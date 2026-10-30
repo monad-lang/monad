@@ -2,7 +2,7 @@
 /// `Struct` (`lang/types.mo`) and the reflection-as-data `Value`
 /// (`lang/core_value.mo`) shape of `init/meta.mo`'s `TypeInfo`/`CtorInfo`/
 /// `FieldInfo`/`Expr`/`MetaMatchArm`/`MetaParam`/`MetaDecl` types -- mirrors
-/// `core/src/eval/meta_reflect.rs` (Rust). Pure: no evaluation, no IO.
+/// `rust/core/src/eval/meta_reflect.rs` (Rust). Pure: no evaluation, no IO.
 /// `lang/typecheck/meta_eval.mo` is the sibling module that actually
 /// EVALUATES a meta-`def` against the `Value` this module builds; this
 /// module only converts data shapes on both sides of that call.
@@ -162,7 +162,7 @@ def attr_drop_bytes (n : I64) (bs : List U8) : List U8 :=
     }
 
 /// Escape `\` and `"` inside an attribute's string argument. The format
-/// is shared byte-for-byte with `core/src/eval/meta_reflect.rs`'s
+/// is shared byte-for-byte with `rust/core/src/eval/meta_reflect.rs`'s
 /// `escape_attr_str`. Characters are copied by UTF-8 width, not one byte
 /// at a time: `String.slice s i 1` returns `""` when its end lands
 /// mid-character, which silently deleted non-ASCII text.
@@ -320,7 +320,7 @@ def build_type_info_value (ind : Inductive) : Result String Value :=
 /// straight through `struct_fields_to_params` with no further
 /// elaboration) carries one, unlike the type-annotation `Term`s this
 /// function was originally written for. Mirrors
-/// `core/src/eval/meta_reflect.rs`'s own `strip_ctx`, run on the Rust
+/// `rust/core/src/eval/meta_reflect.rs`'s own `strip_ctx`, run on the Rust
 /// host side of this exact conversion.
 #[partial]
 def strip_term_ctx (t : Term) : Term :=

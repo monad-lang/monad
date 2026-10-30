@@ -21,7 +21,7 @@ use lib::path {Path}
 ///
 /// The DECLARATION ORDER is the natives' kind code (0 = `not_found` ..
 /// 9 = `other`): `stream_error_kind_of_errno` (runtime/src/runtime.c)
-/// and `stream_error_code` (core/src/core_native.rs) produce it, and
+/// and `stream_error_code` (rust/core/src/core_native.rs) produce it, and
 /// `StreamError.kinds` below decodes it. Keep all four in lock-step.
 pub type StreamErrorKind {
   not_found,

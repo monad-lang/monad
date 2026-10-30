@@ -36,16 +36,13 @@ use crate::term::{Decl, Identifier, ModulePath, NamePath, SearchPaths};
 /// `use`s it.
 fn loaded_with_init_meta() -> LoadedModules {
   let mut loaded = default_modules().unwrap();
-  let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
-  let repo_root = manifest_dir
-    .parent()
-    .expect("core crate's manifest dir has a parent directory");
+  let repo_root = crate::repo_root();
   loaded.set_search_paths(SearchPaths::new(vec![repo_root.to_path_buf()]));
   let path = ModulePath::new(vec![
     Identifier::new("init".to_string()),
     Identifier::new("meta".to_string()),
   ]);
-  let parsed = parse_file(include_str!("../../../init/src/meta.mo").into()).unwrap();
+  let parsed = parse_file(include_str!("../../../../init/src/meta.mo").into()).unwrap();
   let checked = type_check_module_decls_new(&path, parsed.decls, &loaded).unwrap();
   loaded.add_module(module(
     path.clone(),
@@ -167,10 +164,7 @@ fn test_reflect_type_info_blocks_impure_natives_with_a_clear_error() {
 #[test]
 fn test_derive_lens_end_to_end_against_the_real_std_derive_mo() {
   let mut loaded = default_modules().unwrap();
-  let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
-  let repo_root = manifest_dir
-    .parent()
-    .expect("core crate's manifest dir has a parent directory");
+  let repo_root = crate::repo_root();
   loaded.set_search_paths(SearchPaths::new(vec![repo_root.to_path_buf()]));
   let loaded = crate::term::module::load_module_files(
     &ModulePath::new(vec![

@@ -49,7 +49,7 @@ def union_ids (a : List Identifier) (b : List Identifier) : List Identifier :=
         List.empty => b,
     }
 /// An argument to a `#[name arg1 arg2 ...]` attribute. Mirrors the Rust
-/// reference's `AttrArg` (core/src/term.rs) exactly, including the
+/// reference's `AttrArg` (rust/core/src/term.rs) exactly, including the
 /// `named`/`group` shapes (`{name := value}` / `[item, ...]`) even
 /// though no real corpus attribute uses either yet — the combinator
 /// cost of supporting them now is near-zero and avoids a later
@@ -122,7 +122,7 @@ pub instance BEq Attribute {
 /// Whether `attrs` contains an attribute named `name`, e.g.
 /// `has_attr (Identifier.id "derive") ind_attrs`. Mirrors the Rust
 /// reference's `Inductive::has_attr`/`Def::has_test_attr`
-/// (core/src/term.rs).
+/// (rust/core/src/term.rs).
 def has_attr (name : Identifier) (attrs : List Attribute) : Bool :=
     match attrs {
         List.cons hd rest =>
@@ -285,7 +285,7 @@ pub def show_name_path (np : NamePath) : String := match np {
 
 /// `std::list::List.cons` — module half `::`-joined, then `::`, then
 /// name half `.`-joined. Matches the Rust host's `Display` for
-/// `QualifiedName` (core/src/term.rs) so DebugName strings stay
+/// `QualifiedName` (rust/core/src/term.rs) so DebugName strings stay
 /// compiler-consistent.
 pub def show_qualified_name (qn : QualifiedName) : String :=
     String.concat (module_path_to_string_colon qn.qmod)
@@ -315,7 +315,7 @@ pub instance Show ModulePath {
 }
 
 /// The `NamePath` twin of the `ModulePath` instance above -- mirrors the
-/// Rust host's own `impl Display for NamePath` (core/src/term.rs). The
+/// Rust host's own `impl Display for NamePath` (rust/core/src/term.rs). The
 /// two render identically (`.`-joined); the instances exist separately
 /// because the two types are no longer interchangeable.
 pub instance Show NamePath {
@@ -440,7 +440,7 @@ pub def param_with_attrs (name: Identifier) (type_: Term) (attrs: List Attribute
 // Canonical MatchCase uses de Bruijn Term; `ParseMatchCase` is the parser's.
 //
 // `field_pattern` mirrors the Rust reference's `MatchCase.field_pattern`
-// (core/src/term.rs, `plans/implementations/struct-field-destructuring.md`):
+// (rust/core/src/term.rs, `plans/implementations/struct-field-destructuring.md`):
 // `Option.some` only pre-elaboration, when this case was parsed as a
 // `{ x, y } => ...`/`ConsName { x, y } => ...` field-pattern rather than
 // the ordinary positional form (`ConsName x y => ...`). `args`/`body` for
@@ -474,7 +474,7 @@ struct MatchCase {
 }
 
 /// One `{ field, other := binder, .. }` pattern -- mirrors the Rust
-/// reference's `FieldPattern` (core/src/term.rs). `fields` is
+/// reference's `FieldPattern` (rust/core/src/term.rs). `fields` is
 /// `(field_name, binder)` in the order written; `binder` equals
 /// `field_name` when punned (`{ x }`). `rest` is `true` when a trailing
 /// `..` is present (unlisted fields are discarded, not brought into
@@ -529,7 +529,7 @@ pub def field_access_chain (scrutinee : Term) (fields : List Identifier) : Term 
 /// `plans/implementations/struct-field-destructuring.md`'s Phase 8) --
 /// paired with the `FieldPattern` a wrapping `match` needs to actually
 /// bind `x`/`y` from the fixed-name `Param` this variant also carries.
-/// Mirrors the Rust reference's own `ParsedParam` (`core/src/parser.rs`)
+/// Mirrors the Rust reference's own `ParsedParam` (`rust/core/src/parser.rs`)
 /// exactly, adapted to a fixed binder name (`__struct_param`) instead of
 /// a gensym -- `lang/` has no gensym facility (see `motes/clap/src/args.mo`'s own
 /// header comment for the established precedent of a fixed, prefixed
@@ -568,7 +568,7 @@ type Literal {
     /// the exact source text rather than a numeric value: self-hosted
     /// Monad code has no native bridge to parse a decimal string into an
     /// actual float bit pattern (unlike the Rust reference's
-    /// `Literal::Float { value: F64Wrap, .. }`, core/src/term.rs), so
+    /// `Literal::Float { value: F64Wrap, .. }`, rust/core/src/term.rs), so
     /// `text` is the only representation available here — sufficient for
     /// round-tripping through `show_term`/parsing back, though genuine
     /// float codegen (`lang/codegen/emit.mo` has no float `LLVMValue`
@@ -591,7 +591,7 @@ type Literal {
     /// resolve the struct name directly without needing an ambient
     /// expected type from context (a struct literal doesn't always have
     /// one, e.g. passed to a generic function). Mirrors the Rust
-    /// reference's `CoreLit::StructLit` (core/src/core_term.rs).
+    /// reference's `CoreLit::StructLit` (rust/core/src/core_term.rs).
     struct_lit (fields: List StructLitField) (type_name: Option Term),
     /// DEPRECATED: never constructed on purpose. Both typechecking
     /// (`type_check_struct_update`, `lang/typecheck/infer.mo`) and
@@ -1253,7 +1253,7 @@ pub type ParseTermKind {
     /// says it is. It is `none` only for the genuinely non-dependent
     /// chains `build_pi_chain` folds (class-method parameter types, which
     /// carry no names at all). Mirrors the Rust reference's `Term::Pi { arg_name:
-    /// Option<Name>, .. }` (`core/src/term.rs`), whose `lower_core.rs`
+    /// Option<Name>, .. }` (`rust/core/src/term.rs`), whose `lower_core.rs`
     /// arm likewise pushes `arg_name` into scope only when it is `Some`.
     ///
     /// The distinction is load-bearing, not cosmetic: `Term.pi` has no
@@ -1596,7 +1596,7 @@ pub type Term {
     con (c: Con),
     hole,
     /// `quote { <term> }` -- syntax as data. Mirrors the Rust reference's
-    /// `Term::Quote { term: Box<Term> }` (core/src/term.rs). Named
+    /// `Term::Quote { term: Box<Term> }` (rust/core/src/term.rs). Named
     /// `quote_`, not `quote` -- `quote` is a reserved keyword in the
     /// self-hosted grammar's own identifier parser too (same reason
     /// `type_`/`if_`/`match_` above are suffixed, not bare). Parsing/
@@ -1625,7 +1625,7 @@ pub type Term {
     /// hot-path files).
     var_macro (idx: I64) (dbg: DebugName),
     /// A source position attached to the term it wraps. Mirrors the Rust
-    /// reference's `Term::Ctx { loc, module, term }` (`core/src/term.rs`),
+    /// reference's `Term::Ctx { loc, module, term }` (`rust/core/src/term.rs`),
     /// minus the module -- DWARF needs a point, and the file is known at
     /// emission.
     ///
@@ -1819,7 +1819,7 @@ pub struct Class {
 // Canonical StructField uses de Bruijn Term. StructFieldV0 is the legacy V0 variant.
 pub struct StructField {
     /// `mult` mirrors the Rust reference's `StructField.mult`
-    /// (core/src/term.rs): `!name : T` (Linear, must be consumed exactly
+    /// (rust/core/src/term.rs): `!name : T` (Linear, must be consumed exactly
     /// once), `?name : T` (Affine, at most once), `%name : T` (Zero /
     /// Erased), or no prefix at all (Many, the default — the common
     /// case). See examples/structs.mo's `Buffer.data` for a live `!` use.
@@ -1845,7 +1845,7 @@ pub struct Struct {
 }
 
 /// A single item inside a `use Module { ... }` brace filter. Mirrors the
-/// Rust host's `UseItem` (core/src/term.rs).
+/// Rust host's `UseItem` (rust/core/src/term.rs).
 type UseItem {
     use_name (name: Identifier),
     use_rename (name: Identifier) (alias: Identifier),
@@ -1883,7 +1883,7 @@ pub type Decl {
     /// instance). Mirrors Rust's `Decl::ScopedOpen`.
     scoped_open_d (path: NamePath) (filter: OpenFilter) (decl: Decl),
     /// `defmacro name params := <term>` — mirrors the Rust reference's
-    /// `Decl::DefMacro(Def)` (core/src/term.rs): literally reuses `Def`
+    /// `Decl::DefMacro(Def)` (rust/core/src/term.rs): literally reuses `Def`
     /// (`typ` forced to `Term.hole`, `term` wrapped in one lambda per
     /// param when `params` is non-empty via the existing `lam_params`
     /// helper, lang/parser.mo — no new lambda-building logic needed).
@@ -1903,7 +1903,7 @@ pub type Decl {
     /// Point`, `reflect_type_info! T some_meta`). `name` is a bare
     /// `Identifier`, NOT a `ModulePath` — differs from `defmacro`'s own
     /// name shape, mirroring the Rust reference's `Decl::MacroCall`
-    /// exactly (core/src/term.rs). `args` are whitespace-separated
+    /// exactly (rust/core/src/term.rs). `args` are whitespace-separated
     /// terms, not a comma/paren-delimited call.
     macro_call_d (name: Identifier) (args: List Term),
     /// `#![mote { name := "x", deps := [init, std] }]` — a file-level
@@ -1933,7 +1933,7 @@ pub struct Instance {
     /// `implicit_params` holds any `{Name : Type}` binders written right
     /// after `instance` (before the optional `[constraints]` and the class
     /// name), e.g. `instance {A : Type} Show A { ... }`. Mirrors the Rust
-    /// reference's `Instance.params` (core/src/term.rs) — load-bearing for
+    /// reference's `Instance.params` (rust/core/src/term.rs) — load-bearing for
     /// instance resolution there (substitution-based matching against a
     /// lookup key's args), not just documentation. Empty for the common
     /// case of a fully-concrete instance like `instance Show Bool { ... }`.
@@ -1941,7 +1941,7 @@ pub struct Instance {
     /// `defs` holds the instance's own concrete method `Def`s (`def m :=
     /// ...` entries inside the `instance ... { }` body) — mirrors the
     /// Rust reference's `Instance.impls_map: Map<Identifier, Def>`
-    /// (core/src/term.rs), and mirrors this very module's own `Class`
+    /// (rust/core/src/term.rs), and mirrors this very module's own `Class`
     /// type, which already retains its method defs the same way
     /// (`Class.mk`'s `methods` field). Until this field existed,
     /// `instance_parser`/`instance_close` (lang/parser.mo) fully parsed
@@ -3485,7 +3485,7 @@ pub struct Scope {
     //
     // Spell it at EVERY `Scope` literal -- all 69 in the tree do. Leaving it
     // to the default sends the Rust host into an unbounded missing-field fill
-    // (`desugar_struct_literals`, `core/src/core_check.rs`) that OOMs the
+    // (`desugar_struct_literals`, `rust/core/src/core_check.rs`) that OOMs the
     // whole-corpus check, so the pre-commit hook can never pass.
     incomplete_match_ok : Bool := false,
 }

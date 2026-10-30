@@ -28,7 +28,7 @@ use monad_core::term::{ModulePath, NamePath, SourceContext};
 /// `default_modules()`'s own copy is already checked/raised `Term`, not
 /// the raw `Decl`s this driver needs as input.
 fn prelude_decls() -> Vec<SourceContext<Decl>> {
-  let text = include_str!("../../init/src/prelude.mo");
+  let text = include_str!("../../../init/src/prelude.mo");
   load_decls_from_text_with_path(text, &Default::default()).expect("parse init/src/prelude.mo")
 }
 

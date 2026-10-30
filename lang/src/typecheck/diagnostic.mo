@@ -1,8 +1,8 @@
 /// Human-readable rendering for `TypeError` (`lang/types.mo`) — the
 /// type-checking counterpart to `lang/parser/diagnostic.mo`'s
 /// `render_parse_error`, mirroring how the Rust reference splits parse
-/// vs. type diagnostics across `core/src/parser/error.rs` and
-/// `core/src/eval/type.rs::type_error_as_diagnostics`.
+/// vs. type diagnostics across `rust/core/src/parser/error.rs` and
+/// `rust/core/src/eval/type.rs::type_error_as_diagnostics`.
 ///
 /// Unlike `ParseError`, `TypeError` carries no source location — but that
 /// is a fact about the ERROR, not about the AST. Terms DO carry locations

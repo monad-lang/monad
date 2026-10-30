@@ -87,7 +87,7 @@ pub type LLVMValue {
     // Bitwise and shifts. `lshr` (not `ashr`) because every fixed-width
     // integer native that uses these is UNSIGNED -- the u32/u8 family in
     // runtime/src/natives.mo, which masks to width either side of the
-    // operation the way `mask_to_suffix` (core/src/core_native.rs) does.
+    // operation the way `mask_to_suffix` (rust/core/src/core_native.rs) does.
     and_ (lhs : LLVMValue) (rhs : LLVMValue),
     or_ (lhs : LLVMValue) (rhs : LLVMValue),
     xor_ (lhs : LLVMValue) (rhs : LLVMValue),

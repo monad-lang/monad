@@ -33,7 +33,7 @@ environment:
   # `monad`-on-PATH host is a nightly cut from main and can lag a branch
   # that changes the parser or its sources -- see ci.yml for the PR #77
   # case -- and no step here installs one anyway.
-  MONAD_BIN: "cargo run --release --quiet --"
+  MONAD_BIN: "cargo run --manifest-path rust/Cargo.toml --release --quiet --"
 
 when:
   - event: ["push", "pull_request"]

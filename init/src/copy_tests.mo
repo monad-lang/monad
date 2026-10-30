@@ -1,9 +1,9 @@
 /// Tests for `init/src/copy.mo`.
 ///
 /// A separate file because `copy.mo` is in the Rust host's default
-/// module set (`core/src/term/module.rs`'s `default_module_source_files`),
+/// module set (`rust/core/src/term/module.rs`'s `default_module_source_files`),
 /// seeded ambiently into every module closure -- `is_default_module_file`
-/// (`core/src/lib.rs`) then filters it out of every Rust-hosted test path
+/// (`rust/core/src/lib.rs`) then filters it out of every Rust-hosted test path
 /// (`monad-rs test`, the MCP test tool, the LSP's run-tests code lens), so
 /// a `#[test]` inside it is silently never run there. Same reason
 /// `std/src/path_tests.mo`/`process_tests.mo` are separate from their

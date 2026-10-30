@@ -16,7 +16,7 @@ use lang::types {
 use lib::typecheck::infer {empty_locals, last_dotted_segment}
 
 /// Lowers Monad's checked, de-Bruijn `Term` (`lang/types.mo`) to
-/// `CoreIr` (`lang/core_ir.mo`), mirroring `core/src/lower_core_ir.rs`
+/// `CoreIr` (`lang/core_ir.mo`), mirroring `rust/core/src/lower_core_ir.rs`
 /// (Rust). This is the missing piece the former self-hosted evaluator
 /// never had: real global resolution (the former `lower_v0` sent every
 /// unresolved name to a constant placeholder, `EvalTerm.econst 0`) and

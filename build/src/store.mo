@@ -55,7 +55,7 @@ pub def Build.entry_root_named (target_dir : String) (kind : String) : String :=
 ///
 /// Four tiers rather than a bare default because a repository can hold more
 /// than one toolchain. This one does, and its two outputs are named apart --
-/// cargo's `target-rust/` beside monad's `target-monad/` -- rather than both
+/// cargo's `rust/target/` beside monad's `target-monad/` -- rather than both
 /// writing a shared `target/`, where `cargo clean` would delete monad's
 /// store and `monad clean` cargo's artifacts.
 ///

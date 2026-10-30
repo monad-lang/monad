@@ -2,7 +2,7 @@
 ///
 /// This is the actual proof that `#[derive Cli]` works end to end as a real
 /// `.mo` program under BOTH compilers (the Rust-level tests in
-/// `core/src/eval/derive_cli_test.rs` cover the Rust host only): one
+/// `rust/core/src/eval/derive_cli_test.rs` cover the Rust host only): one
 /// attribute on a type the user writes themselves — registered by the
 /// `#[derive_handler Cli]` annotation on `derive_cli` in
 /// `motes/clap/src/args.mo`, not by any compiler special case — generates

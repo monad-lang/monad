@@ -1671,7 +1671,7 @@ def run_store (sub : String) (target_dir_flag : String) : IO I64 := do {
 /// per test file), and RUN it — the driver binary's own `println`
 /// PASS/FAIL-per-test + summary line streams straight to inherited
 /// stdout (`exec_cmd`'s own `std::process::Command::status()` inherits
-/// stdio by default, `core/src/core_native.rs`), the same way
+/// stdio by default, `rust/core/src/core_native.rs`), the same way
 /// `lang.codegen.test_driver`'s own doc comment describes.
 ///
 /// Any argument that's a directory is expanded to every `.mo` file

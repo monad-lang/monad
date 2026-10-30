@@ -194,15 +194,15 @@ fn test_lib_alias_only_fires_on_the_head_segment() {
 /// A real init source path, CWD-independent — cargo runs a test binary from
 /// its own package directory, where a repo-relative `init/src` is not.
 fn init_src(rel: &str) -> std::path::PathBuf {
-  std::path::PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../init/src")).join(rel)
+  crate::repo_root().join("init").join("src").join(rel)
 }
 
 fn cli_src(rel: &str) -> std::path::PathBuf {
-  std::path::PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../cli/src")).join(rel)
+  crate::repo_root().join("cli").join("src").join(rel)
 }
 
 fn std_src(rel: &str) -> std::path::PathBuf {
-  std::path::PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../std/src")).join(rel)
+  crate::repo_root().join("std").join("src").join(rel)
 }
 
 fn qualification_error(source: &str, file: Option<&std::path::Path>) -> Option<String> {

@@ -1,6 +1,6 @@
 /// Structural termination checking for recursive definitions.
 ///
-/// A port of the reference implementation in `core/src/eval/termination.rs`
+/// A port of the reference implementation in `rust/core/src/eval/termination.rs`
 /// (the host's `check_termination_all`), reached from the same point in the
 /// pipeline: once a module's declarations have been checked, each of that
 /// module's own `def`s is verified to recurse only on a *structural subterm* of
@@ -565,7 +565,7 @@ def def_attrs (d : Def) : List Attribute :=
 /// argument list is the point of this attribute: `Option.none` is "not
 /// written", and any `Option.some` -- including the argument-less
 /// `#[decreasing]` -- is written. The reference implementation
-/// (`core/src/eval/termination.rs`) recognises the same three, so the two
+/// (`rust/core/src/eval/termination.rs`) recognises the same three, so the two
 /// compilers still accept and reject exactly the same defs.
 def has_termination_exemption (attrs : List Attribute) : Bool :=
     if has_attr (Identifier.id "terminating") attrs then true
@@ -653,7 +653,7 @@ def render_diag (msg : String) : String :=
 /// Termination-check a module's own `def`s, returning one diagnostic per failing
 /// def. This is the entry point `check_module_with_scope` (`lang/src/module.mo`)
 /// calls, which is where the host calls its own `check_termination_all`
-/// (`core/src/core_check_module.rs`): once, per checked module, over that
+/// (`rust/core/src/core_check_module.rs`): once, per checked module, over that
 /// module's own top-level defs.
 pub def check_termination_all (decls : List Decl) : List String :=
     let defs := collect_defs decls in
@@ -709,7 +709,7 @@ def test_termination_rejects_a_self_call_that_does_not_decrease : Bool :=
             // Pinned to the whole rendering, not just "something was reported":
             // the `error: ` prefix comes from `render_diag` and nowhere else, and
             // the suggestion is the reference's own text, an em dash included
-            // (`args_not_structural_msg`, above; `core/src/eval/termination.rs`
+            // (`args_not_structural_msg`, above; `rust/core/src/eval/termination.rs`
             // spells it `format!("{} — add #[terminating] ...")`). A port that
             // dropped the prefix, or wrote ` -- ` for ` — `, is the failure this
             // is here to catch, and it is not one the corpus can catch for us:
@@ -777,7 +777,7 @@ def test_termination_skips_a_def_marked_partial : Bool :=
 /// `test_termination_rejects_a_self_call_that_does_not_decrease` reports --
 /// so this pins that the attribute is honoured as an assertion, which is what
 /// `has_termination_exemption`'s doc comment says it is. The reference
-/// (`core/src/eval/termination.rs`) skips the same def for the same reason.
+/// (`rust/core/src/eval/termination.rs`) skips the same def for the same reason.
 #[test]
 def test_termination_skips_a_def_marked_decreasing : Bool :=
     let d := t_def "loop" (t_lam "n" (t_app (t_var "loop") (t_var "n")))

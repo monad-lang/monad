@@ -12,7 +12,7 @@
 # here is a failure of real compiled code.
 #
 # The binary has to be built in this job: actions/checkout runs git
-# clean -ffdx at the start of every job, wiping target-rust/, target-monad/,
+# clean -ffdx at the start of every job, wiping rust/target/, target-monad/,
 # .devenv/ and the config, so no job and no run inherits a compiler. The two
 # halves of `compiler-checks` DO share this checkout's scratch directory, on
 # purpose -- the sweep's compiler IS the ladder's release rung-1

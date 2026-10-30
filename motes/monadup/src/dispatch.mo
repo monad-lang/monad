@@ -3,7 +3,7 @@
 ///
 /// `Command.setup` consumes `spec_command`, which `#[derive Cli]` generates
 /// in `command.mo`. The Rust host's `reflect_type_info!` capture re-checks
-/// every non-`#[test]` def in the module being expanded (`core/src/eval/
+/// every non-`#[test]` def in the module being expanded (`rust/core/src/eval/
 /// macro_expand.rs`), and the derive's generated decls do not exist yet at
 /// that point -- so a same-module consumer fails with "unbound variable
 /// `spec_command`". Keeping the consumers here, in a different module that

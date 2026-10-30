@@ -216,7 +216,7 @@ pub infix (==) := BEq.beq
 /// `lte`/`gte` are required methods rather than class defaults: the Rust
 /// host's checked dictionary path refuses an instance that omits a declared
 /// method whose implementation is a default (`check_one_instance_new` in
-/// core/src/core_check_module.rs), falling back to an unchecked path. Every
+/// rust/core/src/core_check_module.rs), falling back to an unchecked path. Every
 /// instance therefore states both. They mean `not gt` / `not lt`, the
 /// total-order reading `BOrd` already assumes.
 pub class BOrd A {

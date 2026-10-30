@@ -65,7 +65,7 @@ MONAD_REPO_ROOT="$HERE"
 MONAD_BIN="${MONAD_BIN:-$MONAD_BOOTSTRAP_BIN}"
 if [ ! -x "$MONAD_BIN" ]; then
   echo "no self-hosted compiler at $MONAD_BIN"
-  echo "build one:  cargo run --release -- run cli/src/main.mo build cli/src/main.mo -o \"$MONAD_BIN\" --release"
+  echo "build one:  cargo run --manifest-path rust/Cargo.toml --release -- run cli/src/main.mo build cli/src/main.mo -o \"$MONAD_BIN\" --release"
   echo "or point MONAD_BIN at an existing binary."
   exit 1
 fi

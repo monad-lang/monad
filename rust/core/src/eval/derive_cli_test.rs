@@ -28,18 +28,14 @@ use crate::term::{Identifier, ModulePath, NamePath, SearchPaths};
 fn load(source: &str) -> Result<(crate::term::module::LoadedModules, ModulePath), String> {
   let mut loaded = default_modules().map_err(|e| e.to_string())?;
   // `motes/clap/src/args.mo` does `use std.list`/`use init.meta` — point
-  // search paths at the repo root (via `CARGO_MANIFEST_DIR`, which is `core/`,
-  // so `std/`/`init/`/`motes/` are one level up) rather than relying on
-  // `cargo test`'s CWD.
+  // search paths at the repo root (via `crate::repo_root()`) rather than
+  // relying on `cargo test`'s CWD.
   //
   // `motes/` is a second root because `resolve_file_path` only ever tries
   // `<root>/<mote>/src/<rest>.mo`, never `<root>/motes/<mote>/...`: the repo
   // root alone resolves `std`/`init`, and `clap` needs the root the mote
   // actually sits directly under.
-  let repo_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-    .parent()
-    .expect("core/ should have a parent dir")
-    .to_path_buf();
+  let repo_root = crate::repo_root();
   let motes_root = repo_root.join("motes");
   loaded.set_search_paths(SearchPaths::new(vec![repo_root, motes_root]));
   let loaded = crate::term::module::load_module_files(

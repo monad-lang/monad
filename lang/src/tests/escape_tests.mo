@@ -19,7 +19,7 @@
 /// behind, so they pin the boundary cases (`> 0x10FFFF`, the surrogate
 /// range, more than six digits, a missing brace) rather than nothing.
 ///
-/// The reference for every case is `core/src/parser/string.rs`:
+/// The reference for every case is `rust/core/src/parser/string.rs`:
 /// `parse_unicode` is `delimited(char('{'), take_while_m_n(1, 6,
 /// is_ascii_hexdigit), char('}'))` mapped through `char::from_u32`, so
 /// `0xD800..=0xDFFF` and anything above the last scalar value are

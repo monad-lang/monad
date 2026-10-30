@@ -15,8 +15,8 @@ come from somewhere else. That is what the Rust [bootstrap
 host](./bootstrap-host.md) is for:
 
 ```bash
-cargo build --release
-cargo run --release -- run cli/src/main.mo build cli/src/main.mo -o "$PWD/monad"
+cargo build --manifest-path rust/Cargo.toml --release
+cargo run --manifest-path rust/Cargo.toml --release -- run cli/src/main.mo build cli/src/main.mo -o "$PWD/monad"
 ```
 
 That produces `monad`, a native binary that needs nothing else. Everything below
@@ -309,7 +309,7 @@ on the next line continues on the `.. ` prompt.
 both. The setting lives in the **tool's** config rather than in a mote's
 `mote.toml`: where output goes is not a property of the thing being built, and
 a script-mode file in no mote at all still needs an answer. This repository
-holds two toolchains, so it names their output apart: cargo's is `target-rust/`
+holds two toolchains, so it names their output apart: cargo's is `rust/target/`
 and monad's is `target-monad/` — they must not eat each other, because a
 `cargo clean` must not delete a monad binary.
 

@@ -4,7 +4,7 @@ use std::list {List.length}
 
 /// `Value`/`Env` — the runtime representation the closure-based evaluator
 /// (`lang/core_eval.mo`) reduces `CoreIr` to, mirroring
-/// `core/src/core_value.rs` (Rust). See that file's own doc comment for
+/// `rust/core/src/core_value.rs` (Rust). See that file's own doc comment for
 /// the full design rationale.
 ///
 /// This is the direct fix for the former `EvalTerm`'s
@@ -26,7 +26,7 @@ use std::list {List.length}
 /// **Match patterns in this module are always single-level** (`Ctor arg
 /// => ...`, never `Ctor (Inner x) => ...`) — Monad's `match` grammar
 /// doesn't parse nested constructor patterns (confirmed against
-/// `core/src/parser.rs`'s `match_case_parser`, which only accepts a
+/// `rust/core/src/parser.rs`'s `match_case_parser`, which only accepts a
 /// constructor name followed by plain identifier args). Where the Rust
 /// original nests a pattern, this file instead nests a `match`
 /// *expression* in the arm body — the same style already used throughout

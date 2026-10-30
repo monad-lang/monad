@@ -37,7 +37,7 @@ def test_u32_not : Bool :=
   U32.not 0u32 == 4294967295u32
 
 /// Width masking, which is the property that makes these natives match
-/// `mask_to_suffix` (core/src/core_native.rs) rather than merely looking
+/// `mask_to_suffix` (rust/core/src/core_native.rs) rather than merely looking
 /// plausible: an unmasked i64 op would leave high bits set and produce a
 /// wrong digest instead of a loud failure.
 #[test]

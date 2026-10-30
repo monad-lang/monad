@@ -61,7 +61,7 @@
 #
 # Runnable by hand, which is how it was checked rather than assumed:
 #
-#   MONAD_HOST_BIN=target-rust/release/monad-rs scripts/ci-compiler-checks.sh
+#   MONAD_HOST_BIN=rust/target/release/monad-rs scripts/ci-compiler-checks.sh
 #
 # with the same warning every other sweep carries: do not edit the tree while
 # it runs.

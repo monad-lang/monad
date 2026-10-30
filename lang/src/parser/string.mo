@@ -11,7 +11,7 @@ open ParseResult {fail, success}
 
 /// Resolve a single escape character (the character right after `\`) to
 /// its real value: the fixed-value half of the Rust reference's
-/// `parse_escaped_char` (core/src/parser/string.rs).
+/// `parse_escaped_char` (rust/core/src/parser/string.rs).
 ///
 /// The two escapes that are NOT a fixed character map live one level up,
 /// in the callers, because they need the rest of the input rather than
@@ -49,7 +49,7 @@ def escape_replacement (c : String) : Option String :=
 
 /// `\` followed by one or more whitespace characters, which contributes
 /// NOTHING to the literal's content -- the Rust reference's
-/// `parse_escaped_whitespace` (core/src/parser/string.rs), Rust's line
+/// `parse_escaped_whitespace` (rust/core/src/parser/string.rs), Rust's line
 /// continuation, so that
 ///
 ///     "a\

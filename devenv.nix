@@ -15,6 +15,13 @@
   # https://devenv.sh/languages/
   languages.rust.enable = true;
 
+  # Cargo discovers `.cargo/config.toml` from the current directory upward,
+  # not from the directory `--manifest-path` names. The hooks and CI invoke
+  # cargo from the repo root with `--manifest-path rust/Cargo.toml`, so the
+  # `[env]` in `rust/.cargo/config.toml` would not apply there. Export the
+  # same value from the dev shell so every invocation agrees.
+  env.RUST_MIN_STACK = "16777216";
+
   # https://devenv.sh/processes/
   # processes.dev.exec = "${lib.getExe pkgs.watchexec} -n -- ls -la";
 
@@ -49,11 +56,11 @@
   '';
 
   scripts.bootstrap.exec = ''
-    cargo run --release -- run cli/src/main.mo $@
+    cargo run --manifest-path rust/Cargo.toml --release -- run cli/src/main.mo $@
   '';
 
   scripts.monad-re.exec = ''
-    cargo run --release -- $@
+    cargo run --manifest-path rust/Cargo.toml --release -- $@
   '';
 
   # https://devenv.sh/basics/
@@ -193,8 +200,18 @@
       always_run = true;
       stages = [ "commit-msg" ];
     };
-    rustfmt.enable = true;
-    clippy.enable = true;
+    # The Rust workspace lives under `rust/`, so both hooks name its manifest
+    # explicitly: they run from the repo root, where there is no Cargo.toml.
+    rustfmt = {
+      enable = true;
+      entry = "cargo fmt --manifest-path rust/Cargo.toml --all -- --color=always";
+      files = "^rust/.*\\.rs$";
+    };
+    clippy = {
+      enable = true;
+      entry = "cargo clippy --manifest-path rust/Cargo.toml --";
+      files = "^rust/.*\\.rs$";
+    };
     # `cargo test --release` and the whole-corpus `cargo run --release -- check
     # init std examples lang cli llvm runtime build motes` are deliberately NOT
     # hooks. Both are whole-corpus and take minutes, and this config is

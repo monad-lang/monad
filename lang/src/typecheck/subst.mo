@@ -5,7 +5,7 @@
 /// Standard, well-known PL theory (Pierce, *Types and Programming
 /// Languages*, §6/§7) — no macro-specific hygiene/gensym-renaming
 /// needed here, unlike the Rust reference's own `subst_macro`
-/// (core/src/eval/macro_expand.rs), which is NAME-based (walks a
+/// (rust/core/src/eval/macro_expand.rs), which is NAME-based (walks a
 /// pre-de-Bruijn-resolution `Term` matching `NameRef`s) and needs
 /// `alpha_rename_body`'s gensym counter specifically to stop two
 /// DIFFERENT macro expansions' own introduced binders from colliding

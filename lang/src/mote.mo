@@ -512,7 +512,7 @@ pub def Mote.manifest_at (dir : String) : IO (Option MoteManifest) := do {
 /// Every mote directory belonging to the workspace rooted at `dir`.
 ///
 /// Mirrors the Rust reference's `Workspace::resolve_members`
-/// (`core/src/term/mote.rs`): each `[workspace] members` entry is a
+/// (`rust/core/src/term/mote.rs`): each `[workspace] members` entry is a
 /// directory relative to the root, except a trailing `/*`, which
 /// expands ONE level to those children that are themselves motes (a
 /// directory containing a `mote.toml`). `IO.list_dir` already returns
@@ -1481,7 +1481,7 @@ def Mote.toolchain_missing_hint (root : Option String) (root_has_sources : Bool)
 /// This is the load-bearing part of reading the attribute at all, because
 /// the two parsers spell a `{ ... }` block differently and NEITHER spelling
 /// is wrong: `lang/src/parser.mo`'s `attr_arg_named_close` wraps the
-/// block's entries in ONE `AttrArg.group`, while `core/src/parser.rs`'s
+/// block's entries in ONE `AttrArg.group`, while `rust/core/src/parser.rs`'s
 /// `attr_arg_parser` returns a `Vec` per call and so flattens the very same
 /// entries straight onto `attr.args`. A reader that assumed either shape
 /// would silently find nothing under the other compiler — the same class of
@@ -2391,7 +2391,7 @@ def test_strings_of_values_drops_non_strings : Bool :=
 // ─── The inline annotation, both parser shapes ───────────────────────
 //
 // These pin the one thing that can silently break: `lang/src/parser.mo`
-// and `core/src/parser.rs` produce DIFFERENT `Attribute.args` shapes for
+// and `rust/core/src/parser.rs` produce DIFFERENT `Attribute.args` shapes for
 // the same source. A reader that handles one shape reports "no deps" under
 // the other compiler, which looks exactly like a file that declared
 // nothing -- so both shapes are built by hand here rather than only the one
@@ -2411,7 +2411,7 @@ def attr_mote_self_hosted : Attribute :=
                 AttrArg.ident (Identifier.id "std")]),
         ]]
 
-/// The same source under `core/src/parser.rs`: the entries FLATTENED onto
+/// The same source under `rust/core/src/parser.rs`: the entries FLATTENED onto
 /// `args` directly, because its `attr_arg_parser` returns a `Vec` per call.
 def attr_mote_rust : Attribute :=
     Attribute.mk (Identifier.id "mote")

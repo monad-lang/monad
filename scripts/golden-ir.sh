@@ -8,7 +8,7 @@
 set -u
 mode=${1:?usage: golden-ir.sh snapshot|diff <dir>}
 dir=${2:?usage: golden-ir.sh snapshot|diff <dir>}
-bin=${MONAD_BIN:-target-rust/release/monad-rs}
+bin=${MONAD_BIN:-rust/target/release/monad-rs}
 files="examples/hello.mo examples/factorial.mo examples/do_block.mo examples/raw_strings.mo
 examples/structs.mo examples/located_terms.mo examples/sha256.mo examples/json.mo examples/toml.mo"
 

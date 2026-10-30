@@ -62,7 +62,7 @@ void monad_release(void* ptr) {
 
    What it buys immediately is REAL concurrency, which the Rust host's
    lazy/cooperative model cannot express at all: the host defers `forkIO`
-   to `await_fiber` (core/src/core_native.rs's own "Rust Host Status"
+   to `await_fiber` (rust/core/src/core_native.rs's own "Rust Host Status"
    note), so nothing there can ever interleave. Two visible consequences,
    both deliberate:
 
@@ -1928,7 +1928,7 @@ int64_t monad_std_fd(int64_t which) {
    their raw payload.
 
    Read the same group's comment in `std/io.mo` for the contract, and
-   `core/src/core_native.rs`'s `read_stdin_exact` for the Rust
+   `rust/core/src/core_native.rs`'s `read_stdin_exact` for the Rust
    evaluator's half. That half needs a UTF-8-carry subtlety this one
    does not: bytes are stored raw here, which is exactly what a byte
    stream wants, so no chunk boundary can surprise this side.

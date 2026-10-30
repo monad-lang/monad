@@ -358,7 +358,7 @@ def native_runtime_fn_name (attrs : List Attribute) : Option NativeWrapKind :=
             else if String.beq target "u64_gt" then Option.some (NativeWrapKind.bool_result "monad_u64_gt")
             // The fixed-width unsigned family, unlike the u8 ops above:
             // these DO mask to width, on both operands and the result,
-            // matching `mask_to_suffix` (core/src/core_native.rs). They
+            // matching `mask_to_suffix` (rust/core/src/core_native.rs). They
             // exist because std/src/sha256.mo is written against `U32`
             // and could not be compiled at all without them.
             else if String.beq target "u8_add" then Option.some (NativeWrapKind.passthrough "monad_u8_add")

@@ -137,7 +137,7 @@ def name_path_variable (input : String) : ParseResult NameRef :=
 /// everything up to it is the module half, the rest the name half.
 /// `::` after a dotted tail (`a::b.c::d`) leaves unparseable input
 /// behind, which surfaces as an ordinary parse error -- matching the
-/// Rust host's `qualified_name_expression` (core/src/parser.rs).
+/// Rust host's `qualified_name_expression` (rust/core/src/parser.rs).
 #[partial]
 def qualified_variable (input : String) : ParseResult NameRef :=
 	match separated_by (tag "::") identifier input {
@@ -380,7 +380,7 @@ def do_parser_desugar (rem: String) (stmts: List DoStmt) : ParseResult ParseTerm
 // this grammar were registered in `atom_parsers`, `get_value` on one
 // line followed by an unrelated `return x` do-statement on the next
 // would greedily swallow `return x` as an extra application argument.
-// See core/src/parser.rs's `return_shorthand_parser` (registered in
+// See rust/core/src/parser.rs's `return_shorthand_parser` (registered in
 // `non_app_term`, not `term_inner`, for the identical reason) and its
 // own doc comment for the concrete regression this caused there
 // (`test_def_do_block_bind`).
@@ -531,7 +531,7 @@ def skip_one_attr_content (r : ParseResult String) (orig : String) : String :=
 // ─── Real attribute (`#[name arg1 arg2 ...]`) parsing ──────────────────
 //
 // Mirrors the Rust reference's `attribute_parser`/`attr_arg_parser`/
-// `opt_attributes` (core/src/parser.rs) — builds real `Attribute`/
+// `opt_attributes` (rust/core/src/parser.rs) — builds real `Attribute`/
 // `AttrArg` data instead of `skip_one_attr`/`def_try_attrs`'s own
 // skip-and-discard. IS wired into `def_parser`/`type_parser`/`Def`/
 // `Inductive` construction (`opt_attributes` is called from
@@ -707,7 +707,7 @@ def attr_arg_try_ident (r : ParseResult String) : ParseResult (List AttrArg) :=
 	}
 
 /// One `#[name arg1 arg2 ...]` attribute. Mirrors `attribute_parser`
-/// (core/src/parser.rs): `"#["`, the attribute's own name, then zero or
+/// (rust/core/src/parser.rs): `"#["`, the attribute's own name, then zero or
 /// more whitespace-separated args, `"]"`.
 #[partial]
 def attribute_parser (input : String) : ParseResult Attribute :=
@@ -769,7 +769,7 @@ def mote_attr_decl (r : ParseResult Attribute) : ParseResult ParseDecl :=
 	}
 
 /// Zero or more stacked attributes ahead of a declaration (`#[a]\n#[b]\n
-/// def ...`). Mirrors `opt_attributes` (core/src/parser.rs).
+/// def ...`). Mirrors `opt_attributes` (rust/core/src/parser.rs).
 #[partial]
 def opt_attributes (input : String) : ParseResult (List Attribute) :=
 	opt_attributes_go (skip_spaces input) List.empty
@@ -1754,7 +1754,7 @@ def type_cons_brace_close (r : ParseResult String) (name : Identifier) (fields :
 	}
 
 /// `StructField -> Param`, REJECTING any field with a default value —
-/// mirrors `core/`'s own `fields_to_cons_params` (`core/src/term.rs`,
+/// mirrors `core/`'s own `fields_to_cons_params` (`rust/core/src/term.rs`,
 /// this plan's Phase 0): an ordinary `type` constructor is only ever
 /// invoked through plain positional application, never struct-literal
 /// syntax, so a `:=` default here would be silently dead code — better
@@ -1776,7 +1776,7 @@ def type_cons_brace_to_constructor (rem : String) (name : Identifier) (fields : 
 /// `StructField -> Param`, REJECTING any field with a default value (by
 /// returning `Option.none` for the WHOLE list rather than the offending
 /// field alone) — mirrors `core/`'s own `fields_to_cons_params`
-/// (`core/src/term.rs`, this plan's Phase 0): an ordinary `type`
+/// (`rust/core/src/term.rs`, this plan's Phase 0): an ordinary `type`
 /// constructor is only ever invoked through plain positional
 /// application, never struct-literal syntax, so a `:=` default here
 /// would be silently dead code — better to error than accept something
@@ -3286,7 +3286,7 @@ def instance_kw (r : ParseResult String) : ParseResult ParseDecl :=
 /// auto-generalizes free type vars anyway), these ARE captured for real:
 /// `Instance.implicit_params` is load-bearing for instance resolution on
 /// the Rust side (substitution-based matching against a lookup key's
-/// args — see `Instance.params` in core/src/term.rs), so there's no
+/// args — see `Instance.params` in rust/core/src/term.rs), so there's no
 /// auto-generalization step to fall back on here.
 #[partial]
 def instance_implicit_params_loop (input : String) (params : List ParseParam) : ParseResult ParseDecl :=
@@ -3729,7 +3729,7 @@ def instance_close (r : ParseResult String) (cls : NamePath) (args : List ParseT
 
 /// One macro parameter: a bare identifier (untyped, `typ = Term.hole`)
 /// or a parenthesized `(x : T)` group (optional multiplicity prefix).
-/// Mirrors the reference's own `macro_param` (core/src/parser.rs) --
+/// Mirrors the reference's own `macro_param` (rust/core/src/parser.rs) --
 /// reuses the same building blocks `def`'s own explicit-param chain
 /// does (`multiplicity_prefix`), just without the `{implicit}`
 /// alternative (defmacro has no implicit-param syntax) and without
@@ -4331,7 +4331,7 @@ def test_with_block_opens_a_decl_macro_call : Bool :=
 // ─── Declaration-position `name! args...` ───────────────────────────────
 //
 // Mirrors the reference's `macro_call_decl_parser`/`macro_call_decl_arg`
-// (core/src/parser.rs). Args are whitespace-separated terms (not a
+// (rust/core/src/parser.rs). Args are whitespace-separated terms (not a
 // comma/paren-delimited call) parsed via a RESTRICTED atom set that
 // deliberately excludes `macro_call_term`/general application, guarded
 // by a lookahead so a second decl-level macro call on the next line
@@ -5732,7 +5732,7 @@ def second_decl_span_is (src : String) (rest : List ParseDecl) : Bool :=
 //   `def u : Sort 2 := Sort 1`    -> accepted (correct, must stay)
 //
 // The levels mirror the Rust reference's own keyword table exactly
-// (`known_sort_keyword_level`, core/src/core_unify.rs: `"Prop" | "Pred" =>
+// (`known_sort_keyword_level`, rust/core/src/core_unify.rs: `"Prop" | "Pred" =>
 // Some(0)`, `"Type" => Some(1)`), so the two compilers cannot disagree
 // about what `Type` denotes even though only the self-hosted one
 // implements the rest of universe polymorphism.
@@ -6034,7 +6034,7 @@ def skip_docstrings_try_newline (r : ParseResult String) (orig : String) : Strin
 // (between decls, in match arms, in def bodies, and -- via the
 // list-literal comment-skip fix -- between list-literal elements) would
 // leak through and break the following parse. Block comments are non-
-// nesting (matching the Rust reference, `core/src/parser.rs`); a missing
+// nesting (matching the Rust reference, `rust/core/src/parser.rs`); a missing
 // closing `*/` consumes the rest of the input rather than emitting a
 // confusing error deep in an unrelated decl, the same way an unterminated
 // `//` line comment simply runs to EOF.
@@ -6083,7 +6083,7 @@ def skip_block_comment_end (input : String) : String :=
 //
 // `let name [: Type] := value in body` desugars to an immediately-
 // applied lambda (`(fn name : Type => body) value`, mirroring the Rust
-// reference's `lets()`/`let_term()`, core/src/term.rs) — no new `Term`
+// reference's `lets()`/`let_term()`, rust/core/src/term.rs) — no new `Term`
 // variant needed, this is purely a parser-level construction, same as
 // `lambda_parser`'s own `fn`/`ꟛ`/`\` desugaring right below it.
 //
@@ -6289,7 +6289,7 @@ def let_term_body (r : ParseResult ParseTerm) (name : Identifier) (typ : ParseTe
 // (FromListLiteral.cons e3 FromListLiteral.empty))` — a right fold using
 // the `FromListLiteral` class's methods (`init/prelude.mo`), not the raw
 // `List.cons`/`List.empty` constructors directly, exactly mirroring the
-// Rust reference's `desugar_list_literal` (core/src/parser.rs). Bracket
+// Rust reference's `desugar_list_literal` (rust/core/src/parser.rs). Bracket
 // syntax (`[`) was previously only ever recognized for class/instance
 // `[Constraint A]` clauses (`class_try_constraints`/
 // `instance_try_constraints`) — as a general term/expression, list
@@ -6374,7 +6374,7 @@ def build_list_literal (elems : List ParseTerm) : ParseTerm :=
 /// applications: `[a, b, c]` -> `Pair.pair a (Pair.pair b c)`. A single
 /// element `[a]` yields just `a` (so `(a,)` and `(a)` both parse to `a`),
 /// matching the Rust reference's `desugar_tuple_literal`
-/// (core/src/parser.rs:831-840). `Pair.pair` is the `Pair` inductive's
+/// (rust/core/src/parser.rs:831-840). `Pair.pair` is the `Pair` inductive's
 /// sole constructor (`init/prelude.mo:204`); the sentinel-var-with-dotted-
 /// debug-name representation mirrors `build_list_literal`'s own
 /// `FromListLiteral.cons` convention (and `variable_try_path`'s dotted-path
@@ -6395,7 +6395,7 @@ def build_tuple_literal (elems : List ParseTerm) : ParseTerm :=
 // ─── Struct-literal parser (`{ field := value, ... [: TypeExpr] }`) ────
 //
 // Mirrors the Rust reference's `struct_or_update_parser`/
-// `struct_val_field_parser` (core/src/parser.rs) — a bare `{` atom
+// `struct_val_field_parser` (rust/core/src/parser.rs) — a bare `{` atom
 // distinct from `struct`'s own DECLARATION syntax (`field : Type`, no
 // `:=`) and from `do { ... }` (which requires the literal keyword `do`
 // before its own `{`, so there's no grammar collision with a bare `{`
@@ -6441,7 +6441,7 @@ def struct_update_base (input : String) : ParseResult ParseTerm :=
 
 /// `{ base with field := value, ... }` is tried FIRST (mirrors the
 /// reference's own `alt((parse_struct_update, ...))` ordering,
-/// `struct_or_update_parser`, core/src/parser.rs) — if `base` parses as
+/// `struct_or_update_parser`, rust/core/src/parser.rs) — if `base` parses as
 /// a variable but no literal `with` keyword follows, this is an
 /// ordinary struct literal whose first field's NAME happens to also be
 /// a valid bare variable reference (e.g. `{ x := 1 }`'s `x`); back off
@@ -6486,7 +6486,7 @@ def struct_update_field_sep (input : String) (base : ParseTerm) (acc : List Pars
 /// Unlike `struct_lit_close`, there is no trailing `: TypeExpr`
 /// self-annotation for a struct update — `base`'s own type already
 /// determines the result type. Mirrors `parse_struct_update`
-/// (core/src/parser.rs), which closes directly with `}`.
+/// (rust/core/src/parser.rs), which closes directly with `}`.
 #[partial]
 def struct_update_finish (input : String) (base : ParseTerm) (fields : List ParseStructLitField) : ParseResult ParseTerm :=
     match tag "}" (skip_docstrings (skip_spaces input)) {
@@ -6628,7 +6628,7 @@ def atom_term_unlocated (input: String) : ParseResult ParseTerm :=
 
 // ─── `quote { <term> }` (syntax as data) ────────────────────────────────
 //
-// Mirrors the Rust reference's `quote_parser` (core/src/parser.rs):
+// Mirrors the Rust reference's `quote_parser` (rust/core/src/parser.rs):
 // `"quote"` keyword, mandatory whitespace, `{`, one full (unrestricted)
 // term, `}`. Parsing/representation only -- see `Term.quote_`'s own doc
 // comment in lang/types.mo for what's deliberately NOT done here yet
@@ -6679,7 +6679,7 @@ def quote_term_finish (r : ParseResult String) (t : ParseTerm) (orig : String) :
 
 // ─── Term-position `name!` (`foo!`, `foo! 1 2`) ─────────────────────────
 //
-// Mirrors the Rust reference's `macro_call` (core/src/parser.rs):
+// Mirrors the Rust reference's `macro_call` (rust/core/src/parser.rs):
 // `identifier` immediately (no space) followed by `!`. Produces
 // `Term.var_macro` -- see that variant's own doc comment in
 // lang/types.mo. `foo! 1 2` then falls out of the ordinary
@@ -6864,7 +6864,7 @@ def atom_parsers : List (String -> ParseResult ParseTerm) :=
 // `{ field, other := binder, .. }` -- shared by the bare (`{ ... } =>
 // ...`) and named-constructor (`ConsName { ... } => ...`) match-case
 // forms below. Mirrors the Rust reference's `struct_pattern_parser`
-// (`core/src/parser.rs`).
+// (`rust/core/src/parser.rs`).
 
 #[partial]
 def field_pattern_item (input : String) : ParseResult FieldPatternEntry :=
@@ -6959,7 +6959,7 @@ def field_pattern_entries_binders (entries : List FieldPatternEntry) : List Iden
 // identifier); then named+brace vs. named+positional, which diverge
 // right after the constructor name (`{` vs. an identifier or `=>`).
 // Mirrors the Rust reference's own three-alternative `match_case_parser`
-// (`core/src/parser.rs`) exactly, adapted to this file's hand-written
+// (`rust/core/src/parser.rs`) exactly, adapted to this file's hand-written
 // CPS style (an explicit try-then-fall-through step per alternative,
 // rather than `nom`'s automatic `alt` backtracking).
 
@@ -7252,7 +7252,7 @@ def paren_inner (r: ParseResult ParseTerm) : ParseResult ParseTerm :=
 /// Tuple-literal probe — after the first parenthesized expression, look for
 /// a `,`. On comma, this is a tuple literal `(a, b, c)` desugared to nested
 /// `Pair.pair` applications (mirrors the Rust reference's
-/// `tuple_or_parens`/`desugar_tuple_literal`, core/src/parser.rs:813-840,
+/// `tuple_or_parens`/`desugar_tuple_literal`, rust/core/src/parser.rs:813-840,
 /// and this file's own `build_list_literal` for `[...]`); on no comma, fall
 /// through to the existing single-element `(e)` / `(e : T)` path
 /// (`paren_try_ann`). A single-element `(x,)` desugars to just `x`, matching
@@ -7298,7 +7298,7 @@ def paren_tuple_end (r : ParseResult String) (acc : List ParseTerm) : ParseResul
 /// Optional `: Type` type ascription inside parens (`(List.empty : List
 /// String)`) — DESUGARED, not discarded (`paren_ann_value`). This
 /// self-hosted `Term` has no `Ann` variant (unlike the Rust reference's
-/// `Term::Ann`, core/src/parser.rs's `ann_parser`), so an ascription
+/// `Term::Ann`, rust/core/src/parser.rs's `ann_parser`), so an ascription
 /// that is merely *kept* has nowhere to live; it previously parsed the
 /// type and threw it away, matching `def_implicit_close`'s "parse for
 /// correctness, discard" pattern for implicit param clauses. That is
@@ -7371,7 +7371,7 @@ def paren_close (r: ParseResult String) (out: ParseTerm) : ParseResult ParseTerm
 // ─── Term lambda ────────────────────────────────────────────────────────
 
 /// `fn a b c => body` — multiple curried params sugar (mirrors the Rust
-/// reference's `many1(lam_param)` + `lams()`, core/src/parser.rs/
+/// reference's `many1(lam_param)` + `lams()`, rust/core/src/parser.rs/
 /// term.rs) for `fn a => fn b => fn c => body`. Previously only a
 /// single name was ever accepted (`lambda_name_outer_got` went straight
 /// to `=>` after one `identifier`), so any multi-param lambda —
@@ -7543,7 +7543,7 @@ def lambda_body (r: ParseResult ParseTerm) (names: List Identifier) : ParseResul
 ///
 /// The param type is `Term.hole`, not a sort such as `Type`/`Sort 1`: the
 /// reference's own bare-name lambda param is `param(i, Hole)`
-/// (`core/src/parser.rs:464-466`'s `lam_param` first alternative, and
+/// (`rust/core/src/parser.rs:464-466`'s `lam_param` first alternative, and
 /// `:1881` for macro params), so an ABSENT annotation and a WRITTEN `_`
 /// are the same construct there.
 ///
@@ -7556,7 +7556,7 @@ def lambda_body (r: ParseResult ParseTerm) (names: List Identifier) : ParseResul
 /// Two consequences, both real. It made the `param_typ` test in the
 /// reference's `App(Lam{param_typ: Hole}, arg)` arm false for
 /// `fn x => x`, so that arm -- which INFERS the argument rather than
-/// checking it (`core/src/core_check.rs:1582-1593`, twin at `:946-964`)
+/// checking it (`rust/core/src/core_check.rs:1582-1593`, twin at `:946-964`)
 /// and so rejects a hole with `InferError::CannotInferHole` (`:884`) --
 /// could not fire, and the self-hosted compiler accepted
 /// `def k : I64 := (fn x => x) _` where the host reports "cannot infer the
@@ -7756,7 +7756,7 @@ def expr_climb_op_rhs_ws (r: ParseResult String) (lhs: ParseTerm) (op: String) (
 ///
 /// The generic path used to build `Term.var sentinel DebugName.unnamed`,
 /// throwing `op` away entirely — `DebugName` has no operator-carrying
-/// variant (unlike the Rust reference's own `NameRef::Op`, core/src/
+/// variant (unlike the Rust reference's own `NameRef::Op`, rust/core/src/
 /// term.rs) to preserve it in, so nothing downstream could ever recover
 /// which operator an application like this meant; every `infix (op) :=
 /// target` declaration (init/lib.mo, init/prelude.mo) was consequently
@@ -9646,7 +9646,7 @@ def test_if_bound_var : Bool :=
 /// just inside `do { }` blocks. Verifies it desugars to an
 /// immediately-applied lambda (`(fn name : Type => body) value`, no new
 /// `Term` variant), mirroring the Rust reference's `lets()`
-/// (core/src/term.rs).
+/// (rust/core/src/term.rs).
 #[test]
 def test_let_term_desugars_to_applied_lambda : Bool :=
     match expression "let x : I64 := 1 in x" {
@@ -9865,7 +9865,7 @@ def test_struct_update_backtrack_to_plain_literal : Bool :=
 /// ever be a name. Parens are the only way a call result can be one --
 /// an unparenthesized application would swallow the `with` -- which makes
 /// `{ (Response.ok_text msg) with status := 400u16 }` the shape the fix
-/// exists for. Mirrors `core/src/parser.rs`'s `parse_struct_update_base`;
+/// exists for. Mirrors `rust/core/src/parser.rs`'s `parse_struct_update_base`;
 /// the two must not drift on which spellings exist.
 #[test]
 def test_struct_update_paren_base : Bool :=
@@ -10818,7 +10818,7 @@ def test_use_parser_accepts_colon_colon : Bool :=
 /// unconsumed. That is what makes a dotted `use` a file-level error --
 /// the loader requires a parse to consume its whole input -- and it is
 /// the same shape the Rust host asserts (`test_use_rejects_dotted_path`,
-/// `core/src/parser/test/declarations.rs`). A hard failure would also
+/// `rust/core/src/parser/test/declarations.rs`). A hard failure would also
 /// count as rejection, so both are accepted here.
 #[test]
 def test_use_parser_rejects_dotted : Bool :=
@@ -11253,7 +11253,7 @@ def test_string_parse_unknown_escape_fails : Bool :=
 // --- raw_string_parse tests ---
 //
 // Mirror the Rust reference's `parse_raw_string_literal` semantics (see
-// `core/src/parser/string.rs`): the closer is the first `"` followed by at
+// `rust/core/src/parser/string.rs`): the closer is the first `"` followed by at
 // least `n` `#`, consuming exactly `n` (extra `#` left in the remainder),
 // matching `rustc`'s lexer which caps the closing hash count at the opening
 // count. The body is verbatim -- no `\`-escape processing.

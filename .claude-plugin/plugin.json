@@ -12,7 +12,7 @@
   "license": "ASL2",
   "mcpServers": {
     "monad": {
-      "command": "${CLAUDE_PLUGIN_ROOT}/target-rust/release/monad-rs",
+      "command": "${CLAUDE_PLUGIN_ROOT}/rust/target/release/monad-rs",
       "args": ["mcp"]
     }
   },

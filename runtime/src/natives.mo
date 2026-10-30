@@ -404,7 +404,7 @@ def emit_u8_div : LLVMFunction := emit_guarded_native "monad_u8_div" (sdiv (parm
 
 /// `monad_u64_mod(a, b)`: 0 when `b == 0`, else `a % b`. `urem`, which is
 /// what an unsigned mod should be, and since 2026-09-12 the reference
-/// interpreter agrees (`core/src/core_native.rs`'s `u64_mod` used the
+/// interpreter agrees (`rust/core/src/core_native.rs`'s `u64_mod` used the
 /// signed `wrapping_rem`; it now uses `uint_binop`).
 ///
 /// This comment used to record the divergence and dismiss it: bucketing is
@@ -452,7 +452,7 @@ def emit_guarded_native (name : String) (op : LLVMValue) : LLVMFunction :=
 // dependency is why they land together.
 //
 // **Every operation masks to its width, on the inputs AND the result.**
-// That is what `mask_to_suffix` (core/src/core_native.rs) does for the
+// That is what `mask_to_suffix` (rust/core/src/core_native.rs) does for the
 // Rust host -- `v as u32 as i64` -- and the two runtimes must agree
 // bit-for-bit or sha256 produces a plausible-looking wrong digest
 // rather than failing loudly. `emit_u8_sub` above predates this rule
@@ -584,7 +584,7 @@ def emit_u32_to_string : LLVMFunction :=
 /// on unmasked i64s would call `0x1_0000_0000` and `0` different when
 /// both are zero as u32. Signed `icmp` after masking is right for the
 /// same reason it is in the reference -- `int_cmp_width`
-/// (core/src/core_native.rs) masks both operands to `u32` first, so
+/// (rust/core/src/core_native.rs) masks both operands to `u32` first, so
 /// every value compared is in `0..2^32-1` and signed and unsigned
 /// ordering agree.
 def emit_masked_icmp_native (name : String) (cmp : LLVMValue) : LLVMFunction :=
@@ -803,7 +803,7 @@ def emit_u16_gt : LLVMFunction := emit_icmp_native "monad_u16_gt" (icmp_sgt (par
 /// UNMASKED, like the `U16` comparisons directly above and like
 /// `emit_u8_sub`/`_mul`/`_div`. The reference routes `U16` through the
 /// SAME generic, unmasked `int_binop` group as `I8`/`I16`/`I32`/`U8`/
-/// `I64` (`core/src/core_native.rs`'s `"i8_add" | ... | "u16_add" |
+/// `I64` (`rust/core/src/core_native.rs`'s `"i8_add" | ... | "u16_add" |
 /// "u64_add"` arm) and masks `U32` alone, so `U16.add 65535u16 1u16`
 /// has to come out 65536 here exactly as it does there. Masking would
 /// not fail loudly -- it would just be a different answer from the

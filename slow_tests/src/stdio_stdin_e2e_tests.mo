@@ -3,7 +3,7 @@
 /// `FdStream.read_line_bounded` over fd 0 now -- one 1-byte read per
 /// byte -- so these pin that it never reads past the line: LSP framing
 /// mixes it with `read_stdin_exact`, and tui polls fd 0 after it.
-/// `core/tests/stdio_stdin_test.rs` runs the same programs interpreted
+/// `rust/core/tests/stdio_stdin_test.rs` runs the same programs interpreted
 /// (and checks the 10k-line one leaks no ByteBuf slots).
 use lang::codegen::test::e2e_harness {compile_source_run_stdin_expect}
 

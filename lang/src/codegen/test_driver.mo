@@ -25,7 +25,7 @@
 /// `IO Result`, classified per def by `classify_test_def` below. A
 /// `Result`-returning test is judged by its constructor — `ok` is a
 /// pass, `err` a failure — mirroring the Rust reference's
-/// `detect_test_result_value` (`core/src/lib.rs`), which unwraps an
+/// `detect_test_result_value` (`rust/core/src/lib.rs`), which unwraps an
 /// `IO` wrapper first and then looks at the payload's constructor.
 /// (The Rust twin classifies VALUES at run time; this classifies the
 /// DECLARED TYPE at discovery time and the driver does the unwrap in
@@ -75,7 +75,7 @@ use std::stream {StreamError, StreamError.is_not_found}
 // ─── Discovery ──────────────────────────────────────────────────────
 
 /// Whether `d` carries a bare `#[test]` attribute. Mirrors the Rust
-/// reference's `Def::has_test_attr` (`core/src/term.rs`), via the
+/// reference's `Def::has_test_attr` (`rust/core/src/term.rs`), via the
 /// already-shared `has_attr` helper (`lang/types.mo`).
 #[partial]
 def is_test_def (d : Def) : Bool :=
@@ -85,7 +85,7 @@ def is_test_def (d : Def) : Bool :=
 
 /// Every top-level `Def` in `decl_list` carrying a bare `#[test]`
 /// attribute. Mirrors the Rust reference's own discovery precedent
-/// (`core/src/lib.rs:886-892`, `module.defs().filter(has_test_attr)`)
+/// (`rust/core/src/lib.rs:886-892`, `module.defs().filter(has_test_attr)`)
 /// — scoped to the given decl list only. Callers should pass the
 /// TARGET FILE's own unprefixed decls (`.decl_list`
 /// (get_loaded_main loaded)`), not its transitive `use` dependencies'
@@ -412,7 +412,7 @@ def synth_all_test_stmts (specs : List TestSpec) (idx : I64) (esc : String) : St
             synth_test_stmts spec idx esc ++ synth_all_test_stmts rest (idx + 1) esc,
     }
 
-/// `format_duration` parity (`core/src/lib.rs`), written in Monad.
+/// `format_duration` parity (`rust/core/src/lib.rs`), written in Monad.
 ///
 /// The native (`IO.current_time_nano`, std/src/io.mo) returns raw
 /// nanoseconds and does no conversion at all; every unit boundary and
@@ -556,7 +556,7 @@ pub def is_no_tests_error (e : String) : Bool :=
 ///
 /// Test discovery runs over the TARGET FILE's own decls only
 /// (the main `ModuleInfo`'s own `.decl_list`) -- matches the
-/// Rust reference's own precedent (`core/src/lib.rs`,
+/// Rust reference's own precedent (`rust/core/src/lib.rs`,
 /// `module.defs().filter(has_test_attr)`, that module's own defs only,
 /// not transitive `use` deps) -- while compilation still uses the FULL
 /// loaded set (`get_loaded_all`), so the driver's calls into the
@@ -957,7 +957,7 @@ def count_main_defs (decl_list : List Decl) : I64 :=
 
 // ─── Duration formatting ────────────────────────────────────────────
 //
-// Reference: `format_duration` (core/src/lib.rs) -- `{nanos}ns`,
+// Reference: `format_duration` (rust/core/src/lib.rs) -- `{nanos}ns`,
 // `{:.0}µs` on `as_micros()`, `{:.2}ms`, `{:.2}s`.
 
 #[test]

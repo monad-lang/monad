@@ -170,7 +170,7 @@ anyone awaiting it.
   finishes first
 
 The Rust side of the repository does contain a real threaded scheduler
-(`core/src/runtime/`, with `scheduler.rs`, `channel.rs`, `mutex.rs`,
+(`rust/core/src/runtime/`, with `scheduler.rs`, `channel.rs`, `mutex.rs`,
 `semaphore.rs`, `reactor.rs`), but nothing in `std/concurrent/*.mo` reaches it:
 the compiler's own runtime is the C one in `runtime/src/runtime.c`. Treat that
 Rust code as groundwork for a future runtime, not as something you can use today.

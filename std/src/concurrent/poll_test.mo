@@ -10,7 +10,7 @@
 // than a silent `none` -- and runs under the compiled backend's runner, like
 // `combine_test.mo`'s header. The host's side of the contract (degraded
 // semantics, the cancelled answer, the double-consume error) is pinned by
-// `core/src/core_native.rs`'s own unit tests, where an eval error is an
+// `rust/core/src/core_native.rs`'s own unit tests, where an eval error is an
 // assertion instead of a doomed `#[test]`.
 //
 // "Wait for the fiber" is a fixed `sleepIO` here rather than a poll loop:

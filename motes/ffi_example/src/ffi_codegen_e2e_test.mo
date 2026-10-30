@@ -7,7 +7,7 @@
 // test suite ran it. That gap is why a whole class of codegen bugs
 // survived a rebase onto main undetected: the ONLY automated FFI test
 // was `ffi_eval_test.mo`, which dispatches through the Rust interpreter
-// (`core/src/ffi.rs::extern_execute`) and never reaches
+// (`rust/core/src/ffi.rs::extern_execute`) and never reaches
 // `lang/codegen/emit.mo` at all. Every bug below produced a clean
 // `ffi_eval_test` pass and a broken compiler.
 //

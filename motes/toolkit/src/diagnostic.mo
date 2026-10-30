@@ -73,7 +73,7 @@ pub def diag_severity_hint : I64 := 4
 
 /// The tool name clients show beside a diagnostic, for a user looking at four
 /// servers at once. The Rust server being replaced sends the same string
-/// (`rust-cli/src/lsp.rs`'s diagnostic builder), so a user switching over sees
+/// (`rust/rust-cli/src/lsp.rs`'s diagnostic builder), so a user switching over sees
 /// no change in the gutter.
 pub def diagnostic_source_name : String := "monad"
 
@@ -192,7 +192,7 @@ def wire_diagnostic_at_origin (dg : Diagnostic) : WireDiagnostic :=
 /// wants it, minus the array.
 ///
 /// The four fields are the four the Rust server being replaced sends
-/// (`rust-cli/src/lsp.rs`), so this is the same wire shape with a better range.
+/// (`rust/rust-cli/src/lsp.rs`), so this is the same wire shape with a better range.
 #[partial]
 pub def wire_diagnostic_json (d : WireDiagnostic) : Json :=
   rpc_object [

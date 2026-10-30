@@ -55,7 +55,7 @@ pub type PositionEncoding {
 /// The specification's default, and what a client that announces nothing gets.
 ///
 /// This is also what the Rust server being replaced assumed, less explicitly:
-/// it advertised no `positionEncoding` at all (`rust-cli/src/lsp.rs:285-304`)
+/// it advertised no `positionEncoding` at all (`rust/rust-cli/src/lsp.rs:285-304`)
 /// and so was held to utf-16 by clients while its ranges were built from
 /// byte-derived columns. This module exists so that assumption can be made
 /// true instead of avoided.

@@ -68,7 +68,7 @@ use lib::typecheck::infer {body_type_error, empty_local_types, empty_locals, typ
 use lib::typecheck::usage {borrow_of_name_set, ctor_name_set}
 use lib::typecheck::affine {check_def}
 // The self-hosted twin of the Rust host's `use`-completeness gate
-// (`check_use_completeness`, core/src/term/module.rs): every name the
+// (`check_use_completeness`, rust/core/src/term/module.rs): every name the
 // main module reaches from another module must be named in its own
 // `use` line. Enforced by `gate_use_completeness` below, at the same
 // load-level chokepoint as its host-side twin.
@@ -975,7 +975,7 @@ def resolve_module_file (base_dir : String) (mp : ModulePath) : IO (Option Strin
                 // prefixing it with `motes/` is the Rust host's own route to
                 // the same file -- it pushes `cwd/motes` onto its search path
                 // and then tries `to_mote_file_path` under each root
-                // (`resolve_file_path`, core/src/term.rs), giving
+                // (`resolve_file_path`, rust/core/src/term.rs), giving
                 // `motes/example/src/greet.mo`.
                 //
                 // Tried AFTER the scan, deliberately: for a one-segment path
@@ -997,7 +997,7 @@ def resolve_module_file (base_dir : String) (mp : ModulePath) : IO (Option Strin
 /// The `motes/<member>/src/<path>.mo` candidates for `mp`, in
 /// `IO.list_dir`'s own sorted order.
 ///
-/// Mirrors the Rust host's `build_default_search_paths` (`core/src/lib.rs`),
+/// Mirrors the Rust host's `build_default_search_paths` (`rust/core/src/lib.rs`),
 /// which pushes `cwd/motes` AND every `cwd/motes/*/src` onto its search
 /// path. Directory probing rather than manifest-driven member resolution,
 /// deliberately: the Rust host probes directories, so parity means probing
@@ -2010,7 +2010,7 @@ def check_module_decls_with_scope (scope : Scope) (decl_list : List Decl) (local
 
 /// A module's type diagnostics, then its termination diagnostics --
 /// `lang/src/termination.mo`'s port of the host's `check_termination_all`
-/// (`core/src/eval/termination.rs`), which the host likewise runs once per
+/// (`rust/core/src/eval/termination.rs`), which the host likewise runs once per
 /// module over that module's own declarations. Before this, both attributes
 /// parsed and were ignored self-hosted, so a definition that loops forever
 /// checked clean here while the host rejected it.
@@ -2705,7 +2705,7 @@ def elaborate_module_decls_go (scope : Scope) (decl_list : List Decl) (locals : 
 // a type that can be built without ever being smaller, which is the same
 // circularity the termination check exists to keep out of the logic. The
 // Rust reference runs this as `check_strict_positivity`
-// (`core/src/eval/type.rs`), once per `Decl::Type` on its live path
+// (`rust/core/src/eval/type.rs`), once per `Decl::Type` on its live path
 // (`core_check_module.rs`); the self-hosted checker did not, so
 // `type Bad { mkBad (f : Bad -> I64) }` was rejected by the host and
 // accepted here. Measured 2026-09-23 before the port: the host rejects it,
@@ -2721,7 +2721,7 @@ def elaborate_module_decls_go (scope : Scope) (decl_list : List Decl) (locals : 
 // Self-reference is matched on the SPELLING the elaborator left in the
 // term, exactly as the reference matches it, and for a qualified occurrence
 // the module half is compared too. That half is not decoration: the same
-// source checked twice by `target-rust/release/monad-rs` gets different verdicts
+// source checked twice by `rust/target/release/monad-rs` gets different verdicts
 // depending on the module the file is checked AS -- `check probe_qual.mo`
 // (module `probe_qual`) rejects `type Q { mkQ (f : probe_qual::Q -> I64) }`
 // while the identical file named by absolute path (module
@@ -4537,7 +4537,7 @@ def unknown_use_name_error (info : ModuleInfo) (path : ModulePath) (n : String) 
 /// the dotted spelling (`List.length`), and the fix for a name the module
 /// declares nowhere is to keep the module loaded with `{}` and reach the
 /// name qualified. `use_name_hint`'s Rust twin in
-/// `core/src/term/module.rs` says the same thing in the same words -- CI
+/// `rust/core/src/term/module.rs` says the same thing in the same words -- CI
 /// runs both over the corpus.
 def use_name_hint (p : String) (n : String) (dotted : Option String) : String :=
     match dotted {
@@ -4595,7 +4595,7 @@ def use_names_ambient_prelude (u : ModulePath) : Bool :=
 /// mote and its declared dependencies; `mote_named_at` and
 /// `is_installed_mote` ask the filesystem the way resolution itself does.
 /// The Rust host asks the manifest half of the same question
-/// (`validate_use_qualification`, core/src/term/module.rs) so the two
+/// (`validate_use_qualification`, rust/core/src/term/module.rs) so the two
 /// compilers cannot drift on what a source means.
 #[partial]
 def head_names_mote (m : Option MoteManifest) (head : String) : IO Bool := do {
@@ -4723,7 +4723,7 @@ def bare_use_hint (head : String) (owner : Option String) : String :=
 
 // ─── The rule's own tests ───────────────────────────────────────────
 //
-// The Rust host carries the same six cases (core/src/term/module/test.rs).
+// The Rust host carries the same six cases (rust/core/src/term/module/test.rs).
 // Both runtimes enforce the rule, so a divergence here would mean a source
 // means one thing under `cargo run` and another under the compiler this
 // project ships. The legal half matters as much as the illegal one: a rule
@@ -5218,7 +5218,7 @@ def gate_mote_targets (r : Result String LoadedModules) : IO (Result String Load
 // named in its own `use` line -- unless the owner is ambient (prelude/
 // init/std closure), the consumer itself, an `open`ed namespace, or the
 // selection a `use M {names}` line spells out. This is the same rule
-// core/src/term/module.rs's `check_use_completeness` enforces on every
+// rust/core/src/term/module.rs's `check_use_completeness` enforces on every
 // load; the walk itself lives in `lang/use_completeness.mo` (why it is
 // a separate module rather than a `lib::module` import: this file is
 // the one importing it, so the reverse edge would be a cycle).
@@ -5534,7 +5534,7 @@ pub def load_file_modules (file_path : String) (verbose : Bool) : IO (Result Str
 /// `forced` is not read: it exists so the caller can pass something that
 /// consumes the step's own result (a `List.length`, a count), which
 /// guarantees the work happens INSIDE the span rather than at some later
-/// use. The evaluator is strict call-by-value -- `core/src/core_eval.rs`'s
+/// use. The evaluator is strict call-by-value -- `rust/core/src/core_eval.rs`'s
 /// `App` arm reduces both sides before applying, and `let x := v in b`
 /// desugars to `App(Lam b, v)` -- so a `let`-bound step is already forced
 /// where it is bound and `forced` is belt-and-braces. AGENTS.md item 25
@@ -6533,7 +6533,7 @@ def test_affine_check_accepts_an_instance_module : IO Bool := do {
 
 /// The rule's own case: a constructor field whose type is a function FROM
 /// the type being declared. Rejected by the reference
-/// (`target-rust/release/monad-rs check` on exactly this source, 2026-09-23).
+/// (`rust/target/release/monad-rs check` on exactly this source, 2026-09-23).
 /// Asserting the message, not just non-emptiness, is what makes this fail if
 /// the diagnostic's wording drifts away from `TypeError::Generic`'s.
 #[test]
@@ -6593,7 +6593,7 @@ def test_check_module_strict_pos_skips_structs : IO Bool := do {
 // --- Tests: the hole-in-infer-position arm ---
 //
 // The reference's `App(Lam{param_typ: Hole}, arg)` arms
-// (`core/src/core_check.rs:1582-1593` in `check`, the twin at `:946-964` in
+// (`rust/core/src/core_check.rs:1582-1593` in `check`, the twin at `:946-964` in
 // `infer`) do not CHECK their argument against the unannotated parameter's
 // type; they INFER it -- and `infer` on a hole is
 // `InferError::CannotInferHole` (`:884`), rendered "cannot infer the type of
@@ -6607,7 +6607,7 @@ def test_check_module_strict_pos_skips_structs : IO Bool := do {
 // is a `matches!` on `fun.strip_ctx()` -- and that width is load-bearing
 // rather than incidental, which is what three earlier candidate rules each
 // got wrong. It is also why the producer half matters: the reference's
-// bare-name lambda param is `param(i, Hole)` (`core/src/parser.rs:464-466`),
+// bare-name lambda param is `param(i, Hole)` (`rust/core/src/parser.rs:464-466`),
 // the port's was a bare sort at level 1 until this phase, and with a bare
 // sort standing in for a placeholder, `infer_position_hole` could tell
 // neither p6 nor the written-`Type` row apart.
@@ -6621,7 +6621,7 @@ def test_check_module_strict_pos_skips_structs : IO Bool := do {
 // literal lambda; s1, because a declared `_` behaves exactly like an absent
 // annotation; r1/r3, because the reference accepts both).
 //
-// Every row is measured against `target-rust/release/monad-rs check` on this same
+// Every row is measured against `rust/target/release/monad-rs check` on this same
 // source, and against the compiled self-hosted binary. `T` is declared EMPTY
 // (`type T {}`) so the rows need no constructor and no `open` -- each row's
 // value is a lambda -- and `T` doubles as row r2's non-arrow type. That is

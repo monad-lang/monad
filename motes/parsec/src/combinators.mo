@@ -54,7 +54,7 @@ def keyword_boundary_ok (rem : String) : Bool :=
 
 
 /// "Furthest progress wins" error selection — mirrors the Rust
-/// reference's `ParseError::or`/`append` (core/src/parser/error.rs),
+/// reference's `ParseError::or`/`append` (rust/core/src/parser/error.rs),
 /// which compare `input.input_len()` between two candidate errors and
 /// keep whichever consumed more before failing (i.e. the deeper, more
 /// specific failure), rather than discarding one arbitrarily. A
@@ -397,7 +397,7 @@ def separated_by_ok (input : String) (acc : List B) : ParseResult (List B) :=
 // --- UTF-8 codepoint-width stepping ---
 //
 // `String.slice`/`String.drop` are byte-oriented (see their own doc
-// comments in core/src/core_native.rs); stepping by a hardcoded 1 byte
+// comments in rust/core/src/core_native.rs); stepping by a hardcoded 1 byte
 // per iteration — as every scanner here used to — silently returns ""
 // once the offset lands mid-character for any multi-byte UTF-8 codepoint
 // (the native slice/drop fall back to empty rather than panic on a

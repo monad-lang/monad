@@ -648,7 +648,7 @@ def build_scope_one_decl (d : Decl) (path : ModulePath) (acc : ScopeData) : Scop
         // decl_list first. No-op, matching use_d/open_d's own existing
         // convention above (this codebase has no static match-
         // exhaustiveness check — Monad's own `NonExhaustiveMatch` is a
-        // RUNTIME-only error, core/src/core_eval.rs — so leaving this
+        // RUNTIME-only error, rust/core/src/core_eval.rs — so leaving this
         // wildcard off would silently typecheck fine today and only
         // crash the instant a real decl of one of these 3 variants
         // reached this function).
@@ -1652,7 +1652,7 @@ def scope_data_add_class_def (sd : ScopeData) (cd : ScopeClassDef) : ScopeData :
 
 // `Type`/`Prop` were registered here but `Sort`/`Pred` weren't -- a
 // straight 2-of-3 incomplete port from the native compiler, which
-// registers all three as real def_refs entries (`core/src/term/
+// registers all three as real def_refs entries (`rust/core/src/term/
 // module.rs`'s own `"Type"`/`"Prop"`/`"Pred"` insertions). Confirmed as
 // the direct cause of `unknown variable 'Sort'`/`'Pred'` in
 // `init/tests.mo`'s own Sort-universe/Pred-as-value tests

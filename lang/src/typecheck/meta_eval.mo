@@ -1,6 +1,6 @@
 /// Real evaluation of a meta-`def` (a `TypeInfo -> List Decl` function,
 /// e.g. `std/derive.mo`'s `derive_lens_meta`) against a `Value` argument
-/// -- the self-hosted analogue of `core/src/eval/meta_compile.rs`'s
+/// -- the self-hosted analogue of `rust/core/src/eval/meta_compile.rs`'s
 /// `MetaEvalContext` (Rust).
 ///
 /// Unlike the Rust reference, this needs no type-check as a

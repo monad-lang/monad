@@ -1,5 +1,5 @@
 /// The self-hosted twin of the Rust host's `use`-completeness gate
-/// (`check_use_completeness`, core/src/term/module.rs): every name a
+/// (`check_use_completeness`, rust/core/src/term/module.rs): every name a
 /// module reaches from another module must be named in its own `use`
 /// line, unless the owner is ambient, the consumer itself, or the name
 /// was `open`-ed. Enforced by `lang/module.mo`'s `gate_use_completeness`
@@ -135,7 +135,7 @@ def qualified_half (s : String) : Option (Pair ModulePath String) :=
 // ─── What a `use` line selects ─────────────────────────────────────
 //
 // The self-hosted twin of the host's `AllowedNames`/`Selection`
-// (core/src/term.rs). Two independent axes, because the import forms
+// (rust/core/src/term.rs). Two independent axes, because the import forms
 // differ on both:
 //
 // | form                     | `bare`          | `qual`          |
@@ -384,7 +384,7 @@ def sel_map_of_decls (decls : List Decl) (m : HashMap String Selection) : HashMa
 // their hub `lib.mo` files re-export through `pub use`, transitively:
 // every file sees those whole, without a `use` line. The host computes
 // the closure from the hub SOURCES (`ambient_seen_modules`,
-// core/src/term/module.rs); this gate computes it from the loaded
+// rust/core/src/term/module.rs); this gate computes it from the loaded
 // world, which is the same set once the loader has walked the trio's
 // own `pub use` targets.
 
@@ -462,7 +462,7 @@ def index_add_row (key : String) (row : DeclRow) (m : HashMap String (List DeclR
 /// One constructor, indexed twice: under its bare tail and under its
 /// full name. The row's `spelling` is the TWO-segment form
 /// (`InductiveName.ctor`), mirroring how the HOST stores a constructor
-/// (`term::induct_constructor`, core/src/term.rs) even though this
+/// (`term::induct_constructor`, rust/core/src/term.rs) even though this
 /// parser writes it single-segment: the dotted-prefix rule that lets
 /// `use std::stream {StreamErrorKind}` select
 /// `StreamErrorKind.permission_denied` is judged against the
@@ -550,7 +550,7 @@ def index_decl (owner : ModulePath) (d : Decl) (m : HashMap String (List DeclRow
                             m),
             },
         // Instances are deliberately not indexed, mirroring the host's
-        // `declaration_index` (core/src/term/module.rs): an instance is
+        // `declaration_index` (rust/core/src/term/module.rs): an instance is
         // reached through class resolution, and its own name binds no
         // reference a `use` line could be asked about. Their visibility is
         // enforced in the instance registries instead (`lang/scope.mo`).
@@ -594,7 +594,7 @@ def declaration_index (world : List (Pair ModulePath (List Decl))) (m : HashMap 
 /// The spellings the consumer's own declarations bind, plus every
 /// constructor tail its inductives carry and the `mk` a `struct`/`class`
 /// synthesizes (the host's `own_declared_keys` and its constructor
-/// reasoning, core/src/term/module.rs): a name the consumer declares
+/// reasoning, rust/core/src/term/module.rs): a name the consumer declares
 /// itself is never "reached from another module". The expanded decl
 /// list's declared names are folded in too, so a name the load-time
 /// macro expansion generates (`Point.x` from `derive_lens! Point`) is
@@ -632,7 +632,7 @@ def own_keys_go (decls : List Decl) (m : HashMap String Bool) : HashMap String B
                             own_keys_go rest (str_map_insert (show_identifier name) true (str_map_insert "mk" true m)),
                     },
                 // The host's `own` set is `names_of_decls`, which is every
-                // decl's `to_ref` (core/src/term.rs): the open's PATH is
+                // decl's `to_ref` (rust/core/src/term.rs): the open's PATH is
                 // an `open Param {mk}` file's own name for `Param`, the
                 // use's flattened module path is its own name for that
                 // path, and an infix/instance carries its own name too.
@@ -687,7 +687,7 @@ def own_ctors_go (ind : String) (cns : List InductConstructor) (m : HashMap Stri
 
 /// The names a module's own declarations reference, kept apart by the
 /// axis each one was WRITTEN on -- the twin of the host's `References`
-/// (core/src/term/module.rs). Merging the axes would make
+/// (rust/core/src/term/module.rs). Merging the axes would make
 /// `use std::base {}` plus a qualified `std::base::Ordering.lt` look
 /// unimported.
 pub struct Refs {

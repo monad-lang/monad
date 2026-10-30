@@ -864,7 +864,7 @@ def lower_parse_params (ctx : ParseLowerCtx) (ps : List ParseParam) : List Param
 /// alone -- it has no name to resolve a class or instance from -- so an
 /// unnamed sentinel reached codegen unresolved and produced a bogus
 /// `void`-typed call argument. Mirrors the Rust reference's own
-/// `desugar_do_statements` (`core/src/parser.rs`), which likewise
+/// `desugar_do_statements` (`rust/core/src/parser.rs`), which likewise
 /// desugars to a real dotted `Monad.bind`/`Monad.pure`.
 def monad_bind_term : Term :=
     Term.var sentinel (DebugName.named (Identifier.id "Monad.bind"))
@@ -878,7 +878,7 @@ def monad_pure_term : Term :=
 /// Folds in SOURCE order -- the first statement is the OUTERMOST wrap,
 /// each statement wrapping the desugaring of those that follow it, with
 /// the trailing `Monad.pure hole` innermost. Mirrors the Rust
-/// reference's `desugar_do_statements` (`core/src/parser.rs`).
+/// reference's `desugar_do_statements` (`rust/core/src/parser.rs`).
 /// Reversing the list (a real past bug) puts the LAST statement
 /// outermost, which both inverts monadic evaluation order and places a
 /// later statement's reference to an earlier binding OUTSIDE that

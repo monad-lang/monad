@@ -8,8 +8,8 @@
 
 # Where `monad build`, `check` and `test` write. This repository holds two
 # toolchains and names their output apart rather than letting them share
-# `target/`: cargo's is `target-rust/` (see .cargo/config.toml) and monad's is
-# `target-monad/`. A project with no Cargo.toml needs none of this and gets
-# the plain `target/` default.
+# `target/`: cargo's is `rust/target/` (see rust/.cargo/config.toml) and
+# monad's is `target-monad/`. A project with no Cargo.toml needs none of this
+# and gets the plain `target/` default.
 [build]
 target-dir = "target-monad"

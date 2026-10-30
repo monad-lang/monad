@@ -15,8 +15,8 @@ including every piece of editor tooling. Nothing in here is a language feature.
 ## Getting it
 
 ```bash
-cargo build --release        # produces target-rust/release/monad-rs
-cargo install --path cli     # or install it
+cargo build --manifest-path rust/Cargo.toml --release   # rust/target/release/monad-rs
+cargo install --path rust/rust-cli                        # or install it
 ```
 
 The binary is `monad-rs`; the crate is `monad-cli`.

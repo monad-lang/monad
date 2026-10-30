@@ -303,12 +303,9 @@ fn test_main_mo_lines_1_30() {
 /// Test parsing lang/src/types.mo (dependency of main.mo, might have the error)
 #[test]
 fn test_parse_lang_types() {
-  // Repo-relative (CARGO_MANIFEST_DIR's parent is the repo root, `core`'s
-  // sibling `lang/` -- mirrors `core_check_module.rs`'s `repo_search_paths`),
-  let types_mo = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-    .parent()
-    .expect("core crate's manifest dir has a parent directory")
-    .join("lang/src/types.mo");
+  // Repo-relative, independent of cargo's cwd: `crate::repo_root()` is the
+  // checkout root (the `rust/core` crate sits two levels below it).
+  let types_mo = crate::repo_root().join("lang/src/types.mo");
   let source = std::fs::read_to_string(&types_mo)
     .unwrap_or_else(|e| panic!("Failed to read {}: {e}", types_mo.display()));
   let lines: Vec<&str> = source.lines().collect();

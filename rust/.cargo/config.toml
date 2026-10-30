@@ -1,0 +1,13 @@
+# Cargo's build output. The Rust workspace lives in `rust/`, so cargo's
+# default `rust/target/` is already separate from the Monad toolchain's
+# `target-monad/` (see ../.monad/config.toml) and from the `target/` default
+# an ordinary Monad project gets. No `[build] target-dir` override is needed
+# any more; keeping the default also means nixpkgs' install hook finds the
+# artifacts where it looks for them.
+#
+# `[env]` rather than a shell export: RUST_MIN_STACK is part of the build's
+# environment for every cargo invocation, including the host that interprets
+# `cli/src/main.mo`.
+
+[env]
+RUST_MIN_STACK = { value = "16777216", force = true }

@@ -3574,12 +3574,8 @@ fn stdlib_dir() -> std::path::PathBuf {
   if let Ok(dir) = std::env::var("MONAD_STDLIB") {
     return std::path::PathBuf::from(dir);
   }
-  // CARGO_MANIFEST_DIR is core/ — parent is the workspace root, then init/src/
-  std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-    .parent()
-    .expect("CARGO_MANIFEST_DIR has no parent")
-    .join("init")
-    .join("src")
+  // `crate::repo_root()` is the checkout root; init/src/ hangs off it.
+  crate::repo_root().join("init").join("src")
 }
 
 /// Sibling of `stdlib_dir()` for the `std` mote (see AGENTS.md's
@@ -3712,10 +3708,7 @@ pub fn init_module(mut loaded: LoadedModules) -> Result<LoadedModules, LoadingEr
 /// Not feature-gated: the `init/src` directory is part of the repo, so the
 /// same path list is valid for the sources read at run time.
 pub fn default_module_source_files() -> Vec<std::path::PathBuf> {
-  let manifest_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-  let root = manifest_dir
-    .parent()
-    .expect("CARGO_MANIFEST_DIR has no parent");
+  let root = crate::repo_root();
   let init_dir = root.join("init").join("src");
   let std_dir = root.join("std").join("src");
   let init_files = [

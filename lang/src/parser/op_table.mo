@@ -28,7 +28,7 @@ pub def op_table : List OpEntry :=
 	 OpEntry.mk "==" 40 false,
 	 OpEntry.mk "!=" 40 false,
 	 // Same precedence level as ==/!= (40), matching the Rust
-	 // reference's operator_precedence (core/src/parser.rs) exactly --
+	 // reference's operator_precedence (rust/core/src/parser.rs) exactly --
 	 // missing here, `infix (<) := BOrd.lt`/`infix (>) := BOrd.gt`
 	 // (init/prelude.mo) rejected as "unknown operator" (op_check,
 	 // lang/parser.mo), which truncated the ENTIRE rest of prelude.mo
@@ -43,7 +43,7 @@ pub def op_table : List OpEntry :=
 	 OpEntry.mk ">=" 40 false,
 	 OpEntry.mk "++" 50 true,
 	 // No built-in meaning — see the matching `tag("@")` entry in
-	 // `core/src/parser.rs`'s `infix_symbol`/`operator_precedence`.
+	 // `rust/core/src/parser.rs`'s `infix_symbol`/`operator_precedence`.
 	 OpEntry.mk "@" 50 true,
 	 OpEntry.mk ">>" 60 false,
 	 OpEntry.mk "<<" 60 false,

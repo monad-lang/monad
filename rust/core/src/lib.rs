@@ -55,6 +55,21 @@ pub mod runtime;
 pub mod shared_str;
 pub mod term;
 
+/// The checkout's root directory.
+///
+/// The Rust workspace lives in `rust/`, so this crate's
+/// `CARGO_MANIFEST_DIR` is `rust/core`; the repo root is two levels up.
+/// Every lookup that reaches `init/`, `std/`, `examples/` or a mote on disk
+/// goes through this one definition, so a future move changes the answer in
+/// one place rather than in every path literal.
+pub fn repo_root() -> PathBuf {
+  PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+    .parent()
+    .and_then(|p| p.parent())
+    .expect("rust/core's CARGO_MANIFEST_DIR has no grandparent")
+    .to_path_buf()
+}
+
 #[cfg(all(not(target_arch = "wasm32"), feature = "repl"))]
 use rustyline::{DefaultEditor, error::ReadlineError};
 
@@ -2433,10 +2448,7 @@ def test_direct_generic_call : Bool :=
     // resolve it via the workspace root rather than relying on cwd, since
     // `cargo test` runs with cwd set to this crate's directory, not the
     // workspace root where `std/` actually lives.
-    let workspace_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-      .parent()
-      .unwrap()
-      .to_path_buf();
+    let workspace_root = repo_root();
     let result = run_tests(
       vec![file],
       EvalOptions::default(),
@@ -2459,10 +2471,26 @@ def test_direct_generic_call : Bool :=
   /// comment above) — shared by every `run_tests_for_files`/
   /// `test_defs_from_source` test below so they don't each re-derive it.
   fn workspace_root() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-      .parent()
-      .unwrap()
-      .to_path_buf()
+    repo_root()
+  }
+
+  /// `repo_root()` is the one place the Rust workspace's depth is encoded:
+  /// `rust/core/` is two levels below the checkout. If a future move changes
+  /// it without changing this helper, every source-path resolution breaks at
+  /// run time; pin the answer against files that exist only at the root.
+  #[test]
+  fn test_repo_root_is_the_checkout_root() {
+    let root = repo_root();
+    assert!(
+      root.join("init/src/prelude.mo").is_file(),
+      "repo_root() did not find init/src/prelude.mo: {}",
+      root.display()
+    );
+    assert!(
+      root.join("rust/Cargo.toml").is_file(),
+      "repo_root() did not find rust/Cargo.toml: {}",
+      root.display()
+    );
   }
 
   /// A fresh, uniquely-named temp dir for one test — same convention as

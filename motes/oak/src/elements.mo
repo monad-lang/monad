@@ -45,7 +45,7 @@ with Html {
     // ═══ Attributes ═══
     //
     // Reserved keywords get the underscore spelling (`class`, `type`, `for`,
-    // `open`; see RESERVED_KEYWORDS in core/src/parser.rs). The emitted
+    // `open`; see RESERVED_KEYWORDS in rust/core/src/parser.rs). The emitted
     // attribute name never carries the underscore.
 
     pub def id_ {Msg : Type} (value : String) : Oak.Attr Msg :=

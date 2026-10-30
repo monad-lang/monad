@@ -471,7 +471,7 @@ def show_struct_fields (fs : List StructField) : String :=
 
 /// Source-level multiplicity prefix (parseable, round-trips through
 /// `multiplicity_prefix`) — distinct from `Multiplicity`'s own `Display`
-/// impl on the Rust side (core/src/term.rs), which uses "0"/"ω"/"!"/"?"
+/// impl on the Rust side (rust/core/src/term.rs), which uses "0"/"ω"/"!"/"?"
 /// for diagnostic printing, not source syntax. Many is the default and
 /// prints as nothing, matching `show_vis_prefix`'s package_private case.
 #[partial]
@@ -682,7 +682,7 @@ pub def show_decls (decl_list : List Decl) : String :=
     }
 
 /// A single item inside a `use Module { ... }` brace filter. Mirrors
-/// Rust's `Display for UseItem` (core/src/term.rs).
+/// Rust's `Display for UseItem` (rust/core/src/term.rs).
 #[partial]
 def show_use_item (item : UseItem) : String := match item {
     UseItem.use_name name => show_identifier name,

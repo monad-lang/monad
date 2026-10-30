@@ -48,7 +48,7 @@ pub def is_ascii_byte (b : U8) : Bool :=
 ///
 /// `0x80 <= b <= 0xbf`, written as "greater than `0x7f` and not greater than
 /// `0xbf`". This is the rule `String.trailing_chars` counts by on BOTH runtimes
-/// -- `core/src/core_native.rs` and `runtime/src/runtime.c` each test
+/// -- `rust/core/src/core_native.rs` and `runtime/src/runtime.c` each test
 /// `(b & 0xC0) != 0x80` -- and the rule `lang/parser/position.mo`'s
 /// `is_utf8_continuation_byte` states (`lang/parser/position.mo:108`), which is
 /// where this formulation is copied from. It is copied rather than imported

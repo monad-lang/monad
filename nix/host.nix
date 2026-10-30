@@ -34,57 +34,46 @@
         # derivation shareable across commits that do not touch them. The
         # filter keeps what the build actually reads, no more:
         #
-        #   * EVERY workspace member. Cargo parses the root `members` list
-        #     before it does anything else, so omitting `wasm/` -- which
-        #     `-p monad-cli` below never builds -- fails the build with
-        #     "failed to load manifest for workspace member" rather than
-        #     being harmless.
-        #   * `.cargo/config.toml`, which is a cargo input even though it
+        #   * EVERY workspace member under `rust/` (the root `members` list
+        #     names `core` and `rust-cli`; cargo parses it before it does
+        #     anything else).
+        #   * `rust/.cargo/config.toml`, which is a cargo input even though it
         #     reaches no source file: it sets `RUST_MIN_STACK = 16 MiB` for
         #     the processes cargo runs. Leaving it out would change the
         #     build's environment silently.
         #   * NOT the monad sources. The `include_str!` calls that reach
-        #     `init/`, `std/` and `examples/` (core/src/core_check_module.rs
-        #     :3921+) are inside `#[cfg(test)] mod test`, and `doCheck =
-        #     false` below means no test build ever expands them; with
-        #     `embed-stdlib` off (the default -- only the `wasm` member turns
-        #     it on) the stdlib is a RUNTIME path, which is why the CI job
-        #     exports MONAD_STDLIB.
+        #     `init/`, `std/` and `examples/` (rust/core/src/core_check_module.rs)
+        #     are inside `#[cfg(test)] mod test`, and `doCheck = false` below
+        #     means no test build ever expands them; the stdlib is a RUNTIME
+        #     path, which is why the CI job exports MONAD_STDLIB.
         src = lib.fileset.toSource {
-          root = ../.;
+          root = ../rust;
           fileset = lib.fileset.unions [
-            ../.cargo
-            ../Cargo.lock
-            ../Cargo.toml
-            ../core
-            ../rust-cli
-            ../wasm
+            ../rust/.cargo
+            ../rust/Cargo.lock
+            ../rust/Cargo.toml
+            ../rust/core
+            ../rust/rust-cli
           ];
         };
-        cargoLock.lockFile = ../Cargo.lock;
+        cargoLock.lockFile = ../rust/Cargo.lock;
 
         # `-p monad-cli` rather than the whole workspace, which keeps the
-        # `wasm` member -- and therefore a wasm32 toolchain -- out of a build
-        # that has no use for it.
+        # `monad-core` dependency as the only crate the host needs.
         cargoBuildFlags = [
           "-p"
           "monad-cli"
         ];
 
-        # Cargo writes to `target-rust/` (see ./.cargo/config.toml, which IS in
-        # the fileset above), but nixpkgs' cargo-install-hook looks in a literal
-        # `target/@targetSubdirectory@/$cargoBuildType` and never reads
-        # CARGO_TARGET_DIR -- so without this the build would succeed and the
-        # install would find nothing. The env var overrides the config file, and
-        # nothing here clobbers it: the build hook's own CARGO_TARGET_DIR
-        # assignment is inside its `buildAndTestSubdir` branch, which this
-        # package does not set.
+        # Cargo's default output is `rust/target`, but nixpkgs' cargo-install
+        # hook looks in a literal `target/@targetSubdirectory@/$cargoBuildType`
+        # relative to the build directory. Pinning the variable (to the same
+        # place the default would use) keeps the install hook and cargo
+        # agreeing without a config file override.
         CARGO_TARGET_DIR = "target";
 
-        # The workspace's own `cargo test` pulls in the wasm member, which
-        # needs a target this derivation does not provide; CI runs the suite
-        # from the dev shell, which does -- the "Rust test suite" step of
-        # ci.yml's `pre-commit-checks`, guarded on the compiler classifier.
+        # CI runs the Rust suite from the dev shell; this derivation only
+        # needs to produce the host binary.
         doCheck = false;
 
         # Deliberately no `git`. No input in Cargo.lock is a git dependency, so

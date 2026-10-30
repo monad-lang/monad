@@ -10,13 +10,13 @@ use lib::core_value {
 use lang::types {Identifier, ModulePath, NumSuffix, i64}
 use std::list {List.length}
 
-/// The evaluator core loop, mirroring `core/src/core_eval.rs` (Rust).
+/// The evaluator core loop, mirroring `rust/core/src/core_eval.rs` (Rust).
 ///
 /// The payoff of `lang/core_ir.mo` + `lang/core_value.mo`: reduces
 /// `CoreIr` to `Value` via environment-extending closures, not
 /// substitution. `app` evaluates its function to a `v_closure` and its
 /// argument to a `Value` (strict call-by-value, matching
-/// `core/src/eval.rs::eval_app`'s real semantics), then *extends* the
+/// `rust/core/src/eval.rs::eval_app`'s real semantics), then *extends* the
 /// closure's captured environment by one binding and evaluates the body
 /// there. Each argument is evaluated exactly once; every subsequent
 /// `local` reference to it is a shared `Value` off the environment, not a
@@ -318,7 +318,7 @@ def force_global
 
 /// NOTE: every `gd_def` here is memoized unconditionally, with none of
 /// the effect carve-out the Rust evaluator's own `force_global` has
-/// (`core/src/core_eval.rs`, `GlobalDef::Effect` /
+/// (`rust/core/src/core_eval.rs`, `GlobalDef::Effect` /
 /// `Native { arity: 0 }`). That is safe ONLY because this evaluator's
 /// native table is `basic_native_table` -- five I64 ops and seven String
 /// ops, all pure. Nothing it can evaluate has an effect to repeat.
@@ -387,7 +387,7 @@ def fire_or_accumulate
 // ─── A small native table ─────────────────────────────────────────────
 // Executing a native op calls through to Monad's own stdlib function of
 // the same meaning. The reference for every semantic detail is
-// `core/src/core_native.rs::exec_native` (the Rust host), and where the
+// `rust/core/src/core_native.rs::exec_native` (the Rust host), and where the
 // compiled backend intentionally diverges the divergence is named here:
 //   * i8/i16/i32/u8/u16/u64 arithmetic and comparison are UNMASKED i64
 //     operations tagged `I64` (`int_binop`), exactly like the reference

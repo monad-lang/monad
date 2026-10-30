@@ -11,7 +11,7 @@
 # nightly whose decls parser silently truncated `std/derive.mo` at the
 # first annotated defmacro. The FALLBACK catches the loud failures; a
 # silently wrong nightly-hosted build is a risk this scheme accepts, and
-# the Rust regression tests (core/tests/constrained_dict_regression_test.rs
+# the Rust regression tests (rust/core/tests/constrained_dict_regression_test.rs
 # and the suite they joined) are the coverage that no longer depends on
 # the self-hosted sweeps this replaces.
 #
@@ -25,12 +25,12 @@
 # checkout's init/src by that script), one rung for a `monad` host
 # (native speed, ~1 min), an interpreted two-rung build for a monad-rs
 # host (~22 min). The fallback host comes from MONAD_HOST_BIN -- ci.yml
-# sets it to the flake's packaged monad-rs; unset, `cargo run --release --`
-# is the default build-self-hosted.sh already carries.
+# sets it to the flake's packaged monad-rs; unset, the default build-self-
+# hosted.sh carries is `cargo run --manifest-path rust/Cargo.toml --release --`.
 #
 # Runnable by hand, which is how it was checked rather than assumed:
 #
-#   MONAD_HOST_BIN=target-rust/release/monad-rs scripts/ci-self-compile.sh
+#   MONAD_HOST_BIN=rust/target/release/monad-rs scripts/ci-self-compile.sh
 #
 # with the same warning every other build carries: do not edit the tree
 # while it runs.
@@ -39,7 +39,7 @@ set -euo pipefail
 root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$root"
 
-fallback_host="${MONAD_HOST_BIN:-"cargo run --release --"}"
+fallback_host="${MONAD_HOST_BIN:-"cargo run --manifest-path $root/rust/Cargo.toml --release --"}"
 out="${1:-$root/target-monad/ci-self-compile}"
 
 nightly=""

@@ -196,7 +196,7 @@ def test_sleepIO_smoke : IO Bool {
 // awaits the fiber it just forked: a `forkIO` that returns a deferred
 // thunk, and an `await_fiber` that runs it inline, satisfies them all.
 // That is exactly what the Rust host does on purpose (see
-// `core/src/core_native.rs`'s `fork_io`, "cooperative/lazy, not real
+// `rust/core/src/core_native.rs`'s `fork_io`, "cooperative/lazy, not real
 // OS-thread concurrency"), so those tests cannot tell the backends
 // apart. This one can: four fibers are forked BEFORE any of them is
 // awaited, so the four sleeps overlap only if the four threads exist at

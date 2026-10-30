@@ -1,7 +1,7 @@
 # The Monad language server: the LSP protocol over `motes/toolkit`'s framing,
 # JSON-RPC and position conversion, and `lang`'s checker as the engine.
 #
-# This is the replacement for `rust-cli/src/lsp.rs`, which links `monad-core`
+# This is the replacement for `rust/rust-cli/src/lsp.rs`, which links `monad-core`
 # in-process. The Rust server is DEPRECATED and there is no parity requirement and
 # no backwards-compatibility requirement: what it gets wrong -- a URI whose
 # percent-escapes are never decoded, a position encoded as utf-16 with no

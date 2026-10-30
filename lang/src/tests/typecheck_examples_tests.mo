@@ -389,7 +389,7 @@ def test_typecheck_exists_declaration : Bool :=
 // fails them).
 //
 // `Type` is level 1 and `Prop`/`Pred` are level 0 -- the same table the
-// Rust reference uses (`known_sort_keyword_level`, core/src/core_unify.rs),
+// Rust reference uses (`known_sort_keyword_level`, rust/core/src/core_unify.rs),
 // so `Pred`, which is a plain alias for `Prop` there, is pinned as one here
 // too rather than left as the only hole-typed member of the four.
 //

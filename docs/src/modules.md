@@ -37,7 +37,7 @@ apart from a name path on sight.
 `::` is the only spelling a `use` path accepts — the corpus migration is
 complete, so a dotted `use std.list` is a parse error rather than a synonym.
 Both parsers enforce it (`use_path_sep` in `lang/src/parser.mo`,
-`use_path_expression` in `core/src/parser.rs`). The three-way rule in full:
+`use_path_expression` in `rust/core/src/parser.rs`). The three-way rule in full:
 
 | Form | Separator | Example |
 | --- | --- | --- |

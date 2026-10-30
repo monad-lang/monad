@@ -1,5 +1,5 @@
 /// The decl-level entry point — `expand_decls`, mirroring the Rust
-/// reference's own `expand_macros` (`core/src/eval/macro_expand.rs`):
+/// reference's own `expand_macros` (`rust/core/src/eval/macro_expand.rs`):
 /// one module's own already-parsed decl_list in, decl_list with every macro
 /// resolved out.
 ///
@@ -423,7 +423,7 @@ def expand_decls_go (lookup : Identifier -> Option Term) (decl_gen_registry : Li
 
 // ─── Attribute → macro bridge (`#[derive ...]`) ────────────────────
 //
-// Mirrors `core/src/eval/macro_expand.rs`'s `Decl::Type(induct)` arm: an
+// Mirrors `rust/core/src/eval/macro_expand.rs`'s `Decl::Type(induct)` arm: an
 // attributed type declaration is not a macro CALL in the source at all,
 // so nothing in `expand_decls_go` above would ever look at it — the
 // attribute has to be read back off the decl and turned into the
@@ -531,7 +531,7 @@ def derive_macro_names_of_attrs (registry : List DeclGenEntry) (attrs : List Att
 /// shapes the reference's `Decl::Type` arm covers. NOTE the self-hosted
 /// split the reference doesn't have: `struct` is its OWN `Decl` variant
 /// here, where the reference represents both as one `Inductive` with
-/// `variant: Struct` (`core/src/term.rs`), which is why `#[derive ...]`
+/// `variant: Struct` (`rust/core/src/term.rs`), which is why `#[derive ...]`
 /// on a `struct` needs a parser change (`ParseStruct`/`Struct`'s own
 /// `attrs` slot) as well as this bridge.
 pub def decl_type_attrs (d : Decl) : List Attribute :=

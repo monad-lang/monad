@@ -634,7 +634,7 @@ pub def F64.to_string (a : F64) : String
 /// is nothing else here -- a codegen caller wants it as the integer it
 /// has to emit, with no further conversion in between. The C side is
 /// `strtod` (`runtime/src/runtime.c`) and the Rust host's equivalent is
-/// `f64::from_str` (`core/src/core_native.rs`), which agree on every
+/// `f64::from_str` (`rust/core/src/core_native.rs`), which agree on every
 /// spelling the number parser can produce; text that parses to nothing
 /// gives 0.0 rather than failing, so a malformed literal is a wrong
 /// constant instead of a compiler crash.

@@ -1,7 +1,7 @@
 use lib::types {Identifier, ModulePath, NumSuffix, id_eq, show_module_path}
 
 /// `CoreIr` — the compiled, evaluator-facing IR this evaluator reduces,
-/// mirroring `core/src/core_ir.rs`'s `CoreIr` (Rust). See that file's own
+/// mirroring `rust/core/src/core_ir.rs`'s `CoreIr` (Rust). See that file's own
 /// doc comment for the full design rationale; the short version: this is
 /// the IR the closure-based `lang/core_eval.mo` evaluates, produced by
 /// `lang/lower_core_ir.mo` lowering the checked, de-Bruijn `Term`
@@ -32,7 +32,7 @@ type IrLit {
 /// `MatchArm` (ctor `match_arm`); that collision was invisible to the
 /// self-hosted checker but broke the Rust host's `check lang`, whose
 /// meta-eval captured the whole `lang/` tree into one flat bare-key
-/// `program.inductives` map (`core/src/lower_core_ir.rs`) — both keyed
+/// `program.inductives` map (`rust/core/src/lower_core_ir.rs`) — both keyed
 /// bare `MatchArm`, the later insert silently overwrote `init.meta`'s,
 /// so `derive_cli_meta`'s `MatchArm.match_arm` reference lowered to
 /// `GlobalDef::Unresolved`. Fixed not by renaming this type but by

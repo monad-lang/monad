@@ -5,7 +5,7 @@
 /// `Expr`/`MetaMatchArm`/`MetaParam`/`MetaDecl` are a small, deliberately
 /// minimal mirror of the compiler's own `Term`/`Decl` surface, letting a
 /// "meta" function — an ordinary `def` invoked via
-/// `core/src/eval/meta_compile.rs`, NOT a `defmacro` template — build new
+/// `rust/core/src/eval/meta_compile.rs`, NOT a `defmacro` template — build new
 /// code with ordinary function calls (`List.map`/`Foldable.foldl`/
 /// `match`/recursion) and hand the result back to be spliced into the
 /// program. This is the Monad-source half of the design; the Rust half

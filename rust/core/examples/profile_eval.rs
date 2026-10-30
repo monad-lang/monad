@@ -6,9 +6,9 @@
 //! instruction count. Run under `valgrind --tool=callgrind` for a clean
 //! eval-only profile, e.g.:
 //!
-//!   cargo build --release --example profile_eval
+//!   cargo build --manifest-path rust/Cargo.toml --release --example profile_eval
 //!   valgrind --tool=callgrind --callgrind-out-file=/tmp/cg.out \
-//!     ./target-rust/release/examples/profile_eval
+//!     ./rust/target/release/examples/profile_eval
 
 use monad_core::core_check_module::check_all_modules_capturing_core;
 use monad_core::core_eval::force_global;

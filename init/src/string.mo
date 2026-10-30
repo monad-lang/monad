@@ -72,7 +72,7 @@ pub def String.to_list (s : String) : List U8
 pub def String.from_list (bytes : List U8) : String
 
 /// UNWIRED -- declared here but absent from `exec_native`'s dispatch
-/// table (`core/src/core_native.rs`), so calling it fails at runtime.
+/// table (`rust/core/src/core_native.rs`), so calling it fails at runtime.
 /// This is the hazard `validate_no_unwired_natives` (lang/codegen/emit.mo)
 /// exists to catch; it never fires here only because nothing reaches
 /// these. See AGENTS.md's `Char` item before relying on either.
@@ -98,13 +98,13 @@ def String.from_chars (bytes : List Chars) : String
 // didn't). See self-hosted-compiler-perf.md Step 2: the active
 // `String.hash`/`String.lt`/`String.gt` below now delegate to natives
 // (`string_hash`/`string_lt`/`string_gt`, bit-identical algorithms,
-// re-implemented in `core/src/core_native.rs`) as a temporary,
+// re-implemented in `rust/core/src/core_native.rs`) as a temporary,
 // pragmatic win — every `Identifier`/`ModulePath` `BOrd`/`Hashable`
 // instance (`lang/types.mo`) pays this cost on every scope hashmap op.
 // Kept here, renamed rather than deleted, as the intended long-term
 // implementation to switch back to once more of the compiler is
 // self-hosted and the interpreter itself is faster (see the tail-call
-// optimization work in `core/src/core_eval.rs`, which reduces — but
+// optimization work in `rust/core/src/core_eval.rs`, which reduces — but
 // does not eliminate — the interpreter-overhead argument against pure
 // `.mo` implementations of hot paths like this one).
 

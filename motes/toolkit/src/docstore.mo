@@ -38,7 +38,7 @@
 /// `docstore_change` changes.
 ///
 /// THE URI CODE IS PERCENT-AWARE, which is a difference from the tool being
-/// replaced: `rust-cli/src/lsp.rs`'s `uri_to_path` strips the `file://` prefix
+/// replaced: `rust/rust-cli/src/lsp.rs`'s `uri_to_path` strips the `file://` prefix
 /// and stops, so a path containing a space or any non-ASCII byte -- both of
 /// which this repository's own filenames avoid but which are unremarkable
 /// elsewhere -- would be handed to the checker as the literal text `%20` and

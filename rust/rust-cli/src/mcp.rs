@@ -920,10 +920,7 @@ mod test {
   // core`'s own `run_tests`-adjacent tests' `workspace_root()` helper.
 
   fn workspace_root() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-      .parent()
-      .unwrap()
-      .to_path_buf()
+    monad_core::repo_root()
   }
 
   /// Unique per-process tmp path so parallel `cargo test` runs don't

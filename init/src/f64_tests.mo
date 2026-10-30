@@ -4,7 +4,7 @@
 /// Every assertion here is a cross-check, not a restatement: this file
 /// runs under the self-hosted runner (compiled code, `runtime.c`'s F64
 /// section) and under `monad-rs test` (the Rust evaluator,
-/// `core/src/core_native.rs`), so a test that passes is two independent
+/// `rust/core/src/core_native.rs`), so a test that passes is two independent
 /// implementations agreeing on the same literal -- which is the whole
 /// hazard this family carries, since an `F64` is a bit pattern here and
 /// the two sides parse and print it with different libraries (`strtod`

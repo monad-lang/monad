@@ -10,15 +10,17 @@ instructed — they may target a different branch.
 
 ```
 monad/
-├── core/              # Rust reference compiler/interpreter ("the Rust host")
-│   └── src/
-│       ├── parser.rs + parser/   # Lexer/parser
-│       ├── core_check_module.rs  # Module type checker (with core_unify.rs)
-│       ├── core_eval.rs          # Closure-based CoreTerm evaluator
-│       ├── core_native.rs        # Native function dispatch + implementations
-│       ├── lower_core_ir.rs      # Term -> CoreIr lowering
-│       └── term/ + term.rs       # AST, modules, motes
-├── rust-cli/          # `monad-rs`: the Rust host binary (cargo-run surface)
+├── rust/              # The Rust bootstrap host ("the Rust host")
+│   ├── Cargo.toml     # cargo workspace root (members: core, rust-cli)
+│   ├── core/          # Rust reference compiler/interpreter
+│   │   └── src/
+│   │       ├── parser.rs + parser/   # Lexer/parser
+│   │       ├── core_check_module.rs  # Module type checker (with core_unify.rs)
+│   │       ├── core_eval.rs          # Closure-based CoreTerm evaluator
+│   │       ├── core_native.rs        # Native function dispatch + implementations
+│   │       ├── lower_core_ir.rs      # Term -> CoreIr lowering
+│   │       └── term/ + term.rs       # AST, modules, motes
+│   └── rust-cli/      # `monad-rs`: the Rust host binary (cargo-run surface)
 ├── cli/               # The self-hosted compiler, written in Monad (`monad build cli`)
 ├── lang/              # Self-hosted compiler sources: parser, typecheck, module, codegen/
 │   └── src/codegen/   # LLVM backend by concern (emit, ir, natives, validate, ...)
@@ -71,7 +73,7 @@ invisible outside its own module, and a package-private (unmarked) one is
 invisible outside its own mote. The rule is judged at the *reference* — every
 name a file reaches, including dotted member names, glob imports, `open`ed
 names and the ambient prelude — by the `use`-completeness gate
-(`lang/src/use_completeness.mo`, `core/src/term/module.rs`), so naming a
+(`lang/src/use_completeness.mo`, `rust/core/src/term/module.rs`), so naming a
 hidden declaration in a `use` line does not help; the declaration itself has
 to be marked `pub`. Instances follow the same rule: a hidden instance is not
 a dictionary candidate for another mote. A macro's own NAME is exempt (a
@@ -102,8 +104,9 @@ def h (s : String) : I64 :=               // ok: String is Copy
 `~/.monad/bin/monad` (`monadup default` installs the latest and makes it
 active — run it before self-compile work). `monad build cli` (or
 `scripts/build-self-hosted.sh`) builds the self-hosted compiler from
-`cli/src/main.mo` as `monad`. `cargo run --release --` (or `monad-rs`) is the
-Rust host — use it when iterating on the Rust compiler itself.
+`cli/src/main.mo` as `monad`. `cargo run --manifest-path rust/Cargo.toml
+--release --` (or `monad-rs`) is the Rust host — use it when iterating on the
+Rust compiler itself.
 `monadup doctor` reports whether the active nightly and the `llc`/`clang`/
 `pkg-config`/Boehm-GC build prerequisites are healthy, and `monadup env`
 prints the resolved home/platform/toolchain roots.
@@ -114,8 +117,8 @@ monad check <path>... [--workspace]    # parse + typecheck (no execution)
 monad test <path>... [--jobs N]        # run each file's #[test] defs
 monad build <path|mote> [--release]    # compile to a native binary
 monad lsp                              # language server on stdio
-cargo build -p monad-core              # build the Rust host crate
-cargo test -p monad-core <name>        # one Rust test
+cargo build --manifest-path rust/Cargo.toml -p monad-core   # build the Rust host crate
+cargo test --manifest-path rust/Cargo.toml -p monad-core <name>   # one Rust test
 ```
 
 - Use `--release` for self-hosted workloads (anything running
@@ -124,7 +127,7 @@ cargo test -p monad-core <name>        # one Rust test
 - Prefer the `monad` binary as the host when self-compiling:
   `MONAD_HOST_BIN=monad scripts/build-self-hosted.sh <out>` compiles
   `cli/src/main.mo` at native speed, much faster than the default
-  `cargo run --release --` host interpreting it.
+  `cargo run --manifest-path rust/Cargo.toml --release --` host interpreting it.
 - `bootstrap` (devenv) / `scripts/bootstrap-compile.sh` / `devenv tasks run
   monad:bootstrap-compile` self-compiles the compiler; CI runs it after
   every change to `lang/`, `runtime/`, `init/` or `std/` because those are
@@ -192,7 +195,7 @@ Numeric literals: `42` (I64), `42u8`/`i32`/`u64`..., `3.14` (F64), `0xFF`.
 
 - **Reserved keywords cannot be field/param names** (`class`, `type`,
   `match`, `if`, `in`, `fn`, ... — see `RESERVED_KEYWORDS` in
-  `core/src/parser.rs`). One keyword in a `(name: Type)` position cascades
+  `rust/core/src/parser.rs`). One keyword in a `(name: Type)` position cascades
   into a misleading `unexpected: Eof` at the NEXT declaration. Rename the
   field (`cls`, `kind`).
 - **Annotated lambda parameters need parens**: `fn (s : String) => s`, not
@@ -261,14 +264,14 @@ field access.
 
 | Concern | File |
 |---|---|
-| Syntax | `core/src/parser.rs` + `core/src/parser/` |
-| Term/AST representation | `core/src/term.rs` + `core/src/term/` |
-| Type checking | `core/src/core_check_module.rs`, `core_unify.rs` |
-| Evaluation | `core/src/core_eval.rs` |
-| Natives | `core/src/core_native.rs` (`exec_native` dispatch) |
-| Lowering to IR | `core/src/lower_core_ir.rs`, `core_ir.rs` |
+| Syntax | `rust/core/src/parser.rs` + `rust/core/src/parser/` |
+| Term/AST representation | `rust/core/src/term.rs` + `rust/core/src/term/` |
+| Type checking | `rust/core/src/core_check_module.rs`, `core_unify.rs` |
+| Evaluation | `rust/core/src/core_eval.rs` |
+| Natives | `rust/core/src/core_native.rs` (`exec_native` dispatch) |
+| Lowering to IR | `rust/core/src/lower_core_ir.rs`, `core_ir.rs` |
 | Self-hosted codegen | `lang/src/codegen/` (emit.mo, ir.mo, natives.mo, validate.mo) |
-| Module loading / motes | `core/src/term/module.rs`, `lang/src/module.mo`, `lang/src/mote.mo` |
+| Module loading / motes | `rust/core/src/term/module.rs`, `lang/src/module.mo`, `lang/src/mote.mo` |
 
 The self-hosted pipeline: parse → scope → elaborate → typecheck → codegen
 (LLVM IR → llc → clang, via `llvm/src/link.mo`). Both compilers must agree
@@ -279,13 +282,13 @@ gate for anything touching `lang/`, `runtime/`, `init/` or `std/`.
 ## Testing and Memory Discipline
 
 ```bash
-cargo test -p monad-core <name>      # one Rust test (cheap iteration)
+cargo test --manifest-path rust/Cargo.toml -p monad-core <name>   # one Rust test (cheap iteration)
 monad test std/src/process_tests.mo  # one Monad test file
 monad test std                       # directory sweep
 scripts/check-docs.sh                # type-check md/AGENTS code fences
 ```
 
-**A whole-corpus check or full `cargo test --release` can exhaust system
+**A whole-corpus check or full `cargo test --manifest-path rust/Cargo.toml --release` can exhaust system
 memory when name resolution regresses** — it has hard-restarted machines.
 The safeguards, in order:
 
@@ -293,15 +296,15 @@ The safeguards, in order:
 
    ```bash
    systemd-run --user --scope -p MemoryMax=4G -p MemorySwapMax=0 \
-       cargo run --release -- check init std
+       cargo run --manifest-path rust/Cargo.toml --release -- check init std
    ```
 
    A polling watchdog does NOT work — allocation spikes finish between
    polls. Use the cap.
 2. One cargo invocation at a time. Narrow the scope (`check init` is cheap,
-   `check init std` is where blow-ups first show; `cargo test -p monad-core
+   `check init std` is where blow-ups first show; `cargo test --manifest-path rust/Cargo.toml -p monad-core
    --lib <name>` beats the full run). Bound parallelism:
-   `cargo test -j 2 -- --test-threads=2`.
+   `cargo test --manifest-path rust/Cargo.toml -j 2 -- --test-threads=2`.
 3. Bisect by narrowing the target, not by widening the cap.
 
 Tests for `std/` modules live in `std/` (`std/src/<module>_tests.mo`), never
@@ -321,7 +324,7 @@ signature differs). Wiring only the first two compiles and fails at runtime.
    pub def function_name (args: Types) : ReturnType
    ```
 
-2. **Interpreter**: `core/src/core_native.rs` — an `exec_native` dispatch
+2. **Interpreter**: `rust/core/src/core_native.rs` — an `exec_native` dispatch
    arm. `PURE_NATIVES` is only for effect-free natives.
 3. **Compiled backend**: `runtime/src/runtime.c`, beside the existing
    helpers (the function generated code calls).
@@ -462,9 +465,9 @@ declarations.
    (parse error / elaboration free-var error / `TypeError` / eval error /
    missing native / `unreachable!` panic).
 2. **TDD**: write the failing test, fix, confirm pass. Parser tests:
-   `core/src/parser/test/`; eval tests in `core_eval.rs`; Monad tests in
+   `rust/core/src/parser/test/`; eval tests in `core_eval.rs`; Monad tests in
    the owning mote (`init/src/tests.mo`, `std/<module>_tests.mo`, ...).
-3. `cargo fmt && cargo test` before committing.
+3. `cargo fmt --manifest-path rust/Cargo.toml && cargo test --manifest-path rust/Cargo.toml` before committing.
 4. Small, focused commits — one logical change each. Update the relevant
    plan in `plans/` when a feature lands.
 
@@ -477,10 +480,10 @@ before proceeding; ask for direction rather than silently picking a fix.
   (`scripts/check-commit-msg.sh`). Never include a `Claude-Session:` trailer.
 - Always commit with hooks enabled — **never `git commit --no-verify`**.
   Hooks: rustfmt, clippy, shellcheck, docs-check, commit-msg.
-- Run `cargo fmt` BEFORE committing: if the rustfmt hook modifies files,
+- Run `cargo fmt --manifest-path rust/Cargo.toml` BEFORE committing: if the rustfmt hook modifies files,
   the commit was REJECTED, not made — retry with `git add` + commit, and
   verify with `git log -1`.
-- The two whole-corpus sweeps — `cargo test --release` and `monad check init
+- The two whole-corpus sweeps — `cargo test --manifest-path rust/Cargo.toml --release` and `monad check init
   std examples lang cli llvm runtime build motes` — run in CI, not hooks
   (`.github/workflows/ci.yml`); do not pay them per commit locally, but run
   them before pushing anything that touches the compiler.

@@ -2,7 +2,7 @@
 /// reference search is about.
 ///
 /// THIS IS THE HALF OF THE REFERENCE'S `identifier_at` THAT IS WORTH KEEPING.
-/// `rust-cli/src/main.rs:712-736` does two things: it scans the line the cursor
+/// `rust/rust-cli/src/main.rs:712-736` does two things: it scans the line the cursor
 /// is on for the run of identifier characters around a column, and then it
 /// resolves the resulting NAME against a symbol table. The scan is right and the
 /// resolution is not -- its own doc records that a local shadowing a top-level

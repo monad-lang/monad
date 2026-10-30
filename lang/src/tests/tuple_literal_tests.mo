@@ -1,6 +1,6 @@
 /// Parser tests for tuple-literal syntax `(a, b, c)`, which desugars to
 /// right-nested `Pair.pair` applications (mirrors the Rust reference's
-/// `desugar_tuple_literal`, core/src/parser.rs:831-840). `Pair` is the
+/// `desugar_tuple_literal`, rust/core/src/parser.rs:831-840). `Pair` is the
 /// inductive in `init/prelude.mo:204`; `(x,)` and `(x)` both yield just `x`.
 
 use lib::types {Identifier, ParseTerm}

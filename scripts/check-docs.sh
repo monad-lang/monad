@@ -67,7 +67,7 @@
 # The Rust bootstrap host still works as an explicit override, for a
 # machine with a cargo tree but no installed nightly:
 #
-#   MONAD_BIN="cargo run --release --quiet --" scripts/check-docs.sh
+#   MONAD_BIN="cargo run --manifest-path rust/Cargo.toml --release --quiet --" scripts/check-docs.sh
 #
 # Both binaries take the same `check <paths>...` shape and the same exit codes,
 # so no other change is needed. The self-hosted run is expected to be GREEN:
@@ -91,12 +91,12 @@ cd "$(dirname "$0")/.."
 
 # The default host is the `monadup`-managed self-hosted binary. Overridable so
 # a cargo-tree machine can fall back to the Rust bootstrap host:
-# MONAD_BIN="cargo run --release --quiet --" scripts/check-docs.sh
+# MONAD_BIN="cargo run --manifest-path rust/Cargo.toml --release --quiet --" scripts/check-docs.sh
 MONAD_BIN=${MONAD_BIN:-monad}
 if [ "$MONAD_BIN" = monad ] && ! command -v monad >/dev/null 2>&1; then
   echo "check-docs: no 'monad' binary on PATH -- install one with 'monadup default'," >&2
   echo "  or point MONAD_BIN at another host (e.g. the Rust bootstrap one:" >&2
-  echo "  MONAD_BIN=\"cargo run --release --quiet --\" scripts/check-docs.sh)" >&2
+  echo "  MONAD_BIN=\"cargo run --manifest-path rust/Cargo.toml --release --quiet --\" scripts/check-docs.sh)" >&2
   exit 1
 fi
 

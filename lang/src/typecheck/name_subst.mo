@@ -20,7 +20,7 @@
 /// `subst.mo` there is no depth/cutoff bookkeeping at all).
 ///
 /// Mirrors the Rust reference's own `subst_macro`/`subst_decl_var`
-/// (`core/src/eval/macro_expand.rs`), minus `subst_decl_var`'s
+/// (`rust/core/src/eval/macro_expand.rs`), minus `subst_decl_var`'s
 /// `subst_path_component` handling of a macro param appearing inside a
 /// generated DECL'S OWN NAME (e.g. templated `def get_$field := ...`)
 /// — self-hosted's grammar has no string-interpolated-decl-name syntax

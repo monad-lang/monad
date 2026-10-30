@@ -55,8 +55,8 @@ machine, which `monadup doctor` checks for you.
 git clone https://tangled.org/monad-lang.org/monad
 cd monad
 devenv shell          # provides Rust, clang, llc, Boehm GC, mdbook
-cargo build --release
-cargo run --release -- run cli/src/main.mo build cli/src/main.mo -o "$PWD/monad" --release
+cargo build --manifest-path rust/Cargo.toml --release
+cargo run --manifest-path rust/Cargo.toml --release -- run cli/src/main.mo build cli/src/main.mo -o "$PWD/monad" --release
 ```
 
 The compiler the flake builds is published to the project's Cachix cache. A

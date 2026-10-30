@@ -17,7 +17,7 @@ use std::list {}
 /// against the original full source text) without needing to thread a
 /// `LocatedSpan` through every one of this parser's ~450 grammar
 /// functions the way the Rust reference does (nom-locate,
-/// core/src/parser/locate.rs) — `ParseError` is the only type that
+/// rust/core/src/parser/locate.rs) — `ParseError` is the only type that
 /// needed to change, not `ParseResult` itself. See
 /// `location_of_remaining`'s own doc comment for the full rationale.
 pub type ParseError {

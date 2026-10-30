@@ -1,11 +1,13 @@
-# Build output. This repository names the two toolchains' directories apart --
-# `target-rust/` is cargo's (.cargo/config.toml) and `target-monad/` is
-# monad's (.monad/config.toml) -- so all three are listed. `/target` is kept
-# because it is still the monad default for a project with no config, and an
-# edit here could restore it; dropping it would fail quietly.
+# Build output. The Rust workspace lives in rust/, so cargo's output is
+# `rust/target/`; `target-monad/` is monad's (.monad/config.toml). `/target`
+# is kept because it is still the monad default for a project with no config,
+# and an edit here could restore it; dropping it would fail quietly.
 /target
-/target-rust
+/rust/target
 /target-monad
+# Cargo output from before the rust/ move (2026-10-30); kept ignored so an
+# existing checkout does not surface it as untracked after pulling.
+/target-rust
 history.txt
 
 # Devenv

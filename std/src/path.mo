@@ -145,7 +145,7 @@ pub instance BEq Path {
 
 // No `Show Path` instance: it would need `use std.show {Show}`, and a
 // std/*.mo file that's part of the always-loaded bootstrap set (see
-// `core/src/term/module.rs`'s `init_package_sources`) depending on a
+// `rust/core/src/term/module.rs`'s `init_package_sources`) depending on a
 // NON-bootstrap std module hits a latent bug in the test runner's own
 // per-file reachability computation (confirmed: `test std` panics with
 // "uses unloaded module: std.show" processing this file, even though

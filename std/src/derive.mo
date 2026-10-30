@@ -8,7 +8,7 @@
 /// the same target is a compile error.
 ///
 /// All four are ported to the reflection-as-data kernel (`init/meta.mo`'s
-/// `TypeInfo`/`Expr`/`MetaDecl` values + `core/src/eval/meta_compile.rs`'s
+/// `TypeInfo`/`Expr`/`MetaDecl` values + `rust/core/src/eval/meta_compile.rs`'s
 /// `MetaEvalContext`, invoked via the `reflect_type_info!` intrinsic) —
 /// see `plans/review-and-reduce-the-greedy-nest.md`: each `derive_*`
 /// stays an ordinary `defmacro`/decl-gen wrapper (so `derive_*!`/
@@ -20,7 +20,7 @@
 /// per-field dispatch intrinsics. The OLDER 5-intrinsic kernel these
 /// replaced (`reflect_ctors!`/`reflect_ctor_fields!`/
 /// `reflect_pairwise_ctors!`/`reflect_fields!`/`reflect_set_field!`) has
-/// since been deleted outright — see `core/src/eval/macro_expand.rs`'s
+/// since been deleted outright — see `rust/core/src/eval/macro_expand.rs`'s
 /// `BUILTIN_INTRINSICS` doc comment for the current (`reflect_type_info!`-
 /// only) design.
 use init::meta {TypeInfo, CtorInfo, FieldInfo, Expr, MetaMatchArm, MetaDecl}
@@ -291,7 +291,7 @@ def cmp_piece_gt (field_name : String) : Expr :=
 /// couldn't see field count up front) this is just an ordinary recursive
 /// walk building nested `if`s directly — see
 /// `test_derive_bord_left_fold_uses_first_deciding_field` in
-/// `core/src/eval/macro_test.rs` for the regression this guards against.
+/// `rust/core/src/eval/macro_test.rs` for the regression this guards against.
 def lt_chain (field_names : List String) : Expr :=
     match field_names {
         empty => e_bool false,

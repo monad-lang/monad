@@ -1,5 +1,5 @@
 /// Rust-mirroring parse error diagnostic rendering for the self-hosted
-/// parser. Mirrors `core/src/diag.rs`'s `render_diagnostic` format —
+/// parser. Mirrors `rust/core/src/diag.rs`'s `render_diagnostic` format —
 /// `error: <message> at L:C\n  --> path:L:C\n<context lines>` — using
 /// `lang/parser/core.mo`'s `ParseError` (which carries the input
 /// remaining at the point of failure) and
@@ -290,7 +290,7 @@ def test_render_source_context_last_line_no_next : Bool :=
 		&& String.contains rendered "3 | bad_here"
 
 /// Regression test for the gutter/caret indentation bug (matching
-/// `core/src/diag.rs`'s own `gutter_aligns_error_line_with_context_lines`
+/// `rust/core/src/diag.rs`'s own `gutter_aligns_error_line_with_context_lines`
 /// test): the error line and a context neighbor must share the exact
 /// same "N | " gutter width — this line-1/line-2 fixture used to render
 /// with the context line ("2 | ...") indented 3 extra stray spaces past
@@ -315,7 +315,7 @@ def test_render_source_context_gutter_alignment_exact : Bool :=
 /// once the window's widest line number needs 4 digits (999/1000/1001),
 /// EVERY displayed line — including the 3-digit "999" one — must pad out
 /// to that same shared width, not just the 4-digit ones. Mirrors
-/// `core/src/diag.rs`'s own
+/// `rust/core/src/diag.rs`'s own
 /// `gutter_width_grows_for_four_digit_line_numbers` test.
 #[test]
 def test_render_source_context_gutter_width_grows_for_wide_line_numbers : Bool :=

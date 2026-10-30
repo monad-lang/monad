@@ -1,5 +1,5 @@
 /// The term-level expansion walk — `expand_term`/`resolve_quote`,
-/// mirroring `core/src/eval/macro_expand.rs`'s own pair of the same
+/// mirroring `rust/core/src/eval/macro_expand.rs`'s own pair of the same
 /// name, built on [[lang/typecheck/macro_apply.mo]]'s
 /// `apply_term_macro` (itself built on [[lang/typecheck/subst.mo]]).
 ///

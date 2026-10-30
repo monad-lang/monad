@@ -1248,10 +1248,7 @@ mod test {
   /// the workspace root where `std/` actually lives) — same convention
   /// as `monad_core`'s and `mcp::test`'s own `workspace_root()` helpers.
   fn workspace_root() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-      .parent()
-      .unwrap()
-      .to_path_buf()
+    monad_core::repo_root()
   }
 
   /// Unique per-process tmp path so parallel `cargo test` runs don't

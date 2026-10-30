@@ -362,7 +362,7 @@ pub def IO.write_stderr (s : String) : IO Unit := IO.write_to FdStream.stderr s
 priv def current_time_raw : RawIO I64
 
 // Milliseconds since the Unix epoch, from the system WALL clock
-// (`SystemTime::now`, core/src/core_native.rs). Use it for differences
+// (`SystemTime::now`, rust/core/src/core_native.rs). Use it for differences
 // between two readings; because it is the wall clock and not a
 // monotonic one, a clock adjustment (NTP, a manual set, a suspend) can
 // make a later reading SMALLER than an earlier one, so a computed
@@ -392,7 +392,7 @@ priv def current_time_nano_raw : RawIO I64
 //
 // Exists because per-test timing needs sub-millisecond resolution: the
 // self-hosted test runner reports each test's duration the way the Rust
-// runner's `format_duration` does (`core/src/lib.rs`), and most tests
+// runner's `format_duration` does (`rust/core/src/lib.rs`), and most tests
 // finish well inside one millisecond, where `current_time` can only
 // ever say "0ms". The native hands over RAW NANOSECONDS and nothing
 // else -- every unit conversion and all the ns/us/ms/s formatting is

@@ -616,7 +616,7 @@ static int64_t monad_string_length_impl(char* s) {
    tests for. Counting bytes here instead would put a column after a
    multi-byte character in the wrong place, and
    `test_resolve_offsets_column_counts_characters` is the test that says
-   so. `core/src/core_native.rs`'s two implementations must agree with
+   so. `rust/core/src/core_native.rs`'s two implementations must agree with
    these byte for byte: a disagreement shows up as the host and a
    self-compiled binary reporting different columns, which reads like a
    codegen bug and is not one. */
@@ -679,7 +679,7 @@ static int64_t monad_string_eq_impl(char* a, char* b) {
    the self-hosted LLVM codegen path (a later `BTreeMap_to_list_asc`
    crashed dereferencing a field that was never a valid tree pointer to
    begin with). Byte-lexicographic `strcmp` ordering, matching the Rust
-   host's own `str < str`/`str > str` (`core/src/core_native.rs`'s
+   host's own `str < str`/`str > str` (`rust/core/src/core_native.rs`'s
    `string_lt`/`string_gt`, whose own doc comment notes UTF-8's byte
    ordering agrees with codepoint ordering) -- same `strcmp` choice
    `monad_string_eq` above already made, same "NULL treated as empty"
@@ -719,7 +719,7 @@ static int monad_utf8_continuation(char c) {
 
    Byte-oriented and clamps rather than errors on any out-of-range
    input, bit-for-bit matching the Rust host's own reference semantics
-   (`core/src/core_native.rs`'s `string_slice`, `SharedStr::subslice`)
+   (`rust/core/src/core_native.rs`'s `string_slice`, `SharedStr::subslice`)
    so compiled and interpreted execution agree: `start` clamps into
    `[0, strlen(s)]`, `len` clamps to `>= 0` and to whatever remains
    after `start`, and a NULL `s` yields `""` -- never a panic/OOB read
@@ -798,7 +798,7 @@ static char* monad_string_slice_impl(char* s, int64_t start_in, int64_t len_in) 
 }
 
 /* `#[native string_drop]` (init/string.mo's `String.drop`) -- same
-   reference semantics as `core/src/core_native.rs`'s `string_drop`/
+   reference semantics as `rust/core/src/core_native.rs`'s `string_drop`/
    `SharedStr::drop_prefix`: drops the first `n` bytes (clamped to
    `[0, strlen(s)]`), never errors on an out-of-range `n`. Like
    `monad_string_slice` above, `n` landing in the middle of a multi-byte
@@ -840,7 +840,7 @@ static char* monad_string_drop_impl(int64_t n, char* s) {
 }
 
 /* djb2 hash: hash = hash * 33 + byte, seed 5381 -- bit-identical to
-   `core/src/core_native.rs`'s own `string_hash` (wrapping u64 mul/add)
+   `rust/core/src/core_native.rs`'s own `string_hash` (wrapping u64 mul/add)
    and to `init/string.mo`'s own `String.hash_selfhosted` reference
    implementation. Pure (no `IO` in String.hash's declared type), so
    this returns a plain i64 rather than the truthy-pointer convention
@@ -997,7 +997,7 @@ static char* monad_string_from_list_impl(rt_word list) {
    `compile_lit_ir` lowers a float literal to one of these bit patterns
    as a plain i64 constant.
 
-   The SEMANTICS mirror `core/src/core_native.rs`'s
+   The SEMANTICS mirror `rust/core/src/core_native.rs`'s
    `float_binop`/`float_cmp`/`float_to_string` exactly, because that is
    what the Rust runner and every `#[test]` in the optics files were
    written against:

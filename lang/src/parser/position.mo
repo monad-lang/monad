@@ -99,7 +99,7 @@ def line_col_scan (s : String) : LineColScan :=
 /// against).
 ///
 /// This is the executable statement of the rule `String.trailing_chars`
-/// counts by on BOTH runtimes -- `core/src/core_native.rs` and
+/// counts by on BOTH runtimes -- `rust/core/src/core_native.rs` and
 /// `runtime/src/runtime.c` each test `(b & 0xC0) != 0x80`, which is
 /// this same range. `test_trailing_chars_matches_continuation_byte_rule`
 /// holds the native to it directly, rather than leaving the agreement to
@@ -141,7 +141,7 @@ def consume_span (span : LocatedSpan) (n : I64) : LocatedSpan :=
 /// Compute the `Location` where `remaining` begins within `original` —
 /// how this parser surfaces error positions: rather than threading a
 /// `LocatedSpan` through every one of ~450 grammar functions (the Rust
-/// reference's nom-locate approach, core/src/parser/locate.rs), every
+/// reference's nom-locate approach, rust/core/src/parser/locate.rs), every
 /// `ParseError` already carries the input remaining right at the point
 /// of failure (see `ParseError`'s own doc comment, lang/parser/core.mo);
 /// this converts that back into a `Location` by diffing against the

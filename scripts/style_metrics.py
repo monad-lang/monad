@@ -17,7 +17,7 @@ Detection notes that cost time to get right:
   multi-constructor sum (`Decl`, `LLVMValue`, `CompileResult`), so those are
   counted separately and are NOT part of the violation total.
 * `#[partial]` is a termination-checker escape hatch only
-  (core/src/eval/termination.rs:503). "Unneeded" here means "the def does not
+  (rust/core/src/eval/termination.rs:503). "Unneeded" here means "the def does not
   call itself", which over-counts mutual-recursion SCCs; it is a screening
   metric, not the Tier 2 rule (that one re-runs the real checker).
 """

@@ -9,7 +9,7 @@
 
 # Every member is NAMED, and `motes/*` is deliberately not used here even
 # though the glob is supported (`Mote.expand_one_member`, lang/src/mote.mo;
-# core/src/term/mote.rs has tests pinning it, and docs/src/bootstrap-host.md
+# rust/core/src/term/mote.rs has tests pinning it, and docs/src/bootstrap-host.md
 # documents it -- this is a choice about THIS manifest, not a deprecation).
 #
 # Two reasons, and the first is the load-bearing one:

@@ -19,7 +19,7 @@ open ParseResult {fail, success}
 // --- Numeric literal suffixes (`33u64`, `3.0f32`) ---
 //
 // Mirrors the Rust reference's `num_suffix_parser`/`float_suffix_parser`
-// (core/src/parser.rs): a suffix must immediately follow the digits with
+// (rust/core/src/parser.rs): a suffix must immediately follow the digits with
 // no intervening whitespace, and int literals accept all ten suffixes
 // (`33f64` is a legal *integer-valued* literal tagged with an f64 suffix
 // — the actual int-to-float conversion is a later concern, not the
@@ -132,7 +132,7 @@ def float_suffix_try_f64 (r : ParseResult String) (orig : String) : ParseResult 
 // The optional leading `-` doubles as this language's only unary-minus
 // support (mirrors the Rust reference, which likewise has no general
 // unary-negation operator — `num_literal`/`float_literal` both fold an
-// optional `-` into the literal itself, core/src/parser.rs) — safe from
+// optional `-` into the literal itself, rust/core/src/parser.rs) — safe from
 // colliding with binary subtraction because this parser only ever runs
 // in atom/prefix position (start of an expression, after `(`, `,`,
 // `:=`, ...), and the `-` must be immediately followed by a digit with

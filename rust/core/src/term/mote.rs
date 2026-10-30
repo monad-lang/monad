@@ -709,10 +709,7 @@ version = "0.1.0"
   /// one of them should fail here rather than surfacing as a module that
   /// mysteriously stops resolving.
   fn repo_root() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-      .parent()
-      .expect("core crate's manifest dir has a parent directory")
-      .to_path_buf()
+    crate::repo_root()
   }
 
   #[test]

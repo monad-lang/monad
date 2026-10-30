@@ -197,7 +197,7 @@ jobs:
           # scripts/check-docs.sh unmodified; the script splits MONAD_BIN
           # into words, so `cargo run ... --` composes with the per-fence
           # `check <file>` it appends.
-          MONAD_BIN: cargo run --release --quiet --
+          MONAD_BIN: cargo run --manifest-path rust/Cargo.toml --release --quiet --
 
       # The pipeline's only whole-corpus check, run through the RUST
       # REFERENCE host (`cargo run --release`). It exercises every rule the
@@ -215,7 +215,7 @@ jobs:
       - name: Rust corpus check
         run: |
           nix develop --no-pure-eval --accept-flake-config -c \
-            cargo run --release -- \
+            cargo run --manifest-path rust/Cargo.toml --release -- \
               check init std examples lang cli llvm runtime build eval motes
 
       # This step is why `nix/host.nix` may set `doCheck = false`: the flake's
@@ -232,7 +232,7 @@ jobs:
         if: needs.changes.outputs.compiler == 'true'
         run: |
           nix develop --no-pure-eval --accept-flake-config -c \
-            cargo test --release
+            cargo test --manifest-path rust/Cargo.toml --release
 
   compiler-checks:
     runs-on: [self-hosted, linux]
@@ -266,7 +266,7 @@ jobs:
       # for the host.
       #
       # A packaged host is not self-sufficient the way `cargo run` was: the
-      # path it reads its stdlib from is compiled IN (core/src/term/module.rs's
+      # path it reads its stdlib from is compiled IN (rust/core/src/term/module.rs's
       # `stdlib_dir()`), so a store host carries a `/build/<src>-source/init/src`
       # path that exists only while the build that made it runs. The script
       # therefore points it at THIS checkout via MONAD_STDLIB -- which is what

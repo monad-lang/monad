@@ -15,7 +15,7 @@
 /// Every assertion is a cross-check rather than a restatement: this file
 /// runs under the self-hosted runner (compiled code, the generated-IR
 /// natives in `runtime/src/natives.mo`) and under `monad-rs test` (the
-/// Rust evaluator, `core/src/core_native.rs`), so a passing test is two
+/// Rust evaluator, `rust/core/src/core_native.rs`), so a passing test is two
 /// independent implementations agreeing -- the same hazard `f64_tests.mo`
 /// guards for floats.
 ///

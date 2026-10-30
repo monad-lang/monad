@@ -86,5 +86,5 @@ fi
 
 bin="$(nix build --no-link --print-out-paths --accept-flake-config .#monadup)"
 echo "ci-monadup: monadup built from the flake ($bin)"
-MONADUP_BIN="$bin/bin/monadup" MONAD_BIN="cargo run --release --quiet --" \
+MONADUP_BIN="$bin/bin/monadup" MONAD_BIN="cargo run --manifest-path rust/Cargo.toml --release --quiet --" \
   exec scripts/check-monadup.sh

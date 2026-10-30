@@ -2390,7 +2390,7 @@ def validate_match_coverage (cases : List MatchCase) (maybe_ind : Option Inducti
 /// the check that warns and a future check that errors cannot disagree about
 /// what "uncovered" means -- the same single-source-of-truth reason the host
 /// computes its `use`-completeness findings in one function
-/// (`unimported_names`, `core/src/term/module.rs`).
+/// (`unimported_names`, `rust/core/src/term/module.rs`).
 pub def match_coverage_gap (cases : List MatchCase) (maybe_ind : Option Inductive) (scope : Scope) : Option (Pair Inductive (List NamePath)) :=
     if scope.incomplete_match_ok then Option.none
     else match maybe_ind {
@@ -2514,7 +2514,7 @@ def type_check_match_case (case_ : MatchCase) (scrutinee_term : Term) (scrutinee
 // ─── Field-pattern match-case elaboration (`plans/implementations/
 // struct-field-destructuring.md`'s Phase 7) ────────────────────────────
 //
-// Unlike the Rust reference (`core/src/core_check.rs`), this checker
+// Unlike the Rust reference (`rust/core/src/core_check.rs`), this checker
 // builds the checked term directly, in one pass, as it goes -- there is
 // no `check`/`infer`-vs-`desugar_struct_literals` split here needing a
 // SECOND independent hook (see `type_check_match_case`'s own doc
@@ -2717,7 +2717,7 @@ def resolve_field_pattern_case (case_name : Identifier) (fp : FieldPattern) (scr
 /// params (`n` of a `Vec A n`) is left alone, and a constructor whose field
 /// type mentions it keeps that mention. The Rust reference solves those by
 /// unifying the constructor's declared RETURN type against the scrutinee
-/// (`match_case_field_types`, `core/src/core_check.rs`), which needs
+/// (`match_case_field_types`, `rust/core/src/core_check.rs`), which needs
 /// metavariables and a per-constructor return-index expression -- this
 /// checker has neither (`lang/src/typecheck/whnf.mo`'s header: `Term.hole`
 /// is a wildcard, not a solvable meta), and `n + 1 ~ 5` needs arithmetic in
@@ -2740,7 +2740,7 @@ def rfp_substituted (ind : Inductive) (scrutinee_typ : Term) (rfp : ResolvedFiel
 
 /// `{ .. }` (no constructor name) requires the scrutinee's inductive to
 /// have EXACTLY one constructor -- mirrors the Rust reference's own
-/// `resolve_field_pattern_case` (`core/src/core_check.rs`) bare-form
+/// `resolve_field_pattern_case` (`rust/core/src/core_check.rs`) bare-form
 /// handling exactly.
 def resolve_bare_field_pattern (fp : FieldPattern) (ind : Inductive) : Result TypeError ResolvedFieldPattern :=
     match ind {
@@ -5862,7 +5862,7 @@ def try_type_check_hinted_app (f : Term) (hint : String) (expected_type : Term) 
     }
 
 /// The reference checker's `App(Lam{param_typ: Hole}, arg)` arms --
-/// `check`'s at `core/src/core_check.rs:1582-1593` (the `matches!` is
+/// `check`'s at `rust/core/src/core_check.rs:1582-1593` (the `matches!` is
 /// `:1587`), `infer`'s twin at `:946-964` -- do not CHECK their argument
 /// against the unannotated parameter's type; they INFER it, and `infer` on
 /// a hole is `InferError::CannotInferHole` (`:884`), rendered "cannot infer
@@ -5896,12 +5896,12 @@ def try_type_check_hinted_app (f : Term) (hint : String) (expected_type : Term) 
 /// there.
 ///
 /// `term_peel` on each of the three terms mirrors the reference's own
-/// `strip_ctx()` (`core/src/core_term.rs:393`) at the same positions;
+/// `strip_ctx()` (`rust/core/src/core_term.rs:393`) at the same positions;
 /// without it a located hole would silently stop matching.
 ///
 /// This arm is only HALF the port, and the other half is in the parser:
 /// the reference's bare-name lambda param IS `param(i, Hole)`
-/// (`core/src/parser.rs:464-466`), while the port's `build_nested_lambdas`
+/// (`rust/core/src/parser.rs:464-466`), while the port's `build_nested_lambdas`
 /// wrote a SORT there -- the port's marker for an OMITTED KIND at its
 /// three type-binder sites (`:1372`/`:1423`/`:2667`). That was not a
 /// spelling mix-up; it was an assertion of a type no source had said.
@@ -6034,7 +6034,7 @@ def app_arg_expected_type (f : Term) : Term :=
 //
 // The type is not MISSING, only late: the callee's domain is exactly what the
 // lambda needs. Recovering it here rather than reordering `type_check_app`
-// (callee before argument, as `core/src/core_check.rs`'s App arm does) is
+// (callee before argument, as `rust/core/src/core_check.rs`'s App arm does) is
 // deliberate: `resolve_class_method` derives a class method's carrier from the
 // Pi that `type_check_app_ordinary` synthesizes FROM THE ARGUMENT'S ALREADY
 // INFERRED TYPE (`carrier_from_expected_type`, stated in that pair's own doc
@@ -6822,7 +6822,7 @@ def type_check_sort_full (sort_term : Term) (level : SortLevel) (expected_type :
 /// (`c.args` is sparse — `Option.none` marks an unfilled, not-yet-
 /// applied position, matching `lower_core_ir.mo`'s own doc comment on
 /// `Con`'s shape) type-checks against that positional param's declared
-/// type. Mirrors `core/src/core_check.rs`'s own `CoreTerm::Con` arm —
+/// type. Mirrors `rust/core/src/core_check.rs`'s own `CoreTerm::Con` arm —
 /// including its "unregistered inductive" fallback (still individually
 /// check each present arg, just without field-type correlation, rather
 /// than rejecting outright) — scaled down to this checker's existing
@@ -7801,7 +7801,7 @@ def con_arity_msg (full_name : NamePath) (got : I64) (want : I64) : String :=
 /// synthetic single-constructor `Inductive` `build_scope_struct`
 /// registers for every struct (name `mk`, mirroring the reference's own
 /// desugaring of a struct literal into a constructor application,
-/// `core/src/core_check.rs`'s `desugar_struct_literals`). The literal's
+/// `rust/core/src/core_check.rs`'s `desugar_struct_literals`). The literal's
 /// FIELD SET is validated first, by the same rule a named call uses
 /// (`field_set_validate`): a written name no declared field matches is an
 /// error, and a declared field the literal omits is an error unless it
@@ -7967,7 +7967,7 @@ def struct_lit_find_field (fields : List StructLitField) (name : Identifier) : O
 /// Whether an argument's already-SUCCESSFUL ordinary check should be
 /// trusted, or is only vacuously successful and must not preempt a
 /// named-call spread. Mirrors the reference compiler's own
-/// `struct_literal_arg_matches_expected` (`core/src/core_check.rs`),
+/// `struct_literal_arg_matches_expected` (`rust/core/src/core_check.rs`),
 /// added there after the identical real failure.
 ///
 /// `type_check_struct_lit` is deliberately LAX about a literal's field
@@ -8381,7 +8381,7 @@ def named_call_def_fold_app (f : Term) (args : List Term) : Term :=
 /// either the update's own override value or the binder for the field it
 /// did not touch.
 ///
-/// The reference desugars the same thing per FIELD (`core/src/
+/// The reference desugars the same thing per FIELD (`rust/core/src/
 /// core_check.rs`'s `desugar_struct_literals`, which clones `base` into
 /// one projection `Match` per un-overridden field), and so did this --
 /// which is free when `base` is a variable and a repeated CALL when it is
@@ -8638,7 +8638,7 @@ def check_con_args_against_params (args : List (Option Term)) (params : List Par
 
 /// Type check a native term. NOT a stub needing "real" checking despite
 /// looking like one — natives are opaque to the type checker BY DESIGN,
-/// mirroring `core/src/core_check.rs`'s own `CoreTerm::Ntv` arm exactly
+/// mirroring `rust/core/src/core_check.rs`'s own `CoreTerm::Ntv` arm exactly
 /// (its own doc comment: "there is no native-signature registry to
 /// consult, even in the real checker"). Accepting `expected_type`
 /// unconditionally is that same "no information, defer to the use

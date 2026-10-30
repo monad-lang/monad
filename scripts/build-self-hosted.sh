@@ -3,8 +3,9 @@
 # Builds <out-dir>/monad from cli/src/main.mo. Skips the build when the
 # binary is newer than every input.
 #
-# The host is `cargo run --release --`, or whatever MONAD_HOST_BIN names --
-# for a builder that has a built host rather than a cargo tree:
+# The host is `cargo run --manifest-path rust/Cargo.toml --release --`, or
+# whatever MONAD_HOST_BIN names -- for a builder that has a built host rather
+# than a cargo tree:
 #   MONAD_HOST_BIN=/nix/store/.../bin/monad-rs scripts/build-self-hosted.sh ...
 # The compiled `monad` binary is supported too, and is much faster when
 # all you need is a current binary from this tree's sources -- keep it
@@ -79,10 +80,10 @@ cd "$root"
 # shellcheck disable=SC1091  # the hook runs bare `shellcheck`; the line above names the path for -x
 . "$root/scripts/lib/raise-stack.sh"
 
-MONAD_HOST_BIN=${MONAD_HOST_BIN:-"cargo run --release --"}
+MONAD_HOST_BIN=${MONAD_HOST_BIN:-"cargo run --manifest-path $root/rust/Cargo.toml --release --"}
 
 # ... and that host finds its stdlib at a path compiled INTO it: `init/src`
-# next to cargo's CARGO_MANIFEST_DIR (core/src/term/module.rs's `stdlib_dir()`,
+# next to the checkout root (rust/core/src/term/module.rs's `stdlib_dir()`,
 # which honours MONAD_STDLIB). A `cargo run` host baked this checkout and
 # resolves correctly; a host built by nix baked `/build/<src>-source/init/src`,
 # which is true only for the duration of that build. Every flake-side build
@@ -138,7 +139,7 @@ if [ -n "$needs_build" ]; then
   # otherwise.
   #
   # Without this, every locally built rung-1 says "unknown": the Rust host
-  # doing the linking has no revision of its own (`core/src/core_native.rs`'s
+  # doing the linking has no revision of its own (`rust/core/src/core_native.rs`'s
   # `build_commit`, `option_env!` at monad-rs's own build time), and the
   # compiler used to recover the number with a `git rev-parse` in the WORKING
   # DIRECTORY -- the wrong repository, which is why that probe is gone.
