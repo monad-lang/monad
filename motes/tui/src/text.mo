@@ -394,15 +394,15 @@ struct WrapSplit {
 def wrap_split_go (gs : List Glyph) (w : I64) (used : I64) (line_rev : List Glyph)
         (space_line : List Glyph) (space_rest : List Glyph) : WrapSplit :=
     match gs {
-        List.empty => { line := List.reverse line_rev, rest := List.empty, broke := false },
+        List.empty => let r : WrapSplit := { line := List.reverse line_rev, rest := List.empty, broke := false } in r,
         List.cons g rest =>
             if w < used + g.width
             then
                 if Bool.not (List.is_empty space_rest)
-                then { line := List.reverse space_line, rest := space_rest, broke := true }
+                then let r : WrapSplit := { line := List.reverse space_line, rest := space_rest, broke := true } in r
                 else if List.is_empty line_rev
-                then { line := List.cons g List.empty, rest := rest, broke := true }
-                else { line := List.reverse line_rev, rest := List.cons g rest, broke := true }
+                then let r : WrapSplit := { line := List.cons g List.empty, rest := rest, broke := true } in r
+                else let r : WrapSplit := { line := List.reverse line_rev, rest := List.cons g rest, broke := true } in r
             else
                 let used2 : I64 := used + g.width in
                 let line2 : List Glyph := List.cons g line_rev in
@@ -465,7 +465,8 @@ pub struct StyledGlyph {
 }
 
 pub def StyledGlyph.mk (g : Glyph) (s : TextStyle) : StyledGlyph :=
-    { glyph := g, style := s }
+    let r : StyledGlyph := { glyph := g, style := s } in
+    r
 
 #[partial]
 def glyphs_onto (gs : List Glyph) (style : TextStyle) (acc : List StyledGlyph) : List StyledGlyph :=
@@ -502,16 +503,16 @@ def styled_split_go
     (gs : List StyledGlyph) (w : I64) (used : I64) (line_rev : List StyledGlyph)
     (space_line : List StyledGlyph) (space_rest : List StyledGlyph) : StyledSplit :=
     match gs {
-        List.empty => { line := List.reverse line_rev, rest := List.empty, broke := false },
+        List.empty => let r : StyledSplit := { line := List.reverse line_rev, rest := List.empty, broke := false } in r,
         List.cons g rest =>
             let gw : I64 := g.glyph.width in
             if w < used + gw
             then
                 if Bool.not (List.is_empty space_rest)
-                then { line := List.reverse space_line, rest := space_rest, broke := true }
+                then let r : StyledSplit := { line := List.reverse space_line, rest := space_rest, broke := true } in r
                 else if List.is_empty line_rev
-                then { line := List.cons g List.empty, rest := rest, broke := true }
-                else { line := List.reverse line_rev, rest := List.cons g rest, broke := true }
+                then let r : StyledSplit := { line := List.cons g List.empty, rest := rest, broke := true } in r
+                else let r : StyledSplit := { line := List.reverse line_rev, rest := List.cons g rest, broke := true } in r
             else
                 let used2 : I64 := used + gw in
                 let line2 : List StyledGlyph := List.cons g line_rev in

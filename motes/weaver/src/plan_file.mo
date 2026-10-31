@@ -19,7 +19,7 @@ use markdown::parse {Markdown.split_frontmatter}
 use markdown::scan {Markdown.split_lines}
 use markdown::types {Markdown.FrontSplit, Markdown.FrontFormat, Markdown.Frontmatter}
 use yaml::yaml {Yaml, Yaml.ParseError, Yaml.parse, Yaml.to_string, Yaml.get_mapping, Yaml.get_str, Yaml.make_mapping_pairs, Yaml.make_str}
-use weaver::store {StoreState, Store.child}
+use weaver::store {StoreState, Store.child, Store.read_named}
 
 pub struct PlanMeta {
     title : String,
@@ -99,21 +99,25 @@ pub def PlanFile.parse (text : String) : PlanParse :=
     match split.front {
         Option.none =>
             let meta : PlanMeta := { PlanMeta.empty with title := title_of_text text } in
-            { doc := { meta := meta, body := text }, warning := Option.none },
+            let doc : PlanDoc := { meta := meta, body := text } in
+            let r : PlanParse := { doc := doc, warning := Option.none } in r,
         Option.some f => match f.format {
             Markdown.FrontFormat.front_toml =>
                 let meta : PlanMeta := { PlanMeta.empty with title := title_of_text split.body } in
-                { doc := { meta := meta, body := split.body }, warning := Option.some "frontmatter is TOML, not YAML" },
+                let doc : PlanDoc := { meta := meta, body := split.body } in
+                let r : PlanParse := { doc := doc, warning := Option.some "frontmatter is TOML, not YAML" } in r,
             Markdown.FrontFormat.front_yaml => match Yaml.parse f.literal {
                 Result.err e =>
                     let meta : PlanMeta := { PlanMeta.empty with title := title_of_text split.body } in
-                    { doc := { meta := meta, body := split.body },
-                      warning := Option.some (String.concat "frontmatter: " (Yaml.ParseError.to_string e)) },
+                    let doc : PlanDoc := { meta := meta, body := split.body } in
+                    let r : PlanParse := { doc := doc,
+                      warning := Option.some (String.concat "frontmatter: " (Yaml.ParseError.to_string e)) } in r,
                 Result.ok y => match Yaml.get_mapping y {
                     Result.err e =>
                         let meta : PlanMeta := { PlanMeta.empty with title := title_of_text split.body } in
-                        { doc := { meta := meta, body := split.body },
-                          warning := Option.some (String.concat "frontmatter: " e) },
+                        let doc : PlanDoc := { meta := meta, body := split.body } in
+                        let r : PlanParse := { doc := doc,
+                          warning := Option.some (String.concat "frontmatter: " e) } in r,
                     Result.ok m =>
                         let meta : PlanMeta := {
                             title := yaml_str "title" m,
@@ -124,7 +128,8 @@ pub def PlanFile.parse (text : String) : PlanParse :=
                             model := yaml_str "model" m,
                         } in
                         let meta2 : PlanMeta := if String.is_empty meta.title then { meta with title := title_of_text split.body } else meta in
-                        { doc := { meta := meta2, body := split.body }, warning := Option.none },
+                        let doc : PlanDoc := { meta := meta2, body := split.body } in
+                        let r : PlanParse := { doc := doc, warning := Option.none } in r,
                 },
             },
         },
@@ -132,11 +137,15 @@ pub def PlanFile.parse (text : String) : PlanParse :=
 
 // ─── Session storage ───────────────────────────────────────────────────
 
+def plan_doc_of (text : String) : Option PlanDoc :=
+    let p : PlanParse := PlanFile.parse text in
+    Option.some p.doc
+
 pub def PlanFile.load_session (st : StoreState) : IO (Option PlanDoc) := do {
     let r <- Store.read_named st "plan.md";
     match r {
         Option.none => IO.pure Option.none,
-        Option.some text => IO.pure (Option.some (PlanFile.parse text).doc),
+        Option.some text => IO.pure (plan_doc_of text),
     }
 }
 
