@@ -165,6 +165,15 @@ pub def FdStream.open_file (path : Path) (mode : I64) : IO (Result StreamError F
 /// The raw descriptor, for FFI calls that take one (`SSL_set_fd`).
 pub def FdStream.raw_fd (s : FdStream) : IO I32 := IO.mk (stream_fd s)
 
+/// Adopt a raw descriptor an FFI call handed back (a pty master).
+///
+/// COMPILED ONLY: compiled, an `FdStream` IS the descriptor; interpreted, it
+/// is a slot in the evaluator's stream registry, so adopting an arbitrary
+/// descriptor would alias a stranger. Callers must pass a descriptor the OS
+/// just produced for them (`forkpty`'s master), and a test harness that uses
+/// this is self-hosted/LLVM-only by construction.
+pub def FdStream.of_raw_fd (fd : I32) : FdStream := std_fd (I32.to_i64 fd)
+
 /// `FdStream.poll`'s readiness bits (`poll(2)`'s POLLIN/POLLOUT).
 pub def FdStream.poll_read : I64 := 1
 pub def FdStream.poll_write : I64 := 2
