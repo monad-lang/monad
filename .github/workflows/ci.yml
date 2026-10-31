@@ -247,9 +247,10 @@ jobs:
     # the nightly install, and whichever self-compile leg runs -- ~1 min
     # for a nightly-hosted build, ~22 min for the interpreted fallback the
     # nightly's failure pays for, plus the cold host build the binary cache
-    # usually substitutes. 90 min covers the worst ordering of those with
-    # room for the runner's co-tenants.
-    timeout-minutes: 90
+    # usually substitutes. Observed 2026-10-31: a loaded runner spent 58 min
+    # in the self-compile and reached 90 min end to end, so 90 was a deadline
+    # in practice; 120 keeps the guard while covering a loaded co-tenant.
+    timeout-minutes: 120
     steps:
       # Full history: `scripts/ci-self-compile.sh` checks whether the installed
       # nightly predates `bootstrap/nightly-floor.txt` with `git merge-base`.
