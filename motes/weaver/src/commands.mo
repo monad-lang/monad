@@ -296,6 +296,36 @@ def last_assistant_go (ms : List Message) : Option String :=
 pub def Commands.last_assistant_text (history : List Message) : Option String :=
     last_assistant_go history
 
+#[partial]
+def has_tool_use (cs : List Content) : Bool :=
+    match cs {
+        List.empty => false,
+        List.cons c rest => match c {
+            Content.tool_use _ _ _ => true,
+            _ => has_tool_use rest,
+        },
+    }
+
+#[terminating]
+def last_message_go (ms : List Message) (last : Option Message) : Option Message :=
+    match ms {
+        List.empty => last,
+        List.cons m rest => last_message_go rest (Option.some m),
+    }
+
+/// The FINAL message's text, only when it is an assistant message with no
+/// tool call. An interim "let me check..." sentence that accompanies a
+/// tool call must never be captured as a plan (the ply-editor session's
+/// turn ended that way and /plan showed the sentence).
+pub def Commands.final_assistant_text (history : List Message) : Option String :=
+    match last_message_go history Option.none {
+        Option.none => Option.none,
+        Option.some m => match m.role {
+            Role.assistant => if has_tool_use m.content then Option.none else assistant_text m,
+            _ => Option.none,
+        },
+    }
+
 pub def Commands.set_plan (st : WeaverState) (p : Option String) : WeaverState :=
     let st2 : WeaverState := { st with plan := p } in
     st2
@@ -319,7 +349,7 @@ pub def Commands.plan_after_turn (st : WeaverState) (before : I64) (r : Result W
     match st.mode {
         Mode.plan => match r {
             Result.err _ => Option.none,
-            Result.ok run2 => Commands.last_assistant_text (turn_delta before run2.session.history),
+            Result.ok run2 => Commands.final_assistant_text (turn_delta before run2.session.history),
         },
         _ => Option.none,
     }

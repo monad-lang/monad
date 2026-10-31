@@ -16,6 +16,9 @@
 
 use std::list {List.length}
 
+use lib::types {TextStyle, TextSpan}
+use lib::core {style_default}
+
 /// One rendered glyph: its source text, the cells it occupies (0, 1 or 2),
 /// and how many source bytes it consumed.
 pub struct Glyph {
@@ -449,6 +452,149 @@ pub def Text.wrap (width : I64) (line : String) : List String :=
         // line is wrapped from the trimmed glyph list.
         if List.is_empty trimmed then [join_glyphs gs] else wrap_go w trimmed
 
+// ==================== styled spans ====================
+//
+// A Markdown row is several styled segments. These mirror the plain
+// wrap/slice functions at glyph level, then regroup equal-style runs so
+// the renderer receives the fewest spans that preserve the styling.
+
+/// A glyph plus the style of the span it came from.
+pub struct StyledGlyph {
+    glyph : Glyph,
+    style : TextStyle
+}
+
+pub def StyledGlyph.mk (g : Glyph) (s : TextStyle) : StyledGlyph :=
+    { glyph := g, style := s }
+
+#[partial]
+def glyphs_onto (gs : List Glyph) (style : TextStyle) (acc : List StyledGlyph) : List StyledGlyph :=
+    match gs {
+        List.empty => acc,
+        List.cons g rest => glyphs_onto rest style (List.cons (StyledGlyph.mk g style) acc),
+    }
+
+/// Flatten spans to glyphs (reversed, then reversed once at the end).
+#[partial]
+def span_glyphs_go (ss : List TextSpan) (acc : List StyledGlyph) : List StyledGlyph :=
+    match ss {
+        List.empty => List.reverse acc,
+        List.cons s rest => span_glyphs_go rest (glyphs_onto (Text.glyphs s.text) s.style acc),
+    }
+
+pub def Text.span_glyphs (ss : List TextSpan) : List StyledGlyph :=
+    span_glyphs_go ss List.empty
+
+pub def Text.width_spans (ss : List TextSpan) : I64 :=
+    match ss {
+        List.empty => 0,
+        List.cons s rest => I64.add (Text.width s.text) (Text.width_spans rest),
+    }
+
+struct StyledSplit {
+    line : List StyledGlyph,
+    rest : List StyledGlyph,
+    broke : Bool
+}
+
+#[terminating]
+def styled_split_go
+    (gs : List StyledGlyph) (w : I64) (used : I64) (line_rev : List StyledGlyph)
+    (space_line : List StyledGlyph) (space_rest : List StyledGlyph) : StyledSplit :=
+    match gs {
+        List.empty => { line := List.reverse line_rev, rest := List.empty, broke := false },
+        List.cons g rest =>
+            let gw : I64 := g.glyph.width in
+            if w < used + gw
+            then
+                if Bool.not (List.is_empty space_rest)
+                then { line := List.reverse space_line, rest := space_rest, broke := true }
+                else if List.is_empty line_rev
+                then { line := List.cons g List.empty, rest := rest, broke := true }
+                else { line := List.reverse line_rev, rest := List.cons g rest, broke := true }
+            else
+                let used2 : I64 := used + gw in
+                let line2 : List StyledGlyph := List.cons g line_rev in
+                if Bool.and (g.glyph.text == " ") (Bool.not (List.is_empty line_rev))
+                then styled_split_go rest w used2 line2 line_rev rest
+                else styled_split_go rest w used2 line2 space_line space_rest,
+    }
+
+#[terminating]
+def styled_wrap_go (w : I64) (gs : List StyledGlyph) : List (List StyledGlyph) :=
+    let split : StyledSplit := styled_split_go gs w 0 List.empty List.empty List.empty in
+    if Bool.not split.broke
+    then List.cons split.line List.empty
+    else List.cons split.line (styled_wrap_go w split.rest)
+
+#[terminating]
+def drop_trailing_styled_go (rev : List StyledGlyph) : List StyledGlyph :=
+    match rev {
+        List.empty => List.empty,
+        List.cons g rest => if g.glyph.text == " " then drop_trailing_styled_go rest else List.reverse rev,
+    }
+
+def drop_trailing_styled (gs : List StyledGlyph) : List StyledGlyph :=
+    drop_trailing_styled_go (List.reverse gs)
+
+/// Group equal-style neighbours back into spans.
+#[partial]
+def group_styled
+    (gs : List StyledGlyph) (cur_text : String) (cur_style : TextStyle)
+    (acc : List TextSpan) : List TextSpan :=
+    match gs {
+        List.empty =>
+            List.reverse
+                (if String.is_empty cur_text then acc else List.cons (TextSpan.mk cur_text cur_style) acc),
+        List.cons g rest =>
+            if String.is_empty cur_text
+            then group_styled rest g.glyph.text g.style acc
+            else if g.style == cur_style
+            then group_styled rest (String.concat cur_text g.glyph.text) cur_style acc
+            else group_styled rest g.glyph.text g.style (List.cons (TextSpan.mk cur_text cur_style) acc),
+    }
+
+pub def Text.group_styled (gs : List StyledGlyph) : List TextSpan :=
+    group_styled gs "" style_default List.empty
+
+#[partial]
+def rows_to_spans (rows : List (List StyledGlyph)) : List (List TextSpan) :=
+    match rows {
+        List.empty => List.empty,
+        List.cons r rest => List.cons (Text.group_styled r) (rows_to_spans rest),
+    }
+
+/// Span-aware equivalent of `Text.wrap`: rows of styled spans, word-wrapped
+/// by cells. An empty input yields one empty row.
+pub def Text.wrap_spans (width : I64) (ss : List TextSpan) : List (List TextSpan) :=
+    let w : I64 := if width < 1 then 1 else width in
+    let gs : List StyledGlyph := Text.span_glyphs ss in
+    let trimmed : List StyledGlyph := drop_trailing_styled gs in
+    if List.is_empty trimmed
+    then List.cons (List.empty : List TextSpan) List.empty
+    else rows_to_spans (styled_wrap_go w trimmed)
+
+/// The spans covering columns `[c0, c1)`, whole glyphs only (the caller
+/// snaps a selection to glyph boundaries first). Used to reverse-video a
+/// selection over a styled row.
+#[partial]
+def slice_styled_go
+    (gs : List StyledGlyph) (col : I64) (c0 : I64) (c1 : I64) (acc : List StyledGlyph)
+    : List StyledGlyph :=
+    match gs {
+        List.empty => List.reverse acc,
+        List.cons g rest =>
+            let start : I64 := col in
+            let end : I64 := col + g.glyph.width in
+            let keep : Bool := Bool.and (start < c1) (c0 < end) in
+            let acc2 : List StyledGlyph := if keep then List.cons g acc else acc in
+            slice_styled_go rest end c0 c1 acc2,
+    }
+
+pub def Text.slice_spans (ss : List TextSpan) (c0 : I64) (c1 : I64) : List TextSpan :=
+    if c1 < c0 then List.empty
+    else Text.group_styled (slice_styled_go (Text.span_glyphs ss) 0 c0 c1 List.empty)
+
 // ==================== tests ====================
 
 #[test]
@@ -528,3 +674,55 @@ def test_prev_boundary_multibyte : Bool := Text.prev_boundary "æø" 2 == 0
 
 #[test]
 def test_next_boundary_multibyte : Bool := Text.next_boundary "æø" 0 == 2
+
+// ─── styled spans ───
+
+#[partial]
+def span_texts (ss : List TextSpan) : String :=
+    match ss {
+        List.empty => "",
+        List.cons s rest => String.concat s.text (span_texts rest),
+    }
+
+#[test]
+def test_width_spans_sums_cells : Bool :=
+    Text.width_spans [TextSpan.mk "ab" style_default, TextSpan.mk "日本" style_default] == 6
+
+#[test]
+def test_wrap_spans_keeps_the_style_across_a_break : Bool :=
+    let bold : TextStyle := { style_default with bold := true } in
+    let rows : List (List TextSpan) :=
+        Text.wrap_spans 6 [TextSpan.mk "hello " style_default, TextSpan.mk "world" bold] in
+    match rows {
+        List.empty => false,
+        List.cons first rest => match rest {
+            List.empty => false,
+            List.cons second _ =>
+                span_texts first == "hello"
+                    && span_texts second == "world"
+                    && match second {
+                        List.empty => false,
+                        List.cons s _ => s.style == bold,
+                    },
+        },
+    }
+
+#[test]
+def test_slice_spans_keeps_the_style : Bool :=
+    let bold : TextStyle := { style_default with bold := true } in
+    let sliced : List TextSpan :=
+        Text.slice_spans [TextSpan.mk "ab" style_default, TextSpan.mk "cd" bold] 1 3 in
+    match sliced {
+        List.empty => false,
+        List.cons first rest => match rest {
+            List.empty => false,
+            List.cons second _ => first.text == "b" && second.text == "c" && second.style == bold,
+        },
+    }
+
+#[test]
+def test_wrap_spans_empty_is_one_empty_row : Bool :=
+    match Text.wrap_spans 10 List.empty {
+        List.cons _ rest => List.is_empty rest,
+        List.empty => false,
+    }

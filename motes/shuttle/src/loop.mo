@@ -426,10 +426,28 @@ def agent_dispatch_run (turn : Turn) (s : RunState) : ResultT String IO (Pair Ru
                 let ends : List String := List.map (fn (n : String) => activity_end n) names;
                 let _ <- emit_each s.emit ends;
                 let capped : List Content := cap_contents (results_of p);
+                let _ <- emit_each s.emit (tool_error_events names capped);
                 return (Result.ok (Pair.pair (state_with_always s (allcache_of p)) capped))
             }
         }
     })
+
+/// One out-of-band event per failed tool call: the name and (capped) error
+/// text, so the log can say WHY a tool failed, not just that it ended.
+#[partial]
+def tool_error_events (names : List String) (cs : List Content) : List String :=
+    match names {
+        List.empty => List.empty,
+        List.cons n rest => match cs {
+            List.empty => List.empty,
+            List.cons c csr => match c {
+                Content.tool_result _ out true =>
+                    List.cons (String.concat "\u{1}toolerror\u{2}" (String.concat n
+                        (String.concat "\u{2}" (Context.cap_text out 300)))) (tool_error_events rest csr),
+                _ => tool_error_events rest csr,
+            },
+        },
+    }
 
 def state_with_always (s : RunState) (cached : List Capability) : RunState :=
     let s2 : RunState := { s with always := cached } in

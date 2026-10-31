@@ -3642,12 +3642,16 @@ pub struct ModuleInfoCache {
     entries : HashMap String ModuleInfo,
     hits : I64,
     misses : I64,
+    /// Entries currently held; a consumer that keeps one cache across many
+    /// checks (weaver's monad_check) resets it when this grows past its cap.
+    size : I64,
 }
 
 pub def module_info_cache_empty : ModuleInfoCache := {
     entries := npath_map_empty,
     hits := 0,
     misses := 0,
+    size := 0,
 }
 
 pub def module_info_cache_lookup (key : ModulePath) (cache : ModuleInfoCache) : Option ModuleInfo :=
@@ -3661,7 +3665,11 @@ def module_info_cache_hit (cache : ModuleInfoCache) : ModuleInfoCache :=
     { cache with hits := cache.hits + 1 }
 
 pub def module_info_cache_insert (key : ModulePath) (info : ModuleInfo) (cache : ModuleInfoCache) : ModuleInfoCache :=
-    { cache with entries := npath_map_insert (npath_of key) info cache.entries, misses := cache.misses + 1 }
+    { cache with entries := npath_map_insert (npath_of key) info cache.entries,
+                 misses := cache.misses + 1, size := cache.size + 1 }
+
+/// How many module infos the cache holds (the consumer's reset signal).
+pub def module_info_cache_count (cache : ModuleInfoCache) : I64 := cache.size
 
 /// A `load_module_with_info` that consults (and extends) the cache.
 pub struct InfoAndCache {

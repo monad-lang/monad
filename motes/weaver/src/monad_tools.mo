@@ -21,7 +21,7 @@ use json::json {
     Json.make_object, Json.make_str,
 }
 use lang::module {
-    ModuleInfoCache, module_info_cache_empty, check_file_cached,
+    ModuleInfoCache, module_info_cache_empty, module_info_cache_count, check_file_cached,
     FileCheckAndCache, FileCheckResult,
 }
 use eval::file {Eval.run_file_limited}
@@ -137,7 +137,8 @@ def check_source (cache : Ref ModuleInfoCache) (root : Option String) (id : Stri
     match w {
         Result.err _ => IO.pure (Content.tool_result id (String.concat "monad_check: could not write " vpath) true),
         Result.ok _ => do {
-            let c <- Ref.get cache;
+            let c0 <- Ref.get cache;
+            let c := if I64.gt (module_info_cache_count c0) 2048 then module_info_cache_empty else c0;
             let fc <- check_file_cached c vpath false;
             let _ <- Ref.set cache fc.cache;
             let _ <- cleanup vpath;
@@ -151,7 +152,8 @@ def check_path_of (dir : String) : String :=
     String.concat dir (String.concat "/weaver_check_buffer_" (String.concat (I64.to_string process_id) ".mo"))
 
 def check_path (cache : Ref ModuleInfoCache) (id : String) (path : String) : IO Content := do {
-    let c <- Ref.get cache;
+    let c0 <- Ref.get cache;
+    let c := if I64.gt (module_info_cache_count c0) 2048 then module_info_cache_empty else c0;
     let fc <- check_file_cached c path false;
     let _ <- Ref.set cache fc.cache;
     let r : FileCheckResult := fc.result;
@@ -235,7 +237,8 @@ def check_buffer (cache : Ref ModuleInfoCache) (root : Option String) (content :
     match w {
         Result.err _ => IO.pure false,
         Result.ok _ => do {
-            let c <- Ref.get cache;
+            let c0 <- Ref.get cache;
+            let c := if I64.gt (module_info_cache_count c0) 2048 then module_info_cache_empty else c0;
             let fc <- check_file_cached c vpath false;
             let _ <- Ref.set cache fc.cache;
             let _ <- cleanup vpath;

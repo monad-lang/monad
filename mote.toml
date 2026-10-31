@@ -63,6 +63,7 @@ members = [
   "motes/openai",
   "motes/anthropic",
   "motes/shuttle",
+  "motes/weaver",
   "motes/loom",
   "motes/xml_html",
   "motes/oak",
@@ -115,6 +116,9 @@ path = "motes/log"
 [workspace.dependencies.lsp]
 path = "motes/lsp"
 
+[workspace.dependencies.markdown]
+path = "motes/markdown"
+
 [workspace.dependencies.moose]
 path = "motes/moose"
 
@@ -133,6 +137,9 @@ path = "std"
 [workspace.dependencies.toml]
 path = "motes/toml"
 
+[workspace.dependencies.time]
+path = "motes/time"
+
 [workspace.dependencies.toolkit]
 path = "motes/toolkit"
 
@@ -141,6 +148,9 @@ path = "motes/web_event"
 
 [workspace.dependencies.xml_html]
 path = "motes/xml_html"
+
+[workspace.dependencies.yaml]
+path = "motes/yaml"
 
 # Affine-by-default migration fallback (measured 2026-10-22). This is a
 # virtual workspace root, so the table covers paths with no manifest of

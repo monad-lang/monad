@@ -38,6 +38,7 @@ use weaver::dumb {append_user, drive_loop}
 use weaver::model {
     TuiModel, WeaverMsg, Window, LiveDelta, on_event, init_tui_model, init_tui_model_with,
     Model.view, Model.scroll_step, Model.append_block, Model.append_lines,
+    Model.scrollbar_hit, Model.scrollbar_press, Model.scrollbar_drag_to, Model.scrollbar_release,
     Model.window, Model.needs_page, Model.page_request, Model.hist_keep,
     DisplayRow, Model.display_line, Model.display_plain, Model.take_last_rows, Model.display_row_widget,
     Model.refresh_rows, Model.begin_selection, Model.drag_selection, Model.finish_selection,
@@ -46,7 +47,7 @@ use weaver::model {
     PickerState, Picker.init, Picker.selected_model, Picker.move,
     list_length, panel_height, input_placeholder,
 }
-use weaver::logs {Logs.info, Logs.debug, Logs.warn}
+use weaver::logs {Logs.info, Logs.debug, Logs.warn, Logs.error, Logs.log_rss}
 use weaver::subagent {Subagent.task_tool}
 use weaver::store {
     Transcript, TranscriptPage, StoreState,
@@ -187,6 +188,7 @@ def update_msg (m : TuiModel) (msg : WeaverMsg) : Pair TuiModel (Cmd WeaverMsg) 
         // too: the dialog closed, so the turn ends and the overlay must
         // be repainted away (leaving modal/turn_pending set used to
         // strand the app).
+        WeaverMsg.submit st text => submit_line (set_state { m with plan_ready := false } st) text,
         WeaverMsg.input_set text =>
             let m2 : TuiModel := with_turn_end (fn (mm : TuiModel) =>
                 { mm with input := input_state text input_placeholder, banner := false }) m in
@@ -244,21 +246,27 @@ def after_clear (action : IO WeaverMsg) : IO WeaverMsg := do {
     IO.pure msg
 }
 
-def persist_turn_action (s : StoreState) (run : RunState) (delta : List Message) (start : I64) (block : List TLine) : IO WeaverMsg :=
-    after_clear (record_turn_action s run delta start block)
+def persist_turn_action (log : Option Logger) (s : StoreState) (run : RunState) (delta : List Message) (start : I64) (block : List TLine) : IO WeaverMsg :=
+    after_clear (record_turn_action log s run delta start block)
 
-def record_turn_action (s : StoreState) (run : RunState) (delta : List Message) (start : I64) (block : List TLine) : IO WeaverMsg := do {
+def record_turn_action (log : Option Logger) (s : StoreState) (run : RunState) (delta : List Message) (start : I64) (block : List TLine) : IO WeaverMsg := do {
     let r <- Store.record_turn s run.session delta start block;
     match r {
-        Result.err e => IO.pure (WeaverMsg.store_result (Option.some e)),
+        Result.err e => do {
+            Logs.warn log (String.concat "ev=persist_error kind=transcript msg=" e);
+            IO.pure (WeaverMsg.store_result (Option.some e))
+        },
         Result.ok _ => discard_live_msg s,
     }
 }
 
-def persist_turn_cmd (store : Option StoreState) (run : RunState) (delta : List Message) (start : I64) (block : List TLine) : Cmd WeaverMsg :=
+def plan_prompt_cmd (st : WeaverState) : Cmd WeaverMsg :=
+    Cmd.perform (fn (_ : Unit) => plan_approval_step st)
+
+def persist_turn_cmd (log : Option Logger) (store : Option StoreState) (run : RunState) (delta : List Message) (start : I64) (block : List TLine) (ready : Bool) (st : WeaverState) : Cmd WeaverMsg :=
     match store {
-        Option.none => repaint_cmd,
-        Option.some s => Cmd.perform (fn (_ : Unit) => persist_turn_action s run delta start block),
+        Option.none => if ready then plan_prompt_cmd st else repaint_cmd,
+        Option.some s => Cmd.perform (fn (_ : Unit) => persist_turn_action log s run delta start block),
     }
 
 def persist_output_action (s : StoreState) (sess : Session) (start : I64) (block : List TLine) : IO WeaverMsg :=
@@ -279,30 +287,35 @@ def persist_output_cmd (fallback : Cmd WeaverMsg) (store : Option StoreState) (s
     }
 
 def turn_result_step (m : TuiModel) (run : RunState) (lines : List TLine) (delta : List Message) (last_context : I64) (plan : Option String) : Pair TuiModel (Cmd WeaverMsg) :=
+    let plan_mode : Bool := mode_is_plan m.state.mode in
+    let ready : Bool := Bool.and plan_mode (match plan { Option.some _ => true, Option.none => false }) in
     // A stopped turn keeps its partial block and carries one marker line.
     // It is display output, not history: the session's messages are the
     // ones the loop kept.
     let shown : List TLine :=
         if run.stopped then List.append lines [TLine.plain "[stopped]"] else lines in
+    let notice : List TLine :=
+        if Bool.and plan_mode (Bool.not ready)
+        then [TLine.plain "[plan not ready -- ask for the plan, or /plan]"]
+        else if ready then [TLine.plain "plan ready -- review it"] else List.empty in
     let st1 : WeaverState := { (m.state) with run := run, last_context := last_context } in
     let st2 : WeaverState := match plan {
         Option.none => st1,
-        Option.some p =>
-            let st_plan : WeaverState := { st1 with plan := Option.some p } in
-            st_plan,
+        Option.some p => { st1 with plan := Option.some p },
     } in
     let with_run : TuiModel := set_state m st2 in
-    let pair := append_block_at with_run shown in
+    let pair := append_block_at with_run (List.append shown notice) in
     match pair {
         Pair.pair m2 at => match at {
             Pair.pair start block =>
                 let m3 : TuiModel := with_turn_end (fn (mm : TuiModel) => mm) m2 in
-                let store : Option StoreState := m3.state.store in
-                if Bool.not (queued_waiting m3)
-                then Pair.pair m3 (persist_turn_cmd store run delta start block)
+                let m4 : TuiModel := { m3 with plan_ready := ready } in
+                let store : Option StoreState := m4.state.store in
+                if Bool.not (queued_waiting m4)
+                then Pair.pair m4 (persist_turn_cmd m4.log store run delta start block ready m4.state)
                 else match store {
-                    Option.none => start_queued m3,
-                    Option.some _ => Pair.pair { m3 with queued_ready := true } (persist_turn_cmd store run delta start block),
+                    Option.none => start_queued m4,
+                    Option.some _ => Pair.pair { m4 with queued_ready := true } (persist_turn_cmd m4.log store run delta start block ready m4.state),
                 },
         },
     }
@@ -417,12 +430,14 @@ def transcript_reset_step (m : TuiModel) (tr : Transcript) : Pair TuiModel (Cmd 
 def store_result_step (m : TuiModel) (e : Option String) : Pair TuiModel (Cmd WeaverMsg) :=
     match e {
         Option.none =>
-            if m.queued_ready then start_queued m else Pair.pair m Cmd.none,
+            if m.plan_ready
+            then Pair.pair { m with plan_ready := false } (plan_prompt_cmd m.state)
+            else if m.queued_ready then start_queued m else Pair.pair m Cmd.none,
         Option.some msg =>
             let st0 : WeaverState := m.state in
             let st : WeaverState := { st0 with store := Option.none } in
             let line : String := String.concat "warning: transcript persistence disabled: " msg in
-            let m2 : TuiModel := Model.append_lines { m with state := st } [TLine.plain line] in
+            let m2 : TuiModel := Model.append_lines { m with state := st, plan_ready := false } [TLine.plain line] in
             if m2.queued_ready then start_queued m2 else Pair.pair m2 (Cmd.none),
     }
 
@@ -431,7 +446,7 @@ def store_result_step (m : TuiModel) (e : Option String) : Pair TuiModel (Cmd We
 def with_turn_end (f : TuiModel -> TuiModel) (m : TuiModel) : TuiModel :=
     { (with_streak_reset f m) with turn_pending := false, live_spent := Option.none, live_base := Option.none,
         live_text := "", live_seen := 0, live_thinking := "", live_thinking_seen := 0,
-        live_activity := Option.none, modal := false, stop_requested := false, overlay_open := false }
+        live_activity := Option.none, scroll_drag := Option.none, modal := false, stop_requested := false, overlay_open := false }
 
 // ── live usage (the thinking row's tokens) ─────────────────────────────
 // The UI's session is the PRE-turn snapshot; shuttle's `on_usage` hook
@@ -657,7 +672,7 @@ def command_reset (m : TuiModel) (effect : Effect) : Pair TuiModel (Cmd WeaverMs
 
 def reset_in_memory (m : TuiModel) (output : String) : Pair TuiModel (Cmd WeaverMsg) :=
     let tr : Transcript := Transcript.append Transcript.empty (plain_lines (theme_split_lines output)) in
-    let m2 : TuiModel := { m with transcript := tr, scroll := 0, page_pending := false } in
+    let m2 : TuiModel := { m with transcript := tr, scroll := 0, scroll_drag := Option.none, page_pending := false } in
     Pair.pair m2 Cmd.none
 
 def reset_action (st : StoreState) (output : String) : IO WeaverMsg := do {
@@ -720,26 +735,38 @@ def update_mouse (m : TuiModel) (me : MouseEvent) : Pair TuiModel (Cmd WeaverMsg
         MouseEvent.press btn r c =>
             if is_left btn
             then
-                // An input-box press places the caret and starts an input
-                // selection; a transcript press starts a transcript one and
-                // drops any input highlight.
-                if Model.in_input m r c
+                // The bar owns its own column; a press there never starts a
+                // text selection. Otherwise: an input-box press places the
+                // caret and starts an input selection, a transcript press
+                // starts a transcript one and drops any input highlight.
+                if Model.scrollbar_hit m r c
+                then maybe_page_cmd (with_streak_reset (fn (mm : TuiModel) => Model.scrollbar_press mm r) m)
+                else if Model.in_input m r c
                 then Pair.pair (with_streak_reset (fn (mm : TuiModel) => Model.input_press mm r c) m) Cmd.none
                 else Pair.pair (with_streak_reset (fn (mm : TuiModel) => Model.begin_selection (Model.clear_input_selection mm) r c) m) Cmd.none
             else Pair.pair (with_streak_reset (fn (mm : TuiModel) => mm) m) Cmd.none,
         MouseEvent.drag btn r c =>
             if is_left btn
             then
-                if Model.input_sel_active m
-                then Pair.pair (with_streak_reset (fn (mm : TuiModel) => Model.input_drag mm r c) m) Cmd.none
-                else Pair.pair (with_streak_reset (fn (mm : TuiModel) => Model.drag_selection mm r c) m) Cmd.none
+                match m.scroll_drag {
+                    Option.some _ =>
+                        maybe_page_cmd (with_streak_reset (fn (mm : TuiModel) => Model.scrollbar_drag_to mm r) m),
+                    Option.none =>
+                        if Model.input_sel_active m
+                        then Pair.pair (with_streak_reset (fn (mm : TuiModel) => Model.input_drag mm r c) m) Cmd.none
+                        else Pair.pair (with_streak_reset (fn (mm : TuiModel) => Model.drag_selection mm r c) m) Cmd.none,
+                }
             else Pair.pair (with_streak_reset (fn (mm : TuiModel) => mm) m) Cmd.none,
         MouseEvent.release btn r c =>
             if is_left btn
             then
-                if Model.input_sel_active m
-                then finish_input_selection_step m r c
-                else finish_selection_step m r c
+                match m.scroll_drag {
+                    Option.some _ => Pair.pair (with_streak_reset Model.scrollbar_release m) Cmd.none,
+                    Option.none =>
+                        if Model.input_sel_active m
+                        then finish_input_selection_step m r c
+                        else finish_selection_step m r c,
+                }
             else Pair.pair (with_streak_reset (fn (mm : TuiModel) => mm) m) Cmd.none,
     }
 
@@ -1062,7 +1089,10 @@ def submit_line (m : TuiModel) (text : String) : Pair TuiModel (Cmd WeaverMsg) :
             let _ <- write_echo store start block;
             run_submitted_line m.log gen st text
         })
-        (turn_never_ran st.run))
+        (fn (e : FiberError) => do {
+            Logs.error m.log (String.concat "ev=fiber_error " (FiberError.message e));
+            IO.pure (turn_never_ran st.run e)
+        }))
 
 /// `enter_key`'s fiber-error message: the turn never ran, so it fails
 /// against the run state it started from. Classed `io`, which is
@@ -1118,7 +1148,7 @@ def set_run (m : TuiModel) (run : RunState) : TuiModel :=
     set_state m { (m.state) with run := run }
 
 def set_size (m : TuiModel) (rows : I64) (cols : I64) : TuiModel :=
-    { m with rows := rows, cols := cols }
+    { m with rows := rows, cols := cols, scroll_drag := Option.none }
 
 // ── run_submitted_line: the dumb-mode twin over WeaverMsg ───────────────
 
@@ -1132,9 +1162,11 @@ pub def run_submitted_line (log : Option Logger) (gen : I64) (st : WeaverState) 
     let kind : String := if String.starts_with "/" text then "command" else "turn";
     Logs.info log (String.concat "ev=submit kind=" (String.concat kind
         (String.concat " bytes=" (I64.to_string (String.length text)))));
+    Logs.log_rss log "submit";
     let msg <- dispatch_submitted log gen st text;
     let t1 <- IO.current_time;
     Logs.info log (String.concat "ev=submit_end elapsed_ms=" (I64.to_string (t1 - t0)));
+    Logs.log_rss log "submit_end";
     Logs.info log (outcome_of msg);
     IO.pure msg
 }
@@ -1142,9 +1174,10 @@ pub def run_submitted_line (log : Option Logger) (gen : I64) (st : WeaverState) 
 def outcome_of (msg : WeaverMsg) : String :=
     match msg {
         WeaverMsg.turn_result run _ _ _ _ =>
-            String.concat "ev=turn_end turns=" (String.concat (I64.to_string run.session.turns)
+            let reason : String := if run.stopped then "stopped" else "ok" in
+            String.concat "ev=turn_end reason=" (String.concat reason (String.concat " turns=" (String.concat (I64.to_string run.session.turns)
                 (String.concat " in=" (String.concat (I64.to_string run.session.spent.input_tokens)
-                (String.concat " out=" (I64.to_string run.session.spent.output_tokens))))) ,
+                (String.concat " out=" (I64.to_string run.session.spent.output_tokens))))))) ,
         WeaverMsg.turn_failed _ e => String.concat "ev=turn_error " (WeaverError.show e),
         WeaverMsg.command_result _ => "ev=command_end",
         WeaverMsg.command_failed e => String.concat "ev=command_error " (WeaverError.show e),
@@ -1388,11 +1421,41 @@ def drive_tui (log : Option Logger) (gen : I64) (st : WeaverState) (text : Strin
 def progress_live (log : Option Logger) (store : Option StoreState) (frag : String) : IO Unit :=
     if String.starts_with "retrying" frag
     then Logs.warn log (String.concat "ev=provider_retry " frag)
+    else if String.starts_with "\u{1}toolerror\u{2}" frag
+    then log_tool_error log frag
     else if String.starts_with "\u{1}activity\u{2}" frag
     then activity_step log store frag
     else if String.starts_with "\u{1}thinking\u{2}" frag
     then append_thinking store frag
     else persist_chunk store frag
+
+/// Split at the first 0x02: the tool-error fragment's name/message pair.
+#[partial]
+def split_sep (bs : List U8) (acc : List U8) : Pair String String :=
+    match bs {
+        List.empty => Pair.pair (String.from_list (List.reverse acc)) "",
+        List.cons b rest =>
+            if U8.beq b 2u8
+            then Pair.pair (String.from_list (List.reverse acc)) (String.from_list rest)
+            else split_sep rest (List.cons b acc),
+    }
+
+pub def tool_error_payload (frag : String) : Option (Pair String String) :=
+    let head : String := "\u{1}toolerror\u{2}" in
+    if String.starts_with head frag
+    then Option.some (split_sep (String.to_list (String.drop (String.length head) frag)) List.empty)
+    else Option.none
+
+/// A failed tool's name and error text at warn/error level (2 KB cap; no
+/// file contents beyond what the tool itself returned as an error).
+def log_tool_error (log : Option Logger) (frag : String) : IO Unit :=
+    match tool_error_payload frag {
+        Option.none => IO.pure unit,
+        Option.some pr => match pr {
+            Pair.pair name msg =>
+                Logs.error log (String.concat "ev=tool_error name=" (String.concat name (String.concat " msg=" msg))),
+        },
+    }
 
 /// The tool name in an activity fragment of `phase` (`start`/`end`), or
 /// none for any other payload.
@@ -1483,9 +1546,15 @@ def tool_result_lines (output : String) (is_error : Bool) : List TLine :=
 
 /// Assistant text is raw (no `assistant:` label); a user message is the
 /// echoed prompt's role; tool/system output keeps its one-word label so
-/// the theme can still classify it.
+/// the theme can still classify it. Only an assistant `text` block is
+/// Markdown; a tool result that happens to carry text stays literal.
 def render_message (m : Message) : List TLine :=
-    let lines : List TLine := List.flatten (List.map render_content_lines m.content) in
+    let markdown : Bool := match m.role {
+        Role.assistant => true,
+        _ => false,
+    } in
+    let lines : List TLine :=
+        List.flatten (List.map (fn (c : Content) => render_content_lines markdown c) m.content) in
     match m.role {
         Role.user => List.map (fn (l : TLine) => TLine.user_line l.text) lines,
         Role.assistant => lines,
@@ -1498,9 +1567,9 @@ def prefixed (p : String) (l : TLine) : TLine :=
     then TLine.detail_line (String.concat p l.text)
     else TLine.plain (String.concat p l.text)
 
-def render_content_lines (c : Content) : List TLine :=
+def render_content_lines (markdown : Bool) (c : Content) : List TLine :=
     match c {
-        Content.text s => [TLine.plain s],
+        Content.text s => [if markdown then TLine.markdown_line s else TLine.plain s],
         Content.tool_use id name input =>
             let summary : String := String.concat "⏺ " (String.concat name
                 (String.concat "(" (String.concat (tool_input_summary input) ")"))) in
@@ -1510,7 +1579,7 @@ def render_content_lines (c : Content) : List TLine :=
             let n : I64 := String.length s in
             let marker : String := String.concat "[thinking · "
                 (String.concat (I64.to_string n) " chars · ctrl+o]") in
-            List.cons (TLine.plain marker) (List.map TLine.detail_line (theme_split_lines s)),
+            List.cons (TLine.thinking_marker marker) (List.map TLine.thinking_detail (theme_split_lines s)),
     }
 
 #[partial]
@@ -1883,14 +1952,27 @@ def plan_approval_step (st : WeaverState) : IO WeaverMsg := do {
                         Result.err e => IO.pure (WeaverMsg.command_failed e),
                         Result.ok e => do {
                             let note : String := Dialog.note_text final;
-                            if String.is_empty note
-                            then IO.pure (WeaverMsg.command_result e)
-                            else do {
-                                persist_note e.state note;
-                                let st2 : WeaverState := note_into_state e.state note;
-                                let out : String := String.concat e.output (String.concat "\nnote: " note);
-                                let e2 : Effect := { e with state := st2, output := out };
-                                IO.pure (WeaverMsg.command_result e2)
+                            if i == 0
+                            then do {
+                                // "Approve and execute": the mode change is
+                                // in `e.state`; start a real turn with the
+                                // instruction (the old code only switched
+                                // modes and sat idle).
+                                let text : String :=
+                                    if String.is_empty note
+                                    then "Implement the approved plan."
+                                    else String.concat "Implement the approved plan.\n\nNote: " note;
+                                IO.pure (WeaverMsg.submit e.state text)
+                            } else do {
+                                if String.is_empty note
+                                then IO.pure (WeaverMsg.command_result e)
+                                else do {
+                                    persist_note e.state note;
+                                    let st2 : WeaverState := note_into_state e.state note;
+                                    let out : String := String.concat e.output (String.concat "\nnote: " note);
+                                    let e2 : Effect := { e with state := st2, output := out };
+                                    IO.pure (WeaverMsg.command_result e2)
+                                }
                             }
                         },
                     }

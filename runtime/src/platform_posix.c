@@ -997,6 +997,111 @@ static int64_t term_ctl_leave_raw(void) {
     return tcsetattr(STDIN_FILENO, TCSAFLUSH, &g_term_ctl_saved) == 0 ? 1 : 0;
 }
 
+/* --- Fatal-signal report ---------------------------------------------
+ *
+ * A segfault or an external SIGTERM used to strand the alternate screen:
+ * the tui restores the terminal only on its controlled exit path, and the
+ * runtime installed no handler at all. This handler is deliberately
+ * async-signal-safe (write/tcsetattr/open/close/raise only, no malloc,
+ * no printf, no Boehm calls): it restores the saved termios, emits the
+ * generic reset sequence, appends one marker line to a path computed at
+ * startup, then re-raises so the exit status still names the signal.
+ *
+ * The marker path is decided ONCE in main (snprintf there, not in the
+ * handler): WEAVER_CRASH_FILE, else $WEAVER_LOG_DIR/crash-<pid>.log,
+ * else $HOME/.weaver/crash-<pid>.log, else /tmp/monad-crash-<pid>.log.
+ * Weaver reports and removes it on the next launch (`ev=crash_signal`).
+ */
+static char g_crash_path[512];
+static int g_crash_path_ready = 0;
+static volatile sig_atomic_t g_crash_active = 0;
+
+static void crash_path_init(void) {
+    const char* explicit_path = getenv("WEAVER_CRASH_FILE");
+    const char* log_dir = getenv("WEAVER_LOG_DIR");
+    const char* home = getenv("HOME");
+    if (explicit_path && *explicit_path)
+        snprintf(g_crash_path, sizeof g_crash_path, "%s", explicit_path);
+    else if (log_dir && *log_dir)
+        snprintf(g_crash_path, sizeof g_crash_path, "%s/crash-%ld.log", log_dir, (long)getpid());
+    else if (home && *home)
+        snprintf(g_crash_path, sizeof g_crash_path, "%s/.weaver/crash-%ld.log", home, (long)getpid());
+    else
+        snprintf(g_crash_path, sizeof g_crash_path, "/tmp/monad-crash-%ld.log", (long)getpid());
+    g_crash_path_ready = 1;
+}
+
+static void crash_write_all(int fd, const char* s, size_t n) {
+    while (n > 0) {
+        ssize_t w = write(fd, s, n);
+        if (w <= 0) return;
+        s += w;
+        n -= (size_t)w;
+    }
+}
+
+static char* crash_put_uint(char* out, unsigned long long v) {
+    char tmp[24];
+    int n = 0;
+    if (v == 0) { *out++ = '0'; return out; }
+    while (v > 0) { tmp[n++] = (char)('0' + (v % 10)); v /= 10; }
+    while (n > 0) *out++ = tmp[--n];
+    return out;
+}
+
+static void crash_handler(int sig) {
+    if (g_crash_active) {
+        signal(sig, SIG_DFL);
+        raise(sig);
+        return;
+    }
+    g_crash_active = 1;
+
+    static const char reset[] =
+        "\x1b[0m\x1b[?1002l\x1b[?1006l\x1b[?2004l\x1b[?1049l\x1b[?25h";
+    if (g_term_ctl_saved_valid) {
+        tcsetattr(STDIN_FILENO, TCSAFLUSH, &g_term_ctl_saved);
+        g_term_ctl_saved_valid = 0;
+    }
+    crash_write_all(STDOUT_FILENO, reset, sizeof reset - 1);
+    crash_write_all(STDERR_FILENO, reset, sizeof reset - 1);
+
+    if (g_crash_path_ready) {
+        int fd = open(g_crash_path, O_WRONLY | O_CREAT | O_TRUNC, 0600);
+        if (fd >= 0) {
+            char line[128];
+            char* p = line;
+            const char* head = "monad crash signal=";
+            while (*head) *p++ = *head++;
+            p = crash_put_uint(p, (unsigned long long)sig);
+            const char* mid = " pid=";
+            while (*mid) *p++ = *mid++;
+            p = crash_put_uint(p, (unsigned long long)getpid());
+            *p++ = '\n';
+            crash_write_all(fd, line, (size_t)(p - line));
+            close(fd);
+        }
+    }
+
+    signal(sig, SIG_DFL);
+    raise(sig);
+}
+
+static void install_crash_handlers(void) {
+    struct sigaction sa;
+    memset(&sa, 0, sizeof sa);
+    sa.sa_handler = crash_handler;
+    sigemptyset(&sa.sa_mask);
+    sa.sa_flags = SA_RESETHAND;
+    sigaction(SIGSEGV, &sa, NULL);
+    sigaction(SIGBUS, &sa, NULL);
+    sigaction(SIGTERM, &sa, NULL);
+    sigaction(SIGHUP, &sa, NULL);
+    sigaction(SIGABRT, &sa, NULL);
+    sigaction(SIGFPE, &sa, NULL);
+    sigaction(SIGILL, &sa, NULL);
+}
+
 static int term_ctl_size_fd(int fd, int64_t* packed) {
     struct winsize ws;
     if (ioctl(fd, TIOCGWINSZ, &ws) != 0) return 0;
@@ -2194,6 +2299,12 @@ int main(int argc, char** argv) {
        would never stop. The process's own stdout/stderr keep dying of
        SIGPIPE through `stdio_die_on_epipe`. */
     signal(SIGPIPE, SIG_IGN);
+    /* A fatal signal (segfault, external SIGTERM/SIGHUP) restores the
+       saved termios, resets the screen escape state and leaves one
+       marker line for the next launch to report. SIGINT is deliberately
+       not handled: cbreak delivers Ctrl+C as a byte to the tui. */
+    crash_path_init();
+    install_crash_handlers();
     /* Exclude argv[0] (the binary's own path) -- matches the
        interpreter's own `run <file> <args...>` semantics (args passed to
        a compiled program's `main` are just the extra CLI args, not the

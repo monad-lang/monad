@@ -23,22 +23,33 @@ use weaver::dumb {Dumb.status_fields}
 use weaver::theme {
     theme_line_style_with, theme_tline_style_with, theme_status_style_with,
     theme_border_style_with, theme_banner_style_with, theme_running_style_with,
+    theme_thinking_style_with,
+    theme_scrollbar_thumb_style_with,
+    theme_markdown_span_style_with,
     BannerPart, theme_split_lines,
+}
+use markdown::parse {Markdown.parse}
+use markdown::render {
+    Markdown.to_lines, Markdown.to_plain_lines,
+    Markdown.StyledLine, Markdown.StyledSpan,
 }
 use weaver::policy {Mode}
 use weaver::store {
-    TLine, Transcript, TranscriptPage, Store.page_lines,
+    TLine, TLineKind, Transcript, TranscriptPage, Store.page_lines,
     Transcript.empty, Transcript.next_block, Transcript.append, Transcript.slice,
 }
-use tui::types {Event, LayoutSize, TextStyle}
+use tui::types {Event, LayoutSize, TextStyle, TextSpan}
 use tui::core {clamp, style_default}
 use tui::widgets::input {
     InputState, input_state, InputState.press, InputState.drag,
     InputState.finish_selection, InputState.clear_selection,
 }
-use tui::widget {Widget, SizedWidget, BorderStyle, border_with, label, text_input, sized, with_style, padding}
+use tui::widget {Widget, SizedWidget, BorderStyle, border_with, label, spans, text_input, sized, with_style, padding}
 use tui::render {wrap_text}
-use tui::text {Text.width, Text.take_width, Text.slice_cols, Text.padded_slice_cols, Text.snap_span}
+use tui::text {
+    Text.width, Text.take_width, Text.slice_cols, Text.padded_slice_cols, Text.snap_span,
+    Text.width_spans, Text.wrap_spans, Text.slice_spans,
+}
 use std::list {List.intercalate}
 
 /// The loop's message type: a raw terminal event not yet interpreted, or
@@ -70,6 +81,9 @@ pub type WeaverMsg {
     store_result (e : Option String),
     /// Fill the input box (the plan dialog's "revise with a note").
     input_set (text : String),
+    /// Submit a line as a new turn (the plan dialog's "approve and
+    /// execute"): the update starts the same fiber path as Enter.
+    submit (st : WeaverState) (text : String),
     /// The Esc stop request's signal write completed; a no-op fold.
     stop_sent,
     /// A pending tick's poll: the live usage (only every tenth frame),
@@ -111,9 +125,10 @@ pub struct RowsKey {
     pending : Bool,
     /// Ctrl+O's detail-line filter.
     details : Bool,
-    /// The streamed block's height: `body_height` shrinks as it grows,
-    /// so the cache must rebuild on that change.
-    stream : I64,
+    /// The two streamed blocks' heights: `body_height` shrinks as they
+    /// grow, so the cache must rebuild on either change.
+    think_stream : I64,
+    text_stream : I64,
 }
 
 /// The model picker: the fetched list, the session's current name,
@@ -230,6 +245,10 @@ pub struct TuiModel {
     /// row for each placeholder line before it. Recomputed with the rows
     /// cache; `scroll` clamps against it.
     row_total : I64 := 0,
+    /// Where the pointer grabbed the scrollbar thumb (rows below its top);
+    /// none when no scrollbar drag is in progress. Kept out of `sel` so a
+    /// bar drag never becomes a text selection.
+    scroll_drag : Option I64 := Option.none,
     /// Submitted non-empty lines, most recent first (the up-arrow
     /// history; ArrowUp recalls only from an empty input).
     hist : List String := List.empty,
@@ -280,6 +299,9 @@ pub struct TuiModel {
     /// Ctrl+O: show detail lines (tool output, completed thinking).
     show_details : Bool := false,
     modal : Bool := false,
+    /// A clean plan-mode turn produced a plan: the persistence
+    /// continuation opens the "Plan ready" dialog once the turn folds.
+    plan_ready : Bool := false,
     /// Esc asked the running turn to stop; the live row says so and the
     /// fiber ends at its next model/tool boundary.
     stop_requested : Bool := false,
@@ -317,7 +339,7 @@ pub def init_tui_model (log : Option Logger) (st : WeaverState) (rows : I64) (co
 
 /// The startup tail loaded from the session store.
 pub def init_tui_model_with (log : Option Logger) (st : WeaverState) (rows : I64) (cols : I64) (tr : Transcript) : TuiModel :=
-    let m : TuiModel := { state := st, input := input_state "" input_placeholder, transcript := tr, rows := rows, cols := cols, ctrl_c_streak := 0, ctrl_d_streak := 0, scroll := 0, row_total := 0, hist := List.empty, hist_idx := 0 - 1, turn_pending := false, spinner_frame := 0, page_pending := false, rows_cache := List.empty, rows_key := Option.none, sel := Option.none, banner := true, banner_frame := 0, live_spent := Option.none, live_base := Option.none, live_text := "", live_seen := 0, live_thinking := "", live_thinking_seen := 0, live_activity := Option.none, show_details := false, modal := false, stop_requested := false, turn_gen := 0, overlay_open := false, dialog_seq := 0, picker := Option.none, queued := List.empty, queued_ready := false, log := log } in
+    let m : TuiModel := { state := st, input := input_state "" input_placeholder, transcript := tr, rows := rows, cols := cols, ctrl_c_streak := 0, ctrl_d_streak := 0, scroll := 0, row_total := 0, scroll_drag := Option.none, hist := List.empty, hist_idx := 0 - 1, turn_pending := false, spinner_frame := 0, page_pending := false, rows_cache := List.empty, rows_key := Option.none, sel := Option.none, banner := true, banner_frame := 0, live_spent := Option.none, live_base := Option.none, live_text := "", live_seen := 0, live_thinking := "", live_thinking_seen := 0, live_activity := Option.none, show_details := false, modal := false, plan_ready := false, stop_requested := false, turn_gen := 0, overlay_open := false, dialog_seq := 0, picker := Option.none, queued := List.empty, queued_ready := false, log := log } in
     Model.refresh_rows m
 
 /// The input box's placeholder, shared by the live edit and a history
@@ -461,7 +483,11 @@ pub def Model.view (m : TuiModel) : Widget :=
     } in
     // `border_with`, not `with_style (border ...)`: the frame is dim, the
     // rows inside it are not (with_style merges into the whole subtree).
-    let transcript : SizedWidget := sized (LayoutSize.fill 1) (border_with (theme_border_style_with colors) BorderStyle.rounded (padding 1 0 1 0 body)) in
+    let inner : Widget :=
+        if I64.lt m.cols 5
+        then body
+        else Widget.row [sized (LayoutSize.fill 1) body, sized (LayoutSize.fixed 1) (Model.scrollbar_column m)] in
+    let transcript : SizedWidget := sized (LayoutSize.fill 1) (border_with (theme_border_style_with colors) BorderStyle.rounded (padding 1 0 0 0 inner)) in
     let status : SizedWidget := sized (LayoutSize.fixed 1) (with_style (theme_status_style_with colors mode) (label (status_line m))) in
     let input : SizedWidget := sized (LayoutSize.fixed 3) (padding 1 0 1 0 (text_input m.input)) in
     let head : List SizedWidget := if m.banner then [sized (LayoutSize.fixed Model.banner_height) (banner_widget m)] else List.empty in
@@ -479,10 +505,19 @@ pub def Model.view (m : TuiModel) : Widget :=
 pub struct DisplayRow {
     text : String,
     style : TextStyle,
+    /// Empty for an ordinary row (painted as one label); a Markdown row
+    /// carries its inline segments so bold/code/link styling survives
+    /// wrapping and selection.
+    spans : List TextSpan,
 }
 
 def mk_row (style : TextStyle) (text : String) : DisplayRow :=
-    let r : DisplayRow := { text := text, style := style } in
+    let r : DisplayRow := { text := text, style := style, spans := List.empty } in
+    r
+
+pub def mk_span_row (style : TextStyle) (ss : List TextSpan) : DisplayRow :=
+    let text : String := String.concat_all (List.map (fn (s : TextSpan) => s.text) ss) in
+    let r : DisplayRow := { text := text, style := style, spans := ss } in
     r
 
 // ── mouse selection ─────────────────────────────────────────────────────
@@ -731,18 +766,74 @@ def take_rows (n : I64) (rs : List DisplayRow) : List DisplayRow :=
 /// The dialog preview has its own, stricter cap.
 pub def Model.display_cap_bytes : I64 := 262144
 
-/// One logical line, split on its own newlines and wrapped. The role flag
-/// styles every wrapped row, so a user line cannot be reclassified by a
-/// prefix it happens to start with.
+/// A UTF-8-safe prefix: `String.slice` answers "" when its end offset is a
+/// continuation byte, so back off up to three bytes rather than render a
+/// blank line.
+#[partial]
+def cap_utf8 (s : String) (max : I64) (back : I64) : String :=
+    if I64.gt back 3 then ""
+    else if I64.lt (max - back) 1 then ""
+    else
+        let x : String := String.slice s 0 (max - back) in
+        if String.is_empty x then cap_utf8 s max (back + 1) else x
+
+#[partial]
+def plain_rows (style : TextStyle) (width : I64) (text : String) : List DisplayRow :=
+    if String.is_empty text
+    then List.singleton (mk_row style "")
+    else
+        List.flatten (List.map (fn (part : String) =>
+            List.map (fn (t : String) => mk_row style t) (wrap_text width part)) (theme_split_lines text))
+
+#[partial]
+def plain_line_list (width : I64) (lines : List String) : List DisplayRow :=
+    match lines {
+        List.empty => List.empty,
+        List.cons l rest => List.append (plain_rows style_default width l) (plain_line_list width rest),
+    }
+
+def md_span (colors : Bool) (s : Markdown.StyledSpan) : TextSpan :=
+    TextSpan.mk s.text (theme_markdown_span_style_with colors s.style)
+
+#[partial]
+def md_rows_go (colors : Bool) (width : I64) (lines : List Markdown.StyledLine) : List DisplayRow :=
+    match lines {
+        List.empty => List.empty,
+        List.cons l rest =>
+            let ss : List TextSpan := List.map (md_span colors) l.spans in
+            let wrapped : List (List TextSpan) := Text.wrap_spans width ss in
+            let rows : List DisplayRow := List.map (fn (row : List TextSpan) => mk_span_row style_default row) wrapped in
+            List.append rows (md_rows_go colors width rest),
+    }
+
+/// An assistant Markdown block: parsed once, wrapped with span-aware
+/// wrapping. With colors off the same AST flattens to plain lines, so a
+/// `--no-color` run shows the same text without the styling.
+def markdown_rows (colors : Bool) (width : I64) (text : String) : List DisplayRow :=
+    let doc := Markdown.parse text in
+    if colors
+    then md_rows_go colors width (Markdown.to_lines doc)
+    else plain_line_list width (Markdown.to_plain_lines doc)
+
+/// One logical line, split on its own newlines and wrapped. The kind wins
+/// over the text: a Markdown block is rendered as Markdown, a thinking
+/// row keeps the thinking style, and a plain row falls back to the prefix
+/// classification (user wins first).
 pub def Model.display_line (colors : Bool) (width : I64) (line : TLine) : List DisplayRow :=
-    let style : TextStyle := theme_tline_style_with colors line.user line.text in
+    let style : TextStyle :=
+        match line.kind {
+            TLineKind.line_thinking => theme_thinking_style_with colors,
+            TLineKind.line_markdown => style_default,
+            _ => theme_tline_style_with colors line.user line.text,
+        } in
     let n : I64 := String.length line.text in
     let truncated : Bool := I64.lt Model.display_cap_bytes n in
-    let text : String := if truncated then String.slice line.text 0 Model.display_cap_bytes else line.text in
+    let text : String := if truncated then cap_utf8 line.text Model.display_cap_bytes 0 else line.text in
     let rows : List DisplayRow :=
-        if String.is_empty text
-        then List.singleton (mk_row style "")
-        else List.flatten (List.map (fn (part : String) => List.map (fn (t : String) => mk_row style t) (wrap_text width part)) (theme_split_lines text)) in
+        match line.kind {
+            TLineKind.line_markdown => markdown_rows colors width text,
+            _ => plain_rows style width text,
+        } in
     if truncated
     then List.append rows [mk_row style "[truncated for display -- full text is in the session history]"]
     else rows
@@ -875,14 +966,15 @@ pub def Model.rows_key_of (m : TuiModel) : RowsKey :=
     let pstart : I64 := match m.transcript.page { Option.some p => p.start, Option.none => 0 - 1 } in
     let k : RowsKey := { total := m.transcript.total, tail_start := m.transcript.tail_start,
                          cols := m.cols, rows := m.rows, scroll := m.scroll, page_start := pstart,
-                         banner := m.banner, pending := m.turn_pending, details := m.show_details, stream := Model.live_stream_height m } in
+                         banner := m.banner, pending := m.turn_pending, details := m.show_details,
+                         think_stream := Model.live_thinking_height m, text_stream := Model.live_text_height m } in
     k
 
 def rows_key_eq (a : RowsKey) (b : RowsKey) : Bool :=
     a.total == b.total && a.tail_start == b.tail_start && a.cols == b.cols
         && a.rows == b.rows && a.scroll == b.scroll && a.page_start == b.page_start
         && a.banner == b.banner && a.pending == b.pending && a.details == b.details
-        && a.stream == b.stream
+        && a.think_stream == b.think_stream && a.text_stream == b.text_stream
 
 /// Recompute the wrapped rows only when the transcript, the viewport or
 /// the scroll position actually moved.
@@ -905,9 +997,42 @@ pub def Model.display_rows (m : TuiModel) : List DisplayRow :=
     m.rows_cache
 
 pub def Model.display_row_widget (r : DisplayRow) : SizedWidget :=
-    let style : TextStyle := r.style in
-    let text : String := r.text in
-    sized (LayoutSize.fixed 1) (with_style style (label text))
+    let base : Widget :=
+        match r.spans {
+            List.empty => label r.text,
+            List.cons _ _ => spans r.spans,
+        } in
+    sized (LayoutSize.fixed 1) (with_style r.style base)
+
+/// A span-row selection: head/mid/tail spans, the middle reversed in place.
+/// The plain-row path stays text-based so it keeps its exact cell padding.
+def selected_span_row (r : DisplayRow) (a : I64) (b : I64) : SizedWidget :=
+    let total : I64 := Text.width r.text in
+    let mw : I64 := if b < a then 0 else b - a in
+    let head : List TextSpan := Text.slice_spans r.spans 0 a in
+    let mid0 : List TextSpan := Text.slice_spans r.spans a b in
+    let tail : List TextSpan := Text.slice_spans r.spans b total in
+    let midw : I64 := Text.width_spans mid0 in
+    let pad : I64 := if mw < midw then 0 else mw - midw in
+    let mid : List TextSpan :=
+        List.append (List.map (fn (s : TextSpan) => TextSpan.mk s.text { s.style with reverse := true }) mid0)
+            (if pad < 1 then List.empty else [TextSpan.mk (String.repeat " " pad) { r.style with reverse := true }]) in
+    let hw : I64 := Text.width_spans head in
+    let tw : I64 := Text.width_spans tail in
+    let p1 : List SizedWidget :=
+        if hw < 1 then List.empty
+        else List.cons (sized (LayoutSize.fixed hw) (with_style r.style (spans head))) List.empty in
+    let p2 : List SizedWidget :=
+        if mw < 1 then List.empty
+        else List.cons (sized (LayoutSize.fixed mw) (with_style r.style (spans mid))) List.empty in
+    let p3 : List SizedWidget :=
+        if tw < 1 then List.empty
+        else List.cons (sized (LayoutSize.fixed tw) (with_style r.style (spans tail))) List.empty in
+    let parts : List SizedWidget := List.append p1 (List.append p2 p3) in
+    match parts {
+        List.empty => Model.display_row_widget r,
+        List.cons _ _ => sized (LayoutSize.fixed 1) (Widget.row parts),
+    }
 
 /// One row split into head / selected middle / tail, so the selection is
 /// reverse video on exactly the chosen cells. Fixed widths come from
@@ -917,28 +1042,32 @@ pub def Model.display_row_widget_selected (m : TuiModel) (idx : I64) (r : Displa
         Option.none => Model.display_row_widget r,
         Option.some pr => match pr {
             Pair.pair a b =>
-                let total : I64 := Text.width r.text in
-                let head : String := Text.slice_cols r.text 0 a in
-                let mid : String := Text.padded_slice_cols r.text a b in
-                let tail : String := Text.slice_cols r.text b total in
-                let hw : I64 := Text.width head in
-                let mw : I64 := if b < a then 0 else b - a in
-                let tw : I64 := Text.width tail in
-                let base : TextStyle := r.style in
-                let sel : TextStyle := { base with reverse := true } in
-                let p1 : List SizedWidget :=
-                    if hw < 1 then List.empty
-                    else List.cons (sized (LayoutSize.fixed hw) (with_style r.style (label head))) List.empty in
-                let p2 : List SizedWidget :=
-                    if mw < 1 then List.empty
-                    else List.cons (sized (LayoutSize.fixed mw) (with_style sel (label mid))) List.empty in
-                let p3 : List SizedWidget :=
-                    if tw < 1 then List.empty
-                    else List.cons (sized (LayoutSize.fixed tw) (with_style r.style (label tail))) List.empty in
-                let parts : List SizedWidget := List.append p1 (List.append p2 p3) in
-                match parts {
-                    List.empty => Model.display_row_widget r,
-                    List.cons _ _ => sized (LayoutSize.fixed 1) (Widget.row parts),
+                match r.spans {
+                    List.cons _ _ => selected_span_row r a b,
+                    List.empty =>
+                        let total : I64 := Text.width r.text in
+                        let head : String := Text.slice_cols r.text 0 a in
+                        let mid : String := Text.padded_slice_cols r.text a b in
+                        let tail : String := Text.slice_cols r.text b total in
+                        let hw : I64 := Text.width head in
+                        let mw : I64 := if b < a then 0 else b - a in
+                        let tw : I64 := Text.width tail in
+                        let base : TextStyle := r.style in
+                        let sel : TextStyle := { base with reverse := true } in
+                        let p1 : List SizedWidget :=
+                            if hw < 1 then List.empty
+                            else List.cons (sized (LayoutSize.fixed hw) (with_style r.style (label head))) List.empty in
+                        let p2 : List SizedWidget :=
+                            if mw < 1 then List.empty
+                            else List.cons (sized (LayoutSize.fixed mw) (with_style sel (label mid))) List.empty in
+                        let p3 : List SizedWidget :=
+                            if tw < 1 then List.empty
+                            else List.cons (sized (LayoutSize.fixed tw) (with_style r.style (label tail))) List.empty in
+                        let parts : List SizedWidget := List.append p1 (List.append p2 p3) in
+                        match parts {
+                            List.empty => Model.display_row_widget r,
+                            List.cons _ _ => sized (LayoutSize.fixed 1) (Widget.row parts),
+                        },
                 },
         },
     }
@@ -956,9 +1085,12 @@ def transcript_column (m : TuiModel) : Widget :=
     // them), so ticks update it without re-wrapping the transcript.
     if m.turn_pending
     then
-        let stream : List SizedWidget :=
-            List.map (fn (r : DisplayRow) => Model.display_row_widget r) (Model.live_stream_rows m) in
-        Widget.column (List.append body (List.append stream [Model.display_row_widget (Model.live_row m)]))
+        let thinking : List SizedWidget :=
+            List.map (fn (r : DisplayRow) => Model.display_row_widget r) (Model.live_thinking_rows m) in
+        let answer : List SizedWidget :=
+            List.map (fn (r : DisplayRow) => Model.display_row_widget r) (Model.live_text_rows m) in
+        Widget.column (List.append body
+            (List.append thinking (List.append answer [Model.display_row_widget (Model.live_row m)])))
     else Widget.column body
 
 /// The TURN's spend the live row shows: the cumulative report from
@@ -1101,18 +1233,30 @@ pub def Model.body_height (m : TuiModel) : I64 :=
     let h : I64 := panel_height m - live in
     if h < 0 then 0 else h
 
-/// The rows the in-flight display owns below the transcript: the
-/// spinner row plus the streamed tail.
+/// The rows the in-flight display owns below the transcript: the spinner
+/// row plus the reasoning and answer tails (separate blocks, so reasoning
+/// can never evict the answer).
 pub def Model.live_rows_height (m : TuiModel) : I64 :=
-    if Bool.not m.turn_pending then 0 else 1 + Model.live_stream_height m
+    if Bool.not m.turn_pending then 0
+    else 1 + Model.live_thinking_height m + Model.live_text_height m
 
-/// The most streamed bytes painted: a bound on the per-tick wrap.
+/// The most reasoning / answer bytes painted: bounds on the per-tick wrap.
+pub def Model.live_thinking_cap_bytes : I64 := 4096
 pub def Model.live_stream_cap_bytes : I64 := 8192
 
-/// At most half the panel, so the transcript stays visible.
-pub def Model.live_stream_cap (m : TuiModel) : I64 :=
+/// The rows the two blocks share, leaving one transcript row. The spinner
+/// spends one row of its own, so the panel never overflows.
+def live_content_cap (m : TuiModel) : I64 :=
     let p : I64 := panel_height m in
-    if p < 4 then 0 else p / 2
+    if I64.lt p 2 then 0 else p - 1
+
+pub def Model.live_thinking_cap (m : TuiModel) : I64 :=
+    let c : I64 := live_content_cap m in
+    c / 2
+
+pub def Model.live_text_cap (m : TuiModel) : I64 :=
+    let c : I64 := live_content_cap m in
+    c - (c / 2)
 
 /// A tail slice that never starts mid-UTF-8: `String.slice` can answer
 /// "" at a continuation boundary, so back off up to three bytes.
@@ -1125,17 +1269,16 @@ def tail_safe (text : String) (start : I64) (back : I64) : String :=
         let s : String := String.slice text (start + back) (n - start - back) in
         if String.is_empty s then tail_safe text start (back + 1i64) else s
 
-/// The streamed tail: reasoning first, then assistant text, with a
-/// caret. Empty when nothing has streamed.
-pub def Model.live_stream_source (m : TuiModel) : String :=
-    let with_text : String :=
-        if String.is_empty m.live_text then m.live_thinking
-        else if String.is_empty m.live_thinking then String.concat m.live_text "▌"
-        else String.concat m.live_thinking (String.concat "\n" (String.concat m.live_text "▌")) in
-    let n : I64 := String.length with_text in
-    if I64.gt n Model.live_stream_cap_bytes
-    then tail_safe with_text (n - Model.live_stream_cap_bytes) 0i64
-    else with_text
+def tail_bytes (text : String) (cap : I64) : String :=
+    let n : I64 := String.length text in
+    if I64.gt n cap then tail_safe text (n - cap) 0i64 else text
+
+pub def Model.live_thinking_source (m : TuiModel) : String :=
+    tail_bytes m.live_thinking Model.live_thinking_cap_bytes
+
+pub def Model.live_text_source (m : TuiModel) : String :=
+    let t : String := tail_bytes m.live_text Model.live_stream_cap_bytes in
+    if String.is_empty t then "" else String.concat t "▌"
 
 #[partial]
 def rows_drop (n : I64) (rs : List DisplayRow) : List DisplayRow :=
@@ -1145,22 +1288,144 @@ def rows_drop (n : I64) (rs : List DisplayRow) : List DisplayRow :=
         List.cons _ rest => rows_drop (n - 1i64) rest,
     }
 
-/// The wrapped streamed rows, newest kept: dim, like the live line.
-pub def Model.live_stream_rows (m : TuiModel) : List DisplayRow :=
-    let src : String := Model.live_stream_source m in
+#[partial]
+def wrap_plain_rows (style : TextStyle) (width : I64) (src : String) : List DisplayRow :=
+    List.flatten (List.map (fn (part : String) =>
+        List.map (fn (t : String) => mk_row style t) (wrap_text width part)) (theme_split_lines src))
+
+/// Reasoning: dim magenta, its own byte and row budget.
+pub def Model.live_thinking_rows (m : TuiModel) : List DisplayRow :=
+    let src : String := Model.live_thinking_source m in
     if String.is_empty src then List.empty
     else
-        let style : TextStyle := theme_running_style_with m.state.colors in
-        let width : I64 := Model.content_width m in
-        let all : List DisplayRow :=
-            List.flatten (List.map (fn (part : String) => List.map (fn (t : String) => mk_row style t) (wrap_text width part)) (theme_split_lines src)) in
+        let all : List DisplayRow := wrap_plain_rows (theme_thinking_style_with m.state.colors) (Model.content_width m) src in
         let n : I64 := rows_len all in
-        let cap : I64 := Model.live_stream_cap m in
+        let cap : I64 := Model.live_thinking_cap m in
         if I64.gt n cap then rows_drop (n - cap) all else all
 
-/// The streamed block's height, capped.
+/// The answer: rendered as Markdown while it streams (the parser is total,
+/// so an unfinished fence or list is literal text until it closes).
+pub def Model.live_text_rows (m : TuiModel) : List DisplayRow :=
+    let src : String := Model.live_text_source m in
+    if String.is_empty src then List.empty
+    else
+        let all : List DisplayRow := markdown_rows m.state.colors (Model.content_width m) src in
+        let n : I64 := rows_len all in
+        let cap : I64 := Model.live_text_cap m in
+        if I64.gt n cap then rows_drop (n - cap) all else all
+
+pub def Model.live_thinking_height (m : TuiModel) : I64 :=
+    rows_len (Model.live_thinking_rows m)
+
+pub def Model.live_text_height (m : TuiModel) : I64 :=
+    rows_len (Model.live_text_rows m)
+
+/// Both live blocks together (the historical name tests use).
 pub def Model.live_stream_height (m : TuiModel) : I64 :=
-    rows_len (Model.live_stream_rows m)
+    Model.live_thinking_height m + Model.live_text_height m
+
+// ── the scrollbar ──────────────────────────────────────────────────────
+// The bar lives in the transcript panel's rightmost cell: the old right
+// padding column, so `content_width` (cols - 4) is unchanged. It covers
+// only the transcript viewport (`body_height`), never the live rows.
+
+pub def Model.scrollbar_visible (m : TuiModel) : Bool :=
+    let h : I64 := Model.body_height m in
+    Bool.and (I64.lt 1 h) (I64.lt h m.row_total)
+
+def scrollbar_room (m : TuiModel) : I64 :=
+    let h : I64 := Model.body_height m in
+    if I64.lt m.row_total (h - 1) then 0 else m.row_total - (h - 1)
+
+/// `(top, length)` in panel-relative rows; none when not scrollable.
+pub def Model.scrollbar_thumb (m : TuiModel) : Option (Pair I64 I64) :=
+    if Bool.not (Model.scrollbar_visible m)
+    then Option.none
+    else
+        let h : I64 := Model.body_height m in
+        let total : I64 := if I64.lt m.row_total 1 then 1 else m.row_total in
+        let w : Window := Model.window m in
+        let eff : I64 := w.eff in
+        let vh : I64 := if I64.gt eff 0 then h - 1 else h in
+        let len0 : I64 := (vh * h) / total in
+        let len : I64 := if I64.lt len0 1 then 1 else if I64.gt len0 h then h else len0 in
+        let room : I64 := scrollbar_room m in
+        if I64.lt room 1
+        then Option.some (Pair.pair (h - len) len)
+        else
+            let span : I64 := h - len in
+            let off : I64 := if I64.lt span 1 then 0 else (eff * span) / room in
+            Option.some (Pair.pair (span - off) len)
+
+pub def Model.scrollbar_hit (m : TuiModel) (row : I64) (col : I64) : Bool :=
+    let h : I64 := Model.body_height m in
+    Bool.and (I64.beq col (m.cols - 2))
+        (Bool.and (Model.scrollbar_visible m)
+            (Bool.and (Bool.not (I64.lt row (Model.panel_top_of m)))
+                (I64.lt row (Model.panel_top_of m + h))))
+
+/// Where a pointer row puts the scroll for a grab offset.
+def scrollbar_scroll_for (m : TuiModel) (row : I64) (grab : I64) : I64 :=
+    let h : I64 := Model.body_height m in
+    match Model.scrollbar_thumb m {
+        Option.none => m.scroll,
+        Option.some pr => match pr {
+            Pair.pair top len =>
+                let span : I64 := h - len in
+                let rel : I64 := row - Model.panel_top_of m in
+                let target_top : I64 := clamp (rel - grab) 0 span in
+                if I64.lt span 1
+                then 0
+                else (span - target_top) * scrollbar_room m / span,
+        },
+    }
+
+pub def Model.scroll_to (m : TuiModel) (target : I64) : TuiModel :=
+    let m2 : TuiModel := { m with scroll := scroll_clamp target m.row_total (Model.body_height m) } in
+    Model.refresh_rows m2
+
+pub def Model.scrollbar_press (m : TuiModel) (row : I64) : TuiModel :=
+    match Model.scrollbar_thumb m {
+        Option.none => m,
+        Option.some pr => match pr {
+            Pair.pair top len =>
+                let rel : I64 := row - Model.panel_top_of m in
+                let in_thumb : Bool := Bool.and (Bool.not (I64.lt rel top)) (I64.lt rel (top + len)) in
+                let grab : I64 := if in_thumb then rel - top else len / 2 in
+                let target : I64 := scrollbar_scroll_for m row grab in
+                Model.scroll_to { m with scroll_drag := Option.some grab } target,
+        },
+    }
+
+pub def Model.scrollbar_drag_to (m : TuiModel) (row : I64) : TuiModel :=
+    match m.scroll_drag {
+        Option.none => m,
+        Option.some grab => Model.scroll_to m (scrollbar_scroll_for m row grab),
+    }
+
+pub def Model.scrollbar_release (m : TuiModel) : TuiModel :=
+    { m with scroll_drag := Option.none }
+
+#[partial]
+def scrollbar_rows (m : TuiModel) (i : I64) (h : I64) (top : I64) (len : I64) : List SizedWidget :=
+    if I64.lt (h - 1) i
+    then List.empty
+    else
+        let thumb : Bool := Bool.and (Bool.not (I64.lt i top)) (I64.lt i (top + len)) in
+        let glyph : String := if thumb then "█" else "│" in
+        let style : TextStyle :=
+            if thumb then theme_scrollbar_thumb_style_with m.state.colors
+            else theme_border_style_with m.state.colors in
+        List.cons (sized (LayoutSize.fixed 1) (with_style style (label glyph)))
+            (scrollbar_rows m (i + 1) h top len)
+
+pub def Model.scrollbar_column (m : TuiModel) : Widget :=
+    match Model.scrollbar_thumb m {
+        Option.none => Widget.column List.empty,
+        Option.some pr => match pr {
+            Pair.pair top len => Widget.column (scrollbar_rows m 0 (Model.body_height m) top len),
+        },
+    }
 
 /// The scroll state machine: `scroll` counts WRAPPED ROWS above the
 /// pinned bottom. The delta moves the window (PageUp/Ctrl+U positive,

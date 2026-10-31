@@ -28,22 +28,38 @@ use weaver::text {Text.cut, Text.first_line}
 // Absolute line coordinates: `total` counts every line ever appended;
 // `tail` is the last `tail_lines`; `page` is at most one older page.
 
+/// What a line means, independent of its text: assistant Markdown is
+/// rendered as Markdown, thinking keeps its own color, everything else
+/// keeps the prefix classification. Kinds survive persistence (block
+/// version 3); a block written before the field existed decodes as
+/// plain.
+pub type TLineKind {
+    line_plain,
+    line_markdown,
+    line_thinking,
+}
+
 /// One rendered transcript line and its role. `user` is true only for the
 /// echoed prompt: user styling rides on this flag, not on a `you:` text
 /// prefix. Tool/error/diff/hint lines keep their semantic prefixes and are
-/// classified by `theme.line_class`.
+/// classified by `theme.line_class`; markdown/thinking lines are styled
+/// from `kind`, never from a prefix.
 pub struct TLine {
     text : String,
     user : Bool,
     /// Hidden unless Ctrl+O shows details: a tool result's full output
     /// or a completed thinking block. Stored either way, so the toggle
     /// is a display filter, not a re-render.
-    detail : Bool := false
+    detail : Bool := false,
+    kind : TLineKind := TLineKind.line_plain
 }
 
-pub def TLine.plain (s : String) : TLine := { text := s, user := false, detail := false }
-pub def TLine.user_line (s : String) : TLine := { text := s, user := true, detail := false }
-pub def TLine.detail_line (s : String) : TLine := { text := s, user := false, detail := true }
+pub def TLine.plain (s : String) : TLine := { text := s, user := false, detail := false, kind := TLineKind.line_plain }
+pub def TLine.user_line (s : String) : TLine := { text := s, user := true, detail := false, kind := TLineKind.line_plain }
+pub def TLine.detail_line (s : String) : TLine := { text := s, user := false, detail := true, kind := TLineKind.line_plain }
+pub def TLine.markdown_line (s : String) : TLine := { text := s, user := false, detail := false, kind := TLineKind.line_markdown }
+pub def TLine.thinking_marker (s : String) : TLine := { text := s, user := false, detail := false, kind := TLineKind.line_thinking }
+pub def TLine.thinking_detail (s : String) : TLine := { text := s, user := false, detail := true, kind := TLineKind.line_thinking }
 
 pub struct TranscriptPage {
     start : I64,
@@ -324,18 +340,31 @@ def field_i64 (obj : BTreeMap String Json) (name : String) : Result String I64 :
 pub def Store.pad12 (n : I64) : String :=
     pad_left (I64.to_string n) 12
 
-/// A block line: `{"text": "...", "user": true|false}`. The `user` flag
-/// is what keeps the echoed prompt styled without a visible prefix.
+pub def TLine.kind_name (k : TLineKind) : String :=
+    match k {
+        TLineKind.line_plain => "plain",
+        TLineKind.line_markdown => "markdown",
+        TLineKind.line_thinking => "thinking",
+    }
+
+pub def TLine.kind_of_name (s : String) : TLineKind :=
+    if String.beq s "markdown" then TLineKind.line_markdown
+    else if String.beq s "thinking" then TLineKind.line_thinking
+    else TLineKind.line_plain
+
+/// A block line: `{"text": "...", "user": true|false, "detail": ..., "kind": ...}`.
+/// The `user` flag is what keeps the echoed prompt styled without a visible prefix.
 def encode_line (l : TLine) : Json :=
     let body : BTreeMap String Json :=
         Map.insert "text" (Json.make_str l.text)
         (Map.insert "user" (Json.make_bool l.user)
-        (Map.insert "detail" (Json.make_bool l.detail) BTreeMap.empty)) in
+        (Map.insert "detail" (Json.make_bool l.detail)
+        (Map.insert "kind" (Json.make_str (TLine.kind_name l.kind)) BTreeMap.empty))) in
     Json.make_object body
 
 pub def Store.encode_block (seq : I64) (start : I64) (lines : List TLine) : Json :=
     let body : BTreeMap String Json :=
-        Map.insert "version" (Json.make_num_int 2)
+        Map.insert "version" (Json.make_num_int 3)
         (Map.insert "seq" (Json.make_num_int seq)
         (Map.insert "start" (Json.make_num_int start)
         (Map.insert "count" (Json.make_num_int (list_len lines))
@@ -355,24 +384,35 @@ def legacy_line (s : String) : TLine :=
     then TLine.plain (String.drop 11 s)
     else TLine.plain s
 
-def decode_line_user (obj : BTreeMap String Json) (text : String) : Result String TLine :=
+/// `kind` is optional: a block written before the field existed decodes
+/// as plain (v1/v2 sessions keep their old look).
+def decode_line_kind (obj : BTreeMap String Json) : TLineKind :=
+    match Json.object_get "kind" obj {
+        Option.none => TLineKind.line_plain,
+        Option.some kj => match Json.get_str kj {
+            Result.err _ => TLineKind.line_plain,
+            Result.ok s => TLine.kind_of_name s,
+        },
+    }
+
+def decode_line_user (obj : BTreeMap String Json) (text : String) (kind : TLineKind) : Result String TLine :=
     match Json.object_get "user" obj {
-        Option.none => Result.ok (TLine.plain text),
+        Option.none => Result.ok ({ text := text, user := false, detail := false, kind := kind } : TLine),
         Option.some uj => match Json.get_bool uj {
-            Result.err _ => Result.ok (TLine.plain text),
-            Result.ok b => decode_line_detail obj text b,
+            Result.err _ => Result.ok ({ text := text, user := false, detail := false, kind := kind } : TLine),
+            Result.ok b => decode_line_detail obj text b kind,
         },
     }
 
 /// `detail` is optional: a block written before the field existed
 /// decodes as a normal (shown) line.
-def decode_line_detail (obj : BTreeMap String Json) (text : String) (user : Bool) : Result String TLine :=
+def decode_line_detail (obj : BTreeMap String Json) (text : String) (user : Bool) (kind : TLineKind) : Result String TLine :=
     match Json.object_get "detail" obj {
-        Option.none => Result.ok ({ text := text, user := user, detail := false } : TLine),
+        Option.none => Result.ok ({ text := text, user := user, detail := false, kind := kind } : TLine),
         Option.some dj => match Json.get_bool dj {
-            Result.err _ => Result.ok ({ text := text, user := user, detail := false } : TLine),
+            Result.err _ => Result.ok ({ text := text, user := user, detail := false, kind := kind } : TLine),
             Result.ok b =>
-                let l : TLine := { text := text, user := user, detail := b } in
+                let l : TLine := { text := text, user := user, detail := b, kind := kind } in
                 Result.ok l,
         },
     }
@@ -382,7 +422,7 @@ def decode_line_obj (obj : BTreeMap String Json) : Result String TLine :=
         Result.err e => Result.err e,
         Result.ok tj => match Json.get_str tj {
             Result.err e => Result.err e,
-            Result.ok text => decode_line_user obj text,
+            Result.ok text => decode_line_user obj text (decode_line_kind obj),
         },
     }
 

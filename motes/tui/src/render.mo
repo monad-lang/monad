@@ -15,14 +15,14 @@
 // assumed).
 
 use lib::types {
-    Rect, Screen, Cell, TextStyle, CellDelta, LayoutSize
+    Rect, Screen, Cell, TextStyle, CellDelta, LayoutSize, TextSpan
 }
 use lib::core {
     mk_screen, screen_get_cell, screen_set_cell,
     style_default, style_merge, style_to_ansi, mk_rect, clamp
 }
 use lib::layout { layout_row, layout_column, pad_rect }
-use lib::text {Glyph, Text.col_of_byte, Text.drop_cols, Text.glyphs, Text.take_width, Text.wrap}
+use lib::text {Glyph, Text.col_of_byte, Text.drop_cols, Text.glyphs, Text.take_width, Text.width, Text.wrap}
 // The Phase 5 stateful widgets' states -- matched on in the new
 // `LeafWidget` arms below.
 use lib::widgets::input {
@@ -37,7 +37,7 @@ use lib::widgets::list { ListState }
 // patterns.
 use lib::widget {
     Widget, BorderStyle, SizedWidget, LeafWidget, DecoratorKind,
-    label, sized, border, border_with, padding, with_style, blank, text_input, list
+    label, spans, sized, border, border_with, padding, with_style, blank, text_input, list
 }
 
 // ==================== Cells ====================
@@ -60,6 +60,24 @@ def write_char (screen : Screen) (row : I64) (col : I64) (ch : String) (active :
 def render_label (text : String) (area : Rect) (screen : Screen) (active : TextStyle) : Screen :=
     if area.height < 1 then screen
     else screen_write_text screen area.y area.x text area.width active
+
+/// Paint styled segments left-to-right, each on top of `active`, stopping
+/// at the rectangle's right edge. Used by Markdown rows and selections.
+#[partial]
+def render_spans
+    (ss : List TextSpan) (area : Rect) (screen : Screen) (active : TextStyle) (used : I64)
+    : Screen :=
+    match ss {
+        List.empty => screen,
+        List.cons s rest =>
+            let left : I64 := area.width - used in
+            if left < 1
+            then screen
+            else
+                let merged : TextStyle := style_merge active s.style in
+                let painted : Screen := screen_write_text screen area.y (area.x + used) s.text left merged in
+                render_spans rest area painted active (used + Text.width s.text),
+    }
 
 /// Copy the remaining cells unchanged (they were not painted by the glyph
 /// run). `acc` is the reverse-ordered prefix already built.
@@ -431,6 +449,7 @@ pub def render_with (w : Widget) (area : Rect) (screen : Screen) (active : TextS
         Widget.leaf kind =>
             match kind {
                 LeafWidget.label text => render_label text area screen active,
+                LeafWidget.spans ss => render_spans ss area screen active 0,
                 LeafWidget.spacer _ => screen,
                 LeafWidget.text_input st => render_text_input st area screen active,
                 LeafWidget.list st => render_list st area screen active,
@@ -871,3 +890,16 @@ def test_apply_deltas_default_cell_does_not_inherit_style : Bool :=
         CellDelta.set 0 1 (mk_styled_cell "b" style_default)
     ] in
     out == "\u{1b}[1;1H\u{1b}[0m\u{1b}[1ma\u{1b}[1;2H\u{1b}[0mb\u{1b}[0m"
+
+#[test]
+def test_render_spans_keeps_per_span_styles : Bool :=
+    let bold : TextStyle := { style_default with bold := true } in
+    let w : Widget := spans [TextSpan.mk "ab" bold, TextSpan.mk "cd" style_default] in
+    let s : Screen := render w (mk_rect 0 0 10 1) (mk_screen 1 10) in
+    match screen_get_cell s 0 0 {
+        Option.some a => match screen_get_cell s 0 3 {
+            Option.some d => a.char == "a" && a.style.bold && Bool.not d.style.bold,
+            Option.none => false,
+        },
+        Option.none => false,
+    }

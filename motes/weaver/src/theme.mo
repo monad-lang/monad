@@ -12,12 +12,14 @@
 use tui::types {TextStyle}
 use tui::core {style_default}
 use std::ansi {Color}
+use markdown::render {Markdown.SpanStyle}
 use weaver::policy {Mode}
 
 pub type LineClass {
     user,
     assistant,
     running,
+    thinking,
     error,
     diff_plus,
     diff_minus,
@@ -47,6 +49,7 @@ pub def class_style (c : LineClass) : TextStyle :=
         LineClass.user => { style_default with fg := some Color.cyan },
         LineClass.assistant => style_default,
         LineClass.running => { style_default with dim := true, fg := some Color.cyan },
+        LineClass.thinking => { style_default with dim := true, fg := some Color.magenta },
         LineClass.error => { style_default with fg := some Color.red },
         LineClass.diff_plus => { style_default with fg := some Color.green },
         LineClass.diff_minus => { style_default with fg := some Color.red },
@@ -65,6 +68,37 @@ pub def theme_line_style_with (colors : Bool) (line : String) : TextStyle :=
 /// The live thinking row's style: the same dim cyan as a `[running]` row.
 pub def theme_running_style_with (colors : Bool) : TextStyle :=
     if colors then class_style LineClass.running else style_default
+
+/// Reasoning rows: dim magenta, distinct from the dim-cyan running line and
+/// from the assistant's default color.
+pub def theme_thinking_style_with (colors : Bool) : TextStyle :=
+    if colors then class_style LineClass.thinking else style_default
+
+/// The scrollbar thumb: readable against the dim track without competing
+/// with the transcript text.
+pub def theme_scrollbar_thumb_style_with (colors : Bool) : TextStyle :=
+    if colors then { style_default with fg := some Color.cyan, bold := true } else style_default
+
+/// A Markdown span's style. The markdown mote stays color-free and only
+/// names the role; the palette lives here with every other one.
+pub def theme_markdown_span_style_with (colors : Bool) (s : Markdown.SpanStyle) : TextStyle :=
+    if colors
+    then match s {
+        Markdown.SpanStyle.span_plain => style_default,
+        Markdown.SpanStyle.span_heading _ => { style_default with bold := true, fg := some Color.blue },
+        Markdown.SpanStyle.span_emphasis => { style_default with italic := true },
+        Markdown.SpanStyle.span_strong => { style_default with bold := true },
+        Markdown.SpanStyle.span_strong_emphasis => { style_default with bold := true, italic := true },
+        Markdown.SpanStyle.span_strikethrough => { style_default with strikethrough := true },
+        Markdown.SpanStyle.span_code => { style_default with fg := some Color.yellow, dim := true },
+        Markdown.SpanStyle.span_link => { style_default with fg := some Color.blue, underline := true },
+        Markdown.SpanStyle.span_quote => { style_default with dim := true, italic := true },
+        Markdown.SpanStyle.span_list_marker => { style_default with fg := some Color.cyan, dim := true },
+        Markdown.SpanStyle.span_table_head => { style_default with bold := true },
+        Markdown.SpanStyle.span_table_border => { style_default with dim := true },
+        Markdown.SpanStyle.span_rule => { style_default with dim := true },
+    }
+    else style_default
 
 /// A transcript line's style: the role flag wins (a user line stays cyan
 /// even when its text starts with `error:`), everything else keeps the
@@ -118,6 +152,7 @@ pub def class_code (c : LineClass) : String :=
         LineClass.user => "\u{1b}[36m",
         LineClass.assistant => "",
         LineClass.running => "\u{1b}[36;2m",
+        LineClass.thinking => "\u{1b}[35;2m",
         LineClass.error => "\u{1b}[31m",
         LineClass.diff_plus => "\u{1b}[32m",
         LineClass.diff_minus => "\u{1b}[31m",

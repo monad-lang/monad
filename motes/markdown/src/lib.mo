@@ -24,6 +24,15 @@ pub use lib::html {
     Markdown.to_html_nodes, Markdown.to_html_nodes_with,
 }
 
+/// The semantic styled-text renderer (see `render.mo`). Consumers map the
+/// `SpanStyle` values to their own colors; `to_plain_lines` is the
+/// persistence/copy form.
+pub use lib::render {
+    Markdown.SpanStyle, Markdown.StyledSpan, Markdown.StyledLine,
+    Markdown.to_lines, Markdown.to_plain_lines, Markdown.line_text,
+    Markdown.style_name,
+}
+
 pub use lib::options {
     Markdown.Options, Markdown.HtmlOptions,
     Markdown.default_options, Markdown.commonmark_options, Markdown.site_options,

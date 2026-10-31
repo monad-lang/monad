@@ -94,7 +94,9 @@ replaces the selection. Alt+Enter folds a newline into it (Enter submits
 the whole value, a multiline submission echoed on its own lines), and the
 arrow keys pull prompt history -- ArrowUp recalls from an empty input, repeats walk
 backward, ArrowDown steps forward back to the live edit. The mouse
-wheel scrolls the transcript (3 rows a notch); a left DRAG selects
+wheel scrolls the transcript (3 rows a notch), and a draggable scrollbar occupies the panel's
+right column (thumb = position and viewport share; click the track to jump, drag the thumb to
+move); a left DRAG selects
 transcript text (reverse-video while dragging) and releasing copies it
 through OSC 52 -- the terminal's own clipboard, also over SSH (tmux
 needs `set-clipboard on`; Shift+drag usually keeps the terminal's
@@ -112,9 +114,12 @@ the turn runs on a fiber while the UI keeps folding keys and 100 ms
 ticks. A dim line under the last prompt shows the spinner, elapsed time
 and THIS TURN's token delta (`| thinking 3.4s · ↑1.2k ↓345`),
 which becomes `running <tool>` while a tool dispatches and `responding`
-once text streams; the streamed text itself appears under the
-transcript with a caret, dim, and is replaced by the real message when
-the turn lands. The row refreshes at 1 Hz from the turn's usage file
+once text streams. Reasoning and the answer are SEPARATE blocks: the
+thinking tail is dim magenta with its own budget, the answer streams
+below it with a caret and is Markdown-rendered as it arrives (headings,
+lists, code, quotes, tables, inline emphasis), so reasoning can never
+evict the answer. The completed message replaces the live blocks; its
+thinking collapses to a `[thinking · N chars · ctrl+o]` marker. The row refreshes at 1 Hz from the turn's usage file
 and disappears when the result lands. The status bar separately shows
 the CONTEXT (`ctx 12.3k/128k (10%)`, from the last request's real
 prompt size) and cumulative `spent` — they are different quantities:
@@ -273,16 +278,27 @@ retries, subagent events and `process_exit`. `WEAVER_LOG` sets the level
 the directory, `WEAVER_DEBUG_LOG` one exact file, and
 `WEAVER_LOG_FORMAT=json` switches every line to one JSON object
 (`{"fields":{...},"level":"INFO","msg":"...","ts":...}`) for machine
-consumption. API keys, prompts and file contents are never logged. Each
-tool dispatch logs `ev=tool_start name=…` / `ev=tool_end name=…`, so the
-last event names the tool when a turn dies mid-dispatch. A run that dies
+consumption, and `WEAVER_LOG_KEEP` (default 50) bounds the number of run
+logs kept in the directory. API keys, prompts and file contents are never
+logged. Each tool dispatch logs `ev=tool_start name=…` / `ev=tool_end
+name=…`, and a FAILED tool logs `ev=tool_error name=… msg=…` (2 KB cap);
+turns end with `ev=turn_end reason=ok|stopped`, fiber failures log
+`ev=fiber_error`, and persistence failures log `ev=persist_error`. Memory
+is sampled at the process start and every submit (`ev=rss label=… kb=…
+hwm_kb=…`), with `ev=rss_high` above `WEAVER_RSS_WARN_MB` (default 1536).
+A run that dies without `process_exit` is reported by the next launch
+(`warning: previous session ended unexpectedly (log: …)`) and logged as
+`crash_detected`; a fatal signal instead leaves `/tmp/monad-crash-<pid>.log`
+(or `$WEAVER_LOG_DIR/crash-<pid>.log`), reported once as `ev=crash_signal`. A run that dies
 without `process_exit` is reported by the next launch (`warning: previous
 session ended unexpectedly (log: …)`) and logged as `crash_detected` --
 the NEWEST run's log only: an older dead log is not "the previous
 session", and reporting it on every launch used to hide the run that had
 just crashed. `/log` prints the newest log's path, last 20 lines and any
-crash note. The runtime has no signal handler/backtrace, so the last
-logged event is the crash-location evidence.
+crash note. The runtime installs fatal-signal handlers (SIGSEGV/SIGBUS/SIGTERM/SIGHUP/
+SIGABRT/SIGFPE/SIGILL): they restore the saved termios, reset the screen
+state (alternate screen, mouse, bracketed paste, cursor) and write the
+signal marker before re-raising, so a crash no longer strands the terminal.
 
 ## Subagents (design)
 
@@ -343,8 +359,10 @@ The dumb UI follows the informal standard: colors are ON unless
 `--no-color` turns its palette off too). A submitted prompt is one
 cyan block carrying its role as data -- no `you:`/`assistant:` text
 prefix -- separated from the reply by a blank line; the reply is plain.
+Assistant text is rendered as Markdown (headings bold blue, code dim
+yellow, links underlined blue, list markers dim cyan, quotes dim italic).
 The remaining lines classify by semantic prefix: `[running]` rows dim
-cyan, `error:`/`denied:`/`refused:` lines and diff `-` rows red, diff
+cyan, thinking rows dim magenta, `error:`/`denied:`/`refused:` lines and diff `-` rows red, diff
 `+` rows green, the Ctrl+C/Ctrl+D hints dim. Old sessions that stored the v1
 `you:`/`assistant:` prefixes migrate on read. The status bar is dim
 terminal-default foreground in manual mode (the one place that reads as

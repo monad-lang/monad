@@ -45,6 +45,23 @@ path = "../mcp_client"
 [dependencies.parsec]
 path = "../parsec"
 
+# Assistant Markdown is rendered through the markdown mote; the plan-file
+# workflow uses its YAML frontmatter split and the yaml mote, and dates
+# use the time mote. `xml_html` is here for the same reason `llvm`/`runtime`
+# are below: markdown's library root re-exports its HTML renderer, so the
+# module graph reaches `xml_html` even when weaver only renders styled text.
+[dependencies.markdown]
+workspace = true
+
+[dependencies.xml_html]
+workspace = true
+
+[dependencies.yaml]
+workspace = true
+
+[dependencies.time]
+workspace = true
+
 # The Monad-aware tools (`monad_check`, `monad_eval`) run the compiler's
 # checker and interpreter in-process, so the whole `lang` engine is a
 # dependency. `llvm` and `runtime` are declared for the same reason

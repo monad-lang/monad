@@ -2,7 +2,8 @@
 /// paging slices, JSON codecs (including the v1 -> v2 line migration) and
 /// path resolution. No IO.
 use weaver::store {
-    TLine, TLine.plain, TLine.user_line,
+    TLine, TLineKind, TLine.plain, TLine.user_line,
+    TLine.markdown_line, TLine.thinking_marker,
     Transcript, TranscriptPage, StoreIndex, StoreIndexBlock, StoreMeta,
     Transcript.empty, Transcript.append, Transcript.next_block, Transcript.slice,
     Transcript.with_page,
@@ -133,6 +134,46 @@ def test_v1_block_lines_migrate : Bool :=
                 texts decoded == ["hi", "there"]
                     && first.user == true
                     && second.user == false,
+        },
+    }
+
+/// Kind is persisted: an assistant Markdown block and a thinking block
+/// come back with their role, so a resumed session styles them the same.
+#[test]
+def test_block_kind_round_trips : Bool :=
+    let ls : List TLine := [TLine.markdown_line "# hi", TLine.thinking_marker "[thinking]"] in
+    match Json.parse (Json.to_string (Store.encode_block 4 121 ls)) {
+        Result.err _ => false,
+        Result.ok j => match Store.decode_block j {
+            Result.err _ => false,
+            Result.ok pr =>
+                let decoded : List TLine := lines_of pr in
+                let first : TLine := nth_line decoded 0 in
+                let second : TLine := nth_line decoded 1 in
+                match first.kind {
+                    TLineKind.line_markdown => match second.kind {
+                        TLineKind.line_thinking => texts decoded == ["# hi", "[thinking]"],
+                        _ => false,
+                    },
+                    _ => false,
+                },
+        },
+    }
+
+/// A version-2 block has no `kind`; it must decode as plain, not fail.
+#[test]
+def test_v2_block_without_kind_decodes_plain : Bool :=
+    let text : String := "{\"version\":2,\"seq\":1,\"start\":0,\"count\":1,\"lines\":[{\"text\":\"- bullet\",\"user\":false,\"detail\":false}]}" in
+    match Json.parse text {
+        Result.err _ => false,
+        Result.ok j => match Store.decode_block j {
+            Result.err _ => false,
+            Result.ok pr =>
+                let first : TLine := nth_line (lines_of pr) 0 in
+                match first.kind {
+                    TLineKind.line_plain => first.text == "- bullet",
+                    _ => false,
+                },
         },
     }
 

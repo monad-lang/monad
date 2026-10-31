@@ -49,6 +49,20 @@ pub struct TextStyle {
     reverse: Bool := false
 }
 
+/// A styled segment of one line. A plain row is one span; Markdown rows
+/// are several, so inline emphasis/bold/code keep their style through
+/// wrapping and clipping. Built with `TextSpan.mk`: constructing a
+/// cross-module constructor in value position is the recorded self-hosted
+/// trap.
+#[derive BEq]
+pub struct TextSpan {
+    text: String,
+    style: TextStyle
+}
+
+pub def TextSpan.mk (text : String) (style : TextStyle) : TextSpan :=
+    { text := text, style := style }
+
 /// A single character cell with styling
 #[derive BEq]
 pub struct Cell {

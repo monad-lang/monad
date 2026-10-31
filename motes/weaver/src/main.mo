@@ -58,7 +58,7 @@ use weaver::settings {Settings, Settings.load, Settings.cap_of, Settings.validat
 use weaver::error {WeaverError, WeaverError.show}
 use weaver::tui_app {Tui.run_resumed}
 use log::logger {Logger}
-use weaver::logs {LogSetup, Logs.setup, Logs.finish, Logs.info, Logs.error}
+use weaver::logs {LogSetup, Logs.setup, Logs.finish, Logs.info, Logs.error, Logs.log_rss}
 use weaver::process_tools {
     StartProcessTool.impl, ReadProcessTool.impl, KillProcessTool.impl, ListProcessesTool.impl,
 }
@@ -418,6 +418,7 @@ def colors_probe : IO Bool := do {
 pub def main (args : List String) : IO I64 := do {
     let setup <- Logs.setup;
     let _ <- Logs.info setup.log (String.concat "ev=process_start argv=" (I64.to_string (List.length args)));
+    Logs.log_rss setup.log "start";
     let colors_on_main <- colors_probe;
     let loaded <- Settings.load;
     let _ <- warn_settings setup.log loaded.warnings;
@@ -552,6 +553,7 @@ def stored_plan (store : Option StoreState) : IO (Option String) :=
     }
 
 def run_opened (setup : LogSetup) (colors : Bool) (p : Plan) (s : Settings) (reg : ToolRegistry) (servers : List McpServer) (o : OpenedSession) : IO I64 := do {
+    let o2 : OpenedSession := with_crash_note setup.crash o;
     let _ <- announce_crash setup.crash;
     let empty_grants : List PermGrant := List.empty;
     let grants <- Ref.new empty_grants;
@@ -560,9 +562,9 @@ def run_opened (setup : LogSetup) (colors : Bool) (p : Plan) (s : Settings) (reg
     let st0 : WeaverState := initial_state p reg s colors o.store o.session (Option.some grants) root;
     let st : WeaverState := Commands.set_plan st0 plan;
     let _ <- Logs.info setup.log (String.concat "ev=session_open session=" (session_label o));
-    let tr0 <- startup_transcript o;
+    let tr0 <- startup_transcript o2;
     let ran_tui <- Tui.run_resumed setup.log st tr0;
-    let _ <- if Bool.not ran_tui then announce_note o else IO.pure unit;
+    let _ <- if Bool.not ran_tui then announce_note o2 else IO.pure unit;
     let final <- run_fallback ran_tui st;
     let _ <- Procs.shutdown;
     let _ <- dispose_all servers;
