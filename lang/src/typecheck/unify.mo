@@ -7,6 +7,7 @@ use lib::typecheck::whnf {whnf}
 /// Structural type unification. Returns the unified type.
 /// Holes match anything. Pi matches Pi structurally.
 /// App spines are congruent: heads and arguments compare separately.
+/// Lambdas compare the binder's own type, then the bodies.
 /// Sorts respect cumulativity (level ≤ expected_level).
 /// A non-explicit binder -- a quantified type variable or a universe level,
 /// which `Term.forall` used to spell -- is stripped before comparison, on
@@ -102,6 +103,30 @@ def unify_go (a : Term) (b : Term) (scope : Scope) (locals : LocalScope) (reduce
                         else unify a ret2 scope locals,
                     _ => unify_stuck a b scope locals reduce,
                 },
+        // A lambda against a lambda: the binder's own type, then the bodies.
+        // Both bodies sit one binder deep under their OWN binder and `unify`
+        // compares de Bruijn indices structurally, so no shift is involved;
+        // binder names are annotations and take no part. Eta is deliberately
+        // absent -- `fn x => f x` against a bare `f` needs the domain to type
+        // the binder from -- and `test_unify_lam_is_not_eta` pins that gap.
+        Term.lam _b1 typ1 body1 => match b {
+            Term.hole => ok a,
+            Term.lam _b2 typ2 body2 =>
+                if Similar.similar a b then
+                    ok a
+                else
+                    match unify typ1 typ2 scope locals {
+                        ok _ => unify body1 body2 scope locals,
+                        err _ => unify_stuck a b scope locals reduce,
+                    },
+            // A lambda is never similar to a pi, so the catch-all's
+            // transparent-quantifier rule reduces to its strip here.
+            Term.pi b2 _dom body2 =>
+                if binder_is_explicit b2
+                then unify_stuck a b scope locals reduce
+                else unify a body2 scope locals,
+            _ => unify_stuck a b scope locals reduce,
+        },
         Term.sort l1 => unify_sort a l1 b scope locals reduce,
         // P2 (plans/type-system/core-term-simplification.md): spine
         // congruence. `unify_stuck`'s whole-spine reduction is weak-head

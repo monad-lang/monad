@@ -1,6 +1,6 @@
 use lang::types {
   Decl, Def, LocalScope, Location, ModulePath, Scope, Term, TypeError, app,
-  binder_anon, binder_binder, binder_is_explicit, concrete, hole, id, lit, named,
+  binder_anon, binder_binder, binder_is_explicit, binder_named, concrete, hole, id, lit, named,
   pi, result_is_ok, sentinel, sort_n, str, term_loc, unnamed, var,
   cub, i0, i1,
 }
@@ -521,3 +521,69 @@ def test_unify_app_dimensions_do_not_convert : Bool :=
     let right : Term := Term.app (conv_free "A") (cub CubicalPrim.i1 List.empty) in
     let ok : Bool := run_unify_conv left right in
     Bool.not ok
+
+// --- lambda conversion ---
+//
+// Two lambdas used to reach only `Similar.similar`: `whnf` does not reduce a
+// lambda at the head, so `unify_stuck` could not look inside one either, and
+// any pair that differed by more than spelling was a mismatch.
+
+/// Bodies that CONVERT but are not identical: `fn x => idt x` against
+/// `fn x => x`. The binder names differ on purpose -- they are annotations
+/// and take no part in the comparison.
+#[test]
+def test_unify_lam_bodies_convert : Bool :=
+    run_unify_conv
+        (Term.lam (binder_named (Identifier.id "x")) (sort_n 0)
+            (Term.app (conv_free "idt") (Term.var 0 DebugName.unnamed)))
+        (Term.lam (binder_named (Identifier.id "y")) (sort_n 0)
+            (Term.var 0 DebugName.unnamed))
+
+/// The negative control: the same shape with a body that does NOT convert.
+/// Without this, the pin above passes for a rule that ignores bodies.
+#[test]
+def test_unify_lam_bodies_disagree : Bool :=
+    let ok : Bool :=
+        run_unify_conv
+            (Term.lam (binder_named (Identifier.id "x")) (sort_n 0)
+                (Term.app (conv_free "konst") (sort_n 0)))
+            (Term.lam (binder_named (Identifier.id "y")) (sort_n 0)
+                (Term.var 0 DebugName.unnamed)) in
+    Bool.not ok
+
+/// The binder's own annotation IS compared, directionally: a lambda over
+/// `Type` is not a lambda over `Prop` (the reverse holds by cumulativity).
+#[test]
+def test_unify_lam_binder_types_disagree : Bool :=
+    let ok : Bool :=
+        run_unify_conv
+            (Term.lam (binder_named (Identifier.id "x")) (sort_n 1)
+                (Term.var 0 DebugName.unnamed))
+            (Term.lam (binder_named (Identifier.id "x")) (sort_n 0)
+                (Term.var 0 DebugName.unnamed)) in
+    Bool.not ok
+
+/// Eta is NOT implemented, and the limit is pinned rather than left
+/// implicit: `fn x => f x` does not convert with a bare `f`. Eta needs the
+/// domain to type the binder from, which is the separate gap `paths.mo`
+/// records for `funext`.
+#[test]
+def test_unify_lam_is_not_eta : Bool :=
+    let ok : Bool :=
+        run_unify_conv
+            (Term.lam (binder_named (Identifier.id "x")) (sort_n 0)
+                (Term.app (conv_free "f") (Term.var 0 DebugName.unnamed)))
+            (conv_free "f") in
+    Bool.not ok
+
+/// The lambda arm must not swallow the transparent-quantifier rule on its
+/// `b` side: a non-explicit `Term.pi` is stripped and the comparison retried
+/// (`test_unify_quantifier_stripped` pins the same rule on the a-side).
+#[test]
+def test_unify_lam_strips_a_quantifier_on_the_right : Bool :=
+    let lam : Term :=
+        Term.lam binder_anon (sort_n 0) (Term.var 0 DebugName.unnamed) in
+    let quant : Term :=
+        Term.pi (binder_binder (Identifier.id "A")) (sort_n 1)
+            (Term.lam binder_anon (sort_n 0) (Term.var 0 DebugName.unnamed)) in
+    run_unify_conv lam quant
