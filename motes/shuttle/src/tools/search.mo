@@ -15,7 +15,8 @@ use init::transformers {ResultT}
 use shuttle::message_types {Content}
 use shuttle::tools::search_args {GrepArgs, GlobArgs}
 use json::json {Json}
-use std::process {Child, Proc.spawn, Proc.read_line, Proc.kill, Proc.wait}
+use std::process {Child, Proc.spawn, Proc.read_line, Proc.wait}
+use std::concurrent::fiber {forkIO}
 use std::stream {StreamError}
 
 def tool_err (id : String) (msg : String) : Content := Content.tool_result id msg true
@@ -50,8 +51,15 @@ def search_read (id : String) (c : Child) (count : I64) (acc : String) : IO Cont
     }
 }
 
+/// `timeout` owns the command's process group; kill it only through its
+/// own deadline. Reap it on a fiber so no child slot leaks.
+def search_reap_later (c : Child) : IO Unit := do {
+    let _fiber <- forkIO (fn (_ : Unit) => do { let _ <- Proc.wait c; IO.pure unit });
+    IO.pure unit
+}
+
 def search_read_err (id : String) (c : Child) (e : StreamError) : IO Content := do {
-    let _killed <- Proc.kill c;
+    search_reap_later c;
     IO.pure (tool_err id (String.concat "search: read failed: " e.message))
 }
 
@@ -82,13 +90,13 @@ def search_eof (id : String) (c : Child) (acc : String) : IO Content := do {
 }
 
 def search_truncate_lines (id : String) (c : Child) (acc : String) : IO Content := do {
-    let _killed <- Proc.kill c;
-    IO.pure (tool_err id (acc ++ search_line_marker ++ I64.to_string search_max_lines ++ " lines; command killed]\n"))
+    search_reap_later c;
+    IO.pure (tool_err id (acc ++ search_line_marker ++ I64.to_string search_max_lines ++ " lines; output truncated]\n"))
 }
 
 def search_truncate_bytes (id : String) (c : Child) (acc : String) : IO Content := do {
-    let _killed <- Proc.kill c;
-    IO.pure (tool_err id (acc ++ search_byte_marker ++ I64.to_string search_max_bytes ++ " bytes; command killed]\n"))
+    search_reap_later c;
+    IO.pure (tool_err id (acc ++ search_byte_marker ++ I64.to_string search_max_bytes ++ " bytes; output truncated]\n"))
 }
 
 def grep_script : String :=

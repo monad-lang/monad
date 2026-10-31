@@ -319,7 +319,8 @@ def crash_files_go (files : List Path) (acc : List String) : List String :=
         List.empty => acc,
         List.cons p rest =>
             let s : String := Path.to_string p in
-            if Bool.and (String.contains s "/crash-") (String.ends_with s ".log")
+            if Bool.and (Bool.or (String.contains s "/crash-") (String.contains s "/monad-crash-"))
+                (String.ends_with s ".log")
             then crash_files_go rest (List.cons s acc)
             else crash_files_go rest acc,
     }

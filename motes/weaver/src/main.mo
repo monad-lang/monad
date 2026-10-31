@@ -108,6 +108,8 @@ def write_errln (s : String) : IO Unit :=
 def stdout_write (s : String) : IO Unit :=
     if String.starts_with "\u{1}activity\u{2}" s
     then IO.pure unit
+    else if String.starts_with "\u{1}toolerror\u{2}" s
+    then IO.pure unit
     else do {
         let thinking_tag : String := "\u{1}thinking\u{2}";
         let text : String :=
@@ -554,7 +556,6 @@ def stored_plan (store : Option StoreState) : IO (Option String) :=
 
 def run_opened (setup : LogSetup) (colors : Bool) (p : Plan) (s : Settings) (reg : ToolRegistry) (servers : List McpServer) (o : OpenedSession) : IO I64 := do {
     let o2 : OpenedSession := with_crash_note setup.crash o;
-    let _ <- announce_crash setup.crash;
     let empty_grants : List PermGrant := List.empty;
     let grants <- Ref.new empty_grants;
     let root <- workspace_root_probe;

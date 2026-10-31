@@ -976,9 +976,24 @@ int64_t monad_proc_wait(int64_t handle, int64_t kill_first) {
 static struct termios g_term_ctl_saved;
 static int g_term_ctl_saved_valid = 0;
 
+static void crash_path_init(void);
+static void install_crash_handlers(void);
+static int g_crash_handlers_installed = 0;
+
+static void maybe_install_crash_handlers(void) {
+    if (g_crash_handlers_installed) return;
+    g_crash_handlers_installed = 1;
+    crash_path_init();
+    install_crash_handlers();
+}
+
 static int64_t term_ctl_enter_raw(void) {
     struct termios t;
     if (tcgetattr(STDIN_FILENO, &t) != 0) return 0;
+    /* Only a program that takes the terminal gets the terminal-restore
+       handler and the crash marker. A plain CLI tool must not emit
+       escape sequences or weaver markers on SIGTERM. */
+    maybe_install_crash_handlers();
     /* First entry wins: a nested enter-leave-enter sequence must still
      * restore the ORIGINAL mode, not the intermediate one. */
     if (!g_term_ctl_saved_valid) {
@@ -1019,13 +1034,10 @@ static volatile sig_atomic_t g_crash_active = 0;
 static void crash_path_init(void) {
     const char* explicit_path = getenv("WEAVER_CRASH_FILE");
     const char* log_dir = getenv("WEAVER_LOG_DIR");
-    const char* home = getenv("HOME");
     if (explicit_path && *explicit_path)
         snprintf(g_crash_path, sizeof g_crash_path, "%s", explicit_path);
     else if (log_dir && *log_dir)
         snprintf(g_crash_path, sizeof g_crash_path, "%s/crash-%ld.log", log_dir, (long)getpid());
-    else if (home && *home)
-        snprintf(g_crash_path, sizeof g_crash_path, "%s/.weaver/crash-%ld.log", home, (long)getpid());
     else
         snprintf(g_crash_path, sizeof g_crash_path, "/tmp/monad-crash-%ld.log", (long)getpid());
     g_crash_path_ready = 1;
@@ -1087,12 +1099,25 @@ static void crash_handler(int sig) {
     raise(sig);
 }
 
+/* A stack-overflow SIGSEGV cannot run a handler on the exhausted stack:
+   give the handler an alternate one. `union` guarantees the alignment
+   sigaltstack requires. */
+static union {
+    char bytes[65536];
+    long double align;
+} g_alt_stack;
+
 static void install_crash_handlers(void) {
+    stack_t ss;
+    memset(&ss, 0, sizeof ss);
+    ss.ss_sp = g_alt_stack.bytes;
+    ss.ss_size = sizeof g_alt_stack.bytes;
+    sigaltstack(&ss, NULL);
     struct sigaction sa;
     memset(&sa, 0, sizeof sa);
     sa.sa_handler = crash_handler;
     sigemptyset(&sa.sa_mask);
-    sa.sa_flags = SA_RESETHAND;
+    sa.sa_flags = SA_RESETHAND | SA_ONSTACK;
     sigaction(SIGSEGV, &sa, NULL);
     sigaction(SIGBUS, &sa, NULL);
     sigaction(SIGTERM, &sa, NULL);
@@ -2299,12 +2324,6 @@ int main(int argc, char** argv) {
        would never stop. The process's own stdout/stderr keep dying of
        SIGPIPE through `stdio_die_on_epipe`. */
     signal(SIGPIPE, SIG_IGN);
-    /* A fatal signal (segfault, external SIGTERM/SIGHUP) restores the
-       saved termios, resets the screen escape state and leaves one
-       marker line for the next launch to report. SIGINT is deliberately
-       not handled: cbreak delivers Ctrl+C as a byte to the tui. */
-    crash_path_init();
-    install_crash_handlers();
     /* Exclude argv[0] (the binary's own path) -- matches the
        interpreter's own `run <file> <args...>` semantics (args passed to
        a compiled program's `main` are just the extra CLI args, not the

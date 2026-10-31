@@ -69,6 +69,16 @@ def yaml_str (key : String) (m : BTreeMap String Yaml) : String :=
         },
     }
 
+/// A UTF-8-safe prefix: `String.slice` answers "" at a continuation
+/// byte, so back off up to three bytes.
+#[partial]
+def cap_title (s : String) (max : I64) (back : I64) : String :=
+    if I64.gt back 3 then ""
+    else if I64.lt (max - back) 1 then ""
+    else
+        let x : String := String.slice s 0 (max - back) in
+        if String.is_empty x then cap_title s max (back + 1) else x
+
 /// The first heading or non-empty line, for a plan with no frontmatter.
 #[partial]
 def title_of (lines : List String) : String :=
@@ -78,7 +88,7 @@ def title_of (lines : List String) : String :=
             let t : String := String.trim l in
             if String.is_empty t then title_of rest
             else if String.starts_with "# " t then String.trim (String.drop 2 t)
-            else if I64.gt (String.length t) 80 then String.slice t 0 80 else t,
+            else if I64.gt (String.length t) 80 then cap_title t 80 0 else t,
     }
 
 def title_of_text (text : String) : String :=
@@ -189,8 +199,9 @@ def drop_trailing_dashes (bs : List U8) : List U8 :=
     List.reverse (drop_leading_dashes (List.reverse bs))
 
 pub def PlanFile.slug (title : String) : String :=
-    let capped : String := if I64.gt (String.length title) 40 then String.slice title 0 40 else title in
-    let chars : List U8 := drop_trailing_dashes (drop_leading_dashes (slug_go (String.to_list capped) true 40 List.empty)) in
+    // The byte cap lives in slug_go, so a multibyte title is never cut
+    // mid-character (the old pre-slice could).
+    let chars : List U8 := drop_trailing_dashes (drop_leading_dashes (slug_go (String.to_list title) true 40 List.empty)) in
     let s : String := String.from_list chars in
     if String.is_empty s then "plan" else s
 

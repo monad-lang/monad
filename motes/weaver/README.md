@@ -288,13 +288,11 @@ is sampled at the process start and every submit (`ev=rss label=… kb=…
 hwm_kb=…`), with `ev=rss_high` above `WEAVER_RSS_WARN_MB` (default 1536).
 A run that dies without `process_exit` is reported by the next launch
 (`warning: previous session ended unexpectedly (log: …)`) and logged as
-`crash_detected`; a fatal signal instead leaves `/tmp/monad-crash-<pid>.log`
-(or `$WEAVER_LOG_DIR/crash-<pid>.log`), reported once as `ev=crash_signal`. A run that dies
-without `process_exit` is reported by the next launch (`warning: previous
-session ended unexpectedly (log: …)`) and logged as `crash_detected` --
-the NEWEST run's log only: an older dead log is not "the previous
-session", and reporting it on every launch used to hide the run that had
-just crashed. `/log` prints the newest log's path, last 20 lines and any
+`crash_detected` -- the NEWEST run's log only: an older dead log is not
+"the previous session", and reporting it on every launch used to hide the
+run that had just crashed. A fatal signal in a TUI run leaves
+`/tmp/monad-crash-<pid>.log` (or `$WEAVER_LOG_DIR/crash-<pid>.log` when
+that is set), reported once as `ev=crash_signal` and then removed. `/log` prints the newest log's path, last 20 lines and any
 crash note. The runtime installs fatal-signal handlers (SIGSEGV/SIGBUS/SIGTERM/SIGHUP/
 SIGABRT/SIGFPE/SIGILL): they restore the saved termios, reset the screen
 state (alternate screen, mouse, bracketed paste, cursor) and write the

@@ -1331,7 +1331,8 @@ pub def Model.live_stream_height (m : TuiModel) : I64 :=
 
 pub def Model.scrollbar_visible (m : TuiModel) : Bool :=
     let h : I64 := Model.body_height m in
-    Bool.and (I64.lt 1 h) (I64.lt h m.row_total)
+    let no_picker : Bool := match m.picker { Option.none => true, Option.some _ => false } in
+    Bool.and no_picker (Bool.and (I64.lt 1 h) (I64.lt h m.row_total))
 
 def scrollbar_room (m : TuiModel) : I64 :=
     let h : I64 := Model.body_height m in
@@ -1359,10 +1360,11 @@ pub def Model.scrollbar_thumb (m : TuiModel) : Option (Pair I64 I64) :=
 
 pub def Model.scrollbar_hit (m : TuiModel) (row : I64) (col : I64) : Bool :=
     let h : I64 := Model.body_height m in
-    Bool.and (I64.beq col (m.cols - 2))
+    Bool.and (I64.lt 4 m.cols)
+        (Bool.and (I64.beq col (m.cols - 2))
         (Bool.and (Model.scrollbar_visible m)
             (Bool.and (Bool.not (I64.lt row (Model.panel_top_of m)))
-                (I64.lt row (Model.panel_top_of m + h))))
+                (I64.lt row (Model.panel_top_of m + h)))))
 
 /// Where a pointer row puts the scroll for a grab offset.
 def scrollbar_scroll_for (m : TuiModel) (row : I64) (grab : I64) : I64 :=

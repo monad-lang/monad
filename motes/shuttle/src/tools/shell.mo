@@ -20,19 +20,16 @@
 /// stream this tool never reads) and then stderr at that same pipe --
 /// the line vanishes from the tool's output entirely.
 ///
-/// NO wall-clock timeout is possible on this surface: `Proc.read_line`
-/// BLOCKS on an empty pipe, and nothing in the current native set can
-/// interrupt it. A command that runs forever WITHOUT printing (e.g.
-/// `sleep infinity`) hangs the tool until the process that hosts it goes
-/// away. The caps below bound only the OUTPUT, not the runtime. A
-/// timeout needs a pollable read or a timer signal, both new natives --
-/// deliberately out of scope for Phase 4.
+/// The command runs under GNU `timeout`, so a command that runs forever
+/// WITHOUT printing is killed at `shell_timeout_s`; the read-side caps
+/// below bound only the output. On a cap the child is NOT SIGKILLed:
+/// `timeout` puts the command in its own process group, so killing the
+/// wrapper would orphan that group. Instead the tool returns the
+/// truncated output immediately and a detached fiber reaps `timeout`,
+/// which still kills the group at its own deadline.
 ///
-/// `Proc.kill` SIGKILLs `sh` itself, not its descendants (there is no
-/// process group): a grandchild that keeps running without touching the
-/// pipe survives the "command killed" marker, orphaned. Reaping the
-/// whole tree needs session handling in `proc_spawn` -- the same
-/// follow-up native work as the timeout.
+/// The truncation marker is an ERROR: the command did not finish, and
+/// the agent must not read truncated output as a completed result.
 ///
 /// The caps are TWO, because output floods two ways: a LINE cap (200)
 /// and a BYTE cap (64 KiB) on the accumulated output. The line cap
@@ -57,7 +54,8 @@ use init::transformers {ResultT}
 use shuttle::message_types {Content}
 use shuttle::tools::shell_args {ShellArgs}
 use json::json {Json}
-use std::process {Child, Proc.spawn, Proc.read_line, Proc.kill, Proc.wait}
+use std::process {Child, Proc.spawn, Proc.read_line, Proc.wait}
+use std::concurrent::fiber {forkIO}
 use std::stream {StreamError}
 
 def tool_err (id : String) (msg : String) : Content := Content.tool_result id msg true
@@ -142,11 +140,15 @@ def shell_read (id : String) (c : Child) (count : I64) (acc : String) : IO Conte
 }
 
 /// The read itself failed (a native error -- e.g. the one-mebibyte line
-/// bound, or a broken pipe): the child is in an unknown state, so kill+reap
-/// it before reporting. This is the one exit that previously leaked the
-/// child alive.
+/// bound, or a broken pipe): the child is in an unknown state. Reap it on
+/// a fiber rather than blocking the turn; `timeout` bounds the command.
+def shell_reap_later (c : Child) : IO Unit := do {
+    let _fiber <- forkIO (fn (_ : Unit) => do { let _ <- Proc.wait c; IO.pure unit });
+    IO.pure unit
+}
+
 def shell_read_err (id : String) (c : Child) (e : StreamError) : IO Content := do {
-    let _killed <- Proc.kill c;
+    shell_reap_later c;
     return (tool_err id ("shell: read failed: " ++ e.message))
 }
 
@@ -185,21 +187,20 @@ def shell_eof (id : String) (c : Child) (acc : String) : IO Content := do {
     else return (tool_err id acc)
 }
 
-/// The cap fired: SIGKILL the child, reap it, and report an ERROR -- the
-/// command did not finish, and the agent must not read truncated output
-/// as a completed result. `Proc.kill` alone is the whole teardown -- it
-/// kills, reaps, and frees the slot -- so there is no `wait` after it,
-/// and the marker text carries the reason instead of an exit code.
+/// The line cap fired: return the truncated output as an ERROR (the
+/// command did not finish), and reap `timeout` on a fiber. The wrapper
+/// stays alive to kill the command's process group at its deadline, so
+/// no detached grandchild outlives it.
 def shell_truncate (id : String) (c : Child) (acc : String) : IO Content := do {
-    let _killed <- Proc.kill c;
-    return (tool_err id (acc ++ shell_truncated_marker ++ I64.to_string shell_max_lines ++ " lines; command killed]\n"))
+    shell_reap_later c;
+    return (tool_err id (acc ++ shell_truncated_marker ++ I64.to_string shell_max_lines ++ " lines; output truncated]\n"))
 }
 
 /// The byte cap fired: same teardown and rationale as `shell_truncate` --
-/// kill, reap, error -- but the marker names the byte budget. `acc` already
+/// fiber reap, error -- but the marker names the byte budget. `acc` already
 /// includes the line that crossed it (the caller checks the grown string),
 /// so the reported output is the whole budget's worth.
 def shell_truncate_bytes (id : String) (c : Child) (acc : String) : IO Content := do {
-    let _killed <- Proc.kill c;
-    return (tool_err id (acc ++ shell_byte_truncated_marker ++ I64.to_string shell_max_bytes ++ " bytes; command killed]\n"))
+    shell_reap_later c;
+    return (tool_err id (acc ++ shell_byte_truncated_marker ++ I64.to_string shell_max_bytes ++ " bytes; output truncated]\n"))
 }
