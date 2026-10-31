@@ -129,7 +129,10 @@ pub type AuthError {
   auth_invalid_token (reason : String),
   auth_expired,
   auth_insufficient_scope (required : List String),
-  auth_temporarily_unavailable
+  auth_temporarily_unavailable,
+  /// The resource server's own client credentials or endpoint are wrong
+  /// (a 4xx from the introspection endpoint), as opposed to an IdP outage.
+  auth_server_misconfigured
 }
 
 pub def AuthError.to_string (e : AuthError) : String :=
@@ -141,5 +144,7 @@ pub def AuthError.to_string (e : AuthError) : String :=
     AuthError.auth_insufficient_scope required =>
       String.concat "auth: insufficient scope: " (List.intercalate " " required),
     AuthError.auth_temporarily_unavailable =>
-      "auth: identity provider temporarily unavailable"
+      "auth: identity provider temporarily unavailable",
+    AuthError.auth_server_misconfigured =>
+      "auth: introspection client credentials or endpoint are misconfigured"
   }

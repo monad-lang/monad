@@ -1,34 +1,31 @@
-/// Resource-server bearer authentication (Phase 3).
+/// Resource-server bearer authentication (Phases 3-4).
 ///
-/// `Bearer.require` is the OAuth analogue of a guard: it parses the single
-/// `Authorization: Bearer` token, fetches (and caches) the issuer's JWKS
-/// through the injected `OauthHttp`, verifies the JWT with `jsonwebtoken`,
-/// checks the required scopes, and only then calls the handler with a
-/// `Principal`. There is no Moon dependency: the handler has the structural
-/// `Principal -> Request -> IO (Result String Response)` type.
+/// `Bearer.require` authenticates a bearer token in one of two modes:
+///
+///   * `BearerValidator.jwt` parses the JWT, fetches/caches the issuer's
+///     JWKS through the injected `OauthHttp`, verifies it with
+///     `jsonwebtoken`, and validates the access-token claims;
+///   * `BearerValidator.introspect` sends the opaque token to the RFC 7662
+///     introspection endpoint and maps the active response.
+///
+/// Both modes then enforce the required scopes and only call the handler with
+/// a verified `Principal`. There is no Moon dependency: the handler has the
+/// structural `Principal -> Request -> IO (Result String Response)` type.
 ///
 /// Failures are RFC 6750 responses: 401 with `WWW-Authenticate: Bearer
-/// realm="api"` (missing) or `error="invalid_token"` (invalid/expired), 403
-/// with `error="insufficient_scope", scope="..."`, and 503 with
-/// `error="temporarily_unavailable"` when the JWKS is unavailable (fetch,
-/// parse, or a rate-limited refetch). Bodies are generic JSON and carry no
-/// token, claim, or key detail; every authentication response is
-/// `Cache-Control: no-store`.
-///
-/// The token is parsed BEFORE the JWKS is fetched, so a syntactically invalid
-/// token costs no round trip. The cache is a `Ref JwksState` updated only
-/// through `Ref.update` (the std::ref rule for read-modify-write across
-/// fibers). An unknown `kid` allows one refetch per request; every fetch is
-/// rate-limited to one per second, including a failed one, so a token spray
-/// or an IdP outage cannot turn into a fetch storm.
+/// realm="api"` (missing) or `error="invalid_token"` (invalid/expired/
+/// inactive), 403 with `error="insufficient_scope", scope="..."`, and 503
+/// with `error="temporarily_unavailable"` when the identity provider is
+/// unavailable. Bodies are generic JSON and carry no token or claim detail;
+/// every authentication response is `Cache-Control: no-store`.
 
 use std::list {List.any, List.filter, List.intercalate, List.length}
 use std::ref {Ref, Ref.get, Ref.new, Ref.update}
 use json::json {Json, Json.get_array, Json.get_object, Json.object_get, Json.parse}
 use http::types {
   Body, Headers, Headers.empty, Headers.get_all, Headers.set, Request, Response,
-  Response.json, Response.with_header, Status.forbidden, Status.ok,
-  Status.service_unavailable, Status.unauthorized,
+  Response.json, Response.with_header, Status.forbidden, Status.internal_server_error,
+  Status.ok, Status.service_unavailable, Status.unauthorized,
 }
 use http::body {Body.to_bytes_pure}
 use jsonwebtoken::claims {Claims.validate_access_token}
@@ -40,6 +37,7 @@ use lib::config {OauthConfig, OauthConfig.claims_config}
 use lib::discovery {OauthEndpoints}
 use lib::errors {AuthError}
 use lib::http_client {OauthHttp, OauthHttp.send_get}
+use lib::introspect {Introspector, Introspector.new, Introspector.principal}
 
 def Bearer.realm : String := "api"
 def Bearer.max_token_bytes : I64 := 16384i64
@@ -55,7 +53,7 @@ pub struct JwksCache {
   fetched_at : I64
 }
 
-/// The cache and the two fetch clocks.
+/// The JWKS cache and the two fetch clocks.
 ///
 /// `last_fetch` bounds ordinary (cold/expired) fetches; `last_forced` bounds
 /// unknown-kid refetches independently, so a legitimate rotation is not
@@ -70,16 +68,24 @@ pub struct JwksState {
   claimed : Bool
 }
 
-/// The guard's configuration, transport, verifier, and cache.
-pub struct BearerValidator {
-  cfg : OauthConfig,
-  endpoints : OauthEndpoints,
-  http : OauthHttp,
-  verifier : JwtVerifier,
-  state : Ref JwksState
+/// The token-validation strategy. JWT mode carries the JWKS plumbing;
+/// introspection mode carries the RFC 7662 client and its cache.
+pub type TokenMode {
+  token_jwt
+    (cfg : OauthConfig)
+    (endpoints : OauthEndpoints)
+    (http : OauthHttp)
+    (verifier : JwtVerifier)
+    (state : Ref JwksState),
+  token_introspect (intro : Introspector)
 }
 
-/// JWT mode. Phase 4 adds the introspection constructor.
+/// A configured guard. Construct it once with `jwt` or `introspect`.
+pub struct BearerValidator {
+  mode : TokenMode
+}
+
+/// JWT mode: verify with the given verifier and cache the issuer's JWKS.
 pub def BearerValidator.jwt
   (cfg : OauthConfig) (ep : OauthEndpoints) (h : OauthHttp) (v : JwtVerifier)
   : IO BearerValidator := do {
@@ -91,11 +97,18 @@ pub def BearerValidator.jwt
   };
   let cell <- Ref.new empty;
   let out : BearerValidator := {
-    cfg := cfg,
-    endpoints := ep,
-    http := h,
-    verifier := v,
-    state := cell
+    mode := TokenMode.token_jwt cfg ep h v cell
+  };
+  return out
+}
+
+/// Opaque-token mode: RFC 7662 introspection, with its own response cache.
+pub def BearerValidator.introspect
+  (cfg : OauthConfig) (ep : OauthEndpoints) (h : OauthHttp)
+  : IO BearerValidator := do {
+  let intro <- Introspector.new cfg ep h;
+  let out : BearerValidator := {
+    mode := TokenMode.token_introspect intro
   };
   return out
 }
@@ -123,50 +136,86 @@ def Bearer.require_at
   : IO (Result String Response) := do {
   match Bearer.extract_token req {
     Result.err e => return (Result.ok (Bearer.response_of e)),
-    Result.ok token => Bearer.check_token v required handler req now token
+    Result.ok token => Bearer.dispatch v required handler req now token
   }
 }
 
-def Bearer.check_token
+def Bearer.dispatch
   (v : BearerValidator) (required : List String)
+  (handler : Principal -> Request -> IO (Result String Response))
+  (req : Request) (now : I64) (token : String)
+  : IO (Result String Response) :=
+  match v.mode {
+    TokenMode.token_jwt cfg ep http verifier state =>
+      Bearer.check_jwt_token cfg ep http verifier state required handler req now token,
+    TokenMode.token_introspect intro =>
+      Bearer.check_introspected intro required handler req now token
+  }
+
+def Bearer.check_introspected
+  (intro : Introspector) (required : List String)
+  (handler : Principal -> Request -> IO (Result String Response))
+  (req : Request) (now : I64) (token : String)
+  : IO (Result String Response) := do {
+  let r <- Introspector.principal intro now token;
+  match r {
+    Result.err e => return (Result.ok (Bearer.response_of e)),
+    Result.ok principal => Bearer.authorize required handler principal req
+  }
+}
+
+def Bearer.check_jwt_token
+  (cfg : OauthConfig) (ep : OauthEndpoints) (http : OauthHttp)
+  (verifier : JwtVerifier) (state : Ref JwksState)
+  (required : List String)
   (handler : Principal -> Request -> IO (Result String Response))
   (req : Request) (now : I64) (token : String)
   : IO (Result String Response) := do {
   match Jwt.parse token {
     Result.err e => return (Result.ok (Bearer.response_of (Bearer.auth_error e))),
-    Result.ok jwt => Bearer.load_and_verify v required handler req now jwt false
+    Result.ok jwt =>
+      Bearer.load_and_verify cfg ep http verifier state required handler req now jwt false
   }
 }
 
 #[terminating]
 def Bearer.load_and_verify
-  (v : BearerValidator) (required : List String)
+  (cfg : OauthConfig) (ep : OauthEndpoints) (http : OauthHttp)
+  (verifier : JwtVerifier) (state : Ref JwksState)
+  (required : List String)
   (handler : Principal -> Request -> IO (Result String Response))
   (req : Request) (now : I64) (jwt : Jwt) (force : Bool)
   : IO (Result String Response) := do {
-  let doc <- Bearer.jwks_doc v now force;
+  let doc <- Bearer.jwks_doc state ep http now force;
   match doc {
     Result.err e => return (Result.ok (Bearer.response_of e)),
-    Result.ok jwks => Bearer.verify_jwt v required handler req now jwks jwt force
+    Result.ok jwks =>
+      Bearer.verify_jwt cfg ep http verifier state required handler req now jwks jwt force
   }
 }
 
 #[terminating]
 def Bearer.verify_jwt
-  (v : BearerValidator) (required : List String)
+  (cfg : OauthConfig) (ep : OauthEndpoints) (http : OauthHttp)
+  (verifier : JwtVerifier) (state : Ref JwksState)
+  (required : List String)
   (handler : Principal -> Request -> IO (Result String Response))
   (req : Request) (now : I64) (jwks : Json) (jwt : Jwt) (force : Bool)
   : IO (Result String Response) := do {
-  let checked <- Jwt.verify v.verifier jwks jwt;
+  let checked <- Jwt.verify verifier jwks jwt;
   match checked {
-    Result.err e => Bearer.on_jwt_error v required handler req now jwt e force,
-    Result.ok _ => Bearer.validate_and_authorize v required handler req now jwt
+    Result.err e =>
+      Bearer.on_jwt_error cfg ep http verifier state required handler req now jwt e force,
+    Result.ok _ =>
+      Bearer.validate_and_authorize cfg required handler req now jwt
   }
 }
 
 #[terminating]
 def Bearer.on_jwt_error
-  (v : BearerValidator) (required : List String)
+  (cfg : OauthConfig) (ep : OauthEndpoints) (http : OauthHttp)
+  (verifier : JwtVerifier) (state : Ref JwksState)
+  (required : List String)
   (handler : Principal -> Request -> IO (Result String Response))
   (req : Request) (now : I64) (jwt : Jwt) (e : JwtError) (force : Bool)
   : IO (Result String Response) :=
@@ -174,17 +223,17 @@ def Bearer.on_jwt_error
     JwtError.jwks_unknown_kid =>
       if force
       then return (Result.ok (Bearer.response_of (Bearer.auth_error e)))
-      else Bearer.load_and_verify v required handler req now jwt true,
+      else Bearer.load_and_verify cfg ep http verifier state required handler req now jwt true,
     _ => return (Result.ok (Bearer.response_of (Bearer.auth_error e)))
   }
 
 def Bearer.validate_and_authorize
-  (v : BearerValidator) (required : List String)
+  (cfg : OauthConfig) (required : List String)
   (handler : Principal -> Request -> IO (Result String Response))
   (req : Request) (now : I64) (jwt : Jwt)
   : IO (Result String Response) := do {
-  let cfg := OauthConfig.claims_config v.cfg;
-  match Claims.validate_access_token cfg now jwt {
+  let claims_cfg := OauthConfig.claims_config cfg;
+  match Claims.validate_access_token claims_cfg now jwt {
     Result.err e => return (Result.ok (Bearer.response_of (Bearer.auth_error e))),
     Result.ok principal => Bearer.authorize required handler principal req
   }
@@ -272,9 +321,9 @@ def Bearer.granted
 /// Atomically claim the right to fetch. A forced refetch is bounded by its
 /// own clock, so the TTL fetch of the same request does not consume it.
 def Bearer.claim_fetch
-  (v : BearerValidator) (now : I64) (force : Bool)
+  (state : Ref JwksState) (now : I64) (force : Bool)
   : IO Bool := do {
-  let st <- Ref.update v.state (fn (s : JwksState) =>
+  let st <- Ref.update state (fn (s : JwksState) =>
     if force
     then if Bearer.rate_limited now s.last_forced
          then Bearer.declined s.cache s.last_fetch s.last_forced
@@ -285,8 +334,10 @@ def Bearer.claim_fetch
   return st.claimed
 }
 
-def Bearer.cached_doc (v : BearerValidator) : IO (Result AuthError Json) := do {
-  let st <- Ref.get v.state;
+def Bearer.cached_doc
+  (state : Ref JwksState)
+  : IO (Result AuthError Json) := do {
+  let st <- Ref.get state;
   match st.cache {
     Option.none => return (Result.err AuthError.auth_temporarily_unavailable),
     Option.some c => return (Result.ok c.jwks)
@@ -294,40 +345,42 @@ def Bearer.cached_doc (v : BearerValidator) : IO (Result AuthError Json) := do {
 }
 
 def Bearer.jwks_doc
-  (v : BearerValidator) (now : I64) (force : Bool)
+  (state : Ref JwksState) (ep : OauthEndpoints) (http : OauthHttp)
+  (now : I64) (force : Bool)
   : IO (Result AuthError Json) := do {
-  let st <- Ref.get v.state;
+  let st <- Ref.get state;
   match st.cache {
-    Option.none => Bearer.refresh_jwks v now force,
+    Option.none => Bearer.refresh_jwks state ep http now force,
     Option.some c =>
       if Bool.not force && Bearer.fresh now c.fetched_at
       then return (Result.ok c.jwks)
-      else Bearer.refresh_jwks v now force
+      else Bearer.refresh_jwks state ep http now force
   }
 }
 
 def Bearer.refresh_jwks
-  (v : BearerValidator) (now : I64) (force : Bool)
+  (state : Ref JwksState) (ep : OauthEndpoints) (http : OauthHttp)
+  (now : I64) (force : Bool)
   : IO (Result AuthError Json) := do {
-  let claimed <- Bearer.claim_fetch v now force;
+  let claimed <- Bearer.claim_fetch state now force;
   if claimed
-  then Bearer.fetch_jwks v now
+  then Bearer.fetch_jwks state ep http now
   else return (Result.err AuthError.auth_temporarily_unavailable)
 }
 
 def Bearer.fetch_jwks
-  (v : BearerValidator) (now : I64)
+  (state : Ref JwksState) (ep : OauthEndpoints) (http : OauthHttp) (now : I64)
   : IO (Result AuthError Json) := do {
-  match v.endpoints.jwks {
+  match ep.jwks {
     Option.none => return (Result.err AuthError.auth_temporarily_unavailable),
     Option.some u => do {
       let hdrs := Headers.set "Accept" "application/json" Headers.empty;
-      let resp <- OauthHttp.send_get v.http u hdrs;
+      let resp <- OauthHttp.send_get http u hdrs;
       match resp {
         Result.err _ => return (Result.err AuthError.auth_temporarily_unavailable),
         Result.ok r =>
           if U16.beq r.status Status.ok
-          then Bearer.store_then_read v now r.body
+          then Bearer.store_then_read state now r.body
           else return (Result.err AuthError.auth_temporarily_unavailable)
       }
     }
@@ -335,19 +388,19 @@ def Bearer.fetch_jwks
 }
 
 def Bearer.store_then_read
-  (v : BearerValidator) (now : I64) (body : Body)
+  (state : Ref JwksState) (now : I64) (body : Body)
   : IO (Result AuthError Json) := do {
-  let stored <- Bearer.store_jwks v now body;
+  let stored <- Bearer.store_jwks state now body;
   match stored {
     Result.err e => return (Result.err e),
-    Result.ok _ => Bearer.cached_doc v
+    Result.ok _ => Bearer.cached_doc state
   }
 }
 
 /// Validate before caching: a transient `{}` or `{"keys":[]}` must not
 /// poison the cache for the whole TTL. The body is capped before parsing.
 def Bearer.store_jwks
-  (v : BearerValidator) (now : I64) (body : Body)
+  (state : Ref JwksState) (now : I64) (body : Body)
   : IO (Result AuthError Unit) := do {
   let bytes := Body.to_bytes_pure body;
   if I64.gt (List.length bytes) Bearer.max_jwks_bytes
@@ -359,7 +412,7 @@ def Bearer.store_jwks
       then return (Result.err AuthError.auth_temporarily_unavailable)
       else do {
         let entry : JwksCache := { jwks := j, fetched_at := now };
-        let _ <- Ref.update v.state (fn (s : JwksState) =>
+        let _ <- Ref.update state (fn (s : JwksState) =>
           let next : JwksState := {
             cache := Option.some entry,
             last_fetch := s.last_fetch,
@@ -417,6 +470,11 @@ def Bearer.auth_response
   Response.with_header "Cache-Control" "no-store"
     (Response.with_header "WWW-Authenticate" challenge res)
 
+/// A server-side failure: no Bearer challenge, because the caller's
+/// credential is not the problem and retrying will not help.
+def Bearer.plain_response (status : U16) (body : String) : Response :=
+  Response.with_header "Cache-Control" "no-store" (Response.json status body)
+
 def Bearer.response_of (e : AuthError) : Response :=
   match e {
     AuthError.auth_missing_token =>
@@ -440,5 +498,8 @@ def Bearer.response_of (e : AuthError) : Response :=
     AuthError.auth_temporarily_unavailable =>
       Bearer.auth_response Status.service_unavailable
         (Bearer.challenge (Option.some "error=\"temporarily_unavailable\""))
-        "{\"error\":\"temporarily_unavailable\"}"
+        "{\"error\":\"temporarily_unavailable\"}",
+    AuthError.auth_server_misconfigured =>
+      Bearer.plain_response Status.internal_server_error
+        "{\"error\":\"server_error\"}"
   }

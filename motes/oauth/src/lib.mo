@@ -16,6 +16,8 @@
 // there is exactly one JWT API.
 
 pub use lib::errors {
+  AuthError,
+  AuthError.to_string,
   OauthError,
   OauthError.of_jwt,
   OauthError.to_string,
@@ -58,4 +60,14 @@ pub use lib::client {
   Client.refresh,
   Client.userinfo,
 }
-pub use lib::bearer {Bearer.require, BearerValidator, BearerValidator.jwt}
+pub use lib::bearer {
+  Bearer.require,
+  BearerValidator,
+  BearerValidator.introspect,
+  BearerValidator.jwt,
+}
+pub use lib::introspect {
+  Introspector,
+  Introspector.new,
+  Introspector.principal,
+}
