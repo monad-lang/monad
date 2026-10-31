@@ -322,6 +322,10 @@ pub fn exec_native(
     "cell_get" => cell_get(args, natives),
     "cell_set" => cell_set(args, natives),
     "cell_add_i64" => cell_add_i64(args, natives),
+    "view_new" => view_new(args, natives),
+    "view_get" => view_get(args, natives),
+    "view_set" => view_set(args, natives),
+    "view_free" => view_free(args, natives),
     "string_get" => string_get(args, natives),
     "string_get_char" => string_get_char(args, natives),
     "string_to_list" => string_to_list(args, natives),
@@ -1910,6 +1914,109 @@ fn cell_add_i64(args: &[Value], natives: &NativeTable) -> Result<Value, CoreEval
   }
   drop(reg);
   raw_io_wrap(natives, Value::Lit(IrLit::Num(sum, NumSuffix::I64)))
+}
+
+// ── Cell (init/src/view.mo) ────────────────────────────────────────────
+//
+// The linear handle over one Copy payload. The host does NOT enforce
+// linearity (the usual parity gap, like `priv` and the affine rule), so
+// this registry is what stands in for the type system: `view_free` clears
+// the slot, and a later op on the same id is an error rather than reading
+// a stale value. Ids are offset so they cannot collide with `Ref`'s
+// (which start at 0).
+static VIEWS: std::sync::LazyLock<std::sync::Mutex<Vec<Option<Value>>>> =
+  std::sync::LazyLock::new(|| std::sync::Mutex::new(Vec::new()));
+
+const VIEW_HANDLE_BASE: u64 = 1 << 40;
+
+fn views() -> Result<std::sync::MutexGuard<'static, Vec<Option<Value>>>, CoreEvalError> {
+  VIEWS
+    .lock()
+    .map_err(|_| CoreEvalError::NativeArgError("view registry poisoned".into()))
+}
+
+fn view_slot(handle: u64, name: &str) -> Result<usize, CoreEvalError> {
+  if handle < VIEW_HANDLE_BASE {
+    return Err(CoreEvalError::NativeArgError(format!(
+      "{name}: not a Cell handle {handle}"
+    )));
+  }
+  usize::try_from(handle - VIEW_HANDLE_BASE)
+    .map_err(|_| CoreEvalError::NativeArgError(format!("{name}: no such Cell {handle}")))
+}
+
+fn view_new(args: &[Value], natives: &NativeTable) -> Result<Value, CoreEvalError> {
+  let init = args
+    .first()
+    .ok_or_else(|| CoreEvalError::NativeArgError("view_new needs 1 arg".into()))?;
+  let mut reg = views()?;
+  reg.push(Some(init.clone()));
+  let id = (reg.len() - 1) as u64;
+  drop(reg);
+  raw_io_wrap(natives, handle_value(VIEW_HANDLE_BASE + id))
+}
+
+fn view_get(args: &[Value], natives: &NativeTable) -> Result<Value, CoreEvalError> {
+  let handle = extract_handle_id(
+    args
+      .first()
+      .ok_or_else(|| CoreEvalError::NativeArgError("view_get needs 1 arg".into()))?,
+  )?;
+  let idx = view_slot(handle, "view_get")?;
+  let reg = views()?;
+  let value = reg
+    .get(idx)
+    .and_then(|slot| slot.as_ref())
+    .cloned()
+    .ok_or_else(|| CoreEvalError::NativeArgError(format!("view_get: no such Cell {handle}")))?;
+  drop(reg);
+  // The `.mo` native declares `RawIO (Pair A (Cell A))`: the payload and
+  // the same handle must travel as one value. Build a real Pair, the same
+  // shape the compiled runtime builds in C with tag 15.
+  let pair_ctor = require_ctor(natives.well_known.pair_pair, "Pair.pair")?;
+  let pair = Value::Con {
+    tag: pair_ctor.tag,
+    args: std::sync::Arc::new(vec![value, handle_value(handle)].into()),
+  };
+  raw_io_wrap(natives, pair)
+}
+
+fn view_set(args: &[Value], natives: &NativeTable) -> Result<Value, CoreEvalError> {
+  if args.len() < 2 {
+    return Err(CoreEvalError::NativeArgError(
+      "view_set needs 2 args".into(),
+    ));
+  }
+  let handle = extract_handle_id(&args[0])?;
+  let idx = view_slot(handle, "view_set")?;
+  let mut reg = views()?;
+  let slot = reg
+    .get_mut(idx)
+    .ok_or_else(|| CoreEvalError::NativeArgError(format!("view_set: no such Cell {handle}")))?;
+  if slot.is_none() {
+    return Err(CoreEvalError::NativeArgError(format!(
+      "view_set: Cell {handle} was freed"
+    )));
+  }
+  *slot = Some(args[1].clone());
+  drop(reg);
+  raw_io_wrap(natives, handle_value(handle))
+}
+
+fn view_free(args: &[Value], natives: &NativeTable) -> Result<Value, CoreEvalError> {
+  let handle = extract_handle_id(
+    args
+      .first()
+      .ok_or_else(|| CoreEvalError::NativeArgError("view_free needs 1 arg".into()))?,
+  )?;
+  let idx = view_slot(handle, "view_free")?;
+  let mut reg = views()?;
+  let slot = reg
+    .get_mut(idx)
+    .ok_or_else(|| CoreEvalError::NativeArgError(format!("view_free: no such Cell {handle}")))?;
+  *slot = None;
+  drop(reg);
+  raw_io_wrap(natives, unit_value())
 }
 
 /// `Ref.update (r : Ref A) (f : A -> A) : IO A` — evaluator-backed because

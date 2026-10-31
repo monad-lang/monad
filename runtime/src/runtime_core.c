@@ -44,6 +44,15 @@ typedef struct {
    free slot after `MONAD_REF_TAG`. Like every handle, it has no Constructor
    slot, so `monad_get_tag` names it; matching on a channel is unsupported. */
 #define MONAD_CHANNEL_TAG 22
+/* A `Cell` (`init/src/view.mo`): an opaque linear handle over one Copy
+   payload word. 23 is the next free slot after `MONAD_CHANNEL_TAG`. Like
+   every handle it has no Constructor slot, so `monad_get_tag` names it. */
+#define MONAD_CELL_TAG 23
+/* `Pair.pair`'s builtin tag (`lang/src/codegen/ctors.mo`'s
+   `builtin_ctor_tags`). `monad_view_get` builds the pair in C because a
+   Cell handle and its payload must travel as one value; a fixed tag is
+   available for exactly the constructors `builtin_ctor_tags` names. */
+#define MONAD_PAIR_TAG 15
 
 typedef struct {
     Header header;
@@ -354,7 +363,7 @@ static int64_t monad_get_tag_impl(rt_word ptr) {
     Header* header = (Header*)RT_PTR(ptr);
     if (header->tag == MONAD_FIBER_TAG || header->tag == MONAD_SCOPE_TAG
         || header->tag == MONAD_BUF_TAG || header->tag == MONAD_REF_TAG
-        || header->tag == MONAD_CHANNEL_TAG) {
+        || header->tag == MONAD_CHANNEL_TAG || header->tag == MONAD_CELL_TAG) {
         return header->tag;
     }
     return ((Constructor*)RT_PTR(ptr))->tag;
@@ -577,6 +586,67 @@ static int64_t ref_add_i64_impl(rt_word handle, int64_t delta) {
     } while (!__atomic_compare_exchange_n(&r->value, &old, (rt_word)(intptr_t)next, 0,
                                           __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE));
     return next;
+}
+
+/* ── Cell (init/src/view.mo) ────────────────────────────────────────────
+   An opaque LINEAR handle over one Copy payload word. Linearity is the
+   checker's guarantee (view-types P1/P2): two fibers cannot legally hold
+   the same Cell, so the payload word needs no lock -- unlike Ref, which
+   is a shared cell. The block is GC-SCANNED (`monad_alloc`, not
+   `monad_alloc_atomic`): a Copy payload can still be a `String` pointer,
+   and an atomic block would hide it from Boehm.
+
+   `view_free_impl` POISONS rather than frees. The block is Boehm-owned
+   (`monad_release`'s own comment explains why free() would corrupt the
+   collector); real freeing arrives with ownership-regions O3/O4, at
+   which point this body becomes an owned free. Poisoning still makes a
+   use-after-free fail its tag check deterministically during bring-up. */
+typedef struct {
+    Header header;
+    rt_word payload;
+} CellObj;
+
+static CellObj* cell_of(rt_word handle) {
+    CellObj* c = (CellObj*)RT_PTR(handle);
+    if (!c || c->header.tag != MONAD_CELL_TAG) return NULL;
+    return c;
+}
+
+static rt_word view_new_impl(rt_word init) {
+    CellObj* c = (CellObj*)RT_PTR(monad_alloc((rt_size)sizeof(CellObj)));
+    if (!c) return 0;
+    c->header.tag = MONAD_CELL_TAG;
+    c->payload = init;
+    return RT_WORD(c);
+}
+
+/* Returns `Pair A (Cell A)` as a real constructor: the payload and the
+   same handle must travel together, and the `.mo` wrapper may not use the
+   handle twice (it is linear). */
+static rt_word view_get_impl(rt_word handle) {
+    CellObj* c = cell_of(handle);
+    if (!c) return 0;
+    Constructor* pair = (Constructor*)alloc_constructor_impl(MONAD_PAIR_TAG, 2);
+    pair->fields[0] = c->payload;
+    pair->fields[1] = handle;
+    return RT_WORD(pair);
+}
+
+static rt_word view_set_impl(rt_word handle, rt_word v) {
+    CellObj* c = cell_of(handle);
+    if (!c) return 0;
+    c->payload = v;
+    return handle;
+}
+
+static rt_word view_free_impl(rt_word handle) {
+    CellObj* c = cell_of(handle);
+    if (!c) return 0;
+    /* Poison: a later op on this word fails the tag check instead of
+       reading a payload the program believes freed. */
+    c->header.tag = 0;
+    c->payload = 0;
+    return 0;
 }
 
 /* `#[native string_length]` (init/string.mo's `String.length`) dispatches
@@ -1322,6 +1392,11 @@ rt_word monad_cell_get(rt_word handle) { return ref_get_impl(handle); }
 rt_word monad_cell_set(rt_word handle, rt_word v) { return ref_set_impl(handle, v); }
 rt_word monad_cell_update(rt_word handle, rt_word f) { return ref_update_impl(handle, f); }
 int64_t monad_cell_add_i64(rt_word handle, int64_t delta) { return ref_add_i64_impl(handle, delta); }
+
+rt_word monad_view_new(rt_word init) { return view_new_impl(init); }
+rt_word monad_view_get(rt_word handle) { return view_get_impl(handle); }
+rt_word monad_view_set(rt_word handle, rt_word v) { return view_set_impl(handle, v); }
+rt_word monad_view_free(rt_word handle) { return view_free_impl(handle); }
 
 int64_t monad_string_length(rt_str s) { return monad_string_length_impl(RT_STR(s)); }
 int64_t monad_string_count_newlines(rt_str s, int64_t len) { return monad_string_count_newlines_impl(RT_STR(s), len); }
