@@ -191,7 +191,7 @@ def test_statet_modify : Bool :=
 // environment still runs.
 
 def readert_list_bind_result : ReaderT (List I64) Id I64 :=
-    let m : ReaderT (List I64) Id I64 := ReaderT.ask in
+    let m : ReaderT (List I64) Id (List I64) := ReaderT.ask in
     Monad.bind m (fn (xs : List I64) =>
         match xs {
             List.cons h _ => Monad.pure h,
