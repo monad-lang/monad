@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
-# Gate weaver's Python pty repros in CI.
+# Gate weaver's terminal tests in CI.
 #
-# The 13 drivers in scripts/weaver-tui-repro/ are the only automated coverage
-# of weaver's raw-mode/TUI loop (plans/implementations/weaver.md records the
-# gap; plans/implementations/2026-10-25-weaver-pty-ci-stopgap.md is this
-# script's plan). They run against the compiled `target-monad/release/weaver`.
+# Two suites run against the compiled `target-monad/release/weaver`: the
+# `mty` drivers in motes/weaver/test (compiled-only, under `monad test`) and
+# the remaining Python repros in scripts/weaver-tui-repro/ (the oracle during
+# the per-driver cutover; plans/implementations/2026-10-25-weaver-pty-monad-
+# tests.md).
 #
 # THE EXIT CODE IS NOT THE VERDICT. Three drivers print a failure and still
 # exit 0: pty_repro.py (`PASSn ...: False`), pty_repro_round2.py (`FAIL`), and
@@ -110,6 +111,21 @@ export WV_TURNS="$run/fixtures/turns_single_read.json"
 export WV_TURNS_LONG="$root/scripts/weaver-tui-repro/turns_long.json"
 export PYTHONUNBUFFERED=1
 unset NO_COLOR
+
+# --- the Monad `mty` drivers ------------------------------------------------
+#
+# Phase 2 of plans/implementations/2026-10-25-weaver-pty-monad-tests.md: the
+# six tty-critical drivers (ctrl_d, input, models, dialogs, async, resize) now
+# live in motes/weaver/test and run under `monad test`, with the generic pty
+# harness in motes/mty. The Python entries for those six stay in the table
+# below until this suite is green in CI, then are removed one per port.
+# WEAVER_MTY gates the suite (unset skips it green in an ordinary sweep); CI
+# sets it and requires the binary.
+echo "ci-weaver-pty: running the Monad mty drivers"
+# shellcheck disable=SC2086  # MONAD_BIN may be `cargo run --release --`
+MTY_ROOT="$root" WEAVER_MTY=1 WEAVER_MTY_REQUIRED=1 WV_BIN="$bin" \
+  $monad test motes/weaver/test --jobs 1 \
+  || die "the Monad mty drivers failed"
 
 # --- the driver table -------------------------------------------------------
 

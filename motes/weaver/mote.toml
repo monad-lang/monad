@@ -27,6 +27,12 @@ path = "../shuttle"
 [dependencies.tui]
 path = "../tui"
 
+# The pty/TUI test harness (`motes/mty`) used by the drivers under `test/`.
+# Weaver's binary does not import it; the dependency exists so the test files
+# can `use mty::...` without failing the declared-deps gate.
+[dependencies.mty]
+path = "../mty"
+
 [dependencies.toml]
 path = "../toml"
 

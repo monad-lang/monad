@@ -50,6 +50,7 @@ members = [
   "motes/monadup",
   "motes/moon",
   "motes/moose",
+  "motes/mty",
   "motes/parsec",
   "motes/toml",
   "motes/toolkit",
