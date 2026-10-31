@@ -10,7 +10,7 @@
 // forward type references within a file, so `Widget` is declared first and
 // names the two later types in its constructor arguments.
 
-use lib::types { TextStyle, LayoutSize, TextSpan }
+use lib::types { TextStyle, LayoutSize, TextSegment }
 use lib::core { style_default }
 // The stateful widgets' pure state machines (Phase 5). One-directional:
 // those modules never import this one.
@@ -49,7 +49,7 @@ pub type LeafWidget {
     list (state : ListState),
     blank,
     /// A run of styled segments, painted left to right on one line.
-    spans (spans : List TextSpan)
+    spans (spans : List TextSegment)
 }
 
 /// A `Widget` paired with the `LayoutSize` that governs its share of a
@@ -98,7 +98,7 @@ pub def label (text : String) : Widget :=
     Widget.leaf (LeafWidget.label text)
 
 /// A single line of styled segments (Markdown inline styles, selection).
-pub def spans (ss : List TextSpan) : Widget :=
+pub def spans (ss : List TextSegment) : Widget :=
     Widget.leaf (LeafWidget.spans ss)
 
 /// Reserve `size` units along the layout axis without painting.

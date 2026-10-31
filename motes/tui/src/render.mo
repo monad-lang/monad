@@ -15,7 +15,7 @@
 // assumed).
 
 use lib::types {
-    Rect, Screen, Cell, TextStyle, CellDelta, LayoutSize, TextSpan
+    Rect, Screen, Cell, TextStyle, CellDelta, LayoutSize, TextSegment
 }
 use lib::core {
     mk_screen, screen_get_cell, screen_set_cell,
@@ -65,7 +65,7 @@ def render_label (text : String) (area : Rect) (screen : Screen) (active : TextS
 /// at the rectangle's right edge. Used by Markdown rows and selections.
 #[partial]
 def render_spans
-    (ss : List TextSpan) (area : Rect) (screen : Screen) (active : TextStyle) (used : I64)
+    (ss : List TextSegment) (area : Rect) (screen : Screen) (active : TextStyle) (used : I64)
     : Screen :=
     match ss {
         List.empty => screen,
@@ -894,7 +894,7 @@ def test_apply_deltas_default_cell_does_not_inherit_style : Bool :=
 #[test]
 def test_render_spans_keeps_per_span_styles : Bool :=
     let bold : TextStyle := { style_default with bold := true } in
-    let w : Widget := spans [TextSpan.mk "ab" bold, TextSpan.mk "cd" style_default] in
+    let w : Widget := spans [TextSegment.of "ab" bold, TextSegment.of "cd" style_default] in
     let s : Screen := render w (mk_rect 0 0 10 1) (mk_screen 1 10) in
     match screen_get_cell s 0 0 {
         Option.some a => match screen_get_cell s 0 3 {

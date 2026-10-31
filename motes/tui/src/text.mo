@@ -16,7 +16,7 @@
 
 use std::list {List.length}
 
-use lib::types {TextStyle, TextSpan}
+use lib::types {TextStyle, TextSegment}
 use lib::core {style_default}
 
 /// One rendered glyph: its source text, the cells it occupies (0, 1 or 2),
@@ -464,7 +464,7 @@ pub struct StyledGlyph {
     style : TextStyle
 }
 
-pub def StyledGlyph.mk (g : Glyph) (s : TextStyle) : StyledGlyph :=
+pub def StyledGlyph.of (g : Glyph) (s : TextStyle) : StyledGlyph :=
     let r : StyledGlyph := { glyph := g, style := s } in
     r
 
@@ -472,21 +472,21 @@ pub def StyledGlyph.mk (g : Glyph) (s : TextStyle) : StyledGlyph :=
 def glyphs_onto (gs : List Glyph) (style : TextStyle) (acc : List StyledGlyph) : List StyledGlyph :=
     match gs {
         List.empty => acc,
-        List.cons g rest => glyphs_onto rest style (List.cons (StyledGlyph.mk g style) acc),
+        List.cons g rest => glyphs_onto rest style (List.cons (StyledGlyph.of g style) acc),
     }
 
 /// Flatten spans to glyphs (reversed, then reversed once at the end).
 #[partial]
-def span_glyphs_go (ss : List TextSpan) (acc : List StyledGlyph) : List StyledGlyph :=
+def span_glyphs_go (ss : List TextSegment) (acc : List StyledGlyph) : List StyledGlyph :=
     match ss {
         List.empty => List.reverse acc,
         List.cons s rest => span_glyphs_go rest (glyphs_onto (Text.glyphs s.text) s.style acc),
     }
 
-pub def Text.span_glyphs (ss : List TextSpan) : List StyledGlyph :=
+pub def Text.span_glyphs (ss : List TextSegment) : List StyledGlyph :=
     span_glyphs_go ss List.empty
 
-pub def Text.width_spans (ss : List TextSpan) : I64 :=
+pub def Text.width_spans (ss : List TextSegment) : I64 :=
     match ss {
         List.empty => 0,
         List.cons s rest => I64.add (Text.width s.text) (Text.width_spans rest),
@@ -542,24 +542,24 @@ def drop_trailing_styled (gs : List StyledGlyph) : List StyledGlyph :=
 #[partial]
 def group_styled
     (gs : List StyledGlyph) (cur_text : String) (cur_style : TextStyle)
-    (acc : List TextSpan) : List TextSpan :=
+    (acc : List TextSegment) : List TextSegment :=
     match gs {
         List.empty =>
             List.reverse
-                (if String.is_empty cur_text then acc else List.cons (TextSpan.mk cur_text cur_style) acc),
+                (if String.is_empty cur_text then acc else List.cons (TextSegment.of cur_text cur_style) acc),
         List.cons g rest =>
             if String.is_empty cur_text
             then group_styled rest g.glyph.text g.style acc
             else if g.style == cur_style
             then group_styled rest (String.concat cur_text g.glyph.text) cur_style acc
-            else group_styled rest g.glyph.text g.style (List.cons (TextSpan.mk cur_text cur_style) acc),
+            else group_styled rest g.glyph.text g.style (List.cons (TextSegment.of cur_text cur_style) acc),
     }
 
-pub def Text.group_styled (gs : List StyledGlyph) : List TextSpan :=
+pub def Text.group_styled (gs : List StyledGlyph) : List TextSegment :=
     group_styled gs "" style_default List.empty
 
 #[partial]
-def rows_to_spans (rows : List (List StyledGlyph)) : List (List TextSpan) :=
+def rows_to_spans (rows : List (List StyledGlyph)) : List (List TextSegment) :=
     match rows {
         List.empty => List.empty,
         List.cons r rest => List.cons (Text.group_styled r) (rows_to_spans rest),
@@ -567,12 +567,12 @@ def rows_to_spans (rows : List (List StyledGlyph)) : List (List TextSpan) :=
 
 /// Span-aware equivalent of `Text.wrap`: rows of styled spans, word-wrapped
 /// by cells. An empty input yields one empty row.
-pub def Text.wrap_spans (width : I64) (ss : List TextSpan) : List (List TextSpan) :=
+pub def Text.wrap_spans (width : I64) (ss : List TextSegment) : List (List TextSegment) :=
     let w : I64 := if width < 1 then 1 else width in
     let gs : List StyledGlyph := Text.span_glyphs ss in
     let trimmed : List StyledGlyph := drop_trailing_styled gs in
     if List.is_empty trimmed
-    then List.cons (List.empty : List TextSpan) List.empty
+    then List.cons (List.empty : List TextSegment) List.empty
     else rows_to_spans (styled_wrap_go w trimmed)
 
 /// The spans covering columns `[c0, c1)`, whole glyphs only (the caller
@@ -592,7 +592,7 @@ def slice_styled_go
             slice_styled_go rest end c0 c1 acc2,
     }
 
-pub def Text.slice_spans (ss : List TextSpan) (c0 : I64) (c1 : I64) : List TextSpan :=
+pub def Text.slice_spans (ss : List TextSegment) (c0 : I64) (c1 : I64) : List TextSegment :=
     if c1 < c0 then List.empty
     else Text.group_styled (slice_styled_go (Text.span_glyphs ss) 0 c0 c1 List.empty)
 
@@ -679,7 +679,7 @@ def test_next_boundary_multibyte : Bool := Text.next_boundary "æø" 0 == 2
 // ─── styled spans ───
 
 #[partial]
-def span_texts (ss : List TextSpan) : String :=
+def span_texts (ss : List TextSegment) : String :=
     match ss {
         List.empty => "",
         List.cons s rest => String.concat s.text (span_texts rest),
@@ -687,13 +687,13 @@ def span_texts (ss : List TextSpan) : String :=
 
 #[test]
 def test_width_spans_sums_cells : Bool :=
-    Text.width_spans [TextSpan.mk "ab" style_default, TextSpan.mk "日本" style_default] == 6
+    Text.width_spans [TextSegment.of "ab" style_default, TextSegment.of "日本" style_default] == 6
 
 #[test]
 def test_wrap_spans_keeps_the_style_across_a_break : Bool :=
     let bold : TextStyle := { style_default with bold := true } in
-    let rows : List (List TextSpan) :=
-        Text.wrap_spans 6 [TextSpan.mk "hello " style_default, TextSpan.mk "world" bold] in
+    let rows : List (List TextSegment) :=
+        Text.wrap_spans 6 [TextSegment.of "hello " style_default, TextSegment.of "world" bold] in
     match rows {
         List.empty => false,
         List.cons first rest => match rest {
@@ -711,8 +711,8 @@ def test_wrap_spans_keeps_the_style_across_a_break : Bool :=
 #[test]
 def test_slice_spans_keeps_the_style : Bool :=
     let bold : TextStyle := { style_default with bold := true } in
-    let sliced : List TextSpan :=
-        Text.slice_spans [TextSpan.mk "ab" style_default, TextSpan.mk "cd" bold] 1 3 in
+    let sliced : List TextSegment :=
+        Text.slice_spans [TextSegment.of "ab" style_default, TextSegment.of "cd" bold] 1 3 in
     match sliced {
         List.empty => false,
         List.cons first rest => match rest {

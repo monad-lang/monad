@@ -91,8 +91,8 @@ def test_hard_break_is_a_new_line : Bool :=
     plain "one  \ntwo" == "one\ntwo"
 
 #[test]
-def test_soft_break_is_a_space : Bool :=
-    plain "one\ntwo" == "one two"
+def test_soft_break_keeps_the_line : Bool :=
+    plain "one\ntwo" == "one\ntwo"
 
 #[test]
 def test_nested_list_is_indented : Bool :=

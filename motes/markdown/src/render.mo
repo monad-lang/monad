@@ -114,14 +114,14 @@ def Markdown.inline_plain (i : Markdown.Inline) : String :=
     }
 
 /// Nesting emphasis under strong (or the reverse) keeps both.
-def Markdown.emphasis_under (s : SpanStyle) : SpanStyle :=
+def Markdown.emphasis_under (s : Markdown.SpanStyle) : Markdown.SpanStyle :=
     match s {
         Markdown.SpanStyle.span_strong => Markdown.SpanStyle.span_strong_emphasis,
         Markdown.SpanStyle.span_strong_emphasis => Markdown.SpanStyle.span_strong_emphasis,
         _ => Markdown.SpanStyle.span_emphasis,
     }
 
-def Markdown.strong_under (s : SpanStyle) : SpanStyle :=
+def Markdown.strong_under (s : Markdown.SpanStyle) : Markdown.SpanStyle :=
     match s {
         Markdown.SpanStyle.span_emphasis => Markdown.SpanStyle.span_strong_emphasis,
         Markdown.SpanStyle.span_strong_emphasis => Markdown.SpanStyle.span_strong_emphasis,
@@ -152,7 +152,7 @@ def Markdown.inline_spans (inls : List Markdown.Inline) (style : Markdown.SpanSt
 def Markdown.inline_span (i : Markdown.Inline) (style : Markdown.SpanStyle) : List Markdown.StyledSpan :=
     match i {
         inline_text t => List.cons (Markdown.span t style) List.empty,
-        inline_soft_break => List.cons (Markdown.span " " style) List.empty,
+        inline_soft_break => List.cons (Markdown.span "\n" style) List.empty,
         inline_hard_break => List.cons (Markdown.span "\n" style) List.empty,
         inline_emphasis c => Markdown.inline_spans c (Markdown.emphasis_under style),
         inline_strong c => Markdown.inline_spans c (Markdown.strong_under style),

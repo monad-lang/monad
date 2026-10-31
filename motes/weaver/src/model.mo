@@ -38,7 +38,7 @@ use weaver::store {
     TLine, TLineKind, Transcript, TranscriptPage, Store.page_lines,
     Transcript.empty, Transcript.next_block, Transcript.append, Transcript.slice,
 }
-use tui::types {Event, LayoutSize, TextStyle, TextSpan}
+use tui::types {Event, LayoutSize, TextStyle, TextSegment}
 use tui::core {clamp, style_default}
 use tui::widgets::input {
     InputState, input_state, InputState.press, InputState.drag,
@@ -508,15 +508,15 @@ pub struct DisplayRow {
     /// Empty for an ordinary row (painted as one label); a Markdown row
     /// carries its inline segments so bold/code/link styling survives
     /// wrapping and selection.
-    spans : List TextSpan,
+    spans : List TextSegment,
 }
 
 def mk_row (style : TextStyle) (text : String) : DisplayRow :=
     let r : DisplayRow := { text := text, style := style, spans := List.empty } in
     r
 
-pub def mk_span_row (style : TextStyle) (ss : List TextSpan) : DisplayRow :=
-    let text : String := String.concat_all (List.map (fn (s : TextSpan) => s.text) ss) in
+pub def mk_span_row (style : TextStyle) (ss : List TextSegment) : DisplayRow :=
+    let text : String := String.concat_all (List.map (fn (s : TextSegment) => s.text) ss) in
     let r : DisplayRow := { text := text, style := style, spans := ss } in
     r
 
@@ -792,17 +792,17 @@ def plain_line_list (width : I64) (lines : List String) : List DisplayRow :=
         List.cons l rest => List.append (plain_rows style_default width l) (plain_line_list width rest),
     }
 
-def md_span (colors : Bool) (s : Markdown.StyledSpan) : TextSpan :=
-    TextSpan.mk s.text (theme_markdown_span_style_with colors s.style)
+def md_span (colors : Bool) (s : Markdown.StyledSpan) : TextSegment :=
+    TextSegment.of s.text (theme_markdown_span_style_with colors s.style)
 
 #[partial]
 def md_rows_go (colors : Bool) (width : I64) (lines : List Markdown.StyledLine) : List DisplayRow :=
     match lines {
         List.empty => List.empty,
         List.cons l rest =>
-            let ss : List TextSpan := List.map (md_span colors) l.spans in
-            let wrapped : List (List TextSpan) := Text.wrap_spans width ss in
-            let rows : List DisplayRow := List.map (fn (row : List TextSpan) => mk_span_row style_default row) wrapped in
+            let ss : List TextSegment := List.map (md_span colors) l.spans in
+            let wrapped : List (List TextSegment) := Text.wrap_spans width ss in
+            let rows : List DisplayRow := List.map (fn (row : List TextSegment) => mk_span_row style_default row) wrapped in
             List.append rows (md_rows_go colors width rest),
     }
 
@@ -1009,14 +1009,14 @@ pub def Model.display_row_widget (r : DisplayRow) : SizedWidget :=
 def selected_span_row (r : DisplayRow) (a : I64) (b : I64) : SizedWidget :=
     let total : I64 := Text.width r.text in
     let mw : I64 := if b < a then 0 else b - a in
-    let head : List TextSpan := Text.slice_spans r.spans 0 a in
-    let mid0 : List TextSpan := Text.slice_spans r.spans a b in
-    let tail : List TextSpan := Text.slice_spans r.spans b total in
+    let head : List TextSegment := Text.slice_spans r.spans 0 a in
+    let mid0 : List TextSegment := Text.slice_spans r.spans a b in
+    let tail : List TextSegment := Text.slice_spans r.spans b total in
     let midw : I64 := Text.width_spans mid0 in
     let pad : I64 := if mw < midw then 0 else mw - midw in
-    let mid : List TextSpan :=
-        List.append (List.map (fn (s : TextSpan) => TextSpan.mk s.text { s.style with reverse := true }) mid0)
-            (if pad < 1 then List.empty else [TextSpan.mk (String.repeat " " pad) { r.style with reverse := true }]) in
+    let mid : List TextSegment :=
+        List.append (List.map (fn (s : TextSegment) => TextSegment.of s.text { s.style with reverse := true }) mid0)
+            (if pad < 1 then List.empty else [TextSegment.of (String.repeat " " pad) { r.style with reverse := true }]) in
     let hw : I64 := Text.width_spans head in
     let tw : I64 := Text.width_spans tail in
     let p1 : List SizedWidget :=
