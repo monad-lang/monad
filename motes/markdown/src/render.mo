@@ -58,10 +58,12 @@ pub struct Markdown.StyledLine {
 }
 
 pub def Markdown.span (text : String) (style : Markdown.SpanStyle) : Markdown.StyledSpan :=
-    { text := text, style := style }
+    let r : Markdown.StyledSpan := { text := text, style := style } in
+    r
 
 pub def Markdown.line (spans : List Markdown.StyledSpan) : Markdown.StyledLine :=
-    { spans := spans }
+    let r : Markdown.StyledLine := { spans := spans } in
+    r
 
 /// A line's text with all styling flattened.
 #[partial]
@@ -71,19 +73,19 @@ pub def Markdown.line_text (l : Markdown.StyledLine) : String :=
 /// Stable names for goldens and debugging.
 pub def Markdown.style_name (s : Markdown.SpanStyle) : String :=
     match s {
-        span_plain => "plain",
-        span_heading _ => "heading",
-        span_emphasis => "emphasis",
-        span_strong => "strong",
-        span_strong_emphasis => "strong_emphasis",
-        span_strikethrough => "strikethrough",
-        span_code => "code",
-        span_link => "link",
-        span_quote => "quote",
-        span_list_marker => "list_marker",
-        span_table_head => "table_head",
-        span_table_border => "table_border",
-        span_rule => "rule",
+        Markdown.SpanStyle.span_plain => "plain",
+        Markdown.SpanStyle.span_heading _ => "heading",
+        Markdown.SpanStyle.span_emphasis => "emphasis",
+        Markdown.SpanStyle.span_strong => "strong",
+        Markdown.SpanStyle.span_strong_emphasis => "strong_emphasis",
+        Markdown.SpanStyle.span_strikethrough => "strikethrough",
+        Markdown.SpanStyle.span_code => "code",
+        Markdown.SpanStyle.span_link => "link",
+        Markdown.SpanStyle.span_quote => "quote",
+        Markdown.SpanStyle.span_list_marker => "list_marker",
+        Markdown.SpanStyle.span_table_head => "table_head",
+        Markdown.SpanStyle.span_table_border => "table_border",
+        Markdown.SpanStyle.span_rule => "rule",
     }
 
 // ─── Inline inlines ─────────────────────────────────────────────────────
@@ -114,16 +116,16 @@ def Markdown.inline_plain (i : Markdown.Inline) : String :=
 /// Nesting emphasis under strong (or the reverse) keeps both.
 def Markdown.emphasis_under (s : SpanStyle) : SpanStyle :=
     match s {
-        span_strong => span_strong_emphasis,
-        span_strong_emphasis => span_strong_emphasis,
-        _ => span_emphasis,
+        Markdown.SpanStyle.span_strong => Markdown.SpanStyle.span_strong_emphasis,
+        Markdown.SpanStyle.span_strong_emphasis => Markdown.SpanStyle.span_strong_emphasis,
+        _ => Markdown.SpanStyle.span_emphasis,
     }
 
 def Markdown.strong_under (s : SpanStyle) : SpanStyle :=
     match s {
-        span_emphasis => span_strong_emphasis,
-        span_strong_emphasis => span_strong_emphasis,
-        _ => span_strong,
+        Markdown.SpanStyle.span_emphasis => Markdown.SpanStyle.span_strong_emphasis,
+        Markdown.SpanStyle.span_strong_emphasis => Markdown.SpanStyle.span_strong_emphasis,
+        _ => Markdown.SpanStyle.span_strong,
     }
 
 /// The destination after a link label, when it says something the label
@@ -132,11 +134,11 @@ def Markdown.link_tail (dest : String) (children : List Markdown.Inline) : List 
     let label : String := Markdown.inlines_plain children in
     if Bool.or (String.is_empty dest) (String.beq dest label)
     then List.empty
-    else List.cons (Markdown.span (String.concat " <" (String.concat dest ">")) span_link) List.empty
+    else List.cons (Markdown.span (String.concat " <" (String.concat dest ">")) Markdown.SpanStyle.span_link) List.empty
 
 def Markdown.autolink_spans (dest : String) (label : String) : List Markdown.StyledSpan :=
     if String.beq dest label
-    then List.cons (Markdown.span label span_link) List.empty
+    then List.cons (Markdown.span label Markdown.SpanStyle.span_link) List.empty
     else Markdown.link_tail dest List.empty
 
 #[partial]
@@ -154,16 +156,16 @@ def Markdown.inline_span (i : Markdown.Inline) (style : Markdown.SpanStyle) : Li
         inline_hard_break => List.cons (Markdown.span "\n" style) List.empty,
         inline_emphasis c => Markdown.inline_spans c (Markdown.emphasis_under style),
         inline_strong c => Markdown.inline_spans c (Markdown.strong_under style),
-        inline_strikethrough c => Markdown.inline_spans c span_strikethrough,
-        inline_code t => List.cons (Markdown.span t span_code) List.empty,
+        inline_strikethrough c => Markdown.inline_spans c Markdown.SpanStyle.span_strikethrough,
+        inline_code t => List.cons (Markdown.span t Markdown.SpanStyle.span_code) List.empty,
         inline_link dest _ children =>
-            List.append (Markdown.inline_spans children span_link) (Markdown.link_tail dest children),
+            List.append (Markdown.inline_spans children Markdown.SpanStyle.span_link) (Markdown.link_tail dest children),
         inline_image dest _ alt =>
             List.append
-                (List.cons (Markdown.span alt span_plain) List.empty)
-                (List.cons (Markdown.span (String.concat " <" (String.concat dest ">")) span_plain) List.empty),
+                (List.cons (Markdown.span alt Markdown.SpanStyle.span_plain) List.empty)
+                (List.cons (Markdown.span (String.concat " <" (String.concat dest ">")) Markdown.SpanStyle.span_plain) List.empty),
         inline_autolink dest label => Markdown.autolink_spans dest label,
-        inline_html l => List.cons (Markdown.span l span_plain) List.empty,
+        inline_html l => List.cons (Markdown.span l Markdown.SpanStyle.span_plain) List.empty,
     }
 
 // ─── Line assembly ─────────────────────────────────────────────────────
@@ -171,7 +173,7 @@ def Markdown.inline_span (i : Markdown.Inline) (style : Markdown.SpanStyle) : Li
 #[terminating]
 def Markdown.indent_spans (n : I64) : List Markdown.StyledSpan :=
     if n < 1 then List.empty
-    else List.cons (Markdown.span " " span_plain) (Markdown.indent_spans (n - 1))
+    else List.cons (Markdown.span " " Markdown.SpanStyle.span_plain) (Markdown.indent_spans (n - 1))
 
 def Markdown.trim_cr (s : String) : String :=
     let n : I64 := String.length s in
@@ -271,17 +273,17 @@ def Markdown.block_lines
     : List Markdown.StyledLine :=
     match b {
         block_paragraph inls =>
-            Markdown.block_spans indent prefix (Markdown.inline_spans inls span_plain),
+            Markdown.block_spans indent prefix (Markdown.inline_spans inls Markdown.SpanStyle.span_plain),
         block_heading level inls =>
-            Markdown.block_spans indent prefix (Markdown.inline_spans inls (span_heading level)),
+            Markdown.block_spans indent prefix (Markdown.inline_spans inls (Markdown.SpanStyle.span_heading level)),
         block_thematic_break =>
             List.cons (Markdown.line (List.append (Markdown.indent_spans indent)
-                (List.append prefix (List.cons (Markdown.span (String.repeat "─" 40) span_rule) List.empty)))) List.empty,
+                (List.append prefix (List.cons (Markdown.span (String.repeat "─" 40) Markdown.SpanStyle.span_rule) List.empty)))) List.empty,
         block_code_block _info literal =>
             Markdown.code_lines literal indent prefix,
         block_quote inner =>
             Markdown.blocks_lines inner indent
-                (List.append prefix (List.cons (Markdown.span "│ " span_quote) List.empty)),
+                (List.append prefix (List.cons (Markdown.span "│ " Markdown.SpanStyle.span_quote) List.empty)),
         block_list kind tight items =>
             Markdown.list_lines kind tight items 0 indent prefix,
         block_table aligns head rows =>
@@ -310,7 +312,7 @@ def Markdown.code_line_list
             let spans : List Markdown.StyledSpan :=
                 List.append (Markdown.indent_spans indent)
                     (List.append prefix
-                        (List.cons (Markdown.span (String.concat "  " l) span_code) List.empty)) in
+                        (List.cons (Markdown.span (String.concat "  " l) Markdown.SpanStyle.span_code) List.empty)) in
             List.cons (Markdown.line spans) (Markdown.code_line_list rest indent prefix),
     }
 
@@ -326,7 +328,7 @@ def Markdown.html_line_list
         List.empty => List.empty,
         List.cons l rest =>
             List.append
-                (Markdown.block_spans indent prefix (List.cons (Markdown.span l span_plain) List.empty))
+                (Markdown.block_spans indent prefix (List.cons (Markdown.span l Markdown.SpanStyle.span_plain) List.empty))
                 (Markdown.html_line_list rest indent prefix),
     }
 
@@ -354,7 +356,7 @@ def Markdown.list_lines
         List.empty => List.empty,
         List.cons item rest =>
             let marker : Markdown.StyledSpan :=
-                Markdown.span (Markdown.list_marker kind index item.checked) span_list_marker in
+                Markdown.span (Markdown.list_marker kind index item.checked) Markdown.SpanStyle.span_list_marker in
             let first_prefix : List Markdown.StyledSpan :=
                 List.append (Markdown.indent_spans indent)
                     (List.append prefix (List.cons marker List.empty)) in
@@ -387,15 +389,15 @@ def Markdown.table_cell_spans
                 List.empty => here,
                 List.cons _ _ =>
                     List.append here
-                        (List.append (List.cons (Markdown.span " │ " span_table_border) List.empty)
+                        (List.append (List.cons (Markdown.span " │ " Markdown.SpanStyle.span_table_border) List.empty)
                             (Markdown.table_cell_spans rest style)),
             },
     }
 
 def Markdown.table_row_spans (row : Markdown.TableRow) (style : Markdown.SpanStyle) : List Markdown.StyledSpan :=
-    List.append (List.cons (Markdown.span "│ " span_table_border) List.empty)
+    List.append (List.cons (Markdown.span "│ " Markdown.SpanStyle.span_table_border) List.empty)
         (List.append (Markdown.table_cell_spans row.cells style)
-            (List.cons (Markdown.span " │" span_table_border) List.empty))
+            (List.cons (Markdown.span " │" Markdown.SpanStyle.span_table_border) List.empty))
 
 #[partial]
 def Markdown.table_rows
@@ -405,7 +407,7 @@ def Markdown.table_rows
         List.empty => List.empty,
         List.cons r rest =>
             List.cons (Markdown.line (List.append (Markdown.indent_spans indent)
-                (List.append prefix (Markdown.table_row_spans r span_plain))))
+                (List.append prefix (Markdown.table_row_spans r Markdown.SpanStyle.span_plain))))
                 (Markdown.table_rows rest indent prefix),
     }
 
@@ -414,10 +416,10 @@ def Markdown.table_lines
     (indent : I64) (prefix : List Markdown.StyledSpan) : List Markdown.StyledLine :=
     let head_line : List Markdown.StyledLine :=
         List.cons (Markdown.line (List.append (Markdown.indent_spans indent)
-            (List.append prefix (Markdown.table_row_spans head span_table_head)))) List.empty in
+            (List.append prefix (Markdown.table_row_spans head Markdown.SpanStyle.span_table_head)))) List.empty in
     let rule : Markdown.StyledLine :=
         Markdown.line (List.append (Markdown.indent_spans indent)
-            (List.append prefix (List.cons (Markdown.span (String.repeat "─" 40) span_table_border) List.empty))) in
+            (List.append prefix (List.cons (Markdown.span (String.repeat "─" 40) Markdown.SpanStyle.span_table_border) List.empty))) in
     List.append head_line (List.cons rule (Markdown.table_rows rows indent prefix))
 
 // ─── Entry points ──────────────────────────────────────────────────────

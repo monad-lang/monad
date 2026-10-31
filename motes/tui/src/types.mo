@@ -61,7 +61,8 @@ pub struct TextSpan {
 }
 
 pub def TextSpan.mk (text : String) (style : TextStyle) : TextSpan :=
-    { text := text, style := style }
+    let r : TextSpan := { text := text, style := style } in
+    r
 
 /// A single character cell with styling
 #[derive BEq]
