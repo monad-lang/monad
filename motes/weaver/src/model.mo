@@ -806,14 +806,22 @@ def md_rows_go (colors : Bool) (width : I64) (lines : List Markdown.StyledLine) 
             List.append rows (md_rows_go colors width rest),
     }
 
+/// A block larger than this renders as plain text: the parser's work on one
+/// huge paragraph is quadratic, and a 28 KB plan/paste is not worth a
+/// multi-second repaint. Normal messages still get Markdown.
+pub def Model.markdown_max_bytes : I64 := 16384
+
 /// An assistant Markdown block: parsed once, wrapped with span-aware
 /// wrapping. With colors off the same AST flattens to plain lines, so a
 /// `--no-color` run shows the same text without the styling.
 def markdown_rows (colors : Bool) (width : I64) (text : String) : List DisplayRow :=
-    let doc := Markdown.parse text in
-    if colors
-    then md_rows_go colors width (Markdown.to_lines doc)
-    else plain_line_list width (Markdown.to_plain_lines doc)
+    if I64.gt (String.length text) Model.markdown_max_bytes
+    then plain_line_list width (theme_split_lines text)
+    else
+        let doc := Markdown.parse text in
+        if colors
+        then md_rows_go colors width (Markdown.to_lines doc)
+        else plain_line_list width (Markdown.to_plain_lines doc)
 
 /// One logical line, split on its own newlines and wrapped. The kind wins
 /// over the text: a Markdown block is rendered as Markdown, a thinking
