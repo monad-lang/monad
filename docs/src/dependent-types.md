@@ -140,9 +140,16 @@ def one_vec : Vec (Nat.succ Nat.zero) I64 := Vec.cons 1 Vec.nil
 Monad is deliberately not a proof assistant, and the dependently typed surface
 is correspondingly small. Today there is:
 
-- **No dependent pattern matching.** A `match` does not refine the types of
-  other variables in scope based on which constructor matched, so writing
-  functions that consume a `Vec` while tracking its length is painful.
+- **Dependent pattern matching is partial.** A `match` now elaborates to the
+  core `Elim` form, and the checker refines the scrutinee per arm, so a result
+  type that is a TYPE-LEVEL function of the scrutinee checks: a proof-relevant
+  eliminator such as `def bool_elim (F : Bool -> Type) (t : F true)
+  (f : F false) (b : Bool) : F b := match b { ... }` is accepted, and swapping
+  its arms is rejected. What is still missing: indexed families (`Eq`/`Vec`
+  index refinement), constructor field types that mention an earlier field
+  (`Sigma.snd`'s `B (Sigma.fst p)`), and a surface way to supply a type
+  argument — so an eliminator can be *verified* but not yet *called*.
+  `proofs/src/dependent.mo` is the worked example.
 - **No usable equality elimination.** See the warning above: `Eq` proofs can be
   built but not consumed.
 - **No tactics, no proof automation, no `Decidable`.** Proofs are written by

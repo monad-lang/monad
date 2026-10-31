@@ -29,6 +29,7 @@ use lang::codegen::validate {
   build_defined_symbol_set, collect_call_targets, missing_call_targets,
   strip_db_lams, validate_export_defs, validate_no_colliding_def_symbols,
   report_elab_stats, validate_no_undesugared_struct_lits,
+  validate_no_undesugared_elims,
   validate_no_monad_externs, validate_no_unwired_natives,
   validate_native_target_availability,
 }
@@ -52,6 +53,8 @@ use lib::codegen::decls {
 use lib::codegen::tco {apply_self_tco}
 use lib::codegen::qualify {qtest_def, qualified_def_name_str, qualify_modules}
 use lib::codegen::free_names {collect_referenced_names, free_names_of_term}
+use lib::typecheck::traverse {term_map_children}
+use lib::elim_lower {elim_to_literal}
 use lib::codegen::ctx {
   CodegenCtx, CtxInstrsVal, CtxInstrsVals, CtxStrPair, LocalBinding,
   build_arity_table, collect_db_params, ctx_bind_local, ctx_lookup_arity,
@@ -2274,7 +2277,7 @@ def literal_int_of (lit : Literal) : Option I64 :=
 // only ever runs on a term that passed `type_check` -- a def that fails
 // stays un-elaborated for `elaborate_module_decls_reporting`'s best-effort
 // caller, so its original, unchecked term never reaches this function.
-#[allow_incomplete_match "quote_/var_macro are rejected by type_check before codegen ever runs"]
+#[allow_incomplete_match "quote_/var_macro are rejected by type_check before codegen ever runs; Term.elim is lowered by desugar_elims_decls before codegen and guarded by validate_no_undesugared_elims"]
 #[partial]
 def compile_db_term_ir (c : CodegenCtx) (term_ : Term) : CompileResult := match term_ {
     Term.lit val => compile_lit_ir c val,
@@ -2505,7 +2508,25 @@ def compile_db_term_ir (c : CodegenCtx) (term_ : Term) : CompileResult := match 
     Term.hole => CompileResult.ok c List.empty LLVMValue.void_val List.empty List.empty List.empty,
     Term.ctx loc inner => compile_located_term_ir c loc inner,
     Term.cubical cub_ => compile_cubical_ir c cub_,
+    // See `crash_elim_reached_codegen`'s own doc comment: the normal pipeline
+    // lowers `Term.elim` in `compile_input_of_modules`, and the gate reports
+    // a miss before codegen; this arm only catches a direct
+    // `compile_db_module` caller that skips both.
+    Term.elim _e => crash_elim_reached_codegen c,
 }
+
+/// Fail-fast backstop for `compile_db_term_ir`'s `Term.elim` arm: reachable
+/// only when a direct `compile_db_module` caller (which has no `Scope` to
+/// desugar against) hands codegen an elaborated `Elim`. The pipeline path
+/// desugars in `compile_input_of_modules` and is additionally guarded by
+/// `validate_no_undesugared_elims`. Same shape and rationale as
+/// `crash_struct_lit_reached_codegen` below.
+#[allow_incomplete_match "fail-fast backstop; see the doc comment above"]
+#[partial]
+def crash_elim_reached_codegen (c : CodegenCtx) : CompileResult :=
+    match Bool.false {
+        Bool.true => CompileResult.ok c List.empty LLVMValue.void_val List.empty List.empty List.empty,
+    }
 
 /// Stage 1 codegen for the cubical primitives.
 ///
@@ -5852,6 +5873,57 @@ def desugar_struct_lit_def (scope : Scope) (d : Def) : Def := match d {
         Def.mk name typ (desugar_struct_lit_term scope term_) constraints attrs vis params,
 }
 
+/// Post-elaboration Term→Term pass: lower every `Term.elim` back to the
+/// `Literal.if_`/`Literal.match_` form the backends still compile
+/// (`core-term-simplification.md` R3c, `lang/src/elim_lower.mo`). The checker
+/// RETURNS `Term.elim` once R3c is wired; this pass runs immediately after
+/// elaboration (inside `compile_input_of_modules`), so reachability, the
+/// validate gates and `compile_db_term_ir` only ever see `Literal` nodes.
+///
+/// Both the body and the declared TYPE are walked. This is the deliberate
+/// difference from `desugar_struct_lit_def` above (which maps only `.term`):
+/// a type-level function's body can be a match, and elaboration writes the
+/// checked `Elim` back into whichever position held it.
+///
+/// Mirrors `extract_defs`' scope: `def_d` only, no recursion into
+/// `scoped_open_d`, because that is exactly what codegen compiles -- the gate
+/// must not be stricter than the consumer.
+#[partial]
+def desugar_elims_decls (scope : Scope) (decl_list : List Decl) : List Decl := match decl_list {
+    List.empty => List.empty,
+    List.cons d rest =>
+        List.cons (desugar_elims_decl scope d) (desugar_elims_decls scope rest),
+}
+
+#[partial]
+def desugar_elims_decl (scope : Scope) (d : Decl) : Decl := match d {
+    Decl.def_d def_ => Decl.def_d (desugar_elims_def scope def_),
+    _ => d,
+}
+
+#[partial]
+def desugar_elims_def (scope : Scope) (d : Def) : Def := match d {
+    Def.mk {name, typ, term := term_, constraints, attrs, vis, params, ..} =>
+        Def.mk name (desugar_elims_term scope typ) (desugar_elims_term scope term_) constraints attrs vis params,
+}
+
+/// Children-first: `term_map_children` rebuilds the node with every child
+/// already desugared, then this node itself is lowered if it is an `Elim`.
+/// A conversion failure leaves the `Term.elim` in place for
+/// `validate_no_undesugared_elims` to report -- returning a half-lowered term
+/// would be worse than a loud gate failure.
+#[partial]
+def desugar_elims_term (scope : Scope) (t : Term) : Term :=
+    let mapped : Term := term_map_children (desugar_elims_term scope) t in
+    match mapped {
+        Term.elim e =>
+            match elim_to_literal scope e {
+                Result.err _reason => Term.elim e,
+                Result.ok lowered => lowered,
+            },
+        _ => mapped,
+    }
+
 /// The term-level rewrite. Structural traversal mirrors
 /// `term_has_struct_lit` (`lang/codegen/validate.mo`) -- the same
 /// positions, but rebuilding instead of probing. `Term.ctx` wrappers
@@ -6211,7 +6283,7 @@ pub def compile_input_of_modules (target_mp : ModulePath) (qualified_mods : List
     let desugared_decls := elaborate_def_typs (desugar_struct_lits_decls scope dict_param_decls) (names_of_decls dict_param_decls);
     let t_elab : I64 <- bench_step verbose "  front end: desugar_struct_lits" t_desugar (List.length desugared_decls);
     let report : BestEffortElab := elaborate_module_decls_reporting scope desugared_decls empty_locs;
-    let elaborated : List Decl := best_effort_decls report;
+    let elaborated : List Decl := desugar_elims_decls scope (best_effort_decls report);
     let _t_done : I64 <- bench_step verbose "  front end: elaborate_module_decls" t_elab (List.length elaborated);
     let input : CompileInput := { scope := scope, decls := elaborated, report := report };
     return input
@@ -6387,10 +6459,12 @@ pub def compile_loaded_modules_to_ir_with_debug (loaded : LoadedModules) (verbos
                   // codegen has: a struct literal that best-effort
                   // elaboration never desugared still compiles to
                   // `void_val` (see `validate_no_undesugared_struct_lits`).
-                  match validate_no_undesugared_struct_lits reachable_decls {
+                  match gate_then
+                            (validate_no_undesugared_struct_lits reachable_decls)
+                            (validate_no_undesugared_elims reachable_decls) {
                     Result.err e => do {
-                        if verbose then do { fail_line ("FAILED at stage: validate_no_undesugared_struct_lits (" ++ e ++ ")"); return unit } else return unit;
-                        return (Result.err e)
+                        if verbose then do { fail_line ("FAILED at stage: validate_no_undesugared_struct_lits/validate_no_undesugared_elims (" ++ e ++ ")"); return unit } else return unit;
+                          return (Result.err e)
                     },
                     Result.ok _ =>
                       // And the collision gate: after qualification no two

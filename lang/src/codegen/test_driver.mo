@@ -57,7 +57,8 @@ use lang::codegen::symbols {
 use parsec::number {parse_i64}
 use lib::codegen::validate {
   report_elab_stats, validate_no_colliding_def_symbols,
-  validate_no_undesugared_struct_lits, validate_no_unwired_natives
+  validate_no_undesugared_struct_lits, validate_no_undesugared_elims,
+  validate_no_unwired_natives
 }
 use llvm::ir {LLVMModule}
 use lang::module {
@@ -727,7 +728,9 @@ def test_driver_gates (elab_gate : Result String (List Decl)) (classes : List Cl
     gate_then
         (gate_then
             (gate_then elab_gate (validate_no_unresolved_class_calls classes reachable))
-            (validate_no_undesugared_struct_lits reachable))
+            (gate_then
+                (validate_no_undesugared_struct_lits reachable)
+                (validate_no_undesugared_elims reachable)))
         (validate_no_colliding_def_symbols reachable)
 
 /// Apply `rename_user_main` to the module whose path is `target_mp`,

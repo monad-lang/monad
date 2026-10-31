@@ -87,6 +87,23 @@ def free_vars (typ : Term) (known_names : List Identifier) : List Identifier :=
         // cubical argument would otherwise not be generalized.
         Term.cubical c =>
             match c { { prim := _, args := args } => free_vars_of_terms args known_names },
+        // An `elim` binds nothing at its own node; `minors` are lambda
+        // chains, so the `lam` arm above handles their binders when this
+        // recurses into one. `params`/`indices` are type positions but can
+        // mention names, so they are walked like every other child.
+        // Destructured rather than projected: the termination checker's
+        // structural-decrease proof needs the pattern-bound form (R3a's own
+        // `term_has_struct_lit` note).
+        Term.elim e =>
+            match e {
+                { inductive := _, levels := _, params := params, indices := indices,
+                  motive := e_motive, minors := minors, scrutinee := scrutinee } =>
+                    union_ids (free_vars_of_terms params known_names)
+                        (union_ids (free_vars_of_terms indices known_names)
+                            (union_ids (free_vars e_motive known_names)
+                                (union_ids (free_vars_of_terms minors known_names)
+                                    (free_vars scrutinee known_names)))),
+            },
     }
 
 #[partial]

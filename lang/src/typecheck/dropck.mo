@@ -84,7 +84,7 @@
 /// time comes. Recorded here so it is a known, deliberate deferral
 /// rather than a surprise the next person to touch this file has to
 /// rediscover.
-use lib::types {Binder, Con, DebugName, FieldPattern, Identifier, Literal, MatchCase, NamePath, Native, StructLitField, Term, binder_explicit, binder_is_explicit, binder_name}
+use lib::types {Binder, Con, DebugName, FieldPattern, Identifier, Literal, MatchCase, NamePath, Native, StructLitField, Term, binder_explicit, binder_is_explicit, binder_name, term_peel}
 use lib::typecheck::usage {UsePos, owning_at}
 use llvm::strmap {str_map_empty}
 use std::map {HashMap}
@@ -139,10 +139,47 @@ pub def drop_leaves (ctors : HashMap String Bool) (borrows : HashMap String Bool
                 // term as `owning_at` already sees it.
                 _ => single_leaf ctors borrows target t,
             },
+        // A dependent match has the same control-flow shape as
+        // `Literal.match_`: the scrutinee runs once before any arm, and
+        // exactly one minor fires. Minors are lambda chains, so peel their
+        // field binders before descending -- an arm body that uses `target`
+        // must count as a use on that path, not as a separate lambda scope.
+        // Destructured, not projected: the termination checker needs the
+        // pattern-bound form.
+        Term.elim elim =>
+            match elim {
+                { inductive := _, levels := _, params := _, indices := _, motive := _,
+                  minors := minors, scrutinee := scrutinee } =>
+                    let branch_leaves : List Bool := drop_leaves_minors ctors borrows target minors in
+                    if I64.gt (owning_at ctors borrows UsePos.up_scrutinee target scrutinee) 0
+                    then all_false branch_leaves
+                    else branch_leaves,
+            },
         // Nothing else in `Term` branches control flow -- `app`, `con`,
         // `ntv`, a nested `lam`'s own body (a SEPARATE scope, not a
         // continuation of this one), etc. are all one leaf each.
         _ => single_leaf ctors borrows target t,
+    }
+
+/// Concatenate every minor's leaves -- see the `Term.elim` arm in
+/// `drop_leaves`.
+#[partial]
+def drop_leaves_minors (ctors : HashMap String Bool) (borrows : HashMap String Bool) (target : I64) (minors : List Term) : List Bool :=
+    match minors {
+        List.empty => List.empty,
+        List.cons m rest =>
+            List.append (drop_leaves_minor ctors borrows target m) (drop_leaves_minors ctors borrows target rest),
+    }
+
+/// Peel a minor's leading `Term.lam` field binders (transparent `ctx`
+/// included), shifting `target` by one per binder, then walk the body the
+/// same way a `MatchCase` body is walked.
+#[partial]
+def drop_leaves_minor (ctors : HashMap String Bool) (borrows : HashMap String Bool) (target : I64) (minor : Term) : List Bool :=
+    let peeled : Term := term_peel minor in
+    match peeled {
+        Term.lam _b _typ body => drop_leaves_minor ctors borrows (target + 1) body,
+        _ => drop_leaves ctors borrows target peeled,
     }
 
 def single_leaf (ctors : HashMap String Bool) (borrows : HashMap String Bool) (target : I64) (t : Term) : List Bool :=

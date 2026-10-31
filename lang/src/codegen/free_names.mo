@@ -52,16 +52,17 @@ def free_names_of_term (bound : List Identifier) (t : Term) : List Identifier :=
     // A cubical primitive binds nothing, so its arguments are walked under
     // the same `bound` set.
     Term.cubical c => match c { { prim := _, args := args } => free_names_of_terms bound args },
-    // `elim` itself binds nothing (unlike `lam`/`pi`): `params`/`motive`/
-    // `scrutinee` are walked under the same `bound` set, and so are
+    // `elim` itself binds nothing (unlike `lam`/`pi`): `params`/`indices`/
+    // `motive`/`scrutinee` are walked under the same `bound` set, and so are
     // `minors` -- each minor is its own self-contained lambda chain
     // (`Term.lam` nodes), whose own binders the `lam` arm above already
     // adds when this recurses into one.
     Term.elim e =>
         union_ids (free_names_of_terms bound e.params)
-            (union_ids (free_names_of_term bound e.motive)
-                (union_ids (free_names_of_terms bound e.minors)
-                    (free_names_of_term bound e.scrutinee))),
+            (union_ids (free_names_of_terms bound e.indices)
+                (union_ids (free_names_of_term bound e.motive)
+                    (union_ids (free_names_of_terms bound e.minors)
+                        (free_names_of_term bound e.scrutinee)))),
 }
 
 #[partial]
@@ -213,15 +214,16 @@ def collect_referenced_names (t : Term) (acc : List String) : List String := mat
     // referenced only under a cubical argument would be invisible to
     // `filter_reachable_decls` and the link would fail with `undefined @X`.
     Term.cubical c => match c { { prim := _, args := args } => collect_referenced_names_terms args acc },
-    // MUST recurse into all four term-bearing fields, same failure shape
+    // MUST recurse into every term-bearing field, same failure shape
     // as `ctx`/`cubical` above: a name referenced only in a dependent
-    // `motive`, an inductive `param`, a minor, or the scrutinee would
-    // otherwise be invisible to `filter_reachable_decls`.
+    // `motive`, an inductive `param`/`index`, a minor, or the scrutinee
+    // would otherwise be invisible to `filter_reachable_decls`.
     Term.elim e =>
         collect_referenced_names e.scrutinee
             (collect_referenced_names_terms e.minors
                 (collect_referenced_names e.motive
-                    (collect_referenced_names_terms e.params acc))),
+                    (collect_referenced_names_terms e.indices
+                        (collect_referenced_names_terms e.params acc)))),
 }
 
 #[partial]

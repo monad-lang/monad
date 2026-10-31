@@ -7,16 +7,18 @@
 // because R4's own landing (PR #119) added its white-box pins but never
 // this file -- a gap the R5 reconnaissance caught and this PR closes.
 //
-// Deliberately TERM-level for the `Elim` itself, not source-level: the
-// parser never produces a `Term.elim` (`elaborate_if_to_elim`/
-// `elaborate_match_to_elim`, R3b, are the only builders, and neither is
-// wired into `type_check_if`/`type_check_match` yet -- that is R3c), so
-// there is no SOURCE SNIPPET that reaches `type_check_elim` today. Every
-// pin hand-builds the `Elim` it checks and runs it through the public
-// `type_check` dispatcher (`Term.elim e => type_check_elim e ...`)
-// rather than the non-`pub` rule directly -- the same `accepted`/
-// `rejected`-style indirection `harness.mo` already uses for leaf rules
-// it cannot name.
+// Deliberately TERM-level for the `Elim` itself, not source-level: R3c now
+// wires `type_check_if`/`type_check_match` to RETURN an `Elim`, so a source
+// `match` whose result type depends on the scrutinee does reach
+// `type_check_elim` (via the dependent fallback; see
+// `proofs/src/dependent.mo`). These pins stay term-level anyway, for the
+// original reason: a hand-built `Elim` names exactly the one rule it tests,
+// whereas a source snippet exercises the whole dispatch and both the checking
+// and iota paths at once. Every pin here hand-builds the `Elim` it checks and
+// runs it through the public `type_check` dispatcher
+// (`Term.elim e => type_check_elim e ...`) rather than the non-`pub` rule
+// directly -- the same `accepted`/`rejected`-style indirection `harness.mo`
+// already uses for leaf rules it cannot name.
 //
 // The SCOPE each `Elim` resolves `inductive`/constructors against IS
 // source-level, though: this mote cannot reach `Multiplicity.many` /

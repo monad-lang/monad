@@ -14,6 +14,7 @@ use lang::types {
   ScopeDef, Term, i64, id_eq, nid, sentinel, show_module_path, show_name_path,
 }
 use lib::typecheck::infer {empty_locals, last_dotted_segment}
+use lib::elim_lower {elim_to_literal}
 
 /// Lowers Monad's checked, de-Bruijn `Term` (`lang/types.mo`) to
 /// `CoreIr` (`lang/core_ir.mo`), mirroring `rust/core/src/lower_core_ir.rs`
@@ -177,16 +178,12 @@ pub type LowerError {
   /// rather than reused, following `le_struct_lit_survived`'s own
   /// precedent -- this used to be a bare missing arm too.
   le_unresolved_macro_artifact,
-  /// A `Term.elim` reached lowering. Unlike `cubical`, this is NOT a
-  /// type-level term -- `if`/`match` are genuine runtime eliminators, and
-  /// `core-term-simplification.md` R3a adds the `Term.elim` variant with
-  /// no production site and no lowering yet; iota reduction over it is
-  /// R5's job (`whnf.mo`), and this meta-eval interpreter -- a separate
-  /// evaluator from the compiled backend's -- needs its own lowering rule
-  /// once something constructs one. Named for the same reason
-  /// `le_unresolved_macro_artifact` is: a bare missing arm here is a
-  /// crash with no cause named.
-  le_elim_not_lowered,
+  /// A `Term.elim` that `elim_to_literal` could not lower: an unresolvable
+  /// inductive, a minor with fewer lambdas than its constructor has fields,
+  /// or a minor/constructor count mismatch. Every `Term.elim` the checker
+  /// produces is well-formed, so this is a defensive diagnostic for a
+  /// hand-built or best-effort term rather than a reachable program state.
+  le_elim_ill_formed (reason : String),
 }
 
 /// Accumulates whole-program global discovery + lowering. See this
@@ -557,6 +554,27 @@ def find_case_inductive (scope : Scope) (cases : List MatchCase) : Option Induct
     }
   else find_case_inductive_by_first_case scope cases
 
+/// Resolve a match's inductive, preferring an EXPLICIT `MatchCase.typ_name`
+/// when a caller supplied one. The `Elim` reconstruction sets it on every
+/// case, which is strictly better than the name/arity search below; ordinary
+/// parsed cases leave it `Option.none` and keep that search unchanged.
+def find_case_inductive_typed (scope : Scope) (cases : List MatchCase) : Option Inductive :=
+  match case_typ_name cases {
+    Option.none => find_case_inductive scope cases,
+    Option.some np =>
+      match scope_find_inductive np scope {
+        Result.err _ => find_case_inductive scope cases,
+        Result.ok ind => Option.some ind,
+      },
+  }
+
+/// The head case's own `typ_name`, if it carries one.
+def case_typ_name (cases : List MatchCase) : Option NamePath :=
+  match cases {
+    List.empty => Option.none,
+    List.cons c _ => match c { MatchCase.mk _ _ _ _ typ_name => typ_name },
+  }
+
 /// Guards `find_inductive_matching_all_cases` against a match built from
 /// nothing but wildcard cases (e.g. `match v { _ => default }`) -- with
 /// no explicit case to constrain anything, `inductive_matches_all_cases`
@@ -730,7 +748,7 @@ def lower_match_arms
 def lower_match (ctx : LowerCtx) (value : Term) (cases : List MatchCase) (acc : LowerAcc) : Pair (Result LowerError CoreIr) LowerAcc :=
   if is_dict_projection_scrutinee value then lower_dict_projection ctx value cases acc
   else
-  match find_case_inductive (ctx_scope ctx) cases {
+  match find_case_inductive_typed (ctx_scope ctx) cases {
     Option.none => lower_err (LowerError.le_unknown_inductive (ModulePath.mk List.empty)) acc,
     Option.some ind =>
       lower_then (lower_term ctx value acc) (fn vir => fn acc1 =>
@@ -889,7 +907,7 @@ pub def show_lower_error (e : LowerError) : String :=
     LowerError.le_struct_lit_survived => "struct literal reached lowering un-desugared (give the literal an explicit `: StructName` annotation, or bind it to an annotated local)",
     LowerError.le_float_literal_unsupported => "float literals are not supported by the evaluator (the eval IR cannot carry one yet)",
     LowerError.le_unresolved_macro_artifact => "an unresolved macro-template variable or quote reached lowering",
-    LowerError.le_elim_not_lowered => "a dependent match/if reached meta-eval lowering with no lowering rule yet",
+    LowerError.le_elim_ill_formed reason => String.concat "a dependent match/if could not be lowered: " reason,
     LowerError.le_in_def path inner => String.concat "in def " (String.concat (show_module_path path) (String.concat ": " (show_lower_error inner))),
   }
 
@@ -946,9 +964,17 @@ def lower_term (ctx : LowerCtx) (t : Term) (acc : LowerAcc) : Pair (Result Lower
     // be here mid-macro-expansion.
     Term.quote_ _inner => lower_err LowerError.le_unresolved_macro_artifact acc,
     Term.var_macro _idx _dbg => lower_err LowerError.le_unresolved_macro_artifact acc,
-    // See `le_elim_not_lowered`'s own doc comment: R3a is additive only,
-    // nothing constructs a `Term.elim` yet, so this is unreachable today.
-    Term.elim _e => lower_err LowerError.le_elim_not_lowered acc,
+    // `core-term-simplification.md` R3c: the checker returns a `Term.elim`
+    // for `if`/`match`. Lower it through the same conversion codegen's
+    // whole-program pass uses (`elim_to_literal`), then re-enter this
+    // function on the `Literal` form -- `lower_term` is `#[partial]`, and the
+    // converted term is a `Term.lit`, so this is a representation step, not a
+    // new evaluation rule.
+    Term.elim e =>
+      match elim_to_literal (ctx_scope ctx) e {
+        Result.err reason => lower_err (LowerError.le_elim_ill_formed reason) acc,
+        Result.ok converted => lower_term ctx converted acc,
+      },
   }
 
 // ─── Whole-program global table: the worklist pass ──────────────────

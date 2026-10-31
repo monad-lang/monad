@@ -3383,6 +3383,7 @@ def def_references_class (constrained_def_classes : HashMap String (List String)
         // silent miscompile).
         Term.elim e =>
             terms_reference_class constrained_def_classes cls_str e.params
+                || terms_reference_class constrained_def_classes cls_str e.indices
                 || def_references_class constrained_def_classes cls_str e.motive
                 || terms_reference_class constrained_def_classes cls_str e.minors
                 || def_references_class constrained_def_classes cls_str e.scrutinee,
@@ -7399,14 +7400,15 @@ def find_unresolved_class_calls_term (classes : List Class) (t : Term) (acc : Li
     // module's own doc comment above on that rewrite), so it carries no
     // new information.
     Term.var_macro _idx _dbg => acc,
-    // Must recurse into all four term-bearing fields: an unresolved class
+    // Must recurse into every term-bearing field: an unresolved class
     // call under a dependent `motive`, one of the inductive's own
-    // `params`, a minor, or the scrutinee is still unresolved.
+    // `params`/`indices`, a minor, or the scrutinee is still unresolved.
     Term.elim e =>
         find_unresolved_class_calls_term classes e.scrutinee
             (find_unresolved_class_calls_terms classes e.minors
                 (find_unresolved_class_calls_term classes e.motive
-                    (find_unresolved_class_calls_terms classes e.params acc))),
+                    (find_unresolved_class_calls_terms classes e.indices
+                        (find_unresolved_class_calls_terms classes e.params acc)))),
 }
 
 #[partial]

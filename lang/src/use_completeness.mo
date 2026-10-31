@@ -781,7 +781,9 @@ def collect_term (t : Term) (refs : Refs) : Refs :=
         // below, generalized to a plain list of minors instead of
         // `MatchCase`s.
         Term.elim e =>
-            collect_terms e.minors (collect_term e.motive (collect_terms e.params (collect_term e.scrutinee refs))),
+            collect_terms e.minors
+                (collect_term e.motive
+                    (collect_terms e.indices (collect_terms e.params (collect_term e.scrutinee refs)))),
     }
 
 #[partial]

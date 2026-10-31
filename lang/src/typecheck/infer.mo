@@ -1375,6 +1375,38 @@ def type_check_lit (value : Literal) (expected_type : Term) (scope : Scope) (loc
             type_check_struct_update base fields expected_type scope local_types locals,
     }
 
+/// `Bool`'s own `Inductive`, resolved from the ambient prelude, for an `if`'s
+/// `Elim`. `Option.none` on a synthetic scope (a test fixture built without
+/// the prelude) keeps the `Literal.if_` fallback.
+def find_bool_inductive (scope : Scope) : Option Inductive :=
+    match scope_find_inductive (NamePath.mk (List.cons (Identifier.id "Bool") List.empty)) scope {
+        Result.err _ => Option.none,
+        Result.ok ind => Option.some ind,
+    }
+
+/// One minor per `Bool` constructor, in DECLARATION order, mapped by NAME
+/// (`true` is `then`, `false` is `else`) rather than by position.
+/// `compile_db_if_ir`'s `ensure_i1_cond` anchors to the constructor tag named
+/// `true`, and `elaborate_if_to_elim`'s "true is constructor 0" is only a
+/// prelude-convention assumption.
+def bool_elim_minors (ctors : List InductConstructor) (then_term : Term) (else_term : Term) : List Term :=
+    match ctors {
+        List.empty => List.empty,
+        List.cons ctor rest =>
+            List.cons (bool_minor_for_ctor ctor then_term else_term)
+                (bool_elim_minors rest then_term else_term),
+    }
+
+def bool_minor_for_ctor (ctor : InductConstructor) (then_term : Term) (else_term : Term) : Term :=
+    match ctor {
+        InductConstructor.mk cname _params _typ =>
+            if Similar.similar (constructor_bare_name cname) (Identifier.id "true")
+            then then_term
+            else if Similar.similar (constructor_bare_name cname) (Identifier.id "false")
+            then else_term
+            else then_term,
+    }
+
 /// Type check an if expression.
 ///
 /// The condition's expected type is `Bool`, spelled the way the parser
@@ -1409,8 +1441,30 @@ def type_check_if (one : Term) (two : Term) (three : Term) (expected_type : Term
                             match body_type_error three els_typ then_typ scope locals {
                                 Option.some e => err e,
                                 Option.none =>
-                                    let lit_val : Literal := Literal.if_ cond_term then_term els_term in
-                                    ok (mk_typed (Term.lit lit_val) then_typ),
+                                    match find_bool_inductive scope {
+                                        // No `Bool` (a synthetic test scope):
+                                        // keep the old literal shape.
+                                        Option.none =>
+                                            let lit_val : Literal := Literal.if_ cond_term then_term els_term in
+                                            ok (mk_typed (Term.lit lit_val) then_typ),
+                                        // R3c full flip: every `if` is a `Bool`
+                                        // `Elim`, with a constant motive (the
+                                        // two branches already share `then_typ`).
+                                        // An un-informative result type keeps the
+                                        // literal: a hole motive would be
+                                        // rejected by `type_check_elim` on any
+                                        // later re-check of this term.
+                                        Option.some ind =>
+                                            if is_hole then_typ
+                                            then
+                                                let lit_val : Literal := Literal.if_ cond_term then_term els_term in
+                                                ok (mk_typed (Term.lit lit_val) then_typ)
+                                            else
+                                                let motive : Term := Term.lam binder_anon bool_typ (term_shift 1 then_typ) in
+                                                let minors : List Term := bool_elim_minors (inductive_constructors ind) then_term els_term in
+                                                let e : Elim := Elim.mk ind.name List.empty List.empty List.empty motive minors cond_term in
+                                                ok (mk_typed (Term.elim e) then_typ),
+                                    },
                             },
                         err e => err e,
                     },
@@ -1420,6 +1474,16 @@ def type_check_if (one : Term) (two : Term) (three : Term) (expected_type : Term
     }
 
 /// Type check a match expression.
+///
+/// R3c full flip. Legacy-first: the existing non-dependent case pipeline runs
+/// first and, on success, its checked cases are REPACKAGED as an `Elim` with a
+/// constant motive (no re-checking -- the arms were just checked against
+/// `expected_type`), so every accepted corpus program keeps its exact
+/// semantics. Two cases stay on the old `Literal.match_` path: an
+/// unresolvable inductive (`maybe_ind = Option.none`) and an INCOMPLETE match
+/// (deliberate `#[allow_incomplete_match]` uses exist, and a hole minor cannot
+/// be peeled back into a case). Only a match the old rule REJECTS can reach
+/// the dependent fallback, which derives a motive and runs `type_check_elim`.
 #[terminating]
 def type_check_match (value_ : Term) (cases : List MatchCase) (expected_type : Term) (scope : Scope) (local_types : List Term) (locals : LocalScope) : Result TypeError TypedTerm :=
     match type_check value_ Term.hole scope local_types locals {
@@ -1428,9 +1492,124 @@ def type_check_match (value_ : Term) (cases : List MatchCase) (expected_type : T
             let sc_typ : Term := sc_tt.typ in
             match validate_match_constructors cases sc_term sc_typ scope {
                 err e => err e,
-                ok maybe_ind => type_check_cases cases sc_term sc_typ maybe_ind expected_type scope local_types locals,
+                ok maybe_ind =>
+                    match type_check_cases_accum cases sc_term sc_typ maybe_ind expected_type scope local_types locals Term.hole List.empty {
+                        ok acc =>
+                            match acc {
+                                mk body_typ checked_cases =>
+                                    match unify body_typ expected_type scope locals {
+                                        ok unified_typ =>
+                                            match maybe_ind {
+                                                Option.none =>
+                                                    let lit_val : Literal := Literal.match_ sc_term checked_cases in
+                                                    ok (mk_typed (Term.lit lit_val) unified_typ),
+                                                Option.some ind =>
+                                                    if List.is_empty (uncovered_constructors checked_cases ind)
+                                                        && Bool.not (is_hole unified_typ)
+                                                    then
+                                                        let e : Elim := elim_from_checked_cases ind sc_term sc_typ checked_cases unified_typ in
+                                                        ok (mk_typed (Term.elim e) unified_typ)
+                                                    else
+                                                        let lit_val : Literal := Literal.match_ sc_term checked_cases in
+                                                        ok (mk_typed (Term.lit lit_val) unified_typ),
+                                            },
+                                        err e => err e,
+                                    },
+                            },
+                        // Legacy rejected it. Try dependent refinement; when
+                        // it does not APPLY, the legacy diagnostic is the
+                        // honest one. When it applies and fails, its own
+                        // diagnostic is.
+                        err legacy_err =>
+                            match try_dependent_match cases sc_term sc_typ maybe_ind expected_type scope local_types locals {
+                                Option.none => err legacy_err,
+                                Option.some dependent => dependent,
+                            },
+                    },
             },
         err e => err e,
+    }
+
+/// Repackage already-checked cases as an `Elim` with a CONSTANT motive --
+/// today's non-dependent result, in the core's one elimination form. Mirrors
+/// `elaborate_match_to_elim` (R3b), but takes the checked cases and the final
+/// unified type rather than re-deriving them.
+def elim_from_checked_cases (ind : Inductive) (sc_term : Term) (sc_typ : Term)
+    (checked_cases : List MatchCase) (result_typ : Term) : Elim :=
+    let params : List Term := match flatten_call_spine sc_typ { CallSpine.mk _head args => args } in
+    let motive : Term := Term.lam binder_anon sc_typ (term_shift 1 result_typ) in
+    let maybe_ind : Option Inductive := Option.some ind in
+    let minors : List Term := build_elim_minors (inductive_constructors ind) checked_cases sc_typ maybe_ind in
+    Elim.mk ind.name List.empty params List.empty motive minors sc_term
+
+/// The dependent fallback: refine the scrutinee to each constructor. Returns
+/// `Option.none` when it does not APPLY (so the caller keeps the legacy
+/// diagnostic) and `Option.some` with the rule's own result when it does.
+/// Scoped to a BOUND-VARIABLE scrutinee, an informative expected type, a
+/// NON-INDEXED inductive (the scrutinee's type spine equals its declared
+/// params), complete coverage, and positional cases (a raw field-pattern arm
+/// cannot be turned into a minor here -- `type_check_field_pattern_case`
+/// resolves it only while type-checking).
+#[terminating]
+def try_dependent_match (cases : List MatchCase) (sc_term : Term) (sc_typ : Term)
+    (maybe_ind : Option Inductive) (expected_type : Term) (scope : Scope)
+    (local_types : List Term) (locals : LocalScope) : Option (Result TypeError TypedTerm) :=
+    match maybe_ind {
+        Option.none => Option.none,
+        Option.some ind =>
+            match term_peel sc_term {
+                Term.var idx _dbg =>
+                    if I64.beq idx sentinel
+                    then Option.none
+                    else if dependent_match_gate_ok ind sc_typ expected_type cases
+                    then
+                        let motive : Term := derive_motive idx sc_typ expected_type in
+                        let params : List Term := match flatten_call_spine sc_typ { CallSpine.mk _head args => args } in
+                        let maybe_ind_ : Option Inductive := Option.some ind in
+                        let minors : List Term := build_elim_minors (inductive_constructors ind) cases sc_typ maybe_ind_ in
+                        let e : Elim := Elim.mk ind.name List.empty params List.empty motive minors sc_term in
+                        Option.some (type_check_elim e expected_type scope local_types locals)
+                    else Option.none,
+                _ => Option.none,
+            },
+    }
+
+/// The fallback's preconditions, all of which must hold before deriving a
+/// motive. `uncovered_constructors` is the DIRECT coverage test (it ignores
+/// `incomplete_match_ok`), and the spine-length check is what keeps indexed
+/// families (`Eq`/`Vec`) out: their `Elim` needs a motive over each index, not
+/// just the scrutinee.
+///
+/// Deliberately NOT gated on `mentions_uninstantiated_typevar`: for a dependent
+/// motive the "uninstantiated" names are exactly the legitimately-bound
+/// `B`/`F`/`E` type families the motive abstracts over (and `Bool` ctor
+/// arguments); rejecting them would refuse the very shape this fallback
+/// exists for. If the expected type is genuinely unsound to refine, the
+/// motive's own sort check and the minor comparison report it.
+def dependent_match_gate_ok (ind : Inductive) (sc_typ : Term) (expected_type : Term)
+    (cases : List MatchCase) : Bool :=
+    let spine_args : List Term := match flatten_call_spine (term_peel sc_typ) { CallSpine.mk _head args => args } in
+    I64.beq (List.length spine_args) (List.length ind.params)
+        && Bool.not (is_hole expected_type)
+        && Bool.not (term_has_hole expected_type)
+        && Bool.not (is_sort_typ expected_type)
+        && Bool.not (cases_have_field_pattern cases)
+        && List.is_empty (uncovered_constructors cases ind)
+
+/// Any arm written as a field pattern (`{ x, y } => ...`). The dependent
+/// fallback uses the RAW cases, and only `type_check_field_pattern_case`
+/// resolves/permutes those, so such a match stays on the legacy path.
+def cases_have_field_pattern (cases : List MatchCase) : Bool :=
+    match cases {
+        List.empty => false,
+        List.cons c rest =>
+            match c {
+                MatchCase.mk _name _args _body fp _typ_name =>
+                    match fp {
+                        Option.some _ => true,
+                        Option.none => cases_have_field_pattern rest,
+                    },
+            },
     }
 
 // ─── R4: the `Elim` typing rule (core-term-simplification.md) ───────────
@@ -1473,24 +1652,21 @@ def free_var_ref (np : NamePath) : Term :=
 // (`subst.mo`, this step's own new primitive) in exactly the one `Term.lam`
 // `type_check_elim_motive` expects to peel.
 //
-// NOT wired into `type_check_if`/`type_check_match` -- that would mean
-// giving `type_check_match` a real `Term.elim`-producing fallback path,
-// which is `R3c`'s job, and R3c's own reconnaissance
-// (`core-term-simplification.md`) found that blocked on `emit.mo`/
-// `lower_core_ir.mo` gaining real `Term.elim` support first. So a real
-// source-level `def Sigma.snd := match p { dpair a b => b }` still cannot
-// be *written and compiled* after this step -- what this step delivers is
-// the derivation RULE itself, pinned directly against `type_check_elim`
-// the same way R4's own dependent-motive pin exercises the CHECKING rule
-// without going through real `match` syntax.
+// Wired into `type_check_match`'s dependent fallback (`try_dependent_match`,
+// R3c): when the legacy non-dependent rule REJECTS a match whose scrutinee is
+// a bound variable and whose expected type is informative, this derives the
+// motive and `type_check_elim` re-checks the raw arms against
+// `motive (K args)`. That is what makes a real source-level
+// `def Sigma.snd := match p { dpair a b => b }` writeable and compilable.
 //
 // Scoped to a scrutinee that is itself an ordinary BOUND VARIABLE
 // (`scrutinee_idx`), matching `term_abstract_var`'s own documented scope --
-// not an arbitrary compound scrutinee expression, and not an INDEXED
-// family's extra index arguments (`Eq A a b`'s `b`, needed for `Eq.rec`/
-// `T.rec` -- recorded as a separate, not-yet-scoped follow-on, R4c, since
-// it needs `Elim` itself to grow an indices field, a `Term`-shape change
-// on the order of R3a, not just a new substitution primitive).
+// not an arbitrary compound scrutinee expression, and NOT an indexed family's
+// extra index arguments (`Eq A a b`'s `b`). R4c's `Elim.indices` field and the
+// rule that checks a motive over it exist; deriving those indices from a
+// source match is a separate follow-on, so the surface fallback requires the
+// scrutinee's type spine to have exactly its inductive's declared params
+// (`dependent_match_gate_ok`).
 def derive_motive (scrutinee_idx : I64) (scrutinee_typ : Term) (expected_type : Term) : Term :=
     Term.lam binder_anon scrutinee_typ (term_abstract_var scrutinee_idx expected_type)
 
@@ -1541,6 +1717,15 @@ def type_check_elim (e : Elim) (expected_type : Term) (scope : Scope)
             },
     }
 
+/// Is `motive` a lambda whose body is more informative than a hole? Used by
+/// `type_check_elim_motive`'s constant-motive escape when the checker cannot
+/// kind the body (a bare inductive type name currently answers a hole).
+def elim_motive_body_is_informative (motive : Term) : Bool :=
+    match term_peel motive {
+        Term.lam _b _typ body => has_informative_head body,
+        _ => false,
+    }
+
 /// Checks `e`'s motive infers to a function into a sort, its domain
 /// agreeing with the scrutinee's real type -- the
 /// `type_check_pathp_go`/`type_check_hcomp_go` pattern, generalized from
@@ -1568,11 +1753,28 @@ def type_check_elim_motive (e : Elim) (ind : Inductive) (sc_term : Term) (sc_typ
                         err err_ => err err_,
                         ok cod =>
                             match sort_level_of cod {
-                                Option.none => err (TypeError.custom
-                                    "Term.elim's motive must be a function into a sort"),
                                 Option.some _l =>
                                     type_check_elim_minors e ind motive_tt.term sc_term
                                         sc_typ expected_type scope local_types locals,
+                                // A CONSTANT motive (`fn _ => T`) whose body type
+                                // the checker cannot kind (`type_check P` for a
+                                // bare inductive name answers a hole today) is
+                                // accepted when the caller supplies an
+                                // informative expected type: the elim's result
+                                // type is then `T`, which the final unify checks
+                                // against that expectation. A hole BODY or a
+                                // hole expectation still fails -- the negative
+                                // pin (`lambda _ => hole`, expected `hole`) keeps
+                                // its answer.
+                                Option.none =>
+                                    if is_hole cod
+                                        && Bool.not (is_hole expected_type)
+                                        && elim_motive_body_is_informative motive_tt.term
+                                    then
+                                        type_check_elim_minors e ind motive_tt.term sc_term
+                                            sc_typ expected_type scope local_types locals
+                                    else err (TypeError.custom
+                                        "Term.elim's motive must be a function into a sort"),
                             },
                     },
             },
@@ -1749,7 +1951,52 @@ def type_check_elim_minor (ctor : InductConstructor) (minor : Term) (ind : Induc
             (rebuild_call shifted_motive (List.append ctor_indices (List.cons ctor_app List.empty))) in
     match type_check minor expected_minor_typ scope local_types locals {
         err err_ => err err_,
-        ok minor_tt => ok minor_tt.term,
+        ok minor_tt =>
+            // The check above is REFLEXIVE for an informative Pi codomain:
+            // `type_check_lam_explicit` returns the expected type verbatim
+            // (`lam_typ := expected_type`), and the leaf rules never consult
+            // an expectation, so comparing `minor_tt.typ` with
+            // `expected_minor_typ` would be `unify(expected, expected)` and
+            // close nothing (R4b's own measured "wrong motive is accepted"
+            // hole). Infer the minor INDEPENDENTLY and compare THAT type.
+            //
+            // The comparison drops `body_type_error`'s "mentions a skolem/
+            // unbound type variable" guard: for a dependent minor those
+            // variables are exactly the legitimately-bound `B`/`F` a motive
+            // abstracts over, and skipping them is why R4b's negative control
+            // could never discriminate. `elim_minor_type_error` keeps only the
+            // hole (unfinished term) and sort (cumulativity) guards.
+            match type_check minor Term.hole scope local_types locals {
+                // UNINFERRABLE minor: keep the expected-driven check's
+                // answer. A constructor field type that mentions an earlier
+                // field (`Sigma`'s `snd : B fst`) leaves `fst` unresolved
+                // under independent inference, which would otherwise reject a
+                // legitimate minor; this is the same "no information, skip the
+                // comparison" rule `body_type_error` applies. Where inference
+                // DOES work -- every ordinary dependent minor, including the
+                // swapped-arm control in `proofs/src/dependent.mo` -- the
+                // comparison below still runs.
+                err _ => ok minor_tt.term,
+                ok inferred =>
+                    match elim_minor_type_error minor inferred.typ expected_minor_typ scope locals {
+                        Option.some e => err e,
+                        Option.none => ok minor_tt.term,
+                    },
+            },
+    }
+
+/// The Elim rule's own minor comparison -- `body_type_error` with the
+/// skolem/unbound-type-variable guard REMOVED (see `type_check_elim_minor`'s
+/// doc comment). `Term.hole` on either side is accepted by `unify`; a sort on
+/// the expected side is skipped because `unify` does not implement
+/// cumulativity (`type_check_sort_full` compares sorts by level).
+def elim_minor_type_error (minor : Term) (inferred : Term) (expected : Term)
+    (scope : Scope) (locals : LocalScope) : Option TypeError :=
+    if term_has_hole minor then Option.none
+    else if is_sort_typ expected then Option.none
+    else match unify expected inferred scope locals {
+        Result.ok _ => Option.none,
+        Result.err e => Option.some e,
     }
 
 /// This constructor's own concrete index value(s) (R4c) -- substitute the
@@ -1849,12 +2096,11 @@ def build_elim_minor_pi_chain (field_types : List Term) (body : Term) : Term :=
 //
 // `elaborate_if_to_elim`/`elaborate_match_to_elim` build the `Term.elim`
 // that an `if`/`match` COULD be, with a CONSTANT motive -- the same
-// non-dependent result `type_check_if`/`type_check_match` already produce
-// today. Deliberately NOT called from either of those yet: that is R3c,
-// gated on R4, since the checker has no typing rule for `Elim` with a
-// real motive until then, and wiring this in early would make every
-// `if`/`match` uncheckable. Exercised directly by pins in
-// `lang/src/tests/infer_tests.mo` instead.
+// non-dependent result the checker produced before R3c. R3c is now WIRED
+// (`type_check_if`/`type_check_match` return an `Elim` and
+// `elim_from_checked_cases` does the repackaging inline); these two remain
+// as pinned reference builders, kept for their own tests in
+// `lang/src/tests/infer_tests.mo`.
 
 /// `if c t e` as an `Elim` on `Bool`: two nullary constructors, so each
 /// minor is its branch TERM unchanged -- no lambda wrapping needed, the
@@ -2550,22 +2796,6 @@ pub def match_coverage_warning (cases : List MatchCase) (maybe_ind : Option Indu
         Option.some p => match p {
             Pair.pair ind missing => Option.some (non_exhaustive_match_message ind missing),
         },
-    }
-
-/// Type check match cases — process all cases and unify their body types.
-def type_check_cases (cases : List MatchCase) (scrutinee_term : Term) (scrutinee_typ : Term) (maybe_ind : Option Inductive) (expected_type : Term) (scope : Scope) (local_types : List Term) (locals : LocalScope) : Result TypeError TypedTerm :=
-    match type_check_cases_accum cases scrutinee_term scrutinee_typ maybe_ind expected_type scope local_types locals (Term.hole) List.empty {
-        ok acc =>
-            match acc {
-                mk body_typ checked_cases =>
-                    match unify body_typ expected_type scope locals {
-                        ok unified_typ =>
-                            let lit_val : Literal := Literal.match_ scrutinee_term checked_cases in
-                            ok (mk_typed (Term.lit lit_val) unified_typ),
-                        err e => err e,
-                    },
-            },
-        err e => err e,
     }
 
 /// Recursively type-check each case, accumulating checked cases and a

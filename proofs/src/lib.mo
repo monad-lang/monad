@@ -15,3 +15,4 @@
 
 pub use lib::equiv {*}
 pub use lib::paths {*}
+pub use lib::dependent {*}

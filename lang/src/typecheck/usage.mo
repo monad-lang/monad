@@ -59,6 +59,7 @@ use lib::types {
   Literal, Location, MatchCase, ModulePath, Multiplicity, NamePath, Native, Param, Scope,
   ScopeData, SortLevel, StructLitField, Term, Visibility, binder_anon, binder_binder,
   binder_explicit, binder_is_explicit, binder_name, binder_named, has_attr, show_identifier, show_name_path,
+  term_peel,
 }
 use lib::scope {
   find_constructor_in_inductive, scope_data_empty, scope_find_all_inductives_by_constructor,
@@ -1038,6 +1039,13 @@ def view_at (idx : I64) (e : ViewEnv) : Bool :=
 /// ordinary function call, which produces a fresh value — the answer is
 /// false. The residual hole is a def that returns a field of its argument
 /// without saying so (the plan's R8 family).
+/// `#[terminating]`: the `Term.elim` arm descends through
+/// `expr_is_view_minors` (a `#[partial]` list walk) back into this function
+/// with a minor's peeled body, which the positional decrease check cannot see
+/// as a structural subterm of `t` -- the same weak-check case the attribute
+/// documents. The walk is well-founded: each recursion strips a constructor
+/// node or a list cell.
+#[terminating]
 pub def expr_is_view (shareds : HashMap String Bool) (e : ViewEnv) (t : Term) : Bool :=
     match t {
         Term.var idx _dbg => view_at idx e,
@@ -1070,7 +1078,42 @@ pub def expr_is_view (shareds : HashMap String Bool) (e : ViewEnv) (t : Term) : 
         Term.quote_ _inner => false,
         Term.cubical c =>
             match c { { prim := _, args := args } => expr_is_view_terms shareds e args },
-        Term.elim _e => false,
+        // Mirrors the `Literal.match_` arm above: the result is a view when
+        // the scrutinee is, or when some minor's body is with its field
+        // binders marked as views. Minors are lambda chains, so peel the
+        // leading binders and push the scrutinee's flag for each. Peeling
+        // ALL leading lambdas over-marks a minor whose body is itself a
+        // closure -- the documented safe direction (a needless escape
+        // report, never a stored view). Destructured, not projected: the
+        // termination checker needs the pattern-bound form.
+        Term.elim elim =>
+            match elim {
+                { inductive := _, levels := _, params := _, indices := _, motive := _,
+                  minors := minors, scrutinee := scrutinee } =>
+                    let sv : Bool := expr_is_view shareds e scrutinee in
+                    sv || expr_is_view_minors shareds e sv minors,
+            },
+    }
+
+/// OR over a dependent match's positional minors -- see the `Term.elim`
+/// arm in `expr_is_view`.
+#[partial]
+def expr_is_view_minors (shareds : HashMap String Bool) (e : ViewEnv) (scrut_view : Bool) (minors : List Term) : Bool :=
+    match minors {
+        List.empty => false,
+        List.cons m rest =>
+            expr_is_view_minor shareds e scrut_view m
+                || expr_is_view_minors shareds e scrut_view rest,
+    }
+
+/// Peel a minor's leading `Term.lam` binders (transparent `ctx` included),
+/// pushing one view flag per binder, then ask whether the body is a view.
+#[partial]
+def expr_is_view_minor (shareds : HashMap String Bool) (e : ViewEnv) (scrut_view : Bool) (minor : Term) : Bool :=
+    let peeled : Term := term_peel minor in
+    match peeled {
+        Term.lam _b _typ body => expr_is_view_minor shareds (view_push scrut_view e) scrut_view body,
+        _ => expr_is_view shareds e peeled,
     }
 
 #[partial]

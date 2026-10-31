@@ -1552,10 +1552,10 @@ pub def binder_name (b : Binder) : DebugName :=
 /// functions only ever build those, so this list is `List.empty`
 /// everywhere one is actually constructed today.
 ///
-/// R3a is purely additive: nothing in the tree constructs one yet (that is
-/// R3b/R3c), so every walker's new `Term.elim` arm below is unreachable in
-/// any program today and is verified by the corpus check/sweep reporting
-/// the SAME counts as before this step, not by any behaviour change.
+/// R3c wired the pipeline: `type_check_if`/`type_check_match` now RETURN a
+/// `Term.elim`, and both backends lower it back to a `Literal` before codegen
+/// (`lang/src/elim_lower.mo`). Every walker's `elim` arm is therefore live, not
+/// unreachable.
 pub struct Elim {
     inductive : NamePath,
     levels : List SortLevel,
@@ -1687,8 +1687,8 @@ pub type Term {
     /// there: `similar_term_go` is a hand-expanded cross product over this
     /// type's variants and nothing checks it for exhaustiveness.
     cubical (c: Cubical),
-    /// The one eliminator -- see `Elim` above. R3a: purely additive, no
-    /// production site yet.
+    /// The one eliminator -- see `Elim` above. R3c: `if`/`match` elaborate
+    /// into this; the backends lower it via `lang/src/elim_lower.mo`.
     elim (e: Elim),
 }
 
