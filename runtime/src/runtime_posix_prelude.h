@@ -41,4 +41,9 @@
 #include <sys/ioctl.h>
 #include <poll.h>
 #include <limits.h>
+#if defined(__linux__)
+/* `std/watch.mo`'s four natives (platform_posix.c); the rest of the POSIX
+   surface is portable, this one header is Linux's. */
+#include <sys/inotify.h>
+#endif
 

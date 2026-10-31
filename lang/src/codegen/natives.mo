@@ -655,6 +655,14 @@ def native_runtime_fn_name (attrs : List Attribute) : Option NativeWrapKind :=
             else if String.beq target "stream_set_timeout" then Option.some (NativeWrapKind.raw_io_passthrough "monad_stream_set_timeout")
             else if String.beq target "stream_read_line" then Option.some (NativeWrapKind.raw_io_passthrough "monad_stream_read_line")
             else if String.beq target "std_fd" then Option.some (NativeWrapKind.passthrough "monad_std_fd")
+            // `std/watch.mo`'s inotify family: four `RawIO` natives behind
+            // `.mo` wrappers, all `raw_io_passthrough` (the `Result`, the
+            // fd/`BufObj` words and the `Unit` come back raw). A watch IS an
+            // `FdStream`, so no handle type is involved.
+            else if String.beq target "inotify_init" then Option.some (NativeWrapKind.raw_io_passthrough "monad_inotify_init")
+            else if String.beq target "inotify_add_watch" then Option.some (NativeWrapKind.raw_io_passthrough "monad_inotify_add_watch")
+            else if String.beq target "inotify_rm_watch" then Option.some (NativeWrapKind.raw_io_passthrough "monad_inotify_rm_watch")
+            else if String.beq target "inotify_read" then Option.some (NativeWrapKind.raw_io_passthrough "monad_inotify_read")
             else Option.none,
     }
 
@@ -970,6 +978,14 @@ pub def runtime_declarations_for (kind : TargetKind) : List LLVMDeclaration :=
     // `stream_read_line` (runtime.c): stream, bound and discard flag in;
     // a `Result`/`Option` pointer out.
     let d107 := mk_decl "monad_stream_read_line" ["i64", "i64", "i64"] "i64" in
+    // `std/watch.mo`'s inotify family (platform_posix.c): the watch is an
+    // `FdStream` (one i64 word), the path a string word, the mask/timeout/
+    // bound i64s, and every result -- `Result`, fd, watch descriptor, `Unit`
+    // or `BufObj` pointer -- one i64 word under the same convention.
+    let d117 := mk_decl "monad_inotify_init" ["i64"] "i64" in
+    let d118 := mk_decl "monad_inotify_add_watch" ["i64", "i64", "i64"] "i64" in
+    let d119 := mk_decl "monad_inotify_rm_watch" ["i64", "i64"] "i64" in
+    let d120 := mk_decl "monad_inotify_read" ["i64", "i64", "i64"] "i64" in
     // `std/concurrent/channel.mo` (platform_posix.c): the channel handle is
     // one i64 word, `put`'s value another, and every result is i64 --
     // `channel_put` returns the Unit constructor pointer, `channel_take`
@@ -987,7 +1003,8 @@ pub def runtime_declarations_for (kind : TargetKind) : List LLVMDeclaration :=
      d65, d66, d66a, d67, d72,
      d74, d76, d78, d79, d80, d81, d82, d83, d84, d85, d87,
      d88, d91, d92, d93, d94, d95, d96, d97, d98, d99, d99a, d99b, d100, d101, d102, d103,
-     d104, d105, d106, d107, d108, d109, d110, d111, d112, d113, d114, d115, d116]
+     d104, d105, d106, d107, d108, d109, d110, d111, d112, d113, d114, d115, d116,
+     d117, d118, d119, d120]
 
 /// The native target's declaration list -- the historical name, kept for
 /// every existing caller and test.
@@ -1009,6 +1026,7 @@ def wasm_os_only_natives : List String := [
     "proc_stream_fd", "proc_wait", "tcp_connect_timeout", "tcp_listen",
     "tcp_listen_on", "tcp_accept", "tcp_local_port", "file_exists", "is_dir", "list_dir",
     "get_env", "stream_open", "stream_poll", "stream_set_timeout", "term_ctl",
+    "inotify_init", "inotify_add_watch", "inotify_rm_watch", "inotify_read",
 ]
 
 /// Natives whose C implementation needs `strtod`; the web profile is

@@ -227,6 +227,19 @@ grep -q 'fork_io' "$tmp/gate-wasi.log" \
 grep -q 'not available on target' "$tmp/gate-wasi.log" \
     || fail "wasi gate did not explain the target: $(cat "$tmp/gate-wasi.log")"
 
+# `std/watch.mo`'s inotify family is Linux-only: a reachable `Watch.new` is
+# the same clean target error on either wasm profile, not a link failure.
+for profile in wasm32-unknown-unknown wasm32-unknown-wasip1; do
+    if "$MONAD" build --target "$profile" fixtures/wasm/web_watch.mo \
+        -o "$tmp/gate-watch-$profile.wasm" --no-cache >"$tmp/gate-watch.log" 2>&1; then
+        fail "$profile build accepted inotify_init"
+    fi
+    grep -q 'inotify_init' "$tmp/gate-watch.log" \
+        || fail "$profile gate did not name inotify_init: $(cat "$tmp/gate-watch.log")"
+    grep -q 'not available on target' "$tmp/gate-watch.log" \
+        || fail "$profile gate did not explain the target: $(cat "$tmp/gate-watch.log")"
+done
+
 echo "== gating: web externs fail on native =="
 if "$MONAD" build fixtures/wasm/web_extern_native.mo \
     -o "$tmp/gate-native" --no-cache >"$tmp/gate-native.log" 2>&1; then

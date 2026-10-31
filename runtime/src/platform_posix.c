@@ -1919,6 +1919,95 @@ int64_t monad_std_fd(int64_t which) {
     return which;
 }
 
+/* ─── inotify (`std/watch.mo`) ────────────────────────────────────────
+   A watch IS an `FdStream` over the kernel's inotify queue: the four
+   natives below are the whole OS surface, and `Watch.decode`
+   (`std/src/watch.mo`) parses the 16-byte `inotify_event` headers in
+   Monad. That split is deliberate -- the parser is unit-tested over
+   synthetic bytes, and this file never looks inside an event.
+
+   `inotify_read` is poll+read in one call rather than `stream_poll`
+   followed by `stream_read`: a timeout is then an EMPTY buffer in both
+   backends (the Rust host has no `stream_poll`), and the "ready but
+   EAGAIN" race has one answer instead of two.
+
+   Linux only. On another POSIX target (macOS) the four functions exist
+   and fail with ENOSYS, so `Watch.new` is an ordinary `StreamError` and
+   a caller with a polling fallback keeps working -- rather than the
+   link failing for a target that has no inotify at all. */
+#if defined(__linux__)
+
+/* `inotify_init : I64 -> RawIO (Result (Pair I64 String) FdStream)` --
+   the init flags are `Watch.init_flags` (IN_NONBLOCK|IN_CLOEXEC). */
+void* monad_inotify_init(int64_t flags) {
+    int fd;
+    do {
+        fd = inotify_init1((int)flags);
+    } while (fd < 0 && errno == EINTR);
+    if (fd < 0) return stream_os_err("inotify_init", errno);
+    stream_carry_clear(fd); /* a reused descriptor inherits nothing */
+    return tcp_ok((void*)(int64_t)fd);
+}
+
+/* `inotify_add_watch : FdStream -> String -> I64 -> RawIO (Result (Pair
+   I64 String) I64)` -- one DIRECTORY, the watch descriptor out. */
+void* monad_inotify_add_watch(int64_t fd, char* path, int64_t mask) {
+    int wd = inotify_add_watch((int)fd, path ? path : "", (uint32_t)mask);
+    if (wd < 0) return stream_os_err("inotify_add_watch", errno);
+    return tcp_ok((void*)(int64_t)wd);
+}
+
+/* `inotify_rm_watch : FdStream -> I64 -> RawIO (Result (Pair I64 String)
+   Unit)`. */
+void* monad_inotify_rm_watch(int64_t fd, int64_t watch) {
+    if (inotify_rm_watch((int)fd, (int)watch) != 0)
+        return stream_os_err("inotify_rm_watch", errno);
+    return tcp_ok(tcp_unit());
+}
+
+/* `inotify_read : FdStream -> I64 -> I64 -> RawIO (Result (Pair I64
+   String) ByteBuf)` -- wait at most `timeout_ms` for events (negative
+   waits forever), then one read of at most `max_bytes`.
+
+   A TIMEOUT IS AN EMPTY BUFFER, not an error: that is how
+   `Watch.next` reports "nothing happened". The kernel returns EINVAL
+   rather than split an event, and `Watch.read_bytes` (4 KiB) is larger
+   than the largest event (16 + NAME_MAX + 1), so a read never truncates
+   one. */
+void* monad_inotify_read(int64_t fd, int64_t timeout_ms, int64_t max_bytes) {
+    struct pollfd pfd;
+    pfd.fd = (int)fd;
+    pfd.events = POLLIN;
+    pfd.revents = 0;
+    int rc = poll_one(&pfd, timeout_ms);
+    if (rc < 0) return stream_os_err("inotify_read", errno);
+    if (rc == 0) return tcp_ok(bytebuf_new(0));
+    return monad_stream_read(fd, max_bytes);
+}
+#else
+void* monad_inotify_init(int64_t flags) {
+    (void)flags;
+    return stream_os_err("inotify_init", ENOSYS);
+}
+void* monad_inotify_add_watch(int64_t fd, char* path, int64_t mask) {
+    (void)fd;
+    (void)path;
+    (void)mask;
+    return stream_os_err("inotify_add_watch", ENOSYS);
+}
+void* monad_inotify_rm_watch(int64_t fd, int64_t watch) {
+    (void)fd;
+    (void)watch;
+    return stream_os_err("inotify_rm_watch", ENOSYS);
+}
+void* monad_inotify_read(int64_t fd, int64_t timeout_ms, int64_t max_bytes) {
+    (void)fd;
+    (void)timeout_ms;
+    (void)max_bytes;
+    return stream_os_err("inotify_read", ENOSYS);
+}
+#endif
+
 /* ─── Raw stdio (`std/io.mo`'s raw-stdio group) ──────────────────────
    The two stdio operations the byte streams above cannot express:
    `read_stdin_exact`'s fill-to-n read and a real stdout flush. Writing

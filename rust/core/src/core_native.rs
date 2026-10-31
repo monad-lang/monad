@@ -399,6 +399,13 @@ pub fn exec_native(
     "stream_fd" => stream_fd(args, natives),
     "stream_read_line" => stream_read_line(args, natives),
     "std_fd" => std_fd(args),
+    // `std/watch.mo`'s inotify family: a watch is an `FdStream` slot, so the
+    // four natives sit beside the byte streams and share their registry.
+    // Linux only; elsewhere they report ENOSYS, matching the C stubs.
+    "inotify_init" => inotify_init(args, natives),
+    "inotify_add_watch" => inotify_add_watch(args, natives),
+    "inotify_rm_watch" => inotify_rm_watch(args, natives),
+    "inotify_read" => inotify_read(args, natives),
     "bytebuf_len" => bytebuf_len(args),
     // `CoreEvalError::UnknownNative` is keyed by id everywhere else (the
     // evaluator, which has the id on hand when the id itself is out of
@@ -1789,6 +1796,22 @@ fn fd_streams() -> Result<std::sync::MutexGuard<'static, Vec<Option<FdEntry>>>, 
     .map_err(|_| CoreEvalError::NativeArgError("stream registry poisoned".into()))
 }
 
+/// Register `entry` in the stream table and return its slot -- the
+/// `FdStream` value. Slots 0-2 are the preassigned stdio entries; a slot a
+/// previous `stream_close` freed is reused before the table grows.
+fn fd_stream_slot(entry: FdEntry) -> Result<i64, CoreEvalError> {
+  let mut reg = fd_streams()?;
+  let slot = match reg.iter().skip(3).position(|e| e.is_none()) {
+    Some(i) => i + 3,
+    None => {
+      reg.push(None);
+      reg.len() - 1
+    }
+  };
+  reg[slot] = Some(entry);
+  Ok(slot as i64)
+}
+
 // ── Ref (std/src/ref.mo) ────────────────────────────────────────────────
 //
 // A `Ref` is a slot in `CELLS`, an I64 registry index like `FdStream`'s.
@@ -2079,16 +2102,8 @@ fn stream_open(args: &[Value], natives: &NativeTable) -> Result<Value, CoreEvalE
   let result = match opened {
     Err(e) => make_stream_err(natives, "stream_open", &e)?,
     Ok(f) => {
-      let mut reg = fd_streams()?;
-      let slot = match reg.iter().skip(3).position(|e| e.is_none()) {
-        Some(i) => i + 3,
-        None => {
-          reg.push(None);
-          reg.len() - 1
-        }
-      };
-      reg[slot] = Some(FdEntry::new(FdKind::File(f)));
-      make_result_ok(natives, Value::Lit(IrLit::Num(slot as i64, NumSuffix::I64)))?
+      let slot = fd_stream_slot(FdEntry::new(FdKind::File(f)))?;
+      make_result_ok(natives, Value::Lit(IrLit::Num(slot, NumSuffix::I64)))?
     }
   };
   raw_io_wrap(natives, result)
@@ -2612,6 +2627,159 @@ fn stream_fd(args: &[Value], natives: &NativeTable) -> Result<Value, CoreEvalErr
 fn std_fd(args: &[Value]) -> Result<Value, CoreEvalError> {
   let which = extract_int(&stream_args(args, 1, "std_fd")?[0])?;
   Ok(Value::Lit(IrLit::Num(which, NumSuffix::I64)))
+}
+
+// ── inotify (`std/watch.mo`) ─────────────────────────────────────────────
+//
+// A watch is an `FD_STREAMS` slot over the kernel queue, exactly like an
+// open file, so `stream_read`/`stream_close` already work on it and only
+// the four syscalls below are new. `inotify_read` is poll+read in ONE call:
+// a timeout is an EMPTY buffer, which is what `Watch.next` reports as "no
+// events", and it avoids depending on `stream_poll`, which this host does
+// not implement.
+//
+// Linux only, like `platform_posix.c`'s half. On any other target the three
+// syscalls report ENOSYS so an interpreted run matches the compiled stubs
+// rather than failing to build.
+
+#[cfg(target_os = "linux")]
+fn inotify_init1_raw(flags: i64) -> std::io::Result<i64> {
+  let fd = unsafe { libc::inotify_init1(flags as libc::c_int) };
+  if fd < 0 {
+    Err(std::io::Error::last_os_error())
+  } else {
+    Ok(fd as i64)
+  }
+}
+
+#[cfg(not(target_os = "linux"))]
+fn inotify_init1_raw(_flags: i64) -> std::io::Result<i64> {
+  Err(std::io::Error::from_raw_os_error(libc::ENOSYS))
+}
+
+#[cfg(target_os = "linux")]
+fn inotify_add_watch_raw(fd: std::os::fd::RawFd, path: &str, mask: i64) -> std::io::Result<i64> {
+  let c =
+    std::ffi::CString::new(path).map_err(|_| std::io::Error::from_raw_os_error(libc::EINVAL))?;
+  let wd = unsafe { libc::inotify_add_watch(fd, c.as_ptr(), mask as u32) };
+  if wd < 0 {
+    Err(std::io::Error::last_os_error())
+  } else {
+    Ok(wd as i64)
+  }
+}
+
+#[cfg(not(target_os = "linux"))]
+fn inotify_add_watch_raw(_fd: std::os::fd::RawFd, _path: &str, _mask: i64) -> std::io::Result<i64> {
+  Err(std::io::Error::from_raw_os_error(libc::ENOSYS))
+}
+
+#[cfg(target_os = "linux")]
+fn inotify_rm_watch_raw(fd: std::os::fd::RawFd, watch: i64) -> std::io::Result<()> {
+  let rc = unsafe { libc::inotify_rm_watch(fd, watch as libc::c_int) };
+  if rc != 0 {
+    Err(std::io::Error::last_os_error())
+  } else {
+    Ok(())
+  }
+}
+
+#[cfg(not(target_os = "linux"))]
+fn inotify_rm_watch_raw(_fd: std::os::fd::RawFd, _watch: i64) -> std::io::Result<()> {
+  Err(std::io::Error::from_raw_os_error(libc::ENOSYS))
+}
+
+/// `inotify_init : I64 -> RawIO (Result (Pair I64 String) FdStream)`.
+fn inotify_init(args: &[Value], natives: &NativeTable) -> Result<Value, CoreEvalError> {
+  use std::os::fd::FromRawFd;
+  let args = stream_args(args, 1, "inotify_init")?;
+  let flags = extract_int(&args[0])?;
+  let result = match inotify_init1_raw(flags) {
+    Err(e) => make_stream_err(natives, "inotify_init", &e)?,
+    Ok(fd) => {
+      let file = unsafe { std::fs::File::from_raw_fd(fd as std::os::fd::RawFd) };
+      let slot = fd_stream_slot(FdEntry::new(FdKind::File(file)))?;
+      make_result_ok(natives, Value::Lit(IrLit::Num(slot, NumSuffix::I64)))?
+    }
+  };
+  raw_io_wrap(natives, result)
+}
+
+/// `inotify_add_watch : FdStream -> String -> I64 -> RawIO (Result (Pair
+/// I64 String) I64)` -- one directory; the watch descriptor out.
+fn inotify_add_watch(args: &[Value], natives: &NativeTable) -> Result<Value, CoreEvalError> {
+  use std::os::fd::AsRawFd;
+  let args = stream_args(args, 3, "inotify_add_watch")?;
+  let handle = extract_int(&args[0])?;
+  let path = extract_string(&args[1])?;
+  let mask = extract_int(&args[2])?;
+  let result = match fd_target(handle, "inotify_add_watch")? {
+    Ok(FdTarget::File(file)) => match inotify_add_watch_raw(file.as_raw_fd(), path, mask) {
+      Err(e) => make_stream_err(natives, "inotify_add_watch", &e)?,
+      Ok(wd) => make_result_ok(natives, Value::Lit(IrLit::Num(wd, NumSuffix::I64)))?,
+    },
+    _ => make_stream_err(natives, "inotify_add_watch", &ebadf())?,
+  };
+  raw_io_wrap(natives, result)
+}
+
+/// `inotify_rm_watch : FdStream -> I64 -> RawIO (Result (Pair I64 String)
+/// Unit)`.
+fn inotify_rm_watch(args: &[Value], natives: &NativeTable) -> Result<Value, CoreEvalError> {
+  use std::os::fd::AsRawFd;
+  let args = stream_args(args, 2, "inotify_rm_watch")?;
+  let handle = extract_int(&args[0])?;
+  let watch = extract_int(&args[1])?;
+  let result = match fd_target(handle, "inotify_rm_watch")? {
+    Ok(FdTarget::File(file)) => match inotify_rm_watch_raw(file.as_raw_fd(), watch) {
+      Err(e) => make_stream_err(natives, "inotify_rm_watch", &e)?,
+      Ok(()) => make_result_ok(natives, unit_value())?,
+    },
+    _ => make_stream_err(natives, "inotify_rm_watch", &ebadf())?,
+  };
+  raw_io_wrap(natives, result)
+}
+
+/// `inotify_read : FdStream -> I64 -> I64 -> RawIO (Result (Pair I64 String)
+/// ByteBuf)` -- wait up to `timeout_ms` (negative = forever), then one read
+/// of at most `max_bytes`. A timeout is an EMPTY buffer, not an error.
+fn inotify_read(args: &[Value], natives: &NativeTable) -> Result<Value, CoreEvalError> {
+  use std::os::fd::AsRawFd;
+  let args = stream_args(args, 3, "inotify_read")?;
+  let handle = extract_int(&args[0])?;
+  let timeout = extract_int(&args[1])?;
+  let max = extract_int(&args[2])?.max(0) as usize;
+  let timeout = if timeout < 0 {
+    -1
+  } else {
+    timeout.min(i32::MAX as i64) as libc::c_int
+  };
+  let read = match fd_target(handle, "inotify_read")? {
+    Ok(FdTarget::File(file)) => {
+      let mut pfd = libc::pollfd {
+        fd: file.as_raw_fd(),
+        events: libc::POLLIN,
+        revents: 0,
+      };
+      let rc = unsafe { libc::poll(&mut pfd, 1, timeout) };
+      if rc < 0 {
+        Err(std::io::Error::last_os_error())
+      } else if rc == 0 {
+        Ok(Vec::new())
+      } else {
+        stream_read_target(FdTarget::File(file), max)
+      }
+    }
+    _ => Err(ebadf()),
+  };
+  let result = match read {
+    Err(e) => make_stream_err(natives, "inotify_read", &e)?,
+    Ok(bytes) => {
+      let id = crate::runtime::global::register(bytes);
+      make_result_ok(natives, handle_value(id))?
+    }
+  };
+  raw_io_wrap(natives, result)
 }
 
 fn bytebuf_free(args: &[Value], natives: &NativeTable) -> Result<Value, CoreEvalError> {
