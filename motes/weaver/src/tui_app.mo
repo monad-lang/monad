@@ -437,8 +437,10 @@ def store_result_step (m : TuiModel) (e : Option String) : Pair TuiModel (Cmd We
             let st0 : WeaverState := m.state in
             let st : WeaverState := { st0 with store := Option.none } in
             let line : String := String.concat "warning: transcript persistence disabled: " msg in
-            let m2 : TuiModel := Model.append_lines { m with state := st, plan_ready := false } [TLine.plain line] in
-            if m2.queued_ready then start_queued m2 else Pair.pair m2 (Cmd.none),
+            let m2 : TuiModel := Model.append_lines { m with state := st } [TLine.plain line] in
+            if m2.plan_ready
+            then Pair.pair { m2 with plan_ready := false } (plan_prompt_cmd m2.state)
+            else if m2.queued_ready then start_queued m2 else Pair.pair m2 (Cmd.none),
     }
 
 /// A turn's or command's completion: the fold `f` runs, the streak
@@ -1089,10 +1091,7 @@ def submit_line (m : TuiModel) (text : String) : Pair TuiModel (Cmd WeaverMsg) :
             let _ <- write_echo store start block;
             run_submitted_line m.log gen st text
         })
-        (fn (e : FiberError) => do {
-            Logs.error m.log (String.concat "ev=fiber_error " (FiberError.message e));
-            IO.pure (turn_never_ran st.run e)
-        }))
+        (turn_never_ran st.run))
 
 /// `enter_key`'s fiber-error message: the turn never ran, so it fails
 /// against the run state it started from. Classed `io`, which is
