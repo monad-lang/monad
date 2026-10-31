@@ -228,6 +228,14 @@ def native_runtime_fn_name (attrs : List Attribute) : Option NativeWrapKind :=
             else if String.beq target "cell_set" then Option.some (NativeWrapKind.raw_io_passthrough "monad_cell_set")
             else if String.beq target "cell_update" then Option.some (NativeWrapKind.raw_io_passthrough "monad_cell_update")
             else if String.beq target "cell_add_i64" then Option.some (NativeWrapKind.raw_io_passthrough "monad_cell_add_i64")
+            // `init/src/view.mo`: the linear `Cell` handle. All four are
+            // `RawIO`-typed with a thin `.mo` wrapper. `view_free`
+            // POISONS rather than freeing (the block is Boehm-owned), so
+            // this is not a real free until ownership O3/O4.
+            else if String.beq target "view_new" then Option.some (NativeWrapKind.raw_io_passthrough "monad_view_new")
+            else if String.beq target "view_get" then Option.some (NativeWrapKind.raw_io_passthrough "monad_view_get")
+            else if String.beq target "view_set" then Option.some (NativeWrapKind.raw_io_passthrough "monad_view_set")
+            else if String.beq target "view_free" then Option.some (NativeWrapKind.raw_io_passthrough "monad_view_free")
             // `String.hash`'s `#[native string_hash]` -- pure `U64`
             // result, same shape as `string_length`. `IO.file_exists`/
             // `is_dir` (`std/io.mo`, `#[native "X_native"]` on the
@@ -930,6 +938,12 @@ pub def runtime_declarations_for (kind : TargetKind) : List LLVMDeclaration :=
     let d110 := mk_decl "monad_cell_set" ["i64", "i64"] "i64" in
     let d111 := mk_decl "monad_cell_update" ["i64", "i64"] "i64" in
     let d112 := mk_decl "monad_cell_add_i64" ["i64", "i64"] "i64" in
+    // `init/src/view.mo` (runtime_core.c): a Cell handle, its payload, and
+    // the same handle back are each one i64 word.
+    let d121 := mk_decl "monad_view_new" ["i64"] "i64" in
+    let d122 := mk_decl "monad_view_get" ["i64"] "i64" in
+    let d123 := mk_decl "monad_view_set" ["i64", "i64"] "i64" in
+    let d124 := mk_decl "monad_view_free" ["i64"] "i64" in
     // The piped-subprocess family (runtime.c) -- every handle, string
     // and `List String` is one i64 word under the uniform boxed
     // convention (`Child` is an opaque registry index, `FdStream`'s own
@@ -1004,7 +1018,7 @@ pub def runtime_declarations_for (kind : TargetKind) : List LLVMDeclaration :=
      d74, d76, d78, d79, d80, d81, d82, d83, d84, d85, d87,
      d88, d91, d92, d93, d94, d95, d96, d97, d98, d99, d99a, d99b, d100, d101, d102, d103,
      d104, d105, d106, d107, d108, d109, d110, d111, d112, d113, d114, d115, d116,
-     d117, d118, d119, d120]
+     d117, d118, d119, d120, d121, d122, d123, d124]
 
 /// The native target's declaration list -- the historical name, kept for
 /// every existing caller and test.

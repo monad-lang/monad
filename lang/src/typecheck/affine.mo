@@ -66,8 +66,11 @@
 /// not earn its own variant yet.
 use lib::types {DebugName, Def, Identifier, ModulePath, Multiplicity, Scope, Term, TypeConstraint, TypeError, binder_explicit, binder_named, id_member, show_identifier}
 use lib::scope {scope_data_empty}
-use lib::typecheck::usage {BinderKind, BinderUse, attribute_binder_types, collect_binder_uses, typ_is_function}
+use lib::typecheck::usage {BinderKind, BinderUse, attribute_binder_types, collect_binder_uses, collect_binder_uses_with_params, typ_is_function}
 use lib::typecheck::copy_class {is_copy}
+use lib::typecheck::type_kinds {
+  TypeKinds, is_linear_type, is_proof_type, type_kinds_empty,
+}
 use std::map {HashMap}
 use llvm::strmap {str_map_empty, str_map_insert}
 
@@ -94,19 +97,33 @@ pub def effective_mult (scope : Scope) (declared : Multiplicity) (typ : Term) : 
 /// therefore SAY it may (`[Copy A]`), and this list is where that
 /// permission lands.
 pub def effective_mult_with_vars (scope : Scope) (copy_vars : List Identifier) (declared : Multiplicity) (typ : Term) : Multiplicity :=
-    match declared {
-        // Explicit annotations are strict: Design B says they are never
-        // rescued by Copy. `!Qubit` stays linear even if someone writes
-        // an instance for it.
-        Multiplicity.linear => Multiplicity.linear,
-        Multiplicity.zero => Multiplicity.zero,
-        Multiplicity.affine => Multiplicity.affine,
-        // The unannotated case. NOT ω -- see this file's header.
-        Multiplicity.many =>
-            if is_copy scope typ then Multiplicity.many
-            else if type_var_is_copy copy_vars typ then Multiplicity.many
-            else Multiplicity.affine,
-    }
+    effective_mult_with_kinds type_kinds_empty scope copy_vars declared typ
+
+/// The rule with `#[linear]`/`#[proof]` type kinds in hand.
+///
+/// A proof type is ALWAYS linear (view-types rule 1), regardless of the
+/// prefix -- `?`/`%` on one is rejected by `check_binder_with`. A
+/// `#[linear]` type is linear unless `?x` explicitly relaxes it to affine
+/// (QTT Phase 7's override). `%` on a linear type is rejected too.
+pub def effective_mult_with_kinds (kinds : TypeKinds) (scope : Scope) (copy_vars : List Identifier) (declared : Multiplicity) (typ : Term) : Multiplicity :=
+    if is_proof_type kinds typ then Multiplicity.linear
+    else
+        match declared {
+            // Explicit annotations are strict: Design B says they are never
+            // rescued by Copy. `!Qubit` stays linear even if someone writes
+            // an instance for it.
+            Multiplicity.linear => Multiplicity.linear,
+            Multiplicity.zero => Multiplicity.zero,
+            // `?x` is the documented relaxation for a `#[linear]` type.
+            Multiplicity.affine => Multiplicity.affine,
+            // The unannotated case. NOT ω -- see this file's header. A
+            // `#[linear]` type takes the linear row here.
+            Multiplicity.many =>
+                if is_linear_type kinds typ then Multiplicity.linear
+                else if is_copy scope typ then Multiplicity.many
+                else if type_var_is_copy copy_vars typ then Multiplicity.many
+                else Multiplicity.affine,
+        }
 
 /// Does this effective multiplicity permit unrestricted use?
 pub def permits_sharing (m : Multiplicity) : Bool :=
@@ -121,10 +138,9 @@ pub def permits_sharing (m : Multiplicity) : Bool :=
 
 /// The diagnostic this binder earns, if any.
 ///
-/// `declared` is threaded in rather than read off `BinderUse`, which
-/// carries no multiplicity: annotations die at `pt_lam`
-/// (`lang/src/parser.mo`) and the corpus writes none. Every caller
-/// passes `Multiplicity.many` today.
+/// `declared` is threaded in rather than read off `BinderUse` by callers
+/// that build one by hand; the always-on rule (`check_binders_go`) passes
+/// `BinderUse.declared u`, which carries the source's prefix.
 ///
 /// The over-use gates compare the BORROW-AWARE budget `count -
 /// borrowed`, not the raw count: `f (Shared.of x); g (Shared.of x)`
@@ -134,7 +150,7 @@ pub def permits_sharing (m : Multiplicity) : Bool :=
 /// doc comment says why a separately-maxed count would under-count),
 /// so the budget is exact across match arms too.
 pub def check_binder (scope : Scope) (declared : Multiplicity) (u : BinderUse) : Option TypeError :=
-    check_binder_with scope List.empty false declared u
+    check_binder_with type_kinds_empty scope List.empty false declared u
 
 /// The checking variant used by the always-on rule: `copy_vars` is the
 /// def's `[Copy A]` permission list, and `strict` selects fail-closed
@@ -149,7 +165,7 @@ pub def check_binder (scope : Scope) (declared : Multiplicity) (u : BinderUse) :
 /// binder whose constructor is corpus-ambiguous -- is left alone. The
 /// report keeps calling `check_def_strict`, so its numbers stay an upper
 /// bound.
-pub def check_binder_with (scope : Scope) (copy_vars : List Identifier) (strict : Bool) (declared : Multiplicity) (u : BinderUse) : Option TypeError :=
+pub def check_binder_with (kinds : TypeKinds) (scope : Scope) (copy_vars : List Identifier) (strict : Bool) (declared : Multiplicity) (u : BinderUse) : Option TypeError :=
     let typ : Term := BinderUse.typ u in
     let uses : I64 := BinderUse.count u in
     let borrowed : I64 := BinderUse.borrowed u in
@@ -187,7 +203,7 @@ pub def check_binder_with (scope : Scope) (copy_vars : List Identifier) (strict 
         // walk reads as its declared parameter stays fail-closed -- the
         // plan's known attribution gap.)
         let payload_shared : Bool :=
-            permits_sharing (effective_mult_with_vars scope copy_vars Multiplicity.many typ) in
+            permits_sharing (effective_mult_with_kinds kinds scope copy_vars Multiplicity.many typ) in
         if I64.gt owning 0 && Bool.not payload_shared
         then Option.some (TypeError.borrowed_value_escapes name typ)
         else Option.none
@@ -195,8 +211,17 @@ pub def check_binder_with (scope : Scope) (copy_vars : List Identifier) (strict 
        && is_unannotated declared
        && Bool.not (typ_is_attributable typ)
     then Option.none
+    // A proof is forced linear (view-types rule 1): `?`/`%` are not legal
+    // spellings for one. This is checked before the ordinary rule because
+    // the ordinary rule would silently accept `?pf` as affine.
+    else if is_proof_type kinds typ && erases_proof declared
+    then Option.some (TypeError.proof_erased_binder name typ)
+    // A `#[linear]` type has a run-time representation, so it cannot be
+    // erased; `?x` remains the documented relaxation to affine.
+    else if is_linear_type kinds typ && is_zero_mult declared
+    then Option.some (TypeError.linear_erased_binder name typ)
     else
-    match effective_mult_with_vars scope copy_vars declared typ {
+    match effective_mult_with_kinds kinds scope copy_vars declared typ {
         // Unrestricted: nothing to check.
         Multiplicity.many => Option.none,
         // Exactly once.
@@ -218,6 +243,20 @@ pub def check_binder_with (scope : Scope) (copy_vars : List Identifier) (strict 
                     (String.concat "erased `" (String.concat (show_identifier name)
                         "` is used at run time")))
             else Option.none,
+    }
+
+/// `?x` or `%x` — the two spellings a proof binder may not carry.
+def erases_proof (declared : Multiplicity) : Bool :=
+    match declared {
+        Multiplicity.affine => true,
+        Multiplicity.zero => true,
+        _ => false,
+    }
+
+def is_zero_mult (declared : Multiplicity) : Bool :=
+    match declared {
+        Multiplicity.zero => true,
+        _ => false,
     }
 
 /// Did the source omit a multiplicity? `Multiplicity.many` is the
@@ -268,22 +307,44 @@ def over_use_error (name : Identifier) (typ : Term) (budget : I64) (owning : I64
 /// `ctor_name_set`/`shared_name_set` (`lang/typecheck/usage.mo`) are
 /// the builders.
 #[partial]
-pub def check_def (scope : Scope) (ctors : HashMap String Bool) (borrows : HashMap String Bool) (d : Def) : List TypeError :=
-    check_def_with scope ctors borrows false d
+pub def check_def (kinds : TypeKinds) (scope : Scope) (ctors : HashMap String Bool) (borrows : HashMap String Bool) (d : Def) : List TypeError :=
+    check_def_with kinds scope ctors borrows false d
 
 /// The report's variant: fail-closed on an unattributable binder, so the
 /// migration cost stays an upper bound. Every number in
 /// `bench/src/affine_report.mo` comes from this one.
 #[partial]
-pub def check_def_strict (scope : Scope) (ctors : HashMap String Bool) (borrows : HashMap String Bool) (d : Def) : List TypeError :=
-    check_def_with scope ctors borrows true d
+pub def check_def_strict (kinds : TypeKinds) (scope : Scope) (ctors : HashMap String Bool) (borrows : HashMap String Bool) (d : Def) : List TypeError :=
+    check_def_with kinds scope ctors borrows true d
 
 #[partial]
-def check_def_with (scope : Scope) (ctors : HashMap String Bool) (borrows : HashMap String Bool) (strict : Bool) (d : Def) : List TypeError :=
-    let raw : List BinderUse := collect_binder_uses ctors borrows (def_body d) in
-    let attributed : List BinderUse := attribute_binder_types scope raw in
-    let copy_vars : List Identifier := copy_vars_of_def d in
-    List.reverse (check_binders_go scope copy_vars strict attributed List.empty)
+def check_def_with (kinds : TypeKinds) (scope : Scope) (ctors : HashMap String Bool) (borrows : HashMap String Bool) (strict : Bool) (d : Def) : List TypeError :=
+    // A body-less declaration (`#[native]`, `#[extern "c"]`, a `def`
+    // written without `:=`) has parameters but no body to use them in.
+    // Its `!`/`%` prefixes describe the call ABI, not a body obligation,
+    // so `linear_unused` must not fire on it.
+    if def_has_no_body (def_body d) then List.empty
+    else
+        // `Def.params` carries the source's `!`/`?`/`%`; the parameter-aware
+        // walker aligns it with the leading lambda chain (skipping generated
+        // `__dict_` binders) and computes captures against the remaining
+        // parameter binders, which are not closures.
+        let raw : List BinderUse :=
+            collect_binder_uses_with_params d.params ctors borrows (def_body d) in
+        let attributed : List BinderUse := attribute_binder_types scope raw in
+        let copy_vars : List Identifier := copy_vars_of_def d in
+        List.reverse (check_binders_go kinds scope copy_vars strict attributed List.empty)
+
+/// Does this term end its leading lambda chain in a hole -- i.e. is the
+/// def a declaration rather than a definition?
+#[terminating]
+def def_has_no_body (t : Term) : Bool :=
+    match t {
+        Term.ctx _loc inner => def_has_no_body inner,
+        Term.lam _b _typ body => def_has_no_body body,
+        Term.hole => true,
+        _ => false,
+    }
 
 /// The type variables the def's `[Copy A]` constraints license. This is
 /// the polymorphic half of the Copy gate: `copy_class.mo` resolves type
@@ -338,15 +399,17 @@ def type_var_name (t : Term) : Option Identifier :=
 def def_body (d : Def) : Term := d.term
 
 #[partial]
-def check_binders_go (scope : Scope) (copy_vars : List Identifier) (strict : Bool) (us : List BinderUse) (acc : List TypeError) : List TypeError :=
+def check_binders_go (kinds : TypeKinds) (scope : Scope) (copy_vars : List Identifier) (strict : Bool) (us : List BinderUse) (acc : List TypeError) : List TypeError :=
     match us {
         List.empty => acc,
         List.cons u rest =>
-            // Every binder is unannotated in today's corpus; see
-            // `check_binder`.
-            match check_binder_with scope copy_vars strict Multiplicity.many u {
-                Option.some e => check_binders_go scope copy_vars strict rest (List.cons e acc),
-                Option.none => check_binders_go scope copy_vars strict rest acc,
+            // The binder's own declared prefix: the parameter-aware
+            // collector wrote a def parameter's `!`/`?`/`%` in, a match binder carries
+            // its constructor field's prefix, and anything unattributed is
+            // the parser's `many` (= unannotated, read as affine).
+            match check_binder_with kinds scope copy_vars strict (BinderUse.declared u) u {
+                Option.some e => check_binders_go kinds scope copy_vars strict rest (List.cons e acc),
+                Option.none => check_binders_go kinds scope copy_vars strict rest acc,
             },
     }
 
@@ -369,20 +432,41 @@ def a_type : Term := Term.var (0 - 1) (DebugName.named (Identifier.id "Term"))
 def binder (uses : I64) (owning : I64) : BinderUse :=
     { name := Identifier.id "x", kind := BinderKind.bk_lam, typ := a_type,
       count := uses, owning := owning, ctor := Identifier.id "", pos := 0 - 1,
-      view := false }
+      view := false, declared := Multiplicity.many, init := Option.none }
 
 /// A function-typed binder with `moves` transfers of the closure.
 def fn_binder (uses : I64) (moves : I64) : BinderUse :=
     let typ : Term := Term.pi (binder_explicit (DebugName.named (Identifier.id "a"))) Term.hole Term.hole in
     { name := Identifier.id "f", kind := BinderKind.bk_lam, typ := typ,
       count := uses, owning := moves, moves := moves,
-      ctor := Identifier.id "", pos := 0 - 1, view := false }
+      ctor := Identifier.id "", pos := 0 - 1, view := false,
+      declared := Multiplicity.many, init := Option.none }
 
 /// A binder whose uses split between real and borrowed.
 def borrowable (uses : I64) (borrowed : I64) (owning : I64) : BinderUse :=
     { name := Identifier.id "x", kind := BinderKind.bk_lam, typ := a_type,
       count := uses, borrowed := borrowed, owning := owning,
-      ctor := Identifier.id "", pos := 0 - 1, view := false }
+      ctor := Identifier.id "", pos := 0 - 1, view := false,
+      declared := Multiplicity.many, init := Option.none }
+
+/// A binder carrying a declared prefix, for the rule's declared-mult
+/// path.
+def declared_binder (m : Multiplicity) (uses : I64) : BinderUse :=
+    { name := Identifier.id "x", kind := BinderKind.bk_lam, typ := a_type,
+      count := uses, owning := 0, ctor := Identifier.id "", pos := 0 - 1,
+      view := false, declared := m, init := Option.none }
+
+#[test]
+def test_check_binders_go_uses_declared : Bool :=
+    // Zero uses of a `!x` is `linear_unused`; the SAME binder under the
+    // old hardcoded `many` would be affine and legal. This is the
+    // discriminator that the declared multiplicity actually reaches the
+    // judgement.
+    match check_binders_go type_kinds_empty probe_scope List.empty false
+            (List.cons (declared_binder Multiplicity.linear 0) List.empty) List.empty {
+        List.cons _ _ => true,
+        List.empty => false,
+    }
 
 #[test]
 def test_unannotated_is_affine_not_many : Bool :=
@@ -464,12 +548,12 @@ def test_a_view_of_a_copy_constrained_payload_may_be_stored : Bool :=
     let base : BinderUse := binder 1 1 in
     let u : BinderUse := { base with view := true, typ := a_type_var } in
     let exempt : Bool :=
-        match check_binder_with probe_scope [Identifier.id "A"] false Multiplicity.many u {
+        match check_binder_with type_kinds_empty probe_scope [Identifier.id "A"] false Multiplicity.many u {
             Option.none => true,
             Option.some _ => false,
         } in
     let reported : Bool :=
-        match check_binder_with probe_scope List.empty false Multiplicity.many u {
+        match check_binder_with type_kinds_empty probe_scope List.empty false Multiplicity.many u {
             Option.some _ => true,
             Option.none => false,
         } in
@@ -683,11 +767,13 @@ def list_of_a : Term :=
 
 def hole_binder (uses : I64) (owning : I64) : BinderUse :=
     { name := Identifier.id "x", kind := BinderKind.bk_lam, typ := Term.hole,
-      count := uses, owning := owning, view := false }
+      count := uses, owning := owning, view := false,
+      declared := Multiplicity.many, init := Option.none }
 
 def var_binder (uses : I64) (owning : I64) : BinderUse :=
     { name := Identifier.id "x", kind := BinderKind.bk_lam, typ := a_type_var,
-      count := uses, owning := owning, view := false }
+      count := uses, owning := owning, view := false,
+      declared := Multiplicity.many, init := Option.none }
 
 #[test]
 def test_copy_constrained_var_may_be_shared : Bool :=
@@ -709,7 +795,7 @@ def test_a_copy_constraint_does_not_leak_into_an_applied_type : Bool :=
 
 #[test]
 def test_copy_constrained_var_used_twice_passes_the_gate : Bool :=
-    match check_binder_with probe_scope [Identifier.id "A"] false Multiplicity.many (var_binder 2 1) {
+    match check_binder_with type_kinds_empty probe_scope [Identifier.id "A"] false Multiplicity.many (var_binder 2 1) {
         Option.none => true,
         Option.some _ => false,
     }
@@ -718,7 +804,7 @@ def test_copy_constrained_var_used_twice_passes_the_gate : Bool :=
 def test_unattributable_binder_is_exempt_under_enforcement : Bool :=
     // Enforcement fails OPEN: a binder the syntax-based attribution
     // cannot type is not rejected. See `check_binder_with`.
-    match check_binder_with probe_scope List.empty false Multiplicity.many (hole_binder 2 1) {
+    match check_binder_with type_kinds_empty probe_scope List.empty false Multiplicity.many (hole_binder 2 1) {
         Option.none => true,
         Option.some _ => false,
     }
@@ -727,7 +813,7 @@ def test_unattributable_binder_is_exempt_under_enforcement : Bool :=
 def test_unattributable_binder_is_counted_by_the_report : Bool :=
     // The report fails CLOSED, so its migration cost stays an upper
     // bound. Same binder, same hole, opposite answer on purpose.
-    match check_binder_with probe_scope List.empty true Multiplicity.many (hole_binder 2 1) {
+    match check_binder_with type_kinds_empty probe_scope List.empty true Multiplicity.many (hole_binder 2 1) {
         Option.some e =>
             match e {
                 TypeError.copy_required _n _t _uses => true,

@@ -58,12 +58,12 @@ use lib::types {
   Attribute, Binder, Con, DebugName, FieldPattern, Identifier, InductConstructor, Inductive,
   Literal, Location, MatchCase, ModulePath, Multiplicity, NamePath, Native, Param, Scope,
   ScopeData, SortLevel, StructLitField, Term, Visibility, binder_anon, binder_binder,
-  binder_explicit, binder_is_explicit, binder_name, binder_named, has_attr, show_identifier, show_name_path,
-  term_peel,
+  binder_explicit, binder_is_explicit, binder_mult, binder_name, binder_named,
+  binder_named_mult, has_attr, show_identifier, show_name_path, term_peel,
 }
 use lib::scope {
   find_constructor_in_inductive, scope_data_empty, scope_find_all_inductives_by_constructor,
-  scope_globals,
+  scope_find_def_return_type, scope_globals,
 }
 use llvm::strmap {str_map_empty, str_map_insert, str_map_lookup}
 use std::map {HashMap}
@@ -214,6 +214,153 @@ def uses_of_opt_args (target : I64) (args : List (Option Term)) : I64 :=
             match a {
                 Option.some t => uses_of target t + uses_of_opt_args target rest,
                 Option.none => uses_of_opt_args target rest,
+            },
+    }
+
+// ─── Closure captures ──────────────────────────────────────────────
+//
+// A binder used under a nested `Term.lam` is CAPTURED. The counter above
+// treats it as one use, which is right for the source text but not for
+// the run time: a closure body may run many times, and with eager fibers
+// it may run on another OS thread. A linear or proof value may not be
+// captured (view-types P10); `view_rules.mo` rejects one that is.
+//
+// Only `Term.lam` increases capture-ness. A match arm's binders and an
+// implicit `pi` shift the de-Bruijn target like any other binder, but
+// they are not closures -- using an outer value directly inside a match
+// arm is an ordinary use.
+
+#[partial]
+pub def captured_uses_of (target : I64) (t : Term) : I64 :=
+    captured_uses_of_with_free 0 target t
+
+/// `free` is the number of leading `Term.lam` binders in `t` that are still
+/// the def's own parameter chain, not closures. A def parameter's body
+/// starts with its remaining sibling parameters; those lambdas must not
+/// count as captures (see `collect_binder_uses_with_params`).
+#[partial]
+pub def captured_uses_of_with_free (free : I64) (target : I64) (t : Term) : I64 :=
+    captured_uses_go free target false t
+
+#[partial]
+def captured_uses_go (free : I64) (target : I64) (inside : Bool) (t : Term) : I64 :=
+    match t {
+        Term.var idx _dbg => if inside && I64.beq idx target then 1 else 0,
+        Term.var_macro _idx _dbg => 0,
+        // Crossing a lambda shifts the target. It is a CAPTURE only when
+        // it is not one of the def's remaining parameter binders.
+        Term.lam _b _typ body =>
+            if I64.gt free 0
+            then captured_uses_go (free - 1) (target + 1) inside body
+            else captured_uses_go 0 (target + 1) true body,
+        // An implicit pi is a type-level binder; it shifts the target but
+        // is not a closure.
+        Term.pi b _arg ret =>
+            if Bool.not (binder_is_explicit b)
+            then captured_uses_go free (target + 1) inside ret
+            else 0,
+        Term.app callee arg =>
+            captured_uses_go free target inside callee
+                + captured_uses_go (bind_free free callee arg) target inside arg,
+        Term.lit value => captured_uses_literal free target inside value,
+        Term.ntv n => captured_uses_native free target inside n,
+        Term.con c => captured_uses_con free target inside c,
+        Term.sort _level => 0,
+        Term.hole => 0,
+        Term.quote_ _inner => 0,
+        Term.ctx _loc inner => captured_uses_go free target inside inner,
+        Term.cubical c => match c { { prim := _, args := args } => captured_uses_terms free target inside args },
+        Term.elim e =>
+            match e {
+                { inductive := _, levels := _, params := _, indices := _,
+                  motive := _, minors := minors, scrutinee := scrutinee } =>
+                    captured_uses_go free target inside scrutinee
+                        + captured_uses_minors free target inside minors,
+            },
+    }
+
+#[partial]
+def captured_uses_minors (free : I64) (target : I64) (inside : Bool) (ts : List Term) : I64 :=
+    match ts {
+        List.empty => 0,
+        List.cons t rest =>
+            i64_max (captured_uses_go free target inside t) (captured_uses_minors free target inside rest),
+    }
+
+#[partial]
+def captured_uses_terms (free : I64) (target : I64) (inside : Bool) (ts : List Term) : I64 :=
+    match ts {
+        List.empty => 0,
+        List.cons t rest =>
+            captured_uses_go free target inside t + captured_uses_terms free target inside rest,
+    }
+
+#[partial]
+def captured_uses_literal (free : I64) (target : I64) (inside : Bool) (l : Literal) : I64 :=
+    match l {
+        Literal.str _v => 0,
+        Literal.char _v => 0,
+        Literal.num _n _suf => 0,
+        Literal.flt _t _suf => 0,
+        Literal.if_ cond then_ else_ =>
+            captured_uses_go free target inside cond
+                + i64_max (captured_uses_go free target inside then_)
+                          (captured_uses_go free target inside else_),
+        Literal.match_ scrut cases =>
+            captured_uses_go free target inside scrut + captured_uses_cases free target inside cases,
+        Literal.struct_lit fields _type_name => captured_uses_fields free target inside fields,
+        Literal.struct_update base fields =>
+            captured_uses_go free target inside base + captured_uses_fields free target inside fields,
+    }
+
+#[partial]
+def captured_uses_cases (free : I64) (target : I64) (inside : Bool) (cases : List MatchCase) : I64 :=
+    match cases {
+        List.empty => 0,
+        List.cons c rest =>
+            i64_max (captured_uses_case free target inside c) (captured_uses_cases free target inside rest),
+    }
+
+#[partial]
+def captured_uses_case (free : I64) (target : I64) (inside : Bool) (c : MatchCase) : I64 :=
+    match c {
+        // A match arm's binders are not a closure: shift the target but
+        // keep `inside` as it was.
+        MatchCase.mk _name args body _fp _typ_name =>
+            captured_uses_go free (target + List.length args) inside body,
+    }
+
+#[partial]
+def captured_uses_fields (free : I64) (target : I64) (inside : Bool) (fields : List StructLitField) : I64 :=
+    match fields {
+        List.empty => 0,
+        List.cons f rest =>
+            match f {
+                StructLitField.mk _name value =>
+                    captured_uses_go free target inside value + captured_uses_fields free target inside rest,
+            },
+    }
+
+#[partial]
+def captured_uses_con (free : I64) (target : I64) (inside : Bool) (c : Con) : I64 :=
+    match c {
+        Con.mk _name _typ_name _num_args args => captured_uses_opt_args free target inside args,
+    }
+
+#[partial]
+def captured_uses_native (free : I64) (target : I64) (inside : Bool) (n : Native) : I64 :=
+    match n {
+        Native.mk _native_name _num_args args => captured_uses_opt_args free target inside args,
+    }
+
+#[partial]
+def captured_uses_opt_args (free : I64) (target : I64) (inside : Bool) (args : List (Option Term)) : I64 :=
+    match args {
+        List.empty => 0,
+        List.cons a rest =>
+            match a {
+                Option.some t => captured_uses_go free target inside t + captured_uses_opt_args free target inside rest,
+                Option.none => captured_uses_opt_args free target inside rest,
             },
     }
 
@@ -958,6 +1105,30 @@ pub struct BinderUse {
     /// the spliced def's `atom_paths`. Defaults that name a DEF (like
     /// `ctor`'s `Identifier.id ""`) are fine. Every literal supplies it.
     view : Bool,
+    /// The source's declared `!`/`?`/`%` prefix on this binder, or
+    /// `Multiplicity.many` when it wrote none. `collect_binder_uses_with_params`
+    /// fills a def's leading binders from `Def.params`; a match binder takes
+    /// the constructor field's `Param.mult`. The affine judgement
+    /// (`affine.mo`'s `check_binders_go`) reads this instead of hardcoding
+    /// `many`.
+    ///
+    /// No default, for the same constructor-valued-default reason as
+    /// `view` above. Every literal supplies it.
+    declared : Multiplicity,
+    /// For a binder whose written annotation is a hole, the INITIALIZER it
+    /// was bound from, when the collector can see one (`let x <- m` /
+    /// `app (app bind m) (lam x => ...)`). `attribute_one` uses it to
+    /// recover the binder's type through the callee's declared return type,
+    /// so a `Cell` bound by a do-block is not left unattributable -- the
+    /// fail-open exemption would otherwise make every `let c <- Cell.new`
+    /// unenforced. `Option.none` everywhere else.
+    init : Option Term,
+    /// Uses of this binder UNDER a nested `lam` -- a closure capture.
+    /// A closure body counts its captures once but may run many times
+    /// (and, with eager fibers, on another thread), so a linear or proof
+    /// value may not be captured. `0` is an ordinary literal default and
+    /// is safe to omit.
+    captured : I64 := 0,
 }
 
 /// Typed accessors, one per field this module's own tests read.
@@ -988,6 +1159,12 @@ pub def BinderUse.borrowed (u : BinderUse) : I64 := u.borrowed
 pub def BinderUse.view (u : BinderUse) : Bool := u.view
 
 pub def BinderUse.moves (u : BinderUse) : I64 := u.moves
+
+pub def BinderUse.declared (u : BinderUse) : Multiplicity := u.declared
+
+pub def BinderUse.captured (u : BinderUse) : I64 := u.captured
+
+pub def BinderUse.init (u : BinderUse) : Option Term := u.init
 
 // ─── View provenance ────────────────────────────────────────────────
 //
@@ -1209,6 +1386,83 @@ def binder_ident (b : Binder) : Identifier :=
 pub def collect_binder_uses (ctors : HashMap String Bool) (borrows : HashMap String Bool) (t : Term) : List BinderUse :=
     collect_uses_term ctors borrows view_env_empty t List.empty
 
+/// Collect a def's binders with its DECLARED parameter list in hand.
+///
+/// The leading lambda chain is not a flat list of `Def.params`: the
+/// elaborator prepends one `__dict_<Class>` lambda per qualifying
+/// constraint AFTER `Def.params` was built (`scope.mo`'s
+/// `add_constraint_dict_params`), and a parameter's own body begins with
+/// its remaining sibling parameters. Walking that chain here gives each
+/// declared binder:
+///
+/// - its real `declared` multiplicity (`Param.mult`), including `!`/`?`/`%`;
+/// - a `captured` count that does NOT treat the remaining parameter
+///   lambdas as closures (`captured_uses_of_with_free`).
+///
+/// Nested binders (closures, let-bound values, match arms) are collected
+/// afterwards by the ordinary walker, whose `captured` rule is correct
+/// for them.
+#[partial]
+pub def collect_binder_uses_with_params (params : List Param) (ctors : HashMap String Bool) (borrows : HashMap String Bool) (t : Term) : List BinderUse :=
+    match collect_leading_uses params ctors borrows t List.empty {
+        Pair.pair uses body =>
+            List.append uses (collect_binder_uses ctors borrows body),
+    }
+
+#[partial]
+def collect_leading_uses (params : List Param) (ctors : HashMap String Bool) (borrows : HashMap String Bool) (t : Term) (acc : List BinderUse) : Pair (List BinderUse) Term :=
+    match t {
+        Term.ctx _loc inner => collect_leading_uses params ctors borrows inner acc,
+        Term.lam b typ body =>
+            if binder_is_hidden_param b then
+                // A generated dictionary/implicit parameter: it is not a
+                // declared param, so the affine rule must read it as
+                // unannotated (`many` -> affine), never as linear.
+                let u : BinderUse :=
+                    leading_use ctors borrows b typ body Multiplicity.many 0 in
+                collect_leading_uses params ctors borrows body (List.cons u acc)
+            else
+                match params {
+                    List.empty => Pair.pair (List.reverse acc) t,
+                    List.cons p rest =>
+                        let u : BinderUse :=
+                            leading_use ctors borrows b typ body
+                                (param_mult_of p) (List.length rest) in
+                        collect_leading_uses rest ctors borrows body (List.cons u acc),
+                },
+        _ => Pair.pair (List.reverse acc) t,
+    }
+
+/// One declared leading binder. `free` is the number of sibling parameter
+/// lambdas at the front of `body` that are not closures.
+def leading_use (ctors : HashMap String Bool) (borrows : HashMap String Bool) (b : Binder) (typ : Term) (body : Term) (declared : Multiplicity) (free : I64) : BinderUse :=
+    let raw : I64 := uses_of 0 body in
+    let own : I64 := owning_uses ctors borrows 0 body in
+    { name := binder_ident b,
+      kind := BinderKind.bk_lam,
+      typ := typ,
+      count := raw,
+      borrowed := raw - borrow_aware_uses borrows 0 body,
+      owning := own,
+      moves := if typ_is_function typ then function_moves ctors borrows 0 body else own,
+      ctor := Identifier.id "",
+      pos := 0 - 1,
+      view := false,
+      declared := declared, init := Option.none,
+      captured := captured_uses_of_with_free free 0 body }
+
+/// A binder that is not one of a def's declared parameters: an implicit
+/// `{A : Type}` binder (`BinderInfo.binder`/`level`) or a generated
+/// `__dict_<Class>` dictionary parameter, both of which the elaborator
+/// inserts around the declared chain.
+pub def binder_is_hidden_param (b : Binder) : Bool :=
+    if Bool.not (binder_is_explicit b) then true
+    else
+        match binder_name b {
+            DebugName.named id => String.starts_with "__dict_" (show_identifier id),
+            DebugName.unnamed => false,
+        }
+
 pub def view_env_empty : ViewEnv := { flags := List.empty, inherit := false }
 
 /// The `lam` behind a beta-redex (`app (lam ...) arg`), peeled of `ctx`. A
@@ -1233,6 +1487,111 @@ def as_redex (t : Term) : Option Redex :=
         _ => Option.none,
     }
 
+/// The shape of a do-bind's continuation: `app (app bind m) (lam x => rest)`.
+/// `initializer` is `m`, the term `attribute_one` resolves `x`'s type from.
+pub struct BindCont {
+    initializer : Term,
+    binder : Binder,
+    typ : Term,
+    body : Term,
+}
+
+#[partial]
+def bind_continuation (callee : Term) (arg : Term) : Option BindCont :=
+    match term_peel arg {
+        Term.lam b typ body =>
+            match term_peel callee {
+                Term.app f m =>
+                    if is_bind_head f then
+                        let bc : BindCont :=
+                            { initializer := m, binder := b, typ := typ, body := body } in
+                        Option.some bc
+                    else Option.none,
+                _ => Option.none,
+            },
+        _ => Option.none,
+    }
+
+/// The head name of a call spine, peeling `ctx` and applications.
+#[partial]
+pub def spine_head_name (t : Term) : Option String :=
+    match t {
+        Term.ctx _loc inner => spine_head_name inner,
+        Term.app callee _arg => spine_head_name callee,
+        Term.var _idx dbg =>
+            match dbg {
+                DebugName.named id => Option.some (show_identifier id),
+                DebugName.unnamed => Option.none,
+            },
+        _ => Option.none,
+    }
+
+/// A `Monad.bind` application. The parser's do-lowering spells the head
+/// `Monad.bind`; `IO.bind`/`RawIO.bind` are accepted for a hand-written
+/// bind. Deliberately NOT a bare `bind`: a user function of that name
+/// could call its continuation any number of times, and the capture
+/// exemption below is only sound for a once-per-execution bind.
+pub def is_bind_head (t : Term) : Bool :=
+    match spine_head_name t {
+        Option.some n =>
+            String.beq n "Monad.bind"
+                || String.beq n "IO.bind" || String.beq n "RawIO.bind",
+        Option.none => false,
+    }
+
+def callee_is_bind_app (callee : Term) : Bool :=
+    match term_peel callee {
+        Term.app f _m => is_bind_head f,
+        _ => false,
+    }
+
+/// A do-bind's continuation lambda is not a closure: the IO bind runs it
+/// once per execution, not many times. Raising the free budget by one makes
+/// the capture walker cross that lambda without marking it a capture. Only
+/// a `Term.lam` ARGUMENT of a `bind` application qualifies; a lambda
+/// anywhere else is still a closure.
+///
+/// The exemption assumes a once-per-execution bind. A multi-shot Monad
+/// (List's bind calls the continuation per element) would duplicate a
+/// captured linear value; a Cell can only be produced in IO, so the
+/// practical corpus is covered, and multi-shot linearity is part of the
+/// deferred `Fiber`/M4 work.
+def bind_free (free : I64) (callee : Term) (arg : Term) : I64 :=
+    match term_peel arg {
+        Term.lam _ _ _ => if callee_is_bind_app callee then free + 1 else free,
+        _ => free,
+    }
+
+/// The type of a do-bind binder, recovered from its initializer's declared
+/// `IO` payload: `let c <- Cell.new 1` makes `c : Cell I64` even though the
+/// source wrote no annotation. Only a call whose head is a global def with
+/// a declared `IO`/`RawIO` return type is resolved; anything computed
+/// (an `if`, a local helper's local) stays a hole and fails open.
+#[partial]
+def init_payload_type (s : Scope) (m : Term) : Option Term :=
+    match spine_head_name m {
+        Option.some id =>
+            match scope_find_def_return_type (NamePath.mk (List.cons (Identifier.id id) List.empty)) s {
+                Option.some ret => io_payload ret,
+                Option.none => Option.none,
+            },
+        Option.none => Option.none,
+    }
+
+#[partial]
+def io_payload (t : Term) : Option Term :=
+    match term_peel t {
+        Term.app f arg =>
+            match spine_head_name f {
+                Option.some n =>
+                    if String.beq n "IO" || String.beq n "RawIO"
+                    then Option.some arg
+                    else Option.none,
+                Option.none => Option.none,
+            },
+        _ => Option.none,
+    }
+
 #[partial]
 def collect_uses_term (ctors : HashMap String Bool) (borrows : HashMap String Bool) (venv : ViewEnv) (t : Term) (acc : List BinderUse) : List BinderUse :=
     match t {
@@ -1244,26 +1603,58 @@ def collect_uses_term (ctors : HashMap String Bool) (borrows : HashMap String Bo
         // binder is reported once — and evaluated in the OUTER view
         // environment, because the initializer cannot see the binder.
         Term.app callee arg =>
-            match as_redex callee {
-                Option.some r =>
-                    let v : Bool := view_binder (expr_is_view borrows venv arg) venv in
-                    let raw : I64 := uses_of 0 r.body in
-                    let own : I64 := owning_uses ctors borrows 0 r.body in
+            match bind_continuation callee arg {
+                // `let x <- m; rest` desugars to
+                // `app (app Monad.bind m) (lam x => rest)`. The first
+                // argument is the binder's INITIALIZER: keep it so
+                // `attribute_one` can recover `x`'s type from the callee's
+                // declared `IO` payload. Without it a `Cell` bound in a
+                // do-block has a hole type and every rule fails open.
+                Option.some bc =>
+                    let v : Bool := view_binder (expr_is_view borrows venv bc.initializer) venv in
+                    let raw : I64 := uses_of 0 bc.body in
+                    let own : I64 := owning_uses ctors borrows 0 bc.body in
                     let u : BinderUse :=
-                        { name := binder_ident r.binder,
+                        { name := binder_ident bc.binder,
                           kind := BinderKind.bk_lam,
-                          typ := r.typ,
+                          typ := bc.typ,
                           count := raw,
-                          borrowed := raw - borrow_aware_uses borrows 0 r.body,
+                          borrowed := raw - borrow_aware_uses borrows 0 bc.body,
                           owning := own,
-                          moves := if typ_is_function r.typ then function_moves ctors borrows 0 r.body else own,
+                          moves := if typ_is_function bc.typ then function_moves ctors borrows 0 bc.body else own,
                           ctor := Identifier.id "",
                           pos := 0 - 1,
-                          view := v } in
-                    collect_uses_term ctors borrows (view_push v venv) r.body
-                        (collect_uses_term ctors borrows venv arg (List.cons u acc)),
+                          view := v,
+                          declared := binder_mult bc.binder,
+                          init := Option.some bc.initializer,
+                          captured := captured_uses_of 0 bc.body } in
+                    collect_uses_term ctors borrows (view_push v venv) bc.body
+                        (collect_uses_term ctors borrows venv callee (List.cons u acc)),
                 Option.none =>
-                    collect_uses_term ctors borrows venv arg (collect_uses_term ctors borrows venv callee acc),
+                    match as_redex callee {
+                        Option.some r =>
+                            let v : Bool := view_binder (expr_is_view borrows venv arg) venv in
+                            let raw : I64 := uses_of 0 r.body in
+                            let own : I64 := owning_uses ctors borrows 0 r.body in
+                            let u : BinderUse :=
+                                { name := binder_ident r.binder,
+                                  kind := BinderKind.bk_lam,
+                                  typ := r.typ,
+                                  count := raw,
+                                  borrowed := raw - borrow_aware_uses borrows 0 r.body,
+                                  owning := own,
+                                  moves := if typ_is_function r.typ then function_moves ctors borrows 0 r.body else own,
+                                  ctor := Identifier.id "",
+                                  pos := 0 - 1,
+                                  view := v,
+                                  declared := binder_mult r.binder,
+                                  init := Option.none,
+                                  captured := captured_uses_of 0 r.body } in
+                            collect_uses_term ctors borrows (view_push v venv) r.body
+                                (collect_uses_term ctors borrows venv arg (List.cons u acc)),
+                        Option.none =>
+                            collect_uses_term ctors borrows venv arg (collect_uses_term ctors borrows venv callee acc),
+                    },
             },
         Term.lam b typ body =>
             let v : Bool := view_binder false venv in
@@ -1279,7 +1670,10 @@ def collect_uses_term (ctors : HashMap String Bool) (borrows : HashMap String Bo
                   moves := if typ_is_function typ then function_moves ctors borrows 0 body else own,
                   ctor := Identifier.id "",
                   pos := 0 - 1,
-                  view := v } in
+                  view := v,
+                  declared := binder_mult b,
+                  init := Option.none,
+                  captured := captured_uses_of 0 body } in
             collect_uses_term ctors borrows (view_push v venv) body (List.cons u acc),
         // A non-explicit `pi` (the former `forall`) binds a TYPE variable.
         // It is erased before run time, so it is not a runtime binder and
@@ -1395,7 +1789,9 @@ def collect_case_args (ctors : HashMap String Bool) (borrows : HashMap String Bo
                   owning := owning_uses ctors borrows idx body,
                   ctor := ctor,
                   pos := i,
-                  view := view } in
+                  view := view,
+                  declared := Multiplicity.many, init := Option.none,
+                  captured := captured_uses_of idx body } in
             collect_case_args ctors borrows view ctor rest (i + 1) n body (List.cons u acc),
     }
 
@@ -1457,18 +1853,41 @@ def attribute_binder_types_go (s : Scope) (us : List BinderUse) (acc : List Bind
         List.cons u rest => attribute_binder_types_go s rest (List.cons (attribute_one s u) acc),
     }
 
-/// One binder. A `bk_lam` binder already carries its annotation, and a
-/// `bk_match` binder is resolved through its constructor -- or left
-/// unknown, which is the honest answer whenever it cannot be.
+/// One binder. A `bk_lam` binder already carries its annotation and its
+/// declared multiplicity, and a `bk_match` binder is resolved through its
+/// constructor -- or left unknown, which is the honest answer whenever it
+/// cannot be. A match binder's `declared` comes from the constructor
+/// FIELD's own `Param.mult` (`#[linear] struct` fields), for the same
+/// reason its type does.
 def attribute_one (s : Scope) (u : BinderUse) : BinderUse :=
     match BinderUse.kind u {
-        BinderKind.bk_lam => u,
+        BinderKind.bk_lam =>
+            // A do-bind binder (`let c <- Cell.new 1`) has a hole for its
+            // written type. Recover it from the initializer's declared
+            // `IO` payload, or every linear/proof rule fails open on it.
+            match BinderUse.init u {
+                Option.some m =>
+                    match init_payload_type s m {
+                        Option.some t => { u with typ := t },
+                        Option.none => u,
+                    },
+                Option.none => u,
+            },
         BinderKind.bk_match =>
-            match ctor_field_type s (BinderUse.ctor u) (BinderUse.pos u) {
-                Option.some t => { u with typ := t },
+            match ctor_field_param s (BinderUse.ctor u) (BinderUse.pos u) {
+                Option.some p =>
+                    { u with typ := param_type_of p, declared := param_mult_of p },
                 Option.none => u,
             },
     }
+
+def param_type_of (p : Param) : Term := match p {
+    Param.mk _name type_ _mult _default _attrs => type_,
+}
+
+def param_mult_of (p : Param) : Multiplicity := match p {
+    Param.mk _name _type_ mult _default _attrs => mult,
+}
 
 /// The declared type of a constructor's `pos`-th field, when exactly one
 /// inductive in scope declares that constructor.
@@ -1491,7 +1910,11 @@ def attribute_one (s : Scope) (u : BinderUse) : BinderUse :=
 /// groups by type head name that is the right trade: `A` is an honest
 /// answer, and the compiler's own constructors are overwhelmingly
 /// monomorphic.
-def ctor_field_type (s : Scope) (ctor : Identifier) (pos : I64) : Option Term :=
+/// The whole declared `Param` of a constructor's `pos`-th field. The
+/// declared type is half of what attribution needs, and the declared
+/// multiplicity is the other half: a match binder must inherit the
+/// field's `!`/`?`/`%`, not default to `many`.
+def ctor_field_param (s : Scope) (ctor : Identifier) (pos : I64) : Option Param :=
     if I64.lt pos 0 then Option.none
     else
         let con_mp : NamePath := NamePath.mk (List.cons ctor List.empty) in
@@ -1506,26 +1929,31 @@ def ctor_field_type (s : Scope) (ctor : Identifier) (pos : I64) : Option Term :=
                             Option.none => Option.none,
                             Option.some c =>
                                 match c {
-                                    InductConstructor.mk _name params _typ => nth_param_type params pos,
+                                    InductConstructor.mk _name params _typ => nth_param params pos,
                                 },
                         },
                 },
         }
 
-/// The `n`-th parameter's declared type. `Option.none` when the pattern
-/// binds more names than the constructor declares fields -- which the
-/// checker rejects, but this walk runs over elaborated terms and should
-/// not assume it never sees one.
+/// The `n`-th parameter. `Option.none` when the pattern binds more names
+/// than the constructor declares fields -- which the checker rejects, but
+/// this walk runs over elaborated terms and should not assume it never
+/// sees one.
 #[partial]
-def nth_param_type (params : List Param) (n : I64) : Option Term :=
+def nth_param (params : List Param) (n : I64) : Option Param :=
     match params {
         List.empty => Option.none,
         List.cons p rest =>
-            if I64.beq n 0 then
-                match p {
-                    Param.mk _name type_ _mult _default _attrs => Option.some type_,
-                }
-            else nth_param_type rest (n - 1),
+            if I64.beq n 0 then Option.some p else nth_param rest (n - 1),
+    }
+
+/// The `n`-th parameter's declared type. Kept as the type-only spelling
+/// for the existing tests, defined through `nth_param`.
+#[partial]
+def nth_param_type (params : List Param) (n : I64) : Option Term :=
+    match nth_param params n {
+        Option.some p => Option.some (param_type_of p),
+        Option.none => Option.none,
     }
 
 // ─── Tests ─────────────────────────────────────────────────────────
@@ -1547,6 +1975,103 @@ def probe_ctors : HashMap String Bool := str_map_insert "P" true str_map_empty
 /// `var 0` -- the binder itself, used once.
 def t_var0 : Term := Term.var 0 dbg_x
 
+/// A scope with one inductive, `P`, whose constructor `mkp` declares one
+/// LINEAR field. Used to pin match-binder multiplicity attribution.
+def linear_field_scope : Scope :=
+    let p : Param := Param.mk (Identifier.id "x") Term.hole Multiplicity.linear Option.none List.empty in
+    let con : InductConstructor :=
+        InductConstructor.mk (NamePath.mk (List.cons (Identifier.id "mkp") List.empty))
+            (List.cons p List.empty) Term.hole in
+    let ind : Inductive :=
+        Inductive.mk (NamePath.mk (List.cons (Identifier.id "P") List.empty))
+            List.empty Term.hole (List.cons con List.empty) List.empty Visibility.package_private in
+    let sd0 : ScopeData := scope_globals empty_scope in
+    { empty_scope with scope := { sd0 with inductives := str_map_insert "P" ind sd0.inductives } }
+
+#[test]
+def test_lam_binder_carries_declared_mult : Bool :=
+    let body : Term :=
+        Term.lam (binder_named_mult (Identifier.id "x") Multiplicity.linear)
+                 Term.hole t_var0 in
+    match collect_binder_uses probe_ctors str_map_empty body {
+        List.cons u _rest =>
+            match BinderUse.declared u {
+                Multiplicity.linear => true,
+                _ => false,
+            },
+        List.empty => false,
+    }
+
+#[test]
+def test_def_params_carry_their_mult_into_the_collector : Bool :=
+    let p : Param := Param.mk (Identifier.id "x") Term.hole Multiplicity.linear Option.none List.empty in
+    let body : Term := Term.lam (binder_named (Identifier.id "x")) Term.hole t_var0 in
+    match collect_binder_uses_with_params (List.cons p List.empty) probe_ctors str_map_empty body {
+        List.cons u _rest =>
+            match BinderUse.declared u {
+                Multiplicity.linear => true,
+                _ => false,
+            },
+        List.empty => false,
+    }
+
+#[test]
+def test_a_dictionary_binder_does_not_shift_the_declared_param : Bool :=
+    // The elaborator prepends `__dict_<Class>` lambdas AFTER `Def.params`
+    // was built. A positional zip would hand the declared `!` to the
+    // dictionary binder and leave the real parameter as `many`.
+    let p : Param := Param.mk (Identifier.id "x") Term.hole Multiplicity.linear Option.none List.empty in
+    let db := binder_named (Identifier.id "__dict_Copy") in
+    let xb := binder_named (Identifier.id "x") in
+    let body : Term :=
+        Term.lam db Term.hole (Term.lam xb Term.hole (Term.var 0 dbg_x)) in
+    let us : List BinderUse :=
+        collect_binder_uses_with_params (List.cons p List.empty) probe_ctors str_map_empty body in
+    match us {
+        List.cons _ rest =>
+            match rest {
+                List.cons u _rest2 =>
+                    match BinderUse.declared u {
+                        Multiplicity.linear => true,
+                        _ => false,
+                    },
+                List.empty => false,
+            },
+        List.empty => false,
+    }
+
+#[test]
+def test_a_sibling_parameter_is_not_a_capture : Bool :=
+    // `def f (c : Cell) (a : I64) := ... c ...`: `c` is used inside the
+    // `a` parameter lambda, which is not a closure.
+    let p_c : Param := Param.mk (Identifier.id "c") Term.hole Multiplicity.linear Option.none List.empty in
+    let p_a : Param := Param.mk (Identifier.id "a") Term.hole Multiplicity.many Option.none List.empty in
+    let cb := binder_named (Identifier.id "c") in
+    let ab := binder_named (Identifier.id "a") in
+    let body : Term :=
+        Term.lam cb Term.hole
+            (Term.lam ab Term.hole (Term.var 1 (DebugName.named (Identifier.id "c")))) in
+    match collect_binder_uses_with_params
+            (List.cons p_c (List.cons p_a List.empty)) probe_ctors str_map_empty body {
+        List.cons u _rest => I64.beq (BinderUse.captured u) 0,
+        List.empty => false,
+    }
+
+#[test]
+def test_match_binder_takes_field_mult : Bool :=
+    let u : BinderUse :=
+        { name := Identifier.id "x", kind := BinderKind.bk_match, typ := Term.hole,
+          count := 1, owning := 1, ctor := Identifier.id "mkp", pos := 0,
+          view := false, declared := Multiplicity.many, init := Option.none } in
+    match attribute_binder_types linear_field_scope (List.cons u List.empty) {
+        List.cons out _rest =>
+            match BinderUse.declared out {
+                Multiplicity.linear => true,
+                _ => false,
+            },
+        List.empty => false,
+    }
+
 #[test]
 def test_uses_of_counts_the_target : Bool :=
     I64.beq (uses_of 0 t_var0) 1
@@ -1554,6 +2079,29 @@ def test_uses_of_counts_the_target : Bool :=
 #[test]
 def test_uses_of_ignores_other_indices : Bool :=
     I64.beq (uses_of 1 t_var0) 0
+
+#[test]
+def test_captured_uses_ignores_a_direct_use : Bool :=
+    // `x` used in its own body is not a capture.
+    I64.beq (captured_uses_of 0 t_var0) 0
+
+#[test]
+def test_captured_uses_counts_under_one_lambda : Bool :=
+    // `fn _ => x`: the outer binder sits at index 1 inside one lambda.
+    let body : Term := Term.lam binder_anon Term.hole (Term.var 1 dbg_x) in
+    I64.beq (captured_uses_of 0 body) 1
+
+#[test]
+def test_match_arg_shift_is_not_a_capture : Bool :=
+    // A match arm binds one name, so `x` is at index 1 -- a normal use,
+    // because a match arm is not a closure.
+    let no_fp : Option FieldPattern := Option.none in
+    let no_typ : Option NamePath := Option.none in
+    let case_ : MatchCase :=
+        MatchCase.mk (Identifier.id "c") (List.cons (Identifier.id "a") List.empty)
+            (Term.var 1 dbg_x) no_fp no_typ in
+    let lit : Literal := Literal.match_ Term.hole (List.cons case_ List.empty) in
+    I64.beq (captured_uses_of 0 (Term.lit lit)) 0
 
 #[test]
 def test_uses_of_sums_application_args : Bool :=
@@ -1732,7 +2280,7 @@ def test_attribute_leaves_lambda_binders_alone : Bool :=
     let u : BinderUse :=
         { name := Identifier.id "x", kind := BinderKind.bk_lam, typ := annotated,
           count := 1, owning := 1, ctor := Identifier.id "", pos := 0 - 1,
-          view := false } in
+          view := false, declared := Multiplicity.many, init := Option.none } in
     match attribute_binder_types empty_scope (List.cons u List.empty) {
         List.cons out _rest =>
             match BinderUse.typ out {
@@ -1753,7 +2301,7 @@ def test_attribute_fails_closed_on_an_unknown_constructor : Bool :=
     let u : BinderUse :=
         { name := Identifier.id "f", kind := BinderKind.bk_match, typ := Term.hole,
           count := 2, owning := 2, ctor := Identifier.id "nope", pos := 0,
-          view := false } in
+          view := false, declared := Multiplicity.many, init := Option.none } in
     match attribute_binder_types empty_scope (List.cons u List.empty) {
         List.cons out _rest =>
             match BinderUse.typ out {

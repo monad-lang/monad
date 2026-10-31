@@ -57,8 +57,8 @@ use lang::module {
   elaborate_loaded_modules_cached, expand_check_paths, module_info_cache_empty,
 }
 use lang::types {
-  DebugName, Decl, Def, Identifier, ModulePath, Scope, SortLevel, Term,
-  TypeError, binder_is_explicit, show_identifier,
+  DebugName, Decl, Def, Identifier, ModulePath, Multiplicity, Scope, SortLevel,
+  Term, TypeError, binder_is_explicit, show_identifier,
 }
 use lang::scope {scope_data_empty}
 use lang::typecheck::usage {
@@ -67,6 +67,7 @@ use lang::typecheck::usage {
 }
 use lang::typecheck::copy_class {CopyVerdict, copy_verdict}
 use lang::typecheck::affine {check_def_strict, copy_vars_of_def, type_var_is_copy}
+use lang::typecheck::type_kinds {TypeKinds, type_kinds}
 use lang::typecheck::diagnostic {type_error_message}
 use std::map {HashMap}
 use std::list {List.length}
@@ -396,7 +397,7 @@ def def_term (d : Def) : Term := d.term
 /// the 2,419 over-used binders -- 30% of the number this whole report
 /// exists to produce.
 #[partial]
-def tally_decls (ctors : HashMap String Bool) (borrows : HashMap String Bool) (s : Scope) (ds : List Decl) (acc : Totals) : Totals :=
+def tally_decls (kinds : TypeKinds) (ctors : HashMap String Bool) (borrows : HashMap String Bool) (s : Scope) (ds : List Decl) (acc : Totals) : Totals :=
     match ds {
         List.empty => acc,
         List.cons d rest =>
@@ -408,17 +409,17 @@ def tally_decls (ctors : HashMap String Bool) (borrows : HashMap String Bool) (s
                     // The Milestone 2 rule, run over the same def. The
                     // STRICT variant: the report's numbers must stay a
                     // fail-closed upper bound, unlike enforcement.
-                    let diags : List TypeError := check_def_strict s ctors borrows def_ in
-                    tally_decls ctors borrows s rest (tally_diags diags counted),
+                    let diags : List TypeError := check_def_strict kinds s ctors borrows def_ in
+                    tally_decls kinds ctors borrows s rest (tally_diags diags counted),
                 // A macro body is a template, not code that runs; its
                 // binders are not runtime owners.
-                Decl.def_macro_d _def => tally_decls ctors borrows s rest acc,
+                Decl.def_macro_d _def => tally_decls kinds ctors borrows s rest acc,
                 // A scoped open wraps one real decl. Codegen ignores
                 // these today (`Decl.scoped_open_d`'s own doc comment),
                 // so the report does too rather than disagree with the
                 // backend it is sizing work for.
-                Decl.scoped_open_d _path _filter _inner => tally_decls ctors borrows s rest acc,
-                _ => tally_decls ctors borrows s rest acc,
+                Decl.scoped_open_d _path _filter _inner => tally_decls kinds ctors borrows s rest acc,
+                _ => tally_decls kinds ctors borrows s rest acc,
             },
     }
 
@@ -587,7 +588,7 @@ def report_on (path : String) : IO Bool := do {
                 // corpus's 44,609 application nodes.
                 let ctors : HashMap String Bool := ctor_name_set em.scope;
                 let borrows : HashMap String Bool := shared_name_set em.scope;
-                let totals : Totals := tally_decls ctors borrows em.scope em.elaborated_decls totals_empty;
+                let totals : Totals := tally_decls (type_kinds em.scope) ctors borrows em.scope em.elaborated_decls totals_empty;
                 print_totals path totals
             }
         }
@@ -719,8 +720,8 @@ def sweep_target (f : String) (st : Sweep) : IO Sweep := do {
             // that file's own view of the corpus.
             let ctors : HashMap String Bool := ctor_name_set em.scope;
             let borrows : HashMap String Bool := shared_name_set em.scope;
-            let dir : Totals := tally_decls ctors borrows em.scope em.target_decls (Sweep.dir st);
-            let grand : Totals := tally_decls ctors borrows em.scope em.target_decls (Sweep.grand st);
+            let dir : Totals := tally_decls (type_kinds em.scope) ctors borrows em.scope em.target_decls (Sweep.dir st);
+            let grand : Totals := tally_decls (type_kinds em.scope) ctors borrows em.scope em.target_decls (Sweep.grand st);
             let out : Sweep :=
                 { st with cache := r.cache, dir := dir, grand := grand,
                   dir_files := Sweep.dir_files st + 1 };
@@ -819,7 +820,8 @@ def report_affine_usage_corpus : IO Bool := do {
 
 def tally_of (count : I64) (typ : Term) : BinderUse :=
     { name := Identifier.id "x", kind := BinderKind.bk_lam, typ := typ, count := count,
-      owning := count, ctor := Identifier.id "", pos := 0 - 1, view := false }
+      owning := count, ctor := Identifier.id "", pos := 0 - 1, view := false,
+      declared := Multiplicity.many, init := Option.none }
 
 def i64_type : Term := Term.var (0 - 1) (DebugName.named (Identifier.id "I64"))
 

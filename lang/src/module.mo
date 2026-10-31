@@ -68,6 +68,11 @@ use lib::typecheck::infer {body_type_error, empty_local_types, empty_locals, typ
 // exactly how `affine.mo`'s own doc on `check_def` prescribes.
 use lib::typecheck::usage {shared_name_set, ctor_name_set}
 use lib::typecheck::affine {check_def}
+use lib::typecheck::type_kinds {TypeKinds, type_kinds}
+// View/proof safety rules (`view-types` Phase 1). These are ERRORS in
+// every mode -- `lang/mote.toml` is `warn`, and a safety rule a warn mote
+// could downgrade is not a rule.
+use lib::typecheck::view_rules {check_module_view_diags}
 // The self-hosted twin of the Rust host's `use`-completeness gate
 // (`check_use_completeness`, rust/core/src/term/module.rs): every name the
 // main module reaches from another module must be named in its own
@@ -2184,15 +2189,17 @@ pub def check_module_with_scope_classified (mode : AffineMode) (scope : Scope) (
     let ordinary <- check_module_with_scope scope decl_list locals path verbose;
     let ctors : HashMap String Bool := ctor_name_set scope;
     let borrows : HashMap String Bool := shared_name_set scope;
+    // Safety rules are errors in BOTH modes.
+    let view_diags : List String := check_module_view_diags path scope decl_list;
     match mode {
         AffineMode.affine_error => do {
             let affine_diags : List String := check_module_decls_affine_only false ctors borrows scope decl_list path;
-            let d : CheckDiagnostics := { errors := list_append ordinary affine_diags, warnings := List.empty };
+            let d : CheckDiagnostics := { errors := list_append (list_append ordinary affine_diags) view_diags, warnings := List.empty };
             return d
         },
         AffineMode.affine_warn => do {
             let affine_diags : List String := check_module_decls_affine_only true ctors borrows scope decl_list path;
-            let d : CheckDiagnostics := { errors := ordinary, warnings := affine_diags };
+            let d : CheckDiagnostics := { errors := list_append ordinary view_diags, warnings := affine_diags };
             return d
         },
     }
@@ -2220,23 +2227,31 @@ pub def check_module_with_scope_affine (scope : Scope) (decl_list : List Decl) (
 /// calls `check_module_with_scope` once.
 #[partial]
 def check_module_decls_affine_only (warning : Bool) (ctors : HashMap String Bool) (borrows : HashMap String Bool) (scope : Scope) (decl_list : List Decl) (path : Option String) : List String :=
+    // Built once, exactly like `ctors`/`borrows`: `#[linear]`/`#[proof]`
+    // classification is a scope scan, not a per-binder lookup.
+    let kinds := type_kinds scope in
+    check_module_decls_affine_go warning kinds ctors borrows scope decl_list path
+
+#[partial]
+def check_module_decls_affine_go (warning : Bool) (kinds : TypeKinds) (ctors : HashMap String Bool) (borrows : HashMap String Bool) (scope : Scope) (decl_list : List Decl) (path : Option String) : List String :=
     match decl_list {
         List.empty => List.empty,
         List.cons d rest =>
-            list_append (check_decl_affine_only warning d ctors borrows scope path)
-                        (check_module_decls_affine_only warning ctors borrows scope rest path),
+            list_append (check_decl_affine_only warning kinds d ctors borrows scope path)
+                        (check_module_decls_affine_go warning kinds ctors borrows scope rest path),
     }
 
 /// `check_def` for a def; empty for every other decl. A dict value def
 /// is skipped for the same reason the ordinary walk skips it: its body
 /// is a codegen artifact (`is_dict_value_def`), not source.
 #[partial]
-def check_decl_affine_only (warning : Bool) (d : Decl) (ctors : HashMap String Bool) (borrows : HashMap String Bool) (scope : Scope) (path : Option String) : List String :=
+def check_decl_affine_only (warning : Bool) (kinds : TypeKinds) (d : Decl) (ctors : HashMap String Bool) (borrows : HashMap String Bool) (scope : Scope) (path : Option String) : List String :=
     match d {
         Decl.def_d df =>
             if is_dict_value_def df then List.empty
-            else render_affine_diags warning (check_def scope ctors borrows df) (show_name_path df.name) path,
-        Decl.scoped_open_d _ _ inner => check_decl_affine_only warning inner ctors borrows scope path,
+            else render_affine_diags warning (check_def kinds scope ctors borrows df) (show_name_path df.name) path,
+        Decl.scoped_open_d _ _ inner =>
+            check_decl_affine_only warning kinds inner ctors borrows scope path,
         _ => List.empty,
     }
 
@@ -3175,7 +3190,12 @@ def check_buffer_ranged (cache : ModuleInfoCache) (file_path : String) (source :
                             (shared_name_set em.scope) em.scope em.target_decls (Option.some file_path)),
                 AffineMode.affine_warn => List.empty,
             };
-            let all_diags : List Diagnostic := list_append diags affine;
+            // View/proof safety rules are errors in EVERY mode, so they
+            // reach the editor regardless of the mote's affine policy.
+            let view : List Diagnostic :=
+                attach_range no_range
+                    (check_module_view_diags (Option.some file_path) em.scope em.target_decls);
+            let all_diags : List Diagnostic := list_append diags (list_append affine view);
             let warm : Option Scope := Option.some em.scope;
             let ok : RangedFileCheck := {
                 path := file_path,
@@ -9025,4 +9045,138 @@ def test_classified_warn_puts_the_rule_in_warnings : IO Bool := do {
     let d <- classified_probe AffineMode.affine_warn over_use_source;
     return (List.is_empty (CheckDiagnostics.errors d)
         && I64.beq (List.length (CheckDiagnostics.warnings d)) 1)
+}
+
+// --- Tests: explicit multiplicities reach the rule ------------------
+//
+// Before `collect_binder_uses_with_params`, a def parameter's `!`/`?`/`%`
+// was dropped at lowering and every binder arrived as `many` (which the
+// rule reads as affine). These parse REAL source through the real driver,
+// so they pin the whole chain: parser -> `Def.params` -> annotated
+// `Term.lam` -> `BinderUse.declared` -> the judgement.
+
+#[test]
+def test_a_linear_parameter_used_twice_is_rejected : IO Bool := do {
+    // The same constructor-store shape as `over_use_source`, so the
+    // ordinary checker is clean and the ONE diagnostic is the rule's.
+    let d <- classified_probe AffineMode.affine_error
+        "type T { mk }\ntype P { mkp (l : T) (r : T) }\ndef pair (!a : T) : P := P.mkp a a";
+    return (I64.beq (List.length (CheckDiagnostics.errors d)) 1)
+}
+
+#[test]
+def test_a_linear_parameter_left_unused_is_rejected : IO Bool := do {
+    let d <- classified_probe AffineMode.affine_error
+        "def skip (!x : I64) : I64 := 0";
+    return (I64.beq (List.length (CheckDiagnostics.errors d)) 1)
+}
+
+#[test]
+def test_an_affine_parameter_may_be_dropped : IO Bool := do {
+    // The control: `?x` is the affine spelling, and weakening is
+    // admissible. Without this, the two rejections above could pass by
+    // rejecting every explicit annotation.
+    let d <- classified_probe AffineMode.affine_error
+        "def skip (?x : I64) : I64 := 0";
+    return (List.is_empty (CheckDiagnostics.errors d))
+}
+
+#[test]
+def test_a_linear_parameter_used_once_is_accepted : IO Bool := do {
+    let d <- classified_probe AffineMode.affine_error
+        "def id_ (!x : I64) : I64 := x";
+    return (List.is_empty (CheckDiagnostics.errors d))
+}
+
+// --- Tests: view/proof safety rules --------------------------------
+//
+// These run through `classified_probe`, so they pin the whole driver:
+// kind classification, the affine forcing, and `view_rules`' diagnostics
+// landing in `errors` in BOTH modes (a safety rule may not be a
+// warning).
+
+#[test]
+def test_a_copy_instance_for_a_linear_type_is_rejected : IO Bool := do {
+    let d <- classified_probe AffineMode.affine_error
+        "#[linear] type Cell { }\ninstance Copy Cell { def copy (c : Cell) : Pair Cell Cell := Pair.pair c c }";
+    return (diags_contain "not allowed for the linear or proof type" (CheckDiagnostics.errors d))
+}
+
+#[test]
+def test_a_linear_type_may_not_be_dropped : IO Bool := do {
+    let d <- classified_probe AffineMode.affine_error
+        "#[linear] type Cell { }\ndef drop_it (c : Cell) : I64 := 0";
+    return (diags_contain "is never used; linear means exactly once" (CheckDiagnostics.errors d))
+}
+
+#[test]
+def test_a_linear_struct_keeps_its_marker : IO Bool := do {
+    // A struct's synthetic inductive must carry the declaration's attrs
+    // (`build_scope_struct`); without that the kind silently vanishes.
+    let d <- classified_probe AffineMode.affine_error
+        "#[linear] struct Handle { fd : I64 }\ndef drop_h (h : Handle) : I64 := 0";
+    return (diags_contain "is never used; linear means exactly once" (CheckDiagnostics.errors d))
+}
+
+#[test]
+def test_a_linear_type_used_twice_is_rejected : IO Bool := do {
+    let d <- classified_probe AffineMode.affine_error
+        "#[linear] type Cell { }\ntype P { mkp (l : Cell) (r : Cell) }\ndef dup (c : Cell) : P := P.mkp c c";
+    return (diags_contain "is moved 2 times" (CheckDiagnostics.errors d))
+}
+
+#[test]
+def test_a_linear_value_captured_by_a_closure_is_rejected : IO Bool := do {
+    // The closure is dropped, so the affine budget sees exactly one use;
+    // only the capture rule rejects it.
+    let d <- classified_probe AffineMode.affine_error
+        "#[linear] type Cell { }\ndef leak (c : Cell) : Unit := let f := fn (u : Unit) => c in unit";
+    return (diags_contain "is captured by a closure" (CheckDiagnostics.errors d))
+}
+
+#[test]
+def test_a_linear_value_stored_in_shared_is_rejected : IO Bool := do {
+    // A local `#[shared]` type, so the probe scope resolves the borrow
+    // without loading init.
+    let d <- classified_probe AffineMode.affine_error
+        "#[shared] type Shared A { of (value : A) }\n#[linear] type Cell { }\ndef leak (c : Cell) : Unit := let s := Shared.of c in unit";
+    return (diags_contain "is stored in a re-readable container" (CheckDiagnostics.errors d))
+}
+
+#[test]
+def test_a_shared_of_a_linear_type_in_a_signature_is_rejected : IO Bool := do {
+    let d <- classified_probe AffineMode.affine_error
+        "#[shared] type Shared A { of (value : A) }\n#[linear] type Cell { }\ndef bad (s : Shared Cell) : I64 := 0";
+    return (diags_contain "wraps a linear or proof type" (CheckDiagnostics.errors d))
+}
+
+#[test]
+def test_a_proof_parameter_is_rejected : IO Bool := do {
+    let d <- classified_probe AffineMode.affine_error
+        "#[proof] type At { }\ndef use_p (p : At) : I64 := 0";
+    return (diags_contain "has no run-time representation" (CheckDiagnostics.errors d))
+}
+
+#[test]
+def test_a_proof_parameter_may_not_be_affine : IO Bool := do {
+    let d <- classified_probe AffineMode.affine_error
+        "#[proof] type At { }\ndef bad (?p : At) : I64 := 0";
+    return (diags_contain "is forced linear; `?` and `%` are not allowed" (CheckDiagnostics.errors d))
+}
+
+#[test]
+def test_a_proof_parameter_may_not_be_erased : IO Bool := do {
+    let d <- classified_probe AffineMode.affine_error
+        "#[proof] type At { }\ndef bad (%p : At) : I64 := 0";
+    return (diags_contain "is forced linear; `?` and `%` are not allowed" (CheckDiagnostics.errors d))
+}
+
+#[test]
+def test_view_errors_survive_a_warn_mote : IO Bool := do {
+    // The same capture fixture under `affine_warn`: the safety rule must
+    // still be an ERROR. A linear `!x` issue would be a warning here, so
+    // the fixture deliberately uses only the capture rule.
+    let d <- classified_probe AffineMode.affine_warn
+        "#[linear] type Cell { }\ndef leak (c : Cell) : Unit := let f := fn (u : Unit) => c in unit";
+    return (diags_contain "is captured by a closure" (CheckDiagnostics.errors d))
 }

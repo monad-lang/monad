@@ -360,7 +360,7 @@ def test_quantifier_unnamed : Bool :=
     // every name it is handed in `DebugName.named`: what this pins is the
     // UNNAMED spelling. Annotated local first -- the
     // bare-struct-literal-in-argument-position miscompile.
-    let b : Binder := { name := DebugName.unnamed, info := BinderInfo.binder } in
+    let b : Binder := { name := DebugName.unnamed, info := BinderInfo.binder, mult := Multiplicity.many } in
     let kind : Term := sort_n 1 in
     let body : Term := sort_n 1 in
     let t : Term := Term.pi b kind body in

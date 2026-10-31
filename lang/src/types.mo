@@ -368,7 +368,10 @@ pub type NameRef {
     nop (Operator),
 }
 
-type Multiplicity {
+/// `pub` because `Binder`/`Param` are `pub` and carry one, and tools
+/// outside the `lang` mote (`bench/src/affine_report.mo`) construct
+/// binders with an explicit multiplicity.
+pub type Multiplicity {
     zero,
     many,
     linear,
@@ -1384,14 +1387,27 @@ pub type BinderInfo {
     level,
 }
 
-/// A binder: what it is called, and how it behaves.
+/// A binder: what it is called, how it behaves, and its declared
+/// multiplicity.
 ///
 /// `name` is a `DebugName`, which is error-message metadata and NEVER
 /// identity — de Bruijn indices determine identity, and this field changes
 /// no index. `BinderInfo` is what the checker actually discriminates on.
+///
+/// `mult` is the source's `!`/`?`/`%` prefix (or `many`, the parser's
+/// spelling for "none written"). It is carried on the binder rather than on
+/// `Term.lam`/`Term.pi` because those variants are matched positionally
+/// across the corpus and an arity change fails at runtime, not at compile
+/// time. It is NOT part of de Bruijn identity and `Similar Binder`
+/// deliberately ignores it.
+///
+/// The helper defs below default it to `Multiplicity.many`; the affine
+/// checker fills in a `def`'s declared `Def.params` multiplicities with
+/// `usage.mo`'s `collect_binder_uses_with_params` before it counts uses.
 pub struct Binder {
     name : DebugName,
     info : BinderInfo,
+    mult : Multiplicity,
 }
 
 /// A binder from a `DebugName` the caller already holds, under the
@@ -1403,6 +1419,7 @@ pub struct Binder {
 pub def binder_explicit (d : DebugName) : Binder := {
     name := d,
     info := BinderInfo.explicit,
+    mult := Multiplicity.many,
 }
 
 /// The binder an anonymous construction site wants: nothing for the error
@@ -1421,6 +1438,7 @@ pub def binder_explicit (d : DebugName) : Binder := {
 pub def binder_anon : Binder := {
     name := DebugName.unnamed,
     info := BinderInfo.explicit,
+    mult := Multiplicity.many,
 }
 
 /// The binder a NAMED arrow carries — `(n : T) -> body` puts `n` in scope
@@ -1438,6 +1456,17 @@ pub def binder_anon : Binder := {
 pub def binder_named (n : Identifier) : Binder := {
     name := DebugName.named n,
     info := BinderInfo.explicit,
+    mult := Multiplicity.many,
+}
+
+/// `binder_named`, with an explicit declared multiplicity. The
+/// def-parameter path reads `Param.mult` directly (`collect_binder_uses_with_params`);
+/// this is the constructor for a binder that already carries one (tests,
+/// and the future expression-lambda plumbing).
+pub def binder_named_mult (n : Identifier) (m : Multiplicity) : Binder := {
+    name := DebugName.named n,
+    info := BinderInfo.explicit,
+    mult := m,
 }
 
 /// The binder `wrap_forall` (`lang/elaborate.mo`) puts on a quantified type
@@ -1453,6 +1482,7 @@ pub def binder_named (n : Identifier) : Binder := {
 pub def binder_binder (n : Identifier) : Binder := {
     name := DebugName.named n,
     info := BinderInfo.binder,
+    mult := Multiplicity.many,
 }
 
 /// The binder `wrap_level_forall` puts on a universe level — `Sort u` in a
@@ -1462,6 +1492,7 @@ pub def binder_binder (n : Identifier) : Binder := {
 pub def binder_level (n : Identifier) : Binder := {
     name := DebugName.named n,
     info := BinderInfo.level,
+    mult := Multiplicity.many,
 }
 
 /// Every `BinderInfo`, as a number. Same purpose as `cubical_prim_tag`: the
@@ -1482,7 +1513,13 @@ pub def binder_info_eq (a : BinderInfo) (b : BinderInfo) : Bool :=
 /// inside a recursive walk defeats the termination checker where a
 /// pattern binder does not (AGENTS.md).
 pub def binder_info_of (b : Binder) : BinderInfo :=
-    match b { { name := _n, info := i } => i }
+    match b { { info := i, .. } => i }
+
+/// A binder's declared multiplicity. `Multiplicity.many` means the source
+/// wrote no prefix; the affine rule reads that as "affine unless Copy",
+/// not as ω. See `Binder`'s own doc comment.
+def binder_mult (b : Binder) : Multiplicity :=
+    match b { { mult := m, .. } => m }
 
 /// Is this an ordinary arrow's binder -- `(x : T) -> U`?
 ///
@@ -1518,7 +1555,7 @@ pub def binder_is_level (b : Binder) : Bool :=
 /// `b.name` by field access inside a recursive walk loses the
 /// termination proof.
 pub def binder_name (b : Binder) : DebugName :=
-    match b { { name := n, info := _i } => n }
+    match b { { name := n, .. } => n }
 
 // The canonical de Bruijn term IR — what everything after the parser
 // works on. `ParseTerm` above is lowered into this.
@@ -1757,6 +1794,34 @@ pub type TypeError {
     /// Without this the dictionary is silently defaulted (and a
     /// dict-generating constraint leaves the call a parameter short).
     missing_instance (cls: NamePath) (typ: Term),
+    /// A `Copy` (or `Clone`) instance declared for a `#[linear]` or
+    /// `#[proof]` type. Linear and proof values must never be duplicated;
+    /// `is_copy` also refuses to grant ω to their carriers, so this is the
+    /// declaration-site diagnostic.
+    proof_copied (typ: Term),
+    /// A proof-typed binder annotated `?` or `%`. A proof is forced
+    /// linear (`view-types` rule 1) and has no run-time representation, so
+    /// neither relaxation is legal.
+    proof_erased_binder (name: Identifier) (typ: Term),
+    /// A proof-typed value used where a run-time value is required: a
+    /// user def binding or returning one, or storing one. v1 proofs are
+    /// phantom (no constructors, no values); real erasure is deferred.
+    proof_at_runtime_position (name: Identifier) (typ: Term),
+    /// A linear or proof value captured by a closure. The closure body
+    /// counts the capture once but may run many times (and, with eager
+    /// fibers, on another thread), which would duplicate the value.
+    view_captured (name: Identifier) (typ: Term),
+    /// A linear or proof value passed to `Shared.of` (or another
+    /// re-readable container). `Shared` is `Copy`, so it could hand out
+    /// two handles to one allocation.
+    view_stored_in_container (name: Identifier) (typ: Term),
+    /// A signature or field whose type is `Shared`/`Ref`/`Array` applied
+    /// to a linear or proof type. Those containers are re-readable, so
+    /// the value could be extracted more than once.
+    view_in_container (typ: Term),
+    /// A `#[linear]`-typed binder annotated `%` (erased). A linear value
+    /// has a run-time representation, so it cannot be erased.
+    linear_erased_binder (name: Identifier) (typ: Term),
 }
 
 /// `f #Named.Instance args`'s lowered marker argument: a sentinel `Term.var`
@@ -3278,6 +3343,29 @@ def test_term_type : Bool :=
 def test_term_hole : Bool :=
     let h : Term := Term.hole in
     true
+
+#[test]
+def test_binder_helpers_default_to_many : Bool :=
+    // The unannotated spelling. The affine rule reads `many` as
+    // "affine unless Copy", so this default is not ω (see affine.mo).
+    match binder_mult (binder_named (Identifier.id "x")) {
+        Multiplicity.many => true,
+        _ => false,
+    }
+
+#[test]
+def test_binder_mult_roundtrips : Bool :=
+    match binder_mult (binder_named_mult (Identifier.id "x") Multiplicity.linear) {
+        Multiplicity.linear => true,
+        _ => false,
+    }
+
+#[test]
+def test_similar_binder_ignores_mult : Bool :=
+    // Multiplicity is a usage annotation, not de Bruijn shape: two
+    // binders that differ only in `!`/`?`/`%` are the same binder.
+    Similar.similar (binder_named_mult (Identifier.id "x") Multiplicity.many)
+                    (binder_named_mult (Identifier.id "x") Multiplicity.linear)
 
 // --- Phase 2: Scope types ---
 

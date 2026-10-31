@@ -766,7 +766,7 @@ def test_show_forall_unnamed : Bool :=
     // helper takes an `Identifier` and wraps it in `DebugName.named`, and
     // what this test is about is the UNNAMED spelling. Annotated local
     // first -- the bare-struct-literal-in-argument-position miscompile.
-    let b : Binder := { name := DebugName.unnamed, info := BinderInfo.binder } in
+    let b : Binder := { name := DebugName.unnamed, info := BinderInfo.binder, mult := Multiplicity.many } in
     let body := Term.sort (SortLevel.concrete 1) in
     let t := Term.pi b (Term.sort (SortLevel.concrete 1)) body in
     show_term t == "{_ : Type} -> Type"

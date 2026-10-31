@@ -101,6 +101,35 @@ pub def type_error_message (e : TypeError) : String :=
 			String.concat "no instance of `" (String.concat (show_name_path cls)
 				(String.concat "` for `" (String.concat (show_term typ)
 				"` -- a dictionary is needed here, and none can be defaulted"))),
+		// View types / `#[linear]`. Each names the rule it enforces, because
+		// the fixes differ: remove the instance, remove the annotation, or
+		// stop hiding the handle.
+		TypeError.proof_copied typ =>
+			String.concat "`Copy`/`Clone` is not allowed for the linear or proof type "
+				(String.concat (show_term typ) "; such a value must never be duplicated"),
+		TypeError.proof_erased_binder name typ =>
+			String.concat "proof `" (String.concat (show_identifier name)
+				(String.concat "` : " (String.concat (show_term typ)
+				" is forced linear; `?` and `%` are not allowed on a proof binder"))),
+		TypeError.proof_at_runtime_position name typ =>
+			String.concat "proof `" (String.concat (show_identifier name)
+				(String.concat "` : " (String.concat (show_term typ)
+				" has no run-time representation; user proof binders and returns are not supported yet"))),
+		TypeError.view_captured name typ =>
+			String.concat "linear `" (String.concat (show_identifier name)
+				(String.concat "` : " (String.concat (show_term typ)
+				" is captured by a closure; a linear or proof value may not be captured"))),
+		TypeError.view_stored_in_container name typ =>
+			String.concat "linear `" (String.concat (show_identifier name)
+				(String.concat "` : " (String.concat (show_term typ)
+				" is stored in a re-readable container (`Shared`/`Ref`/`Array`); that could hand out two handles"))),
+		TypeError.view_in_container typ =>
+			String.concat "`" (String.concat (show_term typ)
+				"` wraps a linear or proof type in `Shared`/`Ref`/`Array`, which is re-readable; that could hand out two handles"),
+		TypeError.linear_erased_binder name typ =>
+			String.concat "linear `" (String.concat (show_identifier name)
+				(String.concat "` : " (String.concat (show_term typ)
+				" cannot be erased with `%`; a linear value has a run-time representation"))),
 	}
 
 /// Render a full diagnostic for a type error — same visual family as
