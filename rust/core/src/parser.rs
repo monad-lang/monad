@@ -2434,15 +2434,15 @@ fn struct_val_field_parser<X: Clone>(input: Span<X>) -> Res<(Identifier, Term), 
   Ok((input, (name, value)))
 }
 
-/// The base of a `{ base with field := v }`: a bare identifier, or a
-/// parenthesized expression. Mirrors the self-hosted parser's own
-/// `struct_update_base` (`lang/src/parser.mo`) -- `identifier` alone was
-/// the whole rule, so a call result could not be a base at all.
+/// The base of a `{ base with field := v }`: a `variable` (so a bare name
+/// or a `.`-separated path like `st.selection`), or a parenthesized
+/// expression. Mirrors the self-hosted parser's own `struct_update_base`
+/// (`lang/src/parser.mo`, whose base is `variable`) -- `identifier` alone
+/// was the whole rule, so neither a field-access base nor a call result
+/// could be a base at all.
 fn parse_struct_update_base<X: Clone>(input: Span<X>) -> Res<Term, X> {
   alt((
-    map(identifier, |id| Term::Var {
-      name: crate::term::NameRef::Id(id),
-    }),
+    variable,
     delimited((char('('), ws0), term, (ws0, char(')'))),
   ))
   .parse(input)

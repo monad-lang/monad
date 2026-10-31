@@ -9883,6 +9883,27 @@ def test_struct_update_paren_base : Bool :=
         fail _ => false
     }
 
+/// A field-access base (`{ st.selection with ... }`) parses: `variable`
+/// accepts a `.`-separated path, which is what `lang/src/features.mo` uses
+/// to update one field of a struct held in a field of another. The Rust
+/// host's `parse_struct_update_base` accepts the same spelling.
+#[test]
+def test_struct_update_path_base : Bool :=
+    let st : Identifier := Identifier.id "st" in
+    let ctx : ParseLowerCtx := { binders := List.cons st List.empty, opened := List.empty, locs := Option.none } in
+    match expression "{ st.selection with x := 10 }" {
+        success rem out =>
+            String.beq rem "" &&
+            match out.kind {
+                ParseTermKind.lit l => match l {
+                    ParseLiteral.struct_update _base fields => I64.beq (List.length fields) 1,
+                    _ => false
+                },
+                _ => false
+            },
+        fail _ => false
+    }
+
 /// The shape the whole widening is for -- and the one that also has to reach
 /// lowering with the call intact, not as the call's head.
 #[test]

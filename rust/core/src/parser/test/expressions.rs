@@ -390,12 +390,13 @@ fn test_struct_val() {
   );
 }
 
-/// The base of a struct update: a bare identifier, or a PARENTHESIZED
-/// expression. `identifier` alone was the whole rule, so a call result could
-/// not be a base at all -- and parens are the only way one can be, since an
+/// The base of a struct update: a `variable` (bare name or `.`-separated
+/// path), or a PARENTHESIZED expression. `identifier` alone was the whole
+/// rule, so neither a field-access base nor a call result could be a base at
+/// all -- and parens are the only way a call can be, since an
 /// unparenthesized application would swallow the `with`. Mirrors
-/// `lang/src/parser.mo`'s `struct_update_base`; the two implementations must
-/// not drift on which spellings exist.
+/// `lang/src/parser.mo`'s `struct_update_base` (whose base is `variable`);
+/// the two implementations must not drift on which spellings exist.
 #[test]
 fn test_struct_update_base_spellings() {
   let p = |s: &'static str| struct_or_update_parser::<()>(s.into());
@@ -418,6 +419,12 @@ fn test_struct_update_base_spellings() {
 
   similar!(base_of("{ p with x := 1 }"), var("p"));
   similar!(base_of("{ (p) with x := 1 }"), var("p"));
+  // A field-access base: `lang/src/features.mo` updates one field of a
+  // struct held in a field of another (`{ st.selection with ... }`).
+  similar!(
+    base_of("{ st.selection with x := 1 }"),
+    pvar(vec!["st", "selection"])
+  );
 
   // The shape the widening exists for.
   assert!(
