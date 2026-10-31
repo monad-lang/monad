@@ -65,6 +65,36 @@ pub use lib::bearer {
   BearerValidator,
   BearerValidator.introspect,
   BearerValidator.jwt,
+  BearerValidator.validate_id_token,
+}
+pub use lib::session {
+  AuthSession,
+  OauthSessionStore,
+  OauthSessionStore.check_csrf,
+  OauthSessionStore.clear_cookies,
+  OauthSessionStore.create,
+  OauthSessionStore.csrf_cookie,
+  OauthSessionStore.csrf_token,
+  OauthSessionStore.destroy,
+  OauthSessionStore.lookup,
+  OauthSessionStore.new,
+  OauthSessionStore.new_with_secret,
+  OauthSessionStore.rotate,
+  OauthSessionStore.rotate_with_tokens,
+  OauthSessionStore.session_cookie,
+  OauthSessionStore.session_name,
+  OauthSessionStore.unauthorized,
+  OauthSessionStore.with_session,
+}
+pub use lib::login {
+  Login.deps,
+  Login.handle_callback,
+  Login.handle_login,
+  Login.handle_logout,
+  Login.handle_refresh,
+  Login.safe_return_to,
+  Login.with_userinfo,
+  LoginDeps,
 }
 pub use lib::introspect {
   Introspector,

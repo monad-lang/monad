@@ -28,7 +28,7 @@ use http::types {
   Status.ok, Status.service_unavailable, Status.unauthorized,
 }
 use http::body {Body.to_bytes_pure}
-use jsonwebtoken::claims {Claims.validate_access_token}
+use jsonwebtoken::claims {Claims.validate_access_token, Claims.validate_id_token}
 use jsonwebtoken::errors {JwtError, JwtError.to_string}
 use jsonwebtoken::jwt {Jwt, Jwt.parse, Jwt.verify}
 use jsonwebtoken::principal {Principal}
@@ -438,6 +438,78 @@ def Bearer.valid_jwks (j : Json) : Bool :=
         Option.none => false,
         Option.some v => Bearer.nonempty_array v
       }
+  }
+
+/// Validate an OIDC ID token (nonce required) with this JWT-mode
+/// validator's JWKS cache and verifier. Introspection mode has no ID token,
+/// so it reports a server misconfiguration.
+pub def BearerValidator.validate_id_token
+  (v : BearerValidator) (now : I64) (nonce : String) (token : String)
+  : IO (Result AuthError Principal) :=
+  match v.mode {
+    TokenMode.token_jwt cfg ep http verifier state =>
+      Bearer.check_id_token cfg ep http verifier state now nonce token,
+    TokenMode.token_introspect _ =>
+      return (Result.err AuthError.auth_server_misconfigured)
+  }
+
+def Bearer.check_id_token
+  (cfg : OauthConfig) (ep : OauthEndpoints) (http : OauthHttp)
+  (verifier : JwtVerifier) (state : Ref JwksState)
+  (now : I64) (nonce : String) (token : String)
+  : IO (Result AuthError Principal) := do {
+  match Jwt.parse token {
+    Result.err e => return (Result.err (Bearer.auth_error e)),
+    Result.ok jwt =>
+      Bearer.load_id_and_verify cfg ep http verifier state now nonce jwt false
+  }
+}
+
+#[terminating]
+def Bearer.load_id_and_verify
+  (cfg : OauthConfig) (ep : OauthEndpoints) (http : OauthHttp)
+  (verifier : JwtVerifier) (state : Ref JwksState)
+  (now : I64) (nonce : String) (jwt : Jwt) (force : Bool)
+  : IO (Result AuthError Principal) := do {
+  let doc <- Bearer.jwks_doc state ep http now force;
+  match doc {
+    Result.err e => return (Result.err e),
+    Result.ok jwks =>
+      Bearer.verify_id_jwt cfg ep http verifier state now nonce jwks jwt force
+  }
+}
+
+#[terminating]
+def Bearer.verify_id_jwt
+  (cfg : OauthConfig) (ep : OauthEndpoints) (http : OauthHttp)
+  (verifier : JwtVerifier) (state : Ref JwksState)
+  (now : I64) (nonce : String) (jwks : Json) (jwt : Jwt) (force : Bool)
+  : IO (Result AuthError Principal) := do {
+  let checked <- Jwt.verify verifier jwks jwt;
+  match checked {
+    Result.err e =>
+      Bearer.on_id_jwt_error cfg ep http verifier state now nonce jwt e force,
+    Result.ok _ =>
+      return (match Claims.validate_id_token
+        (OauthConfig.claims_config cfg) now nonce jwt {
+        Result.err e => Result.err (Bearer.auth_error e),
+        Result.ok principal => Result.ok principal
+      })
+  }
+}
+
+#[terminating]
+def Bearer.on_id_jwt_error
+  (cfg : OauthConfig) (ep : OauthEndpoints) (http : OauthHttp)
+  (verifier : JwtVerifier) (state : Ref JwksState)
+  (now : I64) (nonce : String) (jwt : Jwt) (e : JwtError) (force : Bool)
+  : IO (Result AuthError Principal) :=
+  match e {
+    JwtError.jwks_unknown_kid =>
+      if force
+      then return (Result.err (Bearer.auth_error e))
+      else Bearer.load_id_and_verify cfg ep http verifier state now nonce jwt true,
+    _ => return (Result.err (Bearer.auth_error e))
   }
 
 // ── responses ─────────────────────────────────────────────────────────────
