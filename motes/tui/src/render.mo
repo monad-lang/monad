@@ -19,7 +19,7 @@ use lib::types {
 }
 use lib::core {
     mk_screen, screen_get_cell, screen_set_cell,
-    style_default, style_merge, style_to_ansi, mk_rect, clamp
+    style_default, style_merge, style_to_ansi, mk_rect, clamp, mk_text_segment
 }
 use lib::layout { layout_row, layout_column, pad_rect }
 use lib::text {Glyph, Text.col_of_byte, Text.drop_cols, Text.glyphs, Text.take_width, Text.width, Text.wrap}
@@ -894,7 +894,7 @@ def test_apply_deltas_default_cell_does_not_inherit_style : Bool :=
 #[test]
 def test_render_spans_keeps_per_span_styles : Bool :=
     let bold : TextStyle := { style_default with bold := true } in
-    let w : Widget := spans [TextSegment.of "ab" bold, TextSegment.of "cd" style_default] in
+    let w : Widget := spans [mk_text_segment "ab" bold, mk_text_segment "cd" style_default] in
     let s : Screen := render w (mk_rect 0 0 10 1) (mk_screen 1 10) in
     match screen_get_cell s 0 0 {
         Option.some a => match screen_get_cell s 0 3 {

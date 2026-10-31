@@ -17,7 +17,7 @@
 use std::list {List.length}
 
 use lib::types {TextStyle, TextSegment}
-use lib::core {style_default}
+use lib::core {style_default, mk_text_segment}
 
 /// One rendered glyph: its source text, the cells it occupies (0, 1 or 2),
 /// and how many source bytes it consumed.
@@ -546,13 +546,13 @@ def group_styled
     match gs {
         List.empty =>
             List.reverse
-                (if String.is_empty cur_text then acc else List.cons (TextSegment.of cur_text cur_style) acc),
+                (if String.is_empty cur_text then acc else List.cons (mk_text_segment cur_text cur_style) acc),
         List.cons g rest =>
             if String.is_empty cur_text
             then group_styled rest g.glyph.text g.style acc
             else if g.style == cur_style
             then group_styled rest (String.concat cur_text g.glyph.text) cur_style acc
-            else group_styled rest g.glyph.text g.style (List.cons (TextSegment.of cur_text cur_style) acc),
+            else group_styled rest g.glyph.text g.style (List.cons (mk_text_segment cur_text cur_style) acc),
     }
 
 pub def Text.group_styled (gs : List StyledGlyph) : List TextSegment :=
@@ -687,13 +687,13 @@ def span_texts (ss : List TextSegment) : String :=
 
 #[test]
 def test_width_spans_sums_cells : Bool :=
-    Text.width_spans [TextSegment.of "ab" style_default, TextSegment.of "日本" style_default] == 6
+    Text.width_spans [mk_text_segment "ab" style_default, mk_text_segment "日本" style_default] == 6
 
 #[test]
 def test_wrap_spans_keeps_the_style_across_a_break : Bool :=
     let bold : TextStyle := { style_default with bold := true } in
     let rows : List (List TextSegment) :=
-        Text.wrap_spans 6 [TextSegment.of "hello " style_default, TextSegment.of "world" bold] in
+        Text.wrap_spans 6 [mk_text_segment "hello " style_default, mk_text_segment "world" bold] in
     match rows {
         List.empty => false,
         List.cons first rest => match rest {
@@ -712,7 +712,7 @@ def test_wrap_spans_keeps_the_style_across_a_break : Bool :=
 def test_slice_spans_keeps_the_style : Bool :=
     let bold : TextStyle := { style_default with bold := true } in
     let sliced : List TextSegment :=
-        Text.slice_spans [TextSegment.of "ab" style_default, TextSegment.of "cd" bold] 1 3 in
+        Text.slice_spans [mk_text_segment "ab" style_default, mk_text_segment "cd" bold] 1 3 in
     match sliced {
         List.empty => false,
         List.cons first rest => match rest {

@@ -17,7 +17,7 @@ use std::ansi { Color, color_fg_code, color_bg_code }
 
 // The types (and their derived `BEq`/`Lens` instances) come from the mote's
 // types-only module.
-use lib::types { Rect, TextStyle, Cell, LayoutSize, MouseButton, Key, MouseEvent, Event, Screen, CellDelta }
+use lib::types { Rect, TextStyle, Cell, TextSegment, LayoutSize, MouseButton, Key, MouseEvent, Event, Screen, CellDelta }
 
 use init::optics {view, set, over}
 
@@ -169,6 +169,12 @@ pub def empty_screen (rows : I64) (cols : I64) : Screen :=
 /// Create a cell with the given character and default style
 pub def mk_cell (char : String) : Cell :=
     { char := char, style := style_default }
+
+/// One styled segment. Lives here, not in `types.mo`: the host's macro
+/// capture cannot type a struct literal in that types-only module.
+pub def mk_text_segment (text : String) (style : TextStyle) : TextSegment :=
+    let r : TextSegment := { text := text, style := style } in
+    r
 
 /// Replace the element at `index` (0-indexed); unchanged if out of range.
 /// Index-first to match `List.get`.

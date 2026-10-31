@@ -39,7 +39,7 @@ use weaver::store {
     Transcript.empty, Transcript.next_block, Transcript.append, Transcript.slice,
 }
 use tui::types {Event, LayoutSize, TextStyle, TextSegment}
-use tui::core {clamp, style_default}
+use tui::core {clamp, style_default, mk_text_segment}
 use tui::widgets::input {
     InputState, input_state, InputState.press, InputState.drag,
     InputState.finish_selection, InputState.clear_selection,
@@ -793,7 +793,7 @@ def plain_line_list (width : I64) (lines : List String) : List DisplayRow :=
     }
 
 def md_span (colors : Bool) (s : Markdown.StyledSpan) : TextSegment :=
-    TextSegment.of s.text (theme_markdown_span_style_with colors s.style)
+    mk_text_segment s.text (theme_markdown_span_style_with colors s.style)
 
 #[partial]
 def md_rows_go (colors : Bool) (width : I64) (lines : List Markdown.StyledLine) : List DisplayRow :=
@@ -1015,8 +1015,8 @@ def selected_span_row (r : DisplayRow) (a : I64) (b : I64) : SizedWidget :=
     let midw : I64 := Text.width_spans mid0 in
     let pad : I64 := if mw < midw then 0 else mw - midw in
     let mid : List TextSegment :=
-        List.append (List.map (fn (s : TextSegment) => TextSegment.of s.text { s.style with reverse := true }) mid0)
-            (if pad < 1 then List.empty else [TextSegment.of (String.repeat " " pad) { r.style with reverse := true }]) in
+        List.append (List.map (fn (s : TextSegment) => mk_text_segment s.text { s.style with reverse := true }) mid0)
+            (if pad < 1 then List.empty else [mk_text_segment (String.repeat " " pad) { r.style with reverse := true }]) in
     let hw : I64 := Text.width_spans head in
     let tw : I64 := Text.width_spans tail in
     let p1 : List SizedWidget :=
