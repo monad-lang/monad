@@ -1981,49 +1981,66 @@ def test_type_check_elim_rejects_too_many_minors : Bool :=
         (List.cons Term.hole (List.cons Term.hole (List.cons Term.hole List.empty))) scrutinee in
     elim_result_err (type_check_elim e Term.hole bool_scope_for_elim_tests local_types empty_locals)
 
-/// A genuinely NON-CONSTANT motive: `fn (s : Shape) => tag (Term.var 2)`,
-/// where `tag` is itself a bound function value (`Shape -> Sort 1`, kept
-/// deliberately OPAQUE/unresolved beyond that declared type). Each
-/// minor's own body applies `tag` to ITS OWN constructor -- `circle`'s
-/// minor says `tag (circle r)`, `square`'s says `tag (square r)` -- which
-/// only BUILDS at all if `type_check_elim_minor` threads the correctly
-/// `term_shift`ed motive through each one. `local_types` is
-/// `[Shape, Shape -> Sort 1]` (index 0 the scrutinee's own slot, index 1
-/// `tag`'s).
+/// A genuinely NON-CONSTANT, DEPENDENT motive: `Fam : Shape -> Type` is a
+/// declared family and `val : (s : Shape) -> Fam s` an inhabitant of it,
+/// both resolved BY NAME from parsed source. Only the field binder `r` is
+/// a de Bruijn index here, so this fixture cannot be wrong about depths
+/// the way a hand-assembled one can.
 ///
-/// No swapped-minor mutation control: `type_check_lam_explicit`
-/// (`infer.mo`) does not itself `unify` an application-shaped body
-/// against the Pi's codomain it is checked against -- `type_check_app`
-/// is pure inference, and the explicit-binder arm keeps `expected_type`
-/// verbatim as the lambda's type whenever `ret_typ` isn't a hole, with no
-/// comparison against what `body` actually inferred to. Confirmed
-/// directly: swapping which minor goes with which constructor here still
-/// returns `ok`. This is a pre-existing, orthogonal gap (not introduced
-/// by this rule, and not fixed by it -- recorded in
-/// `core-term-simplification.md`'s R4 section as a flag for R4b, since a
-/// derived non-constant motive's minors will usually be application-
-/// shaped too) rather than something this pin can catch.
-def tag_fn_typ : Term := Term.pi binder_anon Term.hole (sort_n 1)
-def dependent_motive_for_elim_tests : Term :=
-    Term.lam binder_anon Term.hole (Term.app (Term.var 2 DebugName.unnamed) (Term.var 0 DebugName.unnamed))
-def dependent_local_types_for_elim_tests : List Term :=
-    List.cons (named_free_var "Shape") (List.cons tag_fn_typ List.empty)
-def circle_minor_for_elim_tests : Term :=
+/// Its predecessor was hand-built (`tag : Shape -> Sort 1` with minors
+/// `tag (circle r)`) and was RED on main: a minor must produce an
+/// INHABITANT of `Fam (circle r)`, and `tag (circle r)` is a type (it
+/// lives in `Sort 1`), so rejecting it was correct. That also means the
+/// swapped-minor control the old pin said it could not have was really
+/// this fixture bug; the control below is it, fixed.
+def fam_source_for_elim_tests : String :=
+    "type Shape { circle (r : I64), square (r : I64) }\ndef Fam (s : Shape) : Type\ndef val (s : Shape) : Fam s"
+
+def fam_scope_for_elim_tests : Scope :=
+    let mod_path : ModulePath := ModulePath.mk (List.cons (Identifier.id "Test") List.empty) in
+    let sd : ScopeData :=
+        match try_parse_decls fam_source_for_elim_tests {
+            Option.some decls => build_scope_from_decls mod_path decls,
+            Option.none => build_scope_from_decls mod_path List.empty,
+        } in
+    {
+        module_id := mod_path,
+        scope := sd,
+        parent := Option.none,
+        incomplete_match_ok := false,
+    }
+
+def fam_motive_for_elim_tests : Term :=
+    Term.lam binder_anon Term.hole (Term.app (named_free_var "Fam") (Term.var 0 DebugName.unnamed))
+
+def fam_minor_for_elim_tests (ctor : String) : Term :=
     Term.lam binder_anon Term.hole
-        (Term.app (Term.var 2 DebugName.unnamed) (Term.app (named_free_var "circle") (Term.var 0 DebugName.unnamed)))
-def square_minor_for_elim_tests : Term :=
-    Term.lam binder_anon Term.hole
-        (Term.app (Term.var 2 DebugName.unnamed) (Term.app (named_free_var "square") (Term.var 0 DebugName.unnamed)))
+        (Term.app (named_free_var "val")
+            (Term.app (named_free_var ctor) (Term.var 0 DebugName.unnamed)))
+
+def fam_local_types_for_elim_tests : List Term := List.cons (named_free_var "Shape") List.empty
+
+def fam_elim_for_elim_tests (first : Term) (second : Term) : Elim :=
+    Elim.mk shape_name_for_elim_tests List.empty List.empty List.empty fam_motive_for_elim_tests
+        (List.cons first (List.cons second List.empty)) (Term.var 0 DebugName.unnamed)
 
 #[test]
 def test_type_check_elim_accepts_a_real_dependent_motive : Bool :=
-    let scrutinee : Term := Term.var 0 DebugName.unnamed in
-    let e : Elim := Elim.mk shape_name_for_elim_tests List.empty List.empty List.empty
-        dependent_motive_for_elim_tests
-        (List.cons circle_minor_for_elim_tests (List.cons square_minor_for_elim_tests List.empty))
-        scrutinee in
-    elim_result_ok (type_check_elim e Term.hole shape_scope_for_elim_tests
-        dependent_local_types_for_elim_tests empty_locals)
+    elim_result_ok (type_check_elim
+        (fam_elim_for_elim_tests (fam_minor_for_elim_tests "circle") (fam_minor_for_elim_tests "square"))
+        Term.hole fam_scope_for_elim_tests fam_local_types_for_elim_tests empty_locals)
+
+/// The swapped-minor mutation control the old pin documented as impossible:
+/// `square`'s minor under `circle`'s constructor produces
+/// `Fam (square r)` where `Fam (circle r)` is required. This is only
+/// rejected because a def call's return type is instantiated with the
+/// call's own arguments -- without that, both sides came back as the
+/// unsubstituted `Fam s` and the swap was invisible.
+#[test]
+def test_type_check_elim_rejects_swapped_minors_under_a_dependent_motive : Bool :=
+    elim_result_err (type_check_elim
+        (fam_elim_for_elim_tests (fam_minor_for_elim_tests "square") (fam_minor_for_elim_tests "circle"))
+        Term.hole fam_scope_for_elim_tests fam_local_types_for_elim_tests empty_locals)
 
 // ─── R4b: motive derivation (core-term-simplification.md) ───────────────
 //

@@ -4572,7 +4572,7 @@ def try_type_check_def_call (app_term : Term) (expected_type : Term) (scope : Sc
                                                                                     // `def wrong : I64 := add2 1`, which
                                                                                     // the reference checker rejects.
                                                                                     let full_ret : Term :=
-                                                                                        rebuild_pi_chain (drop_params (List.length real_args) params) ret in
+                                                                                        rebuild_pi_chain (drop_params (List.length real_args) params) (instantiate_ret ret params elab_args) in
                                                                                     // W1.4: the LEVEL instantiation runs
                                                                                     // beside the type-variable one. A
                                                                                     // declared `: Sort u` return type
@@ -4926,6 +4926,27 @@ def drop_params (n : I64) (params : List Term) : List Term :=
             List.empty => List.empty,
             List.cons _ rest => drop_params (n - 1) rest,
         }
+
+/// Instantiate a signature's return type with the call's own arguments.
+///
+/// Without it a dependent result type keeps its binder dangling: measured,
+/// `def val (s : Shape) : Fam s` called at `circle r` reported `Fam s`, and a
+/// legitimate dependent elim was rejected. Only a SATURATED call is
+/// instantiated -- a partial one's remaining parameters are re-wrapped by
+/// `rebuild_pi_chain`, and their declared types still refer to the applied
+/// prefix this would remove.
+def instantiate_ret (ret : Term) (params : List Term) (args : List Term) : Term :=
+    if I64.beq (List.length args) (List.length params) then instantiate_ret_go ret args else ret
+
+/// `ret` is written under the signature's own binders, so index 0 is the LAST
+/// parameter: recursing on the tail first substitutes the innermost binder,
+/// and each `beta_reduce` closes exactly one.
+#[terminating]
+def instantiate_ret_go (ret : Term) (args : List Term) : Term :=
+    match args {
+        List.empty => ret,
+        List.cons a rest => beta_reduce (instantiate_ret_go ret rest) a,
+    }
 
 /// The type a signature-driven call reports: the residual Pi chain, NOT
 /// what `unify_structural` answers.
@@ -6730,11 +6751,16 @@ def extract_pi_ret_explicit (f_term : Term) (a_term : Term) (f_typ : Term) (a_ty
             // remaining chain (not just the final return -- `cons e1 e2`
             // solves at the first argument and needs the second
             // parameter's own `List A` rewritten too).
+            // The codomain still names its own binder at index 0; applying
+            // the argument closes it (`whnf_go`'s app arm does the same for
+            // a lambda). Without this a dependent codomain came back with
+            // the binder dangling -- see `instantiate_ret`.
+            let instantiated : Term := beta_reduce pi_ret a_term in
             if is_hole pi_ret
             then ok (mk_typed app_term (con_spine_result_typ f_term pi_ret scope))
             else
                 let pi_subst : List (Pair Identifier Term) := solve_typevars scope pi_arg a_typ List.empty in
-                ok (mk_typed app_term (subst_typevars_term pi_ret pi_subst)),
+                ok (mk_typed app_term (subst_typevars_term instantiated pi_subst)),
         // Unreachable in practice -- the dispatcher above hands this
         // function only `Term.pi` -- but this match is over the full
         // `Term`, so the fallback stays rather than enumerating 14 arms
