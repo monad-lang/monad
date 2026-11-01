@@ -1,0 +1,31 @@
+# The Monad source formatter and the tokenizer it is built on.
+#
+# The library is deliberately layered so the parts are reusable on their own:
+# `lexer` is a general lossless tokenizer (LSP highlighting, a linter, import
+# organization), `rules` is the formatting policy, `render` applies it, and
+# `fmt` is the pure facade. Only `fmt`/`render` know what formatting is.
+#
+# The compiler is NOT a dependency. The tokenizer mirrors the lexical grammar
+# with `parsec`'s byte predicates plus a small local table; the CLI, which
+# already depends on `lang`, performs the strict-parse verification gate.
+# A slow whole-corpus test exists to catch lexical drift.
+
+[mote]
+name = "fmt"
+version = "0.1.0"
+edition = "2026"
+
+[dependencies.init]
+workspace = true
+
+[dependencies.std]
+workspace = true
+
+[dependencies.parsec]
+workspace = true
+
+# Affine-by-default migration exception (measured 2026-11-01). The renderer
+# threads token lists and stacks; delete this when the mote reaches zero
+# violations. See plans/type-system/quantitative-types.md.
+[affine]
+mode = "warn"

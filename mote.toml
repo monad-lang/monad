@@ -40,6 +40,7 @@ members = [
   "motes/demo",
   "motes/example",
   "motes/ffi_example",
+  "motes/fmt",
   "motes/http",
   "motes/json",
   "motes/log",
@@ -89,6 +90,9 @@ path = "motes/crypto"
 
 [workspace.dependencies.eval]
 path = "eval"
+
+[workspace.dependencies.fmt]
+path = "motes/fmt"
 
 [workspace.dependencies.http]
 path = "motes/http"
