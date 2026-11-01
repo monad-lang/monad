@@ -33,6 +33,7 @@ use jsonwebtoken::errors {JwtError, JwtError.to_string}
 use jsonwebtoken::jwt {Jwt, Jwt.parse, Jwt.verify}
 use jsonwebtoken::principal {Principal}
 use jsonwebtoken::verifier {JwtVerifier}
+use lib::audit {Audit.allowed, Audit.denied, Audit.emit, Audit.status_of, AuditEvent}
 use lib::config {OauthConfig, OauthConfig.claims_config}
 use lib::discovery {OauthEndpoints}
 use lib::errors {AuthError}
@@ -69,15 +70,19 @@ pub struct JwksState {
 }
 
 /// The token-validation strategy. JWT mode carries the JWKS plumbing;
-/// introspection mode carries the RFC 7662 client and its cache.
+/// introspection mode carries the RFC 7662 client and its cache. Both carry an
+/// optional audit hook (`BearerValidator.with_audit`).
 pub type TokenMode {
   token_jwt
     (cfg : OauthConfig)
     (endpoints : OauthEndpoints)
     (http : OauthHttp)
     (verifier : JwtVerifier)
-    (state : Ref JwksState),
-  token_introspect (intro : Introspector)
+    (state : Ref JwksState)
+    (audit : Option (AuditEvent -> IO Unit)),
+  token_introspect
+    (intro : Introspector)
+    (audit : Option (AuditEvent -> IO Unit))
 }
 
 /// A configured guard. Construct it once with `jwt` or `introspect`.
@@ -97,7 +102,7 @@ pub def BearerValidator.jwt
   };
   let cell <- Ref.new empty;
   let out : BearerValidator := {
-    mode := TokenMode.token_jwt cfg ep h v cell
+    mode := TokenMode.token_jwt cfg ep h v cell Option.none
   };
   return out
 }
@@ -108,9 +113,38 @@ pub def BearerValidator.introspect
   : IO BearerValidator := do {
   let intro <- Introspector.new cfg ep h;
   let out : BearerValidator := {
-    mode := TokenMode.token_introspect intro
+    mode := TokenMode.token_introspect intro Option.none
   };
   return out
+}
+
+/// Attach an audit hook. Allowed events carry the subject and issuer; denied
+/// events carry a short reason code. `AuditEvent.render` is the safe line.
+pub def BearerValidator.with_audit
+  (v : BearerValidator) (hook : AuditEvent -> IO Unit)
+  : BearerValidator :=
+  match v.mode {
+    TokenMode.token_jwt cfg ep http verifier state _ =>
+      let out : BearerValidator := {
+        mode := TokenMode.token_jwt cfg ep http verifier state (Option.some hook)
+      } in out,
+    TokenMode.token_introspect intro _ =>
+      let out : BearerValidator := {
+        mode := TokenMode.token_introspect intro (Option.some hook)
+      } in out
+  }
+
+def Bearer.audit_of (v : BearerValidator) : Option (AuditEvent -> IO Unit) :=
+  match v.mode {
+    TokenMode.token_jwt _ _ _ _ _ audit => audit,
+    TokenMode.token_introspect _ audit => audit
+  }
+
+def Bearer.reject
+  (audit : Option (AuditEvent -> IO Unit)) (e : AuthError)
+  : IO (Result String Response) := do {
+  let _ <- Audit.emit audit (Audit.denied e);
+  return (Result.ok (Bearer.response_of e))
 }
 
 // ── the guard ─────────────────────────────────────────────────────────────
@@ -135,7 +169,7 @@ def Bearer.require_at
   (req : Request) (now : I64)
   : IO (Result String Response) := do {
   match Bearer.extract_token req {
-    Result.err e => return (Result.ok (Bearer.response_of e)),
+    Result.err e => Bearer.reject (Bearer.audit_of v) e,
     Result.ok token => Bearer.dispatch v required handler req now token
   }
 }
@@ -146,35 +180,37 @@ def Bearer.dispatch
   (req : Request) (now : I64) (token : String)
   : IO (Result String Response) :=
   match v.mode {
-    TokenMode.token_jwt cfg ep http verifier state =>
-      Bearer.check_jwt_token cfg ep http verifier state required handler req now token,
-    TokenMode.token_introspect intro =>
-      Bearer.check_introspected intro required handler req now token
+    TokenMode.token_jwt cfg ep http verifier state audit =>
+      Bearer.check_jwt_token cfg ep http verifier state audit required handler req now token,
+    TokenMode.token_introspect intro audit =>
+      Bearer.check_introspected intro audit required handler req now token
   }
 
 def Bearer.check_introspected
-  (intro : Introspector) (required : List String)
+  (intro : Introspector) (audit : Option (AuditEvent -> IO Unit))
+  (required : List String)
   (handler : Principal -> Request -> IO (Result String Response))
   (req : Request) (now : I64) (token : String)
   : IO (Result String Response) := do {
   let r <- Introspector.principal intro now token;
   match r {
-    Result.err e => return (Result.ok (Bearer.response_of e)),
-    Result.ok principal => Bearer.authorize required handler principal req
+    Result.err e => Bearer.reject audit e,
+    Result.ok principal => Bearer.authorize audit required handler principal req
   }
 }
 
 def Bearer.check_jwt_token
   (cfg : OauthConfig) (ep : OauthEndpoints) (http : OauthHttp)
   (verifier : JwtVerifier) (state : Ref JwksState)
+  (audit : Option (AuditEvent -> IO Unit))
   (required : List String)
   (handler : Principal -> Request -> IO (Result String Response))
   (req : Request) (now : I64) (token : String)
   : IO (Result String Response) := do {
   match Jwt.parse token {
-    Result.err e => return (Result.ok (Bearer.response_of (Bearer.auth_error e))),
+    Result.err e => Bearer.reject audit (Bearer.auth_error e),
     Result.ok jwt =>
-      Bearer.load_and_verify cfg ep http verifier state required handler req now jwt false
+      Bearer.load_and_verify cfg ep http verifier state audit required handler req now jwt false
   }
 }
 
@@ -182,15 +218,16 @@ def Bearer.check_jwt_token
 def Bearer.load_and_verify
   (cfg : OauthConfig) (ep : OauthEndpoints) (http : OauthHttp)
   (verifier : JwtVerifier) (state : Ref JwksState)
+  (audit : Option (AuditEvent -> IO Unit))
   (required : List String)
   (handler : Principal -> Request -> IO (Result String Response))
   (req : Request) (now : I64) (jwt : Jwt) (force : Bool)
   : IO (Result String Response) := do {
   let doc <- Bearer.jwks_doc state ep http now force;
   match doc {
-    Result.err e => return (Result.ok (Bearer.response_of e)),
+    Result.err e => Bearer.reject audit e,
     Result.ok jwks =>
-      Bearer.verify_jwt cfg ep http verifier state required handler req now jwks jwt force
+      Bearer.verify_jwt cfg ep http verifier state audit required handler req now jwks jwt force
   }
 }
 
@@ -198,6 +235,7 @@ def Bearer.load_and_verify
 def Bearer.verify_jwt
   (cfg : OauthConfig) (ep : OauthEndpoints) (http : OauthHttp)
   (verifier : JwtVerifier) (state : Ref JwksState)
+  (audit : Option (AuditEvent -> IO Unit))
   (required : List String)
   (handler : Principal -> Request -> IO (Result String Response))
   (req : Request) (now : I64) (jwks : Json) (jwt : Jwt) (force : Bool)
@@ -205,9 +243,9 @@ def Bearer.verify_jwt
   let checked <- Jwt.verify verifier jwks jwt;
   match checked {
     Result.err e =>
-      Bearer.on_jwt_error cfg ep http verifier state required handler req now jwt e force,
+      Bearer.on_jwt_error cfg ep http verifier state audit required handler req now jwt e force,
     Result.ok _ =>
-      Bearer.validate_and_authorize cfg required handler req now jwt
+      Bearer.validate_and_authorize cfg audit required handler req now jwt
   }
 }
 
@@ -215,6 +253,7 @@ def Bearer.verify_jwt
 def Bearer.on_jwt_error
   (cfg : OauthConfig) (ep : OauthEndpoints) (http : OauthHttp)
   (verifier : JwtVerifier) (state : Ref JwksState)
+  (audit : Option (AuditEvent -> IO Unit))
   (required : List String)
   (handler : Principal -> Request -> IO (Result String Response))
   (req : Request) (now : I64) (jwt : Jwt) (e : JwtError) (force : Bool)
@@ -222,32 +261,48 @@ def Bearer.on_jwt_error
   match e {
     JwtError.jwks_unknown_kid =>
       if force
-      then return (Result.ok (Bearer.response_of (Bearer.auth_error e)))
-      else Bearer.load_and_verify cfg ep http verifier state required handler req now jwt true,
-    _ => return (Result.ok (Bearer.response_of (Bearer.auth_error e)))
+      then Bearer.reject audit (Bearer.auth_error e)
+      else Bearer.load_and_verify cfg ep http verifier state audit required handler req now jwt true,
+    _ => Bearer.reject audit (Bearer.auth_error e)
   }
 
 def Bearer.validate_and_authorize
-  (cfg : OauthConfig) (required : List String)
+  (cfg : OauthConfig) (audit : Option (AuditEvent -> IO Unit))
+  (required : List String)
   (handler : Principal -> Request -> IO (Result String Response))
   (req : Request) (now : I64) (jwt : Jwt)
   : IO (Result String Response) := do {
   let claims_cfg := OauthConfig.claims_config cfg;
   match Claims.validate_access_token claims_cfg now jwt {
-    Result.err e => return (Result.ok (Bearer.response_of (Bearer.auth_error e))),
-    Result.ok principal => Bearer.authorize required handler principal req
+    Result.err e => Bearer.reject audit (Bearer.auth_error e),
+    Result.ok principal => Bearer.authorize audit required handler principal req
   }
 }
 
 def Bearer.authorize
+  (audit : Option (AuditEvent -> IO Unit))
   (required : List String)
   (handler : Principal -> Request -> IO (Result String Response))
   (principal : Principal) (req : Request)
-  : IO (Result String Response) :=
-  let missing := Bearer.missing_scopes required principal.scopes in
+  : IO (Result String Response) := do {
+  let missing := Bearer.missing_scopes required principal.scopes;
   if I64.beq (List.length missing) 0i64
-  then handler principal req
-  else return (Result.ok (Bearer.response_of (AuthError.auth_insufficient_scope missing)))
+  then do {
+    let r <- handler principal req;
+    let status : U16 :=
+      match r {
+        Result.ok res => res.status,
+        Result.err _ => Status.internal_server_error
+      };
+    let _ <- Audit.emit audit (Audit.allowed status principal.subject principal.issuer);
+    return r
+  }
+  else do {
+    let err := AuthError.auth_insufficient_scope missing;
+    let _ <- Audit.emit audit (Audit.denied err);
+    return (Result.ok (Bearer.response_of err))
+  }
+}
 
 def Bearer.missing_scopes
   (required : List String) (granted : List String)
@@ -447,7 +502,7 @@ pub def BearerValidator.validate_id_token
   (v : BearerValidator) (now : I64) (nonce : String) (token : String)
   : IO (Result AuthError Principal) :=
   match v.mode {
-    TokenMode.token_jwt cfg ep http verifier state =>
+    TokenMode.token_jwt cfg ep http verifier state _ =>
       Bearer.check_id_token cfg ep http verifier state now nonce token,
     TokenMode.token_introspect _ =>
       return (Result.err AuthError.auth_server_misconfigured)
@@ -539,39 +594,41 @@ def Bearer.auth_response
   (status : U16) (challenge : String) (body : String)
   : Response :=
   let res := Response.json status body in
-  Response.with_header "Cache-Control" "no-store"
-    (Response.with_header "WWW-Authenticate" challenge res)
+  Response.with_header "Referrer-Policy" "no-referrer"
+    (Response.with_header "Cache-Control" "no-store"
+      (Response.with_header "WWW-Authenticate" challenge res))
 
 /// A server-side failure: no Bearer challenge, because the caller's
 /// credential is not the problem and retrying will not help.
 def Bearer.plain_response (status : U16) (body : String) : Response :=
-  Response.with_header "Cache-Control" "no-store" (Response.json status body)
+  Response.with_header "Referrer-Policy" "no-referrer"
+    (Response.with_header "Cache-Control" "no-store" (Response.json status body))
 
 def Bearer.response_of (e : AuthError) : Response :=
+  let status := Audit.status_of e in
   match e {
     AuthError.auth_missing_token =>
-      Bearer.auth_response Status.unauthorized (Bearer.challenge Option.none)
+      Bearer.auth_response status (Bearer.challenge Option.none)
         "{\"error\":\"unauthorized\"}",
     AuthError.auth_invalid_token _ =>
-      Bearer.auth_response Status.unauthorized
+      Bearer.auth_response status
         (Bearer.challenge (Option.some "error=\"invalid_token\""))
         "{\"error\":\"invalid_token\"}",
     AuthError.auth_expired =>
-      Bearer.auth_response Status.unauthorized
+      Bearer.auth_response status
         (Bearer.challenge (Option.some "error=\"invalid_token\""))
         "{\"error\":\"invalid_token\"}",
     AuthError.auth_insufficient_scope required =>
-      Bearer.auth_response Status.forbidden
+      Bearer.auth_response status
         (Bearer.challenge
           (Option.some
             ("error=\"insufficient_scope\", scope=\""
               ++ List.intercalate " " required ++ "\"")))
         "{\"error\":\"insufficient_scope\"}",
     AuthError.auth_temporarily_unavailable =>
-      Bearer.auth_response Status.service_unavailable
+      Bearer.auth_response status
         (Bearer.challenge (Option.some "error=\"temporarily_unavailable\""))
         "{\"error\":\"temporarily_unavailable\"}",
     AuthError.auth_server_misconfigured =>
-      Bearer.plain_response Status.internal_server_error
-        "{\"error\":\"server_error\"}"
+      Bearer.plain_response status "{\"error\":\"server_error\"}"
   }

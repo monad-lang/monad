@@ -3,6 +3,8 @@
 /// `Bearer.require_at` fixes the clock so expiry and the cache TTL are
 /// deterministic. Both hosts run these.
 
+use std::list {List.any, List.length}
+use std::ref {Ref, Ref.new, Ref.update}
 use std::base64 {B64Url.encode}
 use std::io {IO.current_time}
 use http::types {
@@ -12,9 +14,11 @@ use http::types {
 }
 use http::body {Body.to_bytes_pure}
 use jsonwebtoken::principal {Principal}
+use oauth::audit {AuditEvent, AuditEvent.render}
 use jsonwebtoken::verifier {JwtVerifier}
 use oauth::bearer {
   Bearer.require, Bearer.require_at, BearerValidator, BearerValidator.jwt,
+  BearerValidator.with_audit,
 }
 use oauth::config {ClientAuth, OauthConfig}
 use oauth::discovery {OauthEndpoints}
@@ -170,6 +174,7 @@ def auth_fail
       U16.beq res.status status
         && header_of res "WWW-Authenticate" == www
         && header_of res "Cache-Control" == "no-store"
+        && header_of res "Referrer-Policy" == "no-referrer"
         && body_of (Result.ok res) == body
   }
 
@@ -391,4 +396,45 @@ def test_bearer_require_uses_the_wall_clock : IO Bool := do {
   let token := token_of "{\"alg\":\"RS256\"}" claims;
   let r <- Bearer.require v List.empty ok_handler (request_auth ("Bearer " ++ token));
   return (U16.beq (status_of r) Status.ok)
+}
+
+def audit_log : IO (Pair (Ref (List String)) (AuditEvent -> IO Unit)) := do {
+  let cell <- Ref.new (List.empty : List String);
+  let hook : AuditEvent -> IO Unit := fn (e : AuditEvent) => do {
+    let _ <- Ref.update cell
+      (fn (xs : List String) => List.append xs [AuditEvent.render e]);
+    return unit
+  };
+  return (Pair.pair cell hook)
+}
+
+#[test]
+def test_bearer_audits_allowed_and_denied : IO Bool := do {
+  let pair <- audit_log;
+  match pair {
+    Pair.pair cell hook => do {
+      let v <- validator_with [jwks_exchange] true;
+      let v2 := BearerValidator.with_audit v hook;
+      let req := request_auth ("Bearer " ++ valid_token);
+      let _ <- Bearer.require_at v2 List.empty ok_handler req 2000i64;
+      let vd <- validator_with [jwks_exchange] false;
+      let vd2 := BearerValidator.with_audit vd hook;
+      let _ <- Bearer.require_at vd2 List.empty ok_handler req 2000i64;
+      let entries <- Ref.get cell;
+      let allowed := List.any
+        (fn (s : String) =>
+          String.contains s "oauth allowed"
+            && String.contains s "sub=\"u1\""
+            && String.contains s "status=200")
+        entries;
+      let denied := List.any
+        (fn (s : String) =>
+          String.contains s "oauth denied"
+            && String.contains s "reason=\"invalid_token\"")
+        entries;
+      let leaked := List.any (fn (s : String) => String.contains s valid_token) entries;
+      return (I64.beq (List.length entries) 2i64 && allowed && denied
+        && Bool.not leaked)
+    }
+  }
 }

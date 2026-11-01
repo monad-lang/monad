@@ -6,7 +6,7 @@
 /// RSA key so key selection succeeds; the fake verifier decides the
 /// signature.
 
-use std::list {List.any}
+use std::list {List.any, List.length}
 use std::map {BTreeMap}
 use std::ref {Ref, Ref.new, Ref.update}
 use std::base64 {B64Url.encode}
@@ -21,6 +21,7 @@ use http::uri {Uri.percent_encode}
 use http::strings {Strings.split_at_byte, Strings.split_on}
 use json::json {Json}
 use jsonwebtoken::principal {Principal}
+use oauth::audit {AuditEvent, AuditEvent.render}
 use jsonwebtoken::verifier {JwtVerifier}
 use oauth::bearer {BearerValidator, BearerValidator.jwt}
 use oauth::config {ClientAuth, OauthConfig}
@@ -30,7 +31,7 @@ use oauth::http_client {OauthHttp.fake, ScriptedExchange}
 use oauth::login {
   Login.deps, Login.handle_callback_at, Login.handle_login_with,
   Login.handle_logout_at, Login.handle_refresh_at, Login.with_session_id,
-  Login.with_userinfo, LoginDeps,
+  Login.with_audit, Login.with_userinfo, LoginDeps,
 }
 use oauth::session {
   AuthSession, OauthSessionStore, OauthSessionStore.create_with_id,
@@ -615,4 +616,51 @@ def test_userinfo_without_endpoint_is_502 : IO Bool := do {
   let _ <- begin_with d2 Option.none "nonce1";
   let r <- Login.handle_callback_at d2 (callback_request_for d2 "state1" "abc") 2000i64;
   return (U16.beq (status_of r) Status.bad_gateway)
+}
+
+def audit_log : IO (Pair (Ref (List String)) (AuditEvent -> IO Unit)) := do {
+  let cell <- Ref.new (List.empty : List String);
+  let hook : AuditEvent -> IO Unit := fn (e : AuditEvent) => do {
+    let _ <- Ref.update cell
+      (fn (xs : List String) => List.append xs [AuditEvent.render e]);
+    return unit
+  };
+  return (Pair.pair cell hook)
+}
+
+#[test]
+def test_login_audits_decisions : IO Bool := do {
+  let pair <- audit_log;
+  match pair {
+    Pair.pair cell hook => do {
+      let idt := id_token_with "nonce1";
+      let d <- deps_with [jwks_exchange] [exchange_post idt];
+      let d2 := Login.with_audit d hook;
+      let _ <- begin_with d2 Option.none "nonce1";
+      let _ <- Login.handle_callback_at d2
+        (callback_request_for d2 "state1" "abc") 2000i64;
+      let bad := id_token_with "wrong";
+      let e <- deps_with [jwks_exchange] [exchange_post bad];
+      let e2 := Login.with_audit e hook;
+      let _ <- begin_with e2 Option.none "nonce1";
+      let _ <- Login.handle_callback_at e2
+        (callback_request_for e2 "state1" "abc") 2000i64;
+      let entries <- Ref.get cell;
+      let allowed := List.any
+        (fn (s : String) =>
+          String.contains s "oauth allowed"
+            && String.contains s "sub=\"u1\""
+            && String.contains s "status=303")
+        entries;
+      let denied := List.any
+        (fn (s : String) =>
+          String.contains s "oauth denied"
+            && String.contains s "status=400"
+            && String.contains s "reason=\"callback_failed\"")
+        entries;
+      let leaked := List.any (fn (s : String) => String.contains s idt) entries;
+      return (I64.beq (List.length entries) 2i64 && allowed && denied
+        && Bool.not leaked)
+    }
+  }
 }

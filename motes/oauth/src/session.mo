@@ -201,8 +201,9 @@ def OauthSessionStore.add_cookies
 
 /// The 401 for a missing/duplicate/expired session, clearing both cookies.
 pub def OauthSessionStore.unauthorized (st : OauthSessionStore) : Response :=
-  let res := Response.with_header "Cache-Control" "no-store"
-    (Response.json Status.unauthorized "{\"error\":\"unauthorized\"}") in
+  let res := Response.with_header "Referrer-Policy" "no-referrer"
+    (Response.with_header "Cache-Control" "no-store"
+      (Response.json Status.unauthorized "{\"error\":\"unauthorized\"}")) in
   OauthSessionStore.add_cookies (OauthSessionStore.clear_cookies st) res
 
 // ── lookup ─────────────────────────────────────────────────────────────────

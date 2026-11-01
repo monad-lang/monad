@@ -15,6 +15,17 @@
 // applications that validate tokens import `jsonwebtoken` directly, so
 // there is exactly one JWT API.
 
+pub use lib::redact {Redact.headers, Redact.query, Redact.url, Redact.value}
+pub use lib::audit {
+  Audit.allowed,
+  Audit.denied,
+  Audit.denied_status,
+  Audit.reason_of,
+  Audit.status_of,
+  AuditDecision,
+  AuditEvent,
+  AuditEvent.render,
+}
 pub use lib::errors {
   AuthError,
   AuthError.to_string,
@@ -66,6 +77,7 @@ pub use lib::bearer {
   BearerValidator.introspect,
   BearerValidator.jwt,
   BearerValidator.validate_id_token,
+  BearerValidator.with_audit,
 }
 pub use lib::session {
   AuthSession,
@@ -94,6 +106,7 @@ pub use lib::login {
   Login.handle_refresh,
   Login.safe_return_to,
   Login.with_userinfo,
+  Login.with_audit,
   LoginDeps,
 }
 pub use lib::introspect {

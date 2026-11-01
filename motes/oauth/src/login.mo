@@ -26,6 +26,7 @@ use lib::client {
   Client.append_query, Client.authorize_url, Client.exchange_code, Client.refresh,
   Client.userinfo,
 }
+use lib::audit {Audit.allowed, Audit.denied_status, Audit.emit, AuditEvent}
 use lib::config {OauthConfig}
 use lib::discovery {OauthEndpoints}
 use lib::errors {AuthError, AuthError.to_string, OauthError, OauthError.to_string}
@@ -54,7 +55,10 @@ pub struct LoginDeps {
   check_userinfo : Bool,
   /// Session-id source; the CSPRNG in production, deterministic in tests.
   /// A thunk so constructing the deps never runs it.
-  session_id : Unit -> IO (Result AuthError String)
+  session_id : Unit -> IO (Result AuthError String),
+  /// Audit hook; allowed events carry the subject/issuer, denied ones a
+  /// short reason.
+  audit : Option (AuditEvent -> IO Unit)
 }
 
 pub def Login.deps
@@ -69,12 +73,19 @@ pub def Login.deps
     sessions := sessions,
     bearer := bearer,
     check_userinfo := false,
-    session_id := fn (_ : Unit) => OauthSessionStore.new_id
+    session_id := fn (_ : Unit) => OauthSessionStore.new_id,
+    audit := Option.none
   } in
   d
 
 pub def Login.with_userinfo (d : LoginDeps) : LoginDeps :=
   let out : LoginDeps := { d with check_userinfo := true } in
+  out
+
+pub def Login.with_audit
+  (d : LoginDeps) (hook : AuditEvent -> IO Unit)
+  : LoginDeps :=
+  let out : LoginDeps := { d with audit := Option.some hook } in
   out
 
 def Login.with_session_id
@@ -97,20 +108,47 @@ def Login.query (req : Request) : List (Pair String String) :=
 // ── small responses ────────────────────────────────────────────────────────
 
 def Login.redirect (target : String) : Response :=
-  Response.with_header "Cache-Control" "no-store"
-    (Response.redirect Status.see_other target)
+  Response.with_header "Referrer-Policy" "no-referrer"
+    (Response.with_header "Cache-Control" "no-store"
+      (Response.redirect Status.see_other target))
 
 def Login.bad_request : Response :=
-  Response.with_header "Cache-Control" "no-store"
-    (Response.json Status.bad_request "{\"error\":\"callback_failed\"}")
+  Response.with_header "Referrer-Policy" "no-referrer"
+    (Response.with_header "Cache-Control" "no-store"
+      (Response.json Status.bad_request "{\"error\":\"callback_failed\"}"))
 
 def Login.upstream_error : Response :=
-  Response.with_header "Cache-Control" "no-store"
-    (Response.json Status.bad_gateway "{\"error\":\"callback_failed\"}")
+  Response.with_header "Referrer-Policy" "no-referrer"
+    (Response.with_header "Cache-Control" "no-store"
+      (Response.json Status.bad_gateway "{\"error\":\"callback_failed\"}"))
+
+def Login.status_of_result (r : Result String Response) : U16 :=
+  match r {
+    Result.ok res => res.status,
+    Result.err _ => 500u16
+  }
+
+/// Emit a denied event for any non-303 outcome. Successful flows emit their
+/// own allowed event where the subject is known.
+def Login.audit_if_denied
+  (d : LoginDeps) (r : Result String Response) (reason : String)
+  : IO (Result String Response) := do {
+  let status := Login.status_of_result r;
+  // Every login/refresh/logout success is a redirect; treat any non-4xx/5xx
+  // outcome as success so changing the redirect status cannot duplicate the
+  // allowed event with a spurious denied one.
+  if Bool.not (U16.gt status 399u16)
+  then return r
+  else do {
+    let _ <- Audit.emit d.audit (Audit.denied_status status reason);
+    return r
+  }
+}
 
 def Login.forbidden : Response :=
-  Response.with_header "Cache-Control" "no-store"
-    (Response.json Status.forbidden "{\"error\":\"invalid_request\"}")
+  Response.with_header "Referrer-Policy" "no-referrer"
+    (Response.with_header "Cache-Control" "no-store"
+      (Response.json Status.forbidden "{\"error\":\"invalid_request\"}"))
 
 /// Only a relative path (`/...`, not `//...`) or a same-origin absolute URL
 /// is a safe `return_to`; anything else falls back to `/`.
@@ -209,7 +247,7 @@ def Login.handle_callback_at
   (d : LoginDeps) (req : Request) (now : I64)
   : IO (Result String Response) := do {
   let r <- Login.callback_flow d req now;
-  return (Login.with_cleared_login_cookie d r)
+  Login.audit_if_denied d (Login.with_cleared_login_cookie d r) "callback_failed"
 }
 
 def Login.with_cleared_login_cookie
@@ -371,6 +409,7 @@ def Login.start_session
     Result.err e => return (Result.err ("login: " ++ AuthError.to_string e)),
     Result.ok id => do {
       let s <- OauthSessionStore.create_with_id d.sessions id principal tokens now;
+      let _ <- Audit.emit d.audit (Audit.allowed Status.see_other principal.subject principal.issuer);
       let target := Login.safe_return_to d.config pending.return_to;
       let res := OauthSessionStore.add_cookies
         [OauthSessionStore.session_cookie d.sessions s,
@@ -392,6 +431,13 @@ pub def Login.handle_refresh
 }
 
 def Login.handle_refresh_at
+  (d : LoginDeps) (req : Request) (now : I64)
+  : IO (Result String Response) := do {
+  let r <- Login.refresh_flow d req now;
+  Login.audit_if_denied d r "refresh_failed"
+}
+
+def Login.refresh_flow
   (d : LoginDeps) (req : Request) (now : I64)
   : IO (Result String Response) := do {
   let found <- OauthSessionStore.lookup d.sessions req now;
@@ -445,6 +491,8 @@ def Login.rotate_session
     Result.err e => return (Result.err ("refresh: " ++ AuthError.to_string e)),
     Result.ok id => do {
       let rotated <- OauthSessionStore.rotate_with_id_tokens d.sessions session id tokens now;
+      let _ <- Audit.emit d.audit
+        (Audit.allowed Status.see_other session.subject session.issuer);
       let target := Login.safe_return_to d.config Option.none;
       let res := OauthSessionStore.add_cookies
         [OauthSessionStore.session_cookie d.sessions rotated,
@@ -467,6 +515,13 @@ pub def Login.handle_logout
 def Login.handle_logout_at
   (d : LoginDeps) (req : Request) (now : I64)
   : IO (Result String Response) := do {
+  let r <- Login.logout_flow d req now;
+  Login.audit_if_denied d r "logout_failed"
+}
+
+def Login.logout_flow
+  (d : LoginDeps) (req : Request) (now : I64)
+  : IO (Result String Response) := do {
   let found <- OauthSessionStore.lookup d.sessions req now;
   match found {
     Option.none => return (Result.ok (Login.logged_out d)),
@@ -475,6 +530,8 @@ def Login.handle_logout_at
       then return (Result.ok Login.forbidden)
       else do {
         let _ <- OauthSessionStore.destroy d.sessions req;
+        let _ <- Audit.emit d.audit
+          (Audit.allowed Status.see_other session.subject session.issuer);
         return (Result.ok (Login.logged_out d))
       }
   }
