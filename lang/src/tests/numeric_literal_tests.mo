@@ -10,13 +10,16 @@
 /// Rust parser — whose own boundary cases live in
 /// `rust/core/src/parser/test/numbers.rs`.
 ///
-/// One deliberate divergence is pinned here too: a DECIMAL `u64` above
-/// i64::MAX is rejected self-hosted ("not writable yet") because the
-/// wrapping digit fold cannot recover the true magnitude, while the
-/// Rust parser bit-reinterprets a real u64 parse. HEX `u64` needs no
-/// such exception — the fold's wrapped payload IS the bit
-/// reinterpretation, so `0xFFFFFFFFFFFFFFFFu64` parses on both sides
-/// (plan 0.3; lifted when Phase 3's `U64.bits_of_string` native lands).
+/// A decimal `u64` above i64::MAX parses on both sides now: the Rust
+/// parser bit-reinterprets a real u64 parse, and the self-hosted
+/// parser's wrapping digit fold is ALREADY the exact u64 bit pattern
+/// (mod 2^64), with only the range decided separately — by digit
+/// count, since 10^19 < u64::MAX and a 20-digit text fits only up to
+/// `u64::MAX` (the last true parser divergence, lifted in Phase 3.4;
+/// see `int_overflow_rejection`).
+/// HEX `u64` always worked this way — the fold's wrapped payload IS
+/// the bit reinterpretation, so `0xFFFFFFFFFFFFFFFFu64` and its
+/// decimal spelling agree.
 ///
 /// Integer digits with an `f32`/`f64` suffix build a FLOAT literal on
 /// both sides (`33f64` is `33.0f64`); the self-hosted `ParseLiteral.flt`
@@ -111,19 +114,42 @@ def test_negative_unsigned_rejected : Bool :=
         && String.beq (literal_shape "-5i32") "num -5 i32"
 
 #[test]
-def test_u64_full_range_hex_only : Bool :=
+def test_u64_full_range : Bool :=
     // Hex u64 above i64::MAX: the wrapped payload is exactly the
     // bit-reinterpretation the Rust parser computes for the same
     // literal, so it parses on both sides.
     String.beq (literal_shape "0xFFFFFFFFFFFFFFFFu64") "num -1 u64"
         && String.beq (literal_shape "0x8000000000000000u64") "num -9223372036854775808 u64"
-        // Decimal u64 above i64::MAX: rejected self-hosted until
-        // Phase 3 (the plan's one recorded parser divergence).
-        && rejected "9223372036854775808u64"
-        && rejected "18446744073709551615u64"
+        // Decimal u64 above i64::MAX: the wrapping fold is already the
+        // exact bit pattern, so the decimal and hex spellings of the
+        // same value agree (19 digits folded past i64::MAX, then the
+        // 20-digit boundary, then u64::MAX itself).
+        && String.beq (literal_shape "9223372036854775808u64") "num -9223372036854775808 u64"
+        && String.beq (literal_shape "18446744073709551615u64") "num -1 u64"
+        // Leading zeros do not fake a digit count: 21 characters, 19
+        // true digits, an ordinary in-range value.
+        && String.beq (literal_shape "009223372036854775807u64") "num 9223372036854775807 u64"
+        // One past u64::MAX, in 19 and 20 digits, still rejects.
         && rejected "18446744073709551616u64"
+        && rejected "118446744073709551615u64"
         // At or below i64::MAX, decimal u64 parses fine.
         && String.beq (literal_shape "9223372036854775807u64") "num 9223372036854775807 u64"
+
+#[test]
+def test_leading_zeros_are_not_significant : Bool :=
+    // The Rust parser's exact parses (`str::parse`, `from_str_radix`)
+    // accept zero padding at any length; the overflow gates bound on the
+    // SIGNIFICANT digit count, so a zero-padded literal parses to the
+    // same payload as its unpadded spelling at every width.
+    String.beq (literal_shape "00000000000000000042") "num 42 i64"
+        && String.beq (literal_shape "000000000000000000000") "num 0 i64"
+        && String.beq (literal_shape "0000000000000000000255u8") "num 255 u8"
+        && String.beq (literal_shape "-00000000000000000000009223372036854775808") "num -9223372036854775808 i64"
+        && String.beq (literal_shape "0x00000000000000001") "num 1 i64"
+        && String.beq (literal_shape "0x0000FFFFFFFFFFFFFFFFu64") "num -1 u64"
+        // Padding does not hide a real overflow either.
+        && rejected "0009223372036854775808"
+        && rejected "0x00001FFFFFFFFFFFFFFFFu64"
 
 // ─── Integer digits with a float suffix are a FLOAT literal ─────────
 

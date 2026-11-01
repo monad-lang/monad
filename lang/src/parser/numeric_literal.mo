@@ -128,16 +128,21 @@ def float_suffix_try_f64 (r : ParseResult String) (orig : String) : ParseResult 
 // payload. The Rust side bounds-checks exact parses (i64/u64::from_str,
 // u64::from_str_radix); here the scanner folds `acc * 10 + digit` in
 // wrapping I64 arithmetic (parsec/number.mo), so the bounds are
-// recovered from the digit count:
+// recovered from the SIGNIFICANT digit count (leading zeros stripped
+// first -- `00000000000000000042` is 42 on the Rust side, and a
+// zero-padded literal folds to the same payload as the unpadded one):
 // - up to 18 decimal digits can never wrap (10^18 < i64::MAX), so the
 //   payload is the true value and the per-width check is exact;
 // - 19 digits wrapped past i64::MAX iff the payload went negative
 //   (positive literal) or past i64::MIN iff it went positive (negative
 //   literal) — both detected on the payload's sign alone;
-// - 20+ digits are rejected outright: only `u64` could theoretically
-//   hold them, and a `u64` above i64::MAX is not writable self-hosted
-//   until Phase 3's `U64.bits_of_string` native
-//   (plans/implementations/true-numeric-types.md 0.3) — a clear error,
+// - past that boundary only a positive `u64` can survive, and it now
+//   does: the fold is mod 2^64, so the wrapped payload is already the
+//   exact u64 bit pattern and the gate only decides RANGE (see
+//   `int_overflow_rejection`) — no re-parse, and no
+//   `U64.bits_of_string` call, which would open a bootstrap window (an
+//   older nightly cannot compile a tree whose parser needs a native
+//   it lacks). Everything else past the boundary stays a clear error,
 //   strictly better than the silent wrap-to-garbage of the old parser.
 
 def unsigned_suffix (suffix : NumSuffix) : Bool :=
@@ -174,15 +179,16 @@ def int_value_fits (v : I64) (suffix : NumSuffix) : Bool :=
 	}
 
 /// The decimal gate: `Option.some msg` rejects the literal with `msg`,
-/// `Option.none` accepts it. `digit_len` counts the underscore-stripped
-/// digits, sign excluded.
-def int_literal_rejection (negative : Bool) (digit_len : I64) (value : I64) (suffix : NumSuffix) : Option String :=
+/// `Option.none` accepts it. `digit_len` counts the SIGNIFICANT digits
+/// (underscores, sign and leading zeros stripped); `digits` is that
+/// same text, which the overflow path's u64 range bound needs.
+def int_literal_rejection (negative : Bool) (digit_len : I64) (value : I64) (suffix : NumSuffix) (digits : String) : Option String :=
 	if negative && unsigned_suffix suffix
 	then Option.some "negative literal cannot have an unsigned suffix"
 	else if I64.gt digit_len 19
-	then Option.some "integer literal too large"
+	then int_overflow_rejection value suffix digits
 	else if I64.beq digit_len 19 && int_payload_wrapped negative value
-	then int_wrap_rejection suffix
+	then int_overflow_rejection value suffix digits
 	else if int_value_fits value suffix
 	then Option.none
 	else Option.some "integer literal out of range for its suffix"
@@ -192,14 +198,62 @@ def int_literal_rejection (negative : Bool) (digit_len : I64) (value : I64) (suf
 def int_payload_wrapped (negative : Bool) (value : I64) : Bool :=
 	if negative then I64.gt value 0 else I64.lt value 0
 
-def int_wrap_rejection (suffix : NumSuffix) : Option String :=
+/// `u64::MAX` in digits, the bound a 20-digit literal is compared
+/// against. Byte-identical twin of `core_eval.mo`'s `u64_max_digits`
+/// (the evaluator's own fold gate); duplicated rather than imported so
+/// the parser does not depend on the evaluator's module graph.
+def u64_max_digits : String := "18446744073709551615"
+
+/// `digits` from index `i` on, without its leading `0`s -- `""` for an
+/// all-zero text, so its length is the significant-digit count every
+/// overflow gate bounds on (a zero-padded literal folds to the same
+/// payload as the unpadded one, and the Rust side's exact parses accept
+/// it).
+#[partial]
+def strip_leading_zeros (digits : String) (i : I64) : String :=
+	if I64.beq i (String.length digits)
+	then ""
+	else if String.beq "0" (String.slice digits i 1)
+	then strip_leading_zeros digits (I64.add i 1)
+	else String.drop i digits
+
+/// Whether zero-stripped decimal digits denote a value that fits a
+/// u64: fewer than 20 true digits always fit (10^19 < u64::MAX), a
+/// 20-digit text fits only up to `u64::MAX` — decided exactly by
+/// byte-lexicographic `String.lt`, since ASCII digits sort in value
+/// order — and 21+ never fit.
+def u64_digits_fits (digits : String) : Bool :=
+	let len : I64 := String.length digits in
+	if I64.lt len 20
+	then Bool.true
+	else if I64.gt len 20
+	then Bool.false
+	else Bool.or (String.lt digits u64_max_digits) (String.beq digits u64_max_digits)
+
+/// The gate for every literal past the i64 boundary: 20+ digits, or a
+/// 19-digit fold that wrapped. Only a POSITIVE `u64` can pass — a
+/// negative u64 never reaches here (the unsigned-sign branch rejects
+/// it first) — and the wrapped fold is already its exact bit pattern
+/// (the fold is mod 2^64), so the gate only decides range, by the
+/// zero-stripped digit count: a wrapped 19-digit value necessarily
+/// sits in (i64::MAX, 10^19) and always fits, and 20 digits fit only
+/// up to `u64::MAX`. Every other suffix keeps its old rejection, with
+/// the old per-path message: "too large" past 19 digits, "out of range"
+/// for a 19-digit wrap.
+def int_overflow_rejection (value : I64) (suffix : NumSuffix) (digits : String) : Option String :=
 	match suffix {
-		NumSuffix.u64 => Option.some "u64 literal above i64::MAX is not writable self-hosted yet",
-		_ => Option.some "integer literal out of range for its suffix",
+		NumSuffix.u64 =>
+			if u64_digits_fits digits
+			then Option.none
+			else Option.some "integer literal too large",
+		_ =>
+			if I64.gt (String.length digits) 19
+			then Option.some "integer literal too large"
+			else Option.some "integer literal out of range for its suffix",
 	}
 
 /// The hex gate, same shape as `int_literal_rejection`. `hex_len` counts
-/// hex digits: more than 16 cannot fit any width (u64::MAX is 16 digits)
+/// SIGNIFICANT hex digits (leading zeros stripped): more than 16 cannot fit any width (u64::MAX is 16 digits)
 /// and the fold has already wrapped past the true value. `n` is the
 /// folded magnitude — `n < 0` means the true magnitude is at least 2^63.
 def hex_literal_rejection (negative : Bool) (hex_len : I64) (n : I64) (suffix : NumSuffix) : Option String :=
@@ -317,7 +371,8 @@ def numeric_literal_hex_digits_done (r : ParseResult I64) (negative : Bool) (ori
 def numeric_literal_hex_int_suffix (input : String) (n : I64) (negative : Bool) (orig : String) : ParseResult ParseTerm :=
 	match int_suffix_parser input {
 		success rem suffix =>
-			let hex_len : I64 := I64.sub (String.length orig) (String.length input) in
+			let hex_text : String := String.slice orig 0 (I64.sub (String.length orig) (String.length input)) in
+			let hex_len : I64 := String.length (strip_leading_zeros hex_text 0) in
 			match hex_literal_rejection negative hex_len n suffix {
 				Option.some msg => fail (ParseError.custom msg rem),
 				Option.none =>
@@ -423,8 +478,9 @@ def numeric_literal_int_route (rem : String) (n : I64) (negative : Bool) (int_te
 		NumSuffix.f64 => success rem (pt_lit  (ParseLiteral.flt int_text NumSuffix.f64)),
 		_ =>
 			let value : I64 := if negative then (0 - n) else n in
-			let digit_len : I64 := I64.sub (String.length int_text) (if negative then 1 else 0) in
-			match int_literal_rejection negative digit_len value suffix {
+			let digits : String := strip_leading_zeros (if negative then String.drop 1 int_text else int_text) 0 in
+			let digit_len : I64 := String.length digits in
+			match int_literal_rejection negative digit_len value suffix digits {
 				Option.some msg => fail (ParseError.custom msg rem),
 				Option.none => success rem (pt_lit  (ParseLiteral.num value suffix)),
 			},

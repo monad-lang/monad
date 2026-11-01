@@ -81,6 +81,25 @@ fn test_num_literal_range_validation() {
 }
 
 #[test]
+fn test_literal_leading_zeros_are_not_significant() {
+  // Pins the parity the self-hosted gate (`numeric_literal.mo`'s
+  // significant-digit count) has to match: zero padding never changes
+  // the value or trips the range gate.
+  let n = |i: Span<'static, ()>| num_literal::<()>(i);
+  let (_, r) = n("00000000000000000042".into()).unwrap();
+  similar!(r, num_suffix(42, NumSuffix::I64));
+  let (_, r) = n("0000000000000000000255u8".into()).unwrap();
+  similar!(r, num_suffix(255, NumSuffix::U8));
+  assert!(n("0009223372036854775808".into()).is_err());
+  let h = |i: Span<'static, ()>| hex_literal::<()>(i);
+  let (_, r) = h("0x00000000000000001".into()).unwrap();
+  similar!(r, num_suffix(1, NumSuffix::I64));
+  let (_, r) = h("0x0000FFFFFFFFFFFFFFFFu64".into()).unwrap();
+  similar!(r, num_suffix(-1, NumSuffix::U64));
+  assert!(h("0x00001FFFFFFFFFFFFFFFFu64".into()).is_err());
+}
+
+#[test]
 fn test_num_literal_negative_unsigned_rejected() {
   let p = |i: Span<'static, ()>| num_literal::<()>(i);
   assert!(p("-1u8".into()).is_err());
