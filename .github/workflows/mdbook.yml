@@ -37,7 +37,13 @@ jobs:
       # `nix develop` otherwise runs the devShell's pre-commit sweep.
       DEVENV_SKIP_TASKS: "1"
     steps:
+      # Full history: `scripts/ci-self-compile.sh` decides the bootstrap
+      # window by resolving the commit `bootstrap/nightly-floor.txt` names
+      # and testing it with `git merge-base`. A depth-1 checkout cannot
+      # resolve an older floor and leaves the gate the strict path only.
       - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
       # The nightly is the primary host; ci-self-compile.sh's bootstrap-window
       # fallback uses the local `cargo run` if a floor is ever pending.
       - name: Self-compile with the latest nightly
