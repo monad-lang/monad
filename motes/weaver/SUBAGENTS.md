@@ -25,7 +25,7 @@ how the child sees the **current** provider/model and the run's store.
 - Registry = read-side tools only. No `write`/`edit`/`shell`/`task`.
 - Gate = `Gate.read_only` (precheck denies non-read even for a cached
   pick).
-- Budget = `max_turns`, clamped 1-20 (default 8). No wall-clock timeout:
+- Budget = `max_turns`, clamped 1-50 (default 24). No wall-clock timeout:
   the harness has no cancellation primitive.
 - Persistence (v1): `Session.save` under `<session>/agents/<pid>-<ns>.json`;
   a future `/agents` can list these.

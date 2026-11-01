@@ -134,15 +134,15 @@ def test_render_caps_a_long_list : Bool :=
 
 /// The interactive agent floors the output budget well above shuttle's
 /// 512 preset: a truncated tool call or compaction summary is a failure,
-/// not a saving.
+/// not a saving -- and a whole-file edit needs 16k.
 #[test]
 def test_default_output_budget_is_interactive : Bool :=
-    Weaver.default_max_tokens == 4096i64
+    Weaver.default_max_tokens == 16384i64
 
-/// A turn is one model call; 40 was only a handful of user inputs.
+/// A turn is one model call; a complex task's tool loop spends hundreds.
 #[test]
 def test_default_turn_budget_is_interactive : Bool :=
-    Weaver.default_max_turns == 100i64
+    Weaver.default_max_turns == 500i64
 
 /// Ollama serves smaller windows than the hosted vendors; a too-large
 /// default means autocompact never fires before the provider truncates.

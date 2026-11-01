@@ -19,7 +19,7 @@ usage: weaver [OPTIONS]
                            anthropic | mock            (default: ollama)
   -m, --model <VALUE>      default: the provider's preferred model;
                            /model lists what the API actually serves
-      --max-turns <VALUE>  total model-call budget (default 100, across a
+      --max-turns <VALUE>  total model-call budget (default 500, across a
                            save/resume); a non-number is a usage error
   -r, --resume <VALUE>     open a session id, a session directory, or a
                            /save checkpoint
@@ -319,9 +319,10 @@ Two TOML files, in resolution order GLOBAL -> PROJECT -> RUNTIME:
 mode = "plan"          # manual | plan | allow_edit | auto
 provider = "ollama"
 model = "qwen3:8b"     # used as-is; /model lists the API's catalogue
-max_turns = 100        # model calls per session (raise with /budget)
+max_turns = 500        # model calls per session (raise with /budget)
 thinking = false       # ask for the provider's reasoning channel
-max_tokens = 4096      # per-response output budget (weaver's default; 512 cuts off tool calls)
+max_tokens = 16384     # per-response output budget (weaver's default; 512 cut off
+                       # tool calls, and 4k cut whole-file edits mid-block)
 context_window = 128000  # the window autocompact measures against; when unset,
                        # the provider's own default is used (Ollama 32k,
                        # Mistral/OpenRouter 128k, Anthropic 200k)
@@ -340,7 +341,7 @@ reported in the startup warnings (the TUI's first transcript block, or
 stderr in the line-based UI), with a near-miss hint -- `[api_key]`
 instead of `[api_keys]` would otherwise be silently dead. The entries
 inside `[mcp_caps]` and `[api_keys]` are free-form and never warn. The
-built-in floor is ollama / the provider's default model / 100 turns /
+built-in floor is ollama / the provider's default model / 500 turns /
 the provider's window / manual mode.
 
 `/settings` opens a dialog (TUI) or prints the rows (line UI): Enter

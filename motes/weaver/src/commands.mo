@@ -1252,9 +1252,9 @@ pub def Commands.cycle_setting (st : WeaverState) (key : String) : Result String
     else if key == "thinking"
     then Commands.apply_setting st key (if cfg.thinking then "off" else "on")
     else if key == "max_tokens"
-    then Commands.apply_setting st key (I64.to_string (ladder_next cfg.max_tokens [1024, 2048, 4096, 8192, 16384]))
+    then Commands.apply_setting st key (I64.to_string (ladder_next cfg.max_tokens [1024, 2048, 4096, 8192, 16384, 32768, 65536]))
     else if key == "max_turns"
-    then Commands.apply_setting st key (I64.to_string (ladder_next st.budget [20, 40, 100, 200, 500]))
+    then Commands.apply_setting st key (I64.to_string (ladder_next st.budget [50, 100, 200, 500, 1000]))
     else if key == "context_window"
     then Commands.apply_setting st key (I64.to_string (ladder_next st.context_window [32768, 65536, 128000, 200000, 1000000]))
     else if key == "compact_at"

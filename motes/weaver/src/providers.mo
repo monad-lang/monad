@@ -22,15 +22,15 @@ pub def Weaver.mock_config (model : String) : ProviderConfig :=
     { base_url := "mock", model := model, api_key_env := "WEAVER_UNUSED_KEY", max_tokens := 512, wire := Wire.mock, thinking := false }
 
 /// The interactive agent's output budget. shuttle's presets keep their
-/// conservative 512 for the headless CLI; a coding turn that writes a
-/// file or edits one needs room for the whole `tool_use` block, and a
-/// truncated compaction summary is refused outright.
-pub def Weaver.default_max_tokens : I64 := 4096
+/// conservative 512 for the headless CLI; a complex coding turn writes a
+/// whole source file in one `tool_use` block (or a compaction summary
+/// that is refused when truncated), so 4k cut large edits off mid-block.
+pub def Weaver.default_max_tokens : I64 := 16384
 
 /// The session's model-call budget. A turn is one model call, and a
-/// tool-using turn makes several; 40 is only a handful of user inputs.
-/// `/budget` raises it mid-session.
-pub def Weaver.default_max_turns : I64 := 100
+/// tool-using turn makes several: a complex change (read, edit, test,
+/// fix across many files) spends hundreds. `/budget` raises it mid-session.
+pub def Weaver.default_max_turns : I64 := 500
 
 /// The context window the autocompact estimate is a fraction of. No
 /// provider API reports one, so this is a per-provider default, not a

@@ -20,7 +20,7 @@ pub type WeaverCli {
     weaver
         (#[opt {short := "p", help := "provider preset: ollama | mistral | openrouter | anthropic | mock"}] provider : Option String)
         (#[opt {short := "m", help := "model name; the provider's own list decides what exists"}] model : Option String)
-        (#[opt {short := "", help := "total model-call budget for the session (default 100)"}] max_turns : Option I64)
+        (#[opt {short := "", help := "total model-call budget for the session (default 500)"}] max_turns : Option I64)
         (#[opt {short := "r", help := "open a session id, a session directory, or a /save checkpoint"}] resume : Option String)
         (#[arg {short := "", long := "continue", help := "resume the newest session under the session root"}] cont : Bool)
         (#[arg {short := "", help := "no ANSI colors in the line UI"}] no_color : Bool)

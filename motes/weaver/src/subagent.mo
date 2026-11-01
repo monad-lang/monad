@@ -59,7 +59,7 @@ def pair_fst (p : Pair String Json) : Json :=
 def task_schema : Json :=
     let params : List (Pair String Json) :=
         [str_param "prompt" "The question the subagent should answer with a plan.",
-         num_param "max_turns" "Model-call budget (1-20; 0 uses 8)."] in
+         num_param "max_turns" "Model-call budget (1-50; 0 uses 24)."] in
     Json.make_object (Map.insert "type" (Json.make_str "object")
         (Map.insert "properties" (Json.make_object (params_to_map params BTreeMap.empty))
         (Map.insert "required" (Json.make_array [Json.make_str "prompt"]) BTreeMap.empty)))
@@ -152,7 +152,7 @@ def run_task (cfg : ProviderConfig) (log : Option Logger) (store : Option StoreS
         Result.err e => ResultT.mk (return (Result.ok (Content.tool_result id e true))),
         Result.ok args =>
             ResultT.mk (do {
-                let n : I64 := if args.max_turns < 1 then 8 else if 20 < args.max_turns then 20 else args.max_turns;
+                let n : I64 := if args.max_turns < 1 then 24 else if 50 < args.max_turns then 50 else args.max_turns;
                 let sess : Session := child_session cfg args.prompt;
                 let st : RunState := { session := sess, reg := Subagent.read_registry, turns_left := n,
                     emit := child_emit log, gate := Gate.read_only, always := List.empty,
