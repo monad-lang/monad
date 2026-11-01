@@ -871,4 +871,29 @@ def nat_to_i64 (n : Nat) : I64 :=
 		succ m => I64.add 1 (nat_to_i64 m)
 	}
 
+/// Build a `Nat` from an `I64` payload, the elaboration rewrite target
+/// for context-only Nat literals (`(3 : Nat)` becomes `Nat.of_i64 3`;
+/// `plans/implementations/true-numeric-types.md` §5, Phase 3.1). The
+/// walk is O(n) over the unary representation -- the `#[repr(BigInt)]`
+/// compact repr (Phase 5) makes this O(1) over the compact word and
+/// this def stays the rewrite target unchanged. A negative payload
+/// clamps to `Nat.zero`: a Nat cannot hold it, and the literal
+/// elaboration rejects a negative literal at a `Nat`-expected position
+/// anyway, so the clamp is unreachable from literals and only guards
+/// direct calls.
+#[partial]
+pub def Nat.of_i64 (n : I64) : Nat :=
+	if I64.lt n 0 then Nat.zero else nat_of_i64_walk n
+
+/// The non-negative half of `Nat.of_i64`, split out so the clamp and
+/// the walk each get one small def (the nested-`match`-inside-`if`
+/// shape the checker handles worst). `#[partial]` lives on the public
+/// entry point; this helper is reached only from there.
+#[partial]
+def nat_of_i64_walk (n : I64) : Nat :=
+	match I64.beq n 0 {
+		true => Nat.zero,
+		false => Nat.succ (nat_of_i64_walk (I64.sub n 1))
+	}
+
 pub def Nat.to_string (n : Nat) : String := I64.to_string (nat_to_i64 n)

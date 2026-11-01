@@ -377,6 +377,27 @@ def test_nat_sub_self : Bool :=
 def test_nat_eq_false : Bool :=
     Bool.not (Nat.eq Nat.zero (Nat.succ Nat.zero))
 
+// Nat.of_i64 builder tests -- the elaboration rewrite target for
+// context-only Nat literals (plans/implementations/true-numeric-types.md
+// Phase 3.1). Direct calls only here; the `(42 : Nat)` elaboration tests
+// live in number_width_tests.mo with the rest of Phase 3.5.
+
+#[test]
+def test_nat_of_i64_zero : Bool :=
+    Nat.eq (Nat.of_i64 0) Nat.zero
+
+#[test]
+def test_nat_of_i64_three : Bool :=
+    Nat.eq (Nat.of_i64 3) (Nat.succ (Nat.succ (Nat.succ Nat.zero)))
+
+#[test]
+def test_nat_of_i64_negative_clamps : Bool :=
+    Nat.eq (Nat.of_i64 (-1)) Nat.zero
+
+#[test]
+def test_nat_of_i64_roundtrip : Bool :=
+    String.beq (Nat.to_string (Nat.of_i64 12)) "12"
+
 // Vec dependent type tests
 
 // `Vec`'s length index makes the OTHER constructor structurally
