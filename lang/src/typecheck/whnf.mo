@@ -138,7 +138,14 @@ def whnf_go (fuel : I64) (scope : Scope) (locals : LocalScope) (t0 : Term) : Ter
                 if I64.beq idx sentinel then
                     match whnf_delta scope locals dbg {
                         Option.some body => whnf_go (fuel - 1) scope locals body,
-                        Option.none => t,
+                        // A bare primitive NAME (`Cubical.I`, `i0`, ...) is
+                        // the zero-argument case of the app arm's
+                        // canonicalization above: `type_check_free_var`
+                        // rewrites it to its `Term.cubical` at check time, so
+                        // a body unfolded by delta must reach the same shape
+                        // or a checked binder type and an unfolded one
+                        // compare unequal (`Cubical.I` vs `I`).
+                        Option.none => as_cubical_type t scope locals,
                     }
                 else
                     // A bound de Bruijn variable. Its binder is outside

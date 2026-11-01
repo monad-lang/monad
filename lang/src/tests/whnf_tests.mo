@@ -121,6 +121,15 @@ def test_whnf_delta_substitutes_a_parameter_in_a_pi_codomain : Bool :=
         _ => false,
     }
 
+/// A bare primitive NAME canonicalizes exactly as a saturated primitive CALL
+/// does (`whnf`'s app arm): `type_check_free_var` rewrites the name to its
+/// `Term.cubical` at check time, so a def body reached by delta spells
+/// `Cubical.I` and must compare equal to the checked `cub_interval`.
+#[test]
+def test_whnf_canonicalizes_a_bare_primitive_name : Bool :=
+    let scope : Scope := scope_of "#[cubical \"interval\"] def I : Type" in
+    Similar.similar (whnf scope empty_locals (free_var "I")) cub_interval
+
 #[test]
 def test_whnf_unknown_name_is_stuck : Bool :=
     let t : Term := free_var "no_such_def" in

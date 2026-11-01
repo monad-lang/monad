@@ -1,13 +1,15 @@
 use lib::types {
   LocalScope, Scope, Similar, SortLevel, Term, TypeError, binder_is_explicit,
-  level_le, sentinel, sort_level_of, term_peel
+  binder_name, cubical_prim_eq, level_le, sentinel, sort_level_of, term_peel
 }
+use lib::typecheck::subst {term_shift}
 use lib::typecheck::whnf {whnf}
 
 /// Structural type unification. Returns the unified type.
 /// Holes match anything. Pi matches Pi structurally.
 /// App spines are congruent: heads and arguments compare separately.
 /// Lambdas compare the binder's own type, then the bodies.
+/// A lambda against a function-shaped non-lambda eta-expands the other side.
 /// Sorts respect cumulativity (level ≤ expected_level).
 /// A non-explicit binder -- a quantified type variable or a universe level,
 /// which `Term.forall` used to spell -- is stripped before comparison, on
@@ -42,8 +44,11 @@ use lib::typecheck::whnf {whnf}
 /// `#[terminating]`: `term_peel` strictly removes wrappers, so the pair it
 /// hands `unify_go` is smaller, but that is not a structural subterm the
 /// checker can see.
+/// `pub` for the drift pin (`proofs/src/checker/cubical_props.mo`), which
+/// compares the kernel's inlined `Equiv` against the library's unfolding --
+/// the same precedent as `pub whnf` and `pub equiv_type`.
 #[terminating]
-def unify (a : Term) (b : Term) (scope : Scope) (locals : LocalScope) : Result TypeError Term :=
+pub def unify (a : Term) (b : Term) (scope : Scope) (locals : LocalScope) : Result TypeError Term :=
     unify_go (term_peel a) (term_peel b) scope locals true
 
 /// `unify` without conversion checking -- the exact behaviour this
@@ -63,6 +68,33 @@ def unify (a : Term) (b : Term) (scope : Scope) (locals : LocalScope) : Result T
 #[terminating]
 def unify_structural (a : Term) (b : Term) (scope : Scope) (locals : LocalScope) : Result TypeError Term :=
     unify_go (term_peel a) (term_peel b) scope locals false
+
+/// Pairwise congruence for a cubical primitive's arguments. The catch-all
+/// would compare two `Term.cubical` nodes with `Similar`, which is syntactic
+/// and counts a hole as equal only to another hole; a `PathP` line written
+/// `fn _ => A` carries a HOLE binder annotation while the checker's own
+/// expansion writes `I`, so the two must compare through conversion. Returns
+/// false on any failure, and the caller falls back to `unify_stuck` the same
+/// way the app-spine arm does.
+#[partial]
+def unify_cubical_args (xs : List Term) (ys : List Term) (scope : Scope)
+    (locals : LocalScope) : Bool :=
+    match xs {
+        List.empty =>
+            match ys {
+                List.empty => true,
+                List.cons _ _ => false,
+            },
+        List.cons x rest =>
+            match ys {
+                List.empty => false,
+                List.cons y yrest =>
+                    match unify x y scope locals {
+                        ok _ => unify_cubical_args rest yrest scope locals,
+                        err _ => false,
+                    },
+            },
+    }
 
 /// `reduce` is the retry budget: `true` on the way in, `false` once
 /// both sides have been reduced, so a reduced pair cannot ask to be
@@ -106,10 +138,13 @@ def unify_go (a : Term) (b : Term) (scope : Scope) (locals : LocalScope) (reduce
         // A lambda against a lambda: the binder's own type, then the bodies.
         // Both bodies sit one binder deep under their OWN binder and `unify`
         // compares de Bruijn indices structurally, so no shift is involved;
-        // binder names are annotations and take no part. Eta is deliberately
-        // absent -- `fn x => f x` against a bare `f` needs the domain to type
-        // the binder from -- and `test_unify_lam_is_not_eta` pins that gap.
-        Term.lam _b1 typ1 body1 => match b {
+        // binder names are annotations and take no part. Against anything
+        // else, eta: `fn x => f x` converts with a function-shaped `b` by
+        // applying the shifted `b` to a fresh variable named after the
+        // binder. The name matters -- `Similar` compares a bound variable's
+        // debug name -- and the shift keeps `b`'s free references from being
+        // captured by the fresh variable.
+        Term.lam b1 typ1 body1 => match b {
             Term.hole => ok a,
             Term.lam _b2 typ2 body2 =>
                 if Similar.similar a b then
@@ -125,6 +160,40 @@ def unify_go (a : Term) (b : Term) (scope : Scope) (locals : LocalScope) (reduce
                 if binder_is_explicit b2
                 then unify_stuck a b scope locals reduce
                 else unify a body2 scope locals,
+            _ =>
+                match unify body1
+                    (Term.app (term_shift 1 b) (Term.var 0 (binder_name b1)))
+                    scope locals {
+                    ok _ => ok a,
+                    err _ => unify_stuck a b scope locals reduce,
+                },
+        },
+        // A cubical primitive against a cubical primitive: same tag and
+        // pairwise-convertible arguments. `Similar` alone is syntactic, so
+        // the library's `fn _ => A` line (a HOLE binder annotation) never
+        // matched the checker's `fn _ : I => A`; the Glue drift pin is the
+        // shape that exposed it. A failure still falls back to `unify_stuck`,
+        // so nothing accepted before stops being accepted.
+        Term.cubical c1 => match b {
+            Term.hole => ok a,
+            Term.pi b2 _dom body2 =>
+                if binder_is_explicit b2
+                then unify_stuck a b scope locals reduce
+                else unify a body2 scope locals,
+            Term.cubical c2 =>
+                if Similar.similar a b then
+                    ok a
+                else
+                    match c1 {
+                        { prim := p1, args := as1 } =>
+                            match c2 {
+                                { prim := p2, args := as2 } =>
+                                    if cubical_prim_eq p1 p2
+                                        && unify_cubical_args as1 as2 scope locals
+                                    then ok a
+                                    else unify_stuck a b scope locals reduce,
+                            },
+                    },
             _ => unify_stuck a b scope locals reduce,
         },
         Term.sort l1 => unify_sort a l1 b scope locals reduce,

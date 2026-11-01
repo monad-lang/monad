@@ -2,7 +2,7 @@ use lang::types {
   Decl, Def, LocalScope, Location, ModulePath, Scope, Term, TypeError, app,
   binder_anon, binder_binder, binder_is_explicit, binder_named, concrete, hole, id, lit, named,
   pi, result_is_ok, sentinel, sort_n, str, term_loc, unnamed, var,
-  cub, i0, i1,
+  cub, i0, i1, ineg, cub_i0, cub_i1, cub_interval, cub_pathp,
 }
 use lib::typecheck::unify {unify}
 use lib::typecheck::infer {type_check}
@@ -522,6 +522,35 @@ def test_unify_app_dimensions_do_not_convert : Bool :=
     let ok : Bool := run_unify_conv left right in
     Bool.not ok
 
+// --- cubical congruence ---
+//
+// Two `Term.cubical` nodes used to compare only through `Similar`, which is
+// syntactic: a `PathP` line written `fn _ => A` (a HOLE binder annotation, the
+// way the library `Path` spells it) never matched the checker's own
+// `fn _ : I => A`.
+
+#[test]
+def test_unify_cubical_args_convert_through_holes : Bool :=
+    run_unify_conv
+        (cub_pathp (Term.lam binder_anon Term.hole (sort_n 0)) cub_i0 cub_i1)
+        (cub_pathp (Term.lam binder_anon cub_interval (sort_n 0)) cub_i0 cub_i1)
+
+#[test]
+def test_unify_cubical_args_disagree : Bool :=
+    let ok : Bool :=
+        run_unify_conv
+            (cub_pathp (Term.lam binder_anon Term.hole (sort_n 0)) cub_i0 cub_i1)
+            (cub_pathp (Term.lam binder_anon cub_interval (sort_n 0)) cub_i1 cub_i0) in
+    Bool.not ok
+
+#[test]
+def test_unify_cubical_prims_disagree : Bool :=
+    let ok : Bool :=
+        run_unify_conv
+            (cub_pathp (Term.lam binder_anon Term.hole (sort_n 0)) cub_i0 cub_i1)
+            (cub CubicalPrim.ineg (List.cons cub_interval List.empty)) in
+    Bool.not ok
+
 // --- lambda conversion ---
 //
 // Two lambdas used to reach only `Similar.similar`: `whnf` does not reduce a
@@ -563,16 +592,57 @@ def test_unify_lam_binder_types_disagree : Bool :=
                 (Term.var 0 DebugName.unnamed)) in
     Bool.not ok
 
-/// Eta is NOT implemented, and the limit is pinned rather than left
-/// implicit: `fn x => f x` does not convert with a bare `f`. Eta needs the
-/// domain to type the binder from, which is the separate gap `paths.mo`
-/// records for `funext`.
+/// Eta: `fn x => f x` converts with a bare `f`. The fresh variable takes the
+/// binder's own name, so the body's bound variable is named `x` here -- a
+/// bound variable's `DebugName` is part of `Similar`.
 #[test]
-def test_unify_lam_is_not_eta : Bool :=
+def test_unify_lam_is_eta : Bool :=
+    run_unify_conv
+        (Term.lam (binder_named (Identifier.id "x")) (sort_n 0)
+            (Term.app (conv_free "f") (Term.var 0 (DebugName.named (Identifier.id "x")))))
+        (conv_free "f")
+
+/// The shift is load-bearing: `g` is a bound variable one binder out, and the
+/// eta expansion must move it inside the lambda (`var 0` -> `var 1`) or the
+/// fresh variable aliases it.
+#[test]
+def test_unify_lam_eta_shifts_a_foreign_variable : Bool :=
+    run_unify_conv
+        (Term.lam (binder_named (Identifier.id "x")) (sort_n 0)
+            (Term.app (Term.var 1 (DebugName.named (Identifier.id "g")))
+                (Term.var 0 (DebugName.named (Identifier.id "x")))))
+        (Term.var 0 (DebugName.named (Identifier.id "g")))
+
+/// Negative control: the body must be the function applied to the binder,
+/// not the binder ignored.
+#[test]
+def test_unify_lam_eta_rejects_a_body_that_ignores_the_binder : Bool :=
+    let ok : Bool :=
+        run_unify_conv
+            (Term.lam (binder_named (Identifier.id "x")) (sort_n 0) (conv_free "f"))
+            (conv_free "f") in
+    Bool.not ok
+
+/// Negative control: two uses of the binder are not eta.
+#[test]
+def test_unify_lam_eta_rejects_two_uses : Bool :=
     let ok : Bool :=
         run_unify_conv
             (Term.lam (binder_named (Identifier.id "x")) (sort_n 0)
-                (Term.app (conv_free "f") (Term.var 0 DebugName.unnamed)))
+                (Term.app (Term.app (conv_free "f")
+                    (Term.var 0 (DebugName.named (Identifier.id "x"))))
+                    (Term.var 0 (DebugName.named (Identifier.id "x")))))
+            (conv_free "f") in
+    Bool.not ok
+
+/// The eta variable's NAME is part of the comparison: a body bound under `x`
+/// but spelled `y` does not convert with the `x`-named expansion.
+#[test]
+def test_unify_lam_eta_requires_the_binder_name : Bool :=
+    let ok : Bool :=
+        run_unify_conv
+            (Term.lam (binder_named (Identifier.id "x")) (sort_n 0)
+                (Term.app (conv_free "f") (Term.var 0 (DebugName.named (Identifier.id "y")))))
             (conv_free "f") in
     Bool.not ok
 
