@@ -107,14 +107,14 @@ wished away so that a fix flips a test instead of passing unnoticed.
 - **Hover on a `struct` shows the struct's bare name.** `nav_detail_by_kind`
   (`lang/src/navigation.mo:415`) renders `type` via `show_inductive`, `class` via
   `show_class` and `def` via `nav_def_detail` — and has no `struct` arm, so a struct falls
-  through to its name. `show_struct` exists (`lang/src/pretty.mo:332`) but is not `pub`,
+  through to its name. `show_struct` exists (`lang/src/pretty.mo:459`) but is not `pub`,
   and rendering a struct needs the `Struct` decl read back out of the module cache.
 
 Two more measured oddities are pinned rather than fixed, both in `lang/` and both shared
 with other work:
 
 - **An unnamed instance lists in the picker as `_`.** That is the parser's own sentinel —
-  `instance_try_named` (`lang/src/parser.mo:3182`) defaults the name to
+  `instance_try_named` (`lang/src/parser.mo:3394`) defaults the name to
   `Identifier.id "_"` — not an LSP accident.
 - **`def` ranges are whole lines; `struct`/`type`/`class`/`instance` ranges are byte-exact
   to one past the closing brace.** So `struct ZzReplayShape {` at line 16 through `}` at

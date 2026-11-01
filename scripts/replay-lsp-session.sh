@@ -105,7 +105,7 @@ SHAPES_SYMBOLS = [
     # def 12, struct 23, class 5, type 10, instance 11.
     #
     # THE INSTANCE'S NAME IS `_`, which is the language's own marker for an unnamed
-    # instance -- `instance_try_named` (lang/src/parser.mo:3182) defaults the name to
+    # instance -- `instance_try_named` (lang/src/parser.mo:3394) defaults the name to
     # `Identifier.id "_"`. So it is not an LSP-side accident, but it is a wart in the
     # picker: every anonymous instance lists as `_`. Reported, not fixed here: naming
     # it after its class is a change to `lang/src/module.mo`'s outline vocabulary,
@@ -362,7 +362,7 @@ def session(encoding):
     # has arms for `type`, `class` and `def` -- a `type` renders via `show_inductive`,
     # a `class` via `show_class` -- and no `struct` arm, so a struct falls through to the
     # bare name. Fixing it means reading the `Struct` decl back out of the module cache
-    # and rendering it with `show_struct` (pretty.mo:332, not `pub`); reported, not fixed
+    # and rendering it with `show_struct` (pretty.mo:459, not `pub`); reported, not fixed
     # here. The `in` test is deliberately not used: this asserts the degradation exactly,
     # so improving it flips a test instead of quietly passing.
     check(f"{encoding} hover on the struct declaration is the bare name (known wart)",
