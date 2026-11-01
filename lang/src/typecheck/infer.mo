@@ -7074,14 +7074,164 @@ def class_method_result_solution (f : Term) (expected : Term) (scope : Scope) : 
                 Option.some decl =>
                     match sig_tvars_params_ret decl.sig {
                         SigInfo.mk params ret =>
-                            if is_bare_type_var ret then Option.none else
                             match nth_type (List.length args) params {
                                 Option.none => Option.none,
                                 Option.some next_param =>
-                                    let sol : ResultSolution := { next_param := next_param, vars := decl.vars, subst := solve_typevars scope ret (final_result_type expected) List.empty } in
-                                    Option.some sol,
+                                    if is_bare_type_var ret
+                                    then result_position_solution decl next_param ret expected scope
+                                    else
+                                        let sol : ResultSolution := { next_param := next_param, vars := decl.vars, subst := solve_typevars scope ret (final_result_type expected) List.empty } in
+                                        Option.some sol,
                             },
                     },
+            },
+    }
+
+/// `class_method_result_solution`'s answer for the one signature shape its
+/// own rule declines: a method whose RESULT is a bare class parameter
+/// (`HAdd.add : A -> B -> C` -- `C` says nothing the arguments do not, and
+/// an ill-typed expectation would pin it, the decline's own stated reason).
+/// The evidence that rule does not count is the class's INSTANCE SET: a
+/// call whose expected result is concrete selects among the concrete
+/// instances BY the result position (`C := U8` keeps `HAdd U8 U8 U8`,
+/// discards `HAdd I64 I64 I64`), and the surviving instance answers every
+/// other parameter too. That is exactly what a call whose operands are
+/// all bare literals needs -- `def w : U8 := 250 + 10`: nothing pins `C`
+/// until the expectation does, then the instance hands BOTH literals
+/// `U8`, each retags (`type_check_num_lit`), and the call resolves the
+/// way an explicit `250u8 + 10u8` always did. The same result-side
+/// evidence the Rust reference threads before it processes any argument
+/// (`try_resolve_class_method_inner`'s pre-argument peek), and the
+/// divergence this closes was measured both ways: the file checked clean
+/// under `monad-rs` and failed `monad check` with
+/// `type mismatch: expected U8, found I64`.
+///
+/// Refused -- `Option.none`, the caller falls through to
+/// `class_method_chain_domain` exactly as the old decline did -- wherever
+/// the evidence is not unique: an uninformative expectation, a result
+/// the class's own parameter list does not name, no instance whose
+/// result position is as informative as the expectation, or surviving
+/// instances that disagree about any parameter. Nothing is ever pinned
+/// on a guess; the ill-typed expectations the bare-var decline exists
+/// to refuse match no instance and pin nothing here either.
+def result_position_solution (decl : ClassMethodDecl) (next_param : Term) (ret : Term) (expected : Term) (scope : Scope) : Option ResultSolution :=
+    match term_peel ret {
+        Term.var _ dbg =>
+            match dbg {
+                DebugName.named ret_id =>
+                    let exp : Term := final_result_type expected in
+                    if Bool.not (informative_value exp scope) then Option.none
+                    else
+                        match id_index_of (show_identifier ret_id) (class_param_names decl.cls) {
+                            Option.none => Option.none,
+                            Option.some ret_idx =>
+                                let cls_name : NamePath := NamePath.mk (List.cons decl.cls.name List.empty) in
+                                match result_position_matches (scope_instance_candidates_in scope cls_name) ret_idx exp scope List.empty {
+                                    List.empty => Option.none,
+                                    List.cons first rest =>
+                                        if result_position_agrees rest first scope
+                                        then
+                                            let sol : ResultSolution :=
+                                                { next_param := next_param, vars := decl.vars, subst := instance_param_zip decl.cls first } in
+                                            Option.some sol
+                                        else Option.none,
+                                },
+                        },
+                DebugName.unnamed => Option.none,
+            },
+        _ => Option.none,
+    }
+
+/// The 0-based position of the identifier rendering `s` in `ids`, or
+/// `Option.none`. Compares rendered strings -- `Identifier` is not
+/// `Copy`, so a binder used once per comparison keeps the usage rule.
+def id_index_of (s : String) (ids : List Identifier) : Option I64 :=
+    id_index_of_go s ids 0
+
+def id_index_of_go (s : String) (ids : List Identifier) (i : I64) : Option I64 :=
+    match ids {
+        List.empty => Option.none,
+        List.cons x rest =>
+            if String.beq s (show_identifier x) then Option.some i else id_index_of_go s rest (I64.add i 1),
+    }
+
+/// The instances whose argument at `ret_idx` matches a concrete `exp`,
+/// in candidate order. A VARIABLE argument is not a match whatever the
+/// unifier would say -- the `[Add A] HAdd A A A` bridge matches every
+/// expectation, which is precisely the ill-typed pinning the bare-var
+/// decline refuses -- so `informative_value` gates before
+/// `unify_structural` runs.
+def result_position_matches (cands : List Instance) (ret_idx : I64) (exp : Term) (scope : Scope) (acc : List Instance) : List Instance :=
+    match cands {
+        List.empty => list_reverse acc,
+        List.cons ins rest =>
+            if instance_result_match ins ret_idx exp scope
+            then result_position_matches rest ret_idx exp scope (List.cons ins acc)
+            else result_position_matches rest ret_idx exp scope acc,
+    }
+
+def instance_result_match (ins : Instance) (ret_idx : I64) (exp : Term) (scope : Scope) : Bool :=
+    match nth_type ret_idx ins.args {
+        Option.none => false,
+        Option.some arg_at =>
+            informative_value arg_at scope
+                && (match unify_structural arg_at exp scope empty_locals {
+                        Result.ok _ => true,
+                        Result.err _ => false,
+                    }),
+    }
+
+/// Do all surviving matches answer every argument the same way `first`
+/// does? A disagreement between them is exactly the ambiguity the
+/// bare-var decline refuses to guess on, so it refuses here too.
+def result_position_agrees (rest : List Instance) (first : Instance) (scope : Scope) : Bool :=
+    match rest {
+        List.empty => true,
+        List.cons ins others =>
+            if instance_args_agree first ins scope
+            then result_position_agrees others first scope
+            else false,
+    }
+
+def instance_args_agree (a : Instance) (b : Instance) (scope : Scope) : Bool :=
+    args_agree_go a.args b.args scope
+
+def args_agree_go (aargs : List Term) (bargs : List Term) (scope : Scope) : Bool :=
+    match aargs {
+        List.empty =>
+            match bargs {
+                List.empty => true,
+                List.cons _ _ => false,
+            },
+        List.cons xa rest =>
+            match bargs {
+                List.empty => false,
+                List.cons xb restb =>
+                    (match unify_structural xa xb scope empty_locals {
+                        Result.ok _ => true,
+                        Result.err _ => false,
+                    })
+                        && (match unify_structural xb xa scope empty_locals {
+                                Result.ok _ => true,
+                                Result.err _ => false,
+                            })
+                        && args_agree_go rest restb scope,
+            },
+    }
+
+/// The class's own parameter names paired with the instance's declared
+/// arguments -- the binding the expectation-selected instance answers
+/// every parameter with.
+def instance_param_zip (cls : Class) (ins : Instance) : List (Pair Identifier Term) :=
+    instance_param_zip_go (class_param_names cls) ins.args
+
+def instance_param_zip_go (ids : List Identifier) (ts : List Term) : List (Pair Identifier Term) :=
+    match ids {
+        List.empty => List.empty,
+        List.cons x rest =>
+            match ts {
+                List.empty => List.empty,
+                List.cons t restt => List.cons (Pair.pair x t) (instance_param_zip_go rest restt),
             },
     }
 
@@ -7404,6 +7554,7 @@ def class_method_next_param (f : Term) (expected_type : Term) (scope : Scope) (l
 struct ClassMethodDecl {
     sig : Term,
     vars : List Identifier,
+    cls : Class,
 }
 
 /// The class method a reference names, or `Option.none` if `head` is not one.
@@ -7462,7 +7613,7 @@ def class_method_decl_of (found : ClassMethodRef) : Option ClassMethodDecl :=
         ClassMethodRef.mk cls method =>
             match class_method_declared_type cls method {
                 Option.none => Option.none,
-                Option.some sig => Option.some (ClassMethodDecl.mk sig (class_method_var_names cls sig)),
+                Option.some sig => Option.some (ClassMethodDecl.mk sig (class_method_var_names cls sig) cls),
             },
     }
 
