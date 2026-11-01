@@ -171,10 +171,10 @@ pub def ProviderConfig.effective_key (cfg : ProviderConfig) : IO (Option String)
         Option.none => IO.get_env cfg.api_key_env,
     }
 
-def send_openai (cfg : ProviderConfig) (system : String) (tools : List ToolSpec) (history : List Message) (emit : String -> IO Unit) : ResultT String IO Turn := do {
+def send_openai (cfg : ProviderConfig) (system : String) (tools : List ToolSpec) (history : List Message) (stop : Unit -> IO Bool) (emit : String -> IO Unit) : ResultT String IO Turn := do {
     let api_key <- ResultT.lift (ProviderConfig.effective_key cfg);
     let req := OpenAI.encode_request cfg.model cfg.max_tokens system tools history;
-    let resp <- OpenAI.complete_stream cfg.base_url api_key req emit;
+    let resp <- OpenAI.complete_stream cfg.base_url api_key req stop emit;
     ResultT.mk (return (OpenAI.decode_response resp))
 }
 
@@ -184,17 +184,17 @@ def send_openai (cfg : ProviderConfig) (system : String) (tools : List ToolSpec)
 def anthropic_no_key (cfg : ProviderConfig) : String :=
     String.concat "anthropic: no API key (env " (String.concat cfg.api_key_env " unset, and no direct key)")
 
-def anthropic_send_step (cfg : ProviderConfig) (key_opt : Option String) (req : MessagesRequest) (emit : String -> IO Unit) : ResultT String IO MessagesResponse :=
+def anthropic_send_step (cfg : ProviderConfig) (key_opt : Option String) (req : MessagesRequest) (stop : Unit -> IO Bool) (emit : String -> IO Unit) : ResultT String IO MessagesResponse :=
     match key_opt {
         Option.none =>
             ResultT.mk (return (Result.err (anthropic_no_key cfg))),
-        Option.some key => Anthropic.complete_stream cfg.base_url key req emit,
+        Option.some key => Anthropic.complete_stream cfg.base_url key req stop emit,
     }
 
-def send_anthropic (cfg : ProviderConfig) (system : String) (tools : List ToolSpec) (history : List Message) (emit : String -> IO Unit) : ResultT String IO Turn := do {
+def send_anthropic (cfg : ProviderConfig) (system : String) (tools : List ToolSpec) (history : List Message) (stop : Unit -> IO Bool) (emit : String -> IO Unit) : ResultT String IO Turn := do {
     let key_opt <- ResultT.lift (ProviderConfig.effective_key cfg);
     let req := Anthropic.encode_request cfg.model cfg.max_tokens cfg.thinking system tools history;
-    let resp <- anthropic_send_step cfg key_opt req emit;
+    let resp <- anthropic_send_step cfg key_opt req stop emit;
     ResultT.mk (return (Anthropic.decode_response resp))
 }
 
@@ -205,19 +205,43 @@ def send_anthropic (cfg : ProviderConfig) (system : String) (tools : List ToolSp
 pub def Provider.silent_emit (t : String) : IO Unit :=
     return unit
 
+/// The stop seam of a caller that never interrupts a send.
+pub def Provider.never_stop (u : Unit) : IO Bool :=
+    return false
+
+/// The error a send ends with when `stop` fired mid-stream: the loop
+/// reads it as a stopped turn, never as a failure to retry.
+pub def Provider.stopped_error : String := "stopped by request"
+
+/// A failed send whose stop seam has fired was interrupted, whatever
+/// the transport reported (the aborted read, or a reset it caused).
+def stopped_or (stop : Unit -> IO Bool) (r : Result String Turn) : IO (Result String Turn) :=
+    match r {
+        Result.ok t => return (Result.ok t),
+        Result.err e => do {
+            let halted <- stop unit;
+            return (Result.err (if halted then Provider.stopped_error else e))
+        },
+    }
+
 /// Send one turn's request through `cfg.wire`, streaming: every text
 /// fragment the model produces goes to `emit` as it arrives, and the
 /// returned `Turn` carries the same assembled content the one-shot
 /// path produced. The mock arm serves the scripted provider
 /// (`wire/mock.mo`) -- it emits the scripted turn's text once, so the
 /// loop's offline tests see the same callback contract the real
-/// wires implement.
-pub def Provider.send (cfg : ProviderConfig) (system : String) (tools : List ToolSpec) (history : List Message) (emit : String -> IO Unit) : ResultT String IO Turn :=
-    match cfg.wire {
-        Wire.openai => send_openai cfg system tools history emit,
-        Wire.anthropic => send_anthropic cfg system tools history emit,
+/// wires implement. `stop` is polled while the reply streams; a send it
+/// interrupts fails with `Provider.stopped_error`.
+pub def Provider.send (cfg : ProviderConfig) (system : String) (tools : List ToolSpec) (history : List Message) (stop : Unit -> IO Bool) (emit : String -> IO Unit) : ResultT String IO Turn :=
+    let sent : ResultT String IO Turn := match cfg.wire {
+        Wire.openai => send_openai cfg system tools history stop emit,
+        Wire.anthropic => send_anthropic cfg system tools history stop emit,
         Wire.mock => Mock.send tools history emit,
-    }
+    } in
+    ResultT.mk (do {
+        let r <- ResultT.run sent;
+        stopped_or stop r
+    })
 
 /// The models this config's provider serves. The mock wire answers its
 /// one scripted name, offline, so the command path is testable without

@@ -308,3 +308,35 @@ def test_mock_loop_stop_after_tool_send : IO Bool := do {
         },
     })
 }
+
+def stop_calls : String :=
+    String.concat "/tmp/shuttle_stop_calls_" (String.concat (I64.to_string process_id) ".txt")
+
+/// False on the pre-send check, true from then on: the stop lands
+/// while the send is in flight.
+def stop_after_check (u : Unit) : IO Bool := do {
+    let s <- Test.read_fixture_or (Path.path stop_calls) "";
+    let _ <- Test.write_fixture (Path.path stop_calls) (String.concat s "-");
+    IO.pure (Bool.not (String.is_empty s))
+}
+
+/// Stop during the send: the send's failure (the aborted stream; here
+/// the empty script) ends the run as stopped -- not as an error, and
+/// with no retry -- keeping the caller's history and spending nothing.
+#[test]
+def test_mock_loop_stop_during_send : IO Bool := do {
+    let _ <- Test.write_fixture (Path.path script_path) "[]";
+    let _ <- Test.write_fixture (Path.path stop_calls) "";
+    let st0 : RunState := Loop.initial_state mock_config mock_registry "You are a test harness." [user_message] 6 Provider.silent_emit Gate.auto;
+    let st : RunState := { st0 with should_stop := stop_after_check, retries := 3 };
+    let r <- ResultT.run (Agent.exec Loop.iterate st);
+    let calls <- Test.read_fixture_or (Path.path stop_calls) "";
+    return (match r {
+        Result.err _ => false,
+        Result.ok p => match p {
+            Pair.pair fin _ =>
+                fin.stopped && fin.session.turns == 0 && List.length fin.session.history == 1
+                    && String.length calls == 2,
+        },
+    })
+}

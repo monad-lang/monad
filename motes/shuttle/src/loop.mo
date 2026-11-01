@@ -29,7 +29,7 @@ use init::transformers {ResultT}
 use shuttle::message_types {Role, Content, StopReason}
 use shuttle::message {Message, Turn, Usage}
 use shuttle::provider {ProviderConfig}
-use shuttle::provider {Provider.send}
+use shuttle::provider {Provider.send, Provider.stopped_error}
 use shuttle::tool {ToolSpec, ToolImpl}
 use shuttle::registry {ToolRegistry}
 use shuttle::session {Session}
@@ -274,7 +274,7 @@ def agent_send_step (s : RunState) : ResultT String IO (Pair RunState Turn) :=
 def agent_send_run (s : RunState) : ResultT String IO (Pair RunState Turn) := do {
     let specs : List ToolSpec := ToolRegistry.specs s.reg;
     let turn <- Loop.retry_send
-        (fn (_ : Unit) => Provider.send s.session.config s.session.system_prompt specs s.session.history s.emit)
+        (fn (_ : Unit) => Provider.send s.session.config s.session.system_prompt specs s.session.history s.should_stop s.emit)
         s.sleep_ms
         (if s.retries < 1 then 1 else s.retries)
         1
@@ -292,6 +292,32 @@ def agent_send_run (s : RunState) : ResultT String IO (Pair RunState Turn) := do
         return (Result.ok (Pair.pair s2 turn))
     })
 }
+
+/// Idle -> Idle: the send, or `none` when the stop seam interrupted it
+/// mid-stream (the run is then marked stopped). The loop's own path:
+/// Esc must not wait out a long reply.
+def Loop.send_stoppable : Agent AgentIdle AgentIdle (Option Turn) :=
+    Agent.agent agent_send_stoppable
+
+def agent_send_stoppable (s : RunState) : ResultT String IO (Pair RunState (Option Turn)) :=
+    if s.turns_left < 1 then ResultT.mk (return (Result.err "turn cap reached"))
+    else ResultT.mk (do {
+        let r <- ResultT.run (agent_send_run s);
+        return (stoppable_result s r)
+    })
+
+def stoppable_result (s : RunState) (r : Result String (Pair RunState Turn)) : Result String (Pair RunState (Option Turn)) :=
+    match r {
+        Result.ok pr => Result.ok (Pair.pair pr.first (Option.some pr.second)),
+        Result.err e =>
+            if e == Provider.stopped_error
+            then Result.ok (Pair.pair (mark_stopped s) Option.none)
+            else Result.err e,
+    }
+
+/// Idle -> Answered: adopt the turn `send_stoppable` already received.
+priv def Loop.answered (turn : Turn) : Agent AgentIdle AgentAnswered Turn :=
+    Agent.agent (fn (s : RunState) => ResultT.mk (return (Result.ok (Pair.pair s turn))))
 
 /// The retry loop. `send` is a `Unit ->` SEAM (the eagerness lesson:
 /// a naked `ResultT ... IO` value is evaluated at the call site, so a
@@ -341,7 +367,8 @@ pub def Loop.retry_send
 #[terminating]
 def retry_worth_error (e : String) : Bool :=
     let head : String := String.slice e 0 24 in
-    if Bool.and (retry_contains head 0 "HTTP 4") (Bool.not (retry_contains head 0 "429"))
+    if e == Provider.stopped_error then false
+    else if Bool.and (retry_contains head 0 "HTTP 4") (Bool.not (retry_contains head 0 "429"))
     then false
     else true
 
@@ -609,13 +636,21 @@ def loop_after_send (turn : Turn) : Agent AgentAnswered AgentDone Unit :=
             Option.none => loop_dispatch_or_finish turn,
         })
 
+/// The send's answer: a turn to dispatch, or the stop that cut it off.
+#[terminating]
+def loop_sent (sent : Option Turn) : Agent AgentIdle AgentDone Unit :=
+    match sent {
+        Option.some turn => Agent.bind (Loop.answered turn) (fn (t : Turn) => loop_after_send t),
+        Option.none => Loop.stop_done,
+    }
+
 /// The budget's clear path: the stop check, then the send.
 #[terminating]
 def loop_uncapped : Agent AgentIdle AgentDone Unit :=
     Agent.bind Loop.check_stop (fn (stopping : Option Unit) =>
         match stopping {
             Option.some _ => Loop.stop_done,
-            Option.none => Agent.bind Loop.send (fn (turn : Turn) => loop_after_send turn),
+            Option.none => Agent.bind Loop.send_stoppable loop_sent,
         })
 
 /// One full iteration: the budget first, then ask, then either

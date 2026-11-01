@@ -7,7 +7,7 @@
 /// `delta.content` fragments, `finish_reason` on the last chunk,
 /// `data: [DONE]` sentinel, `usage` usually absent or null).
 use std::test {Test.write_fixture, Test.append_fixture, Test.read_fixture_or}
-use openai::client {OpenaiAcc, openai_apply_event, openai_assemble, openai_finish, openai_stream_bytes}
+use openai::client {OpenaiAcc, openai_apply_event, openai_assemble, openai_finish, openai_stream_bytes, openai_stream_until}
 use openai::types {ChatRequest, ChatResponse, ChatMessage, Choice, ApiUsage}
 use openai::tool {ToolCall}
 use json::json {Json.to_string, Json.parse}
@@ -322,3 +322,22 @@ def test_stream_usage_reads_cached_details : Bool :=
                 ApiUsage.mk _ _ cached => cached == 5,
             }
     }
+
+def halt_now (u : Unit) : IO Bool := return true
+
+def keep_going (u : Unit) : IO Bool := return false
+
+/// A fired stop seam fails the read before any delta reaches `on_text`;
+/// an unfired one folds the bytes as `openai_stream_bytes` does.
+#[test]
+def test_stream_until_stops_before_folding : IO Bool := do {
+    reset_tap;
+    let event : String := "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"Hi\"}}]}\n\n";
+    let stopped <- openai_stream_until halt_now text_tap stream_acc0 (String.to_list event);
+    let t1 <- read_tap;
+    let kept <- openai_stream_until keep_going text_tap stream_acc0 (String.to_list event);
+    let t2 <- read_tap;
+    return (Bool.and
+        (match stopped { Result.err _ => t1 == "", Result.ok _ => false })
+        (match kept { Result.ok _ => t2 == "Hi", Result.err _ => false }))
+}

@@ -625,9 +625,16 @@ def anthropic_emit_all (on_text : String -> IO Unit) (deltas : List String) : IO
         List.cons d rest => Monad.bind (on_text d) (fn _ => anthropic_emit_all on_text rest)
     }
 
-def anthropic_stream_io (u : Uri) (headers : Headers) (body_str : String) (on_text : String -> IO Unit) : IO (Result String MessagesResponse) := do {
+/// `anthropic_stream_bytes` behind the caller's stop seam: a requested
+/// stop fails the read, which closes the connection mid-reply.
+def anthropic_stream_until (halt_seam : Unit -> IO Bool) (on_text : String -> IO Unit) (acc : AnthropicAcc) (bytes : List U8) : IO (Result String (Pair AnthropicAcc Unit)) := do {
+    let halt <- halt_seam unit;
+    if halt then return (Result.err "anthropic: stream stopped") else anthropic_stream_bytes on_text acc bytes
+}
+
+def anthropic_stream_io (u : Uri) (headers : Headers) (body_str : String) (halt_seam : Unit -> IO Bool) (on_text : String -> IO Unit) : IO (Result String MessagesResponse) := do {
     let init : AnthropicAcc := { sse := Sse.init, blocks := List.empty, stop := "", usage := AnthropicUsage.mk 0 0 0 };
-    let res <- Client.post_stream_timeout u headers (Body.from_text body_str) Client.default_stream_idle_ms init (fn st bytes => anthropic_stream_bytes on_text st bytes);
+    let res <- Client.post_stream_timeout u headers (Body.from_text body_str) Client.default_stream_idle_ms init (fn st bytes => anthropic_stream_until halt_seam on_text st bytes);
     return (match res {
         Result.err e => Result.err e,
         Result.ok pr =>
@@ -649,11 +656,13 @@ def anthropic_stream_io (u : Uri) (headers : Headers) (body_str : String) (on_te
 /// preserved, tool inputs parsed back to real objects), `stop_reason`
 /// (defaulting to `"end_turn"`), and usage merged from
 /// `message_start` (input half) and `message_delta` (output half).
-pub def Anthropic.complete_stream (base_url : String) (api_key : String) (req : MessagesRequest) (on_text : String -> IO Unit) : ResultT String IO MessagesResponse :=
+/// `halt_seam` is polled per read; once true the stream fails instead of
+/// waiting out the reply.
+pub def Anthropic.complete_stream (base_url : String) (api_key : String) (req : MessagesRequest) (halt_seam : Unit -> IO Bool) (on_text : String -> IO Unit) : ResultT String IO MessagesResponse :=
     let sreq : MessagesRequest := { req with stream := true } in
     let body_str := Json.to_string (MessagesRequest.serialize_json sreq) in
     let url_str := String.concat base_url "/v1/messages" in
     match Uri.parse url_str {
         Result.err e => ResultT.mk (return (Result.err e)),
-        Result.ok u => ResultT.mk (anthropic_stream_io u (anthropic_headers api_key) body_str on_text),
+        Result.ok u => ResultT.mk (anthropic_stream_io u (anthropic_headers api_key) body_str halt_seam on_text),
     }

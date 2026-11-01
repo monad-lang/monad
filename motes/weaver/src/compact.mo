@@ -11,7 +11,7 @@
 use shuttle::message {Message, Usage, Turn}
 use shuttle::message_types {Role, Content, StopReason}
 use shuttle::session {Session}
-use shuttle::provider {ProviderConfig, Provider.send, Provider.silent_emit}
+use shuttle::provider {ProviderConfig, Provider.send, Provider.silent_emit, Provider.never_stop}
 use shuttle::context {history_tokens, message_tokens, usage_add}
 use std::list {List.length, List.intercalate}
 use init::transformers {ResultT, ResultT.run}
@@ -155,7 +155,7 @@ pub struct Compact.Outcome {
 pub def Compact.compact (cfg : ProviderConfig) (session : Session) (threshold : I64) (instructions : String) : IO (Result String Compact.Outcome) := do {
     let prompt : String := Compact.summary_prompt session.history instructions;
     let msg : Message := { role := Role.user, content := List.cons (Content.text prompt) List.empty };
-    let r <- ResultT.run (Provider.send cfg Compact.summary_system List.empty [msg] Provider.silent_emit);
+    let r <- ResultT.run (Provider.send cfg Compact.summary_system List.empty [msg] Provider.never_stop Provider.silent_emit);
     match r {
         Result.err e => return (Result.err e),
         Result.ok turn => compact_finish session threshold turn,

@@ -8,6 +8,7 @@
 use std::test {Test.write_fixture, Test.read_fixture_or}
 use init::transformers {ResultT}
 use shuttle::loop {Loop.retry_send}
+use shuttle::provider {Provider.stopped_error}
 use shuttle::message {Message, Turn, Usage}
 use shuttle::message_types {Role, Content, StopReason}
 use shuttle::agent {silent_sleep}
@@ -105,4 +106,11 @@ def test_retry_announces_through_emit : IO Bool := do {
     let p <- run_and_marks "openai: HTTP 503: busy" 2;
     let t <- read_file_opt emit_path;
     return (match p { Pair.pair ok _ => Bool.not ok && String.contains t "retrying (2/2)" })
+}
+/// A send the stop seam interrupted is never resent: the user asked the
+/// turn to end.
+#[test]
+def test_retry_send_skips_a_stopped_send : IO Bool := do {
+    let p <- run_and_marks Provider.stopped_error 3;
+    return (match p { Pair.pair ok marks => Bool.not ok && marks == 1 })
 }

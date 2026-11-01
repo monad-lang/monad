@@ -625,9 +625,16 @@ def openai_finish (acc : OpenaiAcc) : Result String ChatResponse :=
         Option.none => Result.ok (openai_assemble acc),
     }
 
-def openai_stream_io (u : Uri) (headers : Headers) (body_str : String) (on_text : String -> IO Unit) : IO (Result String ChatResponse) := do {
+/// `openai_stream_bytes` behind the caller's stop seam: a requested stop
+/// fails the read, which closes the connection mid-reply.
+def openai_stream_until (stop : Unit -> IO Bool) (on_text : String -> IO Unit) (acc : OpenaiAcc) (bytes : List U8) : IO (Result String (Pair OpenaiAcc Unit)) := do {
+    let halt <- stop unit;
+    if halt then return (Result.err "openai: stream stopped") else openai_stream_bytes on_text acc bytes
+}
+
+def openai_stream_io (u : Uri) (headers : Headers) (body_str : String) (stop : Unit -> IO Bool) (on_text : String -> IO Unit) : IO (Result String ChatResponse) := do {
     let init : OpenaiAcc := { sse := Sse.init, text := "", tools := List.empty, finish := "", usage := ApiUsage.mk 0 0 0, error := Option.none };
-    let res <- Client.post_stream_timeout u headers (Body.from_text body_str) Client.default_stream_idle_ms init (fn st bytes => openai_stream_bytes on_text st bytes);
+    let res <- Client.post_stream_timeout u headers (Body.from_text body_str) Client.default_stream_idle_ms init (fn st bytes => openai_stream_until stop on_text st bytes);
     return (match res {
         Result.err e => Result.err e,
         Result.ok pr =>
@@ -646,12 +653,13 @@ def openai_stream_io (u : Uri) (headers : Headers) (body_str : String) (on_text 
 /// the return value is the assembled `ChatResponse` -- text under
 /// `choices[0].message.content`, merged tool calls under
 /// `tool_calls`, `finish_reason`, and usage (zeroed when the server
-/// never sends one).
-pub def OpenAI.complete_stream (base_url : String) (api_key : Option String) (req : ChatRequest) (on_text : String -> IO Unit) : ResultT String IO ChatResponse :=
+/// never sends one). `stop` is polled per read; once true the stream
+/// fails instead of waiting out the reply.
+pub def OpenAI.complete_stream (base_url : String) (api_key : Option String) (req : ChatRequest) (stop : Unit -> IO Bool) (on_text : String -> IO Unit) : ResultT String IO ChatResponse :=
     let sreq : ChatRequest := { req with stream := true } in
     let body_str := Json.to_string (OpenAI.request_json sreq) in
     let url_str := String.concat base_url "/v1/chat/completions" in
     match Uri.parse url_str {
         Result.err e => ResultT.mk (return (Result.err e)),
-        Result.ok u => ResultT.mk (openai_stream_io u (openai_headers api_key) body_str on_text),
+        Result.ok u => ResultT.mk (openai_stream_io u (openai_headers api_key) body_str stop on_text),
     }
