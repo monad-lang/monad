@@ -20,6 +20,7 @@ use lang::types {
 use lib::module {try_parse_decls}
 use lib::scope {build_scope_from_decls, scope_find_inductive}
 use lib::elim_lower {elim_to_literal}
+use lib::typecheck::infer {canonicalize_ctor_refs}
 
 def elim_lower_test_path : ModulePath := ModulePath.mk (List.cons (Identifier.id "elim_lower_tests") List.empty)
 
@@ -221,3 +222,13 @@ def test_elim_to_literal_names_an_anonymous_binder_underscore : Bool :=
 def test_elim_to_literal_rejects_an_unknown_inductive : Bool :=
     let sc : Scope := scope_of "type Shape { circle (r : I64) }" in
     check_unknown_inductive_rejected sc
+
+/// A qualified constructor reference is canonicalized to the bare spelling a
+/// derived motive uses (`Nat.succ` -> `succ`), including in a scope that keys
+/// the owning inductive by its canonical path.
+#[test]
+def test_canonicalize_rewrites_a_qualified_constructor : Bool :=
+    let sc : Scope := scope_of "type Nat { zero, succ (n : Nat) }" in
+    let t : Term := Term.var sentinel (DebugName.named (Identifier.id "Nat.succ")) in
+    let want : Term := Term.var sentinel (DebugName.named (Identifier.id "succ")) in
+    Similar.similar (canonicalize_ctor_refs sc t) want

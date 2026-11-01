@@ -9,18 +9,16 @@
 // `error: type mismatch: expected ((fn (_ : Bool) => F b) true), found (F
 // false)`), so the rule is not vacuous.
 //
-// Two surface requirements are load-bearing today:
+// One surface requirement is load-bearing today: the type function must be an
+// EXPLICIT parameter (`(F : Bool -> Type)`, `(E : Nat -> Nat -> Type)`). An
+// IMPLICIT higher-kinded parameter is skolemized as `Sort 0` during
+// elaboration, so applying it is untyped and the motive fails the "function
+// into a sort" check. Qualified constructor spellings (`Bool.true`,
+// `Nat.succ`) now work: the Elim minor comparison normalizes them (and the
+// checker's `Term.con` form) to the free-var application a derived motive
+// builds.
 //
-// * The type function is an EXPLICIT parameter (`(F : Bool -> Type)`). An
-//   IMPLICIT higher-kinded parameter is skolemized as `Sort 0` during
-//   elaboration, so applying it is untyped and the motive fails the "function
-//   into a sort" check.
-// * Constructor arguments inside those parameter types are spelled BARE
-//   (`F true`, `E x x`'s `reflf zero`), not `Bool.true`/`Nat.zero`: the motive
-//   applies the RESOLVED constructor's own bare name, and the checker's
-//   unification compares constructor references by spelling.
-//
-// Measured limits on what is NOT yet writable (2026-10-31):
+// Measured limits on what is NOT yet writable (2026-11-01):
 //
 // * `Sigma.snd` (`B (Sigma.fst p)`) needs the constructor's own field type
 //   `snd : B fst` substituted with the earlier field binding. The checker
@@ -30,12 +28,6 @@
 // * Recursive induction (`s k (rec k)`) uses the predecessor twice; `Nat` is
 //   not `Copy`, so the always-on affine rule rejects it (proofs/ has no
 //   `[affine]` exception).
-// * A constructor referenced in an arm BODY is qualified by `qualify_modules`
-//   (`Nat.succ`), while a derived motive applies the resolved constructor's
-//   bare name (`succ`); the two do not unify. `bool_elim` sidesteps this
-//   because its constructor references sit in the SIGNATURE's parameter types,
-//   which qualification does not rewrite. A `Nat` case split into an equality
-//   family hits it in its arms.
 // * A type-level IF/MATCH used directly as a result type has no kind the
 //   checker can report, so the motive-sort check fails. A local type function
 //   avoids that.
@@ -48,10 +40,20 @@
 /// The proof-relevant eliminator for `Bool` into an arbitrary type family:
 /// the `true` arm has type `F true`, the `false` arm `F false`, and the result
 /// is `F b`.
-pub def bool_elim (F : Bool -> Type) (t : F true) (f : F false) (b : Bool) : F b :=
+pub def bool_elim (F : Bool -> Type) (t : F Bool.true) (f : F Bool.false) (b : Bool) : F b :=
     match b {
         Bool.true => t,
         Bool.false => f,
+    }
+
+/// A case split over `Nat` into an arbitrary two-place type family, with the
+/// constructor references spelled QUALIFIED (`Nat.zero`, `Nat.succ`) as an
+/// ordinary body is. The motive supplies the bare resolved spelling, so this
+/// only checks once the rule canonicalizes constructor references.
+pub def nat_case_refl (E : Nat -> Nat -> Type) (reflf : (x : Nat) -> E x x) (n : Nat) : E n n :=
+    match n {
+        Nat.zero => reflf Nat.zero,
+        Nat.succ k => reflf (Nat.succ k),
     }
 
 // ─── Presence pin (the def above is the deliverable) ────────────────────

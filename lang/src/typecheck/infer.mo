@@ -43,7 +43,7 @@ use lang::scope {
 use lib::typecheck::name_subst {name_subst_term}
 use lib::typecheck::subst {beta_reduce, term_abstract_var, term_permute, term_subst, term_shift}
 use lib::typecheck::levels {solve_levels, subst_levels_term}
-use lib::typecheck::traverse {term_children}
+use lib::typecheck::traverse {term_children, term_map_children}
 use lib::typecheck::cubical {
   PathParts, endpoint_of, path_parts_of, peels_to_bare_interval,
 }
@@ -1935,7 +1935,13 @@ def type_check_elim_minor (ctor : InductConstructor) (minor : Term) (ind : Induc
     : Result TypeError Term :=
     let field_types : List Term := substitute_inductive_type_params ind sc_typ (types_from_params ctor.params) in
     let n : I64 := List.length field_types in
-    let ctor_app : Term := rebuild_call (free_var_ref ctor.name) (elim_field_vars field_types (n - 1)) in
+    // The expected minor's field references carry the MINOR's own binder
+    // names, not `DebugName.unnamed`: `Similar`/`unify` compare a bound
+    // variable's debug name as well as its index, so an anonymous reference
+    // here never matches a source binder (`Nat.succ k`).
+    let ctor_app : Term :=
+        rebuild_call (free_var_ref ctor.name)
+            (elim_field_vars_named (minor_binder_names n minor List.empty) (n - 1)) in
     let shifted_motive : Term := term_shift n motive_term in
     // R4c: this constructor's OWN index value(s), not the caller's generic
     // `indices` -- `refl`'s own minor is checked against `motive a
@@ -1949,55 +1955,126 @@ def type_check_elim_minor (ctor : InductConstructor) (minor : Term) (ind : Induc
     let expected_minor_typ : Term :=
         build_elim_minor_pi_chain field_types
             (rebuild_call shifted_motive (List.append ctor_indices (List.cons ctor_app List.empty))) in
-    match type_check minor expected_minor_typ scope local_types locals {
-        err err_ => err err_,
-        ok minor_tt =>
-            // The check above is REFLEXIVE for an informative Pi codomain:
-            // `type_check_lam_explicit` returns the expected type verbatim
-            // (`lam_typ := expected_type`), and the leaf rules never consult
-            // an expectation, so comparing `minor_tt.typ` with
-            // `expected_minor_typ` would be `unify(expected, expected)` and
-            // close nothing (R4b's own measured "wrong motive is accepted"
-            // hole). Infer the minor INDEPENDENTLY and compare THAT type.
-            //
-            // The comparison drops `body_type_error`'s "mentions a skolem/
-            // unbound type variable" guard: for a dependent minor those
-            // variables are exactly the legitimately-bound `B`/`F` a motive
-            // abstracts over, and skipping them is why R4b's negative control
-            // could never discriminate. `elim_minor_type_error` keeps only the
-            // hole (unfinished term) and sort (cumulativity) guards.
-            match type_check minor Term.hole scope local_types locals {
-                // UNINFERRABLE minor: keep the expected-driven check's
-                // answer. A constructor field type that mentions an earlier
-                // field (`Sigma`'s `snd : B fst`) leaves `fst` unresolved
-                // under independent inference, which would otherwise reject a
-                // legitimate minor; this is the same "no information, skip the
-                // comparison" rule `body_type_error` applies. Where inference
-                // DOES work -- every ordinary dependent minor, including the
-                // swapped-arm control in `proofs/src/dependent.mo` -- the
-                // comparison below still runs.
-                err _ => ok minor_tt.term,
-                ok inferred =>
-                    match elim_minor_type_error minor inferred.typ expected_minor_typ scope locals {
-                        Option.some e => err e,
-                        Option.none => ok minor_tt.term,
-                    },
+    // Infer the minor INDEPENDENTLY first. `unify`/`Similar` compare a
+    // bound variable's DEBUG NAME as well as its index, and the
+    // expected-driven path builds its Pi chain from the constructor's field
+    // list, so a source binder (`Nat.succ k`) need not match it even when the
+    // types are equal. Inference uses the minor's own binder annotations, and
+    // the comparison below canonicalizes constructor references; the
+    // expected-driven check is kept only for a minor that cannot be inferred
+    // (a field-dependent constructor type, `Sigma`'s `snd : B fst`).
+    match type_check minor Term.hole scope local_types locals {
+        err _ =>
+            match type_check minor expected_minor_typ scope local_types locals {
+                err err_ => err err_,
+                ok minor_tt => ok minor_tt.term,
+            },
+        ok inferred =>
+            match elim_minor_type_error minor inferred.typ expected_minor_typ scope locals {
+                Option.some e => err e,
+                Option.none => ok inferred.term,
+            },
+    }
+
+/// Normalize a type for the Elim minor COMPARISON only. Two shapes differ from
+/// what a derived motive builds even when they denote the same thing:
+///
+/// * a QUALIFIED free-var reference (`Nat.succ`, `Bool.true`) becomes its bare
+///   last segment -- the form the motive's `ctor_app` uses (`free_var_ref
+///   ctor.name`, and `InductConstructor.name` is never type-prefixed);
+/// * a `Term.con` (the checker's introduction node for a constructor
+///   application inside a type) becomes the equivalent free-var application
+///   (`con_as_var_app`), which is the shape the motive produces.
+///
+/// `unify`/`Similar` compare free-var spellings and node shapes exactly, so
+/// without this a source minor written `Nat.succ k` never matches the motive's
+/// `succ k`. Never used on a term that is stored or compiled.
+///
+/// `#[partial]`: children are reached through `term_map_children`, which hides
+/// the structural descent from the termination checker (the same idiom every
+/// `term_map_children`-based rewrite uses).
+#[partial]
+def canonicalize_ctor_refs (scope : Scope) (t : Term) : Term :=
+    let mapped : Term := term_map_children (canonicalize_ctor_refs scope) t in
+    match mapped {
+        Term.var idx dbg =>
+            if I64.beq idx sentinel
+            then
+                match dbg {
+                    DebugName.named id =>
+                        match id {
+                            Identifier.id s =>
+                                match dotted_qualifier s {
+                                    Option.none => mapped,
+                                    Option.some _qual =>
+                                        // Rewrite only a real constructor
+                                        // reference: try the full spelling and
+                                        // the bare last segment against the
+                                        // constructor registry, so a dotted DEF
+                                        // reference is left alone.
+                                        let bare : Identifier := Identifier.id (last_dotted_segment s) in
+                                        let as_full : NamePath := NamePath.mk (List.cons (Identifier.id s) List.empty) in
+                                        let as_bare : NamePath := NamePath.mk (List.cons bare List.empty) in
+                                        if List.is_empty (scope_find_all_inductives_by_constructor as_full scope)
+                                            && List.is_empty (scope_find_all_inductives_by_constructor as_bare scope)
+                                        then mapped
+                                        else Term.var idx (DebugName.named bare),
+                                }
+                        },
+                    DebugName.unnamed => mapped,
+                }
+            else mapped,
+        // A `Term.con` is how the checker represents a constructor
+        // APPLICATION inside a type; a derived motive builds the same
+        // application as a free-var spine (`free_var_ref ctor.name`). Convert
+        // the con to that spine so the two are structurally comparable.
+        Term.con c => con_as_var_app c,
+        _ => mapped,
+    }
+
+/// A `Con` as the flat application a derived motive uses: the bare
+/// constructor name applied to its present arguments.
+#[partial]
+def con_as_var_app (c : Con) : Term :=
+    match c {
+        Con.mk name _typ_name _num_args args =>
+            let bare : Identifier :=
+                match name {
+                    Identifier.id s => Identifier.id (last_dotted_segment s),
+                } in
+            rebuild_call (Term.var sentinel (DebugName.named bare)) (present_opt_terms args List.empty),
+    }
+
+/// The `Some` entries of a sparse constructor-argument list, in order.
+#[partial]
+def present_opt_terms (args : List (Option Term)) (acc : List Term) : List Term :=
+    match args {
+        List.empty => list_reverse acc,
+        List.cons a rest =>
+            match a {
+                Option.some t => present_opt_terms rest (List.cons t acc),
+                Option.none => present_opt_terms rest acc,
             },
     }
 
 /// The Elim rule's own minor comparison -- `body_type_error` with the
 /// skolem/unbound-type-variable guard REMOVED (see `type_check_elim_minor`'s
-/// doc comment). `Term.hole` on either side is accepted by `unify`; a sort on
-/// the expected side is skipped because `unify` does not implement
-/// cumulativity (`type_check_sort_full` compares sorts by level).
+/// doc comment), and with both sides normalized (`canonicalize_ctor_refs`) so a
+/// qualified spelling or a `Con` node matches the free-var application a
+/// derived motive produces. `Term.hole` on either side is accepted by `unify`; a sort on the
+/// expected side is skipped because `unify` does not implement cumulativity
+/// (`type_check_sort_full` compares sorts by level).
 def elim_minor_type_error (minor : Term) (inferred : Term) (expected : Term)
     (scope : Scope) (locals : LocalScope) : Option TypeError :=
     if term_has_hole minor then Option.none
     else if is_sort_typ expected then Option.none
-    else match unify expected inferred scope locals {
-        Result.ok _ => Option.none,
-        Result.err e => Option.some e,
-    }
+    else
+        let inferred_c : Term := canonicalize_ctor_refs scope inferred in
+        let expected_c : Term := canonicalize_ctor_refs scope expected in
+        match unify expected_c inferred_c scope locals {
+            Result.ok _ => Option.none,
+            Result.err e => Option.some e,
+        }
 
 /// This constructor's own concrete index value(s) (R4c) -- substitute the
 /// inductive's own declared params into THIS ctor's own declared return
@@ -2049,7 +2126,7 @@ def substitute_inductive_params_into (ind_params : List Param) (actual_args : Li
 /// Drop the first `n` elements of `xs` -- `std`'s own `List` carries no
 /// `drop` (confirmed: grepped the whole tree, the only `.drop` is
 /// `String.drop`), so this is a small hand-rolled twin, same convention
-/// `elim_field_vars`/`substitute_inductive_type_params_go` already use
+/// `substitute_inductive_type_params_go` already use
 /// for a brand-new list op in this file.
 #[terminating]
 def drop_n (n : I64) (xs : List Term) : List Term :=
@@ -2077,11 +2154,30 @@ def terms_shift (d : I64) (ts : List Term) : List Term :=
 /// comment cites it). Recurses on `field_types` itself (not a raw `I64`
 /// countdown) so the termination checker sees the same structural
 /// decrease `build_anon_lambda_chain` already relies on.
-def elim_field_vars (field_types : List Term) (idx : I64) : List Term :=
-    match field_types {
-        List.empty => List.empty,
-        List.cons _ trest => List.cons (Term.var idx DebugName.unnamed) (elim_field_vars trest (idx - 1)),
-    }
+/// The DebugNames of `n` leading `Term.lam` binders of `minor`, outermost
+/// first -- the names the expected constructor application's field references
+/// must carry (see `type_check_elim_minor`).
+#[partial]
+def minor_binder_names (n : I64) (minor : Term) (acc : List DebugName) : List DebugName :=
+    if I64.lt n 1
+    then list_reverse acc
+    else
+        match term_peel minor {
+            Term.lam b _typ body => minor_binder_names (n - 1) body (List.cons (binder_name b) acc),
+            _ => list_reverse acc,
+        }
+
+/// `idx`, `idx-1`, ... `0` as `Term.var`s carrying `names`' DebugNames, one per
+/// name -- one `Term.var` per field binder.
+#[partial]
+def elim_field_vars_named (names : List DebugName) (idx : I64) : List Term :=
+    if I64.lt idx 0
+    then List.empty
+    else
+        match names {
+            List.cons nm rest => List.cons (Term.var idx nm) (elim_field_vars_named rest (idx - 1)),
+            List.empty => List.cons (Term.var idx DebugName.unnamed) (elim_field_vars_named List.empty (idx - 1)),
+        }
 
 /// One `Term.pi` per field type, OUTERMOST first, ending in `body` --
 /// the Pi-chain counterpart to `build_anon_lambda_chain` (R3b), used to
