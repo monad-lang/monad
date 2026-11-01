@@ -48,6 +48,7 @@ use weaver::model {
     list_length, panel_height, input_placeholder,
 }
 use weaver::logs {Logs.info, Logs.debug, Logs.warn, Logs.error, Logs.log_rss}
+use weaver::title {Title.generate, Title.needed}
 use weaver::subagent {Subagent.task_tool}
 use weaver::store {
     Transcript, TranscriptPage, StoreState,
@@ -56,7 +57,8 @@ use weaver::store {
     Store.startup_transcript, Store.append_chunk, Store.discard_live,
     Store.append_history_note, Store.child, Store.append_named, Store.write_named, Store.write_plan,
     Store.read_named, Store.read_named_from, Store.read_live_from, Store.discard_named,
-    SessionInfo, Store.list_sessions,
+    SessionInfo, Store.list_sessions, Store.read_meta, Store.write_title, Store.derive_name,
+    Store.derive_description, TitleField, StoreMeta,
 }
 use weaver::stop {Stop.predicate, Stop.request, Stop.reset}
 use weaver::overlay {
@@ -195,6 +197,9 @@ def update_msg (m : TuiModel) (msg : WeaverMsg) : Pair TuiModel (Cmd WeaverMsg) 
             Pair.pair m2 repaint_cmd,
         // The Esc request reached the signal file.
         WeaverMsg.stop_sent => Pair.pair m Cmd.none,
+        // The background title call wrote (or skipped) the session's
+        // name/description: already persisted, nothing to fold.
+        WeaverMsg.title_result _ => Pair.pair m Cmd.none,
         WeaverMsg.polled u ov live => polled_step m u ov live,
     }
 
@@ -309,7 +314,7 @@ def turn_result_step (m : TuiModel) (run : RunState) (lines : List TLine) (delta
         Pair.pair m2 at => match at {
             Pair.pair start block =>
                 let m3 : TuiModel := with_turn_end (fn (mm : TuiModel) => mm) m2 in
-                let m4 : TuiModel := { m3 with plan_ready := ready } in
+                let m4 : TuiModel := { m3 with plan_ready := ready, title_due := title_wanted st2 plan } in
                 let store : Option StoreState := m4.state.store in
                 if Bool.not (queued_waiting m4)
                 then Pair.pair m4 (persist_turn_cmd m4.log store run delta start block ready m4.state)
@@ -422,7 +427,7 @@ def page_failed_step (m : TuiModel) (e : String) : Pair TuiModel (Cmd WeaverMsg)
 
 def transcript_reset_step (m : TuiModel) (tr : Transcript) : Pair TuiModel (Cmd WeaverMsg) :=
     let m2 : TuiModel := { m with transcript := tr, scroll := 0, page_pending := false, rows_key := Option.none, banner := true, banner_frame := 0,
-                            queued := List.empty, queued_ready := false } in
+                            queued := List.empty, queued_ready := false, title_due := false } in
     maybe_page_cmd m2
 
 /// A store write failure disables persistence for the rest of the run;
@@ -714,7 +719,12 @@ def update_event (m : TuiModel) (e : Event) : Pair TuiModel (Cmd WeaverMsg) :=
             // The handshake poll runs on EVERY tick, not only while a
             // turn is pending: a dialog opened by a fiber must be seen
             // and acked even if the model's own pending flag is stale.
-            Pair.pair m2 (Cmd.inspect (poll_action m2.state.store m2.spinner_frame m2.live_seen m2.live_thinking_seen)),
+            // A due session title forks here, AFTER persistence and the
+            // plan dialog (a modal's blocking perform keeps ticks from
+            // running until it closes), and never blocks the frame.
+            if m2.title_due
+            then Pair.pair { m2 with title_due := false } (title_cmd m2)
+            else Pair.pair m2 (Cmd.inspect (poll_action m2.state.store m2.spinner_frame m2.live_seen m2.live_thinking_seen)),
         _ => Pair.pair (with_streak_reset (fn (mm : TuiModel) => mm) m) Cmd.none,
     }
 
@@ -1907,6 +1917,112 @@ def persist_plan (store : Option StoreState) (p : Option String) : IO Unit :=
         },
     }
 
+// ── agent-generated session titles ─────────────────────────────────────
+// After the first turn (or a plan) one small model call names the
+// session for `/resume`. It runs on its own fiber from the frame clock,
+// after persistence (and after the plan dialog, which blocks frames),
+// and it writes a field only while that field still holds the DERIVED
+// value -- a `/name` typed meanwhile wins.
+
+def store_present (o : Option StoreState) : Bool :=
+    match o {
+        Option.none => false,
+        Option.some _ => true,
+    }
+
+def opt_text (o : Option String) : String :=
+    match o {
+        Option.none => "",
+        Option.some s => s,
+    }
+
+/// Whether this completed turn warrants the title call.
+def title_wanted (st : WeaverState) (plan : Option String) : Bool :=
+    let has_plan : Bool := match plan {
+        Option.none => false,
+        Option.some _ => true,
+    } in
+    Title.needed (store_present st.store) (st.run.session.config.base_url == "mock")
+        st.run.session.turns has_plan
+
+def title_derived_name (m : StoreMeta) (s : Session) : Bool :=
+    match m.name {
+        Option.none => true,
+        Option.some v => match Store.derive_name s {
+            Option.none => false,
+            Option.some d => v == d,
+        },
+    }
+
+def title_derived_desc (m : StoreMeta) (s : Session) : Bool :=
+    match m.description {
+        Option.none => true,
+        Option.some v => match Store.derive_description s {
+            Option.none => false,
+            Option.some d => v == d,
+        },
+    }
+
+def title_write (yes : Bool) (dir : Path) (field : TitleField) (v : String) : IO Unit :=
+    if Bool.not yes
+    then IO.pure unit
+    else do {
+        let _ <- Store.write_title dir field (Option.some v);
+        IO.pure unit
+    }
+
+/// The fiber's action. Every failure is cosmetic: the derived title
+/// stays, and the turn has already landed.
+def run_title_action (log : Option Logger) (st : WeaverState) (s : StoreState) : IO WeaverMsg := do {
+    let sess : Session := st.run.session;
+    let meta_r <- Store.read_meta s.dir;
+    match meta_r {
+        Result.err e => do {
+            Logs.debug log (String.concat "ev=title_error " e);
+            IO.pure (WeaverMsg.title_result Option.none)
+        },
+        Result.ok m => do {
+            let keep_name : Bool := title_derived_name m sess;
+            let keep_desc : Bool := title_derived_desc m sess;
+            if Bool.and (Bool.not keep_name) (Bool.not keep_desc)
+            then IO.pure (WeaverMsg.title_result Option.none)
+            else do {
+                let request : String := opt_text (Store.derive_name sess);
+                let answer : String := match st.plan {
+                    Option.some p => p,
+                    Option.none => opt_text (Store.derive_description sess),
+                };
+                let got <- Title.generate sess.config request answer;
+                match got {
+                    Option.none => do {
+                        Logs.debug log "ev=title_skip";
+                        IO.pure (WeaverMsg.title_result Option.none)
+                    },
+                    Option.some p => match p {
+                        Pair.pair n d => do {
+                            let _ <- title_write (Bool.and keep_name (Bool.not (String.is_empty n)))
+                                s.dir TitleField.title_name n;
+                            let _ <- title_write (Bool.and keep_desc (Bool.not (String.is_empty d)))
+                                s.dir TitleField.title_description d;
+                            let _ <- Logs.info log (String.concat "ev=title name="
+                                (String.concat n (String.concat " desc=" d)));
+                            IO.pure (WeaverMsg.title_result (Option.some (Pair.pair n d)))
+                        },
+                    },
+                }
+            }
+        },
+    }
+}
+
+def title_cmd (m : TuiModel) : Cmd WeaverMsg :=
+    match m.state.store {
+        Option.none => Cmd.none,
+        Option.some s => Cmd.perform_async
+            (fn (_ : Unit) => run_title_action m.log m.state s)
+            (fn (_ : FiberError) => WeaverMsg.title_result Option.none),
+    }
+
 def plan_dialog_step (st : WeaverState) (text : String) : IO WeaverMsg :=
     if mode_is_plan st.mode
     then plan_approval_step st
@@ -1917,7 +2033,7 @@ def plan_dialog_step (st : WeaverState) (text : String) : IO WeaverMsg :=
 def plan_view_step (st : WeaverState) : IO WeaverMsg := do {
     let o0 : DialogOption := { label := "Close", hint := "Esc", key := "" };
     let d0 : Dialog := Dialog.make "Current plan" "read-only -- switch to plan mode to revise or approve" (plan_body st) [o0];
-    let d : Dialog := { d0 with plain_body := true, footer := "PageUp/PageDown scroll -- Enter/Esc close" };
+    let d : Dialog := { d0 with markdown_body := true, footer := "PageUp/PageDown scroll -- Enter/Esc close" };
     let pr <- dialog_run st.colors st.store d;
     match pr {
         Pair.pair _ _ => IO.pure (WeaverMsg.command_result (plan_effect st "plan closed")),
@@ -1930,7 +2046,7 @@ def plan_approval_step (st : WeaverState) : IO WeaverMsg := do {
     let o2 : DialogOption := { label := "Revise with a note", hint := "r", key := "r" };
     let o3 : DialogOption := { label := "Cancel", hint := "Esc", key := "" };
     let d0 : Dialog := Dialog.make "Plan ready" "approve it to leave plan mode" (plan_body st) [o0, o1, o2, o3];
-    let d : Dialog := { d0 with plain_body := true, footer := "PageUp/PageDown scroll -- a approve/edit, m manual, r revise, Esc cancel" };
+    let d : Dialog := { d0 with markdown_body := true, footer := "PageUp/PageDown scroll -- a approve/edit, m manual, r revise, Esc cancel" };
     let pr <- dialog_run st.colors st.store d;
     match pr {
         Pair.pair final step => match step {
@@ -1998,6 +2114,14 @@ def drop_rows (n : I64) (rs : List DisplayRow) : List DisplayRow :=
         List.empty => rs,
         List.cons _ rest => drop_rows (n - 1) rest,
     }
+
+/// A Markdown body: the lines join into ONE document, so headings,
+/// lists and fences are parsed rather than shown as source. Parsed
+/// once per render, like `dialog_body_rows`.
+pub def markdown_body_rows (colors : Bool) (width : I64) (lines : List String) : List DisplayRow :=
+    if List.length lines < 1
+    then List.empty
+    else Model.display_line colors width (TLine.markdown_line (List.intercalate "\n" lines))
 
 #[partial]
 def dialog_body_rows (colors : Bool) (plain : Bool) (width : I64) (lines : List String) : List DisplayRow :=
@@ -2091,7 +2215,10 @@ def render_dialog (colors : Bool) (d : Dialog) : IO Unit := do {
             let raw_w : I64 := cols - 4;
             let width : I64 := if raw_w < 20 then (if raw_w < 1 then 1 else raw_w) else (if raw_w < 88 then raw_w else 88);
             let content_w : I64 := if width - 4 < 1 then 1 else width - 4;
-            let body_all : List DisplayRow := dialog_body_rows colors d.plain_body content_w d.body;
+            let body_all : List DisplayRow :=
+                if d.markdown_body
+                then markdown_body_rows colors content_w d.body
+                else dialog_body_rows colors d.plain_body content_w d.body;
             let total : I64 := dialog_total_rows d body_all;
             let max_h : I64 := if rows - 2 < 6 then 6 else rows - 2;
             let wanted : I64 := total + 4;

@@ -86,6 +86,9 @@ pub type WeaverMsg {
     submit (st : WeaverState) (text : String),
     /// The Esc stop request's signal write completed; a no-op fold.
     stop_sent,
+    /// The background session-title call finished: the pair it wrote
+    /// (none when it was skipped or failed). Display state only.
+    title_result (title : Option (Pair String String)),
     /// A pending tick's poll: the live usage (only every tenth frame),
     /// the dialog-ownership state (every frame), and -- every third
     /// frame -- the streamed-text delta.
@@ -302,6 +305,11 @@ pub struct TuiModel {
     /// A clean plan-mode turn produced a plan: the persistence
     /// continuation opens the "Plan ready" dialog once the turn folds.
     plan_ready : Bool := false,
+    /// This turn warrants an agent-generated session title (the first
+    /// turn, or one that produced a plan): the next frame tick forks the
+    /// title call, so it never blocks the turn's persistence or its
+    /// dialog.
+    title_due : Bool := false,
     /// Esc asked the running turn to stop; the live row says so and the
     /// fiber ends at its next model/tool boundary.
     stop_requested : Bool := false,
@@ -339,7 +347,7 @@ pub def init_tui_model (log : Option Logger) (st : WeaverState) (rows : I64) (co
 
 /// The startup tail loaded from the session store.
 pub def init_tui_model_with (log : Option Logger) (st : WeaverState) (rows : I64) (cols : I64) (tr : Transcript) : TuiModel :=
-    let m : TuiModel := { state := st, input := input_state "" input_placeholder, transcript := tr, rows := rows, cols := cols, ctrl_c_streak := 0, ctrl_d_streak := 0, scroll := 0, row_total := 0, scroll_drag := Option.none, hist := List.empty, hist_idx := 0 - 1, turn_pending := false, spinner_frame := 0, page_pending := false, rows_cache := List.empty, rows_key := Option.none, sel := Option.none, banner := true, banner_frame := 0, live_spent := Option.none, live_base := Option.none, live_text := "", live_seen := 0, live_thinking := "", live_thinking_seen := 0, live_activity := Option.none, show_details := false, modal := false, plan_ready := false, stop_requested := false, turn_gen := 0, overlay_open := false, dialog_seq := 0, picker := Option.none, queued := List.empty, queued_ready := false, log := log } in
+    let m : TuiModel := { state := st, input := input_state "" input_placeholder, transcript := tr, rows := rows, cols := cols, ctrl_c_streak := 0, ctrl_d_streak := 0, scroll := 0, row_total := 0, scroll_drag := Option.none, hist := List.empty, hist_idx := 0 - 1, turn_pending := false, spinner_frame := 0, page_pending := false, rows_cache := List.empty, rows_key := Option.none, sel := Option.none, banner := true, banner_frame := 0, live_spent := Option.none, live_base := Option.none, live_text := "", live_seen := 0, live_thinking := "", live_thinking_seen := 0, live_activity := Option.none, show_details := false, modal := false, plan_ready := false, title_due := false, stop_requested := false, turn_gen := 0, overlay_open := false, dialog_seq := 0, picker := Option.none, queued := List.empty, queued_ready := false, log := log } in
     Model.refresh_rows m
 
 /// The input box's placeholder, shared by the live edit and a history

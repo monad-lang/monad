@@ -29,6 +29,10 @@ pub struct Dialog {
     /// line classification: a plan's prose is not a diff, and a "+ " or
     /// "- " bullet must not paint the whole line green/red.
     plain_body : Bool := false,
+    /// Render the body as ONE Markdown document (headings, lists, code
+    /// spans) rather than literal source lines: a plan is reviewed, not
+    /// read as source. Takes precedence over `plain_body`.
+    markdown_body : Bool := false,
 }
 
 pub type DialogStep {
@@ -49,6 +53,7 @@ pub def Dialog.make (title : String) (subtitle : String) (body : List String) (o
         editing := false,
         footer := "↑/↓ select · Enter confirm · e note · Esc cancel",
         plain_body := false,
+        markdown_body := false,
     } in
     d
 

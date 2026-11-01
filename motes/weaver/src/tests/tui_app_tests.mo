@@ -26,7 +26,7 @@ use std::path {Path, Path.of}
 use std::map {Map, BTreeMap}
 use weaver::tui_app {
     TuiApp.update, turn_never_ran, TuiApp.resume_rows, TuiApp.resume_option,
-    TuiApp.resume_action_at, activity_name,
+    TuiApp.resume_action_at, activity_name, markdown_body_rows,
     ResumeAction, ResumeChoice,
 }
 use weaver::commands {SessionPage, Commands.session_page}
@@ -1000,3 +1000,27 @@ def test_activity_name_reads_start_and_end : Bool :=
         && activity_name "\u{1}activity\u{2}end\u{2}grep" "end" == Option.some "grep"
         && (match activity_name "\u{1}activity\u{2}end\u{2}grep" "start" { Option.none => true, Option.some _ => false })
         && (match activity_name "plain model text" "start" { Option.none => true, Option.some _ => false })
+
+#[partial]
+def row_contains (rs : List DisplayRow) (s : String) : Bool :=
+    match rs {
+        List.empty => false,
+        List.cons r rest => Bool.or (String.contains r.text s) (row_contains rest s),
+    }
+
+/// A plan dialog's body is rendered as Markdown, not source: the heading
+/// loses its `#`, a list item loses its `-`, and the prose survives. The
+/// old `plain_body` path showed the raw source (fences, backticks, `#`).
+#[test]
+def test_markdown_body_rows_render_a_plan : Bool :=
+    let rs : List DisplayRow := markdown_body_rows false 40
+        ["# Add a cache", "", "- wire it in", "- test it"] in
+    row_contains rs "Add a cache"
+        && Bool.not (row_contains rs "# Add a cache")
+        && Bool.not (row_contains rs "- wire it in")
+        && row_contains rs "wire it in"
+
+/// An empty body is no rows (an empty document must not paint one).
+#[test]
+def test_markdown_body_rows_empty : Bool :=
+    List.length (markdown_body_rows false 40 List.empty) == 0
