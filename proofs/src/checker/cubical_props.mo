@@ -28,6 +28,7 @@ use lang::module {try_parse_decls}
 use lang::scope {build_scope_from_decls}
 use lang::typecheck::cubical {peels_to_bare_interval}
 use lang::typecheck::infer {empty_local_types, empty_locals, equiv_type, type_check}
+use lang::typecheck::unify {unify}
 use lang::typecheck::whnf {whnf}
 use init::shared {Shared}
 use lang::types {
@@ -1483,6 +1484,40 @@ def test_glue_w_type_has_the_shape_of_equiv : Bool :=
         _ => false,
     }
 
+/// The DRIFT pin the shape control above could not be: the kernel's inlined
+/// `Equiv` unfolding (`equiv_type`) and the library `Equiv` (via `whnf` in
+/// `cubical_scope`) must be CONVERTIBLE, not merely similarly shaped.
+///
+/// It was blocked by two causes, both fixed: `unify` had no `Term.lam` arm
+/// (K2) and `whnf`'s delta left a def parameter unsubstituted under a
+/// `Term.pi` (K1). A third surfaced while writing it: `Similar` compares a
+/// bound variable's `DebugName`, so the kernel's inlined expansion names its
+/// variables exactly as `proofs/src/equiv.mo` does (`f`, `b`, `center`, `x`,
+/// `a`) -- see `equiv_is_contr`/`equiv_fiber`/`equiv_type`.
+#[test]
+def test_glue_w_type_matches_the_library_equiv_unfolding : Bool :=
+    // Two RIGID, DISTINCT types: sorts would unify by cumulativity and mask
+    // a swapped arrow. (`Term` is affine, so the arguments are spelled at
+    // each use rather than bound.)
+    let library : Term :=
+        whnf cubical_scope empty_locals
+            (Term.app (Term.app (free_var "Equiv") cub_interval) (free_var "B")) in
+    match unify (equiv_type cub_interval (free_var "B")) library cubical_scope empty_locals {
+        ok _ => true,
+        err _ => false,
+    }
+
+/// The drift pin's own control: a permuted kernel unfolding must fail.
+#[test]
+def test_the_drift_pin_rejects_a_permuted_kernel_unfolding : Bool :=
+    let library : Term :=
+        whnf cubical_scope empty_locals
+            (Term.app (Term.app (free_var "Equiv") cub_interval) (free_var "B")) in
+    match unify (equiv_type (free_var "B") cub_interval) library cubical_scope empty_locals {
+        ok _ => false,
+        err _ => true,
+    }
+
 #[test]
 def test_glue_forms_a_type_at_the_partial_level : Bool :=
     // Formation: the result is the sort `T`'s codomain lands in, read off
@@ -1544,3 +1579,4 @@ def test_unglue_rejects_an_argument_whose_type_is_not_glue : Bool :=
         ok _ => false,
         err _ => true,
     }
+
