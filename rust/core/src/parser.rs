@@ -422,8 +422,10 @@ fn num_suffix_parser<X: Clone>(input: Span<X>) -> Res<NumSuffix, X> {
 /// either in range for its suffix or a parse error — never a silently
 /// masked, non-canonical payload (the `Literal::Num`/`IrLit::Num`
 /// invariant; `mask_to_suffix` re-establishes it at every native, the
-/// parser is where it starts).
-fn int_fits_suffix(value: i64, suffix: NumSuffix) -> bool {
+/// parser is where it starts). Shared with the checker's literal-retag
+/// validation (`core_check.rs`), which applies the same gate when a
+/// bare literal is retagged to a narrower expected type.
+pub(crate) fn int_fits_suffix(value: i64, suffix: NumSuffix) -> bool {
   match suffix {
     NumSuffix::I8 => (-128..=127).contains(&value),
     NumSuffix::I16 => (-32768..=32767).contains(&value),
@@ -452,8 +454,10 @@ fn unsigned_suffix(suffix: NumSuffix) -> bool {
 
 /// An F32-tagged float payload always holds the f32-rounded value
 /// (`(v as f32) as f64`) — the float half of the canonical-payload
-/// invariant; the F32 natives and `F32.to_string` rely on it.
-fn round_f32(value: f64, suffix: NumSuffix) -> f64 {
+/// invariant; the F32 natives and `F32.to_string` rely on it. Shared
+/// with the checker's literal retag (`core_check.rs`), which rounds the
+/// same way when a bare `F64`-tagged literal retags to `F32`.
+pub(crate) fn round_f32(value: f64, suffix: NumSuffix) -> f64 {
   if suffix == NumSuffix::F32 {
     value as f32 as f64
   } else {

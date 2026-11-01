@@ -21,7 +21,7 @@ use crate::core_term::{
   close_n, open_with, permute_binders,
 };
 use crate::core_unify::{MetaContext, UnifyError, force, instantiate, open_n, unify, zonk};
-use crate::term::{GlobalRef, Identifier, Multiplicity, NamePath, TypeConstraint};
+use crate::term::{GlobalRef, Identifier, Multiplicity, NamePath, NumSuffix, TypeConstraint};
 use crate::{AtomPathMap, Map};
 use std::sync::Arc;
 
@@ -731,6 +731,24 @@ pub enum InferError {
     target: Atom,
     field: Identifier,
   },
+  /// A bare (default-suffixed, hence retaggable) integer literal whose
+  /// value exceeds the concrete numeric primitive it was checked
+  /// against — `def a : U8 := 300`. The retag to the expected width is
+  /// range-validated precisely so a literal can never become a silently
+  /// masked, non-canonical payload (`int_fits_suffix`'s own invariant);
+  /// this is that gate firing at the retag instead. `lit` is the
+  /// original (location-carrying) literal term, for the diagnostic.
+  LiteralOutOfRange {
+    lit: CoreTerm,
+    target: Identifier,
+  },
+  /// A bare negative integer literal checked against `Nat`, which has
+  /// no negative values — `-3 : Nat`. Distinct from
+  /// `LiteralOutOfRange` for the clearer message (the value is not
+  /// "too large", it is negative).
+  LiteralNegativeNat {
+    lit: CoreTerm,
+  },
   /// `plans/implementations/struct-field-destructuring.md`: a bare `{
   /// .. }` match-case/parameter pattern's scrutinee type doesn't resolve
   /// to a registered inductive at all (an ordinary type-error case would
@@ -1221,6 +1239,117 @@ pub fn infer(
 
 fn primitive_type(mctx: &mut MetaContext, name: &str) -> Atom {
   mctx.intern(GlobalRef::Local(NamePath::top(name)))
+}
+
+/// What a bare (default-suffixed) numeric literal elaborates to when
+/// its expected type is concrete: one of the ten primitive widths (a
+/// pure retag — the same payload, re-tagged, range-gated), or `Nat` (a
+/// term-level rewrite through the `Nat.of_i64` builder). `None` for
+/// every other expected type (a meta still bare, an applied type, a
+/// non-numeric name): a bare literal stays I64/F64-tagged exactly as
+/// the parser tagged it.
+enum LitTarget {
+  Width(NumSuffix),
+  Nat,
+}
+
+/// The retag decision for an expected type — `Some` only when
+/// `expected` forces to a concrete single-segment `Free` naming one of
+/// the ten numeric primitives or `Nat` (the same ambient spelling
+/// `primitive_type` interns, so a module-shadowed name of a different
+/// arity/path never matches).
+fn literal_retag_target(mctx: &mut MetaContext, expected: &CoreTerm) -> Option<LitTarget> {
+  let forced = force(mctx, expected.clone()).into_stripped_ctx();
+  let CoreTerm::Free(atom) = forced else {
+    return None;
+  };
+  let GlobalRef::Local(path) = mctx.atoms().path_of(atom)?.clone() else {
+    return None;
+  };
+  let segments = path.segments();
+  if segments.len() != 1 {
+    return None;
+  }
+  match segments[0].as_str() {
+    "I8" => Some(LitTarget::Width(NumSuffix::I8)),
+    "I16" => Some(LitTarget::Width(NumSuffix::I16)),
+    "I32" => Some(LitTarget::Width(NumSuffix::I32)),
+    "I64" => Some(LitTarget::Width(NumSuffix::I64)),
+    "U8" => Some(LitTarget::Width(NumSuffix::U8)),
+    "U16" => Some(LitTarget::Width(NumSuffix::U16)),
+    "U32" => Some(LitTarget::Width(NumSuffix::U32)),
+    "U64" => Some(LitTarget::Width(NumSuffix::U64)),
+    "F32" => Some(LitTarget::Width(NumSuffix::F32)),
+    "F64" => Some(LitTarget::Width(NumSuffix::F64)),
+    "Nat" => Some(LitTarget::Nat),
+    _ => None,
+  }
+}
+
+/// The width-retagged form of a bare default-suffixed literal — the
+/// same payload re-tagged to `target`, preserving the canonical-
+/// payload invariant (range gate for integer targets, `round_f32` for
+/// `F32`). `None` when the value does not fit the target: the check
+/// arm turns that into `LiteralOutOfRange`, and the walk leaves the
+/// literal unchanged so the width-correct native does the masking,
+/// exactly as it did before the retag existed. `Nat` is not a width
+/// (its rewrite is term-level, `Nat.of_i64`) and a float literal never
+/// retags to an integer width — both stay `None` here.
+fn retagged_numeric_lit(lit: &CoreLit, target: LitTarget) -> Option<CoreLit> {
+  match (lit, target) {
+    (
+      CoreLit::Num {
+        value,
+        suffix: NumSuffix::I64,
+      },
+      LitTarget::Width(w),
+    ) if w.is_int() => {
+      if crate::parser::int_fits_suffix(*value, w) {
+        Some(CoreLit::Num {
+          value: *value,
+          suffix: w,
+        })
+      } else {
+        None
+      }
+    }
+    (
+      CoreLit::Num {
+        value,
+        suffix: NumSuffix::I64,
+      },
+      LitTarget::Width(w),
+    ) => Some(CoreLit::Float {
+      value: crate::term::F64Wrap(if w == NumSuffix::F32 {
+        crate::parser::round_f32(*value as f64, w)
+      } else {
+        *value as f64
+      }),
+      suffix: w,
+    }),
+    (
+      CoreLit::Float {
+        value,
+        suffix: NumSuffix::F64,
+      },
+      LitTarget::Width(w),
+    ) if w.is_float() => Some(CoreLit::Float {
+      value: crate::term::F64Wrap(crate::parser::round_f32(value.0, w)),
+      suffix: w,
+    }),
+    _ => None,
+  }
+}
+
+/// The `Nat.of_i64` builder's atom — the short ambient path a written
+/// `Nat.of_i64` reference resolves to (init is ambient and the program
+/// indexes the def under this path too), so the synthesized rewrite
+/// `3 : Nat` → `Nat.of_i64 3` checks, lowers and evaluates exactly
+/// like the written form.
+fn nat_of_i64_atom(mctx: &mut MetaContext) -> Atom {
+  mctx.intern(GlobalRef::Local(
+    NamePath::top("Nat").extend_borrowed(&NamePath::top("of_i64")),
+  ))
 }
 
 fn infer_lit(
@@ -1903,6 +2032,75 @@ pub fn check(
     );
   }
 
+  // FORCED-BARENESS LITERAL RETAG (the number plan's context-first
+  // literal typing): a bare literal is I64/F64-tagged by the parser
+  // (there is no "no suffix" spelling left to preserve — the forced-
+  // bareness rule), so when the expected type is a CONCRETE numeric
+  // primitive the literal elaborates to that width instead. `check`
+  // VALIDATES here (the range gate: a retag may never produce a
+  // silently masked, non-canonical payload); the REWRITE itself
+  // happens in `desugar_struct_literals`'s own `Lit` arm, which runs
+  // right after this check at the def level and threads the same
+  // expected type into every argument position. A bare literal
+  // expected at a still-abstract meta (an unannotated position, or a
+  // class param not yet pinned by anything) never takes this arm and
+  // stays I64/F64 exactly as written — that is the "default" half of
+  // the rule. Non-default-suffixed literals (`42u8`, `3.14f32`) fall
+  // through every arm below to the ordinary mismatch, so a written
+  // suffix still wins over the context.
+  if let CoreTerm::Lit(CoreLit::Num { .. } | CoreLit::Float { .. }) = term
+    && let Some(target) = literal_retag_target(mctx, expected)
+  {
+    match (term, target) {
+      (
+        CoreTerm::Lit(CoreLit::Num {
+          value,
+          suffix: NumSuffix::I64,
+        }),
+        LitTarget::Width(w),
+      ) => {
+        if w.is_int() && !crate::parser::int_fits_suffix(*value, w) {
+          return Err(InferError::LiteralOutOfRange {
+            lit: original_term.clone(),
+            target: Identifier::new(w.type_name().to_string()),
+          });
+        }
+        return Ok(());
+      }
+      (
+        CoreTerm::Lit(CoreLit::Num {
+          value,
+          suffix: NumSuffix::I64,
+        }),
+        LitTarget::Nat,
+      ) => {
+        if *value < 0 {
+          return Err(InferError::LiteralNegativeNat {
+            lit: original_term.clone(),
+          });
+        }
+        // Validate the rewrite the walk performs by checking it
+        // directly: `Nat.of_i64 3` against `Nat` (the builder is an
+        // ambient init def, always loaded). If the builder is somehow
+        // not resolvable here, fall through to the ordinary
+        // I64-vs-Nat mismatch below rather than reporting the
+        // synthesis's own error.
+        let rewritten = CoreTerm::App {
+          fun: Box::new(CoreTerm::Free(nat_of_i64_atom(mctx))),
+          arg: Box::new(CoreTerm::Lit(CoreLit::Num {
+            value: *value,
+            suffix: NumSuffix::I64,
+          })),
+        };
+        if check(mctx, ctx, structs, &rewritten, expected).is_ok() {
+          return Ok(());
+        }
+      }
+      (CoreTerm::Lit(CoreLit::Float { .. }), LitTarget::Width(w)) if w.is_float() => return Ok(()),
+      _ => {}
+    }
+  }
+
   // A generic application (`fun` not itself a `Lam` — that shape is
   // handled above) whose `fun` is still polymorphic, e.g. calling a
   // generic constructor like `ok : {E A} -> A -> Result E A` with the
@@ -2112,6 +2310,69 @@ fn instantiate_foralls_tracked(
   (current, named)
 }
 
+/// Select the concrete instance for a (resolved) class-param meta and tie
+/// its declared type arguments to the call's own class-param metas —
+/// the exact selection + type-arg unification
+/// `try_resolve_class_method_inner` performs after its argument loop,
+/// extracted so it can ALSO run mid-loop, as soon as an argument pins
+/// the class param (see the loop's own early-selection block): a bare
+/// literal in a LATER argument can only retag to the instance's width
+/// if the instance's other param metas are pinned BEFORE that argument
+/// is desugared (`x + 1` with x : U8 — arg 0 pins the class param, this
+/// pins `B := U8`, and arg 1's desugar then sees the concrete `U8`).
+///
+/// - `Ok(Some((info, atom)))`: an instance was selected and its
+///   path-headed type arguments unified with the call's metas.
+/// - `Ok(None)`: the class param is not (yet) a concrete head, its
+///   path has no registered instance, or the instance's own type
+///   arguments aren't path-headed (a `List A`-style spine — those pin
+///   through the constraint machinery instead, unchanged). Defers to
+///   the post-loop handling (the D5 bound-dictionary branch, or the
+///   ordinary no-instance abort).
+/// - `Err(())`: a type-arg unification failed — the single-slot
+///   instance table handed out an instance this call cannot use. The
+///   same failure the post-loop unification would report, just
+///   earlier; unification is monotone, so no later argument could
+///   have repaired it — the caller aborts the whole resolution.
+fn select_instance_for_call(
+  mctx: &mut MetaContext,
+  atom_paths: &AtomPathMap,
+  structs: &StructFields,
+  known_instances: &KnownInstances,
+  info: &ClassMethodInfo,
+  named_metas: &Map<Identifier, crate::core_term::MetaId>,
+  class_meta: crate::core_term::MetaId,
+) -> Result<Option<(KnownInstanceInfo, Atom)>, ()> {
+  let forced = force(mctx, CoreTerm::Meta(class_meta)).into_stripped_ctx();
+  let Some(concrete_atom) = head_atom_of(mctx, &forced) else {
+    return Ok(None);
+  };
+  let Some(concrete_path) = atom_paths
+    .get(&concrete_atom)
+    .or_else(|| structs.inductive_paths.get(&concrete_atom))
+    .cloned()
+  else {
+    return Ok(None);
+  };
+  let Some(instance_info) = known_instances
+    .get(&(info.class_path.clone(), concrete_path.clone()))
+    .cloned()
+  else {
+    return Ok(None);
+  };
+  for (param_name, instance_arg) in info.class_param_names.iter().zip(instance_info.args.iter()) {
+    let Some(&param_meta) = named_metas.get(param_name) else {
+      continue;
+    };
+    let Some(arg_core) = instance_arg_path_term(instance_arg, mctx) else {
+      continue;
+    };
+    unify(mctx, &CoreTerm::Meta(param_meta), &arg_core).map_err(|_| ())?;
+  }
+  let instance_atom = mctx.intern(instance_info.prefix.clone());
+  Ok(Some((instance_info, instance_atom)))
+}
+
 /// Attempt to resolve a class-method call site (`head`'s spine,
 /// `spine_args` in application order) to a concrete instance — the
 /// `CoreTerm`-level analogue of the OLD checker's own
@@ -2269,6 +2530,12 @@ fn try_resolve_class_method_inner(
     }
     let _ = unify(mctx, &peek, expected);
   }
+  // The instance selected EARLY — as soon as an argument pins the
+  // class param, and always BEFORE any argument is desugared (see the
+  // pre-pass loop below for where the selection runs) — carried
+  // through to the post-loop dictionary projection so the selection
+  // runs at most once per resolution.
+  let mut early_instance: Option<(KnownInstanceInfo, Atom)> = None;
   // META-PINNING PRE-PASS: check every RAW, undesugared arg against its
   // param type — best-effort, never fatal — BEFORE the desugar loop
   // below, so that every meta an ARG'S OWN type can pin is pinned
@@ -2314,6 +2581,40 @@ fn try_resolve_class_method_inner(
       if let Some(param_ty) = param_tys.get(i) {
         let _ = check(mctx, ctx, structs, arg, param_ty);
       }
+      // EARLY INSTANCE SELECTION, interleaved with the pre-pass's own
+      // arg checks: the moment an argument's check has pinned the
+      // class param, select the instance and tie its declared type
+      // arguments to this call's metas — BEFORE any LATER argument's
+      // check runs, let alone any desugar. This ordering is the whole
+      // point: a later bare literal's own check would pin its param
+      // meta to the default `I64` (`x + 1` with x : U8 pins `B := I64`
+      // without this), which then contradicts the chosen homogeneous
+      // instance's `B := U8` and aborts the resolution — the
+      // pre-retag pipeline's silent fall-through to a partial
+      // resolution. With the instance's pins in place first, the
+      // literal's check sees the CONCRETE `U8` and the literal-retag
+      // validation fires (`check`'s own `Lit` arm); the desugar loop
+      // below then retags it for real. A selection failure (`Err`) is
+      // the same type-arg mismatch the post-loop unification would
+      // report (monotone unification — no later arg repairs it);
+      // `Ok(None)` defers to the loop's own early-selection fallback
+      // (the class meta may resolve mid-loop via a speculative arg)
+      // and ultimately the post-loop handling.
+      if early_instance.is_none() && head_atom_of(mctx, &CoreTerm::Meta(class_meta)).is_some() {
+        match select_instance_for_call(
+          mctx,
+          atom_paths,
+          structs,
+          known_instances,
+          info,
+          &named_metas,
+          class_meta,
+        ) {
+          Ok(Some(pair)) => early_instance = Some(pair),
+          Ok(None) => {}
+          Err(()) => return None,
+        }
+      }
     }
   }
   let mut arg_tys: Vec<CoreTerm> = Vec::with_capacity(spine_args.len());
@@ -2346,6 +2647,38 @@ fn try_resolve_class_method_inner(
   // this loop, for where the REAL capture happens instead.
   let mut speculative: Vec<usize> = Vec::new();
   for (i, &arg) in spine_args.iter().enumerate() {
+    // EARLY INSTANCE SELECTION: the moment an earlier argument has
+    // pinned the class param, select the instance and tie its
+    // declared type arguments to this call's metas — BEFORE the
+    // remaining arguments are desugared. This is what lets a bare
+    // literal in a later argument retag to the instance's width
+    // (`x + 1` with x : U8: arg 0 pins the class param, this pins
+    // `B := U8`, and arg 1's desugar then retags `1` to `U8`); without
+    // it, arg 1's own check pins `B := I64` first, the post-loop
+    // unification aborts the resolution, and the generic fallback
+    // resolves only the partial application — leaving the literal
+    // I64-tagged in a U8 slot forever (the silent-wrap t6 shape).
+    // Purely an ordering change: the pinned values are exactly the
+    // ones the post-loop unification would pin anyway, and a failure
+    // here (`Err`) is the same failure that unification would report
+    // after the loop — unification is monotone, no later argument
+    // could repair it. A defer (`Ok(None)`) leaves the post-loop
+    // handling (D5 bound dict, or the ordinary abort) in charge.
+    if early_instance.is_none() && head_atom_of(mctx, &CoreTerm::Meta(class_meta)).is_some() {
+      match select_instance_for_call(
+        mctx,
+        atom_paths,
+        structs,
+        known_instances,
+        info,
+        &named_metas,
+        class_meta,
+      ) {
+        Ok(Some(pair)) => early_instance = Some(pair),
+        Ok(None) => {}
+        Err(()) => return None,
+      }
+    }
     let CoreTerm::Pi {
       arg: arg_ty, ret, ..
     } = residual.into_stripped_ctx()
@@ -2585,42 +2918,31 @@ fn try_resolve_class_method_inner(
       dict_atom,
     )?
   } else {
-    let concrete_atom = head_atom_of(mctx, &forced_class_meta)?;
-    let concrete_path = atom_paths
-      .get(&concrete_atom)
-      .or_else(|| structs.inductive_paths.get(&concrete_atom))?
-      .clone();
-    let looked_up = known_instances.get(&(info.class_path.clone(), concrete_path.clone()));
-    let instance_info = looked_up?;
-    // Tie the CHOSEN instance's declared type arguments to the call's
-    // own class-param metas. Nothing else does: the instance table keys
-    // on the first arg's head path alone, and for a multi-param class
-    // (`HMul A B C`) the return-type peek above pins only the RETURN
-    // param (`C`), so the call's remaining metas stay bare unless an
-    // argument spelled them out. The case that breaks without this: a
-    // call whose FIRST argument is itself a not-yet-resolved
-    // class-method call (`(100 * d) * 10` — the inner `*`'s return meta
-    // is all the outer `A` was ever unified with), where the outer
-    // resolution used to abort with its class meta still bare, after
-    // already splicing its redo's captured entries into the live queue
-    // — see `instance_arg_path_term` for why only PATH-headed
-    // arguments participate (a `List A`-style spine keeps going through
-    // the constraint machinery below, exactly as before).
-    for (param_name, instance_arg) in info.class_param_names.iter().zip(instance_info.args.iter()) {
-      let Some(&param_meta) = named_metas.get(param_name) else {
-        continue;
-      };
-      let Some(arg_core) = instance_arg_path_term(instance_arg, mctx) else {
-        continue;
-      };
-      // A unification failure here means the single-slot instance
-      // table handed out an instance this call cannot use (its first
-      // arg matched the key, its other params do not) — abort rather
-      // than project a dictionary whose body has the wrong type; the
-      // transactional wrapper drops whatever this attempt recorded.
-      unify(mctx, &CoreTerm::Meta(param_meta), &arg_core).ok()?;
-    }
-    let instance_atom = mctx.intern(instance_info.prefix.clone());
+    // The instance selection + type-arg unification this branch used to
+    // inline — now shared with the loop's EARLY selection (see the
+    // loop's own block for why it runs mid-loop at all): if the loop
+    // already selected (the class param resolved before the last
+    // argument was consumed), reuse it; otherwise this is the
+    // ordinary post-loop selection, identical to the old inline code.
+    // Every `Ok(None)`/`Err` defer-or-abort case here matches an
+    // abort this branch has always performed (`?` on
+    // `head_atom_of`/the path lookups/`looked_up`, and the
+    // unification failure — see `select_instance_for_call`).
+    let (instance_info, instance_atom) = match early_instance {
+      Some(pair) => pair,
+      None => match select_instance_for_call(
+        mctx,
+        atom_paths,
+        structs,
+        known_instances,
+        info,
+        &named_metas,
+        class_meta,
+      ) {
+        Ok(Some(pair)) => pair,
+        _ => return None,
+      },
+    };
     // This method's OWN subset of the instance's constraints (not the
     // flat `instance_info.constraints`, every one of the instance's own
     // declared constraints regardless of whether THIS method's body
@@ -4154,7 +4476,36 @@ pub fn desugar_struct_literals(
 
     CoreTerm::Lit(lit @ (CoreLit::Str { .. } | CoreLit::Char { .. })) => CoreTerm::Lit(lit.clone()),
     CoreTerm::Lit(lit @ (CoreLit::Num { .. } | CoreLit::Float { .. })) => {
-      CoreTerm::Lit(lit.clone())
+      // FORCED-BARENESS LITERAL RETAG — the rewrite half of the rule
+      // `check`'s own `Lit` arm validates: a bare (default-suffixed)
+      // literal whose expected type is a concrete numeric primitive
+      // becomes that width's literal, and a bare integer against `Nat`
+      // becomes `Nat.of_i64 <lit>` (the term-level rewrite the checker
+      // validated through the builder's own signature). Every literal
+      // this rewrites has passed the check-side range gate when it was
+      // checked against this same concrete expected; for the rare
+      // walk-only positions that thread a concrete expected without a
+      // preceding check (the class-call arg threading after a partial
+      // resolution, e.g. `x + 1` with x : U8), an out-of-range value
+      // leaves the literal unchanged so the width-correct natives do
+      // the masking — the exact pre-retag behavior, never a
+      // non-canonical payload minted here.
+      match expected.and_then(|e| literal_retag_target(mctx, e)) {
+        None => CoreTerm::Lit(lit.clone()),
+        Some(LitTarget::Nat) => match lit {
+          CoreLit::Num {
+            suffix: NumSuffix::I64,
+            ..
+          } => CoreTerm::App {
+            fun: Box::new(CoreTerm::Free(nat_of_i64_atom(mctx))),
+            arg: Box::new(CoreTerm::Lit(lit.clone())),
+          },
+          _ => CoreTerm::Lit(lit.clone()),
+        },
+        Some(target) => retagged_numeric_lit(lit, target)
+          .map(CoreTerm::Lit)
+          .unwrap_or_else(|| CoreTerm::Lit(lit.clone())),
+      }
     }
 
     CoreTerm::Con(c) => {

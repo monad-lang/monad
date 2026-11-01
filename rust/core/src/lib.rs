@@ -3118,4 +3118,220 @@ def main : I64 := extended
         .unwrap_or_else(|e| panic!("build_core_program failed (should succeed, not panic): {e}"));
     }
   }
+
+  /// Phase 3.2 (context-first literal typing): a bare — default-suffixed
+  /// — integer literal elaborates to the declared numeric width. `42` in
+  /// a `U8` def body retags to a `U8` literal (it used to be a hard
+  /// I64-vs-U8 mismatch); the evaluated payload carries the retagged
+  /// suffix, pinning that the rewrite reached the lowered program and
+  /// not just the checker's verdict.
+  #[test]
+  fn eval_core_program_bare_int_literal_retags_to_declared_width() {
+    let source = r#"
+use init
+
+def main : U8 := 42
+"#;
+    let result = eval_core_program(&ModulePath::top("'bare_lit_u8_test"), source)
+      .unwrap_or_else(|e| panic!("eval_core_program failed: {e}"));
+    match result {
+      core_value::Value::Lit(core_ir::IrLit::Num(n, crate::term::NumSuffix::U8)) => {
+        assert_eq!(n, 42)
+      }
+      other => panic!("expected a U8-tagged literal, got {other:?}"),
+    }
+  }
+
+  /// The retag's range gate: a bare literal too large for the expected
+  /// width is a CHECK error naming the width, never a silently masked
+  /// payload minted by the rewrite.
+  #[test]
+  fn eval_core_program_bare_int_literal_out_of_range_errors() {
+    let source = r#"
+use init
+
+def main : U8 := 300
+"#;
+    let err = eval_core_program(&ModulePath::top("'bare_lit_u8_range_test"), source)
+      .expect_err("a bare 300 in a U8 def must not check");
+    assert!(
+      err.contains("out of range") && err.contains("U8"),
+      "expected an out-of-range error for U8, got: {err}"
+    );
+  }
+
+  /// A bare integer literal against a float width elaborates to a float
+  /// literal of that width (`42 : F64` → `42.0f64`).
+  #[test]
+  fn eval_core_program_bare_int_literal_retags_to_f64() {
+    let source = r#"
+use init
+
+def main : F64 := 42
+"#;
+    let result = eval_core_program(&ModulePath::top("'bare_lit_f64_test"), source)
+      .unwrap_or_else(|e| panic!("eval_core_program failed: {e}"));
+    match result {
+      core_value::Value::Lit(core_ir::IrLit::Float(
+        crate::term::F64Wrap(v),
+        crate::term::NumSuffix::F64,
+      )) => {
+        assert_eq!(v, 42.0)
+      }
+      other => panic!("expected an F64-tagged float literal, got {other:?}"),
+    }
+  }
+
+  /// A bare float literal retags with the f32 rounding the parser
+  /// applies to a written `3.14f32` — same payload either way.
+  #[test]
+  fn eval_core_program_bare_float_literal_retags_to_f32() {
+    let source = r#"
+use init
+
+def main : F32 := 3.14
+"#;
+    let result = eval_core_program(&ModulePath::top("'bare_lit_f32_test"), source)
+      .unwrap_or_else(|e| panic!("eval_core_program failed: {e}"));
+    let expected = crate::parser::round_f32(3.14, crate::term::NumSuffix::F32);
+    match result {
+      core_value::Value::Lit(core_ir::IrLit::Float(
+        crate::term::F64Wrap(v),
+        crate::term::NumSuffix::F32,
+      )) => {
+        assert_eq!(v, expected)
+      }
+      other => panic!("expected an F32-tagged float literal, got {other:?}"),
+    }
+  }
+
+  /// A bare non-negative integer against `Nat` elaborates through the
+  /// `Nat.of_i64` builder (`3 : Nat` → `Nat.of_i64 3`); `Nat.to_string`
+  /// walks the built value, so this also pins that the rewrite produced
+  /// a real inductive `Nat`, not an untyped literal in a Nat slot.
+  #[test]
+  fn eval_core_program_bare_int_literal_builds_nat_via_of_i64() {
+    let source = r#"
+use init
+
+def n : Nat := 3
+
+def main : String := Nat.to_string n
+"#;
+    let result = eval_core_program(&ModulePath::top("'bare_lit_nat_test"), source)
+      .unwrap_or_else(|e| panic!("eval_core_program failed: {e}"));
+    match result {
+      core_value::Value::Lit(core_ir::IrLit::Str(s)) => assert_eq!(s.as_str(), "3"),
+      other => panic!("expected the string \"3\", got {other:?}"),
+    }
+  }
+
+  /// A bare negative integer against `Nat` is rejected at the retag
+  /// site — the builder would clamp, but a negative literal spelled in
+  /// a Nat position is a mistake the checker reports instead.
+  #[test]
+  fn eval_core_program_negative_nat_literal_errors() {
+    let source = r#"
+use init
+
+def main : Nat := -3
+"#;
+    let err = eval_core_program(&ModulePath::top("'neg_nat_lit_test"), source)
+      .expect_err("a bare -3 in a Nat def must not check");
+    assert!(
+      err.contains("cannot be negative"),
+      "expected a negative-Nat error, got: {err}"
+    );
+  }
+
+  /// The interleaved early-instance selection: `x + 1` with `x : U8`
+  /// selects the `U8` instance before the bare literal's own check runs,
+  /// so the literal retags to the instance's width (it used to default
+  /// itself to I64, abort the resolution, and ride in the U8 slot as an
+  /// I64-tagged literal the native masked). Evaluated end to end the
+  /// call is honest width arithmetic on both operands.
+  #[test]
+  fn eval_core_program_class_call_bare_arg_retags_to_instance_width() {
+    let source = r#"
+use init
+
+def d (x : U8) : U8 := x + 1
+
+def main : U8 := d 5u8
+"#;
+    let result = eval_core_program(&ModulePath::top("'class_arg_retag_test"), source)
+      .unwrap_or_else(|e| panic!("eval_core_program failed: {e}"));
+    match result {
+      core_value::Value::Lit(core_ir::IrLit::Num(n, crate::term::NumSuffix::U8)) => {
+        assert_eq!(n, 6)
+      }
+      other => panic!("expected a U8-tagged literal, got {other:?}"),
+    }
+  }
+
+  /// Recorded limitation (the number plan's t6): a bare literal OUT OF
+  /// RANGE for the instance's width aborts the class-call resolution
+  /// before any retag, falls back to the partial resolution, and the
+  /// literal reaches the width-correct native as an I64-tagged operand
+  /// it masks — the exact pre-retag silent wrap, now locked as the
+  /// pinned behavior until literal-first resolution learns to report
+  /// it.
+  #[test]
+  fn eval_core_program_class_call_out_of_range_bare_arg_still_wraps() {
+    let source = r#"
+use init
+
+def d (x : U8) : U8 := x + 300
+
+def main : U8 := d 5u8
+"#;
+    let result = eval_core_program(&ModulePath::top("'class_arg_wrap_test"), source)
+      .unwrap_or_else(|e| panic!("eval_core_program failed: {e}"));
+    match result {
+      core_value::Value::Lit(core_ir::IrLit::Num(n, crate::term::NumSuffix::U8)) => {
+        assert_eq!(n, 49)
+      }
+      other => panic!("expected a U8-tagged literal, got {other:?}"),
+    }
+  }
+
+  /// The default half of the rule: a bare literal checked against a
+  /// still-abstract meta (an unannotated position) never retags and
+  /// stays I64, exactly as written.
+  #[test]
+  fn eval_core_program_bare_literal_at_bare_meta_stays_i64() {
+    let source = r#"
+use init
+
+def ident {A : Type} (x : A) : A := x
+
+def main : I64 := ident 42
+"#;
+    let result = eval_core_program(&ModulePath::top("'bare_meta_lit_test"), source)
+      .unwrap_or_else(|e| panic!("eval_core_program failed: {e}"));
+    match result {
+      core_value::Value::Lit(core_ir::IrLit::Num(n, crate::term::NumSuffix::I64)) => {
+        assert_eq!(n, 42)
+      }
+      other => panic!("expected an I64-tagged literal, got {other:?}"),
+    }
+  }
+
+  /// A written suffix still wins over the context: `42u8` in an I64
+  /// position keeps its suffix and fails to check, the pre-retag
+  /// behavior unchanged.
+  #[test]
+  fn eval_core_program_suffixed_literal_keeps_its_suffix() {
+    let source = r#"
+use init
+
+def main : I64 := 42u8
+"#;
+    let err = eval_core_program(&ModulePath::top("'suffixed_mismatch_test"), source)
+      .expect_err("42u8 in an I64 def must keep its suffix and fail");
+    assert!(
+      err.contains("U8") && err.contains("I64"),
+      "expected an I64/U8 mismatch, got: {err}"
+    );
+  }
 }

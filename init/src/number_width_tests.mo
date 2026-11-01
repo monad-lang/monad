@@ -119,3 +119,44 @@ def test_f64_sum_is_not_f32_rounded : Bool :=
 #[test]
 def test_f64_to_string_prints_f64 : Bool :=
     F64.to_string (F64.div 1.0 3.0) == "0.3333333333333333"
+
+// --- Phase 3: context-first literal typing -------------------------
+//
+// A bare (suffix-less) literal is I64/F64-tagged by the parser, and the
+// elaborator retags it to the width the context demands: the declared
+// type of the def it appears in, or the width of the instance a class
+// call resolved to (`x + 1` with x : U8 retags the 1 to U8). A written
+// suffix still wins -- `42u8` in an I64 slot is still a mismatch -- and
+// the out-of-range and negative-Nat rejections are CHECK errors, so
+// they live in the Rust harness (rust/core/src/lib.rs), not here: a
+// swept file must check clean. Never match on a numeric primitive
+// here (the opacity work makes them single-constructor; field/value
+// access is the stable surface).
+
+def bare_u8 : U8 := 42
+
+#[test]
+def test_bare_literal_retags_to_u8 : Bool := bare_u8 == 42u8
+
+def bare_f64 : F64 := 42
+
+#[test]
+def test_bare_int_literal_retags_to_f64 : Bool := bare_f64 == 42.0
+
+def bare_f32 : F32 := 3.14
+
+#[test]
+def test_bare_float_literal_retags_to_f32 : Bool :=
+    F32.to_string bare_f32 == "3.14"
+
+def bare_nat : Nat := 3
+
+#[test]
+def test_bare_nat_literal_builds_via_of_i64 : Bool :=
+    Nat.eq bare_nat (Nat.of_i64 3)
+
+def bare_plus_one (x : U8) : U8 := x + 1
+
+#[test]
+def test_class_call_bare_arg_retags_to_instance_width : Bool :=
+    bare_plus_one 5u8 == 6u8

@@ -2160,6 +2160,9 @@ fn infer_error_location(e: &InferError) -> Option<SourceRange> {
       source_range_of(left).or_else(|| source_range_of(right))
     }
     InferError::ExpectedFunctionType(t) | InferError::CannotInfer(t) => source_range_of(t),
+    InferError::LiteralOutOfRange { lit, .. } | InferError::LiteralNegativeNat { lit } => {
+      source_range_of(lit)
+    }
     InferError::UnboundVariable(_)
     | InferError::UnknownMeta(_)
     | InferError::UnexpectedBound(_)
@@ -2212,6 +2215,10 @@ fn infer_error_to_type_error(e: InferError, atoms: &AtomTable) -> TypeError {
       render_atom(*target, atoms),
       field.as_str()
     ),
+    InferError::LiteralOutOfRange { target, .. } => {
+      format!("integer literal out of range for `{}`", target.as_str())
+    }
+    InferError::LiteralNegativeNat { .. } => "a `Nat` literal cannot be negative".to_string(),
     InferError::FieldPatternUnresolvedScrutinee => {
       "cannot resolve `{ .. }`: the matched value's type isn't known here".to_string()
     }
