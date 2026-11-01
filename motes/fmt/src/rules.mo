@@ -15,22 +15,22 @@
 ///
 /// Line breaks are never decided here: the renderer preserves the author's.
 
-use lib::lexer { Lex.gap_tight, Lex.kind_tag, Lex.same_token, Token }
+use lib::lexer { Lex.gap_tight, Lex.kind_tag, Lex.same_token, TokKind, Token }
 
-def kind_is (t : Token) (tag : I64) : Bool :=
-    I64.beq (Lex.kind_tag t.kind) tag
+def kind_is (t : Token) (k : TokKind) : Bool :=
+    I64.beq (Lex.kind_tag t.kind) (Lex.kind_tag k)
 
-pub def Rules.is_sep (t : Token) : Bool := kind_is t 6
+pub def Rules.is_sep (t : Token) : Bool := kind_is t TokKind.sep
 
-pub def Rules.is_opener (t : Token) : Bool := kind_is t 4
+pub def Rules.is_opener (t : Token) : Bool := kind_is t TokKind.opener
 
-pub def Rules.is_closer (t : Token) : Bool := kind_is t 5
+pub def Rules.is_closer (t : Token) : Bool := kind_is t TokKind.closer
 
 pub def Rules.is_line_comment (t : Token) : Bool :=
-    kind_is t 3 && String.starts_with "//" t.text
+    kind_is t TokKind.comment && String.starts_with "//" t.text
 
 pub def Rules.is_block_comment (t : Token) : Bool :=
-    kind_is t 3 && String.starts_with "/*" t.text
+    kind_is t TokKind.comment && String.starts_with "/*" t.text
 
 def is_bracket_open (t : Token) : Bool :=
     String.beq t.text "(" || String.beq t.text "["
@@ -50,7 +50,7 @@ def is_sigil (s : String) : Bool :=
 
 /// Does the parser observe whether these two tokens touch?
 pub def Rules.tight_pair (prev : Token) (cur : Token) : Bool :=
-    (String.beq prev.text "-" && I64.beq (Lex.kind_tag cur.kind) 1) ||
+    (String.beq prev.text "-" && I64.beq (Lex.kind_tag cur.kind) (Lex.kind_tag TokKind.number)) ||
     String.beq prev.text "." || String.beq cur.text "." ||
     String.beq prev.text "::" || String.beq cur.text "::" ||
     is_sigil prev.text || is_sigil cur.text

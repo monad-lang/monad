@@ -454,7 +454,8 @@ def lex_loop
                 Result.ok scan =>
                     let raw : String := String.slice rest 0 scan.len in
                     let text : String :=
-                        if I64.beq (Lex.kind_tag scan.kind) 3 && has_prefix "//" raw
+                        if I64.beq (Lex.kind_tag scan.kind) (Lex.kind_tag TokKind.comment) &&
+                            has_prefix "//" raw
                         then String.slice raw 0 (trim_ws_end raw (String.length raw))
                         else raw in
                     let gap : Gap := { newlines := newlines, spaces := spaces, indent := indent } in
