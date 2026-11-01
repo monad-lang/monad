@@ -109,7 +109,29 @@ pub instance MonadLiftT m m {
     def monad_lift_t (a : m A) : m A := a
 }
 
+/// `Void` is the deliberate exception to the witness rule: it IS the empty
+/// type (`False`). Nothing may inhabit it, and matching on it is the absurd
+/// eliminator. It is not an opaque VALUE type, so it carries no witness.
 pub type Void {}
+
+/// `Inhabited a` — `a` has a canonical value. A class (instance-resolved),
+/// so generic code can require one implicitly.
+///
+/// The intended signature is `{u : Universe} (a : Sort u) : Sort (max 1 u)`.
+/// Class-level sort annotations parse but are not yet enforced (`Class` has
+/// no sort field; universe-polymorphic classes are unfinished), so the sort
+/// is written in the doc rather than the declaration.
+pub class Inhabited (a : Sort u) {
+    def default : a
+}
+
+/// `NonEmpty a` — the proposition that `a` has SOME value. Proof-level
+/// (`Pred` is the `Prop` alias), so it is erased and proof-irrelevant. Use
+/// it where only existence matters; use `Inhabited` when a default value is
+/// wanted.
+pub type NonEmpty {u : Universe} (a : Sort u) : Pred {
+    nonempty (witness : a),
+}
 
 /// UTF8 string
 pub type String {
@@ -125,25 +147,44 @@ pub class ToString A {
 	def to_string (a : A) : String
 }
 
-/// Primitive number types
+/// Primitive number types.
+///
+/// Each is an OPAQUE native-backed type: an inductive with exactly one
+/// nullary WITNESS constructor. A type with no constructors is the empty
+/// type (`False`), and a native returning one would be asserting an
+/// inhabitant of `False` — so every opaque value type declares a witness.
+/// `#[opaque]` makes the witness unreferenceable: it may be neither
+/// constructed nor matched, which is what keeps the type abstract and its
+/// representation native. Values come only from the native operations.
+#[opaque]
+pub type I64 { i64_witness }
+#[opaque]
+pub type I32 { i32_witness }
+#[opaque]
+pub type I16 { i16_witness }
+#[opaque]
+pub type I8 { i8_witness }
 
-pub type I64 {}
-pub type I32 {}
-pub type I16 {}
-pub type I8 {}
+#[opaque]
+pub type U64 { u64_witness }
+#[opaque]
+pub type U32 { u32_witness }
+#[opaque]
+pub type U16 { u16_witness }
+#[opaque]
+pub type U8 { u8_witness }
 
-pub type U64 {}
-pub type U32 {}
-pub type U16 {}
-pub type U8 {}
-
-pub type F64 {}
-pub type F32 {}
+#[opaque]
+pub type F64 { f64_witness }
+#[opaque]
+pub type F32 { f32_witness }
 
 /// Opaque C pointer for the `#[extern "c"]` FFI. A `Ptr` value is the
 /// raw machine word under every backend; never match, compare or print
-/// one (the `FdStream` convention, std/src/stream.mo).
-pub type Ptr {}
+/// one (the `FdStream` convention, std/src/stream.mo). The witness keeps
+/// the type inhabited; `#[opaque]` keeps it abstract.
+#[opaque]
+pub type Ptr { ptr_witness }
 
 /// The NULL pointer — `SSL_set_verify`'s callback argument is the first
 /// caller (motes/tls).
@@ -608,3 +649,31 @@ with Cubical {
 		(t : (u : Cubical.is_one phi) -> T u) (a : A) : Cubical.Glue A phi T w
 	#[cubical "glue_elim"] pub def unglue (g : Type) : Type
 }
+
+// ── Inhabited instances ────────────────────────────────────────────
+//
+// Only INHABITED types get an instance: a type with no value (e.g.
+// `Void`, or a phantom index) deliberately has none, which is what makes
+// `Inhabited` a real obligation. `default` is an ordinary value; it never
+// names an `#[opaque]` witness.
+
+pub instance Inhabited I64 { def default : I64 := 0 }
+pub instance Inhabited I32 { def default : I32 := 0i32 }
+pub instance Inhabited I16 { def default : I16 := 0i16 }
+pub instance Inhabited I8 { def default : I8 := 0i8 }
+
+pub instance Inhabited U64 { def default : U64 := 0u64 }
+pub instance Inhabited U32 { def default : U32 := 0u32 }
+pub instance Inhabited U16 { def default : U16 := 0u16 }
+pub instance Inhabited U8 { def default : U8 := 0u8 }
+
+pub instance Inhabited F64 { def default : F64 := 0.0 }
+pub instance Inhabited F32 { def default : F32 := 0.0f32 }
+
+pub instance Inhabited Bool { def default : Bool := Bool.false }
+pub instance Inhabited Unit { def default : Unit := Unit.unit }
+pub instance Inhabited String { def default : String := "" }
+pub instance Inhabited Ptr { def default : Ptr := Ptr.null }
+pub instance Inhabited Nat { def default : Nat := Nat.zero }
+pub instance {A : Type} Inhabited (List A) { def default : List A := List.empty }
+pub instance {A : Type} Inhabited (Option A) { def default : Option A := Option.none }

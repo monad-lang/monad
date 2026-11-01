@@ -965,7 +965,7 @@ fn test_simple_instance() {
     class HAdd A B C {
       def add (a: A) (b : B) : C
     }
-    type I64 {}
+    type I64 { i64_witness }
 
     #[native num_add]
     def I64.add (a b : I64) : I64

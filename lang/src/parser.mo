@@ -2798,8 +2798,48 @@ def class_name (r : ParseResult String) (vis : Visibility) : ParseResult ParseDe
 	match r {
 		success rem name =>
 			let empty_params : List ParseParam := List.empty in
-			class_params rem (Identifier.id name) empty_params vis,
+			// `{u : Universe}` / `{u}` after the class name, the level
+			// analogue of the `def`/`type` parameter clause. Parsed and
+			// dropped: `u` becomes a level binder only because a `Sort u`
+			// in the surviving params mentions it (`free_level_vars`), the
+			// same rule `def_implicit_close` documents.
+			class_try_universe (tag "{" (skip_spaces rem)) rem (Identifier.id name) empty_params vis,
 		fail e => fail e
+	}
+
+#[partial]
+def class_try_universe (r : ParseResult String) (orig : String) (name : Identifier) (params : List ParseParam) (vis : Visibility) : ParseResult ParseDecl :=
+	match r {
+		success rem _ => class_universe_name (identifier (skip_spaces rem)) orig name params vis,
+		fail _ => class_params orig name params vis
+	}
+
+#[partial]
+def class_universe_name (r : ParseResult String) (orig : String) (name : Identifier) (params : List ParseParam) (vis : Visibility) : ParseResult ParseDecl :=
+	match r {
+		success rem _ => class_universe_optional (tag ":" (skip_spaces rem)) rem orig name params vis,
+		fail _ => class_params orig name params vis
+	}
+
+#[partial]
+def class_universe_optional (r : ParseResult String) (rem : String) (orig : String) (name : Identifier) (params : List ParseParam) (vis : Visibility) : ParseResult ParseDecl :=
+	match r {
+		success rem2 _ => class_universe_kw (tag_keyword "Universe" (skip_spaces rem2)) orig name params vis,
+		fail _ => class_universe_close (tag "}" (skip_spaces rem)) orig name params vis
+	}
+
+#[partial]
+def class_universe_kw (r : ParseResult String) (orig : String) (name : Identifier) (params : List ParseParam) (vis : Visibility) : ParseResult ParseDecl :=
+	match r {
+		success rem _ => class_universe_close (tag "}" (skip_spaces rem)) orig name params vis,
+		fail _ => class_params orig name params vis
+	}
+
+#[partial]
+def class_universe_close (r : ParseResult String) (orig : String) (name : Identifier) (params : List ParseParam) (vis : Visibility) : ParseResult ParseDecl :=
+	match r {
+		success rem _ => class_params (skip_spaces rem) name params vis,
+		fail _ => class_params orig name params vis
 	}
 
 /// Class-level params, same shape as `type_params_loop` (which fixed this
@@ -2835,7 +2875,30 @@ def class_params_try_paren (r : ParseResult String) (orig : String) (name : Iden
 		success rem _ => class_params_paren_name (identifier (skip_spaces rem)) name params vis,
 		fail _ =>
 			let rev : List ParseParam := list_reverse params in
-			class_apply_params (class_brace (tag "{" (skip_spaces orig)) name vis) rev
+			class_apply_params (class_try_kind (tag ":" (skip_spaces orig)) orig name vis) rev
+	}
+
+/// An optional result sort after a class's params — the `: Sort (max 1 u)`
+/// in `class Inhabited {u : Universe} (a : Sort u) : Sort (max 1 u)`.
+///
+/// Parsed and DROPPED: `Class` has no sort field, and adding one is an
+/// arity change on a type matched positionally at ~58 sites. The class's
+/// sort is still inferred by the checker; universe-polymorphic classes are
+/// a separate, unfinished piece (`type-universes`). Accepting the syntax
+/// keeps the intended declaration readable and is the forward-compatible
+/// spelling.
+#[partial]
+def class_try_kind (r : ParseResult String) (orig : String) (name : Identifier) (vis : Visibility) : ParseResult ParseDecl :=
+	match r {
+		success rem _ => class_kind_expr (type_expression (skip_spaces rem)) orig name vis,
+		fail _ => class_brace (tag "{" (skip_spaces orig)) name vis
+	}
+
+#[partial]
+def class_kind_expr (r : ParseResult ParseTerm) (orig : String) (name : Identifier) (vis : Visibility) : ParseResult ParseDecl :=
+	match r {
+		success rem _kind => class_brace (tag "{" (skip_spaces rem)) name vis,
+		fail e => fail e
 	}
 
 #[partial]

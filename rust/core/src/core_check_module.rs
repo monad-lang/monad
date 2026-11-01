@@ -889,6 +889,7 @@ fn register_inductive(
         class_atom,
         StructInfo {
           kind: StructKind::Class,
+          opaque: ind.has_attr("opaque"),
           fields,
           defaults: Map::new(),
         },
@@ -1092,6 +1093,7 @@ fn register_inductive(
         struct_atom,
         StructInfo {
           kind: StructKind::Struct,
+          opaque: ind.has_attr("opaque"),
           fields,
           defaults,
         },
@@ -2168,7 +2170,9 @@ fn infer_error_location(e: &InferError) -> Option<SourceRange> {
     | InferError::FieldPatternConstructorNotAllNamed { .. }
     | InferError::FieldPatternUnknownField { .. }
     | InferError::FieldPatternDuplicateField { .. }
-    | InferError::FieldPatternMissingFields { .. } => None,
+    | InferError::FieldPatternMissingFields { .. }
+    | InferError::OpaqueMatch(_)
+    | InferError::OpaqueConstructor(_) => None,
   }
 }
 
@@ -2262,6 +2266,14 @@ fn infer_error_to_type_error(e: InferError, atoms: &AtomTable) -> TypeError {
         .collect::<Vec<_>>()
         .join(", ")
     ),
+    InferError::OpaqueMatch(atom) => format!(
+      "cannot match on the opaque type `{}`; its values have a native representation and no constructor to dispatch on",
+      render_atom(*atom, atoms)
+    ),
+    InferError::OpaqueConstructor(name) => format!(
+      "`{}` is an `#[opaque]` witness constructor; it may be neither constructed nor matched (values come from the type's natives)",
+      name.as_str()
+    ),
   };
   TypeError::Generic(message, location.unwrap_or_default())
 }
@@ -2295,6 +2307,152 @@ fn infer_error_to_type_error(e: InferError, atoms: &AtomTable) -> TypeError {
 /// collides between two OTHER modules it doesn't itself declare, where
 /// the bare slot ends up whichever colliding module happened to be
 /// checked last (unchanged from the pre-existing, accepted behavior).
+/// `#[opaque]` types declare exactly one NULLARY witness constructor, and
+/// a native/extern may not return an empty inductive (the empty type is
+/// `False`). Mirrors the self-hosted `opaque_rules.mo`; see its module doc
+/// for why both halves are necessary.
+fn check_opaque_and_native_returns(
+  decls: &[SourceContext<Decl>],
+  loaded: &LoadedModules,
+) -> Result<(), TypeError> {
+  // 1. `#[opaque]` validation.
+  for decl in decls {
+    if let Decl::Type(ind) = &**decl {
+      if ind.has_attr("opaque") {
+        // A `struct` literal would construct the constructor without
+        // naming it, bypassing the witness ban; opaque types must be
+        // `type` declarations.
+        if *ind.variant() == InductiveVariant::Struct {
+          return Err(TypeError::Generic(
+            format!(
+              "opaque struct `{}`: an opaque type must be declared as a `type` with one nullary witness constructor, not a struct (a struct literal would bypass the witness ban)",
+              ind.name()
+            ),
+            decl.loc.clone(),
+          ));
+        }
+        let ok = match ind.constructors().as_slice() {
+          [only] => only.params.is_empty(),
+          _ => false,
+        };
+        if !ok {
+          return Err(TypeError::Generic(
+            format!(
+              "opaque type `{}` must declare exactly one nullary witness constructor (an empty inductive is False)",
+              ind.name()
+            ),
+            decl.loc.clone(),
+          ));
+        }
+      }
+    }
+  }
+  // 2. Every empty inductive's last name, for the native-return check.
+  let mut empty_names: std::collections::HashSet<String> = decls
+    .iter()
+    .filter_map(|decl| match &**decl {
+      Decl::Type(ind) if ind.constructors().is_empty() => {
+        Some(ind.name().last().as_str().to_string())
+      }
+      _ => None,
+    })
+    .collect();
+  // The return type may name an empty inductive from a LOADED module
+  // (`Void` lives in the prelude), not just this file. The self-hosted
+  // rule resolves through the scope; this mirrors it.
+  for module in loaded.modules() {
+    for ind in module.inductives() {
+      if ind.constructors().is_empty() {
+        empty_names.insert(ind.name().last().as_str().to_string());
+      }
+    }
+  }
+  for decl in decls {
+    let Decl::Def(def) = &**decl else { continue };
+    // A native declaration's body is the `Ntv` stub built by
+    // `def_with_native` (no written body), NOT a `Hole`, so the attribute
+    // OR the stub identifies it.
+    let is_native = def
+      .attributes
+      .iter()
+      .any(|a| matches!(a.name.as_str(), "native" | "extern"))
+      || surface_term_is_native_decl(&def.term);
+    if !is_native {
+      continue;
+    }
+    let result = surface_io_payload(surface_peel_binders(&def.typ));
+    if let Some(head) = surface_type_head_name(result) {
+      if empty_names.contains(&head) {
+        return Err(TypeError::Generic(
+          format!(
+            "native `{}` returns the empty type `{}` (no constructors); a native may not construct an empty/False type -- give it a witness constructor or return an inhabited wrapper",
+            def.name, head
+          ),
+          decl.loc.clone(),
+        ));
+      }
+    }
+  }
+  Ok(())
+}
+
+fn surface_peel_binders(term: &Term) -> &Term {
+  match term {
+    Term::Forall { body, .. } => surface_peel_binders(body),
+    Term::Pi { ret, .. } => surface_peel_binders(ret),
+    Term::Ctx { term, .. } => surface_peel_binders(term),
+    _ => term,
+  }
+}
+
+fn surface_io_payload(term: &Term) -> &Term {
+  match term {
+    Term::App { fun, arg } if surface_head_is_io(fun) => arg,
+    Term::Ctx { term, .. } => surface_io_payload(term),
+    _ => term,
+  }
+}
+
+fn surface_head_is_io(term: &Term) -> bool {
+  match term {
+    Term::App { fun, .. } => surface_head_is_io(fun),
+    Term::Ctx { term, .. } => surface_head_is_io(term),
+    Term::Var { name } => matches!(
+      surface_name_last(name).as_deref(),
+      Some("IO") | Some("RawIO")
+    ),
+    _ => false,
+  }
+}
+
+fn surface_type_head_name(term: &Term) -> Option<String> {
+  match term {
+    Term::App { fun, .. } => surface_type_head_name(fun),
+    Term::Ctx { term, .. } => surface_type_head_name(term),
+    Term::Var { name } => surface_name_last(name),
+    _ => None,
+  }
+}
+
+fn surface_name_last(name: &NameRef) -> Option<String> {
+  name
+    .to_name_path()
+    .map(|p| p.last().as_str().to_string())
+    .or_else(|| {
+      name
+        .to_qualified()
+        .map(|q| q.name.last().as_str().to_string())
+    })
+}
+
+fn surface_term_is_native_decl(term: &Term) -> bool {
+  match term {
+    Term::Ntv { native } => native.num_args == 0 && native.args.iter().all(|a| a.is_none()),
+    Term::Ctx { term, .. } => surface_term_is_native_decl(term),
+    _ => false,
+  }
+}
+
 fn insert_checked_def(
   program: &mut CoreProgram,
   capture_path: &NamePath,
@@ -2830,6 +2988,7 @@ pub fn type_check_module_decls_new_inner(
 
   let elaborated = elaborate_decls(decls, loaded);
   let expanded = expand_macros(elaborated, loaded, path).map_err(TypeError::MacroExpansion)?;
+  check_opaque_and_native_returns(&expanded, loaded)?;
   // Phase 0 capture: each inductive's constructors, in declaration order
   // (order *is* the constructor's tag, matching the recursor-compilation
   // convention `lower.rs`/`eval_term.rs` already use) — read directly off

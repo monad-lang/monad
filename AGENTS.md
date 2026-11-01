@@ -189,6 +189,27 @@ using it), and is replaced with the first nightly's commit once that nightly
 exists. `MONAD_ALLOW_RUST_FALLBACK=1` exists for a local checkout with no
 network and is never set in CI.
 
+## Inhabitation and opaque types
+
+An inductive with no constructors is the empty type (`False`). Only `Void`
+is deliberately empty; it may never be inhabited and a `#[native]`/
+`#[extern "c"]` may not return it. Every opaque native-backed value type
+(`I64`…`F64`, `Ptr`, `Cell`, `At`, future handles) declares `#[opaque]` and
+exactly one nullary WITNESS constructor:
+
+```monad
+#[opaque]
+pub type Handle { handle_witness }
+```
+
+The witness is the inhabitation proof and is unreferenceable: naming it in
+an expression or a pattern is an error, and matching on an `#[opaque]`
+scrutinee is rejected type-directed in both checkers (its native
+representation has no constructor tag to dispatch on). Values come only from
+the type's natives. Say "this type has a value" with `Inhabited a`
+(`default : a`, a class) or `NonEmpty a` (`Pred`, carrying a `witness`);
+never by inventing an empty type.
+
 ## Writing Monad Code
 
 ### Declarations
@@ -305,6 +326,7 @@ Attributes come before visibility: `#[test] pub def ...`, never
 | `#[partial]` | Parser-table function (loops as ordinary code) |
 | `#[terminating]` | Suppresses the termination check where it is too weak |
 | `#[shared]` | Marks the shared read handle type (`init/src/shared.mo`); the affine checker keys recognition on it, not on the type's name |
+| `#[opaque]` | An opaque native-backed value type: exactly one NULLARY witness constructor, which source may neither construct nor match. A type with no constructors is `False`, and a native may not return one (`opaque_rules.mo`, both checkers) |
 
 Operators (precedence low→high): `|>`/`<|` (5), `>>=` (10), `<*>` (15),
 `<|>` (20), `||` (25), `&&` (30), `==`/`!=`/`<=`/`>=` (40), `++` (50),

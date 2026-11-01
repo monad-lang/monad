@@ -33,8 +33,8 @@ use nom::{
   branch::alt,
   bytes::complete::{tag, take_until, take_while},
   character::complete::{
-    alpha1, char, digit1, hex_digit1, i64, line_ending, multispace0, multispace1, not_line_ending,
-    space0,
+    alpha1, anychar, char, digit1, hex_digit1, i64, line_ending, multispace0, multispace1,
+    not_line_ending, space0,
   },
   combinator::{eof, map, not, opt, peek, recognize, success, verify},
   error::context,
@@ -229,15 +229,45 @@ fn forall_parser<X: Clone>(input: Span<X>) -> Res<Term, X> {
   .parse(input)
 }
 
+/// `Pred` — the `Prop` alias for a proof-level type (`Sort 0`), the same
+/// level the self-hosted parser gives it. `Pred` is a reserved name, so no
+/// other arm here can match it; without this, `: Pred` on a type cannot
+/// parse.
+fn pred_parser<X: Clone>(input: Span<X>) -> Res<Term, X> {
+  let (input, _) = tag("Pred")(input)?;
+  // Word boundary: `Predicate` is an ordinary identifier, not the sort.
+  let (input, _) = verify(
+    peek(opt(anychar)),
+    |c: &Option<char>| !matches!(c, Some(chars) if chars.is_alphanumeric() || *chars == '_'),
+  )
+  .parse(input)?;
+  Ok((input, Term::Sort { level: 0 }))
+}
+
 fn type_base_expression<X: Clone>(input: Span<X>) -> Res<Term, X> {
-  alt((sort_parser, application, variable, type_parens)).parse(input)
+  alt((sort_parser, pred_parser, application, variable, type_parens)).parse(input)
 }
 
 fn sort_parser<X: Clone>(input: Span<X>) -> Res<Term, X> {
   let (input, _) = tag("Sort")(input)?;
   let (input, _) = ws1(input)?;
-  let (input, level_str) = digit1(input)?;
-  let level: u64 = level_str.fragment().parse().unwrap_or(0);
+  // `Sort N`, `Sort u`, or `Sort (max u v)`. The Rust host has no universe
+  // polymorphism (`Term::Sort` carries a concrete `u64`; that work is
+  // self-hosted only), so a symbolic/parenthesized level is PARSED and
+  // approximated as level 1. Accepting the syntax keeps the host able to
+  // read the same corpus; the self-hosted checker is what reasons about
+  // `SortLevel.var`.
+  let (input, level) = alt((
+    map(digit1, |s: Span<X>| {
+      s.fragment().parse::<u64>().unwrap_or(0)
+    }),
+    map(identifier, |_| 1u64),
+    map(
+      delimited((tag("("), ws0), take_until(")"), (ws0, tag(")"))),
+      |_| 1u64,
+    ),
+  ))
+  .parse(input)?;
   Ok((input, Term::Sort { level }))
 }
 
@@ -2177,7 +2207,25 @@ fn class_parser(input: Span) -> Res<Inductive> {
   let (input, _) = ws0(input)?;
   let (input, name) = def_name(input)?;
   let (input, _) = ws0(input)?;
-  let (input, params) = many1(terminated(lam_param, ws0)).parse(input)?;
+  // `{u : Universe}` / `{u}` after the class name, then zero or more params.
+  // The level clause is dropped: `u` becomes a level binder only because a
+  // `Sort u` in the surviving params mentions it (mirrors the def parser's
+  // own implicit-clause handling).
+  let (input, _universe) = opt(delimited(
+    (tag("{"), ws0),
+    terminated(
+      identifier,
+      opt(preceded((ws0, tag(":")), preceded(ws0, tag("Universe")))),
+    ),
+    (ws0, tag("}")),
+  ))
+  .parse(input)?;
+  let (input, _) = ws0(input)?;
+  let (input, params) = many0(terminated(lam_param, ws0)).parse(input)?;
+  // Optional result sort: `class Inhabited (a : Sort u) : Sort (max 1 u)`.
+  // Parsed and dropped (the `Class`/`Inductive` AST has no sort field).
+  let (input, _kind) = opt(preceded((tag(":"), ws0), type_expression)).parse(input)?;
+  let (input, _) = ws0(input)?;
   let (input, defs) = class_inner_parser(input)?;
 
   let mut ind = class(
@@ -2354,6 +2402,32 @@ pub(crate) fn inductive_parser(input: Span) -> Res<Inductive> {
   let (input, constraints) = opt(all_type_cons_parser).parse(input)?;
   let (input, _) = ws0(input)?;
   let (input, name) = def_name(input)?;
+  let (input, _) = ws0(input)?;
+  // Optional `{u : Universe}` / `{u}` level clause. Ambiguous with a
+  // constructor body (`type Unit { unit }`), so it is accepted only when
+  // the token AFTER the `}` can continue a type header — `(`, `{`, `:`, or
+  // a real (non-keyword) identifier, the same guard the self-hosted
+  // `type_params_universe_continue` applies. The clause is dropped; `u`
+  // is a level binder because a surviving `Sort u` mentions it.
+  let before_universe = input.clone();
+  let (after, universe) = opt(delimited(
+    (tag("{"), ws0),
+    terminated(
+      identifier,
+      opt(preceded((ws0, tag(":")), preceded(ws0, tag("Universe")))),
+    ),
+    (ws0, tag("}")),
+  ))
+  .parse(input)?;
+  let (after_ws, _) = ws0(after.clone())?;
+  let punct_start: Res<Span> = peek(alt((tag("("), tag("{"), tag(":")))).parse(after_ws.clone());
+  let ident_start: Res<Identifier> = peek(identifier).parse(after_ws);
+  let continues = punct_start.is_ok() || ident_start.is_ok();
+  let input = if universe.is_some() && continues {
+    after
+  } else {
+    before_universe
+  };
   let (input, _) = ws0(input)?;
   let (input, params) = many0(terminated(lam_param, ws0)).parse(input)?;
   let (input, typ) = opt_type_annotation(input)?;

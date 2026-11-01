@@ -136,6 +136,10 @@ pub enum StructKind {
 #[derive(Debug, Clone)]
 pub struct StructInfo {
   pub kind: StructKind,
+  /// `#[opaque]`: an abstract, native-backed type whose single constructor
+  /// is an unreferenceable inhabitation WITNESS (I64…F64, Ptr, Cell, At).
+  /// Matching on it is rejected, and so is constructing its witness.
+  pub opaque: bool,
   pub fields: Vec<(Identifier, CoreTerm)>,
   /// E5: a struct field's own default value (`h: I64 := 100`), lowered —
   /// keyed separately from `fields` (rather than folded into its tuple
@@ -753,6 +757,13 @@ pub enum InferError {
     constructor: Identifier,
     fields: Vec<Identifier>,
   },
+  /// A match on an `#[opaque]` type. Its single constructor is the
+  /// unreferenceable inhabitation witness, and its values (I64, Ptr, Cell,
+  /// ...) have a native representation with no constructor tag to dispatch
+  /// on.
+  OpaqueMatch(Atom),
+  /// A source reference to an `#[opaque]` type's witness constructor.
+  OpaqueConstructor(Identifier),
 }
 
 impl From<UnifyError> for InferError {
@@ -1121,6 +1132,13 @@ pub fn infer(
     // just for one case fewer than before.
     CoreTerm::Con(c) => {
       let inductive_atom = mctx.intern(c.typ_name.clone());
+      if structs
+        .structs
+        .get(&inductive_atom)
+        .is_some_and(|info| info.opaque)
+      {
+        return Err(InferError::OpaqueConstructor(c.name.clone()));
+      }
       if let Some(info) = structs.constructors.get(&(inductive_atom, c.name.clone())) {
         let param_metas: Vec<MetaId> = info
           .param_atoms
@@ -1270,6 +1288,15 @@ fn infer_lit(
     // disagreeing on result type) either way.
     CoreLit::Match { scrutinee, cases } => {
       let scrutinee_ty = infer(mctx, ctx, structs, scrutinee)?;
+      if let Some(ind_atom) = resolve_match_inductive_atom(mctx, structs, &scrutinee_ty) {
+        if structs
+          .structs
+          .get(&ind_atom)
+          .is_some_and(|info| info.opaque)
+        {
+          return Err(InferError::OpaqueMatch(ind_atom));
+        }
+      }
       // Phase 0 capture happens in `desugar_struct_literals`'s own
       // `Match` arm, not here — see that function's doc comment on why:
       // it's the pass that produces the FINAL term structure (including
@@ -1774,6 +1801,15 @@ pub fn check(
 
   if let CoreTerm::Lit(CoreLit::Match { scrutinee, cases }) = term {
     let scrutinee_ty = infer(mctx, ctx, structs, scrutinee)?;
+    if let Some(ind_atom) = resolve_match_inductive_atom(mctx, structs, &scrutinee_ty) {
+      if structs
+        .structs
+        .get(&ind_atom)
+        .is_some_and(|info| info.opaque)
+      {
+        return Err(InferError::OpaqueMatch(ind_atom));
+      }
+    }
     // Phase 0 capture happens in `desugar_struct_literals`'s own `Match`
     // arm, not here — see `infer`'s own `Match` arm for the rationale.
     for case in cases {

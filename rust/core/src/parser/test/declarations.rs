@@ -1414,3 +1414,37 @@ fn test_pub_def_not_absorbed_by_preceding_def_body() {
   assert_eq!(second_def.vis, Visibility::Pub);
   assert_eq!(second_def.name.to_string(), "warn");
 }
+
+/// A universe-level clause on a class (`{u : Universe}`) and a result-sort
+/// annotation (`: Sort (max 1 u)`) both parse. The level clause is dropped
+/// (a `Sort u` in the surviving params is what binds `u`), and the result
+/// sort is accepted for forward compatibility; the host has no universe
+/// polymorphism, so a symbolic level is approximated as level 1.
+#[test]
+fn test_class_universe_binder_and_result_sort_parse() {
+  let s = r#"pub class Inhabited {u : Universe} (a : Sort u) : Sort (max 1 u) {
+      def default : a
+    }"#
+    .into();
+  let (_, res) = class_parser(s).unwrap();
+  assert_eq!(res.name().last().as_str(), "Inhabited");
+  assert_eq!(res.params().len(), 1);
+  assert_eq!(res.constructors().len(), 1);
+}
+
+/// `type Box {u : Universe} (A : Sort u) : Sort u { mk (a : A) }` — the
+/// level clause is distinguishable from a constructor body by what follows
+/// the closing `}` (a param `(`, a kind `:`, or another `{`), so
+/// `type Unit { unit }` still parses as a body.
+#[test]
+fn test_type_universe_binder_parses_without_swallowing_a_body() {
+  let s = r#"pub type Box {u : Universe} (A : Sort u) : Sort u { mk (a : A) }"#.into();
+  let (_, res) = inductive_parser(s).unwrap();
+  assert_eq!(res.params().len(), 1);
+  assert_eq!(res.constructors().len(), 1);
+
+  let s = r#"pub type Unit2 { unit2 }"#.into();
+  let (_, res) = inductive_parser(s).unwrap();
+  assert_eq!(res.params().len(), 0);
+  assert_eq!(res.constructors().len(), 1);
+}

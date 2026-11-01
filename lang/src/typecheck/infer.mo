@@ -12,7 +12,7 @@ use lang::types {
   cub_pathp, cubical_arity,
   cubical_prim_eq, cubical_prim_name, field_access_chain,
   id_eq, id_member, level_lt, level_of_type, list_rev_loop, list_reverse, many,
-  max, package_private, sentinel, show_identifier, show_name_path,
+  has_attr, max, package_private, sentinel, show_identifier, show_name_path,
   sort_level_of, sort_n, succ, term_peel,
   cub, cub_transp,
 }
@@ -1493,6 +1493,9 @@ def type_check_match (value_ : Term) (cases : List MatchCase) (expected_type : T
             match validate_match_constructors cases sc_term sc_typ scope {
                 err e => err e,
                 ok maybe_ind =>
+                    match reject_opaque_match maybe_ind {
+                        Option.some e => err e,
+                        Option.none =>
                     match type_check_cases_accum cases sc_term sc_typ maybe_ind expected_type scope local_types locals Term.hole List.empty {
                         ok acc =>
                             match acc {
@@ -1526,8 +1529,29 @@ def type_check_match (value_ : Term) (cases : List MatchCase) (expected_type : T
                                 Option.some dependent => dependent,
                             },
                     },
+                    },
             },
         err e => err e,
+    }
+
+/// Matching on an `#[opaque]` type is rejected. Its one constructor is the
+/// unreferenceable inhabitation witness, and its values (I64, Ptr, Cell,
+/// ...) have a native representation with no constructor tag to dispatch
+/// on; a wildcard match would otherwise read one. This is the TYPE-DIRECTED
+/// half of the opacity rule (the name-based half lives in
+/// `opaque_rules.mo`, which also bans naming the witness in a pattern).
+def reject_opaque_match (maybe_ind : Option Inductive) : Option TypeError :=
+    match maybe_ind {
+        Option.none => Option.none,
+        Option.some ind =>
+            match ind {
+                Inductive.mk name _params _typ _ctors attrs _vis =>
+                    if has_attr (Identifier.id "opaque") attrs
+                    then Option.some (TypeError.custom
+                        (String.concat "cannot match on the opaque type `" (String.concat (show_name_path name)
+                        "`; its values have a native representation and no constructor to dispatch on")))
+                    else Option.none,
+            },
     }
 
 /// Repackage already-checked cases as an `Elim` with a CONSTANT motive --

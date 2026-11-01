@@ -73,6 +73,10 @@ use lib::typecheck::type_kinds {TypeKinds, type_kinds}
 // every mode -- `lang/mote.toml` is `warn`, and a safety rule a warn mote
 // could downgrade is not a rule.
 use lib::typecheck::view_rules {check_module_view_diags}
+// Opaque native types: witness validation, unreferenceable constructors,
+// no match on an opaque scrutinee, and natives may not return an empty
+// type. Errors in every mode, like the view rules.
+use lib::typecheck::opaque_rules {check_module_opaque_diags}
 // The self-hosted twin of the Rust host's `use`-completeness gate
 // (`check_use_completeness`, rust/core/src/term/module.rs): every name the
 // main module reaches from another module must be named in its own
@@ -2191,15 +2195,16 @@ pub def check_module_with_scope_classified (mode : AffineMode) (scope : Scope) (
     let borrows : HashMap String Bool := shared_name_set scope;
     // Safety rules are errors in BOTH modes.
     let view_diags : List String := check_module_view_diags path scope decl_list;
+    let opaque_diags : List String := check_module_opaque_diags path scope decl_list;
     match mode {
         AffineMode.affine_error => do {
             let affine_diags : List String := check_module_decls_affine_only false ctors borrows scope decl_list path;
-            let d : CheckDiagnostics := { errors := list_append (list_append ordinary affine_diags) view_diags, warnings := List.empty };
+            let d : CheckDiagnostics := { errors := list_append (list_append (list_append ordinary affine_diags) view_diags) opaque_diags, warnings := List.empty };
             return d
         },
         AffineMode.affine_warn => do {
             let affine_diags : List String := check_module_decls_affine_only true ctors borrows scope decl_list path;
-            let d : CheckDiagnostics := { errors := list_append ordinary view_diags, warnings := affine_diags };
+            let d : CheckDiagnostics := { errors := list_append (list_append ordinary view_diags) opaque_diags, warnings := affine_diags };
             return d
         },
     }
@@ -3195,7 +3200,11 @@ def check_buffer_ranged (cache : ModuleInfoCache) (file_path : String) (source :
             let view : List Diagnostic :=
                 attach_range no_range
                     (check_module_view_diags (Option.some file_path) em.scope em.target_decls);
-            let all_diags : List Diagnostic := list_append diags (list_append affine view);
+            let opaque : List Diagnostic :=
+                attach_range no_range
+                    (check_module_opaque_diags (Option.some file_path) em.scope em.target_decls);
+            let all_diags : List Diagnostic :=
+                list_append diags (list_append affine (list_append view opaque));
             let warm : Option Scope := Option.some em.scope;
             let ok : RangedFileCheck := {
                 path := file_path,
@@ -9169,6 +9178,67 @@ def test_a_proof_parameter_may_not_be_erased : IO Bool := do {
     let d <- classified_probe AffineMode.affine_error
         "#[proof] type At { }\ndef bad (%p : At) : I64 := 0";
     return (diags_contain "is forced linear; `?` and `%` are not allowed" (CheckDiagnostics.errors d))
+}
+
+// --- Tests: opaque native types and empty types --------------------
+//
+// A type with no constructors is False; a native may not return one, and
+// an `#[opaque]` value type must declare exactly one nullary witness that
+// source may neither construct nor match.
+
+#[test]
+def test_an_empty_opaque_type_is_rejected : IO Bool := do {
+    let d <- classified_probe AffineMode.affine_error "#[opaque] type T { }";
+    return (diags_contain "has no constructors; declare exactly one nullary witness" (CheckDiagnostics.errors d))
+}
+
+#[test]
+def test_an_opaque_witness_must_be_nullary : IO Bool := do {
+    let d <- classified_probe AffineMode.affine_error "#[opaque] type T { w (x : I64) }";
+    return (diags_contain "witness constructor must be nullary" (CheckDiagnostics.errors d))
+}
+
+#[test]
+def test_an_opaque_witness_may_not_be_constructed : IO Bool := do {
+    let d <- classified_probe AffineMode.affine_error
+        "#[opaque] type T { w }\ndef bad : T := w";
+    return (diags_contain "witness constructor; it may be neither constructed nor matched" (CheckDiagnostics.errors d))
+}
+
+#[test]
+def test_an_opaque_struct_is_rejected : IO Bool := do {
+    // A struct literal constructs the constructor without naming it,
+    // bypassing the witness ban; opaque types must be `type` declarations.
+    let d <- classified_probe AffineMode.affine_error "#[opaque] struct S2 { x : I64 }";
+    return (diags_contain "must be declared as a `type` with one nullary witness" (CheckDiagnostics.errors d))
+}
+
+#[test]
+def test_an_opaque_type_may_not_be_matched : IO Bool := do {
+    let d <- classified_probe AffineMode.affine_error
+        "#[opaque] type T { w }\ndef m (x : T) : I64 := match x { w => 1 }";
+    return (diags_contain "cannot match on the opaque type" (CheckDiagnostics.errors d))
+}
+
+#[test]
+def test_a_native_may_not_return_an_empty_type : IO Bool := do {
+    let d <- classified_probe AffineMode.affine_error
+        "type EmptyT { }\n#[native \"x\"] def bad : EmptyT";
+    return (diags_contain "returns the empty type" (CheckDiagnostics.errors d))
+}
+
+#[test]
+def test_a_native_may_return_an_inhabited_type : IO Bool := do {
+    let d <- classified_probe AffineMode.affine_error
+        "type T { w }\n#[native \"x\"] def ok : T";
+    return (List.is_empty (CheckDiagnostics.errors d))
+}
+
+#[test]
+def test_a_native_returning_raw_io_of_an_empty_type_is_rejected : IO Bool := do {
+    let d <- classified_probe AffineMode.affine_error
+        "type EmptyT { }\n#[native \"x\"] def bad : RawIO EmptyT";
+    return (diags_contain "returns the empty type" (CheckDiagnostics.errors d))
 }
 
 #[test]

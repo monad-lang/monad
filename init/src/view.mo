@@ -42,16 +42,22 @@ use init::copy {Copy}
 /// constructors, so no user code can forge one. The only producer is a
 /// primitive that allocates or splits a view.
 ///
-/// The `: Prop` sort annotation is deliberately omitted: the parser
-/// accepts `type X : Prop { }` only when at least one constructor follows,
-/// and an empty proof type has none. `#[proof]` carries the kind; the sort
-/// arrives with the erasure/universes work.
+/// A type with no constructors is the empty type (`False`); a native that
+/// returned one would be asserting an inhabitant of `False`. So an opaque
+/// native-backed type declares exactly one nullary WITNESS constructor.
+/// `#[opaque]` makes that constructor unreferenceable: it can be neither
+/// constructed nor matched, which is what keeps the type abstract. Values
+/// come only from the natives.
 #[proof]
-pub type At (A : Type) { }
+#[opaque]
+pub type At (A : Type) { at_witness }
 
-/// An opaque linear handle owning one `Copy` payload.
+/// An opaque linear handle owning one `Copy` payload. The nullary witness
+/// is the inhabitation proof; `#[opaque]` forbids constructing or matching
+/// it (see `At`'s own comment).
 #[linear]
-pub type Cell (A : Type) { }
+#[opaque]
+pub type Cell (A : Type) { cell_witness }
 
 // ── Natives ─────────────────────────────────────────────────────────
 //
