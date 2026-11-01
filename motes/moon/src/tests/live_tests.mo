@@ -7,6 +7,7 @@ use std::path {Path}
 use std::concurrent::fiber {cancel_fiber}
 use std::process {exec_cmd, process_id}
 use std::ref {Ref, Ref.add_i64, Ref.get, Ref.new}
+use std::watch {WatchEvent}
 use http::body_io {Body.pull}
 use http::sse {Sse.response}
 use http::types {
@@ -15,8 +16,8 @@ use http::types {
 }
 use moon::handler_t {HandlerT, HandlerT.pure_io, HandlerT.run_io, HttpError}
 use moon::live {
-  Live.dev_middleware_t, Live.reload, Live.script, Live.watch, Live.watch_files,
-  Live.watch_tree,
+  Live.dev_middleware_t, Live.names_batch_matters, Live.reload, Live.script, Live.watch,
+  Live.watch_files, Live.watch_tree,
 }
 
 def dummy_req : Request :=
@@ -43,8 +44,11 @@ def test_reload_emits_reload_event : IO Bool := do {
 
 /// Compiled-only: `Live.watch` forks a watcher and this test waits on the
 /// `Ref` that fiber bumps. The Rust host starts fibers lazily (at
-/// await/poll), so the watcher never runs and both waits exhaust their
-/// retries.
+/// await/poll), so the watcher never runs and the wait exhausts its retries.
+///
+/// The bump is the WRITE's, not the watcher's: starting a watch does not
+/// report the files it already found (the old polling form's initial empty
+/// digest did, which was an artifact rather than a signal).
 #[test]
 def test_watch_bumps_version : IO Bool := do {
   let name := String.concat "moon_live_watch_" (String.concat (I64.to_string process_id) ".txt");
@@ -52,11 +56,11 @@ def test_watch_bumps_version : IO Bool := do {
   let _ <- IO.write_file (Path.path path) "one";
   let version <- Ref.new 0i64;
   let watcher <- Live.watch (Path.path path) version;
-  let first <- wait_version version 1i64 40i64;
+  sleepIO 300;
   let _ <- IO.write_file (Path.path path) "two";
-  let second <- wait_version version 2i64 40i64;
+  let bumped <- wait_version version 1i64 60i64;
   cancel_fiber watcher;
-  return (Bool.and first second)
+  IO.pure bumped
 }
 
 /// Poll `version` until it reaches `want`, or `tries` 50 ms sleeps elapse.
@@ -196,3 +200,114 @@ def test_watch_tree_ignores_target : IO Bool := do {
   let _ <- exec_cmd "rm" ["-rf", dir];
   IO.pure (Bool.and (I64.beq after_target 0i64) bumped)
 }
+
+// ── inotify path (with the polling fallback) ────────────────────────────
+//
+// These rows exercise the `std::watch` path: the watcher is started before
+// the change, so what bumps is the kernel queue, not a signature diff. They
+// are compiled-only for the reason `test_watch_bumps_version` gives: the Rust
+// host starts fibers lazily.
+
+def live_tmp (name : String) : String :=
+  String.concat "/tmp/moon_live_"
+    (String.concat (I64.to_string process_id) (String.concat "_" name))
+
+/// A file CREATED after the watch starts bumps the version: the directory's
+/// watch reports the new name, which the extension filter accepts.
+#[test]
+def test_watch_tree_creates_file : IO Bool := do {
+  let dir := live_tmp "create";
+  let _ <- exec_cmd "rm" ["-rf", dir];
+  let _ <- exec_cmd "mkdir" ["-p", dir];
+  let version : Ref I64 <- Ref.new 0i64;
+  let watcher <- Live.watch_tree (Path.path dir) List.empty version;
+  sleepIO 300;
+  let _ <- IO.write_file (Path.path (String.concat dir "/new.mo")) "one";
+  let bumped <- wait_version version 1i64 60i64;
+  cancel_fiber watcher;
+  let _ <- exec_cmd "rm" ["-rf", dir];
+  IO.pure bumped
+}
+
+/// An ATOMIC SAVE -- write a temporary file, rename it over the target -- is
+/// the `IN_MOVED_TO` shape every editor produces. Watching the file itself
+/// would lose the watch on the first save; the directory watch sees the
+/// rename.
+#[test]
+def test_watch_tree_atomic_save : IO Bool := do {
+  let dir := live_tmp "atomic";
+  let _ <- exec_cmd "rm" ["-rf", dir];
+  let _ <- exec_cmd "mkdir" ["-p", dir];
+  let source := String.concat dir "/a.mo";
+  let _ <- IO.write_file (Path.path source) "one";
+  let version : Ref I64 <- Ref.new 0i64;
+  let watcher <- Live.watch_tree (Path.path dir) List.empty version;
+  sleepIO 300;
+  let tmp := String.concat dir "/.a.mo.tmp";
+  let _ <- IO.write_file (Path.path tmp) "two";
+  let _ <- exec_cmd "mv" [tmp, source];
+  let bumped <- wait_version version 1i64 60i64;
+  cancel_fiber watcher;
+  let _ <- exec_cmd "rm" ["-rf", dir];
+  IO.pure bumped
+}
+
+/// A root that does not exist yet makes inotify fail, so the watcher must
+/// DEGRADE to the polling signature and still report a file created later.
+#[test]
+def test_watch_tree_falls_back_when_inotify_fails : IO Bool := do {
+  let dir := live_tmp "fallback";
+  let _ <- exec_cmd "rm" ["-rf", dir];
+  let version : Ref I64 <- Ref.new 0i64;
+  let watcher <- Live.watch_tree (Path.path dir) List.empty version;
+  sleepIO 300;
+  let _ <- exec_cmd "mkdir" ["-p", dir];
+  sleepIO 500;
+  let _ <- IO.write_file (Path.path (String.concat dir "/late.mo")) "one";
+  let bumped <- wait_version version 1i64 80i64;
+  cancel_fiber watcher;
+  let _ <- exec_cmd "rm" ["-rf", dir];
+  IO.pure bumped
+}
+
+/// The SSE source sees a bump on its NEXT pull: with
+/// `Live.reload_poll_ms` = 100 a reload reaches the browser in ~100 ms plus
+/// the watch's quiet window, not the old fixed 500 ms.
+#[test]
+def test_reload_source_sees_bump_on_next_pull : IO Bool := do {
+  let version <- Ref.new 0i64;
+  let handler := Live.reload version;
+  let r <- handler dummy_req;
+  match r {
+    Result.err _ => IO.pure false,
+    Result.ok res => live_pull_after_bump res.body version
+  }
+}
+
+def live_pull_after_bump (body : Body) (version : Ref I64) : IO Bool := do {
+  let first <- Body.pull body;
+  let _ <- Ref.add_i64 version 1;
+  let second <- Body.pull body;
+  let first_ok := match first {
+    Option.some bytes => String.starts_with "event: reload" (String.from_list bytes),
+    Option.none => false
+  };
+  let second_ok := match second {
+    Option.some bytes => String.starts_with "event: reload" (String.from_list bytes),
+    Option.none => false
+  };
+  IO.pure (Bool.and first_ok second_ok)
+}
+
+/// An overflow on the fd-level queue (the single-file and explicit-set
+/// watchers) must bump too: events were lost, so anything could have changed.
+#[test]
+def test_names_batch_matters_on_overflow : Bool :=
+  let e : WatchEvent := { watch := 0 - 1, mask := 0x4000, cookie := 0, name := "" } in
+  let hit : WatchEvent := { watch := 3, mask := 0x2, cookie := 0, name := "a.mo" } in
+  let miss : WatchEvent := { watch := 3, mask := 0x2, cookie := 0, name := "b.mo" } in
+  let watched : List WatchEvent := [hit] in
+  let other : List WatchEvent := [miss] in
+  Bool.and (Live.names_batch_matters ["a.mo"] watched)
+    (Bool.and (Live.names_batch_matters ["a.mo"] [e])
+      (Bool.not (Live.names_batch_matters ["a.mo"] other)))

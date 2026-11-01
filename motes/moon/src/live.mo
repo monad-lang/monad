@@ -1,15 +1,17 @@
 /// Live reload: an SSE endpoint fed by a file/tree watcher, plus the
 /// dev-only middleware that injects the client snippet into HTML.
 ///
-/// `Live.watch` polls one file's SHA-256 every 500 ms and bumps a `Ref I64`
-/// version when it changes. `Live.watch_files` and `Live.watch_tree` are the
-/// dev-server forms: explicit input files, or a source tree filtered to the
-/// extension set below. `Live.reload` streams a `reload` event for each new
-/// version (and an initial one on connect) and a heartbeat otherwise.
+/// `Live.watch` watches one file, `Live.watch_files` an explicit input set
+/// and `Live.watch_tree` a source tree filtered to the extension set below;
+/// each bumps a `Ref I64` version when something it serves changes.
+/// `Live.reload` streams a `reload` event for each new version (and an
+/// initial one on connect) and a heartbeat otherwise.
 ///
-/// Polling, not inotify: there is no file-watcher native, and a 400–500 ms
-/// poll is enough for a development loop. Hashing whole files is the cost;
-/// an mtime native would make the poll cheap and is the next step.
+/// All three prefer inotify (`std::watch`) and keep the original polling
+/// signature as the fallback, so a platform without inotify (or a watch that
+/// fails mid-flight) still reloads. The tree form coalesces a save's several
+/// masks into one bump, resolves full paths, and picks up directories created
+/// after the watch started. See `plans/implementations/inotify-file-watching.md`.
 
 use init::clone {Clone}
 use init::shared {Shared, Shared.get}
@@ -17,10 +19,15 @@ use std::concurrent::combine {sleepIO}
 use std::concurrent::fiber {Fiber, forkIO}
 use std::hex {Hex.encode}
 use std::io {IO.is_dir, IO.list_dir, IO.read_file, IO.read_file_bytes}
-use std::list {List.length}
 use std::path {Path, Path.file_name, Path.to_string}
 use std::ref {Ref, Ref.add_i64, Ref.get, Ref.new, Ref.set}
 use std::sha256 {Sha256.hash, Sha256.hash_bytes}
+use std::stream {FdStream, Stream, StreamError}
+use std::watch {
+  Watch, Watch.add, Watch.any_overflow, Watch.changes, Watch.close, Watch.default_ignored,
+  Watch.drain, Watch.new, Watch.next, Watch.recursive, WatchBatch, WatchEvent,
+  WatchEvent.is_dir,
+}
 use http::sse {Sse.response, SseEvent}
 use http::types {Body, Headers, Headers.get, Headers.set, HttpVersion, Request, Response, Status.ok}
 use lib::context {Ctx}
@@ -42,9 +49,18 @@ pub def Live.reload (version : Ref I64) : Request -> IO (Result String Response)
     return (Result.ok (Sse.response (Live.reload_source version seen)))
   }
 
+/// How long one `reload_source` call waits before answering; a bump reaches
+/// the browser within this plus the watch's quiet window.
+///
+/// A `Channel` would not help here: `Channel.take` is single-consumer, so N
+/// connected tabs would each need their own subscription and the SSE layer has
+/// no disconnect hook to unsubscribe them. The version `Ref` is the broadcast,
+/// and polling it at this interval is how every client sees every bump.
+pub def Live.reload_poll_ms : I64 := 100
+
 def Live.reload_source (version : Ref I64) (seen : Ref I64) : Unit -> IO (Option SseEvent) :=
   fn (_ : Unit) => do {
-    sleepIO 500;
+    sleepIO Live.reload_poll_ms;
     let v <- Ref.get version;
     let s <- Ref.get seen;
     if I64.gt v s
@@ -68,11 +84,106 @@ pub def Live.reload_t (version : Ref I64) : HandlerT IO Response :=
   })
 
 // ── file watchers ───────────────────────────────────────────────────────
+//
+// Each watcher prefers inotify (`std::watch`) and falls back to the polling
+// signature below when the platform has no inotify, or when the watch fails
+// later (a queue error, a directory that vanished). The polling code is kept
+// deliberately: it is the degradation path, and it needs no kernel feature.
+//
+// `Live.watch` and `Live.watch_files` watch DIRECTORIES one level deep (the
+// files' parents), so an explicit input set never drags a recursive walk
+// along with it; `Live.watch_tree` is the recursive form, and the one that
+// resolves full paths.
 
-/// Poll `path` in a fiber; each content change bumps `version`.
+/// Watch one file: inotify on its parent directory, filtered to the file's
+/// name; polling when the path has no parent (a bare file name) or inotify is
+/// unavailable.
 pub def Live.watch (path : Path) (version : Ref I64) : IO (Fiber Unit) :=
-  forkIO (fn (_ : Unit) => Live.watch_loop path version "")
+  match (Path.parent path) {
+    Option.none => forkIO (fn (_ : Unit) => Live.watch_loop path version ""),
+    Option.some dir =>
+      Live.watch_names [dir] [Path.file_name path] version
+        (fn (_ : Unit) => Live.watch_loop path version "")
+  }
 
+/// One inotify queue over `dirs` (each ONE level deep), bumping `version`
+/// when a child whose bare name is in `names` changes. `fallback` is the
+/// polling loop that runs instead when inotify cannot be set up or fails
+/// later.
+def Live.watch_names (dirs : List Path) (names : List String) (version : Ref I64)
+    (fallback : Unit -> IO Unit) : IO (Fiber Unit) := do {
+  let opened <- Watch.new;
+  match opened {
+    Result.err _ => forkIO (fn (_ : Unit) => fallback Unit.unit),
+    Result.ok stream => Live.watch_names_queued stream dirs names version fallback
+  }
+}
+
+def Live.watch_names_queued (stream : FdStream) (dirs : List Path) (names : List String)
+    (version : Ref I64) (fallback : Unit -> IO Unit) : IO (Fiber Unit) := do {
+  let added <- Live.watch_each stream dirs;
+  match added {
+    Result.err _ => Live.watch_names_failed stream fallback,
+    Result.ok _ => forkIO (fn (_ : Unit) => Live.watch_names_loop stream names version fallback)
+  }
+}
+
+def Live.watch_names_failed (stream : FdStream) (fallback : Unit -> IO Unit)
+    : IO (Fiber Unit) := do {
+  let _ <- Stream.close stream;
+  forkIO (fn (_ : Unit) => fallback Unit.unit)
+}
+
+#[terminating]
+def Live.watch_each (stream : FdStream) (dirs : List Path) : IO (Result StreamError Unit) :=
+  match dirs {
+    List.empty => IO.pure (Result.ok Unit.unit),
+    List.cons dir rest => do {
+      let added <- Watch.add stream dir Watch.changes;
+      match added {
+        Result.err e => IO.pure (Result.err e),
+        Result.ok _ => Live.watch_each stream rest
+      }
+    }
+  }
+
+#[terminating]
+def Live.watch_names_loop (stream : FdStream) (names : List String) (version : Ref I64)
+    (fallback : Unit -> IO Unit) : IO Unit := do {
+  let got <- Watch.next stream 1000;
+  match got {
+    Result.err _ => do {
+      let _ <- Stream.close stream;
+      fallback Unit.unit
+    },
+    Result.ok evs =>
+      if Live.names_batch_matters names evs
+      then do {
+        let _ <- Ref.add_i64 version 1;
+        Live.watch_names_loop stream names version fallback
+      }
+      else Live.watch_names_loop stream names version fallback
+  }
+}
+
+/// Whether a read from the fd-level queue is worth a bump: a watched name
+/// changed, or the kernel's queue overflowed (events were lost, so anything
+/// could have changed -- the same rule `Live.batch_relevant` applies to the
+/// tree form).
+pub def Live.names_batch_matters (names : List String) (evs : List WatchEvent) : Bool :=
+  Bool.or (Live.events_any_name names evs) (Watch.any_overflow evs)
+
+#[terminating]
+def Live.events_any_name (names : List String) (evs : List WatchEvent) : Bool :=
+  match evs {
+    List.empty => false,
+    List.cons e rest =>
+      if Live.mem_string e.name names
+      then true
+      else Live.events_any_name names rest
+  }
+
+/// Poll the file's SHA-256: the single-file fallback.
 #[terminating]
 def Live.watch_loop (path : Path) (version : Ref I64) (last : String) : IO Unit := do {
   sleepIO 500;
@@ -90,11 +201,55 @@ def Live.watch_loop (path : Path) (version : Ref I64) (last : String) : IO Unit 
   }
 }
 
-/// Poll an explicit input set. The dev script knows exactly what it
-/// consumes, so this is the cheap form.
-pub def Live.watch_files (paths : List Path) (version : Ref I64) : IO (Fiber Unit) := do {
+/// Watch an explicit input set. The parents are watched one level deep (no
+/// subtree walk), so this stays cheap even for a file directly in /tmp; a
+/// path with no parent, or a platform without inotify, falls back to polling
+/// the same digest signature the pre-inotify watcher used.
+///
+/// Names are matched by BARE NAME across the watched directories, so two
+/// inputs called `main.mo` in different directories bump for either: an extra
+/// reload, never a missed one.
+pub def Live.watch_files (paths : List Path) (version : Ref I64) : IO (Fiber Unit) :=
+  match (Live.parents_of paths) {
+    Option.none => Live.watch_files_poll paths version,
+    Option.some dirs => Live.watch_files_watched paths dirs version
+  }
+
+def Live.watch_files_watched (paths : List Path) (dirs : List Path) (version : Ref I64)
+    : IO (Fiber Unit) :=
+  Live.watch_names dirs (Live.file_names paths) version
+    (fn (_ : Unit) => Live.watch_files_poll_body paths version)
+
+def Live.file_names (paths : List Path) : List String :=
+  List.map (fn (p : Path) => Path.file_name p) paths
+
+#[terminating]
+def Live.parents_of (paths : List Path) : Option (List Path) :=
+  match paths {
+    List.empty => Option.some List.empty,
+    List.cons p rest => Live.parent_of p rest
+  }
+
+#[terminating]
+def Live.parent_of (p : Path) (rest : List Path) : Option (List Path) :=
+  match (Path.parent p) {
+    Option.none => Option.none,
+    Option.some dir => Live.parents_cons dir rest
+  }
+
+#[terminating]
+def Live.parents_cons (dir : Path) (rest : List Path) : Option (List Path) :=
+  match (Live.parents_of rest) {
+    Option.none => Option.none,
+    Option.some dirs => Option.some (List.cons dir dirs)
+  }
+
+def Live.watch_files_poll (paths : List Path) (version : Ref I64) : IO (Fiber Unit) :=
+  forkIO (fn (_ : Unit) => Live.watch_files_poll_body paths version)
+
+def Live.watch_files_poll_body (paths : List Path) (version : Ref I64) : IO Unit := do {
   let initial <- Live.signature_of_files paths;
-  forkIO (fn (_ : Unit) => Live.watch_files_loop paths version initial)
+  Live.watch_files_loop paths version initial
 }
 
 #[terminating]
@@ -132,24 +287,88 @@ def Live.file_digest (p : Path) : IO String := do {
   }
 }
 
-/// Poll a source tree. Only the extension set in `Live.watched_file` is
-/// hashed; `ignored` names (and `target`, `target-*`) are skipped.
+/// Watch a source tree: one recursive inotify watch, with the polling
+/// signature as the fallback.
 pub def Live.watch_tree (root : Path) (ignored : List String)
     (version : Ref I64) : IO (Fiber Unit) := do {
+  let opened <- Watch.recursive root (List.append Watch.default_ignored ignored);
+  match opened {
+    Result.err _ => Live.watch_tree_poll root ignored version,
+    Result.ok w => forkIO (fn (_ : Unit) => Live.watch_tree_inotify w root ignored version)
+  }
+}
+
+/// The inotify loop: one `Watch.drain` per second at worst, so an idle tree
+/// costs one blocked `poll(2)`; a batch bumps the version once, however many
+/// events it carried.
+#[terminating]
+def Live.watch_tree_inotify (w : Watch) (root : Path) (ignored : List String)
+    (version : Ref I64) : IO Unit := do {
+  let got <- Watch.drain w 1000 50;
+  match got {
+    Result.err _ => Live.watch_tree_degrade w root ignored version,
+    Result.ok batch =>
+      if Live.batch_relevant batch
+      then do {
+        let _ <- Ref.add_i64 version 1;
+        Live.watch_tree_inotify w root ignored version
+      }
+      else Live.watch_tree_inotify w root ignored version
+  }
+}
+
+/// A watch that failed mid-flight: close it and spend the rest of the fiber
+/// on the polling signature, which needs no kernel state.
+def Live.watch_tree_degrade (w : Watch) (root : Path) (ignored : List String)
+    (version : Ref I64) : IO Unit := do {
+  let _ <- Watch.close w;
+  Live.watch_tree_poll_body root ignored version
+}
+
+/// A batch matters when it touched a file the extension set serves, changed a
+/// directory, or lost events (the kernel's queue overflowed: anything could
+/// have changed, so reload).
+def Live.batch_relevant (batch : WatchBatch) : Bool :=
+  Bool.or batch.overflow (Live.events_relevant batch.events)
+
+#[terminating]
+def Live.events_relevant (pairs : List (Pair WatchEvent Path)) : Bool :=
+  match pairs {
+    List.empty => false,
+    List.cons p rest =>
+      match p {
+        Pair.pair event path =>
+          if Live.tree_event_relevant event path
+          then true
+          else Live.events_relevant rest
+      }
+  }
+
+def Live.tree_event_relevant (event : WatchEvent) (path : Path) : Bool :=
+  Bool.or (WatchEvent.is_dir event) (Live.watched_file (Path.file_name path))
+
+/// The polling tree watcher: kept as the fallback, and public so a caller can
+/// choose it explicitly.
+pub def Live.watch_tree_poll (root : Path) (ignored : List String)
+    (version : Ref I64) : IO (Fiber Unit) :=
+  forkIO (fn (_ : Unit) => Live.watch_tree_poll_body root ignored version)
+
+def Live.watch_tree_poll_body (root : Path) (ignored : List String)
+    (version : Ref I64) : IO Unit := do {
   let initial <- Live.tree_signature root ignored;
-  forkIO (fn (_ : Unit) => Live.watch_tree_loop root ignored version initial)
+  Live.watch_tree_poll_loop root ignored version initial
 }
 
 #[terminating]
-def Live.watch_tree_loop (root : Path) (ignored : List String)
+def Live.watch_tree_poll_loop (root : Path) (ignored : List String)
     (version : Ref I64) (last : String) : IO Unit := do {
   sleepIO 400;
   let sig <- Live.tree_signature root ignored;
   if String.beq sig last
-  then Live.watch_tree_loop root ignored version last
+  then Live.watch_tree_poll_loop root ignored version last
   else do {
     let _ <- Ref.add_i64 version 1;
-    Live.watch_tree_loop root ignored version sig
+    Live.watch_tree_poll_loop root ignored version sig
   }
 }
 
