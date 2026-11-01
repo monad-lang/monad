@@ -41,9 +41,9 @@ use lang::scope {
   type_mentions_any, validate_dict_hints,
 }
 use lib::typecheck::name_subst {name_subst_term}
-use lib::typecheck::subst {beta_reduce, term_abstract_var, term_permute, term_subst, term_shift}
+use lib::typecheck::subst {beta_reduce, term_abstract_var, term_permute, term_subst, term_shift, term_shift_above}
 use lib::typecheck::levels {solve_levels, subst_levels_term}
-use lib::typecheck::traverse {term_children, term_map_children}
+use lib::typecheck::traverse {term_children, term_map_children, term_map_children_at_depth}
 use lib::typecheck::cubical {
   PathParts, endpoint_of, path_parts_of, peels_to_bare_interval,
 }
@@ -1516,7 +1516,17 @@ def type_check_match (value_ : Term) (cases : List MatchCase) (expected_type : T
                                                         let lit_val : Literal := Literal.match_ sc_term checked_cases in
                                                         ok (mk_typed (Term.lit lit_val) unified_typ),
                                             },
-                                        err e => err e,
+                                        // The arms all checked, but their
+                                        // result type is not the declared one:
+                                        // that is the dependent case
+                                        // (`match p { dpair a b => b }`'s arm
+                                        // types by constructor). Try the
+                                        // refinement before reporting.
+                                        err legacy_err =>
+                                            match try_dependent_match cases sc_term sc_typ maybe_ind expected_type scope local_types locals {
+                                                Option.none => err legacy_err,
+                                                Option.some dependent => dependent,
+                                            },
                                     },
                             },
                         // Legacy rejected it. Try dependent refinement; when
@@ -1731,7 +1741,9 @@ def type_check_elim (e : Elim) (expected_type : Term) (scope : Scope)
                             // indices = [T, x] ++ [y]`, not `params` alone.
                             let expected_scrutinee_typ : Term :=
                                 rebuild_call (free_var_ref inductive) (List.append params indices) in
-                            match unify sc_tt.typ expected_scrutinee_typ scope locals {
+                            let sc_typ_c : Term := canonicalize_type_head scope sc_tt.typ in
+                            let expected_c : Term := canonicalize_type_head scope expected_scrutinee_typ in
+                            match unify sc_typ_c expected_c scope locals {
                                 err err_ => err err_,
                                 ok _ =>
                                     type_check_elim_motive e ind sc_tt.term sc_tt.typ
@@ -1739,6 +1751,52 @@ def type_check_elim (e : Elim) (expected_type : Term) (scope : Scope)
                             },
                     },
             },
+    }
+
+/// Rewrite an INDUCTIVE type's head to the spelling the scope registered,
+/// leaving everything else alone. Only used inside the Elim rule's
+/// comparisons: the SAME type reaches them with different spellings --
+/// `Sigma A B` from a `Def.typ`-derived local binder type, `prelude::Sigma A B`
+/// once codegen's qualification pass has rewritten a term reference (measured
+/// 2026-11-01: `sigma_snd` checked, then failed `compile_loaded_modules_to_ir`
+/// with "expected (Sigma A B), found (prelude::Sigma A B)"). `unify` compares
+/// free-variable spellings exactly, and both spellings resolve to one
+/// `Inductive` -- which is what makes rewriting to its registered name sound.
+///
+/// Split into one function per match ON PURPOSE: each scrutinizes a different
+/// inductive (`CallSpine`, `Term`, `DebugName`, `Option`), and nesting matches
+/// across different type variables is the checker limitation AGENTS.md's
+/// Gotchas names.
+#[partial]
+def canonicalize_type_head (scope : Scope) (t : Term) : Term :=
+    match flatten_call_spine (term_peel t) {
+        CallSpine.mk head args => canonicalize_type_head_of head args scope t,
+    }
+
+#[partial]
+def canonicalize_type_head_of (head : Term) (args : List Term) (scope : Scope) (t : Term) : Term :=
+    match head {
+        Term.var idx dbg => canonicalize_type_head_var idx dbg args scope t,
+        _ => t,
+    }
+
+#[partial]
+def canonicalize_type_head_var (idx : I64) (dbg : DebugName) (args : List Term) (scope : Scope)
+    (t : Term) : Term :=
+    if I64.beq idx sentinel
+    then
+        match dbg {
+            DebugName.named id => canonicalize_type_head_named id args scope t,
+            DebugName.unnamed => t,
+        }
+    else t
+
+#[partial]
+def canonicalize_type_head_named (id : Identifier) (args : List Term) (scope : Scope) (t : Term) : Term :=
+    let bare : NamePath := NamePath.mk (List.cons (Identifier.id (identifier_tail id)) List.empty) in
+    match scope_find_inductive bare scope {
+        Result.ok ind => rebuild_call (free_var_ref ind.name) args,
+        Result.err _ => t,
     }
 
 /// Is `motive` a lambda whose body is more informative than a hole? Used by
@@ -1838,7 +1896,8 @@ def type_check_elim_motive_pis (indices : List Term) (motive_typ : Term) (sc_typ
         List.empty =>
             match term_peel motive_typ {
                 Term.pi _b dom cod =>
-                    match unify sc_typ dom scope locals {
+                    match unify (canonicalize_type_head scope sc_typ)
+                        (canonicalize_type_head scope dom) scope locals {
                         err err_ => err err_,
                         ok _ => ok cod,
                     },
@@ -2056,6 +2115,23 @@ def canonicalize_ctor_refs (scope : Scope) (t : Term) : Term :=
         _ => mapped,
     }
 
+/// Bound-variable DebugNames are display hints, not identity. The two sides
+/// of the minor comparison legitimately spell the same de Bruijn position
+/// differently: the expected Pi's field type names a reference after the
+/// constructor's DECLARED field (`snd : B fst`), while a derived motive's
+/// constructor application names it after the MINOR's own binder
+/// (`dpair a b`). `Similar` compares bound-variable names, so normalize them
+/// away -- α-equivalence is what the comparison means. FREE variables keep
+/// their names: those identify a definition and must agree.
+#[partial]
+def canonicalize_bound_var_names (t : Term) : Term :=
+    let mapped : Term := term_map_children canonicalize_bound_var_names t in
+    match mapped {
+        Term.var idx _dbg =>
+            if I64.beq idx sentinel then mapped else Term.var idx DebugName.unnamed,
+        _ => mapped,
+    }
+
 /// A `Con` as the flat application a derived motive uses: the bare
 /// constructor name applied to its present arguments.
 #[partial]
@@ -2093,8 +2169,8 @@ def elim_minor_type_error (minor : Term) (inferred : Term) (expected : Term)
     if term_has_hole minor then Option.none
     else if is_sort_typ expected then Option.none
     else
-        let inferred_c : Term := canonicalize_ctor_refs scope inferred in
-        let expected_c : Term := canonicalize_ctor_refs scope expected in
+        let inferred_c : Term := canonicalize_bound_var_names (canonicalize_ctor_refs scope inferred) in
+        let expected_c : Term := canonicalize_bound_var_names (canonicalize_ctor_refs scope expected) in
         match unify expected_c inferred_c scope locals {
             Result.ok _ => Option.none,
             Result.err e => Option.some e,
@@ -2207,9 +2283,14 @@ def elim_field_vars_named (names : List DebugName) (idx : I64) : List Term :=
 /// the Pi-chain counterpart to `build_anon_lambda_chain` (R3b), used to
 /// state a minor's EXPECTED type rather than construct one.
 def build_elim_minor_pi_chain (field_types : List Term) (body : Term) : Term :=
+    build_elim_minor_pi_chain_go field_types body 0
+
+def build_elim_minor_pi_chain_go (field_types : List Term) (body : Term) (depth : I64) : Term :=
     match field_types {
         List.empty => body,
-        List.cons t trest => Term.pi binder_anon t (build_elim_minor_pi_chain trest body),
+        List.cons t trest =>
+            Term.pi binder_anon (term_shift_above depth depth t)
+                (build_elim_minor_pi_chain_go trest body (depth + 1)),
     }
 
 // ─── R3b: elaboration into `Elim` (core-term-simplification.md) ──────────
@@ -2327,12 +2408,19 @@ def find_covering_case (cname : NamePath) (cases : List MatchCase) : Option Matc
 /// sits at de Bruijn index n-1"), so no reindexing of `body` is needed,
 /// only real `Term.lam` nodes where there were none.
 def build_named_lambda_chain (names : List Identifier) (types : List Term) (body : Term) : Term :=
+    build_named_lambda_chain_go names types body 0
+
+def build_named_lambda_chain_go (names : List Identifier) (types : List Term) (body : Term)
+    (depth : I64) : Term :=
     match names {
         List.empty => body,
         List.cons n nrest =>
             match types {
-                List.cons t trest => Term.lam (binder_named n) t (build_named_lambda_chain nrest trest body),
-                List.empty => Term.lam (binder_named n) Term.hole (build_named_lambda_chain nrest List.empty body),
+                List.cons t trest =>
+                    Term.lam (binder_named n) (term_shift_above depth depth t)
+                        (build_named_lambda_chain_go nrest trest body (depth + 1)),
+                List.empty => Term.lam (binder_named n) Term.hole
+                    (build_named_lambda_chain_go nrest List.empty body (depth + 1)),
             },
     }
 
@@ -2345,9 +2433,14 @@ def build_named_lambda_chain (names : List Identifier) (types : List Term) (body
 /// correct, since nothing between the shift and the outermost new binder
 /// references the shifted indices.
 def build_anon_lambda_chain (types : List Term) (body : Term) : Term :=
+    build_anon_lambda_chain_go types body 0
+
+def build_anon_lambda_chain_go (types : List Term) (body : Term) (depth : I64) : Term :=
     match types {
         List.empty => body,
-        List.cons t trest => Term.lam binder_anon t (build_anon_lambda_chain trest body),
+        List.cons t trest =>
+            Term.lam binder_anon (term_shift_above depth depth t)
+                (build_anon_lambda_chain_go trest body (depth + 1)),
     }
 
 /// Validate that all non-wildcard case constructors belong to the same
@@ -3489,10 +3582,55 @@ def name_subst_over_list (target : Identifier) (replacement : Term) (types : Lis
 
 /// Just the `type_` field of each `Param`, in order.
 def types_from_params (params : List Param) : List Term :=
+    bind_ctor_fields_go params List.empty
+
+/// `types_from_params`'s walk, carrying the constructor's OWN earlier
+/// field names so each field type can be closed over them.
+def bind_ctor_fields_go (params : List Param) (earlier : List Identifier) : List Term :=
     match params {
         List.cons p rest =>
-            match p { Param.mk _ typ _ _ _ => List.cons typ (types_from_params rest) },
+            match p { Param.mk name typ _ _ _ =>
+                let bound : Term := bind_earlier_field_refs (list_reverse earlier) 0 typ in
+                List.cons bound (bind_ctor_fields_go rest (List.append earlier (List.cons name List.empty))) },
         List.empty => List.empty,
+    }
+
+/// Close one constructor field type over the constructor's EARLIER field
+/// names: `Sigma`'s `snd : B fst` is declared with `fst` as an ordinary free
+/// reference, so an arm binding the constructor's fields (`dpair a b => ...`)
+/// would otherwise type `b` from `B fst` with `fst` dangling -- "unknown
+/// variable 'fst'" (measured 2026-11-01). Field `j` of field `i` becomes
+/// de Bruijn index `i - 1 - j`, the outermost-first convention the lambda
+/// chain (`build_named_lambda_chain`) and the Pi chain
+/// (`build_elim_minor_pi_chain`) both consume these types in.
+///
+/// `#[partial]`: children are reached through `term_map_children_at_depth`.
+#[partial]
+def bind_earlier_field_refs (reversed_earlier : List Identifier) (depth : I64) (t : Term) : Term :=
+    match t {
+        Term.var idx dbg =>
+            if I64.beq idx sentinel
+            then
+                match dbg {
+                    DebugName.named id =>
+                        match earlier_field_offset reversed_earlier id 0 {
+                            Option.some k => Term.var (k + depth) dbg,
+                            Option.none => t,
+                        },
+                    DebugName.unnamed => t,
+                }
+            else t,
+        _ => term_map_children_at_depth
+            (fn (under : I64) => fn (child : Term) => bind_earlier_field_refs reversed_earlier (depth + under) child) t,
+    }
+
+/// Position of `target` in `reversed_earlier`, counted from the end -- which
+/// IS the de Bruijn index the earlier field occupies in the type of the field
+/// being bound.
+def earlier_field_offset (rest : List Identifier) (target : Identifier) (seen : I64) : Option I64 :=
+    match rest {
+        List.empty => Option.none,
+        List.cons id tl => if id_eq id target then Option.some seen else earlier_field_offset tl target (seen + 1),
     }
 
 /// Prepend one type per identifier onto the front of `local_types` --

@@ -1491,8 +1491,37 @@ def resolve_def_in_scope_by_name (name : NamePath) (s : Scope) : Result ScopeErr
 // confirmed as a real, live bug via a direct repro, not just a
 // theoretical risk).
 
+/// Item 5.1's bare-miss fallback, applied to defs: a bare reference sitting in
+/// a `typ` position is never rewritten to its qualified form
+/// (`resolve_open_alias_decl` deliberately leaves type fields alone), so after
+/// qualification the exact lookup misses and the name resolves to nothing.
+/// That single miss has two consequences, both measured on 2026-11-01:
+/// `locals_with_def_typevars` binds the UNRESOLVED name as a local typevar,
+/// and `whnf_delta` then refuses to unfold a def shadowed by a local -- so
+/// `Sigma.fst` in `sigma_snd`'s motive stayed stuck and the Elim minor
+/// comparison rejected a correct proof. Same policy and same O(1) map consult
+/// as `scope_data_find_inductive`: the one owner `bare_aliases` records
+/// resolves (`scope_data_add_def` already notes the bare key), zero or 2+
+/// owners is a genuine miss.
 def scope_data_find_def (sd : ScopeData) (name : NamePath) : Option ScopeDef :=
-    npath_map_lookup name sd.def_refs
+    match npath_map_lookup name sd.def_refs {
+        Option.some d => Option.some d,
+        Option.none =>
+            match bare_map_lookup (show_name_path name) sd.bare_aliases {
+                Option.some keys =>
+                    match keys {
+                        List.cons only rest =>
+                            match rest {
+                                List.empty =>
+                                    npath_map_lookup (NamePath.mk (List.cons (Identifier.id only) List.empty))
+                                        sd.def_refs,
+                                List.cons _ _ => Option.none,
+                            },
+                        List.empty => Option.none,
+                    },
+                Option.none => Option.none,
+            },
+    }
 
 // --- ScopeData: find a def's own declared param (name, type) list ---
 // (`plans/implementations/named-field-construction.md`'s Phase 6.)
@@ -2424,6 +2453,19 @@ def resolve_open_alias_term_scoped (names : HashMap String String) (bound : List
         // are `Term.lam` nodes inside it, already handled by the `lam` arm
         // above when this recurses in).
         Term.elim e =>
+            // `inductive` is a NAME PATH, not a term child: item 5.1 renames
+            // an inductive's own declaration, so leaving this field bare
+            // makes `type_check_elim`'s scrutinee-type check compare the
+            // qualified spelling its motive/scrutinee now carry
+            // (`prelude::Sigma`) against a bare `Sigma` and reject a
+            // dependent match at COMPILE time that checked before
+            // qualification (measured 2026-11-01: `sigma_snd` failed
+            // `compile_loaded_modules_to_ir` only).
+            let rewritten_inductive : NamePath :=
+                match alias_map_lookup (show_name_path e.inductive) names {
+                    Option.some qualified => NamePath.mk (List.cons (Identifier.id qualified) List.empty),
+                    Option.none => e.inductive,
+                } in
             let rewritten_params : List Term := resolve_open_alias_terms_scoped names bound e.params in
             let rewritten_indices : List Term := resolve_open_alias_terms_scoped names bound e.indices in
             let rewritten_motive : Term := resolve_open_alias_term_scoped names bound e.motive in
@@ -2431,6 +2473,7 @@ def resolve_open_alias_term_scoped (names : HashMap String String) (bound : List
             let rewritten_scrutinee : Term := resolve_open_alias_term_scoped names bound e.scrutinee in
             Term.elim
                 { e with
+                  inductive := rewritten_inductive,
                   params := rewritten_params,
                   indices := rewritten_indices,
                   motive := rewritten_motive,

@@ -138,6 +138,28 @@ def test_typecheck_module_self_contained_def : Bool :=
 def test_typecheck_module_rejects_unbound_variable : Bool :=
     not (typecheck_source "def bad (x : Type) : Type := totally_undefined_name")
 
+/// A dependent pair defined in the snippet itself (the harness scope has no
+/// prelude): `mk`'s second field is DECLARED in terms of the first
+/// (`g : B f`), which is what the arm binding and the refinement have to
+/// agree on.
+def dependent_pair_source (body : String) : String :=
+    "type Dep (A : Type) (B : A -> Type) { mk (f : A) (g : B f) }\n"
+        ++ "def dcase (A : Type) (B : A -> Type) (C : Dep A B -> Type) "
+        ++ "(h : (a : A) -> (b : B a) -> C (Dep.mk a b)) (p : Dep A B) : C p := "
+        ++ "match p { Dep.mk a b => " ++ body ++ " }"
+
+/// The case split refines `p` to `mk a b` and types `h`'s application from
+/// the constructor's own field types.
+#[test]
+def test_typecheck_dependent_pair_case_split : Bool :=
+    typecheck_source (dependent_pair_source "h a b")
+
+/// ... and the SAME match with a field of the wrong type (`b : B a` where
+/// `C p` is expected) is rejected -- the rule above is not vacuous.
+#[test]
+def test_typecheck_dependent_pair_rejects_wrong_arm : Bool :=
+    not (typecheck_source (dependent_pair_source "b"))
+
 // --- signature-driven application typing (`ScopeData.def_sigs`,
 // `try_type_check_def_call`, lang/typecheck/infer.mo) -- regression
 // tests for the self-hosted checker's call-typing gaps, each pinned to

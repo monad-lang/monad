@@ -145,10 +145,13 @@ is correspondingly small. Today there is:
   type that is a TYPE-LEVEL function of the scrutinee checks: a proof-relevant
   eliminator such as `def bool_elim (F : Bool -> Type) (t : F true)
   (f : F false) (b : Bool) : F b := match b { ... }` is accepted, and swapping
-  its arms is rejected. What is still missing: indexed families (`Eq`/`Vec`
-  index refinement), constructor field types that mention an earlier field
-  (`Sigma.snd`'s `B (Sigma.fst p)`), and a surface way to supply a type
-  argument — so an eliminator can be *verified* but not yet *called*.
+  its arms is rejected. A constructor whose FIELD type mentions an earlier
+  field works too: `def Sigma.snd (A : Type) (B : A -> Type) (p : Sigma A B) :
+  B (Sigma.fst p) := match p { Sigma.dpair a b => b }` verifies, because the
+  checker closes `snd : B fst` over the `fst` binder and reduces the refined
+  motive. What is still missing: indexed families (`Eq`/`Vec` index
+  refinement), arms written as field patterns, and a surface way to supply a
+  type argument — so an eliminator can be *verified* but not yet *called*.
   `proofs/src/dependent.mo` is the worked example.
 - **No usable equality elimination.** See the warning above: `Eq` proofs can be
   built but not consumed.

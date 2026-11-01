@@ -43,6 +43,15 @@ use lib::typecheck::traverse {term_map_children_at_depth}
 
 def term_shift (d : I64) (t : Term) : Term := term_shift_go d 0 t
 
+/// `term_shift` restricted to variables at or above `cutoff`: the OUTER
+/// references of a term being placed under new binders, leaving that term's
+/// references to the binders just introduced (indices below `cutoff`) alone.
+/// A constructor's field types reference its EARLIER fields at indices
+/// `0..i-1` and the enclosing context at `i` and above, so placing field `i`
+/// under `i` new binders -- what the Elim minor's Pi chain and lambda chain
+/// both do -- is exactly `term_shift_above i i`.
+pub def term_shift_above (cutoff : I64) (d : I64) (t : Term) : Term := term_shift_go d cutoff t
+
 #[partial]
 def term_shift_go (d : I64) (cutoff : I64) (t : Term) : Term :=
     match t {
@@ -261,6 +270,22 @@ def test_term_shift_free_var_shifted : Bool :=
     // A free variable (nothing binds it at cutoff 0) has `d` added.
     let t : Term := Term.var 0 DebugName.unnamed in
     I64.beq (term_var_idx (term_shift 2 t)) 2
+
+#[test]
+def test_term_shift_above_leaves_below_cutoff_alone : Bool :=
+    // How the Elim rule places a constructor's field type: index 0 is one of
+    // the binders just introduced (an EARLIER field), index 1 is the enclosing
+    // context. Only the second may move.
+    let t : Term := Term.app (Term.var 1 DebugName.unnamed) (Term.var 0 DebugName.unnamed) in
+    match term_shift_above 1 1 t {
+        Term.app f a => I64.beq (term_var_idx f) 2 && I64.beq (term_var_idx a) 0,
+        _ => false,
+    }
+
+#[test]
+def test_term_shift_above_zero_cutoff_is_term_shift : Bool :=
+    let t : Term := Term.var 0 DebugName.unnamed in
+    I64.beq (term_var_idx (term_shift_above 0 3 t)) 3
 
 #[test]
 def test_term_shift_bound_var_under_lam_untouched : Bool :=

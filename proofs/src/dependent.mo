@@ -20,11 +20,10 @@
 //
 // Measured limits on what is NOT yet writable (2026-11-01):
 //
-// * `Sigma.snd` (`B (Sigma.fst p)`) needs the constructor's own field type
-//   `snd : B fst` substituted with the earlier field binding. The checker
-//   leaves that `fst` as a free name -- the field-dependent gap
-//   `implementations/field-pattern-type-args-not-substituted.md` records for
-//   `Vec` -- so the minor's inferred type disagrees with the refined motive.
+// * A FIELD-PATTERN arm (`{ fst, snd } => snd`) stays on the non-dependent
+//   path: the dependent fallback uses the RAW cases, and only
+//   `type_check_field_pattern_case` resolves those (see
+//   `dependent_match_gate_ok`).
 // * Recursive induction (`s k (rec k)`) uses the predecessor twice; `Nat` is
 //   not `Copy`, so the always-on affine rule rejects it (proofs/ has no
 //   `[affine]` exception).
@@ -56,7 +55,26 @@ pub def nat_case_refl (E : Nat -> Nat -> Type) (reflf : (x : Nat) -> E x x) (n :
         Nat.succ k => reflf (Nat.succ k),
     }
 
-// ─── Presence pin (the def above is the deliverable) ────────────────────
+/// `Sigma.snd`, the second projection -- the shape `plans/type-system/
+/// sigma-types.md` names as the dependent-elimination target. `dpair`'s
+/// second field is DECLARED in terms of the first (`snd : B fst`), so the
+/// arm's `b` is typed `B a`; the refined motive puts `Sigma.fst (dpair a b)`
+/// in the result type, and delta + iota reduce that to `a`.
+pub def sigma_snd (A : Type) (B : A -> Type) (p : Sigma A B) : B (Sigma.fst p) :=
+    match p {
+        Sigma.dpair a b => b,
+    }
+
+/// A case split over `Sigma` into an arbitrary family: the arm receives the
+/// constructor under the refinement, and the result is `C p`.
+pub def sigma_case (A : Type) (B : A -> Type) (C : (p : Sigma A B) -> Type)
+    (f : (a : A) -> (b : B a) -> C (Sigma.dpair a b))
+    (p : Sigma A B) : C p :=
+    match p {
+        Sigma.dpair a b => f a b,
+    }
+
+// ─── Presence pin (the defs above are the deliverable) ──────────────────
 
 /// The module loads and its theorems are checked even though no test can
 /// instantiate their type arguments.
