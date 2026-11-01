@@ -355,16 +355,12 @@ def session(encoding):
     # 5. Navigation, in the file.
     hover = by_id(replies, 11)
     detail = ((hover or {}).get("result") or {}).get("contents", {}).get("value", "")
-    # A WART, pinned as measured rather than wished away: hover on a `struct` shows the
-    # struct's NAME and nothing else. `nav_detail_by_kind` (lang/src/navigation.mo:415)
-    # has arms for `type`, `class` and `def` -- a `type` renders via `show_inductive`,
-    # a `class` via `show_class` -- and no `struct` arm, so a struct falls through to the
-    # bare name. Fixing it means reading the `Struct` decl back out of the module cache
-    # and rendering it with `show_struct` (pretty.mo:459, not `pub`); reported, not fixed
-    # here. The `in` test is deliberately not used: this asserts the degradation exactly,
-    # so improving it flips a test instead of quietly passing.
-    check(f"{encoding} hover on the struct declaration is the bare name (known wart)",
-          detail == "```monad\nZzReplayShape\n```", f"{detail!r}")
+    # Hover on a `struct` declaration renders the struct as written (`show_struct`, read
+    # from the buffer's own declarations): the scope holds only the synthetic inductive a
+    # struct is registered as. Asserted exactly, so the old bare-name fallback fails.
+    check(f"{encoding} hover on the struct declaration renders the struct",
+          detail == "```monad\nstruct ZzReplayShape {\n  width : I64,\n  height : I64\n}\n```",
+          f"{detail!r}")
     check(f"{encoding} definition on the struct declaration",
           locs((by_id(replies, 12) or {}).get("result")) == [("shapes.mo", SHAPES_STRUCT_RANGE)],
           f"{locs((by_id(replies, 12) or {}).get('result'))}")

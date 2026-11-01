@@ -455,8 +455,9 @@ def param_type (p : Param) : Term := match p {
     Param.mk name type_ mult default _attrs => type_,
 }
 
+/// A struct declaration as source: `struct Name {`, one field per line, `}`.
 #[partial]
-def show_struct (s : Struct) : String := match s {
+pub def show_struct (s : Struct) : String := match s {
     Struct.mk name fields _attrs vis =>
         let name_str := show_identifier name in
         let header := String.concat (show_vis_prefix vis) (String.concat "struct " name_str) in

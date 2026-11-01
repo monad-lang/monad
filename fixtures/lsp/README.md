@@ -93,19 +93,13 @@ pinned so that unifying them later is a deliberate change rather than an acciden
 | `nonascii.mo` | The parse-error vector, and the only fixture whose offsets differ between encodings. |
 | `shapes.mo` | One declaration of every kind the picker has a word for, plus a local that shadows a def. Pure ASCII, so every position in it is the same number in bytes and in code units. |
 
-### What `session.jsonl` pins *as a gap*
+### What `session.jsonl` pinned *as a gap*
 
-One assertion is a pin on a known defect, not a criterion met. It is asserted rather than
-wished away so that a fix flips a test instead of passing unnoticed. (The shadowing pin
-that sat beside it flipped with the cursor-to-binding walk: `definition` and `hover` on
-the local's use inside `\zz_replay_shadowed => zz_replay_shadowed` now answer the
-lambda's binder, line 45 columns 5..23.)
-
-- **Hover on a `struct` shows the struct's bare name.** `nav_detail_by_kind`
-  (`lang/src/navigation.mo:415`) renders `type` via `show_inductive`, `class` via
-  `show_class` and `def` via `nav_def_detail` — and has no `struct` arm, so a struct falls
-  through to its name. `show_struct` exists (`lang/src/pretty.mo:459`) but is not `pub`,
-  and rendering a struct needs the `Struct` decl read back out of the module cache.
+No assertion pins a known defect any more; the two that did have flipped. The shadowing
+pin flipped with the cursor-to-binding walk: `definition` and `hover` on the local's use
+inside `\zz_replay_shadowed => zz_replay_shadowed` answer the lambda's binder, line 45
+columns 5..23. The struct pin flipped with struct hover: hover on `ZzReplayShape`'s
+declaration renders the struct (`show_struct`) instead of its bare name.
 
 Two more measured oddities are pinned rather than fixed, both in `lang/` and both shared
 with other work:

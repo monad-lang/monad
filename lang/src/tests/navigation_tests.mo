@@ -49,7 +49,7 @@ use parsec::core {fail, success}
 use lib::pretty {show_term}
 use lib::scope {build_scope_from_decls}
 use lib::types {
-  Identifier, Location, ModulePath, Scope, ScopeData, SourceRange, Term,
+  Decl, Identifier, Location, ModulePath, Scope, ScopeData, SourceRange, Term,
 }
 open IO {println}
 use std::process {exec_cmd, process_id}
@@ -337,7 +337,8 @@ def test_a_def_in_another_module_answers_its_file : IO Bool := do {
             let no_ranges : List DeclRange := List.empty;
             let info : ModuleInfo := ModuleInfo.mk nt_other_module nt_other_file decls;
             let cache : ModuleInfoCache := module_info_cache_insert nt_other_module info module_info_cache_empty;
-            match nav_at scope no_ranges cache "far" {
+            let no_decls : List Decl := List.empty;
+            match nav_at scope no_ranges no_decls cache "far" {
                 Option.none => do { println "NO TARGET for a def in another module"; return false },
                 Option.some t => do {
                     println ("far -> " ++ nt_text t);
@@ -487,4 +488,53 @@ def test_a_let_rebinding_its_name_answers_each_binder : IO Bool := do {
     let outer_ok <- nt_local_is checked "y" 293 274 "y";
     let inner_ok <- nt_local_is checked "y" 302 288 "y";
     return (outer_ok && inner_ok)
+}
+
+// --- Structs ---
+
+/// A struct this file declares, rendered from the buffer's own
+/// declarations. The scope only holds the synthetic one-constructor
+/// inductive a struct is registered as, so a hover read from the scope
+/// would show a `type` the file never wrote -- asserted exactly, so the
+/// bare-name fallback cannot pass either.
+#[test]
+def test_a_struct_hovers_as_its_declaration : IO Bool := do {
+    let checked <- nt_check "nav_probe_struct.mo" "struct ZzBox2 { w : I64, h : I64 }\n";
+    match nav_at_checked checked "ZzBox2" {
+        Option.none => do { println "NO TARGET for a struct declared in this file"; return false },
+        Option.some t => do {
+            println ("ZzBox2 -> " ++ nt_text t);
+            return (String.beq (nt_kind t) "struct"
+                && String.beq (nt_detail t) "struct ZzBox2 {\n  w : I64,\n  h : I64\n}"
+                && I64.beq (nt_line_of t) 1)
+        },
+    }
+}
+
+/// A struct ANOTHER module declares: rendered from that module's cached
+/// declarations, with that module's file -- built by hand for the reason
+/// the cross-module def test above gives.
+#[test]
+def test_a_struct_in_another_module_renders_and_answers_its_file : IO Bool := do {
+    match parse_all_decls "struct ZzFar { w : I64 }\n" {
+        ParseResult.fail _e => do { println "VACUOUS: the fixture did not parse"; return false },
+        ParseResult.success _rem decls => do {
+            let sd : ScopeData := build_scope_from_decls nt_other_module decls;
+            let no_parent : Option Scope := Option.none;
+            let scope : Scope := { module_id := nt_here_module, scope := sd, parent := no_parent, incomplete_match_ok := false };
+            let no_ranges : List DeclRange := List.empty;
+            let no_decls : List Decl := List.empty;
+            let info : ModuleInfo := ModuleInfo.mk nt_other_module nt_other_file decls;
+            let cache : ModuleInfoCache := module_info_cache_insert nt_other_module info module_info_cache_empty;
+            match nav_at scope no_ranges no_decls cache "ZzFar" {
+                Option.none => do { println "NO TARGET for a struct in another module"; return false },
+                Option.some t => do {
+                    println ("ZzFar -> " ++ nt_text t);
+                    return (String.beq (nt_kind t) "struct"
+                        && String.beq (nt_detail t) "struct ZzFar {\n  w : I64\n}"
+                        && String.beq (nt_file_text t) nt_other_file)
+                },
+            }
+        },
+    }
 }

@@ -79,13 +79,13 @@
 /// reason). It keeps `nav_at` usable from a pure test and keeps the
 /// filesystem out of a module whose whole subject is name resolution.
 use lib::module {
-  DeclRange, ModuleInfo, ModuleInfoCache, RangedFileCheck, class_decl_name,
+  DeclRange, ModuleInfo, ModuleInfoCache, RangedFileCheck, class_decl_name, struct_decl_name,
   decl_range_kind, decl_range_name, decl_range_span, inductive_decl_name,
   located_decl_list, located_decl_spans, module_info_cache_lookup, ranged_file_cache,
   ranged_file_located, ranged_file_ranges, ranged_file_scope,
 }
 use lib::parser {LocatedDecls}
-use lib::pretty {show_class, show_inductive, show_term}
+use lib::pretty {show_class, show_inductive, show_struct, show_term}
 use lib::scope {
   qualified_name_to_name_path, scope_find_class, scope_find_def_return_type,
   scope_find_def_sig, scope_find_inductive, scope_find_inductive_by_constructor,
@@ -95,7 +95,7 @@ use lib::typecheck::infer {empty_locals}
 use lib::typecheck::traverse {literal_children, term_children}
 use lib::types {
   Binder, Class, ClassDef, DebugName, Decl, Def, Identifier, Inductive, Instance, Literal,
-  Location, MatchCase, ModulePath, NamePath, NameRef, Scope, ScopeDef, SourceRange, Term,
+  Location, MatchCase, ModulePath, Struct, NamePath, NameRef, Scope, ScopeDef, SourceRange, Term,
   list_reverse, show_identifier, show_name_path, term_peel,
 }
 
@@ -185,17 +185,17 @@ def nav_class_name (cls : Class) : String := show_identifier (class_decl_name cl
 /// about whatever is under the cursor, and "no such name" is a legitimate
 /// answer to that question.
 #[partial]
-pub def nav_at (scope : Scope) (ranges : List DeclRange) (cache : ModuleInfoCache)
-    (ident : String) : Option NavTarget :=
+pub def nav_at (scope : Scope) (ranges : List DeclRange) (decls : List Decl)
+    (cache : ModuleInfoCache) (ident : String) : Option NavTarget :=
   let ref : NameRef := NameRef.nid (Identifier.id ident) in
   match scope_resolve_name ref scope empty_locals {
-    Result.ok sd => nav_resolved (show_name_path (nav_def_name sd)) sd ranges cache scope,
+    Result.ok sd => nav_resolved (show_name_path (nav_def_name sd)) sd ranges decls cache scope,
     // Not resolvable -- so the outline is the only thing left that could
     // know this name. A declaration the file declares but the checker could
     // not resolve is a real state (a typo in a declaration's own
     // annotation is the ordinary way to reach it), and it still has a place
     // to go.
-    Result.err _ => nav_unresolved ident ranges scope,
+    Result.err _ => nav_unresolved ident ranges decls scope,
   }
 
 /// The same resolution, for the caller that already has a check result.
@@ -208,7 +208,9 @@ pub def nav_at (scope : Scope) (ranges : List DeclRange) (cache : ModuleInfoCach
 pub def nav_at_checked (f : RangedFileCheck) (ident : String) : Option NavTarget :=
   match ranged_file_scope f {
     Option.none => Option.none,
-    Option.some scope => nav_at scope (ranged_file_ranges f) (ranged_file_cache f) ident,
+    Option.some scope =>
+      nav_at scope (ranged_file_ranges f) (located_decl_list (ranged_file_located f))
+        (ranged_file_cache f) ident,
   }
 
 // --- Resolution, in two directions ---
@@ -223,23 +225,33 @@ pub def nav_at_checked (f : RangedFileCheck) (ident : String) : Option NavTarget
 /// still hovers and still jumps.
 #[partial]
 def nav_resolved (name : String) (sd : ScopeDef) (ranges : List DeclRange)
-    (cache : ModuleInfoCache) (scope : Scope) : Option NavTarget :=
+    (decls : List Decl) (cache : ModuleInfoCache) (scope : Scope) : Option NavTarget :=
   match nav_decl_named ranges name {
-    Option.some dr => Option.some (nav_local name dr scope),
+    Option.some dr => Option.some (nav_local name dr decls scope),
     Option.none =>
-      match nav_of_type name scope ranges {
+      match nav_struct_far name (nav_def_module sd) cache {
         Option.some t => Option.some t,
-        Option.none =>
-          Option.some (nav_def_far name (nav_def_module sd) cache scope),
+        Option.none => nav_resolved_type_or_def name sd ranges cache scope,
       },
+  }
+
+/// Past the outline and a struct in another module: a type, constructor
+/// or class from the scope, or a def in another module.
+#[partial]
+def nav_resolved_type_or_def (name : String) (sd : ScopeDef) (ranges : List DeclRange)
+    (cache : ModuleInfoCache) (scope : Scope) : Option NavTarget :=
+  match nav_of_type name scope ranges {
+    Option.some t => Option.some t,
+    Option.none => Option.some (nav_def_far name (nav_def_module sd) cache scope),
   }
 
 /// An identifier the scope did not resolve: the outline may still know it,
 /// and past that there is nothing to answer with.
 #[partial]
-def nav_unresolved (ident : String) (ranges : List DeclRange) (scope : Scope) : Option NavTarget :=
+def nav_unresolved (ident : String) (ranges : List DeclRange) (decls : List Decl) (scope : Scope)
+    : Option NavTarget :=
   match nav_decl_named ranges ident {
-    Option.some dr => Option.some (nav_local ident dr scope),
+    Option.some dr => Option.some (nav_local ident dr decls scope),
     Option.none => nav_of_type ident scope ranges,
   }
 
@@ -249,14 +261,15 @@ def nav_unresolved (ident : String) (ranges : List DeclRange) (scope : Scope) : 
 ///
 /// The detail is composed from that kind rather than from the resolution,
 /// which is the fix for the measurement above: a `type` gets
-/// `show_inductive`'s rendering of the whole declaration, a `def` gets its
-/// signature, and a kind with no printer of its own (`struct`,
-/// `instance`, `infix`, ...) gets its name -- honest, since the file is
+/// `show_inductive`'s rendering of the whole declaration, a `struct` gets
+/// `show_struct`'s (read from `decls`, the buffer's own declarations), a
+/// `def` gets its signature, and a kind with no printer of its own
+/// (`instance`, `infix`, ...) gets its name -- honest, since the file is
 /// about to show the declaration itself a few lines away.
-def nav_local (name : String) (dr : DeclRange) (scope : Scope) : NavTarget :=
+def nav_local (name : String) (dr : DeclRange) (decls : List Decl) (scope : Scope) : NavTarget :=
   let kind : String := decl_range_kind dr in
   let no_file : Option String := Option.none in
-  nav_target_mk name (nav_detail_by_kind name kind scope) kind no_file
+  nav_target_mk name (nav_detail_by_kind name kind decls scope) kind no_file
     (Option.some (decl_range_span dr))
 
 /// A name the outline does not carry: a type, a constructor or a class from
@@ -410,8 +423,11 @@ def nav_find_class (keys : List NamePath) (scope : Scope) : Option Class :=
 /// One line to show for a hover, chosen by the kind the FILE gave the
 /// declaration.
 #[partial]
-def nav_detail_by_kind (name : String) (kind : String) (scope : Scope) : String :=
-  if String.beq kind "type"
+def nav_detail_by_kind (name : String) (kind : String) (decls : List Decl) (scope : Scope)
+    : String :=
+  if String.beq kind "struct"
+  then nav_struct_detail name decls
+  else if String.beq kind "type"
   then nav_inductive_detail name scope
   else if String.beq kind "class"
   then nav_class_detail name scope
@@ -968,3 +984,69 @@ def nav_loc_offset (l : Location) : I64 := l.offset
 def nav_range_start (r : SourceRange) : Location := r.start
 
 def nav_range_end (r : SourceRange) : Location := r.end
+
+// --- Structs ---
+//
+// A struct enters the scope as a synthetic one-constructor `Inductive`
+// (`build_scope_struct`), so `show_inductive` would render a `type` the
+// user never wrote. The `Struct` itself survives only in declaration
+// lists: the buffer's located decls for a struct this file declares, and
+// `ModuleInfo.decl_list` for one a loaded module declares -- whose module
+// its type name's `ScopeDef` carries.
+
+/// The struct called `name` in `decls`, rendered; the bare name when the
+/// list does not have it.
+#[partial]
+def nav_struct_detail (name : String) (decls : List Decl) : String :=
+  match nav_find_struct name decls {
+    Option.some st => show_struct st,
+    Option.none => name,
+  }
+
+#[partial]
+def nav_find_struct (name : String) (decls : List Decl) : Option Struct :=
+  match decls {
+    List.empty => Option.none,
+    List.cons d rest => nav_find_struct_after name (nav_struct_named name d) rest,
+  }
+
+#[partial]
+def nav_find_struct_after (name : String) (found : Option Struct) (rest : List Decl)
+    : Option Struct :=
+  match found {
+    Option.some st => Option.some st,
+    Option.none => nav_find_struct name rest,
+  }
+
+#[partial]
+def nav_struct_named (name : String) (d : Decl) : Option Struct :=
+  match d {
+    Decl.struct_d st =>
+      if String.beq (show_identifier (struct_decl_name st)) name
+      then Option.some st
+      else Option.none,
+    _ => Option.none,
+  }
+
+/// A struct another module declares: rendered from that module's decls,
+/// with its file so a jump can find it there. `Option.none` when the
+/// module is not cached or declares no struct by that name.
+#[partial]
+def nav_struct_far (name : String) (mp : ModulePath) (cache : ModuleInfoCache)
+    : Option NavTarget :=
+  match module_info_cache_lookup mp cache {
+    Option.none => Option.none,
+    Option.some info => nav_struct_in_info name info,
+  }
+
+#[partial]
+def nav_struct_in_info (name : String) (info : ModuleInfo) : Option NavTarget :=
+  match nav_find_struct name (nav_info_decls info) {
+    Option.none => Option.none,
+    Option.some st =>
+      let no_range : Option SourceRange := Option.none in
+      Option.some (nav_target_mk name (show_struct st) "struct"
+        (Option.some (nav_info_file_path info)) no_range),
+  }
+
+def nav_info_decls (info : ModuleInfo) : List Decl := info.decl_list
