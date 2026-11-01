@@ -49,6 +49,7 @@ use lib::typecheck::cubical {
 }
 use lib::typecheck::unify {unify, unify_structural}
 use lib::typecheck::whnf {whnf}
+use lang::parser::numeric_literal {int_value_fits}
 use std::list {List.length}
 
 /// A type-checked term paired with its type.
@@ -1335,6 +1336,236 @@ def num_suffix_type_name (suffix : NumSuffix) : String :=
 def named_type_ref (s : String) : Term :=
     Term.var sentinel (DebugName.named (Identifier.id s))
 
+/// What a bare (default-suffixed) numeric literal retags to when its
+/// expected type is concrete: one of the ten primitive widths (a pure
+/// retag -- the same payload, re-tagged, range-gated by
+/// `int_value_fits`), or `Nat` (not a retag: a term-level rewrite
+/// through the `Nat.of_i64` builder). The self-hosted twin of the Rust
+/// reference's `LitTarget` (rust/core/src/core_check.rs).
+type RetagTarget {
+    width (suffix : NumSuffix),
+    nat,
+}
+
+/// The `NumSuffix` a numeric type NAME stands for -- the reverse of
+/// `num_suffix_type_name`, so the retag decision and the type spelling
+/// share one table rather than two that can drift. `Option.none` for
+/// every other name (including `Nat`, which the target picker below
+/// matches by name).
+def numeric_suffix_named (name : String) : Option NumSuffix :=
+    numeric_suffix_named_walk name [
+        NumSuffix.i8, NumSuffix.i16, NumSuffix.i32, NumSuffix.i64,
+        NumSuffix.u8, NumSuffix.u16, NumSuffix.u32, NumSuffix.u64,
+        NumSuffix.f32, NumSuffix.f64,
+    ]
+
+def numeric_suffix_named_walk (name : String) (suffixes : List NumSuffix) : Option NumSuffix :=
+    match suffixes {
+        List.empty => Option.none,
+        List.cons s rest =>
+            if String.beq (num_suffix_type_name s) name
+            then Option.some s
+            else numeric_suffix_named_walk name rest,
+    }
+
+/// The retag target a concrete expected type names: a primitive width by
+/// its type name (`U8`), `Nat` by name, `Option.none` for everything
+/// else (a hole, a generic parameter, an applied type, any other name)
+/// -- a bare literal keeps the type its own suffix gives it, exactly as
+/// before the retag existed.
+def retag_target_named (name : String) : Option RetagTarget :=
+    match numeric_suffix_named name {
+        Option.some w => Option.some (RetagTarget.width w),
+        Option.none =>
+            if String.beq name "Nat" then Option.some RetagTarget.nat
+            else Option.none,
+    }
+
+def numeric_retag_target (expected : Term) : Option RetagTarget :=
+    match type_head_name (term_peel expected) {
+        Option.none => Option.none,
+        Option.some id => retag_target_named (show_identifier id),
+    }
+
+/// Whether a `NumSuffix` is one of the two float widths. An integer
+/// literal retagged to a float target becomes a `Literal.flt` (integer
+/// digits with a float suffix is the parser's own `flt` shape,
+/// `lang/parser/number.mo`), so the width rewrite picks the literal
+/// shape by this test.
+def num_suffix_is_float (s : NumSuffix) : Bool :=
+    match s {
+        NumSuffix.f32 => true, NumSuffix.f64 => true,
+        _ => false,
+    }
+
+/// The literal's OWN type -- the pre-retag behavior, kept as the
+/// fallback for every non-retagging case (no target, a non-default
+/// suffix, a float literal against a non-float target, a scope that
+/// cannot resolve the builder).
+def typed_own_num (n : I64) (suffix : NumSuffix) : Result TypeError TypedTerm :=
+    ok (mk_typed (Term.lit (Literal.num n suffix)) (named_type_ref (num_suffix_type_name suffix)))
+
+def typed_own_flt (text : String) (suffix : NumSuffix) : Result TypeError TypedTerm :=
+    ok (mk_typed (Term.lit (Literal.flt text suffix)) (named_type_ref (num_suffix_type_name suffix)))
+
+/// `type_check_lit`'s `Literal.num` arm: a DEFAULT-suffixed (bare) integer
+/// literal takes the expected type's shape when that type is a concrete
+/// numeric primitive or `Nat` (see `numeric_retag_target`); every other
+/// suffix keeps its own type -- `42u8 : I64` stays the mismatch it always
+/// was. The self-hosted twin of the Rust reference's check-arm retag
+/// (rust/core/src/core_check.rs). `#[terminating]`: the retag fires once
+/// -- the `Nat` rewrite re-enters `type_check` on a freshly BUILT
+/// application, a term the size-based measure cannot rank against the
+/// literal it rewrote, but the rewrite's own literal carries the
+/// explicit `i64` suffix, so the re-check cannot fire it again.
+#[terminating]
+def type_check_num_lit (n : I64) (suffix : NumSuffix) (expected : Term) (scope : Scope) (local_types : List Term) (locals : LocalScope) : Result TypeError TypedTerm :=
+    match numeric_retag_target expected {
+        Option.none => typed_own_num n suffix,
+        Option.some target => type_check_num_targeted n suffix target scope local_types locals,
+    }
+
+/// The target-known half of `type_check_num_lit`, split out so no match
+/// nests an `Option` scrutinee inside a `RetagTarget` scrutinee.
+/// `#[terminating]` for the same reason as its caller.
+#[terminating]
+def type_check_num_targeted (n : I64) (suffix : NumSuffix) (target : RetagTarget) (scope : Scope) (local_types : List Term) (locals : LocalScope) : Result TypeError TypedTerm :=
+    match suffix {
+        NumSuffix.i64 => apply_num_retag n target scope local_types locals,
+        _ => typed_own_num n suffix,
+    }
+
+/// The retag itself: a width target re-tags the payload (range-gated --
+/// out of range is an error, never a silent mask), a `Nat` target
+/// rewrites the literal into `Nat.of_i64 <lit>` and checks that,
+/// exactly as the written form. `#[terminating]` for the same reason as
+/// `type_check_num_lit`.
+#[terminating]
+def apply_num_retag (n : I64) (target : RetagTarget) (scope : Scope) (local_types : List Term) (locals : LocalScope) : Result TypeError TypedTerm :=
+    match target {
+        RetagTarget.width w => apply_num_width n w,
+        RetagTarget.nat => apply_nat_rewrite n scope local_types locals,
+    }
+
+/// A bare integer payload against a primitive width: the float widths
+/// take the digits as `Literal.flt` text (the parser's own shape for
+/// integer digits with a float suffix), the integer widths keep the
+/// payload and take the range gate. `U64` accepts any payload -- the
+/// u64 bit-reinterpretation convention both parsers share
+/// (`int_value_fits`' own `u64 => true`).
+def apply_num_width (n : I64) (w : NumSuffix) : Result TypeError TypedTerm :=
+    if num_suffix_is_float w
+    then ok (mk_typed (Term.lit (Literal.flt (I64.to_string n) w)) (named_type_ref (num_suffix_type_name w)))
+    else if int_value_fits n w
+    then ok (mk_typed (Term.lit (Literal.num n w)) (named_type_ref (num_suffix_type_name w)))
+    else
+        Result.err
+            (TypeError.custom
+                (String.concat "integer literal out of range for `"
+                    (String.concat (num_suffix_type_name w) "`")))
+
+/// The scope KEY the `Nat` builder is registered under, in the very
+/// spelling the current pipeline's resolution matched -- the identifier
+/// `apply_nat_rewrite` synthesizes. The compile/test pipelines build
+/// their scopes from `qualify_modules`' flat `module::name` decls, so
+/// the key there is the qualified spelling (`init.number::Nat.of_i64`,
+/// the symbol the reachability filter and the emitter later mangle);
+/// `check`/`eval` build theirs from unqualified decls, so the key is the
+/// bare dotted name. Either way it is the string to write back, not a
+/// spelling rebuilt from the `ScopeDef` -- whose `module` field names
+/// the CONSUMING module in the qualified pipelines, so a rebuilt
+/// spelling is wrong there (`s13::init.number::Nat.of_i64`, a name
+/// nothing resolves).
+///
+/// The unique `bare_aliases` owner is consulted FIRST, the reverse of
+/// `resolve_free_var_def`'s order: in the qualified pipelines the bare
+/// `Nat.of_i64` ALSO resolves directly (so typechecking succeeds), but
+/// nothing defines that symbol at emission, and a compiled
+/// `def x : Nat := 3` failed in `llc` with `use of undefined value
+/// '@Nat.of_i64'`. The owner key is the one the emitter knows. With no
+/// unique owner (the unqualified pipelines), the direct bare name is the
+/// key. A miss either way is `Option.none`, and the caller falls back to
+/// the literal's own type.
+def nat_builder_key (scope : Scope) (locals : LocalScope) : Option String :=
+    match nat_builder_owner_key scope locals {
+        Option.some k => Option.some k,
+        Option.none =>
+            match scope_resolve_name (NameRef.nid (Identifier.id "Nat.of_i64")) scope locals {
+                Result.ok _ => Option.some "Nat.of_i64",
+                Result.err _ => Option.none,
+            },
+    }
+
+/// The unique `bare_aliases` owner of `Nat.of_i64`, when that owner key
+/// itself resolves; `Option.none` for no owner, an ambiguous one, or an
+/// owner that does not resolve.
+def nat_builder_owner_key (scope : Scope) (locals : LocalScope) : Option String :=
+    let g : ScopeData := scope_globals scope in
+    match bare_map_lookup "Nat.of_i64" g.bare_aliases {
+        Option.some keys =>
+            match keys {
+                List.cons k rest =>
+                    match rest {
+                        List.empty =>
+                            match scope_resolve_name (NameRef.nid (Identifier.id k)) scope locals {
+                                Result.ok _ => Option.some k,
+                                Result.err _ => Option.none,
+                            },
+                        List.cons _ _ => Option.none,
+                    },
+                List.empty => Option.none,
+            },
+        Option.none => Option.none,
+    }
+
+/// A bare non-negative integer literal against a concrete `Nat`:
+/// rewrite to `Nat.of_i64 <lit>` and CHECK that, so the rewrite is
+/// exactly the written form. Negative payloads error here rather than
+/// clamping silently. When the scope cannot resolve the builder (a
+/// synthetic test fixture without the ambient prelude), fall back to
+/// the literal's own type, the same fall-through the Rust reference
+/// keeps. `#[terminating]` for the same reason as
+/// `type_check_num_lit`.
+#[terminating]
+def apply_nat_rewrite (n : I64) (scope : Scope) (local_types : List Term) (locals : LocalScope) : Result TypeError TypedTerm :=
+    if I64.lt n 0
+    then Result.err (TypeError.custom "a `Nat` literal cannot be negative")
+    else
+        match nat_builder_key scope locals {
+            Option.none => typed_own_num n NumSuffix.i64,
+            Option.some key =>
+                type_check
+                    (Term.app (Term.var sentinel (DebugName.named (Identifier.id key)))
+                        (Term.lit (Literal.num n NumSuffix.i64)))
+                    (named_type_ref "Nat") scope local_types locals,
+        }
+
+/// `type_check_lit`'s `Literal.flt` arm: a bare (default `f64`) float
+/// literal retags only between float widths -- `3.14 : F32` re-suffixes
+/// the same text; an integer target (`3.14 : U8`) and every non-default
+/// suffix keep the literal's own type. The text is kept verbatim: the
+/// downstream lowering parses it at the target width
+/// (`F64.bits_of_string`, the route `compile_lit_ir` takes).
+def type_check_flt_lit (text : String) (suffix : NumSuffix) (expected : Term) : Result TypeError TypedTerm :=
+    match numeric_retag_target expected {
+        Option.none => typed_own_flt text suffix,
+        Option.some target => type_check_flt_targeted text suffix target,
+    }
+
+/// The target-known half of `type_check_flt_lit`, split out for the
+/// same nested-match reason as `type_check_num_targeted`.
+def type_check_flt_targeted (text : String) (suffix : NumSuffix) (target : RetagTarget) : Result TypeError TypedTerm :=
+    match target {
+        RetagTarget.nat => typed_own_flt text suffix,
+        RetagTarget.width w => type_check_flt_width text suffix w,
+    }
+
+def type_check_flt_width (text : String) (suffix : NumSuffix) (w : NumSuffix) : Result TypeError TypedTerm :=
+    match suffix {
+        NumSuffix.f64 => ok (mk_typed (Term.lit (Literal.flt text w)) (named_type_ref (num_suffix_type_name w))),
+        _ => typed_own_flt text suffix,
+    }
+
 def type_check_lit (value : Literal) (expected_type : Term) (scope : Scope) (local_types : List Term) (locals : LocalScope) : Result TypeError TypedTerm :=
     match value {
         // A bare sort (a KIND, not a real type) used to be returned here
@@ -1362,9 +1593,9 @@ def type_check_lit (value : Literal) (expected_type : Term) (scope : Scope) (loc
         Literal.char c =>
             ok (mk_typed (Term.lit value) (named_type_ref "Char")),
         Literal.num n suffix =>
-            ok (mk_typed (Term.lit value) (named_type_ref (num_suffix_type_name suffix))),
+            type_check_num_lit n suffix expected_type scope local_types locals,
         Literal.flt text suffix =>
-            ok (mk_typed (Term.lit value) (named_type_ref (num_suffix_type_name suffix))),
+            type_check_flt_lit text suffix expected_type,
         Literal.if_ one two three =>
             type_check_if one two three expected_type scope local_types locals,
         Literal.match_ value_ cases =>
