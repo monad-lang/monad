@@ -1,7 +1,7 @@
 // mty / weaver / processes -- a start_process turn opens the approval overlay,
 // `/processes` lists the running task with its command, and
 // `/processes kill <id>` really stops the pid. Ported from
-// scripts/weaver-tui-repro/pty_repro_processes.py.
+// pty_repro_processes.py (retired).
 use mty::spawn {Mty, Output}
 use mty::check {Check.report}
 use weaver::mty_support {

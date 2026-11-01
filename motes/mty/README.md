@@ -1,9 +1,10 @@
 # mty — a Monad-native pty/TUI test harness
 
 `mty` spawns a compiled program under a pseudo-terminal, feeds it keys/SGR
-mouse reports, reconstructs the rendered screen, and asserts on it. It is the
-replacement for the Python drivers under `scripts/weaver-tui-repro/`; the
-weaver-specific drivers live in `motes/weaver/test/`, not here.
+mouse reports, reconstructs the rendered screen, and asserts on it. The
+weaver-specific drivers live in `motes/weaver/test/`, not here; the last
+remaining Python driver is `scripts/weaver-tui-repro/pty_repro_sessions.py`
+(its 18 MB RSS scenario is blocked on a runtime fiber/GC crash).
 
 ## Compilation and gating
 
@@ -20,9 +21,9 @@ weaver-specific drivers live in `motes/weaver/test/`, not here.
 
 | Module | Public shape |
 |---|---|
-| `src/spawn.mo` | `SpawnConfig`, `Mty.spawn`, `Mty.send_text`, `Mty.pump`, `Mty.wait_until`, `Mty.wait_quiet`, `Mty.resize`, `Mty.alive`, `Mty.reap`, `Mty.finish`, `Output` |
+| `src/spawn.mo` | `SpawnConfig` (including `cwd`), `Mty.spawn`, `Mty.send_text`, `Mty.send_chunked`, `Mty.pump`, `Mty.wait_until`, `Mty.wait_quiet`, `Mty.resize`, `Mty.child_pid`, `Mty.pid_alive`, `Mty.alive`, `Mty.reap`, `Mty.finish`, `Output` |
 | `src/grid.mo` | `Grid.empty/of_string/feed_from/find/row_text/text`; cursor moves, clears, UTF-8 + wide glyphs |
-| `src/ansi.mo` | `Ansi.strip` (CSI/OSC), `Ansi.tight` (also drops whitespace) |
+| `src/ansi.mo` | `Ansi.strip` (CSI/OSC), `Ansi.tight` (also drops whitespace), `Ansi.has_color` (basic palette only) |
 | `src/check.mo` | `Check.report`, `Check.skip`, `Check.enabled`, `Check.value_set`, `Check.bin_path` |
 
 `Output` accumulates raw bytes, the `Grid`, the grid's consumed offset and an
@@ -30,6 +31,13 @@ EOF flag. `Mty.wait_until` replaces fixed sleeps: it pumps in 100 ms slices and
 evaluates a predicate on the current `Output` until it fires or the deadline
 expires. `Mty.wait_quiet` waits for a silence window. `Mty.resize` sets
 `TIOCSWINSZ`, sends SIGWINCH, and restarts the grid at the new geometry.
+
+`SpawnConfig.cwd` is applied by a `chdir` in the forked child (the argv/cwd
+buffers are built before `forkpty`, and the child path allocates nothing), so
+a test can isolate a program that reads cwd-relative config. A relative `bin`
+must be made absolute by the caller: the exec happens after that `chdir`.
+`Mty.send_chunked` writes in byte-sized pieces with a pump between them, for
+bracketed pastes a dialog reads one byte at a time.
 
 ## Running
 

@@ -1,6 +1,6 @@
 // mty / weaver / dialogs -- the permission dialog (deny with a note, arrow
 // selection + Enter), and the plan-review revise path. Ported from
-// scripts/weaver-tui-repro/pty_repro_dialogs.py.
+// pty_repro_dialogs.py (retired).
 //
 // The edit fixture is GENERATED in the run root: the checked-in
 // turns_edit.json has no `new_content`, so the Python driver wrote its own.

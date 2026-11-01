@@ -1,6 +1,6 @@
 // mty / weaver / crash -- a SIGKILLed run leaves no exit marker; the next run
 // warns about the previous crash and logs crash_detected; a clean /quit writes
-// the exit marker. Ported from scripts/weaver-tui-repro/pty_repro_crash.py.
+// the exit marker. Ported from pty_repro_crash.py (retired).
 use mty::spawn {Mty, Output}
 use mty::check {Check.report}
 use weaver::mty_support {

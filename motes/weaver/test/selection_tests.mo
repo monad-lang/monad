@@ -1,6 +1,6 @@
 // mty / weaver / selection -- a drag over transcript text paints reverse
 // video and copies the span through OSC 52, including a pair of wide glyphs.
-// Ported from scripts/weaver-tui-repro/pty_repro_selection.py.
+// Ported from pty_repro_selection.py (retired).
 use mty::spawn {Mty, Output}
 use mty::check {Check.report}
 use weaver::mty_support {run_gated, with_root, fixture_path, spawn, sgr, pos_row, pos_col}

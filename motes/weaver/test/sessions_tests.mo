@@ -2,7 +2,7 @@
 // session store, `--resume` restores it, Home pages older lines from disk, a
 // bracketed paste is one user block, `--no-color` emits no palette codes, and
 // an 18 MB session stays on disk (startup RSS bounded, idle flat).
-// Ported from scripts/weaver-tui-repro/pty_repro_sessions.py.
+// Ported from pty_repro_sessions.py (retired).
 use mty::spawn {Mty, Output}
 use mty::check {Check.report}
 use mty::ansi {Ansi.has_color}

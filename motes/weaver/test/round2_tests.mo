@@ -1,7 +1,7 @@
 // mty / weaver / round2 -- rounded borders and the dim statusbar, eight mock
 // turns, PageUp/PageDown and the SGR wheel indicator, Alt+Enter multiline
 // submit, and history recall. Ported from
-// scripts/weaver-tui-repro/pty_repro_round2.py; the Python's history check
+// pty_repro_round2.py (retired); the Python's history check
 // was hard-coded True and its scroll checks scanned the accumulated stream,
 // so both are real assertions here.
 use mty::spawn {Mty, Output}

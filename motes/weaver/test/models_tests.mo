@@ -1,6 +1,6 @@
 // mty / weaver / models -- the API-loaded model picker: /model opens it with
 // the current name marked, Enter applies the selection (echo + banner), and
-// Esc closes it. Ported from scripts/weaver-tui-repro/pty_repro_models.py.
+// Esc closes it. Ported from pty_repro_models.py (retired).
 use mty::spawn {Mty, Output}
 use mty::check {Check.report}
 use weaver::mty_support {run_gated, with_root, fixture_path, spawn, not_found, quit_cleanly}

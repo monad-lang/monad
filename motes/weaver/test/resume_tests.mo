@@ -1,7 +1,7 @@
 // mty / weaver / resume -- the `/resume` picker lists the current session with
 // its marker and descriptions, Esc leaves the app responsive, choosing a row
 // restores that transcript, and ten sessions page with Older/Newer rows.
-// Ported from scripts/weaver-tui-repro/pty_repro_resume.py.
+// Ported from pty_repro_resume.py (retired).
 use mty::spawn {Mty, Output}
 use mty::check {Check.report}
 use weaver::mty_support {run_gated, with_root, spawn_args}

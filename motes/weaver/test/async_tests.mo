@@ -2,7 +2,7 @@
 // thinking row, mid-turn keys, the completion repaint, no re-emission, one
 // mid-turn Ctrl-C only hints, two quit promptly, Esc stops the turn, and the
 // approval overlay owns stdin. Ported from
-// scripts/weaver-tui-repro/pty_repro_async.py.
+// pty_repro_async.py (retired).
 use mty::spawn {Mty, Output}
 use mty::check {Check.report}
 use mty::ansi {Ansi.tight}

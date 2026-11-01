@@ -1,7 +1,7 @@
 // mty / weaver / bigplan -- a generated 2000-line plan paints promptly and is
 // bottom-pinned, Home reaches its first line, `/plan` opens the review dialog,
 // a 10 KB bracketed paste into the revise note completes, and Esc closes.
-// Ported from scripts/weaver-tui-repro/pty_repro_bigplan.py.
+// Ported from pty_repro_bigplan.py (retired).
 use mty::spawn {Mty, Output}
 use mty::check {Check.report}
 use weaver::mty_support {

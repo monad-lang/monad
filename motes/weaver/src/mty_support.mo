@@ -36,7 +36,7 @@ pub def repo_root : IO String := do {
 
 pub def fixture_path (name : String) : IO String := do {
     let root <- repo_root;
-    return (String.concat root (String.concat "/scripts/weaver-tui-repro/" name))
+    return (String.concat root (String.concat "/motes/weaver/test/fixtures/" name))
 }
 
 /// A fresh `/tmp/mty_<label>_<pid>_<nano>` with `sessions/`, `procs/` and

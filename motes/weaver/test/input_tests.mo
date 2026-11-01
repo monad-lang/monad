@@ -1,7 +1,7 @@
 // mty / weaver / input -- the caret is visible on the first frame, typing
 // lands on the input row, a click moves the caret, a drag copies via OSC 52,
 // and the caret returns after a submit. Ported from
-// scripts/weaver-tui-repro/pty_repro_input.py.
+// pty_repro_input.py (retired).
 use mty::spawn {Mty, Output}
 use mty::check {Check.report}
 use weaver::mty_support {run_gated, with_root, fixture_path, spawn, pos_row, pos_col, sgr, found_at_row}

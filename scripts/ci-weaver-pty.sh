@@ -3,21 +3,20 @@
 #
 # Two suites run against the compiled `target-monad/release/weaver`: the
 # `mty` drivers in motes/weaver/test (compiled-only, under `monad test`) and
-# the Python repros in scripts/weaver-tui-repro/ that have no Monad port yet
-# (the oracle for the remaining drivers;
-# plans/implementations/2026-10-25-weaver-pty-monad-tests.md).
+# one Python oracle, scripts/weaver-tui-repro/pty_repro_sessions.py. Its S6
+# scenario (an 18 MB session with an RSS bound) is not ported yet: resuming
+# that session SIGSEGVs the compiled test driver in a runtime fiber thread
+# (GC_inner_start_routine -> monad_get_tag), independent of where the session
+# is synthesized. Everything else is in the Monad suite
+# (plans/implementations/2026-10-25-weaver-pty-monad-tests.md).
 #
-# THE EXIT CODE IS NOT THE VERDICT. Two drivers print a failure and still
-# exit 0: pty_repro.py (`PASSn ...: False`) and pty_repro_round2.py (`FAIL`).
-# So every run is classified from its OUTPUT as well: a FAIL line, a
-# `: False`, a traceback, no PASS line, or a missing per-driver success
-# marker is a failure even when `$?` is zero.
-# The per-driver markers are in `marker_for` below; keep that table in one
-# place so an output-wording change is one auditable diff.
+# THE EXIT CODE IS NOT THE VERDICT. The Python driver is classified from its
+# OUTPUT too: a FAIL line, a traceback, no PASS line, or the missing
+# `SESSION REPRO: ALL PASS` marker is a failure even when `$?` is zero.
+# The marker is in `marker_for` below.
 #
-# ISOLATION. Every driver gets its own HOME, session root, proc root, and
-# WV_REPRO_TMP under one mktemp root, plus a staged single-read turn fixture
-# for the base driver (whose /tmp/wv_repro path was removed from the script).
+# ISOLATION. The Python driver gets its own HOME, session root, proc root and
+# WV_SESSION_TMP under one mktemp root; the Monad tests create their own roots.
 # Nothing touches the developer's ~/.weaver. The run root is removed on success
 # unless WEAVER_PTY_KEEP=1, and kept on failure so the logs survive.
 #
@@ -84,44 +83,22 @@ cleanup() {
 trap cleanup EXIT
 
 mkdir -p "$run/home" "$run/sessions" "$run/procs" "$run/logs" \
-  "$run/repro" "$run/session-tmp" "$run/fixtures"
-
-# The base driver used to read /tmp/wv_repro/turns.json, a hand-staged file
-# that nothing created. Its first turn is the single-read pick the script
-# expects, so derive that fixture from the checked-in two-read one.
-python3 - "$root/scripts/weaver-tui-repro/turns_two_reads.json" \
-  "$run/fixtures/turns_single_read.json" <<'PY'
-import json
-import sys
-
-with open(sys.argv[1], encoding="utf-8") as fh:
-    turns = json.load(fh)
-if not turns:
-    raise SystemExit("turns_two_reads.json is empty")
-with open(sys.argv[2], "w", encoding="utf-8") as fh:
-    json.dump(turns[:1], fh)
-PY
+  "$run/repro" "$run/session-tmp"
 
 export HOME="$run/home"
 export WEAVER_SESSION_ROOT="$run/sessions"
 export WEAVER_PROC_ROOT="$run/procs"
 export WV_SESSION_TMP="$run/session-tmp"
 export WV_BIN="$bin"
-export WV_TURNS="$run/fixtures/turns_single_read.json"
-export WV_TURNS_LONG="$root/scripts/weaver-tui-repro/turns_long.json"
 export PYTHONUNBUFFERED=1
 unset NO_COLOR
 
 # --- the Monad `mty` drivers ------------------------------------------------
 #
-# Phase 2 of plans/implementations/2026-10-25-weaver-pty-monad-tests.md: the
-# six tty-critical drivers (ctrl_d, input, models, dialogs, async, resize) now
-# live in motes/weaver/test and run under `monad test`, with the generic pty
-# harness in motes/mty. That suite went green in CI (run 41291404639), so the
-# matching Python entries are retired from the table below; their files stay
-# as the oracle while the other eight drivers are ported. WEAVER_MTY gates the
-# suite (unset skips it green in an ordinary sweep); CI sets it and requires
-# the binary.
+# The mty drivers (everything except the sessions S6 scenario) live in
+# motes/weaver/test and run under `monad test`, with the generic pty harness in
+# motes/mty. WEAVER_MTY gates the suite (unset skips it green in an ordinary
+# sweep); CI sets it and requires the binary.
 echo "ci-weaver-pty: running the Monad mty drivers"
 # shellcheck disable=SC2086  # MONAD_BIN may be `cargo run --release --`
 MTY_ROOT="$root" WEAVER_MTY=1 WEAVER_MTY_REQUIRED=1 WV_BIN="$bin" \
@@ -131,14 +108,7 @@ MTY_ROOT="$root" WEAVER_MTY=1 WEAVER_MTY_REQUIRED=1 WV_BIN="$bin" \
 # --- the driver table -------------------------------------------------------
 
 drivers=(
-  pty_repro_selection.py
-  pty_repro_crash.py
-  pty_repro_processes.py
-  pty_repro_round2.py
-  pty_repro_bigplan.py
   pty_repro_sessions.py
-  pty_repro_resume.py
-  pty_repro.py
 )
 
 # The final success line a driver prints on a fully green run. An empty marker
@@ -147,20 +117,14 @@ drivers=(
 marker_for() {
   case "$1" in
     pty_repro_sessions.py) echo "SESSION REPRO: ALL PASS" ;;
-    pty_repro_crash.py) echo "crash repro: ok" ;;
-    pty_repro_bigplan.py) echo "big-plan repro: ok" ;;
-    pty_repro_processes.py) echo "processes repro: ok" ;;
-    pty_repro_selection.py) echo "selection repro: ok" ;;
-    pty_repro_resume.py) echo "RESUME PICKER REPRO: ALL PASS" ;;
     *) echo "" ;;
   esac
 }
 
-# Sessions pages a 1200-line store and measures RSS over an 18 MB session;
-# bigplan generates a 100 KB / 2000-line plan. Everything else is seconds.
+# Sessions pages a 1200-line store and measures RSS over an 18 MB session.
 timeout_for() {
   case "$1" in
-    pty_repro_sessions.py | pty_repro_bigplan.py) echo 420 ;;
+    pty_repro_sessions.py) echo 420 ;;
     *) echo 180 ;;
   esac
 }
@@ -188,9 +152,6 @@ for driver in "${drivers[@]}"; do
   fi
   if grep -qE '^[[:space:]]*FAIL([[:space:]]|$)' "$log"; then
     reason="${reason:+$reason; }FAIL line"
-  fi
-  if [ "$driver" = "pty_repro.py" ] && grep -q ': False$' "$log"; then
-    reason="${reason:+$reason; }: False"
   fi
   if grep -q '^Traceback (most recent call last):' "$log"; then
     reason="${reason:+$reason; }traceback"

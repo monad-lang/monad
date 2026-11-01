@@ -1,7 +1,7 @@
 // weaver / test / resize -- a real pty shrinks and grows: each geometry change
 // emits ESC[2J, the bottom border lands on the new last transcript row, and
 // the long reply re-wraps to the new content width. Ported from
-// scripts/weaver-tui-repro/pty_repro_resize.py.
+// pty_repro_resize.py (retired).
 use mty::spawn {Mty, Output}
 use mty::check {Check.report}
 use mty::grid {Grid}

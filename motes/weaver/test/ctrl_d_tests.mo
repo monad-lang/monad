@@ -1,6 +1,6 @@
 // mty / weaver / ctrl_d -- one Ctrl+D hints, a Ctrl+C/Ctrl+D cross-gesture
 // does not exit, and two consecutive Ctrl+D presses restore the terminal.
-// Ported from scripts/weaver-tui-repro/pty_repro_ctrl_d.py.
+// Ported from pty_repro_ctrl_d.py (retired).
 use mty::spawn {Mty, Output}
 use mty::check {Check.report}
 use weaver::mty_support {run_gated, with_root, fixture_path, spawn}
