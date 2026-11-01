@@ -218,7 +218,8 @@ def test_a_def_resolves_to_its_own_declaration : IO Bool := do {
             return (String.beq (nt_name t) "alpha"
                 && String.beq (nt_kind t) "def"
                 && I64.beq (nt_line_of t) 1
-                && I64.beq (nt_start_off_of t) 0
+                // The name's own span: `def ` is four bytes.
+                && I64.beq (nt_start_off_of t) 4
                 && I64.lt (nt_start_off_of t) (nt_end_off_of t)
                 && String.beq (nt_file_text t) "<none>")
         },

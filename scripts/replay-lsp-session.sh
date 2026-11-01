@@ -138,12 +138,16 @@ SHAPES_SYMBOLS = [
 # that unifying them is a deliberate change rather than an accident.
 NONASCII_MESSAGE = "expected '(' at 18:43"
 
-# A `struct`/`type`/`class`/`instance` range ENDS ONE PAST ITS CLOSING BRACE -- the byte
-# range of the declaration -- while a `def`'s is whole-line: the def's end is the next
-# line's start. Both come from the same table, by different mechanisms. So the struct's
-# range is (16,0)..(19,1) -- `struct ZzReplayShape {` on line 16 through the `}` on line
-# 19 -- and not (16,0)..(21,0).
+# Every declaration's range ends one past its last token: a struct's at its closing
+# brace, a def's at the end of its own last line (`lang/src/decl_text.mo` trims what the
+# def's parse swallowed after it). So the struct's range is (16,0)..(19,1) --
+# `struct ZzReplayShape {` on line 16 through the `}` on line 19.
 SHAPES_STRUCT_RANGE = (16, 0, 19, 1)
+
+# A declaration's NAME, which is where `definition` lands and what documentSymbol's
+# `selectionRange` covers: `struct ZzReplayShape` and `def zz_replay_width`.
+SHAPES_STRUCT_NAME = (16, 7, 16, 20)
+SHAPES_WIDTH_NAME = (38, 4, 38, 19)
 
 
 def prelude_line(needle):
@@ -361,6 +365,20 @@ def session(encoding):
           f"got {got}")
     got = [(s["name"], s["kind"], s["range"]["start"]["line"]) for s in (syms or {}).get("result") or []]
     check(f"{encoding} documentSymbol: kinds and ranges", got == SHAPES_SYMBOLS, f"got {got}")
+    by_name = {s["name"]: s for s in (syms or {}).get("result") or []}
+    sel = [(n, rng(s["selectionRange"])) for n, s in by_name.items()
+           if n in ("ZzReplayShape", "zz_replay_width")]
+    check(f"{encoding} documentSymbol: selectionRange is the name",
+          sorted(sel) == [("ZzReplayShape", SHAPES_STRUCT_NAME), ("zz_replay_width", SHAPES_WIDTH_NAME)],
+          f"got {sel}")
+    # A def's range ends at its own last token, not at the next line's start.
+    width = rng(by_name.get("zz_replay_width", {}).get("range", {"start": {"line": -1, "character": -1},
+                                                                  "end": {"line": -1, "character": -1}}))
+    check(f"{encoding} documentSymbol: a def's range ends on its own line",
+          width == (38, 0, 38, 56), f"got {width}")
+    inside = all(rng(s["range"])[:2] <= rng(s["selectionRange"])[:2]
+                 and rng(s["selectionRange"])[2:] <= rng(s["range"])[2:] for s in by_name.values())
+    check(f"{encoding} documentSymbol: every selectionRange is inside its range", inside)
 
     # 5. Navigation, in the file.
     hover = by_id(replies, 11)
@@ -372,13 +390,13 @@ def session(encoding):
           detail == "```monad\nstruct ZzReplayShape {\n  width : I64,\n  height : I64\n}\n```",
           f"{detail!r}")
     check(f"{encoding} definition on the struct declaration",
-          locs((by_id(replies, 12) or {}).get("result")) == [("shapes.mo", SHAPES_STRUCT_RANGE)],
+          locs((by_id(replies, 12) or {}).get("result")) == [("shapes.mo", SHAPES_STRUCT_NAME)],
           f"{locs((by_id(replies, 12) or {}).get('result'))}")
     hover = by_id(replies, 13)
     detail = ((hover or {}).get("result") or {}).get("contents", {}).get("value", "")
     check(f"{encoding} hover on a def's use", "def zz_replay_width" in detail, f"{detail[:80]!r}")
     check(f"{encoding} definition on a def's use",
-          locs((by_id(replies, 14) or {}).get("result")) == [("shapes.mo", (38, 0, 40, 0))],
+          locs((by_id(replies, 14) or {}).get("result")) == [("shapes.mo", SHAPES_WIDTH_NAME)],
           f"{locs((by_id(replies, 14) or {}).get('result'))}")
 
     # 6. The shadowing case. Cursor is on the local's USE inside

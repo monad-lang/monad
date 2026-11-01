@@ -44,8 +44,8 @@
 /// reflowed it would destroy the layout that carries the meaning.
 use json::json {Json}
 use lang::module {
-  DeclRange, RangedFileCheck, decl_range_kind, decl_range_name, decl_range_span,
-  decl_ranges_of_source, ranged_file_ranges,
+  DeclRange, RangedFileCheck, decl_range_kind, decl_range_name, decl_range_name_span,
+  decl_range_span, decl_ranges_of_source, ranged_file_ranges,
 }
 use lang::navigation {
   NavTarget, nav_at_cursor, nav_target_detail, nav_target_file, nav_target_name,
@@ -59,7 +59,7 @@ use lsp::params {lsp_param_nested_i64, lsp_param_str}
 use toolkit::docstore {DocStore, docstore_text, docstore_uri_of_path}
 use toolkit::jsonrpc {rpc_object}
 use toolkit::position {
-  LineIndex, PositionEncoding, WirePosition, line_index_of_source, offset_of_wire,
+  LineIndex, PositionEncoding, WirePosition, WireRange, line_index_of_source, offset_of_wire,
   wire_position_mk, wire_range_of_offsets,
 }
 use toolkit::text {
@@ -339,7 +339,7 @@ def lsp_location_in_src (enc : PositionEncoding) (uri : String) (src : String) (
   let ix : LineIndex := line_index_of_source src in
   match lsp_decl_named (decl_ranges_of_source src) name {
     Option.none => Json.make_null,
-    Option.some dr => lsp_location_or_null enc uri ix src (decl_range_span dr),
+    Option.some dr => lsp_location_or_null enc uri ix src (decl_range_name_span dr),
   }
 
 /// One location, as the one-element array a client expects, or null.
@@ -422,27 +422,34 @@ def lsp_symbols_of (enc : PositionEncoding) (text : String) (ix : LineIndex)
 /// import is not one. So the kinds with no `SymbolKind` -- see `lsp_symbol_kind` --
 /// simply do not appear, which is the same five-kind filter the Rust server applied.
 ///
-/// `range` AND `selectionRange` ARE THE SAME SPAN, which is a limitation and not a
-/// simplification. The specification wants `range` to cover the declaration and
-/// `selectionRange` to cover its NAME, and it requires `selectionRange` to be contained
-/// by `range`. The declaration table records one span per declaration and no position
-/// for its name, so the honest choice is the whole span for both -- an editor highlights
-/// the declaration rather than the name, which is what the replaced server did and is
-/// less precise rather than wrong.
+/// `range` covers the declaration and `selectionRange` its name, which the
+/// specification requires to sit inside `range`; a declaration with no whole-word
+/// name in its header (an unnamed instance) gets its whole span for both.
 #[partial]
 def lsp_symbol_of (enc : PositionEncoding) (text : String) (ix : LineIndex) (dr : DeclRange)
     : Option Json :=
   match lsp_symbol_kind (decl_range_kind dr) {
     Option.none => Option.none,
     Option.some kind =>
-      match wire_range_of_source_range enc ix text (decl_range_span dr) {
+      lsp_symbol_json (decl_range_name dr) kind
+        (wire_range_of_source_range enc ix text (decl_range_span dr))
+        (wire_range_of_source_range enc ix text (decl_range_name_span dr)),
+  }
+
+#[partial]
+def lsp_symbol_json (name : String) (kind : I64) (range : Option WireRange)
+    (selection : Option WireRange) : Option Json :=
+  match range {
+    Option.none => Option.none,
+    Option.some r =>
+      match selection {
         Option.none => Option.none,
-        Option.some r =>
+        Option.some sel =>
           Option.some (rpc_object [
-            Pair.pair "name" (Json.make_str (decl_range_name dr)),
+            Pair.pair "name" (Json.make_str name),
             Pair.pair "kind" (Json.make_num_int kind),
             Pair.pair "range" (wire_range_json r),
-            Pair.pair "selectionRange" (wire_range_json r),
+            Pair.pair "selectionRange" (wire_range_json sel),
           ]),
       },
   }

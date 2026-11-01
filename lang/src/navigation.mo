@@ -76,10 +76,11 @@
 /// filesystem out of a module whose whole subject is name resolution.
 use lib::module {
   DeclRange, ModuleInfo, ModuleInfoCache, RangedFileCheck, class_decl_name, struct_decl_name,
-  decl_range_kind, decl_range_name, decl_range_span, inductive_decl_name,
+  decl_range_kind, decl_range_name, decl_range_name_span, inductive_decl_name,
   located_decl_list, located_decl_spans, module_info_cache_lookup, ranged_file_cache,
   ranged_file_located, ranged_file_ranges, ranged_file_scope,
 }
+use lib::decl_text {dt_advance}
 use lib::parser {LocatedDecls}
 use lib::pretty {show_class, show_inductive, show_struct, show_term}
 use lib::scope {
@@ -268,7 +269,7 @@ def nav_local (name : String) (dr : DeclRange) (decls : List Decl) (scope : Scop
   let kind : String := decl_range_kind dr in
   let no_file : Option String := Option.none in
   nav_target_mk name (nav_detail_by_kind name kind decls scope) kind no_file
-    (Option.some (decl_range_span dr))
+    (Option.some (decl_range_name_span dr))
 
 /// A name the outline does not carry: a type, a constructor or a class from
 /// the scope, or a `use`d def whose owning module the cache can name.
@@ -358,14 +359,14 @@ def nav_decl_named (ranges : List DeclRange) (name : String) : Option DeclRange 
       else nav_decl_named rest name,
   }
 
-/// The span of the declaration called `name`, or nothing -- the outline's
+/// The name span of the declaration called `name`, or nothing -- the outline's
 /// half of the same lookup, for a target whose kind came from the scope
 /// rather than from the file.
 #[partial]
 def nav_span_named (ranges : List DeclRange) (name : String) : Option SourceRange :=
   match nav_decl_named ranges name {
     Option.none => Option.none,
-    Option.some dr => Option.some (decl_range_span dr),
+    Option.some dr => Option.some (decl_range_name_span dr),
   }
 
 /// The `ModuleInfoCache`'s answer for a module: the file on disk its
@@ -595,27 +596,11 @@ def nav_binder_range (source : String) (name : String) (offset : Option I64)
       Option.some r,
   }
 
-/// A byte offset as a `Location`: 1-based line and column, the convention
-/// the parser's own ranges use.
+/// A byte offset as a `Location`, in the parser's own convention.
 #[partial]
 def nav_location_at (source : String) (off : I64) : Location :=
-  nav_location_scan (String.to_list (String.slice source 0 off)) 0 1 0
-
-/// `line` so far, and the offset just past the last newline seen.
-#[partial]
-def nav_location_scan (bytes : List U8) (i : I64) (line : I64) (line_start : I64) : Location :=
-  match bytes {
-    List.empty =>
-      let loc : Location := { offset := i, line := line, column := i - line_start + 1 } in
-      loc,
-    // One self-call, so the compiled backend's tail-call loop applies.
-    List.cons b rest =>
-      let nl : Bool := U8.beq b nav_byte_newline in
-      nav_location_scan rest (i + 1) (if nl then line + 1 else line)
-        (if nl then i + 1 else line_start),
-  }
-
-def nav_byte_newline : U8 := 10u8
+  let origin : Location := { offset := 0, line := 1, column := 1 } in
+  dt_advance (String.to_list source) off origin
 
 // --- The walk over the buffer's declarations ---
 
@@ -959,7 +944,7 @@ def nav_word_scan (uses : List I64) (name : String) (base : I64) (bytes : List U
     (run_start : I64) (run : List U8) (best : Option I64) : Option I64 :=
   match bytes {
     List.empty => nav_word_close uses name (base + run_start) run best,
-    // One self-call, for the same reason as `nav_location_scan`.
+    // One self-call, so the compiled backend's tail-call loop applies.
     List.cons b rest =>
       let in_run : Bool := nav_byte_is_identifier b in
       let no_run : List U8 := List.empty in

@@ -64,9 +64,9 @@ oracle before any session runs, so a fixture edit that moves the offending byte 
 loudly with the numbers rather than silently re-deriving an expectation that then agrees
 with a buggy server.
 
-A type error would not do here: its range is a declaration's whole-line span, which lands
-on a line boundary, and a column that lands on a line boundary is zero under every
-encoding and tests nothing. The difference is only observable mid-line.
+A type error would not do here: its range is a whole declaration's span, which starts at
+column zero -- the same number under every encoding, so it tests nothing. The difference
+is only observable mid-line.
 
 ### The same position, spelled three ways
 
@@ -102,13 +102,14 @@ inside `\zz_replay_shadowed => zz_replay_shadowed` answer the lambda's binder, l
 columns 5..23. The struct pin flipped with struct hover: hover on `ZzReplayShape`'s
 declaration renders the struct (`show_struct`) instead of its bare name.
 
-Two more measured oddities are pinned rather than fixed, both in `lang/` and both shared
-with other work:
+One more measured oddity is pinned rather than fixed, in `lang/` and shared with other
+work:
 
 - **An unnamed instance lists in the picker as `_`.** That is the parser's own sentinel —
   `instance_try_named` (`lang/src/parser.mo:3394`) defaults the name to
-  `Identifier.id "_"` — not an LSP accident.
-- **`def` ranges are whole lines; `struct`/`type`/`class`/`instance` ranges are byte-exact
-  to one past the closing brace.** So `struct ZzReplayShape {` at line 16 through `}` at
-  line 19 is `(16,0)..(19,1)`, not `(16,0)..(21,0)`. Both come from the same table by
-  different mechanisms.
+  `Identifier.id "_"` — not an LSP accident. Its `selectionRange` is its whole span,
+  since there is no name in its header to select.
+
+Every declaration's range ends one past its last token (`struct ZzReplayShape {` at line
+16 through `}` at line 19 is `(16,0)..(19,1)`; `def zz_replay_width` is `(38,0)..(38,56)`),
+and `definition` and `selectionRange` cover the declaration's name.

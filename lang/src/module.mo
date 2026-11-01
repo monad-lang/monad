@@ -24,6 +24,7 @@ use lib::parser {
 }
 use parsec::core {ParseError, ParseResult, parse_error_remaining}
 use lib::parser::diagnostic {parse_error_location, render_parse_error}
+use lib::decl_text {decl_text_ranges, dt_drop}
 use lang::mote {
   BinTarget, Mote.affine_mode_of_path, Mote.discover, Mote.manifest_at, Mote.manifest_of_attr,
   Mote.manifest_problem,
@@ -230,7 +231,12 @@ pub def show_parse_error (input : String) (path : Option String) (e : ParseError
 pub struct DeclRange {
     name : String,
     kind : String,
+    /// The declaration as written: from its first token to its last, so a
+    /// def's span stops at its own line rather than the next declaration's.
     range : SourceRange,
+    /// The name's own extent inside `range`, or `range` itself when the
+    /// header has no whole-word name (an unnamed instance's `_`).
+    name_range : SourceRange,
 }
 
 // Every field read below is routed through a one-line typed accessor rather
@@ -245,6 +251,8 @@ pub def decl_range_name (dr : DeclRange) : String := dr.name
 pub def decl_range_kind (dr : DeclRange) : String := dr.kind
 
 pub def decl_range_span (dr : DeclRange) : SourceRange := dr.range
+
+pub def decl_range_name_span (dr : DeclRange) : SourceRange := dr.name_range
 
 pub def located_decl_list (l : LocatedDecls) : List Decl := l.decl_list
 
@@ -307,13 +315,16 @@ def decl_name_and_kind (d : Decl) : Pair String String := match d {
 #[partial]
 pub def decl_ranges_of_source (src : String) : List DeclRange :=
     match decls_parser_located_with_ranges src {
-        ParseResult.success _rem located => decl_ranges_of_located located,
+        ParseResult.success _rem located => decl_ranges_of_located src located,
         ParseResult.fail _e => List.empty,
     }
 
+/// The parse's spans, trimmed and given name ranges from `src`'s bytes
+/// (`lang/src/decl_text.mo`). The file is turned into bytes once and walked
+/// forward, since the spans come in source order.
 #[partial]
-def decl_ranges_of_located (located : LocatedDecls) : List DeclRange :=
-    zip_decl_ranges (located_decl_list located) (located_decl_spans located) List.empty
+def decl_ranges_of_located (src : String) (located : LocatedDecls) : List DeclRange :=
+    zip_decl_ranges (String.to_list src) 0 (located_decl_list located) (located_decl_spans located) List.empty
 
 /// Pair each declaration with its range, one for one.
 ///
@@ -322,20 +333,37 @@ def decl_ranges_of_located (located : LocatedDecls) : List DeclRange :=
 /// is a visible absence, while a declaration with the NEXT one's range is a
 /// silently wrong answer. `lang/src/tests/decl_range_tests.mo` pins the
 /// count equality that makes this branch unreachable.
+///
+/// `bytes` is the file from byte `pos` on.
 #[partial]
-def zip_decl_ranges (ds : List Decl) (spans : List SourceRange) (acc : List DeclRange) : List DeclRange :=
+def zip_decl_ranges (bytes : List U8) (pos : I64) (ds : List Decl) (spans : List SourceRange)
+    (acc : List DeclRange) : List DeclRange :=
     match ds {
         List.empty => list_reverse acc,
         List.cons d rest => match spans {
             List.empty => list_reverse acc,
-            List.cons s srest => zip_decl_ranges rest srest (List.cons (mk_decl_range d s) acc),
+            List.cons s srest =>
+                let off : I64 := span_start_offset s in
+                let here : List U8 := dt_drop bytes (off - pos) in
+                zip_decl_ranges here off rest srest (List.cons (mk_decl_range d s here) acc),
         },
     }
 
+def span_start_offset (s : SourceRange) : I64 := s.start.offset
+
+def span_len (s : SourceRange) : I64 := s.end.offset - s.start.offset
+
+def span_start (s : SourceRange) : Location := s.start
+
 #[partial]
-def mk_decl_range (d : Decl) (range : SourceRange) : DeclRange :=
+def mk_decl_range (d : Decl) (range : SourceRange) (bytes : List U8) : DeclRange :=
     match decl_name_and_kind d {
-        Pair.pair n k => DeclRange.mk n k range,
+        Pair.pair n k =>
+            match decl_text_ranges bytes (span_start range) (span_len range) n {
+                Pair.pair trimmed named =>
+                    let dr : DeclRange := { name := n, kind := k, range := trimmed, name_range := named } in
+                    dr,
+            },
     }
 
 // --- Module dependency loading ---
@@ -3158,7 +3186,7 @@ def no_decl_ranges : List DeclRange := List.empty
 #[partial]
 def ranged_truncation (cache : ModuleInfoCache) (file_path : String) (source : String)
     (located : LocatedDecls) : RangedFileCheck :=
-    let ranges : List DeclRange := decl_ranges_of_located located in
+    let ranges : List DeclRange := decl_ranges_of_located source located in
     match decls_parser_strict source {
         ParseResult.fail e => ranged_parse_failure cache file_path source ranges located e,
         // Unreachable in practice: `decls_skip_strict` consumes the whole
@@ -3190,7 +3218,7 @@ def ranged_truncation (cache : ModuleInfoCache) (file_path : String) (source : S
 #[partial]
 def check_buffer_ranged (cache : ModuleInfoCache) (file_path : String) (source : String)
     (located : LocatedDecls) (verbose : Bool) : IO RangedFileCheck := do {
-    let decl_ranges : List DeclRange := decl_ranges_of_located located;
+    let decl_ranges : List DeclRange := decl_ranges_of_located source located;
     let ec <- elaborate_loaded_modules_cached_go file_path false (Option.some source) cache verbose;
     let out_cache : ModuleInfoCache := ec.cache;
     match ec.elaborated {
