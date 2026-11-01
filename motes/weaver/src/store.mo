@@ -266,14 +266,42 @@ pub def Transcript.empty : Transcript :=
 pub def Transcript.next_block (t : Transcript) (lines : List TLine) : List TLine :=
     if t.total > 0 then List.cons (TLine.plain "") lines else lines
 
+/// Lines the tail cap drops move to the END of a loaded page that
+/// reaches the tail, so the loaded window stays contiguous: a gap there
+/// would read back as blank placeholder lines in the middle of the view.
 pub def Transcript.append (t : Transcript) (lines : List TLine) : Transcript :=
     let total2 : I64 := t.total + list_len lines in
-    let tail2 : List TLine := take_last Store.tail_lines (List.append t.tail lines) in
-    let t2 : Transcript := { t with total := total2, tail_start := total2 - list_len tail2, tail := tail2 } in
+    let all : List TLine := List.append t.tail lines in
+    let tail2 : List TLine := take_last Store.tail_lines all in
+    let dropped : List TLine := take_n (list_len all - list_len tail2) all in
+    let page2 : Option TranscriptPage := match t.page {
+        Option.none => Option.none,
+        Option.some q =>
+            if q.start + list_len q.lines == t.tail_start
+            then Option.some (mk_page q.start (List.append q.lines dropped))
+            else t.page,
+    } in
+    let t2 : Transcript := { t with total := total2, tail_start := total2 - list_len tail2, tail := tail2, page := page2 } in
     t2
 
+/// An older page that ENDS where the loaded page starts extends it
+/// (paging up reads one page at a time, each directly above the last);
+/// any other page replaces it. Replacing a contiguous page used to leave
+/// a hole between the new page and the tail, painted as blank rows.
 pub def Transcript.with_page (t : Transcript) (p : TranscriptPage) : Transcript :=
-    let t2 : Transcript := { t with page := Option.some p, page_error := Option.none } in
+    let merged : TranscriptPage := match t.page {
+        Option.none => p,
+        Option.some q =>
+            if p.start + list_len p.lines == q.start
+            then mk_page p.start (List.append p.lines q.lines)
+            else p,
+    } in
+    let t2 : Transcript := { t with page := Option.some merged, page_error := Option.none } in
+    t2
+
+/// Drop the loaded page (End re-pins): memory returns to the tail.
+pub def Transcript.drop_page (t : Transcript) : Transcript :=
+    let t2 : Transcript := { t with page := Option.none, page_error := Option.none } in
     t2
 
 def page_start (t : Transcript) : I64 :=

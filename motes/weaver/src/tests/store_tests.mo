@@ -6,7 +6,7 @@ use weaver::store {
     TLine.markdown_line, TLine.thinking_marker,
     Transcript, TranscriptPage, StoreIndex, StoreIndexBlock, StoreMeta,
     Transcript.empty, Transcript.append, Transcript.next_block, Transcript.slice,
-    Transcript.with_page,
+    Transcript.with_page, Transcript.drop_page,
     Store.encode_block, Store.decode_block, Store.encode_index, Store.decode_index,
     Store.encode_meta, Store.decode_meta, Store.pad12, Store.chunks, Store.root_of,
     Store.tail_lines, Store.fill_title, Store.derive_name, Store.derive_description,
@@ -92,6 +92,47 @@ def test_page_covers_lines_above_the_tail : Bool :=
 def test_uncovered_indices_are_placeholders : Bool :=
     let t : Transcript := Transcript.append Transcript.empty (plain_from 600) in
     texts (Transcript.slice t 0 2) == ["", ""] && texts (Transcript.slice t 86 4) == ["", "", "l89", "l90"]
+
+/// Lines `l(a+1) .. l(a+n)`: absolute indices `a .. a+n-1`.
+def range_lines (a : I64) (n : I64) : List TLine := plain_go (a + 1) (a + n)
+
+/// Paging up reads one page directly above the loaded one; the two must
+/// MERGE. Replacing left the old page's range uncovered between the new
+/// page and the tail -- 512 blank placeholder lines in the scroll view.
+#[test]
+def test_contiguous_pages_merge_without_a_gap : Bool :=
+    let t0 : Transcript := Transcript.append Transcript.empty (plain_from 1200) in
+    let upper : TranscriptPage := { start := 176, lines := range_lines 176 512 } in
+    let lower : TranscriptPage := { start := 0, lines := range_lines 0 176 } in
+    let t : Transcript := Transcript.with_page (Transcript.with_page t0 upper) lower in
+    texts (Transcript.slice t 174 4) == ["l175", "l176", "l177", "l178"]
+        && texts (Transcript.slice t 686 4) == ["l687", "l688", "l689", "l690"]
+
+/// A page that is not adjacent to the loaded one still replaces it.
+#[test]
+def test_non_adjacent_page_replaces : Bool :=
+    let t0 : Transcript := Transcript.append Transcript.empty (plain_from 1200) in
+    let a : TranscriptPage := { start := 176, lines := range_lines 176 512 } in
+    let b : TranscriptPage := { start := 0, lines := range_lines 0 10 } in
+    let t : Transcript := Transcript.with_page (Transcript.with_page t0 a) b in
+    texts (Transcript.slice t 0 2) == ["l1", "l2"] && texts (Transcript.slice t 200 1) == [""]
+
+/// Appending past the tail cap moves the dropped lines onto a page that
+/// reaches the tail, instead of opening a placeholder hole between them.
+#[test]
+def test_append_keeps_a_loaded_page_contiguous : Bool :=
+    let t0 : Transcript := Transcript.append Transcript.empty (plain_from 1200) in
+    let p : TranscriptPage := { start := 176, lines := range_lines 176 512 } in
+    let t1 : Transcript := Transcript.with_page t0 p in
+    let t : Transcript := Transcript.append t1 (plain_lines ["n1", "n2", "n3"]) in
+    t.tail_start == 691 && texts (Transcript.slice t 686 6) == ["l687", "l688", "l689", "l690", "l691", "l692"]
+
+#[test]
+def test_drop_page_returns_to_the_tail : Bool :=
+    let t0 : Transcript := Transcript.append Transcript.empty (plain_from 600) in
+    let p : TranscriptPage := { start := 0, lines := plain_from 88 } in
+    let t : Transcript := Transcript.drop_page (Transcript.with_page t0 p) in
+    texts (Transcript.slice t 0 1) == [""]
 
 #[test]
 def test_slice_clamps_outside_the_transcript : Bool :=

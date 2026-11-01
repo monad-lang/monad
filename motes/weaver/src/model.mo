@@ -305,6 +305,13 @@ pub struct TuiModel {
     /// A clean plan-mode turn produced a plan: the persistence
     /// continuation opens the "Plan ready" dialog once the turn folds.
     plan_ready : Bool := false,
+    /// The user is scrolling UP (PageUp/Ctrl+U/wheel/Home): prefetch
+    /// older pages even when the clamped scroll cannot move any further.
+    /// Cleared by a down scroll or End.
+    want_older : Bool := false,
+    /// Home was pressed: keep loading pages and stay pinned to the loaded
+    /// top until the transcript's first line is loaded.
+    want_top : Bool := false,
     /// This turn warrants an agent-generated session title (the first
     /// turn, or one that produced a plan): the next frame tick forks the
     /// title call, so it never blocks the turn's persistence or its
@@ -347,7 +354,7 @@ pub def init_tui_model (log : Option Logger) (st : WeaverState) (rows : I64) (co
 
 /// The startup tail loaded from the session store.
 pub def init_tui_model_with (log : Option Logger) (st : WeaverState) (rows : I64) (cols : I64) (tr : Transcript) : TuiModel :=
-    let m : TuiModel := { state := st, input := input_state "" input_placeholder, transcript := tr, rows := rows, cols := cols, ctrl_c_streak := 0, ctrl_d_streak := 0, scroll := 0, row_total := 0, scroll_drag := Option.none, hist := List.empty, hist_idx := 0 - 1, turn_pending := false, spinner_frame := 0, page_pending := false, rows_cache := List.empty, rows_key := Option.none, sel := Option.none, banner := true, banner_frame := 0, live_spent := Option.none, live_base := Option.none, live_text := "", live_seen := 0, live_thinking := "", live_thinking_seen := 0, live_activity := Option.none, show_details := false, modal := false, plan_ready := false, title_due := false, stop_requested := false, turn_gen := 0, overlay_open := false, dialog_seq := 0, picker := Option.none, queued := List.empty, queued_ready := false, log := log } in
+    let m : TuiModel := { state := st, input := input_state "" input_placeholder, transcript := tr, rows := rows, cols := cols, ctrl_c_streak := 0, ctrl_d_streak := 0, scroll := 0, row_total := 0, scroll_drag := Option.none, hist := List.empty, hist_idx := 0 - 1, turn_pending := false, spinner_frame := 0, page_pending := false, rows_cache := List.empty, rows_key := Option.none, sel := Option.none, banner := true, banner_frame := 0, live_spent := Option.none, live_base := Option.none, live_text := "", live_seen := 0, live_thinking := "", live_thinking_seen := 0, live_activity := Option.none, show_details := false, modal := false, plan_ready := false, want_older := false, want_top := false, title_due := false, stop_requested := false, turn_gen := 0, overlay_open := false, dialog_seq := 0, picker := Option.none, queued := List.empty, queued_ready := false, log := log } in
     Model.refresh_rows m
 
 /// The input box's placeholder, shared by the live edit and a history
@@ -910,29 +917,35 @@ pub def Model.loaded_shown (m : TuiModel) : LoadedWindow :=
     let lw2 : LoadedWindow := { start := lw.start, lines := lines } in
     lw2
 
-/// The whole loaded window's row count, plus one row per placeholder line
-/// before it. This is the scroll clamp's `len`.
+/// The whole loaded window's row count. This is the scroll clamp's `len`
+/// and the window's row space: the unloaded prefix contributes NO rows.
+/// Counting a row per unloaded LINE made the space disagree with the
+/// loaded one (a hidden detail line contributes none), so scrolling up
+/// moved through phantom rows -- slow, jumpy, and blank.
 pub def Model.row_total_of (m : TuiModel) : I64 :=
     let lw : LoadedWindow := Model.loaded_shown m in
-    lw.start + rows_of_lines m.state.colors (Model.content_width m) lw.lines
+    rows_of_lines m.state.colors (Model.content_width m) lw.lines
 
-/// The logical line containing absolute display row `row`.
+/// The absolute line containing display row `row` of the loaded window.
+/// Hidden detail lines still COUNT as lines (they are skipped in the row
+/// walk but they are real lines above the window), so the indicator's
+/// "N lines above" is the true transcript position.
 #[partial]
-def first_line_at_row_go (colors : Bool) (width : I64) (lines : List TLine) (idx : I64) (off : I64) (target : I64) : I64 :=
+def first_line_at_row_go (colors : Bool) (width : I64) (show : Bool) (lines : List TLine) (abs : I64) (off : I64) (target : I64) : I64 :=
     match lines {
-        List.empty => idx,
+        List.empty => abs,
         List.cons l rest =>
-            let n : I64 := Model.rows_of_line colors width l in
+            let n : I64 := if Bool.and (Bool.not show) l.detail then 0 else Model.rows_of_line colors width l in
             if target < off + n
-            then idx
-            else first_line_at_row_go colors width rest (idx + 1) (off + n) target,
+            then abs
+            else first_line_at_row_go colors width show rest (abs + 1) (off + n) target,
     }
 
 pub def Model.first_line_at_row (m : TuiModel) (row : I64) : I64 :=
-    let lw : LoadedWindow := Model.loaded_shown m in
-    if row < lw.start
-    then row
-    else first_line_at_row_go m.state.colors (Model.content_width m) lw.lines lw.start 0 (row - lw.start)
+    let lw : LoadedWindow := Model.loaded_window m.transcript in
+    if row < 0
+    then lw.start
+    else first_line_at_row_go m.state.colors (Model.content_width m) m.show_details lw.lines lw.start 0 row
 
 /// Collect `count` display rows starting at relative row `start` of the
 /// loaded lines. Rows of a line taller than the window can start inside a
@@ -956,27 +969,20 @@ def collect_rows_go (colors : Bool) (width : I64) (lines : List TLine) (off : I6
                 collect_rows_go colors width rest line_end start (count - take) (List.append acc picked),
     }
 
-#[partial]
-def blank_rows (n : I64) (style : TextStyle) : List DisplayRow :=
-    if n < 1 then List.empty
-    else List.cons (mk_row style "") (blank_rows (n - 1) style)
-
 /// The display rows the panel shows, top to bottom; when scrolled, the
-/// indicator row is prepended and spends one content row.
+/// indicator row is prepended and spends one content row. Only LOADED
+/// lines contribute rows: a page that has not arrived yet is simply not
+/// in the scroll space (the loader keeps up, see `Model.needs_page`), so
+/// there are no blank placeholder rows to scroll through.
 pub def Model.visible_rows (m : TuiModel) : List DisplayRow :=
     let w : Window := Model.window m in
     let lw : LoadedWindow := Model.loaded_shown m in
     let colors : Bool := m.state.colors in
     let width : I64 := Model.content_width m in
-    let gap_total : I64 := if w.start < lw.start then lw.start - w.start else 0 in
-    let gap : I64 := if w.count < gap_total then w.count else gap_total in
-    let placeholders : List DisplayRow := blank_rows gap (theme_line_style_with colors "") in
-    let rel_start : I64 := if w.start < lw.start then 0 else w.start - lw.start in
-    let content : List DisplayRow := collect_rows_go colors width lw.lines 0 rel_start (w.count - gap) List.empty in
-    let rows : List DisplayRow := List.append placeholders content in
+    let content : List DisplayRow := collect_rows_go colors width lw.lines 0 w.start w.count List.empty in
     if w.eff > 0
-    then List.cons (mk_row (theme_line_style_with colors (scrolled_indicator m w)) (scrolled_indicator m w)) rows
-    else rows
+    then List.cons (mk_row (theme_line_style_with colors (scrolled_indicator m w)) (scrolled_indicator m w)) content
+    else content
 
 pub def Model.rows_key_of (m : TuiModel) : RowsKey :=
     let pstart : I64 := match m.transcript.page { Option.some p => p.start, Option.none => 0 - 1 } in
@@ -1154,9 +1160,9 @@ pub def Model.live_row (m : TuiModel) : DisplayRow :=
 /// The absolute ROW window the panel shows. `eff` is the clamped scroll
 /// in rows; the scrolled panel spends ONE row on the indicator, so the
 /// content window is `panel_height - 1` rows ending `eff` rows above the
-/// bottom. `first_line` is the logical transcript line at the window top
-/// (placeholders count one row per line, so it is also the count of lines
-/// still above when the window starts in the not-yet-loaded prefix).
+/// bottom. `start` is relative to the LOADED window (its rows are the
+/// only ones that exist); `first_line` is the absolute transcript line
+/// at the window top, for the indicator.
 pub struct Window {
     start : I64,
     count : I64,
@@ -1174,16 +1180,22 @@ pub def Model.window (m : TuiModel) : Window :=
     let w : Window := { start := start, count := count, eff := eff, first_line := Model.first_line_at_row m start } in
     w
 
-/// The window's top still needs a page when it is above the loaded tail
-/// and above the loaded page (if any). A page always reaches the tail, so
-/// covering `first_line` is enough.
+/// Rows nearer than this to the loaded top trigger the next page: the
+/// load lands BEFORE the user reaches the boundary, and since the view is
+/// anchored to the bottom, content arriving above it does not move it.
+pub def Model.page_prefetch_rows : I64 := 32
+
+/// The loaded top is (nearly) on screen and older lines exist on disk.
+/// `want_top` (Home) keeps loading until the transcript's true first
+/// line, even while the view is pinned at the loaded top. An untouched
+/// view (scroll 0, no up intent) never prefetches, so opening a session
+/// does not read its history.
 pub def Model.needs_page (m : TuiModel) (w : Window) : Bool :=
-    let ts : I64 := m.transcript.tail_start in
-    if Bool.not (w.first_line < ts) then false
-    else match m.transcript.page {
-        Option.none => true,
-        Option.some p => if w.first_line < p.start then true else false,
-    }
+    let lw : LoadedWindow := Model.loaded_window m.transcript in
+    if Bool.not (0 < lw.start) then false
+    else if m.want_top then true
+    else if Bool.not (Bool.or m.want_older (0 < m.scroll)) then false
+    else w.start <= Model.page_prefetch_rows
 
 /// The range to load: one page ending at the top of the tail, or above
 /// the loaded page when the window has scrolled past that.
@@ -1447,11 +1459,12 @@ pub def Model.scrollbar_column (m : TuiModel) : Widget :=
 
 /// The scroll state machine: `scroll` counts WRAPPED ROWS above the
 /// pinned bottom. The delta moves the window (PageUp/Ctrl+U positive,
-/// i.e. older; PageDown negative), clamped at both ends. Ctrl+D is the
-/// double-press exit gesture, not a scroll key.
+/// i.e. older; PageDown negative), clamped at both ends. The clamp runs
+/// in `refresh_rows` against the FRESHLY computed row total -- the cached
+/// `row_total` can lag a transcript/page swap by one fold.
 #[partial]
 pub def Model.scroll_step (m : TuiModel) (delta : I64) : TuiModel :=
-    let m2 : TuiModel := { m with scroll := scroll_clamp (m.scroll + delta) m.row_total (Model.body_height m) } in
+    let m2 : TuiModel := { m with scroll := m.scroll + delta } in
     Model.refresh_rows m2
 
 /// A new block of transcript lines: the blank separator row in front
@@ -1464,8 +1477,10 @@ pub def Model.append_block (m : TuiModel) (lines : List TLine) : TuiModel :=
     let block : List TLine := Transcript.next_block m.transcript lines in
     let tr2 : Transcript := Transcript.append m.transcript block in
     // The row count is only needed to hold a SCROLLED view in place. A
-    // pinned view stays at 0, so the extra wrap of the whole block would
-    // be pure waste -- and for one huge message it was a visible freeze.
+    // pinned view stays at 0, so the extra wrap would be pure waste -- and
+    // for one huge message it was a visible freeze. Only the block's own
+    // rows count: lines the tail cap DROPS were above the window, which is
+    // anchored to the bottom, so they never move it.
     let m2 : TuiModel :=
         if m.scroll > 0
         then

@@ -24,12 +24,13 @@ use weaver::model {
     Model.display_rows, Model.content_width, DisplayRow,
     Model.display_line, Model.display_plain, Model.display_cap_bytes,
     Model.body_height, Model.thinking_text, Model.live_stream_height, Model.live_row, status_line,
-    Model.row_total_of, Model.view, Model.panel_top_of, Model.panel_left,
+    Model.row_total_of, Model.first_line_at_row, Model.refresh_rows,
+    Model.view, Model.panel_top_of, Model.panel_left,
 }
 use tui::render {render}
 use tui::core {empty_screen, mk_rect, screen_get_cell}
 use tui::types {Screen}
-use weaver::store {TLine, TLine.plain, TLine.detail_line, TranscriptPage, Transcript.with_page}
+use weaver::store {TLine, TLine.plain, TLine.detail_line, Transcript, TranscriptPage, Transcript.with_page}
 
 def mock_config : ProviderConfig :=
     { base_url := "mock", model := "mock", api_key_env := "WEAVER_UNUSED_KEY", max_tokens := 8, wire := Wire.mock, thinking := false }
@@ -53,6 +54,14 @@ def nth_line (i : I64) : String := String.concat "l" (I64.to_string i)
 #[partial]
 def lines_up_to (k : I64) (i : I64) : List TLine :=
     if i > k then List.empty else List.cons (TLine.plain (nth_line i)) (lines_up_to k (i + 1))
+
+/// `k` hidden detail lines, as a thinking body writes them.
+#[partial]
+def detail_up_to (k : I64) (i : I64) : List TLine :=
+    if i > k then List.empty
+    else List.cons (TLine.detail_line (String.concat "d" (I64.to_string i))) (detail_up_to k (i + 1))
+
+def detail_block (k : I64) : List TLine := detail_up_to k 1
 
 /// One block of `l1..lk` on an empty transcript (no gap line).
 #[partial]
@@ -159,8 +168,10 @@ def test_pinned_tail_after_overflow : Bool :=
 def test_home_window_precedes_the_tail : Bool :=
     let m := Model.scroll_step (filled 600) 999999 in
     let w : Window := Model.window m in
-    let at_top : Bool := w.first_line == 0 in
-    at_top && Model.needs_page m w
+    // The window is pinned to the LOADED top (`tail_start`), not to a
+    // phantom row 0: unloaded lines have no rows to scroll through.
+    let at_loaded_top : Bool := w.first_line == 88 in
+    at_loaded_top && Model.needs_page m w
 
 #[test]
 def test_page_request_covers_the_pre_tail : Bool :=
@@ -187,11 +198,76 @@ def test_loaded_page_covers_the_top : Bool :=
 #[test]
 def test_stay_put_append_holds_the_absolute_top : Bool :=
     let m := Model.scroll_step (filled 600) 5 in
-    let before : I64 := m.scroll in
-    let w0 : Window := Model.window m in
+    let before : String := first_content_of (Model.visible_rows m) in
     let m2 := Model.append_block m [TLine.plain (nth_line 601)] in
-    let w2 : Window := Model.window m2 in
-    m2.scroll == before + 2 && w2.start == w0.start
+    // The tail cap drops the two oldest lines on this append, so the
+    // RELATIVE start moves while the content must not: compare the line.
+    m2.scroll == 7 && first_content_of (Model.visible_rows m2) == before
+
+// ── the scroll space holds only LOADED rows ───────────────────────────
+// The unloaded prefix used to count one row per line, so a long session
+// scrolled through phantom rows: each step moved almost nothing, and at
+// the top the whole pane was blank placeholders. Home/max scroll on an
+// overflowing session must paint real loaded lines instead.
+
+/// The first CONTENT row's text (the scrolled indicator is not content).
+#[partial]
+def first_content_of (rs : List DisplayRow) : String :=
+    match rs {
+        List.empty => "",
+        List.cons r rest =>
+            if String.contains r.text "lines above" then first_content_of rest else r.text,
+    }
+
+#[partial]
+def all_nonempty (rs : List DisplayRow) : Bool :=
+    match rs {
+        List.empty => true,
+        List.cons r rest => Bool.and (Bool.not (String.is_empty r.text)) (all_nonempty rest),
+    }
+
+#[test]
+def test_home_shows_loaded_lines_not_blank_placeholders : Bool :=
+    let vis := Model.visible_rows (Model.scroll_step (filled 600) 999999) in
+    match vis {
+        List.cons _ rest => first_text_of rest == "l89" && all_nonempty vis,
+        List.empty => false,
+    }
+
+/// Hidden detail lines still COUNT as transcript lines: the indicator is
+/// the absolute position, not an index into the visible lines.
+#[test]
+def test_first_line_counts_hidden_detail_lines : Bool :=
+    let details : List TLine := detail_block 40 in
+    let m : TuiModel := Model.append_block model_of (List.append details (lines_up_to 20 1)) in
+    Model.first_line_at_row m 0 == 40
+
+/// Scrolled into a loaded page when the NEXT page lands: the view must
+/// still be real lines. The second page used to replace the first, and
+/// the first page's range came back as blank placeholder rows.
+#[test]
+def test_second_page_leaves_no_blank_rows : Bool :=
+    let base : TuiModel := Model.scroll_step (filled 1200) 30 in
+    let p1 : TranscriptPage := { start := 176, lines := lines_up_to 688 177 } in
+    let tr1 : Transcript := Transcript.with_page base.transcript p1 in
+    let m1 : TuiModel := { base with transcript := tr1 } in
+    let m2 : TuiModel := Model.scroll_step m1 520 in
+    let p2 : TranscriptPage := { start := 0, lines := lines_up_to 176 1 } in
+    let tr2 : Transcript := Transcript.with_page m2.transcript p2 in
+    let m3 : TuiModel := { m2 with transcript := tr2 } in
+    let m4 : TuiModel := Model.scroll_step m3 17 in
+    all_nonempty (Model.visible_rows m4)
+
+/// A page arriving above a bottom-anchored view does not move it.
+#[test]
+def test_loaded_page_above_holds_the_view : Bool :=
+    let m := Model.scroll_step (filled 600) 5 in
+    let bottom : String := last_text_of (Model.visible_rows m) in
+    let p : TranscriptPage := { start := 0, lines := lines_up_to 88 1 } in
+    let tr : Transcript := Transcript.with_page m.transcript p in
+    let m1 : TuiModel := { m with transcript := tr } in
+    let m2 : TuiModel := Model.refresh_rows m1 in
+    last_text_of (Model.visible_rows m2) == bottom
 
 // ── line wrap ─────────────────────────────────────────────────────────
 

@@ -396,11 +396,21 @@ degrades to the pre-store in-memory behavior with one warning line. The
 line-based (piped) UI persists the per-turn history only -- it has no
 rendered transcript to store.
 
-The TUI keeps only a window: the last 512 transcript lines plus at most
-one older page. Scrolling above that reads the needed blocks back from
-disk, so the full scrollback is reachable while memory stays bounded.
-The model's conversation history (what a provider call needs) remains
-in memory by design; the rendered copy no longer accumulates.
+The TUI keeps only a window: the last 512 transcript lines, plus the
+older lines scrolling up has paged in. Scrolling is over the LOADED rows
+only -- unloaded lines take no rows in the scroll space (counting one row
+per line made a long session scroll through phantom rows: each key moved
+almost nothing, and the top of the transcript was blank placeholder
+rows). Nearing the top of the loaded window prefetches the next 512-line
+page from disk; it lands directly ABOVE the loaded lines (pages merge, so
+there is never a hole between them) and above a bottom-anchored view, so
+the view does not move. Home keeps loading until the first line is in
+memory, and End releases the paged-in lines, so memory returns to the
+tail once the view is pinned again. Hidden detail lines (thinking bodies, tool
+output) are skipped when painting but still count for the `N lines
+above` indicator, which is the true transcript line. The model's
+conversation history (what a provider call needs) remains in memory by
+design; the rendered copy no longer accumulates.
 
 Bare `/resume` opens a picker of the saved sessions, newest first: each
 row carries the session's **name** and a one-line **description**, the

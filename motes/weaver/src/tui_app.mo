@@ -52,7 +52,7 @@ use weaver::title {Title.generate, Title.needed}
 use weaver::subagent {Subagent.task_tool}
 use weaver::store {
     Transcript, TranscriptPage, StoreState,
-    Transcript.empty, Transcript.with_page, Transcript.next_block, Transcript.append,
+    Transcript.empty, Transcript.with_page, Transcript.next_block, Transcript.append, Transcript.drop_page,
     Store.read_page, Store.append_transcript, Store.record_turn, Store.record_output,
     Store.startup_transcript, Store.append_chunk, Store.discard_live,
     Store.append_history_note, Store.child, Store.append_named, Store.write_named, Store.write_plan,
@@ -354,10 +354,18 @@ def failure_step (m : TuiModel) (run : RunState) (e : WeaverError) : Pair TuiMod
 
 // ── transcript paging ────────────────────────────────────────────────────
 
-/// The window after a scroll delta, plus a page load when the requested
-/// range is above the loaded tail and no page covers it.
+/// The window after a scroll delta, plus a page load when the loaded top
+/// is (nearly) on screen and older lines exist. Scrolling UP sets
+/// `want_older`, which keeps prefetching even when the clamped scroll
+/// can no longer move; any down scroll drops it (and a pending Home).
 def scroll_with_pages (m : TuiModel) (delta : I64) : Pair TuiModel (Cmd WeaverMsg) :=
-    let m2 : TuiModel := with_streak_reset (fn (mm : TuiModel) => Model.scroll_step mm delta) m in
+    let m1 : TuiModel :=
+        if delta > 0
+        then { m with want_older := true }
+        else if delta < 0
+        then { m with want_older := false, want_top := false }
+        else m in
+    let m2 : TuiModel := with_streak_reset (fn (mm : TuiModel) => Model.scroll_step mm delta) m1 in
     maybe_page_cmd m2
 
 def maybe_page_cmd (m : TuiModel) : Pair TuiModel (Cmd WeaverMsg) :=
@@ -375,7 +383,13 @@ def page_cmd_for (m : TuiModel) (st : StoreState) : Pair TuiModel (Cmd WeaverMsg
         Option.some req => match req {
             Pair.pair start count =>
                 let m2 : TuiModel := { m with page_pending := true } in
-                Pair.pair m2 (Cmd.perform (fn (_ : Unit) => load_page st start count)),
+                // `perform` forces a full repaint, which is written as a
+                // diff against a BLANK screen: without clearing the real
+                // terminal first, every cell that becomes blank keeps its
+                // old content (a paged scroll left stale fragments and
+                // blank rows). Every other transcript-changing perform
+                // goes through `after_clear` for the same reason.
+                Pair.pair m2 (Cmd.perform (fn (_ : Unit) => after_clear (load_page st start count))),
         },
     }
 
@@ -387,16 +401,20 @@ def load_page (st : StoreState) (start : I64) (count : I64) : IO WeaverMsg := do
     }
 }
 
-/// The rows cache keys on `page.start` only, so a page that EXTENDS the
-/// loaded range (same start) would otherwise reuse stale blank rows;
-/// every transcript/page replacement drops the key instead.
+/// An older page landed. Pages arrive ABOVE a bottom-anchored view, so
+/// the visible content does not move and `scroll` needs no fix-up --
+/// except for Home, which stays pinned to the loaded top and asks for the
+/// next page until the transcript's first line is loaded. The rows cache
+/// keys on `page.start` only, so every page replacement drops the key.
 def page_loaded_step (m : TuiModel) (p : TranscriptPage) : Pair TuiModel (Cmd WeaverMsg) :=
     let prev : Option TranscriptPage := m.transcript.page in
     let tr : Transcript := Transcript.with_page m.transcript p in
-    let m2 : TuiModel := { m with transcript := tr, page_pending := false, rows_key := Option.none } in
+    let m1 : TuiModel := { m with transcript := tr, page_pending := false, rows_key := Option.none } in
+    let m2 : TuiModel := if m1.want_top then Model.scroll_step m1 999999 else m1 in
+    let m3 : TuiModel := if p.start == 0 then { m2 with want_top := false } else m2 in
     if same_page prev p
-    then Pair.pair (with_page_error m2 "page read made no progress") Cmd.none
-    else maybe_page_cmd m2
+    then Pair.pair (with_page_error m3 "page read made no progress") Cmd.none
+    else maybe_page_cmd m3
 
 /// The same page served twice means the store cannot cover the window
 /// (a short block file, or a window taller than one page): stop rather
@@ -427,7 +445,8 @@ def page_failed_step (m : TuiModel) (e : String) : Pair TuiModel (Cmd WeaverMsg)
 
 def transcript_reset_step (m : TuiModel) (tr : Transcript) : Pair TuiModel (Cmd WeaverMsg) :=
     let m2 : TuiModel := { m with transcript := tr, scroll := 0, page_pending := false, rows_key := Option.none, banner := true, banner_frame := 0,
-                            queued := List.empty, queued_ready := false, title_due := false } in
+                            queued := List.empty, queued_ready := false, title_due := false,
+                            want_older := false, want_top := false } in
     maybe_page_cmd m2
 
 /// A store write failure disables persistence for the rest of the run;
@@ -679,7 +698,8 @@ def command_reset (m : TuiModel) (effect : Effect) : Pair TuiModel (Cmd WeaverMs
 
 def reset_in_memory (m : TuiModel) (output : String) : Pair TuiModel (Cmd WeaverMsg) :=
     let tr : Transcript := Transcript.append Transcript.empty (plain_lines (theme_split_lines output)) in
-    let m2 : TuiModel := { m with transcript := tr, scroll := 0, scroll_drag := Option.none, page_pending := false } in
+    let m2 : TuiModel := { m with transcript := tr, scroll := 0, scroll_drag := Option.none, page_pending := false,
+                            want_older := false, want_top := false } in
     Pair.pair m2 Cmd.none
 
 def reset_action (st : StoreState) (output : String) : IO WeaverMsg := do {
@@ -877,11 +897,22 @@ def editor_key (m : TuiModel) (k : Key) : Pair TuiModel (Cmd WeaverMsg) :=
             else if c == "o" then toggle_details m
             else if c == "u" then scroll_with_pages m (half_page m)
             else Pair.pair (streak_reset_input m k) Cmd.none,
-        Key.end => Pair.pair (with_streak_reset (fn (mm : TuiModel) => { mm with scroll := 0 }) m) Cmd.none,
-        Key.home => scroll_with_pages m 999999,
+        Key.end => Pair.pair (with_streak_reset repin m) Cmd.none,
+        // Home pins to the loaded top and keeps loading pages until the
+        // transcript's first line is in memory (the pages land above a
+        // bottom-anchored view, so each one is pinned in turn).
+        Key.home =>
+            let m1 : TuiModel := { m with want_top := true } in
+            scroll_with_pages m1 999999,
         Key.escape => escape_key m,
         _ => Pair.pair (streak_reset_input m k) Cmd.none,
     }
+
+/// End: back to the live tail, and the loaded page (which paging up
+/// grows one page at a time) is released, so memory returns to the tail.
+def repin (m : TuiModel) : TuiModel :=
+    let tr : Transcript := Transcript.drop_page m.transcript in
+    { m with transcript := tr, scroll := 0, want_older := false, want_top := false, rows_key := Option.none }
 
 /// Whether a transcript (mouse) selection is active.
 def transcript_sel_active (m : TuiModel) : Bool :=
