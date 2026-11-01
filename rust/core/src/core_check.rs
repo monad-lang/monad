@@ -2310,6 +2310,90 @@ fn instantiate_foralls_tracked(
   (current, named)
 }
 
+/// The RESULT-POSITION analogue of `select_instance_for_call` (below):
+/// the pre-argument peek has pinned the method's result — itself a
+/// BARE CLASS-PARAM meta (`HAdd.add : A -> B -> C`'s `C`) — to a
+/// concrete type, which is stronger instance evidence than any
+/// argument can provide and must be consumed BEFORE the meta-pinning
+/// pre-pass: a bare-literal operand's own `check` pins its param to
+/// the literal's default width (`A := I64`), the first-arg-keyed early
+/// selection then aborts against the peek's pin (`HAdd I64 I64 I64`'s
+/// `C := I64` vs `C := F64`), and the unresolved call falls to the
+/// evaluator's runtime dispatch, which picks the instance by the FIRST
+/// ARGUMENT's runtime type — `42 + 0.5 : F64` evaluated
+/// `i64_add(42, 0.5)` and crashed extracting the float (the all-bare-
+/// int `250 + 10 : U8` shape "passed" only because I64 add/sub masked
+/// at the U8 boundary coincides with true U8 arithmetic for in-range
+/// operands). Instead: scan the class's known instances for the ones
+/// whose declared argument at `result_idx` (the result param's own
+/// position in `class_param_names`) matches the pinned result, and
+/// when exactly ONE survives, tie every class-param meta to that
+/// instance's arguments — the same unification
+/// `select_instance_for_call` performs, so the pre-pass and the
+/// desugar loop see every param concrete and the bare literals retag
+/// to the instance's width (`check`'s own literal-retag validation,
+/// `desugar_struct_literals`'s rewrite). `None` — defer to the ordinary
+/// first-arg selection, whose semantics are unchanged — whenever the
+/// candidates don't agree on exactly one instance (none matched, or
+/// the result alone genuinely cannot decide between them), or tying a
+/// param fails (a param already pinned to something contradictory,
+/// which only a caller running this AFTER other pins can hit; the
+/// peek-time call site never does).
+#[allow(clippy::too_many_arguments)]
+fn select_instance_by_result_position(
+  mctx: &mut MetaContext,
+  atom_paths: &AtomPathMap,
+  structs: &StructFields,
+  known_instances: &KnownInstances,
+  info: &ClassMethodInfo,
+  named_metas: &Map<Identifier, crate::core_term::MetaId>,
+  result_idx: usize,
+  result_path: &crate::term::GlobalRef,
+) -> Option<(KnownInstanceInfo, Atom)> {
+  let mut matching: Vec<KnownInstanceInfo> = Vec::new();
+  for ((class_path, _), instance_info) in known_instances.iter() {
+    if *class_path != info.class_path {
+      continue;
+    }
+    let Some(instance_arg) = instance_info.args.get(result_idx) else {
+      continue;
+    };
+    let Some(arg_core) = instance_arg_path_term(instance_arg, mctx) else {
+      continue;
+    };
+    let CoreTerm::Free(arg_atom) = arg_core else {
+      continue;
+    };
+    let Some(arg_path) = atom_paths
+      .get(&arg_atom)
+      .or_else(|| structs.inductive_paths.get(&arg_atom))
+    else {
+      continue;
+    };
+    if arg_path != result_path {
+      continue;
+    }
+    matching.push(instance_info.clone());
+  }
+  if matching.len() != 1 {
+    return None;
+  }
+  let instance_info = matching.pop()?;
+  for (param_name, instance_arg) in info.class_param_names.iter().zip(instance_info.args.iter()) {
+    let Some(&param_meta) = named_metas.get(param_name) else {
+      continue;
+    };
+    let Some(arg_core) = instance_arg_path_term(instance_arg, mctx) else {
+      continue;
+    };
+    if unify(mctx, &CoreTerm::Meta(param_meta), &arg_core).is_err() {
+      return None;
+    }
+  }
+  let instance_atom = mctx.intern(instance_info.prefix.clone());
+  Some((instance_info, instance_atom))
+}
+
 /// Select the concrete instance for a (resolved) class-param meta and tie
 /// its declared type arguments to the call's own class-param metas —
 /// the exact selection + type-arg unification
@@ -2373,45 +2457,6 @@ fn select_instance_for_call(
   Ok(Some((instance_info, instance_atom)))
 }
 
-/// Attempt to resolve a class-method call site (`head`'s spine,
-/// `spine_args` in application order) to a concrete instance — the
-/// `CoreTerm`-level analogue of the OLD checker's own
-/// `Scope::resolve_class_method_with_constraints`
-/// (`term/module.rs`), minus its full `InstanceKey` structural matching
-/// (see `KnownInstances`'s doc comment for the narrower scope this
-/// covers). Manually instantiates the method's own (already-elaborated)
-/// `Forall`-wrapped signature with fresh metas (tracking which meta
-/// belongs to the class's own declared type parameter via
-/// `instantiate_foralls_tracked`), then `check`s each spine argument
-/// against its corresponding `Pi`-arg type in turn — binding metas,
-/// including the class-param one, exactly as real application checking
-/// would (this is genuinely redundant work — `check_one_def_new` already
-/// checked this whole term once — but the metas that binding produced
-/// were never persisted anywhere this pass can read, so redoing it is
-/// the only way to recover which concrete type the call resolved to).
-/// Once every argument's consumed, reads back what the class-param meta
-/// resolved to and looks up the matching instance.
-///
-/// After the last spine argument is consumed, if the class-param meta is
-/// STILL unbound, this also tries unifying whatever's left of the
-/// method's own (possibly further-instantiated) type against `expected`
-/// — needed for a class method with NO explicit parameters at all (e.g.
-/// `Map.empty : M K V`, a bare value, not a function) where the
-/// constraint is only ever determined by the ambient expected type (a
-/// `let x : HashMap I64 String := Map.empty in ...`'s own annotation),
-/// never by any argument.
-///
-/// Returns `None` (leaving the call site unresolved, exactly as if this
-/// pass didn't exist) whenever: fewer arguments are applied here than
-/// the method's own arity (nothing to read the class param off yet —
-/// `eval.rs`'s own runtime dispatch may still resolve it once more
-/// arguments are supplied, or it's genuinely a still-polymorphic use
-/// needing a real runtime dictionary, out of scope here); the class-param
-/// meta stays unbound even after that (same reason); or `known_instances`
-/// has no matching entry (no known instance for the concrete type, or its
-/// narrower single-arg-head matching didn't cover this instance's own
-/// shape).
-#[allow(clippy::too_many_arguments)]
 /// Resolve one class-method call to a concrete dictionary projection —
 /// the transactional wrapper around `try_resolve_class_method_inner`.
 /// A resolution that aborts (`None`) may have already recorded match
@@ -2424,6 +2469,7 @@ fn select_instance_for_call(
 /// `eval_core_program_left_nested_operator_chain_resolves_outer_class_call`).
 /// Truncating the queue back to its entry length on every abort makes
 /// the whole resolution all-or-nothing.
+#[allow(clippy::too_many_arguments)]
 fn try_resolve_class_method(
   mctx: &mut MetaContext,
   ctx: &TyCtx,
@@ -2480,6 +2526,45 @@ fn instance_arg_path_term(t: &crate::term::Term, mctx: &mut MetaContext) -> Opti
   Some(CoreTerm::Free(mctx.intern(path)))
 }
 
+/// Attempt to resolve a class-method call site (`head`'s spine,
+/// `spine_args` in application order) to a concrete instance — the
+/// `CoreTerm`-level analogue of the OLD checker's own
+/// `Scope::resolve_class_method_with_constraints`
+/// (`term/module.rs`), minus its full `InstanceKey` structural matching
+/// (see `KnownInstances`'s doc comment for the narrower scope this
+/// covers). Manually instantiates the method's own (already-elaborated)
+/// `Forall`-wrapped signature with fresh metas (tracking which meta
+/// belongs to the class's own declared type parameter via
+/// `instantiate_foralls_tracked`), then `check`s each spine argument
+/// against its corresponding `Pi`-arg type in turn — binding metas,
+/// including the class-param one, exactly as real application checking
+/// would (this is genuinely redundant work — `check_one_def_new` already
+/// checked this whole term once — but the metas that binding produced
+/// were never persisted anywhere this pass can read, so redoing it is
+/// the only way to recover which concrete type the call resolved to).
+/// Once every argument's consumed, reads back what the class-param meta
+/// resolved to and looks up the matching instance.
+///
+/// After the last spine argument is consumed, if the class-param meta is
+/// STILL unbound, this also tries unifying whatever's left of the
+/// method's own (possibly further-instantiated) type against `expected`
+/// — needed for a class method with NO explicit parameters at all (e.g.
+/// `Map.empty : M K V`, a bare value, not a function) where the
+/// constraint is only ever determined by the ambient expected type (a
+/// `let x : HashMap I64 String := Map.empty in ...`'s own annotation),
+/// never by any argument.
+///
+/// Returns `None` (leaving the call site unresolved, exactly as if this
+/// pass didn't exist) whenever: fewer arguments are applied here than
+/// the method's own arity (nothing to read the class param off yet —
+/// `eval.rs`'s own runtime dispatch may still resolve it once more
+/// arguments are supplied, or it's genuinely a still-polymorphic use
+/// needing a real runtime dictionary, out of scope here); the class-param
+/// meta stays unbound even after that (same reason); or `known_instances`
+/// has no matching entry (no known instance for the concrete type, or its
+/// narrower single-arg-head matching didn't cover this instance's own
+/// shape).
+#[allow(clippy::too_many_arguments)]
 fn try_resolve_class_method_inner(
   mctx: &mut MetaContext,
   ctx: &TyCtx,
@@ -2503,6 +2588,13 @@ fn try_resolve_class_method_inner(
   let queue_len_at_entry = mctx.match_resolutions_len();
   let (mut residual, named_metas) = instantiate_foralls_tracked(mctx, method_typ);
   let class_meta = *named_metas.get(&info.class_param_name)?;
+  // The instance selected EARLY — as soon as an argument pins the
+  // class param (always BEFORE any argument is desugared; see the
+  // pre-pass loop below for where the selection runs), or up front by
+  // the result-position pre-selection inside the peek below — carried
+  // through to the post-loop dictionary projection so the selection
+  // runs at most once per resolution.
+  let mut early_instance: Option<(KnownInstanceInfo, Atom)> = None;
   // Peek at the method's final return type (peeling exactly `spine_args.len()`
   // Pi layers with placeholder metas, NOT the real args — class methods'
   // types are non-dependent on their term arguments, only on the type-level
@@ -2529,13 +2621,42 @@ fn try_resolve_class_method_inner(
       peek = force(mctx, open_with(&ret, &CoreTerm::Meta(placeholder))).into_stripped_ctx();
     }
     let _ = unify(mctx, &peek, expected);
+    // RESULT-POSITION PRE-SELECTION (see
+    // `select_instance_by_result_position`'s own doc comment for the
+    // full rationale): when the peek's result is itself a bare
+    // class-param meta AND the unify just pinned it to a concrete
+    // path-headed type, select the instance by that result position
+    // right now — before the pre-pass below pins anything from the
+    // arguments' own defaults. `peek` (pre-unify) identifies WHICH
+    // class param the result is; forcing it AFTER the unify reads the
+    // pin back. A result that isn't a bare meta (an applied type like
+    // `Monad.bind`'s `M B`, a concrete `Free` like `Show.show`'s
+    // `String`, or a dependent result mentioning a peel placeholder)
+    // skips this entirely and keeps the ordinary first-arg flow.
+    if let CoreTerm::Meta(result_meta) = peek.clone().into_stripped_ctx()
+      && let Some((result_param, _)) = named_metas.iter().find(|&(_, &meta)| meta == result_meta)
+      && let Some(result_idx) = info
+        .class_param_names
+        .iter()
+        .position(|param| param == result_param)
+      && let CoreTerm::Free(result_atom) = force(mctx, peek.clone()).into_stripped_ctx()
+      && let Some(result_path) = atom_paths
+        .get(&result_atom)
+        .or_else(|| structs.inductive_paths.get(&result_atom))
+      && let Some(pair) = select_instance_by_result_position(
+        mctx,
+        atom_paths,
+        structs,
+        known_instances,
+        info,
+        &named_metas,
+        result_idx,
+        result_path,
+      )
+    {
+      early_instance = Some(pair);
+    }
   }
-  // The instance selected EARLY — as soon as an argument pins the
-  // class param, and always BEFORE any argument is desugared (see the
-  // pre-pass loop below for where the selection runs) — carried
-  // through to the post-loop dictionary projection so the selection
-  // runs at most once per resolution.
-  let mut early_instance: Option<(KnownInstanceInfo, Atom)> = None;
   // META-PINNING PRE-PASS: check every RAW, undesugared arg against its
   // param type — best-effort, never fatal — BEFORE the desugar loop
   // below, so that every meta an ARG'S OWN type can pin is pinned
