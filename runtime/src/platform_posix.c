@@ -1828,7 +1828,16 @@ void* monad_stream_read(int64_t fd, int64_t max_bytes) {
    I64)` -- ALL of the buffer, ok payload its full length. fds 1/2 go
    through stdio (see the section comment); anything else is a `write`
    loop, since a pipe or socket may take less than asked. SIGPIPE is
-   ignored (`main`), so a vanished reader is EPIPE -> `broken_pipe`. */
+   ignored (`main`), so a vanished reader is EPIPE -> `broken_pipe`.
+
+   BOTH fds are flushed. stderr always was (a log line must not be lost),
+   and stdout needs it for the same reason once it is a PIPE rather than a
+   terminal: `Proc.spawn` gives every child piped stdio, so a spawned script
+   or MCP server writing `println` would otherwise sit in stdio's
+   block buffer until it EXITS -- which for a long-running child is never.
+   A terminal's line buffering hid that for as long as everything was run
+   directly; `monad script --watch` is the first caller that reads a
+   child's stdout while the child keeps running. */
 void* monad_stream_write(int64_t fd, void* buf) {
     BufObj* obj = (BufObj*)buf;
     int64_t n = obj ? obj->len : 0;
@@ -1837,7 +1846,7 @@ void* monad_stream_write(int64_t fd, void* buf) {
         FILE* f = fd == 1 ? stdout : stderr;
         errno = 0;
         int failed = fwrite(obj->payload, 1, (size_t)n, f) != (size_t)n;
-        if (fd == 2) failed = fflush(f) == EOF || failed;
+        failed = fflush(f) == EOF || failed;
         /* The process's own stdout/stderr die of SIGPIPE like every other
            stdio writer here (`stdio_die_on_epipe`); any other failure is
            an ordinary `Result.err`. */
