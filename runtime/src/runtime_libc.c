@@ -46,6 +46,16 @@ rt_str monad_i32_to_string(int64_t n) {
     return RT_STR_WORD(out);
 }
 
+/* `#[native i8_to_string]`/`#[native i16_to_string]` (init/number.mo).
+   Same canonicalize-then-print shape as monad_i32_to_string above: the
+   narrow cast is the reference's `v as iN`, the i64 body prints it. */
+rt_str monad_i8_to_string(int64_t n) {
+    return monad_i64_to_string((int64_t)(int8_t)n);
+}
+rt_str monad_i16_to_string(int64_t n) {
+    return monad_i64_to_string((int64_t)(int16_t)n);
+}
+
 /* `#[native u8_to_string]`/`#[native u16_to_string]`/`#[native
    u64_to_string]` (init/number.mo). Same shape as
    monad_i64_to_string/monad_i32_to_string above; all three print
@@ -108,16 +118,25 @@ int64_t monad_f64_of_string(rt_str s) {
    positionally around the decimal point `%e` reports. 17 significant
    digits always suffice for a double, so the search is bounded and
    short. Rust's spellings for the non-finite values ("NaN", "inf",
-   "-inf") come out of the no-digits exit below. */
-rt_str monad_f64_to_string(int64_t v) {
-    double d = monad_f64_unbits(v);
+   "-inf") come out of the no-digits exit below.
+
+   `monad_f32_to_string` shares the whole body through
+   `monad_float_to_string_impl`: an `F32` payload is an f32-rounded
+   double, so its shortest ROUND-TRIPPING decimal is found with
+   `strtof` against the f32 value (9 digits always suffice), and the
+   rendering is identical. Both spellings are what the same-named
+   Rust host natives print, which is what the two runners have to
+   agree on. */
+static rt_str monad_float_to_string_impl(double d, int is_f32) {
     char mant[64];
+    int max_prec = is_f32 ? 9 : 16;
     int prec = 0;
-    for (; prec <= 16; prec++) {
+    for (; prec <= max_prec; prec++) {
         snprintf(mant, sizeof(mant), "%.*e", prec, d);
-        if (strtod(mant, NULL) == d) break;
+        if (is_f32 ? ((float)strtof(mant, NULL) == (float)d)
+                   : (strtod(mant, NULL) == d)) break;
     }
-    if (prec > 16) snprintf(mant, sizeof(mant), "%.16e", d);
+    if (prec > max_prec) snprintf(mant, sizeof(mant), "%.*e", max_prec, d);
 
     char digits[24];
     int ndig = 0;
@@ -161,4 +180,15 @@ rt_str monad_f64_to_string(int64_t v) {
     char* res = (char*)RT_PTR(monad_alloc_atomic((rt_size)((size_t)n + 1)));
     if (res) memcpy(res, out, (size_t)n + 1);
     return RT_STR_WORD(res);
+}
+
+rt_str monad_f64_to_string(int64_t v) {
+    return monad_float_to_string_impl(monad_f64_unbits(v), 0);
+}
+
+/* `F32.to_string` (init/number.mo) -- the f32-rounded payload printed
+   with Rust's `f32` shortest-round-trip spelling ("0.1" for the f32
+   0.1, not the 17-digit double spelling of the same payload). */
+rt_str monad_f32_to_string(int64_t v) {
+    return monad_float_to_string_impl(monad_f64_unbits(v), 1);
 }

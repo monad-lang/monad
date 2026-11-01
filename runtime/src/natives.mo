@@ -27,12 +27,11 @@
 ///   `alloc_constructor`/`monad_set_field` are callable symbols, so
 ///   generated IR marshals `List`/`Option` exactly like user code.
 /// - All monad numbers are unboxed i64s. The reference masks every
-///   width in and out of each native (`int_binop_width`/
-///   `int_cmp_width`, core_native.rs) and compares `U64` unsigned
-///   (`uint_cmp`); the emitters here are being brought to that same
-///   ledger width by width (`u64_lt`/`u64_gt` are the first), and the
-///   still-plain narrow-width emitters are correct only for the
-///   canonical (parse-time validated) payloads the compiler produces.
+///   width in and out of each native (`int_binop_width`/`int_cmp_width`,
+///   core_native.rs) and compares `U64` unsigned (`uint_cmp`); every
+///   emitter here masks to its width the same way -- `and_` with a
+///   width mask for the unsigned widths, `trunc`+`sext` for the signed
+///   ones, sign-bit-flipped (`icmp_ult`/`icmp_ugt`) for `U64`.
 /// - `monad_string_length` (C, already declared in
 ///   `runtime_declarations`) is the NUL-terminated strlen.
 use llvm::ir {LLVMFunction, LLVMInstruction, LLVMValue, ParamPair, mk}
@@ -279,45 +278,44 @@ def emit_string_get : LLVMFunction :=
 
 // ─── U8/U64 arithmetic + comparison natives ─────────────────────────
 
-/// `monad_u8_eq(a, b) -> raw 0/1` (wired `bool_result`): plain `icmp
-/// eq` -- U8 values are unboxed i64s and the reference compares them
-/// with NO width mask (core_native.rs's own doc comment), so i64
-/// equality IS the semantics. `zext` widens the i1 for the wrapper's
+/// `monad_u8_eq(a, b) -> raw 0/1` (wired `bool_result`): both operands
+/// masked to 8 bits before the `icmp eq` -- the emitted mirror of the
+/// reference's `int_cmp_width` (Phase 1), so two payloads congruent mod
+/// 2^8 compare equal. `zext` widens the i1 for the wrapper's
 /// `2 - raw` Bool boxing.
-def emit_u8_eq : LLVMFunction := emit_icmp_native "monad_u8_eq" (icmp_eq (parm_ 0) (parm_ 1))
+def emit_u8_eq : LLVMFunction := emit_masked_icmp_native "monad_u8_eq" (Shared.of u8_mask) (icmp_eq (var_ "a") (var_ "b"))
 
-/// `monad_u8_lt(a, b) -> raw 0/1` (wired `bool_result`). Signed `slt`
-/// matches the reference's Rust `a < b` on i64; byte values (0-255)
-/// make unsigned comparison equivalent anyway.
-def emit_u8_lt : LLVMFunction := emit_icmp_native "monad_u8_lt" (icmp_slt (parm_ 0) (parm_ 1))
+/// `monad_u8_lt(a, b) -> raw 0/1` (wired `bool_result`): masked
+/// operands, then signed `slt` -- on masked (non-negative) payloads
+/// signed and unsigned ordering agree, which is also the reference's
+/// rule (`int_cmp_width` compares the masked payloads with `<`).
+def emit_u8_lt : LLVMFunction := emit_masked_icmp_native "monad_u8_lt" (Shared.of u8_mask) (icmp_slt (var_ "a") (var_ "b"))
 
-def emit_u8_gt : LLVMFunction := emit_icmp_native "monad_u8_gt" (icmp_sgt (parm_ 0) (parm_ 1))
+def emit_u8_gt : LLVMFunction := emit_masked_icmp_native "monad_u8_gt" (Shared.of u8_mask) (icmp_sgt (var_ "a") (var_ "b"))
 
 def emit_u64_eq : LLVMFunction := emit_icmp_native "monad_u64_eq" (icmp_eq (parm_ 0) (parm_ 1))
 
 /// `monad_u64_lt/gt` (wired `bool_result`): UNSIGNED `ult`/`ugt` on the
 /// i64 payload. This is the one width where signedness changes the
 /// compare's answer: a `U64` at or above 2^63 is carried as a negative
-/// i64, and the old signed `slt`/`sgt` (which mirrored the reference's
-/// then-generic `int_cmp` group) flipped every such comparison. The
-/// reference now routes `u64_lt`/`u64_gt` through `uint_cmp`
-/// (`core_native.rs`), and these emitters match it; `U64` is also the
-/// only width where masking cannot rescue a signed compare, since a
-/// mask is a no-op at 64 bits. The narrower unsigned widths keep their
-/// signed `slt`/`sgt` emitters for now: their canonical payloads are
-/// non-negative, so signed and unsigned agree there.
+/// i64, and a signed compare would flip the answer. The reference
+/// routes `u64_lt`/`u64_gt` through `uint_cmp` (`core_native.rs`), and
+/// these emitters match it; `U64` is also the only width where masking
+/// cannot rescue a signed compare, since a mask is a no-op at 64 bits.
+/// The narrower unsigned widths mask their operands and keep the signed
+/// `slt`/`sgt`: masked payloads are non-negative, so the signed compare
+/// answers as an unsigned one.
 def emit_u64_lt : LLVMFunction := emit_icmp_native "monad_u64_lt" (icmp_ult (parm_ 0) (parm_ 1))
 def emit_u64_gt : LLVMFunction := emit_icmp_native "monad_u64_gt" (icmp_ugt (parm_ 0) (parm_ 1))
 
 /// `monad_u64_add/sub/mul` (wired `passthrough`): plain i64 wrapping
 /// arithmetic, matching the reference exactly -- `core_native.rs`
-/// routes all three through `int_binop(|a, b| a.wrapping_*(b))` with
-/// NO width mask. `U64` is 64 bits wide and these values are i64-
-/// carried, so "no mask" and "full width" coincide: unlike the `U32`
-/// family there is nothing to mask, and unlike `emit_u8_div` there is
-/// no signed/unsigned split to pick, since wrapping i64 add/sub/mul
-/// are bit-identical either way. Div and mod DO split -- they are the
-/// `uint_binop`/`udiv`/`urem` pair above.
+/// routes all three through `int_binop_width(U64, ...)` and `U64`'s
+/// width mask is the identity on an i64-carried payload. Unlike the
+/// `U32` family there is nothing to mask, and unlike
+/// `emit_u64_div` there is no signed/unsigned split to pick, since
+/// wrapping i64 add/sub/mul are bit-identical either way. Div and mod
+/// DO split -- they are the `uint_binop`/`udiv`/`urem` pair above.
 def emit_u64_add : LLVMFunction :=
   let entry :=
     LLVMBasicBlock.mk "entry"
@@ -376,36 +374,20 @@ def emit_icmp_native (name : String) (cmp : LLVMValue) : LLVMFunction :=
     blocks := [entry],
     dbg_loc := Option.none }
 
-/// `monad_u8_sub(a, b)` (wired `passthrough`): plain wrapping i64 sub
-/// -- the reference's `wrapping_sub`, with no width mask.
+/// `monad_u8_sub(a, b)` (wired `passthrough`): both operands masked to
+/// 8 bits, wrapping sub, result masked -- the `int_binop_width(U8)`
+/// mirror, like the u8 family's other arithmetic.
 def emit_u8_sub : LLVMFunction :=
-  let entry :=
-    LLVMBasicBlock.mk "entry"
-      [assign "r" (sub (parm_ 0) (parm_ 1)), ret (var_ "r")] in
-  { name := "monad_u8_sub",
-    params := (i64_params 2),
-    ret_ty := i64_,
-    blocks := [entry],
-    dbg_loc := Option.none }
+  emit_masked_binop "monad_u8_sub" (Shared.of u8_mask) (sub (var_ "a") (var_ "b"))
 
 def emit_u8_mul : LLVMFunction :=
-  let entry :=
-    LLVMBasicBlock.mk "entry"
-      [assign "r" (mul (parm_ 0) (parm_ 1)), ret (var_ "r")] in
-  { name := "monad_u8_mul",
-    params := (i64_params 2),
-    ret_ty := i64_,
-    blocks := [entry],
-    dbg_loc := Option.none }
+  emit_masked_binop "monad_u8_mul" (Shared.of u8_mask) (mul (var_ "a") (var_ "b"))
 
-/// `monad_u8_div(a, b)`: 0 when `b == 0`, else `a / b` -- matching the
-/// reference's `if b == 0 { 0 } else { a.wrapping_div(b) }` guard.
-/// `sdiv`, not `udiv`: the reference's `wrapping_div` is SIGNED
-/// (core_native.rs:174-175), and these values are i64-carried u8s --
-/// identical to `udiv` for in-range operands, but the mirror-the-
-/// reference rule that `emit_u8_lt`/`emit_u8_gt`'s signed `slt`/`sgt`
-/// already follow says match it exactly.
-def emit_u8_div : LLVMFunction := emit_guarded_native "monad_u8_div" (sdiv (parm_ 0) (parm_ 1))
+/// `monad_u8_div(a, b)`: masked operands, 0 when `b == 0`, else the
+/// masked quotient -- `int_div_width`'s mirror. `sdiv`, not `udiv`:
+/// masked u8 operands are non-negative, so the signed divide is the
+/// unsigned one too (and the reference's `wrapping_div` is signed).
+def emit_u8_div : LLVMFunction := emit_masked_div_native "monad_u8_div" (Shared.of u8_mask)
 
 /// `monad_u64_mod(a, b)`: 0 when `b == 0`, else `a % b`. `urem`, which is
 /// what an unsigned mod should be, and since 2026-09-12 the reference
@@ -450,7 +432,7 @@ def emit_guarded_native (name : String) (op : LLVMValue) : LLVMFunction :=
     blocks := [entry, zero, calc],
     dbg_loc := Option.none }
 
-// ─── Fixed-width unsigned integer natives (u8 / u32) ────────────────
+// ─── Fixed-width unsigned integer natives (u8 / u16 / u32) ──────────
 //
 // SHA-256 (std/src/sha256.mo) is written against `U32`, so every one of
 // these has to exist before it can be compiled at all -- that single
@@ -460,9 +442,7 @@ def emit_guarded_native (name : String) (op : LLVMValue) : LLVMFunction :=
 // That is what `mask_to_suffix` (rust/core/src/core_native.rs) does for the
 // Rust host -- `v as u32 as i64` -- and the two runtimes must agree
 // bit-for-bit or sha256 produces a plausible-looking wrong digest
-// rather than failing loudly. `emit_u8_sub` above predates this rule
-// and is deliberately unmasked (its own comment says so); do not copy
-// that shape here.
+// rather than failing loudly.
 //
 // Values are boxed as i64 throughout, so a "u32" is an i64 whose top 32
 // bits are zero. `lshr`, never `ashr`: these are unsigned.
@@ -472,6 +452,9 @@ def u32_mask : LLVMValue := int_ 4294967295
 
 /// `0xFF` -- the u8 width mask.
 def u8_mask : LLVMValue := int_ 255
+
+/// `0xFFFF` -- the u16 width mask.
+def u16_mask : LLVMValue := int_ 65535
 
 /// A two-argument native that masks both operands to `mask`, applies
 /// `op` to the masked temporaries `%a`/`%b`, then masks the result.
@@ -490,6 +473,30 @@ def emit_masked_binop (name : String) (mask : Shared LLVMValue) (op : LLVMValue)
     params := (i64_params 2),
     ret_ty := i64_,
     blocks := [entry],
+    dbg_loc := Option.none }
+
+/// A two-argument division that masks both operands to `mask`, yields 0
+/// for a zero divisor, and masks the quotient -- the `int_div_width`
+/// mirror (`if b == 0 { 0 } else { mask(a.wrapping_div(b)) }`). Masked
+/// unsigned operands are non-negative, so the signed `sdiv` is their
+/// unsigned divide too.
+def emit_masked_div_native (name : String) (mask : Shared LLVMValue) : LLVMFunction :=
+  let entry :=
+    LLVMBasicBlock.mk "entry"
+      [assign "a" (and_ (parm_ 0) (Shared.get mask)),
+       assign "b" (and_ (parm_ 1) (Shared.get mask)),
+       assign "zero_b" (icmp_eq (var_ "b") (int_ 0)),
+       branch (var_ "zero_b") "zero" "calc"] in
+  let zero := LLVMBasicBlock.mk "zero" [ret (int_ 0)] in
+  let calc :=
+    LLVMBasicBlock.mk "calc"
+      [assign "r" (sdiv (var_ "a") (var_ "b")),
+       assign "m" (and_ (var_ "r") (Shared.get mask)),
+       ret (var_ "m")] in
+  { name := name,
+    params := (i64_params 2),
+    ret_ty := i64_,
+    blocks := [entry, zero, calc],
     dbg_loc := Option.none }
 
 /// A one-argument width conversion: mask the operand and return it.
@@ -547,24 +554,7 @@ def emit_u32_shr : LLVMFunction :=
 /// else the masked quotient. Newly reachable because the interpreter
 /// (`lang/core_eval.mo`) implements `u32_div` by calling `U32.div`; the
 /// `Div U32` instance alone never made it reachable before.
-def emit_u32_div : LLVMFunction :=
-  let entry :=
-    LLVMBasicBlock.mk "entry"
-      [assign "a" (and_ (parm_ 0) u32_mask),
-       assign "b" (and_ (parm_ 1) u32_mask),
-       assign "zero_b" (icmp_eq (var_ "b") (int_ 0)),
-       branch (var_ "zero_b") "zero" "calc"] in
-  let zero := LLVMBasicBlock.mk "zero" [ret (int_ 0)] in
-  let calc :=
-    LLVMBasicBlock.mk "calc"
-      [assign "r" (sdiv (var_ "a") (var_ "b")),
-       assign "m" (and_ (var_ "r") u32_mask),
-       ret (var_ "m")] in
-  { name := "monad_u32_div",
-    params := (i64_params 2),
-    ret_ty := i64_,
-    blocks := [entry, zero, calc],
-    dbg_loc := Option.none }
+def emit_u32_div : LLVMFunction := emit_masked_div_native "monad_u32_div" (Shared.of u32_mask)
 
 /// `monad_u32_to_string`: mask, then reuse `monad_i64_to_string` (a
 /// u32's canonical range is non-negative, so the signed printer is
@@ -589,14 +579,14 @@ def emit_u32_to_string : LLVMFunction :=
 /// on unmasked i64s would call `0x1_0000_0000` and `0` different when
 /// both are zero as u32. Signed `icmp` after masking is right for the
 /// same reason it is in the reference -- `int_cmp_width`
-/// (rust/core/src/core_native.rs) masks both operands to `u32` first, so
-/// every value compared is in `0..2^32-1` and signed and unsigned
-/// ordering agree.
-def emit_masked_icmp_native (name : String) (cmp : LLVMValue) : LLVMFunction :=
+/// (rust/core/src/core_native.rs) masks both operands to the width
+/// first, so every value compared is non-negative and signed and
+/// unsigned ordering agree.
+def emit_masked_icmp_native (name : String) (mask : Shared LLVMValue) (cmp : LLVMValue) : LLVMFunction :=
   let entry :=
     LLVMBasicBlock.mk "entry"
-      [assign "a" (and_ (parm_ 0) u32_mask),
-       assign "b" (and_ (parm_ 1) u32_mask),
+      [assign "a" (and_ (parm_ 0) (Shared.get mask)),
+       assign "b" (and_ (parm_ 1) (Shared.get mask)),
        assign "c" cmp,
        assign "r" (zext (var_ "c") i1_ i64_),
        ret (var_ "r")] in
@@ -606,18 +596,69 @@ def emit_masked_icmp_native (name : String) (cmp : LLVMValue) : LLVMFunction :=
     blocks := [entry],
     dbg_loc := Option.none }
 
+/// A two-argument comparison on a SIGNED width's canonical payload:
+/// truncate both operands to 8 bits and sign-extend back (`(v as i8)
+/// as i64`, the reference's `mask_to_suffix(v, I8)`), then compare.
+/// `cmp` is built from `var_ "a"`/`var_ "b"` by the caller. The
+/// trunc/sext pairs go through temps, not nested casts -- the IR
+/// printer does not parenthesize a cast inside a cast (llc rejects
+/// `sext i8 trunc ... to i8 to i64`).
+def emit_i8_icmp_native (name : String) (cmp : LLVMValue) : LLVMFunction :=
+  let entry :=
+    LLVMBasicBlock.mk "entry"
+      [assign "t0" (trunc (parm_ 0) i64_ i8_),
+       assign "a" (sext (var_ "t0") i8_ i64_),
+       assign "t1" (trunc (parm_ 1) i64_ i8_),
+       assign "b" (sext (var_ "t1") i8_ i64_),
+       assign "c" cmp,
+       assign "r" (zext (var_ "c") i1_ i64_),
+       ret (var_ "r")] in
+  { name := name,
+    params := (i64_params 2),
+    ret_ty := i64_,
+    blocks := [entry],
+    dbg_loc := Option.none }
+
+/// The i32 twin of `emit_i8_icmp_native` (`(v as i32) as i64`) -- the
+/// same trunc+sext pair `emit_i64_to_i32` spells for the conversion
+/// native, through temps for the same printer reason.
+def emit_i32_icmp_native (name : String) (cmp : LLVMValue) : LLVMFunction :=
+  let entry :=
+    LLVMBasicBlock.mk "entry"
+      [assign "t0" (trunc (parm_ 0) i64_ i32_),
+       assign "a" (sext (var_ "t0") i32_ i64_),
+       assign "t1" (trunc (parm_ 1) i64_ i32_),
+       assign "b" (sext (var_ "t1") i32_ i64_),
+       assign "c" cmp,
+       assign "r" (zext (var_ "c") i1_ i64_),
+       ret (var_ "r")] in
+  { name := name,
+    params := (i64_params 2),
+    ret_ty := i64_,
+    blocks := [entry],
+    dbg_loc := Option.none }
+
+/// The signed ARITHMETIC families (i8/i16/i32 add/sub/mul/div and
+/// to_string) are NOT emitters: `LLVMType` has no `i16_` (adding one
+/// would shift constructor tags and is a two-step-rollout change for
+/// the surface this file lives in), so they are `runtime.c` functions
+/// (`runtime_core.c`/`runtime_libc.c`) like the F64 family -- C's
+/// `(int8_t)`/`(int16_t)`/`(int32_t)` casts spell the reference's
+/// `mask_to_suffix` exactly. See their `native_runtime_fn_name` and
+/// `runtime_declarations` entries in `lang/src/codegen/natives.mo`.
+
 def emit_u32_eq : LLVMFunction :=
-  emit_masked_icmp_native "monad_u32_eq" (icmp_eq (var_ "a") (var_ "b"))
+  emit_masked_icmp_native "monad_u32_eq" (Shared.of u32_mask) (icmp_eq (var_ "a") (var_ "b"))
 
 /// `monad_u32_lt`/`_gt` -- `BOrd U32`'s two methods. Needed by the same
 /// escape decoder as `emit_u32_mul` above: it rejects the surrogate
 /// range and picks a UTF-8 byte width by comparing the decoded codepoint
 /// against fixed bounds.
 def emit_u32_lt : LLVMFunction :=
-  emit_masked_icmp_native "monad_u32_lt" (icmp_slt (var_ "a") (var_ "b"))
+  emit_masked_icmp_native "monad_u32_lt" (Shared.of u32_mask) (icmp_slt (var_ "a") (var_ "b"))
 
 def emit_u32_gt : LLVMFunction :=
-  emit_masked_icmp_native "monad_u32_gt" (icmp_sgt (var_ "a") (var_ "b"))
+  emit_masked_icmp_native "monad_u32_gt" (Shared.of u32_mask) (icmp_sgt (var_ "a") (var_ "b"))
 
 /// `monad_string_get_char(s, i) -> Option Char` (wired `passthrough`):
 /// `none` for `i < 0` or an out-of-range index, else `some` wrapping the
@@ -790,84 +831,49 @@ def emit_i64_eq : LLVMFunction := emit_icmp_native "monad_i64_eq" (icmp_eq (parm
 def emit_i64_lt : LLVMFunction := emit_icmp_native "monad_i64_lt" (icmp_slt (parm_ 0) (parm_ 1))
 def emit_i64_gt : LLVMFunction := emit_icmp_native "monad_i64_gt" (icmp_sgt (parm_ 0) (parm_ 1))
 
-/// The `U16`/`I8` comparison families, wired as plain unmasked i64
-/// comparisons for the same reason `emit_u8_eq`/`_lt`/`_gt` are: the
-/// reference routes all three widths through the SAME generic
-/// `int_cmp` group (`a == b` / `a < b` / `a > b` on the raw payload),
-/// with no width mask. `U32` is the only width that masks, and it has
-/// its own masked emitters.
-def emit_u16_eq : LLVMFunction := emit_icmp_native "monad_u16_eq" (icmp_eq (parm_ 0) (parm_ 1))
-def emit_u16_lt : LLVMFunction := emit_icmp_native "monad_u16_lt" (icmp_slt (parm_ 0) (parm_ 1))
-def emit_u16_gt : LLVMFunction := emit_icmp_native "monad_u16_gt" (icmp_sgt (parm_ 0) (parm_ 1))
+/// The `U16`/`I8` comparison families, masked to their widths like
+/// every other narrow family since Phase 1/2 of the numeric-types
+/// ledger: `U16` by `and_` with the 16-bit mask (masked payloads are
+/// non-negative, so signed `slt`/`sgt` answer as unsigned ones), `I8`
+/// by the trunc+sext canonicalization directly below.
+def emit_u16_eq : LLVMFunction := emit_masked_icmp_native "monad_u16_eq" (Shared.of u16_mask) (icmp_eq (var_ "a") (var_ "b"))
+def emit_u16_lt : LLVMFunction := emit_masked_icmp_native "monad_u16_lt" (Shared.of u16_mask) (icmp_slt (var_ "a") (var_ "b"))
+def emit_u16_gt : LLVMFunction := emit_masked_icmp_native "monad_u16_gt" (Shared.of u16_mask) (icmp_sgt (var_ "a") (var_ "b"))
 
 /// `U16` arithmetic (`init/number.mo`'s `U16.add`/`sub`/`mul`/`div`),
-/// newly reachable from the HTTP motes: `motes/http/src/wire.mo` and
+/// reachable from the HTTP motes: `motes/http/src/wire.mo` and
 /// `uri.mo` accumulate a parsed decimal through `U16.add (U16.mul acc
-/// 10u16) digit`, and nothing in the corpus multiplied a `U16` before.
+/// 10u16) digit`.
 ///
-/// UNMASKED, like the `U16` comparisons directly above and like
-/// `emit_u8_sub`/`_mul`/`_div`. The reference routes `U16` through the
-/// SAME generic, unmasked `int_binop` group as `I8`/`I16`/`I32`/`U8`/
-/// `I64` (`rust/core/src/core_native.rs`'s `"i8_add" | ... | "u16_add" |
-/// "u64_add"` arm) and masks `U32` alone, so `U16.add 65535u16 1u16`
-/// has to come out 65536 here exactly as it does there. Masking would
-/// not fail loudly -- it would just be a different answer from the
-/// other runtime, which is the divergence class the u64_mod comment
-/// above records the cost of.
-///
-/// `emit_u8_add` does mask, and it is the outlier rather than the
-/// model: the reference does not mask `u8` either, and the family
-/// comment above describes the `U32` rule. It is left as it is here --
-/// correcting it changes the u8 result for out-of-range operands, which
-/// is a separate change with its own evidence to gather, not something
-/// to smuggle into a wiring commit.
+/// Masked to 16 bits on the operands and the result, the emitted mirror
+/// of the reference's `int_binop_width(U16, ...)` (Phase 1): the
+/// reference used to run these unmasked, and these emitters matched it
+/// then; both sides mask now, so `U16.add 65535u16 1u16` comes out 0
+/// here exactly as it does there.
 def emit_u16_add : LLVMFunction :=
-  let entry :=
-    LLVMBasicBlock.mk "entry"
-      [assign "r" (add (parm_ 0) (parm_ 1)), ret (var_ "r")] in
-  { name := "monad_u16_add",
-    params := (i64_params 2),
-    ret_ty := i64_,
-    blocks := [entry],
-    dbg_loc := Option.none }
+  emit_masked_binop "monad_u16_add" (Shared.of u16_mask) (add (var_ "a") (var_ "b"))
 
 def emit_u16_sub : LLVMFunction :=
-  let entry :=
-    LLVMBasicBlock.mk "entry"
-      [assign "r" (sub (parm_ 0) (parm_ 1)), ret (var_ "r")] in
-  { name := "monad_u16_sub",
-    params := (i64_params 2),
-    ret_ty := i64_,
-    blocks := [entry],
-    dbg_loc := Option.none }
+  emit_masked_binop "monad_u16_sub" (Shared.of u16_mask) (sub (var_ "a") (var_ "b"))
 
 def emit_u16_mul : LLVMFunction :=
-  let entry :=
-    LLVMBasicBlock.mk "entry"
-      [assign "r" (mul (parm_ 0) (parm_ 1)), ret (var_ "r")] in
-  { name := "monad_u16_mul",
-    params := (i64_params 2),
-    ret_ty := i64_,
-    blocks := [entry],
-    dbg_loc := Option.none }
+  emit_masked_binop "monad_u16_mul" (Shared.of u16_mask) (mul (var_ "a") (var_ "b"))
 
-/// `monad_u16_div(a, b)`: 0 when `b == 0`, else `a / b`, matching the
-/// reference's `if b == 0 { 0 } else { a.wrapping_div(b) }`. `sdiv`
-/// rather than `udiv` for `emit_u8_div`'s reason: the reference's
-/// `wrapping_div` is signed, and identical to `udiv` for the in-range
-/// operands a 16-bit divide is given anyway.
-def emit_u16_div : LLVMFunction := emit_guarded_native "monad_u16_div" (sdiv (parm_ 0) (parm_ 1))
-def emit_i8_eq : LLVMFunction := emit_icmp_native "monad_i8_eq" (icmp_eq (parm_ 0) (parm_ 1))
-def emit_i8_lt : LLVMFunction := emit_icmp_native "monad_i8_lt" (icmp_slt (parm_ 0) (parm_ 1))
-def emit_i8_gt : LLVMFunction := emit_icmp_native "monad_i8_gt" (icmp_sgt (parm_ 0) (parm_ 1))
+/// `monad_u16_div(a, b)`: masked operands, 0 when the masked divisor is
+/// 0, else the masked quotient -- `int_div_width`'s mirror. Masked
+/// u16 operands are non-negative, so the signed `sdiv` is their
+/// unsigned divide too.
+def emit_u16_div : LLVMFunction := emit_masked_div_native "monad_u16_div" (Shared.of u16_mask)
+def emit_i8_eq : LLVMFunction := emit_i8_icmp_native "monad_i8_eq" (icmp_eq (var_ "a") (var_ "b"))
+def emit_i8_lt : LLVMFunction := emit_i8_icmp_native "monad_i8_lt" (icmp_slt (var_ "a") (var_ "b"))
+def emit_i8_gt : LLVMFunction := emit_i8_icmp_native "monad_i8_gt" (icmp_sgt (var_ "a") (var_ "b"))
 
 /// The `I32` comparison family (`init/number.mo`'s `I32.beq`/`lt`/`gt`)
-/// plus the `I32`↔`I64` conversions, newly reachable from `motes/tls`:
+/// plus the `I32`↔`I64` conversions, reachable from `motes/tls`:
 /// every OpenSSL entry point returns `int`, and the handshake compares
-/// it (`SSL_connect == 1`, `SSL_get_error` dispatch). Signed `slt`/`sgt`
-/// and unmasked, like the `I8` group directly above: the reference's
-/// `int_cmp` group never masks, and an `I32` payload wider than 32 bits
-/// cannot be constructed.
+/// it (`SSL_connect == 1`, `SSL_get_error` dispatch). Both operands
+/// canonicalized by trunc+sext (`(v as i32) as i64`), like the `I8`
+/// group directly above and the reference's `int_cmp_width`.
 ///
 /// `i32_to_i64` is an identity native (the payload already IS the value).
 /// `i64_to_i32` must instead RE-INTERPRET the low 32 bits, because the
@@ -875,9 +881,9 @@ def emit_i8_gt : LLVMFunction := emit_icmp_native "monad_i8_gt" (icmp_sgt (parm_
 /// sign-reinterpreting truncation, not a bit mask -- so a trunc+sext
 /// pair, exactly the shape `sext`'s own doc comment describes for C
 /// integers.
-def emit_i32_eq : LLVMFunction := emit_icmp_native "monad_i32_eq" (icmp_eq (parm_ 0) (parm_ 1))
-def emit_i32_lt : LLVMFunction := emit_icmp_native "monad_i32_lt" (icmp_slt (parm_ 0) (parm_ 1))
-def emit_i32_gt : LLVMFunction := emit_icmp_native "monad_i32_gt" (icmp_sgt (parm_ 0) (parm_ 1))
+def emit_i32_eq : LLVMFunction := emit_i32_icmp_native "monad_i32_eq" (icmp_eq (var_ "a") (var_ "b"))
+def emit_i32_lt : LLVMFunction := emit_i32_icmp_native "monad_i32_lt" (icmp_slt (var_ "a") (var_ "b"))
+def emit_i32_gt : LLVMFunction := emit_i32_icmp_native "monad_i32_gt" (icmp_sgt (var_ "a") (var_ "b"))
 def emit_i32_to_i64 : LLVMFunction := emit_identity_native "monad_i32_to_i64"
 def emit_i64_to_i32 : LLVMFunction :=
   let entry :=

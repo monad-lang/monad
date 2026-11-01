@@ -363,11 +363,12 @@ def native_runtime_fn_name (attrs : List Attribute) : Option NativeWrapKind :=
             // emits `icmp_ult`/`icmp_ugt` -- `bool_result`, like `u64_eq`.
             else if String.beq target "u64_lt" then Option.some (NativeWrapKind.bool_result "monad_u64_lt")
             else if String.beq target "u64_gt" then Option.some (NativeWrapKind.bool_result "monad_u64_gt")
-            // The fixed-width unsigned family, unlike the u8 ops above:
-            // these DO mask to width, on both operands and the result,
-            // matching `mask_to_suffix` (rust/core/src/core_native.rs). They
-            // exist because std/src/sha256.mo is written against `U32`
-            // and could not be compiled at all without them.
+            // The fixed-width unsigned family: every runtime fn masks
+            // to width on both operands and the result, matching
+            // `mask_to_suffix` (rust/core/src/core_native.rs) -- the
+            // u8/u16 entries included since the Phase 2 emitter pass.
+            // They exist because std/src/sha256.mo is written against
+            // `U32` and could not be compiled at all without them.
             else if String.beq target "u8_add" then Option.some (NativeWrapKind.passthrough "monad_u8_add")
             else if String.beq target "u32_add" then Option.some (NativeWrapKind.passthrough "monad_u32_add")
             else if String.beq target "u32_sub" then Option.some (NativeWrapKind.passthrough "monad_u32_sub")
@@ -436,6 +437,31 @@ def native_runtime_fn_name (attrs : List Attribute) : Option NativeWrapKind :=
             else if String.beq target "i32_gt" then Option.some (NativeWrapKind.bool_result "monad_i32_gt")
             else if String.beq target "i32_to_i64" then Option.some (NativeWrapKind.passthrough "monad_i32_to_i64")
             else if String.beq target "i64_to_i32" then Option.some (NativeWrapKind.passthrough "monad_i64_to_i32")
+            // The signed-width ARITHMETIC (i8/i16/i32 add/sub/mul/div)
+            // and the i16 comparisons. Unlike the i8/i32 comparisons
+            // just above, these are runtime.c functions, not
+            // `define`s in the runtime module: `LLVMType` has no `i16_`
+            // and `LLVMValue` no `ashr`, so the trunc+sext canonicalization
+            // `emit_i8_icmp_native` spells for i8/i32 is unspellable for
+            // i16, and the arithmetic families follow the comparisons
+            // into C for family coherence (runtime.c's narrow casts ARE
+            // the reference's `mask_to_suffix`). Div guards the zero
+            // divisor; every entry carries an mk_decl below.
+            else if String.beq target "i8_add" then Option.some (NativeWrapKind.passthrough "monad_i8_add")
+            else if String.beq target "i8_sub" then Option.some (NativeWrapKind.passthrough "monad_i8_sub")
+            else if String.beq target "i8_mul" then Option.some (NativeWrapKind.passthrough "monad_i8_mul")
+            else if String.beq target "i8_div" then Option.some (NativeWrapKind.passthrough "monad_i8_div")
+            else if String.beq target "i16_add" then Option.some (NativeWrapKind.passthrough "monad_i16_add")
+            else if String.beq target "i16_sub" then Option.some (NativeWrapKind.passthrough "monad_i16_sub")
+            else if String.beq target "i16_mul" then Option.some (NativeWrapKind.passthrough "monad_i16_mul")
+            else if String.beq target "i16_div" then Option.some (NativeWrapKind.passthrough "monad_i16_div")
+            else if String.beq target "i16_eq" then Option.some (NativeWrapKind.bool_result "monad_i16_eq")
+            else if String.beq target "i16_lt" then Option.some (NativeWrapKind.bool_result "monad_i16_lt")
+            else if String.beq target "i16_gt" then Option.some (NativeWrapKind.bool_result "monad_i16_gt")
+            else if String.beq target "i32_add" then Option.some (NativeWrapKind.passthrough "monad_i32_add")
+            else if String.beq target "i32_sub" then Option.some (NativeWrapKind.passthrough "monad_i32_sub")
+            else if String.beq target "i32_mul" then Option.some (NativeWrapKind.passthrough "monad_i32_mul")
+            else if String.beq target "i32_div" then Option.some (NativeWrapKind.passthrough "monad_i32_div")
             // The `I64` arithmetic/comparison family -- the last group in
             // `native_op_table` (see that table's own doc comment, and
             // `runtime/src/natives.mo`'s emitters for the semantics).
@@ -487,6 +513,21 @@ def native_runtime_fn_name (attrs : List Attribute) : Option NativeWrapKind :=
             // table -- a native reached from a def the compiler compiles
             // is an ordinary native.
             else if String.beq target "f64_of_string" then Option.some (NativeWrapKind.passthrough "monad_f64_of_string")
+            // `F32` (`init/number.mo`): the f64 family's single-precision
+            // sibling, same conventions end to end -- an F32 value is its
+            // f32-ROUNDED double's bit pattern in an i64 payload
+            // (runtime.c's monad_f32_unbits/bits pair), `passthrough` for
+            // the arithmetic and formatting, `bool_result` for the
+            // comparisons. All runtime.c functions, so all of these
+            // carry mk_decl entries below.
+            else if String.beq target "f32_add" then Option.some (NativeWrapKind.passthrough "monad_f32_add")
+            else if String.beq target "f32_sub" then Option.some (NativeWrapKind.passthrough "monad_f32_sub")
+            else if String.beq target "f32_mul" then Option.some (NativeWrapKind.passthrough "monad_f32_mul")
+            else if String.beq target "f32_div" then Option.some (NativeWrapKind.passthrough "monad_f32_div")
+            else if String.beq target "f32_eq" then Option.some (NativeWrapKind.bool_result "monad_f32_eq")
+            else if String.beq target "f32_lt" then Option.some (NativeWrapKind.bool_result "monad_f32_lt")
+            else if String.beq target "f32_gt" then Option.some (NativeWrapKind.bool_result "monad_f32_gt")
+            else if String.beq target "f32_to_string" then Option.some (NativeWrapKind.passthrough "monad_f32_to_string")
             // `bench_report` is a documented stub (0 / true). `Bench` is
             // a measurement API, never load-bearing for correctness, and
             // a typed zero keeps `--verbose` compiles from crashing on a
@@ -511,6 +552,11 @@ def native_runtime_fn_name (attrs : List Attribute) : Option NativeWrapKind :=
             // unnoticed -- the direct-call path hides it.
             else if String.beq target "i64_to_string" then Option.some (NativeWrapKind.passthrough "monad_i64_to_string")
             else if String.beq target "i32_to_string" then Option.some (NativeWrapKind.passthrough "monad_i32_to_string")
+            // The narrower signed formatters, same canonicalize-then-print
+            // shape (runtime_libc.c delegates to monad_i64_to_string after
+            // the narrow cast); web does the same in platform_web.c.
+            else if String.beq target "i8_to_string" then Option.some (NativeWrapKind.passthrough "monad_i8_to_string")
+            else if String.beq target "i16_to_string" then Option.some (NativeWrapKind.passthrough "monad_i16_to_string")
             // Unsigned formatting: a U64 near the top of its range is a
             // NEGATIVE i64 in this backend's uniform representation, so
             // these can't share `monad_i64_to_string`. `U16.to_string`
@@ -999,6 +1045,41 @@ pub def runtime_declarations_for (kind : TargetKind) : List LLVMDeclaration :=
     let d118 := mk_decl "monad_inotify_add_watch" ["i64", "i64", "i64"] "i64" in
     let d119 := mk_decl "monad_inotify_rm_watch" ["i64", "i64"] "i64" in
     let d120 := mk_decl "monad_inotify_read" ["i64", "i64", "i64"] "i64" in
+    // The `F32` family and the signed-width arithmetic (runtime_core.c):
+    // every operand and result is one i64 word under the head-of-list
+    // convention -- an F32 payload is the f32-rounded double's bit
+    // pattern, a narrow int is its sign-extended canonical value, and
+    // the eq/lt/gt members return the raw 0/1 the `bool_result` wrap
+    // boxes as `Bool` (the f64 family's d48-d54 note, word for word).
+    // The i8/i32 comparison `define`s in the runtime module need no
+    // entry here; the i16 comparisons do -- they are C functions like
+    // everything in this group (the no-`i16_`/no-`ashr` story the
+    // native_runtime_fn_name entries carry).
+    let d125 := mk_decl "monad_f32_add" ["i64", "i64"] "i64" in
+    let d126 := mk_decl "monad_f32_sub" ["i64", "i64"] "i64" in
+    let d127 := mk_decl "monad_f32_mul" ["i64", "i64"] "i64" in
+    let d128 := mk_decl "monad_f32_div" ["i64", "i64"] "i64" in
+    let d129 := mk_decl "monad_f32_eq" ["i64", "i64"] "i64" in
+    let d130 := mk_decl "monad_f32_lt" ["i64", "i64"] "i64" in
+    let d131 := mk_decl "monad_f32_gt" ["i64", "i64"] "i64" in
+    let d132 := mk_decl "monad_f32_to_string" ["i64"] "i64" in
+    let d133 := mk_decl "monad_i8_add" ["i64", "i64"] "i64" in
+    let d134 := mk_decl "monad_i8_sub" ["i64", "i64"] "i64" in
+    let d135 := mk_decl "monad_i8_mul" ["i64", "i64"] "i64" in
+    let d136 := mk_decl "monad_i8_div" ["i64", "i64"] "i64" in
+    let d137 := mk_decl "monad_i8_to_string" ["i64"] "i64" in
+    let d138 := mk_decl "monad_i16_add" ["i64", "i64"] "i64" in
+    let d139 := mk_decl "monad_i16_sub" ["i64", "i64"] "i64" in
+    let d140 := mk_decl "monad_i16_mul" ["i64", "i64"] "i64" in
+    let d141 := mk_decl "monad_i16_div" ["i64", "i64"] "i64" in
+    let d142 := mk_decl "monad_i16_eq" ["i64", "i64"] "i64" in
+    let d143 := mk_decl "monad_i16_lt" ["i64", "i64"] "i64" in
+    let d144 := mk_decl "monad_i16_gt" ["i64", "i64"] "i64" in
+    let d145 := mk_decl "monad_i16_to_string" ["i64"] "i64" in
+    let d146 := mk_decl "monad_i32_add" ["i64", "i64"] "i64" in
+    let d147 := mk_decl "monad_i32_sub" ["i64", "i64"] "i64" in
+    let d148 := mk_decl "monad_i32_mul" ["i64", "i64"] "i64" in
+    let d149 := mk_decl "monad_i32_div" ["i64", "i64"] "i64" in
     // `std/concurrent/channel.mo` (platform_posix.c): the channel handle is
     // one i64 word, `put`'s value another, and every result is i64 --
     // `channel_put` returns the Unit constructor pointer, `channel_take`
@@ -1017,7 +1098,10 @@ pub def runtime_declarations_for (kind : TargetKind) : List LLVMDeclaration :=
      d74, d76, d78, d79, d80, d81, d82, d83, d84, d85, d87,
      d88, d91, d92, d93, d94, d95, d96, d97, d98, d99, d99a, d99b, d100, d101, d102, d103,
      d104, d105, d106, d107, d108, d109, d110, d111, d112, d113, d114, d115, d116,
-     d117, d118, d119, d120, d121, d122, d123, d124]
+     d117, d118, d119, d120, d121, d122, d123, d124,
+     d125, d126, d127, d128, d129, d130, d131, d132, d133,
+     d134, d135, d136, d137, d138, d139, d140, d141,
+     d142, d143, d144, d145, d146, d147, d148, d149]
 
 /// The native target's declaration list -- the historical name, kept for
 /// every existing caller and test.

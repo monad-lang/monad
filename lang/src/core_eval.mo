@@ -389,17 +389,16 @@ def fire_or_accumulate
 // the same meaning. The reference for every semantic detail is
 // `rust/core/src/core_native.rs::exec_native` (the Rust host), and where the
 // compiled backend intentionally diverges the divergence is named here:
-//   * The reference (`core_native.rs`) is width-correct for every width
-//     (Phase 1 of plans/implementations/true-numeric-types.md). This
-//     evaluator's i8/i16/i32/u8/u16/u64 ARITHMETIC arms are still
-//     UNMASKED i64 operations tagged `I64` (`int_binop`) -- masking
-//     them here is Phase 2; the compiled backend has the same gap.
-//   * U32 is the one width-correct family (`int_binop_width`): mask both
-//     operands to 32 bits, apply, mask the result.
-//   * U64 compares are UNSIGNED (sign-bit flip, mirroring the
-//     reference's `uint_cmp` and the emitted `icmp_ult`/`icmp_ugt`);
-//     U64 division/remainder are UNSIGNED (`uint_binop`); everything
-//     else about U64 is raw i64.
+//   * Every integer family is width-correct (`native_int_binop_width`/
+//     `native_int_div_width`/`native_int_cmp_width`): operands are
+//     masked to their width's canonical range, results are masked and
+//     tagged with the op's own suffix -- the mirror of the reference's
+//     Phase 1 (plans/implementations/true-numeric-types.md 2.1-2.4).
+//   * U64 is the one width whose mask is the identity: raw i64 payloads,
+//     results tagged `U64`; its division/remainder are UNSIGNED
+//     (`uint_binop`) and its compares are UNSIGNED (sign-bit flip,
+//     mirroring the reference's `uint_cmp` and the emitted
+//     `icmp_ult`/`icmp_ugt`).
 //   * division by zero returns 0 for the generic families; U32 division
 //     is an error (`int_div_width`).
 // Floats, IO/effects (`io_pure`/`io_bind`), `Eq.rec` and raw pointers are
@@ -471,15 +470,20 @@ def sign_extend (width : I64) (half : I64) (x : I64) : I64 :=
 
 def mask_u8 (x : I64) : I64 := wrap 256 x
 
+def mask_u16 (x : I64) : I64 := wrap 65536 x
+
 def mask_u32 (x : I64) : I64 := wrap 4294967296 x
 
-def masked_u8_value (x : I64) : Value := int_value (mask_u8 x) NumSuffix.u8
+/// The canonical-range projection for a SIGNED width: the low `width`
+/// bits, sign-extended. Partial applications of this are the i8/i16/i32
+/// `mask` arguments of the width-correct families below.
+def mask_i8 (x : I64) : I64 := sign_extend 256 127 x
 
-def masked_u16_value (x : I64) : Value := int_value (wrap 65536 x) NumSuffix.u16
+def mask_i16 (x : I64) : I64 := sign_extend 65536 32767 x
 
-def masked_u32_value (x : I64) : Value := int_value (mask_u32 x) NumSuffix.u32
+def mask_i32 (x : I64) : I64 := sign_extend 4294967296 2147483647 x
 
-// ─── Generic (unmasked) integer families ──────────────────────────────
+// ─── The i64 integer family ───────────────────────────────────────────
 
 def native_i64_binop (f : I64 -> I64 -> I64) (args : List Value) : Result CoreEvalError Value :=
   match args {
@@ -560,7 +564,85 @@ def native_i64_to_i64_value (suffix : NumSuffix) (f : I64 -> I64) (args : List V
       },
   }
 
-// ─── U32: the width-correct family ─────────────────────────────────────
+// ─── Width-correct integer families ────────────────────────────────────
+// The evaluator mirror of the reference's `int_binop_width`/
+// `int_div_width`/`int_cmp_width` (core_native.rs): every i8/i16/i32/
+// u8/u16/u32 native masks its operands to the width's canonical range
+// before the op and masks and tags the result with the width's own
+// suffix (`mask_i8`/`mask_i16`/`mask_i32`/`mask_u8`/`mask_u16`/
+// `mask_u32` above are those ranges). The generic `native_i64_binop`
+// family remains for the genuinely-i64 natives only.
+
+/// `int_binop_width`: mask both operands, apply, mask the result, tag
+/// it with the op's own width. The pre-masked operands keep `f` a
+/// plain i64 closure -- a masked u16 product cannot overflow i64.
+def native_int_binop_width (suffix : NumSuffix) (mask : I64 -> I64) (f : I64 -> I64 -> I64) (args : List Value) : Result CoreEvalError Value :=
+  match args {
+    List.empty => Result.err (CoreEvalError.ce_native_arg_error "expected 2 args, got 0"),
+    List.cons a rest1 =>
+      match rest1 {
+        List.empty => Result.err (CoreEvalError.ce_native_arg_error "expected 2 args, got 1"),
+        List.cons b _ =>
+          match value_as_i64 a {
+            Option.some x =>
+              match value_as_i64 b {
+                Option.some y => Result.ok (int_value (mask (f (mask x) (mask y))) suffix),
+                Option.none => Result.err (CoreEvalError.ce_native_arg_error "expected I64 arg"),
+              },
+            Option.none => Result.err (CoreEvalError.ce_native_arg_error "expected I64 arg"),
+          },
+      },
+  }
+
+/// `int_div_width`: mask both operands, yield 0 for a zero divisor (the
+/// ledger's uniform convention), mask and tag the quotient. The masked
+/// operands are small enough that the i64-only `MIN / -1` overflow
+/// cannot arise at any of these widths -- `I8.div (-128) (-1)` is 128,
+/// which the result mask folds back to -128.
+def native_int_div_width (suffix : NumSuffix) (mask : I64 -> I64) (args : List Value) : Result CoreEvalError Value :=
+  match args {
+    List.empty => Result.err (CoreEvalError.ce_native_arg_error "expected 2 args, got 0"),
+    List.cons a rest1 =>
+      match rest1 {
+        List.empty => Result.err (CoreEvalError.ce_native_arg_error "expected 2 args, got 1"),
+        List.cons b _ =>
+          match value_as_i64 a {
+            Option.some x =>
+              match value_as_i64 b {
+                Option.some y =>
+                  let q : I64 := if I64.beq (mask y) 0 then 0 else I64.div (mask x) (mask y) in
+                  Result.ok (int_value (mask q) suffix),
+                Option.none => Result.err (CoreEvalError.ce_native_arg_error "expected I64 arg"),
+              },
+            Option.none => Result.err (CoreEvalError.ce_native_arg_error "expected I64 arg"),
+          },
+      },
+  }
+
+/// `int_cmp_width`: mask both operands, compare in the width's
+/// canonical range. For the unsigned widths the masked operands are
+/// non-negative, so the signed `I64.lt`/`I64.gt` answer as unsigned
+/// ones too; u64 is the one width needing a genuine unsigned compare
+/// (its mask is the identity, so nothing rescues a signed answer).
+def native_int_cmp_width (mask : I64 -> I64) (f : I64 -> I64 -> Bool) (args : List Value) : Result CoreEvalError Value :=
+  match args {
+    List.empty => Result.err (CoreEvalError.ce_native_arg_error "expected 2 args, got 0"),
+    List.cons a rest1 =>
+      match rest1 {
+        List.empty => Result.err (CoreEvalError.ce_native_arg_error "expected 2 args, got 1"),
+        List.cons b _ =>
+          match value_as_i64 a {
+            Option.some x =>
+              match value_as_i64 b {
+                Option.some y => Result.ok (bool_value (f (mask x) (mask y))),
+                Option.none => Result.err (CoreEvalError.ce_native_arg_error "expected I64 arg"),
+              },
+            Option.none => Result.err (CoreEvalError.ce_native_arg_error "expected I64 arg"),
+          },
+      },
+  }
+
+// ─── U32: the width-correct family, via its own U32 natives ────────────
 
 def native_u32_binop (f : U32 -> U32 -> U32) (args : List Value) : Result CoreEvalError Value :=
   match args {
@@ -601,8 +683,10 @@ def native_u32_cmp (f : U32 -> U32 -> Bool) (args : List Value) : Result CoreEva
       },
   }
 
-/// `int_div_width`: mask, error on a zero divisor (the one family that
-/// does), mask the quotient.
+/// `int_div_width` for the one family routed through its own U32
+/// natives: mask, yield 0 for a zero divisor (the uniform convention
+/// the reference adopted in Phase 1 -- this used to be the one family
+/// that hard-errored), mask the quotient.
 def native_u32_div (args : List Value) : Result CoreEvalError Value :=
   match args {
     List.empty => Result.err (CoreEvalError.ce_native_arg_error "expected 2 args, got 0"),
@@ -615,7 +699,7 @@ def native_u32_div (args : List Value) : Result CoreEvalError Value :=
               match value_as_i64 b {
                 Option.some y =>
                   if I64.beq (mask_u32 y) 0
-                  then Result.err (CoreEvalError.ce_native_arg_error "division by zero")
+                  then Result.ok (int_value 0 NumSuffix.u32)
                   else Result.ok (int_value (U32.to_i64 (U32.div (I64.to_u32 x) (I64.to_u32 y))) NumSuffix.u32),
                 Option.none => Result.err (CoreEvalError.ce_native_arg_error "expected I64 arg"),
               },
@@ -986,54 +1070,55 @@ def exec_native_by_name (s : String) (args : List Value) : Result CoreEvalError 
   else if String.beq s "i64_to_u64" then native_i64_to_i64_value NumSuffix.u64 (fn (x : I64) => x) args
   else if String.beq s "i64_to_u32" then native_i64_to_i64_value NumSuffix.u32 mask_u32 args
   else if String.beq s "i64_to_i32" then native_i64_to_i64_value NumSuffix.i32 (sign_extend 4294967296 2147483647) args
-  // I8 / I16 / I32: unmasked i64 arithmetic, tagged I64 (see the block
-  // comment). Division is guarded; the comparisons are plain i64 ones.
-  else if String.beq s "i8_add" then native_i64_binop I64.add args
-  else if String.beq s "i8_sub" then native_i64_binop I64.sub args
-  else if String.beq s "i8_mul" then native_i64_binop I64.mul args
-  else if String.beq s "i8_div" then native_i64_div_binop args
-  else if String.beq s "i8_eq" then native_i64_bool_binop I64.beq args
-  else if String.beq s "i8_lt" then native_i64_bool_binop I64.lt args
-  else if String.beq s "i8_gt" then native_i64_bool_binop I64.gt args
-  else if String.beq s "i8_to_string" then native_i64_to_string (fn (x : I64) => I64.to_string (sign_extend 256 127 x)) args
-  else if String.beq s "i16_add" then native_i64_binop I64.add args
-  else if String.beq s "i16_sub" then native_i64_binop I64.sub args
-  else if String.beq s "i16_mul" then native_i64_binop I64.mul args
-  else if String.beq s "i16_div" then native_i64_div_binop args
-  else if String.beq s "i16_eq" then native_i64_bool_binop I64.beq args
-  else if String.beq s "i16_lt" then native_i64_bool_binop I64.lt args
-  else if String.beq s "i16_gt" then native_i64_bool_binop I64.gt args
-  else if String.beq s "i16_to_string" then native_i64_to_string (fn (x : I64) => I64.to_string (sign_extend 65536 32767 x)) args
-  else if String.beq s "i32_add" then native_i64_binop I64.add args
-  else if String.beq s "i32_sub" then native_i64_binop I64.sub args
-  else if String.beq s "i32_mul" then native_i64_binop I64.mul args
-  else if String.beq s "i32_div" then native_i64_div_binop args
-  else if String.beq s "i32_eq" then native_i64_bool_binop I64.beq args
-  else if String.beq s "i32_lt" then native_i64_bool_binop I64.lt args
-  else if String.beq s "i32_gt" then native_i64_bool_binop I64.gt args
-  else if String.beq s "i32_to_string" then native_i64_to_string (fn (x : I64) => I64.to_string (sign_extend 4294967296 2147483647 x)) args
+  // I8 / I16 / I32: the width-correct families -- operands masked to
+  // the signed width's canonical range, results masked and tagged with
+  // the width's own suffix (the evaluator mirror of Phase 1).
+  else if String.beq s "i8_add" then native_int_binop_width NumSuffix.i8 mask_i8 I64.add args
+  else if String.beq s "i8_sub" then native_int_binop_width NumSuffix.i8 mask_i8 I64.sub args
+  else if String.beq s "i8_mul" then native_int_binop_width NumSuffix.i8 mask_i8 I64.mul args
+  else if String.beq s "i8_div" then native_int_div_width NumSuffix.i8 mask_i8 args
+  else if String.beq s "i8_eq" then native_int_cmp_width mask_i8 I64.beq args
+  else if String.beq s "i8_lt" then native_int_cmp_width mask_i8 I64.lt args
+  else if String.beq s "i8_gt" then native_int_cmp_width mask_i8 I64.gt args
+  else if String.beq s "i8_to_string" then native_i64_to_string (fn (x : I64) => I64.to_string (mask_i8 x)) args
+  else if String.beq s "i16_add" then native_int_binop_width NumSuffix.i16 mask_i16 I64.add args
+  else if String.beq s "i16_sub" then native_int_binop_width NumSuffix.i16 mask_i16 I64.sub args
+  else if String.beq s "i16_mul" then native_int_binop_width NumSuffix.i16 mask_i16 I64.mul args
+  else if String.beq s "i16_div" then native_int_div_width NumSuffix.i16 mask_i16 args
+  else if String.beq s "i16_eq" then native_int_cmp_width mask_i16 I64.beq args
+  else if String.beq s "i16_lt" then native_int_cmp_width mask_i16 I64.lt args
+  else if String.beq s "i16_gt" then native_int_cmp_width mask_i16 I64.gt args
+  else if String.beq s "i16_to_string" then native_i64_to_string (fn (x : I64) => I64.to_string (mask_i16 x)) args
+  else if String.beq s "i32_add" then native_int_binop_width NumSuffix.i32 mask_i32 I64.add args
+  else if String.beq s "i32_sub" then native_int_binop_width NumSuffix.i32 mask_i32 I64.sub args
+  else if String.beq s "i32_mul" then native_int_binop_width NumSuffix.i32 mask_i32 I64.mul args
+  else if String.beq s "i32_div" then native_int_div_width NumSuffix.i32 mask_i32 args
+  else if String.beq s "i32_eq" then native_int_cmp_width mask_i32 I64.beq args
+  else if String.beq s "i32_lt" then native_int_cmp_width mask_i32 I64.lt args
+  else if String.beq s "i32_gt" then native_int_cmp_width mask_i32 I64.gt args
+  else if String.beq s "i32_to_string" then native_i64_to_string (fn (x : I64) => I64.to_string (mask_i32 x)) args
   else if String.beq s "i32_to_i64" then native_i64_to_i64_value NumSuffix.i64 (fn (x : I64) => x) args
-  // U8 / U16: unmasked like the reference; to_string prints the width's
-  // canonical value (that part IS width-correct, matching `as u8`).
-  else if String.beq s "u8_add" then native_i64_binop I64.add args
-  else if String.beq s "u8_sub" then native_i64_binop I64.sub args
-  else if String.beq s "u8_mul" then native_i64_binop I64.mul args
-  else if String.beq s "u8_div" then native_i64_div_binop args
-  else if String.beq s "u8_eq" then native_i64_bool_binop I64.beq args
-  else if String.beq s "u8_lt" then native_i64_bool_binop I64.lt args
-  else if String.beq s "u8_gt" then native_i64_bool_binop I64.gt args
+  // U8 / U16: the width-correct families, masked like the reference
+  // since Phase 1; to_string keeps printing the width's canonical value.
+  else if String.beq s "u8_add" then native_int_binop_width NumSuffix.u8 mask_u8 I64.add args
+  else if String.beq s "u8_sub" then native_int_binop_width NumSuffix.u8 mask_u8 I64.sub args
+  else if String.beq s "u8_mul" then native_int_binop_width NumSuffix.u8 mask_u8 I64.mul args
+  else if String.beq s "u8_div" then native_int_div_width NumSuffix.u8 mask_u8 args
+  else if String.beq s "u8_eq" then native_int_cmp_width mask_u8 I64.beq args
+  else if String.beq s "u8_lt" then native_int_cmp_width mask_u8 I64.lt args
+  else if String.beq s "u8_gt" then native_int_cmp_width mask_u8 I64.gt args
   else if String.beq s "u8_to_string" then native_i64_to_string (fn (x : I64) => I64.to_string (mask_u8 x)) args
   else if String.beq s "u8_to_u32" then native_i64_to_i64_value NumSuffix.u32 mask_u32 args
   else if String.beq s "u8_to_u64" then native_i64_to_i64_value NumSuffix.u64 (fn (x : I64) => x) args
   else if String.beq s "u8_to_i64" then native_i64_to_i64_value NumSuffix.i64 (fn (x : I64) => x) args
-  else if String.beq s "u16_add" then native_i64_binop I64.add args
-  else if String.beq s "u16_sub" then native_i64_binop I64.sub args
-  else if String.beq s "u16_mul" then native_i64_binop I64.mul args
-  else if String.beq s "u16_div" then native_i64_div_binop args
-  else if String.beq s "u16_eq" then native_i64_bool_binop I64.beq args
-  else if String.beq s "u16_lt" then native_i64_bool_binop I64.lt args
-  else if String.beq s "u16_gt" then native_i64_bool_binop I64.gt args
-  else if String.beq s "u16_to_string" then native_i64_to_string (fn (x : I64) => I64.to_string (wrap 65536 x)) args
+  else if String.beq s "u16_add" then native_int_binop_width NumSuffix.u16 mask_u16 I64.add args
+  else if String.beq s "u16_sub" then native_int_binop_width NumSuffix.u16 mask_u16 I64.sub args
+  else if String.beq s "u16_mul" then native_int_binop_width NumSuffix.u16 mask_u16 I64.mul args
+  else if String.beq s "u16_div" then native_int_div_width NumSuffix.u16 mask_u16 args
+  else if String.beq s "u16_eq" then native_int_cmp_width mask_u16 I64.beq args
+  else if String.beq s "u16_lt" then native_int_cmp_width mask_u16 I64.lt args
+  else if String.beq s "u16_gt" then native_int_cmp_width mask_u16 I64.gt args
+  else if String.beq s "u16_to_string" then native_i64_to_string (fn (x : I64) => I64.to_string (mask_u16 x)) args
   else if String.beq s "u16_to_i64" then native_i64_to_i64_value NumSuffix.i64 (fn (x : I64) => x) args
   // U32: the width-correct family.
   else if String.beq s "u32_add" then native_u32_binop U32.add args
@@ -1051,11 +1136,13 @@ def exec_native_by_name (s : String) (args : List Value) : Result CoreEvalError 
   else if String.beq s "u32_to_string" then native_i64_to_string (fn (x : I64) => U32.to_string (I64.to_u32 x)) args
   else if String.beq s "u32_to_u8" then native_i64_to_i64_value NumSuffix.u8 mask_u8 args
   else if String.beq s "u32_to_i64" then native_i64_to_i64_value NumSuffix.i64 mask_u32 args
-  // U64: raw i64 except the unsigned division/remainder/xor and the
-  // unsigned compares below.
-  else if String.beq s "u64_add" then native_i64_binop I64.add args
-  else if String.beq s "u64_sub" then native_i64_binop I64.sub args
-  else if String.beq s "u64_mul" then native_i64_binop I64.mul args
+  // U64: raw i64 payloads -- the width mask is the identity at 64
+  // bits, so only the result TAG differs from the generic family --
+  // except the unsigned division/remainder/xor and the unsigned
+  // compares below.
+  else if String.beq s "u64_add" then native_int_binop_width NumSuffix.u64 (fn (x : I64) => x) I64.add args
+  else if String.beq s "u64_sub" then native_int_binop_width NumSuffix.u64 (fn (x : I64) => x) I64.sub args
+  else if String.beq s "u64_mul" then native_int_binop_width NumSuffix.u64 (fn (x : I64) => x) I64.mul args
   else if String.beq s "u64_div" then native_u64_div args
   else if String.beq s "u64_mod" then native_u64_mod args
   else if String.beq s "u64_xor" then native_u64_xor args
@@ -1477,6 +1564,57 @@ def test_ntv_u64_gt_is_unsigned : Bool :=
       let cond : CoreIr := CoreIr.ntv n [num_lit (I64.sub 0 1), num_lit 1] in
       let iff : CoreIr := CoreIr.match_ cond [MatchArm.arm 0 (num_lit 100), MatchArm.arm 0 (num_lit 200)] in
       is_num (run iff) 100,
+    Option.none => false,
+  }
+
+#[test]
+def test_ntv_i8_add_wraps_to_width : Bool :=
+  // 100 + 100 = 200 -> -56 in i8's canonical range. The arm used to run
+  // unmasked i64 arithmetic tagged I64, which kept 200 and made the
+  // width's own `I8.add 100i8 100i8 == -56i8` compare false.
+  match native_id_for_name (Identifier.id "i8_add") {
+    Option.some n => is_num (run (CoreIr.ntv n [num_lit 100, num_lit 100])) (I64.sub 0 56),
+    Option.none => false,
+  }
+
+#[test]
+def test_ntv_u16_mul_wraps_to_width : Bool :=
+  // 300 * 300 = 90000 -> 24464 (mod 2^16), same masking rule for the
+  // unsigned widths.
+  match native_id_for_name (Identifier.id "u16_mul") {
+    Option.some n => is_num (run (CoreIr.ntv n [num_lit 300, num_lit 300])) 24464,
+    Option.none => false,
+  }
+
+#[test]
+def test_ntv_i8_div_min_over_neg_one_masks_quotient : Bool :=
+  // i8: -128 / -1 = 128, out of range, folded back to -128 by the
+  // result mask -- the width-level twin of i64's guarded MIN / -1 case.
+  match native_id_for_name (Identifier.id "i8_div") {
+    Option.some n =>
+      is_num (run (CoreIr.ntv n [num_lit (I64.sub 0 128), num_lit (I64.sub 0 1)])) (I64.sub 0 128),
+    Option.none => false,
+  }
+
+#[test]
+def test_ntv_u8_eq_masks_operands : Bool :=
+  // 256 is not a canonical U8 payload; the operand mask projects it to
+  // 0, so this compares 0 == 0 and answers true. The unmasked compare
+  // would answer false -- the operand masking IS the assertion.
+  match native_id_for_name (Identifier.id "u8_eq") {
+    Option.some n =>
+      let cond : CoreIr := CoreIr.ntv n [num_lit 256, num_lit 0] in
+      let iff : CoreIr := CoreIr.match_ cond [MatchArm.arm 0 (num_lit 1), MatchArm.arm 0 (num_lit 0)] in
+      is_num (run iff) 1,
+    Option.none => false,
+  }
+
+#[test]
+def test_ntv_u32_div_by_zero_is_zero : Bool :=
+  // The uniform zero-divisor convention the reference adopted; this
+  // family used to be the one that hard-errored instead.
+  match native_id_for_name (Identifier.id "u32_div") {
+    Option.some n => is_num (run (CoreIr.ntv n [num_lit 7, num_lit 0])) 0,
     Option.none => false,
   }
 

@@ -790,6 +790,15 @@ rt_str monad_i32_to_string(int64_t n) {
     return monad_i64_to_string((int64_t)(int32_t)n);
 }
 
+/* The narrower signed siblings, same canonicalize-then-print shape. */
+rt_str monad_i8_to_string(int64_t n) {
+    return monad_i64_to_string((int64_t)(int8_t)n);
+}
+
+rt_str monad_i16_to_string(int64_t n) {
+    return monad_i64_to_string((int64_t)(int16_t)n);
+}
+
 rt_str monad_u8_to_string(int64_t n) {
     return web_unsigned_to_string((uint64_t)(uint8_t)n, 0);
 }
@@ -820,6 +829,20 @@ rt_str monad_f64_to_string(int64_t v) {
     for (int64_t i = 0; i < n; i++) out[i] = scratch[i];
     out[n] = '\0';
     return RT_WORD(out);
+}
+
+/* `F32.to_string` on the web target. The JS host's formatter (the
+   `monad_js_f64_to_string` import) only speaks double, and this
+   platform has no libc for the native target's `strtof`-based
+   shortest-f32 search, so the payload -- already an f32-ROUNDED
+   double by the storage invariant -- goes to the double formatter
+   as-is. That prints the shortest DOUBLE spelling of the f32 value
+   ("0.10000000149011612" for the f32 0.1) where Rust's `f32` Display
+   prints "0.1": a formatting-only divergence, web only, and
+   the same looseness the f64 web spelling already carries (JS writes
+   "1e+20" where Rust writes "100000000000000000000"). */
+rt_str monad_f32_to_string(int64_t v) {
+    return monad_f64_to_string(v);
 }
 
 /* ── entry point ────────────────────────────────────────────────────── */

@@ -1102,6 +1102,78 @@ int64_t monad_f64_div(int64_t a, int64_t b) { return monad_f64_bits(monad_f64_un
 int64_t monad_f64_eq(int64_t a, int64_t b) { return monad_f64_unbits(a) == monad_f64_unbits(b) ? 1 : 0; }
 int64_t monad_f64_lt(int64_t a, int64_t b) { return monad_f64_unbits(a) < monad_f64_unbits(b) ? 1 : 0; }
 int64_t monad_f64_gt(int64_t a, int64_t b) { return monad_f64_unbits(a) > monad_f64_unbits(b) ? 1 : 0; }
+
+/* The F32 family. An `F32` value is the f32-ROUNDED value held in a
+   double (the uniform-storage invariant, plans/implementations/
+   true-numeric-types.md 3.1): the payload's double converts to float
+   exactly, every operation computes in `float` so each intermediate
+   rounds to single precision, and the result widens back through
+   double -- the C spelling of the reference's `(op(a, b) as f32) as
+   f64`. `0.1f32 + 0.2f32` therefore equals `0.3f32` here exactly as
+   it does in the interpreter. Division follows IEEE float rules, like
+   the f64 family: no zero-divisor guard, `1.0f/0.0f` is `inf`. */
+static float monad_f32_unbits(int64_t bits) {
+    double d;
+    memcpy(&d, &bits, sizeof d);
+    return (float)d;
+}
+static int64_t monad_f32_bits(float f) {
+    double d = (double)f;
+    int64_t bits;
+    memcpy(&bits, &d, sizeof bits);
+    return bits;
+}
+int64_t monad_f32_add(int64_t a, int64_t b) { return monad_f32_bits(monad_f32_unbits(a) + monad_f32_unbits(b)); }
+int64_t monad_f32_sub(int64_t a, int64_t b) { return monad_f32_bits(monad_f32_unbits(a) - monad_f32_unbits(b)); }
+int64_t monad_f32_mul(int64_t a, int64_t b) { return monad_f32_bits(monad_f32_unbits(a) * monad_f32_unbits(b)); }
+int64_t monad_f32_div(int64_t a, int64_t b) { return monad_f32_bits(monad_f32_unbits(a) / monad_f32_unbits(b)); }
+int64_t monad_f32_eq(int64_t a, int64_t b) { return monad_f32_unbits(a) == monad_f32_unbits(b) ? 1 : 0; }
+int64_t monad_f32_lt(int64_t a, int64_t b) { return monad_f32_unbits(a) < monad_f32_unbits(b) ? 1 : 0; }
+int64_t monad_f32_gt(int64_t a, int64_t b) { return monad_f32_unbits(a) > monad_f32_unbits(b) ? 1 : 0; }
+
+/* Signed-width integer arithmetic: the C spelling of the reference's
+   `mask_to_suffix(op(mask_to_suffix(a), mask_to_suffix(b)))` -- C's
+   `(int8_t)`/`(int16_t)`/`(int32_t)` casts ARE the reference's `v as iN`
+   (both truncate to N bits and sign-extend). The narrow casts run the
+   operation on int-promoted operands (no signed-overflow UB: two i8s
+   cannot overflow int), and the i32 family computes in int64_t for the
+   same reason. Division guards the zero divisor (0, like the
+   evaluator's `native_int_div_width`) and runs in a WIDER integer so
+   `INT_MIN / -1` wraps instead of triggering C's division UB; the
+   closing narrow cast folds the wrapped quotient back (i8: -128). */
+int64_t monad_i8_add(int64_t a, int64_t b) { return (int64_t)(int8_t)((int8_t)a + (int8_t)b); }
+int64_t monad_i8_sub(int64_t a, int64_t b) { return (int64_t)(int8_t)((int8_t)a - (int8_t)b); }
+int64_t monad_i8_mul(int64_t a, int64_t b) { return (int64_t)(int8_t)((int8_t)a * (int8_t)b); }
+int64_t monad_i8_div(int64_t a, int64_t b) {
+    int8_t x = (int8_t)a, y = (int8_t)b;
+    if (y == 0) return 0;
+    return (int64_t)(int8_t)((int)x / (int)y);
+}
+int64_t monad_i16_add(int64_t a, int64_t b) { return (int64_t)(int16_t)((int16_t)a + (int16_t)b); }
+int64_t monad_i16_sub(int64_t a, int64_t b) { return (int64_t)(int16_t)((int16_t)a - (int16_t)b); }
+int64_t monad_i16_mul(int64_t a, int64_t b) { return (int64_t)(int16_t)((int16_t)a * (int16_t)b); }
+int64_t monad_i16_div(int64_t a, int64_t b) {
+    int16_t x = (int16_t)a, y = (int16_t)b;
+    if (y == 0) return 0;
+    return (int64_t)(int16_t)((int)x / (int)y);
+}
+int64_t monad_i32_add(int64_t a, int64_t b) { return (int64_t)(int32_t)((int64_t)(int32_t)a + (int64_t)(int32_t)b); }
+int64_t monad_i32_sub(int64_t a, int64_t b) { return (int64_t)(int32_t)((int64_t)(int32_t)a - (int64_t)(int32_t)b); }
+int64_t monad_i32_mul(int64_t a, int64_t b) { return (int64_t)(int32_t)((int64_t)(int32_t)a * (int64_t)(int32_t)b); }
+int64_t monad_i32_div(int64_t a, int64_t b) {
+    int32_t x = (int32_t)a, y = (int32_t)b;
+    if (y == 0) return 0;
+    return (int64_t)(int32_t)((int64_t)x / (int64_t)y);
+}
+/* i16 comparisons: the one signed-width family that could not be an
+   LLVM emitter -- `LLVMType` has no `i16_` and `LLVMValue` no `ashr`,
+   so the trunc+sext shape its i8/i32 twins use (natives.mo's
+   emit_i8_icmp_native) is unspellable there. C casts handle it in one
+   line, the same C route the f64 comparison family takes. */
+int64_t monad_i16_eq(int64_t a, int64_t b) { return (int16_t)a == (int16_t)b ? 1 : 0; }
+int64_t monad_i16_lt(int64_t a, int64_t b) { return (int16_t)a < (int16_t)b ? 1 : 0; }
+int64_t monad_i16_gt(int64_t a, int64_t b) { return (int16_t)a > (int16_t)b ? 1 : 0; }
+
 /* `#[native "build_commit"]` (lang/main.mo's `build_commit : String`) --
    returns the git commit hash this binary was compiled from, baked in
    at build time via -DMONAD_BUILD_COMMIT. "unknown" if git was
