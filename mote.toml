@@ -119,8 +119,14 @@ path = "motes/lsp"
 [workspace.dependencies.markdown]
 path = "motes/markdown"
 
+[workspace.dependencies.mcp_client]
+path = "motes/mcp_client"
+
 [workspace.dependencies.moose]
 path = "motes/moose"
+
+[workspace.dependencies.mty]
+path = "motes/mty"
 
 [workspace.dependencies.parsec]
 path = "motes/parsec"
@@ -130,6 +136,9 @@ path = "runtime"
 
 [workspace.dependencies.serde]
 path = "motes/serde"
+
+[workspace.dependencies.shuttle]
+path = "motes/shuttle"
 
 [workspace.dependencies.std]
 path = "std"
@@ -142,6 +151,9 @@ path = "motes/time"
 
 [workspace.dependencies.toolkit]
 path = "motes/toolkit"
+
+[workspace.dependencies.tui]
+path = "motes/tui"
 
 [workspace.dependencies.web_event]
 path = "motes/web_event"

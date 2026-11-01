@@ -9,41 +9,44 @@ name = "weaver"
 version = "0.1.0"
 edition = "2026"
 
+# Every source is inherited from the root's `[workspace.dependencies]`
+# (mote.toml), so a path moves in one place. An inherited path resolves
+# from the workspace ROOT, not from this directory.
 [dependencies.init]
-path = "../../init"
+workspace = true
 
 [dependencies.std]
-path = "../../std"
+workspace = true
 
 [dependencies.log]
-path = "../log"
+workspace = true
 
 [dependencies.json]
-path = "../json"
+workspace = true
 
 [dependencies.shuttle]
-path = "../shuttle"
+workspace = true
 
 [dependencies.tui]
-path = "../tui"
+workspace = true
 
 # The pty/TUI test harness (`motes/mty`) used by the drivers under `test/`.
 # Weaver's binary does not import it; the dependency exists so the test files
 # can `use mty::...` without failing the declared-deps gate.
 [dependencies.mty]
-path = "../mty"
+workspace = true
 
 [dependencies.toml]
-path = "../toml"
+workspace = true
 
 [dependencies.clap]
-path = "../clap"
+workspace = true
 
 [dependencies.mcp_client]
-path = "../mcp_client"
+workspace = true
 
 [dependencies.parsec]
-path = "../parsec"
+workspace = true
 
 # Assistant Markdown is rendered through the markdown mote; plan files use
 # its YAML frontmatter split and the yaml mote. `xml_html` is here for the
@@ -68,18 +71,18 @@ workspace = true
 # codegen and the IR type names, and without them the module graph fails
 # with `module not found: llvm.strmap`.
 [dependencies.lang]
-path = "../../lang"
+workspace = true
 
 # `monad_eval` runs through the shared evaluator's filesystem entry
 # (`eval::file`), the same pipeline `monad eval` uses.
 [dependencies.eval]
-path = "../../eval"
+workspace = true
 
 [dependencies.llvm]
-path = "../../llvm"
+workspace = true
 
 [dependencies.runtime]
-path = "../../runtime"
+workspace = true
 
 # Affine-by-default migration exception (measured 2026-10-22).
 # Delete this table when the mote reaches zero violations; the default
