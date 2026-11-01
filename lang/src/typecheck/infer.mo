@@ -4675,6 +4675,19 @@ def normalize_path_boundary (t : Term) (scope : Scope) (local_types : List Term)
                     Term.app (normalize_path_boundary f scope local_types locals)
                         (normalize_path_boundary d scope local_types locals),
             },
+        // funext's boundary is a lambda (`fn x => h x i0`): descend so the
+        // applied-path rewrite sees `h x i0` at the depth it is read from.
+        // The binder's type is pushed unshifted -- it is written outside its
+        // own binder, the same convention `idx + 1` compensates for below.
+        Term.lam bnd typ body =>
+            let lv : LocalVar := {
+                name := debug_name_to_id (binder_name bnd),
+                typ := typ,
+                multiplicity := Multiplicity.many,
+            } in
+            Term.lam bnd typ
+                (normalize_path_boundary body scope (List.cons typ local_types)
+                    (scope_push_local lv locals)),
         Term.con c =>
             match c {
                 { name := name, typ_name := typ_name, num_args := num_args, args := cargs } =>
@@ -4702,6 +4715,75 @@ def normalize_con_args (args : List (Option Term)) (scope : Scope) (local_types 
             },
     }
 
+/// Instantiate the leading `Term.pi` binders of `typ` with `args`, one
+/// explicit binder per argument. `Option.none` when an argument meets a
+/// non-Pi or a non-explicit binder -- the caller needs the applied type to
+/// be the one the term really has, not a guess.
+#[partial]
+def instantiate_pi_prefix (typ : Term) (args : List Term) (scope : Scope)
+    (locals : LocalScope) : Option Term :=
+    match args {
+        List.empty => Option.some typ,
+        List.cons a rest =>
+            match term_peel typ {
+                Term.pi b _dom ret =>
+                    if binder_is_explicit b
+                    then instantiate_pi_prefix
+                        (whnf scope locals (beta_reduce ret a)) rest scope locals
+                    else Option.none,
+                _ => Option.none,
+            },
+    }
+
+/// `head args... d` where `head` is a LOCAL function whose Pi chain ends in a
+/// path: read the path type the leading arguments reach, and rewrite the
+/// final endpoint argument to the endpoint that type carries. This is the
+/// applied form of `rewrite_stuck_path_app`'s bare-variable fact --
+/// `h : (x : A) -> Path B (f x) (g x)` gives `h x i0 = f x` by typing.
+/// `Option.none` for a global head, an unsaturated chain, a leading argument
+/// that is not an explicit Pi, or a final argument that is not an endpoint;
+/// the caller then leaves the term stuck.
+def rewrite_applied_path (spine : Term) (scope : Scope) (local_types : List Term)
+    (locals : LocalScope) : Option Term :=
+    match flatten_call_spine spine {
+        CallSpine.mk head args =>
+            match term_peel head {
+                Term.var idx _dbg =>
+                    if I64.beq idx sentinel then Option.none
+                    else
+                        match list_reverse args {
+                            List.empty => Option.none,
+                            List.cons last rev_init =>
+                                match nth_type idx local_types {
+                                    Option.none => Option.none,
+                                    Option.some head_typ =>
+                                        match endpoint_of (whnf scope locals last) {
+                                            Option.none => Option.none,
+                                            Option.some ep =>
+                                                // The stored type is written at its
+                                                // binder's depth; `idx + 1` is the
+                                                // shift `type_check_bound_var` uses
+                                                // to read it here.
+                                                match instantiate_pi_prefix
+                                                    (term_shift (idx + 1) head_typ)
+                                                    (list_reverse rev_init) scope locals {
+                                                    Option.none => Option.none,
+                                                    Option.some applied =>
+                                                        match path_parts_of (whnf scope locals applied) {
+                                                            Option.none => Option.none,
+                                                            Option.some parts =>
+                                                                if cubical_prim_eq ep CubicalPrim.i0
+                                                                then Option.some parts.left
+                                                                else Option.some parts.right,
+                                                        },
+                                                },
+                                        },
+                                },
+                        },
+                _ => Option.none,
+            },
+    }
+
 /// `p d` where `p` is a LOCAL path-typed variable and `d` an endpoint:
 /// the endpoint value the path's own type carries (`p : PathP A a b`
 /// means `p i0 = a`, `p i1 = b` -- the boundary is part of the type, so
@@ -4709,10 +4791,13 @@ def normalize_con_args (args : List (Option Term)) (scope : Scope) (local_types 
 /// heuristic unification step). `Option.none` unless BOTH hold. A
 /// free/global head is refused: a def reference is a `whnf` job, and
 /// `normalize_path_boundary` has already given it that chance to unfold
-/// into a reducible body. Only the head is path-typed; an applied path
-/// under further arguments (`p x i0` -- `funext`'s boundary) is not
-/// rewritten here, which is the recorded reason `funext` waits for
-/// lambda-eta in `unify` alongside R2.
+/// into a reducible body.
+///
+/// An APPLICATION spine (`h x i0`, funext's boundary) takes the applied form:
+/// `rewrite_applied_path` consumes the leading arguments to find the path
+/// type and rewrites the last one. A head already of path type is left to the
+/// bare-variable arm and to `normalize_path_boundary`'s recursion, so
+/// `(p i0) x` resolves through the inner `p i0`.
 def rewrite_stuck_path_app (f : Term) (d : Term) (scope : Scope) (local_types : List Term)
     (locals : LocalScope) : Option Term :=
     match term_peel f {
@@ -4746,6 +4831,9 @@ def rewrite_stuck_path_app (f : Term) (d : Term) (scope : Scope) (local_types : 
                                 },
                         },
                 },
+        // An APPLICATION spine: `h x i0`, where `h`'s own type is what
+        // decides the endpoint.
+        Term.app _ _ => rewrite_applied_path (Term.app f d) scope local_types locals,
         _ => Option.none,
     }
 
@@ -7674,18 +7762,26 @@ def equiv_sigma (a_ty : Term) (a_body : Term) : Term :=
     Term.app (Term.app equiv_sigma_ref a_ty) (Term.lam binder_anon a_ty a_body)
 
 /// `isContr A := Sigma A (fn center => (x : A) -> Path A x center)`.
+///
+/// The bound variables carry the NAMES `proofs/src/equiv.mo` gives them.
+/// `Similar` compares a bound variable's debug name, and the drift pin
+/// (`proofs/src/checker/cubical_props.mo`) requires this inlined expansion
+/// and the library's own unfolding to be convertible, not merely shaped
+/// alike -- and `whnf` introduces the library's names mid-comparison.
 def equiv_is_contr (a_ty : Term) : Term :=
     equiv_sigma a_ty
         (Term.pi binder_anon (term_shift 1 a_ty)
-            (equiv_path (term_shift 2 a_ty) (Term.var 0 DebugName.unnamed)
-                (Term.var 1 DebugName.unnamed)))
+            (equiv_path (term_shift 2 a_ty)
+                (Term.var 0 (DebugName.named (Identifier.id "x")))
+                (Term.var 1 (DebugName.named (Identifier.id "center")))))
 
 /// `fiber A B f b := Sigma A (fn a => Path B (f a) b)`, for the four terms
-/// at the caller's depth.
+/// at the caller's depth. The Sigma's variable is named `a`, as in the
+/// library def, for the drift pin's sake.
 def equiv_fiber (a_ty : Term) (b_ty : Term) (a_fun : Term) (a_point : Term) : Term :=
     equiv_sigma a_ty
         (equiv_path (term_shift 1 b_ty)
-            (Term.app (term_shift 1 a_fun) (Term.var 0 DebugName.unnamed))
+            (Term.app (term_shift 1 a_fun) (Term.var 0 (DebugName.named (Identifier.id "a"))))
             (term_shift 1 a_point))
 
 /// `Equiv X Y := Sigma (X -> Y) (fn f => (b : Y) -> isContr (fiber X Y f b))`
@@ -7700,8 +7796,8 @@ pub def equiv_type (a_x : Term) (a_y : Term) : Term :=
         (Term.pi binder_anon (term_shift 1 a_y)
             (equiv_is_contr
                 (equiv_fiber (term_shift 2 a_x) (term_shift 2 a_y)
-                    (Term.var 1 DebugName.unnamed)
-                    (Term.var 0 DebugName.unnamed))))
+                    (Term.var 1 (DebugName.named (Identifier.id "f")))
+                    (Term.var 0 (DebugName.named (Identifier.id "b"))))))
 
 /// `w : (u : is_one φ) -> Equiv (T u) A` -- `Glue`'s fourth argument's type.
 def glue_equiv_type (a_typ : Term) (a_face : Term) (a_partial : Term) : Term :=
