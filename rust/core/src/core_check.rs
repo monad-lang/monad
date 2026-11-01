@@ -2269,6 +2269,53 @@ fn try_resolve_class_method_inner(
     }
     let _ = unify(mctx, &peek, expected);
   }
+  // META-PINNING PRE-PASS: check every RAW, undesugared arg against its
+  // param type — best-effort, never fatal — BEFORE the desugar loop
+  // below, so that every meta an ARG'S OWN type can pin is pinned
+  // before ANY arg is desugared. Peel the method's Pi chain the same
+  // way the peek above does (safe for the reason its doc comment
+  // states: class methods' types are non-dependent on their term
+  // arguments, so no param type ever mentions a term binder of a Pi
+  // peeled before it); the param types keep the SAME meta atoms as
+  // `residual`'s own chain (cloning a `Meta` keeps its atom id), so a
+  // pin made here is a pin the loop below would make anyway — just
+  // earlier and in a better order.
+  //
+  // Why the order matters: the loop below desugars NON-speculative
+  // args (class meta already resolved, e.g. by the peek) exactly once
+  // and never redoes them. If a LATER arg is what pins a method type
+  // param — `Comonad.extend (fn a => Id.run a + 1) (Id.id 41)`, where
+  // the lambda (arg 0) desugars while the method's `A` is still bare
+  // and only `Id.id 41` (arg 1) pins it to `I64` — then a
+  // class-method call nested in the EARLIER arg (`HAdd.add` in the
+  // lambda body, now that `+` is a heterogeneous dispatch) resolves
+  // with `A` unresolved, finds no instance, and survives as a bare
+  // global reference to the evaluator: `unresolved global: HAdd.add`.
+  // (`HMul` had the identical latent failure; the retarget merely
+  // exposed it.) Checking the args here first pins `A` (and any other
+  // later-pinned param meta) before arg 0's one-and-only desugar, so
+  // the nested call resolves against `I64`. `check` is the cheap path
+  // the loop itself already trusts for pinning — it never re-enters
+  // this resolution machinery, so this pre-pass cannot recurse; a
+  // failed `check` here is ignored, leaving the loop below to fail on
+  // the same arg exactly as it would have without the pre-pass.
+  {
+    let mut peek = residual.clone().into_stripped_ctx();
+    let mut param_tys: Vec<CoreTerm> = Vec::with_capacity(spine_args.len());
+    for _ in spine_args {
+      let CoreTerm::Pi { arg, ret, .. } = peek else {
+        break;
+      };
+      param_tys.push((*arg).clone());
+      let placeholder = mctx.fresh_meta(CoreTerm::Hole);
+      peek = force(mctx, open_with(&ret, &CoreTerm::Meta(placeholder))).into_stripped_ctx();
+    }
+    for (i, &arg) in spine_args.iter().enumerate() {
+      if let Some(param_ty) = param_tys.get(i) {
+        let _ = check(mctx, ctx, structs, arg, param_ty);
+      }
+    }
+  }
   let mut arg_tys: Vec<CoreTerm> = Vec::with_capacity(spine_args.len());
   let mut arg_ds: Vec<CoreTerm> = Vec::with_capacity(spine_args.len());
   // Indices of args processed while `class_meta` was still unresolved —

@@ -3036,6 +3036,45 @@ def main : I64 := scaled 1
     }
   }
 
+  /// Regression test: an unannotated lambda as an EARLY argument of a
+  /// class-method call, where the metas its body's own class-method
+  /// call needs are pinned only by a LATER argument —
+  /// `Comonad.extend (fn a => Id.run a + 1) (Id.id 41)`. The walk
+  /// desugars non-speculative args exactly once (only args desugared
+  /// while the CLASS meta was still bare get the redo), so the lambda
+  /// was desugared with the method's own `A` still unresolved — pinned
+  /// later, by `Id.id 41`'s check — leaving the body's `HAdd.add` an
+  /// unresolved application ("unresolved global: HAdd.add" at eval).
+  /// The corpus site is `init/src/tests.mo`'s
+  /// `test_comonad_id_extend_maps_over_the_context`; the same shape
+  /// with `*` (`HMul`) failed identically, so the bug is latent since
+  /// `*` became a class dispatch and was merely EXPOSED for `+` by the
+  /// prelude retarget. Fixed by the meta-pinning pre-pass in
+  /// `try_resolve_class_method_inner` (check every raw arg against its
+  /// param type before the desugar loop). The mirror probe with an
+  /// ANNOTATED lambda passes without the fix — the annotation is what
+  /// the pre-pass derives.
+  #[test]
+  fn eval_core_program_class_call_lambda_arg_pins_meta_from_later_arg() {
+    let source = r#"
+use init::id {Id}
+
+def extended : I64 :=
+    Id.run (Comonad.extend (fn a => Id.run a + 1) (Id.id 41))
+
+def main : I64 := extended
+"#;
+    let result = eval_core_program(
+      &ModulePath::top("'class_call_lambda_arg_regression_test"),
+      source,
+    )
+    .unwrap_or_else(|e| panic!("eval_core_program failed: {e}"));
+    match result {
+      core_value::Value::Lit(core_ir::IrLit::Num(n, _)) => assert_eq!(n, 42),
+      other => panic!("expected an int literal, got {other:?}"),
+    }
+  }
+
   /// Regression test for the REPL's "Free(atom) missing from atom_paths"
   /// panic (`raise_core.rs:227`) — reliably reproduced by ANY REPL input
   /// before the fix (`cargo run -- repl` then entering `1`, `"hello"`,
