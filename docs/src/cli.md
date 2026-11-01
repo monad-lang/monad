@@ -41,6 +41,14 @@ Usage: monad build [<path>] [name] [--bin <name>] [--output/-o <name>] [--target
          `:help`, `:quit`, `:reset`, `:type <expr>`; a `def` body may continue on the next line
          Prompts go to stderr; results and diagnostics to stdout; EOF or :quit leaves
        monad pretty <path>  Parse and pretty print a .mo source file
+       monad fmt [<path>...] [--check] [--diff] [--stdin] [--workspace/-w] [--verbose/-v]
+         Canonicalize whitespace and indentation. Tokens are never reordered or rewritten,
+           comments are preserved verbatim, and the author's line breaks are kept.
+         Directories expand recursively; no <path> formats the current mote;
+           --workspace/-w formats every mote in the enclosing workspace.
+         --check exits 1 if any file would change; --diff prints a unified diff instead;
+           --stdin reads a whole module from stdin and writes it (with --check/--diff,
+           diagnostics go to stderr and the exit code is 1 when it would change).
        monad check [<path>...] [--workspace/-w] [--verbose/-v] [--no-cache]  Parse and typecheck .mo source files (no execution)
          Any <path> that's a directory is recursively expanded to its *.mo files
          With no <path>, checks the mote containing the working directory

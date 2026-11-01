@@ -318,6 +318,16 @@ jobs:
             --profile "$HOME/.monad-ci-devshell" \
             -c scripts/ci-self-compile.sh
 
+      # The formatter ratchet runs on the compiler THIS tree just built, so
+      # the style it enforces is this commit's. It checks the opt-in
+      # scripts/fmt-ratchet.txt set; the rest of the corpus is not migrated
+      # yet. (scripts/ci-compiler-checks.sh also runs it for manual use.)
+      - name: Formatting ratchet
+        run: |
+          nix develop --no-pure-eval --accept-flake-config \
+            --profile "$HOME/.monad-ci-devshell" \
+            -c scripts/check-fmt.sh "$PWD/target-monad/ci-self-compile/monad"
+
       # The clap spec parser/derive and the monadup mote, on the SELF-HOSTED
       # binary. These are the files that exercise the meta evaluator's new
       # String natives; passing under the Rust host is not enough.

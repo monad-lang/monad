@@ -57,9 +57,10 @@
 # or wider input set. This is the single definition, at the widest coverage:
 # every tree the compiler is built FROM (init, std, lang, cli, llvm, runtime,
 # build, eval, and the motes it imports -- motes/clap, which cli/src/main.mo parses
-# its own argv with, motes/lsp, motes/toolkit and motes/json, which reach the
-# binary through cli/mote.toml's [dependencies.lsp], and motes/parsec and
-# motes/toml through lang), their .mo/.c/.h sources, and each
+# its own argv with, motes/fmt, which backs `monad fmt`, motes/lsp,
+# motes/toolkit and motes/json, which reach the binary through
+# cli/mote.toml's [dependencies.lsp], and motes/parsec and motes/toml through
+# lang), their .mo/.c/.h sources, and each
 # one's mote.toml -- a manifest that carries `[link] libs`, so it decides how
 # the mote is compiled.
 #
@@ -118,7 +119,7 @@ if [ ! -x "$out/monad" ]; then
   needs_build=1
 else
   newer="$(find init std lang cli llvm runtime build eval \
-    motes/clap motes/json motes/lsp motes/parsec motes/toml motes/toolkit \
+    motes/clap motes/fmt motes/json motes/lsp motes/parsec motes/toml motes/toolkit \
     \( -name '*.mo' -o -name '*.c' -o -name '*.h' -o -name mote.toml \) \
     -newer "$out/monad" -print -quit)" || {
     echo "build-self-hosted.sh: cannot scan the ladder's inputs from $PWD" >&2

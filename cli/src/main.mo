@@ -1,5 +1,8 @@
 use std::list {List.length}
-open IO {println, read_file, file_exists}
+open IO {
+  println, read_file, file_exists,
+  write_file, read_stdin_exact, write_stdout, flush_stdout, write_stderr,
+}
 use std::process {exec_cmd, process_id}
 use std::stream {StreamError}
 // The `--jobs` test runner's concurrency: `forkIO` starts a file's
@@ -48,6 +51,8 @@ use build::test_cache {
 use std::list {List.contains_by}
 use std::map {}
 use lang::pretty {show_decls}
+use fmt::fmt {Fmt.default_config, Fmt.format_source}
+use fmt::diff {Diff.unified}
 use lang::codegen::test_driver {compile_loaded_modules_to_test_ir, is_no_tests_error, driver_report_note, driver_report_parsed}
 // The command line is declared and parsed in `cli.mo`/`cli_spec.mo`; the
 // wildcard is required because the derive's defs (`decode_command`) are
@@ -1654,7 +1659,11 @@ def resolve_target_paths (verb : String) (subcommand : String) (files : List Str
                 // only.
                 let dir := if String.beq manifest.dir "" then "." else manifest.dir;
                 let roots : List String := Mote.target_roots manifest dir;
-                println (verb ++ " mote " ++ manifest.name ++ " (" ++ dir ++ ")");
+                // An empty verb is the machine-readable callers' way of
+                // asking for no banner (`monad fmt --check`/`--diff`).
+                if Bool.not (String.is_empty verb) then
+                    println (verb ++ " mote " ++ manifest.name ++ " (" ++ dir ++ ")")
+                else do { return unit };
                 return (Option.some roots)
             }
         }
@@ -1682,6 +1691,209 @@ def no_target_diagnostic (subcommand : String) : IO I64 := do {
     println ("monad " ++ subcommand ++ ": no mote.toml above this directory and no paths given");
     println ("  hint: name a file, run this inside a mote, or pass --workspace");
     return 1
+}
+
+// ----------------------------- monad fmt -----------------------------
+
+struct FmtRun {
+    checked : I64,
+    changed : I64,
+    failed : I64,
+}
+
+/// `monad fmt`: canonicalize whitespace in place, or report drift.
+///
+/// The parser is the semantic gate. A file that does not strictly parse is
+/// refused rather than reformatted, and the formatted text is parsed again
+/// before it is written. `Fmt.format_source` has its own token-stream check;
+/// this second gate is what guarantees the compiler accepts what we write.
+///
+/// `--check` and `--diff` exit 1 when anything would change (the check-mode
+/// convention `monad check` uses) and never write. `--stdin` is a filter:
+/// stdin to stdout, no banner and no summary, with diagnostics on stderr.
+def run_fmt
+    (files : List String) (check : Bool) (diff : Bool)
+    (stdin_mode : Bool) (workspace : Bool) (verbose : Bool) : IO I64 := do {
+    if stdin_mode then do {
+        if Bool.not (List.is_empty files) || workspace then do {
+            println "monad fmt: --stdin takes no paths and no --workspace";
+            return 2
+        } else run_fmt_stdin check diff
+    } else do {
+        // Machine-readable modes must not be prefixed by the mote banner.
+        let verb : String := if check then "" else if diff then "" else "Formatting";
+        let targets <- resolve_target_paths verb "fmt" files workspace;
+        match targets {
+            Option.none => no_target_diagnostic "fmt",
+            Option.some ts =>
+                if List.is_empty ts then return 1
+                else do {
+                    let expanded : List String <- expand_check_paths ts;
+                    run_fmt_files expanded check diff verbose
+                },
+        }
+    }
+}
+
+#[partial]
+def run_fmt_files (files : List String) (check : Bool) (diff : Bool) (verbose : Bool) : IO I64 := do {
+    let start : FmtRun := { checked := 0, changed := 0, failed := 0 };
+    let done : FmtRun <- run_fmt_loop files check diff verbose start;
+    if check || diff then do {
+        if I64.gt done.changed 0 then do {
+            println (I64.to_string done.changed ++ " file(s) would change; " ++
+                I64.to_string done.checked ++ " file(s) checked");
+            return 1
+        } else do {
+            println (I64.to_string done.checked ++ " file(s) checked");
+            return (if I64.gt done.failed 0 then 1 else 0)
+        }
+    } else do {
+        println (I64.to_string done.checked ++ " file(s) checked, " ++
+            I64.to_string done.changed ++ " changed");
+        return (if I64.gt done.failed 0 then 1 else 0)
+    }
+}
+
+#[partial]
+def run_fmt_loop
+    (files : List String) (check : Bool) (diff : Bool) (verbose : Bool)
+    (st : FmtRun) : IO FmtRun := do {
+    match files {
+        List.empty => return st,
+        List.cons path rest => do {
+            let outcome <- run_fmt_file path check diff verbose;
+            match outcome {
+                Option.none => do {
+                    let next : FmtRun := {
+                        checked := I64.add st.checked 1,
+                        changed := st.changed,
+                        failed := I64.add st.failed 1,
+                    };
+                    run_fmt_loop rest check diff verbose next
+                },
+                Option.some changed => do {
+                    let next : FmtRun := {
+                        checked := I64.add st.checked 1,
+                        changed := if changed then I64.add st.changed 1 else st.changed,
+                        failed := st.failed,
+                    };
+                    run_fmt_loop rest check diff verbose next
+                },
+            }
+        },
+    }
+}
+
+/// Returns `none` on any error (already reported), `some changed` otherwise.
+def run_fmt_file
+    (path : String) (check : Bool) (diff : Bool) (verbose : Bool) : IO (Option Bool) := do {
+    let src_opt <- read_source_reporting path;
+    match src_opt {
+        Option.none => return Option.none,
+        Option.some src => do {
+            match try_parse_decls_strict src (Option.some path) {
+                Result.err rendered => do { println rendered; return Option.none },
+                Result.ok _ => do {
+                    match Fmt.format_source Fmt.default_config src {
+                        Result.err e => do {
+                            println ("error: " ++ path ++ " (byte " ++
+                                I64.to_string e.offset ++ "): " ++ e.message);
+                            return Option.none
+                        },
+                        Result.ok out => do {
+                            match try_parse_decls_strict out (Option.some path) {
+                                Result.err rendered => do {
+                                    println ("error: " ++ path ++
+                                        ": formatted output does not parse:");
+                                    println rendered;
+                                    return Option.none
+                                },
+                                Result.ok _ => do {
+                                    if String.beq src out then return (Option.some false)
+                                    else if check then do {
+                                        println ("would reformat " ++ path);
+                                        return (Option.some true)
+                                    } else if diff then do {
+                                        write_stdout (Diff.unified path src out);
+                                        flush_stdout;
+                                        return (Option.some true)
+                                    } else do {
+                                        let w : Result StreamError Unit <-
+                                            write_file (Path.path path) out;
+                                        match w {
+                                            Result.err e => do {
+                                                println ("error: writing " ++ path ++
+                                                    ": " ++ e.message);
+                                                return Option.none
+                                            },
+                                            Result.ok _ => do {
+                                                if verbose then
+                                                    println ("formatted " ++ path)
+                                                else do { return unit };
+                                                return (Option.some true)
+                                            },
+                                        }
+                                    }
+                                },
+                            }
+                        },
+                    }
+                },
+            }
+        },
+    }
+}
+
+/// Read stdin to EOF. A short read (including "") is the documented EOF
+/// signal for `read_stdin_exact`.
+#[partial]
+def read_all_stdin (acc : List String) : IO String := do {
+    let chunk <- read_stdin_exact 65536;
+    if I64.lt (String.length chunk) 65536
+    then return (String.concat_list (List.reverse (List.cons chunk acc)))
+    else read_all_stdin (List.cons chunk acc)
+}
+
+def run_fmt_stdin (check : Bool) (diff : Bool) : IO I64 := do {
+    let src <- read_all_stdin List.empty;
+    match try_parse_decls_strict src (Option.some "<stdin>") {
+        Result.err rendered => do { write_stderr (rendered ++ "\n"); return 1 },
+        Result.ok _ => do {
+            match Fmt.format_source Fmt.default_config src {
+                Result.err e => do {
+                    write_stderr ("error: <stdin>: " ++ e.message ++ "\n");
+                    return 1
+                },
+                Result.ok out => do {
+                    match try_parse_decls_strict out (Option.some "<stdin>") {
+                        Result.err rendered => do {
+                            write_stderr ("error: <stdin>: formatted output does not parse:\n" ++
+                                rendered ++ "\n");
+                            return 1
+                        },
+                        Result.ok _ => do {
+                            if String.beq src out then do {
+                                if check || diff then return 0
+                                else do { write_stdout out; flush_stdout; return 0 }
+                            } else if check then do {
+                                write_stderr "would reformat <stdin>\n";
+                                return 1
+                            } else if diff then do {
+                                write_stdout (Diff.unified "<stdin>" src out);
+                                flush_stdout;
+                                return 1
+                            } else do {
+                                write_stdout out;
+                                flush_stdout;
+                                return 0
+                            }
+                        },
+                    }
+                },
+            }
+        },
+    }
 }
 
 /// Whether a run may use the store at all, from BOTH switches.
@@ -2665,6 +2877,8 @@ def Command.dispatch (cmd : Command) : IO I64 :=
                 }
             }
         },
+        Command.fmt files check diff stdin_mode workspace verbose =>
+            run_fmt files check diff stdin_mode workspace verbose,
         Command.check files verbose workspace no_cache locked target_dir offline => do {
             let _ignored : Bool := offline;
             let opts : CheckOptions := {

@@ -336,6 +336,34 @@ def test_update_defaults_to_cwd : Bool :=
         _ => false,
     }
 
+// ── fmt ────────────────────────────────────────────────────────────────
+
+#[test]
+def test_fmt_defaults : Bool :=
+    match Command.from_args ["fmt"] {
+        Command.fmt files check diff stdin_mode workspace verbose =>
+            List.is_empty files && check == false && diff == false &&
+            stdin_mode == false && workspace == false && verbose == false,
+        _ => false,
+    }
+
+#[test]
+def test_fmt_flags_and_paths : Bool :=
+    match Command.from_args ["fmt", "a.mo", "src/", "--check", "--workspace"] {
+        Command.fmt files check diff stdin_mode workspace verbose =>
+            two_strings files "a.mo" "src/" && check && Bool.not diff &&
+            Bool.not stdin_mode && workspace && Bool.not verbose,
+        _ => false,
+    }
+
+#[test]
+def test_fmt_stdin_flag : Bool :=
+    match Command.from_args ["fmt", "--stdin", "--diff"] {
+        Command.fmt files check diff stdin_mode _workspace _verbose =>
+            List.is_empty files && Bool.not check && diff && stdin_mode,
+        _ => false,
+    }
+
 // ── simple verbs and the fallback ──────────────────────────────────────
 
 #[test]

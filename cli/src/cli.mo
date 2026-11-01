@@ -64,6 +64,14 @@ pub type Command {
     repl,
     /// Parse and pretty-print a source file.
     pretty (#[pos {help := "a .mo source file"}] file : String),
+    /// Format source files in place, or verify them with --check.
+    fmt
+        (#[pos {help := "files or directories; omitted means the current mote"}] files : List String)
+        (#[arg {short := "", help := "exit 1 if any file would change"}] check : Bool)
+        (#[arg {short := "", help := "print a diff instead of writing"}] diff : Bool)
+        (#[arg {short := "", help := "read stdin, write stdout"}] stdin : Bool)
+        (#[arg {short := "w", help := "format every mote in the enclosing workspace"}] workspace : Bool)
+        (#[arg {short := "v", help := "print each changed file"}] verbose : Bool),
     /// Parse and typecheck source files, with no execution.
     check
         (#[pos {help := "files or directories; omitted means the current mote"}] files : List String)

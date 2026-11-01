@@ -257,6 +257,8 @@
                 # them out is what stops an unrelated mote's edit from
                 # invalidating a 20-minute interpretation.
                 "motes/clap"
+                # `fmt` backs `monad fmt` and arrives through `cli`, like `clap`.
+                "motes/fmt"
                 "motes/json"
                 "motes/lsp"
                 "motes/parsec"

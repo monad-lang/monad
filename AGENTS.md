@@ -130,11 +130,20 @@ monad run examples/hello.mo            # compile and run a file
 monad check <path>... [--workspace]    # parse + typecheck (no execution)
 monad test <path>... [--jobs N]        # run each file's #[test] defs
 monad build <path|mote> [--release]    # compile to a native binary
+monad fmt [paths] [--check] [--diff]   # format, or verify with --check
+monad fmt --workspace [--check]        # format/verify every workspace mote
 monad lsp                              # language server on stdio
 cargo build --manifest-path rust/Cargo.toml -p monad-core   # build the Rust host crate
 cargo test --manifest-path rust/Cargo.toml -p monad-core <name>   # one Rust test
 ```
 
+- `monad fmt` canonicalizes whitespace and indentation; it never reorders or
+  rewrites tokens, never moves a comment across a token, and preserves the
+  author's line breaks. `--check` exits 1 if anything would change.
+  `scripts/check-fmt.sh` runs it over the opt-in `scripts/fmt-ratchet.txt`
+  set in CI (the whole corpus is not formatted yet). The library lives in
+  `motes/fmt/`: a reusable lossless tokenizer (`lexer.mo`) plus the layout
+  policy (`rules.mo`, `render.mo`).
 - Use `--release` for self-hosted workloads (anything running
   `cli/src/main.mo` against large files) — the debug build is several times
   slower.

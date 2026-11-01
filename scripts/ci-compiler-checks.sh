@@ -117,10 +117,17 @@ sweep_rc=0
 MONAD_BIN="$MONAD_BOOTSTRAP_BIN" MONAD_TARGET_DIR="$sweep_target" \
   scripts/check-monad-tests.sh || sweep_rc=$?
 
+# The formatting ratchet uses the same rung-1 binary (it is the self-hosted
+# compiler, so it carries `monad fmt`). It runs after the test sweep so a
+# formatting failure is never mistaken for a test failure, and while the
+# ladder is still finishing.
+fmt_rc=0
+scripts/check-fmt.sh "$MONAD_BOOTSTRAP_BIN" || fmt_rc=$?
+
 ladder_rc=0
 wait "$ladder" || ladder_rc=$?
-if [ "$sweep_rc" -ne 0 ] || [ "$ladder_rc" -ne 0 ]; then
-  echo "ci-compiler-checks: the sweep exited ${sweep_rc}, the ladder ${ladder_rc}" >&2
+if [ "$sweep_rc" -ne 0 ] || [ "$ladder_rc" -ne 0 ] || [ "$fmt_rc" -ne 0 ]; then
+  echo "ci-compiler-checks: the sweep exited ${sweep_rc}, the ladder ${ladder_rc}, the fmt ratchet ${fmt_rc}" >&2
   exit 1
 fi
-echo "ci-compiler-checks: the sweep and the ladder both passed"
+echo "ci-compiler-checks: the sweep, the ladder, and the fmt ratchet all passed"
