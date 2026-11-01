@@ -19,9 +19,11 @@
 /// polling fallback keeps working; on wasm the target gate refuses a reachable
 /// call at compile time.
 use lib::bytebuf {ByteBuf}
+use lib::io {IO.is_dir, IO.list_dir}
 use lib::list {List.length}
 use lib::path {Path}
-use lib::stream {FdStream, StreamError, stream_result}
+use lib::ref {Ref}
+use lib::stream {FdStream, Stream, StreamError, stream_result}
 
 // ── the native half (runtime/src/platform_posix.c) ──────────────────────
 
@@ -179,10 +181,18 @@ pub def WatchEvent.moved_from (e : WatchEvent) : Bool := WatchEvent.has e Watch.
 /// The new half of a rename -- an atomic save looks like this, not
 /// `closed_for_write`.
 pub def WatchEvent.moved_to (e : WatchEvent) : Bool := WatchEvent.has e Watch.moved_to
-/// The watched DIRECTORY itself went away (`delete_self`/`move_self`); its
-/// watch handle is dead and must be dropped.
+/// The watched directory itself was DELETED (`IN_DELETE_SELF`): the watch is
+/// finished, and `Watch.drain` drops its descriptor.
+pub def WatchEvent.self_deleted (e : WatchEvent) : Bool := WatchEvent.has e Watch.delete_self
+/// The watched directory itself was renamed or moved (`IN_MOVE_SELF`). The
+/// watch SURVIVES -- it is bound to the inode, not the name -- so this is not a
+/// close signal. A rename within the tree is followed by a `moved_to` on the
+/// new parent, which is what re-resolves the path.
+pub def WatchEvent.self_moved (e : WatchEvent) : Bool := WatchEvent.has e Watch.move_self
+/// The watched directory itself went away, by deletion or by a move. Only
+/// `self_deleted` means the watch is finished.
 pub def WatchEvent.removed_self (e : WatchEvent) : Bool :=
-  Bool.or (WatchEvent.has e Watch.delete_self) (WatchEvent.has e Watch.move_self)
+  Bool.or (WatchEvent.self_deleted e) (WatchEvent.self_moved e)
 /// The event is about a directory (a new one needs its own `Watch.add`).
 pub def WatchEvent.is_dir (e : WatchEvent) : Bool := WatchEvent.has e Watch.is_dir_bit
 /// Events were lost: the queue overflowed, so the caller must rescan.
@@ -262,3 +272,369 @@ def Watch.drop_n (n : I64) (bytes : List U8) : List U8 :=
       List.empty => List.empty,
       List.cons _ rest => Watch.drop_n (n - 1) rest
     }
+
+// ── the tree form ────────────────────────────────────────────────────────
+//
+// A bare inotify queue reports a watch descriptor and a child's bare name; a
+// watcher of a *tree* needs the full path and needs to keep up as
+// directories appear. `Watch` carries the descriptor -> directory map that
+// answers both, and `Watch.drain` is the only reader.
+
+/// A watched tree: the queue, the root it was walked from, the directory names
+/// it skips, and the descriptor -> directory map. `Watch.drain` updates the map
+/// as directories appear and disappear, so one value serves the watcher's whole
+/// lifetime.
+pub struct Watch {
+  stream : FdStream,
+  root : Path,
+  ignored : List String,
+  dirs : Ref (List (Pair I64 Path))
+}
+
+/// Directory names the walker never watches: Monad's build output (`target/`,
+/// and `target-*` by `Watch.ignore_dir`) plus the VCS and dependency caches.
+/// Pass `List.empty` to watch every directory.
+pub def Watch.default_ignored : List String :=
+  ["target", ".git", "node_modules", ".devenv"]
+
+/// Whether the walker skips a directory named `name`: an exact entry in
+/// `ignored`, or the `target-*` build-output convention.
+pub def Watch.ignore_dir (name : String) (ignored : List String) : Bool :=
+  if String.starts_with "target-" name then true else Watch.mem name ignored
+
+#[terminating]
+def Watch.mem (name : String) (xs : List String) : Bool :=
+  match xs {
+    List.empty => false,
+    List.cons x rest => if String.beq name x then true else Watch.mem name rest
+  }
+
+/// Watch `root` and every non-ignored directory under it. Close the result
+/// with `Watch.close`.
+pub def Watch.recursive (root : Path) (ignored : List String)
+    : IO (Result StreamError Watch) := do {
+  let opened <- Watch.new;
+  match opened {
+    Result.err e => IO.pure (Result.err e),
+    Result.ok stream => Watch.recursive_opened stream root ignored
+  }
+}
+
+def Watch.recursive_opened (stream : FdStream) (root : Path) (ignored : List String)
+    : IO (Result StreamError Watch) := do {
+  let walked <- Watch.walk stream root ignored;
+  Watch.recursive_walked stream root ignored walked
+}
+
+def Watch.recursive_walked (stream : FdStream) (root : Path) (ignored : List String)
+    (walked : Result StreamError (List (Pair I64 Path)))
+    : IO (Result StreamError Watch) :=
+  match walked {
+    Result.err e => Watch.close_failed stream e,
+    Result.ok dirs => Watch.recursive_dirs stream root ignored dirs
+  }
+
+def Watch.recursive_dirs (stream : FdStream) (root : Path) (ignored : List String)
+    (dirs : List (Pair I64 Path)) : IO (Result StreamError Watch) := do {
+  let cell <- Ref.new dirs;
+  let w : Watch := { stream := stream, root := root, ignored := ignored, dirs := cell };
+  IO.pure (Result.ok w)
+}
+
+/// Close a queue the walk opened before it failed, so the error path does not
+/// leak the descriptor.
+def Watch.close_failed (stream : FdStream) (e : StreamError)
+    : IO (Result StreamError Watch) := do {
+  let _ <- Stream.close stream;
+  IO.pure (Result.err e)
+}
+
+/// Release the queue. Nothing may use `w` afterwards.
+pub def Watch.close (w : Watch) : IO Unit := Stream.close w.stream
+
+/// Add a watch for `dir` and every non-ignored directory under it, returning
+/// the descriptor -> directory map of everything watched. `Watch.only_dir` is
+/// ORed into the mask (`Watch.changes` has no bit at or above `0x1000000`, so
+/// adding the two IS the OR): the walker watches directories, and a path that
+/// is not one (a file root, or a directory deleted between the event and this
+/// call) fails at `Watch.add` instead of half-watching a file.
+#[terminating]
+def Watch.walk (stream : FdStream) (dir : Path) (ignored : List String)
+    : IO (Result StreamError (List (Pair I64 Path))) := do {
+  let added <- Watch.add stream dir (Watch.changes + Watch.only_dir);
+  match added {
+    Result.err e => IO.pure (Result.err e),
+    Result.ok handle => Watch.walk_added stream dir ignored handle
+  }
+}
+
+#[terminating]
+def Watch.walk_added (stream : FdStream) (dir : Path) (ignored : List String) (handle : I64)
+    : IO (Result StreamError (List (Pair I64 Path))) := do {
+  let entries <- IO.list_dir dir;
+  Watch.walk_entries stream ignored entries (List.cons (Pair.pair handle dir) List.empty)
+}
+
+/// Walk `entries` -- already the children of a watched directory -- appending
+/// every watched descendant's descriptor to `acc`.
+#[terminating]
+def Watch.walk_entries (stream : FdStream) (ignored : List String) (entries : List Path)
+    (acc : List (Pair I64 Path)) : IO (Result StreamError (List (Pair I64 Path))) :=
+  match entries {
+    List.empty => IO.pure (Result.ok (List.reverse acc)),
+    List.cons p rest => Watch.walk_entry stream ignored p rest acc
+  }
+
+#[terminating]
+def Watch.walk_entry (stream : FdStream) (ignored : List String) (p : Path)
+    (rest : List Path) (acc : List (Pair I64 Path))
+    : IO (Result StreamError (List (Pair I64 Path))) := do {
+  let is_dir <- IO.is_dir p;
+  if is_dir
+  then
+    if Watch.ignore_dir (Path.file_name p) ignored
+    then Watch.walk_entries stream ignored rest acc
+    else Watch.walk_sub stream ignored p rest acc
+  else Watch.walk_entries stream ignored rest acc
+}
+
+#[terminating]
+def Watch.walk_sub (stream : FdStream) (ignored : List String) (p : Path)
+    (rest : List Path) (acc : List (Pair I64 Path))
+    : IO (Result StreamError (List (Pair I64 Path))) := do {
+  let sub <- Watch.walk stream p ignored;
+  match sub {
+    Result.err e => IO.pure (Result.err e),
+    Result.ok more => Watch.walk_entries stream ignored rest (List.append more acc)
+  }
+}
+
+/// The directory a descriptor names, if it is still watched.
+#[terminating]
+pub def Watch.dir_of (dirs : List (Pair I64 Path)) (handle : I64) : Option Path :=
+  match dirs {
+    List.empty => Option.none,
+    List.cons p rest =>
+      match p {
+        Pair.pair w d =>
+          if I64.beq w handle then Option.some d else Watch.dir_of rest handle
+      }
+  }
+
+/// An event's full path: the watched directory joined with the child's name,
+/// the directory itself for a zero-length name (an event about the directory),
+/// and the root when its descriptor is no longer known.
+pub def Watch.event_path (dirs : List (Pair I64 Path)) (root : Path) (e : WatchEvent) : Path :=
+  match Watch.dir_of dirs e.watch {
+    Option.none => root,
+    Option.some d => if String.beq e.name "" then d else Path.join d (Path.path e.name)
+  }
+
+/// Whether any event reports a kernel queue overflow: events were lost, so the
+/// caller must rescan rather than trust the batch.
+#[terminating]
+pub def Watch.any_overflow (evs : List WatchEvent) : Bool :=
+  match evs {
+    List.empty => false,
+    List.cons e rest => if WatchEvent.overflowed e then true else Watch.any_overflow rest
+  }
+
+/// One `Watch.drain` result.
+pub struct WatchBatch {
+  /// Every event with the path it concerns, in the order the kernel reported
+  /// them. Overflow events are not here -- they set `overflow`.
+  events : List (Pair WatchEvent Path),
+  /// The kernel dropped events (`/proc/sys/fs/inotify/max_queued_events`):
+  /// anything could have changed, so rescan the tree.
+  overflow : Bool
+}
+
+/// How many reads one `Watch.drain` may do before returning. A tree under a
+/// build emits events faster than a quiet window closes; the caller drains
+/// again rather than the watcher starving.
+pub def Watch.max_reads : I64 := 64
+
+/// Wait up to `timeout_ms` for the first event (negative waits forever), then
+/// keep reading until a `quiet_ms` window passes with nothing new, so one
+/// save's several masks come back as ONE batch. Watches for newly created or
+/// moved-in directories are added before returning, and descriptors the kernel
+/// retired are dropped from the map.
+///
+/// One reader per watch: two fibers calling this race for the same events.
+/// An error means the batch was DISCARDED (a native failure, or a directory the
+/// walk could not enter): rescan rather than retrying, since the events are
+/// already consumed off the queue.
+///
+/// A directory moved OUT of the tree keeps its watch (inotify binds watches to
+/// inodes, not paths) and its map entry therefore names a path that no longer
+/// exists; its events still arrive until `Watch.close`. Rescan when that
+/// matters -- `WatchBatch.overflow` is the kernel's version of the same answer.
+pub def Watch.drain (w : Watch) (timeout_ms : I64) (quiet_ms : I64)
+    : IO (Result StreamError WatchBatch) := do {
+  let got <- Watch.drain_events w.stream timeout_ms quiet_ms 0 List.empty;
+  match got {
+    Result.err e => IO.pure (Result.err e),
+    Result.ok evs => Watch.drain_batch w.stream w.root w.ignored w.dirs evs
+  }
+}
+
+#[terminating]
+def Watch.drain_events (stream : FdStream) (timeout_ms : I64) (quiet_ms : I64)
+    (reads : I64) (acc : List WatchEvent)
+    : IO (Result StreamError (List WatchEvent)) := do {
+  let wait := if I64.lt reads 1 then timeout_ms else quiet_ms;
+  let got <- Watch.next stream wait;
+  match got {
+    Result.err e => IO.pure (Result.err e),
+    Result.ok evs => Watch.drain_events_got stream timeout_ms quiet_ms reads evs acc
+  }
+}
+
+#[terminating]
+def Watch.drain_events_got (stream : FdStream) (timeout_ms : I64) (quiet_ms : I64)
+    (reads : I64) (evs : List WatchEvent) (acc : List WatchEvent)
+    : IO (Result StreamError (List WatchEvent)) :=
+  if I64.beq (List.length evs) 0
+  then IO.pure (Result.ok (List.reverse acc))
+  else if I64.gt reads Watch.max_reads
+  then IO.pure (Result.ok (List.reverse (List.append (List.reverse evs) acc)))
+  else Watch.drain_events stream timeout_ms quiet_ms (reads + 1)
+    (List.append (List.reverse evs) acc)
+
+def Watch.drain_batch (stream : FdStream) (root : Path) (ignored : List String)
+    (dirs : Ref (List (Pair I64 Path))) (evs : List WatchEvent)
+    : IO (Result StreamError WatchBatch) := do {
+  let added <- Watch.watch_new_dirs stream ignored dirs root evs;
+  match added {
+    Result.err e => IO.pure (Result.err e),
+    Result.ok _ => Watch.drain_resolve root dirs evs
+  }
+}
+
+def Watch.drain_resolve (root : Path) (dirs : Ref (List (Pair I64 Path)))
+    (evs : List WatchEvent) : IO (Result StreamError WatchBatch) := do {
+  let current <- Ref.get dirs;
+  let kept := Watch.reap_dead current evs;
+  let _ <- Ref.set dirs kept;
+  let batch : WatchBatch :=
+    { events := Watch.resolve root current evs, overflow := Watch.any_overflow evs };
+  IO.pure (Result.ok batch)
+}
+
+/// A directory appearing under the tree: created empty, or moved in with its
+/// own subtree.
+def Watch.is_new_dir (e : WatchEvent) : Bool :=
+  Bool.and (WatchEvent.is_dir e) (Bool.or (WatchEvent.created e) (WatchEvent.moved_to e))
+
+/// Add a watch (and walk) for every directory the batch reports created or
+/// moved in, so a new subdirectory is watched from its creation.
+#[terminating]
+def Watch.watch_new_dirs (stream : FdStream) (ignored : List String)
+    (dirs : Ref (List (Pair I64 Path))) (root : Path) (evs : List WatchEvent)
+    : IO (Result StreamError Unit) :=
+  match evs {
+    List.empty => IO.pure (Result.ok Unit.unit),
+    List.cons e rest =>
+      if Watch.is_new_dir e
+      then Watch.watch_new_dir stream ignored dirs root e rest
+      else Watch.watch_new_dirs stream ignored dirs root rest
+  }
+
+#[terminating]
+def Watch.watch_new_dir (stream : FdStream) (ignored : List String)
+    (dirs : Ref (List (Pair I64 Path))) (root : Path) (e : WatchEvent) (rest : List WatchEvent)
+    : IO (Result StreamError Unit) := do {
+  let current <- Ref.get dirs;
+  let path := Watch.event_path current root e;
+  let walked <- Watch.walk stream path ignored;
+  match walked {
+    Result.err err => IO.pure (Result.err err),
+    Result.ok more => Watch.watch_new_dir_added stream ignored dirs root rest more current
+  }
+}
+
+#[terminating]
+def Watch.watch_new_dir_added (stream : FdStream) (ignored : List String)
+    (dirs : Ref (List (Pair I64 Path))) (root : Path) (rest : List WatchEvent)
+    (more : List (Pair I64 Path)) (current : List (Pair I64 Path))
+    : IO (Result StreamError Unit) := do {
+  let _ <- Ref.set dirs (List.append more (Watch.reap_replaced current more));
+  Watch.watch_new_dirs stream ignored dirs root rest
+}
+
+/// Whether `handle` appears in `dirs`.
+#[terminating]
+def Watch.wd_in (dirs : List (Pair I64 Path)) (handle : I64) : Bool :=
+  match dirs {
+    List.empty => false,
+    List.cons p rest =>
+      match p {
+        Pair.pair w _ => if I64.beq w handle then true else Watch.wd_in rest handle
+      }
+  }
+
+/// `current` without any descriptor `fresh` supersedes. `inotify_add_watch` on
+/// an inode that is already watched returns the EXISTING descriptor, so a
+/// directory renamed within the tree yields the same handle under a new path:
+/// the entry has to be replaced, not appended, or `Watch.dir_of` could resolve
+/// events to the old name.
+#[terminating]
+def Watch.reap_replaced (current : List (Pair I64 Path)) (fresh : List (Pair I64 Path))
+    : List (Pair I64 Path) :=
+  match current {
+    List.empty => List.empty,
+    List.cons p rest =>
+      match p {
+        Pair.pair w d =>
+          if Watch.wd_in fresh w
+          then Watch.reap_replaced rest fresh
+          else List.cons (Pair.pair w d) (Watch.reap_replaced rest fresh)
+      }
+  }
+
+/// Resolve each event's path (overflow pseudo-events are dropped; they are the
+/// batch's `overflow`).
+#[terminating]
+def Watch.resolve (root : Path) (dirs : List (Pair I64 Path)) (evs : List WatchEvent)
+    : List (Pair WatchEvent Path) :=
+  match evs {
+    List.empty => List.empty,
+    List.cons e rest =>
+      if WatchEvent.overflowed e
+      then Watch.resolve root dirs rest
+      else
+        List.cons (Pair.pair e (Watch.event_path dirs root e))
+          (Watch.resolve root dirs rest)
+  }
+
+/// Drop descriptors the kernel retired -- `IN_IGNORED`, or the directory
+/// itself moved/vanished -- so the map does not grow stale and a later reused
+/// descriptor cannot resolve to the wrong path.
+#[terminating]
+def Watch.reap_dead (dirs : List (Pair I64 Path)) (evs : List WatchEvent)
+    : List (Pair I64 Path) :=
+  match dirs {
+    List.empty => List.empty,
+    List.cons p rest =>
+      match p {
+        Pair.pair w d =>
+          if Watch.wd_dead evs w
+          then Watch.reap_dead rest evs
+          else List.cons (Pair.pair w d) (Watch.reap_dead rest evs)
+      }
+  }
+
+/// A watch is retired only by `IN_IGNORED` (the kernel dropped it) or by its
+/// directory being deleted. `IN_MOVE_SELF` does NOT retire it: a directory
+/// renamed inside the tree keeps the same descriptor, and the matching
+/// `moved_to` is what re-resolves its entry to the new path.
+#[terminating]
+def Watch.wd_dead (evs : List WatchEvent) (handle : I64) : Bool :=
+  match evs {
+    List.empty => false,
+    List.cons e rest =>
+      if Bool.and (I64.beq e.watch handle)
+          (Bool.or (WatchEvent.ignored e) (WatchEvent.self_deleted e))
+      then true
+      else Watch.wd_dead rest handle
+  }
