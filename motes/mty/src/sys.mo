@@ -26,6 +26,12 @@ def execl8 (path : Ptr) (a0 : Ptr) (a1 : Ptr) (a2 : Ptr) (a3 : Ptr)
 #[extern "c" {link_name := "_exit"}]
 def exit_now (code : I32) : I32
 
+// `chdir` runs in the child between `forkpty` and `execl`, so it is PURE for
+// the same reason as the three above: a `RawIO` wrapper would box its result
+// and allocate in the forked child. POSIX lists `chdir` as async-signal-safe.
+#[extern "c"]
+def chdir (path : Ptr) : I32
+
 #[extern "c"]
 def setenv (name : String) (value : String) (overwrite : I32) : RawIO I32
 

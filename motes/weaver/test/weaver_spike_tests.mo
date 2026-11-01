@@ -56,7 +56,8 @@ def run_spike (bin : String) : IO Bool := do {
         args := weaver_args,
         rows := 24,
         cols := 80,
-        env := env_with_turns root turns
+        env := env_with_turns root turns,
+        cwd := Option.some root
     };
     let r <- Mty.spawn cfg;
     match r {

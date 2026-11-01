@@ -8,6 +8,6 @@
 // from the hub is undiscoverable by `monad test` (AGENTS.md).
 
 pub use lib::spawn {SpawnConfig, Mty, Output}
-pub use lib::ansi {Ansi.strip, Ansi.tight}
+pub use lib::ansi {Ansi.strip, Ansi.tight, Ansi.has_color}
 pub use lib::grid {Grid}
 pub use lib::check {Check.report, Check.skip, Check.enabled, Check.value_set, Check.bin_path}

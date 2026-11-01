@@ -22,7 +22,8 @@ def main (args : List String) : IO Unit := do {
         args := List.cons "-c" (List.cons "printf hi" List.empty),
         rows := 24,
         cols := 80,
-        env := List.empty
+        env := List.empty,
+        cwd := Option.none
     };
     let r <- Mty.spawn cfg;
     match r {

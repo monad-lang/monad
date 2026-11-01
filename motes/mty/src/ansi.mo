@@ -79,3 +79,58 @@ def tight_go (bs : List U8) (acc : List U8) : List U8 :=
 /// deltas.
 pub def Ansi.tight (s : String) : String :=
     String.from_list (tight_go (String.to_list (Ansi.strip s)) List.empty)
+
+// ── Colours ──────────────────────────────────────────────────────────────
+//
+// The Python `--no-color` driver searched SGR codes for a foreground or
+// background palette index. Same domain here: 30-37, 40-47, 90-97, 100-107.
+// One deliberate limitation: extended colours (`38;5;n`, `38;2;r;g;b`) are
+// NOT palette parameters, so a stream carrying only those reports false. The
+// app's theme emits basic codes only, and the Python regex's substring match
+// on those forms was accidental.
+
+def is_digit_b (b : U8) : Bool :=
+    Bool.and (Bool.not (U8.lt b 48u8)) (Bool.not (U8.gt b 57u8))
+
+def in_range (lo : I64) (hi : I64) (v : I64) : Bool :=
+    Bool.and (Bool.not (I64.lt v lo)) (Bool.not (I64.gt v hi))
+
+def color_param (v : I64) : Bool :=
+    in_range 30 37 v || in_range 40 47 v || in_range 90 97 v || in_range 100 107 v
+
+#[partial]
+def sgr_scan (bs : List U8) (param : I64) (in_num : Bool) : Bool :=
+    match bs {
+        List.empty => false,
+        List.cons b rest =>
+            if U8.beq b 59u8 then
+                (if in_num then color_param param else false) || sgr_scan rest 0 false
+            else if U8.beq b 109u8 then
+                (if in_num then color_param param else color_param 0)
+            else if is_digit_b b then
+                sgr_scan rest (param * 10 + (U8.to_i64 b - 48)) true
+            else
+                false
+    }
+
+#[partial]
+def has_color_esc (bs : List U8) : Bool :=
+    match bs {
+        List.empty => false,
+        List.cons b rest =>
+            if U8.beq b 91u8 then
+                (if sgr_scan rest 0 false then true else has_color_go rest)
+            else has_color_go rest
+    }
+
+#[partial]
+def has_color_go (bs : List U8) : Bool :=
+    match bs {
+        List.empty => false,
+        List.cons b rest =>
+            if U8.beq b 27u8 then has_color_esc rest else has_color_go rest
+    }
+
+/// Whether a CSI SGR sequence carries a basic foreground/background colour.
+pub def Ansi.has_color (s : String) : Bool :=
+    has_color_go (String.to_list s)

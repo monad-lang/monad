@@ -11,8 +11,12 @@
 use mty::spawn {SpawnConfig, Mty, Output}
 use mty::check {Check.enabled, Check.skip, Check.bin_path, Check.value_set}
 use mty::grid {Grid}
-use std::io {IO.println, IO.get_env, IO.current_time_nano}
+use std::concurrent::combine {sleepIO}
+use std::io {IO.println, IO.get_env, IO.current_time, IO.current_time_nano, IO.read_file}
+use std::path {Path, Path.is_absolute}
 use std::process {process_id, exec_cmd}
+use std::test {Test.write_fixture}
+use weaver::procs {ProcEntry, Procs.scan_at}
 
 def env_or (name : String) (fallback : String) : IO String := do {
     let v <- IO.get_env name;
@@ -35,7 +39,8 @@ pub def fixture_path (name : String) : IO String := do {
     return (String.concat root (String.concat "/scripts/weaver-tui-repro/" name))
 }
 
-/// A fresh `/tmp/mty_<label>_<pid>_<nano>` with `sessions/` and `procs/`.
+/// A fresh `/tmp/mty_<label>_<pid>_<nano>` with `sessions/`, `procs/` and
+/// `logs/`.
 pub def temp_root (label : String) : IO String := do {
     let t <- IO.current_time_nano;
     let root := String.concat "/tmp/mty_" (String.concat label
@@ -43,8 +48,10 @@ pub def temp_root (label : String) : IO String := do {
         (String.concat "_" (I64.to_string t)))));
     let sessions := String.concat root "/sessions";
     let procs := String.concat root "/procs";
+    let logs := String.concat root "/logs";
     let _ <- exec_cmd "mkdir"
-        (List.cons "-p" (List.cons root (List.cons sessions (List.cons procs List.empty))));
+        (List.cons "-p" (List.cons root (List.cons sessions (List.cons procs
+        (List.cons logs List.empty)))));
     return root
 }
 
@@ -66,17 +73,37 @@ pub def env_of (root : String) (fixture : Option String) (extra : List (Pair Str
 pub def weaver_args (model : String) : List String :=
     List.cons "--provider" (List.cons "mock" (List.cons "--model" (List.cons model List.empty)))
 
-pub def spawn (bin : String) (model : String) (rows : I64) (cols : I64) (root : String)
-              (fixture : Option String) (extra : List (Pair String (Option String))) : IO (Result String Mty) := do {
+/// Make a relative `WV_BIN` absolute: the child chdirs to the test root
+/// before `execl`, so a relative path would resolve against the wrong cwd.
+def absolute_bin (bin : String) : IO String := do {
+    if Path.is_absolute (Path.path bin) then IO.pure bin
+    else do {
+        let root <- repo_root;
+        return (String.concat root (String.concat "/" bin))
+    }
+}
+
+/// Spawn weaver with extra CLI switches (e.g. `--resume <id>`, `--no-color`)
+/// and the child's cwd set to the isolated root.
+pub def spawn_args (bin : String) (model : String) (extra_args : List String)
+                   (rows : I64) (cols : I64) (root : String)
+                   (fixture : Option String)
+                   (extra : List (Pair String (Option String))) : IO (Result String Mty) := do {
+    let abs <- absolute_bin bin;
     let cfg : SpawnConfig := {
-        bin := bin,
-        args := weaver_args model,
+        bin := abs,
+        args := List.append (weaver_args model) extra_args,
         rows := rows,
         cols := cols,
-        env := env_of root fixture extra
+        env := env_of root fixture extra,
+        cwd := Option.some root
     };
     Mty.spawn cfg
 }
+
+pub def spawn (bin : String) (model : String) (rows : I64) (cols : I64) (root : String)
+              (fixture : Option String) (extra : List (Pair String (Option String))) : IO (Result String Mty) :=
+    spawn_args bin model List.empty rows cols root fixture extra
 
 /// `WEAVER_MTY` unset -> print SKIP and return none (green); set -> return
 /// the binary path. A missing binary then fails the test through `spawn`.
@@ -181,3 +208,109 @@ pub def sgr (button : I64) (x : I64) (y : I64) (final : String) : String :=
         ++ ";" ++ I64.to_string (x + 1)
         ++ ";" ++ I64.to_string (y + 1)
         ++ final)
+
+// ── Files, logs and processes ───────────────────────────────────────────
+
+/// Write `<root>/.weaver/config.toml` with `mode = "<mode>"` (bigplan's plan
+/// mode). The child cwd is the root, so this is the project config it sees.
+pub def write_mode_config (root : String) (mode : String) : IO Unit := do {
+    let dir := String.concat root "/.weaver";
+    let _ <- exec_cmd "mkdir" (List.cons "-p" (List.cons dir List.empty));
+    let body := String.concat "mode = \"" (String.concat mode "\"\n");
+    let _ <- Test.write_fixture (Path.path (String.concat dir "/config.toml")) body;
+    return unit
+}
+
+/// Read a file, or "" when it is absent/unreadable (a log may not exist yet).
+pub def read_text (path : String) : IO String := do {
+    let r <- IO.read_file (Path.path path);
+    match r {
+        Result.err _ => IO.pure "",
+        Result.ok s => IO.pure s
+    }
+}
+
+pub def wait_file_contains (path : String) (needle : String) (deadline_ms : I64) : IO Bool := do {
+    let start <- IO.current_time;
+    wait_file_go path needle (start + deadline_ms)
+}
+
+#[partial]
+def wait_file_go (path : String) (needle : String) (deadline : I64) : IO Bool := do {
+    let text <- read_text path;
+    if String.contains text needle then IO.pure true
+    else do {
+        let now <- IO.current_time;
+        if I64.gt now deadline then IO.pure false
+        else do { sleepIO 50; wait_file_go path needle deadline }
+    }
+}
+
+pub def proc_entries (root : String) : IO (List ProcEntry) :=
+    Procs.scan_at (Path.path root)
+
+/// The task list once at least one entry exists, or empty at the deadline.
+pub def wait_proc_entries (root : String) (deadline_ms : I64) : IO (List ProcEntry) := do {
+    let start <- IO.current_time;
+    wait_proc_go root (start + deadline_ms)
+}
+
+#[partial]
+def wait_proc_go (root : String) (deadline : I64) : IO (List ProcEntry) := do {
+    let es <- proc_entries root;
+    match es {
+        List.cons e rest => IO.pure (List.cons e rest),
+        List.empty => do {
+            let now <- IO.current_time;
+            if I64.gt now deadline then IO.pure List.empty
+            else do { sleepIO 50; wait_proc_go root deadline }
+        }
+    }
+}
+
+pub def wait_pid_gone (pid : I64) (deadline_ms : I64) : IO Bool := do {
+    let start <- IO.current_time;
+    wait_pid_go pid (start + deadline_ms)
+}
+
+#[partial]
+def wait_pid_go (pid : I64) (deadline : I64) : IO Bool := do {
+    let alive <- Mty.pid_alive pid;
+    if Bool.not alive then IO.pure true
+    else do {
+        let now <- IO.current_time;
+        if I64.gt now deadline then IO.pure false
+        else do { sleepIO 50; wait_pid_go pid deadline }
+    }
+}
+
+/// Last-resort cleanup for a detached task whose parent was killed.
+pub def kill_pid_9 (pid : I64) : IO Unit := do {
+    let cmd := String.concat "kill -9 " (I64.to_string pid);
+    let _ <- exec_cmd "sh" (List.cons "-c" (List.cons cmd List.empty));
+    return unit
+}
+
+/// The status bar shows `turns <n>/<budget>`; match on the prefix so the
+/// budget value does not matter.
+pub def status_turns (o : Output) (n : I64) : Bool :=
+    match Output.find o (String.concat "turns " (String.concat (I64.to_string n) "/")) {
+        Option.some _ => true,
+        Option.none => false
+    }
+
+/// The input box's placeholder row (an empty input, after a submit/recall).
+pub def input_row (o : Output) : Option I64 :=
+    match Output.find o "type a message" {
+        Option.some p => Option.some (pos_row p),
+        Option.none => Option.none
+    }
+
+/// A bracketed paste, chunked so a dialog reading one byte per syscall cannot
+/// block the writer.
+pub def send_paste (m : Mty) (s : String) : IO Unit := do {
+    Mty.send_text m "\u{1b}[200~";
+    Mty.send_chunked m s 1024 50;
+    Mty.send_text m "\u{1b}[201~";
+    return unit
+}

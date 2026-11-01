@@ -13,6 +13,11 @@ def saw_alt (o : Output) : Bool := Output.contains o "\u{1b}[?1049h"
 def caret_here (s : String) : Bool :=
     String.contains s ";7m" || String.contains s "[7m"
 
+/// The alt-screen switch is emitted before the first frame; wait for the
+/// caret itself so the snapshot cannot race the paint under CI load.
+def first_frame (o : Output) : Bool :=
+    Bool.and (saw_alt o) (caret_here o.raw)
+
 def found (o : Output) (needle : String) : Bool :=
     match Output.find o needle {
         Option.some _ => true,
@@ -23,7 +28,7 @@ def since_caret (o : Output) (mark : I64) : Bool :=
     caret_here (Output.since o mark)
 
 def input_go (m : Mty) : IO Bool := do {
-    let up <- Mty.wait_until m saw_alt 6000;
+    let up <- Mty.wait_until m first_frame 6000;
     let o0 <- Mty.output m;
     let a <- Check.report "startup caret is visible without a key" (caret_here o0.raw);
     Mty.send_text m "hello";

@@ -1,5 +1,5 @@
-// mty / tests / ansi -- pure stripping tests (no pty).
-use lib::ansi {Ansi.strip, Ansi.tight}
+// mty / tests / ansi -- pure stripping and colour tests (no pty).
+use lib::ansi {Ansi.strip, Ansi.tight, Ansi.has_color}
 
 #[test]
 def test_strip_csi_sgr : Bool :=
@@ -24,3 +24,27 @@ def test_tight_removes_whitespace : Bool :=
 #[test]
 def test_tight_keeps_utf8 : Bool :=
     Ansi.tight "日 本" == "日本"
+
+#[test]
+def test_has_color_basic_fg : Bool :=
+    Ansi.has_color "\u{1b}[36mhello\u{1b}[0m"
+
+#[test]
+def test_has_color_combined : Bool :=
+    Ansi.has_color "\u{1b}[31;1mhi\u{1b}[0m"
+
+#[test]
+def test_has_color_background : Bool :=
+    Ansi.has_color "\u{1b}[44mhi\u{1b}[0m"
+
+#[test]
+def test_has_color_ignores_dim : Bool :=
+    Bool.not (Ansi.has_color "\u{1b}[2mhi\u{1b}[0m")
+
+#[test]
+def test_has_color_ignores_reverse_and_reset : Bool :=
+    Bool.not (Ansi.has_color "\u{1b}[7mhi\u{1b}[0m")
+
+#[test]
+def test_has_color_plain_text : Bool :=
+    Bool.not (Ansi.has_color "plain text")

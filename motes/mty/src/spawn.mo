@@ -1,21 +1,24 @@
 // mty / spawn -- forkpty plus an FdStream over the master.
 //
-// Phase 0 subset: spawn, write, read-until-EOF, reap, kill. Phase 1 adds the
-// incremental Output/grid state, wait_until/wait_quiet, and resize.
-//
 // Two invariants the FFI shape depends on:
 //
 //   * Environment is set parent-side before the fork and restored immediately
 //     after. The child inherits it; `setenv` is never called in the child
-//     (it is not async-signal-safe). No `chdir`: every weaver path is absolute
-//     through HOME / WEAVER_SESSION_ROOT / WEAVER_PROC_ROOT / WV_SESSION_TMP.
+//     (it is not async-signal-safe).
 //   * Every ByteBuf is built before the fork, and `fork_exec`/`exec_die`
-//     allocate nothing, so the child (a copy of a Boehm-managed process)
-//     never allocates between `forkpty` and `execl`/`_exit`.
+//     (and their `_cwd` variants) allocate nothing, so the child (a copy of a
+//     Boehm-managed process) never allocates between `forkpty` and
+//     `execl`/`_exit`.
+//
+// `SpawnConfig.cwd` is applied by a `chdir` in the child (async-signal-safe,
+// no allocation): weaver reads a cwd-relative `./.weaver/config.toml`, and a
+// test must not inherit the checkout's. A relative `bin` must be absolutized
+// by the caller, because the exec happens after that `chdir`.
 
 use lib::sys {
-    forkpty, execl8, exit_now, setenv, unsetenv, ioctl, kill, waitpid, access,
-    zero_i64, zero_i32, one_i32, code_127, sig_kill, sig_winch, tiocswinsz, x_ok
+    forkpty, execl8, exit_now, chdir, setenv, unsetenv, ioctl, kill, waitpid,
+    access, zero_i64, zero_i32, one_i32, code_127, sig_kill, sig_winch,
+    tiocswinsz, x_ok
 }
 use std::bytebuf {
     ByteBuf, ByteBuf.alloc, ByteBuf.of_string, ByteBuf.of_list, ByteBuf.ptr,
@@ -30,13 +33,16 @@ use std::stream {Stream, FdStream, FdStream.of_raw_fd, FdStream.poll, FdStream.p
 
 /// Spawn parameters. `env` entries with `Option.none` unset the variable; the
 /// parent's previous values are restored immediately after the fork, so one
-/// test cannot leak into the next.
+/// test cannot leak into the next. `cwd` is the child's working directory
+/// (none keeps the parent's); spell it at every literal -- an omitted field
+/// has been seen to fill garbage in compiled code.
 pub struct SpawnConfig {
     bin : String,
     args : List String,
     rows : I64,
     cols : I64,
-    env : List (Pair String (Option String))
+    env : List (Pair String (Option String)),
+    cwd : Option String
 }
 
 /// Everything the child has written, the screen model built from it, and how
@@ -174,6 +180,24 @@ def exec_die (path : Ptr) (a0 : Ptr) (a1 : Ptr) (a2 : Ptr) (a3 : Ptr)
     let _rc : I32 := execl8 path a0 a1 a2 a3 a4 a5 a6 a7 in
     exit_now code_127
 
+/// `fork_exec` with a child-side `chdir` first. Both branches stay pure and
+/// allocation-free; branching on `chdir`'s result keeps the extern
+/// observable (an unused pure call could be eliminated).
+def fork_exec_cwd (amaster : Ptr) (win : Ptr) (cwd : Ptr) (path : Ptr)
+                  (a0 : Ptr) (a1 : Ptr) (a2 : Ptr) (a3 : Ptr)
+                  (a4 : Ptr) (a5 : Ptr) (a6 : Ptr) (a7 : Ptr) : I32 :=
+    let pid : I32 := forkpty amaster Ptr.null Ptr.null win in
+    if I64.beq (I32.to_i64 pid) zero_i64
+    then exec_die_cwd cwd path a0 a1 a2 a3 a4 a5 a6 a7
+    else pid
+
+def exec_die_cwd (cwd : Ptr) (path : Ptr) (a0 : Ptr) (a1 : Ptr) (a2 : Ptr) (a3 : Ptr)
+                 (a4 : Ptr) (a5 : Ptr) (a6 : Ptr) (a7 : Ptr) : I32 :=
+    let rc : I32 := chdir cwd in
+    if I64.beq (I32.to_i64 rc) zero_i64
+    then exec_die path a0 a1 a2 a3 a4 a5 a6 a7
+    else exit_now code_127
+
 // ── Environment ──────────────────────────────────────────────────────────
 
 def apply_value (k : String) (v : Option String) : IO Unit :=
@@ -237,8 +261,14 @@ pub def Mty.spawn (cfg : SpawnConfig) : IO (Result String Mty) := do {
         } else do {
             let ws : List String := List.cons cfg.bin cfg.args;
             let used := used_slots args_n;
+            let cwd_s : String := match cfg.cwd {
+                Option.some s => s,
+                Option.none => ""
+            };
+            let use_cwd := Bool.not (String.is_empty cwd_s);
             let saved <- save_env cfg.env;
             let _ <- apply_env cfg.env;
+            let cwd <- cstring_buf cwd_s;
             let bufs <- build_argv_bufs
                 (word_at ws 0) (word_at ws 1) (word_at ws 2) (word_at ws 3)
                 (word_at ws 4) (word_at ws 5) (word_at ws 6) (word_at ws 7);
@@ -253,10 +283,14 @@ pub def Mty.spawn (cfg : SpawnConfig) : IO (Result String Mty) := do {
             let p6 := slot_ptr bufs.b6 6 used;
             let p7 := slot_ptr bufs.b7 7 used;
             let path := ByteBuf.ptr bufs.b0;
-            let pid := fork_exec (ByteBuf.ptr amaster) (ByteBuf.ptr win) path p0 p1 p2 p3 p4 p5 p6 p7;
+            let pid : I32 := if use_cwd
+                then fork_exec_cwd (ByteBuf.ptr amaster) (ByteBuf.ptr win) (ByteBuf.ptr cwd)
+                    path p0 p1 p2 p3 p4 p5 p6 p7
+                else fork_exec (ByteBuf.ptr amaster) (ByteBuf.ptr win)
+                    path p0 p1 p2 p3 p4 p5 p6 p7;
             let _ <- restore_env saved;
             let out <- Ref.new (Output.empty cfg.rows cfg.cols);
-            Mty.spawn_done amaster win bufs pid out
+            Mty.spawn_done amaster win cwd bufs pid out
         }
     }
 }
@@ -264,11 +298,12 @@ pub def Mty.spawn (cfg : SpawnConfig) : IO (Result String Mty) := do {
 /// The parent half after the fork: decode the master fd, release the pre-fork
 /// buffers, and hand back the handle. The child never reaches this (it is
 /// inside `fork_exec`'s `exec_die`).
-def Mty.spawn_done (amaster : ByteBuf) (win : ByteBuf) (bufs : ArgBufs) (pid : I32) (out : Ref Output) : IO (Result String Mty) := do {
+def Mty.spawn_done (amaster : ByteBuf) (win : ByteBuf) (cwd : ByteBuf) (bufs : ArgBufs) (pid : I32) (out : Ref Output) : IO (Result String Mty) := do {
     let fds <- ByteBuf.to_list amaster 4;
     let fd := I64.to_i32 (decode_fd fds);
     let _ <- ByteBuf.free amaster;
     let _ <- ByteBuf.free win;
+    let _ <- ByteBuf.free cwd;
     let _ <- ByteBuf.free bufs.b0;
     let _ <- ByteBuf.free bufs.b1;
     let _ <- ByteBuf.free bufs.b2;
@@ -295,6 +330,27 @@ pub def Mty.send_text (m : Mty) (s : String) : IO Unit := do {
     let _ <- Stream.write view buf;
     let _ <- ByteBuf.free buf;
     return unit
+}
+
+/// Write `s` in byte-sized chunks with a pump between them. A single large
+/// write can block against a dialog reading one byte per syscall; pastes are
+/// ASCII, so a byte offset is always a character boundary. `chunk_bytes` is
+/// clamped to at least 1.
+pub def Mty.send_chunked (m : Mty) (s : String) (chunk_bytes : I64) (pause_ms : I64) : IO Unit := do {
+    let step := if I64.lt chunk_bytes 1 then 1 else chunk_bytes;
+    send_chunked_go m s (String.length s) step pause_ms 0
+}
+
+#[partial]
+def send_chunked_go (m : Mty) (s : String) (total : I64) (chunk : I64) (pause : I64) (off : I64) : IO Unit := do {
+    if Bool.not (I64.lt off total) then IO.pure unit
+    else do {
+        let rest := total - off;
+        let n := if I64.lt chunk rest then chunk else rest;
+        Mty.send_text m (String.slice s off n);
+        Mty.pump m pause;
+        send_chunked_go m s total chunk pause (off + n)
+    }
 }
 
 /// Set the master's `TIOCSWINSZ` and send SIGWINCH. Weaver observes size by
@@ -468,11 +524,17 @@ pub def Mty.reap (m : Mty) : IO I64 := do {
     return (I32.to_i64 p)
 }
 
-/// `kill(pid, 0) == 0`: still alive (or a zombie awaiting `reap`).
-pub def Mty.alive (m : Mty) : IO Bool := do {
-    let rc <- IO.mk (kill m.pid zero_i32);
+/// The child's pid, for `/proc/<pid>` probes (RSS).
+pub def Mty.child_pid (m : Mty) : I64 := I32.to_i64 m.pid
+
+/// `kill(pid, 0) == 0`: still alive (or a zombie awaiting reaping).
+pub def Mty.pid_alive (pid : I64) : IO Bool := do {
+    let rc <- IO.mk (kill (I64.to_i32 pid) zero_i32);
     return (I64.beq (I32.to_i64 rc) zero_i64)
 }
+
+/// `kill(pid, 0) == 0` for this child.
+pub def Mty.alive (m : Mty) : IO Bool := Mty.pid_alive (Mty.child_pid m)
 
 pub def Mty.terminate (m : Mty) : IO Unit := do {
     let _ <- IO.mk (kill m.pid sig_kill);
