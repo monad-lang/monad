@@ -639,6 +639,21 @@ pub def U64.to_string (a : U64) : String
 #[native u64_to_i64]
 pub def U64.to_i64 (a : U64) : I64
 
+/// The exact decimal parse for a u64: digit text in, its u64 bit
+/// pattern as an `I64` out. `U64.to_string` is the inverse — the same
+/// text/bits pair `F64.bits_of_string`/`F64.to_string` already form for
+/// floats. The digits parse into exactly the bits a `u64` literal of
+/// the same text has, on every backend (`u64::from_str` on the Rust
+/// host, `strtoull` in the C runtime, the evaluator's digit fold); the
+/// compiler itself never calls it (the self-hosted parser's u64 gate
+/// reuses its own digit fold, which keeps the native off the
+/// bootstrap surface). Leading zeros are accepted.
+/// Strict decimal digits only, 0 on anything else: a prefix parse of
+/// `"12a4"` would leave the three backends disagreeing on the same
+/// text, and 0 is already the out-of-range answer.
+#[native string_to_u64_bits]
+pub def U64.bits_of_string (text : String) : I64
+
 pub instance Add U64 {
 	def add (a b : U64) : U64 := U64.add a b
 }

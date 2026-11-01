@@ -4,6 +4,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <errno.h>
 
 /* `I64.to_string` (init/number.mo) had no backing implementation at
    all -- neither a Monad-level `:=` body nor a runtime primitive.
@@ -101,6 +102,28 @@ rt_str monad_u64_to_string(int64_t n) {
    segfault in the compiler. */
 int64_t monad_f64_of_string(rt_str s) {
     return monad_f64_bits(RT_STR(s) ? strtod(RT_STR(s), NULL) : 0.0);
+}
+
+/* `U64.bits_of_string` (`init/number.mo`): the u64 sibling of the parse
+   above -- exact decimal digit text in, the u64 bit pattern out, with
+   `monad_u64_to_string` as the inverse. A runtime facility only: the
+   compiler never calls it (the self-hosted parser's u64 gate reuses its
+   own wrapping digit fold, so no bootstrap window opens). Strict digits
+   only -- strtoull alone would also take a prefix ("12a4" -> 12) and
+   skip leading whitespace, which the Rust host's from_str and the
+   evaluator's digit fold reject, so the pre-scan keeps the three
+   backends identical; leading zeros are accepted by all three. ERANGE
+   (or any non-digit or empty text) yields 0, never a crash. */
+int64_t monad_string_to_u64_bits(rt_str s) {
+    const char *p = RT_STR(s);
+    if (!p || !*p) return 0;
+    for (const char *q = p; *q; q++)
+        if (*q < '0' || *q > '9') return 0;
+    errno = 0;
+    char *end = NULL;
+    unsigned long long u = strtoull(p, &end, 10);
+    if (errno == ERANGE || end == p) return 0;
+    return (int64_t)u;
 }
 
 /* Rust's `f64::to_string` -- what `F64.to_string` means on the host --

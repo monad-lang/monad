@@ -566,6 +566,13 @@ def native_runtime_fn_name (attrs : List Attribute) : Option NativeWrapKind :=
             else if String.beq target "u8_to_string" then Option.some (NativeWrapKind.passthrough "monad_u8_to_string")
             else if String.beq target "u16_to_string" then Option.some (NativeWrapKind.passthrough "monad_u16_to_string")
             else if String.beq target "u64_to_string" then Option.some (NativeWrapKind.passthrough "monad_u64_to_string")
+            // `U64.bits_of_string` (`init/number.mo`): the parse half of
+            // the `monad_u64_to_string` pair above, in the same
+            // text-to-bits shape as `monad_f64_of_string` below. A
+            // runtime facility with no compiler caller (the parser's
+            // u64 gate reuses its own digit fold); the String argument and I64 result are both one word under
+            // the native ABI, so `passthrough` is the wrap.
+            else if String.beq target "string_to_u64_bits" then Option.some (NativeWrapKind.passthrough "monad_string_to_u64_bits")
             // `exec_cmd` is THE load-bearing one for the ladder:
             // `llvm/src/link.mo` shells out to `llc`/`clang` through
             // it, so without it a self-compiled compiler can never run
@@ -874,6 +881,10 @@ pub def runtime_declarations_for (kind : TargetKind) : List LLVMDeclaration :=
     let d36 := mk_decl "monad_list_dir" (List.cons "i64" List.empty) "i64" in
     let d37 := mk_decl "monad_u8_to_string" (List.cons "i64" List.empty) "i64" in
     let d38 := mk_decl "monad_u64_to_string" (List.cons "i64" List.empty) "i64" in
+    // `monad_string_to_u64_bits` is the parse half of the u64 text/bits
+    // pair -- d38 renders, this parses (digit text in, u64 bit pattern
+    // out), both one i64 word under the native convention.
+    let d38b := mk_decl "monad_string_to_u64_bits" (List.cons "i64" List.empty) "i64" in
     let d39 := mk_decl "monad_process_id" List.empty "i64" in
     let d40 := mk_decl "monad_build_commit" List.empty "i64" in
     // `std/array.mo`'s six (runtime.c). Same "no implicit declare"
@@ -1091,7 +1102,7 @@ pub def runtime_declarations_for (kind : TargetKind) : List LLVMDeclaration :=
     let d116 := mk_decl "monad_channel_try_take" ["i64"] "i64" in
     [d1, d2, d3, d7, d7b, d7c, d7d, d7e, d8, d9, d10, d11, d12, d13,
      d14, d15, d16, d17, d18, d19, d20, d21, d22, d23, d23a, d23b, d24, d24b, d25, d26, d27, d28, d29, d30, d31,
-     d32, d33, d34, d35, d36, d37, d38, d39, d40, d41, d42, d43, d44, d45, d46, d47,
+     d32, d33, d34, d35, d36, d37, d38, d38b, d39, d40, d41, d42, d43, d44, d45, d46, d47,
      d48, d49, d50, d51, d52, d53, d54, d55, d56,
      d57, d58, d59, d60, d61, d62, d63, d64,
      d65, d66, d66a, d67, d72,

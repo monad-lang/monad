@@ -1051,6 +1051,75 @@ def native_string_hash (args : List Value) : Result CoreEvalError Value :=
       },
   }
 
+/// `u64::MAX` in digits, the bound `U64.bits_of_string`'s fold checks
+/// a 20-digit text against. The evaluator duplicates the constant
+/// rather than importing it from the parser (`numeric_literal.mo`'s
+/// `u64_max_digits`) so the evaluator does not depend on the parser's
+/// module graph; the two must stay byte-identical.
+def u64_max_digits : String := "18446744073709551615"
+
+/// The digit fold behind `U64.bits_of_string` (`init/number.mo`).
+/// Wrapping i64 arithmetic is bit-identical to u64 arithmetic for the
+/// in-range cases (the same fold the parser's digit scan performs),
+/// so no bignum is needed; a non-digit byte aborts with 0 so the
+/// evaluator agrees with the strict-digits contract of the Rust host
+/// and the C runtime.
+#[partial]
+def u64_bits_of_digits (digits : String) (i : I64) (acc : I64) : I64 :=
+  if I64.beq i (String.length digits)
+  then acc
+  else
+    match String.get digits i {
+      Option.none => 0,
+      Option.some b =>
+        let d : I64 := I64.sub (U8.to_i64 b) 48 in
+        if Bool.or (I64.lt d 0) (I64.gt d 9)
+        then 0
+        else u64_bits_of_digits digits (I64.add i 1) (I64.add (I64.mul acc 10) d),
+    }
+
+/// `digits` from index `i` on, without its leading `0`s (`""` for an
+/// all-zero text). Only `0` bytes are dropped, so a non-digit byte
+/// still reaches the fold's strict check.
+#[partial]
+def u64_strip_leading_zeros (digits : String) (i : I64) : String :=
+  if I64.beq i (String.length digits)
+  then ""
+  else if String.beq "0" (String.slice digits i 1)
+  then u64_strip_leading_zeros digits (I64.add i 1)
+  else String.drop i digits
+
+/// The range gate plus the fold, on the SIGNIFICANT digits (leading
+/// zeros stripped first, as `u64::from_str` and `strtoull` accept any
+/// padding): 21+ digits can never fit a u64, and among 20-digit texts
+/// only `u64::MAX` and its lexicographic predecessors fit, which
+/// byte-lexicographic `String.lt` decides exactly (ASCII digits sort in
+/// value order). Everything else is 0. An empty text is 0 as well: the
+/// all-zero strip and the fold's empty case both land there, and the
+/// other two backends reject `""` to 0.
+def u64_bits_of_string_checked (text : String) : I64 :=
+  let digits : String := u64_strip_leading_zeros text 0 in
+  let len : I64 := String.length digits in
+  if I64.gt len 20
+  then 0
+  else if I64.lt len 20
+  then u64_bits_of_digits digits 0 0
+  else if Bool.or (String.lt digits u64_max_digits) (String.beq digits u64_max_digits)
+  then u64_bits_of_digits digits 0 0
+  else 0
+
+/// `U64.bits_of_string` (`init/number.mo`): the evaluator's exact
+/// decimal parse, digit text to its u64 bit pattern.
+def native_string_to_u64_bits (args : List Value) : Result CoreEvalError Value :=
+  match args {
+    List.empty => Result.err (CoreEvalError.ce_native_arg_error "expected 1 arg, got 0"),
+    List.cons a _ =>
+      match value_as_str a {
+        Option.some x => Result.ok (int_value (u64_bits_of_string_checked x) NumSuffix.i64),
+        Option.none => Result.err (CoreEvalError.ce_native_arg_error "expected String arg"),
+      },
+  }
+
 // ─── Dispatch ─────────────────────────────────────────────────────────
 
 def exec_native (name : Identifier) (args : List Value) : Result CoreEvalError Value :=
@@ -1151,6 +1220,7 @@ def exec_native_by_name (s : String) (args : List Value) : Result CoreEvalError 
   else if String.beq s "u64_gt" then native_u64_gt args
   else if String.beq s "u64_to_string" then native_i64_to_string (fn (x : I64) => U64.to_string (I64.to_u64 x)) args
   else if String.beq s "u64_to_i64" then native_i64_to_i64_value NumSuffix.i64 (fn (x : I64) => x) args
+  else if String.beq s "string_to_u64_bits" then native_string_to_u64_bits args
   // String
   else if String.beq s "string_concat" then native_string_binop_str_result String.concat args
   else if String.beq s "string_eq" then native_string_binop_bool_result String.beq args
@@ -1317,6 +1387,7 @@ def native_specs : List NativeSpec := [
     spec "u64_gt" 2,
     spec "u64_to_string" 1,
     spec "u64_to_i64" 1,
+    spec "string_to_u64_bits" 1,
     spec "string_lt" 2,
     spec "string_gt" 2,
     spec "string_count_newlines" 2,
@@ -1564,6 +1635,20 @@ def test_ntv_u64_gt_is_unsigned : Bool :=
       let cond : CoreIr := CoreIr.ntv n [num_lit (I64.sub 0 1), num_lit 1] in
       let iff : CoreIr := CoreIr.match_ cond [MatchArm.arm 0 (num_lit 100), MatchArm.arm 0 (num_lit 200)] in
       is_num (run iff) 100,
+    Option.none => false,
+  }
+
+/// Zero padding is not significant: `u64::from_str` and `strtoull` both
+/// read "000...01" (21 characters) as 1, so the evaluator's length gate
+/// must bound the stripped digits, not the raw text.
+#[test]
+def test_ntv_u64_bits_of_string_ignores_leading_zeros : Bool :=
+  match native_id_for_name (Identifier.id "string_to_u64_bits") {
+    Option.some n =>
+      is_num (run (CoreIr.ntv n [str_lit "000000000000000000001"])) 1
+        && is_num (run (CoreIr.ntv n [str_lit "0018446744073709551615"])) (I64.sub 0 1)
+        && is_num (run (CoreIr.ntv n [str_lit "0018446744073709551616"])) 0
+        && is_num (run (CoreIr.ntv n [str_lit "000"])) 0,
     Option.none => false,
   }
 

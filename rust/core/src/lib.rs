@@ -3334,4 +3334,66 @@ def main : I64 := 42u8
       "expected an I64/U8 mismatch, got: {err}"
     );
   }
+
+  /// `U64.bits_of_string`: digit text to the u64 bit pattern — the
+  /// parse the self-hosted parser's big-literal fallback performs on
+  /// this host via `u64::from_str`. u64::MAX's digits must yield the
+  /// all-ones pattern, which `U64.to_i64` reads back as -1.
+  #[test]
+  fn eval_core_program_u64_bits_of_string_parses_max() {
+    let source = r#"
+use init
+
+def main : I64 := U64.bits_of_string "18446744073709551615"
+"#;
+    let result = eval_core_program(&ModulePath::top("'u64_bits_max_test"), source)
+      .unwrap_or_else(|e| panic!("eval_core_program failed: {e}"));
+    match result {
+      core_value::Value::Lit(core_ir::IrLit::Num(n, crate::term::NumSuffix::I64)) => {
+        assert_eq!(n, -1)
+      }
+      other => panic!("expected an I64-tagged literal, got {other:?}"),
+    }
+  }
+
+  /// Out-of-range digit text yields 0, never a wrap: the strict
+  /// exact-parse contract shared by the Rust host, the C runtime's
+  /// digit pre-scan + strtoull, and the self-hosted digit fold.
+  #[test]
+  fn eval_core_program_u64_bits_of_string_out_of_range_is_zero() {
+    let source = r#"
+use init
+
+def main : I64 := U64.bits_of_string "18446744073709551616"
+"#;
+    let result = eval_core_program(&ModulePath::top("'u64_bits_oor_test"), source)
+      .unwrap_or_else(|e| panic!("eval_core_program failed: {e}"));
+    match result {
+      core_value::Value::Lit(core_ir::IrLit::Num(n, crate::term::NumSuffix::I64)) => {
+        assert_eq!(n, 0)
+      }
+      other => panic!("expected an I64-tagged literal, got {other:?}"),
+    }
+  }
+
+  /// A u64 literal above i64::MAX parses to its exact bit pattern
+  /// through the parser's own u64 fallback (Phase 0's `u64::from_str`
+  /// route), pinning that the fold never lands on this host: the
+  /// payload is the all-ones pattern, -1 through `U64.to_i64`.
+  #[test]
+  fn eval_core_program_big_u64_literal_has_exact_bits() {
+    let source = r#"
+use init
+
+def main : I64 := U64.to_i64 18446744073709551615u64
+"#;
+    let result = eval_core_program(&ModulePath::top("'big_u64_lit_test"), source)
+      .unwrap_or_else(|e| panic!("eval_core_program failed: {e}"));
+    match result {
+      core_value::Value::Lit(core_ir::IrLit::Num(n, crate::term::NumSuffix::I64)) => {
+        assert_eq!(n, -1)
+      }
+      other => panic!("expected an I64-tagged literal, got {other:?}"),
+    }
+  }
 }

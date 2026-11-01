@@ -160,3 +160,32 @@ def bare_plus_one (x : U8) : U8 := x + 1
 #[test]
 def test_class_call_bare_arg_retags_to_instance_width : Bool :=
     bare_plus_one 5u8 == 6u8
+
+/// A u64 literal above i64::MAX is writable on both hosts: the Rust
+/// parser takes the `u64::from_str` route, and the self-hosted
+/// parser's fold yields the exact bit pattern for any digit length
+/// (mod 2^64), so the decimal and hex spellings of u64::MAX agree.
+#[test]
+def test_big_u64_literal_matches_hex_spelling : Bool :=
+    18446744073709551615u64 == 0xFFFFFFFFFFFFFFFFu64
+
+/// `U64.bits_of_string` is the same exact decimal parse at runtime
+/// (no compiler caller): u64::MAX's digits are the all-ones pattern, which
+/// `U64.to_i64` reads as -1 (the i64 the folded bits would be).
+#[test]
+def test_u64_bits_of_string_max_is_all_ones : Bool :=
+    U64.bits_of_string "18446744073709551615" == I64.sub 0 1
+
+/// Out-of-range and non-digit text yield 0, never a wrap and never a
+/// prefix parse — the strict contract all three backends share.
+#[test]
+def test_u64_bits_of_string_out_of_range_is_zero : Bool :=
+    Bool.and
+        (U64.bits_of_string "18446744073709551616" == 0)
+        (U64.bits_of_string "12a4" == 0)
+
+/// Zero padding is not significant on any backend: 21 characters, one
+/// significant digit.
+#[test]
+def test_u64_bits_of_string_ignores_leading_zeros : Bool :=
+    U64.bits_of_string "000000000000000000001" == 1

@@ -137,6 +137,9 @@ const PURE_NATIVES: &[&str] = &[
   // float literal (`lang/codegen/emit.mo`). Pure: a function of its own
   // argument text, no IO and no clock, so it is foldable like the rest.
   "f64_of_string",
+  // `U64.bits_of_string` (`init/number.mo`), the same decimal -> bits
+  // conversion for u64, and pure for the same reason.
+  "string_to_u64_bits",
   "string_eq",
   "string_concat",
   "string_concat_list",
@@ -312,6 +315,9 @@ pub fn exec_native(
     // `compile_lit_ir`), so its result is the i64 the emitted constant
     // has to be. See `float_of_string`'s own note on the parse.
     "f64_of_string" => float_of_string(args),
+    // `U64.bits_of_string` (`init/number.mo`): the u64 twin of the
+    // parse above — digit text in, u64 bit pattern as an `I64` out.
+    "string_to_u64_bits" => string_to_u64_bits(args),
     "string_eq" => string_eq(args, natives),
     "string_lt" => string_lt(args, natives),
     "string_gt" => string_gt(args, natives),
@@ -777,6 +783,29 @@ fn float_of_string(args: &[Value]) -> Result<Value, CoreEvalError> {
   let s = extract_string(&args[0])?;
   let v: f64 = s.trim().parse().unwrap_or(0.0);
   Ok(Value::Lit(IrLit::Num(v.to_bits() as i64, NumSuffix::I64)))
+}
+
+/// The exact decimal parse behind `U64.bits_of_string`
+/// (`init/number.mo`): digit text in, its u64 bit pattern as an `I64`
+/// out. `u64::from_str` is the same parse the parser's u64 fallback
+/// performs on this host, so a literal converted here and one parsed
+/// directly produce the same bits. Strict decimal digits only —
+/// `from_str` also accepts a leading `+`, and `strtoull` (the C
+/// runtime) would parse a prefix, so the digit scan keeps the three
+/// backends identical. Unparsable or out-of-range text yields 0.
+fn string_to_u64_bits(args: &[Value]) -> Result<Value, CoreEvalError> {
+  if args.is_empty() {
+    return Err(CoreEvalError::NativeArgError(
+      "string_to_u64_bits needs 1 arg".into(),
+    ));
+  }
+  let s = extract_string(&args[0])?;
+  let v: i64 = if !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit()) {
+    s.parse::<u64>().map(|u| u as i64).unwrap_or(0)
+  } else {
+    0
+  };
+  Ok(Value::Lit(IrLit::Num(v, NumSuffix::I64)))
 }
 
 fn string_eq(args: &[Value], natives: &NativeTable) -> Result<Value, CoreEvalError> {
