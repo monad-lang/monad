@@ -3,7 +3,11 @@ open IO {
   println, read_file, file_exists,
   write_file, read_stdin_exact, write_stdout, flush_stdout, write_stderr,
 }
-use std::process {exec_cmd, process_id}
+use std::process {
+  Child, Proc.kill, Proc.read_line, Proc.read_stderr_line, Proc.spawn, Proc.wait,
+  exec_cmd, process_id,
+}
+use std::watch {Watch, Watch.drain, Watch.close, Watch.default_ignored, Watch.recursive, WatchBatch}
 use std::stream {StreamError}
 // The `--jobs` test runner's concurrency: `forkIO` starts a file's
 // compile-link-run tail on its own thread (a real OS thread on the
@@ -1038,7 +1042,7 @@ def script_print (dir : String) (scripts : List ScriptTarget) : IO I64 :=
 
 def script_build_and_run (manifest_dir : String) (t : ScriptTarget)
     (verbose : Bool) (debug : Bool) (no_cache : Bool) (target_dir_flag : String)
-    (mote_name : String) (program_args : List String) : IO I64 := do {
+    (mote_name : String) (watch : Bool) (program_args : List String) : IO I64 := do {
     let owner_opt <-
         if String.is_empty mote_name
         then IO.pure (Option.some manifest_dir)
@@ -1049,32 +1053,222 @@ def script_build_and_run (manifest_dir : String) (t : ScriptTarget)
                 (String.concat "` for script `" (String.concat (ScriptTarget.script_name t) "`"))));
             return 1
         },
-        Option.some owner => do {
-            let spec <- TargetSpec.native;
-            let src := ScriptTarget.script_path t;
-            let out_name : Path := Path.path (ScriptTarget.script_name t);
-            let rc <- build_cached_at src owner out_name target_dir_flag verbose debug
-                no_cache spec;
-            if Bool.not (I64.beq rc 0i64)
-            then do {
-                println "script: compilation failed";
-                return 1
-            }
-            else do {
-                let target_dir <- build_target_dir target_dir_flag src;
-                let dest_dir : String := build_dest_dir target_dir debug;
-                let bin_path : String :=
-                    Path.to_string (Path.join (Path.path dest_dir) out_name);
-                exec_cmd bin_path program_args
-            }
-        },
+        Option.some owner =>
+            if watch
+            then script_watch manifest_dir owner t target_dir_flag verbose debug no_cache
+                     program_args
+            else script_build_and_run_once owner t target_dir_flag verbose debug no_cache
+                     program_args
     }
+}
+
+/// Build the script once and run its binary in the foreground.
+def script_build_and_run_once (owner : String) (t : ScriptTarget) (target_dir_flag : String)
+    (verbose : Bool) (debug : Bool) (no_cache : Bool) (program_args : List String)
+    : IO I64 := do {
+    let spec <- TargetSpec.native;
+    let src := ScriptTarget.script_path t;
+    let out_name : Path := Path.path (ScriptTarget.script_name t);
+    let rc <- build_cached_at src owner out_name target_dir_flag verbose debug no_cache spec;
+    if Bool.not (I64.beq rc 0i64)
+    then do {
+        println "script: compilation failed";
+        return 1
+    }
+    else do {
+        let bin_path <- script_binary_path target_dir_flag src out_name debug;
+        exec_cmd bin_path program_args
+    }
+}
+
+/// Where a script target's binary lands -- the path `build_cached_at` writes.
+def script_binary_path (target_dir_flag : String) (src : String) (out_name : Path)
+    (debug : Bool) : IO String := do {
+    let target_dir <- build_target_dir target_dir_flag src;
+    let dest_dir : String := build_dest_dir target_dir debug;
+    IO.pure (Path.to_string (Path.join (Path.path dest_dir) out_name))
+}
+
+// ── `monad script --watch` ───────────────────────────────────────────────
+//
+// Watch the manifest's tree with `std::watch` (one directory watch per
+// directory; `target*`, VCS and dependency caches are skipped) and keep one
+// child running against it: a change kills and reaps the child, the build runs
+// again (the store decides whether that actually compiles), and the new binary
+// starts with the same argv.
+//
+// The child's three stdio streams are PIPES (`Proc.spawn`), so two pump fibers
+// copy stdout and stderr into ours; they stop at EOF or when `Proc.kill`
+// closes the pipes under them.
+
+/// Build the script and start its binary. `None` when the build failed or the
+/// binary could not start: the watch loop keeps running with no child, so the
+/// next edit retriggers it.
+def script_build_and_start (owner : String) (src : String) (out_name : Path)
+    (target_dir_flag : String) (verbose : Bool) (debug : Bool) (no_cache : Bool)
+    (spec : TargetSpec) (program_args : List String) : IO (Option Child) := do {
+  let rc <- build_cached_at src owner out_name target_dir_flag verbose debug no_cache spec;
+  if Bool.not (I64.beq rc 0i64)
+  then do {
+    println "script --watch: compilation failed; waiting for the next change";
+    IO.pure Option.none
+  }
+  else do {
+    let bin_path <- script_binary_path target_dir_flag src out_name debug;
+    let spawned <- Proc.spawn bin_path program_args;
+    match spawned {
+      Result.err e => do {
+        println (String.concat "script --watch: cannot run `"
+          (String.concat bin_path (String.concat "`: " e.message)));
+        IO.pure Option.none
+      },
+      Result.ok c => script_start_pumps c
+    }
+  }
+}
+
+def script_start_pumps (c : Child) : IO (Option Child) := do {
+  let _ <- forkIO (fn (_ : Unit) => script_pump_stdout c);
+  let _ <- forkIO (fn (_ : Unit) => script_pump_stderr c);
+  IO.pure (Option.some c)
+}
+
+#[terminating]
+def script_pump_stdout (c : Child) : IO Unit := do {
+  let r <- Proc.read_line c;
+  match r {
+    Result.ok more => script_stdout_line c more,
+    Result.err _ => IO.pure Unit.unit
+  }
+}
+
+#[terminating]
+def script_stdout_line (c : Child) (more : Option String) : IO Unit :=
+  match more {
+    Option.some line => do {
+      println line;
+      script_pump_stdout c
+    },
+    Option.none => IO.pure Unit.unit
+  }
+
+#[terminating]
+def script_pump_stderr (c : Child) : IO Unit := do {
+  let r <- Proc.read_stderr_line c;
+  match r {
+    Result.ok more => script_stderr_line c more,
+    Result.err _ => IO.pure Unit.unit
+  }
+}
+
+#[terminating]
+def script_stderr_line (c : Child) (more : Option String) : IO Unit :=
+  match more {
+    Option.some line => do {
+      IO.write_stderr (String.concat line "\n");
+      script_pump_stderr c
+    },
+    Option.none => IO.pure Unit.unit
+  }
+
+/// SIGKILL and reap the running script, if any. `Proc.kill` is idempotent, so
+/// a child that already exited is not an error.
+def script_stop (child : Option Child) : IO Unit :=
+  match child {
+    Option.none => IO.pure Unit.unit,
+    Option.some c => Proc.kill c
+  }
+
+/// Any event at all, or a lost-event overflow, means rerun.
+def script_batch_changed (batch : WatchBatch) : Bool :=
+  match batch.events {
+    List.empty => batch.overflow,
+    List.cons _ _ => true
+  }
+
+/// Discard events that arrived while we reacted (killing, building): the build
+/// reads the files fresh, so swallowing them cannot lose a change, and it
+/// stops a burst from triggering a second rebuild.
+def script_settle (w : Watch) : IO Unit := do {
+  let _ <- Watch.drain w 0 50;
+  IO.pure Unit.unit
+}
+
+#[terminating]
+def script_watch_loop (w : Watch) (owner : String) (src : String) (out_name : Path)
+    (target_dir_flag : String) (verbose : Bool) (debug : Bool) (no_cache : Bool)
+    (spec : TargetSpec) (program_args : List String) (child : Option Child) : IO I64 := do {
+  let got <- Watch.drain w 1000 50;
+  match got {
+    Result.err e => do {
+      let _ <- Watch.close w;
+      println (String.concat "script --watch: the tree changed under the watcher: " e.message);
+      script_stop child;
+      return 1
+    },
+    Result.ok batch =>
+      if script_batch_changed batch
+      then script_watch_rerun w owner src out_name target_dir_flag verbose debug no_cache spec
+             program_args child
+      else script_watch_loop w owner src out_name target_dir_flag verbose debug no_cache spec
+             program_args child
+  }
+}
+
+#[terminating]
+def script_watch_rerun (w : Watch) (owner : String) (src : String) (out_name : Path)
+    (target_dir_flag : String) (verbose : Bool) (debug : Bool) (no_cache : Bool)
+    (spec : TargetSpec) (program_args : List String) (child : Option Child) : IO I64 := do {
+  script_stop child;
+  script_settle w;
+  let next <- script_build_and_start owner src out_name target_dir_flag verbose debug no_cache
+    spec program_args;
+  script_watch_loop w owner src out_name target_dir_flag verbose debug no_cache spec
+    program_args next
+}
+
+def script_watch_opened (w : Watch) (owner : String) (t : ScriptTarget)
+    (target_dir_flag : String) (verbose : Bool) (debug : Bool) (no_cache : Bool)
+    (program_args : List String) : IO I64 := do {
+  let src := ScriptTarget.script_path t;
+  let out_name : Path := Path.path (ScriptTarget.script_name t);
+  let spec <- TargetSpec.native;
+  let child <- script_build_and_start owner src out_name target_dir_flag verbose debug no_cache
+    spec program_args;
+  script_watch_loop w owner src out_name target_dir_flag verbose debug no_cache spec
+    program_args child
+}
+
+/// `monad script <name> --watch`. The manifest's tree is the watch root: the
+/// script path resolves from it, and a workspace root contains its members.
+/// Output under `target/`/`target-*` is ignored by the walker, so building does
+/// not retrigger a rebuild; a script that WRITES into the watched tree will,
+/// so generated files belong under `target/` or outside the tree.
+def script_watch (manifest_dir : String) (owner : String) (t : ScriptTarget)
+    (target_dir_flag : String) (verbose : Bool) (debug : Bool) (no_cache : Bool)
+    (program_args : List String) : IO I64 := do {
+  // The nearest-manifest walk reports "."'s manifest as `""`, which is a fine
+  // closure root (the build fills it in) but not a path to open.
+  let root : String := if String.is_empty manifest_dir then "." else manifest_dir;
+  let opened <- Watch.recursive (Path.path root) Watch.default_ignored;
+  match opened {
+    Result.err e => do {
+      println (String.concat "script --watch: cannot watch `"
+        (String.concat root (String.concat "`: " e.message)));
+      println "  hint: rerun without --watch to run the script once";
+      return 1
+    },
+    Result.ok w => do {
+      println (String.concat "script --watch: watching " root);
+      script_watch_opened w owner t target_dir_flag verbose debug no_cache program_args
+    }
+  }
 }
 
 #[partial]
 def script_run_in_workspace (base_dir : String) (name : String) (verbose : Bool)
     (debug : Bool) (no_cache : Bool) (target_dir_flag : String) (mote_name : String)
-    (program_args : List String) : IO I64 := do {
+    (watch : Bool) (program_args : List String) : IO I64 := do {
     let root <- script_member_root base_dir 32i64;
     match root {
         Option.none => do {
@@ -1089,7 +1283,7 @@ def script_run_in_workspace (base_dir : String) (name : String) (verbose : Bool)
                     match pr {
                         Pair.pair mdir t =>
                             script_build_and_run mdir t verbose debug no_cache
-                                target_dir_flag mote_name program_args,
+                                target_dir_flag mote_name watch program_args,
                     },
                 Option.none => do {
                     println (String.concat "error: no script `" (String.concat name "`"));
@@ -1102,7 +1296,8 @@ def script_run_in_workspace (base_dir : String) (name : String) (verbose : Bool)
 
 def script_run_named (dir : String) (scripts : List ScriptTarget) (name : String)
     (verbose : Bool) (debug : Bool) (no_cache : Bool) (target_dir_flag : String)
-    (workspace : Bool) (mote_name : String) (program_args : List String) : IO I64 := do {
+    (workspace : Bool) (watch : Bool) (mote_name : String) (program_args : List String)
+    : IO I64 := do {
     if String.is_empty name
     then do {
         println "error: script: no script name given (use --list)";
@@ -1114,7 +1309,7 @@ def script_run_named (dir : String) (scripts : List ScriptTarget) (name : String
         then
             if workspace
             then script_run_in_workspace dir name verbose debug no_cache target_dir_flag
-                mote_name program_args
+                mote_name watch program_args
             else do {
                 println (String.concat "error: no script `" (String.concat name
                     (String.concat "` in " dir)));
@@ -1124,7 +1319,7 @@ def script_run_named (dir : String) (scripts : List ScriptTarget) (name : String
         then match script_find name scripts {
             Option.some t =>
                 script_build_and_run dir t verbose debug no_cache target_dir_flag
-                    mote_name program_args,
+                    mote_name watch program_args,
             Option.none => do {
                 println (String.concat "error: no script `" (String.concat name "`"));
                 return 1
@@ -1138,7 +1333,7 @@ def script_run_named (dir : String) (scripts : List ScriptTarget) (name : String
 }
 
 def run_script (name : String) (verbose : Bool) (debug : Bool) (no_cache : Bool)
-    (target_dir_flag : String) (list_mode : Bool) (workspace : Bool)
+    (target_dir_flag : String) (list_mode : Bool) (workspace : Bool) (watch : Bool)
     (mote_name : String) (program_args : List String) : IO I64 := do {
     let found <- Mote.scripts_at_path ".";
     match found {
@@ -1152,7 +1347,7 @@ def run_script (name : String) (verbose : Bool) (debug : Bool) (no_cache : Bool)
                     if list_mode
                     then script_print dir scripts
                     else script_run_named dir scripts name verbose debug no_cache
-                        target_dir_flag workspace mote_name program_args,
+                        target_dir_flag workspace watch mote_name program_args,
             },
     }
 }
@@ -2842,10 +3037,10 @@ def Command.dispatch (cmd : Command) : IO I64 :=
         Command.run file args verbose debug release => do {
             run_file file verbose (if debug then true else Bool.not release) args
         },
-        Command.script name args verbose debug release no_cache workspace list target_dir mote => do {
+        Command.script name args verbose debug release no_cache workspace watch list target_dir mote => do {
             run_script (Option.get_or_default "" name) verbose
                 (if debug then true else Bool.not release) no_cache
-                (Option.get_or_default "" target_dir) list workspace
+                (Option.get_or_default "" target_dir) list workspace watch
                 (Option.get_or_default "" mote) args
         },
         Command.eval file verbose => do {

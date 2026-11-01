@@ -53,6 +53,7 @@ pub type Command {
         (#[arg {short := "", help := "build without debug info"}] release : Bool)
         (#[arg {short := "", help := "compile for real, reading and writing no store entry"}] no_cache : Bool)
         (#[arg {short := "w", help := "search every mote in the enclosing workspace"}] workspace : Bool)
+        (#[arg {short := "", help := "rebuild and rerun whenever a file in the script's tree changes"}] watch : Bool)
         (#[arg {short := "", help := "list scripts instead of running one"}] list : Bool)
         (#[opt {short := "", value_name := "DIR", help := "where the store and output directories live"}] target_dir : Option String)
         (#[opt {short := "", value_name := "NAME", help := "use this mote's closure (default: the script's manifest)"}] mote : Option String),

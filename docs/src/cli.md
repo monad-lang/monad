@@ -35,6 +35,11 @@ Usage: monad build [<path>] [name] [--bin <name>] [--output/-o <name>] [--target
          the binary lands where build would put it and the second identical run prints `cached:`
          Everything after <path> is the compiled program's own argv. Flag-like arguments
          (`-x`, `--weird`) must follow `--`; plain words are forwarded without it.
+       monad script <name> [--list] [--workspace/-w] [--watch] [--mote <name>] [--target-dir <dir>] [--] [args...]  Build and run a named [[script]] (alias: monad s)
+         <name> is a [[script]] declared in the nearest mote.toml (or a workspace root's); scripts/ is the usual home
+         --list prints `mote/script -> path`; --workspace also searches the workspace's member motes
+         --watch rebuilds and reruns the script whenever a file in its tree changes (see `Watching Files`)
+         --mote <name> resolves the closure through that member instead of the script's own manifest
        monad eval <path> [--verbose/-v]  Evaluate a .mo source file using the built-in interpreter (pure programs only)
        monad repl  Interactive read-eval-print loop (pure programs only)
          Expressions print `value : type`; declarations (def/type/struct/class/instance/use/open) persist

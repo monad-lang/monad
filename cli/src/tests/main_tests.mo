@@ -208,7 +208,7 @@ def test_run_debug_flags : Bool :=
 #[test]
 def test_script_alias_and_args : Bool :=
     match Command.from_args ["s", "dev", "--", "x"] {
-        Command.script name args _verbose _debug _release _no_cache _workspace _list
+        Command.script name args _verbose _debug _release _no_cache _workspace _watch _list
             _target_dir _mote =>
             match name {
                 Option.some n => String.beq n "dev" && one_string args "x",
@@ -220,11 +220,24 @@ def test_script_alias_and_args : Bool :=
 #[test]
 def test_script_list_mode : Bool :=
     match Command.from_args ["script", "--list"] {
-        Command.script name _args _verbose _debug _release _no_cache _workspace list
+        Command.script name _args _verbose _debug _release _no_cache _workspace _watch list
             _target_dir _mote =>
             match name {
                 Option.none => list == true,
                 Option.some _ => false,
+            },
+        _ => false,
+    }
+
+/// `--watch` parses as its own flag, next to `--list` and `--workspace`.
+#[test]
+def test_script_watch_flag : Bool :=
+    match Command.from_args ["script", "dev", "--watch"] {
+        Command.script name _args _verbose _debug _release _no_cache _workspace watch _list
+            _target_dir _mote =>
+            match name {
+                Option.some n => String.beq n "dev" && watch == true,
+                Option.none => false,
             },
         _ => false,
     }

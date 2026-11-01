@@ -100,7 +100,7 @@ pub def Command.debug_of (cmd : Command) : Bool :=
     match cmd {
         Command.build _ _ _ debug release _ _ _ _ _ _ _ => if debug then true else Bool.not release,
         Command.run _ _ _ debug release => if debug then true else Bool.not release,
-        Command.script _ _ _ debug release _ _ _ _ _ => if debug then true else Bool.not release,
+        Command.script _ _ _ debug release _ _ _ _ _ _ => if debug then true else Bool.not release,
         Command.install _ _ _ _ _ _ => false,
         Command.eval _ _ => false,
         Command.repl => false,

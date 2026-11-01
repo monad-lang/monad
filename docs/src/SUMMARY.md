@@ -25,6 +25,7 @@
 # Toolchain
 
 - [Compiling and Running](./compiling.md)
+- [Watching Files](./file-watching.md)
 - [Try Monad in the Browser](./try.md)
 - [The Standard Library](./stdlib.md)
 
