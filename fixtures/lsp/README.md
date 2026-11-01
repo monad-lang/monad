@@ -88,9 +88,10 @@ pinned so that unifying them later is a deliberate change rather than an acciden
 
 | File | What it pins |
 |---|---|
-| `session.jsonl` | The whole milestone: handshake, one diagnostic with a correctly-ranged non-ASCII position, a clean file, the outline, hover and definition in-file, a shadowing local, the workspace scan, an unparseable message, and a clean exit. |
+| `session.jsonl` | The whole milestone: handshake, one diagnostic with a correctly-ranged non-ASCII position, a clean file, the outline, hover and definition in-file and across files, a shadowing local, the workspace scan, an unparseable message, and a clean exit. |
 | `eof-mid-message.jsonl` | A frame truncated by end of input: the answer to the last complete request still arrives and the server exits cleanly. |
 | `nonascii.mo` | The parse-error vector, and the only fixture whose offsets differ between encodings. |
+| `farref.mo` | Cross-file navigation: a type, a constructor and a class the prelude declares, so `definition` opens `prelude.mo` at the declaration. The expected lines are read from the checkout's prelude, not hard-coded. |
 | `shapes.mo` | One declaration of every kind the picker has a word for, plus a local that shadows a def. Pure ASCII, so every position in it is the same number in bytes and in code units. |
 
 ### What `session.jsonl` pinned *as a gap*

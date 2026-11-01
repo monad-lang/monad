@@ -991,7 +991,8 @@ def build_scope_class (cls : Class) (path : ModulePath) (acc : ScopeData) : Scop
             let name_list : List Identifier := List.cons clsname List.empty in
             let cls_np : NamePath := NamePath.mk name_list in
             let with_cls : ScopeData := scope_data_add_class acc cls in
-            add_class_methods with_cls methods cls_np
+            let with_mod : ScopeData := { with_cls with class_modules := npath_map_insert cls_np path with_cls.class_modules } in
+            add_class_methods with_mod methods cls_np
     }
 
 def add_class_methods (acc : ScopeData) (methods : List ClassDef) (cls_np : NamePath) : ScopeData :=
@@ -1571,6 +1572,12 @@ pub def scope_find_def_body (name : NamePath) (s : Scope) : Option Term :=
 pub def scope_find_def_sig (name : NamePath) (s : Scope) : Option Term :=
     let g : ScopeData := scope_globals s in
     scope_data_find_def_sig g name
+
+/// The module that declared the class called `name`, for tooling that
+/// needs its file (`ScopeData.class_modules`).
+pub def scope_find_class_module (name : NamePath) (s : Scope) : Option ModulePath :=
+    let g : ScopeData := scope_globals s in
+    npath_map_lookup name g.class_modules
 
 // --- ScopeData: a def's CUBICAL MARKER binding ---
 

@@ -3573,6 +3573,10 @@ pub struct ScopeData {
     // Populated by `scope_data_note_bare` at every registration site
     // (`scope_data_add_def`/`_inductive`/`_class`/`_class_def`).
     bare_aliases : HashMap String (List String) := HashMap.map HashMap.empty_buckets,
+    // A class's declaring module, keyed by its name. `Class` carries no
+    // `ModulePath` and a class registers no `ScopeDef`, so this is the only
+    // place tooling (`lang/src/navigation.mo`) can find its file.
+    class_modules : HashMap String ModulePath := HashMap.map HashMap.empty_buckets,
 }
 
 // A scope node in the linked list.

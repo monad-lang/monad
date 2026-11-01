@@ -280,9 +280,8 @@ def lsp_definition_of_cursor (enc : PositionEncoding) (c : Cursor) : IO Json :=
 ///
 /// THE TWO ARMS ARE THE TWO SHAPES A TARGET COMES IN, and the split is exact rather
 /// than a fallback order: a range exists exactly when the declaration is in the file
-/// whose ranges were consulted, and a file exists exactly when the target is a def the
-/// scope resolved in another module. A type and a class carry no module at all -- see
-/// `lang::navigation`'s stated limits -- so they never reach the second arm.
+/// whose ranges were consulted, and a file exists exactly when the target is a def,
+/// struct, type, constructor or class the scope resolved in another module.
 #[partial]
 def lsp_definition_of_target (enc : PositionEncoding) (c : Cursor) (t : NavTarget) : IO Json :=
   match nav_target_range t {

@@ -60,10 +60,6 @@
 ///   de Bruijn index (see "Locals" below), falling back to `nav_at` for
 ///   anything else. A caller with only a name, no position, still gets the
 ///   top-level def a local shadows.
-/// - **A type's file is not known.** `ScopeDef` carries its `ModulePath`;
-///   `Inductive` and `Class` do not, so a cross-file jump is offered for
-///   defs and not for types and classes. Hover is unaffected -- a detail
-///   needs no file -- and an in-file jump works for all of them.
 /// - **A bare constructor name can be ambiguous.** The constructor index is
 ///   a scan that answers the first match, so hovering `some` in a corpus
 ///   with two types that declare it shows one of them. The scope's own doc
@@ -88,7 +84,8 @@ use lib::parser {LocatedDecls}
 use lib::pretty {show_class, show_inductive, show_struct, show_term}
 use lib::scope {
   qualified_name_to_name_path, scope_find_class, scope_find_def_return_type,
-  scope_find_def_sig, scope_find_inductive, scope_find_inductive_by_constructor,
+  scope_find_class_module, scope_find_def_sig, scope_find_inductive,
+  scope_find_inductive_by_constructor,
   scope_resolve_name, split_qualified_identifier,
 }
 use lib::typecheck::infer {empty_locals}
@@ -195,7 +192,7 @@ pub def nav_at (scope : Scope) (ranges : List DeclRange) (decls : List Decl)
     // not resolve is a real state (a typo in a declaration's own
     // annotation is the ordinary way to reach it), and it still has a place
     // to go.
-    Result.err _ => nav_unresolved ident ranges decls scope,
+    Result.err _ => nav_unresolved ident ranges decls cache scope,
   }
 
 /// The same resolution, for the caller that already has a check result.
@@ -240,7 +237,7 @@ def nav_resolved (name : String) (sd : ScopeDef) (ranges : List DeclRange)
 #[partial]
 def nav_resolved_type_or_def (name : String) (sd : ScopeDef) (ranges : List DeclRange)
     (cache : ModuleInfoCache) (scope : Scope) : Option NavTarget :=
-  match nav_of_type name scope ranges {
+  match nav_of_type name scope ranges cache (nav_module_file (nav_def_module sd) cache) {
     Option.some t => Option.some t,
     Option.none => Option.some (nav_def_far name (nav_def_module sd) cache scope),
   }
@@ -248,11 +245,12 @@ def nav_resolved_type_or_def (name : String) (sd : ScopeDef) (ranges : List Decl
 /// An identifier the scope did not resolve: the outline may still know it,
 /// and past that there is nothing to answer with.
 #[partial]
-def nav_unresolved (ident : String) (ranges : List DeclRange) (decls : List Decl) (scope : Scope)
-    : Option NavTarget :=
+def nav_unresolved (ident : String) (ranges : List DeclRange) (decls : List Decl)
+    (cache : ModuleInfoCache) (scope : Scope) : Option NavTarget :=
+  let no_file : Option String := Option.none in
   match nav_decl_named ranges ident {
     Option.some dr => Option.some (nav_local ident dr decls scope),
-    Option.none => nav_of_type ident scope ranges,
+    Option.none => nav_of_type ident scope ranges cache no_file,
   }
 
 /// A declaration THIS FILE declares: the kind and the range come from the
@@ -280,37 +278,57 @@ def nav_local (name : String) (dr : DeclRange) (decls : List Decl) (scope : Scop
 /// declaration's rather than the position of any one mention of it. That is
 /// the whole reason a constructor answers its type's name: the outline is
 /// keyed by declarations, and `red` is not one.
+///
+/// `far` is the file of the module the name resolved into, when that is
+/// another module: a type or constructor registers a `ScopeDef`, so the
+/// caller already has it. A class registers none, so its file comes from
+/// `ScopeData.class_modules` here.
 #[partial]
-def nav_of_type (name : String) (scope : Scope) (ranges : List DeclRange) : Option NavTarget :=
+def nav_of_type (name : String) (scope : Scope) (ranges : List DeclRange)
+    (cache : ModuleInfoCache) (far : Option String) : Option NavTarget :=
   match nav_find_inductive (nav_lookup_keys (Identifier.id name)) scope {
     Option.some ind =>
-      Option.some (nav_type_target (nav_ind_name ind) (show_inductive ind) "type" ranges),
+      Option.some (nav_type_target (nav_ind_name ind) (show_inductive ind) "type" ranges far),
     Option.none =>
       match nav_find_ctor (nav_lookup_keys (Identifier.id name)) scope {
         Option.some ind =>
-          Option.some (nav_type_target (nav_ind_name ind) (show_inductive ind) "constructor" ranges),
+          Option.some (nav_type_target (nav_ind_name ind) (show_inductive ind) "constructor" ranges far),
         Option.none =>
           match nav_find_class (nav_lookup_keys (Identifier.id name)) scope {
             Option.some cls =>
-              Option.some (nav_type_target (nav_class_name cls) (show_class cls) "class" ranges),
+              Option.some (nav_type_target (nav_class_name cls) (show_class cls) "class" ranges
+                (nav_class_file cls scope cache)),
             Option.none => Option.none,
           },
       },
   }
 
-/// A type, constructor or class target: the same shape as a def's, with no
-/// file ever offered (see this module's own note on that limit) and the
+/// A type, constructor or class target: the same shape as a def's, with the
 /// detail handed in rather than looked up -- `show_inductive`/`show_class`
-/// already render the whole declaration, so there is no signature table to
-/// consult.
+/// already render the whole declaration. A target in another file takes no
+/// range from THIS file's outline, even when a declaration here shares its
+/// name.
 #[partial]
 def nav_type_target (name : String) (detail : String) (kind : String)
-    (ranges : List DeclRange) : NavTarget :=
-  let no_file : Option String := Option.none in
+    (ranges : List DeclRange) (far : Option String) : NavTarget :=
   let no_range : Option SourceRange := Option.none in
-  match nav_span_named ranges name {
-    Option.some r => nav_target_mk name detail kind no_file (Option.some r),
-    Option.none => nav_target_mk name detail kind no_file no_range,
+  match far {
+    Option.some _ => nav_target_mk name detail kind far no_range,
+    Option.none =>
+      match nav_span_named ranges name {
+        Option.some r => nav_target_mk name detail kind far (Option.some r),
+        Option.none => nav_target_mk name detail kind far no_range,
+      },
+  }
+
+/// The file of the module that declared `cls`, when that module is another
+/// one the cache holds.
+#[partial]
+def nav_class_file (cls : Class) (scope : Scope) (cache : ModuleInfoCache) : Option String :=
+  let np : NamePath := NamePath.mk (List.cons (class_decl_name cls) List.empty) in
+  match scope_find_class_module np scope {
+    Option.none => Option.none,
+    Option.some mp => nav_module_file mp cache,
   }
 
 /// A def the outline does not name and the scope resolved anyway: a def

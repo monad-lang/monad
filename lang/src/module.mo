@@ -1664,6 +1664,7 @@ def merge_scope_data (sd1 : ScopeData) (sd2 : ScopeData) : ScopeData :=
         // values are LISTS of class names, and a key named by both inputs
         // must keep both spellings, not one module's.
         constrained_def_classes := bare_aliases_merge sd1.constrained_def_classes sd2.constrained_def_classes,
+        class_modules := HashMap.merge_buckets sd1.class_modules sd2.class_modules,
     }
 
 /// Merge lists of ScopeData

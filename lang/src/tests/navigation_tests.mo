@@ -538,3 +538,41 @@ def test_a_struct_in_another_module_renders_and_answers_its_file : IO Bool := do
         },
     }
 }
+
+/// A type, a constructor and a class ANOTHER module declares each answer
+/// that module's file and no range -- the constructor under its type's
+/// name, which is the name the far file's outline is keyed by. Built by
+/// hand for the reason the cross-module def test above gives.
+#[test]
+def test_types_and_classes_in_another_module_answer_its_file : IO Bool := do {
+    match parse_all_decls "type ZzFarColor { zz_far_red, zz_far_blue }\nclass ZzFarShow A {\n    def zz_far_show (a : A) : String\n}\n" {
+        ParseResult.fail _e => do { println "VACUOUS: the fixture did not parse"; return false },
+        ParseResult.success _rem decls => do {
+            let sd : ScopeData := build_scope_from_decls nt_other_module decls;
+            let no_parent : Option Scope := Option.none;
+            let scope : Scope := { module_id := nt_here_module, scope := sd, parent := no_parent, incomplete_match_ok := false };
+            let info : ModuleInfo := ModuleInfo.mk nt_other_module nt_other_file decls;
+            let cache : ModuleInfoCache := module_info_cache_insert nt_other_module info module_info_cache_empty;
+            let ty <- nt_far_answers scope cache "ZzFarColor" "type" "ZzFarColor";
+            let ctor <- nt_far_answers scope cache "zz_far_red" "constructor" "ZzFarColor";
+            let cls <- nt_far_answers scope cache "ZzFarShow" "class" "ZzFarShow";
+            return (ty && ctor && cls)
+        },
+    }
+}
+
+def nt_far_answers (scope : Scope) (cache : ModuleInfoCache) (ident : String) (kind : String)
+    (name : String) : IO Bool := do {
+    let no_ranges : List DeclRange := List.empty;
+    let no_decls : List Decl := List.empty;
+    match nav_at scope no_ranges no_decls cache ident {
+        Option.none => do { println ("NO TARGET for " ++ ident); return false },
+        Option.some t => do {
+            println (ident ++ " -> " ++ nt_text t);
+            return (String.beq (nt_kind t) kind
+                && String.beq (nt_name t) name
+                && String.beq (nt_file_text t) nt_other_file
+                && I64.beq (nt_line_of t) (0 - 1))
+        },
+    }
+}

@@ -2,6 +2,7 @@
 {"jsonrpc":"2.0","method":"initialized","params":{}}
 {"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file://@ROOT@/fixtures/lsp/nonascii.mo","languageId":"monad","version":1,"text":"@nonascii.mo"}}}
 {"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file://@ROOT@/fixtures/lsp/shapes.mo","languageId":"monad","version":1,"text":"@shapes.mo"}}}
+{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file://@ROOT@/fixtures/lsp/farref.mo","languageId":"monad","version":1,"text":"@farref.mo"}}}
 {"jsonrpc":"2.0","id":10,"method":"textDocument/documentSymbol","params":{"textDocument":{"uri":"file://@ROOT@/fixtures/lsp/shapes.mo"}}}
 {"jsonrpc":"2.0","id":11,"method":"textDocument/hover","params":{"textDocument":{"uri":"file://@ROOT@/fixtures/lsp/shapes.mo"},"position":{"line":16,"character":10}}}
 {"jsonrpc":"2.0","id":12,"method":"textDocument/definition","params":{"textDocument":{"uri":"file://@ROOT@/fixtures/lsp/shapes.mo"},"position":{"line":16,"character":10}}}
@@ -9,6 +10,10 @@
 {"jsonrpc":"2.0","id":14,"method":"textDocument/definition","params":{"textDocument":{"uri":"file://@ROOT@/fixtures/lsp/shapes.mo"},"position":{"line":40,"character":50}}}
 {"jsonrpc":"2.0","id":15,"method":"textDocument/definition","params":{"textDocument":{"uri":"file://@ROOT@/fixtures/lsp/shapes.mo"},"position":{"line":45,"character":30}}}
 {"jsonrpc":"2.0","id":16,"method":"textDocument/hover","params":{"textDocument":{"uri":"file://@ROOT@/fixtures/lsp/shapes.mo"},"position":{"line":45,"character":30}}}
+{"jsonrpc":"2.0","id":19,"method":"textDocument/definition","params":{"textDocument":{"uri":"file://@ROOT@/fixtures/lsp/farref.mo"},"position":{"line":5,"character":25}}}
+{"jsonrpc":"2.0","id":20,"method":"textDocument/definition","params":{"textDocument":{"uri":"file://@ROOT@/fixtures/lsp/farref.mo"},"position":{"line":7,"character":25}}}
+{"jsonrpc":"2.0","id":21,"method":"textDocument/definition","params":{"textDocument":{"uri":"file://@ROOT@/fixtures/lsp/farref.mo"},"position":{"line":9,"character":39}}}
+{"jsonrpc":"2.0","id":22,"method":"textDocument/hover","params":{"textDocument":{"uri":"file://@ROOT@/fixtures/lsp/farref.mo"},"position":{"line":7,"character":25}}}
 {"jsonrpc":"2.0","id":17,"method":"workspace/symbol","params":{"query":"ZzReplayShape"}}
 this line is not JSON at all, which is the whole point of it
 {"jsonrpc":"2.0","id":18,"method":"textDocument/documentSymbol","params":{"textDocument":{"uri":"file://@ROOT@/fixtures/lsp/shapes.mo"}}}

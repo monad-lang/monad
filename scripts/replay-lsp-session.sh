@@ -37,6 +37,8 @@
 #   5. `hover` on a def and `definition` on a def's use resolve, in the file.
 #   6. `definition` and `hover` on a local that shadows a top-level def answer the
 #      LOCAL's binder, not the def (`lang/src/navigation.mo`'s cursor-to-binding walk).
+#      `definition` on a type, constructor and class the prelude declares opens
+#      prelude.mo at the declaration (`farref.mo`).
 #   7. `workspace/symbol` finds a declaration in an open buffer.
 #   8. A message that is not JSON gets a -32700 error with a null id and the session
 #      SURVIVES it -- the next request is still answered.
@@ -142,6 +144,14 @@ NONASCII_MESSAGE = "expected '(' at 18:43"
 # range is (16,0)..(19,1) -- `struct ZzReplayShape {` on line 16 through the `}` on line
 # 19 -- and not (16,0)..(21,0).
 SHAPES_STRUCT_RANGE = (16, 0, 19, 1)
+
+
+def prelude_line(needle):
+    """The 0-based line of `needle` in the checkout's prelude, so the cross-file pins
+    (`farref.mo`) follow a prelude edit instead of hard-coding its line numbers."""
+    with open(os.path.join(root, "init", "src", "prelude.mo"), encoding="utf-8") as fh:
+        text = fh.read()
+    return text[:text.index(needle)].count("\n")
 
 failures = []
 
@@ -382,6 +392,24 @@ def session(encoding):
     detail = ((hover or {}).get("result") or {}).get("contents", {}).get("value", "")
     check(f"{encoding} hover on a shadowing local answers its binder",
           detail == "```monad\nzz_replay_shadowed\n```", f"{detail!r}")
+
+    # 6b. Across files. Each name in `farref.mo` is declared in the prelude, another
+    # module, so its definition is that file at the declaration -- a constructor at its
+    # type's. Only the file's basename and the start line are pinned: the declaration's
+    # extent is the prelude's business.
+    farref = [r for r in pubs if r["params"]["uri"].endswith("farref.mo")]
+    ds = farref[0]["params"]["diagnostics"] if farref else ["(none published)"]
+    check(f"{encoding} farref.mo: no diagnostics", len(ds) == 0, f"{ds[:1]}")
+    for rid, what, needle in ((19, "type", "pub type Option A"),
+                              (20, "class", "pub class Add A"),
+                              (21, "constructor", "pub type Option A")):
+        got = [(f, r[0]) for f, r in locs((by_id(replies, rid) or {}).get("result"))]
+        check(f"{encoding} definition on a prelude {what} opens its declaration",
+              got == [("prelude.mo", prelude_line(needle))], f"{got}")
+    hover = by_id(replies, 22)
+    detail = ((hover or {}).get("result") or {}).get("contents", {}).get("value", "")
+    check(f"{encoding} hover on a prelude class renders the class",
+          detail.startswith("```monad\npub class Add (A : Type) {"), f"{detail[:80]!r}")
 
     # 7. The workspace scan. `SymbolInformation`, so `locs()` takes the nested shape --
     # and the range is the same byte-exact decl span the definition feature answers.
