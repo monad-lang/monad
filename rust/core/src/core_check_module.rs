@@ -366,6 +366,7 @@ fn collect_known_class_methods(
         ClassMethodInfo {
           class_path: GlobalRef::Local(ind.name().clone()),
           class_param_name: param.name.clone(),
+          class_param_names: ind.params().iter().map(|p| p.name.clone()).collect(),
           method_name: method.name.clone(),
           default_type: default_type.clone(),
         },
@@ -533,6 +534,7 @@ fn collect_known_instances(
       (GlobalRef::Local(instance.class_name.clone()), type_path),
       KnownInstanceInfo {
         prefix: GlobalRef::Local(instance.name().clone()),
+        args: instance.args.clone(),
         constraints: instance.constraints.clone(),
         method_constraints,
         constraint_positions,

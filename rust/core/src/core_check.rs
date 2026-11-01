@@ -594,6 +594,12 @@ fn resolve_field_pattern_case(
 pub struct ClassMethodInfo {
   pub class_path: GlobalRef,
   pub class_param_name: Identifier,
+  /// ALL the class's param names, in declaration order (`class HMul A B
+  /// C`'s `[A, B, C]`) — `try_resolve_class_method` zips these with the
+  /// chosen instance's declared type arguments to unify each with the
+  /// call's own metas. `class_param_name` above stays the single first
+  /// param (the dispatch key); this is the full positional list.
+  pub class_param_names: Vec<Identifier>,
   pub method_name: Identifier,
   /// The class param's own declared default (`class FromListLiteral (L :
   /// Type -> Type := List) {...}`'s `List`), if any — used by
@@ -624,6 +630,17 @@ pub type KnownClassMethods = Map<Atom, ClassMethodInfo>;
 #[derive(Debug, Clone)]
 pub struct KnownInstanceInfo {
   pub prefix: GlobalRef,
+  /// The instance's declared type arguments, in declaration order
+  /// (`instance HMul I64 I64 I64`'s `[I64, I64, I64]`), as raw source
+  /// `Term`s. `try_resolve_class_method` unifies the PATH-HEADED ones
+  /// with the call's own class-param metas when it selects this
+  /// instance — the call's other params (`HMul`'s `B`/`C`) are never
+  /// tied to the chosen instance by anything else, which is how a
+  /// multi-param class call whose first argument is itself a
+  /// not-yet-resolved class-method call used to abort with its class
+  /// meta still bare (see
+  /// `eval_core_program_left_nested_operator_chain_resolves_outer_class_call`).
+  pub args: Vec<crate::term::Term>,
   /// Every constraint declared on the `instance` line, regardless of
   /// whether any given method actually needs a dictionary for it — kept
   /// around for callers that want the instance's own declared constraint
@@ -2134,7 +2151,75 @@ fn instantiate_foralls_tracked(
 /// narrower single-arg-head matching didn't cover this instance's own
 /// shape).
 #[allow(clippy::too_many_arguments)]
+/// Resolve one class-method call to a concrete dictionary projection —
+/// the transactional wrapper around `try_resolve_class_method_inner`.
+/// A resolution that aborts (`None`) may have already recorded match
+/// resolutions of its own (a redone speculative arg's splice, a later
+/// arg's captures, its own dictionary projection); the caller discards
+/// the resolution's rewritten TERM on the same abort, so those queue
+/// entries would be left with no corresponding term nodes and a later
+/// lowering would pop one at the wrong node
+/// (`MatchTraversalMismatch` — the leak behind
+/// `eval_core_program_left_nested_operator_chain_resolves_outer_class_call`).
+/// Truncating the queue back to its entry length on every abort makes
+/// the whole resolution all-or-nothing.
 fn try_resolve_class_method(
+  mctx: &mut MetaContext,
+  ctx: &TyCtx,
+  structs: &StructFields,
+  atom_paths: &mut AtomPathMap,
+  known_class_methods: &KnownClassMethods,
+  known_instances: &KnownInstances,
+  dict_scope: &DictScope,
+  info: &ClassMethodInfo,
+  method_typ: &CoreTerm,
+  spine_args: &[&CoreTerm],
+  expected: Option<&CoreTerm>,
+) -> Option<CoreTerm> {
+  let queue_len_at_entry = mctx.match_resolutions_len();
+  let out = try_resolve_class_method_inner(
+    mctx,
+    ctx,
+    structs,
+    atom_paths,
+    known_class_methods,
+    known_instances,
+    dict_scope,
+    info,
+    method_typ,
+    spine_args,
+    expected,
+  );
+  if out.is_none() {
+    mctx.truncate_match_resolutions(queue_len_at_entry);
+  }
+  out
+}
+
+/// A raw instance type argument (`instance HMul I64 I64 I64`'s `I64`)
+/// as a concrete `CoreTerm`, for unifying with a call's class-param
+/// meta — ONLY when the argument is path-headed (a bare name path:
+/// every per-type instance's shape), mirroring `term_head_path`'s own
+/// `Var` cases. An application spine (`List A` in `instance [Show A]
+/// Show (List A)`) or any other spelling returns `None`: those
+/// instances pin their params through the constraint machinery
+/// (`resolve_instance_dict_args`) instead, and translating their
+/// instance-local variables would need the instance's own scope, which
+/// the call site doesn't have.
+fn instance_arg_path_term(t: &crate::term::Term, mctx: &mut MetaContext) -> Option<CoreTerm> {
+  let crate::term::Term::Var { name } = t else {
+    return None;
+  };
+  let path = match name {
+    crate::term::NameRef::Qn(qn) => GlobalRef::Qualified((**qn).clone()),
+    crate::term::NameRef::Id(id) => GlobalRef::Local(NamePath::single(id.clone())),
+    crate::term::NameRef::Np(np) => GlobalRef::Local(np.clone()),
+    _ => return None,
+  };
+  Some(CoreTerm::Free(mctx.intern(path)))
+}
+
+fn try_resolve_class_method_inner(
   mctx: &mut MetaContext,
   ctx: &TyCtx,
   structs: &StructFields,
@@ -2460,6 +2545,34 @@ fn try_resolve_class_method(
       .clone();
     let looked_up = known_instances.get(&(info.class_path.clone(), concrete_path.clone()));
     let instance_info = looked_up?;
+    // Tie the CHOSEN instance's declared type arguments to the call's
+    // own class-param metas. Nothing else does: the instance table keys
+    // on the first arg's head path alone, and for a multi-param class
+    // (`HMul A B C`) the return-type peek above pins only the RETURN
+    // param (`C`), so the call's remaining metas stay bare unless an
+    // argument spelled them out. The case that breaks without this: a
+    // call whose FIRST argument is itself a not-yet-resolved
+    // class-method call (`(100 * d) * 10` — the inner `*`'s return meta
+    // is all the outer `A` was ever unified with), where the outer
+    // resolution used to abort with its class meta still bare, after
+    // already splicing its redo's captured entries into the live queue
+    // — see `instance_arg_path_term` for why only PATH-headed
+    // arguments participate (a `List A`-style spine keeps going through
+    // the constraint machinery below, exactly as before).
+    for (param_name, instance_arg) in info.class_param_names.iter().zip(instance_info.args.iter()) {
+      let Some(&param_meta) = named_metas.get(param_name) else {
+        continue;
+      };
+      let Some(arg_core) = instance_arg_path_term(instance_arg, mctx) else {
+        continue;
+      };
+      // A unification failure here means the single-slot instance
+      // table handed out an instance this call cannot use (its first
+      // arg matched the key, its other params do not) — abort rather
+      // than project a dictionary whose body has the wrong type; the
+      // transactional wrapper drops whatever this attempt recorded.
+      unify(mctx, &CoreTerm::Meta(param_meta), &arg_core).ok()?;
+    }
     let instance_atom = mctx.intern(instance_info.prefix.clone());
     // This method's OWN subset of the instance's constraints (not the
     // flat `instance_info.constraints`, every one of the instance's own

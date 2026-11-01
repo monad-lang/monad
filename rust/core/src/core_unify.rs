@@ -221,6 +221,22 @@ impl MetaContext {
     }
   }
 
+  /// Truncate the capture queue back to its first `at` entries — the
+  /// rollback counterpart to `splice_match_resolutions`. A class-method
+  /// resolution that aborts after splicing its redo's captured entries
+  /// (or after recording anything else of its own — a later arg's
+  /// captures, its own dictionary projection) must not leave those
+  /// entries behind: the caller discards the resolution's rewritten
+  /// TERM on the same abort, so its queue entries are left with no
+  /// corresponding term nodes, and a later lowering pops one at the
+  /// wrong node (`MatchTraversalMismatch`). No-op when capture isn't
+  /// enabled.
+  pub(crate) fn truncate_match_resolutions(&mut self, at: usize) {
+    if let Some(queue) = self.match_resolutions.as_mut() {
+      queue.truncate(at);
+    }
+  }
+
   /// Allocate a fresh, unsolved metavariable of the given type.
   pub fn fresh_meta(&mut self, typ: CoreTerm) -> MetaId {
     let id = MetaId::fresh();

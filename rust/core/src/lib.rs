@@ -2991,6 +2991,51 @@ def main : Bool :=
     }
   }
 
+  /// Regression test for a pre-existing `MatchTraversalMismatch` /
+  /// `unresolved global: HMul.mul` in `try_resolve_class_method`'s
+  /// speculative-argument machinery: a class-method call whose FIRST
+  /// argument is itself a not-yet-resolved class-method call -- the
+  /// left-nested operator chain `(100 * d) * 10` -- only ever resolved
+  /// when the class's first param was pinned by the return-type peek
+  /// (`Div`'s `A -> A -> A`: the peek unifies the RETURN with the
+  /// expected type, and the return IS the class param). For a
+  /// multi-param class (`HMul A B C`) the peek pins the return (`C`)
+  /// alone; the outer call's `A` meta ends up aliased to the INNER
+  /// call's still-bare `C` meta because the chosen instance's own type
+  /// arguments were never unified with the call's metas, so the outer
+  /// resolution aborts AFTER splicing the redo's captured entries into
+  /// the live match-resolution queue (leaking them with no
+  /// corresponding term node), and the generic `App` fallback
+  /// re-resolves in self-before-arg order -- desyncing the lowering
+  /// and leaving the outer call an unresolved `HMul.mul` application.
+  /// Mirrors the real corpus site `motes/clap/src/spec.mo`'s
+  /// `parse_i64_unsigned` (`(9223372036854775807 - d) / 10`), which
+  /// started failing the interpreted `monad-rs run` path the moment
+  /// `-`/`/` were retargeted to the multi-param `HSub`/`HDiv`.
+  /// Confirmed this reproduces `unresolved global: HMul.mul` before
+  /// the fix.
+  #[test]
+  fn eval_core_program_left_nested_operator_chain_resolves_outer_class_call() {
+    let source = r#"
+use init
+
+def scaled (d : I64) : I64 :=
+    let q : I64 := (100 * d) * 10 in
+    q * 2
+
+def main : I64 := scaled 1
+"#;
+    let result = eval_core_program(
+      &ModulePath::top("'left_nested_operator_chain_regression_test"),
+      source,
+    )
+    .unwrap_or_else(|e| panic!("eval_core_program failed: {e}"));
+    match result {
+      core_value::Value::Lit(core_ir::IrLit::Num(n, _)) => assert_eq!(n, 2000),
+      other => panic!("expected an int literal, got {other:?}"),
+    }
+  }
+
   /// Regression test for the REPL's "Free(atom) missing from atom_paths"
   /// panic (`raise_core.rs:227`) — reliably reproduced by ANY REPL input
   /// before the fix (`cargo run -- repl` then entering `1`, `"hello"`,
