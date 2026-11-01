@@ -38,14 +38,9 @@ jobs:
       DEVENV_SKIP_TASKS: "1"
     steps:
       - uses: actions/checkout@v5
-      # Same bootstrap as ci.yml's compiler job: a packaged Rust host for the
-      # self-compile, so this job never depends on the runner's installed
-      # nightly being new enough to build this tree.
-      - name: Build the packaged host from the flake
-        run: |
-          host="$(nix build --no-link --print-out-paths --accept-flake-config .#monadHost)"
-          echo "MONAD_HOST_BIN=$host/bin/monad-rs" >> "$GITHUB_ENV"
-      - name: Self-compile with the latest nightly (Rust host fallback)
+      # The nightly is the primary host; ci-self-compile.sh's bootstrap-window
+      # fallback uses the local `cargo run` if a floor is ever pending.
+      - name: Self-compile with the latest nightly
         run: |
           nix develop --no-pure-eval --accept-flake-config \
             --profile "$HOME/.monad-ci-devshell" \

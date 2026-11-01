@@ -5,15 +5,17 @@
 # compiler. A tree that uses a construct the nightly does not know yet fails
 # here, at the gate, instead of on a user's machine after `monadup update`.
 # The Rust host is the compiler used by the release ladder, but it is NOT a
-# fallback for this check: falling back is how an incompatible tree passed CI
-# before (see plans/bootstrapping/native-rollout.md).
+# fallback for the required check: falling back is how an incompatible tree
+# passed CI before (see plans/bootstrapping/native-rollout.md).
 #
 # `bootstrap/nightly-floor.txt` is the one temporary exception. It names the
 # commit the tree first required from a nightly. While the latest nightly
-# predates that commit, this script says so loudly and uses the Rust host --
-# the nightly that would prove the invariant has not been published yet.
-# Once a nightly at or after the floor exists, the check is strict and stays
-# strict; a future incompatible change cannot use the floor to opt out.
+# predates that commit (or the sentinel is `pending`), this script says so
+# loudly and uses the Rust host -- the nightly that would prove the invariant
+# has not been published yet. Once a nightly at or after the floor exists, the
+# check is strict and stays strict; a future incompatible change cannot use the
+# floor to opt out. A nightly exactly AT the floor is strict: it carries the
+# requirement, so it must build the tree.
 #
 # Local use:
 #   scripts/ci-self-compile.sh [out-dir]
@@ -109,13 +111,17 @@ if [ "$floor" = pending ]; then
   exit 0
 fi
 if [ -n "$floor" ]; then
-  if ! git -C "$root" rev-parse --verify --quiet "$floor^{commit}" >/dev/null; then
+  if ! floor_full="$(git -C "$root" rev-parse --verify --quiet "$floor^{commit}")"; then
     rust_fallback "bootstrap/nightly-floor.txt names '$floor', which is not in this clone"
+    exit 0
   fi
-  # True exactly when the nightly predates the floor: the release that would
-  # prove the invariant has not been cut yet. This is the only non-strict path.
-  if git -C "$root" merge-base --is-ancestor "$nightly_commit" "$floor" 2>/dev/null; then
-    say "the latest nightly ($nightly_commit) predates this tree's floor ($floor)"
+  nightly_full="$(git -C "$root" rev-parse --verify --quiet "$nightly_commit^{commit}" 2>/dev/null || true)"
+  # True exactly when the nightly PREDATES the floor. A nightly AT the floor
+  # proves the invariant, so equality is strict too (the release that carries
+  # this tree's requirement exists in that case).
+  if [ -n "$nightly_full" ] && [ "$nightly_full" != "$floor_full" ] \
+      && git -C "$root" merge-base --is-ancestor "$nightly_full" "$floor_full" 2>/dev/null; then
+    say "bootstrap window: the latest nightly ($nightly_commit) predates this tree's floor ($floor)"
     say "the required check resumes when a nightly at or after $floor is published"
     MONAD_HOST_BIN="$fallback_host" scripts/build-self-hosted.sh "$out"
     say "self-compile OK with the Rust host (bootstrap window)"

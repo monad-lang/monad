@@ -90,6 +90,7 @@ run_gate() {
     MONAD_HOST_BIN="$work/host" FAKE_HOST_SCRIPT="$work/host" \
     FAKE_NIGHTLY_COMMIT="${NIGHTLY:-$head_commit}" \
     FAKE_BUILT_COMMIT="fake-built" FAKE_CHECK_RC=0 FAKE_FAIL_ONE_RUNG=0 \
+    MONAD_ALLOW_RUST_FALLBACK=0 \
     MONAD_NIGHTLY_FLOOR="${MONAD_NIGHTLY_FLOOR:-$work/floor-real}" \
     "$@" "$gate" "$work/out" >"$log" 2>&1 || rc=$?
   if [ "$expect" = 0 ] && [ "$rc" -ne 0 ]; then
@@ -118,7 +119,7 @@ make_nightly
 
 # 0. A `pending` floor: the tree needs a loader the published nightlies
 #    predate, expressed as a sentinel rather than a commit that a rebase-merge
-#    would orphan.
+#    would orphan. The window builds with the Rust host.
 printf 'pending\n' > "$work/floor-pending"
 NIGHTLY="$head_commit" MONAD_NIGHTLY_FLOOR="$work/floor-pending" run_gate 0 "pending floor"
 expect_log "floor is pending" "pending floor"

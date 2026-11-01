@@ -1,22 +1,19 @@
 #!/usr/bin/env bash
 # monadup-checks' test leg: the latest NIGHTLY compiles THIS checkout's
-# monadup and type-checks check-monadup.sh's scaffold; the flake's
-# `.#monadup` plus the Rust host is the FALLBACK.
+# monadup and type-checks check-monadup.sh's scaffold. The nightly is the only
+# host: there is no flake `.#monadup` + Rust-host fallback, because that path
+# emits the mote's IR with `monadRung1` (the Rust host interpreting the whole
+# compiler) and paid ~15 minutes on every compiler-touching PR.
 #
-# The fallback is the job as it used to be, and it is slow on exactly the
-# changes this job runs for: `.#monadup` emits its IR with `monadRung1`,
-# the Rust host interpreting the whole compiler, so any PR that touches a
-# compiler source misses the cache and pays ~15 minutes before a single
-# check runs. A nightly builds the same mote natively in seconds. Like
-# scripts/ci-self-compile.sh, the nightly leg can fail when a PR outgrows
-# a nightly cut from main (a parser or prelude change), and then the
-# fallback takes over. It can also SUCCEED and still be unusable: the
-# compiler carries the native wiring (each native's wrap kind and payload
-# type) in its own tables, so a nightly cut before a change to those tables
-# builds this tree's monadup into a binary whose IO natives hand back the
-# wrong value -- `MONAD_HOME` and `MONADUP_UNAME` stop being read -- and the
-# distribution checks then fail as though the RELEASE were at fault. That is
-# a host problem, so `monadup_honours_env` below settles it here.
+# The nightly leg can fail when a PR outgrows a nightly cut from main (a parser
+# or prelude change); that is a failure here, not a reason to pay the monad-rs
+# build. It can also SUCCEED and still be unusable: the compiler carries the
+# native wiring (each native's wrap kind and payload type) in its own tables,
+# so a nightly cut before a change to those tables builds this tree's monadup
+# into a binary whose IO natives hand back the wrong value -- `MONAD_HOME` and
+# `MONADUP_UNAME` stop being read -- and the distribution checks then fail as
+# though the RELEASE were at fault. That is a host problem, so
+# `monadup_honours_env` below settles it here.
 # A CHECK failure is not a reason to fall back: check-monadup.sh runs once,
 # on whichever binary was built.
 #
@@ -26,8 +23,7 @@
 # stub leg, always took its fallback there. The stub needs curl and jq,
 # which the devshell provides (nix/packages.nix).
 #
-# What the nightly leg does NOT grade is `.#monadup`'s packaging (the
-# static relink); ci.yml's portability step does, on main.
+# The packaged artifact is built and published by nightly-release.sh.
 #
 # Runnable by hand:
 #
@@ -65,26 +61,22 @@ else
   installer=("$root/scripts/monadup")
 fi
 if ! MONAD_HOME="$monad_home" "${installer[@]}" default; then
-  echo "ci-monadup: could not install the latest nightly (${installer[*]}) -- taking the fallback" >&2
+  echo "ci-monadup: could not install the latest nightly (${installer[*]})" >&2
+  exit 1
 elif [ ! -x "$monad_home/bin/monad" ]; then
-  echo "ci-monadup: the install reported success but $monad_home/bin/monad is not executable -- taking the fallback" >&2
+  echo "ci-monadup: the install reported success but $monad_home/bin/monad is not executable" >&2
+  exit 1
 else
   nightly="$monad_home/bin/monad"
 fi
 
-if [ -n "$nightly" ]; then
-  if "$nightly" build motes/monadup --bin monadup --release -o "$out/monadup"; then
-    if monadup_honours_env "$out/monadup"; then
-      echo "ci-monadup: monadup built with the latest nightly ($nightly)"
-      MONADUP_BIN="$out/monadup" MONAD_BIN="$nightly" exec scripts/check-monadup.sh
-    fi
-    echo "ci-monadup: the nightly built a monadup that does not read its environment -- it predates this tree's native wiring and cannot compile it correctly; taking the fallback" >&2
-  else
-    echo "ci-monadup: the nightly could not build motes/monadup -- taking the fallback" >&2
-  fi
+if ! "$nightly" build motes/monadup --bin monadup --release -o "$out/monadup"; then
+  echo "ci-monadup: the latest nightly could not build motes/monadup" >&2
+  exit 1
 fi
-
-bin="$(nix build --no-link --print-out-paths --accept-flake-config .#monadup)"
-echo "ci-monadup: monadup built from the flake ($bin)"
-MONADUP_BIN="$bin/bin/monadup" MONAD_BIN="cargo run --manifest-path rust/Cargo.toml --release --quiet --" \
-  exec scripts/check-monadup.sh
+if ! monadup_honours_env "$out/monadup"; then
+  echo "ci-monadup: the nightly built a monadup that does not read its environment -- it predates this tree's native wiring and cannot compile it correctly" >&2
+  exit 1
+fi
+echo "ci-monadup: monadup built with the latest nightly ($nightly)"
+MONADUP_BIN="$out/monadup" MONAD_BIN="$nightly" exec scripts/check-monadup.sh

@@ -62,10 +62,10 @@ env:
 # 19:41:00. Ten minutes spent waiting for a machine that was running the other
 # half of the same work, and no order left to get wrong now that both halves
 # are one job. `scripts/ci-self-compile.sh` is that job's substance: a
-# self-compile of this checkout hosted by the latest monadup nightly, falling
-# back to the flake's Rust host when the nightly cannot build the tree. The
-# TEST coverage lives in the Rust suite `pre-commit-checks` runs -- the
-# self-hosted sweeps this replaces are not CI's to run anymore.
+# self-compile of this checkout hosted by the latest monadup nightly, with the
+# flake's Rust host as the bootstrap-window fallback. The Rust suite in
+# `pre-commit-checks` is the reference test coverage; `compiler-checks` runs the
+# self-hosted sweeps below.
 #
 # It still runs in PARALLEL with `pre-commit-checks`, deliberately, so `needs:`
 # was considered and declined on the measurements, not on taste:
@@ -80,78 +80,56 @@ env:
 #     clock win, so it is not made here.
 #   * `[self-hosted, linux, monad-ci]` (the label registered by
 #     monad-nixos-modules' modules/github-runner.nix) was considered as a way
-#     to stop paying a cold build. It would not help: the 16-20 min
-#     "Build the compiler from the flake" step is the same on both runners
-#     (16m11s on anders-desktop in run 36243944155, 19m58s on nixos-server in
-#     run 36238059186) because `.#monad` depends on this commit's whole source
-#     tree, so it is cold on EVERY commit. Pinning a job to one machine would
-#     remove scheduling freedom and buy nothing. The fix for that step is a
-#     binary cache, and there is now one this repo owns: `monad-lang.cachix.org`,
-#     declared in flake.nix's nixConfig and pushed by the `Push ... to the binary
-#     cache` steps below (and in nightly.yml), via scripts/push-to-cache.sh. It
-#     serves both runners and the Tangled microVMs alike; the host-side
-#     `nix-serve`/attic route this comment used to name would only have reached
-#     the two runners.
+#     to stop paying a cold build. It would not help: the per-PR compile is
+#     the nightly-hosted self-compile (~1 min) plus the packaged host build
+#     (~3 min), and the `. #monad` artifact is no longer built on a pull
+#     request at all. The cache work belongs to `monad-lang.cachix.org`,
+#     declared in flake.nix's nixConfig and pushed by nightly.yml via
+#     scripts/push-to-cache.sh. It serves both runners and the Tangled
+#     microVMs alike; the host-side `nix-serve`/attic route this comment used
+#     to name would only have reached the two runners.
 #
-# `changes` precedes the rest and gates the jobs that would otherwise BUILD
-# something: the compiler job on one answer, `flake-package` on another.
-# That is neither a reversal of the above nor the `needs:` that was declined
-# there: it is a path classifier that costs seconds (one checkout and a `git
-# diff`, no nix, no cargo), and what it does is SKIP a job on a change that
-# cannot reach it rather than delay a green one behind a gate. It exists
-# because a docs-only change -- the traffic that fills the queue -- otherwise
-# buys a 48-minute job to learn nothing; see scripts/ci-compiler-relevant.sh
-# for the rules and for why a workflow-level `paths-ignore` would be wrong here
-# (it would skip `docs-check`, a pre-commit hook, on exactly the changes that
-# need it). Its second answer, `flake`, is new with `flake-package` and is an
-# ALLOW-LIST where the first is a deny-list -- see scripts/ci-flake-relevant.sh
-# for why one must never miss and the other must never buy a cold build for
-# nothing.
+# `changes` precedes the rest and gates the compiler job: it is a path
+# classifier that costs seconds (one checkout and a `git diff`, no nix, no
+# cargo), and what it does is SKIP a job on a change that cannot reach it
+# rather than delay a green one behind a gate. It exists because a docs-only
+# change -- the traffic that fills the queue -- otherwise buys a long job to
+# learn nothing; see scripts/ci-compiler-relevant.sh for the rules and for why
+# a workflow-level `paths-ignore` would be wrong here (it would skip
+# `docs-check`, a pre-commit hook, on exactly the changes that need it).
 #
 # `pre-commit-checks` needs only `changes`, and no ANSWER gates the job: every
 # run is still linted, rustfmt'd, clippy'd and doc-checked, so no required check
-# is left pending. Only the Rust suite at the end of it reads the classifier --
-# a change that touches no compiler input skips that STEP, and a skipped step
-# reports success, unlike a skipped job.
+# is left pending. The whole-corpus sweeps run in `compiler-checks`
+# (self-hosted) and `pre-commit-checks` (the Rust reference host).
 jobs:
-  # Decides whether the jobs below have anything to do. Answers over outputs
-  # because the gates below read them. `fetch-depth: 0` because the classifiers
-  # diff the change against the commit the event names as its base; the
+  # Decides whether the job below has anything to do. Answers over outputs
+  # because the gates below read them. `fetch-depth: 0` because the classifier
+  # diffs the change against the commit the event names as its base; the
   # repository's whole pack is ~11.5 MiB, so the full history costs seconds,
-  # and a base that cannot be fetched makes them answer `true` (they fail
-  # OPEN), so even a wrong guess costs time rather than signal.
+  # and a base that cannot be fetched makes it answer `true` (it fails OPEN),
+  # so even a wrong guess costs time rather than signal.
   changes:
     runs-on: [self-hosted, linux]
     outputs:
       compiler: ${{ steps.classify.outputs.compiler }}
-      flake: ${{ steps.classify.outputs.flake }}
     steps:
       - uses: actions/checkout@v5
         with:
           fetch-depth: 0
-      # Both answers from ONE checkout and ONE diff, which is the only reason
-      # two classifiers are cheap enough to have: each script walks the same
-      # `git diff --name-only` output and neither is allowed to fail.
-      #
-      # They are separate scripts rather than one with a mode because their
-      # shapes have to differ -- `ci-compiler-relevant.sh` names what is inert
-      # and defaults to `true`, `ci-flake-relevant.sh` names what is relevant
-      # and defaults to `false` -- and a single script with an inverted default
-      # and a different path set is two scripts wearing one name.
+      # One answer from this checkout and diff. `ci-compiler-relevant.sh` names
+      # what is inert and defaults to `true`, so an unreachable base fails OPEN.
       - id: classify
         name: Classify the change
         env:
           # `before` is the previous tip on a push and all zeros on a new
-          # branch; `pull_request.base.sha` is the base tip. The scripts
-          # treat both the zeros and an unreachable revision as `true`.
+          # branch; `pull_request.base.sha` is the base tip. The script
+          # treats both the zeros and an unreachable revision as `true`.
           BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
         run: |
           compiler="$(scripts/ci-compiler-relevant.sh "$BASE")"
-          flake="$(scripts/ci-flake-relevant.sh "$BASE")"
           echo "compiler=$compiler" >> "$GITHUB_OUTPUT"
-          echo "flake=$flake" >> "$GITHUB_OUTPUT"
           echo "compiler-relevant: $compiler"
-          echo "flake-relevant: $flake"
 
   pre-commit-checks:
     needs: changes
@@ -244,8 +222,8 @@ jobs:
     needs: changes
     if: needs.changes.outputs.compiler == 'true'
     # Hang guard, not a deadline, for the whole step list: the host build,
-    # the nightly install, and whichever self-compile leg runs -- ~1 min
-    # for a nightly-hosted build, ~22 min for the interpreted fallback the
+    # the nightly install, and whichever self-compile leg runs -- ~1 min for
+    # a nightly-hosted build, ~22 min for the interpreted fallback the
     # nightly's failure pays for, plus the cold host build the binary cache
     # usually substitutes. Observed 2026-10-31: a loaded runner spent 58 min
     # in the self-compile and reached 90 min end to end, so 90 was a deadline
@@ -429,18 +407,11 @@ jobs:
   # open), so this runs for them.
   #
   # WHO BUILDS monadup is scripts/ci-monadup.sh: the latest monadup
-  # NIGHTLY first (seconds, and it also supplies the `monad` that
-  # type-checks the scaffold `new` writes), and the flake's `.#monadup`
-  # only when the nightly cannot build the tree. The flake build is the
-  # slow path for exactly the changes this job runs on: `.#monadup` emits
-  # its IR with `monadRung1`, i.e. the Rust host interpreting the whole
-  # compiler, so a compiler-touching PR misses the cache and waited ~15
-  # minutes on every run before a single check. Scripts/ci-self-compile.sh
-  # took the same nightly-first shape first.
-  #
-  # The portability/cache steps below still grade the flake artifact, on
-  # main: a static relink that runs without a Nix store is a property of
-  # the published packages, not of a pull request.
+  # NIGHTLY (seconds, and it also supplies the `monad` that type-checks the
+  # scaffold `new` writes). There is no flake/Rust fallback: `.#monadup`
+  # emits its IR with `monadRung1`, the Rust host interpreting the whole
+  # compiler, and that slow path is gone from CI. The packaged artifact is
+  # built and published by nightly-release.sh, not by a pull request.
   monadup-checks:
     runs-on: [self-hosted, linux]
     needs: changes
@@ -449,111 +420,8 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
-      # Main only: the nightly leg never realizes `.#monadup`, so this is
-      # the one place its store path is built before the cache push.
-      - name: Build the portable monadup
-        if: github.ref == 'refs/heads/main'
-        run: |
-          bin="$(nix build --no-link --print-out-paths --accept-flake-config .#monadup)"
-          echo "MONADUP_BIN=$bin/bin/monadup" >> "$GITHUB_ENV"
-          # No `file(1)` here: this step runs outside `nix develop`, and the
-          # runner's PATH carries only bash/git/tar/coreutils (see
-          # scripts/nightly-release.sh). The binary's own `--version` proves it
-          # built and runs; the derivation's checkPhase asserts the same.
-          "$bin/bin/monadup" --version
-
-      # Main only, for the same reason: `MONADUP_BIN` is unset on a pull
-      # request, where check-monadup.sh drives the nightly-built binary.
-      - name: Portability check
-        if: github.ref == 'refs/heads/main'
-        run: |
-          # The point of `.#monadup` is a binary that runs without a Nix
-          # store. `nightly-release.sh` asserts this too, but only at publish
-          # time; without this step a dynamic link would be green here.
-          nix develop --no-pure-eval --accept-flake-config -c sh -c '
-            file "$MONADUP_BIN"
-            out="$(ldd "$MONADUP_BIN" 2>&1)" || true
-            printf "%s\n" "$out"
-            if printf "%s\n" "$out" | grep -q /nix/store; then
-              echo "monadup links a /nix/store library" >&2
-              exit 1
-            fi
-          '
-
       - name: Distribution and binary checks
         run: |
           nix develop --no-pure-eval --accept-flake-config \
             --profile "$HOME/.monad-ci-devshell" \
             -c scripts/ci-monadup.sh
-
-      - name: Push monadup to the binary cache
-        if: github.ref == 'refs/heads/main'
-        env:
-          CACHIX_AUTH_TOKEN: ${{ secrets.CACHIX_AUTH_TOKEN }}
-        run: |
-          paths="$(nix build --no-link --print-out-paths --accept-flake-config .#monadup)"
-          nix develop --no-pure-eval --accept-flake-config -c scripts/push-to-cache.sh $paths
-
-  # `packages.monad` left the per-PR path when `test` became `compiler-checks`:
-  # the compiler job self-compiles this checkout's sources directly, so on a
-  # compiler change the flake package is no longer built on the way to
-  # anything -- and nothing else builds it either (the nightly builds only
-  # `.#monadHost`), so the packaged artifact and its sandboxed build would go
-  # unverified. This job is where they are verified, on the changes that can
-  # move them.
-  #
-  # Gated on `flake`, NOT on `compiler`, and that is the whole point: `nix/**`,
-  # `flake.nix` and `flake.lock` define the PACKAGING, while `compilerSrc`
-  # (nix/monad.nix) is built from the source trees -- so an edit to `nix/`
-  # usually leaves the interpretation a store hit and this job is minutes,
-  # whereas a `flake.lock` bump moves the toolchain and is legitimately cold.
-  # The compiler sources are covered on every compiler-relevant commit by
-  # `compiler-checks`, which self-compiles the same binary from the same
-  # tree, unwrapped.
-  #
-  # No `--no-pure-eval`, unlike every other nix invocation in this file: this
-  # is an ordinary package build, and evaluating it purely is part of what the
-  # flake is for. `--no-link --print-out-paths` so no `result` symlink is left
-  # in the checkout. `nix/monad.nix` and `nix/bootstrap.nix` are the things
-  # being graded -- and nix/bootstrap.nix's own header says why the nix-level
-  # bootstrap beyond rung 1 is not a CI job at all.
-  flake-package:
-    runs-on: [self-hosted, linux]
-    needs: changes
-    if: needs.changes.outputs.flake == 'true'
-    # Hang guard for a cold build, not a deadline: a sandboxed interpretation
-    # of the whole tree (~22 min, the same rung-1 interpretation the
-    # self-compile's fallback leg pays) plus the link
-    # and wrapper steps. It is also the one build in this pipeline that runs
-    # under a nix sandbox's RLIMIT_STACK, which is a reason to keep building it
-    # rather than reason about it.
-    timeout-minutes: 60
-    steps:
-      - uses: actions/checkout@v5
-
-      - name: Build the packaged compiler
-        run: |
-          monad="$(nix build --no-link --print-out-paths --accept-flake-config .#monad)"
-          echo "flake-package: built $monad"
-
-      # The highest-value push: `.#monad`'s input is the ~20 minute rung-1
-      # interpretation. All three are named because a build input is NOT in the
-      # output closure `cachix push` walks -- rung-1 alone would stay uncached.
-      - name: Push the ladder to the binary cache
-        env:
-          CACHIX_AUTH_TOKEN: ${{ secrets.CACHIX_AUTH_TOKEN }}
-        run: |
-          paths="$(nix build --no-link --print-out-paths --accept-flake-config \
-            .#monadHost .#monadRung1 .#monad)"
-          nix develop --no-pure-eval --accept-flake-config -c scripts/push-to-cache.sh $paths
-
-      # The flake's inputs too: an input is fetched, not built, so no build hook
-      # could ever see one, and only a store that starts empty wants them (the
-      # microVMs; the runners keep theirs). Main only.
-      - name: Push the flake's inputs
-        if: github.ref == 'refs/heads/main'
-        env:
-          CACHIX_AUTH_TOKEN: ${{ secrets.CACHIX_AUTH_TOKEN }}
-        run: |
-          nix develop --no-pure-eval --accept-flake-config -c \
-            scripts/push-to-cache.sh --inputs
