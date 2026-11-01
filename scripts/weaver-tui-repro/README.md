@@ -27,6 +27,14 @@ Note the assertions strip ANSI and whitespace before matching: cell
 deltas interleave per-cell cursor/SGR codes, so a rendered phrase is
 never contiguous in the raw byte stream.
 
+## Retired drivers
+
+Six tty-critical drivers have Monad ports that run in CI under `monad test`
+(`motes/weaver/test/`): ctrl_d, input, models, dialogs, async and resize.
+They are no longer in `scripts/ci-weaver-pty.sh`'s driver table; the Python
+files stay here as the oracle until the remaining eight are ported (the
+harness is documented in `motes/mty/README.md`).
+
 ## The scripted turns
 
 Turn JSON is the same codec a session file uses: an array of serialized
@@ -61,7 +69,7 @@ Alt+Enter folds a newline and the multiline submit echoes on its own
 lines (the pump after the submit must EXCEED the retry sleeps when the
 mock script is exhausted -- 2s+4s of backoff before the turn fails).
 
-## Async turns (`pty_repro_async.py`)
+## Async turns (`pty_repro_async.py`; ported to `motes/weaver/test/async_tests.mo`)
 
 With `turns_slow.json`: the UI redraws while a turn runs, the streamed
 fragment is visible mid-turn, mid-turn keys land in the input box, the
@@ -72,7 +80,7 @@ kept), and the approval overlay still owns stdin (a paste cannot answer
 it) -- a rendered grid pins the stopping row because the cell diff
 rewrites it non-contiguously.
 
-## Resize (`pty_repro_resize.py`)
+## Resize (`pty_repro_resize.py`; ported to `motes/weaver/test/resize_tests.mo`)
 
 Spawns at 30x80, runs one mock turn with a 240-character reply, then
 shrinks to 24x40 and grows to 32x100. A small ANSI grid emulator
@@ -88,7 +96,7 @@ reports over the text. Asserts the drag emits reverse-video SGR, and the
 release writes an OSC 52 clipboard sequence carrying the base64 of
 `hello` and (a second drag) `日本` -- wide glyphs selected whole.
 
-## Dialogs (`pty_repro_dialogs.py`)
+## Dialogs (`pty_repro_dialogs.py`; ported to `motes/weaver/test/dialogs_tests.mo`)
 
 Drives the permission dialog with arrows + Enter (approving an `edit`
 runs it), a note on a denial (`e`, text, Enter, `n`) reaching the model
@@ -123,7 +131,7 @@ screen shows the newest eight plus `Older sessions…`, the second the two
 oldest plus `Newer sessions…`. Isolated `HOME`/`WEAVER_SESSION_ROOT`; no
 provider or model turn is involved.
 
-## Input (`pty_repro_input.py`)
+## Input (`pty_repro_input.py`; ported to `motes/weaver/test/input_tests.mo`)
 
 Asserts the input caret is visible on the initial frame and after a
 submit, a click before a character places the caret (typing `X` gives

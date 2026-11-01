@@ -364,14 +364,14 @@ jobs:
                  scripts/check-repl.sh
 
       # Weaver's terminal tests: the six mty drivers in motes/weaver/test run
-      # under `monad test`, and the remaining Python pty drivers in
-      # scripts/weaver-tui-repro/ run as the oracle until each is ported, all
-      # against the release weaver built from THIS commit's self-compiled
-      # compiler. The wrapper still classifies the Python drivers from their
-      # OUTPUT, not their exit codes -- three print a failure and exit 0
-      # (plans/implementations/2026-10-25-weaver-pty-monad-tests.md).
+      # under `monad test`, and the eight Python pty drivers in
+      # scripts/weaver-tui-repro/ that have no Monad port yet run as the
+      # oracle, all against the release weaver built from THIS commit's
+      # self-compiled compiler. The wrapper still classifies the Python
+      # drivers from their OUTPUT, not their exit codes -- two print a failure
+      # and exit 0 (plans/implementations/2026-10-25-weaver-pty-monad-tests.md).
       # ~2 min to build weaver natively, ~1-2 min for the mty suite, ~4 min
-      # for the Python drivers.
+      # for the remaining Python drivers.
       - name: Weaver terminal tests
         run: |
           nix develop --no-pure-eval --accept-flake-config \

@@ -3,15 +3,15 @@
 #
 # Two suites run against the compiled `target-monad/release/weaver`: the
 # `mty` drivers in motes/weaver/test (compiled-only, under `monad test`) and
-# the remaining Python repros in scripts/weaver-tui-repro/ (the oracle during
-# the per-driver cutover; plans/implementations/2026-10-25-weaver-pty-monad-
-# tests.md).
+# the Python repros in scripts/weaver-tui-repro/ that have no Monad port yet
+# (the oracle for the remaining drivers;
+# plans/implementations/2026-10-25-weaver-pty-monad-tests.md).
 #
-# THE EXIT CODE IS NOT THE VERDICT. Three drivers print a failure and still
-# exit 0: pty_repro.py (`PASSn ...: False`), pty_repro_round2.py (`FAIL`), and
-# pty_repro_async.py (`FAIL` plus a summary). So every run is classified from
-# its OUTPUT as well: a FAIL line, a `: False`, a traceback, no PASS line, or
-# a missing per-driver success marker is a failure even when `$?` is zero.
+# THE EXIT CODE IS NOT THE VERDICT. Two drivers print a failure and still
+# exit 0: pty_repro.py (`PASSn ...: False`) and pty_repro_round2.py (`FAIL`).
+# So every run is classified from its OUTPUT as well: a FAIL line, a
+# `: False`, a traceback, no PASS line, or a missing per-driver success
+# marker is a failure even when `$?` is zero.
 # The per-driver markers are in `marker_for` below; keep that table in one
 # place so an output-wording change is one auditable diff.
 #
@@ -117,10 +117,11 @@ unset NO_COLOR
 # Phase 2 of plans/implementations/2026-10-25-weaver-pty-monad-tests.md: the
 # six tty-critical drivers (ctrl_d, input, models, dialogs, async, resize) now
 # live in motes/weaver/test and run under `monad test`, with the generic pty
-# harness in motes/mty. The Python entries for those six stay in the table
-# below until this suite is green in CI, then are removed one per port.
-# WEAVER_MTY gates the suite (unset skips it green in an ordinary sweep); CI
-# sets it and requires the binary.
+# harness in motes/mty. That suite went green in CI (run 41291404639), so the
+# matching Python entries are retired from the table below; their files stay
+# as the oracle while the other eight drivers are ported. WEAVER_MTY gates the
+# suite (unset skips it green in an ordinary sweep); CI sets it and requires
+# the binary.
 echo "ci-weaver-pty: running the Monad mty drivers"
 # shellcheck disable=SC2086  # MONAD_BIN may be `cargo run --release --`
 MTY_ROOT="$root" WEAVER_MTY=1 WEAVER_MTY_REQUIRED=1 WV_BIN="$bin" \
@@ -130,16 +131,10 @@ MTY_ROOT="$root" WEAVER_MTY=1 WEAVER_MTY_REQUIRED=1 WV_BIN="$bin" \
 # --- the driver table -------------------------------------------------------
 
 drivers=(
-  pty_repro_ctrl_d.py
-  pty_repro_models.py
-  pty_repro_input.py
-  pty_repro_dialogs.py
-  pty_repro_resize.py
   pty_repro_selection.py
   pty_repro_crash.py
   pty_repro_processes.py
   pty_repro_round2.py
-  pty_repro_async.py
   pty_repro_bigplan.py
   pty_repro_sessions.py
   pty_repro_resume.py
@@ -151,12 +146,8 @@ drivers=(
 # requirement are its verdict.
 marker_for() {
   case "$1" in
-    pty_repro_async.py) echo "ASYNC PTY REPRO: ALL PASS" ;;
     pty_repro_sessions.py) echo "SESSION REPRO: ALL PASS" ;;
-    pty_repro_input.py) echo "input repro: ok" ;;
     pty_repro_crash.py) echo "crash repro: ok" ;;
-    pty_repro_dialogs.py) echo "dialog repro: ok" ;;
-    pty_repro_resize.py) echo "resize repro: ok" ;;
     pty_repro_bigplan.py) echo "big-plan repro: ok" ;;
     pty_repro_processes.py) echo "processes repro: ok" ;;
     pty_repro_selection.py) echo "selection repro: ok" ;;
