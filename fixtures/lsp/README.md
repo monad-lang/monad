@@ -88,22 +88,19 @@ pinned so that unifying them later is a deliberate change rather than an acciden
 
 | File | What it pins |
 |---|---|
-| `session.jsonl` | The whole milestone: handshake, one diagnostic with a correctly-ranged non-ASCII position, a clean file, the outline, hover and definition in-file, the shadowing gap, the workspace scan, an unparseable message, and a clean exit. |
+| `session.jsonl` | The whole milestone: handshake, one diagnostic with a correctly-ranged non-ASCII position, a clean file, the outline, hover and definition in-file, a shadowing local, the workspace scan, an unparseable message, and a clean exit. |
 | `eof-mid-message.jsonl` | A frame truncated by end of input: the answer to the last complete request still arrives and the server exits cleanly. |
 | `nonascii.mo` | The parse-error vector, and the only fixture whose offsets differ between encodings. |
-| `shapes.mo` | One declaration of every kind the picker has a word for, plus the shadowing pin. Pure ASCII, so every position in it is the same number in bytes and in code units. |
+| `shapes.mo` | One declaration of every kind the picker has a word for, plus a local that shadows a def. Pure ASCII, so every position in it is the same number in bytes and in code units. |
 
 ### What `session.jsonl` pins *as a gap*
 
-Two assertions are pins on known defects, not criteria met. They are asserted rather than
-wished away so that a fix flips a test instead of passing unnoticed.
+One assertion is a pin on a known defect, not a criterion met. It is asserted rather than
+wished away so that a fix flips a test instead of passing unnoticed. (The shadowing pin
+that sat beside it flipped with the cursor-to-binding walk: `definition` and `hover` on
+the local's use inside `\zz_replay_shadowed => zz_replay_shadowed` now answer the
+lambda's binder, line 45 columns 5..23.)
 
-- **A local that shadows a top-level def resolves to the top-level def.** Both `definition`
-  and `hover` on the local's *use* inside `\zz_replay_shadowed => zz_replay_shadowed`
-  answer `def zz_replay_shadowed : I64 := 7`. Locals are not resolved anywhere in this
-  server; `lang/src/navigation.mo`'s "Locals are not resolved" says so. This is inherited
-  from the Rust server being replaced, and the plan lists implementing the
-  cursor-to-binding walk as follow-up work.
 - **Hover on a `struct` shows the struct's bare name.** `nav_detail_by_kind`
   (`lang/src/navigation.mo:415`) renders `type` via `show_inductive`, `class` via
   `show_class` and `def` via `nav_def_detail` — and has no `struct` arm, so a struct falls

@@ -3,7 +3,7 @@
 ///
 /// HOVER AND DEFINITION ASK THE SAME QUESTION, and this module resolves it once.
 /// Both are about the identifier under the cursor, and finding out which declaration
-/// that identifier names -- through `lang`'s `nav_at_checked`, which is the
+/// that identifier names -- through `lang`'s `nav_at_cursor`, which is the
 /// compiler's own `scope_resolve_name` -- is the whole of the work. What differs is
 /// only which field of the answer is reported: hover shows `nav_target_detail` and
 /// the identifier's extent, definition shows `nav_target_range` and the file. So
@@ -13,17 +13,13 @@
 /// set by construction, which is a property neither feature could have if each
 /// resolved names on its own.
 ///
-/// THE IDENTIFIER COMES FROM A TEXT SCAN, NOT FROM THE SYNTAX TREE, and that is the
-/// one place this module is less precise than it could be. `text_identifier_at` finds
-/// the run of identifier bytes containing the cursor, which is fast, total, and
-/// correct for every cursor position a client can send -- including positions inside
-/// comments and string literals, where there is no syntax tree node at all. The
-/// alternative, walking the located term tree to the innermost node containing the
-/// offset, would also decide which of two nested terms an identifier belongs to,
-/// which matters for nothing here: the scan produces a NAME, and the name is resolved
-/// by the compiler. Its one visible limit is that a run of bytes is not a scope, so a
-/// local variable resolves to a top-level def of the same name -- inherited from the
-/// resolver, and stated in `lang::navigation`'s own doc.
+/// THE IDENTIFIER COMES FROM A TEXT SCAN, and its POSITION decides locals.
+/// `text_identifier_at` finds the run of identifier bytes containing the cursor, which
+/// is fast, total, and correct for every cursor position a client can send --
+/// including positions inside comments and string literals, where there is no syntax
+/// tree node at all. The run's first byte is what `lang`'s `nav_at_cursor` looks for in
+/// the located term tree: a var there that is a local answers its binder, so a local
+/// shadowing a top-level def answers the local; anything else is resolved as a name.
 ///
 /// THE TEXT EVERY POSITION IS CONVERTED AGAINST IS THE CHECKED TEXT, which is why
 /// these entry points take the check store and NOT the document store. A range from
@@ -52,7 +48,7 @@ use lang::module {
   decl_ranges_of_source, ranged_file_ranges,
 }
 use lang::navigation {
-  NavTarget, nav_at_checked, nav_target_detail, nav_target_file, nav_target_name,
+  NavTarget, nav_at_cursor, nav_target_detail, nav_target_file, nav_target_name,
   nav_target_range,
 }
 use lang::mote {read_file_or_none}
@@ -101,6 +97,12 @@ pub def cursor_index (c : Cursor) : LineIndex := c.index
 pub def cursor_ident (c : Cursor) : String := c.ident
 
 pub def cursor_span (c : Cursor) : TextSpan := c.span
+
+/// The cursor resolved: a local first, then a name -- see `lang::navigation`'s
+/// `nav_at_cursor`.
+#[partial]
+def nav_at_cursor_of (c : Cursor) : Option NavTarget :=
+  nav_at_cursor (cursor_check c) (cursor_text c) (cursor_ident c) (text_span_start (cursor_span c))
 
 /// Resolve a request's cursor: which document, where in it, and what identifier is
 /// there.
@@ -193,7 +195,7 @@ pub def lsp_hover (checks : CheckStore) (enc : PositionEncoding) (params : Json)
 
 #[partial]
 def lsp_hover_of_cursor (enc : PositionEncoding) (c : Cursor) : Json :=
-  match nav_at_checked (cursor_check c) (cursor_ident c) {
+  match nav_at_cursor_of c {
     Option.none => Json.make_null,
     Option.some t => lsp_hover_json enc c t,
   }
@@ -268,7 +270,7 @@ pub def lsp_definition (checks : CheckStore) (enc : PositionEncoding) (params : 
 
 #[partial]
 def lsp_definition_of_cursor (enc : PositionEncoding) (c : Cursor) : IO Json :=
-  match nav_at_checked (cursor_check c) (cursor_ident c) {
+  match nav_at_cursor_of c {
     Option.none => do { return Json.make_null },
     Option.some t => lsp_definition_of_target enc c t,
   }

@@ -54,18 +54,12 @@
 ///
 /// WHAT THIS DOES NOT DO, all of it stated rather than silently absent:
 ///
-/// - **Locals are not resolved.** `scope_resolve_name` takes a
-///   `LocalScope`, and this passes the empty one. `LocalVar` carries no
-///   location and `Term.var` is positional, so resolving a local properly
-///   means walking the term tree from the declaration that encloses the
-///   cursor -- the walk the Rust server this replaces explicitly declined
-///   to do, and its own doc comment records the resulting defect: a local
-///   shadowing a top-level def resolves to the top-level one. This cut
-///   does not fix that; it inherits it deliberately, because the fix is a
-///   new piece of work (a cursor-to-binding walk) rather than a parameter.
-///   The visible consequence: `gd` on a local that does NOT shadow anything
-///   answers no target, correctly; on one that DOES it answers the
-///   top-level def, which is wrong.
+/// - **`nav_at` resolves names, not locals.** A local is found by
+///   position instead: `nav_at_cursor` walks the buffer's located
+///   declarations to the var under the cursor and reads its binder off the
+///   de Bruijn index (see "Locals" below), falling back to `nav_at` for
+///   anything else. A caller with only a name, no position, still gets the
+///   top-level def a local shadows.
 /// - **A type's file is not known.** `ScopeDef` carries its `ModulePath`;
 ///   `Inductive` and `Class` do not, so a cross-file jump is offered for
 ///   defs and not for types and classes. Hover is unaffected -- a detail
@@ -87,8 +81,10 @@
 use lib::module {
   DeclRange, ModuleInfo, ModuleInfoCache, RangedFileCheck, class_decl_name,
   decl_range_kind, decl_range_name, decl_range_span, inductive_decl_name,
-  module_info_cache_lookup, ranged_file_cache, ranged_file_ranges, ranged_file_scope,
+  located_decl_list, located_decl_spans, module_info_cache_lookup, ranged_file_cache,
+  ranged_file_located, ranged_file_ranges, ranged_file_scope,
 }
+use lib::parser {LocatedDecls}
 use lib::pretty {show_class, show_inductive, show_term}
 use lib::scope {
   qualified_name_to_name_path, scope_find_class, scope_find_def_return_type,
@@ -96,9 +92,11 @@ use lib::scope {
   scope_resolve_name, split_qualified_identifier,
 }
 use lib::typecheck::infer {empty_locals}
+use lib::typecheck::traverse {literal_children, term_children}
 use lib::types {
-  Class, Identifier, Inductive, ModulePath, NamePath, NameRef, Scope, ScopeDef,
-  SourceRange, show_identifier, show_name_path,
+  Binder, Class, ClassDef, DebugName, Decl, Def, Identifier, Inductive, Instance, Literal,
+  Location, MatchCase, ModulePath, NamePath, NameRef, Scope, ScopeDef, SourceRange, Term,
+  list_reverse, show_identifier, show_name_path, term_peel,
 }
 
 // --- The target ---
@@ -470,3 +468,503 @@ def nav_def_detail (name : String) (scope : Scope) : String :=
         Option.none => "def " ++ name,
       },
   }
+
+// --- Locals: the cursor-to-binding walk ---
+//
+// `nav_at` resolves a NAME, and a local is not a name the scope knows. So a
+// cursor is first looked for in the buffer's own located declarations
+// (`RangedFileCheck.located`): the term under it is a `Term.var` whose de
+// Bruijn index the parser already resolved, and counting the binders the
+// walk crossed turns that index into the binder it names -- the same
+// answer the lowering gave, so shadowing is decided by the compiler and not
+// re-derived here. Only a cursor that is NOT on a local falls through to
+// `nav_at`.
+//
+// A binder carries no position (`Binder`/`MatchCase.args` are names), so
+// where one is WRITTEN is found in the text: the last whole-word
+// occurrence of its name between the declaration's start and the first
+// located term of its body that is not itself a located term. A use of the
+// name is always located; the binder never is.
+
+/// What a walk is looking for, and what it needs to place a binder.
+///
+/// `starts` is the offset of every located term in the declaration -- the
+/// occurrences of a name that are uses, and so never its binder.
+struct NavWalk {
+  source : String,
+  target : I64,
+  ident : String,
+  decl_start : I64,
+  starts : List I64,
+}
+
+/// A binder in scope at a point of the walk: its name, its declared type
+/// (`Term.hole` when unannotated), and the term it binds over.
+struct NavBinder {
+  name : String,
+  typ : Term,
+  body : Term,
+}
+
+/// What the walk found at the cursor: a local (its name, type and the
+/// offset its binder is written at, when that could be found), a name that
+/// is not a local, or nothing located there at all.
+type NavHit {
+  bound (name : String) (typ : Term) (offset : Option I64),
+  free,
+  nothing,
+}
+
+/// Resolve the identifier at byte `start` of `source`, locals first.
+///
+/// `source` is the text `f` was checked from and `start` the identifier's
+/// first byte in it. A cursor on a local -- a use or the binder itself --
+/// answers that binder, even with the file's scope missing; any other
+/// cursor answers exactly what `nav_at_checked` does.
+#[partial]
+pub def nav_at_cursor (f : RangedFileCheck) (source : String) (ident : String) (start : I64)
+    : Option NavTarget :=
+  match nav_local_hit f source ident start {
+    NavHit.bound name typ offset => Option.some (nav_local_binder_target source name typ offset),
+    NavHit.free => nav_at_checked f ident,
+    NavHit.nothing => nav_at_checked f ident,
+  }
+
+/// A local's target: kind `local`, its type when it was written, and the
+/// binder's own extent in this file.
+#[partial]
+def nav_local_binder_target (source : String) (name : String) (typ : Term)
+    (offset : Option I64) : NavTarget :=
+  let no_file : Option String := Option.none in
+  nav_target_mk name (nav_local_detail name typ) "local" no_file
+    (nav_binder_range source name offset)
+
+#[partial]
+def nav_local_detail (name : String) (typ : Term) : String :=
+  match term_peel typ {
+    Term.hole => name,
+    _ => name ++ " : " ++ show_term typ,
+  }
+
+#[partial]
+def nav_binder_range (source : String) (name : String) (offset : Option I64)
+    : Option SourceRange :=
+  match offset {
+    Option.none => Option.none,
+    Option.some off =>
+      let stop : I64 := off + String.length name in
+      let r : SourceRange := {
+        start := nav_location_at source off,
+        end := nav_location_at source stop,
+        path := Option.none,
+      } in
+      Option.some r,
+  }
+
+/// A byte offset as a `Location`: 1-based line and column, the convention
+/// the parser's own ranges use.
+#[partial]
+def nav_location_at (source : String) (off : I64) : Location :=
+  nav_location_scan (String.to_list (String.slice source 0 off)) 0 1 0
+
+/// `line` so far, and the offset just past the last newline seen.
+#[partial]
+def nav_location_scan (bytes : List U8) (i : I64) (line : I64) (line_start : I64) : Location :=
+  match bytes {
+    List.empty =>
+      let loc : Location := { offset := i, line := line, column := i - line_start + 1 } in
+      loc,
+    // One self-call, so the compiled backend's tail-call loop applies.
+    List.cons b rest =>
+      let nl : Bool := U8.beq b nav_byte_newline in
+      nav_location_scan rest (i + 1) (if nl then line + 1 else line)
+        (if nl then i + 1 else line_start),
+  }
+
+def nav_byte_newline : U8 := 10u8
+
+// --- The walk over the buffer's declarations ---
+
+#[partial]
+def nav_local_hit (f : RangedFileCheck) (source : String) (ident : String) (start : I64) : NavHit :=
+  let located : LocatedDecls := ranged_file_located f in
+  nav_hit_in_decls source ident start (located_decl_list located) (located_decl_spans located)
+
+/// The declaration whose span covers the cursor, walked; nothing when none
+/// does.
+#[partial]
+def nav_hit_in_decls (source : String) (ident : String) (start : I64) (ds : List Decl)
+    (spans : List SourceRange) : NavHit :=
+  match ds {
+    List.empty => NavHit.nothing,
+    List.cons d rest =>
+      match spans {
+        List.empty => NavHit.nothing,
+        List.cons sp more =>
+          if nav_span_covers sp start
+          then nav_hit_in_decl source ident start sp d
+          else nav_hit_in_decls source ident start rest more,
+      },
+  }
+
+#[partial]
+def nav_span_covers (sp : SourceRange) (off : I64) : Bool :=
+  Bool.not (I64.lt off (nav_loc_offset (nav_range_start sp)))
+    && I64.lt off (nav_loc_offset (nav_range_end sp))
+
+#[partial]
+def nav_hit_in_decl (source : String) (ident : String) (start : I64) (sp : SourceRange) (d : Decl)
+    : NavHit :=
+  let terms : List Term := nav_decl_terms d in
+  let st : NavWalk := {
+    source := source,
+    target := start,
+    ident := ident,
+    decl_start := nav_loc_offset (nav_range_start sp),
+    starts := nav_starts_of_terms terms List.empty,
+  } in
+  let no_binders : List NavBinder := List.empty in
+  nav_walk_terms st no_binders terms
+
+/// The value-level terms a declaration carries: a def's body, an
+/// instance's method bodies, a class's default method bodies. Signatures
+/// are type-level and carry no positions, so they are not walked.
+#[partial]
+def nav_decl_terms (d : Decl) : List Term :=
+  match d {
+    Decl.def_d df => [nav_def_term df],
+    Decl.instance_d i => nav_def_terms (nav_instance_defs i) List.empty,
+    Decl.class_d c => nav_class_default_terms (nav_class_methods c) List.empty,
+    _ => List.empty,
+  }
+
+def nav_def_term (df : Def) : Term := df.term
+
+def nav_instance_defs (i : Instance) : List Def := i.defs
+
+def nav_class_methods (c : Class) : List ClassDef := c.methods
+
+def nav_class_method_default (m : ClassDef) : Option Term := m.default
+
+#[partial]
+def nav_def_terms (ds : List Def) (acc : List Term) : List Term :=
+  match ds {
+    List.empty => list_reverse acc,
+    List.cons df rest => nav_def_terms rest (List.cons (nav_def_term df) acc),
+  }
+
+#[partial]
+def nav_class_default_terms (ms : List ClassDef) (acc : List Term) : List Term :=
+  match ms {
+    List.empty => list_reverse acc,
+    List.cons m rest => nav_class_default_terms rest (nav_cons_some (nav_class_method_default m) acc),
+  }
+
+#[partial]
+def nav_cons_some (o : Option Term) (acc : List Term) : List Term :=
+  match o {
+    Option.none => acc,
+    Option.some t => List.cons t acc,
+  }
+
+/// Walk each term in turn; the first that finds something answers.
+#[partial]
+def nav_walk_terms (st : NavWalk) (stack : List NavBinder) (ts : List Term) : NavHit :=
+  match ts {
+    List.empty => NavHit.nothing,
+    List.cons t rest => nav_walk_terms_after st stack (nav_walk st stack t) rest,
+  }
+
+#[partial]
+def nav_walk_terms_after (st : NavWalk) (stack : List NavBinder) (h : NavHit) (rest : List Term)
+    : NavHit :=
+  match h {
+    NavHit.nothing => nav_walk_terms st stack rest,
+    NavHit.free => NavHit.free,
+    NavHit.bound name typ offset => NavHit.bound name typ offset,
+  }
+
+/// One term. The binding forms push onto `stack` -- innermost first, so a
+/// de Bruijn index is a position in it -- and a `pi` is type-level, so
+/// nothing under it is located and it is not entered.
+#[partial]
+def nav_walk (st : NavWalk) (stack : List NavBinder) (t : Term) : NavHit :=
+  match t {
+    Term.ctx loc inner => nav_walk_located st stack loc inner,
+    Term.lam b typ body => nav_walk_binder st stack (nav_binder_name b) typ body,
+    Term.pi _b _arg _ret => NavHit.nothing,
+    Term.lit l => nav_walk_lit st stack l,
+    _ => nav_walk_terms st stack (term_children t),
+  }
+
+/// A located term at the cursor is where the identifier's var is: as the
+/// term itself, or as the head of the spine it starts. Anything else at the
+/// same offset (an infix spine starts at its left operand, whose own var is
+/// located again further in) is found by walking on.
+#[partial]
+def nav_walk_located (st : NavWalk) (stack : List NavBinder) (loc : Location) (inner : Term)
+    : NavHit :=
+  if I64.beq (nav_loc_offset loc) st.target
+  then nav_walk_located_after st stack (nav_head st stack inner) inner
+  else nav_walk st stack inner
+
+#[partial]
+def nav_walk_located_after (st : NavWalk) (stack : List NavBinder) (h : NavHit) (inner : Term)
+    : NavHit :=
+  match h {
+    NavHit.nothing => nav_walk st stack inner,
+    NavHit.free => NavHit.free,
+    NavHit.bound name typ offset => NavHit.bound name typ offset,
+  }
+
+#[partial]
+def nav_head (st : NavWalk) (stack : List NavBinder) (t : Term) : NavHit :=
+  nav_head_peeled st stack (term_peel t)
+
+/// The var a spine starts with. A field access (`s.width`) lowers to a
+/// `match` on its receiver, so the receiver is the head there.
+#[partial]
+def nav_head_peeled (st : NavWalk) (stack : List NavBinder) (t : Term) : NavHit :=
+  match t {
+    Term.var idx dbg => nav_head_var st stack idx dbg,
+    Term.app callee _arg => nav_head st stack callee,
+    Term.lit l => nav_head_lit st stack l,
+    _ => NavHit.nothing,
+  }
+
+#[partial]
+def nav_head_lit (st : NavWalk) (stack : List NavBinder) (l : Literal) : NavHit :=
+  match l {
+    Literal.match_ scrut _cases => nav_head st stack scrut,
+    _ => NavHit.nothing,
+  }
+
+/// The var at the cursor, if it is the identifier there. A dotted
+/// identifier (`s.width`, one run to the text scan) matches the var for
+/// its first segment.
+#[partial]
+def nav_head_var (st : NavWalk) (stack : List NavBinder) (idx : I64) (dbg : DebugName) : NavHit :=
+  match dbg {
+    DebugName.unnamed => NavHit.nothing,
+    DebugName.named id =>
+      if nav_name_matches (show_identifier id) st.ident
+      then nav_classify st (nav_nth stack idx)
+      else NavHit.nothing,
+  }
+
+#[partial]
+def nav_name_matches (name : String) (ident : String) : Bool :=
+  String.beq name ident || String.starts_with (name ++ ".") ident
+
+/// A var's binder, from its index: the index-th entry of the stack, or a
+/// name that is not a local (`sentinel`, or a binder outside the walk).
+#[partial]
+def nav_classify (st : NavWalk) (b : Option NavBinder) : NavHit :=
+  match b {
+    Option.none => NavHit.free,
+    Option.some nb => NavHit.bound nb.name nb.typ (nav_binder_offset st nb),
+  }
+
+#[partial]
+def nav_nth (stack : List NavBinder) (idx : I64) : Option NavBinder :=
+  if I64.lt idx 0
+  then Option.none
+  else nav_nth_go stack idx
+
+#[partial]
+def nav_nth_go (stack : List NavBinder) (idx : I64) : Option NavBinder :=
+  match stack {
+    List.empty => Option.none,
+    List.cons b rest =>
+      if I64.beq idx 0
+      then Option.some b
+      else nav_nth_go rest (idx - 1),
+  }
+
+/// A binder: the cursor may be ON it, and otherwise its body is walked
+/// with it in scope.
+#[partial]
+def nav_walk_binder (st : NavWalk) (stack : List NavBinder) (name : String) (typ : Term)
+    (body : Term) : NavHit :=
+  let b : NavBinder := { name := name, typ := typ, body := body } in
+  if nav_cursor_on_binder st b
+  then NavHit.bound name typ (Option.some st.target)
+  else nav_walk st (List.cons b stack) body
+
+#[partial]
+def nav_cursor_on_binder (st : NavWalk) (b : NavBinder) : Bool :=
+  String.beq b.name st.ident && nav_offset_is (nav_binder_offset st b) st.target
+
+#[partial]
+def nav_offset_is (o : Option I64) (target : I64) : Bool :=
+  match o {
+    Option.none => false,
+    Option.some off => I64.beq off target,
+  }
+
+#[partial]
+def nav_binder_name (b : Binder) : String :=
+  match nav_binder_debug_name b {
+    DebugName.named id => show_identifier id,
+    DebugName.unnamed => "",
+  }
+
+def nav_binder_debug_name (b : Binder) : DebugName := b.name
+
+#[partial]
+def nav_walk_lit (st : NavWalk) (stack : List NavBinder) (l : Literal) : NavHit :=
+  match l {
+    Literal.match_ scrut cases => nav_walk_cases_after st stack (nav_walk st stack scrut) cases,
+    _ => nav_walk_terms st stack (literal_children l),
+  }
+
+#[partial]
+def nav_walk_cases_after (st : NavWalk) (stack : List NavBinder) (h : NavHit)
+    (cases : List MatchCase) : NavHit :=
+  match h {
+    NavHit.nothing => nav_walk_cases st stack cases,
+    NavHit.free => NavHit.free,
+    NavHit.bound name typ offset => NavHit.bound name typ offset,
+  }
+
+#[partial]
+def nav_walk_cases (st : NavWalk) (stack : List NavBinder) (cases : List MatchCase) : NavHit :=
+  match cases {
+    List.empty => NavHit.nothing,
+    List.cons c rest =>
+      nav_walk_cases_after_case st stack
+        (nav_walk_case st stack (nav_case_args c) (nav_case_body c)) rest,
+  }
+
+#[partial]
+def nav_walk_cases_after_case (st : NavWalk) (stack : List NavBinder) (h : NavHit)
+    (rest : List MatchCase) : NavHit :=
+  match h {
+    NavHit.nothing => nav_walk_cases st stack rest,
+    NavHit.free => NavHit.free,
+    NavHit.bound name typ offset => NavHit.bound name typ offset,
+  }
+
+def nav_case_args (c : MatchCase) : List Identifier := c.args
+
+def nav_case_body (c : MatchCase) : Term := c.body
+
+/// A match arm's pattern names bind over its body, the LAST one innermost
+/// (`lower_ctx_bind_all`) -- so they are pushed in order. A pattern name
+/// carries no type.
+#[partial]
+def nav_walk_case (st : NavWalk) (stack : List NavBinder) (args : List Identifier) (body : Term)
+    : NavHit :=
+  match args {
+    List.empty => nav_walk st stack body,
+    List.cons a rest => nav_walk_case_arg st stack (show_identifier a) rest body,
+  }
+
+#[partial]
+def nav_walk_case_arg (st : NavWalk) (stack : List NavBinder) (name : String)
+    (rest : List Identifier) (body : Term) : NavHit :=
+  let b : NavBinder := { name := name, typ := Term.hole, body := body } in
+  if nav_cursor_on_binder st b
+  then NavHit.bound name Term.hole (Option.some st.target)
+  else nav_walk_case st (List.cons b stack) rest body
+
+// --- Where a binder is written ---
+
+/// The offset of the binder's name in the text: the last whole-word
+/// occurrence of it before its body's first located term, from the
+/// declaration's start, that is not a use. `Option.none` when its body has
+/// no located term to bound the search, or no occurrence qualifies.
+#[partial]
+def nav_binder_offset (st : NavWalk) (b : NavBinder) : Option I64 :=
+  match nav_min_start (nav_starts_of_terms [b.body] List.empty) {
+    Option.none => Option.none,
+    Option.some upper =>
+      nav_last_word st.starts b.name st.decl_start
+        (String.to_list (String.slice st.source st.decl_start (upper - st.decl_start))),
+  }
+
+#[partial]
+def nav_min_start (offs : List I64) : Option I64 :=
+  match offs {
+    List.empty => Option.none,
+    List.cons o rest => Option.some (nav_min_go rest o),
+  }
+
+#[partial]
+def nav_min_go (offs : List I64) (best : I64) : I64 :=
+  match offs {
+    List.empty => best,
+    List.cons o rest => nav_min_go rest (if I64.lt o best then o else best),
+  }
+
+/// Every located term's offset under `ts`, prepended to `acc`.
+#[partial]
+def nav_starts_of_terms (ts : List Term) (acc : List I64) : List I64 :=
+  match ts {
+    List.empty => acc,
+    List.cons t rest => nav_starts_of_terms rest (nav_starts_of_term t acc),
+  }
+
+#[partial]
+def nav_starts_of_term (t : Term) (acc : List I64) : List I64 :=
+  match t {
+    Term.ctx loc inner => nav_starts_of_terms [inner] (List.cons (nav_loc_offset loc) acc),
+    _ => nav_starts_of_terms (term_children t) acc,
+  }
+
+/// The last identifier run in `bytes` (which start at `base`) spelling
+/// `name` and not starting at a use.
+#[partial]
+def nav_last_word (uses : List I64) (name : String) (base : I64) (bytes : List U8) : Option I64 :=
+  nav_word_scan uses name base bytes 0 0 List.empty Option.none
+
+/// One pass over identifier runs. `run_start` is the offset of the run in
+/// progress (relative to `base`) and `run` its bytes, reversed.
+#[partial]
+def nav_word_scan (uses : List I64) (name : String) (base : I64) (bytes : List U8) (i : I64)
+    (run_start : I64) (run : List U8) (best : Option I64) : Option I64 :=
+  match bytes {
+    List.empty => nav_word_close uses name (base + run_start) run best,
+    // One self-call, for the same reason as `nav_location_scan`.
+    List.cons b rest =>
+      let in_run : Bool := nav_byte_is_identifier b in
+      let no_run : List U8 := List.empty in
+      nav_word_scan uses name base rest (i + 1)
+        (if in_run then run_start else i + 1)
+        (if in_run then List.cons b run else no_run)
+        (if in_run then best else nav_word_close uses name (base + run_start) run best),
+  }
+
+/// A run just ended at absolute `at`: it is the new best when it spells
+/// `name` and is not a use.
+#[partial]
+def nav_word_close (uses : List I64) (name : String) (at_off : I64) (run : List U8)
+    (best : Option I64) : Option I64 :=
+  if String.beq (String.from_list (list_reverse run)) name
+      && Bool.not (nav_contains_i64 uses at_off)
+  then Option.some at_off
+  else best
+
+#[partial]
+def nav_contains_i64 (xs : List I64) (x : I64) : Bool :=
+  match xs {
+    List.empty => false,
+    List.cons y rest => I64.beq x y || nav_contains_i64 rest x,
+  }
+
+/// The text scan's identifier bytes (`toolkit::text`): letters, digits,
+/// `_`, `.` and `'`. `U8.lt` is not `pub`, hence the floors one below.
+#[partial]
+def nav_byte_is_identifier (b : U8) : Bool :=
+  (U8.gt b 47u8 && Bool.not (U8.gt b 57u8))
+    || (U8.gt b 64u8 && Bool.not (U8.gt b 90u8))
+    || (U8.gt b 96u8 && Bool.not (U8.gt b 122u8))
+    || U8.beq b 95u8
+    || U8.beq b 46u8
+    || U8.beq b 39u8
+
+def nav_loc_offset (l : Location) : I64 := l.offset
+
+def nav_range_start (r : SourceRange) : Location := r.start
+
+def nav_range_end (r : SourceRange) : Location := r.end

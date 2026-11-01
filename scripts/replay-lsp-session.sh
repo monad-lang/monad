@@ -35,10 +35,8 @@
 #   4. `documentSymbol` answers one symbol per declaration, with the kind the
 #      picker's vocabulary gives it and a range that starts at the declaration.
 #   5. `hover` on a def and `definition` on a def's use resolve, in the file.
-#   6. `definition` on a local that shadows a top-level def answers the TOP-LEVEL
-#      def. This one is a PIN ON A KNOWN GAP, not a criterion met: see
-#      `lang/src/navigation.mo`'s "Locals are not resolved". It is asserted so that
-#      implementing the cursor-to-binding walk flips it.
+#   6. `definition` and `hover` on a local that shadows a top-level def answer the
+#      LOCAL's binder, not the def (`lang/src/navigation.mo`'s cursor-to-binding walk).
 #   7. `workspace/symbol` finds a declaration in an open buffer.
 #   8. A message that is not JSON gets a -32700 error with a null id and the session
 #      SURVIVES it -- the next request is still answered.
@@ -377,17 +375,17 @@ def session(encoding):
           locs((by_id(replies, 14) or {}).get("result")) == [("shapes.mo", (38, 0, 40, 0))],
           f"{locs((by_id(replies, 14) or {}).get('result'))}")
 
-    # 6. The shadowing pin -- a KNOWN GAP, asserted rather than wished away. Cursor is on
-    # the local's USE inside `\zz_replay_shadowed => zz_replay_shadowed`; both features
-    # answer `def zz_replay_shadowed : I64 := 7` on line 42, the top-level def, and not
-    # the lambda binder that actually hides it.
-    check(f"{encoding} definition on a shadowing local answers the TOP-LEVEL def (known gap)",
-          locs((by_id(replies, 15) or {}).get("result")) == [("shapes.mo", (42, 0, 44, 0))],
+    # 6. The shadowing case. Cursor is on the local's USE inside
+    # `\zz_replay_shadowed => zz_replay_shadowed` (line 45); both features answer the
+    # lambda binder -- its name, columns 5..23 -- and not `def zz_replay_shadowed` on
+    # line 42, which it hides. The lambda is unannotated, so the hover is the bare name.
+    check(f"{encoding} definition on a shadowing local answers its binder",
+          locs((by_id(replies, 15) or {}).get("result")) == [("shapes.mo", (45, 5, 45, 23))],
           f"{locs((by_id(replies, 15) or {}).get('result'))}")
     hover = by_id(replies, 16)
     detail = ((hover or {}).get("result") or {}).get("contents", {}).get("value", "")
-    check(f"{encoding} hover on a shadowing local answers the TOP-LEVEL def (known gap)",
-          "def zz_replay_shadowed" in detail, f"{detail!r}")
+    check(f"{encoding} hover on a shadowing local answers its binder",
+          detail == "```monad\nzz_replay_shadowed\n```", f"{detail!r}")
 
     # 7. The workspace scan. `SymbolInformation`, so `locs()` takes the nested shape --
     # and the range is the same byte-exact decl span the definition feature answers.

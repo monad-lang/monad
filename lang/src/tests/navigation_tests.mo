@@ -42,7 +42,7 @@ use lib::module {
   parse_all_decls, ranged_file_ranges, ranged_file_scope,
 }
 use lib::navigation {
-  NavTarget, nav_at, nav_at_checked, nav_target_detail, nav_target_file, nav_target_kind,
+  NavTarget, nav_at, nav_at_checked, nav_at_cursor, nav_target_detail, nav_target_file, nav_target_kind,
   nav_target_name, nav_target_range,
 }
 use parsec::core {fail, success}
@@ -376,4 +376,115 @@ def test_a_truncated_buffer_keeps_its_outline : IO Bool := do {
     return (String.beq names "ok_first"
         && nt_absent (nav_at_checked checked "ok_first")
         && String.beq (nt_scope_text checked) "<no scope>")
+}
+
+// --- Locals: the cursor-to-binding walk ---
+
+/// A local of every binder shape the walk crosses: a lambda's that shadows
+/// a top-level def (line 3), a def parameter (line 4), a match arm's
+/// pattern name (line 5), a field access's receiver (line 7) and a `let`
+/// that rebinds its own name (line 8). Byte
+/// offsets, counted once and used by every test below:
+///
+/// | what | binder | use |
+/// |---|---|---|
+/// | `zz_s` (lambda, shadows line 1) | 54 | 62 |
+/// | `x` (parameter) | 81 | 99 |
+/// | `v` (match arm) | 160 | 165 |
+/// | `b` (receiver of `b.n`) | 226 | 246 |
+/// | `y` (outer `let`) | 274 | 293 |
+/// | `y` (inner `let`) | 288 | 302 |
+def nav_locals_source : String :=
+    "def zz_s : I64 := 7\ndef zz_use : (I64 -> I64) :=\n    \\zz_s => zz_s\ndef zz_param (x : I64) : I64 := x\ndef zz_arm (o : Option I64) : I64 := match o { Option.some v => v, Option.none => 0 }\nstruct ZzBox { n : I64 }\ndef zz_field (b : ZzBox) : I64 := b.n\ndef zz_let : I64 := let y := 1 in let y := y + 1 in y\n"
+
+/// Whether the cursor at `off` resolves to a LOCAL whose binder starts at
+/// `binder` and whose detail is `detail`, printing what it did find.
+#[partial]
+def nt_local_is (checked : RangedFileCheck) (ident : String) (off : I64) (binder : I64)
+    (detail : String) : IO Bool := do {
+    match nav_at_cursor checked nav_locals_source ident off {
+        Option.none => do { println ("NO TARGET for local " ++ ident); return false },
+        Option.some t => do {
+            println (ident ++ " @" ++ I64.to_string off ++ " -> " ++ nt_text t
+                ++ " start=" ++ I64.to_string (nt_start_off_of t));
+            return (String.beq (nt_kind t) "local"
+                && String.beq (nt_name t) ident
+                && String.beq (nt_detail t) detail
+                && I64.beq (nt_start_off_of t) binder)
+        },
+    }
+}
+
+/// The pin the replay gate flips: a local that shadows a top-level def
+/// answers the local, not the def. Both directions are asserted, so a walk
+/// that found nothing (and fell back) cannot pass: the same name at the
+/// DEF's own position still answers the def.
+#[test]
+def test_a_shadowing_local_answers_its_binder : IO Bool := do {
+    let checked <- nt_check "nav_probe_locals_shadow.mo" nav_locals_source;
+    let local_ok <- nt_local_is checked "zz_s" 62 54 "zz_s";
+    let def_kind : String := nt_kind_or_none (nav_at_cursor checked nav_locals_source "zz_s" 4);
+    println ("zz_s @4 kind: " ++ def_kind);
+    return (local_ok && String.beq def_kind "def" && I64.beq (nt_line_at checked "zz_s" 62) 3)
+}
+
+def nt_kind_or_none (o : Option NavTarget) : String :=
+    match o {
+        Option.none => "<none>",
+        Option.some t => nt_kind t,
+    }
+
+def nt_line_at (checked : RangedFileCheck) (ident : String) (off : I64) : I64 :=
+    match nav_at_cursor checked nav_locals_source ident off {
+        Option.none => 0 - 1,
+        Option.some t => nt_line_of t,
+    }
+
+/// The cursor ON the binder answers the binder itself.
+#[test]
+def test_a_cursor_on_a_binder_answers_it : IO Bool := do {
+    let checked <- nt_check "nav_probe_locals_binder.mo" nav_locals_source;
+    nt_local_is checked "zz_s" 54 54 "zz_s"
+}
+
+/// A def parameter shadows nothing: before the walk it answered no target
+/// at all. Its declared type is the detail.
+#[test]
+def test_a_def_parameter_answers_its_binder : IO Bool := do {
+    let checked <- nt_check "nav_probe_locals_param.mo" nav_locals_source;
+    nt_local_is checked "x" 99 81 "x : I64"
+}
+
+/// A match arm's pattern name, which no `lam` binds.
+#[test]
+def test_a_match_arm_name_answers_its_pattern : IO Bool := do {
+    let checked <- nt_check "nav_probe_locals_arm.mo" nav_locals_source;
+    nt_local_is checked "v" 165 160 "v"
+}
+
+/// `b.n` is one run to the text scan and lowers to a `match` on `b`; the
+/// receiver is still found.
+#[test]
+def test_a_field_receiver_answers_its_binder : IO Bool := do {
+    let checked <- nt_check "nav_probe_locals_field.mo" nav_locals_source;
+    match nav_at_cursor checked nav_locals_source "b.n" 246 {
+        Option.none => do { println "NO TARGET for the receiver of b.n"; return false },
+        Option.some t => do {
+            println ("b.n -> " ++ nt_text t ++ " start=" ++ I64.to_string (nt_start_off_of t));
+            return (String.beq (nt_kind t) "local"
+                && String.beq (nt_detail t) "b : ZzBox"
+                && I64.beq (nt_start_off_of t) 226)
+        },
+    }
+}
+
+/// `let y := y + 1 in y`: the `y` in the value is the OUTER binder, the one
+/// after `in` the inner. The inner binder's text search must skip the use
+/// between them, which is what keeps uses out of the candidates.
+#[test]
+def test_a_let_rebinding_its_name_answers_each_binder : IO Bool := do {
+    let checked <- nt_check "nav_probe_locals_let.mo" nav_locals_source;
+    let outer_ok <- nt_local_is checked "y" 293 274 "y";
+    let inner_ok <- nt_local_is checked "y" 302 288 "y";
+    return (outer_ok && inner_ok)
 }
