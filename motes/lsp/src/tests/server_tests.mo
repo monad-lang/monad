@@ -23,9 +23,10 @@
 /// body contains a character outside ASCII -- and this corpus's comments are full of em
 /// dashes and curly quotes. The client would then read the next frame starting inside
 /// this one. The assertion is a byte count, so it fails the moment that is got wrong.
+use lsp::log {trace_at_messages, trace_at_verbose}
 use lsp::server {
   ServerState, ServerStep, lsp_at_eof, lsp_dispatch, lsp_frame, lsp_next_read, lsp_server_new,
-  server_initialized, server_step_exit, server_step_bodies, server_step_state,
+  server_initialized, server_step_exit, server_step_bodies, server_step_state, server_trace,
 }
 use toolkit::framing {content_length}
 use toolkit::jsonrpc {rpc_parse}
@@ -66,6 +67,15 @@ def st_did_change_bare : String := "{\"jsonrpc\":\"2.0\",\"method\":\"textDocume
 
 /// Not JSON at all.
 def st_garbage : String := "{\"jsonrpc\":\"2.0\","
+
+/// The specification's own volume knob, turned up as far as it goes.
+def st_set_trace_verbose : String :=
+  "{\"jsonrpc\":\"2.0\",\"method\":\"$/setTrace\",\"params\":{\"value\":\"verbose\"}}"
+
+/// A trace value the specification does not name, which must land on quiet rather than
+/// on a guess.
+def st_set_trace_garbage : String :=
+  "{\"jsonrpc\":\"2.0\",\"method\":\"$/setTrace\",\"params\":{\"value\":\"noisy\"}}"
 
 // --- Reading a step without touching a field in a test body ---
 //
@@ -280,6 +290,55 @@ def test_a_notification_never_ends_the_session : IO Bool := do {
     let a <- st_ask lsp_server_new st_initialized;
     return (Bool.not (st_code_is (st_step_of a) 0))
 }
+
+// --- Trace ---
+
+/// The level the client last set is carried in the state, because the setting has to
+/// outlive the message that set it: a `$/setTrace` that was forgotten by the next frame
+/// would be a knob that turns itself back.
+#[test]
+def test_settrace_verbose_is_remembered_in_the_state : IO Bool := do {
+    let st : ServerState <- st_handshake st_initialize_utf8;
+    let a <- st_ask st st_set_trace_verbose;
+    return (trace_at_verbose (server_trace (st_state_of a)))
+}
+
+/// ...and it is still there a message later, which is the half of the same rule the
+/// first test cannot show: the level survives a step that was not about the level.
+#[test]
+def test_the_trace_level_survives_the_next_message : IO Bool := do {
+    let st : ServerState <- st_handshake st_initialize_utf8;
+    let a1 <- st_ask st st_set_trace_verbose;
+    let a2 <- st_ask (st_state_of a1) st_initialized;
+    return (trace_at_verbose (server_trace (st_state_of a2)))
+}
+
+/// A trace value the specification does not name is quiet, not a guess -- the same
+/// mapping `log_tests.mo` pins, asserted here through the whole route: a wire message,
+/// the params reader, the state.
+#[test]
+def test_a_trace_value_the_specification_does_not_name_means_off : IO Bool := do {
+    let st : ServerState <- st_handshake st_initialize_utf8;
+    let a <- st_ask st st_set_trace_garbage;
+    return (Bool.not (trace_at_messages (server_trace (st_state_of a))))
+}
+
+/// `$/setTrace` is a notification, so the level change is the whole of the handling and
+/// no reply exists to send -- an answered one would be a protocol violation a client is
+/// entitled to log.
+#[test]
+def test_settrace_answers_nothing : IO Bool := do {
+    let st : ServerState <- st_handshake st_initialize_utf8;
+    let a <- st_ask st st_set_trace_verbose;
+    return (String.beq (st_body_of a) "")
+}
+
+/// The session's story is on by default, which is the decision `log.mo`'s module doc
+/// argues for: the questions this log answers are asked after the fact, when turning
+/// the trace on is too late.
+#[test]
+def test_a_fresh_server_traces_at_messages : Bool :=
+  trace_at_messages (server_trace lsp_server_new)
 
 // --- The frame ---
 
