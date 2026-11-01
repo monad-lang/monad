@@ -7,17 +7,19 @@
 # long session died with SIGSEGV; the 128 MB default only delayed it.
 #
 # This driver makes the failure fast and deterministic:
-#   MONAD_STACK_BYTES=1048576     a 1 MiB stack instead of 128 MiB
+#   MONAD_STACK_BYTES=2097152     a 2 MiB stack instead of 128 MiB
 #   MONAD_TUI_FRAME_BUDGET=200    unwind every 200 frames (the fix's knob)
-# and then drives several thousand frames (one key each). The pre-fix binary
-# dies within the burst; the fixed one survives, keeps answering keys, and
-# still restores the terminal on exit.
+# and then drives several thousand frames (one key each). 2 MiB leaves room
+# for weaver's STARTUP after the module graph grew (markdown/yaml/mty); the
+# per-frame growth the fix removes still overflows it: the pre-fix loop dies
+# around 2.6k frames, inside the 3000-key burst. The fixed binary survives,
+# keeps answering keys, and still restores the terminal on exit.
 #
 # It also samples VmRSS after the burst and reports it (the async-turn RSS
 # growth's baseline): a bound that is only advisory today, printed so a
 # regression is visible in the CI log.
 #
-# Usage: python3 pty_repro_soak.py [--keys 3000] [--stack 1048576]
+# Usage: python3 pty_repro_soak.py [--keys 3000] [--stack 2097152]
 #        WV_BIN=/path/to/weaver python3 pty_repro_soak.py
 import fcntl, os, pty, re, select, shutil, signal, struct, sys, tempfile, termios, time
 
@@ -26,7 +28,7 @@ BIN = os.environ.get("WV_BIN", REPO + "/target-monad/release/weaver")
 TURNS = os.path.join(REPO, "scripts", "weaver-tui-repro", "turns_select.json")
 
 KEYS = 3000
-STACK = "1048576"
+STACK = "2097152"
 BUDGET = "200"
 
 

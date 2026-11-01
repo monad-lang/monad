@@ -16,6 +16,14 @@ use std::process {exec_cmd}
 
 def saw_alt (o : Output) : Bool := Output.contains o "\u{1b}[?1049h"
 
+/// A phrase visible on the rendered grid. The cell diff omits a space that
+/// was already blank, so a spaced phrase is not contiguous in the raw stream.
+def visible (o : Output) (needle : String) : Bool :=
+    match Output.find o needle {
+        Option.some _ => true,
+        Option.none => false
+    }
+
 // ── Generated fixtures ────────────────────────────────────────────────────
 
 def edit_head : String := r#"[{"message": {"role": "assistant", "content": [{"type": "tool_use", "id": "c1", "name": "edit", "input": {"path": ""#
@@ -64,13 +72,12 @@ def deny_go (m : Mty) (root : String) : IO Bool := do {
     let up <- Mty.wait_until m saw_alt 6000;
     Mty.send_text m "go\n";
     let dlg <- Mty.wait_until m (fn (o : Output) =>
-        String.contains (Output.stripped o) "Permission required") 6000;
+        visible o "Permission required") 6000;
     let o1 <- Mty.output m;
-    let s1 := Output.stripped o1;
     let a <- Check.report "permission dialog appears with its options"
-        (dlg && String.contains s1 "Approve once" && String.contains s1 "Deny");
+        (dlg && visible o1 "Approve once" && visible o1 "Deny");
     let b <- Check.report "the dialog names the file it will write"
-        (String.contains s1 note);
+        (String.contains (Output.stripped o1) note);
     Mty.send_text m "e";
     Mty.pump m 150;
     Mty.send_text m "please keep it";
@@ -79,12 +86,12 @@ def deny_go (m : Mty) (root : String) : IO Bool := do {
     Mty.pump m 150;
     Mty.send_text m "n";
     let denied <- Mty.wait_until m (fn (o : Output) =>
-        String.contains (Output.stripped o) "denied: please keep it") 6000;
+        visible o "denied: please keep it") 6000;
     let c <- Check.report "a denied pick carries the note to the model" denied;
     let file <- read_text note;
     let d <- Check.report "the denied edit did not run" (file == "hi");
     let wrote <- Mty.wait_until m (fn (o : Output) =>
-        String.contains (Output.stripped o) "wrote it") 6000;
+        visible o "wrote it") 6000;
     let e <- Check.report "the turn continues after a denial" wrote;
     let o2 <- Mty.output m;
     let gone <- Check.report "the dialog is gone after the denial"
@@ -110,14 +117,14 @@ def approve_go (m : Mty) (root : String) : IO Bool := do {
     let up <- Mty.wait_until m saw_alt 6000;
     Mty.send_text m "go\n";
     let dlg <- Mty.wait_until m (fn (o : Output) =>
-        String.contains (Output.stripped o) "Permission required") 6000;
+        visible o "Permission required") 6000;
     Mty.send_text m "\u{1b}[A";
     Mty.pump m 150;
     Mty.send_text m "\u{1b}[A";
     Mty.pump m 150;
     Mty.send_text m "\r";
     let wrote <- Mty.wait_until m (fn (o : Output) =>
-        String.contains (Output.stripped o) "wrote it") 6000;
+        visible o "wrote it") 6000;
     let file <- read_text note;
     let a <- Check.report "arrow selection + Enter approves the edit"
         (wrote && file == "hello world");
@@ -143,18 +150,13 @@ def approve_run (bin : String) (root : String) : IO Bool := do {
 def plan_go (m : Mty) : IO Bool := do {
     let up <- Mty.wait_until m saw_alt 6000;
     Mty.send_text m "go\n";
-    let plan_seen <- Mty.wait_until m (fn (o : Output) =>
-        String.contains (Output.stripped o) "PLAN: do the thing") 6000;
-    Mty.send_text m "/plan";
-    Mty.pump m 150;
-    Mty.send_text m "\r";
+    // A clean plan-mode turn opens the review dialog by itself now; no /plan.
     let ready <- Mty.wait_until m (fn (o : Output) =>
-        String.contains (Output.stripped o) "Plan ready") 5000;
+        visible o "Plan ready") 12000;
     let o1 <- Mty.output m;
-    let s1 := Output.stripped o1;
+    let plan_seen := visible o1 "PLAN: do the thing";
     let a <- Check.report "the plan dialog shows the plan"
-        (ready && String.contains s1 "PLAN: do the thing"
-            && String.contains s1 "Approve and execute");
+        (ready && plan_seen && visible o1 "Approve and execute");
     Mty.send_text m "e";
     Mty.pump m 150;
     Mty.send_text m "fix the tests too";
@@ -167,7 +169,7 @@ def plan_go (m : Mty) : IO Bool := do {
             (found_at_row o "fix the tests too" 21)) 5000;
     let o2 <- Mty.output m;
     let b <- Check.report "revise with a note fills the input box"
-        (String.contains (Output.stripped o2) "fix the tests too");
+        (visible o2 "fix the tests too");
     let c <- Check.report "the plan dialog is gone after revise" (not_found o2 "Plan ready");
     let d <- Check.report "the note sits on the input row"
         (found_at_row o2 "fix the tests too" 21);
