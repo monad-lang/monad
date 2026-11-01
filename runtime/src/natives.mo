@@ -26,9 +26,13 @@
 ///   emit.mo imports THIS module, so the dependency can't be cyclic).
 ///   `alloc_constructor`/`monad_set_field` are callable symbols, so
 ///   generated IR marshals `List`/`Option` exactly like user code.
-/// - All monad numbers are unboxed i64s, and the reference U8/U64 ops
-///   apply NO width mask (core_native.rs's own doc comment notes this
-///   known gap), so plain i64 arithmetic IS the matching semantics.
+/// - All monad numbers are unboxed i64s. The reference masks every
+///   width in and out of each native (`int_binop_width`/
+///   `int_cmp_width`, core_native.rs) and compares `U64` unsigned
+///   (`uint_cmp`); the emitters here are being brought to that same
+///   ledger width by width (`u64_lt`/`u64_gt` are the first), and the
+///   still-plain narrow-width emitters are correct only for the
+///   canonical (parse-time validated) payloads the compiler produces.
 /// - `monad_string_length` (C, already declared in
 ///   `runtime_declarations`) is the NUL-terminated strlen.
 use llvm::ir {LLVMFunction, LLVMInstruction, LLVMValue, ParamPair, mk}
@@ -43,6 +47,7 @@ use init::shared {Shared}
 open LLVMType {i1_, i32_, i8_, i64_, ptr}
 open LLVMValue {
   add, alloc_constructor, and_, call, icmp_eq, icmp_ne, icmp_sgt, icmp_slt,
+  icmp_ult, icmp_ugt,
   int_, inttoptr, load, lshr_, mul, or_, parm_, phi, sdiv, sext, shl_, sub,
   trunc, udiv, urem, var_, xor_, zext,
 }
@@ -290,19 +295,19 @@ def emit_u8_gt : LLVMFunction := emit_icmp_native "monad_u8_gt" (icmp_sgt (parm_
 
 def emit_u64_eq : LLVMFunction := emit_icmp_native "monad_u64_eq" (icmp_eq (parm_ 0) (parm_ 1))
 
-/// `monad_u64_lt/gt` (wired `bool_result`): SIGNED `slt`/`sgt` on the i64
-/// payload, mirroring the reference exactly. `u64_lt`/`u64_gt` are in the
-/// same generic `int_cmp` group as every other width's comparisons
-/// (`core_native.rs:217-222`, `|a, b| a < b` on `i64`), so the reference
-/// applies NO mask and NO unsigned reinterpretation -- the same rule
-/// `emit_u8_lt`/`emit_u8_gt` follow. Worth stating plainly rather than
-/// leaving implied: this is NOT true unsigned ordering for values at or
-/// above 2^63, and that is a property of the reference being mirrored,
-/// not an oversight here. `U64` is the only width where the distinction
-/// can arise at all, since masking is a no-op at 64 bits (the reference's
-/// own comment records the missing-mask bug for I8/I16/I32/U8/U16).
-def emit_u64_lt : LLVMFunction := emit_icmp_native "monad_u64_lt" (icmp_slt (parm_ 0) (parm_ 1))
-def emit_u64_gt : LLVMFunction := emit_icmp_native "monad_u64_gt" (icmp_sgt (parm_ 0) (parm_ 1))
+/// `monad_u64_lt/gt` (wired `bool_result`): UNSIGNED `ult`/`ugt` on the
+/// i64 payload. This is the one width where signedness changes the
+/// compare's answer: a `U64` at or above 2^63 is carried as a negative
+/// i64, and the old signed `slt`/`sgt` (which mirrored the reference's
+/// then-generic `int_cmp` group) flipped every such comparison. The
+/// reference now routes `u64_lt`/`u64_gt` through `uint_cmp`
+/// (`core_native.rs`), and these emitters match it; `U64` is also the
+/// only width where masking cannot rescue a signed compare, since a
+/// mask is a no-op at 64 bits. The narrower unsigned widths keep their
+/// signed `slt`/`sgt` emitters for now: their canonical payloads are
+/// non-negative, so signed and unsigned agree there.
+def emit_u64_lt : LLVMFunction := emit_icmp_native "monad_u64_lt" (icmp_ult (parm_ 0) (parm_ 1))
+def emit_u64_gt : LLVMFunction := emit_icmp_native "monad_u64_gt" (icmp_ugt (parm_ 0) (parm_ 1))
 
 /// `monad_u64_add/sub/mul` (wired `passthrough`): plain i64 wrapping
 /// arithmetic, matching the reference exactly -- `core_native.rs`

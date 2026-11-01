@@ -197,17 +197,31 @@ pub fn exec_native(
   natives: &NativeTable,
 ) -> Result<Value, CoreEvalError> {
   match name {
-    "i8_add" | "i16_add" | "i32_add" | "i64_add" | "u8_add" | "u16_add" | "u64_add" => {
-      int_binop(args, |a, b| a.wrapping_add(b))
+    // Every integer family routes through the width-correct helpers
+    // (`int_binop_width`/`int_div_width`/`int_cmp_width`): operands are
+    // masked to their width's canonical range before the op, and the
+    // result is masked and tagged with the op's own width — the second
+    // gate of the canonical-payload invariant, after parse-time range
+    // validation. `I8.add 100i8 100i8` now equals `-56i8` (the live bug
+    // this fixes, for every width at once); the old `U32`-only special
+    // case was the template and is now just one more instance of these
+    // generic groups (true-numeric-types.md 2.1).
+    "i8_add" | "i16_add" | "i32_add" | "i64_add" | "u8_add" | "u16_add" | "u32_add" | "u64_add" => {
+      int_binop_width(args, native_int_suffix(name), i64::wrapping_add)
     }
-    "i8_sub" | "i16_sub" | "i32_sub" | "i64_sub" | "u8_sub" | "u16_sub" | "u64_sub" => {
-      int_binop(args, |a, b| a.wrapping_sub(b))
+    "i8_sub" | "i16_sub" | "i32_sub" | "i64_sub" | "u8_sub" | "u16_sub" | "u32_sub" | "u64_sub" => {
+      int_binop_width(args, native_int_suffix(name), i64::wrapping_sub)
     }
-    "i8_mul" | "i16_mul" | "i32_mul" | "i64_mul" | "u8_mul" | "u16_mul" | "u64_mul" => {
-      int_binop(args, |a, b| a.wrapping_mul(b))
+    "i8_mul" | "i16_mul" | "i32_mul" | "i64_mul" | "u8_mul" | "u16_mul" | "u32_mul" | "u64_mul" => {
+      int_binop_width(args, native_int_suffix(name), i64::wrapping_mul)
     }
-    "i8_div" | "i16_div" | "i32_div" | "i64_div" | "u8_div" | "u16_div" => {
-      int_binop(args, |a, b| if b == 0 { 0 } else { a.wrapping_div(b) })
+    // Division: signed `wrapping_div` for the `I*` widths; `U8`/`U16`/
+    // `U32` masked operands are non-negative, so the signed op is also
+    // their unsigned division. A zero divisor yields 0 uniformly (ledger
+    // 2.4) — `u32_div` used to hard-error here while every other width
+    // already returned 0.
+    "i8_div" | "i16_div" | "i32_div" | "i64_div" | "u8_div" | "u16_div" | "u32_div" => {
+      int_div_width(args, native_int_suffix(name))
     }
     // `U64.div`/`U64.mod` are UNSIGNED, as their names say. They used to
     // share the signed `int_binop` path, and the consequence was not a
@@ -228,33 +242,27 @@ pub fn exec_native(
     // 45443ms of a 266178ms self-compile purely from scanning that chain.
     "u64_div" => uint_binop(args, |a, b| if b == 0 { 0 } else { a.wrapping_div(b) }),
     "u64_mod" => uint_binop(args, |a, b| if b == 0 { 0 } else { a.wrapping_rem(b) }),
-    "u64_xor" => int_binop(args, |a, b| a ^ b),
-    "i8_eq" | "i16_eq" | "i32_eq" | "i64_eq" | "u8_eq" | "u16_eq" | "u64_eq" => {
-      int_cmp(args, natives, |a, b| a == b)
+    // Same unsigned rule for `U64` comparison: a payload near `u64::MAX`
+    // is a negative `i64`, and a signed compare would flip the answer —
+    // the interpreter half of the `u64_lt`/`u64_gt` fix whose codegen
+    // half (`icmp_ult`/`icmp_ugt`) already existed.
+    "u64_lt" => uint_cmp(args, natives, |a, b| a < b),
+    "u64_gt" => uint_cmp(args, natives, |a, b| a > b),
+    // Bit-identical either way; routed width-correct only so the result
+    // is tagged `U64` like every other `U64` native (it used to come
+    // back tagged `I64`, against `U64.xor`'s own declared type).
+    "u64_xor" => int_binop_width(args, NumSuffix::U64, |a, b| a ^ b),
+    "i8_eq" | "i16_eq" | "i32_eq" | "i64_eq" | "u8_eq" | "u16_eq" | "u32_eq" | "u64_eq" => {
+      int_cmp_width(args, natives, native_int_suffix(name), |a, b| a == b)
     }
-    "i8_lt" | "i16_lt" | "i32_lt" | "i64_lt" | "u8_lt" | "u16_lt" | "u64_lt" => {
-      int_cmp(args, natives, |a, b| a < b)
+    "i8_lt" | "i16_lt" | "i32_lt" | "i64_lt" | "u8_lt" | "u16_lt" | "u32_lt" => {
+      int_cmp_width(args, natives, native_int_suffix(name), |a, b| a < b)
     }
-    "i8_gt" | "i16_gt" | "i32_gt" | "i64_gt" | "u8_gt" | "u16_gt" | "u64_gt" => {
-      int_cmp(args, natives, |a, b| a > b)
+    "i8_gt" | "i16_gt" | "i32_gt" | "i64_gt" | "u8_gt" | "u16_gt" | "u32_gt" => {
+      int_cmp_width(args, natives, native_int_suffix(name), |a, b| a > b)
     }
-    // `U32` is pulled out of the generic groups above and given
-    // width-correct treatment (mask to 32 bits before AND after each
-    // op) via `int_binop_width`/`int_div_width`/`int_cmp_width` — see
-    // those helpers' doc comments. The same missing-width-mask bug
-    // affects `I8`/`I16`/`I32`/`U8`/`U16` above too (confirmed via a
-    // live repro: `I8.add 100i8 100i8` compared against `-56i8` reports
-    // NOT EQUAL instead of wrapping+comparing correctly) — fixing those
-    // is a larger, separable change, tracked as a follow-up rather than
-    // done here. `U32` needed fixing now because SHA-256 depends on
-    // correct mod-2^32 wraparound.
-    "u32_add" => int_binop_width(args, NumSuffix::U32, i64::wrapping_add),
-    "u32_sub" => int_binop_width(args, NumSuffix::U32, i64::wrapping_sub),
-    "u32_mul" => int_binop_width(args, NumSuffix::U32, i64::wrapping_mul),
-    "u32_div" => int_div_width(args, NumSuffix::U32),
-    "u32_eq" => int_cmp_width(args, natives, NumSuffix::U32, |a, b| a == b),
-    "u32_lt" => int_cmp_width(args, natives, NumSuffix::U32, |a, b| a < b),
-    "u32_gt" => int_cmp_width(args, natives, NumSuffix::U32, |a, b| a > b),
+    // `U32` bitwise/shift ops have no siblings at other widths yet;
+    // they keep their own arms (masked like everything else).
     "u32_and" => int_binop_width(args, NumSuffix::U32, |a, b| a & b),
     "u32_or" => int_binop_width(args, NumSuffix::U32, |a, b| a | b),
     "u32_xor" => int_binop_width(args, NumSuffix::U32, |a, b| a ^ b),
@@ -263,10 +271,14 @@ pub fn exec_native(
     "u8_to_u32" => int_to_int(args, NumSuffix::U32),
     "u32_to_u8" => int_to_int(args, NumSuffix::U8),
     "i64_to_u32" => int_to_int(args, NumSuffix::U32),
-    "f32_add" | "f64_add" => float_binop(args, |a, b| a + b),
-    "f32_sub" | "f64_sub" => float_binop(args, |a, b| a - b),
-    "f32_mul" | "f64_mul" => float_binop(args, |a, b| a * b),
-    "f32_div" | "f64_div" => float_binop(args, |a, b| a / b),
+    // Floats: an `F32` op computes in f32 (operands already carry the
+    // f32-rounded payload; the result is rounded back through
+    // `(v as f32) as f64`) and tags `F32` — the old path always computed
+    // and tagged f64, so `0.1f32 + 0.2f32` reported the f64 sum.
+    "f32_add" | "f64_add" => float_binop(args, native_float_suffix(name), |a, b| a + b),
+    "f32_sub" | "f64_sub" => float_binop(args, native_float_suffix(name), |a, b| a - b),
+    "f32_mul" | "f64_mul" => float_binop(args, native_float_suffix(name), |a, b| a * b),
+    "f32_div" | "f64_div" => float_binop(args, native_float_suffix(name), |a, b| a / b),
     "f32_eq" | "f64_eq" => float_cmp(args, natives, |a, b| a == b),
     "f32_lt" | "f64_lt" => float_cmp(args, natives, |a, b| a < b),
     "f32_gt" | "f64_gt" => float_cmp(args, natives, |a, b| a > b),
@@ -289,7 +301,11 @@ pub fn exec_native(
     // which the compiled backend emits as trunc+sext.
     "i32_to_i64" => int_to_int(args, NumSuffix::I64),
     "i64_to_i32" => int_to_int(args, NumSuffix::I32),
-    "f32_to_string" | "f64_to_string" => float_to_string(args),
+    // `F32.to_string` prints the payload's f32 value (shortest-round-trip,
+    // like the C runtime's formatter) — the old path printed the raw f64
+    // payload for both widths.
+    "f32_to_string" => float_to_string(args, NumSuffix::F32),
+    "f64_to_string" => float_to_string(args, NumSuffix::F64),
     // `f64_of_string` is the one F64 native with no F32 twin and no
     // `F64`-typed result: it is the decimal -> bit-pattern conversion the
     // COMPILER calls to lower a float literal (`lang/codegen/emit.mo`'s
@@ -512,12 +528,40 @@ fn make_option(natives: &NativeTable, v: Option<Value>) -> Result<Value, CoreEva
   }
 }
 
-/// `int_binop` for operations whose operands are genuinely unsigned: the
-/// raw `i64` payload is reinterpreted as `u64`, the operation runs there,
-/// and the result is reinterpreted back. Only the operations where signedness
-/// changes the ANSWER need this -- `add`/`sub`/`mul`/`xor` are bit-identical
-/// either way, and `beq` compares bit patterns, which is why the `U64`
-/// variants of those can keep sharing `int_binop`.
+/// The width of an integer native, spelled as the first `_`-separated
+/// segment of its name (`i8_add` -> `I8`, `u64_lt` -> `U64`) — what lets
+/// the generic dispatch groups stay one arm per OPERATION while the
+/// width-correct helpers get each native's own suffix.
+fn native_int_suffix(name: &str) -> NumSuffix {
+  match name.split('_').next().unwrap_or("") {
+    "i8" => NumSuffix::I8,
+    "i16" => NumSuffix::I16,
+    "i32" => NumSuffix::I32,
+    "i64" => NumSuffix::I64,
+    "u8" => NumSuffix::U8,
+    "u16" => NumSuffix::U16,
+    "u32" => NumSuffix::U32,
+    "u64" => NumSuffix::U64,
+    _ => NumSuffix::I64,
+  }
+}
+
+/// Same for the two float widths (`f32_add` -> `F32`, `f64_div` ->
+/// `F64`).
+fn native_float_suffix(name: &str) -> NumSuffix {
+  if name.starts_with("f32") {
+    NumSuffix::F32
+  } else {
+    NumSuffix::F64
+  }
+}
+
+/// For operations whose operands are genuinely UNSIGNED (`u64_div`/
+/// `u64_mod`): the raw `i64` payload is reinterpreted as `u64`, the
+/// operation runs there, and the result is reinterpreted back. Only the
+/// operations where signedness changes the ANSWER need this —
+/// `add`/`sub`/`mul`/`xor` are bit-identical either way, and `beq`
+/// compares bit patterns.
 fn uint_binop(args: &[Value], op: fn(u64, u64) -> u64) -> Result<Value, CoreEvalError> {
   if args.len() < 2 {
     return Err(CoreEvalError::NativeArgError(
@@ -529,30 +573,36 @@ fn uint_binop(args: &[Value], op: fn(u64, u64) -> u64) -> Result<Value, CoreEval
   Ok(Value::Lit(IrLit::Num(op(a, b) as i64, NumSuffix::U64)))
 }
 
-fn int_binop(args: &[Value], op: fn(i64, i64) -> i64) -> Result<Value, CoreEvalError> {
+/// The comparison twin of `uint_binop` (`u64_lt`/`u64_gt`): a `U64`
+/// value near `u64::MAX` is a negative `i64` payload, so the compare
+/// must run on the `u64` reinterpretation. `u8`/`u16`/`u32` comparisons
+/// do not need this — their masked payloads are non-negative, so the
+/// signed compare in `int_cmp_width` already answers as an unsigned one.
+fn uint_cmp(
+  args: &[Value],
+  natives: &NativeTable,
+  op: fn(u64, u64) -> bool,
+) -> Result<Value, CoreEvalError> {
   if args.len() < 2 {
     return Err(CoreEvalError::NativeArgError(
-      "int binop needs 2 args".into(),
+      "uint cmp needs 2 args".into(),
     ));
   }
-  let a = extract_int(&args[0])?;
-  let b = extract_int(&args[1])?;
-  Ok(Value::Lit(IrLit::Num(op(a, b), NumSuffix::I64)))
+  let a = extract_int(&args[0])? as u64;
+  let b = extract_int(&args[1])? as u64;
+  make_bool(natives, op(a, b))
 }
 
 /// Truncate/reinterpret `v`'s low bits to the Rust integer type matching
 /// `suffix`, then sign/zero-extend back to `i64` — i.e. project `v` onto
-/// its width's canonical range. Used to make width-specific natives
-/// (`u32_add` etc., unlike the generic, unmasked `int_binop` above)
-/// actually correct: `int_binop` computes on the raw, unmasked `i64`
-/// payload and always tags the result `NumSuffix::I64` regardless of the
-/// real operand width, so e.g. two `U32` values that are congruent mod
-/// 2^32 but carry different raw `i64` representations compare unequal.
-/// Confirmed live for `I8`: `I8.add 100i8 100i8` compared against the
-/// wrapped `-56i8` reports not-equal instead of wrapping+comparing
-/// correctly first. `U32` is fixed via this helper (see `int_binop_width`
-/// /`int_div_width`/`int_cmp_width` below); the same bug in
-/// `I8`/`I16`/`I32`/`U8`/`U16` is a separate, out-of-scope follow-up.
+/// its width's canonical range. This is what makes the width-specific
+/// natives correct: without it, ops computed on the raw, unmasked `i64`
+/// payload and always tagged the result `I64` regardless of the real
+/// operand width, so e.g. two `U32` values congruent mod 2^32 but with
+/// different raw `i64` representations compared unequal, and
+/// `I8.add 100i8 100i8` compared against the wrapped `-56i8` reported
+/// not-equal (the live bug that motivated the width-correct routing of
+/// every integer family; see `int_binop_width` below).
 fn mask_to_suffix(v: i64, suffix: NumSuffix) -> i64 {
   match suffix {
     NumSuffix::I8 => v as i8 as i64,
@@ -567,14 +617,14 @@ fn mask_to_suffix(v: i64, suffix: NumSuffix) -> i64 {
   }
 }
 
-/// Width-correct counterpart to `int_binop`: masks both operands to
-/// `suffix`'s canonical range before calling `op`, and masks the result
-/// again before tagging it with `suffix` (instead of always `I64`).
-/// Since both operands are pre-masked, `op` itself can stay a plain
-/// `i64` closure — e.g. a masked `U32` sum is at most just under 2^33,
-/// nowhere near `i64`'s own range, so no separate `u32`-typed closure is
-/// needed even for `wrapping_shl`/`wrapping_shr` (the pre-masked operand
-/// is always non-negative, so plain `i64` shifts behave correctly).
+/// Width-correct integer binop: masks both operands to `suffix`'s
+/// canonical range before calling `op`, and masks the result again
+/// before tagging it with `suffix`. Since both operands are pre-masked,
+/// `op` itself can stay a plain `i64` closure — e.g. a masked `U32` sum
+/// is at most just under 2^33, nowhere near `i64`'s own range, so no
+/// separate `u32`-typed closure is needed even for `wrapping_shl`/
+/// `wrapping_shr` (the pre-masked operand is always non-negative, so
+/// plain `i64` shifts behave correctly).
 fn int_binop_width(
   args: &[Value],
   suffix: NumSuffix,
@@ -593,27 +643,25 @@ fn int_binop_width(
   )))
 }
 
-/// Width-correct division: masks operands, zero-checks the (masked)
-/// divisor, then masks the result. See `int_binop_width`'s doc comment.
+/// Width-correct division: masks operands, yields 0 for a zero divisor
+/// (the ledger's unified convention — what `i64_div` always did, while
+/// `u32_div` used to hard-error), then masks the result. The masked
+/// operands of `U8`/`U16`/`U32` are non-negative, so `wrapping_div` is
+/// their unsigned division too. See `int_binop_width`'s doc comment.
 fn int_div_width(args: &[Value], suffix: NumSuffix) -> Result<Value, CoreEvalError> {
   if args.len() < 2 {
     return Err(CoreEvalError::NativeArgError("int div needs 2 args".into()));
   }
   let a = mask_to_suffix(extract_int(&args[0])?, suffix);
   let b = mask_to_suffix(extract_int(&args[1])?, suffix);
-  if b == 0 {
-    return Err(CoreEvalError::NativeArgError("division by zero".into()));
-  }
-  Ok(Value::Lit(IrLit::Num(
-    mask_to_suffix(a.wrapping_div(b), suffix),
-    suffix,
-  )))
+  let v = if b == 0 { 0 } else { a.wrapping_div(b) };
+  Ok(Value::Lit(IrLit::Num(mask_to_suffix(v, suffix), suffix)))
 }
 
-/// Width-correct counterpart to `int_cmp`: masks both operands to
-/// `suffix`'s canonical range before comparing. See `int_binop_width`'s
-/// doc comment for why this matters (raw, unmasked comparison is the
-/// concrete bug this fixes for `U32`).
+/// Width-correct integer comparison: masks both operands to `suffix`'s
+/// canonical range before comparing (see `int_binop_width`'s doc comment
+/// for why — the unmasked raw comparison is the concrete `U32` bug this
+/// family of helpers fixes).
 fn int_cmp_width(
   args: &[Value],
   natives: &NativeTable,
@@ -628,20 +676,17 @@ fn int_cmp_width(
   make_bool(natives, op(a, b))
 }
 
-fn int_cmp(
+/// Width-correct float binop: an `F32` op computes in f32 — the operands
+/// already carry the f32-rounded payload (parse-time `round_f32`, and
+/// every native re-rounds on the way out), the result is rounded back
+/// through `(v as f32) as f64`, and the literal is tagged `F32`. The old
+/// path always computed and tagged f64, so `0.1f32 + 0.2f32` reported
+/// the f64 sum and could never equal `0.3f32`.
+fn float_binop(
   args: &[Value],
-  natives: &NativeTable,
-  op: fn(i64, i64) -> bool,
+  suffix: NumSuffix,
+  op: fn(f64, f64) -> f64,
 ) -> Result<Value, CoreEvalError> {
-  if args.len() < 2 {
-    return Err(CoreEvalError::NativeArgError("int cmp needs 2 args".into()));
-  }
-  let a = extract_int(&args[0])?;
-  let b = extract_int(&args[1])?;
-  make_bool(natives, op(a, b))
-}
-
-fn float_binop(args: &[Value], op: fn(f64, f64) -> f64) -> Result<Value, CoreEvalError> {
   if args.len() < 2 {
     return Err(CoreEvalError::NativeArgError(
       "float binop needs 2 args".into(),
@@ -649,10 +694,13 @@ fn float_binop(args: &[Value], op: fn(f64, f64) -> f64) -> Result<Value, CoreEva
   }
   let a = extract_float(&args[0])?;
   let b = extract_float(&args[1])?;
-  Ok(Value::Lit(IrLit::Float(
-    crate::term::F64Wrap(op(a, b)),
-    NumSuffix::F64,
-  )))
+  let v = op(a, b);
+  let v = if suffix == NumSuffix::F32 {
+    v as f32 as f64
+  } else {
+    v
+  };
+  Ok(Value::Lit(IrLit::Float(crate::term::F64Wrap(v), suffix)))
 }
 
 fn float_cmp(
@@ -691,14 +739,22 @@ fn int_to_int(args: &[Value], suffix: NumSuffix) -> Result<Value, CoreEvalError>
   Ok(Value::Lit(IrLit::Num(mask_to_suffix(v, suffix), suffix)))
 }
 
-fn float_to_string(args: &[Value]) -> Result<Value, CoreEvalError> {
+/// `F32.to_string` prints the payload's f32 value (shortest-round-trip,
+/// like the C runtime's formatter — the old path printed the raw f64
+/// payload for both widths); `F64.to_string` prints the double.
+fn float_to_string(args: &[Value], suffix: NumSuffix) -> Result<Value, CoreEvalError> {
   if args.is_empty() {
     return Err(CoreEvalError::NativeArgError(
       "float_to_string needs 1 arg".into(),
     ));
   }
   let v = extract_float(&args[0])?;
-  Ok(Value::Lit(IrLit::Str(v.to_string().into())))
+  let s = if suffix == NumSuffix::F32 {
+    (v as f32).to_string()
+  } else {
+    v.to_string()
+  };
+  Ok(Value::Lit(IrLit::Str(s.into())))
 }
 
 /// The decimal -> double conversion behind `F64.bits_of_string`
@@ -3826,6 +3882,21 @@ mod tests {
     assert!(matches!(
       exec_native("i64_gt", &[int(1), int(2)], &natives).unwrap(),
       Value::Con { tag: 8, .. }
+    ));
+  }
+
+  #[test]
+  fn test_u64_cmp_is_unsigned() {
+    // u64::MAX (payload -1) vs 1: the unsigned order flips the signed
+    // answer, so a regression back to the signed compare fails this.
+    let natives = test_natives();
+    assert!(matches!(
+      exec_native("u64_lt", &[int(-1), int(1)], &natives).unwrap(),
+      Value::Con { tag: 8, .. }
+    ));
+    assert!(matches!(
+      exec_native("u64_gt", &[int(-1), int(1)], &natives).unwrap(),
+      Value::Con { tag: 7, .. }
     ));
   }
 

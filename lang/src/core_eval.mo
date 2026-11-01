@@ -389,14 +389,17 @@ def fire_or_accumulate
 // the same meaning. The reference for every semantic detail is
 // `rust/core/src/core_native.rs::exec_native` (the Rust host), and where the
 // compiled backend intentionally diverges the divergence is named here:
-//   * i8/i16/i32/u8/u16/u64 arithmetic and comparison are UNMASKED i64
-//     operations tagged `I64` (`int_binop`), exactly like the reference
-//     and the compiled backend -- the reference's own note records the
-//     missing-width-mask bug as a separate, unfixed change.
+//   * The reference (`core_native.rs`) is width-correct for every width
+//     (Phase 1 of plans/implementations/true-numeric-types.md). This
+//     evaluator's i8/i16/i32/u8/u16/u64 ARITHMETIC arms are still
+//     UNMASKED i64 operations tagged `I64` (`int_binop`) -- masking
+//     them here is Phase 2; the compiled backend has the same gap.
 //   * U32 is the one width-correct family (`int_binop_width`): mask both
 //     operands to 32 bits, apply, mask the result.
-//   * U64 division/remainder are UNSIGNED (`uint_binop`); everything else
-//     about U64 is raw i64.
+//   * U64 compares are UNSIGNED (sign-bit flip, mirroring the
+//     reference's `uint_cmp` and the emitted `icmp_ult`/`icmp_ugt`);
+//     U64 division/remainder are UNSIGNED (`uint_binop`); everything
+//     else about U64 is raw i64.
 //   * division by zero returns 0 for the generic families; U32 division
 //     is an error (`int_div_width`).
 // Floats, IO/effects (`io_pure`/`io_bind`), `Eq.rec` and raw pointers are
@@ -659,13 +662,39 @@ def native_u64_xor (args : List Value) : Result CoreEvalError Value :=
             Option.some x =>
               match value_as_i64 b {
                 Option.some y =>
-                  Result.ok (int_value (U64.to_i64 (U64.xor (I64.to_u64 x) (I64.to_u64 y))) NumSuffix.i64),
+                  Result.ok (int_value (U64.to_i64 (U64.xor (I64.to_u64 x) (I64.to_u64 y))) NumSuffix.u64),
                 Option.none => Result.err (CoreEvalError.ce_native_arg_error "expected I64 arg"),
               },
             Option.none => Result.err (CoreEvalError.ce_native_arg_error "expected I64 arg"),
           },
       },
   }
+
+/// The sign-bit flip that turns a signed i64 compare into an unsigned
+/// u64 one: XOR with 2^63 maps [0, 2^63) onto [2^63, 2^64) and back, so
+/// the SIGNED order of flipped values is the UNSIGNED order of the
+/// originals. Used instead of a direct `U64.lt`/`U64.gt` call because
+/// those are package-private to `init` (only `beq` is pub among the
+/// U64 comparisons this needs), and this file is compiler-source
+/// surface — it must stay readable by the last published nightly, which
+/// predates any visibility change.
+def u64_flip_sign_bit (x : I64) : I64 :=
+  U64.to_i64 (U64.xor (I64.to_u64 x) 0x8000000000000000u64)
+
+/// `u64_lt`: UNSIGNED — a payload at or above 2^63 is a negative i64,
+/// and the signed compare this arm used to run flipped every such
+/// comparison. Mirrors the reference's `uint_cmp` (core_native.rs) and
+/// the emitted `icmp_ult` (runtime/src/natives.mo).
+def native_u64_lt (args : List Value) : Result CoreEvalError Value :=
+  native_i64_bool_binop
+    (fn (a : I64) => fn (b : I64) => I64.lt (u64_flip_sign_bit a) (u64_flip_sign_bit b))
+    args
+
+/// `u64_gt`: the `native_u64_lt` twin.
+def native_u64_gt (args : List Value) : Result CoreEvalError Value :=
+  native_i64_bool_binop
+    (fn (a : I64) => fn (b : I64) => I64.gt (u64_flip_sign_bit a) (u64_flip_sign_bit b))
+    args
 
 // ─── String ───────────────────────────────────────────────────────────
 
@@ -1022,7 +1051,8 @@ def exec_native_by_name (s : String) (args : List Value) : Result CoreEvalError 
   else if String.beq s "u32_to_string" then native_i64_to_string (fn (x : I64) => U32.to_string (I64.to_u32 x)) args
   else if String.beq s "u32_to_u8" then native_i64_to_i64_value NumSuffix.u8 mask_u8 args
   else if String.beq s "u32_to_i64" then native_i64_to_i64_value NumSuffix.i64 mask_u32 args
-  // U64: raw i64 except the unsigned division/remainder/xor.
+  // U64: raw i64 except the unsigned division/remainder/xor and the
+  // unsigned compares below.
   else if String.beq s "u64_add" then native_i64_binop I64.add args
   else if String.beq s "u64_sub" then native_i64_binop I64.sub args
   else if String.beq s "u64_mul" then native_i64_binop I64.mul args
@@ -1030,8 +1060,8 @@ def exec_native_by_name (s : String) (args : List Value) : Result CoreEvalError 
   else if String.beq s "u64_mod" then native_u64_mod args
   else if String.beq s "u64_xor" then native_u64_xor args
   else if String.beq s "u64_eq" then native_i64_bool_binop I64.beq args
-  else if String.beq s "u64_lt" then native_i64_bool_binop I64.lt args
-  else if String.beq s "u64_gt" then native_i64_bool_binop I64.gt args
+  else if String.beq s "u64_lt" then native_u64_lt args
+  else if String.beq s "u64_gt" then native_u64_gt args
   else if String.beq s "u64_to_string" then native_i64_to_string (fn (x : I64) => U64.to_string (I64.to_u64 x)) args
   else if String.beq s "u64_to_i64" then native_i64_to_i64_value NumSuffix.i64 (fn (x : I64) => x) args
   // String
@@ -1422,6 +1452,33 @@ def test_ntv_string_eq_false : Bool :=
 #[test]
 def test_ntv_string_to_lowercase : Bool :=
   is_str (run (CoreIr.ntv 7 [str_lit "MixedCase"])) "mixedcase"
+
+#[test]
+def test_ntv_u64_lt_is_unsigned : Bool :=
+  // u64::MAX (payload -1) < 1u64 is FALSE unsigned -- the old arm ran
+  // the signed i64 compare and answered TRUE, flipping every compare
+  // that crossed 2^63. Native ids are positions in `native_specs`, so
+  // the name is looked up rather than hardcoded at a position that a
+  // mid-list insertion would silently re-point.
+  match native_id_for_name (Identifier.id "u64_lt") {
+    Option.some n =>
+      let cond : CoreIr := CoreIr.ntv n [num_lit (I64.sub 0 1), num_lit 1] in
+      let iff : CoreIr := CoreIr.match_ cond [MatchArm.arm 0 (num_lit 100), MatchArm.arm 0 (num_lit 200)] in
+      is_num (run iff) 200,
+    Option.none => false,
+  }
+
+#[test]
+def test_ntv_u64_gt_is_unsigned : Bool :=
+  // u64::MAX (payload -1) > 1u64 is TRUE unsigned -- the sign-bit twin
+  // of the test above, on the other compare direction.
+  match native_id_for_name (Identifier.id "u64_gt") {
+    Option.some n =>
+      let cond : CoreIr := CoreIr.ntv n [num_lit (I64.sub 0 1), num_lit 1] in
+      let iff : CoreIr := CoreIr.match_ cond [MatchArm.arm 0 (num_lit 100), MatchArm.arm 0 (num_lit 200)] in
+      is_num (run iff) 100,
+    Option.none => false,
+  }
 
 #[test]
 def test_not_a_function_error : Bool :=

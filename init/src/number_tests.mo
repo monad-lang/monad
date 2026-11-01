@@ -33,14 +33,18 @@
 ///   * `lt`/`gt` are asserted in both directions, so a swapped `slt`/`sgt`
 ///     operand order fails instead of passing by symmetry.
 ///
-/// One thing this file deliberately does NOT claim: true unsigned ordering.
-/// `u64_lt`/`u64_gt` are in the same generic `int_cmp` group as every
-/// other width's comparisons (`core_native.rs:217-222`, `|a, b| a < b` on
-/// the i64 payload), so the reference applies no mask and no unsigned
-/// reinterpretation, and a value at or above 2^63 therefore compares
-/// signed. That is a property of the reference being mirrored, not an
-/// oversight in the port -- and it cannot be asserted from here, because
-/// no such value is expressible as an i64-carried `U64` literal.
+/// True unsigned ordering: `u64_lt`/`u64_gt` used to sit in the generic
+/// `int_cmp` group (a signed `|a, b| a < b` on the raw i64 payload),
+/// so a value at or above 2^63 compared signed -- and it could not even
+/// be asserted from here, because no such value was expressible as an
+/// i64-carried `U64` literal. Both halves are gone: the width-correct
+/// overhaul routes `u64_lt`/`u64_gt` through an unsigned compare
+/// (`uint_cmp`, `rust/core/src/core_native.rs`), and Phase 0's parse-time
+/// work makes `0xFFFFFFFFFFFFFFFFu64` writable (the hex fold is the
+/// exact bit reinterpretation). The boundary assertions live in
+/// `number_width_tests.mo` (`U64.lt i64::MAX u64::MAX` and the
+/// `U64.div`/`U64.mod`-at-max twins, which a signed fold answers
+/// differently).
 ///
 /// `beq`, not `eq`: the class member follows the `BEq` naming convention
 /// while the native it is wired to is `u64_eq`. The distinction is real

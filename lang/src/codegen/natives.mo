@@ -349,19 +349,18 @@ def native_runtime_fn_name (attrs : List Attribute) : Option NativeWrapKind :=
             else if String.beq target "u8_div" then Option.some (NativeWrapKind.passthrough "monad_u8_div")
             else if String.beq target "u64_mod" then Option.some (NativeWrapKind.passthrough "monad_u64_mod")
             else if String.beq target "u64_div" then Option.some (NativeWrapKind.passthrough "monad_u64_div")
-            // The `U64` arithmetic half, wired 2026-09-23. Same no-mask rule
-            // as `u64_eq`/`u64_mod`/`u64_div` above -- `core_native.rs` sends
-            // add/sub/mul/xor through `int_binop`, and `U64` is already the
-            // full i64 width, so there is no mask to apply. These were the
-            // only `number::U64` members left unwired, which is what kept
-            // `bench/src/hashmap_bucket_dispatch.mo` out of the sweep.
+            // The `U64` arithmetic half, wired 2026-09-23. Raw i64 payloads
+            // with no mask -- `U64` is already the full i64 width, so the
+            // reference's width machinery (`int_binop_width`) is a no-op
+            // for it; division/remainder (above) are the genuinely
+            // unsigned arithmetic ops.
             else if String.beq target "u64_add" then Option.some (NativeWrapKind.passthrough "monad_u64_add")
             else if String.beq target "u64_sub" then Option.some (NativeWrapKind.passthrough "monad_u64_sub")
             else if String.beq target "u64_mul" then Option.some (NativeWrapKind.passthrough "monad_u64_mul")
             else if String.beq target "u64_xor" then Option.some (NativeWrapKind.passthrough "monad_u64_xor")
-            // `u64_lt`/`u64_gt` are in the same `int_cmp` group as `u64_eq`
-            // (`core_native.rs:217-222`), so they are i64-payload signed
-            // comparisons with no mask -- `bool_result`, like `u64_eq`.
+            // `u64_lt`/`u64_gt` are UNSIGNED compares: the reference routes
+            // them through `uint_cmp` (`core_native.rs`) and the runtime
+            // emits `icmp_ult`/`icmp_ugt` -- `bool_result`, like `u64_eq`.
             else if String.beq target "u64_lt" then Option.some (NativeWrapKind.bool_result "monad_u64_lt")
             else if String.beq target "u64_gt" then Option.some (NativeWrapKind.bool_result "monad_u64_gt")
             // The fixed-width unsigned family, unlike the u8 ops above:
