@@ -5,10 +5,10 @@
 #
 #   scripts/check-nightly-gate.sh
 #
-# The cases cover: the bootstrap window (nightly before the floor), the
-# strict success path, a nightly that cannot build, a nightly-built compiler
-# that cannot check itself, the explicit local opt-out, and the no-monadup
-# failure.
+# The cases cover: the bootstrap window (nightly before the floor), a floor
+# the clone cannot resolve, the strict success path, a nightly that cannot
+# build, a nightly-built compiler that cannot check itself, the explicit local
+# opt-out, and the no-monadup failure.
 set -euo pipefail
 
 root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -134,26 +134,35 @@ else
   pass
 fi
 
-# 2. The nightly is at/after the floor and builds a working compiler.
+# 2. The floor names a commit the clone cannot resolve (a depth-1 checkout of
+#    a tree whose floor is older than HEAD, mdbook.yml's try-wasm before it
+#    got a full-history checkout). The window is undecidable; the strict check
+#    decides, not the clone's shape.
+printf '0000000000000000000000000000000000000000\n' > "$work/floor-missing"
+NIGHTLY="$head_commit" MONAD_NIGHTLY_FLOOR="$work/floor-missing" \
+  run_gate 0 "floor missing from clone"
+expect_log "not in this clone" "floor missing from clone"
+
+# 3. The nightly is at/after the floor and builds a working compiler.
 NIGHTLY="$head_commit" run_gate 0 "strict success"
 expect_log "self-compile OK with the latest nightly host" "strict success"
 
-# 3. The nightly is at/after the floor but cannot compile the tree; strict
+# 4. The nightly is at/after the floor but cannot compile the tree; strict
 #    default must fail (not fall back).
 NIGHTLY="$head_commit" run_gate 1 "strict build failure" FAKE_FAIL_ONE_RUNG=1
 expect_log "last nightly must be able to build this tree" "strict build failure"
 
-# 4. The same failure with the explicit local opt-out falls back.
+# 5. The same failure with the explicit local opt-out falls back.
 NIGHTLY="$head_commit" run_gate 0 "opt-out fallback" \
   FAKE_FAIL_ONE_RUNG=1 MONAD_ALLOW_RUST_FALLBACK=1
 expect_log "Rust host fallback" "opt-out fallback"
 
-# 5. The nightly builds, but the binary it produced cannot check its own
+# 6. The nightly builds, but the binary it produced cannot check its own
 #    source (the miscompile class the old fallback accepted).
 NIGHTLY="$head_commit" run_gate 1 "built compiler check failure" FAKE_CHECK_RC=1
 expect_log "cannot check cli/src/main.mo" "built compiler check failure"
 
-# 6. No usable installer is a failure by default. `MONADUP_BIN` is the
+# 7. No usable installer is a failure by default. `MONADUP_BIN` is the
 #    explicit override; an unusable one must fail rather than silently reach
 #    for the repo stub (which would hit the network).
 bash_bin="$(command -v bash)"

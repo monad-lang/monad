@@ -17,6 +17,10 @@
 # floor to opt out. A nightly exactly AT the floor is strict: it carries the
 # requirement, so it must build the tree.
 #
+# A floor commit the clone cannot resolve (a shallow checkout, a rewritten
+# history) leaves the window undecidable; the strict check then runs anyway,
+# which can only be harder on the tree than the window would have been.
+#
 # Local use:
 #   scripts/ci-self-compile.sh [out-dir]
 #   MONAD_ALLOW_RUST_FALLBACK=1 scripts/ci-self-compile.sh   # explicit opt-out
@@ -111,21 +115,29 @@ if [ "$floor" = pending ]; then
   exit 0
 fi
 if [ -n "$floor" ]; then
-  if ! floor_full="$(git -C "$root" rev-parse --verify --quiet "$floor^{commit}")"; then
-    rust_fallback "bootstrap/nightly-floor.txt names '$floor', which is not in this clone"
-    exit 0
-  fi
-  nightly_full="$(git -C "$root" rev-parse --verify --quiet "$nightly_commit^{commit}" 2>/dev/null || true)"
-  # True exactly when the nightly PREDATES the floor. A nightly AT the floor
-  # proves the invariant, so equality is strict too (the release that carries
-  # this tree's requirement exists in that case).
-  if [ -n "$nightly_full" ] && [ "$nightly_full" != "$floor_full" ] \
-      && git -C "$root" merge-base --is-ancestor "$nightly_full" "$floor_full" 2>/dev/null; then
-    say "bootstrap window: the latest nightly ($nightly_commit) predates this tree's floor ($floor)"
-    say "the required check resumes when a nightly at or after $floor is published"
-    MONAD_HOST_BIN="$fallback_host" scripts/build-self-hosted.sh "$out"
-    say "self-compile OK with the Rust host (bootstrap window)"
-    exit 0
+  floor_full="$(git -C "$root" rev-parse --verify --quiet "$floor^{commit}" 2>/dev/null || true)"
+  if [ -z "$floor_full" ]; then
+    # Not in this clone: a depth-1 checkout of a tree whose floor is an older
+    # commit cannot resolve it. The window is then undecidable, and the
+    # required check decides below -- strict can only be harder than the
+    # window, never easier, so a tree the latest nightly cannot build still
+    # fails. (Each gate job checks out full history so the window stays
+    # decidable; see the `fetch-depth: 0` on ci.yml's and mdbook.yml's.)
+    say "bootstrap/nightly-floor.txt names '$floor', which is not in this clone"
+    say "the bootstrap window cannot be evaluated: running the required check"
+  else
+    nightly_full="$(git -C "$root" rev-parse --verify --quiet "$nightly_commit^{commit}" 2>/dev/null || true)"
+    # True exactly when the nightly PREDATES the floor. A nightly AT the floor
+    # proves the invariant, so equality is strict too (the release that carries
+    # this tree's requirement exists in that case).
+    if [ -n "$nightly_full" ] && [ "$nightly_full" != "$floor_full" ] \
+        && git -C "$root" merge-base --is-ancestor "$nightly_full" "$floor_full" 2>/dev/null; then
+      say "bootstrap window: the latest nightly ($nightly_commit) predates this tree's floor ($floor)"
+      say "the required check resumes when a nightly at or after $floor is published"
+      MONAD_HOST_BIN="$fallback_host" scripts/build-self-hosted.sh "$out"
+      say "self-compile OK with the Rust host (bootstrap window)"
+      exit 0
+    fi
   fi
 fi
 
