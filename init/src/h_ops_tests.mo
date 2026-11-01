@@ -117,3 +117,37 @@ def test_infix_add_u8 : Bool :=
 def test_infix_sub_u8 : Bool :=
     let r : U8 := 200u8 - 150u8 in
     r == 50u8
+
+/// Both operands BARE: nothing pins the instance until the annotation
+/// does. The checker reads the instance off the result position (`C :=
+/// U8` keeps `HAdd U8 U8 U8`, discards `HAdd I64 I64 I64`), retags both
+/// literals, and the wraparound proves the arithmetic itself ran at the
+/// width -- 260 in `U8` is 4, not the `I64` answer 260. The Rust
+/// reference threads the same evidence before it processes any argument
+/// (`try_resolve_class_method_inner`'s pre-argument peek); these pin that
+/// the two checkers agree on the shape.
+#[test]
+def test_infix_add_u8_bare_operands : Bool :=
+    let r : U8 := 250 + 10 in
+    r == 4u8
+
+#[test]
+def test_infix_sub_u8_bare_operands : Bool :=
+    let r : U8 := 4 - 10 in
+    r == 250u8
+
+/// The mixed case: the second operand's own suffix is NOT enough (the
+/// right operand is checked first, so the bare left one defaults to `I64`
+/// before any suffix is seen); the annotation carries the left one too.
+#[test]
+def test_infix_add_u8_bare_left_operand : Bool :=
+    let r : U8 := 5 + 1u8 in
+    r == 6u8
+
+/// A bare INT operand against a float width: the instance evidence hands
+/// it `F64`, and the literal retag re-spells the digits as a float
+/// payload (the same route `42 : F64` takes), not an `I64` truncation.
+#[test]
+def test_infix_add_f64_bare_int_operand : Bool :=
+    let r : F64 := 42 + 0.5 in
+    r == 42.5
