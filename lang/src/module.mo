@@ -3065,12 +3065,19 @@ pub def check_file_cached_from_source (cache : ModuleInfoCache) (file_path : Str
 /// outline costs nothing extra -- and it is most wanted exactly when the
 /// file does not compile. `List.empty` only when there was no located
 /// parse at all.
+///
+/// WHY THE LOCATED PARSE IS HERE. `located` is the buffer's own lowered,
+/// position-carrying declarations -- what navigation walks to find the
+/// binder a local under the cursor names. The buffer is in no module
+/// cache, so this is the only place they survive the check. Empty exactly
+/// when `ranges` is.
 pub struct RangedFileCheck {
     path : String,
     diagnostics : List Diagnostic,
     cache : ModuleInfoCache,
     ranges : List DeclRange,
     scope : Option Scope,
+    located : LocatedDecls,
 }
 
 pub def ranged_file_path (f : RangedFileCheck) : String := f.path
@@ -3082,6 +3089,8 @@ pub def ranged_file_cache (f : RangedFileCheck) : ModuleInfoCache := f.cache
 pub def ranged_file_ranges (f : RangedFileCheck) : List DeclRange := f.ranges
 
 pub def ranged_file_scope (f : RangedFileCheck) : Option Scope := f.scope
+
+pub def ranged_file_located (f : RangedFileCheck) : LocatedDecls := f.located
 
 /// The one-diagnostic result for a buffer that did not parse, at the
 /// position the parse gave up.
@@ -3097,7 +3106,7 @@ pub def ranged_file_scope (f : RangedFileCheck) : Option Scope := f.scope
 /// when a user most wants it.
 #[partial]
 def ranged_parse_failure (cache : ModuleInfoCache) (file_path : String) (source : String)
-    (ranges : List DeclRange) (e : ParseError) : RangedFileCheck :=
+    (ranges : List DeclRange) (located : LocatedDecls) (e : ParseError) : RangedFileCheck :=
     let msg : String := render_parse_error source (Option.some file_path) e in
     let loc : Location := parse_error_location source e in
     let span : SourceRange := SourceRange.mk loc loc (Option.some file_path) in
@@ -3109,8 +3118,13 @@ def ranged_parse_failure (cache : ModuleInfoCache) (file_path : String) (source 
         cache := cache,
         ranges := ranges,
         scope := no_scope,
+        located := located,
     } in
     one
+
+/// No located declarations: the strict-`fail` arm's, alongside
+/// `no_decl_ranges`.
+def no_located_decls : LocatedDecls := LocatedDecls.mk List.empty List.empty
 
 /// No declaration ranges: a buffer the strict parse rejected outright, and
 /// the empty accumulator of a range walk. Named rather than written
@@ -3145,7 +3159,7 @@ def ranged_truncation (cache : ModuleInfoCache) (file_path : String) (source : S
     (located : LocatedDecls) : RangedFileCheck :=
     let ranges : List DeclRange := decl_ranges_of_located located in
     match decls_parser_strict source {
-        ParseResult.fail e => ranged_parse_failure cache file_path source ranges e,
+        ParseResult.fail e => ranged_parse_failure cache file_path source ranges located e,
         // Unreachable in practice: `decls_skip_strict` consumes the whole
         // input or fails, so a lenient truncation implies a strict failure.
         // Kept as a stated `Option.none` rather than an invented position,
@@ -3161,6 +3175,7 @@ def ranged_truncation (cache : ModuleInfoCache) (file_path : String) (source : S
                 cache := cache,
                 ranges := ranges,
                 scope := no_scope,
+                located := located,
             } in
             one,
     }
@@ -3212,6 +3227,7 @@ def check_buffer_ranged (cache : ModuleInfoCache) (file_path : String) (source :
                 cache := out_cache,
                 ranges := decl_ranges,
                 scope := warm,
+                located := located,
             };
             return ok
         },
@@ -3229,6 +3245,7 @@ def check_buffer_ranged (cache : ModuleInfoCache) (file_path : String) (source :
                 cache := out_cache,
                 ranges := decl_ranges,
                 scope := no_scope,
+                located := located,
             };
             return err
         },
@@ -3261,7 +3278,7 @@ pub def check_file_cached_from_source_ranged (cache : ModuleInfoCache) (file_pat
     (source : String) (verbose : Bool) : IO RangedFileCheck :=
     match decls_parser_located_with_ranges source {
         ParseResult.fail e =>
-            do { return (ranged_parse_failure cache file_path source no_decl_ranges e) },
+            do { return (ranged_parse_failure cache file_path source no_decl_ranges no_located_decls e) },
         ParseResult.success rem located =>
             if String.is_empty rem
             then check_buffer_ranged cache file_path source located verbose
