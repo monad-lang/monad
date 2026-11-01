@@ -769,15 +769,25 @@ def Client.stream_finish {S : Type} (status : U16) (headers : Headers) (body_res
     Result.err e => return (Result.err e),
     Result.ok pr =>
       match pr {
-        Pair.pair s body_bytes =>
-          let body : Body := Wire.body_of body_bytes in
+        Pair.pair s rev_bytes =>
+          let body : Body := Wire.body_of (List.reverse rev_bytes) in
           let resp : Response :=
             { status := status, headers := headers, version := HttpVersion.http1_1, body := body } in
           return (Result.ok (Pair.pair s resp))
       }
   }
 
-/// Hand one decoded byte run to the callback and the accumulator. Empty runs
+/// Prepend `bytes` reversed: the streamed body accumulates newest-first, so
+/// each run costs its own length (appending copied the whole body per run).
+#[terminating]
+def Client.rev_onto (bytes : List U8) (acc : List U8) : List U8 :=
+  match bytes {
+    List.empty => acc,
+    List.cons b rest => Client.rev_onto rest (List.cons b acc)
+  }
+
+/// Hand one decoded byte run to the callback and the accumulator, which
+/// holds the body REVERSED (`stream_finish` restores the order). Empty runs
 /// are the common case at chunk boundaries (a read that completed only a
 /// size line) and are skipped rather than passed on.
 def Client.feed {S : Type} (on_bytes : S -> List U8 -> IO (Result String (Pair S Unit))) (s : S) (acc : List U8) (bytes : List U8) : IO (Result String (Pair S (List U8))) := do {
@@ -789,7 +799,7 @@ def Client.feed {S : Type} (on_bytes : S -> List U8 -> IO (Result String (Pair S
       Result.err e => return (Result.err e),
       Result.ok pr =>
         match pr {
-          Pair.pair s2 _ => return (Result.ok (Pair.pair s2 (List.append acc bytes)))
+          Pair.pair s2 _ => return (Result.ok (Pair.pair s2 (Client.rev_onto bytes acc)))
         }
     }
   }
