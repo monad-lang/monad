@@ -1,4 +1,3 @@
-mod lsp;
 mod mcp;
 
 /// The default system allocator is the wrong fit for this binary's
@@ -188,16 +187,6 @@ enum Commands {
     /// --workspace` for exactly what that covers.
     #[arg(long, default_value_t = false, conflicts_with = "inputs")]
     workspace: bool,
-    #[arg(short = 'p', long = "mote-path", value_name = "DIR")]
-    mote_path: Vec<PathBuf>,
-    #[arg(long = "manifest-path", value_name = "PATH")]
-    manifest_path: Option<PathBuf>,
-  },
-
-  /// Start the LSP server (stdio JSON-RPC). Diagnostics and navigation
-  /// (hover/definition/documentSymbol) only — no completions, rename,
-  /// semantic tokens, or code actions yet (see `lsp` module docs).
-  Lsp {
     #[arg(short = 'p', long = "mote-path", value_name = "DIR")]
     mote_path: Vec<PathBuf>,
     #[arg(long = "manifest-path", value_name = "PATH")]
@@ -747,11 +736,7 @@ pub(crate) fn identifier_at(source: &str, line: u32, col: usize) -> Option<(Stri
 /// first (the common case: cursor on a bare `add`), then "declared name
 /// ends with `.name`" as a fallback for a qualified reference (`List.map`
 /// typed at the call site resolving to a symbol whose own recorded name
-/// already includes a module prefix). Pure lookup, no I/O — shared by the
-/// disk-based CLI path (`find_symbol_in_file`) and the LSP server's
-/// in-memory-buffer path (`lsp::hover`/`lsp::definition`, which computes
-/// its own symbol list via `symbols_from_source` instead of reading the
-/// file back off disk).
+/// already includes a module prefix). Pure lookup, no I/O.
 pub(crate) fn find_symbol_by_name<'a>(
   symbols: &'a [SymbolInfo],
   name: &str,
@@ -765,9 +750,7 @@ pub(crate) fn find_symbol_by_name<'a>(
 
 /// Disk-reading convenience wrapper: `file`'s own symbol index (via
 /// `symbols_for_files`, same as the `symbols` command) — the "local"
-/// input to `resolve_symbol` below for the disk-based CLI/MCP paths (the
-/// LSP server computes its own equivalent from the in-memory buffer via
-/// `symbols_from_source` instead of reading the file back off disk).
+/// input to `resolve_symbol` below for the disk-based CLI/MCP paths.
 pub(crate) fn symbols_of_file(file: &Path, mote_path: Vec<PathBuf>) -> Vec<SymbolInfo> {
   symbols_for_files(vec![file.to_path_buf()], mote_path)
     .ok()
@@ -790,12 +773,8 @@ pub(crate) fn symbols_of_file(file: &Path, mote_path: Vec<PathBuf>) -> Vec<Symbo
 /// `Location`/URI in their response.
 ///
 /// No caching: a miss re-walks and re-type-checks every `mote_path`
-/// directory via `symbols_for_files`. Matches this server's existing "no
-/// caching anywhere yet" reality (see e.g. `lsp.rs`'s own "no debounce"
-/// note) — an acceptable v1 tradeoff, not an oversight;
-/// `plans/library-ideas/language-server.md`'s "Performance
-/// Considerations" section already flags workspace-symbol caching as a
-/// known future optimization, not a new gap introduced here.
+/// directory via `symbols_for_files` — an acceptable tradeoff for the
+/// one-shot CLI and MCP paths.
 pub(crate) fn resolve_symbol(
   name: &str,
   local_file: &Path,
@@ -1114,17 +1093,6 @@ fn execute(command: Commands) -> Result<(), String> {
       augment_mote_paths(&mut mote_path, manifest_path.as_ref());
       let inputs = if workspace { mote_path.clone() } else { inputs };
       let result = run_organize_imports(inputs, write, mote_path);
-      if let Err(ref e) = result {
-        eprintln!("error: {e}");
-      }
-      result
-    }
-    Commands::Lsp {
-      mut mote_path,
-      manifest_path,
-    } => {
-      augment_mote_paths(&mut mote_path, manifest_path.as_ref());
-      let result = lsp::run(mote_path);
       if let Err(ref e) = result {
         eprintln!("error: {e}");
       }

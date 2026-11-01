@@ -5,9 +5,8 @@
 //! This is the MCP analog of Phase 0 in
 //! `plans/library-ideas/language-server.md` ("ship structured CLI tools
 //! first, reuse everywhere") — every tool here is a thin wrapper over the
-//! same `monad_core` entry points the CLI and [`crate::lsp`] already call,
-//! so agent clients speaking MCP get identical results to shelling out to
-//! the CLI or driving the LSP server.
+//! same `monad_core` entry points the CLI already calls, so agent clients
+//! speaking MCP get identical results to shelling out to the CLI.
 //!
 //! `run` is deliberately NOT exposed as a tool: `monad_core::run` prints
 //! directly to stdout/stderr and returns `Result<(), String>`, and its
@@ -361,8 +360,7 @@ fn resolve_inputs(arguments: &Value, mote_path: &[PathBuf]) -> Vec<PathBuf> {
 }
 
 /// Shared `file`/`line`/`col` argument parsing for `hover`/`definition` —
-/// same 1-indexed convention as `monad hover`/`monad definition` and the
-/// LSP server's own position handling.
+/// same 1-indexed convention as `monad hover`/`monad definition`.
 fn parse_position_args(arguments: &Value) -> Result<(PathBuf, u32, usize), String> {
   let file = arguments
     .get("file")
