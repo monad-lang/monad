@@ -30,7 +30,7 @@ monad/
 ├── eval/              # The shared evaluator: `monad eval`, `monad repl`, and /try's engine
 ├── init/              # Pure, portable core mote (prelude, IO type, parser) — no deps
 ├── std/               # OS-specific side effects (io, process, path, map, test, ...)
-├── motes/             # Monad packages (json, lsp, clap, toolkit, shuttle, mcp_client, ...)
+├── motes/             # Monad packages (json, lsp, clap, toolkit, fmt, shuttle, mcp_client, ...)
 ├── examples/          # Example programs (not a mote — no manifest)
 ├── bench/             # Standalone .mo micro-benchmarks, #[test]-driven (not swept by check)
 ├── slow_tests/        # Real tests too slow for every-commit sweeps (not swept by check)
