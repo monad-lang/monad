@@ -218,7 +218,18 @@ def any_term_has_bound_var (ts : List Term) : Bool :=
     }
 
 /// Does `t` mention a type variable that is still UNINSTANTIATED -- a name
-/// `locals` skolemized, or a name nothing in `scope` binds?
+/// nothing in `scope` binds?
+///
+/// A name `locals` binds is a SKOLEM: the def's own type parameter (or a
+/// local the term is legitimately written against). Comparing `A` with `A`
+/// is exactly what a generic def's body check is for, so a skolem does not
+/// make the comparison unfair and must NOT skip it (measured 2026-11-01:
+/// with skolems counted, `match x { dpair a p => third b a p }` declared
+/// `: Nat` is accepted although `third` returns `Path A a b`, and every
+/// generic proof in `proofs/` is therefore unchecked at the def boundary).
+/// The name that DOES make it unfair is a free reference nothing binds: a
+/// callee's type variable that instantiating a cross-def reference did not
+/// substitute away (`empty_arities` inferring `HashMap String V`).
 #[terminating]
 def mentions_uninstantiated_typevar (t : Term) (scope : Scope) (locals : LocalScope) : Bool :=
     match t {
@@ -227,7 +238,7 @@ def mentions_uninstantiated_typevar (t : Term) (scope : Scope) (locals : LocalSc
                 match dbg {
                     DebugName.named nm =>
                         match scope_find_local nm locals {
-                            Option.some _ => true,
+                            Option.some _ => false,
                             Option.none =>
                                 match scope_resolve_name (NameRef.nid nm) scope empty_locals {
                                     Result.ok _ => false,

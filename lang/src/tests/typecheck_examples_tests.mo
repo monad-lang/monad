@@ -160,6 +160,22 @@ def test_typecheck_dependent_pair_case_split : Bool :=
 def test_typecheck_dependent_pair_rejects_wrong_arm : Bool :=
     not (typecheck_source (dependent_pair_source "b"))
 
+/// A body whose type mentions the def's OWN type variables is compared, not
+/// skipped (measured 2026-11-01): `mentions_uninstantiated_typevar` used to
+/// treat every skolemized local as uninstantiated, so `x : A` against `B` was
+/// accepted. That skip is what left every generic proof in `proofs/`
+/// unchecked at the def boundary.
+#[test]
+def test_typecheck_rejects_a_generic_body_of_the_wrong_type : Bool :=
+    not (typecheck_source "def bad (A : Type) (B : Type) (x : A) : B := x")
+
+/// The same body when the types DO agree stays accepted -- the pin above
+/// must not be a rule that rejects every generic body.
+#[test]
+def test_typecheck_accepts_a_generic_body_of_the_right_type : Bool :=
+    typecheck_source "def good (A : Type) (x : A) : A := x"
+
+
 // --- signature-driven application typing (`ScopeData.def_sigs`,
 // `try_type_check_def_call`, lang/typecheck/infer.mo) -- regression
 // tests for the self-hosted checker's call-typing gaps, each pinned to
