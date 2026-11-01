@@ -554,7 +554,7 @@ def show_instance (ins : Instance) : String := match ins {
 def show_infix_decl (op : Operator) (path : NamePath) (vis : Visibility) : String :=
     let op_str := show_operator op in
     let path_str := show_name_path path in
-    let op_part := String.concat (show_vis_prefix vis) (String.concat "infix: " op_str) in
+    let op_part := String.concat (show_vis_prefix vis) (String.concat "infix (" (String.concat op_str ")")) in
     let eq_part := String.concat " := " path_str in
     String.concat op_part eq_part
 
@@ -987,7 +987,7 @@ def test_show_decl_scoped_open : Bool :=
 #[test]
 def test_show_decl_infix : Bool :=
     let d := Decl.infix_d (Operator.mk ">>=") (NamePath.mk (List.cons (Identifier.id "Monad") (List.cons (Identifier.id "bind") List.empty))) Visibility.package_private in
-    show_decl d == "infix: >>= := Monad.bind"
+    show_decl d == "infix (>>=) := Monad.bind"
 
 #[test]
 def test_show_decl_def : Bool :=

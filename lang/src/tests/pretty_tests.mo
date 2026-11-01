@@ -353,7 +353,7 @@ def test_show_decl_infix : Bool :=
     let path : NamePath := NamePath.mk (List.cons (Identifier.id "append") List.empty) in
     let decl : Decl := Decl.infix_d op path Visibility.package_private in
     let result : String := show_decl decl in
-    String.beq result "infix: ++ := append"
+    String.beq result "infix (++) := append"
 
 #[test]
 def test_show_decl_use : Bool :=

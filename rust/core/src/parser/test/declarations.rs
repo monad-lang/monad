@@ -1349,6 +1349,15 @@ fn test_visibility_infix() {
 }
 
 #[test]
+fn test_infix_rejects_precedence_clause() {
+  // Precedence comes only from the hardcoded operator table. The `infix:N`
+  // spelling was accepted (and discarded) by the self-hosted grammar alone;
+  // it is not part of the language, and both parsers must reject it.
+  assert!(infix_parser(r#"infix:5 (++) := myConcat"#.into()).is_err());
+  assert!(infix_parser(r#"infix (++) := myConcat"#.into()).is_ok());
+}
+
+#[test]
 fn test_visibility_pub_priv_is_parse_error() {
   // Only one visibility keyword is allowed.
   assert!(

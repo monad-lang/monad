@@ -332,7 +332,8 @@ Operators (precedence low→high): `|>`/`<|` (5), `>>=` (10), `<*>` (15),
 `<|>` (20), `||` (25), `&&` (30), `==`/`!=`/`<=`/`>=` (40), `++` (50),
 `>>`/`<<` (60), `+`/`-` (65), `*`/`/` (70), `.` (12, right; also path
 concatenation).
-Declare with `infix:13 (>>=) := Monad.bind`. `x.f` desugars to `Type.f x`
+Declare with `infix (>>=) := Monad.bind`; precedence comes from the fixed
+table above, never from a clause in the declaration. `x.f` desugars to `Type.f x`
 (receiver type prepended); an `x.y.z` chain on a local binding is sugar for
 field access.
 

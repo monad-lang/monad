@@ -1126,11 +1126,13 @@ def open_build (path : NamePath) (filter : OpenFilter) (maybe_decl : Option Pars
 		Option.none => pd_open_d  path filter
 	}
 
-// infix [:N] (op) := path
+// infix (op) := path
 //
-// The `:N` precedence clause is genuinely optional (parsed and then
-// discarded — the resulting Decl.infix_d never records it), so it's
-// expressed with `opt` rather than a hand-rolled fail-branch fallback.
+// There is no precedence clause. Operator precedence and associativity come
+// from the hardcoded `op_table`, exactly as in the Rust host's `infix_parser`
+// (`rust/core/src/parser.rs`). An earlier self-hosted grammar accepted
+// `infix:N (op) := path` and discarded `N`; that spelling is rejected now, so
+// the two compilers agree.
 
 def infix_parser (input : String) : ParseResult ParseDecl :=
 	match vis_parser input {
@@ -1140,18 +1142,6 @@ def infix_parser (input : String) : ParseResult ParseDecl :=
 
 def infix_vis (input : String) (vis : Visibility) : ParseResult ParseDecl :=
 	match tag "infix" input {
-		success rem _ => infix_after_kw rem vis,
-		fail e => fail e
-	}
-
-def infix_precedence_clause (input : String) : ParseResult I64 :=
-	preceded_by infix_colon_tag number input
-
-def infix_colon_tag (input : String) : ParseResult String :=
-	tag ":" (skip_spaces input)
-
-def infix_after_kw (input : String) (vis : Visibility) : ParseResult ParseDecl :=
-	match opt infix_precedence_clause input {
 		success rem _ => infix_paren rem vis,
 		fail e => fail e
 	}
@@ -11146,15 +11136,14 @@ def test_infix_parser : Bool :=
         fail _ => false
     }
 
+/// `infix:N (op) := path` is not part of the language: both compilers take
+/// precedence from the hardcoded `op_table`, and the self-hosted grammar used
+/// to accept and discard `N`. Rejection is what keeps the surfaces equal.
 #[test]
-def test_infix_parser_with_precedence : Bool :=
+def test_infix_parser_rejects_precedence : Bool :=
     match infix_parser "infix:5 (++) := List.append" {
-        success rem out =>
-            match out.kind {
-                infix_d op path _vis => String.beq rem "",
-                _ => false
-            },
-        fail _ => false
+        success _ _ => false,
+        fail _ => true
     }
 
 #[test]
