@@ -467,7 +467,7 @@ def qualify_one_decl_name (mpath : ModulePath) (renames : HashMap String String)
                 Decl.instance_d (Instance.mk (Identifier.id (qualified_def_name_str mpath (bare_npath (show_identifier insname))))
                     (rename_npath renames cls) constraints args vis implicit_params defs),
         },
-    // An `infix (+) := I64.add` names its target by the SOURCE name, and
+    // An `infix (+) := HAdd.add` names its target by the SOURCE name, and
     // `resolve_infix_decls` (Stage 2) splices that name into every
     // operator call site -- AFTER this pass has run, so it would splice
     // a name nothing defines any more. Map the target here, through the

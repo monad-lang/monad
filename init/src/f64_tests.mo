@@ -17,17 +17,15 @@
 /// would pass just as well on a backend that parsed the literal to the
 /// wrong double.
 ///
-/// `+` is deliberately absent: `infix (+)` is `HAdd.add`
-/// (`init/src/prelude.mo`), whose only instance for `F64` is the generic
-/// `[Add A] HAdd A A A` forwarding instance, and BOTH checkers resolve
-/// that to the `I64` instance -- "type mismatch: `F64` vs. `I64`" -- so
-/// `1.0 + 2.0` does not check today even though `1.0 * 2.0` (a concrete
-/// `HMul F64 F64 F64`), `1.0 - 2.0` and `1.0 / 2.0` all do. That is a
-/// pre-existing instance-resolution gap in the `HAdd`/`Add` forwarding
-/// pair, not a float one (the same shape is the `__Dict_Add_A`
-/// self-recursion the registry records for `init/src/tests.mo`), and it
-/// is left visible here rather than worked around: the operators this
-/// file can exercise are exactly the ones both backends resolve.
+/// `+` used to be deliberately absent: `infix (+)` is `HAdd.add`
+/// (`init/src/prelude.mo`), which for years had no per-type instance
+/// at all -- the generic `[Add A] HAdd A A A` forwarding bridge is
+/// unkeyable by the checker's concrete-head instance table, so `+`
+/// only ever resolved through `init/src/lib.mo`'s `infix (+) :=
+/// I64.add` override, and `1.0 + 2.0` was "type mismatch: `F64` vs.
+/// `I64`". With the per-type `HAdd F64 F64 F64` instance
+/// (`init/src/number.mo`) and the override gone, `+` is exercised
+/// here like `*` is; `h_ops_tests.mo` pins the full operator story.
 
 /// The literal's own VALUE, through the parser: 0x40091EB851EB851F is the
 /// double nearest 3.14. Pinned as bits because that is exactly what the
@@ -37,6 +35,14 @@
 #[test]
 def test_f64_literal_bits_are_the_nearest_double : Bool :=
     I64.beq (F64.bits_of_string "3.14") 4614253070214989087
+
+/// `+` through the retargeted infix: `HAdd F64 F64 F64`'s instance
+/// body is the same native `F64.add` the member test above calls.
+#[test]
+def test_f64_addition_of_literals : Bool :=
+    let sum : F64 := 1.0 + 2.0 in
+    let expected : F64 := 3.0 in
+    F64.beq sum expected
 
 #[test]
 def test_f64_multiplication_of_literals : Bool :=

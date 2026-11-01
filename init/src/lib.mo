@@ -22,8 +22,16 @@ pub use lib::clone {*}
 // `Shared` is deliberately NOT re-exported: a file that uses
 // `Shared.of` must name it, and one that never does holds no shared
 // read for the gate to recognise either way.
-
-infix (+) := I64.add
+//
+// No `infix (+)` override here: `init/src/prelude.mo`'s own
+// `infix (+) := HAdd.add` is what `+` resolves to. This line used to
+// shadow it with `infix (+) := I64.add` (the era's workaround for
+// `HAdd` having no resolvable instances -- a variable-headed bridge
+// instance is unkeyable by the checker's concrete-head lookup, so
+// `+` on anything but `I64` was a type error and `I64` needed the
+// direct spelling). With per-type `HAdd` instances in
+// `init/src/number.mo`, `+` dispatches through the class for every
+// width, exactly as `*` always has through `HMul`.
 
 class From T A {
  def from (t: T): A

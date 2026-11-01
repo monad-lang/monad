@@ -35,21 +35,40 @@ pub class HMul A B C {
 	def mul : A -> B -> C
 }
 
+/// Heterogeneous subtraction, `HMul`'s exact shape: the class carries
+/// the three type parameters, and per-type instances live in
+/// `init/src/number.mo` beside the `HMul` ones. The homogeneous `Sub`
+/// stays as it is -- the direct instances are what the retargeted
+/// `infix (-) := HSub.sub` resolves through, and the two classes are
+/// independent: no bridges, because a variable-headed
+/// `instance [Sub A] HSub A A A` is unkeyable by the concrete-head
+/// instance lookup, which is the whole reason `HAdd`'s own bridge pair
+/// never resolved a single call -- see `h_ops_tests.mo`'s header.
+pub class HSub A B C {
+	def sub : A -> B -> C
+}
+
 /// Subtraction
 pub class Sub A {
 	def sub : A -> A -> A
 }
 
+/// Heterogeneous division -- `HSub`'s exact shape, see above.
+pub class HDiv A B C {
+	def div : A -> B -> C
+}
+
 pub class Div A {
 	def div : A -> A -> A
 }
+
 pub infix (+) := HAdd.add
 
-pub infix (/) := Div.div
+pub infix (/) := HDiv.div
 
 pub infix (*) := HMul.mul
 
-pub infix (-) := Sub.sub
+pub infix (-) := HSub.sub
 
 
 pub class [Functor F] Applicative (F: Type -> Type) {

@@ -10,11 +10,13 @@
 /// target including wasm. The value is built from F64 literals, a digit
 /// table and repeated multiplication/division.
 ///
-/// WHY THE ODD SPELLING OF ADDITION: `infix (+)` resolves to `I64.add`
-/// (`init/src/lib.mo`), and `F64.add` is package-private to `init`, so
-/// `a + b` on two F64 values does not check. Addition is spelled
-/// `a - (0.0f64 - b)`; `*`, `-` and `/` dispatch through the pub
-/// `HMul`/`Sub`/`Div` instances and are what this module uses.
+/// WHY THE ODD SPELLING OF ADDITION: written when `infix (+)` still
+/// resolved to `I64.add` (`init/src/lib.mo`'s since-removed override)
+/// and `a + b` on two `F64` values did not check. `+` resolves now
+/// (`HAdd`'s per-type instances), but the spelling is kept: the
+/// subtraction form is what the digit-table verification ran against.
+/// `*`, `-` and `/` dispatch through the pub `HMul`/`HSub`/`HDiv`
+/// instances and are what this module uses.
 ///
 /// PRECISION: correctly rounded while the mantissa has at most 19
 /// significant digits and the decimal exponent is within +/-22 (each power

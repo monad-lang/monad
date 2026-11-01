@@ -25,11 +25,12 @@
 ///   * `x / 0 == 0` for every width, the ledger's unified convention --
 ///     `u32_div` used to hard-error.
 ///
-/// Calls are direct members (`I8.add`, not `+`): `infix (+)` is
-/// `HAdd.add`, whose forwarding instance both checkers currently resolve
-/// to the `I64` instance for every other carrier (see `f64_tests.mo`'s
-/// header for that pre-existing resolution gap). `==`/`<` are fine --
-/// `BEq`/`BOrd` have concrete per-width instances.
+/// Calls are direct members (`I8.add`, not `+`): that pins the width's
+/// own member arithmetic, independent of whatever the infix table
+/// dispatches `+` to. `+` resolves per-width now too (`HAdd`'s
+/// per-type instances -- `h_ops_tests.mo` pins the operator story),
+/// and `==`/`<` always did: `BEq`/`BOrd` have concrete per-width
+/// instances.
 ///
 /// Cross-checked like `number_tests.mo` and `f64_tests.mo`: the file
 /// runs under `monad-rs test` (the Rust evaluator) and, once Phase 2
