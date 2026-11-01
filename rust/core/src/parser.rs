@@ -418,6 +418,49 @@ fn num_suffix_parser<X: Clone>(input: Span<X>) -> Res<NumSuffix, X> {
   Ok((input, suffix))
 }
 
+/// The canonical-payload gate for integer literals: every literal is
+/// either in range for its suffix or a parse error — never a silently
+/// masked, non-canonical payload (the `Literal::Num`/`IrLit::Num`
+/// invariant; `mask_to_suffix` re-establishes it at every native, the
+/// parser is where it starts).
+fn int_fits_suffix(value: i64, suffix: NumSuffix) -> bool {
+  match suffix {
+    NumSuffix::I8 => (-128..=127).contains(&value),
+    NumSuffix::I16 => (-32768..=32767).contains(&value),
+    NumSuffix::I32 => (-2147483648..=2147483647).contains(&value),
+    NumSuffix::I64 => true,
+    NumSuffix::U8 => (0..=255).contains(&value),
+    NumSuffix::U16 => (0..=65535).contains(&value),
+    NumSuffix::U32 => (0..=4294967295).contains(&value),
+    // A U64 literal's payload is the bit-reinterpreted `u64` (the
+    // overflow fallback in `num_literal`); every i64 payload is a valid
+    // u64 bit pattern, so the u64 parse was already the only range
+    // check there is.
+    NumSuffix::U64 => true,
+    // Integer digits with a float suffix never reach range validation —
+    // `num_literal` routes them to a Float literal first.
+    NumSuffix::F32 | NumSuffix::F64 => true,
+  }
+}
+
+fn unsigned_suffix(suffix: NumSuffix) -> bool {
+  matches!(
+    suffix,
+    NumSuffix::U8 | NumSuffix::U16 | NumSuffix::U32 | NumSuffix::U64
+  )
+}
+
+/// An F32-tagged float payload always holds the f32-rounded value
+/// (`(v as f32) as f64`) — the float half of the canonical-payload
+/// invariant; the F32 natives and `F32.to_string` rely on it.
+fn round_f32(value: f64, suffix: NumSuffix) -> f64 {
+  if suffix == NumSuffix::F32 {
+    value as f32 as f64
+  } else {
+    value
+  }
+}
+
 /// `0xBADBEEF` / `0XFF` hex integer literals, with the same optional
 /// leading `-` and trailing numeric suffix (`0xFFu32`) as `num_literal`.
 /// Parses the digits as `u64` (not `i64`, unlike `num_literal`) and
@@ -425,35 +468,133 @@ fn num_suffix_parser<X: Clone>(input: Span<X>) -> Res<NumSuffix, X> {
 /// `0xFFFFFFFFFFFFFFFFu64` round-trips correctly (as `u64::MAX`, stored
 /// as `-1` in the shared `i64` payload) instead of being rejected for
 /// having the top bit set, which `i64::from_str_radix` would do.
+/// Range-validates against the suffix on the u64 magnitude: a positive
+/// `0x8000000000000000` (2^63) used to wrap silently into a negative
+/// i64 payload; now it is an error (or `u64`, whose full range stays
+/// accepted). A float suffix cannot occur here: `f`, `6`, `4` are all
+/// hex digits, so `hex_digit1` swallows `0xFFf64` whole as the integer
+/// `0xFFf64` — the `f32`/`f64` arm in `fits` is an unreachable gate.
 fn hex_literal<X: Clone>(input: Span<X>) -> Res<Term, X> {
   let (input, sign) = opt(char('-')).parse(input)?;
   let (input, _) = alt((tag("0x"), tag("0X"))).parse(input)?;
   let (input, digits) = hex_digit1(input)?;
+  let (input, suffix) = num_suffix_parser(input)?;
+  let negative = sign.is_some();
+  if negative && unsigned_suffix(suffix) {
+    return Err(nom::Err::Failure(ParseError::new(
+      input.clone(),
+      error::ParseErrorKind::Native(format!(
+        "negative hex literal '-0x{}' cannot have unsigned suffix '{}'",
+        digits.fragment(),
+        suffix.type_name()
+      )),
+    )));
+  }
   let unsigned: u64 = u64::from_str_radix(digits.fragment(), 16).map_err(|_| {
     nom::Err::Failure(ParseError::new(
       input.clone(),
       error::ParseErrorKind::Native(format!("invalid hex literal '0x{}'", digits.fragment())),
     ))
   })?;
+  let fits = match suffix {
+    NumSuffix::I8 => unsigned <= if negative { 128 } else { 127 },
+    NumSuffix::I16 => unsigned <= if negative { 32768 } else { 32767 },
+    NumSuffix::I32 => unsigned <= if negative { 2147483648 } else { 2147483647 },
+    NumSuffix::I64 => {
+      unsigned
+        <= if negative {
+          9223372036854775808
+        } else {
+          9223372036854775807
+        }
+    }
+    NumSuffix::U8 => unsigned <= 255,
+    NumSuffix::U16 => unsigned <= 65535,
+    NumSuffix::U32 => unsigned <= 4294967295,
+    NumSuffix::U64 => true,
+    NumSuffix::F32 | NumSuffix::F64 => false,
+  };
+  if !fits {
+    return Err(nom::Err::Failure(ParseError::new(
+      input.clone(),
+      error::ParseErrorKind::Native(format!(
+        "hex literal '0x{}' is out of range for '{}'",
+        digits.fragment(),
+        suffix.type_name()
+      )),
+    )));
+  }
   let magnitude = unsigned as i64;
-  let value = if sign.is_some() {
+  let value = if negative {
     magnitude.wrapping_neg()
   } else {
     magnitude
   };
-  let (input, suffix) = num_suffix_parser(input)?;
   Ok((input, num_suffix(value, suffix)))
 }
 
+/// The out-of-range failure for `num_literal` — a standalone fn rather
+/// than a closure, because a closure cannot name the span's lifetime in
+/// its return type and nom requires the error to borrow from it.
+fn num_out_of_range<'a, X: Clone>(
+  input: Span<'a, X>,
+  text: &str,
+  suffix: NumSuffix,
+) -> nom::Err<E<'a, X>> {
+  nom::Err::Failure(ParseError::new(
+    input,
+    error::ParseErrorKind::Native(format!(
+      "numeric literal '{}' is out of range for '{}'",
+      text,
+      suffix.type_name()
+    )),
+  ))
+}
+
+/// Decimal integer literals, with an optional leading `-` and one of the
+/// ten numeric suffixes. Three canonicalization rules (corpus-audited
+/// clean before landing, so all three are honest parse errors rather
+/// than behavior changes for existing code):
+/// - integer digits with an `f32`/`f64` suffix are a FLOAT literal
+///   (`33f64` is `33.0f64`), not a `Num` tagged with a float suffix —
+///   the tagged shape was unreadable by every float consumer;
+/// - a negative literal with an unsigned suffix is an error;
+/// - every literal is range-validated against its suffix, and a
+///   decimal `u64` above `i64::MAX` falls back to a `u64` parse and
+///   bit-reinterprets into the shared i64 payload (the same maneuver
+///   `hex_literal` always used) — so `18446744073709551615u64` and
+///   `0xFFFFFFFFFFFFFFFFu64` finally agree on the payload `-1`.
 fn num_literal<X: Clone>(input: Span<X>) -> Res<Term, X> {
   let (input, num_str) = recognize(pair(opt(char('-')), digit1)).parse(input)?;
-  let value: i64 = num_str.fragment().parse().map_err(|_| {
-    nom::Err::Failure(ParseError::new(
-      input.clone(),
-      error::ParseErrorKind::Native(format!("invalid numeric literal '{}'", num_str.fragment())),
-    ))
-  })?;
   let (input, suffix) = num_suffix_parser(input)?;
+  if matches!(suffix, NumSuffix::F32 | NumSuffix::F64) {
+    let value: f64 = num_str.fragment().parse().unwrap_or(0.0);
+    return Ok((input, float_suffix(round_f32(value, suffix), suffix)));
+  }
+  let negative = num_str.fragment().starts_with('-');
+  if negative && unsigned_suffix(suffix) {
+    return Err(nom::Err::Failure(ParseError::new(
+      input.clone(),
+      error::ParseErrorKind::Native(format!(
+        "negative literal '{}' cannot have unsigned suffix '{}'",
+        num_str.fragment(),
+        suffix.type_name()
+      )),
+    )));
+  }
+  let value: i64 = if let Ok(v) = num_str.fragment().parse::<i64>() {
+    v
+  } else if suffix == NumSuffix::U64 && !negative {
+    match num_str.fragment().parse::<u64>() {
+      Ok(u) => u as i64,
+      Err(_) => return Err(num_out_of_range(input, num_str.fragment(), suffix)),
+    }
+  } else {
+    return Err(num_out_of_range(input, num_str.fragment(), suffix));
+  };
+  if !int_fits_suffix(value, suffix) {
+    return Err(num_out_of_range(input, num_str.fragment(), suffix));
+  }
   Ok((input, num_suffix(value, suffix)))
 }
 
@@ -467,7 +608,7 @@ fn float_literal<X: Clone>(input: Span<X>) -> Res<Term, X> {
   .parse(input)?;
   let value: f64 = s.fragment().parse().unwrap_or(0.0);
   let (input, suffix) = float_suffix_parser(input)?;
-  Ok((input, float_suffix(value, suffix)))
+  Ok((input, float_suffix(round_f32(value, suffix), suffix)))
 }
 
 fn float_suffix_parser<X: Clone>(input: Span<X>) -> Res<NumSuffix, X> {
