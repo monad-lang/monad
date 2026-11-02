@@ -12,22 +12,42 @@ pub class FromListLiteral (L : Type -> Type := List) {
 	def empty : L A 
 }
 
-/// Hetrogenous addition class
+/// The arithmetic operators dispatch through the HETEROGENEOUS classes
+/// (`HAdd A B C`: operands and result may differ), so a mote can declare
+/// a genuinely mixed instance. The symmetric case -- every built-in
+/// numeric type -- is the homogeneous class (`Add A`), reached through
+/// one bridge per operator: `instance [Add A] HAdd A A A`. A type gets
+/// `+` by declaring `Add T`; nothing declares `HAdd T T T` for a
+/// symmetric operation. The bridges run one way only: an `Add A` derived
+/// from `HAdd A A A` would make the pair mutually recursive (a dictionary
+/// that builds itself), so there is none.
+
+/// Heterogeneous addition
 pub class HAdd A B C {
 	def add : A -> B -> C
 }
 
-/// Homogenous addition
+/// Homogeneous addition
 pub class Add A {
 	def add : A -> A -> A
 }
 
-pub instance [HAdd A A A] Add A {
-	def add (a b : A) : A := HAdd.add a b
-}
-
 pub instance [Add A] HAdd A A A {
 	def add (a b : A) : A := Add.add a b
+}
+
+/// Heterogeneous subtraction
+pub class HSub A B C {
+	def sub : A -> B -> C
+}
+
+/// Homogeneous subtraction
+pub class Sub A {
+	def sub : A -> A -> A
+}
+
+pub instance [Sub A] HSub A A A {
+	def sub (a b : A) : A := Sub.sub a b
 }
 
 /// Heterogeneous multiplication
@@ -35,31 +55,27 @@ pub class HMul A B C {
 	def mul : A -> B -> C
 }
 
-/// Heterogeneous subtraction, `HMul`'s exact shape: the class carries
-/// the three type parameters, and per-type instances live in
-/// `init/src/number.mo` beside the `HMul` ones. The homogeneous `Sub`
-/// stays as it is -- the direct instances are what the retargeted
-/// `infix (-) := HSub.sub` resolves through, and the two classes are
-/// independent: no bridges, because a variable-headed
-/// `instance [Sub A] HSub A A A` is unkeyable by the concrete-head
-/// instance lookup, which is the whole reason `HAdd`'s own bridge pair
-/// never resolved a single call -- see `h_ops_tests.mo`'s header.
-pub class HSub A B C {
-	def sub : A -> B -> C
+/// Homogeneous multiplication
+pub class Mul A {
+	def mul : A -> A -> A
 }
 
-/// Subtraction
-pub class Sub A {
-	def sub : A -> A -> A
+pub instance [Mul A] HMul A A A {
+	def mul (a b : A) : A := Mul.mul a b
 }
 
-/// Heterogeneous division -- `HSub`'s exact shape, see above.
+/// Heterogeneous division
 pub class HDiv A B C {
 	def div : A -> B -> C
 }
 
+/// Homogeneous division
 pub class Div A {
 	def div : A -> A -> A
+}
+
+pub instance [Div A] HDiv A A A {
+	def div (a b : A) : A := Div.div a b
 }
 
 pub infix (+) := HAdd.add

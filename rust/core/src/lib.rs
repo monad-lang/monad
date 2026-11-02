@@ -3036,6 +3036,36 @@ def main : I64 := scaled 1
     }
   }
 
+  /// `+` inside a def constrained only on the HOMOGENEOUS class: the
+  /// operator's `HAdd` call on the abstract `A` resolves through the
+  /// prelude's `[Add A] HAdd A A A` bridge, with the def's own bound
+  /// `[Add A]` dictionary — in tail position, in an operator chain and
+  /// in an annotated `let`. The `I64` addition in the same def must take
+  /// `Add I64`, not the bound dictionary (`A := U8` would wrap 200 + 100
+  /// to 44): `resolve_bridge_dict_args` prefers a registered instance.
+  #[test]
+  fn eval_core_program_generic_add_resolves_through_symmetric_bridge() {
+    let source = r#"
+use init
+
+def chain [Add A, Copy A] (x : A) (y : A) : A := x + y + x
+
+def in_let [Add A, Copy A] (x : A) (n : I64) : I64 :=
+    let d : A := x + x in
+    n + 100
+
+def total (a : U8) : I64 := U8.to_i64 (chain a 2u8) + in_let a 200
+
+def main : I64 := total 1u8
+"#;
+    let result = eval_core_program(&ModulePath::top("'generic_bridge_add_test"), source)
+      .unwrap_or_else(|e| panic!("eval_core_program failed: {e}"));
+    match result {
+      core_value::Value::Lit(core_ir::IrLit::Num(n, _)) => assert_eq!(n, 4 + 300),
+      other => panic!("expected an int literal, got {other:?}"),
+    }
+  }
+
   /// Regression test: an unannotated lambda as an EARLY argument of a
   /// class-method call, where the metas its body's own class-method
   /// call needs are pinned only by a LATER argument —

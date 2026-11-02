@@ -1,39 +1,22 @@
-/// The heterogeneous operator classes (`HAdd`, `HSub`, `HDiv`, `HMul`)
+/// The heterogeneous operator classes (`HAdd`, `HSub`, `HMul`, `HDiv`)
 /// end to end: direct class calls and the `+`/`-`/`*`/`/` operators, on
 /// both backends.
 ///
-/// `HSub`/`HDiv` are new (`init/src/prelude.mo`), `HAdd`'s per-type
-/// instances are new (`init/src/number.mo`), and `infix (-)`/`infix (/)`
-/// are retargeted from the homogeneous `Sub.sub`/`Div.div` to
-/// `HSub.sub`/`HDiv.div` (the prelude's `infix (+) := HAdd.add` becomes
-/// effective everywhere once `init/src/lib.mo`'s historical
-/// `infix (+) := I64.add` override is gone). This is `HMul`'s exact,
-/// corpus-proven pattern: the operator dispatches through the
-/// heterogeneous class, and the class's per-type instances carry the
-/// bodies.
+/// Every operator dispatches through its heterogeneous class
+/// (`infix (+) := HAdd.add`), and every SYMMETRIC use resolves through
+/// the class's one bridge, `instance [Add A] HAdd A A A`
+/// (`init/src/prelude.mo`), to the homogeneous instance a type declares
+/// (`Add U8`, `init/src/number.mo`). No type declares `HAdd T T T`.
 ///
-/// Why DIRECT per-type instances, not bridges through the homogeneous
-/// classes: the checker's instance table
-/// (`rust/core/src/core_check_module.rs`'s `collect_known_instances`)
-/// keys each instance on `(class, first-type-argument's head path)` and
-/// deliberately SKIPS variable-headed instances (a variable has no
-/// path). The prelude's historical `instance [Add A] HAdd A A A` bridge
-/// therefore never entered the table, `[HAdd T T T]` had no candidate
-/// at all, and a generic-fn `+` call died at eval with `unresolved
-/// global: HAdd.add` -- that bridge pair never resolved a single call.
-/// A per-type `instance HAdd I64 I64 I64` is keyed `(HAdd, I64)` like
-/// any other, which is the whole fix.
-///
-/// Why no GENUINELY heterogeneous instance here (say `HSub I64 U8 I64`):
-/// the table keeps ONE slot per `(class, head)` key -- `Map::insert`,
-/// last one wins -- and this file's own instance would be inserted
-/// last, capturing every `[HSub I64 ...]` lookup in the file and
-/// routing `I64 - I64` calls through a `U8`-truncating body
-/// (`HSub.sub 300 300` would evaluate to `256`, not `0`). A user mote
-/// that owns its `(class, head)` slot can still declare one; what this
-/// file pins is the homogeneous dispatch the corpus's operators need,
-/// plus the `300 300` assertion that would catch any such capture the
-/// moment one lands in this load.
+/// The Rust checker keys instances on `(class, first argument's head)`,
+/// and a bridge has no head, so it registers bridges under their own key
+/// (`core_check::bridge_instance_key`) and falls back to one only when
+/// the direct lookup misses. Selecting the bridge ties the call's params
+/// together (`A A A`), so a bare literal operand retags to the other
+/// operand's width, and the `[Add A]` dictionary comes from the type's
+/// registered instance, or from the enclosing def's own `[Add A]` when
+/// the type is still abstract (`test_generic_add_*` below).
+
 #[test]
 def test_hsub_i64_direct : Bool := HSub.sub 300 300 == 0
 
@@ -120,8 +103,8 @@ def test_infix_sub_u8 : Bool :=
 
 /// Both operands BARE: nothing pins the instance until the annotation
 /// does. The checker reads the instance off the result position (`C :=
-/// U8` keeps `HAdd U8 U8 U8`, discards `HAdd I64 I64 I64`), retags both
-/// literals, and the wraparound proves the arithmetic itself ran at the
+/// U8`, and `Add U8` exists, so the bridge `HAdd A A A` takes `A := U8`),
+/// retags both literals, and the wraparound proves the arithmetic itself ran at the
 /// width -- 260 in `U8` is 4, not the `I64` answer 260. The Rust
 /// reference threads the same evidence before it processes any argument
 /// (`try_resolve_class_method_inner`'s pre-argument peek); these pin that
@@ -151,3 +134,12 @@ def test_infix_add_u8_bare_left_operand : Bool :=
 def test_infix_add_f64_bare_int_operand : Bool :=
     let r : F64 := 42 + 0.5 in
     r == 42.5
+
+/// A def constrained on `[Add A]` must still take `Add I64` for its own
+/// `I64` addition, not the bound `[Add A]` dictionary: with `A := U8`,
+/// the bound dictionary would wrap 200 + 100 to 44.
+def generic_with_i64 [Add A] (x : A) (n : I64) : I64 := n + 100
+
+#[test]
+def test_generic_def_concrete_add_ignores_bound_dict : Bool :=
+    generic_with_i64 1u8 200 == 300

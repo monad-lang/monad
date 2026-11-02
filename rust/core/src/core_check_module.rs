@@ -464,6 +464,34 @@ fn collect_known_instances(
     // variable — which is exactly how the prelude's variable-headed
     // bridge (`Monad (M I) I`) previously slipped past this skip and got
     // itself registered under a variable's spelling.
+    let is_own_var = |id: &Identifier| {
+      instance.params.iter().any(|p| &p.name == id)
+        || instance
+          .constraints
+          .iter()
+          .any(|c| c.vars().iter().any(|v| v == id))
+    };
+    // A SYMMETRIC BRIDGE (`instance [Add A] HAdd A A A`): every argument
+    // is a bare variable of the instance's own. Unlike the skipped shapes
+    // below it needs no head to key on — it answers any call whose
+    // params follow its variable pattern — so it registers under the
+    // bridge key, and the selection consults it only after the direct
+    // `(class, head)` lookup misses.
+    let bridge_vars: Vec<Identifier> = instance
+      .args
+      .iter()
+      .map_while(|arg| {
+        let mut t = arg;
+        while let Term::Ctx { term, .. } = t {
+          t = term;
+        }
+        match t {
+          Term::Var { name } => var_identifier(name).filter(|id| is_own_var(id)).cloned(),
+          _ => None,
+        }
+      })
+      .collect();
+    let is_bridge = !bridge_vars.is_empty() && bridge_vars.len() == instance.args.len();
     let mut head = first_arg;
     loop {
       match head {
@@ -472,20 +500,20 @@ fn collect_known_instances(
         _ => break,
       }
     }
-    if let Term::Var { name } = head
+    if !is_bridge
+      && let Term::Var { name } = head
       && let Some(id) = var_identifier(name)
+      && is_own_var(id)
     {
-      let is_own_var = instance.params.iter().any(|p| &p.name == id)
-        || instance
-          .constraints
-          .iter()
-          .any(|c| c.vars().iter().any(|v| v == id));
-      if is_own_var {
-        return;
-      }
-    }
-    let Some(type_path) = term_head_path(first_arg) else {
       return;
+    }
+    let type_path = if is_bridge {
+      crate::core_check::bridge_instance_key()
+    } else {
+      let Some(type_path) = term_head_path(first_arg) else {
+        return;
+      };
+      type_path
     };
     // Mirrors `elaborate_constrained_type`'s own per-constraint
     // `term_references_class` decision (this same file) — the same
@@ -538,6 +566,7 @@ fn collect_known_instances(
         constraints: instance.constraints.clone(),
         method_constraints,
         constraint_positions,
+        bridge_vars: if is_bridge { bridge_vars } else { Vec::new() },
       },
     );
   };

@@ -7126,8 +7126,9 @@ def result_position_solution (decl : ClassMethodDecl) (next_param : Term) (ret :
                             Option.none => Option.none,
                             Option.some ret_idx =>
                                 let cls_name : NamePath := NamePath.mk (List.cons decl.cls.name List.empty) in
-                                match result_position_matches (scope_instance_candidates_in scope cls_name) ret_idx exp scope List.empty {
-                                    List.empty => Option.none,
+                                let cands : List Instance := scope_instance_candidates_in scope cls_name in
+                                match result_position_matches cands ret_idx exp scope List.empty {
+                                    List.empty => result_position_bridge decl next_param cands ret_idx exp scope,
                                     List.cons first rest =>
                                         if result_position_agrees rest first scope
                                         then
@@ -7140,6 +7141,111 @@ def result_position_solution (decl : ClassMethodDecl) (next_param : Term) (ret :
                 DebugName.unnamed => Option.none,
             },
         _ => Option.none,
+    }
+
+/// `result_position_solution`'s fallback when no instance names the
+/// expected result outright: the class's SYMMETRIC BRIDGE
+/// (`instance [Add A] HAdd A A A`, every argument a bare variable)
+/// answers it when the expected type has an instance of each constraint
+/// on the bridge variable at the result position (`C := U8`, and `Add
+/// U8` exists). Every class parameter the bridge spells with that same
+/// variable takes the expected type -- all three for `HAdd A A A`, so
+/// both bare literal operands of `250 + 10 : U8` retag to `U8`. The Rust
+/// reference makes the same choice
+/// (`core_check::select_bridge_by_result_position`).
+def result_position_bridge (decl : ClassMethodDecl) (next_param : Term) (cands : List Instance) (ret_idx : I64) (exp : Term) (scope : Scope) : Option ResultSolution :=
+    match find_bridge_instance cands scope {
+        Option.none => Option.none,
+        Option.some ins =>
+            match nth_type ret_idx ins.args {
+                Option.none => Option.none,
+                Option.some ret_arg => result_bridge_for_var decl next_param ins (term_var_name ret_arg) exp scope,
+            },
+    }
+
+def result_bridge_for_var (decl : ClassMethodDecl) (next_param : Term) (ins : Instance) (ret_var : String) (exp : Term) (scope : Scope) : Option ResultSolution :=
+    if bridge_constraints_hold ins.constraints ret_var exp scope
+    then
+        let sol : ResultSolution :=
+            { next_param := next_param, vars := decl.vars, subst := bridge_param_subst (class_param_names decl.cls) ins.args ret_var exp } in
+        Option.some sol
+    else Option.none
+
+/// The first candidate whose every argument is a bare, non-type variable
+/// (`HAdd A A A`), or `Option.none`.
+def find_bridge_instance (cands : List Instance) (scope : Scope) : Option Instance :=
+    match cands {
+        List.empty => Option.none,
+        List.cons ins rest =>
+            if is_bridge_args ins.args scope then Option.some ins else find_bridge_instance rest scope,
+    }
+
+def is_bridge_args (args : List Term) (scope : Scope) : Bool :=
+    match args {
+        List.empty => false,
+        List.cons a rest => is_bridge_arg a scope && (is_empty_terms rest || is_bridge_args rest scope),
+    }
+
+def is_empty_terms (ts : List Term) : Bool :=
+    match ts {
+        List.empty => true,
+        List.cons _ _ => false,
+    }
+
+def is_bridge_arg (t : Term) (scope : Scope) : Bool :=
+    Bool.not (String.beq (term_var_name t) "") && Bool.not (informative_value t scope)
+
+/// The name a bare variable term spells, or `""` for anything else.
+def term_var_name (t : Term) : String :=
+    match term_peel t {
+        Term.var _ dbg =>
+            match dbg {
+                DebugName.named id => show_identifier id,
+                DebugName.unnamed => "",
+            },
+        _ => "",
+    }
+
+/// Every constraint on `var` has an instance for `exp`.
+def bridge_constraints_hold (cs : List TypeConstraint) (var : String) (exp : Term) (scope : Scope) : Bool :=
+    match cs {
+        List.empty => true,
+        List.cons c rest =>
+            bridge_constraint_holds c var exp scope && bridge_constraints_hold rest var exp scope,
+    }
+
+def bridge_constraint_holds (c : TypeConstraint) (var : String) (exp : Term) (scope : Scope) : Bool :=
+    match c {
+        TypeConstraint.mk cls vars =>
+            if is_some_index (id_index_of var vars)
+            then Bool.not (is_empty_instances (result_position_matches (scope_instance_candidates_in scope cls) 0 exp scope List.empty))
+            else true,
+    }
+
+def is_some_index (o : Option I64) : Bool :=
+    match o {
+        Option.some _ => true,
+        Option.none => false,
+    }
+
+def is_empty_instances (xs : List Instance) : Bool :=
+    match xs {
+        List.empty => true,
+        List.cons _ _ => false,
+    }
+
+/// Each class parameter whose bridge argument is `var`, bound to `exp`.
+def bridge_param_subst (ids : List Identifier) (args : List Term) (var : String) (exp : Term) : List (Pair Identifier Term) :=
+    match ids {
+        List.empty => List.empty,
+        List.cons x rest =>
+            match args {
+                List.empty => List.empty,
+                List.cons a resta =>
+                    if String.beq (term_var_name a) var
+                    then List.cons (Pair.pair x exp) (bridge_param_subst rest resta var exp)
+                    else bridge_param_subst rest resta var exp,
+            },
     }
 
 /// The 0-based position of the identifier rendering `s` in `ids`, or

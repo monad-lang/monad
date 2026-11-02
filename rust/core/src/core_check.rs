@@ -675,6 +675,23 @@ pub struct KnownInstanceInfo {
   /// scope, so name equality is reliable) — see
   /// `core_check_module::collect_known_instances`.
   pub constraint_positions: Map<Identifier, usize>,
+  /// Each declared type argument's instance-variable name, when this is
+  /// a SYMMETRIC BRIDGE: every argument a bare variable of the instance's
+  /// own (`instance [Add A] HAdd A A A` stores `[A, A, A]`). Empty for
+  /// every ordinary instance. A bridge has no concrete head to key on,
+  /// so it is registered under `bridge_instance_key()` instead and
+  /// consulted only when the direct `(class, head)` lookup misses — see
+  /// `select_bridge_instance`.
+  pub bridge_vars: Vec<Identifier>,
+}
+
+/// The `KnownInstances` type key a symmetric bridge
+/// (`KnownInstanceInfo::bridge_vars`) is registered under. Not a
+/// spelling any type can have, so it never collides with a real type
+/// head or with a def's same-named type variable (the collision that
+/// keeps other variable-headed instances out of the table).
+pub fn bridge_instance_key() -> GlobalRef {
+  GlobalRef::Local(NamePath::top("<symmetric bridge>"))
 }
 
 /// Built once per file from every loaded module's `instance` declarations
@@ -2349,10 +2366,11 @@ fn select_instance_by_result_position(
   named_metas: &Map<Identifier, crate::core_term::MetaId>,
   result_idx: usize,
   result_path: &crate::term::GlobalRef,
+  result_atom: Atom,
 ) -> Option<(KnownInstanceInfo, Atom)> {
   let mut matching: Vec<KnownInstanceInfo> = Vec::new();
   for ((class_path, _), instance_info) in known_instances.iter() {
-    if *class_path != info.class_path {
+    if *class_path != info.class_path || !instance_info.bridge_vars.is_empty() {
       continue;
     }
     let Some(instance_arg) = instance_info.args.get(result_idx) else {
@@ -2375,6 +2393,18 @@ fn select_instance_by_result_position(
     }
     matching.push(instance_info.clone());
   }
+  if matching.is_empty() {
+    return select_bridge_by_result_position(
+      mctx,
+      atom_paths,
+      structs,
+      known_instances,
+      info,
+      named_metas,
+      result_idx,
+      result_atom,
+    );
+  }
   if matching.len() != 1 {
     return None;
   }
@@ -2390,6 +2420,56 @@ fn select_instance_by_result_position(
       return None;
     }
   }
+  let instance_atom = mctx.intern(instance_info.prefix.clone());
+  Some((instance_info, instance_atom))
+}
+
+/// `select_instance_by_result_position`'s fallback when no direct
+/// instance names the pinned result: the class's bridge answers it when
+/// the result type has a registered instance of every constraint on the
+/// bridge variable at the result position (`C := U8` and `Add U8`
+/// exists, so `HAdd A A A` with `A := U8`). The bridge's variable pattern
+/// then pins every tied param to the result (`250 + 10 : U8` -> both
+/// operands `U8`, which is what lets their bare literals retag). `None`
+/// when there is no bridge, a constraint has no instance for the result,
+/// or a param is already pinned to something else.
+#[allow(clippy::too_many_arguments)]
+fn select_bridge_by_result_position(
+  mctx: &mut MetaContext,
+  atom_paths: &AtomPathMap,
+  structs: &StructFields,
+  known_instances: &KnownInstances,
+  info: &ClassMethodInfo,
+  named_metas: &Map<Identifier, crate::core_term::MetaId>,
+  result_idx: usize,
+  result_atom: Atom,
+) -> Option<(KnownInstanceInfo, Atom)> {
+  let instance_info = known_instances
+    .get(&(info.class_path.clone(), bridge_instance_key()))?
+    .clone();
+  let result_var = instance_info.bridge_vars.get(result_idx)?;
+  let result_path = atom_paths
+    .get(&result_atom)
+    .or_else(|| structs.inductive_paths.get(&result_atom))?;
+  for constraint in &instance_info.constraints {
+    if constraint.vars().iter().any(|v| v == result_var)
+      && !known_instances.contains_key(&(
+        GlobalRef::Local(constraint.class().clone()),
+        result_path.clone(),
+      ))
+    {
+      return None;
+    }
+  }
+  tie_bridge_params(mctx, info, named_metas, &instance_info.bridge_vars).ok()?;
+  let result_param = info.class_param_names.get(result_idx)?;
+  let &result_meta = named_metas.get(result_param)?;
+  unify(
+    mctx,
+    &CoreTerm::Meta(result_meta),
+    &CoreTerm::Free(result_atom),
+  )
+  .ok()?;
   let instance_atom = mctx.intern(instance_info.prefix.clone());
   Some((instance_info, instance_atom))
 }
@@ -2431,18 +2511,18 @@ fn select_instance_for_call(
   let Some(concrete_atom) = head_atom_of(mctx, &forced) else {
     return Ok(None);
   };
-  let Some(concrete_path) = atom_paths
+  // A head with no registered path is a still-abstract type variable
+  // (`A` inside `def f [Add A] ...`): only a bridge can answer it, with
+  // its constraint's dictionary coming from the caller's own scope.
+  let direct = atom_paths
     .get(&concrete_atom)
     .or_else(|| structs.inductive_paths.get(&concrete_atom))
-    .cloned()
-  else {
-    return Ok(None);
-  };
-  let Some(instance_info) = known_instances
-    .get(&(info.class_path.clone(), concrete_path.clone()))
-    .cloned()
-  else {
-    return Ok(None);
+    .and_then(|concrete_path| {
+      known_instances.get(&(info.class_path.clone(), concrete_path.clone()))
+    })
+    .cloned();
+  let Some(instance_info) = direct else {
+    return select_bridge_instance(mctx, known_instances, info, named_metas);
   };
   for (param_name, instance_arg) in info.class_param_names.iter().zip(instance_info.args.iter()) {
     let Some(&param_meta) = named_metas.get(param_name) else {
@@ -2455,6 +2535,114 @@ fn select_instance_for_call(
   }
   let instance_atom = mctx.intern(instance_info.prefix.clone());
   Ok(Some((instance_info, instance_atom)))
+}
+
+/// The class's SYMMETRIC BRIDGE (`instance [Add A] HAdd A A A`), when it
+/// has one — the fallback `select_instance_for_call` takes once the direct
+/// `(class, head)` lookup misses. Ties the call's class-param metas
+/// together the way the bridge's own variables do (`A A A`: all three
+/// params become one type), which is what lets a bare literal in a later
+/// argument retag to the first argument's width exactly as a per-type
+/// instance would have. Same `Ok(None)`/`Err(())` contract as
+/// `select_instance_for_call`: no bridge defers, a param already pinned
+/// to something the pattern contradicts (`HAdd I64 U8 _`) aborts. The
+/// bridge's own constraint dictionaries are resolved afterwards, by
+/// `resolve_bridge_dict_args`.
+fn select_bridge_instance(
+  mctx: &mut MetaContext,
+  known_instances: &KnownInstances,
+  info: &ClassMethodInfo,
+  named_metas: &Map<Identifier, crate::core_term::MetaId>,
+) -> Result<Option<(KnownInstanceInfo, Atom)>, ()> {
+  let Some(instance_info) = known_instances
+    .get(&(info.class_path.clone(), bridge_instance_key()))
+    .cloned()
+  else {
+    return Ok(None);
+  };
+  tie_bridge_params(mctx, info, named_metas, &instance_info.bridge_vars)?;
+  let instance_atom = mctx.intern(instance_info.prefix.clone());
+  Ok(Some((instance_info, instance_atom)))
+}
+
+/// Unify every pair of the call's class-param metas whose bridge
+/// variables coincide (`HAdd A A A`: `B := A`, `C := A`).
+fn tie_bridge_params(
+  mctx: &mut MetaContext,
+  info: &ClassMethodInfo,
+  named_metas: &Map<Identifier, crate::core_term::MetaId>,
+  bridge_vars: &[Identifier],
+) -> Result<(), ()> {
+  let mut first_meta: Map<Identifier, crate::core_term::MetaId> = Map::new();
+  for (param_name, var) in info.class_param_names.iter().zip(bridge_vars.iter()) {
+    let Some(&param_meta) = named_metas.get(param_name) else {
+      continue;
+    };
+    match first_meta.get(var) {
+      Some(&first) => {
+        unify(mctx, &CoreTerm::Meta(param_meta), &CoreTerm::Meta(first)).map_err(|_| ())?;
+      }
+      None => {
+        first_meta.insert(var.clone(), param_meta);
+      }
+    }
+  }
+  Ok(())
+}
+
+/// The dictionaries a selected bridge's method takes — one per
+/// constraint its body uses (`[Add A]` for `HAdd A A A`'s `add`). Each
+/// constraint's variable names a position in the bridge's arguments; the
+/// call's class param at that position is the type the dictionary is
+/// for. A REGISTERED instance for that type wins (`Add U8`); only a type
+/// with none — a still-abstract variable of the enclosing def — takes
+/// the caller's bound dictionary (`def f [Add A]`'s own). The order
+/// matters: `resolve_constraint_dict` would hand a bound `[Add A]`
+/// dictionary to an `I64` addition inside that same def. `None` when any
+/// constraint resolves neither way; the call is then left unresolved,
+/// exactly as when no instance matched at all.
+#[allow(clippy::too_many_arguments)]
+fn resolve_bridge_dict_args(
+  mctx: &mut MetaContext,
+  structs: &StructFields,
+  atom_paths: &AtomPathMap,
+  known_instances: &KnownInstances,
+  dict_scope: &DictScope,
+  constraints: &[TypeConstraint],
+  info: &ClassMethodInfo,
+  instance_info: &KnownInstanceInfo,
+  named_metas: &Map<Identifier, crate::core_term::MetaId>,
+) -> Option<Vec<CoreTerm>> {
+  let mut dicts = Vec::with_capacity(constraints.len());
+  for constraint in constraints {
+    let [var] = constraint.vars().as_slice() else {
+      return None;
+    };
+    let pos = instance_info.bridge_vars.iter().position(|v| v == var)?;
+    let param_meta = *named_metas.get(info.class_param_names.get(pos)?)?;
+    let ty = force(mctx, CoreTerm::Meta(param_meta)).into_stripped_ctx();
+    let class = GlobalRef::Local(constraint.class().clone());
+    let registered = head_atom_of(mctx, &ty)
+      .and_then(|atom| {
+        atom_paths
+          .get(&atom)
+          .or_else(|| structs.inductive_paths.get(&atom))
+      })
+      .and_then(|path| known_instances.get(&(class.clone(), path.clone())));
+    let dict = match registered {
+      // A constrained instance (`Add (Vec A)`) would need its own
+      // dictionaries threaded through; none of the symmetric instances
+      // the bridges serve has one, so that shape stays unresolved
+      // rather than guessed.
+      Some(instance) if instance.constraints.is_empty() => {
+        CoreTerm::Free(mctx.intern(instance.prefix.clone()))
+      }
+      Some(_) => return None,
+      None => CoreTerm::Free(*dict_scope.get(&class)?),
+    };
+    dicts.push(dict);
+  }
+  Some(dicts)
 }
 
 /// Resolve one class-method call to a concrete dictionary projection —
@@ -2652,6 +2840,7 @@ fn try_resolve_class_method_inner(
         &named_metas,
         result_idx,
         result_path,
+        result_atom,
       )
     {
       early_instance = Some(pair);
@@ -3076,18 +3265,32 @@ fn try_resolve_class_method_inner(
       .get(&info.method_name)
       .map(Vec::as_slice)
       .unwrap_or(&[]);
-    let dict_args = resolve_instance_dict_args(
-      mctx,
-      structs,
-      atom_paths,
-      known_instances,
-      dict_scope,
-      method_constraints,
-      &forced_class_meta,
-      &named_metas,
-      class_meta,
-      &instance_info.constraint_positions,
-    )?;
+    let dict_args = if instance_info.bridge_vars.is_empty() {
+      resolve_instance_dict_args(
+        mctx,
+        structs,
+        atom_paths,
+        known_instances,
+        dict_scope,
+        method_constraints,
+        &forced_class_meta,
+        &named_metas,
+        class_meta,
+        &instance_info.constraint_positions,
+      )?
+    } else {
+      resolve_bridge_dict_args(
+        mctx,
+        structs,
+        atom_paths,
+        known_instances,
+        dict_scope,
+        method_constraints,
+        info,
+        &instance_info,
+        &named_metas,
+      )?
+    };
     let mut result = project_dict_field(
       mctx,
       structs,

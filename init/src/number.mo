@@ -35,28 +35,9 @@ pub instance Sub I8 {
 	def sub (a b : I8) : I8 := I8.sub a b
 }
 
-pub instance HMul I8 I8 I8 {
+pub instance Mul I8 {
 	def mul (a b : I8) : I8 := I8.mul a b
 }
-/// `HAdd`/`HSub`/`HDiv`, the heterogeneous twins of the `Add`/`Sub`/
-/// `Div` instances above: same bodies (the native-backed members, never
-/// the operators -- `infix (-) := HSub.sub` would make an operator in
-/// this body call this very instance), registered for the concrete
-/// `(HClass, I8)` keys the checker's instance lookup uses. See
-/// `h_ops_tests.mo`'s header for why these are direct instances and not
-/// bridges through the homogeneous classes.
-pub instance HAdd I8 I8 I8 {
-	def add (a b : I8) : I8 := I8.add a b
-}
-
-pub instance HSub I8 I8 I8 {
-	def sub (a b : I8) : I8 := I8.sub a b
-}
-
-pub instance HDiv I8 I8 I8 {
-	def div (a b : I8) : I8 := I8.div a b
-}
-
 
 pub instance Div I8 {
 	def div (a b : I8) : I8 := I8.div a b
@@ -111,28 +92,9 @@ pub instance Sub I16 {
 	def sub (a b : I16) : I16 := I16.sub a b
 }
 
-pub instance HMul I16 I16 I16 {
+pub instance Mul I16 {
 	def mul (a b : I16) : I16 := I16.mul a b
 }
-/// `HAdd`/`HSub`/`HDiv`, the heterogeneous twins of the `Add`/`Sub`/
-/// `Div` instances above: same bodies (the native-backed members, never
-/// the operators -- `infix (-) := HSub.sub` would make an operator in
-/// this body call this very instance), registered for the concrete
-/// `(HClass, I16)` keys the checker's instance lookup uses. See
-/// `h_ops_tests.mo`'s header for why these are direct instances and not
-/// bridges through the homogeneous classes.
-pub instance HAdd I16 I16 I16 {
-	def add (a b : I16) : I16 := I16.add a b
-}
-
-pub instance HSub I16 I16 I16 {
-	def sub (a b : I16) : I16 := I16.sub a b
-}
-
-pub instance HDiv I16 I16 I16 {
-	def div (a b : I16) : I16 := I16.div a b
-}
-
 
 pub instance Div I16 {
 	def div (a b : I16) : I16 := I16.div a b
@@ -190,28 +152,9 @@ pub instance Sub I32 {
 	def sub (a b : I32) : I32 := I32.sub a b
 }
 
-pub instance HMul I32 I32 I32 {
+pub instance Mul I32 {
 	def mul (a b : I32) : I32 := I32.mul a b
 }
-/// `HAdd`/`HSub`/`HDiv`, the heterogeneous twins of the `Add`/`Sub`/
-/// `Div` instances above: same bodies (the native-backed members, never
-/// the operators -- `infix (-) := HSub.sub` would make an operator in
-/// this body call this very instance), registered for the concrete
-/// `(HClass, I32)` keys the checker's instance lookup uses. See
-/// `h_ops_tests.mo`'s header for why these are direct instances and not
-/// bridges through the homogeneous classes.
-pub instance HAdd I32 I32 I32 {
-	def add (a b : I32) : I32 := I32.add a b
-}
-
-pub instance HSub I32 I32 I32 {
-	def sub (a b : I32) : I32 := I32.sub a b
-}
-
-pub instance HDiv I32 I32 I32 {
-	def div (a b : I32) : I32 := I32.div a b
-}
-
 
 pub instance Div I32 {
 	def div (a b : I32) : I32 := I32.div a b
@@ -281,35 +224,15 @@ pub instance Add I64 {
 
 pub instance Sub I64 {
 	// `I64.sub`, NOT `a - b`: `infix (-) := HSub.sub`
-	// (init/prelude.mo) dispatches the operator to the
-	// `HSub I64 I64 I64` instance below, whose own body calls this
-	// same member -- the native spelling keeps every instance
-	// self-contained.
+	// (init/prelude.mo) dispatches the operator through the
+	// `[Sub A] HSub A A A` bridge back to THIS instance, so the
+	// operator spelling would make it call itself.
 	def sub (a b : I64) : I64 := I64.sub a b
 }
 
-pub instance HMul I64 I64 I64 {
+pub instance Mul I64 {
 	def mul (a b : I64) : I64 := I64.mul a b
 }
-/// `HAdd`/`HSub`/`HDiv`, the heterogeneous twins of the `Add`/`Sub`/
-/// `Div` instances above: same bodies (the native-backed members, never
-/// the operators -- `infix (-) := HSub.sub` would make an operator in
-/// this body call this very instance), registered for the concrete
-/// `(HClass, I64)` keys the checker's instance lookup uses. See
-/// `h_ops_tests.mo`'s header for why these are direct instances and not
-/// bridges through the homogeneous classes.
-pub instance HAdd I64 I64 I64 {
-	def add (a b : I64) : I64 := I64.add a b
-}
-
-pub instance HSub I64 I64 I64 {
-	def sub (a b : I64) : I64 := I64.sub a b
-}
-
-pub instance HDiv I64 I64 I64 {
-	def div (a b : I64) : I64 := I64.div a b
-}
-
 
 pub instance Div I64 {
 	def div (a b : I64) : I64 := I64.div a b
@@ -381,28 +304,9 @@ pub instance Sub U8 {
 	def sub (a b : U8) : U8 := U8.sub a b
 }
 
-pub instance HMul U8 U8 U8 {
+pub instance Mul U8 {
 	def mul (a b : U8) : U8 := U8.mul a b
 }
-/// `HAdd`/`HSub`/`HDiv`, the heterogeneous twins of the `Add`/`Sub`/
-/// `Div` instances above: same bodies (the native-backed members, never
-/// the operators -- `infix (-) := HSub.sub` would make an operator in
-/// this body call this very instance), registered for the concrete
-/// `(HClass, U8)` keys the checker's instance lookup uses. See
-/// `h_ops_tests.mo`'s header for why these are direct instances and not
-/// bridges through the homogeneous classes.
-pub instance HAdd U8 U8 U8 {
-	def add (a b : U8) : U8 := U8.add a b
-}
-
-pub instance HSub U8 U8 U8 {
-	def sub (a b : U8) : U8 := U8.sub a b
-}
-
-pub instance HDiv U8 U8 U8 {
-	def div (a b : U8) : U8 := U8.div a b
-}
-
 
 pub instance Div U8 {
 	def div (a b : U8) : U8 := U8.div a b
@@ -460,28 +364,9 @@ pub instance Sub U16 {
 	def sub (a b : U16) : U16 := U16.sub a b
 }
 
-pub instance HMul U16 U16 U16 {
+pub instance Mul U16 {
 	def mul (a b : U16) : U16 := U16.mul a b
 }
-/// `HAdd`/`HSub`/`HDiv`, the heterogeneous twins of the `Add`/`Sub`/
-/// `Div` instances above: same bodies (the native-backed members, never
-/// the operators -- `infix (-) := HSub.sub` would make an operator in
-/// this body call this very instance), registered for the concrete
-/// `(HClass, U16)` keys the checker's instance lookup uses. See
-/// `h_ops_tests.mo`'s header for why these are direct instances and not
-/// bridges through the homogeneous classes.
-pub instance HAdd U16 U16 U16 {
-	def add (a b : U16) : U16 := U16.add a b
-}
-
-pub instance HSub U16 U16 U16 {
-	def sub (a b : U16) : U16 := U16.sub a b
-}
-
-pub instance HDiv U16 U16 U16 {
-	def div (a b : U16) : U16 := U16.div a b
-}
-
 
 pub instance Div U16 {
 	def div (a b : U16) : U16 := U16.div a b
@@ -539,28 +424,9 @@ pub instance Sub U32 {
 	def sub (a b : U32) : U32 := U32.sub a b
 }
 
-pub instance HMul U32 U32 U32 {
+pub instance Mul U32 {
 	def mul (a b : U32) : U32 := U32.mul a b
 }
-/// `HAdd`/`HSub`/`HDiv`, the heterogeneous twins of the `Add`/`Sub`/
-/// `Div` instances above: same bodies (the native-backed members, never
-/// the operators -- `infix (-) := HSub.sub` would make an operator in
-/// this body call this very instance), registered for the concrete
-/// `(HClass, U32)` keys the checker's instance lookup uses. See
-/// `h_ops_tests.mo`'s header for why these are direct instances and not
-/// bridges through the homogeneous classes.
-pub instance HAdd U32 U32 U32 {
-	def add (a b : U32) : U32 := U32.add a b
-}
-
-pub instance HSub U32 U32 U32 {
-	def sub (a b : U32) : U32 := U32.sub a b
-}
-
-pub instance HDiv U32 U32 U32 {
-	def div (a b : U32) : U32 := U32.div a b
-}
-
 
 pub instance Div U32 {
 	def div (a b : U32) : U32 := U32.div a b
@@ -662,28 +528,9 @@ pub instance Sub U64 {
 	def sub (a b : U64) : U64 := U64.sub a b
 }
 
-pub instance HMul U64 U64 U64 {
+pub instance Mul U64 {
 	def mul (a b : U64) : U64 := U64.mul a b
 }
-/// `HAdd`/`HSub`/`HDiv`, the heterogeneous twins of the `Add`/`Sub`/
-/// `Div` instances above: same bodies (the native-backed members, never
-/// the operators -- `infix (-) := HSub.sub` would make an operator in
-/// this body call this very instance), registered for the concrete
-/// `(HClass, U64)` keys the checker's instance lookup uses. See
-/// `h_ops_tests.mo`'s header for why these are direct instances and not
-/// bridges through the homogeneous classes.
-pub instance HAdd U64 U64 U64 {
-	def add (a b : U64) : U64 := U64.add a b
-}
-
-pub instance HSub U64 U64 U64 {
-	def sub (a b : U64) : U64 := U64.sub a b
-}
-
-pub instance HDiv U64 U64 U64 {
-	def div (a b : U64) : U64 := U64.div a b
-}
-
 
 pub instance Div U64 {
   def div (a b : U64) : U64 := U64.div a b
@@ -742,28 +589,9 @@ pub instance Sub F32 {
 	def sub (a b : F32) : F32 := F32.sub a b
 }
 
-pub instance HMul F32 F32 F32 {
+pub instance Mul F32 {
 	def mul (a b : F32) : F32 := F32.mul a b
 }
-/// `HAdd`/`HSub`/`HDiv`, the heterogeneous twins of the `Add`/`Sub`/
-/// `Div` instances above: same bodies (the native-backed members, never
-/// the operators -- `infix (-) := HSub.sub` would make an operator in
-/// this body call this very instance), registered for the concrete
-/// `(HClass, F32)` keys the checker's instance lookup uses. See
-/// `h_ops_tests.mo`'s header for why these are direct instances and not
-/// bridges through the homogeneous classes.
-pub instance HAdd F32 F32 F32 {
-	def add (a b : F32) : F32 := F32.add a b
-}
-
-pub instance HSub F32 F32 F32 {
-	def sub (a b : F32) : F32 := F32.sub a b
-}
-
-pub instance HDiv F32 F32 F32 {
-	def div (a b : F32) : F32 := F32.div a b
-}
-
 
 pub instance Div F32 {
 	def div (a b : F32) : F32 := F32.div a b
@@ -838,28 +666,9 @@ pub instance Sub F64 {
 	def sub (a b : F64) : F64 := F64.sub a b
 }
 
-pub instance HMul F64 F64 F64 {
+pub instance Mul F64 {
 	def mul (a b : F64) : F64 := F64.mul a b
 }
-/// `HAdd`/`HSub`/`HDiv`, the heterogeneous twins of the `Add`/`Sub`/
-/// `Div` instances above: same bodies (the native-backed members, never
-/// the operators -- `infix (-) := HSub.sub` would make an operator in
-/// this body call this very instance), registered for the concrete
-/// `(HClass, F64)` keys the checker's instance lookup uses. See
-/// `h_ops_tests.mo`'s header for why these are direct instances and not
-/// bridges through the homogeneous classes.
-pub instance HAdd F64 F64 F64 {
-	def add (a b : F64) : F64 := F64.add a b
-}
-
-pub instance HSub F64 F64 F64 {
-	def sub (a b : F64) : F64 := F64.sub a b
-}
-
-pub instance HDiv F64 F64 F64 {
-	def div (a b : F64) : F64 := F64.div a b
-}
-
 
 pub instance Div F64 {
 	def div (a b : F64) : F64 := F64.div a b

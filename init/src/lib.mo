@@ -24,14 +24,10 @@ pub use lib::clone {*}
 // read for the gate to recognise either way.
 //
 // No `infix (+)` override here: `init/src/prelude.mo`'s own
-// `infix (+) := HAdd.add` is what `+` resolves to. This line used to
-// shadow it with `infix (+) := I64.add` (the era's workaround for
-// `HAdd` having no resolvable instances -- a variable-headed bridge
-// instance is unkeyable by the checker's concrete-head lookup, so
-// `+` on anything but `I64` was a type error and `I64` needed the
-// direct spelling). With per-type `HAdd` instances in
-// `init/src/number.mo`, `+` dispatches through the class for every
-// width, exactly as `*` always has through `HMul`.
+// `infix (+) := HAdd.add` is what `+` resolves to, through the
+// `[Add A] HAdd A A A` bridge and each type's `Add` instance. This line
+// used to shadow it with `infix (+) := I64.add`, from when the Rust
+// checker could not resolve a call through a variable-headed bridge.
 
 class From T A {
  def from (t: T): A

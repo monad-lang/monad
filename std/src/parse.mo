@@ -13,10 +13,10 @@
 /// WHY THE ODD SPELLING OF ADDITION: written when `infix (+)` still
 /// resolved to `I64.add` (`init/src/lib.mo`'s since-removed override)
 /// and `a + b` on two `F64` values did not check. `+` resolves now
-/// (`HAdd`'s per-type instances), but the spelling is kept: the
-/// subtraction form is what the digit-table verification ran against.
-/// `*`, `-` and `/` dispatch through the pub `HMul`/`HSub`/`HDiv`
-/// instances and are what this module uses.
+/// (through `[Add A] HAdd A A A` and `Add F64`), but the spelling is
+/// kept: the subtraction form is what the digit-table verification ran
+/// against. `*`, `-` and `/` dispatch the same way, through the
+/// `HMul`/`HSub`/`HDiv` bridges and the `Mul`/`Sub`/`Div` instances.
 ///
 /// PRECISION: correctly rounded while the mantissa has at most 19
 /// significant digits and the decimal exponent is within +/-22 (each power
