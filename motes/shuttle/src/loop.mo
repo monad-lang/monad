@@ -467,10 +467,15 @@ def tool_error_events (names : List String) (cs : List Content) : List String :=
         List.empty => List.empty,
         List.cons n rest => match cs {
             List.empty => List.empty,
+            // The flag is bound and tested, not matched as `true`: a Bool
+            // literal pattern does not discriminate compiled, and every
+            // successful result was logged as an error.
             List.cons c csr => match c {
-                Content.tool_result _ out true =>
-                    List.cons (String.concat "\u{1}toolerror\u{2}" (String.concat n
-                        (String.concat "\u{2}" (Context.cap_text out 300)))) (tool_error_events rest csr),
+                Content.tool_result _ out failed =>
+                    if failed
+                    then List.cons (String.concat "\u{1}toolerror\u{2}" (String.concat n
+                        (String.concat "\u{2}" (Context.cap_text out 300)))) (tool_error_events rest csr)
+                    else tool_error_events rest csr,
                 _ => tool_error_events rest csr,
             },
         },
