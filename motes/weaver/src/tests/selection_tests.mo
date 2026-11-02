@@ -14,10 +14,10 @@ use weaver::model {
     TuiModel, init_tui_model, Model.append_block, Model.begin_selection,
     Model.drag_selection, Model.finish_selection, Model.selection_text,
     Model.selection_cols, Model.scroll_step, Model.display_rows, 
-    Model.input_press, Model.input_drag, Model.input_release, Model.in_input,
+    Model.prompt_box,
 }
+use weaver::ui::prompt {PromptModel, PromptMsg, Prompt.update, Prompt.set_text, Prompt.box_contains}
 use weaver::store {TLine, TLine.plain}
-use tui::widgets::input {input_state}
 
 def mock_config : ProviderConfig :=
     { base_url := "mock", model := "mock", api_key_env := "WEAVER_UNUSED_KEY", max_tokens := 8, wire := Wire.mock, thinking := false }
@@ -120,22 +120,34 @@ def test_press_outside_the_panel_clears : Bool :=
 // ── input-box selection ─────────────────────────────────────────────────
 
 def with_input (m : TuiModel) (value : String) : TuiModel :=
-    { m with input := input_state value "" }
+    { m with prompt := Prompt.set_text m.prompt value }
+
+/// The prompt after `msg` (its copied text dropped).
+def prompt_after (m : TuiModel) (msg : PromptMsg) : TuiModel :=
+    match Prompt.update (Model.prompt_box m) m.prompt msg {
+        Pair.pair p _ => { m with prompt := p },
+    }
+
+def input_release (m : TuiModel) (r : I64) (c : I64) : Pair PromptModel (Option String) :=
+    Prompt.update (Model.prompt_box m) m.prompt (PromptMsg.release r c)
 
 def input_drag_text (m : TuiModel) (r0 : I64) (c0 : I64) (r1 : I64) (c1 : I64) : Option String :=
-    let m1 : TuiModel := Model.input_press m r0 c0 in
-    let m2 : TuiModel := Model.input_drag m1 r1 c1 in
-    match Model.input_release m2 r1 c1 {
+    let m1 : TuiModel := prompt_after m (PromptMsg.press r0 c0) in
+    let m2 : TuiModel := prompt_after m1 (PromptMsg.drag r1 c1) in
+    match input_release m2 r1 c1 {
         Pair.pair _ text => text,
     }
+
+def in_input (m : TuiModel) (r : I64) (c : I64) : Bool :=
+    Prompt.box_contains (Model.prompt_box m) r c
 
 #[test]
 def test_input_geometry_is_the_bottom_three_rows : Bool :=
     let m : TuiModel := model_of in
-    Model.in_input m 21 1 && Model.in_input m 23 78
-        && Bool.not (Model.in_input m 20 1)
-        && Bool.not (Model.in_input m 21 0)
-        && Bool.not (Model.in_input m 21 79)
+    in_input m 21 1 && in_input m 23 78
+        && Bool.not (in_input m 20 1)
+        && Bool.not (in_input m 21 0)
+        && Bool.not (in_input m 21 79)
 
 #[test]
 def test_input_drag_copies_the_selection : Bool :=
@@ -146,9 +158,9 @@ def test_input_drag_copies_the_selection : Bool :=
 
 #[test]
 def test_input_click_moves_the_caret_without_copying : Bool :=
-    let m1 : TuiModel := Model.input_press (with_input model_of "hello") 21 2 in
-    match Model.input_release m1 21 2 {
-        Pair.pair m2 text => m2.input.cursor == 1
+    let m1 : TuiModel := prompt_after (with_input model_of "hello") (PromptMsg.press 21 2) in
+    match input_release m1 21 2 {
+        Pair.pair p2 text => p2.input.cursor == 1
             && (match text { Option.some _ => false, Option.none => true }),
     }
 

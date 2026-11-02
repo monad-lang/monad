@@ -92,7 +92,7 @@ def transcript_user_contains (needle : String) (lines : List TLine) : Bool :=
 #[test]
 def test_char_inserts_into_input : Bool :=
     match TuiApp.update (model_of Mode.manual) (key_msg (Key.char "h")) {
-        Pair.pair m2 cmd => m2.input.value == "h" && cmd_is_none cmd
+        Pair.pair m2 cmd => m2.prompt.input.value == "h" && cmd_is_none cmd
     }
 
 #[test]
@@ -100,7 +100,7 @@ def test_backspace_removes_last_char : Bool :=
     match TuiApp.update (model_of Mode.manual) (key_msg (Key.char "h")) {
         Pair.pair m2 _ =>
             match TuiApp.update m2 (key_msg Key.backspace) {
-                Pair.pair m3 _ => String.is_empty m3.input.value
+                Pair.pair m3 _ => String.is_empty m3.prompt.input.value
             }
     }
 
@@ -117,7 +117,7 @@ def test_tab_does_not_touch_input : Bool :=
     match TuiApp.update (model_of Mode.manual) (key_msg (Key.char "x")) {
         Pair.pair m2 _ =>
             match TuiApp.update m2 (key_msg Key.tab) {
-                Pair.pair m3 _ => m3.input.value == "x"
+                Pair.pair m3 _ => m3.prompt.input.value == "x"
             }
     }
 
@@ -127,7 +127,7 @@ def test_tab_does_not_touch_input : Bool :=
 def test_enter_on_empty_input_is_noop : Bool :=
     match TuiApp.update (model_of Mode.manual) (key_msg Key.enter) {
         Pair.pair m2 cmd =>
-            cmd_is_none cmd && String.is_empty m2.input.value && List.length m2.transcript.tail == 0
+            cmd_is_none cmd && String.is_empty m2.prompt.input.value && List.length m2.transcript.tail == 0
     }
 
 #[test]
@@ -137,7 +137,7 @@ def test_enter_with_text_echoes_clears_and_performs : Bool :=
             match TuiApp.update m1 (key_msg Key.enter) {
                 Pair.pair m2 cmd =>
                     cmd_is_perform cmd
-                        && String.is_empty m2.input.value
+                        && String.is_empty m2.prompt.input.value
                         && transcript_user_contains "h" m2.transcript.tail
             }
     }
@@ -344,7 +344,7 @@ def test_alt_enter_inserts_a_newline : Bool :=
             match TuiApp.update m1 (key_msg (Key.alt "\n")) {
                 Pair.pair m2 _ =>
                     match TuiApp.update m2 (key_msg (Key.char "b")) {
-                        Pair.pair m3 _ => m3.input.value == "a\nb"
+                        Pair.pair m3 _ => m3.prompt.input.value == "a\nb"
                     }
             }
     }
@@ -363,7 +363,7 @@ def test_multiline_value_routs_single_line_handler : Bool :=
                     match TuiApp.update m2 (key_msg Key.enter) {
                         Pair.pair m3 cmd =>
                             cmd_is_perform cmd
-                                && Bool.not (String.contains (String.trim m3.input.value) "a")
+                                && Bool.not (String.contains (String.trim m3.prompt.input.value) "a")
                                 && transcript_user_contains "a" m3.transcript.tail
                     }
             }
@@ -379,7 +379,7 @@ def test_up_on_empty_input_recalls_history : Bool :=
                         Pair.pair m3 _ =>
                             match TuiApp.update m3 (key_msg Key.up) {
                                 Pair.pair m4 cmd =>
-                                    cmd_is_none cmd && m4.input.value == "hi" && m4.hist_idx == 0
+                                    cmd_is_none cmd && m4.prompt.input.value == "hi" && m4.prompt.hist_idx == 0
                             }
                     }
             }
@@ -396,7 +396,7 @@ def test_down_from_history_returns_to_live : Bool :=
                         Pair.pair m3 _ =>
                             match TuiApp.update m3 (key_msg Key.down) {
                                 Pair.pair m4 cmd =>
-                                    cmd_is_none cmd && String.is_empty m4.input.value && m4.hist_idx == 0 - 1
+                                    cmd_is_none cmd && String.is_empty m4.prompt.input.value && m4.prompt.hist_idx == 0 - 1
                             }
                     }
             }
@@ -409,7 +409,7 @@ def test_up_with_text_is_not_history : Bool :=
     match TuiApp.update (model_of Mode.manual) (key_msg (Key.char "a")) {
         Pair.pair m1 _ =>
             match TuiApp.update m1 (key_msg Key.up) {
-                Pair.pair m2 cmd => cmd_is_none cmd && m2.input.value == "a" && m2.hist_idx == 0 - 1
+                Pair.pair m2 cmd => cmd_is_none cmd && m2.prompt.input.value == "a" && m2.prompt.hist_idx == 0 - 1
             }
     }
 
@@ -453,7 +453,7 @@ def test_enter_while_pending_queues_the_line : Bool :=
                                 Pair.pair m4 cmd =>
                                     cmd_be cmd Cmd.none
                                         && List.length m4.queued == 1
-                                        && String.is_empty m4.input.value
+                                        && String.is_empty m4.prompt.input.value
                             }
                     }
             }
@@ -562,7 +562,7 @@ def test_input_set_ends_the_turn : Bool :=
     match TuiApp.update (enter_pending (model_of Mode.manual)) (WeaverMsg.input_set "fix it") {
         Pair.pair m2 cmd =>
             Bool.not m2.turn_pending && Bool.not m2.modal && cmd_is_perform_repaint cmd
-                && m2.input.value == "fix it",
+                && m2.prompt.input.value == "fix it",
     }
 
 // Esc while a turn runs requests the stop (an inspect that writes the
@@ -710,7 +710,7 @@ def test_big_model_state_store : Bool :=
 #[test]
 def test_paste_fills_the_box_without_submitting : Bool :=
     match TuiApp.update (model_of Mode.manual) (WeaverMsg.key_event (Event.paste "one\ntwo")) {
-        Pair.pair m2 cmd => cmd_is_none cmd && m2.input.value == "one\ntwo" && Bool.not m2.turn_pending
+        Pair.pair m2 cmd => cmd_is_none cmd && m2.prompt.input.value == "one\ntwo" && Bool.not m2.turn_pending
     }
 
 // ── the launch banner ───────────────────────────────────────────────────
@@ -796,7 +796,7 @@ def test_picker_swallows_typing : Bool :=
     match TuiApp.update (model_of Mode.manual) (picker_command picker_models) {
         Pair.pair m1 _ =>
             match TuiApp.update m1 (key_msg (Key.char "x")) {
-                Pair.pair m2 _ => m2.input.value == "",
+                Pair.pair m2 _ => m2.prompt.input.value == "",
             },
     }
 
@@ -936,7 +936,7 @@ def test_enter_queues_while_a_turn_runs : Bool :=
         Pair.pair m2 cmd =>
             m2.turn_pending
                 && List.length m2.queued == 1
-                && String.is_empty m2.input.value
+                && String.is_empty m2.prompt.input.value
                 && cmd_is_none cmd
                 && transcript_contains "queued: q" m2.transcript.tail,
     }

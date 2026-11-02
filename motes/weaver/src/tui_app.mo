@@ -38,11 +38,10 @@ use weaver::model {
     TuiModel, WeaverMsg, Window, on_event, init_tui_model, init_tui_model_with,
     Model.view, Model.scroll_step, Model.append_block, Model.append_lines,
     Model.scrollbar_hit, Model.scrollbar_press, Model.scrollbar_drag_to, Model.scrollbar_release,
-    Model.window, Model.needs_page, Model.page_request, Model.hist_keep,
+    Model.window, Model.needs_page, Model.page_request,
     Model.refresh_rows, Model.begin_selection, Model.drag_selection, Model.finish_selection,
-    Model.clear_input_selection, Model.in_input, Model.input_drag, Model.input_press,
-    Model.input_release, Model.input_sel_active, Model.picker_height,
-    list_length, panel_height, input_placeholder,
+    Model.prompt_box, Model.picker_height,
+    panel_height,
 }
 use weaver::ui::rows {DisplayRow, Rows.of_line, Rows.wrap, Rows.take, Rows.drop, Rows.widget}
 use weaver::logs {Logs.info, Logs.debug, Logs.warn, Logs.error, Logs.log_rss}
@@ -87,6 +86,7 @@ use tui::terminal {
 use tui::input {Input.step, InputReader, input_reader}
 use tui::tui {App, Cmd, run_app}
 use tui::widgets::picker {PickerModel, PickerStep, Picker.make, Picker.update}
+use weaver::ui::prompt {PromptMsg, Prompt.update, Prompt.text, Prompt.set_text, Prompt.clear, Prompt.submitted, Prompt.selecting, Prompt.clear_selection, Prompt.box_contains}
 use tui::component {Subs, Subs.map, Subs.on_tick}
 use weaver::ui::live {LiveMsg, Live.idle, Live.start, Live.update, Live.request_stop, Live.subscriptions, Live.write_usage, Live.store_usage}
 use init::transformers {ResultT}
@@ -190,7 +190,7 @@ def update_msg (m : TuiModel) (msg : WeaverMsg) : Pair TuiModel (Cmd WeaverMsg) 
         WeaverMsg.submit st text => submit_line (set_state { m with plan_ready := false } st) text,
         WeaverMsg.input_set text =>
             let m2 : TuiModel := with_turn_end (fn (mm : TuiModel) =>
-                { mm with input := input_state text input_placeholder, banner := false }) m in
+                { mm with prompt := Prompt.set_text mm.prompt text, banner := false }) m in
             Pair.pair m2 repaint_cmd,
         // The Esc request reached the signal file.
         WeaverMsg.stop_sent => Pair.pair m Cmd.none,
@@ -636,7 +636,7 @@ def update_event (m : TuiModel) (e : Event) : Pair TuiModel (Cmd WeaverMsg) :=
         Event.paste text =>
             if picker_open m
             then Pair.pair m Cmd.none
-            else Pair.pair (with_streak_reset (fn (mm : TuiModel) => { mm with input := insert_text text mm.input }) m) Cmd.none,
+            else Pair.pair (with_streak_reset (fn (mm : TuiModel) => prompt_step mm (PromptMsg.paste text)) m) Cmd.none,
         Event.mouse me => update_mouse m me,
         // The frame clock: the spinner advances ONLY while a turn is
         // pending, so an idle tick folds to an unchanged model (a
@@ -700,9 +700,9 @@ def update_mouse (m : TuiModel) (me : MouseEvent) : Pair TuiModel (Cmd WeaverMsg
                 // starts a transcript one and drops any input highlight.
                 if Model.scrollbar_hit m r c
                 then maybe_page_cmd (with_streak_reset (fn (mm : TuiModel) => Model.scrollbar_press mm r) m)
-                else if Model.in_input m r c
-                then Pair.pair (with_streak_reset (fn (mm : TuiModel) => Model.input_press mm r c) m) Cmd.none
-                else Pair.pair (with_streak_reset (fn (mm : TuiModel) => Model.begin_selection (Model.clear_input_selection mm) r c) m) Cmd.none
+                else if Prompt.box_contains (Model.prompt_box m) r c
+                then Pair.pair (with_streak_reset (fn (mm : TuiModel) => { (prompt_step mm (PromptMsg.press r c)) with sel := Option.none }) m) Cmd.none
+                else Pair.pair (with_streak_reset (fn (mm : TuiModel) => Model.begin_selection { mm with prompt := Prompt.clear_selection mm.prompt } r c) m) Cmd.none
             else Pair.pair (with_streak_reset (fn (mm : TuiModel) => mm) m) Cmd.none,
         MouseEvent.drag btn r c =>
             if is_left btn
@@ -711,8 +711,8 @@ def update_mouse (m : TuiModel) (me : MouseEvent) : Pair TuiModel (Cmd WeaverMsg
                     Option.some _ =>
                         maybe_page_cmd (with_streak_reset (fn (mm : TuiModel) => Model.scrollbar_drag_to mm r) m),
                     Option.none =>
-                        if Model.input_sel_active m
-                        then Pair.pair (with_streak_reset (fn (mm : TuiModel) => Model.input_drag mm r c) m) Cmd.none
+                        if Prompt.selecting m.prompt
+                        then Pair.pair (with_streak_reset (fn (mm : TuiModel) => prompt_step mm (PromptMsg.drag r c)) m) Cmd.none
                         else Pair.pair (with_streak_reset (fn (mm : TuiModel) => Model.drag_selection mm r c) m) Cmd.none,
                 }
             else Pair.pair (with_streak_reset (fn (mm : TuiModel) => mm) m) Cmd.none,
@@ -722,7 +722,7 @@ def update_mouse (m : TuiModel) (me : MouseEvent) : Pair TuiModel (Cmd WeaverMsg
                 match m.scroll_drag {
                     Option.some _ => Pair.pair (with_streak_reset Model.scrollbar_release m) Cmd.none,
                     Option.none =>
-                        if Model.input_sel_active m
+                        if Prompt.selecting m.prompt
                         then finish_input_selection_step m r c
                         else finish_selection_step m r c,
                 }
@@ -751,8 +751,8 @@ def finish_selection_step (m : TuiModel) (r : I64) (c : I64) : Pair TuiModel (Cm
 /// The input-box twin: the release folds into the input selection, then a
 /// non-empty drag copies through OSC 52.
 def finish_input_selection_step (m : TuiModel) (r : I64) (c : I64) : Pair TuiModel (Cmd WeaverMsg) :=
-    match Model.input_release m r c {
-        Pair.pair m2 text => match text {
+    match Prompt.update (Model.prompt_box m) m.prompt (PromptMsg.release r c) {
+        Pair.pair p2 text => let m2 : TuiModel := { m with prompt := p2 } in match text {
             Option.none => Pair.pair (with_streak_reset (fn (mm : TuiModel) => mm) m2) Cmd.none,
             Option.some t => Pair.pair (with_streak_reset (fn (mm : TuiModel) => mm) m2) (clipboard_cmd t),
         },
@@ -799,8 +799,8 @@ def editor_key (m : TuiModel) (k : Key) : Pair TuiModel (Cmd WeaverMsg) :=
     match k {
         Key.tab => Pair.pair (with_streak_reset cycle_mode m) Cmd.none,
         Key.enter => enter_key m,
-        Key.up => hist_key m,
-        Key.down => hist_down_key m,
+        Key.up => Pair.pair (streak_reset_input m Key.up) Cmd.none,
+        Key.down => Pair.pair (streak_reset_input m Key.down) Cmd.none,
         Key.page_up => scroll_with_pages m (page_step m),
         Key.page_down => scroll_with_pages m (0 - page_step m),
         Key.ctrl c =>
@@ -845,8 +845,8 @@ def stop_cmd (store : Option StoreState) (gen : I64) : Unit -> IO WeaverMsg :=
 /// ask it to stop -- the fiber ends at its next model/tool boundary and
 /// the live row says `stopping…` meanwhile.
 def escape_key (m : TuiModel) : Pair TuiModel (Cmd WeaverMsg) :=
-    if Model.input_sel_active m
-    then Pair.pair (with_streak_reset (fn (mm : TuiModel) => Model.clear_input_selection mm) m) Cmd.none
+    if Prompt.selecting m.prompt
+    then Pair.pair (with_streak_reset (fn (mm : TuiModel) => { mm with prompt := Prompt.clear_selection mm.prompt }) m) Cmd.none
     else if transcript_sel_active m
     then Pair.pair (with_streak_reset (fn (mm : TuiModel) => { mm with sel := Option.none }) m) Cmd.none
     else if Bool.and m.turn_pending (Bool.not m.live.stopping)
@@ -868,62 +868,15 @@ def half_page (m : TuiModel) : I64 :=
     let h : I64 := page_step m in
     if h < 2 then 1 else h / 2
 
+/// A key for the prompt (editing, or the up/down history walk).
 def streak_reset_input (m : TuiModel) (k : Key) : TuiModel :=
-    { (multiline_input m k) with ctrl_c_streak := 0, ctrl_d_streak := 0 }
+    { (prompt_step m (PromptMsg.key k)) with ctrl_c_streak := 0, ctrl_d_streak := 0 }
 
-def multiline_input (m : TuiModel) (k : Key) : TuiModel :=
-    { m with input := handle_input_multiline_key k m.input }
-
-// ── prompt history (the up/down gesture) ────────────────────────────────
-
-/// ArrowUp: history from an EMPTY input (otherwise the gesture is the
-/// multiline cursor's, handled in the input field), and CONTINUED
-/// history while a walk is already open (a recalled value is not
-/// empty). Recall shows the entry and walks OLDER ones on repeats.
-#[partial]
-def hist_key (m : TuiModel) : Pair TuiModel (Cmd WeaverMsg) :=
-    let browsing : Bool := Bool.not (m.hist_idx < 0) in
-    if Bool.or browsing (String.is_empty m.input.value)
-    then Pair.pair (with_streak_reset hist_up m) Cmd.none
-    else Pair.pair (streak_reset_input m Key.up) Cmd.none
-
-/// ArrowDown while browsing steps younger; at the first entry it
-/// returns to the live edit (empty box, placeholder back). Not
-/// browsing = the multiline cursor's move.
-#[partial]
-def hist_down_key (m : TuiModel) : Pair TuiModel (Cmd WeaverMsg) :=
-    let browsing : Bool := Bool.not (m.hist_idx < 0) in
-    if browsing
-    then Pair.pair (with_streak_reset hist_down m) Cmd.none
-    else Pair.pair (streak_reset_input m Key.down) Cmd.none
-
-#[partial]
-def hist_up (m : TuiModel) : TuiModel :=
-    let next : I64 := m.hist_idx + 1 in
-    if Bool.not (next < list_length m.hist)
-    then m
-    else hist_show m next
-
-#[partial]
-def hist_down (m : TuiModel) : TuiModel :=
-    if m.hist_idx < 0
-    then m
-    else
-        let next : I64 := m.hist_idx - 1 in
-        if next < 0
-        then { m with hist_idx := 0 - 1, input := input_state "" input_placeholder }
-        else hist_show m next
-
-#[partial]
-def hist_show (m : TuiModel) (idx : I64) : TuiModel :=
-    let value : String := hist_at m.hist idx in
-    { m with hist_idx := idx, input := input_state value input_placeholder }
-
-#[partial]
-def hist_at (xs : List String) (i : I64) : String :=
-    match xs {
-        List.empty => "",
-        List.cons h rest => if i < 1 then h else hist_at rest (i - 1),
+/// Route one message to the prompt; a selection's copied text is dropped
+/// here (only a mouse release produces one, and that path copies it).
+def prompt_step (m : TuiModel) (msg : PromptMsg) : TuiModel :=
+    match Prompt.update (Model.prompt_box m) m.prompt msg {
+        Pair.pair p2 _ => { m with prompt := p2 },
     }
 
 /// `with_streak_reset f m` = apply `f`, then zero both exit streaks.
@@ -973,9 +926,6 @@ def toggle_details (m : TuiModel) : Pair TuiModel (Cmd WeaverMsg) :=
 def ctrl_c_hint_line : String := "press Ctrl+C again to exit (or /quit)"
 def ctrl_d_hint_line : String := "press Ctrl+D again to exit (or /quit)"
 
-def edit_input (m : TuiModel) (k : Key) : TuiModel :=
-    { m with input := handle_input_multiline_key k m.input }
-
 def cycle_mode (m : TuiModel) : TuiModel :=
     let st2 : WeaverState := { (m.state) with mode := Mode.cycle m.state.mode } in
     set_state m st2
@@ -990,7 +940,7 @@ def cycle_mode (m : TuiModel) : TuiModel :=
 /// consumer). A turn whose fiber never ran folds back as `turn_failed`,
 /// so `turn_pending` clears the same way a failed turn's does.
 def enter_key (m : TuiModel) : Pair TuiModel (Cmd WeaverMsg) :=
-    let text : String := String.trim m.input.value in
+    let text : String := String.trim (Prompt.text m.prompt) in
     if String.is_empty text then Pair.pair m Cmd.none
     else if m.turn_pending then queue_line m text
     else submit_line m text
@@ -1003,7 +953,7 @@ def queue_line (m : TuiModel) (text : String) : Pair TuiModel (Cmd WeaverMsg) :=
     let queued : List String := List.append m.queued (List.cons text List.empty) in
     let line : TLine := TLine.plain (String.concat "queued: " text) in
     let m2 : TuiModel :=
-        { (with_streak_reset (fn (mm : TuiModel) => Model.append_block (clear_input mm) (List.cons line List.empty)) m)
+        { (with_streak_reset (fn (mm : TuiModel) => Model.append_block { mm with prompt := Prompt.clear mm.prompt } (List.cons line List.empty)) m)
             with queued := queued } in
     Pair.pair m2 Cmd.none
 
@@ -1032,7 +982,7 @@ def submit_line (m : TuiModel) (text : String) : Pair TuiModel (Cmd WeaverMsg) :
     let gen : I64 := m.turn_gen + 1 in
     let m2 : TuiModel :=
         { (with_streak_reset
-            (fn (mm : TuiModel) => Model.append_block (hist_push (clear_input mm) text) echo) m)
+            (fn (mm : TuiModel) => Model.append_block { mm with prompt := Prompt.submitted mm.prompt text } echo) m)
             with turn_pending := true, banner := false,
                  live := Live.start (Option.some m.state.run.session.spent), scroll := 0,
                  turn_gen := gen,
@@ -1062,21 +1012,6 @@ def write_echo (store : Option StoreState) (start : I64) (block : List TLine) : 
         },
     }
 
-/// A submitted line enters the history (most recent first, deduped
-/// against the current head) and the walk index returns to live.
-#[partial]
-def hist_push (m : TuiModel) (text : String) : TuiModel :=
-    let pushed : List String :=
-        match m.hist {
-            List.empty => hist_cons_empty text,
-            List.cons h rest => if h == text then m.hist else List.cons text m.hist,
-        } in
-    { m with hist := Model.hist_keep pushed, hist_idx := 0 - 1 }
-
-#[partial]
-def hist_cons_empty (text : String) : List String :=
-    List.cons text List.empty
-
 /// A submitted line is echoed as its OWN lines, all tagged as the user's
 /// role -- a multiline submit is one undivided block, styled cyan with no
 /// prefix. The blank separator before the block (and the next one) is the
@@ -1084,12 +1019,6 @@ def hist_cons_empty (text : String) : List String :=
 #[partial]
 def echo_lines (text : String) : List TLine :=
     List.map TLine.user_line (theme_split_lines text)
-
-def clear_input (m : TuiModel) : TuiModel :=
-    { m with input := weaver_input_state }
-
-def weaver_input_state : InputState :=
-    input_state "" "type a message, or /help"
 
 def set_state (m : TuiModel) (st : WeaverState) : TuiModel :=
     { m with state := st }

@@ -39,6 +39,7 @@ use tui::text {
     Text.width, Text.slice_cols, Text.snap_span,
 }
 use std::list {List.intercalate}
+use weaver::ui::prompt {PromptModel, PromptBox, Prompt.empty, Prompt.view}
 use tui::widgets::picker {PickerModel, Picker.list_height, Picker.view}
 use weaver::ui::live {LiveModel, LiveMsg, LiveView, Live.idle, Live.rows, Live.height, Live.thinking_height, Live.text_height}
 use weaver::ui::rows {
@@ -121,7 +122,8 @@ pub struct RowsKey {
 
 pub struct TuiModel {
     state : WeaverState,
-    input : InputState,
+    /// The input box and its submit history.
+    prompt : PromptModel := Prompt.empty,
     /// The bounded window into the session's transcript: the last
     /// `Store.tail_lines` lines plus at most one older page read from disk.
     transcript : Transcript,
@@ -147,11 +149,6 @@ pub struct TuiModel {
     /// none when no scrollbar drag is in progress. Kept out of `sel` so a
     /// bar drag never becomes a text selection.
     scroll_drag : Option I64 := Option.none,
-    /// Submitted non-empty lines, most recent first (the up-arrow
-    /// history; ArrowUp recalls only from an empty input).
-    hist : List String := List.empty,
-    /// Where the history walk stands (-1 = live edit, not browsing).
-    hist_idx : I64 := 0 - 1,
     /// A turn is running on its own fiber (`Cmd.perform_async`): the
     /// spinner shows and the status row carries its glyph. Keys typed
     /// meanwhile reach the input box (they are read mid-turn unless a
@@ -232,12 +229,8 @@ pub def init_tui_model (log : Option Logger) (st : WeaverState) (rows : I64) (co
 
 /// The startup tail loaded from the session store.
 pub def init_tui_model_with (log : Option Logger) (st : WeaverState) (rows : I64) (cols : I64) (tr : Transcript) : TuiModel :=
-    let m : TuiModel := { state := st, input := input_state "" input_placeholder, transcript := tr, rows := rows, cols := cols, ctrl_c_streak := 0, ctrl_d_streak := 0, scroll := 0, row_total := 0, scroll_drag := Option.none, hist := List.empty, hist_idx := 0 - 1, turn_pending := false, frame := 0, page_pending := false, rows_cache := List.empty, rows_key := Option.none, sel := Option.none, banner := true, banner_frame := 0, live := Live.idle, show_details := false, modal := false, plan_ready := false, want_older := false, want_top := false, title_due := false, turn_gen := 0, overlay_open := false, dialog_seq := 0, picker := Option.none, queued := List.empty, queued_ready := false, log := log } in
+    let m : TuiModel := { state := st, prompt := Prompt.empty, transcript := tr, rows := rows, cols := cols, ctrl_c_streak := 0, ctrl_d_streak := 0, scroll := 0, row_total := 0, scroll_drag := Option.none, turn_pending := false, frame := 0, page_pending := false, rows_cache := List.empty, rows_key := Option.none, sel := Option.none, banner := true, banner_frame := 0, live := Live.idle, show_details := false, modal := false, plan_ready := false, want_older := false, want_top := false, title_due := false, turn_gen := 0, overlay_open := false, dialog_seq := 0, picker := Option.none, queued := List.empty, queued_ready := false, log := log } in
     Model.refresh_rows m
-
-/// The input box's placeholder, shared by the live edit and a history
-/// walk's return-to-live.
-pub def input_placeholder : String := "type a message, or /help" 
 
 // ── the launch banner ────────────────────────────────────────────────────
 
@@ -336,7 +329,7 @@ pub def Model.view (m : TuiModel) : Widget :=
         else Widget.row [sized (LayoutSize.fill 1) body, sized (LayoutSize.fixed 1) (Model.scrollbar_column m)] in
     let transcript : SizedWidget := sized (LayoutSize.fill 1) (border_with (theme_border_style_with colors) BorderStyle.rounded (padding 1 0 0 0 inner)) in
     let status : SizedWidget := sized (LayoutSize.fixed 1) (with_style (theme_status_style_with colors mode) (label (status_line m))) in
-    let input : SizedWidget := sized (LayoutSize.fixed 3) (padding 1 0 1 0 (text_input m.input)) in
+    let input : SizedWidget := sized (LayoutSize.fixed 3) (Prompt.view m.prompt) in
     let head : List SizedWidget := if m.banner then [sized (LayoutSize.fixed Model.banner_height) (banner_widget m)] else List.empty in
     Widget.column (List.append head [transcript, status, input])
 
@@ -358,49 +351,11 @@ pub def Model.panel_left : I64 := 2
 // column 1 and row rows-3, three rows tall (single-line text on the first,
 // multiline down to the third). Banner-independent.
 
-pub def Model.input_top (m : TuiModel) : I64 :=
-    let y : I64 := m.rows - 3 in
-    if y < 0 then 0 else y
-pub def Model.input_left : I64 := 1
-pub def Model.input_width (m : TuiModel) : I64 :=
-    let w : I64 := m.cols - 2 in
-    if w < 1 then 1 else w
-pub def Model.input_height : I64 := 3
-
-pub def Model.in_input (m : TuiModel) (row : I64) (col : I64) : Bool :=
-    let top : I64 := Model.input_top m in
-    let right : I64 := Model.input_left + Model.input_width m in
-    Bool.and (Bool.not (row < top))
-        (Bool.and (row < top + Model.input_height)
-            (Bool.and (Bool.not (col < Model.input_left)) (col < right)))
-
-pub def Model.input_press (m : TuiModel) (row : I64) (col : I64) : TuiModel :=
-    let rel_row : I64 := row - Model.input_top m in
-    let rel_col : I64 := col - Model.input_left in
-    let st : InputState := InputState.press m.input (Model.input_width m) Model.input_height rel_row rel_col in
-    { m with input := st, sel := Option.none }
-
-pub def Model.input_drag (m : TuiModel) (row : I64) (col : I64) : TuiModel :=
-    let rel_row : I64 := row - Model.input_top m in
-    let rel_col : I64 := col - Model.input_left in
-    { m with input := InputState.drag m.input (Model.input_width m) Model.input_height rel_row rel_col }
-
-pub def Model.clear_input_selection (m : TuiModel) : TuiModel :=
-    { m with input := InputState.clear_selection m.input }
-
-/// Whether a drag in the input box is in progress.
-pub def Model.input_sel_active (m : TuiModel) : Bool :=
-    match m.input.sel {
-        Option.none => false,
-        Option.some _ => true,
-    }
-
-/// Finish a drag in the input: drop the highlight and return its text.
-pub def Model.input_release (m : TuiModel) (row : I64) (col : I64) : Pair TuiModel (Option String) :=
-    let dragged : TuiModel := Model.input_drag m row col in
-    match InputState.finish_selection dragged.input {
-        Pair.pair input2 text => Pair.pair { dragged with input := input2 } text,
-    }
+pub def Model.prompt_box (m : TuiModel) : PromptBox :=
+    let top : I64 := if m.rows - 3 < 0 then 0 else m.rows - 3 in
+    let width : I64 := if m.cols - 2 < 1 then 1 else m.cols - 2 in
+    let b : PromptBox := { top := top, left := 1, width := width, height := 3 } in
+    b
 
 pub struct TextSelection {
     anchor_row : I64,
@@ -766,14 +721,6 @@ pub def scroll_indicator (n : I64) : String :=
     let lines_word : String := if n == 1 then "line above -- PgDn for latest" else "lines above -- PgDn for latest" in
     String.concat (String.concat (I64.to_string n) " ") lines_word
 
-#[partial]
-def take_n (n : I64) (xs : List String) : List String :=
-    if n < 1 then List.empty
-    else match xs {
-        List.empty => List.empty,
-        List.cons x rest => List.cons x (take_n (n - 1) rest),
-    }
-
 /// The top scroll still allows: at most `len - (height - 1)` (the
 /// scrolled window shows `height - 1` content rows and an indicator
 /// row), never less than 0 -- so the transcript's FIRST line is
@@ -958,20 +905,6 @@ pub def Model.append_lines (m : TuiModel) (lines : List TLine) : TuiModel :=
     Model.refresh_rows m2
 
 pub def Model.transcript_count (m : TuiModel) : I64 := m.transcript.total
-
-/// Prompt history is capped: an unbounded `List String` was the other
-/// per-process growth.
-pub def Model.hist_cap : I64 := 200
-
-pub def Model.hist_keep (xs : List String) : List String :=
-    take_n Model.hist_cap xs
-
-#[partial]
-pub def list_length (xs : List String) : I64 :=
-    match xs {
-        List.empty => 0,
-        List.cons _ rest => 1 + list_length rest,
-    }
 
 // ── status line ─────────────────────────────────────────────────────────
 
