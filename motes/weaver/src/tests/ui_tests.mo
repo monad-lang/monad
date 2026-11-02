@@ -21,17 +21,19 @@ use weaver::ui::live {LiveModel, LiveView, Live.start, Live.request_stop, Live.s
 use weaver::ui::rows {DisplayRow, Rows.of_line, Rows.wrap, Rows.cap_bytes}
 use weaver::ui::banner {Banner.shown, Banner.hidden}
 use weaver::model {
-    TuiModel, Window, init_tui_model,
-    Model.scroll_step, Model.append_block, Model.window, Model.needs_page,
-    Model.page_request, Model.visible_rows, scroll_indicator, panel_height,
-    Model.display_rows, Model.content_width, 
-    Model.body_height, Model.live_view, status_line,
-    Model.row_total_of, Model.first_line_at_row, Model.refresh_rows,
+    TuiModel, init_tui_model,
+    Model.scroll_step, Model.append_block, Model.pane_view, panel_height,
+    Model.display_rows, Model.content_width,
+    Model.body_height, Model.live_view, status_line, Model.refresh_rows,
     Model.view, Model.panel_top_of, Model.panel_left,
 }
 use tui::render {render}
 use tui::core {empty_screen, mk_rect, screen_get_cell, style_default}
 use tui::types {Screen}
+use weaver::ui::pane {
+    PaneModel, Window, Pane.window, Pane.needs_page, Pane.page_request, Pane.visible_rows,
+    Pane.indicator_text, Pane.row_total_of, Pane.first_line_at_row,
+}
 use weaver::store {TLine, TLine.plain, TLine.detail_line, Transcript, TranscriptPage, Transcript.with_page}
 
 def mock_config : ProviderConfig :=
@@ -49,6 +51,14 @@ def state_of : WeaverState :=
 def model_of : TuiModel :=
     let m : TuiModel := init_tui_model Option.none state_of 24 80 in
     { m with banner := Banner.hidden }
+
+def visible_of (m : TuiModel) : List DisplayRow := Pane.visible_rows (Model.pane_view m) m.pane
+
+def row_total_of (m : TuiModel) : I64 := Pane.row_total_of (Model.pane_view m) m.pane
+
+def with_transcript (m : TuiModel) (tr : Transcript) : TuiModel :=
+    let p : PaneModel := m.pane in
+    { m with pane := { p with transcript := tr } }
 
 def nth_line (i : I64) : String := String.concat "l" (I64.to_string i)
 
@@ -96,58 +106,58 @@ def test_banner_spends_four_rows : Bool :=
 
 #[test]
 def test_pinned_shows_the_tail : Bool :=
-    let vis := Model.visible_rows (filled 25) in
+    let vis := visible_of (filled 25) in
     let count : I64 := List.length vis in
     first_text_of vis == "l8" && count == 18 && last_text_of vis == "l25"
 
 #[test]
 def test_page_up_clamps_to_headroom : Bool :=
     let m := Model.scroll_step (filled 25) 20 in
-    m.scroll == 8
+    m.pane.scroll == 8
 
 #[test]
 def test_scroll_clamps_at_top : Bool :=
     let m := Model.scroll_step (Model.scroll_step (filled 25) 5) 999999 in
-    m.scroll == 8
+    m.pane.scroll == 8
 
 #[test]
 def test_scroll_clamps_at_zero : Bool :=
     let m := Model.scroll_step (filled 25) (0 - 99) in
-    m.scroll == 0
+    m.pane.scroll == 0
 
 #[test]
 def test_tiny_terminal_clamps_to_zero : Bool :=
     let tiny : TuiModel := init_tui_model Option.none state_of 5 80 in
     let stepped := Model.scroll_step tiny 1 in
-    panel_height tiny == 0 && stepped.scroll == 0
+    panel_height tiny == 0 && stepped.pane.scroll == 0
 
 #[test]
 def test_indicator_count_is_the_first_line : Bool :=
-    scroll_indicator 7 == "7 lines above -- PgDn for latest"
+    Pane.indicator_text 7 == "7 lines above -- PgDn for latest"
 
 #[test]
 def test_scroll_window_shows_indicator_and_stops_a_row_short : Bool :=
-    let vis := Model.visible_rows (Model.scroll_step (filled 25) 5) in
+    let vis := visible_of (Model.scroll_step (filled 25) 5) in
     first_text_of vis == "3 lines above -- PgDn for latest" && last_text_of vis == "l20"
 
 #[test]
 def test_stay_put_scroll_append_holds_the_visible_top : Bool :=
     let m2 := Model.append_block (Model.scroll_step (filled 25) 5) [TLine.plain (nth_line 26), TLine.plain (nth_line 27)] in
-    m2.scroll == 8
+    m2.pane.scroll == 8
 
 #[test]
 def test_pinned_append_stays_pinned : Bool :=
     let m2 := Model.append_block (filled 25) [TLine.plain (nth_line 26)] in
-    m2.scroll == 0
+    m2.pane.scroll == 0
 
 #[test]
 def test_pinned_append_rides_the_tail : Bool :=
-    let vis := Model.visible_rows (Model.append_block (filled 25) [TLine.plain (nth_line 26)]) in
+    let vis := visible_of (Model.append_block (filled 25) [TLine.plain (nth_line 26)]) in
     last_text_of vis == "l26"
 
 #[test]
 def test_full_scroll_reaches_the_first_line : Bool :=
-    let vis := Model.visible_rows (Model.scroll_step (filled 25) 8) in
+    let vis := visible_of (Model.scroll_step (filled 25) 8) in
     match vis {
         List.cons _ rest => first_text_of rest == "l1",
         List.empty => false,
@@ -156,30 +166,30 @@ def test_full_scroll_reaches_the_first_line : Bool :=
 #[test]
 def test_end_repins : Bool :=
     let m := Model.scroll_step (Model.scroll_step (filled 25) 5) (0 - 5) in
-    m.scroll == 0
+    m.pane.scroll == 0
 
 // ── the bounded window: overflow and pages ────────────────────────────
 
 #[test]
 def test_pinned_tail_after_overflow : Bool :=
-    let vis := Model.visible_rows (filled 600) in
+    let vis := visible_of (filled 600) in
     let count : I64 := List.length vis in
     first_text_of vis == "l583" && count == 18 && last_text_of vis == "l600"
 
 #[test]
 def test_home_window_precedes_the_tail : Bool :=
     let m := Model.scroll_step (filled 600) 999999 in
-    let w : Window := Model.window m in
+    let w : Window := Pane.window (Model.pane_view m) m.pane in
     // The window is pinned to the LOADED top (`tail_start`), not to a
     // phantom row 0: unloaded lines have no rows to scroll through.
     let at_loaded_top : Bool := w.first_line == 88 in
-    at_loaded_top && Model.needs_page m w
+    at_loaded_top && Pane.needs_page m.pane w
 
 #[test]
 def test_page_request_covers_the_pre_tail : Bool :=
     let m := Model.scroll_step (filled 600) 999999 in
-    let w : Window := Model.window m in
-    match Model.page_request m w {
+    let w : Window := Pane.window (Model.pane_view m) m.pane in
+    match Pane.page_request m.pane {
         Option.none => false,
         Option.some req => match req { Pair.pair s c => s == 0 && c == 88 },
     }
@@ -187,24 +197,24 @@ def test_page_request_covers_the_pre_tail : Bool :=
 #[test]
 def test_loaded_page_covers_the_top : Bool :=
     let base := filled 600 in
-    let tr0 := base.transcript in
+    let tr0 := base.pane.transcript in
     let p : TranscriptPage := { start := 0, lines := lines_up_to 88 1 } in
     let tr := Transcript.with_page tr0 p in
-    let m0 : TuiModel := { base with transcript := tr } in
+    let m0 : TuiModel := with_transcript base tr in
     let m := Model.scroll_step m0 999999 in
-    let w : Window := Model.window m in
-    let vis := Model.visible_rows m in
-    Bool.not (Model.needs_page m w)
+    let w : Window := Pane.window (Model.pane_view m) m.pane in
+    let vis := visible_of m in
+    Bool.not (Pane.needs_page m.pane w)
         && (match vis { List.cons _ rest => first_text_of rest == "l1", List.empty => false })
 
 #[test]
 def test_stay_put_append_holds_the_absolute_top : Bool :=
     let m := Model.scroll_step (filled 600) 5 in
-    let before : String := first_content_of (Model.visible_rows m) in
+    let before : String := first_content_of (visible_of m) in
     let m2 := Model.append_block m [TLine.plain (nth_line 601)] in
     // The tail cap drops the two oldest lines on this append, so the
     // RELATIVE start moves while the content must not: compare the line.
-    m2.scroll == 7 && first_content_of (Model.visible_rows m2) == before
+    m2.pane.scroll == 7 && first_content_of (visible_of m2) == before
 
 // ── the scroll space holds only LOADED rows ───────────────────────────
 // The unloaded prefix used to count one row per line, so a long session
@@ -230,7 +240,7 @@ def all_nonempty (rs : List DisplayRow) : Bool :=
 
 #[test]
 def test_home_shows_loaded_lines_not_blank_placeholders : Bool :=
-    let vis := Model.visible_rows (Model.scroll_step (filled 600) 999999) in
+    let vis := visible_of (Model.scroll_step (filled 600) 999999) in
     match vis {
         List.cons _ rest => first_text_of rest == "l89" && all_nonempty vis,
         List.empty => false,
@@ -242,7 +252,7 @@ def test_home_shows_loaded_lines_not_blank_placeholders : Bool :=
 def test_first_line_counts_hidden_detail_lines : Bool :=
     let details : List TLine := detail_block 40 in
     let m : TuiModel := Model.append_block model_of (List.append details (lines_up_to 20 1)) in
-    Model.first_line_at_row m 0 == 40
+    Pane.first_line_at_row (Model.pane_view m) m.pane 0 == 40
 
 /// Scrolled into a loaded page when the NEXT page lands: the view must
 /// still be real lines. The second page used to replace the first, and
@@ -251,25 +261,25 @@ def test_first_line_counts_hidden_detail_lines : Bool :=
 def test_second_page_leaves_no_blank_rows : Bool :=
     let base : TuiModel := Model.scroll_step (filled 1200) 30 in
     let p1 : TranscriptPage := { start := 176, lines := lines_up_to 688 177 } in
-    let tr1 : Transcript := Transcript.with_page base.transcript p1 in
-    let m1 : TuiModel := { base with transcript := tr1 } in
+    let tr1 : Transcript := Transcript.with_page base.pane.transcript p1 in
+    let m1 : TuiModel := with_transcript base tr1 in
     let m2 : TuiModel := Model.scroll_step m1 520 in
     let p2 : TranscriptPage := { start := 0, lines := lines_up_to 176 1 } in
-    let tr2 : Transcript := Transcript.with_page m2.transcript p2 in
-    let m3 : TuiModel := { m2 with transcript := tr2 } in
+    let tr2 : Transcript := Transcript.with_page m2.pane.transcript p2 in
+    let m3 : TuiModel := with_transcript m2 tr2 in
     let m4 : TuiModel := Model.scroll_step m3 17 in
-    all_nonempty (Model.visible_rows m4)
+    all_nonempty (visible_of m4)
 
 /// A page arriving above a bottom-anchored view does not move it.
 #[test]
 def test_loaded_page_above_holds_the_view : Bool :=
     let m := Model.scroll_step (filled 600) 5 in
-    let bottom : String := last_text_of (Model.visible_rows m) in
+    let bottom : String := last_text_of (visible_of m) in
     let p : TranscriptPage := { start := 0, lines := lines_up_to 88 1 } in
-    let tr : Transcript := Transcript.with_page m.transcript p in
-    let m1 : TuiModel := { m with transcript := tr } in
+    let tr : Transcript := Transcript.with_page m.pane.transcript p in
+    let m1 : TuiModel := with_transcript m tr in
     let m2 : TuiModel := Model.refresh_rows m1 in
-    last_text_of (Model.visible_rows m2) == bottom
+    last_text_of (visible_of m2) == bottom
 
 // ── line wrap ─────────────────────────────────────────────────────────
 
@@ -364,9 +374,10 @@ def test_live_stream_reserves_rows : Bool :=
 #[test]
 def test_detail_lines_are_hidden_until_ctrl_o : Bool :=
     let base : TuiModel := Model.append_block model_of [TLine.plain "summary", TLine.detail_line "full output"] in
-    let hidden : TuiModel := { base with show_details := false } in
-    let opened : TuiModel := { base with show_details := true } in
-    Model.row_total_of opened == Model.row_total_of hidden + 1i64
+    let p : PaneModel := base.pane in
+    let hidden : TuiModel := { base with pane := { p with details := false } } in
+    let opened : TuiModel := { base with pane := { p with details := true } } in
+    row_total_of opened == row_total_of hidden + 1i64
 
 /// The status bar is static mid-turn; the spinner lives on the live row.
 #[test]

@@ -128,7 +128,7 @@ def test_tab_does_not_touch_input : Bool :=
 def test_enter_on_empty_input_is_noop : Bool :=
     match TuiApp.update (model_of Mode.manual) (key_msg Key.enter) {
         Pair.pair m2 cmd =>
-            cmd_is_none cmd && String.is_empty m2.prompt.input.value && List.length m2.transcript.tail == 0
+            cmd_is_none cmd && String.is_empty m2.prompt.input.value && List.length m2.pane.transcript.tail == 0
     }
 
 #[test]
@@ -139,7 +139,7 @@ def test_enter_with_text_echoes_clears_and_performs : Bool :=
                 Pair.pair m2 cmd =>
                     cmd_is_perform cmd
                         && String.is_empty m2.prompt.input.value
-                        && transcript_user_contains "h" m2.transcript.tail
+                        && transcript_user_contains "h" m2.pane.transcript.tail
             }
     }
 
@@ -162,7 +162,7 @@ def test_single_ctrl_c_appends_hint_keeps_running : Bool :=
         Pair.pair m2 cmd =>
             cmd_is_none cmd
                 && m2.ctrl_c_streak == 1
-                && transcript_contains "press Ctrl+C again to exit (or /quit)" m2.transcript.tail
+                && transcript_contains "press Ctrl+C again to exit (or /quit)" m2.pane.transcript.tail
     }
 
 #[test]
@@ -207,7 +207,7 @@ def test_single_ctrl_d_appends_hint_keeps_running : Bool :=
             cmd_is_none cmd
                 && m2.ctrl_d_streak == 1
                 && m2.ctrl_c_streak == 0
-                && transcript_contains "press Ctrl+D again to exit (or /quit)" m2.transcript.tail
+                && transcript_contains "press Ctrl+D again to exit (or /quit)" m2.pane.transcript.tail
     }
 
 #[test]
@@ -307,7 +307,7 @@ def test_recoverable_turn_fails_keeps_running : Bool :=
         Pair.pair m2 cmd =>
             cmd_is_perform_repaint cmd
                 && Bool.not (fatal_is_some2 m2)
-                && transcript_contains "error: provider: wire down" m2.transcript.tail
+                && transcript_contains "error: provider: wire down" m2.pane.transcript.tail
     }
 
 // A config-class error is fatal: the fatal slot is set (main exits
@@ -330,7 +330,7 @@ def test_turn_that_never_ran_is_recoverable : Bool :=
             cmd_is_perform_repaint cmd
                 && Bool.not m2.turn_pending
                 && Bool.not (fatal_is_some2 m2)
-                && transcript_contains "error: io: fiber never started (no thread could be created)" m2.transcript.tail
+                && transcript_contains "error: io: fiber never started (no thread could be created)" m2.pane.transcript.tail
     }
 
 def fatal_is_some2 (m : TuiModel) : Bool :=
@@ -365,7 +365,7 @@ def test_multiline_value_routs_single_line_handler : Bool :=
                         Pair.pair m3 cmd =>
                             cmd_is_perform cmd
                                 && Bool.not (String.contains (String.trim m3.prompt.input.value) "a")
-                                && transcript_user_contains "a" m3.transcript.tail
+                                && transcript_user_contains "a" m3.pane.transcript.tail
                     }
             }
     }
@@ -488,14 +488,14 @@ def test_turn_result_ends_the_turn : Bool :=
             cmd_is_perform_repaint cmd
                 && Bool.not m2.turn_pending
                 && (match m2.live.spent { Option.none => true, Option.some _ => false })
-                && transcript_contains "done" m2.transcript.tail
+                && transcript_contains "done" m2.pane.transcript.tail
     }
 
 // A submit starts the live clock at zero and snapshots the spend.
 #[test]
 def test_enter_resets_the_live_clock : Bool :=
     let m : TuiModel := enter_pending (model_of Mode.manual) in
-    m.live.frame == 0 && m.scroll == 0
+    m.live.frame == 0 && m.pane.scroll == 0
         && (match m.live.base { Option.some _ => true, Option.none => false })
 
 // The polls ride an inspect (no forced repaint); the spinner frame folds
@@ -592,7 +592,7 @@ def test_stopped_turn_appends_the_line : Bool :=
     match TuiApp.update (enter_pending (model_of Mode.manual))
             (WeaverMsg.turn_result stopped_run [TLine.plain "partial answer"] List.empty 0 Option.none) {
         Pair.pair m2 _ =>
-            transcript_contains "[stopped]" m2.transcript.tail
+            transcript_contains "[stopped]" m2.pane.transcript.tail
                 && Bool.not m2.turn_pending
                 && Bool.not m2.live.stopping,
     }
@@ -629,13 +629,13 @@ def big_model (stored : Bool) : TuiModel :=
 #[test]
 def test_home_with_a_store_requests_a_page : Bool :=
     match TuiApp.update (big_model true) (key_msg Key.home) {
-        Pair.pair m2 cmd => m2.page_pending && cmd_is_perform_repaint cmd
+        Pair.pair m2 cmd => m2.pane.page_pending && cmd_is_perform_repaint cmd
     }
 
 #[test]
 def test_home_without_a_store_is_pure : Bool :=
     match TuiApp.update (big_model false) (key_msg Key.home) {
-        Pair.pair m2 cmd => Bool.not m2.page_pending
+        Pair.pair m2 cmd => Bool.not m2.pane.page_pending
     }
 
 #[test]
@@ -650,7 +650,7 @@ def test_page_loaded_clears_pending : Bool :=
         Pair.pair m1 _ =>
             let p : TranscriptPage := { start := 0, lines := lines_go 1 17 } in
             match TuiApp.update m1 (WeaverMsg.page_loaded p) {
-                Pair.pair m2 _ => Bool.not m2.page_pending,
+                Pair.pair m2 _ => Bool.not m2.pane.page_pending,
             }
     }
 
@@ -685,7 +685,7 @@ def test_page_load_that_makes_no_progress_stops : Bool :=
                     match TuiApp.update m2 (WeaverMsg.page_loaded p) {
                         Pair.pair m3 cmd =>
                             cmd_is_none cmd
-                            && match m3.transcript.page_error { Option.some _ => true, Option.none => false },
+                            && match m3.pane.transcript.page_error { Option.some _ => true, Option.none => false },
                     }
             }
     }
@@ -939,7 +939,7 @@ def test_enter_queues_while_a_turn_runs : Bool :=
                 && List.length m2.queued == 1
                 && String.is_empty m2.prompt.input.value
                 && cmd_is_none cmd
-                && transcript_contains "queued: q" m2.transcript.tail,
+                && transcript_contains "queued: q" m2.pane.transcript.tail,
     }
 
 /// The completion starts the head of the queue as the next turn: with no
@@ -953,7 +953,7 @@ def test_turn_completion_starts_the_queued_line : Bool :=
             cmd_is_perform cmd
                 && m2.turn_pending
                 && List.length m2.queued == 0
-                && transcript_user_contains "q" m2.transcript.tail,
+                && transcript_user_contains "q" m2.pane.transcript.tail,
     }
 
 /// Queued lines run in submit order: the first starts, the rest wait.
@@ -966,7 +966,7 @@ def test_queued_lines_start_in_order : Bool :=
         Pair.pair m3 cmd =>
             cmd_is_perform cmd
                 && List.length m3.queued == 1
-                && transcript_user_contains "a" m3.transcript.tail,
+                && transcript_user_contains "a" m3.pane.transcript.tail,
     }
 
 /// With a store the completion persists first and hands the queue to the
@@ -980,7 +980,7 @@ def test_store_write_completion_starts_the_queued_line : Bool :=
             cmd_is_perform cmd
                 && m2.turn_pending
                 && List.length m2.queued == 0
-                && transcript_user_contains "q" m2.transcript.tail,
+                && transcript_user_contains "q" m2.pane.transcript.tail,
     }
 
 /// The activity fragment's tool name, for the crash record's `tool_start`/

@@ -35,13 +35,15 @@ use weaver::permissions {PermGrant, Permissions.get, Permissions.matches, Permis
 use weaver::diff {Diff.for_input, Diff.lines}
 use weaver::dumb {append_user, drive_loop}
 use weaver::model {
-    TuiModel, WeaverMsg, Window, on_event, init_tui_model, init_tui_model_with,
+    TuiModel, WeaverMsg, on_event, init_tui_model, init_tui_model_with,
     Model.view, Model.scroll_step, Model.append_block, Model.append_lines,
-    Model.scrollbar_hit, Model.scrollbar_press, Model.scrollbar_drag_to, Model.scrollbar_release,
-    Model.window, Model.needs_page, Model.page_request,
-    Model.refresh_rows, Model.begin_selection, Model.drag_selection, Model.finish_selection,
+    Model.pane_view, Model.pane_step, Model.refresh_rows,
     Model.prompt_box, Model.picker_height,
     panel_height,
+}
+use weaver::ui::pane {
+    PaneModel, PaneMsg, Pane.reset, Pane.end_drag, Pane.selecting,
+    Pane.page_wanted, Pane.page_requested, Pane.page_loaded, Pane.page_failed,
 }
 use weaver::ui::rows {DisplayRow, Rows.of_line, Rows.wrap, Rows.take, Rows.drop, Rows.widget}
 use weaver::logs {Logs.info, Logs.debug, Logs.warn, Logs.error, Logs.log_rss}
@@ -211,8 +213,8 @@ def plain_lines (ss : List String) : List TLine :=
     List.map TLine.plain ss
 
 def append_block_at (m : TuiModel) (lines : List TLine) : Pair TuiModel (Pair I64 (List TLine)) :=
-    let block : List TLine := Transcript.next_block m.transcript lines in
-    let start : I64 := m.transcript.total in
+    let block : List TLine := Transcript.next_block m.pane.transcript lines in
+    let start : I64 := m.pane.transcript.total in
     let m2 : TuiModel := Model.append_block m lines in
     Pair.pair m2 (Pair.pair start block)
 
@@ -356,18 +358,15 @@ def failure_step (m : TuiModel) (run : RunState) (e : WeaverError) : Pair TuiMod
 // ── transcript paging ────────────────────────────────────────────────────
 
 /// The window after a scroll delta, plus a page load when the loaded top
-/// is (nearly) on screen and older lines exist. Scrolling UP sets
-/// `want_older`, which keeps prefetching even when the clamped scroll
-/// can no longer move; any down scroll drops it (and a pending Home).
+/// is (nearly) on screen and older lines exist.
 def scroll_with_pages (m : TuiModel) (delta : I64) : Pair TuiModel (Cmd WeaverMsg) :=
-    let m1 : TuiModel :=
-        if delta > 0
-        then { m with want_older := true }
-        else if delta < 0
-        then { m with want_older := false, want_top := false }
-        else m in
-    let m2 : TuiModel := with_streak_reset (fn (mm : TuiModel) => Model.scroll_step mm delta) m1 in
-    maybe_page_cmd m2
+    maybe_page_cmd (with_streak_reset (fn (mm : TuiModel) => Model.scroll_step mm delta) m)
+
+/// A pane message that may move the window, then any page it now wants.
+def pane_paged_step (m : TuiModel) (msg : PaneMsg) : Pair TuiModel (Cmd WeaverMsg) :=
+    match Model.pane_step m msg {
+        Pair.pair m2 _ => maybe_page_cmd (with_streak_reset (fn (mm : TuiModel) => mm) m2),
+    }
 
 def maybe_page_cmd (m : TuiModel) : Pair TuiModel (Cmd WeaverMsg) :=
     match m.state.store {
@@ -376,14 +375,11 @@ def maybe_page_cmd (m : TuiModel) : Pair TuiModel (Cmd WeaverMsg) :=
     }
 
 def page_cmd_for (m : TuiModel) (st : StoreState) : Pair TuiModel (Cmd WeaverMsg) :=
-    let w : Window := Model.window m in
-    if Bool.not (Model.needs_page m w) then Pair.pair m Cmd.none
-    else if m.page_pending then Pair.pair m Cmd.none
-    else match Model.page_request m w {
+    match Pane.page_wanted (Model.pane_view m) m.pane {
         Option.none => Pair.pair m Cmd.none,
         Option.some req => match req {
             Pair.pair start count =>
-                let m2 : TuiModel := { m with page_pending := true } in
+                let m2 : TuiModel := { m with pane := Pane.page_requested m.pane } in
                 // `perform` forces a full repaint, which is written as a
                 // diff against a BLANK screen: without clearing the real
                 // terminal first, every cell that becomes blank keeps its
@@ -402,52 +398,22 @@ def load_page (st : StoreState) (start : I64) (count : I64) : IO WeaverMsg := do
     }
 }
 
-/// An older page landed. Pages arrive ABOVE a bottom-anchored view, so
-/// the visible content does not move and `scroll` needs no fix-up --
-/// except for Home, which stays pinned to the loaded top and asks for the
-/// next page until the transcript's first line is loaded. The rows cache
-/// keys on `page.start` only, so every page replacement drops the key.
+/// An older page landed; the next one is asked for unless the same page
+/// came back (the store cannot cover the window: stop rather than
+/// re-requesting it forever).
 def page_loaded_step (m : TuiModel) (p : TranscriptPage) : Pair TuiModel (Cmd WeaverMsg) :=
-    let prev : Option TranscriptPage := m.transcript.page in
-    let tr : Transcript := Transcript.with_page m.transcript p in
-    let m1 : TuiModel := { m with transcript := tr, page_pending := false, rows_key := Option.none } in
-    let m2 : TuiModel := if m1.want_top then Model.scroll_step m1 999999 else m1 in
-    let m3 : TuiModel := if p.start == 0 then { m2 with want_top := false } else m2 in
-    if same_page prev p
-    then Pair.pair (with_page_error m3 "page read made no progress") Cmd.none
-    else maybe_page_cmd m3
-
-/// The same page served twice means the store cannot cover the window
-/// (a short block file, or a window taller than one page): stop rather
-/// than re-requesting it inline forever.
-#[partial]
-def tline_count (ls : List TLine) : I64 :=
-    match ls {
-        List.empty => 0,
-        List.cons _ rest => 1 + tline_count rest,
+    match Pane.page_loaded (Model.pane_view m) m.pane p {
+        Pair.pair p2 progressed =>
+            let m2 : TuiModel := { m with pane := p2 } in
+            if progressed then maybe_page_cmd m2 else Pair.pair m2 Cmd.none,
     }
-
-def same_page (old : Option TranscriptPage) (p : TranscriptPage) : Bool :=
-    match old {
-        Option.none => false,
-        Option.some q => Bool.and (q.start == p.start) (tline_count q.lines == tline_count p.lines),
-    }
-
-def with_page_error (m : TuiModel) (e : String) : TuiModel :=
-    let tr0 : Transcript := m.transcript in
-    let tr : Transcript := { tr0 with page_error := Option.some e } in
-    let m2 : TuiModel := { m with transcript := tr } in
-    m2
 
 def page_failed_step (m : TuiModel) (e : String) : Pair TuiModel (Cmd WeaverMsg) :=
-    let m2 : TuiModel := { m with page_pending := false, rows_key := Option.none } in
-    let m3 : TuiModel := with_page_error m2 e in
-    Pair.pair (with_streak_reset (fn (mm : TuiModel) => mm) m3) Cmd.none
+    Pair.pair (with_streak_reset (fn (mm : TuiModel) => { mm with pane := Pane.page_failed mm.pane e }) m) Cmd.none
 
 def transcript_reset_step (m : TuiModel) (tr : Transcript) : Pair TuiModel (Cmd WeaverMsg) :=
-    let m2 : TuiModel := { m with transcript := tr, scroll := 0, page_pending := false, rows_key := Option.none, banner := Banner.shown,
-                            queued := List.empty, queued_ready := false, title_due := false,
-                            want_older := false, want_top := false } in
+    let m2 : TuiModel := { m with pane := Pane.reset m.pane tr, banner := Banner.shown,
+                            queued := List.empty, queued_ready := false, title_due := false } in
     maybe_page_cmd m2
 
 /// A store write failure disables persistence for the rest of the run;
@@ -471,8 +437,9 @@ def store_result_step (m : TuiModel) (e : Option String) : Pair TuiModel (Cmd We
 /// A turn's or command's completion: the fold `f` runs, the streak
 /// resets, and `turn_pending` clears -- the spinner stops.
 def with_turn_end (f : TuiModel -> TuiModel) (m : TuiModel) : TuiModel :=
-    { (with_streak_reset f m) with turn_pending := false, live := Live.idle,
-        scroll_drag := Option.none, modal := false, overlay_open := false }
+    let m2 : TuiModel := with_streak_reset f m in
+    { m2 with turn_pending := false, live := Live.idle,
+        pane := Pane.end_drag m2.pane, modal := false, overlay_open := false }
 
 // ── subscriptions ────────────────────────────────────────────────────────
 
@@ -618,8 +585,7 @@ def command_reset (m : TuiModel) (effect : Effect) : Pair TuiModel (Cmd WeaverMs
 
 def reset_in_memory (m : TuiModel) (output : String) : Pair TuiModel (Cmd WeaverMsg) :=
     let tr : Transcript := Transcript.append Transcript.empty (plain_lines (theme_split_lines output)) in
-    let m2 : TuiModel := { m with transcript := tr, scroll := 0, scroll_drag := Option.none, page_pending := false,
-                            want_older := false, want_top := false } in
+    let m2 : TuiModel := { m with pane := Pane.reset m.pane tr } in
     Pair.pair m2 Cmd.none
 
 def reset_action (st : StoreState) (output : String) : IO WeaverMsg := do {
@@ -685,39 +651,33 @@ def update_mouse (m : TuiModel) (me : MouseEvent) : Pair TuiModel (Cmd WeaverMsg
         MouseEvent.press btn r c =>
             if is_left btn
             then
-                // The bar owns its own column; a press there never starts a
-                // text selection. Otherwise: an input-box press places the
-                // caret and starts an input selection, a transcript press
-                // starts a transcript one and drops any input highlight.
-                if Model.scrollbar_hit m r c
-                then maybe_page_cmd (with_streak_reset (fn (mm : TuiModel) => Model.scrollbar_press mm r) m)
-                else if Prompt.box_contains (Model.prompt_box m) r c
-                then Pair.pair (with_streak_reset (fn (mm : TuiModel) => { (prompt_step mm (PromptMsg.press r c)) with sel := Option.none }) m) Cmd.none
-                else Pair.pair (with_streak_reset (fn (mm : TuiModel) => Model.begin_selection { mm with prompt := Prompt.clear_selection mm.prompt } r c) m) Cmd.none
+                // An input-box press places the caret and starts an input
+                // selection; anything else goes to the pane (the bar, or a
+                // transcript selection) and drops the input highlight.
+                if Prompt.box_contains (Model.prompt_box m) r c
+                then
+                    let m2 : TuiModel := prompt_step m (PromptMsg.press r c) in
+                    Pair.pair (with_streak_reset (fn (mm : TuiModel) => mm) (pane_only m2 PaneMsg.clear_selection)) Cmd.none
+                else pane_paged_step { m with prompt := Prompt.clear_selection m.prompt } (PaneMsg.press r c)
             else Pair.pair (with_streak_reset (fn (mm : TuiModel) => mm) m) Cmd.none,
         MouseEvent.drag btn r c =>
-            if is_left btn
-            then
-                match m.scroll_drag {
-                    Option.some _ =>
-                        maybe_page_cmd (with_streak_reset (fn (mm : TuiModel) => Model.scrollbar_drag_to mm r) m),
-                    Option.none =>
-                        if Prompt.selecting m.prompt
-                        then Pair.pair (with_streak_reset (fn (mm : TuiModel) => prompt_step mm (PromptMsg.drag r c)) m) Cmd.none
-                        else Pair.pair (with_streak_reset (fn (mm : TuiModel) => Model.drag_selection mm r c) m) Cmd.none,
-                }
+            if Bool.and (is_left btn) (Prompt.selecting m.prompt)
+            then Pair.pair (with_streak_reset (fn (mm : TuiModel) => prompt_step mm (PromptMsg.drag r c)) m) Cmd.none
+            else if is_left btn
+            then pane_paged_step m (PaneMsg.drag r c)
             else Pair.pair (with_streak_reset (fn (mm : TuiModel) => mm) m) Cmd.none,
         MouseEvent.release btn r c =>
-            if is_left btn
-            then
-                match m.scroll_drag {
-                    Option.some _ => Pair.pair (with_streak_reset Model.scrollbar_release m) Cmd.none,
-                    Option.none =>
-                        if Prompt.selecting m.prompt
-                        then finish_input_selection_step m r c
-                        else finish_selection_step m r c,
-                }
+            if Bool.and (is_left btn) (Prompt.selecting m.prompt)
+            then finish_input_selection_step m r c
+            else if is_left btn
+            then finish_selection_step m r c
             else Pair.pair (with_streak_reset (fn (mm : TuiModel) => mm) m) Cmd.none,
+    }
+
+/// A pane message whose copied text (none for these) is not wanted.
+def pane_only (m : TuiModel) (msg : PaneMsg) : TuiModel :=
+    match Model.pane_step m msg {
+        Pair.pair m2 _ => m2,
     }
 
 /// The OSC 52 copy command; the forced repaint also clears the highlight.
@@ -727,12 +687,12 @@ def clipboard_cmd (t : String) : Cmd WeaverMsg :=
         IO.pure (WeaverMsg.key_event Event.tick)
     })
 
-/// End a drag: the release point is folded in one last time, the model
+/// End a drag: the release point is folded in one last time, the pane
 /// drops the highlight, and a non-empty selection is copied (a perform,
-/// so the forced repaint also repaints the de-highlighted row).
+/// so the forced repaint also repaints the de-highlighted row). A bar
+/// drag just ends.
 def finish_selection_step (m : TuiModel) (r : I64) (c : I64) : Pair TuiModel (Cmd WeaverMsg) :=
-    let dragged : TuiModel := Model.drag_selection m r c in
-    match Model.finish_selection dragged {
+    match Model.pane_step m (PaneMsg.release r c) {
         Pair.pair m2 text => match text {
             Option.none => Pair.pair (with_streak_reset (fn (mm : TuiModel) => mm) m2) Cmd.none,
             Option.some t => Pair.pair (with_streak_reset (fn (mm : TuiModel) => mm) m2) (clipboard_cmd t),
@@ -800,28 +760,13 @@ def editor_key (m : TuiModel) (k : Key) : Pair TuiModel (Cmd WeaverMsg) :=
             else if c == "o" then toggle_details m
             else if c == "u" then scroll_with_pages m (half_page m)
             else Pair.pair (streak_reset_input m k) Cmd.none,
-        Key.end => Pair.pair (with_streak_reset repin m) Cmd.none,
+        Key.end => Pair.pair (with_streak_reset (fn (mm : TuiModel) => pane_only mm PaneMsg.repin) m) Cmd.none,
         // Home pins to the loaded top and keeps loading pages until the
         // transcript's first line is in memory (the pages land above a
         // bottom-anchored view, so each one is pinned in turn).
-        Key.home =>
-            let m1 : TuiModel := { m with want_top := true } in
-            scroll_with_pages m1 999999,
+        Key.home => pane_paged_step m PaneMsg.top,
         Key.escape => escape_key m,
         _ => Pair.pair (streak_reset_input m k) Cmd.none,
-    }
-
-/// End: back to the live tail, and the loaded page (which paging up
-/// grows one page at a time) is released, so memory returns to the tail.
-def repin (m : TuiModel) : TuiModel :=
-    let tr : Transcript := Transcript.drop_page m.transcript in
-    { m with transcript := tr, scroll := 0, want_older := false, want_top := false, rows_key := Option.none }
-
-/// Whether a transcript (mouse) selection is active.
-def transcript_sel_active (m : TuiModel) : Bool :=
-    match m.sel {
-        Option.some _ => true,
-        Option.none => false,
     }
 
 /// The Esc stop request's IO: write the generation into the signal file
@@ -838,8 +783,8 @@ def stop_cmd (store : Option StoreState) (gen : I64) : Unit -> IO WeaverMsg :=
 def escape_key (m : TuiModel) : Pair TuiModel (Cmd WeaverMsg) :=
     if Prompt.selecting m.prompt
     then Pair.pair (with_streak_reset (fn (mm : TuiModel) => { mm with prompt := Prompt.clear_selection mm.prompt }) m) Cmd.none
-    else if transcript_sel_active m
-    then Pair.pair (with_streak_reset (fn (mm : TuiModel) => { mm with sel := Option.none }) m) Cmd.none
+    else if Pane.selecting m.pane
+    then Pair.pair (with_streak_reset (fn (mm : TuiModel) => pane_only mm PaneMsg.clear_selection) m) Cmd.none
     else if Bool.and m.turn_pending (Bool.not m.live.stopping)
     then
         let m2 : TuiModel := { m with live := Live.request_stop m.live } in
@@ -898,7 +843,7 @@ def ctrl_d_step (m : TuiModel) : Pair TuiModel (Cmd WeaverMsg) :=
 /// Append one exit hint and persist it unless a turn owns the store.
 /// `m` already carries the armed streak.
 def exit_hint_step (m : TuiModel) (hint : String) : Pair TuiModel (Cmd WeaverMsg) :=
-    let start : I64 := m.transcript.total in
+    let start : I64 := m.pane.transcript.total in
     let m2 : TuiModel := Model.append_lines m [TLine.plain hint] in
     // While a turn runs its fiber owns the store: an inline append
     // would race the echoed prompt (and the shared index temp file),
@@ -911,8 +856,7 @@ def exit_hint_step (m : TuiModel) (hint : String) : Pair TuiModel (Cmd WeaverMsg
 /// thinking). The rows key carries the flag, so `TuiApp.update`'s
 /// `refresh_rows` rebuilds the window.
 def toggle_details (m : TuiModel) : Pair TuiModel (Cmd WeaverMsg) :=
-    let flip : TuiModel -> TuiModel := fn (mm : TuiModel) => { mm with show_details := Bool.not mm.show_details } in
-    Pair.pair (with_streak_reset flip m) Cmd.none
+    Pair.pair (with_streak_reset (fn (mm : TuiModel) => pane_only mm PaneMsg.toggle_details) m) Cmd.none
 
 def ctrl_c_hint_line : String := "press Ctrl+C again to exit (or /quit)"
 def ctrl_d_hint_line : String := "press Ctrl+D again to exit (or /quit)"
@@ -967,15 +911,16 @@ def start_queued (m : TuiModel) : Pair TuiModel (Cmd WeaverMsg) :=
 def submit_line (m : TuiModel) (text : String) : Pair TuiModel (Cmd WeaverMsg) :=
     let st : WeaverState := m.state in
     let echo : List TLine := echo_lines text in
-    let block : List TLine := Transcript.next_block m.transcript echo in
-    let start : I64 := m.transcript.total in
+    let block : List TLine := Transcript.next_block m.pane.transcript echo in
+    let start : I64 := m.pane.transcript.total in
     let store : Option StoreState := m.state.store in
     let gen : I64 := m.turn_gen + 1 in
+    let m1 : TuiModel := with_streak_reset
+        (fn (mm : TuiModel) => Model.append_block { mm with prompt := Prompt.submitted mm.prompt text } echo) m in
+    let p1 : PaneModel := m1.pane in
     let m2 : TuiModel :=
-        { (with_streak_reset
-            (fn (mm : TuiModel) => Model.append_block { mm with prompt := Prompt.submitted mm.prompt text } echo) m)
-            with turn_pending := true, banner := Banner.hidden,
-                 live := Live.start (Option.some m.state.run.session.spent), scroll := 0,
+        { m1 with turn_pending := true, banner := Banner.hidden,
+                 live := Live.start (Option.some m.state.run.session.spent), pane := { p1 with scroll := 0 },
                  turn_gen := gen,
                  modal := modal_command st text } in
     Pair.pair m2 (Cmd.perform_async
@@ -1018,7 +963,7 @@ def set_run (m : TuiModel) (run : RunState) : TuiModel :=
     set_state m { (m.state) with run := run }
 
 def set_size (m : TuiModel) (rows : I64) (cols : I64) : TuiModel :=
-    { m with rows := rows, cols := cols, scroll_drag := Option.none }
+    { m with rows := rows, cols := cols, pane := Pane.end_drag m.pane }
 
 // ── run_submitted_line: the dumb-mode twin over WeaverMsg ───────────────
 

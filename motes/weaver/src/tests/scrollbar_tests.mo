@@ -14,11 +14,9 @@ use std::list {List.length}
 use weaver::ui::banner {Banner.shown, Banner.hidden}
 use weaver::model {
     TuiModel, init_tui_model, Model.append_block, Model.body_height,
-    Model.content_width, Model.panel_top_of, Model.scroll_to,
-    Model.scrollbar_visible, Model.scrollbar_thumb, Model.scrollbar_hit,
-    Model.scrollbar_press, Model.scrollbar_drag_to, Model.scrollbar_release,
-    Model.row_total_of,
+    Model.content_width, Model.panel_top_of, Model.pane_view, Model.pane_step,
 }
+use weaver::ui::pane {PaneMsg, Pane.scroll_to, Pane.bar_visible, Pane.thumb, Pane.bar_hit, Pane.row_total_of}
 use weaver::store {TLine, TLine.plain}
 
 def mock_config : ProviderConfig :=
@@ -43,11 +41,23 @@ def lines_up_to (k : I64) (i : I64) : List TLine :=
 
 def filled : TuiModel := Model.append_block model_of (lines_up_to 100 1)
 
+def thumb_of (m : TuiModel) : Option (Pair I64 I64) := Pane.thumb (Model.pane_view m) m.pane
+
+def hit (m : TuiModel) (r : I64) (c : I64) : Bool := Pane.bar_hit (Model.pane_view m) m.pane r c
+
+def step (m : TuiModel) (msg : PaneMsg) : TuiModel :=
+    match Model.pane_step m msg {
+        Pair.pair m2 _ => m2,
+    }
+
+/// A press at the bar's column on screen row `r`.
+def press_bar (m : TuiModel) (r : I64) : TuiModel := step m (PaneMsg.press r 78)
+
 #[test]
 def test_scrollbar_hidden_without_overflow : Bool :=
     let m : TuiModel := Model.append_block model_of [TLine.plain "one"] in
-    Bool.not (Model.scrollbar_visible m)
-    && match Model.scrollbar_thumb m { Option.none => true, Option.some _ => false }
+    Bool.not (Pane.bar_visible (Model.pane_view m) m.pane)
+    && match thumb_of m { Option.none => true, Option.some _ => false }
 
 #[test]
 def test_content_width_is_unchanged : Bool :=
@@ -55,7 +65,7 @@ def test_content_width_is_unchanged : Bool :=
 
 #[test]
 def test_thumb_is_at_the_bottom_when_pinned : Bool :=
-    match Model.scrollbar_thumb filled {
+    match thumb_of filled {
         Option.none => false,
         Option.some pr => match pr {
             Pair.pair top len => I64.gt len 0 && I64.beq (top + len) (Model.body_height filled),
@@ -64,8 +74,9 @@ def test_thumb_is_at_the_bottom_when_pinned : Bool :=
 
 #[test]
 def test_thumb_reaches_the_top_at_max_scroll : Bool :=
-    let m : TuiModel := Model.scroll_to filled 999999 in
-    match Model.scrollbar_thumb m {
+    let f : TuiModel := filled in
+    let m : TuiModel := { f with pane := Pane.scroll_to (Model.pane_view f) f.pane 999999 } in
+    match thumb_of m {
         Option.none => false,
         Option.some pr => match pr {
             Pair.pair top _ => I64.beq top 0,
@@ -75,30 +86,31 @@ def test_thumb_reaches_the_top_at_max_scroll : Bool :=
 #[test]
 def test_hit_test_is_the_last_column_inside_the_panel : Bool :=
     let row : I64 := Model.panel_top_of filled in
-    Model.scrollbar_hit filled row 78
-    && Bool.not (Model.scrollbar_hit filled row 77)
-    && Bool.not (Model.scrollbar_hit filled (row + Model.body_height filled) 78)
+    hit filled row 78
+    && Bool.not (hit filled row 77)
+    && Bool.not (hit filled (row + Model.body_height filled) 78)
 
 #[test]
 def test_track_press_jumps_and_starts_a_drag_not_a_selection : Bool :=
-    let m : TuiModel := Model.scrollbar_press filled (Model.panel_top_of filled) in
-    match m.scroll_drag {
+    let m : TuiModel := press_bar filled (Model.panel_top_of filled) in
+    match m.pane.bar_grab {
         Option.none => false,
-        Option.some _ => m.scroll > 0 && match m.sel { Option.none => true, Option.some _ => false },
+        Option.some _ => m.pane.scroll > 0 && match m.pane.sel { Option.none => true, Option.some _ => false },
     }
 
 #[test]
 def test_drag_to_the_bottom_returns_to_the_latest : Bool :=
-    let pressed : TuiModel := Model.scrollbar_press filled (Model.panel_top_of filled) in
-    let dragged : TuiModel := Model.scrollbar_drag_to pressed (Model.panel_top_of filled + Model.body_height filled - 1) in
-    dragged.scroll == 0 && match dragged.scroll_drag { Option.some _ => true, Option.none => false }
+    let pressed : TuiModel := press_bar filled (Model.panel_top_of filled) in
+    let dragged : TuiModel := step pressed (PaneMsg.drag (Model.panel_top_of filled + Model.body_height filled - 1) 78) in
+    dragged.pane.scroll == 0 && match dragged.pane.bar_grab { Option.some _ => true, Option.none => false }
 
 #[test]
 def test_release_clears_the_drag : Bool :=
-    let pressed : TuiModel := Model.scrollbar_press filled (Model.panel_top_of filled) in
-    let released : TuiModel := Model.scrollbar_release pressed in
-    match released.scroll_drag { Option.none => true, Option.some _ => false }
+    let pressed : TuiModel := press_bar filled (Model.panel_top_of filled) in
+    let released : TuiModel := step pressed (PaneMsg.release (Model.panel_top_of filled) 78) in
+    match released.pane.bar_grab { Option.none => true, Option.some _ => false }
 
 #[test]
 def test_row_total_exceeds_the_viewport : Bool :=
-    I64.gt (Model.row_total_of filled) (Model.body_height filled)
+    let f : TuiModel := filled in
+    I64.gt (Pane.row_total_of (Model.pane_view f) f.pane) (Model.body_height f)

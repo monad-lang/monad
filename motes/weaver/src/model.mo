@@ -17,27 +17,19 @@ use weaver::overlay {OverlayState}
 use log::logger {Logger}
 use weaver::error {WeaverError}
 use weaver::dumb {Dumb.status_fields}
-use weaver::theme {
-    theme_line_style_with, theme_status_style_with,
-    theme_border_style_with, theme_scrollbar_thumb_style_with,
-}
+use weaver::theme {theme_status_style_with, theme_border_style_with}
 use weaver::policy {Mode}
-use weaver::store {
-    TLine, TLineKind, Transcript, TranscriptPage, Store.page_lines,
-    Transcript.empty, Transcript.next_block, Transcript.append, Transcript.slice,
-}
-use tui::types {Event, LayoutSize, TextStyle}
-use tui::core {clamp, style_default}
+use weaver::store {TLine, Transcript, TranscriptPage, Transcript.empty}
+use tui::types {Event, LayoutSize}
 use tui::widget {Widget, SizedWidget, BorderStyle, border_with, label, sized, with_style, padding}
-use tui::text {Text.slice_cols, Text.snap_span}
-use std::list {List.intercalate}
 use weaver::ui::banner {BannerModel, BannerMsg, BannerView, Banner.shown, Banner.rows, Banner.height, Banner.view}
 use weaver::ui::prompt {PromptModel, PromptBox, Prompt.empty, Prompt.view}
 use tui::widgets::picker {PickerModel, Picker.list_height, Picker.view}
-use weaver::ui::live {LiveModel, LiveMsg, LiveView, Live.idle, Live.rows, Live.height, Live.thinking_height, Live.text_height}
-use weaver::ui::rows {
-    DisplayRow, Rows.plain, Rows.of_line, Rows.count_line, Rows.count_lines,
-    Rows.length, Rows.drop, Rows.take, Rows.at, Rows.widget, Rows.widget_selected,
+use weaver::ui::live {LiveModel, LiveMsg, LiveView, Live.idle, Live.rows, Live.height}
+use weaver::ui::rows {DisplayRow, Rows.widget}
+use weaver::ui::pane {
+    PaneModel, PaneMsg, PaneView, Pane.make, Pane.update, Pane.refresh,
+    Pane.append_block, Pane.append_lines, Pane.row_widgets, Pane.bar_view,
 }
 
 /// The loop's message type: a raw terminal event not yet interpreted, or
@@ -94,34 +86,13 @@ pub type WeaverMsg {
 pub def on_event (e : Event) : WeaverMsg :=
     WeaverMsg.key_event e
 
-/// What the cached display rows were computed for. Any transcript,
-/// viewport or scroll change invalidates them.
-pub struct RowsKey {
-    total : I64,
-    tail_start : I64,
-    cols : I64,
-    rows : I64,
-    scroll : I64,
-    page_start : I64,
-    /// The startup banner spends four rows of the panel while it shows.
-    banner : Bool,
-    /// A pending turn spends one panel row on the live thinking row.
-    pending : Bool,
-    /// Ctrl+O's detail-line filter.
-    details : Bool,
-    /// The two streamed blocks' heights: `body_height` shrinks as they
-    /// grow, so the cache must rebuild on either change.
-    think_stream : I64,
-    text_stream : I64,
-}
-
 pub struct TuiModel {
     state : WeaverState,
     /// The input box and its submit history.
     prompt : PromptModel := Prompt.empty,
-    /// The bounded window into the session's transcript: the last
-    /// `Store.tail_lines` lines plus at most one older page read from disk.
-    transcript : Transcript,
+    /// The transcript pane: the loaded window, its rows, scroll,
+    /// selection and scrollbar.
+    pane : PaneModel,
     rows : I64,
     cols : I64,
     /// Consecutive Ctrl+C presses since the last other event (the
@@ -132,18 +103,6 @@ pub struct TuiModel {
     /// each gesture arms only itself: Ctrl+C then Ctrl+D is two FIRST
     /// presses, never an exit.
     ctrl_d_streak : I64 := 0,
-    /// WRAPPED DISPLAY ROWS above the pinned bottom; 0 = pinned to the
-    /// latest output. A row unit (not a logical line) is what makes every
-    /// row of a message taller than the panel reachable.
-    scroll : I64 := 0,
-    /// The wrapped row count of the loaded window (page + tail) plus one
-    /// row for each placeholder line before it. Recomputed with the rows
-    /// cache; `scroll` clamps against it.
-    row_total : I64 := 0,
-    /// Where the pointer grabbed the scrollbar thumb (rows below its top);
-    /// none when no scrollbar drag is in progress. Kept out of `sel` so a
-    /// bar drag never becomes a text selection.
-    scroll_drag : Option I64 := Option.none,
     /// A turn is running on its own fiber (`Cmd.perform_async`): the
     /// spinner shows and the status row carries its glyph. Keys typed
     /// meanwhile reach the input box (they are read mid-turn unless a
@@ -151,17 +110,6 @@ pub struct TuiModel {
     turn_pending : Bool := false,
     /// Ticks since startup: the subscriptions' cadence clock.
     frame : I64 := 0,
-    /// A page read is in flight; only the synchronous `Cmd.perform`
-    /// pager sets it, so it clears in the same fold.
-    page_pending : Bool := false,
-    /// The wrapped rows last computed, and the state they were computed
-    /// for. Wrapping a long line every 100 ms tick was the TUI's other
-    /// allocation hot spot; a tick reuses this.
-    rows_cache : List DisplayRow := List.empty,
-    rows_key : Option RowsKey := Option.none,
-    /// The mouse selection over DISPLAY rows (cleared whenever the rows
-    /// cache is rebuilt: scroll, append, page load, resize).
-    sel : Option TextSelection := Option.none,
     /// The launch banner, until the first submit.
     banner : BannerModel := Banner.shown,
     /// The running turn's streamed text, spend and spinner (reset at
@@ -170,19 +118,10 @@ pub struct TuiModel {
     /// The submitted line opened a full-screen modal that owns the
     /// terminal: the main loop must not tick-redraw over it (interleaved
     /// writes corrupt the modal's paint).
-    /// Ctrl+O: show detail lines (tool output, completed thinking).
-    show_details : Bool := false,
     modal : Bool := false,
     /// A clean plan-mode turn produced a plan: the persistence
     /// continuation opens the "Plan ready" dialog once the turn folds.
     plan_ready : Bool := false,
-    /// The user is scrolling UP (PageUp/Ctrl+U/wheel/Home): prefetch
-    /// older pages even when the clamped scroll cannot move any further.
-    /// Cleared by a down scroll or End.
-    want_older : Bool := false,
-    /// Home was pressed: keep loading pages and stay pinned to the loaded
-    /// top until the transcript's first line is loaded.
-    want_top : Bool := false,
     /// This turn warrants an agent-generated session title (the first
     /// turn, or one that produced a plan): the next frame tick forks the
     /// title call, so it never blocks the turn's persistence or its
@@ -222,7 +161,7 @@ pub def init_tui_model (log : Option Logger) (st : WeaverState) (rows : I64) (co
 
 /// The startup tail loaded from the session store.
 pub def init_tui_model_with (log : Option Logger) (st : WeaverState) (rows : I64) (cols : I64) (tr : Transcript) : TuiModel :=
-    let m : TuiModel := { state := st, prompt := Prompt.empty, transcript := tr, rows := rows, cols := cols, ctrl_c_streak := 0, ctrl_d_streak := 0, scroll := 0, row_total := 0, scroll_drag := Option.none, turn_pending := false, frame := 0, page_pending := false, rows_cache := List.empty, rows_key := Option.none, sel := Option.none, banner := Banner.shown, live := Live.idle, show_details := false, modal := false, plan_ready := false, want_older := false, want_top := false, title_due := false, turn_gen := 0, overlay_open := false, dialog_seq := 0, picker := Option.none, queued := List.empty, queued_ready := false, log := log } in
+    let m : TuiModel := { state := st, prompt := Prompt.empty, pane := Pane.make tr, rows := rows, cols := cols, ctrl_c_streak := 0, ctrl_d_streak := 0, turn_pending := false, frame := 0, banner := Banner.shown, live := Live.idle, modal := false, plan_ready := false, title_due := false, turn_gen := 0, overlay_open := false, dialog_seq := 0, picker := Option.none, queued := List.empty, queued_ready := false, log := log } in
     Model.refresh_rows m
 
 pub def Model.banner_view (m : TuiModel) : BannerView :=
@@ -251,17 +190,16 @@ pub def Model.view (m : TuiModel) : Widget :=
     let inner : Widget :=
         if I64.lt m.cols 5
         then body
-        else Widget.row [sized (LayoutSize.fill 1) body, sized (LayoutSize.fixed 1) (Model.scrollbar_column m)] in
+        else Widget.row [sized (LayoutSize.fill 1) body, sized (LayoutSize.fixed 1) (Pane.bar_view (Model.pane_view m) m.pane)] in
     let transcript : SizedWidget := sized (LayoutSize.fill 1) (border_with (theme_border_style_with colors) BorderStyle.rounded (padding 1 0 0 0 inner)) in
     let status : SizedWidget := sized (LayoutSize.fixed 1) (with_style (theme_status_style_with colors mode) (label (status_line m))) in
     let input : SizedWidget := sized (LayoutSize.fixed 3) (Prompt.view m.prompt) in
     let head : List SizedWidget := if m.banner.shown then [sized (LayoutSize.fixed Banner.rows) (Banner.view (Model.banner_view m) m.banner)] else List.empty in
     Widget.column (List.append head [transcript, status, input])
 
-// ── mouse selection ─────────────────────────────────────────────────────
-// Coordinates are DISPLAY rows (the painted list, indicator included) and
-// CELL columns inside the transcript content. Screen -> display mapping is
-// the panel's border (1) plus its left padding (1).
+// ── the transcript pane ─────────────────────────────────────────────────
+// Screen -> pane mapping is the panel's border (1) plus its left padding
+// (1); the scrollbar takes the old right padding column.
 
 /// The transcript content's first screen row/column. The row depends on
 /// the launch banner: while it shows, the panel starts four rows lower.
@@ -281,381 +219,41 @@ pub def Model.prompt_box (m : TuiModel) : PromptBox :=
     let b : PromptBox := { top := top, left := 1, width := width, height := 3 } in
     b
 
-pub struct TextSelection {
-    anchor_row : I64,
-    anchor_col : I64,
-    focus_row : I64,
-    focus_col : I64,
-    moved : Bool
-}
-
-/// The display cell under a mouse report, when it lies inside the panel.
-/// `clamp_it` is the drag rule (clamp to the nearest edge); a press must
-/// land inside.
-#[partial]
-def selection_point_in (m : TuiModel) (row : I64) (col : I64) (clamp_it : Bool) : Option (Pair I64 I64) :=
-    let n : I64 := Rows.length m.rows_cache in
-    let w : I64 := Model.content_width m in
-    let r0 : I64 := row - Model.panel_top_of m in
-    let c0 : I64 := col - Model.panel_left in
-    if Bool.or (n < 1) (w < 1)
-    then Option.none
-    else if clamp_it
-    then Option.some (Pair.pair (clamp r0 0 (n - 1)) (clamp c0 0 (w - 1)))
-    else if Bool.and (Bool.not (r0 < 0)) (Bool.and (r0 < n) (Bool.and (Bool.not (c0 < 0)) (c0 < w)))
-    then Option.some (Pair.pair r0 c0)
-    else Option.none
-
-pub def Model.begin_selection (m : TuiModel) (row : I64) (col : I64) : TuiModel :=
-    match selection_point_in m row col false {
-        Option.none => { m with sel := Option.none },
-        Option.some pr => match pr {
-            Pair.pair r c =>
-                let s : TextSelection := { anchor_row := r, anchor_col := c, focus_row := r, focus_col := c, moved := false } in
-                { m with sel := Option.some s },
-        },
-    }
-
-pub def Model.drag_selection (m : TuiModel) (row : I64) (col : I64) : TuiModel :=
-    match m.sel {
-        Option.none => m,
-        Option.some s => match selection_point_in m row col true {
-            Option.none => m,
-            Option.some pr => match pr {
-                Pair.pair r c =>
-                    let moved : Bool := Bool.or s.moved
-                        (Bool.or (Bool.not (r == s.anchor_row)) (Bool.not (c == s.anchor_col))) in
-                    let s2 : TextSelection := { s with focus_row := r, focus_col := c, moved := moved } in
-                    { m with sel := Option.some s2 },
-            },
-        },
-    }
-
-#[terminating]
-def trim_end_spaces (s : String) : String :=
-    if String.is_empty s
-    then s
-    else
-        let n : I64 := String.length s in
-        if String.slice s (n - 1) 1 == " " then trim_end_spaces (String.slice s 0 (n - 1)) else s
-
-/// (forward, top, bottom, left, right): the selection normalized to
-/// reading order, right INCLUSIVE.
-struct SelSpan {
-    forward : Bool,
-    top : I64,
-    bottom : I64,
-    left : I64,
-    right : I64
-}
-
-def sel_span (s : TextSelection) : SelSpan :=
-    let forward : Bool := Bool.or (s.anchor_row < s.focus_row)
-        (Bool.and (s.anchor_row == s.focus_row) (Bool.not (s.focus_col < s.anchor_col))) in
-    let top : I64 := if forward then s.anchor_row else s.focus_row in
-    let bottom : I64 := if forward then s.focus_row else s.anchor_row in
-    let left : I64 := if forward then s.anchor_col else s.focus_col in
-    let right : I64 := if forward then s.focus_col else s.anchor_col in
-    { forward := forward, top := top, bottom := bottom, left := left, right := right }
-
-#[partial]
-def selection_text_go (rows : List DisplayRow) (idx : I64) (sp : SelSpan) (width : I64) (acc : List String) : List String :=
-    if sp.bottom < idx then List.reverse acc
-    else match rows {
-        List.empty => List.reverse acc,
-        List.cons r rest =>
-            if idx < sp.top
-            then selection_text_go rest (idx + 1) sp width acc
-            else
-                let a : I64 := if idx == sp.top then sp.left else 0 in
-                let b : I64 := if idx == sp.bottom then sp.right + 1 else width in
-                let piece : String := trim_end_spaces (Text.slice_cols r.text a b) in
-                selection_text_go rest (idx + 1) sp width (List.cons piece acc),
-    }
-
-/// The selected text, or `none` for a plain click (no drag) or an empty
-/// selection. Rows join with newlines; per-row trailing padding is
-/// trimmed, so dragging past the end of a line does not copy blanks.
-pub def Model.selection_text (m : TuiModel) : Option String :=
-    match m.sel {
-        Option.none => Option.none,
-        Option.some s =>
-            if Bool.not s.moved
-            then Option.none
-            else
-                let sp : SelSpan := sel_span s in
-                let pieces : List String := selection_text_go m.rows_cache 0 sp (Model.content_width m) List.empty in
-                let joined : String := List.intercalate "\n" pieces in
-                if String.is_empty joined then Option.none else Option.some joined,
-    }
-
-/// The half-open cell span to highlight on display row `idx`.
-pub def Model.selection_cols (m : TuiModel) (idx : I64) : Option (Pair I64 I64) :=
-    match m.sel {
-        Option.none => Option.none,
-        Option.some s =>
-            let sp : SelSpan := sel_span s in
-            if Bool.or (idx < sp.top) (sp.bottom < idx)
-            then Option.none
-            else match Rows.at m.rows_cache idx {
-                Option.none => Option.none,
-                Option.some r =>
-                    let a : I64 := if idx == sp.top then sp.left else 0 in
-                    let b : I64 := if idx == sp.bottom then sp.right + 1 else Model.content_width m in
-                    match Text.snap_span r.text a b {
-                        Pair.pair sa sb => Option.some (Pair.pair sa sb),
-                    },
-            },
-    }
-
-/// Drop the selection and return its text (the copy is the caller's job:
-/// a pure update cannot write the clipboard).
-pub def Model.finish_selection (m : TuiModel) : Pair TuiModel (Option String) :=
-    let text : Option String := Model.selection_text m in
-    Pair.pair { m with sel := Option.none } text
-
 /// The panel's content width: the terminal minus the rounded border (2)
 /// and the horizontal padding (2).
 pub def Model.content_width (m : TuiModel) : I64 :=
     let w : I64 := m.cols - 4 in
     if w < 1 then 1 else w
 
-/// The loaded window: the loaded page (if any) through the tail. Lines
-/// before `start` are not on disk yet and render as one blank row each.
-pub struct LoadedWindow {
-    start : I64,
-    lines : List TLine
-}
+/// The pane's geometry: below the banner, above the live rows; no bar
+/// while the picker covers the panel.
+pub def Model.pane_view (m : TuiModel) : PaneView :=
+    let no_picker : Bool := match m.picker { Option.none => true, Option.some _ => false } in
+    let v : PaneView := { colors := m.state.colors, width := Model.content_width m, height := Model.body_height m,
+                          top := Model.panel_top_of m, left := Model.panel_left, bar := Bool.and no_picker (I64.lt 4 m.cols) } in
+    v
 
-pub def Model.loaded_window (t : Transcript) : LoadedWindow :=
-    let start : I64 := match t.page {
-        Option.some p => p.start,
-        Option.none => t.tail_start,
-    } in
-    let n : I64 := t.total - start in
-    let lw : LoadedWindow := { start := start, lines := Transcript.slice t start (if n < 0 then 0 else n) } in
-    lw
-
-/// The loaded window with detail lines hidden unless Ctrl+O asks for
-/// them. Detail lines still count in the transcript's total; hiding
-/// them only changes the rows and the scroll range.
-#[partial]
-def shown_lines (show : Bool) (ls : List TLine) : List TLine :=
-    if show then ls
-    else match ls {
-        List.empty => List.empty,
-        List.cons l rest =>
-            if l.detail then shown_lines show rest
-            else List.cons l (shown_lines show rest),
+/// One pane message; a finished selection's text rides along.
+pub def Model.pane_step (m : TuiModel) (msg : PaneMsg) : Pair TuiModel (Option String) :=
+    match Pane.update (Model.pane_view m) m.pane msg {
+        Pair.pair p text => Pair.pair { m with pane := p } text,
     }
 
-pub def Model.loaded_shown (m : TuiModel) : LoadedWindow :=
-    let lw : LoadedWindow := Model.loaded_window m.transcript in
-    let lines : List TLine := shown_lines m.show_details lw.lines in
-    let lw2 : LoadedWindow := { start := lw.start, lines := lines } in
-    lw2
-
-/// The whole loaded window's row count. This is the scroll clamp's `len`
-/// and the window's row space: the unloaded prefix contributes NO rows.
-/// Counting a row per unloaded LINE made the space disagree with the
-/// loaded one (a hidden detail line contributes none), so scrolling up
-/// moved through phantom rows -- slow, jumpy, and blank.
-pub def Model.row_total_of (m : TuiModel) : I64 :=
-    let lw : LoadedWindow := Model.loaded_shown m in
-    Rows.count_lines m.state.colors (Model.content_width m) lw.lines
-
-/// The absolute line containing display row `row` of the loaded window.
-/// Hidden detail lines still COUNT as lines (they are skipped in the row
-/// walk but they are real lines above the window), so the indicator's
-/// "N lines above" is the true transcript position.
-#[partial]
-def first_line_at_row_go (colors : Bool) (width : I64) (show : Bool) (lines : List TLine) (abs : I64) (off : I64) (target : I64) : I64 :=
-    match lines {
-        List.empty => abs,
-        List.cons l rest =>
-            let n : I64 := if Bool.and (Bool.not show) l.detail then 0 else Rows.count_line colors width l in
-            if target < off + n
-            then abs
-            else first_line_at_row_go colors width show rest (abs + 1) (off + n) target,
-    }
-
-pub def Model.first_line_at_row (m : TuiModel) (row : I64) : I64 :=
-    let lw : LoadedWindow := Model.loaded_window m.transcript in
-    if row < 0
-    then lw.start
-    else first_line_at_row_go m.state.colors (Model.content_width m) m.show_details lw.lines lw.start 0 row
-
-/// Collect `count` display rows starting at relative row `start` of the
-/// loaded lines. Rows of a line taller than the window can start inside a
-/// line: the drop is per ROW, which is the whole point of this unit.
-#[partial]
-def collect_rows_go (colors : Bool) (width : I64) (lines : List TLine) (off : I64) (start : I64) (count : I64) (acc : List DisplayRow) : List DisplayRow :=
-    if count < 1 then acc
-    else match lines {
-        List.empty => acc,
-        List.cons l rest =>
-            let rows : List DisplayRow := Rows.of_line colors width l in
-            let n : I64 := Rows.length rows in
-            let line_end : I64 := off + n in
-            if Bool.not (start < line_end)
-            then collect_rows_go colors width rest line_end start count acc
-            else
-                let skip : I64 := if start < off then 0 else start - off in
-                let avail : I64 := n - skip in
-                let take : I64 := if count < avail then count else avail in
-                let picked : List DisplayRow := Rows.take take (Rows.drop skip rows) in
-                collect_rows_go colors width rest line_end start (count - take) (List.append acc picked),
-    }
-
-/// The display rows the panel shows, top to bottom; when scrolled, the
-/// indicator row is prepended and spends one content row. Only LOADED
-/// lines contribute rows: a page that has not arrived yet is simply not
-/// in the scroll space (the loader keeps up, see `Model.needs_page`), so
-/// there are no blank placeholder rows to scroll through.
-pub def Model.visible_rows (m : TuiModel) : List DisplayRow :=
-    let w : Window := Model.window m in
-    let lw : LoadedWindow := Model.loaded_shown m in
-    let colors : Bool := m.state.colors in
-    let width : I64 := Model.content_width m in
-    let content : List DisplayRow := collect_rows_go colors width lw.lines 0 w.start w.count List.empty in
-    if w.eff > 0
-    then List.cons (Rows.plain (theme_line_style_with colors (scrolled_indicator m w)) (scrolled_indicator m w)) content
-    else content
-
-pub def Model.rows_key_of (m : TuiModel) : RowsKey :=
-    let pstart : I64 := match m.transcript.page { Option.some p => p.start, Option.none => 0 - 1 } in
-    let k : RowsKey := { total := m.transcript.total, tail_start := m.transcript.tail_start,
-                         cols := m.cols, rows := m.rows, scroll := m.scroll, page_start := pstart,
-                         banner := m.banner.shown, pending := m.turn_pending, details := m.show_details,
-                         think_stream := Live.thinking_height (Model.live_view m) m.live, text_stream := Live.text_height (Model.live_view m) m.live } in
-    k
-
-def rows_key_eq (a : RowsKey) (b : RowsKey) : Bool :=
-    a.total == b.total && a.tail_start == b.tail_start && a.cols == b.cols
-        && a.rows == b.rows && a.scroll == b.scroll && a.page_start == b.page_start
-        && a.banner == b.banner && a.pending == b.pending && a.details == b.details
-        && a.think_stream == b.think_stream && a.text_stream == b.text_stream
-
-/// Recompute the wrapped rows only when the transcript, the viewport or
-/// the scroll position actually moved.
+/// Recompute the pane's rows when the transcript, geometry or scroll moved.
 pub def Model.refresh_rows (m : TuiModel) : TuiModel :=
-    let k : RowsKey := Model.rows_key_of m in
-    match m.rows_key {
-        Option.some k0 => if rows_key_eq k k0 then m else rebuild_rows m k,
-        Option.none => rebuild_rows m k,
-    }
+    { m with pane := Pane.refresh (Model.pane_view m) m.pane }
 
-def rebuild_rows (m : TuiModel) (k : RowsKey) : TuiModel :=
-    let rt : I64 := Model.row_total_of m in
-    let scroll2 : I64 := scroll_clamp m.scroll rt (Model.body_height m) in
-    let m2 : TuiModel := { m with row_total := rt, scroll := scroll2, sel := Option.none, rows_cache := List.empty, rows_key := Option.some k } in
-    let rows : List DisplayRow := Model.visible_rows m2 in
-    { m2 with rows_cache := rows }
-
-/// The rows to paint (the cache `refresh_rows` keeps current).
 pub def Model.display_rows (m : TuiModel) : List DisplayRow :=
-    m.rows_cache
-
-pub def Model.display_row_widget_selected (m : TuiModel) (idx : I64) (r : DisplayRow) : SizedWidget :=
-    Rows.widget_selected r (Model.selection_cols m idx)
-
-#[partial]
-def transcript_row_widgets (m : TuiModel) (rows : List DisplayRow) (i : I64) : List SizedWidget :=
-    match rows {
-        List.empty => List.empty,
-        List.cons r rest => List.cons (Model.display_row_widget_selected m i r) (transcript_row_widgets m rest (i + 1)),
-    }
+    m.pane.rows
 
 def transcript_column (m : TuiModel) : Widget :=
-    let body : List SizedWidget := transcript_row_widgets m (Model.display_rows m) 0 in
+    let body : List SizedWidget := Pane.row_widgets (Model.pane_view m) m.pane in
     // The live row is painted AFTER the cached rows (it is not part of
     // them), so ticks update it without re-wrapping the transcript.
     if m.turn_pending
     then
         Widget.column (List.append body (List.map Rows.widget (Live.rows (Model.live_view m) m.live)))
     else Widget.column body
-
-/// The absolute ROW window the panel shows. `eff` is the clamped scroll
-/// in rows; the scrolled panel spends ONE row on the indicator, so the
-/// content window is `panel_height - 1` rows ending `eff` rows above the
-/// bottom. `start` is relative to the LOADED window (its rows are the
-/// only ones that exist); `first_line` is the absolute transcript line
-/// at the window top, for the indicator.
-pub struct Window {
-    start : I64,
-    count : I64,
-    eff : I64,
-    first_line : I64,
-}
-
-pub def Model.window (m : TuiModel) : Window :=
-    let total : I64 := m.row_total in
-    let eff : I64 := scroll_clamp m.scroll total (Model.body_height m) in
-    let h : I64 := if eff > 0 then Model.body_height m - 1 else Model.body_height m in
-    let endp : I64 := total - eff in
-    let start : I64 := if endp - h < 0 then 0 else endp - h in
-    let count : I64 := if endp - start < 0 then 0 else endp - start in
-    let w : Window := { start := start, count := count, eff := eff, first_line := Model.first_line_at_row m start } in
-    w
-
-/// Rows nearer than this to the loaded top trigger the next page: the
-/// load lands BEFORE the user reaches the boundary, and since the view is
-/// anchored to the bottom, content arriving above it does not move it.
-pub def Model.page_prefetch_rows : I64 := 32
-
-/// The loaded top is (nearly) on screen and older lines exist on disk.
-/// `want_top` (Home) keeps loading until the transcript's true first
-/// line, even while the view is pinned at the loaded top. An untouched
-/// view (scroll 0, no up intent) never prefetches, so opening a session
-/// does not read its history.
-pub def Model.needs_page (m : TuiModel) (w : Window) : Bool :=
-    let lw : LoadedWindow := Model.loaded_window m.transcript in
-    if Bool.not (0 < lw.start) then false
-    else if m.want_top then true
-    else if Bool.not (Bool.or m.want_older (0 < m.scroll)) then false
-    else w.start <= Model.page_prefetch_rows
-
-/// The range to load: one page ending at the top of the tail, or above
-/// the loaded page when the window has scrolled past that.
-pub def Model.page_request (m : TuiModel) (w : Window) : Option (Pair I64 I64) :=
-    let upto : I64 := match m.transcript.page {
-        Option.none => m.transcript.tail_start,
-        Option.some p => p.start,
-    } in
-    let req_start : I64 := if upto - Store.page_lines < 0 then 0 else upto - Store.page_lines in
-    if Bool.not (req_start < upto)
-    then Option.none
-    else Option.some (Pair.pair req_start (upto - req_start))
-
-/// The indicator row: a page-read failure replaces the line count while
-/// the window still cannot be covered (otherwise the count is the truth).
-def scrolled_indicator (m : TuiModel) (w : Window) : String :=
-    if Model.needs_page m w then indicator_or_error m w.first_line else scroll_indicator w.first_line
-
-def indicator_or_error (m : TuiModel) (n : I64) : String :=
-    match m.transcript.page_error {
-        Option.some e => String.concat "page load failed: " e,
-        Option.none => scroll_indicator n,
-    }
-
-/// `N lines above -- PgDn for latest`: the row the scrolled-up panel
-/// spends one of its rows on; `n` is the count of lines STILL above
-/// the window's top.
-pub def scroll_indicator (n : I64) : String :=
-    let lines_word : String := if n == 1 then "line above -- PgDn for latest" else "lines above -- PgDn for latest" in
-    String.concat (String.concat (I64.to_string n) " ") lines_word
-
-/// The top scroll still allows: at most `len - (height - 1)` (the
-/// scrolled window shows `height - 1` content rows and an indicator
-/// row), never less than 0 -- so the transcript's FIRST line is
-/// reachable at max scroll.
-#[partial]
-def scroll_clamp (scroll : I64) (len : I64) (height : I64) : I64 :=
-    let headroom : I64 := if height < 1 then 0 else len - (height - 1) in
-    let room : I64 := if headroom < 0 then 0 else headroom in
-    if scroll > room then room
-    else if scroll < 0 then 0
-    else scroll
 
 /// `rows` minus the 3-row input box and the status row, minus the
 /// transcript border's own top/bottom lines.
@@ -681,153 +279,20 @@ pub def Model.live_view (m : TuiModel) : LiveView :=
     let v : LiveView := { colors := m.state.colors, width := Model.content_width m, panel := panel_height m } in
     v
 
-// ── the scrollbar ──────────────────────────────────────────────────────
-// The bar lives in the transcript panel's rightmost cell: the old right
-// padding column, so `content_width` (cols - 4) is unchanged. It covers
-// only the transcript viewport (`body_height`), never the live rows.
-
-pub def Model.scrollbar_visible (m : TuiModel) : Bool :=
-    let h : I64 := Model.body_height m in
-    let no_picker : Bool := match m.picker { Option.none => true, Option.some _ => false } in
-    Bool.and no_picker (Bool.and (I64.lt 1 h) (I64.lt h m.row_total))
-
-def scrollbar_room (m : TuiModel) : I64 :=
-    let h : I64 := Model.body_height m in
-    if I64.lt m.row_total (h - 1) then 0 else m.row_total - (h - 1)
-
-/// `(top, length)` in panel-relative rows; none when not scrollable.
-pub def Model.scrollbar_thumb (m : TuiModel) : Option (Pair I64 I64) :=
-    if Bool.not (Model.scrollbar_visible m)
-    then Option.none
-    else
-        let h : I64 := Model.body_height m in
-        let total : I64 := if I64.lt m.row_total 1 then 1 else m.row_total in
-        let w : Window := Model.window m in
-        let eff : I64 := w.eff in
-        let vh : I64 := if I64.gt eff 0 then h - 1 else h in
-        let len0 : I64 := (vh * h) / total in
-        let len : I64 := if I64.lt len0 1 then 1 else if I64.gt len0 h then h else len0 in
-        let room : I64 := scrollbar_room m in
-        if I64.lt room 1
-        then Option.some (Pair.pair (h - len) len)
-        else
-            let span : I64 := h - len in
-            let off : I64 := if I64.lt span 1 then 0 else (eff * span) / room in
-            Option.some (Pair.pair (span - off) len)
-
-pub def Model.scrollbar_hit (m : TuiModel) (row : I64) (col : I64) : Bool :=
-    let h : I64 := Model.body_height m in
-    Bool.and (I64.lt 4 m.cols)
-        (Bool.and (I64.beq col (m.cols - 2))
-        (Bool.and (Model.scrollbar_visible m)
-            (Bool.and (Bool.not (I64.lt row (Model.panel_top_of m)))
-                (I64.lt row (Model.panel_top_of m + h)))))
-
-/// Where a pointer row puts the scroll for a grab offset.
-def scrollbar_scroll_for (m : TuiModel) (row : I64) (grab : I64) : I64 :=
-    let h : I64 := Model.body_height m in
-    match Model.scrollbar_thumb m {
-        Option.none => m.scroll,
-        Option.some pr => match pr {
-            Pair.pair top len =>
-                let span : I64 := h - len in
-                let rel : I64 := row - Model.panel_top_of m in
-                let target_top : I64 := clamp (rel - grab) 0 span in
-                if I64.lt span 1
-                then 0
-                else (span - target_top) * scrollbar_room m / span,
-        },
-    }
-
-pub def Model.scroll_to (m : TuiModel) (target : I64) : TuiModel :=
-    let m2 : TuiModel := { m with scroll := scroll_clamp target m.row_total (Model.body_height m) } in
-    Model.refresh_rows m2
-
-pub def Model.scrollbar_press (m : TuiModel) (row : I64) : TuiModel :=
-    match Model.scrollbar_thumb m {
-        Option.none => m,
-        Option.some pr => match pr {
-            Pair.pair top len =>
-                let rel : I64 := row - Model.panel_top_of m in
-                let in_thumb : Bool := Bool.and (Bool.not (I64.lt rel top)) (I64.lt rel (top + len)) in
-                let grab : I64 := if in_thumb then rel - top else len / 2 in
-                let target : I64 := scrollbar_scroll_for m row grab in
-                Model.scroll_to { m with scroll_drag := Option.some grab } target,
-        },
-    }
-
-pub def Model.scrollbar_drag_to (m : TuiModel) (row : I64) : TuiModel :=
-    match m.scroll_drag {
-        Option.none => m,
-        Option.some grab => Model.scroll_to m (scrollbar_scroll_for m row grab),
-    }
-
-pub def Model.scrollbar_release (m : TuiModel) : TuiModel :=
-    { m with scroll_drag := Option.none }
-
-#[partial]
-def scrollbar_rows (m : TuiModel) (i : I64) (h : I64) (top : I64) (len : I64) : List SizedWidget :=
-    if I64.lt (h - 1) i
-    then List.empty
-    else
-        let thumb : Bool := Bool.and (Bool.not (I64.lt i top)) (I64.lt i (top + len)) in
-        let glyph : String := if thumb then "█" else "│" in
-        let style : TextStyle :=
-            if thumb then theme_scrollbar_thumb_style_with m.state.colors
-            else theme_border_style_with m.state.colors in
-        List.cons (sized (LayoutSize.fixed 1) (with_style style (label glyph)))
-            (scrollbar_rows m (i + 1) h top len)
-
-pub def Model.scrollbar_column (m : TuiModel) : Widget :=
-    match Model.scrollbar_thumb m {
-        Option.none => Widget.column List.empty,
-        Option.some pr => match pr {
-            Pair.pair top len => Widget.column (scrollbar_rows m 0 (Model.body_height m) top len),
-        },
-    }
-
-/// The scroll state machine: `scroll` counts WRAPPED ROWS above the
-/// pinned bottom. The delta moves the window (PageUp/Ctrl+U positive,
-/// i.e. older; PageDown negative), clamped at both ends. The clamp runs
-/// in `refresh_rows` against the FRESHLY computed row total -- the cached
-/// `row_total` can lag a transcript/page swap by one fold.
-#[partial]
+/// Rows toward older output (negative: toward the latest).
 pub def Model.scroll_step (m : TuiModel) (delta : I64) : TuiModel :=
-    let m2 : TuiModel := { m with scroll := m.scroll + delta } in
-    Model.refresh_rows m2
+    match Model.pane_step m (PaneMsg.scroll delta) {
+        Pair.pair m2 _ => m2,
+    }
 
-/// A new block of transcript lines: the blank separator row in front
-/// (skipped on an empty transcript), and a scrolled view HELD in place
-/// -- the scroll grows by the block's WRAPPED ROW count, so the visible
-/// rows do not slide (auto-pin only happens when the user was already at
-/// the bottom, i.e. scroll = 0: it stays 0 and the tail keeps riding).
-#[partial]
+/// A new block of transcript lines (a blank separator row in front; a
+/// scrolled view is held in place).
 pub def Model.append_block (m : TuiModel) (lines : List TLine) : TuiModel :=
-    let block : List TLine := Transcript.next_block m.transcript lines in
-    let tr2 : Transcript := Transcript.append m.transcript block in
-    // The row count is only needed to hold a SCROLLED view in place. A
-    // pinned view stays at 0, so the extra wrap would be pure waste -- and
-    // for one huge message it was a visible freeze. Only the block's own
-    // rows count: lines the tail cap DROPS were above the window, which is
-    // anchored to the bottom, so they never move it.
-    let m2 : TuiModel :=
-        if m.scroll > 0
-        then
-            let shown : List TLine := shown_lines m.show_details block in
-            let added : I64 := Rows.count_lines m.state.colors (Model.content_width m) shown in
-            { m with transcript := tr2, scroll := m.scroll + added }
-        else { m with transcript := tr2, scroll := 0 } in
-    Model.refresh_rows m2
+    { m with pane := Pane.append_block (Model.pane_view m) m.pane lines }
 
-/// A gapless append (the Ctrl+C hint): no separator row, and no scroll
-/// adjustment -- the line joins the tail like any other output.
-#[partial]
+/// A gapless append (the Ctrl+C hint).
 pub def Model.append_lines (m : TuiModel) (lines : List TLine) : TuiModel :=
-    let tr2 : Transcript := Transcript.append m.transcript lines in
-    let m2 : TuiModel := { m with transcript := tr2 } in
-    Model.refresh_rows m2
-
-pub def Model.transcript_count (m : TuiModel) : I64 := m.transcript.total
+    { m with pane := Pane.append_lines (Model.pane_view m) m.pane lines }
 
 // ── status line ─────────────────────────────────────────────────────────
 
