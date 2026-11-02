@@ -2,9 +2,9 @@
 
 `mty` spawns a compiled program under a pseudo-terminal, feeds it keys/SGR
 mouse reports, reconstructs the rendered screen, and asserts on it. The
-weaver-specific drivers live in `motes/weaver/test/`, not here; the last
-remaining Python driver is `scripts/weaver-tui-repro/pty_repro_sessions.py`
-(its 18 MB RSS scenario is blocked on a runtime fiber/GC crash).
+weaver-specific drivers live in `motes/weaver/test/`, not here; the suite is
+entirely Monad (the last Python pty driver, including the sessions 18 MB RSS
+scenario, was ported and deleted).
 
 ## Compilation and gating
 

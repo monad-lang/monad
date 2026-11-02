@@ -373,15 +373,14 @@ jobs:
             -c env MONAD_BIN="$PWD/target-monad/ci-self-compile/monad" \
                  scripts/check-repl.sh
 
-      # Weaver's terminal tests: the mty drivers in motes/weaver/test run
-      # under `monad test`, and one Python oracle remains in
-      # scripts/weaver-tui-repro/ (pty_repro_sessions.py: its 18 MB RSS
-      # scenario trips a runtime fiber/GC crash), all against the release
-      # weaver built from THIS commit's self-compiled compiler. The wrapper
-      # still classifies that driver from its OUTPUT, not its exit code
+      # Weaver's terminal tests: every mty driver in motes/weaver/test runs
+      # under `monad test` against the release weaver built from THIS
+      # commit's self-compiled compiler. The suite is compiled-only
+      # `#[extern "c"]` pty FFI; there is no Python driver left, including
+      # the sessions 18 MB RSS scenario
       # (plans/implementations/2026-10-25-weaver-pty-monad-tests.md).
       # ~2 min to build weaver natively, ~10-15 min for the mty suite (the
-      # per-file compilation dominates), ~1 min for the Python driver.
+      # per-file compilation dominates; S6 adds ~20 s).
       - name: Weaver terminal tests
         run: |
           nix develop --no-pure-eval --accept-flake-config \
