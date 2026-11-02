@@ -38,19 +38,19 @@
 use std::test {Test.write_fixture}
 use parsec::core {fail, success}
 use lang::module {
-  DeclRange, ModuleInfo, ModuleInfoCache, RangedFileCheck,
-  check_file_cached_from_source_ranged, module_info_cache_empty, module_info_cache_insert,
-  parse_all_decls, ranged_file_ranges, ranged_file_scope,
+    DeclRange, ModuleInfo, ModuleInfoCache, RangedFileCheck,
+    check_file_cached_from_source_ranged, module_info_cache_empty, module_info_cache_insert,
+    parse_all_decls, ranged_file_ranges, ranged_file_scope,
 }
 use toolkit::decl_text {DeclText}
 use toolkit::navigation {
-  NavTarget, nav_at, nav_at_checked, nav_at_cursor, nav_target_detail, nav_target_file, nav_target_kind,
-  nav_target_name, nav_target_range,
+    NavTarget, nav_at, nav_at_checked, nav_at_cursor, nav_target_detail, nav_target_file, nav_target_kind,
+    nav_target_name, nav_target_range,
 }
 use lang::pretty {show_term}
 use lang::scope {build_scope_from_decls}
 use lang::types {
-  Decl, Identifier, Location, ModulePath, Scope, ScopeData, SourceRange, Term,
+    Decl, Identifier, Location, ModulePath, Scope, ScopeData, SourceRange, Term,
 }
 open IO {println}
 use std::process {exec_cmd, process_id}
