@@ -28,7 +28,7 @@ use lang::scope {
   instance_wildcard_names, instance_head_is_concrete, list_append, mangle_instance_dict_name,
   mangle_instance_method_name, mangled_to_identifier, param_names,
   rebuild_call,
-  resolve_dict_arg, resolve_dict_args, scope_data_add_inductive, scope_data_classes, scope_data_constrained_def_classes,
+  resolve_dict_arg, resolve_dict_args, scope_data_add_def, scope_data_add_inductive, scope_data_classes, scope_data_constrained_def_classes,
   scope_data_empty, scope_find_all_inductives_by_constructor, scope_find_class,
   scope_find_class_def_by_name, scope_find_class_def_for_ref, scope_find_def_constraints,
   scope_find_def_dict_constraints,
@@ -10843,4 +10843,94 @@ def test_struct_lit_build_args_substitutes_the_default : Bool :=
             _ => false,
         },
         _ => false,
+    }
+
+// --- The global field access's rebuilt subject ------------------------
+//
+// Regression for `resolve_dotted_head` returning the head AS WRITTEN even
+// when the lookup had found the qualified def (`scope_data_find_def`'s
+// bare-alias fallback, 2026-11-01): `vzero.x` then reached codegen as a
+// reference to the bare `vzero` while `def_symbol_name` is the name
+// verbatim, and the call-target gate rejected it with `call to undefined
+// symbol(s): vzero`. The e2e rows live in
+// `slow_tests/src/codegen_global_field_access_tests.mo`; these pin the
+// mechanism one stage earlier, where the mistake was made.
+
+/// The codegen-side spelling of `def vzero` in module `simple`:
+/// `qualify_decl_names` mints a single identifier carrying the `::`
+/// (`lang/codegen/qualify.mo`), which is what `bare_aliases` records under
+/// the bare `vzero`.
+def qualified_vzero_name : NamePath :=
+    NamePath.mk (List.cons (Identifier.id "simple::vzero") List.empty)
+
+def qualified_vzero_module : ModulePath :=
+    ModulePath.mk (List.cons (Identifier.id "simple") List.empty)
+
+def qualified_vzero_def : ScopeDef := {
+    name := qualified_vzero_name,
+    module := qualified_vzero_module,
+    sig := point_type_ref,
+    body := Term.hole,
+    vis := Visibility.package_private,
+}
+
+/// A scope shaped like the qualified codegen one: the def registered under
+/// the minted spelling, so a bare `vzero` only resolves through
+/// `bare_aliases`, plus the `Point` inductive its signature names (the field
+/// access needs the struct to read the field's index).
+def qualified_vzero_scope : Scope := {
+    module_id := qualified_vzero_module,
+    scope := scope_data_add_inductive (scope_data_add_def scope_data_empty qualified_vzero_def) point_inductive,
+    parent := Option.none,
+    incomplete_match_ok := false,
+}
+
+/// Whether `t` is a `Term.var` naming `want` (source-location wrappers
+/// transparent, as the checker itself treats them).
+def var_names (t : Term) (want : String) : Bool :=
+    match t {
+        Term.var _ dbg =>
+            match dbg {
+                DebugName.named id => String.beq (show_identifier id) want,
+                DebugName.unnamed => false,
+            },
+        Term.ctx _ inner => var_names inner want,
+        _ => false,
+    }
+
+/// Whether `t` (a source-location wrapper transparent) is an eliminator whose
+/// SCRUTINEE names `want` -- `match` elaborates to `Term.elim`, so this reads
+/// the subject the recovery rebuilt.
+def term_scrutinee_names (t : Term) (want : String) : Bool :=
+    match t {
+        Term.elim e => var_names e.scrutinee want,
+        Term.ctx _ inner => term_scrutinee_names inner want,
+        _ => false,
+    }
+
+#[test]
+def test_resolve_dotted_head_returns_the_resolved_name : Bool :=
+    match resolve_dotted_head "vzero" qualified_vzero_scope empty_locals {
+        Option.some found => String.beq found "simple::vzero",
+        Option.none => false,
+    }
+
+/// The behaviour the qualified spelling must NOT disturb: a local binder is
+/// registered under its own bare name, and the rebuilt subject keeps it.
+#[test]
+def test_resolve_dotted_head_keeps_a_local_binders_spelling : Bool :=
+    let locals : LocalScope := prepend_typed_local_vars [Identifier.id "vzero"] [point_type_ref] empty_locals in
+    match resolve_dotted_head "vzero" point_scope locals {
+        Option.some found => String.beq found "vzero",
+        Option.none => false,
+    }
+
+/// End to end through the checker: `vzero.x` against a qualified def must
+/// elaborate to an eliminator whose scrutinee is the QUALIFIED name. Pre-fix
+/// the scrutinee was the bare `vzero`.
+#[test]
+def test_global_field_access_rebuilds_the_qualified_subject : Bool :=
+    match type_check (Term.var sentinel (DebugName.named (Identifier.id "vzero.x"))) Term.hole qualified_vzero_scope empty_local_types empty_locals {
+        err _ => false,
+        ok tt => term_scrutinee_names tt.term "simple::vzero",
     }
