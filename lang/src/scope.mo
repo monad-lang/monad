@@ -24,7 +24,6 @@ use lib::typecheck::traverse {con_map_children, native_map_children, term_map_ch
 // uses -- see `registered_def_type`'s own doc comment for why.
 use lib::elaborate {elaborate_def, names_of_decls}
 use lib::codegen::symbols {string_matches_bare, unqualify_def_name}
-use init::shared {Shared}
 // `ScopeData.def_refs` is a `std.map` `HashMap ModulePath ScopeDef` — see
 // `bench/scope_lookup.mo` — so this module names what it reaches from
 // `std::map` like any other import. It used to be an empty import, to

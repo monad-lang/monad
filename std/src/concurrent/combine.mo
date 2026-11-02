@@ -2,7 +2,6 @@
 // Duration.
 // Builds on forkIO/await_fiber/cancel_fiber from std.concurrent.fiber.
 
-use init::shared {Shared, Shared.get}
 use lib::concurrent::fiber {Fiber, FiberError, await_fiber, cancel_fiber, forkIO, pollFiber}
 
 // `Combine.Duration`, not `Duration`: `motes/time` declares a `pub Duration`

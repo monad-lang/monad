@@ -6,7 +6,6 @@
 // purpose; this file runs under the compiled backend's runner, not the
 // host's. See that test's own comment for the numbers and the reason.
 
-use init::shared {Shared.get, of}
 use lib::concurrent::fiber {Fiber, FiberError, await_fiber, cancel_fiber, forkIO}
 use lib::concurrent::combine {
   Combine.Duration, FiberScope, Timeout, all, race, scope_fork, scoped, sleepIO, timeout,

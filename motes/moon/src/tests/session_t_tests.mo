@@ -1,7 +1,6 @@
 /// Session middleware over `HandlerT`: the handle is installed into the
 /// context, committed after the handler, and loadable on the next request.
 
-use init::shared {Shared, Shared.get}
 use std::test {}
 use http::cookie {SameSite}
 use http::strings {Strings.split_on}

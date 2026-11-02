@@ -5,7 +5,6 @@
 /// slot and the session store. The original `SessionStore.with_session`
 /// (over `Request -> IO (Result String Response)`) stays in `session.mo`.
 
-use init::shared {Shared}
 use std::ref {Ref, Ref.get, Ref.new}
 use http::types {Response}
 use lib::context {Ctx, Ctx.header, Ctx.with_session, SessionSlot}

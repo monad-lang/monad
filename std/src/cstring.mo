@@ -17,7 +17,6 @@
 // Compiled backend only, like `ByteBuf.ptr`: the Rust host ignores
 // `#[extern "c"]` and has no raw addresses.
 
-use init::shared {Shared, Shared.get}
 use lib::bytebuf {ByteBuf.alloc, ByteBuf.free, ByteBuf.ptr,
     ByteBuf.to_list, ByteBuf.to_string}
 

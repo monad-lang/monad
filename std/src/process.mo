@@ -1,6 +1,5 @@
 // IO is ambient (init/io.mo, always a loaded root) -- no `use` needed.
 
-use init::shared {Shared, Shared.get}
 use lib::io {}
 use lib::stream {
   FdStream, FdStream.read_line_bounded, PartialLinePolicy, Stream, StreamError,

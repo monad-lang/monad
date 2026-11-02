@@ -31,7 +31,6 @@
 /// this shim, or re-exporting from `init/src/lib.mo`.
 use lang {}
 use init::copy {}
-use init::shared {}
 
 /// A test only so the module has a runnable decl; the file's job is its
 /// `use` lines. The report never calls this.

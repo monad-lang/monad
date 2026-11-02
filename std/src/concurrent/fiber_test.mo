@@ -1,7 +1,6 @@
 // Fiber concurrency tests
 // Tests for forkIO, await_fiber, cancel_fiber
 
-use init::shared {Shared.get, of}
 use lib::concurrent::fiber {
     FiberError, FiberError.message, FiberError.of_code, await_fiber, cancel_fiber, forkIO,
 }

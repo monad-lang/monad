@@ -41,7 +41,6 @@ use std::list {}
 // reused name below is read, never re-owned -- the B1 conversion idiom
 // `last_colon_colon` landed (`lang/src/scope.mo`): the caller wraps
 // once in `Shared.of`, the callee reads through `Shared.get`.
-use init::shared {Shared}
 
 open LLVMType {i1_, i32_, i8_, i64_, ptr}
 open LLVMValue {

@@ -321,8 +321,13 @@ def status : IO Unit := do {
   write `use lib::greet` for this mote's own.
 - Brace items are NAME PATHS matched against declarations' own spelling:
   `use std::list {List.intercalate}` (dotted), not `{intercalate}`.
-  Constructors are the one bare-name exception. `use std::process
-  {exec_cmd}` binds bare `exec_cmd`.
+  Constructors are named `Type.Ctor` (`use std::option {Option.some}`) or
+  through their type's name (`{Option}`, which also selects its
+  constructors). The legacy bare tail (`{some}`, `{of}`) is still accepted
+  during the migration window — the last published nightly needs it to
+  read the compiler-source surface — and becomes an error once a nightly
+  carrying dotted support is published (two-step rollout). `open T {some}`
+  still binds the bare name inside the opening module.
 - Avoid qualified `module::name` TERM references at call sites — the
   self-hosted compiler does not resolve them yet; import the name instead.
 - `use prelude` is an error (the prelude is ambient, auto-loaded).

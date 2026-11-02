@@ -231,10 +231,12 @@ def dotted_prefix (full : String) (n : String) : Bool :=
         (Bool.and (String.starts_with n full)
             (String.beq (String.slice full (String.length n) 1) "."))
 
-/// Whether a brace-list spelling selects a declaration: exact spelling,
-/// a constructor's own bare name, or a dotted prefix. The
-/// `spelling`/`tail` pair is the declaration's (or item's) full and
-/// last-segment spellings, precomputed so the walk never rescans.
+/// Whether a brace-list spelling selects a declaration: exact spelling, a
+/// constructor's own bare name, or a dotted prefix. During the rollout
+/// window BOTH constructor spellings select (`{List.cons}` and the legacy
+/// `{cons}`); the bare rule is what keeps the last published nightly able
+/// to read the compiler-source surface, and step 2 of the rollout removes
+/// it. `open T {cons}` is separate and keeps binding the bare name.
 #[partial]
 def spelling_selected (names : List String) (spelling : String) (tail : String) (is_ctor : Bool) : Bool :=
     match names {
@@ -272,12 +274,12 @@ pub struct DeclRow {
     vis : Visibility,
 }
 
-/// The spelling a brace item must use to select `row`'s declaration:
-/// the whole spelled name for a def or type, only the last segment for
-/// a constructor -- the same rule `validate_use_names`'s
-/// `declared_names_of` (lang/module.mo) lists constructors by.
+/// The spelling a brace item should use to select `row`'s declaration: the
+/// whole spelled name, constructors included (`Type.ctor`) -- the target
+/// spelling `validate_use_names`'s `declared_names_of` (lang/module.mo)
+/// lists. The legacy bare tail still selects too (`spelling_selected`).
 def item_spelling (row : DeclRow) : String :=
-    if row.is_ctor then row.bare_tail else row.spelling
+    row.spelling
 
 /// Whether a declaration may be written BARE (`List.length`) in a
 /// consumer holding `sel` for its owner.
@@ -293,7 +295,7 @@ def selects_qual (sel : Selection) (row : DeclRow) : Bool :=
         an_all => true,
         an_only ns =>
             let item : String := item_spelling row in
-            spelling_selected ns item item row.is_ctor,
+            spelling_selected ns item row.bare_tail row.is_ctor,
     }
 
 /// `sel` with one more allowed name on both axes.
@@ -1653,7 +1655,7 @@ def test_priv_is_visible_in_its_own_module : Bool :=
 #[test]
 def test_a_constructor_inherits_its_type_visibility : Bool :=
     match probe_errors [Pair.pair widgets_path "type Opt { some (a : I64), none }\n"] consumer_path
-            "use widgets {Opt, some}\ndef f (o : Opt) : I64 := match o { some x => x, none => 0 }" {
+            "use widgets {Opt, Opt.some, Opt.none}\ndef f (o : Opt) : I64 := match o { Opt.some x => x, Opt.none => 0 }" {
         List.cons msg _rest => String.contains msg "is not visible here",
         List.empty => false,
     }
@@ -1766,18 +1768,24 @@ def test_own_struct_constructor_is_not_reported : Bool :=
         (probe_errors [Pair.pair widgets_path foreign_mk] consumer_path
             "struct S { x : I64 }\ndef get_x (s : S) : I64 := match s { mk v => v }")
 
-/// An inductive constructor is importable by its bare name.
+/// During the rollout window BOTH constructor spellings are importable --
+/// the dotted target (`Opt.some`) and the legacy bare tail (`some`) -- and
+/// a dotted reference still needs some import line.
 #[test]
-def test_constructor_import_binds_bare : Bool :=
+def test_constructor_import_accepts_both : Bool :=
     let sum_src : String := "pub type Opt { some (a : I64), none }\n" in
     Bool.and
         (List.is_empty
             (probe_errors [Pair.pair widgets_path sum_src] consumer_path
-                "use widgets {Opt, some, none}\ndef f : Opt := some 1"))
-        (Bool.not
+                "use widgets {Opt, Opt.some}\ndef f : Opt := Opt.some 1"))
+        (Bool.and
             (List.is_empty
                 (probe_errors [Pair.pair widgets_path sum_src] consumer_path
-                    "def f : Opt := some 1")))
+                    "use widgets {Opt, some}\ndef f : Opt := Opt.some 1"))
+            (Bool.not
+                (List.is_empty
+                    (probe_errors [Pair.pair widgets_path sum_src] consumer_path
+                        "def f : Opt := Opt.some 1"))))
 
 /// The ambient trio's `pub use` closure is seen whole: a name
 /// re-exported by the `init` hub needs no `use` line in any consumer,

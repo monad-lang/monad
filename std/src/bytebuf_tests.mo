@@ -15,7 +15,6 @@
 /// instance at run time, and constrained instance dispatch is exactly
 /// what this backend does not honor (`unresolved global: BEq.beq`).
 
-use init::shared {Shared.get, of}
 use std::bytebuf {ByteBuf.alloc, ByteBuf.copy_into, ByteBuf.free, ByteBuf.length, ByteBuf.of_list, ByteBuf.of_string, ByteBuf.to_list, ByteBuf.to_string, ByteBuf.truncate}
 use std::list {List.length}
 

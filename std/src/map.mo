@@ -1,4 +1,3 @@
-use init::shared {Shared, Shared.get}
 
 /// Key-value map type class. Types implementing Map provide ordered
 /// key-value storage with insertion, lookup, and deletion.

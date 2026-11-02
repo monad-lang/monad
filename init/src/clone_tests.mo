@@ -6,7 +6,6 @@
 /// twice). Independence of the two allocations is observable only through a
 /// mutable cell, which `init/` may not name (`std/` owns `Ref`); that test
 /// lives in `std/src/clone_tests.mo`.
-use init::shared {Shared}
 use init::list {List.get}
 
 #[test]

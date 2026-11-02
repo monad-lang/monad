@@ -27,7 +27,10 @@
 /// Instances may be constrained (`[Clone A] Clone (List A)`) — ordinary class
 /// dispatch, unlike `Copy`, whose resolver deliberately refuses constrained
 /// parametric instances (`lang/typecheck/copy_class.mo`).
-use init::shared {Shared, Shared.get}
+
+// `Shared` is ambient through the hub, which the loader visits LAST; an
+// `init` module checked during that load must name it explicitly.
+use init::shared {Shared}
 
 pub class Clone (A : Type) {
     def clone (x : Shared A) : A

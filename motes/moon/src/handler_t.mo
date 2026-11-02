@@ -18,7 +18,6 @@
 /// lambdas use the `_io` forms, `Monad.pure`/`Monad.bind` at IO, and
 /// unconstrained helpers (`run`, `local`, `ask_io`, `request_io`).
 
-use init::shared {Shared}
 use http::types {
   Body, Headers, Headers.set, HttpVersion, Method, Request, Response,
   Status.bad_request, Status.forbidden, Status.internal_server_error,

@@ -12,7 +12,6 @@
 // re-checks the cancel flag on every wake-up) and unwinds at the next
 // bind, the same cooperative rule as every other native.
 
-use init::shared {Shared, Shared.get}
 use lib::concurrent::combine {sleepIO}
 
 /// Channel handles are opaque runtime objects; do not construct or pattern

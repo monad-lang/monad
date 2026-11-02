@@ -8,7 +8,6 @@
 /// Same mote, so `Proc.first_quote` stays package-private and is still
 /// reachable here -- no API had to be widened to test it.
 
-use init::shared {Shared.get, of}
 use std::stream {StreamError, StreamErrorKind}
 
 // ─── Tests: shell_quote ───

@@ -471,7 +471,8 @@ impl GlobalScopeData {
       let selection = filter_map.get(modu.path());
       let is_used = selection.is_some();
       // Which of this module's `full_path`s are constructors. A brace item
-      // may name one by its bare name (`cons`) — see `spelling_selected`.
+      // names one by its DOTTED spelling (`List.cons`); the type's own name
+      // (`List`) also selects it, by the dotted-prefix rule.
       //
       // Ordinary inductives only, matching `declared_names_of` below: a
       // `struct`/`class` is an inductive here too, but the self-hosted
@@ -2502,12 +2503,15 @@ fn declared_names_of(module: &Module) -> Vec<String> {
     // self-hosted check rejects.
     if *ind.value().variant() == InductiveVariant::Generic {
       for con in ind.value().constructors() {
-        // The constructor's BARE name (`cons`, not `List.cons`). The host
-        // stores a constructor as `List.cons` (`term::induct_constructor`)
-        // while the self-hosted parser stores it single-segment and binds
-        // it bare, so the bare name is the one spelling both sides agree
-        // on — see `decl_carried_names` in `lang/src/module.mo`, which
-        // says in as many words that the two must stay in step.
+        // BOTH spellings, during the migration window. The target spelling
+        // is the constructor's own DOTTED name (`List.cons`); the bare tail
+        // (`cons`) is the legacy form that the last published nightly still
+        // needs to read in the compiler-source surface, so it stays
+        // accepted until a nightly carrying dotted support exists. Step 2
+        // of the rollout drops `last()`. The self-hosted
+        // `constructor_names` (lang/src/module.mo) must agree — CI checks
+        // the corpus with both compilers.
+        names.push(con.name().to_string());
         names.push(con.name().last().to_string());
       }
     }
@@ -2551,11 +2555,10 @@ pub struct UnimportedName {
   /// The loaded module whose declaration that name resolves to.
   pub owner: ModulePath,
   /// The declaration's own spelled name in `owner`, which is what a brace
-  /// item would have to say — already reduced to the list-item form by
-  /// [`item_spelling`], so a constructor reads `cons`, not `List.cons`.
+  /// item would have to say — constructors included (`List.cons`).
   pub spelling: NamePath,
-  /// Whether the declaration is an inductive constructor, which may also
-  /// be named by its bare tail (`{cons}` for `List.cons`).
+  /// Whether the declaration is an inductive constructor (informational;
+  /// the bare tail is no longer a selectable brace item).
   pub is_constructor: bool,
   pub kind: FindingKind,
   /// The declaration's visibility, for the hidden message's remedy.
@@ -2855,13 +2858,14 @@ fn own_constructor_tails(module: &Module) -> Vec<String> {
 /// mapped to the declaration it names: the module that declares it, the
 /// declaration's own spelled name, and whether it is a constructor.
 ///
-/// Two spellings per constructor on purpose. `declared_names_of` lists a
-/// constructor by its bare tail (`cons`), because that is how both parsers
-/// write it in the inductive body; a reference site inside this crate may
-/// use the host's two-segment spelling (`List.cons`). Indexing both means
-/// either written form finds its declaration, and the check then asks the
-/// `use` line about the declaration's OWN spelling — so `{cons}` and
-/// `{List.cons}` are judged by the same rule.
+/// Two spellings per constructor on purpose, both for REFERENCE lookup: a
+/// reference inside the defining module may be written bare (`cons`), while
+/// a reference elsewhere is `List.cons`. Both find their declaration here.
+/// The `use` judgment then asks about the declaration's OWN spelling
+/// (`item_spelling` = `List.cons`), so `{List.cons}` selects it and
+/// `{cons}` does not — the bare form is still reachable through `open
+/// T {cons}` and inside the defining module, which is why the bare key is
+/// kept in the index.
 /// One declaration a loaded module provides, as the judgment needs it:
 /// the owner, the declaration's own spelled name, whether it is a
 /// constructor, and its visibility (constructors and class methods inherit
@@ -2979,22 +2983,16 @@ fn declaration_index(loaded: &LoadedModules) -> Map<String, Vec<DeclRow>> {
 }
 
 /// The spelling a brace item must use to select `spelling`: the whole
-/// `NamePath` for a def or type, but only its LAST segment for a
-/// constructor.
+/// `NamePath`, constructors included.
 ///
 /// `declared_names_of` — this check's own oracle, and the self-hosted
-/// `decl_carried_names` it mirrors — lists a constructor bare, so
-/// `use std::list {cons}` selects `List.cons` while `{List.cons}` names
-/// nothing at all. Suggestion and reachability have to use the same
-/// spelling, or the codemod emits a list item the validator rejects:
-/// `use std::map {HashMap.map}` names no declaration, because the struct
-/// `HashMap`'s constructor is reachable as `{map}`.
+/// `decl_carried_names` it mirrors — lists a constructor by its dotted
+/// spelling (`List.cons`), so `use std::list {List.cons}` selects it while
+/// `{cons}` names nothing at all. Suggestion and reachability use the same
+/// spelling, or the codemod emits a list item the validator rejects.
 fn item_spelling(spelling: &NamePath, is_ctor: bool) -> NamePath {
-  if is_ctor {
-    NamePath::single(spelling.last().clone())
-  } else {
-    spelling.clone()
-  }
+  let _ = is_ctor;
+  spelling.clone()
 }
 
 /// The bare names a consumer reaches from another module without saying so.

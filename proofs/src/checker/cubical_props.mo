@@ -30,7 +30,6 @@ use lang::typecheck::cubical {peels_to_bare_interval}
 use lang::typecheck::infer {empty_local_types, empty_locals, equiv_type, type_check}
 use lang::typecheck::unify {unify}
 use lang::typecheck::whnf {whnf}
-use init::shared {Shared}
 use lang::types {
   CubicalPrim, DebugName, ModulePath, Scope, ScopeData, SortLevel, Similar, Term,
   binder_anon, binder_named,

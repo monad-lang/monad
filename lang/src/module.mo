@@ -430,23 +430,27 @@ def decl_carried_names (d : Decl) : List String :=
             match d {
                 Decl.inductive_d ind => match ind {
                     Inductive.mk _ _ _ constructors _ _ =>
-                        List.cons nm (constructor_names constructors)
+                        List.cons nm (constructor_names nm constructors)
                 },
                 _ => List.cons nm List.empty
             }
     }
 
-/// Constructor names, as DECLARED: bare (`cons`, `mk`).
+/// Constructor names, as DECLARED: BOTH the type-qualified spelling
+/// (`List.cons`, the target) and the bare tail (`cons`, the legacy form
+/// kept during the rollout window). A brace item is a name path matched
+/// against the declaration's own spelling, so `use M {List.cons}` and
+/// `use M {List}` (the dotted-prefix rule) select it, and `use M {cons}`
+/// keeps working until a nightly carrying dotted support is published
+/// (step 2 drops the bare entry).
 ///
-/// This side's parser already stores them single-segment
+/// This side's parser stores the constructor itself single-segment
 /// (`NamePath.mk [name]`, `lang/parser.mo`) and `build_scope_inductive`
-/// (`lang/scope.mo`) binds each one under that bare name, so
-/// `use M {cons}` really does bind `cons` here. The Rust host stores the
-/// same constructor as two segments (`List.cons`,
-/// `term::induct_constructor`) and its `declared_names_of` therefore takes
-/// the last segment to land on the same string -- if it did not,
-/// `use M {cons}` would pass this check and fail the host's, and CI runs
-/// both over the corpus. Keep the two in step.
+/// (`lang/scope.mo`) binds the bare name in the DECLARING module, which is
+/// why `open T {cons}` and bare pattern/term references keep working. The
+/// Rust host stores `inductive_name ++ ctor` (`term::induct_constructor`)
+/// and its `declared_names_of` pushes the same two spellings -- the two
+/// must agree, because CI checks the corpus with both compilers.
 ///
 /// Only an ordinary `type` reaches this function: `decl_carried_names`
 /// calls it for `Decl.inductive_d` alone, so a `struct`'s synthesized
@@ -454,13 +458,16 @@ def decl_carried_names (d : Decl) : List String :=
 /// `declared_names_of` restricts itself to `InductiveVariant::Generic` to
 /// match.
 #[partial]
-def constructor_names (cns : List InductConstructor) : List String :=
+def constructor_names (owner : String) (cns : List InductConstructor) : List String :=
     match cns {
         List.empty => List.empty,
         List.cons cn rest =>
             match cn {
                 InductConstructor.mk nm _ _ =>
-                    List.cons (show_name_path nm) (constructor_names rest)
+                    let bare : String := show_name_path nm in
+                    List.cons
+                        (String.concat owner (String.concat "." bare))
+                        (List.cons bare (constructor_names owner rest))
             }
     }
 
@@ -4928,7 +4935,7 @@ def test_a_use_name_declared_nowhere_is_rejected : Bool :=
 /// next to `List.length` and would be accepted by a tail comparison.
 #[test]
 def test_every_declaration_kind_can_be_imported_by_its_own_name : Bool :=
-    List.is_empty (probe_list_names use_names_target "use probe::list {f, T, mk, S, C, MyInst, dm, length}")
+    List.is_empty (probe_list_names use_names_target "use probe::list {f, T, T.mk, S, C, MyInst, dm, length}")
 
 /// ...and its mirror, which is the subtle half: `mk` here comes from a
 /// `STRUCT`, whose synthesized constructor is not a declared name on

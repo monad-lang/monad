@@ -7,7 +7,6 @@
 // runtime/tests/thread_stress.c, where two OS threads can exercise them
 // deterministically.
 
-use init::shared {Shared.get, of}
 use std::concurrent::channel {
     Channel, Channel.new, Channel.put, Channel.take, Channel.tryTake, select,
 }

@@ -2970,11 +2970,12 @@ fn merge_allowed_names(a: &AllowedNames, b: &AllowedNames) -> AllowedNames {
 ///   `List.length` — naming a namespace names its members. The boundary
 ///   is a `.`, so `{length}` selects nothing of `List.length`: a partial
 ///   spelling is only ever a suggestion in the error, never a match.
-/// - **A constructor's own bare name.** `{cons}` selects `List.cons`,
-///   because that is the name the SELF-HOSTED parser stores it under
-///   (single-segment — see `declared_names_of`'s note on keeping the two
-///   implementations in step). `{length}` still selects nothing, so this
-///   widening is confined to constructors.
+/// During the migration window a constructor's own bare name is STILL a
+/// match (`{cons}` selects `List.cons`), alongside its dotted spelling
+/// (`{List.cons}`) and its type's name (`{List}`). The bare rule is what
+/// keeps the last published nightly able to read the compiler-source
+/// surface; step 2 of the rollout removes it once a nightly with dotted
+/// support is published.
 pub fn spelling_selected(
   names: &Set<Identifier>,
   full_path: &NamePath,

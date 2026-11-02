@@ -10,7 +10,6 @@
 // self-hosted loader does -- a bare `use path {...}` here resolves
 // fine self-hosted but fails "module not found: path" under `cargo
 // run`. Qualified works identically on both sides.
-use init::shared {Shared, Shared.get}
 use lib::path {Path}
 use lib::bytebuf {
   ByteBuf, ByteBuf.alloc, ByteBuf.copy_into, ByteBuf.free, ByteBuf.length,

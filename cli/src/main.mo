@@ -1,4 +1,3 @@
-use init::shared {of}
 use std::list {List.length}
 open IO {
   println, read_file, file_exists,

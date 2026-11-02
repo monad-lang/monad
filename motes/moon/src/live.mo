@@ -14,10 +14,8 @@
 /// after the watch started. See `plans/implementations/inotify-file-watching.md`.
 
 use init::clone {Clone}
-use init::shared {Shared, Shared.get}
 use std::concurrent::combine {sleepIO}
 use std::concurrent::fiber {Fiber, forkIO}
-use init::shared {of}
 use std::hex {Hex.encode}
 use std::io {IO.is_dir, IO.list_dir, IO.read_file, IO.read_file_bytes}
 use std::path {Path, Path.file_name, Path.to_string}

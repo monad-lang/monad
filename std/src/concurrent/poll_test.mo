@@ -17,7 +17,6 @@
 // a bounded-retry helper recurses through two defs and the termination
 // checker reasonably refuses to see the bound.
 
-use init::shared {Shared.get, of}
 use lib::concurrent::fiber {FiberError, await_fiber, cancel_fiber, forkIO, pollFiber}
 use lib::concurrent::combine {sleepIO}
 

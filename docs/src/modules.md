@@ -87,6 +87,15 @@ The same rule covers a rename — `{n as m}` is checked against `n`, and
 `use std::io {IO.println as println}` is how you get the bare `println` — and
 `{*}`/`{}` are unaffected.
 
+A constructor's own spelled name is type-qualified, so write
+`use std::option {Option.some}`, or import the type itself —
+`use std::option {Option}` selects the type *and* every constructor under
+it. The bare tail (`use std::option {some}`) is the legacy spelling: it is
+still accepted during the migration window, because the last published
+nightly needs it to read the compiler-source surface, and it becomes an
+error once a nightly carrying dotted support is published. Inside the
+opening module, `open Option {some}` still binds the bare name.
+
 ## Opening Modules
 
 `open` makes a module's definitions available without their prefix:

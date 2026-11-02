@@ -5,7 +5,6 @@
 /// pinned with hand-built `inotify_event` records (no filesystem), the tree
 /// rows use real ones, and `slow_tests/src/watch_e2e_tests.mo` adds a compiled
 /// end-to-end program through the real pipeline.
-use init::shared {Shared.get, of}
 use std::io {IO.write_file}
 use std::list {List.length}
 use std::path {Path}

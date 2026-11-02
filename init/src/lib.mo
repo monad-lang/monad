@@ -19,10 +19,12 @@ pub use lib::copy {*}
 // diagnostic offers `Clone.clone` as a remedy in every file, so the
 // class and its instances have to be in scope without an import.
 pub use lib::clone {*}
-// `Shared` is deliberately NOT re-exported: a file that uses
-// `Shared.of` must name it, and one that never does holds no shared
-// read for the gate to recognise either way.
-//
+// `Shared` is ambient like `Copy`: the affine gate recognises the shared
+// handle by the type itself (`#[shared]`, `init/src/shared.mo`), so every
+// file must be able to name `Shared`, `Shared.of` and `Shared.get` without
+// an import. A file that never uses one holds no shared read either way.
+pub use lib::shared {*}
+
 // No `infix (+)` override here: `init/src/prelude.mo`'s own
 // `infix (+) := HAdd.add` is what `+` resolves to, through the
 // `[Add A] HAdd A A A` bridge and each type's `Add` instance. This line

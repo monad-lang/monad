@@ -6,7 +6,6 @@
 /// lives in its own `st_*` helper: no `#[test]` def nests two
 /// differently-typed matches (the recorded self-hosted codegen hazard).
 
-use init::shared {Shared, Shared.get}
 use std::process {exec_cmd, process_id}
 use std::bytebuf {ByteBuf, ByteBuf.free, ByteBuf.length, ByteBuf.of_string, ByteBuf.to_string}
 use std::stream {Stream, FdStream.read_line_bounded, StreamError, StreamError.kind_of_code, StreamErrorKind, FdStream, FdStream.open_file, FdStream.read_mode, FdStream.write_mode, FdStream.append_mode, PartialLinePolicy}

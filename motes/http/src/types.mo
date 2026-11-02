@@ -7,7 +7,6 @@
 
 use init::clone {Clone}
 use init::copy {Copy}
-use init::shared {Shared, Shared.get}
 use std::show {Show}
 use std::bytebuf {ByteBuf, ByteBuf.free, ByteBuf.length, ByteBuf.of_list, ByteBuf.to_list}
 use std::stream {Stream, StreamError, FdStream, FdStream.poll, FdStream.poll_read, FdStream.poll_write}

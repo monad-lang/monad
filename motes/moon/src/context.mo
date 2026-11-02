@@ -12,7 +12,6 @@
 /// fresh `Shared` handle. `Ctx` never hands out a borrowed view.
 
 use init::copy {Copy}
-use init::shared {Shared, Shared.get}
 use http::types {Body, Headers, Method, Request, Uri}
 use lib::session {SessionHandle}
 

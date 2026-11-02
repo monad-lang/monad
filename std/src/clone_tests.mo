@@ -8,7 +8,6 @@
 /// (Independence of cloned *pure* storage is guaranteed by construction but
 /// unobservable without a mutable cell, so it is documented in
 /// `init/src/clone.mo` rather than asserted here.)
-use init::shared {Shared}
 use std::ref {Ref}
 
 struct Cell {

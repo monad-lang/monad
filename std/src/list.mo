@@ -8,7 +8,6 @@
 ///   - List.length, List.filter, List.sum
 ///   - list_show helper (explicit show function, for concrete call sites)
 
-use init::shared {Shared, Shared.get}
 use lib::show {Show}
 
 

@@ -18,7 +18,6 @@
 /// `Watch.new` fails with an ordinary `StreamError`, so a caller that has a
 /// polling fallback keeps working; on wasm the target gate refuses a reachable
 /// call at compile time.
-use init::shared {Shared, Shared.get}
 use lib::bytebuf {ByteBuf}
 use lib::io {IO.is_dir, IO.list_dir}
 use lib::list {List.length}
