@@ -87,6 +87,7 @@ use tui::input {Input.step, InputReader, input_reader}
 use tui::tui {App, Cmd, run_app}
 use tui::widgets::picker {PickerModel, PickerStep, Picker.make, Picker.update}
 use weaver::ui::prompt {PromptMsg, Prompt.update, Prompt.text, Prompt.set_text, Prompt.clear, Prompt.submitted, Prompt.selecting, Prompt.clear_selection, Prompt.box_contains}
+use weaver::ui::banner {BannerMsg, Banner.shown, Banner.hidden, Banner.update, Banner.animating, Banner.subscriptions}
 use tui::component {Subs, Subs.map, Subs.on_tick}
 use weaver::ui::live {LiveMsg, Live.idle, Live.start, Live.update, Live.request_stop, Live.subscriptions, Live.write_usage, Live.store_usage}
 use init::transformers {ResultT}
@@ -140,7 +141,7 @@ def run_tui_with_size (log : Option Logger) (st : WeaverState) (tr : Transcript)
 /// while a dialog owns the terminal (`modal`).
 pub def tick_redraw (m : TuiModel) : Bool :=
     Bool.or (Bool.and m.turn_pending (Bool.not m.modal))
-        (Bool.and m.banner (m.banner_frame < 12))
+        (Banner.animating m.banner)
 
 /// The loop's read gate: while a dialog is open, ack its ownership (only
 /// now -- the poll has already marked the overlay open and this model's
@@ -190,7 +191,7 @@ def update_msg (m : TuiModel) (msg : WeaverMsg) : Pair TuiModel (Cmd WeaverMsg) 
         WeaverMsg.submit st text => submit_line (set_state { m with plan_ready := false } st) text,
         WeaverMsg.input_set text =>
             let m2 : TuiModel := with_turn_end (fn (mm : TuiModel) =>
-                { mm with prompt := Prompt.set_text mm.prompt text, banner := false }) m in
+                { mm with prompt := Prompt.set_text mm.prompt text, banner := Banner.hidden }) m in
             Pair.pair m2 repaint_cmd,
         // The Esc request reached the signal file.
         WeaverMsg.stop_sent => Pair.pair m Cmd.none,
@@ -198,6 +199,7 @@ def update_msg (m : TuiModel) (msg : WeaverMsg) : Pair TuiModel (Cmd WeaverMsg) 
         // name/description: already persisted, nothing to fold.
         WeaverMsg.title_result _ => Pair.pair m Cmd.none,
         WeaverMsg.live lm => live_step m lm,
+        WeaverMsg.banner bm => Pair.pair { m with banner := Banner.update m.banner bm } Cmd.none,
         WeaverMsg.overlay_polled ov => overlay_step m ov,
         WeaverMsg.batch msgs => batch_step m msgs,
     }
@@ -443,7 +445,7 @@ def page_failed_step (m : TuiModel) (e : String) : Pair TuiModel (Cmd WeaverMsg)
     Pair.pair (with_streak_reset (fn (mm : TuiModel) => mm) m3) Cmd.none
 
 def transcript_reset_step (m : TuiModel) (tr : Transcript) : Pair TuiModel (Cmd WeaverMsg) :=
-    let m2 : TuiModel := { m with transcript := tr, scroll := 0, page_pending := false, rows_key := Option.none, banner := true, banner_frame := 0,
+    let m2 : TuiModel := { m with transcript := tr, scroll := 0, page_pending := false, rows_key := Option.none, banner := Banner.shown,
                             queued := List.empty, queued_ready := false, title_due := false,
                             want_older := false, want_top := false } in
     maybe_page_cmd m2
@@ -484,9 +486,10 @@ pub def TuiApp.subscriptions (m : TuiModel) : Subs WeaverMsg :=
         let ov <- Overlay.read store;
         IO.pure (WeaverMsg.overlay_polled ov)
     }) in
+    let banner : Subs WeaverMsg := Subs.map WeaverMsg.banner (Banner.subscriptions m.banner) in
     if m.turn_pending
-    then Subs.batch [overlay, Subs.map WeaverMsg.live (Live.subscriptions store m.live)]
-    else overlay
+    then Subs.batch [overlay, banner, Subs.map WeaverMsg.live (Live.subscriptions store m.live)]
+    else Subs.batch [overlay, banner]
 
 /// Live messages count only while a turn runs: a poll that lands after
 /// the turn folded must not resurrect its text.
@@ -638,26 +641,14 @@ def update_event (m : TuiModel) (e : Event) : Pair TuiModel (Cmd WeaverMsg) :=
             then Pair.pair m Cmd.none
             else Pair.pair (with_streak_reset (fn (mm : TuiModel) => prompt_step mm (PromptMsg.paste text)) m) Cmd.none,
         Event.mouse me => update_mouse m me,
-        // The frame clock: the spinner advances ONLY while a turn is
-        // pending, so an idle tick folds to an unchanged model (a
-        // zero-diff draw). Deliberately NO streak reset -- ticks arrive
-        // every 100 ms and would make the double-Ctrl-C/Ctrl-D gestures
-        // impossible.
+        // The frame clock: each tick delivers what the subscriptions want
+        // (the dialog handshake always; the banner sweep and a running
+        // turn's live display while they animate). An idle tick folds to
+        // an unchanged model (a zero-diff draw). Deliberately NO streak
+        // reset -- ticks arrive every 100 ms and would make the
+        // double-Ctrl-C/Ctrl-D gestures impossible.
         Event.tick =>
-            let m1 : TuiModel := { m with frame := m.frame + 1 } in
-            let m2 : TuiModel :=
-                if Bool.and m1.banner (m1.banner_frame < 12)
-                then { m1 with banner_frame := m1.banner_frame + 1 }
-                else m1 in
-            // Every pending tick polls the dialog handshake (and, every
-            // tenth frame, the live usage). `Cmd.inspect` folds the
-            // result without forcing a repaint.
-            // The handshake poll runs on EVERY tick, not only while a
-            // turn is pending: a dialog opened by a fiber must be seen
-            // and acked even if the model's own pending flag is stale.
-            // A due session title forks here, AFTER persistence and the
-            // plan dialog (a modal's blocking perform keeps ticks from
-            // running until it closes), and never blocks the frame.
+            let m2 : TuiModel := { m with frame := m.frame + 1 } in
             tick_step m2 (Subs.on_tick m2.frame (TuiApp.subscriptions m2) WeaverMsg.batch),
         _ => Pair.pair (with_streak_reset (fn (mm : TuiModel) => mm) m) Cmd.none,
     }
@@ -983,7 +974,7 @@ def submit_line (m : TuiModel) (text : String) : Pair TuiModel (Cmd WeaverMsg) :
     let m2 : TuiModel :=
         { (with_streak_reset
             (fn (mm : TuiModel) => Model.append_block { mm with prompt := Prompt.submitted mm.prompt text } echo) m)
-            with turn_pending := true, banner := false,
+            with turn_pending := true, banner := Banner.hidden,
                  live := Live.start (Option.some m.state.run.session.spent), scroll := 0,
                  turn_gen := gen,
                  modal := modal_command st text } in

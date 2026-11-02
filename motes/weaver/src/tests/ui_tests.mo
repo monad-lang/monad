@@ -19,6 +19,7 @@ use std::list {List.length}
 use tui::text {Text.width}
 use weaver::ui::live {LiveModel, LiveView, Live.start, Live.request_stop, Live.status_text, Live.thinking_height, Live.text_height}
 use weaver::ui::rows {DisplayRow, Rows.of_line, Rows.wrap, Rows.cap_bytes}
+use weaver::ui::banner {Banner.shown, Banner.hidden}
 use weaver::model {
     TuiModel, Window, init_tui_model,
     Model.scroll_step, Model.append_block, Model.window, Model.needs_page,
@@ -47,7 +48,7 @@ def state_of : WeaverState :=
 
 def model_of : TuiModel :=
     let m : TuiModel := init_tui_model Option.none state_of 24 80 in
-    { m with banner := false }
+    { m with banner := Banner.hidden }
 
 def nth_line (i : I64) : String := String.concat "l" (I64.to_string i)
 
@@ -91,7 +92,7 @@ def test_panel_height_is_rows_minus_six : Bool :=
 #[test]
 def test_banner_spends_four_rows : Bool :=
     let m : TuiModel := init_tui_model Option.none state_of 24 80 in
-    m.banner && panel_height m == 14
+    m.banner.shown && panel_height m == 14
 
 #[test]
 def test_pinned_shows_the_tail : Bool :=
@@ -427,7 +428,7 @@ def test_display_plain_wraps_like_a_transcript_line : Bool :=
 /// real palette; `model_of` is colorless (the dumb-mode default).
 def colored_model_of (lines : List TLine) : TuiModel :=
     let st : WeaverState := { state_of with colors := true } in
-    let m : TuiModel := { (init_tui_model Option.none st 24 80) with banner := false } in
+    let m : TuiModel := { (init_tui_model Option.none st 24 80) with banner := Banner.hidden } in
     Model.append_block m lines
 
 /// V1: the panel's frame is dim, the rows inside it are NOT. The panel used

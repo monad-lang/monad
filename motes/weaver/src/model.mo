@@ -19,9 +19,7 @@ use weaver::error {WeaverError}
 use weaver::dumb {Dumb.status_fields}
 use weaver::theme {
     theme_line_style_with, theme_status_style_with,
-    theme_border_style_with, theme_banner_style_with,
-    theme_scrollbar_thumb_style_with,
-    BannerPart,
+    theme_border_style_with, theme_scrollbar_thumb_style_with,
 }
 use weaver::policy {Mode}
 use weaver::store {
@@ -30,15 +28,10 @@ use weaver::store {
 }
 use tui::types {Event, LayoutSize, TextStyle}
 use tui::core {clamp, style_default}
-use tui::widgets::input {
-    InputState, input_state, InputState.press, InputState.drag,
-    InputState.finish_selection, InputState.clear_selection,
-}
-use tui::widget {Widget, SizedWidget, BorderStyle, border_with, label, text_input, sized, with_style, padding}
-use tui::text {
-    Text.width, Text.slice_cols, Text.snap_span,
-}
+use tui::widget {Widget, SizedWidget, BorderStyle, border_with, label, sized, with_style, padding}
+use tui::text {Text.slice_cols, Text.snap_span}
 use std::list {List.intercalate}
+use weaver::ui::banner {BannerModel, BannerMsg, BannerView, Banner.shown, Banner.rows, Banner.height, Banner.view}
 use weaver::ui::prompt {PromptModel, PromptBox, Prompt.empty, Prompt.view}
 use tui::widgets::picker {PickerModel, Picker.list_height, Picker.view}
 use weaver::ui::live {LiveModel, LiveMsg, LiveView, Live.idle, Live.rows, Live.height, Live.thinking_height, Live.text_height}
@@ -86,6 +79,8 @@ pub type WeaverMsg {
     title_result (title : Option (Pair String String)),
     /// The running turn's live display (`ui/live.mo`).
     live (msg : LiveMsg),
+    /// The launch banner's sweep (`ui/banner.mo`).
+    banner (msg : BannerMsg),
     /// The dialog-ownership handshake, polled every frame.
     overlay_polled (overlay : Option OverlayState),
     /// One tick's subscription results, folded in order.
@@ -167,10 +162,8 @@ pub struct TuiModel {
     /// The mouse selection over DISPLAY rows (cleared whenever the rows
     /// cache is rebuilt: scroll, append, page load, resize).
     sel : Option TextSelection := Option.none,
-    /// The launch banner shows until the first submit.
-    banner : Bool := true,
-    /// The one-time shuttle sweep's tick counter (stops at 12).
-    banner_frame : I64 := 0,
+    /// The launch banner, until the first submit.
+    banner : BannerModel := Banner.shown,
     /// The running turn's streamed text, spend and spinner (reset at
     /// submit; shown only while `turn_pending`).
     live : LiveModel := Live.idle,
@@ -229,80 +222,12 @@ pub def init_tui_model (log : Option Logger) (st : WeaverState) (rows : I64) (co
 
 /// The startup tail loaded from the session store.
 pub def init_tui_model_with (log : Option Logger) (st : WeaverState) (rows : I64) (cols : I64) (tr : Transcript) : TuiModel :=
-    let m : TuiModel := { state := st, prompt := Prompt.empty, transcript := tr, rows := rows, cols := cols, ctrl_c_streak := 0, ctrl_d_streak := 0, scroll := 0, row_total := 0, scroll_drag := Option.none, turn_pending := false, frame := 0, page_pending := false, rows_cache := List.empty, rows_key := Option.none, sel := Option.none, banner := true, banner_frame := 0, live := Live.idle, show_details := false, modal := false, plan_ready := false, want_older := false, want_top := false, title_due := false, turn_gen := 0, overlay_open := false, dialog_seq := 0, picker := Option.none, queued := List.empty, queued_ready := false, log := log } in
+    let m : TuiModel := { state := st, prompt := Prompt.empty, transcript := tr, rows := rows, cols := cols, ctrl_c_streak := 0, ctrl_d_streak := 0, scroll := 0, row_total := 0, scroll_drag := Option.none, turn_pending := false, frame := 0, page_pending := false, rows_cache := List.empty, rows_key := Option.none, sel := Option.none, banner := Banner.shown, live := Live.idle, show_details := false, modal := false, plan_ready := false, want_older := false, want_top := false, title_due := false, turn_gen := 0, overlay_open := false, dialog_seq := 0, picker := Option.none, queued := List.empty, queued_ready := false, log := log } in
     Model.refresh_rows m
 
-// ── the launch banner ────────────────────────────────────────────────────
-
-pub def Model.banner_height : I64 := 4
-
-def banner_seg (style : TextStyle) (text : String) : SizedWidget :=
-    sized (LayoutSize.fixed (Text.width text)) (with_style style (label text))
-
-def banner_pad (m : TuiModel) (w : I64) : I64 :=
-    let room : I64 := m.cols - w in
-    if room < 1 then 0 else room / 2
-
-/// `w e a v e r`, each letter in a cyan -> blue -> magenta gradient.
-#[partial]
-def banner_word_go (colors : Bool) (letters : List String) (i : I64) (acc : List SizedWidget) : List SizedWidget :=
-    match letters {
-        List.empty => List.reverse acc,
-        List.cons l rest =>
-            let part : BannerPart :=
-                if i < 2 then BannerPart.word_cyan
-                else if i < 4 then BannerPart.word_blue
-                else BannerPart.word_magenta in
-            // The separator belongs BETWEEN letters: in the reversed
-            // accumulator it is pushed before the newer letter.
-            let acc1 : List SizedWidget :=
-                if i < 1 then acc
-                else List.cons (banner_seg (theme_banner_style_with colors BannerPart.warp) " ") acc in
-            banner_word_go colors rest (i + 1) (List.cons (banner_seg (theme_banner_style_with colors part) l) acc1),
-    }
-
-def banner_word (colors : Bool) : SizedWidget :=
-    sized (LayoutSize.fixed 11) (Widget.row (banner_word_go colors ["w", "e", "a", "v", "e", "r"] 0 List.empty))
-
-/// The shuttle row: frame + 14-cell warp, the shuttle one cell further
-/// right per tick (a one-time sweep), frame.
-def banner_art_mid (m : TuiModel) : List SizedWidget :=
-    let colors : Bool := m.state.colors in
-    let frame := theme_banner_style_with colors BannerPart.frame in
-    let warp := theme_banner_style_with colors BannerPart.warp in
-    let shuttle := theme_banner_style_with colors BannerPart.shuttle in
-    let p : I64 := if m.banner_frame < 14 then m.banner_frame else 13 in
-    let before : String := String.repeat "─" p in
-    let after : String := String.repeat "─" (13 - p) in
-    [
-        banner_seg frame "│ ",
-        banner_seg warp before,
-        banner_seg shuttle "▸",
-        banner_seg warp after,
-        banner_seg frame " │",
-    ]
-
-def banner_widget (m : TuiModel) : Widget :=
-    let colors : Bool := m.state.colors in
-    let frame := theme_banner_style_with colors BannerPart.frame in
-    let provider : String := m.state.provider in
-    let model : String := m.state.run.session.config.model in
-    let tagline : String := String.concat "coding agent · "
-        (String.concat provider (String.concat "/" (String.concat model " · /help"))) in
-    let tag_w : I64 := Text.width tagline in
-    let right_w : I64 := if tag_w < 11 then 11 else tag_w in
-    let pad : I64 := banner_pad m (18 + 3 + right_w) in
-    let top : String := String.concat "╭" (String.concat (String.repeat "─" 16) "╮") in
-    let bot : String := String.concat "╰" (String.concat (String.repeat "─" 16) "╯") in
-    let lead : SizedWidget := sized (LayoutSize.fixed pad) (label "") in
-    let gap : SizedWidget := sized (LayoutSize.fixed 3) (label "") in
-    let row0 : SizedWidget := sized (LayoutSize.fixed 1) (Widget.row [lead, banner_seg frame top]) in
-    let mid : List SizedWidget := List.append [lead] (List.append (banner_art_mid m) [gap, banner_word colors]) in
-    let row1 : SizedWidget := sized (LayoutSize.fixed 1) (Widget.row mid) in
-    let row2 : SizedWidget := sized (LayoutSize.fixed 1)
-        (Widget.row [lead, banner_seg frame bot, gap, banner_seg (theme_banner_style_with colors BannerPart.tagline) tagline]) in
-    let row3 : SizedWidget := sized (LayoutSize.fixed 1) (label "") in
-    Widget.column [row0, row1, row2, row3]
+pub def Model.banner_view (m : TuiModel) : BannerView :=
+    let v : BannerView := { colors := m.state.colors, cols := m.cols, provider := m.state.provider, model := m.state.run.session.config.model } in
+    v
 
 // ── view ─────────────────────────────────────────────────────────────────
 
@@ -330,7 +255,7 @@ pub def Model.view (m : TuiModel) : Widget :=
     let transcript : SizedWidget := sized (LayoutSize.fill 1) (border_with (theme_border_style_with colors) BorderStyle.rounded (padding 1 0 0 0 inner)) in
     let status : SizedWidget := sized (LayoutSize.fixed 1) (with_style (theme_status_style_with colors mode) (label (status_line m))) in
     let input : SizedWidget := sized (LayoutSize.fixed 3) (Prompt.view m.prompt) in
-    let head : List SizedWidget := if m.banner then [sized (LayoutSize.fixed Model.banner_height) (banner_widget m)] else List.empty in
+    let head : List SizedWidget := if m.banner.shown then [sized (LayoutSize.fixed Banner.rows) (Banner.view (Model.banner_view m) m.banner)] else List.empty in
     Widget.column (List.append head [transcript, status, input])
 
 // ── mouse selection ─────────────────────────────────────────────────────
@@ -342,8 +267,7 @@ pub def Model.view (m : TuiModel) : Widget :=
 /// the launch banner: while it shows, the panel starts four rows lower.
 pub def Model.panel_top : I64 := 1
 pub def Model.panel_top_of (m : TuiModel) : I64 :=
-    let banner : I64 := if m.banner then Model.banner_height else 0 in
-    banner + Model.panel_top
+    Banner.height m.banner + Model.panel_top
 pub def Model.panel_left : I64 := 2
 
 // ── input-box geometry and mouse selection ──────────────────────────────
@@ -602,7 +526,7 @@ pub def Model.rows_key_of (m : TuiModel) : RowsKey :=
     let pstart : I64 := match m.transcript.page { Option.some p => p.start, Option.none => 0 - 1 } in
     let k : RowsKey := { total := m.transcript.total, tail_start := m.transcript.tail_start,
                          cols := m.cols, rows := m.rows, scroll := m.scroll, page_start := pstart,
-                         banner := m.banner, pending := m.turn_pending, details := m.show_details,
+                         banner := m.banner.shown, pending := m.turn_pending, details := m.show_details,
                          think_stream := Live.thinking_height (Model.live_view m) m.live, text_stream := Live.text_height (Model.live_view m) m.live } in
     k
 
@@ -736,8 +660,7 @@ def scroll_clamp (scroll : I64) (len : I64) (height : I64) : I64 :=
 /// `rows` minus the 3-row input box and the status row, minus the
 /// transcript border's own top/bottom lines.
 pub def panel_height (m : TuiModel) : I64 :=
-    let banner : I64 := if m.banner then Model.banner_height else 0 in
-    let h := m.rows - 6 - banner in
+    let h := m.rows - 6 - Banner.height m.banner in
     if h < 0 then 0 else h
 
 /// The transcript body's height: while a turn is pending, one panel row is

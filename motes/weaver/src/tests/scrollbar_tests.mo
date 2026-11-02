@@ -11,6 +11,7 @@ use weaver::commands {WeaverState}
 use weaver::policy {Mode}
 use std::map {BTreeMap}
 use std::list {List.length}
+use weaver::ui::banner {Banner.shown, Banner.hidden}
 use weaver::model {
     TuiModel, init_tui_model, Model.append_block, Model.body_height,
     Model.content_width, Model.panel_top_of, Model.scroll_to,
@@ -34,7 +35,7 @@ def state_of : WeaverState :=
 
 def model_of : TuiModel :=
     let m : TuiModel := init_tui_model Option.none state_of 24 80 in
-    { m with banner := false }
+    { m with banner := Banner.hidden }
 
 #[partial]
 def lines_up_to (k : I64) (i : I64) : List TLine :=

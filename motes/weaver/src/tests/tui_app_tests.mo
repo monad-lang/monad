@@ -18,6 +18,7 @@ use weaver::ui::live {LiveModel, LiveMsg, LiveDelta, Live.start, Live.status_tex
 use tui::component {Subs.pure_on}
 use tui::widgets::picker {Picker.count, Picker.selected}
 use weaver::ui::rows {DisplayRow, Rows.of_line, Rows.wrap, Rows.cap_bytes}
+use weaver::ui::banner {Banner.shown, Banner.hidden}
 use weaver::model {
     TuiModel, WeaverMsg, init_tui_model, Model.append_block,
     Model.scroll_step, Model.display_rows,
@@ -55,7 +56,7 @@ def state_of (mode : Mode) : WeaverState :=
 
 def model_of (mode : Mode) : TuiModel :=
     let m : TuiModel := init_tui_model Option.none (state_of mode) 24 80 in
-    { m with banner := false }
+    { m with banner := Banner.hidden }
 
 def mode_eq (a : Mode) (b : Mode) : Bool :=
     match a {
@@ -623,7 +624,7 @@ def lines_go (i : I64) (n : I64) : List TLine :=
 def big_model (stored : Bool) : TuiModel :=
     let st : WeaverState := if stored then state_with_store Mode.manual else state_of Mode.manual in
     let m : TuiModel := init_tui_model Option.none st 24 80 in
-    Model.append_block { m with banner := false } (lines_go 1 600)
+    Model.append_block { m with banner := Banner.hidden } (lines_go 1 600)
 
 #[test]
 def test_home_with_a_store_requests_a_page : Bool :=
@@ -718,19 +719,19 @@ def test_paste_fills_the_box_without_submitting : Bool :=
 #[test]
 def test_enter_hides_the_banner : Bool :=
     let base : TuiModel := model_of Mode.manual in
-    let shown : TuiModel := { base with banner := true } in
+    let shown : TuiModel := { base with banner := Banner.shown } in
     match TuiApp.update shown (key_msg (Key.char "h")) {
         Pair.pair m1 _ => match TuiApp.update m1 (key_msg Key.enter) {
-            Pair.pair m2 _ => Bool.not m2.banner,
+            Pair.pair m2 _ => Bool.not m2.banner.shown,
         },
     }
 
 #[test]
 def test_tick_advances_the_banner_sweep : Bool :=
     let base : TuiModel := model_of Mode.manual in
-    let shown : TuiModel := { base with banner := true } in
+    let shown : TuiModel := { base with banner := Banner.shown } in
     match TuiApp.update shown (WeaverMsg.key_event Event.tick) {
-        Pair.pair m2 _ => m2.banner && m2.banner_frame == 1,
+        Pair.pair m2 _ => m2.banner.shown && m2.banner.frame == 1,
     }
 
 // ── the model picker ───────────────────────────────────────────────────

@@ -10,6 +10,7 @@ use weaver::commands {WeaverState}
 use weaver::policy {Mode}
 use std::map {BTreeMap}
 use weaver::ui::rows {DisplayRow, Rows.of_line, Rows.wrap, Rows.cap_bytes}
+use weaver::ui::banner {Banner.shown, Banner.hidden}
 use weaver::model {
     TuiModel, init_tui_model, Model.append_block, Model.begin_selection,
     Model.drag_selection, Model.finish_selection, Model.selection_text,
@@ -33,7 +34,7 @@ def state_of : WeaverState :=
 
 def model_of : TuiModel :=
     let m : TuiModel := init_tui_model Option.none state_of 24 80 in
-    { m with banner := false }
+    { m with banner := Banner.hidden }
 
 def plain_lines (ss : List String) : List TLine :=
     match ss {
