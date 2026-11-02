@@ -7,8 +7,8 @@
 // didClose against the docstore), `checks` (the check cache a document's
 // diagnostics come from), `diagnostics` (turning a check into a publish
 // notification) and `navigation` (hover, definition, document and
-// workspace symbols). `log` is the server's own stderr log, the one
-// thing in the mote that is allowed to speak outside the protocol.
+// workspace symbols). The server logs to stderr through the `log` mote's
+// `Logger` (`server.mo`'s `lsp_logger`).
 //
 // One type group per module, which is the rule `build/src/lib.mo` set --
 // a consumer cannot get a type by naming a module it does not yet know.
@@ -23,7 +23,6 @@ pub use lib::checks {Check, CheckStore}
 pub use lib::diagnostics {}
 pub use lib::documents {DocumentEdit}
 pub use lib::lifecycle {}
-pub use lib::log {TraceLevel}
 pub use lib::navigation {Cursor}
 pub use lib::params {}
 pub use lib::server {ServerState, ServerStep}

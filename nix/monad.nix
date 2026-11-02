@@ -250,7 +250,8 @@
                 # Compiler inputs -- see THE RULE above. `clap` arrives through
                 # `cli`, whose `main.mo` parses its own argv with it;
                 # `lsp`/`toolkit` arrive through `cli` too (its `lsp` subcommand),
-                # and `json` through `lsp`, which speaks JSON-RPC; `parsec` and
+                # `json` through `lsp`, which speaks JSON-RPC, and `log`, its
+                # stderr log, through `lsp` too; `parsec` and
                 # `toml` arrive through `lang` itself, which parses with one and
                 # reads every manifest with the other. Not the rest of `motes/`:
                 # those are consumers of the compiler, not part of it, and keeping
@@ -260,6 +261,7 @@
                 # `fmt` backs `monad fmt` and arrives through `cli`, like `clap`.
                 "motes/fmt"
                 "motes/json"
+                "motes/log"
                 "motes/lsp"
                 "motes/parsec"
                 "motes/toml"

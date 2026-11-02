@@ -109,6 +109,9 @@ path = "lang"
 [workspace.dependencies.llvm]
 path = "llvm"
 
+[workspace.dependencies.log]
+path = "motes/log"
+
 [workspace.dependencies.lsp]
 path = "motes/lsp"
 

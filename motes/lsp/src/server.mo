@@ -13,9 +13,9 @@
 /// than the comparison it replaced.
 ///
 /// STDOUT CARRIES PROTOCOL FRAMES AND NOTHING ELSE. This is the one invariant the
-/// whole file is written around, and it is why every log line goes through
-/// `log.mo`'s writers -- the only code in the mote that touches `IO.write_stderr`
-/// -- rather than through a print of its own. The check path this server drives
+/// whole file is written around, and it is why every log line goes through the
+/// session's `Logger`, whose one sink (`lsp_log_sink`) writes `IO.write_stderr`,
+/// rather than through a print of its own. The check path this server drives
 /// prints eagerly to stdout in `lang`'s loaders, so a path that reached one of
 /// those with verbose output on would write a diagnostic into the middle of the
 /// protocol stream, and the client's complaint would be about a malformed frame
@@ -61,7 +61,8 @@ use lsp::lifecycle {
   lsp_choose_encoding, lsp_initialize_result, lsp_no_encodings, lsp_offered_encodings,
   lsp_root_path,
 }
-use lsp::log {TraceLevel, log_error, log_info, log_verbose, trace_default, trace_of_str}
+use log::level {LogLevel}
+use log::logger {Logger, Logger.debug, Logger.error, Logger.info, Logger.with_sink}
 use lsp::navigation {lsp_definition, lsp_document_symbol, lsp_hover, lsp_workspace_symbol}
 use lsp::params {lsp_param_str}
 use std::bench {Bench.now, Bench.since}
@@ -96,8 +97,8 @@ use toolkit::position {PositionEncoding, position_encoding_name}
 /// stops a confused client from being served from a state that was never negotiated.
 /// `shutdown` is only ever read to decide the exit code.
 ///
-/// `trace` is the level the client last set with `$/setTrace`, and it is carried in
-/// the state because the setting outlives any one message: a server that logged at
+/// `logger` filters at the level the client last set with `$/setTrace`, and it is
+/// carried in the state because the setting outlives any one message: a server that logged at
 /// a fixed level could not be quieted by a client that finds the log noisy, and one
 /// that read it from the message would forget it on the next frame. stderr is the
 /// only place anything is written, never stdout, which is the protocol channel.
@@ -108,7 +109,7 @@ pub struct ServerState {
   root : Option String,
   initialized : Bool,
   shutdown : Bool,
-  trace : TraceLevel,
+  logger : Logger,
 }
 
 /// A fresh server: no documents, no checks, the default encoding, no root, and
@@ -120,7 +121,7 @@ pub struct ServerState {
 /// pre-3.17 handshake rather than a third, invented one.
 def lsp_server_new : ServerState :=
   ServerState.mk docstore_empty checkstore_empty lsp_default_encoding lsp_no_root false false
-  trace_default
+  (lsp_logger lsp_default_log_level)
 
 def lsp_default_encoding : PositionEncoding := lsp_choose_encoding lsp_no_encodings
 
@@ -141,29 +142,49 @@ pub def server_initialized (st : ServerState) : Bool := st.initialized
 
 pub def server_shutdown (st : ServerState) : Bool := st.shutdown
 
-pub def server_trace (st : ServerState) : TraceLevel := st.trace
+pub def server_logger (st : ServerState) : Logger := st.logger
+
+/// The server's log: stderr only, each line prefixed `monad-lsp: ` so an editor's
+/// captured log names the process when several servers share one stderr.
+pub def lsp_logger (level : LogLevel) : Logger := Logger.with_sink level lsp_log_sink
+
+def lsp_log_sink (line : String) : IO Unit := IO.write_stderr ("monad-lsp: " ++ line)
+
+/// A session logs its requests and document traffic until a client says otherwise:
+/// most questions about a live session are asked after the fact.
+def lsp_default_log_level : LogLevel := LogLevel.info
+
+/// The minimum level a `$/setTrace` value names. `off` still writes errors; `messages`
+/// is info and `verbose` is debug. A value the specification does not name is `off`:
+/// a client that reached for the knob and missed is asking for less log.
+pub def lsp_trace_level (value : String) : LogLevel :=
+  if String.beq value "messages"
+  then LogLevel.info
+  else if String.beq value "verbose"
+  then LogLevel.debug
+  else LogLevel.error
 
 /// The state after `$/setTrace`: everything the session negotiated, and a new level.
-def lsp_server_traced (st : ServerState) (level : TraceLevel) : ServerState :=
-  ServerState.mk st.docs st.checks st.encoding st.root st.initialized st.shutdown level
+def lsp_server_traced (st : ServerState) (level : LogLevel) : ServerState :=
+  ServerState.mk st.docs st.checks st.encoding st.root st.initialized st.shutdown (lsp_logger level)
 
 /// The state after a document edit: new buffers, and the checks that go with them.
 def lsp_server_edited (st : ServerState) (docs : DocStore) (checks : CheckStore) : ServerState :=
-  ServerState.mk docs checks st.encoding st.root st.initialized st.shutdown st.trace
+  ServerState.mk docs checks st.encoding st.root st.initialized st.shutdown st.logger
 
 /// The state after `initialize`: the negotiated encoding, the workspace root, and the
 /// first half of the handshake done.
 def lsp_server_started (st : ServerState) (root : Option String) (enc : PositionEncoding)
     : ServerState :=
-  ServerState.mk st.docs st.checks enc root st.initialized st.shutdown st.trace
+  ServerState.mk st.docs st.checks enc root st.initialized st.shutdown st.logger
 
 /// The state after the `initialized` notification.
 def lsp_server_ready (st : ServerState) : ServerState :=
-  ServerState.mk st.docs st.checks st.encoding st.root true st.shutdown st.trace
+  ServerState.mk st.docs st.checks st.encoding st.root true st.shutdown st.logger
 
 /// The state after `shutdown`.
 def lsp_server_marked_shutdown (st : ServerState) : ServerState :=
-  ServerState.mk st.docs st.checks st.encoding st.root st.initialized true st.trace
+  ServerState.mk st.docs st.checks st.encoding st.root st.initialized true st.logger
 
 // --- One step of the loop ---
 
@@ -238,15 +259,15 @@ def lsp_no_exit : Option I64 := Option.none
 pub def lsp_dispatch (st : ServerState) (m : RpcMessage) : IO ServerStep :=
   match m {
     RpcMessage.unparseable reason => do {
-      log_error ("unreadable message: " ++ reason);
+      Logger.error (server_logger st) ("unreadable message: " ++ reason);
       return (lsp_step_reply st (rpc_encode_error_no_id rpc_code_parse_error reason))
     },
     RpcMessage.response _id _result => do {
-      log_error "ignoring a response the client sent";
+      Logger.error (server_logger st) "ignoring a response the client sent";
       return (lsp_step_quiet st)
     },
     RpcMessage.failure _id _code _message => do {
-      log_error "ignoring a failure message the client sent";
+      Logger.error (server_logger st) "ignoring a failure message the client sent";
       return (lsp_step_quiet st)
     },
     RpcMessage.request id method params => do {
@@ -267,7 +288,7 @@ pub def lsp_dispatch (st : ServerState) (m : RpcMessage) : IO ServerStep :=
 /// "which request did this come from".
 #[partial]
 def lsp_log_request (st : ServerState) (id : Json) (method : String) : IO Unit :=
-  log_info (server_trace st) ("request " ++ method ++ " (id " ++ Json.to_string id ++ ")")
+  Logger.info (server_logger st) ("request " ++ method ++ " (id " ++ Json.to_string id ++ ")")
 
 /// Say that a notification arrived. `$/`-prefixed notifications are protocol plumbing
 /// (keepalives, cancelations) and are logged only at verbose; the rest are the
@@ -276,8 +297,8 @@ def lsp_log_request (st : ServerState) (id : Json) (method : String) : IO Unit :
 #[partial]
 def lsp_log_notification (st : ServerState) (method : String) (params : Option Json) : IO Unit :=
   if String.starts_with "$/" method
-  then log_verbose (server_trace st) ("notification " ++ method)
-  else log_info (server_trace st)
+  then Logger.debug (server_logger st) ("notification " ++ method)
+  else Logger.info (server_logger st)
     ("notification " ++ method ++ lsp_notification_where params)
 
 /// The ` params.uri` suffix of a notification log line, or nothing when the message
@@ -294,10 +315,10 @@ def lsp_notification_where (params : Option Json) : String :=
 /// is missing or not one of the specification's three names -- a level the server
 /// cannot understand is a level it must not guess at.
 #[partial]
-def lsp_trace_of_params (params : Option Json) : TraceLevel :=
+def lsp_trace_of_params (params : Option Json) : LogLevel :=
   match lsp_param_str "value" (lsp_params_or_empty params) {
-    Option.none => TraceLevel.trace_off,
-    Option.some value => trace_of_str value,
+    Option.none => LogLevel.error,
+    Option.some value => lsp_trace_level value,
   }
 
 /// `$/setTrace`: remember the level, say nothing. The reply to a notification would be
@@ -324,9 +345,9 @@ def lsp_root_show (root : Option String) : String :=
 def lsp_log_frame (st : ServerState) (m : RpcMessage) (ms : I64) : IO Unit :=
   match m {
     RpcMessage.request _id method _params =>
-      log_verbose (server_trace st) (method ++ " in " ++ I64.to_string ms ++ "ms"),
+      Logger.debug (server_logger st) (method ++ " in " ++ I64.to_string ms ++ "ms"),
     RpcMessage.notification method _params =>
-      log_verbose (server_trace st) (method ++ " in " ++ I64.to_string ms ++ "ms"),
+      Logger.debug (server_logger st) (method ++ " in " ++ I64.to_string ms ++ "ms"),
     _ => IO.pure Unit.unit,
   }
 
@@ -371,7 +392,7 @@ def lsp_request_ready (st : ServerState) (id : Json) (method : String) (params :
 def lsp_initialize (st : ServerState) (id : Json) (params : Option Json) : IO ServerStep := do {
     let p : Json := lsp_params_or_empty params;
     let enc : PositionEncoding := lsp_choose_encoding (lsp_offered_encodings p);
-    log_info (server_trace st)
+    Logger.info (server_logger st)
       ("initialize: encoding " ++ position_encoding_name enc
         ++ ", root " ++ lsp_root_show (lsp_root_path p));
     return (lsp_step_reply (lsp_server_started st (lsp_root_path p) enc)
@@ -397,7 +418,7 @@ def lsp_shutdown (st : ServerState) (id : Json) : IO ServerStep := do {
 /// that receives no answer waits forever.
 #[partial]
 def lsp_not_initialized (st : ServerState) (id : Json) (method : String) : IO ServerStep := do {
-    log_error ("request before initialize: " ++ method);
+    Logger.error (server_logger st) ("request before initialize: " ++ method);
     return (lsp_step_reply st
               (rpc_encode_error id lsp_code_not_initialized
                 ("server not initialized: " ++ method)))
@@ -419,7 +440,7 @@ def lsp_code_not_initialized : I64 := 0 - 32002
 /// logged, so a session that hits this leaves a record of what was asked for.
 #[partial]
 def lsp_unknown_request (st : ServerState) (id : Json) (method : String) : IO ServerStep := do {
-    log_error ("unknown request: " ++ method);
+    Logger.error (server_logger st) ("unknown request: " ++ method);
     return (lsp_step_reply st
               (rpc_encode_error id rpc_code_method_not_found ("unknown method: " ++ method)))
 }
@@ -464,14 +485,14 @@ def lsp_initialized (st : ServerState) : IO ServerStep := do {
 #[partial]
 def lsp_exit (st : ServerState) : IO ServerStep := do {
     let code : I64 := if server_shutdown st then 0 else 1;
-    log_info (server_trace st) ("exit (code " ++ I64.to_string code ++ ")");
+    Logger.info (server_logger st) ("exit (code " ++ I64.to_string code ++ ")");
     return (lsp_step_exit st code)
 }
 
 /// A notification this server does not act on, which is most of them.
 #[partial]
 def lsp_unknown_notification (st : ServerState) (method : String) : IO ServerStep := do {
-    log_error ("ignoring notification: " ++ method);
+    Logger.error (server_logger st) ("ignoring notification: " ++ method);
     return (lsp_step_quiet st)
 }
 
@@ -566,7 +587,7 @@ def lsp_save_params (st : ServerState) (p : Json) : IO ServerStep :=
 /// happens, and a crash from a malformed keystroke is the thing being avoided.
 #[partial]
 def lsp_log_quiet (st : ServerState) (msg : String) : IO ServerStep := do {
-    log_error msg;
+    Logger.error (server_logger st) msg;
     return (lsp_step_quiet st)
 }
 
@@ -628,7 +649,7 @@ def lsp_emit_diagnostics (st : ServerState) (docs : DocStore) (checks : CheckSto
     let frame : String :=
       lsp_publish_notification uri (docstore_version uri docs) (server_encoding st) ch;
     let n : I64 := List.length (ranged_file_diagnostics (check_result ch));
-    log_verbose (server_trace st)
+    Logger.debug (server_logger st)
       ("published " ++ I64.to_string n ++ " diagnostic(s) for " ++ uri);
     return (lsp_step_says st docs checks frame)
 }
@@ -795,13 +816,13 @@ pub def lsp_loop (st : ServerState) (buf : String) : IO I64 := do {
             let chunk <- IO.read_stdin_exact k;
             if lsp_at_eof chunk
             then do {
-                log_info (server_trace st) "end of input";
+                Logger.info (server_logger st) "end of input";
                 return lsp_eof_code
             }
             else lsp_loop st (buf ++ chunk)
         },
         FrameRead.bad_header reason => do {
-            log_error ("bad frame: " ++ reason);
+            Logger.error (server_logger st) ("bad frame: " ++ reason);
             let body : String := rpc_encode_error_no_id rpc_code_parse_error reason;
             lsp_write_frames (List.cons body lsp_no_bodies);
             IO.flush_stdout;

@@ -45,6 +45,10 @@ workspace = true
 [dependencies.json]
 workspace = true
 
+# The server's stderr log is a `log::Logger`.
+[dependencies.log]
+workspace = true
+
 # `llvm` and `runtime` are declared because `lang::module` -- where `Diagnostic`,
 # `ModuleInfoCache` and the load path live -- is not self-contained the way
 # `lang::json` is: the compiler's own modules reach into codegen, codegen reaches
