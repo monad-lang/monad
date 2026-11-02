@@ -14,10 +14,12 @@ use shuttle::session {Session}
 use weaver::commands {WeaverState, Effect, TranscriptChange, set_fatal}
 use weaver::error {WeaverError}
 use weaver::policy {Mode}
+use weaver::ui::live {LiveModel, LiveMsg, LiveDelta, Live.start, Live.status_text}
+use tui::component {Subs.pure_on}
 use weaver::ui::rows {DisplayRow, Rows.of_line, Rows.wrap, Rows.cap_bytes}
 use weaver::model {
-    TuiModel, WeaverMsg, LiveDelta, init_tui_model, Model.append_block,
-    Model.scroll_step, Model.display_rows, Model.thinking_text,
+    TuiModel, WeaverMsg, init_tui_model, Model.append_block,
+    Model.scroll_step, Model.display_rows,
     PickerState, Picker.count, Picker.selected_model, Picker.init, Picker.move,
     Picker.window_offset, Picker.visible,
 }
@@ -26,7 +28,7 @@ use weaver::store {StoreState, TLine, TLine.plain, TranscriptPage, SessionInfo}
 use std::path {Path, Path.of}
 use std::map {Map, BTreeMap}
 use weaver::tui_app {
-    TuiApp.update, turn_never_ran, TuiApp.resume_rows, TuiApp.resume_option,
+    TuiApp.update, TuiApp.subscriptions, turn_never_ran, TuiApp.resume_rows, TuiApp.resume_option,
     TuiApp.resume_action_at, activity_name, markdown_body_rows,
     ResumeAction, ResumeChoice,
 }
@@ -264,13 +266,15 @@ def test_tick_does_not_reset_ctrl_d_streak : Bool :=
 #[test]
 def test_polled_live_delta_appends_streamed_text : Bool :=
     let base0 : TuiModel := model_of Mode.manual in
-    let base : TuiModel := { base0 with turn_pending := true, live_seen := 4 } in
+    let l0 : LiveModel := Live.start Option.none in
+    let base : TuiModel := { base0 with turn_pending := true, live := { l0 with text_seen := 4 } } in
     let d : LiveDelta := { text := "he", thinking := "hm", text_seen := 6, thinking_seen := 2, activity := Option.some "read" } in
-    match TuiApp.update base (WeaverMsg.polled Option.none Option.none (Option.some d)) {
+    match TuiApp.update base (WeaverMsg.live (LiveMsg.delta (Option.some d))) {
         Pair.pair m2 _ =>
-            m2.live_text == "he" && m2.live_thinking == "hm" && m2.live_seen == 6
-                && m2.live_thinking_seen == 2
-                && (match m2.live_activity {
+            let l : LiveModel := m2.live in
+            l.text == "he" && l.thinking == "hm" && l.text_seen == 6
+                && l.thinking_seen == 2
+                && (match l.activity {
                     Option.some n => n == "read",
                     Option.none => false,
                 })
@@ -279,17 +283,18 @@ def test_polled_live_delta_appends_streamed_text : Bool :=
 #[test]
 def test_polled_live_delta_ignored_when_idle : Bool :=
     let d : LiveDelta := { text := "late", thinking := "", text_seen := 4, thinking_seen := 0, activity := Option.none } in
-    match TuiApp.update (model_of Mode.manual) (WeaverMsg.polled Option.none Option.none (Option.some d)) {
-        Pair.pair m2 _ => String.is_empty m2.live_text
+    match TuiApp.update (model_of Mode.manual) (WeaverMsg.live (LiveMsg.delta (Option.some d))) {
+        Pair.pair m2 _ => String.is_empty m2.live.text
     }
 
 #[test]
 def test_turn_end_clears_the_live_stream : Bool :=
     let st : WeaverState := state_of Mode.manual in
     let base0 : TuiModel := model_of Mode.manual in
-    let base : TuiModel := { base0 with turn_pending := true, live_text := "partial", live_thinking := "why" } in
+    let l0 : LiveModel := Live.start Option.none in
+    let base : TuiModel := { base0 with turn_pending := true, live := { l0 with text := "partial", thinking := "why" } } in
     match TuiApp.update base (WeaverMsg.turn_result st.run [] [] 0 Option.none) {
-        Pair.pair m2 _ => String.is_empty m2.live_text && String.is_empty m2.live_thinking
+        Pair.pair m2 _ => String.is_empty m2.live.text && String.is_empty m2.live.thinking
     }
 
 // ── failures carry their class: the dumb failed_step contract mirrored ──
@@ -463,7 +468,7 @@ def test_tick_spins_only_while_pending : Bool :=
     match TuiApp.update (model_of Mode.manual) (WeaverMsg.key_event Event.tick) {
         Pair.pair idle _ =>
             match TuiApp.update (enter_pending idle) (WeaverMsg.key_event Event.tick) {
-                Pair.pair spun cmd => spun.spinner_frame == 1 && idle.spinner_frame == 0 && idle.ctrl_c_streak == spun.ctrl_c_streak && cmd_is_inspect cmd
+                Pair.pair spun cmd => spun.live.frame == 1 && idle.live.frame == 0 && idle.ctrl_c_streak == spun.ctrl_c_streak && cmd_is_inspect cmd
             }
     }
 
@@ -482,7 +487,7 @@ def test_turn_result_ends_the_turn : Bool :=
         Pair.pair m2 cmd =>
             cmd_is_perform_repaint cmd
                 && Bool.not m2.turn_pending
-                && (match m2.live_spent { Option.none => true, Option.some _ => false })
+                && (match m2.live.spent { Option.none => true, Option.some _ => false })
                 && transcript_contains "done" m2.transcript.tail
     }
 
@@ -490,28 +495,38 @@ def test_turn_result_ends_the_turn : Bool :=
 #[test]
 def test_enter_resets_the_live_clock : Bool :=
     let m : TuiModel := enter_pending (model_of Mode.manual) in
-    m.spinner_frame == 0 && m.scroll == 0
-        && (match m.live_base { Option.some _ => true, Option.none => false })
+    m.live.frame == 0 && m.scroll == 0
+        && (match m.live.base { Option.some _ => true, Option.none => false })
 
-// The tenth frame arms the 1 Hz usage poll (an inspect, not a repaint).
+// The polls ride an inspect (no forced repaint); the spinner frame folds
+// on the tick itself.
 #[test]
-def test_tick_at_ten_polls_usage : Bool :=
+def test_tick_polls_with_an_inspect : Bool :=
     let base : TuiModel := enter_pending (model_of Mode.manual) in
-    let m9 : TuiModel := { base with spinner_frame := 9 } in
+    let m9 : TuiModel := { base with frame := 9, live := { base.live with frame := 9 } } in
     match TuiApp.update m9 (WeaverMsg.key_event Event.tick) {
-        Pair.pair m10 cmd => m10.spinner_frame == 10 && cmd_is_inspect cmd,
+        Pair.pair m10 cmd => m10.live.frame == 10 && m10.frame == 10 && cmd_is_inspect cmd,
     }
+
+// A pending turn subscribes to its live polls; an idle app only to the
+// dialog handshake.
+#[test]
+def test_live_subscriptions_only_while_pending : Bool :=
+    let idle : TuiModel := model_of Mode.manual in
+    let pending : TuiModel := enter_pending idle in
+    List.length (Subs.pure_on 1 (TuiApp.subscriptions pending)) == 1
+        && List.is_empty (Subs.pure_on 1 (TuiApp.subscriptions idle))
 
 // The usage half of a poll only lands while a turn is pending.
 #[test]
 def test_live_usage_updates_only_while_pending : Bool :=
     let u : Usage := { input_tokens := 3, output_tokens := 4, cached_tokens := 0 } in
-    match TuiApp.update (enter_pending (model_of Mode.manual)) (WeaverMsg.polled (Option.some u) Option.none Option.none) {
+    match TuiApp.update (enter_pending (model_of Mode.manual)) (WeaverMsg.live (LiveMsg.usage (Option.some u))) {
         Pair.pair m1 _ =>
-            match TuiApp.update (model_of Mode.manual) (WeaverMsg.polled (Option.some u) Option.none Option.none) {
+            match TuiApp.update (model_of Mode.manual) (WeaverMsg.live (LiveMsg.usage (Option.some u))) {
                 Pair.pair idle _ =>
-                    (match m1.live_spent { Option.some x => x.input_tokens == 3 && x.output_tokens == 4, Option.none => false })
-                    && (match idle.live_spent { Option.none => true, Option.some _ => false }),
+                    (match m1.live.spent { Option.some x => x.input_tokens == 3 && x.output_tokens == 4, Option.none => false })
+                    && (match idle.live.spent { Option.none => true, Option.some _ => false }),
             },
     }
 
@@ -523,7 +538,7 @@ def cmd_is_inspect (c : Cmd WeaverMsg) : Bool :=
 #[test]
 def test_polled_open_marks_the_overlay : Bool :=
     let st : OverlayState := { want := true, ack := false, seq := 0 } in
-    match TuiApp.update (enter_pending (model_of Mode.manual)) (WeaverMsg.polled Option.none (Option.some st) Option.none) {
+    match TuiApp.update (enter_pending (model_of Mode.manual)) (WeaverMsg.overlay_polled (Option.some st)) {
         Pair.pair m2 cmd => m2.overlay_open && m2.modal && cmd_is_none cmd,
     }
 
@@ -533,9 +548,9 @@ def test_polled_open_marks_the_overlay : Bool :=
 def test_polled_close_repaints : Bool :=
     let opened : OverlayState := { want := true, ack := true, seq := 0 } in
     let finished : OverlayState := { want := false, ack := false, seq := 1 } in
-    match TuiApp.update (enter_pending (model_of Mode.manual)) (WeaverMsg.polled Option.none (Option.some opened) Option.none) {
+    match TuiApp.update (enter_pending (model_of Mode.manual)) (WeaverMsg.overlay_polled (Option.some opened)) {
         Pair.pair m1 _ =>
-            match TuiApp.update m1 (WeaverMsg.polled Option.none (Option.some finished) Option.none) {
+            match TuiApp.update m1 (WeaverMsg.batch [WeaverMsg.overlay_polled (Option.some finished)]) {
                 Pair.pair m2 cmd =>
                     Bool.not m2.overlay_open && Bool.not m2.modal && m2.dialog_seq == 1 && cmd_is_perform_repaint cmd,
             },
@@ -557,15 +572,15 @@ def test_input_set_ends_the_turn : Bool :=
 def test_escape_requests_stop_while_pending : Bool :=
     match TuiApp.update (enter_pending (model_of Mode.manual)) (key_msg Key.escape) {
         Pair.pair m2 cmd =>
-            m2.stop_requested && cmd_is_inspect cmd
-                && String.contains (Model.thinking_text m2) "stopping",
+            m2.live.stopping && cmd_is_inspect cmd
+                && String.contains (Live.status_text m2.live) "stopping",
     }
 
 // Esc with nothing to cancel is a no-op.
 #[test]
 def test_escape_idle_is_a_no_op : Bool :=
     match TuiApp.update (model_of Mode.manual) (key_msg Key.escape) {
-        Pair.pair m2 cmd => cmd_is_none cmd && Bool.not m2.stop_requested,
+        Pair.pair m2 cmd => cmd_is_none cmd && Bool.not m2.live.stopping,
     }
 
 // A stopped turn keeps its partial block and appends `[stopped]`; the
@@ -579,7 +594,7 @@ def test_stopped_turn_appends_the_line : Bool :=
         Pair.pair m2 _ =>
             transcript_contains "[stopped]" m2.transcript.tail
                 && Bool.not m2.turn_pending
-                && Bool.not m2.stop_requested,
+                && Bool.not m2.live.stopping,
     }
 
 // The repaint cmd IS a plain perform (the forced blank repaint).

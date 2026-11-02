@@ -11,19 +11,15 @@
 /// `ListState.offset` bookkeeping is the wrong tool here (it drives a
 /// single-selection menu's highlight, not a scrolling transcript).
 use shuttle::agent {RunState}
-use shuttle::message {Message, Usage}
-use shuttle::context {usage_zero}
-use weaver::usage {Usage.delta}
+use shuttle::message {Message}
 use weaver::commands {WeaverState, Effect}
 use weaver::overlay {OverlayState}
-use weaver::format {format_tokens, format_elapsed}
 use log::logger {Logger}
 use weaver::error {WeaverError}
 use weaver::dumb {Dumb.status_fields}
 use weaver::theme {
     theme_line_style_with, theme_status_style_with,
-    theme_border_style_with, theme_banner_style_with, theme_running_style_with,
-    theme_thinking_style_with,
+    theme_border_style_with, theme_banner_style_with,
     theme_scrollbar_thumb_style_with,
     BannerPart,
 }
@@ -40,12 +36,13 @@ use tui::widgets::input {
 }
 use tui::widget {Widget, SizedWidget, BorderStyle, border_with, label, text_input, sized, with_style, padding}
 use tui::text {
-    Text.width, Text.take_width, Text.slice_cols, Text.snap_span,
+    Text.width, Text.slice_cols, Text.snap_span,
 }
 use std::list {List.intercalate}
+use weaver::ui::live {LiveModel, LiveMsg, LiveView, Live.idle, Live.rows, Live.height, Live.thinking_height, Live.text_height}
 use weaver::ui::rows {
-    DisplayRow, Rows.plain, Rows.wrap, Rows.markdown, Rows.of_line, Rows.count_line, Rows.count_lines,
-    Rows.length, Rows.drop, Rows.take, Rows.at, Rows.tail_bytes, Rows.widget, Rows.widget_selected,
+    DisplayRow, Rows.plain, Rows.of_line, Rows.count_line, Rows.count_lines,
+    Rows.length, Rows.drop, Rows.take, Rows.at, Rows.widget, Rows.widget_selected,
 }
 
 /// The loop's message type: a raw terminal event not yet interpreted, or
@@ -85,21 +82,12 @@ pub type WeaverMsg {
     /// The background session-title call finished: the pair it wrote
     /// (none when it was skipped or failed). Display state only.
     title_result (title : Option (Pair String String)),
-    /// A pending tick's poll: the live usage (only every tenth frame),
-    /// the dialog-ownership state (every frame), and -- every third
-    /// frame -- the streamed-text delta.
-    polled (usage : Option Usage) (overlay : Option OverlayState) (live : Option LiveDelta),
-}
-
-/// One live poll's streamed-text delta: the new assistant text and
-/// reasoning since the given offsets, the offsets after the read, and
-/// the tool currently dispatching (none when nothing is).
-pub struct LiveDelta {
-    text : String,
-    thinking : String,
-    text_seen : I64,
-    thinking_seen : I64,
-    activity : Option String,
+    /// The running turn's live display (`ui/live.mo`).
+    live (msg : LiveMsg),
+    /// The dialog-ownership handshake, polled every frame.
+    overlay_polled (overlay : Option OverlayState),
+    /// One tick's subscription results, folded in order.
+    batch (msgs : List WeaverMsg),
 }
 
 /// `tui::App`'s `on_event : Event -> WeaverMsg` -- every raw event is a
@@ -258,9 +246,8 @@ pub struct TuiModel {
     /// meanwhile reach the input box (they are read mid-turn unless a
     /// dialog owns stdin); Esc asks the turn to stop.
     turn_pending : Bool := false,
-    /// The spinner's tick counter (bumped only while `turn_pending`, so
-    /// idle ticks are zero-diff draws).
-    spinner_frame : I64 := 0,
+    /// Ticks since startup: the subscriptions' cadence clock.
+    frame : I64 := 0,
     /// A page read is in flight; only the synchronous `Cmd.perform`
     /// pager sets it, so it clears in the same fold.
     page_pending : Bool := false,
@@ -276,25 +263,12 @@ pub struct TuiModel {
     banner : Bool := true,
     /// The one-time shuttle sweep's tick counter (stops at 12).
     banner_frame : I64 := 0,
-    /// The cumulative spend reported by the turn's `on_usage` hook. The
-    /// session in `state.run` is the PRE-turn snapshot, so this is the
-    /// live token count the thinking row shows.
-    live_spent : Option Usage := Option.none,
-    /// The cumulative spend at submit: `live_spent` minus this is the
-    /// TURN's delta (the file carries cumulative billing).
-    live_base : Option Usage := Option.none,
+    /// The running turn's streamed text, spend and spinner (reset at
+    /// submit; shown only while `turn_pending`).
+    live : LiveModel := Live.idle,
     /// The submitted line opened a full-screen modal that owns the
     /// terminal: the main loop must not tick-redraw over it (interleaved
     /// writes corrupt the modal's paint).
-    /// The in-flight turn's streamed text and reasoning, painted below
-    /// the transcript and cleared at turn end; `live_seen`/
-    /// `live_thinking_seen` are byte offsets into the turn files.
-    live_text : String := "",
-    live_seen : I64 := 0,
-    live_thinking : String := "",
-    live_thinking_seen : I64 := 0,
-    /// The tool currently dispatching, from the activity feed.
-    live_activity : Option String := Option.none,
     /// Ctrl+O: show detail lines (tool output, completed thinking).
     show_details : Bool := false,
     modal : Bool := false,
@@ -313,9 +287,6 @@ pub struct TuiModel {
     /// title call, so it never blocks the turn's persistence or its
     /// dialog.
     title_due : Bool := false,
-    /// Esc asked the running turn to stop; the live row says so and the
-    /// fiber ends at its next model/tool boundary.
-    stop_requested : Bool := false,
     /// The submitted turn's generation (the stop signal's stale-request
     /// guard).
     turn_gen : I64 := 0,
@@ -350,7 +321,7 @@ pub def init_tui_model (log : Option Logger) (st : WeaverState) (rows : I64) (co
 
 /// The startup tail loaded from the session store.
 pub def init_tui_model_with (log : Option Logger) (st : WeaverState) (rows : I64) (cols : I64) (tr : Transcript) : TuiModel :=
-    let m : TuiModel := { state := st, input := input_state "" input_placeholder, transcript := tr, rows := rows, cols := cols, ctrl_c_streak := 0, ctrl_d_streak := 0, scroll := 0, row_total := 0, scroll_drag := Option.none, hist := List.empty, hist_idx := 0 - 1, turn_pending := false, spinner_frame := 0, page_pending := false, rows_cache := List.empty, rows_key := Option.none, sel := Option.none, banner := true, banner_frame := 0, live_spent := Option.none, live_base := Option.none, live_text := "", live_seen := 0, live_thinking := "", live_thinking_seen := 0, live_activity := Option.none, show_details := false, modal := false, plan_ready := false, want_older := false, want_top := false, title_due := false, stop_requested := false, turn_gen := 0, overlay_open := false, dialog_seq := 0, picker := Option.none, queued := List.empty, queued_ready := false, log := log } in
+    let m : TuiModel := { state := st, input := input_state "" input_placeholder, transcript := tr, rows := rows, cols := cols, ctrl_c_streak := 0, ctrl_d_streak := 0, scroll := 0, row_total := 0, scroll_drag := Option.none, hist := List.empty, hist_idx := 0 - 1, turn_pending := false, frame := 0, page_pending := false, rows_cache := List.empty, rows_key := Option.none, sel := Option.none, banner := true, banner_frame := 0, live := Live.idle, show_details := false, modal := false, plan_ready := false, want_older := false, want_top := false, title_due := false, turn_gen := 0, overlay_open := false, dialog_seq := 0, picker := Option.none, queued := List.empty, queued_ready := false, log := log } in
     Model.refresh_rows m
 
 /// The input box's placeholder, shared by the live edit and a history
@@ -812,7 +783,7 @@ pub def Model.rows_key_of (m : TuiModel) : RowsKey :=
     let k : RowsKey := { total := m.transcript.total, tail_start := m.transcript.tail_start,
                          cols := m.cols, rows := m.rows, scroll := m.scroll, page_start := pstart,
                          banner := m.banner, pending := m.turn_pending, details := m.show_details,
-                         think_stream := Model.live_thinking_height m, text_stream := Model.live_text_height m } in
+                         think_stream := Live.thinking_height (Model.live_view m) m.live, text_stream := Live.text_height (Model.live_view m) m.live } in
     k
 
 def rows_key_eq (a : RowsKey) (b : RowsKey) : Bool :=
@@ -857,55 +828,8 @@ def transcript_column (m : TuiModel) : Widget :=
     // them), so ticks update it without re-wrapping the transcript.
     if m.turn_pending
     then
-        let thinking : List SizedWidget :=
-            List.map (fn (r : DisplayRow) => Rows.widget r) (Model.live_thinking_rows m) in
-        let answer : List SizedWidget :=
-            List.map (fn (r : DisplayRow) => Rows.widget r) (Model.live_text_rows m) in
-        Widget.column (List.append body
-            (List.append thinking (List.append answer [Rows.widget (Model.live_row m)])))
+        Widget.column (List.append body (List.map Rows.widget (Live.rows (Model.live_view m) m.live)))
     else Widget.column body
-
-/// The TURN's spend the live row shows: the cumulative report from
-/// `on_usage` minus the submit-time baseline. Zero until the first model
-/// call reports.
-pub def Model.thinking_spent (m : TuiModel) : Usage :=
-    match m.live_spent {
-        Option.some u => match m.live_base {
-            Option.some base => Usage.delta u base,
-            Option.none => u,
-        },
-        Option.none => usage_zero,
-    }
-
-/// `| thinking 3.4s · ↑1.2k ↓345`, or `| stopping…` once Esc asked the
-/// turn to stop (the fiber ends at its next step boundary).
-pub def Model.thinking_text (m : TuiModel) : String :=
-    if m.stop_requested
-    then String.concat (spinner_glyph m.spinner_frame) " stopping…"
-    else
-        let u : Usage := Model.thinking_spent m in
-        let tail : String := String.concat (format_elapsed m.spinner_frame)
-            (String.concat " · ↑"
-                (String.concat (format_tokens u.input_tokens)
-                    (String.concat " ↓" (format_tokens u.output_tokens)))) in
-        let mid : String := String.concat (Model.live_phase m) (String.concat " " tail) in
-        String.concat (spinner_glyph m.spinner_frame) (String.concat " " mid)
-
-/// What the live line says the turn is doing: the dispatching tool,
-/// else "responding" once assistant text has streamed, else
-/// "thinking".
-pub def Model.live_phase (m : TuiModel) : String :=
-    match m.live_activity {
-        Option.some name => String.concat "running " name,
-        Option.none =>
-            if String.is_empty m.live_text then "thinking" else "responding",
-    }
-
-/// The thinking line under the last prompt, clipped to the content width.
-pub def Model.live_row (m : TuiModel) : DisplayRow :=
-    let style : TextStyle := theme_running_style_with m.state.colors in
-    let text : String := Text.take_width (Model.thinking_text m) (Model.content_width m) in
-    Rows.plain style text
 
 /// The absolute ROW window the panel shows. `eff` is the clamped scroll
 /// in rows; the scrolled panel spends ONE row on the indicator, so the
@@ -1016,63 +940,11 @@ pub def Model.body_height (m : TuiModel) : I64 :=
 /// can never evict the answer).
 pub def Model.live_rows_height (m : TuiModel) : I64 :=
     if Bool.not m.turn_pending then 0
-    else 1 + Model.live_thinking_height m + Model.live_text_height m
+    else Live.height (Model.live_view m) m.live
 
-/// The most reasoning / answer bytes painted: bounds on the per-tick wrap.
-pub def Model.live_thinking_cap_bytes : I64 := 4096
-pub def Model.live_stream_cap_bytes : I64 := 8192
-
-/// The rows the two blocks share, leaving one transcript row. The spinner
-/// spends one row of its own, so the panel never overflows.
-def live_content_cap (m : TuiModel) : I64 :=
-    let p : I64 := panel_height m in
-    if I64.lt p 2 then 0 else p - 1
-
-pub def Model.live_thinking_cap (m : TuiModel) : I64 :=
-    let c : I64 := live_content_cap m in
-    c / 2
-
-pub def Model.live_text_cap (m : TuiModel) : I64 :=
-    let c : I64 := live_content_cap m in
-    c - (c / 2)
-
-pub def Model.live_thinking_source (m : TuiModel) : String :=
-    Rows.tail_bytes m.live_thinking Model.live_thinking_cap_bytes
-
-pub def Model.live_text_source (m : TuiModel) : String :=
-    let t : String := Rows.tail_bytes m.live_text Model.live_stream_cap_bytes in
-    if String.is_empty t then "" else String.concat t "▌"
-
-/// Reasoning: dim magenta, its own byte and row budget.
-pub def Model.live_thinking_rows (m : TuiModel) : List DisplayRow :=
-    let src : String := Model.live_thinking_source m in
-    if String.is_empty src then List.empty
-    else
-        let all : List DisplayRow := Rows.wrap (theme_thinking_style_with m.state.colors) (Model.content_width m) src in
-        let n : I64 := Rows.length all in
-        let cap : I64 := Model.live_thinking_cap m in
-        if I64.gt n cap then Rows.drop (n - cap) all else all
-
-/// The answer: rendered as Markdown while it streams (the parser is total,
-/// so an unfinished fence or list is literal text until it closes).
-pub def Model.live_text_rows (m : TuiModel) : List DisplayRow :=
-    let src : String := Model.live_text_source m in
-    if String.is_empty src then List.empty
-    else
-        let all : List DisplayRow := Rows.markdown m.state.colors (Model.content_width m) src in
-        let n : I64 := Rows.length all in
-        let cap : I64 := Model.live_text_cap m in
-        if I64.gt n cap then Rows.drop (n - cap) all else all
-
-pub def Model.live_thinking_height (m : TuiModel) : I64 :=
-    Rows.length (Model.live_thinking_rows m)
-
-pub def Model.live_text_height (m : TuiModel) : I64 :=
-    Rows.length (Model.live_text_rows m)
-
-/// Both live blocks together (the historical name tests use).
-pub def Model.live_stream_height (m : TuiModel) : I64 :=
-    Model.live_thinking_height m + Model.live_text_height m
+pub def Model.live_view (m : TuiModel) : LiveView :=
+    let v : LiveView := { colors := m.state.colors, width := Model.content_width m, panel := panel_height m } in
+    v
 
 // ── the scrollbar ──────────────────────────────────────────────────────
 // The bar lives in the transcript panel's rightmost cell: the old right
@@ -1244,10 +1116,3 @@ pub def list_length (xs : List String) : I64 :=
 pub def status_line (m : TuiModel) : String :=
     Dumb.status_fields m.state
 
-/// The spinner's four frames, cycling on the tick count.
-pub def spinner_glyph (frame : I64) : String :=
-    let idx : I64 := frame - (frame / 4) * 4 in
-    if I64.beq idx 0 then "|"
-    else if I64.beq idx 1 then "/"
-    else if I64.beq idx 2 then "-"
-    else "\\"

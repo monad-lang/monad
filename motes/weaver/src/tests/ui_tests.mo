@@ -17,13 +17,14 @@ use weaver::policy {Mode}
 use std::map {BTreeMap}
 use std::list {List.length}
 use tui::text {Text.width}
+use weaver::ui::live {LiveModel, LiveView, Live.start, Live.request_stop, Live.status_text, Live.thinking_height, Live.text_height}
 use weaver::ui::rows {DisplayRow, Rows.of_line, Rows.wrap, Rows.cap_bytes}
 use weaver::model {
     TuiModel, Window, init_tui_model,
     Model.scroll_step, Model.append_block, Model.window, Model.needs_page,
     Model.page_request, Model.visible_rows, scroll_indicator, panel_height,
     Model.display_rows, Model.content_width, 
-    Model.body_height, Model.thinking_text, Model.live_stream_height, Model.live_row, status_line,
+    Model.body_height, Model.live_view, status_line,
     Model.row_total_of, Model.first_line_at_row, Model.refresh_rows,
     Model.view, Model.panel_top_of, Model.panel_left,
 }
@@ -313,9 +314,13 @@ def live_usage : Usage :=
     { input_tokens := 1234, output_tokens := 345, cached_tokens := 0 }
 
 def live_model : TuiModel :=
-    let base : TuiModel := { model_of with turn_pending := true, spinner_frame := 12 } in
-    let m : TuiModel := { base with live_spent := Option.some live_usage } in
+    let l0 : LiveModel := Live.start Option.none in
+    let live : LiveModel := { l0 with frame := 12, spent := Option.some live_usage } in
+    let m : TuiModel := { model_of with turn_pending := true, live := live } in
     m
+
+def with_live (m : TuiModel) (f : LiveModel -> LiveModel) : TuiModel :=
+    { m with live := f m.live }
 
 #[test]
 def test_live_row_reserves_one_panel_row : Bool :=
@@ -324,7 +329,8 @@ def test_live_row_reserves_one_panel_row : Bool :=
 
 #[test]
 def test_thinking_text_carries_time_and_tokens : Bool :=
-    let t : String := Model.thinking_text live_model in
+    let lm : TuiModel := live_model in
+    let t : String := Live.status_text lm.live in
     String.contains t "thinking" && String.contains t "1.2s"
         && String.contains t "↑1.2k" && String.contains t "↓345"
 
@@ -332,23 +338,27 @@ def test_thinking_text_carries_time_and_tokens : Bool :=
 /// token/time line.
 #[test]
 def test_thinking_text_says_stopping : Bool :=
-    let m : TuiModel := { live_model with stop_requested := true } in
-    String.contains (Model.thinking_text m) "stopping"
+    let lm : TuiModel := live_model in
+    String.contains (Live.status_text (Live.request_stop lm.live)) "stopping"
 
 #[test]
 def test_thinking_text_says_responding_after_streaming : Bool :=
-    let m : TuiModel := { live_model with live_text := "hello" } in
-    String.contains (Model.thinking_text m) "responding"
+    let lm : TuiModel := live_model in
+    let l : LiveModel := { lm.live with text := "hello" } in
+    String.contains (Live.status_text l) "responding"
 
 #[test]
 def test_thinking_text_names_the_running_tool : Bool :=
-    let m : TuiModel := { live_model with live_activity := Option.some "read" } in
-    String.contains (Model.thinking_text m) "running read"
+    let lm : TuiModel := live_model in
+    let l : LiveModel := { lm.live with activity := Option.some "read" } in
+    String.contains (Live.status_text l) "running read"
 
 #[test]
 def test_live_stream_reserves_rows : Bool :=
-    let m : TuiModel := { live_model with live_text := "streamed reply" } in
-    Model.body_height m == panel_height m - 1i64 - Model.live_stream_height m
+    let m : TuiModel := with_live live_model (fn (l : LiveModel) => { l with text := "streamed reply" }) in
+    let v : LiveView := Model.live_view m in
+    Model.body_height m == panel_height m - 1i64 - Live.thinking_height v m.live - Live.text_height v m.live
+        && I64.lt 0 (Live.text_height v m.live)
 
 #[test]
 def test_detail_lines_are_hidden_until_ctrl_o : Bool :=
@@ -367,7 +377,7 @@ def test_status_line_is_static_mid_turn : Bool :=
 #[test]
 def test_live_row_is_not_in_the_rows_cache : Bool :=
     let idle : TuiModel := Model.append_block model_of [TLine.plain "hello"] in
-    let pending : TuiModel := { idle with turn_pending := true, spinner_frame := 1 } in
+    let pending : TuiModel := { idle with turn_pending := true } in
     List.length (Model.display_rows pending) == List.length (Model.display_rows idle)
 
 /// The display cap keeps one enormous logical line from making every

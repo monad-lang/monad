@@ -19,9 +19,8 @@ use shuttle::agent {RunState}
 use shuttle::registry {ToolRegistry}
 use shuttle::gate {Pick, Approval, Gate, Capability}
 use shuttle::message {Message, Usage}
-use shuttle::context {usage_zero}
 use shuttle::message_types {Role, Content}
-use weaver::usage {Usage.delta, UsageTracker.start, UsageTracker.silent, UsageTracker.last}
+use weaver::usage {UsageTracker.start, UsageTracker.silent, UsageTracker.last}
 use std::ref {Ref}
 use weaver::commands {
     WeaverState, Effect, Effect.ok, set_fatal, Commands.dispatch, Commands.set_model,
@@ -36,7 +35,7 @@ use weaver::permissions {PermGrant, Permissions.get, Permissions.matches, Permis
 use weaver::diff {Diff.for_input, Diff.lines}
 use weaver::dumb {append_user, drive_loop}
 use weaver::model {
-    TuiModel, WeaverMsg, Window, LiveDelta, on_event, init_tui_model, init_tui_model_with,
+    TuiModel, WeaverMsg, Window, on_event, init_tui_model, init_tui_model_with,
     Model.view, Model.scroll_step, Model.append_block, Model.append_lines,
     Model.scrollbar_hit, Model.scrollbar_press, Model.scrollbar_drag_to, Model.scrollbar_release,
     Model.window, Model.needs_page, Model.page_request, Model.hist_keep,
@@ -55,8 +54,8 @@ use weaver::store {
     Transcript.empty, Transcript.with_page, Transcript.next_block, Transcript.append, Transcript.drop_page,
     Store.read_page, Store.append_transcript, Store.record_turn, Store.record_output,
     Store.startup_transcript, Store.append_chunk, Store.discard_live,
-    Store.append_history_note, Store.child, Store.append_named, Store.write_named, Store.write_plan,
-    Store.read_named, Store.read_named_from, Store.read_live_from, Store.discard_named,
+    Store.append_history_note, Store.append_named, Store.write_named, Store.write_plan,
+    Store.discard_named,
     SessionInfo, Store.list_sessions, Store.read_meta, Store.write_title, Store.derive_name,
     Store.derive_description, TitleField, StoreMeta,
 }
@@ -88,15 +87,12 @@ use tui::terminal {
 }
 use tui::input {Input.step, InputReader, input_reader}
 use tui::tui {App, Cmd, run_app}
+use tui::component {Subs, Subs.map, Subs.on_tick}
+use weaver::ui::live {LiveMsg, Live.idle, Live.start, Live.update, Live.request_stop, Live.subscriptions, Live.write_usage, Live.store_usage}
 use init::transformers {ResultT}
-use std::io {IO.read_stdin_exact, IO.write_stdout, IO.flush_stdout, IO.read_file, IO.write_file}
-use std::path {Path, Path.to_string}
-use std::process {process_id}
-use std::map {Map, BTreeMap}
-use json::json {
-    Json, Json.parse, Json.to_string, Json.make_object, Json.make_num_int,
-    Json.get_object, Json.get_num, Json.get_num_i64, Json.object_get,
-}
+use std::io {IO.read_stdin_exact, IO.write_stdout, IO.flush_stdout}
+use std::path {Path}
+use json::json {Json, Json.to_string}
 use std::list {List.intercalate, List.length}
 
 // ── Tui.run: the tty probe and the App wiring ───────────────────────────
@@ -175,6 +171,7 @@ pub def TuiApp.update (m : TuiModel) (msg : WeaverMsg) : Pair TuiModel (Cmd Weav
         Pair.pair m2 cmd => Pair.pair (Model.refresh_rows m2) cmd,
     }
 
+#[partial]
 def update_msg (m : TuiModel) (msg : WeaverMsg) : Pair TuiModel (Cmd WeaverMsg) :=
     match msg {
         WeaverMsg.key_event e => update_event m e,
@@ -200,7 +197,9 @@ def update_msg (m : TuiModel) (msg : WeaverMsg) : Pair TuiModel (Cmd WeaverMsg) 
         // The background title call wrote (or skipped) the session's
         // name/description: already persisted, nothing to fold.
         WeaverMsg.title_result _ => Pair.pair m Cmd.none,
-        WeaverMsg.polled u ov live => polled_step m u ov live,
+        WeaverMsg.live lm => live_step m lm,
+        WeaverMsg.overlay_polled ov => overlay_step m ov,
+        WeaverMsg.batch msgs => batch_step m msgs,
     }
 
 // ── persistence commands ─────────────────────────────────────────────────
@@ -470,159 +469,76 @@ def store_result_step (m : TuiModel) (e : Option String) : Pair TuiModel (Cmd We
 /// A turn's or command's completion: the fold `f` runs, the streak
 /// resets, and `turn_pending` clears -- the spinner stops.
 def with_turn_end (f : TuiModel -> TuiModel) (m : TuiModel) : TuiModel :=
-    { (with_streak_reset f m) with turn_pending := false, live_spent := Option.none, live_base := Option.none,
-        live_text := "", live_seen := 0, live_thinking := "", live_thinking_seen := 0,
-        live_activity := Option.none, scroll_drag := Option.none, modal := false, stop_requested := false, overlay_open := false }
+    { (with_streak_reset f m) with turn_pending := false, live := Live.idle,
+        scroll_drag := Option.none, modal := false, overlay_open := false }
 
-// ── live usage (the thinking row's tokens) ─────────────────────────────
-// The UI's session is the PRE-turn snapshot; shuttle's `on_usage` hook
-// writes the cumulative spend to a tiny file after every model call, and
-// a 1 Hz `Cmd.inspect` reads it back into `live_spent`.
+// ── subscriptions ────────────────────────────────────────────────────────
 
-def usage_path (store : Option StoreState) : String :=
-    match store {
-        Option.some s => Path.to_string (Store.child s.dir "usage.txt"),
-        Option.none => String.concat "/tmp/weaver-usage-" (String.concat (I64.to_string process_id) ".txt"),
-    }
-
-def usage_json (u : Usage) : String :=
-    Json.to_string (Json.make_object
-        (Map.insert "in" (Json.make_num_int u.input_tokens)
-        (Map.insert "out" (Json.make_num_int u.output_tokens)
-        (Map.insert "cached" (Json.make_num_int u.cached_tokens) BTreeMap.empty))))
-
-def usage_field (obj : BTreeMap String Json) (name : String) : I64 :=
-    match Json.object_get name obj {
-        Option.some j => match Json.get_num_i64 (Json.get_num j) {
-            Result.ok n => n,
-            Result.err _ => 0,
-        },
-        Option.none => 0,
-    }
-
-def usage_of_json (s : String) : Option Usage :=
-    match Json.parse s {
-        Result.err _ => Option.none,
-        Result.ok j => match Json.get_object j {
-            Result.err _ => Option.none,
-            Result.ok obj =>
-                let u : Usage := { input_tokens := usage_field obj "in", output_tokens := usage_field obj "out", cached_tokens := usage_field obj "cached" } in
-                Option.some u,
-        },
-    }
-
-def write_usage (store : Option StoreState) (u : Usage) : IO Unit := do {
-    let _ <- IO.write_file (Path.path (usage_path store)) (usage_json u);
-    IO.pure unit
-}
-
-def read_usage (store : Option StoreState) : IO (Option Usage) := do {
-    let r <- IO.read_file (Path.path (usage_path store));
-    match r {
-        Result.err _ => IO.pure Option.none,
-        Result.ok s => IO.pure (usage_of_json s),
-    }
-}
-
-/// `on_usage`: persist the CUMULATIVE spend for the 1 Hz live row; the
-/// row subtracts the submit-time baseline (`live_base`) to show the turn.
-def usage_live (log : Option Logger) (store : Option StoreState) (u : Usage) : IO Unit := do {
-    write_usage store u;
-    Logs.debug log (String.concat "ev=model_usage in=" (String.concat (I64.to_string u.input_tokens)
-        (String.concat " out=" (String.concat (I64.to_string u.output_tokens)
-        (String.concat " cached=" (I64.to_string u.cached_tokens))))))
-}
-
-/// The usage half of the poll, read every tenth frame (1 Hz).
-def usage_due (store : Option StoreState) (frame : I64) : IO (Option Usage) :=
-    if I64.beq (frame - ((frame / 10) * 10)) 0
-    then read_usage store
-    else IO.pure Option.none
-
-/// The live-text poll cadence: every third frame (~3 Hz), cheap enough
-/// for a growing file and often enough to read as streaming.
-def live_due (frame : I64) : Bool :=
-    I64.beq (frame - ((frame / 3) * 3)) 0
-
-/// The activity file's last event: `start <name>` means that tool is
-/// running; `end` (or anything else) means nothing is.
-def activity_of (line : String) : Option String :=
-    let tag : String := String.concat "\u{1}activity\u{2}" "start\u{2}" in
-    if String.starts_with tag line
-    then Option.some (String.slice line (String.length tag) (String.length line - String.length tag))
-    else Option.none
-
-def activity_of_read (act : Option String) : Option String :=
-    match act {
-        Option.none => Option.none,
-        Option.some line => activity_of line,
-    }
-
-/// The live half of a poll, when due and when a store exists.
-def read_live (store : Option StoreState) (text_seen : I64) (think_seen : I64) : IO (Option LiveDelta) :=
-    match store {
-        Option.none => IO.pure Option.none,
-        Option.some s => do {
-            let t <- Store.read_live_from s text_seen;
-            let th <- Store.read_named_from s "thinking.txt" think_seen;
-            let act <- Store.read_named s "activity.txt";
-            let activity : Option String := activity_of_read act;
-            let d : LiveDelta := { text := t.first, thinking := th.first,
-                                    text_seen := t.second, thinking_seen := th.second,
-                                    activity := activity };
-            IO.pure (Option.some d)
-        },
-    }
-
-/// A pending tick's poll: the dialog handshake every frame, the live
-/// usage every tenth, and the streamed text every third.
-def poll_action (store : Option StoreState) (frame : I64) (text_seen : I64) (think_seen : I64) : Unit -> IO WeaverMsg :=
-    fn (_ : Unit) => do {
+/// The dialog handshake is polled on EVERY tick, not only while a turn is
+/// pending: a dialog opened by a fiber must be seen and acked even if the
+/// model's own pending flag is stale. A running turn adds its live
+/// display's spinner and polls.
+pub def TuiApp.subscriptions (m : TuiModel) : Subs WeaverMsg :=
+    let store : Option StoreState := m.state.store in
+    let overlay : Subs WeaverMsg := Subs.poll 1 (fn (_ : Unit) => do {
         let ov <- Overlay.read store;
-        let u <- usage_due store frame;
-        let live <- if live_due frame
-            then read_live store text_seen think_seen
-            else IO.pure Option.none;
-        IO.pure (WeaverMsg.polled u ov live)
-    }
+        IO.pure (WeaverMsg.overlay_polled ov)
+    }) in
+    if m.turn_pending
+    then Subs.batch [overlay, Subs.map WeaverMsg.live (Live.subscriptions store m.live)]
+    else overlay
 
-/// A tick's poll result: live usage while pending, and the dialog
-/// handshake. Opening suppresses tick draws (modal); a new close
-/// sequence clears it and returns the clear+repaint that erases the
+/// Live messages count only while a turn runs: a poll that lands after
+/// the turn folded must not resurrect its text.
+def live_step (m : TuiModel) (msg : LiveMsg) : Pair TuiModel (Cmd WeaverMsg) :=
+    if m.turn_pending
+    then Pair.pair { m with live := Live.update m.live msg } Cmd.none
+    else Pair.pair m Cmd.none
+
+/// The dialog handshake. Opening suppresses tick draws (modal); a new
+/// close sequence clears it and returns the clear+repaint that erases the
 /// dialog. A missing/garbled state file is a no-op (the startup reset
 /// guarantees a valid one; a torn read must not drop ownership).
-def fold_live (m : TuiModel) (d : LiveDelta) : TuiModel :=
-    if Bool.not m.turn_pending then m
-    else
-        let m1 : TuiModel :=
-            { m with live_text := String.concat m.live_text d.text,
-                     live_thinking := String.concat m.live_thinking d.thinking,
-                     live_seen := d.text_seen, live_thinking_seen := d.thinking_seen,
-                     live_activity := d.activity } in
-        m1
-
-def polled_step (m : TuiModel) (u : Option Usage) (ov : Option OverlayState) (live : Option LiveDelta) : Pair TuiModel (Cmd WeaverMsg) :=
-    let m0 : TuiModel := match live {
-        Option.some d => fold_live m d,
-        Option.none => m,
-    } in
-    let m1 : TuiModel := match u {
-        Option.some x => if m0.turn_pending then { m0 with live_spent := Option.some x } else m0,
-        Option.none => m0,
-    } in
+def overlay_step (m : TuiModel) (ov : Option OverlayState) : Pair TuiModel (Cmd WeaverMsg) :=
     match ov {
-        Option.none => Pair.pair m1 Cmd.none,
+        Option.none => Pair.pair m Cmd.none,
         Option.some s =>
             if s.want
             then
-                if m1.overlay_open
-                then Pair.pair m1 Cmd.none
-                else Pair.pair { m1 with overlay_open := true, modal := true } Cmd.none
-            else if Bool.or m1.overlay_open (Bool.not (s.seq == m1.dialog_seq))
+                if m.overlay_open
+                then Pair.pair m Cmd.none
+                else Pair.pair { m with overlay_open := true, modal := true } Cmd.none
+            else if Bool.or m.overlay_open (Bool.not (s.seq == m.dialog_seq))
             then
-                let closed : TuiModel := { m1 with overlay_open := false, modal := false, dialog_seq := s.seq } in
+                let closed : TuiModel := { m with overlay_open := false, modal := false, dialog_seq := s.seq } in
                 Pair.pair closed repaint_cmd
-            else Pair.pair m1 Cmd.none,
+            else Pair.pair m Cmd.none,
+    }
+
+/// Fold a batch in order. A fold returns one command, so the first
+/// non-trivial one wins; subscription messages only ever produce one (the
+/// overlay close's repaint).
+#[partial]
+def batch_step (m : TuiModel) (msgs : List WeaverMsg) : Pair TuiModel (Cmd WeaverMsg) :=
+    batch_go m msgs Cmd.none
+
+#[partial]
+def batch_go (m : TuiModel) (msgs : List WeaverMsg) (cmd : Cmd WeaverMsg) : Pair TuiModel (Cmd WeaverMsg) :=
+    match msgs {
+        List.empty => Pair.pair m cmd,
+        List.cons x rest => batch_next (update_msg m x) rest cmd,
+    }
+
+#[partial]
+def batch_next (step : Pair TuiModel (Cmd WeaverMsg)) (rest : List WeaverMsg) (cmd : Cmd WeaverMsg) : Pair TuiModel (Cmd WeaverMsg) :=
+    match step {
+        Pair.pair m2 c => batch_go m2 rest (first_cmd cmd c),
+    }
+
+def first_cmd (a : Cmd WeaverMsg) (b : Cmd WeaverMsg) : Cmd WeaverMsg :=
+    match a {
+        Cmd.none => b,
+        _ => a,
     }
 
 /// The completion frame's repaint: a trivial `perform` forces the next
@@ -710,6 +626,7 @@ def reset_action (st : StoreState) (output : String) : IO WeaverMsg := do {
     IO.pure (WeaverMsg.transcript_reset (Transcript.append tr0 block))
 }
 
+#[partial]
 def update_event (m : TuiModel) (e : Event) : Pair TuiModel (Cmd WeaverMsg) :=
     match e {
         Event.key k => update_key m k,
@@ -726,9 +643,7 @@ def update_event (m : TuiModel) (e : Event) : Pair TuiModel (Cmd WeaverMsg) :=
         // every 100 ms and would make the double-Ctrl-C/Ctrl-D gestures
         // impossible.
         Event.tick =>
-            let m1 : TuiModel := if m.turn_pending
-                then { m with spinner_frame := m.spinner_frame + 1 }
-                else m in
+            let m1 : TuiModel := { m with frame := m.frame + 1 } in
             let m2 : TuiModel :=
                 if Bool.and m1.banner (m1.banner_frame < 12)
                 then { m1 with banner_frame := m1.banner_frame + 1 }
@@ -742,10 +657,21 @@ def update_event (m : TuiModel) (e : Event) : Pair TuiModel (Cmd WeaverMsg) :=
             // A due session title forks here, AFTER persistence and the
             // plan dialog (a modal's blocking perform keeps ticks from
             // running until it closes), and never blocks the frame.
-            if m2.title_due
-            then Pair.pair { m2 with title_due := false } (title_cmd m2)
-            else Pair.pair m2 (Cmd.inspect (poll_action m2.state.store m2.spinner_frame m2.live_seen m2.live_thinking_seen)),
+            tick_step m2 (Subs.on_tick m2.frame (TuiApp.subscriptions m2) WeaverMsg.batch),
         _ => Pair.pair (with_streak_reset (fn (mm : TuiModel) => mm) m) Cmd.none,
+    }
+
+/// A tick: fold the subscriptions' pure messages (the spinner frame) now,
+/// then run their polls -- unless a session title is due, which forks
+/// here instead (once), AFTER persistence and the plan dialog.
+def tick_step (m : TuiModel) (due : Pair (List WeaverMsg) (Cmd WeaverMsg)) : Pair TuiModel (Cmd WeaverMsg) :=
+    match due {
+        Pair.pair msgs poll => match batch_step m msgs {
+            Pair.pair m2 _ =>
+                if m2.title_due
+                then Pair.pair { m2 with title_due := false } (title_cmd m2)
+                else Pair.pair m2 poll,
+        },
     }
 
 /// The mouse's gestures: the wheel scrolls (three rows a notch), and a
@@ -937,9 +863,9 @@ def escape_key (m : TuiModel) : Pair TuiModel (Cmd WeaverMsg) :=
     then Pair.pair (with_streak_reset (fn (mm : TuiModel) => Model.clear_input_selection mm) m) Cmd.none
     else if transcript_sel_active m
     then Pair.pair (with_streak_reset (fn (mm : TuiModel) => { mm with sel := Option.none }) m) Cmd.none
-    else if Bool.and m.turn_pending (Bool.not m.stop_requested)
+    else if Bool.and m.turn_pending (Bool.not m.live.stopping)
     then
-        let m2 : TuiModel := { m with stop_requested := true } in
+        let m2 : TuiModel := { m with live := Live.request_stop m.live } in
         Pair.pair (with_streak_reset (fn (mm : TuiModel) => mm) m2)
             (Cmd.inspect (stop_cmd m.state.store m.turn_gen))
     else Pair.pair (with_streak_reset (fn (mm : TuiModel) => mm) m) Cmd.none
@@ -1121,11 +1047,9 @@ def submit_line (m : TuiModel) (text : String) : Pair TuiModel (Cmd WeaverMsg) :
     let m2 : TuiModel :=
         { (with_streak_reset
             (fn (mm : TuiModel) => Model.append_block (hist_push (clear_input mm) text) echo) m)
-            with turn_pending := true, banner := false, spinner_frame := 0,
-                 live_spent := Option.none, live_base := Option.some m.state.run.session.spent,
-                 live_text := "", live_seen := 0, live_thinking := "", live_thinking_seen := 0,
-                 live_activity := Option.none, scroll := 0,
-                 stop_requested := false, turn_gen := gen,
+            with turn_pending := true, banner := false,
+                 live := Live.start (Option.some m.state.run.session.spent), scroll := 0,
+                 turn_gen := gen,
                  modal := modal_command st text } in
     Pair.pair m2 (Cmd.perform_async
         (fn (_ : Unit) => do {
@@ -1392,13 +1316,13 @@ def drive_turn_tui (log : Option Logger) (gen : I64) (st : WeaverState) (text : 
         Pair.pair st2 note => do {
             let before : I64 := list_msg_length st2.run.session.history;
             // The live row's baseline: the file carries cumulative spend,
-            // and `live_base` is the submit-time total.
-            write_usage st2.store st2.run.session.spent;
+            // and the live display's `base` is the submit-time total.
+            Live.store_usage st2.store st2.run.session.spent;
             // The live row reads the cumulative file; the tracker answers
             // the one number autocompact needs -- the LAST call's prompt
             // (the turn's summed delta overstates it per tool call).
             let tracker <- UsageTracker.start st2.run.session.spent;
-            let live_seam : Usage -> IO Unit := usage_live log st2.store;
+            let live_seam : Usage -> IO Unit := Live.write_usage log st2.store;
             let on_u : Usage -> IO Unit := fn (u : Usage) => do {
                 let _ <- live_seam u;
                 UsageTracker.silent tracker u
