@@ -29,7 +29,7 @@ use std::list {}
 use std::path {Path}
 use std::stream {StreamError}
 use std::watch {
-  Watch, Watch.close, Watch.default_ignored, Watch.drain, Watch.recursive, WatchBatch, WatchEvent,
+  Watch, Watch.default_ignored, Watch.drain, Watch.recursive, WatchBatch, WatchEvent,
 }
 
 def WatchBatch.changed (b : WatchBatch) : I64 := List.length b.events
@@ -66,6 +66,11 @@ It waits up to its first argument for *something* to happen, then
 keeps reading until a quiet window of the second argument passes with nothing
 new, so one editor save arrives as one batch -- not as its `IN_MODIFY`,
 `IN_CLOSE_WRITE` and `IN_MOVED_TO` events separately.
+
+`Watch.close` releases the queue when the loop is done with it; a `Watch` is
+affine, so a drain-and-close loop keeps the watch inside one def that owns it
+for its lifetime (`monad script --watch`'s `script_watch_loop` is the in-tree
+example) -- the sample above drains one batch and stops.
 
 ## The events
 
