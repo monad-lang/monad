@@ -21,7 +21,7 @@ use tui::widget {Widget, SizedWidget, label, sized, with_style}
 use tui::text {Text.slice_cols, Text.snap_span}
 use std::list {List.intercalate}
 use weaver::ui::rows {
-    DisplayRow, Rows.plain, Rows.of_line, Rows.count_line, Rows.count_lines,
+    DisplayRow, Rows.plain, Rows.of_line, Rows.count_lines,
     Rows.length, Rows.drop, Rows.take, Rows.at, Rows.widget_selected,
 }
 
@@ -47,6 +47,28 @@ pub struct PaneKey {
     colors : Bool,
     scroll : I64,
     details : Bool,
+}
+
+/// One loaded line rendered: its absolute index, its rows (none for a
+/// hidden detail line) and their count.
+pub struct CachedLine {
+    abs : I64,
+    rows : List DisplayRow,
+    count : I64,
+}
+
+/// The loaded window rendered once per content change. Scrolling only
+/// slices it: re-rendering every loaded line (Markdown parse + wrap) three
+/// times per wheel notch was the scroll freeze.
+pub struct PaneCache {
+    start : I64,
+    total_lines : I64,
+    width : I64,
+    colors : Bool,
+    details : Bool,
+    lines : List CachedLine,
+    /// The rows of every line together: the scroll clamp's `len`.
+    row_total : I64,
 }
 
 pub struct TextSelection {
@@ -76,6 +98,7 @@ pub struct PaneModel {
     /// Wrapping a long line every tick was the TUI's allocation hot spot.
     rows : List DisplayRow := List.empty,
     key : Option PaneKey := Option.none,
+    cache : Option PaneCache := Option.none,
     /// The mouse selection over DISPLAY rows (cleared whenever the rows
     /// rebuild: scroll, append, page load, resize).
     sel : Option TextSelection := Option.none,
@@ -106,13 +129,13 @@ pub type PaneMsg {
 
 pub def Pane.make (tr : Transcript) : PaneModel :=
     let p : PaneModel := { transcript := tr, scroll := 0, row_total := 0, bar_grab := Option.none, page_pending := false,
-                           rows := List.empty, key := Option.none, sel := Option.none, details := false,
+                           rows := List.empty, key := Option.none, cache := Option.none, sel := Option.none, details := false,
                            want_older := false, want_top := false } in
     p
 
 /// A session switch: the new transcript, pinned, with no paging intent.
 pub def Pane.reset (p : PaneModel) (tr : Transcript) : PaneModel :=
-    { p with transcript := tr, scroll := 0, bar_grab := Option.none, page_pending := false, key := Option.none,
+    { p with transcript := tr, scroll := 0, bar_grab := Option.none, page_pending := false, key := Option.none, cache := Option.none,
         want_older := false, want_top := false }
 
 /// One message; the copied text of a finished selection rides along (a
@@ -214,11 +237,6 @@ def shown_lines (show : Bool) (ls : List TLine) : List TLine :=
             else List.cons l (shown_lines show rest),
     }
 
-pub def Pane.loaded_shown (p : PaneModel) : LoadedWindow :=
-    let lw : LoadedWindow := Pane.loaded_window p.transcript in
-    let lw2 : LoadedWindow := { start := lw.start, lines := shown_lines p.details lw.lines } in
-    lw2
-
 /// Rows nearer than this to the loaded top trigger the next page: the
 /// load lands BEFORE the user reaches the boundary, and since the view is
 /// anchored to the bottom, content arriving above it does not move it.
@@ -293,33 +311,92 @@ def same_page (old : Option TranscriptPage) (pg : TranscriptPage) : Bool :=
 
 // ── rows and the window ─────────────────────────────────────────────────
 
+// ── the rendered-rows cache ─────────────────────────────────────────────
+
+def cache_fits (c : PaneCache) (v : PaneView) (p : PaneModel) (lw : LoadedWindow) : Bool :=
+    c.start == lw.start && c.total_lines == p.transcript.total
+        && c.width == v.width && c.colors == v.colors && c.details == p.details
+
+/// The rows `old` already rendered for absolute line `abs`, when it was
+/// rendered for the same width, colors and details. Lines are append-only,
+/// so an index names the same text for the transcript's whole life.
+#[partial]
+def reuse_rows (old : List CachedLine) (abs : I64) : Pair (Option CachedLine) (List CachedLine) :=
+    match old {
+        List.empty => Pair.pair Option.none List.empty,
+        List.cons c rest =>
+            if c.abs < abs then reuse_rows rest abs
+            else if c.abs == abs then Pair.pair (Option.some c) rest
+            else Pair.pair Option.none old,
+    }
+
+#[partial]
+def cache_lines_go (colors : Bool) (width : I64) (show : Bool) (lines : List TLine) (abs : I64) (old : List CachedLine) (acc : List CachedLine) (total : I64) : Pair (List CachedLine) I64 :=
+    match lines {
+        List.empty => Pair.pair (List.reverse acc) total,
+        List.cons l rest =>
+            match reuse_rows old abs {
+                Pair.pair hit old2 =>
+                    let c : CachedLine := match hit {
+                        Option.some c0 => c0,
+                        Option.none =>
+                            let rows : List DisplayRow :=
+                                if Bool.and (Bool.not show) l.detail then List.empty else Rows.of_line colors width l in
+                            let fresh : CachedLine := { abs := abs, rows := rows, count := Rows.length rows } in
+                            fresh,
+                    } in
+                    cache_lines_go colors width show rest (abs + 1) old2 (List.cons c acc) (total + c.count),
+            },
+    }
+
+/// The cache for the current window: the stored one when it still fits,
+/// else a rebuild that reuses every line rendered for the same geometry.
+pub def Pane.cache_of (v : PaneView) (p : PaneModel) : PaneCache :=
+    let lw : LoadedWindow := Pane.loaded_window p.transcript in
+    let stored : Option PaneCache := p.cache in
+    match stored {
+        Option.some c => if cache_fits c v p lw then c else build_cache v p lw stored,
+        Option.none => build_cache v p lw stored,
+    }
+
+def build_cache (v : PaneView) (p : PaneModel) (lw : LoadedWindow) (prior : Option PaneCache) : PaneCache :=
+    let old : List CachedLine := match prior {
+        Option.some c => if Bool.and (c.width == v.width) (Bool.and (c.colors == v.colors) (c.details == p.details)) then c.lines else List.empty,
+        Option.none => List.empty,
+    } in
+    match cache_lines_go v.colors v.width p.details lw.lines lw.start old List.empty 0 {
+        Pair.pair lines total =>
+            let c : PaneCache := { start := lw.start, total_lines := p.transcript.total, width := v.width, colors := v.colors,
+                                   details := p.details, lines := lines, row_total := total } in
+            c,
+    }
+
 /// The whole loaded window's row count: the scroll clamp's `len`. The
 /// unloaded prefix contributes NO rows (a row per unloaded LINE made the
 /// space disagree with the loaded one, and scrolling moved through
 /// phantom rows).
 pub def Pane.row_total_of (v : PaneView) (p : PaneModel) : I64 :=
-    let lw : LoadedWindow := Pane.loaded_shown p in
-    Rows.count_lines v.colors v.width lw.lines
+    let c : PaneCache := Pane.cache_of v p in
+    c.row_total
 
 /// The absolute line containing display row `row`. Hidden detail lines
 /// still COUNT as lines, so the indicator's "N lines above" is the true
 /// transcript position.
 #[partial]
-def first_line_at_row_go (colors : Bool) (width : I64) (show : Bool) (lines : List TLine) (abs : I64) (off : I64) (target : I64) : I64 :=
+def first_line_at_row_go (lines : List CachedLine) (last : I64) (off : I64) (target : I64) : I64 :=
     match lines {
-        List.empty => abs,
-        List.cons l rest =>
-            let n : I64 := if Bool.and (Bool.not show) l.detail then 0 else Rows.count_line colors width l in
-            if target < off + n
-            then abs
-            else first_line_at_row_go colors width show rest (abs + 1) (off + n) target,
+        List.empty => last,
+        List.cons c rest =>
+            if target < off + c.count
+            then c.abs
+            else first_line_at_row_go rest (c.abs + 1) (off + c.count) target,
     }
 
 pub def Pane.first_line_at_row (v : PaneView) (p : PaneModel) (row : I64) : I64 :=
-    let lw : LoadedWindow := Pane.loaded_window p.transcript in
+    let c : PaneCache := Pane.cache_of v p in
     if row < 0
-    then lw.start
-    else first_line_at_row_go v.colors v.width p.details lw.lines lw.start 0 row
+    then c.start
+    else first_line_at_row_go c.lines c.start 0 row
 
 /// The absolute ROW window shown. `eff` is the clamped scroll; a scrolled
 /// pane spends ONE row on the indicator, so the content window is
@@ -356,30 +433,28 @@ def scroll_clamp (scroll : I64) (len : I64) (height : I64) : I64 :=
 /// Collect `count` display rows starting at relative row `start`. The
 /// drop is per ROW, so a window can start inside a tall line.
 #[partial]
-def collect_rows_go (colors : Bool) (width : I64) (lines : List TLine) (off : I64) (start : I64) (count : I64) (acc : List DisplayRow) : List DisplayRow :=
+def collect_rows_go (lines : List CachedLine) (off : I64) (start : I64) (count : I64) (acc : List DisplayRow) : List DisplayRow :=
     if count < 1 then acc
     else match lines {
         List.empty => acc,
-        List.cons l rest =>
-            let rows : List DisplayRow := Rows.of_line colors width l in
-            let n : I64 := Rows.length rows in
-            let line_end : I64 := off + n in
+        List.cons c rest =>
+            let line_end : I64 := off + c.count in
             if Bool.not (start < line_end)
-            then collect_rows_go colors width rest line_end start count acc
+            then collect_rows_go rest line_end start count acc
             else
                 let skip : I64 := if start < off then 0 else start - off in
-                let avail : I64 := n - skip in
+                let avail : I64 := c.count - skip in
                 let take : I64 := if count < avail then count else avail in
-                let picked : List DisplayRow := Rows.take take (Rows.drop skip rows) in
-                collect_rows_go colors width rest line_end start (count - take) (List.append acc picked),
+                let picked : List DisplayRow := Rows.take take (Rows.drop skip c.rows) in
+                collect_rows_go rest line_end start (count - take) (List.append acc picked),
     }
 
 /// The rows shown, top to bottom; when scrolled, the indicator row is
 /// prepended and spends one content row.
 pub def Pane.visible_rows (v : PaneView) (p : PaneModel) : List DisplayRow :=
     let w : Window := Pane.window v p in
-    let lw : LoadedWindow := Pane.loaded_shown p in
-    let content : List DisplayRow := collect_rows_go v.colors v.width lw.lines 0 w.start w.count List.empty in
+    let c : PaneCache := Pane.cache_of v p in
+    let content : List DisplayRow := collect_rows_go c.lines 0 w.start w.count List.empty in
     if w.eff > 0
     then
         let text : String := indicator p w in
@@ -421,9 +496,12 @@ pub def Pane.refresh (v : PaneView) (p : PaneModel) : PaneModel :=
         Option.none => rebuild v p k,
     }
 
+/// Re-slice the rows. The rendered lines come from the cache, which only
+/// renders lines it has not seen for this geometry.
 def rebuild (v : PaneView) (p : PaneModel) (k : PaneKey) : PaneModel :=
-    let rt : I64 := Pane.row_total_of v p in
-    let p2 : PaneModel := { p with row_total := rt, scroll := scroll_clamp p.scroll rt v.height, sel := Option.none, rows := List.empty, key := Option.some k } in
+    let c : PaneCache := Pane.cache_of v p in
+    let rt : I64 := c.row_total in
+    let p2 : PaneModel := { p with row_total := rt, scroll := scroll_clamp p.scroll rt v.height, sel := Option.none, rows := List.empty, key := Option.some k, cache := Option.some c } in
     { p2 with rows := Pane.visible_rows v p2 }
 
 // ── mouse selection ─────────────────────────────────────────────────────

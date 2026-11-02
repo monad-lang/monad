@@ -31,8 +31,8 @@ use tui::render {render}
 use tui::core {empty_screen, mk_rect, screen_get_cell, style_default}
 use tui::types {Screen}
 use weaver::ui::pane {
-    PaneModel, Window, Pane.window, Pane.needs_page, Pane.page_request, Pane.visible_rows,
-    Pane.indicator_text, Pane.row_total_of, Pane.first_line_at_row,
+    PaneModel, PaneCache, Window, Pane.window, Pane.needs_page, Pane.page_request, Pane.visible_rows,
+    Pane.indicator_text, Pane.row_total_of, Pane.first_line_at_row, Pane.refresh, Pane.reset,
 }
 use weaver::store {TLine, TLine.plain, TLine.detail_line, Transcript, TranscriptPage, Transcript.with_page}
 
@@ -459,3 +459,46 @@ def test_render_keeps_transcript_rows_undimmed : Bool :=
         Option.none => false,
     } in
     Bool.not body_dim && border_dim
+
+// ── the rendered-rows cache ─────────────────────────────────────────────
+
+#[partial]
+def joined_texts (rs : List DisplayRow) : String :=
+    match rs {
+        List.empty => "",
+        List.cons r rest => String.concat r.text (String.concat "\n" (joined_texts rest)),
+    }
+
+def cache_rows (p : PaneModel) : I64 :=
+    match p.cache { Option.some c => c.row_total, Option.none => 0 - 1 }
+
+/// Scrolling slices the cached rows: the window equals a cold rebuild's.
+#[test]
+def test_scrolled_window_matches_a_cold_rebuild : Bool :=
+    let m : TuiModel := Model.scroll_step (Model.scroll_step (filled 600) 40) 7 in
+    let p : PaneModel := m.pane in
+    let cold : PaneModel := Pane.refresh (Model.pane_view m) { p with cache := Option.none, key := Option.none } in
+    joined_texts p.rows == joined_texts cold.rows && Bool.not (String.is_empty (joined_texts p.rows))
+
+/// A scroll-only step keeps the cache: same row total, every loaded line
+/// still cached.
+#[test]
+def test_scroll_keeps_the_cache : Bool :=
+    let m0 : TuiModel := filled 300 in
+    let m1 : TuiModel := Model.scroll_step m0 25 in
+    cache_rows m0.pane == cache_rows m1.pane && cache_rows m1.pane == row_total_of m1
+
+/// An append renders only the new lines; the old rows still read the same.
+#[test]
+def test_append_reuses_cached_lines : Bool :=
+    let m0 : TuiModel := Model.scroll_step (filled 300) 30 in
+    let before : String := joined_texts m0.pane.rows in
+    let m1 : TuiModel := Model.append_block m0 [TLine.plain "fresh"] in
+    joined_texts m1.pane.rows == before && cache_rows m1.pane > cache_rows m0.pane
+
+/// A session switch drops the cache: line indices name another transcript.
+#[test]
+def test_reset_drops_the_cache : Bool :=
+    let m : TuiModel := filled 50 in
+    let p2 : PaneModel := Pane.reset m.pane m.pane.transcript in
+    match p2.cache { Option.none => true, Option.some _ => false }
