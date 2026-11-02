@@ -81,6 +81,7 @@ members = [
   "motes/markdown",
   "motes/gen",
   "motes/acorn",
+  "motes/ply",
 ]
 
 # Shared dependency sources, inherited by members with `workspace = true`.

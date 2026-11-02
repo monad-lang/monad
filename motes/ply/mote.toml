@@ -1,0 +1,59 @@
+# Ply -- a selection-first modal code editor built on `tui` and `toolkit`.
+# Helix-style select-then-act editing, LSP-backed navigation, and an MCP
+# surface a coding agent can drive with typed, version-checked edits.
+# See plans/library-ideas/code-editor.md.
+#
+# The library half (`src/lib.mo`) is the reusable pure core (rope,
+# selections, history, keymap, transactions); `src/main.mo` is the TUI
+# binary. The same split Weaver uses.
+
+[mote]
+name = "ply"
+version = "0.1.0"
+edition = "2026"
+
+# Sub-table, not an inline table (`std = { path = "../../std" }`): the
+# self-hosted TOML reader supports headers and not inline tables, and a
+# manifest it cannot parse makes `Mote.discover` return none -- which
+# silently turns the declared-deps check off for this mote rather than
+# failing. See the note in the repo root's mote.toml.
+#
+# The paths climb two levels because this mote lives under `motes/`.
+# `motes/toolkit/mote.toml` is the sibling precedent with the same shape.
+[dependencies.init]
+path = "../../init"
+
+[dependencies.std]
+path = "../../std"
+
+# The terminal-UI library: the Elm-architecture loop (`run_app`), the
+# key/mouse decoder, the widget tree and its renderer. Phase 3 upstreams
+# one new `spans` leaf into it for per-span styling on a line.
+[dependencies.tui]
+path = "../tui"
+
+# The protocol substrate: `framing`, `jsonrpc`, `position` (`LineIndex`,
+# byte <-> UTF-16), `wire`, `docstore` and `text`. The LSP client (Phase 6)
+# and the MCP server (Phase 7) are both built on it.
+[dependencies.toolkit]
+path = "../toolkit"
+
+# `llvm` and `runtime` are declared because `toolkit` depends on `lang`,
+# and `lang::module` -- where the checker's `Diagnostic` lives -- is not
+# self-contained the way `lang::json` is: the compiler's own modules reach
+# into codegen, codegen reaches into `llvm`, and the IR type names come from
+# `llvm::strmap`. Without these the module graph fails to resolve with
+# `module not found: llvm.strmap`, which names the symptom and not the
+# cause. `motes/toolkit/mote.toml` and `motes/lsp/mote.toml` declare the
+# same pair for the same reason.
+[dependencies.llvm]
+path = "../../llvm"
+
+[dependencies.runtime]
+path = "../../runtime"
+
+# Affine-by-default migration exception (measured 2026-10-22).
+# Delete this table when the mote reaches zero violations; the default
+# (no table) is `mode = "error"`. See plans/type-system/quantitative-types.md.
+[affine]
+mode = "warn"
