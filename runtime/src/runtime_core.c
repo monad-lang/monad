@@ -1356,10 +1356,11 @@ static rt_word monad_bytebuf_truncate_impl(rt_word buf, int64_t n) {
     return alloc_constructor_impl(0, 0);
 }
 
-/* `bytebuf_copy_into : ByteBuf -> I64 -> ByteBuf -> RawIO Unit` -- copy
+/* `bytebuf_copy_into : ByteBuf -> I64 -> ByteBuf -> RawIO ByteBuf` -- copy
    all of `src` into `dst` at `off`, clamped to `dst`'s length (never
    grows it); an offset outside `[0, dst->len]` copies nothing. `memmove`
-   because `dst` and `src` may be the same buffer. */
+   because `dst` and `src` may be the same buffer. Returns `dst`: the
+   buffer is consumed and handed back, so a linear caller can thread it. */
 static rt_word monad_bytebuf_copy_into_impl(rt_word dstw, int64_t off, rt_word srcw) {
     BufObj* dst = (BufObj*)RT_PTR(dstw);
     BufObj* src = (BufObj*)RT_PTR(srcw);
@@ -1367,7 +1368,7 @@ static rt_word monad_bytebuf_copy_into_impl(rt_word dstw, int64_t off, rt_word s
         int64_t n = src->len < dst->len - off ? src->len : dst->len - off;
         if (n > 0) memmove(dst->payload + off, src->payload, (size_t)n);
     }
-    return alloc_constructor_impl(0, 0);
+    return dstw;
 }
 
 /* `IO.ByteBuf.free (b : ByteBuf) : IO Unit` -- no-op (see the section

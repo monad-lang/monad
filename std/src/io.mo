@@ -10,6 +10,7 @@
 // self-hosted loader does -- a bare `use path {...}` here resolves
 // fine self-hosted but fails "module not found: path" under `cargo
 // run`. Qualified works identically on both sides.
+use init::shared {Shared, Shared.get}
 use lib::path {Path}
 use lib::bytebuf {
   ByteBuf, ByteBuf.alloc, ByteBuf.copy_into, ByteBuf.free, ByteBuf.length,
@@ -49,28 +50,31 @@ pub def IO.write_file_bytes (path : Path) (bytes : List U8) : IO (Result StreamE
 def IO.write_bytes_opened (opened : Result StreamError FdStream) (bytes : List U8) : IO (Result StreamError Unit) :=
   match opened {
     Result.err e => IO.pure (Result.err e),
-    Result.ok s => IO.write_bytes_all s bytes
+    Result.ok s => IO.write_bytes_all (Shared.of s) bytes
   }
 
-def IO.write_bytes_all (s : FdStream) (bytes : List U8) : IO (Result StreamError Unit) := do {
+/// The stream is written and then closed, so it travels as a `Shared`
+/// handle: `Shared.get` is a read, and the close is a second read of the
+/// same owned descriptor.
+def IO.write_bytes_all (s : Shared FdStream) (bytes : List U8) : IO (Result StreamError Unit) := do {
   let buf <- ByteBuf.of_list bytes;
-  let r <- Stream.write s buf;
+  let r <- Stream.write (Shared.get s) buf;
   let _ <- ByteBuf.free buf;
-  let _ <- Stream.close s;
+  let _ <- Stream.close (Shared.get s);
   return (IO.written r)
 }
 
 def IO.write_opened (opened : Result StreamError FdStream) (content : String) : IO (Result StreamError Unit) :=
   match opened {
     Result.err e => IO.pure (Result.err e),
-    Result.ok s => IO.write_all s content
+    Result.ok s => IO.write_all (Shared.of s) content
   }
 
-def IO.write_all (s : FdStream) (content : String) : IO (Result StreamError Unit) := do {
+def IO.write_all (s : Shared FdStream) (content : String) : IO (Result StreamError Unit) := do {
   let buf <- ByteBuf.of_string content;
-  let r <- Stream.write s buf;
+  let r <- Stream.write (Shared.get s) buf;
   let _ <- ByteBuf.free buf;
-  let _ <- Stream.close s;
+  let _ <- Stream.close (Shared.get s);
   return (IO.written r)
 }
 
@@ -103,12 +107,12 @@ pub def IO.read_file_bytes (path : Path) : IO (Result StreamError (List U8)) := 
 def IO.read_bytes_opened (opened : Result StreamError FdStream) : IO (Result StreamError (List U8)) :=
   match opened {
     Result.err e => IO.pure (Result.err e),
-    Result.ok s => IO.read_bytes_all s
+    Result.ok s => IO.read_bytes_all (Shared.of s)
   }
 
-def IO.read_bytes_all (s : FdStream) : IO (Result StreamError (List U8)) := do {
+def IO.read_bytes_all (s : Shared FdStream) : IO (Result StreamError (List U8)) := do {
   let chunks <- IO.read_chunks s List.empty;
-  let _ <- Stream.close s;
+  let _ <- Stream.close (Shared.get s);
   IO.read_bytes_joined chunks
 }
 
@@ -124,31 +128,33 @@ def IO.read_bytes_flatten (bufs : List ByteBuf) : IO (Result StreamError (List U
     List.cons one rest =>
       match rest {
         List.empty => IO.buf_bytes_result one,
-        List.cons _ _ => IO.gather_bytes bufs
+        List.cons _ _ => IO.gather_bytes (List.cons one rest)
       }
   }
 
 def IO.buf_bytes_result (b : ByteBuf) : IO (Result StreamError (List U8)) := do {
-  let bytes <- ByteBuf.to_list b (ByteBuf.length b);
+  let src := Shared.of b;
+  let n := ByteBuf.length (Shared.get src);
+  let bytes <- ByteBuf.to_list (Shared.get src) n;
   let _ <- ByteBuf.free b;
   return (Result.ok bytes)
 }
 
 def IO.gather_bytes (bufs : List ByteBuf) : IO (Result StreamError (List U8)) := do {
-  let dst <- ByteBuf.alloc (IO.total_length bufs);
-  let _ <- IO.copy_chunks dst 0 bufs;
-  IO.buf_bytes_result dst
+  let dst <- ByteBuf.alloc (IO.total_length (Shared.of bufs));
+  let dst2 <- IO.copy_chunks dst 0 bufs;
+  IO.buf_bytes_result dst2
 }
 
 def IO.read_opened (opened : Result StreamError FdStream) : IO (Result StreamError String) :=
   match opened {
     Result.err e => IO.pure (Result.err e),
-    Result.ok s => IO.read_all s
+    Result.ok s => IO.read_all (Shared.of s)
   }
 
-def IO.read_all (s : FdStream) : IO (Result StreamError String) := do {
+def IO.read_all (s : Shared FdStream) : IO (Result StreamError String) := do {
   let chunks <- IO.read_chunks s List.empty;
-  let _ <- Stream.close s;
+  let _ <- Stream.close (Shared.get s);
   IO.read_joined chunks
 }
 
@@ -166,17 +172,18 @@ def IO.read_text (bufs : List ByteBuf) : IO (Result StreamError String) := do {
 /// The chunks read so far are `acc_rev`, newest first. Every chunk is
 /// freed on the error path; on success the caller owns them.
 #[terminating]
-def IO.read_chunks (s : FdStream) (acc_rev : List ByteBuf) : IO (Result StreamError (List ByteBuf)) := do {
-  let r <- Stream.read s IO.read_chunk_size;
+def IO.read_chunks (s : Shared FdStream) (acc_rev : List ByteBuf) : IO (Result StreamError (List ByteBuf)) := do {
+  let r <- Stream.read (Shared.get s) IO.read_chunk_size;
   IO.read_chunk_got s acc_rev r
 }
 
 #[terminating]
-def IO.read_chunk_got (s : FdStream) (acc_rev : List ByteBuf) (r : Result StreamError ByteBuf) : IO (Result StreamError (List ByteBuf)) :=
+def IO.read_chunk_got (s : Shared FdStream) (acc_rev : List ByteBuf) (r : Result StreamError ByteBuf) : IO (Result StreamError (List ByteBuf)) :=
   match r {
     Result.err e => IO.read_failed acc_rev e,
     Result.ok buf =>
-      if ByteBuf.length buf == 0
+      let src := Shared.of buf in
+      if ByteBuf.length (Shared.get src) == 0
       then IO.read_at_eof acc_rev buf
       else IO.read_chunks s (List.cons buf acc_rev)
   }
@@ -213,43 +220,48 @@ def IO.chunks_text (bufs : List ByteBuf) : IO String :=
     List.cons one rest =>
       match rest {
         List.empty => IO.buf_text one,
-        List.cons _ _ => IO.gathered_text bufs
+        List.cons _ _ => IO.gathered_text (List.cons one rest)
       }
   }
 
 def IO.buf_text (b : ByteBuf) : IO String := do {
-  let text <- ByteBuf.to_string b (ByteBuf.length b);
+  let src := Shared.of b;
+  let n := ByteBuf.length (Shared.get src);
+  let text <- ByteBuf.to_string (Shared.get src) n;
   let _ <- ByteBuf.free b;
   return text
 }
 
 def IO.gathered_text (bufs : List ByteBuf) : IO String := do {
-  let dst <- ByteBuf.alloc (IO.total_length bufs);
-  let _ <- IO.copy_chunks dst 0 bufs;
-  IO.buf_text dst
+  let dst <- ByteBuf.alloc (IO.total_length (Shared.of bufs));
+  let dst2 <- IO.copy_chunks dst 0 bufs;
+  IO.buf_text dst2
 }
 
 #[terminating]
-def IO.total_length (bufs : List ByteBuf) : I64 :=
-  match bufs {
+def IO.total_length (bufs : Shared (List ByteBuf)) : I64 :=
+  match Shared.get bufs {
     List.empty => 0,
-    List.cons b rest => ByteBuf.length b + IO.total_length rest
+    List.cons b rest => ByteBuf.length b + IO.total_length (Shared.of rest)
   }
 
-/// Copy each of `bufs` into `dst` from `offset` on, freeing each.
+/// Copy each of `bufs` into `dst` from `offset` on, freeing each. The
+/// destination is consumed and returned (view-types P2's shape), so a
+/// linear caller never mentions it twice.
 #[terminating]
-def IO.copy_chunks (dst : ByteBuf) (offset : I64) (bufs : List ByteBuf) : IO Unit :=
+def IO.copy_chunks (dst : ByteBuf) (offset : I64) (bufs : List ByteBuf) : IO ByteBuf :=
   match bufs {
-    List.empty => IO.pure Unit.unit,
+    List.empty => IO.pure dst,
     List.cons b rest => IO.copy_chunk dst offset b rest
   }
 
 #[terminating]
-def IO.copy_chunk (dst : ByteBuf) (offset : I64) (b : ByteBuf) (rest : List ByteBuf) : IO Unit := do {
-  let n := ByteBuf.length b;
-  let _ <- ByteBuf.copy_into dst offset b;
+def IO.copy_chunk (dst : ByteBuf) (offset : I64) (b : ByteBuf) (rest : List ByteBuf) : IO ByteBuf := do {
+  let src := Shared.of b;
+  let n := ByteBuf.length (Shared.get src);
+  let dst2 <- ByteBuf.copy_into dst offset (Shared.get src);
   let _ <- ByteBuf.free b;
-  IO.copy_chunks dst (offset + n) rest
+  IO.copy_chunks dst2 (offset + n) rest
 }
 
 #[native "file_exists"]

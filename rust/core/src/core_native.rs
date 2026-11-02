@@ -1797,10 +1797,11 @@ fn bytebuf_truncate(args: &[Value], natives: &NativeTable) -> Result<Value, Core
   raw_io_wrap(natives, unit_value())
 }
 
-/// `bytebuf_copy_into : ByteBuf -> I64 -> ByteBuf -> RawIO Unit` -- copy
-/// all of `src` into `dst` at `offset`, clamped to `dst`'s length (never
-/// grows it); an offset outside `[0, len]` copies nothing. `src` is
-/// cloned out first, so `dst == src` cannot double-borrow the registry.
+/// `bytebuf_copy_into : ByteBuf -> I64 -> ByteBuf -> RawIO ByteBuf` --
+/// copy all of `src` into `dst` at `offset`, clamped to `dst`'s length
+/// (never grows it); an offset outside `[0, len]` copies nothing. `src`
+/// is cloned out first, so `dst == src` cannot double-borrow the
+/// registry. Returns `dst` (the consumed-and-returned handle).
 fn bytebuf_copy_into(args: &[Value], natives: &NativeTable) -> Result<Value, CoreEvalError> {
   if args.len() < 3 {
     return Err(CoreEvalError::NativeArgError(
@@ -1823,7 +1824,7 @@ fn bytebuf_copy_into(args: &[Value], natives: &NativeTable) -> Result<Value, Cor
   .ok_or_else(|| {
     CoreEvalError::NativeArgError(format!("bytebuf_copy_into: no buffer for handle {dst}"))
   })?;
-  raw_io_wrap(natives, unit_value())
+  raw_io_wrap(natives, args[0].clone())
 }
 
 // --- `std/stream.mo`'s byte streams --------------------------------
