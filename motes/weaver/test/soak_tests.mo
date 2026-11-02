@@ -1,10 +1,10 @@
 // mty / weaver / soak -- a long run must not grow the native stack. Every
 // frame of the tui loop runs through a chain of IO binds whose continuations
-// the compiled backend calls inside `monad_io_bind`'s C frame; before the
-// segmented loop a long session died with SIGSEGV. A 2 MiB stack and a
-// 200-frame budget make that fast: the pre-fix loop overflows inside the
-// 3000-key burst (one frame per key), the fixed one keeps answering and
-// still restores the terminal. Ported from pty_repro_soak.py (retired).
+// the compiled backend calls inside `monad_io_bind`'s C frame; a recursive
+// frame loop died with SIGSEGV in a long session. With a 2 MiB stack a
+// recursive loop overflows inside the 3000-key burst (one frame per key);
+// the `IO.iterate` loop keeps answering and still restores the terminal.
+// Ported from pty_repro_soak.py (retired).
 use mty::spawn {Mty, Output}
 use mty::check {Check.report}
 use weaver::mty_support {run_gated, with_root, fixture_path, spawn, rss_kb}
@@ -33,7 +33,7 @@ def soak_go (m : Mty) : IO Bool := do {
     let a <- Check.report "the initial frame renders" up;
     let sent <- burst m 0;
     let o1 <- Mty.output m;
-    let b <- Check.report "3000 frames without a segfault (stack 2 MiB, budget 200)"
+    let b <- Check.report "3000 frames without a segfault (stack 2 MiB)"
         (Bool.and (sent == soak_keys) (Bool.not o1.eof));
     // Ctrl+U clears the long input: one more frame, still answered.
     Mty.send_text m "\u{15}";
@@ -58,8 +58,7 @@ def soak_run (bin : String) (root : String) : IO Bool := do {
     let turns <- fixture_path "turns_select.json";
     let env : List (Pair String (Option String)) :=
         List.cons (Pair.pair "MONAD_STACK_BYTES" (Option.some "2097152"))
-        (List.cons (Pair.pair "MONAD_TUI_FRAME_BUDGET" (Option.some "200"))
-        (List.cons (Pair.pair "WEAVER_LOG_DIR" (Option.some (String.concat root "/debug"))) List.empty));
+        (List.cons (Pair.pair "WEAVER_LOG_DIR" (Option.some (String.concat root "/debug"))) List.empty);
     let r <- spawn bin "mock" 24 80 root (Option.some turns) env;
     match r {
         Result.err e => do { IO.println (String.concat "FAIL mty soak spawn: " e); return false },
@@ -73,3 +72,45 @@ def test_soak_long_run_keeps_the_stack_flat : IO Bool :=
 
 def test_soak_body (bin : String) : IO Bool :=
     with_root "soak" (fn (root : String) => soak_run bin root)
+
+// A pending turn redraws the spinner ten times a second. A recursive frame
+// loop kept every one of those frames (and the model and screen each
+// pointed at) alive: ~1 MB per redraw, 600 MB a minute at 50x200. The
+// `IO.iterate` loop must hold RSS flat while the turn waits.
+def pending_bound_kb : I64 := 20000
+
+def pending_go (m : Mty) : IO Bool := do {
+    let up <- Mty.wait_until m saw_alt 8000;
+    let a <- Check.report "the initial frame renders" up;
+    Mty.send_text m "hello\r";
+    Mty.pump m 3000;
+    let before <- rss_kb (Mty.child_pid m);
+    Mty.pump m 20000;
+    let after <- rss_kb (Mty.child_pid m);
+    IO.println (String.concat "INFO VmRSS over 20 s of a pending turn: " (String.concat (I64.to_string before)
+        (String.concat " -> " (String.concat (I64.to_string after) " kB"))));
+    let b <- Check.report "RSS stays flat while a turn is pending" (I64.lt (after - before) pending_bound_kb);
+    Mty.send_text m "\u{3}";
+    Mty.pump m 400;
+    Mty.send_text m "\u{3}";
+    let _ <- Mty.wait_until m (fn (o : Output) => o.eof) 6000;
+    let _ <- Mty.reap m;
+    Mty.finish m;
+    return (a && b)
+}
+
+def pending_run (bin : String) (root : String) : IO Bool := do {
+    let turns <- fixture_path "turns_slow.json";
+    let env : List (Pair String (Option String)) :=
+        [Pair.pair "SHUTTLE_MOCK_DELAY_MS" (Option.some "60000"),
+         Pair.pair "WEAVER_LOG_DIR" (Option.some (String.concat root "/debug"))];
+    let r <- spawn bin "mock" 50 200 root (Option.some turns) env;
+    match r {
+        Result.err e => do { IO.println (String.concat "FAIL mty pending spawn: " e); return false },
+        Result.ok m => pending_go m
+    }
+}
+
+#[test]
+def test_soak_pending_turn_keeps_rss_flat : IO Bool :=
+    run_gated "mty weaver pending-turn rss" (fn (bin : String) => with_root "pending" (fn (root : String) => pending_run bin root))

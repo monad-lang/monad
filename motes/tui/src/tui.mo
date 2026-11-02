@@ -93,7 +93,7 @@ use lib::terminal {
     Terminal.leave_raw_mode, Terminal.reset_style, Terminal.size
 }
 use std::concurrent::fiber {Fiber, FiberError, forkIO, pollFiber}
-use std::io { IO.flush_stdout, IO.write_stdout, IO.get_env }
+use std::io { IO.flush_stdout, IO.write_stdout }
 use std::list { List.length }
 
 /// Commands `update` returns instead of performing. `none` is the
@@ -165,16 +165,8 @@ pub type App (S : Type) (M : Type) {
 /// each event batch through `update` and redraws whenever the batch
 /// was nonempty (so ticks animate, real keys move, resize reflows).
 /// Restores the terminal on quit or EOF -- every exit from `loop_app`
-/// lands in the one `restore_terminal` below it.
+/// lands in `after_frame`'s one `restore_terminal`.
 pub def run_app {S : Type} {M : Type} (a : App S M) : IO Unit := do {
-    let budget <- frame_budget;
-    run_app_with a budget
-}
-
-/// `run_app` with an explicit segment budget. `MONAD_TUI_FRAME_BUDGET` is the
-/// test knob (a pty soak sets it small together with `MONAD_STACK_BYTES`, so
-/// a stack overrun fails in seconds); unset or unparsable keeps the default.
-pub def run_app_with {S : Type} {M : Type} (a : App S M) (budget : I64) : IO Unit := do {
     let size <- Terminal.size;
     let _ <- Terminal.enter_raw_mode;
     Terminal.enter_alt_screen;
@@ -183,62 +175,23 @@ pub def run_app_with {S : Type} {M : Type} (a : App S M) (budget : I64) : IO Uni
     Terminal.enable_bracketed_paste;
     Terminal.clear_screen;
     Terminal.cursor_move 0 0;
-    run_with_size a (if budget < 1 then 1 else budget) size
-}
-
-/// The decimal value of a one-character digit string, or none.
-def digit_value (ch : String) : Option I64 :=
-    if ch == "0" then Option.some 0
-    else if ch == "1" then Option.some 1
-    else if ch == "2" then Option.some 2
-    else if ch == "3" then Option.some 3
-    else if ch == "4" then Option.some 4
-    else if ch == "5" then Option.some 5
-    else if ch == "6" then Option.some 6
-    else if ch == "7" then Option.some 7
-    else if ch == "8" then Option.some 8
-    else if ch == "9" then Option.some 9
-    else Option.none
-
-#[partial]
-def parse_decimal_go (s : String) (i : I64) (acc : I64) : Option I64 :=
-    if Bool.not (i < String.length s)
-    then Option.some acc
-    else match digit_value (String.slice s i 1) {
-        Option.none => Option.none,
-        Option.some d => parse_decimal_go s (i + 1) (acc * 10 + d),
-    }
-
-/// A non-negative decimal integer, or none for empty/junk.
-pub def parse_decimal (s : String) : Option I64 :=
-    let t : String := String.trim s in
-    if String.is_empty t then Option.none else parse_decimal_go t 0 0
-
-def frame_budget : IO I64 := do {
-    let v <- IO.get_env "MONAD_TUI_FRAME_BUDGET";
-    match v {
-        Option.none => IO.pure loop_frame_budget,
-        Option.some s => match parse_decimal s {
-            Option.some n => IO.pure (if n < 1 then 1 else n),
-            Option.none => IO.pure loop_frame_budget,
-        },
-    }
+    run_with_size a size
 }
 
 /// The loop proper: build the reader from the probed size, fold frames
 /// until quit/EOF, then restore. The back buffer starts as a
 /// same-sized blank screen: `diff` refuses to diff different-sized
 /// screens, so a wrong seed would swallow the first frame.
-def run_with_size {S : Type} {M : Type} (a : App S M) (budget : I64) (size : Pair I64 I64) : IO Unit :=
+def run_with_size {S : Type} {M : Type} (a : App S M) (size : Pair I64 I64) : IO Unit :=
     match size {
         Pair.pair rows cols =>
             match a {
-                App.app init _ _ vw _ => run_loop a (fn (_ : S) => true) init vw rows cols budget,
-                App.app_ticked init _ _ vw _ redraw _ => run_loop a redraw init vw rows cols budget,
+                App.app init _ _ vw _ => run_loop a (fn (_ : S) => true) init vw rows cols,
+                App.app_ticked init _ _ vw _ redraw _ => run_loop a redraw init vw rows cols,
             }
     }
 
-def run_loop {S : Type} {M : Type} (a : App S M) (redraw : S -> Bool) (init : S) (vw : S -> Widget) (rows : I64) (cols : I64) (budget : I64) : IO Unit := do {
+def run_loop {S : Type} {M : Type} (a : App S M) (redraw : S -> Bool) (init : S) (vw : S -> Widget) (rows : I64) (cols : I64) : IO Unit := do {
     let reader : InputReader := input_reader rows cols;
     // An initial frame BEFORE the first `Input.produce`: with no ticks
     // (`tick_ms < 0`) the first produce blocks until a key, and the
@@ -246,38 +199,33 @@ def run_loop {S : Type} {M : Type} (a : App S M) (redraw : S -> Bool) (init : S)
     // This draw also flushes run_app's setup writes, which otherwise sat
     // in the stdout buffer behind it.
     let prev <- draw_frame vw init reader (empty_screen rows cols) true false;
-    run_segments a redraw reader init prev List.empty List.empty budget
+    let start : LoopOutcome S M := LoopOutcome.loop_more init prev reader List.empty List.empty;
+    IO.iterate start (frame_step a redraw)
 }
 
-/// Drive one segment, then either restore (quit/EOF) or START THE NEXT ONE
-/// from the state the segment handed back.
-///
-/// WHY THE LOOP IS SEGMENTED: every frame of `loop_app`'s cycle runs inside
-/// a chain of `IO` do-binds. Compiled, `monad_io_bind` CALLS the
-/// continuation inside its own C frame (`runtime/src/runtime_core.c`), and
-/// the compiler's tail-call rewrite covers only pure SELF-recursion
-/// (`lang/src/codegen/tco.mo`) -- so the six mutually recursive defs here
-/// grew the native stack for as long as weaver ran. A long session died
-/// with SIGSEGV inside whatever function happened to be called next, and
-/// the 128 MB stack only delayed it. Returning to this def every
-/// `loop_frame_budget` frames unwinds that stack; the restart costs one
-/// frame, so the practical ceiling is `budget * (stack / restart frame)`
-/// frames rather than one unbounded chain.
-#[terminating]
-def run_segments {S : Type} {M : Type} (a : App S M) (redraw : S -> Bool) (reader : InputReader) (model : S) (prev : Screen) (pending : List M) (turns : List (PendingTurn M)) (budget : I64) : IO Unit := do {
-    let res <- loop_app a redraw reader model prev pending turns budget;
-    after_segment a redraw res budget
-}
+/// One frame, run by `IO.iterate`: `loop_app` folds one batch and hands
+/// the live state back, so each frame's IO returns before the next starts.
+/// A recursive do-loop here nested one native frame per redraw (compiled
+/// `monad_io_bind` calls its continuation inside its own C frame), and the
+/// collector kept every past model and screen those frames referenced --
+/// ~1 MB per redraw, 10 redraws a second during a turn. `IO.iterate` is a
+/// stopgap until plain recursion is heapless
+/// (plans/bootstrapping/heapless-loops.md).
+def frame_step {S : Type} {M : Type} (a : App S M) (redraw : S -> Bool) (st : LoopOutcome S M) : IO (Option (LoopOutcome S M)) :=
+    match st {
+        LoopOutcome.loop_more model prev reader pending turns =>
+            Monad.bind (loop_app a redraw reader model prev pending turns) (fn (res : LoopOutcome S M) => after_frame res),
+        LoopOutcome.loop_done => IO.pure (Option.none : Option (LoopOutcome S M)),
+    }
 
-/// What a segment's result means: restore, or start the next segment.
-/// `res` is a typed parameter rather than the action result matched in a
-/// do-block -- a bare `none` there is ambiguous with `Cmd.none`.
-#[terminating]
-def after_segment {S : Type} {M : Type} (a : App S M) (redraw : S -> Bool) (res : LoopOutcome S M) (budget : I64) : IO Unit :=
+/// Quit/EOF restores the terminal and ends the iteration.
+def after_frame {S : Type} {M : Type} (res : LoopOutcome S M) : IO (Option (LoopOutcome S M)) :=
     match res {
-        LoopOutcome.loop_more model2 prev2 reader2 pending2 turns2 =>
-            run_segments a redraw reader2 model2 prev2 pending2 turns2 budget,
-        LoopOutcome.loop_done => restore_terminal,
+        LoopOutcome.loop_done => do {
+            restore_terminal;
+            IO.pure (Option.none : Option (LoopOutcome S M))
+        },
+        LoopOutcome.loop_more _ _ _ _ _ => IO.pure (Option.some res),
     }
 
 /// Whether a batch needs a frame: queued messages and real input always
@@ -311,26 +259,25 @@ pub def App.has_tick (evs : List Event) : Bool :=
 /// One iteration: poll the pending turn fibers, produce a batch of raw
 /// events, lift them to `M`, fold, draw if it was nonempty (or forced),
 /// recurse with the dispatched/performed messages as the next batch's
-/// prefix and the pending handles still owned here. `budget` counts the
-/// frames left in this segment; `resume_or_loop` hands the state back to
-/// `run_segments` when it runs out (see that def for why).
+/// prefix and the pending handles still owned here, handed back to
+/// `frame_step` (see that def for why every frame returns).
 /// `#[terminating]`: the loop's progress is the reader's stream, not a
 /// structural argument.
 #[terminating]
-def loop_app {S : Type} {M : Type} (a : App S M) (redraw : S -> Bool) (reader : InputReader) (model : S) (prev : Screen) (pending : List M) (turns : List (PendingTurn M)) (budget : I64) : IO (LoopOutcome S M) :=
+def loop_app {S : Type} {M : Type} (a : App S M) (redraw : S -> Bool) (reader : InputReader) (model : S) (prev : Screen) (pending : List M) (turns : List (PendingTurn M)) : IO (LoopOutcome S M) :=
     match a {
         // Explicit `Monad.bind` on the poll (the do-block form's binder
         // is untyped on the self-hosted side, and a
         // polymorphic-`.mo`-def result is exactly where its inference
         // goes wrong -- `poll_turns`'s own comment).
         App.app _ on_ev upd vw tick_ms =>
-            loop_body a redraw on_ev upd vw tick_ms (fn (_ : S) => IO.pure true) reader model prev pending turns budget,
+            loop_body redraw on_ev upd vw tick_ms (fn (_ : S) => IO.pure true) reader model prev pending turns,
         App.app_ticked _ on_ev upd vw tick_ms _ reads =>
-            loop_body a redraw on_ev upd vw tick_ms reads reader model prev pending turns budget,
+            loop_body redraw on_ev upd vw tick_ms reads reader model prev pending turns,
     }
 
 #[terminating]
-def loop_body {S : Type} {M : Type} (a : App S M) (redraw : S -> Bool) (on_ev : Event -> M) (upd : S -> M -> Pair S (Cmd M)) (vw : S -> Widget) (tick_ms : I64) (reads : S -> IO Bool) (reader : InputReader) (model : S) (prev : Screen) (pending : List M) (turns : List (PendingTurn M)) (budget : I64) : IO (LoopOutcome S M) :=
+def loop_body {S : Type} {M : Type} (redraw : S -> Bool) (on_ev : Event -> M) (upd : S -> M -> Pair S (Cmd M)) (vw : S -> Widget) (tick_ms : I64) (reads : S -> IO Bool) (reader : InputReader) (model : S) (prev : Screen) (pending : List M) (turns : List (PendingTurn M)) : IO (LoopOutcome S M) :=
     Monad.bind (poll_turns turns) (fn (polled : Pair (List M) (List (PendingTurn M))) => do {
         match polled {
             Pair.pair tmsgs turns2 => do {
@@ -340,7 +287,7 @@ def loop_body {S : Type} {M : Type} (a : App S M) (redraw : S -> Bool) (on_ev : 
                 // it.
                 let batched : List M := List.append pending tmsgs;
                 let out <- produce_for turns2 reader tick_ms model reads;
-                after_produce a redraw upd vw on_ev model prev batched turns2 out budget
+                after_produce redraw upd vw on_ev model prev batched turns2 out
             }
         }
     })
@@ -381,8 +328,8 @@ def PendingTurn.message {M : Type} (t : PendingTurn M) (r : Result FiberError M)
         Result.err e => match t { PendingTurn.waiting _ on_error => on_error e }
     }
 
-/// Why the frame loop returned. `loop_more` is a spent budget's hand-back:
-/// the live state `run_segments` restarts with. `loop_done` is quit/EOF.
+/// One frame's result. `loop_more` is the live state the next frame starts
+/// from; `loop_done` is quit/EOF.
 /// A two-constructor `type`, not a `struct`: it is generic over both `S`
 /// and `M` (the same reason `PendingTurn` above is one), and `Option`
 /// cannot carry it unambiguously (`none` collides with `Cmd.none`).
@@ -391,10 +338,6 @@ type LoopOutcome (S : Type) (M : Type) {
     loop_more (model : S) (prev : Screen) (reader : InputReader) (pending : List M) (turns : List (PendingTurn M))
 }
 
-/// Frames per segment; see `run_segments` for why the loop is segmented.
-/// Sized so one segment's own bind chain stays far below the 128 MB native
-/// stack while the restart count stays far below what that stack can hold.
-pub def loop_frame_budget : I64 := 10000
 
 
 /// Every pending turn fiber, polled once. A fiber that has completed
@@ -433,16 +376,16 @@ def split_head {M : Type} (head : Option (Result FiberError M)) (t : PendingTurn
 
 /// The produce step: a closed reader folds and draws its FINAL batch
 /// (a piped script's last keystrokes still count) and then stops -- a
-/// controlled exit, `run_segments` restores after us.
+/// controlled exit, `after_frame` restores after us.
 #[terminating]
-def after_produce {S : Type} {M : Type} (a : App S M) (redraw : S -> Bool) (upd : S -> M -> Pair S (Cmd M)) (vw : S -> Widget) (on_ev : Event -> M) (model : S) (prev : Screen) (pending : List M) (turns : List (PendingTurn M)) (out : Pair (List Event) InputReader) (budget : I64) : IO (LoopOutcome S M) :=
+def after_produce {S : Type} {M : Type} (redraw : S -> Bool) (upd : S -> M -> Pair S (Cmd M)) (vw : S -> Widget) (on_ev : Event -> M) (model : S) (prev : Screen) (pending : List M) (turns : List (PendingTurn M)) (out : Pair (List Event) InputReader) : IO (LoopOutcome S M) :=
     match out {
         Pair.pair evs reader2 =>
             let msgs : List M := List.map on_ev evs in
             let dirty : Bool := App.should_draw redraw model pending evs in
             if reader2.closed
             then final_frame upd vw reader2 model prev pending msgs
-            else step_loop a redraw upd vw reader2 model prev turns pending msgs dirty budget
+            else step_loop upd vw reader2 model prev turns pending msgs dirty
     }
 
 /// The exit draw: one fold, one frame, no recursion -- the loop is over
@@ -473,63 +416,58 @@ def final_draw {S : Type} {M : Type} (vw : S -> Widget) (reader : InputReader) (
 /// The batch `step_loop` folds: `pending` (last frame's
 /// dispatched/performed messages) in front of the freshly produced ones.
 #[terminating]
-def step_loop {S : Type} {M : Type} (a : App S M) (redraw : S -> Bool) (upd : S -> M -> Pair S (Cmd M)) (vw : S -> Widget) (reader : InputReader) (model : S) (prev : Screen) (turns : List (PendingTurn M)) (pending : List M) (msgs : List M) (dirty : Bool) (budget : I64) : IO (LoopOutcome S M) :=
+def step_loop {S : Type} {M : Type} (upd : S -> M -> Pair S (Cmd M)) (vw : S -> Widget) (reader : InputReader) (model : S) (prev : Screen) (turns : List (PendingTurn M)) (pending : List M) (msgs : List M) (dirty : Bool) : IO (LoopOutcome S M) :=
     let batch : List M := List.append pending msgs in
     do {
         let stepped <- step_batch upd model batch;
-        after_step a redraw vw reader prev turns batch stepped dirty budget
+        after_step vw reader prev turns batch stepped dirty
     }
 
 /// The fold's continuation: `quit` ends the loop, anything else draws
 /// the frame (when the batch was nonempty, or `perform` forced a
 /// repaint) and recurses with the queued `dispatch`/`perform` messages.
 #[terminating]
-def after_step {S : Type} {M : Type} (a : App S M) (redraw : S -> Bool) (vw : S -> Widget) (reader : InputReader) (prev : Screen) (turns : List (PendingTurn M)) (batch : List M) (stepped : Pair (Pair S (Cmd M)) (Pair (List M) Bool)) (dirty : Bool) (budget : I64) : IO (LoopOutcome S M) :=
+def after_step {S : Type} {M : Type} (vw : S -> Widget) (reader : InputReader) (prev : Screen) (turns : List (PendingTurn M)) (batch : List M) (stepped : Pair (Pair S (Cmd M)) (Pair (List M) Bool)) (dirty : Bool) : IO (LoopOutcome S M) :=
     match stepped {
-        Pair.pair inner tail => continue_step a redraw vw reader prev turns batch inner tail dirty budget
+        Pair.pair inner tail => continue_step vw reader prev turns batch inner tail dirty
     }
 
-/// One frame's end: continue in this segment, or hand the live state back
-/// to `run_segments` once the budget is spent. The hand-back IS the
-/// stack unwind (`run_segments`'s own note).
-#[terminating]
-def resume_or_loop {S : Type} {M : Type} (a : App S M) (redraw : S -> Bool) (reader : InputReader) (model : S) (prev : Screen) (pending : List M) (turns : List (PendingTurn M)) (budget : I64) : IO (LoopOutcome S M) :=
-    if budget < 1
-    then IO.pure (LoopOutcome.loop_more model prev reader pending turns : LoopOutcome S M)
-    else loop_app a redraw reader model prev pending turns (budget - 1)
+/// One frame's end: hand the live state back to `frame_step`.
+def hand_back {S : Type} {M : Type} (reader : InputReader) (model : S) (prev : Screen) (pending : List M) (turns : List (PendingTurn M)) : IO (LoopOutcome S M) :=
+    IO.pure (LoopOutcome.loop_more model prev reader pending turns : LoopOutcome S M)
 
 /// Draw the frame, then continue (or hand back) -- a typed def rather than a
 /// do-block in a `match` arm, which the checker mis-infers (AGENTS' recorded
 /// "let x <- inside a do-block inside a match arm" shape).
 #[terminating]
-def resume_after_draw {S : Type} {M : Type} (a : App S M) (redraw : S -> Bool) (vw : S -> Widget) (reader : InputReader) (prev : Screen) (turns : List (PendingTurn M)) (model2 : S) (pending2 : List M) (dirty : Bool) (forced : Bool) (budget : I64) : IO (LoopOutcome S M) := do {
+def resume_after_draw {S : Type} {M : Type} (vw : S -> Widget) (reader : InputReader) (prev : Screen) (turns : List (PendingTurn M)) (model2 : S) (pending2 : List M) (dirty : Bool) (forced : Bool) : IO (LoopOutcome S M) := do {
     let frame <- draw_frame vw model2 reader prev dirty forced;
-    resume_or_loop a redraw reader model2 frame pending2 turns budget
+    hand_back reader model2 frame pending2 turns
 }
 
 /// The `perform_async` arm: fork, draw, and continue with the new handle
 /// joined to the pending set.
 #[terminating]
-def resume_after_fork {S : Type} {M : Type} (a : App S M) (redraw : S -> Bool) (vw : S -> Widget) (reader : InputReader) (prev : Screen) (turns : List (PendingTurn M)) (model2 : S) (pending2 : List M) (f : Fiber M) (on_error : FiberError -> M) (dirty : Bool) (forced : Bool) (budget : I64) : IO (LoopOutcome S M) := do {
+def resume_after_fork {S : Type} {M : Type} (vw : S -> Widget) (reader : InputReader) (prev : Screen) (turns : List (PendingTurn M)) (model2 : S) (pending2 : List M) (f : Fiber M) (on_error : FiberError -> M) (dirty : Bool) (forced : Bool) : IO (LoopOutcome S M) := do {
     let frame <- draw_frame vw model2 reader prev dirty forced;
-    resume_or_loop a redraw reader model2 frame pending2 (List.cons (PendingTurn.waiting f on_error) turns) budget
+    hand_back reader model2 frame pending2 (List.cons (PendingTurn.waiting f on_error) turns)
 }
 
 /// The `perform_async` arm's fork. Its own def, not a `let f <- ...` in a
 /// do-block in a match arm: that shape is a recorded checker trap, and with
 /// a generic outcome here it solved the outcome's `M` as the monad (`IO`).
 #[terminating]
-def resume_after_fork_start {S : Type} {M : Type} (a : App S M) (redraw : S -> Bool) (vw : S -> Widget) (reader : InputReader) (prev : Screen) (turns : List (PendingTurn M)) (model2 : S) (pending2 : List M) (action : Unit -> IO M) (on_error : FiberError -> M) (dirty : Bool) (forced : Bool) (budget : I64) : IO (LoopOutcome S M) := do {
+def resume_after_fork_start {S : Type} {M : Type} (vw : S -> Widget) (reader : InputReader) (prev : Screen) (turns : List (PendingTurn M)) (model2 : S) (pending2 : List M) (action : Unit -> IO M) (on_error : FiberError -> M) (dirty : Bool) (forced : Bool) : IO (LoopOutcome S M) := do {
     // The fork IS this frame's delivery: the handle joins the loop's
     // pending set, and the next `loop_app` polls it before it produces.
     // The handle is consumed exactly once -- here it is born, in
     // `poll_turns` it dies.
     let f <- forkIO action;
-    resume_after_fork a redraw vw reader prev turns model2 pending2 f on_error dirty forced budget
+    resume_after_fork vw reader prev turns model2 pending2 f on_error dirty forced
 }
 
 #[terminating]
-def continue_step {S : Type} {M : Type} (a : App S M) (redraw : S -> Bool) (vw : S -> Widget) (reader : InputReader) (prev : Screen) (turns : List (PendingTurn M)) (batch : List M) (inner : Pair S (Cmd M)) (tail : Pair (List M) Bool) (dirty : Bool) (budget : I64) : IO (LoopOutcome S M) :=
+def continue_step {S : Type} {M : Type} (vw : S -> Widget) (reader : InputReader) (prev : Screen) (turns : List (PendingTurn M)) (batch : List M) (inner : Pair S (Cmd M)) (tail : Pair (List M) Bool) (dirty : Bool) : IO (LoopOutcome S M) :=
     match inner {
         Pair.pair model2 cmd =>
             match cmd {
@@ -537,11 +475,11 @@ def continue_step {S : Type} {M : Type} (a : App S M) (redraw : S -> Bool) (vw :
                 Cmd.perform_async action on_error =>
                     match tail {
                         Pair.pair pending2 forced =>
-                            resume_after_fork_start a redraw vw reader prev turns model2 pending2 action on_error dirty forced budget
+                            resume_after_fork_start vw reader prev turns model2 pending2 action on_error dirty forced
                     },
                 _ => match tail {
                     Pair.pair pending2 forced =>
-                        resume_after_draw a redraw vw reader prev turns model2 pending2 dirty forced budget
+                        resume_after_draw vw reader prev turns model2 pending2 dirty forced
                 }
             }
     }
