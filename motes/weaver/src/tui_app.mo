@@ -42,7 +42,6 @@ use weaver::model {
     Model.refresh_rows, Model.begin_selection, Model.drag_selection, Model.finish_selection,
     Model.clear_input_selection, Model.in_input, Model.input_drag, Model.input_press,
     Model.input_release, Model.input_sel_active, Model.picker_height,
-    PickerState, Picker.init, Picker.selected_model, Picker.move,
     list_length, panel_height, input_placeholder,
 }
 use weaver::ui::rows {DisplayRow, Rows.of_line, Rows.wrap, Rows.take, Rows.drop, Rows.widget}
@@ -87,6 +86,7 @@ use tui::terminal {
 }
 use tui::input {Input.step, InputReader, input_reader}
 use tui::tui {App, Cmd, run_app}
+use tui::widgets::picker {PickerModel, PickerStep, Picker.make, Picker.update}
 use tui::component {Subs, Subs.map, Subs.on_tick}
 use weaver::ui::live {LiveMsg, Live.idle, Live.start, Live.update, Live.request_stop, Live.subscriptions, Live.write_usage, Live.store_usage}
 use init::transformers {ResultT}
@@ -570,7 +570,8 @@ def open_picker_from (m : TuiModel) (models_opt : Option (List String)) : TuiMod
             List.empty => m,
             List.cons _ _ =>
                 let current : String := m.state.run.session.config.model in
-                { m with picker := Option.some (Picker.init models current) },
+                let title : String := String.concat "Select a model — " m.state.provider in
+                { m with picker := Option.some (Picker.make title models current) },
         },
     }
 
@@ -773,39 +774,24 @@ def update_key (m : TuiModel) (k : Key) : Pair TuiModel (Cmd WeaverMsg) :=
         Option.none => editor_key m k,
     }
 
-def picker_moved (m : TuiModel) (p : PickerState) (delta : I64) : Pair TuiModel (Cmd WeaverMsg) :=
-    let p2 : PickerState := Picker.move delta (Model.picker_height m) p in
-    Pair.pair (with_streak_reset (fn (mm : TuiModel) => { mm with picker := Option.some p2 }) m) Cmd.none
-
 def picker_close (m : TuiModel) : Pair TuiModel (Cmd WeaverMsg) :=
     let m2 : TuiModel := { m with picker := Option.none } in
     Pair.pair (with_streak_reset (fn (mm : TuiModel) => mm) m2) repaint_cmd
 
-/// Enter: set the selected model and echo it through the command path,
+/// Enter: set the chosen model and echo it through the command path,
 /// which appends and persists the line and repaints (keeping the store
 /// index in sync).
-def picker_choose (m : TuiModel) (p : PickerState) : Pair TuiModel (Cmd WeaverMsg) :=
-    let chosen : String := Picker.selected_model p in
+def picker_choose (m : TuiModel) (chosen : String) : Pair TuiModel (Cmd WeaverMsg) :=
     let st2 : WeaverState := Commands.set_model m.state chosen in
     let effect : Effect := Effect.ok st2 (String.concat "model: " chosen) in
     let m2 : TuiModel := { m with picker := Option.none } in
     command_result_step (with_streak_reset (fn (mm : TuiModel) => mm) m2) effect
 
-def picker_key (m : TuiModel) (p : PickerState) (k : Key) : Pair TuiModel (Cmd WeaverMsg) :=
-    match k {
-        Key.up => picker_moved m p (0i64 - 1i64),
-        Key.down => picker_moved m p 1i64,
-        Key.page_up => picker_moved m p (0i64 - 10i64),
-        Key.page_down => picker_moved m p 10i64,
-        Key.home => picker_moved m p (0i64 - 999999i64),
-        Key.end => picker_moved m p 999999i64,
-        Key.enter => picker_choose m p,
-        Key.escape => picker_close m,
-        Key.ctrl c =>
-            if String.beq c "c"
-            then picker_close m
-            else Pair.pair (with_streak_reset (fn (mm : TuiModel) => mm) m) Cmd.none,
-        _ => Pair.pair (with_streak_reset (fn (mm : TuiModel) => mm) m) Cmd.none,
+def picker_key (m : TuiModel) (p : PickerModel) (k : Key) : Pair TuiModel (Cmd WeaverMsg) :=
+    match Picker.update (Model.picker_height m) p k {
+        PickerStep.stay p2 => Pair.pair (with_streak_reset (fn (mm : TuiModel) => { mm with picker := Option.some p2 }) m) Cmd.none,
+        PickerStep.choose chosen => picker_choose m chosen,
+        PickerStep.cancel => picker_close m,
     }
 
 /// The editor's key map (the picker is closed).

@@ -16,12 +16,11 @@ use weaver::error {WeaverError}
 use weaver::policy {Mode}
 use weaver::ui::live {LiveModel, LiveMsg, LiveDelta, Live.start, Live.status_text}
 use tui::component {Subs.pure_on}
+use tui::widgets::picker {Picker.count, Picker.selected}
 use weaver::ui::rows {DisplayRow, Rows.of_line, Rows.wrap, Rows.cap_bytes}
 use weaver::model {
     TuiModel, WeaverMsg, init_tui_model, Model.append_block,
     Model.scroll_step, Model.display_rows,
-    PickerState, Picker.count, Picker.selected_model, Picker.init, Picker.move,
-    Picker.window_offset, Picker.visible,
 }
 use weaver::overlay {OverlayState}
 use weaver::store {StoreState, TLine, TLine.plain, TranscriptPage, SessionInfo}
@@ -756,7 +755,7 @@ def test_command_result_opens_the_picker : Bool :=
     match TuiApp.update (model_of Mode.manual) (picker_command picker_models) {
         Pair.pair m2 _ =>
             match m2.picker {
-                Option.some p => Picker.count p == 3 && Picker.selected_model p == "alpha",
+                Option.some p => Picker.count p == 3 && Picker.selected p == "alpha",
                 Option.none => false,
             },
     }
@@ -800,29 +799,6 @@ def test_picker_swallows_typing : Bool :=
                 Pair.pair m2 _ => m2.input.value == "",
             },
     }
-
-#[test]
-def test_picker_move_clamps_at_both_ends : Bool :=
-    // A one-item list still reaches both clamped ends; nothing indexes
-    // past them.
-    let p : PickerState := Picker.init ["only"] "only" in
-    let up : PickerState := Picker.move (0i64 - 1i64) 2i64 p in
-    let down : PickerState := Picker.move 9i64 2i64 p in
-    Picker.selected_model up == "only" && Picker.selected_model down == "only"
-
-#[test]
-def test_picker_window_follows_the_selection : Bool :=
-    let p : PickerState := Picker.init ["a", "b", "c", "d", "e", "f"] "a" in
-    let p2 : PickerState := Picker.move 4i64 2i64 p in
-    let vis : List String := Picker.visible 2i64 p2 in
-    Picker.selected_model p2 == "e"
-        && Picker.window_offset 2i64 p2 == 3i64
-        && List.length vis == 2
-
-#[test]
-def test_picker_init_misses_the_current_name_without_breaking : Bool :=
-    let p : PickerState := Picker.init picker_models "not-listed" in
-    Picker.count p == 3 && Picker.selected_model p == "alpha"
 
 #[test]
 def test_picker_swallows_ctrl_d : Bool :=

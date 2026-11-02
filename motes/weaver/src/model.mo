@@ -39,6 +39,7 @@ use tui::text {
     Text.width, Text.slice_cols, Text.snap_span,
 }
 use std::list {List.intercalate}
+use tui::widgets::picker {PickerModel, Picker.list_height, Picker.view}
 use weaver::ui::live {LiveModel, LiveMsg, LiveView, Live.idle, Live.rows, Live.height, Live.thinking_height, Live.text_height}
 use weaver::ui::rows {
     DisplayRow, Rows.plain, Rows.of_line, Rows.count_line, Rows.count_lines,
@@ -117,96 +118,6 @@ pub struct RowsKey {
     think_stream : I64,
     text_stream : I64,
 }
-
-/// The model picker: the fetched list, the session's current name,
-/// and the selected row. Pure -- the TUI draws it in the transcript
-/// panel and routes keys to it while it is open; no dialog machinery.
-pub struct PickerState {
-    models : List String,
-    current : String,
-    selected : I64,
-    offset : I64,
-}
-
-#[partial]
-def picker_index_of (model : String) (models : List String) (i : I64) : I64 :=
-    match models {
-        List.empty => 0i64 - 1i64,
-        List.cons m rest =>
-            if String.beq m model then i else picker_index_of model rest (i + 1i64),
-    }
-
-#[partial]
-def picker_count (models : List String) : I64 :=
-    match models {
-        List.empty => 0i64,
-        List.cons _ rest => 1i64 + picker_count rest,
-    }
-
-#[partial]
-def picker_at (i : I64) (models : List String) : Option String :=
-    match models {
-        List.empty => Option.none,
-        List.cons m rest => if i < 1i64 then Option.some m else picker_at (i - 1i64) rest,
-    }
-
-#[partial]
-def picker_take (n : I64) (xs : List String) : List String :=
-    if n < 1i64 then List.empty
-    else match xs {
-        List.empty => List.empty,
-        List.cons x rest => List.cons x (picker_take (n - 1i64) rest),
-    }
-
-#[partial]
-def picker_drop (n : I64) (xs : List String) : List String :=
-    if n < 1i64 then xs
-    else match xs {
-        List.empty => xs,
-        List.cons _ rest => picker_drop (n - 1i64) rest,
-    }
-
-pub def Picker.init (models : List String) (current : String) : PickerState :=
-    let idx : I64 := picker_index_of current models 0i64 in
-    let sel : I64 := if idx < 0i64 then 0i64 else idx in
-    { models := models, current := current, selected := sel, offset := 0i64 }
-
-pub def Picker.count (p : PickerState) : I64 := picker_count p.models
-
-pub def Picker.selected_model (p : PickerState) : String :=
-    match picker_at p.selected p.models {
-        Option.none => p.current,
-        Option.some m => m,
-    }
-
-/// Clamp the selection and scroll `offset` so it stays inside a window
-/// of `visible` rows.
-pub def Picker.adjust (visible : I64) (p : PickerState) : PickerState :=
-    let n : I64 := Picker.count p in
-    if n < 1i64 then p
-    else
-        let sel : I64 := clamp p.selected 0i64 (n - 1i64) in
-        let v : I64 := if visible < 1i64 then 1i64 else visible in
-        let off : I64 :=
-            if sel < p.offset then sel
-            else if p.offset + v < sel + 1i64 then sel + 1i64 - v
-            else p.offset in
-        { p with selected := sel, offset := off }
-
-pub def Picker.move (delta : I64) (visible : I64) (p : PickerState) : PickerState :=
-    let sel : I64 := p.selected + delta in
-    Picker.adjust visible { p with selected := sel }
-
-/// The adjusted top row for a `visible`-row window (the view's read
-/// side; `adjust` is what key handling writes).
-pub def Picker.window_offset (visible : I64) (p : PickerState) : I64 :=
-    let adjusted : PickerState := Picker.adjust visible p in
-    adjusted.offset
-
-pub def Picker.visible (visible : I64) (p : PickerState) : List String :=
-    let v : I64 := if visible < 1i64 then 1i64 else visible in
-    let start : I64 := Picker.window_offset v p in
-    picker_take v (picker_drop start p.models)
 
 pub struct TuiModel {
     state : WeaverState,
@@ -298,7 +209,7 @@ pub struct TuiModel {
     dialog_seq : I64 := 0,
     /// The model picker, while `/model` with no argument
     /// has one open. The app loop still owns stdin; keys route here.
-    picker : Option PickerState := Option.none,
+    picker : Option PickerModel := Option.none,
     /// Instructions typed while a turn runs, in submit order. Enter
     /// queues instead of dropping them; the head starts when the running
     /// turn's result folds in.
@@ -408,60 +319,14 @@ def banner_widget (m : TuiModel) : Widget :=
 /// `Lens`, and a whole-program check loads both (a real collision,
 /// caught by checking the whole corpus, not just this mote).
 pub def Model.picker_height (m : TuiModel) : I64 :=
-    // The header and footer lines come out of the same budget; a panel
-    // too short for them gets a zero-row list, never an overflowing one.
-    let h : I64 := panel_height m - 2i64 in
-    if h < 0i64 then 0i64 else h
-
-def picker_header_text (m : TuiModel) (p : PickerState) : String :=
-    String.concat "Select a model — "
-        (String.concat m.state.provider (String.concat "   current: " p.current))
-
-def picker_footer_text : String := "↑/↓ move · Enter select · Esc cancel"
-
-def picker_row_widgets (p : PickerState) (row : I64) (names : List String) : List SizedWidget :=
-    match names {
-        List.empty => List.empty,
-        List.cons name rest =>
-            let cursor : String := if I64.beq row p.selected then "> " else "  " in
-            let mark : String := if String.beq name p.current then "*" else " " in
-            let text : String := String.concat cursor (String.concat mark (String.concat " " name)) in
-            let style : TextStyle :=
-                if I64.beq row p.selected
-                then { style_default with reverse := true }
-                else style_default in
-            List.cons (sized (LayoutSize.fixed 1) (with_style style (label text)))
-                (picker_row_widgets p (row + 1i64) rest),
-    }
-
-def picker_column (m : TuiModel) (p : PickerState) : Widget :=
-    let avail : I64 := panel_height m in
-    let dim : TextStyle := { style_default with dim := true } in
-    let head : SizedWidget := sized (LayoutSize.fixed 1) (with_style dim (label (picker_header_text m p))) in
-    let foot : SizedWidget := sized (LayoutSize.fixed 1) (with_style dim (label picker_footer_text)) in
-    // The layout does not clip children, so a row emitted past the
-    // panel paints over its border and the status line: a 1-row panel
-    // gets the header alone, a 2-row one header + footer, and only a
-    // 3-row one has room for a listed model.
-    if avail < 1i64
-    then Widget.column List.empty
-    else if I64.beq avail 1i64
-    then Widget.column [head]
-    else if I64.beq avail 2i64
-    then Widget.column [head, foot]
-    else
-        let h : I64 := Model.picker_height m in
-        let start : I64 := Picker.window_offset h p in
-        let names : List String := Picker.visible h p in
-        let rows : List SizedWidget := picker_row_widgets p start names in
-        Widget.column (List.append (List.cons head rows) [foot])
+    Picker.list_height (panel_height m)
 
 pub def Model.view (m : TuiModel) : Widget :=
     let colors : Bool := m.state.colors in
     let mode : Mode := m.state.mode in
     let body : Widget := match m.picker {
         Option.none => transcript_column m,
-        Option.some p => picker_column m p,
+        Option.some p => Picker.view (panel_height m) p,
     } in
     // `border_with`, not `with_style (border ...)`: the frame is dim, the
     // rows inside it are not (with_style merges into the whole subtree).

@@ -25,5 +25,6 @@ pub use lib::component {Subs}
 pub use lib::tuit {Cooked, Raw, Closed, Term, TuiT}
 pub use lib::widgets::input {InputState, input_state, handle_input_key}
 pub use lib::widgets::list {ListState, list_state, handle_list_key}
+pub use lib::widgets::picker {PickerModel, PickerStep}
 pub use lib::widget {BorderStyle, LeafWidget, SizedWidget, DecoratorKind, Widget, text_input, list}
 pub use lib::render {BorderChars}
