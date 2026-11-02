@@ -18,6 +18,7 @@
 /// `Watch.new` fails with an ordinary `StreamError`, so a caller that has a
 /// polling fallback keeps working; on wasm the target gate refuses a reachable
 /// call at compile time.
+use init::shared {Shared, Shared.get}
 use lib::bytebuf {ByteBuf}
 use lib::io {IO.is_dir, IO.list_dir}
 use lib::list {List.length}
@@ -136,8 +137,9 @@ def Watch.next_read (read : Result StreamError ByteBuf)
 /// Decode one read (freeing the buffer), including the empty one a timeout
 /// returns.
 def Watch.decode_buffer (buf : ByteBuf) : IO (Result StreamError (List WatchEvent)) := do {
-  let n := ByteBuf.length buf;
-  let bytes <- ByteBuf.to_list buf n;
+  let src := Shared.of buf;
+  let n := ByteBuf.length (Shared.get src);
+  let bytes <- ByteBuf.to_list (Shared.get src) n;
   let _ <- ByteBuf.free buf;
   IO.pure (Result.ok (Watch.decode bytes))
 }
@@ -212,7 +214,7 @@ pub def WatchEvent.ignored (e : WatchEvent) : Bool := WatchEvent.has e Watch.ign
 /// only a caller that passes a short hand-built buffer can see one.
 #[terminating]
 pub def Watch.decode (bytes : List U8) : List WatchEvent :=
-  match Watch.decode_one bytes {
+  match Watch.decode_one (Shared.of bytes) {
     Option.none => List.empty,
     Option.some p =>
       match p {
@@ -220,8 +222,8 @@ pub def Watch.decode (bytes : List U8) : List WatchEvent :=
       }
   }
 
-def Watch.decode_one (bytes : List U8) : Option (Pair WatchEvent (List U8)) :=
-  if I64.lt (List.length bytes) 16
+def Watch.decode_one (bytes : Shared (List U8)) : Option (Pair WatchEvent (List U8)) :=
+  if I64.lt (List.length (Shared.get bytes)) 16
   then Option.none
   else
     let watch := Watch.u32_at bytes 0 in
@@ -229,19 +231,19 @@ def Watch.decode_one (bytes : List U8) : Option (Pair WatchEvent (List U8)) :=
     let cookie := Watch.u32_at bytes 8 in
     let name_len := Watch.u32_at bytes 12 in
     let total := 16 + name_len in
-    if I64.lt (List.length bytes) total
+    if I64.lt (List.length (Shared.get bytes)) total
     then Option.none
     else
       let name := String.from_list (Watch.name_bytes bytes 16 name_len) in
       let ev : WatchEvent := { watch := watch, mask := mask, cookie := cookie, name := name } in
-      Option.some (Pair.pair ev (Watch.drop_n total bytes))
+      Option.some (Pair.pair ev (Watch.drop_n total (Shared.get bytes)))
 
 /// The little-endian u32 at byte offset `off` (0 outside the list).
-def Watch.u32_at (bytes : List U8) (off : I64) : I64 :=
-  let b0 := U8.to_i64 (Watch.u8_at bytes off) in
-  let b1 := U8.to_i64 (Watch.u8_at bytes (off + 1)) in
-  let b2 := U8.to_i64 (Watch.u8_at bytes (off + 2)) in
-  let b3 := U8.to_i64 (Watch.u8_at bytes (off + 3)) in
+def Watch.u32_at (bytes : Shared (List U8)) (off : I64) : I64 :=
+  let b0 := U8.to_i64 (Watch.u8_at (Shared.get bytes) off) in
+  let b1 := U8.to_i64 (Watch.u8_at (Shared.get bytes) (off + 1)) in
+  let b2 := U8.to_i64 (Watch.u8_at (Shared.get bytes) (off + 2)) in
+  let b3 := U8.to_i64 (Watch.u8_at (Shared.get bytes) (off + 3)) in
   b0 + b1 * 256 + b2 * 65536 + b3 * 16777216
 
 /// Byte `i`, or 0 outside the list.
@@ -253,11 +255,11 @@ def Watch.u8_at (bytes : List U8) (i : I64) : U8 :=
 
 /// The name bytes at `off`, stopping at the NUL padding or after `len` bytes.
 #[terminating]
-def Watch.name_bytes (bytes : List U8) (off : I64) (len : I64) : List U8 :=
+def Watch.name_bytes (bytes : Shared (List U8)) (off : I64) (len : I64) : List U8 :=
   if I64.lt len 1
   then List.empty
   else
-    let b := Watch.u8_at bytes off in
+    let b := Watch.u8_at (Shared.get bytes) off in
     if U8.beq b 0u8
     then List.empty
     else List.cons b (Watch.name_bytes bytes (off + 1) (len - 1))
@@ -320,9 +322,12 @@ pub def Watch.recursive (root : Path) (ignored : List String)
   }
 }
 
+/// The walk below only READS the stream and the ignore list (`Shared.of`
+/// borrows them); the values themselves are stored in the returned
+/// `Watch`, so they stay owned here.
 def Watch.recursive_opened (stream : FdStream) (root : Path) (ignored : List String)
     : IO (Result StreamError Watch) := do {
-  let walked <- Watch.walk stream root ignored;
+  let walked <- Watch.walk (Shared.of stream) root (Shared.of ignored);
   Watch.recursive_walked stream root ignored walked
 }
 
@@ -359,9 +364,9 @@ pub def Watch.close (w : Watch) : IO Unit := Stream.close w.stream
 /// is not one (a file root, or a directory deleted between the event and this
 /// call) fails at `Watch.add` instead of half-watching a file.
 #[terminating]
-def Watch.walk (stream : FdStream) (dir : Path) (ignored : List String)
+def Watch.walk (stream : Shared FdStream) (dir : Path) (ignored : Shared (List String))
     : IO (Result StreamError (List (Pair I64 Path))) := do {
-  let added <- Watch.add stream dir (Watch.changes + Watch.only_dir);
+  let added <- Watch.add (Shared.get stream) dir (Watch.changes + Watch.only_dir);
   match added {
     Result.err e => IO.pure (Result.err e),
     Result.ok handle => Watch.walk_added stream dir ignored handle
@@ -369,7 +374,7 @@ def Watch.walk (stream : FdStream) (dir : Path) (ignored : List String)
 }
 
 #[terminating]
-def Watch.walk_added (stream : FdStream) (dir : Path) (ignored : List String) (handle : I64)
+def Watch.walk_added (stream : Shared FdStream) (dir : Path) (ignored : Shared (List String)) (handle : I64)
     : IO (Result StreamError (List (Pair I64 Path))) := do {
   let entries <- IO.list_dir dir;
   Watch.walk_entries stream ignored entries (List.cons (Pair.pair handle dir) List.empty)
@@ -378,7 +383,7 @@ def Watch.walk_added (stream : FdStream) (dir : Path) (ignored : List String) (h
 /// Walk `entries` -- already the children of a watched directory -- appending
 /// every watched descendant's descriptor to `acc`.
 #[terminating]
-def Watch.walk_entries (stream : FdStream) (ignored : List String) (entries : List Path)
+def Watch.walk_entries (stream : Shared FdStream) (ignored : Shared (List String)) (entries : List Path)
     (acc : List (Pair I64 Path)) : IO (Result StreamError (List (Pair I64 Path))) :=
   match entries {
     List.empty => IO.pure (Result.ok (List.reverse acc)),
@@ -386,20 +391,20 @@ def Watch.walk_entries (stream : FdStream) (ignored : List String) (entries : Li
   }
 
 #[terminating]
-def Watch.walk_entry (stream : FdStream) (ignored : List String) (p : Path)
+def Watch.walk_entry (stream : Shared FdStream) (ignored : Shared (List String)) (p : Path)
     (rest : List Path) (acc : List (Pair I64 Path))
     : IO (Result StreamError (List (Pair I64 Path))) := do {
   let is_dir <- IO.is_dir p;
   if is_dir
   then
-    if Watch.ignore_dir (Path.file_name p) ignored
+    if Watch.ignore_dir (Path.file_name p) (Shared.get ignored)
     then Watch.walk_entries stream ignored rest acc
     else Watch.walk_sub stream ignored p rest acc
   else Watch.walk_entries stream ignored rest acc
 }
 
 #[terminating]
-def Watch.walk_sub (stream : FdStream) (ignored : List String) (p : Path)
+def Watch.walk_sub (stream : Shared FdStream) (ignored : Shared (List String)) (p : Path)
     (rest : List Path) (acc : List (Pair I64 Path))
     : IO (Result StreamError (List (Pair I64 Path))) := do {
   let sub <- Watch.walk stream p ignored;
@@ -469,40 +474,52 @@ pub def Watch.max_reads : I64 := 64
 /// inodes, not paths) and its map entry therefore names a path that no longer
 /// exists; its events still arrive until `Watch.close`. Rescan when that
 /// matters -- `WatchBatch.overflow` is the kernel's version of the same answer.
-pub def Watch.drain (w : Watch) (timeout_ms : I64) (quiet_ms : I64)
+/// Takes the watch by `Shared`: draining only reads the handle's fields
+/// (it updates the map through the `Ref` cell), so the caller keeps
+/// ownership for a later `Watch.close`.
+pub def Watch.drain (w : Shared Watch) (timeout_ms : I64) (quiet_ms : I64)
+    : IO (Result StreamError WatchBatch) :=
+  let watch : Watch := Shared.get w in
+  match watch {
+    { stream, root, ignored, dirs } =>
+      Watch.drain_started (Shared.of stream) root (Shared.of ignored) dirs timeout_ms quiet_ms
+  }
+
+def Watch.drain_started (stream : Shared FdStream) (root : Path) (ignored : Shared (List String))
+    (dirs : Ref (List (Pair I64 Path))) (timeout_ms : I64) (quiet_ms : I64)
     : IO (Result StreamError WatchBatch) := do {
-  let got <- Watch.drain_events w.stream timeout_ms quiet_ms 0 List.empty;
+  let got <- Watch.drain_events stream timeout_ms quiet_ms 0 List.empty;
   match got {
     Result.err e => IO.pure (Result.err e),
-    Result.ok evs => Watch.drain_batch w.stream w.root w.ignored w.dirs evs
+    Result.ok evs => Watch.drain_batch stream root ignored dirs (Shared.of evs)
   }
 }
 
 #[terminating]
-def Watch.drain_events (stream : FdStream) (timeout_ms : I64) (quiet_ms : I64)
+def Watch.drain_events (stream : Shared FdStream) (timeout_ms : I64) (quiet_ms : I64)
     (reads : I64) (acc : List WatchEvent)
     : IO (Result StreamError (List WatchEvent)) := do {
   let wait := if I64.lt reads 1 then timeout_ms else quiet_ms;
-  let got <- Watch.next stream wait;
+  let got <- Watch.next (Shared.get stream) wait;
   match got {
     Result.err e => IO.pure (Result.err e),
-    Result.ok evs => Watch.drain_events_got stream timeout_ms quiet_ms reads evs acc
+    Result.ok evs => Watch.drain_events_got stream timeout_ms quiet_ms reads (Shared.of evs) acc
   }
 }
 
 #[terminating]
-def Watch.drain_events_got (stream : FdStream) (timeout_ms : I64) (quiet_ms : I64)
-    (reads : I64) (evs : List WatchEvent) (acc : List WatchEvent)
+def Watch.drain_events_got (stream : Shared FdStream) (timeout_ms : I64) (quiet_ms : I64)
+    (reads : I64) (evs : Shared (List WatchEvent)) (acc : List WatchEvent)
     : IO (Result StreamError (List WatchEvent)) :=
-  if I64.beq (List.length evs) 0
+  if I64.beq (List.length (Shared.get evs)) 0
   then IO.pure (Result.ok (List.reverse acc))
   else if I64.gt reads Watch.max_reads
-  then IO.pure (Result.ok (List.reverse (List.append (List.reverse evs) acc)))
+  then IO.pure (Result.ok (List.reverse (List.append (List.reverse (Shared.get evs)) acc)))
   else Watch.drain_events stream timeout_ms quiet_ms (reads + 1)
-    (List.append (List.reverse evs) acc)
+    (List.append (List.reverse (Shared.get evs)) acc)
 
-def Watch.drain_batch (stream : FdStream) (root : Path) (ignored : List String)
-    (dirs : Ref (List (Pair I64 Path))) (evs : List WatchEvent)
+def Watch.drain_batch (stream : Shared FdStream) (root : Path) (ignored : Shared (List String))
+    (dirs : Ref (List (Pair I64 Path))) (evs : Shared (List WatchEvent))
     : IO (Result StreamError WatchBatch) := do {
   let added <- Watch.watch_new_dirs stream ignored dirs root evs;
   match added {
@@ -512,12 +529,13 @@ def Watch.drain_batch (stream : FdStream) (root : Path) (ignored : List String)
 }
 
 def Watch.drain_resolve (root : Path) (dirs : Ref (List (Pair I64 Path)))
-    (evs : List WatchEvent) : IO (Result StreamError WatchBatch) := do {
+    (evs : Shared (List WatchEvent)) : IO (Result StreamError WatchBatch) := do {
   let current <- Ref.get dirs;
-  let kept := Watch.reap_dead current evs;
+  let cur := Shared.of current;
+  let kept := Watch.reap_dead (Shared.get cur) evs;
   let _ <- Ref.set dirs kept;
   let batch : WatchBatch :=
-    { events := Watch.resolve root current evs, overflow := Watch.any_overflow evs };
+    { events := Watch.resolve root cur evs, overflow := Watch.any_overflow (Shared.get evs) };
   IO.pure (Result.ok batch)
 }
 
@@ -529,36 +547,39 @@ def Watch.is_new_dir (e : WatchEvent) : Bool :=
 /// Add a watch (and walk) for every directory the batch reports created or
 /// moved in, so a new subdirectory is watched from its creation.
 #[terminating]
-def Watch.watch_new_dirs (stream : FdStream) (ignored : List String)
-    (dirs : Ref (List (Pair I64 Path))) (root : Path) (evs : List WatchEvent)
+def Watch.watch_new_dirs (stream : Shared FdStream) (ignored : Shared (List String))
+    (dirs : Ref (List (Pair I64 Path))) (root : Path) (evs : Shared (List WatchEvent))
     : IO (Result StreamError Unit) :=
-  match evs {
+  match Shared.get evs {
     List.empty => IO.pure (Result.ok Unit.unit),
     List.cons e rest =>
       if Watch.is_new_dir e
-      then Watch.watch_new_dir stream ignored dirs root e rest
-      else Watch.watch_new_dirs stream ignored dirs root rest
+      then Watch.watch_new_dir stream ignored dirs root e (Shared.of rest)
+      else Watch.watch_new_dirs stream ignored dirs root (Shared.of rest)
   }
 
 #[terminating]
-def Watch.watch_new_dir (stream : FdStream) (ignored : List String)
-    (dirs : Ref (List (Pair I64 Path))) (root : Path) (e : WatchEvent) (rest : List WatchEvent)
+def Watch.watch_new_dir (stream : Shared FdStream) (ignored : Shared (List String))
+    (dirs : Ref (List (Pair I64 Path))) (root : Path) (e : WatchEvent) (rest : Shared (List WatchEvent))
     : IO (Result StreamError Unit) := do {
   let current <- Ref.get dirs;
-  let path := Watch.event_path current root e;
+  let cur := Shared.of current;
+  let path := Watch.event_path (Shared.get cur) root e;
   let walked <- Watch.walk stream path ignored;
   match walked {
     Result.err err => IO.pure (Result.err err),
-    Result.ok more => Watch.watch_new_dir_added stream ignored dirs root rest more current
+    Result.ok more => Watch.watch_new_dir_added stream ignored dirs root rest more (Shared.get cur)
   }
 }
 
 #[terminating]
-def Watch.watch_new_dir_added (stream : FdStream) (ignored : List String)
-    (dirs : Ref (List (Pair I64 Path))) (root : Path) (rest : List WatchEvent)
+def Watch.watch_new_dir_added (stream : Shared FdStream) (ignored : Shared (List String))
+    (dirs : Ref (List (Pair I64 Path))) (root : Path) (rest : Shared (List WatchEvent))
     (more : List (Pair I64 Path)) (current : List (Pair I64 Path))
     : IO (Result StreamError Unit) := do {
-  let _ <- Ref.set dirs (List.append more (Watch.reap_replaced current more));
+  let ms := Shared.of more;
+  let cs := Shared.of current;
+  let _ <- Ref.set dirs (List.append (Shared.get ms) (Watch.reap_replaced (Shared.get cs) ms));
   Watch.watch_new_dirs stream ignored dirs root rest
 }
 
@@ -579,48 +600,51 @@ def Watch.wd_in (dirs : List (Pair I64 Path)) (handle : I64) : Bool :=
 /// the entry has to be replaced, not appended, or `Watch.dir_of` could resolve
 /// events to the old name.
 #[terminating]
-def Watch.reap_replaced (current : List (Pair I64 Path)) (fresh : List (Pair I64 Path))
+def Watch.reap_replaced (current : List (Pair I64 Path)) (fresh : Shared (List (Pair I64 Path)))
     : List (Pair I64 Path) :=
   match current {
     List.empty => List.empty,
     List.cons p rest =>
       match p {
         Pair.pair w d =>
-          if Watch.wd_in fresh w
+          let wd : I64 := w in
+          if Watch.wd_in (Shared.get fresh) wd
           then Watch.reap_replaced rest fresh
-          else List.cons (Pair.pair w d) (Watch.reap_replaced rest fresh)
+          else List.cons (Pair.pair wd d) (Watch.reap_replaced rest fresh)
       }
   }
 
 /// Resolve each event's path (overflow pseudo-events are dropped; they are the
 /// batch's `overflow`).
 #[terminating]
-def Watch.resolve (root : Path) (dirs : List (Pair I64 Path)) (evs : List WatchEvent)
+def Watch.resolve (root : Path) (dirs : Shared (List (Pair I64 Path))) (evs : Shared (List WatchEvent))
     : List (Pair WatchEvent Path) :=
-  match evs {
+  match Shared.get evs {
     List.empty => List.empty,
     List.cons e rest =>
-      if WatchEvent.overflowed e
-      then Watch.resolve root dirs rest
+      let ev : WatchEvent := e in
+      if WatchEvent.overflowed ev
+      then Watch.resolve root dirs (Shared.of rest)
       else
-        List.cons (Pair.pair e (Watch.event_path dirs root e))
-          (Watch.resolve root dirs rest)
+        List.cons (Pair.pair ev (Watch.event_path (Shared.get dirs) root ev))
+          (Watch.resolve root dirs (Shared.of rest))
   }
 
 /// Drop descriptors the kernel retired -- `IN_IGNORED`, or the directory
 /// itself moved/vanished -- so the map does not grow stale and a later reused
 /// descriptor cannot resolve to the wrong path.
 #[terminating]
-def Watch.reap_dead (dirs : List (Pair I64 Path)) (evs : List WatchEvent)
+def Watch.reap_dead (dirs : List (Pair I64 Path)) (evs : Shared (List WatchEvent))
     : List (Pair I64 Path) :=
   match dirs {
     List.empty => List.empty,
     List.cons p rest =>
       match p {
         Pair.pair w d =>
-          if Watch.wd_dead evs w
+          let wd : I64 := w in
+          if Watch.wd_dead (Shared.get evs) wd
           then Watch.reap_dead rest evs
-          else List.cons (Pair.pair w d) (Watch.reap_dead rest evs)
+          else List.cons (Pair.pair wd d) (Watch.reap_dead rest evs)
       }
   }
 

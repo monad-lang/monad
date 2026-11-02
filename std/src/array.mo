@@ -43,6 +43,23 @@ type Array A {
     mk,
 }
 
+/// A frozen `Array` is immutable and its backing constructor is never
+/// mutated in place (`Array.set` copies; `freeze` copies the builder), so
+/// sharing one is a pointer duplicate -- the same reasoning as `Copy Nat`,
+/// not the silent deep copy a `Copy List` would be. `ArrayBuilder` is the
+/// mutable half and deliberately has NO instance.
+///
+/// The instance is unconditional because this module ALREADY assumes the
+/// element may be duplicated: `Array.new n fill` writes `fill` into n
+/// slots, and `from_list`/`set` copy elements. Arrays of non-`Copy`
+/// elements are the deferred feature (`view-types.md`); a conditional
+/// `[Copy A]` instance does not resolve today (`copy_class.mo`'s
+/// conditional parametric instances), so the assumption is recorded here
+/// rather than enforced.
+pub instance {A : Type} Copy (Array A) {
+    def copy (a : Array A) : Pair (Array A) (Array A) := Pair.pair a a
+}
+
 /// A partially-filled `Array` under construction. The same
 /// representation as `Array` -- a distinct type only so the type
 /// checker keeps the mutable and immutable halves apart, which is what
@@ -113,7 +130,7 @@ def Array.from_list (xs : List A) : Array A :=
     match xs {
         List.empty => Array.empty,
         List.cons x rest =>
-            let n : I64 := List.length xs in
+            let n : I64 := List.length (List.cons x rest) in
             let arr : Array A := Array.new n x in
             Array.fill_from arr 1 rest,
     }

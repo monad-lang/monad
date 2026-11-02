@@ -15,6 +15,14 @@
 /// compared; the constructor is not built by user code.
 pub type Ref (A : Type) { ref }
 
+/// A `Ref` is a shared handle: duplicating it duplicates the REFERENCE,
+/// not the payload, so every holder observes the same slot -- which is
+/// exactly the point of a shared cell. Unconditional, like
+/// `Copy (Shared A)`.
+pub instance {A : Type} Copy (Ref A) {
+    def copy (r : Ref A) : Pair (Ref A) (Ref A) := Pair.pair r r
+}
+
 #[native cell_new]
 priv def cell_new_raw (init : A) : RawIO (Ref A)
 

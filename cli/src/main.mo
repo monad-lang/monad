@@ -1,3 +1,4 @@
+use init::shared {of}
 use std::list {List.length}
 open IO {
   println, read_file, file_exists,
@@ -1190,7 +1191,7 @@ def script_batch_changed (batch : WatchBatch) : Bool :=
 /// reads the files fresh, so swallowing them cannot lose a change, and it
 /// stops a burst from triggering a second rebuild.
 def script_settle (w : Watch) : IO Unit := do {
-  let _ <- Watch.drain w 0 50;
+  let _ <- Watch.drain (Shared.of w) 0 50;
   IO.pure Unit.unit
 }
 
@@ -1198,7 +1199,7 @@ def script_settle (w : Watch) : IO Unit := do {
 def script_watch_loop (w : Watch) (owner : String) (src : String) (out_name : Path)
     (target_dir_flag : String) (verbose : Bool) (debug : Bool) (no_cache : Bool)
     (spec : TargetSpec) (program_args : List String) (child : Option Child) : IO I64 := do {
-  let got <- Watch.drain w 1000 50;
+  let got <- Watch.drain (Shared.of w) 1000 50;
   match got {
     Result.err e => do {
       let _ <- Watch.close w;

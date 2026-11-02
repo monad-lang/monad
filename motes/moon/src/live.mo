@@ -17,6 +17,7 @@ use init::clone {Clone}
 use init::shared {Shared, Shared.get}
 use std::concurrent::combine {sleepIO}
 use std::concurrent::fiber {Fiber, forkIO}
+use init::shared {of}
 use std::hex {Hex.encode}
 use std::io {IO.is_dir, IO.list_dir, IO.read_file, IO.read_file_bytes}
 use std::path {Path, Path.file_name, Path.to_string}
@@ -304,7 +305,7 @@ pub def Live.watch_tree (root : Path) (ignored : List String)
 #[terminating]
 def Live.watch_tree_inotify (w : Watch) (root : Path) (ignored : List String)
     (version : Ref I64) : IO Unit := do {
-  let got <- Watch.drain w 1000 50;
+  let got <- Watch.drain (Shared.of w) 1000 50;
   match got {
     Result.err _ => Live.watch_tree_degrade w root ignored version,
     Result.ok batch =>

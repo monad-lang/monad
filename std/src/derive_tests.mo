@@ -114,6 +114,10 @@ type Duo {
     mk (first : I64) (second : I64),
 }
 
+instance Copy Duo {
+    def copy (d : Duo) : Pair Duo Duo := Pair.pair d d
+}
+
 derive_lens! Duo
 
 #[test]
@@ -172,6 +176,10 @@ struct Triple {
     a : I64,
     b : I64,
     c : I64,
+}
+
+instance Copy Triple {
+    def copy (t : Triple) : Pair Triple Triple := Pair.pair t t
 }
 
 derive_bord! Triple

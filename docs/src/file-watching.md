@@ -41,7 +41,7 @@ def show (r : Result StreamError WatchBatch) : IO Unit :=
   }
 
 def one_batch (w : Watch) : IO Unit := do {
-  let batch <- Watch.drain w 1000 50;
+  let batch <- Watch.drain (Shared.of w) 1000 50;
   let _ <- Watch.close w;
   show batch
 }
@@ -60,7 +60,9 @@ directories named by `Watch.default_ignored` and `target-*` are skipped), and
 returns a `Watch` carrying the queue, the root and a descriptor → directory map.
 `Path.path "."` is the tree to watch; pass the directory you care about.
 
-`Watch.drain` waits up to its first argument for *something* to happen, then
+`Watch.drain` takes the watch by `Shared` — draining only reads the handle and
+updates the map through its `Ref` cell, so the handle is still yours to close.
+It waits up to its first argument for *something* to happen, then
 keeps reading until a quiet window of the second argument passes with nothing
 new, so one editor save arrives as one batch -- not as its `IN_MODIFY`,
 `IN_CLOSE_WRITE` and `IN_MOVED_TO` events separately.

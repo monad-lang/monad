@@ -24,6 +24,7 @@
 /// `BUILTIN_INTRINSICS` doc comment for the current (`reflect_type_info!`-
 /// only) design.
 use init::meta {TypeInfo, CtorInfo, FieldInfo, Expr, MetaMatchArm, MetaDecl}
+use init::shared {Shared, Shared.get}
 
 open TypeInfo {type_info}
 open CtorInfo {ctor_info}
@@ -52,26 +53,29 @@ def lens_getter (type_name : String) (ctor_name : String) (field_names : List St
 /// `"Point.mk"`) to reify to a real value-constructing reference — unlike
 /// a match arm's pattern, which uses the bare constructor name.
 def lens_setter (type_name : String) (ctor_name : String) (field_names : List String) (field_typ : Expr) (target : String) : Expr :=
+    let names := Shared.of field_names in
     e_lam "v" field_typ
         (e_lam "s" (e_var type_name)
             (e_match (e_var "s")
-                [match_arm ctor_name field_names
+                [match_arm ctor_name (Shared.get names)
                     (e_ctor (String.concat type_name (String.concat "." ctor_name))
-                            (List.map (rebuild_field target) field_names))]))
+                            (List.map (rebuild_field target) (Shared.get names)))]))
 
 def rebuild_field (target : String) (field_name : String) : Expr :=
     if field_name == target then e_var "v" else e_var field_name
 
 /// One field -> its `Lens`-typed `def`, named `<Type>.<field>`.
 def lens_field_decl (type_name : String) (ctor_name : String) (field_names : List String) (field : FieldInfo) : MetaDecl :=
+    let names := Shared.of field_names in
     match field {
         field_info fname ftyp fattrs fdefault =>
+            let typ := Shared.of ftyp in
             d_def
                 (String.concat type_name (String.concat "." fname))
                 List.empty
-                (e_app (e_app (e_var "Lens") (e_var type_name)) ftyp)
-                (e_app (e_app (e_var "lens") (lens_getter type_name ctor_name field_names fname))
-                       (lens_setter type_name ctor_name field_names ftyp fname))
+                (e_app (e_app (e_var "Lens") (e_var type_name)) (Shared.get typ))
+                (e_app (e_app (e_var "lens") (lens_getter type_name ctor_name (Shared.get names) fname))
+                       (lens_setter type_name ctor_name (Shared.get names) (Shared.get typ) fname))
     }
 
 /// `derive_lens_meta`'s work for one already-known-single constructor:
@@ -79,8 +83,9 @@ def lens_field_decl (type_name : String) (ctor_name : String) (field_names : Lis
 def lens_decls_for_ctor (type_name : String) (ctor : CtorInfo) : List MetaDecl :=
     match ctor {
         ctor_info ctor_name fields =>
-            let field_names := List.map field_name_of fields in
-            List.map (lens_field_decl type_name ctor_name field_names) fields
+            let fs := Shared.of fields in
+            let field_names := List.map field_name_of (Shared.get fs) in
+            List.map (lens_field_decl type_name ctor_name field_names) (Shared.get fs)
     }
 
 /// `derive_lens! Point` (or `#[derive Lens] struct Point {...}`) generates
@@ -149,10 +154,11 @@ def debug_label (type_name : String) (ctor_name : String) (is_single : Bool) : S
 /// `"Label { f1: r1, ..., fN: rN }"` for one with fields.
 def debug_arm_body (type_name : String) (ctor_name : String) (is_single : Bool) (field_names : List String) : Expr :=
     let label := debug_label type_name ctor_name is_single in
-    match field_names {
+    let names := Shared.of field_names in
+    match Shared.get names {
         empty => e_str label,
         cons _ _ =>
-            let fields_expr := join_with_sep ", " (List.map debug_piece field_names) in
+            let fields_expr := join_with_sep ", " (List.map debug_piece (Shared.get names)) in
             e_app (e_app (e_var "String.concat") (e_str (String.concat label " { ")))
                   (e_app (e_app (e_var "String.concat") fields_expr) (e_str " }")),
     }
@@ -185,8 +191,9 @@ def is_single_ctor_list (ctors : List CtorInfo) : Bool :=
 pub def derive_debug_meta (info : TypeInfo) : List MetaDecl :=
     match info {
         type_info type_name ctors =>
-            let is_single := is_single_ctor_list ctors in
-            let arms := List.map (debug_ctor_arm type_name is_single) ctors in
+            let cs := Shared.of ctors in
+            let is_single := is_single_ctor_list (Shared.get cs) in
+            let arms := List.map (debug_ctor_arm type_name is_single) (Shared.get cs) in
             [d_instance "Debug" (e_var type_name)
                 [d_def "debug" [meta_param "self" (e_var type_name)] (e_var "String")
                     (e_match (e_var "self") arms)]]
@@ -264,7 +271,8 @@ def beq_outer_arm (all_ctors : List CtorInfo) (i : I64) (ctor_a : CtorInfo) : Me
 pub def derive_beq_meta (info : TypeInfo) : List MetaDecl :=
     match info {
         type_info type_name ctors =>
-            let arms := map_indexed_ctor_arms 0 (beq_outer_arm ctors) ctors in
+            let cs := Shared.of ctors in
+            let arms := map_indexed_ctor_arms 0 (beq_outer_arm (Shared.get cs)) (Shared.get cs) in
             [d_instance "BEq" (e_var type_name)
                 [d_def "beq" [meta_param "a" (e_var type_name), meta_param "b" (e_var type_name)] (e_var "Bool")
                     (e_match (e_var "a") arms)]]
@@ -339,7 +347,8 @@ def bord_outer_arm (chain_fn : List String -> Expr) (diff_lt_is_true : Bool) (al
 /// and `gte` are derived: `lte = not gt`, `gte = not lt` (matching
 /// `init/prelude.mo`'s `BOrd` contract).
 def bord_method (name : String) (chain_fn : List String -> Expr) (diff_lt_is_true : Bool) (negate : Bool) (type_name : String) (ctors : List CtorInfo) : MetaDecl :=
-    let arms := map_indexed_ctor_arms 0 (bord_outer_arm chain_fn diff_lt_is_true ctors) ctors in
+    let cs := Shared.of ctors in
+    let arms := map_indexed_ctor_arms 0 (bord_outer_arm chain_fn diff_lt_is_true (Shared.get cs)) (Shared.get cs) in
     let raw_body := e_match (e_var "a") arms in
     let body := if negate then e_app (e_var "Bool.not") raw_body else raw_body in
     d_def name [meta_param "a" (e_var type_name), meta_param "b" (e_var type_name)] (e_var "Bool")
@@ -357,11 +366,12 @@ def bord_method (name : String) (chain_fn : List String -> Expr) (diff_lt_is_tru
 pub def derive_bord_meta (info : TypeInfo) : List MetaDecl :=
     match info {
         type_info type_name ctors =>
+            let cs := Shared.of ctors in
             [d_instance "BOrd" (e_var type_name)
-                [bord_method "lt" lt_chain true false type_name ctors,
-                 bord_method "gt" gt_chain false false type_name ctors,
-                 bord_method "lte" gt_chain false true type_name ctors,
-                 bord_method "gte" lt_chain true true type_name ctors]]
+                [bord_method "lt" lt_chain true false type_name (Shared.get cs),
+                 bord_method "gt" gt_chain false false type_name (Shared.get cs),
+                 bord_method "lte" gt_chain false true type_name (Shared.get cs),
+                 bord_method "gte" lt_chain true true type_name (Shared.get cs)]]
     }
 
 #[derive_handler BOrd]
