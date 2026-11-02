@@ -516,6 +516,27 @@ static int64_t monad_io_bind_impl(int64_t io_val, int64_t f) {
     return apply_closure1_impl(RT_PTR(f), RT_VALUE(inner));
 }
 
+/* monad_io_iterate: RawIO.iterate (init : S) (step : S -> RawIO (Option S))
+   : RawIO Unit -- applies `step` until it answers `none`. Each step returns
+   before the next starts, so the loop holds no frame per iteration: a
+   recursive do-loop nests one `monad_io_bind` frame per iteration and the
+   collector keeps everything they reference. A TEMPORARY native until
+   plain recursion is heapless (plans/bootstrapping/heapless-loops.md).
+   Cancellation is checked once per iteration, as at a bind. Tags:
+   `Option.none` 3, `Option.some` 4 (`builtin_ctor_tags`). */
+static int64_t monad_io_iterate_impl(int64_t init, int64_t step) {
+    int64_t s = init;
+    for (;;) {
+        if (monad_io_cancelled()) return MONAD_CANCELLED_SENTINEL;
+        int64_t io = apply_closure1_impl(RT_PTR(step), s);
+        if (io == MONAD_CANCELLED_SENTINEL) return io;
+        rt_field opt = monad_get_field_impl(RT_FIELD(io), 0);
+        if (monad_get_tag_impl(opt) != 4)
+            return RT_VALUE(monad_io_pure_impl(RT_VALUE(alloc_constructor_impl(0, 0))));
+        s = RT_VALUE(monad_get_field_impl(opt, 0));
+    }
+}
+
 /* ── Ref (std/src/ref.mo) ──────────────────────────────────────────────
    A shared mutable slot, lock-free: native fibers are OS threads, so every
    access to the value word is atomic (the `__atomic` builtins, as for
@@ -1472,6 +1493,7 @@ rt_word monad_array_freeze(rt_word b) { return monad_array_freeze_impl(b); }
 
 rt_word monad_io_pure(int64_t a) { return monad_io_pure_impl(a); }
 int64_t monad_io_bind(int64_t io_val, int64_t f) { return monad_io_bind_impl(io_val, f); }
+int64_t monad_io_iterate(int64_t init, int64_t step) { return monad_io_iterate_impl(init, step); }
 
 rt_word monad_cell_new(rt_word init) { return ref_new_impl(init); }
 rt_word monad_cell_get(rt_word handle) { return ref_get_impl(handle); }

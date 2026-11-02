@@ -18,6 +18,13 @@ pub def RawIO.pure (a : A) : RawIO A
 #[native "io_bind"]
 pub def RawIO.bind (a : RawIO A) (f : A -> RawIO B) : RawIO B
 
+/// Apply `step` from `init` until it answers `none`. Each step returns
+/// before the next starts, so a long loop keeps no frames alive -- a
+/// recursive do-loop keeps one per iteration. TEMPORARY until plain
+/// recursion is heapless (plans/bootstrapping/heapless-loops.md).
+#[native "io_iterate"]
+pub def RawIO.iterate (init : S) (step : S -> RawIO (Option S)) : RawIO Unit
+
 pub instance Monad RawIO {
   def pure (a : A) : RawIO A :=
     RawIO.pure a
@@ -41,6 +48,11 @@ def IO.bind (a : IO A) (f : A -> IO B) : IO B :=
     match a {
         IO.mk raw => IO.mk (RawIO.bind raw (fn x => match f x { IO.mk r => r }))
     }
+
+/// `RawIO.iterate` for `IO` steps: run `step` from `init` until it answers
+/// `none`, in constant stack.
+pub def IO.iterate (init : S) (step : S -> IO (Option S)) : IO Unit :=
+    IO.mk (RawIO.iterate init (fn (s : S) => match step s { IO.mk r => r }))
 
 pub instance Monad IO {
   def pure (a : A) : IO A :=
