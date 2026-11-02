@@ -7,7 +7,8 @@ use mty::spawn {Mty, Output}
 use mty::check {Check.report}
 use mty::ansi {Ansi.has_color}
 use weaver::mty_support {
-    run_gated, with_root, spawn_args, status_turns, send_paste, quit_cleanly
+    run_gated, with_root, spawn_args, status_turns, send_paste, quit_cleanly,
+    rss_kb
 }
 use weaver::mty_fixtures {
     LineSpec, write_text_script, write_generated_session, session_dir,
@@ -291,3 +292,102 @@ def test_sessions_color_body (bin : String) : IO Bool :=
     with_root "sessions_color" (fn (root : String) => no_color_run bin root)
 
 // ── S6: an 18 MB session stays on disk ──────────────────────────────────
+
+/// 20 000 lines of 900 z's plus a zero-padded index. With `cols = 100` the
+/// 900 z's fill exactly nine rows, so `-19999` is contiguous on the tenth.
+def rss_huge_spec : LineSpec :=
+    LineSpec.indexed (String.concat (String.repeat "z" 900) "-") "" 5
+
+def rss_spawn (bin : String) (root : String) (id : String) : IO (Option Mty) := do {
+    let args := List.cons "--resume" (List.cons id List.empty);
+    let r <- sessions_spawn bin root args Option.none;
+    match r {
+        Result.err e => do {
+            IO.println (String.concat "FAIL mty sessions rss spawn: " e);
+            IO.pure Option.none
+        },
+        Result.ok m => IO.pure (Option.some m)
+    }
+}
+
+/// The control: a one-line session, resumed and measured once it is idle.
+def rss_baseline (bin : String) (root : String) (sessions : String) : IO I64 := do {
+    let ok <- write_generated_session sessions "s-small" Option.none Option.none
+        1000 1 (LineSpec.fixed "hello");
+    if Bool.not ok then do {
+        IO.println "FAIL mty sessions rss: could not synthesize the baseline session";
+        return 0 - 1
+    } else do {
+        let m_opt <- rss_spawn bin root "s-small";
+        match m_opt {
+            Option.none => do { return 0 - 1 },
+            Option.some m => do {
+                let ready <- Mty.wait_until m placeholder_seen 15000;
+                let _ <- Check.report "the baseline session paints" ready;
+                let _ <- Mty.wait_quiet m 300 3000;
+                if Bool.not ready then do {
+                    Mty.finish m;
+                    return 0 - 1
+                } else do {
+                    let rss <- rss_kb (Mty.child_pid m);
+                    Mty.finish m;
+                    return rss
+                }
+            }
+        }
+    }
+}
+
+def rss_huge (bin : String) (root : String) (sessions : String)
+             (base : I64) : IO Bool :=
+    if I64.lt base 1 then do {
+        let _ <- Check.report "the baseline RSS is readable" false;
+        return false
+    } else rss_huge_body bin root sessions base
+
+def rss_huge_body (bin : String) (root : String) (sessions : String)
+                  (base : I64) : IO Bool := do {
+    let ok <- write_generated_session sessions "s-huge" Option.none Option.none
+        2000 20000 rss_huge_spec;
+    if Bool.not ok then do {
+        IO.println "FAIL mty sessions rss: could not synthesize the huge session";
+        return false
+    } else do {
+        let m_opt <- rss_spawn bin root "s-huge";
+        match m_opt {
+            Option.none => do { return false },
+            Option.some m => do {
+                let ready <- Mty.wait_until m placeholder_seen 15000;
+                let painted <- Mty.wait_until m
+                    (fn (o : Output) => grid_has o "-19999") 60000;
+                let r1 <- rss_kb (Mty.child_pid m);
+                let _ <- Mty.wait_quiet m 1000 5000;
+                let r2 <- rss_kb (Mty.child_pid m);
+                let a <- Check.report "the huge session's tail paints"
+                    (Bool.and ready painted);
+                let b <- Check.report "startup RSS stays within 10 MB of the baseline"
+                    (Bool.and (I64.gt r1 0) (I64.lt r1 (base + 10240)));
+                let c <- Check.report "idle RSS growth stays under 20 MB"
+                    (Bool.and (I64.gt r2 0) (I64.lt (r2 - r1) 20000));
+                IO.println (String.concat "rss base=" (String.concat (I64.to_string base)
+                    (String.concat "KB huge=" (String.concat (I64.to_string r1)
+                    (String.concat "KB idle=" (String.concat (I64.to_string r2) "KB"))))));
+                Mty.finish m;
+                return (Bool.and a (Bool.and b c))
+            }
+        }
+    }
+}
+
+def rss_run (bin : String) (root : String) : IO Bool := do {
+    let sessions := String.concat root "/sessions";
+    let base <- rss_baseline bin root sessions;
+    rss_huge bin root sessions base
+}
+
+#[test]
+def test_sessions_big_session_rss : IO Bool :=
+    run_gated "mty weaver sessions rss" test_sessions_rss_body
+
+def test_sessions_rss_body (bin : String) : IO Bool :=
+    with_root "sessions_rss" (fn (root : String) => rss_run bin root)

@@ -16,7 +16,9 @@ use std::io {IO.println, IO.get_env, IO.current_time, IO.current_time_nano, IO.r
 use std::path {Path, Path.is_absolute}
 use std::process {process_id, exec_cmd}
 use std::test {Test.write_fixture}
+use parsec::number {parse_i64}
 use weaver::procs {ProcEntry, Procs.scan_at}
+use weaver::theme {theme_split_lines}
 
 def env_or (name : String) (fallback : String) : IO String := do {
     let v <- IO.get_env name;
@@ -245,6 +247,39 @@ def wait_file_go (path : String) (needle : String) (deadline : I64) : IO Bool :=
         else do { sleepIO 50; wait_file_go path needle deadline }
     }
 }
+
+/// `VmRSS` in kB from `/proc/<pid>/status`; -1 when it cannot be read.
+///
+/// The final `return` is load-bearing. The self-hosted compile gate
+/// typechecks only the TARGET module (`check_deps=false`; see
+/// `plans/bootstrapping/check-deps-memory-blowup.md`), so an ill-typed
+/// helper in a library is not diagnosed when a test imports it. A bare
+/// tail expression here compiled to the raw `I64` through the `IO.bind`
+/// continuation, and `monad_get_tag` dereferenced that RSS integer -- the
+/// historical "fiber/GC SIGSEGV" in the sessions driver. `monad-rs check`
+/// and the corpus sweeps catch the shape; keep the `return` anyway.
+pub def rss_kb (pid : I64) : IO I64 := do {
+    let path := String.concat "/proc/" (String.concat (I64.to_string pid) "/status");
+    let text <- read_text path;
+    return (rss_of_lines (theme_split_lines text))
+}
+
+#[partial]
+def rss_of_lines (lines : List String) : I64 :=
+    match lines {
+        List.empty => 0 - 1,
+        List.cons l rest =>
+            if String.starts_with "VmRSS:" l then rss_value l else rss_of_lines rest
+    }
+
+/// `VmRSS:      1234 kB` -> 1234.
+def rss_value (l : String) : I64 :=
+    let t := String.trim (String.drop 6 l) in
+    let body := if String.ends_with t " kB" then String.slice t 0 (String.length t - 3) else t in
+    match parse_i64 body {
+        Option.some v => v,
+        Option.none => 0 - 1
+    }
 
 pub def proc_entries (root : String) : IO (List ProcEntry) :=
     Procs.scan_at (Path.path root)
