@@ -19,6 +19,11 @@ struct Sha256State {
   e : U32, f : U32, g : U32, h : U32
 }
 
+/// Eight 32-bit registers; duplicating the state is a register copy.
+pub instance Copy Sha256State {
+  def copy (s : Sha256State) : Pair Sha256State Sha256State := Pair.pair s s
+}
+
 // ── Constants (FIPS 180-4) ──
 
 def Sha256.h0 : List U32 :=

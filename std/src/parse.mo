@@ -123,6 +123,13 @@ struct Parse.Decimal {
     expv : I64,
 }
 
+/// The parser state is a pure record of `Copy` scalars, so sharing a
+/// snapshot across a branch is a bit-copy, not an ownership move.
+pub instance Copy Parse.Decimal {
+    def copy (d : Parse.Decimal) : Pair Parse.Decimal Parse.Decimal :=
+        Pair.pair d d
+}
+
 def Parse.decimal_init : Parse.Decimal :=
     let d : Parse.Decimal := {
         mant := 0.0f64,

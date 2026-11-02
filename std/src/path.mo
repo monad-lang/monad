@@ -11,6 +11,12 @@ pub type Path {
     path String
 }
 
+/// A `Path` is a `String` wrapper, and `String` is `Copy` (an immutable
+/// pointer), so sharing one is a pointer copy, not an ownership move.
+pub instance Copy Path {
+    def copy (p : Path) : Pair Path Path := Pair.pair p p
+}
+
 /// The validating smart constructor -- the ONLY sanctioned way to build
 /// a `Path` from an arbitrary/external string (CLI argv, a hardcoded
 /// literal, ...). Rejects the empty string: an empty path is never a

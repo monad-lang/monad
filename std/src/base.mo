@@ -63,6 +63,11 @@ class [Enum A] Bounded A {
 
 // ---------- Instances ----------
 
+/// `Ordering` is a three-way tag: sharing one is a register move.
+pub instance Copy Ordering {
+    def copy (o : Ordering) : Pair Ordering Ordering := Pair.pair o o
+}
+
 pub instance BEq Ordering {
     def beq (a b : Ordering) : Bool :=
         match a {

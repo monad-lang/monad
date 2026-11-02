@@ -127,8 +127,24 @@ pub instance Copy U8 {
     def copy (x : U8) : Pair U8 U8 := Pair.pair x x
 }
 
+pub instance Copy I8 {
+    def copy (x : I8) : Pair I8 I8 := Pair.pair x x
+}
+
+pub instance Copy I16 {
+    def copy (x : I16) : Pair I16 I16 := Pair.pair x x
+}
+
+pub instance Copy U16 {
+    def copy (x : U16) : Pair U16 U16 := Pair.pair x x
+}
+
 pub instance Copy F64 {
     def copy (x : F64) : Pair F64 F64 := Pair.pair x x
+}
+
+pub instance Copy F32 {
+    def copy (x : F32) : Pair F32 F32 := Pair.pair x x
 }
 
 pub instance Copy Bool {
