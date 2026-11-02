@@ -9,10 +9,11 @@ use shuttle::session {Session}
 use weaver::commands {WeaverState}
 use weaver::policy {Mode}
 use std::map {BTreeMap}
+use weaver::ui::rows {DisplayRow, Rows.of_line, Rows.wrap, Rows.cap_bytes}
 use weaver::model {
     TuiModel, init_tui_model, Model.append_block, Model.begin_selection,
     Model.drag_selection, Model.finish_selection, Model.selection_text,
-    Model.selection_cols, Model.scroll_step, Model.display_rows, DisplayRow,
+    Model.selection_cols, Model.scroll_step, Model.display_rows, 
     Model.input_press, Model.input_drag, Model.input_release, Model.in_input,
 }
 use weaver::store {TLine, TLine.plain}

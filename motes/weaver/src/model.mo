@@ -21,36 +21,32 @@ use log::logger {Logger}
 use weaver::error {WeaverError}
 use weaver::dumb {Dumb.status_fields}
 use weaver::theme {
-    theme_line_style_with, theme_tline_style_with, theme_status_style_with,
+    theme_line_style_with, theme_status_style_with,
     theme_border_style_with, theme_banner_style_with, theme_running_style_with,
     theme_thinking_style_with,
     theme_scrollbar_thumb_style_with,
-    theme_markdown_span_style_with,
-    BannerPart, theme_split_lines,
-}
-use markdown::parse {Markdown.parse}
-use markdown::render {
-    Markdown.to_lines, Markdown.to_plain_lines,
-    Markdown.StyledLine, Markdown.StyledSpan,
+    BannerPart,
 }
 use weaver::policy {Mode}
 use weaver::store {
     TLine, TLineKind, Transcript, TranscriptPage, Store.page_lines,
     Transcript.empty, Transcript.next_block, Transcript.append, Transcript.slice,
 }
-use tui::types {Event, LayoutSize, TextStyle, TextSegment}
-use tui::core {clamp, style_default, mk_text_segment}
+use tui::types {Event, LayoutSize, TextStyle}
+use tui::core {clamp, style_default}
 use tui::widgets::input {
     InputState, input_state, InputState.press, InputState.drag,
     InputState.finish_selection, InputState.clear_selection,
 }
-use tui::widget {Widget, SizedWidget, BorderStyle, border_with, label, spans, text_input, sized, with_style, padding}
-use tui::render {wrap_text}
+use tui::widget {Widget, SizedWidget, BorderStyle, border_with, label, text_input, sized, with_style, padding}
 use tui::text {
-    Text.width, Text.take_width, Text.slice_cols, Text.padded_slice_cols, Text.snap_span,
-    Text.width_spans, Text.wrap_spans, Text.slice_spans,
+    Text.width, Text.take_width, Text.slice_cols, Text.snap_span,
 }
 use std::list {List.intercalate}
+use weaver::ui::rows {
+    DisplayRow, Rows.plain, Rows.wrap, Rows.markdown, Rows.of_line, Rows.count_line, Rows.count_lines,
+    Rows.length, Rows.drop, Rows.take, Rows.at, Rows.tail_bytes, Rows.widget, Rows.widget_selected,
+}
 
 /// The loop's message type: a raw terminal event not yet interpreted, or
 /// the folded-back result of a `Cmd.perform`'d turn or slash command.
@@ -508,33 +504,6 @@ pub def Model.view (m : TuiModel) : Widget :=
     let head : List SizedWidget := if m.banner then [sized (LayoutSize.fixed Model.banner_height) (banner_widget m)] else List.empty in
     Widget.column (List.append head [transcript, status, input])
 
-/// The transcript panel's content: the window of lines that fit, one
-/// `label` row each. `rows - 4` is the fill share's height (`rows`
-/// minus the status and input's one row each) minus the border's own
-/// top/bottom lines; clamped so a tiny or not-yet-known terminal never
-/// asks for a negative slice. Scrolled up (scroll > 0), the panel's
-/// first row shows the count indicator.
-/// One display row: wrapped text plus the style of its ORIGINAL logical
-/// line (a continuation row must not be reclassified by a prefix it
-/// happens to start with).
-pub struct DisplayRow {
-    text : String,
-    style : TextStyle,
-    /// Empty for an ordinary row (painted as one label); a Markdown row
-    /// carries its inline segments so bold/code/link styling survives
-    /// wrapping and selection.
-    spans : List TextSegment,
-}
-
-def mk_row (style : TextStyle) (text : String) : DisplayRow :=
-    let r : DisplayRow := { text := text, style := style, spans := List.empty } in
-    r
-
-pub def mk_span_row (style : TextStyle) (ss : List TextSegment) : DisplayRow :=
-    let text : String := String.concat_all (List.map (fn (s : TextSegment) => s.text) ss) in
-    let r : DisplayRow := { text := text, style := style, spans := ss } in
-    r
-
 // ── mouse selection ─────────────────────────────────────────────────────
 // Coordinates are DISPLAY rows (the painted list, indicator included) and
 // CELL columns inside the transcript content. Screen -> display mapping is
@@ -605,19 +574,12 @@ pub struct TextSelection {
     moved : Bool
 }
 
-#[partial]
-def row_at (rows : List DisplayRow) (i : I64) : Option DisplayRow :=
-    match rows {
-        List.empty => Option.none,
-        List.cons r rest => if i < 1 then Option.some r else row_at rest (i - 1),
-    }
-
 /// The display cell under a mouse report, when it lies inside the panel.
 /// `clamp_it` is the drag rule (clamp to the nearest edge); a press must
 /// land inside.
 #[partial]
 def selection_point_in (m : TuiModel) (row : I64) (col : I64) (clamp_it : Bool) : Option (Pair I64 I64) :=
-    let n : I64 := rows_len m.rows_cache in
+    let n : I64 := Rows.length m.rows_cache in
     let w : I64 := Model.content_width m in
     let r0 : I64 := row - Model.panel_top_of m in
     let c0 : I64 := col - Model.panel_left in
@@ -720,7 +682,7 @@ pub def Model.selection_cols (m : TuiModel) (idx : I64) : Option (Pair I64 I64) 
             let sp : SelSpan := sel_span s in
             if Bool.or (idx < sp.top) (sp.bottom < idx)
             then Option.none
-            else match row_at m.rows_cache idx {
+            else match Rows.at m.rows_cache idx {
                 Option.none => Option.none,
                 Option.some r =>
                     let a : I64 := if idx == sp.top then sp.left else 0 in
@@ -742,145 +704,6 @@ pub def Model.finish_selection (m : TuiModel) : Pair TuiModel (Option String) :=
 pub def Model.content_width (m : TuiModel) : I64 :=
     let w : I64 := m.cols - 4 in
     if w < 1 then 1 else w
-
-#[partial]
-def rows_len (rs : List DisplayRow) : I64 :=
-    match rs {
-        List.empty => 0,
-        List.cons _ rest => 1 + rows_len rest,
-    }
-
-#[partial]
-def drop_rows (n : I64) (rs : List DisplayRow) : List DisplayRow :=
-    if n < 1 then rs
-    else match rs {
-        List.empty => rs,
-        List.cons _ rest => drop_rows (n - 1) rest,
-    }
-
-/// The last `n` rows (never more than the panel holds).
-#[partial]
-pub def Model.take_last_rows (n : I64) (rs : List DisplayRow) : List DisplayRow :=
-    if n < 1 then List.empty
-    else
-        let cut : I64 := rows_len rs - n in
-        drop_rows (if cut < 0 then 0 else cut) rs
-
-/// The first `n` rows.
-#[partial]
-def take_rows (n : I64) (rs : List DisplayRow) : List DisplayRow :=
-    if n < 1 then List.empty
-    else match rs {
-        List.empty => List.empty,
-        List.cons r rest => List.cons r (take_rows (n - 1) rest),
-    }
-
-/// The display bound for one logical line. The stored transcript keeps the
-/// full text; only rendering truncates, so one enormous assistant message
-/// cannot make every repaint (and every row-count walk) arbitrarily large.
-/// The dialog preview has its own, stricter cap.
-pub def Model.display_cap_bytes : I64 := 262144
-
-/// A UTF-8-safe prefix: `String.slice` answers "" when its end offset is a
-/// continuation byte, so back off up to three bytes rather than render a
-/// blank line.
-#[partial]
-def cap_utf8 (s : String) (max : I64) (back : I64) : String :=
-    if I64.gt back 3 then ""
-    else if I64.lt (max - back) 1 then ""
-    else
-        let x : String := String.slice s 0 (max - back) in
-        if String.is_empty x then cap_utf8 s max (back + 1) else x
-
-#[partial]
-def plain_rows (style : TextStyle) (width : I64) (text : String) : List DisplayRow :=
-    if String.is_empty text
-    then List.singleton (mk_row style "")
-    else
-        List.flatten (List.map (fn (part : String) =>
-            List.map (fn (t : String) => mk_row style t) (wrap_text width part)) (theme_split_lines text))
-
-#[partial]
-def plain_line_list (width : I64) (lines : List String) : List DisplayRow :=
-    match lines {
-        List.empty => List.empty,
-        List.cons l rest => List.append (plain_rows style_default width l) (plain_line_list width rest),
-    }
-
-def md_span (colors : Bool) (s : Markdown.StyledSpan) : TextSegment :=
-    mk_text_segment s.text (theme_markdown_span_style_with colors s.style)
-
-#[partial]
-def md_rows_go (colors : Bool) (width : I64) (lines : List Markdown.StyledLine) : List DisplayRow :=
-    match lines {
-        List.empty => List.empty,
-        List.cons l rest =>
-            let ss : List TextSegment := List.map (md_span colors) l.spans in
-            let wrapped : List (List TextSegment) := Text.wrap_spans width ss in
-            let rows : List DisplayRow := List.map (fn (row : List TextSegment) => mk_span_row style_default row) wrapped in
-            List.append rows (md_rows_go colors width rest),
-    }
-
-/// A block larger than this renders as plain text: the parser's work on one
-/// huge paragraph is quadratic, and a 28 KB plan/paste is not worth a
-/// multi-second repaint. Normal messages still get Markdown.
-pub def Model.markdown_max_bytes : I64 := 16384
-
-/// An assistant Markdown block: parsed once, wrapped with span-aware
-/// wrapping. With colors off the same AST flattens to plain lines, so a
-/// `--no-color` run shows the same text without the styling.
-def markdown_rows (colors : Bool) (width : I64) (text : String) : List DisplayRow :=
-    if I64.gt (String.length text) Model.markdown_max_bytes
-    then plain_line_list width (theme_split_lines text)
-    else
-        let doc := Markdown.parse text in
-        if colors
-        then md_rows_go colors width (Markdown.to_lines doc)
-        else plain_line_list width (Markdown.to_plain_lines doc)
-
-/// One logical line, split on its own newlines and wrapped. The kind wins
-/// over the text: a Markdown block is rendered as Markdown, a thinking
-/// row keeps the thinking style, and a plain row falls back to the prefix
-/// classification (user wins first).
-pub def Model.display_line (colors : Bool) (width : I64) (line : TLine) : List DisplayRow :=
-    let style : TextStyle :=
-        match line.kind {
-            TLineKind.line_thinking => theme_thinking_style_with colors,
-            TLineKind.line_markdown => style_default,
-            _ => theme_tline_style_with colors line.user line.text,
-        } in
-    let n : I64 := String.length line.text in
-    let truncated : Bool := I64.lt Model.display_cap_bytes n in
-    let text : String := if truncated then cap_utf8 line.text Model.display_cap_bytes 0 else line.text in
-    let rows : List DisplayRow :=
-        match line.kind {
-            TLineKind.line_markdown => markdown_rows colors width text,
-            _ => plain_rows style width text,
-        } in
-    if truncated
-    then List.append rows [mk_row style "[truncated for display -- full text is in the session history]"]
-    else rows
-
-/// Wrap `s` with the DEFAULT style, one row per wrapped part: a dialog
-/// body that is prose (a plan, a permission prompt) must not inherit the
-/// transcript's line classification -- a plan bullet starting "+ " turned
-/// the whole line green, diff colors and all.
-pub def Model.display_plain (width : I64) (s : String) : List DisplayRow :=
-    let w : I64 := if width < 1 then 1 else width in
-    if String.is_empty s
-    then List.singleton (mk_row style_default "")
-    else List.flatten (List.map (fn (part : String) => List.map (fn (t : String) => mk_row style_default t) (wrap_text w part)) (theme_split_lines s))
-
-#[partial]
-pub def Model.rows_of_line (colors : Bool) (width : I64) (line : TLine) : I64 :=
-    rows_len (Model.display_line colors width line)
-
-#[partial]
-def rows_of_lines (colors : Bool) (width : I64) (lines : List TLine) : I64 :=
-    match lines {
-        List.empty => 0,
-        List.cons l rest => Model.rows_of_line colors width l + rows_of_lines colors width rest,
-    }
 
 /// The loaded window: the loaded page (if any) through the tail. Lines
 /// before `start` are not on disk yet and render as one blank row each.
@@ -924,7 +747,7 @@ pub def Model.loaded_shown (m : TuiModel) : LoadedWindow :=
 /// moved through phantom rows -- slow, jumpy, and blank.
 pub def Model.row_total_of (m : TuiModel) : I64 :=
     let lw : LoadedWindow := Model.loaded_shown m in
-    rows_of_lines m.state.colors (Model.content_width m) lw.lines
+    Rows.count_lines m.state.colors (Model.content_width m) lw.lines
 
 /// The absolute line containing display row `row` of the loaded window.
 /// Hidden detail lines still COUNT as lines (they are skipped in the row
@@ -935,7 +758,7 @@ def first_line_at_row_go (colors : Bool) (width : I64) (show : Bool) (lines : Li
     match lines {
         List.empty => abs,
         List.cons l rest =>
-            let n : I64 := if Bool.and (Bool.not show) l.detail then 0 else Model.rows_of_line colors width l in
+            let n : I64 := if Bool.and (Bool.not show) l.detail then 0 else Rows.count_line colors width l in
             if target < off + n
             then abs
             else first_line_at_row_go colors width show rest (abs + 1) (off + n) target,
@@ -956,8 +779,8 @@ def collect_rows_go (colors : Bool) (width : I64) (lines : List TLine) (off : I6
     else match lines {
         List.empty => acc,
         List.cons l rest =>
-            let rows : List DisplayRow := Model.display_line colors width l in
-            let n : I64 := rows_len rows in
+            let rows : List DisplayRow := Rows.of_line colors width l in
+            let n : I64 := Rows.length rows in
             let line_end : I64 := off + n in
             if Bool.not (start < line_end)
             then collect_rows_go colors width rest line_end start count acc
@@ -965,7 +788,7 @@ def collect_rows_go (colors : Bool) (width : I64) (lines : List TLine) (off : I6
                 let skip : I64 := if start < off then 0 else start - off in
                 let avail : I64 := n - skip in
                 let take : I64 := if count < avail then count else avail in
-                let picked : List DisplayRow := take_rows take (drop_rows skip rows) in
+                let picked : List DisplayRow := Rows.take take (Rows.drop skip rows) in
                 collect_rows_go colors width rest line_end start (count - take) (List.append acc picked),
     }
 
@@ -981,7 +804,7 @@ pub def Model.visible_rows (m : TuiModel) : List DisplayRow :=
     let width : I64 := Model.content_width m in
     let content : List DisplayRow := collect_rows_go colors width lw.lines 0 w.start w.count List.empty in
     if w.eff > 0
-    then List.cons (mk_row (theme_line_style_with colors (scrolled_indicator m w)) (scrolled_indicator m w)) content
+    then List.cons (Rows.plain (theme_line_style_with colors (scrolled_indicator m w)) (scrolled_indicator m w)) content
     else content
 
 pub def Model.rows_key_of (m : TuiModel) : RowsKey :=
@@ -1018,81 +841,8 @@ def rebuild_rows (m : TuiModel) (k : RowsKey) : TuiModel :=
 pub def Model.display_rows (m : TuiModel) : List DisplayRow :=
     m.rows_cache
 
-pub def Model.display_row_widget (r : DisplayRow) : SizedWidget :=
-    let base : Widget :=
-        match r.spans {
-            List.empty => label r.text,
-            List.cons _ _ => spans r.spans,
-        } in
-    sized (LayoutSize.fixed 1) (with_style r.style base)
-
-/// A span-row selection: head/mid/tail spans, the middle reversed in place.
-/// The plain-row path stays text-based so it keeps its exact cell padding.
-def selected_span_row (r : DisplayRow) (a : I64) (b : I64) : SizedWidget :=
-    let total : I64 := Text.width r.text in
-    let mw : I64 := if b < a then 0 else b - a in
-    let head : List TextSegment := Text.slice_spans r.spans 0 a in
-    let mid0 : List TextSegment := Text.slice_spans r.spans a b in
-    let tail : List TextSegment := Text.slice_spans r.spans b total in
-    let midw : I64 := Text.width_spans mid0 in
-    let pad : I64 := if mw < midw then 0 else mw - midw in
-    let mid : List TextSegment :=
-        List.append (List.map (fn (s : TextSegment) => mk_text_segment s.text { s.style with reverse := true }) mid0)
-            (if pad < 1 then List.empty else [mk_text_segment (String.repeat " " pad) { r.style with reverse := true }]) in
-    let hw : I64 := Text.width_spans head in
-    let tw : I64 := Text.width_spans tail in
-    let p1 : List SizedWidget :=
-        if hw < 1 then List.empty
-        else List.cons (sized (LayoutSize.fixed hw) (with_style r.style (spans head))) List.empty in
-    let p2 : List SizedWidget :=
-        if mw < 1 then List.empty
-        else List.cons (sized (LayoutSize.fixed mw) (with_style r.style (spans mid))) List.empty in
-    let p3 : List SizedWidget :=
-        if tw < 1 then List.empty
-        else List.cons (sized (LayoutSize.fixed tw) (with_style r.style (spans tail))) List.empty in
-    let parts : List SizedWidget := List.append p1 (List.append p2 p3) in
-    match parts {
-        List.empty => Model.display_row_widget r,
-        List.cons _ _ => sized (LayoutSize.fixed 1) (Widget.row parts),
-    }
-
-/// One row split into head / selected middle / tail, so the selection is
-/// reverse video on exactly the chosen cells. Fixed widths come from
-/// `Text.width`, never from byte length.
 pub def Model.display_row_widget_selected (m : TuiModel) (idx : I64) (r : DisplayRow) : SizedWidget :=
-    match Model.selection_cols m idx {
-        Option.none => Model.display_row_widget r,
-        Option.some pr => match pr {
-            Pair.pair a b =>
-                match r.spans {
-                    List.cons _ _ => selected_span_row r a b,
-                    List.empty =>
-                        let total : I64 := Text.width r.text in
-                        let head : String := Text.slice_cols r.text 0 a in
-                        let mid : String := Text.padded_slice_cols r.text a b in
-                        let tail : String := Text.slice_cols r.text b total in
-                        let hw : I64 := Text.width head in
-                        let mw : I64 := if b < a then 0 else b - a in
-                        let tw : I64 := Text.width tail in
-                        let base : TextStyle := r.style in
-                        let sel : TextStyle := { base with reverse := true } in
-                        let p1 : List SizedWidget :=
-                            if hw < 1 then List.empty
-                            else List.cons (sized (LayoutSize.fixed hw) (with_style r.style (label head))) List.empty in
-                        let p2 : List SizedWidget :=
-                            if mw < 1 then List.empty
-                            else List.cons (sized (LayoutSize.fixed mw) (with_style sel (label mid))) List.empty in
-                        let p3 : List SizedWidget :=
-                            if tw < 1 then List.empty
-                            else List.cons (sized (LayoutSize.fixed tw) (with_style r.style (label tail))) List.empty in
-                        let parts : List SizedWidget := List.append p1 (List.append p2 p3) in
-                        match parts {
-                            List.empty => Model.display_row_widget r,
-                            List.cons _ _ => sized (LayoutSize.fixed 1) (Widget.row parts),
-                        },
-                },
-        },
-    }
+    Rows.widget_selected r (Model.selection_cols m idx)
 
 #[partial]
 def transcript_row_widgets (m : TuiModel) (rows : List DisplayRow) (i : I64) : List SizedWidget :=
@@ -1108,11 +858,11 @@ def transcript_column (m : TuiModel) : Widget :=
     if m.turn_pending
     then
         let thinking : List SizedWidget :=
-            List.map (fn (r : DisplayRow) => Model.display_row_widget r) (Model.live_thinking_rows m) in
+            List.map (fn (r : DisplayRow) => Rows.widget r) (Model.live_thinking_rows m) in
         let answer : List SizedWidget :=
-            List.map (fn (r : DisplayRow) => Model.display_row_widget r) (Model.live_text_rows m) in
+            List.map (fn (r : DisplayRow) => Rows.widget r) (Model.live_text_rows m) in
         Widget.column (List.append body
-            (List.append thinking (List.append answer [Model.display_row_widget (Model.live_row m)])))
+            (List.append thinking (List.append answer [Rows.widget (Model.live_row m)])))
     else Widget.column body
 
 /// The TURN's spend the live row shows: the cumulative report from
@@ -1155,7 +905,7 @@ pub def Model.live_phase (m : TuiModel) : String :=
 pub def Model.live_row (m : TuiModel) : DisplayRow :=
     let style : TextStyle := theme_running_style_with m.state.colors in
     let text : String := Text.take_width (Model.thinking_text m) (Model.content_width m) in
-    mk_row style text
+    Rows.plain style text
 
 /// The absolute ROW window the panel shows. `eff` is the clamped scroll
 /// in rows; the scrolled panel spends ONE row on the indicator, so the
@@ -1286,50 +1036,22 @@ pub def Model.live_text_cap (m : TuiModel) : I64 :=
     let c : I64 := live_content_cap m in
     c - (c / 2)
 
-/// A tail slice that never starts mid-UTF-8: `String.slice` can answer
-/// "" at a continuation boundary, so back off up to three bytes.
-#[partial]
-def tail_safe (text : String) (start : I64) (back : I64) : String :=
-    let n : I64 := String.length text in
-    if I64.gt back 3i64 then ""
-    else if I64.lt (n - start - back) 1i64 then ""
-    else
-        let s : String := String.slice text (start + back) (n - start - back) in
-        if String.is_empty s then tail_safe text start (back + 1i64) else s
-
-def tail_bytes (text : String) (cap : I64) : String :=
-    let n : I64 := String.length text in
-    if I64.gt n cap then tail_safe text (n - cap) 0i64 else text
-
 pub def Model.live_thinking_source (m : TuiModel) : String :=
-    tail_bytes m.live_thinking Model.live_thinking_cap_bytes
+    Rows.tail_bytes m.live_thinking Model.live_thinking_cap_bytes
 
 pub def Model.live_text_source (m : TuiModel) : String :=
-    let t : String := tail_bytes m.live_text Model.live_stream_cap_bytes in
+    let t : String := Rows.tail_bytes m.live_text Model.live_stream_cap_bytes in
     if String.is_empty t then "" else String.concat t "▌"
-
-#[partial]
-def rows_drop (n : I64) (rs : List DisplayRow) : List DisplayRow :=
-    if n < 1i64 then rs
-    else match rs {
-        List.empty => rs,
-        List.cons _ rest => rows_drop (n - 1i64) rest,
-    }
-
-#[partial]
-def wrap_plain_rows (style : TextStyle) (width : I64) (src : String) : List DisplayRow :=
-    List.flatten (List.map (fn (part : String) =>
-        List.map (fn (t : String) => mk_row style t) (wrap_text width part)) (theme_split_lines src))
 
 /// Reasoning: dim magenta, its own byte and row budget.
 pub def Model.live_thinking_rows (m : TuiModel) : List DisplayRow :=
     let src : String := Model.live_thinking_source m in
     if String.is_empty src then List.empty
     else
-        let all : List DisplayRow := wrap_plain_rows (theme_thinking_style_with m.state.colors) (Model.content_width m) src in
-        let n : I64 := rows_len all in
+        let all : List DisplayRow := Rows.wrap (theme_thinking_style_with m.state.colors) (Model.content_width m) src in
+        let n : I64 := Rows.length all in
         let cap : I64 := Model.live_thinking_cap m in
-        if I64.gt n cap then rows_drop (n - cap) all else all
+        if I64.gt n cap then Rows.drop (n - cap) all else all
 
 /// The answer: rendered as Markdown while it streams (the parser is total,
 /// so an unfinished fence or list is literal text until it closes).
@@ -1337,16 +1059,16 @@ pub def Model.live_text_rows (m : TuiModel) : List DisplayRow :=
     let src : String := Model.live_text_source m in
     if String.is_empty src then List.empty
     else
-        let all : List DisplayRow := markdown_rows m.state.colors (Model.content_width m) src in
-        let n : I64 := rows_len all in
+        let all : List DisplayRow := Rows.markdown m.state.colors (Model.content_width m) src in
+        let n : I64 := Rows.length all in
         let cap : I64 := Model.live_text_cap m in
-        if I64.gt n cap then rows_drop (n - cap) all else all
+        if I64.gt n cap then Rows.drop (n - cap) all else all
 
 pub def Model.live_thinking_height (m : TuiModel) : I64 :=
-    rows_len (Model.live_thinking_rows m)
+    Rows.length (Model.live_thinking_rows m)
 
 pub def Model.live_text_height (m : TuiModel) : I64 :=
-    rows_len (Model.live_text_rows m)
+    Rows.length (Model.live_text_rows m)
 
 /// Both live blocks together (the historical name tests use).
 pub def Model.live_stream_height (m : TuiModel) : I64 :=
@@ -1485,7 +1207,7 @@ pub def Model.append_block (m : TuiModel) (lines : List TLine) : TuiModel :=
         if m.scroll > 0
         then
             let shown : List TLine := shown_lines m.show_details block in
-            let added : I64 := rows_of_lines m.state.colors (Model.content_width m) shown in
+            let added : I64 := Rows.count_lines m.state.colors (Model.content_width m) shown in
             { m with transcript := tr2, scroll := m.scroll + added }
         else { m with transcript := tr2, scroll := 0 } in
     Model.refresh_rows m2

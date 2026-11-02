@@ -14,8 +14,9 @@ use shuttle::session {Session}
 use weaver::commands {WeaverState, Effect, TranscriptChange, set_fatal}
 use weaver::error {WeaverError}
 use weaver::policy {Mode}
+use weaver::ui::rows {DisplayRow, Rows.of_line, Rows.wrap, Rows.cap_bytes}
 use weaver::model {
-    TuiModel, WeaverMsg, LiveDelta, DisplayRow, init_tui_model, Model.append_block,
+    TuiModel, WeaverMsg, LiveDelta, init_tui_model, Model.append_block,
     Model.scroll_step, Model.display_rows, Model.thinking_text,
     PickerState, Picker.count, Picker.selected_model, Picker.init, Picker.move,
     Picker.window_offset, Picker.visible,

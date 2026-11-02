@@ -40,13 +40,13 @@ use weaver::model {
     Model.view, Model.scroll_step, Model.append_block, Model.append_lines,
     Model.scrollbar_hit, Model.scrollbar_press, Model.scrollbar_drag_to, Model.scrollbar_release,
     Model.window, Model.needs_page, Model.page_request, Model.hist_keep,
-    DisplayRow, Model.display_line, Model.display_plain, Model.take_last_rows, Model.display_row_widget,
     Model.refresh_rows, Model.begin_selection, Model.drag_selection, Model.finish_selection,
     Model.clear_input_selection, Model.in_input, Model.input_drag, Model.input_press,
     Model.input_release, Model.input_sel_active, Model.picker_height,
     PickerState, Picker.init, Picker.selected_model, Picker.move,
     list_length, panel_height, input_placeholder,
 }
+use weaver::ui::rows {DisplayRow, Rows.of_line, Rows.wrap, Rows.take, Rows.drop, Rows.widget}
 use weaver::logs {Logs.info, Logs.debug, Logs.warn, Logs.error, Logs.log_rss}
 use weaver::title {Title.generate, Title.needed}
 use weaver::subagent {Subagent.task_tool}
@@ -74,7 +74,7 @@ use tui::types {Event, Key, MouseEvent, MouseButton, LayoutSize, TextStyle, Rect
 use tui::widget {Widget, SizedWidget, BorderStyle, border_with, padding, sized, label, with_style}
 use tui::widgets::input {InputState, input_state, handle_input_multiline_key, insert_text}
 use tui::widgets::input {handle_input_key}
-use tui::core {empty_screen, mk_rect, style_to_ansi}
+use tui::core {empty_screen, mk_rect, style_to_ansi, style_default}
 use tui::render {render, diff, apply_deltas}
 use tui::text {Text.take_width, Text.width}
 use tui::clipboard {Clipboard.copy}
@@ -2130,29 +2130,13 @@ def plan_approval_step (st : WeaverState) : IO WeaverMsg := do {
 
 // ── dialog rendering and input ─────────────────────────────────────────
 
-#[partial]
-def take_rows (n : I64) (rs : List DisplayRow) : List DisplayRow :=
-    if n < 1 then List.empty
-    else match rs {
-        List.empty => List.empty,
-        List.cons r rest => List.cons r (take_rows (n - 1) rest),
-    }
-
-#[partial]
-def drop_rows (n : I64) (rs : List DisplayRow) : List DisplayRow :=
-    if n < 1 then rs
-    else match rs {
-        List.empty => rs,
-        List.cons _ rest => drop_rows (n - 1) rest,
-    }
-
 /// A Markdown body: the lines join into ONE document, so headings,
 /// lists and fences are parsed rather than shown as source. Parsed
 /// once per render, like `dialog_body_rows`.
 pub def markdown_body_rows (colors : Bool) (width : I64) (lines : List String) : List DisplayRow :=
     if List.length lines < 1
     then List.empty
-    else Model.display_line colors width (TLine.markdown_line (List.intercalate "\n" lines))
+    else Rows.of_line colors width (TLine.markdown_line (List.intercalate "\n" lines))
 
 #[partial]
 def dialog_body_rows (colors : Bool) (plain : Bool) (width : I64) (lines : List String) : List DisplayRow :=
@@ -2161,8 +2145,8 @@ def dialog_body_rows (colors : Bool) (plain : Bool) (width : I64) (lines : List 
         List.cons l rest =>
             let rows : List DisplayRow :=
                 if plain
-                then Model.display_plain width l
-                else Model.display_line colors width (TLine.plain l) in
+                then Rows.wrap style_default width l
+                else Rows.of_line colors width (TLine.plain l) in
             List.append rows (dialog_body_rows colors plain width rest),
     }
 
@@ -2189,7 +2173,7 @@ def dialog_option_rows (colors : Bool) (d : Dialog) (i : I64) (width : I64) : Li
             let marker : String := if i == d.selected then "> " else "  " in
             let suffix : String := if String.is_empty o.hint then "" else String.concat "  (" (String.concat o.hint ")") in
             let line : String := String.concat marker (String.concat o.label suffix) in
-            let rows : List DisplayRow := Model.display_line colors width (TLine.plain line) in
+            let rows : List DisplayRow := Rows.of_line colors width (TLine.plain line) in
             let styled : List DisplayRow := if i == d.selected then List.map reverse_row rows else rows in
             List.append styled (dialog_option_rows colors d (i + 1) width),
     }
@@ -2201,7 +2185,7 @@ def dialog_note_row (colors : Bool) (d : Dialog) (width : I64) : List DisplayRow
         else if String.is_empty d.note.value
         then "note: (press e to add one)"
         else String.concat "note: " d.note.value in
-    List.map dim_row (Model.display_line colors width (TLine.plain text))
+    List.map dim_row (Rows.of_line colors width (TLine.plain text))
 
 /// The dialog's visible rows. The body yields to the fixed rows on a
 /// short terminal, so the options, note and footer stay visible.
@@ -2214,11 +2198,11 @@ def dialog_rows (colors : Bool) (d : Dialog) (width : I64) (height : I64) (body_
     let nopts : I64 := Dialog.option_count d in
     let fixed : I64 := 2 + 1 + 1 + nopts + 1 + 1 + 1 in
     let body_budget : I64 := if budget - fixed < 1 then 0 else budget - fixed in
-    let body : List DisplayRow := take_rows body_budget (drop_rows d.scroll body_all) in
-    let title_rows : List DisplayRow := List.map bold_row (Model.display_line colors width (TLine.plain d.title)) in
-    let subtitle_rows : List DisplayRow := List.map dim_row (Model.display_line colors width (TLine.plain d.subtitle)) in
-    let blank : List DisplayRow := Model.display_line colors width (TLine.plain "") in
-    let foot : List DisplayRow := List.map dim_row (Model.display_line colors width (TLine.plain d.footer)) in
+    let body : List DisplayRow := Rows.take body_budget (Rows.drop d.scroll body_all) in
+    let title_rows : List DisplayRow := List.map bold_row (Rows.of_line colors width (TLine.plain d.title)) in
+    let subtitle_rows : List DisplayRow := List.map dim_row (Rows.of_line colors width (TLine.plain d.subtitle)) in
+    let blank : List DisplayRow := Rows.of_line colors width (TLine.plain "") in
+    let foot : List DisplayRow := List.map dim_row (Rows.of_line colors width (TLine.plain d.footer)) in
     let a : List DisplayRow := List.append title_rows subtitle_rows in
     let b : List DisplayRow := List.append a blank in
     let c : List DisplayRow := List.append b body in
@@ -2227,7 +2211,7 @@ def dialog_rows (colors : Bool) (d : Dialog) (width : I64) (height : I64) (body_
     let g : List DisplayRow := List.append f blank in
     let h : List DisplayRow := List.append g (dialog_note_row colors d width) in
     let all : List DisplayRow := List.append h foot in
-    take_rows budget all
+    Rows.take budget all
 
 def dialog_total_rows (d : Dialog) (body_all : List DisplayRow) : I64 :=
     let nopts : I64 := Dialog.option_count d in
@@ -2236,7 +2220,7 @@ def dialog_total_rows (d : Dialog) (body_all : List DisplayRow) : I64 :=
 def dialog_widget (colors : Bool) (rows : List DisplayRow) : Widget :=
     Widget.column [
         sized (LayoutSize.fill 1) (border_with (theme_border_style_with colors) BorderStyle.rounded
-            (padding 1 1 1 2 (Widget.column (List.map Model.display_row_widget rows)))),
+            (padding 1 1 1 2 (Widget.column (List.map Rows.widget rows)))),
     ]
 
 def render_dialog (colors : Bool) (d : Dialog) : IO Unit := do {

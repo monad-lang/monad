@@ -17,18 +17,18 @@ use weaver::policy {Mode}
 use std::map {BTreeMap}
 use std::list {List.length}
 use tui::text {Text.width}
+use weaver::ui::rows {DisplayRow, Rows.of_line, Rows.wrap, Rows.cap_bytes}
 use weaver::model {
     TuiModel, Window, init_tui_model,
     Model.scroll_step, Model.append_block, Model.window, Model.needs_page,
     Model.page_request, Model.visible_rows, scroll_indicator, panel_height,
-    Model.display_rows, Model.content_width, DisplayRow,
-    Model.display_line, Model.display_plain, Model.display_cap_bytes,
+    Model.display_rows, Model.content_width, 
     Model.body_height, Model.thinking_text, Model.live_stream_height, Model.live_row, status_line,
     Model.row_total_of, Model.first_line_at_row, Model.refresh_rows,
     Model.view, Model.panel_top_of, Model.panel_left,
 }
 use tui::render {render}
-use tui::core {empty_screen, mk_rect, screen_get_cell}
+use tui::core {empty_screen, mk_rect, screen_get_cell, style_default}
 use tui::types {Screen}
 use weaver::store {TLine, TLine.plain, TLine.detail_line, Transcript, TranscriptPage, Transcript.with_page}
 
@@ -374,8 +374,8 @@ def test_live_row_is_not_in_the_rows_cache : Bool :=
 /// repaint and row-count walk unbounded; the marker says where the rest is.
 #[test]
 def test_display_line_caps_an_enormous_line : Bool :=
-    let long : String := String.repeat "x" (Model.display_cap_bytes + 1) in
-    let rows : List DisplayRow := Model.display_line false 80 (TLine.plain long) in
+    let long : String := String.repeat "x" (Rows.cap_bytes + 1) in
+    let rows : List DisplayRow := Rows.of_line false 80 (TLine.plain long) in
     match List.reverse rows {
         List.cons last _ => String.contains last.text "truncated for display",
         List.empty => false,
@@ -403,7 +403,7 @@ def test_a_message_taller_than_the_panel_is_fully_reachable : Bool :=
 /// plain dialog body: plans are prose, not diffs.
 #[test]
 def test_display_plain_does_not_classify : Bool :=
-    let rows := Model.display_plain 40 "+ not a diff" in
+    let rows := Rows.wrap style_default 40 "+ not a diff" in
     match rows {
         List.cons r _ => r.style.fg == Option.none && Bool.not r.style.dim,
         List.empty => false,
@@ -411,7 +411,7 @@ def test_display_plain_does_not_classify : Bool :=
 
 #[test]
 def test_display_plain_wraps_like_a_transcript_line : Bool :=
-    Bool.not (I64.lt (List.length (Model.display_plain 4 "abcdefghij")) 3)
+    Bool.not (I64.lt (List.length (Rows.wrap style_default 4 "abcdefghij")) 3)
 
 /// A colored 24x80 model with one block appended. The render pins need the
 /// real palette; `model_of` is colorless (the dumb-mode default).
