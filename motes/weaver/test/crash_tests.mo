@@ -9,7 +9,7 @@ use weaver::mty_support {
 use std::io {IO.println}
 
 def has_stripped (o : Output) (needle : String) : Bool :=
-    String.contains (Output.stripped o) needle
+    String.contains (Output.tight o) needle
 
 def crash_go (bin : String) (root : String) (turns : String) : IO Bool := do {
     let log_dir := String.concat root "/logs";
@@ -38,7 +38,7 @@ def crash_go (bin : String) (root : String) (turns : String) : IO Bool := do {
                 Result.err e => do { IO.println (String.concat "FAIL mty crash spawn 2: " e); return false },
                 Result.ok m2 => do {
                     let warned <- Mty.wait_until m2
-                        (fn (o : Output) => has_stripped o "previous session ended unexpectedly") 6000;
+                        (fn (o : Output) => has_stripped o "previoussessionendedunexpectedly") 6000;
                     let c <- Check.report "the restart warns about the previous crash" warned;
                     let logged <- wait_file_contains run2 "ev=crash_detected" 6000;
                     let d <- Check.report "the restart logs crash_detected" logged;

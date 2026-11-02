@@ -5,7 +5,7 @@
 use mty::spawn {Mty, Output}
 use mty::check {Check.report}
 use weaver::mty_support {
-    run_gated, with_root, spawn_args, send_paste, write_mode_config
+    run_gated, with_root, spawn_args, send_paste, write_mode_config, count_occurrences
 }
 use weaver::mty_fixtures {
     write_text_script, plan_text, newest_session, session_dir, wait_store_text
@@ -14,9 +14,6 @@ use std::io {IO.println, IO.current_time_nano}
 
 def tight_has (o : Output) (needle : String) : Bool :=
     String.contains (Output.tight o) needle
-
-def stripped_has (o : Output) (needle : String) : Bool :=
-    String.contains (Output.stripped o) needle
 
 def grid_has (o : Output) (needle : String) : Bool :=
     match Output.find o needle {
@@ -41,7 +38,14 @@ def bigplan_go (m : Mty) (sessions : String) : IO Bool := do {
     let ready <- Mty.wait_until m placeholder_seen 8000;
     let t0 <- IO.current_time_nano;
     Mty.send_text m "go\n";
-    let tail <- Mty.wait_until m (fn (o : Output) => tight_has o "PLAN-LINE-1999") 10000;
+    // A clean plan-mode turn opens the review dialog by itself. Close it so
+    // the transcript checks run against the panel; `/plan` reopens it below.
+    let auto <- Mty.wait_until m (fn (o : Output) => tight_has o "Planready") 20000;
+    let a0 <- timed_report "the plan dialog opens by itself" t0 auto;
+    Mty.send_text m "\u{1b}";
+    let _ <- Mty.wait_until m (fn (o : Output) => tight_has o "plannotapproved") 10000;
+    // The GRID, not the stream: an unchanged screen sends no new bytes.
+    let tail <- Mty.wait_until m (fn (o : Output) => grid_has o "PLAN-LINE-1999") 20000;
     let a <- timed_report "a large plan paints promptly" t0 tail;
     let id_opt <- newest_session sessions;
     let stored <- match id_opt {
@@ -56,7 +60,7 @@ def bigplan_go (m : Mty) (sessions : String) : IO Bool := do {
     Mty.send_text m "\u{1b}[F";
     let t2 <- IO.current_time_nano;
     Mty.send_text m "/plan\r";
-    let ready_dialog <- Mty.wait_until m (fn (o : Output) => stripped_has o "Plan ready") 10000;
+    let ready_dialog <- Mty.wait_until m (fn (o : Output) => I64.lt 1 (count_occurrences (Output.tight o) "Planready")) 10000;
     let d <- timed_report "the plan dialog opens promptly" t2 ready_dialog;
     Mty.send_text m "e";
     let editing <- Mty.wait_until m (fn (o : Output) => grid_has o "note:") 3000;
@@ -65,10 +69,11 @@ def bigplan_go (m : Mty) (sessions : String) : IO Bool := do {
     let pasted <- Mty.wait_until m (fn (o : Output) => tight_has o "note-note-") 15000;
     let e <- timed_report "a large note paste completes" t3 pasted;
     Mty.send_text m "\u{1b}";
-    let closed <- Mty.wait_until m (fn (o : Output) => stripped_has o "plan not approved") 8000;
+    // The second "plan not approved": the first was the auto dialog's.
+    let closed <- Mty.wait_until m (fn (o : Output) => I64.lt 1 (count_occurrences (Output.tight o) "plannotapproved")) 8000;
     let f <- Check.report "Esc still closes the dialog after a paste" closed;
     Mty.finish m;
-    return (Bool.and ready (Bool.and a (Bool.and b (Bool.and c (Bool.and d (Bool.and editing (Bool.and e f)))))))
+    return (Bool.and (Bool.and ready a0) (Bool.and a (Bool.and b (Bool.and c (Bool.and d (Bool.and editing (Bool.and e f)))))))
 }
 
 def bigplan_run (bin : String) (root : String) : IO Bool := do {
