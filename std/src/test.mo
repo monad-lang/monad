@@ -61,9 +61,10 @@ def Test.append_to (path : Path) (text : String) (r : Result StreamError String)
     match r {
         Result.ok old => Test.write_fixture path (String.concat old text),
         Result.err e =>
-            if StreamError.is_not_found e
+            let err : StreamError := e in
+            if StreamError.is_not_found err
             then Test.write_fixture path text
-            else Test.append_failed path e
+            else Test.append_failed path err
     }
 
 def Test.append_failed (path : Path) (e : StreamError) : IO Bool := do {

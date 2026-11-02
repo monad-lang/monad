@@ -87,7 +87,7 @@ def test_of_list_4k_round_trips : IO Bool := do {
     let big : List U8 := ramp 4096;
     let b <- ByteBuf.of_list big;
     let xs <- ByteBuf.to_list b 4096;
-    return (I64.beq (List.length xs) 4096 && bytes_eq xs big)
+    return (I64.beq (List.length xs) 4096 && bytes_eq xs (ramp 4096))
 }
 
 /// `to_list` reads only the first `len` bytes -- the whole point of the

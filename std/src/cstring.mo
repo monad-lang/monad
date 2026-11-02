@@ -17,6 +17,7 @@
 // Compiled backend only, like `ByteBuf.ptr`: the Rust host ignores
 // `#[extern "c"]` and has no raw addresses.
 
+use init::shared {Shared, Shared.get}
 use lib::bytebuf {ByteBuf, ByteBuf.alloc, ByteBuf.free, ByteBuf.ptr,
     ByteBuf.to_list, ByteBuf.to_string}
 
@@ -31,9 +32,15 @@ def cstring_memcpy (dst : Ptr) (src : Ptr) (n : I64) : RawIO Ptr
 
 with CString {
     /// Copy a NUL-terminated C string into a Monad `String`.
-    pub def read (p : Ptr) : IO String := do {
-        let n := cstring_strlen p;
-        CString.read_or_empty p n
+    ///
+    /// The source pointer is read twice (length, then copy), so it travels
+    /// as a `Shared Ptr`: a view is a read, not a move, and the pointer's
+    /// referent is foreign-owned either way.
+    pub def read (p : Ptr) : IO String := CString.read_shared (Shared.of p)
+
+    def read_shared (p : Shared Ptr) : IO String := do {
+        let n := cstring_strlen (Shared.get p);
+        CString.read_or_empty (Shared.get p) n
     }
 
     /// Copy exactly `n` bytes (may contain NULs) into a Monad `String`.

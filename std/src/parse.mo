@@ -79,9 +79,10 @@ def Parse.i64_go (bs : List U8) (acc : I64) (seen : Bool) : Option I64 :=
             match Parse.digit_value b {
                 Option.none => Option.none,
                 Option.some d =>
-                    if Parse.i64_overflows acc d
+                    let dv : I64 := d in
+                    if Parse.i64_overflows acc dv
                     then Option.none
-                    else Parse.i64_go rest (I64.add (I64.mul acc 10i64) d) true,
+                    else Parse.i64_go rest (I64.add (I64.mul acc 10i64) dv) true,
             },
     }
 

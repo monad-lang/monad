@@ -41,6 +41,17 @@ pub struct StreamError {
   message : String
 }
 
+/// A kind is a plain tag and a `StreamError` is a tag plus a `Copy`
+/// `String`, so sharing one is a bit-copy, not an ownership move.
+pub instance Copy StreamErrorKind {
+  def copy (k : StreamErrorKind) : Pair StreamErrorKind StreamErrorKind :=
+    Pair.pair k k
+}
+
+pub instance Copy StreamError {
+  def copy (e : StreamError) : Pair StreamError StreamError := Pair.pair e e
+}
+
 /// `StreamErrorKind` in declaration order, so a kind code IS an index.
 /// A table rather than an `if` ladder: there are no integer patterns.
 def StreamError.kinds : List StreamErrorKind :=

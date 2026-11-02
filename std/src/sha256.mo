@@ -10,6 +10,7 @@
 /// any message under 2^32 bits (~512 MiB), which is far beyond what this
 /// tree-walking-successor interpreter can hash in reasonable time anyway.
 
+use init::shared {Shared, Shared.get}
 use std::list {List.length}
 
 // ── State ──
@@ -152,9 +153,10 @@ def Sha256.zero_bytes (n : I64) : List U8 :=
   if I64.beq n 0 then List.empty
   else List.cons 0u8 (Sha256.zero_bytes (n - 1))
 
-def Sha256.pad (bytes : List U8) (msg_len_bytes : I64) : List U8 :=
+def Sha256.pad (bytes : Shared (List U8)) : List U8 :=
+  let msg_len_bytes := List.length (Shared.get bytes) in
   let bit_len := I64.mul msg_len_bytes 8 in
-  let marked := List.append bytes (List.singleton 128u8) in // 0x80
+  let marked := List.append (Shared.get bytes) (List.singleton 128u8) in // 0x80
   let zeros := Sha256.zero_bytes (Sha256.pad_zeros_needed msg_len_bytes) in
   let len_hi := Sha256.unpack_word 0u32 in // high 32 bits of bit-length: see module doc
   let len_lo := Sha256.unpack_word (I64.to_u32 bit_len) in
@@ -175,18 +177,18 @@ def Sha256.at_or_zero (l : List U32) (i : I64) : U32 :=
 // first (cons-accumulator, same idiom as List.reverse_append). For the
 // next word: sigma1(rev[1]) + rev[6] + sigma0(rev[14]) + rev[15].
 #[terminating] // decreasing I64 counter over a 2-list-lookback window
-def Sha256.expand_loop (rev_words : List U32) (remaining : I64) : List U32 :=
-  if I64.beq remaining 0 then rev_words
+def Sha256.expand_loop (rev_words : Shared (List U32)) (remaining : I64) : List U32 :=
+  if I64.beq remaining 0 then Shared.get rev_words
   else
-    let w2 := Sha256.at_or_zero rev_words 1 in
-    let w7 := Sha256.at_or_zero rev_words 6 in
-    let w15 := Sha256.at_or_zero rev_words 14 in
-    let w16 := Sha256.at_or_zero rev_words 15 in
+    let w2 := Sha256.at_or_zero (Shared.get rev_words) 1 in
+    let w7 := Sha256.at_or_zero (Shared.get rev_words) 6 in
+    let w15 := Sha256.at_or_zero (Shared.get rev_words) 14 in
+    let w16 := Sha256.at_or_zero (Shared.get rev_words) 15 in
     let new_w := U32.add (U32.add (Sha256.sigma1 w2) w7) (U32.add (Sha256.sigma0 w15) w16) in
-    Sha256.expand_loop (List.cons new_w rev_words) (remaining - 1)
+    Sha256.expand_loop (Shared.of (List.cons new_w (Shared.get rev_words))) (remaining - 1)
 
 def Sha256.schedule (block16 : List U32) : List U32 :=
-  List.reverse (Sha256.expand_loop (List.reverse block16) 48)
+  List.reverse (Sha256.expand_loop (Shared.of (List.reverse block16)) 48)
 
 // ── Compression ──
 
@@ -243,18 +245,18 @@ def Sha256.drop_n (n : I64) (bytes : List U8) : List U8 :=
 
 #[terminating] // list shrinks by 64 each call via a helper, not a
                 // directly-matched sub-term
-def Sha256.process_blocks (s : Sha256State) (padded : List U8) : Sha256State :=
-  match padded {
+def Sha256.process_blocks (s : Sha256State) (padded : Shared (List U8)) : Sha256State :=
+  match Shared.get padded {
     empty => s,
     cons _ _ =>
       Sha256.process_blocks
-        (Sha256.compress_block s (Sha256.take_n 64 padded))
-        (Sha256.drop_n 64 padded)
+        (Sha256.compress_block s (Sha256.take_n 64 (Shared.get padded)))
+        (Shared.of (Sha256.drop_n 64 (Shared.get padded)))
   }
 
 pub def Sha256.hash_bytes (bytes : List U8) : List U8 :=
-  let padded := Sha256.pad bytes (List.length bytes) in
-  let final := Sha256.process_blocks Sha256.initial_state padded in
+  let padded := Sha256.pad (Shared.of bytes) in
+  let final := Sha256.process_blocks Sha256.initial_state (Shared.of padded) in
   match final { mk a b c d e f g h =>
     List.flatten [Sha256.unpack_word a, Sha256.unpack_word b, Sha256.unpack_word c, Sha256.unpack_word d,
                    Sha256.unpack_word e, Sha256.unpack_word f, Sha256.unpack_word g, Sha256.unpack_word h]
