@@ -98,8 +98,15 @@ def agent_apply {J : Type} {K : Type} {A : Type} {B : Type} (f : A -> Agent J K 
 /// Each do-block in its own def (workaround 4): the only bind in this
 /// file runs over `ResultT`, a concrete head the checker dispatches
 /// reliably -- the shape `loop.mo`'s own bodies already use.
+///
+/// The bound variable is ANNOTATED (`let p : Pair RunState A <-`). Without
+/// the annotation the checker types `p` from the do-block's declared RESULT
+/// (`... (Pair RunState B)`) rather than from `Agent.exec ma s`, so `p` comes
+/// back as the wrong pair and `f v` is rejected with "expected A, found B"
+/// (measured 2026-11-02, after the def-boundary comparison stopped skipping
+/// type variables; the whole def used to pass unchecked).
 def agent_bind_run {I : Type} {J : Type} {K : Type} {A : Type} {B : Type} (ma : Agent I J A) (f : A -> Agent J K B) (s : RunState) : ResultT String IO (Pair RunState B) := do {
-    let p <- Agent.exec ma s;
+    let p : Pair RunState A <- Agent.exec ma s;
     agent_apply f p
 }
 
