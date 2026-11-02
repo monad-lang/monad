@@ -2453,6 +2453,30 @@ fn surface_term_is_native_decl(term: &Term) -> bool {
   }
 }
 
+/// Ensure every captured `Match` resolution's inductive atom is in this
+/// def's `atom_paths`: `lower_match` resolves the resolution atom through
+/// that map, but an ordinary inductive's own bare name is deliberately not
+/// a `known_globals` entry (see `register_inductive`). A type that appears
+/// only in an INFERRED type -- the base of a `{ base with ... }` update
+/// whose type the def's own source never names, say -- is therefore in
+/// neither `global_atom_paths` nor the def's own lowering resolutions, and
+/// lowering fails with `UnresolvedAtom`. Non-inductive resolutions (a
+/// class's dictionary projection) are already in `global_atom_paths`.
+fn seed_match_resolution_paths(
+  atom_paths: &mut AtomPathMap,
+  structs: &StructFields,
+  resolutions: &[(Vec<Identifier>, Atom)],
+) {
+  for (_, atom) in resolutions {
+    if atom_paths.contains_key(atom) {
+      continue;
+    }
+    if let Some(path) = structs.inductive_paths.get(atom) {
+      atom_paths.insert(*atom, path.clone());
+    }
+  }
+}
+
 fn insert_checked_def(
   program: &mut CoreProgram,
   capture_path: &NamePath,
@@ -2678,12 +2702,9 @@ fn check_one_def_new(
     // stay scoped per-def, not merged at the end of the whole module's
     // check.
     if let Some(program) = core_out.as_deref_mut() {
-      insert_match_resolutions(
-        program,
-        capture_path,
-        &def.name,
-        mctx.take_match_resolutions(),
-      );
+      let resolutions = mctx.take_match_resolutions();
+      seed_match_resolution_paths(&mut atom_paths, structs, &resolutions);
+      insert_match_resolutions(program, capture_path, &def.name, resolutions);
     }
     if let Some(program) = core_out {
       insert_checked_def(
@@ -2745,12 +2766,9 @@ fn check_one_def_new(
     // now (AFTER desugar_struct_literals), before the next def's check
     // appends more.
     if let Some(program) = core_out.as_deref_mut() {
-      insert_match_resolutions(
-        program,
-        capture_path,
-        &def.name,
-        mctx.take_match_resolutions(),
-      );
+      let resolutions = mctx.take_match_resolutions();
+      seed_match_resolution_paths(&mut atom_paths, structs, &resolutions);
+      insert_match_resolutions(program, capture_path, &def.name, resolutions);
     }
     // Unlike the annotated branch, there's no pre-existing `Term` for an
     // inferred type — it has to be raised too, and (unlike the checked
