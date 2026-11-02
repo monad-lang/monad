@@ -17,7 +17,7 @@
 /// level up. Advertising a capability is not reversible from the client's side: a
 /// client that sees `completionProvider` puts a completion popup in front of the user
 /// and it fails on every keystroke if the server does not implement it. A test that
-/// checked "the five fields are present" would pass just as happily with a sixth
+/// checked "the six fields are present" would pass just as happily with a seventh
 /// field added by mistake, so the assertion is the whole object, byte for byte, and
 /// adding a capability is a deliberate edit to this file.
 ///
@@ -227,16 +227,17 @@ def lc_utf8_offering : List String := List.cons "utf-8" lc_no_offerings
 ///
 /// Keys are alphabetical because `Json.to_string` walks a `BTreeMap`, which is worth
 /// knowing when reading the literal: `definitionProvider` sorts before
-/// `documentSymbolProvider` because `e` is before `o` in the second word, and
+/// `documentFormattingProvider`/`documentSymbolProvider` because `e` is before `o` in
+/// the second word, and
 /// `textDocumentSync` sits between `positionEncoding` and `workspaceSymbolProvider`.
 def lc_caps_utf16 : String :=
-  "{\"definitionProvider\":true,\"documentSymbolProvider\":true,\"hoverProvider\":true,\"positionEncoding\":\"utf-16\",\"textDocumentSync\":1,\"workspaceSymbolProvider\":true}"
+  "{\"definitionProvider\":true,\"documentFormattingProvider\":true,\"documentSymbolProvider\":true,\"hoverProvider\":true,\"positionEncoding\":\"utf-16\",\"textDocumentSync\":1,\"workspaceSymbolProvider\":true}"
 
 def lc_caps_utf8 : String :=
-  "{\"definitionProvider\":true,\"documentSymbolProvider\":true,\"hoverProvider\":true,\"positionEncoding\":\"utf-8\",\"textDocumentSync\":1,\"workspaceSymbolProvider\":true}"
+  "{\"definitionProvider\":true,\"documentFormattingProvider\":true,\"documentSymbolProvider\":true,\"hoverProvider\":true,\"positionEncoding\":\"utf-8\",\"textDocumentSync\":1,\"workspaceSymbolProvider\":true}"
 
 #[test]
-def test_the_capabilities_are_exactly_these_five : Bool :=
+def test_the_capabilities_are_exactly_these_six : Bool :=
   String.beq (Json.to_string (lsp_capabilities_json PositionEncoding.utf16)) lc_caps_utf16
     && String.beq (Json.to_string (lsp_capabilities_json PositionEncoding.utf8)) lc_caps_utf8
 

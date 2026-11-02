@@ -14,6 +14,8 @@
 {"jsonrpc":"2.0","id":20,"method":"textDocument/definition","params":{"textDocument":{"uri":"file://@ROOT@/fixtures/lsp/farref.mo"},"position":{"line":7,"character":25}}}
 {"jsonrpc":"2.0","id":21,"method":"textDocument/definition","params":{"textDocument":{"uri":"file://@ROOT@/fixtures/lsp/farref.mo"},"position":{"line":9,"character":39}}}
 {"jsonrpc":"2.0","id":22,"method":"textDocument/hover","params":{"textDocument":{"uri":"file://@ROOT@/fixtures/lsp/farref.mo"},"position":{"line":7,"character":25}}}
+{"jsonrpc":"2.0","id":23,"method":"textDocument/formatting","params":{"textDocument":{"uri":"file://@ROOT@/fixtures/lsp/farref.mo"},"options":{"tabSize":2,"insertSpaces":true}}}
+{"jsonrpc":"2.0","id":24,"method":"textDocument/formatting","params":{"textDocument":{"uri":"file://@ROOT@/fixtures/lsp/not_open.mo"},"options":{"tabSize":4,"insertSpaces":true}}}
 {"jsonrpc":"2.0","id":17,"method":"workspace/symbol","params":{"query":"ZzReplayShape"}}
 this line is not JSON at all, which is the whole point of it
 {"jsonrpc":"2.0","id":18,"method":"textDocument/documentSymbol","params":{"textDocument":{"uri":"file://@ROOT@/fixtures/lsp/shapes.mo"}}}

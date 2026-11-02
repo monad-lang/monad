@@ -7,7 +7,8 @@
 // didClose against the docstore), `checks` (the check cache a document's
 // diagnostics come from), `diagnostics` (turning a check into a publish
 // notification) and `navigation` (hover, definition, document and
-// workspace symbols). The server logs to stderr through the `log` mote's
+// workspace symbols) and `formatting` (the buffer through `monad fmt`'s
+// formatter). The server logs to stderr through the `log` mote's
 // `Logger` (`server.mo`'s `lsp_logger`).
 //
 // One type group per module, which is the rule `build/src/lib.mo` set --
@@ -22,6 +23,7 @@
 pub use lib::checks {Check, CheckStore}
 pub use lib::diagnostics {}
 pub use lib::documents {DocumentEdit}
+pub use lib::formatting {}
 pub use lib::lifecycle {}
 pub use lib::navigation {Cursor}
 pub use lib::params {}

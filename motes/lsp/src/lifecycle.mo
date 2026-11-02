@@ -5,7 +5,7 @@
 /// advertising `completionProvider` and then answering `Method not found` puts a
 /// completion popup in front of the user that fails on every keystroke, and
 /// advertising `codeActionProvider` makes a client offer refactors this server
-/// would have to refuse. The five capabilities below are exactly the five methods
+/// would have to refuse. The six capabilities below are exactly the six methods
 /// `server.mo` answers -- diagnostics arrive as a notification and so are not
 /// advertised at all -- and the list and the dispatcher are meant to be read
 /// together.
@@ -143,7 +143,7 @@ pub def lsp_sync_full : I64 := 1
 
 /// What this server can do, in the client's vocabulary.
 ///
-/// The four booleans are the navigation features; `textDocumentSync` is required
+/// The booleans are the navigation features and formatting; `textDocumentSync` is required
 /// for the client to send `didOpen`/`didChange` at all, so a server that omitted
 /// it would receive no documents and have nothing to check.
 #[partial]
@@ -155,6 +155,7 @@ pub def lsp_capabilities_json (enc : PositionEncoding) : Json :=
     Pair.pair "definitionProvider" (Json.make_bool true),
     Pair.pair "documentSymbolProvider" (Json.make_bool true),
     Pair.pair "workspaceSymbolProvider" (Json.make_bool true),
+    Pair.pair "documentFormattingProvider" (Json.make_bool true),
   ]
 
 #[partial]

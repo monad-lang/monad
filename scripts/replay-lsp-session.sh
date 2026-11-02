@@ -24,7 +24,7 @@
 #
 # WHAT IS ASSERTED, in the order the fixture asks for it:
 #
-#   1. `initialize` advertises the five implemented features and echoes the
+#   1. `initialize` advertises the six implemented features and echoes the
 #      negotiated `positionEncoding` -- and nothing else, since a capability that
 #      is advertised and not answered is worse than one never offered.
 #   2. The parse-error vector publishes exactly one diagnostic, severity error,
@@ -330,8 +330,9 @@ def session(encoding):
     init = by_id(replies, 1) or {}
     caps = (init.get("result") or {}).get("capabilities") or {}
     want = {"positionEncoding", "textDocumentSync", "hoverProvider",
-            "definitionProvider", "documentSymbolProvider", "workspaceSymbolProvider"}
-    check(f"{encoding} capabilities: exactly the implemented five", set(caps) == want,
+            "definitionProvider", "documentSymbolProvider", "workspaceSymbolProvider",
+            "documentFormattingProvider"}
+    check(f"{encoding} capabilities: exactly the implemented six", set(caps) == want,
           f"offered {sorted(caps)}")
     check(f"{encoding} capabilities: positionEncoding echoed", caps.get("positionEncoding") == encoding,
           f"{caps.get('positionEncoding')!r}")
@@ -428,6 +429,18 @@ def session(encoding):
     detail = ((hover or {}).get("result") or {}).get("contents", {}).get("value", "")
     check(f"{encoding} hover on a prelude class renders the class",
           detail.startswith("```monad\npub class Add (A : Type) {"), f"{detail[:80]!r}")
+
+    # Formatting. `farref.mo` is already in `monad fmt`'s style, so it answers no
+    # edits -- even though the client asked for 2-space indents, which the server
+    # ignores in favour of the canonical style. A document that is not open answers
+    # null, not an error.
+    fmt_open = by_id(replies, 23) or {}
+    check(f"{encoding} formatting a formatted buffer answers no edits",
+          "error" not in fmt_open and fmt_open.get("result") == [], f"{fmt_open!r}"[:200])
+    fmt_closed = by_id(replies, 24) or {}
+    check(f"{encoding} formatting a document that is not open answers null",
+          "error" not in fmt_closed and "result" in fmt_closed and fmt_closed["result"] is None,
+          f"{fmt_closed!r}"[:200])
 
     # 7. The workspace scan. `SymbolInformation`, so `locs()` takes the nested shape --
     # and the range is the same byte-exact decl span the definition feature answers.

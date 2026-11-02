@@ -53,6 +53,7 @@ use lsp::checks {
   checkstore_recheck,
 }
 use lsp::diagnostics {lsp_clear_notification, lsp_publish_notification}
+use lsp::formatting {lsp_formatting}
 use lsp::documents {
   DocumentEdit, document_change, document_close, document_edit_changed, document_edit_store,
   document_edit_uri, document_open, document_uri,
@@ -376,6 +377,7 @@ def lsp_request_ready (st : ServerState) (id : Json) (method : String) (params :
   else if String.beq method "textDocument/definition" then lsp_definition_request st id params
   else if String.beq method "textDocument/documentSymbol" then lsp_symbols_request st id params
   else if String.beq method "workspace/symbol" then lsp_workspace_request st id params
+  else if String.beq method "textDocument/formatting" then lsp_formatting_request st id params
   else lsp_unknown_request st id method
 
 // --- The handshake ---
@@ -681,6 +683,19 @@ def lsp_symbols_request (st : ServerState) (id : Json) (params : Option Json) : 
       lsp_document_symbol (server_checks st) (server_encoding st) (lsp_params_or_empty params);
     return (lsp_step_reply st (rpc_encode_result id result))
 }
+
+/// `textDocument/formatting`. A buffer the formatter refuses (it does not lex) answers
+/// null, which a client reads as "no edits", and the reason goes to the log.
+#[partial]
+def lsp_formatting_request (st : ServerState) (id : Json) (params : Option Json)
+    : IO ServerStep :=
+  match lsp_formatting (server_docs st) (server_encoding st) (lsp_params_or_empty params) {
+    Result.ok edits => do { return (lsp_step_reply st (rpc_encode_result id edits)) },
+    Result.err reason => do {
+        Logger.info (server_logger st) reason;
+        return (lsp_step_reply st (rpc_encode_result id Json.make_null))
+    },
+  }
 
 /// `workspace/symbol`, which reads the document store as well as the check store.
 ///

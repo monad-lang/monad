@@ -45,6 +45,10 @@ workspace = true
 [dependencies.json]
 workspace = true
 
+# `textDocument/formatting` runs `monad fmt`'s formatter.
+[dependencies.fmt]
+workspace = true
+
 # The server's stderr log is a `log::Logger`.
 [dependencies.log]
 workspace = true
