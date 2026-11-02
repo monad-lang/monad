@@ -517,9 +517,9 @@ void* monad_channel_try_take(void* handle) {
     return alloc_constructor_impl(3, 0);
 }
 
-/* SIGPIPE back to its default action. `sigaction` rather than `signal`
-   because the fork children below call this between `fork` and `exec`,
-   where a multithreaded process may only use async-signal-safe calls. */
+/* SIGPIPE back to its default action, for a stdio writer about to die of
+   it (`stdio_die_on_epipe`). Spawned children get the same reset from
+   `spawn_child`'s attributes. */
 static void sigpipe_default(void) {
     struct sigaction sa = {0};
     sa.sa_handler = SIG_DFL;
@@ -605,11 +605,11 @@ static char** monad_build_argv(char* cmd, void* args) {
  * and the peer never sees EOF while that child lives.
  *
  * Setting FD_CLOEXEC after the fact leaves a window in which another
- * thread can fork and exec with the descriptor still inheritable. This
+ * thread can spawn a child with the descriptor still inheritable. This
  * file defines no _GNU_SOURCE, so pipe2(2) is not declared; instead
  * creation and the fcntl happen under `fork_lock` held shared, and every
- * fork holds it exclusively (the shape of Go's syscall.ForkLock). The
- * lock is never held across a blocking call, so a fork waits at most
+ * spawn holds it exclusively (the shape of Go's syscall.ForkLock). The
+ * lock is never held across a blocking call, so a spawn waits at most
  * for one pipe() or socket() and its fcntl. accept(2) blocks, so it
  * cannot take the lock: on Linux it is accept4(SOCK_CLOEXEC), and
  * elsewhere a narrow window remains. `monad_stream_open` passes
@@ -654,13 +654,39 @@ static int cloexec_accept(int listener) {
 #endif
 }
 
-/* fork(2) with no descriptor half-created. The child must not touch the
-   lock again: it execs or _exits. */
-static pid_t fork_excl(void) {
+extern char** environ;
+
+/* Spawn `argv` with stdin/stdout/stderr from `in_fd`/`out_fd`/`err_fd`
+   (-1 inherits) and SIGPIPE back at its default (`main` ignores it, and
+   SIG_IGN survives exec). posix_spawnp, not fork: glibc spawns with a
+   CLONE_VFORK that copies no page tables, where a fork of a multi-GB
+   heap took a second per child. Holds `fork_lock` exclusively, so no
+   descriptor is half-created. Returns 0, or the errno of a spawn that
+   never happened -- exec failure included. */
+static int spawn_child(pid_t* pid, const char* cmd, char** argv, int in_fd, int out_fd, int err_fd) {
+    posix_spawn_file_actions_t fa;
+    posix_spawnattr_t attr;
+    int rc = posix_spawn_file_actions_init(&fa);
+    if (rc != 0) return rc;
+    rc = posix_spawnattr_init(&attr);
+    if (rc != 0) {
+        posix_spawn_file_actions_destroy(&fa);
+        return rc;
+    }
+    sigset_t defaults;
+    sigemptyset(&defaults);
+    sigaddset(&defaults, SIGPIPE);
+    posix_spawnattr_setsigdefault(&attr, &defaults);
+    posix_spawnattr_setflags(&attr, POSIX_SPAWN_SETSIGDEF);
+    if (in_fd >= 0) posix_spawn_file_actions_adddup2(&fa, in_fd, 0);
+    if (out_fd >= 0) posix_spawn_file_actions_adddup2(&fa, out_fd, 1);
+    if (err_fd >= 0) posix_spawn_file_actions_adddup2(&fa, err_fd, 2);
     pthread_rwlock_wrlock(&fork_lock);
-    pid_t pid = fork();
-    if (pid != 0) pthread_rwlock_unlock(&fork_lock);
-    return pid;
+    rc = posix_spawnp(pid, cmd, &fa, &attr, argv, environ);
+    pthread_rwlock_unlock(&fork_lock);
+    posix_spawnattr_destroy(&attr);
+    posix_spawn_file_actions_destroy(&fa);
+    return rc;
 }
 
 /* `#[native "exec_cmd"]` (std/process.mo, `exec_cmd : String -> List
@@ -671,9 +697,10 @@ static pid_t fork_excl(void) {
 
    Walks the `List String` cons chain into a NULL-terminated argv (with
    the command itself as argv[0], as execvp requires), then
-   fork + execvp + waitpid. Returns the child's exit code, or -1 if the
-   command could not be spawned or died on a signal -- matching the
-   reference's `status.code().unwrap_or(-1)`. The wrapper
+   `spawn_child` + waitpid. Returns the child's exit code, 127 when the
+   command could not be executed (the shell's code, which a forked child
+   used to exit with), or -1 if no child could be created or it died on a
+   signal -- matching the reference's `status.code().unwrap_or(-1)`. The wrapper
    (native_runtime_fn_name's raw_io_passthrough kind) does the RawIO.io
    boxing; the `.mo` wrapper adds IO.mk. */
 int64_t monad_exec_cmd(char* cmd, void* args) {
@@ -689,15 +716,11 @@ int64_t monad_exec_cmd(char* cmd, void* args) {
        order the writes were made in. */
     fflush(NULL);
 
-    pid_t pid = fork_excl();
-    if (pid < 0) { free(argv); return -1; }
-    if (pid == 0) {
-        sigpipe_default(); /* see `main`: SIG_IGN would survive exec */
-        execvp(cmd, argv);
-        _exit(127);            /* exec failed -- conventional shell code */
-    }
-    int status = 0;
+    pid_t pid;
+    int rc = spawn_child(&pid, cmd, argv, -1, -1, -1);
     free(argv);
+    if (rc != 0) return (rc == EAGAIN || rc == ENOMEM) ? -1 : 127;
+    int status = 0;
     if (waitpid(pid, &status, 0) < 0) return -1;
     return WIFEXITED(status) ? (int64_t)WEXITSTATUS(status) : -1;
 }
@@ -738,7 +761,7 @@ static void* tcp_unit(void) {
  *
  * Locked: every fiber is an OS thread, so two fibers may spawn or reap
  * at once. `proc_registry_lock` covers claiming and releasing a slot and
- * reading its fields. It is never held across `fork`, `read` or
+ * reading its fields. It is never held across a spawn, `read` or
  * `waitpid`. */
 #define MONAD_PROC_MAX 64
 
@@ -786,11 +809,8 @@ static void stream_carry_clear(int fd);
  * `monad_proc_stream_fd` hands out the descriptor and the byte-stream
  * natives do the work.
  *
- * EXEC FAILURE IS AN ERROR, not a child that exits 127: a fourth pipe,
- * both ends `O_CLOEXEC`, is the handshake. The child writes one errno
- * byte only if `execvp` fails and exits; a SUCCESSFUL exec closes the
- * write end automatically, so the parent's single `read` answers EOF
- * ("running") or one byte ("could not run, and why") -- the same
+ * EXEC FAILURE IS AN ERROR, not a child that exits 127: `spawn_child`
+ * reports the errno of a spawn that never happened, the same
  * `Result.err` the Rust host's `Command::spawn` already reports, which
  * is the contract `std/src/process.mo` declares. */
 void* monad_proc_spawn(char* cmd, void* args) {
@@ -813,60 +833,19 @@ void* monad_proc_spawn(char* cmd, void* args) {
         free(argv);
         return stream_os_err("proc_spawn", errno);
     }
-    int status_pipe[2];
-    if (cloexec_pipe(status_pipe) < 0) {
-        close(in_pipe[0]); close(in_pipe[1]);
-        close(out_pipe[0]); close(out_pipe[1]);
-        close(err_pipe[0]); close(err_pipe[1]);
-        free(argv);
-        return stream_os_err("proc_spawn", errno);
-    }
     fflush(NULL); /* same ordering concern as `monad_exec_cmd` */
 
-    pid_t pid = fork_excl();
-    if (pid < 0) {
-        close(in_pipe[0]); close(in_pipe[1]);
-        close(out_pipe[0]); close(out_pipe[1]);
-        close(err_pipe[0]); close(err_pipe[1]);
-        close(status_pipe[0]); close(status_pipe[1]);
-        free(argv);
-        return stream_os_err("proc_spawn", errno);
-    }
-    if (pid == 0) {
-        dup2(in_pipe[0], 0);
-        dup2(out_pipe[1], 1);
-        dup2(err_pipe[1], 2);
-        close(in_pipe[0]); close(in_pipe[1]);
-        close(out_pipe[0]); close(out_pipe[1]);
-        close(err_pipe[0]); close(err_pipe[1]);
-        close(status_pipe[0]);
-        sigpipe_default(); /* see `main`: SIG_IGN would survive exec */
-        execvp(cmd, argv);
-        unsigned char exec_errno = (errno > 0 && errno < 256) ? (unsigned char)errno : 127;
-        ssize_t ignored = write(status_pipe[1], &exec_errno, 1);
-        (void)ignored;
-        _exit(127); /* exec failed -- conventional shell code */
-    }
+    /* Every pipe end is CLOEXEC, so the child keeps only its dup2'd
+       0/1/2. A failed spawn leaves no registry entry and no fds. */
+    pid_t pid;
+    int rc = spawn_child(&pid, cmd, argv, in_pipe[0], out_pipe[1], err_pipe[1]);
     free(argv);
     close(in_pipe[0]);
     close(out_pipe[1]);
     close(err_pipe[1]);
-    close(status_pipe[1]);
-
-    /* The exec verdict: EOF is success (the CLOEXEC write end died with
-     * the exec), one byte is the errno of a spawn that never happened.
-     * A failed spawn leaves no registry entry and no fds -- the child
-     * is reaped before the error is returned, so nothing leaks. */
-    unsigned char exec_errno = 0;
-    ssize_t n;
-    do {
-        n = read(status_pipe[0], &exec_errno, 1);
-    } while (n < 0 && errno == EINTR);
-    close(status_pipe[0]);
-    if (n == 1) {
+    if (rc != 0) {
         close(in_pipe[1]); close(out_pipe[0]); close(err_pipe[0]);
-        waitpid(pid, NULL, 0);
-        return stream_os_err("proc_spawn", exec_errno);
+        return stream_os_err("proc_spawn", rc);
     }
 
     int slot = -1;
@@ -2319,8 +2298,7 @@ int main(int argc, char** argv) {
        covers `send`; `monad_stream_write`'s `write` to a child that
        already exited has no such cover. Ignored dispositions survive
        `exec`, so
-       every fork child (`monad_exec_cmd`, `monad_proc_spawn`) restores
-       the default before exec'ing, or `yes | head` in a spawned shell
+       every spawned child (`spawn_child`) gets the default back, or `yes | head` in a spawned shell
        would never stop. The process's own stdout/stderr keep dying of
        SIGPIPE through `stdio_die_on_epipe`. */
     signal(SIGPIPE, SIG_IGN);

@@ -31,6 +31,7 @@
 #include <dirent.h>
 #include <sys/resource.h>
 #include <sys/wait.h>
+#include <spawn.h>
 #include <signal.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
