@@ -21,6 +21,7 @@ pub use lib::terminal {}
 pub use lib::input {Input.decode, Input.pending_escape, Input.produce, InputReader, input_reader}
 pub use lib::frp {EventStream, Signal}
 pub use lib::tui {Cmd, App, run_app}
+pub use lib::component {Subs}
 pub use lib::tuit {Cooked, Raw, Closed, Term, TuiT}
 pub use lib::widgets::input {InputState, input_state, handle_input_key}
 pub use lib::widgets::list {ListState, list_state, handle_list_key}
