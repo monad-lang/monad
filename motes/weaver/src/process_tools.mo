@@ -6,14 +6,17 @@ use shuttle::gate {Capability}
 use shuttle::message_types {Content}
 use json::json {
     Json, Json.make_object, Json.make_str, Json.make_array, Json.get_array,
+    Json.Number, Json.get_object, Json.object_get, Json.get_num, Json.get_num_i64, Json.get_str,
 }
+use parsec::number {parse_i64}
+use std::concurrent::combine {sleepIO}
 use weaver::process_args {StartProcessArgs, ReadProcessArgs, KillProcessArgs}
 use std::map {Map, BTreeMap}
 use std::io {IO.current_time_nano}
-use std::path {Path.to_string}
+use std::path {Path, Path.to_string}
 use init::transformers {ResultT}
 use weaver::procs {
-    ProcEntry, ProcStatus, ProcStatus.text, Procs.start, Procs.list, Procs.tail, Procs.kill,
+    ProcEntry, ProcStatus, ProcStatus.text, Procs.start, Procs.list, Procs.entry, Procs.entry_at, Procs.root, Procs.tail, Procs.kill,
 }
 use weaver::format {format_elapsed}
 
@@ -38,13 +41,6 @@ def params_schema (params : List (Pair String Json)) : Json :=
     Json.make_object (Map.insert "type" (Json.make_str "object")
         (Map.insert "properties" (Json.make_object (params_to_map params BTreeMap.empty))
         (Map.insert "required" (Json.make_array (List.map pair_fst params)) BTreeMap.empty)))
-
-#[partial]
-def find_entry (id : String) (xs : List ProcEntry) : Option ProcEntry :=
-    match xs {
-        List.empty => Option.none,
-        List.cons e rest => if e.id == id then Option.some e else find_entry id rest,
-    }
 
 // ── start_process ───────────────────────────────────────────────────────
 
@@ -78,11 +74,19 @@ def start_run (id : String) (j : Json) : ResultT String IO Content :=
 
 // ── read_process ────────────────────────────────────────────────────────
 
-def read_params : List (Pair String Json) :=
-    [str_param "id" "The task id returned by start_process."]
+def read_schema : Json :=
+    let wait : Json := Json.make_object (Map.insert "type" (Json.make_str "integer")
+        (Map.insert "description" (Json.make_str "Optional: wait up to this many seconds (max 60) for the task to exit before answering.") BTreeMap.empty)) in
+    let props : BTreeMap String Json :=
+        Map.insert "wait_seconds" wait (params_to_map [str_param "id" "The task id returned by start_process."] BTreeMap.empty) in
+    Json.make_object (Map.insert "type" (Json.make_str "object")
+        (Map.insert "properties" (Json.make_object props)
+        (Map.insert "required" (Json.make_array [Json.make_str "id"]) BTreeMap.empty)))
 
 pub def ReadProcessTool.spec : ToolSpec :=
-    { name := "read_process", description := "Show a background task's status and its last 40 output lines.", schema := params_schema read_params }
+    { name := "read_process",
+      description := "Show a background task's status and its last 40 output lines. To wait for a task, pass wait_seconds instead of calling read_process repeatedly.",
+      schema := read_schema }
 
 pub def ReadProcessTool.impl : ToolImpl :=
     { spec := ReadProcessTool.spec, cap := Capability.read, run := read_run }
@@ -105,9 +109,68 @@ def read_found (id : String) (task : String) (found : Option ProcEntry) : IO Con
         Option.some e => read_entry id e,
     }
 
-def read_lookup (id : String) (task : String) : IO Content := do {
-    let entries <- Procs.list;
-    read_found id task (find_entry task entries)
+def read_lookup (root : Path) (id : String) (task : String) : IO Content := do {
+    let found <- Procs.entry_at root task;
+    read_found id task found
+}
+
+/// The longest `wait_seconds` honoured.
+def max_wait_seconds : I64 := 60
+
+def num_int (n : Result String Json.Number) : Option I64 :=
+    match Json.get_num_i64 n {
+        Result.ok i => Option.some i,
+        Result.err _ => Option.none,
+    }
+
+def str_int (r : Result String String) : Option I64 :=
+    match r {
+        Result.ok t => parse_i64 (String.trim t),
+        Result.err _ => Option.none,
+    }
+
+/// `wait_seconds` as a number or a numeric string, clamped to 0..60.
+def wait_of (j : Json) : I64 :=
+    let got : Option I64 := match Json.get_object j {
+        Result.err _ => Option.none,
+        Result.ok o => match Json.object_get "wait_seconds" o {
+            Option.none => Option.none,
+            Option.some w => match num_int (Json.get_num w) {
+                Option.some i => Option.some i,
+                Option.none => str_int (Json.get_str w),
+            },
+        },
+    } in
+    match got {
+        Option.none => 0,
+        Option.some n => if n < 0 then 0 else if n > max_wait_seconds then max_wait_seconds else n,
+    }
+
+def still_running (found : Option ProcEntry) : Bool :=
+    match found {
+        Option.some e => match e.status { ProcStatus.running => true, _ => false },
+        Option.none => false,
+    }
+
+/// Poll the task's own directory every 250 ms until it stops running or
+/// the deadline passes: one tool call instead of a model call per poll.
+#[partial]
+def wait_exit (root : Path) (task : String) (deadline : I64) : IO Unit := do {
+    let found <- Procs.entry_at root task;
+    let now <- IO.current_time_nano;
+    if Bool.and (still_running found) (now < deadline)
+    then do {
+        sleepIO 250;
+        wait_exit root task deadline
+    }
+    else IO.pure unit
+}
+
+/// `read_process` against the task store at `root`: wait first when asked.
+def read_at (root : Path) (id : String) (task : String) (secs : I64) : IO Content := do {
+    let now <- IO.current_time_nano;
+    let _ <- if secs > 0 then wait_exit root task (now + secs * 1000000000) else IO.pure unit;
+    read_lookup root id task
 }
 
 def read_run (id : String) (j : Json) : ResultT String IO Content :=
@@ -115,7 +178,8 @@ def read_run (id : String) (j : Json) : ResultT String IO Content :=
         Result.err e => ResultT.mk (return (Result.ok (tool_err id e))),
         Result.ok args =>
             ResultT.mk (do {
-                let c <- read_lookup id args.id;
+                let root <- Procs.root;
+                let c <- read_at root id args.id (wait_of j);
                 IO.pure (Result.ok c)
             }),
     }
@@ -146,8 +210,8 @@ def kill_found (id : String) (task : String) (found : Option ProcEntry) : IO Con
     }
 
 def kill_lookup (id : String) (task : String) : IO Content := do {
-    let entries <- Procs.list;
-    kill_found id task (find_entry task entries)
+    let found <- Procs.entry task;
+    kill_found id task found
 }
 
 def kill_run (id : String) (j : Json) : ResultT String IO Content :=

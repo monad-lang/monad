@@ -148,9 +148,16 @@ pub def Procs.read_meta (p : Path) : IO (Option (Pair String (Pair String I64)))
 
 // ── status ──────────────────────────────────────────────────────────────
 
+/// `/proc/<pid>` where procfs exists: a spawn per probe cost a fork of
+/// the whole heap. Elsewhere `kill -0`.
 def is_running (pid : I64) : IO Bool := do {
-    let code <- exec_cmd "sh" ["-c", String.concat "kill -0 " (String.concat (I64.to_string pid) " 2>/dev/null")];
-    IO.pure (I64.beq code 0)
+    let procfs <- IO.is_dir (Path.path "/proc/self");
+    if procfs
+    then IO.is_dir (Path.path (String.concat "/proc/" (I64.to_string pid)))
+    else do {
+        let code <- exec_cmd "sh" ["-c", String.concat "kill -0 " (String.concat (I64.to_string pid) " 2>/dev/null")];
+        IO.pure (I64.beq code 0)
+    }
 }
 
 def parse_or (text : String) (fallback : I64) : I64 :=
@@ -280,6 +287,19 @@ pub def Procs.scan_at (root : Path) : IO (List ProcEntry) := do {
     let entries <- scan_dirs dirs List.empty;
     IO.pure (sort_desc entries)
 }
+
+/// One task by id, read from its own directory instead of scanning them
+/// all. The id comes from the model, so anything but a plain `p-` name is
+/// unknown.
+pub def Procs.entry (id : String) : IO (Option ProcEntry) := do {
+    let root <- Procs.root;
+    Procs.entry_at root id
+}
+
+pub def Procs.entry_at (root : Path) (id : String) : IO (Option ProcEntry) :=
+    if Bool.and (String.starts_with "p-" id) (Bool.not (String.contains id "/"))
+    then scan_one (Store.child root id)
+    else IO.pure Option.none
 
 pub def Procs.list : IO (List ProcEntry) := do {
     let root <- Procs.root;

@@ -263,8 +263,10 @@ listed by `/mcp`.
 
 `start_process {command, cwd}` launches a detached `sh -c` with merged
 stdout/stderr under `<sessions root>/procs/p-<pid>/` (`WEAVER_PROC_ROOT`
-overrides); `read_process {id}` returns status, elapsed time and the last
-40 output lines, `list_processes` lists them, and `kill_process {id}`
+overrides); `read_process {id, wait_seconds?}` returns status, elapsed
+time and the last 40 output lines -- with `wait_seconds` (at most 60) it
+first waits for the task to exit, so the model does not poll in a loop
+of full requests -- `list_processes` lists them, and `kill_process {id}`
 sends TERM then KILL. `/processes` prints the same snapshot and accepts
 `kill <id>`. Tasks are killed when weaver exits (`WEAVER_PROC_KEEP` opts
 out). Limitations: no process group (a detached grandchild can survive a

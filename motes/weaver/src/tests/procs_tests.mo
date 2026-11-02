@@ -4,8 +4,11 @@
 /// removes what it creates.
 use weaver::procs {
     ProcEntry, ProcStatus, Procs.detached_script, Procs.start_at,
-    Procs.scan_at, Procs.tail, Procs.kill,
+    Procs.scan_at, Procs.tail, Procs.kill, Procs.entry_at,
 }
+use weaver::process_tools {read_at, wait_of}
+use shuttle::message_types {Content}
+use json::json {Json, Json.parse}
 use std::path {Path, Path.to_string}
 use std::process {process_id, exec_cmd}
 use tui::terminal {Terminal.poll}
@@ -105,3 +108,53 @@ def test_a_sleep_is_running_then_killed : IO Bool := do {
         Result.ok e => sleep_case root e,
     }
 }
+
+// ── read_process: one entry, and waiting ────────────────────────────────
+
+def content_text (c : Content) : String :=
+    match c {
+        Content.tool_result _ out _ => out,
+        _ => "",
+    }
+
+def wait_case (root : String) (e : ProcEntry) : IO Bool := do {
+    let c <- read_at (Path.path root) "call-1" e.id 10;
+    let out : String := content_text c;
+    cleanup root;
+    return (String.contains out "exited (0)" && String.contains out "done")
+}
+
+def wait_started (root : String) (r : Result String ProcEntry) : IO Bool :=
+    match r {
+        Result.err _ => do { cleanup root; return false },
+        Result.ok e => wait_case root e,
+    }
+
+/// One `read_process` with `wait_seconds` returns the finished task: no
+/// model call per poll.
+#[test]
+def test_read_process_waits_for_the_exit : IO Bool := do {
+    let root : String := temp_root "wait";
+    let started <- Procs.start_at (Path.path root) "sleep 1; echo done" "";
+    wait_started root started
+}
+
+/// The id comes from the model: a path is never looked up.
+#[test]
+def test_entry_at_rejects_a_path_id : IO Bool := do {
+    let got <- Procs.entry_at (Path.path "/tmp") "../etc";
+    return (match got { Option.none => true, Option.some _ => false })
+}
+
+def wait_in (text : String) : I64 :=
+    match Json.parse text {
+        Result.ok j => wait_of j,
+        Result.err _ => 0 - 1,
+    }
+
+#[test]
+def test_wait_seconds_parses_and_clamps : Bool :=
+    wait_in "{\"id\": \"p-1\", \"wait_seconds\": 600}" == 60
+        && wait_in "{\"id\": \"p-1\", \"wait_seconds\": \"5\"}" == 5
+        && wait_in "{\"id\": \"p-1\"}" == 0
+        && wait_in "{\"id\": \"p-1\", \"wait_seconds\": -3}" == 0
