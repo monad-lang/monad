@@ -4056,42 +4056,40 @@ def dotted_head_names_inductive (head : String) (scope : Scope) : Bool :=
     }
 
 /// The name `try_global_field_access` rebuilds a dotted access's subject
-/// under -- `head` as written when it resolves, else the ONE `def_refs` key
-/// that ends in `::head`.
+/// under -- the name the RESOLUTION actually found, not `head` as written.
 ///
-/// The second half is why this exists. A def's own name is module-qualified
-/// by the time CODEGEN elaborates (`qualify_decl_names`, `lang.codegen.
-/// qualify`) -- `def vzero` in `simple` is registered as `simple::vzero`,
-/// and references are rewritten to match by `resolve_open_alias_term_
-/// scoped` -- but that rewriter matches a reference by its WHOLE name text,
-/// and a dotted spelling is not one its keys ever carry, so `vzero.x`
-/// survives qualification with a bare head. `scope_resolve_name` then misses
-/// in the codegen scope while the checker's own (pre-qualification) scope
-/// resolves it, which is exactly the shape of a fix that passes `monad
-/// check` and fails `monad compile` -- measured on the Gap 3 fixture:
-/// `elaborate_class: 3 decl(s) did not elaborate (kept un-elaborated):
-/// prelude::Lens, simple::vzero_x, simple::vzero_y`, each with `unknown
-/// variable 'vzero.x'`.
+/// A def's own name is module-qualified by the time CODEGEN elaborates
+/// (`qualify_decl_names`, `lang.codegen.qualify`) -- `def vzero` in `simple`
+/// is registered as `simple::vzero`, and references are rewritten to match by
+/// `resolve_open_alias_term_scoped` -- but that rewriter matches a reference
+/// by its WHOLE name text, and a dotted spelling is not one its keys ever
+/// carry, so `vzero.x` survives qualification with a bare head. The checker's
+/// own (pre-qualification) scope resolves that head; codegen's does too now,
+/// through `scope_data_find_def`'s bare-alias fallback, which returns the
+/// QUALIFIED definition. Returning `head` there is what made the two disagree:
+/// the checker resolved, and codegen then built a reference to the bare
+/// `vzero` while `def_symbol_name` is the name VERBATIM (`lang/codegen/
+/// symbols.mo`) -- `call to undefined symbol(s): vzero`, the same failure the
+/// fallback exists to prevent, one stage later.
 ///
-/// The key is returned as the rebuilt subject's NAME, not just used as a
-/// presence test, because `def_symbol_name` is the name VERBATIM
-/// (`lang/codegen/symbols.mo`): rebuilding the subject as the bare `vzero`
-/// inside a qualified graph would resolve in the checker and then reach
-/// codegen as a symbol nothing defines -- the same failure one stage later.
-///
-/// A suffix with more than one match is ambiguous and returns `Option.none`,
-/// i.e. the honest `unknown variable`: two modules declaring the same bare
-/// name is precisely what qualification exists to keep apart, and the
-/// rewriter above (which resolves that case by the importing module's own
-/// `use`/`open`) is the only place with the information to choose.
+/// So the resolved `ScopeDef`'s own name is the answer in every case: a local
+/// binder and a pre-qualification def are registered under the bare spelling
+/// (unchanged), and a def reached through the alias fallback comes back
+/// qualified (`simple::vzero`), which is what both the checker's re-entry and
+/// codegen's symbol table agree on.
 ///
 /// The miss half consults `ScopeData.bare_aliases` (noted at
 /// registration) rather than scanning every `def_refs` key per miss --
-/// same unique-owner rule, one O(1) lookup.
+/// same unique-owner rule, one O(1) lookup. A suffix with more than one match
+/// is ambiguous and returns `Option.none`, i.e. the honest `unknown variable`:
+/// two modules declaring the same bare name is precisely what qualification
+/// exists to keep apart, and the rewriter above (which resolves that case by
+/// the importing module's own `use`/`open`) is the only place with the
+/// information to choose.
 #[partial]
 def resolve_dotted_head (head : String) (scope : Scope) (locals : LocalScope) : Option String :=
     match scope_resolve_name (NameRef.nid (Identifier.id head)) scope locals {
-        ok _ => Option.some head,
+        ok d => Option.some (show_name_path d.name),
         err _ =>
             let g : ScopeData := scope_globals scope in
             match bare_map_lookup head g.bare_aliases {
