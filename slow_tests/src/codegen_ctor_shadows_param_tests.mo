@@ -47,7 +47,8 @@ def main (args : List String) : IO I64 := do {
 /// with the bug the `return 7` after the first statement never runs.
 #[test]
 def test_ctor_named_f_does_not_break_do_blocks : IO Bool :=
-    let source := r#"type Probe {
+    let source := r#"open IO {println}
+type Probe {
     f (n : I64),
     zero_key
 }

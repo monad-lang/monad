@@ -52,11 +52,16 @@ def main (args : List String) : IO I64 := do {
             exec_cmd "rm" ["-f", src_path];
             match mod_result {
                 Result.err msg => do {
+                    // The diagnostic is the checker's `missing_instance`
+                    // (naming the class) rather than a call-site message that
+                    // also named the method; the class name and the absence of
+                    // the cryptic undefined-symbol text are the claims this row
+                    // makes now.
                     let names_class := String.contains msg "NoInstance";
-                    let names_method := String.contains msg "only_method";
-                    if names_class && names_method then return true
+                    let cryptic := String.contains msg "undefined symbol";
+                    if names_class && Bool.not cryptic then return true
                     else do {
-                        IO.println ("test_unresolved_class_method_call_fails_fast: error message missing class/method name: " ++ msg);
+                        IO.println ("test_unresolved_class_method_call_fails_fast: expected a diagnostic naming NoInstance, got: " ++ msg);
                         return false
                     }
                 },
