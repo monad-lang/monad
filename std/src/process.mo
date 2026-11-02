@@ -226,8 +226,9 @@ def Proc.escape_quotes (s : String) : String :=
         Option.some i =>
             // `String.slice`'s third argument is a LENGTH, not an end
             // index -- so this is "the i bytes before the quote".
-            String.concat (String.slice s 0 i)
-                (String.concat "'\\''" (Proc.escape_quotes (String.drop (i + 1) s)))
+            let idx : I64 := i in
+            String.concat (String.slice s 0 idx)
+                (String.concat "'\\''" (Proc.escape_quotes (String.drop (idx + 1) s)))
     }
 
 /// Quote `s` so that a POSIX shell reads it as one literal word.
@@ -295,9 +296,10 @@ def Proc.capture_read (code : I64) (r : Result StreamError String) : Pair I64 St
     match r {
         Result.ok out => Pair.pair code out,
         Result.err e =>
-            if StreamError.is_not_found e
+            let err : StreamError := e in
+            if StreamError.is_not_found err
             then Pair.pair code ""
-            else Pair.pair (if code == 0 then 1 else code) ("capture: reading the output failed: " ++ e.message)
+            else Pair.pair (if code == 0 then 1 else code) ("capture: reading the output failed: " ++ err.message)
     }
 
 /// Run `cmd args` and return its exit status together with everything it

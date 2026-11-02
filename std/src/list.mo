@@ -8,6 +8,7 @@
 ///   - List.length, List.filter, List.sum
 ///   - list_show helper (explicit show function, for concrete call sites)
 
+use init::shared {Shared, Shared.get}
 use lib::show {Show}
 
 
@@ -196,15 +197,18 @@ def List.intercalate_rest (sep : String) (xs : List String) : String :=
 /// Drop later duplicates, keeping the first occurrence (left-biased).
 /// Replaces `union_ids`/`dedup_idents`/`dedup_funcs_by_name`.
 def List.dedup_by {A : Type} (eq : A -> A -> Bool) (xs : List A) : List A :=
-    List.dedup_by_go eq xs List.empty
+    List.dedup_by_go (Shared.of eq) xs (Shared.of (List.empty : List A))
 
-def List.dedup_by_go {A : Type} (eq : A -> A -> Bool) (xs : List A) (seen : List A) : List A :=
+def List.dedup_by_go {A : Type} (eq : Shared (A -> A -> Bool)) (xs : List A) (seen : Shared (List A)) : List A :=
     match xs {
         List.empty => List.empty,
         List.cons a tail =>
-            if List.contains_by eq a seen
+            let sa := Shared.of a in
+            if List.contains_by (Shared.get eq) (Shared.get sa) (Shared.get seen)
             then List.dedup_by_go eq tail seen
-            else List.cons a (List.dedup_by_go eq tail (List.cons a seen)),
+            else List.cons (Shared.get sa)
+                    (List.dedup_by_go eq tail
+                        (Shared.of (List.cons (Shared.get sa) (Shared.get seen)))),
         _ => List.empty
     }
 
@@ -258,20 +262,29 @@ def test_dedup_by : Bool :=
 /// runtime-only and unreliable inside recursive self-hosted code.
 #[partial]
 pub def List.sort_by {A : Type} (lt : A -> A -> Bool) (xs : List A) : List A :=
+    List.sort_by_go (Shared.of lt) xs
+
+def List.sort_by_go {A : Type} (lt : Shared (A -> A -> Bool)) (xs : List A) : List A :=
     match xs {
         List.empty => List.empty,
-        List.cons x rest => List.insert_sorted_by lt x (List.sort_by lt rest),
+        List.cons x rest => List.insert_sorted_by lt x (List.sort_by_go lt rest),
         _ => List.empty
     }
 
 #[partial]
-def List.insert_sorted_by {A : Type} (lt : A -> A -> Bool) (x : A) (xs : List A) : List A :=
+def List.insert_sorted_by {A : Type} (lt : Shared (A -> A -> Bool)) (x : A) (xs : List A) : List A :=
+    let sx := Shared.of x in
+    // Bind the borrowed callee: calling `(Shared.get lt) a b` directly is
+    // miscompiled by the self-hosted backend, while a view-typed local
+    // used as the callee is the supported shape.
+    let f : A -> A -> Bool := Shared.get lt in
     match xs {
         List.empty => [x],
         List.cons y rest =>
-            if lt x y
-            then List.cons x xs
-            else List.cons y (List.insert_sorted_by lt x rest),
+            let sy := Shared.of y in
+            if f (Shared.get sx) (Shared.get sy)
+            then List.cons x (List.cons (Shared.get sy) rest)
+            else List.cons (Shared.get sy) (List.insert_sorted_by lt x rest),
         _ => [x]
     }
 

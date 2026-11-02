@@ -231,6 +231,12 @@ pub type PartialLinePolicy {
   discard
 }
 
+/// A two-way tag: sharing one is a register move.
+pub instance Copy PartialLinePolicy {
+  def copy (p : PartialLinePolicy) : Pair PartialLinePolicy PartialLinePolicy :=
+    Pair.pair p p
+}
+
 /// `PartialLinePolicy` as the native's flag: 0 = deliver, 1 = discard.
 def PartialLinePolicy.discard_flag (policy : PartialLinePolicy) : I64 :=
   match policy {

@@ -71,4 +71,4 @@ def test_list_append : Bool :=
 def test_list_append_empty_left : Bool :=
     let xs : List I64 := [] in
     let ys : List I64 := [1, 2] in
-    BEq.beq (xs ++ ys) ys
+    BEq.beq (xs ++ ys) ([1, 2] : List I64)

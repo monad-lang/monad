@@ -8,6 +8,7 @@
 /// Same mote, so `Proc.first_quote` stays package-private and is still
 /// reachable here -- no API had to be widened to test it.
 
+use init::shared {Shared, Shared.get}
 use lib::process {Child}
 use std::stream {StreamError, StreamErrorKind}
 
@@ -145,8 +146,9 @@ def test_spawn_echo_reads_a_line_then_eof_then_waits_zero : IO Bool := do {
     match r {
         Result.err _ => return false,
         Result.ok c => do {
-            let l1 <- Proc.read_line c;
-            let l2 <- Proc.read_line c;
+            let sh := Shared.of c;
+            let l1 <- Proc.read_line (Shared.get sh);
+            let l2 <- Proc.read_line (Shared.get sh);
             let code <- Proc.wait c;
             return (pr_line_is l1 "hi" && pr_is_eof l2 && code == 0)
         }
@@ -162,8 +164,9 @@ def test_spawn_cat_roundtrips_a_written_line : IO Bool := do {
     match r {
         Result.err _ => return false,
         Result.ok c => do {
-            let w <- Proc.write c "hello\n";
-            let l <- Proc.read_line c;
+            let sh := Shared.of c;
+            let w <- Proc.write (Shared.get sh) "hello\n";
+            let l <- Proc.read_line (Shared.get sh);
             let code <- Proc.wait c;
             return (pr_wrote w 6 && pr_line_is l "hello" && code == 0)
         }
@@ -215,8 +218,9 @@ def test_spawn_write_to_an_exited_child_is_an_error_not_a_signal : IO Bool := do
     match r {
         Result.err _ => return false,
         Result.ok c => do {
-            let l <- Proc.read_line c;
-            let w <- Proc.write c "hello\n";
+            let sh := Shared.of c;
+            let l <- Proc.read_line (Shared.get sh);
+            let w <- Proc.write (Shared.get sh) "hello\n";
             let _code <- Proc.wait c;
             return (pr_is_eof l && pr_write_is_broken_pipe w)
         }
@@ -242,8 +246,9 @@ def test_spawn_keeps_stderr_out_of_the_protocol_stream : IO Bool := do {
     match r {
         Result.err _ => return false,
         Result.ok c => do {
-            let e <- Proc.read_stderr_line c;
-            let l <- Proc.read_line c;
+            let sh := Shared.of c;
+            let e <- Proc.read_stderr_line (Shared.get sh);
+            let l <- Proc.read_line (Shared.get sh);
             let code <- Proc.wait c;
             return (pr_line_is e "err" && pr_line_is l "out" && code == 0)
         }
@@ -276,7 +281,8 @@ def test_spawn_wait_after_kill_reports_a_freed_slot : IO Bool := do {
     match r {
         Result.err _ => return false,
         Result.ok c => do {
-            Proc.kill c;
+            let sh := Shared.of c;
+            Proc.kill (Shared.get sh);
             let code <- Proc.wait c;
             return (code == (0 - 1))
         }
@@ -293,7 +299,8 @@ def test_spawn_discards_a_partial_line_at_eof : IO Bool := do {
     match r {
         Result.err _ => return false,
         Result.ok c => do {
-            let l <- Proc.read_line c;
+            let sh := Shared.of c;
+            let l <- Proc.read_line (Shared.get sh);
             let code <- Proc.wait c;
             return (pr_is_eof l && code == 0)
         }
@@ -325,7 +332,8 @@ def test_spawn_read_line_is_bounded : IO Bool := do {
     match r {
         Result.err _ => return false,
         Result.ok c => do {
-            let l <- Proc.read_line c;
+            let sh := Shared.of c;
+            let l <- Proc.read_line (Shared.get sh);
             // The child exits on its own once the pipe closes; the
             // verdict is the read's, so `wait` is cleanup either way.
             let _code <- Proc.wait c;

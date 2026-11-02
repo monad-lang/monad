@@ -6,6 +6,7 @@
 /// lives in its own `st_*` helper: no `#[test]` def nests two
 /// differently-typed matches (the recorded self-hosted codegen hazard).
 
+use init::shared {Shared, Shared.get}
 use std::process {exec_cmd, process_id}
 use std::bytebuf {ByteBuf, ByteBuf.free, ByteBuf.length, ByteBuf.of_string, ByteBuf.to_string}
 use std::stream {Stream, FdStream.read_line_bounded, StreamError, StreamError.kind_of_code, StreamErrorKind, FdStream, FdStream.open_file, FdStream.read_mode, FdStream.write_mode, FdStream.append_mode, PartialLinePolicy}
@@ -21,18 +22,18 @@ def st_wrote (r : Result StreamError I64) (n : I64) : Bool :=
         Result.err _ => false
     }
 
-def st_write_all (s : FdStream) (text : String) : IO Bool := do {
+def st_write_all (s : Shared FdStream) (text : String) : IO Bool := do {
     let buf <- ByteBuf.of_string text;
-    let r <- Stream.write s buf;
+    let r <- Stream.write (Shared.get s) buf;
     let _ <- ByteBuf.free buf;
-    let _ <- Stream.close s;
+    let _ <- Stream.close (Shared.get s);
     return (st_wrote r (String.length text))
 }
 
 def st_write_opened (opened : Result StreamError FdStream) (text : String) : IO Bool :=
     match opened {
         Result.err _ => IO.pure false,
-        Result.ok s => st_write_all s text
+        Result.ok s => st_write_all (Shared.of s) text
     }
 
 /// Create-or-truncate `path` holding exactly `text`.
@@ -45,22 +46,23 @@ def st_write_file (path : String) (text : String) : IO Bool := do {
 
 /// The whole stream, read in 4 KiB pieces until the zero-length end.
 #[terminating]
-def st_read_all (s : FdStream) (acc_rev : List String) : IO (Option String) := do {
-    let r <- Stream.read s 4096;
+def st_read_all (s : Shared FdStream) (acc_rev : List String) : IO (Option String) := do {
+    let r <- Stream.read (Shared.get s) 4096;
     st_read_step s acc_rev r
 }
 
 #[terminating]
-def st_read_step (s : FdStream) (acc_rev : List String) (r : Result StreamError ByteBuf) : IO (Option String) :=
+def st_read_step (s : Shared FdStream) (acc_rev : List String) (r : Result StreamError ByteBuf) : IO (Option String) :=
     match r {
         Result.err _ => IO.pure Option.none,
         Result.ok buf => st_read_buf s acc_rev buf
     }
 
 #[terminating]
-def st_read_buf (s : FdStream) (acc_rev : List String) (buf : ByteBuf) : IO (Option String) := do {
-    let n := ByteBuf.length buf;
-    let text <- ByteBuf.to_string buf n;
+def st_read_buf (s : Shared FdStream) (acc_rev : List String) (buf : ByteBuf) : IO (Option String) := do {
+    let src := Shared.of buf;
+    let n := ByteBuf.length (Shared.get src);
+    let text <- ByteBuf.to_string (Shared.get src) n;
     let _ <- ByteBuf.free buf;
     if n == 0
     then do { return (Option.some (String.concat_list (List.reverse acc_rev))) }
@@ -70,12 +72,12 @@ def st_read_buf (s : FdStream) (acc_rev : List String) (buf : ByteBuf) : IO (Opt
 def st_read_opened (opened : Result StreamError FdStream) : IO (Option String) :=
     match opened {
         Result.err _ => IO.pure Option.none,
-        Result.ok s => st_read_and_close s
+        Result.ok s => st_read_and_close (Shared.of s)
     }
 
-def st_read_and_close (s : FdStream) : IO (Option String) := do {
+def st_read_and_close (s : Shared FdStream) : IO (Option String) := do {
     let text <- st_read_all s List.empty;
-    let _ <- Stream.close s;
+    let _ <- Stream.close (Shared.get s);
     return text
 }
 
@@ -161,14 +163,14 @@ def st_three_lines (path : String) (policy : PartialLinePolicy) (partial_deliver
 def st_three_lines_opened (opened : Result StreamError FdStream) (policy : PartialLinePolicy) (partial_delivered : Bool) : IO Bool :=
     match opened {
         Result.err _ => IO.pure false,
-        Result.ok s => st_three_lines_of s policy partial_delivered
+        Result.ok s => st_three_lines_of (Shared.of s) policy partial_delivered
     }
 
-def st_three_lines_of (s : FdStream) (policy : PartialLinePolicy) (partial_delivered : Bool) : IO Bool := do {
-    let a <- FdStream.read_line_bounded s 0 policy;
-    let b <- FdStream.read_line_bounded s 0 policy;
-    let c <- FdStream.read_line_bounded s 0 policy;
-    let _ <- Stream.close s;
+def st_three_lines_of (s : Shared FdStream) (policy : PartialLinePolicy) (partial_delivered : Bool) : IO Bool := do {
+    let a <- FdStream.read_line_bounded (Shared.get s) 0 policy;
+    let b <- FdStream.read_line_bounded (Shared.get s) 0 policy;
+    let c <- FdStream.read_line_bounded (Shared.get s) 0 policy;
+    let _ <- Stream.close (Shared.get s);
     let second_ok := if partial_delivered then st_line_is b "cd" else st_line_eof b;
     return (st_line_is a "ab" && second_ok && st_line_eof c)
 }
@@ -181,12 +183,12 @@ def st_bounded_line (path : String) (max_len : I64) : IO (Result StreamError (Op
 def st_bounded_line_opened (opened : Result StreamError FdStream) (max_len : I64) : IO (Result StreamError (Option String)) :=
     match opened {
         Result.err e => IO.pure (Result.err e),
-        Result.ok s => st_bounded_line_of s max_len
+        Result.ok s => st_bounded_line_of (Shared.of s) max_len
     }
 
-def st_bounded_line_of (s : FdStream) (max_len : I64) : IO (Result StreamError (Option String)) := do {
-    let r <- FdStream.read_line_bounded s max_len PartialLinePolicy.deliver;
-    let _ <- Stream.close s;
+def st_bounded_line_of (s : Shared FdStream) (max_len : I64) : IO (Result StreamError (Option String)) := do {
+    let r <- FdStream.read_line_bounded (Shared.get s) max_len PartialLinePolicy.deliver;
+    let _ <- Stream.close (Shared.get s);
     return r
 }
 
