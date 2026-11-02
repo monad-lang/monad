@@ -24,7 +24,7 @@
 /// `BUILTIN_INTRINSICS` doc comment for the current (`reflect_type_info!`-
 /// only) design.
 use init::meta {TypeInfo, CtorInfo, FieldInfo, Expr, MetaMatchArm, MetaDecl}
-use init::shared {Shared, Shared.get}
+use init::shared {Shared.get, of}
 
 open TypeInfo {type_info}
 open CtorInfo {ctor_info}

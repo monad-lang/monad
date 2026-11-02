@@ -58,7 +58,8 @@ def IO.write_bytes_opened (opened : Result StreamError FdStream) (bytes : List U
 /// same owned descriptor.
 def IO.write_bytes_all (s : Shared FdStream) (bytes : List U8) : IO (Result StreamError Unit) := do {
   let buf <- ByteBuf.of_list bytes;
-  let r <- Stream.write (Shared.get s) buf;
+  let bs := Shared.of buf;
+  let r <- Stream.write (Shared.get s) (Shared.get bs);
   let _ <- ByteBuf.free buf;
   let _ <- Stream.close (Shared.get s);
   return (IO.written r)
@@ -72,7 +73,8 @@ def IO.write_opened (opened : Result StreamError FdStream) (content : String) : 
 
 def IO.write_all (s : Shared FdStream) (content : String) : IO (Result StreamError Unit) := do {
   let buf <- ByteBuf.of_string content;
-  let r <- Stream.write (Shared.get s) buf;
+  let bs := Shared.of buf;
+  let r <- Stream.write (Shared.get s) (Shared.get bs);
   let _ <- ByteBuf.free buf;
   let _ <- Stream.close (Shared.get s);
   return (IO.written r)
@@ -321,7 +323,8 @@ pub def IO.get_env (s : String) : IO (Option String) := IO.mk (get_env_raw s)
 // (`stdio_die_on_epipe`, runtime.c; the interpreter mirrors it).
 pub def IO.write_to (s : FdStream) (text : String) : IO Unit := do {
   let buf <- ByteBuf.of_string text;
-  let _ <- Stream.write s buf;
+  let bs := Shared.of buf;
+  let _ <- Stream.write s (Shared.get bs);
   ByteBuf.free buf
 }
 

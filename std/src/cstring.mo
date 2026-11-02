@@ -18,7 +18,7 @@
 // `#[extern "c"]` and has no raw addresses.
 
 use init::shared {Shared, Shared.get}
-use lib::bytebuf {ByteBuf, ByteBuf.alloc, ByteBuf.free, ByteBuf.ptr,
+use lib::bytebuf {ByteBuf.alloc, ByteBuf.free, ByteBuf.ptr,
     ByteBuf.to_list, ByteBuf.to_string}
 
 // `n` is `I64`, not `size_t`/`U64`: it is a 64-bit register on every
@@ -46,8 +46,9 @@ with CString {
     /// Copy exactly `n` bytes (may contain NULs) into a Monad `String`.
     pub def read_n (p : Ptr) (n : I64) : IO String := do {
         let buf <- ByteBuf.alloc n;
-        let _ <- IO.mk (cstring_memcpy (ByteBuf.ptr buf) p n);
-        let s <- ByteBuf.to_string buf n;
+        let bs := Shared.of buf;
+        let _ <- IO.mk (cstring_memcpy (ByteBuf.ptr (Shared.get bs)) p n);
+        let s <- ByteBuf.to_string (Shared.get bs) n;
         let _ <- ByteBuf.free buf;
         return s
     }
@@ -62,8 +63,9 @@ with CString {
 
     def bytes_n (p : Ptr) (n : I64) : IO (List U8) := do {
         let buf <- ByteBuf.alloc n;
-        let _ <- IO.mk (cstring_memcpy (ByteBuf.ptr buf) p n);
-        let xs <- ByteBuf.to_list buf n;
+        let bs := Shared.of buf;
+        let _ <- IO.mk (cstring_memcpy (ByteBuf.ptr (Shared.get bs)) p n);
+        let xs <- ByteBuf.to_list (Shared.get bs) n;
         let _ <- ByteBuf.free buf;
         return xs
     }

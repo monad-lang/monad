@@ -24,7 +24,8 @@ def st_wrote (r : Result StreamError I64) (n : I64) : Bool :=
 
 def st_write_all (s : Shared FdStream) (text : String) : IO Bool := do {
     let buf <- ByteBuf.of_string text;
-    let r <- Stream.write (Shared.get s) buf;
+    let bs := Shared.of buf;
+    let r <- Stream.write (Shared.get s) (Shared.get bs);
     let _ <- ByteBuf.free buf;
     let _ <- Stream.close (Shared.get s);
     return (st_wrote r (String.length text))

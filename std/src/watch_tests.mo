@@ -5,7 +5,7 @@
 /// pinned with hand-built `inotify_event` records (no filesystem), the tree
 /// rows use real ones, and `slow_tests/src/watch_e2e_tests.mo` adds a compiled
 /// end-to-end program through the real pipeline.
-use init::shared {Shared, Shared.get}
+use init::shared {Shared.get, of}
 use std::io {IO.write_file}
 use std::list {List.length}
 use std::path {Path}
@@ -302,7 +302,7 @@ def test_watch_recursive_nested_edit : IO Bool := do {
 
 def wt_nested_edit (w : Watch) (root : String) : IO Bool := do {
   wt_write (root ++ "/a/b/one.mo") "two";
-  let r <- Watch.drain (Shared.of w)2000 50;
+  let r <- Watch.drain (Shared.of w) 2000 50;
   Watch.close w;
   wt_rm root;
   match r {
@@ -327,7 +327,7 @@ def test_watch_recursive_new_directory : IO Bool := do {
 
 def wt_new_directory (w : Watch) (root : String) : IO Bool := do {
   wt_mkdir (root ++ "/newdir");
-  let first <- Watch.drain (Shared.of w)2000 50;
+  let first <- Watch.drain (Shared.of w) 2000 50;
   match first {
     Result.err _ => wt_close_false w root,
     Result.ok b => wt_new_directory_added w root b
@@ -337,7 +337,7 @@ def wt_new_directory (w : Watch) (root : String) : IO Bool := do {
 def wt_new_directory_added (w : Watch) (root : String) (b : WatchBatch) : IO Bool := do {
   let saw_dir := wt_saw_dir b.events (root ++ "/newdir");
   wt_write (root ++ "/newdir/x.mo") "x";
-  let second <- Watch.drain (Shared.of w)2000 50;
+  let second <- Watch.drain (Shared.of w) 2000 50;
   Watch.close w;
   wt_rm root;
   match second {
@@ -365,7 +365,7 @@ def test_watch_recursive_ignored_directory : IO Bool := do {
 def wt_ignored_directory (w : Watch) (root : String) : IO Bool := do {
   wt_write (root ++ "/target/x.mo") "x";
   wt_write (root ++ "/keep/y.mo") "y";
-  let r <- Watch.drain (Shared.of w)2000 50;
+  let r <- Watch.drain (Shared.of w) 2000 50;
   Watch.close w;
   wt_rm root;
   match r {
@@ -431,7 +431,7 @@ def test_watch_recursive_renamed_directory : IO Bool := do {
 
 def wt_renamed_directory (w : Watch) (root : String) : IO Bool := do {
   wt_mkdir (root ++ "/old");
-  let created <- Watch.drain (Shared.of w)2000 50;
+  let created <- Watch.drain (Shared.of w) 2000 50;
   match created {
     Result.err _ => wt_close_false w root,
     Result.ok _ => wt_renamed_after w root
@@ -440,7 +440,7 @@ def wt_renamed_directory (w : Watch) (root : String) : IO Bool := do {
 
 def wt_renamed_after (w : Watch) (root : String) : IO Bool := do {
   let _ <- exec_cmd "mv" [root ++ "/old", root ++ "/new"];
-  let moved <- Watch.drain (Shared.of w)2000 50;
+  let moved <- Watch.drain (Shared.of w) 2000 50;
   match moved {
     Result.err _ => wt_close_false w root,
     Result.ok _ => wt_renamed_write w root
@@ -449,7 +449,7 @@ def wt_renamed_after (w : Watch) (root : String) : IO Bool := do {
 
 def wt_renamed_write (w : Watch) (root : String) : IO Bool := do {
   wt_write (root ++ "/new/x.mo") "x";
-  let r <- Watch.drain (Shared.of w)2000 50;
+  let r <- Watch.drain (Shared.of w) 2000 50;
   Watch.close w;
   wt_rm root;
   match r {

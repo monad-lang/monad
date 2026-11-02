@@ -1,6 +1,7 @@
 // Fiber concurrency tests
 // Tests for forkIO, await_fiber, cancel_fiber
 
+use init::shared {Shared.get, of}
 use lib::concurrent::fiber {
     FiberError, FiberError.message, FiberError.of_code, await_fiber, cancel_fiber, forkIO,
 }
@@ -88,8 +89,9 @@ def test_fork_multiple_and_await : IO Bool {
 #[test]
 def test_await_cancelled_is_err : IO Bool {
     let f <- forkIO slow_1_action;
-    cancel_fiber f;
-    let r <- await_fiber f;
+    let sf := Shared.of f;
+    cancel_fiber (Shared.get sf);
+    let r <- await_fiber (Shared.get sf);
     return (err_is_cancelled r)
 }
 
@@ -105,8 +107,9 @@ def test_cancel_stops_before_the_next_bind : IO Bool := do {
         Ref.set ran true
     });
     sleepIO 10;
-    cancel_fiber f;
-    let r <- await_fiber f;
+    let sf := Shared.of f;
+    cancel_fiber (Shared.get sf);
+    let r <- await_fiber (Shared.get sf);
     let side_effect <- Ref.get ran;
     return (unit_err_is_cancelled r && Bool.not side_effect)
 }

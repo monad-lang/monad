@@ -140,7 +140,8 @@ pub def timeout {A : Type} (duration : Combine.Duration) (f : Fiber A) : IO (Res
 // are cancelled when the scope exits.
 def scoped (f : FiberScope -> IO A) : IO A := do {
   let scope <- scope_new;
-  let result <- f scope;
+  let ss := Shared.of scope;
+  let result <- f (Shared.get ss);
   scope_drop scope;
   return result
 }

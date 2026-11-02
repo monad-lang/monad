@@ -8,8 +8,7 @@
 /// Same mote, so `Proc.first_quote` stays package-private and is still
 /// reachable here -- no API had to be widened to test it.
 
-use init::shared {Shared, Shared.get}
-use lib::process {Child}
+use init::shared {Shared.get, of}
 use std::stream {StreamError, StreamErrorKind}
 
 // ─── Tests: shell_quote ───
@@ -200,12 +199,6 @@ def pr_read_is_invalid_input (l : Result StreamError (Option String)) : Bool :=
         Result.err e => pr_kind_is_invalid_input e.kind
     }
 
-/// A spawn failed because the command does not exist.
-def pr_spawn_is_not_found (r : Result StreamError Child) : Bool :=
-    match r {
-        Result.ok _ => false,
-        Result.err e => StreamError.is_not_found e
-    }
 
 /// Writing to a child that has already exited is `broken_pipe`, not the
 /// death of THIS process by SIGPIPE -- the compiled runtime ignores
@@ -313,7 +306,7 @@ def test_spawn_discards_a_partial_line_at_eof : IO Bool := do {
 def test_spawn_of_a_missing_command_is_an_error : IO Bool := do {
     let r <- Proc.spawn "monad_no_such_command_exists" [];
     match r {
-        Result.err _ => return (pr_spawn_is_not_found r),
+        Result.err e => return (StreamError.is_not_found e),
         Result.ok c => do {
             let _code <- Proc.wait c;
             return false

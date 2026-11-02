@@ -15,6 +15,7 @@
 /// instance at run time, and constrained instance dispatch is exactly
 /// what this backend does not honor (`unresolved global: BEq.beq`).
 
+use init::shared {Shared.get, of}
 use std::bytebuf {ByteBuf.alloc, ByteBuf.copy_into, ByteBuf.free, ByteBuf.length, ByteBuf.of_list, ByteBuf.of_string, ByteBuf.to_list, ByteBuf.to_string, ByteBuf.truncate}
 use std::list {List.length}
 
@@ -87,7 +88,8 @@ def test_of_list_4k_round_trips : IO Bool := do {
     let big : List U8 := ramp 4096;
     let b <- ByteBuf.of_list big;
     let xs <- ByteBuf.to_list b 4096;
-    return (I64.beq (List.length xs) 4096 && bytes_eq xs (ramp 4096))
+    let sxs := Shared.of xs;
+    return (I64.beq (List.length (Shared.get sxs)) 4096 && bytes_eq (Shared.get sxs) (ramp 4096))
 }
 
 /// `to_list` reads only the first `len` bytes -- the whole point of the
@@ -162,7 +164,8 @@ def he_bytes : List U8 := [104u8, 195u8, 169u8]
 #[test]
 def test_of_string_round_trips_through_to_string : IO Bool := do {
     let b <- ByteBuf.of_string "hello, world";
-    let s <- ByteBuf.to_string b 12;
+    let sb := Shared.of b;
+    let s <- ByteBuf.to_string (Shared.get sb) 12;
     let _ <- ByteBuf.free b;
     return (String.beq s "hello, world")
 }
@@ -172,8 +175,9 @@ def test_of_string_round_trips_through_to_string : IO Bool := do {
 #[test]
 def test_of_string_holds_the_utf8_bytes : IO Bool := do {
     let b <- ByteBuf.of_string "hé";
-    let xs <- ByteBuf.to_list b 3;
-    let n := ByteBuf.length b;
+    let sb := Shared.of b;
+    let xs <- ByteBuf.to_list (Shared.get sb) 3;
+    let n := ByteBuf.length (Shared.get sb);
     let _ <- ByteBuf.free b;
     return (I64.beq n 3 && bytes_eq xs he_bytes)
 }
@@ -181,7 +185,8 @@ def test_of_string_holds_the_utf8_bytes : IO Bool := do {
 #[test]
 def test_to_string_of_utf8_bytes_is_the_text : IO Bool := do {
     let b <- ByteBuf.of_list he_bytes;
-    let s <- ByteBuf.to_string b 3;
+    let sb := Shared.of b;
+    let s <- ByteBuf.to_string (Shared.get sb) 3;
     let _ <- ByteBuf.free b;
     return (String.beq s "hé")
 }
@@ -190,7 +195,8 @@ def test_to_string_of_utf8_bytes_is_the_text : IO Bool := do {
 #[test]
 def test_to_string_clamps_len_to_the_buffer : IO Bool := do {
     let b <- ByteBuf.of_string "abc";
-    let s <- ByteBuf.to_string b 100;
+    let sb := Shared.of b;
+    let s <- ByteBuf.to_string (Shared.get sb) 100;
     let _ <- ByteBuf.free b;
     return (String.beq s "abc")
 }
@@ -198,7 +204,8 @@ def test_to_string_clamps_len_to_the_buffer : IO Bool := do {
 #[test]
 def test_to_string_takes_only_len_bytes : IO Bool := do {
     let b <- ByteBuf.of_string "abcdef";
-    let s <- ByteBuf.to_string b 2;
+    let sb := Shared.of b;
+    let s <- ByteBuf.to_string (Shared.get sb) 2;
     let _ <- ByteBuf.free b;
     return (String.beq s "ab")
 }
@@ -206,8 +213,9 @@ def test_to_string_takes_only_len_bytes : IO Bool := do {
 #[test]
 def test_of_string_empty_is_a_zero_length_buffer : IO Bool := do {
     let b <- ByteBuf.of_string "";
-    let s <- ByteBuf.to_string b 0;
-    let n := ByteBuf.length b;
+    let sb := Shared.of b;
+    let s <- ByteBuf.to_string (Shared.get sb) 0;
+    let n := ByteBuf.length (Shared.get sb);
     let _ <- ByteBuf.free b;
     return (I64.beq n 0 && String.beq s "")
 }
@@ -218,9 +226,10 @@ def test_of_string_empty_is_a_zero_length_buffer : IO Bool := do {
 #[test]
 def test_truncate_shrinks_length_and_contents : IO Bool := do {
     let b <- ByteBuf.of_list three_bytes;
-    let _ <- ByteBuf.truncate b 2;
-    let xs <- ByteBuf.to_list b 3;
-    let len : I64 := ByteBuf.length b;
+    let sb := Shared.of b;
+    let _ <- ByteBuf.truncate (Shared.get sb) 2;
+    let xs <- ByteBuf.to_list (Shared.get sb) 3;
+    let len : I64 := ByteBuf.length (Shared.get sb);
     let _ <- ByteBuf.free b;
     return (I64.beq len 2 && bytes_eq xs first_two)
 }
@@ -229,10 +238,11 @@ def test_truncate_shrinks_length_and_contents : IO Bool := do {
 #[test]
 def test_truncate_clamps : IO Bool := do {
     let b <- ByteBuf.of_list three_bytes;
-    let _ <- ByteBuf.truncate b 10;
-    let grown : I64 := ByteBuf.length b;
-    let _ <- ByteBuf.truncate b (0 - 1);
-    let emptied : I64 := ByteBuf.length b;
+    let sb := Shared.of b;
+    let _ <- ByteBuf.truncate (Shared.get sb) 10;
+    let grown : I64 := ByteBuf.length (Shared.get sb);
+    let _ <- ByteBuf.truncate (Shared.get sb) (0 - 1);
+    let emptied : I64 := ByteBuf.length (Shared.get sb);
     let _ <- ByteBuf.free b;
     return (I64.beq grown 3 && I64.beq emptied 0)
 }
@@ -244,9 +254,12 @@ def test_copy_into_gathers_buffers : IO Bool := do {
     let a <- ByteBuf.of_list first_two;
     let b <- ByteBuf.of_list three_bytes;
     let dst <- ByteBuf.alloc 5;
-    let _ <- ByteBuf.copy_into dst 0 a;
-    let _ <- ByteBuf.copy_into dst 2 b;
-    let xs <- ByteBuf.to_list dst 5;
+    let sa := Shared.of a;
+    let sb := Shared.of b;
+    let sd := Shared.of dst;
+    let _ <- ByteBuf.copy_into (Shared.get sd) 0 (Shared.get sa);
+    let _ <- ByteBuf.copy_into (Shared.get sd) 2 (Shared.get sb);
+    let xs <- ByteBuf.to_list (Shared.get sd) 5;
     let _ <- ByteBuf.free a;
     let _ <- ByteBuf.free b;
     let _ <- ByteBuf.free dst;
@@ -259,11 +272,13 @@ def test_copy_into_gathers_buffers : IO Bool := do {
 def test_copy_into_clamps : IO Bool := do {
     let src <- ByteBuf.of_list three_bytes;
     let dst <- ByteBuf.alloc 4;
-    let _ <- ByteBuf.copy_into dst 2 src;
-    let _ <- ByteBuf.copy_into dst 9 src;
-    let _ <- ByteBuf.copy_into dst (0 - 1) src;
-    let xs <- ByteBuf.to_list dst 9;
-    let len : I64 := ByteBuf.length dst;
+    let ss := Shared.of src;
+    let sd := Shared.of dst;
+    let _ <- ByteBuf.copy_into (Shared.get sd) 2 (Shared.get ss);
+    let _ <- ByteBuf.copy_into (Shared.get sd) 9 (Shared.get ss);
+    let _ <- ByteBuf.copy_into (Shared.get sd) (0 - 1) (Shared.get ss);
+    let xs <- ByteBuf.to_list (Shared.get sd) 9;
+    let len : I64 := ByteBuf.length (Shared.get sd);
     let _ <- ByteBuf.free src;
     let _ <- ByteBuf.free dst;
     return (I64.beq len 4 && bytes_eq xs [0u8, 0u8, 1u8, 2u8])

@@ -6,6 +6,7 @@
 // purpose; this file runs under the compiled backend's runner, not the
 // host's. See that test's own comment for the numbers and the reason.
 
+use init::shared {Shared.get, of}
 use lib::concurrent::fiber {Fiber, FiberError, await_fiber, cancel_fiber, forkIO}
 use lib::concurrent::combine {
   Combine.Duration, FiberScope, Timeout, all, race, scope_fork, scoped, sleepIO, timeout,
@@ -100,8 +101,9 @@ def err_is_cancelled (r : Result FiberError A) : Bool :=
 def test_all_reports_a_cancelled_fiber : IO Bool {
   let f1 <- forkIO io_10_action;
   let f2 <- forkIO slow_10_action;
-  cancel_fiber f2;
-  let results <- all [f1, f2];
+  let sf2 := Shared.of f2;
+  cancel_fiber (Shared.get sf2);
+  let results <- all [f1, Shared.get sf2];
   return (err_is_cancelled results)
 }
 
@@ -110,8 +112,9 @@ def test_all_reports_a_cancelled_fiber : IO Bool {
 #[test]
 def test_race_of_a_cancelled_fiber_is_err : IO Bool {
   let f <- forkIO slow_10_action;
-  cancel_fiber f;
-  let result <- race [f];
+  let sf := Shared.of f;
+  cancel_fiber (Shared.get sf);
+  let result <- race [Shared.get sf];
   return (err_is_cancelled result)
 }
 

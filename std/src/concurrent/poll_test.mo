@@ -17,6 +17,7 @@
 // a bounded-retry helper recurses through two defs and the termination
 // checker reasonably refuses to see the bound.
 
+use init::shared {Shared.get, of}
 use lib::concurrent::fiber {FiberError, await_fiber, cancel_fiber, forkIO, pollFiber}
 use lib::concurrent::combine {sleepIO}
 
@@ -64,10 +65,11 @@ def sleep_100_action (_ : Unit) : IO I64 := do {
 #[test]
 def test_poll_none_then_some : IO Bool {
   let f <- forkIO poll_300_then_42;
-  let first <- pollFiber f;
+  let sf := Shared.of f;
+  let first <- pollFiber (Shared.get sf);
   let first_ok := match first { Option.none => true, Option.some _ => false };
   sleepIO 700;
-  let later <- pollFiber f;
+  let later <- pollFiber (Shared.get sf);
   return (polled_ok_is later 42 && first_ok)
 }
 
@@ -88,9 +90,10 @@ def test_poll_value_is_the_result : IO Bool {
 #[test]
 def test_poll_cancelled_fiber_is_err : IO Bool {
   let f <- forkIO sleep_100_action;
-  cancel_fiber f;
+  let sf := Shared.of f;
+  cancel_fiber (Shared.get sf);
   sleepIO 300;
-  let o <- pollFiber f;
+  let o <- pollFiber (Shared.get sf);
   return (match o {
     Option.some r => err_is_cancelled r,
     Option.none => false
@@ -103,16 +106,18 @@ def test_poll_cancelled_fiber_is_err : IO Bool {
 #[test]
 def test_poll_then_await_re_reads : IO Bool {
   let f <- forkIO poll_300_then_42;
+  let sf := Shared.of f;
   sleepIO 700;
-  let o <- pollFiber f;
-  let v <- await_fiber f;
+  let o <- pollFiber (Shared.get sf);
+  let v <- await_fiber (Shared.get sf);
   return (polled_ok_is o (ok_value v))
 }
 
 #[test]
 def test_await_then_poll_re_reads : IO Bool {
   let f <- forkIO poll_300_then_42;
-  let v <- await_fiber f;
-  let o <- pollFiber f;
+  let sf := Shared.of f;
+  let v <- await_fiber (Shared.get sf);
+  let o <- pollFiber (Shared.get sf);
   return (polled_ok_is o (ok_value v))
 }

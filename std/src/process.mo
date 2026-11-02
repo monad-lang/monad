@@ -1,5 +1,6 @@
 // IO is ambient (init/io.mo, always a loaded root) -- no `use` needed.
 
+use init::shared {Shared, Shared.get}
 use lib::io {}
 use lib::stream {
   FdStream, FdStream.read_line_bounded, PartialLinePolicy, Stream, StreamError,
@@ -130,7 +131,8 @@ pub def Proc.write (c : Child) (s : String) : IO (Result StreamError I64) := do 
     // `IO.mk` here, so the `Stream FdStream` instance would not be found.
     let view : FdStream <- IO.mk (proc_stream_fd c Proc.stdin_flag);
     let buf <- ByteBuf.of_string s;
-    let r <- Stream.write view buf;
+    let bs := Shared.of buf;
+    let r <- Stream.write view (Shared.get bs);
     let _ <- ByteBuf.free buf;
     return r
 }
