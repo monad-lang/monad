@@ -106,8 +106,13 @@ def agent_bind_run {I : Type} {J : Type} {K : Type} {A : Type} {B : Type} (ma : 
 pub def Agent.bind {I : Type} {J : Type} {K : Type} {A : Type} {B : Type} (ma : Agent I J A) (f : A -> Agent J K B) : Agent I K B :=
     Agent.agent (fn (s : RunState) => agent_bind_run ma f s)
 
+/// The body ASCRIBES `Agent.pure`'s index: `pure` returns `Agent I I A`, and
+/// the checker cannot solve its `I` from the enclosing `bind`'s still-free
+/// `K` (no metavariables). Left implicit, the call infers `Agent I I B` and
+/// the arm then pins `bind`'s `K` to the wrong index (measured 2026-11-01,
+/// hidden until the def-boundary comparison stopped skipping type variables).
 pub def Agent.map {I : Type} {J : Type} {A : Type} {B : Type} (f : A -> B) (ma : Agent I J A) : Agent I J B :=
-    Agent.bind ma (fn (a : A) => Agent.pure (f a))
+    Agent.bind ma (fn (a : A) => (Agent.pure (f a) : Agent J J B))
 
 pub def Agent.and_then {I : Type} {J : Type} {K : Type} {A : Type} {B : Type} (first : Agent I J A) (second : Agent J K B) : Agent I K B :=
     Agent.bind first (fn (_ : A) => second)
