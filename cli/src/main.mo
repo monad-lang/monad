@@ -770,9 +770,15 @@ def install_binary (home : String) (src : String) (name : String) : IO I64 := do
 /// own existing semantics and avoid blocking every compile on an
 /// unrelated, pre-existing gap somewhere in prelude/init — `check_deps=true`
 /// exists (see `elaborate_loaded_modules`'s own doc comment) but is not
-/// yet safe to default to anywhere: it caused unbounded memory growth
-/// checking `cli/src/main.mo`'s own full closure, root cause under
-/// investigation (`bootstrapping/check-deps-memory-blowup.md`).
+/// safe to default to anywhere: it runs `check_termination_all` over the
+/// whole closure, which is only sound per module (188 spurious diagnostics
+/// in `slow_tests/typecheck_init_tests.mo`), and it is superlinear in
+/// closure size. It is also redundant with the sweep, which checks every
+/// `.mo` file as its own target; see
+/// `bootstrapping/check-deps-memory-blowup.md` for the measurements. The
+/// consequence is known: a type error in an imported module is not caught
+/// by compiling one importer (the sessions RSS helper's bare do-tail was
+/// one such case), so the per-file sweeps remain the safety net.
 /// `compile_loaded_modules_to_ir` (`lang.codegen.emit`) separately attempts
 /// whole-graph elaboration on its own, with its own graceful fallback,
 /// purely to improve codegen's own dictionary-dispatch resolution (see its
