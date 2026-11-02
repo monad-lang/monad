@@ -33,7 +33,7 @@ use weaver::tui_app {
     ResumeAction, ResumeChoice,
 }
 use weaver::commands {SessionPage, Commands.session_page}
-use weaver::dialog {DialogOption}
+use tui::widgets::dialog {DialogOption}
 use tui::text {Text.width}
 use std::concurrent::fiber {never_started}
 use tui::types {Event, Key}

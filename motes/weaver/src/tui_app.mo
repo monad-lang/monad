@@ -45,7 +45,7 @@ use weaver::ui::pane {
     PaneModel, PaneMsg, Pane.reset, Pane.end_drag, Pane.selecting,
     Pane.page_wanted, Pane.page_requested, Pane.page_loaded, Pane.page_failed,
 }
-use weaver::ui::rows {DisplayRow, Rows.of_line, Rows.wrap, Rows.take, Rows.drop, Rows.widget}
+use weaver::ui::rows {DisplayRow, Rows.of_line, Rows.widget}
 use weaver::logs {Logs.info, Logs.debug, Logs.warn, Logs.error, Logs.log_rss}
 use weaver::title {Title.generate, Title.needed}
 use weaver::subagent {Subagent.task_tool}
@@ -69,23 +69,17 @@ use weaver::theme {theme_split_lines, theme_line_style_with, theme_border_style_
 use weaver::store {TLine, TLine.plain, TLine.user_line}
 use weaver::error {WeaverError, WeaverError.show, WeaverError.recoverable}
 use std::concurrent::fiber {FiberError, FiberError.message}
-use tui::types {Event, Key, MouseEvent, MouseButton, LayoutSize, TextStyle, Rect, Cell, Screen}
-use tui::widget {Widget, SizedWidget, BorderStyle, border_with, padding, sized, label, with_style}
-use tui::widgets::input {InputState, input_state, handle_input_multiline_key, insert_text}
-use tui::widgets::input {handle_input_key}
-use tui::core {empty_screen, mk_rect, style_to_ansi, style_default}
-use tui::render {render, diff, apply_deltas}
+use tui::types {Event, Key, MouseEvent, MouseButton}
+use tui::widget {SizedWidget}
 use tui::text {Text.take_width, Text.width}
 use tui::clipboard {Clipboard.copy}
-use tui::layout {center_rect_in}
-use weaver::dialog {
-    Dialog, DialogOption, DialogStep, Dialog.make, Dialog.step, Dialog.paste,
-    Dialog.with_default, Dialog.note_text, Dialog.option_count,
+use tui::widgets::dialog {
+    DialogModel, DialogOption, DialogStep, Dialog.make, Dialog.with_default, Dialog.note_text,
+    Dialog.paint, Dialog.modal,
 }
 use tui::terminal {
-    Terminal.clear_screen, Terminal.cursor_move, Terminal.enter_raw_mode, Terminal.poll, Terminal.size,
+    Terminal.clear_screen, Terminal.cursor_move, Terminal.enter_raw_mode, Terminal.size,
 }
-use tui::input {Input.step, InputReader, input_reader}
 use tui::tui {App, Cmd, run_app}
 use tui::widgets::picker {PickerModel, PickerStep, Picker.make, Picker.update}
 use weaver::ui::prompt {PromptMsg, Prompt.update, Prompt.text, Prompt.set_text, Prompt.clear, Prompt.submitted, Prompt.selecting, Prompt.clear_selection, Prompt.box_contains}
@@ -93,7 +87,6 @@ use weaver::ui::banner {BannerMsg, Banner.shown, Banner.hidden, Banner.update, B
 use tui::component {Subs, Subs.map, Subs.on_tick}
 use weaver::ui::live {LiveMsg, Live.idle, Live.start, Live.update, Live.request_stop, Live.subscriptions, Live.write_usage, Live.store_usage}
 use init::transformers {ResultT}
-use std::io {IO.read_stdin_exact, IO.write_stdout, IO.flush_stdout}
 use std::path {Path}
 use json::json {Json, Json.to_string}
 use std::list {List.intercalate, List.length}
@@ -1013,7 +1006,7 @@ def permissions_dialog_step (st : WeaverState) : IO WeaverMsg := do {
     let text : String := Permissions.render st.workspace_root (Mode.show st.mode) gs;
     let body : List String := theme_split_lines text;
     let opts : List DialogOption := List.cons o0 (List.cons o1 (List.cons o2 (List.cons o3 (List.cons o4 (List.cons o5 List.empty)))));
-    let d : Dialog := Dialog.make "Permissions" "session grants (cleared on /clear and /resume)" body opts;
+    let d : DialogModel := Dialog.make "Permissions" "session grants (cleared on /clear and /resume)" body opts;
     let pr <- dialog_run st.colors st.store d;
     let step : DialogStep := match pr { Pair.pair _ s => s };
     permissions_step_msg st step
@@ -1060,7 +1053,7 @@ def settings_dialog_step (st : WeaverState) : IO WeaverMsg := do {
     let opts : List DialogOption := List.append row_opts actions;
     let body : List String := List.map (fn (r : SettingRow) =>
         String.concat "  " (String.concat r.label (String.concat ": " r.value))) rows;
-    let d : Dialog := Dialog.make "Settings" "Enter cycles or applies -- Esc closes" body opts;
+    let d : DialogModel := Dialog.make "Settings" "Enter cycles or applies -- Esc closes" body opts;
     let pr <- dialog_run st.colors st.store d;
     let step : DialogStep := match pr { Pair.pair _ s => s };
     settings_step_msg st (List.length rows) step
@@ -1451,13 +1444,6 @@ def diff_lines_of (diff_pair : Option (Pair String String)) : List String :=
         }
     }
 
-#[partial]
-def list_length_rows (rs : List DisplayRow) : I64 :=
-    match rs {
-        List.empty => 0,
-        List.cons _ rest => 1 + list_length_rows rest,
-    }
-
 def prompt_overlay (colors : Bool) (store : Option StoreState) (grants : Option (Ref (List PermGrant))) (root : Option String) (p : Pick) : IO Approval := do {
     let diff_pair <- Diff.for_input p.name p.input;
     // The header names the target path; repeat it as its own line so a
@@ -1470,7 +1456,7 @@ def prompt_overlay (colors : Bool) (store : Option StoreState) (grants : Option 
     let repo_ok : Bool := Permissions.pick_in_repo root (pick_target p);
     let opts : List DialogOption := perm_options p.cap repo_ok;
     let subtitle : String := String.concat (cap_name p.cap) (String.concat " " p.name);
-    let d : Dialog := Dialog.make "Permission required" subtitle body opts;
+    let d : DialogModel := Dialog.make "Permission required" subtitle body opts;
     let default_idx : I64 := perm_default_index p.cap repo_ok;
     let pr <- dialog_run colors store (Dialog.with_default d default_idx);
     match pr {
@@ -1613,10 +1599,9 @@ def resume_pick (st : WeaverState) (s : StoreState) (page_size : I64) (infos : L
     let rows : Pair (List DialogOption) (List ResumeAction) := TuiApp.resume_rows s.id sp;
     match rows {
         Pair.pair opts acts => do {
-            let d0 : Dialog := Dialog.make "Resume a session" "Enter loads the selected session · Esc cancels" List.empty opts;
-            let d : Dialog := { d0 with footer := "↑/↓ select · Enter load · Esc cancel" };
-            let size <- Terminal.size;
-            let pr <- dialog_body st.colors d size;
+            let d0 : DialogModel := Dialog.make "Resume a session" "Enter loads the selected session · Esc cancels" List.empty opts;
+            let d : DialogModel := { d0 with footer := "↑/↓ select · Enter load · Esc cancel" };
+            let pr <- Dialog.modal (paint_dialog st.colors) d;
             match pr {
                 Pair.pair _ step => match step {
                     DialogStep.choose i => match TuiApp.resume_action_at i acts {
@@ -1838,8 +1823,8 @@ def plan_dialog_step (st : WeaverState) (text : String) : IO WeaverMsg :=
 /// produced, still available after approval and later turns.
 def plan_view_step (st : WeaverState) : IO WeaverMsg := do {
     let o0 : DialogOption := { label := "Close", hint := "Esc", key := "" };
-    let d0 : Dialog := Dialog.make "Current plan" "read-only -- switch to plan mode to revise or approve" (plan_body st) [o0];
-    let d : Dialog := { d0 with markdown_body := true, footer := "PageUp/PageDown scroll -- Enter/Esc close" };
+    let d0 : DialogModel := Dialog.make "Current plan" "read-only -- switch to plan mode to revise or approve" (plan_body st) [o0];
+    let d : DialogModel := { d0 with markdown := true, footer := "PageUp/PageDown scroll -- Enter/Esc close" };
     let pr <- dialog_run st.colors st.store d;
     match pr {
         Pair.pair _ _ => IO.pure (WeaverMsg.command_result (plan_effect st "plan closed")),
@@ -1851,8 +1836,8 @@ def plan_approval_step (st : WeaverState) : IO WeaverMsg := do {
     let o1 : DialogOption := { label := "Approve to manual", hint := "m", key := "m" };
     let o2 : DialogOption := { label := "Revise with a note", hint := "r", key := "r" };
     let o3 : DialogOption := { label := "Cancel", hint := "Esc", key := "" };
-    let d0 : Dialog := Dialog.make "Plan ready" "approve it to leave plan mode" (plan_body st) [o0, o1, o2, o3];
-    let d : Dialog := { d0 with markdown_body := true, footer := "PageUp/PageDown scroll -- a approve/edit, m manual, r revise, Esc cancel" };
+    let d0 : DialogModel := Dialog.make "Plan ready" "approve it to leave plan mode" (plan_body st) [o0, o1, o2, o3];
+    let d : DialogModel := { d0 with markdown := true, footer := "PageUp/PageDown scroll -- a approve/edit, m manual, r revise, Esc cancel" };
     let pr <- dialog_run st.colors st.store d;
     match pr {
         Pair.pair final step => match step {
@@ -1903,218 +1888,34 @@ def plan_approval_step (st : WeaverState) : IO WeaverMsg := do {
     }
 }
 
-// ── dialog rendering and input ─────────────────────────────────────────
+// ── dialog rendering ───────────────────────────────────────────────────
 
 /// A Markdown body: the lines join into ONE document, so headings,
-/// lists and fences are parsed rather than shown as source. Parsed
-/// once per render, like `dialog_body_rows`.
+/// lists and fences are parsed rather than shown as source.
 pub def markdown_body_rows (colors : Bool) (width : I64) (lines : List String) : List DisplayRow :=
     if List.length lines < 1
     then List.empty
     else Rows.of_line colors width (TLine.markdown_line (List.intercalate "\n" lines))
 
-#[partial]
-def dialog_body_rows (colors : Bool) (plain : Bool) (width : I64) (lines : List String) : List DisplayRow :=
-    match lines {
-        List.empty => List.empty,
-        List.cons l rest =>
-            let rows : List DisplayRow :=
-                if plain
-                then Rows.wrap style_default width l
-                else Rows.of_line colors width (TLine.plain l) in
-            List.append rows (dialog_body_rows colors plain width rest),
-    }
+/// The body as transcript rows: a Markdown dialog renders its body as one
+/// document, any other keeps the transcript's line styling.
+def dialog_body_rows (colors : Bool) (width : I64) (d : DialogModel) : List SizedWidget :=
+    let rows : List DisplayRow :=
+        if d.markdown
+        then markdown_body_rows colors width d.body
+        else List.flatten (List.map (fn (l : String) => Rows.of_line colors width (TLine.plain l)) d.body) in
+    List.map Rows.widget rows
 
-def dim_row (r : DisplayRow) : DisplayRow :=
-    let base : TextStyle := r.style in
-    let st : TextStyle := { base with dim := true } in
-    { r with style := st }
+def paint_dialog (colors : Bool) (d : DialogModel) : IO Unit :=
+    Dialog.paint (theme_border_style_with colors) (dialog_body_rows colors) d
 
-def bold_row (r : DisplayRow) : DisplayRow :=
-    let base : TextStyle := r.style in
-    let st : TextStyle := { base with bold := true } in
-    { r with style := st }
-
-def reverse_row (r : DisplayRow) : DisplayRow :=
-    let base : TextStyle := r.style in
-    let st : TextStyle := { base with reverse := true } in
-    { r with style := st }
-
-#[partial]
-def dialog_option_rows (colors : Bool) (d : Dialog) (i : I64) (width : I64) : List DisplayRow :=
-    match Dialog.option_at d i {
-        Option.none => List.empty,
-        Option.some o =>
-            let marker : String := if i == d.selected then "> " else "  " in
-            let suffix : String := if String.is_empty o.hint then "" else String.concat "  (" (String.concat o.hint ")") in
-            let line : String := String.concat marker (String.concat o.label suffix) in
-            let rows : List DisplayRow := Rows.of_line colors width (TLine.plain line) in
-            let styled : List DisplayRow := if i == d.selected then List.map reverse_row rows else rows in
-            List.append styled (dialog_option_rows colors d (i + 1) width),
-    }
-
-def dialog_note_row (colors : Bool) (d : Dialog) (width : I64) : List DisplayRow :=
-    let text : String :=
-        if d.editing
-        then String.concat "note: " (String.concat d.note.value "_")
-        else if String.is_empty d.note.value
-        then "note: (press e to add one)"
-        else String.concat "note: " d.note.value in
-    List.map dim_row (Rows.of_line colors width (TLine.plain text))
-
-/// The dialog's visible rows. The body yields to the fixed rows on a
-/// short terminal, so the options, note and footer stay visible.
-/// The dialog's visible rows. The wrapped body is computed ONCE by the
-/// caller (`render_dialog`) and reused for the height and the visible
-/// slice: wrapping a large plan twice per render, every 100 ms, was the
-/// dialog's own freeze.
-def dialog_rows (colors : Bool) (d : Dialog) (width : I64) (height : I64) (body_all : List DisplayRow) : List DisplayRow :=
-    let budget : I64 := if height - 4 < 1 then 1 else height - 4 in
-    let nopts : I64 := Dialog.option_count d in
-    let fixed : I64 := 2 + 1 + 1 + nopts + 1 + 1 + 1 in
-    let body_budget : I64 := if budget - fixed < 1 then 0 else budget - fixed in
-    let body : List DisplayRow := Rows.take body_budget (Rows.drop d.scroll body_all) in
-    let title_rows : List DisplayRow := List.map bold_row (Rows.of_line colors width (TLine.plain d.title)) in
-    let subtitle_rows : List DisplayRow := List.map dim_row (Rows.of_line colors width (TLine.plain d.subtitle)) in
-    let blank : List DisplayRow := Rows.of_line colors width (TLine.plain "") in
-    let foot : List DisplayRow := List.map dim_row (Rows.of_line colors width (TLine.plain d.footer)) in
-    let a : List DisplayRow := List.append title_rows subtitle_rows in
-    let b : List DisplayRow := List.append a blank in
-    let c : List DisplayRow := List.append b body in
-    let e : List DisplayRow := List.append c blank in
-    let f : List DisplayRow := List.append e (dialog_option_rows colors d 0 width) in
-    let g : List DisplayRow := List.append f blank in
-    let h : List DisplayRow := List.append g (dialog_note_row colors d width) in
-    let all : List DisplayRow := List.append h foot in
-    Rows.take budget all
-
-def dialog_total_rows (d : Dialog) (body_all : List DisplayRow) : I64 :=
-    let nopts : I64 := Dialog.option_count d in
-    list_length_rows body_all + nopts + 7
-
-def dialog_widget (colors : Bool) (rows : List DisplayRow) : Widget :=
-    Widget.column [
-        sized (LayoutSize.fill 1) (border_with (theme_border_style_with colors) BorderStyle.rounded
-            (padding 1 1 1 2 (Widget.column (List.map Rows.widget rows)))),
-    ]
-
-def render_dialog (colors : Bool) (d : Dialog) : IO Unit := do {
-    let size <- Terminal.size;
-    match size {
-        Pair.pair rows cols => do {
-            let raw_w : I64 := cols - 4;
-            let width : I64 := if raw_w < 20 then (if raw_w < 1 then 1 else raw_w) else (if raw_w < 88 then raw_w else 88);
-            let content_w : I64 := if width - 4 < 1 then 1 else width - 4;
-            let body_all : List DisplayRow :=
-                if d.markdown_body
-                then markdown_body_rows colors content_w d.body
-                else dialog_body_rows colors d.plain_body content_w d.body;
-            let total : I64 := dialog_total_rows d body_all;
-            let max_h : I64 := if rows - 2 < 6 then 6 else rows - 2;
-            let wanted : I64 := total + 4;
-            let height : I64 := if wanted < max_h then wanted else max_h;
-            let body : List DisplayRow := dialog_rows colors d content_w height body_all;
-            let rect : Rect := center_rect_in (mk_rect 0 0 cols rows) width height;
-            Terminal.clear_screen;
-            Terminal.cursor_move 0 0;
-            let screen := render (dialog_widget colors body) rect (empty_screen rows cols);
-            let deltas := diff (empty_screen rows cols) screen;
-            IO.write_stdout (apply_deltas deltas);
-            IO.flush_stdout
-        }
-    }
-}
-
-/// Two terminal sizes are the same.
-def same_size (a : Pair I64 I64) (b : Pair I64 I64) : Bool :=
-    match a {
-        Pair.pair ar ac => match b {
-            Pair.pair br bc => Bool.and (ar == br) (ac == bc),
-        },
-    }
-
-/// Fold one decoded event into the dialog; `some` ends the modal.
-def dialog_apply (d : Dialog) (e : Event) : Pair Dialog (Option DialogStep) :=
-    match e {
-        Event.key k => match Dialog.step d k {
-            Pair.pair d2 step => match step {
-                DialogStep.continue => Pair.pair d2 Option.none,
-                _ => Pair.pair d2 (Option.some step),
-            },
-        },
-        Event.paste text => Pair.pair (Dialog.paste d text) Option.none,
-        _ => Pair.pair d Option.none,
-    }
-
-/// One byte through `Input.step` -- the same decoder the main loop uses,
-/// including its linear bracketed-paste accumulator. EOF closes the reader.
-def dialog_read (r : InputReader) : IO (Pair (List Event) InputReader) := do {
-    let chunk <- IO.read_stdin_exact 1;
-    if String.length chunk == 0
-    then
-        let closed_reader : InputReader := { r with closed := true } in
-        IO.pure (Pair.pair List.empty closed_reader)
-    else IO.pure (Input.step r List.empty chunk)
-}
-
-/// The modal loop: repaint when the dialog or the terminal size changed,
-/// then poll for input. Events a read decodes are queued and folded in
-/// order. A lone ESC cancels; any other incomplete prefix stays pending in
-/// the reader -- the loop is never blocked on it (the old code re-entered
-/// a blocking read for an `ESC[` prefix). Re-rendering only on change also
-/// stops re-wrapping a large body every 100 ms.
-#[partial]
-def dialog_loop (colors : Bool) (d : Dialog) (r : InputReader) (queued : List Event) (last : Option (Pair I64 I64)) : IO (Pair Dialog DialogStep) := do {
-    let size <- Terminal.size;
-    let need : Bool := match last {
-        Option.none => true,
-        Option.some p => Bool.not (same_size p size),
-    };
-    let _ <- if need then render_dialog colors d else IO.pure unit;
-    match queued {
-        List.cons e rest =>
-            match dialog_apply d e {
-                Pair.pair d2 step => match step {
-                    Option.some s => IO.pure (Pair.pair d2 s),
-                    Option.none => dialog_loop colors d2 r rest Option.none,
-                },
-            },
-        List.empty => do {
-            let ready <- Terminal.poll 100;
-            if Bool.not ready
-            then
-                if r.closed
-                then IO.pure (Pair.pair d DialogStep.cancel)
-                else if r.pending == "\u{1b}"
-                then IO.pure (Pair.pair d DialogStep.cancel)
-                else dialog_loop colors d r List.empty (Option.some size)
-            else do {
-                let got <- dialog_read r;
-                match got {
-                    Pair.pair evs r2 =>
-                        if Bool.and r2.closed (List.is_empty evs)
-                        then IO.pure (Pair.pair d DialogStep.cancel)
-                        else dialog_loop colors d r2 evs (Option.some size),
-                }
-            }
-        },
-    }
-}
-
-/// Open a dialog over a fresh input reader sized to the terminal. The
-/// final dialog rides along so the caller can read the note. The
-/// overlay handshake brackets the whole modal -- confirm, cancel or EOF:
-/// `begin` takes stdin from the main loop; `finish` releases it and
-/// bumps the close sequence the loop's poll repaints on.
-def dialog_body (colors : Bool) (d : Dialog) (size : Pair I64 I64) : IO (Pair Dialog DialogStep) :=
-    match size {
-        Pair.pair rows cols => dialog_loop colors d (input_reader rows cols) List.empty Option.none,
-    }
-
-def dialog_run (colors : Bool) (store : Option StoreState) (d : Dialog) : IO (Pair Dialog DialogStep) := do {
+/// Run a dialog. The overlay handshake brackets the whole modal --
+/// confirm, cancel or EOF: `begin` takes stdin from the main loop;
+/// `finish` releases it and bumps the close sequence the loop's poll
+/// repaints on.
+def dialog_run (colors : Bool) (store : Option StoreState) (d : DialogModel) : IO (Pair DialogModel DialogStep) := do {
     Overlay.begin store;
-    let size <- Terminal.size;
-    let r <- dialog_body colors d size;
+    let r <- Dialog.modal (paint_dialog colors) d;
     Overlay.finish store;
     IO.pure r
 }
