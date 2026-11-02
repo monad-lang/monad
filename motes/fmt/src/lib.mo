@@ -5,7 +5,7 @@
 /// only the tokenizer names `fmt::lexer` for it; a tool that wants the
 /// formatter can use these re-exports directly.
 
-pub use lib::config { FmtConfig, LineEnding }
+pub use lib::config {FmtConfig, LineEnding}
 
 pub use lib::lexer {
     Gap, LexError, TokKind, Token,
@@ -16,4 +16,4 @@ pub use lib::fmt {
     Fmt.default_config, Fmt.format_source, Fmt.is_formatted, FmtError,
 }
 
-pub use lib::diff { Diff.unified }
+pub use lib::diff {Diff.unified}

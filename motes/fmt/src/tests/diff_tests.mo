@@ -1,7 +1,7 @@
 /// Tests for the `--diff` renderer, including the terminator-only cases that
 /// a line-based diff would otherwise report as no change at all.
 
-use fmt::diff { Diff.unified }
+use fmt::diff {Diff.unified}
 
 #[test]
 def test_identical_text_has_no_diff : Bool :=

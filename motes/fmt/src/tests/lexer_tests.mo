@@ -2,8 +2,8 @@
 /// multi-character tokens stay whole, numbers and suffixes stay one token, and
 /// comments/strings/raw strings are opaque.
 
-use std::list { List.length }
-use lib::lexer { Lex.lex, Lex.lines, Token }
+use std::list {List.length}
+use lib::lexer {Lex.lex, Lex.lines, Token}
 
 #[partial]
 def count (ts : List Token) : I64 :=

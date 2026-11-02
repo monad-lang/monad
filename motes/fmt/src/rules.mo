@@ -15,7 +15,7 @@
 ///
 /// Line breaks are never decided here: the renderer preserves the author's.
 
-use lib::lexer { Lex.gap_tight, Lex.kind_tag, Lex.same_token, TokKind, Token }
+use lib::lexer {Lex.gap_tight, Lex.kind_tag, Lex.same_token, TokKind, Token}
 
 def kind_is (t : Token) (k : TokKind) : Bool :=
     I64.beq (Lex.kind_tag t.kind) (Lex.kind_tag k)

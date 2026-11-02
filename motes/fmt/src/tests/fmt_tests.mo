@@ -1,7 +1,7 @@
 /// Behavioural tests for the formatter: canonical spacing, indentation,
 /// comment preservation, idempotence, and the parser-sensitive tight pairs.
 
-use lib::fmt { Fmt.default_config, Fmt.format_source }
+use lib::fmt {Fmt.default_config, Fmt.format_source}
 
 def fmt (src : String) : String :=
     match Fmt.format_source Fmt.default_config src {
@@ -30,7 +30,34 @@ def test_tightens_openers_and_closers : Bool :=
 
 #[test]
 def test_single_line_braces : Bool :=
-    expect "def p : Point := {x:=1,y:=2}\n" "def p : Point := { x := 1, y := 2 }\n"
+    expect "def p : Point := {  x:=1,y:=2 }\n" "def p : Point := { x := 1, y := 2 }\n"
+
+/// A brace keeps the author's tight or spaced interior: the corpus writes
+/// `{A : Type}` binders tight and struct literals spaced.
+#[test]
+def test_tight_braces_stay_tight : Bool :=
+    expect "def f {A : Type} (x : A) : A := x\n" "def f {A : Type} (x : A) : A := x\n"
+
+/// A `use`/`open` item list is tight, on one line or several.
+#[test]
+def test_use_braces_are_tight : Bool :=
+    expect "use a::b { C, d }\npub use e { F }\nopen G { h }\n"
+        "use a::b {C, d}\npub use e {F}\nopen G {h}\n"
+
+#[test]
+def test_multi_line_use_braces_are_tight : Bool :=
+    expect "use a::b {\n  C,\n  d }\ndef p : P := { x := 1 }\n"
+        "use a::b {\n    C,\n    d}\ndef p : P := { x := 1 }\n"
+
+/// A body brace at the end of a wrapped signature line belongs to the def:
+/// the body is one level in and the closer at column 0, as the author wrote.
+#[test]
+def test_brace_on_a_wrapped_signature_line : Bool :=
+    let want : String :=
+        "def f (a : I64)\n    (b : I64) : IO I64 := do {\n    let c := a;\n    return c\n}\n" in
+    let wide : String :=
+        "def f (a : I64)\n        (b : I64) : IO I64 := do {\n    let c := a;\n    return c\n}\n" in
+    String.beq (fmt wide) want && String.beq (fmt want) want
 
 #[test]
 def test_indents_one_level : Bool :=

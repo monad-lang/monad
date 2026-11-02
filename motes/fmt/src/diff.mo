@@ -9,8 +9,8 @@
 ///
 /// It is independent of formatting: any two texts can be diffed.
 
-use std::list { List.intercalate, List.length }
-use lib::lexer { Lex.lines }
+use std::list {List.intercalate, List.length}
+use lib::lexer {Lex.lines}
 
 #[partial]
 def common_prefix (a : List String) (b : List String) : I64 :=

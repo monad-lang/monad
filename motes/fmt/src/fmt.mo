@@ -9,10 +9,10 @@
 /// the caller must not write the result. The gate also makes `a - 1` vs `a -1`
 /// impossible to corrupt silently.
 
-use lib::config { FmtConfig }
-use lib::lexer { Lex.lex }
-use lib::render { Render.render }
-use lib::rules { Rules.tokens_match }
+use lib::config {FmtConfig}
+use lib::lexer {Lex.lex}
+use lib::render {Render.render}
+use lib::rules {Rules.tokens_match}
 
 pub struct FmtError {
     offset : I64,
