@@ -8994,6 +8994,23 @@ def test_elaborate_cross_class_instance_constraint_resolves : IO Bool := do {
     return (not (String.contains out "HAdd.add") && String.contains out "__Dict_Add_N")
 }
 
+/// A def constrained only on the HOMOGENEOUS class reaches the bridge
+/// through it: `HAdd.add` on the abstract `A` counts as a use of `Add`
+/// (`collect_constrained_def_classes`' bridge arm), so the def receives
+/// its `__dict_Add` parameter and the bridge resolves with it -- in tail
+/// position and inside an annotated `let` alike.
+#[test]
+def test_elaborate_generic_call_through_symmetric_bridge : IO Bool := do {
+    let src : String :=
+        "class HAdd A B C { def add : A -> B -> C }\n" ++
+        "class Add A { def add : A -> A -> A }\n" ++
+        "instance [Add A] HAdd A A A { def add (a b : A) : A := Add.add a b }\n" ++
+        "def gd [Add A] (x : A) (y : A) : A := HAdd.add x y\n" ++
+        "def gl [Add A] (x : A) (y : A) : A := let z : A := HAdd.add x y in z\n";
+    let out <- elaborate_synthetic_source src;
+    return (not (String.contains out "HAdd.add") && String.contains out "HAdd_A_A_A_add __dict_Add x y")
+}
+
 // `class_method_next_param`'s `expected_type`-solving (stage 11.3d, this
 // fix) is verified correct by direct Term inspection -- solving a class
 // method's remaining signature against a genuinely concrete `expected_type`

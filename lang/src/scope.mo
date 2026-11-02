@@ -3295,7 +3295,80 @@ def collect_constrained_def_classes_go (decl_list : List Decl) (acc : HashMap St
                                     collect_constrained_def_classes_go rest (bare_map_insert key (constraint_class_names constraints existing) acc),
                             },
                     },
+                Decl.instance_d ins =>
+                    if instance_is_symmetric_bridge ins
+                    then collect_constrained_def_classes_go rest (bridge_method_classes ins.defs ins.constraints acc)
+                    else collect_constrained_def_classes_go rest acc,
                 _ => collect_constrained_def_classes_go rest acc,
+            },
+    }
+
+/// A SYMMETRIC BRIDGE (`instance [Add A] HAdd A A A`): every argument a
+/// bare variable its own constraints bind. A call to one of its methods
+/// (`HAdd.add`, and so every `+`) on an abstract type is answered by the
+/// bridge with the CONSTRAINT's dictionary, so it is a use of that
+/// constraint's class (`Add`) for `def_references_class`: without this,
+/// `def f [Add A] (x : A) : A := x + x` never received its `__dict_Add`
+/// parameter, and the bridge had no dictionary to resolve with
+/// (`no instance found for HAdd.add`).
+#[partial]
+def instance_is_symmetric_bridge (ins : Instance) : Bool :=
+    match ins.args {
+        List.empty => false,
+        List.cons _ _ => all_bridge_vars ins.args (constraint_var_names ins.constraints List.empty),
+    }
+
+#[partial]
+def all_bridge_vars (args : List Term) (vars : List Identifier) : Bool :=
+    match args {
+        List.empty => true,
+        List.cons a rest => is_bound_var_term a vars && all_bridge_vars rest vars,
+    }
+
+#[partial]
+def is_bound_var_term (t : Term) (vars : List Identifier) : Bool :=
+    match t {
+        Term.ctx _ inner => is_bound_var_term inner vars,
+        Term.var _ dbg =>
+            match dbg {
+                DebugName.named id => spelled_in_ids (show_identifier id) vars,
+                DebugName.unnamed => false,
+            },
+        _ => false,
+    }
+
+#[partial]
+def spelled_in_ids (s : String) (ids : List Identifier) : Bool :=
+    match ids {
+        List.empty => false,
+        List.cons x rest => String.beq (show_identifier x) s || spelled_in_ids s rest,
+    }
+
+#[partial]
+def constraint_var_names (cs : List TypeConstraint) (acc : List Identifier) : List Identifier :=
+    match cs {
+        List.empty => acc,
+        List.cons c rest =>
+            match c {
+                TypeConstraint.mk _ vars => constraint_var_names rest (List.append vars acc),
+            },
+    }
+
+/// Register each of the bridge's method names (by bare last segment,
+/// like a constrained def's) against the bridge's constraint classes.
+#[partial]
+def bridge_method_classes (defs : List Def) (constraints : List TypeConstraint) (acc : HashMap String (List String)) : HashMap String (List String) :=
+    match defs {
+        List.empty => acc,
+        List.cons d rest =>
+            match d {
+                Def.mk {name := dname, ..} =>
+                    let key : String := identifier_tail (last_segment dname) in
+                    let existing : List String := match bare_map_lookup key acc {
+                        Option.some classes => classes,
+                        Option.none => List.empty,
+                    } in
+                    bridge_method_classes rest constraints (bare_map_insert key (constraint_class_names constraints existing) acc),
             },
     }
 
@@ -6740,6 +6813,9 @@ def resolve_dict_arg (classes : List Class) (instances : List Instance) (dict_en
                             Option.some (Term.var (0 - 1) (DebugName.named (mangled_to_identifier (mangle_instance_dict_name found_insname found_cls ins_args)))),
                     },
                 Option.none =>
+            match concrete_constraint_dict instances cls_name (bound_constraint_carrier bindings vars) {
+                Option.some t => Option.some t,
+                Option.none =>
             match lookup_dict_binding dict_env cls_name {
                 Option.some bound_id => Option.some (Term.var 0 (DebugName.named bound_id)),
                 Option.none =>
@@ -6818,6 +6894,58 @@ def resolve_dict_arg (classes : List Class) (instances : List Instance) (dict_en
                     },
             },
             },
+            },
+    }
+
+/// The dictionary of a CONCRETE, unconstrained instance for the type a
+/// constraint's variable is bound to (`Add I64` when a bridge's `[Add
+/// A]` binds `A := I64`), or `Option.none`. Checked before the caller's
+/// bound dictionary: inside `def f [Add A] ...`, an `I64` addition that
+/// goes through the `[Add A] HAdd A A A` bridge must get `Add I64`, not
+/// the def's own `__dict_Add` (with `A := U8` that dictionary wraps
+/// `200 + 100` to 44). A binding that is still a type variable matches
+/// only wildcard-headed instances, which are refused here, so a
+/// genuinely abstract constraint keeps forwarding the bound dictionary
+/// exactly as before. A constrained instance (`BEq (List A)`) needs its
+/// own dictionaries and is left to the paths below.
+#[partial]
+def concrete_constraint_dict (instances : List Instance) (cls_name : NamePath) (carrier : Option Term) : Option Term :=
+    match carrier {
+        Option.none => Option.none,
+        Option.some c =>
+            match find_matching_instance instances cls_name c {
+                Option.none => Option.none,
+                Option.some ins =>
+                    match ins {
+                        Instance.mk found_insname found_cls ins_constraints ins_args _ _ _ =>
+                            if is_empty_constraints ins_constraints && Bool.not (instance_has_wildcard_head ins)
+                            then Option.some (Term.var (0 - 1) (DebugName.named (mangled_to_identifier (mangle_instance_dict_name found_insname found_cls ins_args))))
+                            else Option.none,
+                    },
+            },
+    }
+
+def is_empty_constraints (cs : List TypeConstraint) : Bool :=
+    match cs {
+        List.empty => true,
+        List.cons _ _ => false,
+    }
+
+/// Whether the instance's first argument is one of its own type
+/// variables (a bridge or other catch-all), or it has no arguments.
+#[partial]
+def instance_has_wildcard_head (ins : Instance) : Bool :=
+    match ins.args {
+        List.empty => true,
+        List.cons a _ => is_wildcard_headed a (instance_wildcard_names ins),
+    }
+
+#[partial]
+def is_wildcard_headed (t : Term) (wildcards : List Identifier) : Bool :=
+    match t {
+        Term.ctx _ inner => is_wildcard_headed inner wildcards,
+        Term.app f _ => is_wildcard_headed f wildcards,
+        _ => is_bound_var_term t wildcards,
     }
 
 #[partial]

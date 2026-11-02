@@ -135,6 +135,29 @@ def test_infix_add_f64_bare_int_operand : Bool :=
     let r : F64 := 42 + 0.5 in
     r == 42.5
 
+/// `+` inside defs constrained only on the HOMOGENEOUS class: each
+/// resolves through the bridge with the def's own `[Add A]` dictionary,
+/// in tail position, in an operator chain and in an annotated `let`.
+def generic_double [Add A, Copy A] (x : A) : A := x + x
+
+def generic_chain [Add A, Copy A] (x : A) (y : A) : A := x + y + x
+
+def generic_in_let [Add A, Copy A] (x : A) : A :=
+    let d : A := x + x in
+    d + x
+
+#[test]
+def test_generic_add_through_bound_dict : Bool :=
+    generic_double 21 == 42 && generic_double 100u8 == 200u8
+
+#[test]
+def test_generic_add_chain : Bool :=
+    generic_chain 1u8 2u8 == 4u8 && generic_chain 10 5 == 25
+
+#[test]
+def test_generic_add_in_let : Bool :=
+    generic_in_let 7 == 21
+
 /// A def constrained on `[Add A]` must still take `Add I64` for its own
 /// `I64` addition, not the bound `[Add A]` dictionary: with `A := U8`,
 /// the bound dictionary would wrap 200 + 100 to 44.
