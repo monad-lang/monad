@@ -1,19 +1,78 @@
-/// Where a declaration's text really ends, and where its name is, read back
-/// from the source bytes its parse span covers.
+/// A declaration as tooling shows it: its span trimmed to the text the
+/// user wrote, and its name's own range, both read back from the source.
 ///
 /// The parser stamps a declaration from the input it started at to the
 /// remainder it left (`pd_at`). A def's parse consumes the whitespace and
 /// comment lines after it, so its span runs to the next declaration's first
 /// byte; a `struct`/`type`/`class` stops at its `}`. The name gets no
 /// position at all. Both are recovered here from the text, which leaves the
-/// declaration parsers untouched: the end drops trailing whitespace
-/// and whole comment lines, and the name is the first whole-word occurrence
-/// on the header line, after the leading comments and `#[...]` attributes.
+/// compiler untouched: the end drops trailing whitespace and whole comment
+/// lines, and the name is the first whole-word occurrence on the header
+/// line, after the leading comments and `#[...]` attributes.
 ///
 /// Every scan below makes ONE self-call, so the compiled backend's
 /// tail-call rewrite turns it into a loop.
-use lang::types {Location, SourceRange, list_reverse}
+use lang::types {Location, SourceRange}
+use lang::module {DeclRange, decl_range_kind, decl_range_name, decl_range_span, decl_ranges_of_source}
 use std::list {List.length}
+
+/// One declaration of a file's outline. `range` is the declaration as
+/// written, from its first token to its last; `name_range` is the name's
+/// extent inside it, or `range` itself when the header has no whole-word
+/// name (an unnamed instance's `_`).
+pub struct DeclText {
+    name : String,
+    kind : String,
+    range : SourceRange,
+    name_range : SourceRange,
+}
+
+pub def decl_text_name (d : DeclText) : String := d.name
+
+pub def decl_text_kind (d : DeclText) : String := d.kind
+
+pub def decl_text_span (d : DeclText) : SourceRange := d.range
+
+pub def decl_text_name_span (d : DeclText) : SourceRange := d.name_range
+
+/// The compiler's declaration ranges for `src`, trimmed and named. The
+/// ranges come in source order, so `src` is turned into bytes once and
+/// walked forward.
+#[partial]
+pub def decl_texts (src : String) (ranges : List DeclRange) : List DeclText :=
+    decl_texts_go (String.to_list src) 0 ranges List.empty
+
+/// `decl_texts` over the declarations `src` parses to.
+#[partial]
+pub def decl_texts_of_source (src : String) : List DeclText :=
+    decl_texts src (decl_ranges_of_source src)
+
+/// `bytes` is the file from byte `pos` on.
+#[partial]
+def decl_texts_go (bytes : List U8) (pos : I64) (ranges : List DeclRange) (acc : List DeclText)
+    : List DeclText :=
+    match ranges {
+        List.empty => List.reverse acc,
+        List.cons dr rest =>
+            let sp : SourceRange := decl_range_span dr in
+            let off : I64 := sp.start.offset in
+            let here : List U8 := dt_drop bytes (off - pos) in
+            decl_texts_go here off rest (List.cons (decl_text_of dr sp here) acc),
+    }
+
+#[partial]
+def decl_text_of (dr : DeclRange) (sp : SourceRange) (bytes : List U8) : DeclText :=
+    let name : String := decl_range_name dr in
+    match decl_text_ranges bytes sp.start (sp.end.offset - sp.start.offset) name {
+        Pair.pair trimmed named =>
+            let d : DeclText := {
+                name := name,
+                kind := decl_range_kind dr,
+                range := { trimmed with path := sp.path },
+                name_range := { named with path := sp.path },
+            } in
+            d,
+    }
 
 def dt_nl : U8 := 10u8
 
@@ -44,7 +103,7 @@ def dt_between (n : I64) (lo : I64) (hi : I64) : Bool :=
 
 /// `bs` with its first `n` bytes dropped.
 #[partial]
-pub def dt_drop (bs : List U8) (n : I64) : List U8 :=
+def dt_drop (bs : List U8) (n : I64) : List U8 :=
   if I64.lt n 1 then bs
   else match bs {
     List.empty => bs,
@@ -53,9 +112,9 @@ pub def dt_drop (bs : List U8) (n : I64) : List U8 :=
 
 #[partial]
 def dt_take (bs : List U8) (n : I64) (acc : List U8) : List U8 :=
-  if I64.lt n 1 then list_reverse acc
+  if I64.lt n 1 then List.reverse acc
   else match bs {
-    List.empty => list_reverse acc,
+    List.empty => List.reverse acc,
     List.cons b rest => dt_take rest (n - 1) (List.cons b acc),
   }
 
@@ -65,10 +124,10 @@ def dt_take (bs : List U8) (n : I64) (acc : List U8) : List U8 :=
 /// instance's `_`, a `use` -- the name range is the span itself, which an
 /// editor's `selectionRange` still accepts.
 #[partial]
-pub def decl_text_ranges (bytes : List U8) (start : Location) (len : I64) (name : String)
+def decl_text_ranges (bytes : List U8) (start : Location) (len : I64) (name : String)
     : Pair SourceRange SourceRange :=
   let body : List U8 := dt_take bytes len List.empty in
-  let kept : I64 := dt_trim_end (list_reverse body) len in
+  let kept : I64 := dt_trim_end (List.reverse body) len in
   let span : SourceRange := { start := start, end := dt_advance body kept start, path := Option.none } in
   match dt_name_offset body name kept {
     Option.none => Pair.pair span span,
@@ -237,7 +296,7 @@ def dt_word_at (bs : List U8) (name : List U8) : Bool :=
 /// convention (`lang/src/parser/position.mo`), so a UTF-8 continuation byte
 /// does not advance the column.
 #[partial]
-pub def dt_advance (bs : List U8) (r : I64) (origin : Location) : Location :=
+def dt_advance (bs : List U8) (r : I64) (origin : Location) : Location :=
   dt_advance_go bs r origin.offset origin.line origin.column
 
 #[partial]

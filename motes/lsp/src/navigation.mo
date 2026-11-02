@@ -3,7 +3,7 @@
 ///
 /// HOVER AND DEFINITION ASK THE SAME QUESTION, and this module resolves it once.
 /// Both are about the identifier under the cursor, and finding out which declaration
-/// that identifier names -- through `lang`'s `nav_at_cursor`, which is the
+/// that identifier names -- through `toolkit::navigation`'s `nav_at_cursor`, which is the
 /// compiler's own `scope_resolve_name` -- is the whole of the work. What differs is
 /// only which field of the answer is reported: hover shows `nav_target_detail` and
 /// the identifier's extent, definition shows `nav_target_range` and the file. So
@@ -17,7 +17,7 @@
 /// `text_identifier_at` finds the run of identifier bytes containing the cursor, which
 /// is fast, total, and correct for every cursor position a client can send --
 /// including positions inside comments and string literals, where there is no syntax
-/// tree node at all. The run's first byte is what `lang`'s `nav_at_cursor` looks for in
+/// tree node at all. The run's first byte is what `toolkit::navigation`'s `nav_at_cursor` looks for in
 /// the located term tree: a var there that is a local answers its binder, so a local
 /// shadowing a top-level def answers the local; anything else is resolved as a name.
 ///
@@ -38,16 +38,17 @@
 /// every other declaration in the file from the picker. Reading the scope instead
 /// would answer nothing at exactly the moment the feature is most useful.
 ///
-/// HOVER SHOWS A DECLARATION, NOT A TYPE. It renders the detail `lang::navigation`
+/// HOVER SHOWS A DECLARATION, NOT A TYPE. It renders the detail `toolkit::navigation`
 /// composed -- a signature for a def, the whole declaration for a type or a class --
 /// in a markdown fence, because a type's rendering is multi-line and a client that
 /// reflowed it would destroy the layout that carries the meaning.
 use json::json {Json}
-use lang::module {
-  DeclRange, RangedFileCheck, decl_range_kind, decl_range_name, decl_range_name_span,
-  decl_range_span, decl_ranges_of_source, ranged_file_ranges,
+use lang::module {RangedFileCheck, ranged_file_ranges}
+use toolkit::decl_text {
+  DeclText, decl_text_kind, decl_text_name, decl_text_name_span, decl_text_span, decl_texts,
+  decl_texts_of_source,
 }
-use lang::navigation {
+use toolkit::navigation {
   NavTarget, nav_at_cursor, nav_target_detail, nav_target_file, nav_target_name,
   nav_target_range,
 }
@@ -98,7 +99,7 @@ pub def cursor_ident (c : Cursor) : String := c.ident
 
 pub def cursor_span (c : Cursor) : TextSpan := c.span
 
-/// The cursor resolved: a local first, then a name -- see `lang::navigation`'s
+/// The cursor resolved: a local first, then a name -- see `toolkit::navigation`'s
 /// `nav_at_cursor`.
 #[partial]
 def nav_at_cursor_of (c : Cursor) : Option NavTarget :=
@@ -255,7 +256,7 @@ def lsp_no_symbols : List Json := List.empty
 /// The result is an ARRAY of one location rather than a single location, which is the
 /// shape the specification lists first and the one the most widely used servers send.
 /// Both are accepted, so this is a choice about the future: a name can have more than
-/// one declaration -- an ambiguous constructor is one case `lang::navigation` names --
+/// one declaration -- an ambiguous constructor is one case `toolkit::navigation` names --
 /// and the array shape absorbs that without becoming a different response type.
 ///
 /// This is a request in the IO sense: a target in another file is answered by reading
@@ -298,7 +299,7 @@ def lsp_definition_of_target (enc : PositionEncoding) (c : Cursor) (t : NavTarge
 /// because `ModuleInfo` holds declarations and not positions. So the position has to
 /// come from that file's own declaration table, which means reading the file, and that
 /// table is keyed by the same name the resolution answered with -- the same agreement
-/// `lang::navigation` relies on, read in the other direction. A jump that opens the
+/// `toolkit::navigation` relies on, read in the other direction. A jump that opens the
 /// right file at the right line costs one read and one parse.
 ///
 /// Past that, nothing. A file that cannot be read, or a name that is not in its outline,
@@ -337,9 +338,9 @@ def lsp_location_in_file (enc : PositionEncoding) (path : String) (text : Option
 def lsp_location_in_src (enc : PositionEncoding) (uri : String) (src : String) (name : String)
     : Json :=
   let ix : LineIndex := line_index_of_source src in
-  match lsp_decl_named (decl_ranges_of_source src) name {
+  match lsp_decl_named (decl_texts_of_source src) name {
     Option.none => Json.make_null,
-    Option.some dr => lsp_location_or_null enc uri ix src (decl_range_name_span dr),
+    Option.some dr => lsp_location_or_null enc uri ix src (decl_text_name_span dr),
   }
 
 /// One location, as the one-element array a client expects, or null.
@@ -359,14 +360,14 @@ def lsp_location_or_null (enc : PositionEncoding) (uri : String) (ix : LineIndex
 /// The declaration called `name` in a list of ranges, or nothing.
 ///
 /// A linear walk: a file's declarations number in the tens, the list is already in hand,
-/// and the read happens once per jump. `lang`'s own `decl_ranges_of_source` is the same
+/// and the read happens once per jump. `toolkit::navigation`'s own `nav_decl_named` is the same
 /// shape for the same reason, in the same direction.
 #[partial]
-def lsp_decl_named (rs : List DeclRange) (name : String) : Option DeclRange :=
+def lsp_decl_named (rs : List DeclText) (name : String) : Option DeclText :=
   match rs {
     List.empty => Option.none,
     List.cons dr rest =>
-      if String.beq (decl_range_name dr) name
+      if String.beq (decl_text_name dr) name
       then Option.some dr
       else lsp_decl_named rest name,
   }
@@ -400,11 +401,11 @@ pub def lsp_document_symbol (checks : CheckStore) (enc : PositionEncoding) (para
 def lsp_symbols_of_check (enc : PositionEncoding) (ch : Check) : Json :=
   let text : String := check_text ch in
   Json.make_array (lsp_symbols_of enc text (line_index_of_source text)
-    (ranged_file_ranges (check_result ch)))
+    (decl_texts text (ranged_file_ranges (check_result ch))))
 
 #[partial]
 def lsp_symbols_of (enc : PositionEncoding) (text : String) (ix : LineIndex)
-    (rs : List DeclRange) : List Json :=
+    (rs : List DeclText) : List Json :=
   match rs {
     List.empty => List.empty,
     List.cons dr rest =>
@@ -426,14 +427,14 @@ def lsp_symbols_of (enc : PositionEncoding) (text : String) (ix : LineIndex)
 /// specification requires to sit inside `range`; a declaration with no whole-word
 /// name in its header (an unnamed instance) gets its whole span for both.
 #[partial]
-def lsp_symbol_of (enc : PositionEncoding) (text : String) (ix : LineIndex) (dr : DeclRange)
+def lsp_symbol_of (enc : PositionEncoding) (text : String) (ix : LineIndex) (dr : DeclText)
     : Option Json :=
-  match lsp_symbol_kind (decl_range_kind dr) {
+  match lsp_symbol_kind (decl_text_kind dr) {
     Option.none => Option.none,
     Option.some kind =>
-      lsp_symbol_json (decl_range_name dr) kind
-        (wire_range_of_source_range enc ix text (decl_range_span dr))
-        (wire_range_of_source_range enc ix text (decl_range_name_span dr)),
+      lsp_symbol_json (decl_text_name dr) kind
+        (wire_range_of_source_range enc ix text (decl_text_span dr))
+        (wire_range_of_source_range enc ix text (decl_text_name_span dr)),
   }
 
 #[partial]
@@ -542,11 +543,11 @@ def lsp_items_in_file (enc : PositionEncoding) (path : String) (text : Option St
 def lsp_items_in_src (enc : PositionEncoding) (uri : String) (src : String) (query : String)
     : List Json :=
   let ix : LineIndex := line_index_of_source src in
-  lsp_items_of enc uri src ix (decl_ranges_of_source src) query
+  lsp_items_of enc uri src ix (decl_texts_of_source src) query
 
 #[partial]
 def lsp_items_of (enc : PositionEncoding) (uri : String) (src : String) (ix : LineIndex)
-    (rs : List DeclRange) (query : String) : List Json :=
+    (rs : List DeclText) (query : String) : List Json :=
   match rs {
     List.empty => List.empty,
     List.cons dr rest =>
@@ -561,23 +562,23 @@ def lsp_items_of (enc : PositionEncoding) (uri : String) (src : String) (ix : Li
 /// document -- it is in a file the client may never have opened.
 #[partial]
 def lsp_symbol_info (enc : PositionEncoding) (uri : String) (src : String) (ix : LineIndex)
-    (dr : DeclRange) (query : String) : Option Json :=
-  match lsp_symbol_kind (decl_range_kind dr) {
+    (dr : DeclText) (query : String) : Option Json :=
+  match lsp_symbol_kind (decl_text_kind dr) {
     Option.none => Option.none,
     Option.some kind =>
-      if lsp_name_matches (decl_range_name dr) query
+      if lsp_name_matches (decl_text_name dr) query
       then lsp_symbol_info_of enc uri src ix dr kind
       else Option.none,
   }
 
 #[partial]
 def lsp_symbol_info_of (enc : PositionEncoding) (uri : String) (src : String) (ix : LineIndex)
-    (dr : DeclRange) (kind : I64) : Option Json :=
-  match location_json_of_source_range uri enc ix src (decl_range_span dr) {
+    (dr : DeclText) (kind : I64) : Option Json :=
+  match location_json_of_source_range uri enc ix src (decl_text_span dr) {
     Option.none => Option.none,
     Option.some loc =>
       Option.some (rpc_object [
-        Pair.pair "name" (Json.make_str (decl_range_name dr)),
+        Pair.pair "name" (Json.make_str (decl_text_name dr)),
         Pair.pair "kind" (Json.make_num_int kind),
         Pair.pair "location" loc,
       ]),

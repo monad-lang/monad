@@ -36,7 +36,7 @@
 #      picker's vocabulary gives it and a range that starts at the declaration.
 #   5. `hover` on a def and `definition` on a def's use resolve, in the file.
 #   6. `definition` and `hover` on a local that shadows a top-level def answer the
-#      LOCAL's binder, not the def (`lang/src/navigation.mo`'s cursor-to-binding walk).
+#      LOCAL's binder, not the def (`motes/toolkit/src/navigation.mo`'s cursor-to-binding walk).
 #      `definition` on a type, constructor and class the prelude declares opens
 #      prelude.mo at the declaration (`farref.mo`).
 #   7. `workspace/symbol` finds a declaration in an open buffer.
@@ -139,7 +139,7 @@ SHAPES_SYMBOLS = [
 NONASCII_MESSAGE = "expected '(' at 18:43"
 
 # Every declaration's range ends one past its last token: a struct's at its closing
-# brace, a def's at the end of its own last line (`lang/src/decl_text.mo` trims what the
+# brace, a def's at the end of its own last line (`motes/toolkit/src/decl_text.mo` trims what the
 # def's parse swallowed after it). So the struct's range is (16,0)..(19,1) --
 # `struct ZzReplayShape {` on line 16 through the `}` on line 19.
 SHAPES_STRUCT_RANGE = (16, 0, 19, 1)

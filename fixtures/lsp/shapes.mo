@@ -10,7 +10,7 @@
 // The last two defs are the SHADOWING case. `\zz_replay_shadowed => zz_replay_shadowed`
 // binds a local with the same name as the top-level def above it, and go-to-definition
 // and hover on that local's use answer the lambda's binder, not the def it hides
-// (`lang/src/navigation.mo`'s cursor-to-binding walk). Every position below is pinned by
+// (`motes/toolkit/src/navigation.mo`'s cursor-to-binding walk). Every position below is pinned by
 // line in `session.jsonl` and the replay script, so this comment keeps its line count:
 // add or remove a line above and every cursor in the session moves.
 

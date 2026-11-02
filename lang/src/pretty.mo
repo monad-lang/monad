@@ -398,7 +398,7 @@ def show_def (d : Def) : String := match d {
 }
 
 #[partial]
-def show_inductive (ind : Inductive) : String := match ind {
+pub def show_inductive (ind : Inductive) : String := match ind {
     Inductive.mk name params typ constructors attrs vis =>
         let name_str := show_name_path name in
         let header := String.concat (show_vis_prefix vis) (String.concat "type " name_str) in
@@ -500,7 +500,7 @@ def show_struct_field (f : StructField) : String := match f {
 }
 
 #[partial]
-def show_class (cls : Class) : String := match cls {
+pub def show_class (cls : Class) : String := match cls {
     Class.mk name params constraints methods vis =>
         let name_str := show_identifier name in
         let header := String.concat (show_vis_prefix vis) (String.concat "class " name_str) in

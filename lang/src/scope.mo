@@ -991,8 +991,7 @@ def build_scope_class (cls : Class) (path : ModulePath) (acc : ScopeData) : Scop
             let name_list : List Identifier := List.cons clsname List.empty in
             let cls_np : NamePath := NamePath.mk name_list in
             let with_cls : ScopeData := scope_data_add_class acc cls in
-            let with_mod : ScopeData := { with_cls with class_modules := npath_map_insert cls_np path with_cls.class_modules } in
-            add_class_methods with_mod methods cls_np
+            add_class_methods with_cls methods cls_np
     }
 
 def add_class_methods (acc : ScopeData) (methods : List ClassDef) (cls_np : NamePath) : ScopeData :=
@@ -1027,7 +1026,7 @@ pub def scope_globals (s : Scope) : ScopeData := s.scope
 
 // ---- scope_find_inductive ---
 
-def scope_find_inductive (name : NamePath) (s : Scope) : Result ScopeError Inductive :=
+pub def scope_find_inductive (name : NamePath) (s : Scope) : Result ScopeError Inductive :=
     let g : ScopeData := scope_globals s in
     let result : Option Inductive := scope_data_find_inductive g name in
     match result {
@@ -1054,12 +1053,12 @@ def scope_data_classes (sd : ScopeData) : List Class :=
 def scope_data_constrained_def_classes (sd : ScopeData) : HashMap String (List String) :=
     sd.constrained_def_classes
 
-def scope_find_class (name : NamePath) (s : Scope) : Option Class :=
+pub def scope_find_class (name : NamePath) (s : Scope) : Option Class :=
     find_class_by_name (scope_data_classes (scope_globals s)) name
 
 // --- scope_find_inductive_by_constructor ---
 
-def scope_find_inductive_by_constructor (con_name : NamePath) (s : Scope) : Option Inductive :=
+pub def scope_find_inductive_by_constructor (con_name : NamePath) (s : Scope) : Option Inductive :=
     let g : ScopeData := scope_globals s in
     scope_data_find_inductive_by_constructor g con_name
 
@@ -1326,7 +1325,7 @@ def last_colon_colon (s : Shared String) (i : I64) (best : I64) : I64 :=
 /// qualified reference always reported `unknown variable`. Recovering
 /// the structure here makes that arm live for all of them at once
 /// (`infer.mo`'s four sites, `lower_core_ir.mo`, `module.mo`).
-def split_qualified_identifier (i : Identifier) : Option QualifiedName :=
+pub def split_qualified_identifier (i : Identifier) : Option QualifiedName :=
     let text : String := show_identifier i in
     let cut : I64 := last_colon_colon (Shared.of text) 0 (0 - 1) in
     if cut < 3 then Option.none
@@ -1421,7 +1420,7 @@ def resolve_qualified_in_scope (qn : QualifiedName) (s : Scope) : Result ScopeEr
 
 /// `mod::name` flattened to the `.`-rendered `NamePath` key a
 /// dotted-declared def registers under.
-def qualified_name_to_name_path (qn : QualifiedName) : NamePath :=
+pub def qualified_name_to_name_path (qn : QualifiedName) : NamePath :=
     match qn {
         mk qmod qname =>
             match qmod {
@@ -1572,12 +1571,6 @@ pub def scope_find_def_body (name : NamePath) (s : Scope) : Option Term :=
 pub def scope_find_def_sig (name : NamePath) (s : Scope) : Option Term :=
     let g : ScopeData := scope_globals s in
     scope_data_find_def_sig g name
-
-/// The module that declared the class called `name`, for tooling that
-/// needs its file (`ScopeData.class_modules`).
-pub def scope_find_class_module (name : NamePath) (s : Scope) : Option ModulePath :=
-    let g : ScopeData := scope_globals s in
-    npath_map_lookup name g.class_modules
 
 // --- ScopeData: a def's CUBICAL MARKER binding ---
 

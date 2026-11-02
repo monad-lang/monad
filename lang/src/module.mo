@@ -24,7 +24,6 @@ use lib::parser {
 }
 use parsec::core {ParseError, ParseResult, parse_error_remaining}
 use lib::parser::diagnostic {parse_error_location, render_parse_error}
-use lib::decl_text {decl_text_ranges, dt_drop}
 use lang::mote {
   BinTarget, Mote.affine_mode_of_path, Mote.discover, Mote.manifest_at, Mote.manifest_of_attr,
   Mote.manifest_problem,
@@ -93,7 +92,7 @@ use std::show {Show}
 // `ScopeData.def_refs` is a `std.map` `HashMap ModulePath ScopeDef` (see
 // `lang/scope.mo`'s own `use std.map {}` doc comment for why the import
 // is empty).
-use std::map {HashMap, HashMap.merge_buckets}
+use std::map {HashMap, HashMap.merge_buckets, HashMap.to_list}
 // `Runtime.c_path` is the last tier of `resolve_runtime_src` below -- the
 // checkout-root-relative literal, kept in the mote that owns the C file
 // rather than repeated here.
@@ -231,12 +230,7 @@ pub def show_parse_error (input : String) (path : Option String) (e : ParseError
 pub struct DeclRange {
     name : String,
     kind : String,
-    /// The declaration as written: from its first token to its last, so a
-    /// def's span stops at its own line rather than the next declaration's.
     range : SourceRange,
-    /// The name's own extent inside `range`, or `range` itself when the
-    /// header has no whole-word name (an unnamed instance's `_`).
-    name_range : SourceRange,
 }
 
 // Every field read below is routed through a one-line typed accessor rather
@@ -252,8 +246,6 @@ pub def decl_range_kind (dr : DeclRange) : String := dr.kind
 
 pub def decl_range_span (dr : DeclRange) : SourceRange := dr.range
 
-pub def decl_range_name_span (dr : DeclRange) : SourceRange := dr.name_range
-
 pub def located_decl_list (l : LocatedDecls) : List Decl := l.decl_list
 
 pub def located_decl_spans (l : LocatedDecls) : List SourceRange := l.spans
@@ -263,11 +255,11 @@ pub def located_decl_spans (l : LocatedDecls) : List SourceRange := l.spans
 // below needs four. Each is its own def for the reason just stated: one
 // field read, one explicit return type, per def.
 
-def inductive_decl_name (i : Inductive) : NamePath := i.name
+pub def inductive_decl_name (i : Inductive) : NamePath := i.name
 
-def struct_decl_name (s : Struct) : Identifier := s.name
+pub def struct_decl_name (s : Struct) : Identifier := s.name
 
-def class_decl_name (c : Class) : Identifier := c.name
+pub def class_decl_name (c : Class) : Identifier := c.name
 
 def instance_decl_name (i : Instance) : Identifier := i.name
 
@@ -315,16 +307,13 @@ def decl_name_and_kind (d : Decl) : Pair String String := match d {
 #[partial]
 pub def decl_ranges_of_source (src : String) : List DeclRange :=
     match decls_parser_located_with_ranges src {
-        ParseResult.success _rem located => decl_ranges_of_located src located,
+        ParseResult.success _rem located => decl_ranges_of_located located,
         ParseResult.fail _e => List.empty,
     }
 
-/// The parse's spans, trimmed and given name ranges from `src`'s bytes
-/// (`lang/src/decl_text.mo`). The file is turned into bytes once and walked
-/// forward, since the spans come in source order.
 #[partial]
-def decl_ranges_of_located (src : String) (located : LocatedDecls) : List DeclRange :=
-    zip_decl_ranges (String.to_list src) 0 (located_decl_list located) (located_decl_spans located) List.empty
+def decl_ranges_of_located (located : LocatedDecls) : List DeclRange :=
+    zip_decl_ranges (located_decl_list located) (located_decl_spans located) List.empty
 
 /// Pair each declaration with its range, one for one.
 ///
@@ -333,37 +322,20 @@ def decl_ranges_of_located (src : String) (located : LocatedDecls) : List DeclRa
 /// is a visible absence, while a declaration with the NEXT one's range is a
 /// silently wrong answer. `lang/src/tests/decl_range_tests.mo` pins the
 /// count equality that makes this branch unreachable.
-///
-/// `bytes` is the file from byte `pos` on.
 #[partial]
-def zip_decl_ranges (bytes : List U8) (pos : I64) (ds : List Decl) (spans : List SourceRange)
-    (acc : List DeclRange) : List DeclRange :=
+def zip_decl_ranges (ds : List Decl) (spans : List SourceRange) (acc : List DeclRange) : List DeclRange :=
     match ds {
         List.empty => list_reverse acc,
         List.cons d rest => match spans {
             List.empty => list_reverse acc,
-            List.cons s srest =>
-                let off : I64 := span_start_offset s in
-                let here : List U8 := dt_drop bytes (off - pos) in
-                zip_decl_ranges here off rest srest (List.cons (mk_decl_range d s here) acc),
+            List.cons s srest => zip_decl_ranges rest srest (List.cons (mk_decl_range d s) acc),
         },
     }
 
-def span_start_offset (s : SourceRange) : I64 := s.start.offset
-
-def span_len (s : SourceRange) : I64 := s.end.offset - s.start.offset
-
-def span_start (s : SourceRange) : Location := s.start
-
 #[partial]
-def mk_decl_range (d : Decl) (range : SourceRange) (bytes : List U8) : DeclRange :=
+def mk_decl_range (d : Decl) (range : SourceRange) : DeclRange :=
     match decl_name_and_kind d {
-        Pair.pair n k =>
-            match decl_text_ranges bytes (span_start range) (span_len range) n {
-                Pair.pair trimmed named =>
-                    let dr : DeclRange := { name := n, kind := k, range := trimmed, name_range := named } in
-                    dr,
-            },
+        Pair.pair n k => DeclRange.mk n k range,
     }
 
 // --- Module dependency loading ---
@@ -1692,7 +1664,6 @@ def merge_scope_data (sd1 : ScopeData) (sd2 : ScopeData) : ScopeData :=
         // values are LISTS of class names, and a key named by both inputs
         // must keep both spellings, not one module's.
         constrained_def_classes := bare_aliases_merge sd1.constrained_def_classes sd2.constrained_def_classes,
-        class_modules := HashMap.merge_buckets sd1.class_modules sd2.class_modules,
     }
 
 /// Merge lists of ScopeData
@@ -3096,8 +3067,8 @@ pub def check_file_cached_from_source (cache : ModuleInfoCache) (file_path : Str
 /// parse at all.
 ///
 /// WHY THE LOCATED PARSE IS HERE. `located` is the buffer's own lowered,
-/// position-carrying declarations -- what navigation walks to find the
-/// binder a local under the cursor names. The buffer is in no module
+/// position-carrying declarations -- what tooling (`toolkit::navigation`)
+/// walks to find the binder a local under the cursor names. The buffer is in no module
 /// cache, so this is the only place they survive the check. Empty exactly
 /// when `ranges` is.
 pub struct RangedFileCheck {
@@ -3186,7 +3157,7 @@ def no_decl_ranges : List DeclRange := List.empty
 #[partial]
 def ranged_truncation (cache : ModuleInfoCache) (file_path : String) (source : String)
     (located : LocatedDecls) : RangedFileCheck :=
-    let ranges : List DeclRange := decl_ranges_of_located source located in
+    let ranges : List DeclRange := decl_ranges_of_located located in
     match decls_parser_strict source {
         ParseResult.fail e => ranged_parse_failure cache file_path source ranges located e,
         // Unreachable in practice: `decls_skip_strict` consumes the whole
@@ -3218,7 +3189,7 @@ def ranged_truncation (cache : ModuleInfoCache) (file_path : String) (source : S
 #[partial]
 def check_buffer_ranged (cache : ModuleInfoCache) (file_path : String) (source : String)
     (located : LocatedDecls) (verbose : Bool) : IO RangedFileCheck := do {
-    let decl_ranges : List DeclRange := decl_ranges_of_located source located;
+    let decl_ranges : List DeclRange := decl_ranges_of_located located;
     let ec <- elaborate_loaded_modules_cached_go file_path false (Option.some source) cache verbose;
     let out_cache : ModuleInfoCache := ec.cache;
     match ec.elaborated {
@@ -3679,13 +3650,17 @@ pub def module_info_cache_empty : ModuleInfoCache := {
     misses := 0,
 }
 
-def module_info_cache_lookup (key : ModulePath) (cache : ModuleInfoCache) : Option ModuleInfo :=
+pub def module_info_cache_lookup (key : ModulePath) (cache : ModuleInfoCache) : Option ModuleInfo :=
     npath_map_lookup (npath_of key) cache.entries
+
+/// Every cached module, in no particular order.
+pub def module_info_cache_entries (cache : ModuleInfoCache) : List (Pair String ModuleInfo) :=
+    HashMap.to_list cache.entries
 
 def module_info_cache_hit (cache : ModuleInfoCache) : ModuleInfoCache :=
     { cache with hits := cache.hits + 1 }
 
-def module_info_cache_insert (key : ModulePath) (info : ModuleInfo) (cache : ModuleInfoCache) : ModuleInfoCache :=
+pub def module_info_cache_insert (key : ModulePath) (info : ModuleInfo) (cache : ModuleInfoCache) : ModuleInfoCache :=
     { cache with entries := npath_map_insert (npath_of key) info cache.entries, misses := cache.misses + 1 }
 
 /// A `load_module_with_info` that consults (and extends) the cache.

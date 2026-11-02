@@ -29,7 +29,9 @@ workspace = true
 workspace = true
 
 # `lang` is here for its `Json`, which `jsonrpc.mo` parses into and writes out
-# of, and for its `Diagnostic`, which `diagnostic.mo` converts to the wire.
+# of, for its `Diagnostic`, which `diagnostic.mo` converts to the wire, and for
+# the scope and declarations `navigation.mo` resolves names against. Tooling
+# that the compiler does not need lives here, not in `lang`.
 # `framing`/`bytes`/`position` stay deliberately free of it and take plain
 # `I64` coordinates. The edge is honest: every consumer of this mote (the LSP
 # server, the MCP server, a linter, a formatter) already depends on `lang` to
@@ -39,6 +41,10 @@ workspace = true
 workspace = true
 
 [dependencies.json]
+workspace = true
+
+# `parsec` for the `ParseResult` constructors the navigation tests match on.
+[dependencies.parsec]
 workspace = true
 
 # `llvm` and `runtime` are declared because `lang::module` -- where `Diagnostic`

@@ -275,7 +275,7 @@ def elim_children (e : Elim) : List Term :=
     List.append e.params
         (List.append e.indices (List.cons e.motive (List.append e.minors (List.singleton e.scrutinee))))
 
-def literal_children (l : Literal) : List Term :=
+pub def literal_children (l : Literal) : List Term :=
     match l {
         Literal.str _v => List.empty,
         Literal.char _v => List.empty,

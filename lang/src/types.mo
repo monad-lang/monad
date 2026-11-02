@@ -468,7 +468,7 @@ pub def param_with_attrs (name: Identifier) (type_: Term) (attrs: List Attribute
 // desugaring resolve it -- `lang/codegen/ctors.mo`/`emit.mo` read it
 // directly for owner-qualified ctor-tag dispatch instead of guessing
 // from the bare name/arity alone (stage 11.4).
-struct MatchCase {
+pub struct MatchCase {
     name: Identifier,
     args: List Identifier,
     body: Term,
@@ -556,7 +556,7 @@ type NumSuffix {
 }
 
 // Canonical Literal uses de Bruijn Term; `ParseLiteral` is the parser's.
-type Literal {
+pub type Literal {
     str (value: String),
     /// A `'c'` literal. Carries a real `Char` -- one Unicode codepoint,
     /// mirroring the Rust reference's `Literal::Char(char)` and feeding
@@ -3573,10 +3573,6 @@ pub struct ScopeData {
     // Populated by `scope_data_note_bare` at every registration site
     // (`scope_data_add_def`/`_inductive`/`_class`/`_class_def`).
     bare_aliases : HashMap String (List String) := HashMap.map HashMap.empty_buckets,
-    // A class's declaring module, keyed by its name. `Class` carries no
-    // `ModulePath` and a class registers no `ScopeDef`, so this is the only
-    // place tooling (`lang/src/navigation.mo`) can find its file.
-    class_modules : HashMap String ModulePath := HashMap.map HashMap.empty_buckets,
 }
 
 // A scope node in the linked list.

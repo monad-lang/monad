@@ -36,19 +36,20 @@
 /// this repository's recorded `#[test]` plus struct-field codegen hazard.
 /// The `nt_` prefix keeps whole-program scope clean.
 use std::test {Test.write_fixture}
-use lib::module {
+use parsec::core {fail, success}
+use lang::module {
   DeclRange, ModuleInfo, ModuleInfoCache, RangedFileCheck,
   check_file_cached_from_source_ranged, module_info_cache_empty, module_info_cache_insert,
   parse_all_decls, ranged_file_ranges, ranged_file_scope,
 }
-use lib::navigation {
+use toolkit::decl_text {DeclText}
+use toolkit::navigation {
   NavTarget, nav_at, nav_at_checked, nav_at_cursor, nav_target_detail, nav_target_file, nav_target_kind,
   nav_target_name, nav_target_range,
 }
-use parsec::core {fail, success}
-use lib::pretty {show_term}
-use lib::scope {build_scope_from_decls}
-use lib::types {
+use lang::pretty {show_term}
+use lang::scope {build_scope_from_decls}
+use lang::types {
   Decl, Identifier, Location, ModulePath, Scope, ScopeData, SourceRange, Term,
 }
 open IO {println}
@@ -211,7 +212,7 @@ def nt_check (name : String) (src : String) : IO RangedFileCheck := do {
 def test_a_def_resolves_to_its_own_declaration : IO Bool := do {
     let checked <- nt_check "nav_probe.mo" nav_source;
     println ("outline: " ++ nt_names_text (ranged_file_ranges checked));
-    match nav_at_checked checked "alpha" {
+    match nav_at_checked checked nav_source "alpha" {
         Option.none => do { println "NO TARGET for a def declared in this file"; return false },
         Option.some t => do {
             println ("alpha -> " ++ nt_text t);
@@ -234,7 +235,7 @@ def test_a_def_resolves_to_its_own_declaration : IO Bool := do {
 #[test]
 def test_a_defs_detail_is_a_real_signature : IO Bool := do {
     let checked <- nt_check "nav_probe_sig.mo" nav_source;
-    match nav_at_checked checked "alpha" {
+    match nav_at_checked checked nav_source "alpha" {
         Option.none => do { println "VACUOUS: alpha did not resolve"; return false },
         Option.some t => do {
             println ("alpha detail: " ++ nt_detail t);
@@ -251,7 +252,7 @@ def test_a_defs_detail_is_a_real_signature : IO Bool := do {
 #[test]
 def test_a_type_resolves_to_its_declaration : IO Bool := do {
     let checked <- nt_check "nav_probe_type.mo" nav_source;
-    match nav_at_checked checked "Color" {
+    match nav_at_checked checked nav_source "Color" {
         Option.none => do { println "NO TARGET for a type declared in this file"; return false },
         Option.some t => do {
             println ("Color -> " ++ nt_text t);
@@ -273,7 +274,7 @@ def test_a_type_resolves_to_its_declaration : IO Bool := do {
 #[test]
 def test_a_constructor_resolves_to_its_type : IO Bool := do {
     let checked <- nt_check "nav_probe_ctor.mo" nav_source;
-    match nav_at_checked checked "red" {
+    match nav_at_checked checked nav_source "red" {
         Option.none => do { println "NO TARGET for a constructor"; return false },
         Option.some t => do {
             println ("red -> " ++ nt_text t);
@@ -290,7 +291,7 @@ def test_a_constructor_resolves_to_its_type : IO Bool := do {
 #[test]
 def test_a_class_resolves_to_its_declaration : IO Bool := do {
     let checked <- nt_check "nav_probe_class.mo" nav_source;
-    match nav_at_checked checked "Show" {
+    match nav_at_checked checked nav_source "Show" {
         Option.none => do { println "NO TARGET for a class"; return false },
         Option.some t => do {
             println ("Show -> " ++ nt_text t);
@@ -310,8 +311,8 @@ def test_a_class_resolves_to_its_declaration : IO Bool := do {
 #[test]
 def test_an_unknown_identifier_has_no_target : IO Bool := do {
     let checked <- nt_check "nav_probe_missing.mo" nav_source;
-    let control : Option NavTarget := nav_at_checked checked "alpha";
-    let missing : Option NavTarget := nav_at_checked checked "no_such_name_anywhere";
+    let control : Option NavTarget := nav_at_checked checked nav_source "alpha";
+    let missing : Option NavTarget := nav_at_checked checked nav_source "no_such_name_anywhere";
     println ("control resolved: " ++ nt_yes_no (Bool.not (nt_absent control)));
     return (Bool.not (nt_absent control) && nt_absent missing)
 }
@@ -335,7 +336,7 @@ def test_a_def_in_another_module_answers_its_file : IO Bool := do {
             let sd : ScopeData := build_scope_from_decls nt_other_module decls;
             let no_parent : Option Scope := Option.none;
             let scope : Scope := { module_id := nt_here_module, scope := sd, parent := no_parent, incomplete_match_ok := false };
-            let no_ranges : List DeclRange := List.empty;
+            let no_ranges : List DeclText := List.empty;
             let info : ModuleInfo := ModuleInfo.mk nt_other_module nt_other_file decls;
             let cache : ModuleInfoCache := module_info_cache_insert nt_other_module info module_info_cache_empty;
             let no_decls : List Decl := List.empty;
@@ -376,7 +377,7 @@ def test_a_truncated_buffer_keeps_its_outline : IO Bool := do {
     let names : String := nt_names_text (ranged_file_ranges checked);
     println ("truncated outline: " ++ names ++ ", " ++ nt_scope_text checked);
     return (String.beq names "ok_first"
-        && nt_absent (nav_at_checked checked "ok_first")
+        && nt_absent (nav_at_checked checked nav_truncated_source "ok_first")
         && String.beq (nt_scope_text checked) "<no scope>")
 }
 
@@ -501,7 +502,7 @@ def test_a_let_rebinding_its_name_answers_each_binder : IO Bool := do {
 #[test]
 def test_a_struct_hovers_as_its_declaration : IO Bool := do {
     let checked <- nt_check "nav_probe_struct.mo" "struct ZzBox2 { w : I64, h : I64 }\n";
-    match nav_at_checked checked "ZzBox2" {
+    match nav_at_checked checked "struct ZzBox2 { w : I64, h : I64 }\n" "ZzBox2" {
         Option.none => do { println "NO TARGET for a struct declared in this file"; return false },
         Option.some t => do {
             println ("ZzBox2 -> " ++ nt_text t);
@@ -523,7 +524,7 @@ def test_a_struct_in_another_module_renders_and_answers_its_file : IO Bool := do
             let sd : ScopeData := build_scope_from_decls nt_other_module decls;
             let no_parent : Option Scope := Option.none;
             let scope : Scope := { module_id := nt_here_module, scope := sd, parent := no_parent, incomplete_match_ok := false };
-            let no_ranges : List DeclRange := List.empty;
+            let no_ranges : List DeclText := List.empty;
             let no_decls : List Decl := List.empty;
             let info : ModuleInfo := ModuleInfo.mk nt_other_module nt_other_file decls;
             let cache : ModuleInfoCache := module_info_cache_insert nt_other_module info module_info_cache_empty;
@@ -564,7 +565,7 @@ def test_types_and_classes_in_another_module_answer_its_file : IO Bool := do {
 
 def nt_far_answers (scope : Scope) (cache : ModuleInfoCache) (ident : String) (kind : String)
     (name : String) : IO Bool := do {
-    let no_ranges : List DeclRange := List.empty;
+    let no_ranges : List DeclText := List.empty;
     let no_decls : List Decl := List.empty;
     match nav_at scope no_ranges no_decls cache ident {
         Option.none => do { println ("NO TARGET for " ++ ident); return false },
