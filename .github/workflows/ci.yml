@@ -206,11 +206,20 @@ jobs:
       # a skipped JOB is a name branch protection would have to be told about:
       # a docs-only change costs nothing and a compiler change still gates the
       # job that already gates.
+      #
+      # `-j 2`: the release profile is `lto = "fat"` with `codegen-units = 1`,
+      # so every rustc in this step is a multi-GB link, and cargo starts as
+      # many as the jobserver allows. Run 41604919880 had four of them
+      # SIGKILLed (signal 9) on `nixos76-github-runner-2` -- the dependency
+      # tree (criterion and friends) compiled fresh alongside the four test
+      # binaries' links and the host ran out. Bounding the jobserver is the
+      # same discipline AGENTS.md prescribes for a local sweep. Only the
+      # build is capped; the suite's tests still run in parallel afterwards.
       - name: Rust test suite
         if: needs.changes.outputs.compiler == 'true'
         run: |
           nix develop --no-pure-eval --accept-flake-config -c \
-            cargo test --manifest-path rust/Cargo.toml --release
+            cargo test --manifest-path rust/Cargo.toml --release -j 2
 
   compiler-checks:
     runs-on: [self-hosted, linux]
