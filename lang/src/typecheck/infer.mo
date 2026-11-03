@@ -7030,9 +7030,18 @@ def app_arg_expected_type (f : Term) : Term :=
 /// not on its shape at all -- the same point `sig_hints` makes for the
 /// resolution pass's identical hint, whose `names` parameter exists for the
 /// same reason.
+///
+/// `subst` is what solved `dom` from the DECLARED parameter (empty for an
+/// inferred, non-class callee). A consumer that needs another part of the
+/// declaration solved the same way must start from the declaration and
+/// apply this list, never re-substitute `dom`: once solved, `dom` may hold
+/// a CALLER's type variable that shares a class variable's spelling (a
+/// `{M : Type}` message type under `Monad`'s `M`), and a second pass
+/// rewrites it.
 pub struct CalleeDomain {
     dom : Term,
     vars : List Identifier,
+    subst : List (Pair Identifier Term),
 }
 
 /// The type to check an application's ARGUMENT against. `app_arg_expected_type`
@@ -7358,6 +7367,24 @@ def is_bare_type_var (t : Term) : Bool :=
         _ => false,
     }
 
+/// The declared `t` with `subst` applied and each of `vars` it leaves
+/// unsolved replaced by a hole -- in ONE simultaneous substitution
+/// (`subst_typevars_term`; the first entry for a name wins). An unsolved
+/// signature variable says "unknown here", not a type to check against.
+/// Filling after substituting would also blank a solution that names a
+/// caller variable spelled like a class one (`B := List M` under
+/// `Monad`'s own `M`), and substituting after filling or twice would
+/// rewrite that caller `M` to the carrier.
+#[partial]
+def solve_and_fill (t : Term) (subst : List (Pair Identifier Term)) (vars : List Identifier) : Term :=
+    subst_typevars_term t (List.append subst (hole_entries vars))
+
+def hole_entries (vars : List Identifier) : List (Pair Identifier Term) :=
+    match vars {
+        List.empty => List.empty,
+        List.cons v rest => List.cons (Pair.pair v Term.hole) (hole_entries rest),
+    }
+
 /// `t` with each of `vars` still free in it replaced by a hole: an unsolved
 /// signature variable says "unknown here", not a type to check against.
 #[partial]
@@ -7388,7 +7415,7 @@ def class_method_result_domain (f : Term) (expected : Term) (scope : Scope) (loc
         Option.some sol =>
             match sol.subst {
                 List.cons _ _ =>
-                    let d : Term := fill_unsolved_vars sol.vars (subst_typevars_term sol.next_param sol.subst) in
+                    let d : Term := solve_and_fill sol.next_param sol.subst sol.vars in
                     if has_informative_head d then Option.some d else class_method_chain_domain f expected scope local_types locals,
                 List.empty => class_method_chain_domain f expected scope local_types locals,
             },
@@ -7423,15 +7450,19 @@ def class_method_chain_domain (f : Term) (expected : Term) (scope : Scope) (loca
 /// nothing -- the old behavior.
 #[partial]
 def class_method_lam_body_expected (f : Term) (expected : Term) (cd : CalleeDomain) (scope : Scope) : Term :=
-    match term_peel cd.dom {
-        Term.pi _ _ cod =>
-            match class_method_result_solution f expected scope {
-                Option.none => Term.hole,
-                Option.some sol =>
-                    let filled : Term := fill_unsolved_vars cd.vars (subst_typevars_term cod sol.subst) in
+    match class_method_result_solution f expected scope {
+        Option.none => Term.hole,
+        Option.some sol =>
+            // The DECLARED codomain, solved once -- `cd.dom` is already
+            // solved (see `CalleeDomain`). The result solution comes first:
+            // it matched the codomain against the call's own expectation;
+            // the argument solution fills what that left open.
+            match term_peel sol.next_param {
+                Term.pi _ _ cod =>
+                    let filled : Term := solve_and_fill cod (List.append sol.subst cd.subst) sol.vars in
                     if has_informative_head filled then filled else Term.hole,
+                _ => Term.hole,
             },
-        _ => Term.hole,
     }
 
 /// `class_method_lam_body_expected` for a lambda whose BINDER the hint gate
@@ -7566,7 +7597,7 @@ def inferred_callee_domain (f : Term) (scope : Scope) (local_types : List Term) 
         ok f_tt =>
             match pi_domain_of f_tt.typ {
                 Option.none => Option.none,
-                Option.some dom => Option.some (CalleeDomain.mk dom List.empty),
+                Option.some dom => Option.some (CalleeDomain.mk dom List.empty List.empty),
             },
     }
 
@@ -7656,7 +7687,7 @@ def class_method_next_param (f : Term) (expected_type : Term) (scope : Scope) (l
                                             let solved : List (Pair Identifier Term) :=
                                                 solve_typevars scope remaining expected_type dcc.subst in
                                             let dom : Term := subst_typevars_term next_param solved in
-                                            Option.some (CalleeDomain.mk dom decl.vars),
+                                            Option.some (CalleeDomain.mk dom decl.vars solved),
                                     },
                             },
                     },

@@ -1110,7 +1110,7 @@ def test_field_pattern_bare_scrutinee_head_leaves_declared_types : Bool :=
 // -------------------------------------------------------------------
 
 def cd_of (dom : Term) (vars : List Identifier) : CalleeDomain :=
-    CalleeDomain.mk dom vars
+    CalleeDomain.mk dom vars List.empty
 
 /// The accepting case: a domain that is a real, closed type and that the
 /// callee's own declaration does not bind -- the do-bind / callback shape

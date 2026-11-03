@@ -7605,6 +7605,31 @@ def test_class_method_solution_does_not_rewrite_the_callers_same_named_variable 
     return (match diags { List.empty => true, List.cons _ _ => false })
 }
 
+/// A do-bind continuation's body expectation solves the method's DECLARED
+/// codomain once: `bind`'s `A -> M B` gets `M := Bx` and `B := Lst M`
+/// (the CALLER's own `M`, a message type) together. Re-substituting the
+/// already-solved `Bx (Lst M)` with `M := Bx` made it `Bx (Lst Bx)`, so the
+/// generic `run_polls`'s `M` solved to the carrier and `acc` was rejected
+/// (`expected (Lst Bx), found (Lst M)` -- `motes/tui`'s `run_poll` and the
+/// `App S M` loop, against `IO`).
+#[test]
+def test_continuation_expectation_keeps_the_callers_same_named_variable : IO Bool := do {
+    let src : String :=
+        "type Bx (A : Type) { bx (a : A) }\n" ++
+        "type Lst (A : Type) { nil, cns (a : A) (r : Lst A) }\n" ++
+        "type Un { un }\n" ++
+        "class Functor (F : Type -> Type) { def map (f : A -> B) (x : F A) : F B }\n" ++
+        "class [Functor F] Applicative (F : Type -> Type) { def pure : A -> F A }\n" ++
+        "class [Applicative M] Monad (M : Type -> Type) { def bind (a : M A) (f : A -> M B) : M B\n def pure : A -> M A }\n" ++
+        "instance Functor Bx { def map (f : A -> B) (x : Bx A) : Bx B := match x { Bx.bx a => Bx.bx (f a) } }\n" ++
+        "instance Applicative Bx { def pure (a : A) : Bx A := Bx.bx a }\n" ++
+        "instance Monad Bx { def bind (a : Bx A) (f : A -> Bx B) : Bx B := match a { Bx.bx x => f x }\n def pure (a : A) : Bx A := Bx.bx a }\n" ++
+        "def run_polls {M : Type} (actions : Lst (Un -> Bx M)) (acc : Lst M) : Bx (Lst M) := Bx.bx acc\n" ++
+        "def run_poll {M : Type} (action : Un -> Bx M) (acc : Lst M) : Bx (Lst M) := Monad.bind (action Un.un) (fn msg => run_polls Lst.nil acc)\n";
+    let diags <- check_synthetic_source src;
+    return (List.is_empty diags)
+}
+
 /// A constraint whose evidence the method body never uses gets no dict
 /// parameter on the promoted def, so the checker's call site must not pass one
 /// (it applied a dict to the nullary `Map_BTreeMap_empty` and crashed the test
