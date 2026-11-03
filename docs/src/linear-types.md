@@ -51,7 +51,7 @@ struct Buffer {
 So do parameters, on definitions and on typed lambda parameters:
 
 ```monad
-def f (!a : I64) (?b : I64) (%c : I64) (d : I64) : I64 := a + b + c + d
+def f (!a : I64) (?b : I64) (%c : I64) (d : I64) : I64 := a + b + d
 def h : I64 -> I64 := fn (!x : I64) => x
 ```
 
@@ -87,10 +87,16 @@ Enforced at compile time, with no run-time overhead:
 
 ```monad
 def ok (!x : I64) : I64 := x           // passes (once carried)
-def unused (!x : I64) : I64 := 42      // intended: fails — never used
-def overused (!x : I64) : I64 := x + x // intended: fails — used twice
 def affine_ok (?x : I64) : I64 := 42   // passes
 def many_ok (x : I64) : I64 := x + x   // passes: I64 is Copy
+```
+
+The two failures the `!` row is about are shown below for their diagnostics
+only; they do not compile, which is why this block is tagged `ignore`.
+
+```monad,ignore
+def unused (!x : I64) : I64 := 42      // fails — never used
+def overused (!x : I64) : I64 := x + x // fails — used twice
 ```
 
 `many_ok` passes because `Copy I64` is a builtin instance. Replace `I64`

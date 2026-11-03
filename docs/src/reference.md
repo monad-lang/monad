@@ -509,10 +509,13 @@ Parameters accept them too — on definitions and on typed lambda parameters:
 
 ```monad
 def f (!linear : I64) (?affine : I64) (%erased : I64) (many : I64) : I64 :=
-    linear + affine + erased + many
+    linear + affine + many
 
 def g : I64 -> I64 := fn (!x : I64) => x
 ```
+
+`%erased` may not appear in a run-time position at all, which is why `f` above
+does not add it in; `linear-types.md` covers that rule.
 
 The prefix applies to the whole group, so `(!x y : I64)` makes *both* names
 linear. A destructured parameter takes one as well — `(!{fst, snd} : Coord)` —
