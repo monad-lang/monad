@@ -449,3 +449,28 @@ def test_ntv_string_starts_with_false : Bool :=
     Option.some v => value_bool_is v false,
     Option.none => false,
   }
+
+// ─── Test 7: a TYPE NAME in value position ──────────────────────────────
+// `idT I64 5`: `I64` has no `Def` and no constructor, so `lower_one_global`
+// used to push `gd_unresolved` and forcing it raised
+// `ce_unresolved_global`. A type's own name is an inert sort value now,
+// mirroring the immediate codegen emits for the same reference.
+
+def i64_decl : Decl :=
+  Decl.inductive_d (Inductive.mk (np1 "I64") List.empty Term.hole List.empty List.empty Visibility.package_private)
+
+/// def idT (T : Type) (x : T) : T := x
+def idt_decl : Decl :=
+  def_decl "idT"
+    (Term.lam (binder_explicit (named "T")) Term.hole
+      (Term.lam (binder_explicit (named "x")) Term.hole (Term.var 0 (named "x"))))
+
+def type_arg_main_term : Term :=
+  Term.app (Term.app (free_var "idT") (free_var "I64")) (num 5)
+
+def type_arg_test_decls : List Decl :=
+  [i64_decl, idt_decl, def_decl "main" type_arg_main_term]
+
+#[test]
+def test_inductive_name_as_type_argument_end_to_end : Bool :=
+  opt_value_num_is (lower_and_run (build_ctx type_arg_test_decls) "main") 5

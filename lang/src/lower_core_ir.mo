@@ -1042,23 +1042,41 @@ def lam_chain_arity (t : Term) : I64 :=
 /// hand-lowered via `Term.ntv` -- would always fail lowering with
 /// `le_type_level_term` the moment its own innermost `Term.hole` is
 /// reached.
-def lower_one_global (ctx : LowerCtx) (path : NamePath) (acc : LowerAcc) : Result LowerError LowerAcc :=
-  match find_def (ctx_defs ctx) path {
-    // Not an ordinary `Def` -- but `scope_resolve_name` already
-    // resolved SOME `ScopeDef` for this path to intern it as a global
-    // in the first place (see `lower_resolved_name`), which for a
-    // constructor referenced bare via an `open Decl {d_def, ...}`
-    // alias (`std/derive.mo`) succeeds even though no matching `Def`
-    // exists -- confirmed load-bearing via direct repro: forcing this
-    // slot at runtime previously hit `ce_unresolved_global` for
-    // exactly this shape. Try the SAME constructor-owner fallback
-    // `lower_free_var_fallback` uses before finally giving up.
-    Option.none =>
+/// A path with no ordinary `Def`. `scope_resolve_name` already resolved
+/// SOME `ScopeDef` for it to intern it as a global in the first place
+/// (see `lower_resolved_name`), so three shapes reach here:
+///
+///   * a TYPE/INDUCTIVE NAME in runtime value position (`idT I64 5`,
+///     `sigma_snd I64 (fn (a : I64) => I64) p`) -- a sort, so it lowers
+///     to this IR's inert sort value `IrLit.ir_sort 0`, the same
+///     immediate codegen emits. Before this it became `gd_unresolved`
+///     and forcing the slot raised `ce_unresolved_global`, which is what
+///     made a verified eliminator impossible to CALL;
+///   * a constructor referenced bare through an `open Decl {d_def, ...}`
+///     alias (`std/derive.mo`), which needs the SAME constructor-owner
+///     fallback `lower_free_var_fallback` uses;
+///   * anything else, which stays `gd_unresolved`.
+///
+/// The type check comes FIRST: a type name must never be misread as a
+/// constructor. No `Term.sort` is lowered here, so `le_type_level_term`
+/// cannot fire for this shape.
+def lower_missing_global (ctx : LowerCtx) (path : NamePath) (acc : LowerAcc) : Result LowerError LowerAcc :=
+  match scope_find_inductive path (ctx_scope ctx) {
+    Result.ok _ind =>
+      Result.ok (push_done acc (GlobalDef.gd_def (CoreIr.lit (IrLit.ir_sort 0)))),
+    Result.err _ =>
       match find_ctor_tag_arity ctx (name_path_last_segment path) {
         Option.some pr =>
           match pr { Pair.pair tag arity => Result.ok (push_done acc (GlobalDef.gd_constructor tag arity)) },
         Option.none => Result.ok (push_done acc (GlobalDef.gd_unresolved (modpath_of path))),
       },
+  }
+
+def lower_one_global (ctx : LowerCtx) (path : NamePath) (acc : LowerAcc) : Result LowerError LowerAcc :=
+  match find_def (ctx_defs ctx) path {
+    // Not an ordinary `Def` -- see `lower_missing_global`'s own doc
+    // comment for what a resolved-but-not-a-def path can be.
+    Option.none => lower_missing_global ctx path acc,
     Option.some def_ =>
       match def_ {
         Def.mk {name := _name, typ := _typ, term, constraints := _constraints, attrs, vis := _vis, ..} =>
