@@ -14,7 +14,17 @@ directory once and resolves every event's bare name back to a full path.
 
 ## Watching a tree
 
-```monad
+This one opts out of `scripts/check-docs.sh`'s type check (`monad,ignore`):
+`one_batch` hands the same `Watch` to `Watch.drain` and then to
+`Watch.close`, and the affine rule -- an unannotated binder is used at most
+once unless its type is `Copy` -- is enforced as an error on every check
+path while `std` still migrates (`std/mote.toml` runs `[affine] mode =
+"warn"`, and `cli`'s `script --watch` loop, this example's real-world
+twin, relies on the same window). The shape is the one a program actually
+writes; the fence goes back to being checked the day the watch API can
+express it.
+
+```monad,ignore
 use std::list {List.length}
 use std::path {Path}
 use std::stream {StreamError}
