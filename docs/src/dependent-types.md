@@ -149,10 +149,14 @@ is correspondingly small. Today there is:
   field works too: `def Sigma.snd (A : Type) (B : A -> Type) (p : Sigma A B) :
   B (Sigma.fst p) := match p { Sigma.dpair a b => b }` verifies, because the
   checker closes `snd : B fst` over the `fst` binder and reduces the refined
-  motive. What is still missing: indexed families (`Eq`/`Vec` index
-  refinement), arms written as field patterns, and a surface way to supply a
-  type argument — so an eliminator can be *verified* but not yet *called*.
-  `proofs/src/dependent.mo` is the worked example.
+  motive. An EXPLICIT type argument can be supplied and executed:
+  `sigma_snd I64 (fn (a : I64) => I64) (Sigma.dpair 1 2)` compiles, links
+  and returns `2`, because a type name in runtime value position compiles to
+  an inert sort value in both backends. What is still missing: indexed
+  families (`Eq`/`Vec` index refinement), arms written as field patterns,
+  IMPLICIT type arguments (higher-order inference is not implemented), and a
+  type APPLICATION used as a value (`List I64`). `proofs/src/dependent.mo`
+  verifies the theorems; `proofs/src/dependent_runtime.mo` calls them.
 - **No usable equality elimination.** See the warning above: `Eq` proofs can be
   built but not consumed.
 - **No tactics, no proof automation, no `Decidable`.** Proofs are written by

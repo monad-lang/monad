@@ -31,10 +31,12 @@
 //   checker can report, so the motive-sort check fails. A local type function
 //   avoids that.
 //
-// Nothing here executes the eliminator: its type argument cannot be supplied
-// with the surface syntax (implicit arguments are inferred, and higher-order
-// inference is not implemented). The theorems are VERIFIED by the checker,
-// which is the property this step delivers.
+// These theorems are VERIFIED by the checker. They can also be CALLED now
+// when the type argument is EXPLICIT (`sigma_snd I64 (fn (a : I64) => I64)
+// (Sigma.dpair 1 2)`): a type NAME in value position compiles to an inert
+// sort value in both backends. See `dependent_runtime.mo` for the
+// compile-and-run tier. Still missing: IMPLICIT type arguments (higher-order
+// inference is not implemented) and a type application used as a value.
 
 /// The proof-relevant eliminator for `Bool` into an arbitrary type family:
 /// the `true` arm has type `F true`, the `false` arm `F false`, and the result
