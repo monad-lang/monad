@@ -14,12 +14,11 @@
 use llvm::strmap {str_map_empty, str_map_insert, str_map_lookup}
 use std::list {List.length}
 use lang::types {
-  DebugName, Def, Identifier, Location, ModulePath, Param, Term, binder_is_explicit,
-  binder_name,
-  param_many, term_peel,
+  DebugName, Def, Identifier, Inductive, Location, ModulePath, Param, Struct, Term,
+  binder_is_explicit, binder_name, param_many, term_peel,
 }
 use llvm::ir {DbgLoc, LLVMInstruction, LLVMValue}
-use lib::codegen::symbols {def_symbol_name}
+use lib::codegen::symbols {def_symbol_name, extract_base_name, symbol_identifier, unqualify_def_name}
 use lang::codegen::util {identifier_eq}
 use std::map {HashMap}
 
@@ -52,6 +51,16 @@ pub struct CodegenCtx {
     /// tag -- see `constructor_arity`'s own doc comment for why this is
     /// needed.
     ctor_arities : HashMap String I64,
+    /// Every declared TYPE's own value-position representation: its
+    /// symbol -> the inert sort level a runtime reference to it stands
+    /// for (always 0; the value is opaque to every consumer). A type
+    /// argument (`idT I64 5`) reaches codegen as an ordinary `Term.var`,
+    /// and nothing defines a symbol for `I64` -- without this table the
+    /// value-position fallback emitted a call to that undefined symbol.
+    /// Keyed like `arities` (`def_symbol_name`), plus the bare alias a
+    /// unit-test or unqualified caller carries. A real def of the same
+    /// symbol always wins -- see `ctx_lookup_type_level`.
+    type_levels : HashMap String I64,
     /// The position in force while compiling a term, set when
     /// `compile_db_term_ir` enters a `Term.ctx` and restored on the way
     /// out. `none` whenever locations are off, and whenever a term
@@ -119,8 +128,8 @@ def resolve_call_name (c : CodegenCtx) (llvm_name : String) : String :=
 /// global reference falls back to today's eager-0-arg-call behavior --
 /// correct only for genuinely 0-arity defs).
 #[partial]
-def empty_ctx (arities : HashMap String I64) (ctor_tags : HashMap String I64) (ctor_arities : HashMap String I64) (extern_wrappers : HashMap String String) : CodegenCtx :=
-    { locals := List.empty, next_temp := 0, next_label := 0, arities := arities, ctor_tags := ctor_tags, ctor_arities := ctor_arities, current_loc := Option.none, extern_wrappers := extern_wrappers }
+def empty_ctx (arities : HashMap String I64) (ctor_tags : HashMap String I64) (ctor_arities : HashMap String I64) (extern_wrappers : HashMap String String) (type_levels : HashMap String I64) : CodegenCtx :=
+    { locals := List.empty, next_temp := 0, next_label := 0, arities := arities, ctor_tags := ctor_tags, ctor_arities := ctor_arities, current_loc := Option.none, extern_wrappers := extern_wrappers, type_levels := type_levels }
 
 /// Convert a captured source position to the minimal
 /// `llvm.ir.DbgLoc` shape `LLVMFunction.dbg_loc` expects.
@@ -222,6 +231,29 @@ def ctx_restore_locals (outer : CodegenCtx) (inner : CodegenCtx) : CodegenCtx :=
 #[partial]
 def ctx_lookup_arity (c : CodegenCtx) (llvm_name : String) : Option I64 := str_map_lookup llvm_name c.arities
 
+/// The inert sort level a TYPE NAME stands for in runtime value position,
+/// or `none`. A real def of the same symbol always wins: the arity table
+/// already proves one is defined and callable, which is what keeps a
+/// constructor/def that happens to share a spelling with a type from
+/// being rewritten. See `CodegenCtx.type_levels`.
+///
+/// A reference can reach codegen under a DIFFERENT qualification than the
+/// declaration: a body written `I64` is qualified to `prelude::I64` by the
+/// checker's own spelling, while the inductive declares under its module
+/// path. So an exact miss falls back to the bare name (`I64`), which the
+/// table also carries. Every entry is level 0, so a same-bare-name
+/// collision across modules cannot change the value.
+#[partial]
+def ctx_lookup_type_level (c : CodegenCtx) (llvm_name : String) : Option I64 :=
+    match ctx_lookup_arity c llvm_name {
+        Option.some _ => Option.none,
+        Option.none =>
+            match str_map_lookup llvm_name c.type_levels {
+                Option.some level => Option.some level,
+                Option.none => str_map_lookup (extract_base_name (unqualify_def_name llvm_name)) c.type_levels,
+            },
+    }
+
 /// Builds the arity table `empty_ctx` needs from a module's own `List
 /// Def`, keyed by the exact same `llvm_name` `compile_db_def_ir` gives
 /// each def's own compiled LLVM function (`def_symbol_name` of its
@@ -243,6 +275,44 @@ def build_arity_table_go (defs : List Def) (acc : HashMap String I64) : HashMap 
                 build_arity_table_go rest (str_map_insert llvm_name arity acc),
         },
 }
+
+/// Builds `type_levels` from the module's own declared types -- every
+/// `Inductive` and every `Struct`, keyed by the SAME `llvm_name` a
+/// value-position `Term.var` computes (`def_symbol_name` of the
+/// qualified name), plus the bare alias an unqualified reference
+/// carries. Every value is 0: a type name used as a value is inert, and
+/// no consumer reads its level. Built once per module compile, beside
+/// `build_arity_table`.
+#[partial]
+def build_type_level_table (inds : List Inductive) (structs : List Struct) : HashMap String I64 :=
+    build_type_level_table_structs structs (build_type_level_table_go inds str_map_empty)
+
+#[partial]
+def build_type_level_table_go (inds : List Inductive) (acc : HashMap String I64) : HashMap String I64 := match inds {
+    List.empty => acc,
+    List.cons ind rest =>
+        match ind {
+            Inductive.mk name _params _typ _ctors _attrs _vis =>
+                build_type_level_table_go rest (insert_type_level (def_symbol_name name) acc),
+        },
+}
+
+#[partial]
+def build_type_level_table_structs (structs : List Struct) (acc : HashMap String I64) : HashMap String I64 := match structs {
+    List.empty => acc,
+    List.cons s rest =>
+        match s {
+            Struct.mk name _fields _attrs _vis =>
+                build_type_level_table_structs rest (insert_type_level (symbol_identifier name) acc),
+        },
+}
+
+/// One type's two keys: its qualified symbol and the bare spelling an
+/// unqualified reference (or a unit-test fixture) carries.
+#[partial]
+def insert_type_level (symbol : String) (acc : HashMap String I64) : HashMap String I64 :=
+    let bare := extract_base_name (unqualify_def_name symbol) in
+    str_map_insert bare 0 (str_map_insert symbol 0 acc)
 
 /// (The v1 def-name -> `Location` table built here -- `build_debug_locs`
 /// -- is gone: since stage 6 a function's own location is the `Term.ctx`

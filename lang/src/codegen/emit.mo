@@ -57,10 +57,10 @@ use lib::typecheck::traverse {term_map_children}
 use lib::elim_lower {elim_to_literal}
 use lib::codegen::ctx {
   CodegenCtx, CtxInstrsVal, CtxInstrsVals, CtxStrPair, LocalBinding,
-  build_arity_table, collect_db_params, ctx_bind_local, ctx_lookup_arity,
-  ctx_lookup_ctor_arity, ctx_lookup_ctor_tag, ctx_lookup_local,
-  ctx_reset_locals, ctx_restore_locals, dbg_loc_of_location, empty_ctx,
-  fresh_label, fresh_temp, lookup_binding, resolve_call_name
+  build_arity_table, build_type_level_table, collect_db_params, ctx_bind_local,
+  ctx_lookup_arity, ctx_lookup_ctor_arity, ctx_lookup_ctor_tag, ctx_lookup_local,
+  ctx_lookup_type_level, ctx_reset_locals, ctx_restore_locals, dbg_loc_of_location,
+  empty_ctx, fresh_label, fresh_temp, lookup_binding, resolve_call_name
 }
 use lib::codegen::symbols {
   bare_modpath, def_symbol_name, ends_with_main, extract_base_name,
@@ -2213,6 +2213,17 @@ def builtin_sort_level (name : String) : Option I64 :=
     else if String.beq base "Sort" then Option.some 0
     else Option.none
 
+/// The inert immediate a bare NAME stands for in runtime VALUE position:
+/// a sort keyword's own level (`builtin_sort_level`), otherwise a declared
+/// type's level (`ctx_lookup_type_level`). One helper keeps the two arms at
+/// the SAME nesting depth the arm already had.
+#[partial]
+def value_position_level (c : CodegenCtx) (name : String) (llvm_name : String) : Option I64 :=
+    match builtin_sort_level name {
+        Option.some level => Option.some level,
+        Option.none => ctx_lookup_type_level c llvm_name,
+    }
+
 /// The level a `Sort <n>` written as an APPLICATION stands for, or
 /// `Option.none` for every other application. `Sort 1`/`Sort 0` reach
 /// this codegen as an ordinary `App(Var "Sort", Lit n)` -- the Rust
@@ -2305,7 +2316,7 @@ def compile_db_term_ir (c : CodegenCtx) (term_ : Term) : CompileResult := match 
                             Option.some _ => true,
                             Option.none => false,
                         } in
-                        match builtin_sort_level name {
+                        match value_position_level c name llvm_name {
                             // `Pred`/`Prop`/`Type` (and the bare `Sort`
                             // keyword) are registered as fake ScopeDefs
                             // whose own body is `Term.hole` (`lang/scope.mo`)
@@ -2331,6 +2342,13 @@ def compile_db_term_ir (c : CodegenCtx) (term_ : Term) : CompileResult := match 
                             // host's own unifier compares these atoms
                             // against. Emitted as a plain immediate -- no
                             // call, no allocation, nothing to define.
+                            //
+                            // A declared TYPE's NAME answers the same way
+                            // (`idT I64 5`, `sigma_snd I64 (fn (a : I64) =>
+                            // I64) p`): the runtime slot stays, but the value
+                            // is inert, and `I64` no longer reaches the
+                            // fallback below, which emitted `call i64 @"I64"`
+                            // for a symbol nothing defines.
                             Option.some level =>
                                 CompileResult.ok c List.empty (LLVMValue.int_ level) List.empty List.empty List.empty,
                             Option.none =>
@@ -4868,7 +4886,7 @@ def compile_db_decls_ir (defs : List Def) : LLVMModule :=
 def compile_db_decls_ir_with_debug (defs : List Def) (source_path : Option String) (debug_files : List (Pair String String)) : LLVMModule :=
     let arities := build_arity_table defs in
     let extern_wrappers := build_extern_wrapper_table defs in
-    match compile_db_def_list (empty_ctx arities str_map_empty str_map_empty extern_wrappers) defs {
+    match compile_db_def_list (empty_ctx arities str_map_empty str_map_empty extern_wrappers str_map_empty) defs {
         { ctx := _, funcs := compiled_funcs, globals := compiled_globals, externs := compiled_exts } =>
             let funcs := ren_main_and_wrap compiled_funcs in
             let extra_decls := extern_declarations compiled_exts in
@@ -4894,17 +4912,19 @@ def compile_db_module (decl_list : List Decl) : LLVMModule :=
 pub def compile_db_module_with_debug (decl_list : List Decl) (source_path : Option String) (debug_files : List (Pair String String)) (triple : String) : LLVMModule :=
     let defs := extract_defs decl_list in
     let inds := extract_inductives decl_list in
-    // Structs feed the ARITY table only -- see
+    let structs := extract_structs decl_list in
+    // Structs feed the ARITY and TYPE-LEVEL tables only -- see
     // `collect_struct_ctor_claims`' own doc comment for why a struct's
     // `mk` must be arity-known (a value-position `Point.mk` reference)
     // while staying out of the tag map (its allocation's tag comes from
     // the bare-name tier, exactly as a struct literal's does).
     let ctor_tags := build_constructor_tag_map inds in
-    let ctor_arities := build_constructor_arity_map_with_structs inds (extract_structs decl_list) in
+    let ctor_arities := build_constructor_arity_map_with_structs inds structs in
     let ctor_funcs := compile_db_inductive_decls inds ctor_tags in
     let arities := build_arity_table defs in
     let extern_wrappers := build_extern_wrapper_table defs in
-    match compile_db_def_list (empty_ctx arities ctor_tags ctor_arities extern_wrappers) defs {
+    let type_levels := build_type_level_table inds structs in
+    match compile_db_def_list (empty_ctx arities ctor_tags ctor_arities extern_wrappers type_levels) defs {
         { ctx := _, funcs := compiled_funcs, globals := compiled_globals, externs := compiled_exts } =>
             // Prepend the GENERATED runtime natives (`lang/codegen/
             // runtime.mo`) -- ordinary `define`s in this same module,
@@ -5333,7 +5353,7 @@ def test_ctor_tag_map_qualified_name_lookup : Bool :=
     let ind_name := NamePath.mk (List.cons (Identifier.id "Option") List.empty) in
     let ind := Inductive.mk ind_name List.empty (Term.sort (SortLevel.concrete 1)) ctors empty_attrs Visibility.package_private in
     let tag_map := build_constructor_tag_map (List.cons ind List.empty) in
-    let c := empty_ctx empty_arities tag_map str_map_empty str_map_empty in
+    let c := empty_ctx empty_arities tag_map str_map_empty str_map_empty str_map_empty in
     is_constructor_var c "Option.Some" && is_constructor_var c "Option.None"
 
 /// A hand-built single-field Param -- the fixture shape for the
@@ -5365,7 +5385,7 @@ def unit_test_struct (type_name : String) (field_names : List String) : Struct :
 def test_struct_ctor_reference_is_arity_known : Bool :=
     let structs : List Struct := List.cons (unit_test_struct "Point" ["x", "y"]) List.empty in
     let arity_map := build_constructor_arity_map_with_structs List.empty structs in
-    let c := empty_ctx empty_arities str_map_empty arity_map str_map_empty in
+    let c := empty_ctx empty_arities str_map_empty arity_map str_map_empty str_map_empty in
     is_constructor_var c "Point.mk"
         && I64.beq (constructor_arity c "Point.mk") 2
 
@@ -5385,11 +5405,30 @@ def test_struct_ctor_reference_shares_the_literals_tag : Bool :=
         List.empty (Term.sort (SortLevel.concrete 1)) [slim_mk] empty_attrs Visibility.package_private in
     let tag_map := build_constructor_tag_map (List.cons slim List.empty) in
     let arity_map := build_constructor_arity_map_with_structs (List.cons slim List.empty) (List.cons (unit_test_struct "Point" ["x", "y"]) List.empty) in
-    let c := empty_ctx empty_arities tag_map arity_map str_map_empty in
+    let c := empty_ctx empty_arities tag_map arity_map str_map_empty str_map_empty in
     let by_reference : I64 := constructor_tag_at c "Point.mk" 2 in
     let by_literal : I64 := constructor_tag_at c "mk" 2 in
     I64.gt by_reference 15
         && I64.beq by_reference by_literal
+
+/// A declared TYPE's NAME in value position (`idT I64 5`). With no local,
+/// def or constructor entry it used to reach the 0-arg-call fallback and
+/// emit `call i64 @"I64"` for a symbol nothing defines. The type-level
+/// table now answers with the inert level immediate.
+#[test]
+def test_type_name_in_value_position_is_an_inert_level : Bool :=
+    let ind := Inductive.mk (NamePath.mk (List.cons (Identifier.id "I64") List.empty))
+        List.empty (Term.sort (SortLevel.concrete 1)) List.empty empty_attrs Visibility.package_private in
+    let levels := build_type_level_table (List.cons ind List.empty) List.empty in
+    let c := empty_ctx empty_arities str_map_empty str_map_empty str_map_empty levels in
+    let t := Term.var sentinel (DebugName.named (Identifier.id "I64")) in
+    match compile_db_term_ir c t {
+        CompileResult.ok _ctx _instrs val _blocks _funcs _globals =>
+            match val {
+                LLVMValue.int_ level => I64.beq level 0,
+                _ => false,
+            },
+    }
 
 /// Composite tag keying (`build_constructor_tag_map` +
 /// `constructor_tag_at`): two different types both declaring a `mk`
@@ -5415,7 +5454,7 @@ def test_ctor_tags_distinguish_same_name_differing_arity : Bool :=
         List.empty (Term.sort (SortLevel.concrete 1)) [wide_mk] empty_attrs Visibility.package_private in
     let tag_map := build_constructor_tag_map (List.cons slim (List.cons wide List.empty)) in
     let arity_map := build_constructor_arity_map (List.cons slim (List.cons wide List.empty)) in
-    let c := empty_ctx empty_arities tag_map arity_map str_map_empty in
+    let c := empty_ctx empty_arities tag_map arity_map str_map_empty str_map_empty in
     let slim_at := constructor_tag_at c "mk" 1 in
     let wide_at := constructor_tag_at c "mk" 3 in
     Bool.not (I64.beq slim_at wide_at)
@@ -5452,7 +5491,7 @@ def native_def_fixture (name : String) (target : String) : Def :=
 
 #[partial]
 def compile_native_def_fixture_text (name : String) (target : String) : String :=
-    match compile_db_def_ir (empty_ctx empty_arities str_map_empty str_map_empty str_map_empty) (native_def_fixture name target) {
+    match compile_db_def_ir (empty_ctx empty_arities str_map_empty str_map_empty str_map_empty str_map_empty) (native_def_fixture name target) {
         { ctx := _, funcs := funcs, globals := _, .. } =>
             emit_module (LLVMModule.mk "x86_64-unknown-linux-gnu" List.empty funcs List.empty Option.none List.empty),
     }
