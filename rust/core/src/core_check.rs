@@ -647,18 +647,11 @@ pub struct KnownInstanceInfo {
   /// set as a whole; `try_resolve_class_method` uses `method_constraints`
   /// below instead, not this.
   pub constraints: Vec<TypeConstraint>,
-  /// Per-method subset of `constraints` — only the ones that method's OWN
-  /// body actually references (`core_check_module::term_references_class`,
-  /// the same check `elaborate_constrained_type` uses to decide whether to
-  /// add a method's leading dict `Pi` in the first place). NOT every
-  /// method of a constrained instance needs every one of the instance's
-  /// own constraints — e.g. `instance [BOrd K] Map BTreeMap { def empty :=
-  /// BTreeMap.empty }`'s `empty` never mentions `BOrd` at all, so it
-  /// compiles with arity 0, not 1 — appending a dict arg for `[BOrd K]` to
-  /// every method uniformly (as an earlier version of this type did, via
-  /// the single flat `constraints` field above) mismatches methods like
-  /// `empty` that don't actually take one, producing arity errors
-  /// ("expected 0 constructor fields, got 1"). Falls back to an empty
+  /// Per-method subset of `constraints` — the ones that become the
+  /// method's leading dict `Pi`s: every dictionary-carrying constraint
+  /// (`core_check_module::class_carries_dictionary`) of a method with a
+  /// real body, the same rule `elaborate_constrained_type` applies to a
+  /// def. A body-less method takes none. Falls back to an empty
   /// `Vec` (via `Map::get`'s `None` -> caller-side default) for a method
   /// name that isn't in this map at all, matching "this method needs no
   /// dict args" rather than erroring.
@@ -3473,9 +3466,9 @@ fn try_insert_dict_args(
         let instance_atom = mctx.intern(instance_info.prefix.clone());
         // A still-generic instance (`instance [Monad M] Monad (TuiT M I I)`)
         // MAY itself be a D3-elaborated constrained def — D3 gives the
-        // instance's own value leading dictionary `Pi`s only when its
-        // body references the class (the same `term_references_class`
-        // test every constrained def gets). When it did, those `Pi`s
+        // instance's own value leading dictionary `Pi`s by the same
+        // declaration rule every constrained def gets
+        // (`elaborate_constrained_type`). When it did, those `Pi`s
         // must be applied here before the value can serve as THIS call's
         // dictionary; when it didn't (an instance whose methods handle
         // the class themselves, each with its own per-method dict args —

@@ -378,13 +378,12 @@ pub def build_scope_from_decls (path : ModulePath) (decl_list : List Decl) : Sco
 /// asks for.
 pub def build_scope_from_groups (groups : List DeclGroup) : ScopeData :=
     let all_decls : List Decl := decl_groups_flatten groups in
-    // Seeded BEFORE the fold: `build_scope_def` reads the see-through map
-    // back out of the accumulator while registering each def, and the map
-    // is a property of the whole decl list, not of any one registration
-    // (a def it must see through may be declared after the one being
-    // registered).
+    // Seeded BEFORE the fold: `build_scope_def` reads the class set back
+    // out of the accumulator while registering each def, and the set is a
+    // property of the whole decl list, not of any one registration (a
+    // def's class may be declared after the def).
     //
-    // INVARIANT: the map is only as wide as the list THIS build was
+    // INVARIANT: the set is only as wide as the list THIS build was
     // handed, and the checker's D4 resolution compares its answer against
     // Phase 3's decision over the whole program. A scope built from a
     // NARROWER list (one module) therefore under-reports a qualified
@@ -395,7 +394,7 @@ pub def build_scope_from_groups (groups : List DeclGroup) : ScopeData :=
     // `rebuild_target_scope`) and `merge_scope_data`'s union keep the two
     // lists equal; per-module scopes are safe only where nothing resolves
     // class calls through them.
-    let empty : ScopeData := { scope_data_empty with constrained_def_classes := collect_constrained_def_classes all_decls } in
+    let empty : ScopeData := { scope_data_empty with dict_classes := collect_dict_classes all_decls } in
     let with_decls : ScopeData := build_scope_from_groups_go groups empty in
     let with_builtins : ScopeData := add_builtins with_decls in
     // Skip pass 2 entirely when this module has no use_d/open_d/
@@ -741,7 +740,7 @@ def build_scope_def (df : Def) (path : ModulePath) (acc : ScopeData) : ScopeData
             // (`add_constraint_dict_params`), so the checker's call
             // reification never re-walks a callee body per call site.
             let with_constraints : ScopeData := scope_data_add_def_constraints with_body defname def_constraints in
-            scope_data_add_def_dict_constraints with_constraints defname (qualifying_dict_constraints acc.constrained_def_classes def_constraints term_)
+            scope_data_add_def_dict_constraints with_constraints defname (qualifying_dict_constraints acc.dict_classes def_constraints typ term_)
     }
 
 /// Does a def body carry a real body, or is it a body-less declaration?
@@ -1046,11 +1045,11 @@ pub def scope_find_inductive (name : NamePath) (s : Scope) : Result ScopeError I
 def scope_data_classes (sd : ScopeData) : List Class :=
     sd.classes
 
-/// The whole-graph see-through map (`collect_constrained_def_classes`),
-/// read back by the checker's D4 resolution so `emitted_dict_constraints`
+/// The whole-graph dictionary-class set (`collect_dict_classes`), read
+/// back by the checker's D4 resolution so `emitted_dict_constraints`
 /// answers with the same predicate Phase 3 used.
-def scope_data_constrained_def_classes (sd : ScopeData) : HashMap String (List String) :=
-    sd.constrained_def_classes
+def scope_data_dict_classes (sd : ScopeData) : HashMap String (List String) :=
+    sd.dict_classes
 
 pub def scope_find_class (name : NamePath) (s : Scope) : Option Class :=
     find_class_by_name (scope_data_classes (scope_globals s)) name
@@ -3239,9 +3238,9 @@ def promote_instance_decl_groups_tail (groups : List DeclGroup) (classes : List 
     }
 
 // --- Phase 3 (dictionary-passing plan, see
-// plans/bootstrapping/self-hosted-compiler.md): a constrained def whose
-// body actually references a single-var class constraint gains one
-// leading dictionary parameter for it (a new outer Term.pi on .typ and
+// plans/bootstrapping/self-hosted-compiler.md): a constrained def gains
+// one leading dictionary parameter per single-var constraint whose class
+// carries a dictionary (`qualifying_dict_constraints`) (a new outer Term.pi on .typ and
 // a matching outer Term.lam on .term). Mirrors the Rust reference's
 // `elaborate_constrained_type` (core_check_module.rs), done here as a
 // plain structural AST rewrite (not through the real bidirectional type
@@ -3258,70 +3257,27 @@ def promote_instance_decl_groups_tail (groups : List DeclGroup) (classes : List 
 // it's a documentation-only placeholder (`dict_param_type_placeholder`),
 // not load-bearing.
 
-/// Every constrained def's BARE last-segment name -> the classes its own
-/// declared constraints mention, over a whole decl list. This is how
-/// `def_references_class` sees THROUGH a call to another constrained def:
-/// the callee needs a dictionary for the class, so a caller reaching the
-/// class only through such a call (`TuiT.enter_raw_mode` ->
-/// `tui_discard_bool [Monad M]`) still needs a dictionary parameter of its
-/// own to forward, and must not read as phantom. Keyed by the name the
-/// body SPELLS the call with (`TuiT.enter_raw_mode` and a bare
-/// `enter_raw_mode` both end in "enter_raw_mode"), the same one-level
-/// approximation the Rust reference uses (`collect_constrained_def_classes`,
-/// core_check_module.rs): a same-last-name false positive costs at worst a
-/// spurious dict `Pi`, which the call-site insertion resolves harmlessly;
-/// the reverse direction is the silent dict-slot shift this prevents.
-def collect_constrained_def_classes (decl_list : List Decl) : HashMap String (List String) :=
-    collect_constrained_def_classes_go decl_list bare_map_empty
+/// Every class that carries a DICTIONARY, keyed by its bare name: a class
+/// with at least one method. `Copy` is one (`WriterT.listen` calls
+/// `Copy.copy` on its abstract `W`); a method-less marker class is not.
+/// The value list is unused (always empty); the map shape is the
+/// `bare_map_*` one the scope already merges.
+def collect_dict_classes (decl_list : List Decl) : HashMap String (List String) :=
+    collect_dict_classes_go decl_list bare_map_empty
 
 #[partial]
-def collect_constrained_def_classes_go (decl_list : List Decl) (acc : HashMap String (List String)) : HashMap String (List String) :=
+def collect_dict_classes_go (decl_list : List Decl) (acc : HashMap String (List String)) : HashMap String (List String) :=
     match decl_list {
         List.empty => acc,
         List.cons d rest =>
             match d {
-                Decl.def_d def_ =>
-                    match def_ {
-                        Def.mk {name := dname, constraints, ..} =>
-                            match constraints {
-                                List.empty => collect_constrained_def_classes_go rest acc,
-                                List.cons _ _ =>
-                                    let key : String := identifier_tail (last_segment dname) in
-                                    let existing : List String := match bare_map_lookup key acc {
-                                        Option.some classes => classes,
-                                        Option.none => List.empty,
-                                    } in
-                                    collect_constrained_def_classes_go rest (bare_map_insert key (constraint_class_names constraints existing) acc),
-                            },
-                    },
-                Decl.instance_d ins =>
-                    if instance_is_symmetric_bridge ins
-                    then collect_constrained_def_classes_go rest (bridge_method_classes ins.defs ins.constraints acc)
-                    else collect_constrained_def_classes_go rest acc,
-                _ => collect_constrained_def_classes_go rest acc,
+                Decl.class_d cls =>
+                    let key : String := identifier_tail cls.name in
+                    if List.is_empty cls.methods
+                    then collect_dict_classes_go rest acc
+                    else collect_dict_classes_go rest (bare_map_insert key List.empty acc),
+                _ => collect_dict_classes_go rest acc,
             },
-    }
-
-/// A SYMMETRIC BRIDGE (`instance [Add A] HAdd A A A`): every argument a
-/// bare variable its own constraints bind. A call to one of its methods
-/// (`HAdd.add`, and so every `+`) on an abstract type is answered by the
-/// bridge with the CONSTRAINT's dictionary, so it is a use of that
-/// constraint's class (`Add`) for `def_references_class`: without this,
-/// `def f [Add A] (x : A) : A := x + x` never received its `__dict_Add`
-/// parameter, and the bridge had no dictionary to resolve with
-/// (`no instance found for HAdd.add`).
-#[partial]
-def instance_is_symmetric_bridge (ins : Instance) : Bool :=
-    match ins.args {
-        List.empty => false,
-        List.cons _ _ => all_bridge_vars ins.args (constraint_var_names ins.constraints List.empty),
-    }
-
-#[partial]
-def all_bridge_vars (args : List Term) (vars : List Identifier) : Bool :=
-    match args {
-        List.empty => true,
-        List.cons a rest => is_bound_var_term a vars && all_bridge_vars rest vars,
     }
 
 #[partial]
@@ -3343,216 +3299,53 @@ def spelled_in_ids (s : String) (ids : List Identifier) : Bool :=
         List.cons x rest => String.beq (show_identifier x) s || spelled_in_ids s rest,
     }
 
+/// The constraints that become dictionary PARAMETERS: every
+/// single-variable constraint whose class carries a dictionary
+/// (`collect_dict_classes`), on a def that has a real body and does not
+/// return a type. Decided from the DECLARATION alone, never from the
+/// body: a def's arity is part of its ABI, so the callee and every call
+/// site (`def_dict_constraints`, `emitted_dict_constraints`) must reach
+/// the same answer without re-reading a body that elaboration may have
+/// rewritten -- and whether the body uses the dictionary is a resolution
+/// fact (`x + x` reaches `Add` only through `[Add A] HAdd A A A`) that no
+/// syntactic scan can see. The Rust reference applies the same rule
+/// (`elaborate_constrained_type`, core_check_module.rs).
+///
+/// The exemptions are the shapes a dictionary cannot be threaded into: a
+/// body-less `#[native]`/`#[extern]` declaration has a fixed native
+/// arity, and a TYPE-level def (`Lens [Functor F] ... : Type`) is
+/// expanded where it is used, as a type, not called.
 #[partial]
-def constraint_var_names (cs : List TypeConstraint) (acc : List Identifier) : List Identifier :=
-    match cs {
-        List.empty => acc,
-        List.cons c rest =>
-            match c {
-                TypeConstraint.mk _ vars => constraint_var_names rest (List.append vars acc),
-            },
-    }
-
-/// Register each of the bridge's method names (by bare last segment,
-/// like a constrained def's) against the bridge's constraint classes.
-#[partial]
-def bridge_method_classes (defs : List Def) (constraints : List TypeConstraint) (acc : HashMap String (List String)) : HashMap String (List String) :=
-    match defs {
-        List.empty => acc,
-        List.cons d rest =>
-            match d {
-                Def.mk {name := dname, ..} =>
-                    let key : String := identifier_tail (last_segment dname) in
-                    let existing : List String := match bare_map_lookup key acc {
-                        Option.some classes => classes,
-                        Option.none => List.empty,
-                    } in
-                    bridge_method_classes rest constraints (bare_map_insert key (constraint_class_names constraints existing) acc),
-            },
-    }
+pub def qualifying_dict_constraints (dict_classes : HashMap String (List String)) (constraints : List TypeConstraint) (typ : Term) (body : Term) : List TypeConstraint :=
+    if def_body_is_real body && Bool.not (returns_sort typ)
+    then dict_bearing_constraints dict_classes constraints
+    else List.empty
 
 #[partial]
-def constraint_class_names (constraints : List TypeConstraint) (acc : List String) : List String :=
-    match constraints {
-        List.empty => acc,
-        List.cons c rest =>
-            match c {
-                TypeConstraint.mk cls _vars => constraint_class_names rest (List.cons (show_name_path cls) acc),
-            },
-    }
-
-/// The see-through half of `def_references_class` (see
-/// `collect_constrained_def_classes`): does the SPELLED name name a
-/// constrained def whose own constraints mention `cls_str`?
-#[partial]
-def calls_constrained_def_for_class (constrained_def_classes : HashMap String (List String)) (cls_str : String) (spelled : String) : Bool :=
-    // Empty-map short-circuit before the normalization allocates: a
-    // single-module scope (every synthetic test scope, `build_scope_from_
-    // decls` on one module) has nothing to see through.
-    if HashMap.is_empty constrained_def_classes then false
-    else
-        match bare_map_lookup (bare_name_of_spelling spelled) constrained_def_classes {
-            Option.some classes => string_list_has classes cls_str,
-            Option.none => false,
-        }
-
-/// A spelled name's last component, splitting on `.` (`TuiT.bind`) and
-/// then on `::` (`prelude::Monad.bind`) -- the same normalization
-/// `identifier_tail` applies to an `Identifier`, without a round trip
-/// through one (this runs once per `Term.var` of every constrained def's
-/// body).
-#[partial]
-def bare_name_of_spelling (s : String) : String :=
-    let dot : I64 := last_dot_index s 0 (0 - 1) in
-    let after_dot : String := if dot < 0 then s else String.drop (dot + 1) s in
-    let colons : I64 := last_colon_colon_index after_dot 0 (0 - 1) in
-    if colons < 0 then after_dot else String.drop (colons + 1) after_dot
-
-/// Only constraints with exactly one bound var (`[Show A]`, not
-/// `[Convert A B]`-shaped multi-var constraints, which have no real
-/// corpus need today -- see this plan's own corpus-reality-check) AND
-/// whose class is genuinely referenced in the def's own body qualify --
-/// skips a phantom/unused constraint rather than adding a dead
-/// parameter every caller would still need to supply.
-#[partial]
-pub def qualifying_dict_constraints (constrained_def_classes : HashMap String (List String)) (constraints : List TypeConstraint) (body : Term) : List TypeConstraint :=
+def dict_bearing_constraints (dict_classes : HashMap String (List String)) (constraints : List TypeConstraint) : List TypeConstraint :=
     match constraints {
         List.empty => List.empty,
         List.cons c rest =>
             match c {
                 TypeConstraint.mk cls vars =>
-                    let single_var := match vars { List.cons _ v_rest => match v_rest { List.empty => true, List.cons _ _ => false, }, List.empty => false, } in
-                    if single_var && def_references_class constrained_def_classes (show_name_path cls) body
-                    then List.cons c (qualifying_dict_constraints constrained_def_classes rest body)
-                    else qualifying_dict_constraints constrained_def_classes rest body,
+                    let single_var : Bool := match vars { List.cons _ v_rest => List.is_empty v_rest, List.empty => false, } in
+                    let carries : Bool := match bare_map_lookup (identifier_tail (last_segment cls)) dict_classes {
+                        Option.some _ => true,
+                        Option.none => false,
+                    } in
+                    if single_var && carries
+                    then List.cons c (dict_bearing_constraints dict_classes rest)
+                    else dict_bearing_constraints dict_classes rest,
             },
     }
 
-/// Syntactic scan for any `Term.var` whose own name is a dotted
-/// reference into `cls_str` (e.g. `"Show.show"` for `cls_str = "Show"`)
-/// OR names a constrained def whose own constraints mention it (the
-/// see-through half, `calls_constrained_def_for_class`) anywhere inside
-/// `t` -- deliberately conservative/best-effort, not a fully exhaustive
-/// walk of every `Term`/`Literal` shape (e.g. a class reference buried
-/// inside a `quote_`'d term's own nested structure beyond one level, or
-/// an exotic native-arg shape, could in principle be missed) -- matching
-/// this codebase's "approximate, don't guess" fallback style elsewhere:
-/// missing a real reference here means a constrained def doesn't get a
-/// dict param it needed, which surfaces as a clean link-time "undefined
-/// symbol" failure later (the class method reference stays unresolved),
-/// not a silent miscompile.
+/// Whether a declared signature's final codomain is a sort (`... : Type`).
 #[partial]
-def def_references_class (constrained_def_classes : HashMap String (List String)) (cls_str : String) (t : Term) : Bool :=
-    match t {
-        Term.var _ dbg =>
-            match dbg {
-                DebugName.named id =>
-                    let spelled : String := show_identifier id in
-                    if String.starts_with (cls_str ++ ".") spelled
-                    then true
-                    else if String.beq spelled ("__dict_" ++ cls_str)
-                         // The def's own dictionary PARAMETER for this
-                         // class (`dict_param_name`). Phase 3 added it
-                         // BECAUSE this def qualified, and the checker's
-                         // D5 rewrites the class-method reference that
-                         // justified it into a projection on this binder
-                         // -- so on an ELABORATED body (`collect_def_
-                         // constraints`'s input) this is often the only
-                         // surviving evidence, and reading it keeps the
-                         // call-site table in step with Phase 3.
-                         then true
-                         else calls_constrained_def_for_class constrained_def_classes cls_str spelled,
-                DebugName.unnamed => false,
-            },
-        Term.lam _ typ body => def_references_class constrained_def_classes cls_str typ || def_references_class constrained_def_classes cls_str body,
-        // One arm, three flavours. A former `forall`'s kind is its `arg`
-        // here; it is always a sort, which references no class, so
-        // visiting it changes nothing the old arm could see.
-        Term.pi _b arg ret => def_references_class constrained_def_classes cls_str arg || def_references_class constrained_def_classes cls_str ret,
-        Term.app f a => def_references_class constrained_def_classes cls_str f || def_references_class constrained_def_classes cls_str a,
-        Term.lit v => literal_references_class constrained_def_classes cls_str v,
-        Term.con c =>
-            match c { Con.mk _ _ _ args => opt_terms_reference_class constrained_def_classes cls_str args },
-        Term.ntv n =>
-            match n { Native.mk _ _ args => opt_terms_reference_class constrained_def_classes cls_str args },
-        // A sort references no class.
-        Term.sort _level => false,
-        Term.hole => false,
-        Term.quote_ inner => def_references_class constrained_def_classes cls_str inner,
-        Term.ctx _loc inner => def_references_class constrained_def_classes cls_str inner,
-        Term.cubical c => match c { { prim := _, args := args } => terms_reference_class constrained_def_classes cls_str args },
-        // Mirrors the `var` arm above: a macro-template variable's own
-        // name is checked the same way a resolved var's would be.
-        Term.var_macro _ dbg =>
-            match dbg {
-                DebugName.named id =>
-                    let spelled : String := show_identifier id in
-                    if String.starts_with (cls_str ++ ".") spelled
-                    then true
-                    else if String.beq spelled ("__dict_" ++ cls_str)
-                    then true
-                    else calls_constrained_def_for_class constrained_def_classes cls_str spelled,
-                DebugName.unnamed => false,
-            },
-        // Must check all four term-bearing fields: a class method can
-        // appear in a dependent `motive` or in one of the inductive's own
-        // `params` just as readily as in `scrutinee`/`minors`, and a
-        // missed reference here is the same accepted risk as everywhere
-        // else in this best-effort scan (a clean link-time failure, not a
-        // silent miscompile).
-        Term.elim e =>
-            terms_reference_class constrained_def_classes cls_str e.params
-                || terms_reference_class constrained_def_classes cls_str e.indices
-                || def_references_class constrained_def_classes cls_str e.motive
-                || terms_reference_class constrained_def_classes cls_str e.minors
-                || def_references_class constrained_def_classes cls_str e.scrutinee,
-    }
-
-#[partial]
-def terms_reference_class (constrained_def_classes : HashMap String (List String)) (cls_str : String) (ts : List Term) : Bool :=
-    match ts {
-        List.empty => false,
-        List.cons x rest => def_references_class constrained_def_classes cls_str x || terms_reference_class constrained_def_classes cls_str rest,
-    }
-
-#[partial]
-def literal_references_class (constrained_def_classes : HashMap String (List String)) (cls_str : String) (l : Literal) : Bool :=
-    match l {
-        Literal.str _ => false,
-        Literal.char _ => false,
-        Literal.num _ _ => false,
-        Literal.flt _ _ => false,
-        Literal.if_ a b c => def_references_class constrained_def_classes cls_str a || def_references_class constrained_def_classes cls_str b || def_references_class constrained_def_classes cls_str c,
-        Literal.match_ scrut cases => def_references_class constrained_def_classes cls_str scrut || match_cases_reference_class constrained_def_classes cls_str cases,
-        Literal.struct_lit fields _ => struct_fields_reference_class constrained_def_classes cls_str fields,
-        Literal.struct_update base fields => def_references_class constrained_def_classes cls_str base || struct_fields_reference_class constrained_def_classes cls_str fields,
-    }
-
-#[partial]
-def match_cases_reference_class (constrained_def_classes : HashMap String (List String)) (cls_str : String) (cases : List MatchCase) : Bool :=
-    match cases {
-        List.empty => false,
-        List.cons c rest =>
-            match c { MatchCase.mk _ _ body _ _ => def_references_class constrained_def_classes cls_str body || match_cases_reference_class constrained_def_classes cls_str rest },
-    }
-
-#[partial]
-def struct_fields_reference_class (constrained_def_classes : HashMap String (List String)) (cls_str : String) (fields : List StructLitField) : Bool :=
-    match fields {
-        List.empty => false,
-        List.cons f rest =>
-            match f { StructLitField.mk _ value => def_references_class constrained_def_classes cls_str value || struct_fields_reference_class constrained_def_classes cls_str rest },
-    }
-
-#[partial]
-def opt_terms_reference_class (constrained_def_classes : HashMap String (List String)) (cls_str : String) (args : List (Option Term)) : Bool :=
-    match args {
-        List.empty => false,
-        List.cons a rest =>
-            match a {
-                Option.some t => def_references_class constrained_def_classes cls_str t || opt_terms_reference_class constrained_def_classes cls_str rest,
-                Option.none => opt_terms_reference_class constrained_def_classes cls_str rest,
-            },
+def returns_sort (typ : Term) : Bool :=
+    match term_peel typ {
+        Term.pi _b _arg ret => returns_sort ret,
+        Term.sort _ => true,
+        _ => false,
     }
 
 /// The dictionary parameter's own `typ` annotation -- genuinely non-load-
@@ -3616,10 +3409,10 @@ pub def dict_param_name (cls : NamePath) : String :=
 /// unchanged) when no constraint qualifies -- the overwhelmingly common
 /// case (an ordinary, unconstrained def).
 #[partial]
-def add_constraint_dict_params (constrained_def_classes : HashMap String (List String)) (d : Def) : Def :=
+def add_constraint_dict_params (dict_classes : HashMap String (List String)) (d : Def) : Def :=
     match d {
         Def.mk {name, typ, term := term_, constraints, attrs, vis, params, ..} =>
-            let qualifying := qualifying_dict_constraints constrained_def_classes constraints term_ in
+            let qualifying := qualifying_dict_constraints dict_classes constraints typ term_ in
             match qualifying {
                 List.empty => d,
                 List.cons _ _ =>
@@ -3640,20 +3433,19 @@ def add_constraint_dict_params (constrained_def_classes : HashMap String (List S
 /// same as any other constrained def).
 #[partial]
 def add_constraint_dict_params_decls (decl_list : List Decl) : List Decl :=
-    // The see-through map over the WHOLE list, exactly as
-    // `build_scope_from_groups` seeds it and `collect_def_constraints`
-    // builds its own: every half of the ABI decision must read the same
-    // program-wide facts.
-    add_constraint_dict_params_decls_go (collect_constrained_def_classes decl_list) decl_list
+    // The class set over the WHOLE list, exactly as
+    // `build_scope_from_groups` seeds it: every half of the ABI decision
+    // must read the same program-wide facts.
+    add_constraint_dict_params_decls_go (collect_dict_classes decl_list) decl_list
 
 #[partial]
-def add_constraint_dict_params_decls_go (constrained_def_classes : HashMap String (List String)) (decl_list : List Decl) : List Decl :=
+def add_constraint_dict_params_decls_go (dict_classes : HashMap String (List String)) (decl_list : List Decl) : List Decl :=
     match decl_list {
         List.empty => List.empty,
         List.cons d rest =>
             match d {
-                Decl.def_d def_ => List.cons (Decl.def_d (add_constraint_dict_params constrained_def_classes def_)) (add_constraint_dict_params_decls_go constrained_def_classes rest),
-                _ => List.cons d (add_constraint_dict_params_decls_go constrained_def_classes rest),
+                Decl.def_d def_ => List.cons (Decl.def_d (add_constraint_dict_params dict_classes def_)) (add_constraint_dict_params_decls_go dict_classes rest),
+                _ => List.cons d (add_constraint_dict_params_decls_go dict_classes rest),
             },
     }
 
@@ -3663,21 +3455,20 @@ def add_constraint_dict_params_decls_go (constrained_def_classes : HashMap Strin
 /// alongside is irrelevant to the result.
 #[partial]
 pub def add_constraint_dict_params_decl_groups (groups : List DeclGroup) : List DeclGroup :=
-    // One map across ALL groups, not one per module: a def in one module
-    // routinely calls a constrained def declared in another, and a
-    // module-local map would silently skip the see-through for exactly
-    // those calls -- the ABI mismatch this whole predicate exists to
-    // keep in step.
-    add_constraint_dict_params_decl_groups_go (collect_constrained_def_classes (decl_groups_flatten groups)) groups
+    // One class set across ALL groups, not one per module: a def is
+    // routinely constrained on a class declared in another module (the
+    // prelude's), and a module-local set would miss it -- the callee and
+    // its callers would then disagree on its arity.
+    add_constraint_dict_params_decl_groups_go (collect_dict_classes (decl_groups_flatten groups)) groups
 
 #[partial]
-def add_constraint_dict_params_decl_groups_go (constrained_def_classes : HashMap String (List String)) (groups : List DeclGroup) : List DeclGroup :=
+def add_constraint_dict_params_decl_groups_go (dict_classes : HashMap String (List String)) (groups : List DeclGroup) : List DeclGroup :=
     match groups {
         List.empty => List.empty,
         List.cons g rest =>
             match g {
                 DeclGroup.mk gpath gdecls =>
-                    List.cons (DeclGroup.mk gpath (add_constraint_dict_params_decls_go constrained_def_classes gdecls)) (add_constraint_dict_params_decl_groups_go constrained_def_classes rest),
+                    List.cons (DeclGroup.mk gpath (add_constraint_dict_params_decls_go dict_classes gdecls)) (add_constraint_dict_params_decl_groups_go dict_classes rest),
             },
     }
 
@@ -7353,30 +7144,21 @@ def first_param_default (params : List Param) : Option Term :=
 
 /// The instance constraints whose dictionary parameter the EMITTED
 /// method actually carries -- `qualifying_dict_constraints` applied to
-/// the very body `add_constraint_dict_params_decls` filters, so that the
-/// dict arguments this call site prepends (one per constraint, in
-/// constraint order -- `resolve_dict_args`) line up with the mangled
-/// def's own leading parameters, count and order both.
-///
-/// MEASURED: without this, `std/src/map.mo`'s `instance [BOrd K] Map
-/// BTreeMap` resolved `let m : BTreeMap I64 String := Map.empty` to
-/// `apply_closure1(Map_BTreeMap_empty(), __Dict_BOrd_I64)` -- the
-/// instance HAS a constraint, so the call site prepended a dict, but
-/// `Map.empty`'s body (`BTreeMap.empty`) references no `BOrd.` and so
-/// was emitted with no dict parameter at all. Applying a dict to a
-/// nullary constructor segfaults (the driver died with -1), which is how
-/// this was found. The same mismatch is systematic, not Map-specific:
-/// `instance [BEq K, BEq V] BEq BTreeMap K V`'s own `beq` body is
-/// `BTreeMap.beq a b` -- two constraints, no `BEq.` reference, no dict
-/// parameters emitted.
+/// the same declaration `add_constraint_dict_params_decls` rewrites, so
+/// that the dict arguments this call site prepends (one per constraint,
+/// in constraint order -- `resolve_dict_args`) line up with the mangled
+/// def's own leading parameters, count and order both. Since the rule
+/// reads only the declaration, that is every dictionary-carrying
+/// constraint of a method with a body: `instance [BOrd K] Map BTreeMap`'s
+/// `empty` takes its `BOrd` dictionary even though `BTreeMap.empty`
+/// never uses it, exactly as the call site supplies it.
 ///
 /// `promote_methods` copies a method's `term` VERBATIM out of the
 /// instance decl into the promoted `Def` (only the name and the
 /// concatenated constraint list change), and `promote_instance_defs` is
 /// non-destructive -- the original `Decl.instance_d` stays in the list
-/// scope data is built from -- so reading the body back out of the
-/// instance here reads the same term the emission pass scanned, whether
-/// or not an earlier pass rewrote infix operators inside it.
+/// scope data is built from -- so the body read back out of the instance
+/// here has a real body exactly when the emitted def does.
 ///
 /// A method the instance omits is promoted from the CLASS's default
 /// (`promote_methods`), so the same filter runs over that default's body.
@@ -7385,7 +7167,7 @@ def first_param_default (params : List Param) : Option Term :=
 /// unfiltered: the mangled name is a dangling global either way -- a
 /// loud link-time undefined symbol, not a silent miscompile.
 #[partial]
-def emitted_dict_constraints (constrained_def_classes : HashMap String (List String)) (classes : List Class) (ins : Instance) (method_name : Identifier) : List TypeConstraint :=
+def emitted_dict_constraints (dict_classes : HashMap String (List String)) (classes : List Class) (ins : Instance) (method_name : Identifier) : List TypeConstraint :=
     match ins {
         Instance.mk _ cname ins_constraints _ _ _ defs =>
             match find_instance_method defs method_name {
@@ -7400,7 +7182,7 @@ def emitted_dict_constraints (constrained_def_classes : HashMap String (List Str
                                         ClassDef.mk _ _ cdefault =>
                                             match cdefault {
                                                 Option.none => ins_constraints,
-                                                Option.some body => qualifying_dict_constraints constrained_def_classes ins_constraints body,
+                                                Option.some body => qualifying_dict_constraints dict_classes ins_constraints Term.hole body,
                                             },
                                     },
                             },
@@ -7408,7 +7190,7 @@ def emitted_dict_constraints (constrained_def_classes : HashMap String (List Str
                 Option.some d =>
                     match d {
                         Def.mk {term := body, constraints := own_constraints, ..} =>
-                            qualifying_dict_constraints constrained_def_classes (List.append ins_constraints own_constraints) body,
+                            qualifying_dict_constraints dict_classes (List.append ins_constraints own_constraints) Term.hole body,
                     },
             },
     }
@@ -8319,20 +8101,27 @@ def name_path_to_str_scope (np : NamePath) : String :=
 
 // --- Phase 3 (dictionary-passing plan) tests ---
 
+/// `[Show A]` on a value-level def, with `Show` a dictionary class.
+def phase3_show_constraint : TypeConstraint :=
+    TypeConstraint.mk (NamePath.mk (List.cons (Identifier.id "Show") List.empty)) (List.cons (Identifier.id "A") List.empty)
+
+def phase3_dict_classes : HashMap String (List String) :=
+    bare_map_insert "Show" List.empty bare_map_empty
+
+def phase3_string_typ : Term :=
+    Term.pi binder_anon Term.hole (Term.var 0 (DebugName.named (Identifier.id "String")))
+
 #[test]
 def test_add_constraint_dict_params_adds_pi_and_lam : Bool :=
     // def show_twice [Show A] (x : A) : String := Show.show x
     let show_call := Term.app (Term.var 1 (DebugName.named (Identifier.id "Show.show"))) (Term.var 0 (DebugName.named (Identifier.id "x"))) in
     let orig_term := Term.lam (binder_named (Identifier.id "x")) Term.hole show_call in
-    let orig_typ := Term.pi binder_anon Term.hole (Term.sort (SortLevel.concrete 1)) in
-    let constraint := TypeConstraint.mk (NamePath.mk (List.cons (Identifier.id "Show") List.empty)) (List.cons (Identifier.id "A") List.empty) in
-    let d := Def.mk (NamePath.mk (List.cons (Identifier.id "show_twice") List.empty)) orig_typ orig_term
-        (List.cons constraint List.empty) List.empty Visibility.package_private List.empty in
-    let d2 := add_constraint_dict_params bare_map_empty d in
-    match d2 {
+    let d := Def.mk (NamePath.mk (List.cons (Identifier.id "show_twice") List.empty)) phase3_string_typ orig_term
+        (List.cons phase3_show_constraint List.empty) List.empty Visibility.package_private List.empty in
+    match add_constraint_dict_params phase3_dict_classes d {
         Def.mk {typ := new_typ, term := new_term, ..} =>
             match new_typ {
-                Term.pi _ _ rest_typ => Similar.similar rest_typ orig_typ,
+                Term.pi _ _ rest_typ => Similar.similar rest_typ phase3_string_typ,
                 _ => false,
             } &&
             match new_term {
@@ -8341,29 +8130,44 @@ def test_add_constraint_dict_params_adds_pi_and_lam : Bool :=
             },
     }
 
+/// The parameter comes from the DECLARATION: a body that never names
+/// `Show` still takes the dictionary (its arity must not depend on what
+/// resolution later finds inside it).
 #[test]
-def test_add_constraint_dict_params_skips_unreferenced_constraint : Bool :=
-    // A [Show A] constraint whose body never actually calls Show.show
-    // -- no dict param should be added (a phantom/unused constraint).
-    let unrelated_body := Term.lit (Literal.num 42 NumSuffix.i64) in
-    let constraint := TypeConstraint.mk (NamePath.mk (List.cons (Identifier.id "Show") List.empty)) (List.cons (Identifier.id "A") List.empty) in
-    let d := Def.mk (NamePath.mk [Identifier.id "unrelated"]) (Term.sort (SortLevel.concrete 1)) unrelated_body
-        (List.cons constraint List.empty) List.empty Visibility.package_private List.empty in
-    let d2 := add_constraint_dict_params bare_map_empty d in
-    match d2 {
-        Def.mk {typ := new_typ, term := new_term, ..} =>
-            Similar.similar new_typ (Term.sort (SortLevel.concrete 1)) && Similar.similar new_term unrelated_body,
+def test_add_constraint_dict_params_ignores_the_body : Bool :=
+    let body := Term.lit (Literal.num 42 NumSuffix.i64) in
+    let d := Def.mk (NamePath.mk [Identifier.id "unrelated"]) phase3_string_typ body
+        (List.cons phase3_show_constraint List.empty) List.empty Visibility.package_private List.empty in
+    match add_constraint_dict_params phase3_dict_classes d {
+        Def.mk {typ := new_typ, ..} =>
+            match new_typ {
+                Term.pi _ _ rest_typ => Similar.similar rest_typ phase3_string_typ,
+                _ => false,
+            },
     }
 
+/// A class with no dictionary (absent from the map: a method-less
+/// marker class) adds nothing.
 #[test]
-def test_def_references_class_true_for_dotted_var : Bool :=
-    let t := Term.app (Term.var 0 (DebugName.named (Identifier.id "Show.show"))) (Term.var 1 (DebugName.named (Identifier.id "x"))) in
-    def_references_class bare_map_empty "Show" t
+def test_add_constraint_dict_params_skips_dictionaryless_class : Bool :=
+    let body := Term.lit (Literal.num 42 NumSuffix.i64) in
+    let d := Def.mk (NamePath.mk [Identifier.id "unrelated"]) phase3_string_typ body
+        (List.cons phase3_show_constraint List.empty) List.empty Visibility.package_private List.empty in
+    match add_constraint_dict_params bare_map_empty d {
+        Def.mk {typ := new_typ, ..} => Similar.similar new_typ phase3_string_typ,
+    }
 
+/// A def returning a type (`Lens [Functor F] ... : Type`) is expanded as
+/// a type, never called, so it takes no dictionary.
 #[test]
-def test_def_references_class_false_for_unrelated_var : Bool :=
-    let t := Term.var 0 (DebugName.named (Identifier.id "I64.add")) in
-    not (def_references_class bare_map_empty "Show" t)
+def test_add_constraint_dict_params_skips_type_level_def : Bool :=
+    let typ := Term.pi binder_anon Term.hole (Term.sort (SortLevel.concrete 1)) in
+    let body := Term.lam (binder_named (Identifier.id "x")) Term.hole (Term.var 0 (DebugName.named (Identifier.id "x"))) in
+    let d := Def.mk (NamePath.mk [Identifier.id "Alias"]) typ body
+        (List.cons phase3_show_constraint List.empty) List.empty Visibility.package_private List.empty in
+    match add_constraint_dict_params phase3_dict_classes d {
+        Def.mk {typ := new_typ, ..} => Similar.similar new_typ typ,
+    }
 
 // Regression test for `last_segment_of`'s dotted-single-segment gap: a
 // def declared with an already-qualified own name (`def IO.println (...)`)

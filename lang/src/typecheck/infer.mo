@@ -28,7 +28,7 @@ use lang::scope {
   instance_wildcard_names, instance_head_is_concrete, list_append, mangle_instance_dict_name,
   mangle_instance_method_name, mangled_to_identifier, param_names,
   rebuild_call,
-  resolve_dict_arg, resolve_dict_args, scope_data_add_def, scope_data_add_inductive, scope_data_classes, scope_data_constrained_def_classes,
+  resolve_dict_arg, resolve_dict_args, scope_data_add_def, scope_data_add_inductive, scope_data_classes, scope_data_dict_classes,
   scope_data_empty, scope_find_all_inductives_by_constructor, scope_find_class,
   scope_find_class_def_by_name, scope_find_class_def_for_ref, scope_find_def_constraints,
   scope_find_def_dict_constraints,
@@ -1248,7 +1248,7 @@ def resolve_class_method_carrier (class_name : NamePath) (method_name : Identifi
         Option.some ins =>
             let bindings : List (Pair Identifier Term) :=
                 carrier_bindings (instance_wildcard_names ins) ins.args carrier in
-            resolve_class_method_d4 ins.name ins.cls method_name (emitted_dict_constraints (scope_data_constrained_def_classes (scope_globals scope)) (scope_data_classes (scope_globals scope)) ins method_name) ins.args carrier bindings expected_type scope locals,
+            resolve_class_method_d4 ins.name ins.cls method_name (emitted_dict_constraints (scope_data_dict_classes (scope_globals scope)) (scope_data_classes (scope_globals scope)) ins method_name) ins.args carrier bindings expected_type scope locals,
     }
 
 /// The carrier a call INSIDE a dictionary-carrying scope must be resolved
@@ -6801,7 +6801,7 @@ def try_type_check_hinted_app (f : Term) (hint : String) (expected_type : Term) 
                                                     } in
                                                 let bindings : List (Pair Identifier Term) :=
                                                     carrier_bindings (instance_wildcard_names ins) ins_args hint_carrier in
-                                                resolve_class_method_d4 insname ins_cls method_name (emitted_dict_constraints (scope_data_constrained_def_classes (scope_globals scope)) (scope_data_classes (scope_globals scope)) ins method_name) ins_args hint_carrier bindings expected_type scope locals,
+                                                resolve_class_method_d4 insname ins_cls method_name (emitted_dict_constraints (scope_data_dict_classes (scope_globals scope)) (scope_data_classes (scope_globals scope)) ins method_name) ins_args hint_carrier bindings expected_type scope locals,
                                     },
                             },
                             },

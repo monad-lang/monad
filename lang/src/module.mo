@@ -1670,7 +1670,7 @@ def merge_scope_data (sd1 : ScopeData) (sd2 : ScopeData) : ScopeData :=
         // Same shape and same reason as `bare_aliases` just above: the
         // values are LISTS of class names, and a key named by both inputs
         // must keep both spellings, not one module's.
-        constrained_def_classes := bare_aliases_merge sd1.constrained_def_classes sd2.constrained_def_classes,
+        dict_classes := bare_aliases_merge sd1.dict_classes sd2.dict_classes,
     }
 
 /// Merge lists of ScopeData
@@ -7630,12 +7630,14 @@ def test_continuation_expectation_keeps_the_callers_same_named_variable : IO Boo
     return (List.is_empty diags)
 }
 
-/// A constraint whose evidence the method body never uses gets no dict
-/// parameter on the promoted def, so the checker's call site must not pass one
-/// (it applied a dict to the nullary `Map_BTreeMap_empty` and crashed the test
-/// driver of every file that builds a `BTreeMap`).
+/// An instance constraint is a dict parameter of the promoted def whether or
+/// not the method body uses its evidence (decided from the declaration), so
+/// the checker's call site passes it -- the count the def carries, no more
+/// and no fewer (a mismatch applied a dict to the nullary
+/// `Map_BTreeMap_empty` and crashed the test driver of every file that
+/// builds a `BTreeMap`).
 #[test]
-def test_class_method_call_passes_only_the_dicts_the_def_carries : IO Bool := do {
+def test_class_method_call_passes_the_dicts_the_def_carries : IO Bool := do {
     let src : String :=
         "type Box (A : Type) { box (a : A), none }\n" ++
         "class Keyed (A : Type) { def key (a : A) : I64 }\n" ++
@@ -7644,7 +7646,8 @@ def test_class_method_call_passes_only_the_dicts_the_def_carries : IO Bool := do
         "instance [Keyed A] Empty Box { def empty : Box A := Box.none }\n" ++
         "def g : Box I64 := Empty.empty";
     let out <- elaborate_synthetic_source src;
-    return (not (String.contains out "Empty.empty") && not (String.contains out "Empty_Box_empty __Dict_Keyed"))
+    return (not (String.contains out "Empty.empty") && String.contains out "Empty_Box_empty __Dict_Keyed_I64" &&
+        String.contains out "Empty_Box_empty : (_ -> (Box A))")
 }
 
 /// D4: a class-method call at a CONCRETE carrier with a real matching
@@ -7790,52 +7793,53 @@ def elaborate_parsed_decls (decl_list : List Decl) : List Decl :=
 /// exactly the constraints Phase 3 (`add_constraint_dict_params`) turned
 /// into leading dict PARAMETERS -- `qualifying_dict_constraints`, the
 /// same predicate both halves must share. Recording the RAW constraint
-/// list instead handed a leading argument to every constrained CALLEE
-/// whose own constraint never qualified (single-var but unreferenced in
-/// the body -- `init/src/transformers.mo`'s `StateT.bind_step`,
-/// `motes/tui/src/tuit.mo`'s `tui_apply`): the callee's parameters all
+/// list instead hands a leading argument to every constrained CALLEE
+/// whose constraint does not qualify (a multi-var constraint, a
+/// method-less class, a native): the callee's parameters all
 /// shifted left by one, its own continuation slot received the
 /// dictionary, and the compiled driver called a field of the dictionary
 /// as a function and died by signal -- MEASURED as `driver exited -1`
 /// on `init/src/transformers_tests.mo` and `motes/tui/src/tests/
 /// tuit_tests.mo`.
 ///
-/// `refs_step` is the qualifying half (its body calls `Wrap.wrap`, so
-/// Phase 3 gave it a `__dict_Wrap` parameter and the call site must
-/// prepend the `Wrap Id` dictionary); `norefs_step` is the bind_step
-/// shape (constrained, but its body never mentions the class -- no
-/// parameter, and the call site must pass it through UNTOUCHED).
-/// Asserted against the REAL checker alone (`elaborate_module_decls_
-/// best_effort`), then through the syntactic pass over that output --
-/// the real codegen composition -- so the checker reifies the call-site
-/// dictionary from the argument-solved substitution and the pass agrees.
+/// The rule reads the declaration, never the body: `refs_step` (its body
+/// calls `Wrap.wrap`) and `norefs_step` (the bind_step shape -- its body
+/// never mentions the class) both carry a `__dict_Wrap` parameter, and
+/// both call sites prepend the `Wrap Id` dictionary. `tag_step` is a
+/// body-less native, which takes no dictionary -- its call site must pass
+/// through UNTOUCHED. Asserted against the REAL checker alone (`elaborate_module_
+/// decls_best_effort`), so the checker reifies the call-site dictionary
+/// from the argument-solved substitution.
 #[test]
-def test_elaborate_skips_unreferenced_constrained_callee : IO Bool := do {
+def test_elaborate_passes_dicts_by_declaration : IO Bool := do {
     let src : String :=
         "class Wrap (M : Type -> Type) { def wrap (m : M A) : M A }\n" ++
         "type Id A { id_mk (a : A) }\n" ++
         "instance Wrap Id { def wrap (m : Id A) : Id A := m }\n" ++
         "def refs_step [Wrap M] {A : Type} (m : M A) : M A := Wrap.wrap m\n" ++
         "def norefs_step [Wrap M] {B : Type} (m : M B) : M B := m\n" ++
+        "#[native \"tag_step\"]\ndef tag_step [Wrap M] {B : Type} (m : M B) : M B\n" ++
         "def use_refs : Id I64 := refs_step (Id.id_mk 1)\n" ++
-        "def use_norefs : Id I64 := norefs_step (Id.id_mk 2)";
+        "def use_norefs : Id I64 := norefs_step (Id.id_mk 2)\n" ++
+        "def use_tag : Id I64 := tag_step (Id.id_mk 3)";
     let result : ParseResult (List Decl) := parse_all_decls src;
     return (match result {
         ParseResult.success _ decl_list => do {
             let elaborated := elaborate_parsed_decls decl_list;
             let refs_ok := decl_list_def_term_contains elaborated "use_refs" "__Dict_Wrap_Id";
-            let norefs_ok := Bool.not (decl_list_def_term_contains elaborated "use_norefs" "__Dict_Wrap");
+            let norefs_ok := decl_list_def_term_contains elaborated "use_norefs" "__Dict_Wrap_Id";
+            let tag_ok := Bool.not (decl_list_def_term_contains elaborated "use_tag" "__Dict_Wrap");
             // Non-vacuity: a failed elaboration would re-emit the
             // original body, making the negative assertion trivially true.
-            let calls_norefs := decl_list_def_term_contains elaborated "use_norefs" "norefs_step";
-            Bool.and (Bool.and refs_ok norefs_ok) calls_norefs
+            let calls_tag := decl_list_def_term_contains elaborated "use_tag" "tag_step";
+            refs_ok && norefs_ok && tag_ok && calls_tag
         },
         ParseResult.fail _ => false,
     })
 }
 
 /// A 0-arg constrained op, resolved from its annotated binding's own
-/// type: `op`'s body references the class (so Phase 3 gave it a dict
+/// type: `op` is constrained (so Phase 3 gave it a dict
 /// parameter) but it has NO value arguments for carrier inference to
 /// read a carrier from, and as a bare reference the var arm used to
 /// hand it back untouched -- codegen then emitted a closure AWAITING
@@ -7924,16 +7928,13 @@ def test_elaborate_forwards_dict_past_a_variable_headed_instance : IO Bool := do
 /// `init/src/foldable_tests.mo`'s `test_foldr_option_none` and
 /// `std/src/base.mo`'s `test_bounded_max` all report `no instance found`
 /// once `resolve_class_calls_decls` stops covering for the checker.
-/// The see-through gap (`collect_constrained_def_classes`): `through`
-/// reaches `Bind` ONLY through a call to another constrained def, so a
-/// body-local predicate reads `[Bind M]` as phantom, Phase 3 gives it no
-/// dict parameter, and its `step m` call has nothing to forward -- the
-/// compiled callee then receives its first value argument in the dict
-/// slot. MEASURED shape: `motes/tui`'s `TuiT.enter_raw_mode` ->
-/// `tui_discard_bool [Monad M]`, and `StateT`'s instance `bind` ->
-/// `bind_go`, both restructured away at the time because this predicate
-/// could not see the call. The predicate must follow one level --
-/// `step`'s own declared constraints mention `Bind`.
+/// A def that reaches its class ONLY through a call to another
+/// constrained def (`through` -> `step [Bind M]`) still takes the
+/// dictionary, and forwards it: the parameter comes from the declaration,
+/// so there is no body predicate to miss the call. MEASURED shape before
+/// that rule: `motes/tui`'s `TuiT.enter_raw_mode` -> `tui_discard_bool
+/// [Monad M]`, where the compiled callee received its first value
+/// argument in the dict slot.
 #[test]
 def test_elaborate_see_through_constrained_callee : IO Bool := do {
     let src : String :=
@@ -9027,10 +9028,10 @@ def test_elaborate_cross_class_instance_constraint_resolves : IO Bool := do {
 }
 
 /// A def constrained only on the HOMOGENEOUS class reaches the bridge
-/// through it: `HAdd.add` on the abstract `A` counts as a use of `Add`
-/// (`collect_constrained_def_classes`' bridge arm), so the def receives
-/// its `__dict_Add` parameter and the bridge resolves with it -- in tail
-/// position and inside an annotated `let` alike.
+/// through it: the def's `[Add A]` is a dictionary parameter (it is
+/// declared), and the bridge `[Add A] HAdd A A A` resolves `HAdd.add` on
+/// the abstract `A` with it -- in tail position and inside an annotated
+/// `let` alike.
 #[test]
 def test_elaborate_generic_call_through_symmetric_bridge : IO Bool := do {
     let src : String :=
@@ -9320,3 +9321,4 @@ def test_view_errors_survive_a_warn_mote : IO Bool := do {
         "#[linear] type Cell { }\ndef leak (c : Cell) : Unit := let f := fn (u : Unit) => c in unit";
     return (diags_contain "is captured by a closure" (CheckDiagnostics.errors d))
 }
+

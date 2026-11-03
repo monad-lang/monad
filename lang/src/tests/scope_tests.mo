@@ -6,7 +6,7 @@ use lang::types {
   package_private, param_many, priv_, pub_, sentinel, show_identifier, sort_n, unnamed,
 }
 use lang::scope {
-  LocalTypeBinding, add_constraint_dict_params, bare_map_empty, bind_term_vars, build_scope_from_decls,
+  LocalTypeBinding, add_constraint_dict_params, bare_map_empty, bare_map_insert, bind_term_vars, build_scope_from_decls,
   build_scope_from_modules, find_constraint_bound_carrier_any, infer_carrier_type,
   list_append, lookup_binding, mk, npath_eq, placeholder_carrier, refine_scope_instances,
   resolve_def_in_scope_by_name,
@@ -770,15 +770,14 @@ def test_dict_param_type_is_hole : Bool :=
     let add_cls : NamePath := NamePath.mk (List.cons (Identifier.id "Add") List.empty) in
     let constraint : TypeConstraint := TypeConstraint.mk add_cls (List.cons (Identifier.id "A") List.empty) in
     let constraints : List TypeConstraint := List.cons constraint List.empty in
-    // The body's `Add.add` reference is what `qualifying_dict_constraints`
-    // needs (`def_references_class` scans for a `var` whose name starts
-    // with `"Add."`) to qualify the constraint for a leading dict param.
+    // `Add` carries a dictionary (it is in the class set), so the
+    // constraint becomes a leading dict param.
     let add_add_ref : Term := Term.var (-1) (DebugName.named (Identifier.id "Add.add")) in
     let body : Term := Term.app add_add_ref (Term.var (-1) (DebugName.named (Identifier.id "a"))) in
     let def_name : NamePath := NamePath.mk (List.cons (Identifier.id "HAdd_A_A_A_add") List.empty) in
     let empty_attrs : List Attribute := List.empty in
     let df : Def := Def.mk def_name Term.hole body constraints empty_attrs Visibility.package_private List.empty in
-    match add_constraint_dict_params bare_map_empty df {
+    match add_constraint_dict_params (bare_map_insert "Add" List.empty bare_map_empty) df {
         Def.mk {typ := _new_typ, term := new_term, ..} =>
             match new_term {
                 Term.lam _dbg param_typ _body =>

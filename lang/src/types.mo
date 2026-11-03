@@ -3547,19 +3547,16 @@ pub struct ScopeData {
     def_constraints : HashMap String (List TypeConstraint) := HashMap.map HashMap.empty_buckets,
     // The subset of `def_constraints` that became dictionary PARAMETERS
     // (`qualifying_dict_constraints`, computed once at registration from
-    // the same body and constraint list Phase 3 read). The checker's
+    // the same declaration Phase 3 read). The checker's
     // ordinary-call reification reads this instead of re-walking the
     // callee's body at every call site.
     def_dict_constraints : HashMap String (List TypeConstraint) := HashMap.map HashMap.empty_buckets,
-    // Every constrained def's BARE last-segment name -> the classes its
-    // own declared constraints mention (`collect_constrained_def_classes`,
-    // lang/scope.mo). `def_references_class` consults it so a def that
-    // reaches a class only through a call to another constrained def
-    // (`TuiT.enter_raw_mode` -> `tui_discard_bool [Monad M]`) still
-    // qualifies for a dictionary parameter of its own to forward.
-    // Seeded once per whole-graph scope build, from the same decl list
-    // Phase 3 scans, so both halves make the same decision.
-    constrained_def_classes : HashMap String (List String) := HashMap.map HashMap.empty_buckets,
+    // Every class that carries a dictionary (has at least one method), by
+    // bare name (`collect_dict_classes`, lang/scope.mo) -- the class half
+    // of `qualifying_dict_constraints`. Seeded once per whole-graph scope
+    // build, from the same decl list Phase 3 reads, so the callee's arity
+    // and every call site agree.
+    dict_classes : HashMap String (List String) := HashMap.map HashMap.empty_buckets,
     // Every registered name's BARE spelling (`prelude::Monad` ->
     // `Monad`) -> the qualified keys that own it. The read side of
     // item 5.1's bare-vs-qualified tolerance: `scope_data_find_

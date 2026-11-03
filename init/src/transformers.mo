@@ -96,26 +96,25 @@ pub def StateT.modify [Monad M] {S : Type} (f : S -> S) : StateT S M Unit :=
 /// Internal: unwrap a `Pair S A` and run the continuation in the new
 /// state. Extracted so the instance body stays single-line (the parser
 /// doesn't accept multi-line lambdas inside instance bodies); it is the
-/// `ResultT`/`OptionT` `bind_step` pattern exactly, and it carries no
-/// `[Monad M]` dictionary parameter of its own -- its body never
-/// references the class, so the call the instance body makes to it needs
-/// no dictionary argument (see `collect_def_constraints`, lang/scope.mo).
+/// `ResultT`/`OptionT` `bind_step` pattern exactly. Its declared `[Monad
+/// M]` is a dictionary parameter like any other constraint
+/// (`qualifying_dict_constraints`, lang/src/scope.mo), which the instance
+/// body's call forwards from its own binding.
 def StateT.bind_step [Monad M] {S : Type} {A : Type} {B : Type} (f : A -> StateT S M B) (p : Pair S A) : M (Pair S B) :=
     match p {
         Pair.pair s2 a => StateT.run (f a) s2
     }
 
-/// The state-threading bind step. Its body references `Monad.bind`, so
-/// `qualifying_dict_constraints` (lang/src/scope.mo) gives it a leading
-/// dictionary parameter; the instance body reaches `Monad` only through
-/// this call, and the checker's see-through table forwards the
-/// instance's own `[Monad M]` binding to it.
+/// The state-threading bind step. Its `[Monad M]` is a leading dictionary
+/// parameter (`qualifying_dict_constraints`, lang/src/scope.mo); the
+/// instance body reaches `Monad` only through this call, which forwards
+/// the instance's own `[Monad M]` binding to it.
 def StateT.bind_go [Monad M] {S : Type} {A : Type} {B : Type} (ma : StateT S M A) (f : A -> StateT S M B) (s : S) : M (Pair S B) :=
     Monad.bind (StateT.run ma s) (StateT.bind_step f)
 
 /// `bind` goes through `StateT.bind_go`, the same shape `ResultT`/`OptionT`
-/// use: the helper carries the dict parameter and the see-through table
-/// forwards it here, so the instance body itself names no class.
+/// use: the helper carries the dict parameter and the instance body's
+/// call forwards its own binding, so the body itself names no class.
 pub instance [Monad M] Monad (StateT S M) {
     def pure (a : A) : StateT S M A :=
         StateT.mk (fn s => Monad.pure (Pair.pair s a))
@@ -166,8 +165,7 @@ pub def ReaderT.local {R : Type} {R2 : Type} {M : Type -> Type} {A : Type}
 
 /// Internal: run the continuation in the same environment. Extracted so
 /// the instance body stays single-line (the parser doesn't accept
-/// multi-line lambdas inside instance bodies), and it carries no `[Monad
-/// M]` dictionary of its own -- its body never references the class.
+/// multi-line lambdas inside instance bodies).
 ///
 /// The environment is used twice (once for `ma`, once for its
 /// continuation). `Shared R` cannot be used here: `Shared.get` yields a

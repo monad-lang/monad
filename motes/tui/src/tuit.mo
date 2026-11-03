@@ -113,9 +113,9 @@ pub def TuiT.pure [Monad M] {I : Type} {A : Type} (a : A) : TuiT M I I A :=
 def tui_apply [Monad M] {J : Type} {K : Type} {A : Type} {B : Type} (f : A -> TuiT M J K B) (a : A) (t : Term M) : M B :=
     TuiT.run (f a) t
 
-/// `bind` reaches `Monad` through `tui_apply`; the see-through table
-/// (`qualifying_dict_constraints`, lang/src/scope.mo) marks this def and
-/// the call site forwards its own `[Monad M]` binding.
+/// `bind` reaches `Monad` through `tui_apply`, whose declared `[Monad M]`
+/// is a dictionary parameter (`qualifying_dict_constraints`,
+/// lang/src/scope.mo); the call forwards this def's own binding.
 pub def TuiT.bind [Monad M] {I : Type} {J : Type} {K : Type} {A : Type} {B : Type} (ma : TuiT M I J A) (f : A -> TuiT M J K B) : TuiT M I K B :=
     TuiT.tui_t (fn (t : Term M) => Monad.bind (TuiT.run ma t) (fn (a : A) => tui_apply f a t))
 

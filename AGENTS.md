@@ -89,9 +89,12 @@ A mote's `mote.toml` may carry `[affine] mode = "warn"` while it migrates;
 the default (no table) is `error`, and there is no off switch. `String` is
 `Copy` (an immutable pointer); `ByteBuf` is not (it is mutable).
 
-A def's declared constraints (`[Foo A]`, and `[Copy A]` too — that one
-carries no dictionary) are likewise a **call-site obligation** in the
-self-hosted compiler: once the call's types are solved, every constraint
+A def's declared single-variable constraints are its **dictionary
+parameters** in both compilers, decided from the declaration alone: every
+`[Foo A]` whose class has a method (`[Copy A]` included) becomes one,
+whether or not the body visibly uses it; a body-less `#[native]` and a def
+returning a type take none. They are likewise a **call-site obligation** in
+the self-hosted compiler: once the call's types are solved, every constraint
 needs a matching instance, or the call is a `no instance of ...` error. A
 still-generic caller forwarding its own parameter is not decidable and stays
 accepted, and so is a bare reference (`let f : S -> S := op`). A class
