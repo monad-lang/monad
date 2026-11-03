@@ -4171,6 +4171,53 @@ mod tests {
     args.first().cloned().unwrap()
   }
 
+  /// `view_get` is the REFERENCE SEMANTICS for view-types P2: the
+  /// payload and the SAME handle travel as one `Pair`, because the `.mo`
+  /// wrapper is linear and may not use the handle twice. The self-hosted
+  /// compiler's fused do-bind (`try_compile_view_bind_db`,
+  /// `lang/src/codegen/emit.mo`) relies on exactly this pairing: it
+  /// reads the payload with `monad_view_payload` and passes the input
+  /// handle through instead of returning both, so `view_get_impl` and
+  /// `view_set_impl` must keep returning the word they were given. This
+  /// pins the evaluator half; `view_ir_tests.mo` pins the compiled half.
+  #[test]
+  fn test_view_get_keeps_payload_and_same_handle() {
+    let natives = test_natives();
+    let raw = natives.well_known.raw_io_io.unwrap();
+    let pair_ctor = require_ctor(natives.well_known.pair_pair, "Pair.pair").unwrap();
+
+    let created = view_new(&[int(41)], &natives).unwrap();
+    let Value::Con { tag, ref args } = created else {
+      panic!("view_new did not return a RawIO wrapper: {created:?}")
+    };
+    assert_eq!(tag, raw.tag);
+    let handle = extract_handle_id(&args.first().cloned().unwrap()).unwrap();
+
+    let read = view_get(&[handle_value(handle)], &natives).unwrap();
+    let Value::Con { tag, ref args } = read else {
+      panic!("view_get did not return a RawIO wrapper: {read:?}")
+    };
+    assert_eq!(tag, raw.tag);
+    let pair = args.first().cloned().unwrap();
+    let Value::Con { tag, ref args } = pair else {
+      panic!("view_get did not return a Pair: {pair:?}")
+    };
+    assert_eq!(tag, pair_ctor.tag);
+    assert!(matches!(args.first(), Some(Value::Lit(IrLit::Num(41, _)))));
+    assert_eq!(extract_handle_id(&args[1]).unwrap(), handle);
+
+    // The same-word invariant the fused `get`/`set` lowerings rely on.
+    let written = view_set(&[handle_value(handle), int(7)], &natives).unwrap();
+    let Value::Con { tag, ref args } = written else {
+      panic!("view_set did not return a RawIO wrapper: {written:?}")
+    };
+    assert_eq!(tag, raw.tag);
+    assert_eq!(
+      extract_handle_id(&args.first().cloned().unwrap()).unwrap(),
+      handle
+    );
+  }
+
   #[test]
   fn test_poll_after_cancel_answers_err_cancelled() {
     let natives = test_natives();
