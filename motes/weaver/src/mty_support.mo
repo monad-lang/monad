@@ -47,21 +47,21 @@ pub def temp_root (label : String) : IO String := do {
     let t <- IO.current_time_nano;
     let root := String.concat "/tmp/mty_" (String.concat label
         (String.concat "_" (String.concat (I64.to_string process_id)
-        (String.concat "_" (I64.to_string t)))));
+            (String.concat "_" (I64.to_string t)))));
     let sessions := String.concat root "/sessions";
     let procs := String.concat root "/procs";
     let logs := String.concat root "/logs";
     let _ <- exec_cmd "mkdir"
         (List.cons "-p" (List.cons root (List.cons sessions (List.cons procs
-        (List.cons logs List.empty)))));
+            (List.cons logs List.empty)))));
     return root
 }
 
 def base_env (root : String) : List (Pair String (Option String)) :=
     List.cons (Pair.pair "HOME" (Option.some root))
         (List.cons (Pair.pair "WEAVER_SESSION_ROOT" (Option.some (String.concat root "/sessions")))
-        (List.cons (Pair.pair "WEAVER_PROC_ROOT" (Option.some (String.concat root "/procs")))
-        (List.cons (Pair.pair "NO_COLOR" Option.none) List.empty)))
+            (List.cons (Pair.pair "WEAVER_PROC_ROOT" (Option.some (String.concat root "/procs")))
+                (List.cons (Pair.pair "NO_COLOR" Option.none) List.empty)))
 
 def turns_env (fixture : Option String) : List (Pair String (Option String)) :=
     match fixture {
@@ -88,9 +88,9 @@ def absolute_bin (bin : String) : IO String := do {
 /// Spawn weaver with extra CLI switches (e.g. `--resume <id>`, `--no-color`)
 /// and the child's cwd set to the isolated root.
 pub def spawn_args (bin : String) (model : String) (extra_args : List String)
-                   (rows : I64) (cols : I64) (root : String)
-                   (fixture : Option String)
-                   (extra : List (Pair String (Option String))) : IO (Result String Mty) := do {
+    (rows : I64) (cols : I64) (root : String)
+    (fixture : Option String)
+    (extra : List (Pair String (Option String))) : IO (Result String Mty) := do {
     let abs <- absolute_bin bin;
     let cfg : SpawnConfig := {
         bin := abs,
@@ -104,7 +104,7 @@ pub def spawn_args (bin : String) (model : String) (extra_args : List String)
 }
 
 pub def spawn (bin : String) (model : String) (rows : I64) (cols : I64) (root : String)
-              (fixture : Option String) (extra : List (Pair String (Option String))) : IO (Result String Mty) :=
+    (fixture : Option String) (extra : List (Pair String (Option String))) : IO (Result String Mty) :=
     spawn_args bin model List.empty rows cols root fixture extra
 
 /// `WEAVER_MTY` unset -> print SKIP and return none (green); set -> return

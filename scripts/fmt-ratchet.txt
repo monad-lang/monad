@@ -9,7 +9,9 @@ motes/fmt/src
 motes/lsp/src/formatting.mo
 motes/lsp/src/tests/formatting_tests.mo
 motes/lsp/src/tests/trace_tests.mo
+motes/shuttle
 motes/toolkit/src/decl_text.mo
 motes/toolkit/src/navigation.mo
 motes/toolkit/src/tests/decl_text_tests.mo
 motes/toolkit/src/tests/navigation_tests.mo
+motes/weaver

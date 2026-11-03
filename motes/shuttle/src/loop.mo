@@ -347,8 +347,8 @@ pub def Loop.retry_send
                     let _ <- sleep_ms delay;
                     let _ <- emit (String.concat "retrying ("
                         (String.concat (I64.to_string (attempt + 1))
-                        (String.concat "/" (String.concat (I64.to_string retries)
-                        (String.concat "): " (String.concat e "\n"))))));
+                            (String.concat "/" (String.concat (I64.to_string retries)
+                                (String.concat "): " (String.concat e "\n"))))));
                     let res2 <- ResultT.run (Loop.retry_send send sleep_ms retries (attempt + 1) (delay + 2000) emit);
                     return res2
                 }

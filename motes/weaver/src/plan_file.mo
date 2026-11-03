@@ -111,13 +111,13 @@ pub def PlanFile.parse (text : String) : PlanParse :=
                     let meta : PlanMeta := { PlanMeta.empty with title := title_of_text split.body } in
                     let doc : PlanDoc := { meta := meta, body := split.body } in
                     let r : PlanParse := { doc := doc,
-                      warning := Option.some (String.concat "frontmatter: " (Yaml.ParseError.to_string e)) } in r,
+                        warning := Option.some (String.concat "frontmatter: " (Yaml.ParseError.to_string e)) } in r,
                 Result.ok y => match Yaml.get_mapping y {
                     Result.err e =>
                         let meta : PlanMeta := { PlanMeta.empty with title := title_of_text split.body } in
                         let doc : PlanDoc := { meta := meta, body := split.body } in
                         let r : PlanParse := { doc := doc,
-                          warning := Option.some (String.concat "frontmatter: " e) } in r,
+                            warning := Option.some (String.concat "frontmatter: " e) } in r,
                     Result.ok m =>
                         let meta : PlanMeta := {
                             title := yaml_str "title" m,

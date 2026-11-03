@@ -15,11 +15,11 @@
 /// written down.
 use json::json {
     Json, Json.parse, Json.to_string, Json.ParseError.to_string,
-    Json.make_object, Json.make_array, Json.make_str, Json.make_num_int,
+    Json.make_object_pairs, Json.make_array, Json.make_str, Json.make_num_int,
     Json.get_object, Json.get_array, Json.get_str, Json.get_num_i64,
     Json.object_get,
 }
-use std::map {Map, BTreeMap}
+use std::map {BTreeMap}
 use std::io {IO.read_file, IO.write_file}
 use std::stream {StreamError, StreamError.is_not_found}
 use std::path {Path.of, Path.to_string}
@@ -37,14 +37,13 @@ pub struct Session {
 }
 
 pub def Session.serialize_json (s : Session) : Json :=
-    Json.make_object
-        (Map.insert "config" (ProviderConfig.serialize_json s.config)
-        (Map.insert "system_prompt" (Json.make_str s.system_prompt)
-        (Map.insert "tools" (Json.make_array (List.map ToolSpec.serialize_json s.tools))
-        (Map.insert "history" (Json.make_array (List.map Message.serialize_json s.history))
-        (Map.insert "turns" (Json.make_num_int s.turns)
-        (Map.insert "spent" (Usage.serialize_json s.spent)
-        BTreeMap.empty))))))
+    Json.make_object_pairs
+        [Pair.pair "config" (ProviderConfig.serialize_json s.config),
+            Pair.pair "system_prompt" (Json.make_str s.system_prompt),
+            Pair.pair "tools" (Json.make_array (List.map ToolSpec.serialize_json s.tools)),
+            Pair.pair "history" (Json.make_array (List.map Message.serialize_json s.history)),
+            Pair.pair "turns" (Json.make_num_int s.turns),
+            Pair.pair "spent" (Usage.serialize_json s.spent)]
 
 #[partial]
 def decode_tools (js : List Json) : Result String (List ToolSpec) :=

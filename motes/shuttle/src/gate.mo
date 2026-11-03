@@ -73,7 +73,7 @@ pub struct Gate {
 /// precheck refuses.
 pub def Gate.auto : Gate :=
     { ask := fn (_ : Pick) => IO.pure Approval.once,
-      precheck := fn (_ : Pick) => IO.pure Option.none }
+        precheck := fn (_ : Pick) => IO.pure Option.none }
 
 /// A read-only gate for subagents: read picks run, everything else is
 /// denied (the precheck, so plan semantics hold even for a cached pick).
@@ -91,4 +91,4 @@ pub def read_precheck (cap : Capability) : Option Approval :=
 
 pub def Gate.read_only : Gate :=
     { ask := fn (p : Pick) => IO.pure (read_decision p.cap),
-      precheck := fn (p : Pick) => IO.pure (read_precheck p.cap) }
+        precheck := fn (p : Pick) => IO.pure (read_precheck p.cap) }

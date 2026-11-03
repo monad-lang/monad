@@ -102,7 +102,7 @@ def pending_run (bin : String) (root : String) : IO Bool := do {
     let turns <- fixture_path "turns_slow.json";
     let env : List (Pair String (Option String)) :=
         [Pair.pair "SHUTTLE_MOCK_DELAY_MS" (Option.some "60000"),
-         Pair.pair "WEAVER_LOG_DIR" (Option.some (String.concat root "/debug"))];
+            Pair.pair "WEAVER_LOG_DIR" (Option.some (String.concat root "/debug"))];
     let r <- spawn bin "mock" 50 200 root (Option.some turns) env;
     match r {
         Result.err e => do { IO.println (String.concat "FAIL mty pending spawn: " e); return false },

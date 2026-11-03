@@ -151,30 +151,36 @@ def respond (st : WeaverState) (output : String) : IO (Result WeaverError Effect
 /// The command table -- the whole `/`-surface, weaver.md Phase 6's
 /// final shape.
 pub def command_table : BTreeMap String SlashCommand :=
-    Map.insert "/budget" (SlashCommand.mk cmd_budget)
-        (Map.insert "/clear" (SlashCommand.mk cmd_clear)
-        (Map.insert "/compact" (SlashCommand.mk cmd_compact)
-        (Map.insert "/h" (SlashCommand.mk cmd_help)
-        (Map.insert "/help" (SlashCommand.mk cmd_help)
-        (Map.insert "/mcp" (SlashCommand.mk cmd_mcp)
-        (Map.insert "/mode" (SlashCommand.mk cmd_mode)
-        (Map.insert "/model" (SlashCommand.mk cmd_model)
-        (Map.insert "/name" (SlashCommand.mk cmd_name)
-        (Map.insert "/describe" (SlashCommand.mk cmd_describe)
-        (Map.insert "/permissions" (SlashCommand.mk cmd_permissions)
-        (Map.insert "/settings" (SlashCommand.mk cmd_settings)
-        (Map.insert "/plan" (SlashCommand.mk cmd_plan)
-        (Map.insert "/provider" (SlashCommand.mk cmd_provider)
-        (Map.insert "/q" (SlashCommand.mk cmd_quit)
-        (Map.insert "/quit" (SlashCommand.mk cmd_quit)
-        (Map.insert "/resume" (SlashCommand.mk cmd_resume)
-        (Map.insert "/save" (SlashCommand.mk cmd_save)
-        (Map.insert "/log" (SlashCommand.mk cmd_log)
-        (Map.insert "/processes" (SlashCommand.mk cmd_processes)
-        (Map.insert "/procs" (SlashCommand.mk cmd_processes)
-        (Map.insert "/thinking" (SlashCommand.mk cmd_thinking)
-        (Map.insert "/tools" (SlashCommand.mk cmd_tools)
-            BTreeMap.empty))))))))))))))))))))))
+    command_map
+        [Pair.pair "/budget" (SlashCommand.mk cmd_budget),
+            Pair.pair "/clear" (SlashCommand.mk cmd_clear),
+            Pair.pair "/compact" (SlashCommand.mk cmd_compact),
+            Pair.pair "/h" (SlashCommand.mk cmd_help),
+            Pair.pair "/help" (SlashCommand.mk cmd_help),
+            Pair.pair "/mcp" (SlashCommand.mk cmd_mcp),
+            Pair.pair "/mode" (SlashCommand.mk cmd_mode),
+            Pair.pair "/model" (SlashCommand.mk cmd_model),
+            Pair.pair "/name" (SlashCommand.mk cmd_name),
+            Pair.pair "/describe" (SlashCommand.mk cmd_describe),
+            Pair.pair "/permissions" (SlashCommand.mk cmd_permissions),
+            Pair.pair "/settings" (SlashCommand.mk cmd_settings),
+            Pair.pair "/plan" (SlashCommand.mk cmd_plan),
+            Pair.pair "/provider" (SlashCommand.mk cmd_provider),
+            Pair.pair "/q" (SlashCommand.mk cmd_quit),
+            Pair.pair "/quit" (SlashCommand.mk cmd_quit),
+            Pair.pair "/resume" (SlashCommand.mk cmd_resume),
+            Pair.pair "/save" (SlashCommand.mk cmd_save),
+            Pair.pair "/log" (SlashCommand.mk cmd_log),
+            Pair.pair "/processes" (SlashCommand.mk cmd_processes),
+            Pair.pair "/procs" (SlashCommand.mk cmd_processes),
+            Pair.pair "/thinking" (SlashCommand.mk cmd_thinking),
+            Pair.pair "/tools" (SlashCommand.mk cmd_tools)]
+
+def command_map (cs : List (Pair String SlashCommand)) : BTreeMap String SlashCommand :=
+    match cs {
+        List.empty => BTreeMap.empty,
+        List.cons p rest => match p { Pair.pair name c => Map.insert name c (command_map rest) },
+    }
 
 /// Route one `/`-line: split at the first space, look the command up,
 /// run it. Unknown names get `/help`'s hint, not silence.
@@ -526,7 +532,6 @@ def tool_line (reg : ToolRegistry) (spec : ToolSpec) : String :=
         Option.none => spec.name,
     }
 
-
 // ── /processes (dumb mode's snapshot; the TUI opens the monitor) ───────
 
 #[partial]
@@ -568,7 +573,6 @@ def cmd_processes (arg : String) (st : WeaverState) : IO (Result WeaverError Eff
     }
     else respond st "usage: /processes [kill <id>]"
 }
-
 
 // ── /log (the debug log path + tail + crash note) ──────────────────────
 
@@ -1095,8 +1099,8 @@ def record_compact (store : Option StoreState) (out : Compact.Outcome) : IO (Opt
 def compact_message (out : Compact.Outcome) (note : Option String) : String :=
     let base : String := String.concat "compacted: "
         (String.concat (I64.to_string out.before) (String.concat " → "
-        (String.concat (I64.to_string out.after) (String.concat " messages (~"
-        (String.concat (I64.to_string out.tokens) " tokens)"))))) in
+            (String.concat (I64.to_string out.after) (String.concat " messages (~"
+                (String.concat (I64.to_string out.tokens) " tokens)"))))) in
     match note {
         Option.none => base,
         Option.some e => String.concat base (String.concat " (history not saved: " (String.concat e ")")),

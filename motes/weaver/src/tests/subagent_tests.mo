@@ -56,7 +56,6 @@ def test_read_only_ask_denies_non_reads : IO Bool := do {
     return (match ap { Approval.deny _ => true, _ => false })
 }
 
-
 // ── a child loop against the scripted wire ─────────────────────────────
 
 def mock_cfg : ProviderConfig :=

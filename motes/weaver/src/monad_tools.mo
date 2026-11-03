@@ -99,8 +99,8 @@ def check_schema : Json :=
 
 pub def MonadCheck.spec : ToolSpec :=
     { name := "monad_check",
-      description := "Type-check Monad source with the compiler's own checker: pass `path` for a file or `source` for an in-memory buffer. A buffer is staged as a temporary .mo in the nearest enclosing mote (so its imports resolve) and removed after the check. Returns the diagnostics.",
-      schema := check_schema }
+        description := "Type-check Monad source with the compiler's own checker: pass `path` for a file or `source` for an in-memory buffer. A buffer is staged as a temporary .mo in the nearest enclosing mote (so its imports resolve) and removed after the check. Returns the diagnostics.",
+        schema := check_schema }
 
 def has_errors (r : FileCheckResult) : Bool :=
     let errs : List String := r.diagnostics in
@@ -203,8 +203,8 @@ def eval_schema : Json :=
 
 pub def MonadEval.spec : ToolSpec :=
     { name := "monad_eval",
-      description := "Evaluate Monad code with the self-hosted interpreter (pure programs only; I64/String natives, no IO). Definitions accumulate across calls: a `def` snippet is added to the session scratch module, an expression is wrapped into `main` and its value returned, a snippet with `def main` runs as a whole module. Call `monad_check` first for diagnostics.",
-      schema := eval_schema }
+        description := "Evaluate Monad code with the self-hosted interpreter (pure programs only; I64/String natives, no IO). Definitions accumulate across calls: a `def` snippet is added to the session scratch module, an expression is wrapped into `main` and its value returned, a snippet with `def main` runs as a whole module. Call `monad_check` first for diagnostics.",
+        schema := eval_schema }
 
 def buffer_text (defs : List String) : String :=
     List.intercalate "\n\n" defs

@@ -112,8 +112,8 @@ def dir_child (e : ProcEntry) (name : String) : Path :=
 def meta_json (command : String) (cwd : String) (started_ns : I64) : String :=
     Json.to_string (Json.make_object
         (Map.insert "command" (Json.make_str command)
-        (Map.insert "cwd" (Json.make_str cwd)
-        (Map.insert "started_ns" (Json.make_num_int started_ns) BTreeMap.empty))))
+            (Map.insert "cwd" (Json.make_str cwd)
+                (Map.insert "started_ns" (Json.make_num_int started_ns) BTreeMap.empty))))
 
 def meta_str (obj : BTreeMap String Json) (name : String) : String :=
     match Json.object_get name obj {
@@ -213,8 +213,8 @@ pub def Procs.status_of (dir : Path) (pid : I64) : IO ProcStatus := do {
 def mk_entry (d : Path) (pid_in : I64) (command_in : String) (cwd_in : String) (started_in : I64) (status_in : ProcStatus) : ProcEntry :=
     let id : String := Path.file_name d in
     let e : ProcEntry := { id := id, pid := pid_in, command := command_in, cwd := cwd_in,
-      started_ns := started_in, status := status_in,
-      log := Store.child d "log", dir := d } in
+        started_ns := started_in, status := status_in,
+        log := Store.child d "log", dir := d } in
     e
 
 def entry_of (d : Path) (command : String) (cwd : String) (started : I64) : IO ProcEntry := do {

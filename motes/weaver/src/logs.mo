@@ -190,7 +190,7 @@ def log_rss_values (log : Option Logger) (label : String) (rss : I64) (hwm : I64
     let limit : I64 := if I64.lt warn_mb 1 then 1536 else warn_mb;
     if I64.gt (rss / 1024) limit
     then Logs.warn log (String.concat "ev=rss_high label=" (String.concat label
-            (String.concat " mb=" (I64.to_string (rss / 1024)))))
+        (String.concat " mb=" (I64.to_string (rss / 1024)))))
     else IO.pure unit
 }
 

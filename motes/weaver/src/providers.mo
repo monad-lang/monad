@@ -82,12 +82,12 @@ pub def Weaver.config_for (provider : String) (model : String) (keys : BTreeMap 
 /// owner and the key it resolves. `fallback` answers a config this
 /// file did not build.
 pub def Weaver.provider_of (fallback : String) (cfg : ProviderConfig) : String :=
-  if String.beq cfg.base_url "http://localhost:11434" then "ollama"
-  else if String.beq cfg.base_url "https://api.mistral.ai" then "mistral"
-  else if String.beq cfg.base_url "https://openrouter.ai/api" then "openrouter"
-  else if String.beq cfg.base_url "https://api.anthropic.com" then "anthropic"
-  else if String.beq cfg.base_url "mock" then "mock"
-  else fallback
+    if String.beq cfg.base_url "http://localhost:11434" then "ollama"
+    else if String.beq cfg.base_url "https://api.mistral.ai" then "mistral"
+    else if String.beq cfg.base_url "https://openrouter.ai/api" then "openrouter"
+    else if String.beq cfg.base_url "https://api.anthropic.com" then "anthropic"
+    else if String.beq cfg.base_url "mock" then "mock"
+    else fallback
 
 /// The model a fetched catalogue implies: the preferred name when it is
 /// listed, else the first listed name, else the preference (an empty

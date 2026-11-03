@@ -48,7 +48,7 @@ pub type WeaverMsg {
     /// call; `plan` is the assistant text captured while the turn ran in
     /// plan mode (none otherwise).
     turn_result (run : RunState) (lines : List TLine) (delta : List Message)
-                (last_context : I64) (plan : Option String),
+        (last_context : I64) (plan : Option String),
     turn_failed (run : RunState) (e : WeaverError),
     command_result (effect : Effect),
     command_failed (e : WeaverError),
@@ -230,7 +230,7 @@ pub def Model.content_width (m : TuiModel) : I64 :=
 pub def Model.pane_view (m : TuiModel) : PaneView :=
     let no_picker : Bool := match m.picker { Option.none => true, Option.some _ => false } in
     let v : PaneView := { colors := m.state.colors, width := Model.content_width m, height := Model.body_height m,
-                          top := Model.panel_top_of m, left := Model.panel_left, bar := Bool.and no_picker (I64.lt 4 m.cols) } in
+        top := Model.panel_top_of m, left := Model.panel_left, bar := Bool.and no_picker (I64.lt 4 m.cols) } in
     v
 
 /// One pane message; a finished selection's text rides along.
@@ -301,4 +301,3 @@ pub def Model.append_lines (m : TuiModel) (lines : List TLine) : TuiModel :=
 /// mid-turn: the spinner now lives on the thinking row under the prompt.
 pub def status_line (m : TuiModel) : String :=
     Dumb.status_fields m.state
-

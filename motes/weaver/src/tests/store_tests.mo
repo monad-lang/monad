@@ -322,7 +322,7 @@ def titled (ms : List Message) : Session :=
 #[test]
 def test_meta_name_description_roundtrip : Bool :=
     let m : StoreMeta := { session := test_session, created := 1, updated := 2, history_next := 3, history_base := 1,
-                            plan := Option.none, name := Option.some "fix the overlay", description := Option.some "I'll start by reading overlay.mo" } in
+        plan := Option.none, name := Option.some "fix the overlay", description := Option.some "I'll start by reading overlay.mo" } in
     match Store.decode_meta (Store.encode_meta m) {
         Result.err _ => false,
         Result.ok m2 =>
@@ -379,7 +379,7 @@ def test_derive_description_is_the_first_assistant_text : Bool :=
 #[test]
 def test_fill_title_keeps_an_existing_name : Bool :=
     let m : StoreMeta := { session := test_session, created := 1, updated := 2, history_next := 3, history_base := 1,
-                            plan := Option.none, name := Option.some "manual", description := Option.none } in
+        plan := Option.none, name := Option.some "manual", description := Option.none } in
     let m2 := Store.fill_title m (titled [user_msg "derived", assistant_msg "the reply"]) in
     (match m2.name { Option.some n => String.beq n "manual", Option.none => false })
         && (match m2.description { Option.some d => String.beq d "the reply", Option.none => false })

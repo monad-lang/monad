@@ -6,7 +6,7 @@
 /// and `meta.json` are small caches rewritten atomically (temp + `mv`);
 /// the block files are the source of truth and a stale index rebuilds.
 use json::json {
-    Json, Json.parse, Json.to_string, Json.make_object, Json.make_array,
+    Json, Json.parse, Json.to_string, Json.make_object_pairs, Json.make_array,
     Json.make_str, Json.make_num_int, Json.make_bool, Json.get_bool,
     Json.get_object, Json.get_array, Json.get_str, Json.get_num, Json.get_num_i64,
     Json.object_get,
@@ -17,7 +17,7 @@ use std::process {exec_cmd, process_id}
 use std::bench {Bench.now}
 use std::bytebuf {ByteBuf, ByteBuf.of_string, ByteBuf.free}
 use std::stream {FdStream, FdStream.open_file, FdStream.append_mode, Stream, StreamError}
-use std::map {Map, BTreeMap}
+use std::map {BTreeMap}
 use std::list {List.length}
 use shuttle::session {Session, Session.messages_to_json, Session.messages_of_json}
 use shuttle::message {Message}
@@ -383,21 +383,19 @@ pub def TLine.kind_of_name (s : String) : TLineKind :=
 /// A block line: `{"text": "...", "user": true|false, "detail": ..., "kind": ...}`.
 /// The `user` flag is what keeps the echoed prompt styled without a visible prefix.
 def encode_line (l : TLine) : Json :=
-    let body : BTreeMap String Json :=
-        Map.insert "text" (Json.make_str l.text)
-        (Map.insert "user" (Json.make_bool l.user)
-        (Map.insert "detail" (Json.make_bool l.detail)
-        (Map.insert "kind" (Json.make_str (TLine.kind_name l.kind)) BTreeMap.empty))) in
-    Json.make_object body
+    Json.make_object_pairs
+        [Pair.pair "text" (Json.make_str l.text),
+            Pair.pair "user" (Json.make_bool l.user),
+            Pair.pair "detail" (Json.make_bool l.detail),
+            Pair.pair "kind" (Json.make_str (TLine.kind_name l.kind))]
 
 pub def Store.encode_block (seq : I64) (start : I64) (lines : List TLine) : Json :=
-    let body : BTreeMap String Json :=
-        Map.insert "version" (Json.make_num_int 3)
-        (Map.insert "seq" (Json.make_num_int seq)
-        (Map.insert "start" (Json.make_num_int start)
-        (Map.insert "count" (Json.make_num_int (list_len lines))
-        (Map.insert "lines" (Json.make_array (List.map encode_line lines)) BTreeMap.empty)))) in
-    Json.make_object body
+    Json.make_object_pairs
+        [Pair.pair "version" (Json.make_num_int 3),
+            Pair.pair "seq" (Json.make_num_int seq),
+            Pair.pair "start" (Json.make_num_int start),
+            Pair.pair "count" (Json.make_num_int (list_len lines)),
+            Pair.pair "lines" (Json.make_array (List.map encode_line lines))]
 
 /// Version-1 blocks stored plain strings with role prefixes; migrating
 /// them on read means an old session resumes with the new colors and no
@@ -530,19 +528,17 @@ pub def Store.empty_index : StoreIndex :=
     i
 
 def encode_index_block (b : StoreIndexBlock) : Json :=
-    let body : BTreeMap String Json :=
-        Map.insert "seq" (Json.make_num_int b.seq)
-        (Map.insert "start" (Json.make_num_int b.start)
-        (Map.insert "count" (Json.make_num_int b.count) BTreeMap.empty)) in
-    Json.make_object body
+    Json.make_object_pairs
+        [Pair.pair "seq" (Json.make_num_int b.seq),
+            Pair.pair "start" (Json.make_num_int b.start),
+            Pair.pair "count" (Json.make_num_int b.count)]
 
 pub def Store.encode_index (i : StoreIndex) : Json :=
-    let body : BTreeMap String Json :=
-        Map.insert "version" (Json.make_num_int 1)
-        (Map.insert "total" (Json.make_num_int i.total)
-        (Map.insert "next_seq" (Json.make_num_int i.next_seq)
-        (Map.insert "blocks" (Json.make_array (List.map encode_index_block i.blocks)) BTreeMap.empty))) in
-    Json.make_object body
+    Json.make_object_pairs
+        [Pair.pair "version" (Json.make_num_int 1),
+            Pair.pair "total" (Json.make_num_int i.total),
+            Pair.pair "next_seq" (Json.make_num_int i.next_seq),
+            Pair.pair "blocks" (Json.make_array (List.map encode_index_block i.blocks))]
 
 #[partial]
 def decode_index_blocks (js : List Json) : Result String (List StoreIndexBlock) :=
@@ -636,17 +632,16 @@ def opt_str_json (p : Option String) : Json :=
 pub def Store.encode_meta (m : StoreMeta) : Json :=
     let inner : Session := m.session in
     let bare : Session := { inner with history := List.empty } in
-    let body : BTreeMap String Json :=
-        Map.insert "version" (Json.make_num_int 1)
-        (Map.insert "created" (Json.make_num_int m.created)
-        (Map.insert "updated" (Json.make_num_int m.updated)
-        (Map.insert "history_next" (Json.make_num_int m.history_next)
-        (Map.insert "history_base" (Json.make_num_int m.history_base)
-        (Map.insert "plan" (opt_str_json m.plan)
-        (Map.insert "name" (opt_str_json m.name)
-        (Map.insert "description" (opt_str_json m.description)
-        (Map.insert "session" (Session.serialize_json bare) BTreeMap.empty)))))))) in
-    Json.make_object body
+    Json.make_object_pairs
+        [Pair.pair "version" (Json.make_num_int 1),
+            Pair.pair "created" (Json.make_num_int m.created),
+            Pair.pair "updated" (Json.make_num_int m.updated),
+            Pair.pair "history_next" (Json.make_num_int m.history_next),
+            Pair.pair "history_base" (Json.make_num_int m.history_base),
+            Pair.pair "plan" (opt_str_json m.plan),
+            Pair.pair "name" (opt_str_json m.name),
+            Pair.pair "description" (opt_str_json m.description),
+            Pair.pair "session" (Session.serialize_json bare)]
 
 pub def Store.decode_meta (j : Json) : Result String StoreMeta :=
     match Json.get_object j {
@@ -939,7 +934,7 @@ def history_path (dir : Path) (seq : I64) : Path :=
 
 def meta_of (s : Session) (created : I64) (updated : I64) (next : I64) : StoreMeta :=
     let m : StoreMeta := { session := s, created := created, updated := updated, history_next := next, history_base := 1i64, plan := Option.none,
-                            name := Option.none, description := Option.none } in
+        name := Option.none, description := Option.none } in
     Store.fill_title m s
 
 def state_of (root : Path) (dir : Path) (id : String) : StoreState :=
@@ -1529,8 +1524,8 @@ def info_of (dir : Path) (m : StoreMeta) : SessionInfo :=
     let created : I64 := m.created in
     let updated : I64 := m.updated in
     let info : SessionInfo := { id := id, name := name, description := description,
-                                turns := turns, model := model,
-                                created := created, updated := updated } in
+        turns := turns, model := model,
+        created := created, updated := updated } in
     info
 
 /// `a` sorts before `b`: newest `updated` first, `created` breaking ties.

@@ -59,10 +59,10 @@ def pair_fst (p : Pair String Json) : Json :=
 def task_schema : Json :=
     let params : List (Pair String Json) :=
         [str_param "prompt" "The question the subagent should answer with a plan.",
-         num_param "max_turns" "Model-call budget (1-50; 0 uses 24)."] in
+            num_param "max_turns" "Model-call budget (1-50; 0 uses 24)."] in
     Json.make_object (Map.insert "type" (Json.make_str "object")
         (Map.insert "properties" (Json.make_object (params_to_map params BTreeMap.empty))
-        (Map.insert "required" (Json.make_array [Json.make_str "prompt"]) BTreeMap.empty)))
+            (Map.insert "required" (Json.make_array [Json.make_str "prompt"]) BTreeMap.empty)))
 
 pub def Subagent.spec : ToolSpec :=
     { name := "task", description := "Ask a read-only subagent to investigate and return a plan.", schema := task_schema }
@@ -75,9 +75,9 @@ def user_message (text : String) : Message :=
 
 def child_session (cfg : ProviderConfig) (prompt : String) : Session :=
     let s : Session := { config := cfg, system_prompt := Subagent.system_prompt,
-      tools := ToolRegistry.specs Subagent.read_registry,
-      history := List.cons (user_message prompt) List.empty,
-      turns := 0, spent := usage_zero } in
+        tools := ToolRegistry.specs Subagent.read_registry,
+        history := List.cons (user_message prompt) List.empty,
+        turns := 0, spent := usage_zero } in
     s
 
 #[partial]
@@ -102,7 +102,7 @@ def last_assistant (ms : List Message) : Option String :=
 def usage_footer (s : Session) : String :=
     String.concat "[subagent turns=" (String.concat (I64.to_string s.turns)
         (String.concat " tokens in=" (String.concat (I64.to_string s.spent.input_tokens)
-        (String.concat " out=" (String.concat (I64.to_string s.spent.output_tokens) "]")))))
+            (String.concat " out=" (String.concat (I64.to_string s.spent.output_tokens) "]")))))
 
 // ── the tool ────────────────────────────────────────────────────────────
 
@@ -147,7 +147,7 @@ def task_result (id : String) (log : Option Logger) (store : Option StoreState) 
     }
 
 def run_task (cfg : ProviderConfig) (log : Option Logger) (store : Option StoreState)
-        (stop : Unit -> IO Bool) (id : String) (j : Json) : ResultT String IO Content :=
+    (stop : Unit -> IO Bool) (id : String) (j : Json) : ResultT String IO Content :=
     match TaskArgs.deserialize_json j {
         Result.err e => ResultT.mk (return (Result.ok (Content.tool_result id e true))),
         Result.ok args =>
@@ -169,5 +169,5 @@ def run_task (cfg : ProviderConfig) (log : Option Logger) (store : Option StoreS
 /// uses the CURRENT provider/model and the run's store/log; `stop` is the
 /// parent's stop predicate, so Esc also ends a child at its boundaries.
 pub def Subagent.task_tool (cfg : ProviderConfig) (log : Option Logger)
-        (store : Option StoreState) (stop : Unit -> IO Bool) : ToolImpl :=
+    (store : Option StoreState) (stop : Unit -> IO Bool) : ToolImpl :=
     { spec := Subagent.spec, cap := Capability.exec, run := run_task cfg log store stop }

@@ -63,8 +63,8 @@ def s1_go (m : Mty) : IO Bool := do {
     let since := Ansi.tight (Output.since o5 mark3);
     let f <- Check.report "S3 no re-emission after the completion"
         (Bool.and (I64.beq (count_occurrences since "replyslow") 0)
-         (Bool.and (I64.beq (count_occurrences since "thinking") 0)
-                   (I64.beq (count_occurrences since "[thinking]") 0)));
+            (Bool.and (I64.beq (count_occurrences since "thinking") 0)
+                (I64.beq (count_occurrences since "[thinking]") 0)));
     let restored <- quit_cleanly m 3000;
     let g <- Check.report "S3 double Ctrl+C still exits cleanly" restored;
     Mty.finish m;

@@ -129,8 +129,8 @@ pub type PaneMsg {
 
 pub def Pane.make (tr : Transcript) : PaneModel :=
     let p : PaneModel := { transcript := tr, scroll := 0, row_total := 0, bar_grab := Option.none, page_pending := false,
-                           rows := List.empty, key := Option.none, cache := Option.none, sel := Option.none, details := false,
-                           want_older := false, want_top := false } in
+        rows := List.empty, key := Option.none, cache := Option.none, sel := Option.none, details := false,
+        want_older := false, want_top := false } in
     p
 
 /// A session switch: the new transcript, pinned, with no paging intent.
@@ -367,7 +367,7 @@ def build_cache (v : PaneView) (p : PaneModel) (lw : LoadedWindow) (prior : Opti
     match cache_lines_go v.colors v.width p.details lw.lines lw.start old List.empty 0 {
         Pair.pair lines total =>
             let c : PaneCache := { start := lw.start, total_lines := p.transcript.total, width := v.width, colors := v.colors,
-                                   details := p.details, lines := lines, row_total := total } in
+                details := p.details, lines := lines, row_total := total } in
             c,
     }
 
@@ -478,7 +478,7 @@ pub def Pane.indicator_text (n : I64) : String :=
 pub def Pane.key_of (v : PaneView) (p : PaneModel) : PaneKey :=
     let pstart : I64 := match p.transcript.page { Option.some pg => pg.start, Option.none => 0 - 1 } in
     let k : PaneKey := { total := p.transcript.total, tail_start := p.transcript.tail_start, page_start := pstart,
-                         width := v.width, height := v.height, colors := v.colors, scroll := p.scroll, details := p.details } in
+        width := v.width, height := v.height, colors := v.colors, scroll := p.scroll, details := p.details } in
     k
 
 def key_eq (a : PaneKey) (b : PaneKey) : Bool :=

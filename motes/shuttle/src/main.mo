@@ -612,9 +612,9 @@ def print_answer (session : Session) : IO Unit := do {
 /// counting every model call.
 def usage_line (session : Session) : String :=
     String.concat "[turns: " (String.concat (I64.to_string session.turns)
-    (String.concat " | tokens in " (String.concat (I64.to_string session.spent.input_tokens)
-    (String.concat ", out " (String.concat (I64.to_string session.spent.output_tokens)
-    (String.concat ", cached " (String.concat (I64.to_string session.spent.cached_tokens) "]")))))))
+        (String.concat " | tokens in " (String.concat (I64.to_string session.spent.input_tokens)
+            (String.concat ", out " (String.concat (I64.to_string session.spent.output_tokens)
+                (String.concat ", cached " (String.concat (I64.to_string session.spent.cached_tokens) "]")))))))
 
 #[partial]
 def message_text (m : Message) : String :=

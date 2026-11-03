@@ -61,12 +61,12 @@ pub def Catalog.render (provider : String) (models : List String) (current : Str
     let shown_count : I64 := catalog_count shown in
     let head : List String :=
         [String.concat "model: " current,
-         String.concat "models (" (String.concat provider (String.concat "): " (I64.to_string total)))] in
+            String.concat "models (" (String.concat provider (String.concat "): " (I64.to_string total)))] in
     let body : List String := List.map catalog_indent shown in
     let more : List String :=
         if shown_count < total
         then [String.concat "  ... and "
-                (String.concat (I64.to_string (total - shown_count)) " more")]
+            (String.concat (I64.to_string (total - shown_count)) " more")]
         else List.empty in
     let note : List String := match Catalog.note provider models current {
         Option.none => List.empty,

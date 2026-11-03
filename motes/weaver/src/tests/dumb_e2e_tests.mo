@@ -218,7 +218,7 @@ def state_of (reg : ToolRegistry) : WeaverState := {
     run := run_of reg,
     mode := Mode.manual,
     provider := "mock",
-    budget := budget, context_window := 128000, compact_at := 80, plan := Option.none, last_context := 0, grants := Option.none, workspace_root := Option.none, 
+    budget := budget, context_window := 128000, compact_at := 80, plan := Option.none, last_context := 0, grants := Option.none, workspace_root := Option.none,
     mcps := List.empty,
     keys := BTreeMap.empty,
     catalog := BTreeMap.empty,
@@ -317,7 +317,6 @@ def test_dumb_e2e_manual_approval_and_plan_refusal : IO Bool := do {
     return (final_state_ok st cursor tap)
 }
 
-
 // ── The Phase 5 e2e: a real `edit`, diff in the approval ───────────────
 
 def edit_target_path : String :=
@@ -328,9 +327,9 @@ def edit_registry : ToolRegistry := ToolRegistry.register EditTool.impl ToolRegi
 def edit_input (target : String) : Json :=
     Json.make_object
         (Map.insert "path" (Json.make_str target)
-        (Map.insert "expected_content" (Json.make_str "line one\nline two\n")
-        (Map.insert "new_content" (Json.make_str "line one\nline two changed\n")
-            BTreeMap.empty)))
+            (Map.insert "expected_content" (Json.make_str "line one\nline two\n")
+                (Map.insert "new_content" (Json.make_str "line one\nline two changed\n")
+                    BTreeMap.empty)))
 
 def edit_turn_message (target : String) : Message :=
     { role := Role.assistant, content := [Content.tool_use "call_1" "edit" (edit_input target)] }
@@ -454,7 +453,7 @@ def plan_exec_text : String := "PLAN: 1) write the file 2) run it"
 def plan_exec_write_input : Json :=
     Json.make_object
         (Map.insert "path" (Json.make_str plan_exec_target)
-        (Map.insert "content" (Json.make_str "def main : I64 := 7 * 6\n") BTreeMap.empty))
+            (Map.insert "content" (Json.make_str "def main : I64 := 7 * 6\n") BTreeMap.empty))
 
 def plan_exec_shell_input : Json :=
     Json.make_object (Map.insert "command" (Json.make_str (String.concat "cat " plan_exec_target)) BTreeMap.empty)

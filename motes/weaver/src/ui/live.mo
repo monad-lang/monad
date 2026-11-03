@@ -93,9 +93,9 @@ pub def Live.update (m : LiveModel) (msg : LiveMsg) : LiveModel :=
 
 pub def Live.fold_delta (m : LiveModel) (d : LiveDelta) : LiveModel :=
     { m with text := String.concat m.text d.text,
-             thinking := String.concat m.thinking d.thinking,
-             text_seen := d.text_seen, thinking_seen := d.thinking_seen,
-             activity := d.activity }
+        thinking := String.concat m.thinking d.thinking,
+        text_seen := d.text_seen, thinking_seen := d.thinking_seen,
+        activity := d.activity }
 
 // ── view ─────────────────────────────────────────────────────────────────
 
@@ -214,8 +214,8 @@ pub def Live.usage_path (store : Option StoreState) : String :=
 def usage_json (u : Usage) : String :=
     Json.to_string (Json.make_object
         (Map.insert "in" (Json.make_num_int u.input_tokens)
-        (Map.insert "out" (Json.make_num_int u.output_tokens)
-        (Map.insert "cached" (Json.make_num_int u.cached_tokens) BTreeMap.empty))))
+            (Map.insert "out" (Json.make_num_int u.output_tokens)
+                (Map.insert "cached" (Json.make_num_int u.cached_tokens) BTreeMap.empty))))
 
 def usage_field (obj : BTreeMap String Json) (name : String) : I64 :=
     match Json.object_get name obj {
@@ -249,7 +249,7 @@ pub def Live.write_usage (log : Option Logger) (store : Option StoreState) (u : 
     Live.store_usage store u;
     Logs.debug log (String.concat "ev=model_usage in=" (String.concat (I64.to_string u.input_tokens)
         (String.concat " out=" (String.concat (I64.to_string u.output_tokens)
-        (String.concat " cached=" (I64.to_string u.cached_tokens))))))
+            (String.concat " cached=" (I64.to_string u.cached_tokens))))))
 }
 
 pub def Live.read_usage (store : Option StoreState) : IO (Option Usage) := do {
@@ -285,8 +285,8 @@ pub def Live.read_delta (store : Option StoreState) (text_seen : I64) (thinking_
             let th <- Store.read_named_from s "thinking.txt" thinking_seen;
             let act <- Store.read_named s "activity.txt";
             let d : LiveDelta := { text := t.first, thinking := th.first,
-                                    text_seen := t.second, thinking_seen := th.second,
-                                    activity := activity_of_read act };
+                text_seen := t.second, thinking_seen := th.second,
+                activity := activity_of_read act };
             IO.pure (Option.some d)
         },
     }

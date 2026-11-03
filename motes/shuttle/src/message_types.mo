@@ -75,13 +75,13 @@ pub def Content.serialize_json (c : Content) : Json :=
         Content.tool_use id name input =>
             Json.make_object (Map.insert "type" (Json.make_str "tool_use")
                 (Map.insert "id" (Json.make_str id)
-                (Map.insert "name" (Json.make_str name)
-                (Map.insert "input" input BTreeMap.empty)))),
+                    (Map.insert "name" (Json.make_str name)
+                        (Map.insert "input" input BTreeMap.empty)))),
         Content.tool_result call_id output is_error =>
             Json.make_object (Map.insert "type" (Json.make_str "tool_result")
                 (Map.insert "call_id" (Json.make_str call_id)
-                (Map.insert "output" (Json.make_str output)
-                (Map.insert "is_error" (Json.make_bool is_error) BTreeMap.empty)))),
+                    (Map.insert "output" (Json.make_str output)
+                        (Map.insert "is_error" (Json.make_bool is_error) BTreeMap.empty)))),
         Content.thinking s signature =>
             let base :=
                 Map.insert "type" (Json.make_str "thinking") (Map.insert "text" (Json.make_str s) BTreeMap.empty) in

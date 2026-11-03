@@ -27,7 +27,7 @@ def placeholder_seen (o : Output) : Bool :=
     grid_has o "type a message"
 
 def synth (root : String) (id : String) (name : String) (description : String)
-          (updated : I64) (marker : String) : IO Bool :=
+    (updated : I64) (marker : String) : IO Bool :=
     write_generated_session (String.concat root "/sessions") id
         (Option.some name) (Option.some description) updated 1
         (LineSpec.fixed marker)

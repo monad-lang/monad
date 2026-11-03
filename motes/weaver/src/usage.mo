@@ -29,8 +29,8 @@ pub def UsageTracker.start (base : Usage) : IO (Ref UsageTracker) :=
 /// counters move backwards) must not render a negative count.
 pub def Usage.delta (now : Usage) (before : Usage) : Usage :=
     { input_tokens := clamp_sub now.input_tokens before.input_tokens,
-      output_tokens := clamp_sub now.output_tokens before.output_tokens,
-      cached_tokens := clamp_sub now.cached_tokens before.cached_tokens }
+        output_tokens := clamp_sub now.output_tokens before.output_tokens,
+        cached_tokens := clamp_sub now.cached_tokens before.cached_tokens }
 
 def clamp_sub (a : I64) (b : I64) : I64 :=
     if I64.lt a b then 0 else a - b

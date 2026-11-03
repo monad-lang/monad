@@ -39,8 +39,8 @@ pub def Overlay.path (store : Option StoreState) : Path :=
 pub def Overlay.serialize (s : OverlayState) : String :=
     Json.to_string (Json.make_object
         (Map.insert "want" (Json.make_bool s.want)
-        (Map.insert "ack" (Json.make_bool s.ack)
-        (Map.insert "seq" (Json.make_num_int s.seq) BTreeMap.empty))))
+            (Map.insert "ack" (Json.make_bool s.ack)
+                (Map.insert "seq" (Json.make_num_int s.seq) BTreeMap.empty))))
 
 def want_of (o : Option Json) : Bool :=
     match o {

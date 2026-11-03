@@ -6,7 +6,7 @@ use weaver::plan_file {PlanDoc, PlanMeta, PlanParse, PlanFile.parse, PlanFile.re
 
 def meta_of : PlanMeta :=
     { title := "Fix the widget", session := "s-1", created := "2026-10-31",
-      updated := "2026-10-31", status := "ready", model := "openrouter/x" }
+        updated := "2026-10-31", status := "ready", model := "openrouter/x" }
 
 def doc_of : PlanDoc :=
     { meta := meta_of, body := "# Plan\n\n- do it\n" }

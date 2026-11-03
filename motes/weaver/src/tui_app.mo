@@ -406,7 +406,7 @@ def page_failed_step (m : TuiModel) (e : String) : Pair TuiModel (Cmd WeaverMsg)
 
 def transcript_reset_step (m : TuiModel) (tr : Transcript) : Pair TuiModel (Cmd WeaverMsg) :=
     let m2 : TuiModel := { m with pane := Pane.reset m.pane tr, banner := Banner.shown,
-                            queued := List.empty, queued_ready := false, title_due := false } in
+        queued := List.empty, queued_ready := false, title_due := false } in
     maybe_page_cmd m2
 
 /// A store write failure disables persistence for the rest of the run;
@@ -913,9 +913,9 @@ def submit_line (m : TuiModel) (text : String) : Pair TuiModel (Cmd WeaverMsg) :
     let p1 : PaneModel := m1.pane in
     let m2 : TuiModel :=
         { m1 with turn_pending := true, banner := Banner.hidden,
-                 live := Live.start (Option.some m.state.run.session.spent), pane := { p1 with scroll := 0 },
-                 turn_gen := gen,
-                 modal := modal_command st text } in
+            live := Live.start (Option.some m.state.run.session.spent), pane := { p1 with scroll := 0 },
+            turn_gen := gen,
+            modal := modal_command st text } in
     Pair.pair m2 (Cmd.perform_async
         (fn (_ : Unit) => do {
             let _ <- write_echo store start block;
@@ -985,7 +985,7 @@ def outcome_of (msg : WeaverMsg) : String :=
             let reason : String := if run.stopped then "stopped" else "ok" in
             String.concat "ev=turn_end reason=" (String.concat reason (String.concat " turns=" (String.concat (I64.to_string run.session.turns)
                 (String.concat " in=" (String.concat (I64.to_string run.session.spent.input_tokens)
-                (String.concat " out=" (I64.to_string run.session.spent.output_tokens))))))) ,
+                    (String.concat " out=" (I64.to_string run.session.spent.output_tokens))))))),
         WeaverMsg.turn_failed _ e => String.concat "ev=turn_error " (WeaverError.show e),
         WeaverMsg.command_result _ => "ev=command_end",
         WeaverMsg.command_failed e => String.concat "ev=command_error " (WeaverError.show e),

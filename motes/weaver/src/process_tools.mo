@@ -40,13 +40,13 @@ def pair_fst (p : Pair String Json) : Json :=
 def params_schema (params : List (Pair String Json)) : Json :=
     Json.make_object (Map.insert "type" (Json.make_str "object")
         (Map.insert "properties" (Json.make_object (params_to_map params BTreeMap.empty))
-        (Map.insert "required" (Json.make_array (List.map pair_fst params)) BTreeMap.empty)))
+            (Map.insert "required" (Json.make_array (List.map pair_fst params)) BTreeMap.empty)))
 
 // ── start_process ───────────────────────────────────────────────────────
 
 def start_params : List (Pair String Json) :=
     [str_param "command" "Shell command to run detached. Its stdout and stderr go to a per-task log.",
-     str_param "cwd" "Working directory, or \"\" to inherit weaver's."]
+        str_param "cwd" "Working directory, or \"\" to inherit weaver's."]
 
 pub def StartProcessTool.spec : ToolSpec :=
     { name := "start_process", description := "Start a background shell command; returns its task id and log path.", schema := params_schema start_params }
@@ -65,8 +65,8 @@ def start_run (id : String) (j : Json) : ResultT String IO Content :=
                     Result.ok e2 =>
                         let text : String := String.concat "started " (String.concat e2.id
                             (String.concat " (pid " (String.concat (I64.to_string e2.pid)
-                            (String.concat ")\nlog: " (String.concat (Path.to_string e2.log)
-                            "\nUse read_process to poll; kill_process to stop."))))) in
+                                (String.concat ")\nlog: " (String.concat (Path.to_string e2.log)
+                                    "\nUse read_process to poll; kill_process to stop."))))) in
                         IO.pure (Result.ok (tool_ok id text)),
                 }
             }),
@@ -81,12 +81,12 @@ def read_schema : Json :=
         Map.insert "wait_seconds" wait (params_to_map [str_param "id" "The task id returned by start_process."] BTreeMap.empty) in
     Json.make_object (Map.insert "type" (Json.make_str "object")
         (Map.insert "properties" (Json.make_object props)
-        (Map.insert "required" (Json.make_array [Json.make_str "id"]) BTreeMap.empty)))
+            (Map.insert "required" (Json.make_array [Json.make_str "id"]) BTreeMap.empty)))
 
 pub def ReadProcessTool.spec : ToolSpec :=
     { name := "read_process",
-      description := "Show a background task's status and its last 40 output lines. To wait for a task, pass wait_seconds instead of calling read_process repeatedly.",
-      schema := read_schema }
+        description := "Show a background task's status and its last 40 output lines. To wait for a task, pass wait_seconds instead of calling read_process repeatedly.",
+        schema := read_schema }
 
 pub def ReadProcessTool.impl : ToolImpl :=
     { spec := ReadProcessTool.spec, cap := Capability.read, run := read_run }
@@ -97,9 +97,9 @@ def read_entry (id : String) (e : ProcEntry) : IO Content := do {
     let body : String := if List.is_empty lines then "(no output)" else String.concat_list lines;
     let head : String := String.concat "id " (String.concat e.id
         (String.concat ": " (String.concat (ProcStatus.text e.status)
-        (String.concat "  " (String.concat (format_elapsed ((now - e.started_ns) / 100000000))
-        (String.concat "\ncommand: " (String.concat e.command
-        "\n--- last 40 lines ---\n")))))));
+            (String.concat "  " (String.concat (format_elapsed ((now - e.started_ns) / 100000000))
+                (String.concat "\ncommand: " (String.concat e.command
+                    "\n--- last 40 lines ---\n")))))));
     IO.pure (tool_ok id (String.concat head body))
 }
 
@@ -236,7 +236,7 @@ pub def ListProcessesTool.impl : ToolImpl :=
 def line_of (e : ProcEntry) (now : I64) (acc : List String) : List String :=
     List.cons (String.concat e.id (String.concat "  " (String.concat (ProcStatus.text e.status)
         (String.concat "  " (String.concat (format_elapsed ((now - e.started_ns) / 100000000))
-        (String.concat "  " e.command)))))) acc
+            (String.concat "  " e.command)))))) acc
 
 #[partial]
 def lines_of (xs : List ProcEntry) (now : I64) (acc : List String) : List String :=

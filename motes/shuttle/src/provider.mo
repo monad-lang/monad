@@ -15,10 +15,10 @@ use shuttle::message {Message, Turn}
 use shuttle::tool {ToolSpec}
 use init::transformers {ResultT, ResultT.run}
 use json::json {
-    Json, Json.make_object, Json.make_str, Json.make_num_int,
+    Json, Json.make_object_pairs, Json.make_str, Json.make_num_int,
     Json.get_object, Json.get_str, Json.get_num_i64, Json.object_get, Json.make_bool, Json.get_bool,
 }
-use std::map {Map, BTreeMap}
+use std::map {BTreeMap}
 use openai::client {OpenAI.complete_stream, OpenAI.list_models}
 use shuttle::wire::openai {OpenAI.encode_request, OpenAI.decode_response}
 use anthropic::client {Anthropic.complete_stream, Anthropic.list_models}
@@ -73,14 +73,13 @@ pub def Wire.deserialize_json (j : Json) : Result String Wire :=
 /// `session_tests.mo::test_session_save_omits_direct_api_key`, not by
 /// this comment.
 pub def ProviderConfig.serialize_json (c : ProviderConfig) : Json :=
-    Json.make_object
-        (Map.insert "base_url" (Json.make_str c.base_url)
-        (Map.insert "model" (Json.make_str c.model)
-        (Map.insert "api_key_env" (Json.make_str c.api_key_env)
-        (Map.insert "max_tokens" (Json.make_num_int c.max_tokens)
-        (Map.insert "wire" (Wire.serialize_json c.wire)
-        (Map.insert "thinking" (Json.make_bool c.thinking)
-        BTreeMap.empty))))))
+    Json.make_object_pairs
+        [Pair.pair "base_url" (Json.make_str c.base_url),
+            Pair.pair "model" (Json.make_str c.model),
+            Pair.pair "api_key_env" (Json.make_str c.api_key_env),
+            Pair.pair "max_tokens" (Json.make_num_int c.max_tokens),
+            Pair.pair "wire" (Wire.serialize_json c.wire),
+            Pair.pair "thinking" (Json.make_bool c.thinking)]
 
 def config_field (obj : BTreeMap String Json) (name : String) : Result String Json :=
     match Json.object_get name obj {

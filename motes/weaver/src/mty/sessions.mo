@@ -56,7 +56,7 @@ def reply_one (o : Output) : Bool :=
     Bool.and (grid_has o "persisted-reply") (status_turns o 1)
 
 def sessions_spawn (bin : String) (root : String) (extra : List String)
-                   (fixture : Option String) : IO (Result String Mty) :=
+    (fixture : Option String) : IO (Result String Mty) :=
     spawn_args bin "mock" extra 24 100 root fixture List.empty
 
 def persist_checks (m : Mty) (sessions : String) (before : List String) : IO Bool := do {
@@ -335,14 +335,14 @@ def rss_baseline (bin : String) (root : String) (sessions : String) : IO I64 := 
 }
 
 def rss_huge (bin : String) (root : String) (sessions : String)
-             (base : I64) : IO Bool :=
+    (base : I64) : IO Bool :=
     if I64.lt base 1 then do {
         let _ <- Check.report "the baseline RSS is readable" false;
         return false
     } else rss_huge_body bin root sessions base
 
 def rss_huge_body (bin : String) (root : String) (sessions : String)
-                  (base : I64) : IO Bool := do {
+    (base : I64) : IO Bool := do {
     let ok <- write_generated_session sessions "s-huge" Option.none Option.none
         2000 20000 rss_huge_spec;
     if Bool.not ok then do {
@@ -367,7 +367,7 @@ def rss_huge_body (bin : String) (root : String) (sessions : String)
                     (Bool.and (I64.gt r2 0) (I64.lt (r2 - r1) 20000));
                 IO.println (String.concat "rss base=" (String.concat (I64.to_string base)
                     (String.concat "KB huge=" (String.concat (I64.to_string r1)
-                    (String.concat "KB idle=" (String.concat (I64.to_string r2) "KB"))))));
+                        (String.concat "KB idle=" (String.concat (I64.to_string r2) "KB"))))));
                 Mty.finish m;
                 return (Bool.and a (Bool.and b c))
             }

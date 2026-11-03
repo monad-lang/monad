@@ -33,7 +33,7 @@ pub def Stop.path (store : Option StoreState) : Path :=
 pub def Stop.serialize (s : StopState) : String :=
     Json.to_string (Json.make_object
         (Map.insert "gen" (Json.make_num_int s.gen)
-        (Map.insert "stop" (Json.make_bool s.stop) BTreeMap.empty)))
+            (Map.insert "stop" (Json.make_bool s.stop) BTreeMap.empty)))
 
 def gen_of (o : Option Json) : I64 :=
     match o {

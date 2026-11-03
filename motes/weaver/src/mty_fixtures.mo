@@ -37,20 +37,20 @@ use weaver::store {
 def text_content (text : String) : Json :=
     Json.make_object_pairs
         [Pair.pair "type" (Json.make_str "text"),
-         Pair.pair "text" (Json.make_str text)]
+            Pair.pair "text" (Json.make_str text)]
 
 def tool_content (id : String) (name : String) (input : Json) : Json :=
     Json.make_object_pairs
         [Pair.pair "type" (Json.make_str "tool_use"),
-         Pair.pair "id" (Json.make_str id),
-         Pair.pair "name" (Json.make_str name),
-         Pair.pair "input" input]
+            Pair.pair "id" (Json.make_str id),
+            Pair.pair "name" (Json.make_str name),
+            Pair.pair "input" input]
 
 def usage_json : Json :=
     Json.make_object_pairs
         [Pair.pair "input_tokens" (Json.make_num_int 1),
-         Pair.pair "output_tokens" (Json.make_num_int 10),
-         Pair.pair "cached_tokens" (Json.make_num_int 0)]
+            Pair.pair "output_tokens" (Json.make_num_int 10),
+            Pair.pair "cached_tokens" (Json.make_num_int 0)]
 
 /// One scripted turn: assistant message, usage, stop reason.
 pub def turn_json (content : Json) (stop : String) : Json :=
@@ -58,9 +58,9 @@ pub def turn_json (content : Json) (stop : String) : Json :=
         [Pair.pair "message"
             (Json.make_object_pairs
                 [Pair.pair "role" (Json.make_str "assistant"),
-                 Pair.pair "content" (Json.make_array [content])]),
-         Pair.pair "usage" usage_json,
-         Pair.pair "stop" (Json.make_str stop)]
+                    Pair.pair "content" (Json.make_array [content])]),
+            Pair.pair "usage" usage_json,
+            Pair.pair "stop" (Json.make_str stop)]
 
 pub def text_turn_json (text : String) : Json :=
     turn_json (text_content text) "end_turn"
@@ -80,17 +80,17 @@ pub def write_base_script (path : String) (note_path : String) : IO Bool :=
     let input : Json := Json.make_object_pairs [Pair.pair "path" (Json.make_str note_path)] in
     write_turns path
         [tool_use_turn_json "b1" "read" input,
-         text_turn_json "done reading"]
+            text_turn_json "done reading"]
 
 /// Turn 0 starts a detached process; turn 1 reports.
 pub def write_process_script (path : String) (command : String) : IO Bool :=
     let input : Json :=
         Json.make_object_pairs
             [Pair.pair "command" (Json.make_str command),
-             Pair.pair "cwd" (Json.make_str "")] in
+                Pair.pair "cwd" (Json.make_str "")] in
     write_turns path
         [tool_use_turn_json "p1" "start_process" input,
-         text_turn_json "started it"]
+            text_turn_json "started it"]
 
 // ── Generated text ───────────────────────────────────────────────────────
 
@@ -120,13 +120,13 @@ pub def plan_text (n : I64) : String :=
 
 def test_cfg : ProviderConfig :=
     { base_url := "mock", model := "mock", api_key_env := "WEAVER_UNUSED_KEY",
-      api_key := Option.none, max_tokens := 8, wire := Wire.mock, thinking := false }
+        api_key := Option.none, max_tokens := 8, wire := Wire.mock, thinking := false }
 
 def test_usage : Usage := { input_tokens := 0, output_tokens := 0, cached_tokens := 0 }
 
 def test_session (turns : I64) : Session :=
     { config := test_cfg, system_prompt := "s", tools := List.empty,
-      history := List.empty, turns := turns, spent := test_usage }
+        history := List.empty, turns := turns, spent := test_usage }
 
 pub def session_dir (sessions : String) (id : String) : Path :=
     Store.session_dir (Path.path sessions) id
@@ -183,7 +183,7 @@ struct BlockState {
 /// metadata as it goes. One block's lines exist at a time.
 #[partial]
 def write_blocks_go (dir : Path) (spec : LineSpec) (start : I64) (count : I64)
-                    (seq : I64) (st : BlockState) : IO BlockState := do {
+    (seq : I64) (st : BlockState) : IO BlockState := do {
     if Bool.not (I64.lt start count) then IO.pure st
     else do {
         let room := count - start;
@@ -204,15 +204,15 @@ def write_blocks_go (dir : Path) (spec : LineSpec) (start : I64) (count : I64)
 /// A session with `count` plain assistant lines made by `spec`.
 /// `updated` orders it in the picker; `name`/`description` fill the row.
 pub def write_generated_session (sessions : String) (id : String)
-                                (name : Option String) (description : Option String)
-                                (updated : I64) (count : I64)
-                                (spec : LineSpec) : IO Bool := do {
+    (name : Option String) (description : Option String)
+    (updated : I64) (count : I64)
+    (spec : LineSpec) : IO Bool := do {
     let dir := session_dir sessions id;
     let tdir := transcript_dir dir;
     let hdir := history_dir dir;
     let _ <- exec_cmd "mkdir"
         (List.cons "-p" (List.cons (Path.to_string dir)
-        (List.cons (Path.to_string tdir) (List.cons (Path.to_string hdir) List.empty))));
+            (List.cons (Path.to_string tdir) (List.cons (Path.to_string hdir) List.empty))));
     let st0 : BlockState := { ok := true, next_seq := 1, blocks := List.empty };
     let st <- write_blocks_go dir spec 0 count 1 st0;
     let idx : StoreIndex := {

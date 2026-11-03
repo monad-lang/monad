@@ -534,7 +534,6 @@ def test_meta_without_history_base_defaults_to_one : Bool :=
         },
     }
 
-
 /// The plan rides the meta: absent before any capture, then the exact
 /// text after `write_plan`, and `read_plan` on a deleted session is none.
 #[test]

@@ -61,7 +61,7 @@ def state_of (mode : Mode) (mcps : List String) : WeaverState := {
     run := run_of,
     mode := mode,
     provider := "mock",
-    budget := budget, context_window := 128000, compact_at := 80, plan := Option.none, last_context := 0, grants := Option.none, workspace_root := Option.none, 
+    budget := budget, context_window := 128000, compact_at := 80, plan := Option.none, last_context := 0, grants := Option.none, workspace_root := Option.none,
     mcps := mcps,
     keys := BTreeMap.empty,
     catalog := BTreeMap.empty,
@@ -511,7 +511,7 @@ def test_resume_by_directory_loads_history : IO Bool := do {
 }
 
 def check_resume_dir (base : WeaverState) (s0 : StoreState) (root : Path) : IO Bool := do {
-    let _ <- Store.append_transcript s0.dir 0 [TLine.user_line "x"] ;
+    let _ <- Store.append_transcript s0.dir 0 [TLine.user_line "x"];
     let r <- Commands.dispatch (String.concat "/resume " (Path.to_string s0.dir)) (with_store base s0);
     match effect_state r {
         Option.none => IO.pure false,
