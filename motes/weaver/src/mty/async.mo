@@ -1,4 +1,4 @@
-// weaver / test / async -- the live-turn behaviors: redraws mid-turn, the
+// weaver / mty / async -- the live-turn behaviors: redraws mid-turn, the
 // thinking row, mid-turn keys, the completion repaint, no re-emission, one
 // mid-turn Ctrl-C only hints, two quit promptly, Esc stops the turn, and the
 // approval overlay owns stdin. Ported from
@@ -185,36 +185,31 @@ def s5_run (bin : String) (root : String) : IO Bool := do {
 
 // ── Entries ───────────────────────────────────────────────────────────────
 
-#[test]
-def test_async_live_turn_and_completion : IO Bool :=
+pub def run_async_live_turn_and_completion : IO Bool :=
     run_gated "mty weaver async" test_async_s1_body
 
 def test_async_s1_body (bin : String) : IO Bool :=
     with_root "async_live" (fn (root : String) => s1_run bin root)
 
-#[test]
-def test_async_one_ctrl_c_mid_turn : IO Bool :=
+pub def run_async_one_ctrl_c_mid_turn : IO Bool :=
     run_gated "mty weaver async" test_async_s2_body
 
 def test_async_s2_body (bin : String) : IO Bool :=
     with_root "async_one_c" (fn (root : String) => s2_run bin root)
 
-#[test]
-def test_async_double_ctrl_c_mid_turn : IO Bool :=
+pub def run_async_double_ctrl_c_mid_turn : IO Bool :=
     run_gated "mty weaver async" test_async_s3_body
 
 def test_async_s3_body (bin : String) : IO Bool :=
     with_root "async_two_c" (fn (root : String) => s3_run bin root)
 
-#[test]
-def test_async_esc_stops_turn : IO Bool :=
+pub def run_async_esc_stops_turn : IO Bool :=
     run_gated "mty weaver async" test_async_s4_body
 
 def test_async_s4_body (bin : String) : IO Bool :=
     with_root "async_stop" (fn (root : String) => s4_run bin root)
 
-#[test]
-def test_async_overlay_owns_stdin : IO Bool :=
+pub def run_async_overlay_owns_stdin : IO Bool :=
     run_gated "mty weaver async" test_async_s5_body
 
 def test_async_s5_body (bin : String) : IO Bool :=

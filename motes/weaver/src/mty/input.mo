@@ -1,4 +1,4 @@
-// mty / weaver / input -- the caret is visible on the first frame, typing
+// weaver / mty / input -- the caret is visible on the first frame, typing
 // lands on the input row, a click moves the caret, a drag copies via OSC 52,
 // and the caret returns after a submit. Ported from
 // pty_repro_input.py (retired).
@@ -75,8 +75,7 @@ def input_run (bin : String) (root : String) : IO Bool := do {
     }
 }
 
-#[test]
-def test_input_caret_click_drag : IO Bool :=
+pub def run_input_caret_click_drag : IO Bool :=
     run_gated "mty weaver input" test_input_body
 
 def test_input_body (bin : String) : IO Bool :=

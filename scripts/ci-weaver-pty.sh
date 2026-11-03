@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
 # Gate weaver's terminal tests in CI.
 #
-# The drivers live in motes/weaver/test and run under `monad test`, with the
-# generic pty harness in motes/mty (compiled-only `#[extern "c"]` FFI). There
-# is no Python driver left: the sessions S6 scenario (an 18 MB store with an
-# RSS bound) is in sessions_tests.mo. See
+# The drivers live in motes/weaver/src/mty and run under `monad test` through
+# the one file motes/weaver/test/mty_tests.mo (one compile for the whole
+# suite), with the generic pty harness in motes/mty (compiled-only
+# `#[extern "c"]` FFI). The sessions S6 scenario (an 18 MB store with an RSS
+# bound) is in weaver::mty::sessions. See
 # plans/implementations/2026-10-25-weaver-pty-monad-tests.md.
 #
 # ISOLATION. Every driver creates its own temp root and points the spawned
@@ -69,5 +70,5 @@ echo "ci-weaver-pty: testing $bin"
 echo "ci-weaver-pty: running the Monad mty drivers"
 # shellcheck disable=SC2086  # MONAD_BIN may be `cargo run --release --`
 MTY_ROOT="$root" WEAVER_MTY=1 WEAVER_MTY_REQUIRED=1 WV_BIN="$bin" \
-  $monad test motes/weaver/test --jobs 1 \
+  $monad test motes/weaver/test/mty_tests.mo \
   || die "the Monad mty drivers failed"

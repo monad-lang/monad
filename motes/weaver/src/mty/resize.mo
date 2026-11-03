@@ -1,4 +1,4 @@
-// weaver / test / resize -- a real pty shrinks and grows: each geometry change
+// weaver / mty / resize -- a real pty shrinks and grows: each geometry change
 // emits ESC[2J, the bottom border lands on the new last transcript row, and
 // the long reply re-wraps to the new content width. Ported from
 // pty_repro_resize.py (retired).
@@ -68,8 +68,7 @@ def resize_run (bin : String) (root : String) : IO Bool := do {
     }
 }
 
-#[test]
-def test_resize_clears_and_rewraps : IO Bool :=
+pub def run_resize_clears_and_rewraps : IO Bool :=
     run_gated "mty weaver resize" test_resize_body
 
 def test_resize_body (bin : String) : IO Bool :=

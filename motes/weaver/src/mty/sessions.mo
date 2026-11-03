@@ -1,4 +1,4 @@
-// mty / weaver / sessions -- persistence and resume: a turn is written to the
+// weaver / mty / sessions -- persistence and resume: a turn is written to the
 // session store, `--resume` restores it, Home pages older lines from disk, a
 // bracketed paste is one user block, `--no-color` emits no palette codes, and
 // an 18 MB session stays on disk (startup RSS bounded, idle flat).
@@ -138,8 +138,7 @@ def persist_run (bin : String) (root : String) : IO Bool := do {
     }
 }
 
-#[test]
-def test_sessions_persist_then_resume : IO Bool :=
+pub def run_sessions_persist_then_resume : IO Bool :=
     run_gated "mty weaver sessions persist" test_sessions_persist_body
 
 def test_sessions_persist_body (bin : String) : IO Bool :=
@@ -171,8 +170,7 @@ def paging_run (bin : String) (root : String) : IO Bool := do {
     }
 }
 
-#[test]
-def test_sessions_home_pages_from_disk : IO Bool :=
+pub def run_sessions_home_pages_from_disk : IO Bool :=
     run_gated "mty weaver sessions home" test_sessions_home_body
 
 def test_sessions_home_body (bin : String) : IO Bool :=
@@ -232,8 +230,7 @@ def paste_run (bin : String) (root : String) : IO Bool := do {
     }
 }
 
-#[test]
-def test_sessions_bracketed_paste_is_one_block : IO Bool :=
+pub def run_sessions_bracketed_paste_is_one_block : IO Bool :=
     run_gated "mty weaver sessions paste" test_sessions_paste_body
 
 def test_sessions_paste_body (bin : String) : IO Bool :=
@@ -284,8 +281,7 @@ def no_color_run (bin : String) (root : String) : IO Bool := do {
     }
 }
 
-#[test]
-def test_sessions_no_color : IO Bool :=
+pub def run_sessions_no_color : IO Bool :=
     run_gated "mty weaver sessions color" test_sessions_color_body
 
 def test_sessions_color_body (bin : String) : IO Bool :=
@@ -385,8 +381,7 @@ def rss_run (bin : String) (root : String) : IO Bool := do {
     rss_huge bin root sessions base
 }
 
-#[test]
-def test_sessions_big_session_rss : IO Bool :=
+pub def run_sessions_big_session_rss : IO Bool :=
     run_gated "mty weaver sessions rss" test_sessions_rss_body
 
 def test_sessions_rss_body (bin : String) : IO Bool :=

@@ -1,5 +1,5 @@
 // weaver / mty_support -- spawn, isolation, gating and assertion helpers
-// shared by the pty drivers under `motes/weaver/test/`.
+// shared by the pty drivers in `weaver::mty::*`.
 //
 // The generic harness lives in `motes/mty`; this module is the weaver-specific
 // glue (weaver's argv, mock fixtures, per-test roots). Keeping it in weaver's

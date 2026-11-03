@@ -1,4 +1,4 @@
-// mty / weaver / base -- the first frame renders without a key, `go` opens the
+// weaver / mty / base -- the first frame renders without a key, `go` opens the
 // approval overlay, `y` runs the read and completes the turn, the completion
 // repaints, and the double Ctrl+C gesture hints then restores the screen.
 // Ported from the retired scripts/weaver-tui-repro/pty_repro.py; the scripted
@@ -72,8 +72,7 @@ def base_run (bin : String) (root : String) : IO Bool := do {
     }
 }
 
-#[test]
-def test_base_initial_frame_overlay_exit : IO Bool :=
+pub def run_base_initial_frame_overlay_exit : IO Bool :=
     run_gated "mty weaver base" test_base_body
 
 def test_base_body (bin : String) : IO Bool :=

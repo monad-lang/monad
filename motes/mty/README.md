@@ -2,7 +2,8 @@
 
 `mty` spawns a compiled program under a pseudo-terminal, feeds it keys/SGR
 mouse reports, reconstructs the rendered screen, and asserts on it. The
-weaver-specific drivers live in `motes/weaver/test/`, not here; the suite is
+weaver-specific drivers live in `motes/weaver/src/mty/`, run by the one test
+file `motes/weaver/test/mty_tests.mo`, not here; the suite is
 entirely Monad (the last Python pty driver, including the sessions 18 MB RSS
 scenario, was ported and deleted).
 
@@ -51,7 +52,7 @@ MTY_SELFTEST=1 monad test motes/mty/src/tests/spawn_spike_tests.mo
 monad build motes/weaver/src/main.mo --release -o target-monad/release/weaver
 MTY_ROOT="$PWD" WEAVER_MTY=1 WEAVER_MTY_REQUIRED=1 \
   WV_BIN=target-monad/release/weaver \
-  monad test motes/weaver/test --jobs 1 -v
+  monad test motes/weaver/test/mty_tests.mo -v
 ```
 
 `WV_BIN` names the binary under test; `WV_SESSION_KEEP=1` keeps a failed

@@ -1,4 +1,4 @@
-// mty / weaver / ctrl_d -- one Ctrl+D hints, a Ctrl+C/Ctrl+D cross-gesture
+// weaver / mty / ctrl_d -- one Ctrl+D hints, a Ctrl+C/Ctrl+D cross-gesture
 // does not exit, and two consecutive Ctrl+D presses restore the terminal.
 // Ported from pty_repro_ctrl_d.py (retired).
 use mty::spawn {Mty, Output}
@@ -67,15 +67,13 @@ def double_exits (bin : String) (root : String) : IO Bool := do {
     }
 }
 
-#[test]
-def test_ctrl_d_single_and_cross_gesture : IO Bool :=
+pub def run_ctrl_d_single_and_cross_gesture : IO Bool :=
     run_gated "mty weaver ctrl_d" test_ctrl_d_single_body
 
 def test_ctrl_d_single_body (bin : String) : IO Bool :=
     with_root "ctrl_d_single" (fn (root : String) => single_and_cross bin root)
 
-#[test]
-def test_ctrl_d_double_exits : IO Bool :=
+pub def run_ctrl_d_double_exits : IO Bool :=
     run_gated "mty weaver ctrl_d" test_ctrl_d_double_body
 
 def test_ctrl_d_double_body (bin : String) : IO Bool :=

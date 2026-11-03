@@ -1,4 +1,4 @@
-// mty / weaver / round2 -- rounded borders and the dim statusbar, eight mock
+// weaver / mty / round2 -- rounded borders and the dim statusbar, eight mock
 // turns, PageUp/PageDown and the SGR wheel indicator, Alt+Enter multiline
 // submit, and history recall. Ported from
 // pty_repro_round2.py (retired); the Python's history check
@@ -106,8 +106,7 @@ def round2_run (bin : String) (root : String) : IO Bool := do {
     }
 }
 
-#[test]
-def test_round2_scroll_multiline_history : IO Bool :=
+pub def run_round2_scroll_multiline_history : IO Bool :=
     run_gated "mty weaver round2" test_round2_body
 
 def test_round2_body (bin : String) : IO Bool :=

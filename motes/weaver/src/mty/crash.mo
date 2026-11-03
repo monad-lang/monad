@@ -1,4 +1,4 @@
-// mty / weaver / crash -- a SIGKILLed run leaves no exit marker; the next run
+// weaver / mty / crash -- a SIGKILLed run leaves no exit marker; the next run
 // warns about the previous crash and logs crash_detected; a clean /quit writes
 // the exit marker. Ported from pty_repro_crash.py (retired).
 use mty::spawn {Mty, Output}
@@ -58,8 +58,7 @@ def crash_run (bin : String) (root : String) : IO Bool := do {
     crash_go bin root turns
 }
 
-#[test]
-def test_crash_detect_and_clean_exit : IO Bool :=
+pub def run_crash_detect_and_clean_exit : IO Bool :=
     run_gated "mty weaver crash" test_crash_body
 
 def test_crash_body (bin : String) : IO Bool :=

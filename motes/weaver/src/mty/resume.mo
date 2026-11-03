@@ -1,4 +1,4 @@
-// mty / weaver / resume -- the `/resume` picker lists the current session with
+// weaver / mty / resume -- the `/resume` picker lists the current session with
 // its marker and descriptions, Esc leaves the app responsive, choosing a row
 // restores that transcript, and ten sessions page with Older/Newer rows.
 // Ported from pty_repro_resume.py (retired).
@@ -172,22 +172,19 @@ def resume_pager_run (bin : String) (root : String) : IO Bool := do {
     }
 }
 
-#[test]
-def test_resume_picker_lists_current_and_esc : IO Bool :=
+pub def run_resume_picker_lists_current_and_esc : IO Bool :=
     run_gated "mty weaver resume picker" test_resume_picker_body
 
 def test_resume_picker_body (bin : String) : IO Bool :=
     with_root "resume_picker" (fn (root : String) => resume_picker_run bin root)
 
-#[test]
-def test_resume_choose_loads_transcript : IO Bool :=
+pub def run_resume_choose_loads_transcript : IO Bool :=
     run_gated "mty weaver resume choose" test_resume_choose_body
 
 def test_resume_choose_body (bin : String) : IO Bool :=
     with_root "resume_choose" (fn (root : String) => resume_choose_run bin root)
 
-#[test]
-def test_resume_pager : IO Bool :=
+pub def run_resume_pager : IO Bool :=
     run_gated "mty weaver resume pager" test_resume_pager_body
 
 def test_resume_pager_body (bin : String) : IO Bool :=

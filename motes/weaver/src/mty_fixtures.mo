@@ -1,5 +1,5 @@
 // weaver / mty_fixtures -- turn scripts and synthetic session stores for the
-// pty drivers under `motes/weaver/test/`.
+// pty drivers in `weaver::mty::*`.
 //
 // Two jobs:
 //

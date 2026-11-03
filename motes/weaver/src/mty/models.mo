@@ -1,4 +1,4 @@
-// mty / weaver / models -- the API-loaded model picker: /model opens it with
+// weaver / mty / models -- the API-loaded model picker: /model opens it with
 // the current name marked, Enter applies the selection (echo + banner), and
 // Esc closes it. Ported from pty_repro_models.py (retired).
 use mty::spawn {Mty, Output}
@@ -54,8 +54,7 @@ def models_run (bin : String) (root : String) : IO Bool := do {
     }
 }
 
-#[test]
-def test_model_picker_select_and_cancel : IO Bool :=
+pub def run_model_picker_select_and_cancel : IO Bool :=
     run_gated "mty weaver models" test_models_body
 
 def test_models_body (bin : String) : IO Bool :=

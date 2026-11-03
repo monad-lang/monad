@@ -1,4 +1,4 @@
-// mty / weaver / processes -- a start_process turn opens the approval overlay,
+// weaver / mty / processes -- a start_process turn opens the approval overlay,
 // `/processes` lists the running task with its command, and
 // `/processes kill <id>` really stops the pid. Ported from
 // pty_repro_processes.py (retired).
@@ -89,8 +89,7 @@ def processes_run (bin : String) (root : String) : IO Bool := do {
     }
 }
 
-#[test]
-def test_start_process_list_and_kill : IO Bool :=
+pub def run_start_process_list_and_kill : IO Bool :=
     run_gated "mty weaver processes" test_processes_body
 
 def test_processes_body (bin : String) : IO Bool :=

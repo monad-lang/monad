@@ -1,4 +1,4 @@
-// mty / weaver / bigplan -- a generated 2000-line plan paints promptly and is
+// weaver / mty / bigplan -- a generated 2000-line plan paints promptly and is
 // bottom-pinned, Home reaches its first line, `/plan` opens the review dialog,
 // a 10 KB bracketed paste into the revise note completes, and Esc closes.
 // Ported from pty_repro_bigplan.py (retired).
@@ -93,8 +93,7 @@ def bigplan_run (bin : String) (root : String) : IO Bool := do {
     }
 }
 
-#[test]
-def test_bigplan_paint_home_dialog_paste : IO Bool :=
+pub def run_bigplan_paint_home_dialog_paste : IO Bool :=
     run_gated "mty weaver bigplan" test_bigplan_body
 
 def test_bigplan_body (bin : String) : IO Bool :=

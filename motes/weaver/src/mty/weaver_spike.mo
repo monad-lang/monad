@@ -70,8 +70,7 @@ def run_spike (bin : String) : IO Bool := do {
     }
 }
 
-#[test]
-def test_weaver_frame_resize_exit : IO Bool := do {
+pub def run_weaver_frame_resize_exit : IO Bool := do {
     let on <- Check.enabled "MTY_SELFTEST";
     if Bool.not on then do {
         Check.skip "mty weaver spike (set MTY_SELFTEST=1; compiled backend only)"

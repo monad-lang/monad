@@ -1,4 +1,4 @@
-// mty / weaver / soak -- a long run must not grow the native stack. Every
+// weaver / mty / soak -- a long run must not grow the native stack. Every
 // frame of the tui loop runs through a chain of IO binds whose continuations
 // the compiled backend calls inside `monad_io_bind`'s C frame; a recursive
 // frame loop died with SIGSEGV in a long session. With a 2 MiB stack a
@@ -66,8 +66,7 @@ def soak_run (bin : String) (root : String) : IO Bool := do {
     }
 }
 
-#[test]
-def test_soak_long_run_keeps_the_stack_flat : IO Bool :=
+pub def run_soak_long_run_keeps_the_stack_flat : IO Bool :=
     run_gated "mty weaver soak" test_soak_body
 
 def test_soak_body (bin : String) : IO Bool :=
@@ -111,6 +110,5 @@ def pending_run (bin : String) (root : String) : IO Bool := do {
     }
 }
 
-#[test]
-def test_soak_pending_turn_keeps_rss_flat : IO Bool :=
+pub def run_soak_pending_turn_keeps_rss_flat : IO Bool :=
     run_gated "mty weaver pending-turn rss" (fn (bin : String) => with_root "pending" (fn (root : String) => pending_run bin root))

@@ -1,4 +1,4 @@
-// mty / weaver / dialogs -- the permission dialog (deny with a note, arrow
+// weaver / mty / dialogs -- the permission dialog (deny with a note, arrow
 // selection + Enter), and the plan-review revise path. Ported from
 // pty_repro_dialogs.py (retired).
 //
@@ -191,22 +191,19 @@ def plan_run (bin : String) (root : String) : IO Bool := do {
     }
 }
 
-#[test]
-def test_dialog_deny_with_note : IO Bool :=
+pub def run_dialog_deny_with_note : IO Bool :=
     run_gated "mty weaver dialogs" test_dialog_deny_body
 
 def test_dialog_deny_body (bin : String) : IO Bool :=
     with_root "dialogs_deny" (fn (root : String) => deny_run bin root)
 
-#[test]
-def test_dialog_arrow_approves : IO Bool :=
+pub def run_dialog_arrow_approves : IO Bool :=
     run_gated "mty weaver dialogs" test_dialog_approve_body
 
 def test_dialog_approve_body (bin : String) : IO Bool :=
     with_root "dialogs_approve" (fn (root : String) => approve_run bin root)
 
-#[test]
-def test_dialog_plan_revise : IO Bool :=
+pub def run_dialog_plan_revise : IO Bool :=
     run_gated "mty weaver dialogs" test_dialog_plan_body
 
 def test_dialog_plan_body (bin : String) : IO Bool :=
