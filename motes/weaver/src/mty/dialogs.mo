@@ -1,6 +1,6 @@
 // weaver / mty / dialogs -- the permission dialog (deny with a note, arrow
-// selection + Enter), and the plan-review revise path. Ported from
-// pty_repro_dialogs.py (retired).
+// selection + Enter), the plan-review revise path, and typed values in the
+// settings dialog. Ported from pty_repro_dialogs.py (retired).
 //
 // The edit fixture is GENERATED in the run root: the checked-in
 // turns_edit.json has no `new_content`, so the Python driver wrote its own.
@@ -191,6 +191,64 @@ def plan_run (bin : String) (root : String) : IO Bool := do {
     }
 }
 
+// ── 4. Settings: typed values, and the dialog stays open ─────────────────
+
+def clear_screen_seq : String := "\u{1b}[2J"
+
+def settings_go (m : Mty) : IO Bool := do {
+    let up <- Mty.wait_until m saw_alt 6000;
+    Mty.send_text m "/settings\r";
+    let dlg <- Mty.wait_until m (fn (o : Output) => visible o "Output budget") 6000;
+    Mty.send_text m "\u{1b}[B";
+    Mty.pump m 150;
+    Mty.send_text m "\u{1b}[B";
+    Mty.pump m 150;
+    Mty.send_text m "\r";
+    Mty.pump m 150;
+    Mty.send_text m "\u{15}5000";
+    Mty.pump m 150;
+    Mty.send_text m "\r";
+    let applied <- Mty.wait_until m (fn (o : Output) =>
+        visible o "max_tokens: 5000") 6000;
+    let o1 <- Mty.output m;
+    let a <- Check.report "a typed value applies and the dialog stays open"
+        (dlg && applied && visible o1 "Output budget: 5000" && visible o1 "Save to project");
+    Mty.send_text m "\r";
+    Mty.pump m 150;
+    Mty.send_text m "\u{15}abc";
+    Mty.pump m 150;
+    Mty.send_text m "\r";
+    let rejected <- Mty.wait_until m (fn (o : Output) =>
+        visible o "max_tokens must be a number") 6000;
+    let o2 <- Mty.output m;
+    let b <- Check.report "a rejected value shows its error in the dialog"
+        (rejected && visible o2 "Output budget: 5000");
+    let mark : I64 := String.length o2.raw;
+    Mty.send_text m "\u{1b}[B";
+    Mty.pump m 150;
+    Mty.send_text m "\u{1b}[<65;10;10M";
+    Mty.pump m 150;
+    Mty.send_text m "\u{1b}[A";
+    Mty.pump m 300;
+    let o3 <- Mty.output m;
+    let c <- Check.report "moving and scrolling repaint without clearing the screen"
+        (Bool.not (String.contains (Output.since o3 mark) clear_screen_seq));
+    Mty.send_text m "\u{1b}";
+    let closed <- Mty.wait_until m (fn (o : Output) => not_found o "Save to project") 6000;
+    let d <- Check.report "Esc closes the settings dialog" closed;
+    Mty.finish m;
+    return (up && a && b && c && d)
+}
+
+def settings_run (bin : String) (root : String) : IO Bool := do {
+    let fixture <- plan_fixture root;
+    let r <- spawn_dialogs bin root fixture;
+    match r {
+        Result.err e => do { IO.println (String.concat "FAIL mty dialogs spawn: " e); return false },
+        Result.ok m => settings_go m
+    }
+}
+
 pub def run_dialog_deny_with_note : IO Bool :=
     run_gated "mty weaver dialogs" test_dialog_deny_body
 
@@ -208,3 +266,9 @@ pub def run_dialog_plan_revise : IO Bool :=
 
 def test_dialog_plan_body (bin : String) : IO Bool :=
     with_root "dialogs_plan" (fn (root : String) => plan_run bin root)
+
+pub def run_dialog_settings_edit : IO Bool :=
+    run_gated "mty weaver dialogs" test_dialog_settings_body
+
+def test_dialog_settings_body (bin : String) : IO Bool :=
+    with_root "dialogs_settings" (fn (root : String) => settings_run bin root)

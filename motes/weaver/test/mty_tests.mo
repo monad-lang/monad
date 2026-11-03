@@ -18,7 +18,8 @@ use weaver::mty::ctrl_d {run_ctrl_d_single_and_cross_gesture, run_ctrl_d_double_
 use weaver::mty::dialogs {
     run_dialog_deny_with_note,
     run_dialog_arrow_approves,
-    run_dialog_plan_revise
+    run_dialog_plan_revise,
+    run_dialog_settings_edit
 }
 use weaver::mty::input {run_input_caret_click_drag}
 use weaver::mty::models {run_model_picker_select_and_cancel}
@@ -82,6 +83,9 @@ def test_dialog_arrow_approves : IO Bool := run_dialog_arrow_approves
 
 #[test]
 def test_dialog_plan_revise : IO Bool := run_dialog_plan_revise
+
+#[test]
+def test_dialog_settings_edit : IO Bool := run_dialog_settings_edit
 
 #[test]
 def test_input_caret_click_drag : IO Bool := run_input_caret_click_drag

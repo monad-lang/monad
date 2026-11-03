@@ -25,7 +25,7 @@ use std::ref {Ref}
 use weaver::commands {
     WeaverState, Effect, Effect.ok, set_fatal, Commands.dispatch, Commands.set_model,
     Commands.autocompact, Commands.last_assistant_text, Commands.current_plan,
-    Commands.plan_after_turn, Commands.setting_rows, Commands.cycle_setting, SettingRow,
+    Commands.plan_after_turn, Commands.setting_rows, Commands.cycle_setting, Commands.apply_setting, SettingRow, SettingKind,
     SessionPage, Commands.session_page, Commands.turns_label, Commands.turn_context,
 }
 use log::logger {Logger}
@@ -69,12 +69,12 @@ use weaver::theme {theme_split_lines, theme_line_style_with, theme_border_style_
 use weaver::store {TLine, TLine.plain, TLine.user_line}
 use weaver::error {WeaverError, WeaverError.show, WeaverError.recoverable}
 use std::concurrent::fiber {FiberError, FiberError.message}
-use tui::types {Event, Key, MouseEvent, MouseButton}
+use tui::types {Event, Key, MouseEvent, MouseButton, Screen}
 use tui::widget {SizedWidget}
 use tui::text {Text.take_width, Text.width}
 use tui::clipboard {Clipboard.copy}
 use tui::widgets::dialog {
-    DialogModel, DialogOption, DialogStep, Dialog.make, Dialog.with_default, Dialog.note_text,
+    DialogModel, DialogOption, DialogStep, Dialog.make, Dialog.with_default, Dialog.with_notes, Dialog.note_text,
     Dialog.paint, Dialog.modal,
 }
 use tui::terminal {
@@ -1034,38 +1034,71 @@ def permissions_choose (i : I64) (st : WeaverState) : IO WeaverMsg := do {
     }
 }
 
-/// `/settings` in the TUI: one row per editable setting (Enter cycles
-/// it), then Model/Provider and the two explicit save targets. Free-form
-/// values are `/settings <key> <value>`.
+/// `/settings` in the TUI: one row per setting -- Enter types a number
+/// row's value in place, or cycles the mode and thinking rows -- then
+/// Model/Provider and the two save targets. The dialog stays open across
+/// edits, with the last result (or a rejected value's error) as its
+/// subtitle, until Esc or an action closes it.
 def settings_dialog_step (st : WeaverState) : IO WeaverMsg := do {
-    let rows : List SettingRow := Commands.setting_rows st;
-    // The lambda's literal needs its own annotation: the host checker
-    // cannot infer it from `List.map`'s result type.
-    let row_opts : List DialogOption := List.map (fn (r : SettingRow) =>
-        let o : DialogOption := { label := String.concat r.label (String.concat ": " r.value), hint := "Enter", key := "" } in
-        o) rows;
-    let a_model : DialogOption := { label := "Model... (opens the picker)", hint := "", key := "" };
-    let a_provider : DialogOption := { label := "Provider (use /provider <name>)", hint := "", key := "" };
-    let a_save_p : DialogOption := { label := "Save to project (.weaver/config.toml)", hint := "", key := "" };
-    let a_save_g : DialogOption := { label := "Save to global (~/.weaver/config.toml)", hint := "", key := "" };
-    let a_close : DialogOption := { label := "Close", hint := "Esc", key := "" };
-    let actions : List DialogOption := [a_model, a_provider, a_save_p, a_save_g, a_close];
-    let opts : List DialogOption := List.append row_opts actions;
-    let body : List String := List.map (fn (r : SettingRow) =>
-        String.concat "  " (String.concat r.label (String.concat ": " r.value))) rows;
-    let d : DialogModel := Dialog.make "Settings" "Enter cycles or applies -- Esc closes" body opts;
-    let pr <- dialog_run st.colors st.store d;
-    let step : DialogStep := match pr { Pair.pair _ s => s };
-    settings_step_msg st (List.length rows) step
+    Overlay.begin st.store;
+    let pr <- settings_loop st 0 "Enter edits or cycles -- Esc closes";
+    Overlay.finish st.store;
+    match pr { Pair.pair st2 action => settings_choose_action action st2 }
 }
 
-def settings_step_msg (st : WeaverState) (nrows : I64) (step : DialogStep) : IO WeaverMsg :=
+/// The setting rows as dialog options: a number row carries its value,
+/// so Enter edits it; the other rows show theirs and Enter cycles them.
+pub def TuiApp.settings_options (rows : List SettingRow) : List DialogOption :=
+    List.map (fn (r : SettingRow) =>
+        match r.kind {
+            SettingKind.setting_number =>
+                let o : DialogOption := { label := r.label, hint := "", key := "", value := Option.some r.value } in
+                o,
+            _ =>
+                let o : DialogOption := { label := String.concat r.label (String.concat ": " r.value), hint := "Enter", key := "" } in
+                o,
+        }) rows
+
+def settings_actions : List DialogOption :=
+    let a_model : DialogOption := { label := "Model... (opens the picker)", hint := "", key := "" } in
+    let a_provider : DialogOption := { label := "Provider (use /provider <name>)", hint := "", key := "" } in
+    let a_save_p : DialogOption := { label := "Save to project (.weaver/config.toml)", hint := "", key := "" } in
+    let a_save_g : DialogOption := { label := "Save to global (~/.weaver/config.toml)", hint := "", key := "" } in
+    let a_close : DialogOption := { label := "Close", hint := "Esc", key := "" } in
+    [a_model, a_provider, a_save_p, a_save_g, a_close]
+
+/// One open of the dialog with `selected` highlighted and `status` as the
+/// subtitle. Answers the edited state and the chosen action's index
+/// (-1 = closed).
+#[partial]
+def settings_loop (st : WeaverState) (selected : I64) (status : String) : IO (Pair WeaverState I64) := do {
+    let rows : List SettingRow := Commands.setting_rows st;
+    let opts : List DialogOption := List.append (TuiApp.settings_options rows) settings_actions;
+    let body : List String := [String.concat st.provider (String.concat "/" st.run.session.config.model)];
+    let d : DialogModel := Dialog.with_default (Dialog.make "Settings" status body opts) selected;
+    let pr <- Dialog.modal (paint_dialog st.colors) d;
+    match pr { Pair.pair _ step => settings_step st (List.length rows) step }
+}
+
+#[partial]
+def settings_step (st : WeaverState) (nrows : I64) (step : DialogStep) : IO (Pair WeaverState I64) :=
     match step {
         DialogStep.choose i =>
             if I64.lt i nrows
-            then settings_choose_row i st
-            else settings_choose_action (i - nrows) st,
-        _ => IO.pure (WeaverMsg.command_result (Effect.ok st "settings closed")),
+            then settings_applied st i (Commands.cycle_setting st (row_key_at i (Commands.setting_rows st)))
+            else IO.pure (Pair.pair st (i - nrows)),
+        DialogStep.submit i text =>
+            settings_applied st i (Commands.apply_setting st (row_key_at i (Commands.setting_rows st)) (String.trim text)),
+        _ => IO.pure (Pair.pair st (0 - 1)),
+    }
+
+/// Reopen on row `i` after an edit: the new state and its output line, or
+/// the unchanged state and the error.
+#[partial]
+def settings_applied (st : WeaverState) (i : I64) (r : Result String (Pair WeaverState String)) : IO (Pair WeaverState I64) :=
+    match r {
+        Result.err e => settings_loop st i e,
+        Result.ok pr => match pr { Pair.pair st2 out => settings_loop st2 i out },
     }
 
 #[partial]
@@ -1073,15 +1106,6 @@ def row_key_at (i : I64) (rows : List SettingRow) : String :=
     match rows {
         List.empty => "",
         List.cons r rest => if I64.lt i 1 then r.key else row_key_at (i - 1) rest,
-    }
-
-def settings_choose_row (i : I64) (st : WeaverState) : IO WeaverMsg :=
-    let key : String := row_key_at i (Commands.setting_rows st) in
-    match Commands.cycle_setting st key {
-        Result.err e => IO.pure (WeaverMsg.command_result (Effect.ok st e)),
-        Result.ok pr => match pr {
-            Pair.pair st2 out => IO.pure (WeaverMsg.command_result (Effect.ok st2 out)),
-        },
     }
 
 def settings_choose_action (i : I64) (st : WeaverState) : IO WeaverMsg := do {
@@ -1456,7 +1480,7 @@ def prompt_overlay (colors : Bool) (store : Option StoreState) (grants : Option 
     let repo_ok : Bool := Permissions.pick_in_repo root (pick_target p);
     let opts : List DialogOption := perm_options p.cap repo_ok;
     let subtitle : String := String.concat (cap_name p.cap) (String.concat " " p.name);
-    let d : DialogModel := Dialog.make "Permission required" subtitle body opts;
+    let d : DialogModel := Dialog.with_notes (Dialog.make "Permission required" subtitle body opts);
     let default_idx : I64 := perm_default_index p.cap repo_ok;
     let pr <- dialog_run colors store (Dialog.with_default d default_idx);
     match pr {
@@ -1824,7 +1848,7 @@ def plan_dialog_step (st : WeaverState) (text : String) : IO WeaverMsg :=
 def plan_view_step (st : WeaverState) : IO WeaverMsg := do {
     let o0 : DialogOption := { label := "Close", hint := "Esc", key := "" };
     let d0 : DialogModel := Dialog.make "Current plan" "read-only -- switch to plan mode to revise or approve" (plan_body st) [o0];
-    let d : DialogModel := { d0 with markdown := true, footer := "PageUp/PageDown scroll -- Enter/Esc close" };
+    let d : DialogModel := { d0 with markdown := true, footer := "PageUp/PageDown or wheel scroll -- Enter/Esc close" };
     let pr <- dialog_run st.colors st.store d;
     match pr {
         Pair.pair _ _ => IO.pure (WeaverMsg.command_result (plan_effect st "plan closed")),
@@ -1837,7 +1861,7 @@ def plan_approval_step (st : WeaverState) : IO WeaverMsg := do {
     let o2 : DialogOption := { label := "Revise with a note", hint := "r", key := "r" };
     let o3 : DialogOption := { label := "Cancel", hint := "Esc", key := "" };
     let d0 : DialogModel := Dialog.make "Plan ready" "approve it to leave plan mode" (plan_body st) [o0, o1, o2, o3];
-    let d : DialogModel := { d0 with markdown := true, footer := "PageUp/PageDown scroll -- a approve/edit, m manual, r revise, Esc cancel" };
+    let d : DialogModel := { (Dialog.with_notes d0) with markdown := true, footer := "PageUp/PageDown scroll -- e note, a approve/edit, m manual, r revise, Esc cancel" };
     let pr <- dialog_run st.colors st.store d;
     match pr {
         Pair.pair final step => match step {
@@ -1906,8 +1930,8 @@ def dialog_body_rows (colors : Bool) (width : I64) (d : DialogModel) : List Size
         else List.flatten (List.map (fn (l : String) => Rows.of_line colors width (TLine.plain l)) d.body) in
     List.map Rows.widget rows
 
-def paint_dialog (colors : Bool) (d : DialogModel) : IO Unit :=
-    Dialog.paint (theme_border_style_with colors) (dialog_body_rows colors) d
+def paint_dialog (colors : Bool) (prev : Option Screen) (d : DialogModel) : IO (Pair Screen DialogModel) :=
+    Dialog.paint (theme_border_style_with colors) (dialog_body_rows colors) prev d
 
 /// Run a dialog. The overlay handshake brackets the whole modal --
 /// confirm, cancel or EOF: `begin` takes stdin from the main loop;

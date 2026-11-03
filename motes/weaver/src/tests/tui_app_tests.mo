@@ -11,7 +11,7 @@ use shuttle::gate {Gate}
 use shuttle::provider {ProviderConfig, Wire}
 use shuttle::registry {ToolRegistry}
 use shuttle::session {Session}
-use weaver::commands {WeaverState, Effect, TranscriptChange, set_fatal}
+use weaver::commands {WeaverState, Effect, TranscriptChange, set_fatal, Commands.setting_rows}
 use weaver::error {WeaverError}
 use weaver::policy {Mode}
 use weaver::ui::live {LiveModel, LiveMsg, LiveDelta, Live.start, Live.status_text}
@@ -29,7 +29,7 @@ use std::path {Path, Path.of}
 use std::map {Map, BTreeMap}
 use weaver::tui_app {
     TuiApp.update, TuiApp.subscriptions, turn_never_ran, TuiApp.resume_rows, TuiApp.resume_option,
-    TuiApp.resume_action_at, activity_name, markdown_body_rows,
+    TuiApp.resume_action_at, TuiApp.settings_options, activity_name, markdown_body_rows,
     ResumeAction, ResumeChoice,
 }
 use weaver::commands {SessionPage, Commands.session_page}
@@ -38,7 +38,7 @@ use tui::text {Text.width}
 use std::concurrent::fiber {never_started}
 use tui::types {Event, Key}
 use tui::tui {Cmd}
-use std::list {List.length}
+use std::list {List.length, List.filter}
 
 // ── The offline state (commands_tests.mo's shape) ───────────────────────
 
@@ -1017,3 +1017,18 @@ def test_markdown_body_rows_render_a_plan : Bool :=
 #[test]
 def test_markdown_body_rows_empty : Bool :=
     List.length (markdown_body_rows false 40 List.empty) == 0
+
+// ── /settings dialog options ────────────────────────────────────────────
+
+def editable_count (opts : List DialogOption) : I64 :=
+    List.length (List.filter (fn (o : DialogOption) => match o.value { Option.some _ => true, Option.none => false }) opts)
+
+/// The four number rows are typed in place; mode and thinking cycle.
+#[test]
+def test_settings_options_make_the_number_rows_editable : Bool :=
+    let opts : List DialogOption := TuiApp.settings_options (Commands.setting_rows (state_of Mode.manual)) in
+    let budget_shown : Bool := match List.get 3 opts {
+        Option.some o => o.label == "Turn budget" && (match o.value { Option.some v => v == "10", Option.none => false }),
+        Option.none => false,
+    } in
+    List.length opts == 6 && editable_count opts == 4 && budget_shown

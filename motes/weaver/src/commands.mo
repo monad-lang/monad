@@ -1230,40 +1230,14 @@ pub def Commands.apply_setting (st : WeaverState) (key : String) (value : String
     else Result.err (String.concat "unknown setting: "
         (String.concat key " (mode | thinking | max_tokens | max_turns | context_window | compact_at)"))
 
-#[partial]
-def next_above (cur : I64) (ladder : List I64) : Option I64 :=
-    match ladder {
-        List.empty => Option.none,
-        List.cons x rest => if I64.gt x cur then Option.some x else next_above cur rest,
-    }
-
-def ladder_next (cur : I64) (ladder : List I64) : I64 :=
-    match next_above cur ladder {
-        Option.some x => x,
-        Option.none => match ladder {
-            List.empty => cur,
-            List.cons first _ => first,
-        },
-    }
-
-/// Step a setting to its next curated value (the dialog's Enter). A
-/// numeric ladder wraps to its lowest rung; free text is `/settings
-/// <key> <value>`.
+/// Step a cycling setting (mode, thinking) to its next value: the
+/// dialog's Enter on those rows. Number settings are typed instead.
 pub def Commands.cycle_setting (st : WeaverState) (key : String) : Result String (Pair WeaverState String) :=
-    let cfg : ProviderConfig := st.run.session.config in
     if key == "mode"
     then Commands.apply_setting st key (Mode.show (Mode.cycle st.mode))
     else if key == "thinking"
-    then Commands.apply_setting st key (if cfg.thinking then "off" else "on")
-    else if key == "max_tokens"
-    then Commands.apply_setting st key (I64.to_string (ladder_next cfg.max_tokens [1024, 2048, 4096, 8192, 16384, 32768, 65536]))
-    else if key == "max_turns"
-    then Commands.apply_setting st key (I64.to_string (ladder_next st.budget [50, 100, 200, 500, 1000]))
-    else if key == "context_window"
-    then Commands.apply_setting st key (I64.to_string (ladder_next st.context_window [32768, 65536, 128000, 200000, 1000000]))
-    else if key == "compact_at"
-    then Commands.apply_setting st key (I64.to_string (ladder_next st.compact_at [50, 60, 70, 80, 90]))
-    else Result.err (String.concat "unknown setting: " key)
+    then Commands.apply_setting st key (if st.run.session.config.thinking then "off" else "on")
+    else Result.err (String.concat "not a cycling setting: " key)
 
 def settings_update (st : WeaverState) : SettingsUpdate :=
     let cfg : ProviderConfig := st.run.session.config in
