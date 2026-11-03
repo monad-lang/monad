@@ -1,6 +1,30 @@
-# Rung 1, in two derivations: the host interprets `cli/src/main.mo` into a real
-# `monad` plus the `.ll` it emitted (`packages.monadRung1`), and a small link
-# step stamps that `.ll` with this commit's revision (`packages.monad`).
+# Rung 1, in two derivations, built by two hosts: a host compiles
+# `cli/src/main.mo` into a real `monad` plus the `.ll` it emitted, and a small
+# link step stamps that `.ll` with this commit's revision (`packages.monad`).
+#
+# The two hosts, and what each one's rung is FOR:
+#
+#   * the Rust interpreter (`packages.monadHost`, nix/host.nix) builds
+#     `packages.monadRung1` -- the reference the bootstrap ladder consumes:
+#     its `.ll` is one side of the interpreted-vs-compiled `cmp`
+#     (scripts/bootstrap-compile.sh's store re-use), so it stays interpreted
+#     however the release is built.
+#   * the pinned previous nightly (`packages.monadNightlyHost`,
+#     nix/nightly.nix) builds `packages.monadNightlyRung1` -- the rung the
+#     RELEASE is cut from: every `monad-nightly-<platform>` and
+#     `monadup-<platform>` asset is that rung's `.ll` (or IR) relinked.
+#     plans/bootstrapping/nightly-compiles-next.md names the invariant; the
+#     cost it removes is measured there too (~2 min of native compilation
+#     against ~26 min of interpretation per cold leg, and the Mac leg stops
+#     paying the Rust host's own cold build as well).
+#
+# A derivation per host rather than one rung switched to the nightly: the
+# ladder's `cmp` is interpreted-vs-compiled, and a nightly-built rung 1 would
+# compare the nightly's IR against the tree's instead -- failing loudly on
+# every branch that changes codegen (scripts/build-self-hosted.sh's header
+# says the same, which is why its own ladder keeps the cargo host). Keeping
+# `monadRung1` interpreted and moving the RELEASE to `nightlyRung1` leaves the
+# ladder asserting exactly what it always asserted.
 #
 # The split exists because of what made the old single derivation uncacheable.
 # `.#monad` was cold on EVERY commit for two independent reasons -- its `src`
@@ -56,6 +80,11 @@
     }:
     let
       monadHost = config.packages.monadHost;
+      # The other rung-1 host: the pinned previous nightly (nix/nightly.nix).
+      # Read through `config` rather than imported directly so the two hosts
+      # enter this module the same way, and so the pin -- its url, its hash,
+      # the bump rule -- stays a concern of the file that owns it.
+      nightlyHost = config.packages.monadNightlyHost;
 
       # The collector, with its static archive. Every link in this file goes
       # through either `gcLink`'s archive-by-path or `llvm/src/link.mo`'s
@@ -302,82 +331,111 @@
         );
       };
 
-      # The interpretation. Commit-free by construction: no phase below
-      # mentions `commit`, and neither does `nix/host.nix`, which takes only
-      # `monadVersion` -- so nothing in this derivation's inputs can move with
-      # the revision, which is the whole point of it. What `monad version`
+      # The rung-1 build, parameterized by its HOST (see the file header for
+      # which host builds which rung and why). Commit-free by construction: no
+      # phase below mentions `commit`, and neither do `nix/host.nix` or
+      # `nix/nightly.nix` -- so nothing in this derivation's inputs can move
+      # with the revision, which is the whole point of it. What `monad version`
       # prints from this output is therefore a constant and not this commit;
       # the revision belongs to `.#monad` below, and it gets one.
       #
-      # It installs `monad.ll` BESIDE the binary, which is the enabling change
-      # for CI's bootstrap job: the ladder there asserts the
-      # interpreted-vs-compiled comparison and needs the IR the interpreter
-      # wrote, and `nix/monad.nix` has deliberately never installed one. The
-      # reasoning that kept it out -- "exactly one consumer, the
-      # interpreted-vs-compiled `cmp`... a store copy would grow every
-      # consumer's closure by 5.4 MB of IR" -- is an argument about the
-      # PACKAGED `.#monad`, whose consumers compile programs and have no use
-      # for the IR of the compiler itself. A dedicated rung-1 output whose only
-      # consumer is that ladder is the different thing that argument allows
-      # for, and `.#monad` still installs the binary alone.
-      rung1 = pkgs.stdenv.mkDerivation {
-        pname = "monad-rung1";
-        version = monadVersion;
+      # It installs `monad.ll` BESIDE the binary: the interpreted rung's `.ll`
+      # is one side of CI's interpreted-vs-compiled `cmp` (the enabling change
+      # for that ladder -- `.#monad` deliberately installs no IR), and the
+      # nightly-hosted rung's `.ll` is what `monadFor` below relinks into every
+      # published `monad-nightly-<platform>`. One derivation shape serves both,
+      # because the only thing the two hosts change is WHO compiles the tree.
+      rung1For =
+        { host, pname, description }:
+        pkgs.stdenv.mkDerivation {
+          inherit pname;
+          version = monadVersion;
 
-        src = compilerSrc;
+          src = compilerSrc;
 
-        # No `git` here either (see nix/host.nix): a store copy has no `.git`,
-        # so nothing in this build could name the revision from the tree it is
-        # building -- and this derivation must not name one at all.
-        nativeBuildInputs = [
-          monadHost
-          pkgs.llvm
-          pkgs.clang
-          pkgs.lld
-          pkgs.makeWrapper
-          pkgs.bash
-          pkgs.coreutils
-        ];
-        buildInputs = [ gcStatic ];
+          # No `git` here either (see nix/host.nix): a store copy has no `.git`,
+          # so nothing in this build could name the revision from the tree it is
+          # building -- and this derivation must not name one at all.
+          #
+          # The host arrives as a build input named by MONAD_HOST_BIN, the knob
+          # scripts/build-self-hosted.sh takes, and the script dispatches on its
+          # BASENAME: the interpreter runs the two-rung interpreted shape,
+          # while the pinned nightly -- `bin/monad` -- takes the one-rung
+          # native build (`monad build cli/src/main.mo -o ...`), which is the
+          # entire saving the nightly host exists for.
+          nativeBuildInputs = [
+            host
+            pkgs.llvm
+            pkgs.clang
+            pkgs.lld
+            pkgs.makeWrapper
+            pkgs.bash
+            pkgs.coreutils
+          ];
+          buildInputs = [ gcStatic ];
 
-        # The script below is entered by its shebang, exactly as CI enters it,
-        # and a nix build has no `/usr/bin/env` to resolve that shebang with.
-        # nixpkgs patches shebangs from `fixupOutputHooks` -- on the OUTPUT, at
-        # the end -- so the unpacked source arrives at buildPhase still saying
-        # `#!/usr/bin/env bash` and the build dies with "bad interpreter". This
-        # one line patches the tree instead; `pkgs.bash` above is the
-        # interpreter it rewrites to.
-        postPatch = "patchShebangs scripts";
+          # The script below is entered by its shebang, exactly as CI enters it,
+          # and a nix build has no `/usr/bin/env` to resolve that shebang with.
+          # nixpkgs patches shebangs from `fixupOutputHooks` -- on the OUTPUT, at
+          # the end -- so the unpacked source arrives at buildPhase still saying
+          # `#!/usr/bin/env bash` and the build dies with "bad interpreter". This
+          # one line patches the tree instead; `pkgs.bash` above is the
+          # interpreter it rewrites to.
+          postPatch = "patchShebangs scripts";
 
-        buildPhase = ''
-          runHook preBuild
+          buildPhase = ''
+            runHook preBuild
 
-          # `$PWD` is the unpacked source root, which is what the script is
-          # given as its output directory -- the script writes `$PWD/monad`
-          # beside the `.ll` it emits for the same reason this is spelled
-          # absolutely.
-          MONAD_HOST_BIN=${lib.getExe monadHost} scripts/build-self-hosted.sh "$PWD" --release
+            # `$PWD` is the unpacked source root, which is what the script is
+            # given as its output directory -- the script writes `$PWD/monad`
+            # beside the `.ll` it emits for the same reason this is spelled
+            # absolutely.
+            MONAD_HOST_BIN=${lib.getExe host} scripts/build-self-hosted.sh "$PWD" --release
 
-          runHook postBuild
-        '';
+            runHook postBuild
+          '';
 
-        # `""` for the flag and the path, so this wrapper sets no revision and
-        # puts nothing ahead of the runtime PATH: rung 1 has no revision to
-        # set, and it is this machine's code whatever the target below is for.
-        # The collector is the native one, because so is the code. The `.ll` is
-        # installed ahead of the shared step because that step is a complete
-        # phase, hooks and all, and `install` needs none of them.
-        installPhase = ''
-          install -Dm644 "$PWD/monad.ll" $out/share/monad/monad.ll
-          ${installPhaseWith gcStatic "" ""}
-        '';
+          # `""` for the flag and the path, so this wrapper sets no revision and
+          # puts nothing ahead of the runtime PATH: rung 1 has no revision to
+          # set, and it is this machine's code whatever the target below is for.
+          # The collector is the native one, because so is the code. The `.ll` is
+          # installed ahead of the shared step because that step is a complete
+          # phase, hooks and all, and `install` needs none of them.
+          installPhase = ''
+            install -Dm644 "$PWD/monad.ll" $out/share/monad/monad.ll
+            ${installPhaseWith gcStatic "" ""}
+          '';
 
-        meta = {
-          description = "Rung 1 of the Monad bootstrap ladder, with the IR it emitted";
-          homepage = "https://monad-lang.org";
-          license = lib.licenses.asl20;
-          mainProgram = "monad";
+          meta = {
+            inherit description;
+            homepage = "https://monad-lang.org";
+            license = lib.licenses.asl20;
+            mainProgram = "monad";
+          };
         };
+
+      # The INTERPRETED rung 1, the bootstrap ladder's reference: its `.ll` is
+      # what scripts/bootstrap-compile.sh's store re-use compares the
+      # self-compiled turn against, which is why this stays on the Rust host
+      # however the release is built (the file header's "a derivation per
+      # host" paragraph).
+      rung1 = rung1For {
+        host = monadHost;
+        pname = "monad-rung1";
+        description = "Rung 1 of the Monad bootstrap ladder, with the IR the host interpreter emitted";
+      };
+
+      # The NIGHTLY-HOSTED rung 1, the release's rung: the pinned previous
+      # nightly (nix/nightly.nix) compiles this tree, and every
+      # `monad-nightly-<platform>` asset is this rung's `.ll` relinked with
+      # the commit's revision. Same sources, same phases, same commit-free
+      # key -- only the host differs, which is what keeps the cache honest: a
+      # pin bump is a different `host` store path and therefore a different
+      # rung, while a commit that touches nothing but the revision shares it.
+      nightlyRung1 = rung1For {
+        host = nightlyHost;
+        pname = "monad-nightly-rung1";
+        description = "Rung 1 of the nightly release, compiled by the pinned previous nightly, with the IR it emitted";
       };
     in
     let
@@ -460,8 +518,9 @@
             # what makes the packaged compiler report the revision it was built
             # from rather than the one its host happens to have.
             #
-            # `monadHost` is NOT here: this derivation never runs the interpreter.
-            # It reads `rung1`'s output instead, which is the whole point.
+            # No HOST is here either: this derivation runs nothing but llc and
+            # clang. It reads `nightlyRung1`'s output instead -- the pin's host
+            # has already done the compiling, and this is the per-commit half.
             nativeBuildInputs = [
               pkgs.llvm
               pkgs.clang
@@ -479,15 +538,16 @@
             buildPhase = ''
               runHook preBuild
 
-              # Rung 1's IR, linked here with this commit's revision. `rung1` is a
-              # build input and not a runtime one: the `.ll` is copied out of its
-              # store path, and `llc` records the path it was GIVEN -- this build
-              # directory -- so the finished binary should name no store path of
-              # rung 1's. That is checked after the build with `nix-store -q
-              # --references` on this derivation's output, not asserted here.
+              # The nightly-hosted rung 1's IR, linked here with this commit's
+              # revision. `nightlyRung1` is a build input and not a runtime one:
+              # the `.ll` is copied out of its store path, and `llc` records the
+              # path it was GIVEN -- this build directory -- so the finished
+              # binary should name no store path of the rung's. That is checked
+              # after the build with `nix-store -q --references` on this
+              # derivation's output, not asserted here.
               ${
                 lib.optionalString (ccPath != null) "export PATH=${ccPath}:$PATH\n"
-              }install -Dm644 ${rung1}/share/monad/monad.ll "$PWD/monad.ll"
+              }install -Dm644 ${nightlyRung1}/share/monad/monad.ll "$PWD/monad.ll"
 
               llc -filetype=obj${llcFlags} "$PWD/monad.ll" -o "$PWD/monad.o"
               clang -pthread -c runtime/src/runtime.c \
@@ -679,24 +739,24 @@
       #
       # The compiler emits monadup's IR ONCE (natively) from the commit-free
       # rung-1 compiler; every published platform relinks that same `.ll`.
-      # Using `monadRung1` rather than the stamped `monad` keeps this
+      # Using `nightlyRung1` rather than the stamped `monad` keeps this
       # derivation's hash off the per-commit revision: the emitted IR does
       # not depend on the stamp, and keying on it made every compiler change
-      # rebuild the ~26-minute interpretation. The header's triple is
+      # rebuild the rung. The header's triple is
       # overridden by `llc -mtriple` (measured for the compiler's own rung-1
-      # relink), so one interpretation serves all four platforms. The relink
+      # relink), so one emission serves all four platforms. The relink
       # is `monadFor`'s shape without the makeWrapper: a consumer downloads
       # the bare binary, not a store wrapper.
       monadupIr = pkgs.stdenv.mkDerivation {
         pname = "monadup-ir";
         version = monadVersion;
         src = monadupSrc;
-        nativeBuildInputs = [ config.packages.monadRung1 pkgs.llvm pkgs.clang pkgs.coreutils pkgs.bash ];
+        nativeBuildInputs = [ nightlyRung1 pkgs.llvm pkgs.clang pkgs.coreutils pkgs.bash ];
         buildPhase = ''
           runHook preBuild
           export MONAD_ROOT="$PWD"
           export MONAD_TARGET_DIR="$TMPDIR/monad-target"
-          ${lib.getExe config.packages.monadRung1} build motes/monadup --bin monadup \
+          ${lib.getExe nightlyRung1} build motes/monadup --bin monadup \
             --release --no-cache -o "$PWD/monadup"
           test -f "$PWD/monadup.ll"
           runHook postBuild
@@ -849,6 +909,13 @@
         # compiler's sources, and it is where the `.ll` that ladder compares
         # against now comes from.
         monadRung1 = rung1;
+        # The release's rung 1 on its own, for the binary cache: the cross
+        # legs of a night build `.#monad-<platform>` on a machine whose store
+        # has not built it, and cachix is how the native leg's copy reaches
+        # them. Named in nightly.yml's push step for the same reason
+        # `monadRung1` is: a build input is not in the output closure a
+        # `cachix push` walks.
+        monadNightlyRung1 = nightlyRung1;
         monadup = monadup;
       }
       // lib.optionalAttrs (pkgs.stdenv.hostPlatform.system == "x86_64-linux") {

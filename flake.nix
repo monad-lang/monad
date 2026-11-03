@@ -32,14 +32,16 @@
     ];
   };
 
-  # A thin assembler over three independent modules. Each `nix/*.nix` file owns
+  # A thin assembler over four independent modules. Each `nix/*.nix` file owns
   # one rung of the ladder and reads the rung below it as a PACKAGE
   # (`config.packages.monadHost`) rather than as a function applied to it, so
   # the modules can be read, built and cached one at a time:
   #
-  #   nix/host.nix     packages.monadHost  the Rust interpreter (rung 0)
-  #   nix/monad.nix    packages.monad      rung 1, built by scripts/
-  #   nix/bootstrap.nix checks.bootstrap   the fixpoint rung 1 asserts
+  #   nix/host.nix     packages.monadHost       the Rust interpreter (rung 0)
+  #   nix/nightly.nix  packages.monadNightlyHost  the pinned previous nightly,
+  #                                           host of the RELEASE's rung 1
+  #   nix/monad.nix    packages.monad           rung 1, built by scripts/
+  #   nix/bootstrap.nix checks.bootstrap        the fixpoint rung 1 asserts
   #
   # (`nix/packages.nix` is not one of them: it is a DEVENV module, the dev
   # shell's package list, imported by devenv.nix.)
@@ -48,6 +50,9 @@
   # rather than through `_module.args`: they are not module-system state, they
   # are what this flake knows about itself, and `import`-arguments cannot be
   # silently shadowed by a module that happens to declare the same option.
+  # (`nix/nightly.nix` is a bare module rather than an `import` call for the
+  # same reason read the other way: it needs no facts from this file -- its pin
+  # is its own data.)
   outputs =
     inputs:
     let
@@ -91,6 +96,8 @@
       ];
 
       imports = [
+        # A bare module, not an `import` call: it takes no facts from this file.
+        ./nix/nightly.nix
         (import ./nix/host.nix { inherit monadVersion; })
         (import ./nix/monad.nix { inherit commit monadVersion; })
         (import ./nix/bootstrap.nix { inherit commit monadVersion; })

@@ -418,9 +418,10 @@ jobs:
   # WHO BUILDS monadup is scripts/ci-monadup.sh: the latest monadup
   # NIGHTLY (seconds, and it also supplies the `monad` that type-checks the
   # scaffold `new` writes). There is no flake/Rust fallback: `.#monadup`
-  # emits its IR with `monadRung1`, the Rust host interpreting the whole
-  # compiler, and that slow path is gone from CI. The packaged artifact is
-  # built and published by nightly-release.sh, not by a pull request.
+  # emits its IR with `monadNightlyRung1`, the compiler compiled by the
+  # pinned previous nightly (nix/nightly.nix), so even that path is
+  # minutes now. The packaged artifact is built and published by
+  # nightly-release.sh, not by a pull request.
   monadup-checks:
     runs-on: [self-hosted, linux]
     needs: changes

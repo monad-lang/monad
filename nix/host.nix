@@ -1,5 +1,8 @@
-# The Rust bootstrap host: rung 1 of the ladder, and the only thing that can
-# build `cli/src/main.mo` (rung 2 is the result). `nix build .#monadHost`.
+# The Rust bootstrap host: rung 1 of the ladder, and one of the two hosts
+# that build `cli/src/main.mo` (rung 2 is the result) -- the other is the
+# pinned previous nightly (nix/nightly.nix), which compiles the release
+# family's rung 1 in ~2 minutes where this one interprets it in ~26.
+# `nix build .#monadHost`.
 #
 # It is a package of its own rather than a step inside `monad`'s build, which
 # is what makes `nix build .#monadHost` a ~3 minute answer to "does the Rust

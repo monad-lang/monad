@@ -20,12 +20,14 @@
 # build modes. Saying so here rather than approximating it is the point.
 #
 # Cost, and why it is not a CI job: rung 1 here is `packages.monad`, so this
-# check only pays that ~20 minute build when it is not already in the store --
-# but the check itself is a `check` plus two self-compiles. CI's ladder pays
+# check only pays that build when it is not already in the store -- and that
+# build is a ~2-minute nightly-hosted rung plus the relink now, not the
+# ~20-minute interpretation it used to embed (nix/monad.nix, nix/nightly.nix).
+# But the check itself is a `check` plus two self-compiles. CI's ladder pays
 # the same interpretation on every compiler change, and in a different
 # derivation (its own scratch directory, not `packages.monadRung1`), so that is
 # the same work and not the same store path: gating a pipeline on this would add
-# a third ~20 minute interpretation rather than reusing one.
+# a third ladder's worth of self-compiles rather than reusing one.
 { commit, monadVersion }:
 {
   perSystem =

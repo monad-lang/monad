@@ -24,12 +24,21 @@ env:
   DEVENV_SKIP_TASKS: "1"
 
 jobs:
-  # The native leg. It is also the one that seeds the binary cache with rung 1,
-  # which is what makes the cross legs below affordable: rung 1 is one ~26
-  # minute interpretation of the compiler by the Rust host, every platform's
-  # binary is that same `.ll` relinked, and a cross leg that had to pay the
-  # interpretation again would cost a night what three self-compiles cost.
-  # `needs:` on the cross job is what orders the two.
+  # The native leg. It is also the one that seeds the binary cache with the
+  # rungs, because a build input is not in an output closure and `cachix push`
+  # walks only closures -- see the push step below. There are two rungs and
+  # they exist for different consumers:
+  #
+  #   * `.#monadNightlyRung1` is the one the release itself is relinked from:
+  #     the compiler compiled by the PINNED previous nightly (nix/nightly.nix),
+  #     one ~2-minute native build instead of the ~26-minute interpretation
+  #     the Rust host used to pay on every cold leg. Every leg's binary is
+  #     that same `.ll` relinked, so a leg that misses the cache now redoes
+  #     minutes, not a night -- but the cross legs below still consume this
+  #     same derivation, and `needs:` is what orders them after it exists.
+  #   * `.#monadRung1` is the interpreted ladder rung, unchanged: the store
+  #     comparison in bootstrap-compile (interpreted IR vs compiled IR) and
+  #     any other ladder consumer still build exactly that one.
   linux-native:
     if: github.repository == 'monad-lang/monad'
     runs-on: [self-hosted, linux]
@@ -71,19 +80,22 @@ jobs:
           nix develop --no-pure-eval --accept-flake-config -c \
             scripts/nightly-release.sh x86_64-linux
 
-      # What the cross legs are about to need, pushed now that it exists. All
-      # three are named because a build input is NOT in the output closure
-      # `cachix push` walks -- rung 1 alone would stay uncached, which is the
-      # expensive one. `cachix` is the devshell's (nix/packages.nix): the runner host
-      # has none. The same three are pushed by ci.yml's `flake-package` job on
-      # the same commit; this is the copy that matters when the nightly wins
-      # the race against it.
+      # What the legs and the ladder are about to need, pushed now that it
+      # exists. `.#monadNightlyRung1` is named because a build input is NOT in
+      # the output closure `cachix push` walks -- the release's own `.#monad`
+      # relinks from it and would leave it uncached otherwise, and the cross
+      # legs below build the same derivation. `.#monadHost` and `.#monadRung1`
+      # are named for the same reason and for the ladder's other consumers
+      # (bootstrap-compile's store-reuse comparison among them). `cachix` is
+      # the devshell's (nix/packages.nix): the runner host has none. ci.yml
+      # pushes only `.#monadHost` (its compiler job), so this step is the one
+      # place the rungs reach monad-lang.cachix.org from.
       - name: Push the ladder to the binary cache
         env:
           CACHIX_AUTH_TOKEN: ${{ secrets.CACHIX_AUTH_TOKEN }}
         run: |
           paths="$(nix build --no-link --print-out-paths --accept-flake-config \
-            .#monadHost .#monadRung1 .#monad)"
+            .#monadHost .#monadRung1 .#monadNightlyRung1 .#monad)"
           nix develop --no-pure-eval --accept-flake-config -c scripts/push-to-cache.sh $paths
 
       - uses: actions/upload-artifact@v5
@@ -138,11 +150,13 @@ jobs:
           if-no-files-found: error
 
   # The arm64 Mac leg, and the only one that does not share the native leg's
-  # rung 1: a different platform's interpretation of the compiler is a
-  # different derivation, so `needs:` would buy no cache warmth and would put a
-  # GitHub-hosted runner behind the self-hosted queue for nothing. One leg pays
-  # a cold store -- monad-lang.cachix.org has no aarch64-darwin paths yet, which
-  # is what the push step below is for.
+  # rung 1: a different platform's rung is a different derivation -- compiled
+  # here by the PINNED aarch64-darwin nightly (nix/nightly.nix) rather than
+  # the linux pin, but the same ~2-minute nightly-hosted self-compile the
+  # other legs share -- so `needs:` would buy no cache warmth and would put a
+  # GitHub-hosted runner behind the self-hosted queue for nothing. One leg
+  # pays a cold store -- monad-lang.cachix.org has no aarch64-darwin paths
+  # yet, which is what the push step below is for.
   darwin-native:
     if: github.repository == 'monad-lang/monad'
     runs-on: macos-15
@@ -167,16 +181,18 @@ jobs:
             scripts/nightly-release.sh aarch64-darwin
 
       # So a re-run of this same commit -- which is what iterating on a leg
-      # that has never run here looks like -- substitutes instead of paying the
-      # interpretation again. `cachix` comes from its own `nix shell` because
-      # the push script documents `nix develop` as its caller and cannot be
-      # entered that way on this runner.
+      # that has never run here looks like -- substitutes every rung instead
+      # of recompiling them. `.#monadNightlyRung1` is named for the same
+      # reason as on the linux leg: a build input is not in the output
+      # closure `cachix push` walks. `cachix` comes from its own `nix shell`
+      # because the push script documents `nix develop` as its caller and
+      # cannot be entered that way on this runner.
       - name: Push the ladder to the binary cache
         env:
           CACHIX_AUTH_TOKEN: ${{ secrets.CACHIX_AUTH_TOKEN }}
         run: |
           paths="$(nix build --no-link --print-out-paths --accept-flake-config \
-            .#monadHost .#monadRung1 .#monad)"
+            .#monadHost .#monadRung1 .#monadNightlyRung1 .#monad)"
           nix shell nixpkgs#cachix nixpkgs#coreutils nixpkgs#gnugrep -c \
             scripts/push-to-cache.sh $paths
 

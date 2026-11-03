@@ -5,10 +5,11 @@
 #
 # The binary itself comes from the flake -- `.#monad` for this machine's
 # platform, `.#monad-<platform>` for one it only cross-builds -- and that is
-# what a matrix of legs can afford. Both are rung 1, ONE ~26-minute
-# interpretation of the compiler by the Rust host, relinked per target in
-# seconds; a leg that ran its own interpretation would pay that cost again for
-# every platform, and three legs would cost a night three self-compiles.
+# what a matrix of legs can afford. Both are rung 1, ONE ~2-minute compile
+# of the compiler by the PINNED previous nightly (nix/nightly.nix),
+# relinked per target in seconds; a leg that misses the cache redoes
+# minutes, not the ~26-minute interpretation the Rust host used to pay
+# on every cold leg.
 #
 # This used to be four inline `run:` lines in that workflow, and the first
 # of them -- `file dist/monad-nightly-x86_64-linux` -- was the only command
@@ -69,11 +70,11 @@ cd "$root"
 
 # `nix build` and not an in-workflow self-compile, because the flake's `monad`
 # IS that self-compile: rung 1 is `scripts/build-self-hosted.sh` run inside a
-# derivation (`nix/monad.nix`), and `.#monad` relinks its `.ll` with this
-# commit's revision. Taking it from the store is what lets every leg of a
-# night's matrix share one interpretation -- and it is the same command
-# ci.yml's `flake-package` job and `checks.bootstrap` already build, so it is
-# a path in daily use rather than a new one.
+# derivation, hosted by the pinned previous nightly (`nix/monad.nix`,
+# `nix/nightly.nix`), and `.#monad` relinks its `.ll` with this commit's
+# revision. Taking it from the store is what lets every leg of a night's
+# matrix share one rung -- and it is the same command `checks.bootstrap`
+# already builds, so it is a path in daily use rather than a new one.
 #
 # The revision the artifact claims is then baked by the flake, not by this
 # script: `MONAD_BUILD_COMMIT` from `self.shortRev` at LINK time, in whichever

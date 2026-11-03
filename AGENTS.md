@@ -181,7 +181,11 @@ change is in this surface too.
    able to read the tree.
 2. Wait for a nightly whose commit contains step 1. Only then use the
    construct from the surface (and, for a rename/removal, delete the old
-   path). `plans/bootstrapping/native-rollout.md` specifies the native half.
+   path) — and bump the pinned host in `nix/nightly.nix` to a nightly that
+   contains step 1: the release family's rung 1 is compiled by that pinned
+   binary (`nix/monad.nix`, `monadNightlyRung1`), so a pin older than the
+   surface fails loudly, at rung 1, with the host's own unknown-construct
+   error. `plans/bootstrapping/native-rollout.md` specifies the native half.
 
 A red gate means the change used something the nightly lacks (split it), the
 tree advanced past a nightly that cannot build it (wait for the next nightly —

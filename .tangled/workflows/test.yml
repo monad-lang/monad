@@ -2,13 +2,13 @@
 # the `test` job, until that job absorbed `bootstrap`. The GitHub side now runs
 # this same sweep against the ladder's own release rung-1 and starts it while
 # the ladder is still finishing (scripts/ci-compiler-checks.sh); here it still
-# builds `.#monad` first, which is correct but pays an interpretation the
-# GitHub job no longer does, and that `.#monad` is graded on GitHub by
-# `flake-package` now.
+# builds `.#monad` first, which is correct but pays a build the GitHub job
+# gets for free -- and since the release family moved to the pinned nightly
+# as its host (nix/nightly.nix), that build is a ~2-minute rung plus the
+# relink, not the interpretation this used to cost.
 #
 # Two steps: the flake builds the compiler this job sweeps (`packages.monad` --
-# rung 1, from this commit's tree; see the GitHub `flake-package` job for what
-# taking it from the flake buys and what it costs), then
+# rung 1, from this commit's tree), then
 # scripts/check-monad-tests.sh runs that binary over the corpus. Called
 # directly rather than through
 # `devenv tasks run monad:test` (its local equivalent), as the GitHub job does,
