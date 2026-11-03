@@ -37,6 +37,28 @@ def test_cell_roundtrip : IO Bool := do {
     write_again p
 }
 
+/// The FUSED shape: every continuation consumes the accessor's result
+/// immediately, so codegen lowers the whole flow to one function and no
+/// `Pair`/`IO` box (`try_compile_view_bind_db`). The escaping tests
+/// above stay the control -- they must keep the boxed path working.
+#[test]
+def test_cell_fused_roundtrip : IO Bool := do {
+    let c0 <- Cell.new 41;
+    let p <- Cell.get c0;
+    match p {
+        Pair.pair x c1 => do {
+            let c2 <- Cell.set c1 (I64.add x 1);
+            let p2 <- Cell.get c2;
+            match p2 {
+                Pair.pair y c3 => do {
+                    let _ <- Cell.free c3;
+                    return (I64.beq y 42)
+                },
+            }
+        },
+    }
+}
+
 #[test]
 def test_cell_holds_a_string : IO Bool := do {
     // `String` is `Copy` and a bare pointer, so the Cell block must stay

@@ -79,6 +79,34 @@ pub def build_source_binary (source : String) (basename : String) : IO (Result S
     }
 }
 
+/// Compile `source` to LLVM IR TEXT (no `llc`, no link), for IR-shape
+/// tests such as `view_ir_tests.mo`. Same load + elaborate + emit steps
+/// `build_source_binary` runs; the fixture is removed afterwards.
+#[partial]
+pub def compile_source_ir (source : String) (basename : String) : IO (Result String String) := do {
+    let output_dir := "/tmp/monad_ir_" ++ I64.to_string process_id;
+    let src_path := output_dir ++ "/" ++ basename ++ ".mo";
+
+    exec_cmd "mkdir" ["-p", output_dir];
+    let _w <- Test.write_fixture (Path.path src_path) source;
+
+    let loaded_result <- load_file_modules src_path false;
+    match loaded_result {
+        Result.err e => do {
+            exec_cmd "rm" ["-f", src_path];
+            return (Result.err ("failed to load: " ++ e))
+        },
+        Result.ok loaded => do {
+            let mod_result <- compile_loaded_modules_to_ir loaded false;
+            exec_cmd "rm" ["-f", src_path];
+            match mod_result {
+                Result.err e => return (Result.err ("failed to resolve class-method calls: " ++ e)),
+                Result.ok mod_ => return (Result.ok (emit_module mod_)),
+            }
+        },
+    }
+}
+
 /// Build `source`, run the binary, and compare its exit code against
 /// `expected`.
 #[partial]

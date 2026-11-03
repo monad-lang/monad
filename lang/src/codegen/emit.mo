@@ -97,6 +97,10 @@ use lib::scope {
 // `lang.typecheck.infer`, and nothing in `lang.typecheck.*` imports
 // codegen, so this adds no cycle.
 use lib::typecheck::infer {type_head_name, struct_lit_build_args, struct_lit_con_name}
+// The do-bind head's spelling convention, shared with the usage analysis
+// rather than restated here (`spine_head_name` peels `Term.ctx` and the
+// application spine).
+use lib::typecheck::usage {spine_head_name}
 // `--verbose` stage-start trace + the red "FAILED at stage" lines
 // (`lang/log` -- helpers gate on `verbose` themselves; the fail lines
 // are ungated, printing in both modes as they did before).
@@ -2590,26 +2594,466 @@ def compile_cubical_ir (c : CodegenCtx) (cub_ : Cubical) : CompileResult :=
         CubicalPrim.glue_elim => CompileResult.ok c List.empty LLVMValue.void_val List.empty List.empty List.empty,
     }
 
+// ── View do-bind fusion (view-types P2) ─────────────────────────────
+//
+// `init/src/view.mo`'s four accessors return `IO`, and a read used to
+// cost three allocations: `RawIO.io`, `IO.mk`, and the `Pair` C builds
+// in `view_get_impl`. When a do-bind's initializer IS one of those
+// accessors and the continuation is the shape that consumes the result
+// without boxing, the bind is lowered DIRECTLY here: the payload comes
+// back as one i64 word (`monad_view_payload`) and the handle is passed
+// through unchanged -- `view_get_impl` returns the very word it was
+// given, which is what makes a single i64 result enough for both halves
+// of the pair.
+//
+// This is shape-selected, never a semantic change. An escaping pair (the
+// `finish_with_42`/`write_again` shape in `init/src/view_tests.mo`), a
+// hand-written bind, or any Monad other than IO falls straight through
+// to the v1 boxed path, which is unchanged and remains the reference
+// semantics (the Rust host interprets that path).
+//
+// The accessor head is matched by its RESOLVED symbol
+// (`init.view::Cell.get`, ...), not a bare name, so a user def that
+// happens to spell `Cell.get` can never trigger fusion.
+
+type ViewBindOp {
+    view_get,
+    view_new,
+    view_set,
+    view_free,
+}
+
+struct ViewAccessorCall {
+    op : ViewBindOp,
+    args : List Term,
+}
+
+struct ViewBindPlan {
+    op : ViewBindOp,
+    args : List Term,
+    binder : Binder,
+    body : Term,
+}
+
+struct ViewPairArm {
+    payload_var : Identifier,
+    handle_var : Identifier,
+    body : Term,
+}
+
+struct ViewOperands {
+    cell : Option Term,
+    value : Option Term,
+}
+
 #[partial]
-def compile_db_app_ir (c : CodegenCtx) (fun : Term) (arg : Term) : CompileResult :=
-    // Check `let`-shaped beta-redexes FIRST -- `fun` here is a bare
-    // `Term.lam`, a shape none of the other three cases below ever
-    // match (they all key off `fun`/its own head being `Term.var`), so
-    // ordering relative to them doesn't matter for correctness. It's
-    // checked first purely because it's the single most common call
-    // shape in real code (see its own doc comment).
-    match try_compile_let_beta_db c fun arg {
-        Option.some result => result,
-        Option.none =>
-            // Check if this is a constructor application
-            match try_compile_constructor_app_db c fun arg {
-                Option.some result => result,
-                Option.none =>
-                    match try_compile_inline_native_db c fun arg {
-                        Option.some result => result,
-                        Option.none => compile_general_db_call c fun arg,
+def view_op_of_name (name : String) : Option ViewBindOp :=
+    if String.beq name "init.view::Cell.get" then Option.some ViewBindOp.view_get
+    else if String.beq name "init.view::Cell.new" then Option.some ViewBindOp.view_new
+    else if String.beq name "init.view::Cell.set" then Option.some ViewBindOp.view_set
+    else if String.beq name "init.view::Cell.free" then Option.some ViewBindOp.view_free
+    else Option.none
+
+/// A do-bind head as codegen sees it. The parser's do-lowering spells
+/// `Monad.bind`, but elaboration rewrites the call through the `Monad
+/// IO` instance to that instance's promoted method
+/// (`...::Monad_IO_bind`), so both spellings are accepted. Only the
+/// IO/RawIO instances qualify: a Cell accessor's result is IO-typed,
+/// and fusing under any other Monad (List's multi-shot bind) would
+/// drop a box the continuation is entitled to.
+///
+/// The promoted-method spelling is matched by SUFFIX, not a resolved
+/// symbol: the class's declared module is part of the mangled name
+/// (`init.io::prelude::Monad_IO_bind`) and is not stable across a
+/// prelude move, while the class/carrier/method tail is. A user def
+/// whose name happens to end in `Monad_IO_bind` cannot fuse unless it is
+/// ALSO applied in bind position to a Cell accessor, which the caller
+/// (`view_bind_plan`) requires.
+#[partial]
+def is_view_bind_head (t : Term) : Bool :=
+    match spine_head_name t {
+        Option.some n =>
+            let name : String := n in
+            String.beq name "Monad.bind"
+                || String.beq name "IO.bind"
+                || String.beq name "RawIO.bind"
+                || String.ends_with name "Monad_IO_bind"
+                || String.ends_with name "Monad_RawIO_bind",
+        Option.none => false,
+    }
+
+#[partial]
+def view_accessor_of (t : Term) : Option ViewAccessorCall :=
+    match flatten_app_spine t {
+        { head, args } =>
+            match head {
+                Term.var _ dbg =>
+                    match dbg {
+                        DebugName.named id_ =>
+                            match view_op_of_name (symbol_identifier id_) {
+                                Option.some op =>
+                                    let call : ViewAccessorCall := { op := op, args := args } in
+                                    Option.some call,
+                                Option.none => Option.none,
+                            },
+                        DebugName.unnamed => Option.none,
+                    },
+                _ => Option.none,
+            },
+    }
+
+/// `app (app <bind> <initializer>) (lam x => body)` -- the same shape
+/// `lang/typecheck/usage.mo`'s `bind_continuation` keys on.
+#[partial]
+def view_bind_plan (callee : Term) (arg : Term) : Option ViewBindPlan :=
+    match term_peel arg {
+        Term.lam b _typ body =>
+            match term_peel callee {
+                Term.app f m =>
+                    if is_view_bind_head f then
+                        match view_accessor_of m {
+                            Option.some call =>
+                                match call {
+                                    { op, args } =>
+                                        let plan : ViewBindPlan :=
+                                            { op := op, args := args, binder := b, body := body } in
+                                        Option.some plan,
+                                },
+                            Option.none => Option.none,
+                        }
+                    else Option.none,
+                _ => Option.none,
+            },
+        _ => Option.none,
+    }
+
+/// The last `n` terms of `xs`. The accessor's spine carries its
+/// dictionary arguments BEFORE the source arguments (`[Copy A]` is
+/// resolved to a dictionary VALUE and passed first -- see the emitted
+/// `init.view::Cell.get(i64 <dict>, i64 <cell>)`), so the operands this
+/// fusion needs are always a suffix.
+#[partial]
+def view_last_n_terms (n : I64) (xs : List Term) : List Term :=
+    List.reverse (view_first_n_terms n (List.reverse xs))
+
+#[partial]
+def view_first_n_terms (n : I64) (xs : List Term) : List Term :=
+    if I64.beq n 0 then List.empty
+    else
+        match xs {
+            List.empty => List.empty,
+            List.cons x rest => List.cons x (view_first_n_terms (n - 1) rest),
+        }
+
+#[partial]
+def view_operands (op : ViewBindOp) (args : List Term) : Option ViewOperands :=
+    match op {
+        ViewBindOp.view_get => view_one_cell (view_last_n_terms 1 args),
+        ViewBindOp.view_free => view_one_cell (view_last_n_terms 1 args),
+        ViewBindOp.view_new => view_one_value (view_last_n_terms 1 args),
+        ViewBindOp.view_set => view_cell_and_value (view_last_n_terms 2 args),
+    }
+
+#[partial]
+def view_one_cell (xs : List Term) : Option ViewOperands :=
+    match xs {
+        List.cons cell rest =>
+            match rest {
+                List.empty =>
+                    let ops : ViewOperands := { cell := Option.some cell, value := Option.none } in
+                    Option.some ops,
+                List.cons _ _ => Option.none,
+            },
+        List.empty => Option.none,
+    }
+
+#[partial]
+def view_one_value (xs : List Term) : Option ViewOperands :=
+    match xs {
+        List.cons v rest =>
+            match rest {
+                List.empty =>
+                    let ops : ViewOperands := { cell := Option.none, value := Option.some v } in
+                    Option.some ops,
+                List.cons _ _ => Option.none,
+            },
+        List.empty => Option.none,
+    }
+
+#[partial]
+def view_cell_and_value (xs : List Term) : Option ViewOperands :=
+    match xs {
+        List.cons cell rest =>
+            match rest {
+                List.cons v rest2 =>
+                    match rest2 {
+                        List.empty =>
+                            let ops : ViewOperands := { cell := Option.some cell, value := Option.some v } in
+                            Option.some ops,
+                        List.cons _ _ => Option.none,
+                    },
+                List.empty => Option.none,
+            },
+        List.empty => Option.none,
+    }
+
+/// Does this scrutinee name the do-bind's own binder?
+#[partial]
+def view_binder_matches (scrutinee : DebugName) (binder : Binder) : Bool :=
+    match scrutinee {
+        DebugName.named got =>
+            match binder_name binder {
+                DebugName.named want => String.beq (show_identifier got) (show_identifier want),
+                DebugName.unnamed => false,
+            },
+        DebugName.unnamed => false,
+    }
+
+/// The only continuation shape a fused `get` may inline: a single-case
+/// match on the bound variable, case `Pair.pair x c`, both fields plain
+/// pattern variables. Anything else (a pass-through, a field pattern,
+/// several cases) keeps the boxed `Pair`.
+#[partial]
+def view_pair_arm (body : Term) (binder : Binder) : Option ViewPairArm :=
+    // Laddered: this grammar supports no nested constructor patterns
+    // (`Term.lit (Literal.match_ ..)` is not a pattern).
+    match term_peel body {
+        Term.lit lit_ => view_pair_literal lit_ binder,
+        _ => Option.none,
+    }
+
+#[partial]
+def view_pair_literal (lit_ : Literal) (binder : Binder) : Option ViewPairArm :=
+    match lit_ {
+        Literal.match_ scrut cases => view_pair_scrutinee scrut cases binder,
+        _ => Option.none,
+    }
+
+#[partial]
+def view_pair_scrutinee (scrut : Term) (cases : List MatchCase) (binder : Binder) : Option ViewPairArm :=
+    match term_peel scrut {
+        Term.var _ dbg =>
+            if view_binder_matches dbg binder then
+                match cases {
+                    List.cons c rest =>
+                        match rest {
+                            List.empty => view_pair_case c,
+                            List.cons _ _ => Option.none,
+                        },
+                    List.empty => Option.none,
+                }
+            else Option.none,
+        _ => Option.none,
+    }
+
+#[partial]
+def view_pair_case (c : MatchCase) : Option ViewPairArm :=
+    match c {
+        { name, args, body, field_pattern, .. } =>
+            if String.beq (extract_base_name (symbol_identifier name)) "pair" then
+                match field_pattern {
+                    Option.none =>
+                        match args {
+                            List.cons payload_var rest =>
+                                match rest {
+                                    List.cons handle_var rest2 =>
+                                        match rest2 {
+                                            List.empty =>
+                                                let arm : ViewPairArm :=
+                                                    { payload_var := payload_var, handle_var := handle_var, body := body } in
+                                                Option.some arm,
+                                            List.cons _ _ => Option.none,
+                                        },
+                                    List.empty => Option.none,
+                                },
+                            List.empty => Option.none,
+                        },
+                    Option.some _ => Option.none,
+                }
+            else Option.none,
+    }
+
+/// Compile the fused bind's continuation inline (never lifted) and
+/// splice it after the accessor's own instruction sequence. Mirrors
+/// `try_compile_let_beta_db`'s tail: `materialize_branch_val`, then
+/// `compose_seq`, so a continuation that is itself an `if`/`match` keeps
+/// its own terminal block.
+#[partial]
+def compile_view_continuation (pre_instrs : List LLVMInstruction) (pre_blocks : List LLVMBasicBlock) (pre_val : LLVMValue) (funcs : List LLVMFunction) (globals : List LLVMGlobal) (bound_ctx : CodegenCtx) (body : Term) : Option CompileResult :=
+    match compile_db_term_ir bound_ctx body {
+        CompileResult.ok ctx2 instrs2_raw val2_raw blocks2 funcs2 globals2 =>
+            match materialize_branch_val ctx2 body instrs2_raw val2_raw {
+                { ctx := ctx2m, instrs := instrs2, val := val2 } =>
+                    match compose_seq ({ instrs := pre_instrs, blocks := pre_blocks, val := pre_val }) ({ instrs := instrs2, blocks := blocks2, val := val2 }) {
+                        { instrs := combined, blocks := all_blocks, val := last_val } =>
+                            Option.some (CompileResult.ok ctx2m combined last_val all_blocks (List.append funcs funcs2) (List.append globals globals2)),
                     },
             },
+    }
+
+/// `new`/`set`: one native call whose result IS the value the do-binder
+/// names.
+#[partial]
+def compile_view_call_bind_db (c : CodegenCtx) (target : String) (operands : List Term) (binder : Binder) (body : Term) : Option CompileResult :=
+    let seq := compile_spine_args c operands in
+    match fresh_temp seq.ctx {
+        CtxStrPair.mk ctx_call temp =>
+            let native_call := LLVMValue.call target LLVMType.i64_ seq.vals false in
+            let assign := LLVMInstruction.assign temp native_call in
+            match compose_seq ({ instrs := seq.instrs, blocks := seq.blocks, val := seq.last_val }) ({ instrs := List.cons assign List.empty, blocks := List.empty, val := LLVMValue.var_ temp }) {
+                { instrs := call_instrs, blocks := call_blocks, val := call_last } =>
+                    match binder_name binder {
+                        DebugName.named name =>
+                            let bound := ctx_bind_local ctx_call name (LLVMValue.var_ temp) in
+                            compile_view_continuation call_instrs call_blocks call_last seq.funcs seq.globals bound body,
+                        DebugName.unnamed =>
+                            compile_view_continuation call_instrs call_blocks call_last seq.funcs seq.globals ctx_call body,
+                    },
+            },
+    }
+
+/// `free`: the accessor returns `IO Unit`. A binder named something
+/// other than `_` gets a fresh `Unit` value; the common
+/// `let _ <- Cell.free c` skips the allocation entirely.
+#[partial]
+def compile_view_free_bind_db (c : CodegenCtx) (cell : Term) (binder : Binder) (body : Term) : Option CompileResult :=
+    let seq := compile_spine_args c (List.cons cell List.empty) in
+    match fresh_temp seq.ctx {
+        CtxStrPair.mk ctx_call temp =>
+            let native_call := LLVMValue.call "monad_view_free" LLVMType.i64_ seq.vals false in
+            let assign := LLVMInstruction.assign temp native_call in
+            match compose_seq ({ instrs := seq.instrs, blocks := seq.blocks, val := seq.last_val }) ({ instrs := List.cons assign List.empty, blocks := List.empty, val := LLVMValue.var_ temp }) {
+                { instrs := call_instrs, blocks := call_blocks, val := call_last } =>
+                    match binder_name binder {
+                        // `let _ <- Cell.free c` is the common shape: the
+                        // binder cannot be referenced, so skip the Unit
+                        // allocation entirely.
+                        DebugName.named name =>
+                            if String.beq (symbol_identifier name) "_"
+                            then compile_view_continuation call_instrs call_blocks call_last seq.funcs seq.globals ctx_call body
+                            else
+                                match fresh_temp ctx_call {
+                                    CtxStrPair.mk ctx_unit unit_temp =>
+                                        let unit_tag := constructor_tag ctx_call "Unit.unit" in
+                                        let unit_call := LLVMValue.call "alloc_constructor" LLVMType.i64_ (List.cons (LLVMValue.int_ unit_tag) (List.cons (LLVMValue.int_ 0) List.empty)) false in
+                                        let unit_assign := LLVMInstruction.assign unit_temp unit_call in
+                                        match compose_seq ({ instrs := call_instrs, blocks := call_blocks, val := call_last }) ({ instrs := List.cons unit_assign List.empty, blocks := List.empty, val := LLVMValue.var_ unit_temp }) {
+                                            { instrs := full_instrs, blocks := full_blocks, val := full_last } =>
+                                                let bound := ctx_bind_local ctx_unit name (LLVMValue.var_ unit_temp) in
+                                                compile_view_continuation full_instrs full_blocks full_last seq.funcs seq.globals bound body,
+                                        },
+                                },
+                        DebugName.unnamed =>
+                            compile_view_continuation call_instrs call_blocks call_last seq.funcs seq.globals ctx_call body,
+                    },
+            },
+    }
+
+/// `get`: read the payload with `monad_view_payload`, pass the handle
+/// through unchanged (the invariant `view_get_impl` documents), bind the
+/// two pattern variables, and inline the arm.
+#[partial]
+def compile_view_get_bind_db (c : CodegenCtx) (cell : Term) (arm : ViewPairArm) : Option CompileResult :=
+    let seq := compile_spine_args c (List.cons cell List.empty) in
+    match fresh_temp seq.ctx {
+        CtxStrPair.mk ctx_call temp =>
+            let payload_call := LLVMValue.call "monad_view_payload" LLVMType.i64_ seq.vals false in
+            let assign := LLVMInstruction.assign temp payload_call in
+            match compose_seq ({ instrs := seq.instrs, blocks := seq.blocks, val := seq.last_val }) ({ instrs := List.cons assign List.empty, blocks := List.empty, val := LLVMValue.var_ temp }) {
+                { instrs := call_instrs, blocks := call_blocks, val := call_last } =>
+                    match seq.vals {
+                        List.cons cell_val _rest =>
+                            match arm {
+                                { payload_var, handle_var, body := arm_body } =>
+                                    let bound_payload := ctx_bind_local ctx_call payload_var (LLVMValue.var_ temp) in
+                                    let bound_handle := ctx_bind_local bound_payload handle_var cell_val in
+                                    compile_view_continuation call_instrs call_blocks call_last seq.funcs seq.globals bound_handle arm_body,
+                            },
+                        List.empty => Option.none,
+                    },
+            },
+    }
+
+#[partial]
+def compile_view_bind_db (c : CodegenCtx) (plan : ViewBindPlan) : Option CompileResult :=
+    match plan {
+        { op, args, binder, body } =>
+            match view_operands op args {
+                Option.none => Option.none,
+                Option.some ops =>
+                    match ops {
+                        { cell, value } =>
+                            match op {
+                                ViewBindOp.view_get =>
+                                    match cell {
+                                        Option.some cell_arg =>
+                                            match view_pair_arm body binder {
+                                                Option.some arm => compile_view_get_bind_db c cell_arg arm,
+                                                Option.none => Option.none,
+                                            },
+                                        Option.none => Option.none,
+                                    },
+                                ViewBindOp.view_new =>
+                                    match value {
+                                        Option.some v =>
+                                            compile_view_call_bind_db c "monad_view_new" (List.cons v List.empty) binder body,
+                                        Option.none => Option.none,
+                                    },
+                                ViewBindOp.view_set =>
+                                    match cell {
+                                        Option.some cell_arg =>
+                                            match value {
+                                                Option.some v =>
+                                                    compile_view_call_bind_db c "monad_view_set" (List.cons cell_arg (List.cons v List.empty)) binder body,
+                                                Option.none => Option.none,
+                                            },
+                                        Option.none => Option.none,
+                                    },
+                                ViewBindOp.view_free =>
+                                    match cell {
+                                        Option.some cell_arg => compile_view_free_bind_db c cell_arg binder body,
+                                        Option.none => Option.none,
+                                    },
+                            },
+                    },
+            },
+    }
+
+#[partial]
+def try_compile_view_bind_db (c : CodegenCtx) (fun : Term) (arg : Term) : Option CompileResult :=
+    match view_bind_plan fun arg {
+        Option.none => Option.none,
+        Option.some plan => compile_view_bind_db c plan,
+    }
+
+#[partial]
+def compile_db_app_ir (c : CodegenCtx) (fun : Term) (arg : Term) : CompileResult :=
+    // The view fusion first: its shape (`app (app bind accessor) lam`) is
+    // also matched by nothing below except the general call path, so the
+    // order buys the fusion before that path lifts the continuation into
+    // its own closure.
+    match try_compile_view_bind_db c fun arg {
+        Option.some result => result,
+        Option.none =>
+        // Check `let`-shaped beta-redexes next -- `fun` here is a bare
+        // `Term.lam`, a shape none of the other cases below ever
+        // match (they all key off `fun`/its own head being `Term.var`), so
+        // ordering relative to them doesn't matter for correctness. It's
+        // checked early purely because it's the single most common call
+        // shape in real code (see its own doc comment).
+        match try_compile_let_beta_db c fun arg {
+            Option.some result => result,
+            Option.none =>
+                // Check if this is a constructor application
+                match try_compile_constructor_app_db c fun arg {
+                    Option.some result => result,
+                    Option.none =>
+                        match try_compile_inline_native_db c fun arg {
+                            Option.some result => result,
+                            Option.none => compile_general_db_call c fun arg,
+                        },
+                },
+        },
     }
 
 /// `let x := arg in body` (`lang/parser.mo`'s `let_term_body`) desugars

@@ -30,12 +30,26 @@
 /// linear, never `Copy`, and user defs may not bind or return one until
 /// the erasure pass lands.
 ///
-/// ## What is deliberately absent
+/// ## The fused do-bind
 ///
-/// `Cell.get` returns an ordinary boxed `Pair` in v1 (one allocation per
-/// read). The zero-allocation unboxed return is a separate, IR-gated
-/// milestone; a boxed v1 first keeps the safety rules and the runtime
-/// correct.
+/// The public types are unchanged, so an escaping `Pair` is still an
+/// ordinary boxed value -- that path stays the reference semantics (the
+/// Rust host interprets exactly it). But the common shape, a do-bind
+/// whose initializer is one of these accessors and whose continuation
+/// consumes the result immediately, is lowered WITHOUT the box:
+/// `lang/src/codegen/emit.mo`'s `try_compile_view_bind_db` reads the
+/// payload with `monad_view_payload` and passes the handle through
+/// (below), and calls `monad_view_new`/`_set`/`_free` directly for the
+/// other three. The fusion is shape-selected, never a semantic change: anything
+/// that does not match keeps the boxed path, and the emitted shape is
+/// pinned by `lang/src/codegen/test/view_ir_tests.mo`.
+///
+/// ## The handle invariant the fusion relies on
+///
+/// `view_get_impl` and `view_set_impl` return the SAME handle word they
+/// were given, and `view_new_impl` returns a fresh one. A fused `get`
+/// therefore needs no aggregate result: one i64 (the payload) plus the
+/// unchanged input word is the whole pair.
 use init::copy {Copy}
 
 /// The proof that `A` is live at a location. Opaque and erased: it has no
