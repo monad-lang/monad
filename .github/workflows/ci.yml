@@ -382,21 +382,6 @@ jobs:
             -c env MONAD_BIN="$PWD/target-monad/ci-self-compile/monad" \
                  scripts/check-repl.sh
 
-      # Weaver's terminal tests: every mty driver in motes/weaver/test runs
-      # under `monad test` against the release weaver built from THIS
-      # commit's self-compiled compiler. The suite is compiled-only
-      # `#[extern "c"]` pty FFI; there is no Python driver left, including
-      # the sessions 18 MB RSS scenario
-      # (plans/implementations/2026-10-25-weaver-pty-monad-tests.md).
-      # ~2 min to build weaver natively, ~10-15 min for the mty suite (the
-      # per-file compilation dominates; S6 adds ~20 s).
-      - name: Weaver terminal tests
-        run: |
-          nix develop --no-pure-eval --accept-flake-config \
-            --profile "$HOME/.monad-ci-devshell" \
-            -c env MONAD_BIN="$PWD/target-monad/ci-self-compile/monad" \
-                 scripts/ci-weaver-pty.sh
-
       # Phase 0-2 of plans/bootstrapping/wasm-target.md: the wasi fib
       # differential, the web loader smoke test, and clean target-gating
       # errors. Reuses the binary the step above just self-compiled, so it
@@ -417,6 +402,40 @@ jobs:
           nix develop --no-pure-eval --accept-flake-config \
             --profile "$HOME/.monad-ci-devshell" \
             -c scripts/check-runtime-threads.sh
+
+  # Weaver's terminal suite, beside compiler-checks rather than inside it: it
+  # was 28 of that job's 68 minutes (run 41624196650) and needs nothing from it
+  # but a compiler built from this tree, which this job builds itself with the
+  # nightly. The build skips the built binary's `check cli` (compiler-checks
+  # owns that verdict). The suite is ONE test file, motes/weaver/test/mty_tests.mo,
+  # over the drivers in weaver::mty::*: a file per driver paid a ~60 s compile
+  # each for a few seconds of terminal time.
+  weaver-checks:
+    runs-on: [self-hosted, linux]
+    needs: changes
+    if: needs.changes.outputs.compiler == 'true'
+    timeout-minutes: 60
+    steps:
+      # Full history for ci-self-compile.sh's nightly-floor check, as in
+      # compiler-checks.
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Self-compile with the latest nightly
+        run: |
+          nix develop --no-pure-eval --accept-flake-config \
+            --profile "$HOME/.monad-ci-devshell" \
+            -c env CI_SELF_COMPILE_BUILD_ONLY=1 scripts/ci-self-compile.sh
+
+      # The release weaver built by this commit's compiler, then the mty
+      # drivers against it (compiled-only `#[extern "c"]` pty FFI).
+      - name: Weaver terminal tests
+        run: |
+          nix develop --no-pure-eval --accept-flake-config \
+            --profile "$HOME/.monad-ci-devshell" \
+            -c env MONAD_BIN="$PWD/target-monad/ci-self-compile/monad" \
+                 scripts/ci-weaver-pty.sh
 
   # The portable monadup binary and the distribution harness: the bootstrap
   # stub, the fixture-driven install path, doctor/env/new, and a monadup

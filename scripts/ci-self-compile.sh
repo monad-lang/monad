@@ -25,6 +25,7 @@
 #   scripts/ci-self-compile.sh [out-dir]
 #   MONAD_ALLOW_RUST_FALLBACK=1 scripts/ci-self-compile.sh   # explicit opt-out
 #   MONADUP_BIN=/path/to/monadup scripts/ci-self-compile.sh  # pick the installer
+#   CI_SELF_COMPILE_BUILD_ONLY=1 scripts/ci-self-compile.sh  # skip the built binary's check
 #
 # The nightly is installed with `monadup default` (install latest, set it
 # active), so the host is `$MONAD_HOME/bin/monad` -- the active shim, no
@@ -151,6 +152,13 @@ nightly_rc=0
 MONAD_HOST_BIN="$nightly" scripts/build-self-hosted.sh "$out" || nightly_rc=$?
 if [ "$nightly_rc" -ne 0 ]; then
   rust_fallback "the latest nightly ($nightly_commit) cannot build this tree"
+fi
+
+# A job that only needs the binary (ci.yml's weaver-checks) stops here; the
+# check below is compiler-checks' verdict, not every consumer's.
+if [ "${CI_SELF_COMPILE_BUILD_ONLY:-0}" = 1 ]; then
+  say "built with the latest nightly host ($nightly_commit); check skipped (CI_SELF_COMPILE_BUILD_ONLY=1)"
+  exit 0
 fi
 
 # Building is not enough: the binary has to do the job it was built for. A
