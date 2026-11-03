@@ -52,8 +52,21 @@ def paths_g1 : String :=
 def paths_g2 : String :=
     String.concat "def bad_codomain {A : Type} {B : Type} (f : A -> B) {a : A} {b : A} (p : Path A a b) : Path B (f b) (f a) := fn (i : I) => f (p i)\n" (String.concat "def bad_funext_boundary {A : Type} {B : Type} {f : A -> B} {g : A -> B} (h : (x : A) -> Path B (f x) (g x)) : Path (A -> B) g f := fn (i : I) => fn (x : A) => h x i\n" (String.concat "def bad_funext_body {A : Type} {B : Type} {f : A -> B} {g : A -> B} (h : (x : A) -> Path B (f x) (g x)) : Path (A -> B) f g := fn (i : I) => fn (x : A) => f x\n" (String.concat "def bad_funext_dep {A : Type} {B : A -> Type} {f : (x : A) -> B x} {g : (x : A) -> B x} (h : (x : A) -> Path (B x) (f x) (g x)) : Path ((x : A) -> B x) g f := fn (i : I) => fn (x : A) => h x i\n" (String.concat "def bad_funext_inv {A : Type} {B : Type} {f : A -> B} {g : A -> B} (p : Path (A -> B) f g) : (x : A) -> Path B (g x) (f x) := fn (x : A) => fn (i : I) => p i x\n" (String.concat "def bad_sym_sym {A : Type} {a : A} {b : A} (p : Path A a b) : Path (Path A a b) (sym (sym p)) p := fn (k : I) => fn (i : I) => p (ineg i)\n" (String.concat "def bad_ap_refl_body {A : Type} {B : Type} (f : A -> B) (a : A) : Path (Path B (f a) (f a)) (ap f (refl a)) (refl (f a)) := fn (i : I) => fn (j : I) => a\n" ("def rejected_control : Type := no_such_name_anywhere\n")))))))
 
+/// The two combinators that apply the dimension TWICE, kept in their own
+/// group: the affine rule is not what these feed (`def_body_diagnostics` is
+/// the type checker) -- that the second use is ALLOWED at all is the
+/// `Copy Cubical.I` instance's job, pinned at the driver level in
+/// `lang/src/tests/typecheck_negative_tests.mo`.
+def paths_g3 : String :=
+    String.concat "def ap2 {A : Type} {B : Type} {C : Type} {a0 : A} {a1 : A} {b0 : B} {b1 : B} (f : A -> B -> C) (p : Path A a0 a1) (q : Path B b0 b1) : Path C (f a0 b0) (f a1 b1) := fn (i : I) => f (p i) (q i)\n" (String.concat "def path_pair {A : Type} {B : A -> Type} {a0 : A} {a1 : A} {b0 : B a0} {b1 : B a1} (p : Path A a0 a1) (q : PathP (fn i => B (p i)) b0 b1) : Path (Sigma A B) (Sigma.dpair a0 b0) (Sigma.dpair a1 b1) := fn (i : I) => Sigma.dpair (p i) (q i)\n" "")
+
+/// Their rejection controls: swapping the two-place application's endpoints,
+/// and reversing the dependent pair's second component.
+def paths_g4 : String :=
+    String.concat "def bad_ap2 {A : Type} {B : Type} {C : Type} {a0 : A} {a1 : A} {b0 : B} {b1 : B} (f : A -> B -> C) (p : Path A a0 a1) (q : Path B b0 b1) : Path C (f a1 b1) (f a0 b0) := fn (i : I) => f (p i) (q i)\n" (String.concat "def bad_path_pair {A : Type} {B : A -> Type} {a0 : A} {a1 : A} {b0 : B a0} {b1 : B a1} (p : Path A a0 a1) (q : PathP (fn i => B (p i)) b0 b1) : Path (Sigma A B) (Sigma.dpair a0 b0) (Sigma.dpair a1 b1) := fn (i : I) => Sigma.dpair (p i) (q (ineg i))\n" "")
+
 def paths_decls_source : String :=
-    String.concat paths_g0 (String.concat paths_g1 paths_g2)
+    String.concat paths_g0 (String.concat paths_g1 (String.concat paths_g2 (String.concat paths_g3 paths_g4)))
 
 /// The declarations, or the empty list on a parse failure -- which makes
 /// every pin below fail rather than silently pass against nothing.
@@ -116,6 +129,24 @@ def test_ap_checks_against_its_declared_path : Bool :=
 #[test]
 def test_apd_checks_against_its_declared_pathp : Bool :=
     checks "apd"
+
+#[test]
+def test_ap2_checks_against_its_declared_path : Bool :=
+    checks "ap2"
+
+#[test]
+def test_path_pair_checks_against_its_declared_path : Bool :=
+    checks "path_pair"
+
+/// ... and both are discriminating: swapping the two-place application's
+/// endpoints, and reversing the dependent pair's second component, must fail.
+#[test]
+def test_ap2_with_swapped_endpoints_is_rejected : Bool :=
+    not (checks "bad_ap2")
+
+#[test]
+def test_path_pair_with_a_reversed_second_component_is_rejected : Bool :=
+    not (checks "bad_path_pair")
 
 #[test]
 def test_funext_checks_against_its_declared_path : Bool :=

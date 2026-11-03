@@ -4994,6 +4994,13 @@ def instance_wildcard_names (ins : Instance) : List Identifier :=
 // Fail-closed by construction: a name this pass cannot prove is a
 // variable leaves its instance exactly as concrete as it was before, so
 // no instance that resolves today resolves differently.
+//
+// A QUALIFIED name is never a variable, whatever the `known` set says --
+// see `filter_unknown_types`. Without that rule `instance Copy Cubical.I`
+// is recovered as a wildcard (a cubical primitive is a `def`, and
+// `declared_type_names` lists only inductives/structs/classes), which cost
+// the interval its `Copy` instance and with it every cubical combinator that
+// applies two paths at the same dimension.
 
 /// Every type name the program's own decls introduce, as tail segments --
 /// the set `filter_unknown_types` rules an instance arg's names against.
@@ -5029,17 +5036,40 @@ def instance_arg_free_names (args : List Term) : List Identifier :=
             List.append (bare_type_var_name a) (List.append (collect_app_arg_names a) (instance_arg_free_names rest)),
     }
 
-/// `ids` minus every name whose tail segment is one of `known`'s -- see
-/// the section comment above.
+/// `ids` minus every name whose tail segment is one of `known`'s, and minus
+/// every QUALIFIED name -- see the section comment above.
+///
+/// The spelling is the discriminator between the two meanings a name can
+/// have here: a type VARIABLE is always a bare identifier (`I` in `instance
+/// Monad (Protocol I I)`), while a qualified reference (`Cubical.I`,
+/// `Toml.Value`, `json::Number`) can only name something that exists. Treating
+/// a qualified name as a variable is what made `instance Copy Cubical.I`
+/// unusable: `Cubical.I` is a `#[cubical "interval"] def`, which
+/// `declared_type_names` does not know (it lists inductives, structs and
+/// classes), so the name was recovered as a wildcard, the instance stopped
+/// being fully concrete, `keep_admissible` (`lang/typecheck/copy_class.mo`)
+/// dropped it, and a dimension used twice stayed affine (measured 2026-11-02).
+///
+/// The alternative -- teaching `decl_type_names` about cubical defs -- is
+/// REJECTED: that set is compared by TAIL, so registering `I` would stop every
+/// bare `I` in an instance arg from being a variable and break dispatch for the
+/// whole `instance Monad (Protocol I I)` family.
 #[partial]
 def filter_unknown_types (ids : List Identifier) (known : List Identifier) : List Identifier :=
     match ids {
         List.empty => List.empty,
         List.cons hd rest =>
-            if tail_member hd known
+            if identifier_is_qualified hd || tail_member hd known
             then filter_unknown_types rest known
             else List.cons hd (filter_unknown_types rest known),
     }
+
+/// Does `id` name something qualified -- a dotted path (`Cubical.I`,
+/// `Toml.Value`) or a `::` path (`json::Number`)? Such a spelling is a
+/// reference, never a bindable type variable.
+def identifier_is_qualified (id : Identifier) : Bool :=
+    let s : String := show_identifier id in
+    String.contains s "." || String.contains s "::"
 
 #[partial]
 def tail_member (id : Identifier) (known : List Identifier) : Bool :=

@@ -3,17 +3,19 @@ use lang::types {
   InstanceKey, LocalScope, LocalVar, Module, ModulePath, ModuleRegistry, NamePath,
   NameRef, Param, QualifiedName, Scope, ScopeData, ScopeDef, ScopeError,
   ScopeInstance, Similar, Term, TypeConstraint, Visibility, binder_binder, many, named,
-  package_private, param_many, priv_, pub_, show_identifier, sort_n, unnamed,
+  package_private, param_many, priv_, pub_, sentinel, show_identifier, sort_n, unnamed,
 }
 use lang::scope {
   LocalTypeBinding, add_constraint_dict_params, bare_map_empty, bind_term_vars, build_scope_from_decls,
   build_scope_from_modules, find_constraint_bound_carrier_any, infer_carrier_type,
-  list_append, lookup_binding, mk, npath_eq, placeholder_carrier, resolve_def_in_scope_by_name,
+  list_append, lookup_binding, mk, npath_eq, placeholder_carrier, refine_scope_instances,
+  resolve_def_in_scope_by_name,
   resolve_dict_args, scope_data_add_def, scope_data_add_inductive, scope_data_add_instance,
   scope_data_empty, scope_find_inductive, scope_find_inductive_by_constructor,
   scope_find_local, scope_globals, scope_instance_candidates_in, scope_push_local, scope_resolve_instance,
   scope_resolve_name, term_to_slug,
 }
+use lang::typecheck::copy_class {copy_verdict, copy_verdict_grants_omega}
 use llvm::strmap {str_map_empty, str_map_insert}
 use std::list {List.length}
 
@@ -1207,3 +1209,91 @@ def test_a_same_mote_package_private_instance_is_a_candidate : Bool :=
 #[test]
 def test_a_pub_instance_crosses_motes : Bool :=
     I64.beq (candidate_count consumer_mote_path other_mote_path Visibility.pub_) 1
+
+// ─── Qualified instance args are references, not type variables ──────
+//
+// `refine_scope_instances` recovers an instance arg's unbound names as its
+// `implicit_params`, which is what makes `instance Monad (Protocol I I)`
+// match `Protocol Init Init`. A QUALIFIED name can never be such a variable,
+// and treating one as a variable is what cost `Cubical.I` its `Copy`
+// instance: the instance stopped being fully concrete and was dropped before
+// any carrier matching (measured 2026-11-02). Both halves are pinned -- the
+// qualified name stays concrete AND a bare one is still recovered.
+
+def copy_class_np : NamePath := NamePath.mk (List.cons (Identifier.id "Copy") List.empty)
+
+def copy_instance_with_arg (name : String) (arg : Term) : Instance :=
+    let empty_constraints : List TypeConstraint := List.empty in
+    let empty_params : List Param := List.empty in
+    let empty_defs : List Def := List.empty in
+    Instance.mk (Identifier.id name) copy_class_np empty_constraints
+        (List.cons arg List.empty) Visibility.pub_ empty_params empty_defs
+
+/// The refined `Copy` candidates for a scope holding `ins`.
+def refined_copy_candidates (ins : Instance) : List Instance :=
+    let sd : ScopeData := scope_data_add_instance scope_data_empty test_owner ins in
+    let no_decls : List Decl := List.empty in
+    let refined : ScopeData := refine_scope_instances no_decls sd in
+    let path : ModulePath := ModulePath.mk (List.cons (Identifier.id "Test") List.empty) in
+    let s : Scope := {
+        module_id := path,
+        scope := refined,
+        parent := Option.none,
+        incomplete_match_ok := false,
+    } in
+    scope_instance_candidates_in s copy_class_np
+
+def refined_copy_scope (ins : Instance) : Scope :=
+    let sd : ScopeData := scope_data_add_instance scope_data_empty test_owner ins in
+    let no_decls : List Decl := List.empty in
+    let refined : ScopeData := refine_scope_instances no_decls sd in
+    let path : ModulePath := ModulePath.mk (List.cons (Identifier.id "Test") List.empty) in
+    {
+        module_id := path,
+        scope := refined,
+        parent := Option.none,
+        incomplete_match_ok := false,
+    }
+
+def interval_instance : Instance :=
+    copy_instance_with_arg "Copy_Cubical_I"
+        (Term.var sentinel (DebugName.named (Identifier.id "Cubical.I")))
+
+def implicit_param_count (ins : Instance) : I64 :=
+    match ins {
+        Instance.mk _ _ _ _ _ implicit_params _ => List.length implicit_params,
+    }
+
+#[test]
+def test_refinement_keeps_a_qualified_instance_arg_concrete : Bool :=
+    match refined_copy_candidates interval_instance {
+        List.cons found _ => I64.beq (implicit_param_count found) 0,
+        List.empty => false,
+    }
+
+/// The control the rule must not break: a BARE unbound name in an instance
+/// arg is still a type variable (`instance Monad (Protocol I I)`).
+#[test]
+def test_refinement_still_recovers_a_bare_instance_type_variable : Bool :=
+    let ins : Instance :=
+        copy_instance_with_arg "Copy_I" (Term.var sentinel (DebugName.named (Identifier.id "I"))) in
+    match refined_copy_candidates ins {
+        List.cons found _ => I64.beq (implicit_param_count found) 1,
+        List.empty => false,
+    }
+
+/// And the end the whole change exists for: the refined registry answers
+/// "Copy" for a dimension binder.
+#[test]
+def test_copy_verdict_grants_omega_to_a_qualified_interval_instance : Bool :=
+    let ins : Instance :=
+        copy_instance_with_arg "Copy_Cubical_I"
+            (Term.var sentinel (DebugName.named (Identifier.id "Cubical.I"))) in
+    let sd : ScopeData := scope_data_add_instance scope_data_empty test_owner ins in
+    let no_decls : List Decl := List.empty in
+    let refined : ScopeData := refine_scope_instances no_decls sd in
+    let path : ModulePath := ModulePath.mk (List.cons (Identifier.id "Test") List.empty) in
+    let s : Scope :={ module_id := path, scope := refined, parent := Option.none, incomplete_match_ok := false } in
+    let carrier : Term := Term.var sentinel (DebugName.named (Identifier.id "Cubical.I")) in
+    copy_verdict_grants_omega (copy_verdict s carrier)
+

@@ -232,3 +232,27 @@ def test_complete_literals_and_defaulted_omissions_are_accepted : IO Bool :=
         ++ "struct Q { x : I64, y : I64 := 7 }\n"
         ++ "def defaulted : Q := { x := 1 }\n"
         ++ "def updated (p : P) : P := { p with y := 3 }\n")
+
+// --- The affine rule on dimension binders --------------------------------
+//
+// The only harness that runs the REAL `monad check` pipeline over
+// `em.target_decls`, which is where the affine walk sees lowered source --
+// a dimension binder's type is the reference `Cubical.I`, not a cubical
+// node. `instance Copy Cubical.I` (`init/src/copy.mo`) is admissible only
+// because `filter_unknown_types` (`lang/src/scope.mo`) stopped recovering a
+// QUALIFIED name as an unquantified type variable, so these two pins are the
+// driver-level before/after for that rule.
+
+#[test]
+def test_a_dimension_used_twice_is_accepted : IO Bool :=
+    accepted "def dup_i (i : Cubical.I) : Pair Cubical.I Cubical.I := Pair.pair i i\n"
+
+/// ... and the licence is specific to the interval: an ordinary affine type
+/// used twice is still an error. Without this the pin above would also pass
+/// if the rule had simply stopped enforcing anything.
+#[test]
+def test_a_non_copy_type_used_twice_is_still_rejected : IO Bool :=
+    rejected_with "dup_nocopy" "is moved 2 times"
+        ("type NoCopy { mk }\n"
+        ++ "def dup_nocopy (x : NoCopy) : Pair NoCopy NoCopy := Pair.pair x x\n")
+

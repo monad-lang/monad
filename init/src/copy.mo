@@ -174,6 +174,24 @@ pub instance Copy String {
 pub instance Copy Nat {
     def copy (x : Nat) : Pair Nat Nat := Pair.pair x x
 }
+
+/// A dimension is a compile-time index, not a runtime value: codegen emits
+/// `i0`/`i1` as the immediates 0/1, so a duplicate is a register move and two
+/// binders cannot own the same allocation through it. This is the one case
+/// where the value is not a pointer at all, which is exactly why the interval
+/// needs its own instance rather than a general rule.
+///
+/// It exists for the cubical combinators that apply TWO paths at the same
+/// dimension (`ap2`'s `f (p i) (q i)`, `path_pair`'s `dpair (p i) (q i)`); under
+/// the affine-by-default rule the second use is rejected in any mote that
+/// enforces it, and `proofs/` enforces it.
+///
+/// The QUALIFIED spelling matters: it is what keeps this instance off a bare
+/// `I` type variable elsewhere (`instance Monad (Protocol I I)`) -- see
+/// `filter_unknown_types` in `lang/src/scope.mo`.
+pub instance Copy Cubical.I {
+    def copy (i : Cubical.I) : Pair Cubical.I Cubical.I := Pair.pair i i
+}
 /// The product comonad: `E` is a read-only environment, so `extract` is the
 /// second component and `duplicate` copies it into both halves.
 ///

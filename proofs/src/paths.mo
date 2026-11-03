@@ -33,14 +33,16 @@
 // `sym_sym` is named `i` to match `sym`'s own binder: `Similar` compares a
 // bound variable's debug name, not only its index.
 //
-// `ap2` and `path_pair` are NOT here yet, and the reason is measured:
-// both apply TWO paths at the same dimension (`g (p i) (q i)`), and
-// `proofs/` has no `[affine] mode` table, i.e. the affine rule is
-// enforced as an ERROR there -- a dimension used twice is rejected
-// ("`i` : Cubical.I is used 2 times but is affine") because `Cubical.I`
-// has no `Copy` instance. Giving the interval one is a separate decision
-// (an instance body that duplicates a dimension, plus carrier matching
-// against the `Term.cubical` interval node), recorded in univalence.md.
+// `ap2` and `path_pair` apply TWO paths at the same dimension
+// (`g (p i) (q i)`). `proofs/` has no `[affine] mode` table, so the affine
+// rule is enforced as an ERROR there and that second use is rejected --
+// unless `Cubical.I` is `Copy`. It now is: `init/src/copy.mo` carries
+// `instance Copy Cubical.I`, which is admissible only because a QUALIFIED
+// name is no longer recovered as an unquantified instance type variable
+// (`filter_unknown_types`, `lang/src/scope.mo`). A dimension is a
+// compile-time index, so duplicating one costs a register move; that is the
+// whole reason the interval gets an instance and, say, `Nat`'s neighbours do
+// not get a blanket one.
 
 use proofs::equiv {Path}
 
@@ -68,6 +70,23 @@ pub def apd {A : Type} {B : A -> Type} {a : A} {b : A}
     (f : (x : A) -> B x) (p : Path A a b) :
     Cubical.PathP (fn x => B (p x)) (f a) (f b) :=
     fn (i : Cubical.I) => f (p i)
+
+/// Two-place application (`cong₂`): both paths are applied at the SAME
+/// dimension, which is why the interval must be `Copy` (see the header).
+pub def ap2 {A : Type} {B : Type} {C : Type} {a0 : A} {a1 : A} {b0 : B} {b1 : B}
+    (f : A -> B -> C) (p : Path A a0 a1) (q : Path B b0 b1) :
+    Path C (f a0 b0) (f a1 b1) :=
+    fn (i : Cubical.I) => f (p i) (q i)
+
+/// A path between dependent pairs, built pointwise: the second component is a
+/// path OVER the line the first one traces, so it is a `PathP`, not a `Path`.
+/// Also two uses of the dimension (see the header).
+pub def path_pair {A : Type} {B : A -> Type} {a0 : A} {a1 : A}
+    {b0 : B a0} {b1 : B a1}
+    (p : Path A a0 a1)
+    (q : Cubical.PathP (fn i => B (p i)) b0 b1) :
+    Path (Sigma A B) (Sigma.dpair a0 b0) (Sigma.dpair a1 b1) :=
+    fn (i : Cubical.I) => Sigma.dpair (p i) (q i)
 
 /// Function extensionality: pointwise paths give a path between functions.
 pub def funext {A : Type} {B : Type} {f : A -> B} {g : A -> B}
