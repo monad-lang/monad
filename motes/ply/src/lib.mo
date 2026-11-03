@@ -1,13 +1,17 @@
 // The ply mote's library root -- bare `use ply` resolves here.
 //
-// One module so far, so this is thin by construction: the pure core's
-// value types (the rope, selections, changes, the undo history and the
-// editor mode). Later phases add the modules that operate on them
-// (`rope.mo`, `selection.mo`, `history.mo`, `transaction.mo`, `keymap.mo`)
-// and re-export them here by name, so a consumer (Weaver's approval diff, a
-// future `monad-shell` line editor) gets the whole reusable core through
-// this one import.
+// The pure core is complete as of Phase 1: the value types (types.mo), the
+// rope (rope.mo), selections (selection.mo), the undo history (history.mo),
+// a document (model.mo) and the transaction that edits one
+// (transaction.mo). Later phases add the modules that drive these -- the
+// keymap, commands, view, LSP client and MCP server -- and re-export them
+// here the same way, so a consumer (Weaver's approval diff, a future
+// `monad-shell` line editor) gets the whole reusable core through this one
+// import.
 //
 // No `{*}` globs -- the `motes/json/src/lib.mo` doctrine.
 
 pub use lib::types {Rope, Selection, Selections, Change, Revision, History, Mode}
+pub use lib::rope {Rope.of_string}
+pub use lib::selection {Selections.cursor}
+pub use lib::model {Document, Document.of_text}
