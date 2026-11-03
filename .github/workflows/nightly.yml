@@ -25,20 +25,21 @@ env:
 
 jobs:
   # The native leg. It is also the one that seeds the binary cache with the
-  # rungs, because a build input is not in an output closure and `cachix push`
-  # walks only closures -- see the push step below. There are two rungs and
-  # they exist for different consumers:
+  # release rung, because a build input is not in an output closure and
+  # `cachix push` walks only closures -- see the push step below. That rung
+  # is `.#monadNightlyRung1`: the compiler compiled by the PINNED previous
+  # nightly (nix/nightly.nix), one ~2-minute native build instead of the
+  # ~26-minute interpretation the Rust host used to pay on every cold leg.
+  # Every leg's binary is that same `.ll` relinked, so a leg that misses the
+  # cache redoes minutes, not a night -- and the cross legs below consume
+  # this same derivation, which is what `needs:` orders them after.
   #
-  #   * `.#monadNightlyRung1` is the one the release itself is relinked from:
-  #     the compiler compiled by the PINNED previous nightly (nix/nightly.nix),
-  #     one ~2-minute native build instead of the ~26-minute interpretation
-  #     the Rust host used to pay on every cold leg. Every leg's binary is
-  #     that same `.ll` relinked, so a leg that misses the cache now redoes
-  #     minutes, not a night -- but the cross legs below still consume this
-  #     same derivation, and `needs:` is what orders them after it exists.
-  #   * `.#monadRung1` is the interpreted ladder rung, unchanged: the store
-  #     comparison in bootstrap-compile (interpreted IR vs compiled IR) and
-  #     any other ladder consumer still build exactly that one.
+  # NOTHING monad-rs-based is built by this workflow: the interpreted ladder
+  # (`.#monadHost`, `.#monadRung1`) belongs to the PR pipeline and the
+  # bootstrap ladder, not to a release. ci.yml's compiler job builds and
+  # pushes `.#monadHost` itself; `.#monadRung1` is the ladder's own
+  # interpreted reference (scripts/bootstrap-compile.sh), built by whoever
+  # needs that comparison -- no release leg.
   linux-native:
     if: github.repository == 'monad-lang/monad'
     runs-on: [self-hosted, linux]
@@ -80,22 +81,22 @@ jobs:
           nix develop --no-pure-eval --accept-flake-config -c \
             scripts/nightly-release.sh x86_64-linux
 
-      # What the legs and the ladder are about to need, pushed now that it
-      # exists. `.#monadNightlyRung1` is named because a build input is NOT in
-      # the output closure `cachix push` walks -- the release's own `.#monad`
-      # relinks from it and would leave it uncached otherwise, and the cross
-      # legs below build the same derivation. `.#monadHost` and `.#monadRung1`
-      # are named for the same reason and for the ladder's other consumers
-      # (bootstrap-compile's store-reuse comparison among them). `cachix` is
-      # the devshell's (nix/packages.nix): the runner host has none. ci.yml
-      # pushes only `.#monadHost` (its compiler job), so this step is the one
-      # place the rungs reach monad-lang.cachix.org from.
-      - name: Push the ladder to the binary cache
+      # What the cross legs and a re-run are about to need, pushed now that
+      # it exists. `.#monadNightlyRung1` is named because a build input is
+      # NOT in the output closure `cachix push` walks -- the release's own
+      # `.#monad` relinks from it and would leave it uncached otherwise, and
+      # the cross legs below build the same derivation. `.#monad` is the
+      # release itself, for a re-run of this same commit. The monad-rs
+      # ladder (`.#monadHost`, `.#monadRung1`) is deliberately absent: a
+      # release leg has no use for it, and building it here would put the
+      # ~26-minute interpretation back into the nightly. `cachix` is the
+      # devshell's (nix/packages.nix): the runner host has none.
+      - name: Push the nightly to the binary cache
         env:
           CACHIX_AUTH_TOKEN: ${{ secrets.CACHIX_AUTH_TOKEN }}
         run: |
           paths="$(nix build --no-link --print-out-paths --accept-flake-config \
-            .#monadHost .#monadRung1 .#monadNightlyRung1 .#monad)"
+            .#monadNightlyRung1 .#monad)"
           nix develop --no-pure-eval --accept-flake-config -c scripts/push-to-cache.sh $paths
 
       - uses: actions/upload-artifact@v5
@@ -181,18 +182,21 @@ jobs:
             scripts/nightly-release.sh aarch64-darwin
 
       # So a re-run of this same commit -- which is what iterating on a leg
-      # that has never run here looks like -- substitutes every rung instead
-      # of recompiling them. `.#monadNightlyRung1` is named for the same
-      # reason as on the linux leg: a build input is not in the output
-      # closure `cachix push` walks. `cachix` comes from its own `nix shell`
-      # because the push script documents `nix develop` as its caller and
-      # cannot be entered that way on this runner.
-      - name: Push the ladder to the binary cache
+      # that has never run here looks like -- substitutes the rung and the
+      # release instead of recompiling them. `.#monadNightlyRung1` is named
+      # for the same reason as on the linux leg: a build input is not in
+      # the output closure `cachix push` walks. Nothing monad-rs-based is
+      # built or pushed here either -- a cold darwin cargo build plus a
+      # cold interpretation used to be most of this leg's wall, and a
+      # release has no use for either. `cachix` comes from its own
+      # `nix shell` because the push script documents `nix develop` as its
+      # caller and cannot be entered that way on this runner.
+      - name: Push the nightly to the binary cache
         env:
           CACHIX_AUTH_TOKEN: ${{ secrets.CACHIX_AUTH_TOKEN }}
         run: |
           paths="$(nix build --no-link --print-out-paths --accept-flake-config \
-            .#monadHost .#monadRung1 .#monadNightlyRung1 .#monad)"
+            .#monadNightlyRung1 .#monad)"
           nix shell nixpkgs#cachix nixpkgs#coreutils nixpkgs#gnugrep -c \
             scripts/push-to-cache.sh $paths
 

@@ -124,17 +124,18 @@ out="$MONAD_BOOTSTRAP_DIR"
 #     consume this. The saving is therefore runner CPU on the release ladder, NOT
 #     the step's wall clock; said plainly here so a CI log is not read as a win it
 #     cannot make.
-#   * A hit is OPPORTUNISTIC. The fleet's two runners share no nix store, and
-#     `ci.yml` already records that. It hits on a re-run, on a commit that
-#     leaves the compiler's sources alone, or on a machine that has already
-#     built the package -- and since the release family moved to the
-#     nightly-hosted rung (nix/nightly.nix), nothing in a PR pipeline
-#     realizes `monadRung1` any more: `.#monad` depends on
-#     `monadNightlyRung1` instead, and `compiler-checks` builds its rung-1
-#     from source in its own scratch directory and no longer goes through
-#     the flake at all. What puts it in a runner's store is the NIGHTLY's
-#     cache push (nightly.yml names it beside the rungs it builds), so a
-#     machine that has only swept has NOT got this.
+#   * A hit is OPPORTUNISTIC, and nothing in CI guarantees it any more.
+#     The fleet's two runners share no nix store, and `ci.yml` already
+#     records that. Since the release family moved to the nightly-hosted
+#     rung (nix/nightly.nix) and the nightly stopped building or pushing
+#     the interpreted one, no pipeline realizes `monadRung1`: `.#monad`
+#     depends on `monadNightlyRung1` instead, and `compiler-checks` builds
+#     its rung-1 from source in its own scratch directory and never puts a
+#     store copy anywhere. A hit needs a store that already holds it -- a
+#     local dev shell's `nix build .#monadRung1`, a leftover from when the
+#     nightly used to build it, or `MONAD_RUNG1_STORE` naming one -- and CI
+#     takes the from-source branch otherwise, which is the same build this
+#     ladder exists to assert.
 #   * `nix-store --check-validity` asks "is it already realized", which is the
 #     question. `nix build` would answer it by BUILDING, which is the ~320 s of
 #     interpretation this exists to avoid; `nix eval` of the output path carries

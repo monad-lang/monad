@@ -904,17 +904,20 @@
       packages = {
         monad = monad;
         default = monad;
-        # Rung 1 on its own, for CI's bootstrap ladder: it is what makes the
-        # interpretation a store hit across commits that do not touch the
-        # compiler's sources, and it is where the `.ll` that ladder compares
-        # against now comes from.
+        # Rung 1 on its own, interpreted: the reference side of the
+        # bootstrap ladder's comparison (scripts/bootstrap-compile.sh's
+        # store re-use, when a store copy happens to exist -- nothing in
+        # CI realizes one since the nightly stopped building or pushing it),
+        # and the source of the `.ll` that ladder compares against. Never
+        # built by the release pipeline: a release leg has no use for the
+        # interpreted rung, and paying the interpretation there is what the
+        # nightly host exists to avoid.
         monadRung1 = rung1;
         # The release's rung 1 on its own, for the binary cache: the cross
         # legs of a night build `.#monad-<platform>` on a machine whose store
         # has not built it, and cachix is how the native leg's copy reaches
-        # them. Named in nightly.yml's push step for the same reason
-        # `monadRung1` is: a build input is not in the output closure a
-        # `cachix push` walks.
+        # them. Named in nightly.yml's push step because a build input is
+        # not in the output closure a `cachix push` walks.
         monadNightlyRung1 = nightlyRung1;
         monadup = monadup;
       }
