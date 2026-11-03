@@ -1000,6 +1000,13 @@ pub def runtime_declarations_for (kind : TargetKind) : List LLVMDeclaration :=
     let d122 := mk_decl "monad_view_get" ["i64"] "i64" in
     let d123 := mk_decl "monad_view_set" ["i64", "i64"] "i64" in
     let d124 := mk_decl "monad_view_free" ["i64"] "i64" in
+    // `monad_view_payload` (runtime_core.c) -- the fused do-bind's read
+    // half. Emitted DIRECTLY by `try_compile_view_bind_db`
+    // (`lang/src/codegen/emit.mo`), never reached through a native
+    // wrapper, so it has a declare but no `native_runtime_fn_name` entry:
+    // the call-target gate still needs the declare (a call to an
+    // undeclared symbol fails the module).
+    let d150 := mk_decl "monad_view_payload" ["i64"] "i64" in
     // The piped-subprocess family (runtime.c) -- every handle, string
     // and `List String` is one i64 word under the uniform boxed
     // convention (`Child` is an opaque registry index, `FdStream`'s own
@@ -1109,7 +1116,7 @@ pub def runtime_declarations_for (kind : TargetKind) : List LLVMDeclaration :=
      d74, d76, d78, d79, d80, d81, d82, d83, d84, d85, d87,
      d88, d91, d92, d93, d94, d95, d96, d97, d98, d99, d99a, d99b, d100, d101, d102, d103,
      d104, d105, d106, d107, d108, d109, d110, d111, d112, d113, d114, d115, d116,
-     d117, d118, d119, d120, d121, d122, d123, d124,
+     d117, d118, d119, d120, d121, d122, d123, d124, d150,
      d125, d126, d127, d128, d129, d130, d131, d132, d133,
      d134, d135, d136, d137, d138, d139, d140, d141,
      d142, d143, d144, d145, d146, d147, d148, d149]

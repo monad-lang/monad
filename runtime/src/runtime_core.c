@@ -632,6 +632,19 @@ static rt_word view_get_impl(rt_word handle) {
     return RT_WORD(pair);
 }
 
+/* The fused do-bind's read half (`try_compile_view_bind_db`,
+   lang/src/codegen/emit.mo). When the continuation destructures the pair
+   immediately, codegen emits this instead of `monad_view_get`, so no
+   `Pair` is allocated; the handle half is passed through separately,
+   which is exactly what `view_get_impl` would have put in field 1 -- it
+   returns the SAME word it was given. A poisoned or foreign handle reads
+   0, the same answer `view_get_impl`'s failed tag check gives. */
+static rt_word view_payload_impl(rt_word handle) {
+    CellObj* c = cell_of(handle);
+    if (!c) return 0;
+    return c->payload;
+}
+
 static rt_word view_set_impl(rt_word handle, rt_word v) {
     CellObj* c = cell_of(handle);
     if (!c) return 0;
@@ -1468,6 +1481,7 @@ int64_t monad_cell_add_i64(rt_word handle, int64_t delta) { return ref_add_i64_i
 
 rt_word monad_view_new(rt_word init) { return view_new_impl(init); }
 rt_word monad_view_get(rt_word handle) { return view_get_impl(handle); }
+rt_word monad_view_payload(rt_word handle) { return view_payload_impl(handle); }
 rt_word monad_view_set(rt_word handle, rt_word v) { return view_set_impl(handle, v); }
 rt_word monad_view_free(rt_word handle) { return view_free_impl(handle); }
 
