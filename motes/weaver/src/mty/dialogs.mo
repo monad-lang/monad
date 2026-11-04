@@ -1,6 +1,7 @@
 // weaver / mty / dialogs -- the permission dialog (deny with a note, arrow
 // selection + Enter), the plan-review revise path, and typed values in the
-// settings dialog. Ported from pty_repro_dialogs.py (retired).
+// settings dialog, and a dialog that must survive a long stay open. Ported
+// from pty_repro_dialogs.py (retired).
 //
 // The edit fixture is GENERATED in the run root: the checked-in
 // turns_edit.json has no `new_content`, so the Python driver wrote its own.
@@ -249,6 +250,53 @@ def settings_run (bin : String) (root : String) : IO Bool := do {
     }
 }
 
+// ── 5. A dialog open for long keeps its stack flat ───────────────────────
+
+// The modal loop once recursed through IO binds, one native frame chain
+// per poll or byte, and a permission dialog left open overnight died with
+// SIGSEGV on its fiber's stack. Under a 2 MiB stack the recursive loop
+// overflowed inside this burst; the single-self-call loop, compiled to a
+// back-edge, keeps answering.
+def dialog_keys : I64 := 3000
+
+#[partial]
+def dialog_burst (m : Mty) (sent : I64) (down : Bool) : IO I64 := do {
+    let o <- Mty.output m;
+    if Bool.or o.eof (Bool.not (sent < dialog_keys)) then IO.pure sent
+    else do {
+        Mty.send_text m (if down then "j" else "k");
+        Mty.pump m 4;
+        dialog_burst m (sent + 1) (Bool.not down)
+    }
+}
+
+def soak_dialog_go (m : Mty) : IO Bool := do {
+    let up <- Mty.wait_until m saw_alt 6000;
+    Mty.send_text m "/settings\r";
+    let dlg <- Mty.wait_until m (fn (o : Output) => visible o "Output budget") 6000;
+    let sent <- dialog_burst m 0 true;
+    Mty.pump m 300;
+    let o1 <- Mty.output m;
+    IO.println (String.concat "INFO keys sent: " (I64.to_string sent));
+    let a <- Check.report "3000 keys in an open dialog without a segfault (stack 2 MiB)"
+        (dlg && sent == dialog_keys && Bool.not o1.eof);
+    Mty.send_text m "\u{1b}";
+    let closed <- Mty.wait_until m (fn (o : Output) => not_found o "Save to project") 6000;
+    let b <- Check.report "Esc still closes the dialog after the burst" closed;
+    Mty.finish m;
+    return (up && a && b)
+}
+
+def soak_dialog_run (bin : String) (root : String) : IO Bool := do {
+    let fixture <- plan_fixture root;
+    let env : List (Pair String (Option String)) := [Pair.pair "MONAD_STACK_BYTES" (Option.some "2097152")];
+    let r <- spawn bin "mock" 24 80 root (Option.some fixture) env;
+    match r {
+        Result.err e => do { IO.println (String.concat "FAIL mty dialogs spawn: " e); return false },
+        Result.ok m => soak_dialog_go m
+    }
+}
+
 pub def run_dialog_deny_with_note : IO Bool :=
     run_gated "mty weaver dialogs" test_dialog_deny_body
 
@@ -272,3 +320,9 @@ pub def run_dialog_settings_edit : IO Bool :=
 
 def test_dialog_settings_body (bin : String) : IO Bool :=
     with_root "dialogs_settings" (fn (root : String) => settings_run bin root)
+
+pub def run_dialog_open_long_keeps_the_stack_flat : IO Bool :=
+    run_gated "mty weaver dialogs" test_dialog_soak_body
+
+def test_dialog_soak_body (bin : String) : IO Bool :=
+    with_root "dialogs_soak" (fn (root : String) => soak_dialog_run bin root)
