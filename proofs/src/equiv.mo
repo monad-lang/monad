@@ -9,6 +9,22 @@
 pub def Path (A : Type) (a : A) (b : A) : Type :=
     Cubical.PathP (fn _ => A) a b
 
+/// A proof is `Copy`: a path never reaches run time (the compiled form of a
+/// `Path` is erased -- there is nothing to own), so sharing one costs nothing
+/// and two uses cannot double-free. Without it the affine rule rejects the
+/// ordinary cubical proofs that mention the same path twice -- a contraction's
+/// `pair_path p (fn i j => p (ijoin i j))`, a `path_pair` whose two components
+/// depend on the same path.
+///
+/// It is a LIBRARY instance rather than a kernel rule about `Path`, for the
+/// same reason `Copy Cubical.I` is: `Copy` is an ordinary class, and a proof
+/// type is whatever the library says it is. Note this licenses duplicating a
+/// PROOF, not the data a proof is about (`b : A` in `Sigma.dpair b (refl b)` is
+/// still affine unless `A` has its own instance).
+pub instance {A : Type} {a : A} {b : A} Copy (Path A a b) {
+    def copy (p : Path A a b) : Pair (Path A a b) (Path A a b) := Pair.pair p p
+}
+
 /// `isContr A` -- a point of `A` with every point equal to it.
 pub def isContr (A : Type) : Type :=
     Sigma A (fn center => ((x : A) -> Path A x center))
