@@ -3,9 +3,10 @@
 /// files, so there is no mutable registry (the language has no IORef) and
 /// a crashed harness leaves a readable record.
 ///
-/// A launched process is NOT a child group: `kill` targets the shell pid,
-/// and a grandchild that detaches can survive. The foreground `shell`
-/// tool is untouched.
+/// A launched process leads its own process group (`set -m`), and `kill`
+/// signals the whole group, so the command's children go with it; only a
+/// grandchild that calls `setsid` itself can escape. The foreground
+/// `shell` tool is untouched.
 use std::io {IO.get_env, IO.is_dir, IO.list_dir, IO.read_file, IO.write_file, IO.current_time_nano}
 use std::path {Path, Path.to_string, Path.join, Path.file_name}
 use std::process {exec_cmd, process_id, Proc.capture}
@@ -308,13 +309,14 @@ pub def Procs.list : IO (List ProcEntry) := do {
 
 /// The detached script. Paths are single-quoted; the command is shell
 /// script by contract (the shell tool's own rule), and `< /dev/null`
-/// detaches stdin so the child cannot read the terminal.
+/// detaches stdin so the child cannot read the terminal. `set -m` puts the
+/// background job in its own process group, whose id is the recorded pid.
 pub def Procs.detached_script (dir : Path) (cwd : String) (command : String) : String :=
     let log : String := shell_quote (Path.to_string (Store.child dir "log")) in
     let pidp : String := shell_quote (Path.to_string (Store.child dir "pid")) in
     let exitp : String := shell_quote (Path.to_string (Store.child dir "exit")) in
     let cd : String := if String.is_empty cwd then "" else String.concat "cd " (String.concat (shell_quote cwd) " && ") in
-    String.concat_list [cd, "{ ( ", command, " ) > ", log,
+    String.concat_list ["set -m; ", cd, "{ ( ", command, " ) > ", log,
         " 2>&1 < /dev/null; echo $? > ", exitp, "; } & echo $! > ", pidp]
 
 pub def Procs.start_at (root : Path) (command : String) (cwd : String) : IO (Result String ProcEntry) := do {
@@ -391,9 +393,12 @@ def take_last (n : I64) (xs : List String) : List String :=
     let cut : I64 := len - n in
     drop_first (if cut < 0 then 0 else cut) xs
 
+/// TERM, then KILL, to the task's process group; the bare pid when the
+/// group signal fails (a task started before groups were used).
 def kill_running (e : ProcEntry) : IO (Result String String) := do {
-    let script : String := String.concat "kill -TERM " (String.concat (I64.to_string e.pid)
-        (String.concat " 2>/dev/null; sleep 0.2; kill -KILL " (String.concat (I64.to_string e.pid) " 2>/dev/null")));
+    let pid : String := I64.to_string e.pid;
+    let script : String := String.concat_list ["kill -TERM -- -", pid, " 2>/dev/null || kill -TERM ", pid,
+        " 2>/dev/null; sleep 0.2; kill -KILL -- -", pid, " 2>/dev/null || kill -KILL ", pid, " 2>/dev/null"];
     let _ <- exec_cmd "sh" ["-c", script];
     let _ <- write_text (dir_child e "killed") "1";
     IO.pure (Result.ok (String.concat "killed " e.id))

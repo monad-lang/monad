@@ -12,6 +12,8 @@ use json::json {Json, Json.parse}
 use std::path {Path, Path.to_string}
 use std::process {process_id, exec_cmd}
 use tui::terminal {Terminal.poll}
+use std::io {IO.read_file, IO.is_dir}
+use std::concurrent::combine {sleepIO}
 
 def temp_root (suffix : String) : String :=
     String.concat "/tmp/weaver_procs_test_"
@@ -55,6 +57,7 @@ def test_detached_script_quotes_and_detaches : Bool :=
         && String.contains script "'/tmp/r/p-1/exit'"
         && String.contains script "2>&1 < /dev/null"
         && String.contains script "& echo $!"
+        && String.starts_with "set -m; " script
 
 def after_or (id : String) (xs : List ProcEntry) (fallback : ProcEntry) : IO ProcEntry :=
     IO.pure (match find_entry id xs { Option.some x => x, Option.none => fallback })
@@ -106,6 +109,32 @@ def test_a_sleep_is_running_then_killed : IO Bool := do {
     match r {
         Result.err _ => do { let _ <- cleanup root; IO.pure false },
         Result.ok e => sleep_case root e,
+    }
+}
+
+/// The kill reaches the task's children: its process group goes, not
+/// only the shell that started it.
+def group_case (root : String) (e : ProcEntry) : IO Bool := do {
+    let _ <- sleepIO 300;
+    let child_text <- IO.read_file (Path.path (String.concat root "/child"));
+    let child : String := match child_text { Result.ok t => String.trim t, Result.err _ => "" };
+    let before <- IO.is_dir (Path.path (String.concat "/proc/" child));
+    let _ <- Procs.kill e;
+    let _ <- sleepIO 300;
+    let after <- IO.is_dir (Path.path (String.concat "/proc/" child));
+    let _ <- cleanup root;
+    IO.pure (Bool.not (String.is_empty child) && before && Bool.not after)
+}
+
+#[test]
+def test_kill_takes_the_task_s_children : IO Bool := do {
+    let root : String := temp_root "group";
+    let _ <- cleanup root;
+    let _ <- exec_cmd "mkdir" ["-p", root];
+    let r <- Procs.start_at (Path.path root) (String.concat "sleep 31 & echo $! > " (String.concat root "/child; wait")) "";
+    match r {
+        Result.err _ => do { let _ <- cleanup root; IO.pure false },
+        Result.ok e => group_case root e,
     }
 }
 
