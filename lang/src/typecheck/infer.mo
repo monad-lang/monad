@@ -3326,7 +3326,20 @@ def type_check_match_case (case_ : MatchCase) (scrutinee_term : Term) (scrutinee
                             List.empty =>
                                 type_check_case_body_checked name args body expected_type scope local_types locals maybe_ind,
                             _ =>
-                                let arg_types : List Term := arg_types_for_case name maybe_ind scrutinee_typ in
+                                let raw_arg_types : List Term := arg_types_for_case name maybe_ind scrutinee_typ in
+                                // Reduce a BETA REDEX at the head of each field
+                                // type before binding it. A field declared in
+                                // terms of an earlier one (`Sigma`'s `snd : B
+                                // fst`) becomes `(fn a => ...) fst` once the
+                                // inductive's params are substituted, and the
+                                // unreduced redex in a binder type is what made
+                                // an arm's body infer `Sigma.dpair a0 b0` /
+                                // `Sigma.dpair fst (...)` instead of the
+                                // pattern's own variables (measured 2026-11-04).
+                                // Deliberately only the head lambda application:
+                                // a general `whnf` here recursed and crashed the
+                                // compiler on `check proofs`.
+                                let arg_types : List Term := List.map apply_head_redex raw_arg_types in
                                 let extended_types : List Term := prepend_typed args arg_types local_types in
                                 let extended_locals : LocalScope := prepend_typed_local_vars args arg_types locals in
                                 type_check_case_body_checked name args body expected_type scope extended_types extended_locals maybe_ind,
@@ -3744,6 +3757,36 @@ def index_of_identifier (target : Identifier) (names : List Identifier) (i : I64
 /// touching the scan itself (which a previous, reverted attempt at a
 /// scan-order fix already showed is not safe to change directly -- see
 /// `find_inductive_for_cases`'s own doc comment above).
+/// Apply one value to a term, beta-reducing when the term is a lambda.
+#[partial]
+def apply_one (f : Term) (a : Term) : Term :=
+    match term_peel f {
+        Term.lam _b _typ body => beta_reduce body a,
+        _ => Term.app f a,
+    }
+
+#[partial]
+def apply_head_redex_go (f : Term) (args : List Term) : Term :=
+    match args {
+        List.empty => f,
+        List.cons a rest => apply_head_redex_go (apply_one f a) rest,
+    }
+
+/// A field type whose HEAD is a lambda applied to arguments -- `(fn a => Path
+/// A a b) fst` -- reduced to the lambda's body. Any other head is returned
+/// unchanged, so this never unfolds a def and never touches a stuck
+/// application. See its call site for why an unreduced head redex in an arm's
+/// binder type is a bug rather than cosmetics.
+#[partial]
+def apply_head_redex (t : Term) : Term :=
+    match flatten_call_spine (term_peel t) {
+        CallSpine.mk head args =>
+            match head {
+                Term.lam _b _typ _body => apply_head_redex_go head args,
+                _ => t,
+            },
+    }
+
 def arg_types_for_case (case_name : Identifier) (maybe_ind : Option Inductive) (scrutinee_typ : Term) : List Term :=
     match maybe_ind {
         Option.some ind =>
