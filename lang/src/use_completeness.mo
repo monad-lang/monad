@@ -639,7 +639,7 @@ def own_keys_go (decls : List Decl) (m : HashMap String Bool) : HashMap String B
                 // use's flattened module path is its own name for that
                 // path, and an infix/instance carries its own name too.
                 // Skipping any of them is a divergence: the host accepts
-                // `lang/src/codegen/test/compile_tests.mo` (bare `Param`
+                // `codegen/src/test/compile_tests.mo` (bare `Param`
                 // covered by its `open Param {mk}`) where a walk without
                 // the open path would report it.
                 Decl.use_d path _filter _public =>
@@ -1869,7 +1869,7 @@ def test_dotted_prefix_selects_pattern_constructors : Bool :=
 /// An `open T {n}` file owns the open's PATH name as well (the host's
 /// `own` set is every decl's `to_ref`, and an `open`'s ref IS its path):
 /// `open Param {mk}` covers a bare `Param` reference. The shape
-/// `lang/src/codegen/test/compile_tests.mo` uses -- a false positive
+/// `codegen/src/test/compile_tests.mo` uses -- a false positive
 /// there until the own-name walk counted `open`'s path.
 #[test]
 def test_open_path_is_own_name : Bool :=

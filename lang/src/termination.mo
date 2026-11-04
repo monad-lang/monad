@@ -57,7 +57,7 @@
 /// module's own declarations, before any qualification: `check_module_with_scope`
 /// is reached from `elaborate_loaded_modules`, whose `target_decls` is
 /// `main_module.decl_list` (`lang/module.mo`), and the pass that rewrites names
-/// to `module.path::name` is `qualify_modules` in `lang/codegen/qualify.mo` -- a
+/// to `module.path::name` is `qualify_modules` in `codegen/qualify.mo` -- a
 /// codegen pass, downstream of every check. Within one module no two defs share a
 /// name, so discarding the qualifier (as `recursion_name` does) cannot conflate
 /// two of them.

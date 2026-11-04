@@ -1,4 +1,4 @@
-/// Regression tests for `needs_io_wrap` (`lang/codegen/emit.mo`):
+/// Regression tests for `needs_io_wrap` (`codegen/emit.mo`):
 /// `IO.read_file`/`IO.file_exists`'s raw call result must be wrapped in a
 /// real `IO.io`-tagged constructor before it can be used as an `IO` value,
 /// same as `IO.println`/`IO.write_file` already were.
@@ -27,7 +27,7 @@
 /// returning `Result StreamError _`, not natives; the bind-then-use shape
 /// is kept as an end-to-end check on the `Result` they return.
 use std::process {process_id}
-use lang::codegen::test::e2e_harness {compile_source_run_expect}
+use codegen::test::e2e_harness {compile_source_run_expect}
 
 /// Binds `IO.read_file`'s result via `<-` and then ACTUALLY USES it
 /// (passed as a real function argument, compared against a literal) --

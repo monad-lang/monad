@@ -22,24 +22,24 @@ use lang::types {
   AttrArg, Attribute, Con, Decl, Def, Identifier, Literal, MatchCase, NamePath, Native,
   StructLitField, Term, binder_is_explicit, id_eq, show_identifier, term_peel,
 }
-use lib::scope {collect_classes, find_unresolved_class_calls_decls}
-use lib::codegen::ctors {CtorClaim, collect_ctor_claims_inds}
+use lang::scope {collect_classes, find_unresolved_class_calls_decls}
+use lib::ctors {CtorClaim, collect_ctor_claims_inds}
 use std::list {List.intercalate, List.length}
 open IO {get_env, println}
 use llvm::ir {
   LLVMBasicBlock, LLVMDeclaration, LLVMFunction, LLVMInstruction, LLVMModule,
   LLVMValue, PhiPair,
 }
-use lib::codegen::decls {def_name_str, extract_defs, extract_inductives, has_export_attr}
+use lib::decls {def_name_str, extract_defs, extract_inductives, has_export_attr}
 use runtime::natives {runtime_native_functions}
-use lib::codegen::natives {
+use lib::natives {
   lookup_native_any, native_attr_target_name, native_runtime_fn_name,
   runtime_declarations, NativeAvailability, native_target_availability,
 }
 use llvm::target {TargetKind}
-use lang::codegen::symbols {def_symbol_name, ends_with_main, name_path_to_str}
+use lib::symbols {def_symbol_name, ends_with_main, name_path_to_str}
 use lang::name_text {unqualify_def_name}
-use lib::codegen::util {
+use lib::util {
   dedup_strs, join_semicolon_msgs, list_contains_str
 }
 use std::map {HashMap}
@@ -639,7 +639,7 @@ def cases_have_struct_lit (cases : List MatchCase) : Bool := match cases {
 }
 
 /// Fail-fast gate for a `Term.elim` that survived the post-elaboration
-/// desugar (`desugar_elims_decls`, `lang/codegen/emit.mo`). The normal
+/// desugar (`desugar_elims_decls`, `codegen/emit.mo`). The normal
 /// pipeline cannot produce one -- the pass runs on every elaborated def body
 /// AND type -- so a hit means a pipeline entry point skipped the pass, and
 /// `compile_db_term_ir` has no `Term.elim` arm (it would be a bare
@@ -1062,7 +1062,7 @@ def print_stats_lines (ls : List String) : IO Unit := match ls {
 ///
 /// The `MONAD_STRICT_ELAB` INTERIM SWITCH that lived here is gone
 /// (2026-10-25, standing checker-gaps Item 11): the gate
-/// (`validate_reachable_elaborated`, `lang/codegen/emit.mo`) is now
+/// (`validate_reachable_elaborated`, `codegen/emit.mo`) is now
 /// unconditional. The switch existed because the self-compile had 55 decls
 /// (34 reachable) failing to elaborate on bare-name collisions (`Param` in
 /// lang/types.mo and init/meta.mo, `MatchArm` in lang/core_ir.mo and

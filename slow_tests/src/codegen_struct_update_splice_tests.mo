@@ -1,5 +1,5 @@
 /// Regression tests for the `compose_seq` pure-argument splice
-/// corruption (fixed via `compose_seq_acc`, `lang/codegen/emit.mo`).
+/// corruption (fixed via `compose_seq_acc`, `codegen/emit.mo`).
 ///
 /// A struct update `{ x with f := <expr> }` desugars at typecheck to a
 /// constructor application inside a single-case match on `x` -- a
@@ -32,7 +32,7 @@
 /// regression reproduces the miscompile (wrong exit code) rather than
 /// just an IR-shape mismatch.
 open IO {println}
-use lang::codegen::test::e2e_harness {compile_source_run_expect}
+use codegen::test::e2e_harness {compile_source_run_expect}
 
 /// The minimal repro shape: `{ c with b := c.b + 1 }` -- the `+ 1`'s
 /// literal operand directly follows the `b`-projection's branching

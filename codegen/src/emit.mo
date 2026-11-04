@@ -25,7 +25,7 @@ use llvm::ir {
   PhiPair, emit_module, llvm_symbol_ref, llvm_value_type, show_llvm_type
 }
 use runtime::natives {runtime_native_functions}
-use lang::codegen::validate {
+use lib::validate {
   build_defined_symbol_set, collect_call_targets, missing_call_targets,
   strip_db_lams, validate_export_defs, validate_no_colliding_def_symbols,
   report_elab_stats, validate_no_undesugared_struct_lits,
@@ -33,54 +33,54 @@ use lang::codegen::validate {
   validate_no_monad_externs, validate_no_unwired_natives,
   validate_native_target_availability,
 }
-use lang::codegen::ctors {
+use lib::ctors {
   bare_ctor_tag, build_constructor_arity_map,
   build_constructor_arity_map_with_structs, build_constructor_tag_map,
   builtin_ctor_arities, builtin_ctor_tags, constructor_arity, constructor_tag,
   ctor_composite_key, is_constructor_var,
 }
-use lib::codegen::natives {
+use lib::natives {
   NativeWrapKind, lookup_native, lookup_native_any, native_attr_target_name,
   native_op_table, native_runtime_fn_name, runtime_declarations,
   runtime_declarations_for,
 }
 use llvm::target {TargetKind}
-use lib::codegen::decls {
+use lib::decls {
   build_def_name_map, collect_all_decls_from_modules, def_name_str, export_names,
   export_pairs, export_roots, extract_defs, extract_inductives, extract_structs,
   filter_reachable_decls, reachable_defs_from,
 }
-use lib::codegen::tco {apply_self_tco}
-use lib::codegen::qualify {qtest_def, qualified_def_name_str, qualify_modules}
-use lib::codegen::free_names {collect_referenced_names, free_names_of_term}
-use lib::typecheck::traverse {term_map_children}
-use lib::elim_lower {elim_to_literal}
-use lib::codegen::ctx {
+use lib::tco {apply_self_tco}
+use lib::qualify {qtest_def, qualified_def_name_str, qualify_modules}
+use lib::free_names {collect_referenced_names, free_names_of_term}
+use lang::typecheck::traverse {term_map_children}
+use lang::elim_lower {elim_to_literal}
+use lib::ctx {
   CodegenCtx, CtxInstrsVal, CtxInstrsVals, CtxStrPair, LocalBinding,
   build_arity_table, build_type_level_table, collect_db_params, ctx_bind_local,
   ctx_lookup_arity, ctx_lookup_ctor_arity, ctx_lookup_ctor_tag, ctx_lookup_local,
   ctx_lookup_type_level, ctx_reset_locals, ctx_restore_locals, dbg_loc_of_location,
   empty_ctx, fresh_label, fresh_temp, lookup_binding, resolve_call_name
 }
-use lib::codegen::symbols {
+use lib::symbols {
   bare_modpath, def_symbol_name, ends_with_main, extract_base_name,
   bare_npath, mangle_identifiers, name_path_to_str, module_path_to_str,
   ref_symbol_name,
   replace_dots_with_underscores, string_find_last, symbol_identifier,
 }
-use lib::name_text {unqualify_def_name}
-use lib::elaborate {names_of_decls}
-use lib::codegen::util {
+use lang::name_text {unqualify_def_name}
+use lang::elaborate {names_of_decls}
+use lib::util {
   dedup_idents, dedup_idents_go, dedup_strs, dedup_strs_go, drop_last_instr,
   ident_in_list, identifier_eq, join_semicolon_msgs, list_contains_str, rev_vals
 }
-use lib::module {
+use lang::module {
   BestEffortElab, LoadedModules, ModuleInfo, bench_step, best_effort_decls,
   best_effort_errors, best_effort_failed, decl_display_name, elaborate_def_typs, elaborate_module_decls_best_effort,
   elaborate_module_decls_reporting, get_loaded_all, get_loaded_main,
   resolve_open_aliases_in_modules
 }
-use lib::scope {
+use lang::scope {
   add_constraint_dict_params_decls, alias_map_empty, alias_map_insert,
   alias_map_lookup, build_scope_from_decls, collect_classes, collect_open_aliases,
   modpath_eq, refine_scope_instances, scope_find_inductive,
@@ -96,11 +96,11 @@ use lib::scope {
 // cost: `lang.module` (already imported above) already pulls
 // `lang.typecheck.infer`, and nothing in `lang.typecheck.*` imports
 // codegen, so this adds no cycle.
-use lib::typecheck::infer {type_head_name, struct_lit_build_args, struct_lit_con_name}
+use lang::typecheck::infer {type_head_name, struct_lit_build_args, struct_lit_con_name}
 // The do-bind head's spelling convention, shared with the usage analysis
 // rather than restated here (`spine_head_name` peels `Term.ctx` and the
 // application spine).
-use lib::typecheck::usage {spine_head_name}
+use lang::typecheck::usage {spine_head_name}
 // `--verbose` stage-start trace + the red "FAILED at stage" lines
 // (`lang/log` -- helpers gate on `verbose` themselves; the fail lines
 // are ungated, printing in both modes as they did before).
@@ -352,7 +352,7 @@ def constructor_tag_at (c : CodegenCtx) (name : String) (arity : I64) : I64 :=
             // The BARE-name builtin tier is consulted only after the
             // composite key, and only for a matching arity. A user type
             // may declare a constructor sharing a builtin's bare name --
-            // `lang/codegen/emit.mo`'s own `CompileResult.ok` carries SIX
+            // `codegen/emit.mo`'s own `CompileResult.ok` carries SIX
             // fields against builtin `Result.ok`'s one -- and answering
             // the builtin's tag there hands two incompatible layouts the
             // same tag, exactly the corruption the composite key exists
@@ -518,7 +518,7 @@ def compile_lit_ir (c : CodegenCtx) (lit_ : Literal) : CompileResult := match li
     // by `F64.bits_of_string` -- a native call made while this compiler
     // itself runs, whose result is folded into the emitted constant.
     // `suffix` is deliberately unused: an `F32` literal has no separate
-    // representation here (F32 is unwired, `lang/codegen/natives.mo`).
+    // representation here (F32 is unwired, `codegen/natives.mo`).
     Literal.flt text suffix => CompileResult.ok c List.empty (LLVMValue.int_ (F64.bits_of_string text)) List.empty List.empty List.empty,
     // `Char` and `String` have structurally IDENTICAL declared shapes
     // (`init/prelude.mo`: both are `of_bytes (List U8)`), and a
@@ -1746,7 +1746,7 @@ def build_set_env_instrs (obj_val : LLVMValue) (vals : List LLVMValue) (idx : I6
 /// and PREPEND a marker so every instruction the term produced carries it.
 ///
 /// Prepend, never append. `ends_with_terminator` inspects an instruction
-/// list's LAST element and `drop_last_instr` (`lang/codegen/util.mo`) drops
+/// list's LAST element and `drop_last_instr` (`codegen/util.mo`) drops
 /// it blindly, so a marker sitting at the end of a list would be read as a
 /// terminator or silently discarded. Prepending holds that invariant by
 /// construction rather than by remembering it.
@@ -3862,7 +3862,7 @@ def compile_spine_args (c : CodegenCtx) (terms : List Term) : SpineArgs :=
 def compile_spine_args_go (c : CodegenCtx) (terms : List Term) (acc_instrs : List LLVMInstruction) (acc_blocks : List LLVMBasicBlock) (acc_funcs : List LLVMFunction) (acc_globals : List LLVMGlobal) (acc_vals : List LLVMValue) (acc_val : LLVMValue) : SpineArgs :=
     match terms {
         // Trailing comma load-bearing -- see `build_get_env_instrs`'s
-        // doc comment (lang/codegen/emit.mo) for why.
+        // doc comment (codegen/emit.mo) for why.
         List.empty => { ctx := c, instrs := acc_instrs, blocks := acc_blocks, funcs := acc_funcs, globals := acc_globals, vals := (rev_vals acc_vals List.empty), last_val := acc_val },
         List.cons t rest =>
             match compile_db_term_ir c t {
@@ -4749,7 +4749,7 @@ def zero_return_instrs (instrs : List LLVMInstruction) : List LLVMInstruction :=
 /// via the same real compile+run: exits 0, not 5, because `main`'s
 /// whole body silently became `alloc_constructor(tag=0, fields=0)`
 /// rather than anything derived from `return 5`). This is exactly the
-/// pre-existing gap `lang/codegen/test_driver.mo`'s own doc comment
+/// pre-existing gap `codegen/test_driver.mo`'s own doc comment
 /// already flags ("do-notation/IO-typed main was apparently never
 /// exercised through the compile-then-run path... worth its own future
 /// investigation, but out of scope to fix generally here") — this fix
@@ -5418,7 +5418,7 @@ def compile_db_def_ir (c : CodegenCtx) (def_ : Def) : DefResult := match def_ {
 /// actually wants to land on, and it skips the attributes for free.
 /// `strip_db_lams` (which produced `body`) keeps the wrapper on the
 /// term it lands on -- see its own comment in
-/// `lang/codegen/validate.mo` -- so this reads the position directly.
+/// `codegen/validate.mo` -- so this reads the position directly.
 ///
 /// `Option.none` when the body carries no wrapper -- only possible when
 /// its module's located parse failed outright (`locate_module_info`
@@ -5621,7 +5621,7 @@ pub def compile_db_module_with_debug (decl_list : List Decl) (source_path : Opti
     let type_levels := build_type_level_table inds structs in
     match compile_db_def_list (empty_ctx arities ctor_tags ctor_arities extern_wrappers type_levels) defs {
         { ctx := _, funcs := compiled_funcs, globals := compiled_globals, externs := compiled_exts } =>
-            // Prepend the GENERATED runtime natives (`lang/codegen/
+            // Prepend the GENERATED runtime natives (`codegen/
             // runtime.mo`) -- ordinary `define`s in this same module,
             // called by the native wrappers `native_runtime_fn_name`
             // wires. They deliberately carry no matching `declare` (see
@@ -6659,7 +6659,7 @@ def desugar_elims_term (scope : Scope) (t : Term) : Term :=
     }
 
 /// The term-level rewrite. Structural traversal mirrors
-/// `term_has_struct_lit` (`lang/codegen/validate.mo`) -- the same
+/// `term_has_struct_lit` (`codegen/validate.mo`) -- the same
 /// positions, but rebuilding instead of probing. `Term.ctx` wrappers
 /// are recursed into and PRESERVED (located `--debug` decls are
 /// wrapped; "every site that rebuilds preserves", per Term.ctx's own
@@ -6791,7 +6791,7 @@ def desugar_opt_terms (scope : Scope) (args : List (Option Term)) : List (Option
 
 /// The call-target gate's verdict, from the `missing` list the sub-timed
 /// steps above already computed. (This gate used to live in
-/// `validate_all_call_targets_defined`, `lang/codegen/validate.mo`, whose
+/// `validate_all_call_targets_defined`, `codegen/validate.mo`, whose
 /// second call re-walked the whole module and re-probed every target --
 /// running the gate TWICE, visible as a 314280ms self-compile.)
 #[partial]
@@ -6851,7 +6851,7 @@ def reachable_elab_failures_go (failed : List String) (errors : List String) (na
 /// UNCONDITIONAL since 2026-10-25 (standing checker-gaps Item 11): the
 /// `strict`/`MONAD_STRICT_ELAB` switch this used to carry existed only
 /// while the self-compile still had reachable decls failing on bare-name
-/// collisions (55 swallowed, 34 reachable, per `lang/codegen/validate.mo`'s
+/// collisions (55 swallowed, 34 reachable, per `codegen/validate.mo`'s
 /// retired switch comment). Qualified-name resolution removed them, and the
 /// re-measure reports `swallowed=0`; a swallowed decl is now a build error
 /// on every pipeline that runs this gate (codegen, the test driver, `eval`).
@@ -7249,7 +7249,7 @@ pub def compile_loaded_modules_to_ir_with_debug (loaded : LoadedModules) (verbos
                     // `#[extern "c"]` targets need no special case here:
                     // each one emits a `declare <ret> @<link>(...)` into
                     // `module_decls`, and `build_defined_symbol_set` folds
-                    // those in (`add_decl_symbols`, `lang/codegen/validate.mo`),
+                    // those in (`add_decl_symbols`, `codegen/validate.mo`),
                     // so an extern call is already a defined symbol.
                     let t_closed : I64 <- Bench.now;
                     let gate_targets : List String := collect_call_targets (module_funcs mod_);

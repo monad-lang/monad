@@ -1,5 +1,5 @@
 /// Regression test for `validate_no_unwired_natives`'s fail-fast check
-/// (`lang/codegen/emit.mo`): a reachable bodyless `#[native X]` def whose
+/// (`codegen/emit.mo`): a reachable bodyless `#[native X]` def whose
 /// X is wired nowhere must produce a `Result.err` naming the native
 /// target and enclosing def, not a silently-miscompiled "return Unit"
 /// stub that only surfaces as a runtime SIGSEGV in the resulting binary.
@@ -28,7 +28,7 @@
 use std::test {Test.write_fixture}
 use std::process {exec_cmd, process_id}
 use lang::module {LoadedModules, load_file_modules}
-use lang::codegen::emit {compile_loaded_modules_to_ir}
+use codegen::emit {compile_loaded_modules_to_ir}
 
 #[test]
 def test_unwired_native_fails_fast : IO Bool := do {

@@ -17,7 +17,7 @@
 /// module's own doc comment for the representation facts that makes
 /// possible.
 use llvm::ir {emit_module, mk}
-use lib::codegen::emit {check_contains}
+use lib::emit {check_contains}
 use runtime::natives {runtime_native_functions}
 
 #[partial]

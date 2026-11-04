@@ -364,12 +364,12 @@ def test_probe_unify_peels_a_nested_operand : Bool :=
     }
 
 /// Strip leading `lam`/`forall` binders but KEEP the `Term.ctx` they land
-/// on -- the same rule `strip_db_lams` (`lang/src/codegen/validate.mo:457`,
+/// on -- the same rule `strip_db_lams` (`codegen/src/validate.mo:457`,
 /// "the term WITH its wrapper, not the peeled one ... peeling here would
 /// silently discard it") and `dbg_loc_of_body`
-/// (`lang/src/codegen/emit.mo:4476`) already rely on. Duplicated locally
-/// rather than imported because those live in `lang.codegen`, which
-/// depends on `lang.module` -- importing back is a cycle.
+/// (`codegen/src/emit.mo:4476`) already rely on. Duplicated locally
+/// rather than imported because those live in `codegen`, which depends on
+/// `lang.module` -- importing back is a cycle.
 def probe_strip_binders (t : Term) : Term := match t {
     Term.lam _dbg _typ body => probe_strip_binders body,
     // R2b folded `Term.forall` into `Term.pi`: a quantifier is a non-explicit

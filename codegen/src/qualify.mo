@@ -19,15 +19,15 @@ use lang::types {
   TypeConstraint, binder_named, hole, lam, many, named, package_private, sentinel,
   module_path_to_string_colon, show_identifier, show_module_path, show_name_path, use_items, use_name, var,
 }
-use lib::module {ModuleInfo, bench_step, best_effort_failed, elaborate_module_decls_reporting}
-use lib::scope {
+use lang::module {ModuleInfo, bench_step, best_effort_failed, elaborate_module_decls_reporting}
+use lang::scope {
   OpenAlias, alias_map_empty, alias_map_insert, alias_map_lookup,
   build_scope_from_decls, collect_open_aliases, modpath_eq, modpath_of, resolve_open_alias_decls,
 }
-use lang::codegen::free_names {collect_referenced_names, free_names_of_term}
-use lib::codegen::symbols {bare_modpath, bare_npath, symbol_identifier}
-use lib::name_text {unqualify_def_name}
-use lib::codegen::util {
+use lib::free_names {collect_referenced_names, free_names_of_term}
+use lib::symbols {bare_modpath, bare_npath, symbol_identifier}
+use lang::name_text {unqualify_def_name}
+use lib::util {
   join_semicolon_msgs, list_contains_str
 }
 use std::map {HashMap}
@@ -614,7 +614,7 @@ def insert_all_names (names : List String) (acc : HashMap String Bool) : HashMap
 /// the decls are concatenated.
 #[partial]
 /// Monadic only so each stage can be `bench_step`-timed -- the same
-/// instrumentation `elaborate_class` got (`lang/codegen/emit.mo`). The
+/// instrumentation `elaborate_class` got (`codegen/emit.mo`). The
 /// pass printed ONE number (`qualify_modules`: 29406ms of the 969811ms
 /// self-compile baseline, 24.9s at the 2026-09-09 re-profile) for six
 /// whole-graph stages plus the per-module rewrite, none of which had

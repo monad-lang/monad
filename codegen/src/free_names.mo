@@ -1,25 +1,25 @@
 /// Free-variable and referenced-name analysis over `Term`.
 ///
 /// Two families of pure traversal, extracted from
-/// `lang/codegen/emit.mo` because each has two unrelated consumers and
+/// `codegen/emit.mo` because each has two unrelated consumers and
 /// so belongs to neither:
 ///
 /// * `free_names_of_term` is binder-AWARE. It is what closure capture
 ///   uses to decide a lambda's environment, and what
-///   `lang.codegen.qualify` uses to report an ambiguous reference --
+///   `codegen.qualify` uses to report an ambiguous reference --
 ///   the latter specifically because it must NOT count a local binder
 ///   as a reference (a match binder named `param_name` once made the
 ///   compiler report an ambiguity that did not exist).
 /// * `collect_referenced_names` is binder-BLIND, and deliberately so:
 ///   reachability may safely over-approximate, and cheaply. Do not
 ///   reach for it where precision matters -- that is the other one.
-use lib::types {
+use lang::types {
   Con, DebugName, FieldPattern, FieldPatternEntry, Identifier, Literal, MatchCase,
   Native, StructLitField, Term, binder_is_explicit, binder_name,
   union_ids,
 }
-use lib::codegen::symbols {symbol_identifier}
-use lib::codegen::util {ident_in_list, identifier_eq}
+use lib::symbols {symbol_identifier}
+use lib::util {ident_in_list, identifier_eq}
 use std::map {}
 
 #[partial]

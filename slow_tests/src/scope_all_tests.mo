@@ -211,10 +211,10 @@ def test_scope_lang_scope : IO Bool := build_scope_for_file "lang/src/scope.mo" 
 def test_scope_lang_codegen_ir : IO Bool := build_scope_for_file "llvm/src/ir.mo" "codegen_ir"
 
 #[test]
-def test_scope_lang_codegen_emit : IO Bool := build_scope_for_file "lang/src/codegen/emit.mo" "codegen_emit"
+def test_scope_lang_codegen_emit : IO Bool := build_scope_for_file "codegen/src/emit.mo" "codegen_emit"
 
 #[test]
-def test_scope_lang_codegen_link : IO Bool := build_scope_for_file "lang/src/codegen/link.mo" "codegen_link"
+def test_scope_lang_codegen_link : IO Bool := build_scope_for_file "codegen/src/link.mo" "codegen_link"
 
 #[test]
 def test_scope_lang_typecheck_infer : IO Bool := build_scope_for_file "lang/src/typecheck/infer.mo" "typecheck_infer"
@@ -223,7 +223,7 @@ def test_scope_lang_typecheck_infer : IO Bool := build_scope_for_file "lang/src/
 def test_scope_lang_typecheck_unify : IO Bool := build_scope_for_file "lang/src/typecheck/unify.mo" "typecheck_unify"
 
 #[test]
-def test_scope_lang_codegen_test_e2e : IO Bool := build_scope_for_file "lang/src/codegen/test/test_e2e.mo" "codegen_test_e2e"
+def test_scope_lang_codegen_test_e2e : IO Bool := build_scope_for_file "codegen/src/test/test_e2e.mo" "codegen_test_e2e"
 
 #[test]
-def test_scope_lang_codegen_test_link_e2e : IO Bool := build_scope_for_file "lang/src/codegen/test/test_link_e2e.mo" "codegen_test_link_e2e"
+def test_scope_lang_codegen_test_link_e2e : IO Bool := build_scope_for_file "codegen/src/test/test_link_e2e.mo" "codegen_test_link_e2e"

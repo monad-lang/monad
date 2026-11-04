@@ -1,7 +1,7 @@
 // Lower a `Term.elim` back to the `Literal.if_`/`Literal.match_` form that
 // codegen and the evaluator still compile -- `core-term-simplification.md`
 // R3c. The checker RETURNS `Term.elim` once R3c is wired; this is the one
-// shared conversion, used by `lang/codegen/emit.mo`'s whole-program decl pass
+// shared conversion, used by `codegen/emit.mo`'s whole-program decl pass
 // and by `lang/lower_core_ir.mo` (eval / REPL / meta-eval).
 //
 // This is a representation change, not a semantic one. `Elim.minors` are

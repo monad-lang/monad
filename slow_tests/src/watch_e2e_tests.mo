@@ -13,7 +13,7 @@
 /// `ENOSYS` and this exits 1, which is the documented contract rather than a
 /// test bug (the suite runs on Linux).
 use std::process {exec_cmd, process_id}
-use lang::codegen::test::e2e_harness {compile_source_run_expect}
+use codegen::test::e2e_harness {compile_source_run_expect}
 
 /// A unique temp directory for this process (the same shape
 /// `codegen_wired_natives_e2e_tests.mo` uses).

@@ -4,7 +4,7 @@ use lang::types {
   num, package_private, pi, sort_n, str, var,
 }
 use llvm::ir {emit_module}
-use lib::codegen::emit {check_contains, compile_db_decls_ir}
+use lib::emit {check_contains, compile_db_decls_ir}
 
 open Term {app, con, hole, lam, lit, pi, var}
 open Literal {if_, match_, num, str}
@@ -155,7 +155,7 @@ def test_compile_division : Bool :=
 /// Uses `I64_beq` (mangled from `I64.beq`) -- the real, only I64
 /// equality function in the whole corpus (`init/number.mo`'s `BEq I64`
 /// instance method; there is no `I64.eq`, confirmed "unknown variable").
-/// `lookup_native`'s dispatch table (`lang/codegen/emit.mo`) used to
+/// `lookup_native`'s dispatch table (`codegen/emit.mo`) used to
 /// hardcode `"I64_eq"` instead, which no real parsed program could ever
 /// reference -- this test's own prior `"I64_eq"` name masked that gap
 /// rather than catching it, since a hand-built `Term.var` can reference

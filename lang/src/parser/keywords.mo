@@ -37,7 +37,7 @@
 /// corpus (`lang/types.mo`'s own `Identifier.id as => ...`, `String.beq
 /// as bs`), so reserving it globally breaks far more than it fixes.
 /// Confirmed as a real regression from an earlier version of this same
-/// fix that included `as`: `lang/types.mo`/`lang/codegen/emit.mo` (both
+/// fix that included `as`: `lang/types.mo`/`codegen/emit.mo` (both
 /// bind fields to a local literally named `as`) went from parsing fine
 /// to truncating entirely.
 def kw_list : List String :=

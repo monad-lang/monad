@@ -1,6 +1,6 @@
 /// Regression tests for a constructor stealing a call whose head is a LOCAL
 /// of the same bare name (`try_compile_constructor_app_db`,
-/// `lang/src/codegen/emit.mo`).
+/// `codegen/src/emit.mo`).
 ///
 /// That function already bails out when the bare name is ALSO a real
 /// top-level def -- a function/constructor collision -- but it never looked
@@ -20,7 +20,7 @@
 /// took down all four of that mote's test files while leaving the Rust host
 /// completely silent.
 open IO {println}
-use lang::codegen::test::e2e_harness {compile_source_run_expect}
+use codegen::test::e2e_harness {compile_source_run_expect}
 
 /// A parameter named `f` applied as a function, alongside an arity-1
 /// constructor `f`. The direct unit: with the bug `f x` allocates a

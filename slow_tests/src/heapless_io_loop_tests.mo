@@ -1,7 +1,7 @@
 /// The heapless-loops exit criterion: a plain recursive IO loop runs in
 /// constant native stack under a SMALL stack, with no `IO.iterate`.
 ///
-/// Before the IO do-bind fusion (`lang/src/codegen/emit.mo`'s
+/// Before the IO do-bind fusion (`codegen/src/emit.mo`'s
 /// `try_compile_io_bind_db`), each iteration went through
 /// `monad_io_bind`, which calls the continuation inside its own C frame,
 /// so a 1,000,000-iteration loop could never finish under 2 MiB -- it
@@ -17,7 +17,7 @@
 /// This test builds and runs a real binary (via the shared e2e harness),
 /// so it belongs in `slow_tests/`.
 open IO {println}
-use lang::codegen::test::e2e_harness {compile_source_run_stack_expect}
+use codegen::test::e2e_harness {compile_source_run_stack_expect}
 
 def loop_source : String :=
     "def pure_i64 (n : I64) : IO I64 := IO.pure n\n"

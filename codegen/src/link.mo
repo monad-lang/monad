@@ -9,7 +9,7 @@ use lang::types {
   sort, var,
 }
 use llvm::ir {emit_module}
-use lib::codegen::emit {check_contains, compile_db_decls_ir}
+use lib::emit {check_contains, compile_db_decls_ir}
 
 open Term {app, lam, lit, var}
 open Literal {num}

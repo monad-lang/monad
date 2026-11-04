@@ -388,7 +388,7 @@ def np_to_maybe_id (np : NamePath) : Option Identifier :=
 
 /// An `Identifier` possibly carrying item 5.1's `module::Name`
 /// qualification (`inductive_d`/`struct_d`/`class_d`/`instance_d`
-/// declarations, since `qualify_one_decl_name` — `lang/src/codegen/
+/// declarations, since `qualify_one_decl_name` — `codegen/src/
 /// qualify.mo`), unwrapped back to its bare source spelling.
 ///
 /// `known_names` (`names_of_decls`, below) feeds `elaborate_type`'s
@@ -472,7 +472,7 @@ def names_of_decl (decl : Decl) : List Identifier :=
 /// keying the set on `show_identifier` dedups identically to `id_member`.
 /// (`List.dedup_by`, std/list.mo, is no substitute: its own `seen` is a
 /// plain list scanned linearly -- the same O(n^2).)
-def names_of_decls (decl_list : List Decl) : List Identifier :=
+pub def names_of_decls (decl_list : List Decl) : List Identifier :=
     names_of_decls_go decl_list str_map_empty
 
 // Mutually recursive through `keep_new_names`; each `keep_new_names`

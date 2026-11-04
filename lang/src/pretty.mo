@@ -282,7 +282,7 @@ def show_literal (lit : Literal) : String := match lit {
         let inner := String.concat lhs br in
         String.concat inner "\n}",
     // `{ x := 1, y := 2 }` -- a struct literal that never reached the
-    // desugaring (`desugar_struct_lits_decls`, lang/codegen/emit.mo) or
+    // desugaring (`desugar_struct_lits_decls`, codegen/emit.mo) or
     // the checker's rewrite, which is the only state this printer can
     // still see one in: every surviving struct literal is rejected
     // fail-fast by `validate_no_undesugared_struct_lits` on the compile
@@ -569,7 +569,7 @@ def show_use_pub_prefix (public : Bool) : String :=
 /// sight. See plans/implementations/qualified-names.md.
 ///
 /// Deliberately NOT a change to `show_module_path`: that rendering is
-/// also what `lang.codegen.qualify` builds symbol names out of
+/// also what `codegen.qualify` builds symbol names out of
 /// (`lang.types::show_term`, dot-joined module then `::` then name), and
 /// flipping it would rename every compiled symbol.
 def show_use_path (path : ModulePath) : String :=

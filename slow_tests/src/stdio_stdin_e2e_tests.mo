@@ -5,7 +5,7 @@
 /// mixes it with `read_stdin_exact`, and tui polls fd 0 after it.
 /// `rust/core/tests/stdio_stdin_test.rs` runs the same programs interpreted
 /// (and checks the 10k-line one leaks no ByteBuf slots).
-use lang::codegen::test::e2e_harness {compile_source_run_stdin_expect}
+use codegen::test::e2e_harness {compile_source_run_stdin_expect}
 
 /// `read_line` header lines, a `read_stdin_exact` body, more lines:
 /// every byte lands with the reader that asked.

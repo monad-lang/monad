@@ -25,7 +25,7 @@
 /// end of input or a non-identifier character -- after the keyword tag
 /// succeeds) and using it at both `return`-recognition call sites instead
 /// of the bare `tag`.
-use lang::codegen::test::e2e_harness {compile_source_run_expect}
+use codegen::test::e2e_harness {compile_source_run_expect}
 
 /// An ordinary, non-monadic def whose name starts with `return_`, called
 /// as a plain `let`-bound expression -- the exact shape that used to

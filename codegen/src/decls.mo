@@ -17,11 +17,11 @@ use lang::types {
   Attribute, Decl, DebugName, Def, Identifier, Inductive, Multiplicity, NamePath, Struct,
   StructField, Term, Visibility, concrete, id_eq, sentinel,
 }
-use lib::module {ModuleInfo}
-use lib::codegen::symbols {def_symbol_name}
-use lib::name_text {unqualify_def_name}
-use lib::codegen::free_names {collect_referenced_names}
-use lib::codegen::util {}
+use lang::module {ModuleInfo}
+use lib::symbols {def_symbol_name}
+use lang::name_text {unqualify_def_name}
+use lib::free_names {collect_referenced_names}
+use lib::util {}
 use std::map {HashMap}
 
 /// Extract def_d entries from a list of Decl. A def wrapped in

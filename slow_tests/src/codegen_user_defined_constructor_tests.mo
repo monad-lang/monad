@@ -1,6 +1,6 @@
 /// Regression tests for the user-defined-constructor-codegen-gap fix
 /// (`plans/implementations/2026-08-29-user-defined-constructor-codegen-
-/// gap.md`): `is_constructor_var`/`constructor_tag` (`lang/codegen/
+/// gap.md`): `is_constructor_var`/`constructor_tag` (`codegen/
 /// emit.mo`) were closed, hardcoded whitelists of ~16 builtin
 /// constructor names -- any OTHER constructor (every user-defined type,
 /// AND any builtin constructor with 2+ params used directly, e.g.
@@ -17,12 +17,12 @@
 /// spine (any arity), not just a single immediately-applied argument.
 ///
 /// Also fixed along the way: `string_find_last`/`extract_base_name`
-/// (`lang/codegen/emit.mo`) had a genuine, previously-undiscovered
+/// (`codegen/emit.mo`) had a genuine, previously-undiscovered
 /// off-by-length bug (`String.slice`'s third argument is a LENGTH, not
 /// an end index) that silently broke stripping a qualified name's own
 /// type prefix -- the map lookups here would all have failed without it.
 open IO {println}
-use lang::codegen::test::e2e_harness {compile_source_run_expect}
+use codegen::test::e2e_harness {compile_source_run_expect}
 
 /// The exact `Item.present`/`Item.absent` repro from the filed gap doc:
 /// a user-defined, 2-constructor type, each with a field, referenced

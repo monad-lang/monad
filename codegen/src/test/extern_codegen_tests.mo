@@ -3,9 +3,9 @@ use lang::types {
   package_private, sort_n,
   str, var,
 }
-use lib::module {}
+use lang::module {}
 use llvm::ir {emit_module}
-use lib::codegen::emit {compile_db_decls_ir}
+use lib::emit {compile_db_decls_ir}
 
 open Def {mk}
 open Attribute {mk}

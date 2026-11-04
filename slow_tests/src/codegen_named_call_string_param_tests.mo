@@ -34,7 +34,7 @@
 /// a regression reproduces as the real miscompile (the callee's body
 /// never executing) rather than an IR-shape mismatch.
 open IO {println}
-use lang::codegen::test::e2e_harness {compile_source_run_expect}
+use codegen::test::e2e_harness {compile_source_run_expect}
 
 /// The exact failing shape: first parameter typed `String`. Pre-fix the
 /// callee never ran and the program exited 1; the fix makes it a real

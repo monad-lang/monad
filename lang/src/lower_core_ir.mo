@@ -148,9 +148,9 @@ pub type LowerError {
   /// A `Literal.struct_lit`/`Literal.struct_update` survived all
   /// desugaring and reached lowering -- the type checker's
   /// `type_check_struct_lit` (`lang/typecheck/infer.mo`) and codegen's
-  /// `desugar_struct_lits_decls` pass (`lang/codegen/emit.mo`) should
+  /// `desugar_struct_lits_decls` pass (`codegen/emit.mo`) should
   /// both have turned it into a `Term.con` before here. The eval-path
-  /// (`lower_root`/`meta_eval`) counterpart of `lang/codegen/emit.mo`'s
+  /// (`lower_root`/`meta_eval`) counterpart of `codegen/emit.mo`'s
   /// `validate_no_undesugared_struct_lits` compile gate: this used to
   /// be a bare missing arm, i.e. a non-exhaustive-match crash with no
   /// named cause.

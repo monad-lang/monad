@@ -1,6 +1,6 @@
 /// Regression tests for `main`'s own exit code.
 ///
-/// `unwrap_io_return_blocks` (`lang/src/codegen/emit.mo`) reads field 0 of
+/// `unwrap_io_return_blocks` (`codegen/src/emit.mo`) reads field 0 of
 /// `main`'s returned `IO` box and returns it, because the C runtime's
 /// `int main()` casts whatever it gets straight to `int`. That is right for
 /// an `IO I64` and wrong for an `IO Unit`: `Unit` is its own zero-field
@@ -14,7 +14,7 @@
 /// The harness compares the process's real exit status, which is the whole
 /// point -- no IR-shape assertion can see this.
 open IO {println}
-use lang::codegen::test::e2e_harness {compile_source_run_expect}
+use codegen::test::e2e_harness {compile_source_run_expect}
 
 /// The reported shape, verbatim: output correct, exit code garbage.
 #[test]

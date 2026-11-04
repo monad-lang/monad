@@ -20,7 +20,7 @@ pub type Identifier {
 }
 
 /// Compare two identifiers for equality (by string value).
-def id_eq (a : Identifier) (b : Identifier) : Bool :=
+pub def id_eq (a : Identifier) (b : Identifier) : Bool :=
     match a {
         Identifier.id as => match b {
             Identifier.id bs => String.beq as bs,
@@ -40,7 +40,7 @@ def id_member (id : Identifier) (ids : List Identifier) : Bool :=
     }
 
 /// Union two lists of identifiers (deduplicated, left-biased order).
-def union_ids (a : List Identifier) (b : List Identifier) : List Identifier :=
+pub def union_ids (a : List Identifier) (b : List Identifier) : List Identifier :=
     match a {
         List.cons hd rest =>
             if id_member hd b
@@ -54,7 +54,7 @@ def union_ids (a : List Identifier) (b : List Identifier) : List Identifier :=
 /// though no real corpus attribute uses either yet — the combinator
 /// cost of supporting them now is near-zero and avoids a later
 /// breaking retype of `Attribute.args` once one does.
-type AttrArg {
+pub type AttrArg {
     ident (id: Identifier),
     str (value: String),
     num (value: I64),
@@ -79,17 +79,17 @@ pub struct Attribute {
 /// The empty attribute list, under both names the corpus already uses
 /// for it. Declared here, beside `Attribute` itself, because each was
 /// previously declared TWICE -- `empty_attrs` in
-/// `lang/typecheck/macro_queue.mo` and `lang/codegen/emit.mo`,
-/// `no_attrs` in `lang/codegen/test_driver.mo` and
+/// `lang/typecheck/macro_queue.mo` and `codegen/emit.mo`,
+/// `no_attrs` in `codegen/test_driver.mo` and
 /// `lang/typecheck/meta_reflect.mo` -- so each was two definitions of
 /// one LLVM symbol, of which the emitted binary silently kept one.
 /// Both spellings are kept rather than picking a winner: the two names
 /// read differently at their call sites (`no_attrs` for a synthesized
 /// decl that HAS no attributes, `empty_attrs` for an accumulator's
 /// zero) and unifying them is a rename sweep with no correctness value.
-def empty_attrs : List Attribute := List.empty
+pub def empty_attrs : List Attribute := List.empty
 
-def no_attrs : List Attribute := List.empty
+pub def no_attrs : List Attribute := List.empty
 
 /// Structural equality by name and args.
 def attr_eq (a : Attribute) (b : Attribute) : Bool :=
@@ -123,7 +123,7 @@ pub instance BEq Attribute {
 /// `has_attr (Identifier.id "derive") ind_attrs`. Mirrors the Rust
 /// reference's `Inductive::has_attr`/`Def::has_test_attr`
 /// (rust/core/src/term.rs).
-def has_attr (name : Identifier) (attrs : List Attribute) : Bool :=
+pub def has_attr (name : Identifier) (attrs : List Attribute) : Bool :=
     match attrs {
         List.cons hd rest =>
             match hd { Attribute.mk n _ => if id_eq n name then true else has_attr name rest },
@@ -210,7 +210,7 @@ def test_attr_args_missing_is_none_but_argless_is_some_empty : Bool :=
             Option.none => true,
         }
 
-struct Operator {
+pub struct Operator {
     symbol: String,
 }
 
@@ -263,7 +263,7 @@ pub def show_identifier (id : Identifier) : String := match id {
 /// `Char` is `of_bytes (List U8)` (`init/prelude.mo`) and carries one
 /// codepoint's worth of them, so this is total and round-trips whatever
 /// `char_literal` (`lang/parser/string.mo`) sliced out.
-def char_to_string (c : Char) : String := match c {
+pub def char_to_string (c : Char) : String := match c {
     Char.of_bytes bytes => String.from_list bytes,
 }
 
@@ -305,7 +305,7 @@ pub def module_path_to_string_colon (mp : ModulePath) : String := match mp {
 
 /// Join a module path's segments with `.` (`[Foo, bar]` -> `Foo.bar`).
 /// For the LLVM symbol-name form (`Foo__bar`) see
-/// `lang/codegen/emit.mo`'s `mangle_identifiers`.
+/// `codegen/emit.mo`'s `mangle_identifiers`.
 def join_identifiers (ids : List Identifier) : String :=
     List.intercalate "." (List.map show_identifier ids)
 
@@ -421,7 +421,7 @@ def parse_param_with_mult (name: Identifier) (type_: ParseTerm) (mult: Multiplic
 /// Canonical sibling of `parse_param_many`, for code that already holds
 /// a lowered `Term`.
 #[partial]
-def param_many (name: Identifier) (type_: Term) : Param :=
+pub def param_many (name: Identifier) (type_: Term) : Param :=
     let none : Option Term := Option.none in
     let no_attrs : List Attribute := List.empty in
     Param.mk name type_ Multiplicity.many none no_attrs
@@ -459,13 +459,13 @@ pub def param_with_attrs (name: Identifier) (type_: Term) (attrs: List Attribute
 // (`lang/typecheck/subst.mo`'s `term_permute`, mirroring the reference's
 // own `core_term::permute_binders`) and clearing this back to
 // `Option.none` -- every OTHER consumer (`lang/lower_core_ir.mo`,
-// `lang/codegen/emit.mo`, `lang/pretty.mo`'s runtime-facing paths) only
+// `codegen/emit.mo`, `lang/pretty.mo`'s runtime-facing paths) only
 // ever sees `Option.none` here.
 //
 // `typ_name` has the INVERSE lifecycle: `Option.none` pre-check (the
 // owning inductive isn't known yet), `Option.some path` once
 // `lang/typecheck/infer.mo`'s `type_check_match_case`/the struct-update
-// desugaring resolve it -- `lang/codegen/ctors.mo`/`emit.mo` read it
+// desugaring resolve it -- `codegen/ctors.mo`/`emit.mo` read it
 // directly for owner-qualified ctor-tag dispatch instead of guessing
 // from the bare name/arity alone (stage 11.4).
 pub struct MatchCase {
@@ -551,7 +551,7 @@ type ParsedParam {
     destructured (param: ParseParam) (fp: FieldPattern),
 }
 
-type NumSuffix {
+pub type NumSuffix {
     i8, i16, i32, i64, u8, u16, u32, u64, f32, f64,
 }
 
@@ -574,14 +574,14 @@ pub type Literal {
     /// `Literal::Float { value: F64Wrap, .. }`, rust/core/src/term.rs), so
     /// `text` is the only representation available here — sufficient for
     /// round-tripping through `show_term`/parsing back, though genuine
-    /// float codegen (`lang/codegen/emit.mo` has no float `LLVMValue`
+    /// float codegen (`codegen/emit.mo` has no float `LLVMValue`
     /// variant at all yet) remains a separate, unstarted piece of work.
     flt (text: String) (suffix: NumSuffix),
     if_ (one: Term) (two: Term) (three: Term),
     match_ (value: Term) (cases: List MatchCase),
     /// DEPRECATED: never constructed on purpose. Both typechecking
     /// (`type_check_struct_lit`, `lang/typecheck/infer.mo`) and codegen
-    /// (`desugar_struct_lits_decls`, `lang/codegen/emit.mo`) rewrite an
+    /// (`desugar_struct_lits_decls`, `codegen/emit.mo`) rewrite an
     /// annotated struct literal to a real `Term.con` before use; this
     /// variant survives only when best-effort elaboration fails, and
     /// every survivor is rejected fail-fast by
@@ -598,7 +598,7 @@ pub type Literal {
     struct_lit (fields: List StructLitField) (type_name: Option Term),
     /// DEPRECATED: never constructed on purpose. Both typechecking
     /// (`type_check_struct_update`, `lang/typecheck/infer.mo`) and
-    /// codegen (`desugar_struct_lits_decls`, `lang/codegen/emit.mo`)
+    /// codegen (`desugar_struct_lits_decls`, `codegen/emit.mo`)
     /// rewrite a struct update away before use; this variant survives
     /// only when best-effort elaboration fails, and every survivor is
     /// rejected fail-fast by `validate_no_undesugared_struct_lits`
@@ -815,7 +815,7 @@ pub type DebugName {
 /// level def to its BARE name, those five were five definitions of
 /// one LLVM symbol `@sentinel`, of which the emitted binary silently
 /// kept one -- see `validate_no_colliding_def_symbols`
-/// (`lang/codegen/emit.mo`), which now rejects that shape outright.
+/// (`codegen/emit.mo`), which now rejects that shape outright.
 pub def sentinel : I64 := -1
 
 /// Visibility of a declaration. Mirrors the Rust reference's
@@ -826,7 +826,7 @@ pub def sentinel : I64 := -1
 /// gets its own separate `public: Bool` field directly on `Decl.use_d`,
 /// since `priv use` isn't a real form) or `open` (no visibility concept
 /// at all).
-type Visibility {
+pub type Visibility {
     pub_,
     priv_,
     package_private,
@@ -1702,7 +1702,7 @@ pub type Term {
     /// carries one: `kind_wants_loc` (`lang/src/parser/lower_parse.mo`)
     /// excludes the kinds whose position is not worth recording, and a
     /// located def's BODY carries one by construction
-    /// (`lang/src/codegen/ctx.mo`).
+    /// (`codegen/src/ctx.mo`).
     ctx (loc: Location) (term: Term),
     /// A sort, at a level that may be a plain numeral or a level expression
     /// (`var`/`max`/`succ`). The ONLY sort spelling at the canonical term
@@ -1924,7 +1924,7 @@ pub struct Struct {
 
 /// A single item inside a `use Module { ... }` brace filter. Mirrors the
 /// Rust host's `UseItem` (rust/core/src/term.rs).
-type UseItem {
+pub type UseItem {
     use_name (name: Identifier),
     use_rename (name: Identifier) (alias: Identifier),
     use_glob,
@@ -1934,7 +1934,7 @@ type UseItem {
 
 /// What names a `use` declaration imports. Bare `use Module` (no braces)
 /// is deprecated but still parses. Mirrors Rust's `UseFilter`.
-type UseFilter {
+pub type UseFilter {
     use_bare,
     use_items (items: List UseItem),
 }

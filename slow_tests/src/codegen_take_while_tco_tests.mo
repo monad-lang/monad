@@ -33,7 +33,7 @@
 /// deliberately NOT a multiple of 256 so `exit = 100 + rest` mod 256
 /// can't alias the success value).
 open IO {println}
-use lang::codegen::test::e2e_harness {compile_source_run_expect}
+use codegen::test::e2e_harness {compile_source_run_expect}
 
 /// The always-true whole-input scan: pre-fix this is exactly the
 /// per-char mutual-recursion + whole-remainder-copy loop, at ~3x the

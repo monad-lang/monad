@@ -2,7 +2,7 @@
 //
 // A deliberately small surface: the compiler pipeline's entry points, in
 // pipeline order. Everything else is reached by naming the module it lives
-// in (`use lang.codegen.emit {...}`), which is how the compiler's own
+// in (`use lib::module {...}`), which is how the compiler's own
 // modules import from each other and stays the norm -- a re-export hub that
 // tried to mirror all of lang/ would be a second, always-stale index of it.
 //

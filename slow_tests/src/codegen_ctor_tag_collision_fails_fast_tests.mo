@@ -1,6 +1,6 @@
 /// Regression tests for constructor-tag disambiguation by arity
 /// (`build_constructor_tag_map`/`constructor_tag_at`,
-/// lang/codegen/emit.mo).
+/// codegen/emit.mo).
 ///
 /// Codegen used to key a constructor's runtime tag AND its recorded
 /// field count by the constructor's BARE name only (match dispatch's
@@ -24,10 +24,10 @@
 /// invisible through `check` and `llc` both.
 use std::test {Test.write_fixture}
 open IO {println}
-use lang::codegen::test::e2e_harness {compile_source_run_expect}
+use codegen::test::e2e_harness {compile_source_run_expect}
 use std::process {process_id, exec_cmd}
 use lang::module {LoadedModules, load_file_modules}
-use lang::codegen::emit {compile_loaded_modules_to_ir}
+use codegen::emit {compile_loaded_modules_to_ir}
 use llvm::ir {emit_module}
 
 /// Two types both declaring `mk`, at arities 1 and 3, both constructed
@@ -100,7 +100,7 @@ def main (args : List String) : IO I64 := do {
 
 /// A user constructor that shares a BUILTIN's bare name at a different
 /// arity -- `CompileResult.ok` (6 fields) against builtin `Result.ok`
-/// (1 field) is the real instance, in lang/codegen/emit.mo itself.
+/// (1 field) is the real instance, in codegen/emit.mo itself.
 ///
 /// The builtin tag tables are consulted before the arity-keyed map, and
 /// `Con.mk`'s own `name` field is the constructor's BARE name, so a user

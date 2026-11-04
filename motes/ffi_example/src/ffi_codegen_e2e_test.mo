@@ -8,7 +8,7 @@
 // survived a rebase onto main undetected: the ONLY automated FFI test
 // was `ffi_eval_test.mo`, which dispatches through the Rust interpreter
 // (`rust/core/src/ffi.rs::extern_execute`) and never reaches
-// `lang/codegen/emit.mo` at all. Every bug below produced a clean
+// `codegen/emit.mo` at all. Every bug below produced a clean
 // `ffi_eval_test` pass and a broken compiler.
 //
 // This test drives the REAL backend end to end -- load -> codegen ->
@@ -56,7 +56,7 @@ use std::process {exec_cmd, process_id}
 use lang::types {}
 use lang::module {collect_link_libs, get_loaded_all, load_file_modules}
 use llvm::ir {emit_module}
-use lang::codegen::emit {compile_loaded_modules_to_ir}
+use codegen::emit {compile_loaded_modules_to_ir}
 use llvm::link {compile_ir_to_obj, compile_runtime_obj, link_objects, map_dash_l}
 use runtime {Runtime.c_path}
 

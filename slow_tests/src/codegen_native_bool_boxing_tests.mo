@@ -1,5 +1,5 @@
 /// Regression tests for the native-boolean-comparison-as-ORDINARY-VALUE
-/// boxing fix (`materialize_native_bool_arg`, `lang/codegen/emit.mo`).
+/// boxing fix (`materialize_native_bool_arg`, `codegen/emit.mo`).
 ///
 /// A native comparison (`I64.lt`/`.gt`/`.eq`/`.ne`) compiles, via
 /// `emit_arith_instr`, to a raw `icmp`-produced `i1` materialized into a
@@ -29,7 +29,7 @@
 /// of whether the fix is present; only a REAL `icmp`-produced register
 /// exercises the bug this test guards.
 open IO {println}
-use lang::codegen::test::e2e_harness {compile_source_run_expect}
+use codegen::test::e2e_harness {compile_source_run_expect}
 
 /// `Bool.not (I64.lt a b)` where `a > b`: `I64.lt` is false, `Bool.not`
 /// flips it to true. Passing a real runtime comparison as `Bool.not`'s
@@ -60,7 +60,7 @@ def main (args : List String) : IO I64 := do {
     compile_source_run_expect source "test_native_comparison_as_ordinary_bool_arg_false" 0
 
 /// A native comparison bound via `let` and REUSED (as two separate later
-/// `if`-conditions) -- `try_compile_let_beta_db` (`lang/codegen/emit.mo`)
+/// `if`-conditions) -- `try_compile_let_beta_db` (`codegen/emit.mo`)
 /// binds the let's compiled RHS value directly with no boxing step of
 /// its own, so every later reference is just `Term.var name`, losing the
 /// "this came from a native comparison" term-shape signal

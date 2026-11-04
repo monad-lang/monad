@@ -20,7 +20,7 @@
 /// (`lang/typecheck/macro_queue.mo`'s `expand_decls_graph`) is
 /// responsible for running `elaborate_module_decls_best_effort` +
 /// `resolve_class_calls_decls` (the same "prepare for real execution"
-/// pipeline `lang/codegen/test_driver.mo` already runs before compiling
+/// pipeline `codegen/test_driver.mo` already runs before compiling
 /// a test driver) before ever calling `meta_eval_invoke`.
 use std::list {List.length}
 use lib::core_eval {CoreEvalError, apply, basic_native_table, eval}

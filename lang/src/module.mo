@@ -572,7 +572,7 @@ def path_join (a : String) (b : String) : String :=
 ///
 /// It exists so that ONE FILE HAS ONE SPELLING, because a resolved path is
 /// what `ModuleInfo.file_path` records and `qualify_modules`'s
-/// `dedup_modules_by_file` (`lang/codegen/qualify.mo`) collapses the same
+/// `dedup_modules_by_file` (`codegen/qualify.mo`) collapses the same
 /// file registered under two module paths BY COMPARING THAT STRING. From
 /// inside a mote the join legitimately carries `..`, so one file reached by
 /// two routes could be spelled `../init/src/number.mo` and
@@ -797,7 +797,7 @@ def toolchain_has_ambient_sources (root : Option String) : IO Bool := do {
 ///
 /// Lives here rather than beside `find_workspace_members` because
 /// `resolve_runtime_src` is its only caller, and that has to sit at this
-/// level: the codegen harnesses (`lang/src/codegen/test/e2e_harness.mo`,
+/// level: the codegen harnesses (`codegen/src/test/e2e_harness.mo`,
 /// `compile_tests.mo`, `test_link_e2e.mo`) compile the C runtime through the
 /// same resolver, and they are modules of THIS mote -- so the resolver
 /// cannot live in `cli/`, which is above them.
@@ -2457,7 +2457,7 @@ def scope_for_def_body (attrs : List Attribute) (scope : Scope) : Scope :=
 /// swallowed and codegen then compiles the un-elaborated body with its
 /// syntactic fallbacks -- `void_val` struct literals and index-0 field reads.
 /// That is a SIGSEGV in the self-compiled binary with no diagnostic anywhere,
-/// the exact shape `lang/codegen/validate.mo` documents; it cost a ladder
+/// the exact shape `codegen/validate.mo` documents; it cost a ladder
 /// rung on 2026-10-06. Checking the same rule twice buys nothing: every def
 /// elaboration sees has already been through `check_def_with_scope`.
 def scope_for_elab_body (attrs : List Attribute) (scope : Scope) : Scope :=
@@ -2615,8 +2615,8 @@ def elaborate_decl_with_scope (d : Decl) (scope : Scope) (locals : LocalScope) :
 def elaborate_module_decls (scope : Scope) (decl_list : List Decl) (locals : LocalScope) : Result (List String) (List Decl) :=
     elaborate_module_decls_go scope decl_list locals List.empty List.empty
 
-/// Best-effort sibling for codegen's own WHOLE-GRAPH use (`lang.codegen.
-/// emit`/`lang.codegen.test_driver`) rather than `check`'s own gate
+/// Best-effort sibling for codegen's own WHOLE-GRAPH use (`codegen.
+/// emit`/`codegen.test_driver`) rather than `check`'s own gate
 /// (which wants `elaborate_module_decls`'s all-or-nothing, real-
 /// diagnostics behavior above): a def that fails to elaborate is left
 /// COMPLETELY UNCHANGED rather than aborting the whole pass. This
@@ -2639,7 +2639,7 @@ pub def elaborate_module_decls_best_effort (scope : Scope) (decl_list : List Dec
 /// carries a body that can fail to elaborate in a way worth naming; every
 /// other shape reports its kind, which is enough to say "not a def".
 #[partial]
-def decl_display_name (d : Decl) : String :=
+pub def decl_display_name (d : Decl) : String :=
     match d {
         Decl.def_d def_ => match def_ { Def.mk {name, ..} => show_name_path name },
         Decl.inductive_d i => match i { Inductive.mk name _ _ _ _ _ => show_name_path name },
@@ -2668,11 +2668,11 @@ pub struct BestEffortElab {
 pub def best_effort_decls (r : BestEffortElab) : List Decl := r.decls
 
 #[partial]
-def best_effort_failed (r : BestEffortElab) : List String := r.failed
+pub def best_effort_failed (r : BestEffortElab) : List String := r.failed
 
 /// One `name: message` line per failed decl, parallel to `best_effort_failed`.
 #[partial]
-def best_effort_errors (r : BestEffortElab) : List String := r.errors
+pub def best_effort_errors (r : BestEffortElab) : List String := r.errors
 
 /// Declared return type, not a bare literal at the use site -- the
 /// self-hosted checker cannot infer a struct literal's type in `return`/
@@ -3731,7 +3731,7 @@ pub instance Show LoadedModules {
 }
 
 #[partial]
-def get_loaded_main (loaded : LoadedModules) : ModuleInfo :=
+pub def get_loaded_main (loaded : LoadedModules) : ModuleInfo :=
     match loaded {
         LoadedModules.mk main_module all_modules => main_module
     }
@@ -3853,7 +3853,7 @@ pub def load_modules_from_sources (main : ModuleInfo) (seeds : List ModulePath)
 /// Resolves every bare `open`/`use`-imported name inside ONE module's
 /// own `decl_list` to its real, fully qualified target -- see
 /// `lang.scope`'s own `OpenAlias`/`collect_open_aliases`/`resolve_open_
-/// alias_decls` doc comment. Must run PER-MODULE, before `lang.codegen.
+/// alias_decls` doc comment. Must run PER-MODULE, before `codegen.
 /// emit`'s `collect_all_decls_from_modules` flattens every loaded
 /// module's own decls into one global list -- collecting and applying
 /// the alias table AFTER flattening (an earlier version of this fix)
@@ -3936,7 +3936,7 @@ def collect_root_aliases_go (modules : List ModuleInfo) (roots : List ModulePath
     }
 
 /// `resolve_open_aliases_in_module_info` applied to every loaded
-/// module -- the actual entry point `lang.codegen.emit`/`lang.codegen.
+/// module -- the actual entry point `codegen.emit`/`codegen.
 /// test_driver` call, on `get_loaded_all`'s own `List ModuleInfo`,
 /// BEFORE `collect_all_decls_from_modules` flattens it. `known_names`
 /// (every real def name across the WHOLE loaded program) is computed
@@ -3945,7 +3945,7 @@ def collect_root_aliases_go (modules : List ModuleInfo) (roots : List ModulePath
 /// validation step is required at all. `root_aliases` (see its own doc
 /// comment) is ALSO computed once and merged into every module's own
 /// alias list, not just prelude/init/std's own.
-def resolve_open_aliases_in_modules (modules : List ModuleInfo) : List ModuleInfo :=
+pub def resolve_open_aliases_in_modules (modules : List ModuleInfo) : List ModuleInfo :=
     let known_names := all_module_decl_names modules in
     let root_aliases := collect_root_aliases modules known_names in
     resolve_open_aliases_in_modules_go known_names root_aliases modules
@@ -3959,7 +3959,7 @@ def resolve_open_aliases_in_modules_go (known_names : List String) (root_aliases
     }
 
 /// `lib` names the mote a file belongs to, the way Rust's `crate::` names
-/// its crate: inside `lang`, `use lib.codegen.emit` IS `lang.codegen.emit`.
+/// its crate: inside `lang`, `use lib.codegen.emit` IS `codegen.emit`.
 ///
 /// Rewritten to the canonical mote-qualified path here, at load time, and
 /// not resolved as a file path directly -- because a module path is also a
@@ -5647,7 +5647,7 @@ pub def bench_step (verbose : Bool) (label : String) (t0 : I64) (forced : I64) :
 // --- elaborate_loaded_modules: THE unified check/compile/test front end ---
 //
 // `check` (via `check_file_cached`), `compile`/`test` (via `cli/src/main.mo`'s
-// `compile_file`/test-loop, `lang/codegen/emit.mo`/`test_driver.mo`), and
+// `compile_file`/test-loop, `codegen/emit.mo`/`test_driver.mo`), and
 // `slow_tests` used to each hand-roll their own version of this pipeline,
 // independently, and had quietly drifted apart -- `check` seeded prelude/
 // init and resolved infixes, `slow_tests`' own `load_module_with_dependencies`
@@ -5678,8 +5678,8 @@ pub struct ElaboratedAndCache {
 }
 
 /// A trivial local flatten of every loaded module's own decls into one
-/// list -- mirrors `lang.codegen.emit`'s own `collect_all_decls_from_modules`
-/// exactly, but can't be imported from there: `lang.codegen.emit` already
+/// list -- mirrors `codegen.emit`'s own `collect_all_decls_from_modules`
+/// exactly, but can't be imported from there: `codegen.emit` already
 /// `use`s `lang.module` (for `get_loaded_all`/`get_loaded_main`/
 /// `.decl_list`/`try_parse_decls`), so importing back would be
 /// a module cycle. Same dodge as `lang.typecheck.infer`'s own documented
@@ -5826,7 +5826,7 @@ def test_flatten_keeps_priv_in_its_own_module : Bool :=
 /// `locals_with_def_typevars`'s `forall_chain_binder_names` walk is the
 /// consume-the-Forall-chain half that actually skolemizes those binders.
 #[partial]
-def elaborate_def_typs (decls : List Decl) (known_names : List Identifier) : List Decl :=
+pub def elaborate_def_typs (decls : List Decl) (known_names : List Identifier) : List Decl :=
     match decls {
         List.empty => List.empty,
         List.cons d rest =>
@@ -5860,7 +5860,7 @@ def elaborate_def_typs (decls : List Decl) (known_names : List Identifier) : Lis
 //      (`elaborate_module_decls_best_effort` + `resolve_class_calls_decls`
 //      -- the SAME two-pass "resolve every class-method call to a
 //      concrete, directly-callable function" preparation
-//      `lang/codegen/test_driver.mo` already runs before compiling a
+//      `codegen/test_driver.mo` already runs before compiling a
 //      test driver, needed here because `lang/lower_core_ir.mo`'s
 //      free-variable resolution has no concept of typeclass
 //      dictionaries) and actually evaluate + reify each call.
@@ -6034,8 +6034,8 @@ def has_decl_gen_expansion (registry : List DeclGenEntry) (decls : List Decl) : 
 /// expansion applied to the target's own RAW decl list (the
 /// `main_module.decl_list` the parser produced), and it exists because
 /// the CODEGEN paths do not consume a prepared list at all: both
-/// `lang.codegen.emit`'s `compile_loaded_modules_to_ir` and
-/// `lang.codegen.test_driver`'s `compile_loaded_modules_to_test_ir` take
+/// `codegen.emit`'s `compile_loaded_modules_to_ir` and
+/// `codegen.test_driver`'s `compile_loaded_modules_to_test_ir` take
 /// `LoadedModules` and run the elaboration passes THEMSELVES, over each
 /// module's own raw `decl_list` (`qualify_modules` first, so a generated
 /// decl's bare names -- `String.concat`, `Lens`, the `Point.x` lens's
@@ -6070,7 +6070,7 @@ pub struct GraphExpansion {
     /// decl-gen/`reflect_type_info!` output -- a derive written in a
     /// dependency mote (not the file being compiled) otherwise never
     /// reaches codegen, which reads each module's own `decl_list`
-    /// verbatim (`collect_all_decls_from_modules`, `lang.codegen.decls`).
+    /// verbatim (`collect_all_decls_from_modules`, `codegen.decls`).
     /// Always empty when `changed` is false, by the same monotonicity
     /// `raw_changed` relies on: a decl-gen call that doesn't survive
     /// substitution over the WHOLE graph cannot survive over any one
@@ -6239,7 +6239,7 @@ def expand_decls_graph_go (scope : Scope) (whole_graph_decls : List Decl) (targe
         // codegen pipeline's own promotion pass, so no resolution of a
         // prepared list can see it either. The check now lives where the
         // resolution actually happens, over the decls the run will really
-        // use: `lang.codegen.emit`'s and `lang.codegen.test_driver`'s own
+        // use: `codegen.emit`'s and `codegen.test_driver`'s own
         // `validate_no_unresolved_class_calls` on the reachable closure of
         // the fully-prepared graph. Nothing narrows for a non-derive file:
         // this validation only ever ran when a `reflect_type_info!` call

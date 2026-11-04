@@ -1,6 +1,6 @@
 /// Regression tests for `NativeOp.op_write_file` reaching
 /// `compile_native_app_db`'s 2-arg "inline native" fast path
-/// (`lang/codegen/emit.mo`, `try_compile_inline_native_db` ->
+/// (`codegen/emit.mo`, `try_compile_inline_native_db` ->
 /// `compile_native_app_db`).
 ///
 /// `IO.write_file (path : String) (content : String) : IO Unit`
@@ -46,7 +46,7 @@
 /// dispatch gap -- out of scope here.
 use std::process {process_id}
 use std::test {Test.read_fixture}
-use lang::codegen::test::e2e_harness {compile_source_run_expect}
+use codegen::test::e2e_harness {compile_source_run_expect}
 
 /// `IO.write_file path content;` as a bare do-block statement (exactly
 /// `link_ir`'s own shape) with non-literal `path`/`content`. Guards the

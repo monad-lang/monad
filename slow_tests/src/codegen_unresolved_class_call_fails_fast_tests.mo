@@ -15,7 +15,7 @@
 /// unresolvable class method call, independent of either of those.
 ///
 /// The unresolved call MUST be reachable from `main` -- the check runs
-/// on the REACHABLE decls only (`lang.codegen.emit`'s own
+/// on the REACHABLE decls only (`codegen.emit`'s own
 /// `compile_loaded_modules_to_ir` / `validate_no_unresolved_class_calls`'s
 /// own doc comment explains why: validating the whole loaded graph
 /// blocked a compile over a bug in dead code the program never actually
@@ -25,7 +25,7 @@
 use std::test {Test.write_fixture}
 use std::process {exec_cmd, process_id}
 use lang::module {LoadedModules, load_file_modules}
-use lang::codegen::emit {compile_loaded_modules_to_ir}
+use codegen::emit {compile_loaded_modules_to_ir}
 
 #[test]
 def test_unresolved_class_method_call_fails_fast : IO Bool := do {

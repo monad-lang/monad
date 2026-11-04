@@ -21,7 +21,7 @@
 /// read lives in the compiled source behind an accessor (a `#[test]` def
 /// that reads a field takes the FIELD's LLVM type as its return type).
 open IO {println}
-use lang::codegen::test::e2e_harness {compile_source_run_expect}
+use codegen::test::e2e_harness {compile_source_run_expect}
 
 /// The minimal shape: rebuild a two-field struct, read both fields back.
 /// Pre-fix both came back as field 0, giving 80 rather than 42.

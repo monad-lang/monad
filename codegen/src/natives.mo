@@ -14,11 +14,11 @@ use llvm::strmap {str_map_empty, str_map_insert, str_map_lookup}
 use lang::types {AttrArg, Attribute, id, id_eq}
 use llvm::ir {LLVMDeclaration, NativeOp}
 use llvm::target {TargetKind}
-use lang::codegen::symbols {
+use lib::symbols {
   extract_base_name, replace_dots_with_underscores, symbol_identifier,
 }
-use lib::name_text {unqualify_def_name}
-use lib::codegen::util {}
+use lang::name_text {unqualify_def_name}
+use lib::util {}
 use std::map {HashMap}
 
 #[partial]
@@ -197,7 +197,7 @@ def native_runtime_fn_name (attrs : List Attribute) : Option NativeWrapKind :=
             // that silently discards its arguments, and without the
             // `mk_decl` in `runtime_declarations` below it fails as
             // `call to undefined symbol(s): monad_...` out of the
-            // call-target gate (`gate_result`, `lang/codegen/emit.mo`).
+            // call-target gate (`gate_result`, `codegen/emit.mo`).
             else if String.beq target "string_count_newlines" then Option.some (NativeWrapKind.passthrough "monad_string_count_newlines")
             else if String.beq target "string_trailing_chars" then Option.some (NativeWrapKind.passthrough "monad_string_trailing_chars")
             // `std/array.mo`. Plain passthroughs: every value in this
@@ -256,7 +256,7 @@ def native_runtime_fn_name (attrs : List Attribute) : Option NativeWrapKind :=
             // `current_time` (std/io.mo). The test runner's synthesized
             // driver times each test with this and does every unit
             // conversion itself, in Monad -- see
-            // `lang/codegen/test_driver.mo`.
+            // `codegen/test_driver.mo`.
             else if String.beq target "current_time_nano" then Option.some (NativeWrapKind.raw_io_passthrough "monad_current_time_nano")
             // `String.lt`/`String.gt` (`init/string.mo`, `instance BOrd
             // String`'s own backing natives) -- same previously-unwired
@@ -507,7 +507,7 @@ def native_runtime_fn_name (attrs : List Attribute) : Option NativeWrapKind :=
             else if String.beq target "f64_to_string" then Option.some (NativeWrapKind.passthrough "monad_f64_to_string")
             // `f64_of_string` is the one member of this family with no
             // `#[native]` def behind it in `init/number.mo`: the COMPILER
-            // calls it, to lower a float literal (`lang/codegen/emit.mo`'s
+            // calls it, to lower a float literal (`codegen/emit.mo`'s
             // `compile_lit_ir`), so its call site is a compiler-internal
             // def rather than a number.mo one. Same convention, same
             // table -- a native reached from a def the compiler compiles
@@ -818,7 +818,7 @@ pub def runtime_declarations_for (kind : TargetKind) : List LLVMDeclaration :=
     // (I64.to_string n)` printed nothing at all (a real, hand-compiled
     // repro). `monad_i64_to_string` (runtime.c) is the actual
     // implementation; `test_compile_i64_to_string_native`
-    // (lang/codegen/test/compile_tests.mo) is its regression test.
+    // (codegen/test/compile_tests.mo) is its regression test.
     // i64, not the C header's `char*` -- see the CONVENTION comment at
     // the head of this list (the returned char* IS the String value,
     // held as i64, and every call site types it i64).
@@ -889,7 +889,7 @@ pub def runtime_declarations_for (kind : TargetKind) : List LLVMDeclaration :=
     let d40 := mk_decl "monad_build_commit" List.empty "i64" in
     // `std/array.mo`'s six (runtime.c). Same "no implicit declare"
     // requirement as every native above -- without these, the
-    // call-target gate (`gate_result`, `lang/codegen/emit.mo`) rejects
+    // call-target gate (`gate_result`, `codegen/emit.mo`) rejects
     // the module with "call to undefined symbol(s): monad_array_new".
     let d41 := mk_decl "monad_array_new" (List.cons "i64" (List.cons "i64" List.empty)) "i64" in
     let d42 := mk_decl "monad_array_len" (List.cons "i64" List.empty) "i64" in
@@ -916,7 +916,7 @@ pub def runtime_declarations_for (kind : TargetKind) : List LLVMDeclaration :=
     let d56 := mk_decl "monad_f64_of_string" (List.cons "i64" List.empty) "i64" in
     // The async runtime (`runtime.c`). Same "no implicit declare"
     // requirement as every native above: without these the call-target
-    // gate (`gate_result`, `lang/codegen/emit.mo`) rejects the module
+    // gate (`gate_result`, `codegen/emit.mo`) rejects the module
     // with "call to undefined symbol(s): monad_fork_io". Every one
     // returns i64 under the CONVENTION at the head of this list -- a
     // fiber/scope handle and a `char*`/bit-pattern are all just i64 here.
@@ -939,7 +939,7 @@ pub def runtime_declarations_for (kind : TargetKind) : List LLVMDeclaration :=
     let d64 := mk_decl "monad_u16_to_string" (List.cons "i64" List.empty) "i64" in
     // The TCP family (`runtime.c`). Same "no implicit declare"
     // requirement as every native above -- without these the call-target
-    // gate (`gate_result`, `lang/codegen/emit.mo`) rejects the module
+    // gate (`gate_result`, `codegen/emit.mo`) rejects the module
     // with "call to undefined symbol(s): monad_tcp_connect_timeout".
     // Every parameter and return is i64 under the CONVENTION at the head
     // of this list: a String, an `FdStream` (the file descriptor) and a
@@ -1008,7 +1008,7 @@ pub def runtime_declarations_for (kind : TargetKind) : List LLVMDeclaration :=
     let d124 := mk_decl "monad_view_free" ["i64"] "i64" in
     // `monad_view_payload` (runtime_core.c) -- the fused do-bind's read
     // half. Emitted DIRECTLY by `try_compile_view_bind_db`
-    // (`lang/src/codegen/emit.mo`), never reached through a native
+    // (`codegen/src/emit.mo`), never reached through a native
     // wrapper, so it has a declare but no `native_runtime_fn_name` entry:
     // the call-target gate still needs the declare (a call to an
     // undeclared symbol fails the module).

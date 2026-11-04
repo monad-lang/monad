@@ -15,7 +15,7 @@
 /// A vacuous closure returns `Result.ok` and fails this test. The synthetic
 /// failure also keeps the pin independent of whether a real elaboration
 /// failure can be provoked for this fixture (the gate logic itself is pinned
-/// in `lang/codegen/emit.mo`'s own tests).
+/// in `codegen/emit.mo`'s own tests).
 use std::test {Test.write_fixture}
 use std::process {exec_cmd, process_id}
 use lang::types {LocalScope}
@@ -23,8 +23,8 @@ use lang::module {
   BestEffortElab, best_effort_decls, elaborate_module_decls_reporting,
   elaborate_loaded_modules,
 }
-use lang::codegen::decls {filter_reachable_decls}
-use lang::codegen::emit {validate_reachable_elaborated}
+use codegen::decls {filter_reachable_decls}
+use codegen::emit {validate_reachable_elaborated}
 
 #[test]
 def test_eval_gate_roots_at_the_real_bare_main : IO Bool := do {

@@ -3,7 +3,7 @@
 /// string phi-merge fix: values that reach a `phi` (an `if`/`match`
 /// merge point) or a bare `ret` need the SAME materialization call
 /// arguments already get (`materialize_void`/`materialize_native_bool_
-/// arg`, `lang/codegen/emit.mo`) -- neither `build_db_if_blocks`/
+/// arg`, `codegen/emit.mo`) -- neither `build_db_if_blocks`/
 /// `build_merge_result` (if/else merges), `build_match_case_block`
 /// (match-arm merges), nor `compile_db_def_ir_body` (a def's own bare
 /// return value) called them until this session's fixes.
@@ -17,7 +17,7 @@
 /// "return Unit" stub, both as a bare call and as an `if`'s own
 /// condition.
 open IO {println}
-use lang::codegen::test::e2e_harness {compile_source_run_expect}
+use codegen::test::e2e_harness {compile_source_run_expect}
 
 /// `I64.beq` used directly as an `if`'s own condition and as an
 /// ordinary comparison -- exercises `lookup_native`'s fixed dispatch

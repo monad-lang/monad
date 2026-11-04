@@ -13,7 +13,7 @@
 /// had its own inlined copy of them until the llvm mote was extracted, and
 /// the two had already drifted apart on flags.
 ///
-/// Lives under `lang/src/codegen/test/` rather than `slow_tests/` because
+/// Lives under `codegen/src/test/` rather than `slow_tests/` because
 /// both directories consume it and this is codegen test infrastructure;
 /// cross-directory `use` resolves fine (search paths are anchored at the
 /// repo root).
@@ -26,7 +26,7 @@ use lang::module {
 use llvm::ir {emit_module}
 use llvm::link {compile_ir_to_obj, compile_runtime_obj, link_objects}
 use runtime {}
-use lib::codegen::emit {compile_loaded_modules_to_ir}
+use lib::emit {compile_loaded_modules_to_ir}
 
 /// Build `source` to a native binary through the self-hosted pipeline:
 /// `Result.ok <binary path>` with the intermediates already removed, or

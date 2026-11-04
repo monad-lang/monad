@@ -4,7 +4,7 @@
 /// namespace, not the def-symbol one. `MatchCase` and `Con` dispatch
 /// sites now carry their resolved owner too (`typ_name`, stage 11.4 --
 /// `lang/typecheck/infer.mo`'s `type_check_match_case` resolves it once
-/// the scrutinee's real constructor is known), so `lang/codegen/
+/// the scrutinee's real constructor is known), so `codegen/
 /// emit.mo`'s `constructor_tag_owned` can key by the exact owner-
 /// qualified alias for those two call shapes -- the only tier that can
 /// tell apart two different types sharing both the same bare ctor name
@@ -30,10 +30,10 @@
 /// arity for the same reason.
 use llvm::strmap {str_map_empty, str_map_insert, str_map_lookup}
 use std::list {List.length}
-use lib::types {InductConstructor, Inductive, Struct}
-use lib::codegen::ctx {CodegenCtx, ctx_lookup_ctor_arity, ctx_lookup_ctor_tag}
-use lib::codegen::symbols {extract_base_name, name_path_to_str, symbol_identifier}
-use lib::codegen::util {}
+use lang::types {InductConstructor, Inductive, Struct}
+use lib::ctx {CodegenCtx, ctx_lookup_ctor_arity, ctx_lookup_ctor_tag}
+use lib::symbols {extract_base_name, name_path_to_str, symbol_identifier}
+use lib::util {}
 use std::map {HashMap}
 
 /// The builtin constructors' tags, keyed by BOTH their qualified

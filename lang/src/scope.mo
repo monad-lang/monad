@@ -132,18 +132,18 @@ def npath_map_lookup {V : Type} (key : NamePath) (m : HashMap String V) : Option
 
 /// String-keyed map for the bare-name -> qualified-name rewrite tables
 /// `resolve_open_alias_decls` drives. Mirrors `modpath_map_*` just
-/// above (and `lang.codegen.emit`'s `str_map_*`) in bypassing `Map`'s
+/// above (and `codegen.emit`'s `str_map_*`) in bypassing `Map`'s
 /// typeclass dispatch for direct `HashMap` bucket calls.
 ///
-/// Deliberately NOT called `str_map_*`: `lang.codegen.emit` already
+/// Deliberately NOT called `str_map_*`: `codegen.emit` already
 /// exports helpers by that name, and until every def carries its module
 /// path those two would have been one LLVM symbol with one surviving
 /// body -- the exact failure this whole change exists to remove. Named
 /// apart so the gate never has to catch it.
-def alias_map_empty : HashMap String String :=
+pub def alias_map_empty : HashMap String String :=
     HashMap.map HashMap.empty_buckets
 
-def alias_map_insert (key : String) (val : String) (m : HashMap String String) : HashMap String String :=
+pub def alias_map_insert (key : String) (val : String) (m : HashMap String String) : HashMap String String :=
     match m {
         HashMap.map buckets =>
             let idx := HashMap.bucket_of (String.hash key) in
@@ -152,7 +152,7 @@ def alias_map_insert (key : String) (val : String) (m : HashMap String String) :
             HashMap.map (HashMap.set_bucket buckets idx new_bucket)
     }
 
-def alias_map_lookup (key : String) (m : HashMap String String) : Option String :=
+pub def alias_map_lookup (key : String) (m : HashMap String String) : Option String :=
     match m {
         HashMap.map buckets =>
             let idx := HashMap.bucket_of (String.hash key) in
@@ -272,7 +272,7 @@ def npath_eq (a : NamePath) (b : NamePath) : Bool :=
 /// `ModuleRegistry` entry paths, `codegen/qualify.mo`'s open-alias
 /// tables) as opposed to a DECL's own name, which is a `NamePath` and
 /// goes through `npath_eq` above.
-def modpath_eq (a : ModulePath) (b : ModulePath) : Bool :=
+pub def modpath_eq (a : ModulePath) (b : ModulePath) : Bool :=
     Similar.similar a b
 
 /// Exactly `!modpath_lt(a,b) && !modpath_gt(a,b)`, but rendering each
@@ -575,7 +575,7 @@ def npath_of (path : ModulePath) : NamePath :=
 /// `LowerError`'s path-carrying variants, both kept `ModulePath` on the
 /// Rust host side too, converted only where the two meet). Mirrors the
 /// Rust host's `impl From<NamePath> for ModulePath`.
-def modpath_of (np : NamePath) : ModulePath :=
+pub def modpath_of (np : NamePath) : ModulePath :=
     match np {
         NamePath.mk ids => ModulePath.mk ids
     }
@@ -821,7 +821,7 @@ def scope_data_add_def_params (sd : ScopeData) (name : NamePath) (params : List 
 /// chain) down to its final, non-binder return type --
 /// e.g. `CodegenCtx -> CtxStrPair` (`Term.pi CodegenCtx (Term.pi ... )`
 /// -- actually `Term.pi CodegenCtx CtxStrPair` for a single-arg def)
-/// strips to `CtxStrPair`. Mirrors `lang/codegen/emit.mo`'s own
+/// strips to `CtxStrPair`. Mirrors `codegen/emit.mo`'s own
 /// `strip_db_lams`/the checker's general "strip leading binders" idiom.
 #[terminating]
 def strip_pi_chain_to_return_type (t : Term) : Term :=
@@ -1286,7 +1286,7 @@ def resolve_name_in_locals (nref : NameRef) (locals : LocalScope) : Option Scope
 /// `s` is `Shared String`, not `String` -- the experiment's real B1
 /// conversion (M2.5), chosen
 /// over the first candidate tried (`alias_map_insert`) because THAT one
-/// turned out to have two more callers in `lang/codegen/qualify.mo`'s
+/// turned out to have two more callers in `codegen/qualify.mo`'s
 /// hot per-declared-name pass (~3,172 names) that a corpus-wide grep
 /// caught before it shipped -- exactly the danger this experiment's own
 /// sketch flagged for an unerased `Shared`. This function has exactly
@@ -1375,7 +1375,7 @@ def resolve_name_in_scope (nref : NameRef) (s : Scope) : Result ScopeError Scope
         // A `::` in the spelling MAY be a `NameRef.nqn` that the parse
         // lowering flattened to a string -- but it may equally be a
         // compiler-MINTED name (`with_module_prefix` mangles a promoted
-        // instance method to `lang.codegen.ctors::BEq_I64_beq`), which
+        // instance method to `codegen.ctors::BEq_I64_beq`), which
         // is registered under that whole string as its own key. So try
         // the plain lookup FIRST and only fall back to re-splitting:
         // re-splitting eagerly sent minted instance methods down the
@@ -1913,8 +1913,8 @@ def add_module_infixes (acc : ScopeData) (infxs : List Infix) : ScopeData :=
 // the shared generic structural-recursion primitive both use.
 //
 // Must run AFTER `infixes` is actually populated — wired into
-// `lang.codegen.emit`'s `compile_loaded_modules_to_ir` and
-// `lang.codegen.test_driver`'s `compile_loaded_modules_to_test_ir`,
+// `codegen.emit`'s `compile_loaded_modules_to_ir` and
+// `codegen.test_driver`'s `compile_loaded_modules_to_test_ir`,
 // both of which already have a flat decl_list with every loaded
 // module's own `infix` declarations in it by the time codegen runs
 // (see `collect_infixes` below — no separately-built `Scope` needed
@@ -2115,13 +2115,13 @@ def infix_from_decl (d : Decl) : Option Infix :=
         _ => Option.none,
     }
 
-def collect_infixes (decl_list : List Decl) : List Infix :=
+pub def collect_infixes (decl_list : List Decl) : List Infix :=
     List.filter_map infix_from_decl decl_list
 
 /// Resolves infix operators across a whole decl_list at once —
 /// `resolve_infix_decl` applied to every entry.
 #[partial]
-def resolve_infix_decls (infixes : List Infix) (decl_list : List Decl) : List Decl :=
+pub def resolve_infix_decls (infixes : List Infix) (decl_list : List Decl) : List Decl :=
     match decl_list {
         List.empty => List.empty,
         List.cons d rest => List.cons (resolve_infix_decl infixes d) (resolve_infix_decls infixes rest),
@@ -2151,7 +2151,7 @@ pub def resolve_infix_decl_groups (infixes : List Infix) (groups : List DeclGrou
 // as its OWN, separate `ScopeData` entry -- same signature/body as the
 // real def, but under the BARE name, not the qualified one. That's
 // exactly what the type checker needs to resolve a bare call's
-// signature. But codegen (`lang.codegen.emit`) never consults
+// signature. But codegen (`codegen.emit`) never consults
 // `ScopeData` at all -- it walks the raw, still-bare `Term`s directly,
 // and a bare call's own `Term.var` still carries whatever bare name the
 // SOURCE TEXT wrote, never rewritten to the real qualified path the way
@@ -2249,7 +2249,7 @@ def open_aliases_from_decl (d : Decl) : List OpenAlias :=
 /// whole program's own known def names before being used to rewrite
 /// anything.
 #[partial]
-def collect_open_aliases (decl_list : List Decl) : List OpenAlias :=
+pub def collect_open_aliases (decl_list : List Decl) : List OpenAlias :=
     match decl_list {
         List.empty => List.empty,
         List.cons d rest => append_open_aliases (open_aliases_from_decl d) (collect_open_aliases rest),
@@ -2265,7 +2265,7 @@ def def_name_from_decl (d : Decl) : Option String :=
 /// Every real, existing top-level `Def`'s own registered name in
 /// `decl_list` -- used by `filter_valid_open_aliases` to validate a
 /// candidate alias's reconstructed qualified name actually refers to
-/// something real, not a guess. Mirrors `lang.codegen.emit`'s own
+/// something real, not a guess. Mirrors `codegen.emit`'s own
 /// `extract_defs` (`Decl.def_d` only -- promoted instance methods don't
 /// exist as real `Def`s yet at the point this runs, before `promote_
 /// instance_defs`, but a `use`/`open` alias targeting one specifically
@@ -2322,7 +2322,7 @@ def filter_valid_open_aliases (known_names : List String) (aliases : List OpenAl
 /// returned as the process exit code instead. Confirmed as a real
 /// regression from an earlier, broader version of this same pass (which
 /// did walk `Def.typ` too, mirroring `resolve_infix_def` exactly): every
-/// `lang/codegen/test/test_closure_capture_e2e.mo` test started failing
+/// `codegen/test/test_closure_capture_e2e.mo` test started failing
 /// with a plausible-looking but wrong number (e.g. expected 15, got 16)
 /// the moment it landed, all four sharing this exact "IO", used both as
 /// an opened value name and a bare type annotation" shape. Restricted to
@@ -2626,10 +2626,10 @@ def resolve_open_alias_class_defs (names : HashMap String String) (methods : Lis
 
 /// Resolves open/use names across a whole decl_list at once --
 /// `resolve_open_alias_decl` applied to every entry. Wired in right
-/// alongside `resolve_infix_decls` (`lang.codegen.emit`'s
+/// alongside `resolve_infix_decls` (`codegen.emit`'s
 /// `compile_loaded_modules_to_ir`).
 #[partial]
-def resolve_open_alias_decls (names : HashMap String String) (decl_list : List Decl) : List Decl :=
+pub def resolve_open_alias_decls (names : HashMap String String) (decl_list : List Decl) : List Decl :=
     match decl_list {
         List.empty => List.empty,
         List.cons d rest => List.cons (resolve_open_alias_decl names d) (resolve_open_alias_decls names rest),
@@ -2646,7 +2646,7 @@ def resolve_open_alias_decls (names : HashMap String String) (decl_list : List D
 //
 // No real `Decl.struct_d`/`Decl.inductive_d` declaration is synthesized
 // for a "dictionary type" -- confirmed unnecessary: `compile_con_ir`/
-// `compile_match_ir` (lang/codegen/emit.mo) work structurally off a
+// `compile_match_ir` (codegen/emit.mo) work structurally off a
 // `Con`'s own name/typ_name/num_args/args and a `MatchCase`'s own
 // constructor name, neither needing a registered Inductive/Struct. A
 // dictionary value is built directly as `Term.con`; `Con.mk` carries no
@@ -2665,7 +2665,7 @@ def class_from_decl (d : Decl) : Option Class :=
         _ => Option.none,
     }
 
-def collect_classes (decl_list : List Decl) : List Class :=
+pub def collect_classes (decl_list : List Decl) : List Class :=
     List.filter_map class_from_decl decl_list
 
 /// Flat scan for every top-level Instance declaration.
@@ -2746,7 +2746,7 @@ def class_defs_names (cds : List ClassDef) : List Identifier :=
 /// whole build BEFORE `build_scope_from_decls` ever runs, so a
 /// genuinely ambiguous bare class name never reaches this comparison.
 /// Comparing via `string_matches_bare` (the no-allocation twin of
-/// `unqualify_def_name` + `String.beq`, `lang/codegen/symbols.mo`) --
+/// `unqualify_def_name` + `String.beq`, `codegen/symbols.mo`) --
 /// this runs per instance/class comparison in
 /// `resolve_class_calls_decls`, and a slice per compared byte per
 /// comparison was a measured ~10x blowup of that stage.
@@ -2867,7 +2867,7 @@ def find_qualifier_sep (s : String) (i : I64) (n : I64) : I64 :=
     else find_qualifier_sep s (i + 1) n
 
 /// Prepend an instance's declaring module to a synthesized name, in the
-/// same `module::name` form `lang.codegen.emit`'s `qualified_def_name`
+/// same `module::name` form `codegen.emit`'s `qualified_def_name`
 /// uses for source defs.
 ///
 /// Needed because the slug is built from the instance's type ARGS by
@@ -3178,7 +3178,7 @@ def options_of (ts : List Term) : List (Option Term) :=
 /// ignored by reachability filtering exactly like an infix declaration
 /// already is).
 #[partial]
-def promote_instance_defs (decl_list : List Decl) : List Decl :=
+pub def promote_instance_defs (decl_list : List Decl) : List Decl :=
     let classes := collect_classes decl_list in
     let instances := collect_instances decl_list in
     List.append decl_list (promote_all_instances classes instances)
@@ -3432,7 +3432,7 @@ def add_constraint_dict_params (dict_classes : HashMap String (List String)) (d 
 /// from the original method Def unchanged, so this pass reaches it the
 /// same as any other constrained def).
 #[partial]
-def add_constraint_dict_params_decls (decl_list : List Decl) : List Decl :=
+pub def add_constraint_dict_params_decls (decl_list : List Decl) : List Decl :=
     // The class set over the WHOLE list, exactly as
     // `build_scope_from_groups` seeds it: every half of the ABI decision
     // must read the same program-wide facts.
@@ -3523,7 +3523,7 @@ pub type CtorOwner {
 /// itself a computed call (`I64.to_string x`) rather than a literal/
 /// bare-var/constructor -- exactly the shape the self-hosted test
 /// driver's own synthesized summary line produces
-/// (`lang/codegen/test_driver.mo`'s `synthesize_test_driver_source`),
+/// (`codegen/test_driver.mo`'s `synthesize_test_driver_source`),
 /// and the root cause of the `Append_append` self-compile bug this
 /// table exists to close. Deliberately reads `Def.typ` directly from the
 /// decl list rather than going through `scope_resolve_name`: `ScopeData`
@@ -4373,7 +4373,7 @@ def infer_carrier_type (env : List LocalTypeBinding) (ctor_owners : List CtorOwn
     match term_peel t {
         // `Literal.if_`'s own two branches are the operand shape the
         // self-hosted test driver's own synthesized summary line
-        // ACTUALLY produces (`synth_sum_expr`, lang/codegen/test_driver.mo:
+        // ACTUALLY produces (`synth_sum_expr`, codegen/test_driver.mo:
         // `(if test_one then 1 else 0) + (if test_two then 1 else 0)`) --
         // `literal_carrier_type` below only covers bare `num`/`str`
         // literals, so an if-expression operand fell through to `None`
@@ -4553,7 +4553,7 @@ def infer_carrier_type (env : List LocalTypeBinding) (ctor_owners : List CtorOwn
         // -- e.g. `I64.to_string x` inside `I64.to_string x ++ y` -- look
         // up the called function's own DECLARED return type. This is the
         // exact shape the self-hosted test driver's own synthesized
-        // summary line produces (`lang/codegen/test_driver.mo`), and the
+        // summary line produces (`codegen/test_driver.mo`), and the
         // root cause of the `Append_append` self-compile bug: previously
         // this fell through to the wildcard below and failed clean
         // rather than resolving. See `DefTypeEntry`'s own doc comment for
@@ -7300,7 +7300,7 @@ def dict_binding_class_of (id : Identifier) : Option NamePath :=
 /// -- confirmed via a direct repro, the same one that found the dead-code
 /// false-positive above).
 #[partial]
-def validate_no_unresolved_class_calls (classes : List Class) (decl_list : List Decl) : Result String (List Decl) :=
+pub def validate_no_unresolved_class_calls (classes : List Class) (decl_list : List Decl) : Result String (List Decl) :=
     match find_unresolved_class_calls_decls classes decl_list {
         List.empty => Result.ok decl_list,
         List.cons msg _rest => Result.err msg,
@@ -7311,7 +7311,7 @@ def validate_no_unresolved_class_calls (classes : List Class) (decl_list : List 
 /// `resolve_class_calls_decls`'s own doc comment for why any such
 /// survivor is unambiguously a real unresolved-instance failure.
 #[partial]
-def find_unresolved_class_calls_decls (classes : List Class) (decl_list : List Decl) : List String :=
+pub def find_unresolved_class_calls_decls (classes : List Class) (decl_list : List Decl) : List String :=
     match decl_list {
         List.empty => List.empty,
         List.cons d rest =>
@@ -8076,7 +8076,7 @@ def decl_list_has_instance_named (decl_list : List Decl) (cls_str : String) : Bo
     }
 
 /// A bare `module_path_to_str`-equivalent local to scope.mo (that
-/// function lives in lang/codegen/emit.mo, not imported here) --
+/// function lives in codegen/emit.mo, not imported here) --
 /// single-segment only, matching every name `mangle_instance_*_name`
 /// ever produces.
 #[partial]
@@ -8203,7 +8203,7 @@ def test_lookup_def_type_finds_dotted_own_name_def_by_bare_query : Bool :=
 // Regression test for `infer_carrier_type`'s `Literal.if_` gap: the
 // self-hosted test driver's own synthesized summary line chains
 // `+`/`HAdd.add` over TWO if-expression operands
-// (`synth_sum_expr`, lang/codegen/test_driver.mo:
+// (`synth_sum_expr`, codegen/test_driver.mo:
 // `(if test_one then 1 else 0) + (if test_two then 1 else 0)`) --
 // `literal_carrier_type` only covers bare `num`/`str` literals, so
 // this fell through to `None`, leaving `HAdd.add` unresolved and

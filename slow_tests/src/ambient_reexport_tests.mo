@@ -16,7 +16,7 @@
 /// regression making the hubs conditional on the spelling would have been
 /// invisible -- every file that would have failed carried the line.
 open IO {println}
-use lang::codegen::test::e2e_harness {compile_source_run_expect}
+use codegen::test::e2e_harness {compile_source_run_expect}
 
 /// `IO` (the type), `IO.pure` (a dotted def), a `do` block's implicit
 /// `Monad IO`, and the `init` hub's other re-exports -- `String`, `I64`,

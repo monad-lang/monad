@@ -3,11 +3,11 @@
 /// `#[test]`-attributed `def` in a target file, synthesize a driver
 /// program that calls each of them and reports PASS/FAIL, compile that
 /// driver via the existing native codegen pipeline
-/// (`lang.codegen.emit`), and hand the result back to `cli/src/main.mo`
+/// (`codegen.emit`), and hand the result back to `cli/src/main.mo`
 /// to link and run.
 ///
 /// Kept as its own file rather than folded into the already-1857-line
-/// `lang/codegen/emit.mo` — isolates the genuinely novel logic
+/// `codegen/emit.mo` — isolates the genuinely novel logic
 /// (discovery + source synthesis) from existing, working codegen.
 ///
 /// **Architecture decision**: the driver is synthesized as ordinary
@@ -41,21 +41,21 @@
 /// `scope_*` family) are wired now, so
 /// `std/src/concurrent/{fiber,combine,poll}_test.mo` run through this
 /// driver; the gate remains the guard for any future unwired native.
-use lang::codegen::decls {filter_reachable_decls}
-use lang::codegen::qualify {qtest_def, qualified_def_name_str, qualify_modules}
+use lib::decls {filter_reachable_decls}
+use lib::qualify {qtest_def, qualified_def_name_str, qualify_modules}
 use lang::types {
   Attribute, Class, DebugName, Decl, Def, ModulePath, NamePath, Term, has_attr, i64, id, no_attrs, num, package_private,
   show_identifier, struct_lit, use_bare,
 }
-use lib::codegen::emit {
+use lib::emit {
   CompileInput, compile_db_module_with_debug, compile_input_of_modules, emit_type_head_is_io,
   gate_then, validate_reachable_elaborated
 }
-use lang::codegen::symbols {
+use lib::symbols {
   bare_npath, module_path_to_str, name_path_to_str, symbol_identifier,
 }
 use parsec::number {parse_i64}
-use lib::codegen::validate {
+use lib::validate {
   report_elab_stats, validate_no_colliding_def_symbols,
   validate_no_undesugared_struct_lits, validate_no_undesugared_elims,
   validate_no_unwired_natives
@@ -65,7 +65,7 @@ use lang::module {
   BestEffortElab, LoadedModules, ModuleInfo, best_effort_errors, get_loaded_all,
   get_loaded_main, resolve_open_aliases_in_modules, try_parse_decls,
 }
-use lib::scope {
+use lang::scope {
   collect_classes, strip_all_leading_binders,
   validate_no_unresolved_class_calls,
 }
@@ -192,7 +192,7 @@ def io_type_payload (t : Term) : Term :=
     }
 
 /// Whether `t`'s head is the builtin `Result` -- the type-shape twin
-/// of `emit_type_head_is_io` (`lang/codegen/emit.mo`), for the driver's
+/// of `emit_type_head_is_io` (`codegen/emit.mo`), for the driver's
 /// `Result`-test classification.
 #[partial]
 def emit_type_head_is_result (t : Term) : Bool :=
@@ -233,7 +233,7 @@ def display_prefix_of (mp : ModulePath) : String :=
 /// A file may legitimately define BOTH `#[test]` defs and a `main` (17
 /// slow_tests files, `examples/structs.mo`, and `cli/src/main.mo`
 /// itself). Both mains cannot survive into one binary: `rename_main`
-/// (`lang/codegen/emit.mo`) rewrites every `main`-tailed symbol to
+/// (`codegen/emit.mo`) rewrites every `main`-tailed symbol to
 /// `main_monad` and `dedup_funcs_by_name` keeps the FIRST one, and the
 /// user's modules precede the driver in the spliced list -- so the
 /// user's `main` would win and the driver would never run, silently
@@ -253,7 +253,7 @@ def display_prefix_of (mp : ModulePath) : String :=
 /// program's real side effects during a test run).
 ///
 /// The new name avoids `__user_main` deliberately: `ends_with_main`
-/// (`lang/codegen/symbols.mo`) has a latent `String.slice` length bug,
+/// (`codegen/symbols.mo`) has a latent `String.slice` length bug,
 /// and a future fix to it would make any `*_main` name collide here all
 /// over again. `__monad_user_entry` ends in no such suffix.
 #[partial]
@@ -309,7 +309,7 @@ def renamed_entry_def (def_val : Def) : Def :=
 // this file used a bare `I64` let-chain because an `IO I64` main was
 // believed to produce a garbage exit code. That is no longer true (and
 // the belief may always have been about a since-fixed bug):
-// `unwrap_io_return_blocks` (`lang/codegen/emit.mo`) unwraps an
+// `unwrap_io_return_blocks` (`codegen/emit.mo`) unwraps an
 // IO-typed `main` return at the C boundary, verified directly --
 // `def main : IO I64 { return 5 }` compiles and exits 5. The do-block
 // shape is what makes `IO Bool` tests bindable with `<-` at all.
@@ -550,7 +550,7 @@ pub def is_no_tests_error (e : String) : Bool :=
 
 /// Discover -> synthesize -> parse -> collision-check -> splice into
 /// the decl list -> reachability-filter -> compile. Mirrors
-/// `lang.codegen.emit.compile_loaded_modules_to_ir`'s own body, but
+/// `codegen.emit.compile_loaded_modules_to_ir`'s own body, but
 /// with the extra splice step -- a plain `#[test]`-bearing file has no
 /// pre-existing `main` for that function's own reachability rooting to
 /// find, so this builds one first.
@@ -618,7 +618,7 @@ pub def compile_loaded_modules_to_test_ir (loaded : LoadedModules) (result_path 
 /// annotated struct literals un-desugared and tripping the
 /// `validate_no_undesugared_struct_lits` gate at a stage far from the
 /// real failure. At a def's top level the same bind elaborates fine --
-/// `lang.codegen.emit`'s `compile_loaded_modules_to_ir` has the identical
+/// `codegen.emit`'s `compile_loaded_modules_to_ir` has the identical
 /// call.
 #[partial]
 def compile_test_driver_with (loaded : LoadedModules) (driver_decls : List Decl) (total_tests : I64) (triple : String) : IO (Result String TestIrResult) := do {
@@ -692,7 +692,7 @@ def compile_test_driver_with (loaded : LoadedModules) (driver_decls : List Decl)
                     let reachable := filter_reachable_decls (List.cons driver_root List.empty) dispatched_decls;
                     report_elab_stats false (best_effort_errors elab_report) elaborated reachable;
                     // Validate the REACHABLE decls, not the full spliced
-                    // graph -- see `lang.codegen.emit`'s own
+                    // graph -- see `codegen.emit`'s own
                     // `compile_loaded_modules_to_ir` / `validate_no_
                     // unresolved_class_calls`'s own doc comment for why
                     // (a bug in dead code the test driver never actually
@@ -754,7 +754,7 @@ def rename_user_main_in_modules (target_mp : ModulePath) (mods : List ModuleInfo
 // ─── Tests ───────────────────────────────────────────────────────────
 //
 // Hand-built `Decl.def_d` fixtures (some `#[test]`-attributed, some
-// not), same construction style as `lang/codegen/link.mo`'s own
+// not), same construction style as `codegen/link.mo`'s own
 // existing `test_link_compile_defs_to_ir` fixture. No pipeline wiring
 // exercised here — pure discovery-function unit tests.
 

@@ -22,8 +22,8 @@ use lang::module {
     best_effort_decls, check_module_with_scope_classified, elaborate_loaded_modules_pure,
     elaborate_module_decls_reporting, load_modules_from_sources,
 }
-use lang::codegen::decls {filter_reachable_decls}
-use lang::codegen::emit {validate_reachable_elaborated}
+use codegen::decls {filter_reachable_decls}
+use codegen::emit {validate_reachable_elaborated}
 use lang::core_eval {CoreEvalError, basic_native_table, eval}
 use lang::core_ir {CoreIr}
 use lang::core_value {Env, GlobalTable, Value, global_cache_new_fueled, global_table_len}

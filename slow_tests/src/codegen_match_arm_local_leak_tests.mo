@@ -1,7 +1,7 @@
 /// Regression test for match-arm pattern bindings leaking into the
 /// SIBLING arms compiled after them.
 ///
-/// `build_match_case_block` (lang/codegen/emit.mo) calls
+/// `build_match_case_block` (codegen/emit.mo) calls
 /// `bind_match_fields` to push one codegen local per pattern variable,
 /// then handed the resulting ctx -- bindings still on it -- straight to
 /// the next arm. So a later arm referencing a name an earlier arm
@@ -22,7 +22,7 @@
 /// The reference interpreter is unaffected (it has no shared ctx to
 /// leak), and `check` says nothing -- only compiling and running finds
 /// it, hence the full compile/link/execute round trip here.
-use lang::codegen::test::e2e_harness {compile_source_run_expect}
+use codegen::test::e2e_harness {compile_source_run_expect}
 
 /// `resolve_branch_merge_info`'s own shape, reduced: the `some` arm
 /// reads two fields off its bound value (binding locals `label` and

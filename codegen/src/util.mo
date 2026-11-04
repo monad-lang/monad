@@ -1,8 +1,8 @@
 /// Small, shared building blocks for the LLVM backend.
 ///
-/// These are the defs the rest of `lang/codegen/` reaches for constantly
+/// These are the defs the rest of `codegen/` reaches for constantly
 /// -- `List.empty`/`List.cons` alone have 39 callers each, and
-/// `str_map_lookup` 28. They lived in `lang/codegen/emit.mo` until that
+/// `str_map_lookup` 28. They lived in `codegen/emit.mo` until that
 /// file reached 8,204 lines, and they are extracted FIRST because every
 /// other candidate extraction pulls them in: nothing else could be split
 /// out cleanly while they had no home of their own.
@@ -10,14 +10,14 @@
 /// Deliberately dependency-light -- `lang.types` and `llvm.ir`
 /// only -- so that every other backend module can import this one
 /// without creating a cycle.
-use lib::types {Decl, Identifier}
+use lang::types {Decl, Identifier}
 use llvm::ir {
   LLVMBasicBlock, LLVMFunction, LLVMGlobal, LLVMInstruction, LLVMValue, ParamPair,
 }
 // Re-exported, not redefined. They moved to a leaf module so `ir.mo` can use
 // them too -- `ir.mo` cannot import THIS file, since the `use` above makes the
 // dependency run the other way. `pub use` keeps all eight existing
-// `use lang.codegen.util {str_map_*}` importers working unchanged; a second
+// `use codegen.util {str_map_*}` importers working unchanged; a second
 // copy here would be two definitions of one bare LLVM symbol (AGENTS.md
 // item 18).
 pub use llvm::strmap {str_map_empty, str_map_insert, str_map_lookup}

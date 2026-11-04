@@ -1,14 +1,14 @@
 /// `CodegenCtx` -- the state threaded through term compilation -- and
 /// the tables it carries.
 ///
-/// Extracted from `lang/codegen/emit.mo` so that the two consumers of
+/// Extracted from `codegen/emit.mo` so that the two consumers of
 /// `fresh_temp`/`fresh_label` can be separate modules: without a shared
-/// home for the context, `lang.codegen.tco`'s tail-call rewrite and
+/// home for the context, `codegen.tco`'s tail-call rewrite and
 /// `emit`'s term compiler would each need the other's names and could
 /// not be split at all.
 ///
 /// `arities` are keyed by `def_symbol_name`
-/// (`lang.codegen.symbols`); `ctor_tags`/`ctor_arities` are keyed in
+/// (`codegen.symbols`); `ctor_tags`/`ctor_arities` are keyed in
 /// CONSTRUCTOR space, which is a different namespace -- see
 /// `constructor_tag` in `emit` for the three key shapes it uses.
 use llvm::strmap {str_map_empty, str_map_insert, str_map_lookup}
@@ -18,9 +18,9 @@ use lang::types {
   binder_is_explicit, binder_name, param_many, term_peel,
 }
 use llvm::ir {DbgLoc, LLVMInstruction, LLVMValue}
-use lib::codegen::symbols {def_symbol_name, extract_base_name, symbol_identifier}
-use lib::name_text {unqualify_def_name}
-use lang::codegen::util {identifier_eq}
+use lib::symbols {def_symbol_name, extract_base_name, symbol_identifier}
+use lang::name_text {unqualify_def_name}
+use lib::util {identifier_eq}
 use std::map {HashMap}
 
 pub struct LocalBinding {

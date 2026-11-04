@@ -199,7 +199,7 @@ def test_typecheck_sig_driven_poly_call : Bool :=
 // free var in a pre-elaboration `Def.typ` is a `sentinel` var (concrete
 // type names included), that rewrote the monomorphic `Box P` return
 // into `(Box _)`, failing the whole match with "type mismatch:
-// expected (Box _), found (Box P)" (live in `lang/codegen/emit.mo`'s
+// expected (Box _), found (Box P)" (live in `codegen/emit.mo`'s
 // `ensure_main_params`; only the match-arm shape exposed it, the
 // annotated top-level form masked it).
 #[test]

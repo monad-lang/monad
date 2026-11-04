@@ -1,7 +1,7 @@
 /// Regression tests for the closure free-variable-capture fix
 /// (`plans/implementations/2026-08-28-codegen-closure-free-var-capture.md`).
 ///
-/// `compile_db_lam_ir` (`lang/codegen/emit.mo`) lifts a nested `Term.lam`
+/// `compile_db_lam_ir` (`codegen/emit.mo`) lifts a nested `Term.lam`
 /// (every do-notation continuation is exactly this shape -- `let x <- e1;
 /// e2` desugars to `Monad.bind e1 (\x -> e2)`, `lang/types.mo`'s
 /// `desugar_do_inner`) into a brand-new, independent top-level LLVM
@@ -28,7 +28,7 @@
 /// or an escaping first-class lambda) forces real lambda-lifting, which is
 /// why every test below uses `<-`, not `:=`.
 open IO {println}
-use lib::codegen::test::e2e_harness {compile_source_run_expect}
+use lib::test::e2e_harness {compile_source_run_expect}
 
 /// Primary regression test: `b`'s own bind-continuation transitively
 /// captures `a` from the enclosing lifted lambda. Uses `I64.add`

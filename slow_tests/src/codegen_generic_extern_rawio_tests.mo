@@ -1,5 +1,5 @@
 /// Regression test for the `RawIO` box on a GENERIC extern
-/// (`return_is_raw_io`, `lang/codegen/emit.mo`).
+/// (`return_is_raw_io`, `codegen/emit.mo`).
 ///
 /// Every `#[extern "c"]` def declared `RawIO A` gets exactly one
 /// `monad_io_pure` box in its generated wrapper, so it composes with
@@ -15,7 +15,7 @@
 ///
 /// The fixture extern binds libc's `strlen` with an implicit `A` inferred
 /// from its argument, which is the exact shape that was broken.
-use lang::codegen::test::e2e_harness {compile_source_run_expect}
+use codegen::test::e2e_harness {compile_source_run_expect}
 
 #[test]
 def test_generic_rawio_extern_is_boxed : IO Bool :=

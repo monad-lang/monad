@@ -27,7 +27,7 @@ use std::list {List.length}
 // further; this function only ever looks one level down.
 
 #[partial]
-def term_map_children (f : Term -> Term) (t : Term) : Term :=
+pub def term_map_children (f : Term -> Term) (t : Term) : Term :=
     match t {
         Term.var idx dbg => Term.var idx dbg,
         Term.var_macro idx dbg => Term.var_macro idx dbg,

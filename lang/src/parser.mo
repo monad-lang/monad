@@ -70,7 +70,7 @@ def at_least_two (ids : List String) : Bool :=
 /// just a theoretical gap): `match_case_name`'s own `dotted_identifier`
 /// call, at a source position that isn't actually a valid case pattern
 /// (e.g. one an unrelated parsing bug elsewhere already corrupted --
-/// see `lang/codegen/emit.mo`'s `build_get_env_instrs`'s own doc
+/// see `codegen/emit.mo`'s `build_get_env_instrs`'s own doc
 /// comment / `plans/implementations/2026-08-30-match-case-comma-parser-
 /// bug.md`), used to silently return `success` with an EMPTY id list
 /// rather than failing -- which `match_case_name` then turned into a
@@ -103,7 +103,7 @@ def join_dotted_identifiers (ids : List String) : String :=
 // imported above -- this file used to carry a byte-identical second copy
 // alongside that import, which is two definitions of the LLVM symbol
 // `@name_ref_to_string` (codegen mangles a def to its bare name), the
-// shape `validate_no_colliding_def_symbols` (`lang/codegen/validate.mo`)
+// shape `validate_no_colliding_def_symbols` (`codegen/validate.mo`)
 // now rejects.
 
 /// Convert a ModulePath to its `use`-line spelling: `::`-joined.
@@ -3433,7 +3433,7 @@ def instance_apply_params (dr : ParseResult ParseDecl) (params : List ParseParam
 /// at the first dot and reject the decl outright ("did not fully
 /// parse"). The name is stored as the JOINED string `"My.Greet"`, which
 /// is exactly how the one consumer that reads it renders a `NamePath` --
-/// `qualified_def_name_str` (`lang/codegen/qualify.mo`) calls
+/// `qualified_def_name_str` (`codegen/qualify.mo`) calls
 /// `bare_npath (show_identifier insname)`, whose dotted spelling is the
 /// same string -- so the dictionary symbol is identical either way.
 /// `Identifier.id "_"` remains the anonymous sentinel for the unnamed
@@ -7251,7 +7251,7 @@ def if_kw (r: ParseResult String) : ParseResult ParseTerm :=
 // `skip_docstrings (skip_spaces rem)` before `tag "then"`/`tag "else"`
 // too, not just after them -- a comment can sit right BEFORE the keyword
 // itself (e.g. a `// Check base names` line documenting the next `else
-// if` branch, lang/codegen/emit.mo's `constructor_tag`), not only right
+// if` branch, codegen/emit.mo's `constructor_tag`), not only right
 // after it.
 #[partial]
 def if_cond (r: ParseResult ParseTerm) : ParseResult ParseTerm :=
@@ -7719,7 +7719,7 @@ def expr_climb_rest (input: String) (lhs: ParseTerm) (min_prec: I64) : ParseResu
 /// name, ...). Skipping a comment here would let that ambiguity reach
 /// PAST the comment into whatever follows it -- confirmed as a real
 /// regression from an earlier version of this exact fix, which skipped
-/// comments unconditionally right here: `lang/codegen/emit.mo`'s own
+/// comments unconditionally right here: `codegen/emit.mo`'s own
 /// `compose_seq` (a match arm's struct-literal body, no trailing comma,
 /// followed by a multi-line comment, then the next arm's `Option.none`)
 /// got its body corrupted by swallowing `Option.none` as a bogus extra
@@ -10871,12 +10871,12 @@ def test_use_parser : Bool :=
 /// (`use_path_sep`, and `test_use_parser_rejects_dotted` below).
 #[test]
 def test_use_parser_accepts_colon_colon : Bool :=
-    match use_parser "use lang::codegen::emit {compile_db_module}" {
+    match use_parser "use codegen::emit {compile_db_module}" {
         success rem out =>
             match out.kind {
                 use_d path _filter _pub =>
                     (String.beq rem "") &&
-                    String.beq (module_path_to_string path) "lang::codegen::emit",
+                    String.beq (module_path_to_string path) "codegen::emit",
                 _ => false
             },
         fail _ => false

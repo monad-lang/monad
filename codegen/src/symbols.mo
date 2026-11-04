@@ -9,7 +9,7 @@
 ///
 /// A symbol is the def's fully qualified source name verbatim
 /// (`lang.typecheck.infer::inductive_bare_name`) -- see
-/// `lang.codegen.qualify` for where the `module::name` form comes from,
+/// `codegen.qualify` for where the `module::name` form comes from,
 /// and `def_symbol_name` for why nothing is mangled into underscores
 /// any more.
 use std::list {List.intercalate}
@@ -17,7 +17,7 @@ use lang::types {
   Identifier, ModulePath, NamePath, show_module_path, show_name_path,
 }
 use std::map {}
-use lib::name_text {unqualify_def_name}
+use lang::name_text {unqualify_def_name}
 
 /// A genuine, previously-undiscovered bug lived here (and in
 /// `string_find_last_loop` below) until this session: `String.slice`'s
@@ -144,7 +144,7 @@ def module_path_to_str (mp : ModulePath) : String := match mp {
 
 /// `module_path_to_str`'s `NamePath` twin, for the positions where the
 /// thing being mangled is a DEF's own name rather than a file path
-/// (`lang/codegen/validate.mo`'s diagnostics naming the offending def).
+/// (`codegen/validate.mo`'s diagnostics naming the offending def).
 /// Same mangling, because the two are the same kind of thing to a symbol
 /// table -- only which of the two roles the path plays changed.
 #[partial]
@@ -230,7 +230,7 @@ def test_ends_with_main_is_the_exact_source_name : Bool :=
     if Bool.not (ends_with_main "cli.main::main") then false
     else if Bool.not (ends_with_main "main") then false
     else if ends_with_main "cli.main::run_main" then false
-    else if ends_with_main "lang.codegen.emit::rename_main" then false
+    else if ends_with_main "codegen.emit::rename_main" then false
     else true
 
 #[partial]

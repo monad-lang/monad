@@ -22,7 +22,7 @@
 /// `check` stays completely silent about this, and so does `llc` --
 /// only RUNNING a compiled binary finds it, which is why this test
 /// compiles, links and executes rather than inspecting IR text.
-use lang::codegen::test::e2e_harness {compile_source_run_expect}
+use codegen::test::e2e_harness {compile_source_run_expect}
 
 /// The safe form, and the one every site in `lang/` now uses: bind the
 /// literal to a local with an explicit type annotation first, then pass

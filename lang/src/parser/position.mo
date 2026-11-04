@@ -378,7 +378,7 @@ pub def resolve_offsets_in_file (source : String) (offsets : List I64) : List (P
 ///
 /// Accumulator-passing in `merge_asc`, not `List.cons x (merge rest)`: the
 /// merge is the one part whose recursion depth is O(n) rather than O(log n),
-/// and `lang/codegen/decls.mo`'s own note explains why depth is expensive
+/// and `codegen/decls.mo`'s own note explains why depth is expensive
 /// here beyond the stack (Boehm marks conservatively from the whole stack on
 /// every collection, so depth is paid again per collection).
 #[partial]

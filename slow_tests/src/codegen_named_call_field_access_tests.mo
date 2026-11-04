@@ -27,7 +27,7 @@
 /// other, since a value read from the wrong field is still a perfectly
 /// well-formed integer.
 open IO {println}
-use lang::codegen::test::e2e_harness {compile_source_run_expect}
+use codegen::test::e2e_harness {compile_source_run_expect}
 
 /// The minimal shape: the SAME field access, once as an ordinary
 /// positional argument and once as a named one. Both must read field

@@ -39,7 +39,7 @@ def test_extern_sin_needs_libm : Bool :=
 /// self-hosted too, runtime/src/natives.mo, but a Boolean cannot show
 /// WHICH sign came back if this fails). Which ABI cast produces it
 /// (`sext`, not `zext`) is asserted against the emitted IR in
-/// `lang/src/codegen/test/extern_codegen_tests.mo`
+/// `codegen/src/test/extern_codegen_tests.mo`
 /// -- Monad's own `I32` operations all re-narrow to 32 bits, so no run-time
 /// value here could tell the two apart.
 #[test]

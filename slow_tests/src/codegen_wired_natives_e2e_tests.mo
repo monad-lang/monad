@@ -16,7 +16,7 @@
 /// `validate_no_unwired_natives`'s own doc comment for that story.
 /// `String.reverse` is therefore deliberately exercised below.
 use std::process {process_id}
-use lang::codegen::test::e2e_harness {compile_source_run_expect}
+use codegen::test::e2e_harness {compile_source_run_expect}
 
 /// The generated `monad_string_starts_with` byte loop. A too-long
 /// prefix must fall out through the byte comparison against the NUL

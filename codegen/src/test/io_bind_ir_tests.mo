@@ -1,5 +1,5 @@
 /// IR-shape gate for the IO do-bind fusion (`try_compile_io_bind_db`,
-/// `lang/src/codegen/emit.mo`), the heapless-loops H1 change.
+/// `codegen/src/emit.mo`), the heapless-loops H1 change.
 ///
 /// A do-bind in `IO` compiles to `monad_io_bind(m, closure)`, and the
 /// runtime runs the continuation inside the bind's own C frame -- so a
@@ -15,10 +15,10 @@
 ///
 /// The fixture module is named after the basename (`io_fused_ir`), so its
 /// defs are emitted as `io_fused_ir::<name>`.
-use lib::codegen::test::e2e_harness {
+use lib::test::e2e_harness {
     compile_source_ir, compile_source_run_expect, ir_function,
 }
-use lib::codegen::emit {check_contains}
+use lib::emit {check_contains}
 open IO {println}
 
 /// A self-recursive IO loop with one do-bind: pre-fusion this is

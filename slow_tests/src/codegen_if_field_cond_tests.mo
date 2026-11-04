@@ -21,7 +21,7 @@
 /// itself -- that takes the FIELD's LLVM type as the def's return type --
 /// so every read lives in the compiled source.
 open IO {println}
-use lang::codegen::test::e2e_harness {compile_source_run_expect}
+use codegen::test::e2e_harness {compile_source_run_expect}
 
 /// `done` first: the index that always worked, kept as the control.
 #[test]

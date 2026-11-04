@@ -23,7 +23,7 @@
 use std::test {Test.write_fixture}
 use std::process {exec_cmd, process_id}
 use lang::module {LoadedModules, load_file_modules}
-use lang::codegen::emit {compile_loaded_modules_to_ir}
+use codegen::emit {compile_loaded_modules_to_ir}
 
 #[test]
 def test_mutual_class_bridge_with_no_concrete_instance_fails_fast : IO Bool := do {

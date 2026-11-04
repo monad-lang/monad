@@ -8,7 +8,7 @@
 /// never stopped. `stdio_die_on_epipe` restores the old behaviour for
 /// stdio. These rows run the binary as `bin | head -n 1` and compare the
 /// BINARY's exit status.
-use lang::codegen::test::e2e_harness {compile_source_run_piped_expect}
+use codegen::test::e2e_harness {compile_source_run_piped_expect}
 
 /// Far more output than a pipe buffer holds, so the writes that follow
 /// head's exit fail with EPIPE: the binary must die of SIGPIPE (141),

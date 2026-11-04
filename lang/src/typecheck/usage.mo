@@ -1374,8 +1374,8 @@ def binder_ident (b : Binder) : Identifier :=
 /// Accumulator-passing, and every walker below it likewise: this runs
 /// over whole modules -- 3,817 defs for the compiler itself -- and the
 /// natural `List.cons x (recurse rest)` shape holds one native frame per
-/// node, which is the exact pathology `lang/codegen/decls.mo`'s
-/// `extract_defs` and `lang/codegen/qualify.mo`'s
+/// node, which is the exact pathology `codegen/decls.mo`'s
+/// `extract_defs` and `codegen/qualify.mo`'s
 /// `ambiguous_declared_names` document (and which Boehm then pays for
 /// again on every collection, since it marks conservatively from the
 /// whole stack).
@@ -1766,7 +1766,7 @@ def collect_uses_case (ctors : HashMap String Bool) (borrows : HashMap String Bo
 /// (`prepend_typed`, `lang/typecheck/infer.mo:1299`), so the LAST one
 /// ends up innermost at index 0 and the first sits at `n - 1`. Codegen
 /// agrees from the other side: `bind_match_fields`
-/// (`lang/codegen/emit.mo:653`) reads field `i` for the `i`-th name in
+/// (`codegen/emit.mo:653`) reads field `i` for the `i`-th name in
 /// written order. Getting this backwards silently attributes each
 /// binder's count to a different binder, which is why it is spelled out
 /// rather than inlined.

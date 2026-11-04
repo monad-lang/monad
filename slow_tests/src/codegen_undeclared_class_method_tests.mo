@@ -32,7 +32,7 @@
 use std::test {Test.write_fixture}
 use std::process {exec_cmd, process_id}
 use lang::module {load_file_modules}
-use lang::codegen::emit {compile_loaded_modules_to_ir}
+use codegen::emit {compile_loaded_modules_to_ir}
 
 #[test]
 def test_undeclared_class_method_fails_the_compile_clearly : IO Bool := do {

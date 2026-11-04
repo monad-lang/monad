@@ -1,5 +1,5 @@
 /// IR-shape gate for view-types P2's fused do-bind
-/// (`try_compile_view_bind_db`, `lang/src/codegen/emit.mo`).
+/// (`try_compile_view_bind_db`, `codegen/src/emit.mo`).
 ///
 /// A `Cell` accessor costs three allocations on the boxed path
 /// (`RawIO.io`, `IO.mk`, and the `Pair` the C runtime builds). The
@@ -19,10 +19,10 @@
 /// module: the compiler emits the `view_get_raw` wrapper (and the
 /// `Copy I64` dictionary) regardless of reachability, so a module-wide
 /// "no monad_view_get" check would be false by construction.
-use lib::codegen::test::e2e_harness {
+use lib::test::e2e_harness {
   compile_source_ir, compile_source_run_expect, ir_function,
 }
-use lib::codegen::emit {check_contains}
+use lib::emit {check_contains}
 open IO {println}
 
 /// Every Cell operation in the fused shape, in one do-block. `main`'s

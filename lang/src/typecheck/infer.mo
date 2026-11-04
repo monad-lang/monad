@@ -1965,7 +1965,7 @@ def derive_motive (scrutinee_idx : I64) (scrutinee_typ : Term) (expected_type : 
 /// violation` counter flags, and not `e.scrutinee` by projection, which
 /// breaks the termination checker's structural-decrease proof for the
 /// call into `type_check` below) -- the same idiom `term_has_struct_
-/// lit`'s own `elim` arm (R3a, `lang/codegen/validate.mo`) already uses
+/// lit`'s own `elim` arm (R3a, `codegen/validate.mo`) already uses
 /// for exactly this reason.
 ///
 /// `#[terminating]`: the call into `type_check_elim_motive` below carries
@@ -2737,7 +2737,7 @@ def validate_match_constructors (cases : List MatchCase) (scrutinee_term : Term)
 /// `class FromListLiteral` (`term_matches_carrier`'s own doc comment) is
 /// the measured regression from the one site that did not have that
 /// guarantee. The arm is the guarantee.
-def type_head_name (t : Term) : Option Identifier :=
+pub def type_head_name (t : Term) : Option Identifier :=
     match t {
         Term.ctx _loc inner => type_head_name inner,
         Term.var _ dbg =>
@@ -2764,7 +2764,7 @@ def type_head_name (t : Term) : Option Identifier :=
 /// `match x { List.cons hd rest => ..., List.empty => ... }` could pick
 /// `Vec` depending on scan order and then fail ("`Vec` has no
 /// `empty`") -- this was the single largest remaining blocker in
-/// `lang/codegen/emit.mo`'s corpus check. A scan-order-only fix
+/// `codegen/emit.mo`'s corpus check. A scan-order-only fix
 /// ("prefer first-declared") was tried and reverted: it fixed this one
 /// collision but regressed a DIFFERENT one once more of the corpus
 /// started passing (measured: emit.mo's error count went 14 -> 44) --
@@ -3095,7 +3095,7 @@ def validate_cases_against_inductive (cases : List MatchCase) (ind : Inductive) 
 // A match must cover every constructor of its scrutinee's inductive. Before
 // this the self-hosted checker reported NOTHING for a missing arm, and the
 // backend compensated by making the LAST arm unconditional
-// (`build_match_chain`, lang/codegen/emit.mo) -- so a match omitting `T.e`
+// (`build_match_chain`, codegen/emit.mo) -- so a match omitting `T.e`
 // silently ran `T.d`'s body and returned a wrong value. That shipped once:
 // plans/implementations/2026-08-29-native-io-op-non-exhaustive-match-crash.md.
 //
@@ -3209,7 +3209,7 @@ def uncovered_constructors (cases : List MatchCase) (ind : Inductive) : List Nam
 /// the scrutinee's type could not be resolved, which is frequent and genuine,
 /// and rejecting it would red the corpus at scale while STILL being unsound
 /// (it would reject provably exhaustive matches the resolver missed). Phase
-/// 2's per-tag runtime trap (lang/codegen/emit.mo) closes that hole at run
+/// 2's per-tag runtime trap (codegen/emit.mo) closes that hole at run
 /// time, on the tag actually computed, needing no static type at all.
 ///
 /// A def marked `#[allow_incomplete_match "<reason>"]` opts out via
@@ -3222,7 +3222,7 @@ def uncovered_constructors (cases : List MatchCase) (ind : Inductive) : List Nam
 /// caller (`elaborate_module_decls_reporting`, lang/module.mo) is
 /// best-effort and SWALLOWED the error, leaving the def un-elaborated for
 /// codegen's syntactic fallbacks to miscompile into a SIGSEGV with no
-/// diagnostic (`lang/codegen/validate.mo` documents that exact shape; it
+/// diagnostic (`codegen/validate.mo` documents that exact shape; it
 /// cost a ladder rung on 2026-10-06). `scope_for_elab_body` (lang/module.mo)
 /// still forces `incomplete_match_ok := true` unconditionally, so that path
 /// stays exempt by design -- only `check` (via `check_def_with_scope`)
@@ -3412,7 +3412,7 @@ def type_check_field_pattern_case (name : Identifier) (args : List Identifier) (
                     // The ELABORATED `MatchCase`'s own `args` (what codegen's
                     // `bind_match_fields`/`free_names_of_cases` actually bind
                     // names against -- see their own doc comments,
-                    // `lang/codegen/emit.mo`) must be the WRITTEN BINDER
+                    // `codegen/emit.mo`) must be the WRITTEN BINDER
                     // names (`{ term := body }`'s `body`), NOT `declared_
                     // names` (`term`, the struct's own canonical field name)
                     // -- `body`'s own embedded `Term.var` references are
@@ -4125,7 +4125,7 @@ def dotted_head_names_inductive (head : String) (scope : Scope) : Bool :=
 /// under -- the name the RESOLUTION actually found, not `head` as written.
 ///
 /// A def's own name is module-qualified by the time CODEGEN elaborates
-/// (`qualify_decl_names`, `lang.codegen.qualify`) -- `def vzero` in `simple`
+/// (`qualify_decl_names`, `codegen.qualify`) -- `def vzero` in `simple`
 /// is registered as `simple::vzero`, and references are rewritten to match by
 /// `resolve_open_alias_term_scoped` -- but that rewriter matches a reference
 /// by its WHOLE name text, and a dotted spelling is not one its keys ever
@@ -4134,7 +4134,7 @@ def dotted_head_names_inductive (head : String) (scope : Scope) : Bool :=
 /// through `scope_data_find_def`'s bare-alias fallback, which returns the
 /// QUALIFIED definition. Returning `head` there is what made the two disagree:
 /// the checker resolved, and codegen then built a reference to the bare
-/// `vzero` while `def_symbol_name` is the name VERBATIM (`lang/codegen/
+/// `vzero` while `def_symbol_name` is the name VERBATIM (`codegen/
 /// symbols.mo`) -- `call to undefined symbol(s): vzero`, the same failure the
 /// fallback exists to prevent, one stage later.
 ///
@@ -4248,7 +4248,7 @@ def try_global_field_access (id : Identifier) (expected_type : Term) (scope : Sc
 /// arms), so a qualified value reference like `List.cons` never
 /// resolves via `scope_resolve_name`'s plain `def_refs` lookup -- this
 /// was `type_check_free_var`'s biggest single remaining gap (confirmed
-/// via lang/codegen/emit.mo: ~100 of its "unknown variable" errors were
+/// via codegen/emit.mo: ~100 of its "unknown variable" errors were
 /// all qualified constructor references -- `List.cons`, `Option.none`,
 /// `Def.mk`, `Inductive.mk`, ...).
 ///
@@ -8157,7 +8157,7 @@ def type_check_sort_full (sort_term : Term) (level : SortLevel) (expected_type :
 ///
 /// **But this def is on the compile path, and the comment that used to
 /// say otherwise is how a miscompile hid here for weeks.**
-/// `desugar_struct_lits_decls` (`lang/codegen/emit.mo`) rewrites every
+/// `desugar_struct_lits_decls` (`codegen/emit.mo`) rewrites every
 /// annotated struct literal to a `Term.con` and hands the per-arg check
 /// to the elaborate pass right after it — so every `monad build` of a
 /// program holding one reaches this def. The constructor lookup below
@@ -9192,7 +9192,7 @@ def struct_lit_head_name (type_name : Option Term) (expected_type : Term) : Opti
 /// (`build_scope_struct` registers it as `NamePath.mk [mk]`) --
 /// `Con.mk` wants just the bare constructor `Identifier`, same as
 /// every other constructor-application site in this file.
-def struct_lit_con_name (np : NamePath) : Identifier :=
+pub def struct_lit_con_name (np : NamePath) : Identifier :=
     match np {
         NamePath.mk ids =>
             match list_last ids {
@@ -9239,7 +9239,7 @@ def list_last (ids : List Identifier) : Option Identifier :=
 /// `monad_get_field`/`monad_set_field` on field 7 or 8 read/wrote past
 /// the end of the allocation.
 #[terminating]
-def struct_lit_build_args (params : List Param) (fields : List StructLitField) : List (Option Term) :=
+pub def struct_lit_build_args (params : List Param) (fields : List StructLitField) : List (Option Term) :=
     match params {
         List.empty => List.empty,
         List.cons p rest =>
@@ -9711,7 +9711,7 @@ def named_call_def_fold_app (f : Term) (args : List Term) : Term :=
 /// base be a call at all (`struct_update_base`, `lang/parser.mo`).
 ///
 /// This used to leave a bare `Term.lit (Literal.struct_update base
-/// fields)` in place unconditionally — a term `lang/codegen/emit.mo`'s
+/// fields)` in place unconditionally — a term `codegen/emit.mo`'s
 /// `compile_lit_ir` has no case for at all, so ANY struct-update
 /// expression reaching codegen crashed with a non-exhaustive-match
 /// error (confirmed: `#[partial]`, only `num`/`flt`/`str`/`if_`/
@@ -9813,7 +9813,7 @@ def struct_update_override_args (params : List Param) (fields : List StructLitFi
 /// The wrapping match arm's binder names: one per declared field, PREFIXED.
 ///
 /// The prefix is load-bearing. Codegen binds an arm's args by NAME
-/// (`bind_match_fields`, `lang/codegen/emit.mo`), so a binder spelled like
+/// (`bind_match_fields`, `codegen/emit.mo`), so a binder spelled like
 /// the field would shadow a same-named outer variable inside the arm --
 /// and `{ r with status := status }`, a parameter passed to the field it
 /// is named after, is exactly how a struct update gets written. The
@@ -9874,7 +9874,7 @@ def struct_update_arm_args (overrides : List (Option Term)) (binders : List Iden
 /// match_`) gets REWRITTEN during type-checking (`type_check_field_
 /// pattern_case`'s own `declared_order_binders`, above) into a full,
 /// declared-order positional match `bind_match_fields`
-/// (`lang/codegen/emit.mo`) actually needs to extract the right field.
+/// (`codegen/emit.mo`) actually needs to extract the right field.
 /// An earlier version of this function (and `check_con_args_against_
 /// params` below) only returned `Bool`, discarding that elaboration --
 /// every caller then rebuilt the final `Con`/`Term.con` from the
@@ -10168,7 +10168,7 @@ def test_type_check_struct_lit_missing_field_rejected : Bool :=
 
 // --- Regression: the shape codegen's own struct-literal desugar produces ---
 //
-// `desugar_struct_lit_con` (`lang/codegen/emit.mo`) rewrites an annotated
+// `desugar_struct_lit_con` (`codegen/emit.mo`) rewrites an annotated
 // literal to `Con.mk <bare ctor> <type path> n args` and leaves the per-arg
 // CHECK to the elaborate pass that follows it. That pass is `type_check_con`,
 // and it used to look the constructor up under `typ_name ++ [cname]` --
@@ -10607,7 +10607,7 @@ def test_type_check_struct_update_bad_base_rejected : Bool :=
     }
 
 /// Regression test for the struct-update codegen crash fix: the checked
-/// term must be something `lang/src/codegen/emit.mo` actually compiles --
+/// term must be something `codegen/src/emit.mo` actually compiles --
 /// NOT a bare `Term.lit (Literal.struct_update ...)`, which
 /// `compile_lit_ir` has no real codegen for and which
 /// `type_check_struct_update` ALWAYS produced before that fix.
@@ -10955,7 +10955,7 @@ def test_struct_lit_build_args_substitutes_the_default : Bool :=
 
 /// The codegen-side spelling of `def vzero` in module `simple`:
 /// `qualify_decl_names` mints a single identifier carrying the `::`
-/// (`lang/codegen/qualify.mo`), which is what `bare_aliases` records under
+/// (`codegen/qualify.mo`), which is what `bare_aliases` records under
 /// the bare `vzero`.
 def qualified_vzero_name : NamePath :=
     NamePath.mk (List.cons (Identifier.id "simple::vzero") List.empty)

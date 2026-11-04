@@ -5,8 +5,8 @@ use lang::types {Def, i64, id, lit, num, package_private, sort_n}
 use llvm::ir {emit_module}
 use llvm::link {compile_ir_to_obj, compile_runtime_obj, link_objects}
 use runtime {}
-use lib::codegen::emit {compile_db_decls_ir}
-use lib::module {resolve_runtime_src}
+use lib::emit {compile_db_decls_ir}
+use lang::module {resolve_runtime_src}
 
 open Term {lit}
 open Literal {num}
@@ -31,7 +31,7 @@ def build_main42 : List Def :=
 /// Full e2e: compile 42 to LLVM IR, write file, run llc, link, execute.
 def main : IO I64 {
     // Per-process output directory, like every other codegen harness
-    // (`lang/src/codegen/test/e2e_harness.mo`, `compile_tests.mo`): a bare
+    // (`codegen/src/test/e2e_harness.mo`, `compile_tests.mo`): a bare
     // `/tmp` would put `monad_test_42`, its `.ll`/`.o` and the shared
     // `monad_runtime.o` at fixed absolute paths, so two `monad test` runs
     // on one machine -- or this file alongside any of them -- would link

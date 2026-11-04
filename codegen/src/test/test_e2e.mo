@@ -4,7 +4,7 @@ use lang::types {
   num, package_private, sort_n, var,
 }
 use llvm::ir {emit_module}
-use lib::codegen::emit {check_contains, compile_db_decls_ir}
+use lib::emit {check_contains, compile_db_decls_ir}
 
 open Term {lam, lit}
 open Literal {num}
@@ -78,7 +78,7 @@ def test_e2e_no_calling_convention : Bool :=
     Bool.not (check_contains text " cc ") && check_contains text "define i64 @"
 
 /// Regression test for the `IO`-typed `main` garbage-exit-code fix
-/// (`lang/codegen/emit.mo`'s `unwrap_io_return_blocks`/
+/// (`codegen/emit.mo`'s `unwrap_io_return_blocks`/
 /// `emit_type_head_is_io`): a `main` declared `IO I64` must have its
 /// generated LLVM body call the runtime's `monad_get_field` to unwrap
 /// the boxed `IO.mk (RawIO.io _)` payload before returning — confirmed by checking

@@ -3,7 +3,7 @@
 /// unification.md`) and the adjacent `String.length` native-wiring gap
 /// found while chasing it.
 ///
-/// Before the fix, `Literal.str` (`lang/codegen/emit.mo`) compiled a
+/// Before the fix, `Literal.str` (`codegen/emit.mo`) compiled a
 /// string literal to a raw `LLVMValue.global_` (`ptr i8_`), while every
 /// COMPUTED String (`String.concat`, a boxed field, ...) is `i64`-typed.
 /// A literal and a computed string meeting at the same `phi` (an `if`
@@ -24,7 +24,7 @@
 /// convention (reused verbatim below) -- real parsing/typechecking/
 /// desugaring needs to run to reach the actual bug shape.
 open IO {println}
-use lang::codegen::test::e2e_harness {compile_source_run_expect}
+use codegen::test::e2e_harness {compile_source_run_expect}
 
 /// The exact minimal repro from the plan doc: a recursive `if` whose
 /// `then` branch computes a String (`String.concat`) and whose `else`
@@ -65,7 +65,7 @@ def main (args : List String) : IO I64 :=
     compile_source_run_expect source "test_string_literal_both_branches_phi_merge" 3
 
 /// `String.length` (std/string.mo) had no entry in `native_runtime_fn_
-/// name` (`lang/codegen/emit.mo`) -- same "confirmed as a real gap"
+/// name` (`codegen/emit.mo`) -- same "confirmed as a real gap"
 /// shape as `string_concat`'s own doc comment there: a `#[native
 /// string_length]` def with no real body silently compiled to the
 /// generic "return Unit" stub, discarding its argument entirely and

@@ -23,8 +23,8 @@ use llvm::ir {LLVMModule, emit_module}
 use llvm::link {link_ir, mkdir_parent}
 use llvm::target {TargetSpec, TargetPlan}
 use runtime {}
-use lang::codegen::emit {compile_db_module_with_debug, compile_loaded_modules_to_ir_with_debug}
-use lang::codegen::decls {collect_all_decls_from_modules, export_names}
+use codegen::emit {compile_db_module_with_debug, compile_loaded_modules_to_ir_with_debug}
+use codegen::decls {collect_all_decls_from_modules, export_names}
 use lang::module {CheckDiagnostics, ElaboratedAndCache, collect_link_libs, collect_link_pkgs, get_loaded_all, ElaboratedModules, FileCheckAndCache, LoadedModules, ModuleInfo, ModuleInfoCache, bench_step, check_file_cached, check_module_with_scope_path, elaborate_loaded_modules, elaborate_loaded_modules_cached, elaborate_module_decls_best_effort, expand_check_paths, extract_directory, load_file_modules, load_module_with_info, module_name_from_path, module_info_cache_empty, resolve_runtime_src, try_parse_decls, try_parse_decls_strict}
 use lang::mote {
   Mote.discover, Mote.discover_config_target_dir, Mote.target_roots,
@@ -57,7 +57,7 @@ use std::map {}
 use lang::pretty {show_decls}
 use fmt::fmt {Fmt.default_config, Fmt.format_source}
 use fmt::diff {Diff.unified}
-use lang::codegen::test_driver {compile_loaded_modules_to_test_ir, is_no_tests_error, driver_report_note, driver_report_parsed}
+use codegen::test_driver {compile_loaded_modules_to_test_ir, is_no_tests_error, driver_report_note, driver_report_parsed}
 // The command line is declared and parsed in `cli.mo`/`cli_spec.mo`; the
 // wildcard is required because the derive's defs (`decode_command`) are
 // macro-generated and a named import of one does not resolve self-hosted

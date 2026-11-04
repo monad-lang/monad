@@ -22,7 +22,7 @@
 /// instead of the expected exit code, the same class as the take_while
 /// test's SIGSEGV-or-timeout signature.
 open IO {println}
-use lang::codegen::test::e2e_harness {compile_source_run_expect}
+use codegen::test::e2e_harness {compile_source_run_expect}
 
 /// The precomputed-tail shape at a depth where O(2^n) is hopeless but
 /// O(n) is instant: post-fix 64 elements resolve in microseconds.

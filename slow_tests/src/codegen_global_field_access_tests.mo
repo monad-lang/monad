@@ -35,7 +35,7 @@
 /// type and miscompiles. Every read lives in the compiled source string,
 /// behind an accessor.
 open IO {println}
-use lang::codegen::test::e2e_harness {compile_source_run_expect}
+use codegen::test::e2e_harness {compile_source_run_expect}
 
 /// The minimal shape, exactly as filed: one struct, one top-level def, and
 /// two accessors reading its two fields.

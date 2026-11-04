@@ -6,9 +6,9 @@ use lang::types {
 use llvm::ir {emit_module}
 use llvm::link {compile_ir_to_obj, compile_runtime_obj, link_objects}
 use runtime {}
-use lib::codegen::emit {compile_db_decls_ir, compile_db_module}
-use lib::module {resolve_runtime_src}
-use lib::scope {promote_instance_defs}
+use lib::emit {compile_db_decls_ir, compile_db_module}
+use lang::module {resolve_runtime_src}
+use lang::scope {promote_instance_defs}
 
 open Term {lit}
 open Literal {num}
@@ -138,7 +138,7 @@ def compile_link_run_expect (defs : List Def) (basename : String) (expected : I6
 }
 
 /// Regression test for the multi-arg direct-call fix
-/// (compile_general_db_call/flatten_app_spine, lang/codegen/emit.mo):
+/// (compile_general_db_call/flatten_app_spine, codegen/emit.mo):
 /// a call to a top-level 2-param function used to compile as two
 /// separate, each-wrong, single-argument calls instead of one correct
 /// 2-argument call. `subtract 10 3` must produce 7.
@@ -160,7 +160,7 @@ def test_compile_multiarg_call : IO Bool := do {
 }
 
 /// Regression tests for the real compile_match_ir tag-dispatch
-/// implementation (lang/codegen/emit.mo), the runtime tag/field
+/// implementation (codegen/emit.mo), the runtime tag/field
 /// accessors and List/constructor tag fixes (runtime.c), and the
 /// compile_db_def_ir "already terminated" fix (needed because a
 /// whole-body match like this compiles its own terminator, same shape
@@ -279,7 +279,7 @@ def test_compile_function_value_from_struct_field : IO Bool := do {
 }
 
 /// Regression test for the `let`-chain beta-reduction fix
-/// (`try_compile_let_beta_db`, lang/codegen/emit.mo): `let a := 2 in let
+/// (`try_compile_let_beta_db`, codegen/emit.mo): `let a := 2 in let
 /// b := 3 in I64.add a b` desugars (lang/parser.mo's `let_term_body`) to
 /// `Term.app (Term.lam a _ (Term.app (Term.lam b _ (I64.add a b)) 3)) 2`
 /// -- BEFORE this fix, each `Term.lam` here compiled via
@@ -310,7 +310,7 @@ def test_compile_nested_let_chain : IO Bool := do {
 
 /// Regression test for `I64.to_string`'s missing runtime backing
 /// (`monad_i64_to_string`, runtime.c + the `op_i64_to_string` NativeOp,
-/// lang/codegen/emit.mo/ir.mo): like `I64.add`, `I64.to_string`
+/// codegen/emit.mo/ir.mo): like `I64.add`, `I64.to_string`
 /// (init/number.mo) has no `:=` body at all -- before this fix it had
 /// NO runtime implementation whatsoever (not even a broken one), so any
 /// call compiled through the generic per-decl path (`compile_db_def_ir`

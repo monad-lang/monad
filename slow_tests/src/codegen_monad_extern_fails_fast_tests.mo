@@ -1,4 +1,4 @@
-/// Regression test for `validate_no_monad_externs` (`lang/codegen/validate.mo`):
+/// Regression test for `validate_no_monad_externs` (`codegen/validate.mo`):
 /// an `#[extern "c"]` declaration must not bind a Monad runtime symbol
 /// (`monad_*`). Those have the uniform i64 native ABI and a safe
 /// `#[native]` wrapper; an extern call bypasses both, and the earlier
@@ -11,7 +11,7 @@
 use std::test {Test.write_fixture}
 use std::process {exec_cmd, process_id}
 use lang::module {load_file_modules}
-use lang::codegen::emit {compile_loaded_modules_to_ir}
+use codegen::emit {compile_loaded_modules_to_ir}
 
 #[test]
 def test_monad_extern_link_fails_fast : IO Bool := do {

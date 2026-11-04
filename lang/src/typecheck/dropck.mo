@@ -5,7 +5,7 @@
 /// (*Design B: Viability
 /// Experiment*). This
 /// module decides WHERE a `monad_release` call would go; it does not
-/// emit one. Codegen wiring (`lang/codegen/emit.mo`) and the runtime's
+/// emit one. Codegen wiring (`codegen/emit.mo`) and the runtime's
 /// real free (`runtime/src/runtime.c`) are deliberately separate,
 /// unstarted work — see the design's own M3 section for why: this
 /// module is pure and safely testable in isolation, `emit.mo` is the
@@ -79,7 +79,7 @@
 /// real workload this cost is currently paid against, and the standard
 /// fix (thread an accumulator through the branches instead of
 /// appending, matching every other O(n) list-builder in this codebase —
-/// `lang/codegen/decls.mo`'s `extract_defs`, `qualify.mo`'s
+/// `codegen/decls.mo`'s `extract_defs`, `qualify.mo`'s
 /// `ambiguous_declared_names`) is well understood and small when the
 /// time comes. Recorded here so it is a known, deliberate deferral
 /// rather than a surprise the next person to touch this file has to
@@ -249,8 +249,8 @@ def any_leaf_true (bs : List Bool) : Bool :=
 /// keep the two in step when this module is wired.
 ///
 /// Accumulator-passing, like every corpus-scale walker in this
-/// codebase (`lang/codegen/decls.mo`'s `extract_defs`,
-/// `lang/codegen/qualify.mo`'s `ambiguous_declared_names`,
+/// codebase (`codegen/decls.mo`'s `extract_defs`,
+/// `codegen/qualify.mo`'s `ambiguous_declared_names`,
 /// `usage.mo`'s own `collect_binder_uses`): the natural
 /// `List.cons x (recurse rest)` shape holds one native frame per node,
 /// which those files' own doc comments document as a real stack-depth

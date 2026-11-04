@@ -25,7 +25,7 @@
 /// imports `name_ref_to_string` back rather than keeping the
 /// byte-identical copy it used to carry beside that import -- two
 /// definitions of one bare LLVM symbol, the shape
-/// `validate_no_colliding_def_symbols` (`lang/codegen/validate.mo`) now
+/// `validate_no_colliding_def_symbols` (`codegen/validate.mo`) now
 /// rejects and AGENTS.md item 18 describes.
 ///
 /// `sentinel` is the exception: it belongs to `Term`'s representation
@@ -57,7 +57,7 @@ use lang::types {
 use lib::types {Location, ParseSpan, field_access_chain, parse_span_is_unknown, show_module_path, show_name_path, show_operator}
 // The monomorphic string map, from the leaf module -- never `Map.lookup`,
 // whose generic dispatch can resolve to the wrong instance
-// (`lang/codegen/util.mo` documents the live bug).
+// (`codegen/util.mo` documents the live bug).
 use llvm::strmap {str_map_lookup}
 use std::map {HashMap}
 
@@ -275,7 +275,7 @@ def lower_name_global (nref : NameRef) : Term :=
 // declared here: codegen mangles a top-level def to its bare name, so a
 // second `def sentinel` would be a second definition of the LLVM symbol
 // `@sentinel` -- the shape `validate_no_colliding_def_symbols`
-// (`lang/codegen/validate.mo`) now rejects outright.
+// (`codegen/validate.mo`) now rejects outright.
 
 #[partial]
 def find_index (id: Identifier) (ctx: List Identifier) (depth: I64) : Option I64 :=
@@ -294,7 +294,7 @@ def show_name_path_dotted (np : NamePath) : String := show_name_path np
 
 /// A qualified reference rendered the way codegen spells a DEFINITION:
 /// dotted module half, `::`, dotted name half (`std.process::process_id`).
-/// Mirrors `qualified_def_name_str` (`lang/codegen/qualify.mo`) -- the two
+/// Mirrors `qualified_def_name_str` (`codegen/qualify.mo`) -- the two
 /// must stay in step, which `emit.mo`'s `gate_result` check assumes.
 #[partial]
 def qualified_ref_symbol (qn : QualifiedName) : String :=
@@ -317,7 +317,7 @@ def name_ref_to_string (nref : NameRef) : Option String := match nref {
     // `Display` (see its doc comment in `lang/types.mo`) and is what
     // diagnostics should keep showing. A reference must agree with what
     // codegen emits for the DEFINITION (`qualified_def_name_str`,
-    // `lang/codegen/qualify.mo`), or the call is emitted under a symbol
+    // `codegen/qualify.mo`), or the call is emitted under a symbol
     // nothing defines and `llc` fails with "use of undefined value".
     NameRef.nqn qn => Option.some (qualified_ref_symbol qn),
     NameRef.nop op => Option.some (show_operator op),
@@ -551,7 +551,7 @@ def collect_do_stmt_rems (s : DoStmt) (acc : List I64) : List I64 := match s {
 /// is what implements placement rule R2 -- never wrap a `lam` or its
 /// direct body. A caller-based rule would break at every function, because
 /// a def body's outermost node IS a lam; and a wrapper between two lams
-/// truncates `collect_db_params` (`lang/codegen/ctx.mo`), which counts
+/// truncates `collect_db_params` (`codegen/ctx.mo`), which counts
 /// them to derive a compiled function's parameter count.
 ///
 /// `quote_` is excluded because its body is syntax-as-data, not code.
