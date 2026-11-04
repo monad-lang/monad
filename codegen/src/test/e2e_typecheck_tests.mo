@@ -14,21 +14,26 @@ open NumSuffix {i64}
 open Param {mk}
 open Def {mk}
 
-/// Test that we can compile a simple function and verify it produces LLVM IR
-#[test]
-def test_compile_simple_function : Bool :=
-    let id := Identifier.id "simple" in
-    let body := Term.lit (Literal.num 42 NumSuffix.i64) in
-    let term_ := Term.lam (binder_named (Identifier.id "x")) (sort_n 1) body in
-    let def_ := Def.mk
+/// Compile one `Def` named by `id`, with `term_` as its body, and return
+/// the rendered module text. The IR-shape tests below used to spell this
+/// same `Def.mk` by hand.
+def compile_one_def_text (id : Identifier) (term_ : Term) : String :=
+    let def_ : Def := Def.mk
         (NamePath.mk (List.cons id List.empty))
         (sort_n 1)
         term_
         List.empty
         List.empty
         Visibility.package_private List.empty in
-    let mod_ := compile_db_decls_ir (List.cons def_ List.empty) in
-    let text := emit_module mod_ in
+    emit_module (compile_db_decls_ir (List.cons def_ List.empty))
+
+/// Test that we can compile a simple function and verify it produces LLVM IR
+#[test]
+def test_compile_simple_function : Bool :=
+    let id := Identifier.id "simple" in
+    let body := Term.lit (Literal.num 42 NumSuffix.i64) in
+    let term_ := Term.lam (binder_named (Identifier.id "x")) (sort_n 1) body in
+    let text := compile_one_def_text id term_ in
     check_contains text "simple"
 
 /// Test that we can compile a function with arithmetic
@@ -41,15 +46,7 @@ def test_compile_arithmetic : Bool :=
     let add_var := Term.var 0 (DebugName.named (Identifier.id "I64_add")) in
     let body := Term.app (Term.app add_var x_var) one in
     let term_ := Term.lam (binder_named x_id) (sort_n 1) body in
-    let def_ := Def.mk
-        (NamePath.mk (List.cons id List.empty))
-        (sort_n 1)
-        term_
-        List.empty
-        List.empty
-        Visibility.package_private List.empty in
-    let mod_ := compile_db_decls_ir (List.cons def_ List.empty) in
-    let text := emit_module mod_ in
+    let text := compile_one_def_text id term_ in
     check_contains text "add i64"
 
 /// Test that we can compile multiple definitions
@@ -96,15 +93,7 @@ def test_compile_subtraction : Bool :=
     let sub_var := Term.var 0 (DebugName.named (Identifier.id "I64_sub")) in
     let body := Term.app (Term.app sub_var x_var) y_var in
     let term_ := Term.lam (binder_named x_id) (sort_n 1) (Term.lam (binder_named y_id) (sort_n 1) body) in
-    let def_ := Def.mk
-        (NamePath.mk (List.cons id List.empty))
-        (sort_n 1)
-        term_
-        List.empty
-        List.empty
-        Visibility.package_private List.empty in
-    let mod_ := compile_db_decls_ir (List.cons def_ List.empty) in
-    let text := emit_module mod_ in
+    let text := compile_one_def_text id term_ in
     check_contains text "sub i64"
 
 /// Test compilation of multiplication
@@ -118,15 +107,7 @@ def test_compile_multiplication : Bool :=
     let mul_var := Term.var 0 (DebugName.named (Identifier.id "I64_mul")) in
     let body := Term.app (Term.app mul_var x_var) y_var in
     let term_ := Term.lam (binder_named x_id) (sort_n 1) (Term.lam (binder_named y_id) (sort_n 1) body) in
-    let def_ := Def.mk
-        (NamePath.mk (List.cons id List.empty))
-        (sort_n 1)
-        term_
-        List.empty
-        List.empty
-        Visibility.package_private List.empty in
-    let mod_ := compile_db_decls_ir (List.cons def_ List.empty) in
-    let text := emit_module mod_ in
+    let text := compile_one_def_text id term_ in
     check_contains text "mul i64"
 
 /// Test compilation of division
@@ -140,15 +121,7 @@ def test_compile_division : Bool :=
     let div_var := Term.var 0 (DebugName.named (Identifier.id "I64_div")) in
     let body := Term.app (Term.app div_var x_var) y_var in
     let term_ := Term.lam (binder_named x_id) (sort_n 1) (Term.lam (binder_named y_id) (sort_n 1) body) in
-    let def_ := Def.mk
-        (NamePath.mk (List.cons id List.empty))
-        (sort_n 1)
-        term_
-        List.empty
-        List.empty
-        Visibility.package_private List.empty in
-    let mod_ := compile_db_decls_ir (List.cons def_ List.empty) in
-    let text := emit_module mod_ in
+    let text := compile_one_def_text id term_ in
     check_contains text "sdiv i64"
 
 /// Test compilation of equality comparison.
@@ -170,15 +143,7 @@ def test_compile_equality : Bool :=
     let eq_var := Term.var 0 (DebugName.named (Identifier.id "I64_beq")) in
     let body := Term.app (Term.app eq_var x_var) y_var in
     let term_ := Term.lam (binder_named x_id) (sort_n 1) (Term.lam (binder_named y_id) (sort_n 1) body) in
-    let def_ := Def.mk
-        (NamePath.mk (List.cons id List.empty))
-        (sort_n 1)
-        term_
-        List.empty
-        List.empty
-        Visibility.package_private List.empty in
-    let mod_ := compile_db_decls_ir (List.cons def_ List.empty) in
-    let text := emit_module mod_ in
+    let text := compile_one_def_text id term_ in
     check_contains text "icmp eq i64"
 
 /// Test compilation of nested arithmetic expressions
@@ -195,15 +160,7 @@ def test_compile_nested_arithmetic : Bool :=
     let mul_result := Term.app (Term.app mul_var x_var) two in
     let body := Term.app (Term.app add_var mul_result) three in
     let term_ := Term.lam (binder_named x_id) (sort_n 1) body in
-    let def_ := Def.mk
-        (NamePath.mk (List.cons id List.empty))
-        (sort_n 1)
-        term_
-        List.empty
-        List.empty
-        Visibility.package_private List.empty in
-    let mod_ := compile_db_decls_ir (List.cons def_ List.empty) in
-    let text := emit_module mod_ in
+    let text := compile_one_def_text id term_ in
     check_contains text "mul i64" && check_contains text "add i64"
 
 /// Test compilation with string literals
@@ -212,15 +169,7 @@ def test_compile_string_literal : Bool :=
     let id := Identifier.id "greet" in
     let body := Term.lit (Literal.str "hello") in
     let term_ := Term.lam (binder_named (Identifier.id "x")) (sort_n 1) body in
-    let def_ := Def.mk
-        (NamePath.mk (List.cons id List.empty))
-        (sort_n 1)
-        term_
-        List.empty
-        List.empty
-        Visibility.package_private List.empty in
-    let mod_ := compile_db_decls_ir (List.cons def_ List.empty) in
-    let text := emit_module mod_ in
+    let text := compile_one_def_text id term_ in
     check_contains text "hello"
 
 /// Test that main function is renamed to main_monad
@@ -229,15 +178,7 @@ def test_main_renaming : Bool :=
     let id := Identifier.id "main" in
     let body := Term.lit (Literal.num 0 NumSuffix.i64) in
     let term_ := Term.lam (binder_named (Identifier.id "x")) (sort_n 1) body in
-    let def_ := Def.mk
-        (NamePath.mk (List.cons id List.empty))
-        (sort_n 1)
-        term_
-        List.empty
-        List.empty
-        Visibility.package_private List.empty in
-    let mod_ := compile_db_decls_ir (List.cons def_ List.empty) in
-    let text := emit_module mod_ in
+    let text := compile_one_def_text id term_ in
     check_contains text "main_monad"
 
 /// Test compilation with if-then-else (using native equality)
@@ -253,15 +194,7 @@ def test_compile_if_then_else : Bool :=
     let else_val := Term.lit (Literal.num 20 NumSuffix.i64) in
     let body := Term.lit (Literal.if_ cond then_val else_val) in
     let term_ := Term.lam (binder_named (Identifier.id "x")) (sort_n 1) body in
-    let def_ := Def.mk
-        (NamePath.mk (List.cons id List.empty))
-        (sort_n 1)
-        term_
-        List.empty
-        List.empty
-        Visibility.package_private List.empty in
-    let mod_ := compile_db_decls_ir (List.cons def_ List.empty) in
-    let text := emit_module mod_ in
+    let text := compile_one_def_text id term_ in
     // Should contain branch instruction
     check_contains text "br i1"
 
@@ -276,15 +209,7 @@ def test_compile_less_than : Bool :=
     let lt_var := Term.var 0 (DebugName.named (Identifier.id "I64_lt")) in
     let body := Term.app (Term.app lt_var x_var) y_var in
     let term_ := Term.lam (binder_named x_id) (sort_n 1) (Term.lam (binder_named y_id) (sort_n 1) body) in
-    let def_ := Def.mk
-        (NamePath.mk (List.cons id List.empty))
-        (sort_n 1)
-        term_
-        List.empty
-        List.empty
-        Visibility.package_private List.empty in
-    let mod_ := compile_db_decls_ir (List.cons def_ List.empty) in
-    let text := emit_module mod_ in
+    let text := compile_one_def_text id term_ in
     check_contains text "icmp slt i64"
 
 /// Test compilation of greater-than comparison
@@ -298,15 +223,7 @@ def test_compile_greater_than : Bool :=
     let gt_var := Term.var 0 (DebugName.named (Identifier.id "I64_gt")) in
     let body := Term.app (Term.app gt_var x_var) y_var in
     let term_ := Term.lam (binder_named x_id) (sort_n 1) (Term.lam (binder_named y_id) (sort_n 1) body) in
-    let def_ := Def.mk
-        (NamePath.mk (List.cons id List.empty))
-        (sort_n 1)
-        term_
-        List.empty
-        List.empty
-        Visibility.package_private List.empty in
-    let mod_ := compile_db_decls_ir (List.cons def_ List.empty) in
-    let text := emit_module mod_ in
+    let text := compile_one_def_text id term_ in
     check_contains text "icmp sgt i64"
 
 /// Test compilation of not-equal comparison
@@ -320,15 +237,7 @@ def test_compile_not_equal : Bool :=
     let ne_var := Term.var 0 (DebugName.named (Identifier.id "I64_ne")) in
     let body := Term.app (Term.app ne_var x_var) y_var in
     let term_ := Term.lam (binder_named x_id) (sort_n 1) (Term.lam (binder_named y_id) (sort_n 1) body) in
-    let def_ := Def.mk
-        (NamePath.mk (List.cons id List.empty))
-        (sort_n 1)
-        term_
-        List.empty
-        List.empty
-        Visibility.package_private List.empty in
-    let mod_ := compile_db_decls_ir (List.cons def_ List.empty) in
-    let text := emit_module mod_ in
+    let text := compile_one_def_text id term_ in
     check_contains text "icmp ne i64"
 
 /// Test compilation of nested function application with multiple parameters
@@ -348,15 +257,7 @@ def test_compile_multi_param_function : Bool :=
     let term_ := Term.lam (binder_named x_id) (sort_n 1) (
         Term.lam (binder_named y_id) (sort_n 1) (
         Term.lam (binder_named z_id) (sort_n 1) body)) in
-    let def_ := Def.mk
-        (NamePath.mk (List.cons id List.empty))
-        (sort_n 1)
-        term_
-        List.empty
-        List.empty
-        Visibility.package_private List.empty in
-    let mod_ := compile_db_decls_ir (List.cons def_ List.empty) in
-    let text := emit_module mod_ in
+    let text := compile_one_def_text id term_ in
     check_contains text "add i64"
 
 /// Test compilation of nested lambdas (currying)
@@ -371,15 +272,7 @@ def test_compile_nested_lambdas : Bool :=
     let inner_body := Term.app (Term.app add_var x_var) y_var in
     let inner_lam := Term.lam (binder_named y_id) (sort_n 1) inner_body in
     let term_ := Term.lam (binder_named x_id) (sort_n 1) inner_lam in
-    let def_ := Def.mk
-        (NamePath.mk (List.cons id List.empty))
-        (sort_n 1)
-        term_
-        List.empty
-        List.empty
-        Visibility.package_private List.empty in
-    let mod_ := compile_db_decls_ir (List.cons def_ List.empty) in
-    let text := emit_module mod_ in
+    let text := compile_one_def_text id term_ in
     check_contains text "make_adder"
 
 /// Test compilation with constant folding for arithmetic
@@ -391,15 +284,7 @@ def test_compile_constant_folding : Bool :=
     let add_var := Term.var 0 (DebugName.named (Identifier.id "I64_add")) in
     let body := Term.app (Term.app add_var five) three in
     let term_ := Term.lam (binder_named (Identifier.id "x")) (sort_n 1) body in
-    let def_ := Def.mk
-        (NamePath.mk (List.cons id List.empty))
-        (sort_n 1)
-        term_
-        List.empty
-        List.empty
-        Visibility.package_private List.empty in
-    let mod_ := compile_db_decls_ir (List.cons def_ List.empty) in
-    let text := emit_module mod_ in
+    let text := compile_one_def_text id term_ in
     // Should be optimized to just return 8
     check_contains text "8"
 
@@ -416,15 +301,7 @@ def test_compile_if_with_gt : Bool :=
     let else_val := Term.lit (Literal.num 200 NumSuffix.i64) in
     let body := Term.lit (Literal.if_ cond then_val else_val) in
     let term_ := Term.lam (binder_named (Identifier.id "x")) (sort_n 1) body in
-    let def_ := Def.mk
-        (NamePath.mk (List.cons id List.empty))
-        (sort_n 1)
-        term_
-        List.empty
-        List.empty
-        Visibility.package_private List.empty in
-    let mod_ := compile_db_decls_ir (List.cons def_ List.empty) in
-    let text := emit_module mod_ in
+    let text := compile_one_def_text id term_ in
     // Should contain branch instruction
     check_contains text "br i1"
 
@@ -441,15 +318,7 @@ def test_compile_constructor : Bool :=
     let pair_con := Con.mk pair_name pair_typ 2 (List.cons (Option.some x_var) (List.cons (Option.some y_var) List.empty)) in
     let body := Term.con pair_con in
     let term_ := Term.lam (binder_named x_id) (sort_n 1) (Term.lam (binder_named y_id) (sort_n 1) body) in
-    let def_ := Def.mk
-        (NamePath.mk (List.cons id List.empty))
-        (sort_n 1)
-        term_
-        List.empty
-        List.empty
-        Visibility.package_private List.empty in
-    let mod_ := compile_db_decls_ir (List.cons def_ List.empty) in
-    let text := emit_module mod_ in
+    let text := compile_one_def_text id term_ in
     check_contains text "make_pair"
 
 /// Test compilation of nested let-like expressions via lambda application
@@ -467,15 +336,7 @@ def test_compile_complex_expression : Bool :=
     let add2 := Term.app (Term.app add_var x_var) twenty in
     let body := Term.app (Term.app mul_var add1) add2 in
     let term_ := Term.lam (binder_named x_id) (sort_n 1) body in
-    let def_ := Def.mk
-        (NamePath.mk (List.cons id List.empty))
-        (sort_n 1)
-        term_
-        List.empty
-        List.empty
-        Visibility.package_private List.empty in
-    let mod_ := compile_db_decls_ir (List.cons def_ List.empty) in
-    let text := emit_module mod_ in
+    let text := compile_one_def_text id term_ in
     check_contains text "mul i64" && check_contains text "add i64"
 
 /// Test compilation with all four arithmetic operations
@@ -496,15 +357,7 @@ def test_compile_all_arithmetic : Bool :=
     let div_mul_a := Term.app (Term.app div_var mul_ab) a_var in
     let body := Term.app (Term.app sub_var add_ab) div_mul_a in
     let term_ := Term.lam (binder_named a_id) (sort_n 1) (Term.lam (binder_named b_id) (sort_n 1) body) in
-    let def_ := Def.mk
-        (NamePath.mk (List.cons id List.empty))
-        (sort_n 1)
-        term_
-        List.empty
-        List.empty
-        Visibility.package_private List.empty in
-    let mod_ := compile_db_decls_ir (List.cons def_ List.empty) in
-    let text := emit_module mod_ in
+    let text := compile_one_def_text id term_ in
     check_contains text "add i64" && check_contains text "sub i64" && 
     check_contains text "mul i64" && check_contains text "sdiv i64"
 
@@ -525,15 +378,7 @@ def test_compile_nested_if : Bool :=
     let inner_if := Term.lit (Literal.if_ cond2 then_val2 else_val2) in
     let body := Term.lit (Literal.if_ cond1 then_val1 inner_if) in
     let term_ := Term.lam (binder_named (Identifier.id "x")) (sort_n 1) body in
-    let def_ := Def.mk
-        (NamePath.mk (List.cons id List.empty))
-        (sort_n 1)
-        term_
-        List.empty
-        List.empty
-        Visibility.package_private List.empty in
-    let mod_ := compile_db_decls_ir (List.cons def_ List.empty) in
-    let text := emit_module mod_ in
+    let text := compile_one_def_text id term_ in
     // Should contain multiple branch instructions
     check_contains text "br i1"
 
@@ -546,15 +391,7 @@ def test_compile_bool_true : Bool :=
     let true_con := Con.mk (Identifier.id "true") bool_typ 0 List.empty in
     let body := Term.con true_con in
     let term_ := Term.lam (binder_named (Identifier.id "x")) (sort_n 1) body in
-    let def_ := Def.mk
-        (NamePath.mk (List.cons id List.empty))
-        (sort_n 1)
-        term_
-        List.empty
-        List.empty
-        Visibility.package_private List.empty in
-    let mod_ := compile_db_decls_ir (List.cons def_ List.empty) in
-    let text := emit_module mod_ in
+    let text := compile_one_def_text id term_ in
     check_contains text "bool_true"
 
 /// Test compilation of boolean false literal (constructor)
@@ -566,15 +403,7 @@ def test_compile_bool_false : Bool :=
     let false_con := Con.mk (Identifier.id "false") bool_typ 0 List.empty in
     let body := Term.con false_con in
     let term_ := Term.lam (binder_named (Identifier.id "x")) (sort_n 1) body in
-    let def_ := Def.mk
-        (NamePath.mk (List.cons id List.empty))
-        (sort_n 1)
-        term_
-        List.empty
-        List.empty
-        Visibility.package_private List.empty in
-    let mod_ := compile_db_decls_ir (List.cons def_ List.empty) in
-    let text := emit_module mod_ in
+    let text := compile_one_def_text id term_ in
     check_contains text "bool_false"
 
 /// Test compilation of Bool.not function call
@@ -591,15 +420,7 @@ def test_compile_bool_not : Bool :=
     let not_var := Term.var 0 (DebugName.named not_name) in
     let body := Term.app not_var x_var in
     let term_ := Term.lam (binder_named x_id) (sort_n 1) body in
-    let def_ := Def.mk
-        (NamePath.mk (List.cons id List.empty))
-        (sort_n 1)
-        term_
-        List.empty
-        List.empty
-        Visibility.package_private List.empty in
-    let mod_ := compile_db_decls_ir (List.cons def_ List.empty) in
-    let text := emit_module mod_ in
+    let text := compile_one_def_text id term_ in
     check_contains text "test_not"
 
 /// Test compilation of if-then-else with boolean literals
@@ -615,15 +436,7 @@ def test_compile_if_with_bool_literals : Bool :=
     // if true then 10 else 20
     let body := Term.lit (Literal.if_ true_val ten twenty) in
     let term_ := Term.lam (binder_named (Identifier.id "x")) (sort_n 1) body in
-    let def_ := Def.mk
-        (NamePath.mk (List.cons id List.empty))
-        (sort_n 1)
-        term_
-        List.empty
-        List.empty
-        Visibility.package_private List.empty in
-    let mod_ := compile_db_decls_ir (List.cons def_ List.empty) in
-    let text := emit_module mod_ in
+    let text := compile_one_def_text id term_ in
     check_contains text "br i1"
 
 /// Test compilation of List.empty constructor
@@ -635,15 +448,7 @@ def test_compile_list_empty : Bool :=
     let empty_con := Con.mk (Identifier.id "empty") list_typ 0 List.empty in
     let body := Term.con empty_con in
     let term_ := Term.lam (binder_named (Identifier.id "x")) (sort_n 1) body in
-    let def_ := Def.mk
-        (NamePath.mk (List.cons id List.empty))
-        (sort_n 1)
-        term_
-        List.empty
-        List.empty
-        Visibility.package_private List.empty in
-    let mod_ := compile_db_decls_ir (List.cons def_ List.empty) in
-    let text := emit_module mod_ in
+    let text := compile_one_def_text id term_ in
     check_contains text "list_empty"
 
 /// Test compilation of List.cons constructor
@@ -660,15 +465,7 @@ def test_compile_list_cons : Bool :=
     let cons_con := Con.mk cons_name list_typ 2 (List.cons (Option.some x_var) (List.cons (Option.some empty_val) List.empty)) in
     let body := Term.con cons_con in
     let term_ := Term.lam (binder_named x_id) (sort_n 1) body in
-    let def_ := Def.mk
-        (NamePath.mk (List.cons id List.empty))
-        (sort_n 1)
-        term_
-        List.empty
-        List.empty
-        Visibility.package_private List.empty in
-    let mod_ := compile_db_decls_ir (List.cons def_ List.empty) in
-    let text := emit_module mod_ in
+    let text := compile_one_def_text id term_ in
     check_contains text "list_cons"
 
 /// Test compilation of match expression with boolean
@@ -685,15 +482,7 @@ def test_compile_match_bool : Bool :=
     let cases := List.cons true_case (List.cons false_case List.empty) in
     let body := Term.lit (Literal.match_ x_var cases) in
     let term_ := Term.lam (binder_named x_id) (sort_n 1) body in
-    let def_ := Def.mk
-        (NamePath.mk (List.cons id List.empty))
-        (sort_n 1)
-        term_
-        List.empty
-        List.empty
-        Visibility.package_private List.empty in
-    let mod_ := compile_db_decls_ir (List.cons def_ List.empty) in
-    let text := emit_module mod_ in
+    let text := compile_one_def_text id term_ in
     check_contains text "match_bool"
 
 /// Test compilation of recursive factorial function
@@ -716,15 +505,7 @@ def test_compile_recursive_factorial : Bool :=
     let mul_result := Term.app (Term.app mul_var n_var) recursive_call in
     let body := Term.lit (Literal.if_ cond one mul_result) in
     let term_ := Term.lam (binder_named n_id) (sort_n 1) body in
-    let def_ := Def.mk
-        (NamePath.mk (List.cons id List.empty))
-        (sort_n 1)
-        term_
-        List.empty
-        List.empty
-        Visibility.package_private List.empty in
-    let mod_ := compile_db_decls_ir (List.cons def_ List.empty) in
-    let text := emit_module mod_ in
+    let text := compile_one_def_text id term_ in
     check_contains text "factorial"
 
 /// Test compilation of nested boolean expressions
@@ -748,15 +529,7 @@ def test_compile_nested_bool_expr : Bool :=
     let inner_if := Term.lit (Literal.if_ b_eq_true true_lit false_lit) in
     let body := Term.lit (Literal.if_ a_eq_true inner_if false_lit) in
     let term_ := Term.lam (binder_named a_id) (sort_n 1) (Term.lam (binder_named b_id) (sort_n 1) body) in
-    let def_ := Def.mk
-        (NamePath.mk (List.cons id List.empty))
-        (sort_n 1)
-        term_
-        List.empty
-        List.empty
-        Visibility.package_private List.empty in
-    let mod_ := compile_db_decls_ir (List.cons def_ List.empty) in
-    let text := emit_module mod_ in
+    let text := compile_one_def_text id term_ in
     check_contains text "br i1"
 
 /// Test compilation of Option.some constructor
@@ -770,15 +543,7 @@ def test_compile_option_some : Bool :=
     let some_con := Con.mk (Identifier.id "some") option_typ 1 (List.cons (Option.some x_var) List.empty) in
     let body := Term.con some_con in
     let term_ := Term.lam (binder_named x_id) (sort_n 1) body in
-    let def_ := Def.mk
-        (NamePath.mk (List.cons id List.empty))
-        (sort_n 1)
-        term_
-        List.empty
-        List.empty
-        Visibility.package_private List.empty in
-    let mod_ := compile_db_decls_ir (List.cons def_ List.empty) in
-    let text := emit_module mod_ in
+    let text := compile_one_def_text id term_ in
     check_contains text "option_some"
 
 /// Test compilation of Option.none constructor
@@ -790,15 +555,7 @@ def test_compile_option_none : Bool :=
     let none_con := Con.mk (Identifier.id "none") option_typ 0 List.empty in
     let body := Term.con none_con in
     let term_ := Term.lam (binder_named (Identifier.id "x")) (sort_n 1) body in
-    let def_ := Def.mk
-        (NamePath.mk (List.cons id List.empty))
-        (sort_n 1)
-        term_
-        List.empty
-        List.empty
-        Visibility.package_private List.empty in
-    let mod_ := compile_db_decls_ir (List.cons def_ List.empty) in
-    let text := emit_module mod_ in
+    let text := compile_one_def_text id term_ in
     check_contains text "option_none"
 
 /// Test compilation of Pair.pair constructor
@@ -814,15 +571,7 @@ def test_compile_pair : Bool :=
     let pair_con := Con.mk (Identifier.id "pair") pair_typ 2 (List.cons (Option.some x_var) (List.cons (Option.some y_var) List.empty)) in
     let body := Term.con pair_con in
     let term_ := Term.lam (binder_named x_id) (sort_n 1) (Term.lam (binder_named y_id) (sort_n 1) body) in
-    let def_ := Def.mk
-        (NamePath.mk (List.cons id List.empty))
-        (sort_n 1)
-        term_
-        List.empty
-        List.empty
-        Visibility.package_private List.empty in
-    let mod_ := compile_db_decls_ir (List.cons def_ List.empty) in
-    let text := emit_module mod_ in
+    let text := compile_one_def_text id term_ in
     check_contains text "make_pair"
 
 /// Test compilation of Result.ok constructor
@@ -836,15 +585,7 @@ def test_compile_result_ok : Bool :=
     let ok_con := Con.mk (Identifier.id "ok") result_typ 1 (List.cons (Option.some x_var) List.empty) in
     let body := Term.con ok_con in
     let term_ := Term.lam (binder_named x_id) (sort_n 1) body in
-    let def_ := Def.mk
-        (NamePath.mk (List.cons id List.empty))
-        (sort_n 1)
-        term_
-        List.empty
-        List.empty
-        Visibility.package_private List.empty in
-    let mod_ := compile_db_decls_ir (List.cons def_ List.empty) in
-    let text := emit_module mod_ in
+    let text := compile_one_def_text id term_ in
     check_contains text "result_ok"
 
 /// Test compilation of Result.err constructor
@@ -858,15 +599,7 @@ def test_compile_result_err : Bool :=
     let err_con := Con.mk (Identifier.id "err") result_typ 1 (List.cons (Option.some e_var) List.empty) in
     let body := Term.con err_con in
     let term_ := Term.lam (binder_named e_id) (sort_n 1) body in
-    let def_ := Def.mk
-        (NamePath.mk (List.cons id List.empty))
-        (sort_n 1)
-        term_
-        List.empty
-        List.empty
-        Visibility.package_private List.empty in
-    let mod_ := compile_db_decls_ir (List.cons def_ List.empty) in
-    let text := emit_module mod_ in
+    let text := compile_one_def_text id term_ in
     check_contains text "result_err"
 
 /// Test compilation with multiple nested constructors (Pair of Options)
@@ -889,15 +622,7 @@ def test_compile_nested_constructors : Bool :=
     let pair_con := Con.mk (Identifier.id "pair") pair_typ 2 (List.cons (Option.some some_val) (List.cons (Option.some none_val) List.empty)) in
     let body := Term.con pair_con in
     let term_ := Term.lam (binder_named x_id) (sort_n 1) body in
-    let def_ := Def.mk
-        (NamePath.mk (List.cons id List.empty))
-        (sort_n 1)
-        term_
-        List.empty
-        List.empty
-        Visibility.package_private List.empty in
-    let mod_ := compile_db_decls_ir (List.cons def_ List.empty) in
-    let text := emit_module mod_ in
+    let text := compile_one_def_text id term_ in
     check_contains text "nested_pair_option"
 
 /// Test compilation of mutually recursive functions (even and odd)
@@ -951,15 +676,7 @@ def test_compile_complex_control_flow : Bool :=
     let inner_if := Term.lit (Literal.if_ x_gt_zero mul_xy5 y_var) in
     let body := Term.lit (Literal.if_ x_lt_zero mul_xy10 inner_if) in
     let term_ := Term.lam (binder_named x_id) (sort_n 1) (Term.lam (binder_named y_id) (sort_n 1) body) in
-    let def_ := Def.mk
-        (NamePath.mk (List.cons id List.empty))
-        (sort_n 1)
-        term_
-        List.empty
-        List.empty
-        Visibility.package_private List.empty in
-    let mod_ := compile_db_decls_ir (List.cons def_ List.empty) in
-    let text := emit_module mod_ in
+    let text := compile_one_def_text id term_ in
     check_contains text "br i1"
 
 /// Test compilation of constructor with multiple fields (3-element tuple via nested Pairs)
@@ -980,15 +697,7 @@ def test_compile_triple : Bool :=
     let outer_pair_con := Con.mk (Identifier.id "pair") pair_typ 2 (List.cons (Option.some x_var) (List.cons (Option.some inner_pair_val) List.empty)) in
     let body := Term.con outer_pair_con in
     let term_ := Term.lam (binder_named x_id) (sort_n 1) (Term.lam (binder_named y_id) (sort_n 1) (Term.lam (binder_named z_id) (sort_n 1) body)) in
-    let def_ := Def.mk
-        (NamePath.mk (List.cons id List.empty))
-        (sort_n 1)
-        term_
-        List.empty
-        List.empty
-        Visibility.package_private List.empty in
-    let mod_ := compile_db_decls_ir (List.cons def_ List.empty) in
-    let text := emit_module mod_ in
+    let text := compile_one_def_text id term_ in
     check_contains text "triple"
 
 /// Test compilation of nested list constructors (List of Lists)
@@ -1006,15 +715,7 @@ def test_compile_nested_list : Bool :=
     let outer_cons := Con.mk (Identifier.id "cons") list_typ 2 (List.cons (Option.some inner_list) (List.cons (Option.some empty_val) List.empty)) in
     let body := Term.con outer_cons in
     let term_ := Term.lam (binder_named x_id) (sort_n 1) body in
-    let def_ := Def.mk
-        (NamePath.mk (List.cons id List.empty))
-        (sort_n 1)
-        term_
-        List.empty
-        List.empty
-        Visibility.package_private List.empty in
-    let mod_ := compile_db_decls_ir (List.cons def_ List.empty) in
-    let text := emit_module mod_ in
+    let text := compile_one_def_text id term_ in
     check_contains text "nested_list"
 
 /// Test compilation of chained native function applications
@@ -1034,15 +735,7 @@ def test_compile_chained_natives : Bool :=
     let mul_step := Term.app (Term.app mul_var add_step) ten in
     let body := Term.app (Term.app sub_var mul_step) twenty in
     let term_ := Term.lam (binder_named x_id) (sort_n 1) body in
-    let def_ := Def.mk
-        (NamePath.mk (List.cons id List.empty))
-        (sort_n 1)
-        term_
-        List.empty
-        List.empty
-        Visibility.package_private List.empty in
-    let mod_ := compile_db_decls_ir (List.cons def_ List.empty) in
-    let text := emit_module mod_ in
+    let text := compile_one_def_text id term_ in
     check_contains text "add i64" && check_contains text "mul i64" && check_contains text "sub i64"
 
 /// Test compilation of mixed boolean and arithmetic operations
@@ -1063,15 +756,7 @@ def test_compile_mixed_bool_arith : Bool :=
     let else_val := add_result in
     let body := Term.lit (Literal.if_ cond then_val else_val) in
     let term_ := Term.lam (binder_named x_id) (sort_n 1) body in
-    let def_ := Def.mk
-        (NamePath.mk (List.cons id List.empty))
-        (sort_n 1)
-        term_
-        List.empty
-        List.empty
-        Visibility.package_private List.empty in
-    let mod_ := compile_db_decls_ir (List.cons def_ List.empty) in
-    let text := emit_module mod_ in
+    let text := compile_one_def_text id term_ in
     check_contains text "br i1" && check_contains text "add i64"
 
 /// Test compilation of Result with both ok and err cases
@@ -1096,15 +781,7 @@ def test_compile_result_both : Bool :=
     let pair_con := Con.mk (Identifier.id "pair") pair_typ 2 (List.cons (Option.some ok_val) (List.cons (Option.some err_val) List.empty)) in
     let body := Term.con pair_con in
     let term_ := Term.lam (binder_named x_id) (sort_n 1) body in
-    let def_ := Def.mk
-        (NamePath.mk (List.cons id List.empty))
-        (sort_n 1)
-        term_
-        List.empty
-        List.empty
-        Visibility.package_private List.empty in
-    let mod_ := compile_db_decls_ir (List.cons def_ List.empty) in
-    let text := emit_module mod_ in
+    let text := compile_one_def_text id term_ in
     check_contains text "result_both"
 
 /// Test compilation of deeply nested if-then-else with arithmetic
@@ -1129,15 +806,7 @@ def test_compile_deeply_nested_if : Bool :=
     let middle_if := Term.lit (Literal.if_ cond2 ten middle_else) in
     let body := Term.lit (Literal.if_ cond1 one middle_if) in
     let term_ := Term.lam (binder_named x_id) (sort_n 1) body in
-    let def_ := Def.mk
-        (NamePath.mk (List.cons id List.empty))
-        (sort_n 1)
-        term_
-        List.empty
-        List.empty
-        Visibility.package_private List.empty in
-    let mod_ := compile_db_decls_ir (List.cons def_ List.empty) in
-    let text := emit_module mod_ in
+    let text := compile_one_def_text id term_ in
     // Should contain multiple branch instructions
     check_contains text "br i1"
 
@@ -1166,15 +835,7 @@ def test_compile_lambda_multi_arg : Bool :=
     let lam_5_3 := Term.app lam_5 three in
     let result := Term.app lam_5_3 two in
     let term_ := result in
-    let def_ := Def.mk
-        (NamePath.mk (List.cons id List.empty))
-        (sort_n 1)
-        term_
-        List.empty
-        List.empty
-        Visibility.package_private List.empty in
-    let mod_ := compile_db_decls_ir (List.cons def_ List.empty) in
-    let text := emit_module mod_ in
+    let text := compile_one_def_text id term_ in
     check_contains text "lam_multi_arg"
 
 /// Test compilation of a quantified type
@@ -1187,15 +848,7 @@ def test_compile_forall_type : Bool :=
     // {A : Type} -> A (a quantified binder, `Term.forall` until R2b)
     let forall_body := Term.lam (binder_named x_id) (sort_n 1) x_var in
     let term_ := Term.pi (binder_binder a_id) (sort_n 1) forall_body in
-    let def_ := Def.mk
-        (NamePath.mk (List.cons id List.empty))
-        (sort_n 1)
-        term_
-        List.empty
-        List.empty
-        Visibility.package_private List.empty in
-    let mod_ := compile_db_decls_ir (List.cons def_ List.empty) in
-    let text := emit_module mod_ in
+    let text := compile_one_def_text id term_ in
     check_contains text "forall_test"
 
 /// Test compilation of pi type
@@ -1210,15 +863,7 @@ def test_compile_pi_type : Bool :=
     let pi_body := Term.pi (binder_binder b_id) (sort_n 1) (
         Term.lam binder_anon (sort_n 1) a_var) in
     let term_ := Term.pi binder_anon a_var pi_body in
-    let def_ := Def.mk
-        (NamePath.mk (List.cons id List.empty))
-        (sort_n 1)
-        term_
-        List.empty
-        List.empty
-        Visibility.package_private List.empty in
-    let mod_ := compile_db_decls_ir (List.cons def_ List.empty) in
-    let text := emit_module mod_ in
+    let text := compile_one_def_text id term_ in
     check_contains text "pi_test"
 
 /// Test compilation of type_ (universe) term
@@ -1242,15 +887,7 @@ def test_compile_type_universe : Bool :=
 def test_compile_hole : Bool :=
     let id := Identifier.id "hole_test" in
     let term_ := Term.hole in
-    let def_ := Def.mk
-        (NamePath.mk (List.cons id List.empty))
-        (sort_n 1)
-        term_
-        List.empty
-        List.empty
-        Visibility.package_private List.empty in
-    let mod_ := compile_db_decls_ir (List.cons def_ List.empty) in
-    let text := emit_module mod_ in
+    let text := compile_one_def_text id term_ in
     check_contains text "hole_test"
 
 /// Test compilation of partial application (currying)
@@ -1265,15 +902,7 @@ def test_compile_partial_application : Bool :=
     let partial_add := Term.app add_var five in
     let body := Term.app partial_add x_var in
     let term_ := Term.lam (binder_named x_id) (sort_n 1) body in
-    let def_ := Def.mk
-        (NamePath.mk (List.cons id List.empty))
-        (sort_n 1)
-        term_
-        List.empty
-        List.empty
-        Visibility.package_private List.empty in
-    let mod_ := compile_db_decls_ir (List.cons def_ List.empty) in
-    let text := emit_module mod_ in
+    let text := compile_one_def_text id term_ in
     check_contains text "partial_app"
 
 /// Test compilation of multiple definitions with dependencies
@@ -1326,15 +955,7 @@ def test_compile_match_multiple_cases : Bool :=
     let cases := List.cons true_case (List.cons false_case List.empty) in
     let body := Term.lit (Literal.match_ x_var cases) in
     let term_ := Term.lam (binder_named x_id) (sort_n 1) body in
-    let def_ := Def.mk
-        (NamePath.mk (List.cons id List.empty))
-        (sort_n 1)
-        term_
-        List.empty
-        List.empty
-        Visibility.package_private List.empty in
-    let mod_ := compile_db_decls_ir (List.cons def_ List.empty) in
-    let text := emit_module mod_ in
+    let text := compile_one_def_text id term_ in
     check_contains text "match_multi"
 
 /// Test compilation of comparison operators (simplified version)
@@ -1349,15 +970,7 @@ def test_compile_comparison_ops : Bool :=
     let eq_var := Term.var 0 (DebugName.named (Identifier.id "I64_eq")) in
     let body := Term.app (Term.app eq_var x_var) y_var in
     let term_ := Term.lam (binder_named x_id) (sort_n 1) (Term.lam (binder_named y_id) (sort_n 1) body) in
-    let def_ := Def.mk
-        (NamePath.mk (List.cons id List.empty))
-        (sort_n 1)
-        term_
-        List.empty
-        List.empty
-        Visibility.package_private List.empty in
-    let mod_ := compile_db_decls_ir (List.cons def_ List.empty) in
-    let text := emit_module mod_ in
+    let text := compile_one_def_text id term_ in
     check_contains text "comparison_ops"
 
 /// Test compilation of arithmetic operators (simplified version)
@@ -1372,15 +985,7 @@ def test_compile_arithmetic_ops : Bool :=
     let add_var := Term.var 0 (DebugName.named (Identifier.id "I64_add")) in
     let body := Term.app (Term.app add_var x_var) y_var in
     let term_ := Term.lam (binder_named x_id) (sort_n 1) (Term.lam (binder_named y_id) (sort_n 1) body) in
-    let def_ := Def.mk
-        (NamePath.mk (List.cons id List.empty))
-        (sort_n 1)
-        term_
-        List.empty
-        List.empty
-        Visibility.package_private List.empty in
-    let mod_ := compile_db_decls_ir (List.cons def_ List.empty) in
-    let text := emit_module mod_ in
+    let text := compile_one_def_text id term_ in
     check_contains text "arithmetic_ops"
 
 /// Test compilation of recursive Fibonacci function
@@ -1406,15 +1011,7 @@ def test_compile_fibonacci : Bool :=
     let sum := Term.app (Term.app add_var fib_n1) fib_n2 in
     let body := Term.lit (Literal.if_ cond n_var sum) in
     let term_ := Term.lam (binder_named n_id) (sort_n 1) body in
-    let def_ := Def.mk
-        (NamePath.mk (List.cons id List.empty))
-        (sort_n 1)
-        term_
-        List.empty
-        List.empty
-        Visibility.package_private List.empty in
-    let mod_ := compile_db_decls_ir (List.cons def_ List.empty) in
-    let text := emit_module mod_ in
+    let text := compile_one_def_text id term_ in
     check_contains text "fibonacci"
 
 /// Test compilation of multiple nested lists (List (List (List A)))
@@ -1437,15 +1034,7 @@ def test_compile_triple_nested_list : Bool :=
     let outer_cons := Con.mk (Identifier.id "cons") list_typ 2 (List.cons (Option.some middle_list) (List.cons (Option.some empty_val) List.empty)) in
     let body := Term.con outer_cons in
     let term_ := Term.lam (binder_named x_id) (sort_n 1) body in
-    let def_ := Def.mk
-        (NamePath.mk (List.cons id List.empty))
-        (sort_n 1)
-        term_
-        List.empty
-        List.empty
-        Visibility.package_private List.empty in
-    let mod_ := compile_db_decls_ir (List.cons def_ List.empty) in
-    let text := emit_module mod_ in
+    let text := compile_one_def_text id term_ in
     check_contains text "triple_nested"
 
 /// Test compilation with all available constructors (Bool, List, Option, Pair, Result)
@@ -1498,15 +1087,7 @@ def test_compile_nat_zero : Bool :=
     let zero_con := Con.mk (Identifier.id "zero") nat_typ 0 List.empty in
     let body := Term.con zero_con in
     let term_ := Term.lam (binder_named (Identifier.id "x")) (sort_n 1) body in
-    let def_ := Def.mk
-        (NamePath.mk (List.cons id List.empty))
-        (sort_n 1)
-        term_
-        List.empty
-        List.empty
-        Visibility.package_private List.empty in
-    let mod_ := compile_db_decls_ir (List.cons def_ List.empty) in
-    let text := emit_module mod_ in
+    let text := compile_one_def_text id term_ in
     check_contains text "nat_zero"
 
 /// Test compilation of Nat.succ constructor
@@ -1522,15 +1103,7 @@ def test_compile_nat_succ : Bool :=
     let succ_con := Con.mk (Identifier.id "succ") nat_typ 1 (List.cons (Option.some x_var) List.empty) in
     let body := Term.con succ_con in
     let term_ := Term.lam (binder_named x_id) (sort_n 1) body in
-    let def_ := Def.mk
-        (NamePath.mk (List.cons id List.empty))
-        (sort_n 1)
-        term_
-        List.empty
-        List.empty
-        Visibility.package_private List.empty in
-    let mod_ := compile_db_decls_ir (List.cons def_ List.empty) in
-    let text := emit_module mod_ in
+    let text := compile_one_def_text id term_ in
     check_contains text "nat_succ"
 
 /// Test compilation of nested Nat constructors (succ(succ(zero)))
@@ -1546,15 +1119,7 @@ def test_compile_nested_nat : Bool :=
     let succ_con2 := Con.mk (Identifier.id "succ") nat_typ 1 (List.cons (Option.some succ_val1) List.empty) in
     let body := Term.con succ_con2 in
     let term_ := Term.lam (binder_named (Identifier.id "x")) (sort_n 1) body in
-    let def_ := Def.mk
-        (NamePath.mk (List.cons id List.empty))
-        (sort_n 1)
-        term_
-        List.empty
-        List.empty
-        Visibility.package_private List.empty in
-    let mod_ := compile_db_decls_ir (List.cons def_ List.empty) in
-    let text := emit_module mod_ in
+    let text := compile_one_def_text id term_ in
     check_contains text "nested_nat"
 
 /// Test compilation of complex nested constructors (List of Option of Nat)
@@ -1582,15 +1147,7 @@ def test_compile_list_option_nat : Bool :=
     let cons_con2 := Con.mk (Identifier.id "cons") list_typ 2 (List.cons (Option.some none_nat) (List.cons (Option.some cons_val1) List.empty)) in
     let body := Term.con cons_con2 in
     let term_ := Term.lam (binder_named (Identifier.id "x")) (sort_n 1) body in
-    let def_ := Def.mk
-        (NamePath.mk (List.cons id List.empty))
-        (sort_n 1)
-        term_
-        List.empty
-        List.empty
-        Visibility.package_private List.empty in
-    let mod_ := compile_db_decls_ir (List.cons def_ List.empty) in
-    let text := emit_module mod_ in
+    let text := compile_one_def_text id term_ in
     check_contains text "list_option_nat"
 
 /// Test compilation of deeply nested Nat (succ(succ(succ(zero))))
@@ -1608,15 +1165,7 @@ def test_compile_nat_three : Bool :=
     let succ_con3 := Con.mk (Identifier.id "succ") nat_typ 1 (List.cons (Option.some two_val) List.empty) in
     let body := Term.con succ_con3 in
     let term_ := Term.lam (binder_named (Identifier.id "x")) (sort_n 1) body in
-    let def_ := Def.mk
-        (NamePath.mk (List.cons id List.empty))
-        (sort_n 1)
-        term_
-        List.empty
-        List.empty
-        Visibility.package_private List.empty in
-    let mod_ := compile_db_decls_ir (List.cons def_ List.empty) in
-    let text := emit_module mod_ in
+    let text := compile_one_def_text id term_ in
     check_contains text "nat_three"
 
 /// Test compilation of Option containing List of Nat
@@ -1638,15 +1187,7 @@ def test_compile_option_list_nat : Bool :=
     let some_con := Con.mk (Identifier.id "some") option_typ 1 (List.cons (Option.some list_nat) List.empty) in
     let body := Term.con some_con in
     let term_ := Term.lam (binder_named (Identifier.id "x")) (sort_n 1) body in
-    let def_ := Def.mk
-        (NamePath.mk (List.cons id List.empty))
-        (sort_n 1)
-        term_
-        List.empty
-        List.empty
-        Visibility.package_private List.empty in
-    let mod_ := compile_db_decls_ir (List.cons def_ List.empty) in
-    let text := emit_module mod_ in
+    let text := compile_one_def_text id term_ in
     check_contains text "option_list_nat"
 
 /// Test compilation of Pair of Nat and List
@@ -1666,15 +1207,7 @@ def test_compile_pair_nat_list : Bool :=
     let pair_con := Con.mk (Identifier.id "pair") pair_typ 2 (List.cons (Option.some zero_val) (List.cons (Option.some empty_val) List.empty)) in
     let body := Term.con pair_con in
     let term_ := Term.lam (binder_named (Identifier.id "x")) (sort_n 1) body in
-    let def_ := Def.mk
-        (NamePath.mk (List.cons id List.empty))
-        (sort_n 1)
-        term_
-        List.empty
-        List.empty
-        Visibility.package_private List.empty in
-    let mod_ := compile_db_decls_ir (List.cons def_ List.empty) in
-    let text := emit_module mod_ in
+    let text := compile_one_def_text id term_ in
     check_contains text "pair_nat_list"
 
 /// Test compilation of Result with Nat values
@@ -1690,15 +1223,7 @@ def test_compile_result_nat : Bool :=
     let ok_con := Con.mk (Identifier.id "ok") result_typ 1 (List.cons (Option.some zero_val) List.empty) in
     let body := Term.con ok_con in
     let term_ := Term.lam (binder_named (Identifier.id "x")) (sort_n 1) body in
-    let def_ := Def.mk
-        (NamePath.mk (List.cons id List.empty))
-        (sort_n 1)
-        term_
-        List.empty
-        List.empty
-        Visibility.package_private List.empty in
-    let mod_ := compile_db_decls_ir (List.cons def_ List.empty) in
-    let text := emit_module mod_ in
+    let text := compile_one_def_text id term_ in
     check_contains text "result_nat"
 
 /// Test compilation of nested Result (Result (Option Nat))
@@ -1718,15 +1243,7 @@ def test_compile_result_option_nat : Bool :=
     let ok_con := Con.mk (Identifier.id "ok") result_typ 1 (List.cons (Option.some some_val) List.empty) in
     let body := Term.con ok_con in
     let term_ := Term.lam (binder_named (Identifier.id "x")) (sort_n 1) body in
-    let def_ := Def.mk
-        (NamePath.mk (List.cons id List.empty))
-        (sort_n 1)
-        term_
-        List.empty
-        List.empty
-        Visibility.package_private List.empty in
-    let mod_ := compile_db_decls_ir (List.cons def_ List.empty) in
-    let text := emit_module mod_ in
+    let text := compile_one_def_text id term_ in
     check_contains text "result_option_nat"
 
 /// Test compilation of match on Nat.zero
@@ -1742,15 +1259,7 @@ def test_compile_match_nat_zero : Bool :=
     let cases := List.cons zero_case List.empty in
     let body := Term.lit (Literal.match_ x_var cases) in
     let term_ := Term.lam (binder_named x_id) (sort_n 1) body in
-    let def_ := Def.mk
-        (NamePath.mk (List.cons id List.empty))
-        (sort_n 1)
-        term_
-        List.empty
-        List.empty
-        Visibility.package_private List.empty in
-    let mod_ := compile_db_decls_ir (List.cons def_ List.empty) in
-    let text := emit_module mod_ in
+    let text := compile_one_def_text id term_ in
     check_contains text "match_nat_zero"
 
 /// Test compilation of match on Nat with zero and succ cases
@@ -1768,15 +1277,7 @@ def test_compile_match_nat_zero_succ : Bool :=
     let cases := List.cons zero_case (List.cons succ_case List.empty) in
     let body := Term.lit (Literal.match_ x_var cases) in
     let term_ := Term.lam (binder_named x_id) (sort_n 1) body in
-    let def_ := Def.mk
-        (NamePath.mk (List.cons id List.empty))
-        (sort_n 1)
-        term_
-        List.empty
-        List.empty
-        Visibility.package_private List.empty in
-    let mod_ := compile_db_decls_ir (List.cons def_ List.empty) in
-    let text := emit_module mod_ in
+    let text := compile_one_def_text id term_ in
     check_contains text "match_nat_both"
 
 /// Test compilation of recursive Nat addition
@@ -1806,15 +1307,7 @@ def test_compile_nat_add : Bool :=
     let cases := List.cons a_zero_case (List.cons a_succ_case List.empty) in
     let body := Term.lit (Literal.match_ a_var cases) in
     let term_ := Term.lam (binder_named a_id) (sort_n 1) (Term.lam (binder_named b_id) (sort_n 1) body) in
-    let def_ := Def.mk
-        (NamePath.mk (List.cons id List.empty))
-        (sort_n 1)
-        term_
-        List.empty
-        List.empty
-        Visibility.package_private List.empty in
-    let mod_ := compile_db_decls_ir (List.cons def_ List.empty) in
-    let text := emit_module mod_ in
+    let text := compile_one_def_text id term_ in
     check_contains text "nat_add"
 
 /// Test compilation of recursive Nat multiplication
@@ -1844,15 +1337,7 @@ def test_compile_nat_mul : Bool :=
     let cases := List.cons a_zero_case (List.cons a_succ_case List.empty) in
     let body := Term.lit (Literal.match_ a_var cases) in
     let term_ := Term.lam (binder_named a_id) (sort_n 1) (Term.lam (binder_named b_id) (sort_n 1) body) in
-    let def_ := Def.mk
-        (NamePath.mk (List.cons id List.empty))
-        (sort_n 1)
-        term_
-        List.empty
-        List.empty
-        Visibility.package_private List.empty in
-    let mod_ := compile_db_decls_ir (List.cons def_ List.empty) in
-    let text := emit_module mod_ in
+    let text := compile_one_def_text id term_ in
     check_contains text "nat_mul"
 
 /// Test compilation of Nat predecessor function using match
@@ -1876,15 +1361,7 @@ def test_compile_nat_pred : Bool :=
     let cases := List.cons zero_case (List.cons succ_case List.empty) in
     let body := Term.lit (Literal.match_ n_var cases) in
     let term_ := Term.lam (binder_named n_id) (sort_n 1) body in
-    let def_ := Def.mk
-        (NamePath.mk (List.cons id List.empty))
-        (sort_n 1)
-        term_
-        List.empty
-        List.empty
-        Visibility.package_private List.empty in
-    let mod_ := compile_db_decls_ir (List.cons def_ List.empty) in
-    let text := emit_module mod_ in
+    let text := compile_one_def_text id term_ in
     check_contains text "nat_pred"
 
 /// Test compilation of String.beq (boolean equality)
@@ -1896,15 +1373,7 @@ def test_compile_string_beq : Bool :=
     let beq_var := Term.var 0 (DebugName.named (Identifier.id "String_beq")) in
     let body := Term.app (Term.app beq_var s1) s2 in
     let term_ := Term.lam (binder_named (Identifier.id "x")) (sort_n 1) body in
-    let def_ := Def.mk
-        (NamePath.mk (List.cons id List.empty))
-        (sort_n 1)
-        term_
-        List.empty
-        List.empty
-        Visibility.package_private List.empty in
-    let mod_ := compile_db_decls_ir (List.cons def_ List.empty) in
-    let text := emit_module mod_ in
+    let text := compile_one_def_text id term_ in
     check_contains text "string_beq_test"
 
 /// Test compilation of String.concat
@@ -1916,15 +1385,7 @@ def test_compile_string_concat : Bool :=
     let concat_var := Term.var 0 (DebugName.named (Identifier.id "String_concat")) in
     let body := Term.app (Term.app concat_var s1) s2 in
     let term_ := Term.lam (binder_named (Identifier.id "x")) (sort_n 1) body in
-    let def_ := Def.mk
-        (NamePath.mk (List.cons id List.empty))
-        (sort_n 1)
-        term_
-        List.empty
-        List.empty
-        Visibility.package_private List.empty in
-    let mod_ := compile_db_decls_ir (List.cons def_ List.empty) in
-    let text := emit_module mod_ in
+    let text := compile_one_def_text id term_ in
     check_contains text "string_concat_test"
 
 /// Test compilation of List.is_empty using match
@@ -1943,15 +1404,7 @@ def test_compile_list_is_empty : Bool :=
     let cases := List.cons empty_case (List.cons cons_case List.empty) in
     let body := Term.lit (Literal.match_ x_var cases) in
     let term_ := Term.lam (binder_named x_id) (sort_n 1) body in
-    let def_ := Def.mk
-        (NamePath.mk (List.cons id List.empty))
-        (sort_n 1)
-        term_
-        List.empty
-        List.empty
-        Visibility.package_private List.empty in
-    let mod_ := compile_db_decls_ir (List.cons def_ List.empty) in
-    let text := emit_module mod_ in
+    let text := compile_one_def_text id term_ in
     check_contains text "list_is_empty"
 
 /// Test compilation of Option.is_some using match
@@ -1969,15 +1422,7 @@ def test_compile_option_is_some : Bool :=
     let cases := List.cons some_case (List.cons none_case List.empty) in
     let body := Term.lit (Literal.match_ x_var cases) in
     let term_ := Term.lam (binder_named x_id) (sort_n 1) body in
-    let def_ := Def.mk
-        (NamePath.mk (List.cons id List.empty))
-        (sort_n 1)
-        term_
-        List.empty
-        List.empty
-        Visibility.package_private List.empty in
-    let mod_ := compile_db_decls_ir (List.cons def_ List.empty) in
-    let text := emit_module mod_ in
+    let text := compile_one_def_text id term_ in
     check_contains text "option_is_some"
 
 /// Test compilation of Monad.pure (IO)
@@ -1989,15 +1434,7 @@ def test_compile_io_pure : Bool :=
     let pure_var := Term.var 0 (DebugName.named (Identifier.id "IO_pure")) in
     let body := Term.app pure_var x_var in
     let term_ := Term.lam (binder_named x_id) (sort_n 1) body in
-    let def_ := Def.mk
-        (NamePath.mk (List.cons id List.empty))
-        (sort_n 1)
-        term_
-        List.empty
-        List.empty
-        Visibility.package_private List.empty in
-    let mod_ := compile_db_decls_ir (List.cons def_ List.empty) in
-    let text := emit_module mod_ in
+    let text := compile_one_def_text id term_ in
     check_contains text "io_pure_test"
 
 /// Test compilation of Monad.bind (IO)
@@ -2010,13 +1447,5 @@ def test_compile_io_bind : Bool :=
     let io_var := Term.var 1 (DebugName.named (Identifier.id "io_val")) in
     let body := Term.app (Term.app bind_var io_var) x_var in
     let term_ := Term.lam (binder_named x_id) (sort_n 1) body in
-    let def_ := Def.mk
-        (NamePath.mk (List.cons id List.empty))
-        (sort_n 1)
-        term_
-        List.empty
-        List.empty
-        Visibility.package_private List.empty in
-    let mod_ := compile_db_decls_ir (List.cons def_ List.empty) in
-    let text := emit_module mod_ in
+    let text := compile_one_def_text id term_ in
     check_contains text "io_bind_test"
