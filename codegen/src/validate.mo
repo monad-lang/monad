@@ -24,7 +24,7 @@ use lang::types {
 }
 use lang::scope {collect_classes, find_unresolved_class_calls_decls}
 use lib::ctors {CtorClaim, collect_ctor_claims_inds}
-use std::list {List.intercalate, List.length}
+use std::list {List.length}
 open IO {get_env, println}
 use llvm::ir {
   LLVMBasicBlock, LLVMDeclaration, LLVMFunction, LLVMInstruction, LLVMModule,
@@ -44,6 +44,16 @@ use lib::util {
 }
 use std::map {HashMap}
 
+/// The shared fail-fast result shape for the validators: no messages is
+/// success, otherwise the messages become one `; `-joined diagnostic. The
+/// whole family used to repeat this match by hand.
+#[partial]
+def validate_with (decl_list : List Decl) (msgs : List String) : Result String (List Decl) :=
+    match msgs {
+        List.empty => Result.ok decl_list,
+        List.cons _ _ => Result.err (join_semicolon_msgs msgs ""),
+    }
+
 /// An `#[extern "c"]` declaration names a symbol in a FOREIGN library. It
 /// must not bind a Monad runtime symbol (the `monad_*` functions in
 /// runtime/src/): those have the uniform i64 native ABI and a safe
@@ -53,11 +63,7 @@ use std::map {HashMap}
 /// other gates.
 #[partial]
 pub def validate_no_monad_externs (decl_list : List Decl) : Result String (List Decl) :=
-    let msgs := find_monad_externs (extract_defs decl_list) List.empty in
-    match msgs {
-        List.empty => Result.ok decl_list,
-        List.cons _ _ => Result.err (List.intercalate "; " msgs),
-    }
+    validate_with decl_list (find_monad_externs (extract_defs decl_list) List.empty)
 
 #[partial]
 def find_monad_externs (defs : List Def) (acc : List String) : List String :=
@@ -216,11 +222,7 @@ def find_link_name_arg (args : List AttrArg) : Option String :=
 /// sole unwired key and is unreachable dead code.
 #[partial]
 pub def validate_no_unwired_natives (decl_list : List Decl) : Result String (List Decl) :=
-    let msgs := find_unwired_native_defs (extract_defs decl_list) in
-    match msgs {
-        List.empty => Result.ok decl_list,
-        List.cons _ _ => Result.err (join_semicolon_msgs msgs ""),
-    }
+    validate_with decl_list (find_unwired_native_defs (extract_defs decl_list))
 
 /// One error message per reachable bodyless `#[native X]` def whose X is
 /// wired nowhere -- see `validate_no_unwired_natives`'s own doc comment
@@ -266,11 +268,7 @@ def find_unwired_native_defs_go (defs : List Def) (acc : List String) : List Str
 /// run-time trap. Runs on the REACHABLE decls, like the unwired check.
 #[partial]
 pub def validate_native_target_availability (kind : TargetKind) (triple : String) (decl_list : List Decl) : Result String (List Decl) :=
-    let msgs := find_unavailable_native_defs kind triple (extract_defs decl_list) in
-    match msgs {
-        List.empty => Result.ok decl_list,
-        List.cons _ _ => Result.err (join_semicolon_msgs msgs ""),
-    }
+    validate_with decl_list (find_unavailable_native_defs kind triple (extract_defs decl_list))
 
 #[partial]
 def find_unavailable_native_defs (kind : TargetKind) (triple : String) (defs : List Def) : List String :=
@@ -363,11 +361,7 @@ pub def validate_export_defs (kind : TargetKind) (triple : String) (decl_list : 
 
 #[partial]
 def export_check (triple : String) (decl_list : List Decl) : Result String (List Decl) :=
-    let msgs := find_export_msgs (extract_defs decl_list) List.empty List.empty in
-    match msgs {
-        List.empty => Result.ok decl_list,
-        List.cons _ _ => Result.err (join_semicolon_msgs msgs ""),
-    }
+    validate_with decl_list (find_export_msgs (extract_defs decl_list) List.empty List.empty)
 
 #[partial]
 def find_export_msgs (defs : List Def) (seen : List String) (acc : List String) : List String := match defs {
@@ -506,11 +500,7 @@ def export_has_implicit_param (typ : Term) : Bool := match term_peel typ {
 /// (AGENTS.md's rule-1 pitfall).
 #[partial]
 def validate_no_undesugared_struct_lits (decl_list : List Decl) : Result String (List Decl) :=
-    let msgs := find_undesugared_struct_lit_defs (extract_defs decl_list) in
-    match msgs {
-        List.empty => Result.ok decl_list,
-        List.cons _ _ => Result.err (join_semicolon_msgs msgs ""),
-    }
+    validate_with decl_list (find_undesugared_struct_lit_defs (extract_defs decl_list))
 
 /// One message per reachable def whose body still contains an
 /// un-desugared struct literal -- see
@@ -647,11 +637,7 @@ def cases_have_struct_lit (cases : List MatchCase) : Bool := match cases {
 /// reasoning as the struct-literal gate above.
 #[partial]
 pub def validate_no_undesugared_elims (decl_list : List Decl) : Result String (List Decl) :=
-    let msgs := find_undesugared_elim_defs (extract_defs decl_list) in
-    match msgs {
-        List.empty => Result.ok decl_list,
-        List.cons _ _ => Result.err (join_semicolon_msgs msgs ""),
-    }
+    validate_with decl_list (find_undesugared_elim_defs (extract_defs decl_list))
 
 /// One message per reachable def whose body or declared type still contains
 /// a `Term.elim` -- see `validate_no_undesugared_elims`.
@@ -759,11 +745,7 @@ def fields_have_elim (fields : List StructLitField) : Bool := match fields {
 /// One message per LLVM symbol claimed by two or more reachable defs.
 #[partial]
 def validate_no_colliding_def_symbols (decl_list : List Decl) : Result String (List Decl) :=
-    let msgs := colliding_def_symbol_msgs (extract_defs decl_list) str_map_empty in
-    match msgs {
-        List.empty => Result.ok decl_list,
-        List.cons _ _ => Result.err (join_semicolon_msgs msgs ""),
-    }
+    validate_with decl_list (colliding_def_symbol_msgs (extract_defs decl_list) str_map_empty)
 
 #[partial]
 def colliding_def_symbol_msgs (defs : List Def) (seen : HashMap String Bool) : List String :=

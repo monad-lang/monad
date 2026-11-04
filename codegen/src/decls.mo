@@ -12,7 +12,7 @@
 /// names nothing, and a wrapper supplying it would quietly return an
 /// empty closure.
 use llvm::strmap {str_map_empty, str_map_insert, str_map_lookup}
-use std::list {List.length}
+use std::list {List.filter_map, List.length}
 use lang::types {
   Attribute, Decl, DebugName, Def, Identifier, Inductive, Multiplicity, NamePath, Struct,
   StructField, Term, Visibility, concrete, id_eq, sentinel,
@@ -39,18 +39,14 @@ use std::map {HashMap}
 /// so depth here is paid again on each of the hundreds of collections
 /// these allocations trigger.
 #[partial]
-def extract_defs (decl_list : List Decl) : List Def :=
-    List.reverse (extract_defs_go decl_list List.empty)
+def def_of_decl (d : Decl) : Option Def := match d {
+    Decl.def_d def_ => Option.some def_,
+    _ => Option.none,
+}
 
 #[partial]
-def extract_defs_go (decl_list : List Decl) (acc : List Def) : List Def := match decl_list {
-    List.empty => acc,
-    List.cons d rest =>
-        match d {
-            Decl.def_d def_ => extract_defs_go rest (List.cons def_ acc),
-            _ => extract_defs_go rest acc,
-        }
-}
+def extract_defs (decl_list : List Decl) : List Def :=
+    List.filter_map def_of_decl decl_list
 
 /// Extract struct_d entries from a list of Decl.
 ///
@@ -72,32 +68,24 @@ def extract_defs_go (decl_list : List Decl) (acc : List Def) : List Def := match
 /// and the reference above silently goes back to being an undefined
 /// function call.
 #[partial]
-def extract_inductives (decl_list : List Decl) : List Inductive :=
-    List.reverse (extract_inductives_go decl_list List.empty)
+def inductive_of_decl (d : Decl) : Option Inductive := match d {
+    Decl.inductive_d ind => Option.some ind,
+    _ => Option.none,
+}
 
 #[partial]
-def extract_inductives_go (decl_list : List Decl) (acc : List Inductive) : List Inductive := match decl_list {
-    List.empty => acc,
-    List.cons d rest =>
-        match d {
-            Decl.inductive_d ind => extract_inductives_go rest (List.cons ind acc),
-            _ => extract_inductives_go rest acc,
-        }
+def extract_inductives (decl_list : List Decl) : List Inductive :=
+    List.filter_map inductive_of_decl decl_list
+
+#[partial]
+def struct_of_decl (d : Decl) : Option Struct := match d {
+    Decl.struct_d s => Option.some s,
+    _ => Option.none,
 }
 
 #[partial]
 def extract_structs (decl_list : List Decl) : List Struct :=
-    List.reverse (extract_structs_go decl_list List.empty)
-
-#[partial]
-def extract_structs_go (decl_list : List Decl) (acc : List Struct) : List Struct := match decl_list {
-    List.empty => acc,
-    List.cons d rest =>
-        match d {
-            Decl.struct_d s => extract_structs_go rest (List.cons s acc),
-            _ => extract_structs_go rest acc,
-        }
-}
+    List.filter_map struct_of_decl decl_list
 
 /// Restricts `decl_list` to the transitive closure of Defs reachable from a
 /// top-level `main`, plus every Inductive (kept unconditionally --
@@ -154,33 +142,15 @@ def build_def_name_map (defs : List Def) (acc : HashMap String Def) : HashMap St
 
 #[partial]
 def map_def_decl (defs : List Def) : List Decl :=
-    List.reverse (map_def_decl_go defs List.empty)
-
-#[partial]
-def map_def_decl_go (defs : List Def) (acc : List Decl) : List Decl := match defs {
-    List.empty => acc,
-    List.cons d rest => map_def_decl_go rest (List.cons (Decl.def_d d) acc),
-}
+    List.map (fn d => Decl.def_d d) defs
 
 #[partial]
 def map_inductive_decl (inds : List Inductive) : List Decl :=
-    List.reverse (map_inductive_decl_go inds List.empty)
-
-#[partial]
-def map_inductive_decl_go (inds : List Inductive) (acc : List Decl) : List Decl := match inds {
-    List.empty => acc,
-    List.cons i rest => map_inductive_decl_go rest (List.cons (Decl.inductive_d i) acc),
-}
+    List.map (fn i => Decl.inductive_d i) inds
 
 #[partial]
 def map_struct_decl (structs : List Struct) : List Decl :=
-    List.reverse (map_struct_decl_go structs List.empty)
-
-#[partial]
-def map_struct_decl_go (structs : List Struct) (acc : List Decl) : List Decl := match structs {
-    List.empty => acc,
-    List.cons s rest => map_struct_decl_go rest (List.cons (Decl.struct_d s) acc),
-}
+    List.map (fn s => Decl.struct_d s) structs
 
 /// Reachability works in the same name space the emitted symbols do --
 /// `collect_referenced_names` collects a reference's `symbol_identifier`
@@ -214,65 +184,52 @@ def has_export_attr (attrs : List Attribute) : Bool := match attrs {
 /// so without them the def is filtered out before codegen and the export
 /// does not exist.
 #[partial]
-def export_roots (decl_list : List Decl) : List String :=
-    List.reverse (export_roots_go decl_list List.empty)
+def export_root_of_decl (d : Decl) : Option String := match d {
+    Decl.def_d def_ =>
+        if has_export_attr (def_attrs def_)
+        then Option.some (def_name_str def_)
+        else Option.none,
+    _ => Option.none,
+}
 
 #[partial]
-def export_roots_go (decl_list : List Decl) (acc : List String) : List String := match decl_list {
-    List.empty => acc,
-    List.cons d rest =>
-        match d {
-            Decl.def_d def_ =>
-                if has_export_attr (def_attrs def_)
-                then export_roots_go rest (List.cons (def_name_str def_) acc)
-                else export_roots_go rest acc,
-            _ => export_roots_go rest acc,
-        },
-}
+def export_roots (decl_list : List Decl) : List String :=
+    List.filter_map export_root_of_decl decl_list
 
 /// The JS-visible name of every `#[export "c"]` def: the SOURCE name
 /// (`oak_mount`), not the qualified symbol every def is emitted under.
 /// `wasm-ld --export=` can only export a symbol under its own name, which
 /// is why `add_export_shims` (emit.mo) emits a thunk per export.
 #[partial]
-pub def export_names (decl_list : List Decl) : List String :=
-    List.reverse (export_names_go decl_list List.empty)
+def export_name_of_decl (d : Decl) : Option String := match d {
+    Decl.def_d def_ =>
+        if has_export_attr (def_attrs def_)
+        then Option.some (unqualify_def_name (def_name_str def_))
+        else Option.none,
+    _ => Option.none,
+}
 
 #[partial]
-def export_names_go (decl_list : List Decl) (acc : List String) : List String := match decl_list {
-    List.empty => acc,
-    List.cons d rest =>
-        match d {
-            Decl.def_d def_ =>
-                if has_export_attr (def_attrs def_)
-                then export_names_go rest (List.cons (unqualify_def_name (def_name_str def_)) acc)
-                else export_names_go rest acc,
-            _ => export_names_go rest acc,
-        },
-}
+pub def export_names (decl_list : List Decl) : List String :=
+    List.filter_map export_name_of_decl decl_list
 
 /// `(JS name, qualified symbol)` for every `#[export "c"]` def, in decl
 /// order. `add_export_shims` needs both halves to emit the thunk.
 #[partial]
-def export_pairs (decl_list : List Decl) : List (Pair String String) :=
-    List.reverse (export_pairs_go decl_list List.empty)
+def export_pair_of_decl (d : Decl) : Option (Pair String String) := match d {
+    Decl.def_d def_ =>
+        if has_export_attr (def_attrs def_)
+        then
+            let qualified := def_name_str def_ in
+            let plain := unqualify_def_name qualified in
+            Option.some (Pair.pair plain qualified)
+        else Option.none,
+    _ => Option.none,
+}
 
 #[partial]
-def export_pairs_go (decl_list : List Decl) (acc : List (Pair String String)) : List (Pair String String) := match decl_list {
-    List.empty => acc,
-    List.cons d rest =>
-        match d {
-            Decl.def_d def_ =>
-                if has_export_attr (def_attrs def_)
-                then
-                    let qualified := def_name_str def_ in
-                    let plain := unqualify_def_name qualified in
-                    let pair_ : Pair String String := Pair.pair plain qualified in
-                    export_pairs_go rest (List.cons pair_ acc)
-                else export_pairs_go rest acc,
-            _ => export_pairs_go rest acc,
-        },
-}
+def export_pairs (decl_list : List Decl) : List (Pair String String) :=
+    List.filter_map export_pair_of_decl decl_list
 
 #[partial]
 def def_attrs (d : Def) : List Attribute := match d {
