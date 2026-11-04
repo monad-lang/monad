@@ -25,6 +25,7 @@ use weaver::pty::dialogs {
 use weaver::pty::input {run_input_caret_click_drag}
 use weaver::pty::models {run_model_picker_select_and_cancel}
 use weaver::pty::processes {run_start_process_list_and_kill}
+use weaver::pty::approvals {run_auto_mode_holds_destructive_commands}
 use weaver::pty::resize {run_resize_clears_and_rewraps}
 use weaver::pty::resume {
     run_resume_picker_lists_current_and_esc,
@@ -99,6 +100,9 @@ def test_model_picker_select_and_cancel : IO Bool := run_model_picker_select_and
 
 #[test]
 def test_start_process_list_and_kill : IO Bool := run_start_process_list_and_kill
+
+#[test]
+def test_auto_mode_holds_destructive_commands : IO Bool := run_auto_mode_holds_destructive_commands
 
 #[test]
 def test_resize_clears_and_rewraps : IO Bool := run_resize_clears_and_rewraps

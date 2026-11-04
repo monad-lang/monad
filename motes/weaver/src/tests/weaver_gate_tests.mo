@@ -216,3 +216,33 @@ def test_repo_exec_grant_does_not_cover_an_outside_command : IO Bool := do {
     let none_c : Bool := match c { Option.none => true, Option.some _ => false };
     return (none_a && none_b && none_c)
 }
+
+/// No grant covers a flagged command, not even an anywhere grant: it is
+/// asked about every time.
+#[test]
+def test_grants_never_cover_a_flagged_command : IO Bool := do {
+    let empty_grants : List PermGrant := List.empty;
+    let r <- Ref.new empty_grants;
+    let g : PermGrant := { cap := Capability.exec, scope := PermScope.anywhere };
+    let _ <- Permissions.add (Option.some r) g;
+    let flagged <- precheck_of Mode.manual (Option.some r) (Option.some (Path.path "/repo")) (shell_pick "git push --force");
+    let plain <- precheck_of Mode.manual (Option.some r) (Option.some (Path.path "/repo")) (shell_pick "git push");
+    let asks : Bool := match flagged { Option.none => true, Option.some _ => false };
+    let granted : Bool := match plain { Option.some ap => match ap { Approval.once => true, _ => false }, Option.none => false };
+    return (asks && granted)
+}
+
+/// In auto mode the precheck lets a plain command through (no decision:
+/// the ask cell answers once) and leaves a flagged one to the prompt.
+#[test]
+def test_auto_mode_holds_a_flagged_command_for_the_prompt : IO Bool := do {
+    let empty_grants : List PermGrant := List.empty;
+    let r <- Ref.new empty_grants;
+    let g : Gate := Gate.weaver Mode.auto (Option.some r) (Option.some (Path.path "/repo")) no_read no_write;
+    let ask : Pick -> IO Approval := g.ask;
+    let plain <- ask (shell_pick "ls src");
+    let flagged <- ask (shell_pick "rm -rf /");
+    let plain_ok : Bool := match plain { Approval.once => true, _ => false };
+    let flagged_denied : Bool := match flagged { Approval.deny _ => true, _ => false };
+    return (plain_ok && flagged_denied)
+}

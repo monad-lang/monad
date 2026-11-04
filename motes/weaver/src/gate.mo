@@ -81,7 +81,7 @@ def weaver_precheck (mode : Mode) (grants : Option (Ref (List PermGrant))) (root
         },
         Decision.ask => do {
             let gs <- Permissions.get grants;
-            if Permissions.matches gs p.cap (Reach.is_inside a.scope)
+            if Gate.granted gs p.cap a
             then IO.pure (Option.some Approval.once)
             else IO.pure Option.none
         },
@@ -234,12 +234,24 @@ pub def gate_answer_feedback (cap : Capability) (ans : PickAnswer) : String :=
             String.concat "n -- denied (" (String.concat reason ")"),
     }
 
+/// A grant covers the pick -- never one a danger rule flagged: that one is
+/// asked about every time, whatever was granted before.
+pub def Gate.granted (gs : List PermGrant) (cap : Capability) (a : Assessment) : Bool :=
+    match a.danger {
+        Option.some _ => false,
+        Option.none => Permissions.matches gs cap (Reach.is_inside a.scope),
+    }
+
 /// Where the pick reaches, for both UIs' prompts: `where: inside /src/x`,
 /// `where: outside the workspace: /etc/hosts`, or `where: can't tell
 /// where this runs`; then `⚠ <reason>` when a rule flagged it.
 pub def Gate.assessment_lines (root : Option Path) (a : Assessment) : String :=
     let scope_text : String := String.concat "  where: " (Assess.scope_line root a.scope) in
-    match a.danger {
+    let warn : Option String := match a.danger {
+        Option.some d => Option.some d,
+        Option.none => a.outside_write,
+    } in
+    match warn {
         Option.none => scope_text,
         Option.some reason => String.concat scope_text (String.concat "\n  ⚠ " reason),
     }

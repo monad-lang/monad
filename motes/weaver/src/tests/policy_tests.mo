@@ -21,11 +21,11 @@ def decision_eq (a : Decision) (b : Decision) : Bool :=
 
 /// A pick inside the workspace, flagged by no rule: the plain cell.
 def plain : Assessment :=
-    let a : Assessment := { scope := Reach.inside, danger := Option.none } in
+    let a : Assessment := { scope := Reach.inside, danger := Option.none, outside_write := Option.none } in
     a
 
 def reaching (scope : Reach) : Assessment :=
-    let a : Assessment := { scope := scope, danger := Option.none } in
+    let a : Assessment := { scope := scope, danger := Option.none, outside_write := Option.none } in
     a
 
 /// One cell of the table: the decision for (cap, mode) is `expected`.
@@ -78,7 +78,20 @@ def test_allow_edit_asks_for_an_edit_outside_the_workspace : Bool :=
         && cell_at Capability.read Mode.allow_edit out Decision.allow
         && cell_at Capability.write Mode.manual out Decision.ask
         && cell_at Capability.write Mode.plan out (Decision.refuse plan_refusal)
-        && cell_at Capability.write Mode.auto out Decision.allow
+        && cell_at Capability.read Mode.auto out Decision.allow
+
+/// `auto` asks before a destructive pick or a write outside the workspace;
+/// every other mode
+/// decides as it would anyway (manual already asks, plan refuses).
+#[test]
+def test_auto_asks_for_a_flagged_pick : Bool :=
+    let flagged : Assessment := { scope := Reach.inside, danger := Option.some "git push --force rewrites remote history", outside_write := Option.none } in
+    let writes_out : Assessment := { scope := Reach.outside [Path.path "/etc/motd"], danger := Option.none, outside_write := Option.some "writes outside the workspace: /etc/motd" } in
+    cell_at Capability.exec Mode.auto flagged Decision.ask
+        && cell_at Capability.write Mode.auto writes_out Decision.ask
+        && cell_at Capability.write Mode.auto flagged Decision.ask
+        && cell_at Capability.exec Mode.manual flagged Decision.ask
+        && cell_at Capability.exec Mode.plan flagged (Decision.refuse plan_refusal)
 
 // ── The mode state machine ──────────────────────────────────────────────
 

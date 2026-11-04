@@ -33,7 +33,8 @@ pub type Decision {
 /// of `Capability x Mode`, and each cell the assessment splits, is pinned
 /// by `tests/policy_tests.mo` -- a change here without that file changing
 /// is a contradiction. `a` is where the pick reaches (`Assess.pick`):
-/// `allow_edit` lets an edit through only inside the workspace.
+/// `allow_edit` lets an edit through only inside the workspace, and `auto`
+/// still asks before a destructive pick or a write outside the workspace.
 pub def Policy.decide (cap : Capability) (mode : Mode) (a : Assessment) : Decision :=
     match mode {
         Mode.manual => Decision.ask,
@@ -49,7 +50,14 @@ pub def Policy.decide (cap : Capability) (mode : Mode) (a : Assessment) : Decisi
                 Capability.write => if Reach.is_inside a.scope then Decision.allow else Decision.ask,
                 Capability.read => Decision.allow,
             },
-        Mode.auto => Decision.allow,
+        Mode.auto =>
+            match a.danger {
+                Option.some _ => Decision.ask,
+                Option.none => match a.outside_write {
+                    Option.some _ => Decision.ask,
+                    Option.none => Decision.allow,
+                },
+            },
     }
 
 // ── The mode state machine ──────────────────────────────────────────────

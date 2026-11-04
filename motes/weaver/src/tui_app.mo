@@ -31,8 +31,8 @@ use weaver::commands {
 }
 use log::logger {Logger}
 use weaver::policy {Mode, Mode.show, Mode.cycle, Policy.decide, Decision}
-use weaver::gate {pick_header, pick_target, cap_name, capped_diff, PickAnswer, record_answer, answer_approval, Gate.assessment_lines}
-use weaver::permissions {PermGrant, Permissions.get, Permissions.matches, Permissions.render}
+use weaver::gate {pick_header, pick_target, cap_name, capped_diff, PickAnswer, record_answer, answer_approval, Gate.assessment_lines, Gate.granted}
+use weaver::permissions {PermGrant, Permissions.get, Permissions.render}
 use weaver::assess {Assessment, Reach.is_inside, Assess.pick}
 use weaver::diff {Diff.for_input, Diff.lines}
 use weaver::dumb {append_user, drive_loop}
@@ -48,7 +48,7 @@ use weaver::ui::pane {
     Pane.page_wanted, Pane.page_requested, Pane.page_loaded, Pane.page_failed,
 }
 use weaver::ui::rows {DisplayRow, Rows.of_line, Rows.widget}
-use weaver::logs {Logs.info, Logs.debug, Logs.warn, Logs.error, Logs.log_rss}
+use weaver::logs {Logs.info, Logs.debug, Logs.warn, Logs.error, Logs.log_rss, Logs.sanitize}
 use weaver::title {Title.generate, Title.needed}
 use weaver::subagent {Subagent.task_tool}
 use weaver::store {
@@ -1242,7 +1242,7 @@ def error_line (e : WeaverError) : TLine :=
 def drive_tui (log : Option Logger) (gen : I64) (st : WeaverState) (text : String) (on_usage : Usage -> IO Unit) : ResultT WeaverError IO RunState := do {
     let stop : Unit -> IO Bool := Stop.predicate st.store gen;
     let with_task : RunState := { (st.run) with reg := ToolRegistry.register (Subagent.task_tool st.run.session.config log st.store stop) st.run.reg };
-    let gated : RunState := { with_task with gate := Gate.weaver_tui st.mode st.colors st.store st.grants (Place.cwd_of st.place),
+    let gated : RunState := { with_task with gate := Gate.weaver_tui log st.mode st.colors st.store st.grants (Place.cwd_of st.place),
         emit := progress_live log st.store, on_usage := on_usage,
         should_stop := stop, stopped := false };
     let ready : RunState := append_user gated text;
@@ -1440,9 +1440,9 @@ def list_msg_length (xs : List Message) : I64 :=
 /// read for `y`/`n`/`a`. `mode` is the only parameter -- same shape as
 /// `Gate.weaver`, minus the read/write seams dumb mode needs and this
 /// does not (it owns its own screen and its own stdin read).
-pub def Gate.weaver_tui (mode : Mode) (colors : Bool) (store : Option StoreState) (grants : Option (Ref (List PermGrant))) (root : Option Path) : Gate :=
+pub def Gate.weaver_tui (log : Option Logger) (mode : Mode) (colors : Bool) (store : Option StoreState) (grants : Option (Ref (List PermGrant))) (root : Option Path) : Gate :=
     {
-        ask := weaver_tui_ask mode colors store grants root,
+        ask := weaver_tui_ask log mode colors store grants root,
         precheck := weaver_tui_precheck mode grants root,
     }
 
@@ -1452,19 +1452,29 @@ def weaver_tui_precheck (mode : Mode) (grants : Option (Ref (List PermGrant))) (
         Decision.refuse reason => IO.pure (Option.some (Approval.deny reason)),
         Decision.ask => do {
             let gs <- Permissions.get grants;
-            if Permissions.matches gs p.cap (Reach.is_inside a.scope)
+            if Gate.granted gs p.cap a
             then IO.pure (Option.some Approval.once)
             else IO.pure Option.none
         },
         Decision.allow => IO.pure Option.none,
     }
 
-def weaver_tui_ask (mode : Mode) (colors : Bool) (store : Option StoreState) (grants : Option (Ref (List PermGrant))) (root : Option Path) (p : Pick) : IO Approval :=
+def weaver_tui_ask (log : Option Logger) (mode : Mode) (colors : Bool) (store : Option StoreState) (grants : Option (Ref (List PermGrant))) (root : Option Path) (p : Pick) : IO Approval :=
     let a : Assessment := Assess.pick root p in
     match Policy.decide p.cap mode a {
         Decision.allow => IO.pure Approval.once,
-        Decision.ask => prompt_overlay colors store grants root a p,
+        Decision.ask => do {
+            let _ <- log_danger log p a;
+            prompt_overlay colors store grants root a p
+        },
         Decision.refuse reason => IO.pure (Approval.deny reason),
+    }
+
+def log_danger (log : Option Logger) (p : Pick) (a : Assessment) : IO Unit :=
+    match a.danger {
+        Option.none => IO.pure unit,
+        Option.some reason => Logs.info log (String.concat "ev=danger name=" (String.concat p.name
+            (String.concat " reason=" (Logs.sanitize reason)))),
     }
 
 def diff_lines_of (diff_pair : Option (Pair String String)) : List String :=
@@ -1489,7 +1499,11 @@ def prompt_overlay (colors : Bool) (store : Option StoreState) (grants : Option 
     let opts : List DialogOption := perm_options p.cap repo_ok;
     let subtitle : String := String.concat (cap_name p.cap) (String.concat " " p.name);
     let d : DialogModel := Dialog.with_notes (Dialog.make "Permission required" subtitle body opts);
-    let default_idx : I64 := perm_default_index p.cap repo_ok;
+    // A flagged pick defaults to Deny, reads included.
+    let default_idx : I64 := match a.danger {
+        Option.some _ => if repo_ok then 3 else 2,
+        Option.none => perm_default_index p.cap repo_ok,
+    };
     let pr <- dialog_run colors store (Dialog.with_default d default_idx);
     match pr {
         Pair.pair final step => match step {

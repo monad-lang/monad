@@ -4,10 +4,11 @@
 /// path-like word, `cd` target and redirect target is resolved against the
 /// working directory. Lexical, like `Permissions.within`: no symlinks are
 /// followed and nothing runs.
-use shuttle::gate {Pick}
+use shuttle::gate {Pick, Capability}
 use json::json {Json, Json.get_object, Json.object_get, Json.get_str}
 use std::path {Path, Path.of, Path.to_string, Path.beq}
-use std::list {List.intercalate, List.any}
+use std::list {List.intercalate, List.any, List.filter}
+use weaver::danger {Danger.command, Danger.base_name, Danger.short_flag}
 use weaver::shell_words {ShellWord, ShellRedir, ShellCmd, ShellScript, ShellWords.parse}
 use weaver::permissions {Permissions.within, Permissions.normalize}
 
@@ -22,10 +23,13 @@ pub type Reach {
 }
 
 /// The gate's reading of one pick. `danger` names why a command is
-/// destructive enough that auto mode must still ask.
+/// destructive: it is asked about in every mode, whatever was granted.
+/// `outside_write` names a write outside the workspace: auto mode asks
+/// before it, but an `anywhere` grant covers it.
 pub struct Assessment {
     scope : Reach,
     danger : Option String,
+    outside_write : Option String,
 }
 
 /// Commands longer than this are not scanned (the scanner recurses per
@@ -40,11 +44,27 @@ pub def Assess.pick (root : Option Path) (p : Pick) : Assessment :=
     then command_pick root p
     else match input_str "path" p.input {
         Option.none => Assess.unknown,
-        Option.some path => Assess.path root path,
+        Option.some path => file_pick root p.cap path,
+    }
+
+/// A file tool's target, and whether it writes outside the workspace.
+def file_pick (root : Option Path) (cap : Capability) (path : String) : Assessment :=
+    let a : Assessment := Assess.path root path in
+    match cap {
+        Capability.write => match a.scope {
+            Reach.outside ps => match ps {
+                List.cons p _ =>
+                    let d : Assessment := { a with outside_write := Option.some (String.concat "writes outside the workspace: " (Path.to_string p)) } in
+                    d,
+                List.empty => a,
+            },
+            _ => a,
+        },
+        _ => a,
     }
 
 pub def Assess.unknown : Assessment :=
-    let a : Assessment := { scope := Reach.unknown, danger := Option.none } in
+    let a : Assessment := { scope := Reach.unknown, danger := Option.none, outside_write := Option.none } in
     a
 
 /// A file tool's target.
@@ -100,10 +120,13 @@ struct Walk {
     outside : List Path,
     unknown : Bool,
     danger : Option String,
+    outside_write : Option String,
+    /// The previous simple command's name, for `curl .. | sh`.
+    prev : String,
 }
 
 def walk_start (root : Option Path) (base : Option Path) : Walk :=
-    let w : Walk := { root := root, base := base, outside := List.empty, unknown := false, danger := Option.none } in
+    let w : Walk := { root := root, base := base, outside := List.empty, unknown := false, danger := Option.none, outside_write := Option.none, prev := "" } in
     w
 
 def walk_result (w : Walk) : Assessment :=
@@ -114,7 +137,7 @@ def walk_result (w : Walk) : Assessment :=
             else if List.is_empty w.outside then Reach.inside
             else Reach.outside (List.reverse w.outside),
     } in
-    let a : Assessment := { scope := scope, danger := w.danger } in
+    let a : Assessment := { scope := scope, danger := w.danger, outside_write := w.outside_write } in
     a
 
 def lost (w : Walk) : Walk :=
@@ -126,6 +149,14 @@ def add_outside (p : Path) (w : Walk) : Walk :=
     else
         let w2 : Walk := { w with outside := List.cons p w.outside } in
         w2
+
+def add_outside_write (reason : String) (w : Walk) : Walk :=
+    match w.outside_write {
+        Option.some _ => w,
+        Option.none =>
+            let w2 : Walk := { w with outside_write := Option.some reason } in
+            w2,
+    }
 
 def add_danger (reason : String) (w : Walk) : Walk :=
     match w.danger {
@@ -168,7 +199,14 @@ def walk_cmd (depth : I64) (c : ShellCmd) (w0 : Walk) : Walk :=
     let w1 : Walk := walk_redirs c.redirs w0 in
     match words {
         List.empty => w1,
-        List.cons name args => walk_named depth name args w1,
+        List.cons name args =>
+            let n : String := Danger.base_name name.text in
+            let w2 : Walk := if Bool.and c.piped (Bool.and (is_shell n) (one_of w1.prev ["curl", "wget"]))
+                then add_danger (String.concat w1.prev " output is piped into a shell") w1
+                else w1 in
+            let w3 : Walk := walk_named depth name args w2 in
+            let w4 : Walk := { w3 with prev := n } in
+            w4,
     }
 
 #[terminating]
@@ -176,9 +214,13 @@ def walk_named (depth : I64) (name : ShellWord) (args : List ShellWord) (w : Wal
     if String.beq name.text "cd" then walk_cd args w
     else
         let w2 : Walk := note_words args w in
+        let w3 : Walk := match Danger.command name.text args {
+            Option.some reason => add_danger reason w2,
+            Option.none => path_danger (Danger.base_name name.text) args w2,
+        } in
         match Assess.inline_script name.text args {
-            Option.none => w2,
-            Option.some text => walk_text (depth + 1) text w2,
+            Option.none => w3,
+            Option.some text => walk_text (depth + 1) text w3,
         }
 
 #[partial]
@@ -188,11 +230,16 @@ def note_words (ws : List ShellWord) (w : Walk) : Walk :=
         List.cons x rest => note_words rest (note_word w x),
     }
 
+/// A write redirect outside the workspace is an outside write as well as a
+/// reach.
 #[partial]
 def walk_redirs (rs : List ShellRedir) (w : Walk) : Walk :=
     match rs {
         List.empty => w,
-        List.cons r rest => walk_redirs rest (note_word w r.target),
+        List.cons r rest =>
+            let w2 : Walk := note_word w r.target in
+            let w3 : Walk := if r.out then note_outside_write (spot_of w2 true r.target) w2 else w2 in
+            walk_redirs rest w3,
     }
 
 /// `cd DIR` moves the base. `cd` and `cd ~` go home (outside); `cd -` and
@@ -214,17 +261,136 @@ def cd_lost (w : Walk) : Walk :=
     let w2 : Walk := { w with base := Option.none } in
     w2
 
+/// Where one word points, when it is a path. `operand` reads a plain word
+/// (`build`) as a relative path too: an `rm` or `mv` operand always is.
+type Spot {
+    spot_none,
+    spot_inside (p : Path),
+    spot_outside (p : Path),
+    spot_lost,
+}
+
+def spot_of (w : Walk) (operand : Bool) (x : ShellWord) : Spot :=
+    let text : String := if operand then x.text else Assess.path_part x.text in
+    if String.is_empty text then Spot.spot_none
+    else if Bool.not (Bool.or operand (Assess.path_like text)) then Spot.spot_none
+    else if x.dynamic then Spot.spot_lost
+    else match Assess.resolve w.base text {
+        Option.none => Spot.spot_lost,
+        Option.some p =>
+            if Assess.harmless p then Spot.spot_none
+            else if Assess.inside w.root p then Spot.spot_inside p
+            else Spot.spot_outside p,
+    }
+
 /// One word: when it reads as a path, classify where it points.
 def note_word (w : Walk) (x : ShellWord) : Walk :=
-    let text : String := Assess.path_part x.text in
-    if Bool.not (Assess.path_like text) then w
-    else if x.dynamic then lost w
-    else match Assess.resolve w.base text {
-        Option.none => lost w,
-        Option.some p =>
-            if Assess.harmless p then w
-            else if Assess.inside w.root p then w
-            else add_outside p w,
+    match spot_of w false x {
+        Spot.spot_none => w,
+        Spot.spot_inside _ => w,
+        Spot.spot_outside p => add_outside p w,
+        Spot.spot_lost => lost w,
+    }
+
+def note_outside_write (sp : Spot) (w : Walk) : Walk :=
+    match sp {
+        Spot.spot_outside p => add_outside_write (String.concat "writes outside the workspace: " (Path.to_string p)) w,
+        _ => w,
+    }
+
+// ── path-dependent dangers ──────────────────────────────────────────────
+
+/// The rules that need to know where an operand points: deleting outside
+/// the workspace, at its root or on a wildcard; a recursive chmod/chown
+/// or a move outside it. Copying or teeing onto a path outside it is an
+/// outside write.
+def path_danger (n : String) (args : List ShellWord) (w : Walk) : Walk :=
+    let ops : List ShellWord := operands args in
+    if one_of n ["rm", "rmdir", "unlink"] then rm_danger n (has_recursive_or_force args) ops w
+    else if Bool.and (one_of n ["chmod", "chown", "chgrp"]) (has_recursive args) then outside_danger (String.concat n " -R changes ") ops w
+    else if one_of n ["mv"] then outside_danger "mv moves " ops w
+    else if one_of n ["tee"] then outside_write_all ops w
+    else if one_of n ["cp", "install", "ln", "rsync"] then last_outside_write ops w
+    else w
+
+def one_of (t : String) (ks : List String) : Bool :=
+    List.any (fn (k : String) => String.beq k t) ks
+
+/// The non-flag words (`--` ends the flags).
+#[partial]
+def operands (ws : List ShellWord) : List ShellWord :=
+    match ws {
+        List.empty => ws,
+        List.cons x rest =>
+            if String.beq x.text "--" then rest
+            else if Bool.and (String.starts_with "-" x.text) (Bool.not (String.beq x.text "-")) then operands rest
+            else List.cons x (operands rest),
+    }
+
+def flag_texts (ws : List ShellWord) : List String :=
+    List.map (fn (x : ShellWord) => x.text) (List.filter (fn (x : ShellWord) => String.starts_with "-" x.text) ws)
+
+def has_recursive (ws : List ShellWord) : Bool :=
+    let fs : List String := flag_texts ws in
+    Danger.short_flag "R" fs || Danger.short_flag "r" fs || List.any (fn (f : String) => String.beq f "--recursive") fs
+
+def has_recursive_or_force (ws : List ShellWord) : Bool :=
+    let fs : List String := flag_texts ws in
+    has_recursive ws || Danger.short_flag "f" fs || List.any (fn (f : String) => String.beq f "--force") fs
+
+/// `rm` outside the workspace, or `rm -r`/`-f` on a wildcard, the
+/// workspace root itself, or a path only known at run time.
+#[partial]
+def rm_danger (n : String) (forced : Bool) (ops : List ShellWord) (w : Walk) : Walk :=
+    match ops {
+        List.empty => w,
+        List.cons x rest =>
+            match rm_reason n forced x w {
+                Option.some reason => add_danger reason w,
+                Option.none => rm_danger n forced rest w,
+            },
+    }
+
+def rm_reason (n : String) (forced : Bool) (x : ShellWord) (w : Walk) : Option String :=
+    match spot_of w true x {
+        Spot.spot_outside p => Option.some (String.concat n (String.concat " deletes outside the workspace: " (Path.to_string p))),
+        Spot.spot_lost => if forced then Option.some (String.concat n " -r on a path only known at run time") else Option.none,
+        Spot.spot_inside p =>
+            if Bool.and forced (Bool.or (String.contains x.text "*") (is_root w.root p))
+            then Option.some (String.concat n (String.concat " -r deletes " x.text))
+            else Option.none,
+        Spot.spot_none => Option.none,
+    }
+
+def is_root (root : Option Path) (p : Path) : Bool :=
+    match root {
+        Option.none => false,
+        Option.some r => String.beq (Permissions.normalize (Path.to_string r)) (Path.to_string p),
+    }
+
+#[partial]
+def outside_danger (what : String) (ops : List ShellWord) (w : Walk) : Walk :=
+    match ops {
+        List.empty => w,
+        List.cons x rest => match spot_of w true x {
+            Spot.spot_outside p => add_danger (String.concat what (String.concat "outside the workspace: " (Path.to_string p))) w,
+            _ => outside_danger what rest w,
+        },
+    }
+
+/// `cp a b dest`: the last operand is the one written.
+def last_outside_write (ops : List ShellWord) (w : Walk) : Walk :=
+    match List.last ops {
+        Option.none => w,
+        Option.some x => note_outside_write (spot_of w true x) w,
+    }
+
+/// `tee a b`: every operand is written.
+#[partial]
+def outside_write_all (ops : List ShellWord) (w : Walk) : Walk :=
+    match ops {
+        List.empty => w,
+        List.cons x rest => outside_write_all rest (note_outside_write (spot_of w true x) w),
     }
 
 // ── words ───────────────────────────────────────────────────────────────
@@ -259,6 +425,8 @@ def skip_wrapper_opts (wrapper : String) (ws : List ShellWord) : List ShellWord 
         List.cons x rest =>
             if Bool.or (String.starts_with "-" x.text) (is_assignment x.text) then skip_wrapper_opts wrapper rest
             else if Bool.and (String.beq wrapper "timeout") (starts_with_digit x.text) then rest
+            // `nice -n 5`, `ionice -c 3`: the flag's value.
+            else if Bool.and (one_of wrapper ["nice", "ionice"]) (starts_with_digit x.text) then skip_wrapper_opts wrapper rest
             else ws,
     }
 
