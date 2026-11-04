@@ -5,7 +5,7 @@
 # hook entry cannot chain commands -- hence this wrapper script.
 #
 # Runs the SELF-HOSTED test runner (`monad test`, implemented in
-# lang/src/codegen/test_driver.mo + cli/src/main.mo), not the Rust
+# codegen/src/test_driver.mo + cli/src/main.mo), not the Rust
 # evaluator: that runner is what the project ships, and until this
 # switched, nothing in CI exercised it over the whole corpus. It
 # compiles a driver binary per test file and runs it, so a test failure
@@ -536,7 +536,7 @@ fi
 # `find` lists agree exactly" was a comment that a later edit could
 # falsify silently; a list built once cannot drift from itself. Biggest
 # first, which is the order `shard_files` wants.
-corpus_dirs=(init std examples lang cli llvm runtime build eval motes slow_tests bench proofs)
+corpus_dirs=(init std examples lang codegen cli llvm runtime build eval motes slow_tests bench proofs)
 corpus_sizes() {
   find "${corpus_dirs[@]}" -name '*.mo' -printf '%s\t%p\n' | sort -rn
 }

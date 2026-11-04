@@ -542,8 +542,8 @@ Three natives are declared but unimplemented in both implementations —
 `eq_rec`, `string_to_chars`, `string_from_chars` — and fail at run time with
 `unknown native`.
 
-A few natives are not written in C at all: `lang/codegen/runtime.mo` emits LLVM
-IR directly for thirteen simple operations.
+A few natives are not written in C at all: `runtime/src/natives.mo` emits
+LLVM IR directly for thirteen simple operations.
 
 ## Known Rough Edges
 

@@ -18,6 +18,10 @@ workspace = true
 [dependencies.lang]
 workspace = true
 
+# The backend tests and the e2e harness live in `codegen`.
+[dependencies.codegen]
+workspace = true
+
 # The whole-corpus formatter gate: format every `.mo`, then re-parse both
 # sides and re-format the output. Slow, and therefore here rather than in the
 # fast sweep.

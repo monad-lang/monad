@@ -13,6 +13,9 @@ edition = "2026"
 [dependencies.lang]
 workspace = true
 
+[dependencies.codegen]
+workspace = true
+
 [dependencies.llvm]
 workspace = true
 

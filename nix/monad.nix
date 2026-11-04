@@ -243,8 +243,8 @@
       #     derivation as `commit` and `monadVersion` arguments, and the
       #     toolchain reaches it through `pkgs`.
       #
-      # 205 files and 4.7 MiB, against the whole tracked tree's 476 files and
-      # 8.1 MiB (both measured -- re-measure rather than adjust these, they
+      # 330 files and 7.9 MiB, against the whole tracked tree's 1,183 files
+      # and 19 MiB (both measured -- re-measure rather than adjust these, they
       # have gone stale three times). What that buys is not a smaller build --
       # it is a SHAREABLE one: `rung1` below carries no commit, so this hash is
       # the same across two commits that differ only outside these paths, and
@@ -269,6 +269,7 @@
                 "init"
                 "std"
                 "lang"
+                "codegen"
                 "cli"
                 "llvm"
                 "runtime"

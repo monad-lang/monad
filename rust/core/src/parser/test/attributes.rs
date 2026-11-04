@@ -579,7 +579,7 @@ fn test_export_c_keeps_its_body() {
 #[test]
 fn test_extern_c_with_lib_and_link_name() {
   // `link_name`/`lib`/`nullable` are interpreted only by the self-hosted
-  // codegen (lang/codegen/emit.mo). The Rust host parses the attribute
+  // codegen (codegen/emit.mo). The Rust host parses the attribute
   // args without acting on them, so the native keeps the def's own name
   // — `link_name := "puts"` does NOT rename it to `puts`.
   let s = r#"#[extern "c" {lib := "m", link_name := "puts", nullable := true}]

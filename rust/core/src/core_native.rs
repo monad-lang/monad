@@ -134,7 +134,7 @@ const PURE_NATIVES: &[&str] = &[
   "f32_to_string",
   "f64_to_string",
   // The decimal -> bit-pattern conversion the compiler uses to lower a
-  // float literal (`lang/codegen/emit.mo`). Pure: a function of its own
+  // float literal (`codegen/emit.mo`). Pure: a function of its own
   // argument text, no IO and no clock, so it is foldable like the rest.
   "f64_of_string",
   // `U64.bits_of_string` (`init/number.mo`), the same decimal -> bits
@@ -311,7 +311,7 @@ pub fn exec_native(
     "f64_to_string" => float_to_string(args, NumSuffix::F64),
     // `f64_of_string` is the one F64 native with no F32 twin and no
     // `F64`-typed result: it is the decimal -> bit-pattern conversion the
-    // COMPILER calls to lower a float literal (`lang/codegen/emit.mo`'s
+    // COMPILER calls to lower a float literal (`codegen/emit.mo`'s
     // `compile_lit_ir`), so its result is the i64 the emitted constant
     // has to be. See `float_of_string`'s own note on the parse.
     "f64_of_string" => float_of_string(args),
@@ -3405,7 +3405,7 @@ fn current_time(natives: &NativeTable) -> Result<Value, CoreEvalError> {
 /// for the same reason `current_time` above is.
 ///
 /// Deliberately no unit conversion: the only caller is the synthesized
-/// test driver (`lang/codegen/test_driver.mo`), which does all of its
+/// test driver (`codegen/test_driver.mo`), which does all of its
 /// ns/us/ms/s arithmetic in Monad so both runtimes format identically.
 fn current_time_nano(natives: &NativeTable) -> Result<Value, CoreEvalError> {
   let now = std::time::SystemTime::now()
@@ -4175,7 +4175,7 @@ mod tests {
   /// payload and the SAME handle travel as one `Pair`, because the `.mo`
   /// wrapper is linear and may not use the handle twice. The self-hosted
   /// compiler's fused do-bind (`try_compile_view_bind_db`,
-  /// `lang/src/codegen/emit.mo`) relies on exactly this pairing: it
+  /// `codegen/src/emit.mo`) relies on exactly this pairing: it
   /// reads the payload with `monad_view_payload` and passes the input
   /// handle through instead of returning both, so `view_get_impl` and
   /// `view_set_impl` must keep returning the word they were given. This

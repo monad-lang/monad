@@ -23,6 +23,10 @@ workspace = true
 [dependencies.lang]
 workspace = true
 
+# The reachability and validation stages shared with the build pipeline.
+[dependencies.codegen]
+workspace = true
+
 # Affine-by-default migration exception (measured 2026-10-29). The shared
 # recipe mirrors lang::eval_run's field-access pattern, which reads a
 # struct's fields more than once; delete this table when the mote reaches

@@ -3,7 +3,7 @@
 #   scripts/golden-ir.sh snapshot <dir>   build the fixed corpus, keep each .ll in <dir>
 #   scripts/golden-ir.sh diff <dir>       rebuild into a scratch dir, diff against <dir>
 # Builds run with MONAD_ELAB_STATS=1, so each <name>.log also carries the
-# `elab_stats:` lines (see lang/src/codegen/validate.mo, report_elab_stats).
+# `elab_stats:` lines (see codegen/src/validate.mo, report_elab_stats).
 # The IR embeds the checkout's absolute path: compare within one worktree.
 set -u
 mode=${1:?usage: golden-ir.sh snapshot|diff <dir>}
@@ -22,7 +22,7 @@ mkdir -p "$out"
 
 for f in $files; do
   n=$(basename "$f" .mo)
-  MONAD_ELAB_STATS=1 "$bin" run cli/src/main.mo build "$f" --no-cache -o "$out/$n" > "$out/$n.log" 2>&1 \
+  MONAD_ELAB_STATS=1 "$bin" run cli/src/main.mo -- build "$f" --no-cache -o "$out/$n" > "$out/$n.log" 2>&1 \
     || echo "build failed: $f (see $out/$n.log)"
   rm -f "$out/$n" "$out/$n.o" "$out/${n}_runtime.o"
 done

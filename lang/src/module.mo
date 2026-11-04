@@ -3959,13 +3959,13 @@ def resolve_open_aliases_in_modules_go (known_names : List String) (root_aliases
     }
 
 /// `lib` names the mote a file belongs to, the way Rust's `crate::` names
-/// its crate: inside `lang`, `use lib.codegen.emit` IS `codegen.emit`.
+/// its crate: inside `codegen`, `use lib.emit` IS `codegen.emit`.
 ///
 /// Rewritten to the canonical mote-qualified path here, at load time, and
 /// not resolved as a file path directly -- because a module path is also a
-/// module's IDENTITY. Left as `lib.codegen.emit` it would be a second
-/// module distinct from the same file loaded under its real name, scope
-/// would hold both, and codegen would emit `lib.codegen.emit::f` symbols.
+/// module's IDENTITY. Left as `lib.emit` it would be a second module
+/// distinct from the same file loaded under its real name, scope would hold
+/// both, and the backend would emit `lib.emit::f` symbols.
 ///
 /// Reads no manifest unless a `lib` use is actually present, so files
 /// without one cost nothing.

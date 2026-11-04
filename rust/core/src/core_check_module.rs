@@ -4427,9 +4427,9 @@ mod test {
   #[test]
   fn test_real_file_lang_codegen_emit() {
     let env = ModuleCheckEnv::new();
-    let source = include_str!("../../../lang/src/codegen/emit.mo");
+    let source = include_str!("../../../codegen/src/emit.mo");
     let report = check_module_source(&env, source);
-    print_report("lang/src/codegen/emit.mo", &report);
+    print_report("codegen/src/emit.mo", &report);
   }
 
   #[test]
@@ -4443,49 +4443,49 @@ mod test {
   #[test]
   fn test_real_file_lang_codegen_link() {
     let env = ModuleCheckEnv::new();
-    let source = include_str!("../../../lang/src/codegen/link.mo");
+    let source = include_str!("../../../codegen/src/link.mo");
     let report = check_module_source(&env, source);
-    print_report("lang/src/codegen/link.mo", &report);
+    print_report("codegen/src/link.mo", &report);
   }
 
   #[test]
   fn test_real_file_lang_codegen_test_compile_tests() {
     let env = ModuleCheckEnv::new();
-    let source = include_str!("../../../lang/src/codegen/test/compile_tests.mo");
+    let source = include_str!("../../../codegen/src/test/compile_tests.mo");
     let report = check_module_source(&env, source);
-    print_report("lang/src/codegen/test/compile_tests.mo", &report);
+    print_report("codegen/src/test/compile_tests.mo", &report);
   }
 
   #[test]
   fn test_real_file_lang_codegen_test_e2e_typecheck_tests() {
     let env = ModuleCheckEnv::new();
-    let source = include_str!("../../../lang/src/codegen/test/e2e_typecheck_tests.mo");
+    let source = include_str!("../../../codegen/src/test/e2e_typecheck_tests.mo");
     let report = check_module_source(&env, source);
-    print_report("lang/src/codegen/test/e2e_typecheck_tests.mo", &report);
+    print_report("codegen/src/test/e2e_typecheck_tests.mo", &report);
   }
 
   #[test]
   fn test_real_file_lang_codegen_test_ir_emission_tests() {
     let env = ModuleCheckEnv::new();
-    let source = include_str!("../../../lang/src/codegen/test/ir_emission_tests.mo");
+    let source = include_str!("../../../codegen/src/test/ir_emission_tests.mo");
     let report = check_module_source(&env, source);
-    print_report("lang/src/codegen/test/ir_emission_tests.mo", &report);
+    print_report("codegen/src/test/ir_emission_tests.mo", &report);
   }
 
   #[test]
   fn test_real_file_lang_codegen_test_test_e2e() {
     let env = ModuleCheckEnv::new();
-    let source = include_str!("../../../lang/src/codegen/test/test_e2e.mo");
+    let source = include_str!("../../../codegen/src/test/test_e2e.mo");
     let report = check_module_source(&env, source);
-    print_report("lang/src/codegen/test/test_e2e.mo", &report);
+    print_report("codegen/src/test/test_e2e.mo", &report);
   }
 
   #[test]
   fn test_real_file_lang_codegen_test_test_link_e2e() {
     let env = ModuleCheckEnv::new();
-    let source = include_str!("../../../lang/src/codegen/test/test_link_e2e.mo");
+    let source = include_str!("../../../codegen/src/test/test_link_e2e.mo");
     let report = check_module_source(&env, source);
-    print_report("lang/src/codegen/test/test_link_e2e.mo", &report);
+    print_report("codegen/src/test/test_link_e2e.mo", &report);
   }
 
   #[test]

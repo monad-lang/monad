@@ -22,8 +22,8 @@ monad/
 │   │       └── term/ + term.rs       # AST, modules, motes
 │   └── rust-cli/      # `monad-rs`: the Rust host binary (cargo-run surface)
 ├── cli/               # The self-hosted compiler, written in Monad (`monad build cli`)
-├── lang/              # Self-hosted compiler sources: parser, typecheck, module, codegen/
-│   └── src/codegen/   # LLVM backend by concern (emit, ir, natives, validate, ...)
+├── lang/              # Self-hosted compiler front end: parser, typecheck, module
+├── codegen/           # LLVM backend by concern (emit, natives, validate, ...)
 ├── llvm/              # Self-hosted LLVM IR + linking (llc/clang via exec_cmd)
 ├── runtime/           # C runtime linked into every compiled binary (runtime.c)
 ├── build/             # Build orchestrator: input hashing, content store, cache
@@ -45,7 +45,7 @@ monad/
 `init/`, `std/`, `lang/`, `cli/`, `eval/`, and everything under `motes/` are
 **motes** (Monad's packages). A mote's modules live in its `src/` directory; a `use`
 path's first segment names the mote, the rest is the path within its `src/`
-(`use lang::codegen::emit {...}` reads `lang/src/codegen/emit.mo`).
+(`use codegen::emit {...}` reads `codegen/src/emit.mo`).
 
 - **`init/` vs `std/`**: `init/` holds pure, portable code that must work in
   any environment (wasm included); `std/` holds OS side effects (file I/O,
@@ -370,7 +370,7 @@ field access.
 | Evaluation | `rust/core/src/core_eval.rs` |
 | Natives | `rust/core/src/core_native.rs` (`exec_native` dispatch) |
 | Lowering to IR | `rust/core/src/lower_core_ir.rs`, `core_ir.rs` |
-| Self-hosted codegen | `lang/src/codegen/` (emit.mo, ir.mo, natives.mo, validate.mo) |
+| Self-hosted codegen | `codegen/src/` (emit.mo, natives.mo, validate.mo, ...); IR is `llvm/src/ir.mo` |
 | Module loading / motes | `rust/core/src/term/module.rs`, `lang/src/module.mo`, `lang/src/mote.mo` |
 
 The self-hosted pipeline: parse → scope → elaborate → typecheck → codegen
@@ -428,7 +428,7 @@ signature differs). Wiring only the first two compiles and fails at runtime.
    arm. `PURE_NATIVES` is only for effect-free natives.
 3. **Compiled backend**: `runtime/src/runtime.c`, beside the existing
    helpers (the function generated code calls).
-4. **Codegen**: `lang/src/codegen/natives.mo` — `native_op_table` (only for
+4. **Codegen**: `codegen/src/natives.mo` — `native_op_table` (only for
    natives whose direct calls should inline), `native_runtime_fn_name` (the
 :   `NativeWrapKind` — below), and `runtime_declarations` (the `declare`, or
    the call-target gate fails the compile).

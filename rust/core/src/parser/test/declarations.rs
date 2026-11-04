@@ -949,13 +949,12 @@ fn test_use_rejects_dotted_path() {
 
 #[test]
 fn test_pub_use_accepts_colon_colon_separator() {
-  let s = "pub use lang::codegen::emit {compile}".into();
+  let s = "pub use codegen::emit {compile}".into();
   let (_, res) = use_parser(s).unwrap();
   assert!(res.public);
   assert_eq!(
     res.module_path,
     ModulePath::new(vec![
-      Identifier::new("lang".to_string()),
       Identifier::new("codegen".to_string()),
       Identifier::new("emit".to_string()),
     ])

@@ -2701,12 +2701,12 @@ impl ModulePath {
   }
 
   /// `lib` names the mote a file belongs to, the way Rust's `crate::`
-  /// names its crate: inside `lang`, `use lib.codegen.emit` is
-  /// `lang.codegen.emit`. Rewritten to the canonical mote-qualified path
-  /// here, at load time -- NOT resolved as a file path directly -- because
-  /// a module path is also a module's IDENTITY. Left as `lib.codegen.emit`
-  /// it would be a second module distinct from the same file loaded under
-  /// its real name, and codegen would emit `lib.codegen.emit::f` symbols.
+  /// names its crate: inside `codegen`, `use lib.emit` is `codegen.emit`.
+  /// Rewritten to the canonical mote-qualified path here, at load time --
+  /// NOT resolved as a file path directly -- because a module path is also
+  /// a module's IDENTITY. Left as `lib.emit` it would be a second module
+  /// distinct from the same file loaded under its real name, and the
+  /// backend would emit `lib.emit::f` symbols.
   ///
   /// A one-segment `lib` (bare `use lib`) becomes the mote name itself,
   /// which resolves to the mote's `src/lib.mo` like any other bare mote
@@ -2726,8 +2726,8 @@ impl ModulePath {
   /// path within it. `std.list` -> `std/src/list.mo`; a lone `std` -> the
   /// mote's library root, `std/src/lib.mo`.
   ///
-  /// This is the only thing that makes `use lang::codegen::ir` find
-  /// `llvm/src/ir.mo` after the repo became a mote workspace --
+  /// This is the only thing that makes `use codegen::emit` find
+  /// `codegen/src/emit.mo` after the repo became a mote workspace --
   /// `to_file_path` joins segments literally and knows nothing about motes.
   ///
   /// This is a resolution MAPPING only. Which spellings are legal at all is

@@ -31,6 +31,10 @@ workspace = true
 [dependencies.lang]
 workspace = true
 
+# The compiler backend: the CLI drives it after the front end.
+[dependencies.codegen]
+workspace = true
+
 # The formatter behind `monad fmt`. It is a dependency of THIS mote and not of
 # `lang`: formatting is a tool over source text, not a compiler stage, and the
 # strict-parse gate it is wrapped in here is the compiler's business.

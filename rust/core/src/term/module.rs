@@ -3891,7 +3891,7 @@ pub fn bare_open_warnings(
 
 /// `#[extern "c" ...]` FFI declarations are lowered ONLY by the
 /// self-hosted compiler's LLVM path (the `monad_extern_*` C-ABI wrappers
-/// in `lang/codegen/emit.mo`, plus `lang/main.mo`'s link-libs plumbing).
+/// in `codegen/emit.mo`, plus `lang/main.mo`'s link-libs plumbing).
 /// The Rust host has no C bridge: the parser accepts the attribute and
 /// lowers the def to an ordinary native under its own name, so a mote
 /// declaring externs still LOADS and type-checks here — but forcing such

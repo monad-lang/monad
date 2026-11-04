@@ -62,6 +62,11 @@ neutral="$out_dir/monad-src.tar.gz"
 member_manifests=(init/mote.toml std/mote.toml llvm/mote.toml runtime/mote.toml)
 members=(init std llvm runtime)
 
+# Not staged: `lang`, `codegen`, `cli` and `eval` are compiler internals.
+# They reach consumers as the toolchain binary, not as sources to compile, so
+# adding `codegen` here would ship the backend twice and enlarge every
+# consumer's dependency closure. Keep the four runtime-side motes above.
+
 for m in "${members[@]}"; do
   [ -f "$root/$m/mote.toml" ] || { echo "stage-mote-sources: $m/mote.toml is missing" >&2; exit 1; }
   [ -d "$root/$m/src" ] || { echo "stage-mote-sources: $m/src is missing" >&2; exit 1; }

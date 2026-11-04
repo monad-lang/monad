@@ -289,7 +289,7 @@ fn test_qualified_uses_are_accepted() {
   for source in [
     "use std::io {IO}\n",
     "use init::io {IO}\n",
-    "use lang::codegen::emit {}\n",
+    "use codegen::emit {}\n",
   ] {
     assert!(
       qualification_error(source, None).is_none(),
@@ -542,17 +542,16 @@ fn test_a_use_of_an_unloaded_module_is_left_alone() {
 }
 
 /// A mote path reads as `<mote>/src/<rest>.mo`, which is what makes
-/// `use lang.codegen.emit` find `lang/src/codegen/emit.mo`.
+/// `use codegen.emit` find `codegen/src/emit.mo`.
 #[test]
 fn test_mote_file_path_puts_sources_under_src() {
   let path = ModulePath::new(vec![
-    Identifier::new("lang".to_string()),
     Identifier::new("codegen".to_string()),
     Identifier::new("emit".to_string()),
   ]);
   assert_eq!(
     path.to_mote_file_path(),
-    std::path::PathBuf::from("lang/src/codegen/emit.mo")
+    std::path::PathBuf::from("codegen/src/emit.mo")
   );
   assert_eq!(
     ModulePath::top("std").to_mote_file_path(),

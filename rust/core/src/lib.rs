@@ -726,7 +726,7 @@ fn detect_test_result_value(
       // expected)`) pass regardless of the actual assertion — a real,
       // separate, and serious gap, found while validating the
       // dictionary-passing plan's own e2e tests
-      // (lang/codegen/test/compile_tests.mo).
+      // (codegen/test/compile_tests.mo).
       //
       // Fixed by checking `io_mk` FIRST (an `IO`-wrapped value must
       // always be unwrapped before its own payload's pass/fail meaning
@@ -2556,7 +2556,7 @@ def test_direct_generic_call : Bool :=
   /// its actual payload) matched `bool_true` immediately and reported
   /// Pass unconditionally. Found while validating the dictionary-
   /// passing plan's own end-to-end compile-and-run tests
-  /// (lang/codegen/test/compile_tests.mo), which are exactly this
+  /// (codegen/test/compile_tests.mo), which are exactly this
   /// shape (`IO Bool`, asserting a compiled program's real exit code).
   #[test]
   fn test_run_tests_for_files_io_wrapped_bool_reports_correctly() {

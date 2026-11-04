@@ -1926,7 +1926,7 @@ fn def_parser(input: Span) -> Res<Def> {
 
   // `#[extern "c" ...]` — codegen-only declarations. Only the self-hosted
   // compiler lowers these: `#[extern]` into a C-ABI wrapper plus link
-  // flags (lang/codegen/emit.mo, lang/main.mo's link_libs). The Rust host
+  // flags (codegen/emit.mo, lang/main.mo's link_libs). The Rust host
   // has no C bridge at all, so it records the attribute and parses the def
   // as an ordinary `Term::Ntv` under the def's own name — enough for
   // ffi_example-style motes to LOAD and type-check (`module_warnings`
