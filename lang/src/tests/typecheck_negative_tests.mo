@@ -256,3 +256,25 @@ def test_a_non_copy_type_used_twice_is_still_rejected : IO Bool :=
         ("type NoCopy { mk }\n"
         ++ "def dup_nocopy (x : NoCopy) : Pair NoCopy NoCopy := Pair.pair x x\n")
 
+// --- The `#[proof]` def exemption ---------------------------------------
+//
+// A proof def's result is erased, so its body is proof code and may use any
+// binder freely. This is what licenses a contractibility proof's centre,
+// `Sigma.dpair b (refl b)`, which duplicates a DATA value `b : A` that no
+// `Copy` instance can cover (measured 2026-11-05).
+
+#[test]
+def test_a_proof_def_may_duplicate_a_value : IO Bool :=
+    accepted
+        ("type NoCopyP { mk }\n"
+        ++ "#[proof]\n"
+        ++ "def dup_proof (x : NoCopyP) : Pair NoCopyP NoCopyP := Pair.pair x x\n")
+
+/// ... and the exemption is opt-in: the SAME body without the marker is still
+/// an error, so the rule did not become a blanket switch.
+#[test]
+def test_the_same_duplication_without_the_proof_marker_is_rejected : IO Bool :=
+    rejected_with "dup_plain" "is moved 2 times"
+        ("type NoCopyP { mk }\n"
+        ++ "def dup_plain (x : NoCopyP) : Pair NoCopyP NoCopyP := Pair.pair x x\n")
+

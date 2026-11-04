@@ -64,7 +64,7 @@
 /// `TypeError.custom`: it is real but has no corpus instances at all
 /// (the whole corpus carries zero multiplicity annotations), so it does
 /// not earn its own variant yet.
-use lib::types {DebugName, Def, Identifier, ModulePath, Multiplicity, Scope, Term, TypeConstraint, TypeError, binder_explicit, binder_named, id_member, show_identifier}
+use lib::types {DebugName, Def, Identifier, ModulePath, Multiplicity, Scope, Term, TypeConstraint, TypeError, binder_explicit, binder_named, has_attr, id_member, show_identifier}
 use lib::scope {scope_data_empty}
 use lib::typecheck::usage {BinderKind, BinderUse, attribute_binder_types, collect_binder_uses, collect_binder_uses_with_params, typ_is_function}
 use lib::typecheck::copy_class {is_copy}
@@ -324,6 +324,19 @@ def check_def_with (kinds : TypeKinds) (scope : Scope) (ctors : HashMap String B
     // Its `!`/`%` prefixes describe the call ABI, not a body obligation,
     // so `linear_unused` must not fire on it.
     if def_has_no_body (def_body d) then List.empty
+    // A `#[proof]` def produces an ERASED value: its body is proof code that
+    // never runs, so every binder in it may be used freely. This is the
+    // structural exemption the cubical proofs need -- a contraction writes
+    // `Sigma.dpair b (refl b)`, duplicating a DATA value `b : A`, which no
+    // `Copy` instance can license for a type variable (measured 2026-11-04).
+    //
+    // The marker sits on the proof DEF rather than being derived from its
+    // result type because `ScopeDef` (`lang/src/types.mo`) carries no
+    // attributes, so the checker cannot ask whether the type former a def
+    // returns is itself `#[proof]`. Deriving it would mean adding attrs to
+    // `ScopeDef`; recorded in plans/type-system/univalence.md.
+    else if has_attr (Identifier.id "proof")
+        (match d { Def.mk { attrs, .. } => attrs }) then List.empty
     else
         // `Def.params` carries the source's `!`/`?`/`%`; the parameter-aware
         // walker aligns it with the leading lambda chain (skipping generated
