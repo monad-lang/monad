@@ -37,7 +37,7 @@ use lib::ctors {
   ctor_composite_key, is_constructor_var,
 }
 use lib::natives {
-  NativeWrapKind, lookup_native, lookup_native_any, native_attr_target_name,
+  NativeWrapKind, lookup_native, lookup_native_any,
   native_op_table, native_runtime_fn_name, runtime_declarations,
   runtime_declarations_for,
 }

@@ -15,7 +15,7 @@ use llvm::strmap {str_map_empty, str_map_insert, str_map_lookup}
 use std::list {List.filter_map, List.length}
 use lang::types {
   Attribute, Decl, DebugName, Def, Identifier, Inductive, Multiplicity, NamePath, Struct,
-  StructField, Term, Visibility, concrete, id_eq, sentinel,
+  StructField, Term, Visibility, concrete, has_attr, id_eq, sentinel,
 }
 use lang::module {ModuleInfo}
 use lib::symbols {def_symbol_name}
@@ -166,19 +166,6 @@ def def_body_term (d : Def) : Term := match d {
     Def.mk {name := _name, typ := _typ, term := term_, constraints := _constraints, attrs := _attrs, vis := _vis, ..} => term_,
 }
 
-/// Whether this def carries `#[export "c"]` -- a wasm export. The
-/// attribute name is compared exactly, like `has_extern_attr`
-/// (`validate.mo`) does for `#[extern]`.
-#[partial]
-def has_export_attr (attrs : List Attribute) : Bool := match attrs {
-    List.empty => false,
-    List.cons a rest =>
-        match a {
-            Attribute.mk aname _ =>
-                if id_eq aname (Identifier.id "export") then true else has_export_attr rest,
-        },
-}
-
 /// The qualified symbol of every `#[export "c"]` def, in decl order.
 /// These are extra reachability roots: `main` never references an export,
 /// so without them the def is filtered out before codegen and the export
@@ -186,7 +173,7 @@ def has_export_attr (attrs : List Attribute) : Bool := match attrs {
 #[partial]
 def export_root_of_decl (d : Decl) : Option String := match d {
     Decl.def_d def_ =>
-        if has_export_attr (def_attrs def_)
+        if has_attr (Identifier.id "export") (def_attrs def_)
         then Option.some (def_name_str def_)
         else Option.none,
     _ => Option.none,
@@ -203,7 +190,7 @@ def export_roots (decl_list : List Decl) : List String :=
 #[partial]
 def export_name_of_decl (d : Decl) : Option String := match d {
     Decl.def_d def_ =>
-        if has_export_attr (def_attrs def_)
+        if has_attr (Identifier.id "export") (def_attrs def_)
         then Option.some (unqualify_def_name (def_name_str def_))
         else Option.none,
     _ => Option.none,
@@ -218,7 +205,7 @@ pub def export_names (decl_list : List Decl) : List String :=
 #[partial]
 def export_pair_of_decl (d : Decl) : Option (Pair String String) := match d {
     Decl.def_d def_ =>
-        if has_export_attr (def_attrs def_)
+        if has_attr (Identifier.id "export") (def_attrs def_)
         then
             let qualified := def_name_str def_ in
             let plain := unqualify_def_name qualified in

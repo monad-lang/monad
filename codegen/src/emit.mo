@@ -40,7 +40,7 @@ use lib::ctors {
   ctor_composite_key, is_constructor_var,
 }
 use lib::natives {
-  NativeWrapKind, lookup_native, lookup_native_any, native_attr_target_name,
+  NativeWrapKind, lookup_native, lookup_native_any,
   native_op_table, native_runtime_fn_name, runtime_declarations,
   runtime_declarations_for,
 }
@@ -69,6 +69,7 @@ use lib::symbols {
   replace_dots_with_underscores, string_find_last, symbol_identifier,
 }
 use lang::name_text {unqualify_def_name}
+use lib::attrs {find_attr_args, find_named_arg}
 use lang::elaborate {names_of_decls}
 use lib::util {
   dedup_idents, dedup_idents_go, dedup_strs, dedup_strs_go, drop_last_instr,
@@ -4366,37 +4367,6 @@ def build_extern_wrapper_table_go (defs : List Def) (acc : HashMap String String
 def build_llvm_params_db (params : List Param) : List ParamPair :=
     build_llvm_params_from_db params 0
 
-/// Looks up the *named* argument of an `#[extern "c" { key := value, ... }]`
-/// attribute — `find_named_arg "link_name" attrs` returns `Option.some s`
-/// for the first `AttrArg.named (Identifier.id "link_name") (AttrArg.str s)`
-/// it sees, and `Option.none` otherwise. Mirrors `lang.types.attr_arg_eq`'s
-/// own pattern (structural shape walk).
-#[partial]
-def find_named_arg (key : String) (args : List AttrArg) : Option String := match args {
-    List.empty => Option.none,
-    List.cons hd tl =>
-        match hd {
-            AttrArg.named n v =>
-                if id_eq n (Identifier.id key)
-                then match v { AttrArg.str s => Option.some s, _ => Option.none }
-                else find_named_arg key tl,
-            // `lang/parser.mo`'s `attr_arg_named_close` wraps a
-            // `{name := value, ...}` block in a single `AttrArg.group`
-            // (deliberately NOT flattened onto the enclosing attribute's
-            // own arg list — see its doc comment), so a parsed
-            // `#[extern "c" {link_name := "puts"}]` carries the pair
-            // nested one level down. Recurse into the group; without
-            // this, every named arg reads as absent and the override is
-            // silently ignored.
-            AttrArg.group items =>
-                match find_named_arg key items {
-                    Option.some s => Option.some s,
-                    Option.none => find_named_arg key tl,
-                },
-            _ => find_named_arg key tl,
-        },
-}
-
 /// Parses a `#[extern "c" ...]` attribute (if `attrs` contains one) into
 /// an `ExternInfo`. Returns `Option.none` for any def lacking the
 /// attribute — `compile_db_def_ir`'s own dispatch treats that as "not an
@@ -4417,7 +4387,7 @@ def extern_attr_info (def_ : Def) (params : List Param) : Option ExternInfo :=
 /// inside an `Option.some` arm body).
 #[partial]
 def build_extern_info (name : NamePath) (typ : Term) (params : List Param) (attrs : List Attribute) : Option ExternInfo :=
-    match extern_attr_target attrs {
+    match find_attr_args "extern" attrs {
         Option.none => Option.none,
         Option.some ext_args => build_extern_info_some name typ params ext_args,
     }
@@ -4463,23 +4433,6 @@ def extern_link_name_from_args (ext_args : List AttrArg) (fallback_np : NamePath
     match find_named_arg "link_name" ext_args {
         Option.some n => n,
         Option.none => unqualify_def_name (last_segment_of_name_path fallback_np),
-    }
-
-/// Helper for `extern_attr_info`: scans `attrs` for `Attribute.mk
-/// (Identifier.id "extern") args` and returns those `args`. Mirrors
-/// `native_attr_target_name` exactly — same shape, different attribute
-/// name. Returns `Option.none` if no `#[extern ...]` attribute is found.
-#[partial]
-def extern_attr_target (attrs : List Attribute) : Option (List AttrArg) :=
-    match attrs {
-        List.empty => Option.none,
-        List.cons a rest =>
-            match a {
-                Attribute.mk aname aargs =>
-                    if id_eq aname (Identifier.id "extern")
-                    then Option.some aargs
-                    else extern_attr_target rest,
-            },
     }
 
 /// Extracts the LAST identifier from a (possibly qualified) decl name

@@ -11,13 +11,14 @@
 /// `runtime_declarations` lives here too: it is the `declare` list for
 /// exactly the C functions these tables dispatch to.
 use llvm::strmap {str_map_empty, str_map_insert, str_map_lookup}
-use lang::types {AttrArg, Attribute, id, id_eq}
+use lang::types {Attribute}
 use llvm::ir {LLVMDeclaration, NativeOp}
 use llvm::target {TargetKind}
 use lib::symbols {
-  extract_base_name, replace_dots_with_underscores, symbol_identifier,
+  extract_base_name, replace_dots_with_underscores,
 }
 use lang::name_text {unqualify_def_name}
+use lib::attrs {attr_target}
 use lib::util {}
 use std::map {HashMap}
 
@@ -175,7 +176,7 @@ type NativeWrapKind {
 /// a native this backend doesn't implement yet.
 #[partial]
 def native_runtime_fn_name (attrs : List Attribute) : Option NativeWrapKind :=
-    match native_attr_target_name attrs {
+    match attr_target "native" attrs {
         Option.none => Option.none,
         Option.some target =>
             if String.beq target "string_concat" then Option.some (NativeWrapKind.passthrough "monad_string_concat")
@@ -724,31 +725,6 @@ def native_runtime_fn_name (attrs : List Attribute) : Option NativeWrapKind :=
             else if String.beq target "inotify_rm_watch" then Option.some (NativeWrapKind.raw_io_passthrough "monad_inotify_rm_watch")
             else if String.beq target "inotify_read" then Option.some (NativeWrapKind.raw_io_passthrough "monad_inotify_read")
             else Option.none,
-    }
-
-#[partial]
-def native_attr_target_name (attrs : List Attribute) : Option String :=
-    match attrs {
-        List.empty => Option.none,
-        List.cons a rest =>
-            match a {
-                Attribute.mk aname args =>
-                    if id_eq aname (Identifier.id "native")
-                    then attr_arg_as_string_first args
-                    else native_attr_target_name rest,
-            },
-    }
-
-#[partial]
-def attr_arg_as_string_first (args : List AttrArg) : Option String :=
-    match args {
-        List.empty => Option.none,
-        List.cons a _ =>
-            match a {
-                AttrArg.ident aid => Option.some (symbol_identifier aid),
-                AttrArg.str s => Option.some s,
-                _ => Option.none,
-            },
     }
 
 #[partial]

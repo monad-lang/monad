@@ -20,7 +20,7 @@
 use llvm::strmap {str_map_empty, str_map_insert, str_map_lookup}
 use lang::types {
   AttrArg, Attribute, Con, Decl, Def, Identifier, Literal, MatchCase, NamePath, Native,
-  StructLitField, Term, binder_is_explicit, id_eq, show_identifier, term_peel,
+  StructLitField, Term, binder_is_explicit, has_attr, id_eq, show_identifier, term_peel,
 }
 use lang::scope {collect_classes, find_unresolved_class_calls_decls}
 use lib::ctors {CtorClaim, collect_ctor_claims_inds}
@@ -30,12 +30,13 @@ use llvm::ir {
   LLVMBasicBlock, LLVMDeclaration, LLVMFunction, LLVMInstruction, LLVMModule,
   LLVMValue, PhiPair,
 }
-use lib::decls {def_name_str, extract_defs, extract_inductives, has_export_attr}
+use lib::decls {def_name_str, extract_defs, extract_inductives}
 use runtime::natives {runtime_native_functions}
 use lib::natives {
-  lookup_native_any, native_attr_target_name, native_runtime_fn_name,
+  lookup_native_any, native_runtime_fn_name,
   runtime_declarations, NativeAvailability, native_target_availability,
 }
+use lib::attrs {attr_target}
 use llvm::target {TargetKind}
 use lib::symbols {def_symbol_name, ends_with_main, name_path_to_str}
 use lang::name_text {unqualify_def_name}
@@ -79,7 +80,7 @@ def find_monad_externs (defs : List Def) (acc : List String) : List String :=
 def monad_extern_message (d : Def) : Option String :=
     match d {
         Def.mk {name, attrs, ..} =>
-            match has_extern_attr attrs {
+            match has_attr (Identifier.id "extern") attrs {
                 false => Option.none,
                 true =>
                     match extern_link_name attrs {
@@ -100,19 +101,6 @@ def monad_extern_message (d : Def) : Option String :=
                                     else Option.none,
                             },
                     },
-            }
-    }
-
-/// Whether the def carries any `#[extern ...]` attribute. Without this,
-/// an ordinary def whose name happens to start with `monad_` would be
-/// treated as an extern and rejected.
-def has_extern_attr (attrs : List Attribute) : Bool :=
-    match attrs {
-        List.empty => false,
-        List.cons a rest =>
-            match a {
-                Attribute.mk aname _ =>
-                    if id_eq aname (Identifier.id "extern") then true else has_extern_attr rest,
             }
     }
 
@@ -241,7 +229,7 @@ def find_unwired_native_defs_go (defs : List Def) (acc : List String) : List Str
                 Def.mk {name, typ := _typ, term := term_, constraints := _constraints, attrs, vis := _vis, ..} =>
                     match strip_db_lams term_ {
                         Term.hole =>
-                            match native_attr_target_name attrs {
+                            match attr_target "native" attrs {
                                 Option.some target =>
                                     match native_runtime_fn_name attrs {
                                         Option.some _ => find_unwired_native_defs_go rest acc,
@@ -283,7 +271,7 @@ def find_unavailable_native_defs_go (kind : TargetKind) (triple : String) (defs 
                 Def.mk {name, typ := _typ, term := term_, constraints := _constraints, attrs, vis := _vis, ..} =>
                     match strip_db_lams term_ {
                         Term.hole =>
-                            match native_attr_target_name attrs {
+                            match attr_target "native" attrs {
                                 Option.none =>
                                     match extern_target_problem kind triple name attrs {
                                         Option.none => find_unavailable_native_defs_go kind triple rest acc,
@@ -399,7 +387,7 @@ def export_dup_msg (plain : String) (seen : List String) : List String :=
 def export_def_name (d : Def) : Option String :=
     match d {
         Def.mk {name, typ := _typ, term := _term, constraints := _constraints, attrs, vis := _vis, ..} =>
-            if has_export_attr attrs then Option.some (unqualify_def_name (def_symbol_name name)) else Option.none,
+            if has_attr (Identifier.id "export") attrs then Option.some (unqualify_def_name (def_symbol_name name)) else Option.none,
     }
 
 #[partial]

@@ -139,8 +139,9 @@ pub def has_attr (name : Identifier) (attrs : List Attribute) : Bool :=
 /// one corpus attribute whose args carry meaning: the parser already
 /// produces `AttrArg.ident` for it (`attr_arg_parser`,
 /// lang/parser.mo), so what was missing was only a way to read them
-/// back out.
-def attr_args (name : Identifier) (attrs : List Attribute) : Option (List AttrArg) :=
+/// back out. `codegen` reuses it as the one implementation behind its
+/// string-keyed `attrs::find_attr_args`.
+pub def attr_args (name : Identifier) (attrs : List Attribute) : Option (List AttrArg) :=
     match attrs {
         List.cons hd rest =>
             match hd {
