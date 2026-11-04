@@ -1833,16 +1833,28 @@ def try_dependent_match (cases : List MatchCase) (sc_term : Term) (sc_typ : Term
     match maybe_ind {
         Option.none => Option.none,
         Option.some ind =>
+            // Reduce the scrutinee type BEFORE anything reads its spine. A
+            // def-spelled type -- `x : fiber A A (fn x => x) b` -- flattens to
+            // FOUR spine args while `Sigma` declares two, so the gate below
+            // declined on a type that is not what the arm refines; the same raw
+            // spine was also what `Elim.params` and `substitute_inductive_type_
+            // params` consumed (measured 2026-11-04).
+            let raw_args : I64 :=
+                match flatten_call_spine (term_peel sc_typ) { CallSpine.mk _ args => List.length args } in
+            let sc_typ_r : Term :=
+                if I64.beq raw_args (List.length ind.params)
+                then sc_typ
+                else whnf scope local_types locals sc_typ in
             match term_peel sc_term {
                 Term.var idx _dbg =>
                     if I64.beq idx sentinel
                     then Option.none
-                    else if dependent_match_gate_ok ind sc_typ expected_type cases
+                    else if dependent_match_gate_ok ind sc_typ_r expected_type cases
                     then
-                        let motive : Term := derive_motive idx sc_typ expected_type in
-                        let params : List Term := match flatten_call_spine sc_typ { CallSpine.mk _head args => args } in
+                        let motive : Term := derive_motive idx sc_typ_r expected_type in
+                        let params : List Term := match flatten_call_spine sc_typ_r { CallSpine.mk _head args => args } in
                         let maybe_ind_ : Option Inductive := Option.some ind in
-                        let minors : List Term := build_elim_minors (inductive_constructors ind) cases sc_typ maybe_ind_ in
+                        let minors : List Term := build_elim_minors (inductive_constructors ind) cases sc_typ_r maybe_ind_ in
                         let e : Elim := Elim.mk ind.name List.empty params List.empty motive minors sc_term in
                         Option.some (type_check_elim e expected_type scope local_types locals)
                     else Option.none,
