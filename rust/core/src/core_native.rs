@@ -1104,51 +1104,6 @@ pub fn io_bind(
   crate::core_eval::apply(f, inner, globals, natives, cache)
 }
 
-/// `io_iterate (init : S) (step : S -> RawIO (Option S)) : RawIO Unit` —
-/// applies `step` until it answers `none`, each step returning before the
-/// next starts (the compiled `monad_io_iterate`'s loop). TEMPORARY until
-/// plain recursive IO is heapless (plans/bootstrapping/heapless-loops.md).
-/// Dispatched from `fire_or_accumulate` like `io_bind`.
-pub fn io_iterate(
-  args: &[Value],
-  globals: &crate::core_value::GlobalTable,
-  natives: &NativeTable,
-  cache: &mut crate::core_value::GlobalCache,
-) -> Result<Value, CoreEvalError> {
-  let mut state = args
-    .first()
-    .ok_or_else(|| CoreEvalError::NativeArgError("io_iterate needs 2 args".into()))?
-    .clone();
-  let step = args
-    .get(1)
-    .ok_or_else(|| CoreEvalError::NativeArgError("io_iterate needs 2 args".into()))?
-    .clone();
-  let raw_io = require_ctor(natives.well_known.raw_io_io, "RawIO.io")?;
-  let some = require_ctor(natives.well_known.option_some, "Option.some")?;
-  loop {
-    let io_val = crate::core_eval::apply(step.clone(), state, globals, natives, cache)?;
-    let opt = match &io_val {
-      Value::Con { tag, args } if *tag == raw_io.tag => args.first().cloned().ok_or_else(|| {
-        CoreEvalError::NativeArgError("RawIO.io constructor has no fields".into())
-      })?,
-      _ => {
-        return Err(CoreEvalError::NativeArgError(format!(
-          "io_iterate expected a RawIO value, got {io_val:?}"
-        )));
-      }
-    };
-    match &opt {
-      Value::Con { tag, args } if *tag == some.tag => {
-        state = args
-          .first()
-          .cloned()
-          .ok_or_else(|| CoreEvalError::NativeArgError("Option.some has no fields".into()))?;
-      }
-      _ => return raw_io_wrap(natives, unit_value()),
-    }
-  }
-}
-
 // --- `std/array.mo` -------------------------------------------------
 //
 // An `Array A` value IS a `Value::Con` tagged `Array.mk` whose `args`

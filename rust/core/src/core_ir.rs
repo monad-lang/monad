@@ -84,6 +84,15 @@ pub struct MatchArm {
   pub body: IrRef,
 }
 
+/// Which effectful monad an `IoBind` came from. The two differ only in
+/// how many wrapper constructors the payload hides behind: `IO A` is
+/// `IO.mk (RawIO.io a)`, `RawIO A` is `RawIO.io a`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IoBindKind {
+  Io,
+  RawIo,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum CoreIr {
   /// De Bruijn index into the *runtime* environment (an `Env`, built by
@@ -114,6 +123,22 @@ pub enum CoreIr {
   App {
     fun: IrRef,
     arg: IrRef,
+  },
+
+  /// A fully-applied `Monad.bind` at `IO`/`RawIO`, lowered direct-style:
+  /// evaluate `input`, unwrap its payload, and continue with `body` (the
+  /// bind's continuation lambda body) with that payload bound. `IO.bind`
+  /// is the identity on its continuation's value -- `RawIO.bind` returns
+  /// `f`'s value unchanged -- so this is exactly the monadic bind, only
+  /// without the native call that would run the continuation inside its
+  /// own frame and keep that frame alive under a recursive loop (see
+  /// `plans/bootstrapping/heapless-loops.md` H1). `LowerCtx` only emits
+  /// this for the IO/RawIO instances; every other bind stays an ordinary
+  /// `App` of the dictionary projection.
+  IoBind {
+    kind: IoBindKind,
+    input: IrRef,
+    body: IrRef,
   },
 
   Lit(IrLit),
@@ -186,6 +211,9 @@ impl Display for CoreIr {
       CoreIr::Global(i) => write!(f, "(global {i})"),
       CoreIr::Lam { body } => write!(f, "(lam {body})"),
       CoreIr::App { fun, arg } => write!(f, "(app {fun} {arg})"),
+      CoreIr::IoBind { kind, input, body } => {
+        write!(f, "(io-bind {kind:?} {input} {body})")
+      }
       CoreIr::Lit(l) => write!(f, "(lit {l})"),
       CoreIr::Match { scrutinee, arms } => {
         write!(f, "(match {scrutinee}")?;
@@ -237,6 +265,14 @@ pub fn app(fun: CoreIr, arg: CoreIr) -> CoreIr {
   CoreIr::App {
     fun: Arc::new(fun),
     arg: Arc::new(arg),
+  }
+}
+
+pub fn io_bind(kind: IoBindKind, input: CoreIr, body: CoreIr) -> CoreIr {
+  CoreIr::IoBind {
+    kind,
+    input: Arc::new(input),
+    body: Arc::new(body),
   }
 }
 

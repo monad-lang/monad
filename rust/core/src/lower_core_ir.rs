@@ -12,7 +12,7 @@
 //! nodes (nothing class/instance-dispatch-specific needs reinventing
 //! here).
 
-use crate::core_ir::{self, CoreIr, IrLit, IrRef, MatchArm};
+use crate::core_ir::{self, CoreIr, IoBindKind, IrLit, IrRef, MatchArm};
 use crate::core_program::CoreProgram;
 use crate::core_term::{Atom, CoreConstructor, CoreLit, CoreNative, CoreTerm};
 use crate::term::{GlobalRef, Identifier, ModulePath, NamePath};
@@ -56,6 +56,14 @@ fn shift_ir(ir: &IrRef, cutoff: u32, delta: u32) -> IrRef {
     CoreIr::App { fun, arg } => std::sync::Arc::new(CoreIr::App {
       fun: shift_ir(fun, cutoff, delta),
       arg: shift_ir(arg, cutoff, delta),
+    }),
+    // The body runs with the bind's payload bound (the evaluator extends
+    // the environment by one frame before entering it), exactly like a
+    // `Lam` body.
+    CoreIr::IoBind { kind, input, body } => std::sync::Arc::new(CoreIr::IoBind {
+      kind: *kind,
+      input: shift_ir(input, cutoff, delta),
+      body: shift_ir(body, cutoff + 1, delta),
     }),
     CoreIr::Match { scrutinee, arms } => std::sync::Arc::new(CoreIr::Match {
       scrutinee: shift_ir(scrutinee, cutoff, delta),
@@ -256,6 +264,80 @@ fn dict_projection_spine(term: &CoreTerm) -> Option<(&CoreTerm, Vec<&CoreTerm>)>
   }
 }
 
+/// The `Monad` instance a dictionary-projection `Match` scrutinizes, as
+/// `project_dict_field` records it: an anonymous instance is synthesized
+/// under a single dasherized identifier (`instance-Monad-IO`), so the
+/// flat path's suffix names the carrier. `IO` and `RawIO` are the two
+/// this lowering claims (see `CoreIr::IoBind`); everything else -- `List`,
+/// `Option`, a user's own monad -- keeps the generic dictionary-call path.
+fn io_instance_kind(path: &GlobalRef) -> Option<IoBindKind> {
+  let flat = path.to_flat_name_path().to_string();
+  if flat == "instance-Monad-IO" || flat.ends_with(".instance-Monad-IO") {
+    Some(IoBindKind::Io)
+  } else if flat == "instance-Monad-RawIO" || flat.ends_with(".instance-Monad-RawIO") {
+    Some(IoBindKind::RawIo)
+  } else {
+    None
+  }
+}
+
+/// A hand-written `IO.bind`/`RawIO.bind` call, resolved straight to the
+/// declaring def (no dictionary projection at all).
+fn io_method_path_kind(path: &GlobalRef) -> Option<IoBindKind> {
+  let flat = path.to_flat_name_path().to_string();
+  if flat == "init.io.IO.bind" {
+    Some(IoBindKind::Io)
+  } else if flat == "init.io.RawIO.bind" {
+    Some(IoBindKind::RawIo)
+  } else {
+    None
+  }
+}
+
+fn io_bind_head_kind(ctx: &LowerCtx, head: &CoreTerm) -> Option<IoBindKind> {
+  match head.strip_ctx() {
+    CoreTerm::Free(atom) => io_method_path_kind(ctx.atom_paths.get(atom)?),
+    CoreTerm::Lit(CoreLit::Match { scrutinee, cases }) if cases.len() == 1 => {
+      // `project_dict_field`'s exact shape: one case whose body is the
+      // projected field (`Bound(_)`) over the instance atom. Two applied
+      // arguments then identify the method as `bind` (`pure` takes one).
+      if !matches!(cases[0].value.strip_ctx(), CoreTerm::Bound(_)) {
+        return None;
+      }
+      let CoreTerm::Free(atom) = scrutinee.strip_ctx() else {
+        return None;
+      };
+      io_instance_kind(ctx.atom_paths.get(atom)?)
+    }
+    _ => None,
+  }
+}
+
+/// Recognizes a fully-applied `Monad.bind` at `IO`/`RawIO`:
+/// `App(App(<bind head>, input), Lam)`. Only a literal-lambda
+/// continuation is claimed -- a named or partial continuation keeps the
+/// ordinary path (and still works, just without the trampoline).
+fn io_bind_spine<'t>(
+  ctx: &LowerCtx,
+  term: &'t CoreTerm,
+) -> Option<(IoBindKind, &'t CoreTerm, &'t CoreTerm, &'t CoreTerm)> {
+  let mut args: Vec<&CoreTerm> = Vec::new();
+  let mut head = term;
+  while let CoreTerm::App { fun, arg } = head.strip_ctx() {
+    args.push(arg.as_ref());
+    head = fun.as_ref();
+  }
+  if args.len() != 2 {
+    return None;
+  }
+  args.reverse();
+  let CoreTerm::Lam { body, .. } = args[1].strip_ctx() else {
+    return None;
+  };
+  let kind = io_bind_head_kind(ctx, head)?;
+  Some((kind, head, args[0], body))
+}
+
 /// Lower one def's/instance-method's checked body. `Bound`/`Free`
 /// indices and dictionary-passing structure carry straight through — see
 /// this module's doc comment.
@@ -299,6 +381,21 @@ pub fn lower_term(ctx: &mut LowerCtx, term: &CoreTerm) -> Result<CoreIr, LowerCo
     // whose bound value AND body both involved a dictionary-projected
     // class method (a real, previously-uncaught example: `init/init.mo`'s
     // `List.get`, whose body is `let b := index == 0 in (match l {...})`).
+    //
+    // A fully-applied `Monad.bind` at IO/RawIO lowers direct-style (see
+    // `CoreIr::IoBind`): the continuation becomes this node's body, which
+    // the evaluator enters in the same loop frame instead of calling the
+    // `io_bind` native. The head (the dictionary projection) is still
+    // lowered AFTER the arguments, purely so its queued match resolution
+    // is consumed in traversal order, exactly as the dict-projection arm
+    // below does; its value is discarded.
+    CoreTerm::App { .. } if io_bind_spine(ctx, term).is_some() => {
+      let (kind, head, input, body) = io_bind_spine(ctx, term).expect("checked above");
+      let input_ir = lower_term(ctx, input)?;
+      let body_ir = lower_term(ctx, body)?;
+      let _head_ir = lower_term(ctx, head)?;
+      Ok(core_ir::io_bind(kind, input_ir, body_ir))
+    }
     CoreTerm::App { .. } if dict_projection_spine(term).is_some() => {
       // A class-method (or struct-field-projection) call site:
       // `desugar_struct_literals`'s `App` arm (`core_check.rs`) doesn't

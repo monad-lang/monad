@@ -3426,4 +3426,111 @@ def main : I64 := U64.to_i64 18446744073709551615u64
       other => panic!("expected an I64-tagged literal, got {other:?}"),
     }
   }
+
+  /// Load + check + lower one in-memory module. The same pipeline
+  /// `eval_core_program` runs, stopped before evaluation so a test can
+  /// inspect the lowered shapes.
+  fn lower_source(path: &ModulePath, source: &str) -> lower_core_ir::LoweredProgram {
+    let mut loaded = default_modules().unwrap();
+    load_module_from_text(source, path, &mut loaded).unwrap();
+    let decls = term::module::load_decls_from_text_with_path(source, &Default::default()).unwrap();
+    let program = build_core_program(&loaded, &[(path.clone(), decls)])
+      .unwrap_or_else(|e| panic!("build: {e}"));
+    lower_core_ir::lower_program(&program).unwrap()
+  }
+
+  /// The host's half of heapless-loops H1: a do-bind at `IO`/`RawIO`
+  /// lowers to `CoreIr::IoBind` (payload taken, continuation entered in
+  /// the same eval frame) instead of an application of the `io_bind`
+  /// native. A `List`/generic bind must NOT become one -- the selection
+  /// is by the resolved instance.
+  #[test]
+  fn io_do_bind_lowers_to_an_io_bind_node() {
+    let source = r#"
+def pure_i64 (n : I64) : IO I64 := IO.pure n
+
+#[terminating]
+def count (n : I64) : IO I64 := do {
+    let x <- pure_i64 n;
+    if x < 1 then IO.pure 42 else count (x - 1)
+}
+
+def twice (xs : List I64) : List I64 := do {
+    let x <- xs;
+    return x
+}
+
+def main (args : List String) : IO I64 := do {
+    count 3
+}
+"#;
+    let lowered = lower_source(&ModulePath::top("'io_bind_lowering"), source);
+    let body_of = |suffix: &str| -> String {
+      let (idx, _) = lowered
+        .paths
+        .iter()
+        .enumerate()
+        .find(|(_, p)| {
+          p.to_flat_name_path()
+            .to_string()
+            .ends_with(&format!(".{suffix}"))
+        })
+        .unwrap_or_else(|| panic!("no def named {suffix}"));
+      match &lowered.globals[idx] {
+        lower_core_ir::GlobalDef::Def(body) => format!("{body}"),
+        other => panic!("expected a def, got {other:?}"),
+      }
+    };
+    let count = body_of("count");
+    assert!(
+      count.contains("(io-bind Io"),
+      "IO do-bind should lower to IoBind, got {count}"
+    );
+    let twice = body_of("twice");
+    assert!(
+      !twice.contains("(io-bind"),
+      "a List do-bind must keep the generic path, got {twice}"
+    );
+  }
+
+  /// The plan's exit criterion for the host backend: a plain recursive IO
+  /// loop finishes a million iterations on a 2 MiB thread stack. Before
+  /// the `IoBind` lowering, every iteration ran the continuation inside
+  /// `io_bind`'s Rust frame (behind the `IO.mk (...)` field evaluation),
+  /// so this could not get far.
+  #[test]
+  fn io_loop_survives_a_million_iterations_on_a_two_mib_stack() {
+    let source = r#"
+def pure_i64 (n : I64) : IO I64 := IO.pure n
+
+#[terminating]
+def count (n : I64) : IO I64 := do {
+    let x <- pure_i64 n;
+    if x < 1 then IO.pure 42 else count (x - 1)
+}
+
+def main : IO I64 := do {
+    count 1000000
+}
+"#;
+    let worker = std::thread::Builder::new()
+      .stack_size(2 * 1024 * 1024)
+      .spawn(|| eval_core_program(&ModulePath::top("'io_loop_stack"), source))
+      .unwrap();
+    let result = worker
+      .join()
+      .expect("worker thread panicked")
+      .expect("eval");
+    // `main : IO I64` evaluates to `IO.mk (RawIO.io 42)`.
+    match result {
+      core_value::Value::Con { args, .. } => match args.first() {
+        Some(core_value::Value::Con { args: inner, .. }) => match inner.first() {
+          Some(core_value::Value::Lit(core_ir::IrLit::Num(n, _))) => assert_eq!(*n, 42),
+          other => panic!("expected the RawIO.io payload, got {other:?}"),
+        },
+        other => panic!("expected the IO.mk field, got {other:?}"),
+      },
+      other => panic!("expected an IO value, got {other:?}"),
+    }
+  }
 }

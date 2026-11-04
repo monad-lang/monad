@@ -24,7 +24,7 @@
 
 use std::sync::Arc;
 
-use crate::core_ir::{CoreIr, IrRef};
+use crate::core_ir::{CoreIr, IoBindKind, IrRef};
 use crate::core_native::exec_native;
 use crate::core_value::{
   ConArgs, CoreEvalCycle, Env, EnvRef, GlobalCache, GlobalTable, NativeTable, Value,
@@ -287,6 +287,17 @@ pub fn eval(
           ctor.clone(),
         ));
       }
+      CoreIr::IoBind { kind, input, body } => {
+        // Direct-style `Monad.bind` at IO/RawIO (see `CoreIr::IoBind`):
+        // `input` is already evaluated (compiled/eager IO), so the bind
+        // is just "take its payload and continue" -- entered as a tail
+        // position, in THIS frame, never through the `io_bind` native.
+        let v = eval(input, &cur_env, globals, natives, cache)?;
+        let payload = io_bind_payload(&v, *kind, natives)?;
+        cur_env = Env::extend(&cur_env, payload);
+        cur_ir = body.clone();
+        continue;
+      }
       CoreIr::Con {
         tag,
         arity: _,
@@ -315,6 +326,47 @@ pub fn eval(
         );
       }
     }
+  }
+}
+
+/// `IO.bind`'s payload extraction, without applying the continuation --
+/// the direct-style evaluation of an `IoBind` node. Mirrors
+/// `core_native::io_bind`'s own unwrap (and its error), plus the `IO.mk`
+/// layer when the bind came from `Monad IO`.
+fn io_bind_payload(
+  value: &Value,
+  kind: IoBindKind,
+  natives: &NativeTable,
+) -> Result<Value, CoreEvalError> {
+  let raw_io = natives
+    .well_known
+    .raw_io_io
+    .ok_or(CoreEvalError::MissingWellKnownCtor("RawIO.io"))?;
+  let mut inner = value;
+  if kind == IoBindKind::Io {
+    let io_mk = natives
+      .well_known
+      .io_mk
+      .ok_or(CoreEvalError::MissingWellKnownCtor("IO.mk"))?;
+    inner = match inner {
+      Value::Con { tag, args } if *tag == io_mk.tag => args
+        .first()
+        .ok_or_else(|| CoreEvalError::NativeArgError("IO.mk has no fields".into()))?,
+      _ => {
+        return Err(CoreEvalError::NativeArgError(format!(
+          "io_bind expected an IO value, got {inner:?}"
+        )));
+      }
+    };
+  }
+  match inner {
+    Value::Con { tag, args } if *tag == raw_io.tag => args
+      .first()
+      .cloned()
+      .ok_or_else(|| CoreEvalError::NativeArgError("RawIO.io has no fields".into())),
+    _ => Err(CoreEvalError::NativeArgError(format!(
+      "io_bind expected a RawIO value, got {inner:?}"
+    ))),
   }
 }
 
@@ -359,8 +411,6 @@ fn fire_or_accumulate(
       crate::core_native::poll_fiber(&args, globals, natives, cache)
     } else if name.as_str() == "io_bind" {
       crate::core_native::io_bind(&args, globals, natives, cache)
-    } else if name.as_str() == "io_iterate" {
-      crate::core_native::io_iterate(&args, globals, natives, cache)
     } else if name.as_str() == "cell_update" {
       // `Ref.update` applies its function under the registry lock: the
       // full evaluator, exactly like `await_fiber`.
