@@ -20,32 +20,10 @@
 /// `Copy I64` dictionary) regardless of reachability, so a module-wide
 /// "no monad_view_get" check would be false by construction.
 use lib::codegen::test::e2e_harness {
-  compile_source_ir, compile_source_run_expect,
+  compile_source_ir, compile_source_run_expect, ir_function,
 }
 use lib::codegen::emit {check_contains}
 open IO {println}
-
-/// Index of the first occurrence of `needle` at or after `from`, or -1.
-#[partial]
-def view_find_from (hay : String) (needle : String) (from : I64) : I64 :=
-    if I64.gt (from + String.length needle) (String.length hay) then 0 - 1
-    else if String.beq (String.slice hay from (String.length needle)) needle then from
-    else view_find_from hay needle (from + 1)
-
-/// One emitted function's text, from its `; Function: <name>` header up
-/// to the blank line before the next IR comment. Empty when the function
-/// was not emitted at all.
-#[partial]
-def view_ir_function (ir : String) (name : String) : String :=
-    let header := "; Function: " ++ name ++ "\n" in
-    let start := view_find_from ir header 0 in
-    if I64.lt start 0 then ""
-    else
-        let body_start := start + String.length header in
-        let next := view_find_from ir "\n\n; " body_start in
-        if I64.lt next 0
-        then String.slice ir body_start (String.length ir - body_start)
-        else String.slice ir body_start (next - body_start)
 
 /// Every Cell operation in the fused shape, in one do-block. `main`'s
 /// own exit code is the value read back (42).
@@ -93,7 +71,7 @@ def test_fused_cell_binds_emit_the_native_calls : IO Bool := do {
             return false
         },
         Result.ok text => do {
-            let hot := view_ir_function text "main_monad";
+            let hot := ir_function text "main_monad";
             return (check_contains hot "call i64 @monad_view_payload(i64 "
                 && check_contains hot "call i64 @monad_view_new(i64 "
                 && check_contains hot "call i64 @monad_view_set(i64 "
@@ -116,7 +94,7 @@ def test_fused_cell_binds_keep_no_boxed_get_or_pair : IO Bool := do {
             return false
         },
         Result.ok text => do {
-            let hot := view_ir_function text "main_monad";
+            let hot := ir_function text "main_monad";
             return (Bool.not (check_contains hot "@\"init.view::Cell.get\"(")
                 && Bool.not (check_contains hot "alloc_constructor(i64 15, i64 2)")
                 && Bool.not (check_contains hot "call i64 @alloc_closure"))
@@ -134,7 +112,7 @@ def test_escaping_pair_keeps_the_boxed_get : IO Bool := do {
             return false
         },
         Result.ok text => do {
-            let hot := view_ir_function text "main_monad";
+            let hot := ir_function text "main_monad";
             return (check_contains hot "@\"init.view::Cell.get\"("
                 && Bool.not (check_contains hot "monad_view_payload"))
         },

@@ -200,17 +200,29 @@ def run_loop {S : Type} {M : Type} (a : App S M) (redraw : S -> Bool) (init : S)
     // in the stdout buffer behind it.
     let prev <- draw_frame vw init reader (empty_screen rows cols) true false;
     let start : LoopOutcome S M := LoopOutcome.loop_more init prev reader List.empty List.empty;
-    IO.iterate start (frame_step a redraw)
+    drive_frames a redraw start
 }
 
-/// One frame, run by `IO.iterate`: `loop_app` folds one batch and hands
-/// the live state back, so each frame's IO returns before the next starts.
-/// A recursive do-loop here nested one native frame per redraw (compiled
-/// `monad_io_bind` calls its continuation inside its own C frame), and the
-/// collector kept every past model and screen those frames referenced --
-/// ~1 MB per redraw, 10 redraws a second during a turn. `IO.iterate` is a
-/// stopgap until plain recursion is heapless
-/// (plans/bootstrapping/heapless-loops.md).
+/// Frames, one at a time, as plain recursion. Each `frame_step` returns
+/// before the next starts, and the back-edge the self-tail-call rewrite
+/// gives `drive_frames` (`lang/src/codegen/tco.mo`) is what keeps the
+/// loop constant-stack -- the IO do-bind fusion turns `let next <-
+/// frame_step ...` into straight-line code, so nothing nests a frame per
+/// redraw (`plans/bootstrapping/heapless-loops.md` H1).
+#[partial]
+def drive_frames {S : Type} {M : Type} (a : App S M) (redraw : S -> Bool) (st : LoopOutcome S M) : IO Unit := do {
+    let next <- frame_step a redraw st;
+    // Annotated local: the do-binder's own type is not inferred, and bare
+    // `none` is ambiguous between `Option.none` and `Cmd.none`.
+    let decided : Option (LoopOutcome S M) := next;
+    match decided {
+        Option.none => IO.pure unit,
+        Option.some s => drive_frames a redraw s,
+    }
+}
+
+/// One frame: `loop_app` folds one batch and hands the live state back,
+/// so each frame's IO returns before the next starts.
 def frame_step {S : Type} {M : Type} (a : App S M) (redraw : S -> Bool) (st : LoopOutcome S M) : IO (Option (LoopOutcome S M)) :=
     match st {
         LoopOutcome.loop_more model prev reader pending turns =>

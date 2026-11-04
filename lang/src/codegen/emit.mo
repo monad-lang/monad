@@ -3026,33 +3026,284 @@ def try_compile_view_bind_db (c : CodegenCtx) (fun : Term) (arg : Term) : Option
         Option.some plan => compile_view_bind_db c plan,
     }
 
+// ── IO do-bind fusion (heapless-loops H1) ───────────────────────────
+//
+// A do-bind in IO desugars to `Monad.bind m (λx. rest)`, which elaboration
+// rewrites through the `Monad IO` instance to that instance's promoted
+// method (`...::Monad_IO_bind`). Compiled naively that is
+// `monad_io_bind(m, closure)`, and `monad_io_bind_impl` runs the
+// continuation INSIDE its own C frame -- every recursive IO loop nests one
+// frame per iteration, and Boehm keeps everything those frames reference
+// (the weaver frame loop measured 649 MB/min;
+// `plans/bootstrapping/heapless-loops.md`). Compiled IO is eager, so the
+// bind is just "take `m`'s payload and continue": this fusion compiles the
+// continuation INLINE, with no closure and no bind call. A recursive def's
+// last statement then calls itself in tail position, which `tco.mo`
+// already rewrites into a loop.
+//
+// Exactness: `IO.bind a f` is
+// `IO.mk (RawIO.bind raw (λx. match f x { IO.mk r => r }))`, and
+// `RawIO.bind` returns `f`'s value unchanged, so the inlined
+// continuation's value IS the bind's value.
+//
+// The cancel check stays a real bind point: the runtime's
+// `monad_io_bind_guard` performs `monad_io_bind_impl`'s sentinel/fiber
+// check without calling anything, and the lowering branches on it. The
+// cancel arm jumps to the merge phi rather than returning early on
+// purpose -- `tco.mo` aborts the loop rewrite when pruning a recursive
+// site would leave a phi with no predecessors, and this arm is the
+// base-case edge it must keep.
+//
+// Shape-selected, never semantic: a hand-written `IO.bind` with a named
+// continuation, plain `Monad.bind` (the generic form), or any other Monad
+// falls through to the existing boxed path unchanged.
+
+type IoBindKind {
+    io_bind,
+    raw_io_bind,
+}
+
+struct IoBindPlan {
+    kind : IoBindKind,
+    initializer : Term,
+    binder : Binder,
+    body : Term,
+}
+
+/// Everything the fused bind's entry block produces before the branch:
+/// `m`'s value, the guard call, the compare, and the labels of the
+/// cancel/continue/merge triangle.
+struct IoBindEntry {
+    ctx : CodegenCtx,
+    entry : Triple,
+    funcs : List LLVMFunction,
+    globals : List LLVMGlobal,
+    m_val : LLVMValue,
+    guard_temp : String,
+    then_label : String,
+    else_label : String,
+    merge_label : String,
+}
+
+/// The continue branch: the payload read plus the continuation, compiled
+/// inline. `reached` is false when the body's own instructions already
+/// ended in a terminator (a nested if/match), which the merge machinery
+/// retargets.
+struct IoBindCont {
+    ctx : CodegenCtx,
+    instrs : List LLVMInstruction,
+    val : LLVMValue,
+    blocks : List LLVMBasicBlock,
+    reached : Bool,
+    funcs : List LLVMFunction,
+    globals : List LLVMGlobal,
+}
+
+/// The bind heads the fusion may claim. Deliberately NOT plain
+/// `Monad.bind`: that spelling is the generic/abstract form, and fusing it
+/// would treat an unknown monad as IO. The promoted spellings are matched
+/// by their `::`-boundary suffix for the same reason the view fusion does
+/// (the class's module prefix is not stable), while still excluding a user
+/// def literally named `Foo_Monad_IO_bind`; `IO.bind`/`RawIO.bind` cover
+/// hand-written binds. The IR tests pin the real spelling, so a prelude
+/// rename fails loudly instead of silently losing the fusion.
+#[partial]
+def io_bind_kind_of_name (name : String) : Option IoBindKind :=
+    if String.beq name "IO.bind" then Option.some IoBindKind.io_bind
+    else if String.beq name "RawIO.bind" then Option.some IoBindKind.raw_io_bind
+    else if String.ends_with name "::Monad_RawIO_bind" then Option.some IoBindKind.raw_io_bind
+    else if String.ends_with name "::Monad_IO_bind" then Option.some IoBindKind.io_bind
+    else Option.none
+
+#[partial]
+def io_bind_head_kind (t : Term) : Option IoBindKind :=
+    match spine_head_name t {
+        Option.some name => io_bind_kind_of_name name,
+        Option.none => Option.none,
+    }
+
+/// `app (app <IO bind> <initializer>) (lam x => body)` -- the same shape
+/// `view_bind_plan` keys on, with the IO/RawIO bind head.
+#[partial]
+def io_bind_plan (callee : Term) (arg : Term) : Option IoBindPlan :=
+    match term_peel arg {
+        Term.lam b _typ body =>
+            match term_peel callee {
+                Term.app f m =>
+                    match io_bind_head_kind f {
+                        Option.some kind =>
+                            let plan : IoBindPlan := { kind := kind, initializer := m, binder := b, body := body } in
+                            Option.some plan,
+                        Option.none => Option.none,
+                    },
+                _ => Option.none,
+            },
+        _ => Option.none,
+    }
+
+/// Compile `m` once, then the guard call, the compare and the branch into
+/// the cancel (`then`) and continue (`else`) blocks.
+#[partial]
+def build_io_bind_entry (c : CodegenCtx) (m : Term) : Option IoBindEntry :=
+    let seq := compile_spine_args c (List.cons m List.empty) in
+    match seq.vals {
+        List.empty => Option.none,
+        List.cons m_val _rest =>
+            match fresh_temp seq.ctx {
+                CtxStrPair.mk ctx_guard guard_temp =>
+                    let guard_instr := LLVMInstruction.assign guard_temp (LLVMValue.call "monad_io_bind_guard" LLVMType.i64_ (List.cons m_val List.empty) false) in
+                    match compose_seq ({ instrs := seq.instrs, blocks := seq.blocks, val := seq.last_val }) ({ instrs := List.cons guard_instr List.empty, blocks := List.empty, val := LLVMValue.var_ guard_temp }) {
+                        { instrs := instrs_guard, blocks := blocks_guard, val := _ } =>
+                            match fresh_temp ctx_guard {
+                                CtxStrPair.mk ctx_cmp cmp_temp =>
+                                    let cmp_instr := LLVMInstruction.assign cmp_temp (LLVMValue.icmp_ne (LLVMValue.var_ guard_temp) (LLVMValue.int_ 0)) in
+                                    match compose_seq ({ instrs := instrs_guard, blocks := blocks_guard, val := LLVMValue.var_ guard_temp }) ({ instrs := List.cons cmp_instr List.empty, blocks := List.empty, val := LLVMValue.var_ cmp_temp }) {
+                                        { instrs := instrs_cmp, blocks := blocks_cmp, val := _ } =>
+                                            match build_if_labels ctx_cmp {
+                                                { ctx_after := ctx_labels, then_label, else_label, merge_label } =>
+                                                    let branch_instr := LLVMInstruction.branch (LLVMValue.var_ cmp_temp) then_label else_label in
+                                                    let entry := compose_seq ({ instrs := instrs_cmp, blocks := blocks_cmp, val := LLVMValue.var_ cmp_temp }) ({ instrs := List.cons branch_instr List.empty, blocks := List.empty, val := LLVMValue.var_ cmp_temp }) in
+                                                    let e : IoBindEntry := { ctx := ctx_labels, entry := entry, funcs := seq.funcs, globals := seq.globals, m_val := m_val, guard_temp := guard_temp, then_label := then_label, else_label := else_label, merge_label := merge_label } in
+                                                    Option.some e,
+                                            },
+                                    },
+                            },
+                    },
+            },
+    }
+
+/// The payload value of a fused bind: `IO` reads a second field out of
+/// the `RawIO.io` box, `RawIO`'s payload IS the first field (nothing to
+/// copy -- an SSA `%t = %u` copy is not a valid LLVM instruction).
+struct IoBindPayload {
+    ctx : CodegenCtx,
+    instrs : List LLVMInstruction,
+    val : LLVMValue,
+}
+
+#[partial]
+def io_bind_payload_read (c : CodegenCtx) (kind : IoBindKind) (raw_temp : String) : IoBindPayload :=
+    match kind {
+        IoBindKind.io_bind =>
+            match fresh_temp c {
+                CtxStrPair.mk ctx_p temp =>
+                    let field_zero := List.cons (LLVMValue.int_ 0) List.empty in
+                    let inner_call := LLVMValue.call "monad_get_field" LLVMType.i64_ (List.cons (LLVMValue.var_ raw_temp) field_zero) false in
+                    let instr := LLVMInstruction.assign temp inner_call in
+                    { ctx := ctx_p, instrs := List.cons instr List.empty, val := LLVMValue.var_ temp },
+            },
+        IoBindKind.raw_io_bind =>
+            { ctx := c, instrs := List.empty, val := LLVMValue.var_ raw_temp },
+    }
+
+/// The continue branch. The payload read lives here, not in the entry
+/// block: it must not run on the cancel path (where `m` is the sentinel,
+/// not a constructor). `IO` wraps twice (`IO.mk (RawIO.io x)`); `RawIO`
+/// once.
+#[partial]
+def compile_io_bind_cont (e : IoBindEntry) (kind : IoBindKind) (binder : Binder) (body : Term) : Option IoBindCont :=
+    match fresh_temp e.ctx {
+        CtxStrPair.mk ctx_raw raw_temp =>
+            let field_zero := List.cons (LLVMValue.int_ 0) List.empty in
+            let raw_instr := LLVMInstruction.assign raw_temp (LLVMValue.call "monad_get_field" LLVMType.i64_ (List.cons e.m_val field_zero) false) in
+            match io_bind_payload_read ctx_raw kind raw_temp {
+                { ctx := ctx_payload, instrs := payload_instrs, val := payload_val } =>
+                    let bound_ctx := match binder_name binder {
+                        DebugName.named name =>
+                            if String.beq (symbol_identifier name) "_"
+                            then ctx_payload
+                            else ctx_bind_local ctx_payload name payload_val,
+                        DebugName.unnamed => ctx_payload,
+                    } in
+                    match compile_db_term_ir bound_ctx body {
+                        CompileResult.ok ctx_b instrs_b val_b blocks_b funcs_b globals_b =>
+                            let reached := not (ends_with_terminator instrs_b) in
+                            let bmr := materialize_branch_val ctx_b body instrs_b val_b in
+                            let tm := materialize_terminal_ret (not reached) bmr.ctx body bmr.val blocks_b in
+                            let prefix := List.cons raw_instr payload_instrs in
+                            let cont : IoBindCont := { ctx := tm.ctx, instrs := List.append prefix bmr.instrs, val := tm.val, blocks := tm.blocks, reached := reached, funcs := funcs_b, globals := globals_b } in
+                            Option.some cont,
+                    },
+            },
+    }
+
+#[partial]
+def compile_io_bind_db (c : CodegenCtx) (plan : IoBindPlan) : Option CompileResult :=
+    match plan {
+        { kind, initializer, binder, body } =>
+            match build_io_bind_entry c initializer {
+                Option.none => Option.none,
+                Option.some e =>
+                    match compile_io_bind_cont e kind binder body {
+                        Option.none => Option.none,
+                        Option.some cont =>
+                            let then_block := build_branch_block e.then_label e.merge_label List.empty in
+                            let else_block := build_branch_block e.else_label e.merge_label cont.instrs in
+                            Option.some (build_merge_result {
+                                ctx_else := cont.ctx,
+                                merge_label := e.merge_label,
+                                then_reaches := true,
+                                then_val := LLVMValue.var_ e.guard_temp,
+                                then_label := e.then_label,
+                                else_reaches := cont.reached,
+                                else_val := cont.val,
+                                else_label := e.else_label,
+                                entry_instrs := e.entry.instrs,
+                                entry_blocks := e.entry.blocks,
+                                entry_funcs := e.funcs,
+                                entry_globals := e.globals,
+                                blocks_then := List.empty,
+                                blocks_else := cont.blocks,
+                                funcs_then := List.empty,
+                                funcs_else := cont.funcs,
+                                globals_then := List.empty,
+                                globals_else := cont.globals,
+                                then_block := then_block,
+                                else_block := else_block,
+                            }),
+                    },
+            },
+    }
+
+#[partial]
+def try_compile_io_bind_db (c : CodegenCtx) (fun : Term) (arg : Term) : Option CompileResult :=
+    match io_bind_plan fun arg {
+        Option.none => Option.none,
+        Option.some plan => compile_io_bind_db c plan,
+    }
+
 #[partial]
 def compile_db_app_ir (c : CodegenCtx) (fun : Term) (arg : Term) : CompileResult :=
     // The view fusion first: its shape (`app (app bind accessor) lam`) is
-    // also matched by nothing below except the general call path, so the
-    // order buys the fusion before that path lifts the continuation into
-    // its own closure.
+    // also matched by the IO fusion below, and only the view fusion knows
+    // how to read the payload without building the `Pair`. Then the
+    // general IO fusion, which claims every other IO do-bind. Both run
+    // before `try_compile_let_beta_db` could lift the continuation.
     match try_compile_view_bind_db c fun arg {
         Option.some result => result,
         Option.none =>
-        // Check `let`-shaped beta-redexes next -- `fun` here is a bare
-        // `Term.lam`, a shape none of the other cases below ever
-        // match (they all key off `fun`/its own head being `Term.var`), so
-        // ordering relative to them doesn't matter for correctness. It's
-        // checked early purely because it's the single most common call
-        // shape in real code (see its own doc comment).
-        match try_compile_let_beta_db c fun arg {
+        match try_compile_io_bind_db c fun arg {
             Option.some result => result,
             Option.none =>
-                // Check if this is a constructor application
-                match try_compile_constructor_app_db c fun arg {
-                    Option.some result => result,
-                    Option.none =>
-                        match try_compile_inline_native_db c fun arg {
-                            Option.some result => result,
-                            Option.none => compile_general_db_call c fun arg,
-                        },
-                },
+            // Check `let`-shaped beta-redexes next -- `fun` here is a bare
+            // `Term.lam`, a shape none of the other cases below ever
+            // match (they all key off `fun`/its own head being `Term.var`), so
+            // ordering relative to them doesn't matter for correctness. It's
+            // checked early purely because it's the single most common call
+            // shape in real code (see its own doc comment).
+            match try_compile_let_beta_db c fun arg {
+                Option.some result => result,
+                Option.none =>
+                    // Check if this is a constructor application
+                    match try_compile_constructor_app_db c fun arg {
+                        Option.some result => result,
+                        Option.none =>
+                            match try_compile_inline_native_db c fun arg {
+                                Option.some result => result,
+                                Option.none => compile_general_db_call c fun arg,
+                            },
+                    },
+            },
         },
     }
 

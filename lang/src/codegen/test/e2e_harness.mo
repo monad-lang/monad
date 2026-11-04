@@ -126,6 +126,54 @@ pub def compile_source_run_expect (source : String) (basename : String) (expecte
     }
 }
 
+/// Index of the first occurrence of `needle` at or after `from`, or -1.
+/// Shared by the IR-shape tests, which slice one function out of the
+/// emitted module text.
+#[partial]
+pub def ir_find_from (hay : String) (needle : String) (from : I64) : I64 :=
+    if I64.gt (from + String.length needle) (String.length hay) then 0 - 1
+    else if String.beq (String.slice hay from (String.length needle)) needle then from
+    else ir_find_from hay needle (from + 1)
+
+/// One emitted function's text, from its `; Function: <name>` header up
+/// to the blank line before the next IR comment. Empty when the function
+/// was not emitted at all.
+#[partial]
+pub def ir_function (ir : String) (name : String) : String :=
+    let header := "; Function: " ++ name ++ "\n" in
+    let start := ir_find_from ir header 0 in
+    if I64.lt start 0 then ""
+    else
+        let body_start := start + String.length header in
+        let next := ir_find_from ir "\n\n; " body_start in
+        if I64.lt next 0
+        then String.slice ir body_start (String.length ir - body_start)
+        else String.slice ir body_start (next - body_start)
+
+/// Like `compile_source_run_expect`, but the binary runs with an explicit
+/// `MONAD_STACK_BYTES` (the C runtime clamps it to 1 MiB..1 GiB). This is
+/// how a constant-stack claim is proved: a recursive loop that still
+/// nested a frame per iteration cannot finish a large N under a small
+/// stack.
+#[partial]
+pub def compile_source_run_stack_expect (source : String) (basename : String) (stack_bytes : I64) (expected : I64) : IO Bool := do {
+    let built <- build_source_binary source basename;
+    match built {
+        Result.err e => do {
+            println (basename ++ ": " ++ e);
+            return false
+        },
+        Result.ok bin => do {
+            let var := "MONAD_STACK_BYTES=" ++ I64.to_string stack_bytes;
+            let exec_result <- exec_cmd "env" [var, bin];
+            exec_cmd "rm" ["-f", bin];
+            println (basename ++ ": expected " ++ I64.to_string expected ++ ", got " ++ I64.to_string exec_result
+                ++ " under " ++ I64.to_string stack_bytes ++ "-byte stack");
+            return (exec_result == expected)
+        },
+    }
+}
+
 /// Like `compile_source_run_expect`, but the binary's stdout is piped
 /// into `head -n 1`, which exits after the first line. `expected` is
 /// compared against the BINARY's exit status (bash's `PIPESTATUS[0]`),

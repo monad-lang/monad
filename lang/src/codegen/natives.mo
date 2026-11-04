@@ -294,9 +294,6 @@ def native_runtime_fn_name (attrs : List Attribute) : Option NativeWrapKind :=
             // `RawIO` values (not `IO`), so `passthrough` is correct.
             else if String.beq target "io_pure" then Option.some (NativeWrapKind.passthrough "monad_io_pure")
             else if String.beq target "io_bind" then Option.some (NativeWrapKind.passthrough "monad_io_bind")
-            // `IO.iterate`'s loop (TEMPORARY, plans/bootstrapping/heapless-loops.md):
-            // returns the `RawIO Unit` it builds itself, so `passthrough` too.
-            else if String.beq target "io_iterate" then Option.some (NativeWrapKind.passthrough "monad_io_iterate")
             else if String.beq target "file_exists" then Option.some (NativeWrapKind.raw_io_truthy_ptr_bool_result "monad_file_exists")
             else if String.beq target "is_dir" then Option.some (NativeWrapKind.raw_io_truthy_ptr_bool_result "monad_is_dir")
             // `std/io.mo`'s two remaining raw-stdio natives -- the
@@ -967,7 +964,12 @@ pub def runtime_declarations_for (kind : TargetKind) : List LLVMDeclaration :=
     // above.
     let d78 := mk_decl "monad_io_pure" (List.cons "i64" List.empty) "i64" in
     let d79 := mk_decl "monad_io_bind" (List.cons "i64" (List.cons "i64" List.empty)) "i64" in
-    let d79b := mk_decl "monad_io_iterate" (List.cons "i64" (List.cons "i64" List.empty)) "i64" in
+    // `monad_io_bind_guard` (runtime_core.c) -- the cancellation check the
+    // fused IO do-bind emits before reading the payload. Codegen emits this
+    // call directly (`try_compile_io_bind_db`), never through a native
+    // wrapper, so it has no `native_runtime_fn_name` entry -- same split as
+    // `monad_view_payload`.
+    let d79c := mk_decl "monad_io_bind_guard" (List.cons "i64" List.empty) "i64" in
     // `monad_ptr_null` (runtime.c) -- `Ptr.null`'s backing function. No
     // parameters; the i64 result is the NULL word itself.
     let d80 := mk_decl "monad_ptr_null" List.empty "i64" in
@@ -1117,7 +1119,7 @@ pub def runtime_declarations_for (kind : TargetKind) : List LLVMDeclaration :=
      d48, d49, d50, d51, d52, d53, d54, d55, d56,
      d57, d58, d59, d60, d61, d62, d63, d64,
      d65, d66, d66a, d67, d72,
-     d74, d76, d78, d79, d79b, d80, d81, d82, d83, d84, d85, d87,
+     d74, d76, d78, d79, d79c, d80, d81, d82, d83, d84, d85, d87,
      d88, d91, d92, d93, d94, d95, d96, d97, d98, d99, d99a, d99b, d100, d101, d102, d103,
      d104, d105, d106, d107, d108, d109, d110, d111, d112, d113, d114, d115, d116,
      d117, d118, d119, d120, d121, d122, d123, d124, d150,

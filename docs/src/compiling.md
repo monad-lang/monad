@@ -549,7 +549,10 @@ IR directly for thirteen simple operations.
 
 - Compiling a large program is slow — a full self-compile takes minutes.
 - Deep recursion in compiled code can exhaust the stack; raise it with
-  `ulimit -s` when compiling large inputs.
+  `ulimit -s` when compiling large inputs. A *self-tail-recursive* loop is
+  the exception: the backend rewrites it into a back-edge, and that includes
+  an `IO` loop written with `do`/`let x <- ...` (the do-bind is compiled
+  direct-style, so the recursive call really is in tail position).
 - `monad eval` and `monad repl` reach only the pure native table (above), so
   neither is a substitute for `monad run`; `monad repl` also re-checks the
   whole session on each input, which is fine for a scratchpad but not

@@ -1,9 +1,11 @@
 // weaver / mty / soak -- a long run must not grow the native stack. Every
-// frame of the tui loop runs through a chain of IO binds whose continuations
-// the compiled backend calls inside `monad_io_bind`'s C frame; a recursive
-// frame loop died with SIGSEGV in a long session. With a 2 MiB stack a
-// recursive loop overflows inside the 3000-key burst (one frame per key);
-// the `IO.iterate` loop keeps answering and still restores the terminal.
+// frame of the tui loop is a do-bind chain; the IO do-bind fusion compiles
+// it direct-style, so the self-recursive frame loop is a tco back-edge and
+// a 2 MiB stack stays enough for the 3000-key burst (one step per key).
+// Before the fusion `monad_io_bind` called each continuation inside its own
+// C frame and a recursive frame loop died with SIGSEGV in a long session --
+// the reason the temporary `IO.iterate` native existed; see
+// plans/bootstrapping/heapless-loops.md.
 // Ported from pty_repro_soak.py (retired).
 use mty::spawn {Mty, Output}
 use mty::check {Check.report}
@@ -72,10 +74,10 @@ pub def run_soak_long_run_keeps_the_stack_flat : IO Bool :=
 def test_soak_body (bin : String) : IO Bool :=
     with_root "soak" (fn (root : String) => soak_run bin root)
 
-// A pending turn redraws the spinner ten times a second. A recursive frame
-// loop kept every one of those frames (and the model and screen each
-// pointed at) alive: ~1 MB per redraw, 600 MB a minute at 50x200. The
-// `IO.iterate` loop must hold RSS flat while the turn waits.
+// A pending turn redraws the spinner ten times a second. Before the IO
+// do-bind fusion every redraw's bind frame stayed alive (and the model and
+// screen each pointed at): ~1 MB per redraw, 600 MB a minute at 50x200. The
+// plain recursive frame loop must hold RSS flat while the turn waits.
 def pending_bound_kb : I64 := 20000
 
 def pending_go (m : Mty) : IO Bool := do {

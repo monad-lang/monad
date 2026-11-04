@@ -516,25 +516,18 @@ static int64_t monad_io_bind_impl(int64_t io_val, int64_t f) {
     return apply_closure1_impl(RT_PTR(f), RT_VALUE(inner));
 }
 
-/* monad_io_iterate: RawIO.iterate (init : S) (step : S -> RawIO (Option S))
-   : RawIO Unit -- applies `step` until it answers `none`. Each step returns
-   before the next starts, so the loop holds no frame per iteration: a
-   recursive do-loop nests one `monad_io_bind` frame per iteration and the
-   collector keeps everything they reference. A TEMPORARY native until
-   plain recursion is heapless (plans/bootstrapping/heapless-loops.md).
-   Cancellation is checked once per iteration, as at a bind. Tags:
-   `Option.none` 3, `Option.some` 4 (`builtin_ctor_tags`). */
-static int64_t monad_io_iterate_impl(int64_t init, int64_t step) {
-    int64_t s = init;
-    for (;;) {
-        if (monad_io_cancelled()) return MONAD_CANCELLED_SENTINEL;
-        int64_t io = apply_closure1_impl(RT_PTR(step), s);
-        if (io == MONAD_CANCELLED_SENTINEL) return io;
-        rt_field opt = monad_get_field_impl(RT_FIELD(io), 0);
-        if (monad_get_tag_impl(opt) != 4)
-            return RT_VALUE(monad_io_pure_impl(RT_VALUE(alloc_constructor_impl(0, 0))));
-        s = RT_VALUE(monad_get_field_impl(opt, 0));
-    }
+/* monad_io_bind_guard: the cancellation half of `monad_io_bind`, for the
+   codegen's direct-style (fused) IO bind. A fused bind compiles to a
+   branch -- cancel before reading any field, else continue inline -- so
+   it needs the same check as `monad_io_bind_impl` without the call into
+   the continuation. Returns MONAD_CANCELLED_SENTINEL when the bind must
+   short-circuit (the value is already the sentinel, or this fiber is
+   cancelled) and 0 otherwise; 0 is not a valid IO value, so the caller
+   branches on `!= 0`. See `plans/bootstrapping/heapless-loops.md` H1. */
+static int64_t monad_io_bind_guard_impl(int64_t io_val) {
+    if (io_val == MONAD_CANCELLED_SENTINEL || monad_io_cancelled())
+        return MONAD_CANCELLED_SENTINEL;
+    return 0;
 }
 
 /* ── Ref (std/src/ref.mo) ──────────────────────────────────────────────
@@ -1493,7 +1486,7 @@ rt_word monad_array_freeze(rt_word b) { return monad_array_freeze_impl(b); }
 
 rt_word monad_io_pure(int64_t a) { return monad_io_pure_impl(a); }
 int64_t monad_io_bind(int64_t io_val, int64_t f) { return monad_io_bind_impl(io_val, f); }
-int64_t monad_io_iterate(int64_t init, int64_t step) { return monad_io_iterate_impl(init, step); }
+int64_t monad_io_bind_guard(int64_t io_val) { return monad_io_bind_guard_impl(io_val); }
 
 rt_word monad_cell_new(rt_word init) { return ref_new_impl(init); }
 rt_word monad_cell_get(rt_word handle) { return ref_get_impl(handle); }
