@@ -18,6 +18,7 @@
 /// start with `save failed:`. The error carries no state, so the
 /// caller's stands untouched (session intact); the caller classifies
 /// it through `WeaverError.recoverable`.
+use weaver::tasks {TaskEntry, Tasks.list, Tasks.line}
 use weaver::todo {Todo.read, Todo.write, Todo.summary, Todo.lines}
 use weaver::place {SessionPlace, Place.cwd_of}
 use shuttle::provider {ProviderConfig}
@@ -54,7 +55,7 @@ use weaver::permissions {
     Permissions.revoke_cap, Permissions.clear, PermGrant.describe, Permissions.render,
 }
 use weaver::settings {SettingsUpdate, Settings.save}
-use weaver::procs {ProcEntry, ProcEntry.line, Procs.list, Procs.kill}
+use weaver::procs {ProcEntry, Procs.list, Procs.kill}
 use weaver::logs {Logs.latest_path, Logs.tail, Logs.detect_crash}
 
 /// Everything the interactive session carries between inputs.
@@ -175,6 +176,7 @@ pub def command_table : BTreeMap String SlashCommand :=
             Pair.pair "/save" (SlashCommand.mk cmd_save),
             Pair.pair "/log" (SlashCommand.mk cmd_log),
             Pair.pair "/processes" (SlashCommand.mk cmd_processes),
+            Pair.pair "/tasks" (SlashCommand.mk cmd_processes),
             Pair.pair "/procs" (SlashCommand.mk cmd_processes),
             Pair.pair "/thinking" (SlashCommand.mk cmd_thinking),
             Pair.pair "/todos" (SlashCommand.mk cmd_todos),
@@ -567,23 +569,28 @@ def cmd_todos (arg : String) (st : WeaverState) : IO (Result WeaverError Effect)
     else respond st (String.concat (Todo.summary ts) (String.concat "\n  " (List.intercalate "\n  " (Todo.lines ts))))
 }
 
+/// `/tasks` (`/processes`, `/procs`): background processes and subagent
+/// runs, one line each with its id; `kill <id>` stops a process. The TUI
+/// opens the monitor dialog for the bare command instead.
 def cmd_processes (arg : String) (st : WeaverState) : IO (Result WeaverError Effect) := do {
     let entries <- Procs.list;
     let now <- IO.current_time_nano;
     let trimmed : String := String.trim arg;
     if String.is_empty trimmed
-    then
-        let text : String := if List.is_empty entries
-            then "processes: none"
-            else String.concat_list (List.map (fn (e : ProcEntry) => ProcEntry.line e now) entries) in
+    then do {
+        let ts <- Tasks.list st.store;
+        let text : String := if List.is_empty ts
+            then "tasks: none"
+            else List.intercalate "\n" (List.map (fn (t : TaskEntry) => String.concat t.id (String.concat "  " (Tasks.line now t))) ts);
         respond st text
+    }
     else if String.starts_with "kill " trimmed
     then do {
         let id : String := String.trim (String.drop 5 trimmed);
         let msg <- kill_proc id entries;
         respond st msg
     }
-    else respond st "usage: /processes [kill <id>]"
+    else respond st "usage: /tasks [kill <id>]"
 }
 
 // ── /log (the debug log path + tail + crash note) ──────────────────────
@@ -1441,7 +1448,7 @@ def help_text : String :=
         "/permissions [allow|revoke ...]      list or manage session approval grants",
         "/settings [<key> <value>|save project|global]  change or save settings",
         "/tools                               list tools with their capability tags",
-        "/processes [kill <id>]               list background tasks",
+        "/tasks [kill <id>]                    background processes and subagent runs (TUI monitor)",
         "/todos                               the task's todo list (Ctrl+T folds it in the TUI)",
         "/thinking [on|off]                   show or set the reasoning channel",
         "/log                                 the debug log path, tail and crash note",

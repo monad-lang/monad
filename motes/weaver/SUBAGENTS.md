@@ -27,8 +27,10 @@ how the child sees the **current** provider/model and the run's store.
   pick).
 - Budget = `max_turns`, clamped 1-50 (default 24). No wall-clock timeout:
   the harness has no cancellation primitive.
-- Persistence (v1): `Session.save` under `<session>/agents/<pid>-<ns>.json`;
-  a future `/agents` can list these.
+- Persistence (v1): `Session.save` under `<session>/agents/<pid>-<ns>.json`,
+  and a run record `<session>/agents/a-<pid>-<ns>.status.json` (prompt,
+  running/done/failed, start time, the answer's first 2000 bytes) that
+  `/tasks` lists (`tasks.mo`).
 - Result = child's last assistant text + `[subagent turns=… tokens …]`.
 
 ## Planned phases
@@ -38,15 +40,15 @@ how the child sees the **current** provider/model and the run's store.
    Two child runs (plan, then execute) or one run whose gate is swapped;
    the plan text is the contract. Execute-phase approvals reuse the
    parent's dialog through the existing `Gate.weaver_tui`.
-2. **`/agents` monitor.** A list of child runs with status, elapsed,
-   last emit line and token totals (the debug log already records
-   `subagent_start/end/usage`; persisted sessions give the plan text).
-   Model it on the `/processes` snapshot first, then a live overlay once
-   the modal renderer is fixed.
+2. **Monitor: done as `/tasks`.** Child runs are listed with background
+   processes (status, elapsed, the prompt; Enter shows the answer, `x`
+   asks the running turn to stop). Still open: the last emit line and
+   token totals while a child runs.
 3. **Background children.** Run the child on a fiber so the parent turn
    does not block, and poll it with `pollFiber`. This needs a
    fiber-to-model progress channel: today `Cmd.perform_async` delivers
-   one message at completion, and there is no mvar/channel in `std`.
+   one message at completion; `std/src/concurrent/channel.mo` now has an
+   MVar-style `Channel` to build it on.
 4. **Approval forwarding.** A background child's `ask` cannot open the
    parent's modal (stdin is serial). Either deny non-read picks with a
    clear reason (v1), surface a queue after the parent turn, or give the

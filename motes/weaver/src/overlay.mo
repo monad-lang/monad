@@ -12,9 +12,10 @@ use json::json {
     Json.get_object, Json.object_get, Json.get_bool, Json.get_num_i64, Json.get_num,
 }
 use std::map {Map, BTreeMap}
-use std::path {Path}
+use std::path {Path, Path.to_string}
 use std::io {IO.read_file, IO.write_file}
-use std::process {process_id}
+use std::process {process_id, exec_cmd}
+use std::concurrent::combine {sleepIO}
 use tui::terminal {Terminal.poll}
 use weaver::store {StoreState, Store.child}
 
@@ -88,9 +89,47 @@ pub def Overlay.write_state (store : Option StoreState) (s : OverlayState) : IO 
     IO.pure unit
 }
 
-/// Startup: no dialog, no history.
-pub def Overlay.reset (store : Option StoreState) : IO Unit :=
+/// Startup: no dialog, no history, no monitor.
+pub def Overlay.reset (store : Option StoreState) : IO Unit := do {
+    Overlay.monitor_close store;
     Overlay.write_state store Overlay.default
+}
+
+// ── the /tasks monitor's lock ───────────────────────────────────────────
+// The monitor runs on the main loop (it opens mid-turn), outside the
+// handshake above: the main loop is the one reading stdin. While its lock
+// exists, a turn's dialog waits instead of reading stdin under it.
+
+pub def Overlay.monitor_path (store : Option StoreState) : Path :=
+    match store {
+        Option.some s => Store.child s.dir "monitor.lock",
+        Option.none =>
+            Path.path (String.concat "/tmp/weaver-monitor-"
+                (String.concat (I64.to_string process_id) ".lock")),
+    }
+
+pub def Overlay.monitor_open (store : Option StoreState) : IO Unit := do {
+    let _ <- IO.write_file (Overlay.monitor_path store) "1";
+    IO.pure unit
+}
+
+pub def Overlay.monitor_close (store : Option StoreState) : IO Unit := do {
+    let _ <- exec_cmd "rm" ["-f", Path.to_string (Overlay.monitor_path store)];
+    IO.pure unit
+}
+
+/// Wait (100 ms steps, one self-call) while the monitor is open.
+#[partial]
+pub def Overlay.wait_monitor (store : Option StoreState) : IO Unit := do {
+    let r <- IO.read_file (Overlay.monitor_path store);
+    let open_now : Bool := match r { Result.ok _ => true, Result.err _ => false };
+    if open_now
+    then do {
+        let _ <- sleepIO 100;
+        Overlay.wait_monitor store
+    }
+    else IO.pure unit
+}
 
 /// The main loop's acknowledgement: set only while `want` is up and not
 /// already acknowledged. Called from the loop's read gate, after the

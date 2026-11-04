@@ -24,6 +24,8 @@ use std::path {Path, Path.to_string, Path.with_suffix}
 use std::process {process_id, exec_cmd}
 use init::transformers {ResultT}
 use log::logger {Logger}
+use weaver::tasks {Tasks.agent_id, Tasks.record_agent}
+use weaver::text {Text.cut}
 use weaver::logs {Logs.debug, Logs.info}
 use weaver::subagent_args {TaskArgs}
 use weaver::store {StoreState, Store.child}
@@ -159,10 +161,29 @@ def run_task (cfg : ProviderConfig) (log : Option Logger) (store : Option StoreS
                     retries := 1, sleep_ms := silent_sleep, on_usage := child_usage log,
                     should_stop := stop, stopped := false };
                 let _ <- Logs.info log (String.concat "ev=subagent_start turns=" (I64.to_string n));
+                let run_id <- Tasks.agent_id;
+                let started <- IO.current_time_nano;
+                let _ <- Tasks.record_agent store run_id args.prompt "running" started "";
                 let r <- ResultT.run (Loop.run_state st);
                 let c <- task_result id log store r;
+                let _ <- Tasks.record_agent store run_id args.prompt (run_status r) started (content_summary c);
                 IO.pure (Result.ok c)
             }),
+    }
+
+/// The `/tasks` status word: the run ended with an answer or failed (a
+/// stopped run comes back as a session too, so it reads as done).
+def run_status (r : Result String Session) : String :=
+    match r {
+        Result.ok _ => "done",
+        Result.err _ => "failed",
+    }
+
+/// The answer's first few lines, for the monitor's detail view.
+def content_summary (c : Content) : String :=
+    match c {
+        Content.tool_result _ text _ => Text.cut 2000 text,
+        _ => "",
     }
 
 /// The per-turn `task` tool. The registry is built each turn so the child

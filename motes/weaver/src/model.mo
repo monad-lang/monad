@@ -20,6 +20,7 @@ use weaver::error {WeaverError}
 use weaver::dumb {Dumb.status_fields}
 use weaver::theme {theme_status_style_with, theme_border_style_with, theme_thinking_style_with}
 use weaver::todo {TodoItem, Todo.summary, Todo.lines, Todo.is_running}
+use weaver::tasks {TaskEntry}
 use tui::text {Text.take_width}
 use weaver::policy {Mode}
 use weaver::store {TLine, Transcript, TranscriptPage, Transcript.empty}
@@ -80,6 +81,11 @@ pub type WeaverMsg {
     overlay_polled (overlay : Option OverlayState),
     /// The session's todo list, polled from `todos.json`.
     todos_polled (todos : List TodoItem),
+    /// Background processes and subagent runs, polled for the footer
+    /// count and the exit notes.
+    tasks_polled (tasks : List TaskEntry),
+    /// The `/tasks` monitor closed; `notes` are what it did (a kill).
+    monitor_closed (notes : List String),
     /// One tick's subscription results, folded in order.
     batch (msgs : List WeaverMsg),
 }
@@ -158,6 +164,12 @@ pub struct TuiModel {
     todos : List TodoItem := List.empty,
     /// Ctrl+T: the whole list, or its one-line summary.
     todos_open : Bool := true,
+    /// Tasks running at the last poll (the footer's count).
+    tasks_running : I64 := 0,
+    /// Their ids: the next poll's exit notes compare against them.
+    tasks_seen : List String := List.empty,
+    /// Exit notes the next turn's message carries to the model.
+    task_notes : List String := List.empty,
 }
 
 /// The initial model: an empty input box with a hint placeholder, no
@@ -170,7 +182,7 @@ pub def init_tui_model (log : Option Logger) (st : WeaverState) (rows : I64) (co
 
 /// The startup tail loaded from the session store.
 pub def init_tui_model_with (log : Option Logger) (st : WeaverState) (rows : I64) (cols : I64) (tr : Transcript) : TuiModel :=
-    let m : TuiModel := { state := st, prompt := Prompt.empty, pane := Pane.make tr, rows := rows, cols := cols, ctrl_c_streak := 0, ctrl_d_streak := 0, turn_pending := false, frame := 0, banner := Banner.shown, live := Live.idle, modal := false, plan_ready := false, title_due := false, turn_gen := 0, overlay_open := false, dialog_seq := 0, picker := Option.none, queued := List.empty, queued_ready := false, log := log, todos := List.empty, todos_open := true } in
+    let m : TuiModel := { state := st, prompt := Prompt.empty, pane := Pane.make tr, rows := rows, cols := cols, ctrl_c_streak := 0, ctrl_d_streak := 0, turn_pending := false, frame := 0, banner := Banner.shown, live := Live.idle, modal := false, plan_ready := false, title_due := false, turn_gen := 0, overlay_open := false, dialog_seq := 0, picker := Option.none, queued := List.empty, queued_ready := false, log := log, todos := List.empty, todos_open := true, tasks_running := 0, tasks_seen := List.empty, task_notes := List.empty } in
     Model.refresh_rows m
 
 pub def Model.banner_view (m : TuiModel) : BannerView :=
@@ -368,4 +380,9 @@ pub def Model.append_lines (m : TuiModel) (lines : List TLine) : TuiModel :=
 /// prompt (the input box itself is the prompt here). It is STATIC
 /// mid-turn: the spinner now lives on the thinking row under the prompt.
 pub def status_line (m : TuiModel) : String :=
-    Dumb.status_fields m.state
+    let base : String := Dumb.status_fields m.state in
+    // In front: the fields already fill an 80-column row, and a clipped
+    // count would hide the one thing still running.
+    if m.tasks_running < 1 then base
+    else String.concat (I64.to_string m.tasks_running)
+        (String.concat (if m.tasks_running == 1 then " task running · " else " tasks running · ") base)

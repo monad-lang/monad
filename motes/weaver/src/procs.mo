@@ -17,7 +17,6 @@ use json::json {
 use std::map {Map, BTreeMap}
 use parsec::number {parse_i64}
 use weaver::store {Store.sessions_root, Store.child}
-use weaver::format {format_elapsed}
 
 pub type ProcStatus {
     running,
@@ -44,13 +43,6 @@ pub def ProcStatus.text (s : ProcStatus) : String :=
         ProcStatus.killed => "killed",
         ProcStatus.lost => "lost",
     }
-
-/// The monitor's one-line description: `running  3.4s  echo hi`.
-pub def ProcEntry.line (e : ProcEntry) (now_ns : I64) : String :=
-    let frames : I64 := (now_ns - e.started_ns) / 100000000 in
-    String.concat (ProcStatus.text e.status)
-        (String.concat "  " (String.concat (format_elapsed frames)
-            (String.concat "  " e.command)))
 
 // ── the run root ────────────────────────────────────────────────────────
 
