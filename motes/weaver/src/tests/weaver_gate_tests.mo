@@ -246,3 +246,15 @@ def test_auto_mode_holds_a_flagged_command_for_the_prompt : IO Bool := do {
     let flagged_denied : Bool := match flagged { Approval.deny _ => true, _ => false };
     return (plain_ok && flagged_denied)
 }
+
+/// todo_write never asks, in manual mode or any other.
+#[test]
+def test_todo_write_is_unguarded : IO Bool := do {
+    let input : Json := Json.make_object (Map.insert "todos" (Json.make_str "x") BTreeMap.empty);
+    let p : Pick := { name := "todo_write", cap := Capability.read, input := input };
+    let res <- precheck_of Mode.manual Option.none (Option.some (Path.path "/repo")) p;
+    return (match res {
+        Option.some ap => match ap { Approval.once => true, _ => false },
+        Option.none => false,
+    })
+}

@@ -19,7 +19,7 @@
 /// scripted pair -- the gate is testable without a tty, the same
 /// discipline as the mock wire.
 use shuttle::gate {Capability, Pick, Approval, Gate}
-use weaver::policy {Mode, Decision, Policy.decide}
+use weaver::policy {Mode, Decision, Policy.decide, Policy.unguarded}
 use weaver::diff {Diff.for_input, Diff.render}
 use weaver::permissions {
     PermGrant, PermScope, Permissions.matches, Permissions.get,
@@ -74,7 +74,8 @@ pub def Gate.weaver (mode : Mode) (grants : Option (Ref (List PermGrant))) (root
 /// silent about why nothing ran).
 def weaver_precheck (mode : Mode) (grants : Option (Ref (List PermGrant))) (root : Option Path) (write : String -> IO Unit) (p : Pick) : IO (Option Approval) :=
     let a : Assessment := Assess.pick root p in
-    match Policy.decide p.cap mode a {
+    if Policy.unguarded p.name then IO.pure (Option.some Approval.once)
+    else match Policy.decide p.cap mode a {
         Decision.refuse reason => do {
             let _ <- write (String.concat "refused: " (String.concat reason "\n"));
             IO.pure (Option.some (Approval.deny reason))

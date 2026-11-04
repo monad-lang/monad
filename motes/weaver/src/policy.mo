@@ -29,6 +29,11 @@ pub type Decision {
     refuse (reason : String),
 }
 
+/// Tools that only change weaver's own session state (the todo list) run
+/// in every mode without a prompt: there is nothing to approve.
+pub def Policy.unguarded (tool : String) : Bool :=
+    String.beq tool "todo_write"
+
 /// The decision table, the whole policy in one function. Every cell
 /// of `Capability x Mode`, and each cell the assessment splits, is pinned
 /// by `tests/policy_tests.mo` -- a change here without that file changing

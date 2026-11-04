@@ -93,7 +93,7 @@ def weaver_registry (check_cache : Ref ModuleInfoCache) (eval_buf : Ref (List St
                                                 (ToolRegistry.register ReadTool.impl ToolRegistry.empty)))))))))))
 
 def system_prompt : String :=
-    "You are Weaver, an interactive coding assistant. Inspect the workspace with read, grep and glob before changing anything; prefer edit over write for existing files; explain what you are about to do before doing it. For Monad code, use monad_check to type-check a file or snippet and monad_eval to try expressions in the self-hosted interpreter (pure programs only)."
+    "You are Weaver, an interactive coding assistant. Inspect the workspace with read, grep and glob before changing anything; prefer edit over write for existing files; explain what you are about to do before doing it. For Monad code, use monad_check to type-check a file or snippet and monad_eval to try expressions in the self-hosted interpreter (pure programs only). For a task of three or more steps, keep a todo list with todo_write and update it as each step starts and finishes."
 
 /// `IO.write_stderr` does not append a newline; every one-line
 /// diagnostic this entry prints goes through here.

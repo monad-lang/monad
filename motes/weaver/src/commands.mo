@@ -18,6 +18,7 @@
 /// start with `save failed:`. The error carries no state, so the
 /// caller's stands untouched (session intact); the caller classifies
 /// it through `WeaverError.recoverable`.
+use weaver::todo {Todo.read, Todo.write, Todo.summary, Todo.lines}
 use weaver::place {SessionPlace, Place.cwd_of}
 use shuttle::provider {ProviderConfig}
 use shuttle::registry {ToolRegistry}
@@ -176,6 +177,7 @@ pub def command_table : BTreeMap String SlashCommand :=
             Pair.pair "/processes" (SlashCommand.mk cmd_processes),
             Pair.pair "/procs" (SlashCommand.mk cmd_processes),
             Pair.pair "/thinking" (SlashCommand.mk cmd_thinking),
+            Pair.pair "/todos" (SlashCommand.mk cmd_todos),
             Pair.pair "/tools" (SlashCommand.mk cmd_tools)]
 
 def command_map (cs : List (Pair String SlashCommand)) : BTreeMap String SlashCommand :=
@@ -556,6 +558,14 @@ def kill_proc (id : String) (xs : List ProcEntry) : IO String :=
         Option.none => IO.pure (String.concat "unknown process: " id),
         Option.some e => kill_proc_one e,
     }
+
+/// `/todos`: the session's todo list (`todo_write` keeps it).
+def cmd_todos (arg : String) (st : WeaverState) : IO (Result WeaverError Effect) := do {
+    let ts <- Todo.read st.store;
+    if List.is_empty ts
+    then respond st "no todos yet (the model keeps them with todo_write)"
+    else respond st (String.concat (Todo.summary ts) (String.concat "\n  " (List.intercalate "\n  " (Todo.lines ts))))
+}
 
 def cmd_processes (arg : String) (st : WeaverState) : IO (Result WeaverError Effect) := do {
     let entries <- Procs.list;
@@ -1046,7 +1056,11 @@ def cmd_clear (arg : String) (st : WeaverState) : IO (Result WeaverError Effect)
     let st2 : WeaverState := Commands.set_plan (set_session st fresh st.budget) Option.none;
     let _ <- Permissions.clear st.grants;
     match st.store {
-        Option.none => IO.pure (Result.ok (Effect.reset st2 "cleared")),
+        Option.none => do {
+            // No store: the list lives in a per-process file; empty it.
+            let _ <- Todo.write Option.none List.empty;
+            IO.pure (Result.ok (Effect.reset st2 "cleared"))
+        },
         Option.some s => clear_with_store st2 s fresh,
     }
 }
@@ -1428,6 +1442,7 @@ def help_text : String :=
         "/settings [<key> <value>|save project|global]  change or save settings",
         "/tools                               list tools with their capability tags",
         "/processes [kill <id>]               list background tasks",
+        "/todos                               the task's todo list (Ctrl+T folds it in the TUI)",
         "/thinking [on|off]                   show or set the reasoning channel",
         "/log                                 the debug log path, tail and crash note",
         "/mcp                                 list mounted MCP servers",

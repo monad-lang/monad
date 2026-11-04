@@ -31,6 +31,7 @@ use weaver::theme {Theme.tint, theme_status_code, class_code, LineClass}
 use log::logger {Logger}
 use shuttle::registry {ToolRegistry}
 use weaver::subagent {Subagent.task_tool}
+use weaver::todo {TodoTool.impl}
 use weaver::usage {UsageTracker.start, UsageTracker.silent, UsageTracker.last}
 use weaver::format {format_tokens}
 use init::transformers {ResultT}
@@ -310,7 +311,8 @@ def drive (read : Unit -> IO (Option String)) (write : String -> IO Unit) (st : 
 
 def drive_ready (read : Unit -> IO (Option String)) (write : String -> IO Unit) (st : WeaverState) (text : String) : ResultT WeaverError IO RunState := do {
     let base : RunState := st.run;
-    let with_task : RunState := { base with reg := ToolRegistry.register (Subagent.task_tool base.session.config Option.none Option.none silent_stop) base.reg };
+    let with_task : RunState := { base with reg := ToolRegistry.register (TodoTool.impl st.store)
+        (ToolRegistry.register (Subagent.task_tool base.session.config Option.none Option.none silent_stop) base.reg) };
     let gated : RunState := gate_for st read (theme_write write st.colors) with_task;
     let ready : RunState := append_user gated text;
     drive_loop ready

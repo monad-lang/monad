@@ -30,7 +30,7 @@ use weaver::commands {
     SessionPage, Commands.session_page, Commands.sessions_for, Commands.turns_label, Commands.turn_context,
 }
 use log::logger {Logger}
-use weaver::policy {Mode, Mode.show, Mode.cycle, Policy.decide, Decision}
+use weaver::policy {Mode, Mode.show, Mode.cycle, Policy.decide, Policy.unguarded, Decision}
 use weaver::gate {pick_header, pick_target, cap_name, capped_diff, PickAnswer, record_answer, answer_approval, Gate.assessment_lines, Gate.granted}
 use weaver::permissions {PermGrant, Permissions.get, Permissions.render}
 use weaver::assess {Assessment, Reach.is_inside, Assess.pick}
@@ -51,6 +51,7 @@ use weaver::ui::rows {DisplayRow, Rows.of_line, Rows.widget}
 use weaver::logs {Logs.info, Logs.debug, Logs.warn, Logs.error, Logs.log_rss, Logs.sanitize}
 use weaver::title {Title.generate, Title.needed}
 use weaver::subagent {Subagent.task_tool}
+use weaver::todo {TodoItem, TodoTool.impl, Todo.read, Todo.same}
 use weaver::store {
     Transcript, TranscriptPage, StoreState,
     Transcript.empty, Transcript.with_page, Transcript.next_block, Transcript.append, Transcript.drop_page,
@@ -198,6 +199,7 @@ def update_msg (m : TuiModel) (msg : WeaverMsg) : Pair TuiModel (Cmd WeaverMsg) 
         WeaverMsg.live lm => live_step m lm,
         WeaverMsg.banner bm => Pair.pair { m with banner := Banner.update m.banner bm } Cmd.none,
         WeaverMsg.overlay_polled ov => overlay_step m ov,
+        WeaverMsg.todos_polled ts => todos_step m ts,
         WeaverMsg.batch msgs => batch_step m msgs,
     }
 
@@ -449,9 +451,27 @@ pub def TuiApp.subscriptions (m : TuiModel) : Subs WeaverMsg :=
         IO.pure (WeaverMsg.overlay_polled ov)
     }) in
     let banner : Subs WeaverMsg := Subs.map WeaverMsg.banner (Banner.subscriptions m.banner) in
+    // The todo list changes only through a turn's todo_write, a /clear or a
+    // /resume: twice a second is plenty, and a small file.
+    let todos : Subs WeaverMsg := Subs.poll 5 (fn (_ : Unit) => do {
+        let ts <- Todo.read store;
+        IO.pure (WeaverMsg.todos_polled ts)
+    }) in
     if m.turn_pending
-    then Subs.batch [overlay, banner, Subs.map WeaverMsg.live (Live.subscriptions store m.live)]
-    else Subs.batch [overlay, banner]
+    then Subs.batch [overlay, banner, todos, Subs.map WeaverMsg.live (Live.subscriptions store m.live)]
+    else Subs.batch [overlay, banner, todos]
+
+/// A polled todo list. Only a change refreshes the rows (the panel's
+/// height moves the transcript's) and repaints: a poll's message alone
+/// draws no frame, and the forced one must start from a cleared terminal
+/// (the panel moves the transcript border, and blank cells send no delta).
+def todos_step (m : TuiModel) (ts : List TodoItem) : Pair TuiModel (Cmd WeaverMsg) :=
+    if Todo.same m.todos ts then Pair.pair m Cmd.none
+    else Pair.pair (Model.refresh_rows { m with todos := ts }) repaint_cmd
+
+/// Ctrl+T: fold the todo panel to its summary line, or open it again.
+def toggle_todos (m : TuiModel) : Pair TuiModel (Cmd WeaverMsg) :=
+    Pair.pair (with_streak_reset (fn (mm : TuiModel) => Model.refresh_rows { mm with todos_open := Bool.not mm.todos_open }) m) Cmd.none
 
 /// Live messages count only while a turn runs: a poll that lands after
 /// the turn folded must not resurrect its text.
@@ -753,6 +773,7 @@ def editor_key (m : TuiModel) (k : Key) : Pair TuiModel (Cmd WeaverMsg) :=
             if c == "c" then ctrl_c_step m
             else if c == "d" then ctrl_d_step m
             else if c == "o" then toggle_details m
+            else if c == "t" then toggle_todos m
             else if c == "u" then scroll_with_pages m (half_page m)
             else Pair.pair (streak_reset_input m k) Cmd.none,
         Key.end => Pair.pair (with_streak_reset (fn (mm : TuiModel) => pane_only mm PaneMsg.repin) m) Cmd.none,
@@ -1241,7 +1262,8 @@ def error_line (e : WeaverError) : TLine :=
 /// as-is (Phase 9: `drive_loop` is already `ResultT WeaverError IO`).
 def drive_tui (log : Option Logger) (gen : I64) (st : WeaverState) (text : String) (on_usage : Usage -> IO Unit) : ResultT WeaverError IO RunState := do {
     let stop : Unit -> IO Bool := Stop.predicate st.store gen;
-    let with_task : RunState := { (st.run) with reg := ToolRegistry.register (Subagent.task_tool st.run.session.config log st.store stop) st.run.reg };
+    let with_task : RunState := { (st.run) with reg := ToolRegistry.register (TodoTool.impl st.store)
+        (ToolRegistry.register (Subagent.task_tool st.run.session.config log st.store stop) st.run.reg) };
     let gated : RunState := { with_task with gate := Gate.weaver_tui log st.mode st.colors st.store st.grants (Place.cwd_of st.place),
         emit := progress_live log st.store, on_usage := on_usage,
         should_stop := stop, stopped := false };
@@ -1448,7 +1470,8 @@ pub def Gate.weaver_tui (log : Option Logger) (mode : Mode) (colors : Bool) (sto
 
 def weaver_tui_precheck (mode : Mode) (grants : Option (Ref (List PermGrant))) (root : Option Path) (p : Pick) : IO (Option Approval) :=
     let a : Assessment := Assess.pick root p in
-    match Policy.decide p.cap mode a {
+    if Policy.unguarded p.name then IO.pure (Option.some Approval.once)
+    else match Policy.decide p.cap mode a {
         Decision.refuse reason => IO.pure (Option.some (Approval.deny reason)),
         Decision.ask => do {
             let gs <- Permissions.get grants;

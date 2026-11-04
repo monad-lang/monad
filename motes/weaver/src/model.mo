@@ -12,12 +12,15 @@
 /// single-selection menu's highlight, not a scrolling transcript).
 use shuttle::agent {RunState}
 use shuttle::message {Message}
+use std::list {List.length}
 use weaver::commands {WeaverState, Effect}
 use weaver::overlay {OverlayState}
 use log::logger {Logger}
 use weaver::error {WeaverError}
 use weaver::dumb {Dumb.status_fields}
-use weaver::theme {theme_status_style_with, theme_border_style_with}
+use weaver::theme {theme_status_style_with, theme_border_style_with, theme_thinking_style_with}
+use weaver::todo {TodoItem, Todo.summary, Todo.lines, Todo.is_running}
+use tui::text {Text.take_width}
 use weaver::policy {Mode}
 use weaver::store {TLine, Transcript, TranscriptPage, Transcript.empty}
 use tui::types {Event, LayoutSize}
@@ -75,6 +78,8 @@ pub type WeaverMsg {
     banner (msg : BannerMsg),
     /// The dialog-ownership handshake, polled every frame.
     overlay_polled (overlay : Option OverlayState),
+    /// The session's todo list, polled from `todos.json`.
+    todos_polled (todos : List TodoItem),
     /// One tick's subscription results, folded in order.
     batch (msgs : List WeaverMsg),
 }
@@ -149,6 +154,10 @@ pub struct TuiModel {
     queued_ready : Bool := false,
     /// The run's debug logger (none when WEAVER_LOG=off).
     log : Option Logger := Option.none,
+    /// The model's todo list (`todo_write`), shown above the status row.
+    todos : List TodoItem := List.empty,
+    /// Ctrl+T: the whole list, or its one-line summary.
+    todos_open : Bool := true,
 }
 
 /// The initial model: an empty input box with a hint placeholder, no
@@ -161,7 +170,7 @@ pub def init_tui_model (log : Option Logger) (st : WeaverState) (rows : I64) (co
 
 /// The startup tail loaded from the session store.
 pub def init_tui_model_with (log : Option Logger) (st : WeaverState) (rows : I64) (cols : I64) (tr : Transcript) : TuiModel :=
-    let m : TuiModel := { state := st, prompt := Prompt.empty, pane := Pane.make tr, rows := rows, cols := cols, ctrl_c_streak := 0, ctrl_d_streak := 0, turn_pending := false, frame := 0, banner := Banner.shown, live := Live.idle, modal := false, plan_ready := false, title_due := false, turn_gen := 0, overlay_open := false, dialog_seq := 0, picker := Option.none, queued := List.empty, queued_ready := false, log := log } in
+    let m : TuiModel := { state := st, prompt := Prompt.empty, pane := Pane.make tr, rows := rows, cols := cols, ctrl_c_streak := 0, ctrl_d_streak := 0, turn_pending := false, frame := 0, banner := Banner.shown, live := Live.idle, modal := false, plan_ready := false, title_due := false, turn_gen := 0, overlay_open := false, dialog_seq := 0, picker := Option.none, queued := List.empty, queued_ready := false, log := log, todos := List.empty, todos_open := true } in
     Model.refresh_rows m
 
 pub def Model.banner_view (m : TuiModel) : BannerView :=
@@ -195,7 +204,66 @@ pub def Model.view (m : TuiModel) : Widget :=
     let status : SizedWidget := sized (LayoutSize.fixed 1) (with_style (theme_status_style_with colors mode) (label (status_line m))) in
     let input : SizedWidget := sized (LayoutSize.fixed 3) (Prompt.view m.prompt) in
     let head : List SizedWidget := if m.banner.shown then [sized (LayoutSize.fixed Banner.rows) (Banner.view (Model.banner_view m) m.banner)] else List.empty in
-    Widget.column (List.append head [transcript, status, input])
+    let todo_rows : List String := Model.todo_rows m in
+    let todos : List SizedWidget := if List.is_empty todo_rows then List.empty
+        else [sized (LayoutSize.fixed (List.length todo_rows)) (Widget.column (List.map (fn (r : String) =>
+            sized (LayoutSize.fixed 1) (with_style (theme_thinking_style_with colors) (label r))) todo_rows))] in
+    Widget.column (List.append head (List.append [transcript] (List.append todos [status, input])))
+
+// ── the todo panel ───────────────────────────────────────────────────────
+
+/// The most todo rows shown open; a longer list keeps the in-progress item
+/// and its neighbours in view.
+pub def Model.todo_max_rows : I64 := 8
+
+/// The panel above the status row: nothing without todos; folded (Ctrl+T),
+/// the one-line summary; open, the summary and the items, each clipped to
+/// the width.
+pub def Model.todo_rows (m : TuiModel) : List String :=
+    if List.is_empty m.todos then List.empty
+    else
+        let width : I64 := if m.cols - 2 < 1 then 1 else m.cols - 2 in
+        let head : String := String.concat " " (Todo.summary m.todos) in
+        let all : List String := if m.todos_open
+            then List.cons head (List.map (fn (l : String) => String.concat "   " l) (todo_window m.todos))
+            else [String.concat head "  (ctrl+t)"] in
+        List.map (fn (r : String) => Text.take_width r width) all
+
+/// At most `todo_max_rows - 1` items, starting a little before the one in
+/// progress so it stays visible.
+def todo_window (ts : List TodoItem) : List String :=
+    let cap : I64 := Model.todo_max_rows - 1 in
+    let lines : List String := Todo.lines ts in
+    let n : I64 := List.length lines in
+    if Bool.not (I64.lt cap n) then lines
+    else
+        let at : I64 := running_index ts 0 in
+        let start0 : I64 := if at < 1 then 0 else at - 1 in
+        let start : I64 := if I64.lt (n - cap) start0 then n - cap else start0 in
+        take_n cap (drop_n start lines)
+
+#[partial]
+def running_index (ts : List TodoItem) (i : I64) : I64 :=
+    match ts {
+        List.empty => 0,
+        List.cons t rest => if Todo.is_running t then i else running_index rest (i + 1),
+    }
+
+#[partial]
+def take_n (n : I64) (xs : List String) : List String :=
+    if n < 1 then List.empty
+    else match xs {
+        List.empty => xs,
+        List.cons x rest => List.cons x (take_n (n - 1) rest),
+    }
+
+#[partial]
+def drop_n (n : I64) (xs : List String) : List String :=
+    if n < 1 then xs
+    else match xs {
+        List.empty => xs,
+        List.cons _ rest => drop_n (n - 1) rest,
+    }
 
 // ── the transcript pane ─────────────────────────────────────────────────
 // Screen -> pane mapping is the panel's border (1) plus its left padding
@@ -258,7 +326,7 @@ def transcript_column (m : TuiModel) : Widget :=
 /// `rows` minus the 3-row input box and the status row, minus the
 /// transcript border's own top/bottom lines.
 pub def panel_height (m : TuiModel) : I64 :=
-    let h := m.rows - 6 - Banner.height m.banner in
+    let h := m.rows - 6 - Banner.height m.banner - List.length (Model.todo_rows m) in
     if h < 0 then 0 else h
 
 /// The transcript body's height: while a turn is pending, one panel row is

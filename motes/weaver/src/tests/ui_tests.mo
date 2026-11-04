@@ -5,6 +5,7 @@
 /// `ui_theme_tests.mo`. Two parser corners worth knowing: an `--` comment
 /// line directly after `:=` breaks the parse, and an expression projection
 /// `(f x).field` binds looser than `==` -- bind to a `let` first.
+use weaver::todo {TodoItem, TodoStatus}
 use shuttle::agent {RunState, silent_sleep, silent_usage, silent_stop}
 use shuttle::context {usage_zero}
 use shuttle::message {Usage}
@@ -15,14 +16,14 @@ use shuttle::session {Session}
 use weaver::commands {WeaverState}
 use weaver::policy {Mode}
 use std::map {BTreeMap}
-use std::list {List.length}
+use std::list {List.length, List.intercalate}
 use tui::text {Text.width}
 use weaver::ui::live {LiveModel, LiveView, Live.start, Live.request_stop, Live.status_text, Live.thinking_height, Live.text_height,
     Live.separator_height, Live.rows}
 use weaver::ui::rows {DisplayRow, Rows.of_line, Rows.wrap, Rows.cap_bytes, Rows.length}
 use weaver::ui::banner {Banner.shown, Banner.hidden}
 use weaver::model {
-    TuiModel, init_tui_model,
+    TuiModel, init_tui_model, Model.todo_rows,
     Model.scroll_step, Model.append_block, Model.pane_view, panel_height,
     Model.display_rows, Model.content_width,
     Model.body_height, Model.live_view, status_line, Model.refresh_rows,
@@ -520,3 +521,30 @@ def test_reset_drops_the_cache : Bool :=
     let m : TuiModel := filled 50 in
     let p2 : PaneModel := Pane.reset m.pane m.pane.transcript in
     match p2.cache { Option.none => true, Option.some _ => false }
+
+// ── the todo panel ──────────────────────────────────────────────────────
+
+def with_todos (unfolded : Bool) : TuiModel :=
+    let a : TodoItem := { content := "Read the module", status := TodoStatus.todo_completed, active := "" } in
+    let b : TodoItem := { content := "Run the tests", status := TodoStatus.todo_in_progress, active := "Running the tests" } in
+    let c : TodoItem := { content := "Commit", status := TodoStatus.todo_pending, active := "" } in
+    let m : TuiModel := model_of in
+    Model.refresh_rows { m with todos := [a, b, c], todos_open := unfolded }
+
+/// Open, the panel is the summary and one row per item, and the transcript
+/// gives up exactly those rows.
+#[test]
+def test_todo_panel_open : Bool :=
+    let m : TuiModel := with_todos true in
+    let rows : List String := Model.todo_rows m in
+    List.length rows == 4
+        && panel_height m == panel_height model_of - 4
+        && String.contains (List.intercalate "|" rows) "◐ Running the tests"
+
+/// Folded (Ctrl+T), one summary row; without todos, no panel at all.
+#[test]
+def test_todo_panel_folded_and_empty : Bool :=
+    let m : TuiModel := with_todos false in
+    List.length (Model.todo_rows m) == 1
+        && String.contains (List.intercalate "|" (Model.todo_rows m)) "todos 1/3"
+        && List.is_empty (Model.todo_rows model_of)
