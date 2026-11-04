@@ -1844,7 +1844,7 @@ def try_dependent_match (cases : List MatchCase) (sc_term : Term) (sc_typ : Term
             let sc_typ_r : Term :=
                 if I64.beq raw_args (List.length ind.params)
                 then sc_typ
-                else whnf scope local_types locals sc_typ in
+                else whnf scope locals sc_typ in
             match term_peel sc_term {
                 Term.var idx _dbg =>
                     if I64.beq idx sentinel
