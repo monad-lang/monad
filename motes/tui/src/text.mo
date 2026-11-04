@@ -14,7 +14,7 @@
 // bytes render as a one-cell space so model output cannot inject ANSI or
 // desynchronize the cell grid.
 
-use std::list {List.length}
+use std::list {List.length, List.any}
 
 use lib::types {TextStyle, TextSegment}
 use lib::core {style_default, mk_text_segment}
@@ -129,14 +129,45 @@ def wide (cp : U32) : Bool :=
         (Bool.or (in_range cp 0xFFE0u32 0xFFE6u32)
         (Bool.or (in_range cp 0x1F1E6u32 0x1F1FFu32)
         (Bool.or (in_range cp 0x1F300u32 0x1FAFFu32)
-        (Bool.or (in_range cp 0x20000u32 0x2FFFu32)
-              (in_range cp 0x30000u32 0x3FFFu32))))))))))))))))
+        (Bool.or (in_range cp 0x20000u32 0x2FFFFu32)
+        (Bool.or (in_range cp 0x30000u32 0x3FFFFu32)
+              (emoji_presentation cp)))))))))))))))))
+
+/// Below U+1F300, the code points terminals draw as two-cell emoji by
+/// default (Unicode's Emoji_Presentation set): ✅ ❌ ⭐ ⌛ ⚡ and kin.
+/// Counting them as one cell let a row spill past the margin.
+def emoji_presentation (cp : U32) : Bool :=
+    if U32.lt cp 0x231Au32 then false
+    else if U32.lt 0x2B55u32 cp then (if in_range cp 0x1F004u32 0x1F251u32 then emoji_presentation_smp cp else false)
+    else List.any (fn (r : Pair U32 U32) => match r { Pair.pair lo hi => in_range cp lo hi })
+        [Pair.pair 0x231Au32 0x231Bu32, Pair.pair 0x23E9u32 0x23ECu32, Pair.pair 0x23F0u32 0x23F0u32,
+            Pair.pair 0x23F3u32 0x23F3u32, Pair.pair 0x25FDu32 0x25FEu32, Pair.pair 0x2614u32 0x2615u32,
+            Pair.pair 0x2648u32 0x2653u32, Pair.pair 0x267Fu32 0x267Fu32, Pair.pair 0x2693u32 0x2693u32,
+            Pair.pair 0x26A1u32 0x26A1u32, Pair.pair 0x26AAu32 0x26ABu32, Pair.pair 0x26BDu32 0x26BEu32,
+            Pair.pair 0x26C4u32 0x26C5u32, Pair.pair 0x26CEu32 0x26CEu32, Pair.pair 0x26D4u32 0x26D4u32,
+            Pair.pair 0x26EAu32 0x26EAu32, Pair.pair 0x26F2u32 0x26F3u32, Pair.pair 0x26F5u32 0x26F5u32,
+            Pair.pair 0x26FAu32 0x26FAu32, Pair.pair 0x26FDu32 0x26FDu32, Pair.pair 0x2705u32 0x2705u32,
+            Pair.pair 0x270Au32 0x270Bu32, Pair.pair 0x2728u32 0x2728u32, Pair.pair 0x274Cu32 0x274Cu32,
+            Pair.pair 0x274Eu32 0x274Eu32, Pair.pair 0x2753u32 0x2755u32, Pair.pair 0x2757u32 0x2757u32,
+            Pair.pair 0x2795u32 0x2797u32, Pair.pair 0x27B0u32 0x27B0u32, Pair.pair 0x27BFu32 0x27BFu32,
+            Pair.pair 0x2B1Bu32 0x2B1Cu32, Pair.pair 0x2B50u32 0x2B50u32, Pair.pair 0x2B55u32 0x2B55u32]
+
+/// The supplementary-plane emoji below the U+1F300 block.
+def emoji_presentation_smp (cp : U32) : Bool :=
+    List.any (fn (r : Pair U32 U32) => match r { Pair.pair lo hi => in_range cp lo hi })
+        [Pair.pair 0x1F004u32 0x1F004u32, Pair.pair 0x1F0CFu32 0x1F0CFu32, Pair.pair 0x1F18Eu32 0x1F18Eu32,
+            Pair.pair 0x1F191u32 0x1F19Au32, Pair.pair 0x1F201u32 0x1F201u32, Pair.pair 0x1F21Au32 0x1F21Au32,
+            Pair.pair 0x1F22Fu32 0x1F22Fu32, Pair.pair 0x1F232u32 0x1F236u32, Pair.pair 0x1F238u32 0x1F23Au32,
+            Pair.pair 0x1F250u32 0x1F251u32]
 
 /// Fold a zero-width or joined glyph into its predecessor: the text is
 /// appended, the consumed bytes accumulate, and the predecessor's width
 /// wins (a ZWJ sequence is one 2-cell glyph).
+/// VS16 (U+FE0F) asks for emoji presentation, which terminals draw in two
+/// cells: `⚠` is one cell, `⚠️` two.
 def merge_glyph (prev : Glyph) (g : Glyph) : Glyph :=
-    { prev with text := String.concat prev.text g.text, bytes := prev.bytes + g.bytes }
+    let width : I64 := if String.beq g.text "\u{fe0f}" then 2 else prev.width in
+    { prev with text := String.concat prev.text g.text, bytes := prev.bytes + g.bytes, width := width }
 
 /// A leading zero-width glyph has nothing to fold into: render it standalone
 /// in one cell.
@@ -630,6 +661,18 @@ def test_wrap_latin1 : Bool := Text.wrap 3 "æøå" == ["æøå"]
 
 #[test]
 def test_wrap_wide : Bool := Text.wrap 2 "日本" == ["日", "本"]
+
+/// Emoji-presentation characters below U+1F300 take two cells.
+#[test]
+def test_width_bmp_emoji : Bool := Text.width "✅" == 2 && Text.width "❌" == 2 && Text.width "⭐" == 2 && Text.width "⌛" == 2
+
+/// Text-presentation symbols stay one cell; VS16 makes them two.
+#[test]
+def test_width_vs16 : Bool := Text.width "⚠" == 1 && Text.width "⚠️" == 2 && Text.width "✔" == 1 && Text.width "⏺" == 1
+
+/// CJK Extension B and beyond are wide.
+#[test]
+def test_width_cjk_ext_b : Bool := Text.width "𠀀" == 2
 
 #[test]
 def test_width_skin_tone : Bool := Text.width "👍🏽" == 2

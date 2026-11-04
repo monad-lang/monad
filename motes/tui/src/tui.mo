@@ -90,6 +90,7 @@ use lib::terminal {
     Terminal.enable_mouse, Terminal.disable_mouse,
     Terminal.enable_bracketed_paste, Terminal.disable_bracketed_paste,
     Terminal.enter_alt_screen, Terminal.enter_raw_mode, Terminal.leave_alt_screen,
+    Terminal.disable_autowrap, Terminal.enable_autowrap,
     Terminal.leave_raw_mode, Terminal.reset_style, Terminal.size
 }
 use std::concurrent::fiber {Fiber, FiberError, forkIO, pollFiber}
@@ -170,6 +171,7 @@ pub def run_app {S : Type} {M : Type} (a : App S M) : IO Unit := do {
     let size <- Terminal.size;
     let _ <- Terminal.enter_raw_mode;
     Terminal.enter_alt_screen;
+    Terminal.disable_autowrap;
     Terminal.cursor_hide;
     Terminal.enable_mouse;
     Terminal.enable_bracketed_paste;
@@ -612,6 +614,7 @@ def restore_terminal : IO Unit := do {
     Terminal.reset_style;
     Terminal.disable_bracketed_paste;
     Terminal.disable_mouse;
+    Terminal.enable_autowrap;
     Terminal.leave_alt_screen;
     Terminal.cursor_show;
     let _ <- Terminal.leave_raw_mode;

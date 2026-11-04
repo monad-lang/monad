@@ -119,6 +119,14 @@ pub def Terminal.enter_alt_screen_code : String := "\u{1b}[?1049h"
 /// Switch back to the primary screen buffer (and its scrollback).
 pub def Terminal.leave_alt_screen_code : String := "\u{1b}[?1049l"
 
+/// Autowrap off (DECAWM): a row painted wider than the terminal is clipped
+/// at the right margin instead of wrapping onto -- and overwriting -- the
+/// row below, which a diffed repaint would never fix.
+pub def Terminal.disable_autowrap_code : String := "\u{1b}[?7l"
+
+/// Autowrap back on, for the shell.
+pub def Terminal.enable_autowrap_code : String := "\u{1b}[?7h"
+
 /// Enable mouse-button press/release reporting in SGR encoding
 /// (`?1006` -- decimal, unambiguous coordinates; the legacy encodings
 /// are ambiguous with arrow keys). Phase 6's input decoder consumes this.
@@ -165,6 +173,12 @@ pub def Terminal.enter_alt_screen : IO Unit :=
 pub def Terminal.leave_alt_screen : IO Unit :=
     IO.write_stdout Terminal.leave_alt_screen_code
 
+pub def Terminal.disable_autowrap : IO Unit :=
+    IO.write_stdout Terminal.disable_autowrap_code
+
+pub def Terminal.enable_autowrap : IO Unit :=
+    IO.write_stdout Terminal.enable_autowrap_code
+
 pub def Terminal.enable_mouse : IO Unit :=
     IO.write_stdout Terminal.enable_mouse_code
 
@@ -207,6 +221,11 @@ def test_clear_screen_code : Bool :=
 def test_scroll_region_codes : Bool :=
     Terminal.set_scroll_region_code 0 23 == "\u{1b}[1;24r"
     && Terminal.reset_scroll_region_code == "\u{1b}[r"
+
+#[test]
+def test_autowrap_codes : Bool :=
+    Terminal.disable_autowrap_code == "\u{1b}[?7l"
+    && Terminal.enable_autowrap_code == "\u{1b}[?7h"
 
 #[test]
 def test_alt_screen_codes : Bool :=

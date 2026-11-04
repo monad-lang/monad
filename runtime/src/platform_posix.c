@@ -1049,7 +1049,7 @@ static void crash_handler(int sig) {
     g_crash_active = 1;
 
     static const char reset[] =
-        "\x1b[0m\x1b[?1002l\x1b[?1006l\x1b[?2004l\x1b[?1049l\x1b[?25h";
+        "\x1b[0m\x1b[?1002l\x1b[?1006l\x1b[?2004l\x1b[?7h\x1b[?1049l\x1b[?25h";
     if (g_term_ctl_saved_valid) {
         tcsetattr(STDIN_FILENO, TCSAFLUSH, &g_term_ctl_saved);
         g_term_ctl_saved_valid = 0;
