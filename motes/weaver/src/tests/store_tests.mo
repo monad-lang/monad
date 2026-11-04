@@ -17,7 +17,8 @@ use shuttle::message {Message, Usage}
 use shuttle::message_types {Role, Content}
 use weaver::text {Text.cut, Text.first_line}
 use json::json {Json.parse, Json.to_string}
-use std::path {Path.to_string}
+use std::path {Path, Path.to_string}
+use weaver::place {SessionPlace}
 use std::list {List.length}
 
 #[partial]
@@ -240,7 +241,7 @@ def test_session : Session :=
 
 #[test]
 def test_meta_json_roundtrip : Bool :=
-    let m : StoreMeta := { session := test_session, created := 10, updated := 20, history_next := 3, history_base := 1, plan := Option.none, name := Option.none, description := Option.none } in
+    let m : StoreMeta := { session := test_session, created := 10, updated := 20, history_next := 3, history_base := 1, plan := Option.none, name := Option.none, description := Option.none, place := Option.none } in
     let j := Store.encode_meta m in
     match Json.parse (Json.to_string j) {
         Result.err _ => false,
@@ -297,7 +298,7 @@ def test_empty_override_is_unset : Bool :=
 /// and an absent key (an older session) decodes as none.
 #[test]
 def test_meta_plan_roundtrip : Bool :=
-    let m : StoreMeta := { session := test_session, created := 10, updated := 20, history_next := 3, history_base := 1, plan := Option.some "PLAN: 1) read", name := Option.none, description := Option.none } in
+    let m : StoreMeta := { session := test_session, created := 10, updated := 20, history_next := 3, history_base := 1, plan := Option.some "PLAN: 1) read", name := Option.none, description := Option.none, place := Option.none } in
     match Store.decode_meta (Store.encode_meta m) {
         Result.err _ => false,
         Result.ok m2 =>
@@ -322,7 +323,7 @@ def titled (ms : List Message) : Session :=
 #[test]
 def test_meta_name_description_roundtrip : Bool :=
     let m : StoreMeta := { session := test_session, created := 1, updated := 2, history_next := 3, history_base := 1,
-        plan := Option.none, name := Option.some "fix the overlay", description := Option.some "I'll start by reading overlay.mo" } in
+        plan := Option.none, name := Option.some "fix the overlay", description := Option.some "I'll start by reading overlay.mo", place := Option.none } in
     match Store.decode_meta (Store.encode_meta m) {
         Result.err _ => false,
         Result.ok m2 =>
@@ -379,7 +380,7 @@ def test_derive_description_is_the_first_assistant_text : Bool :=
 #[test]
 def test_fill_title_keeps_an_existing_name : Bool :=
     let m : StoreMeta := { session := test_session, created := 1, updated := 2, history_next := 3, history_base := 1,
-        plan := Option.none, name := Option.some "manual", description := Option.none } in
+        plan := Option.none, name := Option.some "manual", description := Option.none, place := Option.none } in
     let m2 := Store.fill_title m (titled [user_msg "derived", assistant_msg "the reply"]) in
     (match m2.name { Option.some n => String.beq n "manual", Option.none => false })
         && (match m2.description { Option.some d => String.beq d "the reply", Option.none => false })
@@ -403,3 +404,26 @@ def test_text_first_line : Bool :=
         && String.beq (Text.first_line "a\rb") "a"
         && String.beq (Text.first_line "only") "only"
         && String.beq (Text.first_line "日本\nx") "日本"
+
+// ── session places ────────────────────────────────────────────────────
+
+#[test]
+def test_meta_place_roundtrip : Bool :=
+    let place : SessionPlace := { cwd := Path.path "/src/a/sub", repo := Path.path "/src/a" } in
+    let m : StoreMeta := { session := test_session, created := 1, updated := 2, history_next := 3, history_base := 1, plan := Option.none, name := Option.none, description := Option.none, place := Option.some place } in
+    match Store.decode_meta (Store.encode_meta m) {
+        Result.err _ => false,
+        Result.ok m2 => match m2.place {
+            Option.none => false,
+            Option.some p => String.beq (Path.to_string p.cwd) "/src/a/sub" && String.beq (Path.to_string p.repo) "/src/a",
+        },
+    }
+
+/// A session written before places were recorded has none.
+#[test]
+def test_meta_without_place_decodes_none : Bool :=
+    let m : StoreMeta := { session := test_session, created := 1, updated := 2, history_next := 3, history_base := 1, plan := Option.none, name := Option.none, description := Option.none, place := Option.none } in
+    match Store.decode_meta (Store.encode_meta m) {
+        Result.err _ => false,
+        Result.ok m2 => match m2.place { Option.none => true, Option.some _ => false },
+    }

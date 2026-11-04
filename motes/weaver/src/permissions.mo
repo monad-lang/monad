@@ -15,6 +15,7 @@
 /// the file system.
 use shuttle::gate {Capability, Capability.eq}
 use std::ref {Ref}
+use std::path {Path, Path.to_string}
 use std::list {List.filter, List.intercalate}
 
 /// Where a grant applies. `repo` needs a path-bearing pick inside the
@@ -106,10 +107,10 @@ def scope_eq (a : PermScope) (b : PermScope) : Bool :=
 /// The `/permissions` display: mode, workspace root, then one line per
 /// grant. Lives here (not in `commands`) so the TUI dialog can render it
 /// without importing the command module's state type.
-pub def Permissions.render (root : Option String) (mode_text : String) (gs : List PermGrant) : String :=
+pub def Permissions.render (root : Option Path) (mode_text : String) (gs : List PermGrant) : String :=
     let root_text : String := match root {
         Option.none => "(no workspace root -- repo grants are not offered)",
-        Option.some r => r,
+        Option.some r => Path.to_string r,
     } in
     let head : String := String.concat "permissions: mode " (String.concat mode_text
         (String.concat ", root " root_text)) in
@@ -193,22 +194,22 @@ def raw_join (a : String) (b : String) : String :=
 /// A pick's target qualifies for repo scope only when it names a path
 /// inside the root. `exec`/`net` picks and targetless picks never do:
 /// a shell command is not confined by its input.
-pub def Permissions.pick_in_repo (root : Option String) (target : Option String) : Bool :=
+pub def Permissions.pick_in_repo (root : Option Path) (target : Option String) : Bool :=
     match root {
         Option.none => false,
         Option.some r => match target {
             Option.none => false,
-            Option.some t => Permissions.within r t,
+            Option.some t => Permissions.within (Path.to_string r) t,
         },
     }
 
 /// Does any grant cover this pick? `anywhere` grants cover every pick
 /// of their capability; `repo` grants cover only in-repo targets.
-pub def Permissions.matches (root : Option String) (grants : List PermGrant) (cap : Capability) (target : Option String) : Bool :=
+pub def Permissions.matches (root : Option Path) (grants : List PermGrant) (cap : Capability) (target : Option String) : Bool :=
     matches_go root grants cap target
 
 #[partial]
-def matches_go (root : Option String) (grants : List PermGrant) (cap : Capability) (target : Option String) : Bool :=
+def matches_go (root : Option Path) (grants : List PermGrant) (cap : Capability) (target : Option String) : Bool :=
     match grants {
         List.empty => false,
         List.cons g rest =>

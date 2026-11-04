@@ -22,6 +22,7 @@ use std::io {IO.write_file, IO.write_stderr}
 use std::concurrent::combine {sleepIO}
 use json::json {Json, Json.get_object, Json.make_object}
 use std::map {Map}
+use weaver::place {SessionPlace}
 
 #[partial]
 def lines_go (i : I64) (n : I64) : List TLine :=
@@ -72,7 +73,7 @@ def with_history (s : Session) (ms : List Message) : Session :=
 def test_new_session_append_and_page : IO Bool := do {
     let root : Path := root_for "append";
     clean root;
-    let r <- Store.new_session root test_session;
+    let r <- Store.new_session root Option.none test_session;
     match r {
         Result.err _ => IO.pure false,
         Result.ok st => check_append st,
@@ -98,7 +99,7 @@ def check_page (p : Result String TranscriptPage) : IO Bool :=
 def test_startup_loads_the_tail : IO Bool := do {
     let root : Path := root_for "startup";
     clean root;
-    let r <- Store.new_session root test_session;
+    let r <- Store.new_session root Option.none test_session;
     match r {
         Result.err _ => IO.pure false,
         Result.ok st => check_startup st,
@@ -118,7 +119,7 @@ def check_startup (st : StoreState) : IO Bool := do {
 def test_out_of_sync_append_is_an_error : IO Bool := do {
     let root : Path := root_for "sync";
     clean root;
-    let r <- Store.new_session root test_session;
+    let r <- Store.new_session root Option.none test_session;
     match r {
         Result.err _ => IO.pure false,
         Result.ok st => check_sync st,
@@ -140,7 +141,7 @@ def check_sync (st : StoreState) : IO Bool := do {
 def test_append_note_keeps_the_index_in_sync : IO Bool := do {
     let root : Path := root_for "note";
     clean root;
-    let r <- Store.new_session root test_session;
+    let r <- Store.new_session root Option.none test_session;
     match r {
         Result.err _ => IO.pure false,
         Result.ok st => check_note_sync st,
@@ -161,7 +162,7 @@ def check_note_sync (st : StoreState) : IO Bool := do {
 def test_index_rebuilds_after_removal : IO Bool := do {
     let root : Path := root_for "rebuild";
     clean root;
-    let r <- Store.new_session root test_session;
+    let r <- Store.new_session root Option.none test_session;
     match r {
         Result.err _ => IO.pure false,
         Result.ok st => check_rebuild st,
@@ -185,7 +186,7 @@ def check_rebuild (st : StoreState) : IO Bool := do {
 def test_history_roundtrip_across_turns : IO Bool := do {
     let root : Path := root_for "history";
     clean root;
-    let r <- Store.new_session root test_session;
+    let r <- Store.new_session root Option.none test_session;
     match r {
         Result.err _ => IO.pure false,
         Result.ok st => check_history st,
@@ -247,7 +248,7 @@ def orphan_step (st : StoreState) : IO Bool := do {
 def test_history_loads_only_the_committed_prefix : IO Bool := do {
     let root : Path := root_for "orphan";
     clean root;
-    let r <- Store.new_session root test_session;
+    let r <- Store.new_session root Option.none test_session;
     match r {
         Result.err _ => IO.pure false,
         Result.ok st => orphan_step st,
@@ -286,7 +287,7 @@ def gap_first (st : StoreState) : IO Bool := do {
 def test_history_stops_at_a_missing_block : IO Bool := do {
     let root : Path := root_for "gap";
     clean root;
-    let r <- Store.new_session root test_session;
+    let r <- Store.new_session root Option.none test_session;
     match r {
         Result.err _ => IO.pure false,
         Result.ok st => gap_first st,
@@ -299,7 +300,7 @@ def test_import_session_keeps_history : IO Bool := do {
     clean root;
     let hist : List Message := [user_msg "one", assistant_msg "two"];
     let s : Session := with_history test_session hist;
-    let r <- Store.import_session root s;
+    let r <- Store.import_session root Option.none s;
     match r {
         Result.err _ => IO.pure false,
         Result.ok st => check_import st,
@@ -317,7 +318,7 @@ def check_import (st : StoreState) : IO Bool := do {
 // ── sessions listing and degradation ──────────────────────────────────
 
 def check_latest (root : Path) : IO Bool := do {
-    let l <- Store.latest_session root;
+    let l <- Store.latest_session root Option.none;
     return (match l { Option.some _ => true, Option.none => false })
 }
 
@@ -325,7 +326,7 @@ def check_latest (root : Path) : IO Bool := do {
 def test_latest_session_is_some : IO Bool := do {
     let root : Path := root_for "latest";
     clean root;
-    let r <- Store.new_session root test_session;
+    let r <- Store.new_session root Option.none test_session;
     match r {
         Result.err _ => IO.pure false,
         Result.ok _ => check_latest root,
@@ -333,7 +334,7 @@ def test_latest_session_is_some : IO Bool := do {
 }
 
 def latest_order_read (root : Path) (st1 : StoreState) : IO Bool := do {
-    let l <- Store.latest_session root;
+    let l <- Store.latest_session root Option.none;
     match l {
         Option.some id => IO.pure (id == st1.id),
         Option.none => IO.pure false,
@@ -350,7 +351,7 @@ def latest_order_finish (root : Path) (st1 : StoreState) : IO Bool := do {
 }
 
 def latest_order_second (root : Path) (st1 : StoreState) : IO Bool := do {
-    let r <- Store.new_session root test_session;
+    let r <- Store.new_session root Option.none test_session;
     match r {
         Result.err _ => IO.pure false,
         Result.ok _ => latest_order_finish root st1,
@@ -363,7 +364,7 @@ def latest_order_second (root : Path) (st1 : StoreState) : IO Bool := do {
 def test_latest_session_is_the_most_recently_updated : IO Bool := do {
     let root : Path := root_for "latest_order";
     clean root;
-    let r <- Store.new_session root test_session;
+    let r <- Store.new_session root Option.none test_session;
     match r {
         Result.err _ => IO.pure false,
         Result.ok st1 => latest_order_second root st1,
@@ -388,7 +389,7 @@ def test_unwritable_root_is_rejected : IO Bool :=
 def test_chunks_append_and_discard : IO Bool := do {
     let root : Path := root_for "chunks";
     clean root;
-    let r <- Store.new_session root test_session;
+    let r <- Store.new_session root Option.none test_session;
     match r {
         Result.err _ => IO.pure false,
         Result.ok st => check_chunks st,
@@ -412,7 +413,7 @@ def check_chunks (st : StoreState) : IO Bool := do {
 def test_history_note_is_committed : IO Bool := do {
     let root : Path := root_for "note";
     clean root;
-    let r <- Store.new_session root test_session;
+    let r <- Store.new_session root Option.none test_session;
     match r {
         Result.err _ => IO.pure false,
         Result.ok st => check_note st,
@@ -441,7 +442,7 @@ def test_read_live_from_tails_and_restarts : IO Bool := do {
     let root : Path := root_for "live_from";
     clean root;
     let _ <- Store.ensure_root root;
-    let r <- Store.new_session root test_session;
+    let r <- Store.new_session root Option.none test_session;
     match r {
         Result.err _ => IO.pure false,
         Result.ok st => do {
@@ -466,7 +467,7 @@ def test_detail_flag_round_trips : IO Bool := do {
     let root : Path := root_for "detail";
     clean root;
     let _ <- Store.ensure_root root;
-    let r <- Store.new_session root test_session;
+    let r <- Store.new_session root Option.none test_session;
     match r {
         Result.err _ => IO.pure false,
         Result.ok st => do {
@@ -489,7 +490,7 @@ def compact_session_lit : Session :=
 
 def compact_resume_scenario (root : Path) : IO Bool := do {
     let _ <- Store.ensure_root root;
-    let r <- Store.new_session root compact_session_lit;
+    let r <- Store.new_session root Option.none compact_session_lit;
     match r {
         Result.err _ => IO.pure false,
         Result.ok st => compact_resume_run root st,
@@ -525,7 +526,7 @@ def compact_resume_ok (w : Result String Unit) (loaded : Result String Session) 
 /// A meta written before `history_base` existed decodes with base 1.
 #[test]
 def test_meta_without_history_base_defaults_to_one : Bool :=
-    let m : StoreMeta := { session := test_session, created := 1i64, updated := 2i64, history_next := 3i64, history_base := 1i64, plan := Option.none, name := Option.none, description := Option.none } in
+    let m : StoreMeta := { session := test_session, created := 1i64, updated := 2i64, history_next := 3i64, history_base := 1i64, plan := Option.none, name := Option.none, description := Option.none, place := Option.none } in
     match Json.get_object (Store.encode_meta m) {
         Result.err _ => false,
         Result.ok obj => match Store.decode_meta (Json.make_object (Map.delete "history_base" obj)) {
@@ -540,7 +541,7 @@ def test_meta_without_history_base_defaults_to_one : Bool :=
 def test_plan_rides_the_session_meta : IO Bool := do {
     let root : Path := root_for "plan";
     clean root;
-    let r <- Store.new_session root test_session;
+    let r <- Store.new_session root Option.none test_session;
     match r {
         Result.err _ => IO.pure false,
         Result.ok st => do {
@@ -570,7 +571,7 @@ def delta_of (u : String) (a : String) : List Message :=
 def test_record_history_derives_titles : IO Bool := do {
     let root : Path := root_for "title_derive";
     clean root;
-    let r <- Store.new_session root test_session;
+    let r <- Store.new_session root Option.none test_session;
     match r {
         Result.err _ => IO.pure false,
         Result.ok st => do {
@@ -596,7 +597,7 @@ def titles_are (st : StoreState) (name : String) (desc : String) : IO Bool := do
 def test_manual_name_is_sticky_across_turns : IO Bool := do {
     let root : Path := root_for "title_sticky";
     clean root;
-    let r <- Store.new_session root test_session;
+    let r <- Store.new_session root Option.none test_session;
     match r {
         Result.err _ => IO.pure false,
         Result.ok st => do {
@@ -618,7 +619,7 @@ def test_manual_name_is_sticky_across_turns : IO Bool := do {
 def test_cleared_name_rederives_on_the_next_write : IO Bool := do {
     let root : Path := root_for "title_clear";
     clean root;
-    let r <- Store.new_session root test_session;
+    let r <- Store.new_session root Option.none test_session;
     match r {
         Result.err _ => IO.pure false,
         Result.ok st => do {
@@ -642,7 +643,7 @@ def test_cleared_name_rederives_on_the_next_write : IO Bool := do {
 def test_write_title_leaves_updated_alone : IO Bool := do {
     let root : Path := root_for "title_updated";
     clean root;
-    let r <- Store.new_session root test_session;
+    let r <- Store.new_session root Option.none test_session;
     match r {
         Result.err _ => IO.pure false,
         Result.ok st => do {
@@ -696,11 +697,11 @@ def set_updated (st : StoreState) (updated : I64) : IO Bool := do {
 def test_list_sessions_is_newest_first_with_fallbacks : IO Bool := do {
     let root : Path := root_for "list_order";
     clean root;
-    let r1 <- Store.new_session root test_session;
+    let r1 <- Store.new_session root Option.none test_session;
     match r1 {
         Result.err _ => IO.pure false,
         Result.ok st1 => do {
-            let r2 <- Store.new_session root test_session;
+            let r2 <- Store.new_session root Option.none test_session;
             match r2 {
                 Result.err _ => IO.pure false,
                 Result.ok st2 => do {
@@ -733,7 +734,7 @@ def test_list_sessions_skips_non_session_dirs : IO Bool := do {
     let root : Path := root_for "list_skip";
     clean root;
     let mk <- exec_cmd "mkdir" ["-p", Path.to_string (Store.child root "debug")];
-    let r <- Store.new_session root test_session;
+    let r <- Store.new_session root Option.none test_session;
     match r {
         Result.err _ => IO.pure false,
         Result.ok st => do {
@@ -743,5 +744,47 @@ def test_list_sessions_skips_non_session_dirs : IO Bool := do {
                 List.cons only rest => IO.pure (String.beq only.id st.id && List.length rest == 0),
             }
         }
+    }
+}
+
+// ── --continue stays in the repo ──────────────────────────────────────
+
+def place_in (repo : String) : Option SessionPlace :=
+    let p : SessionPlace := { cwd := Path.path repo, repo := Path.path repo } in
+    Option.some p
+
+def latest_is (root : Path) (here : Option SessionPlace) (want : Option String) : IO Bool := do {
+    let l <- Store.latest_session root here;
+    return (match l {
+        Option.none => match want { Option.none => true, Option.some _ => false },
+        Option.some id => match want { Option.none => false, Option.some w => String.beq id w },
+    })
+}
+
+def latest_in_places (root : Path) (a : StoreState) (b : StoreState) : IO Bool := do {
+    let _ <- Store.new_session root Option.none test_session;
+    let ok_a <- latest_is root (place_in "/src/a") (Option.some a.id);
+    let ok_b <- latest_is root (place_in "/src/b") (Option.some b.id);
+    let ok_c <- latest_is root (place_in "/src/c") Option.none;
+    clean root;
+    return (ok_a && ok_b && ok_c)
+}
+
+/// Each repo continues its own latest session; a session saved before
+/// places were recorded (the newest here) matches no repo.
+#[test]
+def test_latest_session_stays_in_its_repo : IO Bool := do {
+    let root : Path := root_for "places";
+    clean root;
+    let ra <- Store.new_session root (place_in "/src/a") test_session;
+    let _ <- sleepIO 5;
+    let rb <- Store.new_session root (place_in "/src/b") test_session;
+    let _ <- sleepIO 5;
+    match ra {
+        Result.err _ => IO.pure false,
+        Result.ok a => match rb {
+            Result.err _ => IO.pure false,
+            Result.ok b => latest_in_places root a b,
+        },
     }
 }

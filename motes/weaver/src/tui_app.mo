@@ -15,6 +15,7 @@
 /// instead, and a full-screen (not diffed) render of the pick. `tui.mo`'s
 /// `Cmd.perform`-fires-a-forced-repaint rule is what cleans the real
 /// screen up again on the next ordinary frame.
+use weaver::place {Place.cwd_of}
 use shuttle::agent {RunState}
 use shuttle::registry {ToolRegistry}
 use shuttle::gate {Pick, Approval, Gate, Capability}
@@ -26,7 +27,7 @@ use weaver::commands {
     WeaverState, Effect, Effect.ok, set_fatal, Commands.dispatch, Commands.set_model,
     Commands.autocompact, Commands.last_assistant_text, Commands.current_plan,
     Commands.plan_after_turn, Commands.setting_rows, Commands.cycle_setting, Commands.apply_setting, SettingRow, SettingKind,
-    SessionPage, Commands.session_page, Commands.turns_label, Commands.turn_context,
+    SessionPage, Commands.session_page, Commands.sessions_for, Commands.turns_label, Commands.turn_context,
 }
 use log::logger {Logger}
 use weaver::policy {Mode, Mode.show, Mode.cycle, Policy.decide, Decision}
@@ -1003,7 +1004,7 @@ def permissions_dialog_step (st : WeaverState) : IO WeaverMsg := do {
     let o3 : DialogOption := { label := "Revoke exec grants", hint := "", key := "" };
     let o4 : DialogOption := { label := "Revoke net grants", hint := "", key := "" };
     let o5 : DialogOption := { label := "Close", hint := "Esc", key := "" };
-    let text : String := Permissions.render st.workspace_root (Mode.show st.mode) gs;
+    let text : String := Permissions.render (Place.cwd_of st.place) (Mode.show st.mode) gs;
     let body : List String := theme_split_lines text;
     let opts : List DialogOption := List.cons o0 (List.cons o1 (List.cons o2 (List.cons o3 (List.cons o4 (List.cons o5 List.empty)))));
     let d : DialogModel := Dialog.make "Permissions" "session grants (cleared on /clear and /resume)" body opts;
@@ -1240,7 +1241,7 @@ def error_line (e : WeaverError) : TLine :=
 def drive_tui (log : Option Logger) (gen : I64) (st : WeaverState) (text : String) (on_usage : Usage -> IO Unit) : ResultT WeaverError IO RunState := do {
     let stop : Unit -> IO Bool := Stop.predicate st.store gen;
     let with_task : RunState := { (st.run) with reg := ToolRegistry.register (Subagent.task_tool st.run.session.config log st.store stop) st.run.reg };
-    let gated : RunState := { with_task with gate := Gate.weaver_tui st.mode st.colors st.store st.grants st.workspace_root,
+    let gated : RunState := { with_task with gate := Gate.weaver_tui st.mode st.colors st.store st.grants (Place.cwd_of st.place),
         emit := progress_live log st.store, on_usage := on_usage,
         should_stop := stop, stopped := false };
     let ready : RunState := append_user gated text;
@@ -1435,13 +1436,13 @@ def list_msg_length (xs : List Message) : I64 :=
 /// read for `y`/`n`/`a`. `mode` is the only parameter -- same shape as
 /// `Gate.weaver`, minus the read/write seams dumb mode needs and this
 /// does not (it owns its own screen and its own stdin read).
-pub def Gate.weaver_tui (mode : Mode) (colors : Bool) (store : Option StoreState) (grants : Option (Ref (List PermGrant))) (root : Option String) : Gate :=
+pub def Gate.weaver_tui (mode : Mode) (colors : Bool) (store : Option StoreState) (grants : Option (Ref (List PermGrant))) (root : Option Path) : Gate :=
     {
         ask := weaver_tui_ask mode colors store grants root,
         precheck := weaver_tui_precheck mode grants root,
     }
 
-def weaver_tui_precheck (mode : Mode) (grants : Option (Ref (List PermGrant))) (root : Option String) (p : Pick) : IO (Option Approval) :=
+def weaver_tui_precheck (mode : Mode) (grants : Option (Ref (List PermGrant))) (root : Option Path) (p : Pick) : IO (Option Approval) :=
     match Policy.decide p.cap mode {
         Decision.refuse reason => IO.pure (Option.some (Approval.deny reason)),
         Decision.ask => do {
@@ -1453,7 +1454,7 @@ def weaver_tui_precheck (mode : Mode) (grants : Option (Ref (List PermGrant))) (
         Decision.allow => IO.pure Option.none,
     }
 
-def weaver_tui_ask (mode : Mode) (colors : Bool) (store : Option StoreState) (grants : Option (Ref (List PermGrant))) (root : Option String) (p : Pick) : IO Approval :=
+def weaver_tui_ask (mode : Mode) (colors : Bool) (store : Option StoreState) (grants : Option (Ref (List PermGrant))) (root : Option Path) (p : Pick) : IO Approval :=
     match Policy.decide p.cap mode {
         Decision.allow => IO.pure Approval.once,
         Decision.ask => prompt_overlay colors store grants root p,
@@ -1468,7 +1469,7 @@ def diff_lines_of (diff_pair : Option (Pair String String)) : List String :=
         }
     }
 
-def prompt_overlay (colors : Bool) (store : Option StoreState) (grants : Option (Ref (List PermGrant))) (root : Option String) (p : Pick) : IO Approval := do {
+def prompt_overlay (colors : Bool) (store : Option StoreState) (grants : Option (Ref (List PermGrant))) (root : Option Path) (p : Pick) : IO Approval := do {
     let diff_pair <- Diff.for_input p.name p.input;
     // The header names the target path; repeat it as its own line so a
     // long path stays visible above the diff.
@@ -1547,6 +1548,8 @@ def ellipsize (max_cells : I64) (s : String) : String :=
 pub type ResumeAction {
     resume_session (id : String),
     resume_shift (delta : I64),
+    /// Widen the picker from this repo's sessions to every repo's.
+    resume_all,
     resume_cancel,
 }
 
@@ -1587,10 +1590,12 @@ def push_row (opt : DialogOption) (act : ResumeAction) (p : Pair (List DialogOpt
     }
 
 /// The page's rows: its sessions, then Newer/Older page shifts when
-/// they exist, then Cancel. Pure, so the labels and the index-to-action
-/// mapping are unit-testable without a terminal.
-pub def TuiApp.resume_rows (current : String) (sp : SessionPage) : Pair (List DialogOption) (List ResumeAction) :=
+/// they exist, then (`offer_all`) the switch to every repo's sessions,
+/// then Cancel. Pure, so the labels and the index-to-action mapping are
+/// unit-testable without a terminal.
+pub def TuiApp.resume_rows (current : String) (offer_all : Bool) (sp : SessionPage) : Pair (List DialogOption) (List ResumeAction) :=
     let close_opt : DialogOption := { label := "Cancel", hint := "Esc", key := "" } in
+    let all_opt : DialogOption := { label := "All repos' sessions…", hint := "", key := "" } in
     let older_opt : DialogOption := { label := "Older sessions…", hint := "", key := "" } in
     let newer_opt : DialogOption := { label := "Newer sessions…", hint := "", key := "" } in
     let p0 : Pair (List DialogOption) (List ResumeAction) := resume_option_rows current sp.rows List.empty List.empty in
@@ -1598,7 +1603,9 @@ pub def TuiApp.resume_rows (current : String) (sp : SessionPage) : Pair (List Di
         if sp.has_older then push_row older_opt (ResumeAction.resume_shift 1i64) p0 else p0 in
     let p2 : Pair (List DialogOption) (List ResumeAction) :=
         if sp.has_newer then push_row newer_opt (ResumeAction.resume_shift (0i64 - 1i64)) p1 else p1 in
-    push_row close_opt ResumeAction.resume_cancel p2
+    let p3 : Pair (List DialogOption) (List ResumeAction) :=
+        if offer_all then push_row all_opt ResumeAction.resume_all p2 else p2 in
+    push_row close_opt ResumeAction.resume_cancel p3
 
 #[partial]
 pub def TuiApp.resume_action_at (i : I64) (acts : List ResumeAction) : ResumeAction :=
@@ -1617,20 +1624,25 @@ pub type ResumeChoice {
 /// The caller holds the overlay open across the whole loop: releasing
 /// it per page would leave a window where the main loop reads stdin and
 /// steals the keystroke meant for the next page.
+/// `every` is the whole store; `all` picks whether the page shows it or
+/// only this repo's sessions.
 #[partial]
-def resume_pick (st : WeaverState) (s : StoreState) (page_size : I64) (infos : List SessionInfo) (page : I64) : IO ResumeChoice := do {
+def resume_pick (st : WeaverState) (s : StoreState) (page_size : I64) (every : List SessionInfo) (all : Bool) (page : I64) : IO ResumeChoice := do {
+    let infos : List SessionInfo := Commands.sessions_for st.place all every;
     let sp : SessionPage := Commands.session_page page_size page infos;
-    let rows : Pair (List DialogOption) (List ResumeAction) := TuiApp.resume_rows s.id sp;
+    let rows : Pair (List DialogOption) (List ResumeAction) := TuiApp.resume_rows s.id (Bool.not all) sp;
+    let subtitle : String := if all then "every repo's sessions · Enter loads · Esc cancels" else "this repo's sessions · Enter loads · Esc cancels";
     match rows {
         Pair.pair opts acts => do {
-            let d0 : DialogModel := Dialog.make "Resume a session" "Enter loads the selected session · Esc cancels" List.empty opts;
+            let d0 : DialogModel := Dialog.make "Resume a session" subtitle List.empty opts;
             let d : DialogModel := { d0 with footer := "↑/↓ select · Enter load · Esc cancel" };
             let pr <- Dialog.modal (paint_dialog st.colors) d;
             match pr {
                 Pair.pair _ step => match step {
                     DialogStep.choose i => match TuiApp.resume_action_at i acts {
                         ResumeAction.resume_session id => IO.pure (ResumeChoice.resume_id id),
-                        ResumeAction.resume_shift delta => resume_pick st s page_size infos (page + delta),
+                        ResumeAction.resume_shift delta => resume_pick st s page_size every all (page + delta),
+                        ResumeAction.resume_all => resume_pick st s page_size every true 0,
                         ResumeAction.resume_cancel => IO.pure ResumeChoice.resume_closed,
                     },
                     _ => IO.pure ResumeChoice.resume_closed,
@@ -1647,15 +1659,17 @@ def resume_dialog_step (st : WeaverState) : IO WeaverMsg :=
     match st.store {
         Option.none => command_step_tui st "/resume",
         Option.some s => do {
-            let infos <- Store.list_sessions s.root;
-            match infos {
+            let every <- Store.list_sessions s.root;
+            match every {
                 List.empty => IO.pure (WeaverMsg.command_result (Effect.ok st "no saved sessions")),
                 List.cons _ _ => do {
                     let size <- Terminal.size;
                     let rows : I64 := match size { Pair.pair r _ => r };
                     let page_size : I64 := resume_page_size rows;
+                    // No session of this repo yet: open on every repo's.
+                    let all : Bool := List.is_empty (Commands.sessions_for st.place false every);
                     let _ <- Overlay.begin (Option.some s);
-                    let choice <- resume_pick st s page_size infos 0;
+                    let choice <- resume_pick st s page_size every all 0;
                     let _ <- Overlay.finish (Option.some s);
                     match choice {
                         ResumeChoice.resume_id id => command_step_tui st (String.concat "/resume " id),

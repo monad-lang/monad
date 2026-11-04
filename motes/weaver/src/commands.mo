@@ -18,6 +18,7 @@
 /// start with `save failed:`. The error carries no state, so the
 /// caller's stands untouched (session intact); the caller classifies
 /// it through `WeaverError.recoverable`.
+use weaver::place {SessionPlace, Place.cwd_of}
 use shuttle::provider {ProviderConfig}
 use shuttle::registry {ToolRegistry}
 use shuttle::session {Session, Session.save, Session.load}
@@ -35,7 +36,7 @@ use weaver::catalog {Catalog.fetch, Catalog.lookup, Catalog.remember, Catalog.re
 use weaver::compact {Compact.threshold, Compact.should_compact, Compact.estimate, Compact.compact, Compact.Outcome}
 use weaver::error {WeaverError, WeaverError.of_shuttle}
 use weaver::store {
-    StoreState, Store.new_session, Store.latest_session, Store.load_session,
+    StoreState, Store.new_session, Store.load_session, Store.sessions_in,
     Store.import_session, Store.session_dir, Store.base_name, Store.record_compacted,
     Store.read_plan, Store.write_plan,
     SessionInfo, TitleField, StoreMeta, Store.list_sessions, Store.read_meta, Store.write_title,
@@ -85,9 +86,10 @@ pub struct WeaverState {
     /// `always` cache stays empty), so `/permissions` can inspect and
     /// clear them. None in tests/headless states.
     grants : Option (Ref (List PermGrant)) := Option.none,
-    /// The directory a `repo` grant is scoped to (`PWD` at startup).
-    /// Lexical scope, not a sandbox.
-    workspace_root : Option String := Option.none,
+    /// Where weaver runs (`PWD` at startup, and its git repo). A `repo`
+    /// grant is scoped to `cwd` -- lexical scope, not a sandbox -- and new
+    /// sessions record it so `--continue` stays in the repo.
+    place : Option SessionPlace := Option.none,
     mcps : List String,
     keys : BTreeMap String String,
     /// The last model list fetched per provider (`/model` with
@@ -720,8 +722,8 @@ def save_result (file : String) (st : WeaverState) (r : Result String Unit) : IO
 /// fresh directory. The turn budget SPANS both halves (the remaining
 /// budget is the total minus the turns the loaded session already took).
 def cmd_resume (arg : String) (st : WeaverState) : IO (Result WeaverError Effect) :=
-    if String.is_empty arg
-    then list_sessions_effect st
+    if String.is_empty arg then list_sessions_effect st false
+    else if String.beq arg "--all" then list_sessions_effect st true
     else match Path.of arg {
         Result.err e => IO.pure (Result.err (WeaverError.io e)),
         Result.ok p => resume_path st p arg,
@@ -734,8 +736,9 @@ def cmd_resume (arg : String) (st : WeaverState) : IO (Result WeaverError Effect
 pub def Commands.turns_label (n : I64) : String :=
     if n == 1 then "1 turn" else String.concat (I64.to_string n) " turns"
 
-/// One picker/list row: `[current] name -- description (N turns · model) id`.
-def session_line (current : String) (i : SessionInfo) : String :=
+/// One picker/list row: `[current] name -- description (N turns · model) id`,
+/// then ` in <repo>` when listing every repo's sessions.
+def session_line (current : String) (all : Bool) (i : SessionInfo) : String :=
     let id : String := i.id in
     let name : String := i.name in
     let desc : String := i.description in
@@ -744,8 +747,17 @@ def session_line (current : String) (i : SessionInfo) : String :=
     let mark : String := if String.beq current id then "[current] " else "          " in
     let label : String := if String.is_empty desc then name else String.concat name (String.concat " -- " desc) in
     let stats : String := String.concat (Commands.turns_label turns) (String.concat " · " model) in
-    String.concat "  " (String.concat mark (String.concat label
-        (String.concat "  (" (String.concat stats (String.concat ") " id)))))
+    let line : String := String.concat "  " (String.concat mark (String.concat label
+        (String.concat "  (" (String.concat stats (String.concat ") " id))))) in
+    if all then String.concat line (Commands.place_suffix i.place) else line
+
+/// ` in <repo>`, or ` in (unknown)` for a session saved before places were
+/// recorded.
+pub def Commands.place_suffix (place : Option SessionPlace) : String :=
+    match place {
+        Option.none => " in (unknown)",
+        Option.some p => String.concat " in " (Path.to_string p.repo),
+    }
 
 /// One page of the `/resume` picker: the sessions on it plus whether
 /// newer/older pages exist. Pure, so the TUI's paging is unit-testable
@@ -793,28 +805,42 @@ pub def Commands.session_page (page_size : I64) (page : I64) (infos : List Sessi
     sp
 
 #[partial]
-def session_lines_go (current : String) (infos : List SessionInfo) (acc : List String) : List String :=
+def session_lines_go (current : String) (all : Bool) (infos : List SessionInfo) (acc : List String) : List String :=
     match infos {
         List.empty => List.reverse acc,
-        List.cons i rest => session_lines_go current rest (List.cons (session_line current i) acc),
+        List.cons i rest => session_lines_go current all rest (List.cons (session_line current all i) acc),
     }
 
-def sessions_text (s : StoreState) (infos : List SessionInfo) : String :=
-    let root : String := Path.to_string s.root in
-    let current : String := s.id in
-    let head : String := String.concat "sessions under " (String.concat root " (newest first):") in
-    let body : String := List.intercalate "\n" (session_lines_go current infos List.empty) in
-    String.concat head (String.concat "\n" (String.concat body
-        "\nresume one with /resume <id> (the TUI's bare /resume opens a picker)"))
+/// What a session list covers: this repo's sessions, or (`all`, or no
+/// known place) every session under the root.
+def sessions_scope (s : StoreState) (place : Option SessionPlace) (all : Bool) : String :=
+    match place {
+        Option.some p => if all then String.concat "sessions under " (Path.to_string s.root)
+            else String.concat "sessions in " (Path.to_string p.repo),
+        Option.none => String.concat "sessions under " (Path.to_string s.root),
+    }
 
-def list_sessions_effect (st : WeaverState) : IO (Result WeaverError Effect) :=
+def sessions_text (s : StoreState) (place : Option SessionPlace) (all : Bool) (infos : List SessionInfo) : String :=
+    let current : String := s.id in
+    let head : String := String.concat (sessions_scope s place all) " (newest first):" in
+    let body : String := List.intercalate "\n" (session_lines_go current all infos List.empty) in
+    let more : String := if all then "" else "; /resume --all lists every repo's" in
+    String.concat head (String.concat "\n" (String.concat body
+        (String.concat "\nresume one with /resume <id> (the TUI's bare /resume opens a picker)" more)))
+
+/// The sessions `/resume` offers: this repo's, or every one with `all`.
+pub def Commands.sessions_for (place : Option SessionPlace) (all : Bool) (infos : List SessionInfo) : List SessionInfo :=
+    if all then infos else Store.sessions_in place infos
+
+def list_sessions_effect (st : WeaverState) (all : Bool) : IO (Result WeaverError Effect) :=
     match st.store {
         Option.none => respond st "session persistence unavailable (HOME unset or ~/.weaver/sessions unwritable)",
         Option.some s => do {
-            let infos <- Store.list_sessions s.root;
+            let every <- Store.list_sessions s.root;
+            let infos : List SessionInfo := Commands.sessions_for st.place all every;
             match infos {
-                List.empty => respond st "no saved sessions",
-                List.cons _ _ => respond st (sessions_text s infos),
+                List.empty => respond st (if all then "no saved sessions" else "no saved sessions in this repo (/resume --all lists every repo's)"),
+                List.cons _ _ => respond st (sessions_text s st.place all infos),
             }
         },
     }
@@ -891,20 +917,6 @@ def cmd_name (arg : String) (st : WeaverState) : IO (Result WeaverError Effect) 
 def cmd_describe (arg : String) (st : WeaverState) : IO (Result WeaverError Effect) :=
     cmd_title TitleField.title_description arg st
 
-def resume_latest (st : WeaverState) : IO (Result WeaverError Effect) :=
-    match st.store {
-        Option.none => respond st "session persistence unavailable (HOME unset or ~/.weaver/sessions unwritable)",
-        Option.some s => resume_latest_store st s,
-    }
-
-def resume_latest_store (st : WeaverState) (s : StoreState) : IO (Result WeaverError Effect) := do {
-    let l <- Store.latest_session s.root;
-    match l {
-        Option.none => respond st "no saved sessions",
-        Option.some id => resume_dir st (Store.session_dir s.root id) id,
-    }
-}
-
 def resume_path (st : WeaverState) (p : Path) (label : String) : IO (Result WeaverError Effect) := do {
     let isd <- IO.is_dir p;
     if isd then resume_dir st p label else resume_by_id st label;
@@ -964,7 +976,7 @@ def plan_cleared (e : Effect) : Effect :=
     e1
 
 def resume_import_into (st : WeaverState) (s : Session) (old : StoreState) (label : String) : IO (Result WeaverError Effect) := do {
-    let r <- Store.import_session old.root s;
+    let r <- Store.import_session old.root st.place s;
     match r {
         Result.err e => IO.pure (Result.err (WeaverError.io e)),
         Result.ok ns => do {
@@ -1044,7 +1056,7 @@ def clear_session (s : Session) : Session :=
     s2
 
 def clear_with_store (st : WeaverState) (s : StoreState) (fresh : Session) : IO (Result WeaverError Effect) := do {
-    let r <- Store.new_session s.root fresh;
+    let r <- Store.new_session s.root st.place fresh;
     match r {
         Result.err e => IO.pure (Result.ok (Effect.reset (set_store st Option.none) (String.concat "cleared (persistence disabled: " (String.concat e ")")))),
         Result.ok ns => IO.pure (Result.ok (Effect.reset (set_store st (Option.some ns)) "cleared")),
@@ -1369,7 +1381,7 @@ def permissions_revoke (arg : String) (st : WeaverState) : IO (Result WeaverErro
     }
 
 pub def permissions_text (st : WeaverState) (gs : List PermGrant) : String :=
-    Permissions.render st.workspace_root (Mode.show st.mode) gs
+    Permissions.render (Place.cwd_of st.place) (Mode.show st.mode) gs
 
 def set_max_tokens (st : WeaverState) (n : I64) : WeaverState :=
     let cfg : ProviderConfig := st.run.session.config in
@@ -1420,7 +1432,7 @@ def help_text : String :=
         "/log                                 the debug log path, tail and crash note",
         "/mcp                                 list mounted MCP servers",
         "/save <file>                         checkpoint the session as a JSON file",
-        "/resume [<id|file>]                  list saved sessions (TUI picker) or continue an id/file",
+        "/resume [<id|file>|--all]            list this repo's sessions (TUI picker) or continue an id/file",
         "/name [<text>|-]                     show, set or clear this session's name",
         "/describe [<text>|-]                 show, set or clear this session's description",
         "/clear                               start a new session and reset the budget",

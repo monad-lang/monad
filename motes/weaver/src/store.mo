@@ -18,11 +18,12 @@ use std::bench {Bench.now}
 use std::bytebuf {ByteBuf, ByteBuf.of_string, ByteBuf.free}
 use std::stream {FdStream, FdStream.open_file, FdStream.append_mode, Stream, StreamError}
 use std::map {BTreeMap}
-use std::list {List.length}
+use std::list {List.length, List.filter}
 use shuttle::session {Session, Session.messages_to_json, Session.messages_of_json}
 use shuttle::message {Message}
 use shuttle::message_types {Role, Content}
 use weaver::text {Text.cut, Text.first_line}
+use weaver::place {SessionPlace, Place.same_repo}
 
 // ── the in-memory view ────────────────────────────────────────────────
 // Absolute line coordinates: `total` counts every line ever appended;
@@ -93,6 +94,9 @@ pub struct SessionInfo {
     model : String,
     created : I64,
     updated : I64,
+    /// Where the session was started; none for sessions saved before
+    /// places were recorded.
+    place : Option SessionPlace := Option.none,
 }
 
 /// Which title `/name` and `/describe` write.
@@ -134,6 +138,9 @@ pub struct StoreMeta {
     /// A one-line description: the first assistant text, unless
     /// `/describe` set one. Same fill rules as `name`.
     description : Option String := Option.none,
+    /// Where the session was started (`cwd`/`repo` in the JSON). Absent
+    /// in sessions written before the field existed.
+    place : Option SessionPlace := Option.none,
 }
 
 // ── derived session titles ─────────────────────────────────────────────
@@ -629,6 +636,30 @@ def opt_str_json (p : Option String) : Json :=
         Option.some s => Json.make_str s,
     }
 
+def place_cwd (p : Option SessionPlace) : Option String :=
+    match p {
+        Option.none => Option.none,
+        Option.some pl => Option.some (Path.to_string pl.cwd),
+    }
+
+def place_repo (p : Option SessionPlace) : Option String :=
+    match p {
+        Option.none => Option.none,
+        Option.some pl => Option.some (Path.to_string pl.repo),
+    }
+
+/// Both `cwd` and `repo` must decode, or the session has no place.
+def decode_meta_place (obj : BTreeMap String Json) : Option SessionPlace :=
+    match decode_meta_opt_str "cwd" obj {
+        Option.none => Option.none,
+        Option.some c => match decode_meta_opt_str "repo" obj {
+            Option.none => Option.none,
+            Option.some r =>
+                let place : SessionPlace := { cwd := Path.path c, repo := Path.path r } in
+                Option.some place,
+        },
+    }
+
 pub def Store.encode_meta (m : StoreMeta) : Json :=
     let inner : Session := m.session in
     let bare : Session := { inner with history := List.empty } in
@@ -641,6 +672,8 @@ pub def Store.encode_meta (m : StoreMeta) : Json :=
             Pair.pair "plan" (opt_str_json m.plan),
             Pair.pair "name" (opt_str_json m.name),
             Pair.pair "description" (opt_str_json m.description),
+            Pair.pair "cwd" (opt_str_json (place_cwd m.place)),
+            Pair.pair "repo" (opt_str_json (place_repo m.place)),
             Pair.pair "session" (Session.serialize_json bare)]
 
 pub def Store.decode_meta (j : Json) : Result String StoreMeta :=
@@ -704,7 +737,8 @@ def decode_meta_finish (obj : BTreeMap String Json) (sj : Json) (created : I64) 
             let plan : Option String := decode_meta_opt_str "plan" obj in
             let name : Option String := decode_meta_opt_str "name" obj in
             let description : Option String := decode_meta_opt_str "description" obj in
-            let m : StoreMeta := { session := s, created := created, updated := updated, history_next := next, history_base := base, plan := plan, name := name, description := description } in
+            let place : Option SessionPlace := decode_meta_place obj in
+            let m : StoreMeta := { session := s, created := created, updated := updated, history_next := next, history_base := base, plan := plan, name := name, description := description, place := place } in
             Result.ok m,
     }
 
@@ -932,9 +966,9 @@ def block_path (dir : Path) (seq : I64) : Path :=
 def history_path (dir : Path) (seq : I64) : Path :=
     Store.child (history_dir dir) (String.concat (Store.pad12 seq) ".json")
 
-def meta_of (s : Session) (created : I64) (updated : I64) (next : I64) : StoreMeta :=
+def meta_of (place : Option SessionPlace) (s : Session) (created : I64) (updated : I64) (next : I64) : StoreMeta :=
     let m : StoreMeta := { session := s, created := created, updated := updated, history_next := next, history_base := 1i64, plan := Option.none,
-        name := Option.none, description := Option.none } in
+        name := Option.none, description := Option.none, place := place } in
     Store.fill_title m s
 
 def state_of (root : Path) (dir : Path) (id : String) : StoreState :=
@@ -992,16 +1026,17 @@ def dirs_ready (dir : Path) : IO Bool := do {
     return (Bool.and t h)
 }
 
-def init_session_at (root : Path) (dir : Path) (id : String) (s : Session) : IO (Result String StoreState) := do {
+def init_session_at (root : Path) (dir : Path) (id : String) (place : Option SessionPlace) (s : Session) : IO (Result String StoreState) := do {
     let now <- Bench.now;
-    let mok <- write_meta_at dir (meta_of s now now 1);
+    let mok <- write_meta_at dir (meta_of place s now now 1);
     let iok <- write_atomic (index_path dir) (Json.to_string (Store.encode_index Store.empty_index));
     if Bool.and mok iok
     then IO.pure (Result.ok (state_of root dir id))
     else IO.pure (Result.err "could not initialise the session")
 }
 
-pub def Store.new_session (root : Path) (s : Session) : IO (Result String StoreState) := do {
+/// `place` is where the session runs (`--continue` resumes per repo).
+pub def Store.new_session (root : Path) (place : Option SessionPlace) (s : Session) : IO (Result String StoreState) := do {
     let ok <- Store.ensure_root root;
     if Bool.not ok then IO.pure (Result.err "session root is not writable")
     else do {
@@ -1014,27 +1049,27 @@ pub def Store.new_session (root : Path) (s : Session) : IO (Result String StoreS
         let ready <- dirs_ready dir;
         if Bool.not ready
         then IO.pure (Result.err "could not create the session directory")
-        else init_session_at root dir id s
+        else init_session_at root dir id place s
     }
 }
 
 /// A shuttle JSON checkpoint becomes a new session directory whose first
 /// history block is the loaded transcript.
-pub def Store.import_session (root : Path) (s : Session) : IO (Result String StoreState) := do {
-    let r <- Store.new_session root s;
+pub def Store.import_session (root : Path) (place : Option SessionPlace) (s : Session) : IO (Result String StoreState) := do {
+    let r <- Store.new_session root place s;
     match r {
         Result.err e => IO.pure (Result.err e),
-        Result.ok st => import_into st s,
+        Result.ok st => import_into st place s,
     }
 }
 
-def import_into (st : StoreState) (s : Session) : IO (Result String StoreState) := do {
+def import_into (st : StoreState) (place : Option SessionPlace) (s : Session) : IO (Result String StoreState) := do {
     let p : Path := history_path st.dir 1;
     let ok <- write_verified p (Json.to_string (Session.messages_to_json s.history));
     if Bool.not ok then IO.pure (Result.err "could not write imported history")
     else do {
         let now <- Bench.now;
-        let mok <- write_meta_at st.dir (meta_of s now now 2);
+        let mok <- write_meta_at st.dir (meta_of place s now now 2);
         if mok then IO.pure (Result.ok st) else IO.pure (Result.err "could not write the session meta")
     }
 }
@@ -1478,31 +1513,44 @@ def list_msg_len (ms : List Message) : I64 :=
 // ── IO: latest session ────────────────────────────────────────────────
 
 #[partial]
-def latest_go (names : List Path) (best : Option String) (best_t : I64) (best_c : I64) : IO (Option String) :=
+def latest_go (here : Option SessionPlace) (names : List Path) (best : Option String) (best_t : I64) (best_c : I64) : IO (Option String) :=
     match names {
         List.empty => IO.pure best,
         List.cons dir rest => do {
             let isd <- IO.is_dir dir;
-            if Bool.not isd then latest_go rest best best_t best_c
+            if Bool.not isd then latest_go here rest best best_t best_c
             else do {
                 let meta_r <- Store.read_meta dir;
                 match meta_r {
-                    Result.err _ => latest_go rest best best_t best_c,
+                    Result.err _ => latest_go here rest best best_t best_c,
                     Result.ok m =>
-                        if Bool.or (m.updated > best_t) (Bool.and (m.updated == best_t) (m.created > best_c))
-                        then latest_go rest (Option.some (Path.file_name dir)) m.updated m.created
-                        else latest_go rest best best_t best_c,
+                        if Bool.and (Store.in_place here m.place)
+                            (Bool.or (m.updated > best_t) (Bool.and (m.updated == best_t) (m.created > best_c)))
+                        then latest_go here rest (Option.some (Path.file_name dir)) m.updated m.created
+                        else latest_go here rest best best_t best_c,
                 }
             }
         },
     }
 
-/// The session with the greatest `meta.updated` (`--continue`); `created`
-/// breaks a same-millisecond tie (deterministically, without depending on
-/// the directory-name order).
-pub def Store.latest_session (root : Path) : IO (Option String) := do {
+/// A session recorded at `there` belongs to `here`: the same repo. With no
+/// known `here` (`PWD` unset) every session does.
+pub def Store.in_place (here : Option SessionPlace) (there : Option SessionPlace) : Bool :=
+    match here {
+        Option.none => true,
+        Option.some h => Place.same_repo h there,
+    }
+
+/// The sessions of `infos` that belong to `here`, order kept.
+pub def Store.sessions_in (here : Option SessionPlace) (infos : List SessionInfo) : List SessionInfo :=
+    List.filter (fn (i : SessionInfo) => Store.in_place here i.place) infos
+
+/// The session of `here`'s repo with the greatest `meta.updated`
+/// (`--continue`); `created` breaks a same-millisecond tie
+/// (deterministically, without depending on the directory-name order).
+pub def Store.latest_session (root : Path) (here : Option SessionPlace) : IO (Option String) := do {
     let names <- IO.list_dir root;
-    latest_go names Option.none 0 0
+    latest_go here names Option.none 0 0
 }
 
 // ── IO: the session list (`/resume` picker) ───────────────────────────
@@ -1523,9 +1571,10 @@ def info_of (dir : Path) (m : StoreMeta) : SessionInfo :=
     let model : String := m.session.config.model in
     let created : I64 := m.created in
     let updated : I64 := m.updated in
+    let place : Option SessionPlace := m.place in
     let info : SessionInfo := { id := id, name := name, description := description,
         turns := turns, model := model,
-        created := created, updated := updated } in
+        created := created, updated := updated, place := place } in
     info
 
 /// `a` sorts before `b`: newest `updated` first, `created` breaking ties.

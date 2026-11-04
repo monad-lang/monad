@@ -1,4 +1,5 @@
 use shuttle::gate {Capability}
+use std::path {Path}
 use weaver::gate {PickAnswer, answer_line, gate_answer_feedback, gate_answer_prompt}
 use shuttle::gate {Pick, Approval, Gate}
 use weaver::gate {Gate.weaver}
@@ -118,7 +119,7 @@ def no_read (_ : Unit) : IO (Option String) := IO.pure Option.none
 
 def no_write (_ : String) : IO Unit := IO.pure unit
 
-def precheck_of (mode : Mode) (grants : Option (Ref (List PermGrant))) (root : Option String) (p : Pick) : IO (Option Approval) := do {
+def precheck_of (mode : Mode) (grants : Option (Ref (List PermGrant))) (root : Option Path) (p : Pick) : IO (Option Approval) := do {
     let g : Gate := Gate.weaver mode grants root no_read no_write;
     let check : Pick -> IO (Option Approval) := g.precheck;
     let r <- check p;
@@ -134,7 +135,7 @@ def test_precheck_allows_a_granted_repo_write : IO Bool := do {
     let r <- Ref.new empty_grants;
     let g : PermGrant := { cap := Capability.write, scope := PermScope.repo };
     let _ <- Permissions.add (Option.some r) g;
-    let res <- precheck_of Mode.manual (Option.some r) (Option.some "/repo") (write_pick "src/a.mo");
+    let res <- precheck_of Mode.manual (Option.some r) (Option.some (Path.path "/repo")) (write_pick "src/a.mo");
     return (match res {
         Option.some ap => match ap { Approval.once => true, _ => false },
         Option.none => false,
@@ -148,7 +149,7 @@ def test_precheck_allows_a_granted_anywhere_write : IO Bool := do {
     let r <- Ref.new empty_grants;
     let g : PermGrant := { cap := Capability.write, scope := PermScope.anywhere };
     let _ <- Permissions.add (Option.some r) g;
-    let res <- precheck_of Mode.manual (Option.some r) (Option.some "/repo") (write_pick "/tmp/a.mo");
+    let res <- precheck_of Mode.manual (Option.some r) (Option.some (Path.path "/repo")) (write_pick "/tmp/a.mo");
     return (match res {
         Option.some ap => match ap { Approval.once => true, _ => false },
         Option.none => false,
@@ -162,7 +163,7 @@ def test_precheck_does_not_cover_an_outside_write : IO Bool := do {
     let r <- Ref.new empty_grants;
     let g : PermGrant := { cap := Capability.write, scope := PermScope.repo };
     let _ <- Permissions.add (Option.some r) g;
-    let res <- precheck_of Mode.manual (Option.some r) (Option.some "/repo") (write_pick "/tmp/a.mo");
+    let res <- precheck_of Mode.manual (Option.some r) (Option.some (Path.path "/repo")) (write_pick "/tmp/a.mo");
     return (match res { Option.none => true, Option.some _ => false })
 }
 
@@ -173,7 +174,7 @@ def test_precheck_refuses_a_granted_write_in_plan_mode : IO Bool := do {
     let r <- Ref.new empty_grants;
     let g : PermGrant := { cap := Capability.write, scope := PermScope.anywhere };
     let _ <- Permissions.add (Option.some r) g;
-    let res <- precheck_of Mode.plan (Option.some r) (Option.some "/repo") (write_pick "src/a.mo");
+    let res <- precheck_of Mode.plan (Option.some r) (Option.some (Path.path "/repo")) (write_pick "src/a.mo");
     return (match res {
         Option.some ap => match ap { Approval.deny _ => true, _ => false },
         Option.none => false,

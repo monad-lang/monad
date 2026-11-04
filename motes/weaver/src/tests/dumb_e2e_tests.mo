@@ -218,7 +218,7 @@ def state_of (reg : ToolRegistry) : WeaverState := {
     run := run_of reg,
     mode := Mode.manual,
     provider := "mock",
-    budget := budget, context_window := 128000, compact_at := 80, plan := Option.none, last_context := 0, grants := Option.none, workspace_root := Option.none,
+    budget := budget, context_window := 128000, compact_at := 80, plan := Option.none, last_context := 0, grants := Option.none, place := Option.none,
     mcps := List.empty,
     keys := BTreeMap.empty,
     catalog := BTreeMap.empty,

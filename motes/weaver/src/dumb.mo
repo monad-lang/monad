@@ -12,6 +12,7 @@
 /// returns the advanced one. The read/write seams are PARAMETERS --
 /// production passes stdin and a flushed stdout, the e2e passes a
 /// scripted pair, and the gate answers through the same seams.
+use weaver::place {Place.cwd_of}
 use shuttle::agent {Agent, Agent.exec, RunState, silent_stop}
 use shuttle::loop {Loop.iterate}
 use shuttle::message {Message, Usage}
@@ -340,7 +341,7 @@ def run_of_pair (p : Pair RunState Unit) : RunState :=
     match p { Pair.pair r _ => r }
 
 def gate_for (st : WeaverState) (read : Unit -> IO (Option String)) (write : String -> IO Unit) (run : RunState) : RunState :=
-    let r2 : RunState := { run with gate := Gate.weaver st.mode st.grants st.workspace_root read write } in
+    let r2 : RunState := { run with gate := Gate.weaver st.mode st.grants (Place.cwd_of st.place) read write } in
     r2
 
 def append_user (run : RunState) (text : String) : RunState :=

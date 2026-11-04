@@ -19,7 +19,7 @@ use shuttle::tool {ToolSpec, ToolImpl}
 use weaver::commands {
     WeaverState, Effect, Commands.dispatch, Commands.context_used, Commands.context_percent,
     Commands.set_plan, Commands.plan_after_turn, SessionPage, Commands.session_page,
-    Commands.turns_label, Commands.turn_context,
+    Commands.turns_label, Commands.turn_context, Commands.sessions_for, Commands.place_suffix,
 }
 use weaver::catalog {Catalog.lookup}
 use weaver::error {WeaverError}
@@ -32,7 +32,8 @@ use weaver::store {
 }
 use std::path {Path, Path.of, Path.to_string}
 use std::process {exec_cmd}
-use std::list {List.length}
+use std::list {List.length, List.intercalate}
+use weaver::place {SessionPlace}
 use json::json {Json}
 use std::map {Map, BTreeMap}
 use std::process {process_id}
@@ -61,7 +62,7 @@ def state_of (mode : Mode) (mcps : List String) : WeaverState := {
     run := run_of,
     mode := mode,
     provider := "mock",
-    budget := budget, context_window := 128000, compact_at := 80, plan := Option.none, last_context := 0, grants := Option.none, workspace_root := Option.none,
+    budget := budget, context_window := 128000, compact_at := 80, plan := Option.none, last_context := 0, grants := Option.none, place := Option.none,
     mcps := mcps,
     keys := BTreeMap.empty,
     catalog := BTreeMap.empty,
@@ -470,7 +471,7 @@ def test_clear_rotates_the_session_directory : IO Bool := do {
     let root : Path := test_root "clear";
     clean_dir root;
     let base : WeaverState := state_of Mode.manual [];
-    let r <- Store.new_session root base.run.session;
+    let r <- Store.new_session root Option.none base.run.session;
     match r {
         Result.err _ => IO.pure false,
         Result.ok s0 => check_clear_rotation base s0,
@@ -503,7 +504,7 @@ def test_resume_by_directory_loads_history : IO Bool := do {
     let root : Path := test_root "resume";
     clean_dir root;
     let base : WeaverState := state_of Mode.manual [];
-    let r <- Store.new_session root base.run.session;
+    let r <- Store.new_session root Option.none base.run.session;
     match r {
         Result.err _ => IO.pure false,
         Result.ok s0 => check_resume_dir base s0 root,
@@ -844,7 +845,7 @@ def test_name_sets_and_bare_shows : IO Bool := do {
     let root : Path := test_root "name";
     clean_dir root;
     let base : WeaverState := state_of Mode.manual [];
-    let r <- Store.new_session root base.run.session;
+    let r <- Store.new_session root Option.none base.run.session;
     match r {
         Result.err _ => IO.pure false,
         Result.ok s0 => do {
@@ -869,7 +870,7 @@ def test_name_dash_clears_the_stored_value : IO Bool := do {
     let root : Path := test_root "name_clear";
     clean_dir root;
     let base : WeaverState := state_of Mode.manual [];
-    let r <- Store.new_session root base.run.session;
+    let r <- Store.new_session root Option.none base.run.session;
     match r {
         Result.err _ => IO.pure false,
         Result.ok s0 => do {
@@ -895,7 +896,7 @@ def test_describe_sets_and_bare_shows : IO Bool := do {
     let root : Path := test_root "describe";
     clean_dir root;
     let base : WeaverState := state_of Mode.manual [];
-    let r <- Store.new_session root base.run.session;
+    let r <- Store.new_session root Option.none base.run.session;
     match r {
         Result.err _ => IO.pure false,
         Result.ok s0 => do {
@@ -931,11 +932,11 @@ def test_resume_bare_lists_sessions_and_marks_current : IO Bool := do {
     let root : Path := test_root "list";
     clean_dir root;
     let base : WeaverState := state_of Mode.manual [];
-    let r1 <- Store.new_session root base.run.session;
+    let r1 <- Store.new_session root Option.none base.run.session;
     match r1 {
         Result.err _ => IO.pure false,
         Result.ok s1 => do {
-            let r2 <- Store.new_session root base.run.session;
+            let r2 <- Store.new_session root Option.none base.run.session;
             match r2 {
                 Result.err _ => IO.pure false,
                 Result.ok s2 => do {
@@ -957,7 +958,7 @@ def test_resume_bare_lists_sessions_and_marks_current : IO Bool := do {
 // ── session paging (the TUI picker's pure half) ───────────────────────
 
 def info_of (id : String) (updated : I64) : SessionInfo :=
-    { id := id, name := id, description := "", turns := 1, model := "m", created := updated, updated := updated }
+    { id := id, name := id, description := "", turns := 1, model := "m", created := updated, updated := updated, place := Option.none }
 
 def infos_of (ids : List String) (i : I64) (acc : List SessionInfo) : List SessionInfo :=
     match ids {
@@ -1005,7 +1006,7 @@ def test_resume_resets_last_context : IO Bool := do {
     let root : Path := test_root "resume_ctx";
     clean_dir root;
     let base : WeaverState := state_of Mode.manual [];
-    let r <- Store.new_session root base.run.session;
+    let r <- Store.new_session root Option.none base.run.session;
     match r {
         Result.err _ => IO.pure false,
         Result.ok s0 => do {
@@ -1041,3 +1042,36 @@ def test_turn_context_falls_back_to_the_delta : Bool :=
     let sess : Session := { session_of with spent := after } in
     let run2 : RunState := { run_of with session := sess } in
     Commands.turn_context before none run2 == 600
+
+// ── /resume lists this repo's sessions ────────────────────────────────
+
+def info_in (id : String) (repo : Option String) : SessionInfo :=
+    let place : Option SessionPlace := match repo {
+        Option.none => Option.none,
+        Option.some r =>
+            let p : SessionPlace := { cwd := Path.path r, repo := Path.path r } in
+            Option.some p,
+    } in
+    let i : SessionInfo := { id := id, name := id, description := "", turns := 1, model := "m", created := 1, updated := 1, place := place } in
+    i
+
+#[partial]
+def info_ids (xs : List SessionInfo) : List String :=
+    match xs {
+        List.empty => List.empty,
+        List.cons i rest => List.cons i.id (info_ids rest),
+    }
+
+#[test]
+def test_sessions_for_keeps_this_repos : Bool :=
+    let here : SessionPlace := { cwd := Path.path "/src/a", repo := Path.path "/src/a" } in
+    let infos : List SessionInfo := [info_in "s-1" (Option.some "/src/a"), info_in "s-2" (Option.some "/src/b"), info_in "s-3" Option.none] in
+    List.intercalate "," (info_ids (Commands.sessions_for (Option.some here) false infos)) == "s-1"
+        && List.length (Commands.sessions_for (Option.some here) true infos) == 3
+        && List.length (Commands.sessions_for Option.none false infos) == 3
+
+#[test]
+def test_place_suffix_names_the_repo : Bool :=
+    let p : SessionPlace := { cwd := Path.path "/src/a/x", repo := Path.path "/src/a" } in
+    String.beq (Commands.place_suffix (Option.some p)) " in /src/a"
+        && String.beq (Commands.place_suffix Option.none) " in (unknown)"

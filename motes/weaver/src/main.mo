@@ -41,7 +41,7 @@ use weaver::store {
     Store.sessions_root, Store.ensure_root, Store.new_session, Store.load_session,
     Store.import_session, Store.session_dir, Store.latest_session, Store.startup_transcript,
     Store.base_name, Store.append_transcript, Store.append_note, Store.read_live, Store.discard_live,
-    Store.read_plan,
+    Store.read_plan, Store.read_meta,
     Transcript.empty, Transcript.append, Transcript.next_block,
 }
 use weaver::theme {theme_split_lines}
@@ -54,6 +54,7 @@ use weaver::providers {
 use std::map {BTreeMap}
 use std::ref {Ref, Ref.new}
 use weaver::permissions {PermGrant}
+use weaver::place {SessionPlace, Place.probe, Place.cwd_of, Place.moved_note}
 use weaver::settings {Settings, Settings.load, Settings.cap_of, Settings.validate}
 use weaver::error {WeaverError, WeaverError.show}
 use weaver::tui_app {Tui.run_resumed}
@@ -67,7 +68,7 @@ use init::transformers {ResultT}
 use json::json {Json}
 use std::io {IO.write_stdout, IO.flush_stdout, IO.read_line, IO.write_stderr, IO.get_env, IO.is_dir}
 use std::stream {StreamError}
-use std::path {Path, Path.of}
+use std::path {Path, Path.of, Path.to_string}
 use std::list {List.intercalate, List.length}
 use std::map {Map}
 
@@ -396,11 +397,11 @@ def rekey_loaded (p : Plan) (s : Settings) (sess : Session) : Pair Session (Opti
 /// budget, the settings' mode (manual is the safe default; `/mode`
 /// changes it), and a gate rebuilt from the mode before every turn --
 /// `Gate.auto` here is never consulted.
-def initial_state (p : Plan) (reg : ToolRegistry) (s : Settings) (colors : Bool) (store : Option StoreState) (session : Session) (grants : Option (Ref (List PermGrant))) (root : Option String) : WeaverState :=
+def initial_state (p : Plan) (reg : ToolRegistry) (s : Settings) (colors : Bool) (store : Option StoreState) (session : Session) (grants : Option (Ref (List PermGrant))) (place : Option SessionPlace) : WeaverState :=
     let left : I64 := if p.max_turns - session.turns < 0 then 0 else p.max_turns - session.turns in
     let run : RunState := { session := session, reg := reg, turns_left := left, emit := stdout_write, gate := Gate.auto, always := List.empty, retries := 3, sleep_ms := Dumb.poll_sleep, on_usage := silent_usage, should_stop := silent_stop, stopped := false } in
     let prov : String := Weaver.provider_of p.provider session.config in
-    let st : WeaverState := { run := run, mode := initial_mode s, provider := prov, budget := p.max_turns, context_window := p.context_window, compact_at := p.compact_at, plan := Option.none, last_context := 0, grants := grants, workspace_root := root, mcps := p.mcps, keys := s.api_keys, catalog := BTreeMap.empty, quit := false, colors := colors, fatal := Option.none, store := store } in
+    let st : WeaverState := { run := run, mode := initial_mode s, provider := prov, budget := p.max_turns, context_window := p.context_window, compact_at := p.compact_at, plan := Option.none, last_context := 0, grants := grants, place := place, mcps := p.mcps, keys := s.api_keys, catalog := BTreeMap.empty, quit := false, colors := colors, fatal := Option.none, store := store } in
     st
 
 /// The mode the session starts in: the settings' `mode` key when it parses,
@@ -474,14 +475,21 @@ def run_plan (setup : LogSetup) (colors : Bool) (p : Plan) (s : Settings) : IO I
     let cache <- Ref.new module_info_cache_empty;
     let empty_buf : List String := List.empty;
     let eval_buf <- Ref.new empty_buf;
-    let root <- workspace_root_probe;
-    let r <- mount_all client_info p.mcps s (weaver_registry cache eval_buf root) [];
-    mounted_plan setup colors p s r
+    let place <- Place.probe;
+    let r <- mount_all client_info p.mcps s (weaver_registry cache eval_buf (cwd_text place)) [];
+    mounted_plan setup colors p s place r
 }
+
+/// The monad tools resolve buffers against the working directory as text.
+def cwd_text (place : Option SessionPlace) : Option String :=
+    match Place.cwd_of place {
+        Option.none => Option.none,
+        Option.some c => Option.some (Path.to_string c),
+    }
 
 /// `mount_all` disposes the mounted servers itself on error, so both
 /// arms here hand back an exit code and nothing else.
-def mounted_plan (setup : LogSetup) (colors : Bool) (p : Plan) (s : Settings) (r : Result WeaverError (Pair ToolRegistry (List McpServer))) : IO I64 :=
+def mounted_plan (setup : LogSetup) (colors : Bool) (p : Plan) (s : Settings) (place : Option SessionPlace) (r : Result WeaverError (Pair ToolRegistry (List McpServer))) : IO I64 :=
     match r {
         Result.err e => do {
             write_errln (String.concat "error: " (WeaverError.show e));
@@ -489,7 +497,7 @@ def mounted_plan (setup : LogSetup) (colors : Bool) (p : Plan) (s : Settings) (r
             return 1
         },
         Result.ok pr => match pr {
-            Pair.pair reg servers => start_loop setup colors p s reg servers,
+            Pair.pair reg servers => start_loop setup colors p s place reg servers,
         },
     }
 
@@ -508,12 +516,12 @@ struct OpenedSession {
 /// falls back to the line-based `Dumb.run` when stdin is not one.
 /// Phase 9: the exit code follows the state -- a fatal error recorded
 /// mid-session exits 1.
-def start_loop (setup : LogSetup) (colors : Bool) (p : Plan) (s : Settings) (reg : ToolRegistry) (servers : List McpServer) : IO I64 := do {
+def start_loop (setup : LogSetup) (colors : Bool) (p : Plan) (s : Settings) (place : Option SessionPlace) (reg : ToolRegistry) (servers : List McpServer) : IO I64 := do {
     let root_opt <- Store.sessions_root;
-    let opened <- open_session root_opt p s reg;
+    let opened <- open_session root_opt place p s reg;
     match opened {
         Result.err e => fail_started servers e,
-        Result.ok o => run_opened setup colors p s reg servers (with_model_note p.model_note o),
+        Result.ok o => run_opened setup colors p s place reg servers (with_model_note p.model_note o),
     }
 }
 
@@ -536,17 +544,6 @@ def fail_started (servers : List McpServer) (e : WeaverError) : IO I64 := do {
     return 1
 }
 
-/// The workspace root a `repo` grant is scoped to, from `PWD` (there is
-/// no cwd/realpath native). Unset means repo scope is not offered.
-def workspace_root_probe : IO (Option String) := do {
-    let pwd <- IO.get_env "PWD";
-    match pwd {
-        Option.none => IO.pure Option.none,
-        Option.some p =>
-            if String.is_empty p then IO.pure Option.none else IO.pure (Option.some p),
-    }
-}
-
 /// The plan a resumed session last captured, when persistence is on.
 def stored_plan (store : Option StoreState) : IO (Option String) :=
     match store {
@@ -554,13 +551,12 @@ def stored_plan (store : Option StoreState) : IO (Option String) :=
         Option.some s => Store.read_plan s.dir,
     }
 
-def run_opened (setup : LogSetup) (colors : Bool) (p : Plan) (s : Settings) (reg : ToolRegistry) (servers : List McpServer) (o : OpenedSession) : IO I64 := do {
+def run_opened (setup : LogSetup) (colors : Bool) (p : Plan) (s : Settings) (place : Option SessionPlace) (reg : ToolRegistry) (servers : List McpServer) (o : OpenedSession) : IO I64 := do {
     let o2 : OpenedSession := with_crash_note setup.crash o;
     let empty_grants : List PermGrant := List.empty;
     let grants <- Ref.new empty_grants;
-    let root <- workspace_root_probe;
     let plan <- stored_plan o.store;
-    let st0 : WeaverState := initial_state p reg s colors o.store o.session (Option.some grants) root;
+    let st0 : WeaverState := initial_state p reg s colors o.store o.session (Option.some grants) place;
     let st : WeaverState := Commands.set_plan st0 plan;
     let _ <- Logs.info setup.log (String.concat "ev=session_open session=" (session_label o));
     let tr0 <- startup_transcript o2;
@@ -635,10 +631,10 @@ def note_block (tr : Transcript) (note : Option String) : Transcript :=
 def resume_requested (p : Plan) : Bool :=
     Bool.or (Bool.not (String.is_empty p.resume)) p.cont
 
-def open_session (root_opt : Option Path) (p : Plan) (s : Settings) (reg : ToolRegistry) : IO (Result WeaverError OpenedSession) :=
+def open_session (root_opt : Option Path) (place : Option SessionPlace) (p : Plan) (s : Settings) (reg : ToolRegistry) : IO (Result WeaverError OpenedSession) :=
     match root_opt {
         Option.none => open_no_root p reg,
-        Option.some root => open_with_root root p s reg,
+        Option.some root => open_with_root root place p s reg,
     }
 
 def open_no_root (p : Plan) (reg : ToolRegistry) : IO (Result WeaverError OpenedSession) :=
@@ -646,11 +642,11 @@ def open_no_root (p : Plan) (reg : ToolRegistry) : IO (Result WeaverError Opened
     then IO.pure (Result.err (WeaverError.config "session persistence unavailable: HOME is unset or unwritable"))
     else IO.pure (Result.ok (degraded "session persistence unavailable (HOME unset); this run is in-memory" p reg))
 
-def open_with_root (root : Path) (p : Plan) (s : Settings) (reg : ToolRegistry) : IO (Result WeaverError OpenedSession) := do {
+def open_with_root (root : Path) (place : Option SessionPlace) (p : Plan) (s : Settings) (reg : ToolRegistry) : IO (Result WeaverError OpenedSession) := do {
     let ok <- Store.ensure_root root;
     if Bool.not ok then open_unwritable p reg
-    else if resume_requested p then resume_open root p s
-    else fresh_open root p reg
+    else if resume_requested p then resume_open root place p s reg
+    else fresh_open root place p reg
 }
 
 def open_unwritable (p : Plan) (reg : ToolRegistry) : IO (Result WeaverError OpenedSession) :=
@@ -670,9 +666,9 @@ def opened_note (store : Option StoreState) (s : Session) (note : Option String)
     let o : OpenedSession := { store := store, session := s, note := note } in
     o
 
-def fresh_open (root : Path) (p : Plan) (reg : ToolRegistry) : IO (Result WeaverError OpenedSession) := do {
+def fresh_open (root : Path) (place : Option SessionPlace) (p : Plan) (reg : ToolRegistry) : IO (Result WeaverError OpenedSession) := do {
     let sess : Session := fresh_session p reg;
-    let r <- Store.new_session root sess;
+    let r <- Store.new_session root place sess;
     match r {
         Result.err e => IO.pure (Result.ok (degraded (String.concat "session persistence disabled: " e) p reg)),
         Result.ok st => IO.pure (Result.ok (opened (Option.some st) sess)),
@@ -683,55 +679,76 @@ def store_at (root : Path) (dir : Path) : StoreState :=
     let s : StoreState := { root := root, dir := dir, id := Store.base_name dir } in
     s
 
-def resume_open (root : Path) (p : Plan) (s : Settings) : IO (Result WeaverError OpenedSession) :=
-    if p.cont then resume_latest root p s else resume_token root p s
+def resume_open (root : Path) (place : Option SessionPlace) (p : Plan) (s : Settings) (reg : ToolRegistry) : IO (Result WeaverError OpenedSession) :=
+    if p.cont then resume_latest root place p s reg else resume_token root place p s
 
-def resume_latest (root : Path) (p : Plan) (s : Settings) : IO (Result WeaverError OpenedSession) := do {
-    let l <- Store.latest_session root;
+/// `--continue` resumes the latest session of this repo; with none there,
+/// it starts a fresh one and says so.
+def resume_latest (root : Path) (place : Option SessionPlace) (p : Plan) (s : Settings) (reg : ToolRegistry) : IO (Result WeaverError OpenedSession) := do {
+    let l <- Store.latest_session root place;
     match l {
-        Option.none => IO.pure (Result.err (WeaverError.config "no saved sessions")),
-        Option.some id => resume_dir root (Store.session_dir root id) p s,
+        Option.none => fresh_noted root place p reg,
+        Option.some id => resume_dir root place (Store.session_dir root id) p s,
     }
 }
 
-def resume_token (root : Path) (p : Plan) (s : Settings) : IO (Result WeaverError OpenedSession) :=
+def fresh_noted (root : Path) (place : Option SessionPlace) (p : Plan) (reg : ToolRegistry) : IO (Result WeaverError OpenedSession) := do {
+    let r <- fresh_open root place p reg;
+    match r {
+        Result.err e => IO.pure (Result.err e),
+        Result.ok o => IO.pure (Result.ok (with_model_note (Option.some (no_session_note place)) o)),
+    }
+}
+
+def no_session_note (place : Option SessionPlace) : String :=
+    match place {
+        Option.none => "no session to continue; starting a new one",
+        Option.some pl => String.concat "no session to continue in " (String.concat (Path.to_string pl.repo) "; starting a new one"),
+    }
+
+def resume_token (root : Path) (place : Option SessionPlace) (p : Plan) (s : Settings) : IO (Result WeaverError OpenedSession) :=
     match Path.of p.resume {
         Result.err e => IO.pure (Result.err (WeaverError.config e)),
-        Result.ok path => resume_token_path root path p s,
+        Result.ok path => resume_token_path root place path p s,
     }
 
-def resume_token_path (root : Path) (path : Path) (p : Plan) (s : Settings) : IO (Result WeaverError OpenedSession) := do {
+def resume_token_path (root : Path) (place : Option SessionPlace) (path : Path) (p : Plan) (s : Settings) : IO (Result WeaverError OpenedSession) := do {
     let isd <- IO.is_dir path;
-    if isd then resume_dir root path p s
-    else resume_token_candidate root p s
+    if isd then resume_dir root place path p s
+    else resume_token_candidate root place p s
 }
 
-def resume_token_candidate (root : Path) (p : Plan) (s : Settings) : IO (Result WeaverError OpenedSession) := do {
+def resume_token_candidate (root : Path) (place : Option SessionPlace) (p : Plan) (s : Settings) : IO (Result WeaverError OpenedSession) := do {
     let cand : Path := Store.session_dir root p.resume;
     let isd <- IO.is_dir cand;
-    if isd then resume_dir root cand p s else resume_file root p s
+    if isd then resume_dir root place cand p s else resume_file root place p s
 }
 
-def resume_dir (root : Path) (dir : Path) (p : Plan) (s : Settings) : IO (Result WeaverError OpenedSession) := do {
+def resume_dir (root : Path) (place : Option SessionPlace) (dir : Path) (p : Plan) (s : Settings) : IO (Result WeaverError OpenedSession) := do {
     let r <- Store.load_session dir;
+    let meta <- Store.read_meta dir;
+    let moved : Option String := match meta {
+        Result.err _ => Option.none,
+        Result.ok m => Place.moved_note place m.place,
+    };
     match r {
         Result.err e => IO.pure (Result.err (WeaverError.io e)),
         Result.ok sess => match rekey_loaded p s sess {
-            Pair.pair sess2 note => IO.pure (Result.ok (opened_note (Option.some (store_at root dir)) sess2 note)),
+            Pair.pair sess2 note => IO.pure (Result.ok (with_model_note moved (opened_note (Option.some (store_at root dir)) sess2 note))),
         },
     }
 }
 
-def resume_file (root : Path) (p : Plan) (s : Settings) : IO (Result WeaverError OpenedSession) := do {
+def resume_file (root : Path) (place : Option SessionPlace) (p : Plan) (s : Settings) : IO (Result WeaverError OpenedSession) := do {
     let r <- Session.load p.resume;
     match r {
         Result.err e => IO.pure (Result.err (WeaverError.io e)),
-        Result.ok sess => resume_import_file root p s sess,
+        Result.ok sess => resume_import_file root place p s sess,
     }
 }
 
-def resume_import_file (root : Path) (p : Plan) (s : Settings) (sess : Session) : IO (Result WeaverError OpenedSession) := do {
-    let imp <- Store.import_session root sess;
+def resume_import_file (root : Path) (place : Option SessionPlace) (p : Plan) (s : Settings) (sess : Session) : IO (Result WeaverError OpenedSession) := do {
+    let imp <- Store.import_session root place sess;
     match imp {
         Result.err e => IO.pure (Result.err (WeaverError.io e)),
         Result.ok st => match rekey_loaded p s sess {

@@ -26,6 +26,7 @@ use weaver::permissions {
     Permissions.add,
 }
 use std::ref {Ref}
+use std::path {Path}
 use json::json {Json, Json.to_string}
 
 /// What one user answer to a prompt means. `here` records a repo-scoped
@@ -58,7 +59,7 @@ pub def cap_name (c : Capability) : String :=
 /// point it is passed (the compiled backend's `RawIO.io` is a strict
 /// box), so every approval would read the SAME line. The function form
 /// re-reads per ask.
-pub def Gate.weaver (mode : Mode) (grants : Option (Ref (List PermGrant))) (root : Option String) (read : Unit -> IO (Option String)) (write : String -> IO Unit) : Gate :=
+pub def Gate.weaver (mode : Mode) (grants : Option (Ref (List PermGrant))) (root : Option Path) (read : Unit -> IO (Option String)) (write : String -> IO Unit) : Gate :=
     let g : Gate := {
         ask := weaver_ask mode grants root read write,
         precheck := weaver_precheck mode grants root write,
@@ -70,7 +71,7 @@ pub def Gate.weaver (mode : Mode) (grants : Option (Ref (List PermGrant))) (root
 /// repo-scoped grant must not cover a pick outside the root. A refusal
 /// is also visible to the human (the line-based UI would otherwise stay
 /// silent about why nothing ran).
-def weaver_precheck (mode : Mode) (grants : Option (Ref (List PermGrant))) (root : Option String) (write : String -> IO Unit) (p : Pick) : IO (Option Approval) :=
+def weaver_precheck (mode : Mode) (grants : Option (Ref (List PermGrant))) (root : Option Path) (write : String -> IO Unit) (p : Pick) : IO (Option Approval) :=
     match Policy.decide p.cap mode {
         Decision.refuse reason => do {
             let _ <- write (String.concat "refused: " (String.concat reason "\n"));
@@ -85,7 +86,7 @@ def weaver_precheck (mode : Mode) (grants : Option (Ref (List PermGrant))) (root
         Decision.allow => IO.pure Option.none,
     }
 
-def weaver_ask (mode : Mode) (grants : Option (Ref (List PermGrant))) (root : Option String) (read : Unit -> IO (Option String)) (write : String -> IO Unit) (p : Pick) : IO Approval :=
+def weaver_ask (mode : Mode) (grants : Option (Ref (List PermGrant))) (root : Option Path) (read : Unit -> IO (Option String)) (write : String -> IO Unit) (p : Pick) : IO Approval :=
     match Policy.decide p.cap mode {
         Decision.allow => IO.pure Approval.once,
         Decision.ask => prompt_pick grants root read write p,
@@ -105,7 +106,7 @@ def refused (write : String -> IO Unit) (reason : String) : IO Approval := do {
 /// and for file mutations the old -> new diff), read one word. EOF
 /// during an approval is a denial, not an approval -- a closed stdin
 /// must never green-light a mutation.
-def prompt_pick (grants : Option (Ref (List PermGrant))) (root : Option String) (read : Unit -> IO (Option String)) (write : String -> IO Unit) (p : Pick) : IO Approval := do {
+def prompt_pick (grants : Option (Ref (List PermGrant))) (root : Option Path) (read : Unit -> IO (Option String)) (write : String -> IO Unit) (p : Pick) : IO Approval := do {
     let _ <- write (pick_header p);
     let r <- Diff.for_input p.name p.input;
     let _ <- write_diff write r;
@@ -117,7 +118,7 @@ def prompt_pick (grants : Option (Ref (List PermGrant))) (root : Option String) 
 /// silently deny). A trailing text after the letter is the note: the
 /// model sees it on the tool result, or as the denial's reason.
 #[partial]
-def ask_again (grants : Option (Ref (List PermGrant))) (root : Option String) (repo_ok : Bool) (read : Unit -> IO (Option String)) (write : String -> IO Unit) (p : Pick) (tries : I64) : IO Approval := do {
+def ask_again (grants : Option (Ref (List PermGrant))) (root : Option Path) (repo_ok : Bool) (read : Unit -> IO (Option String)) (write : String -> IO Unit) (p : Pick) (tries : I64) : IO Approval := do {
     let _ <- write (gate_answer_prompt p.cap repo_ok);
     let line <- read unit;
     match line {
