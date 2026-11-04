@@ -14,4 +14,6 @@
 pub use lib::types {Rope, Selection, Selections, Change, Revision, History, Mode}
 pub use lib::rope {Rope.of_string}
 pub use lib::selection {Selections.cursor}
-pub use lib::model {Document, Document.of_text}
+pub use lib::model {Document, Document.of_text, EditorState, EditorMsg, Command, on_event}
+pub use lib::keymap {KeyResult, Binding, Keymap.resolve, Keymap.default_bindings}
+pub use lib::commands {update, Registry.default}

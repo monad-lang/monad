@@ -304,6 +304,19 @@ def Rope.byte_is_boundary (r : Rope) (off : I64) : Bool :=
         Option.some b => rope_is_boundary_byte b
     }
 
+/// The byte AT `off`, or `none` when `off` is outside the rope. One
+/// descent and one byte read -- the primitive every text motion in
+/// `commands.mo` walks with, because a `String.get` needs a flat string
+/// and the rope must not flatten for the sake of one byte.
+pub def Rope.byte_at (r : Rope) (off : I64) : Option U8 :=
+    match String.get (Rope.slice r off 1) 0 {
+        Option.some b => Option.some b,
+        Option.none => Option.none
+    }
+
+/// The rope's byte count, the bound every motion clamps to.
+pub def Rope.end_offset (r : Rope) : I64 := Rope.bytes r
+
 // ── Splitting, replacing, rebalancing ────────────────────────────────────
 
 
