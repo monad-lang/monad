@@ -348,6 +348,8 @@ Attributes come before visibility: `#[test] pub def ...`, never
 | `#[terminating]` | Suppresses the termination check where it is too weak |
 | `#[shared]` | Marks the shared read handle type (`init/src/shared.mo`); the affine checker keys recognition on it, not on the type's name |
 | `#[opaque]` | An opaque native-backed value type: exactly one NULLARY witness constructor, which source may neither construct nor match. A type with no constructors is `False`, and a native may not return one (`opaque_rules.mo`, both checkers) |
+| `#[at decl]` / `#[at term]` | On a `defmacro`: the positions it may be used in. Absent means both; a use at an excluded position is an error |
+| `#[returns expr]` / `#[returns decls]` | On a `defmacro`: what its body produces, checked against the body form at the definition site |
 
 Operators (precedence low→high): `|>`/`<|` (5), `>>=` (10), `<*>` (15),
 `<|>` (20), `||` (25), `&&` (30), `==`/`!=`/`<=`/`>=` (40), `++` (50),

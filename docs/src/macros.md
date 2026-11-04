@@ -2,12 +2,14 @@
 
 Monad has a real macro system: `defmacro`, `quote`, and compile-time reflection.
 It is not a bolted-on preprocessor — `#[derive]` is implemented *in Monad*, in
-`std/derive.mo`, on top of these primitives. The compiler only supplies a few
-reflection intrinsics.
+`std/derive.mo`, on top of these primitives. The compiler only supplies one
+reflection intrinsic, `meta!`.
 
-This is the one area where the self-hosted compiler is *ahead* of the
-[bootstrap host](./bootstrap-host.md): term macros work here and not there.
-`#[derive …]` is the reverse, and is marked below.
+Term macros work on both compilers, with one shape difference: the reference
+contract (and the bootstrap host) requires the body to be a `quote`, while the
+self-hosted compiler also accepts a bare term (`defmacro double x := x + x`).
+Both accept `defmacro double x := quote { x + x }`. See
+[bootstrap-host](./bootstrap-host.md) for the divergence table.
 
 ## Quoting
 
@@ -21,16 +23,19 @@ quote { 1 + 2 }
 
 There are two forms of `defmacro`.
 
-**Term macros** produce an expression:
+**Term macros** produce an expression. The portable spelling wraps the body in
+a `quote` — the compiler strips that quote and expands the result (this is what
+`fmt!` does):
 
 ```monad,ignore
-defmacro double x := x + x
+defmacro double x := quote { x + x }
 def y : I64 := double! 9
 ```
 
-> **Self-hosted only.** Term macros are rejected by the bootstrap host, which
-> fails with *"macro `double` did not return a Term value"*. Declaration macros
-> (below) work on both.
+> **Bare bodies are a self-hosted extension.** The self-hosted compiler also
+> accepts `defmacro double x := x + x`; the bootstrap host requires the
+> `quote` (otherwise it fails with *"macro `double` did not return a Term
+> value"*). Write the `quote` form for code that must run on both.
 
 **Declaration macros** produce a list of top-level declarations, using a
 `decls { ... }` template:
@@ -43,12 +48,21 @@ defmacro derive_lens T := decls {
 
 A macro is invoked with a `!` suffix — `double! 9`, `derive_lens! Point`.
 
+Both forms accept two optional attributes. `#[at decl]`, `#[at term]` or
+`#[at [decl, term]]` declares where the macro may be used (absent means
+both); a use at a position it excludes is an error. `#[returns expr]` /
+`#[returns decls]` states what the body produces and is checked against the
+body at the definition site, so the two cannot drift apart. `fmt!` below is
+declared `#[at term] #[returns expr]`.
+
 ## Reflection as Data
 
-The interesting half is `reflect_type_info!`, a compiler intrinsic that hands a
-type's structure to an **ordinary Monad function** as an ordinary value. That
+The interesting half is `meta!`, a compiler intrinsic that hands a type's
+structure to an **ordinary Monad function** as an ordinary value. That
 function computes a `List Decl`, and the compiler splices the result back into
-the program.
+the program. (`reflect_type_info!` is the name the shipped derives still use;
+it remains an accepted alias until a nightly carrying the rename is
+published — see [bootstrap-host](./bootstrap-host.md).)
 
 The data model lives in `init/meta.mo`:
 
@@ -243,6 +257,36 @@ Registration rules:
 - An unknown `#[derive Foo]` target is an error on the Rust host (listing the
   registered targets) and a silent no-op self-hosted.
 
+## Format strings (`fmt!`)
+
+`init::format` provides a compile-time format macro with the ergonomics of
+Rust's `format!` and none of the run-time cost:
+
+```monad,ignore
+use init::format {fmt}
+
+def greet (name : String) (n : I64) : String :=
+    fmt! "hi {name}, you are {n:>4}"
+```
+
+A hole names a variable that is **already in scope**: `fmt!` takes exactly one
+argument — the template — and introduces no binders of its own. `{name}`
+interpolates it, `{name:>N}` right-aligns to a minimum width, `{name:^N}`
+centres, and `{{`/`}}` are literal braces. A hole with no name (`{}` or
+`{:>N}`), an unknown specifier, an unclosed hole, or an out-of-scope
+variable is a compile-time error at the call site. Widths count UTF-8 bytes,
+not display columns.
+
+The template never reaches the generated code: it is parsed and lowered at
+expansion time into one `String.concat_list` with direct `FmtDisplay.fmt_display`
+calls, so there is no run-time template walking.
+
+> **Compiler support.** `fmt!` rides the term-position `meta!` intrinsic and
+> cross-module term-macro lookup. The bootstrap host and a self-hosted
+> compiler built from this change both expand it; an installed nightly older
+> than the parity change may not, which is why this sample stays tagged
+> `monad,ignore` until such a nightly is published.
+
 ## Limitations
 
 - `#[derive ...]` dispatches only to *registered* targets — but registration
@@ -263,13 +307,15 @@ equivalent.
 ## Summary
 
 - `defmacro` defines term macros and declaration macros; `quote { }` makes syntax data
-- `reflect_type_info!` passes a type's structure to an ordinary Monad function
+- `meta!` (alias `reflect_type_info!`) passes a type's structure to an ordinary Monad function
 - `#[derive BEq BOrd Debug Lens]` — space-separated, and the backend must be imported
 - `#[derive_handler <Target> ...]` on a `defmacro` registers it as an
   `#[derive <Target>]` backend; duplicate targets across *different* macros
   are a compile error
 - Derives are library code in `std/derive.mo`, not compiler built-ins
-- Both compilers expand `#[derive …]`; term macros (`double!`) are
-  self-hosted-only, which is the one divergence left in this area
+- Both compilers expand `#[derive …]` and term macros; the bootstrap host
+  requires a `quote`-bodied term macro, which the self-hosted compiler also
+  accepts (a bare body is its own extension)
+- `fmt! "…{name}…"` is a compile-time format macro in `init::format`
 
 Next, we'll look at **linear types**.

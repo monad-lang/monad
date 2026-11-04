@@ -183,16 +183,19 @@ twelve.
 
 Five, in this direction.
 
-Term macros:
+A **bare-bodied** term macro:
 
 ```monad,ignore
 defmacro double x := x + x
 def y : I64 := double! 9
 ```
 
-The host fails with *"macro `double` did not return a Term value"*. Declaration
-macros (`defmacro name T := decls { … }`) work on the host — it is specifically
-the term form that diverges. See [Macros and Derive](./macros.md).
+Both compilers expand a `quote`-bodied term macro
+(`defmacro double x := quote { x + x }`); the host requires that `quote` and
+fails on a bare body with *"macro `double` did not return a Term value"*, while
+the self-hosted compiler accepts both. Declaration macros
+(`defmacro name T := decls { … }`) work on both. See
+[Macros and Derive](./macros.md).
 
 A multiplicity prefix on a **destructured** parameter:
 
@@ -292,8 +295,9 @@ permissive one at the edges, in the four places listed above.
 This appendix is the current record. The two plans it used to point at are
 historical: `bootstrapping/self-hosted-parity-gaps.md` was a 2026-09-07
 inventory of constructs the host accepted and the self-hosted compiler did not,
-and eleven of its twelve sections have closed since — the twelfth is the term
-macro above, which is a host-side bug;
+and eleven of its twelve sections have closed since — the twelfth is the
+bare-bodied term macro above, which is a host-side gap (the host accepts the
+`quote`-bodied form both compilers document);
 `bootstrapping/self-hosted-test-runner-multi-test.md` tracked files the
 self-hosted test runner skipped, and the sweep now carries no exclusions at
 all. The checker gaps that remain are tracked in
