@@ -657,7 +657,7 @@ with Cubical {
 	#[cubical "ineg"] pub def ineg (i : Cubical.I) : Cubical.I
 	#[cubical "imeet"] pub def imeet (i : Cubical.I) (j : Cubical.I) : Cubical.I
 	#[cubical "ijoin"] pub def ijoin (i : Cubical.I) (j : Cubical.I) : Cubical.I
-	#[cubical "pathp"] pub def PathP (A : Cubical.I -> Type) (a : A Cubical.i0) (b : A Cubical.i1) : Type
+	#[cubical "pathp"] pub def PathP {u : Universe} (A : Cubical.I -> Sort u) (a : A Cubical.i0) (b : A Cubical.i1) : Sort u
 	#[cubical "transp"] pub def transp (A : Cubical.I -> Type) (a : A Cubical.i0) : A Cubical.i1
 	#[cubical "face_eq0"] pub def face_eq0 (i : Cubical.I) : Cubical.I
 	#[cubical "face_eq1"] pub def face_eq1 (i : Cubical.I) : Cubical.I

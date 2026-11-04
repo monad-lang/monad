@@ -6,7 +6,7 @@
 // `Path` itself carries the body `Cubical.PathP (fn _ => A) a b`, which is
 // what `type_check_bound_var`'s depth shift (PR #129) unblocked.
 
-pub def Path (A : Type) (a : A) (b : A) : Type :=
+pub def Path {u : Universe} (A : Sort u) (a : A) (b : A) : Sort u :=
     Cubical.PathP (fn _ => A) a b
 
 /// A proof is `Copy`: a path never reaches run time (the compiled form of a
