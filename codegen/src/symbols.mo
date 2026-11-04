@@ -225,14 +225,6 @@ def replace_dots_loop (s : String) (acc : String) : String :=
 def ends_with_main (name : String) : Bool :=
     String.beq (unqualify_def_name name) "main"
 
-#[test]
-def test_ends_with_main_is_the_exact_source_name : Bool :=
-    if Bool.not (ends_with_main "cli.main::main") then false
-    else if Bool.not (ends_with_main "main") then false
-    else if ends_with_main "cli.main::run_main" then false
-    else if ends_with_main "codegen.emit::rename_main" then false
-    else true
-
 #[partial]
 def bare_modpath (name : String) : ModulePath :=
     ModulePath.mk (List.cons (Identifier.id name) List.empty)

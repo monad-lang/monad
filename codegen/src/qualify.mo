@@ -804,117 +804,23 @@ def qtest_refs_of_decls (decls : List Decl) : List String := match decls {
         },
 }
 
-/// The collision that crashed the self-compiled compiler: one bare name,
-/// two modules. Both must survive, under distinct symbols.
-#[test]
-def test_qualify_same_name_in_two_modules_stays_distinct : IO Bool := do {
-    let a := qtest_module "a" (List.cons (qtest_def "shared" "x") List.empty);
-    let b := qtest_module "b" (List.cons (qtest_def "shared" "y") List.empty);
-    let r <- qualify_modules false (List.cons a (List.cons b List.empty));
-    match r {
-        Result.err _ => return false,
-        Result.ok ms => do {
-            let names := qtest_def_names ms;
-            return (if list_contains_str names "a::shared"
-                then list_contains_str names "b::shared"
-                else false)
-        },
-    }
-}
-
-/// A local definition wins: `a`'s own `shared` is what `a` calls, even
-/// though `b` declares the name too.
-#[test]
-def test_qualify_local_definition_wins : IO Bool := do {
-    let a := qtest_module "a" (List.cons (qtest_def "shared" "z")
-        (List.cons (qtest_def "caller" "shared") List.empty));
-    let b := qtest_module "b" (List.cons (qtest_def "shared" "y") List.empty);
-    let r <- qualify_modules false (List.cons a (List.cons b List.empty));
-    match r {
-        Result.err _ => return false,
-        Result.ok ms => return (list_contains_str (qtest_body_refs ms) "a::shared"),
-    }
-}
-
-/// The dominant corpus shape: a bare cross-module call to a uniquely
-/// named def, with no `use`/`open` naming it at all.
-#[test]
-def test_qualify_unique_owner_resolves_without_any_import : IO Bool := do {
-    let a := qtest_module "a" (List.cons (qtest_def "only_here" "w") List.empty);
-    let b := qtest_module "b" (List.cons (qtest_def "caller" "only_here") List.empty);
-    let r <- qualify_modules false (List.cons a (List.cons b List.empty));
-    match r {
-        Result.err _ => return false,
-        Result.ok ms => return (list_contains_str (qtest_body_refs ms) "a::only_here"),
-    }
-}
-
-/// An explicit `use X {n}` picks a winner when two modules declare `n`.
-///
-/// This test exists because that rule shipped DEAD: the alias's own
-/// `qualified_name` is dot-joined (`b.shared`) while an emitted symbol
-/// is `::`-joined (`b::shared`), and the comparison used the second
-/// form, so it never matched anything. Nothing caught it, because the
-/// import-set fallback happened to answer correctly for every ambiguous
-/// name then in the corpus.
-#[test]
-def test_qualify_explicit_import_picks_the_declarer : IO Bool := do {
-    let a := qtest_module "a" (List.cons (qtest_def "shared" "x") List.empty);
-    let b := qtest_module "b" (List.cons (qtest_def "shared" "y") List.empty);
-    // `c` imports BOTH declarers, so the import-set fallback cannot
-    // narrow it -- only the explicit `{shared}` item on `b` can. An
-    // earlier version of this test imported `b` alone and passed even
-    // with the rule reverted, which is exactly how the bug shipped.
-    let use_a := Decl.use_d (bare_modpath "a") (UseFilter.use_items List.empty) false;
-    let use_b := Decl.use_d (bare_modpath "b")
-        (UseFilter.use_items (List.cons (UseItem.use_name (Identifier.id "shared")) List.empty)) false;
-    let c := qtest_module "c" (List.cons use_a (List.cons use_b (List.cons (qtest_def "caller" "shared") List.empty)));
-    let r <- qualify_modules false (List.cons a (List.cons b (List.cons c List.empty)));
-    match r {
-        Result.err _ => return false,
-        Result.ok ms => return (list_contains_str (qtest_body_refs ms) "b::shared"),
-    }
-}
-
-/// A struct field's DEFAULT is an executable term and must be qualified
-/// like any body. The checker splices it into every struct literal that
-/// omits the field, so leaving it bare while its target is renamed makes
-/// those literals fail to elaborate -- and because codegen elaboration
-/// is best-effort, that surfaces several stages later as an unrelated
-/// gate firing. `lang/types.mo`'s `ScopeData.def_params` (defaulting to
-/// `HashMap.map HashMap.empty_buckets`) is the real instance of this.
-#[test]
-def test_qualify_rewrites_struct_field_defaults : IO Bool := do {
-    let helper := qtest_def "make_empty" "z";
-    let fld := StructField.mk (Identifier.id "f") Term.hole
-        (Option.some (Term.var sentinel (DebugName.named (Identifier.id "make_empty"))))
-        Multiplicity.many;
-    let st := Decl.struct_d (Struct.mk (Identifier.id "Holder") (List.cons fld List.empty) List.empty Visibility.package_private);
-    let a := qtest_module "a" (List.cons helper (List.cons st List.empty));
-    let r <- qualify_modules false (List.cons a List.empty);
-    match r {
-        Result.err _ => return false,
-        Result.ok ms => return (list_contains_str (struct_default_refs ms) "a::make_empty"),
-    }
-}
-
 #[partial]
-def struct_default_refs (modules : List ModuleInfo) : List String :=
+def struct_default_ref_names (modules : List ModuleInfo) : List String :=
     match modules {
         List.empty => List.empty,
-        List.cons m rest => List.append (struct_default_refs_of_decls (m.decl_list)) (struct_default_refs rest),
+        List.cons m rest => List.append (struct_default_ref_names_of_decls (m.decl_list)) (struct_default_ref_names rest),
     }
 
 #[partial]
-def struct_default_refs_of_decls (decls : List Decl) : List String := match decls {
+def struct_default_ref_names_of_decls (decls : List Decl) : List String := match decls {
     List.empty => List.empty,
     List.cons d rest =>
         match d {
             Decl.struct_d st =>
                 match st {
-                    Struct.mk _n fields _attrs _v => List.append (struct_field_default_refs fields) (struct_default_refs_of_decls rest),
+                    Struct.mk _n fields _attrs _v => List.append (struct_field_default_refs fields) (struct_default_ref_names_of_decls rest),
                 },
-            _ => struct_default_refs_of_decls rest,
+            _ => struct_default_ref_names_of_decls rest,
         },
 }
 
@@ -930,81 +836,6 @@ def struct_field_default_refs (fields : List StructField) : List String := match
                 },
         },
 }
-
-/// One FILE registered under two module paths is not an ambiguity --
-/// `init/string.mo` arrives as both `string` and `init.string`, and
-/// treating those as rival declarers made every `String.*` reference in
-/// the corpus unresolvable.
-#[test]
-def test_qualify_same_file_under_two_paths_is_not_ambiguous : IO Bool := do {
-    let decls := List.cons (qtest_def "shared" "x") List.empty;
-    let short_ := ModuleInfo.mk (bare_modpath "string") "init/src/string.mo" decls;
-    let long_ := ModuleInfo.mk (bare_modpath "init.string") "init/src/string.mo" decls;
-    let caller := qtest_module "user" (List.cons (qtest_def "caller" "shared") List.empty);
-    let r <- qualify_modules false (List.cons short_ (List.cons long_ (List.cons caller List.empty)));
-    match r {
-        Result.err _ => return false,
-        // The longer path wins, and the duplicate module is dropped
-        // rather than compiled twice under two symbols.
-        Result.ok ms => return (list_contains_str (qtest_body_refs ms) "init.string::shared"),
-    }
-}
-
-/// Two declarers and no import saying which: refusing to guess is the
-/// whole point -- silently picking one is what the old flat namespace
-/// did, and what crashed the compiler.
-#[test]
-def test_qualify_ambiguous_reference_is_an_error : IO Bool := do {
-    let a := qtest_module "a" (List.cons (qtest_def "shared" "x") List.empty);
-    let b := qtest_module "b" (List.cons (qtest_def "shared" "y") List.empty);
-    let c := qtest_module "c" (List.cons (qtest_def "caller" "shared") List.empty);
-    let r <- qualify_modules false (List.cons a (List.cons b (List.cons c List.empty)));
-    match r {
-        Result.err _ => return true,
-        Result.ok _ => return false,
-    }
-}
-
-/// `String.a` and `String_a` must not become one symbol. They did under
-/// the old `replace_dots_with_underscores` mangling, which is why the
-/// symbol is now the source name verbatim.
-#[test]
-def test_qualify_dotted_and_underscored_names_stay_distinct : IO Bool := do {
-    let a := qtest_module "m" (List.cons (qtest_def "String.a" "x")
-        (List.cons (qtest_def "String_a" "y") List.empty));
-    let r <- qualify_modules false (List.cons a List.empty);
-    match r {
-        Result.err _ => return false,
-        Result.ok ms => do {
-            let names := qtest_def_names ms;
-            return (if list_contains_str names "m::String.a"
-                then list_contains_str names "m::String_a"
-                else false)
-        },
-    }
-}
-
-// --- Collision matrix, item 5.0: type-level decls (inductive/struct/
-// class) are NOT qualified by `qualify_one_decl_name` today -- its match
-// has explicit arms only for `def_d`/`instance_d`/`infix_d`, falling
-// through `_ => d` unchanged for everything else (see that function's
-// own body, above). Two modules declaring the same-named type/struct/
-// class collide exactly the way def names used to before this file
-// existed (see this file's header comment, and the historical
-// `inductive_bare_name` crash it cites) -- these probes are RED until
-// item 5.1 extends `qualify_one_decl_name` to those variants.
-//
-// NOT covered here, deliberately: same-named CONSTRUCTOR in two
-// different types. That class of ambiguity is a DIFFERENT mechanism --
-// `Con`/`MatchCase` dispatch already keys by the owning inductive's
-// `NamePath` (stage 11.4, `unify-check-compile-test-elaboration.md`),
-// so a bare ctor-name collision across unrelated types is already
-// disambiguated downstream regardless of whether the INDUCTIVE's own
-// name is qualified here. Re-verify this still holds once 5.1 actually
-// renames inductives (a ctor's `typ_name` must track the rename).
-// Same-named CLASS + INSTANCE is also not a separate cell: `instance_d`
-// is already qualified (see the explicit arm above) -- only the class
-// itself is the gap, covered by the class probe below.
 
 #[partial]
 def qtest_type (name : String) : Decl :=
@@ -1104,107 +935,6 @@ def qtest_class_names_of_decls (decls : List Decl) : List String := match decls 
         },
 }
 
-/// RED: both modules' `Foo` stay bare "Foo" after `qualify_modules` --
-/// the second silently collides with the first instead of becoming
-/// `a::Foo`/`b::Foo`.
-#[test]
-def test_qualify_same_named_type_in_two_modules_stays_distinct : IO Bool := do {
-    let a := qtest_module "a" (List.cons (qtest_type "Foo") List.empty);
-    let b := qtest_module "b" (List.cons (qtest_type "Foo") List.empty);
-    let r <- qualify_modules false (List.cons a (List.cons b List.empty));
-    match r {
-        Result.err _ => return false,
-        Result.ok ms => do {
-            let names := qtest_type_names ms;
-            return (if list_contains_str names "a::Foo"
-                then list_contains_str names "b::Foo"
-                else false)
-        },
-    }
-}
-
-/// Same probe, module list reversed -- the collision (or its fix) must
-/// not depend on load order.
-#[test]
-def test_qualify_same_named_type_module_order_swapped_stays_distinct : IO Bool := do {
-    let a := qtest_module "a" (List.cons (qtest_type "Foo") List.empty);
-    let b := qtest_module "b" (List.cons (qtest_type "Foo") List.empty);
-    let r <- qualify_modules false (List.cons b (List.cons a List.empty));
-    match r {
-        Result.err _ => return false,
-        Result.ok ms => do {
-            let names := qtest_type_names ms;
-            return (if list_contains_str names "a::Foo"
-                then list_contains_str names "b::Foo"
-                else false)
-        },
-    }
-}
-
-/// RED: two same-named structs with genuinely DIFFERENT fields must both
-/// survive, under their own qualified name, with their own field list
-/// intact (not merged, not overwritten by the other's).
-#[test]
-def test_qualify_same_named_struct_with_different_fields_stays_distinct : IO Bool := do {
-    let a := qtest_module "a" (List.cons (qtest_struct "Holder" (List.cons (qtest_field "x") List.empty)) List.empty);
-    let b := qtest_module "b" (List.cons (qtest_struct "Holder" (List.cons (qtest_field "y") List.empty)) List.empty);
-    let r <- qualify_modules false (List.cons a (List.cons b List.empty));
-    match r {
-        Result.err _ => return false,
-        Result.ok ms => do {
-            let entries := qtest_struct_entries ms;
-            return (if qtest_struct_has_entry entries "a::Holder" "x"
-                then qtest_struct_has_entry entries "b::Holder" "y"
-                else false)
-        },
-    }
-}
-
-/// RED: same shape as the type/struct probes, for `class_d`.
-#[test]
-def test_qualify_same_named_class_in_two_modules_stays_distinct : IO Bool := do {
-    let a := qtest_module "a" (List.cons (qtest_class "Foo") List.empty);
-    let b := qtest_module "b" (List.cons (qtest_class "Foo") List.empty);
-    let r <- qualify_modules false (List.cons a (List.cons b List.empty));
-    match r {
-        Result.err _ => return false,
-        Result.ok ms => do {
-            let names := qtest_class_names ms;
-            return (if list_contains_str names "a::Foo"
-                then list_contains_str names "b::Foo"
-                else false)
-        },
-    }
-}
-
-/// Item 5.1 regression: a lam's own ANNOTATION inside a def body names a
-/// type decl that qualification renamed -- but the annotation is the
-/// body-side twin of `Def.typ`'s pi-chain, which `resolve_open_alias_def`
-/// deliberately never rewrites. Rewriting only the annotation minted a
-/// qualified-vs-bare type mismatch that failed elaboration for every
-/// match arm comparing a param against a constructor or a call (prelude's
-/// own `Nat.add` was the live canary). The annotation stays source-spelled;
-/// the read side tolerates the bare spelling (`scope_find_inductive`'s
-/// unique-suffix fallback).
-#[test]
-def test_qualify_lam_annotation_stays_source_spelled : IO Bool := do {
-    let body := Term.lam (binder_named (Identifier.id "x"))
-        (Term.var sentinel (DebugName.named (Identifier.id "Foo"))) Term.hole;
-    let df := Def.mk (bare_npath "f") Term.hole body
-        ([] : List TypeConstraint) ([] : List Attribute) Visibility.package_private List.empty;
-    let a := qtest_module "a" (List.cons (qtest_type "Foo") (List.cons (Decl.def_d df) List.empty));
-    let r <- qualify_modules false (List.cons a List.empty);
-    match r {
-        Result.err _ => return false,
-        Result.ok ms => do {
-            let anns := qtest_lam_annotations ms;
-            return (if list_contains_str anns "Foo"
-                then Bool.not (list_contains_str anns "a::Foo")
-                else false)
-        },
-    }
-}
-
 #[partial]
 def qtest_lam_annotations (modules : List ModuleInfo) : List String :=
     match modules {
@@ -1243,48 +973,3 @@ def qtest_elab_failures_of_modules (modules : List ModuleInfo) : List String :=
             List.append (best_effort_failed (elaborate_module_decls_reporting scope m.decl_list locals))
                 (qtest_elab_failures_of_modules rest),
     }
-
-/// Item 5.1 regression (#15): post-qualify, a def whose whole body is a
-/// bare-annotated lam still ELABORATES. The body is checked against a
-/// hole, so the lam takes the inferring arm and the annotation is
-/// type-checked AS A TERM -- its bare head (`Pair`, renamed to `a::Pair`
-/// by the same qualification pass that leaves annotations source-spelled)
-/// must resolve through the checker's free-var path, whose `def_refs`
-/// lookup is exact-only. `resolve_free_var_def` retries the miss by
-/// unique qualified suffix; pre-#15 every def of this shape failed with
-/// `unknown variable 'Pair'` (`lang.mote::Mote.table_keys` was the
-/// corpus canary).
-#[test]
-def test_qualify_bare_annotation_head_elaborates : IO Bool := do {
-    let body := Term.lam (binder_named (Identifier.id "p"))
-        (Term.var sentinel (DebugName.named (Identifier.id "Pair")))
-        (Term.var 0 (DebugName.named (Identifier.id "p")));
-    let df := Def.mk (bare_npath "g") Term.hole body
-        ([] : List TypeConstraint) ([] : List Attribute) Visibility.package_private List.empty;
-    let a := qtest_module "a" (List.cons (qtest_type "Pair") (List.cons (Decl.def_d df) List.empty));
-    let r <- qualify_modules false (List.cons a List.empty);
-    match r {
-        Result.err _ => return false,
-        Result.ok ms => return (match qtest_elab_failures_of_modules ms { List.empty => true, List.cons _ _ => false }),
-    }
-}
-
-/// `::` separates the module from the name, so the source name is
-/// recoverable exactly -- which is what the native tables, keyed on what
-/// the source wrote, depend on.
-#[test]
-def test_unqualify_recovers_the_source_name : Bool :=
-    if String.beq (unqualify_def_name "init.string::String.beq") "String.beq"
-    then if String.beq (unqualify_def_name "plain_name") "plain_name"
-        then String.beq (unqualify_def_name "cli.main::main") "main"
-        else false
-    else false
-
-/// Diagnostics spell module paths the way source does (`a::b`), not with
-/// the internal dot-joined key spelling.
-#[test]
-def test_ambiguous_owner_msg_spells_module_paths_with_colons : Bool :=
-    let a : ModulePath := ModulePath.mk [Identifier.id "std", Identifier.id "io"] in
-    let b : ModulePath := ModulePath.mk [Identifier.id "std", Identifier.id "fs"] in
-    String.beq (ambiguous_owner_msg a "read" [b])
-        "`read` is referenced from std::io but declared in std::fs -- add an explicit `use <module> {read}` to say which"

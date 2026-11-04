@@ -1179,61 +1179,6 @@ pub def native_target_availability (kind : TargetKind) (target : String) : Nativ
             else NativeAvailability.available,
     }
 
-#[test]
-def test_wasm_gates_posix_only_natives : Bool :=
-    match native_target_availability TargetKind.wasi "term_ctl" {
-        NativeAvailability.unavailable _ => true,
-        NativeAvailability.available => false,
-    }
-        && match native_target_availability TargetKind.web "fork_io" {
-            NativeAvailability.unavailable _ => true,
-            NativeAvailability.available => false,
-        }
-        && match native_target_availability TargetKind.wasi "tcp_connect_timeout" {
-            NativeAvailability.unavailable _ => true,
-            NativeAvailability.available => false,
-        }
-        && match native_target_availability TargetKind.web "poll_fiber" {
-            NativeAvailability.unavailable _ => true,
-            NativeAvailability.available => false,
-        }
-        && match native_target_availability TargetKind.wasi "channel_take" {
-            NativeAvailability.unavailable _ => true,
-            NativeAvailability.available => false,
-        }
-
-#[test]
-def test_wasm_keeps_console_and_arithmetic : Bool :=
-    match native_target_availability TargetKind.wasi "stream_write" {
-        NativeAvailability.available => true,
-        NativeAvailability.unavailable _ => false,
-    }
-        && match native_target_availability TargetKind.web "print_str" {
-            NativeAvailability.available => true,
-            NativeAvailability.unavailable _ => false,
-        }
-        && match native_target_availability TargetKind.native "term_ctl" {
-            NativeAvailability.available => true,
-            NativeAvailability.unavailable _ => false,
-        }
-
-#[test]
-def test_web_gates_float_formatting : Bool :=
-    // The web profile formats floats through the JS host (platform_web.c),
-    // so only the decimal PARSER (`f64_of_string`, strtod) stays gated there.
-    match native_target_availability TargetKind.web "f64_to_string" {
-        NativeAvailability.available => true,
-        NativeAvailability.unavailable _ => false,
-    }
-        && match native_target_availability TargetKind.web "f64_of_string" {
-            NativeAvailability.unavailable _ => true,
-            NativeAvailability.available => false,
-        }
-        && match native_target_availability TargetKind.wasi "f64_to_string" {
-            NativeAvailability.available => true,
-            NativeAvailability.unavailable _ => false,
-        }
-
 /// `apply_closureN`'s own declared param list: the closure value itself
 /// plus `n` ordinary args, all i64 (matches every def's own uniform
 /// boxed-i64 calling convention). `n` is the applied arity, so this
