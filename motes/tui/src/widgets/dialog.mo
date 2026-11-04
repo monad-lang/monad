@@ -388,69 +388,107 @@ def read_events (r : InputReader) : IO (Pair (List Event) InputReader) := do {
     else IO.pure (Input.step r List.empty chunk)
 }
 
-/// Repaint when the dialog or the terminal size changed, then poll for
-/// input. Decoded events are queued and folded in order. A lone ESC
-/// cancels (or leaves an open field); any other incomplete prefix stays
-/// pending in the reader, so the loop never blocks on it.
+/// The modal's loop state: the dialog, the input decoder, decoded events
+/// not yet folded, the last painted screen, and whether a repaint is due.
+struct ModalState {
+    d : DialogModel,
+    r : InputReader,
+    queued : List Event,
+    prev : Option Screen,
+    dirty : Bool,
+}
+
+/// What one modal step decided: keep going, or end with this answer.
+type ModalNext {
+    more (s : ModalState),
+    done (result : Pair DialogModel DialogStep),
+}
+
+/// The modal loop, one step per call, as plain recursion with a single
+/// self-call: the IO do-bind fusion leaves it in tail position and
+/// `tco.mo` makes it a back-edge, so a dialog left open for hours polls in
+/// constant stack (`plans/bootstrapping/heapless-loops.md`). The old
+/// multi-function loop nested a native frame per 100 ms poll and
+/// overflowed its fiber's stack.
 #[partial]
-def modal_loop (paint : Option Screen -> DialogModel -> IO (Pair Screen DialogModel)) (d : DialogModel) (r : InputReader) (queued : List Event) (prev : Option Screen) (dirty : Bool) : IO (Pair DialogModel DialogStep) := do {
-    let size <- Terminal.size;
-    let resized : Bool := match prev {
-        Option.none => true,
-        Option.some s => match size { Pair.pair rows cols => Bool.not (Bool.and (s.rows == rows) (s.cols == cols)) },
-    };
-    let painted <- if Bool.or dirty resized
-        then paint prev d
-        else IO.pure (Pair.pair (match prev { Option.some s => s, Option.none => empty_screen 0 0 }) d);
-    match painted {
-        Pair.pair screen d1 => modal_events paint d1 r queued screen,
+def modal_loop (paint : Option Screen -> DialogModel -> IO (Pair Screen DialogModel)) (s : ModalState) : IO (Pair DialogModel DialogStep) := do {
+    let next <- modal_step paint s;
+    // Annotated local: the do-binder's own type is not inferred.
+    let decided : ModalNext := next;
+    match decided {
+        ModalNext.done result => IO.pure result,
+        ModalNext.more s2 => modal_loop paint s2,
     }
 }
 
-#[partial]
-def modal_events (paint : Option Screen -> DialogModel -> IO (Pair Screen DialogModel)) (d : DialogModel) (r : InputReader) (queued : List Event) (screen : Screen) : IO (Pair DialogModel DialogStep) :=
-    match queued {
-        List.cons e rest =>
-            match Dialog.apply d e {
-                Pair.pair d2 step => match step {
-                    Option.some s => IO.pure (Pair.pair d2 s),
-                    Option.none => modal_loop paint d2 r rest (Option.some screen) (changed d d2),
-                },
-            },
-        List.empty => do {
-            let ready <- Terminal.poll 100;
-            if Bool.not ready
-            then
-                if r.closed
-                then IO.pure (Pair.pair d DialogStep.cancel)
-                else if r.pending == "\u{1b}"
-                then lone_escape paint d r screen
-                else modal_loop paint d r List.empty (Option.some screen) false
-            else do {
-                let got <- read_events r;
-                match got {
-                    Pair.pair evs r2 =>
-                        if Bool.and r2.closed (List.is_empty evs)
-                        then IO.pure (Pair.pair d DialogStep.cancel)
-                        else modal_loop paint d r2 evs (Option.some screen) false,
-                }
-            }
+/// One modal step: repaint when the dialog or the terminal size changed,
+/// then fold one queued event or poll stdin once.
+def modal_step (paint : Option Screen -> DialogModel -> IO (Pair Screen DialogModel)) (s : ModalState) : IO ModalNext := do {
+    let size <- Terminal.size;
+    let resized : Bool := match s.prev {
+        Option.none => true,
+        Option.some p => match size { Pair.pair rows cols => Bool.not (Bool.and (p.rows == rows) (p.cols == cols)) },
+    };
+    let painted <- if Bool.or s.dirty resized
+        then paint s.prev s.d
+        else IO.pure (Pair.pair (match s.prev { Option.some p => p, Option.none => empty_screen 0 0 }) s.d);
+    match painted {
+        Pair.pair screen d1 => modal_advance { s with d := d1, prev := Option.some screen, dirty := false },
+    }
+}
+
+/// Fold the next queued event, or poll stdin once when none is queued.
+def modal_advance (s : ModalState) : IO ModalNext :=
+    match s.queued {
+        List.cons e rest => IO.pure (Modal.fold s e rest),
+        List.empty => modal_poll s,
+    }
+
+/// Fold one decoded event: an answer ends the modal; otherwise a repaint
+/// is due only if the event changed what a paint shows.
+def Modal.fold (s : ModalState) (e : Event) (rest : List Event) : ModalNext :=
+    match Dialog.apply s.d e {
+        Pair.pair d2 step => match step {
+            Option.some a => ModalNext.done (Pair.pair d2 a),
+            Option.none => ModalNext.more { s with d := d2, queued := rest, dirty := changed s.d d2 },
         },
     }
 
-/// A lone ESC is the Escape key: it leaves an open field or note, and
-/// otherwise cancels the dialog.
-#[partial]
-def lone_escape (paint : Option Screen -> DialogModel -> IO (Pair Screen DialogModel)) (d : DialogModel) (r : InputReader) (screen : Screen) : IO (Pair DialogModel DialogStep) :=
-    let r2 : InputReader := { r with pending := "" } in
-    modal_loop paint d r2 [Event.key Key.escape] (Option.some screen) false
+/// Wait up to 100 ms for input. A quiet poll with a lone ESC pending is
+/// the Escape key; EOF cancels.
+def modal_poll (s : ModalState) : IO ModalNext := do {
+    let ready <- Terminal.poll 100;
+    if ready
+    then modal_read s
+    else IO.pure (Modal.idle s)
+}
+
+/// A quiet poll: EOF cancels, a pending lone ESC becomes the Escape key
+/// (it leaves an open field or note, else cancels), anything else waits.
+def Modal.idle (s : ModalState) : ModalNext :=
+    if s.r.closed
+    then ModalNext.done (Pair.pair s.d DialogStep.cancel)
+    else if s.r.pending == "\u{1b}"
+    then ModalNext.more { s with r := { s.r with pending := "" }, queued := [Event.key Key.escape] }
+    else ModalNext.more s
+
+def modal_read (s : ModalState) : IO ModalNext := do {
+    let got <- read_events s.r;
+    match got {
+        Pair.pair evs r2 =>
+            if Bool.and r2.closed (List.is_empty evs)
+            then IO.pure (ModalNext.done (Pair.pair s.d DialogStep.cancel))
+            else IO.pure (ModalNext.more { s with r := r2, queued := evs }),
+    }
+}
 
 /// Run the dialog over stdin until it is chosen, cancelled, submitted or
 /// stdin closes. The final dialog rides along so the caller can read the
 /// note.
 pub def Dialog.modal (paint : Option Screen -> DialogModel -> IO (Pair Screen DialogModel)) (d : DialogModel) : IO (Pair DialogModel DialogStep) := do {
     let size <- Terminal.size;
-    match size {
-        Pair.pair rows cols => modal_loop paint d (input_reader rows cols) List.empty Option.none true,
-    }
+    let start : ModalState := match size {
+        Pair.pair rows cols => { d := d, r := input_reader rows cols, queued := List.empty, prev := Option.none, dirty := true },
+    };
+    modal_loop paint start
 }

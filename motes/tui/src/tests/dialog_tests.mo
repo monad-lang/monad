@@ -6,8 +6,9 @@ use lib::widgets::dialog {
     DialogModel, DialogOption, DialogStep, Dialog.make, Dialog.step, Dialog.paste,
     Dialog.note_text, Dialog.with_default, Dialog.apply, Dialog.rows, Dialog.body_rows,
     Dialog.total_rows, Dialog.frame_width, Dialog.frame_height, Dialog.content_width,
-    Dialog.with_notes, Dialog.clamp_scroll,
+    Dialog.with_notes, Dialog.clamp_scroll, ModalState, ModalNext, Modal.fold, Modal.idle,
 }
+use lib::input {InputReader, input_reader}
 use lib::types {Key, Event, MouseEvent, MouseButton}
 use lib::widget {SizedWidget}
 use std::list {List.length}
@@ -225,3 +226,47 @@ def test_clamp_scroll_stops_at_the_last_body_row : Bool :=
     let clamped : DialogModel := Dialog.clamp_scroll 14 8 far in
     let kept : DialogModel := Dialog.clamp_scroll 14 8 d in
     clamped.scroll == 6 && kept.scroll == 0
+
+// ── the modal step ──────────────────────────────────────────────────────
+
+def modal_of (d : DialogModel) (r : InputReader) : ModalState :=
+    { d := d, r := r, queued := List.empty, prev := Option.none, dirty := false }
+
+#[test]
+def test_quiet_poll_with_a_lone_escape_queues_the_key : Bool :=
+    let r0 : InputReader := input_reader 24 80 in
+    let r : InputReader := { r0 with pending := "\u{1b}" } in
+    match Modal.idle (modal_of opened r) {
+        ModalNext.more s => String.is_empty s.r.pending && List.length s.queued == 1,
+        ModalNext.done _ => false,
+    }
+
+#[test]
+def test_escape_in_an_open_field_keeps_the_modal_running : Bool :=
+    match Modal.fold (modal_of opened (input_reader 24 80)) (Event.key Key.escape) List.empty {
+        ModalNext.more s => s.dirty && (match s.d.field { Option.none => true, Option.some _ => false }),
+        ModalNext.done _ => false,
+    }
+
+#[test]
+def test_escape_on_the_options_ends_the_modal : Bool :=
+    match Modal.fold (modal_of dialog (input_reader 24 80)) (Event.key Key.escape) List.empty {
+        ModalNext.done pr => match pr { Pair.pair _ step => match step { DialogStep.cancel => true, _ => false } },
+        ModalNext.more _ => false,
+    }
+
+#[test]
+def test_a_closed_reader_cancels_on_a_quiet_poll : Bool :=
+    let r0 : InputReader := input_reader 24 80 in
+    let r : InputReader := { r0 with closed := true } in
+    match Modal.idle (modal_of dialog r) {
+        ModalNext.done _ => true,
+        ModalNext.more _ => false,
+    }
+
+#[test]
+def test_a_no_op_event_needs_no_repaint : Bool :=
+    match Modal.fold (modal_of dialog (input_reader 24 80)) (Event.mouse (MouseEvent.press MouseButton.left 1 1)) List.empty {
+        ModalNext.more s => Bool.not s.dirty,
+        ModalNext.done _ => false,
+    }
