@@ -70,6 +70,10 @@ set -euo pipefail
 root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$root"
 
+# Fail fast on a front-end -> backend cycle: the backend is the `codegen`
+# mote and `lang` must stay its dependency, never the other way round.
+scripts/check-lang-no-codegen.sh
+
 # shellcheck disable=SC2034  # read by the sourced helper, not here
 MONAD_REPO_ROOT="$root"
 # shellcheck source=scripts/lib/bootstrap-dir.sh
