@@ -129,9 +129,9 @@ def check_decl_view (kinds : TypeKinds) (ctors : HashMap String Bool) (borrows :
 def is_dict_value_def (df : Def) : Bool :=
     String.starts_with "__Dict_" (last_name_segment (show_name_path df.name))
 
-/// The segment after the LAST `::` (or the whole string). Mirrors
-/// `module.mo`'s `unqualify_instance_name`, which cannot be imported here
-/// without a cycle.
+/// The segment after the LAST `::` (or the whole string).
+/// `name_text`'s `unqualify_def_name` is the first-`::` twin; this needs
+/// the last-`::` spelling, so it keeps its own walk.
 #[partial]
 def last_name_segment (s : String) : String :=
     let idx : I64 := last_sep_index s 0 (String.length s) (0 - 1) in

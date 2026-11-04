@@ -33,7 +33,7 @@
 /// index 0 (innermost), matching `lang/core_eval.mo`'s own
 /// `extend_env_with_fields`/`dispatch_arm` runtime behavior exactly.
 /// `push_locals` below is the one place that convention is applied.
-use lib::codegen::symbols {unqualify_def_name}
+use lib::name_text {unqualify_def_name}
 use lib::core_eval {value_as_i64, value_as_str}
 use lang::core_ir {IrLit, match_}
 use lib::core_value {Value}

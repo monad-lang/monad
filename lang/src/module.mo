@@ -18,6 +18,7 @@ use lang::types {
   use_bare, use_glob, use_items, use_name, use_rename, use_sub, use_sub_rename,
   visibility_beq,
 }
+use lib::name_text {unqualify_def_name}
 use lib::parser {
   LocatedDecls, decls_parser, decls_parser_located, decls_parser_located_with_ranges,
   decls_parser_strict, module_path_to_string,
@@ -2304,23 +2305,7 @@ def is_dict_value_def (df : Def) : Bool :=
     // which does not START with `__Dict_`. Missing that would put dict
     // values back through the type checker, and they carry a deliberate
     // `Term.var 0` sentinel convention that does not survive it.
-    String.starts_with "__Dict_" (unqualify_instance_name (show_name_path df.name))
-
-/// The part of a synthesized name after its `module::` qualifier, or the
-/// whole name when it has none. Mirrors `lang.codegen.emit`'s own
-/// `unqualify_def_name`; kept here rather than imported because
-/// `lang.module` is a DEPENDENCY of `lang.codegen.emit`, not the other
-/// way round.
-#[partial]
-def unqualify_instance_name (s : String) : String :=
-    let idx := find_instance_qualifier_sep s 0 (String.length s) in
-    if I64.beq idx (0 - 1) then s else String.slice s (idx + 2) (String.length s - idx - 2)
-
-#[partial]
-def find_instance_qualifier_sep (s : String) (i : I64) (n : I64) : I64 :=
-    if I64.gt (i + 2) n then (0 - 1)
-    else if String.beq (String.slice s i 2) "::" then i
-    else find_instance_qualifier_sep s (i + 1) n
+    String.starts_with "__Dict_" (unqualify_def_name (show_name_path df.name))
 
 /// `use_d`/`open_d`/`infix_d` genuinely have nothing to type-check (no
 /// term/type of their own) — the `_ => List.empty` catch-all is correct

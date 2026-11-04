@@ -18,7 +18,8 @@ use lang::types {
   binder_is_explicit, binder_name, param_many, term_peel,
 }
 use llvm::ir {DbgLoc, LLVMInstruction, LLVMValue}
-use lib::codegen::symbols {def_symbol_name, extract_base_name, symbol_identifier, unqualify_def_name}
+use lib::codegen::symbols {def_symbol_name, extract_base_name, symbol_identifier}
+use lib::name_text {unqualify_def_name}
 use lang::codegen::util {identifier_eq}
 use std::map {HashMap}
 

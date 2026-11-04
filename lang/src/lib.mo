@@ -21,5 +21,7 @@ pub use lib::pretty {show_decls}
 pub use lib::features {
   DepPolicy, FeaturePackage, FeatureSelection, Features.resolve,
 }
-pub use lib::codegen::emit {compile_loaded_modules_to_ir_with_debug}
+// The backend is the `codegen` mote, which depends on `lang`. Re-exporting
+// its pipeline entry here would make `lang` depend back on `codegen`, so
+// consumers import `codegen::emit` directly.
 pub use llvm::ir {LLVMModule, emit_module}

@@ -25,7 +25,8 @@ use lib::scope {
   build_scope_from_decls, collect_open_aliases, modpath_eq, modpath_of, resolve_open_alias_decls,
 }
 use lang::codegen::free_names {collect_referenced_names, free_names_of_term}
-use lib::codegen::symbols {bare_modpath, bare_npath, symbol_identifier, unqualify_def_name}
+use lib::codegen::symbols {bare_modpath, bare_npath, symbol_identifier}
+use lib::name_text {unqualify_def_name}
 use lib::codegen::util {
   join_semicolon_msgs, list_contains_str
 }

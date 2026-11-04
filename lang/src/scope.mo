@@ -23,7 +23,7 @@ use lib::typecheck::traverse {con_map_children, native_map_children, term_map_ch
 // same whole-graph known-name set the `check` path's `elaborate_def_typs`
 // uses -- see `registered_def_type`'s own doc comment for why.
 use lib::elaborate {elaborate_def, names_of_decls}
-use lib::codegen::symbols {string_matches_bare, unqualify_def_name}
+use lib::name_text {string_matches_bare, unqualify_def_name}
 // `ScopeData.def_refs` is a `std.map` `HashMap ModulePath ScopeDef` — see
 // `bench/scope_lookup.mo` — so this module names what it reaches from
 // `std::map` like any other import. It used to be an empty import, to
@@ -7466,22 +7466,6 @@ def find_unresolved_class_calls_opt_list (classes : List Class) (args : List (Op
 pub type DefConstraintEntry {
     mk (name : NamePath) (constraints : List TypeConstraint),
 }
-
-/// The part of a compiler-MINTED name after its `module::` qualifier, or
-/// the whole name when it has none. Mirrors `lang.module`'s own
-/// `unqualify_instance_name` (and `lang.codegen.emit`'s
-/// `unqualify_def_name`); kept here rather than imported because
-/// `lang.module` is a DEPENDENCY of this file, not the other way round.
-#[partial]
-pub def unqualify_minted_name (s : String) : String :=
-    let idx := find_minted_name_sep s 0 (String.length s) in
-    if I64.beq idx (0 - 1) then s else String.slice s (idx + 2) (String.length s - idx - 2)
-
-#[partial]
-def find_minted_name_sep (s : String) (i : I64) (n : I64) : I64 :=
-    if I64.gt (i + 2) n then (0 - 1)
-    else if String.beq (String.slice s i 2) "::" then i
-    else find_minted_name_sep s (i + 1) n
 
 /// Strip EVERY leading `Term.pi` binder, all three flavours included
 /// (unlike `return_type_after_n_args`, which strips a fixed `n` and stops at

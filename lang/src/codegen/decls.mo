@@ -18,7 +18,8 @@ use lang::types {
   StructField, Term, Visibility, concrete, id_eq, sentinel,
 }
 use lib::module {ModuleInfo}
-use lib::codegen::symbols {def_symbol_name, unqualify_def_name}
+use lib::codegen::symbols {def_symbol_name}
+use lib::name_text {unqualify_def_name}
 use lib::codegen::free_names {collect_referenced_names}
 use lib::codegen::util {}
 use std::map {HashMap}

@@ -16,8 +16,8 @@ use llvm::ir {LLVMDeclaration, NativeOp}
 use llvm::target {TargetKind}
 use lang::codegen::symbols {
   extract_base_name, replace_dots_with_underscores, symbol_identifier,
-  unqualify_def_name,
 }
+use lib::name_text {unqualify_def_name}
 use lib::codegen::util {}
 use std::map {HashMap}
 

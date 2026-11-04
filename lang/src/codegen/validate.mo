@@ -37,7 +37,8 @@ use lib::codegen::natives {
   runtime_declarations, NativeAvailability, native_target_availability,
 }
 use llvm::target {TargetKind}
-use lang::codegen::symbols {def_symbol_name, ends_with_main, name_path_to_str, unqualify_def_name}
+use lang::codegen::symbols {def_symbol_name, ends_with_main, name_path_to_str}
+use lang::name_text {unqualify_def_name}
 use lib::codegen::util {
   dedup_strs, join_semicolon_msgs, list_contains_str
 }

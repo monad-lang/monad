@@ -67,8 +67,8 @@ use lib::codegen::symbols {
   bare_npath, mangle_identifiers, name_path_to_str, module_path_to_str,
   ref_symbol_name,
   replace_dots_with_underscores, string_find_last, symbol_identifier,
-  unqualify_def_name,
 }
+use lib::name_text {unqualify_def_name}
 use lib::elaborate {names_of_decls}
 use lib::codegen::util {
   dedup_idents, dedup_idents_go, dedup_strs, dedup_strs_go, drop_last_instr,

@@ -10,7 +10,7 @@ use lang::types {
 // `HashMap` is what this file reaches from `std.map`, named like any
 // other import — see scope.mo's comment on the same line for the history.
 use std::map {HashMap}
-use lib::codegen::symbols {unqualify_def_name}
+use lib::name_text {unqualify_def_name}
 use llvm::strmap {str_map_empty, str_map_insert, str_map_lookup}
 
 
