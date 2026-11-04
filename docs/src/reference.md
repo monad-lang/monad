@@ -521,9 +521,9 @@ The prefix applies to the whole group, so `(!x y : I64)` makes *both* names
 linear. A destructured parameter takes one as well — `(!{fst, snd} : Coord)` —
 though that spelling is self-hosted only; the bootstrap host rejects it.
 
-> **Nothing enforces multiplicities in either implementation.** Lowering drops
-> the annotation and every binder becomes `Many` — see
-> [Linear Types](./linear-types.md).
+> **The self-hosted compiler enforces multiplicities; the Rust host does
+> not.** An erased (`%`) parameter may not be used at run time, a linear one
+> must be used exactly once — see [Linear Types](./linear-types.md).
 
 ## Modules
 
