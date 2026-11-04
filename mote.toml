@@ -27,6 +27,7 @@ members = [
   "init",
   "std",
   "lang",
+  "codegen",
   "cli",
   "llvm",
   "runtime",
@@ -85,6 +86,9 @@ path = "build"
 
 [workspace.dependencies.clap]
 path = "motes/clap"
+
+[workspace.dependencies.codegen]
+path = "codegen"
 
 [workspace.dependencies.crypto]
 path = "motes/crypto"
