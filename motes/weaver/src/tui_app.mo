@@ -1345,7 +1345,7 @@ def persist_chunk (store : Option StoreState) (frag : String) : IO Unit :=
 // ── transcript rendering ─────────────────────────────────────────────────
 
 def transcript_lines_of_messages (ms : List Message) : List TLine :=
-    List.flatten (List.map render_message ms)
+    List.flatten (List.map TuiApp.render_message ms)
 
 #[partial]
 def take_strings (n : I64) (xs : List String) : List String :=
@@ -1381,7 +1381,7 @@ def tool_result_lines (output : String) (is_error : Bool) : List TLine :=
 /// echoed prompt's role; tool/system output keeps its one-word label so
 /// the theme can still classify it. Only an assistant `text` block is
 /// Markdown; a tool result that happens to carry text stays literal.
-def render_message (m : Message) : List TLine :=
+pub def TuiApp.render_message (m : Message) : List TLine :=
     let markdown : Bool := match m.role {
         Role.assistant => true,
         _ => false,
@@ -1412,7 +1412,10 @@ def render_content_lines (markdown : Bool) (c : Content) : List TLine :=
             let n : I64 := String.length s in
             let marker : String := String.concat "[thinking · "
                 (String.concat (I64.to_string n) " chars · ctrl+o]") in
-            List.cons (TLine.thinking_marker marker) (List.map TLine.thinking_detail (theme_split_lines s)),
+            // A blank line after the block keeps the reasoning (collapsed or
+            // not) apart from the answer and the tool log below it.
+            List.cons (TLine.thinking_marker marker)
+                (List.append (List.map TLine.thinking_detail (theme_split_lines s)) [TLine.plain ""]),
     }
 
 #[partial]

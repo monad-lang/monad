@@ -17,8 +17,9 @@ use weaver::policy {Mode}
 use std::map {BTreeMap}
 use std::list {List.length}
 use tui::text {Text.width}
-use weaver::ui::live {LiveModel, LiveView, Live.start, Live.request_stop, Live.status_text, Live.thinking_height, Live.text_height}
-use weaver::ui::rows {DisplayRow, Rows.of_line, Rows.wrap, Rows.cap_bytes}
+use weaver::ui::live {LiveModel, LiveView, Live.start, Live.request_stop, Live.status_text, Live.thinking_height, Live.text_height,
+    Live.separator_height, Live.rows}
+use weaver::ui::rows {DisplayRow, Rows.of_line, Rows.wrap, Rows.cap_bytes, Rows.length}
 use weaver::ui::banner {Banner.shown, Banner.hidden}
 use weaver::model {
     TuiModel, init_tui_model,
@@ -370,6 +371,23 @@ def test_live_stream_reserves_rows : Bool :=
     let v : LiveView := Model.live_view m in
     Model.body_height m == panel_height m - 1i64 - Live.thinking_height v m.live - Live.text_height v m.live
         && I64.lt 0 (Live.text_height v m.live)
+
+/// Reasoning and answer both streaming: one rule row parts them, and the
+/// body gives it up.
+#[test]
+def test_live_separator_between_thinking_and_text : Bool :=
+    let m : TuiModel := with_live live_model (fn (l : LiveModel) => { l with thinking := "weighing it", text := "the reply" }) in
+    let v : LiveView := Model.live_view m in
+    let rows : List DisplayRow := Live.rows v m.live in
+    Live.separator_height m.live == 1
+        && Model.body_height m == panel_height m - 2i64 - Live.thinking_height v m.live - Live.text_height v m.live
+        && Rows.length rows == 2i64 + Live.thinking_height v m.live + Live.text_height v m.live
+
+/// Only one of them: no separator.
+#[test]
+def test_live_no_separator_without_thinking : Bool :=
+    let m : TuiModel := with_live live_model (fn (l : LiveModel) => { l with text := "the reply" }) in
+    Live.separator_height m.live == 0
 
 #[test]
 def test_detail_lines_are_hidden_until_ctrl_o : Bool :=

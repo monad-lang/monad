@@ -6,7 +6,8 @@
 /// own, already pinned by their own test files.
 use shuttle::agent {RunState, silent_sleep, silent_usage, silent_stop}
 use shuttle::context {usage_zero}
-use shuttle::message {Usage}
+use shuttle::message {Usage, Message}
+use shuttle::message_types {Role, Content}
 use shuttle::gate {Gate}
 use shuttle::provider {ProviderConfig, Wire}
 use shuttle::registry {ToolRegistry}
@@ -29,7 +30,7 @@ use std::path {Path, Path.of}
 use std::map {Map, BTreeMap}
 use weaver::tui_app {
     TuiApp.update, TuiApp.subscriptions, turn_never_ran, TuiApp.resume_rows, TuiApp.resume_option,
-    TuiApp.resume_action_at, TuiApp.settings_options, activity_name, markdown_body_rows,
+    TuiApp.resume_action_at, TuiApp.settings_options, activity_name, markdown_body_rows, TuiApp.render_message,
     ResumeAction, ResumeChoice,
 }
 use weaver::commands {SessionPage, Commands.session_page}
@@ -1043,4 +1044,20 @@ def test_resume_rows_offer_all_repos : Bool :=
             List.length opts == 4
                 && (match TuiApp.resume_action_at 2 acts { ResumeAction.resume_all => true, _ => false })
                 && (match TuiApp.resume_action_at 3 acts { ResumeAction.resume_cancel => true, _ => false }),
+    }
+
+/// A finished thinking block ends with a blank line, so the answer below
+/// it stands apart whether the block is collapsed or expanded.
+#[test]
+def test_thinking_block_is_followed_by_a_blank_line : Bool :=
+    let m : Message := { role := Role.assistant, content := [Content.thinking "weigh it\nthen answer" "", Content.text "the answer"] } in
+    let ls : List TLine := TuiApp.render_message m in
+    List.length ls == 5
+        && (match line_at 3 ls { Option.some l => Bool.and (String.is_empty l.text) (Bool.not l.detail), Option.none => false })
+
+#[partial]
+def line_at (i : I64) (ls : List TLine) : Option TLine :=
+    match ls {
+        List.empty => Option.none,
+        List.cons l rest => if i < 1 then Option.some l else line_at (i - 1) rest,
     }

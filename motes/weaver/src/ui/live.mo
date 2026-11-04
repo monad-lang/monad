@@ -163,9 +163,11 @@ def content_cap (v : LiveView) : I64 :=
 
 pub def Live.thinking_cap (v : LiveView) : I64 := content_cap v / 2
 
-pub def Live.text_cap (v : LiveView) : I64 :=
+/// The answer's share; the separator row comes out of it.
+pub def Live.text_cap (v : LiveView) (m : LiveModel) : I64 :=
     let c : I64 := content_cap v in
-    c - (c / 2)
+    let cap : I64 := c - (c / 2) - Live.separator_height m in
+    if cap < 0 then 0 else cap
 
 def last_rows (cap : I64) (all : List DisplayRow) : List DisplayRow :=
     let n : I64 := Rows.length all in
@@ -187,11 +189,21 @@ pub def Live.thinking_rows (v : LiveView) (m : LiveModel) : List DisplayRow :=
 pub def Live.text_rows (v : LiveView) (m : LiveModel) : List DisplayRow :=
     let src : String := Live.text_source m in
     if String.is_empty src then List.empty
-    else last_rows (Live.text_cap v) (Rows.markdown v.colors v.width src)
+    else last_rows (Live.text_cap v m) (Rows.markdown v.colors v.width src)
 
-/// The whole live block: reasoning, answer, then the spinner row.
+/// Reasoning and answer both streaming: a dim rule row parts them.
+pub def Live.separator_height (m : LiveModel) : I64 :=
+    if Bool.or (String.is_empty m.thinking) (String.is_empty m.text) then 0 else 1
+
+pub def Live.separator_rows (v : LiveView) (m : LiveModel) : List DisplayRow :=
+    if Bool.or (Live.separator_height m == 0) (v.width < 1) then List.empty
+    else [Rows.plain (theme_thinking_style_with v.colors) (String.repeat "╌" v.width)]
+
+/// The whole live block: reasoning, a separator, the answer, then the
+/// spinner row.
 pub def Live.rows (v : LiveView) (m : LiveModel) : List DisplayRow :=
-    List.append (Live.thinking_rows v m) (List.append (Live.text_rows v m) [Live.status_row v m])
+    List.append (Live.thinking_rows v m)
+        (List.append (Live.separator_rows v m) (List.append (Live.text_rows v m) [Live.status_row v m]))
 
 pub def Live.thinking_height (v : LiveView) (m : LiveModel) : I64 :=
     Rows.length (Live.thinking_rows v m)
@@ -201,7 +213,7 @@ pub def Live.text_height (v : LiveView) (m : LiveModel) : I64 :=
 
 /// The rows `Live.rows` takes.
 pub def Live.height (v : LiveView) (m : LiveModel) : I64 :=
-    1 + Live.thinking_height v m + Live.text_height v m
+    1 + Live.thinking_height v m + Live.separator_height m + Live.text_height v m
 
 // ── the usage file ───────────────────────────────────────────────────────
 
