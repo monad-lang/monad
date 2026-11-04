@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 # Gate weaver's terminal tests in CI.
 #
-# The drivers live in motes/weaver/src/mty and run under `monad test` through
-# the one file motes/weaver/test/mty_tests.mo (one compile for the whole
-# suite), with the generic pty harness in motes/mty (compiled-only
+# The drivers live in motes/weaver/src/pty and run under `monad test` through
+# the one file motes/weaver/test/pty_tests.mo (one compile for the whole
+# suite), with the generic pty harness in motes/pty (compiled-only
 # `#[extern "c"]` FFI). The sessions S6 scenario (an 18 MB store with an RSS
-# bound) is in weaver::mty::sessions. See
+# bound) is in weaver::pty::sessions. See
 # plans/implementations/2026-10-25-weaver-pty-monad-tests.md.
 #
 # ISOLATION. Every driver creates its own temp root and points the spawned
@@ -63,12 +63,12 @@ fi
 [ -x "$bin" ] || die "missing $bin after the build (run without WEAVER_PTY_SKIP_BUILD)"
 echo "ci-weaver-pty: testing $bin"
 
-# --- the Monad `mty` drivers ------------------------------------------------
+# --- the Monad `pty` drivers ------------------------------------------------
 #
-# WEAVER_MTY gates the suite (unset skips it green in an ordinary sweep); CI
+# WEAVER_PTY gates the suite (unset skips it green in an ordinary sweep); CI
 # sets it and requires the binary, so a missing or broken weaver is red.
-echo "ci-weaver-pty: running the Monad mty drivers"
+echo "ci-weaver-pty: running the Monad pty drivers"
 # shellcheck disable=SC2086  # MONAD_BIN may be `cargo run --release --`
-MTY_ROOT="$root" WEAVER_MTY=1 WEAVER_MTY_REQUIRED=1 WV_BIN="$bin" \
-  $monad test motes/weaver/test/mty_tests.mo \
-  || die "the Monad mty drivers failed"
+PTY_ROOT="$root" WEAVER_PTY=1 WEAVER_PTY_REQUIRED=1 WV_BIN="$bin" \
+  $monad test motes/weaver/test/pty_tests.mo \
+  || die "the Monad pty drivers failed"

@@ -1,7 +1,7 @@
 # The weaver TUI pty repros
 
 The pty drivers live in `motes/weaver/test/` and run under `monad test`
-(the harness is `motes/mty`, documented in `motes/mty/README.md`; the
+(the harness is `motes/pty`, documented in `motes/pty/README.md`; the
 fixtures are in `motes/weaver/test/fixtures/`). `scripts/ci-weaver-pty.sh`
 builds a release weaver from the same commit and runs that suite. The last
 Python driver (`pty_repro_sessions.py`, including the 18 MB RSS scenario)

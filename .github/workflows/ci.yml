@@ -407,8 +407,8 @@ jobs:
   # was 28 of that job's 68 minutes (run 41624196650) and needs nothing from it
   # but a compiler built from this tree, which this job builds itself with the
   # nightly. The build skips the built binary's `check cli` (compiler-checks
-  # owns that verdict). The suite is ONE test file, motes/weaver/test/mty_tests.mo,
-  # over the drivers in weaver::mty::*: a file per driver paid a ~60 s compile
+  # owns that verdict). The suite is ONE test file, motes/weaver/test/pty_tests.mo,
+  # over the drivers in weaver::pty::*: a file per driver paid a ~60 s compile
   # each for a few seconds of terminal time.
   weaver-checks:
     runs-on: [self-hosted, linux]
@@ -428,7 +428,7 @@ jobs:
             --profile "$HOME/.monad-ci-devshell" \
             -c env CI_SELF_COMPILE_BUILD_ONLY=1 scripts/ci-self-compile.sh
 
-      # The release weaver built by this commit's compiler, then the mty
+      # The release weaver built by this commit's compiler, then the pty
       # drivers against it (compiled-only `#[extern "c"]` pty FFI).
       - name: Weaver terminal tests
         run: |

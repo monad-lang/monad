@@ -52,7 +52,7 @@ members = [
   "motes/monadup",
   "motes/moon",
   "motes/moose",
-  "motes/mty",
+  "motes/pty",
   "motes/parsec",
   "motes/toml",
   "motes/toolkit",
@@ -129,8 +129,8 @@ path = "motes/mcp_client"
 [workspace.dependencies.moose]
 path = "motes/moose"
 
-[workspace.dependencies.mty]
-path = "motes/mty"
+[workspace.dependencies.pty]
+path = "motes/pty"
 
 [workspace.dependencies.parsec]
 path = "motes/parsec"

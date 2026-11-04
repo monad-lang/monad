@@ -1,0 +1,30 @@
+# pty -- the Monad-native pseudo-terminal/TUI test harness (`plan
+# 2026-10-25-weaver-pty-monad-tests.md`). A test-support mote: it owns the
+# `#[extern "c"]` PTY bindings and the spawn/pump/grid/check layer the weaver
+# terminal tests use instead of scripts/weaver-tui-repro/*.py.
+#
+# It is NOT compiled into the compiler: do not add it to
+# scripts/build-self-hosted.sh or nix/monad.nix's compilerSrc.
+[mote]
+name = "pty"
+version = "0.1.0"
+edition = "2026"
+
+[dependencies.init]
+workspace = true
+
+[dependencies.std]
+workspace = true
+
+# `tui::text` only: the repo's one wcwidth/UTF-8 implementation, which the
+# screen grid reuses rather than duplicating. The module imports only
+# `std::list`, so the closure cost is one small module.
+[dependencies.tui]
+path = "../tui"
+
+# Affine-by-default migration exception (measured 2026-10-22). The FFI layer
+# reuses a ByteBuf/`Ptr` across `ptr`/fork/free and reads an out-parameter, so
+# it cannot reach zero violations without an API redesign; keep the warnings
+# confined to sys/spawn. The default (no table) is `mode = "error"`.
+[affine]
+mode = "warn"
