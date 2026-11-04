@@ -10,6 +10,7 @@
 /// file edits through and still asks for code and network; `auto` is
 /// the trust setting the status bar never stops warning about.
 use shuttle::gate {Capability}
+use weaver::assess {Assessment, Reach.is_inside}
 
 /// The approval mode -- what the user controls, one `/mode` away.
 pub type Mode {
@@ -29,9 +30,11 @@ pub type Decision {
 }
 
 /// The decision table, the whole policy in one function. Every cell
-/// of `Capability x Mode` is pinned by `tests/policy_tests.mo` -- a
-/// change here without that file changing is a contradiction.
-pub def Policy.decide (cap : Capability) (mode : Mode) : Decision :=
+/// of `Capability x Mode`, and each cell the assessment splits, is pinned
+/// by `tests/policy_tests.mo` -- a change here without that file changing
+/// is a contradiction. `a` is where the pick reaches (`Assess.pick`):
+/// `allow_edit` lets an edit through only inside the workspace.
+pub def Policy.decide (cap : Capability) (mode : Mode) (a : Assessment) : Decision :=
     match mode {
         Mode.manual => Decision.ask,
         Mode.plan =>
@@ -43,7 +46,8 @@ pub def Policy.decide (cap : Capability) (mode : Mode) : Decision :=
             match cap {
                 Capability.exec => Decision.ask,
                 Capability.net => Decision.ask,
-                _ => Decision.allow,
+                Capability.write => if Reach.is_inside a.scope then Decision.allow else Decision.ask,
+                Capability.read => Decision.allow,
             },
         Mode.auto => Decision.allow,
     }

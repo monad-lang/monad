@@ -1,6 +1,7 @@
 /// Session approval grants, finer-grained than a capability: `repo`
-/// covers a pick whose target path is inside the workspace root,
-/// `anywhere` covers every pick of that capability.
+/// covers a pick that stays inside the workspace root (a file inside it,
+/// or a command whose every path is -- `assess.mo`), `anywhere` covers
+/// every pick of that capability.
 ///
 /// The list lives in a `Ref` owned by weaver, not in shuttle's
 /// `RunState.always` cache. Two reasons: the cache is keyed only by
@@ -18,8 +19,8 @@ use std::ref {Ref}
 use std::path {Path, Path.to_string}
 use std::list {List.filter, List.intercalate}
 
-/// Where a grant applies. `repo` needs a path-bearing pick inside the
-/// workspace root; `anywhere` is the old "all <cap>s this session".
+/// Where a grant applies. `repo` needs a pick inside the workspace root;
+/// `anywhere` is the old "all <cap>s this session".
 pub type PermScope {
     repo,
     anywhere,
@@ -174,7 +175,9 @@ pub def Permissions.normalize (s : String) : String :=
 /// made absolute) is refused: the normalized boundary would be `/`, which
 /// accepts every absolute path -- a "this repo" grant covering all of the
 /// filesystem. Repo scope is simply not offered in that case.
-pub def Permissions.within (root : String) (target : String) : Bool :=
+pub def Permissions.within (root_p : Path) (target_p : Path) : Bool :=
+    let root : String := Path.to_string root_p in
+    let target : String := Path.to_string target_p in
     if String.is_empty root then false
     else
         let root_n : String := Permissions.normalize root in
@@ -191,32 +194,21 @@ pub def Permissions.within (root : String) (target : String) : Bool :=
 def raw_join (a : String) (b : String) : String :=
     if String.ends_with a "/" then String.concat a b else String.concat a (String.concat "/" b)
 
-/// A pick's target qualifies for repo scope only when it names a path
-/// inside the root. `exec`/`net` picks and targetless picks never do:
-/// a shell command is not confined by its input.
-pub def Permissions.pick_in_repo (root : Option Path) (target : Option String) : Bool :=
-    match root {
-        Option.none => false,
-        Option.some r => match target {
-            Option.none => false,
-            Option.some t => Permissions.within (Path.to_string r) t,
-        },
-    }
-
 /// Does any grant cover this pick? `anywhere` grants cover every pick
-/// of their capability; `repo` grants cover only in-repo targets.
-pub def Permissions.matches (root : Option Path) (grants : List PermGrant) (cap : Capability) (target : Option String) : Bool :=
-    matches_go root grants cap target
+/// of their capability; `repo` grants cover only a pick whose every path
+/// is inside the workspace (`inside`, from `Assess.pick`).
+pub def Permissions.matches (grants : List PermGrant) (cap : Capability) (inside : Bool) : Bool :=
+    matches_go grants cap inside
 
 #[partial]
-def matches_go (root : Option Path) (grants : List PermGrant) (cap : Capability) (target : Option String) : Bool :=
+def matches_go (grants : List PermGrant) (cap : Capability) (inside : Bool) : Bool :=
     match grants {
         List.empty => false,
         List.cons g rest =>
             let covers : Bool := Capability.eq g.cap cap
                 && (match g.scope {
                     PermScope.anywhere => true,
-                    PermScope.repo => Permissions.pick_in_repo root target,
+                    PermScope.repo => inside,
                 }) in
-            if covers then true else matches_go root rest cap target,
+            if covers then true else matches_go rest cap inside,
     }

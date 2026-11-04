@@ -22,11 +22,12 @@ use shuttle::gate {Capability, Pick, Approval, Gate}
 use weaver::policy {Mode, Decision, Policy.decide}
 use weaver::diff {Diff.for_input, Diff.render}
 use weaver::permissions {
-    PermGrant, PermScope, Permissions.matches, Permissions.pick_in_repo, Permissions.get,
+    PermGrant, PermScope, Permissions.matches, Permissions.get,
     Permissions.add,
 }
 use std::ref {Ref}
 use std::path {Path}
+use weaver::assess {Assessment, Reach.is_inside, Assess.pick, Assess.scope_line}
 use json::json {Json, Json.to_string}
 
 /// What one user answer to a prompt means. `here` records a repo-scoped
@@ -72,14 +73,15 @@ pub def Gate.weaver (mode : Mode) (grants : Option (Ref (List PermGrant))) (root
 /// is also visible to the human (the line-based UI would otherwise stay
 /// silent about why nothing ran).
 def weaver_precheck (mode : Mode) (grants : Option (Ref (List PermGrant))) (root : Option Path) (write : String -> IO Unit) (p : Pick) : IO (Option Approval) :=
-    match Policy.decide p.cap mode {
+    let a : Assessment := Assess.pick root p in
+    match Policy.decide p.cap mode a {
         Decision.refuse reason => do {
             let _ <- write (String.concat "refused: " (String.concat reason "\n"));
             IO.pure (Option.some (Approval.deny reason))
         },
         Decision.ask => do {
             let gs <- Permissions.get grants;
-            if Permissions.matches root gs p.cap (pick_target p)
+            if Permissions.matches gs p.cap (Reach.is_inside a.scope)
             then IO.pure (Option.some Approval.once)
             else IO.pure Option.none
         },
@@ -87,9 +89,10 @@ def weaver_precheck (mode : Mode) (grants : Option (Ref (List PermGrant))) (root
     }
 
 def weaver_ask (mode : Mode) (grants : Option (Ref (List PermGrant))) (root : Option Path) (read : Unit -> IO (Option String)) (write : String -> IO Unit) (p : Pick) : IO Approval :=
-    match Policy.decide p.cap mode {
+    let a : Assessment := Assess.pick root p in
+    match Policy.decide p.cap mode a {
         Decision.allow => IO.pure Approval.once,
-        Decision.ask => prompt_pick grants root read write p,
+        Decision.ask => prompt_pick grants root a read write p,
         Decision.refuse reason => refused write reason,
     }
 
@@ -106,11 +109,12 @@ def refused (write : String -> IO Unit) (reason : String) : IO Approval := do {
 /// and for file mutations the old -> new diff), read one word. EOF
 /// during an approval is a denial, not an approval -- a closed stdin
 /// must never green-light a mutation.
-def prompt_pick (grants : Option (Ref (List PermGrant))) (root : Option Path) (read : Unit -> IO (Option String)) (write : String -> IO Unit) (p : Pick) : IO Approval := do {
+def prompt_pick (grants : Option (Ref (List PermGrant))) (root : Option Path) (a : Assessment) (read : Unit -> IO (Option String)) (write : String -> IO Unit) (p : Pick) : IO Approval := do {
     let _ <- write (pick_header p);
+    let _ <- write (String.concat (Gate.assessment_lines root a) "\n");
     let r <- Diff.for_input p.name p.input;
     let _ <- write_diff write r;
-    let repo_ok : Bool := Permissions.pick_in_repo root (pick_target p);
+    let repo_ok : Bool := Reach.is_inside a.scope;
     ask_again grants root repo_ok read write p 1
 }
 
@@ -185,7 +189,7 @@ def answer_split (s : String) (i : I64) : Option I64 :=
     else answer_split s (i + 1)
 
 /// The answer's word and its optional note. `r` is accepted only when a
-/// repo scope was offered (a path-bearing pick inside the root).
+/// repo scope was offered (a pick that stays inside the root).
 pub def answer_line (repo_ok : Bool) (s : String) : Option (Pair PickAnswer String) :=
     match answer_split s 0 {
         Option.none => answer_word_note repo_ok s "",
@@ -228,6 +232,16 @@ pub def gate_answer_feedback (cap : Capability) (ans : PickAnswer) : String :=
             (String.concat (cap_name cap) "s approved anywhere for this session"),
         PickAnswer.pick_deny reason =>
             String.concat "n -- denied (" (String.concat reason ")"),
+    }
+
+/// Where the pick reaches, for both UIs' prompts: `where: inside /src/x`,
+/// `where: outside the workspace: /etc/hosts`, or `where: can't tell
+/// where this runs`; then `⚠ <reason>` when a rule flagged it.
+pub def Gate.assessment_lines (root : Option Path) (a : Assessment) : String :=
+    let scope_text : String := String.concat "  where: " (Assess.scope_line root a.scope) in
+    match a.danger {
+        Option.none => scope_text,
+        Option.some reason => String.concat scope_text (String.concat "\n  ⚠ " reason),
     }
 
 /// The `path` a pick's input names (`write`, `edit`, `read`), when it

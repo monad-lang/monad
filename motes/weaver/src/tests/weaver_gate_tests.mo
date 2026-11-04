@@ -180,3 +180,39 @@ def test_precheck_refuses_a_granted_write_in_plan_mode : IO Bool := do {
         Option.none => false,
     })
 }
+
+// ── commands scoped to the workspace ──────────────────────────────────
+
+def shell_pick (command : String) : Pick :=
+    let input : Json := Json.make_object (Map.insert "command" (Json.make_str command) BTreeMap.empty) in
+    { name := "shell", cap := Capability.exec, input := input }
+
+def exec_repo_precheck (command : String) : IO (Option Approval) := do {
+    let empty_grants : List PermGrant := List.empty;
+    let r <- Ref.new empty_grants;
+    let g : PermGrant := { cap := Capability.exec, scope := PermScope.repo };
+    let _ <- Permissions.add (Option.some r) g;
+    precheck_of Mode.manual (Option.some r) (Option.some (Path.path "/repo")) (shell_pick command)
+}
+
+/// A repo exec grant now covers a command that stays in the workspace...
+#[test]
+def test_repo_exec_grant_covers_an_inside_command : IO Bool := do {
+    let res <- exec_repo_precheck "cargo test -p core && ls src/";
+    return (match res {
+        Option.some ap => match ap { Approval.once => true, _ => false },
+        Option.none => false,
+    })
+}
+
+/// ...but not one that reaches outside it, or one it cannot read.
+#[test]
+def test_repo_exec_grant_does_not_cover_an_outside_command : IO Bool := do {
+    let a <- exec_repo_precheck "cat /etc/hosts";
+    let b <- exec_repo_precheck "cd .. && ls";
+    let c <- exec_repo_precheck "ls $HOME/x";
+    let none_a : Bool := match a { Option.none => true, Option.some _ => false };
+    let none_b : Bool := match b { Option.none => true, Option.some _ => false };
+    let none_c : Bool := match c { Option.none => true, Option.some _ => false };
+    return (none_a && none_b && none_c)
+}

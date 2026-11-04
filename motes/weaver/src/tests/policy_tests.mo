@@ -7,6 +7,8 @@ use weaver::policy {
     Mode.parse, Mode.approve_plan, Mode.warns_auto, Mode.show, Mode.cycle,
 }
 use shuttle::gate {Capability}
+use weaver::assess {Assessment, Reach}
+use std::path {Path}
 
 /// Structural equality on `Decision`, payload included: the refusal
 /// reason is part of the contract (the model and the user both read it).
@@ -17,9 +19,22 @@ def decision_eq (a : Decision) (b : Decision) : Bool :=
         Decision.refuse r => match b { Decision.refuse r2 => r == r2, _ => false },
     }
 
+/// A pick inside the workspace, flagged by no rule: the plain cell.
+def plain : Assessment :=
+    let a : Assessment := { scope := Reach.inside, danger := Option.none } in
+    a
+
+def reaching (scope : Reach) : Assessment :=
+    let a : Assessment := { scope := scope, danger := Option.none } in
+    a
+
 /// One cell of the table: the decision for (cap, mode) is `expected`.
 def cell (cap : Capability) (mode : Mode) (expected : Decision) : Bool :=
-    decision_eq (Policy.decide cap mode) expected
+    decision_eq (Policy.decide cap mode plain) expected
+
+/// A cell the assessment splits.
+def cell_at (cap : Capability) (mode : Mode) (a : Assessment) (expected : Decision) : Bool :=
+    decision_eq (Policy.decide cap mode a) expected
 
 /// The plan-mode refusal reason, exactly as `Policy.decide` spells it.
 def plan_refusal : String :=
@@ -50,6 +65,20 @@ def test_decision_table_every_cell : Bool :=
         && cell Capability.write Mode.auto Decision.allow
         && cell Capability.exec Mode.auto Decision.allow
         && cell Capability.net Mode.auto Decision.allow
+
+/// `allow_edit` lets an edit through only inside the workspace: an edit
+/// outside it, or one whose target cannot be read, asks. The other modes
+/// do not split on scope.
+#[test]
+def test_allow_edit_asks_for_an_edit_outside_the_workspace : Bool :=
+    let out : Assessment := reaching (Reach.outside [Path.path "/etc/hosts"]) in
+    let unknown : Assessment := reaching Reach.unknown in
+    cell_at Capability.write Mode.allow_edit out Decision.ask
+        && cell_at Capability.write Mode.allow_edit unknown Decision.ask
+        && cell_at Capability.read Mode.allow_edit out Decision.allow
+        && cell_at Capability.write Mode.manual out Decision.ask
+        && cell_at Capability.write Mode.plan out (Decision.refuse plan_refusal)
+        && cell_at Capability.write Mode.auto out Decision.allow
 
 // ── The mode state machine ──────────────────────────────────────────────
 

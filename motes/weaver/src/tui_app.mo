@@ -31,8 +31,9 @@ use weaver::commands {
 }
 use log::logger {Logger}
 use weaver::policy {Mode, Mode.show, Mode.cycle, Policy.decide, Decision}
-use weaver::gate {pick_header, pick_target, cap_name, capped_diff, PickAnswer, record_answer, answer_approval}
-use weaver::permissions {PermGrant, Permissions.get, Permissions.matches, Permissions.pick_in_repo, Permissions.render}
+use weaver::gate {pick_header, pick_target, cap_name, capped_diff, PickAnswer, record_answer, answer_approval, Gate.assessment_lines}
+use weaver::permissions {PermGrant, Permissions.get, Permissions.matches, Permissions.render}
+use weaver::assess {Assessment, Reach.is_inside, Assess.pick}
 use weaver::diff {Diff.for_input, Diff.lines}
 use weaver::dumb {append_user, drive_loop}
 use weaver::model {
@@ -1446,11 +1447,12 @@ pub def Gate.weaver_tui (mode : Mode) (colors : Bool) (store : Option StoreState
     }
 
 def weaver_tui_precheck (mode : Mode) (grants : Option (Ref (List PermGrant))) (root : Option Path) (p : Pick) : IO (Option Approval) :=
-    match Policy.decide p.cap mode {
+    let a : Assessment := Assess.pick root p in
+    match Policy.decide p.cap mode a {
         Decision.refuse reason => IO.pure (Option.some (Approval.deny reason)),
         Decision.ask => do {
             let gs <- Permissions.get grants;
-            if Permissions.matches root gs p.cap (pick_target p)
+            if Permissions.matches gs p.cap (Reach.is_inside a.scope)
             then IO.pure (Option.some Approval.once)
             else IO.pure Option.none
         },
@@ -1458,9 +1460,10 @@ def weaver_tui_precheck (mode : Mode) (grants : Option (Ref (List PermGrant))) (
     }
 
 def weaver_tui_ask (mode : Mode) (colors : Bool) (store : Option StoreState) (grants : Option (Ref (List PermGrant))) (root : Option Path) (p : Pick) : IO Approval :=
-    match Policy.decide p.cap mode {
+    let a : Assessment := Assess.pick root p in
+    match Policy.decide p.cap mode a {
         Decision.allow => IO.pure Approval.once,
-        Decision.ask => prompt_overlay colors store grants root p,
+        Decision.ask => prompt_overlay colors store grants root a p,
         Decision.refuse reason => IO.pure (Approval.deny reason),
     }
 
@@ -1472,7 +1475,7 @@ def diff_lines_of (diff_pair : Option (Pair String String)) : List String :=
         }
     }
 
-def prompt_overlay (colors : Bool) (store : Option StoreState) (grants : Option (Ref (List PermGrant))) (root : Option Path) (p : Pick) : IO Approval := do {
+def prompt_overlay (colors : Bool) (store : Option StoreState) (grants : Option (Ref (List PermGrant))) (root : Option Path) (a : Assessment) (p : Pick) : IO Approval := do {
     let diff_pair <- Diff.for_input p.name p.input;
     // The header names the target path; repeat it as its own line so a
     // long path stays visible above the diff.
@@ -1480,8 +1483,9 @@ def prompt_overlay (colors : Bool) (store : Option StoreState) (grants : Option 
         Option.none => List.empty,
         Option.some path => List.cons (String.concat "file: " path) List.empty,
     };
-    let body : List String := List.append (List.append [pick_header p] target) (diff_lines_of diff_pair);
-    let repo_ok : Bool := Permissions.pick_in_repo root (pick_target p);
+    let place : List String := theme_split_lines (Gate.assessment_lines root a);
+    let body : List String := List.append (List.append (List.append [pick_header p] place) target) (diff_lines_of diff_pair);
+    let repo_ok : Bool := Reach.is_inside a.scope;
     let opts : List DialogOption := perm_options p.cap repo_ok;
     let subtitle : String := String.concat (cap_name p.cap) (String.concat " " p.name);
     let d : DialogModel := Dialog.with_notes (Dialog.make "Permission required" subtitle body opts);
@@ -1500,9 +1504,9 @@ def prompt_overlay (colors : Bool) (store : Option StoreState) (grants : Option 
     }
 }
 
-/// The approval rows. `r` (repo scope) is offered only when the pick's
-/// target is a path inside the workspace root -- a shell command or an
-/// outside path has nothing to confine it to.
+/// The approval rows. `r` (repo scope) is offered only when the pick stays
+/// inside the workspace root -- a file there, or a command whose every
+/// path is; an outside or unreadable pick has nothing to confine it to.
 def perm_options (cap : Capability) (repo_ok : Bool) : List DialogOption :=
     let once : DialogOption := { label := "Approve once", hint := "y", key := "y" } in
     let here : DialogOption := { label := String.concat "Always allow all " (String.concat (cap_name cap) "s in this repo"), hint := "r", key := "r" } in

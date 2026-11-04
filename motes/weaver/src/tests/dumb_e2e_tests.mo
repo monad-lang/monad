@@ -31,7 +31,8 @@ use json::json {Json, Json.parse, Json.get_array, Json.get_str, Json.make_str, J
 use parsec::number {parse_i64}
 use std::map {Map, BTreeMap}
 use std::io {IO.file_exists}
-use std::path {Path.of}
+use std::path {Path, Path.of}
+use weaver::place {SessionPlace}
 use std::process {process_id, exec_cmd}
 
 // ── The PID-qualified file set ─────────────────────────────────────────
@@ -479,6 +480,11 @@ def write_plan_exec_inputs : IO Unit :=
     write_text inputs_path
         (Json.to_string (Json.make_array (List.map (fn (s : String) => Json.make_str s) plan_exec_inputs)))
 
+def in_tmp (st : WeaverState) : WeaverState :=
+    let place : SessionPlace := { cwd := Path.path "/tmp", repo := Path.path "/tmp" } in
+    let st2 : WeaverState := { st with place := Option.some place } in
+    st2
+
 def plan_exec_registry : ToolRegistry :=
     ToolRegistry.register ShellTool.impl (ToolRegistry.register WriteTool.impl ToolRegistry.empty)
 
@@ -514,7 +520,9 @@ def test_dumb_e2e_plan_then_execute : IO Bool := do {
     let _ <- write_plan_exec_inputs;
     let _ <- write_text cursor_path "0";
     let _ <- write_text tap_path "";
-    let st <- Dumb.run Option.none scripted_read tap_write (state_of plan_exec_registry);
+    // The plan writes under /tmp: that is the workspace here, so
+    // allow_edit lets the write through without asking.
+    let st <- Dumb.run Option.none scripted_read tap_write (in_tmp (state_of plan_exec_registry));
     let cursor <- read_cursor;
     let tap <- read_tap;
     let file <- read_target plan_exec_target;
