@@ -82,9 +82,11 @@ pub type Expr {
     e_if (cond : Expr) (then_ : Expr) (else_ : Expr),
     e_match (scrutinee : Expr) (arms : List MetaMatchArm),
     e_ctor (ctor_name : String) (args : List Expr),
-    /// Let-the-checker-infer-this-type (`Term::Hole`). `fmt!` emits
-    /// `fn name => ...` from a template that names variables without
-    /// declaring their types, exactly like a hand-written `fn x => x`.
+    /// Let-the-checker-infer-this-type (`Term::Hole`): the term-position
+    /// counterpart of a `_` annotation. It is available to any
+    /// term-position meta function that needs to build a binder without
+    /// knowing its type; `fmt!` itself does not use it (its expansion
+    /// introduces no binders — a hole is the call site's own variable).
     e_hole,
     /// The term-position counterpart of `MetaDecl.d_error`: an `e_error`
     /// anywhere in a returned `Expr` fails the whole `meta!` invocation

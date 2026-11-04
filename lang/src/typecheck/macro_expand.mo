@@ -3,21 +3,33 @@
 /// name, built on [[lang/typecheck/macro_apply.mo]]'s
 /// `apply_term_macro` (itself built on [[lang/typecheck/subst.mo]]).
 ///
-/// Deliberately NOT wired into any pipeline yet (see `macro_apply.mo`'s
-/// own scope note — same reasoning applies here). This module answers
-/// "given a way to look up a macro definition by name, and a `Term`,
-/// what does it look like with every macro call resolved" — the
-/// caller (a future outer decl-level work-queue, Step 6-7) is
-/// responsible for building that lookup from a real set of registered
-/// `Decl.def_macro_d`s and threading the whole thing through the
-/// pipeline.
+/// Two layers:
+///
+/// - The pure `expand_term`/`resolve_quote` pair, called by
+///   `lang/typecheck/macro_queue.mo`'s per-file `expand_decls`. It has
+///   only a macro lookup, so it expands ordinary term macros and leaves
+///   every `meta!` call untouched.
+/// - The `Result`-returning `expand_term_with_meta`, called by the
+///   whole-graph pass (`lang/module.mo`'s `expand_decls_graph`), which
+///   additionally carries a `MetaIntrinsicCtx` so a term-position
+///   `meta!`/`reflect_type_info!` can be evaluated and its `Expr`
+///   reified. Evaluation can fail, which is why this half returns
+///   `Result` (the pure wrappers cannot, and swallow a depth-limit
+///   failure by leaving the term unexpanded — the graph pass diagnoses
+///   it).
+use lang::core_value {Value}
 use lang::types {
-  Con, Identifier, Literal, MatchCase, Native, StructLitField, Term, binder_anon,
-  concrete,
-  id_eq, level_const, named, sentinel, term_peel, unnamed,
+  Con, Decl, Identifier, Inductive, Literal, MatchCase, NamePath, Native,
+  StructLitField, Term, binder_anon, concrete, id_eq, level_const, named,
+  sentinel, show_identifier, term_peel, unnamed,
 }
 use lib::typecheck::macro_apply {apply_term_macro}
-use lib::typecheck::traverse {con_map_children, literal_map_children, match_case_map_children, match_cases_map_children, native_map_children, opt_term_map_children, opt_terms_map_children, struct_field_map_children, struct_fields_map_children, term_map_children}
+use lib::typecheck::meta_eval {meta_eval_invoke}
+use lib::typecheck::meta_reflect {
+  build_type_info_value, find_inductive_by_bare_name, reify_value_to_term,
+  str_val, strip_term_ctx, term_free_var_name,
+}
+use lib::typecheck::traverse {result_bind, term_map_children_result}
 
 // ─── Application-spine helpers ─────────────────────────────────────
 //
@@ -92,69 +104,296 @@ def exactly_one (xs : List Term) : Option Term :=
 
 // ─── The walk itself ────────────────────────────────────────────────
 
-/// Structural `Term` recursion; on an application spine bottoming out
-/// at a registered macro, expands the (already-`expand_term`ed) args
-/// then applies the macro, then re-runs the RESULT through
-/// `expand_term` again (matches the reference — a macro's own
-/// expansion may itself contain further macro calls, e.g. a template
-/// that quotes another `name!` call). An unresolved macro name is NOT
-/// an error — passed through, expanded only structurally. Hitting
-/// `Term.quote_` dispatches to `resolve_quote` instead of continuing
-/// this same walk (its `unquote`-recognizing behavior only applies
-/// inside a quote).
+// ─── The meta intrinsic's evaluation environment ──────────────────────
+//
+// `meta! subject meta_def` at TERM position needs three things beyond
+// the macro lookup: the decl list the meta def is evaluated against
+// (already prepared for real execution — see `meta_eval.mo`'s header),
+// the inductives the subject and the reifier resolve names against, and
+// nothing else. The graph pass builds it once and shares it; the
+// per-file pure walk has none and leaves `meta!` in place.
+
+pub struct MetaIntrinsicCtx {
+    mic_dispatched : List Decl,
+    mic_inductives : List Inductive,
+}
+
+/// `BUILTIN_INTRINSICS`'s self-hosted twin: `reflect_type_info` stays an
+/// accepted ALIAS of `meta` for one nightly rollout window (the last
+/// published nightly resolves only the hardcoded spelling at
+/// `lang/module.mo`'s `is_reflect_type_info_call`).
+def is_intrinsic_ident (id : Identifier) : Bool :=
+    id_eq id (Identifier.id "meta") || id_eq id (Identifier.id "reflect_type_info")
+
+/// A recursive macro (`defmacro loopy x := quote { loopy! x }`) would
+/// otherwise recurse until the stack dies. The reference caps at 64
+/// (`MAX_EXPANSION_DEPTH`); 32 is already far past any real template.
+def max_expansion_depth : I64 := 32
+
+// ─── The Result-returning walk ────────────────────────────────────────
+
+/// The walk with an optional meta-evaluation environment. `Option.none`
+/// is exactly the per-file pure walk: ordinary macros expand, `meta!`
+/// calls are left untouched. `depth` bounds the number of macro
+/// applications along one expansion chain.
 #[partial]
-def expand_term (lookup : Identifier -> Option Term) (t : Term) : Term :=
+def expand_term_go
+    (lookup : Identifier -> Option Term)
+    (ctx : Option MetaIntrinsicCtx)
+    (depth : I64)
+    (t : Term) : Result String Term :=
+    if I64.gt depth max_expansion_depth then
+        Result.err "macro expansion exceeded the depth limit (does a macro expand into itself?)"
+    else
+        match t {
+            Term.app _ _ =>
+                match macro_call_head t {
+                    Option.some macro_name =>
+                        if is_intrinsic_ident macro_name then
+                            expand_intrinsic_go (expand_term_go lookup ctx (I64.add depth 1)) ctx macro_name (spine_args t List.empty)
+                        else
+                            match lookup macro_name {
+                                Option.some macro_body =>
+                                    result_bind
+                                        (map_terms_result (expand_term_go lookup ctx (I64.add depth 1)) (spine_args t List.empty))
+                                        (fn (args : List Term) =>
+                                            apply_macro_expansion_go lookup ctx (I64.add depth 1) macro_body args),
+                                Option.none => term_map_children_result (expand_term_go lookup ctx depth) t,
+                            },
+                    Option.none => term_map_children_result (expand_term_go lookup ctx depth) t,
+                },
+            Term.quote_ inner =>
+                result_bind (resolve_quote_go lookup ctx depth inner) (fn (inner2 : Term) =>
+                    Result.ok (Term.quote_ inner2)),
+            _ => term_map_children_result (expand_term_go lookup ctx depth) t,
+        }
+
+/// The quote-body twin of `expand_term_go`. `unquote(x)` splices its arg
+/// back into term context; any other macro call is expanded right here.
+#[partial]
+def resolve_quote_go
+    (lookup : Identifier -> Option Term)
+    (ctx : Option MetaIntrinsicCtx)
+    (depth : I64)
+    (t : Term) : Result String Term :=
+    if I64.gt depth max_expansion_depth then
+        Result.err "macro expansion exceeded the depth limit (does a macro expand into itself?)"
+    else
+        match t {
+            Term.app _ _ =>
+                if is_unquote_call t
+                then
+                    match exactly_one (spine_args t List.empty) {
+                        Option.some arg => expand_term_go lookup ctx depth arg,
+                        Option.none => term_map_children_result (resolve_quote_go lookup ctx depth) t,
+                    }
+                else
+                    match macro_call_head t {
+                        Option.some macro_name =>
+                            if is_intrinsic_ident macro_name then
+                                expand_intrinsic_go (resolve_quote_go lookup ctx (I64.add depth 1)) ctx macro_name (spine_args t List.empty)
+                            else
+                                match lookup macro_name {
+                                    Option.some macro_body =>
+                                        result_bind
+                                            (map_terms_result (resolve_quote_go lookup ctx (I64.add depth 1)) (spine_args t List.empty))
+                                            (fn (args : List Term) =>
+                                                apply_macro_expansion_go lookup ctx (I64.add depth 1) macro_body args),
+                                    Option.none => term_map_children_result (resolve_quote_go lookup ctx depth) t,
+                                },
+                        Option.none => term_map_children_result (resolve_quote_go lookup ctx depth) t,
+                    },
+            _ => term_map_children_result (resolve_quote_go lookup ctx depth) t,
+        }
+
+/// Apply a term macro and give back the EXPANSION, not a quoted template.
+///
+/// A term macro's body is normally `quote { ... }` (`fmt`'s is
+/// `quote { meta! template fmt_meta }`), and the reference requires the
+/// applied result to be that quote, resolves its inside, and strips the
+/// quote (`rust/core/src/eval/macro_expand.rs`'s `apply_macro`). Without
+/// the strip, `fmt! "..."` would expand to a `quote_` node — syntax as
+/// data — and the checker rejects it. The bare-body form (`defmacro
+/// double x := x + x`) is this compiler's own deliberate deviation: it
+/// has no quote to strip, so it is expanded as the term it already is.
+#[partial]
+def apply_macro_expansion_go
+    (lookup : Identifier -> Option Term)
+    (ctx : Option MetaIntrinsicCtx)
+    (depth : I64)
+    (macro_body : Term)
+    (args : List Term) : Result String Term :=
+    strip_applied_quote_go lookup ctx depth (apply_term_macro macro_body args)
+
+/// The strip half, split out so the applied term is a PARAMETER
+/// (`applied`) rather than a catch-all pattern binder — a bare lowercase
+/// pattern name can resolve against an unrelated global instead of
+/// binding.
+#[partial]
+def strip_applied_quote_go
+    (lookup : Identifier -> Option Term)
+    (ctx : Option MetaIntrinsicCtx)
+    (depth : I64)
+    (applied : Term) : Result String Term :=
+    // The parser wraps terms in source locations, and a macro body is a
+    // term like any other — strip before asking whether the RESULT is a
+    // quote (the reference does the same, `strip_ctx` in `apply_macro`).
+    match strip_term_ctx applied {
+        Term.quote_ inner =>
+            result_bind (resolve_quote_go lookup ctx depth inner) (fn (resolved : Term) =>
+                expand_term_go lookup ctx depth resolved),
+        _ => expand_term_go lookup ctx depth applied,
+    }
+
+/// Expand the arguments (already in the caller's walk — `expand` is
+/// `expand_term_go` or `resolve_quote_go`), then dispatch. Arguments are
+/// expanded BEFORE the intrinsic runs, matching the reference.
+#[partial]
+def expand_intrinsic_go
+    (expand : Term -> Result String Term)
+    (ctx : Option MetaIntrinsicCtx)
+    (name : Identifier)
+    (args : List Term) : Result String Term :=
+    result_bind (map_terms_result expand args) (fn (args2 : List Term) =>
+        match ctx {
+            // The per-file pure walk has no evaluation environment; leave
+            // the call for the whole-graph pass rather than failing here.
+            Option.none => Result.err (String.concat (show_identifier name)
+                "!: the meta intrinsic needs the whole-graph expansion environment"),
+            Option.some c => dispatch_meta c name args2,
+        })
+
+/// `meta! subject meta_def` — reflect the subject to a value, invoke the
+/// ordinary Monad def, reify its `Expr` result.
+#[partial]
+def dispatch_meta (ctx : MetaIntrinsicCtx) (name : Identifier) (args : List Term) : Result String Term :=
+    match args {
+        List.cons subject rest =>
+            match rest {
+                List.cons meta_ref rest2 =>
+                    match rest2 {
+                        List.empty =>
+                            result_bind (reflect_subject name subject ctx.mic_inductives) (fn (subject_value : Value) =>
+                                match term_free_var_name meta_ref {
+                                    Option.none => Result.err (String.concat (show_identifier name)
+                                        "!: second argument must name a top-level def"),
+                                    Option.some meta_name =>
+                                        result_bind
+                                            (meta_eval_invoke ctx.mic_dispatched (single_name_path meta_name) subject_value)
+                                            (fn (result_value : Value) =>
+                                                match reify_value_to_term result_value {
+                                                    Result.err message => Result.err (String.concat (show_identifier name) (String.concat "!: " message)),
+                                                    Result.ok term => Result.ok term,
+                                                }),
+                                }),
+                        List.cons _ _ => Result.err (String.concat (show_identifier name) "! expects 2 arguments (a subject and a meta-function name)"),
+                    },
+                List.empty => Result.err (String.concat (show_identifier name) "! expects 2 arguments (a subject and a meta-function name)"),
+            },
+        List.empty => Result.err (String.concat (show_identifier name) "! expects 2 arguments (a subject and a meta-function name)"),
+    }
+
+def single_name_path (name : String) : NamePath :=
+    NamePath.mk (List.cons (Identifier.id name) List.empty)
+
+/// The single reflection step, whatever the position: a string literal
+/// reflects to itself; a plain type name reflects to its `TypeInfo`.
+def reflect_subject (name : Identifier) (subject : Term) (inds : List Inductive) : Result String Value :=
+    reflect_stripped name (strip_term_ctx subject) inds
+
+def reflect_stripped (name : Identifier) (stripped : Term) (inds : List Inductive) : Result String Value :=
+    match stripped {
+        Term.lit l => reflect_literal_subject name l stripped inds,
+        _ => reflect_type_subject name stripped inds,
+    }
+
+def reflect_literal_subject (name : Identifier) (l : Literal) (stripped : Term) (inds : List Inductive) : Result String Value :=
+    match l {
+        Literal.str value => Result.ok (str_val value),
+        _ => reflect_type_subject name stripped inds,
+    }
+
+def reflect_type_subject (name : Identifier) (stripped : Term) (inds : List Inductive) : Result String Value :=
+    match term_free_var_name stripped {
+        Option.none => Result.err (String.concat (show_identifier name)
+            "!: first argument must be a string literal or a type name"),
+        Option.some type_name =>
+            match find_inductive_by_bare_name inds type_name {
+                Option.none => Result.err (String.concat (show_identifier name)
+                    (String.concat "!: unknown type " type_name)),
+                Option.some ind =>
+                    match build_type_info_value ind {
+                        Result.err e => Result.err e,
+                        Result.ok v => Result.ok v,
+                    },
+            },
+    }
+
+/// Detection-only walk: `Result.err` as soon as a term-position macro call
+/// the whole-graph pass could still expand appears — an intrinsic, or any
+/// name the graph-wide registry knows. Reuses the Result traversal's
+/// short-circuit rather than adding a second scan pass.
+#[partial]
+pub def scan_live_call (lookup : Identifier -> Option Term) (t : Term) : Result String Term :=
     match t {
         Term.app _ _ =>
             match macro_call_head t {
-                Option.some macro_name =>
-                    match lookup macro_name {
-                        Option.some macro_body =>
-                            let args : List Term := List.map (expand_term lookup) (spine_args t List.empty) in
-                            expand_term lookup (apply_term_macro macro_body args),
-                        Option.none => term_map_children (expand_term lookup) t,
-                    },
-                Option.none => term_map_children (expand_term lookup) t,
+                Option.some name =>
+                    if is_intrinsic_ident name then Result.err "found"
+                    else
+                        match lookup name {
+                            Option.some _ => Result.err "found",
+                            Option.none => term_map_children_result (scan_live_call lookup) t,
+                        },
+                Option.none => term_map_children_result (scan_live_call lookup) t,
             },
-        Term.quote_ inner => Term.quote_ (resolve_quote lookup inner),
-        _ => term_map_children (expand_term lookup) t,
+        _ => term_map_children_result (scan_live_call lookup) t,
     }
 
-/// Walks a quoted body. `unquote(x)` (an application spine bottoming
-/// out at a plain `Term.var` named `"unquote"`, with exactly one arg)
-/// is replaced by that arg itself — already concrete by this point, no
-/// evaluation — then that arg is re-run through `expand_term` (it may
-/// itself contain live macro calls). Any OTHER macro call found
-/// directly in the quote body is expanded right here too (mirrors the
-/// reference exactly). Everything else recurses structurally,
-/// remaining quoted (a nested `Term.quote_` stays a `Term.quote_` —
-/// this walk doesn't collapse it).
-#[partial]
-def resolve_quote (lookup : Identifier -> Option Term) (t : Term) : Term :=
-    match t {
-        Term.app _ _ =>
-            if is_unquote_call t
-            then
-                match exactly_one (spine_args t List.empty) {
-                    Option.some arg => expand_term lookup arg,
-                    // Malformed unquote call (0 or 2+ args) -- not this
-                    // primitive's job to diagnose (later pipeline
-                    // wiring's); fall back rather than silently drop.
-                    Option.none => term_map_children (resolve_quote lookup) t,
-                }
-            else
-                match macro_call_head t {
-                    Option.some macro_name =>
-                        match lookup macro_name {
-                            Option.some macro_body =>
-                                let args : List Term := List.map (resolve_quote lookup) (spine_args t List.empty) in
-                                resolve_quote lookup (apply_term_macro macro_body args),
-                            Option.none => term_map_children (resolve_quote lookup) t,
-                        },
-                    Option.none => term_map_children (resolve_quote lookup) t,
-                },
-        _ => term_map_children (resolve_quote lookup) t,
+pub def term_has_live_call (lookup : Identifier -> Option Term) (t : Term) : Bool :=
+    match scan_live_call lookup t {
+        Result.ok _ => false,
+        Result.err _ => true,
     }
+
+/// Short-circuiting map over a term list, in order.
+#[partial]
+def map_terms_result (f : Term -> Result String Term) (ts : List Term) : Result String (List Term) :=
+    match ts {
+        List.empty => Result.ok List.empty,
+        List.cons x rest =>
+            result_bind (f x) (fn (x2 : Term) =>
+                result_bind (map_terms_result f rest) (fn (rest2 : List Term) =>
+                    Result.ok (List.cons x2 rest2))),
+    }
+
+// ─── The pure entry points ────────────────────────────────────────────
+
+/// The per-file walk `macro_queue.mo` uses: no evaluation environment, so
+/// an intrinsic is left in place. A depth-limit failure (a macro that
+/// expands into itself) leaves the term unexpanded; the whole-graph pass
+/// is where that becomes a diagnostic.
+#[partial]
+pub def expand_term (lookup : Identifier -> Option Term) (t : Term) : Term :=
+    match expand_term_go lookup Option.none 0 t {
+        Result.ok expanded => expanded,
+        Result.err _ => t,
+    }
+
+#[partial]
+pub def resolve_quote (lookup : Identifier -> Option Term) (t : Term) : Term :=
+    match resolve_quote_go lookup Option.none 0 t {
+        Result.ok expanded => expanded,
+        Result.err _ => t,
+    }
+
+/// The whole-graph entry point: ordinary macros plus the term-position
+/// `meta!`/`reflect_type_info!` intrinsic, with real error propagation.
+pub def expand_term_with_meta
+    (lookup : Identifier -> Option Term)
+    (ctx : MetaIntrinsicCtx)
+    (t : Term) : Result String Term :=
+    expand_term_go lookup (Option.some ctx) 0 t
 
 // ─── Tests ───────────────────────────────────────────────────────────
 //
@@ -187,6 +426,16 @@ def no_macros_lookup (id : Identifier) : Option Term := Option.none
 
 def double_lookup (id : Identifier) : Option Term :=
     if id_eq id double_ident then Option.some double_body else Option.none
+
+/// `defmacro quoted_double x := quote { x }` — the shape a real
+/// `quote`-bodied term macro (`fmt`) has. Applying it must yield `x`
+/// itself, not a `quote_` wrapper (syntax-as-data).
+def quoted_double_ident : Identifier := Identifier.id "quoted_double"
+
+def quoted_double_body : Term := Term.lam binder_anon Term.hole (Term.quote_ (Term.var 0 DebugName.unnamed))
+
+def quoted_double_lookup (id : Identifier) : Option Term :=
+    if id_eq id quoted_double_ident then Option.some quoted_double_body else Option.none
 
 #[test]
 def test_macro_call_head_recognizes_var_macro_spine : Bool :=
@@ -232,6 +481,68 @@ def test_expand_term_expands_registered_macro_call : Bool :=
     // documented contract).
     let call : Term := Term.app (Term.var_macro (0 - 1) (DebugName.named double_ident)) (Term.sort (SortLevel.concrete 9)) in
     I64.beq (term_type_level (expand_term double_lookup call)) 9
+
+#[test]
+def test_expand_term_unwraps_a_quote_bodied_macro : Bool :=
+    // `quoted_double! 7` -- a `quote`-bodied term macro (the shape `fmt`
+    // has) expands to its inside, NOT to a `quote_` node. The reference
+    // requires and strips the quote (`apply_macro`); leaving it wrapped
+    // hands the checker syntax-as-data and fails.
+    let call : Term := Term.app (Term.var_macro (0 - 1) (DebugName.named quoted_double_ident)) (Term.sort (SortLevel.concrete 7)) in
+    match expand_term quoted_double_lookup call {
+        // The expansion is exactly the substituted argument, not a
+        // `quote_` around it.
+        Term.sort l => match level_const l {
+            Option.some n => I64.beq n 7,
+            Option.none => false,
+        },
+        _ => false,
+    }
+
+// ── The term-position meta intrinsic ──
+//
+// These stay short of a real evaluation: building a dispatched decl list
+// that defines a meta function is the end-to-end test's job
+// (`slow_tests/src/fmt_macro_tests.mo`), which is also what proves a real
+// `Expr` comes back. Here the reflection step and the arity/error
+// plumbing are pinned.
+
+def empty_meta_ctx : MetaIntrinsicCtx := {
+    mic_dispatched := List.empty,
+    mic_inductives := List.empty,
+}
+
+def meta_ident : Identifier := Identifier.id "meta"
+
+def echo_meta_term : Term := Term.var (0 - 1) (DebugName.named (Identifier.id "echo_meta"))
+
+#[test]
+def test_meta_intrinsic_requires_two_args : Bool :=
+    let call : Term := Term.app (Term.var_macro (0 - 1) (DebugName.named meta_ident)) (Term.lit (Literal.str "hi")) in
+    match expand_term_with_meta no_macros_lookup empty_meta_ctx call {
+        Result.err message => String.contains message "expects 2 arguments",
+        Result.ok _ => false,
+    }
+
+#[test]
+def test_meta_intrinsic_rejects_an_unreflectable_subject : Bool :=
+    let subject : Term := Term.sort (SortLevel.concrete 0) in
+    let call : Term := Term.app (Term.app (Term.var_macro (0 - 1) (DebugName.named meta_ident)) subject) echo_meta_term in
+    match expand_term_with_meta no_macros_lookup empty_meta_ctx call {
+        Result.err message => String.contains message "first argument",
+        Result.ok _ => false,
+    }
+
+#[test]
+def test_meta_intrinsic_reflects_a_string_subject_then_evaluates : Bool :=
+    // A string literal is a valid subject, so expansion gets as far as
+    // invoking the named def; with an empty dispatched list that fails
+    // in lowering, which is the proof the reflection step accepted it.
+    let call : Term := Term.app (Term.app (Term.var_macro (0 - 1) (DebugName.named meta_ident)) (Term.lit (Literal.str "hi"))) echo_meta_term in
+    match expand_term_with_meta no_macros_lookup empty_meta_ctx call {
+        Result.err message => String.contains message "failed to lower",
+        Result.ok _ => false,
+    }
 
 #[test]
 def test_expand_term_passes_through_unknown_macro_name : Bool :=

@@ -1,19 +1,18 @@
-//! End-to-end gate for `fmt!` (`init/src/format_macro.mo` +
-//! `init/src/format.mo`) through the REAL pipeline: elaborate →
+//! End-to-end gate for `fmt!` (`init/src/format.mo`: `fmt_meta` and the
+//! `fmt` macro) through the REAL pipeline: elaborate →
 //! `expand_macros` → type check → evaluate. Nothing here hand-builds an
 //! `Expr`; the point of the feature is that a format string is parsed and
 //! emitted by ordinary Monad code at expansion time, so the only honest
 //! test drives the macro.
 //!
-//! `expand_and_run` mirrors `derive_cli_test.rs`'s harness: load the real
+//! `expand_to_debug` mirrors `derive_cli_test.rs`'s harness: load the real
 //! `init/meta.mo` and `init/format.mo` from disk (via search paths — the
 //! meta-eval capture RE-READS modules from disk, so the files must be
-//! findable there), then expand and check the test file against them.
+//! findable there), then expand the test file against them.
 //!
-//! The generated functions are reached by calling a `main`-free helper def
-//! (`fmt_call_*`) rather than `main`, because `expand_macros`'s own
-//! `current_decls` filter drops `#[test]` defs and a bare `main` would
-//! otherwise be the only consumer shape exercised.
+//! Consumer defs are ordinary named functions rather than `main`, because
+//! `expand_macros`'s own `current_decls` filter drops `#[test]` defs and a
+//! bare `main` would otherwise be the only consumer shape exercised.
 
 use crate::Map;
 use crate::core_check_module::type_check_module_decls_new;
@@ -77,11 +76,12 @@ fn expand_to_debug(input: &str) -> Result<Vec<(String, String)>, String> {
   )
 }
 
-/// The whole expansion of the simplest hole: a curried lambda whose single
-/// parameter is the hole's name, over a `String.concat_list` of the
-/// literal pieces and one direct `FmtDisplay.fmt_display` call.
+/// The whole expansion of the simplest hole: one `String.concat_list` of
+/// the literal pieces and one direct `FmtDisplay.fmt_display` call on the
+/// call site's own variable. The macro emits NO binder — `word` here is
+/// the enclosing `def`'s parameter, not something the expansion creates.
 #[test]
-fn fmt_expands_a_bare_hole_to_one_binder_and_one_display_call() {
+fn fmt_expands_a_bare_hole_to_one_display_call() {
   let expanded = expand_to_debug(
     r#"
 use init::format {fmt}
@@ -96,18 +96,50 @@ def shout (word : String) : String :=
     .find(|(n, _)| n.ends_with("shout"))
     .expect("shout survives expansion");
   assert_eq!(name, "shout");
-  // One binder, carrying the hole's own name.
+  // The hole's own name, referring to the call site's binder.
   assert!(
     body.contains("word"),
-    "expansion should bind `word`: {body}"
+    "expansion should reference `word`: {body}"
   );
   assert!(
     body.contains("fmt_display"),
     "a hole must call the display class: {body}"
   );
   assert!(
-    body.contains("string_concat_list") || body.contains("\"String.concat_list\""),
+    body.contains("concat_list"),
     "pieces are concatenated in one allocation: {body}"
+  );
+  assert!(
+    !body.contains("apply_align"),
+    "a hole with no width must not pay a padding call: {body}"
+  );
+}
+
+/// A hole inside a struct-literal field is an ordinary term too. The
+/// expander's structural walk must reach it (the self-hosted walk already
+/// does, through `literal_map_children`), or the macro call survives
+/// unexpanded into the checker.
+#[test]
+fn fmt_expands_inside_a_struct_literal_field() {
+  let expanded = expand_to_debug(
+    r#"
+use init::format {fmt}
+
+struct Wrap { msg : String }
+
+def wrapped (n : I64) : String :=
+    let w : Wrap := { msg := fmt! "{n}" } in
+    w.msg
+"#,
+  )
+  .expect("fmt! inside a struct literal must expand");
+  let (_, body) = expanded
+    .iter()
+    .find(|(n, _)| n.ends_with("wrapped"))
+    .expect("wrapped survives expansion");
+  assert!(
+    body.contains("fmt_display"),
+    "a hole inside a struct literal must expand: {body}"
   );
 }
 
@@ -222,6 +254,26 @@ def bad : String :=
 /// An out-of-scope hole is an ordinary unresolved variable at the call
 /// site — the property that makes "in-string references only" safe rather
 /// than a capture hazard.
+/// `{}` names no variable, and `fmt!` has no positional argument for it
+/// to mean — so it is rejected at expansion time instead of emitting
+/// `e_var ""` (which surfaced as `unbound variable \`\``).
+#[test]
+fn fmt_rejects_an_unnamed_hole() {
+  let err = expand_to_debug(
+    r#"
+use init::format {fmt}
+
+def bad : String :=
+    fmt! "{}"
+"#,
+  )
+  .expect_err("an unnamed hole must fail expansion");
+  assert!(
+    err.contains("must name a variable"),
+    "the error should say what was wrong: {err}"
+  );
+}
+
 #[test]
 fn fmt_hole_naming_nothing_fails_as_an_unresolved_variable() {
   let loaded = loaded_with_init_meta_and_format();

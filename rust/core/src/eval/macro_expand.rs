@@ -5,8 +5,8 @@ use crate::core_value::Value;
 use crate::term::module::LoadedModules;
 use crate::term::{
   AttrArg, Constructor, Decl, DeclGenDef, Def, GlobalRef, Identifier, Inductive, Literal,
-  ModulePath, NamePath, NameRef, Named, Par, Param, SourceContext,
-  Term::{self, Ann, App, Con, Ctx, Forall, Lam, Lit, Pi, Quote, Var},
+  ModulePath, NamePath, NameRef, Named, Native, Par, Param, SourceContext,
+  Term::{self, Ann, App, Con, Ctx, Forall, Lam, Lit, Ntv, Pi, Quote, Var},
   case_with_optional_field_pattern, instance, match_term, mpvar,
 };
 
@@ -746,18 +746,39 @@ fn term_has_macro_call(term: &Term) -> bool {
   }
   match term {
     App { fun, arg } => is_macro_head(fun) || term_has_macro_call(fun) || term_has_macro_call(arg),
-    Lam { body, .. } => term_has_macro_call(body),
+    Lam { param, body } => {
+      let param_has = match &param {
+        Par::P(p) => {
+          term_has_macro_call(&p.typ) || p.default.as_deref().is_some_and(term_has_macro_call)
+        }
+        Par::I { typ, .. } => term_has_macro_call(typ),
+      };
+      param_has || term_has_macro_call(body)
+    }
     Quote { term } => term_has_macro_call(term),
     Ctx { term, .. } => term_has_macro_call(term),
     Ann { term, typ } => term_has_macro_call(term) || term_has_macro_call(typ),
     Pi { arg, ret, .. } => term_has_macro_call(arg) || term_has_macro_call(ret),
     Forall { typ, body, .. } => term_has_macro_call(typ) || term_has_macro_call(body),
+    Ntv { native } => native.args.iter().flatten().any(term_has_macro_call),
     Lit {
       value: Literal::If { value, then, els },
     } => term_has_macro_call(value) || term_has_macro_call(then) || term_has_macro_call(els),
     Lit {
       value: Literal::Match { value, cases },
     } => term_has_macro_call(value) || cases.iter().any(|c| term_has_macro_call(&c.value)),
+    Lit {
+      value: Literal::StructLit { fields, type_name },
+    } => {
+      fields.values().any(term_has_macro_call)
+        || type_name.as_deref().is_some_and(term_has_macro_call)
+    }
+    Lit {
+      value: Literal::StructUpdate { base, fields },
+    } => term_has_macro_call(base) || fields.values().any(term_has_macro_call),
+    Lit {
+      value: Literal::Term(inner),
+    } => term_has_macro_call(inner),
     Con(Constructor { args, .. }) => args.iter().flatten().any(term_has_macro_call),
     _ => false,
   }
@@ -769,6 +790,74 @@ fn strip_ctx(term: Term) -> Term {
     Ctx { term: t, .. } => strip_ctx(*t),
     other => other,
   }
+}
+
+/// Map an optional child term, preserving `None`. Shared by the structural
+/// walks below (struct-literal annotations, parameter defaults).
+fn map_opt_child(
+  f: &mut impl FnMut(Term) -> Result<Term, MacroError>,
+  t: Option<Box<Term>>,
+) -> Result<Option<Box<Term>>, MacroError> {
+  match t {
+    Some(inner) => Ok(Some(Box::new(f(*inner)?))),
+    None => Ok(None),
+  }
+}
+
+/// Map a struct literal/update's named fields. `Map` is a `BTreeMap`, so
+/// rebuilding in iteration order is stable.
+fn map_term_fields(
+  f: &mut impl FnMut(Term) -> Result<Term, MacroError>,
+  fields: Map<Identifier, Term>,
+) -> Result<Map<Identifier, Term>, MacroError> {
+  let mut out = Map::new();
+  for (name, value) in fields {
+    out.insert(name, f(value)?);
+  }
+  Ok(out)
+}
+
+/// Map a lambda parameter's type (and default), so a macro call in an
+/// annotation is expanded like any other term.
+fn map_par(
+  f: &mut impl FnMut(Term) -> Result<Term, MacroError>,
+  par: Par,
+) -> Result<Par, MacroError> {
+  match par {
+    Par::P(mut p) => {
+      p.typ = Box::new(f(*p.typ)?);
+      p.default = map_opt_child(f, p.default)?;
+      Ok(Par::P(p))
+    }
+    Par::I { typ, mult } => Ok(Par::I {
+      typ: Box::new(f(*typ)?),
+      mult,
+    }),
+  }
+}
+
+/// Map a native application's argument slots.
+fn map_native_args(
+  f: &mut impl FnMut(Term) -> Result<Term, MacroError>,
+  native: Native,
+) -> Result<Native, MacroError> {
+  let Native {
+    native_name,
+    num_args,
+    args,
+  } = native;
+  let args = args
+    .into_iter()
+    .map(|slot| match slot {
+      Some(t) => f(t).map(Some),
+      None => Ok(None),
+    })
+    .collect::<Result<Vec<_>, MacroError>>()?;
+  Ok(Native {
+    native_name,
+    num_args,
+    args,
+  })
 }
 
 /// Maximum macro expansion depth to prevent infinite recursion
@@ -1344,7 +1433,7 @@ fn expand_term(term: Term, ctx: &ExpandCtx, depth: u64) -> Result<Term, MacroErr
       })
     }
     Lam { param, body } => Ok(Lam {
-      param,
+      param: map_par(&mut |t| expand_term(t, ctx, depth), param)?,
       body: Box::new(expand_term(*body, ctx, depth)?),
     }),
     Quote { term } => Ok(Quote {
@@ -1424,6 +1513,30 @@ fn expand_term(term: Term, ctx: &ExpandCtx, depth: u64) -> Result<Term, MacroErr
         num_args,
       }))
     }
+    Ntv { native } => Ok(Ntv {
+      native: map_native_args(&mut |t| expand_term(t, ctx, depth), native)?,
+    }),
+    Lit {
+      value: Literal::StructLit { fields, type_name },
+    } => Ok(Term::Lit {
+      value: Literal::StructLit {
+        fields: map_term_fields(&mut |t| expand_term(t, ctx, depth), fields)?,
+        type_name: map_opt_child(&mut |t| expand_term(t, ctx, depth), type_name)?,
+      },
+    }),
+    Lit {
+      value: Literal::StructUpdate { base, fields },
+    } => Ok(Term::Lit {
+      value: Literal::StructUpdate {
+        base: Box::new(expand_term(*base, ctx, depth)?),
+        fields: map_term_fields(&mut |t| expand_term(t, ctx, depth), fields)?,
+      },
+    }),
+    Lit {
+      value: Literal::Term(inner),
+    } => Ok(Term::Lit {
+      value: Literal::Term(Box::new(expand_term(*inner, ctx, depth)?)),
+    }),
     other => Ok(other),
   }
 }
@@ -1493,7 +1606,7 @@ fn resolve_quote(term: Term, ctx: &ExpandCtx, depth: u64) -> Result<Term, MacroE
       }
     }
     Lam { param, body } => Ok(Lam {
-      param,
+      param: map_par(&mut |t| resolve_quote(t, ctx, depth), param)?,
       body: Box::new(resolve_quote(*body, ctx, depth)?),
     }),
     Quote { term } => {
@@ -1576,6 +1689,30 @@ fn resolve_quote(term: Term, ctx: &ExpandCtx, depth: u64) -> Result<Term, MacroE
         num_args,
       }))
     }
+    Ntv { native } => Ok(Ntv {
+      native: map_native_args(&mut |t| resolve_quote(t, ctx, depth), native)?,
+    }),
+    Lit {
+      value: Literal::StructLit { fields, type_name },
+    } => Ok(Term::Lit {
+      value: Literal::StructLit {
+        fields: map_term_fields(&mut |t| resolve_quote(t, ctx, depth), fields)?,
+        type_name: map_opt_child(&mut |t| resolve_quote(t, ctx, depth), type_name)?,
+      },
+    }),
+    Lit {
+      value: Literal::StructUpdate { base, fields },
+    } => Ok(Term::Lit {
+      value: Literal::StructUpdate {
+        base: Box::new(resolve_quote(*base, ctx, depth)?),
+        fields: map_term_fields(&mut |t| resolve_quote(t, ctx, depth), fields)?,
+      },
+    }),
+    Lit {
+      value: Literal::Term(inner),
+    } => Ok(Term::Lit {
+      value: Literal::Term(Box::new(resolve_quote(*inner, ctx, depth)?)),
+    }),
     other => Ok(other),
   }
 }

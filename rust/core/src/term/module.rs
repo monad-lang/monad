@@ -4192,6 +4192,160 @@ fn collect_term_names(term: &Term, refs: &mut References, bound: &mut Binders) {
   }
 }
 
+/// Every TERM-position macro name (`name!`) appearing in `term`, at any
+/// depth. A macro call is a `Term::Var` whose `NameRef` is `Macro`, so the
+/// var itself is the evidence unused-import analysis needs; over-inclusion
+/// (a name that turns out not to be load-bearing) is the safe direction.
+fn collect_term_macro_names(term: &Term, names: &mut Set<NamePath>) {
+  fn par(param: &Par, names: &mut Set<NamePath>) {
+    match param {
+      Par::P(p) => {
+        collect_term_macro_names(&p.typ, names);
+        if let Some(default) = &p.default {
+          collect_term_macro_names(default, names);
+        }
+      }
+      Par::I { typ, .. } => collect_term_macro_names(typ, names),
+    }
+  }
+  fn literal(value: &Literal, names: &mut Set<NamePath>) {
+    match value {
+      Literal::If { value, then, els } => {
+        collect_term_macro_names(value, names);
+        collect_term_macro_names(then, names);
+        collect_term_macro_names(els, names);
+      }
+      Literal::Match { value, cases } => {
+        collect_term_macro_names(value, names);
+        for case in cases {
+          collect_term_macro_names(&case.value, names);
+        }
+      }
+      Literal::StructLit { fields, type_name } => {
+        for value in fields.values() {
+          collect_term_macro_names(value, names);
+        }
+        if let Some(type_name) = type_name {
+          collect_term_macro_names(type_name, names);
+        }
+      }
+      Literal::StructUpdate { base, fields } => {
+        collect_term_macro_names(base, names);
+        for value in fields.values() {
+          collect_term_macro_names(value, names);
+        }
+      }
+      Literal::Term(inner) => collect_term_macro_names(inner, names),
+      Literal::Str { .. }
+      | Literal::Char { .. }
+      | Literal::Num { .. }
+      | Literal::Float { .. }
+      | Literal::Foreign(_) => {}
+    }
+  }
+  match term {
+    Term::Var { name } => {
+      if let NameRef::Macro(id) = name {
+        names.insert(NamePath::single(id.clone()));
+      }
+    }
+    Term::Forall { typ, body, .. } => {
+      collect_term_macro_names(typ, names);
+      collect_term_macro_names(body, names);
+    }
+    Term::Pi { arg, ret, .. } => {
+      collect_term_macro_names(arg, names);
+      collect_term_macro_names(ret, names);
+    }
+    Term::Lam { param, body } => {
+      par(param, names);
+      collect_term_macro_names(body, names);
+    }
+    Term::App { fun, arg } => {
+      collect_term_macro_names(fun, names);
+      collect_term_macro_names(arg, names);
+    }
+    Term::Ann { term, typ } => {
+      collect_term_macro_names(term, names);
+      collect_term_macro_names(typ, names);
+    }
+    Term::Lit { value } => literal(value, names),
+    Term::Ntv { native } => {
+      for arg in native.args() {
+        if let Some(t) = arg {
+          collect_term_macro_names(t, names);
+        }
+      }
+    }
+    Term::Con(c) => {
+      for arg in &c.args {
+        if let Some(t) = arg {
+          collect_term_macro_names(t, names);
+        }
+      }
+    }
+    Term::Ctx { term, .. } => collect_term_macro_names(term, names),
+    Term::Sort { .. } | Term::Hole => {}
+    Term::Quote { term } => collect_term_macro_names(term, names),
+  }
+}
+
+/// Every term-position macro name in one declaration's embedded terms.
+/// Used alongside `collect_macro_call_names` so a `use`d term macro
+/// (`use init::format {fmt}` + `fmt! "..."`) is not reported unused.
+fn collect_decl_macro_names(decl: &Decl, names: &mut Set<NamePath>) {
+  fn def(def: &Def, names: &mut Set<NamePath>) {
+    collect_term_macro_names(&def.term, names);
+    collect_term_macro_names(&def.typ, names);
+  }
+  match decl {
+    Decl::Def(d) | Decl::DefMacro(d) => def(d, names),
+    Decl::Type(ind) => {
+      collect_term_macro_names(ind.typ(), names);
+      for param in ind.params() {
+        collect_term_macro_names(&param.typ, names);
+        if let Some(default) = &param.default {
+          collect_term_macro_names(default, names);
+        }
+      }
+      for cons in ind.constructors() {
+        collect_term_macro_names(cons.typ(), names);
+        for param in cons.params() {
+          collect_term_macro_names(&param.typ, names);
+          if let Some(default) = &param.default {
+            collect_term_macro_names(default, names);
+          }
+        }
+      }
+    }
+    Decl::Ins(ins) => {
+      for arg in &ins.args {
+        collect_term_macro_names(arg, names);
+      }
+      for d in ins.impls_map.values() {
+        def(d, names);
+      }
+    }
+    Decl::MacroCall { args, .. } => {
+      for arg in args {
+        collect_term_macro_names(arg, names);
+      }
+    }
+    Decl::ScopedOpen { decl, .. } => collect_decl_macro_names(decl, names),
+    Decl::DeclGen(gd) => {
+      for d in &gd.decls {
+        collect_decl_macro_names(d, names);
+      }
+    }
+    Decl::Generated(inner) => {
+      for d in inner {
+        collect_decl_macro_names(d, names);
+      }
+    }
+    Decl::Use(_) | Decl::Open(_) | Decl::Infix(_) | Decl::MoteAttr { .. } => {}
+  }
+}
+
 /// Collect the macro names a module *invokes* — `derive_lens! Point`-style
 /// `Decl::MacroCall`s and `#[derive BEq]` attribute dispatch (mapped to
 /// its registered `defmacro` via the `#[derive_handler ...]` registry,
@@ -4227,6 +4381,11 @@ pub fn collect_macro_call_names(
       }
       _ => {}
     }
+    // TERM-position calls (`fmt! "..."`) are not `Decl::MacroCall`s and
+    // are gone by the time the post-expansion module is walked, so this
+    // pre-expansion pass is the only place unused-import analysis can see
+    // them.
+    collect_decl_macro_names(ctx.value(), &mut names);
   }
   names
 }

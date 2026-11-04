@@ -34,7 +34,8 @@ use lang::mote {
 use lib::pretty {show_term, show_decls}
 use lib::typecheck::name_subst {close_named_vars}
 use lib::typecheck::macro_apply {expand_decl_gen_call}
-use lib::typecheck::macro_queue {DeclGenEntry, DeriveHandlerReg, build_decl_gen_registry, derive_bridge_decls, derive_handler_regs_of_decls, expand_decls, find_duplicate_derive_target, lookup_decl_gen}
+use lib::typecheck::macro_expand {MetaIntrinsicCtx, expand_term_with_meta}
+use lib::typecheck::macro_queue {DeclGenEntry, DeriveHandlerReg, TermMacroEntry, build_decl_gen_registry, build_term_macro_registry, check_macro_declarations, check_macro_uses, decls_have_live_term_call, derive_bridge_decls, derive_handler_regs_of_decls, expand_decls, expand_decls_terms_res, find_duplicate_derive_target, lookup_decl_gen, lookup_term_macro}
 use lib::typecheck::meta_eval {meta_eval_invoke}
 use lib::typecheck::meta_reflect {
   build_type_info_value, collect_inductives, find_inductive_by_bare_name,
@@ -5887,17 +5888,23 @@ def elaborate_def_typs (decls : List Decl) (known_names : List Identifier) : Lis
 // (unknown `T`, a meta-def that itself errors, a `d_error` result) --
 // an unresolved/unknown macro name still passes through unchanged, the
 // same "not an error" rule `expand_decls_go` itself already follows.
-def is_reflect_type_info_call (d : Decl) : Bool :=
+/// The single reflection intrinsic, under either accepted spelling.
+/// `meta` is the name `init/format.mo` uses; `reflect_type_info` stays an
+/// ALIAS for one nightly rollout window (the last published nightly
+/// resolves only this hardcoded spelling, so `std/derive.mo`'s templates
+/// must not switch yet — AGENTS.md's two-step rollout).
+def is_meta_intrinsic_call (d : Decl) : Bool :=
     match d {
-        Decl.macro_call_d name _ => id_eq name (Identifier.id "reflect_type_info"),
+        Decl.macro_call_d name _ =>
+            id_eq name (Identifier.id "reflect_type_info") || id_eq name (Identifier.id "meta"),
         _ => false,
     }
 
 #[partial]
-def has_reflect_type_info_call (decls : List Decl) : Bool :=
+def has_meta_intrinsic_call (decls : List Decl) : Bool :=
     match decls {
         List.empty => false,
-        List.cons d rest => if is_reflect_type_info_call d then true else has_reflect_type_info_call rest,
+        List.cons d rest => if is_meta_intrinsic_call d then true else has_meta_intrinsic_call rest,
     }
 
 def decl_gen_subst_one (registry : List DeclGenEntry) (d : Decl) : List Decl :=
@@ -5940,24 +5947,26 @@ def decl_gen_subst_decls (registry : List DeclGenEntry) (decls : List Decl) : Li
                 (list_append (derive_bridge_decls registry d) (decl_gen_subst_decls registry rest)),
     }
 
-/// One `reflect_type_info! T meta_def` call -> the meta-def's own
-/// reified output decls, via `lang.typecheck.meta_reflect`/
-/// `lang.typecheck.meta_eval`.
+/// One decl-position `meta! T meta_def` (or `reflect_type_info! ...`) call
+/// -> the meta-def's own reified output decls, via
+/// `lang.typecheck.meta_reflect`/`lang.typecheck.meta_eval`. The
+/// diagnostic names the spelling the author actually wrote.
 def resolve_one_reflect_call (inds : List Inductive) (dispatched : List Decl) (d : Decl) : Result String (List Decl) :=
     match d {
-        Decl.macro_call_d _name args =>
+        Decl.macro_call_d name args =>
+            let label : String := String.concat (show_identifier name) "!: " in
             match args {
                 List.cons t_arg rest1 =>
                     match rest1 {
                         List.cons meta_ref _ =>
                             match term_free_var_name t_arg {
-                                Option.none => Result.err "reflect_type_info!: T argument must be a plain type name",
+                                Option.none => Result.err (String.concat label "T argument must be a plain type name"),
                                 Option.some t_name =>
                                     match find_inductive_by_bare_name inds t_name {
-                                        Option.none => Result.err ("reflect_type_info!: unknown type " ++ t_name),
+                                        Option.none => Result.err (String.concat label (String.concat "unknown type " t_name)),
                                         Option.some ind =>
                                             match term_free_var_name meta_ref {
-                                                Option.none => Result.err "reflect_type_info!: meta-def argument must be a plain name",
+                                                Option.none => Result.err (String.concat label "meta-def argument must be a plain name"),
                                                 Option.some meta_name =>
                                                     match build_type_info_value ind {
                                                         Result.err e => Result.err e,
@@ -5970,11 +5979,11 @@ def resolve_one_reflect_call (inds : List Inductive) (dispatched : List Decl) (d
                                             },
                                     },
                             },
-                        List.empty => Result.err "reflect_type_info!: expected 2 arguments (T, meta_def)",
+                        List.empty => Result.err (String.concat label "expected 2 arguments (T, meta_def)"),
                     },
-                List.empty => Result.err "reflect_type_info!: expected 2 arguments (T, meta_def)",
+                List.empty => Result.err (String.concat label "expected 2 arguments (T, meta_def)"),
             },
-        _ => Result.err "resolve_one_reflect_call: expected a reflect_type_info! macro_call_d",
+        _ => Result.err "resolve_one_reflect_call: expected a meta! macro_call_d",
     }
 
 #[partial]
@@ -5982,7 +5991,7 @@ def resolve_reflect_calls (inds : List Inductive) (dispatched : List Decl) (decl
     match decls {
         List.empty => Result.ok List.empty,
         List.cons d rest =>
-            if is_reflect_type_info_call d then
+            if is_meta_intrinsic_call d then
                 match resolve_one_reflect_call inds dispatched d {
                     Result.err e => Result.err e,
                     Result.ok new_decls =>
@@ -6091,19 +6100,29 @@ pub struct GraphExpansion {
 /// `mods` must already exclude the target module (the caller's
 /// `raw_target` covers that one).
 #[partial]
-def expand_dep_modules_raw (registry : List DeclGenEntry) (inds : List Inductive) (dispatched : List Decl) (mods : List ModuleInfo) : Result String (List (Pair ModulePath (List Decl))) :=
+def expand_dep_modules_raw (registry : List DeclGenEntry) (inds : List Inductive) (dispatched : List Decl) (term_lookup : Identifier -> Option Term) (meta_ctx : MetaIntrinsicCtx) (mods : List ModuleInfo) : Result String (List (Pair ModulePath (List Decl))) :=
     match mods {
         List.empty => Result.ok List.empty,
         List.cons m rest =>
-            match expand_dep_modules_raw registry inds dispatched rest {
+            match expand_dep_modules_raw registry inds dispatched term_lookup meta_ctx rest {
                 Result.err e => Result.err e,
                 Result.ok tail =>
                     let subst : List Decl := decl_gen_subst_decls registry m.decl_list in
-                    let changed : Bool := has_decl_gen_expansion registry m.decl_list || has_reflect_type_info_call subst in
+                    // A dependency's own TERM macro calls (including a
+                    // call to a macro another dependency declares) are
+                    // expanded here too, for the same reason the decl-gen
+                    // half is: codegen reads each module's raw decl_list
+                    // verbatim.
+                    let term_changed : Bool := decls_have_live_term_call term_lookup subst in
+                    let changed : Bool := has_decl_gen_expansion registry m.decl_list || has_meta_intrinsic_call subst || term_changed in
                     if changed then
-                        match resolve_reflect_calls inds dispatched subst {
+                        match expand_decls_terms_res (fn t => expand_term_with_meta term_lookup meta_ctx t) subst {
                             Result.err e => Result.err e,
-                            Result.ok final => Result.ok (List.cons (Pair.pair m.path final) tail),
+                            Result.ok term_final =>
+                                match resolve_reflect_calls inds dispatched term_final {
+                                    Result.err e => Result.err e,
+                                    Result.ok final => Result.ok (List.cons (Pair.pair m.path final) tail),
+                                },
                         }
                     else Result.ok tail,
             },
@@ -6153,6 +6172,19 @@ def dep_module_derive_handler_regs (mods : List ModuleInfo) : List DeriveHandler
 /// counted exactly once. The message matches the Rust host's
 /// `register_derive_handler` spelling.
 def expand_decls_graph (scope : Scope) (whole_graph_decls : List Decl) (target : List Decl) (raw_target : List Decl) (dep_modules : List ModuleInfo) : Result String GraphExpansion :=
+    // Definition-site `#[at]`/`#[returns]` check, in the file that wrote
+    // the macro (a dependency is checked as its own target by the corpus
+    // sweep, so its declaration is diagnosed there -- never at a caller).
+    match check_macro_declarations raw_target {
+        Option.some e => Result.err e,
+        Option.none =>
+            match check_macro_uses raw_target {
+                Option.some e => Result.err e,
+                Option.none => expand_decls_graph_checked scope whole_graph_decls target raw_target dep_modules,
+            },
+    }
+
+def expand_decls_graph_checked (scope : Scope) (whole_graph_decls : List Decl) (target : List Decl) (raw_target : List Decl) (dep_modules : List ModuleInfo) : Result String GraphExpansion :=
     let regs : List DeriveHandlerReg :=
         list_append (derive_handler_regs_of_decls scope.module_id raw_target)
             (dep_module_derive_handler_regs dep_modules) in
@@ -6177,14 +6209,35 @@ def expand_decls_graph_go (scope : Scope) (whole_graph_decls : List Decl) (targe
     let raw_subst : List Decl := decl_gen_subst_decls registry raw_target in
     let substituted : Bool :=
         has_decl_gen_expansion registry whole_graph_decls || has_decl_gen_expansion registry target in
+    // The TERM-macro registry the whole-graph pass resolves against: the
+    // target's own definitions shadow dependencies', matching the
+    // reference's "current module's macros take priority". Without this,
+    // a `use init::format {fmt}` call site has no registry entry at all
+    // (the per-file pass sees only its own file's `defmacro`s).
+    let term_registry : List TermMacroEntry :=
+        list_append (build_term_macro_registry raw_target) (build_term_macro_registry whole_graph_decls) in
+    let term_lookup : Identifier -> Option Term := fn id => lookup_term_macro term_registry id in
     // `raw_changed`: a registered decl-gen call anywhere in the RAW target
-    // (its body may or may not contain a `reflect_type_info!`), or a
-    // `reflect_type_info!` call left in the substituted raw target. Both
-    // mean the raw list gains decls, so the main module's own `decl_list`
-    // must be replaced with `raw_target`.
+    // (its body may or may not contain a `reflect_type_info!`), a
+    // `reflect_type_info!` call left in the substituted raw target, or a
+    // term-position call the term pass will expand. All mean the raw list
+    // changes, so the main module's own `decl_list` must be replaced with
+    // `raw_target`.
     let raw_changed : Bool :=
-        has_decl_gen_expansion registry raw_target || has_reflect_type_info_call raw_subst in
-    if has_reflect_type_info_call graph_subst || has_reflect_type_info_call target_subst || has_reflect_type_info_call raw_subst then
+        has_decl_gen_expansion registry raw_target
+            || has_meta_intrinsic_call raw_subst
+            || decls_have_live_term_call term_lookup raw_subst in
+    let reflect_needed : Bool :=
+        has_meta_intrinsic_call graph_subst
+            || has_meta_intrinsic_call target_subst
+            || has_meta_intrinsic_call raw_subst in
+    // The expensive preparation below (elaborating the whole graph for
+    // real execution) is paid only when there is something to expand.
+    let term_needed : Bool :=
+        decls_have_live_term_call term_lookup graph_subst
+            || decls_have_live_term_call term_lookup target_subst
+            || decls_have_live_term_call term_lookup raw_subst in
+    if Bool.or reflect_needed term_needed then
         let inds : List Inductive := collect_inductives whole_graph_decls in
         let empty_locs : LocalScope := { vars := List.empty, parent := Option.none } in
         // `dispatched` is the expansion ENVIRONMENT, not the graph that
@@ -6208,23 +6261,46 @@ def expand_decls_graph_go (scope : Scope) (whole_graph_decls : List Decl) (targe
         // was present in the graph, and the downstream gate runs the same
         // check unconditionally.
         let dispatched := elaborate_module_decls_best_effort scope whole_graph_decls empty_locs in
-        match resolve_reflect_calls inds dispatched graph_subst {
+        let meta_ctx : MetaIntrinsicCtx := {
+            mic_dispatched := dispatched,
+            mic_inductives := inds,
+        } in
+        let expand_terms : Term -> Result String Term :=
+            fn t => expand_term_with_meta term_lookup meta_ctx t in
+        // The TERM pass runs first: a term macro may expand into the
+        // decl-position `reflect_type_info!` call the next match resolves
+        // (and, for `fmt!`, into a term-position `meta!` this same walk
+        // evaluates).
+        match expand_decls_terms_res expand_terms graph_subst {
             Result.err e => Result.err e,
-            Result.ok graph_final =>
-                match resolve_reflect_calls inds dispatched target_subst {
+            Result.ok graph_term =>
+                match expand_decls_terms_res expand_terms target_subst {
                     Result.err e => Result.err e,
-                    // This branch always rewrites at least the
-                    // `reflect_type_info!` call it just resolved.
-                    Result.ok target_final =>
-                        match resolve_reflect_calls inds dispatched raw_subst {
+                    Result.ok target_term =>
+                        match expand_decls_terms_res expand_terms raw_subst {
                             Result.err e => Result.err e,
-                            Result.ok raw_final =>
-                                match expand_dep_modules_raw registry inds dispatched dep_modules {
+                            Result.ok raw_term =>
+                                match resolve_reflect_calls inds dispatched graph_term {
                                     Result.err e => Result.err e,
-                                    Result.ok raw_all_final =>
-                                        let expanded : GraphExpansion :=
-                                            { graph := graph_final, target := target_final, raw_target := raw_final, changed := true, raw_changed := raw_changed, raw_all := raw_all_final } in
-                                        Result.ok expanded,
+                                    Result.ok graph_final =>
+                                        match resolve_reflect_calls inds dispatched target_term {
+                                            Result.err e => Result.err e,
+                                            // This branch always rewrites at
+                                            // least the `reflect_type_info!`
+                                            // call it just resolved.
+                                            Result.ok target_final =>
+                                                match resolve_reflect_calls inds dispatched raw_term {
+                                                    Result.err e => Result.err e,
+                                                    Result.ok raw_final =>
+                                                        match expand_dep_modules_raw registry inds dispatched term_lookup meta_ctx dep_modules {
+                                                            Result.err e => Result.err e,
+                                                            Result.ok raw_all_final =>
+                                                                let expanded : GraphExpansion :=
+                                                                    { graph := graph_final, target := target_final, raw_target := raw_final, changed := true, raw_changed := raw_changed, raw_all := raw_all_final } in
+                                                                Result.ok expanded,
+                                                        },
+                                                },
+                                        },
                                 },
                         },
                 },

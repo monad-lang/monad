@@ -129,7 +129,12 @@ def find_inductive_by_bare_name (inds : List Inductive) (name : String) : Option
 /// was invoked with -- the only shape this corpus ever needs: a plain
 /// (possibly still-sentinel-idx, DebugName-named) variable reference.
 def term_free_var_name (t : Term) : Option String :=
-    match t {
+    // Strip source locations: a TERM-position intrinsic's arguments come
+    // from the parser's ordinary term grammar and are `Term.ctx`-wrapped,
+    // while a decl-position call's arguments may not be. Peeling here
+    // makes both positions agree (the reference's `strip_ctx` at every
+    // `term_as_identifier` call site).
+    match strip_term_ctx t {
         Term.var _idx dbg =>
             match dbg {
                 DebugName.named id => Option.some (show_identifier_ id),
@@ -436,7 +441,12 @@ def strings_of_values (vs : List Value) : Result String (List String) :=
 /// `Expr` Value -> `Term`, in de-Bruijn scope `locals` (innermost
 /// first). Tags mirror `init/meta.mo`'s own `Expr` declaration order
 /// (this file's own doc comment): 0=e_var 1=e_str 2=e_int 3=e_bool
-/// 4=e_app 5=e_lam 6=e_if 7=e_match 8=e_ctor.
+/// 4=e_app 5=e_lam 6=e_if 7=e_match 8=e_ctor 9=e_hole 10=e_error.
+///
+/// Tag 9 (`e_hole`) reifies to `Term.hole` — let-the-checker-infer —
+/// and tag 10 (`e_error`) aborts the whole reification with its message,
+/// the term-position counterpart of `MetaDecl.d_error`. Both mirror
+/// `rust/core/src/eval/meta_reflect.rs`'s `reify_value_to_term`.
 #[partial]
 def reify_expr_value (locals : List String) (v : Value) : Result String Term :=
     match v {
@@ -450,8 +460,29 @@ def reify_expr_value (locals : List String) (v : Value) : Result String Term :=
             else if I64.beq tag 6 then reify_e_if locals args
             else if I64.beq tag 7 then reify_e_match locals args
             else if I64.beq tag 8 then reify_e_ctor locals args
+            else if I64.beq tag 9 then Result.ok Term.hole
+            else if I64.beq tag 10 then reify_e_error args
             else Result.err "reify_expr_value: unrecognized Expr constructor tag",
         _ => Result.err "reify_expr_value: expected an Expr value (v_con)",
+    }
+
+/// The term-position entry point: an arbitrary `Expr` returned by a
+/// `String -> Expr` (or any other) meta function, reified at top level,
+/// where there are no enclosing binders to resolve against. Mirrors
+/// `rust/core/src/eval/meta_reflect.rs`'s `reify_value_to_term`.
+pub def reify_value_to_term (v : Value) : Result String Term :=
+    reify_expr_value List.empty v
+
+/// `e_error message` — reject the meta function's whole result with
+/// `message`, reported as an ordinary macro-expansion error by the caller.
+def reify_e_error (args : List Value) : Result String Term :=
+    match args {
+        List.cons message_val _ =>
+            match value_as_str message_val {
+                Option.some message => Result.err message,
+                Option.none => Result.err "e_error: expected a String message",
+            },
+        List.empty => Result.err "e_error: missing message arg",
     }
 
 def reify_e_var (locals : List String) (args : List Value) : Result String Term :=

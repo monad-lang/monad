@@ -596,6 +596,33 @@ fn test_qualified_reference_counts_as_used() {
 }
 
 #[test]
+fn test_term_position_macro_call_counts_as_use_of_its_import() {
+  // `use init::format {fmt}` + `fmt! "..."` is a USE of `fmt`. The call
+  // is a `Term::Var { name: NameRef::Macro }`, not a `Decl::MacroCall`,
+  // and expansion removes it before the post-expansion module is walked —
+  // so the pre-expansion pass has to collect it, or the import is
+  // reported unused.
+  let decls = parse_file(
+    r#"
+    use init::format {fmt}
+
+    def shout (word : String) : String :=
+        fmt! "<{word}>"
+    "#
+    .into(),
+  )
+  .unwrap()
+  .decls;
+  let loaded = default_modules().unwrap();
+  let names = collect_macro_call_names(&decls, &loaded);
+  let fmt_name = NamePath::single(Identifier::new("fmt".to_string()));
+  assert!(
+    names.contains(&fmt_name),
+    "a term-position macro call must count as a use: {names:?}"
+  );
+}
+
+#[test]
 fn test_match_pattern_constructor_counts_as_used() {
   // A constructor referenced only in match-pattern position (never as a
   // call-position `Term::Var`) must still be recorded as "referenced" —

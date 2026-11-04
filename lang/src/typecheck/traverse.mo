@@ -146,6 +146,200 @@ def con_map_children (f : Term -> Term) (c : Con) : Con :=
 def native_map_children (f : Term -> Term) (n : Native) : Native :=
     match n { Native.mk name num_args args => Native.mk name num_args (opt_terms_map_children f args) }
 
+// ─── Result-aware structural recursion ─────────────────────────────
+//
+// `term_map_children` maps with a pure function. A pass that can FAIL
+// while walking — macro expansion, whose intrinsic evaluation and
+// malformed-template checks return `Result` — needs the same traversal
+// with short-circuiting: the first `Result.err` wins and the remaining
+// siblings are not visited. Same child order and same rebuilds as the
+// pure twins above.
+
+/// Short-circuiting bind for `Result String` (there is no `Monad
+/// (Result E)` instance in the prelude, and this walk should not need
+/// one).
+pub def result_bind {A B : Type} (r : Result String A) (k : A -> Result String B) : Result String B :=
+    match r {
+        Result.ok a => k a,
+        Result.err e => Result.err e,
+    }
+
+#[partial]
+pub def term_map_children_result (f : Term -> Result String Term) (t : Term) : Result String Term :=
+    match t {
+        Term.var idx dbg => Result.ok (Term.var idx dbg),
+        Term.var_macro idx dbg => Result.ok (Term.var_macro idx dbg),
+        Term.lam dbg typ body =>
+            result_bind (f typ) (fn (typ2 : Term) =>
+                result_bind (f body) (fn (body2 : Term) =>
+                    Result.ok (Term.lam dbg typ2 body2))),
+        Term.pi b arg ret =>
+            result_bind (f arg) (fn (arg2 : Term) =>
+                result_bind (f ret) (fn (ret2 : Term) =>
+                    Result.ok (Term.pi b arg2 ret2))),
+        Term.app callee arg =>
+            result_bind (f callee) (fn (callee2 : Term) =>
+                result_bind (f arg) (fn (arg2 : Term) =>
+                    Result.ok (Term.app callee2 arg2))),
+        Term.lit value =>
+            result_bind (literal_map_children_result f value) (fn (value2 : Literal) =>
+                Result.ok (Term.lit value2)),
+        Term.ntv n =>
+            result_bind (native_map_children_result f n) (fn (n2 : Native) =>
+                Result.ok (Term.ntv n2)),
+        Term.con c =>
+            result_bind (con_map_children_result f c) (fn (c2 : Con) =>
+                Result.ok (Term.con c2)),
+        Term.sort level => Result.ok (Term.sort level),
+        Term.hole => Result.ok Term.hole,
+        Term.quote_ inner =>
+            result_bind (f inner) (fn (inner2 : Term) =>
+                Result.ok (Term.quote_ inner2)),
+        Term.ctx loc inner =>
+            result_bind (f inner) (fn (inner2 : Term) =>
+                Result.ok (Term.ctx loc inner2)),
+        Term.cubical c =>
+            result_bind (cubical_map_children_result f c) (fn (c2 : Cubical) =>
+                Result.ok (Term.cubical c2)),
+        Term.elim e =>
+            result_bind (elim_map_children_result f e) (fn (e2 : Elim) =>
+                Result.ok (Term.elim e2)),
+    }
+
+#[partial]
+def elim_map_children_result (f : Term -> Result String Term) (e : Elim) : Result String Elim :=
+    result_bind (terms_map_children_result f e.params) (fn (params2 : List Term) =>
+        result_bind (terms_map_children_result f e.indices) (fn (indices2 : List Term) =>
+            result_bind (f e.motive) (fn (motive2 : Term) =>
+                result_bind (terms_map_children_result f e.minors) (fn (minors2 : List Term) =>
+                    result_bind (f e.scrutinee) (fn (scrutinee2 : Term) =>
+                        // Annotated local, NOT `Result.ok { e with ... }`:
+                        // a struct literal in argument position is the
+                        // recorded self-hosted codegen hazard (it can
+                        // compile to a void placeholder).
+                        let updated : Elim := { e with
+                            params := params2,
+                            indices := indices2,
+                            motive := motive2,
+                            minors := minors2,
+                            scrutinee := scrutinee2 } in
+                        Result.ok updated)))))
+
+#[partial]
+def cubical_map_children_result (f : Term -> Result String Term) (c : Cubical) : Result String Cubical :=
+    result_bind (terms_map_children_result f c.args) (fn (args2 : List Term) =>
+        // Annotated local — see `elim_map_children_result`'s note on the
+        // struct-literal-in-argument-position hazard.
+        let updated : Cubical := { c with args := args2 } in
+        Result.ok updated)
+
+#[partial]
+def terms_map_children_result (f : Term -> Result String Term) (ts : List Term) : Result String (List Term) :=
+    match ts {
+        List.empty => Result.ok List.empty,
+        List.cons x rest =>
+            result_bind (f x) (fn (x2 : Term) =>
+                result_bind (terms_map_children_result f rest) (fn (rest2 : List Term) =>
+                    Result.ok (List.cons x2 rest2))),
+    }
+
+#[partial]
+def literal_map_children_result (f : Term -> Result String Term) (l : Literal) : Result String Literal :=
+    match l {
+        Literal.str v => Result.ok (Literal.str v),
+        Literal.char v => Result.ok (Literal.char v),
+        Literal.num n suf => Result.ok (Literal.num n suf),
+        Literal.flt t suf => Result.ok (Literal.flt t suf),
+        Literal.if_ a b c =>
+            result_bind (f a) (fn (a2 : Term) =>
+                result_bind (f b) (fn (b2 : Term) =>
+                    result_bind (f c) (fn (c2 : Term) =>
+                        Result.ok (Literal.if_ a2 b2 c2)))),
+        Literal.match_ scrut cases =>
+            result_bind (f scrut) (fn (scrut2 : Term) =>
+                result_bind (match_cases_map_children_result f cases) (fn (cases2 : List MatchCase) =>
+                    Result.ok (Literal.match_ scrut2 cases2))),
+        Literal.struct_lit fields type_name =>
+            result_bind (struct_fields_map_children_result f fields) (fn (fields2 : List StructLitField) =>
+                result_bind (opt_term_map_children_result f type_name) (fn (type_name2 : Option Term) =>
+                    Result.ok (Literal.struct_lit fields2 type_name2))),
+        Literal.struct_update base fields =>
+            result_bind (f base) (fn (base2 : Term) =>
+                result_bind (struct_fields_map_children_result f fields) (fn (fields2 : List StructLitField) =>
+                    Result.ok (Literal.struct_update base2 fields2))),
+    }
+
+#[partial]
+def match_cases_map_children_result (f : Term -> Result String Term) (cases : List MatchCase) : Result String (List MatchCase) :=
+    match cases {
+        List.empty => Result.ok List.empty,
+        List.cons c rest =>
+            result_bind (match_case_map_children_result f c) (fn (c2 : MatchCase) =>
+                result_bind (match_cases_map_children_result f rest) (fn (rest2 : List MatchCase) =>
+                    Result.ok (List.cons c2 rest2))),
+    }
+
+#[partial]
+def match_case_map_children_result (f : Term -> Result String Term) (c : MatchCase) : Result String MatchCase :=
+    match c {
+        MatchCase.mk name args body fp typ_name =>
+            result_bind (f body) (fn (body2 : Term) =>
+                Result.ok (MatchCase.mk name args body2 fp typ_name)),
+    }
+
+#[partial]
+def struct_fields_map_children_result (f : Term -> Result String Term) (fields : List StructLitField) : Result String (List StructLitField) :=
+    match fields {
+        List.empty => Result.ok List.empty,
+        List.cons fld rest =>
+            result_bind (struct_field_map_children_result f fld) (fn (fld2 : StructLitField) =>
+                result_bind (struct_fields_map_children_result f rest) (fn (rest2 : List StructLitField) =>
+                    Result.ok (List.cons fld2 rest2))),
+    }
+
+#[partial]
+def struct_field_map_children_result (f : Term -> Result String Term) (fld : StructLitField) : Result String StructLitField :=
+    match fld {
+        StructLitField.mk name value =>
+            result_bind (f value) (fn (value2 : Term) =>
+                Result.ok (StructLitField.mk name value2)),
+    }
+
+#[partial]
+def opt_term_map_children_result (f : Term -> Result String Term) (t : Option Term) : Result String (Option Term) :=
+    match t {
+        Option.some x =>
+            result_bind (f x) (fn (x2 : Term) =>
+                Result.ok (Option.some x2)),
+        Option.none => Result.ok Option.none,
+    }
+
+#[partial]
+def opt_terms_map_children_result (f : Term -> Result String Term) (ts : List (Option Term)) : Result String (List (Option Term)) :=
+    match ts {
+        List.empty => Result.ok List.empty,
+        List.cons x rest =>
+            result_bind (opt_term_map_children_result f x) (fn (x2 : Option Term) =>
+                result_bind (opt_terms_map_children_result f rest) (fn (rest2 : List (Option Term)) =>
+                    Result.ok (List.cons x2 rest2))),
+    }
+
+#[partial]
+def con_map_children_result (f : Term -> Result String Term) (c : Con) : Result String Con :=
+    match c {
+        Con.mk name typ_name num_args args =>
+            result_bind (opt_terms_map_children_result f args) (fn (args2 : List (Option Term)) =>
+                Result.ok (Con.mk name typ_name num_args args2)),
+    }
+
+#[partial]
+def native_map_children_result (f : Term -> Result String Term) (n : Native) : Result String Native :=
+    match n {
+        Native.mk name num_args args =>
+            result_bind (opt_terms_map_children_result f args) (fn (args2 : List (Option Term)) =>
+                Result.ok (Native.mk name num_args args2)),
+    }
+
 // ─── Depth-aware structural recursion ──────────────────────────────
 //
 // `term_map_children_at_depth f t` is `term_map_children` for walks that

@@ -7,9 +7,10 @@
 /// name -> definition, matching how [[lang/typecheck/macro_expand.mo]]'s
 /// `expand_term`/`resolve_quote` already expect their own `lookup`
 /// argument shaped), then walks the list once: `Decl.def_macro_d`/
-/// `Decl.decl_gen_d` are macro DEFINITIONS, consumed into the registry
-/// and dropped from the output (they don't correspond to any real
-/// runtime definition); `Decl.macro_call_d` is resolved against the
+/// `Decl.decl_gen_d` are macro DEFINITIONS, folded into the registry and
+/// RETAINED in the output (they carry no runtime code, but the whole-graph
+/// pass needs the definition to resolve a macro declared in another
+/// module); `Decl.macro_call_d` is resolved against the
 /// decl-gen registry and replaced by its expansion; every other decl
 /// kind is kept, with its own embedded `Term` fields run through
 /// `expand_term` (so term-position macro calls inside an ordinary
@@ -35,11 +36,12 @@ use lang::types {
   AttrArg, Attribute, Class, ClassDef, Decl, Def, Identifier, InductConstructor,
   Inductive, Instance, ModulePath, NamePath, Param, Struct, StructField, Term,
   TypeConstraint, binder_anon, concrete, empty_attrs, id_eq, level_const, many,
-  named, 
-  package_private, sentinel, show_identifier, show_module_path, unnamed,
+  named,
+  package_private, sentinel, show_identifier, show_module_path, show_name_path, unnamed,
 }
 use lib::typecheck::macro_apply {expand_decl_gen_call}
-use lib::typecheck::macro_expand {expand_term}
+use lib::typecheck::macro_expand {expand_term, macro_call_head, scan_live_call}
+use lib::typecheck::traverse {result_bind, term_map_children_result}
 
 // ─── Registry ───────────────────────────────────────────────────────
 
@@ -53,6 +55,228 @@ type DeclGenEntry { dg_entry (name: Identifier) (params: List Param) (decl_list:
 def name_path_last (np : NamePath) : Option Identifier :=
     match np { NamePath.mk ids => List.last ids }
 
+// ─── `#[at ...]` / `#[returns ...]` ──────────────────────────────────
+//
+// Mirrors `rust/core/src/eval/macro_expand.rs:298-367`: `#[at decl]`,
+// `#[at term]` or `#[at [decl, term]]`; ABSENT means both (what every
+// macro written before the attribute existed relies on). The registries
+// below drop a macro that does not permit the position they serve, so a
+// mis-positioned call is never applied; `check_macro_declarations` turns
+// a contradictory DECLARATION into an error in the macro's own file.
+
+#[partial]
+def attr_arg_strings (args : List AttrArg) : List String :=
+    match args {
+        List.empty => List.empty,
+        List.cons a rest => List.append (attr_one_string a) (attr_arg_strings rest),
+    }
+
+def attr_one_string (a : AttrArg) : List String :=
+    match a {
+        AttrArg.ident id => List.cons (show_identifier id) List.empty,
+        AttrArg.group items => attr_arg_strings items,
+        AttrArg.str v => List.cons v List.empty,
+        AttrArg.num _ => List.empty,
+        AttrArg.named _ _ => List.empty,
+    }
+
+/// Every bare name the attributes called `want` list, across all of them.
+#[partial]
+def attr_strings_named (attrs : List Attribute) (want : String) : List String :=
+    match attrs {
+        List.empty => List.empty,
+        List.cons a rest =>
+            match a {
+                Attribute.mk name args =>
+                    if id_eq name (Identifier.id want) then
+                        List.append (attr_arg_strings args) (attr_strings_named rest want)
+                    else attr_strings_named rest want,
+            },
+    }
+
+/// Whether a macro carrying `attrs` may be used at `position` (`"decl"`
+/// or `"term"`). Absent `#[at]` means both.
+def macro_permits (attrs : List Attribute) (position : String) : Bool :=
+    let declared : List String := attr_strings_named attrs "at" in
+    if List.is_empty declared then true
+    else List.any (fn (s : String) => String.beq s position) declared
+
+/// The first `#[at ...]` name that is neither `decl` nor `term`.
+#[partial]
+def bad_at_name (attrs : List Attribute) : Option String :=
+    match attr_strings_named attrs "at" {
+        List.empty => Option.none,
+        List.cons s rest =>
+            if String.beq s "decl" then bad_at_name_from rest
+            else if String.beq s "term" then bad_at_name_from rest
+            else Option.some s,
+    }
+
+#[partial]
+def bad_at_name_from (names : List String) : Option String :=
+    match names {
+        List.empty => Option.none,
+        List.cons s rest =>
+            if String.beq s "decl" then bad_at_name_from rest
+            else if String.beq s "term" then bad_at_name_from rest
+            else Option.some s,
+    }
+
+/// Definition-site check of one macro's `#[at]`/`#[returns]`, against the
+/// form its BODY actually produces (`"expr"` for `defmacro` + `quote`,
+/// `"decls"` for `defmacro` + `decls { ... }`).
+def check_one_macro_declaration (name : String) (attrs : List Attribute) (body_form : String) : Option String :=
+    match bad_at_name attrs {
+        Option.some bad =>
+            Option.some ("macro `" ++ name ++ "` declares `#[at " ++ bad
+                ++ "]`, which is neither `decl` nor `term`"),
+        Option.none =>
+            match attr_strings_named attrs "returns" {
+                List.empty => Option.none,
+                List.cons only rest =>
+                    if Bool.not (List.is_empty rest) then
+                        Option.some ("macro `" ++ name ++ "` declares `#[returns]` more than once")
+                    else if String.beq only body_form then Option.none
+                    else Option.some ("macro `" ++ name ++ "` declares `#[returns " ++ only
+                        ++ "]` but its body produces " ++ form_description body_form),
+            },
+    }
+
+def form_description (form : String) : String :=
+    if String.beq form "expr" then "an expression" else "declarations"
+
+/// Every macro DECLARATION in `decls`, checked; first error wins.
+#[partial]
+pub def check_macro_declarations (decls : List Decl) : Option String :=
+    match decls {
+        List.empty => Option.none,
+        List.cons d rest =>
+            match check_one_declaration d {
+                Option.some e => Option.some e,
+                Option.none => check_macro_declarations rest,
+            },
+    }
+
+def check_one_declaration (d : Decl) : Option String :=
+    match d {
+        Decl.def_macro_d d_val =>
+            match d_val {
+                Def.mk {name, attrs, ..} => check_one_macro_declaration (show_name_path name) attrs "expr",
+            },
+        Decl.decl_gen_d name _params _decls attrs =>
+            check_one_macro_declaration (show_name_path name) attrs "decls",
+        _ => Option.none,
+    }
+
+// ─── Use-site `#[at]` checks ─────────────────────────────────────────
+//
+// The registries are position-FILTERED, so a mis-positioned call is never
+// applied — but "never applied" alone would either pass through silently
+// (a decl-position call is otherwise ignored) or surface as a generic
+// unresolved-term error. These checks name the macro and the position the
+// author actually wrote, like the reference's `require_position`/
+// `require_decl_position` (`rust/core/src/eval/macro_expand.rs:400-433`).
+
+struct MacroUseInfo {
+    mui_name : Identifier,
+    mui_decl : Bool,
+    mui_term : Bool,
+}
+
+def macro_use_info (id : Identifier) (attrs : List Attribute) : MacroUseInfo :=
+    let built : MacroUseInfo := {
+        mui_name := id,
+        mui_decl := macro_permits attrs "decl",
+        mui_term := macro_permits attrs "term",
+    } in
+    built
+
+#[partial]
+def build_macro_use_table (decls : List Decl) : List MacroUseInfo :=
+    match decls {
+        List.empty => List.empty,
+        List.cons d rest =>
+            match d {
+                Decl.def_macro_d d_val =>
+                    match d_val {
+                        Def.mk {name, attrs, ..} =>
+                            match name_path_last name {
+                                Option.some id => List.cons (macro_use_info id attrs) (build_macro_use_table rest),
+                                Option.none => build_macro_use_table rest,
+                            },
+                    },
+                Decl.decl_gen_d name _params _decls attrs =>
+                    match name_path_last name {
+                        Option.some id => List.cons (macro_use_info id attrs) (build_macro_use_table rest),
+                        Option.none => build_macro_use_table rest,
+                    },
+                _ => build_macro_use_table rest,
+            },
+    }
+
+#[partial]
+def lookup_use_info (table : List MacroUseInfo) (name : Identifier) : Option MacroUseInfo :=
+    match table {
+        List.empty => Option.none,
+        List.cons info rest =>
+            if id_eq info.mui_name name then Option.some info else lookup_use_info rest name,
+    }
+
+/// Walk `t`, erroring at the first `name!` call whose macro excludes TERM
+/// position. Unknown names are left alone: an unresolved macro name is not
+/// an error in this compiler (matching `expand_term`).
+#[partial]
+def check_term_positions (table : List MacroUseInfo) (t : Term) : Result String Term :=
+    match t {
+        Term.app _ _ =>
+            match macro_call_head t {
+                Option.some name =>
+                    match lookup_use_info table name {
+                        Option.some info =>
+                            if info.mui_term then term_map_children_result (check_term_positions table) t
+                            else Result.err ("macro `" ++ show_identifier name
+                                ++ "` is declared `#[at decl]` but was used at term position"),
+                        Option.none => term_map_children_result (check_term_positions table) t,
+                    },
+                Option.none => term_map_children_result (check_term_positions table) t,
+            },
+        _ => term_map_children_result (check_term_positions table) t,
+    }
+
+def check_one_use (table : List MacroUseInfo) (d : Decl) : Option String :=
+    match d {
+        Decl.macro_call_d name _ =>
+            match lookup_use_info table name {
+                Option.some info =>
+                    if info.mui_decl then Option.none
+                    else Option.some ("macro `" ++ show_identifier name
+                        ++ "` is declared `#[at term]` but was used at declaration position"),
+                Option.none => Option.none,
+            },
+        _ =>
+            // Macro DEFINITIONS pass through this walk untouched: their
+            // quote bodies are templates, not live calls.
+            match expand_decl_terms_res (check_term_positions table) d {
+                Result.err message => Option.some message,
+                Result.ok _ => Option.none,
+            },
+    }
+
+#[partial]
+pub def check_macro_uses (decls : List Decl) : Option String :=
+    check_macro_uses_go (build_macro_use_table decls) decls
+
+#[partial]
+def check_macro_uses_go (table : List MacroUseInfo) (decls : List Decl) : Option String :=
+    match decls {
+        List.empty => Option.none,
+        List.cons d rest =>
+            match check_one_use table d {
+                Option.some e => Option.some e,
+                Option.none => check_macro_uses_go table rest,
+            },
+    }
+
 #[partial]
 def build_term_macro_registry (decl_list : List Decl) : List TermMacroEntry :=
     match decl_list {
@@ -61,9 +285,12 @@ def build_term_macro_registry (decl_list : List Decl) : List TermMacroEntry :=
             match d {
                 Decl.def_macro_d d_val =>
                     match d_val {
-                        Def.mk {name, term, ..} =>
+                        Def.mk {name, term, attrs, ..} =>
                             match name_path_last name {
-                                Option.some id => List.cons (TermMacroEntry.tm_entry id term) (build_term_macro_registry rest),
+                                Option.some id =>
+                                    if macro_permits attrs "term" then
+                                        List.cons (TermMacroEntry.tm_entry id term) (build_term_macro_registry rest)
+                                    else build_term_macro_registry rest,
                                 Option.none => build_term_macro_registry rest,
                             },
                     },
@@ -97,7 +324,10 @@ def build_decl_gen_registry (decl_list : List Decl) : List DeclGenEntry :=
             match d {
                 Decl.decl_gen_d name params gen_decls attrs =>
                     match name_path_last name {
-                        Option.some id => List.cons (DeclGenEntry.dg_entry id params gen_decls (derive_handler_targets_of_attrs attrs)) (build_decl_gen_registry rest),
+                        Option.some id =>
+                            if macro_permits attrs "decl" then
+                                List.cons (DeclGenEntry.dg_entry id params gen_decls (derive_handler_targets_of_attrs attrs)) (build_decl_gen_registry rest)
+                            else build_decl_gen_registry rest,
                         Option.none => build_decl_gen_registry rest,
                     },
                 _ => build_decl_gen_registry rest,
@@ -358,6 +588,212 @@ def expand_decls_terms_only (lookup : Identifier -> Option Term) (decl_list : Li
         List.cons d rest => List.cons (expand_decl_terms lookup d) (expand_decls_terms_only lookup rest),
     }
 
+// ─── The Result-returning twin (whole-graph term/meta pass) ─────────
+//
+// Same walk, but the expander can FAIL (`meta!` evaluation, the depth
+// limit), so every level short-circuits. Used by `module.mo`'s
+// `expand_decls_graph`: once with `macro_expand.scan_live_call` as the
+// expander (detection only), then with `expand_term_with_meta` to do the
+// real work. `def_macro_d`/`decl_gen_d` pass through unchanged — their
+// bodies are TEMPLATES, and expanding the `meta!` inside a template's
+// quote would consume the intrinsic at definition time instead of at a
+// call site.
+
+#[partial]
+def param_terms_expand_res (expand : Term -> Result String Term) (p : Param) : Result String Param :=
+    match p {
+        Param.mk name typ mult default attrs =>
+            result_bind (expand typ) (fn (typ2 : Term) =>
+                result_bind (opt_term_expand_res expand default) (fn (default2 : Option Term) =>
+                    Result.ok (Param.mk name typ2 mult default2 attrs))),
+    }
+
+#[partial]
+def params_terms_expand_res (expand : Term -> Result String Term) (params : List Param) : Result String (List Param) :=
+    match params {
+        List.empty => Result.ok List.empty,
+        List.cons p rest =>
+            result_bind (param_terms_expand_res expand p) (fn (p2 : Param) =>
+                result_bind (params_terms_expand_res expand rest) (fn (rest2 : List Param) =>
+                    Result.ok (List.cons p2 rest2))),
+    }
+
+#[partial]
+def opt_term_expand_res (expand : Term -> Result String Term) (t : Option Term) : Result String (Option Term) :=
+    match t {
+        Option.some x =>
+            result_bind (expand x) (fn (x2 : Term) =>
+                Result.ok (Option.some x2)),
+        Option.none => Result.ok Option.none,
+    }
+
+#[partial]
+def terms_expand_res (expand : Term -> Result String Term) (ts : List Term) : Result String (List Term) :=
+    match ts {
+        List.empty => Result.ok List.empty,
+        List.cons x rest =>
+            result_bind (expand x) (fn (x2 : Term) =>
+                result_bind (terms_expand_res expand rest) (fn (rest2 : List Term) =>
+                    Result.ok (List.cons x2 rest2))),
+    }
+
+#[partial]
+def induct_constructor_terms_expand_res (expand : Term -> Result String Term) (ctor : InductConstructor) : Result String InductConstructor :=
+    match ctor {
+        InductConstructor.mk name params typ =>
+            result_bind (params_terms_expand_res expand params) (fn (params2 : List Param) =>
+                result_bind (expand typ) (fn (typ2 : Term) =>
+                    Result.ok (InductConstructor.mk name params2 typ2))),
+    }
+
+#[partial]
+def induct_constructors_terms_expand_res (expand : Term -> Result String Term) (ctors : List InductConstructor) : Result String (List InductConstructor) :=
+    match ctors {
+        List.empty => Result.ok List.empty,
+        List.cons c rest =>
+            result_bind (induct_constructor_terms_expand_res expand c) (fn (c2 : InductConstructor) =>
+                result_bind (induct_constructors_terms_expand_res expand rest) (fn (rest2 : List InductConstructor) =>
+                    Result.ok (List.cons c2 rest2))),
+    }
+
+#[partial]
+def struct_field_terms_expand_res (expand : Term -> Result String Term) (f : StructField) : Result String StructField :=
+    match f {
+        StructField.mk name typ default mult =>
+            result_bind (expand typ) (fn (typ2 : Term) =>
+                result_bind (opt_term_expand_res expand default) (fn (default2 : Option Term) =>
+                    Result.ok (StructField.mk name typ2 default2 mult))),
+    }
+
+#[partial]
+def struct_fields_terms_expand_res (expand : Term -> Result String Term) (fields : List StructField) : Result String (List StructField) :=
+    match fields {
+        List.empty => Result.ok List.empty,
+        List.cons f rest =>
+            result_bind (struct_field_terms_expand_res expand f) (fn (f2 : StructField) =>
+                result_bind (struct_fields_terms_expand_res expand rest) (fn (rest2 : List StructField) =>
+                    Result.ok (List.cons f2 rest2))),
+    }
+
+#[partial]
+def class_def_terms_expand_res (expand : Term -> Result String Term) (cd : ClassDef) : Result String ClassDef :=
+    match cd {
+        ClassDef.mk name typ default =>
+            result_bind (expand typ) (fn (typ2 : Term) =>
+                result_bind (opt_term_expand_res expand default) (fn (default2 : Option Term) =>
+                    Result.ok (ClassDef.mk name typ2 default2))),
+    }
+
+#[partial]
+def class_defs_terms_expand_res (expand : Term -> Result String Term) (cds : List ClassDef) : Result String (List ClassDef) :=
+    match cds {
+        List.empty => Result.ok List.empty,
+        List.cons cd rest =>
+            result_bind (class_def_terms_expand_res expand cd) (fn (cd2 : ClassDef) =>
+                result_bind (class_defs_terms_expand_res expand rest) (fn (rest2 : List ClassDef) =>
+                    Result.ok (List.cons cd2 rest2))),
+    }
+
+#[partial]
+def def_terms_expand_res (expand : Term -> Result String Term) (d : Def) : Result String Def :=
+    match d {
+        Def.mk {name, typ, term, constraints, attrs, vis, params, ..} =>
+            result_bind (expand typ) (fn (typ2 : Term) =>
+                result_bind (expand term) (fn (term2 : Term) =>
+                    Result.ok (Def.mk name typ2 term2 constraints attrs vis params))),
+    }
+
+#[partial]
+def defs_terms_expand_res (expand : Term -> Result String Term) (defs : List Def) : Result String (List Def) :=
+    match defs {
+        List.empty => Result.ok List.empty,
+        List.cons d rest =>
+            result_bind (def_terms_expand_res expand d) (fn (d2 : Def) =>
+                result_bind (defs_terms_expand_res expand rest) (fn (rest2 : List Def) =>
+                    Result.ok (List.cons d2 rest2))),
+    }
+
+#[partial]
+def inductive_terms_expand_res (expand : Term -> Result String Term) (ind : Inductive) : Result String Inductive :=
+    match ind {
+        Inductive.mk name params typ constructors attrs vis =>
+            result_bind (params_terms_expand_res expand params) (fn (params2 : List Param) =>
+                result_bind (expand typ) (fn (typ2 : Term) =>
+                    result_bind (induct_constructors_terms_expand_res expand constructors) (fn (ctors2 : List InductConstructor) =>
+                        Result.ok (Inductive.mk name params2 typ2 ctors2 attrs vis)))),
+    }
+
+#[partial]
+def struct_terms_expand_res (expand : Term -> Result String Term) (s : Struct) : Result String Struct :=
+    match s {
+        Struct.mk name fields attrs vis =>
+            result_bind (struct_fields_terms_expand_res expand fields) (fn (fields2 : List StructField) =>
+                Result.ok (Struct.mk name fields2 attrs vis)),
+    }
+
+#[partial]
+def class_terms_expand_res (expand : Term -> Result String Term) (cls : Class) : Result String Class :=
+    match cls {
+        Class.mk name params constraints methods vis =>
+            result_bind (params_terms_expand_res expand params) (fn (params2 : List Param) =>
+                result_bind (class_defs_terms_expand_res expand methods) (fn (methods2 : List ClassDef) =>
+                    Result.ok (Class.mk name params2 constraints methods2 vis))),
+    }
+
+#[partial]
+def instance_terms_expand_res (expand : Term -> Result String Term) (ins : Instance) : Result String Instance :=
+    match ins {
+        Instance.mk name cls constraints args vis implicit_params defs =>
+            result_bind (terms_expand_res expand args) (fn (args2 : List Term) =>
+                result_bind (params_terms_expand_res expand implicit_params) (fn (params2 : List Param) =>
+                    result_bind (defs_terms_expand_res expand defs) (fn (defs2 : List Def) =>
+                        Result.ok (Instance.mk name cls constraints args2 vis params2 defs2)))),
+    }
+
+#[partial]
+def expand_decl_terms_res (expand : Term -> Result String Term) (d : Decl) : Result String Decl :=
+    match d {
+        Decl.def_d d_val =>
+            result_bind (def_terms_expand_res expand d_val) (fn (d2 : Def) => Result.ok (Decl.def_d d2)),
+        Decl.inductive_d ind =>
+            result_bind (inductive_terms_expand_res expand ind) (fn (ind2 : Inductive) => Result.ok (Decl.inductive_d ind2)),
+        Decl.struct_d s =>
+            result_bind (struct_terms_expand_res expand s) (fn (s2 : Struct) => Result.ok (Decl.struct_d s2)),
+        Decl.class_d cls =>
+            result_bind (class_terms_expand_res expand cls) (fn (cls2 : Class) => Result.ok (Decl.class_d cls2)),
+        Decl.instance_d ins =>
+            result_bind (instance_terms_expand_res expand ins) (fn (ins2 : Instance) => Result.ok (Decl.instance_d ins2)),
+        Decl.scoped_open_d path filter inner =>
+            result_bind (expand_decl_terms_res expand inner) (fn (inner2 : Decl) =>
+                Result.ok (Decl.scoped_open_d path filter inner2)),
+        Decl.infix_d op path vis => Result.ok (Decl.infix_d op path vis),
+        Decl.use_d path filter public => Result.ok (Decl.use_d path filter public),
+        Decl.open_d path filter => Result.ok (Decl.open_d path filter),
+        Decl.def_macro_d d_val => Result.ok (Decl.def_macro_d d_val),
+        Decl.decl_gen_d name params gen_decls attrs => Result.ok (Decl.decl_gen_d name params gen_decls attrs),
+        Decl.macro_call_d name args => Result.ok (Decl.macro_call_d name args),
+        Decl.mote_d attr => Result.ok (Decl.mote_d attr),
+    }
+
+#[partial]
+pub def expand_decls_terms_res (expand : Term -> Result String Term) (decl_list : List Decl) : Result String (List Decl) :=
+    match decl_list {
+        List.empty => Result.ok List.empty,
+        List.cons d rest =>
+            result_bind (expand_decl_terms_res expand d) (fn (d2 : Decl) =>
+                result_bind (expand_decls_terms_res expand rest) (fn (rest2 : List Decl) =>
+                    Result.ok (List.cons d2 rest2))),
+    }
+
+/// Whether any decl's own terms still contain a call the whole-graph
+/// pass could expand (an intrinsic, or a macro the graph-wide registry
+/// knows). Uses the Result walk's short-circuit as the scan.
+pub def decls_have_live_term_call (lookup : Identifier -> Option Term) (decl_list : List Decl) : Bool :=
+    match expand_decls_terms_res (scan_live_call lookup) decl_list {
+        Result.ok _ => false,
+        Result.err _ => true,
+    }
+
 // ─── The work-queue itself ─────────────────────────────────────────
 
 /// Entry point: expand every macro call (term- and decl-position) in
@@ -380,20 +816,26 @@ def expand_decls_go (lookup : Identifier -> Option Term) (decl_gen_registry : Li
         List.empty => List.empty,
         List.cons d rest =>
             match d {
-                // Macro DEFINITIONS -- already folded into the
-                // registry built once at `expand_decls`'s own entry;
-                // consumed, not part of the expanded output.
-                Decl.def_macro_d _ => expand_decls_go lookup decl_gen_registry rest,
-                // Retained in the output (unlike `def_macro_d` above) --
-                // a decl-gen template may never be invoked within its
-                // OWN file (e.g. every `defmacro derive_lens T := ...`
-                // in `std/derive.mo` is only ever invoked from a
-                // DIFFERENT, later-loaded file). Dropping it here would
-                // make it permanently unresolvable once this file's own
-                // per-file `expand_decls` pass has run -- a later,
-                // whole-graph pass (`expand_decls_graph`) needs to still
-                // see it. Still folded into `decl_gen_registry` for
-                // same-file resolution, exactly as before.
+                // Macro DEFINITIONS -- folded into the registry built once
+                // at `expand_decls`'s own entry, but RETAINED in the output
+                // for the same reason `decl_gen_d` is retained just below:
+                // a term macro declared in a DIFFERENT, later-loaded module
+                // is resolved only by the whole-graph pass
+                // (`module.mo`'s `expand_decls_graph`), which needs the
+                // definition to still be in that module's `decl_list`. The
+                // Rust reference keeps `Decl::DefMacro` in its output too.
+                Decl.def_macro_d _ => List.cons d (expand_decls_go lookup decl_gen_registry rest),
+                // Retained in the output, exactly like `def_macro_d`
+                // above -- a decl-gen template may never be invoked
+                // within its OWN file (e.g. every
+                // `defmacro derive_lens T := ...` in `std/derive.mo` is
+                // only ever invoked from a DIFFERENT, later-loaded file).
+                // Dropping it here would make it permanently unresolvable
+                // once this file's own per-file `expand_decls` pass has
+                // run -- a later, whole-graph pass (`expand_decls_graph`)
+                // needs to still see it. Still folded into
+                // `decl_gen_registry` for same-file resolution, exactly as
+                // before.
                 Decl.decl_gen_d name params gen_decls attrs =>
                     List.cons d (expand_decls_go lookup decl_gen_registry rest),
                 Decl.macro_call_d name args =>
@@ -658,34 +1100,45 @@ def empty_constraints : List TypeConstraint := List.empty
 def dummy_path : NamePath := NamePath.mk (List.cons (Identifier.id "dummy") List.empty)
 
 #[test]
-def test_expand_decls_drops_term_macro_definitions : Bool :=
-    // `defmacro double x := x` on its own -- consumed into the
-    // registry, produces zero output decl_list.
+def test_expand_decls_retains_term_macro_definitions : Bool :=
+    // `defmacro double x := x` on its own -- folded into the registry but
+    // RETAINED in the output. A term macro declared here may be invoked
+    // from a different, later-loaded module, and the whole-graph pass
+    // needs the definition to still be in this module's `decl_list`. The
+    // Rust reference keeps `Decl::DefMacro` in its output too.
     let double_name : NamePath := NamePath.mk (List.cons (Identifier.id "double") List.empty) in
     let body : Term := Term.lam binder_anon Term.hole (Term.var 0 DebugName.unnamed) in
     let macro_def : Decl := Decl.def_macro_d (Def.mk double_name Term.hole body empty_constraints empty_attrs Visibility.package_private List.empty) in
     match expand_decls (List.cons macro_def List.empty) {
-        List.empty => true,
-        List.cons _ _ => false,
+        List.cons only rest =>
+            (match rest { List.empty => true, List.cons _ _ => false }) &&
+            match only { Decl.def_macro_d _ => true, _ => false },
+        List.empty => false,
     }
 
 #[test]
 def test_expand_decls_expands_term_position_macro_call_inside_a_def : Bool :=
-    // `defmacro double x := x` + `def y : Hole := double! 9` --
-    // ordinary def's own `term` field gets its macro call resolved,
-    // and the macro definition itself is dropped from the output.
+    // `defmacro double x := x` + `def y : Hole := double! 9` -- the
+    // ordinary def's own `term` field gets its macro call resolved, and
+    // the macro DEFINITION is retained ahead of it (see
+    // `test_expand_decls_retains_term_macro_definitions`).
     let double_name : NamePath := NamePath.mk (List.cons (Identifier.id "double") List.empty) in
     let body : Term := Term.lam binder_anon Term.hole (Term.var 0 DebugName.unnamed) in
     let macro_def : Decl := Decl.def_macro_d (Def.mk double_name Term.hole body empty_constraints empty_attrs Visibility.package_private List.empty) in
     let call : Term := Term.app (Term.var_macro (0 - 1) (DebugName.named (Identifier.id "double"))) (Term.sort (SortLevel.concrete 9)) in
     let y_def : Decl := Decl.def_d (Def.mk dummy_path Term.hole call empty_constraints empty_attrs Visibility.package_private List.empty) in
     match expand_decls (List.cons macro_def (List.cons y_def List.empty)) {
-        List.cons only_decl rest =>
-            (match rest { List.empty => true, List.cons _ _ => false }) &&
-            match only_decl {
-                Decl.def_d d_val =>
-                    match d_val { Def.mk {term, ..} => I64.beq (term_type_level term) 9 },
-                _ => false,
+        List.cons first rest =>
+            (match first { Decl.def_macro_d _ => true, _ => false }) &&
+            match rest {
+                List.cons second rest2 =>
+                    (match rest2 { List.empty => true, List.cons _ _ => false }) &&
+                    match second {
+                        Decl.def_d d_val =>
+                            match d_val { Def.mk {term, ..} => I64.beq (term_type_level term) 9 },
+                        _ => false,
+                    },
+                List.empty => false,
             },
         List.empty => false,
     }

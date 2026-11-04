@@ -9,7 +9,7 @@
 ///
 /// Like Lean's `s!"..."`/`format!`, the interpolation holes name variables
 /// that must ALREADY be in scope at the call site — `fmt!` takes exactly
-/// ONE argument (the format string) and emits the binders itself:
+/// ONE argument (the format string):
 ///
 /// ```monad
 /// def greet (name : String) (n : I64) : String :=
@@ -19,15 +19,17 @@
 /// expands to roughly
 ///
 /// ```monad
-/// fn name => fn n =>
-///     String.concat_list ["hi ", FmtDisplay.fmt_display name, ", you are ",
-///                         Format.pad_left (FmtDisplay.fmt_display n) 4]
+/// String.concat_list ["hi ", FmtDisplay.fmt_display name, ", you are ",
+///                     Format.apply_align (FormatAlign.right 4)
+///                         (FmtDisplay.fmt_display n)]
 /// ```
 ///
 /// — one allocation, direct `FmtDisplay` calls, and no runtime parsing of
-/// the template. A hole naming something out of scope does not silently
-/// capture anything: the emitted lambda's parameter is the only binder, and
-/// the checker rejects an unbound name as usual.
+/// the template. The expansion introduces NO binders: each hole is the
+/// call site's own variable, and the surrounding `def`/`fn` that already
+/// binds it is the only binder involved. That is why an out-of-scope hole
+/// is an ordinary unbound-variable error at the call site, and why the
+/// macro has nothing to capture with.
 ///
 /// ## The pieces
 ///
@@ -40,27 +42,29 @@
 /// ## Hygiene
 ///
 /// `Format.emit` builds a CORE `Expr` (`init/meta.mo`), so each hole's
-/// `e_var` names the call site's own binder directly. The expansion is a
-/// curried `fn` chain, so a call site that already binds `name` keeps ITS
-/// binding — the macro introduces no names of its own, and therefore has
-/// nothing to capture with. `Format.emit`'s own helper binders (`tmp`,
-/// `pieces`) never reach the output.
+/// `e_var` names the call site's own binder directly. Since the expansion
+/// introduces NO binders at all, a call site that already binds `name`
+/// keeps ITS binding — there is no new scope to capture anything in.
+/// `Format.emit`'s own helper binders never reach the output.
 ///
 /// ## Scope
 ///
-/// `{}`, `{name}`, `{:>N}`, `{:^N}`, `{name:>N}`, `{name:^N}` and `{{`/`}}`
-/// escapes. Fill characters, `{:x}`/`{:o}`/`{:b}`/`{:?}` and precision are
-/// deliberately out: each needs a per-type instance or a second class, and
-/// none has a caller yet. A `:spec` this module does not understand is a
-/// COMPILE error (an `unresolved` name in the emitted code), not a silent
-/// pass-through — see `Format.parse`.
+/// `{name}`, `{name:>N}`, `{name:^N}` and `{{`/`}}` escapes. A hole must
+/// NAME a variable: `{}`/`{:>N}` have nothing to refer to
+/// (there is no positional argument to fall back on) and are rejected at
+/// expansion time. Fill characters, `{:x}`/`{:o}`/`{:b}`/`{:?}` and
+/// precision are deliberately out: each needs a per-type instance or a
+/// second class, and none has a caller yet. An unsupported `:spec` is a
+/// COMPILE error, not a silent pass-through — see `Format.parse`.
 
 use init::meta {Expr}
 
 open Expr {e_var, e_str, e_int, e_app, e_error}
 
 /// One hole's alignment, with the width it pads to. `width` counts the
-/// display string's own characters, so `{:>4}` on `"ab"` yields `"  ab"`.
+/// display string's own BYTES (`String.length` is byte-oriented), so
+/// `{n:>4}` on `"ab"` yields `"  ab"`; a multi-byte character counts once
+/// per byte, not once per column.
 pub type FormatAlign {
     left,
     right (width : I64),
@@ -148,28 +152,41 @@ pub def Format.apply_align (align : FormatAlign) (s : String) : String :=
     }
 
 /// The `Expr` for one piece: literal text becomes `e_str`, a hole becomes
-/// `Format.apply_align <align> (FmtDisplay.fmt_display <name>)` — i.e. the
-/// class method applied directly to the call site's own variable, with no
-/// intermediate `to_string` call and no runtime template walking.
+/// its display call (padded only when it has a width) — the class method
+/// applied directly to the call site's own variable, with no intermediate
+/// `to_string` call and no runtime template walking.
 pub def Format.emit_piece (piece : FormatPiece) : Expr :=
     match piece {
         literal text => e_str text,
-        hole name align =>
-            e_app (e_app (e_var "Format.apply_align") (Format.align_expr align))
-                  (e_app (e_var "FmtDisplay.fmt_display") (e_var name)),
+        hole name align => Format.emit_hole name align,
     }
 
-/// One `FormatAlign` as the `Expr` a hole's emitted code builds. `left` is
-/// `e_var "FormatAlign.left"` — a qualified constructor reference, the same
-/// `e_ctor`-free spelling `std/derive.mo` uses for constructors it applies
-/// (`e_var` + `e_app`), which the checker instantiates correctly where a
-/// raw `Con` node would not.
-pub def Format.align_expr (align : FormatAlign) : Expr :=
+/// One hole's whole `Expr`. A bare `{name}` is JUST the display call — the
+/// common case pays no padding call at all; only `:>N`/`:^N` wrap it in
+/// `Format.apply_align`.
+///
+/// `FormatAlign.right`/`.centre` are qualified `e_var`s applied with
+/// `e_app` — the same `e_ctor`-free spelling `std/derive.mo` uses for
+/// constructors it applies, which the checker instantiates correctly where
+/// a raw `Con` node would not. (The arm rebuilds the constructor from its
+/// own field rather than reusing `align`: an unannotated binder may be
+/// used only once, and the scrutinee already counts as one use.)
+def Format.emit_hole (name : String) (align : FormatAlign) : Expr :=
     match align {
-        left => e_var "FormatAlign.left",
-        right width => e_app (e_var "FormatAlign.right") (e_int width),
-        centre width => e_app (e_var "FormatAlign.centre") (e_int width),
+        left => Format.display_expr name,
+        right width =>
+            e_app (e_app (e_var "Format.apply_align")
+                         (e_app (e_var "FormatAlign.right") (e_int width)))
+                  (Format.display_expr name),
+        centre width =>
+            e_app (e_app (e_var "Format.apply_align")
+                         (e_app (e_var "FormatAlign.centre") (e_int width)))
+                  (Format.display_expr name),
     }
+
+/// `FmtDisplay.fmt_display <name>` — the value a hole displays.
+def Format.display_expr (name : String) : Expr :=
+    e_app (e_var "FmtDisplay.fmt_display") (e_var name)
 
 /// Every piece's `Expr`, in template order.
 pub def Format.emit_pieces (pieces : List FormatPiece) : List Expr :=
@@ -242,8 +259,9 @@ def scan_to_rbrace (s : String) (i : I64) (len : I64) : I64 :=
     else scan_to_rbrace s (I64.add i 1) len
 
 /// The identifier starting at `start` in `body` (a hole's inside text):
-/// returns `(name, index just past it)`. An empty name is allowed --
-/// `{}` and `{:>4}` both mean "the single argument".
+/// returns `(name, index just past it)`. An empty name is NOT a hole --
+/// `Format.parse_hole` rejects it with the reason (there is no positional
+/// argument for `{}` to mean).
 #[terminating]
 def scan_name (body : String) (start : I64) (len : I64) : Pair String I64 :=
     scan_name_at body start start len
@@ -307,18 +325,24 @@ pub def Format.parse_hole (body : String) : Result String FormatPiece :=
         // `stop` sits on the `:`; skip it.
         else String.slice body (I64.add stop 1) (I64.sub (I64.sub len stop) 1)
     in
-    match Format.parse_spec spec {
+    // `fmt!` takes exactly ONE argument — the template — so a hole CANNOT
+    // mean "the single argument": an unnamed hole has nothing to refer to
+    // (it would emit `e_var ""`, surfacing much later as `unbound variable
+    // \`\``). Reject it at expansion time with the real reason.
+    if String.is_empty name then err "fmt!: a hole must name a variable"
+    else match Format.parse_spec spec {
         ok align => ok (hole name align),
         err message => err message,
     }
 
 /// `Format.parse` -- split a template into its pieces.
 ///
-/// `{}`/`{name}`/`{:>N}`/`{name:>N}`/`{:^N}`/`{name:^N}` are holes;
-/// `{{` and `}}` are the literal brace characters. An unterminated hole,
-/// an unclosed escape or an unknown spec is an `err` with the reason and
-/// the byte offset, so the expansion fails with a message naming the
-/// author's own text rather than emitting broken code.
+/// `{name}`/`{name:>N}`/`{name:^N}` are holes — every hole
+/// must name a variable; `{{` and `}}` are the literal brace characters.
+/// An unterminated hole, an unnamed hole, an unknown spec or an unclosed
+/// escape is an `err` carrying the reason (the offending spec, or the byte
+/// offset for a brace error), so the expansion fails with a message naming
+/// the author's own text rather than emitting broken code.
 pub def Format.parse (template : String) : Result String (List FormatPiece) :=
     parse_pieces template 0 (String.length template) List.empty
 
@@ -327,7 +351,10 @@ pub def Format.parse (template : String) : Result String (List FormatPiece) :=
 #[terminating]
 def parse_pieces (s : String) (i : I64) (len : I64) (acc : List FormatPiece)
     : Result String (List FormatPiece) :=
-    if I64.gt i len then ok (List.reverse acc)
+    // `i >= len`, NOT `i > len`: at `i == len` there is nothing left to
+    // scan, and `scan_literal` would report `stop == i`, so an empty
+    // literal would be appended and the same index re-scanned forever.
+    if i >= len then ok (List.reverse acc)
     else if is_lbrace_at s i then
         if U8.beq (byte_at s (I64.add i 1)) byte_lbrace then
             // `{{` -> one literal `{`.
