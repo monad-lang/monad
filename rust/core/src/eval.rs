@@ -1,6 +1,8 @@
 pub mod constraint;
 #[cfg(test)]
 pub mod derive_cli_test;
+#[cfg(test)]
+pub mod format_test;
 pub mod macro_expand;
 #[cfg(test)]
 pub mod macro_test;

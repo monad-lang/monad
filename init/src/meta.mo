@@ -57,12 +57,21 @@ pub type TypeInfo {
 
 /// A minimal, constructible mirror of the compiler's own `Term` surface —
 /// deliberately NOT a full mirror. `Pi`/`Forall`/`Sort`/`Ann`/`Ntv`/`Ctx`/
-/// `Hole`/`Quote` are excluded: compiler-internal, derivable from a
-/// generated `def`'s param-list/return-type shape (see `Decl.d_def`
-/// below), or simply never needed by any of this design's target
-/// derives' generated code. `e_ctor` is a deliberate ergonomic addition
-/// over the raw `Term` surface (constructor rebuild is common to every
-/// derive) rather than forcing callers to spell out nested `e_app`s.
+/// `Quote` are excluded: compiler-internal, derivable from a generated
+/// `def`'s param-list/return-type shape (see `Decl.d_def` below), or
+/// simply never needed by any of this design's target derives' generated
+/// code. `e_ctor` is a deliberate ergonomic addition over the raw `Term`
+/// surface (constructor rebuild is common to every derive) rather than
+/// forcing callers to spell out nested `e_app`s.
+///
+/// `e_hole` and `e_error` are appended AFTER the original nine so every
+/// existing constructor tag is unchanged — `reify_value_to_term` resolves a
+/// tag by declaration order, and `lang/src/typecheck/meta_reflect.mo`
+/// repeats 0..8 literally. Both exist for TERM-position meta functions,
+/// which `fmt!` is the first of: `e_hole` because an emitted binder has no
+/// type to annotate it with, `e_error` because a term meta function
+/// otherwise has no way to reject its input (the `d_error` gap below, one
+/// position over).
 pub type Expr {
     e_var (name : String),
     e_str (value : String),
@@ -73,6 +82,16 @@ pub type Expr {
     e_if (cond : Expr) (then_ : Expr) (else_ : Expr),
     e_match (scrutinee : Expr) (arms : List MetaMatchArm),
     e_ctor (ctor_name : String) (args : List Expr),
+    /// Let-the-checker-infer-this-type (`Term::Hole`). `fmt!` emits
+    /// `fn name => ...` from a template that names variables without
+    /// declaring their types, exactly like a hand-written `fn x => x`.
+    e_hole,
+    /// The term-position counterpart of `MetaDecl.d_error`: an `e_error`
+    /// anywhere in a returned `Expr` fails the whole `meta!` invocation
+    /// with `message` as a normal macro-expansion-time error instead of
+    /// splicing nonsense into the program. `init/format.mo` uses it so a
+    /// malformed format template reports the reason at the call site.
+    e_error (message : String),
 }
 
 /// One arm of an `e_match` — the constructor it matches, its bound field

@@ -77,6 +77,14 @@ fn str_value(s: &str) -> Value {
   Value::Lit(IrLit::Str(s.into()))
 }
 
+/// A Monad `String` value, for `macro_expand::reflect_subject`: a `meta!`
+/// subject that is a string literal reflects to itself, so a format string
+/// reaches `init/format.mo`'s `fmt_meta` as the ordinary `String` value its
+/// own signature (`String -> Expr`) declares.
+pub fn string_value(s: &str) -> Value {
+  str_value(s)
+}
+
 fn expect_str(v: Value) -> Result<String, MacroError> {
   match v {
     Value::Lit(IrLit::Str(s)) => Ok(s.as_str().to_string()),
@@ -419,6 +427,11 @@ pub fn build_type_info_value(
 /// `term_to_expr_value`, but complete over all of `Expr`'s constructors
 /// (a "meta" function's computed result can use any of them, not just
 /// the subset `term_to_expr_value` itself produces for field types).
+///
+/// `e_hole` reifies to `Term::Hole` (the checker infers the type) and
+/// `e_error` reifies to an ERROR — the term-position half of
+/// `MetaDecl.d_error`, so a term meta function can reject its input with a
+/// message instead of splicing nonsense.
 pub fn reify_value_to_term(
   v: Value,
   inductives: &Map<NamePath, Inductive>,
@@ -489,6 +502,11 @@ pub fn reify_value_to_term(
           // type parameters through the `Var`+`App` path (same
           // load-bearing detail `derive_cli.rs` documents).
           Ok(crate::term::apps(name_ref_term(&ctor_name), arg_terms))
+        }
+        "e_hole" => Ok(Term::Hole),
+        "e_error" => {
+          let message = expect_str(pop_front(&mut args)?)?;
+          Err(MacroError::Generic(message))
         }
         other => Err(MacroError::Generic(format!(
           "meta: unknown Expr constructor `{other}`"

@@ -1,4 +1,7 @@
+use std::cell::RefCell;
+
 use crate::Map;
+use crate::core_value::Value;
 use crate::term::module::LoadedModules;
 use crate::term::{
   AttrArg, Constructor, Decl, DeclGenDef, Def, GlobalRef, Identifier, Inductive, Literal,
@@ -7,30 +10,78 @@ use crate::term::{
   case_with_optional_field_pattern, instance, match_term, mpvar,
 };
 
-/// Names of the built-in macro-expansion reflection intrinsics — recognized
-/// by the expander itself rather than looked up in `macro_defs`/
-/// `decl_gen_defs`, since they need read access to already-parsed
-/// `Inductive` definitions (field/constructor reflection), which ordinary
-/// template-substitution macros never do.
+/// Names of the built-in macro-expansion intrinsics — recognized by the
+/// expander itself rather than looked up in `macro_defs`/`decl_gen_defs`,
+/// since they need read access to already-parsed definitions AND to the
+/// real evaluator, which ordinary template-substitution macros never do.
 ///
-/// `reflect_type_info!` (decl position; see `expand_reflect_type_info_decl`'s
-/// own doc comment for the full design) is the sole remaining member — the
-/// reflection-as-data metaprogramming kernel (see
-/// `plans/review-and-reduce-the-greedy-nest.md`): a type's structure is
-/// exposed as an ordinary Monad *value* (`TypeInfo`, `init/meta.mo`), and an
-/// ordinary Monad function (`std/derive.mo`'s `derive_lens_meta`/
-/// `derive_debug_meta`/`derive_beq_meta`/`derive_bord_meta`, or a user's own)
-/// computes a `List Decl` value from it, via real evaluation — not template
-/// substitution. This replaced an earlier five-intrinsic kernel
+/// `meta!` is the single remaining intrinsic (see
+/// `expand_builtin_decl_intrinsic`'s doc comment for the full design): a
+/// SUBJECT — a type name at declaration position, an expression at term
+/// position — is reified into an ordinary Monad *value*
+/// (`TypeInfo`/`Expr`, `init/meta.mo`), handed to an ordinary Monad
+/// function (`std/derive.mo`'s `derive_lens_meta`, `init/format.mo`'s
+/// `fmt_meta`, or a user's own), evaluated for real, and the result
+/// reified back into a `Term` (term position) or a `List Decl`
+/// (declaration position). This replaced an earlier five-intrinsic kernel
 /// (`reflect_fields!`/`reflect_ctors!`/`reflect_ctor_fields!`/
 /// `reflect_pairwise_ctors!`/`reflect_set_field!`) that instead composed
 /// built-in per-constructor/per-field dispatch primitives in Rust; once all
 /// four derives were ported off it, it was deleted outright rather than
 /// kept alongside this one.
-const BUILTIN_INTRINSICS: &[&str] = &["reflect_type_info"];
+///
+/// `reflect_type_info` is retained as an accepted ALIAS of `meta` for one
+/// rollout window: the last published nightly resolves it by its hardcoded
+/// spelling (`lang/src/module.mo`'s `is_reflect_type_info_call`), so the
+/// compiler-source surface cannot switch to `meta!` until a nightly
+/// carrying this rename has been published (AGENTS.md's two-step rollout).
+/// Delete the alias once `init`/`std` no longer mention it.
+const BUILTIN_INTRINSICS: &[&str] = &["meta", "reflect_type_info"];
 
 fn is_builtin_intrinsic(name: &str) -> bool {
   BUILTIN_INTRINSICS.contains(&name)
+}
+
+/// Everything a term/quote walk needs beyond the term itself: the macro
+/// tables, the type table the reflection intrinsic resolves against, and —
+/// built LAZILY on the first `meta!` that actually needs it — the compiled
+/// snapshot of the loaded program the meta function is evaluated in.
+///
+/// Bundled rather than threaded as five separate parameters through every
+/// recursive call of `expand_term`/`resolve_quote`/`apply_macro`: the walk
+/// is the same shape at every depth, and the evaluator snapshot is
+/// expensive enough (`meta_compile::MetaEvalContext::build` re-checks and
+/// lowers the whole loaded program) that it must be built at most once per
+/// `expand_macros` run rather than once per intrinsic call.
+struct ExpandCtx<'a> {
+  macro_defs: &'a Map<NamePath, Def>,
+  inductives: &'a Map<NamePath, Inductive>,
+  loaded: &'a LoadedModules,
+  current_path: &'a ModulePath,
+  /// The file's own decls, already filtered to what a meta-evaluation
+  /// capture may see (see `meta_capture_decls`).
+  capture_decls: &'a [SourceContext<Decl>],
+  meta_eval: RefCell<Option<super::meta_compile::MetaEvalContext>>,
+}
+
+impl<'a> ExpandCtx<'a> {
+  /// Run `f` against the meta-evaluation snapshot, building it on first
+  /// use. `invoke` runs the real `core_eval`, which never re-enters macro
+  /// expansion, so the `RefCell` borrow below can never be taken twice.
+  fn with_meta_context<T>(
+    &self,
+    f: impl FnOnce(&mut super::meta_compile::MetaEvalContext) -> Result<T, MacroError>,
+  ) -> Result<T, MacroError> {
+    let mut slot = self.meta_eval.borrow_mut();
+    if slot.is_none() {
+      *slot = Some(super::meta_compile::MetaEvalContext::build(
+        self.loaded,
+        self.current_path,
+        self.capture_decls,
+      )?);
+    }
+    f(slot.as_mut().expect("just built"))
+  }
 }
 
 /// Collect `Inductive` definitions from loaded modules, keyed by name (`NamePath`).
@@ -161,6 +212,226 @@ fn derive_handler_targets(gd: &DeclGenDef) -> Result<Vec<String>, MacroError> {
   Ok(targets)
 }
 
+/// Where a `defmacro` says it may be invoked, as declared by its
+/// `#[at ...]` attribute.
+///
+/// Both `defmacro` forms already parse attributes (the `decls`/DeclGen form
+/// and the `quote` form), so this needs no parser change — the attribute
+/// vocabulary is the expander's, exactly as `#[derive_handler ...]` is.
+/// Accepted spellings mirror `#[derive ...]`'s:
+///
+/// - `#[at decl]`, `#[at term]` — one position;
+/// - `#[at [decl, term]]` — both;
+/// - absent — both, i.e. wherever the body form can actually expand.
+#[derive(Debug, Clone, Copy)]
+struct MacroPositions {
+  decl: bool,
+  term: bool,
+}
+
+impl MacroPositions {
+  const BOTH: MacroPositions = MacroPositions {
+    decl: true,
+    term: true,
+  };
+
+  fn describe(self) -> String {
+    match (self.decl, self.term) {
+      (true, true) => "declaration or term position".to_string(),
+      (true, false) => "declaration position only".to_string(),
+      (false, true) => "term position only".to_string(),
+      (false, false) => "nowhere (`#[at]` lists no position)".to_string(),
+    }
+  }
+}
+
+/// What a `defmacro` produces, as declared by its `#[returns ...]`
+/// attribute: `#[returns expr]` or `#[returns decls]`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MacroReturns {
+  Expr,
+  Decls,
+}
+
+impl MacroReturns {
+  fn describe(self) -> &'static str {
+    match self {
+      MacroReturns::Expr => "an expression",
+      MacroReturns::Decls => "declarations",
+    }
+  }
+}
+
+/// Flatten one `#[at ...]`/`#[returns ...]` argument into the bare names it
+/// lists — the same two shapes `#[derive ...]` accepts.
+fn attr_bare_names(attr: &crate::term::Attribute) -> Result<Vec<String>, MacroError> {
+  fn flatten(
+    attr: &crate::term::Attribute,
+    arg: &AttrArg,
+    out: &mut Vec<String>,
+  ) -> Result<(), MacroError> {
+    match arg {
+      AttrArg::Ident(id) => {
+        out.push(id.as_str().to_string());
+        Ok(())
+      }
+      AttrArg::Group(items) => {
+        for item in items {
+          flatten(attr, item, out)?;
+        }
+        Ok(())
+      }
+      other => Err(MacroError::Generic(format!(
+        "#[{} ...] takes bare names (e.g. `{}`), got: {other:?}",
+        attr.name.as_str(),
+        attr.name.as_str()
+      ))),
+    }
+  }
+  let mut names = Vec::new();
+  for arg in &attr.args {
+    flatten(attr, arg, &mut names)?;
+  }
+  Ok(names)
+}
+
+/// Read a `defmacro`'s `#[at ...]` declaration(s). Absent means
+/// `MacroPositions::BOTH`: a macro that never says where it lives is
+/// usable wherever its body form can expand, which is what every macro
+/// written before this attribute existed relies on.
+fn macro_positions(attributes: &[crate::term::Attribute]) -> Result<MacroPositions, MacroError> {
+  let mut positions = MacroPositions {
+    decl: false,
+    term: false,
+  };
+  let mut declared = false;
+  for attr in attributes {
+    if attr.name.as_str() != "at" {
+      continue;
+    }
+    declared = true;
+    for name in attr_bare_names(attr)? {
+      match name.as_str() {
+        "decl" => positions.decl = true,
+        "term" => positions.term = true,
+        other => {
+          return Err(MacroError::Generic(format!(
+            "#[at ...] understands `decl` and `term`, got `{other}`"
+          )));
+        }
+      }
+    }
+  }
+  Ok(if declared {
+    positions
+  } else {
+    MacroPositions::BOTH
+  })
+}
+
+/// Read a `defmacro`'s `#[returns ...]` declaration, if it has one. Absent
+/// means "infer from the body form", which `check_macro_declaration` then
+/// verifies the attribute against.
+fn macro_returns(
+  attributes: &[crate::term::Attribute],
+) -> Result<Option<MacroReturns>, MacroError> {
+  let mut found: Option<MacroReturns> = None;
+  for attr in attributes {
+    if attr.name.as_str() != "returns" {
+      continue;
+    }
+    let names = attr_bare_names(attr)?;
+    let [only] = names.as_slice() else {
+      return Err(MacroError::Generic(format!(
+        "#[returns ...] takes exactly one of `expr`/`decls`, got {} names",
+        names.len()
+      )));
+    };
+    let this = match only.as_str() {
+      "expr" => MacroReturns::Expr,
+      "decls" => MacroReturns::Decls,
+      other => {
+        return Err(MacroError::Generic(format!(
+          "#[returns ...] understands `expr` and `decls`, got `{other}`"
+        )));
+      }
+    };
+    if found.is_some_and(|prev| prev != this) {
+      return Err(MacroError::Generic(
+        "#[returns ...] may be declared only once".to_string(),
+      ));
+    }
+    found = Some(this);
+  }
+  Ok(found)
+}
+
+/// The one place a macro's own `#[at]`/`#[returns]` declarations are
+/// checked against what its body actually is. Runs at the macro's
+/// DEFINITION site (`expand_macros`'s `Decl::DefMacro`/`Decl::DeclGen`
+/// arm), so a contradictory attribute is an error in the file that wrote
+/// it rather than a puzzling failure at some later call.
+///
+/// `body_form` — what the body actually produces — is not a judgement call:
+/// `defmacro f x := decls { ... }` is a `Decl::DeclGen` (declarations),
+/// while `defmacro f x := quote { ... }` is a `Decl::DefMacro` whose body
+/// is a `quote` (an expression).
+fn check_macro_declaration(
+  name: &NamePath,
+  attributes: &[crate::term::Attribute],
+  body_form: MacroReturns,
+) -> Result<(), MacroError> {
+  macro_positions(attributes)?;
+  if let Some(declared) = macro_returns(attributes)? {
+    if declared != body_form {
+      return Err(MacroError::Generic(format!(
+        "macro `{name}` declares `#[returns {}]` but its body produces {}",
+        match declared {
+          MacroReturns::Expr => "expr",
+          MacroReturns::Decls => "decls",
+        },
+        body_form.describe()
+      )));
+    }
+  }
+  Ok(())
+}
+
+/// Reject a TERM-position use of a macro whose `#[at ...]` excludes it.
+/// Checked at the dispatch site rather than at expansion of the body, so
+/// the diagnostic names the macro and the position the author actually
+/// wrote.
+fn require_position(def: &Def, body_form: MacroReturns) -> Result<(), MacroError> {
+  let positions = macro_positions(&def.attributes)?;
+  if positions.term {
+    return Ok(());
+  }
+  let produced = match body_form {
+    MacroReturns::Expr => "an expression",
+    MacroReturns::Decls => "declarations",
+  };
+  Err(MacroError::Generic(format!(
+    "macro `{}` is declared `{}` but was used at term position (it produces {produced})",
+    def.name,
+    positions.describe()
+  )))
+}
+
+/// The declaration-position counterpart of `require_position`.
+fn require_decl_position(
+  name: &Identifier,
+  attributes: &[crate::term::Attribute],
+) -> Result<(), MacroError> {
+  let positions = macro_positions(attributes)?;
+  if positions.decl {
+    return Ok(());
+  }
+  Err(MacroError::Generic(format!(
+    "macro `{name}` is declared `{}` but was used at declaration position (it produces an expression)",
+    positions.describe()
+  )))
+}
+
 /// Insert one registration, erroring on a duplicate: two DIFFERENT macros
 /// registering the same target name would otherwise resolve last-wins,
 /// silently wrong across mote load order. The SAME macro re-registering
@@ -277,115 +548,219 @@ pub(crate) fn derive_handler_macro_names(
   names
 }
 
-/// Dispatch a built-in reflection intrinsic invoked at **decl** position
-/// (i.e. `reflect_type_info! T meta_def_name` appearing where a
-/// `decls { ... }` template expects a declaration — see `expand_macro_call`).
+/// Dispatch a built-in intrinsic invoked at **decl** position (i.e.
+/// `meta! T meta_def_name` appearing where a `decls { ... }` template
+/// expects a declaration — see `expand_macro_call`).
+///
+/// `meta!` is the ONE intrinsic (see `BUILTIN_INTRINSICS`): a macro whose
+/// argument is read through the compiler's own parsed representation,
+/// converted to a Monad value, handed to an ordinary Monad function at
+/// expansion time, and reified back into real declarations (here) or a real
+/// `Term` (`expand_builtin_term_intrinsic`). Position decides the output
+/// type — this arm reifies a `List MetaDecl` — so the same intrinsic serves
+/// `std/derive.mo`'s templates and `init/format.mo`'s `fmt!` without either
+/// of them knowing about the other.
 fn expand_builtin_decl_intrinsic(
   name: &Identifier,
   args: &[Term],
-  inductives: &Map<NamePath, Inductive>,
-  loaded: &LoadedModules,
-  current_decls: &[SourceContext<Decl>],
-  current_path: &ModulePath,
+  ctx: &ExpandCtx,
 ) -> Result<Vec<Decl>, MacroError> {
   match name.as_str() {
-    "reflect_type_info" => {
-      expand_reflect_type_info_decl(args, inductives, loaded, current_decls, current_path)
-    }
+    "meta" | "reflect_type_info" => expand_meta_decl(name, args, ctx),
     other => Err(MacroError::Generic(format!(
       "intrinsic `{other}` is not valid at declaration position"
     ))),
   }
 }
 
-/// `reflect_type_info! T meta_def_name` — the reflection-as-data kernel
-/// (see `plans/review-and-reduce-the-greedy-nest.md`): builds a `TypeInfo`
-/// *value* (`meta_reflect::build_type_info_value`) from `T`'s already-
-/// parsed `Inductive`, then invokes the named top-level `def`
-/// (`meta_def_name` — an ordinary Monad function, e.g. `std/derive.mo`'s
-/// `derive_lens : TypeInfo -> List Decl`, NOT a `defmacro` template) with
-/// that value as its sole argument, via the real production evaluator
-/// (`core_eval`, through `meta_compile::MetaEvalContext`, sandboxed to
-/// `core_native::is_pure_native`'s allowlist — no IO/concurrency). The
-/// result is reified (`meta_reflect::reify_decls_value_to_decls`) back
-/// into real declarations to splice in.
+/// A built-in intrinsic invoked at **term** position (appearing inside an
+/// ordinary expression — see `expand_term`/`resolve_quote`): the same
+/// `meta!` subject/function pair as the declaration-position form, with the
+/// evaluated result reified as a `Term` instead of a `List MetaDecl`.
+fn expand_builtin_term_intrinsic(
+  name: &Identifier,
+  args: &[Term],
+  ctx: &ExpandCtx,
+) -> Result<Term, MacroError> {
+  match name.as_str() {
+    "meta" | "reflect_type_info" => expand_meta_term(name, args, ctx),
+    other => Err(MacroError::Generic(format!(
+      "intrinsic `{other}` is not valid at term position"
+    ))),
+  }
+}
+
+/// `meta! subject meta_def_name` — the reflection-as-data kernel (see
+/// `plans/review-and-reduce-the-greedy-nest.md` and, for the format-string
+/// use, `init/format.mo`): build the subject's Monad *value* form, invoke
+/// the named top-level `def` (`meta_def_name` — an ordinary Monad function,
+/// e.g. `std/derive.mo`'s `derive_lens : TypeInfo -> List MetaDecl`, NOT a
+/// `defmacro` template) with that value as its sole argument, via the real
+/// production evaluator (`core_eval`, through `meta_compile::
+/// MetaEvalContext`, sandboxed to `core_native::is_pure_native`'s allowlist
+/// — no IO/concurrency), and reify the result back into real syntax.
 ///
-/// Unlike every other intrinsic in this file, `meta_def_name` is invoked
+/// Unlike every template-substitution macro, `meta_def_name` is invoked
 /// through ordinary function CALL semantics (real evaluation, arbitrary
-/// Monad computation — `List.map`/`match`/recursion), not macro-call
-/// template substitution — it never needs to be registered in
-/// `decl_gen_defs`/`macro_defs` at all.
-fn expand_reflect_type_info_decl(
+/// Monad computation — `List.map`/`match`/recursion), so it never needs to
+/// be registered in `decl_gen_defs`/`macro_defs` at all.
+fn expand_meta_decl(
+  name: &Identifier,
+  args: &[Term],
+  ctx: &ExpandCtx,
+) -> Result<Vec<Decl>, MacroError> {
+  let (subject, meta_def_name) = meta_call_parts(name, args, ctx.inductives)?;
+  let result_value = ctx.with_meta_context(|eval| {
+    eval.invoke(
+      &GlobalRef::Local(NamePath::single(meta_def_name)),
+      vec![subject],
+    )
+  })?;
+  super::meta_reflect::reify_decls_value_to_decls(result_value, ctx.inductives)
+}
+
+fn expand_meta_term(name: &Identifier, args: &[Term], ctx: &ExpandCtx) -> Result<Term, MacroError> {
+  let (subject, meta_def_name) = meta_call_parts(name, args, ctx.inductives)?;
+  let result_value = ctx.with_meta_context(|eval| {
+    eval.invoke(
+      &GlobalRef::Local(NamePath::single(meta_def_name)),
+      vec![subject],
+    )
+  })?;
+  super::meta_reflect::reify_value_to_term(result_value, ctx.inductives)
+}
+
+/// The two halves every `meta!` invocation shares, at either position: the
+/// already-written subject term, reflected into the value form the meta
+/// function expects, and the plain name of that function.
+fn meta_call_parts(
+  name: &Identifier,
   args: &[Term],
   inductives: &Map<NamePath, Inductive>,
-  loaded: &LoadedModules,
-  current_decls: &[SourceContext<Decl>],
-  current_path: &ModulePath,
-) -> Result<Vec<Decl>, MacroError> {
-  let [type_arg, meta_def_name_arg] = args else {
+) -> Result<(Value, Identifier), MacroError> {
+  let [subject_arg, meta_def_name_arg] = args else {
     return Err(MacroError::Generic(format!(
-      "reflect_type_info! expects 2 arguments (a type and a meta-function name), got {}",
+      "{name}! expects 2 arguments (a subject and a meta-function name), got {}",
       args.len()
     )));
   };
-  let induct = resolve_inductive(type_arg, inductives).ok_or_else(|| {
-    MacroError::Generic("reflect_type_info!: first argument must name a known type".into())
-  })?;
+  let subject = reflect_subject(name, subject_arg, inductives)?;
   let meta_def_name = term_as_identifier(meta_def_name_arg).ok_or_else(|| {
-    MacroError::Generic("reflect_type_info!: second argument must name a top-level def".into())
+    MacroError::Generic(format!(
+      "{name}!: second argument must name a top-level def"
+    ))
   })?;
-  let type_info_value = super::meta_reflect::build_type_info_value(induct, inductives)?;
-  // Rebuilt fresh on every call rather than cached across the enclosing
-  // `expand_macros` run — simpler and correct, at the cost of re-checking
-  // the whole loaded program once per `reflect_type_info!`/derive
-  // invocation in a file that uses several; revisit if that proves to
-  // matter in practice (thread a cache through `expand_macros`'s work
-  // queue the same way `decl_gen_defs` already is).
-  //
-  // Forwarded to `MetaEvalContext::build`'s `current_decls`: `Decl::Use`/
-  // `Decl::Open`/`Decl::Infix` (import/scope context — never references
-  // anything not-yet-generated, safe to always include) and every
-  // `Decl::Def` EXCEPT `#[test]`-attributed ones. `#[test]` defs are
-  // specifically excluded because they're the natural CONSUMERS of a
-  // derive's own output (e.g. a test calling the very lens
-  // `derive_lens!` is about to generate) — re-checking one this early
-  // (`build_core_program`'s capture pass type-checks every decl in the
-  // batch) fails with a spurious "unbound variable" for something that
-  // will exist by the time the OUTER expansion finishes, confirmed
-  // directly, not hypothetical. Ordinary (non-`#[test]`) same-file
-  // helper defs a same-file meta function calls are kept, so that case
-  // works too — every REAL target (`std/derive.mo`'s own
-  // `derive_lens_meta`/etc.) lives in an already-loaded module and
-  // doesn't go through this path at all, only a user's own same-file
-  // meta function does. `Decl::MacroCall`/`Decl::Generated` are dropped
-  // regardless (the actual recursion trigger, see `meta_compile.rs`).
-  let meta_def_decls: Vec<SourceContext<Decl>> = current_decls
+  Ok((subject, meta_def_name))
+}
+
+/// The single reflection step `meta!` performs, whatever the position:
+/// a name reflecting to its `TypeInfo` value, or a string literal
+/// reflecting to itself.
+///
+/// This is the one place position does NOT matter — `std/derive.mo`'s
+/// derives want a type's structure, while `init/format.mo`'s `fmt!` wants
+/// the format string it was handed. Both are "the argument, as data" and
+/// the meta function's own type decides which it accepts, so adding a
+/// subject kind is a single match arm here rather than a second intrinsic.
+fn reflect_subject(
+  name: &Identifier,
+  term: &Term,
+  inductives: &Map<NamePath, Inductive>,
+) -> Result<Value, MacroError> {
+  let stripped = strip_ctx(term.clone());
+  if let Term::Lit {
+    value: Literal::Str { value },
+  } = &stripped
+  {
+    return Ok(super::meta_reflect::string_value(value));
+  }
+  match resolve_inductive(&stripped, inductives) {
+    Some(induct) => super::meta_reflect::build_type_info_value(induct, inductives),
+    None => Err(MacroError::Generic(format!(
+      "{name}!: first argument must name a known type or be a string literal"
+    ))),
+  }
+}
+
+/// Filter the file's own decls down to what a meta-evaluation capture may
+/// see, before `meta_compile::MetaEvalContext::build` receives them:
+/// `Decl::Use`/`Decl::Open`/`Decl::Infix` (import/scope context — never
+/// references anything not-yet-generated, safe to always include) and every
+/// `Decl::Def` EXCEPT `#[test]`-attributed ones. `#[test]` defs are
+/// specifically excluded because they're the natural CONSUMERS of a
+/// derive's own output (e.g. a test calling the very lens `derive_lens!` is
+/// about to generate) — re-checking one this early
+/// (`build_core_program`'s capture pass type-checks every decl in the
+/// batch) fails with a spurious "unbound variable" for something that will
+/// exist by the time the OUTER expansion finishes, confirmed directly, not
+/// hypothetical. Ordinary (non-`#[test]`) same-file helper defs a same-file
+/// meta function calls are kept, so that case works too — every REAL target
+/// (`std/derive.mo`'s own `derive_lens_meta`, `init/format.mo`'s
+/// `fmt_meta`) lives in an already-loaded module and doesn't go through
+/// this path at all, only a user's own same-file meta function does.
+/// `Decl::MacroCall`/`Decl::Generated` are dropped regardless (the actual
+/// recursion trigger, see `meta_compile.rs`).
+///
+/// A `Decl::Def` whose body still contains a MACRO CALL is dropped too —
+/// the second actual recursion trigger, and the one that only became
+/// reachable once `meta!` gained a term-position form.
+///
+/// The capture pass runs the real checker, which runs `expand_macros`,
+/// which expands that def's macro calls again — and a term-position
+/// `meta!` inside one of them re-enters `ExpandCtx::with_meta_context` from
+/// inside the capture that context is building, forever (confirmed
+/// directly: an unbounded stack overflow, not hypothetical). Matching only
+/// the intrinsic's own name is NOT enough, which is the trap here: the def
+/// being expanded holds `fmt! "{n}"`, a call to an ordinary `defmacro`
+/// whose BODY is `meta!`, so the recursion arrives one expansion step later
+/// and an intrinsic-only filter misses it. Any macro call at all is
+/// therefore the right thing to exclude.
+///
+/// Dropping those defs is precise, not a loss: a macro call is unexpanded
+/// by definition at this point, so such a def cannot be checked (or be a
+/// meta FUNCTION, which `current_decls` exists for) until the outer
+/// expansion finishes.
+fn meta_capture_decls(decls: &[SourceContext<Decl>]) -> Vec<SourceContext<Decl>> {
+  decls
     .iter()
     .filter(|ctx| match ctx.value() {
-      Decl::Def(def) => !def.has_test_attr(),
+      Decl::Def(def) => !def.has_test_attr() && !term_has_macro_call(&def.term),
       Decl::Use(_) | Decl::Open(_) | Decl::Infix(_) => true,
       _ => false,
     })
     .cloned()
-    .collect();
-  let mut ctx = super::meta_compile::MetaEvalContext::build(loaded, current_path, &meta_def_decls)?;
-  let result_value = ctx.invoke(
-    &GlobalRef::Local(NamePath::single(meta_def_name)),
-    vec![type_info_value],
-  )?;
-  super::meta_reflect::reify_decls_value_to_decls(result_value, inductives)
+    .collect()
 }
 
-/// A built-in reflection intrinsic invoked at **term** position (appearing
-/// inside an ordinary expression — see `expand_term`/`resolve_quote`).
-/// `reflect_type_info!` (`BUILTIN_INTRINSICS`'s sole remaining member) is
-/// decl-position only, so any term-position use is always invalid — kept as
-/// a real, named dispatch point (rather than folded into the generic "macro
-/// not found" fallback) so that gets a clear, specific error.
-fn expand_builtin_term_intrinsic(name: &Identifier, _args: &[Term]) -> Result<Term, MacroError> {
-  Err(MacroError::Generic(format!(
-    "intrinsic `{name}` is not valid at term position"
-  )))
+/// Whether `term` contains a macro call (`name! ...`, built-in or not) at
+/// any depth. Used only by `meta_capture_decls` above; see its doc comment
+/// for why such a def must stay out of a meta-evaluation capture.
+fn term_has_macro_call(term: &Term) -> bool {
+  fn is_macro_head(term: &Term) -> bool {
+    matches!(
+      strip_ctx(term.clone()),
+      Var {
+        name: NameRef::Macro(_)
+      }
+    )
+  }
+  match term {
+    App { fun, arg } => is_macro_head(fun) || term_has_macro_call(fun) || term_has_macro_call(arg),
+    Lam { body, .. } => term_has_macro_call(body),
+    Quote { term } => term_has_macro_call(term),
+    Ctx { term, .. } => term_has_macro_call(term),
+    Ann { term, typ } => term_has_macro_call(term) || term_has_macro_call(typ),
+    Pi { arg, ret, .. } => term_has_macro_call(arg) || term_has_macro_call(ret),
+    Forall { typ, body, .. } => term_has_macro_call(typ) || term_has_macro_call(body),
+    Lit {
+      value: Literal::If { value, then, els },
+    } => term_has_macro_call(value) || term_has_macro_call(then) || term_has_macro_call(els),
+    Lit {
+      value: Literal::Match { value, cases },
+    } => term_has_macro_call(value) || cases.iter().any(|c| term_has_macro_call(&c.value)),
+    Con(Constructor { args, .. }) => args.iter().flatten().any(term_has_macro_call),
+    _ => false,
+  }
 }
 
 /// Recursively strip Ctx wrappers from a term.
@@ -584,6 +959,18 @@ pub fn expand_macros(
   // reprocesses it through the same match arms until it bottoms out in
   // concrete decls, matching how `apply_macro`/`expand_term` already
   // recurse for term-level macros.
+  // One expansion context for the whole run: the intrinsic's evaluator
+  // snapshot is built lazily on the first `meta!` that needs it and reused
+  // by every later one (see `ExpandCtx::with_meta_context`).
+  let capture_decls = meta_capture_decls(&current_decls);
+  let expand_ctx = ExpandCtx {
+    macro_defs: &macro_defs,
+    inductives: &inductives,
+    loaded,
+    current_path,
+    capture_decls: &capture_decls,
+    meta_eval: RefCell::new(None),
+  };
   let mut queue: std::collections::VecDeque<SourceContext<Decl>> = flatten_generated(decls).into();
   let mut batch = Vec::new();
   let mut iterations: u64 = 0;
@@ -600,15 +987,7 @@ pub fn expand_macros(
     let decl = ctx.value().clone();
     match decl {
       Decl::MacroCall { name, args } => {
-        let expanded = expand_macro_call(
-          &name,
-          &args,
-          &decl_gen_defs,
-          &inductives,
-          loaded,
-          &current_decls,
-          current_path,
-        )?;
+        let expanded = expand_macro_call(&name, &args, &decl_gen_defs, &expand_ctx)?;
         for d in &expanded {
           if let Decl::DeclGen(gd) = d {
             decl_gen_defs.insert(gd.name.clone(), gd.clone());
@@ -623,11 +1002,16 @@ pub fn expand_macros(
           queue.push_front(SourceContext::no_ctx(d));
         }
       }
-      Decl::DefMacro(_) | Decl::DeclGen(_) => {
+      Decl::DefMacro(def) => {
+        check_macro_declaration(&def.name, &def.attributes, MacroReturns::Expr)?;
+        batch.push(ctx);
+      }
+      Decl::DeclGen(gd) => {
+        check_macro_declaration(&gd.name, &gd.attributes, MacroReturns::Decls)?;
         batch.push(ctx);
       }
       Decl::Def(mut def) => {
-        def.term = expand_term(def.term, &macro_defs, &inductives, 0)?;
+        def.term = expand_term(def.term, &expand_ctx, 0)?;
         batch.push(ctx.map(|_| Decl::Def(def)));
       }
       Decl::Type(induct) => {
@@ -662,15 +1046,8 @@ pub fn expand_macros(
             ))
           })?;
           let call_args = vec![mpvar(NamePath::from(induct.name().clone()))];
-          let expanded = expand_macro_call(
-            &handler.macro_name,
-            &call_args,
-            &decl_gen_defs,
-            &inductives,
-            loaded,
-            &current_decls,
-            current_path,
-          )?;
+          let expanded =
+            expand_macro_call(&handler.macro_name, &call_args, &decl_gen_defs, &expand_ctx)?;
           generated.extend(expanded);
         }
         // The type itself is pushed straight to `batch`, same as always —
@@ -704,7 +1081,7 @@ pub fn expand_macros(
         // `Decl::Def` arm above, since it's nested inside `ScopedOpen`).
         let inner = match *decl {
           Decl::Def(mut def) => {
-            def.term = expand_term(def.term, &macro_defs, &inductives, 0)?;
+            def.term = expand_term(def.term, &expand_ctx, 0)?;
             Decl::Def(def)
           }
           other => other,
@@ -727,7 +1104,7 @@ pub fn expand_macros(
       // instances are the first thing to actually exercise it.
       Decl::Ins(mut ins) => {
         for def in ins.impls_map.values_mut() {
-          def.term = expand_term(def.term.clone(), &macro_defs, &inductives, 0)?;
+          def.term = expand_term(def.term.clone(), &expand_ctx, 0)?;
         }
         batch.push(ctx.map(|_| Decl::Ins(ins)));
       }
@@ -766,20 +1143,10 @@ fn expand_macro_call(
   name: &Identifier,
   args: &[Term],
   decl_gen_defs: &Map<NamePath, DeclGenDef>,
-  inductives: &Map<NamePath, Inductive>,
-  loaded: &LoadedModules,
-  current_decls: &[SourceContext<Decl>],
-  current_path: &ModulePath,
+  ctx: &ExpandCtx,
 ) -> Result<Vec<Decl>, MacroError> {
   if is_builtin_intrinsic(name.as_str()) {
-    return expand_builtin_decl_intrinsic(
-      name,
-      args,
-      inductives,
-      loaded,
-      current_decls,
-      current_path,
-    );
+    return expand_builtin_decl_intrinsic(name, args, ctx);
   }
   let path = NamePath::single(name.clone());
   let gen_def = decl_gen_defs
@@ -787,6 +1154,7 @@ fn expand_macro_call(
     .ok_or_else(|| MacroError::MacroNotFound {
       name: name.to_string(),
     })?;
+  require_decl_position(name, &gen_def.attributes)?;
 
   if args.len() != gen_def.params.len() {
     return Err(MacroError::Generic(format!(
@@ -924,12 +1292,7 @@ fn subst_path_component(path: NamePath, name: &Identifier, replacement: &Term) -
 }
 
 /// Walk a term and expand macro calls.
-fn expand_term(
-  term: Term,
-  macro_defs: &Map<NamePath, Def>,
-  inductives: &Map<NamePath, Inductive>,
-  depth: u64,
-) -> Result<Term, MacroError> {
+fn expand_term(term: Term, ctx: &ExpandCtx, depth: u64) -> Result<Term, MacroError> {
   if depth > MAX_EXPANSION_DEPTH {
     return Err(MacroError::DepthLimitExceeded);
   }
@@ -943,13 +1306,14 @@ fn expand_term(
       } = &fun_inner
       {
         if is_builtin_intrinsic(name.as_str()) {
-          let arg = expand_term(*arg, macro_defs, inductives, depth)?;
-          return expand_builtin_term_intrinsic(name, &[arg]);
+          let arg = expand_term(*arg, ctx, depth)?;
+          return expand_builtin_term_intrinsic(name, &[arg], ctx);
         }
         let path = NamePath::single(name.clone());
-        if let Some(def) = macro_defs.get(&path) {
-          let arg = expand_term(*arg, macro_defs, inductives, depth)?;
-          return apply_macro(def, vec![arg], macro_defs, inductives, depth);
+        if let Some(def) = ctx.macro_defs.get(&path) {
+          require_position(def, MacroReturns::Expr)?;
+          let arg = expand_term(*arg, ctx, depth)?;
+          return apply_macro(def, vec![arg], ctx, depth);
         }
       }
       // Check for chained name! a b macro call
@@ -958,36 +1322,37 @@ fn expand_term(
           if is_builtin_intrinsic(name.as_str()) {
             for a in args.iter_mut() {
               let old = std::mem::replace(a, Term::Hole);
-              *a = expand_term(old, macro_defs, inductives, depth)?;
+              *a = expand_term(old, ctx, depth)?;
             }
-            return expand_builtin_term_intrinsic(&name, &args);
+            return expand_builtin_term_intrinsic(&name, &args, ctx);
           }
           let path = NamePath::single(name.clone());
-          if let Some(def) = macro_defs.get(&path) {
+          if let Some(def) = ctx.macro_defs.get(&path) {
+            require_position(def, MacroReturns::Expr)?;
             for a in args.iter_mut() {
               let old = std::mem::replace(a, Term::Hole);
-              *a = expand_term(old, macro_defs, inductives, depth)?;
+              *a = expand_term(old, ctx, depth)?;
             }
-            return apply_macro(def, args, macro_defs, inductives, depth);
+            return apply_macro(def, args, ctx, depth);
           }
         }
       }
       // Not a macro call (or macro not found) — recurse normally
       Ok(App {
-        fun: Box::new(expand_term(*fun, macro_defs, inductives, depth)?),
-        arg: Box::new(expand_term(*arg, macro_defs, inductives, depth)?),
+        fun: Box::new(expand_term(*fun, ctx, depth)?),
+        arg: Box::new(expand_term(*arg, ctx, depth)?),
       })
     }
     Lam { param, body } => Ok(Lam {
       param,
-      body: Box::new(expand_term(*body, macro_defs, inductives, depth)?),
+      body: Box::new(expand_term(*body, ctx, depth)?),
     }),
     Quote { term } => Ok(Quote {
-      term: Box::new(resolve_quote(*term, macro_defs, inductives, depth)?),
+      term: Box::new(resolve_quote(*term, ctx, depth)?),
     }),
     Ctx { loc, term, module } => Ok(Ctx {
       loc,
-      term: Box::new(expand_term(*term, macro_defs, inductives, depth)?),
+      term: Box::new(expand_term(*term, ctx, depth)?),
       module,
     }),
     Pi {
@@ -997,27 +1362,27 @@ fn expand_term(
       mult,
     } => Ok(Pi {
       arg_name,
-      arg: Box::new(expand_term(*arg, macro_defs, inductives, depth)?),
-      ret: Box::new(expand_term(*ret, macro_defs, inductives, depth)?),
+      arg: Box::new(expand_term(*arg, ctx, depth)?),
+      ret: Box::new(expand_term(*ret, ctx, depth)?),
       mult,
     }),
     Forall { name, typ, body } => Ok(Forall {
       name,
-      typ: Box::new(expand_term(*typ, macro_defs, inductives, depth)?),
-      body: Box::new(expand_term(*body, macro_defs, inductives, depth)?),
+      typ: Box::new(expand_term(*typ, ctx, depth)?),
+      body: Box::new(expand_term(*body, ctx, depth)?),
     }),
     Ann { term, typ } => Ok(Ann {
-      term: Box::new(expand_term(*term, macro_defs, inductives, depth)?),
-      typ: Box::new(expand_term(*typ, macro_defs, inductives, depth)?),
+      term: Box::new(expand_term(*term, ctx, depth)?),
+      typ: Box::new(expand_term(*typ, ctx, depth)?),
     }),
     Lit {
       value: Literal::Match { value, cases },
     } => {
-      let value = expand_term(*value, macro_defs, inductives, depth)?;
+      let value = expand_term(*value, ctx, depth)?;
       let cases = cases
         .into_iter()
         .map(|c| {
-          let value = expand_term(*c.value, macro_defs, inductives, depth)?;
+          let value = expand_term(*c.value, ctx, depth)?;
           Ok(case_with_optional_field_pattern(
             c.name,
             c.args,
@@ -1031,9 +1396,9 @@ fn expand_term(
     Lit {
       value: Literal::If { value, then, els },
     } => {
-      let value = expand_term(*value, macro_defs, inductives, depth)?;
-      let then = expand_term(*then, macro_defs, inductives, depth)?;
-      let els = expand_term(*els, macro_defs, inductives, depth)?;
+      let value = expand_term(*value, ctx, depth)?;
+      let then = expand_term(*then, ctx, depth)?;
+      let els = expand_term(*els, ctx, depth)?;
       Ok(Term::Lit {
         value: Literal::If {
           value: Box::new(value),
@@ -1050,10 +1415,7 @@ fn expand_term(
     }) => {
       let args: Vec<Option<Term>> = args
         .into_iter()
-        .map(|a| {
-          a.map(|t| expand_term(t, macro_defs, inductives, depth))
-            .transpose()
-        })
+        .map(|a| a.map(|t| expand_term(t, ctx, depth)).transpose())
         .collect::<Result<Vec<_>, MacroError>>()?;
       Ok(Con(Constructor {
         name,
@@ -1067,12 +1429,7 @@ fn expand_term(
 }
 
 /// Resolve unquote calls inside a Quote body and expand any macro calls.
-fn resolve_quote(
-  term: Term,
-  macro_defs: &Map<NamePath, Def>,
-  inductives: &Map<NamePath, Inductive>,
-  depth: u64,
-) -> Result<Term, MacroError> {
+fn resolve_quote(term: Term, ctx: &ExpandCtx, depth: u64) -> Result<Term, MacroError> {
   if depth > MAX_EXPANSION_DEPTH {
     return Err(MacroError::DepthLimitExceeded);
   }
@@ -1087,9 +1444,9 @@ fn resolve_quote(
         && n.as_str() == "unquote"
       {
         // unquote(arg): splice arg into the output, then expand it
-        let arg = resolve_quote(*arg, macro_defs, inductives, depth)?;
+        let arg = resolve_quote(*arg, ctx, depth)?;
         // The spliced result may contain macro calls
-        expand_term(arg, macro_defs, inductives, depth)
+        expand_term(arg, ctx, depth)
       } else {
         // Check for name! macro call
         if let Var {
@@ -1097,13 +1454,14 @@ fn resolve_quote(
         } = &fun_inner
         {
           if is_builtin_intrinsic(name.as_str()) {
-            let arg = resolve_quote(*arg, macro_defs, inductives, depth)?;
-            return expand_builtin_term_intrinsic(name, &[arg]);
+            let arg = resolve_quote(*arg, ctx, depth)?;
+            return expand_builtin_term_intrinsic(name, &[arg], ctx);
           }
           let path = NamePath::single(name.clone());
-          if let Some(def) = macro_defs.get(&path) {
-            let arg = resolve_quote(*arg, macro_defs, inductives, depth)?;
-            return apply_macro(def, vec![arg], macro_defs, inductives, depth + 1);
+          if let Some(def) = ctx.macro_defs.get(&path) {
+            require_position(def, MacroReturns::Expr)?;
+            let arg = resolve_quote(*arg, ctx, depth)?;
+            return apply_macro(def, vec![arg], ctx, depth + 1);
           }
         }
         // Check for chained name! a b macro call
@@ -1112,40 +1470,41 @@ fn resolve_quote(
             if is_builtin_intrinsic(name.as_str()) {
               for a in args.iter_mut() {
                 let old = std::mem::replace(a, Term::Hole);
-                *a = resolve_quote(old, macro_defs, inductives, depth)?;
+                *a = resolve_quote(old, ctx, depth)?;
               }
-              return expand_builtin_term_intrinsic(&name, &args);
+              return expand_builtin_term_intrinsic(&name, &args, ctx);
             }
             let path = NamePath::single(name.clone());
-            if let Some(def) = macro_defs.get(&path) {
+            if let Some(def) = ctx.macro_defs.get(&path) {
+              require_position(def, MacroReturns::Expr)?;
               for a in args.iter_mut() {
                 let old = std::mem::replace(a, Term::Hole);
-                *a = resolve_quote(old, macro_defs, inductives, depth)?;
+                *a = resolve_quote(old, ctx, depth)?;
               }
-              return apply_macro(def, args, macro_defs, inductives, depth + 1);
+              return apply_macro(def, args, ctx, depth + 1);
             }
           }
         }
         // Not a macro call — recurse
         Ok(App {
-          fun: Box::new(resolve_quote(*fun, macro_defs, inductives, depth)?),
-          arg: Box::new(resolve_quote(*arg, macro_defs, inductives, depth)?),
+          fun: Box::new(resolve_quote(*fun, ctx, depth)?),
+          arg: Box::new(resolve_quote(*arg, ctx, depth)?),
         })
       }
     }
     Lam { param, body } => Ok(Lam {
       param,
-      body: Box::new(resolve_quote(*body, macro_defs, inductives, depth)?),
+      body: Box::new(resolve_quote(*body, ctx, depth)?),
     }),
     Quote { term } => {
       // Nested quote — don't resolve unquotes (they belong to the inner quote)
       Ok(Quote {
-        term: Box::new(resolve_quote(*term, macro_defs, inductives, depth)?),
+        term: Box::new(resolve_quote(*term, ctx, depth)?),
       })
     }
     Ctx { loc, term, module } => Ok(Ctx {
       loc,
-      term: Box::new(resolve_quote(*term, macro_defs, inductives, depth)?),
+      term: Box::new(resolve_quote(*term, ctx, depth)?),
       module,
     }),
     Pi {
@@ -1155,27 +1514,27 @@ fn resolve_quote(
       mult,
     } => Ok(Pi {
       arg_name,
-      arg: Box::new(resolve_quote(*arg, macro_defs, inductives, depth)?),
-      ret: Box::new(resolve_quote(*ret, macro_defs, inductives, depth)?),
+      arg: Box::new(resolve_quote(*arg, ctx, depth)?),
+      ret: Box::new(resolve_quote(*ret, ctx, depth)?),
       mult,
     }),
     Forall { name, typ, body } => Ok(Forall {
       name,
-      typ: Box::new(resolve_quote(*typ, macro_defs, inductives, depth)?),
-      body: Box::new(resolve_quote(*body, macro_defs, inductives, depth)?),
+      typ: Box::new(resolve_quote(*typ, ctx, depth)?),
+      body: Box::new(resolve_quote(*body, ctx, depth)?),
     }),
     Ann { term, typ } => Ok(Ann {
-      term: Box::new(resolve_quote(*term, macro_defs, inductives, depth)?),
-      typ: Box::new(resolve_quote(*typ, macro_defs, inductives, depth)?),
+      term: Box::new(resolve_quote(*term, ctx, depth)?),
+      typ: Box::new(resolve_quote(*typ, ctx, depth)?),
     }),
     Lit {
       value: Literal::Match { value, cases },
     } => {
-      let value = resolve_quote(*value, macro_defs, inductives, depth)?;
+      let value = resolve_quote(*value, ctx, depth)?;
       let cases = cases
         .into_iter()
         .map(|c| {
-          let value = resolve_quote(*c.value, macro_defs, inductives, depth)?;
+          let value = resolve_quote(*c.value, ctx, depth)?;
           Ok(case_with_optional_field_pattern(
             c.name,
             c.args,
@@ -1189,9 +1548,9 @@ fn resolve_quote(
     Lit {
       value: Literal::If { value, then, els },
     } => {
-      let value = resolve_quote(*value, macro_defs, inductives, depth)?;
-      let then = resolve_quote(*then, macro_defs, inductives, depth)?;
-      let els = resolve_quote(*els, macro_defs, inductives, depth)?;
+      let value = resolve_quote(*value, ctx, depth)?;
+      let then = resolve_quote(*then, ctx, depth)?;
+      let els = resolve_quote(*els, ctx, depth)?;
       Ok(Term::Lit {
         value: Literal::If {
           value: Box::new(value),
@@ -1208,10 +1567,7 @@ fn resolve_quote(
     }) => {
       let args: Vec<Option<Term>> = args
         .into_iter()
-        .map(|a| {
-          a.map(|t| resolve_quote(t, macro_defs, inductives, depth))
-            .transpose()
-        })
+        .map(|a| a.map(|t| resolve_quote(t, ctx, depth)).transpose())
         .collect::<Result<Vec<_>, MacroError>>()?;
       Ok(Con(Constructor {
         name,
@@ -1249,8 +1605,7 @@ fn collect_macro_args(fun: Term, arg: Term) -> Option<(Identifier, Vec<Term>)> {
 fn apply_macro(
   def: &Def,
   args: Vec<Term>,
-  macro_defs: &Map<NamePath, Def>,
-  inductives: &Map<NamePath, Inductive>,
+  ctx: &ExpandCtx,
   depth: u64,
 ) -> Result<Term, MacroError> {
   if depth > MAX_EXPANSION_DEPTH {
@@ -1279,8 +1634,8 @@ fn apply_macro(
     Quote { term } => {
       // Hygiene: rename macro-introduced binders with gensym names
       let term = alpha_rename_body(*term);
-      let expanded = resolve_quote(term, macro_defs, inductives, depth)?;
-      expand_term(expanded, macro_defs, inductives, depth + 1)
+      let expanded = resolve_quote(term, ctx, depth)?;
+      expand_term(expanded, ctx, depth + 1)
     }
     _ => Err(MacroError::NonTermReturn {
       name: def.name.to_string(),
