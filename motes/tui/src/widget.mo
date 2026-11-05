@@ -68,6 +68,8 @@ pub type DecoratorKind {
     /// ambient style. `with_style` cannot express this: it merges into the
     /// whole subtree, so a `dim` border also dimmed every row inside it.
     border_styled (style : BorderStyle) (text_style : TextStyle),
+    /// `border_styled` with `title` set into the top edge.
+    border_titled (style : BorderStyle) (text_style : TextStyle) (title : String),
     padding (left : I64) (top : I64) (right : I64) (bottom : I64),
     styled (style : TextStyle)
 }
@@ -127,6 +129,11 @@ pub def border (bs : BorderStyle) (child : Widget) : Widget :=
 /// structure-is-quieter-than-content rule, without the content dimmed too.
 pub def border_with (s : TextStyle) (bs : BorderStyle) (child : Widget) : Widget :=
     Widget.decorator (DecoratorKind.border_styled bs s) child
+
+/// `border_with`, with `title` in the top edge (`╭─ title ───╮`), bold in
+/// the frame's style; clipped to fit, and left out when it cannot.
+pub def border_titled (s : TextStyle) (bs : BorderStyle) (title : String) (child : Widget) : Widget :=
+    Widget.decorator (DecoratorKind.border_titled bs s title) child
 
 /// Inset `child` by the given number of cells on each side.
 pub def padding (left : I64) (top : I64) (right : I64) (bottom : I64) (child : Widget) : Widget :=

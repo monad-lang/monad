@@ -37,7 +37,7 @@ use lib::widgets::list { ListState }
 // patterns.
 use lib::widget {
     Widget, BorderStyle, SizedWidget, LeafWidget, DecoratorKind,
-    label, spans, sized, border, border_with, padding, with_style, blank, text_input, list
+    label, spans, sized, border, border_with, border_titled, padding, with_style, blank, text_input, list
 }
 
 // ==================== Cells ====================
@@ -219,6 +219,16 @@ def draw_border (area : Rect) (bs : BorderStyle) (screen : Screen) (active : Tex
     let top := draw_h_edge area area.y bc.tl bc.h bc.tr screen active in
     let bottom := draw_h_edge area (area.y + area.height - 1) bc.bl bc.h bc.br top active in
     draw_v_edges area (area.y + 1) (area.y + area.height - 1) bc.v bottom active
+
+/// The title in the top edge, after `╭─`: ` title `, clipped so a corner
+/// and one edge cell stay on the right. Fewer than 6 free cells (or an
+/// empty title) draw nothing.
+def draw_title (area : Rect) (title : String) (screen : Screen) (frame : TextStyle) : Screen :=
+    let room : I64 := area.width - 4 in
+    if Bool.or (room < 6) (Bool.or (area.height < 2) (String.is_empty title)) then screen
+    else
+        let text : String := String.concat " " (String.concat (Text.take_width title (room - 2)) " ") in
+        screen_write_text screen area.y (area.x + 2) text room (style_merge frame { style_default with bold := true })
 
 // ==================== Text input & list (Phase 5) ====================
 
@@ -468,6 +478,10 @@ pub def render_with (w : Widget) (area : Rect) (screen : Screen) (active : TextS
                     let frame : TextStyle := style_merge active s in
                     let boxed := if area.width < 2 || area.height < 2 then screen else draw_border area bs screen frame in
                     render_with child (pad_rect area 1 1 1 1) boxed active,
+                DecoratorKind.border_titled bs s title =>
+                    let frame : TextStyle := style_merge active s in
+                    let boxed := if area.width < 2 || area.height < 2 then screen else draw_border area bs screen frame in
+                    render_with child (pad_rect area 1 1 1 1) (draw_title area title boxed frame) active,
                 DecoratorKind.padding l t r b =>
                     render_with child (pad_rect area l t r b) screen active,
                 DecoratorKind.styled s =>
@@ -671,6 +685,28 @@ def test_render_border_too_small_skips_box : Bool :=
     // zero-size rect), so the single cell stays a space.
     let s := render (border BorderStyle.plain (label "x")) (mk_rect 0 0 1 1) (mk_screen 1 1) in
     cell_is s 0 0 " "
+
+/// ` title ` sits after the corner and one edge cell, bold.
+#[test]
+def test_render_border_title_in_the_top_edge : Bool :=
+    let s := render (border_titled style_default BorderStyle.plain "abc" blank) (mk_rect 0 0 12 3) (mk_screen 3 12) in
+    cell_is s 0 0 "+" && cell_is s 0 1 "-" && cell_is s 0 2 " " && cell_is s 0 3 "a" && cell_is s 0 5 "c"
+        && cell_is s 0 6 " " && cell_is s 0 7 "-" && cell_is s 0 11 "+"
+
+/// A long title is clipped so the last edge cell and the corner remain;
+/// too little room drops it.
+#[test]
+def test_render_border_title_clips_and_drops : Bool :=
+    let long := render (border_titled style_default BorderStyle.plain "abcdefghij" blank) (mk_rect 0 0 12 3) (mk_screen 3 12) in
+    let tiny := render (border_titled style_default BorderStyle.plain "abc" blank) (mk_rect 0 0 9 3) (mk_screen 3 9) in
+    cell_is long 0 3 "a" && cell_is long 0 8 "f" && cell_is long 0 9 " " && cell_is long 0 10 "-" && cell_is long 0 11 "+"
+        && cell_is tiny 0 3 "-"
+
+/// A wide glyph that does not fit whole is left out, not split over the edge.
+#[test]
+def test_render_border_title_wide_glyphs_fit : Bool :=
+    let s := render (border_titled style_default BorderStyle.plain "日本語日本" blank) (mk_rect 0 0 12 3) (mk_screen 3 12) in
+    cell_is s 0 3 "日" && cell_is s 0 10 "-" && cell_is s 0 11 "+"
 
 #[test]
 def test_render_column_splits_vertically : Bool :=
