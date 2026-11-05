@@ -389,13 +389,18 @@ def read_events (r : InputReader) : IO (Pair (List Event) InputReader) := do {
 }
 
 /// The modal's loop state: the dialog, the input decoder, decoded events
-/// not yet folded, the last painted screen, and whether a repaint is due.
+/// not yet folded, the last painted screen, and whether a repaint is due;
+/// with a refresh, how many quiet polls run between calls and how many
+/// have passed.
 struct ModalState {
     d : DialogModel,
     r : InputReader,
     queued : List Event,
     prev : Option Screen,
     dirty : Bool,
+    refresh : Option (DialogModel -> IO (Option DialogModel)),
+    every : I64,
+    idle : I64,
 }
 
 /// What one modal step decided: keep going, or end with this answer.
@@ -460,8 +465,32 @@ def modal_poll (s : ModalState) : IO ModalNext := do {
     let ready <- Terminal.poll 100;
     if ready
     then modal_read s
-    else IO.pure (Modal.idle s)
+    else modal_quiet (Modal.idle s)
 }
+
+/// A quiet poll that did not end the modal counts toward the refresh.
+def modal_quiet (next : ModalNext) : IO ModalNext :=
+    match next {
+        ModalNext.done _ => IO.pure next,
+        ModalNext.more s => match s.refresh {
+            Option.none => IO.pure next,
+            Option.some f =>
+                if Dialog.refresh_due s.idle s.every then modal_refresh f s
+                else IO.pure (ModalNext.more { s with idle := s.idle + 1 }),
+        },
+    }
+
+def modal_refresh (f : DialogModel -> IO (Option DialogModel)) (s : ModalState) : IO ModalNext := do {
+    let got <- f s.d;
+    IO.pure (ModalNext.more (match got {
+        Option.none => { s with idle := 0 },
+        Option.some d2 => { s with d := d2, idle := 0, dirty := true },
+    }))
+}
+
+/// Whether this quiet poll, after `idle` earlier ones, is the refresh's.
+pub def Dialog.refresh_due (idle : I64) (every : I64) : Bool :=
+    Bool.not (idle + 1 < every)
 
 /// A quiet poll: EOF cancels, a pending lone ESC becomes the Escape key
 /// (it leaves an open field or note, else cancels), anything else waits.
@@ -485,10 +514,19 @@ def modal_read (s : ModalState) : IO ModalNext := do {
 /// Run the dialog over stdin until it is chosen, cancelled, submitted or
 /// stdin closes. The final dialog rides along so the caller can read the
 /// note.
-pub def Dialog.modal (paint : Option Screen -> DialogModel -> IO (Pair Screen DialogModel)) (d : DialogModel) : IO (Pair DialogModel DialogStep) := do {
+pub def Dialog.modal (paint : Option Screen -> DialogModel -> IO (Pair Screen DialogModel)) (d : DialogModel) : IO (Pair DialogModel DialogStep) :=
+    modal_start Option.none 0 paint d
+
+/// `Dialog.modal`, calling `refresh` every `every` quiet polls (100 ms
+/// each): `some` replaces the dialog and repaints it, `none` keeps it.
+pub def Dialog.modal_refresh (every : I64) (refresh : DialogModel -> IO (Option DialogModel)) (paint : Option Screen -> DialogModel -> IO (Pair Screen DialogModel)) (d : DialogModel) : IO (Pair DialogModel DialogStep) :=
+    modal_start (Option.some refresh) every paint d
+
+def modal_start (refresh : Option (DialogModel -> IO (Option DialogModel))) (every : I64) (paint : Option Screen -> DialogModel -> IO (Pair Screen DialogModel)) (d : DialogModel) : IO (Pair DialogModel DialogStep) := do {
     let size <- Terminal.size;
     let start : ModalState := match size {
-        Pair.pair rows cols => { d := d, r := input_reader rows cols, queued := List.empty, prev := Option.none, dirty := true },
+        Pair.pair rows cols => { d := d, r := input_reader rows cols, queued := List.empty, prev := Option.none, dirty := true,
+            refresh := refresh, every := every, idle := 0 },
     };
     modal_loop paint start
 }

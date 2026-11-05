@@ -6,7 +6,7 @@ use lib::widgets::dialog {
     DialogModel, DialogOption, DialogStep, Dialog.make, Dialog.step, Dialog.paste,
     Dialog.note_text, Dialog.with_default, Dialog.apply, Dialog.rows, Dialog.body_rows,
     Dialog.total_rows, Dialog.frame_width, Dialog.frame_height, Dialog.content_width,
-    Dialog.with_notes, Dialog.clamp_scroll, ModalState, ModalNext, Modal.fold, Modal.idle,
+    Dialog.with_notes, Dialog.clamp_scroll, ModalState, ModalNext, Modal.fold, Modal.idle, modal_quiet, Dialog.refresh_due,
 }
 use lib::input {InputReader, input_reader}
 use lib::types {Key, Event, MouseEvent, MouseButton}
@@ -230,7 +230,8 @@ def test_clamp_scroll_stops_at_the_last_body_row : Bool :=
 // ── the modal step ──────────────────────────────────────────────────────
 
 def modal_of (d : DialogModel) (r : InputReader) : ModalState :=
-    { d := d, r := r, queued := List.empty, prev := Option.none, dirty := false }
+    { d := d, r := r, queued := List.empty, prev := Option.none, dirty := false,
+        refresh := Option.none, every := 0, idle := 0 }
 
 #[test]
 def test_quiet_poll_with_a_lone_escape_queues_the_key : Bool :=
@@ -270,3 +271,35 @@ def test_a_no_op_event_needs_no_repaint : Bool :=
         ModalNext.more s => Bool.not s.dirty,
         ModalNext.done _ => false,
     }
+
+// ── the refresh ─────────────────────────────────────────────────────────
+
+def retitle (d : DialogModel) : IO (Option DialogModel) :=
+    let d2 : DialogModel := { d with title := "refreshed" } in
+    IO.pure (Option.some d2)
+
+def ticking (every : I64) : ModalState :=
+    let s : ModalState := modal_of opened (input_reader 24 80) in
+    { s with refresh := Option.some retitle, every := every }
+
+def quiet_state (n : ModalNext) : ModalState :=
+    match n { ModalNext.more s => s, ModalNext.done _ => ticking 0 }
+
+#[test]
+def test_refresh_due_on_every_nth_quiet_poll : Bool :=
+    Bool.not (Dialog.refresh_due 0 3) && Bool.not (Dialog.refresh_due 1 3) && Dialog.refresh_due 2 3
+        && Dialog.refresh_due 0 1
+
+/// Two quiet polls only count; the third runs the refresh, swaps the
+/// dialog in, asks for a paint and starts the count over.
+#[test]
+def test_quiet_polls_run_the_refresh : IO Bool := do {
+    let a <- modal_quiet (ModalNext.more (ticking 3));
+    let b <- modal_quiet (ModalNext.more (quiet_state a));
+    let c <- modal_quiet (ModalNext.more (quiet_state b));
+    let sa : ModalState := quiet_state a;
+    let sb : ModalState := quiet_state b;
+    let sc : ModalState := quiet_state c;
+    IO.pure (sa.idle == 1 && Bool.not sa.dirty && sb.idle == 2 && Bool.not (String.beq sb.d.title "refreshed")
+        && sc.idle == 0 && sc.dirty && String.beq sc.d.title "refreshed")
+}
