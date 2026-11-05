@@ -17,7 +17,7 @@ use lib::elements {
     Html.script, Html.style, Html.title,
     Html.node, Html.void, Html.text, Html.raw, Html.comment, Html.doctype,
     Html.fragment, Html.document, Html.document_with, Html.document_utf8,
-    Html.navbar, Html.card
+    Html.navbar, Html.card, Html.class_list, Html.attrs_when
 }
 use lib::typed {Oak.Node, Oak.to_html}
 use xml_html::html {Html.to_string}
@@ -233,3 +233,17 @@ def test_reserved_renames : Bool :=
     && element_renders (Html.div [Html.class_ ["c"]] List.empty) "<div class=\"c\"></div>"
     && element_renders (Html.label [Html.for_ "f"] List.empty) "<label for=\"f\"></label>"
     && element_renders (Html.node "details" [Html.open_] List.empty) "<details open></details>"
+
+// ─── Conditional attributes ───
+
+#[test]
+def test_class_list_keeps_enabled : Bool :=
+    element_renders
+        (Html.div [Html.class_list [Pair.pair "a" true, Pair.pair "b" false, Pair.pair "c" true]] List.empty)
+        "<div class=\"a c\"></div>"
+
+#[test]
+def test_attrs_when : Bool :=
+    element_renders
+        (Html.div (List.append (Html.attrs_when true [Html.id_ "x"]) (Html.attrs_when false [Html.disabled])) List.empty)
+        "<div id=\"x\"></div>"

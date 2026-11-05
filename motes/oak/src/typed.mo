@@ -17,7 +17,7 @@
 // they are stable across renders and already correct when `Patch` mounts a
 // lowered subtree at an arbitrary path.
 
-use web_event::event {WebEvent, HandlerResult, ListenerFlags, ListenerFlags.encode}
+use web_event::event {WebEvent, HandlerResult, HandlerResult.map, ListenerFlags, ListenerFlags.encode}
 use xml_html::html {Html.Attr, Html.Node}
 
 pub type Oak.Attr (Msg : Type) {
@@ -51,6 +51,47 @@ pub def Oak.of_attr {Msg : Type} (attr : Html.Attr) : Oak.Attr Msg :=
 
 pub def Oak.text {Msg : Type} (content : String) : Oak.Node Msg :=
     Oak.Node.raw (Html.Node.node_text content)
+
+// ═══ Message mapping ═══
+//
+// Embed a sub-view with its own message type: `Oak.Node.map Child view`.
+// Mapping only relabels handlers; the markup and the tree shape are
+// untouched, so handler ids (derived from the path) are unchanged.
+
+def map_handler {A : Type} {B : Type} (f : A -> B) (h : WebEvent -> HandlerResult A)
+    : WebEvent -> HandlerResult B :=
+    fn (e : WebEvent) => HandlerResult.map f (h e)
+
+pub def Oak.Attr.map {A : Type} {B : Type} (f : A -> B) (a : Oak.Attr A) : Oak.Attr B :=
+    match a {
+        Oak.Attr.html attr => Oak.Attr.html attr,
+        Oak.Attr.on event flags handler => Oak.Attr.on event flags (map_handler f handler),
+    }
+
+#[terminating]
+def map_attrs {A : Type} {B : Type} (f : A -> B) (attrs : List (Oak.Attr A)) : List (Oak.Attr B) :=
+    match attrs {
+        List.empty => List.empty,
+        List.cons a rest => List.cons (Oak.Attr.map f a) (map_attrs f rest),
+    }
+
+#[terminating]
+def map_nodes {A : Type} {B : Type} (f : A -> B) (nodes : List (Oak.Node A)) : List (Oak.Node B) :=
+    match nodes {
+        List.empty => List.empty,
+        List.cons n rest => List.cons (Oak.Node.map f n) (map_nodes f rest),
+    }
+
+#[terminating]
+pub def Oak.Node.map {A : Type} {B : Type} (f : A -> B) (n : Oak.Node A) : Oak.Node B :=
+    match n {
+        Oak.Node.raw node => Oak.Node.raw node,
+        Oak.Node.element tag attrs children =>
+            Oak.Node.element tag (map_attrs f attrs) (map_nodes f children),
+        Oak.Node.void tag attrs => Oak.Node.void tag (map_attrs f attrs),
+        Oak.Node.raw_text tag attrs content => Oak.Node.raw_text tag (map_attrs f attrs) content,
+        Oak.Node.fragment children => Oak.Node.fragment (map_nodes f children),
+    }
 
 // ═══ Handler ids ═══
 //

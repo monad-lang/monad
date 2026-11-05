@@ -17,6 +17,7 @@ pub use xml_html::html {
 pub use lib::typed {
     Oak.Node, Oak.Attr, Oak.Lowered,
     Oak.of_html, Oak.of_attr, Oak.text, Oak.lower, Oak.to_html,
+    Oak.Node.map, Oak.Attr.map,
     Handler.id, Handler.spec, Handler.spec_of, Handler.prefix,
 }
 
@@ -78,7 +79,7 @@ pub use lib::elements {
 }
 
 pub use lib::elements {
-    Html.attr, Html.bool_attr, Html.role, Html.aria,
+    Html.attr, Html.bool_attr, Html.role, Html.aria, Html.class_list, Html.attrs_when,
     Html.key_attr, Html.key,
     Html.method_, Html.action, Html.enctype, Html.enctype_multipart,
     Html.target, Html.rel, Html.charset, Html.accept,

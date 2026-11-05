@@ -41,6 +41,18 @@ def navbar_links {Msg : Type} (links : List (Pair String String)) : List (Oak.No
         List.cons link rest => List.cons (navbar_link link) (navbar_links rest),
     }
 
+// The names whose flag is set, in source order (for `Html.class_list`).
+#[terminating]
+def enabled_names (pairs : List (Pair String Bool)) : List String :=
+    match pairs {
+        List.empty => List.empty,
+        List.cons p rest =>
+            match p {
+                Pair.pair name on =>
+                    if on then List.cons name (enabled_names rest) else enabled_names rest
+            },
+    }
+
 with Html {
     // ═══ Attributes ═══
     //
@@ -77,6 +89,16 @@ with Html {
 
     pub def for_ {Msg : Type} (value : String) : Oak.Attr Msg :=
         Html.attr "for" value
+
+    /// `class` from `(name, enabled)` pairs: only enabled names are kept.
+    /// `Html.class_list [("btn", true), ("btn--active", is_active)]`.
+    pub def class_list {Msg : Type} (pairs : List (Pair String Bool)) : Oak.Attr Msg :=
+        Html.attr "class" (List.intercalate " " (enabled_names pairs))
+
+    /// `attrs` when `cond` holds, otherwise nothing. Splice with
+    /// `List.append`: `List.append base (Html.attrs_when busy [Html.disabled])`.
+    pub def attrs_when {Msg : Type} (cond : Bool) (attrs : List (Oak.Attr Msg)) : List (Oak.Attr Msg) :=
+        if cond then attrs else List.empty
 
     pub def style_attr {Msg : Type} (value : String) : Oak.Attr Msg :=
         Html.attr "style" value
