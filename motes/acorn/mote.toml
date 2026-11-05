@@ -1,0 +1,43 @@
+# Acorn: the monad-lang.org site generator, built on Oak.
+#
+# Replaces Zola (landing page) and mdBook (the book under /docs/), and will
+# render docs.rs-style API pages for a mote. The plan is
+# plans/implementations/2026-11-05-acorn-docs-site.md.
+#
+# Pages are Oak views at `Msg = Unit` lowered with `Oak.to_html` -- a static
+# site binds no handlers. Book chapters go through `markdown`, whose output is
+# already an `Html.Node`, so it embeds with `Oak.of_html`.
+#
+# Dependencies grow by phase: `fmt` (highlighting), `moon`/`http` (serve) and
+# `lang`/`toolkit`/`llvm`/`runtime` (API docs) are added when their phase
+# lands, so the scaffold does not pay the compiler's load time.
+#
+# No `[affine]` table: new code is written affine-clean.
+
+[mote]
+name = "acorn"
+version = "0.1.0"
+edition = "2026"
+
+[dependencies.init]
+workspace = true
+
+[dependencies.std]
+workspace = true
+
+# A path, not `workspace = true`: the root has no `oak` workspace entry
+# (try_ui uses the same form).
+[dependencies.oak]
+path = "../oak"
+
+[dependencies.xml_html]
+workspace = true
+
+[dependencies.markdown]
+workspace = true
+
+[dependencies.toml]
+workspace = true
+
+[dependencies.clap]
+workspace = true
