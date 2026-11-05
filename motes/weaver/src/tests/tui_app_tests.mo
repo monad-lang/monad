@@ -4,7 +4,7 @@
 /// IO) is asserted by SHAPE here (it IS a `perform`), never executed --
 /// the turn/command machinery itself is shuttle's and `commands.mo`'s
 /// own, already pinned by their own test files.
-use shuttle::agent {RunState, silent_sleep, silent_usage, silent_stop, silent_inbox}
+use shuttle::agent {RunState, silent_sleep, silent_usage, silent_stop, silent_inbox, silent_side_spend}
 use shuttle::context {usage_zero}
 use shuttle::message {Usage, Message}
 use shuttle::message_types {Role, Content}
@@ -50,7 +50,7 @@ def session_of : Session :=
     { config := mock_config, system_prompt := "test", tools := List.empty, history := List.empty, turns := 0, spent := usage_zero }
 
 def run_of : RunState :=
-    { session := session_of, reg := ToolRegistry.empty, turns_left := 10, emit := fn (_ : String) => IO.pure unit, gate := Gate.auto, always := List.empty, retries := 1, sleep_ms := silent_sleep, on_usage := silent_usage, should_stop := silent_stop, inbox := silent_inbox, stopped := false }
+    { session := session_of, reg := ToolRegistry.empty, turns_left := 10, emit := fn (_ : String) => IO.pure unit, gate := Gate.auto, always := List.empty, retries := 1, sleep_ms := silent_sleep, on_usage := silent_usage, should_stop := silent_stop, inbox := silent_inbox, side_spend := silent_side_spend, stopped := false }
 
 def state_of (mode : Mode) : WeaverState :=
     { run := run_of, mode := mode, provider := "mock", budget := 10, context_window := 128000, compact_at := 80, plan := Option.none, last_context := 0, grants := Option.none, place := Option.none, mcps := List.empty, keys := BTreeMap.empty, catalog := BTreeMap.empty, quit := false, colors := false, fatal := Option.none, store := Option.none }

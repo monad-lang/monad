@@ -7,7 +7,7 @@
 /// is part of the contract: the user reads it, and the loop prints
 /// nothing else.
 use init::transformers {ResultT}
-use shuttle::agent {RunState, silent_sleep, silent_usage, silent_stop, silent_inbox}
+use shuttle::agent {RunState, silent_sleep, silent_usage, silent_stop, silent_inbox, silent_side_spend}
 use shuttle::context {usage_zero}
 use shuttle::gate {Capability, Gate}
 use shuttle::message {Message, Usage}
@@ -83,7 +83,7 @@ def run_of : RunState := {
     sleep_ms := silent_sleep,
     on_usage := silent_usage,
     should_stop := silent_stop,
-    inbox := silent_inbox, stopped := false,
+    inbox := silent_inbox, side_spend := silent_side_spend, stopped := false,
 }
 
 def session_of : Session := {

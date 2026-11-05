@@ -15,7 +15,7 @@ use mcp_client::protocol {McpClientInfo, McpTool}
 use mcp_client::server {McpServer, Server.connect, Server.list_tools, Server.call, Server.dispose}
 use shuttle::gate {Capability, Gate, Gate.auto}
 use shuttle::registry {ToolRegistry}
-use shuttle::agent {RunState, silent_sleep, silent_usage, silent_stop, silent_inbox}
+use shuttle::agent {RunState, silent_sleep, silent_usage, silent_stop, silent_inbox, silent_side_spend}
 use shuttle::session {Session, Session.load}
 use shuttle::context {usage_zero}
 use shuttle::provider {ProviderConfig}
@@ -399,7 +399,7 @@ def rekey_loaded (p : Plan) (s : Settings) (sess : Session) : Pair Session (Opti
 /// `Gate.auto` here is never consulted.
 def initial_state (p : Plan) (reg : ToolRegistry) (s : Settings) (colors : Bool) (store : Option StoreState) (session : Session) (grants : Option (Ref (List PermGrant))) (place : Option SessionPlace) : WeaverState :=
     let left : I64 := if p.max_turns - session.turns < 0 then 0 else p.max_turns - session.turns in
-    let run : RunState := { session := session, reg := reg, turns_left := left, emit := stdout_write, gate := Gate.auto, always := List.empty, retries := 3, sleep_ms := Dumb.poll_sleep, on_usage := silent_usage, should_stop := silent_stop, inbox := silent_inbox, stopped := false } in
+    let run : RunState := { session := session, reg := reg, turns_left := left, emit := stdout_write, gate := Gate.auto, always := List.empty, retries := 3, sleep_ms := Dumb.poll_sleep, on_usage := silent_usage, should_stop := silent_stop, inbox := silent_inbox, side_spend := silent_side_spend, stopped := false } in
     let prov : String := Weaver.provider_of p.provider session.config in
     let st : WeaverState := { run := run, mode := initial_mode s, provider := prov, budget := p.max_turns, context_window := p.context_window, compact_at := p.compact_at, plan := Option.none, last_context := 0, grants := grants, place := place, mcps := p.mcps, keys := s.api_keys, catalog := BTreeMap.empty, quit := false, colors := colors, fatal := Option.none, store := store } in
     st

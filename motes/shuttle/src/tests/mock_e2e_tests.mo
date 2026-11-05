@@ -381,3 +381,34 @@ def test_with_notes_empty_keeps_results : Bool :=
         List.cons c _ => match c { Content.tool_result _ out _ => out == "one", _ => false },
         List.empty => false,
     }
+
+def side_ten_five (u : Unit) : IO Usage :=
+    let x : Usage := { input_tokens := 10, output_tokens := 5, cached_tokens := 0 } in
+    IO.pure x
+
+def side_usage_marker : String :=
+    String.concat "/tmp/shuttle_side_usage_" (String.concat (I64.to_string process_id) ".txt")
+
+def record_usage (u : Usage) : IO Unit := do {
+    let _ <- Test.append_fixture (Path.path side_usage_marker) (String.concat (I64.to_string u.input_tokens) ",");
+    IO.pure unit
+}
+
+/// A tool's own spend (a subagent's) lands in the session total, and
+/// `on_usage` hears the new total right after the dispatch (the model
+/// calls spend 1 and 2 input tokens, the one dispatch 10).
+#[test]
+def test_mock_loop_side_spend_counts : IO Bool := do {
+    write_script;
+    let _ <- Test.write_fixture (Path.path side_usage_marker) "";
+    let st0 : RunState := Loop.initial_state mock_config mock_registry "You are a test harness." [user_message] 6 Provider.silent_emit Gate.auto;
+    let st : RunState := { st0 with side_spend := side_ten_five, on_usage := record_usage };
+    let r <- ResultT.run (Agent.exec Loop.iterate st);
+    let calls <- Test.read_fixture_or (Path.path side_usage_marker) "";
+    return (match r {
+        Result.err _ => false,
+        Result.ok p => match p {
+            Pair.pair fin _ => fin.session.spent.input_tokens == 13 && fin.session.spent.output_tokens == 35 && String.beq calls "1,11,13,",
+        },
+    })
+}

@@ -5,8 +5,8 @@ The v1 shipped now is a **read-only plan subagent**: the model can call
 `read`/`grep`/`glob` under `Gate.read_only`, then returns its last
 assistant message plus a usage footer. The child is synchronous (inside
 the parent's tool dispatch), depth 1 (its registry has no `task`), and
-its usage is logged/reported but not added to the parent's
-`session.spent`. This document is the roadmap beyond that.
+its usage is added to the parent's `session.spent` after the dispatch
+(`RunState.side_spend`). This document is the roadmap beyond that.
 
 ## Why it is small
 
@@ -62,8 +62,8 @@ how the child sees the **current** provider/model and the run's store.
 
 ## Constraints and risks
 
-- **Accounting:** child usage should eventually be added to the parent
-  `session.spent`; today only the footer/log carries it.
+- **Accounting:** a finished child's usage joins the parent's
+  `session.spent`; a child that failed outright reports none.
 - **Cancellation:** nothing can interrupt a running `ResultT`/IO action
   coherently. `cancel_fiber` exists but a blocked provider/tool read
   cannot be unwound. Bound every child by `turns_left`.

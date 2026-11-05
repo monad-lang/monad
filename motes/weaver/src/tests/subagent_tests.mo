@@ -1,10 +1,11 @@
 /// The `task` subagent's surface: its spec, its read-only registry, and
 /// the read-only gate it installs on the child loop.
-use weaver::subagent {Subagent.spec, Subagent.system_prompt, Subagent.read_registry, Subagent.task_tool}
+use weaver::subagent {Subagent.spec, Subagent.system_prompt, Subagent.read_registry, Subagent.task_tool, Subagent.drain}
+use std::ref {Ref, Ref.new}
 use shuttle::gate {Gate, Gate.read_only, Pick, Capability, Approval}
 use shuttle::registry {ToolRegistry}
 use shuttle::provider {ProviderConfig, Wire}
-use shuttle::message {Message, Turn}
+use shuttle::message {Message, Turn, Usage}
 use shuttle::message_types {Role, Content, StopReason}
 use shuttle::context {usage_zero}
 use shuttle::agent {silent_stop}
@@ -64,21 +65,28 @@ def mock_cfg : ProviderConfig :=
 def script_path : String :=
     String.concat "/tmp/shuttle_mock_turns_" (String.concat (I64.to_string process_id) ".json")
 
+def child_usage : Usage := { input_tokens := 7, output_tokens := 3, cached_tokens := 0 }
+
 def child_turn : Turn :=
-    { message := { role := Role.assistant, content := [Content.text "CHILD PLAN"] }, usage := usage_zero, stop := StopReason.end_turn }
+    { message := { role := Role.assistant, content := [Content.text "CHILD PLAN"] }, usage := child_usage, stop := StopReason.end_turn }
 
 def task_input : Json :=
     Json.make_object (Map.insert "prompt" (Json.make_str "plan it")
         (Map.insert "max_turns" (Json.make_num_int 4) BTreeMap.empty))
 
 /// The child's history starts at zero assistant messages, so the mock's
-/// first scripted turn is its plan.
+/// first scripted turn is its plan. Its spend lands in the turn's Ref,
+/// and one drain takes it.
 #[test]
 def test_task_tool_runs_a_child_loop : IO Bool := do {
     let _ <- IO.write_file (Path.path script_path) (Json.to_string (Json.make_array [Turn.serialize_json child_turn]));
-    let tool := Subagent.task_tool mock_cfg Option.none Option.none silent_stop;
+    let spend <- Ref.new usage_zero;
+    let tool := Subagent.task_tool mock_cfg Option.none Option.none silent_stop spend;
     let r <- ResultT.run (tool.run "c1" task_input);
     let _ <- exec_cmd "rm" ["-f", script_path];
+    let first <- Subagent.drain spend unit;
+    let second <- Subagent.drain spend unit;
+    let spent_ok : Bool := first.input_tokens == 7 && first.output_tokens == 3 && second.input_tokens == 0;
     match r {
         Result.err _ => IO.pure false,
         Result.ok c =>
@@ -86,7 +94,7 @@ def test_task_tool_runs_a_child_loop : IO Bool := do {
             match content {
                 Content.tool_result _ out is_err =>
                     IO.pure (Bool.not is_err && String.contains out "CHILD PLAN"
-                        && String.contains out "[subagent turns=1"),
+                        && String.contains out "[subagent turns=1" && spent_ok),
                 _ => IO.pure false,
             },
     }

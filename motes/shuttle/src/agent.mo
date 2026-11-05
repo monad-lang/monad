@@ -64,6 +64,9 @@ pub struct RunState {
     /// Drained after every tool dispatch and appended to the last tool
     /// result, so the model hears them mid-turn.
     inbox : Unit -> IO (List String),
+    /// Spend made outside the model calls (a subagent's), drained after
+    /// every tool dispatch into `session.spent`.
+    side_spend : Unit -> IO Usage,
     /// Set when the loop ended because `should_stop` fired. The session
     /// is a normal partial result, never an error.
     stopped : Bool,
@@ -77,6 +80,11 @@ pub def silent_stop (u : Unit) : IO Bool := IO.pure false
 
 /// The inbox seam's default: nothing ever arrives.
 pub def silent_inbox (u : Unit) : IO (List String) := IO.pure List.empty
+
+/// The side-spend seam's default: tools spend nothing.
+pub def silent_side_spend (u : Unit) : IO Usage :=
+    let z : Usage := { input_tokens := 0, output_tokens := 0, cached_tokens := 0 } in
+    IO.pure z
 
 /// The sleep seam's default: no timed-wait native exists (no new
 /// natives -- the recorded owner decision) and the headless default

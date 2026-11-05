@@ -33,7 +33,7 @@ use shuttle::provider {Provider.send, Provider.stopped_error}
 use shuttle::tool {ToolSpec, ToolImpl}
 use shuttle::registry {ToolRegistry}
 use shuttle::session {Session}
-use shuttle::agent {RunState, Agent, AgentIdle, AgentAnswered, AgentExecuting, AgentDone, silent_sleep, silent_usage, silent_stop, silent_inbox}
+use shuttle::agent {RunState, Agent, AgentIdle, AgentAnswered, AgentExecuting, AgentDone, silent_sleep, silent_usage, silent_stop, silent_inbox, silent_side_spend}
 use shuttle::context {usage_zero, usage_add, Context.cap_text, Context.tool_output_max}
 use std::list {List.intercalate}
 use shuttle::gate {Capability, Pick, Approval, Gate}
@@ -455,7 +455,10 @@ def agent_dispatch_run (turn : Turn) (s : RunState) : ResultT String IO (Pair Ru
                 let _ <- emit_each s.emit ends;
                 let capped : List Content := cap_contents (results_of p);
                 let _ <- emit_each s.emit (tool_error_events names capped);
-                return (Result.ok (Pair.pair (state_with_always s (allcache_of p)) capped))
+                let side <- s.side_spend unit;
+                let s2 : RunState := with_side_spend (state_with_always s (allcache_of p)) side;
+                let _ <- if usage_is_zero side then IO.pure unit else s2.on_usage s2.session.spent;
+                return (Result.ok (Pair.pair s2 capped))
             }
         }
     })
@@ -481,6 +484,16 @@ def tool_error_events (names : List String) (cs : List Content) : List String :=
             },
         },
     }
+
+/// Add the tools' own spend (a subagent's model calls) to the session's.
+def with_side_spend (s : RunState) (side : Usage) : RunState :=
+    let base : Session := s.session in
+    let session2 : Session := { base with spent := usage_add base.spent side } in
+    let s2 : RunState := { s with session := session2 } in
+    s2
+
+def usage_is_zero (u : Usage) : Bool :=
+    u.input_tokens == 0 && u.output_tokens == 0 && u.cached_tokens == 0
 
 def state_with_always (s : RunState) (cached : List Capability) : RunState :=
     let s2 : RunState := { s with always := cached } in
@@ -709,7 +722,7 @@ pub def Loop.iterate : Agent AgentIdle AgentDone Unit :=
 /// that wants no gate -- shuttle's own CLI and tests).
 pub def Loop.initial_state (cfg : ProviderConfig) (reg : ToolRegistry) (system : String) (history : List Message) (turns_left : I64) (emit : String -> IO Unit) (gate : Gate) : RunState :=
     let session : Session := { config := cfg, system_prompt := system, tools := ToolRegistry.specs reg, history := history, turns := 0, spent := usage_zero } in
-    let st : RunState := { session := session, reg := reg, turns_left := turns_left, emit := emit, gate := gate, always := List.empty, retries := 1, sleep_ms := silent_sleep, on_usage := silent_usage, should_stop := silent_stop, inbox := silent_inbox, stopped := false } in
+    let st : RunState := { session := session, reg := reg, turns_left := turns_left, emit := emit, gate := gate, always := List.empty, retries := 1, sleep_ms := silent_sleep, on_usage := silent_usage, should_stop := silent_stop, inbox := silent_inbox, side_spend := silent_side_spend, stopped := false } in
     st
 
 def runstate_of_pair (p : Pair RunState Unit) : RunState :=

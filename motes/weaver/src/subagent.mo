@@ -2,10 +2,12 @@
 /// (`Loop.run_state`) over a fresh Session with only read/grep/glob and
 /// `Gate.read_only`, then returns the child's last assistant message.
 /// Synchronous: the child runs inside the parent's tool dispatch, depth 1
-/// (the child registry has no `task`). Child usage rides the result footer
-/// and the debug log, not the parent Session.spent (v1 accounting gap).
-use shuttle::agent {RunState, silent_sleep, silent_usage, silent_inbox}
-use shuttle::context {usage_zero}
+/// (the child registry has no `task`). The child's spend goes into the
+/// turn's `spend` Ref, which the parent loop folds into its own
+/// `session.spent` after the dispatch (`RunState.side_spend`).
+use shuttle::agent {RunState, silent_sleep, silent_usage, silent_inbox, silent_side_spend}
+use shuttle::context {usage_zero, usage_add}
+use std::ref {Ref, Ref.get, Ref.set, Ref.modify}
 use shuttle::gate {Gate}
 use shuttle::provider {ProviderConfig}
 use shuttle::loop {Loop.run_state}
@@ -149,7 +151,7 @@ def task_result (id : String) (log : Option Logger) (store : Option StoreState) 
     }
 
 def run_task (cfg : ProviderConfig) (log : Option Logger) (store : Option StoreState)
-    (stop : Unit -> IO Bool) (id : String) (j : Json) : ResultT String IO Content :=
+    (stop : Unit -> IO Bool) (spend : Ref Usage) (id : String) (j : Json) : ResultT String IO Content :=
     match TaskArgs.deserialize_json j {
         Result.err e => ResultT.mk (return (Result.ok (Content.tool_result id e true))),
         Result.ok args =>
@@ -159,16 +161,34 @@ def run_task (cfg : ProviderConfig) (log : Option Logger) (store : Option StoreS
                 let st : RunState := { session := sess, reg := Subagent.read_registry, turns_left := n,
                     emit := child_emit log, gate := Gate.read_only, always := List.empty,
                     retries := 1, sleep_ms := silent_sleep, on_usage := child_usage log,
-                    should_stop := stop, inbox := silent_inbox, stopped := false };
+                    should_stop := stop, inbox := silent_inbox, side_spend := silent_side_spend, stopped := false };
                 let _ <- Logs.info log (String.concat "ev=subagent_start turns=" (I64.to_string n));
                 let run_id <- Tasks.agent_id;
                 let started <- IO.current_time_nano;
                 let _ <- Tasks.record_agent store run_id args.prompt "running" started "";
                 let r <- ResultT.run (Loop.run_state st);
+                let _ <- add_spend spend r;
                 let c <- task_result id log store r;
-                let _ <- Tasks.record_agent store run_id args.prompt (run_status r) started (content_summary c);
+                let _ <- Tasks.record_agent store run_id args.prompt (run_status r) started (run_summary r c);
                 IO.pure (Result.ok c)
             }),
+    }
+
+/// A finished child's spend is the parent's too (a stopped child returns
+/// its partial session; a failed one has none to report).
+def add_spend (spend : Ref Usage) (r : Result String Session) : IO Unit :=
+    match r {
+        Result.ok final => Ref.modify spend (fn (u : Usage) => usage_add u final.spent),
+        Result.err _ => IO.pure unit,
+    }
+
+/// The turn's `side_spend` seam over the same Ref: what the children
+/// spent since the last dispatch, and the Ref starts over.
+pub def Subagent.drain (spend : Ref Usage) : Unit -> IO Usage :=
+    fn (_ : Unit) => do {
+        let u <- Ref.get spend;
+        let _ <- Ref.set spend usage_zero;
+        IO.pure u
     }
 
 /// The `/tasks` status word: the run ended with an answer or failed (a
@@ -179,16 +199,22 @@ def run_status (r : Result String Session) : String :=
         Result.err _ => "failed",
     }
 
-/// The answer's first few lines, for the monitor's detail view.
-def content_summary (c : Content) : String :=
-    match c {
-        Content.tool_result _ text _ => Text.cut 2000 text,
+/// The monitor's detail: the child's spend, then the answer's start (the
+/// result's own footer sits at its end, past the cut for a long answer).
+def run_summary (r : Result String Session) (c : Content) : String :=
+    let text : String := match c {
+        Content.tool_result _ out _ => Text.cut 2000 out,
         _ => "",
+    } in
+    match r {
+        Result.ok final => String.concat (usage_footer final) (String.concat "\n" text),
+        Result.err _ => text,
     }
 
 /// The per-turn `task` tool. The registry is built each turn so the child
 /// uses the CURRENT provider/model and the run's store/log; `stop` is the
 /// parent's stop predicate, so Esc also ends a child at its boundaries.
+/// `spend` collects the children's usage for `Subagent.drain`.
 pub def Subagent.task_tool (cfg : ProviderConfig) (log : Option Logger)
-    (store : Option StoreState) (stop : Unit -> IO Bool) : ToolImpl :=
-    { spec := Subagent.spec, cap := Capability.exec, run := run_task cfg log store stop }
+    (store : Option StoreState) (stop : Unit -> IO Bool) (spend : Ref Usage) : ToolImpl :=
+    { spec := Subagent.spec, cap := Capability.exec, run := run_task cfg log store stop spend }

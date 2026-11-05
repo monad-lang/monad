@@ -22,7 +22,8 @@ use shuttle::gate {Pick, Approval, Gate, Capability}
 use shuttle::message {Message, Usage}
 use shuttle::message_types {Role, Content}
 use weaver::usage {UsageTracker.start, UsageTracker.silent, UsageTracker.last}
-use std::ref {Ref}
+use std::ref {Ref, Ref.new}
+use shuttle::context {usage_zero}
 use weaver::commands {
     WeaverState, Effect, Effect.ok, set_fatal, Commands.dispatch, Commands.set_model,
     Commands.autocompact, Commands.last_assistant_text, Commands.current_plan,
@@ -50,7 +51,7 @@ use weaver::ui::pane {
 use weaver::ui::rows {DisplayRow, Rows.of_line, Rows.widget}
 use weaver::logs {Logs.info, Logs.debug, Logs.warn, Logs.error, Logs.log_rss, Logs.sanitize}
 use weaver::title {Title.generate, Title.needed}
-use weaver::subagent {Subagent.task_tool}
+use weaver::subagent {Subagent.task_tool, Subagent.drain}
 use weaver::todo {TodoItem, TodoTool.impl, Todo.read, Todo.same}
 use weaver::procs {Procs.tail, Procs.kill}
 use weaver::format {format_elapsed}
@@ -1252,7 +1253,8 @@ def drive_turn_tui (log : Option Logger) (gen : I64) (st : WeaverState) (text : 
             };
             // Exit notes no tool boundary took ride the typed line.
             let notes <- Inbox.take st2.store;
-            let r <- ResultT.run (drive_tui log gen st2 (TuiApp.with_task_notes notes text) on_u);
+            let spend <- Ref.new usage_zero;
+            let r <- ResultT.run (drive_tui log gen st2 (TuiApp.with_task_notes notes text) on_u spend);
             let last <- UsageTracker.last tracker;
             let last_context : I64 := match r {
                 Result.err _ => st2.last_context,
@@ -1294,13 +1296,13 @@ def error_line (e : WeaverError) : TLine :=
 /// screen mid-frame -- the recorded UI-repair finding). Drive the loop
 /// -- `append_user`/`drive_loop` are `dumb.mo`'s own halves, reused
 /// as-is (Phase 9: `drive_loop` is already `ResultT WeaverError IO`).
-def drive_tui (log : Option Logger) (gen : I64) (st : WeaverState) (text : String) (on_usage : Usage -> IO Unit) : ResultT WeaverError IO RunState := do {
+def drive_tui (log : Option Logger) (gen : I64) (st : WeaverState) (text : String) (on_usage : Usage -> IO Unit) (spend : Ref Usage) : ResultT WeaverError IO RunState := do {
     let stop : Unit -> IO Bool := Stop.predicate st.store gen;
     let with_task : RunState := { (st.run) with reg := ToolRegistry.register (TodoTool.impl st.store)
-        (ToolRegistry.register (Subagent.task_tool st.run.session.config log st.store stop) st.run.reg) };
+        (ToolRegistry.register (Subagent.task_tool st.run.session.config log st.store stop spend) st.run.reg) };
     let gated : RunState := { with_task with gate := Gate.weaver_tui log st.mode st.colors st.store st.grants (Place.cwd_of st.place),
         emit := progress_live log st.store, on_usage := on_usage,
-        should_stop := stop, inbox := Inbox.seam st.store, stopped := false };
+        should_stop := stop, inbox := Inbox.seam st.store, side_spend := Subagent.drain spend, stopped := false };
     let ready : RunState := append_user gated text;
     drive_loop ready
 }

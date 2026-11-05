@@ -30,12 +30,13 @@ use weaver::store {StoreState, Store.record_history, Store.write_plan}
 use weaver::theme {Theme.tint, theme_status_code, class_code, LineClass}
 use log::logger {Logger}
 use shuttle::registry {ToolRegistry}
-use weaver::subagent {Subagent.task_tool}
+use weaver::subagent {Subagent.task_tool, Subagent.drain}
 use weaver::todo {TodoTool.impl}
 use weaver::usage {UsageTracker.start, UsageTracker.silent, UsageTracker.last}
 use weaver::format {format_tokens}
 use init::transformers {ResultT}
-use std::ref {Ref}
+use std::ref {Ref, Ref.new}
+use shuttle::context {usage_zero}
 use tui::terminal {Terminal.poll}
 
 /// The interactive sleep: `Terminal.poll`'s timeout IS a timed wait --
@@ -309,10 +310,17 @@ def advance_run (st : WeaverState) (run2 : RunState) : WeaverState :=
 def drive (read : Unit -> IO (Option String)) (write : String -> IO Unit) (st : WeaverState) (text : String) : ResultT WeaverError IO RunState :=
     drive_ready read write st text
 
-def drive_ready (read : Unit -> IO (Option String)) (write : String -> IO Unit) (st : WeaverState) (text : String) : ResultT WeaverError IO RunState := do {
+def drive_ready (read : Unit -> IO (Option String)) (write : String -> IO Unit) (st : WeaverState) (text : String) : ResultT WeaverError IO RunState :=
+    ResultT.mk (do {
+        let spend <- Ref.new usage_zero;
+        ResultT.run (drive_spending read write st text spend)
+    })
+
+def drive_spending (read : Unit -> IO (Option String)) (write : String -> IO Unit) (st : WeaverState) (text : String) (spend : Ref Usage) : ResultT WeaverError IO RunState := do {
     let base : RunState := st.run;
     let with_task : RunState := { base with reg := ToolRegistry.register (TodoTool.impl st.store)
-        (ToolRegistry.register (Subagent.task_tool base.session.config Option.none Option.none silent_stop) base.reg) };
+        (ToolRegistry.register (Subagent.task_tool base.session.config Option.none Option.none silent_stop spend) base.reg),
+        side_spend := Subagent.drain spend };
     let gated : RunState := gate_for st read (theme_write write st.colors) with_task;
     let ready : RunState := append_user gated text;
     drive_loop ready
