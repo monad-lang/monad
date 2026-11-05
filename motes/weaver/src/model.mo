@@ -168,8 +168,6 @@ pub struct TuiModel {
     tasks_running : I64 := 0,
     /// Their ids: the next poll's exit notes compare against them.
     tasks_seen : List String := List.empty,
-    /// Exit notes the next turn's message carries to the model.
-    task_notes : List String := List.empty,
 }
 
 /// The initial model: an empty input box with a hint placeholder, no
@@ -182,7 +180,7 @@ pub def init_tui_model (log : Option Logger) (st : WeaverState) (rows : I64) (co
 
 /// The startup tail loaded from the session store.
 pub def init_tui_model_with (log : Option Logger) (st : WeaverState) (rows : I64) (cols : I64) (tr : Transcript) : TuiModel :=
-    let m : TuiModel := { state := st, prompt := Prompt.empty, pane := Pane.make tr, rows := rows, cols := cols, ctrl_c_streak := 0, ctrl_d_streak := 0, turn_pending := false, frame := 0, banner := Banner.shown, live := Live.idle, modal := false, plan_ready := false, title_due := false, turn_gen := 0, overlay_open := false, dialog_seq := 0, picker := Option.none, queued := List.empty, queued_ready := false, log := log, todos := List.empty, todos_open := true, tasks_running := 0, tasks_seen := List.empty, task_notes := List.empty } in
+    let m : TuiModel := { state := st, prompt := Prompt.empty, pane := Pane.make tr, rows := rows, cols := cols, ctrl_c_streak := 0, ctrl_d_streak := 0, turn_pending := false, frame := 0, banner := Banner.shown, live := Live.idle, modal := false, plan_ready := false, title_due := false, turn_gen := 0, overlay_open := false, dialog_seq := 0, picker := Option.none, queued := List.empty, queued_ready := false, log := log, todos := List.empty, todos_open := true, tasks_running := 0, tasks_seen := List.empty } in
     Model.refresh_rows m
 
 pub def Model.banner_view (m : TuiModel) : BannerView :=

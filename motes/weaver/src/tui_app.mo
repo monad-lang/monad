@@ -67,6 +67,7 @@ use weaver::store {
     Store.derive_description, TitleField, StoreMeta,
 }
 use weaver::stop {Stop.predicate, Stop.request, Stop.reset}
+use weaver::inbox {Inbox.post, Inbox.take, Inbox.seam}
 use weaver::overlay {
     OverlayState, Overlay.read, Overlay.reset, Overlay.ack, Overlay.begin, Overlay.finish,
     Overlay.monitor_open, Overlay.monitor_close, Overlay.wait_monitor,
@@ -485,8 +486,11 @@ pub def TuiApp.subscriptions (m : TuiModel) : Subs WeaverMsg :=
         IO.pure (WeaverMsg.todos_polled ts)
     }) in
     // Background tasks: the footer count and exit notes, once a second.
+    // The notes go to the turn's inbox here (the update is pure).
+    let seen : List String := m.tasks_seen in
     let tasks : Subs WeaverMsg := Subs.poll 10 (fn (_ : Unit) => do {
         let ts <- Tasks.list store;
+        let _ <- Inbox.post store (Tasks.exit_notes seen ts);
         IO.pure (WeaverMsg.tasks_polled ts)
     }) in
     if m.turn_pending
@@ -956,7 +960,6 @@ def start_queued (m : TuiModel) : Pair TuiModel (Cmd WeaverMsg) :=
 /// Submit `text` as this turn's line: echo, history, and the async turn.
 def submit_line (m : TuiModel) (text : String) : Pair TuiModel (Cmd WeaverMsg) :=
     let st : WeaverState := m.state in
-    let is_command : Bool := String.starts_with "/" text in
     let echo : List TLine := echo_lines text in
     let block : List TLine := Transcript.next_block m.pane.transcript echo in
     let start : I64 := m.pane.transcript.total in
@@ -969,15 +972,11 @@ def submit_line (m : TuiModel) (text : String) : Pair TuiModel (Cmd WeaverMsg) :
         { m1 with turn_pending := true, banner := Banner.hidden,
             live := Live.start (Option.some m.state.run.session.spent), pane := { p1 with scroll := 0 },
             turn_gen := gen,
-            modal := modal_command st text,
-            task_notes := if is_command then m.task_notes else List.empty } in
-    // The model hears about background tasks that ended since its last
-    // turn; the echo shows only what was typed.
-    let sent : String := if is_command then text else TuiApp.with_task_notes m.task_notes text in
+            modal := modal_command st text } in
     Pair.pair m2 (Cmd.perform_async
         (fn (_ : Unit) => do {
             let _ <- write_echo store start block;
-            run_submitted_line m.log gen st sent
+            run_submitted_line m.log gen st text
         })
         (turn_never_ran st.run))
 
@@ -1251,7 +1250,9 @@ def drive_turn_tui (log : Option Logger) (gen : I64) (st : WeaverState) (text : 
                 let _ <- live_seam u;
                 UsageTracker.silent tracker u
             };
-            let r <- ResultT.run (drive_tui log gen st2 text on_u);
+            // Exit notes no tool boundary took ride the typed line.
+            let notes <- Inbox.take st2.store;
+            let r <- ResultT.run (drive_tui log gen st2 (TuiApp.with_task_notes notes text) on_u);
             let last <- UsageTracker.last tracker;
             let last_context : I64 := match r {
                 Result.err _ => st2.last_context,
@@ -1299,7 +1300,7 @@ def drive_tui (log : Option Logger) (gen : I64) (st : WeaverState) (text : Strin
         (ToolRegistry.register (Subagent.task_tool st.run.session.config log st.store stop) st.run.reg) };
     let gated : RunState := { with_task with gate := Gate.weaver_tui log st.mode st.colors st.store st.grants (Place.cwd_of st.place),
         emit := progress_live log st.store, on_usage := on_usage,
-        should_stop := stop, stopped := false };
+        should_stop := stop, inbox := Inbox.seam st.store, stopped := false };
     let ready : RunState := append_user gated text;
     drive_loop ready
 }
@@ -2239,13 +2240,12 @@ def monitor_closed_step (m : TuiModel) (notes : List String) : Pair TuiModel (Cm
 // ── the task poll ──────────────────────────────────────────────────────
 
 /// A polled task list: the footer's count, and a note for each background
-/// process that ended since the last poll -- shown now, and carried to the
-/// model with the next message. A change asks for a frame.
+/// process that ended since the last poll -- shown now; the poll already
+/// posted it to the model's inbox. A change asks for a frame.
 def tasks_step (m : TuiModel) (ts : List TaskEntry) : Pair TuiModel (Cmd WeaverMsg) :=
     let notes : List String := Tasks.exit_notes m.tasks_seen ts in
     let running : I64 := Tasks.running_count ts in
-    let m1 : TuiModel := { m with tasks_running := running, tasks_seen := Tasks.running_ids ts,
-        task_notes := List.append m.task_notes notes } in
+    let m1 : TuiModel := { m with tasks_running := running, tasks_seen := Tasks.running_ids ts } in
     if Bool.not (List.is_empty notes) then note_block draw_next m1 (List.map TLine.plain notes)
     else if running == m.tasks_running then Pair.pair m1 Cmd.none
     else Pair.pair m1 draw_next
@@ -2254,8 +2254,8 @@ def tasks_step (m : TuiModel) (ts : List TaskEntry) : Pair TuiModel (Cmd WeaverM
 /// `stop_sent` folds to nothing). A plain diff, unlike `repaint_cmd`.
 def draw_next : Cmd WeaverMsg := Cmd.dispatch WeaverMsg.stop_sent
 
-/// The message the model gets: the typed line, then the exit notes since
-/// the last turn.
+/// The message the model gets: the typed line, then the exit notes no
+/// tool boundary delivered.
 pub def TuiApp.with_task_notes (notes : List String) (text : String) : String :=
     if List.is_empty notes then text
     else String.concat text (String.concat "\n\n" (List.intercalate "\n" notes))

@@ -33,8 +33,9 @@ use shuttle::provider {Provider.send, Provider.stopped_error}
 use shuttle::tool {ToolSpec, ToolImpl}
 use shuttle::registry {ToolRegistry}
 use shuttle::session {Session}
-use shuttle::agent {RunState, Agent, AgentIdle, AgentAnswered, AgentExecuting, AgentDone, silent_sleep, silent_usage, silent_stop}
+use shuttle::agent {RunState, Agent, AgentIdle, AgentAnswered, AgentExecuting, AgentDone, silent_sleep, silent_usage, silent_stop, silent_inbox}
 use shuttle::context {usage_zero, usage_add, Context.cap_text, Context.tool_output_max}
+use std::list {List.intercalate}
 use shuttle::gate {Capability, Pick, Approval, Gate}
 use json::json {Json}
 
@@ -491,14 +492,38 @@ def state_with_always (s : RunState) (cached : List Capability) : RunState :=
 pub def Loop.append_results (turn : Turn) (results : List Content) : Agent AgentExecuting AgentIdle Unit :=
     Agent.agent (fn (s : RunState) => agent_append_run turn results s)
 
-def agent_append_run (turn : Turn) (results : List Content) (s : RunState) : ResultT String IO (Pair RunState Unit) := do {
-    let tool_message : Message := { role := Role.tool, content := results };
-    let history2 : List Message := List.append s.session.history [turn.message, tool_message];
-    let base : Session := s.session;
-    let session2 : Session := { base with history := history2 };
-    let s2 : RunState := { s with session := session2 };
-    ResultT.mk (return (Result.ok (Pair.pair s2 unit)))
-}
+def agent_append_run (turn : Turn) (results : List Content) (s : RunState) : ResultT String IO (Pair RunState Unit) :=
+    ResultT.mk (do {
+        let notes <- s.inbox unit;
+        return (Result.ok (Pair.pair (append_results_state turn (Loop.with_notes notes results) s) unit))
+    })
+
+def append_results_state (turn : Turn) (results : List Content) (s : RunState) : RunState :=
+    let tool_message : Message := { role := Role.tool, content := results } in
+    let history2 : List Message := List.append s.session.history [turn.message, tool_message] in
+    let base : Session := s.session in
+    let session2 : Session := { base with history := history2 } in
+    let s2 : RunState := { s with session := session2 } in
+    s2
+
+/// Inbox notes ride the LAST tool result's text: every wire accepts it
+/// (no extra message between a tool call and the next model call), and
+/// it lands after the output cap, so a long result cannot cut it off.
+pub def Loop.with_notes (notes : List String) (results : List Content) : List Content :=
+    match notes {
+        List.empty => results,
+        List.cons _ _ => List.reverse (note_last (List.intercalate "\n" notes) (List.reverse results)),
+    }
+
+def note_last (text : String) (rev : List Content) : List Content :=
+    match rev {
+        List.empty => rev,
+        List.cons c rest => match c {
+            Content.tool_result id output failed =>
+                List.cons (Content.tool_result id (String.concat output (String.concat "\n\n" text)) failed) rest,
+            _ => List.cons c rest,
+        },
+    }
 
 /// Answered -> Done: append the final assistant message.
 pub def Loop.finish (turn : Turn) : Agent AgentAnswered AgentDone Unit :=
@@ -684,7 +709,7 @@ pub def Loop.iterate : Agent AgentIdle AgentDone Unit :=
 /// that wants no gate -- shuttle's own CLI and tests).
 pub def Loop.initial_state (cfg : ProviderConfig) (reg : ToolRegistry) (system : String) (history : List Message) (turns_left : I64) (emit : String -> IO Unit) (gate : Gate) : RunState :=
     let session : Session := { config := cfg, system_prompt := system, tools := ToolRegistry.specs reg, history := history, turns := 0, spent := usage_zero } in
-    let st : RunState := { session := session, reg := reg, turns_left := turns_left, emit := emit, gate := gate, always := List.empty, retries := 1, sleep_ms := silent_sleep, on_usage := silent_usage, should_stop := silent_stop, stopped := false } in
+    let st : RunState := { session := session, reg := reg, turns_left := turns_left, emit := emit, gate := gate, always := List.empty, retries := 1, sleep_ms := silent_sleep, on_usage := silent_usage, should_stop := silent_stop, inbox := silent_inbox, stopped := false } in
     st
 
 def runstate_of_pair (p : Pair RunState Unit) : RunState :=

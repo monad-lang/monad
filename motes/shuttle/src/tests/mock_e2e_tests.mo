@@ -19,7 +19,7 @@ use shuttle::provider {ProviderConfig, Wire, Provider.silent_emit}
 use shuttle::gate {Capability, Gate, Gate.auto}
 use shuttle::registry {ToolRegistry}
 use shuttle::tool {ToolSpec, ToolImpl}
-use shuttle::loop {Loop.run, Loop.initial_state, Loop.iterate}
+use shuttle::loop {Loop.run, Loop.initial_state, Loop.iterate, Loop.with_notes}
 use shuttle::agent {Agent.exec, RunState}
 use shuttle::session {Session}
 use json::json {Json, Json.make_array, Json.make_str, Json.to_string}
@@ -340,3 +340,44 @@ def test_mock_loop_stop_during_send : IO Bool := do {
         },
     })
 }
+
+def one_note (u : Unit) : IO (List String) := IO.pure ["[background task p-1 exited (0): make]"]
+
+/// An inbox note rides the tool result of the same turn: the model hears
+/// it at the next send, not after the user's next message.
+#[test]
+def test_mock_loop_inbox_note_rides_tool_result : IO Bool := do {
+    write_script;
+    let st0 : RunState := Loop.initial_state mock_config mock_registry "You are a test harness." [user_message] 6 Provider.silent_emit Gate.auto;
+    let st : RunState := { st0 with inbox := one_note };
+    let r <- ResultT.run (Agent.exec Loop.iterate st);
+    return (match r {
+        Result.err _ => false,
+        Result.ok p => match p {
+            Pair.pair fin _ => history_mentions "p-1 exited (0)" fin.session.history,
+        },
+    })
+}
+
+#[test]
+def test_with_notes_appends_to_last_result : Bool :=
+    let rs : List Content := [Content.tool_result "a" "one" false, Content.tool_result "b" "two" true] in
+    match Loop.with_notes ["note"] rs {
+        List.cons first rest => match rest {
+            List.cons last _ => match last {
+                Content.tool_result id out failed =>
+                    id == "b" && out == "two\n\nnote" && failed
+                        && (match first { Content.tool_result _ o _ => o == "one", _ => false }),
+                _ => false,
+            },
+            List.empty => false,
+        },
+        List.empty => false,
+    }
+
+#[test]
+def test_with_notes_empty_keeps_results : Bool :=
+    match Loop.with_notes List.empty [Content.tool_result "a" "one" false] {
+        List.cons c _ => match c { Content.tool_result _ out _ => out == "one", _ => false },
+        List.empty => false,
+    }

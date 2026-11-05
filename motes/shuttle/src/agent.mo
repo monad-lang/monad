@@ -60,6 +60,10 @@ pub struct RunState {
     /// one (before tools dispatch). It runs on the loop's own thread and
     /// never serializes; an interactive caller backs it with a signal.
     should_stop : Unit -> IO Bool,
+    /// Notes that arrived while the loop ran (a background task exited).
+    /// Drained after every tool dispatch and appended to the last tool
+    /// result, so the model hears them mid-turn.
+    inbox : Unit -> IO (List String),
     /// Set when the loop ended because `should_stop` fired. The session
     /// is a normal partial result, never an error.
     stopped : Bool,
@@ -70,6 +74,9 @@ pub def silent_usage (u : Usage) : IO Unit := IO.pure unit
 
 /// The stop seam's default: never stop.
 pub def silent_stop (u : Unit) : IO Bool := IO.pure false
+
+/// The inbox seam's default: nothing ever arrives.
+pub def silent_inbox (u : Unit) : IO (List String) := IO.pure List.empty
 
 /// The sleep seam's default: no timed-wait native exists (no new
 /// natives -- the recorded owner decision) and the headless default

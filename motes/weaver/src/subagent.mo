@@ -4,7 +4,7 @@
 /// Synchronous: the child runs inside the parent's tool dispatch, depth 1
 /// (the child registry has no `task`). Child usage rides the result footer
 /// and the debug log, not the parent Session.spent (v1 accounting gap).
-use shuttle::agent {RunState, silent_sleep, silent_usage}
+use shuttle::agent {RunState, silent_sleep, silent_usage, silent_inbox}
 use shuttle::context {usage_zero}
 use shuttle::gate {Gate}
 use shuttle::provider {ProviderConfig}
@@ -159,7 +159,7 @@ def run_task (cfg : ProviderConfig) (log : Option Logger) (store : Option StoreS
                 let st : RunState := { session := sess, reg := Subagent.read_registry, turns_left := n,
                     emit := child_emit log, gate := Gate.read_only, always := List.empty,
                     retries := 1, sleep_ms := silent_sleep, on_usage := child_usage log,
-                    should_stop := stop, stopped := false };
+                    should_stop := stop, inbox := silent_inbox, stopped := false };
                 let _ <- Logs.info log (String.concat "ev=subagent_start turns=" (I64.to_string n));
                 let run_id <- Tasks.agent_id;
                 let started <- IO.current_time_nano;

@@ -8,7 +8,9 @@ use weaver::pty_support {
     run_gated, with_root, spawn_args, wait_proc_entries,
     wait_pid_gone, kill_pid_9
 }
-use weaver::pty_fixtures {write_process_script}
+use weaver::pty_fixtures {write_process_script, write_midturn_script}
+use std::process {exec_cmd}
+use std::concurrent::combine {sleepIO}
 use weaver::procs {ProcEntry}
 use std::io {IO.println}
 
@@ -104,3 +106,56 @@ pub def run_start_process_list_and_kill : IO Bool :=
 
 def test_processes_body (bin : String) : IO Bool :=
     with_root "processes" (fn (root : String) => processes_run bin root)
+
+// ── mid-turn exit notes ─────────────────────────────────────────────────
+
+/// Poll the sessions' model history (not the transcript, which shows the
+/// note too) until some file mentions `needle`.
+#[partial]
+def wait_store_mentions (root : String) (needle : String) (left_ms : I64) : IO Bool := do {
+    let rc <- exec_cmd "grep" ["-rqsF", needle, String.concat root "/sessions", "--exclude-dir=transcript"];
+    if rc == 0 then IO.pure true
+    else if left_ms < 1 then IO.pure false
+    else do {
+        let _ <- sleepIO 200;
+        wait_store_mentions root needle (left_ms - 200)
+    }
+}
+
+def midturn_go (m : Pty) (root : String) : IO Bool := do {
+    let ready <- Pty.wait_until m placeholder_seen 6000;
+    Pty.send_text m "go\n";
+    let first <- Pty.wait_until m (fn (o : Output) => has_stripped o "Permission required") 6000;
+    Pty.send_text m "y";
+    let second <- Pty.wait_until m (fn (o : Output) => has_stripped o "sleep 5") 6000;
+    Pty.send_text m "y";
+    let shown <- Pty.wait_until m (fn (o : Output) => grid_has o "[background task") 8000;
+    let done <- Pty.wait_until m (fn (o : Output) => has_tight o "heardit") 12000;
+    let a <- Check.report "the turn starts the task, runs the shell and ends" (ready && first && second && done);
+    let c <- Check.report "the exit note shows in the transcript" shown;
+    // The tool message carrying the shell's result holds the note: the
+    // model heard the exit inside the same turn.
+    let noted <- wait_store_mentions root "[background task" 4000;
+    let b <- Check.report "the exit note reaches the model mid-turn" noted;
+    Pty.finish m;
+    return (a && b && c)
+}
+
+def midturn_run (bin : String) (root : String) : IO Bool := do {
+    let turns := String.concat root "/turns_midturn.json";
+    let wrote <- write_midturn_script turns;
+    if Bool.not wrote then do {
+        IO.println "FAIL pty midturn: could not write the turn script";
+        return false
+    } else do {
+        let r <- spawn_args bin "mock" List.empty 24 80 root (Option.some turns) List.empty;
+        match r {
+            Result.err e => do { IO.println (String.concat "FAIL pty midturn spawn: " e); return false },
+            Result.ok m => midturn_go m root
+        }
+    }
+}
+
+pub def run_exit_note_mid_turn : IO Bool :=
+    run_gated "pty weaver midturn" (fn (bin : String) =>
+        with_root "midturn" (fn (root : String) => midturn_run bin root))
