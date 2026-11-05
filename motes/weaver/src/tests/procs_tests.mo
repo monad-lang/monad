@@ -3,7 +3,7 @@
 /// PID-qualified (a fixed /tmp name collides across runs), and every test
 /// removes what it creates.
 use weaver::procs {
-    ProcEntry, ProcStatus, Procs.detached_script, Procs.start_at,
+    ProcEntry, ProcStatus, Procs.detached_script, Procs.start_at, Procs.start_foreground, Procs.release, Procs.discard, Procs.shutdown_at,
     Procs.scan_at, Procs.tail, Procs.kill, Procs.entry_at, Procs.log_start, Procs.log_kill, Procs.log_exit,
 }
 use log::logger {Logger}
@@ -12,7 +12,7 @@ use weaver::process_tools {read_at, wait_of}
 use shuttle::message_types {Content}
 use json::json {Json, Json.parse}
 use std::path {Path, Path.to_string}
-use std::process {process_id, exec_cmd}
+use std::process {process_id, exec_cmd, Proc.kill_group}
 use tui::terminal {Terminal.poll}
 use std::io {IO.read_file, IO.is_dir}
 use std::concurrent::combine {sleepIO}
@@ -51,6 +51,9 @@ def find_entry (id : String) (xs : List ProcEntry) : Option ProcEntry :=
         List.cons e rest => if e.id == id then Option.some e else find_entry id rest,
     }
 
+def is_some (o : Option ProcEntry) : Bool :=
+    match o { Option.some _ => true, Option.none => false }
+
 #[test]
 def test_detached_script_quotes_and_detaches : Bool :=
     let script : String := Procs.detached_script (Path.path "/tmp/r/p-1") "" "echo hi" in
@@ -78,7 +81,7 @@ def exit_case (root : String) (e : ProcEntry) : IO Bool := do {
 def test_started_process_exits_and_keeps_its_log : IO Bool := do {
     let root : String := temp_root "exit";
     let _ <- cleanup root;
-    let r <- Procs.start_at (Path.path root) "echo one; echo two" "";
+    let r <- Procs.start_at (Path.path root) "echo one; echo two" "" false;
     match r {
         Result.err _ => do { let _ <- cleanup root; IO.pure false },
         Result.ok e => exit_case root e,
@@ -107,7 +110,7 @@ def sleep_case (root : String) (e : ProcEntry) : IO Bool := do {
 def test_a_sleep_is_running_then_killed : IO Bool := do {
     let root : String := temp_root "sleep";
     let _ <- cleanup root;
-    let r <- Procs.start_at (Path.path root) "sleep 30" "";
+    let r <- Procs.start_at (Path.path root) "sleep 30" "" false;
     match r {
         Result.err _ => do { let _ <- cleanup root; IO.pure false },
         Result.ok e => sleep_case root e,
@@ -133,7 +136,7 @@ def test_kill_takes_the_task_s_children : IO Bool := do {
     let root : String := temp_root "group";
     let _ <- cleanup root;
     let _ <- exec_cmd "mkdir" ["-p", root];
-    let r <- Procs.start_at (Path.path root) (String.concat "sleep 31 & echo $! > " (String.concat root "/child; wait")) "";
+    let r <- Procs.start_at (Path.path root) (String.concat "sleep 31 & echo $! > " (String.concat root "/child; wait")) "" false;
     match r {
         Result.err _ => do { let _ <- cleanup root; IO.pure false },
         Result.ok e => group_case root e,
@@ -166,7 +169,7 @@ def wait_started (root : String) (r : Result String ProcEntry) : IO Bool :=
 #[test]
 def test_read_process_waits_for_the_exit : IO Bool := do {
     let root : String := temp_root "wait";
-    let started <- Procs.start_at (Path.path root) "sleep 1; echo done" "";
+    let started <- Procs.start_at (Path.path root) "sleep 1; echo done" "" false;
     wait_started root started
 }
 
@@ -213,4 +216,50 @@ def test_proc_events_reach_the_log : IO Bool := do {
     IO.pure (String.contains text "ev=proc_start id=p-7 child=4242 cmd=make"
         && String.contains text "ev=proc_kill id=p-7 by=user ok=true"
         && String.contains text "ev=proc_exit id=p-7 status=exited (0)")
+}
+
+/// A foreground task hides from scans until released; `entry_at` finds it
+/// by id either way, and `discard` removes it.
+def foreground_case (root : String) (e : ProcEntry) : IO Bool := do {
+    let hidden <- Procs.scan_at (Path.path root);
+    let by_id <- Procs.entry_at (Path.path root) e.id;
+    Procs.release e;
+    let shown <- Procs.scan_at (Path.path root);
+    let _ <- Procs.kill e;
+    Procs.discard e;
+    let gone <- IO.is_dir e.dir;
+    let _ <- cleanup root;
+    IO.pure (List.is_empty hidden && is_some by_id
+        && is_some (find_entry e.id shown) && Bool.not gone)
+}
+
+#[test]
+def test_a_foreground_task_is_hidden_until_released : IO Bool := do {
+    let root : String := temp_root "fg";
+    let _ <- cleanup root;
+    let r <- Procs.start_foreground (Path.path root) "sleep 30" "";
+    match r {
+        Result.err _ => do { let _ <- cleanup root; IO.pure false },
+        Result.ok e => foreground_case root e,
+    }
+}
+
+/// Shutdown reaches a foreground task too: killed, and its dir removed.
+def shutdown_case (root : String) (e : ProcEntry) : IO Bool := do {
+    Procs.shutdown_at (Path.path root);
+    let gone <- IO.is_dir e.dir;
+    let alive <- Proc.kill_group e.pid 0;
+    let _ <- cleanup root;
+    IO.pure (Bool.not gone && Bool.not alive)
+}
+
+#[test]
+def test_shutdown_kills_a_foreground_task : IO Bool := do {
+    let root : String := temp_root "fgdown";
+    let _ <- cleanup root;
+    let r <- Procs.start_foreground (Path.path root) "sleep 30" "";
+    match r {
+        Result.err _ => do { let _ <- cleanup root; IO.pure false },
+        Result.ok e => shutdown_case root e,
+    }
 }

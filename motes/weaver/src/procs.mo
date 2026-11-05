@@ -5,11 +5,16 @@
 ///
 /// A launched process leads its own process group (`set -m`), and `kill`
 /// signals the whole group, so the command's children go with it; only a
-/// grandchild that calls `setsid` itself can escape. The foreground
-/// `shell` tool is untouched.
-use std::io {IO.get_env, IO.is_dir, IO.list_dir, IO.read_file, IO.write_file, IO.current_time_nano}
+/// grandchild that calls `setsid` itself can escape.
+///
+/// weaver's `shell` tool runs every command here too. While it waits, the
+/// task carries a `foreground` marker that hides it from every scan; one
+/// that finishes in time is discarded, and one that outlives the wait is
+/// released into an ordinary background task.
+use std::io {IO.get_env, IO.is_dir, IO.list_dir, IO.read_file, IO.write_file, IO.current_time_nano, IO.file_exists}
 use std::path {Path, Path.to_string, Path.join, Path.file_name}
-use std::process {exec_cmd, process_id, Proc.capture}
+use std::process {exec_cmd, process_id, Proc.capture, Proc.kill_group, Proc.sigterm, Proc.sigkill}
+use std::concurrent::combine {sleepIO}
 use json::json {
     Json, Json.parse, Json.to_string, Json.make_object, Json.make_str, Json.make_num_int,
     Json.get_object, Json.get_str, Json.get_num, Json.get_num_i64, Json.object_get,
@@ -143,17 +148,9 @@ pub def Procs.read_meta (p : Path) : IO (Option (Pair String (Pair String I64)))
 
 // ── status ──────────────────────────────────────────────────────────────
 
-/// `/proc/<pid>` where procfs exists: a spawn per probe cost a fork of
-/// the whole heap. Elsewhere `kill -0`.
-def is_running (pid : I64) : IO Bool := do {
-    let procfs <- IO.is_dir (Path.path "/proc/self");
-    if procfs
-    then IO.is_dir (Path.path (String.concat "/proc/" (I64.to_string pid)))
-    else do {
-        let code <- exec_cmd "sh" ["-c", String.concat "kill -0 " (String.concat (I64.to_string pid) " 2>/dev/null")];
-        IO.pure (I64.beq code 0)
-    }
-}
+/// Signal 0 to the task's group: delivered means alive.
+def is_running (pid : I64) : IO Bool :=
+    Proc.kill_group pid 0
 
 def parse_or (text : String) (fallback : I64) : I64 :=
     match parse_i64 (String.trim text) {
@@ -223,6 +220,15 @@ def some_entry (d : Path) (command : String) (cwd : String) (started : I64) : IO
     IO.pure (Option.some e)
 }
 
+/// A task the `shell` tool is still waiting on: no scan sees it.
+def is_foreground (d : Path) : IO Bool :=
+    IO.file_exists (Store.child d "foreground")
+
+def scan_visible (d : Path) : IO (Option ProcEntry) := do {
+    let fg <- is_foreground d;
+    if fg then IO.pure Option.none else scan_one d
+}
+
 def scan_one (d : Path) : IO (Option ProcEntry) := do {
     let meta <- Procs.read_meta (Store.child d "meta.json");
     match meta {
@@ -236,20 +242,21 @@ def scan_one (d : Path) : IO (Option ProcEntry) := do {
     }
 }
 
+/// `with_fg` includes the foreground tasks every other scan hides.
 #[terminating]
-def scan_step (d : Path) (rest : List Path) (acc : List ProcEntry) : IO (List ProcEntry) := do {
-    let one <- scan_one d;
+def scan_step (with_fg : Bool) (d : Path) (rest : List Path) (acc : List ProcEntry) : IO (List ProcEntry) := do {
+    let one <- if with_fg then scan_one d else scan_visible d;
     match one {
-        Option.none => scan_dirs rest acc,
-        Option.some e => scan_dirs rest (List.cons e acc),
+        Option.none => scan_dirs with_fg rest acc,
+        Option.some e => scan_dirs with_fg rest (List.cons e acc),
     }
 }
 
 #[partial]
-def scan_dirs (dirs : List Path) (acc : List ProcEntry) : IO (List ProcEntry) :=
+def scan_dirs (with_fg : Bool) (dirs : List Path) (acc : List ProcEntry) : IO (List ProcEntry) :=
     match dirs {
         List.empty => IO.pure acc,
-        List.cons d rest => scan_step d rest acc,
+        List.cons d rest => scan_step with_fg d rest acc,
     }
 
 /// Newest-first by start time (insertion sort; the list is small).
@@ -279,7 +286,7 @@ def insert_desc (x : ProcEntry) (xs : List ProcEntry) : List ProcEntry :=
 
 pub def Procs.scan_at (root : Path) : IO (List ProcEntry) := do {
     let dirs <- IO.list_dir root;
-    let entries <- scan_dirs dirs List.empty;
+    let entries <- scan_dirs false dirs List.empty;
     IO.pure (sort_desc entries)
 }
 
@@ -313,7 +320,9 @@ pub def Procs.detached_script (dir : Path) (cwd : String) (command : String) : S
     String.concat_list ["set -m; ", cd, "{ ( ", command, " ) > ", log,
         " 2>&1 < /dev/null; echo $? > ", exitp, "; } & echo $! > ", pidp]
 
-pub def Procs.start_at (root : Path) (command : String) (cwd : String) : IO (Result String ProcEntry) := do {
+/// `foreground` writes the marker before the job starts, so no scan ever
+/// sees the task unmarked.
+pub def Procs.start_at (root : Path) (command : String) (cwd : String) (foreground : Bool) : IO (Result String ProcEntry) := do {
     let ok <- Procs.ensure root;
     if Bool.not ok
     then IO.pure (Result.err (String.concat "could not create " (Path.to_string root)))
@@ -323,6 +332,7 @@ pub def Procs.start_at (root : Path) (command : String) (cwd : String) : IO (Res
         let dir : Path := Store.child root id;
         let _ <- exec_cmd "mkdir" ["-p", Path.to_string dir];
         let _ <- write_text (Store.child dir "meta.json") (meta_json command cwd now);
+        let _ <- if foreground then write_text (Store.child dir "foreground") "1" else IO.pure unit;
         let script : String := Procs.detached_script dir cwd command;
         let _ <- exec_cmd "sh" ["-c", script];
         let pid <- pid_of dir;
@@ -339,7 +349,23 @@ pub def Procs.start_at (root : Path) (command : String) (cwd : String) : IO (Res
 
 pub def Procs.start (command : String) (cwd : String) : IO (Result String ProcEntry) := do {
     let root <- Procs.root;
-    Procs.start_at root command cwd
+    Procs.start_at root command cwd false
+}
+
+/// A task the caller waits on: hidden until `release`d.
+pub def Procs.start_foreground (root : Path) (command : String) (cwd : String) : IO (Result String ProcEntry) :=
+    Procs.start_at root command cwd true
+
+/// Make a foreground task an ordinary background one.
+pub def Procs.release (e : ProcEntry) : IO Unit := do {
+    let _ <- exec_cmd "rm" ["-f", Path.to_string (dir_child e "foreground")];
+    IO.pure unit
+}
+
+/// Delete a finished foreground task's directory, log included.
+pub def Procs.discard (e : ProcEntry) : IO Unit := do {
+    let _ <- exec_cmd "rm" ["-rf", Path.to_string e.dir];
+    IO.pure unit
 }
 
 /// The log's last `n` lines (missing log -> empty).
@@ -387,13 +413,12 @@ def take_last (n : I64) (xs : List String) : List String :=
     let cut : I64 := len - n in
     drop_first (if cut < 0 then 0 else cut) xs
 
-/// TERM, then KILL, to the task's process group; the bare pid when the
-/// group signal fails (a task started before groups were used).
+/// TERM, then KILL, to the task's process group (`Proc.kill_group`
+/// falls back to the bare pid for a task started before groups were used).
 def kill_running (e : ProcEntry) : IO (Result String String) := do {
-    let pid : String := I64.to_string e.pid;
-    let script : String := String.concat_list ["kill -TERM -- -", pid, " 2>/dev/null || kill -TERM ", pid,
-        " 2>/dev/null; sleep 0.2; kill -KILL -- -", pid, " 2>/dev/null || kill -KILL ", pid, " 2>/dev/null"];
-    let _ <- exec_cmd "sh" ["-c", script];
+    let _ <- Proc.kill_group e.pid Proc.sigterm;
+    sleepIO 200;
+    let _ <- Proc.kill_group e.pid Proc.sigkill;
     let _ <- write_text (dir_child e "killed") "1";
     IO.pure (Result.ok (String.concat "killed " e.id))
 }
@@ -406,7 +431,15 @@ pub def Procs.kill (e : ProcEntry) : IO (Result String String) :=
     }
 
 def shutdown_all : IO Unit := do {
-    let entries <- Procs.list;
+    let root <- Procs.root;
+    Procs.shutdown_at root
+}
+
+/// Kill every running task under `root`, the foreground ones included
+/// (a `shell` command weaver exits during), and discard those.
+pub def Procs.shutdown_at (root : Path) : IO Unit := do {
+    let dirs <- IO.list_dir root;
+    let entries <- scan_dirs true dirs List.empty;
     shutdown_go entries
 }
 
@@ -421,7 +454,9 @@ pub def Procs.shutdown : IO Unit := do {
 
 #[terminating]
 def shutdown_step (e : ProcEntry) (rest : List ProcEntry) : IO Unit := do {
+    let fg <- is_foreground e.dir;
     let _ <- Procs.kill e;
+    let _ <- if fg then Procs.discard e else IO.pure unit;
     shutdown_go rest
 }
 
@@ -445,3 +480,8 @@ pub def Procs.log_kill (log : Option Logger) (by : String) (e : ProcEntry) (r : 
 
 pub def Procs.log_exit (log : Option Logger) (id : String) (status : String) : IO Unit :=
     Logs.info log (String.concat "ev=proc_exit id=" (String.concat id (String.concat " status=" (Logs.sanitize status))))
+
+/// A foreground `shell` command left running in the background; `why` is
+/// `by the user` (Ctrl+B) or `after <n>s` (the wait budget).
+pub def Procs.log_detach (log : Option Logger) (e : ProcEntry) (why : String) : IO Unit :=
+    Logs.info log (String.concat "ev=proc_detach id=" (String.concat e.id (String.concat " why=" (Logs.sanitize why))))
