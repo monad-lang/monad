@@ -48,7 +48,7 @@ def run_of : RunState :=
     { session := session_of, reg := ToolRegistry.empty, turns_left := 10, emit := fn (_ : String) => IO.pure unit, gate := Gate.auto, always := List.empty, retries := 1, sleep_ms := silent_sleep, on_usage := silent_usage, should_stop := silent_stop, inbox := silent_inbox, side_spend := silent_side_spend, stopped := false }
 
 def state_of : WeaverState :=
-    { run := run_of, mode := Mode.manual, provider := "mock", budget := 10, context_window := 128000, compact_at := 80, plan := Option.none, last_context := 0, grants := Option.none, place := Option.none, mcps := List.empty, keys := BTreeMap.empty, catalog := BTreeMap.empty, quit := false, colors := false, fatal := Option.none, store := Option.none }
+    { run := run_of, mode := Mode.manual, provider := "mock", budget := 10, context_window := 128000, compact_at := 80, plan := Option.none, last_context := 0, grants := Option.none, place := Option.none, mcps := List.empty, keys := BTreeMap.empty, catalog := BTreeMap.empty, quit := false, colors := false, fatal := Option.none, name := Option.none, store := Option.none }
 
 def model_of : TuiModel :=
     let m : TuiModel := init_tui_model Option.none state_of 24 80 in
@@ -548,3 +548,25 @@ def test_todo_panel_folded_and_empty : Bool :=
     List.length (Model.todo_rows m) == 1
         && String.contains (List.intercalate "|" (Model.todo_rows m)) "todos 1/3"
         && List.is_empty (Model.todo_rows model_of)
+
+// ── the session name ────────────────────────────────────────────────────
+
+#[partial]
+def top_row_go (screen : Screen) (col : I64) (acc : String) : String :=
+    if Bool.not (col < 80) then acc
+    else match screen_get_cell screen 0 col {
+        Option.some c => top_row_go screen (col + 1) (String.concat acc c.char),
+        Option.none => acc,
+    }
+
+/// A named session shows its name in the frame's top edge; an unnamed one
+/// keeps the plain edge. The frame costs no extra row either way.
+#[test]
+def test_session_name_sits_in_the_top_edge : Bool :=
+    let plain : TuiModel := colored_model_of [TLine.plain "hello"] in
+    let named : TuiModel := { plain with state := { (plain.state) with name := Option.some "fix the flake" } } in
+    let s1 : Screen := render (Model.view named) (mk_rect 0 0 80 24) (empty_screen 24 80) in
+    let s0 : Screen := render (Model.view plain) (mk_rect 0 0 80 24) (empty_screen 24 80) in
+    String.starts_with "\u{256d}\u{2500} fix the flake \u{2500}" (top_row_go s1 0 "")
+        && Bool.not (String.contains (top_row_go s0 0 "") "fix")
+        && Model.panel_top_of named == Model.panel_top_of plain

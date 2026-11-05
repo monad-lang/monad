@@ -25,7 +25,7 @@ use tui::text {Text.take_width}
 use weaver::policy {Mode}
 use weaver::store {TLine, Transcript, TranscriptPage, Transcript.empty}
 use tui::types {Event, LayoutSize}
-use tui::widget {Widget, SizedWidget, BorderStyle, border_with, label, sized, with_style, padding}
+use tui::widget {Widget, SizedWidget, BorderStyle, border_with, border_titled, label, sized, with_style, padding}
 use weaver::ui::banner {BannerModel, BannerMsg, BannerView, Banner.shown, Banner.rows, Banner.height, Banner.view}
 use weaver::ui::prompt {PromptModel, PromptBox, Prompt.empty, Prompt.view}
 use tui::widgets::picker {PickerModel, Picker.list_height, Picker.view}
@@ -210,7 +210,13 @@ pub def Model.view (m : TuiModel) : Widget :=
         if I64.lt m.cols 5
         then body
         else Widget.row [sized (LayoutSize.fill 1) body, sized (LayoutSize.fixed 1) (Pane.bar_view (Model.pane_view m) m.pane)] in
-    let transcript : SizedWidget := sized (LayoutSize.fill 1) (border_with (theme_border_style_with colors) BorderStyle.rounded (padding 1 0 0 0 inner)) in
+    let framed : Widget := padding 1 0 0 0 inner in
+    // The session's name sits in the frame's top edge: it costs no row.
+    let frame : Widget := match m.state.name {
+        Option.some n => border_titled (theme_border_style_with colors) BorderStyle.rounded n framed,
+        Option.none => border_with (theme_border_style_with colors) BorderStyle.rounded framed,
+    } in
+    let transcript : SizedWidget := sized (LayoutSize.fill 1) frame in
     let status : SizedWidget := sized (LayoutSize.fixed 1) (with_style (theme_status_style_with colors mode) (label (status_line m))) in
     let input : SizedWidget := sized (LayoutSize.fixed 3) (Prompt.view m.prompt) in
     let head : List SizedWidget := if m.banner.shown then [sized (LayoutSize.fixed Banner.rows) (Banner.view (Model.banner_view m) m.banner)] else List.empty in

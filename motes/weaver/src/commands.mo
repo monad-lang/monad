@@ -105,6 +105,9 @@ pub struct WeaverState {
     /// every WeaverState literal -- an omitted non-defaulted field has
     /// been seen to check clean and fill garbage at runtime.
     colors : Bool := true,
+    /// The session's name as the top of the screen shows it: `/name`, the
+    /// generated title, or the first message's; none for a fresh session.
+    name : Option String := Option.none,
     /// The active session directory, when persistence is available; none
     /// degrades to the pre-store in-memory behaviour.
     store : Option StoreState,
@@ -908,6 +911,36 @@ def title_set (f : TitleField) (st : WeaverState) (dir : Path) (text : String) :
         },
     }
 }
+
+/// The name the top of the screen shows: `/name` or the generated title
+/// (the store's meta), else the first message's.
+pub def Commands.session_name (st : WeaverState) : IO (Option String) :=
+    match st.store {
+        Option.none => IO.pure (Store.derive_name st.run.session),
+        Option.some s => do {
+            let r <- Store.read_meta s.dir;
+            IO.pure (match r {
+                Result.ok m => match m.name {
+                    Option.some n => Option.some n,
+                    Option.none => Store.derive_name st.run.session,
+                },
+                Result.err _ => Store.derive_name st.run.session,
+            })
+        },
+    }
+
+/// A command's effect with the session name re-read: `/name`, `/resume`
+/// and `/clear` all move it.
+pub def Commands.with_name (r : Result WeaverError Effect) : IO (Result WeaverError Effect) :=
+    match r {
+        Result.err _ => IO.pure r,
+        Result.ok e => do {
+            let name <- Commands.session_name e.state;
+            let st2 : WeaverState := { (e.state) with name := name };
+            let e2 : Effect := { e with state := st2 };
+            IO.pure (Result.ok e2)
+        },
+    }
 
 /// `/name [<text>|-]` (and `/describe`): show the effective value, set
 /// it, or clear it back to the derived one.

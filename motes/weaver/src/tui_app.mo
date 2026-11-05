@@ -25,7 +25,7 @@ use weaver::usage {UsageTracker.start, UsageTracker.silent, UsageTracker.last}
 use std::ref {Ref, Ref.new, Ref.get, Ref.set}
 use shuttle::context {usage_zero}
 use weaver::commands {
-    WeaverState, Effect, Effect.ok, set_fatal, Commands.dispatch, Commands.set_model,
+    WeaverState, Effect, Effect.ok, set_fatal, Commands.dispatch, Commands.set_model, Commands.with_name,
     Commands.autocompact, Commands.last_assistant_text, Commands.current_plan,
     Commands.plan_after_turn, Commands.setting_rows, Commands.cycle_setting, Commands.apply_setting, SettingRow, SettingKind,
     SessionPage, Commands.session_page, Commands.sessions_for, Commands.turns_label, Commands.turn_context,
@@ -202,7 +202,7 @@ def update_msg (m : TuiModel) (msg : WeaverMsg) : Pair TuiModel (Cmd WeaverMsg) 
         WeaverMsg.stop_sent => Pair.pair m Cmd.none,
         // The background title call wrote (or skipped) the session's
         // name/description: already persisted, nothing to fold.
-        WeaverMsg.title_result _ => Pair.pair m Cmd.none,
+        WeaverMsg.title_result t => Pair.pair (TuiApp.title_step m t) draw_next,
         WeaverMsg.live lm => live_step m lm,
         WeaverMsg.banner bm => Pair.pair { m with banner := Banner.update m.banner bm } Cmd.none,
         WeaverMsg.overlay_polled ov => overlay_step m ov,
@@ -332,7 +332,7 @@ def turn_result_step (m : TuiModel) (run : RunState) (lines : List TLine) (delta
         if Bool.and plan_mode (Bool.not ready)
         then [TLine.plain "[plan not ready -- ask for the plan, or /plan]"]
         else if ready then [TLine.plain "plan ready -- review it"] else List.empty in
-    let st1 : WeaverState := { (m.state) with run := run, last_context := last_context } in
+    let st1 : WeaverState := { (m.state) with run := run, last_context := last_context, name := named m.state.name run } in
     let st2 : WeaverState := match plan {
         Option.none => st1,
         Option.some p => { st1 with plan := Option.some p },
@@ -352,6 +352,13 @@ def turn_result_step (m : TuiModel) (run : RunState) (lines : List TLine) (delta
                     Option.some _ => Pair.pair { m4 with queued_ready := true } (persist_turn_cmd m4.log store run delta start block ready m4.state),
                 },
         },
+    }
+
+/// A fresh session is named by its first message until a title or `/name`.
+def named (name : Option String) (run : RunState) : Option String :=
+    match name {
+        Option.some _ => name,
+        Option.none => Store.derive_name run.session,
     }
 
 /// A failed turn or command: the error line lands, then the failure's one
@@ -1089,7 +1096,8 @@ def permissions_choose (i : I64) (st : WeaverState) : IO WeaverMsg := do {
     if String.is_empty line
     then return (WeaverMsg.command_result (Effect.ok st "permissions closed"))
     else do {
-        let r <- Commands.dispatch line st;
+        let r0 <- Commands.dispatch line st;
+        let r <- Commands.with_name r0;
         return (command_msg st r)
     }
 }
@@ -1178,7 +1186,8 @@ def settings_choose_action (i : I64) (st : WeaverState) : IO WeaverMsg := do {
     if String.is_empty line
     then return (WeaverMsg.command_result (Effect.ok st "settings closed"))
     else do {
-        let r <- Commands.dispatch line st;
+        let r0 <- Commands.dispatch line st;
+        let r <- Commands.with_name r0;
         return (command_msg st r)
     }
 }
@@ -1215,7 +1224,8 @@ def modal_command (st : WeaverState) (text : String) : Bool :=
             (Bool.or (text == "/permissions") (text == "/resume")))
 
 def command_step_tui (st : WeaverState) (line : String) : IO WeaverMsg := do {
-    let r <- Commands.dispatch line st;
+    let r0 <- Commands.dispatch line st;
+    let r <- Commands.with_name r0;
     return (command_msg st r)
 }
 
@@ -2299,6 +2309,13 @@ def log_exits (log : Option Logger) (ts : List TaskEntry) : IO Unit :=
             let _ <- Procs.log_exit log t.id t.status;
             log_exits log rest
         },
+    }
+
+/// A generated title names the session at the top of the screen.
+pub def TuiApp.title_step (m : TuiModel) (t : Option (Pair String String)) : TuiModel :=
+    match t {
+        Option.none => m,
+        Option.some p => match p { Pair.pair n _ => { m with state := { (m.state) with name := Option.some n } } },
     }
 
 /// Draw the next frame (a dispatched message makes the batch non-empty;

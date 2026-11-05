@@ -4,7 +4,7 @@
 // Ported from pty_repro_resume.py (retired).
 use pty::spawn {Pty, Output}
 use pty::check {Check.report}
-use weaver::pty_support {run_gated, with_root, spawn_args, report_screen}
+use weaver::pty_support {run_gated, with_root, spawn_args, report_screen, found_at_row}
 use weaver::pty_fixtures {LineSpec, write_generated_session, pad2}
 use std::io {IO.println}
 
@@ -189,3 +189,26 @@ pub def run_resume_pager : IO Bool :=
 
 def test_resume_pager_body (bin : String) : IO Bool :=
     with_root "resume_pager" (fn (root : String) => resume_pager_run bin root)
+
+// ── the session name at the top ────────────────────────────────────────
+
+def name_checks (m : Pty) : IO Bool := do {
+    let ready <- Pty.wait_until m placeholder_seen 6000;
+    Pty.send_text m "/name pty-check\r";
+    let shown <- Pty.wait_until m (fn (o : Output) => found_at_row o "pty-check" 0) 4000;
+    let a <- report_screen m "/name puts the name in the frame's top edge" (Bool.and ready shown);
+    Pty.finish m;
+    return a
+}
+
+def name_run (bin : String) (root : String) : IO Bool := do {
+    let r <- spawn_args bin "mock" List.empty 24 80 root Option.none List.empty;
+    match r {
+        Result.err e => do { IO.println (String.concat "FAIL pty name spawn: " e); return false },
+        Result.ok m => name_checks m
+    }
+}
+
+pub def run_name_shows_in_the_frame : IO Bool :=
+    run_gated "pty weaver session name" (fn (bin : String) =>
+        with_root "name" (fn (root : String) => name_run bin root))

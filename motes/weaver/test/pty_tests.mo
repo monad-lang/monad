@@ -32,7 +32,7 @@ use weaver::pty::resume {
     run_resume_picker_lists_current_and_esc,
     run_resume_choose_loads_transcript,
     run_resume_pager
-}
+    , run_name_shows_in_the_frame}
 use weaver::pty::round2 {run_round2_scroll_multiline_history}
 use weaver::pty::selection {run_selection_drag_and_osc52}
 use weaver::pty::sessions {
@@ -156,3 +156,6 @@ def test_soak_pending_turn_keeps_rss_flat : IO Bool := run_soak_pending_turn_kee
 
 #[test]
 def test_weaver_frame_resize_exit : IO Bool := run_weaver_frame_resize_exit
+
+#[test]
+def test_name_shows_in_the_frame : IO Bool := run_name_shows_in_the_frame

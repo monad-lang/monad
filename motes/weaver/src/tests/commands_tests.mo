@@ -69,7 +69,7 @@ def state_of (mode : Mode) (mcps : List String) : WeaverState := {
     quit := false,
     fatal := Option.none,
     colors := true,
-    store := Option.none,
+    name := Option.none, store := Option.none,
 }
 
 def run_of : RunState := {
