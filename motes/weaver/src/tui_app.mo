@@ -222,6 +222,26 @@ def append_block_at (m : TuiModel) (lines : List TLine) : Pair TuiModel (Pair I6
     let m2 : TuiModel := Model.append_block m lines in
     Pair.pair m2 (Pair.pair start block)
 
+/// A display block that lands outside a turn's own result (an exit note,
+/// a queued line, the monitor's notes): it is written to the store too,
+/// at its in-memory position, or the next turn's append finds the store
+/// behind and persistence turns off ("transcript log out of sync").
+/// Without a store, `fallback` is the command (a frame, when no key drew one).
+def note_block (fallback : Cmd WeaverMsg) (m : TuiModel) (lines : List TLine) : Pair TuiModel (Cmd WeaverMsg) :=
+    match append_block_at m lines {
+        Pair.pair m2 at => match at {
+            Pair.pair start block => match m2.state.store {
+                Option.none => Pair.pair m2 fallback,
+                Option.some s => Pair.pair m2 (Cmd.perform (fn (_ : Unit) => after_clear (record_note s start block))),
+            },
+        },
+    }
+
+def record_note (s : StoreState) (start : I64) (block : List TLine) : IO WeaverMsg := do {
+    let r <- Store.append_transcript s.dir start block;
+    IO.pure (WeaverMsg.store_result (warning_of r))
+}
+
 def warning_of (r : Result String Unit) : Option String :=
     match r {
         Result.err e => Option.some e,
@@ -909,16 +929,14 @@ def enter_key (m : TuiModel) : Pair TuiModel (Cmd WeaverMsg) :=
     else submit_line m text
 
 /// Enter while a turn runs QUEUES the line instead of dropping it: the
-/// head starts when the running turn's result folds in. The
-/// acknowledgement is a transcript line, in memory only -- the queue is
-/// per-run UI state, not session content.
+/// head starts when the running turn's result folds in. The queue is
+/// per-run UI state; its acknowledgement line is transcript like any
+/// other, so it is persisted where it lands.
 def queue_line (m : TuiModel) (text : String) : Pair TuiModel (Cmd WeaverMsg) :=
     let queued : List String := List.append m.queued (List.cons text List.empty) in
     let line : TLine := TLine.plain (String.concat "queued: " text) in
-    let m2 : TuiModel :=
-        { (with_streak_reset (fn (mm : TuiModel) => Model.append_block { mm with prompt := Prompt.clear mm.prompt } (List.cons line List.empty)) m)
-            with queued := queued } in
-    Pair.pair m2 Cmd.none
+    let m1 : TuiModel := { (with_streak_reset (fn (mm : TuiModel) => { mm with prompt := Prompt.clear mm.prompt }) m) with queued := queued } in
+    note_block Cmd.none m1 [line]
 
 /// Are instructions waiting behind the running turn?
 def queued_waiting (m : TuiModel) : Bool :=
@@ -2216,7 +2234,7 @@ def task_kill (st : WeaverState) (gen : I64) (pending : Bool) (t : TaskEntry) : 
 /// The monitor's notes land in the transcript (display only).
 def monitor_closed_step (m : TuiModel) (notes : List String) : Pair TuiModel (Cmd WeaverMsg) :=
     if List.is_empty notes then Pair.pair m Cmd.none
-    else Pair.pair (Model.append_block m (List.map TLine.plain notes)) Cmd.none
+    else note_block draw_next m (List.map TLine.plain notes)
 
 // ── the task poll ──────────────────────────────────────────────────────
 
@@ -2228,9 +2246,9 @@ def tasks_step (m : TuiModel) (ts : List TaskEntry) : Pair TuiModel (Cmd WeaverM
     let running : I64 := Tasks.running_count ts in
     let m1 : TuiModel := { m with tasks_running := running, tasks_seen := Tasks.running_ids ts,
         task_notes := List.append m.task_notes notes } in
-    let m2 : TuiModel := if List.is_empty notes then m1 else Model.append_block m1 (List.map TLine.plain notes) in
-    if Bool.and (List.is_empty notes) (running == m.tasks_running) then Pair.pair m2 Cmd.none
-    else Pair.pair m2 draw_next
+    if Bool.not (List.is_empty notes) then note_block draw_next m1 (List.map TLine.plain notes)
+    else if running == m.tasks_running then Pair.pair m1 Cmd.none
+    else Pair.pair m1 draw_next
 
 /// Draw the next frame (a dispatched message makes the batch non-empty;
 /// `stop_sent` folds to nothing). A plain diff, unlike `repaint_cmd`.
