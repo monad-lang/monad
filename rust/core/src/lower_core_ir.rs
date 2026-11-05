@@ -1122,7 +1122,19 @@ pub fn lower_program(program: &CoreProgram) -> Result<LoweredProgram, LowerCoreI
         lowered_defs.insert(path.clone(), ir);
       }
       Err(LowerCoreIrError::UnexpectedTypeLevelTerm(_)) => {}
-      Err(e @ (LowerCoreIrError::UnresolvedMatch | LowerCoreIrError::NonExhaustiveMatch(..))) => {
+      Err(
+        e @ (LowerCoreIrError::UnresolvedMatch
+        | LowerCoreIrError::NonExhaustiveMatch(..)
+        // A `Free` atom with no recorded path. In the meta-capture path
+        // (`build_core_program` re-reads a whole closure and lowers it), a
+        // checked term can retain an opened-binder atom, and whether that
+        // happens is sensitive to atom allocation elsewhere -- adding a class
+        // method default shifts it into an unrelated `std`/`json` def.
+        // Skipping the def keeps a macro expansion from aborting on code it
+        // never calls; a real reference still surfaces as `UnresolvedGlobal`
+        // at assembly time below, exactly as for the other skipped shapes.
+        | LowerCoreIrError::UnresolvedAtom(_)),
+      ) => {
         // Reserve this def's slot anyway (rather than leaving it to be
         // lazily interned later, possibly *after* the snapshot the final
         // assembly loop below takes) — anything referencing this path

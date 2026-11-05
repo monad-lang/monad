@@ -369,6 +369,12 @@ pub(crate) fn build_core_program(
   }
   capture_modules.extend(extra_modules.iter().cloned());
 
+  // Fill each instance's missing class-defaulted methods before checking and
+  // capturing — the host counterpart of the self-hosted `promote_methods`.
+  // This keeps dispatch, the dictionary arity and `Instance.cons` in step
+  // with the class.
+  core_check_module::expand_instance_defaults(loaded, &mut capture_modules);
+
   // No cross-module bare-name collision check here anymore -- `CoreProgram`
   // (`core_program.rs`) used to key `defs`/`match_resolutions` by a def's
   // bare (non-module-qualified) name, which broke whenever two

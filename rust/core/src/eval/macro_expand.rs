@@ -2049,24 +2049,24 @@ fn alpha_rename_body(term: Term) -> Term {
 /// param's type and a param's name occupy different scopes (the type
 /// annotation is evaluated in the OUTER scope, before the param itself is
 /// bound).
-fn subst_par_typ(p: Par, name: &NameRef, replacement: &Term) -> Par {
+fn subst_par_typ(p: Par, name: &NameRef, replacement: &Term, under: bool) -> Par {
   match p {
     Par::P(mut param) => {
-      param.typ = Box::new(subst_macro(*param.typ, name, replacement));
+      param.typ = Box::new(subst_macro_go(*param.typ, name, replacement, under));
       Par::P(param)
     }
     Par::I { typ, mult } => Par::I {
-      typ: Box::new(subst_macro(*typ, name, replacement)),
+      typ: Box::new(subst_macro_go(*typ, name, replacement, under)),
       mult,
     },
   }
 }
 
-fn subst_macro(term: Term, name: &NameRef, replacement: &Term) -> Term {
+fn subst_macro_go(term: Term, name: &NameRef, replacement: &Term, under: bool) -> Term {
   match term {
     Var { name: n } if &n == name => replacement.clone(),
     Lam { param: p, body: b } => {
-      let p = subst_par_typ(p, name, replacement);
+      let p = subst_par_typ(p, name, replacement, under);
       let should_skip = match (&p, name) {
         (Par::P(p_name), NameRef::Id(n)) => &p_name.name == n,
         _ => false,
@@ -2076,13 +2076,13 @@ fn subst_macro(term: Term, name: &NameRef, replacement: &Term) -> Term {
       } else {
         Lam {
           param: p,
-          body: Box::new(subst_macro(*b, name, replacement)),
+          body: Box::new(subst_macro_go(*b, name, replacement, under)),
         }
       }
     }
     App { fun, arg } => App {
-      fun: Box::new(subst_macro(*fun, name, replacement)),
-      arg: Box::new(subst_macro(*arg, name, replacement)),
+      fun: Box::new(subst_macro_go(*fun, name, replacement, under)),
+      arg: Box::new(subst_macro_go(*arg, name, replacement, under)),
     },
     Pi {
       arg_name,
@@ -2091,8 +2091,8 @@ fn subst_macro(term: Term, name: &NameRef, replacement: &Term) -> Term {
       mult,
     } => Pi {
       arg_name,
-      arg: Box::new(subst_macro(*arg, name, replacement)),
-      ret: Box::new(subst_macro(*ret, name, replacement)),
+      arg: Box::new(subst_macro_go(*arg, name, replacement, under)),
+      ret: Box::new(subst_macro_go(*ret, name, replacement, under)),
       mult,
     },
     Forall {
@@ -2103,21 +2103,33 @@ fn subst_macro(term: Term, name: &NameRef, replacement: &Term) -> Term {
       if let NameRef::Id(id) = name
         && &n == id
       {
-        Forall {
-          name: n,
-          typ,
-          body: b,
+        if under {
+          // `subst_var_under_forall`: this Forall IS the binder being
+          // instantiated, so replace its bound occurrences too. The binder
+          // itself is kept (now unused); dropping it would need a second
+          // rewrite of the body's indices.
+          Forall {
+            name: n,
+            typ: Box::new(subst_macro_go(*typ, name, replacement, true)),
+            body: Box::new(subst_macro_go(*b, name, replacement, true)),
+          }
+        } else {
+          Forall {
+            name: n,
+            typ,
+            body: b,
+          }
         }
       } else {
         Forall {
           name: n,
-          typ: Box::new(subst_macro(*typ, name, replacement)),
-          body: Box::new(subst_macro(*b, name, replacement)),
+          typ: Box::new(subst_macro_go(*typ, name, replacement, under)),
+          body: Box::new(subst_macro_go(*b, name, replacement, under)),
         }
       }
     }
     Quote { term: t } => Quote {
-      term: Box::new(subst_macro(*t, name, replacement)),
+      term: Box::new(subst_macro_go(*t, name, replacement, under)),
     },
     Ctx {
       loc,
@@ -2125,12 +2137,12 @@ fn subst_macro(term: Term, name: &NameRef, replacement: &Term) -> Term {
       module,
     } => Ctx {
       loc,
-      term: Box::new(subst_macro(*t, name, replacement)),
+      term: Box::new(subst_macro_go(*t, name, replacement, under)),
       module,
     },
     Ann { term: t, typ } => Ann {
-      term: Box::new(subst_macro(*t, name, replacement)),
-      typ: Box::new(subst_macro(*typ, name, replacement)),
+      term: Box::new(subst_macro_go(*t, name, replacement, under)),
+      typ: Box::new(subst_macro_go(*typ, name, replacement, under)),
     },
     Con(Constructor {
       typ_name,
@@ -2143,13 +2155,13 @@ fn subst_macro(term: Term, name: &NameRef, replacement: &Term) -> Term {
       num_args,
       args: args
         .into_iter()
-        .map(|a| a.map(|t| subst_macro(t, name, replacement)))
+        .map(|a| a.map(|t| subst_macro_go(t, name, replacement, under)))
         .collect(),
     }),
     Lit {
       value: Literal::Match { value, cases },
     } => {
-      let value = subst_macro(*value, name, replacement);
+      let value = subst_macro_go(*value, name, replacement, under);
       let cases = cases
         .into_iter()
         .map(|c| {
@@ -2157,7 +2169,7 @@ fn subst_macro(term: Term, name: &NameRef, replacement: &Term) -> Term {
             c.name,
             c.args,
             c.field_pattern,
-            subst_macro(*c.value, name, replacement),
+            subst_macro_go(*c.value, name, replacement, under),
           )
         })
         .collect();
@@ -2167,11 +2179,27 @@ fn subst_macro(term: Term, name: &NameRef, replacement: &Term) -> Term {
       value: Literal::If { value, then, els },
     } => Term::Lit {
       value: Literal::If {
-        value: Box::new(subst_macro(*value, name, replacement)),
-        then: Box::new(subst_macro(*then, name, replacement)),
-        els: Box::new(subst_macro(*els, name, replacement)),
+        value: Box::new(subst_macro_go(*value, name, replacement, under)),
+        then: Box::new(subst_macro_go(*then, name, replacement, under)),
+        els: Box::new(subst_macro_go(*els, name, replacement, under)),
       },
     },
     other => other,
   }
+}
+
+/// Template substitution: replace `name` everywhere EXCEPT occurrences bound
+/// by a `Forall` binder of that name (macro templates never instantiate the
+/// binder they substitute for).
+fn subst_macro(term: Term, name: &NameRef, replacement: &Term) -> Term {
+  subst_macro_go(term, name, replacement, false)
+}
+
+/// Instantiation substitution: like `subst_macro`, but the occurrences BOUND
+/// by a `Forall` binder of the SAME name are replaced too. Used to specialize
+/// a class method's default (its `Forall` is over the class's own parameter)
+/// at an instance's concrete type arguments -- the host's equivalent of the
+/// self-hosted `subst_class_params` in `promote_methods`.
+pub(crate) fn subst_var_under_forall(term: Term, name: &NameRef, replacement: &Term) -> Term {
+  subst_macro_go(term, name, replacement, true)
 }

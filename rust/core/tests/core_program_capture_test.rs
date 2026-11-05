@@ -156,9 +156,9 @@ fn phase0_captures_whole_program_core_terms() {
     "Stack's and Queue's `cons` matches must resolve to different inductive atoms"
   );
 
-  // --- instances: BEq I64's dictionary shape is recorded, and its one
-  //     method (`beq`) is independently present in `defs` under an
-  //     instance-qualified path ---
+  // --- instances: BEq I64's dictionary shape is recorded, and BOTH methods
+  //     (`beq`, written in SOURCE, and the class-DEFAULTED `not_beq`) are
+  //     independently present in `defs` under instance-qualified paths ---
   let (instance_path, info) = program
     .instances
     .iter()
@@ -169,13 +169,18 @@ fn phase0_captures_whole_program_core_terms() {
         program.instances.keys().collect::<Vec<_>>()
       )
     });
-  assert_eq!(info.method_paths.len(), 1, "BEq has exactly one method");
-  let method_path = &info.method_paths[0];
-  assert!(
-    program.defs.contains_key(method_path),
-    "instance {instance_path}'s method path {method_path} should be captured in defs, got keys: {:?}",
-    program.defs.keys().collect::<Vec<_>>()
+  assert_eq!(
+    info.method_paths.len(),
+    2,
+    "BEq has `beq` and the defaulted `not_beq`"
   );
+  for method_path in &info.method_paths {
+    assert!(
+      program.defs.contains_key(method_path),
+      "instance {instance_path}'s method path {method_path} should be captured in defs, got keys: {:?}",
+      program.defs.keys().collect::<Vec<_>>()
+    );
+  }
 }
 
 /// End-to-end test for Phase 2 (`lower_core_ir::lower_program`), against

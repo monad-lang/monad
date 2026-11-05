@@ -386,7 +386,27 @@ fn collect_known_class_methods(
   out
 }
 
-/// A class's own declared method names, in declaration order — needed to
+/// One class method as the checker needs it: its name (for dictionary
+/// position), its declared type, and its DEFAULT body if the class supplies
+/// one. A default lets `check_one_instance_new` splice an implementation into
+/// an instance that omits the method -- the same rule the self-hosted
+/// `promote_methods` applies.
+#[derive(Debug, Clone)]
+struct ClassMethodSpec {
+  name: Identifier,
+  typ: Term,
+  default: Option<Term>,
+}
+
+/// A class's own parameter names (for specializing a default at an instance)
+/// and its declared methods, in declaration order.
+#[derive(Debug, Clone)]
+struct ClassMethods {
+  params: Vec<Identifier>,
+  methods: Vec<ClassMethodSpec>,
+}
+
+/// A class's own declared methods, in declaration order — needed to
 /// build a dictionary `Con` value from an `instance`'s `impls_map` (a
 /// `Map<Identifier, Def>`, unordered by name): a `Con`'s `args` are
 /// positional, so an instance's method implementations must be placed in
@@ -396,19 +416,12 @@ fn collect_known_class_methods(
 fn collect_class_method_order(
   loaded: &LoadedModules,
   expanded: &[SourceContext<Decl>],
-) -> Map<NamePath, Vec<Identifier>> {
+) -> Map<NamePath, ClassMethods> {
   let mut out = Map::new();
   let mut visit = |ind: &Inductive| {
-    if *ind.variant() != InductiveVariant::Class {
-      return;
+    if let Some(methods) = class_methods_of(ind) {
+      out.insert(ind.name().clone(), methods);
     }
-    let Some(cons) = ind.constructors().first() else {
-      return;
-    };
-    out.insert(
-      ind.name().clone(),
-      cons.params.iter().map(|p| p.name.clone()).collect(),
-    );
   };
   for module in loaded.modules() {
     for ind in module.inductives() {
@@ -421,6 +434,168 @@ fn collect_class_method_order(
     }
   }
   out
+}
+
+/// The classes reachable from a capture's module list, WITHOUT cloning the
+/// declarations (this runs on every macro expansion; the capture is the whole
+/// init package plus the file's dependency closure).
+fn collect_classes_from_modules(
+  loaded: &LoadedModules,
+  modules: &[(ModulePath, Vec<SourceContext<Decl>>)],
+) -> Map<NamePath, ClassMethods> {
+  let mut out = Map::new();
+  let mut visit = |ind: &Inductive| {
+    if let Some(methods) = class_methods_of(ind) {
+      out.insert(ind.name().clone(), methods);
+    }
+  };
+  for module in loaded.modules() {
+    for ind in module.inductives() {
+      visit(ind);
+    }
+  }
+  for (_, decls) in modules {
+    for ctx in decls {
+      if let Decl::Type(ind) = ctx.value() {
+        visit(ind);
+      }
+    }
+  }
+  out
+}
+
+fn class_methods_of(ind: &Inductive) -> Option<ClassMethods> {
+  if *ind.variant() != InductiveVariant::Class {
+    return None;
+  }
+  let cons = ind.constructors().first()?;
+  Some(ClassMethods {
+    params: ind.params().iter().map(|p| p.name.clone()).collect(),
+    methods: cons
+      .params
+      .iter()
+      .map(|p| ClassMethodSpec {
+        name: p.name.clone(),
+        typ: (*p.typ).clone(),
+        default: p.default.as_deref().cloned(),
+      })
+      .collect(),
+  })
+}
+
+/// The Def that splices `spec`'s class default into an instance: the class
+/// method's type and body specialized at the instance's arguments (`A` ->
+/// `Bool`) — the host counterpart of the self-hosted `subst_class_params` in
+/// `promote_methods`.
+fn default_instance_method(
+  spec: &ClassMethodSpec,
+  params: &[Identifier],
+  args: &[Term],
+  body: &Term,
+) -> Def {
+  let mut typ = spec.typ.clone();
+  let mut body = body.clone();
+  for (param_name, arg) in params.iter().zip(args.iter()) {
+    let nr = NameRef::Id(param_name.clone());
+    typ = crate::eval::macro_expand::subst_var_under_forall(typ, &nr, arg);
+    body = crate::eval::macro_expand::subst_var_under_forall(body, &nr, arg);
+  }
+  def(
+    NamePath::single(spec.name.clone()),
+    Vec::new(),
+    typ,
+    body,
+    Vec::new(),
+  )
+}
+
+/// Can this instance argument be injected into a class method's type by the
+/// source-level substitution? Only a plain single-identifier type head is
+/// safe: a dotted name (`Json.Number`) or an application (`(BTreeMap String
+/// Json)`) arrives as a `Var`/`App` whose elaborated form differs from the
+/// raw term, and substituting it produces a type the checker cannot unify
+/// with the instance's written method. Those instances stay on the
+/// pre-existing unchecked path.
+fn simple_type_arg(arg: &Term) -> bool {
+  match arg {
+    Term::Ctx { term, .. } => simple_type_arg(term),
+    Term::Var {
+      name: NameRef::Id(_),
+    } => true,
+    _ => false,
+  }
+}
+
+/// Fill every instance's missing class-DEFAULTED methods, in place, before
+/// checking/evaluation — the host counterpart of the self-hosted
+/// `promote_instance_defs`/`promote_methods`.
+///
+/// Without it, a defaulted method is absent from `Instance.impls_map` and
+/// `Instance.cons`: a class-method call to it cannot be dispatched (the
+/// checker falls back to the abstract signature and treats the first
+/// argument as the dictionary), and the runtime dictionary has fewer fields
+/// than the class declares (`value is not a constructor`). The default body
+/// is specialized at the instance's type arguments (`A` -> `Bool`); a
+/// one-parameter class's unparenthesized application (`BEq BTreeMap K V`) is
+/// folded into the single applied type first.
+pub(crate) fn expand_instance_defaults(
+  loaded: &LoadedModules,
+  modules: &mut [(ModulePath, Vec<SourceContext<Decl>>)],
+) {
+  let classes = collect_classes_from_modules(loaded, modules);
+  for (_, decls) in modules.iter_mut() {
+    for ctx in decls.iter_mut() {
+      let Decl::Ins(ins) = ctx.value() else {
+        continue;
+      };
+      let Some(info) = classes.get(&ins.class_name) else {
+        continue;
+      };
+      let missing = info
+        .methods
+        .iter()
+        .any(|m| !ins.impls_map.contains_key(&m.name) && m.default.is_some());
+      if !missing {
+        continue;
+      }
+      // Specialize only when the instance supplies exactly one argument per
+      // class parameter. A dotted type name (`BEq Json.Number`) and an
+      // unparenthesized application (`BEq BTreeMap K V`) both reach here as
+      // MULTIPLE syntactic args for a one-parameter class, and folding them
+      // is ambiguous (a qualified name is not an application). Those
+      // instances stay on the pre-existing unchecked path rather than being
+      // specialized at the wrong type.
+      if ins.args.len() != info.params.len() || !ins.args.iter().all(simple_type_arg) {
+        continue;
+      }
+      let mut impls: Vec<Def> = Vec::with_capacity(info.methods.len());
+      for spec in &info.methods {
+        if let Some(written) = ins.impls_map.get(&spec.name) {
+          impls.push(written.clone());
+          continue;
+        }
+        let Some(default_body) = &spec.default else {
+          continue;
+        };
+        impls.push(default_instance_method(
+          spec,
+          &info.params,
+          &ins.args,
+          default_body,
+        ));
+      }
+      let new_ins = crate::term::instance(
+        Some(ins.name().clone()),
+        ins.class_name.clone(),
+        ins.constraints.clone(),
+        ins.params.clone(),
+        ins.args.clone(),
+        impls,
+        ins.attributes.clone(),
+      );
+      *ctx = ctx.with(Decl::Ins(new_ins));
+    }
+  }
 }
 
 /// Every `instance`'s `(class, concrete-type-head) -> instance-name`
@@ -2540,11 +2715,12 @@ fn check_one_def_new(
 /// relative to the class's) written order.
 ///
 /// Returns `Ok(None)` (rather than erroring) for shapes this phase doesn't
-/// yet handle — the class isn't a known single-param class, or a method the
-/// class declares has no override in `impls_map` (a default-method
-/// implementation, out of scope for now) — so callers fall back to the
-/// pre-existing unchecked pass-through for those instances instead of
-/// hard-failing the whole module.
+/// yet handle — the class isn't a known class, or a method the class declares
+/// has NEITHER an override in `impls_map` NOR a class default — so callers
+/// fall back to the pre-existing unchecked pass-through for those instances
+/// instead of hard-failing the whole module. A DEFAULTED missing method is
+/// spliced here (`ClassMethodSpec.default`), matching the self-hosted
+/// `promote_methods`.
 #[allow(clippy::too_many_arguments)]
 fn check_one_instance_new(
   mctx: &mut MetaContext,
@@ -2555,7 +2731,7 @@ fn check_one_instance_new(
   global_atom_paths: &AtomPathMap,
   known_class_methods: &KnownClassMethods,
   known_instances: &KnownInstances,
-  class_method_order: &Map<NamePath, Vec<Identifier>>,
+  class_method_order: &Map<NamePath, ClassMethods>,
   // Phase 0 capture — see `check_one_def_new`'s doc comment. Each
   // method's OWN `Def.name` is a bare, non-instance-qualified identifier
   // (`instance_inner_parser` parses each method with an ordinary
@@ -2570,13 +2746,33 @@ fn check_one_instance_new(
   // from the per-method paths this records.
   mut core_out: Option<&mut CoreProgram>,
 ) -> Result<Option<Def>, TypeError> {
-  let Some(method_order) = class_method_order.get(&instance.class_name) else {
+  let Some(class_info) = class_method_order.get(&instance.class_name) else {
     return Ok(None);
   };
-  let mut args: Vec<Option<Term>> = Vec::with_capacity(method_order.len());
-  for method_name in method_order {
-    let Some(method_def) = instance.impls_map.get(method_name) else {
-      return Ok(None);
+  let method_specs = &class_info.methods;
+  // See `expand_instance_defaults`: a dotted type name or an unparenthesized
+  // application arrives as multiple syntactic args for a one-parameter
+  // class, so specializing would use the wrong type. Decline (unchecked
+  // pass-through) rather than mis-specializing.
+  let args_match_params =
+    instance.args.len() == class_info.params.len() && instance.args.iter().all(simple_type_arg);
+  let mut args: Vec<Option<Term>> = Vec::with_capacity(method_specs.len());
+  for spec in method_specs {
+    // A method the instance omits but the CLASS defaults is spliced in here,
+    // exactly as the self-hosted `promote_methods` does at the source level:
+    // the class's own body is checked against the class's declared method
+    // type. A genuinely unimplemented AND undefaulted method still falls
+    // back to the unchecked pass-through, as before.
+    let synthesized;
+    let method_def = match instance.impls_map.get(&spec.name) {
+      Some(method_def) => method_def,
+      None => match &spec.default {
+        Some(body) if args_match_params => {
+          synthesized = default_instance_method(spec, &class_info.params, &instance.args, body);
+          &synthesized
+        }
+        _ => return Ok(None),
+      },
     };
     // An instance is a def which is a value instance of the class — its
     // own constraints (`[BEq A]` in `instance [BEq A] BEq (List A) {...}`)
@@ -2586,12 +2782,13 @@ fn check_one_instance_new(
     // line). Without this, a method that recursively calls a class method
     // on the instance's own constrained type variable (e.g. `beq`'s
     // `BEq.beq x_tail y_tail`, needing a `BEq A` dictionary while `A` is
-    // still abstract) can never resolve it.
+    // still abstract) can never resolve it. The synthesized default gets
+    // the same treatment.
     let mut method_def = method_def.clone();
     method_def
       .type_constraints
       .extend(instance.constraints.iter().cloned());
-    let method_capture_path = instance.name().clone().append(vec![method_name.clone()]);
+    let method_capture_path = instance.name().clone().append(vec![spec.name.clone()]);
     let checked = check_one_def_new(
       mctx,
       ctx,
@@ -2611,9 +2808,9 @@ fn check_one_instance_new(
       instance.name().clone(),
       CoreInstanceInfo {
         class_name: instance.class_name.clone(),
-        method_paths: method_order
+        method_paths: method_specs
           .iter()
-          .map(|m| instance.name().clone().append(vec![m.clone()]))
+          .map(|m| instance.name().clone().append(vec![m.name.clone()]))
           .collect(),
       },
     );
