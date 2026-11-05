@@ -200,6 +200,14 @@ echo "== web: subscriptions (window/document listeners, animation frame) =="
     -o "$tmp/oak_subs.wasm" --no-cache
 node wasm/web/subs_smoke.mjs "$tmp/oak_subs.wasm"
 
+echo "== web: oak_ui explorer (stories, knobs, themes, persisted prefs, modal) =="
+# The component explorer end to end: restores the stored story/theme on the
+# first frame, logs a story's click, applies a knob, re-themes and persists,
+# navigates from the sidebar and closes a modal with Escape.
+"$MONAD" build --target wasm32-unknown-unknown motes/oak_ui_book --bin book \
+    -o "$tmp/oak_ui_book.wasm" --no-cache
+node wasm/web/oak_ui_book_smoke.mjs "$tmp/oak_ui_book.wasm"
+
 echo "== output suffix (build without -o) =="
 # The same rule must name the cache destination and the linked artifact.
 "$MONAD" build --target wasm32-unknown-unknown fixtures/wasm/hello.mo \

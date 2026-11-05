@@ -362,13 +362,16 @@ jobs:
       # of them ships on a green CI. `motes/oak` is listed whole: the
       # dictionary-carrier fixes landed 2026-10-24, so `app_tests` and
       # `html_t_tests` compile and pass like the other three files.
+      # `motes/oak_ui` (components) and `motes/oak_ui_book` (the explorer,
+      # whose suite requires every story to pass its accessibility lint)
+      # build on oak.
       - name: Self-hosted web stack tests
         run: |
           nix develop --no-pure-eval --accept-flake-config \
             --profile "$HOME/.monad-ci-devshell" \
             -c "$PWD/target-monad/ci-self-compile/monad" test \
                  motes/http motes/moon motes/jsgen motes/web_wasm motes/xml_html \
-                 motes/oak_wasm motes/oak \
+                 motes/oak_wasm motes/oak motes/web_event motes/oak_ui motes/oak_ui_book \
                  std/src/ref_tests.mo std/src/watch_tests.mo
 
       # `monad repl` end to end through the self-hosted binary: a scripted
