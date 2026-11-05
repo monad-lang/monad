@@ -1,0 +1,55 @@
+# oak_ui_book: a storybook-style explorer for oak_ui.
+#
+# Every oak_ui component has one or more stories (src/stories/). The live
+# explorer (`book`, a wasm SPA on oak_wasm) lists them, renders the selected
+# one inside a themed, width-constrained frame, and inspects it: knobs
+# (Controls), the messages it emits (Actions), its serialized HTML (Source),
+# an accessibility lint (A11y) and the theme tokens (Tokens).
+#
+# `book_static` renders every story with its default knobs to a static
+# gallery plus the stylesheet the SPA loads, with no browser runtime.
+# Everything but `src/main.mo` is pure, so the static bin and the tests run
+# natively; only `main.mo` reaches the web externs (Storage).
+[mote]
+name = "oak_ui_book"
+version = "0.1.0"
+edition = "2026"
+targets = ["web"]
+
+[[bin]]
+name = "book"
+path = "src/main.mo"
+
+[[bin]]
+name = "book_static"
+path = "src/static.mo"
+
+[dependencies.init]
+workspace = true
+
+[dependencies.std]
+workspace = true
+
+[dependencies.xml_html]
+workspace = true
+
+[dependencies.web_event]
+workspace = true
+
+[dependencies.oak]
+workspace = true
+
+[dependencies.oak_ui]
+workspace = true
+
+[dependencies.oak_wasm]
+path = "../oak_wasm"
+
+[dependencies.web_wasm]
+path = "../web_wasm"
+
+# Affine-by-default exception (2026-11-05), for the same reason as oak_ui:
+# a story binds one generic message to several listeners, and the explorer's
+# model is read field by field. See plans/type-system/quantitative-types.md.
+[affine]
+mode = "warn"

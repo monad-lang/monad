@@ -70,6 +70,7 @@ members = [
   "motes/oak",
   "motes/oak_wasm",
   "motes/oak_ui",
+  "motes/oak_ui_book",
   "motes/oauth",
   "motes/jsonwebtoken",
   "motes/yaml",
