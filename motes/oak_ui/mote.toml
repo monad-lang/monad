@@ -1,0 +1,39 @@
+# oak_ui: reusable, composable, stylable components over Oak.
+#
+# Components are pure functions returning `Oak.Node Msg`; interactive state
+# (open/closed, active tab, sort) is controlled by the caller's model. Styling
+# is a typed `Ui.Theme` rendered to `--oak-*` CSS custom properties plus a
+# shipped stylesheet (`Ui.css_all`) that only reads those variables.
+#
+# No browser dependency: everything here renders on the server (SSR) and in
+# the wasm runtime alike. `init` and `std` are ambient; declared anyway as
+# every manifest here does.
+[mote]
+name = "oak_ui"
+version = "0.1.0"
+edition = "2026"
+
+[dependencies.init]
+workspace = true
+
+[dependencies.std]
+workspace = true
+
+[dependencies.xml_html]
+workspace = true
+
+[dependencies.web_event]
+workspace = true
+
+[dependencies.oak]
+workspace = true
+
+# Affine-by-default exception, chosen up front (2026-11-05): a component that
+# binds one caller message to two listeners (a modal's backdrop click and its
+# Escape key) uses a generic `Msg` twice, and requiring `[Copy Msg]` would push
+# a Copy instance onto every application's message type. oak, oak_wasm and
+# try_ui carry the same table. Modifier lists are resolved once into the
+# `Copy` record `Ui.Style`, so the remaining violations are these Msg reuses.
+# See plans/type-system/quantitative-types.md.
+[affine]
+mode = "warn"

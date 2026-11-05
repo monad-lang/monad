@@ -9,6 +9,7 @@ motes/fmt/src
 motes/lsp/src/formatting.mo
 motes/lsp/src/tests/formatting_tests.mo
 motes/lsp/src/tests/trace_tests.mo
+motes/oak_ui
 motes/shuttle
 motes/toolkit/src/decl_text.mo
 motes/toolkit/src/navigation.mo

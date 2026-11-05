@@ -69,6 +69,7 @@ members = [
   "motes/xml_html",
   "motes/oak",
   "motes/oak_wasm",
+  "motes/oak_ui",
   "motes/oauth",
   "motes/jsonwebtoken",
   "motes/yaml",
@@ -131,6 +132,12 @@ path = "motes/moose"
 
 [workspace.dependencies.pty]
 path = "motes/pty"
+
+[workspace.dependencies.oak]
+path = "motes/oak"
+
+[workspace.dependencies.oak_ui]
+path = "motes/oak_ui"
 
 [workspace.dependencies.parsec]
 path = "motes/parsec"
