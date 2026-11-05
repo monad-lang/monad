@@ -48,3 +48,16 @@ pub use lib::form {
     Ui.field, Ui.input, Ui.text_input, Ui.textarea, Ui.select, Ui.checkbox, Ui.switch,
     Ui.radio_group, Ui.range, Ui.file_input, Ui.input_group, Ui.form,
 }
+
+pub use lib::css_display {Ui.css_feedback, Ui.css_data}
+
+pub use lib::feedback {
+    Ui.Toast, Ui.alert, Ui.badge, Ui.tag, Ui.spinner, Ui.progress, Ui.skeleton, Ui.empty_state,
+    Ui.toast, Ui.toast_region,
+}
+
+pub use lib::data {
+    Ui.Column, Ui.SortState, Ui.SortState.none, Ui.SortState.toggle, Ui.column, Ui.Column.sortable,
+    Ui.Column.numeric, Ui.striped, Ui.hoverable, Ui.sticky_header,
+    Ui.card, Ui.description_list, Ui.list_group, Ui.avatar, Ui.stat, Ui.table,
+}
