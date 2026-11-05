@@ -70,7 +70,7 @@ def decl_def_name (d : Decl) : Option NamePath := match d {
         },
     Decl.class_d cls =>
         match cls {
-            Class.mk name _params _constraints _methods _vis => Option.some (bare_npath (show_identifier name)),
+            Class.mk name _params _constraints _methods _vis _ => Option.some (bare_npath (show_identifier name)),
         },
     _ => Option.none,
 }
@@ -440,9 +440,9 @@ def qualify_one_decl_name (mpath : ModulePath) (renames : HashMap String String)
         },
     Decl.class_d cls =>
         match cls {
-            Class.mk name params constraints methods vis =>
+            Class.mk name params constraints methods vis sort =>
                 Decl.class_d (Class.mk (Identifier.id (qualified_def_name_str mpath (bare_npath (show_identifier name))))
-                    params constraints methods vis),
+                    params constraints methods vis sort),
         },
     // An instance carries the module it was declared in via its own
     // name, so `promote_instance_defs` (Stage 3, on the already-flat
@@ -1016,7 +1016,7 @@ def qtest_struct (name : String) (fields : List StructField) : Decl :=
 
 #[partial]
 def qtest_class (name : String) : Decl :=
-    Decl.class_d (Class.mk (Identifier.id name) List.empty List.empty List.empty Visibility.package_private)
+    Decl.class_d (Class.mk (Identifier.id name) List.empty List.empty List.empty Visibility.package_private Option.none)
 
 #[partial]
 def qtest_field (name : String) : StructField :=
@@ -1098,7 +1098,7 @@ def qtest_class_names_of_decls (decls : List Decl) : List String := match decls 
         match d {
             Decl.class_d cls =>
                 match cls {
-                    Class.mk name _params _constraints _methods _vis => List.cons (show_identifier name) (qtest_class_names_of_decls rest),
+                    Class.mk name _params _constraints _methods _vis _ => List.cons (show_identifier name) (qtest_class_names_of_decls rest),
                 },
             _ => qtest_class_names_of_decls rest,
         },

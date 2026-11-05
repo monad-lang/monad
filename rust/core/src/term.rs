@@ -607,8 +607,9 @@ pub fn class(
   params: Vec<Param>,
   defs: Vec<ClassDef>,
   attributes: Vec<Attribute>,
+  sort: Option<Term>,
 ) -> Inductive {
-  let typ = params_to_inductive_type(&params, sort1());
+  let typ = params_to_inductive_type(&params, sort.unwrap_or_else(sort1).replace_hole(sort1));
   let con_typs = defs.iter().map(|d| d.typ.clone()).collect();
   let method_constraints: Map<Identifier, Vec<TypeConstraint>> = defs
     .iter()

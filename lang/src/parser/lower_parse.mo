@@ -1039,6 +1039,10 @@ def lower_parse_inductive (ctx : ParseLowerCtx) (i : ParseInductive) : Inductive
 def lower_parse_class (ctx : ParseLowerCtx) (c : ParseClass) : Class :=
     Class.mk c.name (lower_parse_params ctx c.params) c.constraints
              (lower_parse_class_defs ctx c.methods) c.vis
+             (match c.sort {
+                 Option.some s => Option.some (lower_parse_term_bare ctx s),
+                 Option.none => Option.none,
+             })
 
 
 #[partial]

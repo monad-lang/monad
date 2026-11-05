@@ -152,11 +152,11 @@ pub type Void {}
 /// `Inhabited a` — `a` has a canonical value. A class (instance-resolved),
 /// so generic code can require one implicitly.
 ///
-/// The intended signature is `{u : Universe} (a : Sort u) : Sort (max 1 u)`.
-/// Class-level sort annotations parse but are not yet enforced (`Class` has
-/// no sort field; universe-polymorphic classes are unfinished), so the sort
-/// is written in the doc rather than the declaration.
-pub class Inhabited (a : Sort u) {
+/// The class's own result sort is `Sort (max 1 u)`: the dictionary type lives
+/// one universe above its carrier at least. The class head now carries that
+/// clause for real (`Class.sort`), and `check_class_with_scope` rejects a
+/// non-sort kind.
+pub class Inhabited {u : Universe} (a : Sort u) : Sort (max 1 u) {
     def default : a
 }
 

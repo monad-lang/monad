@@ -24,7 +24,8 @@ fn test_class() {
         vec![],
         None
       )],
-      vec![]
+      vec![],
+      None
     )
   );
   let s = r#"class [Functor F] Applicative F {
@@ -62,7 +63,8 @@ fn test_class() {
           None
         )
       ],
-      vec![]
+      vec![],
+      None
     )
   );
   let s = r#"class [Applicative M] Monad (M: Type -> Type) {
@@ -100,7 +102,8 @@ fn test_class() {
           None
         )
       ],
-      vec![]
+      vec![],
+      None
     )
   );
 }
@@ -1427,8 +1430,8 @@ fn test_pub_def_not_absorbed_by_preceding_def_body() {
 /// A universe-level clause on a class (`{u : Universe}`) and a result-sort
 /// annotation (`: Sort (max 1 u)`) both parse. The level clause is dropped
 /// (a `Sort u` in the surviving params is what binds `u`), and the result
-/// sort is accepted for forward compatibility; the host has no universe
-/// polymorphism, so a symbolic level is approximated as level 1.
+/// sort is now RETAINED in the class's `Inductive.typ` (the host has no
+/// universe polymorphism, so `Sort (max 1 u)` still approximates to 1).
 #[test]
 fn test_class_universe_binder_and_result_sort_parse() {
   let s = r#"pub class Inhabited {u : Universe} (a : Sort u) : Sort (max 1 u) {
@@ -1439,6 +1442,15 @@ fn test_class_universe_binder_and_result_sort_parse() {
   assert_eq!(res.name().last().as_str(), "Inhabited");
   assert_eq!(res.params().len(), 1);
   assert_eq!(res.constructors().len(), 1);
+  assert_eq!(pi_codomain(res.typ()), &Term::Sort { level: 1 });
+
+  // A concrete `: Sort 0` result sort lands in the class's kind verbatim.
+  let s = r#"pub class ProofClass (a : Sort 0) : Sort 0 {
+      def witness : a
+    }"#
+    .into();
+  let (_, res) = class_parser(s).unwrap();
+  assert_eq!(pi_codomain(res.typ()), &Term::Sort { level: 0 });
 }
 
 /// `type Box {u : Universe} (A : Sort u) : Sort u { mk (a : A) }` — the

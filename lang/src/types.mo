@@ -1092,6 +1092,9 @@ pub struct ParseClass {
     constraints : List TypeConstraint,
     methods : List ParseClassDef,
     vis : Visibility,
+    /// The declared result sort (`: Sort (max 1 u)`, `: Prop`), or `None`
+    /// when the class head omits it. Lowered into `Class.sort`.
+    sort : Option ParseTerm,
 }
 
 pub struct ParseInstance {
@@ -1892,6 +1895,11 @@ pub struct Class {
     constraints: List TypeConstraint,
     methods: List ClassDef,
     vis: Visibility,
+    /// The class's declared RESULT SORT — the `: Sort (max 1 u)` / `: Prop`
+    /// clause after the params, or `None` when the head omits it (default
+    /// `Sort 1`). Kept because the class is checked as a type former; the
+    /// host represents the same clause in its `Inductive.typ`'s codomain.
+    sort: Option Term,
 }
 
 // Canonical StructField uses de Bruijn Term. StructFieldV0 is the legacy V0 variant.
@@ -2615,8 +2623,12 @@ def test_level_le_refuses_two_distinct_level_vars : Bool :=
                        (SortLevel.var (Identifier.id "v")))
 
 /// The sort level of a term, if that term is a sort.
+///
+/// `pub` for the checker's own declaration-kind rules (`module.mo`'s class and
+/// inductive kind validation), which ask "is this term a sort" the same way
+/// `unify_sort` already does.
 #[partial]
-def sort_level_of (t: Term) : Option SortLevel := match term_peel t {
+pub def sort_level_of (t: Term) : Option SortLevel := match term_peel t {
     Term.sort level => Option.some level,
     _ => Option.none,
 }

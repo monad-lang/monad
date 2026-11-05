@@ -476,7 +476,7 @@ pub fn defs_class(
   args: Vec<Param>,
   funs: Vec<ClassDef>,
 ) -> Decl {
-  Decl::Type(class(name, constraints, args, funs, vec![]))
+  Decl::Type(class(name, constraints, args, funs, vec![], None))
 }
 
 pub fn defs_class_with_doc(
@@ -486,7 +486,7 @@ pub fn defs_class_with_doc(
   funs: Vec<ClassDef>,
   _doc: Option<Documentation>,
 ) -> Decl {
-  Decl::Type(class(name, constraints, args, funs, vec![]))
+  Decl::Type(class(name, constraints, args, funs, vec![], None))
 }
 
 #[test]

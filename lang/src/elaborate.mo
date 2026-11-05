@@ -337,11 +337,11 @@ def collect_param_names (params : List Param) : List Identifier :=
 /// Elaborate a class definition.
 def elaborate_class (cls : Class) (known_names : List Identifier) : Class :=
     match cls {
-        Class.mk name params constraints methods vis =>
+        Class.mk name params constraints methods vis sort =>
             let param_names := collect_param_names params in
             let extended_names := union_ids param_names known_names in
             let elaborated_methods := elaborate_class_defs methods extended_names in
-            Class.mk name params constraints elaborated_methods vis,
+            Class.mk name params constraints elaborated_methods vis sort,
     }
 
 /// Elaborate a list of class method definitions.
@@ -434,7 +434,7 @@ def names_of_decl (decl : Decl) : List Identifier :=
             },
         Decl.class_d c =>
             match c {
-                Class.mk name _ _ _ _ =>
+                Class.mk name _ _ _ _ _ =>
                     let empty : List Identifier := List.empty in
                     List.cons (unqualified_decl_id name) empty,
             },

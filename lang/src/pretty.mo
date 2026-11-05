@@ -501,7 +501,7 @@ def show_struct_field (f : StructField) : String := match f {
 
 #[partial]
 pub def show_class (cls : Class) : String := match cls {
-    Class.mk name params constraints methods vis =>
+    Class.mk name params constraints methods vis sort =>
         let name_str := show_identifier name in
         let header := String.concat (show_vis_prefix vis) (String.concat "class " name_str) in
         let with_params := match params {
@@ -511,8 +511,12 @@ pub def show_class (cls : Class) : String := match cls {
                 let sp := String.concat " " params_str in
                 String.concat header sp,
         } in
+        let with_sort := match sort {
+            Option.none => with_params,
+            Option.some s => String.concat with_params (String.concat " : " (show_term s)),
+        } in
         let methods_str := show_class_defs methods in
-        let ob := String.concat with_params " {\n  " in
+        let ob := String.concat with_sort " {\n  " in
         let inner := String.concat ob methods_str in
         String.concat inner "\n}",
 }
@@ -1006,7 +1010,7 @@ def test_show_decl_class : Bool :=
     let show_name := Identifier.id "show" in
     let cd := ClassDef.mk show_name (Term.sort (SortLevel.concrete 1)) Option.none in
     let methods := List.cons cd List.empty in
-    let cls := Class.mk name List.empty List.empty methods Visibility.package_private in
+    let cls := Class.mk name List.empty List.empty methods Visibility.package_private Option.none in
     let decl := Decl.class_d cls in
     show_decl decl == "class Show {\n  def show : Type\n}"
 

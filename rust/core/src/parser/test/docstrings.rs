@@ -46,7 +46,8 @@ class Functor (F: Type -> Type) {
         vec![],
         None
       )],
-      vec![]
+      vec![],
+      None
     ))
   );
   assert!(ctx.doc.is_some());

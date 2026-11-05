@@ -342,7 +342,7 @@ def test_show_decl_class_simple : Bool :=
     let param_ : Param := Param.mk test_id_A (sort_n 1) Multiplicity.many none_term no_attrs in
     let params : List Param := List.cons param_ empty_params in
     let methods : List ClassDef := List.cons meth empty_class_defs in
-    let cls : Class := Class.mk (Identifier.id "Eq") params empty_constraints methods Visibility.package_private in
+    let cls : Class := Class.mk (Identifier.id "Eq") params empty_constraints methods Visibility.package_private Option.none in
     let decl : Decl := Decl.class_d cls in
     let result : String := show_decl decl in
     String.beq result "class Eq (A : Type) {\n  def eq : (A -> (A -> Prop))\n}"

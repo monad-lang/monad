@@ -2775,8 +2775,8 @@ def class_apply_constraints (dr : ParseResult ParseDecl) (constraints : List Typ
 			match decl.kind {
 				class_d cls =>
 					match cls {
-						ParseClass.mk name params _ methods vis =>
-							success rem (pd_class_d  (ParseClass.mk name params constraints methods vis))
+						ParseClass.mk name params _ methods vis sort =>
+							success rem (pd_class_d  (ParseClass.mk name params constraints methods vis sort))
 					},
 				_ => success rem decl
 			},
@@ -2871,12 +2871,9 @@ def class_params_try_paren (r : ParseResult String) (orig : String) (name : Iden
 /// An optional result sort after a class's params — the `: Sort (max 1 u)`
 /// in `class Inhabited {u : Universe} (a : Sort u) : Sort (max 1 u)`.
 ///
-/// Parsed and DROPPED: `Class` has no sort field, and adding one is an
-/// arity change on a type matched positionally at ~58 sites. The class's
-/// sort is still inferred by the checker; universe-polymorphic classes are
-/// a separate, unfinished piece (`type-universes`). Accepting the syntax
-/// keeps the intended declaration readable and is the forward-compatible
-/// spelling.
+/// Captured into `ParseClass.sort` (then `Class.sort`) and checked by
+/// `check_class_with_scope`: the declared kind must be a sort. `None` (no
+/// clause) is the common case and defaults to `Sort 1`.
 #[partial]
 def class_try_kind (r : ParseResult String) (orig : String) (name : Identifier) (vis : Visibility) : ParseResult ParseDecl :=
 	match r {
@@ -2887,7 +2884,25 @@ def class_try_kind (r : ParseResult String) (orig : String) (name : Identifier) 
 #[partial]
 def class_kind_expr (r : ParseResult ParseTerm) (orig : String) (name : Identifier) (vis : Visibility) : ParseResult ParseDecl :=
 	match r {
-		success rem _kind => class_brace (tag "{" (skip_spaces rem)) name vis,
+		success rem kind => class_apply_sort (class_brace (tag "{" (skip_spaces rem)) name vis) (Option.some kind),
+		fail e => fail e
+	}
+
+/// Patch the parsed result sort onto the finished `ParseClass`, the same
+/// patch-after-the-method-subtree pattern as `class_apply_params`/
+/// `class_apply_constraints`.
+#[partial]
+def class_apply_sort (dr : ParseResult ParseDecl) (sort : Option ParseTerm) : ParseResult ParseDecl :=
+	match dr {
+		success rem decl =>
+			match decl.kind {
+				class_d cls =>
+					match cls {
+						ParseClass.mk name params constraints methods vis _ =>
+							success rem (pd_class_d (ParseClass.mk name params constraints methods vis sort))
+					},
+				_ => success rem decl
+			},
 		fail e => fail e
 	}
 
@@ -2952,8 +2967,8 @@ def class_apply_params (dr : ParseResult ParseDecl) (params : List ParseParam) :
 			match decl.kind {
 				class_d cls =>
 					match cls {
-						ParseClass.mk name _ constraints methods vis =>
-							success rem (pd_class_d  (ParseClass.mk name params constraints methods vis))
+						ParseClass.mk name _ constraints methods vis sort =>
+							success rem (pd_class_d  (ParseClass.mk name params constraints methods vis sort))
 					},
 				_ => success rem decl
 			},
@@ -3282,7 +3297,7 @@ def class_close (r : ParseResult String) (name : Identifier) (methods : List Par
 			// Placeholders — class_apply_params/class_apply_constraints
 			// patch the real values in afterward (see class_params's doc
 			// comment; same pattern instance_close uses for vis).
-			success rem (pd_class_d  (ParseClass.mk name empty_params empty_constraints rev_methods vis)),
+			success rem (pd_class_d  (ParseClass.mk name empty_params empty_constraints rev_methods vis Option.none)),
 		fail e => fail e
 	}
 
@@ -8685,7 +8700,7 @@ def test_class_with_constraints : Bool :=
 #[partial]
 def class_has_one_functor_f_constraint (c : ParseClass) : Bool :=
 	match c {
-		ParseClass.mk _name _params constraints _methods _vis =>
+		ParseClass.mk _name _params constraints _methods _vis _ =>
 			match constraints {
 				List.cons tc rest => constraint_is_functor_f tc && list_is_empty_tc rest,
 				List.empty => false
@@ -8826,7 +8841,7 @@ def test_class_with_paren_params : Bool :=
 #[partial]
 def class_has_one_param_named_F (c : ParseClass) : Bool :=
 	match c {
-		ParseClass.mk _name params _constraints _methods _vis =>
+		ParseClass.mk _name params _constraints _methods _vis _ =>
 			match params {
 				List.cons p rest => param_named_F p && list_is_empty rest,
 				List.empty => false
@@ -8856,7 +8871,7 @@ def test_class_with_default_param : Bool :=
 #[partial]
 def class_has_one_param_L_with_default (c : ParseClass) : Bool :=
 	match c {
-		ParseClass.mk _name params _constraints _methods _vis =>
+		ParseClass.mk _name params _constraints _methods _vis _ =>
 			match params {
 				List.cons p rest => param_named_L_with_default p && list_is_empty rest,
 				List.empty => false

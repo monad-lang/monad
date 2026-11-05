@@ -2413,8 +2413,14 @@ fn class_parser(input: Span) -> Res<Inductive> {
   let (input, _) = ws0(input)?;
   let (input, params) = many0(terminated(lam_param, ws0)).parse(input)?;
   // Optional result sort: `class Inhabited (a : Sort u) : Sort (max 1 u)`.
-  // Parsed and dropped (the `Class`/`Inductive` AST has no sort field).
-  let (input, _kind) = opt(preceded((tag(":"), ws0), type_expression)).parse(input)?;
+  // Threaded into `class()`'s `Inductive.typ`; a BARE symbolic level uses the
+  // inductive result-sort approximation (bottom), everything else the normal
+  // type-expression parser.
+  let (input, kind) = opt(preceded(
+    (char(':'), ws0),
+    alt((inductive_sort_parser, type_expression)),
+  ))
+  .parse(input)?;
   let (input, _) = ws0(input)?;
   let (input, defs) = class_inner_parser(input)?;
 
@@ -2424,6 +2430,7 @@ fn class_parser(input: Span) -> Res<Inductive> {
     params,
     defs,
     attrs,
+    kind,
   );
   ind.vis = vis;
   Ok((input, ind))

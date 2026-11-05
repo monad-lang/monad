@@ -985,7 +985,7 @@ def struct_fields_to_params (fields : List StructField) : List Param :=
 
 def build_scope_class (cls : Class) (path : ModulePath) (acc : ScopeData) : ScopeData :=
     match cls {
-        mk clsname _ _ methods _vis =>
+        mk clsname _ _ methods _vis _sort =>
             let name_list : List Identifier := List.cons clsname List.empty in
             let cls_np : NamePath := NamePath.mk name_list in
             let with_cls : ScopeData := scope_data_add_class acc cls in
@@ -2050,8 +2050,8 @@ def resolve_infix_struct (infixes : List Infix) (s : Struct) : Struct :=
 #[partial]
 def resolve_infix_class (infixes : List Infix) (cls : Class) : Class :=
     match cls {
-        Class.mk clsname params constraints methods vis =>
-            Class.mk clsname (resolve_infix_params infixes params) constraints (resolve_infix_class_defs infixes methods) vis,
+        Class.mk clsname params constraints methods vis sort =>
+            Class.mk clsname (resolve_infix_params infixes params) constraints (resolve_infix_class_defs infixes methods) vis sort,
     }
 
 #[partial]
@@ -2608,8 +2608,8 @@ def resolve_open_alias_struct_field_defaults (names : HashMap String String) (fi
 #[partial]
 def resolve_open_alias_class (names : HashMap String String) (cls : Class) : Class :=
     match cls {
-        Class.mk name params constraints methods vis =>
-            Class.mk name params constraints (resolve_open_alias_class_defs names methods) vis,
+        Class.mk name params constraints methods vis sort =>
+            Class.mk name params constraints (resolve_open_alias_class_defs names methods) vis sort,
     }
 
 #[partial]
@@ -2687,7 +2687,7 @@ def collect_instances (decl_list : List Decl) : List Instance :=
 #[partial]
 def class_method_names (cls : Class) : List Identifier :=
     match cls {
-        Class.mk _ _ _ methods _ => class_defs_names methods,
+        Class.mk _ _ _ methods _ _ => class_defs_names methods,
     }
 
 #[partial]
@@ -2773,7 +2773,7 @@ def find_class_by_name (classes : List Class) (cls_name : NamePath) : Option Cla
         List.empty => Option.none,
         List.cons cls rest =>
             match cls {
-                Class.mk cname _ _ _ _ =>
+                Class.mk cname _ _ _ _ _ =>
                     if class_name_eq (NamePath.mk (List.cons cname List.empty)) cls_name
                     then Option.some cls
                     else find_class_by_name rest cls_name,
@@ -3025,7 +3025,7 @@ def promote_methods (cls : Class) (insname : Identifier) (cls_name : NamePath) (
 #[partial]
 def class_method_default (cls : Class) (mname : Identifier) : Option ClassDef :=
     match cls {
-        Class.mk _ _ _ methods _ => class_def_by_name methods mname,
+        Class.mk _ _ _ methods _ _ => class_def_by_name methods mname,
     }
 
 #[partial]
@@ -3045,7 +3045,7 @@ def class_def_by_name (cds : List ClassDef) (mname : Identifier) : Option ClassD
 #[partial]
 def subst_class_params (cls : Class) (ins_args : List Term) (t : Term) : Term :=
     match cls {
-        Class.mk _ params _ _ _ => subst_params_by_args params ins_args t,
+        Class.mk _ params _ _ _ _ => subst_params_by_args params ins_args t,
     }
 
 /// Two passes so the substitution is simultaneous: renaming every param
@@ -4809,7 +4809,7 @@ def decl_type_names (d : Decl) : List Identifier :=
     match d {
         Decl.inductive_d i => match i { Inductive.mk nm _p _t _c _a _v => List.cons (last_segment nm) List.empty },
         Decl.struct_d s => match s { Struct.mk nm _f _a _v => List.cons nm List.empty },
-        Decl.class_d c => match c { Class.mk nm _p _c _m _v => List.cons nm List.empty },
+        Decl.class_d c => match c { Class.mk nm _p _c _m _v _ => List.cons nm List.empty },
         _ => List.empty,
     }
 
@@ -5511,7 +5511,7 @@ def keep_ids_present (ids : List Identifier) (keep : List Identifier) : List Ide
 #[partial]
 def class_param_names (cls : Class) : List Identifier :=
     match cls {
-        Class.mk _name params _constraints _methods _vis => param_names params,
+        Class.mk _name params _constraints _methods _vis _ => param_names params,
     }
 
 /// The bare names standing as a Pi chain's own parameter types that ALSO
@@ -5644,7 +5644,7 @@ def strip_foralls (typ : Term) : Term :=
 #[partial]
 def class_method_declared_type (cls : Class) (method_name : Identifier) : Option Term :=
     match cls {
-        Class.mk _name _params _constraints methods_ _vis => class_defs_type_of methods_ method_name,
+        Class.mk _name _params _constraints methods_ _vis _ => class_defs_type_of methods_ method_name,
     }
 
 #[partial]
@@ -6143,7 +6143,7 @@ pub def scope_find_class_def_for_ref (id : Identifier) (bare_id : Identifier) (s
                 ClassMethodRef.mk cls method =>
                     let g : ScopeData := scope_globals s in
                     match cls {
-                        Class.mk cname _ _ _ _ =>
+                        Class.mk cname _ _ _ _ _ =>
                             match find_class_def_of (NamePath.mk (List.cons cname List.empty)) method g.class_defs {
                                 Option.some cd => ok cd,
                                 Option.none => scope_find_class_def_by_name bare_id s,
@@ -6360,7 +6360,7 @@ pub def validate_dict_hints (callee : Identifier) (resolved : Option NamePath) (
 /// Class name's own `Identifier` -> the `Class`'s own declared name.
 #[partial]
 def class_own_name (cls : Class) : NamePath :=
-    match cls { Class.mk cname _ _ _ _ => NamePath.mk (List.cons cname List.empty) }
+    match cls { Class.mk cname _ _ _ _ _ => NamePath.mk (List.cons cname List.empty) }
 
 #[partial]
 def find_matching_instance_any (instances : List Instance) (cls_name : NamePath) (carriers : List Term) : Option Instance :=
@@ -6854,7 +6854,7 @@ def first_param_name (params : List Param) : Option Identifier :=
 #[partial]
 def class_first_param_name (cls : Class) : Option Identifier :=
     match cls {
-        Class.mk _nm params _c _m _v => first_param_name params,
+        Class.mk _nm params _c _m _v _ => first_param_name params,
     }
 
 /// The carrier a call's own FULL type hint implies, by projecting that
@@ -7133,7 +7133,7 @@ def arg_count (args : List Term) : I64 :=
 /// above.
 pub def class_default_carrier (cls : Class) : Option Term :=
     match cls {
-        Class.mk _name params _constraints _methods _vis => first_param_default params,
+        Class.mk _name params _constraints _methods _vis _ => first_param_default params,
     }
 
 def first_param_default (params : List Param) : Option Term :=
@@ -7338,7 +7338,7 @@ def format_unresolved_class_call (def_name : String) (ref : ClassMethodRef) : St
     match ref {
         ClassMethodRef.mk cls method_name =>
             match cls {
-                Class.mk cname _ _ _ _ =>
+                Class.mk cname _ _ _ _ _ =>
                     let cls_name := show_identifier cname in
                     let method_str := show_identifier method_name in
                     let call := String.concat cls_name (String.concat "." method_str) in
@@ -7887,7 +7887,7 @@ def dummy_beq_class : Class :=
     let a_param := param_many (Identifier.id "A") (Term.sort (SortLevel.concrete 1)) in
     let beq_method := ClassDef.mk (Identifier.id "beq") Term.hole Option.none in
     Class.mk (Identifier.id "BEq") (List.cons a_param List.empty) List.empty
-        (List.cons beq_method List.empty) Visibility.package_private
+        (List.cons beq_method List.empty) Visibility.package_private Option.none
 
 /// Fixture: `instance BEq Bool { def beq := <true_body> }`.
 #[partial]
@@ -7930,7 +7930,7 @@ def test_promote_instance_defs_missing_method_skips_instance : Bool :=
     let show_method := ClassDef.mk (Identifier.id "show") Term.hole Option.none in
     let extra_method := ClassDef.mk (Identifier.id "extra") Term.hole Option.none in
     let cls := Class.mk (Identifier.id "Show") List.empty List.empty
-        (List.cons show_method (List.cons extra_method List.empty)) Visibility.package_private in
+        (List.cons show_method (List.cons extra_method List.empty)) Visibility.package_private Option.none in
     let cls_name := NamePath.mk (List.cons (Identifier.id "Show") List.empty) in
     let show_name := NamePath.mk (List.cons (Identifier.id "show") List.empty) in
     let show_def := Def.mk show_name Term.hole (mk_i64_dummy 1) List.empty List.empty Visibility.package_private List.empty in
@@ -7949,7 +7949,7 @@ def dummy_cmp_class : Class :=
     let lt_method := ClassDef.mk (Identifier.id "lt") a_ref Option.none in
     let lte_method := ClassDef.mk (Identifier.id "lte") a_ref (Option.some a_ref) in
     Class.mk (Identifier.id "Cmp") (List.cons a_param List.empty) List.empty
-        (List.cons lt_method (List.cons lte_method List.empty)) Visibility.package_private
+        (List.cons lt_method (List.cons lte_method List.empty)) Visibility.package_private Option.none
 
 #[partial]
 def dummy_cmp_bool_decls : List Decl :=
@@ -7991,7 +7991,7 @@ def swap_decls : List Decl :=
     let pick := ClassDef.mk (Identifier.id "pick") a_ref (Option.some b_ref) in
     let cls := Class.mk (Identifier.id "Swap")
         (List.cons (param_many (Identifier.id "A") ty) (List.cons (param_many (Identifier.id "B") ty) List.empty))
-        List.empty (List.cons pick List.empty) Visibility.package_private in
+        List.empty (List.cons pick List.empty) Visibility.package_private Option.none in
     let cls_name := NamePath.mk (List.cons (Identifier.id "Swap") List.empty) in
     let ins := Instance.mk (Identifier.id "_") cls_name List.empty
         (List.cons b_ref (List.cons a_ref List.empty))
@@ -8375,7 +8375,7 @@ def test_class_method_var_names_includes_bare_domains : Bool :=
     let params : List Param := List.cons (Param.mk (Identifier.id "T") Term.hole Multiplicity.many Option.none List.empty) List.empty in
     let no_constraints : List TypeConstraint := List.empty in
     let no_methods : List ClassDef := List.empty in
-    let cls : Class := Class.mk (Identifier.id "Foldable") params no_constraints no_methods Visibility.package_private in
+    let cls : Class := Class.mk (Identifier.id "Foldable") params no_constraints no_methods Visibility.package_private Option.none in
     let names : List Identifier := class_method_var_names cls foldl_hint_sig in
     // `T` from the class's own parameters, `A` from `T A`, `B` from the
     // bare accumulator domain.

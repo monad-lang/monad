@@ -14,7 +14,7 @@ use lang::types {
   binder_anon, binder_is_explicit, binder_is_level, binder_name, concrete,
   has_incomplete_match_exemption, id_eq,
   list_reverse, many, module_path_to_string_colon, package_private, priv_,
-  show_identifier, show_module_path, show_name_path, term_peel, union_ids,
+  show_identifier, show_module_path, show_name_path, sort_level_of, term_peel, union_ids,
   use_bare, use_glob, use_items, use_name, use_rename, use_sub, use_sub_rename,
   visibility_beq,
 }
@@ -406,7 +406,7 @@ def decl_local_name (d : Decl) : Option String :=
                 Option.some (show_name_path name)
         },
         Decl.struct_d st => match st { Struct.mk nm _ _ _ => Option.some (show_identifier nm) },
-        Decl.class_d cls => match cls { Class.mk nm _ _ _ _ => Option.some (show_identifier nm) },
+        Decl.class_d cls => match cls { Class.mk nm _ _ _ _ _ => Option.some (show_identifier nm) },
         Decl.instance_d ins => match ins { Instance.mk nm _ _ _ _ _ _ => Option.some (show_identifier nm) },
         Decl.decl_gen_d nm _ _ _ => Option.some (show_name_path nm),
         _ => Option.none
@@ -2364,11 +2364,31 @@ def check_struct_field_with_scope (f : StructField) (scope : Scope) (locals : Lo
 #[partial]
 def check_class_with_scope (cls : Class) (scope : Scope) (locals : LocalScope) (path : Option String) (verbose : Bool) : IO (List String) :=
     match cls {
-        Class.mk name _params constraints methods _vis => do {
+        Class.mk name _params constraints methods _vis sort => do {
             if verbose then println ("  checking class " ++ identifier_to_string name) else do { return unit };
             let locals_ : LocalScope := locals_with_class_typevars cls scope locals;
-            check_class_methods_with_scope methods constraints scope locals_ path verbose
+            let sort_diags : List String := class_sort_diagnostics name sort path;
+            let method_diags : List String <- check_class_methods_with_scope methods constraints scope locals_ path verbose;
+            return (list_append sort_diags method_diags)
         }
+    }
+
+/// The class head's declared result sort (`: Sort (max 1 u)`, `: Prop`), when
+/// written, must be a SORT. `sort_level_of` peels `Term.ctx` and matches the
+/// `Term.sort` node; a class head naming an ordinary type (`: I64`) has no
+/// level and is rejected. `Option.none` (the common no-clause case) defaults
+/// to `Sort 1` and needs no check.
+#[partial]
+def class_sort_diagnostics (name : Identifier) (sort : Option Term) (path : Option String) : List String :=
+    match sort {
+        Option.none => List.empty,
+        Option.some s =>
+            match sort_level_of s {
+                Option.some _ => List.empty,
+                Option.none =>
+                    [render_type_error (identifier_to_string name) path
+                        (TypeError.custom "class kind must be a sort")],
+            },
     }
 
 #[partial]

@@ -212,10 +212,10 @@ def test_elaborate_class_method : Bool :=
     let meth : ClassDef := ClassDef.mk (Identifier.id "eq") eq_typ none_term in
     let methods : List ClassDef := List.cons meth List.empty in
     let params : List Param := List.cons p_A List.empty in
-    let cls : Class := Class.mk id_Eq params empty_constraints methods Visibility.package_private in
+    let cls : Class := Class.mk id_Eq params empty_constraints methods Visibility.package_private Option.none in
     let elaborated : Class := elaborate_class cls no_ids in
     match elaborated {
-        Class.mk _ _ _ elaborated_methods _ =>
+        Class.mk _ _ _ elaborated_methods _ _ =>
             match elaborated_methods {
                 List.cons em _ =>
                     match em {
@@ -258,7 +258,7 @@ def test_names_of_decl_def : Bool :=
 
 #[test]
 def test_names_of_decl_class : Bool :=
-    let cls : Class := Class.mk id_Eq empty_params empty_constraints empty_class_defs Visibility.package_private in
+    let cls : Class := Class.mk id_Eq empty_params empty_constraints empty_class_defs Visibility.package_private Option.none in
     let decl : Decl := Decl.class_d cls in
     let names : List Identifier := names_of_decl decl in
     match names {

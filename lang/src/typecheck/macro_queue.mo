@@ -530,8 +530,8 @@ def struct_terms_expand (lookup : Identifier -> Option Term) (s : Struct) : Stru
 #[partial]
 def class_terms_expand (lookup : Identifier -> Option Term) (cls : Class) : Class :=
     match cls {
-        Class.mk name params constraints methods vis =>
-            Class.mk name (params_terms_expand lookup params) constraints (class_defs_terms_expand lookup methods) vis,
+        Class.mk name params constraints methods vis sort =>
+            Class.mk name (params_terms_expand lookup params) constraints (class_defs_terms_expand lookup methods) vis sort,
     }
 
 #[partial]
@@ -734,10 +734,10 @@ def struct_terms_expand_res (expand : Term -> Result String Term) (s : Struct) :
 #[partial]
 def class_terms_expand_res (expand : Term -> Result String Term) (cls : Class) : Result String Class :=
     match cls {
-        Class.mk name params constraints methods vis =>
+        Class.mk name params constraints methods vis sort =>
             result_bind (params_terms_expand_res expand params) (fn (params2 : List Param) =>
                 result_bind (class_defs_terms_expand_res expand methods) (fn (methods2 : List ClassDef) =>
-                    Result.ok (Class.mk name params2 constraints methods2 vis))),
+                    Result.ok (Class.mk name params2 constraints methods2 vis sort))),
     }
 
 #[partial]

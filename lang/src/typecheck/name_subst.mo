@@ -239,8 +239,8 @@ def struct_name_subst (target : Identifier) (replacement : Term) (s : Struct) : 
 #[partial]
 def class_name_subst (target : Identifier) (replacement : Term) (cls : Class) : Class :=
     match cls {
-        Class.mk name params constraints methods vis =>
-            Class.mk name (params_name_subst target replacement params) constraints (class_defs_name_subst target replacement methods) vis,
+        Class.mk name params constraints methods vis sort =>
+            Class.mk name (params_name_subst target replacement params) constraints (class_defs_name_subst target replacement methods) vis sort,
     }
 
 #[partial]

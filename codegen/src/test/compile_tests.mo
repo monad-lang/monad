@@ -431,7 +431,7 @@ def test_promote_instance_defs_compiles_and_runs : IO Bool := do {
 
     let a_param := param_many (Identifier.id "A") (sort_n 1);
     let add_method := ClassDef.mk (Identifier.id "add") Term.hole (Option.none : Option Term);
-    let cls := Class.mk (Identifier.id "MyAdd") [a_param] ([] : List TypeConstraint) [add_method] Visibility.package_private;
+    let cls := Class.mk (Identifier.id "MyAdd") [a_param] ([] : List TypeConstraint) [add_method] Visibility.package_private Option.none;
 
     let cls_name := NamePath.mk (List.cons (Identifier.id "MyAdd") List.empty);
     let i64_arg := Term.var 0 (DebugName.named (Identifier.id "I64"));

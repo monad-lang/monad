@@ -1188,7 +1188,7 @@ def any_mentions_hole (ts : List Term) : Bool :=
 /// result type, so the result-type fallback applies to one-parameter classes only.
 def class_has_single_param (cls : Class) : Bool :=
     match cls {
-        Class.mk _ params _ _ _ =>
+        Class.mk _ params _ _ _ _ =>
             match params {
                 List.cons _ rest =>
                     match rest {
@@ -6806,7 +6806,7 @@ def try_type_check_hinted_app (f : Term) (hint : String) (expected_type : Term) 
                                 match ref {
                                     ClassMethodRef.mk cls method_name =>
                                         match cls {
-                                            Class.mk cname _ _ _ _ =>
+                                            Class.mk cname _ _ _ _ _ =>
                                                 Option.some (Pair.pair (NamePath.mk (List.cons cname List.empty)) method_name),
                                         },
                                 },
