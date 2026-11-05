@@ -271,6 +271,11 @@ pub def Eq.rec (A : Sort 1) (a : A) (P : (b : A) -> Eq A a b -> Sort 1)
 /// Equals
 pub class BEq A {
     def beq : A -> A -> Bool
+
+    /// Logical negation of `beq`, as a class DEFAULT: an instance only
+    /// implements `beq`. The self-hosted compiler splices this body into an
+    /// instance that omits it (`promote_methods`).
+    def not_beq (a : A) (b : A) : Bool := Bool.not (BEq.beq a b)
 }
 
 pub instance BEq Bool {
@@ -279,11 +284,9 @@ pub instance BEq Bool {
         else (Bool.not b)
 }
 
-// TODO Constraint resolving
-// def BEq.not_beq [BEq A] (a b : A) : Bool := not (a == b)
-
 pub infix (==) := BEq.beq
-// infix (!=) := BEq.not_beq
+
+pub infix (!=) := BEq.not_beq
 
 /// Ordered comparison.
 ///

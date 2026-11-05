@@ -58,6 +58,12 @@ def test_hex_literal_uppercase_prefix : Bool :=
 def test_i64_add : Bool :=
     1 + 2 == 3
 
+/// `!=` is `BEq.not_beq`, whose body is the `BEq` class DEFAULT: `BEq I64`
+/// (like every shipping BEq instance) implements only `beq`.
+#[test]
+def test_not_beq_operator : Bool :=
+    (1 != 2) && Bool.not (1 != 1)
+
 #[test]
 def test_i64_sub : Bool :=
     5 - 3 == 2
