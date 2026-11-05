@@ -37,6 +37,13 @@ def main : IO Unit := IO.write_stdout (Html.to_string view)
 re-export hub). Attribute names that are Monad keywords take a trailing
 underscore: `class_`, `type_`, `for_`, `open_`, `method_`, `name_`.
 
+## Components
+
+`Html.navbar`/`Html.card` are minimal demos. For real components (forms,
+tables, modals, tabs, navigation, feedback) with theming, use
+[`oak_ui`](../oak_ui/README.md); browse them in
+[`oak_ui_book`](../oak_ui_book/README.md).
+
 ## Lists and identity
 
 `Html.key k` stamps a list child with `data-oak-key="k"`. A list whose

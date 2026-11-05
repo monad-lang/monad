@@ -22,6 +22,7 @@ pub def Ui.css_base : String := r#"
   font-family: var(--oak-font-sans); font-size: var(--oak-font-size);
   line-height: var(--oak-line-height);
 }
+[class*="oak-"], [class*="oak-"]::before, [class*="oak-"]::after,
 .oak-root *, .oak-root *::before, .oak-root *::after,
 [data-theme] *, [data-theme] *::before, [data-theme] *::after { box-sizing: border-box; }
 .oak-root :focus-visible, [data-theme] :focus-visible {
