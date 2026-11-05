@@ -1,7 +1,7 @@
 /// Modifier resolution and class-name building.
 
 use lib::vocab {
-    Ui.Style, Ui.resolve, Ui.class_names, Ui.Tone.slug, Ui.Size.slug,
+    Ui.Style, Ui.Tone, Ui.Tone.all, Ui.resolve, Ui.class_names, Ui.Tone.slug, Ui.Size.slug,
     Ui.danger, Ui.primary, Ui.small, Ui.cls, Ui.gap,
 }
 
@@ -26,3 +26,17 @@ def test_resolve_classes_accumulate : Bool :=
 def test_class_names_skip_empty_mods : Bool :=
     String.beq (Ui.class_names "oak-btn" ["primary", "", "sm"] ["mine"])
         "oak-btn oak-btn--primary oak-btn--sm mine"
+
+#[terminating]
+def tone_slugs (ts : List Ui.Tone) : String :=
+    match ts {
+        List.empty => "",
+        List.cons t rest => String.concat_list [Ui.Tone.slug t, " ", tone_slugs rest],
+    }
+
+/// parsec (reachable through xml_html) has a two-field `success`; while the
+/// codegen keys constructor tags by bare name, an unprefixed nullary
+/// `success` here matched as `info`. Pins the prefixed names.
+#[test]
+def test_every_tone_matches_its_own_arm : Bool :=
+    String.beq (tone_slugs Ui.Tone.all) "neutral primary success warning danger info "

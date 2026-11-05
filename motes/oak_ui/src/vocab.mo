@@ -9,35 +9,41 @@
 // one modifier appears twice, the LAST one wins; a component ignores the
 // modifiers it has no use for.
 //
+// Constructor names carry a prefix (`tone_success`, `opt_loading`): the
+// self-hosted codegen keys constructor tags by BARE name, and a bare name
+// claimed at a different arity elsewhere in the program (parsec's
+// `success rem out`) silently misdirects a match on it
+// (plans/implementations/2026-10-21-constructor-bare-name-arity-collision.md).
+// Call sites use the shorthands (`Ui.success`), which are ordinary defs.
+//
 // `Ui.resolve` folds the list into `Ui.Style`, a `Copy` record, so a
 // component reads `s.tone`/`s.size` freely without re-walking the list.
 
 use std::list {List.intercalate}
 
-pub type Ui.Tone { neutral, primary, success, warning, danger, info }
+pub type Ui.Tone { tone_neutral, tone_primary, tone_success, tone_warning, tone_danger, tone_info }
 
-pub type Ui.Size { sm, md, lg }
+pub type Ui.Size { size_sm, size_md, size_lg }
 
-pub type Ui.Variant { solid, soft, outline, ghost, plain }
+pub type Ui.Variant { variant_solid, variant_soft, variant_outline, variant_ghost, variant_plain }
 
-/// Flex/grid alignment. `end_` because the slug `end` reads as a keyword in
-/// too many host languages; the emitted class says `end`.
-pub type Ui.Align { start, center, end_, stretch, between }
+/// Flex/grid alignment.
+pub type Ui.Align { align_start, align_center, align_end, align_stretch, align_between }
 
 pub type Ui.Opt {
-    tone (t : Ui.Tone),
-    size (s : Ui.Size),
-    variant (v : Ui.Variant),
-    full_width,
-    loading,
-    disabled,
-    required,
-    wrap,
-    gap (n : I64),
-    cols (n : I64),
-    align (a : Ui.Align),
-    justify (a : Ui.Align),
-    classes (names : List String)
+    opt_tone (t : Ui.Tone),
+    opt_size (s : Ui.Size),
+    opt_variant (v : Ui.Variant),
+    opt_full_width,
+    opt_loading,
+    opt_disabled,
+    opt_required,
+    opt_wrap,
+    opt_gap (n : I64),
+    opt_cols (n : I64),
+    opt_align (a : Ui.Align),
+    opt_justify (a : Ui.Align),
+    opt_classes (names : List String)
 }
 
 /// The resolved modifiers. Every field is named at every literal.
@@ -82,67 +88,67 @@ pub instance Copy Ui.Align {
 
 pub def Ui.Tone.slug (t : Ui.Tone) : String :=
     match t {
-        Ui.Tone.neutral => "neutral",
-        Ui.Tone.primary => "primary",
-        Ui.Tone.success => "success",
-        Ui.Tone.warning => "warning",
-        Ui.Tone.danger => "danger",
-        Ui.Tone.info => "info",
+        Ui.Tone.tone_neutral => "neutral",
+        Ui.Tone.tone_primary => "primary",
+        Ui.Tone.tone_success => "success",
+        Ui.Tone.tone_warning => "warning",
+        Ui.Tone.tone_danger => "danger",
+        Ui.Tone.tone_info => "info",
     }
 
 /// Every tone, in declaration order (themes and stories iterate it).
 pub def Ui.Tone.all : List Ui.Tone :=
-    [Ui.Tone.neutral, Ui.Tone.primary, Ui.Tone.success, Ui.Tone.warning, Ui.Tone.danger, Ui.Tone.info]
+    [Ui.Tone.tone_neutral, Ui.Tone.tone_primary, Ui.Tone.tone_success, Ui.Tone.tone_warning, Ui.Tone.tone_danger, Ui.Tone.tone_info]
 
 pub def Ui.Size.slug (s : Ui.Size) : String :=
     match s {
-        Ui.Size.sm => "sm",
-        Ui.Size.md => "md",
-        Ui.Size.lg => "lg",
+        Ui.Size.size_sm => "sm",
+        Ui.Size.size_md => "md",
+        Ui.Size.size_lg => "lg",
     }
 
 pub def Ui.Variant.slug (v : Ui.Variant) : String :=
     match v {
-        Ui.Variant.solid => "solid",
-        Ui.Variant.soft => "soft",
-        Ui.Variant.outline => "outline",
-        Ui.Variant.ghost => "ghost",
-        Ui.Variant.plain => "plain",
+        Ui.Variant.variant_solid => "solid",
+        Ui.Variant.variant_soft => "soft",
+        Ui.Variant.variant_outline => "outline",
+        Ui.Variant.variant_ghost => "ghost",
+        Ui.Variant.variant_plain => "plain",
     }
 
 pub def Ui.Align.slug (a : Ui.Align) : String :=
     match a {
-        Ui.Align.start => "start",
-        Ui.Align.center => "center",
-        Ui.Align.end_ => "end",
-        Ui.Align.stretch => "stretch",
-        Ui.Align.between => "between",
+        Ui.Align.align_start => "start",
+        Ui.Align.align_center => "center",
+        Ui.Align.align_end => "end",
+        Ui.Align.align_stretch => "stretch",
+        Ui.Align.align_between => "between",
     }
 
 // ═══ Resolution ═══
 
 /// The style with no modifiers: neutral, medium, solid, gap 3, one column.
 pub def Ui.Style.default : Ui.Style :=
-    { tone := Ui.Tone.neutral, size := Ui.Size.md, variant := Ui.Variant.solid,
+    { tone := Ui.Tone.tone_neutral, size := Ui.Size.size_md, variant := Ui.Variant.variant_solid,
         full_width := false, loading := false, disabled := false, required := false, wrap := false,
-        gap := 3, cols := 1, align := Ui.Align.stretch, justify := Ui.Align.start,
+        gap := 3, cols := 1, align := Ui.Align.align_stretch, justify := Ui.Align.align_start,
         classes := List.empty }
 
 def apply_opt (s : Ui.Style) (o : Ui.Opt) : Ui.Style :=
     match o {
-        Ui.Opt.tone t => { s with tone := t },
-        Ui.Opt.size z => { s with size := z },
-        Ui.Opt.variant v => { s with variant := v },
-        Ui.Opt.full_width => { s with full_width := true },
-        Ui.Opt.loading => { s with loading := true },
-        Ui.Opt.disabled => { s with disabled := true },
-        Ui.Opt.required => { s with required := true },
-        Ui.Opt.wrap => { s with wrap := true },
-        Ui.Opt.gap n => { s with gap := n },
-        Ui.Opt.cols n => { s with cols := n },
-        Ui.Opt.align a => { s with align := a },
-        Ui.Opt.justify a => { s with justify := a },
-        Ui.Opt.classes names => { s with classes := List.append s.classes names },
+        Ui.Opt.opt_tone t => { s with tone := t },
+        Ui.Opt.opt_size z => { s with size := z },
+        Ui.Opt.opt_variant v => { s with variant := v },
+        Ui.Opt.opt_full_width => { s with full_width := true },
+        Ui.Opt.opt_loading => { s with loading := true },
+        Ui.Opt.opt_disabled => { s with disabled := true },
+        Ui.Opt.opt_required => { s with required := true },
+        Ui.Opt.opt_wrap => { s with wrap := true },
+        Ui.Opt.opt_gap n => { s with gap := n },
+        Ui.Opt.opt_cols n => { s with cols := n },
+        Ui.Opt.opt_align a => { s with align := a },
+        Ui.Opt.opt_justify a => { s with justify := a },
+        Ui.Opt.opt_classes names => { s with classes := List.append s.classes names },
     }
 
 #[terminating]
@@ -180,36 +186,36 @@ pub def Ui.class_names (block : String) (mods : List String) (extra : List Strin
 // ═══ Shorthand modifiers ═══
 
 with Ui {
-    pub def neutral : Ui.Opt := Ui.Opt.tone Ui.Tone.neutral
-    pub def primary : Ui.Opt := Ui.Opt.tone Ui.Tone.primary
-    pub def success : Ui.Opt := Ui.Opt.tone Ui.Tone.success
-    pub def warning : Ui.Opt := Ui.Opt.tone Ui.Tone.warning
-    pub def danger : Ui.Opt := Ui.Opt.tone Ui.Tone.danger
-    pub def info : Ui.Opt := Ui.Opt.tone Ui.Tone.info
+    pub def neutral : Ui.Opt := Ui.Opt.opt_tone Ui.Tone.tone_neutral
+    pub def primary : Ui.Opt := Ui.Opt.opt_tone Ui.Tone.tone_primary
+    pub def success : Ui.Opt := Ui.Opt.opt_tone Ui.Tone.tone_success
+    pub def warning : Ui.Opt := Ui.Opt.opt_tone Ui.Tone.tone_warning
+    pub def danger : Ui.Opt := Ui.Opt.opt_tone Ui.Tone.tone_danger
+    pub def info : Ui.Opt := Ui.Opt.opt_tone Ui.Tone.tone_info
 
-    pub def small : Ui.Opt := Ui.Opt.size Ui.Size.sm
-    pub def medium : Ui.Opt := Ui.Opt.size Ui.Size.md
-    pub def large : Ui.Opt := Ui.Opt.size Ui.Size.lg
+    pub def small : Ui.Opt := Ui.Opt.opt_size Ui.Size.size_sm
+    pub def medium : Ui.Opt := Ui.Opt.opt_size Ui.Size.size_md
+    pub def large : Ui.Opt := Ui.Opt.opt_size Ui.Size.size_lg
 
-    pub def solid : Ui.Opt := Ui.Opt.variant Ui.Variant.solid
-    pub def soft : Ui.Opt := Ui.Opt.variant Ui.Variant.soft
-    pub def outline : Ui.Opt := Ui.Opt.variant Ui.Variant.outline
-    pub def ghost : Ui.Opt := Ui.Opt.variant Ui.Variant.ghost
-    pub def plain : Ui.Opt := Ui.Opt.variant Ui.Variant.plain
+    pub def solid : Ui.Opt := Ui.Opt.opt_variant Ui.Variant.variant_solid
+    pub def soft : Ui.Opt := Ui.Opt.opt_variant Ui.Variant.variant_soft
+    pub def outline : Ui.Opt := Ui.Opt.opt_variant Ui.Variant.variant_outline
+    pub def ghost : Ui.Opt := Ui.Opt.opt_variant Ui.Variant.variant_ghost
+    pub def plain : Ui.Opt := Ui.Opt.opt_variant Ui.Variant.variant_plain
 
-    pub def full : Ui.Opt := Ui.Opt.full_width
-    pub def busy : Ui.Opt := Ui.Opt.loading
-    pub def inactive : Ui.Opt := Ui.Opt.disabled
+    pub def full : Ui.Opt := Ui.Opt.opt_full_width
+    pub def busy : Ui.Opt := Ui.Opt.opt_loading
+    pub def inactive : Ui.Opt := Ui.Opt.opt_disabled
     /// A form field that must be filled (`required` + a marker).
-    pub def required : Ui.Opt := Ui.Opt.required
-    pub def wrapping : Ui.Opt := Ui.Opt.wrap
+    pub def required : Ui.Opt := Ui.Opt.opt_required
+    pub def wrapping : Ui.Opt := Ui.Opt.opt_wrap
 
     /// Spacing step `n` on the theme's scale (0-8).
-    pub def gap (n : I64) : Ui.Opt := Ui.Opt.gap n
+    pub def gap (n : I64) : Ui.Opt := Ui.Opt.opt_gap n
     /// Grid column count (0 = auto-fit by minimum width).
-    pub def cols (n : I64) : Ui.Opt := Ui.Opt.cols n
-    pub def align (a : Ui.Align) : Ui.Opt := Ui.Opt.align a
-    pub def justify (a : Ui.Align) : Ui.Opt := Ui.Opt.justify a
+    pub def cols (n : I64) : Ui.Opt := Ui.Opt.opt_cols n
+    pub def align (a : Ui.Align) : Ui.Opt := Ui.Opt.opt_align a
+    pub def justify (a : Ui.Align) : Ui.Opt := Ui.Opt.opt_justify a
     /// Extra classes on the component's root element.
-    pub def cls (names : List String) : Ui.Opt := Ui.Opt.classes names
+    pub def cls (names : List String) : Ui.Opt := Ui.Opt.opt_classes names
 }

@@ -18,7 +18,7 @@ def flex_extra (s : Ui.Style) : List String :=
 def wrap_mods (s : Ui.Style) : List String :=
     if s.wrap then ["wrap"] else List.empty
 
-def row_base : Ui.Style := { Ui.Style.default with align := Ui.Align.center }
+def row_base : Ui.Style := { Ui.Style.default with align := Ui.Align.align_center }
 
 def grid_mod (cols : I64) : String :=
     if I64.beq cols 0 then "auto"
@@ -27,9 +27,9 @@ def grid_mod (cols : I64) : String :=
 
 def container_mod (z : Ui.Size) : String :=
     match z {
-        Ui.Size.sm => "sm",
-        Ui.Size.md => "",
-        Ui.Size.lg => "lg",
+        Ui.Size.size_sm => "sm",
+        Ui.Size.size_md => "",
+        Ui.Size.size_lg => "lg",
     }
 
 with Ui {

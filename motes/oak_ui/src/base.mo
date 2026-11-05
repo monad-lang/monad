@@ -27,14 +27,14 @@ pub def Ui.tone_class (t : Ui.Tone) : String := String.concat "oak-tone-" (Ui.To
 /// The tone modifier, empty for neutral (the unmarked default).
 pub def Ui.tone_mod (t : Ui.Tone) : String :=
     match t {
-        Ui.Tone.neutral => "",
+        Ui.Tone.tone_neutral => "",
         _ => Ui.Tone.slug t,
     }
 
 /// The size modifier, empty for md (the unmarked default).
 pub def Ui.size_mod (z : Ui.Size) : String :=
     match z {
-        Ui.Size.md => "",
+        Ui.Size.size_md => "",
         _ => Ui.Size.slug z,
     }
 

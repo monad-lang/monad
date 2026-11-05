@@ -15,7 +15,7 @@ use lib::base {Ui.root_attrs, Ui.tone_class, Ui.size_mod}
 
 def variant_mod (v : Ui.Variant) : String :=
     match v {
-        Ui.Variant.solid => "",
+        Ui.Variant.variant_solid => "",
         _ => Ui.Variant.slug v,
     }
 
