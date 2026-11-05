@@ -530,17 +530,21 @@ pub fn induct_constructor(
 }
 
 fn params_to_inductive_type(params: &[Param], typ: Term) -> Term {
-  if params.is_empty() {
-    sort1()
-  } else {
-    pi_typs(
-      params
-        .iter()
-        .map(|p| p.typ.to_owned().replace_hole(sort1))
-        .collect(),
-      typ,
+  // NAMED binders, not `pi_typs`'s anonymous ones: an inductive's own later
+  // parameter type can depend on an earlier parameter, exactly like a def's
+  // (e.g. `Sigma (A : Sort u) (B : A -> Sort v)`). `lower_core.rs` pushes a
+  // `Pi`'s `arg_name` into scope before lowering its codomain, so an
+  // anonymous binder leaves the dependency unresolved (a `Hole`), which made
+  // a generic application of such an inductive untypable in a def body.
+  // Mirrors `pi_named_with_mult`'s use in the def-param desugaring.
+  params.iter().rev().fold(typ, |acc, p| {
+    pi_named_with_mult(
+      p.name.clone(),
+      p.typ.to_owned().replace_hole(sort1),
+      acc,
+      p.mult.clone(),
     )
-  }
+  })
 }
 
 pub fn inductive(

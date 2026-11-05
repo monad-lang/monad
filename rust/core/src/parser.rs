@@ -333,6 +333,51 @@ fn opt_type_annotation<X: Clone>(input: Span<X>) -> Res<Term, X> {
   alt((type_annotation, success(Hole))).parse(input)
 }
 
+/// The result sort of an INDUCTIVE (or class) head: `Sort N`, `Sort u`, or
+/// `Sort (max u v)`.
+///
+/// Differs from `sort_parser` in exactly one way: a BARE symbolic level
+/// (`Sort w`) approximates to the BOTTOM universe (`Sort 0`) rather than 1.
+/// A bare symbolic result sort is the "any universe, chosen at the use site"
+/// spelling (`type Sigma (A : Sort u) (B : A -> Sort v) : Sort w`), and the
+/// host has no level
+/// variables to instantiate it with. Bottom is the permissive choice: every
+/// concrete use is then accepted by cumulativity, which is what lets the
+/// `Exists` alias (`Sigma A P : Prop`) read in the host at all. The
+/// parameterised/`max` form keeps the old level-1 approximation; only the
+/// bare-variable spelling changes.
+///
+/// Deliberately used only at an inductive/class result-sort position, never
+/// by `sort_parser` globally: a symbolic level written in an ordinary TYPE
+/// expression keeps its existing (non-result) approximation.
+fn inductive_sort_parser<X: Clone>(input: Span<X>) -> Res<Term, X> {
+  let (input, _) = tag("Sort")(input)?;
+  let (input, _) = ws1(input)?;
+  let (input, level) = alt((
+    map(digit1, |s: Span<X>| {
+      s.fragment().parse::<u64>().unwrap_or(0)
+    }),
+    map(identifier, |_| 0u64),
+    map(
+      delimited((tag("("), ws0), take_until(")"), (ws0, tag(")"))),
+      |_| 1u64,
+    ),
+  ))
+  .parse(input)?;
+  Ok((input, Term::Sort { level }))
+}
+
+fn opt_inductive_type_annotation<X: Clone>(input: Span<X>) -> Res<Term, X> {
+  alt((
+    preceded(
+      (char(':'), ws0),
+      alt((inductive_sort_parser, type_expression)),
+    ),
+    success(Hole),
+  ))
+  .parse(input)
+}
+
 fn string_literal<X: Clone>(input: Span<X>) -> Res<Term, X> {
   let extra = input.extra().clone();
   let input = input.map_extra(|_| ());
@@ -2575,7 +2620,7 @@ pub(crate) fn inductive_parser(input: Span) -> Res<Inductive> {
   };
   let (input, _) = ws0(input)?;
   let (input, params) = many0(terminated(lam_param, ws0)).parse(input)?;
-  let (input, typ) = opt_type_annotation(input)?;
+  let (input, typ) = opt_inductive_type_annotation(input)?;
   let (input, _) = ws0(input)?;
   let induct_type = if params.is_empty() {
     mpvar(NamePath::from(name.clone()))

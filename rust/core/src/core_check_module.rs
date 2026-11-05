@@ -3429,6 +3429,28 @@ mod test {
     assert_eq!(report.passed(), 2, "report: {report:?}");
   }
 
+  /// A generic alias of a DEPENDENT inductive (`def Exists (A : Type) (P : A
+  /// -> Prop) : Prop := Sigma A P`) used to fail with `type mismatch:
+  /// <unknown> vs. A`: the inductive's kind Pi binders were anonymous, so the
+  /// dependent `A` in `B : A -> Sort v` lowered to a hole. The kind's binders
+  /// are named now (mirroring the def-param fix above), and a bare symbolic
+  /// result sort approximates to the bottom universe, so the alias checks.
+  #[test]
+  fn test_generic_dependent_inductive_alias_checks() {
+    let env = ModuleCheckEnv::new();
+    let report = check_module_source(
+      &env,
+      "type DSigma (A : Sort 1) (B : A -> Sort 1) : Sort w {\n  dpair (fst : A) (snd : B fst)\n}\n\
+       def DExists (A : Type) (P : A -> Prop) : Prop := DSigma A P\n",
+    );
+    assert_eq!(report.defs.len(), 1, "report: {report:?}");
+    assert!(
+      report.defs[0].result.is_ok(),
+      "expected pass, got {:?}",
+      report.defs[0].result
+    );
+  }
+
   #[test]
   fn test_dependent_explicit_pi_telescope_over_gadt_index_checks() {
     // The harder case from the same investigation: a `Vec (len : Nat) A`

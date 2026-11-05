@@ -1,4 +1,5 @@
 use super::*;
+use crate::term::Typed;
 
 #[test]
 fn test_class() {
@@ -823,7 +824,7 @@ fn module_test() {
         npt("Bool"),
         vec![],
         vec![],
-        mpv("Bool"),
+        Term::Sort { level: 1 },
         vec![
           induct_constructor(npt("Bool"), id("true"), mpv("Bool"), vec![]),
           induct_constructor(npt("Bool"), id("false"), mpv("Bool"), vec![])
@@ -1455,4 +1456,75 @@ fn test_type_universe_binder_parses_without_swallowing_a_body() {
   let (_, res) = inductive_parser(s).unwrap();
   assert_eq!(res.params().len(), 0);
   assert_eq!(res.constructors().len(), 1);
+}
+
+/// The codomain of a Pi chain — an inductive's declared result sort once the
+/// parameter binders are peeled.
+fn pi_codomain(t: &Term) -> &Term {
+  match t {
+    Term::Pi { ret, .. } => pi_codomain(ret),
+    other => other,
+  }
+}
+
+/// A BARE symbolic result sort (`Sort w`) is "any universe, chosen at the use
+/// site"; with no level variables the host approximates it to the bottom
+/// universe so every concrete use is accepted by cumulativity. This is what
+/// lets the `Exists` alias (`Sigma A P : Prop`) read in the host.
+#[test]
+fn test_inductive_symbolic_result_sort_approximates_to_bottom() {
+  let s = r#"pub type Sigma2 (A : Sort u) (B : A -> Sort v) : Sort w {
+      dpair (fst : A) (snd : B fst)
+  }"#
+    .into();
+  let (_, res) = inductive_parser(s).unwrap();
+  assert_eq!(pi_codomain(res.typ()), &Term::Sort { level: 0 });
+}
+
+/// The parameterised/`max` spelling keeps the pre-existing level-1
+/// approximation; only the bare-variable result sort moved to the bottom.
+#[test]
+fn test_inductive_parenthesized_result_sort_stays_level_one() {
+  let s = r#"pub type Box2 (A : Sort u) : Sort (max 1 u) { mk (a : A) }"#.into();
+  let (_, res) = inductive_parser(s).unwrap();
+  assert_eq!(pi_codomain(res.typ()), &Term::Sort { level: 1 });
+}
+
+/// A PARAMETERLESS inductive's declared kind is its own type: `type True :
+/// Prop` must not be silently replaced by `Sort 1` (which is what the old
+/// `params_to_inductive_type` did when the param list was empty).
+#[test]
+fn test_nullary_inductive_keeps_its_declared_kind() {
+  let s = r#"pub type True2 : Sort 0 { trivial }"#.into();
+  let (_, res) = inductive_parser(s).unwrap();
+  assert_eq!(pi_codomain(res.typ()), &Term::Sort { level: 0 });
+}
+
+/// An inductive's later parameter type may mention an earlier parameter
+/// (`B : A -> Sort v`). The host lowers a `Pi`'s `arg_name` into scope, so
+/// the binders must be NAMED; anonymous ones left `A` unresolved (a Hole) and
+/// made a generic application of such an inductive untypable in a def body.
+#[test]
+fn test_dependent_inductive_params_get_named_binders() {
+  let s = r#"pub type Sigma3 (A : Sort u) (B : A -> Sort v) : Sort w {
+      dpair (fst : A) (snd : B fst)
+  }"#
+    .into();
+  let (_, res) = inductive_parser(s).unwrap();
+  match res.typ() {
+    Term::Pi { arg_name, ret, .. } => {
+      assert!(
+        arg_name.is_some(),
+        "expected the first param binder to be named"
+      );
+      match ret.as_ref() {
+        Term::Pi { arg_name, .. } => assert!(
+          arg_name.is_some(),
+          "expected the second param binder to be named"
+        ),
+        other => panic!("expected an inner Pi, got {other:?}"),
+      }
+    }
+    other => panic!("expected a Pi kind, got {other:?}"),
+  }
 }
