@@ -47,3 +47,34 @@ pub def ui_first_prevents {Msg : Type} (n : Oak.Node Msg) (e : WebEvent) : Bool 
 /// How many handlers a view registers.
 pub def ui_handler_count {Msg : Type} (n : Oak.Node Msg) : I64 :=
     match Oak.lower n { Oak.Lowered.lowered _ handlers => List.length handlers }
+
+#[terminating]
+def nth_handler {Msg : Type} (hs : List (Pair U32 (WebEvent -> HandlerResult Msg))) (i : I64)
+    : Option (WebEvent -> HandlerResult Msg) :=
+    match hs {
+        List.empty => Option.none,
+        List.cons entry rest =>
+            if I64.beq i 0
+            then (match entry { Pair.pair _ h => Option.some h })
+            else nth_handler rest (i - 1),
+    }
+
+/// The message the `i`-th handler (document order, 0-based) produces for `e`.
+pub def ui_nth_msg {Msg : Type} (n : Oak.Node Msg) (i : I64) (e : WebEvent) : Option Msg :=
+    match Oak.lower n {
+        Oak.Lowered.lowered _ handlers =>
+            match nth_handler handlers i {
+                Option.none => Option.none,
+                Option.some h => match h e { HandlerResult.handler_result m _ _ => m },
+            },
+    }
+
+/// Whether the `i`-th handler asks for `preventDefault` on `e`.
+pub def ui_nth_prevents {Msg : Type} (n : Oak.Node Msg) (i : I64) (e : WebEvent) : Bool :=
+    match Oak.lower n {
+        Oak.Lowered.lowered _ handlers =>
+            match nth_handler handlers i {
+                Option.none => false,
+                Option.some h => match h e { HandlerResult.handler_result _ p _ => p },
+            },
+    }

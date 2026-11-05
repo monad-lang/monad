@@ -12,6 +12,7 @@
 use lib::theme {Ui.Theme, Ui.Theme.css_vars, Ui.Theme.css_auto}
 use lib::css_controls {Ui.css_tones, Ui.css_button, Ui.css_form}
 use lib::css_display {Ui.css_feedback, Ui.css_data}
+use lib::css_overlay {Ui.css_nav, Ui.css_disclosure, Ui.css_overlay}
 
 // ═══ Base ═══
 
@@ -162,8 +163,9 @@ pub def Ui.css_typography : String := r#"
 
 /// Every section, in cascade order. Grows with each component family.
 pub def Ui.css_all : String :=
-    String.concat_list [Ui.css_base, Ui.css_tones, Ui.css_layout, Ui.css_typography, Ui.css_button, Ui.css_form,
-        Ui.css_feedback, Ui.css_data]
+    String.concat_list
+        [Ui.css_base, Ui.css_tones, Ui.css_layout, Ui.css_typography, Ui.css_button, Ui.css_form,
+            Ui.css_feedback, Ui.css_data, Ui.css_nav, Ui.css_disclosure, Ui.css_overlay]
 
 /// Variables for one theme on `:root`, then the whole sheet.
 pub def Ui.stylesheet (t : Ui.Theme) : String :=

@@ -61,3 +61,17 @@ pub use lib::data {
     Ui.Column.numeric, Ui.striped, Ui.hoverable, Ui.sticky_header,
     Ui.card, Ui.description_list, Ui.list_group, Ui.avatar, Ui.stat, Ui.table,
 }
+
+pub use lib::css_overlay {Ui.css_nav, Ui.css_disclosure, Ui.css_overlay}
+
+pub use lib::nav {
+    Ui.Tab, Ui.NavItem, Ui.NavGroup, Ui.tab, Ui.nav_item, Ui.nav_group,
+    Ui.navbar, Ui.nav_link, Ui.tabs, Ui.breadcrumbs, Ui.pagination, Ui.sidebar_nav, Ui.steps,
+}
+
+pub use lib::disclosure {Ui.Section, Ui.section, Ui.accordion, Ui.collapsible, Ui.details}
+
+pub use lib::overlay {
+    Ui.MenuItem, Ui.menu_item, Ui.menu_danger, Ui.menu_divider,
+    Ui.modal, Ui.drawer, Ui.dropdown_menu, Ui.popover, Ui.tooltip,
+}
