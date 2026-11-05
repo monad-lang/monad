@@ -23,7 +23,7 @@ use shuttle::message_types {Content}
 use shuttle::tool {ToolSpec, ToolImpl}
 use shuttle::tools::file_tools {ReadTool.impl, WriteTool.impl, EditTool.impl}
 use shuttle::tools::search_tools {GrepTool.impl, GlobTool.impl}
-use shuttle::tools::shell_tools {ShellTool.impl}
+use weaver::shell_tool {WeaverShell.impl, WeaverShell.never_stop, WeaverShell.fg_path}
 use clap::parse {Cli.run}
 // Wildcards: the derive's defs (decode_weavercli) are macro-generated,
 // and a named import of one does not resolve in the self-hosted loader.
@@ -85,7 +85,7 @@ def weaver_registry (log : Option Logger) (check_cache : Ref ModuleInfoCache) (e
                 (ToolRegistry.register ReadProcessTool.impl
                     (ToolRegistry.register (KillProcessTool.impl log)
                         (ToolRegistry.register ListProcessesTool.impl
-                            (ToolRegistry.register ShellTool.impl
+                            (ToolRegistry.register (WeaverShell.impl log WeaverShell.never_stop (WeaverShell.fg_path Option.none))
                                 (ToolRegistry.register EditTool.impl
                                     (ToolRegistry.register WriteTool.impl
                                         (ToolRegistry.register GlobTool.impl

@@ -24,7 +24,7 @@ use log::logger {Logger}
 def tool_err (id : String) (msg : String) : Content := Content.tool_result id msg true
 def tool_ok (id : String) (msg : String) : Content := Content.tool_result id msg false
 
-def str_param (name : String) (desc : String) : Pair String Json :=
+pub def str_param (name : String) (desc : String) : Pair String Json :=
     Pair.pair name (Json.make_object (Map.insert "type" (Json.make_str "string")
         (Map.insert "description" (Json.make_str desc) BTreeMap.empty)))
 
@@ -132,11 +132,12 @@ def str_int (r : Result String String) : Option I64 :=
         Result.err _ => Option.none,
     }
 
-/// `wait_seconds` as a number or a numeric string, clamped to 0..60.
-def wait_of (j : Json) : I64 :=
+/// Integer argument `key`, as a number or a numeric string, clamped to
+/// 0..`max`; `fallback` when it is absent or unreadable.
+pub def int_arg (key : String) (fallback : I64) (max : I64) (j : Json) : I64 :=
     let got : Option I64 := match Json.get_object j {
         Result.err _ => Option.none,
-        Result.ok o => match Json.object_get "wait_seconds" o {
+        Result.ok o => match Json.object_get key o {
             Option.none => Option.none,
             Option.some w => match num_int (Json.get_num w) {
                 Option.some i => Option.some i,
@@ -145,9 +146,23 @@ def wait_of (j : Json) : I64 :=
         },
     } in
     match got {
-        Option.none => 0,
-        Option.some n => if n < 0 then 0 else if n > max_wait_seconds then max_wait_seconds else n,
+        Option.none => fallback,
+        Option.some n => if n < 0 then 0 else if n > max then max else n,
     }
+
+/// `wait_seconds`, clamped to 0..60.
+def wait_of (j : Json) : I64 := int_arg "wait_seconds" 0 max_wait_seconds j
+
+/// A JSON-Schema integer property.
+pub def int_param (name : String) (desc : String) : Pair String Json :=
+    Pair.pair name (Json.make_object (Map.insert "type" (Json.make_str "integer")
+        (Map.insert "description" (Json.make_str desc) BTreeMap.empty)))
+
+/// `{"type":"object", ...}` with `required` naming only some properties.
+pub def object_schema (props : List (Pair String Json)) (required : List String) : Json :=
+    Json.make_object (Map.insert "type" (Json.make_str "object")
+        (Map.insert "properties" (Json.make_object (params_to_map props BTreeMap.empty))
+            (Map.insert "required" (Json.make_array (List.map Json.make_str required)) BTreeMap.empty)))
 
 def still_running (found : Option ProcEntry) : Bool :=
     match found {
