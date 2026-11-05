@@ -78,12 +78,12 @@ use std::map {Map}
 /// proxies. The checker cache and eval buffer are per-session Refs
 /// (created in `run_plan`), so one session's checks warm each other and
 /// `monad_eval` definitions accumulate.
-def weaver_registry (check_cache : Ref ModuleInfoCache) (eval_buf : Ref (List String)) (root : Option String) : ToolRegistry :=
+def weaver_registry (log : Option Logger) (check_cache : Ref ModuleInfoCache) (eval_buf : Ref (List String)) (root : Option String) : ToolRegistry :=
     ToolRegistry.register (MonadEval.tool eval_buf check_cache root)
         (ToolRegistry.register (MonadCheck.tool check_cache root)
-            (ToolRegistry.register StartProcessTool.impl
+            (ToolRegistry.register (StartProcessTool.impl log)
                 (ToolRegistry.register ReadProcessTool.impl
-                    (ToolRegistry.register KillProcessTool.impl
+                    (ToolRegistry.register (KillProcessTool.impl log)
                         (ToolRegistry.register ListProcessesTool.impl
                             (ToolRegistry.register ShellTool.impl
                                 (ToolRegistry.register EditTool.impl
@@ -476,7 +476,7 @@ def run_plan (setup : LogSetup) (colors : Bool) (p : Plan) (s : Settings) : IO I
     let empty_buf : List String := List.empty;
     let eval_buf <- Ref.new empty_buf;
     let place <- Place.probe;
-    let r <- mount_all client_info p.mcps s (weaver_registry cache eval_buf (cwd_text place)) [];
+    let r <- mount_all client_info p.mcps s (weaver_registry setup.log cache eval_buf (cwd_text place)) [];
     mounted_plan setup colors p s place r
 }
 

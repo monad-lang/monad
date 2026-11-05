@@ -53,10 +53,10 @@ use weaver::logs {Logs.info, Logs.debug, Logs.warn, Logs.error, Logs.log_rss, Lo
 use weaver::title {Title.generate, Title.needed}
 use weaver::subagent {Subagent.task_tool, Subagent.drain}
 use weaver::todo {TodoItem, TodoTool.impl, Todo.read, Todo.same}
-use weaver::procs {Procs.tail, Procs.kill}
+use weaver::procs {Procs.tail, Procs.kill, Procs.log_kill, Procs.log_exit}
 use weaver::format {format_elapsed}
 use std::io {IO.current_time_nano}
-use weaver::tasks {TaskEntry, TaskKind, Tasks.list, Tasks.line, Tasks.running_count, Tasks.running_ids, Tasks.exit_notes}
+use weaver::tasks {TaskEntry, TaskKind, Tasks.list, Tasks.line, Tasks.running_count, Tasks.running_ids, Tasks.exit_notes, Tasks.exited}
 use weaver::store {
     Transcript, TranscriptPage, StoreState,
     Transcript.empty, Transcript.with_page, Transcript.next_block, Transcript.append, Transcript.drop_page,
@@ -489,9 +489,11 @@ pub def TuiApp.subscriptions (m : TuiModel) : Subs WeaverMsg :=
     // Background tasks: the footer count and exit notes, once a second.
     // The notes go to the turn's inbox here (the update is pure).
     let seen : List String := m.tasks_seen in
+    let log : Option Logger := m.log in
     let tasks : Subs WeaverMsg := Subs.poll 10 (fn (_ : Unit) => do {
         let ts <- Tasks.list store;
         let _ <- Inbox.post store (Tasks.exit_notes seen ts);
+        let _ <- log_exits log (Tasks.exited seen ts);
         IO.pure (WeaverMsg.tasks_polled ts)
     }) in
     if m.turn_pending
@@ -2057,11 +2059,11 @@ def open_monitor (m : TuiModel) : Pair TuiModel (Cmd WeaverMsg) :=
     let gen : I64 := m.turn_gen in
     let pending : Bool := m.turn_pending in
     let cleared : TuiModel := with_streak_reset (fn (mm : TuiModel) => { mm with prompt := Prompt.submitted mm.prompt "/tasks" }) m in
-    Pair.pair cleared (Cmd.perform (fn (_ : Unit) => monitor_run st gen pending))
+    Pair.pair cleared (Cmd.perform (fn (_ : Unit) => monitor_run m.log st gen pending))
 
-def monitor_run (st : WeaverState) (gen : I64) (pending : Bool) : IO WeaverMsg := do {
+def monitor_run (log : Option Logger) (st : WeaverState) (gen : I64) (pending : Bool) : IO WeaverMsg := do {
     Overlay.monitor_open st.store;
-    let notes <- monitor_loop st gen pending (MonitorView.mon_list 0) List.empty;
+    let notes <- monitor_loop log st gen pending (MonitorView.mon_list 0) List.empty;
     Overlay.monitor_close st.store;
     clear_terminal;
     IO.pure (WeaverMsg.monitor_closed notes)
@@ -2078,21 +2080,21 @@ pub type MonitorView {
 /// One view per call, one self-call: a monitor left open polls nothing
 /// and nests nothing.
 #[partial]
-def monitor_loop (st : WeaverState) (gen : I64) (pending : Bool) (view : MonitorView) (notes : List String) : IO (List String) :=
+def monitor_loop (log : Option Logger) (st : WeaverState) (gen : I64) (pending : Bool) (view : MonitorView) (notes : List String) : IO (List String) :=
     match view {
         MonitorView.mon_closed => IO.pure notes,
         _ => do {
-            let step <- monitor_step st gen pending view;
+            let step <- monitor_step log st gen pending view;
             match step {
-                Pair.pair next more => monitor_loop st gen pending next (List.append notes more),
+                Pair.pair next more => monitor_loop log st gen pending next (List.append notes more),
             }
         },
     }
 
-def monitor_step (st : WeaverState) (gen : I64) (pending : Bool) (view : MonitorView) : IO (Pair MonitorView (List String)) :=
+def monitor_step (log : Option Logger) (st : WeaverState) (gen : I64) (pending : Bool) (view : MonitorView) : IO (Pair MonitorView (List String)) :=
     match view {
         MonitorView.mon_list selected => monitor_list st selected,
-        MonitorView.mon_detail id => monitor_detail st gen pending id,
+        MonitorView.mon_detail id => monitor_detail log st gen pending id,
         MonitorView.mon_closed => IO.pure (Pair.pair MonitorView.mon_closed List.empty),
     }
 
@@ -2148,15 +2150,15 @@ def task_by_id (id : String) (ts : List TaskEntry) : Option TaskEntry :=
 
 /// One task: its facts and output (a process's log tail, a subagent's
 /// answer), with Kill/Stop while it runs, Refresh, and Back.
-def monitor_detail (st : WeaverState) (gen : I64) (pending : Bool) (id : String) : IO (Pair MonitorView (List String)) := do {
+def monitor_detail (log : Option Logger) (st : WeaverState) (gen : I64) (pending : Bool) (id : String) : IO (Pair MonitorView (List String)) := do {
     let ts <- Tasks.list st.store;
     match task_by_id id ts {
         Option.none => IO.pure (Pair.pair (MonitorView.mon_list 0) List.empty),
-        Option.some t => monitor_detail_of st gen pending t,
+        Option.some t => monitor_detail_of log st gen pending t,
     }
 }
 
-def monitor_detail_of (st : WeaverState) (gen : I64) (pending : Bool) (t : TaskEntry) : IO (Pair MonitorView (List String)) := do {
+def monitor_detail_of (log : Option Logger) (st : WeaverState) (gen : I64) (pending : Bool) (t : TaskEntry) : IO (Pair MonitorView (List String)) := do {
     let now <- IO.current_time_nano;
     let output <- task_output t;
     let body : List String := List.append (TuiApp.task_facts now t) (List.cons "" output);
@@ -2164,7 +2166,7 @@ def monitor_detail_of (st : WeaverState) (gen : I64) (pending : Bool) (t : TaskE
     let pr <- Dialog.modal (paint_dialog st.colors) d;
     let step : DialogStep := match pr { Pair.pair _ s => s };
     match TuiApp.detail_action t step {
-        DetailAction.detail_kill => task_kill st gen pending t,
+        DetailAction.detail_kill => task_kill log st gen pending t,
         DetailAction.detail_refresh => IO.pure (Pair.pair (MonitorView.mon_detail t.id) List.empty),
         DetailAction.detail_back => IO.pure (Pair.pair (MonitorView.mon_list 0) List.empty),
     }
@@ -2215,10 +2217,11 @@ pub def TuiApp.detail_action (t : TaskEntry) (step : DialogStep) : DetailAction 
     }
 
 /// Kill a process (its whole group), or ask the running turn to stop.
-def task_kill (st : WeaverState) (gen : I64) (pending : Bool) (t : TaskEntry) : IO (Pair MonitorView (List String)) :=
+def task_kill (log : Option Logger) (st : WeaverState) (gen : I64) (pending : Bool) (t : TaskEntry) : IO (Pair MonitorView (List String)) :=
     match t.proc {
         Option.some e => do {
             let r <- Procs.kill e;
+            let _ <- Procs.log_kill log "user" e r;
             let note : String := match r {
                 Result.ok msg => msg,
                 Result.err msg => String.concat "kill " (String.concat t.id (String.concat ": " msg)),
@@ -2251,6 +2254,16 @@ def tasks_step (m : TuiModel) (ts : List TaskEntry) : Pair TuiModel (Cmd WeaverM
     if Bool.not (List.is_empty notes) then note_block draw_next m1 (List.map TLine.plain notes)
     else if running == m.tasks_running then Pair.pair m1 Cmd.none
     else Pair.pair m1 draw_next
+
+#[partial]
+def log_exits (log : Option Logger) (ts : List TaskEntry) : IO Unit :=
+    match ts {
+        List.empty => IO.pure unit,
+        List.cons t rest => do {
+            let _ <- Procs.log_exit log t.id t.status;
+            log_exits log rest
+        },
+    }
 
 /// Draw the next frame (a dispatched message makes the batch non-empty;
 /// `stop_sent` folds to nothing). A plain diff, unlike `repaint_cmd`.

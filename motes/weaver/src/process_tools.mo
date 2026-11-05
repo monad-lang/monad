@@ -16,9 +16,10 @@ use std::io {IO.current_time_nano}
 use std::path {Path, Path.to_string}
 use init::transformers {ResultT}
 use weaver::procs {
-    ProcEntry, ProcStatus, ProcStatus.text, Procs.start, Procs.list, Procs.entry, Procs.entry_at, Procs.root, Procs.tail, Procs.kill,
+    ProcEntry, ProcStatus, ProcStatus.text, Procs.start, Procs.list, Procs.entry, Procs.entry_at, Procs.root, Procs.tail, Procs.kill, Procs.log_start, Procs.log_kill,
 }
 use weaver::format {format_elapsed}
+use log::logger {Logger}
 
 def tool_err (id : String) (msg : String) : Content := Content.tool_result id msg true
 def tool_ok (id : String) (msg : String) : Content := Content.tool_result id msg false
@@ -51,10 +52,10 @@ def start_params : List (Pair String Json) :=
 pub def StartProcessTool.spec : ToolSpec :=
     { name := "start_process", description := "Start a background shell command; returns its task id and log path.", schema := params_schema start_params }
 
-pub def StartProcessTool.impl : ToolImpl :=
-    { spec := StartProcessTool.spec, cap := Capability.exec, run := start_run }
+pub def StartProcessTool.impl (log : Option Logger) : ToolImpl :=
+    { spec := StartProcessTool.spec, cap := Capability.exec, run := start_run log }
 
-def start_run (id : String) (j : Json) : ResultT String IO Content :=
+def start_run (log : Option Logger) (id : String) (j : Json) : ResultT String IO Content :=
     match StartProcessArgs.deserialize_json j {
         Result.err e => ResultT.mk (return (Result.ok (tool_err id e))),
         Result.ok args =>
@@ -62,12 +63,14 @@ def start_run (id : String) (j : Json) : ResultT String IO Content :=
                 let r <- Procs.start args.command args.cwd;
                 match r {
                     Result.err e => IO.pure (Result.ok (tool_err id (String.concat "start_process: " e))),
-                    Result.ok e2 =>
+                    Result.ok e2 => do {
+                        let _ <- Procs.log_start log e2;
                         let text : String := String.concat "started " (String.concat e2.id
                             (String.concat " (pid " (String.concat (I64.to_string e2.pid)
                                 (String.concat ")\nlog: " (String.concat (Path.to_string e2.log)
-                                    "\nUse read_process to poll; kill_process to stop."))))) in
-                        IO.pure (Result.ok (tool_ok id text)),
+                                    "\nUse read_process to poll; kill_process to stop.")))));
+                        IO.pure (Result.ok (tool_ok id text))
+                    },
                 }
             }),
     }
@@ -192,34 +195,35 @@ def kill_params : List (Pair String Json) :=
 pub def KillProcessTool.spec : ToolSpec :=
     { name := "kill_process", description := "Stop a background task (SIGTERM, then SIGKILL).", schema := params_schema kill_params }
 
-pub def KillProcessTool.impl : ToolImpl :=
-    { spec := KillProcessTool.spec, cap := Capability.exec, run := kill_run }
+pub def KillProcessTool.impl (log : Option Logger) : ToolImpl :=
+    { spec := KillProcessTool.spec, cap := Capability.exec, run := kill_run log }
 
-def kill_entry (id : String) (e : ProcEntry) : IO Content := do {
+def kill_entry (log : Option Logger) (id : String) (e : ProcEntry) : IO Content := do {
     let r <- Procs.kill e;
+    let _ <- Procs.log_kill log "model" e r;
     match r {
         Result.ok msg => IO.pure (tool_ok id msg),
         Result.err msg => IO.pure (tool_err id (String.concat "kill_process: " msg)),
     }
 }
 
-def kill_found (id : String) (task : String) (found : Option ProcEntry) : IO Content :=
+def kill_found (log : Option Logger) (id : String) (task : String) (found : Option ProcEntry) : IO Content :=
     match found {
         Option.none => IO.pure (tool_err id (String.concat "unknown task: " task)),
-        Option.some e => kill_entry id e,
+        Option.some e => kill_entry log id e,
     }
 
-def kill_lookup (id : String) (task : String) : IO Content := do {
+def kill_lookup (log : Option Logger) (id : String) (task : String) : IO Content := do {
     let found <- Procs.entry task;
-    kill_found id task found
+    kill_found log id task found
 }
 
-def kill_run (id : String) (j : Json) : ResultT String IO Content :=
+def kill_run (log : Option Logger) (id : String) (j : Json) : ResultT String IO Content :=
     match KillProcessArgs.deserialize_json j {
         Result.err e => ResultT.mk (return (Result.ok (tool_err id e))),
         Result.ok args =>
             ResultT.mk (do {
-                let c <- kill_lookup id args.id;
+                let c <- kill_lookup log id args.id;
                 IO.pure (Result.ok c)
             }),
     }

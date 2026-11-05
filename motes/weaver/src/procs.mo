@@ -17,6 +17,8 @@ use json::json {
 use std::map {Map, BTreeMap}
 use parsec::number {parse_i64}
 use weaver::store {Store.sessions_root, Store.child}
+use weaver::logs {Logs.info, Logs.sanitize}
+use log::logger {Logger}
 
 pub type ProcStatus {
     running,
@@ -429,3 +431,17 @@ def shutdown_go (xs : List ProcEntry) : IO Unit :=
         List.empty => IO.pure unit,
         List.cons e rest => shutdown_step e rest,
     }
+
+// ── debug-log events ────────────────────────────────────────────────────
+
+pub def Procs.log_start (log : Option Logger) (e : ProcEntry) : IO Unit :=
+    Logs.info log (String.concat "ev=proc_start id=" (String.concat e.id (String.concat " child=" (String.concat (I64.to_string e.pid)
+        (String.concat " cmd=" (Logs.sanitize e.command))))))
+
+/// `by` is who asked: `model` (kill_process) or `user` (the monitor).
+pub def Procs.log_kill (log : Option Logger) (by : String) (e : ProcEntry) (r : Result String String) : IO Unit :=
+    Logs.info log (String.concat "ev=proc_kill id=" (String.concat e.id (String.concat " by=" (String.concat by
+        (String.concat " ok=" (match r { Result.ok _ => "true", Result.err _ => "false" }))))))
+
+pub def Procs.log_exit (log : Option Logger) (id : String) (status : String) : IO Unit :=
+    Logs.info log (String.concat "ev=proc_exit id=" (String.concat id (String.concat " status=" (Logs.sanitize status))))

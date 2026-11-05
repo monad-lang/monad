@@ -4,8 +4,10 @@
 /// removes what it creates.
 use weaver::procs {
     ProcEntry, ProcStatus, Procs.detached_script, Procs.start_at,
-    Procs.scan_at, Procs.tail, Procs.kill, Procs.entry_at,
+    Procs.scan_at, Procs.tail, Procs.kill, Procs.entry_at, Procs.log_start, Procs.log_kill, Procs.log_exit,
 }
+use log::logger {Logger}
+use log::level {LogLevel}
 use weaver::process_tools {read_at, wait_of}
 use shuttle::message_types {Content}
 use json::json {Json, Json.parse}
@@ -187,3 +189,28 @@ def test_wait_seconds_parses_and_clamps : Bool :=
         && wait_in "{\"id\": \"p-1\", \"wait_seconds\": \"5\"}" == 5
         && wait_in "{\"id\": \"p-1\"}" == 0
         && wait_in "{\"id\": \"p-1\", \"wait_seconds\": -3}" == 0
+
+// ── debug-log events ────────────────────────────────────────────────────
+
+def logged_entry : ProcEntry :=
+    let e : ProcEntry := { id := "p-7", pid := 4242, command := "make\ttest", cwd := "", started_ns := 0,
+        status := ProcStatus.running, log := Path.path "/tmp/x", dir := Path.path "/tmp" } in
+    e
+
+#[test]
+def test_proc_events_reach_the_log : IO Bool := do {
+    let root : String := temp_root "events";
+    let _ <- cleanup root;
+    let _ <- exec_cmd "mkdir" ["-p", root];
+    let path : String := String.concat root "/run.log";
+    let log : Option Logger := Option.some (Logger.file LogLevel.info path);
+    let _ <- Procs.log_start log logged_entry;
+    let _ <- Procs.log_kill log "user" logged_entry (Result.ok "killed p-7");
+    let _ <- Procs.log_exit log "p-7" "exited (0)";
+    let r <- IO.read_file (Path.path path);
+    let _ <- cleanup root;
+    let text : String := match r { Result.ok t => t, Result.err _ => "" };
+    IO.pure (String.contains text "ev=proc_start id=p-7 child=4242 cmd=make"
+        && String.contains text "ev=proc_kill id=p-7 by=user ok=true"
+        && String.contains text "ev=proc_exit id=p-7 status=exited (0)")
+}

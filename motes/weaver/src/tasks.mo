@@ -179,9 +179,13 @@ pub def Tasks.running_ids (ts : List TaskEntry) : List String :=
 pub def Tasks.exit_notes (before : List String) (now : List TaskEntry) : List String :=
     List.map (fn (t : TaskEntry) => String.concat "[background task " (String.concat t.id
         (String.concat " " (String.concat t.status (String.concat ": " (String.concat t.label "]"))))))
-        (List.filter (fn (t : TaskEntry) =>
-            Bool.and (Bool.not t.running)
-                (Bool.and (is_proc t) (List.any (fn (id : String) => String.beq id t.id) before))) now)
+        (Tasks.exited before now)
+
+/// The background processes that were running at the last poll and are not now.
+pub def Tasks.exited (before : List String) (now : List TaskEntry) : List TaskEntry :=
+    List.filter (fn (t : TaskEntry) =>
+        Bool.and (Bool.not t.running)
+            (Bool.and (is_proc t) (List.any (fn (id : String) => String.beq id t.id) before))) now
 
 def is_proc (t : TaskEntry) : Bool :=
     match t.kind { TaskKind.task_proc => true, TaskKind.task_agent => false }
