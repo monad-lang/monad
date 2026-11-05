@@ -15,4 +15,9 @@
 
 pub use lib::equiv {*}
 pub use lib::paths {*}
-pub use lib::dependent {*}pub use lib::contract {*}
+pub use lib::dependent {*}
+pub use lib::contract {*}
+pub use lib::bool {*}
+pub use lib::nat {*}
+pub use lib::list {*}
+pub use lib::vec {*}
