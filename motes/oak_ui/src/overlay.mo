@@ -18,7 +18,7 @@ use oak::typed {Oak.Attr, Oak.Node}
 use oak::elements {
     Html.div, Html.span, Html.h2, Html.button, Html.header, Html.footer, Html.type_, Html.id_,
     Html.aria, Html.role, Html.class_, Html.class_list, Html.text, Html.fragment, Html.tabindex,
-    Html.autofocus,
+    Html.autofocus, Html.attrs_when,
 }
 use oak::events {Html.on, Html.on_click}
 use lib::vocab {Ui.Opt, Ui.Style, Ui.Size, Ui.Align, Ui.resolve, Ui.ghost, Ui.small}
@@ -91,13 +91,16 @@ def menu_item_nodes {Msg : Type} (items : List (Ui.MenuItem Msg)) : List (Oak.No
 def floating {Msg : Type} (block : String) (id : String) (label : String) (is_open : Bool) (on_toggle : Msg)
     (popup_role : String) (s : Ui.Style) (content : List (Oak.Node Msg)) : Oak.Node Msg :=
     let panel_id : String := String.concat id "-panel" in
+    // The trigger names the panel in `aria-controls` only while the panel
+    // exists (it is not rendered when closed).
     Html.div (Ui.root_attrs block [if is_open then "open" else ""] List.empty s [Html.id_ id])
         (List.cons
             (Html.button
-                [Html.class_ ["oak-btn", "oak-btn--outline", "oak-tone-neutral", String.concat block "__trigger"],
-                    Html.type_ "button", Html.aria "haspopup" (if String.beq popup_role "menu" then "menu" else "dialog"),
-                    Html.aria "expanded" (if is_open then "true" else "false"), Html.aria "controls" panel_id,
-                    Html.on_click on_toggle]
+                (List.append
+                    [Html.class_ ["oak-btn", "oak-btn--outline", "oak-tone-neutral", String.concat block "__trigger"],
+                        Html.type_ "button", Html.aria "haspopup" (if String.beq popup_role "menu" then "menu" else "dialog"),
+                        Html.aria "expanded" (if is_open then "true" else "false")]
+                    (List.append (Html.attrs_when is_open [Html.aria "controls" panel_id]) [Html.on_click on_toggle]))
                 [Html.text label, Ui.icon "chevron-down"])
             (if is_open
                 then [Html.div

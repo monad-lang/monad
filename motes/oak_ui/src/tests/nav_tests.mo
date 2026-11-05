@@ -35,7 +35,7 @@ def test_tabs_markup_only_active_panel : Bool :=
     let t : Oak.Node NavTestMsg := tabs_at "b" in
     ui_has t "<div class=\"oak-tabs__list\" role=\"tablist\">"
         && ui_has t "<button class=\"oak-tabs__tab oak-tabs__tab--active\" type=\"button\" role=\"tab\" id=\"t-tab-b\" aria-selected=\"true\" aria-controls=\"t-panel-b\" tabindex=\"0\">Beta</button>"
-        && ui_has t "aria-selected=\"false\" aria-controls=\"t-panel-a\" tabindex=\"-1\">Alpha"
+        && ui_has t "id=\"t-tab-a\" aria-selected=\"false\" tabindex=\"-1\">Alpha"
         && ui_has t "<div data-oak-key=\"b\" class=\"oak-tabs__panel\" role=\"tabpanel\" id=\"t-panel-b\" aria-labelledby=\"t-tab-b\" tabindex=\"0\">B body</div>"
         && Bool.not (ui_has t "A body")
 

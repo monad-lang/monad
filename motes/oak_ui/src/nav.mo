@@ -11,7 +11,7 @@ use oak::typed {Oak.Attr, Oak.Node}
 use oak::elements {
     Html.div, Html.span, Html.nav, Html.header, Html.ol, Html.li, Html.a, Html.button, Html.p,
     Html.href, Html.type_, Html.id_, Html.attr, Html.aria, Html.role, Html.class_, Html.class_list,
-    Html.text, Html.key, Html.tabindex, Html.disabled,
+    Html.text, Html.key, Html.tabindex, Html.disabled, Html.attrs_when,
 }
 use oak::events {Html.on, Html.on_click}
 use lib::vocab {Ui.Opt, Ui.Style, Ui.resolve, Ui.ghost, Ui.cls}
@@ -111,13 +111,15 @@ def tab_button {Msg : Type} (id : String) (active : String) (on_select : String 
     match t {
         Ui.Tab.ui_tab k label _ =>
             let is_active : Bool := String.beq k active in
+            // Only the active panel is rendered, so only the active tab may
+            // point at one (`aria-controls` must name an existing id).
             Html.button
-                [Html.class_list [Pair.pair "oak-tabs__tab" true, Pair.pair "oak-tabs__tab--active" is_active],
-                    Html.type_ "button", Html.role "tab", Html.id_ (tab_id id k),
-                    Html.aria "selected" (if is_active then "true" else "false"),
-                    Html.aria "controls" (panel_id id k),
-                    Html.tabindex (if is_active then 0 else -1),
-                    Html.on_click (on_select k)]
+                (List.append
+                    [Html.class_list [Pair.pair "oak-tabs__tab" true, Pair.pair "oak-tabs__tab--active" is_active],
+                        Html.type_ "button", Html.role "tab", Html.id_ (tab_id id k),
+                        Html.aria "selected" (if is_active then "true" else "false")]
+                    (List.append (Html.attrs_when is_active [Html.aria "controls" (panel_id id k)])
+                        [Html.tabindex (if is_active then 0 else -1), Html.on_click (on_select k)]))
                 [Html.text label]
     }
 

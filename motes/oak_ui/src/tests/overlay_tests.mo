@@ -85,7 +85,8 @@ def test_dropdown_menu : Bool :=
     let opened : Oak.Node OverlayTestMsg :=
         Ui.dropdown_menu List.empty "act" "Actions" true (OverlayTestMsg.toggled "menu")
             [Ui.menu_item "Rename" OverlayTestMsg.renamed, Ui.menu_divider, Ui.menu_danger "Delete" OverlayTestMsg.deleted] in
-    ui_has closed "aria-haspopup=\"menu\" aria-expanded=\"false\" aria-controls=\"act-panel\""
+    ui_has closed "aria-haspopup=\"menu\" aria-expanded=\"false\">"
+        && ui_has opened "aria-haspopup=\"menu\" aria-expanded=\"true\" aria-controls=\"act-panel\">"
         && Bool.not (ui_has closed "role=\"menu\"")
         && ui_has opened "<div class=\"oak-menu__panel\" id=\"act-panel\" role=\"menu\" aria-label=\"Actions\">"
         && ui_has opened "<div class=\"oak-menu__divider\" role=\"separator\"></div>"
