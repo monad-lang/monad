@@ -9,7 +9,7 @@
 // `WEAVER_PTY=1` enables the suite; unset skips it green, so the ordinary
 // `monad test` sweeps stay clean.
 use pty::spawn {SpawnConfig, Pty, Output}
-use pty::check {Check.enabled, Check.skip, Check.bin_path, Check.value_set}
+use pty::check {Check.enabled, Check.skip, Check.bin_path, Check.value_set, Check.report}
 use pty::grid {Grid}
 use std::concurrent::combine {sleepIO}
 use std::io {IO.println, IO.get_env, IO.current_time, IO.current_time_nano, IO.read_file}
@@ -348,4 +348,16 @@ pub def send_paste (m : Pty) (s : String) : IO Unit := do {
     Pty.send_chunked m s 1024 50;
     Pty.send_text m "\u{1b}[201~";
     return unit
+}
+
+/// `Check.report`, printing the screen when the check fails: a flaky
+/// check is diagnosable from the CI log alone.
+pub def report_screen (m : Pty) (name : String) (ok : Bool) : IO Bool := do {
+    let r <- Check.report name ok;
+    if ok then IO.pure r
+    else do {
+        let o <- Pty.output m;
+        IO.println (String.concat "---- screen ----\n" (String.concat (Output.text o) "\n----"));
+        IO.pure r
+    }
 }

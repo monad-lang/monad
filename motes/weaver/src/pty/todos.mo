@@ -2,7 +2,7 @@
 // above the status row, and Ctrl+T folds it to its summary line.
 use pty::spawn {Pty, Output}
 use pty::check {Check.report}
-use weaver::pty_support {run_gated, with_root, spawn_args}
+use weaver::pty_support {run_gated, with_root, spawn_args, report_screen}
 use weaver::pty_fixtures {write_turns, tool_use_turn_json, text_turn_json}
 use json::json {Json, Json.make_object_pairs, Json.make_str, Json.make_array}
 use std::io {IO.println}
@@ -29,7 +29,7 @@ def todos_go (m : Pty) : IO Bool := do {
     Pty.send_text m "go\r";
     let shown <- Pty.wait_until m (fn (o : Output) =>
         Bool.and (grid_has o "todos 1/3") (Bool.and (grid_has o "Running the tests") (grid_has o "Commit the fix"))) 8000;
-    let a <- Check.report "the todo panel lists the items" (Bool.and ready shown);
+    let a <- report_screen m "the todo panel lists the items" (Bool.and ready shown);
     let done <- Pty.wait_until m (fn (o : Output) => grid_has o "listed the steps") 6000;
     let b <- Check.report "todo_write runs without an approval" done;
     Pty.send_text m "\u{14}";

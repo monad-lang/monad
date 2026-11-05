@@ -4,7 +4,7 @@
 // Ported from pty_repro_resume.py (retired).
 use pty::spawn {Pty, Output}
 use pty::check {Check.report}
-use weaver::pty_support {run_gated, with_root, spawn_args}
+use weaver::pty_support {run_gated, with_root, spawn_args, report_screen}
 use weaver::pty_fixtures {LineSpec, write_generated_session, pad2}
 use std::io {IO.println}
 
@@ -95,7 +95,7 @@ def choose_checks (m : Pty) : IO Bool := do {
     let loaded <- Pty.wait_until m (fn (o : Output) => grid_has o "ALPHA-TRANSCRIPT") 6000;
     let c <- Check.report "the chosen session's transcript is restored" loaded;
     let closed <- Pty.wait_until m (fn (o : Output) => grid_lacks o "Resume a session") 3000;
-    let d <- Check.report "the picker closed after choosing" closed;
+    let d <- report_screen m "the picker closed after choosing" closed;
     Pty.finish m;
     return (Bool.and ready (Bool.and a (Bool.and b (Bool.and c d))))
 }
