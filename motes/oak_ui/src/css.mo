@@ -10,6 +10,7 @@
 // Raw strings keep the CSS readable (no escaped quotes).
 
 use lib::theme {Ui.Theme, Ui.Theme.css_vars, Ui.Theme.css_auto}
+use lib::css_controls {Ui.css_tones, Ui.css_button, Ui.css_form}
 
 // ═══ Base ═══
 
@@ -160,7 +161,7 @@ pub def Ui.css_typography : String := r#"
 
 /// Every section, in cascade order. Grows with each component family.
 pub def Ui.css_all : String :=
-    String.concat_list [Ui.css_base, Ui.css_layout, Ui.css_typography]
+    String.concat_list [Ui.css_base, Ui.css_tones, Ui.css_layout, Ui.css_typography, Ui.css_button, Ui.css_form]
 
 /// Variables for one theme on `:root`, then the whole sheet.
 pub def Ui.stylesheet (t : Ui.Theme) : String :=

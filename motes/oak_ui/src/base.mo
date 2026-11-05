@@ -20,6 +20,10 @@ pub def Ui.root_attrs {Msg : Type} (block : String) (mods : List String) (extra 
     (s : Ui.Style) (attrs : List (Oak.Attr Msg)) : List (Oak.Attr Msg) :=
     List.cons (Html.attr "class" (Ui.class_names block mods (List.append extra s.classes))) attrs
 
+/// `oak-tone-<slug>`: sets the `--ui-c*` colours toned components paint
+/// with (see `Ui.css_tones`).
+pub def Ui.tone_class (t : Ui.Tone) : String := String.concat "oak-tone-" (Ui.Tone.slug t)
+
 /// The tone modifier, empty for neutral (the unmarked default).
 pub def Ui.tone_mod (t : Ui.Tone) : String :=
     match t {

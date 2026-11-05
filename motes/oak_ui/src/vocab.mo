@@ -31,6 +31,7 @@ pub type Ui.Opt {
     full_width,
     loading,
     disabled,
+    required,
     wrap,
     gap (n : I64),
     cols (n : I64),
@@ -47,6 +48,7 @@ pub struct Ui.Style {
     full_width : Bool,
     loading : Bool,
     disabled : Bool,
+    required : Bool,
     wrap : Bool,
     gap : I64,
     cols : I64,
@@ -122,7 +124,7 @@ pub def Ui.Align.slug (a : Ui.Align) : String :=
 /// The style with no modifiers: neutral, medium, solid, gap 3, one column.
 pub def Ui.Style.default : Ui.Style :=
     { tone := Ui.Tone.neutral, size := Ui.Size.md, variant := Ui.Variant.solid,
-        full_width := false, loading := false, disabled := false, wrap := false,
+        full_width := false, loading := false, disabled := false, required := false, wrap := false,
         gap := 3, cols := 1, align := Ui.Align.stretch, justify := Ui.Align.start,
         classes := List.empty }
 
@@ -134,6 +136,7 @@ def apply_opt (s : Ui.Style) (o : Ui.Opt) : Ui.Style :=
         Ui.Opt.full_width => { s with full_width := true },
         Ui.Opt.loading => { s with loading := true },
         Ui.Opt.disabled => { s with disabled := true },
+        Ui.Opt.required => { s with required := true },
         Ui.Opt.wrap => { s with wrap := true },
         Ui.Opt.gap n => { s with gap := n },
         Ui.Opt.cols n => { s with cols := n },
@@ -197,6 +200,8 @@ with Ui {
     pub def full : Ui.Opt := Ui.Opt.full_width
     pub def busy : Ui.Opt := Ui.Opt.loading
     pub def inactive : Ui.Opt := Ui.Opt.disabled
+    /// A form field that must be filled (`required` + a marker).
+    pub def required : Ui.Opt := Ui.Opt.required
     pub def wrapping : Ui.Opt := Ui.Opt.wrap
 
     /// Spacing step `n` on the theme's scale (0-8).
