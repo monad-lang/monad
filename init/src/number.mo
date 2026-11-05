@@ -1,4 +1,3 @@
-
 /// Number types and operations
 
 // I8
@@ -28,34 +27,34 @@ pub def I8.gt (a b : I8) : Bool
 pub def I8.to_string (a : I8) : String
 
 pub instance Add I8 {
-	def add (a b : I8) : I8 := I8.add a b
+    def add (a b : I8) : I8 := I8.add a b
 }
 
 pub instance Sub I8 {
-	def sub (a b : I8) : I8 := I8.sub a b
+    def sub (a b : I8) : I8 := I8.sub a b
 }
 
 pub instance Mul I8 {
-	def mul (a b : I8) : I8 := I8.mul a b
+    def mul (a b : I8) : I8 := I8.mul a b
 }
 
 pub instance Div I8 {
-	def div (a b : I8) : I8 := I8.div a b
+    def div (a b : I8) : I8 := I8.div a b
 }
 
 pub instance BEq I8 {
-	def beq (a b : I8) : Bool := I8.beq a b
+    def beq (a b : I8) : Bool := I8.beq a b
 }
 
 pub instance BOrd I8 {
-	def lt (a b : I8) : Bool := I8.lt a b
-	def gt (a b : I8) : Bool := I8.gt a b
-	def lte (a b : I8) : Bool := Bool.not (I8.gt a b)
-	def gte (a b : I8) : Bool := Bool.not (I8.lt a b)
+    def lt (a b : I8) : Bool := I8.lt a b
+    def gt (a b : I8) : Bool := I8.gt a b
+    def lte (a b : I8) : Bool := Bool.not (I8.gt a b)
+    def gte (a b : I8) : Bool := Bool.not (I8.lt a b)
 }
 
 pub instance ToString I8 {
-	def to_string (a : I8) : String := I8.to_string a
+    def to_string (a : I8) : String := I8.to_string a
 }
 
 // I16
@@ -85,34 +84,34 @@ pub def I16.gt (a b : I16) : Bool
 pub def I16.to_string (a : I16) : String
 
 pub instance Add I16 {
-	def add (a b : I16) : I16 := I16.add a b
+    def add (a b : I16) : I16 := I16.add a b
 }
 
 pub instance Sub I16 {
-	def sub (a b : I16) : I16 := I16.sub a b
+    def sub (a b : I16) : I16 := I16.sub a b
 }
 
 pub instance Mul I16 {
-	def mul (a b : I16) : I16 := I16.mul a b
+    def mul (a b : I16) : I16 := I16.mul a b
 }
 
 pub instance Div I16 {
-	def div (a b : I16) : I16 := I16.div a b
+    def div (a b : I16) : I16 := I16.div a b
 }
 
 pub instance BEq I16 {
-	def beq (a b : I16) : Bool := I16.beq a b
+    def beq (a b : I16) : Bool := I16.beq a b
 }
 
 pub instance BOrd I16 {
-	def lt (a b : I16) : Bool := I16.lt a b
-	def gt (a b : I16) : Bool := I16.gt a b
-	def lte (a b : I16) : Bool := Bool.not (I16.gt a b)
-	def gte (a b : I16) : Bool := Bool.not (I16.lt a b)
+    def lt (a b : I16) : Bool := I16.lt a b
+    def gt (a b : I16) : Bool := I16.gt a b
+    def lte (a b : I16) : Bool := Bool.not (I16.gt a b)
+    def gte (a b : I16) : Bool := Bool.not (I16.lt a b)
 }
 
 pub instance ToString I16 {
-	def to_string (a : I16) : String := I16.to_string a
+    def to_string (a : I16) : String := I16.to_string a
 }
 
 // I32
@@ -145,34 +144,34 @@ pub def I32.to_string (a : I32) : String
 pub def I32.to_i64 (a : I32) : I64
 
 pub instance Add I32 {
-	def add (a b : I32) : I32 := I32.add a b
+    def add (a b : I32) : I32 := I32.add a b
 }
 
 pub instance Sub I32 {
-	def sub (a b : I32) : I32 := I32.sub a b
+    def sub (a b : I32) : I32 := I32.sub a b
 }
 
 pub instance Mul I32 {
-	def mul (a b : I32) : I32 := I32.mul a b
+    def mul (a b : I32) : I32 := I32.mul a b
 }
 
 pub instance Div I32 {
-	def div (a b : I32) : I32 := I32.div a b
+    def div (a b : I32) : I32 := I32.div a b
 }
 
 pub instance BEq I32 {
-	def beq (a b : I32) : Bool := I32.beq a b
+    def beq (a b : I32) : Bool := I32.beq a b
 }
 
 pub instance BOrd I32 {
-	def lt (a b : I32) : Bool := I32.lt a b
-	def gt (a b : I32) : Bool := I32.gt a b
-	def lte (a b : I32) : Bool := Bool.not (I32.gt a b)
-	def gte (a b : I32) : Bool := Bool.not (I32.lt a b)
+    def lt (a b : I32) : Bool := I32.lt a b
+    def gt (a b : I32) : Bool := I32.gt a b
+    def lte (a b : I32) : Bool := Bool.not (I32.gt a b)
+    def gte (a b : I32) : Bool := Bool.not (I32.lt a b)
 }
 
 pub instance ToString I32 {
-	def to_string (a : I32) : String := I32.to_string a
+    def to_string (a : I32) : String := I32.to_string a
 }
 
 // I64
@@ -219,42 +218,42 @@ pub def I64.to_string (a : I64) : String
 pub def I64.neg (n : I64) : I64 := 0 - n
 
 pub instance Add I64 {
-	def add (a b : I64) : I64 := I64.add a b
+    def add (a b : I64) : I64 := I64.add a b
 }
 
 pub instance Sub I64 {
-	// `I64.sub`, NOT `a - b`: `infix (-) := HSub.sub`
-	// (init/prelude.mo) dispatches the operator through the
-	// `[Sub A] HSub A A A` bridge back to THIS instance, so the
-	// operator spelling would make it call itself.
-	def sub (a b : I64) : I64 := I64.sub a b
+    // `I64.sub`, NOT `a - b`: `infix (-) := HSub.sub`
+    // (init/prelude.mo) dispatches the operator through the
+    // `[Sub A] HSub A A A` bridge back to THIS instance, so the
+    // operator spelling would make it call itself.
+    def sub (a b : I64) : I64 := I64.sub a b
 }
 
 pub instance Mul I64 {
-	def mul (a b : I64) : I64 := I64.mul a b
+    def mul (a b : I64) : I64 := I64.mul a b
 }
 
 pub instance Div I64 {
-	def div (a b : I64) : I64 := I64.div a b
+    def div (a b : I64) : I64 := I64.div a b
 }
 
 pub instance BEq I64 {
-	def beq (a b : I64) : Bool := I64.beq a b
+    def beq (a b : I64) : Bool := I64.beq a b
 }
 
 pub instance BOrd I64 {
-	def lt (a b : I64) : Bool := I64.lt a b
-	def gt (a b : I64) : Bool := I64.gt a b
-	def lte (a b : I64) : Bool := Bool.not (I64.gt a b)
-	def gte (a b : I64) : Bool := Bool.not (I64.lt a b)
+    def lt (a b : I64) : Bool := I64.lt a b
+    def gt (a b : I64) : Bool := I64.gt a b
+    def lte (a b : I64) : Bool := Bool.not (I64.gt a b)
+    def gte (a b : I64) : Bool := Bool.not (I64.lt a b)
 }
 
 pub instance ToString I64 {
-  def to_string (a : I64) : String := I64.to_string a
+    def to_string (a : I64) : String := I64.to_string a
 }
 
 pub instance Hashable I64 {
-  def hash (a : I64) : U64 := I64.to_u64 a
+    def hash (a : I64) : U64 := I64.to_u64 a
 }
 
 // U8
@@ -297,34 +296,34 @@ pub def U8.gt (a b : U8) : Bool
 pub def U8.to_string (a : U8) : String
 
 pub instance Add U8 {
-	def add (a b : U8) : U8 := U8.add a b
+    def add (a b : U8) : U8 := U8.add a b
 }
 
 pub instance Sub U8 {
-	def sub (a b : U8) : U8 := U8.sub a b
+    def sub (a b : U8) : U8 := U8.sub a b
 }
 
 pub instance Mul U8 {
-	def mul (a b : U8) : U8 := U8.mul a b
+    def mul (a b : U8) : U8 := U8.mul a b
 }
 
 pub instance Div U8 {
-	def div (a b : U8) : U8 := U8.div a b
+    def div (a b : U8) : U8 := U8.div a b
 }
 
 pub instance BEq U8 {
-	def beq (a b : U8) : Bool := U8.beq a b
+    def beq (a b : U8) : Bool := U8.beq a b
 }
 
 pub instance BOrd U8 {
-	def lt (a b : U8) : Bool := U8.lt a b
-	def gt (a b : U8) : Bool := U8.gt a b
-	def lte (a b : U8) : Bool := Bool.not (U8.gt a b)
-	def gte (a b : U8) : Bool := Bool.not (U8.lt a b)
+    def lt (a b : U8) : Bool := U8.lt a b
+    def gt (a b : U8) : Bool := U8.gt a b
+    def lte (a b : U8) : Bool := Bool.not (U8.gt a b)
+    def gte (a b : U8) : Bool := Bool.not (U8.lt a b)
 }
 
 pub instance ToString U8 {
-	def to_string (a : U8) : String := U8.to_string a
+    def to_string (a : U8) : String := U8.to_string a
 }
 
 // U16
@@ -357,34 +356,34 @@ pub def U16.to_string (a : U16) : String
 pub def U16.to_i64 (a : U16) : I64
 
 pub instance Add U16 {
-	def add (a b : U16) : U16 := U16.add a b
+    def add (a b : U16) : U16 := U16.add a b
 }
 
 pub instance Sub U16 {
-	def sub (a b : U16) : U16 := U16.sub a b
+    def sub (a b : U16) : U16 := U16.sub a b
 }
 
 pub instance Mul U16 {
-	def mul (a b : U16) : U16 := U16.mul a b
+    def mul (a b : U16) : U16 := U16.mul a b
 }
 
 pub instance Div U16 {
-	def div (a b : U16) : U16 := U16.div a b
+    def div (a b : U16) : U16 := U16.div a b
 }
 
 pub instance BEq U16 {
-	def beq (a b : U16) : Bool := U16.beq a b
+    def beq (a b : U16) : Bool := U16.beq a b
 }
 
 pub instance BOrd U16 {
-	def lt (a b : U16) : Bool := U16.lt a b
-	def gt (a b : U16) : Bool := U16.gt a b
-	def lte (a b : U16) : Bool := Bool.not (U16.gt a b)
-	def gte (a b : U16) : Bool := Bool.not (U16.lt a b)
+    def lt (a b : U16) : Bool := U16.lt a b
+    def gt (a b : U16) : Bool := U16.gt a b
+    def lte (a b : U16) : Bool := Bool.not (U16.gt a b)
+    def gte (a b : U16) : Bool := Bool.not (U16.lt a b)
 }
 
 pub instance ToString U16 {
-	def to_string (a : U16) : String := U16.to_string a
+    def to_string (a : U16) : String := U16.to_string a
 }
 
 // U32
@@ -417,34 +416,34 @@ pub def U32.to_string (a : U32) : String
 pub def U32.to_i64 (a : U32) : I64
 
 pub instance Add U32 {
-	def add (a b : U32) : U32 := U32.add a b
+    def add (a b : U32) : U32 := U32.add a b
 }
 
 pub instance Sub U32 {
-	def sub (a b : U32) : U32 := U32.sub a b
+    def sub (a b : U32) : U32 := U32.sub a b
 }
 
 pub instance Mul U32 {
-	def mul (a b : U32) : U32 := U32.mul a b
+    def mul (a b : U32) : U32 := U32.mul a b
 }
 
 pub instance Div U32 {
-	def div (a b : U32) : U32 := U32.div a b
+    def div (a b : U32) : U32 := U32.div a b
 }
 
 pub instance BEq U32 {
-	def beq (a b : U32) : Bool := U32.beq a b
+    def beq (a b : U32) : Bool := U32.beq a b
 }
 
 pub instance BOrd U32 {
-	def lt (a b : U32) : Bool := U32.lt a b
-	def gt (a b : U32) : Bool := U32.gt a b
-	def lte (a b : U32) : Bool := Bool.not (U32.gt a b)
-	def gte (a b : U32) : Bool := Bool.not (U32.lt a b)
+    def lt (a b : U32) : Bool := U32.lt a b
+    def gt (a b : U32) : Bool := U32.gt a b
+    def lte (a b : U32) : Bool := Bool.not (U32.gt a b)
+    def gte (a b : U32) : Bool := Bool.not (U32.lt a b)
 }
 
 pub instance ToString U32 {
-	def to_string (a : U32) : String := U32.to_string a
+    def to_string (a : U32) : String := U32.to_string a
 }
 
 #[native u32_and]
@@ -468,7 +467,7 @@ pub def U32.to_u8 (a : U32) : U8
 pub def U32.not (a : U32) : U32 := U32.xor a 0xFFFFFFFFu32
 
 pub def U32.rotr (a n : U32) : U32 :=
-	U32.or (U32.shr a n) (U32.shl a (U32.sub 32u32 n))
+    U32.or (U32.shr a n) (U32.shl a (U32.sub 32u32 n))
 
 // U64
 
@@ -521,38 +520,38 @@ pub def U64.to_i64 (a : U64) : I64
 pub def U64.bits_of_string (text : String) : I64
 
 pub instance Add U64 {
-	def add (a b : U64) : U64 := U64.add a b
+    def add (a b : U64) : U64 := U64.add a b
 }
 
 pub instance Sub U64 {
-	def sub (a b : U64) : U64 := U64.sub a b
+    def sub (a b : U64) : U64 := U64.sub a b
 }
 
 pub instance Mul U64 {
-	def mul (a b : U64) : U64 := U64.mul a b
+    def mul (a b : U64) : U64 := U64.mul a b
 }
 
 pub instance Div U64 {
-  def div (a b : U64) : U64 := U64.div a b
+    def div (a b : U64) : U64 := U64.div a b
 }
 
 pub instance Hashable U64 {
-  def hash (a : U64) : U64 := a
+    def hash (a : U64) : U64 := a
 }
 
 pub instance BEq U64 {
-	def beq (a b : U64) : Bool := U64.beq a b
+    def beq (a b : U64) : Bool := U64.beq a b
 }
 
 pub instance BOrd U64 {
-	def lt (a b : U64) : Bool := U64.lt a b
-	def gt (a b : U64) : Bool := U64.gt a b
-	def lte (a b : U64) : Bool := Bool.not (U64.gt a b)
-	def gte (a b : U64) : Bool := Bool.not (U64.lt a b)
+    def lt (a b : U64) : Bool := U64.lt a b
+    def gt (a b : U64) : Bool := U64.gt a b
+    def lte (a b : U64) : Bool := Bool.not (U64.gt a b)
+    def gte (a b : U64) : Bool := Bool.not (U64.lt a b)
 }
 
 pub instance ToString U64 {
-	def to_string (a : U64) : String := U64.to_string a
+    def to_string (a : U64) : String := U64.to_string a
 }
 
 // F32
@@ -582,34 +581,34 @@ pub def F32.gt (a b : F32) : Bool
 pub def F32.to_string (a : F32) : String
 
 pub instance Add F32 {
-	def add (a b : F32) : F32 := F32.add a b
+    def add (a b : F32) : F32 := F32.add a b
 }
 
 pub instance Sub F32 {
-	def sub (a b : F32) : F32 := F32.sub a b
+    def sub (a b : F32) : F32 := F32.sub a b
 }
 
 pub instance Mul F32 {
-	def mul (a b : F32) : F32 := F32.mul a b
+    def mul (a b : F32) : F32 := F32.mul a b
 }
 
 pub instance Div F32 {
-	def div (a b : F32) : F32 := F32.div a b
+    def div (a b : F32) : F32 := F32.div a b
 }
 
 pub instance BEq F32 {
-	def beq (a b : F32) : Bool := F32.beq a b
+    def beq (a b : F32) : Bool := F32.beq a b
 }
 
 pub instance BOrd F32 {
-	def lt (a b : F32) : Bool := F32.lt a b
-	def gt (a b : F32) : Bool := F32.gt a b
-	def lte (a b : F32) : Bool := Bool.not (F32.gt a b)
-	def gte (a b : F32) : Bool := Bool.not (F32.lt a b)
+    def lt (a b : F32) : Bool := F32.lt a b
+    def gt (a b : F32) : Bool := F32.gt a b
+    def lte (a b : F32) : Bool := Bool.not (F32.gt a b)
+    def gte (a b : F32) : Bool := Bool.not (F32.lt a b)
 }
 
 pub instance ToString F32 {
-	def to_string (a : F32) : String := F32.to_string a
+    def to_string (a : F32) : String := F32.to_string a
 }
 
 // F64
@@ -659,41 +658,41 @@ pub def F64.to_string (a : F64) : String
 pub def F64.bits_of_string (text : String) : I64
 
 pub instance Add F64 {
-	def add (a b : F64) : F64 := F64.add a b
+    def add (a b : F64) : F64 := F64.add a b
 }
 
 pub instance Sub F64 {
-	def sub (a b : F64) : F64 := F64.sub a b
+    def sub (a b : F64) : F64 := F64.sub a b
 }
 
 pub instance Mul F64 {
-	def mul (a b : F64) : F64 := F64.mul a b
+    def mul (a b : F64) : F64 := F64.mul a b
 }
 
 pub instance Div F64 {
-	def div (a b : F64) : F64 := F64.div a b
+    def div (a b : F64) : F64 := F64.div a b
 }
 
 pub instance BEq F64 {
-	def beq (a b : F64) : Bool := F64.beq a b
+    def beq (a b : F64) : Bool := F64.beq a b
 }
 
 pub instance BOrd F64 {
-	def lt (a b : F64) : Bool := F64.lt a b
-	def gt (a b : F64) : Bool := F64.gt a b
-	def lte (a b : F64) : Bool := Bool.not (F64.gt a b)
-	def gte (a b : F64) : Bool := Bool.not (F64.lt a b)
+    def lt (a b : F64) : Bool := F64.lt a b
+    def gt (a b : F64) : Bool := F64.gt a b
+    def lte (a b : F64) : Bool := Bool.not (F64.gt a b)
+    def gte (a b : F64) : Bool := Bool.not (F64.lt a b)
 }
 
 pub instance ToString F64 {
-	def to_string (a : F64) : String := F64.to_string a
+    def to_string (a : F64) : String := F64.to_string a
 }
 
 def nat_to_i64 (n : Nat) : I64 :=
-	match n {
-		zero => 0,
-		succ m => I64.add 1 (nat_to_i64 m)
-	}
+    match n {
+        zero => 0,
+        succ m => I64.add 1 (nat_to_i64 m)
+    }
 
 /// Build a `Nat` from an `I64` payload, the elaboration rewrite target
 /// for context-only Nat literals (`(3 : Nat)` becomes `Nat.of_i64 3`;
@@ -707,7 +706,7 @@ def nat_to_i64 (n : Nat) : I64 :=
 /// direct calls.
 #[partial]
 pub def Nat.of_i64 (n : I64) : Nat :=
-	if I64.lt n 0 then Nat.zero else nat_of_i64_walk n
+    if I64.lt n 0 then Nat.zero else nat_of_i64_walk n
 
 /// The non-negative half of `Nat.of_i64`, split out so the clamp and
 /// the walk each get one small def (the nested-`match`-inside-`if`
@@ -715,9 +714,9 @@ pub def Nat.of_i64 (n : I64) : Nat :=
 /// entry point; this helper is reached only from there.
 #[partial]
 def nat_of_i64_walk (n : I64) : Nat :=
-	match I64.beq n 0 {
-		true => Nat.zero,
-		false => Nat.succ (nat_of_i64_walk (I64.sub n 1))
-	}
+    match I64.beq n 0 {
+        true => Nat.zero,
+        false => Nat.succ (nat_of_i64_walk (I64.sub n 1))
+    }
 
 pub def Nat.to_string (n : Nat) : String := I64.to_string (nat_to_i64 n)

@@ -225,4 +225,3 @@ pub instance {E : Type} [Copy E] Comonad (Pair E) {
                 },
         }
 }
-

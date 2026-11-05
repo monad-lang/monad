@@ -1,4 +1,3 @@
-
 /// String functions
 
 use lib::math {}
@@ -110,50 +109,50 @@ def String.from_chars (bytes : List Chars) : String
 
 /// djb2 hash: hash = hash * 33 + byte
 #[terminating]
-def String.hash_bytes_selfhosted (bytes: List U8) (acc: U64) : U64 :=
-  match bytes {
-    List.empty => acc,
-    List.cons b rest =>
-      let byte : U64 := U8.to_u64 b in
-      String.hash_bytes_selfhosted rest (U64.add (U64.mul acc 33u64) byte)
-  }
+def String.hash_bytes_selfhosted (bytes : List U8) (acc : U64) : U64 :=
+    match bytes {
+        List.empty => acc,
+        List.cons b rest =>
+            let byte : U64 := U8.to_u64 b in
+            String.hash_bytes_selfhosted rest (U64.add (U64.mul acc 33u64) byte)
+    }
 
 def String.hash_selfhosted (s : String) : U64 :=
-  String.hash_bytes_selfhosted (String.to_list s) 5381u64
+    String.hash_bytes_selfhosted (String.to_list s) 5381u64
 
 #[native string_hash]
 pub def String.hash (s : String) : U64
 
 pub instance BEq String {
-	def beq (a b : String) : Bool := String.beq a b
+    def beq (a b : String) : Bool := String.beq a b
 }
 
 def bytes_lt_selfhosted (a b : List U8) : Bool :=
-	match a {
-		empty => match b {
-			empty => false,
-			cons _ _ => true
-		},
-		cons xa ta => match b {
-			empty => false,
-			cons xb tb =>
-				if U8.lt xa xb then true
-				else if U8.gt xa xb then false
-				else bytes_lt_selfhosted ta tb
-		}
-	}
+    match a {
+        empty => match b {
+            empty => false,
+            cons _ _ => true
+        },
+        cons xa ta => match b {
+            empty => false,
+            cons xb tb =>
+                if U8.lt xa xb then true
+                else if U8.gt xa xb then false
+                else bytes_lt_selfhosted ta tb
+        }
+    }
 
 def bytes_gt_selfhosted (a b : List U8) : Bool :=
-	match a {
-		empty => false,
-		cons xa ta => match b {
-			empty => true,
-			cons xb tb =>
-				if U8.gt xa xb then true
-				else if U8.lt xa xb then false
-				else bytes_gt_selfhosted ta tb
-		}
-	}
+    match a {
+        empty => false,
+        cons xa ta => match b {
+            empty => true,
+            cons xb tb =>
+                if U8.gt xa xb then true
+                else if U8.lt xa xb then false
+                else bytes_gt_selfhosted ta tb
+        }
+    }
 
 def String.lt_selfhosted (a b : String) : Bool := bytes_lt_selfhosted (String.to_list a) (String.to_list b)
 
@@ -166,62 +165,62 @@ pub def String.lt (a b : String) : Bool
 pub def String.gt (a b : String) : Bool
 
 pub instance BOrd String {
-	def lt (a b : String) : Bool := String.lt a b
-	def gt (a b : String) : Bool := String.gt a b
-	def lte (a b : String) : Bool := Bool.not (String.gt a b)
-	def gte (a b : String) : Bool := Bool.not (String.lt a b)
+    def lt (a b : String) : Bool := String.lt a b
+    def gt (a b : String) : Bool := String.gt a b
+    def lte (a b : String) : Bool := Bool.not (String.gt a b)
+    def gte (a b : String) : Bool := Bool.not (String.lt a b)
 }
 
 pub instance ToString String {
-	def to_string (s : String) : String := s
+    def to_string (s : String) : String := s
 }
 
 pub instance Add String {
-	def add (a b : String) : String := String.concat a b
+    def add (a b : String) : String := String.concat a b
 }
 
 pub instance Append String {
-  def append (a b : String) : String := String.concat a b
+    def append (a b : String) : String := String.concat a b
 }
 
 pub instance Hashable String {
-  def hash (s : String) : U64 := String.hash s
+    def hash (s : String) : U64 := String.hash s
 }
 
 pub def String.is_empty (s : String) : Bool :=
-	I64.beq (String.length s) 0
+    I64.beq (String.length s) 0
 
 // ── List helpers (polymorphic) ──
 
 def List.reverse_append (bytes : List A) (acc : List A) : List A :=
-	match bytes {
-		empty => acc,
-		cons b rest => List.reverse_append rest (List.cons b acc)
-	}
+    match bytes {
+        empty => acc,
+        cons b rest => List.reverse_append rest (List.cons b acc)
+    }
 
 pub def List.reverse (self : List A) : List A :=
-	List.reverse_append self List.empty
+    List.reverse_append self List.empty
 
 pub def List.singleton (a : A) : List A :=
-	List.cons a List.empty
+    List.cons a List.empty
 
 // ── Prefix / Suffix ──
 
 pub def String.ends_with (s : String) (suffix : String) : Bool :=
-	String.starts_with (String.reverse suffix) (String.reverse s)
+    String.starts_with (String.reverse suffix) (String.reverse s)
 
 // ── Repetition ──
 
 #[terminating]
 pub def String.repeat (s : String) (n : I64) : String :=
-	if I64.beq n 0
-	then ""
-	else String.concat s (String.repeat s (n - 1))
+    if I64.beq n 0
+    then ""
+    else String.concat s (String.repeat s (n - 1))
 
 // ── Reverse ──
 
 def String.reverse (s : String) : String :=
-	String.from_list (List.reverse (String.to_list s))
+    String.from_list (List.reverse (String.to_list s))
 
 // ── Search ──
 
@@ -230,10 +229,10 @@ def String.reverse (s : String) : String :=
 /// offset, so a byte-at-a-time walk silently stops at the first non-ASCII
 /// byte (`String.contains "héllo" "llo"` was false).
 def utf8_lead_width (b : U8) : I64 :=
-	if U8.lt b 128u8 then 1
-	else if U8.lt b 224u8 then 2
-	else if U8.lt b 240u8 then 3
-	else 4
+    if U8.lt b 128u8 then 1
+    else if U8.lt b 224u8 then 2
+    else if U8.lt b 240u8 then 3
+    else 4
 
 /// Scan `s` for `sub`, one CHARACTER at a time. `String.starts_with`
 /// compares the prefix byte-wise (it `strlen`s the prefix, never the
@@ -245,19 +244,19 @@ def utf8_lead_width (b : U8) : I64 :=
 /// `String.drop`, which the termination checker cannot see through.
 #[terminating]
 def contains_from (s : String) (sub : String) : Bool :=
-	if String.starts_with sub s then true
-	else match String.get s 0 {
-		Option.some b => contains_from (String.drop (utf8_lead_width b) s) sub,
-		Option.none => false,
-	}
+    if String.starts_with sub s then true
+    else match String.get s 0 {
+        Option.some b => contains_from (String.drop (utf8_lead_width b) s) sub,
+        Option.none => false,
+    }
 
 pub def String.contains (s : String) (sub : String) : Bool :=
-	contains_from s sub
+    contains_from s sub
 
 // ── Trim ──
 
 def is_whitespace_byte (b : U8) : Bool :=
-	U8.beq b 32u8 || U8.beq b 9u8 || U8.beq b 10u8 || U8.beq b 13u8
+    U8.beq b 32u8 || U8.beq b 9u8 || U8.beq b 10u8 || U8.beq b 13u8
 
 /// Trim leading whitespace on the string itself. A `String` is `Copy`, so
 /// this needs no list round-trip (and no second owner of the bytes).
@@ -266,16 +265,16 @@ def is_whitespace_byte (b : U8) : Bool :=
 /// descent is through the native `String.drop`.
 #[terminating]
 def trim_leading (s : String) : String :=
-	match String.get s 0 {
-		Option.some b =>
-			if is_whitespace_byte b then trim_leading (String.drop 1 s) else s,
-		Option.none => s,
-	}
+    match String.get s 0 {
+        Option.some b =>
+            if is_whitespace_byte b then trim_leading (String.drop 1 s) else s,
+        Option.none => s,
+    }
 
 pub def String.trim (s : String) : String :=
-	let lead_trimmed : String := trim_leading s in
-	let reversed : String := String.reverse lead_trimmed in
-	String.reverse (trim_leading reversed)
+    let lead_trimmed : String := trim_leading s in
+    let reversed : String := String.reverse lead_trimmed in
+    String.reverse (trim_leading reversed)
 
 /// Index of the last occurrence of `needle` in `haystack`, or -1.
 ///
@@ -289,14 +288,14 @@ pub def String.trim (s : String) : String :=
 /// termination checker can't see is well-founded.
 #[terminating]
 def String.find_last_loop (haystack : String) (needle : String) (start_idx : I64) : I64 :=
-	if I64.lt start_idx 0 then -1
-	else if String.beq (String.slice haystack start_idx (String.length needle)) needle then start_idx
-	else String.find_last_loop haystack needle (start_idx - 1)
+    if I64.lt start_idx 0 then -1
+    else if String.beq (String.slice haystack start_idx (String.length needle)) needle then start_idx
+    else String.find_last_loop haystack needle (start_idx - 1)
 
 def String.find_last (haystack : String) (needle : String) : I64 :=
-	if String.beq needle "" then -1
-	else if I64.gt (String.length needle) (String.length haystack) then -1
-	else String.find_last_loop haystack needle (String.length haystack - String.length needle)
+    if String.beq needle "" then -1
+    else if I64.gt (String.length needle) (String.length haystack) then -1
+    else String.find_last_loop haystack needle (String.length haystack - String.length needle)
 
 /// Concatenate every string in a list, no separator.
 /// (For a separator, use `List.intercalate` in `std/list.mo`.)
@@ -312,10 +311,10 @@ def String.find_last (haystack : String) (needle : String) : I64 :=
 /// inside a compiler module; `cli/src/args.mo`'s `cli_concat_all` and
 /// `lang/toml.mo`'s `toml_concat_list_body` were further copies.
 pub def String.concat_all (ss : List String) : String :=
-	match ss {
-		empty => "",
-		cons hd tl => String.concat hd (String.concat_all tl)
-	}
+    match ss {
+        empty => "",
+        cons hd tl => String.concat hd (String.concat_all tl)
+    }
 
 /// Concatenate every piece in ONE allocation.
 ///

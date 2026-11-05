@@ -15,4 +15,5 @@ motes/toolkit/src/navigation.mo
 motes/toolkit/src/tests/decl_text_tests.mo
 motes/toolkit/src/tests/navigation_tests.mo
 motes/weaver
+init
 proofs/src

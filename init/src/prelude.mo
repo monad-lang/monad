@@ -1,15 +1,14 @@
-
 pub type Any {
-	any {A : Type} (value: A)
+    any {A : Type} (value : A)
 }
 
-pub class Functor (F: Type -> Type) {
-	def map (f: A -> B) : (F A) -> F B
+pub class Functor (F : Type -> Type) {
+    def map (f : A -> B) : (F A) -> F B
 }
 
 pub class FromListLiteral (L : Type -> Type := List) {
-	def cons (a : A) (L A) : L A
-	def empty : L A 
+    def cons (a : A) (L A) : L A
+    def empty : L A
 }
 
 /// The arithmetic operators dispatch through the HETEROGENEOUS classes
@@ -24,58 +23,58 @@ pub class FromListLiteral (L : Type -> Type := List) {
 
 /// Heterogeneous addition
 pub class HAdd A B C {
-	def add : A -> B -> C
+    def add : A -> B -> C
 }
 
 /// Homogeneous addition
 pub class Add A {
-	def add : A -> A -> A
+    def add : A -> A -> A
 }
 
 pub instance [Add A] HAdd A A A {
-	def add (a b : A) : A := Add.add a b
+    def add (a b : A) : A := Add.add a b
 }
 
 /// Heterogeneous subtraction
 pub class HSub A B C {
-	def sub : A -> B -> C
+    def sub : A -> B -> C
 }
 
 /// Homogeneous subtraction
 pub class Sub A {
-	def sub : A -> A -> A
+    def sub : A -> A -> A
 }
 
 pub instance [Sub A] HSub A A A {
-	def sub (a b : A) : A := Sub.sub a b
+    def sub (a b : A) : A := Sub.sub a b
 }
 
 /// Heterogeneous multiplication
 pub class HMul A B C {
-	def mul : A -> B -> C
+    def mul : A -> B -> C
 }
 
 /// Homogeneous multiplication
 pub class Mul A {
-	def mul : A -> A -> A
+    def mul : A -> A -> A
 }
 
 pub instance [Mul A] HMul A A A {
-	def mul (a b : A) : A := Mul.mul a b
+    def mul (a b : A) : A := Mul.mul a b
 }
 
 /// Heterogeneous division
 pub class HDiv A B C {
-	def div : A -> B -> C
+    def div : A -> B -> C
 }
 
 /// Homogeneous division
 pub class Div A {
-	def div : A -> A -> A
+    def div : A -> A -> A
 }
 
 pub instance [Div A] HDiv A A A {
-	def div (a b : A) : A := Div.div a b
+    def div (a b : A) : A := Div.div a b
 }
 
 pub infix (+) := HAdd.add
@@ -86,13 +85,12 @@ pub infix (*) := HMul.mul
 
 pub infix (-) := HSub.sub
 
-
-pub class [Functor F] Applicative (F: Type -> Type) {
+pub class [Functor F] Applicative (F : Type -> Type) {
     def pure : A -> F A
     def apply : F (A -> B) -> F A -> F B
 }
 
-pub class [Applicative M] Monad (M: Type -> Type) {
+pub class [Applicative M] Monad (M : Type -> Type) {
     def bind (a : M A) (f : A -> M B) : M B
     def pure : A -> M A
 }
@@ -170,16 +168,16 @@ pub type NonEmpty {u : Universe} (a : Sort u) : Pred {
 
 /// UTF8 string
 pub type String {
-	of_bytes (List U8)
+    of_bytes (List U8)
 }
 
 /// UTF8 code point
 pub type Char {
-	of_bytes (List U8)
+    of_bytes (List U8)
 }
 
 pub class ToString A {
-	def to_string (a : A) : String
+    def to_string (a : A) : String
 }
 
 /// Primitive number types.
@@ -233,7 +231,7 @@ pub def Ptr.null : Ptr
 pub def Ptr.minus_one : Ptr
 
 pub type Unit {
-	unit
+    unit
 }
 
 // TODO: the `open ... {...}` filters below are hand-verified against
@@ -247,8 +245,8 @@ pub type Unit {
 open Unit {unit}
 
 pub type Bool {
-	true,
-	false
+    true,
+    false
 }
 
 open Bool {and, false, not, or, true}
@@ -272,13 +270,13 @@ pub def Eq.rec (A : Sort 1) (a : A) (P : (b : A) -> Eq A a b -> Sort 1)
 
 /// Equals
 pub class BEq A {
-	def beq : A -> A -> Bool
+    def beq : A -> A -> Bool
 }
 
 pub instance BEq Bool {
-	def beq (a b : Bool) : Bool :=
-		if a then b
-		else (Bool.not b)
+    def beq (a b : Bool) : Bool :=
+        if a then b
+        else (Bool.not b)
 }
 
 // TODO Constraint resolving
@@ -296,10 +294,10 @@ pub infix (==) := BEq.beq
 /// instance therefore states both. They mean `not gt` / `not lt`, the
 /// total-order reading `BOrd` already assumes.
 pub class BOrd A {
-  def lt (a b : A) : Bool
-  def gt (a b : A) : Bool
-  def lte (a b : A) : Bool
-  def gte (a b : A) : Bool
+    def lt (a b : A) : Bool
+    def gt (a b : A) : Bool
+    def lte (a b : A) : Bool
+    def gte (a b : A) : Bool
 }
 
 pub infix (<) := BOrd.lt
@@ -313,32 +311,32 @@ pub infix (>=) := BOrd.gte
 pub infix (>) := BOrd.gt
 
 pub instance BOrd Bool {
-  def lt (a b : Bool) : Bool :=
-    if a then false
-    else b
+    def lt (a b : Bool) : Bool :=
+        if a then false
+        else b
 
-  def gt (a b : Bool) : Bool :=
-    if a then Bool.not b
-    else false
+    def gt (a b : Bool) : Bool :=
+        if a then Bool.not b
+        else false
 
-  // false <= anything; true <= b exactly when b is true.
-  def lte (a b : Bool) : Bool :=
-    if a then b
-    else true
+    // false <= anything; true <= b exactly when b is true.
+    def lte (a b : Bool) : Bool :=
+        if a then b
+        else true
 
-  // true >= anything; false >= b exactly when b is false.
-  def gte (a b : Bool) : Bool :=
-    if a then true
-    else Bool.not b
+    // true >= anything; false >= b exactly when b is false.
+    def gte (a b : Bool) : Bool :=
+        if a then true
+        else Bool.not b
 }
 
 /// Hashable: produce a hash value for an element.
 pub class Hashable A {
-  def hash (a : A) : U64
+    def hash (a : A) : U64
 }
 
-pub type DefaultValue (A: Type) (default : A) {
-	default
+pub type DefaultValue (A : Type) (default : A) {
+    default
 }
 
 pub def Bool.not (b : Bool) : Bool := if b then false else true
@@ -352,20 +350,20 @@ pub def Bool.or (a b : Bool) : Bool := if a then true else b
 pub infix (||) := Bool.or
 
 pub type Result E A {
-	ok (a: A),
-	err (e: E)
+    ok (a : A),
+    err (e : E)
 }
 
 /// Whether `r` is `Result.ok` -- for a caller that checks an effect's
 /// outcome (a test asserting a write landed) without needing its value.
 pub def Result.is_ok {E A : Type} (r : Result E A) : Bool :=
-	match r {
-		Result.ok _ => true,
-		Result.err _ => false
-	}
+    match r {
+        Result.ok _ => true,
+        Result.err _ => false
+    }
 
 pub type Pair A B {
-	pair (first : A) (second : B)
+    pair (first : A) (second : B)
 }
 
 /// Dependent pair: the second component's TYPE may depend on the first
@@ -393,7 +391,7 @@ pub type Pair A B {
 /// grammar both compilers share. The Rust host has no level variables; it
 /// approximates a bare symbolic result sort to the bottom universe.
 pub type Sigma (A : Sort u) (B : A -> Sort v) : Sort w {
-	dpair (fst : A) (snd : B fst)
+    dpair (fst : A) (snd : B fst)
 }
 
 /// Existential quantification -- `Sigma` instantiated at `Prop`.
@@ -417,167 +415,164 @@ pub def Exists (A : Type) (P : A -> Prop) : Prop := Sigma A P
 /// expected type to see the scrutinee refined to `Sigma.dpair a b`, which is
 /// the dependent-match rule, not a prelude concern.
 pub def Sigma.fst {A : Type} {B : A -> Type} (p : Sigma A B) : A :=
-	match p { Sigma.dpair a _ => a }
+    match p { Sigma.dpair a _ => a }
 
 open Result {err, ok}
 
 pub type Option A {
-	some (a: A),
-	none
+    some (a : A),
+    none
 }
 
 open Option {none, some}
 
 pub def Option.get_or_default (default : A) (self : Option A) : A :=
-	match self {
-		some a => a,
-		none => default
-	}
+    match self {
+        some a => a,
+        none => default
+    }
 
 pub type Nat {
-	zero,
-	succ (n : Nat)
+    zero,
+    succ (n : Nat)
 }
 
 pub def Nat.add (a b : Nat) : Nat :=
-	match a {
-		zero => b,
-		succ n => Nat.succ (Nat.add n b)
-	}
+    match a {
+        zero => b,
+        succ n => Nat.succ (Nat.add n b)
+    }
 
 pub def Nat.sub (a b : Nat) : Nat :=
-	match b {
-		zero => a,
-		succ n => match a {
-			zero => Nat.zero,
-			succ m => Nat.sub m n
-		}
-	}
+    match b {
+        zero => a,
+        succ n => match a {
+            zero => Nat.zero,
+            succ m => Nat.sub m n
+        }
+    }
 
 pub def Nat.mul (a b : Nat) : Nat :=
-	match a {
-		zero => Nat.zero,
-		succ n => Nat.add b (Nat.mul n b)
-	}
+    match a {
+        zero => Nat.zero,
+        succ n => Nat.add b (Nat.mul n b)
+    }
 
 pub def Nat.eq (a b : Nat) : Bool :=
-	match a {
-		zero => match b {
-			zero => true,
-			succ _ => false
-		},
-		succ n => match b {
-			zero => false,
-			succ m => Nat.eq n m
-		}
-	}
-
-
+    match a {
+        zero => match b {
+            zero => true,
+            succ _ => false
+        },
+        succ n => match b {
+            zero => false,
+            succ m => Nat.eq n m
+        }
+    }
 
 pub instance BEq Nat {
-	def beq (a b : Nat) : Bool := Nat.eq a b
+    def beq (a b : Nat) : Bool := Nat.eq a b
 }
 
 pub instance Add Nat {
-	def add (a b : Nat) : Nat := Nat.add a b
+    def add (a b : Nat) : Nat := Nat.add a b
 }
 
 pub instance Sub Nat {
-	def sub (a b : Nat) : Nat := Nat.sub a b
+    def sub (a b : Nat) : Nat := Nat.sub a b
 }
 
-pub def Lens [Functor F] {F : Type -> Type} (S: Type) (T: Type) (A: Type) (B : Type) : Type :=
-	(A -> F B) -> S -> F T
+pub def Lens [Functor F] {F : Type -> Type} (S : Type) (T : Type) (A : Type) (B : Type) : Type :=
+    (A -> F B) -> S -> F T
 
 pub type List A {
-	empty,
-	cons (a : A) (List A) : List A
+    empty,
+    cons (a : A) (List A) : List A
 }
 
 pub instance FromListLiteral List {
-	def cons (a: A) (l : List A) : List A := List.cons a l
-	def empty : List A := List.empty
+    def cons (a : A) (l : List A) : List A := List.cons a l
+    def empty : List A := List.empty
 }
 
 pub def List.is_empty (self : List A) : Bool :=
-	match self {
-		empty => true,
-		cons a tail => false,
-		_ => true
-	}
+    match self {
+        empty => true,
+        cons a tail => false,
+        _ => true
+    }
 
 pub def List.append (a b : List A) : List A :=
-	match a {
-		empty => b,
-		cons el_a tail => List.cons el_a (List.append tail b),
-		_ => b
-	}
+    match a {
+        empty => b,
+        cons el_a tail => List.cons el_a (List.append tail b),
+        _ => b
+    }
 
 /// Append b to value a
 pub class Append A {
-	def append (a b : A) : A
+    def append (a b : A) : A
 }
 
 pub infix (++) := Append.append
 
 pub def List.first (self : List A) : Option A :=
-	match self {
-		empty => none,
-		cons a tail => some a,
-		_ => none
-	}
+    match self {
+        empty => none,
+        cons a tail => some a,
+        _ => none
+    }
 pub def List.last (self : List A) : Option A :=
-	match self {
-		empty => none,
-		cons a tail => if List.is_empty tail
-			then some a
-			else List.last tail,
-		_ => none
-	}
+    match self {
+        empty => none,
+        cons a tail => if List.is_empty tail
+            then some a
+            else List.last tail,
+        _ => none
+    }
 pub def List.flatten (self : List (List A)) : List A :=
-	match self {
-		empty => List.empty,
-		cons list tail => List.append list (List.flatten tail),
-		_ => List.empty
-	}
+    match self {
+        empty => List.empty,
+        cons list tail => List.append list (List.flatten tail),
+        _ => List.empty
+    }
 
 pub def List.tail (l : List A) : List A :=
-	match l {
-		empty => List.empty,
-		cons a tail => tail,
-		_ => List.empty
-	}
+    match l {
+        empty => List.empty,
+        cons a tail => tail,
+        _ => List.empty
+    }
 
-pub def List.map (f : A -> B) (self: List A) : List B :=
-		match self {
-			empty => List.empty,
-			cons a tail => List.cons (f a) (List.map f tail),
-			_ => List.empty
-		}
-
+pub def List.map (f : A -> B) (self : List A) : List B :=
+    match self {
+        empty => List.empty,
+        cons a tail => List.cons (f a) (List.map f tail),
+        _ => List.empty
+    }
 
 pub instance Functor List {
-  // `List.map` (not the recursive `Functor.map`) -- a match-arm PATTERN-
-  // bound variable (`tail`, from `cons a tail => ...`) is never added to
-  // `env` by `resolve_class_call_term`'s term walker (`lang/scope.mo`,
-  // only `Term.lam`-introduced bindings are, see its own doc comment) --
-  // a distinct gap from the bare-local-var one already fixed, caught by
-  // the new fail-fast check (`no instance found for 'Functor.map'`) this
-  // instance's own recursive call had been silently hitting. `List.map`
-  // (just above) is the identical concrete implementation, already
-  // correct and non-generic -- reuse it instead of chasing this gap here.
-  def map (f : A -> B) (self: List A) : List B :=
-    match self {
-      empty => List.empty,
-      cons a tail => List.cons (f a) (List.map f tail),
-      _ => List.empty
-    }
+    // `List.map` (not the recursive `Functor.map`) -- a match-arm PATTERN-
+    // bound variable (`tail`, from `cons a tail => ...`) is never added to
+    // `env` by `resolve_class_call_term`'s term walker (`lang/scope.mo`,
+    // only `Term.lam`-introduced bindings are, see its own doc comment) --
+    // a distinct gap from the bare-local-var one already fixed, caught by
+    // the new fail-fast check (`no instance found for 'Functor.map'`) this
+    // instance's own recursive call had been silently hitting. `List.map`
+    // (just above) is the identical concrete implementation, already
+    // correct and non-generic -- reuse it instead of chasing this gap here.
+    def map (f : A -> B) (self : List A) : List B :=
+        match self {
+            empty => List.empty,
+            cons a tail => List.cons (f a) (List.map f tail),
+            _ => List.empty
+        }
 }
 
 /// A length-indexed vector: Vec len A is a list of exactly len elements of type A
 pub type Vec (len : Nat) A {
-	nil : Vec Nat.zero A,
-	cons (head : A) (tail : Vec len A) : Vec (Nat.succ len) A
+    nil : Vec Nat.zero A,
+    cons (head : A) (tail : Vec len A) : Vec (Nat.succ len) A
 }
 
 pub def fun_apply (f : A -> B) (a : A) : B := f a
@@ -654,38 +649,38 @@ pub class IndexedMonadLift (m : Type -> Type -> Type -> Type) (n : Type -> Type 
 // itself did not land this session -- see univalence.md's Stage 6
 // reconnaissance for the two separate parser bugs that blocked it.
 with Cubical {
-	#[cubical "interval"] pub def I : Type
-	#[cubical "i0"] pub def i0 : Cubical.I
-	#[cubical "i1"] pub def i1 : Cubical.I
-	#[cubical "ineg"] pub def ineg (i : Cubical.I) : Cubical.I
-	#[cubical "imeet"] pub def imeet (i : Cubical.I) (j : Cubical.I) : Cubical.I
-	#[cubical "ijoin"] pub def ijoin (i : Cubical.I) (j : Cubical.I) : Cubical.I
-	#[cubical "pathp"] pub def PathP {u : Universe} (A : Cubical.I -> Sort u) (a : A Cubical.i0) (b : A Cubical.i1) : Sort u
-	#[cubical "transp"] pub def transp (A : Cubical.I -> Type) (a : A Cubical.i0) : A Cubical.i1
-	#[cubical "face_eq0"] pub def face_eq0 (i : Cubical.I) : Cubical.I
-	#[cubical "face_eq1"] pub def face_eq1 (i : Cubical.I) : Cubical.I
-	#[cubical "is_one"] pub def is_one (i : Cubical.I) : Type
-	#[cubical "hcomp"] pub def hcomp (A : Type) (phi : Cubical.I) (u : Cubical.I -> Cubical.is_one phi -> A) (u0 : A) : A
-	// The canonical inhabitant of `is_one i1` (Stage 6b). Its signature is
-	// stated here for the bare/under-applied case like every other
-	// primitive's; the checker's own `cubical_result_type` row is what types
-	// it (`lang/typecheck/infer.mo`), and the pin
-	// `test_it_is_one_types_as_a_proof_of_is_one_i1`
-	// (`proofs/src/checker/cubical_props.mo`) asserts that row's answer.
-	#[cubical "it_is_one"] pub def it_is_one : Cubical.is_one Cubical.i1
-	// Stage 6b-ii's three. Their signatures are stated LOOSELY, and that
-	// is deliberate: only the checker's own rules (`type_check_glue`,
-	// `type_check_glue_intro`, `type_check_glue_elim`,
-	// lang/src/typecheck/infer.mo) can state them exactly, because `w`'s
-	// type mentions `Equiv`, which lives in `proofs` -- above this file.
-	// What these three lines buy is name RESOLUTION and a type for the
-	// under-applied case; a saturated application is typed by the rule.
-	#[cubical "glue"] pub def Glue (A : Type) (phi : Cubical.I)
-		(T : Cubical.is_one phi -> Type) (w : (u : Cubical.is_one phi) -> Type) : Type
-	#[cubical "glue_intro"] pub def glue (A : Type) (phi : Cubical.I)
-		(T : Cubical.is_one phi -> Type) (w : (u : Cubical.is_one phi) -> Type)
-		(t : (u : Cubical.is_one phi) -> T u) (a : A) : Cubical.Glue A phi T w
-	#[cubical "glue_elim"] pub def unglue (g : Type) : Type
+    #[cubical "interval"] pub def I : Type
+    #[cubical "i0"] pub def i0 : Cubical.I
+    #[cubical "i1"] pub def i1 : Cubical.I
+    #[cubical "ineg"] pub def ineg (i : Cubical.I) : Cubical.I
+    #[cubical "imeet"] pub def imeet (i : Cubical.I) (j : Cubical.I) : Cubical.I
+    #[cubical "ijoin"] pub def ijoin (i : Cubical.I) (j : Cubical.I) : Cubical.I
+    #[cubical "pathp"] pub def PathP {u : Universe} (A : Cubical.I -> Sort u) (a : A Cubical.i0) (b : A Cubical.i1) : Sort u
+    #[cubical "transp"] pub def transp (A : Cubical.I -> Type) (a : A Cubical.i0) : A Cubical.i1
+    #[cubical "face_eq0"] pub def face_eq0 (i : Cubical.I) : Cubical.I
+    #[cubical "face_eq1"] pub def face_eq1 (i : Cubical.I) : Cubical.I
+    #[cubical "is_one"] pub def is_one (i : Cubical.I) : Type
+    #[cubical "hcomp"] pub def hcomp (A : Type) (phi : Cubical.I) (u : Cubical.I -> Cubical.is_one phi -> A) (u0 : A) : A
+    // The canonical inhabitant of `is_one i1` (Stage 6b). Its signature is
+    // stated here for the bare/under-applied case like every other
+    // primitive's; the checker's own `cubical_result_type` row is what types
+    // it (`lang/typecheck/infer.mo`), and the pin
+    // `test_it_is_one_types_as_a_proof_of_is_one_i1`
+    // (`proofs/src/checker/cubical_props.mo`) asserts that row's answer.
+    #[cubical "it_is_one"] pub def it_is_one : Cubical.is_one Cubical.i1
+    // Stage 6b-ii's three. Their signatures are stated LOOSELY, and that
+    // is deliberate: only the checker's own rules (`type_check_glue`,
+    // `type_check_glue_intro`, `type_check_glue_elim`,
+    // lang/src/typecheck/infer.mo) can state them exactly, because `w`'s
+    // type mentions `Equiv`, which lives in `proofs` -- above this file.
+    // What these three lines buy is name RESOLUTION and a type for the
+    // under-applied case; a saturated application is typed by the rule.
+    #[cubical "glue"] pub def Glue (A : Type) (phi : Cubical.I)
+        (T : Cubical.is_one phi -> Type) (w : (u : Cubical.is_one phi) -> Type) : Type
+    #[cubical "glue_intro"] pub def glue (A : Type) (phi : Cubical.I)
+        (T : Cubical.is_one phi -> Type) (w : (u : Cubical.is_one phi) -> Type)
+        (t : (u : Cubical.is_one phi) -> T u) (a : A) : Cubical.Glue A phi T w
+    #[cubical "glue_elim"] pub def unglue (g : Type) : Type
 }
 
 // ── Inhabited instances ────────────────────────────────────────────

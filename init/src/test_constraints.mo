@@ -11,32 +11,32 @@ use lib {}
 // --- Class Definitions ---
 
 class Show A {
-  def show : A -> String
+    def show : A -> String
 }
 
 class [Show A] ShowWrap A {
-  def show_wrap : A -> String
+    def show_wrap : A -> String
 }
 
 class [Show A] ShowDouble A {
-  def show_double : A -> String
+    def show_double : A -> String
 }
 
 // --- Instances ---
 
 // Show I64 exists (no constraints)
 pub instance Show I64 {
-  def show (a : I64) : String := I64.to_string a
+    def show (a : I64) : String := I64.to_string a
 }
 
 // ShowWrap I64 requires Show I64 (which exists)
 pub instance ShowWrap I64 {
-  def show_wrap (a : I64) : String := I64.to_string a
+    def show_wrap (a : I64) : String := I64.to_string a
 }
 
 // ShowDouble I64 requires Show I64 (which exists)
 pub instance ShowDouble I64 {
-  def show_double (a : I64) : String := I64.to_string a
+    def show_double (a : I64) : String := I64.to_string a
 }
 
 // --- Tests ---
@@ -80,8 +80,8 @@ def get_five : Option I64 :=
 #[test]
 def test_option_operations : Bool :=
     match get_five {
-      some _ => true,
-      none => false
+        some _ => true,
+        none => false
     }
 
 // Test 8: BEq Bool instance works

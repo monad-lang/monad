@@ -19,10 +19,10 @@ pub def RawIO.pure (a : A) : RawIO A
 pub def RawIO.bind (a : RawIO A) (f : A -> RawIO B) : RawIO B
 
 pub instance Monad RawIO {
-  def pure (a : A) : RawIO A :=
-    RawIO.pure a
-  def bind (a : RawIO A) (f : A -> RawIO B) : RawIO B :=
-    RawIO.bind a f
+    def pure (a : A) : RawIO A :=
+        RawIO.pure a
+    def bind (a : RawIO A) (f : A -> RawIO B) : RawIO B :=
+        RawIO.bind a f
 }
 
 /// IO is the user-facing IO type. It wraps `RawIO` and can be extended
@@ -51,10 +51,10 @@ def IO.bind (a : IO A) (f : A -> IO B) : IO B :=
     }
 
 pub instance Monad IO {
-  def pure (a : A) : IO A :=
-    IO.pure a
-  def bind (a : IO A) (f : A -> IO B) : IO B :=
-    IO.bind a f
+    def pure (a : A) : IO A :=
+        IO.pure a
+    def bind (a : IO A) (f : A -> IO B) : IO B :=
+        IO.bind a f
 }
 
 // TODO support constraints

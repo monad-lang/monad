@@ -176,12 +176,12 @@ def Format.emit_hole (name : String) (align : FormatAlign) : Expr :=
         left => Format.display_expr name,
         right width =>
             e_app (e_app (e_var "Format.apply_align")
-                         (e_app (e_var "FormatAlign.right") (e_int width)))
-                  (Format.display_expr name),
+                (e_app (e_var "FormatAlign.right") (e_int width)))
+                (Format.display_expr name),
         centre width =>
             e_app (e_app (e_var "Format.apply_align")
-                         (e_app (e_var "FormatAlign.centre") (e_int width)))
-                  (Format.display_expr name),
+                (e_app (e_var "FormatAlign.centre") (e_int width)))
+                (Format.display_expr name),
     }
 
 /// `FmtDisplay.fmt_display <name>` — the value a hole displays.
@@ -299,17 +299,17 @@ pub def Format.parse_spec (spec : String) : Result String FormatAlign :=
         let first := byte_at spec 0 in
         if Bool.not (Bool.or (U8.beq first byte_gt) (U8.beq first byte_caret)) then
             err (String.concat "fmt!: unknown format spec `:"
-                               (String.concat spec "`"))
+                (String.concat spec "`"))
         else
             let scanned := scan_digits spec 1 len 0 in
             let width := match scanned { pair w _ => w } in
             let stop := match scanned { pair _ s => s } in
             if Bool.not (I64.beq stop len) then
                 err (String.concat "fmt!: trailing characters after a width in `:"
-                                    (String.concat spec "`"))
+                    (String.concat spec "`"))
             else if I64.lt width 1 then
                 err (String.concat "fmt!: a format width must be at least 1, got `:"
-                                   (String.concat spec "`"))
+                    (String.concat spec "`"))
             else if U8.beq first byte_gt then ok (right width)
             else ok (centre width)
 

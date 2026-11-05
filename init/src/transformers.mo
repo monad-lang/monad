@@ -160,7 +160,7 @@ pub def ReaderT.asks [Monad M] {R : Type} {A : Type} (f : R -> A) : ReaderT R M 
 
 /// Run `m` in a locally modified environment.
 pub def ReaderT.local {R : Type} {R2 : Type} {M : Type -> Type} {A : Type}
-        (f : R2 -> R) (m : ReaderT R M A) : ReaderT R2 M A :=
+    (f : R2 -> R) (m : ReaderT R M A) : ReaderT R2 M A :=
     ReaderT.mk (fn (r2 : R2) => ReaderT.run m (f r2))
 
 /// Internal: run the continuation in the same environment. Extracted so
@@ -174,7 +174,7 @@ pub def ReaderT.local {R : Type} {R2 : Type} {M : Type -> Type} {A : Type}
 /// variable, so the affine rule's fail-open path exempts it (the same
 /// reason main's `init` reaches zero diagnostics with this body).
 def ReaderT.bind_step [Monad M] {R : Type} {A : Type} {B : Type}
-        (f : A -> ReaderT R M B) (r : R) : A -> M B :=
+    (f : A -> ReaderT R M B) (r : R) : A -> M B :=
     fn (a : A) => ReaderT.run (f a) r
 
 /// The instance body references `Monad.bind`/`Monad.pure` DIRECTLY, the
@@ -228,7 +228,7 @@ pub def ResultT.throw [Monad M] {E : Type} {A : Type} (e : E) : ResultT E M A :=
     ResultT.mk (Monad.pure (Result.err e))
 
 def ResultT.catch_step [Monad M] {E : Type} {A : Type}
-        (on_error : E -> ResultT E M A) (r : Result E A) : M (Result E A) :=
+    (on_error : E -> ResultT E M A) (r : Result E A) : M (Result E A) :=
     match r {
         Result.ok a => Monad.pure (Result.ok a),
         Result.err e => ResultT.run (on_error e)
@@ -236,7 +236,7 @@ def ResultT.catch_step [Monad M] {E : Type} {A : Type}
 
 /// `ExceptT`'s `catchError` / `handleError`: run `on_error` on `Err`.
 pub def ResultT.catch [Monad M] {E : Type} {A : Type}
-        (m : ResultT E M A) (on_error : E -> ResultT E M A) : ResultT E M A :=
+    (m : ResultT E M A) (on_error : E -> ResultT E M A) : ResultT E M A :=
     ResultT.mk (Monad.bind (ResultT.run m) (ResultT.catch_step on_error))
 
 /// Map the error payload, leaving a successful value alone.
@@ -246,7 +246,7 @@ pub def ResultT.catch [Monad M] {E : Type} {A : Type}
 /// helper whose body transforms the payload crashes the compiled backend
 /// (measured: `driver exited -1`), while the same body in a lambda works.
 pub def ResultT.map_error [Monad M] {E : Type} {E2 : Type} {A : Type}
-        (f : E -> E2) (m : ResultT E M A) : ResultT E2 M A :=
+    (f : E -> E2) (m : ResultT E M A) : ResultT E2 M A :=
     ResultT.mk (Monad.bind (ResultT.run m) (fn (r : Result E A) =>
         match r {
             Result.ok a => Monad.pure (Result.ok a),
@@ -302,7 +302,7 @@ pub def WriterT.tell [Monad M] {W : Type} (w : W) : WriterT W M Unit :=
     WriterT.mk (Monad.pure (Pair.pair w unit))
 
 def WriterT.bind_step [Monad M, Semigroup W] {W : Type} {A : Type} {B : Type}
-        (f : A -> WriterT W M B) (p : Pair W A) : M (Pair W B) :=
+    (f : A -> WriterT W M B) (p : Pair W A) : M (Pair W B) :=
     match p {
         Pair.pair w a => Monad.bind (WriterT.run (f a)) (fn q =>
             match q {
@@ -311,7 +311,7 @@ def WriterT.bind_step [Monad M, Semigroup W] {W : Type} {A : Type} {B : Type}
     }
 
 def WriterT.bind_run [Monad M, Semigroup W] {W : Type} {A : Type} {B : Type}
-        (ma : WriterT W M A) (f : A -> WriterT W M B) : M (Pair W B) :=
+    (ma : WriterT W M A) (f : A -> WriterT W M B) : M (Pair W B) :=
     Monad.bind (WriterT.run ma) (WriterT.bind_step f)
 
 pub instance [Monad M, Semigroup W, Monoid W] Monad (WriterT W M) {
@@ -324,7 +324,7 @@ pub instance [Monad M, Semigroup W, Monoid W] Monad (WriterT W M) {
 /// `listen`: pair the result with the log it wrote. Requires `Copy W`
 /// because the log is returned AND kept as the WriterT's own output.
 pub def WriterT.listen [Monad M, Copy W] {W : Type} {A : Type}
-        (m : WriterT W M A) : WriterT W M (Pair A W) :=
+    (m : WriterT W M A) : WriterT W M (Pair A W) :=
     WriterT.mk (Monad.bind (WriterT.run m) (fn (p : Pair W A) =>
         match p {
             Pair.pair w a =>
@@ -336,7 +336,7 @@ pub def WriterT.listen [Monad M, Copy W] {W : Type} {A : Type}
 /// `censor`: transform the log a computation wrote. Inline lambda for the
 /// same compiled-backend reason as `ResultT.map_error`.
 pub def WriterT.censor [Monad M] {W : Type} {A : Type}
-        (f : W -> W) (m : WriterT W M A) : WriterT W M A :=
+    (f : W -> W) (m : WriterT W M A) : WriterT W M A :=
     WriterT.mk (Monad.bind (WriterT.run m) (fn (p : Pair W A) =>
         match p {
             Pair.pair w a => Monad.pure (Pair.pair (f w) a)

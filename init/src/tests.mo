@@ -296,8 +296,8 @@ def test_unit : Bool :=
 // Struct tests
 
 struct Point {
-    x: I64,
-    y: I64,
+    x : I64,
+    y : I64,
 }
 
 #[test]
@@ -306,8 +306,6 @@ def test_struct_construct_and_match : Bool :=
     match pt {
         mk x y => true
     }
-
-
 
 #[test]
 def test_eq_in_plain_match : Bool :=
@@ -331,8 +329,8 @@ def test_struct_wildcard : Bool :=
     }
 
 struct DefaultedBox {
-    w: I64,
-    h: I64 := 100,
+    w : I64,
+    h : I64 := 100,
 }
 
 #[test]

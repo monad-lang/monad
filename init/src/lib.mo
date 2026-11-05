@@ -32,20 +32,19 @@ pub use lib::shared {*}
 // checker could not resolve a call through a variable-headed bridge.
 
 class From T A {
- def from (t: T): A
+    def from (t : T) : A
 }
 
 pub instance [BEq A] BEq (Option A) {
-	def beq (oa ob : Option A) : Bool :=
-		match oa {
-			some a => match ob {
-				some b => a == b,
-				none => false
-			},
-			none => match ob {
-				some b => false,
-				none => true,
-			}
-		}
+    def beq (oa ob : Option A) : Bool :=
+        match oa {
+            some a => match ob {
+                some b => a == b,
+                none => false
+            },
+            none => match ob {
+                some b => false,
+                none => true,
+            }
+        }
 }
-
