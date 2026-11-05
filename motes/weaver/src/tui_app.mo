@@ -22,7 +22,7 @@ use shuttle::gate {Pick, Approval, Gate, Capability}
 use shuttle::message {Message, Usage}
 use shuttle::message_types {Role, Content}
 use weaver::usage {UsageTracker.start, UsageTracker.silent, UsageTracker.last}
-use std::ref {Ref, Ref.new}
+use std::ref {Ref, Ref.new, Ref.get, Ref.set}
 use shuttle::context {usage_zero}
 use weaver::commands {
     WeaverState, Effect, Effect.ok, set_fatal, Commands.dispatch, Commands.set_model,
@@ -85,7 +85,7 @@ use tui::text {Text.take_width, Text.width}
 use tui::clipboard {Clipboard.copy}
 use tui::widgets::dialog {
     DialogModel, DialogOption, DialogStep, Dialog.make, Dialog.with_default, Dialog.with_notes, Dialog.note_text,
-    Dialog.paint, Dialog.modal,
+    Dialog.paint, Dialog.modal, Dialog.modal_refresh, Dialog.option_count,
 }
 use tui::terminal {
     Terminal.clear_screen, Terminal.cursor_move, Terminal.enter_raw_mode, Terminal.size,
@@ -2105,10 +2105,30 @@ def monitor_list (st : WeaverState) (selected : I64) : IO (Pair MonitorView (Lis
     let size <- Terminal.size;
     let width : I64 := match size { Pair.pair _ cols => cols - 12 };
     let d : DialogModel := TuiApp.monitor_dialog now width ts;
-    let pr <- Dialog.modal (paint_dialog st.colors) (Dialog.with_default d selected);
+    // The rows on screen are the latest refresh's: a choice maps to them.
+    let latest <- Ref.new ts;
+    let pr <- Dialog.modal_refresh 10 (list_refresh st.store width latest) (paint_dialog st.colors) (Dialog.with_default d selected);
     let step : DialogStep := match pr { Pair.pair _ s => s };
-    IO.pure (Pair.pair (TuiApp.monitor_list_next ts step) List.empty)
+    let shown <- Ref.get latest;
+    IO.pure (Pair.pair (TuiApp.monitor_list_next shown step) List.empty)
 }
+
+/// Once a second: re-read the tasks (statuses and elapsed times move).
+def list_refresh (store : Option StoreState) (width : I64) (latest : Ref (List TaskEntry)) (d : DialogModel) : IO (Option DialogModel) := do {
+    let ts <- Tasks.list store;
+    let now <- IO.current_time_nano;
+    let old <- Ref.get latest;
+    let _ <- Ref.set latest ts;
+    IO.pure (Option.some (TuiApp.monitor_refreshed d (TuiApp.monitor_dialog now width ts) (List.length ts - List.length old)))
+}
+
+/// The refreshed list keeps the selected row: new tasks are prepended
+/// (newest first), so the selection moves down by as many.
+pub def TuiApp.monitor_refreshed (old : DialogModel) (fresh : DialogModel) (added : I64) : DialogModel :=
+    let last : I64 := Dialog.option_count fresh - 1 in
+    let want : I64 := old.selected + added in
+    let sel : I64 := if want < 0 then 0 else if last < want then last else want in
+    { fresh with selected := sel, scroll := old.scroll }
 
 pub def TuiApp.monitor_dialog (now : I64) (width : I64) (ts : List TaskEntry) : DialogModel :=
     let rows : List DialogOption := List.map (fn (t : TaskEntry) =>
@@ -2163,12 +2183,28 @@ def monitor_detail_of (log : Option Logger) (st : WeaverState) (gen : I64) (pend
     let output <- task_output t;
     let body : List String := List.append (TuiApp.task_facts now t) (List.cons "" output);
     let d : DialogModel := Dialog.make (String.concat "Task " t.id) t.status body (TuiApp.detail_options t);
-    let pr <- Dialog.modal (paint_dialog st.colors) d;
+    let pr <- Dialog.modal_refresh 10 (detail_refresh st.store t.id) (paint_dialog st.colors) d;
     let step : DialogStep := match pr { Pair.pair _ s => s };
     match TuiApp.detail_action t step {
         DetailAction.detail_kill => task_kill log st gen pending t,
         DetailAction.detail_refresh => IO.pure (Pair.pair (MonitorView.mon_detail t.id) List.empty),
         DetailAction.detail_back => IO.pure (Pair.pair (MonitorView.mon_list 0) List.empty),
+    }
+}
+
+/// Once a second: the task's status, elapsed time and output. The options
+/// stay as opened, so a choice keeps its meaning (Kill on an ended task
+/// only reports).
+def detail_refresh (store : Option StoreState) (id : String) (d : DialogModel) : IO (Option DialogModel) := do {
+    let ts <- Tasks.list store;
+    match task_by_id id ts {
+        Option.none => IO.pure Option.none,
+        Option.some t => do {
+            let now <- IO.current_time_nano;
+            let output <- task_output t;
+            let d2 : DialogModel := { d with subtitle := t.status, body := List.append (TuiApp.task_facts now t) (List.cons "" output) };
+            IO.pure (Option.some d2)
+        },
     }
 }
 

@@ -159,3 +159,46 @@ def midturn_run (bin : String) (root : String) : IO Bool := do {
 pub def run_exit_note_mid_turn : IO Bool :=
     run_gated "pty weaver midturn" (fn (bin : String) =>
         with_root "midturn" (fn (root : String) => midturn_run bin root))
+
+// ── the monitor refreshes itself ────────────────────────────────────────
+
+def live_go (m : Pty) : IO Bool := do {
+    let ready <- Pty.wait_until m placeholder_seen 6000;
+    Pty.send_text m "go\n";
+    let overlay <- Pty.wait_until m (fn (o : Output) => has_stripped o "Permission required") 6000;
+    Pty.send_text m "y";
+    let done <- Pty.wait_until m started 8000;
+    let a <- Check.report "the ticking task starts" (ready && overlay && done);
+    Pty.send_text m "/tasks\r";
+    let listed <- Pty.wait_until m (fn (o : Output) => Bool.and (grid_has o "Tasks") (grid_has o "running")) 4000;
+    Pty.send_text m "\r";
+    let first <- Pty.wait_until m (fn (o : Output) => grid_has o "tick1") 4000;
+    // No key from here on: only the refresh can show the later lines.
+    let later <- Pty.wait_until m (fn (o : Output) => Bool.and (grid_has o "tick3") (grid_has o "exited")) 8000;
+    let b <- Check.report "the detail view follows the output without a key" (listed && first && later);
+    Pty.send_text m "\u{1b}";
+    let flipped <- Pty.wait_until m (fn (o : Output) => Bool.and (grid_has o "Enter opens a task") (grid_has o "0 running")) 4000;
+    let c <- Check.report "the list shows the task ended" flipped;
+    Pty.send_text m "\u{1b}";
+    Pty.finish m;
+    return (a && b && c)
+}
+
+def live_run (bin : String) (root : String) : IO Bool := do {
+    let turns := String.concat root "/turns_live.json";
+    let wrote <- write_process_script turns "for i in 1 2 3; do echo tick$i; sleep 1; done";
+    if Bool.not wrote then do {
+        IO.println "FAIL pty monitor live: could not write the turn script";
+        return false
+    } else do {
+        let r <- spawn_args bin "mock" List.empty 24 80 root (Option.some turns) List.empty;
+        match r {
+            Result.err e => do { IO.println (String.concat "FAIL pty monitor live spawn: " e); return false },
+            Result.ok m => live_go m
+        }
+    }
+}
+
+pub def run_monitor_refreshes_itself : IO Bool :=
+    run_gated "pty weaver monitor live" (fn (bin : String) =>
+        with_root "monlive" (fn (root : String) => live_run bin root))

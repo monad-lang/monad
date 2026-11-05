@@ -7,9 +7,10 @@ use weaver::tasks {
 }
 use weaver::tui_app {
     TuiApp.monitor_list_next, TuiApp.detail_action, TuiApp.detail_options, TuiApp.with_task_notes,
+    TuiApp.monitor_dialog, TuiApp.monitor_refreshed,
     MonitorView, DetailAction,
 }
-use tui::widgets::dialog {DialogStep}
+use tui::widgets::dialog {DialogStep, DialogModel}
 use std::list {List.length, List.intercalate}
 
 def proc_task (id : String) (running : Bool) (status : String) (started : I64) : TaskEntry :=
@@ -79,3 +80,14 @@ def test_detail_choices : Bool :=
 def test_notes_ride_the_next_message : Bool :=
     String.beq (TuiApp.with_task_notes List.empty "go") "go"
         && String.beq (TuiApp.with_task_notes ["[background task p-1 exited (0): make]"] "go") "go\n\n[background task p-1 exited (0): make]"
+
+/// A refresh that finds a new task keeps the selected task selected: it
+/// moved down one row. The selection never runs past the last option.
+#[test]
+def test_monitor_refresh_keeps_the_selected_task : Bool :=
+    let before : List TaskEntry := [proc_task "p-1" true "running" 1, proc_task "p-0" true "running" 0] in
+    let after : List TaskEntry := List.cons (proc_task "p-2" true "running" 2) before in
+    let old : DialogModel := { (TuiApp.monitor_dialog 5 60 before) with selected := 1 } in
+    let moved : DialogModel := TuiApp.monitor_refreshed old (TuiApp.monitor_dialog 5 60 after) 1 in
+    let far : DialogModel := TuiApp.monitor_refreshed { old with selected := 9 } (TuiApp.monitor_dialog 5 60 before) 0 in
+    moved.selected == 2 && far.selected == 3
