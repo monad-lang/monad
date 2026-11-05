@@ -33,3 +33,9 @@ workspace = true
 
 [dependencies.lang]
 workspace = true
+
+# Used only by `src/checker/` (the real-pipeline fixtures need
+# `std::test`/`std::process`/`std::path`). The mathematical half under
+# `src/*.mo` still imports `init` alone.
+[dependencies.std]
+workspace = true
