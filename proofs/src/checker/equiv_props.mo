@@ -34,7 +34,7 @@ use lang::module {try_parse_decls}
 use lang::scope {build_scope_from_decls}
 use lang::typecheck::infer {empty_local_types, empty_locals, type_check}
 use lang::types {
-  Decl, Def, ModulePath, Scope, ScopeData, Term, id, show_name_path,
+    Decl, Def, ModulePath, Scope, ScopeData, Term, id, show_name_path,
 }
 
 def equiv_props_path : ModulePath :=

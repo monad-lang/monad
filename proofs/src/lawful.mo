@@ -38,7 +38,7 @@ pub class [Monad M] LawfulMonad (M : Type -> Type)
     /// `bind (bind m f) g = bind m (fn x => bind (f x) g)`.
     def associative (m : M A) (f : A -> M B) (g : B -> M C) :
         Path (M C) (bind A C (bind A B m f) g)
-                    (bind A C m (fn x => bind B C (f x) g))
+            (bind A C m (fn x => bind B C (f x) g))
 }
 
 /// The identity monad's `pure`, as a named def so the laws can reduce it.
@@ -63,7 +63,7 @@ pub def Id.right_fam {A : Type} (m : Id A) : Type :=
 #[proof]
 pub def Id.assoc_fam {A B C : Type} (f : A -> Id B) (g : B -> Id C) (m : Id A) : Type :=
     Path (Id C) (Id.bind A C (Id.bind A B m f) g)
-                (Id.bind A C m (fn x => Id.bind B C (f x) g))
+        (Id.bind A C m (fn x => Id.bind B C (f x) g))
 
 /// `Id` is a lawful monad for its own `bind`/`pure`. The instance's method
 /// bodies are the checked proofs (the self-hosted checker verifies them).
@@ -83,7 +83,7 @@ pub instance LawfulMonad Id Id.bind Id.pure {
     /// `Shared.get`, whose borrowed reads the affine rule exempts.
     def associative (m : Id A) (f : A -> Id B) (g : B -> Id C) :
         Path (Id C) (Id.bind A C (Id.bind A B m f) g)
-                    (Id.bind A C m (fn x => Id.bind B C (f x) g)) :=
+            (Id.bind A C m (fn x => Id.bind B C (f x) g)) :=
         let fs : Shared (A -> Id B) := Shared.of f in
         let gs : Shared (B -> Id C) := Shared.of g in
         Id.elim (Id.assoc_fam (Shared.get fs) (Shared.get gs))

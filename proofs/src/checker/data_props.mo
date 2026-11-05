@@ -14,8 +14,8 @@
 /// the fixture cannot import `proofs/` (renamed away from `Path`/`refl` so the
 /// ambient std tier cannot collide with them).
 use lang::module {
-  Diagnostic, check_file_cached_from_source_ranged, diagnostic_message,
-  module_info_cache_empty, ranged_file_diagnostics,
+    Diagnostic, check_file_cached_from_source_ranged, diagnostic_message,
+    module_info_cache_empty, ranged_file_diagnostics,
 }
 use std::path {Path}
 use std::process {exec_cmd, process_id}

@@ -23,8 +23,8 @@ use lang::module {try_parse_decls}
 use lang::scope {build_scope_from_decls}
 use lang::typecheck::infer {empty_local_types, empty_locals, type_check}
 use lang::types {
-  ModulePath, Scope, ScopeData, binder_anon, binder_binder, cub, cub_interval, level_const,
-  sentinel,
+    ModulePath, Scope, ScopeData, binder_anon, binder_binder, cub, cub_interval, level_const,
+    sentinel,
 }
 
 // --- The soundness pin ---

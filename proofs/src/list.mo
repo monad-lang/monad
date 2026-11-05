@@ -35,11 +35,11 @@ pub def nil_append {A : Type} (xs : List A) :
 #[proof]
 pub def append_assoc_fam {A : Type} (ys : List A) (zs : List A) (xs : List A) : Type :=
     Path (List A) (List.append (List.append xs ys) zs)
-                 (List.append xs (List.append ys zs))
+        (List.append xs (List.append ys zs))
 
 #[proof]
 pub def append_assoc {A : Type} (xs : List A) (ys : List A) (zs : List A) :
     Path (List A) (List.append (List.append xs ys) zs)
-                 (List.append xs (List.append ys zs)) :=
+        (List.append xs (List.append ys zs)) :=
     list_elim (append_assoc_fam ys zs) (refl (List.append ys zs))
         (fn x t ih => ap (fn tl => List.cons x tl) ih) xs

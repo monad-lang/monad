@@ -31,12 +31,12 @@ use lang::typecheck::infer {empty_local_types, empty_locals, equiv_type, type_ch
 use lang::typecheck::unify {unify}
 use lang::typecheck::whnf {whnf}
 use lang::types {
-  CubicalPrim, DebugName, ModulePath, Scope, ScopeData, SortLevel, Similar, Term,
-  binder_anon, binder_named,
-  cub, cub_face_eq0, cub_face_eq1, cub_glue, cub_glue_elim, cub_glue_intro, cub_hcomp,
-  cub_i0, cub_i1, cub_imeet,
-  cub_ijoin, cub_ineg, cub_interval, cub_is_one, cub_it_is_one, cub_pathp,
-  cub_transp, cubical_prim_eq, id, sentinel, sort_n,
+    CubicalPrim, DebugName, ModulePath, Scope, ScopeData, SortLevel, Similar, Term,
+    binder_anon, binder_named,
+    cub, cub_face_eq0, cub_face_eq1, cub_glue, cub_glue_elim, cub_glue_intro, cub_hcomp,
+    cub_i0, cub_i1, cub_imeet,
+    cub_ijoin, cub_ineg, cub_interval, cub_is_one, cub_it_is_one, cub_pathp,
+    cub_transp, cubical_prim_eq, id, sentinel, sort_n,
 }
 
 def checker_synthetic_path : ModulePath :=
@@ -48,17 +48,17 @@ def checker_synthetic_path : ModulePath :=
 def cubical_decls_source : String :=
     String.concat "#[cubical \"interval\"] def I : Type\n"
     (String.concat "#[cubical \"i0\"] def i0 : I\n"
-    (String.concat "#[cubical \"i1\"] def i1 : I\n"
-    (String.concat "#[cubical \"ineg\"] def ineg (i : I) : I\n"
-    (String.concat "#[cubical \"imeet\"] def imeet (i : I) (j : I) : I\n"
-    (String.concat "#[cubical \"ijoin\"] def ijoin (i : I) (j : I) : I\n"
-    (String.concat "#[cubical \"pathp\"] def PathP (A : I -> Type) (a : A i0) (b : A i1) : Type\n"
-    (String.concat "#[cubical \"transp\"] def transp (A : I -> Type) (a : A i0) : A i1\n"
-    (String.concat "#[cubical \"face_eq0\"] def face_eq0 (i : I) : I\n"
-    (String.concat "#[cubical \"face_eq1\"] def face_eq1 (i : I) : I\n"
-    (String.concat "#[cubical \"is_one\"] def is_one (i : I) : Type\n"
-    (String.concat "#[cubical \"hcomp\"] def hcomp (A : Type) (phi : I) (u : I -> is_one phi -> A) (u0 : A) : A\n"
-    "#[cubical \"it_is_one\"] def it_is_one : is_one i1\n")))))))))))
+        (String.concat "#[cubical \"i1\"] def i1 : I\n"
+            (String.concat "#[cubical \"ineg\"] def ineg (i : I) : I\n"
+                (String.concat "#[cubical \"imeet\"] def imeet (i : I) (j : I) : I\n"
+                    (String.concat "#[cubical \"ijoin\"] def ijoin (i : I) (j : I) : I\n"
+                        (String.concat "#[cubical \"pathp\"] def PathP (A : I -> Type) (a : A i0) (b : A i1) : Type\n"
+                            (String.concat "#[cubical \"transp\"] def transp (A : I -> Type) (a : A i0) : A i1\n"
+                                (String.concat "#[cubical \"face_eq0\"] def face_eq0 (i : I) : I\n"
+                                    (String.concat "#[cubical \"face_eq1\"] def face_eq1 (i : I) : I\n"
+                                        (String.concat "#[cubical \"is_one\"] def is_one (i : I) : Type\n"
+                                            (String.concat "#[cubical \"hcomp\"] def hcomp (A : Type) (phi : I) (u : I -> is_one phi -> A) (u0 : A) : A\n"
+                                                "#[cubical \"it_is_one\"] def it_is_one : is_one i1\n")))))))))))
 
 /// `Sigma` and the library's own `Path`/`isContr`/`fiber`/`isEquiv`/
 /// `Equiv`, spelled as `init/src/prelude.mo` and (`Sigma`) as
@@ -73,10 +73,10 @@ def cubical_decls_source : String :=
 def library_decls_source : String :=
     String.concat "type Sigma (A : Type) (B : A -> Type) { dpair (fst : A) (snd : B fst) }\n"
     (String.concat "def Path (A : Type) (a : A) (b : A) : Type := PathP (fn _ => A) a b\n"
-    (String.concat "def isContr (A : Type) : Type := Sigma A (fn center => ((x : A) -> Path A x center))\n"
-    (String.concat "def fiber (A : Type) (B : Type) (f : A -> B) (b : B) : Type := Sigma A (fn a => Path B (f a) b)\n"
-    (String.concat "def isEquiv (A : Type) (B : Type) (f : A -> B) : Type := (b : B) -> isContr (fiber A B f b)\n"
-    "def Equiv (A : Type) (B : Type) : Type := Sigma (A -> B) (fn f => isEquiv A B f)\n"))))
+        (String.concat "def isContr (A : Type) : Type := Sigma A (fn center => ((x : A) -> Path A x center))\n"
+            (String.concat "def fiber (A : Type) (B : Type) (f : A -> B) (b : B) : Type := Sigma A (fn a => Path B (f a) b)\n"
+                (String.concat "def isEquiv (A : Type) (B : Type) (f : A -> B) : Type := (b : B) -> isContr (fiber A B f b)\n"
+                    "def Equiv (A : Type) (B : Type) : Type := Sigma (A -> B) (fn f => isEquiv A B f)\n"))))
 
 /// The whole synthetic prelude: the cubical block plus the library defs
 /// the `Glue` rule's expansion needs.
@@ -107,10 +107,10 @@ def unmarked_scope : Scope :=
     let source : String :=
         String.concat "def I : Type\n"
         (String.concat "def i0 : I\n"
-        (String.concat "def i1 : I\n"
-        (String.concat "def ineg (i : I) : I\n"
-        (String.concat "def imeet (i : I) (j : I) : I\n"
-        "def ijoin (i : I) (j : I) : I")))) in
+            (String.concat "def i1 : I\n"
+                (String.concat "def ineg (i : I) : I\n"
+                    (String.concat "def imeet (i : I) (j : I) : I\n"
+                        "def ijoin (i : I) (j : I) : I")))) in
     let sd : ScopeData :=
         match try_parse_decls source {
             Option.some decl_list => build_scope_from_decls checker_synthetic_path decl_list,
@@ -1578,4 +1578,3 @@ def test_unglue_rejects_an_argument_whose_type_is_not_glue : Bool :=
         ok _ => false,
         err _ => true,
     }
-

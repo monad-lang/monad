@@ -35,8 +35,8 @@ use lang::scope {build_scope_from_decls}
 use lang::typecheck::infer {empty_locals, type_check}
 use lang::typecheck::whnf {whnf}
 use lang::types {
-  DebugName, Elim, Identifier, ModulePath, NamePath, Scope, ScopeData, Similar, Term,
-  binder_anon, sentinel, sort_n,
+    DebugName, Elim, Identifier, ModulePath, NamePath, Scope, ScopeData, Similar, Term,
+    binder_anon, sentinel, sort_n,
 }
 
 def elim_props_path : ModulePath := ModulePath.mk (List.cons (Identifier.id "elim_props") List.empty)
