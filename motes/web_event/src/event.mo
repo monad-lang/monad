@@ -131,4 +131,19 @@ with HandlerResult {
     /// Handle the event and stop its default action.
     pub def prevent {Msg : Type} (m : Msg) : HandlerResult Msg :=
         HandlerResult.handler_result (Option.some m) true false
+
+    /// Relabel the message, keeping the prevent/stop decisions. This is
+    /// what lets a sub-view with its own message type be embedded in a
+    /// parent view (`Oak.Node.map`).
+    pub def map {A : Type} {B : Type} (f : A -> B) (r : HandlerResult A) : HandlerResult B :=
+        match r {
+            HandlerResult.handler_result m prevent_default stop_propagation =>
+                HandlerResult.handler_result (map_msg f m) prevent_default stop_propagation
+        }
 }
+
+def map_msg {A : Type} {B : Type} (f : A -> B) (m : Option A) : Option B :=
+    match m {
+        Option.some a => Option.some (f a),
+        Option.none => Option.none,
+    }

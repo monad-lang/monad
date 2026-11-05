@@ -49,3 +49,21 @@ def test_handler_result_ignore : Bool :=
                 Option.some _ => false,
             },
     }
+
+def double (n : I64) : I64 := I64.mul n 2
+
+#[test]
+def test_handler_result_map_keeps_flags : Bool :=
+    match HandlerResult.map double (HandlerResult.prevent 21) {
+        HandlerResult.handler_result m prevent_default stop_propagation =>
+            prevent_default && Bool.not stop_propagation
+                && (match m { Option.some v => I64.beq v 42, Option.none => false })
+    }
+
+#[test]
+def test_handler_result_map_ignore_stays_empty : Bool :=
+    let r : HandlerResult I64 := HandlerResult.ignore in
+    match HandlerResult.map double r {
+        HandlerResult.handler_result m _ _ =>
+            match m { Option.some _ => false, Option.none => true }
+    }
