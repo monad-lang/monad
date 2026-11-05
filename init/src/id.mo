@@ -1,5 +1,8 @@
 /// Identity monad: wraps a pure value, enabling do notation in pure contexts.
-type Id A {
+///
+/// `pub` because `proofs/` names it (the `LawfulMonad Id` laws); a
+/// package-private type would be invisible across the mote boundary.
+pub type Id A {
     id (a : A)
 }
 open Id {id}
