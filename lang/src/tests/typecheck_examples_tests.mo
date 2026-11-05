@@ -530,6 +530,14 @@ def test_typecheck_def_universe_clause : Bool :=
 def test_typecheck_universe_polymorphic_sigma : Bool :=
     typecheck_source "type P { p0 }\ntype Sigma {u} {v} (A : Sort u) (B : A -> Sort v) : Sort (max u v) { dpair (fst : A) (snd : B fst) }\ndef fam (x : P) : Type := P\ndef v : Sigma P fam := Sigma.dpair P.p0 P.p0"
 
+/// The SHIPPED `Sigma`/`Exists` shape: no level clauses (levels are
+/// name-keyed and survive by mention in `Sort u`/`Sort v`/`Sort w`), and
+/// `Exists` is a def ALIAS at `Prop` rather than a second inductive. One
+/// constructor (`GSigma.dpair`) serves both.
+#[test]
+def test_typecheck_sort_generic_sigma_and_exists_alias : Bool :=
+    typecheck_source "type P { p0 }\ntype GSigma (A : Sort u) (B : A -> Sort v) : Sort w { dpair (fst : A) (snd : B fst) }\ndef GExists (A : Type) (P : A -> Prop) : Prop := GSigma A P\ndef fam (x : P) : Type := P\ndef v : GSigma P fam := GSigma.dpair P.p0 P.p0"
+
 /// A level-polymorphic call checks, and the same def is usable at two
 /// levels. The strict observable for the INSTANTIATION is
 /// `infer_tests.mo`'s `test_level_polymorphic_call_instantiates_the_level`

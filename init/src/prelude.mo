@@ -381,38 +381,41 @@ pub type Pair A B {
 /// shape was unrepresentable until constructor parameter lists were made
 /// to bind; before that the mention dangled and was silently generalized
 /// into an unrelated implicit.
-pub type Sigma (A : Type) (B : A -> Type) {
+/// Dependent pairs. The result universe is a FREE level `w`, so the same
+/// inductive serves both a data `Sigma` (instantiated at `Sort (max u v)`)
+/// and the propositional `Exists` below (instantiated at `Sort 0`, where
+/// `Prop`'s impredicativity lets a `Type`-level first component sit inside a
+/// `Prop` pair).
+///
+/// The level clauses are deliberately OMITTED (`type Sigma (A : Sort u) …`
+/// rather than `{u} {v} {w}`): levels are name-keyed and survive by mention
+/// in `Sort u`/`Sort v`/`Sort w`, and one name per `{...}` clause is the
+/// grammar both compilers share. The Rust host has no level variables; it
+/// approximates a bare symbolic result sort to the bottom universe.
+pub type Sigma (A : Sort u) (B : A -> Sort v) : Sort w {
 	dpair (fst : A) (snd : B fst)
 }
 
-/// Existential quantification -- `Sigma` restricted to a `Prop`-valued
-/// family, so the pair itself lands in `Prop`.
+/// Existential quantification -- `Sigma` instantiated at `Prop`.
 ///
-/// Declared separately rather than defined as a `Sigma` because there is
-/// no universe polymorphism yet: `Sigma A B` is unconditionally in
-/// `Type` (`Sort 1`), so an `Exists` built from it would lose the `Prop`
-/// discipline. Merging the two is for when universe levels become
-/// variables.
-pub type Exists (A : Type) (P : A -> Prop) : Prop {
-	intro (a : A) (proof : P a)
-}
+/// This is now a def alias: `Sigma A P` is a dependent pair whose result
+/// level is solved by the expected `Prop`, so the pair itself lands in
+/// `Sort 0`. One constructor (`Sigma.dpair`) and one set of projections
+/// serve both `Sigma` and `Exists`.
+pub def Exists (A : Type) (P : A -> Prop) : Prop := Sigma A P
 
 /// First projection. Non-dependent, so ordinary match typing suffices.
 ///
-/// NOTE the prelude ships no `Sigma` VALUE and no test that builds one.
-/// Constructing `Sigma.dpair a b` requires `B a` to reduce, i.e.
-/// conversion checking: the self-hosted checker has it (beta + delta,
-/// lang/src/typecheck/whnf.mo) but the Rust host does not. Construction
-/// is covered by source-string tests in
-/// lang/src/tests/typecheck_examples_tests.mo, which run through the
-/// self-hosted checker only.
+/// Constructing `Sigma.dpair a b` requires `B a` to reduce, i.e. conversion
+/// checking, which the self-hosted checker has. The Rust host can now TYPE a
+/// generic `Sigma A B` application (its kind's Pi binders carry names), but
+/// it still does not construct one; construction is covered by source-string
+/// tests in `lang/src/tests/typecheck_examples_tests.mo`.
 ///
-/// The second projection `Sigma.snd (p : Sigma A B) : B (Sigma.fst p)`
-/// is deliberately absent: checking it needs the arm's expected type to
-/// see `p` refined to `Sigma.dpair a b` (scrutinee refinement), and then
-/// `Sigma.fst (Sigma.dpair a b)` reduced away by iota. Neither checker
-/// does the refinement step today -- `p` stays a variable, so iota has
-/// no constructor to fire on. See plans/type-system/sigma-types.md.
+/// The second projection `Sigma.snd (p : Sigma A B) : B (Sigma.fst p)` lives
+/// in `proofs/src/dependent.mo` (`sigma_snd`): checking it needs the arm's
+/// expected type to see the scrutinee refined to `Sigma.dpair a b`, which is
+/// the dependent-match rule, not a prelude concern.
 pub def Sigma.fst {A : Type} {B : A -> Type} (p : Sigma A B) : A :=
 	match p { Sigma.dpair a _ => a }
 
