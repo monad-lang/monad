@@ -17,7 +17,8 @@ use lib::elements {
     Html.script, Html.style, Html.title,
     Html.node, Html.void, Html.text, Html.raw, Html.comment, Html.doctype,
     Html.fragment, Html.document, Html.document_with, Html.document_utf8,
-    Html.navbar, Html.card, Html.class_list, Html.attrs_when
+    Html.navbar, Html.card, Html.class_list, Html.attrs_when,
+    Html.pre, Html.code, Html.details, Html.summary, Html.dialog, Html.progress
 }
 use lib::typed {Oak.Node, Oak.to_html}
 use xml_html::html {Html.to_string}
@@ -247,3 +248,20 @@ def test_attrs_when : Bool :=
     element_renders
         (Html.div (List.append (Html.attrs_when true [Html.id_ "x"]) (Html.attrs_when false [Html.disabled])) List.empty)
         "<div id=\"x\"></div>"
+
+// ─── Text-level and disclosure elements ───
+
+#[test]
+def test_pre_code : Bool :=
+    element_renders (Html.pre List.empty [Html.code List.empty [Html.text "x < y"]])
+        "<pre><code>x &lt; y</code></pre>"
+
+#[test]
+def test_details_summary : Bool :=
+    element_renders (Html.details [Html.open_] [Html.summary List.empty [Html.text "More"]])
+        "<details open><summary>More</summary></details>"
+
+#[test]
+def test_dialog_progress : Bool :=
+    element_renders (Html.dialog List.empty [Html.progress [Html.attr "value" "3"] List.empty])
+        "<dialog><progress value=\"3\"></progress></dialog>"

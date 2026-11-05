@@ -73,6 +73,7 @@ pub use lib::elements {
     Html.source, Html.area, Html.base, Html.embed, Html.track, Html.wbr,
     Html.script, Html.style, Html.title, Html.head, Html.body,
     Html.canvas, Html.video, Html.audio,
+    Html.pre, Html.code, Html.strong, Html.em, Html.small, Html.kbd, Html.mark, Html.blockquote, Html.figure, Html.figcaption, Html.dl, Html.dt, Html.dd, Html.details, Html.summary, Html.dialog, Html.progress, Html.meter, Html.time, Html.abbr,
 
     Html.node, Html.void, Html.text, Html.html_node, Html.raw, Html.comment,
     Html.doctype, Html.fragment, Html.document, Html.navbar, Html.card

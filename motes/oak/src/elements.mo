@@ -323,6 +323,68 @@ with Html {
     pub def audio {Msg : Type} (attrs : List (Oak.Attr Msg)) (children : List (Oak.Node Msg)) : Oak.Node Msg :=
         mk_element "audio" attrs children
 
+    // Text-level, disclosure and feedback elements.
+
+    pub def pre {Msg : Type} (attrs : List (Oak.Attr Msg)) (children : List (Oak.Node Msg)) : Oak.Node Msg :=
+        mk_element "pre" attrs children
+
+    pub def code {Msg : Type} (attrs : List (Oak.Attr Msg)) (children : List (Oak.Node Msg)) : Oak.Node Msg :=
+        mk_element "code" attrs children
+
+    pub def strong {Msg : Type} (attrs : List (Oak.Attr Msg)) (children : List (Oak.Node Msg)) : Oak.Node Msg :=
+        mk_element "strong" attrs children
+
+    pub def em {Msg : Type} (attrs : List (Oak.Attr Msg)) (children : List (Oak.Node Msg)) : Oak.Node Msg :=
+        mk_element "em" attrs children
+
+    pub def small {Msg : Type} (attrs : List (Oak.Attr Msg)) (children : List (Oak.Node Msg)) : Oak.Node Msg :=
+        mk_element "small" attrs children
+
+    pub def kbd {Msg : Type} (attrs : List (Oak.Attr Msg)) (children : List (Oak.Node Msg)) : Oak.Node Msg :=
+        mk_element "kbd" attrs children
+
+    pub def mark {Msg : Type} (attrs : List (Oak.Attr Msg)) (children : List (Oak.Node Msg)) : Oak.Node Msg :=
+        mk_element "mark" attrs children
+
+    pub def blockquote {Msg : Type} (attrs : List (Oak.Attr Msg)) (children : List (Oak.Node Msg)) : Oak.Node Msg :=
+        mk_element "blockquote" attrs children
+
+    pub def figure {Msg : Type} (attrs : List (Oak.Attr Msg)) (children : List (Oak.Node Msg)) : Oak.Node Msg :=
+        mk_element "figure" attrs children
+
+    pub def figcaption {Msg : Type} (attrs : List (Oak.Attr Msg)) (children : List (Oak.Node Msg)) : Oak.Node Msg :=
+        mk_element "figcaption" attrs children
+
+    pub def dl {Msg : Type} (attrs : List (Oak.Attr Msg)) (children : List (Oak.Node Msg)) : Oak.Node Msg :=
+        mk_element "dl" attrs children
+
+    pub def dt {Msg : Type} (attrs : List (Oak.Attr Msg)) (children : List (Oak.Node Msg)) : Oak.Node Msg :=
+        mk_element "dt" attrs children
+
+    pub def dd {Msg : Type} (attrs : List (Oak.Attr Msg)) (children : List (Oak.Node Msg)) : Oak.Node Msg :=
+        mk_element "dd" attrs children
+
+    pub def details {Msg : Type} (attrs : List (Oak.Attr Msg)) (children : List (Oak.Node Msg)) : Oak.Node Msg :=
+        mk_element "details" attrs children
+
+    pub def summary {Msg : Type} (attrs : List (Oak.Attr Msg)) (children : List (Oak.Node Msg)) : Oak.Node Msg :=
+        mk_element "summary" attrs children
+
+    pub def dialog {Msg : Type} (attrs : List (Oak.Attr Msg)) (children : List (Oak.Node Msg)) : Oak.Node Msg :=
+        mk_element "dialog" attrs children
+
+    pub def progress {Msg : Type} (attrs : List (Oak.Attr Msg)) (children : List (Oak.Node Msg)) : Oak.Node Msg :=
+        mk_element "progress" attrs children
+
+    pub def meter {Msg : Type} (attrs : List (Oak.Attr Msg)) (children : List (Oak.Node Msg)) : Oak.Node Msg :=
+        mk_element "meter" attrs children
+
+    pub def time {Msg : Type} (attrs : List (Oak.Attr Msg)) (children : List (Oak.Node Msg)) : Oak.Node Msg :=
+        mk_element "time" attrs children
+
+    pub def abbr {Msg : Type} (attrs : List (Oak.Attr Msg)) (children : List (Oak.Node Msg)) : Oak.Node Msg :=
+        mk_element "abbr" attrs children
+
     // ═══ Void elements ═══
 
     pub def input {Msg : Type} (attrs : List (Oak.Attr Msg)) : Oak.Node Msg := mk_void "input" attrs
