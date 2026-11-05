@@ -572,6 +572,14 @@ char* monad_is_dir(char* path) {
     return S_ISDIR(st.st_mode) ? (char*)"1" : NULL;
 }
 
+/* `file_size : String -> RawIO I64` -- the `stat` size, or -1. */
+int64_t monad_file_size(char* path) {
+    if (!path) return -1;
+    struct stat st;
+    if (stat(path, &st) != 0) return -1;
+    return (int64_t)st.st_size;
+}
+
 
 /* A NULL-terminated argv for `execvp(cmd, argv)`: argv[0] = cmd, then one
  * entry per `List String` cons cell (tag 6: head field 0, tail field 1),
@@ -936,6 +944,16 @@ int64_t monad_proc_wait(int64_t handle, int64_t kill_first) {
     int status = 0;
     if (waitpid(pid, &status, 0) < 0) return -1;
     return WIFEXITED(status) ? (int64_t)WEXITSTATUS(status) : -1;
+}
+
+/* `proc_kill_group : I64 -> I64 -> RawIO I64` -- `killpg`, else `kill`
+ * on the bare pid; 0 on delivery, -1 otherwise. `pgid < 2` and signals
+ * outside 0..64 are refused: 0 and -1 would address every process the
+ * caller may signal, and 1 is init. */
+int64_t monad_proc_kill_group(int64_t pgid, int64_t sig) {
+    if (pgid < 2 || pgid > INT32_MAX || sig < 0 || sig > 64) return -1;
+    if (killpg((pid_t)pgid, (int)sig) == 0) return 0;
+    return kill((pid_t)pgid, (int)sig) == 0 ? 0 : -1;
 }
 
 /* `term_ctl : I64 -> I64 -> RawIO I64` (motes/tui/src/terminal.mo) --

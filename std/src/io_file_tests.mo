@@ -121,3 +121,17 @@ def test_read_of_an_unreadable_file_is_permission_denied : IO Bool := do {
     exec_cmd "rm" ["-f", path];
     return (is_root == 0 || iof_permission_denied r)
 }
+
+#[test]
+def test_file_size_counts_bytes : IO Bool := do {
+    let p : String := iof_path "size";
+    let w <- iof_write p "hello, size";
+    let n <- IO.file_size (Path.path p);
+    return (iof_wrote w && Option.get_or_default 0 n == 11)
+}
+
+#[test]
+def test_file_size_of_a_missing_file_is_none : IO Bool := do {
+    let n <- IO.file_size (Path.path (iof_path "no-such-file"));
+    return (Option.get_or_default 7 n == 7)
+}

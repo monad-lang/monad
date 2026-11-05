@@ -333,3 +333,38 @@ def test_spawn_read_line_is_bounded : IO Bool := do {
         }
     }
 }
+
+// ─── Tests: kill_group ───
+
+/// A detached `sleep` in its own process group (`set -m`), so the group
+/// id is the printed pid.
+def detached_sleep : IO I64 := do {
+    let r <- Proc.capture "sh" ["-c", "set -m; sleep 30 > /dev/null 2>&1 & echo $!"];
+    match r { Pair.pair _ out => return (digits_value (String.to_list (String.trim out)) 0) }
+}
+
+/// A decimal digit string's value (the test needs no error path).
+#[partial]
+def digits_value (bs : List U8) (acc : I64) : I64 :=
+    match bs {
+        List.empty => acc,
+        List.cons b rest => digits_value rest (acc * 10 + U8.to_i64 b - 48),
+    }
+
+#[test]
+def test_kill_group_ends_a_detached_group : IO Bool := do {
+    let pid <- detached_sleep;
+    let alive <- Proc.kill_group pid 0;
+    let sent <- Proc.kill_group pid Proc.sigterm;
+    let _ <- exec_cmd "sleep" ["0.3"];
+    let after <- Proc.kill_group pid 0;
+    return (pid > 1 && alive && sent && Bool.not after)
+}
+
+#[test]
+def test_kill_group_refuses_init_and_the_broadcast_ids : IO Bool := do {
+    let a <- Proc.kill_group 0 0;
+    let b <- Proc.kill_group (0 - 1) 0;
+    let c <- Proc.kill_group 1 0;
+    return (Bool.not a && Bool.not b && Bool.not c)
+}

@@ -297,6 +297,7 @@ def native_runtime_fn_name (attrs : List Attribute) : Option NativeWrapKind :=
             else if String.beq target "io_bind" then Option.some (NativeWrapKind.passthrough "monad_io_bind")
             else if String.beq target "file_exists" then Option.some (NativeWrapKind.raw_io_truthy_ptr_bool_result "monad_file_exists")
             else if String.beq target "is_dir" then Option.some (NativeWrapKind.raw_io_truthy_ptr_bool_result "monad_is_dir")
+            else if String.beq target "file_size" then Option.some (NativeWrapKind.raw_io_passthrough "monad_file_size")
             // `std/io.mo`'s two remaining raw-stdio natives -- the
             // byte-level half of stdio the stream primitives cannot
             // express (`read_stdin_exact`'s fill-to-n read and a real
@@ -598,6 +599,7 @@ def native_runtime_fn_name (attrs : List Attribute) : Option NativeWrapKind :=
             else if String.beq target "proc_spawn" then Option.some (NativeWrapKind.raw_io_passthrough "monad_proc_spawn")
             else if String.beq target "proc_stream_fd" then Option.some (NativeWrapKind.raw_io_passthrough "monad_proc_stream_fd")
             else if String.beq target "proc_wait" then Option.some (NativeWrapKind.raw_io_passthrough "monad_proc_wait")
+            else if String.beq target "proc_kill_group" then Option.some (NativeWrapKind.raw_io_passthrough "monad_proc_kill_group")
             // `term_ctl : I64 -> I64 -> RawIO I64` (motes/tui/src/
             // terminal.mo) -- the tui mote's ONE terminal-control
             // native: cbreak enter/leave, TIOCGWINSZ and stdin-poll
@@ -756,6 +758,7 @@ pub def runtime_declarations_for (kind : TargetKind) : List LLVMDeclaration :=
     let d3 := mk_decl "monad_release" (List.cons "i64" List.empty) "void" in
     let d7 := mk_decl "monad_file_exists" (List.cons "i64" List.empty) "i64" in
     let d7b := mk_decl "monad_is_dir" (List.cons "i64" List.empty) "i64" in
+    let d7b1 := mk_decl "monad_file_size" (List.cons "i64" List.empty) "i64" in
     let d7c := mk_decl "monad_string_hash" (List.cons "i64" List.empty) "i64" in
     let d7d := mk_decl "monad_current_time" List.empty "i64" in
     let d7e := mk_decl "monad_current_time_nano" List.empty "i64" in
@@ -1002,6 +1005,7 @@ pub def runtime_declarations_for (kind : TargetKind) : List LLVMDeclaration :=
     // `monad_stream_*` declarations below.
     let d88 := mk_decl "monad_proc_spawn" (List.cons "i64" (List.cons "i64" List.empty)) "i64" in
     let d91 := mk_decl "monad_proc_wait" (List.cons "i64" (List.cons "i64" List.empty)) "i64" in
+    let d91a := mk_decl "monad_proc_kill_group" (List.cons "i64" (List.cons "i64" List.empty)) "i64" in
     // `monad_term_ctl` (runtime.c) -- `term_ctl : I64 -> I64 ->
     // RawIO I64`'s backing function: the i64 op flag plus one i64
     // argument (the poll timeout; the mode/size ops ignore it) in,
@@ -1089,14 +1093,14 @@ pub def runtime_declarations_for (kind : TargetKind) : List LLVMDeclaration :=
     let d114 := mk_decl "monad_channel_put" ["i64", "i64"] "i64" in
     let d115 := mk_decl "monad_channel_take" ["i64"] "i64" in
     let d116 := mk_decl "monad_channel_try_take" ["i64"] "i64" in
-    [d1, d2, d3, d7, d7b, d7c, d7d, d7e, d8, d9, d10, d11, d12, d13,
+    [d1, d2, d3, d7, d7b, d7b1, d7c, d7d, d7e, d8, d9, d10, d11, d12, d13,
         d14, d15, d16, d17, d18, d19, d20, d21, d22, d23, d23a, d23b, d24, d24b, d25, d26, d27, d28, d29, d30, d31,
         d32, d33, d34, d35, d36, d37, d38, d38b, d39, d40, d41, d42, d43, d44, d45, d46, d47,
         d48, d49, d50, d51, d52, d53, d54, d55, d56,
         d57, d58, d59, d60, d61, d62, d63, d64,
         d65, d66, d66a, d67, d72,
         d74, d76, d78, d79, d79c, d80, d81, d82, d83, d84, d85, d87,
-        d88, d91, d92, d93, d94, d95, d96, d97, d98, d99, d99a, d99b, d100, d101, d102, d103,
+        d88, d91, d91a, d92, d93, d94, d95, d96, d97, d98, d99, d99a, d99b, d100, d101, d102, d103,
         d104, d105, d106, d107, d108, d109, d110, d111, d112, d113, d114, d115, d116,
         d117, d118, d119, d120, d121, d122, d123, d124, d150,
         d125, d126, d127, d128, d129, d130, d131, d132, d133,
@@ -1120,8 +1124,8 @@ def wasm_os_only_natives : List String := [
     "fork_io", "await_fiber", "poll_fiber", "cancel_fiber", "scope_new", "scope_fork",
     "scope_drop", "sleep_io", "channel_new", "channel_put", "channel_take",
     "channel_try_take", "exec_cmd", "process_id", "proc_spawn",
-    "proc_stream_fd", "proc_wait", "tcp_connect_timeout", "tcp_listen",
-    "tcp_listen_on", "tcp_accept", "tcp_local_port", "file_exists", "is_dir", "list_dir",
+    "proc_stream_fd", "proc_wait", "proc_kill_group", "tcp_connect_timeout", "tcp_listen",
+    "tcp_listen_on", "tcp_accept", "tcp_local_port", "file_exists", "is_dir", "file_size", "list_dir",
     "get_env", "stream_open", "stream_poll", "stream_set_timeout", "term_ctl",
     "inotify_init", "inotify_add_watch", "inotify_rm_watch", "inotify_read",
 ]

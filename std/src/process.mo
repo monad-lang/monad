@@ -87,6 +87,13 @@ priv def Proc.reap_flag : I64 := 0
 /// `proc_wait`'s kill flag: 1 = SIGKILL first, then reap.
 priv def Proc.kill_flag : I64 := 1
 
+/// Send signal `sig` to process group `pgid`, falling back to the single
+/// process `pgid` when no such group exists. 0 on delivery, -1 otherwise.
+/// The runtime refuses `pgid < 2` (0 and -1 address every process the
+/// caller may signal, 1 is init) and signals outside 0..64.
+#[native "proc_kill_group"]
+priv def proc_kill_group (pgid : I64) (sig : I64) : RawIO I64
+
 /// Fork+exec `cmd args` with all three standard streams piped.
 /// Payload is `Result.err (Pair.pair <kind code> <message>)` rather
 /// than a native failure when the child could not be spawned;
@@ -170,6 +177,17 @@ pub def Proc.wait (c : Child) : IO I64 :=
 /// already freed, not because the kill failed to reap.
 pub def Proc.kill (c : Child) : IO Unit :=
     IO.mk (RawIO.bind (proc_wait c Proc.kill_flag) (fn _ => RawIO.pure Unit.unit))
+
+/// Signal a process group (a detached job started with `set -m`, whose
+/// group id is its leader's pid). True when the signal was delivered.
+/// Signal 0 delivers nothing and only probes that the group is alive.
+pub def Proc.kill_group (pgid : I64) (sig : I64) : IO Bool := do {
+    let r <- IO.mk (proc_kill_group pgid sig);
+    return (r == 0)
+}
+
+pub def Proc.sigterm : I64 := 15
+pub def Proc.sigkill : I64 := 9
 
 // ── Capturing a command's output ────────────────────────────────────────
 // `exec_cmd` above hands back an exit status and nothing else:

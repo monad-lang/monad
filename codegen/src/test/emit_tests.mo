@@ -508,7 +508,7 @@ def test_native_proc_stream_fd_wraps_raw_io_not_io : Bool :=
         else false
     else false
 
-/// All three proc natives must have a `native_runtime_fn_name` entry --
+/// The proc natives (and `file_size`) must have a `native_runtime_fn_name` entry --
 /// without one, a value-position reference compiles to the Unit stub,
 /// silently (the same gap `test_native_i64_family_entries_are_wired`
 /// pins for the `I64` family).
@@ -517,6 +517,8 @@ def test_native_proc_family_entries_are_wired : Bool :=
     native_wrap_is_some (native_attr "proc_spawn")
         && native_wrap_is_some (native_attr "proc_stream_fd")
         && native_wrap_is_some (native_attr "proc_wait")
+        && native_wrap_is_some (native_attr "proc_kill_group")
+        && native_wrap_is_some (native_attr "file_size")
 
 #[test]
 def test_native_string_eq_wraps_raw_result_as_tagged_bool : Bool :=

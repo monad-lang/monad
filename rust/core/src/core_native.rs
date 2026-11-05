@@ -358,6 +358,7 @@ pub fn exec_native(
     "bench_report" => bench_report(args, natives),
     "file_exists" => file_exists(args, natives),
     "is_dir" => is_dir(args, natives),
+    "file_size" => file_size(args, natives),
     "list_dir" => list_dir(args, natives),
     "get_env" => get_env(args, natives),
     // `std/io.mo`'s two raw-stdio natives, `RawIO` behind `.mo`
@@ -374,6 +375,7 @@ pub fn exec_native(
     "proc_spawn" => proc_spawn(args, natives),
     "proc_stream_fd" => proc_stream_fd(args, natives),
     "proc_wait" => proc_wait(args, natives),
+    "proc_kill_group" => proc_kill_group(args, natives),
     // The tui mote's ONE terminal-control native (motes/tui/src/
     // terminal.mo) -- raw-mode enter/leave and TIOCGWINSZ merged behind
     // an I64 op flag, the same one-entry-point-one-flag shape
@@ -1303,6 +1305,20 @@ fn file_exists(args: &[Value], natives: &NativeTable) -> Result<Value, CoreEvalE
   let path = extract_string(&args[0])?;
   let exists = make_bool(natives, std::fs::metadata(path).is_ok())?;
   raw_io_wrap(natives, exists)
+}
+
+/// `file_size (path : String) : RawIO I64` -- the `stat` size, or -1.
+fn file_size(args: &[Value], natives: &NativeTable) -> Result<Value, CoreEvalError> {
+  if args.is_empty() {
+    return Err(CoreEvalError::NativeArgError(
+      "file_size needs 1 arg".into(),
+    ));
+  }
+  let path = extract_string(&args[0])?;
+  let n = std::fs::metadata(path)
+    .map(|m| m.len() as i64)
+    .unwrap_or(-1);
+  raw_io_wrap(natives, Value::Lit(IrLit::Num(n, NumSuffix::I64)))
 }
 
 /// `IO.is_dir (path : String) : IO Bool` — see `file_exists`'s own doc
@@ -3235,6 +3251,28 @@ fn proc_wait(args: &[Value], natives: &NativeTable) -> Result<Value, CoreEvalErr
       }
       pc.child.wait().ok().and_then(|s| s.code()).unwrap_or(-1) as i64
     }
+  };
+  raw_io_wrap(natives, Value::Lit(IrLit::Num(code, NumSuffix::I64)))
+}
+
+/// `proc_kill_group : I64 -> I64 -> RawIO I64` -- `killpg`, else `kill`
+/// on the bare pid; 0 on delivery, -1 otherwise. `pgid < 2` and signals
+/// outside 0..64 are refused: 0 and -1 would address every process the
+/// caller may signal, and 1 is init.
+fn proc_kill_group(args: &[Value], natives: &NativeTable) -> Result<Value, CoreEvalError> {
+  if args.len() < 2 {
+    return Err(CoreEvalError::NativeArgError(
+      "proc_kill_group needs 2 args".into(),
+    ));
+  }
+  let pgid = extract_int(&args[0])?;
+  let sig = extract_int(&args[1])?;
+  let code = if pgid < 2 || !(0..=64).contains(&sig) || pgid > i64::from(libc::pid_t::MAX) {
+    -1
+  } else {
+    let (p, s) = (pgid as libc::pid_t, sig as libc::c_int);
+    let ok = unsafe { libc::killpg(p, s) == 0 || libc::kill(p, s) == 0 };
+    if ok { 0 } else { -1 }
   };
   raw_io_wrap(natives, Value::Lit(IrLit::Num(code, NumSuffix::I64)))
 }

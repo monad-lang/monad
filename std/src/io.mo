@@ -275,6 +275,10 @@ priv def is_dir_raw (path : String) : RawIO Bool
 
 def IO.is_dir_native (path : String) : IO Bool := IO.mk (is_dir_raw path)
 
+/// A file's size in bytes, or -1 when it cannot be `stat`ed.
+#[native "file_size"]
+priv def file_size_raw (path : String) : RawIO I64
+
 // Bare entry names (not full paths), sorted, one directory level.
 #[native "list_dir"]
 priv def list_dir_raw (path : String) : RawIO (List String)
@@ -419,6 +423,13 @@ pub def IO.file_exists (path : Path) : IO Bool :=
 
 pub def IO.is_dir (path : Path) : IO Bool :=
     IO.is_dir_native (Path.to_string path)
+
+/// The size of the file at `path` in bytes (following symlinks), or
+/// `none` when it does not exist or cannot be read.
+pub def IO.file_size (path : Path) : IO (Option I64) := do {
+    let n <- IO.mk (file_size_raw (Path.to_string path));
+    return (if n < 0 then Option.none else Option.some n)
+}
 
 /// The entries of the directory `path`, one level, sorted, each joined
 /// onto `path` (`Path.file_name` gives the bare name back).
