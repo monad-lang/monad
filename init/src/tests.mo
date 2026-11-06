@@ -539,6 +539,20 @@ def test_id_unwrap : Bool :=
 def test_id_unwrap_false : Bool :=
     match Id.run (Id.id false) { true => false, false => true }
 
+/// `return` of an `Id` value inside an `IO` block is `IO`'s `pure`: a
+/// higher-kinded method's carrier comes from the block's type, never from
+/// the returned element's own instance.
+def io_returning_id : IO (Id I64) := do {
+    let x <- IO.pure 5;
+    return (Id.id x)
+}
+
+#[test]
+def test_id_returned_inside_io_uses_io_pure : IO Bool := do {
+    let r <- io_returning_id;
+    return (Id.run r == 5)
+}
+
 // `Eq.refl`/`Sort`/`Prop`/`Type`-as-value tests below are genuinely
 // type-checking-only: `Eq`'s only inhabitant is `refl` and a `Sort`
 // value carries no runtime-observable structure at all (see

@@ -1058,7 +1058,22 @@ def resolve_class_method ({ class_name, name := method_name, .. } : ScopeClassDe
                             resolve_class_method_carrier class_name method_name carrier expected_type scope locals,
                     },
                 Option.none =>
-                    let carrier_opt : Option Term := carrier_from_expected_type expected_type in
+                    // The first Pi domain is the carrier only when the
+                    // method takes the carrier first (`Show.show : A ->
+                    // String`). For a higher-kinded method it is the
+                    // ELEMENT (`Monad.pure : A -> M A`), and an element
+                    // that happens to have an instance of its own is a
+                    // wrong answer, not a miss: `return (Id.id x)` in an
+                    // `IO (Id I64)` do-block resolved `Monad.pure` to
+                    // `Monad Id` and typed the block `Id (Id I64)`. Such a
+                    // method's carrier is read through its
+                    // own signature instead (`M A` against `IO X` binds
+                    // `M := IO`); `Option.none` there leaves the hint chain
+                    // below to answer, as before.
+                    let carrier_opt : Option Term :=
+                        if class_has_single_param cls && Bool.not (method_carrier_is_first_arg cls method_name)
+                        then method_sig_carrier cls method_name expected_type
+                        else carrier_from_expected_type expected_type in
                     let direct : Result TypeError TypedTerm :=
                         match carrier_opt {
                             Option.none => err (TypeError.custom "cannot infer carrier type for class method"),
