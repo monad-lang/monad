@@ -58,28 +58,23 @@ def parse_error_text (e : Toml.ParseError) : String :=
         Toml.ParseError.generic msg => msg,
     }
 
-/// `Result` has no `Monad` instance the compiled backend resolves, so the
-/// reads chain through this instead of `do`.
-def then_ {A : Type} {B : Type} (r : Result String A) (k : A -> Result String B) : Result String B :=
-    match r {
-        Result.ok a => k a,
-        Result.err e => Result.err e,
-    }
-
-def book_of (book : Shared Toml.Value) (title : String) (base_url : String) (out_dir : String) : Result String SiteConfig :=
-    then_ (string_or "src" "docs/src" (Shared.get book)) (fn (book_src : String) =>
-        then_ (string_or "dir" "docs" (Shared.get book)) (fn (book_dir : String) =>
-            let cfg : SiteConfig :=
-            { title := title, base_url := base_url, book_src := book_src,
-                book_dir := book_dir, out_dir := out_dir } in
-            Result.ok cfg))
+def book_of (book : Shared Toml.Value) (title : String) (base_url : String) (out_dir : String) : Result String SiteConfig := do {
+    let book_src <- string_or "src" "docs/src" (Shared.get book);
+    let book_dir <- string_or "dir" "docs" (Shared.get book);
+    let cfg : SiteConfig :=
+        { title := title, base_url := base_url, book_src := book_src,
+            book_dir := book_dir, out_dir := out_dir };
+    return cfg
+}
 
 def of_value (root_value : Toml.Value) : Result String SiteConfig :=
     let root : Shared Toml.Value := Shared.of root_value in
-    then_ (string_or "title" "Monad language" (Shared.get root)) (fn (title : String) =>
-        then_ (string_or "base_url" "/" (Shared.get root)) (fn (base_url : String) =>
-            then_ (string_or "out" "docs/public" (Shared.get root)) (fn (out_dir : String) =>
-                book_of (Shared.of (table_or_empty "book" (Shared.get root))) title base_url out_dir)))
+    do {
+        let title <- string_or "title" "Monad language" (Shared.get root);
+        let base_url <- string_or "base_url" "/" (Shared.get root);
+        let out_dir <- string_or "out" "docs/public" (Shared.get root);
+        book_of (Shared.of (table_or_empty "book" (Shared.get root))) title base_url out_dir
+    }
 
 /// Parse `site.toml` text. Absent keys take the monad-lang.org defaults.
 pub def SiteConfig.parse (src : String) : Result String SiteConfig :=
