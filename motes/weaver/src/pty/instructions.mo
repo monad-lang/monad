@@ -1,7 +1,8 @@
 // weaver / pty / instructions -- a trusted project's AGENTS.md is named in
 // the startup note, and an edit to it between two turns reaches the model
 // as a change note on the second turn's message (read back from the
-// session's saved history: the mock provider records no requests).
+// session's saved history: the mock provider records no requests);
+// `/memory` then lists the file at its new size.
 use pty::spawn {Pty, Output}
 use pty::check {Check.report}
 use weaver::pty_support {run_gated, with_root, fixture_path, spawn_args, status_turns, quit_cleanly}
@@ -29,13 +30,16 @@ def instr_go (m : Pty) (root : String) : IO Bool := do {
     Pty.send_text m "second\n";
     let two <- Pty.wait_until m (fn (o : Output) => status_turns o 2) 8000;
     let b <- Check.report "both turns complete" (one && two);
+    Pty.send_text m "/memory\n";
+    let listed <- Pty.wait_until m (fn (o : Output) => tight_has o "AGENTS.md(repo,42B)") 4000;
+    let e <- Check.report "/memory lists the file at its new size" listed;
     let quit <- quit_cleanly m 4000;
     Pty.finish m;
     let noted <- history_has root "changed during the session";
     let c <- Check.report "the second turn carries the change note" noted;
     let diffed <- history_has root "+ Always answer in haiku.";
     let d <- Check.report "the note shows the added line" diffed;
-    IO.pure (a && b && quit && c && d)
+    IO.pure (a && b && e && quit && c && d)
 }
 
 def instr_run (bin : String) (root : String) : IO Bool := do {

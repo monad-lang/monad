@@ -20,6 +20,7 @@ use weaver::commands {
     WeaverState, Effect, Commands.dispatch, Commands.context_used, Commands.context_percent,
     Commands.set_plan, Commands.plan_after_turn, SessionPage, Commands.session_page,
     Commands.turns_label, Commands.turn_context, Commands.sessions_for, Commands.place_suffix,
+    Commands.memory_text,
 }
 use weaver::catalog {Catalog.lookup}
 use weaver::error {WeaverError}
@@ -1093,6 +1094,23 @@ def test_clear_rebuilds_the_prompt_from_the_files : IO Bool := do {
     let st : WeaverState := { (state_of Mode.manual []) with instructions := [haiku_file] };
     let r <- Commands.dispatch "/clear" st;
     IO.pure (String.contains (prompt_of r) "Always answer in haiku.")
+}
+
+/// `/memory` lists each file with its scope and size; a file a tool
+/// attached later is marked; with none, it says where weaver looks.
+#[test]
+def test_memory_text_lists_and_marks_attached : Bool :=
+    let nested : InstrFile := Instructions.capped (Path.path "/r/motes/x/AGENTS.md") "dir" "x rules\n" 32768 in
+    let listed : String := Commands.memory_text [haiku_file] [haiku_file, nested] true in
+    String.contains listed "/r/AGENTS.md (repo, 24 B)"
+        && String.contains listed "/r/motes/x/AGENTS.md (dir, 8 B) (attached)"
+        && String.contains (Commands.memory_text List.empty List.empty false) "once the project is trusted"
+
+/// `/memory` with an unknown argument is a usage error.
+#[test]
+def test_memory_rejects_an_unknown_argument : IO Bool := do {
+    let r <- Commands.dispatch "/memory nope" (state_of Mode.manual []);
+    IO.pure (match r { Result.err _ => true, Result.ok _ => false })
 }
 
 /// A resumed session's prompt carries the files as last seen, not the

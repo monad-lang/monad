@@ -208,6 +208,8 @@ warning flag shuttle's loop prints.
 /permissions [allow|revoke ...]      list or manage session approval grants
 /settings [<key> <value>|save project|global]  change or save settings
 /tools                               list tools with their capability tags
+/trust                               trust this project's AGENTS.md and .weaver/config.toml
+/memory [reload]                     the loaded AGENTS.md files; reload re-reads them into the prompt
 /processes [kill <id>]               list background tasks (a snapshot)
 /log                                 the debug log path, tail and crash note
 /mcp                                 list mounted MCP servers
@@ -308,6 +310,52 @@ signal marker before re-raising, so a crash no longer strands the terminal.
 `Gate.read_only`, depth 1) and returns its plan plus a usage footer. The
 fuller roadmap (execute phase, `/agents`, background/parallel children,
 approval forwarding) is in [SUBAGENTS.md](SUBAGENTS.md).
+
+## Project instructions (AGENTS.md)
+
+Weaver reads the instruction files a project keeps for its agents and
+puts them in the system prompt, after its own:
+
+```
+$XDG_CONFIG_HOME/weaver/AGENTS.md    the user's own (else ~/.config/weaver/AGENTS.md)
+<repo>/AGENTS.md                     the repo root's (the git toplevel, else the cwd)
+<repo>/.../<cwd>/AGENTS.md           each directory down to the cwd; deeper refines shallower
+```
+
+- **Caps.** 32 KiB per file and 96 KiB in all, cut after a whole line
+  with a note naming the file to read for the rest.
+- **Once per session.** The system prompt is the cached prefix of every
+  request, so it is built at the start (and on resume, `/clear`,
+  `/trust`, `/memory reload`) and never swapped mid-session. A loaded
+  file edited mid-session reaches the model as a note on your next
+  message instead: a diff from the version it has, or that the file was
+  deleted.
+- **Deeper files on demand.** An AGENTS.md below the cwd (a mote in a
+  monorepo) is attached to a tool's result the first time `read`,
+  `edit`, `write`, `grep` or `glob` reaches its directory, once.
+- **Subagents** get the same files after their own prompt.
+- The startup note names each loaded file; `/memory` lists them (an
+  attached one is marked), and `/memory reload` re-reads them now.
+
+### Trust
+
+A project's AGENTS.md and `.weaver/config.toml` steer the model, and a
+cloned repo's copy can carry prompt injection (or set `mode = "auto"`).
+Neither is read until you trust the project. The first start in a
+project with either file asks, before the TUI starts:
+
+```
+Trust this project? [y]es  [n]o  [v]iew
+```
+
+`v` shows the files (the root-to-cwd chain plus every tracked AGENTS.md
+in the repo, which a tool may attach later). A yes is recorded in
+`~/.weaver/trusted.json` with the text you saw; a file added or changed
+since asks again, and `v` then shows the diff. No (or EOF) starts
+untrusted: only your own `~/.config/weaver/AGENTS.md` and
+`~/.weaver/config.toml` apply. Without a terminal the project stays
+untrusted unless `--trust` or `WEAVER_TRUST=1` trusts the run (not
+recorded). `/trust` trusts it from inside a session.
 
 ## Settings
 

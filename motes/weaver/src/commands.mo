@@ -44,10 +44,10 @@ use weaver::store {
     SessionInfo, TitleField, StoreMeta, Store.list_sessions, Store.read_meta, Store.write_title,
     Store.derive_name, Store.derive_description,
 }
-use std::path {Path, Path.of, Path.parent, Path.to_string}
+use std::path {Path, Path.of, Path.parent, Path.to_string, Path.beq}
 use std::io {IO.is_dir, IO.current_time_nano}
 use std::map {Map, BTreeMap}
-use std::list {List.intercalate}
+use std::list {List.intercalate, List.any}
 use std::ref {Ref}
 use parsec::number {parse_i64}
 use weaver::permissions {
@@ -58,7 +58,7 @@ use weaver::settings {SettingsUpdate, Settings.save}
 use weaver::procs {ProcEntry, Procs.list, Procs.kill}
 use weaver::logs {Logs.latest_path, Logs.tail, Logs.detect_crash}
 use weaver::trust {Trust.items, Trust.record_path, Trust.remember}
-use weaver::instructions {InstrFile, Instructions.user_path, Instructions.discover, Instructions.note, Instructions.current, Instructions.reset, Prompt.system}
+use weaver::instructions {InstrFile, Instructions.user_path, Instructions.discover, Instructions.note, Instructions.current, Instructions.reset, Instructions.label, Prompt.system}
 
 /// Everything the interactive session carries between inputs.
 /// `run` is shuttle's own state (session, registry, turn budget, gate,
@@ -194,7 +194,8 @@ pub def command_table : BTreeMap String SlashCommand :=
             Pair.pair "/thinking" (SlashCommand.mk cmd_thinking),
             Pair.pair "/todos" (SlashCommand.mk cmd_todos),
             Pair.pair "/tools" (SlashCommand.mk cmd_tools),
-            Pair.pair "/trust" (SlashCommand.mk cmd_trust)]
+            Pair.pair "/trust" (SlashCommand.mk cmd_trust),
+            Pair.pair "/memory" (SlashCommand.mk cmd_memory)]
 
 def command_map (cs : List (Pair String SlashCommand)) : BTreeMap String SlashCommand :=
     match cs {
@@ -1527,6 +1528,44 @@ pub def with_instructions (st : WeaverState) (fs : List InstrFile) : WeaverState
     let run2 : RunState := { run with session := sess } in
     { st with instructions := fs, run := run2 }
 
+/// `/memory`: the instruction files this session has, where they came
+/// from and how big they are; `/memory reload` re-reads them into the
+/// system prompt now.
+def cmd_memory (arg : String) (st : WeaverState) : IO (Result WeaverError Effect) :=
+    if arg == "reload" then memory_reload st
+    else if String.is_empty arg then memory_list st
+    else IO.pure (Result.err (WeaverError.usage "/memory [reload]"))
+
+def memory_list (st : WeaverState) : IO (Result WeaverError Effect) := do {
+    let fs <- Instructions.current st.instr_seen st.instructions;
+    respond st (Commands.memory_text st.instructions fs st.trusted)
+}
+
+/// One line per file, attached ones marked; with none, where weaver looks.
+pub def Commands.memory_text (start : List InstrFile) (fs : List InstrFile) (trusted : Bool) : String :=
+    match fs {
+        List.empty => List.intercalate "\n" [
+            "no AGENTS.md loaded. weaver reads $XDG_CONFIG_HOME/weaver/AGENTS.md (or ~/.config/weaver/AGENTS.md),",
+            if trusted then "and AGENTS.md from the repo root down to the cwd; a deeper one is attached when a tool reaches its directory"
+            else "and, once the project is trusted (/trust), the project's AGENTS.md files"],
+        List.cons _ _ => List.intercalate "\n" (List.map (fn (f : InstrFile) => memory_line start f) fs),
+    }
+
+def memory_line (start : List InstrFile) (f : InstrFile) : String :=
+    if List.any (fn (g : InstrFile) => Path.beq g.path f.path) start
+    then Instructions.label f
+    else String.concat (Instructions.label f) " (attached)"
+
+def memory_reload (st : WeaverState) : IO (Result WeaverError Effect) := do {
+    let user <- Instructions.user_path;
+    let fs <- Instructions.discover user st.place st.trusted;
+    let _ <- Instructions.reset st.instr_seen fs;
+    let st2 : WeaverState := with_instructions st fs;
+    respond st2 (String.concat_list [
+        match Instructions.note fs { Option.some n => n, Option.none => "instructions: none found" },
+        "\nreloaded into the system prompt (the prompt cache starts cold)"])
+}
+
 def help_text : String :=
     List.intercalate "\n" [
         "/mode [manual|plan|allow_edit|auto]  show or set the approval mode",
@@ -1538,6 +1577,7 @@ def help_text : String :=
         "/settings [<key> <value>|save project|global]  change or save settings",
         "/tools                               list tools with their capability tags",
         "/trust                               trust this project's AGENTS.md and .weaver/config.toml",
+        "/memory [reload]                     the loaded AGENTS.md files; reload re-reads them into the prompt",
         "/tasks [kill <id>]                    background processes and subagent runs (TUI monitor)",
         "/todos                               the task's todo list (Ctrl+T folds it in the TUI)",
         "/thinking [on|off]                   show or set the reasoning channel",
