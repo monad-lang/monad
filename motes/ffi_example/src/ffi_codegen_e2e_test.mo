@@ -57,6 +57,7 @@ use lang::types {}
 use lang::module {collect_link_libs, get_loaded_all, load_file_modules}
 use llvm::ir {emit_module}
 use codegen::emit {compile_loaded_modules_to_ir}
+use codegen::errors {CodegenError}
 use llvm::link {compile_ir_to_obj, compile_runtime_obj, link_objects, map_dash_l}
 use runtime {Runtime.c_path}
 
@@ -159,7 +160,7 @@ def compile_ffi_fixture_exit_code : IO I64 := do {
             let mod_result <- compile_loaded_modules_to_ir loaded false;
             match mod_result {
                 Result.err e => do {
-                    println ("ffi_codegen_e2e: codegen failed: " ++ e);
+                    println ("ffi_codegen_e2e: codegen failed: " ++ CodegenError.render e);
                     return (0 - 2)
                 },
                 Result.ok mod_ => do {
@@ -234,7 +235,7 @@ def test_extern_f64_return_type_declares_double : IO Bool := do {
             exec_cmd "rm" ["-f", src_path];
             match mod_result {
                 Result.err e => do {
-                    println ("test_extern_f64_return_type_declares_double: codegen failed: " ++ e);
+                    println ("test_extern_f64_return_type_declares_double: codegen failed: " ++ CodegenError.render e);
                     return false
                 },
                 Result.ok mod_ => do {

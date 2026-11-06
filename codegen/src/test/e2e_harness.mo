@@ -27,6 +27,7 @@ use llvm::ir {emit_module}
 use llvm::link {compile_ir_to_obj, compile_runtime_obj, link_objects}
 use runtime {}
 use lib::emit {compile_loaded_modules_to_ir}
+use lib::errors {CodegenError}
 
 /// Build `source` to a native binary through the self-hosted pipeline:
 /// `Result.ok <binary path>` with the intermediates already removed, or
@@ -50,7 +51,7 @@ pub def build_source_binary (source : String) (basename : String) : IO (Result S
         Result.ok loaded => do {
             let mod_result <- compile_loaded_modules_to_ir loaded false;
             match mod_result {
-                Result.err e => return (Result.err ("failed to resolve class-method calls: " ++ e)),
+                Result.err e => return (Result.err ("failed to resolve class-method calls: " ++ CodegenError.render e)),
                 Result.ok mod_ => do {
                     let ir_text := emit_module mod_;
                     let _w <- Test.write_fixture (Path.path ir_path) ir_text;
@@ -100,7 +101,7 @@ pub def compile_source_ir (source : String) (basename : String) : IO (Result Str
             let mod_result <- compile_loaded_modules_to_ir loaded false;
             exec_cmd "rm" ["-f", src_path];
             match mod_result {
-                Result.err e => return (Result.err ("failed to resolve class-method calls: " ++ e)),
+                Result.err e => return (Result.err ("failed to resolve class-method calls: " ++ CodegenError.render e)),
                 Result.ok mod_ => return (Result.ok (emit_module mod_)),
             }
         },

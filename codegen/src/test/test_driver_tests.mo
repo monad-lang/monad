@@ -493,7 +493,7 @@ def test_driver_gates_accept_a_clean_program : Bool :=
 
 #[test]
 def test_driver_gates_report_the_elaboration_failure_first : Bool :=
-    match test_driver_gates (Result.err "elab") List.empty (List.cons (qtest_def "dup" "x") (List.cons (qtest_def "dup" "y") List.empty)) {
-        Result.err e => e == "elab",
+    match test_driver_gates (Result.err (CodegenError.of_message "elab")) List.empty (List.cons (qtest_def "dup" "x") (List.cons (qtest_def "dup" "y") List.empty)) {
+        Result.err e => CodegenError.render e == "elab",
         Result.ok _ => false,
     }
