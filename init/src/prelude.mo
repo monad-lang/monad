@@ -365,6 +365,41 @@ pub def Result.is_ok {E A : Type} (r : Result E A) : Bool :=
         Result.err _ => false
     }
 
+/// `Result E` is the error monad: `bind` threads an `ok` value and stops at
+/// the first `err`, which it passes through unchanged. This is what a `do`
+/// block over a `Result E A` runs on.
+pub instance Functor (Result E) {
+    def map (f : A -> B) (r : Result E A) : Result E B :=
+        match r {
+            Result.ok a => Result.ok (f a),
+            Result.err e => Result.err e
+        }
+}
+
+pub instance Applicative (Result E) {
+    def pure (a : A) : Result E A := Result.ok a
+
+    def apply (f : Result E (A -> B)) (r : Result E A) : Result E B :=
+        match f {
+            Result.ok g =>
+                match r {
+                    Result.ok a => Result.ok (g a),
+                    Result.err e => Result.err e
+                },
+            Result.err e => Result.err e
+        }
+}
+
+pub instance Monad (Result E) {
+    def pure (a : A) : Result E A := Result.ok a
+
+    def bind (r : Result E A) (f : A -> Result E B) : Result E B :=
+        match r {
+            Result.ok a => f a,
+            Result.err e => Result.err e
+        }
+}
+
 pub type Pair A B {
     pair (first : A) (second : B)
 }

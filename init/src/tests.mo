@@ -780,3 +780,63 @@ def test_comonad_pair_extend_applies_with_the_environment_in_scope : Bool :=
     match Comonad.extend (fn w => Comonad.extract w + 1) (Pair.pair 10 3) {
         Pair.pair e b => e == 10 && b == 4
     }
+
+// Result monad tests
+
+def result_half (n : I64) : Result String I64 :=
+    if n == 2 * (n / 2) then Result.ok (n / 2) else Result.err "odd"
+
+/// Halve twice; the second halving never runs once the first fails.
+def result_quarter (n : I64) : Result String I64 := do {
+    let h <- result_half n;
+    let q <- result_half h;
+    return q
+}
+
+#[test]
+def test_result_do_threads_ok : Bool :=
+    match result_quarter 12 {
+        Result.ok q => q == 3,
+        Result.err _ => false
+    }
+
+#[test]
+def test_result_do_stops_at_first_err : Bool :=
+    match result_quarter 6 {
+        Result.ok _ => false,
+        Result.err e => String.beq e "odd"
+    }
+
+#[test]
+def test_result_map_ok : Bool :=
+    let r : Result String I64 := Functor.map (fn (x : I64) => x + 1) (Result.ok 41) in
+    match r {
+        Result.ok v => v == 42,
+        Result.err _ => false
+    }
+
+#[test]
+def test_result_map_err_passes_through : Bool :=
+    let r : Result String I64 := Functor.map (fn (x : I64) => x + 1) (Result.err "e") in
+    match r {
+        Result.ok _ => false,
+        Result.err e => String.beq e "e"
+    }
+
+/// `return` of a `Result` value inside an `IO` block is `IO`'s `pure`, not
+/// `Result`'s: the carrier comes from the block's type, never from the
+/// returned element's (this shape, in `FdStream.open_file`, segfaulted every
+/// `IO.write_file` once `Monad (Result E)` existed).
+def io_returning_result : IO (Result String I64) := do {
+    let x <- IO.pure 5;
+    return (Result.ok x)
+}
+
+#[test]
+def test_result_returned_inside_io_uses_io_pure : IO Bool := do {
+    let r <- io_returning_result;
+    return (match r {
+        Result.ok v => v == 5,
+        Result.err _ => false
+    })
+}
