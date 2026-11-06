@@ -12,6 +12,7 @@ use markdown::parse {Markdown.parse_with}
 use markdown::html {Markdown.heading_texts, Markdown.to_html_nodes_with}
 use lib::config {SiteConfig}
 use lib::layout {Layout.render, PageSpec, BookNav}
+use lib::passes {Passes.chapter}
 use lib::summary {NavEntry, NavChapter, Summary.parse, Summary.chapters}
 
 /// The rendering options for book chapters: heading ids on, so the TOC and
@@ -33,7 +34,7 @@ pub def Site.render_chapter (cfg : SiteConfig) (book : Option BookNav) (stem : S
     let doc : Shared Markdown.Document := Shared.of (Markdown.parse_with Markdown.site_options src) in
     let page : PageSpec :=
         { title := chapter_title stem (Shared.get doc), root := "../",
-            body := Markdown.to_html_nodes_with chapter_html_options (Shared.get doc),
+            body := Passes.chapter (Markdown.to_html_nodes_with chapter_html_options (Shared.get doc)),
             book := book } in
     Layout.render cfg page
 

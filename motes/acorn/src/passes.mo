@@ -1,0 +1,170 @@
+/// Passes over a rendered chapter's `Html.Node` tree.
+///
+/// The markdown mote has no render hooks, so book-specific markup is applied
+/// after rendering, on typed nodes (never on HTML text):
+///
+/// - a relative link to `foo.md` (with or without `#anchor`) points at the
+///   rendered `foo.html`;
+/// - a GFM admonition (`> [!WARNING]` …) becomes
+///   `<div class="admonition warning">` with a title paragraph.
+use xml_html::html {Html.Node, Html.Attr}
+
+/// A relative `.md` link → `.html`, keeping its `#fragment`. Absolute URLs,
+/// root paths, bare fragments and other files are unchanged.
+pub def Passes.rewrite_href (href : String) : String :=
+    if String.contains href "://" || String.starts_with "/" href || String.starts_with "#" href || String.starts_with "mailto:" href
+    then href
+    else rewrite_relative href (String.find_last href "#")
+
+def rewrite_relative (href : String) (hash : I64) : String :=
+    let path : String := if hash < 0 then href else String.slice href 0 hash in
+    let frag : String := if hash < 0 then "" else String.drop hash href in
+    let n : I64 := String.length path in
+    if String.ends_with path ".md"
+    then String.concat (String.slice path 0 (n - 3)) (String.concat ".html" frag)
+    else href
+
+def rewrite_attr (a : Html.Attr) : Html.Attr :=
+    match a {
+        Html.Attr.attr name value =>
+            if String.beq name "href" then Html.Attr.attr name (Passes.rewrite_href value) else Html.Attr.attr name value,
+        Html.Attr.bool_attr name => Html.Attr.bool_attr name,
+    }
+
+/// The admonition kinds GitHub renders, with their display titles.
+def admonition_title (kind : String) : Option String :=
+    let k : String := String.to_lowercase kind in
+    if String.beq k "note" then Option.some "Note"
+    else if String.beq k "tip" then Option.some "Tip"
+    else if String.beq k "important" then Option.some "Important"
+    else if String.beq k "warning" then Option.some "Warning"
+    else if String.beq k "caution" then Option.some "Caution"
+    else Option.none
+
+/// The index of the first `byte` in `s` at or after `i`, or -1.
+// Ends: `i` grows toward the string's length, where `String.get` is none.
+#[terminating]
+def index_of_byte (s : String) (byte : U8) (i : I64) : I64 :=
+    match String.get s i {
+        Option.none => -1,
+        Option.some b => if b == byte then i else index_of_byte s byte (i + 1),
+    }
+
+/// The marker's kind in text starting `[!KIND]`, and the text after it.
+pub def Passes.admonition_marker (text : String) : Option (Pair String String) :=
+    if String.starts_with "[!" text
+    then marker_at text (index_of_byte text 93u8 2)
+    else Option.none
+
+def marker_at (text : String) (close : I64) : Option (Pair String String) :=
+    if close < 0
+    then Option.none
+    else Option.some (Pair.pair (String.slice text 2 (close - 2)) (String.trim (String.drop (close + 1) text)))
+
+def admonition_div (kind : String) (title : String) (rest : List Html.Node) : Html.Node :=
+    Html.Node.node_element "div"
+        [Html.Attr.attr "class" (String.concat "admonition " (String.to_lowercase kind))]
+        (List.cons (Html.Node.node_element "p" [Html.Attr.attr "class" "admonition-title"] [Html.Node.node_text title]) rest)
+
+/// The first paragraph with its marker text removed; dropped when nothing
+/// else was in it.
+def strip_marker (after : String) (more : List Html.Node) : List Html.Node :=
+    if String.is_empty after
+    then strip_leading_break more
+    else [Html.Node.node_element "p" List.empty (List.cons (Html.Node.node_text after) more)]
+
+/// A paragraph that was only the marker line may still hold a soft break.
+def strip_leading_break (nodes : List Html.Node) : List Html.Node :=
+    match nodes {
+        List.empty => List.empty,
+        List.cons n rest => [Html.Node.node_element "p" List.empty (List.cons n rest)],
+    }
+
+/// Rendered markup is an immutable tree: sharing a node shares pointers.
+instance Copy Html.Node {
+    def copy (n : Html.Node) : Pair Html.Node Html.Node := Pair.pair n n
+}
+
+/// A blockquote whose first paragraph opens with `[!KIND]` → an admonition;
+/// anything else stays a blockquote.
+def blockquote (children : List Html.Node) : Html.Node :=
+    match drop_blank children {
+        List.cons first rest => blockquote_first first rest,
+        List.empty => plain_quote List.empty,
+    }
+
+/// Leading whitespace-only text (the newlines between block tags) dropped.
+def drop_blank (nodes : List Html.Node) : List Html.Node :=
+    match nodes {
+        List.empty => List.empty,
+        List.cons n rest => drop_blank_at n rest,
+    }
+
+// Mutual recursion with `drop_blank` on the list's own tail.
+#[terminating]
+def drop_blank_at (n : Html.Node) (rest : List Html.Node) : List Html.Node :=
+    match n {
+        Html.Node.node_text t =>
+            if String.is_empty (String.trim t) then drop_blank rest else List.cons (Html.Node.node_text t) rest,
+        _ => List.cons n rest,
+    }
+
+def blockquote_first (first : Html.Node) (rest : List Html.Node) : Html.Node :=
+    match first {
+        Html.Node.node_element tag attrs para =>
+            if String.beq tag "p"
+            then paragraph_marker attrs para rest
+            else plain_quote (List.cons (Html.Node.node_element tag attrs para) rest),
+        _ => plain_quote (List.cons first rest),
+    }
+
+def plain_quote (children : List Html.Node) : Html.Node :=
+    Html.Node.node_element "blockquote" List.empty children
+
+def paragraph_marker (attrs : List Html.Attr) (para : List Html.Node) (rest : List Html.Node) : Html.Node :=
+    match para {
+        List.cons head more => head_marker attrs head more rest,
+        List.empty => plain_quote (List.cons (Html.Node.node_element "p" attrs List.empty) rest),
+    }
+
+def head_marker (attrs : List Html.Attr) (head : Html.Node) (more : List Html.Node) (rest : List Html.Node) : Html.Node :=
+    match head {
+        Html.Node.node_text t => text_marker attrs t more rest (Passes.admonition_marker t),
+        _ => plain_quote (List.cons (Html.Node.node_element "p" attrs (List.cons head more)) rest),
+    }
+
+def text_marker (attrs : List Html.Attr) (t : String) (more : List Html.Node) (rest : List Html.Node) (marker : Option (Pair String String)) : Html.Node :=
+    match marker {
+        Option.some m => pair_marker attrs t more rest m,
+        Option.none => plain_quote (List.cons (Html.Node.node_element "p" attrs (List.cons (Html.Node.node_text t) more)) rest),
+    }
+
+def pair_marker (attrs : List Html.Attr) (t : String) (more : List Html.Node) (rest : List Html.Node) (m : Pair String String) : Html.Node :=
+    match m {
+        Pair.pair kind after => kind_marker attrs t more rest kind after,
+    }
+
+def kind_marker (attrs : List Html.Attr) (t : String) (more : List Html.Node) (rest : List Html.Node) (kind : String) (after : String) : Html.Node :=
+    match admonition_title kind {
+        Option.some title => admonition_div kind title (List.append (strip_marker after more) rest),
+        Option.none => plain_quote (List.cons (Html.Node.node_element "p" attrs (List.cons (Html.Node.node_text t) more)) rest),
+    }
+
+/// Apply every pass to one node, children first.
+pub def Passes.node (n : Html.Node) : Html.Node :=
+    match n {
+        Html.Node.node_element tag attrs children =>
+            element tag (List.map rewrite_attr attrs) (List.map Passes.node children),
+        Html.Node.node_void tag attrs => Html.Node.node_void tag (List.map rewrite_attr attrs),
+        Html.Node.node_fragment children => Html.Node.node_fragment (List.map Passes.node children),
+        _ => n,
+    }
+
+def element (tag : String) (attrs : List Html.Attr) (children : List Html.Node) : Html.Node :=
+    if String.beq tag "blockquote"
+    then blockquote children
+    else Html.Node.node_element tag attrs children
+
+/// Apply every pass to a rendered chapter body.
+pub def Passes.chapter (nodes : List Html.Node) : List Html.Node :=
+    List.map Passes.node nodes
