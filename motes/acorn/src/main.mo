@@ -83,7 +83,7 @@ def build_and_report (cfg : SiteConfig) : IO I64 := do {
     match built {
         Result.err e => report_error e,
         Result.ok n => do {
-            IO.println (String.concat "acorn: wrote " (String.concat (I64.to_string n) (String.concat " pages to " cfg.out_dir)));
+            IO.println (String.concat "acorn: wrote " (String.concat (I64.to_string n) (String.concat " files to " cfg.out_dir)));
             return 0
         },
     }

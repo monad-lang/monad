@@ -11,11 +11,12 @@ def parsed_or_default (src : String) : SiteConfig :=
 def test_defaults_when_empty : Bool :=
     let c : SiteConfig := parsed_or_default "" in
     String.beq c.book_src "docs/src" && String.beq c.book_dir "docs" && String.beq c.out_dir "docs/public"
+        && String.beq c.assets_dir "motes/acorn/assets"
 
 #[test]
 def test_reads_keys : Bool :=
-    let c : SiteConfig := parsed_or_default "title = \"T\"\nout = \"x\"\n[book]\nsrc = \"b\"\n" in
-    String.beq c.title "T" && String.beq c.out_dir "x" && String.beq c.book_src "b"
+    let c : SiteConfig := parsed_or_default "title = \"T\"\nout = \"x\"\nassets = \"a\"\n[book]\nsrc = \"b\"\n" in
+    String.beq c.title "T" && String.beq c.out_dir "x" && String.beq c.book_src "b" && String.beq c.assets_dir "a"
 
 #[test]
 def test_wrong_type_is_error : Bool :=

@@ -3,8 +3,8 @@
 /// The book's chapters come from `SUMMARY.md`, in its order, and render to
 /// `<out>/<book_dir>/<chapter>.html` (mdBook's URLs), each with the sidebar
 /// and its prev/next neighbours.
-use std::io {IO.read_file, IO.write_file}
-use std::path {Path, Path.of, Path.to_string}
+use std::io {IO.read_file, IO.write_file, IO.list_dir}
+use std::path {Path, Path.of, Path.to_string, Path.file_name}
 use std::process {exec_cmd}
 use markdown::types {Markdown.Document}
 use markdown::options {Markdown.HtmlOptions, Markdown.default_html_options, Markdown.site_options}
@@ -150,10 +150,68 @@ def write_then (cfg : SiteConfig) (dirs : BookDirs) (entries : Shared (List NavE
     }
 }
 
-/// Build the site; returns the number of pages written.
-pub def Site.build (cfg : SiteConfig) : IO (Result String I64) :=
-    let dirs : BookDirs := { src := cfg.book_src, out := join cfg.out_dir cfg.book_dir } in
-    build_book cfg dirs
+/// Build the site; returns the number of files written.
+pub def Site.build (cfg : SiteConfig) : IO (Result String I64) := do {
+    let made <- mkdir_p cfg.out_dir;
+    match made {
+        Result.err e => return (Result.err e),
+        Result.ok _ => assets_then_book cfg,
+    }
+}
+
+def assets_then_book (cfg : SiteConfig) : IO (Result String I64) := do {
+    let copied <- copy_assets cfg.assets_dir cfg.out_dir;
+    match copied {
+        Result.err e => return (Result.err e),
+        Result.ok n => book_then_count cfg n,
+    }
+}
+
+def book_then_count (cfg : SiteConfig) (assets : I64) : IO (Result String I64) := do {
+    let dirs : BookDirs := { src := cfg.book_src, out := join cfg.out_dir cfg.book_dir };
+    let pages <- build_book cfg dirs;
+    match pages {
+        Result.err e => return (Result.err e),
+        Result.ok n => return (Result.ok (n + assets)),
+    }
+}
+
+/// Copy every file in the assets directory into the output root.
+def copy_assets (assets : String) (out : String) : IO (Result String I64) :=
+    match Path.of assets {
+        Result.err e => return (Result.err e),
+        Result.ok dir => list_and_copy dir out,
+    }
+
+def list_and_copy (dir : Path) (out : String) : IO (Result String I64) := do {
+    let files <- IO.list_dir dir;
+    copy_all files out 0
+}
+
+def copy_all (files : List Path) (out : String) (done : I64) : IO (Result String I64) :=
+    match files {
+        List.empty => return (Result.ok done),
+        List.cons f rest => copy_then f rest out done,
+    }
+
+// Mutual recursion with `copy_all` on a strictly shorter `rest`.
+#[terminating]
+def copy_then (f : Path) (rest : List Path) (out : String) (done : I64) : IO (Result String I64) := do {
+    let one <- copy_file f out;
+    match one {
+        Result.err e => return (Result.err e),
+        Result.ok _ => copy_all rest out (done + 1),
+    }
+}
+
+def copy_file (f : Path) (out : String) : IO (Result String Unit) := do {
+    let target : String := join out (Path.file_name f);
+    let read <- read_path f;
+    match read {
+        Result.err e => return (Result.err e),
+        Result.ok text => write_page target text,
+    }
+}
 
 def build_book (cfg : SiteConfig) (dirs : BookDirs) : IO (Result String I64) := do {
     let made <- mkdir_p dirs.out;
