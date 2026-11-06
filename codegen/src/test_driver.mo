@@ -48,9 +48,10 @@ use lang::types {
     show_identifier, struct_lit, use_bare,
 }
 use lib::emit {
-    CompileInput, compile_db_module_with_debug, compile_input_of_modules, emit_type_head_is_io,
-    gate_then, validate_reachable_elaborated
+    CompileInput, class_gate_result, compile_db_module_with_debug, compile_input_of_modules,
+    emit_type_head_is_io, gate_then, validate_reachable_elaborated
 }
+use lib::errors {CodegenError}
 use lib::symbols {
     bare_npath, module_path_to_str, name_path_to_str, symbol_identifier,
 }
@@ -541,13 +542,12 @@ pub def synthesize_test_driver_source (specs : List TestSpec) (file_path : Strin
 /// `no `, so a prefix test silently treats every instance failure as
 /// "this file has no tests" -- exactly the misclassification that let
 /// broken files pass as skipped.
-pub def no_tests_error_message : String := "no #[test] defs found"
-
 /// Whether an error from `compile_loaded_modules_to_test_ir` is the
-/// benign no-tests case. Full-string equality, never a prefix -- see
-/// `no_tests_error_message`.
-pub def is_no_tests_error (e : String) : Bool :=
-    String.beq e no_tests_error_message
+/// benign no-tests case. The typed variant makes this structural; it was
+/// once a full-string comparison against the rendered message, which had to
+/// be distinguished from every other `no ...` diagnostic.
+pub def is_no_tests_error (e : CodegenError) : Bool :=
+    CodegenError.is_no_tests e
 
 /// Discover -> synthesize -> parse -> collision-check -> splice into
 /// the decl list -> reachability-filter -> compile. Mirrors
@@ -589,12 +589,12 @@ pub struct TestIrResult {
 /// `clang`'s link. `run_test_file_tail` has already probed it for the
 /// link, so this costs nothing extra.
 #[partial]
-pub def compile_loaded_modules_to_test_ir (loaded : LoadedModules) (result_path : String) (triple : String) : IO (Result String TestIrResult) := do {
+pub def compile_loaded_modules_to_test_ir (loaded : LoadedModules) (result_path : String) (triple : String) : IO (Result CodegenError TestIrResult) := do {
     let target_mi : ModuleInfo := get_loaded_main loaded;
     let target_decls := target_mi.decl_list;
     let test_defs := discover_test_defs target_decls;
     if List.is_empty test_defs then do {
-        return Result.err no_tests_error_message
+        return (Result.err CodegenError.no_tests)
     } else do {
         let prefix_ : String := display_prefix_of target_mi.path;
         let specs : List TestSpec := classify_test_defs prefix_ test_defs;
@@ -603,7 +603,7 @@ pub def compile_loaded_modules_to_test_ir (loaded : LoadedModules) (result_path 
             Option.some driver_decls =>
                 compile_test_driver_with loaded driver_decls (List.length specs) triple,
             Option.none => do {
-                return Result.err "internal error: failed to parse synthesized test driver (this is a monad-test bug, not a problem with the target file)"
+                return (Result.err (CodegenError.internal "internal error: failed to parse synthesized test driver (this is a monad-test bug, not a problem with the target file)"))
             }
         }
     }
@@ -622,7 +622,7 @@ pub def compile_loaded_modules_to_test_ir (loaded : LoadedModules) (result_path 
 /// `codegen.emit`'s `compile_loaded_modules_to_ir` has the identical
 /// call.
 #[partial]
-def compile_test_driver_with (loaded : LoadedModules) (driver_decls : List Decl) (total_tests : I64) (triple : String) : IO (Result String TestIrResult) := do {
+def compile_test_driver_with (loaded : LoadedModules) (driver_decls : List Decl) (total_tests : I64) (triple : String) : IO (Result CodegenError TestIrResult) := do {
     // Per-module, BEFORE the modules are flattened -- see
     // `lang.module`'s `resolve_open_aliases_in_module_info`
     // (applied to an already-flattened list, one module's
@@ -649,7 +649,7 @@ def compile_test_driver_with (loaded : LoadedModules) (driver_decls : List Decl)
     // `CompileResult`. The annotation pins it (the error's
     // own prescribed fix; emit.mo's call site matches the
     // bound value where its type is already resolvable).
-    let qr : Result String (List ModuleInfo) := qualify_result;
+    let qr : Result CodegenError (List ModuleInfo) := qualify_result;
     let qualified_ok : Bool := match qr {
         Result.ok _ => true,
         Result.err _ => false,
@@ -661,7 +661,7 @@ def compile_test_driver_with (loaded : LoadedModules) (driver_decls : List Decl)
     // so.
     let _qnote <- match qr {
         Result.ok _ => do { return unit },
-        Result.err qe => do { fail_line ("test driver: qualify_modules failed (" ++ qe ++ ")"); return unit },
+        Result.err qe => do { fail_line ("test driver: qualify_modules failed (" ++ CodegenError.render qe ++ ")"); return unit },
     };
     let qualified_mods := match qr {
         Result.ok ms => ms,
@@ -725,10 +725,10 @@ def compile_test_driver_with (loaded : LoadedModules) (driver_decls : List Decl)
 /// The checker-handoff gates the test driver runs over its reachable decls,
 /// in `compile_loaded_modules_to_ir`'s order; the first failure wins.
 #[partial]
-def test_driver_gates (elab_gate : Result String (List Decl)) (classes : List Class) (reachable : List Decl) : Result String (List Decl) :=
+def test_driver_gates (elab_gate : Result CodegenError (List Decl)) (classes : List Class) (reachable : List Decl) : Result CodegenError (List Decl) :=
     gate_then
         (gate_then
-            (gate_then elab_gate (validate_no_unresolved_class_calls classes reachable))
+            (gate_then elab_gate (class_gate_result (validate_no_unresolved_class_calls classes reachable)))
             (gate_then
                 (validate_no_undesugared_struct_lits reachable)
                 (validate_no_undesugared_elims reachable)))

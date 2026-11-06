@@ -25,6 +25,7 @@ use lang::types {
 use lang::scope {collect_classes, find_unresolved_class_calls_decls}
 use lib::ctors {CtorClaim, collect_ctor_claims_inds}
 use std::list {List.length}
+use lib::errors {CodegenDiagnostic, CodegenError}
 open IO {get_env, println}
 use llvm::ir {
     LLVMBasicBlock, LLVMDeclaration, LLVMFunction, LLVMInstruction, LLVMModule,
@@ -49,10 +50,11 @@ use std::map {HashMap}
 /// success, otherwise the messages become one `; `-joined diagnostic. The
 /// whole family used to repeat this match by hand.
 #[partial]
-def validate_with (decl_list : List Decl) (msgs : List String) : Result String (List Decl) :=
-    match msgs {
+def validate_with (decl_list : List Decl) (issues : List CodegenDiagnostic) : Result CodegenError (List Decl) :=
+    match issues {
         List.empty => Result.ok decl_list,
-        List.cons _ _ => Result.err (join_semicolon_msgs msgs ""),
+        List.cons _ _ =>
+            Result.err (CodegenError.diagnostics (join_semicolon_msgs (List.map CodegenDiagnostic.render issues) "")),
     }
 
 /// An `#[extern "c"]` declaration names a symbol in a FOREIGN library. It
@@ -63,11 +65,11 @@ def validate_with (decl_list : List Decl) (msgs : List String) : Result String (
 /// wiring instead. This is checked over the reachable decls, like the
 /// other gates.
 #[partial]
-pub def validate_no_monad_externs (decl_list : List Decl) : Result String (List Decl) :=
+pub def validate_no_monad_externs (decl_list : List Decl) : Result CodegenError (List Decl) :=
     validate_with decl_list (find_monad_externs (extract_defs decl_list) List.empty)
 
 #[partial]
-def find_monad_externs (defs : List Def) (acc : List String) : List String :=
+def find_monad_externs (defs : List Def) (acc : List CodegenDiagnostic) : List CodegenDiagnostic :=
     match defs {
         List.empty => acc,
         List.cons d rest =>
@@ -77,7 +79,7 @@ def find_monad_externs (defs : List Def) (acc : List String) : List String :=
             }
     }
 
-def monad_extern_message (d : Def) : Option String :=
+def monad_extern_message (d : Def) : Option CodegenDiagnostic :=
     match d {
         Def.mk {name, attrs, ..} =>
             match has_attr (Identifier.id "extern") attrs {
@@ -104,12 +106,10 @@ def monad_extern_message (d : Def) : Option String :=
             }
     }
 
-def extern_message (name : NamePath) (link : String) : String :=
-    String.concat_list
-        ["extern `", link, "` on `", name_path_to_str name,
-            "` binds a Monad runtime symbol; declare it as a #[native] in init/std instead"]
+def extern_message (name : NamePath) (link : String) : CodegenDiagnostic :=
+    CodegenDiagnostic.monad_extern link (name_path_to_str name)
 
-def monad_extern_check (name : NamePath) (link : String) : Option String :=
+def monad_extern_check (name : NamePath) (link : String) : Option CodegenDiagnostic :=
     if String.starts_with "monad_" link
     then Option.some (extern_message name link)
     else Option.none
@@ -209,7 +209,7 @@ def find_link_name_arg (args : List AttrArg) : Option String :=
 /// (`native_runtime_fn_name`'s own `i64_*` group); `I64_ne` remains the
 /// sole unwired key and is unreachable dead code.
 #[partial]
-pub def validate_no_unwired_natives (decl_list : List Decl) : Result String (List Decl) :=
+pub def validate_no_unwired_natives (decl_list : List Decl) : Result CodegenError (List Decl) :=
     validate_with decl_list (find_unwired_native_defs (extract_defs decl_list))
 
 /// One error message per reachable bodyless `#[native X]` def whose X is
@@ -217,11 +217,11 @@ pub def validate_no_unwired_natives (decl_list : List Decl) : Result String (Lis
 /// for the fail-fast contract. Only BODYLESS natives are checked: a
 /// real-bodied def compiles a real function whatever its attributes.
 #[partial]
-def find_unwired_native_defs (defs : List Def) : List String :=
+def find_unwired_native_defs (defs : List Def) : List CodegenDiagnostic :=
     List.reverse (find_unwired_native_defs_go defs List.empty)
 
 #[partial]
-def find_unwired_native_defs_go (defs : List Def) (acc : List String) : List String :=
+def find_unwired_native_defs_go (defs : List Def) (acc : List CodegenDiagnostic) : List CodegenDiagnostic :=
     match defs {
         List.empty => acc,
         List.cons d rest =>
@@ -238,10 +238,7 @@ def find_unwired_native_defs_go (defs : List Def) (acc : List String) : List Str
                                                 Option.some _ => find_unwired_native_defs_go rest acc,
                                                 Option.none =>
                                                     let def_name := name_path_to_str name in
-                                                    let head := String.concat "native `" (String.concat target "`") in
-                                                    let mid := String.concat " (needed by def `" (String.concat def_name "`)") in
-                                                    let msg := String.concat head (String.concat mid " is not wired into the native backend -- it would silently compile to a 'return Unit' stub; add a monad_* runtime function + native_runtime_fn_name entry, or an inline native_op_table key") in
-                                                    find_unwired_native_defs_go rest (List.cons msg acc),
+                                                    find_unwired_native_defs_go rest (List.cons (CodegenDiagnostic.unwired_native target def_name) acc),
                                             },
                                     },
                                 Option.none => find_unwired_native_defs_go rest acc,
@@ -255,15 +252,15 @@ def find_unwired_native_defs_go (defs : List Def) (acc : List String) : List Str
 /// compile error naming the native and the target, not a link failure or a
 /// run-time trap. Runs on the REACHABLE decls, like the unwired check.
 #[partial]
-pub def validate_native_target_availability (kind : TargetKind) (triple : String) (decl_list : List Decl) : Result String (List Decl) :=
+pub def validate_native_target_availability (kind : TargetKind) (triple : String) (decl_list : List Decl) : Result CodegenError (List Decl) :=
     validate_with decl_list (find_unavailable_native_defs kind triple (extract_defs decl_list))
 
 #[partial]
-def find_unavailable_native_defs (kind : TargetKind) (triple : String) (defs : List Def) : List String :=
+def find_unavailable_native_defs (kind : TargetKind) (triple : String) (defs : List Def) : List CodegenDiagnostic :=
     List.reverse (find_unavailable_native_defs_go kind triple defs List.empty)
 
 #[partial]
-def find_unavailable_native_defs_go (kind : TargetKind) (triple : String) (defs : List Def) (acc : List String) : List String :=
+def find_unavailable_native_defs_go (kind : TargetKind) (triple : String) (defs : List Def) (acc : List CodegenDiagnostic) : List CodegenDiagnostic :=
     match defs {
         List.empty => acc,
         List.cons d rest =>
@@ -283,8 +280,8 @@ def find_unavailable_native_defs_go (kind : TargetKind) (triple : String) (defs 
                                             find_unavailable_native_defs_go kind triple rest acc,
                                         NativeAvailability.unavailable reason =>
                                             let def_name := name_path_to_str name in
-                                            let msg := "native `" ++ target ++ "` (needed by def `" ++ def_name ++ "`) is not available on target `" ++ triple ++ "` (" ++ TargetKind.name kind ++ "): " ++ reason in
-                                            find_unavailable_native_defs_go kind triple rest (List.cons msg acc),
+                                            find_unavailable_native_defs_go kind triple rest
+                                                (List.cons (CodegenDiagnostic.unavailable_native target def_name triple (TargetKind.name kind) reason) acc),
                                     },
                             },
                         _ => find_unavailable_native_defs_go kind triple rest acc,
@@ -306,7 +303,7 @@ def find_unavailable_native_defs_go (kind : TargetKind) (triple : String) (defs 
 /// the golden and drift tests, so a whole-mote "web only" gate would be
 /// wrong.
 #[partial]
-def extern_target_problem (kind : TargetKind) (triple : String) (name : NamePath) (attrs : List Attribute) : Option String :=
+def extern_target_problem (kind : TargetKind) (triple : String) (name : NamePath) (attrs : List Attribute) : Option CodegenDiagnostic :=
     match kind {
         TargetKind.web => Option.none,
         _ =>
@@ -316,8 +313,7 @@ def extern_target_problem (kind : TargetKind) (triple : String) (name : NamePath
                     if String.starts_with "web_" link
                     then
                         let def_name := name_path_to_str name in
-                        Option.some (String.concat
-                            ("extern `" ++ link ++ "` (needed by def `" ++ def_name ++ "`) is not available on target `" ++ triple ++ "` (" ++ TargetKind.name kind ++ "): ")
+                        Option.some (CodegenDiagnostic.unavailable_extern link def_name triple (TargetKind.name kind)
                             "it is part of the browser boundary (motes/web_wasm), which only the web profile implements")
                     else Option.none,
             },
@@ -340,7 +336,7 @@ def extern_target_problem (kind : TargetKind) (triple : String) (name : NamePath
 ///   not supply them;
 /// * unique -- two exports on one name would collide at link.
 #[partial]
-pub def validate_export_defs (kind : TargetKind) (triple : String) (decl_list : List Decl) : Result String (List Decl) :=
+pub def validate_export_defs (kind : TargetKind) (triple : String) (decl_list : List Decl) : Result CodegenError (List Decl) :=
     match kind {
         TargetKind.native => Result.ok decl_list,
         TargetKind.wasi => Result.ok decl_list,
@@ -348,11 +344,11 @@ pub def validate_export_defs (kind : TargetKind) (triple : String) (decl_list : 
     }
 
 #[partial]
-def export_check (triple : String) (decl_list : List Decl) : Result String (List Decl) :=
+def export_check (triple : String) (decl_list : List Decl) : Result CodegenError (List Decl) :=
     validate_with decl_list (find_export_msgs (extract_defs decl_list) List.empty List.empty)
 
 #[partial]
-def find_export_msgs (defs : List Def) (seen : List String) (acc : List String) : List String := match defs {
+def find_export_msgs (defs : List Def) (seen : List String) (acc : List CodegenDiagnostic) : List CodegenDiagnostic := match defs {
     List.empty => List.reverse acc,
     List.cons d rest => find_export_msgs_one d rest seen acc,
 }
@@ -362,7 +358,7 @@ def find_export_msgs (defs : List Def) (seen : List String) (acc : List String) 
 /// ("expected a function type, found `String`"), while the self-hosted
 /// checker accepts it -- so the shared code keeps the conservative shape.
 #[partial]
-def find_export_msgs_one (d : Def) (rest : List Def) (seen : List String) (acc : List String) : List String :=
+def find_export_msgs_one (d : Def) (rest : List Def) (seen : List String) (acc : List CodegenDiagnostic) : List CodegenDiagnostic :=
     match export_def_name d {
         Option.none => find_export_msgs rest seen acc,
         Option.some plain =>
@@ -370,15 +366,15 @@ def find_export_msgs_one (d : Def) (rest : List Def) (seen : List String) (acc :
     }
 
 #[partial]
-def export_msgs_for (plain : String) (d : Def) (seen : List String) (acc : List String) : List String :=
+def export_msgs_for (plain : String) (d : Def) (seen : List String) (acc : List CodegenDiagnostic) : List CodegenDiagnostic :=
     let dup := export_dup_msg plain seen in
     let problems := List.append dup (export_def_problems plain d) in
     List.append (List.reverse problems) acc
 
 #[partial]
-def export_dup_msg (plain : String) (seen : List String) : List String :=
+def export_dup_msg (plain : String) (seen : List String) : List CodegenDiagnostic :=
     if list_contains_str seen plain
-    then List.cons (String.concat "duplicate `#[export \"c\"]` name `" (String.concat plain "`")) List.empty
+    then List.cons (CodegenDiagnostic.duplicate_export plain) List.empty
     else List.empty
 
 /// The JS-visible name of an `#[export "c"]` def, or `none` for every other
@@ -391,32 +387,31 @@ def export_def_name (d : Def) : Option String :=
     }
 
 #[partial]
-def export_def_problems (plain : String) (d : Def) : List String :=
+def export_def_problems (plain : String) (d : Def) : List CodegenDiagnostic :=
     match d {
         Def.mk {name, typ, term := term_, constraints, attrs, vis := _vis, ..} =>
-            let label := String.concat "`#[export \"c\"]` def `" (String.concat plain "`") in
             // `rename_main` renames the entry symbol (`ends_with_main`,
             // i.e. source name exactly `main`), so that export would leave
             // its thunk with no target.
             let main_problem := if ends_with_main (def_symbol_name name)
-                then List.cons (String.concat label " cannot be `main`: the runtime entry renames that symbol") List.empty
+                then List.cons (CodegenDiagnostic.export_main plain) List.empty
                 else List.empty in
             let shape_problem := if String.contains plain "."
-                then List.cons (String.concat label " must be a single identifier segment; a dotted name is not a JS property") List.empty
+                then List.cons (CodegenDiagnostic.export_dotted plain) List.empty
                 else List.empty in
             let abi_problem := if export_abi_is_c attrs
                 then List.empty
-                else List.cons (String.concat label " must name the C ABI as `#[export \"c\"]`") List.empty in
+                else List.cons (CodegenDiagnostic.export_abi plain) List.empty in
             let body_problem := match strip_db_lams term_ {
-                Term.hole => List.cons (String.concat label " needs a body: an export is the def's own code, not a foreign binding") List.empty,
+                Term.hole => List.cons (CodegenDiagnostic.export_no_body plain) List.empty,
                 _ => List.empty,
             } in
             let implicit_problem := if export_has_implicit_param typ
-                then List.cons (String.concat label " cannot have implicit parameters: the export ABI passes only explicit i64 words") List.empty
+                then List.cons (CodegenDiagnostic.export_implicit plain) List.empty
                 else List.empty in
             let constraint_problem := if List.is_empty constraints
                 then List.empty
-                else List.cons (String.concat label " cannot have type-class constraints: no dictionary can cross the export ABI") List.empty in
+                else List.cons (CodegenDiagnostic.export_constraints plain) List.empty in
             List.append main_problem (List.append shape_problem (List.append abi_problem (List.append body_problem (List.append implicit_problem constraint_problem)))),
     }
 
@@ -487,18 +482,18 @@ def export_has_implicit_param (typ : Term) : Bool := match term_peel typ {
 /// bind the literal to a local with an explicit type annotation first
 /// (AGENTS.md's rule-1 pitfall).
 #[partial]
-def validate_no_undesugared_struct_lits (decl_list : List Decl) : Result String (List Decl) :=
+def validate_no_undesugared_struct_lits (decl_list : List Decl) : Result CodegenError (List Decl) :=
     validate_with decl_list (find_undesugared_struct_lit_defs (extract_defs decl_list))
 
 /// One message per reachable def whose body still contains an
 /// un-desugared struct literal -- see
 /// `validate_no_undesugared_struct_lits`'s own doc comment.
 #[partial]
-def find_undesugared_struct_lit_defs (defs : List Def) : List String :=
+def find_undesugared_struct_lit_defs (defs : List Def) : List CodegenDiagnostic :=
     List.reverse (find_undesugared_struct_lit_defs_go defs List.empty)
 
 #[partial]
-def find_undesugared_struct_lit_defs_go (defs : List Def) (acc : List String) : List String :=
+def find_undesugared_struct_lit_defs_go (defs : List Def) (acc : List CodegenDiagnostic) : List CodegenDiagnostic :=
     match defs {
         List.empty => acc,
         List.cons d rest =>
@@ -507,9 +502,8 @@ def find_undesugared_struct_lit_defs_go (defs : List Def) (acc : List String) : 
                     if term_has_struct_lit term_
                     then
                         let def_name := name_path_to_str name in
-                        let head := String.concat "def `" (String.concat def_name "`") in
-                        let msg := String.concat head " contains a struct literal that never desugared to a constructor -- it would silently compile to a void placeholder; give the literal an explicit `: StructName` annotation, or bind it to an annotated local before passing it" in
-                        find_undesugared_struct_lit_defs_go rest (List.cons msg acc)
+                        find_undesugared_struct_lit_defs_go rest
+                            (List.cons (CodegenDiagnostic.undesugared_struct_lit def_name) acc)
                     else find_undesugared_struct_lit_defs_go rest acc,
             },
     }
@@ -624,17 +618,17 @@ def cases_have_struct_lit (cases : List MatchCase) : Bool := match cases {
 /// non-exhaustive-match crash with no def name). Reachable decls only, same
 /// reasoning as the struct-literal gate above.
 #[partial]
-pub def validate_no_undesugared_elims (decl_list : List Decl) : Result String (List Decl) :=
+pub def validate_no_undesugared_elims (decl_list : List Decl) : Result CodegenError (List Decl) :=
     validate_with decl_list (find_undesugared_elim_defs (extract_defs decl_list))
 
 /// One message per reachable def whose body or declared type still contains
 /// a `Term.elim` -- see `validate_no_undesugared_elims`.
 #[partial]
-def find_undesugared_elim_defs (defs : List Def) : List String :=
+def find_undesugared_elim_defs (defs : List Def) : List CodegenDiagnostic :=
     List.reverse (find_undesugared_elim_defs_go defs List.empty)
 
 #[partial]
-def find_undesugared_elim_defs_go (defs : List Def) (acc : List String) : List String :=
+def find_undesugared_elim_defs_go (defs : List Def) (acc : List CodegenDiagnostic) : List CodegenDiagnostic :=
     match defs {
         List.empty => acc,
         List.cons d rest =>
@@ -643,9 +637,8 @@ def find_undesugared_elim_defs_go (defs : List Def) (acc : List String) : List S
                     if term_has_elim df_typ || term_has_elim term_
                     then
                         let def_name := name_path_to_str name in
-                        let head := String.concat "def `" (String.concat def_name "`") in
-                        let msg := String.concat head " contains a Term.elim that never desugared to a match -- codegen would crash; the elimination desugar pass (desugar_elims_decls) was skipped" in
-                        find_undesugared_elim_defs_go rest (List.cons msg acc)
+                        find_undesugared_elim_defs_go rest
+                            (List.cons (CodegenDiagnostic.undesugared_elim def_name) acc)
                     else find_undesugared_elim_defs_go rest acc,
             },
     }
@@ -732,24 +725,22 @@ def fields_have_elim (fields : List StructLitField) : Bool := match fields {
 
 /// One message per LLVM symbol claimed by two or more reachable defs.
 #[partial]
-def validate_no_colliding_def_symbols (decl_list : List Decl) : Result String (List Decl) :=
+def validate_no_colliding_def_symbols (decl_list : List Decl) : Result CodegenError (List Decl) :=
     validate_with decl_list (colliding_def_symbol_msgs (extract_defs decl_list) str_map_empty)
 
 #[partial]
-def colliding_def_symbol_msgs (defs : List Def) (seen : HashMap String Bool) : List String :=
+def colliding_def_symbol_msgs (defs : List Def) (seen : HashMap String Bool) : List CodegenDiagnostic :=
     match defs {
         List.empty => List.empty,
         List.cons d rest =>
             let sym := def_name_str d in
             match str_map_lookup sym seen {
                 Option.some _ =>
-                    List.cons (String.concat "two definitions share the LLVM symbol `" (String.concat sym
-                        "` -- one of them would be silently dropped; give them distinct names or distinct modules"))
+                    List.cons (CodegenDiagnostic.duplicate_symbol sym)
                         (colliding_def_symbol_msgs rest seen),
                 Option.none =>
                     if reserved_runtime_symbol sym
-                    then List.cons (String.concat "def `" (String.concat sym
-                        "` collides with a runtime symbol of the same name -- rename the def"))
+                    then List.cons (CodegenDiagnostic.runtime_symbol_collision sym)
                         (colliding_def_symbol_msgs rest (str_map_insert sym true seen))
                     else colliding_def_symbol_msgs rest (str_map_insert sym true seen),
             },

@@ -29,6 +29,7 @@ use std::test {Test.write_fixture}
 use std::process {exec_cmd, process_id}
 use lang::module {LoadedModules, load_file_modules}
 use codegen::emit {compile_loaded_modules_to_ir}
+use codegen::errors {CodegenError}
 
 #[test]
 def test_unwired_native_fails_fast : IO Bool := do {
@@ -54,7 +55,8 @@ def main (args : List String) : IO I64 := do {
             let mod_result <- compile_loaded_modules_to_ir loaded false;
             exec_cmd "rm" ["-f", src_path];
             match mod_result {
-                Result.err msg => do {
+                Result.err err => do {
+                    let msg := CodegenError.render err;
                     let names_native := String.contains msg "definitely_not_a_real_native";
                     let names_def := String.contains msg "use_it";
                     if names_native && names_def then return true

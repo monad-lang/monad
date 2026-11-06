@@ -1,6 +1,7 @@
 /// Tests moved out of `codegen::test_driver` so the production module stays readable.
 
 use lib::decls {filter_reachable_decls}
+use lib::errors {CodegenError}
 use lib::qualify {qualified_def_name_str, qualify_modules}
 use lib::test::support {qtest_def}
 use lang::types {
@@ -35,7 +36,7 @@ use std::stream {StreamError, StreamError.is_not_found}
 use lib::test_driver {
     TestSpec, classify_test_def, discover_test_defs, display_prefix_of,
     fmt_dur_ns, fmt_dur_source, is_no_tests_error, is_test_def,
-    no_tests_error_message, parse_driver_result, rename_user_main,
+    parse_driver_result, rename_user_main,
     result_file_marker, synth_test_stmts, synthesize_test_driver_source,
     test_driver_gates,
 }
@@ -310,18 +311,18 @@ def test_fmt_dur_source_carries_the_rounding_constants : Bool :=
 
 #[test]
 def test_is_no_tests_error_true_for_the_sentinel : Bool :=
-    is_no_tests_error no_tests_error_message
+    is_no_tests_error CodegenError.no_tests
 
 // The `no `-prefix hazard this predicate exists for: an unresolved
 // instance error starts with the same two words and must NOT be read as
 // "this file has no tests".
 #[test]
 def test_is_no_tests_error_false_for_instance_failure : Bool :=
-    Bool.not (is_no_tests_error "no instance found for `Foldable.foldl` (needed in `m::t`)")
+    Bool.not (is_no_tests_error (CodegenError.of_message "no instance found for `Foldable.foldl` (needed in `m::t`)"))
 
 #[test]
 def test_is_no_tests_error_false_for_native_failure : Bool :=
-    Bool.not (is_no_tests_error "native `f64_mul` is not wired into the native backend")
+    Bool.not (is_no_tests_error (CodegenError.of_message "native `f64_mul` is not wired into the native backend"))
 
 // ─── The result-file protocol ────────────────────────────────────────
 //

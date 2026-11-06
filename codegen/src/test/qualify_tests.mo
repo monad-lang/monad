@@ -20,6 +20,7 @@ use lib::util {
 }
 use std::map {HashMap}
 use std::list {List.intercalate, List.length}
+use lib::errors {CodegenDiagnostic}
 use lib::qualify {ambiguous_owner_msg, decl_def_name, identifier_names, qualify_modules, qualify_one_decl_name}
 use lib::test::support {qtest_def}
 
@@ -335,7 +336,7 @@ def test_unqualify_recovers_the_source_name : Bool :=
 def test_ambiguous_owner_msg_spells_module_paths_with_colons : Bool :=
     let a : ModulePath := ModulePath.mk [Identifier.id "std", Identifier.id "io"] in
     let b : ModulePath := ModulePath.mk [Identifier.id "std", Identifier.id "fs"] in
-    String.beq (ambiguous_owner_msg a "read" [b])
+    String.beq (CodegenDiagnostic.render (ambiguous_owner_msg a "read" [b]))
         "`read` is referenced from std::io but declared in std::fs -- add an explicit `use <module> {read}` to say which"
 
 #[partial]

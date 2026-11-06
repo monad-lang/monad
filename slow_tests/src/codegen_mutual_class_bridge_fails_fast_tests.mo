@@ -24,6 +24,7 @@ use std::test {Test.write_fixture}
 use std::process {exec_cmd, process_id}
 use lang::module {LoadedModules, load_file_modules}
 use codegen::emit {compile_loaded_modules_to_ir}
+use codegen::errors {CodegenError}
 
 #[test]
 def test_mutual_class_bridge_with_no_concrete_instance_fails_fast : IO Bool := do {
@@ -62,7 +63,8 @@ def main (args : List String) : IO I64 := do {
             let mod_result <- compile_loaded_modules_to_ir loaded false;
             exec_cmd "rm" ["-f", src_path];
             match mod_result {
-                Result.err msg => do {
+                Result.err err => do {
+                    let msg := CodegenError.render err;
                     let names_bar := String.contains msg "Bar";
                     if names_bar then return true
                     else do {

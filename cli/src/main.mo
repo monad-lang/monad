@@ -57,6 +57,7 @@ use std::map {}
 use lang::pretty {show_decls}
 use fmt::fmt {Fmt.default_config, Fmt.format_source}
 use fmt::diff {Diff.unified}
+use codegen::errors {CodegenError}
 use codegen::test_driver {compile_loaded_modules_to_test_ir, is_no_tests_error, driver_report_note, driver_report_parsed}
 // The command line is declared and parsed in `cli.mo`/`cli_spec.mo`; the
 // wildcard is required because the derive's defs (`decode_command`) are
@@ -104,10 +105,10 @@ def default_output_dir : Path := Path.path ("/tmp/monad_out_" ++ I64.to_string p
 /// is enough here (the `--verbose` compile pipeline prints the precise
 /// stage names too).
 #[partial]
-def link_compiled_module (mod_result : Result String LLVMModule) (link_libs : List String) (link_pkgs : List String) (export_syms : List String) (base_dir : String) (output_dir : Path) (output_name : Path) (ir : Option Path) (verbose : Bool) (target : TargetSpec) : IO I64 :=
+def link_compiled_module (mod_result : Result CodegenError LLVMModule) (link_libs : List String) (link_pkgs : List String) (export_syms : List String) (base_dir : String) (output_dir : Path) (output_name : Path) (ir : Option Path) (verbose : Bool) (target : TargetSpec) : IO I64 :=
     match mod_result {
         Result.err e => do {
-            println ("FAILED at stage: compile_loaded_modules_to_ir (" ++ e ++ ")");
+            println ("FAILED at stage: compile_loaded_modules_to_ir (" ++ CodegenError.render e ++ ")");
             return 1
         },
         Result.ok mod_ => do {
@@ -2758,8 +2759,8 @@ def Build.test_tail_build (f : String) (loaded : LoadedModules) (out_dir : Strin
             // a SKIP, every other IR failure is a FAIL -- a file that
             // genuinely stopped compiling must not pass CI silently as a
             // skip (`skipped` affects no exit code).
-            if is_no_tests_error e then do { return (TestFileOutcome.skip_outcome e) }
-            else do { return (TestFileOutcome.fail_outcome e) },
+            if is_no_tests_error e then do { return (TestFileOutcome.skip_outcome (CodegenError.render e)) }
+            else do { return (TestFileOutcome.fail_outcome (CodegenError.render e)) },
         Result.ok ir_result => do {
             let total : I64 := ir_result.total_tests;
             let t_emit : I64 <- Bench.now;

@@ -24,6 +24,7 @@ use lang::module {
 }
 use codegen::decls {filter_reachable_decls}
 use codegen::emit {validate_reachable_elaborated}
+use codegen::errors {CodegenError}
 use lang::core_eval {CoreEvalError, basic_native_table, eval}
 use lang::core_ir {CoreIr}
 use lang::core_value {Env, GlobalTable, Value, global_cache_new_fueled, global_table_len}
@@ -182,7 +183,7 @@ def dispatch (em : ElaboratedModules) (fuel : I64) (depth_limit : I64)
     match validate_reachable_elaborated report reachable {
         Result.err e =>
             IO.pure (Result.err
-                (stage_error EvalStage.eval_stage_elaborate e warnings)),
+                (stage_error EvalStage.eval_stage_elaborate (CodegenError.render e) warnings)),
         Result.ok _ =>
             lower em.scope dispatched fuel depth_limit want_type root context_path typ warnings,
     }

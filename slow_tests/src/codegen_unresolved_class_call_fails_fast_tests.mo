@@ -26,6 +26,7 @@ use std::test {Test.write_fixture}
 use std::process {exec_cmd, process_id}
 use lang::module {LoadedModules, load_file_modules}
 use codegen::emit {compile_loaded_modules_to_ir}
+use codegen::errors {CodegenError}
 
 #[test]
 def test_unresolved_class_method_call_fails_fast : IO Bool := do {
@@ -51,7 +52,8 @@ def main (args : List String) : IO I64 := do {
             let mod_result <- compile_loaded_modules_to_ir loaded false;
             exec_cmd "rm" ["-f", src_path];
             match mod_result {
-                Result.err msg => do {
+                Result.err err => do {
+                    let msg := CodegenError.render err;
                     // The diagnostic is the checker's `missing_instance`
                     // (naming the class) rather than a call-site message that
                     // also named the method; the class name and the absence of

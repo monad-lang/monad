@@ -33,6 +33,7 @@ use std::test {Test.write_fixture}
 use std::process {exec_cmd, process_id}
 use lang::module {load_file_modules}
 use codegen::emit {compile_loaded_modules_to_ir}
+use codegen::errors {CodegenError}
 
 #[test]
 def test_undeclared_class_method_fails_the_compile_clearly : IO Bool := do {
@@ -73,7 +74,8 @@ def main (args : List String) : IO I64 := do {
             let mod_result <- compile_loaded_modules_to_ir loaded false;
             exec_cmd "rm" ["-f", src_path];
             match mod_result {
-                Result.err msg => do {
+                Result.err err => do {
+                    let msg := CodegenError.render err;
                     let names_the_call := String.contains msg "Bag.zzz";
                     let not_rewired := Bool.not (String.contains msg "Other_I64_zzz");
                     if names_the_call && not_rewired then return true

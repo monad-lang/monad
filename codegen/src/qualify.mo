@@ -24,6 +24,7 @@ use lang::scope {
     OpenAlias, alias_map_empty, alias_map_insert, alias_map_lookup,
     build_scope_from_decls, collect_open_aliases, modpath_eq, modpath_of, resolve_open_alias_decls,
 }
+use lib::errors {CodegenDiagnostic, CodegenError}
 use lib::free_names {collect_referenced_names, free_names_of_term}
 use lib::symbols {bare_modpath, bare_npath, symbol_identifier}
 use lang::name_text {unqualify_def_name}
@@ -233,7 +234,7 @@ def modpath_list_intersect (a : List ModulePath) (b : List ModulePath) : List Mo
 /// importing it). Rules 1/2/4 exist only for the ~19 names two or more
 /// modules declare.
 #[partial]
-def resolve_owner (mpath : ModulePath) (own_aliases : List OpenAlias) (imports : List ModulePath) (name : String) (owners : List ModulePath) : Result String ModulePath :=
+def resolve_owner (mpath : ModulePath) (own_aliases : List OpenAlias) (imports : List ModulePath) (name : String) (owners : List ModulePath) : Result CodegenDiagnostic ModulePath :=
     let explicit := explicit_import_owners own_aliases name owners in
     if modpath_list_contains owners mpath
     then
@@ -248,10 +249,8 @@ def resolve_owner (mpath : ModulePath) (own_aliases : List OpenAlias) (imports :
         match explicit {
             List.empty => Result.ok mpath,
             List.cons e _ =>
-                Result.err (String.concat "module " (String.concat (module_path_to_string_colon mpath)
-                    (String.concat " both declares `" (String.concat name
-                        (String.concat "` and imports it from " (String.concat (module_path_to_string_colon e)
-                            " -- drop one, they are not interchangeable")))))),
+                Result.err (CodegenDiagnostic.declared_and_imported
+                    (module_path_to_string_colon mpath) name (module_path_to_string_colon e)),
         }
     else match explicit {
         List.cons e erest =>
@@ -279,18 +278,13 @@ def resolve_owner (mpath : ModulePath) (own_aliases : List OpenAlias) (imports :
                                 List.empty => Result.err (ambiguous_owner_msg mpath name owners),
                             },
                     },
-                List.empty => Result.err (String.concat "no module declares `" (String.concat name "`")),
+                List.empty => Result.err (CodegenDiagnostic.no_declarer name),
             },
     }
 
 #[partial]
-def ambiguous_owner_msg (mpath : ModulePath) (name : String) (candidates : List ModulePath) : String :=
-    String.concat "`" (String.concat name
-        (String.concat "` is referenced from " (String.concat (module_path_to_string_colon mpath)
-            (String.concat " but declared in " (String.concat (join_modpaths candidates)
-                " -- add an explicit `use <module> {"
-            )))))
-        ++ name ++ "}` to say which"
+def ambiguous_owner_msg (mpath : ModulePath) (name : String) (candidates : List ModulePath) : CodegenDiagnostic :=
+    CodegenDiagnostic.ambiguous_owner name (module_path_to_string_colon mpath) (join_modpaths candidates)
 
 #[partial]
 def join_modpaths (ps : List ModulePath) : String :=
@@ -512,7 +506,7 @@ def module_rename_map (mpath : ModulePath) (own_aliases : List OpenAlias) (impor
 /// references. Only computed when something was unresolvable, so the
 /// common module pays nothing for it.
 #[partial]
-def unresolved_refs_in_module (mpath : ModulePath) (own_aliases : List OpenAlias) (imports : List ModulePath) (owners_map : HashMap String (List ModulePath)) (ambig : List String) (decls : List Decl) : List String :=
+def unresolved_refs_in_module (mpath : ModulePath) (own_aliases : List OpenAlias) (imports : List ModulePath) (owners_map : HashMap String (List ModulePath)) (ambig : List String) (decls : List Decl) : List CodegenDiagnostic :=
     let unresolved := unresolvable_names mpath own_aliases imports owners_map ambig in
     match unresolved {
         List.empty => List.empty,
@@ -534,7 +528,7 @@ def unresolvable_names (mpath : ModulePath) (own_aliases : List OpenAlias) (impo
     }
 
 #[partial]
-def unresolved_messages (mpath : ModulePath) (own_aliases : List OpenAlias) (imports : List ModulePath) (owners_map : HashMap String (List ModulePath)) (unresolved : List String) (referenced : HashMap String Bool) : List String :=
+def unresolved_messages (mpath : ModulePath) (own_aliases : List OpenAlias) (imports : List ModulePath) (owners_map : HashMap String (List ModulePath)) (unresolved : List String) (referenced : HashMap String Bool) : List CodegenDiagnostic :=
     match unresolved {
         List.empty => List.empty,
         List.cons n rest =>
@@ -625,7 +619,7 @@ def insert_all_names (names : List String) (acc : HashMap String Bool) : HashMap
 /// itself forces the update chain without timing anything). The
 /// arithmetic check (AGENTS.md item 25): these sub-times must sum to the
 /// enclosing `qualify_modules` total `emit.mo` still prints.
-def qualify_modules (verbose : Bool) (all_modules : List ModuleInfo) : IO (Result String (List ModuleInfo)) := do {
+def qualify_modules (verbose : Bool) (all_modules : List ModuleInfo) : IO (Result CodegenError (List ModuleInfo)) := do {
     let t0 : I64 <- Bench.now;
     let modules := dedup_modules_by_file all_modules;
     let t1 : I64 <- bench_step verbose "  qualify: dedup_modules_by_file" t0 (List.length modules);
@@ -642,7 +636,7 @@ def qualify_modules (verbose : Bool) (all_modules : List ModuleInfo) : IO (Resul
     let msgs := collect_qualify_errors modules owners_map ambig;
     let t6 : I64 <- bench_step verbose "  qualify: collect_qualify_errors" t5 (List.length msgs);
     match msgs {
-        List.cons _ _ => return (Result.err (join_semicolon_msgs msgs "")),
+        List.cons _ _ => return (Result.err (CodegenError.qualify (join_semicolon_msgs (List.map CodegenDiagnostic.render msgs) ""))),
         List.empty => do {
             let qualified := qualify_modules_go modules owners_map global_map ambig;
             let _t7 : I64 <- bench_step verbose "  qualify: qualify_modules_go" t6 (List.length qualified);
@@ -720,7 +714,7 @@ def keep_canonical_modules (modules : List ModuleInfo) (best : HashMap String St
     }
 
 #[partial]
-def collect_qualify_errors (modules : List ModuleInfo) (owners_map : HashMap String (List ModulePath)) (ambig : List String) : List String :=
+def collect_qualify_errors (modules : List ModuleInfo) (owners_map : HashMap String (List ModulePath)) (ambig : List String) : List CodegenDiagnostic :=
     match modules {
         List.empty => List.empty,
         List.cons m rest =>

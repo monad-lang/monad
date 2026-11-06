@@ -71,6 +71,7 @@ use lib::symbols {
 use lang::name_text {unqualify_def_name}
 use lib::attrs {find_attr_args, find_named_arg}
 use lang::elaborate {names_of_decls}
+use lib::errors {CodegenError}
 use lib::util {
     dedup_idents, dedup_idents_go, dedup_strs, dedup_strs_go, drop_last_instr,
     ident_in_list, identifier_eq, join_semicolon_msgs, list_contains_str, rev_vals
@@ -5927,7 +5928,7 @@ def strs_have_no_i8_star (ss : List String) : Bool :=
 /// (`cli/src/main.mo`'s own compile-file progress markers, link failures,
 /// the user's program output) in low-value noise.
 #[partial]
-pub def compile_loaded_modules_to_ir (loaded : LoadedModules) (verbose : Bool) : IO (Result String LLVMModule) :=
+pub def compile_loaded_modules_to_ir (loaded : LoadedModules) (verbose : Bool) : IO (Result CodegenError LLVMModule) :=
     compile_loaded_modules_to_ir_with_debug loaded verbose Option.none default_triple
 
 /// One `(module path string, file path)` pair per loaded module -- the
@@ -6198,13 +6199,14 @@ def desugar_opt_terms (scope : Scope) (args : List (Option Term)) : List (Option
 /// second call re-walked the whole module and re-probed every target --
 /// running the gate TWICE, visible as a 314280ms self-compile.)
 #[partial]
-def gate_result (missing : List String) (m : LLVMModule) : Result String LLVMModule :=
+def gate_result (missing : List String) (m : LLVMModule) : Result CodegenError LLVMModule :=
     match missing {
         List.empty => Result.ok m,
         List.cons _ _ =>
-            Result.err (String.concat "call to undefined symbol(s): "
-                (String.concat (join_semicolon_msgs (dedup_strs missing) "")
-                    " -- a reference resolved to a name nothing defines; def_symbol_name and ref_symbol_name must agree")),
+            Result.err (CodegenError.undefined_symbols
+                (String.concat "call to undefined symbol(s): "
+                    (String.concat (join_semicolon_msgs (dedup_strs missing) "")
+                        " -- a reference resolved to a name nothing defines; def_symbol_name and ref_symbol_name must agree"))),
     }
 
 /// One `--verbose` line naming how many decls best-effort elaboration left
@@ -6259,22 +6261,30 @@ def reachable_elab_failures_go (failed : List String) (errors : List String) (na
 /// re-measure reports `swallowed=0`; a swallowed decl is now a build error
 /// on every pipeline that runs this gate (codegen, the test driver, `eval`).
 #[partial]
-pub def validate_reachable_elaborated (report : BestEffortElab) (reachable : List Decl) : Result String (List Decl) :=
+pub def validate_reachable_elaborated (report : BestEffortElab) (reachable : List Decl) : Result CodegenError (List Decl) :=
     let bad : List String := reachable_elab_failures_go (best_effort_failed report) (best_effort_errors report) (decl_name_set reachable str_map_empty) in
     match bad {
         List.empty => Result.ok reachable,
         List.cons _ _ =>
-            Result.err (String.concat (I64.to_string (List.length bad))
-                (String.concat " reachable decl(s) did not elaborate: "
-                    (List.intercalate "; " (take_first_n bad 5)))),
+            Result.err (CodegenError.elaboration (List.length bad)
+                (List.intercalate "; " (take_first_n bad 5))),
     }
 
 /// The first failing gate's result, else the second's.
 #[partial]
-pub def gate_then (first : Result String (List Decl)) (second : Result String (List Decl)) : Result String (List Decl) :=
+pub def gate_then (first : Result CodegenError (List Decl)) (second : Result CodegenError (List Decl)) : Result CodegenError (List Decl) :=
     match first {
         Result.err _ => first,
         Result.ok _ => second,
+    }
+
+/// `lang`'s unresolved-class gate still reports text (the front end may not
+/// name a codegen type); cross the mote boundary here.
+#[partial]
+def class_gate_result (r : Result String (List Decl)) : Result CodegenError (List Decl) :=
+    match r {
+        Result.ok ds => Result.ok ds,
+        Result.err msg => Result.err (CodegenError.of_message msg),
     }
 
 /// First `n`, for a report that must not print 4000 names.
@@ -6387,7 +6397,7 @@ def gate_set_probe (m : HashMap String Bool) : I64 :=
 /// (`CompileResult`), and a bare match on an un-annotated binder is exactly
 /// the ambiguity that bit `aa3c9b3`'s qualify sub-timing.
 #[partial]
-def call_target_gate_probe (r : Result String LLVMModule) : I64 := match r {
+def call_target_gate_probe (r : Result CodegenError LLVMModule) : I64 := match r {
     Result.err _ => 0,
     Result.ok _ => 1,
 }
@@ -6441,7 +6451,7 @@ pub def compile_input_of_modules (target_mp : ModulePath) (qualified_mods : List
 /// header records and therefore what llc compiles for when the caller
 /// passes no `-mtriple`.
 #[partial]
-pub def compile_loaded_modules_to_ir_with_debug (loaded : LoadedModules) (verbose : Bool) (source_path : Option String) (triple : String) : IO (Result String LLVMModule) := do {
+pub def compile_loaded_modules_to_ir_with_debug (loaded : LoadedModules) (verbose : Bool) (source_path : Option String) (triple : String) : IO (Result CodegenError LLVMModule) := do {
     let total_start : I64 <- Bench.now;
 
     let all_mods := get_loaded_all loaded;
@@ -6491,7 +6501,7 @@ pub def compile_loaded_modules_to_ir_with_debug (loaded : LoadedModules) (verbos
     let qualify_result <- qualify_modules verbose aliased_mods;
     match qualify_result {
         Result.err e => do {
-            if verbose then do { fail_line ("FAILED at stage: qualify_modules (" ++ e ++ ")"); return unit } else return unit;
+            if verbose then do { fail_line ("FAILED at stage: qualify_modules (" ++ CodegenError.render e ++ ")"); return unit } else return unit;
             return (Result.err e)
         },
         Result.ok qualified_mods => do {
@@ -6561,9 +6571,9 @@ pub def compile_loaded_modules_to_ir_with_debug (loaded : LoadedModules) (verbos
             // (the elaboration gate is unconditional since Item 11), so the stage
             // line names both -- same convention as the unwired-native/monad-extern
             // pair below. The message itself says which condition tripped.
-            match gate_then (validate_reachable_elaborated elab_report reachable_decls) (validate_no_unresolved_class_calls dispatched_classes reachable_decls) {
+            match gate_then (validate_reachable_elaborated elab_report reachable_decls) (class_gate_result (validate_no_unresolved_class_calls dispatched_classes reachable_decls)) {
                 Result.err e => do {
-                    if verbose then do { fail_line ("FAILED at stage: validate_reachable_elaborated/validate_no_unresolved_class_calls (" ++ e ++ ")"); return unit } else return unit;
+                    if verbose then do { fail_line ("FAILED at stage: validate_reachable_elaborated/validate_no_unresolved_class_calls (" ++ CodegenError.render e ++ ")"); return unit } else return unit;
                     return (Result.err e)
                 },
                 Result.ok _ =>
@@ -6576,19 +6586,19 @@ pub def compile_loaded_modules_to_ir_with_debug (loaded : LoadedModules) (verbos
                 match gate_then (validate_no_unwired_natives reachable_decls)
                 (validate_no_monad_externs reachable_decls) {
                     Result.err e => do {
-                        if verbose then do { fail_line ("FAILED at stage: validate_no_unwired_natives/validate_no_monad_externs (" ++ e ++ ")"); return unit } else return unit;
+                        if verbose then do { fail_line ("FAILED at stage: validate_no_unwired_natives/validate_no_monad_externs (" ++ CodegenError.render e ++ ")"); return unit } else return unit;
                         return (Result.err e)
                     },
                     Result.ok _ =>
                     match validate_native_target_availability (TargetKind.of_triple triple) triple reachable_decls {
                         Result.err e => do {
-                            if verbose then do { fail_line ("FAILED at stage: validate_native_target_availability (" ++ e ++ ")"); return unit } else return unit;
+                            if verbose then do { fail_line ("FAILED at stage: validate_native_target_availability (" ++ CodegenError.render e ++ ")"); return unit } else return unit;
                             return (Result.err e)
                         },
                         Result.ok _ =>
                         match validate_export_defs (TargetKind.of_triple triple) triple reachable_decls {
                             Result.err e => do {
-                                if verbose then do { fail_line ("FAILED at stage: validate_export_defs (" ++ e ++ ")"); return unit } else return unit;
+                                if verbose then do { fail_line ("FAILED at stage: validate_export_defs (" ++ CodegenError.render e ++ ")"); return unit } else return unit;
                                 return (Result.err e)
                             },
                             Result.ok _ =>
@@ -6600,7 +6610,7 @@ pub def compile_loaded_modules_to_ir_with_debug (loaded : LoadedModules) (verbos
                             (validate_no_undesugared_struct_lits reachable_decls)
                             (validate_no_undesugared_elims reachable_decls) {
                                 Result.err e => do {
-                                    if verbose then do { fail_line ("FAILED at stage: validate_no_undesugared_struct_lits/validate_no_undesugared_elims (" ++ e ++ ")"); return unit } else return unit;
+                                    if verbose then do { fail_line ("FAILED at stage: validate_no_undesugared_struct_lits/validate_no_undesugared_elims (" ++ CodegenError.render e ++ ")"); return unit } else return unit;
                                     return (Result.err e)
                                 },
                                 Result.ok _ =>
@@ -6609,7 +6619,7 @@ pub def compile_loaded_modules_to_ir_with_debug (loaded : LoadedModules) (verbos
                                 // finds is a synthesized or runtime-symbol clash.
                                 match validate_no_colliding_def_symbols reachable_decls {
                                     Result.err e => do {
-                                        if verbose then do { fail_line ("FAILED at stage: validate_no_colliding_def_symbols (" ++ e ++ ")"); return unit } else return unit;
+                                        if verbose then do { fail_line ("FAILED at stage: validate_no_colliding_def_symbols (" ++ CodegenError.render e ++ ")"); return unit } else return unit;
                                         return (Result.err e)
                                     },
                                     Result.ok _ => do {
@@ -6661,7 +6671,7 @@ pub def compile_loaded_modules_to_ir_with_debug (loaded : LoadedModules) (verbos
                                         let t_gate_set : I64 <- bench_step verbose "  gate: build_defined_symbol_set" t_gate_walk (gate_set_probe gate_defined);
                                         let gate_missing : List String := missing_call_targets gate_targets gate_defined;
                                         let _t_gate_probe : I64 <- bench_step verbose "  gate: missing_call_targets" t_gate_set (List.length gate_missing);
-                                        let closed : Result String LLVMModule := gate_result gate_missing mod_;
+                                        let closed : Result CodegenError LLVMModule := gate_result gate_missing mod_;
                                         let _t_closed : I64 <- bench_step verbose "call-target gate" t_closed (call_target_gate_probe closed);
                                         if verbose then do {
                                             Bench.report_since "compile_loaded_modules_to_ir total" total_start;
