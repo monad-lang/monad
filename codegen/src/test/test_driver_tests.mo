@@ -364,38 +364,42 @@ def test_driver_source_has_no_test_count_ceiling : Bool :=
     String.contains src "__f287"
     && String.contains src ("\"" ++ result_file_marker ++ "\" ++ I64.to_string __f287")
 
-#[test]
-def test_parse_driver_result_round_trips : Bool :=
-    match parse_driver_result (result_file_marker ++ "7") {
-        Option.some n => I64.beq n 7,
+/// `parse_driver_result raw` is `Option.some n` with `n = expected`.
+#[partial]
+def parse_driver_eq (raw : String) (expected : I64) : Bool :=
+    match parse_driver_result raw {
+        Option.some n => I64.beq n expected,
         Option.none => false,
     }
 
+/// `parse_driver_result raw` rejects the input.
+#[partial]
+def parse_driver_none (raw : String) : Bool :=
+    match parse_driver_result raw {
+        Option.some _ => false,
+        Option.none => true,
+    }
+
+#[test]
+def test_parse_driver_result_round_trips : Bool :=
+    parse_driver_eq (result_file_marker ++ "7") 7
+
 #[test]
 def test_parse_driver_result_round_trips_the_corpus_count : Bool :=
-    match parse_driver_result (result_file_marker ++ "288") {
-        Option.some n => I64.beq n 288,
-        Option.none => false,
-    }
+    parse_driver_eq (result_file_marker ++ "288") 288
 
 // The count is written with no trailing newline, but the parent trims
 // before parsing anyway -- a driver edited by hand, or a native write
 // that ever grows a newline, must still round-trip.
 #[test]
 def test_parse_driver_result_trims_whitespace : Bool :=
-    match parse_driver_result (result_file_marker ++ " 12 \n") {
-        Option.some n => I64.beq n 12,
-        Option.none => false,
-    }
+    parse_driver_eq (result_file_marker ++ " 12 \n") 12
 
 // A count of zero is a VALID parse, not "nothing" -- this is the all-
 // tests-passed report and must reach the parent as `Option.some 0`.
 #[test]
 def test_parse_driver_result_zero_is_some : Bool :=
-    match parse_driver_result (result_file_marker ++ "0") {
-        Option.some n => I64.beq n 0,
-        Option.none => false,
-    }
+    parse_driver_eq (result_file_marker ++ "0") 0
 
 // The reject tests match rather than `Bool.not`-ing the `Option`
 // directly: `parse_driver_result` returns an `Option I64`, and the
@@ -404,34 +408,19 @@ def test_parse_driver_result_zero_is_some : Bool :=
 // way while asserting nothing.
 #[test]
 def test_parse_driver_result_rejects_a_missing_marker : Bool :=
-    match parse_driver_result "7" {
-        Option.some _ => false,
-        Option.none => true,
-    }
+    parse_driver_none "7"
 
 #[test]
 def test_parse_driver_result_rejects_garbage_after_the_marker : Bool :=
-    match parse_driver_result (result_file_marker ++ "x") {
-        Option.some _ => false,
-        Option.none => true,
-    }
+    parse_driver_none (result_file_marker ++ "x")
 
 #[test]
 def test_parse_driver_result_rejects_input_shorter_than_the_marker : Bool :=
-    match parse_driver_result "" {
-        Option.some _ => false,
-        Option.none => match parse_driver_result "__MONAD" {
-            Option.some _ => false,
-            Option.none => true,
-        },
-    }
+    parse_driver_none "" && parse_driver_none "__MONAD"
 
 #[test]
 def test_parse_driver_result_rejects_a_wrong_marker : Bool :=
-    match parse_driver_result "__MONAD_CHECK__ 7" {
-        Option.some _ => false,
-        Option.none => true,
-    }
+    parse_driver_none "__MONAD_CHECK__ 7"
 
 // ─── The `Result` test shape ────────────────────────────────────────
 //
