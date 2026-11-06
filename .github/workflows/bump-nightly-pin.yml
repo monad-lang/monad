@@ -1,0 +1,101 @@
+name: Bump nightly pin
+
+# Keep nix/nightly.nix on the newest published nightly.
+#
+# The pin hosts the release's rung 1 (nix/monad.nix's `nightlyRung1`), so a pin
+# that lags the compiler-source surface breaks every nightly at rung 1 with the
+# host's own unknown-construct error. That happened on 2026-11-06: the prelude
+# adopted a class-head `{u : Universe}` binder that the pinned binary predated
+# (the parser support landed two hours AFTER that nightly was published), and
+# the pin had been stale since it was introduced. This workflow runs the bump
+# daily instead of relying on someone remembering AGENTS.md's rule; the PR is
+# still reviewed and merged by a human, and the nightly run on merge remains
+# the authoritative gate.
+#
+# It runs ONLY in monad-lang/monad (the same repository gate nightly.yml uses),
+# so no mirror of this repo opens a parallel bump PR.
+#
+# IT CANNOT FEED ITSELF. A bump PR touches only nix/nightly.nix, and
+# nightly.yml's push trigger ignores exactly that file, so merging the bump
+# publishes no new nightly. Without that filter the merge would release a
+# nightly whose only content is the bump, the next scheduled run would adopt
+# it, and every bump would beget another nightly forever.
+
+on:
+  schedule:
+    # Daily, early UTC. The bump is idempotent, so a night with no new nightly
+    # costs one API call and opens nothing.
+    - cron: '17 6 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+# One bump at a time: a manual dispatch must not race the scheduled run into
+# force-pushing the same automation branch.
+concurrency:
+  group: bump-nightly-pin
+  cancel-in-progress: false
+
+env:
+  # Same suppression as the other workflows: the devShell's shellHook runs the
+  # full pre-commit sweep on every `nix develop -c` entry, and these steps only
+  # need the tools.
+  DEVENV_SKIP_TASKS: "1"
+
+jobs:
+  bump:
+    # Only the canonical repository runs this, the same repository gate
+    # nightly.yml uses: a mirror must not open a parallel bump PR.
+    if: github.repository == 'monad-lang/monad'
+    runs-on: [self-hosted, linux]
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          # Full history so the PR branch is based on a real main and so the
+          # script's git operations are never blocked by a shallow clone.
+          fetch-depth: 0
+
+      # The bot's PR is created with GITHUB_TOKEN and therefore triggers no
+      # CI (see the open step below), so the tool's own hermetic fixture tests
+      # run here as this job's gate.
+      - name: Test the bump tool
+        run: |
+          nix develop --no-pure-eval --accept-flake-config -c scripts/check-nightly-pin.sh
+
+      # `nix develop` because the script needs curl and python3, which the
+      # runner host does not carry (nix/packages.nix's comment says the same
+      # about jq: the runner service's PATH holds bash, git, tar and coreutils
+      # only). Reuses the same shell the other jobs already realise.
+      - name: Bump the pin to the newest nightly
+        id: bump
+        run: |
+          nix develop --no-pure-eval --accept-flake-config -c scripts/bump-nightly-pin.sh
+
+          if git diff --quiet -- nix/nightly.nix; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          tag="$(sed -n 's/^ *tag = "\([^"]*\)";$/\1/p' nix/nightly.nix | head -n 1)"
+          echo "changed=true" >> "$GITHUB_OUTPUT"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
+      # The PR lives on one fixed branch and is refreshed in place, so a week
+      # of bumps is one PR, not seven. `gh` is a dev-shell package; the open
+      # script is entered through `nix develop` for the same reason as above.
+      #
+      # GH_TOKEN is the repository's own token: GitHub suppresses workflow runs
+      # for events it creates, so this PR will NOT run CI on its own head. Set a
+      # PAT (contents + pull-requests) as GH_TOKEN if per-PR checks are wanted;
+      # the nightly run on merge is the gate either way. The repository must
+      # also allow Actions to create pull requests (Settings -> Actions ->
+      # General -> "Allow GitHub Actions to create and approve pull requests").
+      - name: Open or refresh the bump PR
+        if: steps.bump.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          nix develop --no-pure-eval --accept-flake-config \
+            -c scripts/open-nightly-pin-pr.sh "${{ steps.bump.outputs.tag }}"

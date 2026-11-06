@@ -124,6 +124,15 @@
       ${config.devenv.root}/scripts/nightly-release.sh
     '';
   };
+  # Adopt the newest published nightly as the release's rung-1 host
+  # (nix/nightly.nix). The scheduled `Bump nightly pin` workflow runs the same
+  # script and opens a PR; this is the local entry point, and `--check` makes
+  # a stale pin visible without changing anything.
+  tasks."monad:bump-nightly" = {
+    exec = ''
+      ${config.devenv.root}/scripts/bump-nightly-pin.sh
+    '';
+  };
   # The self-hosted compiler compiles ITSELF, and then the binary that falls
   # out has to do the job it was built for -- twice, once `--release` and once
   # in the default DWARF-emitting mode, each with its own fixpoint `cmp`.

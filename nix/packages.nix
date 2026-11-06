@@ -139,5 +139,9 @@ in
     # tar and coreutils only, so both have to come from here.
     curl
     jq
+    # The scheduled pin bump (.github/workflows/bump-nightly-pin.yml) opens and
+    # refreshes its PR with `gh`; the runner host carries no gh of its own, and
+    # the step enters through `nix develop` for exactly the reason above.
+    gh
   ];
 }
