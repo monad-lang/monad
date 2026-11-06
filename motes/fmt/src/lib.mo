@@ -12,6 +12,10 @@ pub use lib::lexer {
     Lex.gap_tight, Lex.kind_tag, Lex.lex, Lex.lines, Lex.same_token,
 }
 
+pub use lib::highlight {
+    HlClass, Span, Highlight.css_class, Highlight.is_keyword, Highlight.spans,
+}
+
 pub use lib::fmt {
     Fmt.default_config, Fmt.format_source, Fmt.is_formatted, FmtError,
 }
