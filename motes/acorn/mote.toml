@@ -41,3 +41,6 @@ workspace = true
 
 [dependencies.clap]
 workspace = true
+
+[dependencies.fmt]
+workspace = true

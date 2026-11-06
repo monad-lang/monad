@@ -6,8 +6,13 @@
 /// - a relative link to `foo.md` (with or without `#anchor`) points at the
 ///   rendered `foo.html`;
 /// - a GFM admonition (`> [!WARNING]` …) becomes
-///   `<div class="admonition warning">` with a title paragraph.
+///   `<div class="admonition warning">` with a title paragraph;
+/// - a fenced block's info string (`monad,ignore`) splits into the language
+///   (`<code class="language-monad">`) and its flags (`<pre class="ignore">`),
+///   and a `monad` block's text becomes highlighted spans.
 use xml_html::html {Html.Node, Html.Attr}
+use std::list {List.intercalate}
+use fmt::highlight {Span, Highlight.css_class, Highlight.spans}
 
 /// A relative `.md` link → `.html`, keeping its `#fragment`. Absolute URLs,
 /// root paths, bare fragments and other files are unchanged.
@@ -161,9 +166,113 @@ pub def Passes.node (n : Html.Node) : Html.Node :=
     }
 
 def element (tag : String) (attrs : List Html.Attr) (children : List Html.Node) : Html.Node :=
-    if String.beq tag "blockquote"
-    then blockquote children
+    if String.beq tag "blockquote" then blockquote children
+    else if String.beq tag "pre" then pre_block attrs children
     else Html.Node.node_element tag attrs children
+
+/// A fence's info string, split at its first comma: the language and the
+/// comma-separated flags after it.
+pub struct FenceInfo {
+    lang : String,
+    flags : List String,
+}
+
+/// `monad,ignore` → `{ lang := "monad", flags := ["ignore"] }`.
+pub def Passes.fence_info (info : String) : FenceInfo :=
+    match split_commas info {
+        List.empty => { lang := "", flags := List.empty },
+        List.cons lang flags => { lang := lang, flags := flags },
+    }
+
+#[terminating]
+def split_commas (s : String) : List String :=
+    let i : I64 := index_of_byte s 44u8 0 in
+    if i < 0
+    then [s]
+    else List.cons (String.slice s 0 i) (split_commas (String.drop (i + 1) s))
+
+/// The fence's info string from the `<code>`'s `language-…` class.
+def code_info (attrs : List Html.Attr) : String :=
+    match attrs {
+        List.empty => "",
+        List.cons a rest => attr_info a rest,
+    }
+
+// Mutual recursion with `code_info` on the list's own tail.
+#[terminating]
+def attr_info (a : Html.Attr) (rest : List Html.Attr) : String :=
+    match a {
+        Html.Attr.attr name value =>
+            if String.beq name "class" && String.starts_with "language-" value
+            then String.drop 9 value
+            else code_info rest,
+        Html.Attr.bool_attr _ => code_info rest,
+    }
+
+/// `<pre><code class="language-INFO">text</code></pre>`, the only shape the
+/// markdown renderer emits for a fence; anything else is left alone.
+def pre_block (attrs : List Html.Attr) (children : List Html.Node) : Html.Node :=
+    match children {
+        List.cons first rest => pre_first attrs first rest,
+        List.empty => Html.Node.node_element "pre" attrs List.empty,
+    }
+
+def pre_first (attrs : List Html.Attr) (first : Html.Node) (rest : List Html.Node) : Html.Node :=
+    match rest {
+        List.empty => pre_code attrs first,
+        List.cons r more => Html.Node.node_element "pre" attrs (List.cons first (List.cons r more)),
+    }
+
+def pre_code (attrs : List Html.Attr) (code : Html.Node) : Html.Node :=
+    match code {
+        Html.Node.node_element tag cattrs body =>
+            if String.beq tag "code"
+            then fenced (Passes.fence_info (code_info cattrs)) body
+            else Html.Node.node_element "pre" attrs [Html.Node.node_element tag cattrs body],
+        _ => Html.Node.node_element "pre" attrs [code],
+    }
+
+def fenced (info : FenceInfo) (body : List Html.Node) : Html.Node :=
+    match info {
+        { lang, flags } =>
+            let pre_attrs : List Html.Attr :=
+                if List.is_empty flags then List.empty else [Html.Attr.attr "class" (List.intercalate " " flags)] in
+            let code_attrs : List Html.Attr :=
+                if String.is_empty lang then List.empty else [Html.Attr.attr "class" (String.concat "language-" lang)] in
+            Html.Node.node_element "pre" pre_attrs
+                [Html.Node.node_element "code" code_attrs (code_body lang body)],
+    }
+
+/// A `monad` block's text as highlighted spans; other languages unchanged.
+def code_body (lang : String) (body : List Html.Node) : List Html.Node :=
+    if String.beq lang "monad" then highlight_body body else body
+
+def highlight_body (body : List Html.Node) : List Html.Node :=
+    match body {
+        List.cons first rest => highlight_first first rest,
+        List.empty => List.empty,
+    }
+
+def highlight_first (first : Html.Node) (rest : List Html.Node) : List Html.Node :=
+    match rest {
+        List.empty => highlight_text first,
+        List.cons r more => List.cons first (List.cons r more),
+    }
+
+def highlight_text (n : Html.Node) : List Html.Node :=
+    match n {
+        Html.Node.node_text src => List.map span_node (Highlight.spans src),
+        _ => [n],
+    }
+
+def span_node (s : Span) : Html.Node :=
+    match s {
+        { cls, text } =>
+            let c : String := Highlight.css_class cls in
+            if String.is_empty c
+            then Html.Node.node_text text
+            else Html.Node.node_element "span" [Html.Attr.attr "class" c] [Html.Node.node_text text],
+    }
 
 /// Apply every pass to a rendered chapter body.
 pub def Passes.chapter (nodes : List Html.Node) : List Html.Node :=

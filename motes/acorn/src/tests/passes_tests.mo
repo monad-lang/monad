@@ -1,5 +1,6 @@
 /// Link rewriting and admonitions over rendered chapters.
-use lib::passes {Passes.rewrite_href}
+use std::list {List.intercalate}
+use lib::passes {FenceInfo, Passes.fence_info, Passes.rewrite_href}
 use lib::site {Site.render_chapter}
 use lib::config {SiteConfig}
 
@@ -45,3 +46,25 @@ def test_marker_with_text_on_same_line : Bool :=
 def test_plain_and_unknown_quotes_stay_blockquotes : Bool :=
     String.contains (render "> Just a quote.\n") "<blockquote>"
         && String.contains (render "> [!SHOUT] no.\n") "[!SHOUT]"
+
+def info_text (i : FenceInfo) : String :=
+    match i {
+        { lang, flags } => String.concat lang (String.concat "|" (List.intercalate "," flags)),
+    }
+
+#[test]
+def test_fence_info_splits_flags : Bool :=
+    String.beq (info_text (Passes.fence_info "monad,ignore")) "monad|ignore"
+        && String.beq (info_text (Passes.fence_info "monad")) "monad|"
+        && String.beq (info_text (Passes.fence_info "monad,check,run")) "monad|check,run"
+
+#[test]
+def test_monad_fence_is_highlighted_and_flagged : Bool :=
+    let html : String := render "```monad,ignore\ndef x : I64 := 1\n```\n" in
+    String.contains html "<pre class=\"ignore\"><code class=\"language-monad\"><span class=\"kw\">def</span> <span class=\"fn\">x</span>"
+        && String.contains html "<span class=\"num\">1</span>"
+
+#[test]
+def test_other_fences_are_left_plain : Bool :=
+    let html : String := render "```bash\nmonad run x.mo\n```\n" in
+    String.contains html "<pre><code class=\"language-bash\">monad run x.mo"
