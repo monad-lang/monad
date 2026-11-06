@@ -3,7 +3,7 @@ use std::process {exec_cmd, process_id}
 use lang::types {
     Attribute, Decl, Def, Term, TypeConstraint, binder_named, i64, id, match_, named, num, package_private, param_many, sort_n, str,
 }
-use llvm::ir {emit_module}
+use llvm::ir {LLVMModule, emit_module}
 use llvm::link {compile_ir_to_obj, compile_runtime_obj, link_objects}
 use runtime {}
 use lib::emit {compile_db_decls_ir, compile_db_module}
@@ -29,64 +29,21 @@ def mk_i64 (n : I64) : Term :=
 
 /// Simple test: compile and run a program that returns 42
 #[test]
-def test_compile_42 : IO Bool := do {
-    let defs := [mk_def "main" (mk_i64 42)];
-
-    let output_dir := "/tmp/monad_e2e_" ++ I64.to_string process_id;
-    let ir_path := String.concat output_dir "/test_42.ll";
-    let obj_path := String.concat output_dir "/test_42.o";
-    let runtime_obj := String.concat output_dir "/monad_runtime.o";
-    let output_path := String.concat output_dir "/test_42";
-
-    exec_cmd "mkdir" ["-p", output_dir];
-
-    let mod_ := compile_db_decls_ir defs;
-    let ir_text := emit_module mod_;
-    // `ir_path` is always non-empty by construction (built from
-    // non-empty literal fragments above) -- `Path.path` directly.
-    let _w <- Test.write_fixture (Path.path ir_path) ir_text;
-    println ("wrote ir to: " ++ ir_path);
-
-    let llc_result <- compile_ir_to_obj ir_path obj_path;
-    if not (llc_result == 0) then do {
-        println <| "llc failed";
-        return false
-    } else do {
-
-        // The C runtime comes from the shared resolver, like every other
-        // consumer: `Runtime.c_path` alone is checkout-root-relative, so it
-        // named nothing when the working directory was not the root. These
-        // harnesses build their program in memory rather than writing a
-        // source file, so the working directory is the only anchor they
-        // have -- which is what the resolver's workspace tier already uses.
-        let runtime_src <- resolve_runtime_src "";
-        let rt_result <- compile_runtime_obj runtime_src [] runtime_obj;
-        if not (rt_result == 0) then do {
-            println <| "compiling runtime failed";
-            return false
-        } else do {
-
-            let link_result <- link_objects [obj_path, runtime_obj] output_path [];
-            if not (link_result == 0) then do {
-                println <| "clang linker failed";
-                return false
-            } else do {
-                let exec_result <- exec_cmd output_path [];
-
-                exec_cmd "rm" ["-f", ir_path, obj_path, runtime_obj, output_path];
-
-                return (exec_result == 42)
-            }
-        }
-    }
-}
+def test_compile_42 : IO Bool :=
+    compile_link_run_expect [mk_def "main" (mk_i64 42)] "test_42" 42
 
 /// Shared compile+link+execute helper for the regression tests below --
 /// same llc/clang/clang pipeline as test_compile_42, parameterized by a
 /// unique basename (so tests don't clobber each other's /tmp files) and
 /// the expected process exit code.
 #[partial]
-def compile_link_run_expect (defs : List Def) (basename : String) (expected : I64) : IO Bool := do {
+def compile_link_run_expect (defs : List Def) (basename : String) (expected : I64) : IO Bool :=
+    link_run_module_expect (compile_db_decls_ir defs) basename expected
+
+/// Shared link-and-run for an already-built module: llc, the C runtime,
+/// clang, execute, and compare the exit code.
+#[partial]
+def link_run_module_expect (mod_ : LLVMModule) (basename : String) (expected : I64) : IO Bool := do {
     let output_dir := "/tmp/monad_e2e_" ++ I64.to_string process_id;
     let ir_path := output_dir ++ "/" ++ basename ++ ".ll";
     let obj_path := output_dir ++ "/" ++ basename ++ ".o";
@@ -101,7 +58,6 @@ def compile_link_run_expect (defs : List Def) (basename : String) (expected : I6
 
     exec_cmd "mkdir" ["-p", output_dir];
 
-    let mod_ := compile_db_decls_ir defs;
     let ir_text := emit_module mod_;
     // `ir_path` is always non-empty by construction -- `Path.path` directly.
     let _w <- Test.write_fixture (Path.path ir_path) ir_text;
@@ -362,50 +318,8 @@ def test_compile_string_literal_with_embedded_quote_and_backslash : IO Bool := d
 /// direct, low-level test of `promote_instance_defs`'s own output
 /// needs, no dependency on the wider check/scope pipeline.
 #[partial]
-def compile_decls_link_run_expect (decl_list : List Decl) (basename : String) (expected : I64) : IO Bool := do {
-    let output_dir := "/tmp/monad_e2e_" ++ I64.to_string process_id;
-    let ir_path := output_dir ++ "/" ++ basename ++ ".ll";
-    let obj_path := output_dir ++ "/" ++ basename ++ ".o";
-    let runtime_obj := output_dir ++ "/" ++ basename ++ "_runtime.o";
-    let output_path := output_dir ++ "/" ++ basename;
-
-    exec_cmd "mkdir" ["-p", output_dir];
-
-    let mod_ := compile_db_module decl_list;
-    let ir_text := emit_module mod_;
-    // `ir_path` is always non-empty by construction -- `Path.path` directly.
-    let _w <- Test.write_fixture (Path.path ir_path) ir_text;
-
-    let llc_result <- compile_ir_to_obj ir_path obj_path;
-    if not (llc_result == 0) then do {
-        println <| basename ++ ": llc failed";
-        return false
-    } else do {
-        // The C runtime comes from the shared resolver, like every other
-        // consumer: `Runtime.c_path` alone is checkout-root-relative, so it
-        // named nothing when the working directory was not the root. These
-        // harnesses build their program in memory rather than writing a
-        // source file, so the working directory is the only anchor they
-        // have -- which is what the resolver's workspace tier already uses.
-        let runtime_src <- resolve_runtime_src "";
-        let rt_result <- compile_runtime_obj runtime_src [] runtime_obj;
-        if not (rt_result == 0) then do {
-            println <| basename ++ ": compiling runtime failed";
-            return false
-        } else do {
-            let link_result <- link_objects [obj_path, runtime_obj] output_path [];
-            if not (link_result == 0) then do {
-                println <| basename ++ ": clang linker failed";
-                return false
-            } else do {
-                let exec_result <- exec_cmd output_path [];
-                exec_cmd "rm" ["-f", ir_path, obj_path, runtime_obj, output_path];
-                println <| basename ++ ": expected " ++ I64.to_string expected ++ ", got " ++ I64.to_string exec_result;
-                return (exec_result == expected)
-            }
-        }
-    }
-}
+def compile_decls_link_run_expect (decl_list : List Decl) (basename : String) (expected : I64) : IO Bool :=
+    link_run_module_expect (compile_db_module decl_list) basename expected
 
 /// Phase 2 (dictionary-passing plan) end-to-end regression test:
 /// `promote_instance_defs` (lang/scope.mo) turns `class MyAdd A { def
