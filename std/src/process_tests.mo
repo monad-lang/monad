@@ -198,7 +198,6 @@ def pr_read_is_invalid_input (l : Result StreamError (Option String)) : Bool :=
         Result.err e => pr_kind_is_invalid_input e.kind
     }
 
-
 /// Writing to a child that has already exited is `broken_pipe`, not the
 /// death of THIS process by SIGPIPE -- the compiled runtime ignores
 /// SIGPIPE in `main` for exactly this. Reading stdout to its end first is

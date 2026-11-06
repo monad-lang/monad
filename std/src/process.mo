@@ -2,8 +2,8 @@
 
 use lib::io {}
 use lib::stream {
-  FdStream, FdStream.read_line_bounded, PartialLinePolicy, Stream, StreamError,
-  StreamError.is_not_found, stream_result,
+    FdStream, FdStream.read_line_bounded, PartialLinePolicy, Stream, StreamError,
+    StreamError.is_not_found, stream_result,
 }
 use lib::bytebuf {ByteBuf.free, ByteBuf.of_string}
 open IO {current_time_nano, read_file}
@@ -12,7 +12,7 @@ open IO {current_time_nano, read_file}
 priv def exec_cmd_raw (cmd : String) (args : List String) : RawIO I64
 
 pub def exec_cmd (cmd : String) (args : List String) : IO I64 :=
-  IO.mk (exec_cmd_raw cmd args)
+    IO.mk (exec_cmd_raw cmd args)
 
 #[native "process_id"]
 pub def process_id : I64
@@ -61,7 +61,7 @@ pub def process_id : I64
 // stream.
 
 pub type Child {
-  child
+    child
 }
 
 /// `proc_stream_fd`'s flag: 0 = the child's stdin (the parent's write

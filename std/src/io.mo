@@ -12,13 +12,13 @@
 // run`. Qualified works identically on both sides.
 use lib::path {Path}
 use lib::bytebuf {
-  ByteBuf, ByteBuf.alloc, ByteBuf.copy_into, ByteBuf.free, ByteBuf.length,
-  ByteBuf.of_list, ByteBuf.of_string, ByteBuf.to_list, ByteBuf.to_string,
+    ByteBuf, ByteBuf.alloc, ByteBuf.copy_into, ByteBuf.free, ByteBuf.length,
+    ByteBuf.of_list, ByteBuf.of_string, ByteBuf.to_list, ByteBuf.to_string,
 }
 use lib::stream {
-  Stream, FdStream, FdStream.open_file, FdStream.read_line_bounded,
-  FdStream.read_mode, FdStream.stderr, FdStream.stdin, FdStream.stdout,
-  FdStream.write_mode, PartialLinePolicy, StreamError, stream_result,
+    Stream, FdStream, FdStream.open_file, FdStream.read_line_bounded,
+    FdStream.read_mode, FdStream.stderr, FdStream.stdin, FdStream.stdout,
+    FdStream.write_mode, PartialLinePolicy, StreamError, stream_result,
 }
 
 /// Write `s` and a newline to stdout (buffered; see `IO.flush_stdout`).
@@ -35,55 +35,55 @@ def IO.read_chunk_size : I64 := 65536
 /// Create or truncate `path` and write `content` to it. A missing parent
 /// directory is `not_found`; it is not created.
 pub def IO.write_file (path : Path) (content : String) : IO (Result StreamError Unit) := do {
-  let opened <- FdStream.open_file path FdStream.write_mode;
-  IO.write_opened opened content
+    let opened <- FdStream.open_file path FdStream.write_mode;
+    IO.write_opened opened content
 }
 
 /// Write raw bytes to `path`, truncating it. The byte counterpart of
 /// `IO.write_file`; no decoding is involved.
 pub def IO.write_file_bytes (path : Path) (bytes : List U8) : IO (Result StreamError Unit) := do {
-  let opened <- FdStream.open_file path FdStream.write_mode;
-  IO.write_bytes_opened opened bytes
+    let opened <- FdStream.open_file path FdStream.write_mode;
+    IO.write_bytes_opened opened bytes
 }
 
 def IO.write_bytes_opened (opened : Result StreamError FdStream) (bytes : List U8) : IO (Result StreamError Unit) :=
-  match opened {
-    Result.err e => IO.pure (Result.err e),
-    Result.ok s => IO.write_bytes_all (Shared.of s) bytes
-  }
+    match opened {
+        Result.err e => IO.pure (Result.err e),
+        Result.ok s => IO.write_bytes_all (Shared.of s) bytes
+    }
 
 /// The stream is written and then closed, so it travels as a `Shared`
 /// handle: `Shared.get` is a read, and the close is a second read of the
 /// same owned descriptor.
 def IO.write_bytes_all (s : Shared FdStream) (bytes : List U8) : IO (Result StreamError Unit) := do {
-  let buf <- ByteBuf.of_list bytes;
-  let bs := Shared.of buf;
-  let r <- Stream.write (Shared.get s) (Shared.get bs);
-  let _ <- ByteBuf.free buf;
-  let _ <- Stream.close (Shared.get s);
-  return (IO.written r)
+    let buf <- ByteBuf.of_list bytes;
+    let bs := Shared.of buf;
+    let r <- Stream.write (Shared.get s) (Shared.get bs);
+    let _ <- ByteBuf.free buf;
+    let _ <- Stream.close (Shared.get s);
+    return (IO.written r)
 }
 
 def IO.write_opened (opened : Result StreamError FdStream) (content : String) : IO (Result StreamError Unit) :=
-  match opened {
-    Result.err e => IO.pure (Result.err e),
-    Result.ok s => IO.write_all (Shared.of s) content
-  }
+    match opened {
+        Result.err e => IO.pure (Result.err e),
+        Result.ok s => IO.write_all (Shared.of s) content
+    }
 
 def IO.write_all (s : Shared FdStream) (content : String) : IO (Result StreamError Unit) := do {
-  let buf <- ByteBuf.of_string content;
-  let bs := Shared.of buf;
-  let r <- Stream.write (Shared.get s) (Shared.get bs);
-  let _ <- ByteBuf.free buf;
-  let _ <- Stream.close (Shared.get s);
-  return (IO.written r)
+    let buf <- ByteBuf.of_string content;
+    let bs := Shared.of buf;
+    let r <- Stream.write (Shared.get s) (Shared.get bs);
+    let _ <- ByteBuf.free buf;
+    let _ <- Stream.close (Shared.get s);
+    return (IO.written r)
 }
 
 def IO.written (r : Result StreamError I64) : Result StreamError Unit :=
-  match r {
-    Result.err e => Result.err e,
-    Result.ok _ => Result.ok Unit.unit
-  }
+    match r {
+        Result.err e => Result.err e,
+        Result.ok _ => Result.ok Unit.unit
+    }
 
 /// The whole file at `path` as text; a missing file is `not_found`.
 ///
@@ -92,8 +92,8 @@ def IO.written (r : Result StreamError I64) : Result StreamError Unit :=
 /// straddles a chunk boundary, which the interpreter's lossy UTF-8
 /// decode turns into U+FFFD.
 pub def IO.read_file (path : Path) : IO (Result StreamError String) := do {
-  let opened <- FdStream.open_file path FdStream.read_mode;
-  IO.read_opened opened
+    let opened <- FdStream.open_file path FdStream.read_mode;
+    IO.read_opened opened
 }
 
 /// The whole file at `path` as raw bytes; a missing file is `not_found`.
@@ -101,168 +101,168 @@ pub def IO.read_file (path : Path) : IO (Result StreamError String) := do {
 /// binary content survive. One chunk is returned directly; several are
 /// copied into one buffer first.
 pub def IO.read_file_bytes (path : Path) : IO (Result StreamError (List U8)) := do {
-  let opened <- FdStream.open_file path FdStream.read_mode;
-  IO.read_bytes_opened opened
+    let opened <- FdStream.open_file path FdStream.read_mode;
+    IO.read_bytes_opened opened
 }
 
 def IO.read_bytes_opened (opened : Result StreamError FdStream) : IO (Result StreamError (List U8)) :=
-  match opened {
-    Result.err e => IO.pure (Result.err e),
-    Result.ok s => IO.read_bytes_all (Shared.of s)
-  }
+    match opened {
+        Result.err e => IO.pure (Result.err e),
+        Result.ok s => IO.read_bytes_all (Shared.of s)
+    }
 
 def IO.read_bytes_all (s : Shared FdStream) : IO (Result StreamError (List U8)) := do {
-  let chunks <- IO.read_chunks s List.empty;
-  let _ <- Stream.close (Shared.get s);
-  IO.read_bytes_joined chunks
+    let chunks <- IO.read_chunks s List.empty;
+    let _ <- Stream.close (Shared.get s);
+    IO.read_bytes_joined chunks
 }
 
 def IO.read_bytes_joined (chunks : Result StreamError (List ByteBuf)) : IO (Result StreamError (List U8)) :=
-  match chunks {
-    Result.err e => IO.pure (Result.err e),
-    Result.ok bufs => IO.read_bytes_flatten bufs
-  }
+    match chunks {
+        Result.err e => IO.pure (Result.err e),
+        Result.ok bufs => IO.read_bytes_flatten bufs
+    }
 
 def IO.read_bytes_flatten (bufs : List ByteBuf) : IO (Result StreamError (List U8)) :=
-  match bufs {
-    List.empty => IO.pure (Result.ok List.empty),
-    List.cons one rest =>
-      match rest {
-        List.empty => IO.buf_bytes_result one,
-        List.cons _ _ => IO.gather_bytes (List.cons one rest)
-      }
-  }
+    match bufs {
+        List.empty => IO.pure (Result.ok List.empty),
+        List.cons one rest =>
+            match rest {
+                List.empty => IO.buf_bytes_result one,
+                List.cons _ _ => IO.gather_bytes (List.cons one rest)
+            }
+    }
 
 def IO.buf_bytes_result (b : ByteBuf) : IO (Result StreamError (List U8)) := do {
-  let src := Shared.of b;
-  let n := ByteBuf.length (Shared.get src);
-  let bytes <- ByteBuf.to_list (Shared.get src) n;
-  let _ <- ByteBuf.free b;
-  return (Result.ok bytes)
+    let src := Shared.of b;
+    let n := ByteBuf.length (Shared.get src);
+    let bytes <- ByteBuf.to_list (Shared.get src) n;
+    let _ <- ByteBuf.free b;
+    return (Result.ok bytes)
 }
 
 def IO.gather_bytes (bufs : List ByteBuf) : IO (Result StreamError (List U8)) := do {
-  let dst <- ByteBuf.alloc (IO.total_length (Shared.of bufs));
-  let dst2 <- IO.copy_chunks dst 0 bufs;
-  IO.buf_bytes_result dst2
+    let dst <- ByteBuf.alloc (IO.total_length (Shared.of bufs));
+    let dst2 <- IO.copy_chunks dst 0 bufs;
+    IO.buf_bytes_result dst2
 }
 
 def IO.read_opened (opened : Result StreamError FdStream) : IO (Result StreamError String) :=
-  match opened {
-    Result.err e => IO.pure (Result.err e),
-    Result.ok s => IO.read_all (Shared.of s)
-  }
+    match opened {
+        Result.err e => IO.pure (Result.err e),
+        Result.ok s => IO.read_all (Shared.of s)
+    }
 
 def IO.read_all (s : Shared FdStream) : IO (Result StreamError String) := do {
-  let chunks <- IO.read_chunks s List.empty;
-  let _ <- Stream.close (Shared.get s);
-  IO.read_joined chunks
+    let chunks <- IO.read_chunks s List.empty;
+    let _ <- Stream.close (Shared.get s);
+    IO.read_joined chunks
 }
 
 def IO.read_joined (chunks : Result StreamError (List ByteBuf)) : IO (Result StreamError String) :=
-  match chunks {
-    Result.err e => IO.pure (Result.err e),
-    Result.ok bufs => IO.read_text bufs
-  }
+    match chunks {
+        Result.err e => IO.pure (Result.err e),
+        Result.ok bufs => IO.read_text bufs
+    }
 
 def IO.read_text (bufs : List ByteBuf) : IO (Result StreamError String) := do {
-  let text <- IO.chunks_text bufs;
-  return (Result.ok text)
+    let text <- IO.chunks_text bufs;
+    return (Result.ok text)
 }
 
 /// The chunks read so far are `acc_rev`, newest first. Every chunk is
 /// freed on the error path; on success the caller owns them.
 #[terminating]
 def IO.read_chunks (s : Shared FdStream) (acc_rev : List ByteBuf) : IO (Result StreamError (List ByteBuf)) := do {
-  let r <- Stream.read (Shared.get s) IO.read_chunk_size;
-  IO.read_chunk_got s acc_rev r
+    let r <- Stream.read (Shared.get s) IO.read_chunk_size;
+    IO.read_chunk_got s acc_rev r
 }
 
 #[terminating]
 def IO.read_chunk_got (s : Shared FdStream) (acc_rev : List ByteBuf) (r : Result StreamError ByteBuf) : IO (Result StreamError (List ByteBuf)) :=
-  match r {
-    Result.err e => IO.read_failed acc_rev e,
-    Result.ok buf =>
-      let src := Shared.of buf in
-      if ByteBuf.length (Shared.get src) == 0
-      then IO.read_at_eof acc_rev buf
-      else IO.read_chunks s (List.cons buf acc_rev)
-  }
+    match r {
+        Result.err e => IO.read_failed acc_rev e,
+        Result.ok buf =>
+            let src := Shared.of buf in
+            if ByteBuf.length (Shared.get src) == 0
+            then IO.read_at_eof acc_rev buf
+            else IO.read_chunks s (List.cons buf acc_rev)
+    }
 
 def IO.read_at_eof (acc_rev : List ByteBuf) (eof : ByteBuf) : IO (Result StreamError (List ByteBuf)) := do {
-  let _ <- ByteBuf.free eof;
-  return (Result.ok (List.reverse acc_rev))
+    let _ <- ByteBuf.free eof;
+    return (Result.ok (List.reverse acc_rev))
 }
 
 def IO.read_failed (acc_rev : List ByteBuf) (e : StreamError) : IO (Result StreamError (List ByteBuf)) := do {
-  let _ <- IO.free_all acc_rev;
-  return (Result.err e)
+    let _ <- IO.free_all acc_rev;
+    return (Result.err e)
 }
 
 #[terminating]
 def IO.free_all (bufs : List ByteBuf) : IO Unit :=
-  match bufs {
-    List.empty => IO.pure Unit.unit,
-    List.cons b rest => IO.free_then b rest
-  }
+    match bufs {
+        List.empty => IO.pure Unit.unit,
+        List.cons b rest => IO.free_then b rest
+    }
 
 #[terminating]
 def IO.free_then (b : ByteBuf) (rest : List ByteBuf) : IO Unit := do {
-  let _ <- ByteBuf.free b;
-  IO.free_all rest
+    let _ <- ByteBuf.free b;
+    IO.free_all rest
 }
 
 /// Decode `bufs` as one text, freeing each. One chunk -- every file
 /// under 64 KiB -- decodes directly; more are copied into a single
 /// buffer first.
 def IO.chunks_text (bufs : List ByteBuf) : IO String :=
-  match bufs {
-    List.empty => IO.pure "",
-    List.cons one rest =>
-      match rest {
-        List.empty => IO.buf_text one,
-        List.cons _ _ => IO.gathered_text (List.cons one rest)
-      }
-  }
+    match bufs {
+        List.empty => IO.pure "",
+        List.cons one rest =>
+            match rest {
+                List.empty => IO.buf_text one,
+                List.cons _ _ => IO.gathered_text (List.cons one rest)
+            }
+    }
 
 def IO.buf_text (b : ByteBuf) : IO String := do {
-  let src := Shared.of b;
-  let n := ByteBuf.length (Shared.get src);
-  let text <- ByteBuf.to_string (Shared.get src) n;
-  let _ <- ByteBuf.free b;
-  return text
+    let src := Shared.of b;
+    let n := ByteBuf.length (Shared.get src);
+    let text <- ByteBuf.to_string (Shared.get src) n;
+    let _ <- ByteBuf.free b;
+    return text
 }
 
 def IO.gathered_text (bufs : List ByteBuf) : IO String := do {
-  let dst <- ByteBuf.alloc (IO.total_length (Shared.of bufs));
-  let dst2 <- IO.copy_chunks dst 0 bufs;
-  IO.buf_text dst2
+    let dst <- ByteBuf.alloc (IO.total_length (Shared.of bufs));
+    let dst2 <- IO.copy_chunks dst 0 bufs;
+    IO.buf_text dst2
 }
 
 #[terminating]
 def IO.total_length (bufs : Shared (List ByteBuf)) : I64 :=
-  match Shared.get bufs {
-    List.empty => 0,
-    List.cons b rest => ByteBuf.length b + IO.total_length (Shared.of rest)
-  }
+    match Shared.get bufs {
+        List.empty => 0,
+        List.cons b rest => ByteBuf.length b + IO.total_length (Shared.of rest)
+    }
 
 /// Copy each of `bufs` into `dst` from `offset` on, freeing each. The
 /// destination is consumed and returned (view-types P2's shape), so a
 /// linear caller never mentions it twice.
 #[terminating]
 def IO.copy_chunks (dst : ByteBuf) (offset : I64) (bufs : List ByteBuf) : IO ByteBuf :=
-  match bufs {
-    List.empty => IO.pure dst,
-    List.cons b rest => IO.copy_chunk dst offset b rest
-  }
+    match bufs {
+        List.empty => IO.pure dst,
+        List.cons b rest => IO.copy_chunk dst offset b rest
+    }
 
 #[terminating]
 def IO.copy_chunk (dst : ByteBuf) (offset : I64) (b : ByteBuf) (rest : List ByteBuf) : IO ByteBuf := do {
-  let src := Shared.of b;
-  let n := ByteBuf.length (Shared.get src);
-  let dst2 <- ByteBuf.copy_into dst offset (Shared.get src);
-  let _ <- ByteBuf.free b;
-  IO.copy_chunks dst2 (offset + n) rest
+    let src := Shared.of b;
+    let n := ByteBuf.length (Shared.get src);
+    let dst2 <- ByteBuf.copy_into dst offset (Shared.get src);
+    let _ <- ByteBuf.free b;
+    IO.copy_chunks dst2 (offset + n) rest
 }
 
 #[native "file_exists"]
@@ -325,10 +325,10 @@ pub def IO.get_env (s : String) : IO (Option String) := IO.mk (get_env_raw s)
 // reader kills the process by SIGPIPE before an error could surface
 // (`stdio_die_on_epipe`, runtime.c; the interpreter mirrors it).
 pub def IO.write_to (s : FdStream) (text : String) : IO Unit := do {
-  let buf <- ByteBuf.of_string text;
-  let bs := Shared.of buf;
-  let _ <- Stream.write s (Shared.get bs);
-  ByteBuf.free buf
+    let buf <- ByteBuf.of_string text;
+    let bs := Shared.of buf;
+    let _ <- Stream.write s (Shared.get bs);
+    ByteBuf.free buf
 }
 
 // One line from stdin, WITHOUT its trailing newline. `Result.ok
@@ -343,7 +343,7 @@ pub def IO.write_to (s : FdStream) (text : String) : IO Unit := do {
 // the line stay in the kernel for the caller's next `read_stdin_exact`
 // or `poll(2)` -- a reader that read ahead would desynchronize both.
 pub def IO.read_line : IO (Result StreamError (Option String)) :=
-  FdStream.read_line_bounded FdStream.stdin 0 PartialLinePolicy.deliver
+    FdStream.read_line_bounded FdStream.stdin 0 PartialLinePolicy.deliver
 
 #[native "read_stdin_exact"]
 priv def read_stdin_exact (n : I64) : RawIO String
@@ -488,29 +488,29 @@ priv def tcp_local_port (listener : FdStream) : RawIO U16
 /// Connect with a deadline, including the per-address connect attempts.
 /// Name resolution (`getaddrinfo`) still has no timeout.
 pub def IO.tcp_connect_timeout (host : String) (port : U16) (timeout_ms : I64) : IO (Result StreamError FdStream) := do {
-  let r <- IO.mk (tcp_connect_timeout host port timeout_ms);
-  return (stream_result r)
+    let r <- IO.mk (tcp_connect_timeout host port timeout_ms);
+    return (stream_result r)
 }
 
 /// Blocking connect: the zero-deadline spelling of `IO.tcp_connect_timeout`.
 pub def IO.tcp_connect (host : String) (port : U16) : IO (Result StreamError FdStream) :=
-  IO.tcp_connect_timeout host port 0i64
+    IO.tcp_connect_timeout host port 0i64
 
 pub def IO.tcp_listen (port : U16) : IO (Result StreamError FdStream) := do {
-  let r <- IO.mk (tcp_listen port);
-  return (stream_result r)
+    let r <- IO.mk (tcp_listen port);
+    return (stream_result r)
 }
 
 /// Listen on a specific host address or name (`"127.0.0.1"`, `"localhost"`,
 /// `""` for the wildcard) instead of always `0.0.0.0`.
 pub def IO.tcp_listen_on (host : String) (port : U16) : IO (Result StreamError FdStream) := do {
-  let r <- IO.mk (tcp_listen_on host port);
-  return (stream_result r)
+    let r <- IO.mk (tcp_listen_on host port);
+    return (stream_result r)
 }
 
 pub def IO.tcp_accept (listener : FdStream) : IO (Result StreamError FdStream) := do {
-  let r <- IO.mk (tcp_accept listener);
-  return (stream_result r)
+    let r <- IO.mk (tcp_accept listener);
+    return (stream_result r)
 }
 
 pub def IO.tcp_local_port (listener : FdStream) : IO U16 := IO.mk (tcp_local_port listener)
