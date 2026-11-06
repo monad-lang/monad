@@ -15,6 +15,29 @@ open DebugName {named}
 
 def empty_attrs : List Attribute := List.empty
 
+/// `Term.var` for a type name, the shape these fixtures use.
+#[partial]
+def tv (name : String) : Term := Term.var 0 (named (id name))
+
+/// `RawIO A`.
+#[partial]
+def raw_io (t : Term) : Term := Term.app (Term.var 0 (named (id "RawIO"))) t
+
+/// One `#[extern "c" ...]` def with a single param, in the shape every
+/// fixture below needs: a lambda per param (see the comment above), the
+/// declared result type, and the extern attribute's own args.
+#[partial]
+def extern_fixture (name : String) (param_ty : Term) (ret_ty : Term) (ext_args : List AttrArg) : Def :=
+    let attrs := List.cons (Attribute.mk (id "extern") ext_args) List.empty in
+    Def.mk (NamePath.mk (List.cons (id name) List.empty)) ret_ty
+        (Term.lam (binder_named (id "a")) param_ty Term.hole)
+        ([] : List TypeConstraint) attrs Visibility.package_private List.empty
+
+/// Compile one def's module and test the rendered IR for `needle`.
+#[partial]
+def contains_def_ir (d : Def) (needle : String) : Bool :=
+    String.contains (emit_module (compile_db_decls_ir (List.cons d List.empty))) needle
+
 /// Each fixture's body is a `Term.lam` PER PARAM, because Monad encodes a
 /// def's parameters as the lambdas of its body (`collect_db_params`
 /// strips them) — a `Term.hole` body means ZERO parameters, and a
@@ -30,13 +53,7 @@ def string_term : Term := Term.var 0 (named (id "String"))
 /// Render a `(String) -> I32` extern def named `puts_ffi` with the param
 /// genuinely attached.
 #[partial]
-def mk_puts_def : Def :=
-    let s_id := id "s" in
-    let attrs := List.cons (Attribute.mk (id "extern") (List.cons (AttrArg.str "c") List.empty)) List.empty in
-    Def.mk (NamePath.mk (List.cons (id "puts_ffi") List.empty))
-        (Term.var 0 (named (id "I32")))
-        (Term.lam (binder_named s_id) string_term Term.hole)
-        ([] : List TypeConstraint) attrs Visibility.package_private List.empty
+def mk_puts_def : Def := extern_fixture "puts_ffi" string_term (tv "I32") [AttrArg.str "c"]
 
 /// `puts_ffi` (String → I32) compiles to:
 ///   declare i32 @puts(i8*)
@@ -44,57 +61,42 @@ def mk_puts_def : Def :=
 ///      call i32 @puts(i8* %t) ... %r = sext i32 %c to i64 ... ret i64 %r }
 #[test]
 def test_extern_puts_declare : Bool :=
-    let ir := emit_module (compile_db_decls_ir (List.cons mk_puts_def List.empty)) in
-    String.contains ir "declare i32 @puts"
+    contains_def_ir mk_puts_def "declare i32 @puts"
 
 /// `puts_ffi` wrapper body must call `puts` with the inttoptr-cast param.
 #[test]
 def test_extern_puts_wrapper_call : Bool :=
-    let ir := emit_module (compile_db_decls_ir (List.cons mk_puts_def List.empty)) in
-    String.contains ir "call i32 @puts"
+    contains_def_ir mk_puts_def "call i32 @puts"
 
 /// `puts_ffi`'s `String` param must cross the boundary as
 /// `inttoptr i64 %p0 to i8*` — the wrapper's param is the uniform boxed
 /// `i64`, and `bitcast` disallows ptr<->int.
 #[test]
 def test_extern_puts_param_inttoptr : Bool :=
-    let ir := emit_module (compile_db_decls_ir (List.cons mk_puts_def List.empty)) in
-    String.contains ir "inttoptr i64 %p0 to i8*"
+    contains_def_ir mk_puts_def "inttoptr i64 %p0 to i8*"
 
 /// `puts_ffi`'s `i32` result must come back SIGN-extended: C integers
 /// are signed (`puts` returns EOF = -1 on error), and the `zext` this
 /// replaces turned every negative value into a huge positive one.
 #[test]
 def test_extern_puts_return_sext : Bool :=
-    let ir := emit_module (compile_db_decls_ir (List.cons mk_puts_def List.empty)) in
-    String.contains ir "sext i32"
+    contains_def_ir mk_puts_def "sext i32"
 
 /// `strlen : String -> I64` (link_name override via `#[extern "c" { link_name := "strlen" }]`).
 #[partial]
-def mk_strlen_def : Def :=
-    let s_id := id "s" in
-    let link_arg := AttrArg.named (id "link_name") (AttrArg.str "strlen") in
-    let c_arg := AttrArg.str "c" in
-    let ext_args := List.cons c_arg (List.cons link_arg List.empty) in
-    let attrs := List.cons (Attribute.mk (id "extern") ext_args) List.empty in
-    Def.mk (NamePath.mk (List.cons (id "strlen") List.empty))
-        (Term.var 0 (named (id "I64")))
-        (Term.lam (binder_named s_id) string_term Term.hole)
-        ([] : List TypeConstraint) attrs Visibility.package_private List.empty
+def mk_strlen_def : Def := extern_fixture "strlen" string_term (tv "I64") [AttrArg.str "c", AttrArg.named (id "link_name") (AttrArg.str "strlen")]
 
 /// `#[extern "c" { link_name := "strlen" }]` must emit `declare i64 @strlen(i8*)`
 /// (NOT `@mystrlen` — the override picks the symbol).
 #[test]
 def test_extern_strlen_link_name_override : Bool :=
-    let ir := emit_module (compile_db_decls_ir (List.cons mk_strlen_def List.empty)) in
-    String.contains ir "declare i64 @strlen"
+    contains_def_ir mk_strlen_def "declare i64 @strlen"
 
 /// The override must not disturb the param cast — `strlen`'s `String`
 /// param still enters the call as `i8*` via `inttoptr`.
 #[test]
 def test_extern_strlen_param_inttoptr : Bool :=
-    let ir := emit_module (compile_db_decls_ir (List.cons mk_strlen_def List.empty)) in
-    String.contains ir "inttoptr i64 %p0 to i8*"
+    contains_def_ir mk_strlen_def "inttoptr i64 %p0 to i8*"
 
 /// `sin : F64 -> F64` must emit `declare double @sin(double)` — the
 /// `double` is what proves `return_llvm_type` peeled the `Term.ctx`
@@ -104,57 +106,36 @@ def test_extern_strlen_param_inttoptr : Bool :=
 /// declared once by the mote (`[link] libs` in `mote.toml`), not by every
 /// def that binds a symbol from it.
 #[partial]
-def mk_sin_def : Def :=
-    let x_id := id "x" in
-    let c_arg := AttrArg.str "c" in
-    let ext_args := List.cons c_arg List.empty in
-    let attrs := List.cons (Attribute.mk (id "extern") ext_args) List.empty in
-    Def.mk (NamePath.mk (List.cons (id "sin") List.empty))
-        (Term.var 0 (named (id "F64")))
-        (Term.lam (binder_named x_id) (Term.var 0 (named (id "F64"))) Term.hole)
-        ([] : List TypeConstraint) attrs Visibility.package_private List.empty
+def mk_sin_def : Def := extern_fixture "sin" (tv "F64") (tv "F64") [AttrArg.str "c"]
 
 #[test]
 def test_extern_sin_declare_double : Bool :=
-    let ir := emit_module (compile_db_decls_ir (List.cons mk_sin_def List.empty)) in
-    String.contains ir "declare double @sin"
+    contains_def_ir mk_sin_def "declare double @sin"
 
 /// `sin`'s `F64` param enters the call as `bitcast i64 %p0 to double`
 /// — same 64 bits, the boxed-double convention.
 #[test]
 def test_extern_sin_param_bitcast_double : Bool :=
-    let ir := emit_module (compile_db_decls_ir (List.cons mk_sin_def List.empty)) in
-    String.contains ir "bitcast i64 %p0 to double"
+    contains_def_ir mk_sin_def "bitcast i64 %p0 to double"
 
 /// `abs : I32 -> I32` — the narrow-integer shape. The param must be
 /// TRUNCATED (a `bitcast` between unequal widths is invalid LLVM:
 /// `llc: invalid cast opcode for cast from 'i64' to 'i32'`) and the
 /// signed return sign-extended.
 #[partial]
-def mk_abs_def : Def :=
-    let x_id := id "x" in
-    let c_arg := AttrArg.str "c" in
-    let ext_args := List.cons c_arg List.empty in
-    let attrs := List.cons (Attribute.mk (id "extern") ext_args) List.empty in
-    Def.mk (NamePath.mk (List.cons (id "abs") List.empty))
-        (Term.var 0 (named (id "I32")))
-        (Term.lam (binder_named x_id) (Term.var 0 (named (id "I32"))) Term.hole)
-        ([] : List TypeConstraint) attrs Visibility.package_private List.empty
+def mk_abs_def : Def := extern_fixture "abs" (tv "I32") (tv "I32") [AttrArg.str "c"]
 
 #[test]
 def test_extern_abs_declare : Bool :=
-    let ir := emit_module (compile_db_decls_ir (List.cons mk_abs_def List.empty)) in
-    String.contains ir "declare i32 @abs"
+    contains_def_ir mk_abs_def "declare i32 @abs"
 
 #[test]
 def test_extern_abs_param_trunc : Bool :=
-    let ir := emit_module (compile_db_decls_ir (List.cons mk_abs_def List.empty)) in
-    String.contains ir "trunc i64 %p0 to i32"
+    contains_def_ir mk_abs_def "trunc i64 %p0 to i32"
 
 #[test]
 def test_extern_abs_return_sext : Bool :=
-    let ir := emit_module (compile_db_decls_ir (List.cons mk_abs_def List.empty)) in
-    String.contains ir "sext i32"
+    contains_def_ir mk_abs_def "sext i32"
 
 /// `link_name` written in the PARSED attribute shape —
 /// `lang/parser.mo`'s `attr_arg_named_close` wraps `{link_name := "..."}`
@@ -164,22 +145,11 @@ def test_extern_abs_return_sext : Bool :=
 /// own name instead. Regression test for the parsed-vs-constructed-attr
 /// mismatch the flat-attr fixtures above can't catch.
 #[partial]
-def mk_sin_def_grouped : Def :=
-    let x_id := id "x" in
-    let link_arg := AttrArg.named (id "link_name") (AttrArg.str "sinf") in
-    let link_group := AttrArg.group (List.cons link_arg List.empty) in
-    let c_arg := AttrArg.str "c" in
-    let ext_args := List.cons c_arg (List.cons link_group List.empty) in
-    let attrs := List.cons (Attribute.mk (id "extern") ext_args) List.empty in
-    Def.mk (NamePath.mk (List.cons (id "sin") List.empty))
-        (Term.var 0 (named (id "F64")))
-        (Term.lam (binder_named x_id) (Term.var 0 (named (id "F64"))) Term.hole)
-        ([] : List TypeConstraint) attrs Visibility.package_private List.empty
+def mk_sin_def_grouped : Def := extern_fixture "sin" (tv "F64") (tv "F64") [AttrArg.str "c", AttrArg.group [AttrArg.named (id "link_name") (AttrArg.str "sinf")]]
 
 #[test]
 def test_extern_link_name_grouped_attr : Bool :=
-    let ir := emit_module (compile_db_decls_ir (List.cons mk_sin_def_grouped List.empty)) in
-    String.contains ir "declare double @sinf"
+    contains_def_ir mk_sin_def_grouped "declare double @sinf"
 
 /// A non-extern def must produce NO `declare` for any C symbol — only
 /// the wrapper function (and existing runtime declarations).
@@ -193,8 +163,7 @@ def mk_plain_def : Def :=
 
 #[test]
 def test_no_extern_attr_no_c_declare : Bool :=
-    let ir := emit_module (compile_db_decls_ir (List.cons mk_plain_def List.empty)) in
-    not (String.contains ir "declare i64 @plain")
+    Bool.not (contains_def_ir mk_plain_def "declare i64 @plain")
 
 /// `ctx_new_ffi : Ptr -> Ptr` — the opaque-pointer shape every OpenSSL
 /// handle crosses the FFI in (`SSL_CTX_new : SSL_CTX* -> SSL_CTX*`, and
@@ -203,28 +172,17 @@ def test_no_extern_attr_no_c_declare : Bool :=
 /// return `i8*` here — an `i64` means the arm did not fire and the
 /// fallback swallowed the pointer.
 #[partial]
-def mk_ctx_new_def : Def :=
-    let m_id := id "m" in
-    let ptr_term : Term := Term.var 0 (named (id "Ptr")) in
-    let c_arg := AttrArg.str "c" in
-    let ext_args := List.cons c_arg List.empty in
-    let attrs := List.cons (Attribute.mk (id "extern") ext_args) List.empty in
-    Def.mk (NamePath.mk (List.cons (id "ctx_new_ffi") List.empty))
-        ptr_term
-        (Term.lam (binder_named m_id) ptr_term Term.hole)
-        ([] : List TypeConstraint) attrs Visibility.package_private List.empty
+def mk_ctx_new_def : Def := extern_fixture "ctx_new_ffi" (tv "Ptr") (tv "Ptr") [AttrArg.str "c"]
 
 #[test]
 def test_extern_ptr_return_declares_i8ptr : Bool :=
-    let ir := emit_module (compile_db_decls_ir (List.cons mk_ctx_new_def List.empty)) in
-    String.contains ir "declare i8* @ctx_new_ffi"
+    contains_def_ir mk_ctx_new_def "declare i8* @ctx_new_ffi"
 
 /// The `Ptr` result must come back as `ptrtoint` — the raw pointer word
 /// reboxed into the uniform `i64` the wrapper returns.
 #[test]
 def test_extern_ptr_return_ptrtoint : Bool :=
-    let ir := emit_module (compile_db_decls_ir (List.cons mk_ctx_new_def List.empty)) in
-    String.contains ir "ptrtoint i8*"
+    contains_def_ir mk_ctx_new_def "ptrtoint i8*"
 
 /// A SIDE-EFFECTING extern is declared `RawIO I32`. The wrapper must box
 /// the raw `i32` result exactly once (`monad_io_pure`), so the value
@@ -232,54 +190,31 @@ def test_extern_ptr_return_ptrtoint : Bool :=
 /// inner `declare` keeps the true ABI type (`i32`, not `i64`) and the
 /// result is still sign-extended before boxing.
 #[partial]
-def mk_puts_raw_io_def : Def :=
-    let s_id := id "s" in
-    let raw_io_i32 : Term :=
-        Term.app (Term.var 0 (named (id "RawIO"))) (Term.var 0 (named (id "I32"))) in
-    let c_arg := AttrArg.str "c" in
-    let attrs := List.cons (Attribute.mk (id "extern") (List.cons c_arg List.empty)) List.empty in
-    Def.mk (NamePath.mk (List.cons (id "puts_raw_io") List.empty))
-        raw_io_i32
-        (Term.lam (binder_named s_id) string_term Term.hole)
-        ([] : List TypeConstraint) attrs Visibility.package_private List.empty
+def mk_puts_raw_io_def : Def := extern_fixture "puts_raw_io" string_term (raw_io (tv "I32")) [AttrArg.str "c"]
 
 #[test]
 def test_extern_raw_io_declares_payload_type : Bool :=
-    let ir := emit_module (compile_db_decls_ir (List.cons mk_puts_raw_io_def List.empty)) in
-    String.contains ir "declare i32 @puts_raw_io"
+    contains_def_ir mk_puts_raw_io_def "declare i32 @puts_raw_io"
 
 #[test]
 def test_extern_raw_io_return_sext : Bool :=
-    let ir := emit_module (compile_db_decls_ir (List.cons mk_puts_raw_io_def List.empty)) in
-    String.contains ir "sext i32"
+    contains_def_ir mk_puts_raw_io_def "sext i32"
 
 #[test]
 def test_extern_raw_io_return_boxes_once : Bool :=
-    let ir := emit_module (compile_db_decls_ir (List.cons mk_puts_raw_io_def List.empty)) in
-    String.contains ir "call i64 @monad_io_pure"
+    contains_def_ir mk_puts_raw_io_def "call i64 @monad_io_pure"
 
 /// `RawIO Ptr` — the payload type must still drive the inner ABI
 /// declaration (`i8*`), not the `i64` fallback.
 #[partial]
-def mk_ctx_new_raw_io_def : Def :=
-    let m_id := id "m" in
-    let ptr_term : Term := Term.var 0 (named (id "Ptr")) in
-    let raw_io_ptr : Term := Term.app (Term.var 0 (named (id "RawIO"))) ptr_term in
-    let c_arg := AttrArg.str "c" in
-    let attrs := List.cons (Attribute.mk (id "extern") (List.cons c_arg List.empty)) List.empty in
-    Def.mk (NamePath.mk (List.cons (id "ctx_new_raw_io") List.empty))
-        raw_io_ptr
-        (Term.lam (binder_named m_id) ptr_term Term.hole)
-        ([] : List TypeConstraint) attrs Visibility.package_private List.empty
+def mk_ctx_new_raw_io_def : Def := extern_fixture "ctx_new_raw_io" (tv "Ptr") (raw_io (tv "Ptr")) [AttrArg.str "c"]
 
 #[test]
 def test_extern_raw_io_ptr_declares_i8ptr : Bool :=
-    let ir := emit_module (compile_db_decls_ir (List.cons mk_ctx_new_raw_io_def List.empty)) in
-    String.contains ir "declare i8* @ctx_new_raw_io"
+    contains_def_ir mk_ctx_new_raw_io_def "declare i8* @ctx_new_raw_io"
 
 /// A pure extern (no `RawIO`) must NOT call `monad_io_pure` — the box is
 /// only for a declared `RawIO A`.
 #[test]
 def test_extern_pure_return_not_boxed : Bool :=
-    let ir := emit_module (compile_db_decls_ir (List.cons mk_strlen_def List.empty)) in
-    not (String.contains ir "call i64 @monad_io_pure")
+    Bool.not (contains_def_ir mk_strlen_def "call i64 @monad_io_pure")
