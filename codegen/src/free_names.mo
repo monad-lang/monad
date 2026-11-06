@@ -14,9 +14,9 @@
 ///   reachability may safely over-approximate, and cheaply. Do not
 ///   reach for it where precision matters -- that is the other one.
 use lang::types {
-  Con, DebugName, FieldPattern, FieldPatternEntry, Identifier, Literal, MatchCase,
-  Native, StructLitField, Term, binder_is_explicit, binder_name,
-  union_ids,
+    Con, DebugName, FieldPattern, FieldPatternEntry, Identifier, Literal, MatchCase,
+    Native, StructLitField, Term, binder_is_explicit, binder_name,
+    union_ids,
 }
 use lib::symbols {symbol_identifier}
 use lib::util {ident_in_list, identifier_eq}

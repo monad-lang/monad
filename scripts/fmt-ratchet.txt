@@ -5,6 +5,7 @@
 # passes on it. The rest of the corpus is deliberately NOT here yet: much of
 # it is tab- or 2-space-indented, and reformatting it is a large, separate
 # migration. Blank lines and `#` comments are ignored.
+codegen
 motes/fmt/src
 motes/lsp/src/formatting.mo
 motes/lsp/src/tests/formatting_tests.mo

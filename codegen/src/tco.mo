@@ -14,11 +14,11 @@ use llvm::strmap {str_map_empty, str_map_insert, str_map_lookup}
 use std::list {List.length}
 use lang::types {Identifier}
 use llvm::ir {
-  LLVMBasicBlock, LLVMInstruction, LLVMType, LLVMValue, PhiPair,
+    LLVMBasicBlock, LLVMInstruction, LLVMType, LLVMValue, PhiPair,
 }
 use lib::ctx {CodegenCtx, CtxStrPair, fresh_label, fresh_temp}
 use lib::util {
-  drop_last_instr
+    drop_last_instr
 }
 use std::map {HashMap}
 

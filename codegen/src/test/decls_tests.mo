@@ -2,8 +2,8 @@
 
 use std::list {List.length}
 use lang::types {
-  Attribute, Decl, DebugName, Def, Identifier, Inductive, Multiplicity, NamePath, Struct,
-  StructField, Term, Visibility, concrete, id_eq, sentinel,
+    Attribute, Decl, DebugName, Def, Identifier, Inductive, Multiplicity, NamePath, Struct,
+    StructField, Term, Visibility, concrete, id_eq, sentinel,
 }
 use lang::module {ModuleInfo}
 use lib::symbols {def_symbol_name}

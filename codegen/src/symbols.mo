@@ -14,7 +14,7 @@
 /// any more.
 use std::list {List.intercalate}
 use lang::types {
-  Identifier, ModulePath, NamePath, show_module_path, show_name_path,
+    Identifier, ModulePath, NamePath, show_module_path, show_name_path,
 }
 use std::map {}
 use lang::name_text {unqualify_def_name}
@@ -193,11 +193,11 @@ def ref_symbol_name (id : Identifier) : String :=
 
 /// Replace dots with underscores in a string for use as LLVM identifier
 #[partial]
-def replace_dots_with_underscores (s : String) : String := 
+def replace_dots_with_underscores (s : String) : String :=
     replace_dots_loop s ""
 
 #[partial]
-def replace_dots_loop (s : String) (acc : String) : String := 
+def replace_dots_loop (s : String) (acc : String) : String :=
     if String.beq s "" then acc
     else
         let first_char : U8 := match String.get s 0 {
@@ -205,7 +205,7 @@ def replace_dots_loop (s : String) (acc : String) : String :=
             Option.none => 0u8
         } in
         let rest := String.slice s 1 (String.length s - 1) in
-        let dot_byte : U8 := 46u8 in  // '.' character
+        let dot_byte : U8 := 46u8 in // '.' character
         if U8.beq first_char dot_byte then
             replace_dots_loop rest (String.concat acc "_")
         else

@@ -20,7 +20,7 @@
 /// `Copy I64` dictionary) regardless of reachability, so a module-wide
 /// "no monad_view_get" check would be false by construction.
 use lib::test::e2e_harness {
-  compile_source_ir, compile_source_run_expect, ir_function,
+    compile_source_ir, compile_source_run_expect, ir_function,
 }
 use lib::emit {check_contains}
 open IO {println}

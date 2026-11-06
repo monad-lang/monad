@@ -14,8 +14,8 @@
 use llvm::strmap {str_map_empty, str_map_insert, str_map_lookup}
 use std::list {List.filter_map, List.length}
 use lang::types {
-  Attribute, Decl, DebugName, Def, Identifier, Inductive, Multiplicity, NamePath, Struct,
-  StructField, Term, Visibility, concrete, has_attr, id_eq, sentinel,
+    Attribute, Decl, DebugName, Def, Identifier, Inductive, Multiplicity, NamePath, Struct,
+    StructField, Term, Visibility, concrete, has_attr, id_eq, sentinel,
 }
 use lang::module {ModuleInfo}
 use lib::symbols {def_symbol_name}

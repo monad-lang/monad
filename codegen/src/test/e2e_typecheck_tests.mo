@@ -1,7 +1,7 @@
 use lang::types {
-  app, binder_anon, binder_binder, binder_named, con, hole, i64, id, if_, lam, lit,
-  match_, named,
-  num, package_private, pi, sort_n, str, var,
+    app, binder_anon, binder_binder, binder_named, con, hole, i64, id, if_, lam, lit,
+    match_, named,
+    num, package_private, pi, sort_n, str, var,
 }
 use llvm::ir {emit_module}
 use lib::emit {check_contains, compile_db_decls_ir}
@@ -256,7 +256,7 @@ def test_compile_multi_param_function : Bool :=
     let body := Term.app (Term.app add_var add_xy) z_var in
     let term_ := Term.lam (binder_named x_id) (sort_n 1) (
         Term.lam (binder_named y_id) (sort_n 1) (
-        Term.lam (binder_named z_id) (sort_n 1) body)) in
+            Term.lam (binder_named z_id) (sort_n 1) body)) in
     let text := compile_one_def_text id term_ in
     check_contains text "add i64"
 
@@ -358,7 +358,7 @@ def test_compile_all_arithmetic : Bool :=
     let body := Term.app (Term.app sub_var add_ab) div_mul_a in
     let term_ := Term.lam (binder_named a_id) (sort_n 1) (Term.lam (binder_named b_id) (sort_n 1) body) in
     let text := compile_one_def_text id term_ in
-    check_contains text "add i64" && check_contains text "sub i64" && 
+    check_contains text "add i64" && check_contains text "sub i64" &&
     check_contains text "mul i64" && check_contains text "sdiv i64"
 
 /// Test compilation of deeply nested if-then-else
@@ -641,11 +641,11 @@ def test_compile_mutual_recursion : Bool :=
     let even_body := Term.lit (Literal.if_ (Term.app (Term.app eq_var n_var) zero) (Term.con (Con.mk (Identifier.id "true") (NamePath.mk (List.cons (Identifier.id "Bool") List.empty)) 0 List.empty)) (Term.app (Term.var 1 (DebugName.named odd_id)) (Term.app (Term.app sub_var n_var) one))) in
     let even_term := Term.lam (binder_named n_id) (sort_n 1) even_body in
     let even_def := Def.mk (NamePath.mk [even_id]) (sort_n 1) even_term List.empty List.empty Visibility.package_private List.empty in
-    
+
     let odd_body := Term.lit (Literal.if_ (Term.app (Term.app eq_var n_var) one) (Term.con (Con.mk (Identifier.id "true") (NamePath.mk (List.cons (Identifier.id "Bool") List.empty)) 0 List.empty)) (Term.app (Term.var 1 (DebugName.named even_id)) (Term.app (Term.app sub_var n_var) one))) in
     let odd_term := Term.lam (binder_named n_id) (sort_n 1) odd_body in
     let odd_def := Def.mk (NamePath.mk [odd_id]) (sort_n 1) odd_term List.empty List.empty Visibility.package_private List.empty in
-    
+
     let defs := List.cons even_def (List.cons odd_def List.empty) in
     let mod_ := compile_db_decls_ir defs in
     let text := emit_module mod_ in
@@ -826,7 +826,7 @@ def test_compile_lambda_multi_arg : Bool :=
     let body := Term.app (Term.app add_var add_xy) z_var in
     let lam := Term.lam (binder_named x_id) (sort_n 1) (
         Term.lam (binder_named y_id) (sort_n 1) (
-        Term.lam (binder_named z_id) (sort_n 1) body)) in
+            Term.lam (binder_named z_id) (sort_n 1) body)) in
     // Apply the lambda to concrete values
     let five := Term.lit (Literal.num 5 NumSuffix.i64) in
     let three := Term.lit (Literal.num 3 NumSuffix.i64) in
@@ -1046,27 +1046,27 @@ def test_compile_all_constructors : Bool :=
     let bool_typ := NamePath.mk (List.cons bool_name List.empty) in
     let true_con := Con.mk (Identifier.id "true") bool_typ 0 List.empty in
     let true_val := Term.con true_con in
-    
+
     let list_name := Identifier.id "List" in
     let list_typ := NamePath.mk (List.cons list_name List.empty) in
     let empty_con := Con.mk (Identifier.id "empty") list_typ 0 List.empty in
     let empty_val := Term.con empty_con in
-    
+
     let option_name := Identifier.id "Option" in
     let option_typ := NamePath.mk (List.cons option_name List.empty) in
     let some_con := Con.mk (Identifier.id "some") option_typ 1 (List.cons (Option.some true_val) List.empty) in
     let some_val := Term.con some_con in
-    
+
     let pair_name := Identifier.id "Pair" in
     let pair_typ := NamePath.mk (List.cons pair_name List.empty) in
     let pair_con := Con.mk (Identifier.id "pair") pair_typ 2 (List.cons (Option.some empty_val) (List.cons (Option.some some_val) List.empty)) in
     let pair_val := Term.con pair_con in
-    
+
     let result_name := Identifier.id "Result" in
     let result_typ := NamePath.mk (List.cons result_name List.empty) in
     let ok_con := Con.mk (Identifier.id "ok") result_typ 1 (List.cons (Option.some pair_val) List.empty) in
     let body := Term.con ok_con in
-    
+
     let def_ := Def.mk
         (NamePath.mk (List.cons id List.empty))
         (sort_n 1)

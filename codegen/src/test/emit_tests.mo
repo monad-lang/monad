@@ -6,46 +6,46 @@ use std::map {HashMap}
 use std::list {List.any, List.intercalate, List.length}
 use lang::mote {Mote.toolchain_root}
 use lang::types {
-  AttrArg, Attribute, Binder, Con, DebugName, Decl, Def, Identifier, InductConstructor,
-  Inductive, Literal, LocalScope, Location, MatchCase, ModulePath, Multiplicity,
-  NamePath, Native, Operator, Param, Scope, ScopeData, Struct, StructField,
-  StructLitField, Term, TypeConstraint, UseFilter, UseItem, Visibility,
-  binder_is_explicit, binder_name, binder_named, char_to_string, concrete, empty_attrs,
-  group, i64, id_eq,
-  ident, param_many, sentinel, show_identifier, show_module_path, term_peel,
-  Cubical, face_eq0, face_eq1, hcomp, i0, i1, ijoin, imeet, ineg, interval,
-  is_one, it_is_one, pathp, transp, glue, glue_elim, glue_intro,
+    AttrArg, Attribute, Binder, Con, DebugName, Decl, Def, Identifier, InductConstructor,
+    Inductive, Literal, LocalScope, Location, MatchCase, ModulePath, Multiplicity,
+    NamePath, Native, Operator, Param, Scope, ScopeData, Struct, StructField,
+    StructLitField, Term, TypeConstraint, UseFilter, UseItem, Visibility,
+    binder_is_explicit, binder_name, binder_named, char_to_string, concrete, empty_attrs,
+    group, i64, id_eq,
+    ident, param_many, sentinel, show_identifier, show_module_path, term_peel,
+    Cubical, face_eq0, face_eq1, hcomp, i0, i1, ijoin, imeet, ineg, interval,
+    is_one, it_is_one, pathp, transp, glue, glue_elim, glue_intro,
 }
 use llvm::ir {
-  DbgLoc, LLVMBasicBlock, LLVMDeclaration, LLVMFunction, LLVMGlobal,
-  LLVMInstruction, LLVMModule, LLVMType, LLVMValue, NativeOp, ParamPair,
-  PhiPair, emit_module, llvm_symbol_ref, llvm_value_type, show_llvm_type
+    DbgLoc, LLVMBasicBlock, LLVMDeclaration, LLVMFunction, LLVMGlobal,
+    LLVMInstruction, LLVMModule, LLVMType, LLVMValue, NativeOp, ParamPair,
+    PhiPair, emit_module, llvm_symbol_ref, llvm_value_type, show_llvm_type
 }
 use runtime::natives {runtime_native_functions}
 use lib::validate {
-  build_defined_symbol_set, collect_call_targets, missing_call_targets,
-  strip_db_lams, validate_export_defs, validate_no_colliding_def_symbols,
-  report_elab_stats, validate_no_undesugared_struct_lits,
-  validate_no_undesugared_elims,
-  validate_no_monad_externs, validate_no_unwired_natives,
-  validate_native_target_availability,
+    build_defined_symbol_set, collect_call_targets, missing_call_targets,
+    strip_db_lams, validate_export_defs, validate_no_colliding_def_symbols,
+    report_elab_stats, validate_no_undesugared_struct_lits,
+    validate_no_undesugared_elims,
+    validate_no_monad_externs, validate_no_unwired_natives,
+    validate_native_target_availability,
 }
 use lib::ctors {
-  bare_ctor_tag, build_constructor_arity_map,
-  build_constructor_arity_map_with_structs, build_constructor_tag_map,
-  builtin_ctor_arities, builtin_ctor_tags, constructor_arity, constructor_tag,
-  ctor_composite_key, is_constructor_var,
+    bare_ctor_tag, build_constructor_arity_map,
+    build_constructor_arity_map_with_structs, build_constructor_tag_map,
+    builtin_ctor_arities, builtin_ctor_tags, constructor_arity, constructor_tag,
+    ctor_composite_key, is_constructor_var,
 }
 use lib::natives {
-  NativeWrapKind, lookup_native, lookup_native_any,
-  native_op_table, native_runtime_fn_name, runtime_declarations,
-  runtime_declarations_for,
+    NativeWrapKind, lookup_native, lookup_native_any,
+    native_op_table, native_runtime_fn_name, runtime_declarations,
+    runtime_declarations_for,
 }
 use llvm::target {TargetKind}
 use lib::decls {
-  build_def_name_map, collect_all_decls_from_modules, def_name_str, export_names,
-  export_pairs, export_roots, extract_defs, extract_inductives, extract_structs,
-  filter_reachable_decls, reachable_defs_from,
+    build_def_name_map, collect_all_decls_from_modules, def_name_str, export_names,
+    export_pairs, export_roots, extract_defs, extract_inductives, extract_structs,
+    filter_reachable_decls, reachable_defs_from,
 }
 use lib::tco {apply_self_tco}
 use lib::qualify {qtest_def, qualified_def_name_str, qualify_modules}
@@ -53,38 +53,38 @@ use lib::free_names {collect_referenced_names, free_names_of_term}
 use lang::typecheck::traverse {term_map_children}
 use lang::elim_lower {elim_to_literal}
 use lib::ctx {
-  CodegenCtx, CtxInstrsVal, CtxInstrsVals, CtxStrPair, LocalBinding,
-  build_arity_table, build_type_level_table, collect_db_params, ctx_bind_local,
-  ctx_lookup_arity, ctx_lookup_ctor_arity, ctx_lookup_ctor_tag, ctx_lookup_local,
-  ctx_lookup_type_level, ctx_reset_locals, ctx_restore_locals, dbg_loc_of_location,
-  empty_ctx, fresh_label, fresh_temp, lookup_binding, resolve_call_name
+    CodegenCtx, CtxInstrsVal, CtxInstrsVals, CtxStrPair, LocalBinding,
+    build_arity_table, build_type_level_table, collect_db_params, ctx_bind_local,
+    ctx_lookup_arity, ctx_lookup_ctor_arity, ctx_lookup_ctor_tag, ctx_lookup_local,
+    ctx_lookup_type_level, ctx_reset_locals, ctx_restore_locals, dbg_loc_of_location,
+    empty_ctx, fresh_label, fresh_temp, lookup_binding, resolve_call_name
 }
 use lib::symbols {
-  bare_modpath, def_symbol_name, ends_with_main, extract_base_name,
-  bare_npath, mangle_identifiers, name_path_to_str, module_path_to_str,
-  ref_symbol_name,
-  replace_dots_with_underscores, string_find_last, symbol_identifier,
+    bare_modpath, def_symbol_name, ends_with_main, extract_base_name,
+    bare_npath, mangle_identifiers, name_path_to_str, module_path_to_str,
+    ref_symbol_name,
+    replace_dots_with_underscores, string_find_last, symbol_identifier,
 }
 use lang::name_text {unqualify_def_name}
 use lang::elaborate {names_of_decls}
 use lib::util {
-  dedup_idents, dedup_idents_go, dedup_strs, dedup_strs_go, drop_last_instr,
-  ident_in_list, identifier_eq, join_semicolon_msgs, list_contains_str, rev_vals
+    dedup_idents, dedup_idents_go, dedup_strs, dedup_strs_go, drop_last_instr,
+    ident_in_list, identifier_eq, join_semicolon_msgs, list_contains_str, rev_vals
 }
 use lang::module {
-  BestEffortElab, LoadedModules, ModuleInfo, bench_step, best_effort_decls,
-  best_effort_errors, best_effort_failed, decl_display_name, elaborate_def_typs, elaborate_module_decls_best_effort,
-  elaborate_module_decls_reporting, get_loaded_all, get_loaded_main,
-  resolve_open_aliases_in_modules
+    BestEffortElab, LoadedModules, ModuleInfo, bench_step, best_effort_decls,
+    best_effort_errors, best_effort_failed, decl_display_name, elaborate_def_typs, elaborate_module_decls_best_effort,
+    elaborate_module_decls_reporting, get_loaded_all, get_loaded_main,
+    resolve_open_aliases_in_modules
 }
 use lang::scope {
-  add_constraint_dict_params_decls, alias_map_empty, alias_map_insert,
-  alias_map_lookup, build_scope_from_decls, collect_classes, collect_open_aliases,
-  modpath_eq, refine_scope_instances, scope_find_inductive,
-  resolve_open_alias_decls,
-  collect_infixes, promote_instance_defs,
-  resolve_infix_decls, strip_all_leading_binders,
-  validate_no_unresolved_class_calls,
+    add_constraint_dict_params_decls, alias_map_empty, alias_map_insert,
+    alias_map_lookup, build_scope_from_decls, collect_classes, collect_open_aliases,
+    modpath_eq, refine_scope_instances, scope_find_inductive,
+    resolve_open_alias_decls,
+    collect_infixes, promote_instance_defs,
+    resolve_infix_decls, strip_all_leading_binders,
+    validate_no_unresolved_class_calls,
 }
 use lang::typecheck::infer {type_head_name, struct_lit_build_args, struct_lit_con_name}
 use lang::typecheck::usage {spine_head_name}
@@ -92,9 +92,9 @@ use std::log {fail_line, stage}
 open IO {println}
 open LLVMType {i1_, i8_, i32_, i64_, f32_, f64_, ptr, void}
 open LLVMValue {
-  add, alloc_closure, alloc_constructor, bitcast, bool_, call, gep, global_,
-  icmp_eq, icmp_ne, icmp_sgt, icmp_slt, int32_, int_, inttoptr, load, mul, native_op,
-  parm_, phi, ptrtoint, sdiv, sext, sub, trunc, typed, var_, void_val, zext,
+    add, alloc_closure, alloc_constructor, bitcast, bool_, call, gep, global_,
+    icmp_eq, icmp_ne, icmp_sgt, icmp_slt, int32_, int_, inttoptr, load, mul, native_op,
+    parm_, phi, ptrtoint, sdiv, sext, sub, trunc, typed, var_, void_val, zext,
 }
 use lib::emit {CompileResult, check_contains, check_count, compile_db_decls_ir, compile_db_decls_ir_with_debug, compile_db_inductive_constructors, compile_db_inductive_decls, compile_db_module_with_debug, compile_db_term_ir, compile_native_def_fixture_text, constructor_tag_at, dbg_loc_of_body, debug_fixture_def, decls_have_no_i8_star, empty_arities, ends_with_terminator, i64_ne, located_fixture_def, located_num_fixture_def, native_attr, native_bool_over_branching_fixture_def, native_wrap_is_some, prepend_loc_marker, unit_test_param, unit_test_struct, validate_reachable_elaborated}
 

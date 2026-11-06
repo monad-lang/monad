@@ -1,7 +1,7 @@
 use std::test {Test.write_fixture}
 use std::process {exec_cmd, process_id}
 use lang::types {
-  Attribute, Decl, Def, Term, TypeConstraint, binder_named, i64, id, match_, named, num, package_private, param_many, sort_n, str,
+    Attribute, Decl, Def, Term, TypeConstraint, binder_named, i64, id, match_, named, num, package_private, param_many, sort_n, str,
 }
 use llvm::ir {emit_module}
 use llvm::link {compile_ir_to_obj, compile_runtime_obj, link_objects}

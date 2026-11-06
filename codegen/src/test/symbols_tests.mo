@@ -2,7 +2,7 @@
 
 use std::list {List.intercalate}
 use lang::types {
-  Identifier, ModulePath, NamePath, show_module_path, show_name_path,
+    Identifier, ModulePath, NamePath, show_module_path, show_name_path,
 }
 use std::map {}
 use lang::name_text {unqualify_def_name}

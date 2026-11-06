@@ -19,29 +19,29 @@
 /// block a build that never touches it.
 use llvm::strmap {str_map_empty, str_map_insert, str_map_lookup}
 use lang::types {
-  AttrArg, Attribute, Con, Decl, Def, Identifier, Literal, MatchCase, NamePath, Native,
-  StructLitField, Term, binder_is_explicit, has_attr, id_eq, show_identifier, term_peel,
+    AttrArg, Attribute, Con, Decl, Def, Identifier, Literal, MatchCase, NamePath, Native,
+    StructLitField, Term, binder_is_explicit, has_attr, id_eq, show_identifier, term_peel,
 }
 use lang::scope {collect_classes, find_unresolved_class_calls_decls}
 use lib::ctors {CtorClaim, collect_ctor_claims_inds}
 use std::list {List.length}
 open IO {get_env, println}
 use llvm::ir {
-  LLVMBasicBlock, LLVMDeclaration, LLVMFunction, LLVMInstruction, LLVMModule,
-  LLVMValue, PhiPair,
+    LLVMBasicBlock, LLVMDeclaration, LLVMFunction, LLVMInstruction, LLVMModule,
+    LLVMValue, PhiPair,
 }
 use lib::decls {def_name_str, extract_defs, extract_inductives}
 use runtime::natives {runtime_native_functions}
 use lib::natives {
-  lookup_native_any, native_runtime_fn_name,
-  runtime_declarations, NativeAvailability, native_target_availability,
+    lookup_native_any, native_runtime_fn_name,
+    runtime_declarations, NativeAvailability, native_target_availability,
 }
 use lib::attrs {attr_target}
 use llvm::target {TargetKind}
 use lib::symbols {def_symbol_name, ends_with_main, name_path_to_str}
 use lang::name_text {unqualify_def_name}
 use lib::util {
-  dedup_strs, join_semicolon_msgs, list_contains_str
+    dedup_strs, join_semicolon_msgs, list_contains_str
 }
 use std::map {HashMap}
 
@@ -95,8 +95,8 @@ def monad_extern_message (d : Def) : Option String :=
                                 Option.none => Option.none,
                                 Option.some segment =>
                                     if String.starts_with "monad_" segment
-                                       || String.contains segment "::monad_"
-                                       || String.contains segment ".monad_"
+                                        || String.contains segment "::monad_"
+                                        || String.contains segment ".monad_"
                                     then Option.some (extern_message name segment)
                                     else Option.none,
                             },
@@ -107,7 +107,7 @@ def monad_extern_message (d : Def) : Option String :=
 def extern_message (name : NamePath) (link : String) : String :=
     String.concat_list
         ["extern `", link, "` on `", name_path_to_str name,
-         "` binds a Monad runtime symbol; declare it as a #[native] in init/std instead"]
+            "` binds a Monad runtime symbol; declare it as a #[native] in init/std instead"]
 
 def monad_extern_check (name : NamePath) (link : String) : Option String :=
     if String.starts_with "monad_" link
@@ -554,17 +554,17 @@ def term_has_struct_lit (t : Term) : Bool := match t {
     Term.elim e =>
         match e {
             { inductive := _,
-              levels := _,
-              params := params,
-              indices := indices,
-              motive := motive,
-              minors := minors,
-              scrutinee := scrutinee } =>
-                terms_have_struct_lit params
-                    || terms_have_struct_lit indices
-                    || term_has_struct_lit motive
-                    || terms_have_struct_lit minors
-                    || term_has_struct_lit scrutinee,
+                levels := _,
+                params := params,
+                indices := indices,
+                motive := motive,
+                minors := minors,
+                scrutinee := scrutinee } =>
+                    terms_have_struct_lit params
+                        || terms_have_struct_lit indices
+                        || term_has_struct_lit motive
+                        || terms_have_struct_lit minors
+                        || term_has_struct_lit scrutinee,
         },
 }
 
@@ -749,8 +749,8 @@ def colliding_def_symbol_msgs (defs : List Def) (seen : HashMap String Bool) : L
                 Option.none =>
                     if reserved_runtime_symbol sym
                     then List.cons (String.concat "def `" (String.concat sym
-                            "` collides with a runtime symbol of the same name -- rename the def"))
-                            (colliding_def_symbol_msgs rest (str_map_insert sym true seen))
+                        "` collides with a runtime symbol of the same name -- rename the def"))
+                        (colliding_def_symbol_msgs rest (str_map_insert sym true seen))
                     else colliding_def_symbol_msgs rest (str_map_insert sym true seen),
             },
     }

@@ -21,7 +21,7 @@ use std::test {Test.write_fixture}
 open IO {println}
 use std::process {exec_cmd, process_id}
 use lang::module {
-  LoadedModules, extract_directory, load_file_modules, resolve_runtime_src,
+    LoadedModules, extract_directory, load_file_modules, resolve_runtime_src,
 }
 use llvm::ir {emit_module}
 use llvm::link {compile_ir_to_obj, compile_runtime_obj, link_objects}

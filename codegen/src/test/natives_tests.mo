@@ -5,7 +5,7 @@ use lang::types {AttrArg, Attribute, id, id_eq}
 use llvm::ir {LLVMDeclaration, NativeOp}
 use llvm::target {TargetKind}
 use lib::symbols {
-  extract_base_name, replace_dots_with_underscores, symbol_identifier,
+    extract_base_name, replace_dots_with_underscores, symbol_identifier,
 }
 use lang::name_text {unqualify_def_name}
 use lib::util {}

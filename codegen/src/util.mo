@@ -12,7 +12,7 @@
 /// without creating a cycle.
 use lang::types {Decl, Identifier}
 use llvm::ir {
-  LLVMBasicBlock, LLVMFunction, LLVMGlobal, LLVMInstruction, LLVMValue, ParamPair,
+    LLVMBasicBlock, LLVMFunction, LLVMGlobal, LLVMInstruction, LLVMValue, ParamPair,
 }
 // Re-exported, not redefined. They moved to a leaf module so `ir.mo` can use
 // them too -- `ir.mo` cannot import THIS file, since the `use` above makes the

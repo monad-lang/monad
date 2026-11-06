@@ -44,30 +44,30 @@
 use lib::decls {filter_reachable_decls}
 use lib::qualify {qtest_def, qualified_def_name_str, qualify_modules}
 use lang::types {
-  Attribute, Class, DebugName, Decl, Def, ModulePath, NamePath, Term, has_attr, i64, id, no_attrs, num, package_private,
-  show_identifier, struct_lit, use_bare,
+    Attribute, Class, DebugName, Decl, Def, ModulePath, NamePath, Term, has_attr, i64, id, no_attrs, num, package_private,
+    show_identifier, struct_lit, use_bare,
 }
 use lib::emit {
-  CompileInput, compile_db_module_with_debug, compile_input_of_modules, emit_type_head_is_io,
-  gate_then, validate_reachable_elaborated
+    CompileInput, compile_db_module_with_debug, compile_input_of_modules, emit_type_head_is_io,
+    gate_then, validate_reachable_elaborated
 }
 use lib::symbols {
-  bare_npath, module_path_to_str, name_path_to_str, symbol_identifier,
+    bare_npath, module_path_to_str, name_path_to_str, symbol_identifier,
 }
 use parsec::number {parse_i64}
 use lib::validate {
-  report_elab_stats, validate_no_colliding_def_symbols,
-  validate_no_undesugared_struct_lits, validate_no_undesugared_elims,
-  validate_no_unwired_natives
+    report_elab_stats, validate_no_colliding_def_symbols,
+    validate_no_undesugared_struct_lits, validate_no_undesugared_elims,
+    validate_no_unwired_natives
 }
 use llvm::ir {LLVMModule}
 use lang::module {
-  BestEffortElab, LoadedModules, ModuleInfo, best_effort_errors, get_loaded_all,
-  get_loaded_main, resolve_open_aliases_in_modules, try_parse_decls,
+    BestEffortElab, LoadedModules, ModuleInfo, best_effort_errors, get_loaded_all,
+    get_loaded_main, resolve_open_aliases_in_modules, try_parse_decls,
 }
 use lang::scope {
-  collect_classes, strip_all_leading_binders,
-  validate_no_unresolved_class_calls,
+    collect_classes, strip_all_leading_binders,
+    validate_no_unresolved_class_calls,
 }
 use std::list {List.intercalate, List.length}
 use std::log {fail_line}
@@ -113,10 +113,10 @@ def discover_test_defs (decl_list : List Decl) : List Def :=
 /// joined with `::` plus the test's own bare name, matching the Rust
 /// runner's `module::sub::test_name` presentation.
 pub struct TestSpec {
-    display: String,
-    call: String,
-    io_test: Bool,
-    result_test: Bool
+    display : String,
+    call : String,
+    io_test : Bool,
+    result_test : Bool
 }
 
 /// The marker prefix the driver writes into its result file (see the
@@ -387,7 +387,7 @@ def synth_test_stmts_with (display : String) (call : String) (io_test : Bool) (r
         if I64.beq idx 0
         then "    let " ++ f ++ " := (if " ++ b ++ " then 0 else 1);\n"
         else "    let " ++ f ++ " := I64.add " ++ synth_idx_name "__f" (idx - 1) ++
-             " (if " ++ b ++ " then 0 else 1);\n" in
+            " (if " ++ b ++ " then 0 else 1);\n" in
     // A `Result` test binds its call to a holder and derives the
     // verdict from the constructor (`ok` passes, `err` fails) -- the
     // source-level twin of the Rust runner's `detect_test_result_value`.
@@ -397,7 +397,7 @@ def synth_test_stmts_with (display : String) (call : String) (io_test : Bool) (r
     let test_bind : String :=
         if result_test
         then "    let " ++ q ++ bind_op ++ call ++ ";\n" ++
-             "    let " ++ b ++ " := match " ++ q ++ " { Result.ok _ => true, Result.err _ => false };\n"
+            "    let " ++ b ++ " := match " ++ q ++ " { Result.ok _ => true, Result.err _ => false };\n"
         else "    let " ++ b ++ bind_op ++ call ++ ";\n" in
     "    let " ++ n_start ++ " <- IO.current_time_nano;\n" ++
     test_bind ++
@@ -572,8 +572,8 @@ pub def is_no_tests_error (e : String) : Bool :=
 /// meaningful against the file's own total, which the driver itself does
 /// not restate in the file.
 pub struct TestIrResult {
-    mod_: LLVMModule,
-    total_tests: I64
+    mod_ : LLVMModule,
+    total_tests : I64
 }
 
 /// `result_path` is where the driver writes its `__MONAD_TEST__ <failed>`
@@ -622,103 +622,103 @@ pub def compile_loaded_modules_to_test_ir (loaded : LoadedModules) (result_path 
 /// call.
 #[partial]
 def compile_test_driver_with (loaded : LoadedModules) (driver_decls : List Decl) (total_tests : I64) (triple : String) : IO (Result String TestIrResult) := do {
-                    // Per-module, BEFORE the modules are flattened -- see
-                    // `lang.module`'s `resolve_open_aliases_in_module_info`
-                    // (applied to an already-flattened list, one module's
-                    // alias shadows an unrelated local elsewhere). The
-                    // driver is its own module, in the list from the start,
-                    // so its `open IO {println}` resolves like any other
-                    // module's; it also lets `qualify_modules` see it, since
-                    // its body calls real library defs (`I64.to_string`,
-                    // `++`) by bare name.
-                    let driver_mp : ModulePath := ModulePath.mk (List.cons (Identifier.id "__test_driver") List.empty);
-                    let driver_mod : ModuleInfo := ModuleInfo.mk driver_mp "" driver_decls;
-                    let aliased_mods := resolve_open_aliases_in_modules (List.append (get_loaded_all loaded) (List.cons driver_mod List.empty));
-                    // A target file may define its own `main` alongside its
-                    // tests; rename it out of the way -- see `rename_user_main`
-                    // for why the driver's `main` would otherwise lose to it.
-                    let target_for_rename : ModuleInfo := get_loaded_main loaded;
-                    let with_driver := rename_user_main_in_modules target_for_rename.path aliased_mods;
-                    let qualify_result <- qualify_modules false with_driver;
-                    // Annotated rebinding: `qualify_result` arrives from a
-                    // do-notation bind -- an unannotated lambda binder
-                    // once desugared -- and the checker then cannot infer
-                    // a scrutinee type for the matches below, leaving `ok`
-                    // ambiguous between `Result` and emit.mo's own
-                    // `CompileResult`. The annotation pins it (the error's
-                    // own prescribed fix; emit.mo's call site matches the
-                    // bound value where its type is already resolvable).
-                    let qr : Result String (List ModuleInfo) := qualify_result;
-                    let qualified_ok : Bool := match qr {
-                        Result.ok _ => true,
-                        Result.err _ => false,
-                    };
-                    // The fallback below used to be silent, which made a
-                    // qualification failure look like "the driver
-                    // compiled but found no tests". It is the one branch
-                    // here that cannot produce a working binary, so say
-                    // so.
-                    let _qnote <- match qr {
-                        Result.ok _ => do { return unit },
-                        Result.err qe => do { fail_line ("test driver: qualify_modules failed (" ++ qe ++ ")"); return unit },
-                    };
-                    let qualified_mods := match qr {
-                        Result.ok ms => ms,
-                        // Keep the pre-qualification modules on failure:
-                        // this driver's job is to RUN tests, and a
-                        // qualification error is reported by the real
-                        // compile path with a proper message.
-                        Result.err _ => with_driver,
-                    };
-                    // The same front end `build` runs (`compile_input_of_modules`).
-                    // The driver's own summary line (`I64.to_string __passed ++
-                    // "/" ++ ...`) has computed operands, which the syntactic
-                    // `resolve_class_calls_decls` below can only resolve once
-                    // elaboration has run.
-                    let target_mp : ModulePath := match get_loaded_main loaded { ModuleInfo.mk mp_ _ _ => mp_ };
-                    let input : CompileInput <- compile_input_of_modules target_mp qualified_mods false;
-                    let elab_report : BestEffortElab := input.report;
-                    let elaborated : List Decl := input.decls;
-                    let dispatched_decls := elaborated;
-                    // The root has to match the branch actually taken
-                    // above: on the fallback the decls are still
-                    // UNqualified, and rooting at `__test_driver::main`
-                    // would match nothing at all, quietly compiling an
-                    // empty program instead of surfacing the failure.
-                    let driver_root : String :=
-                        if qualified_ok
-                        then qualified_def_name_str driver_mp (bare_npath "main")
-                        else "main";
-                    let reachable := filter_reachable_decls (List.cons driver_root List.empty) dispatched_decls;
-                    report_elab_stats false (best_effort_errors elab_report) elaborated reachable;
-                    // Validate the REACHABLE decls, not the full spliced
-                    // graph -- see `codegen.emit`'s own
-                    // `compile_loaded_modules_to_ir` / `validate_no_
-                    // unresolved_class_calls`'s own doc comment for why
-                    // (a bug in dead code the test driver never actually
-                    // exercises must not block every other test in the
-                    // same file from running).
-                    let dispatched_classes := collect_classes dispatched_decls;
-                    match test_driver_gates (validate_reachable_elaborated elab_report reachable) dispatched_classes reachable {
-                        Result.err e => return (Result.err e),
-                        Result.ok _ =>
-                            // The same fail-fast gate the real compile
-                            // path runs (`compile_loaded_modules_to_ir`).
-                            // This path skipped it, which is how a test
-                            // reaching an unwired native produced a
-                            // binary that SIGSEGVs on a "return Unit"
-                            // stub instead of a clear message.
-                            // `cli/src/main.mo` turns this particular
-                            // error into a SKIP; see the gate note in
-                            // this file's header.
-                            match validate_no_unwired_natives reachable {
-                                Result.err e => return (Result.err e),
-                                Result.ok _ => do {
-                                    let result : TestIrResult := { mod_ := compile_db_module_with_debug reachable Option.none List.empty triple, total_tests := total_tests };
-                                    return (Result.ok result)
-                                },
-                            },
-                    }
+    // Per-module, BEFORE the modules are flattened -- see
+    // `lang.module`'s `resolve_open_aliases_in_module_info`
+    // (applied to an already-flattened list, one module's
+    // alias shadows an unrelated local elsewhere). The
+    // driver is its own module, in the list from the start,
+    // so its `open IO {println}` resolves like any other
+    // module's; it also lets `qualify_modules` see it, since
+    // its body calls real library defs (`I64.to_string`,
+    // `++`) by bare name.
+    let driver_mp : ModulePath := ModulePath.mk (List.cons (Identifier.id "__test_driver") List.empty);
+    let driver_mod : ModuleInfo := ModuleInfo.mk driver_mp "" driver_decls;
+    let aliased_mods := resolve_open_aliases_in_modules (List.append (get_loaded_all loaded) (List.cons driver_mod List.empty));
+    // A target file may define its own `main` alongside its
+    // tests; rename it out of the way -- see `rename_user_main`
+    // for why the driver's `main` would otherwise lose to it.
+    let target_for_rename : ModuleInfo := get_loaded_main loaded;
+    let with_driver := rename_user_main_in_modules target_for_rename.path aliased_mods;
+    let qualify_result <- qualify_modules false with_driver;
+    // Annotated rebinding: `qualify_result` arrives from a
+    // do-notation bind -- an unannotated lambda binder
+    // once desugared -- and the checker then cannot infer
+    // a scrutinee type for the matches below, leaving `ok`
+    // ambiguous between `Result` and emit.mo's own
+    // `CompileResult`. The annotation pins it (the error's
+    // own prescribed fix; emit.mo's call site matches the
+    // bound value where its type is already resolvable).
+    let qr : Result String (List ModuleInfo) := qualify_result;
+    let qualified_ok : Bool := match qr {
+        Result.ok _ => true,
+        Result.err _ => false,
+    };
+    // The fallback below used to be silent, which made a
+    // qualification failure look like "the driver
+    // compiled but found no tests". It is the one branch
+    // here that cannot produce a working binary, so say
+    // so.
+    let _qnote <- match qr {
+        Result.ok _ => do { return unit },
+        Result.err qe => do { fail_line ("test driver: qualify_modules failed (" ++ qe ++ ")"); return unit },
+    };
+    let qualified_mods := match qr {
+        Result.ok ms => ms,
+        // Keep the pre-qualification modules on failure:
+        // this driver's job is to RUN tests, and a
+        // qualification error is reported by the real
+        // compile path with a proper message.
+        Result.err _ => with_driver,
+    };
+    // The same front end `build` runs (`compile_input_of_modules`).
+    // The driver's own summary line (`I64.to_string __passed ++
+    // "/" ++ ...`) has computed operands, which the syntactic
+    // `resolve_class_calls_decls` below can only resolve once
+    // elaboration has run.
+    let target_mp : ModulePath := match get_loaded_main loaded { ModuleInfo.mk mp_ _ _ => mp_ };
+    let input : CompileInput <- compile_input_of_modules target_mp qualified_mods false;
+    let elab_report : BestEffortElab := input.report;
+    let elaborated : List Decl := input.decls;
+    let dispatched_decls := elaborated;
+    // The root has to match the branch actually taken
+    // above: on the fallback the decls are still
+    // UNqualified, and rooting at `__test_driver::main`
+    // would match nothing at all, quietly compiling an
+    // empty program instead of surfacing the failure.
+    let driver_root : String :=
+        if qualified_ok
+        then qualified_def_name_str driver_mp (bare_npath "main")
+        else "main";
+    let reachable := filter_reachable_decls (List.cons driver_root List.empty) dispatched_decls;
+    report_elab_stats false (best_effort_errors elab_report) elaborated reachable;
+    // Validate the REACHABLE decls, not the full spliced
+    // graph -- see `codegen.emit`'s own
+    // `compile_loaded_modules_to_ir` / `validate_no_
+    // unresolved_class_calls`'s own doc comment for why
+    // (a bug in dead code the test driver never actually
+    // exercises must not block every other test in the
+    // same file from running).
+    let dispatched_classes := collect_classes dispatched_decls;
+    match test_driver_gates (validate_reachable_elaborated elab_report reachable) dispatched_classes reachable {
+        Result.err e => return (Result.err e),
+        Result.ok _ =>
+            // The same fail-fast gate the real compile
+            // path runs (`compile_loaded_modules_to_ir`).
+            // This path skipped it, which is how a test
+            // reaching an unwired native produced a
+            // binary that SIGSEGVs on a "return Unit"
+            // stub instead of a clear message.
+            // `cli/src/main.mo` turns this particular
+            // error into a SKIP; see the gate note in
+            // this file's header.
+            match validate_no_unwired_natives reachable {
+                Result.err e => return (Result.err e),
+                Result.ok _ => do {
+                    let result : TestIrResult := { mod_ := compile_db_module_with_debug reachable Option.none List.empty triple, total_tests := total_tests };
+                    return (Result.ok result)
+                },
+            },
+    }
 }
 
 /// The checker-handoff gates the test driver runs over its reachable decls,

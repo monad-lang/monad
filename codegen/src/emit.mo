@@ -9,46 +9,46 @@ use std::map {HashMap}
 use std::list {List.any, List.intercalate, List.length}
 use lang::mote {Mote.toolchain_root}
 use lang::types {
-  AttrArg, Attribute, Binder, Con, DebugName, Decl, Def, Identifier, InductConstructor,
-  Inductive, Literal, LocalScope, Location, MatchCase, ModulePath, Multiplicity,
-  NamePath, Native, Operator, Param, Scope, ScopeData, Struct, StructField,
-  StructLitField, Term, TypeConstraint, UseFilter, UseItem, Visibility,
-  binder_is_explicit, binder_name, binder_named, char_to_string, concrete, empty_attrs,
-  group, i64, id_eq,
-  ident, param_many, sentinel, show_identifier, show_module_path, term_peel,
-  Cubical, face_eq0, face_eq1, hcomp, i0, i1, ijoin, imeet, ineg, interval,
-  is_one, it_is_one, pathp, transp, glue, glue_elim, glue_intro,
+    AttrArg, Attribute, Binder, Con, DebugName, Decl, Def, Identifier, InductConstructor,
+    Inductive, Literal, LocalScope, Location, MatchCase, ModulePath, Multiplicity,
+    NamePath, Native, Operator, Param, Scope, ScopeData, Struct, StructField,
+    StructLitField, Term, TypeConstraint, UseFilter, UseItem, Visibility,
+    binder_is_explicit, binder_name, binder_named, char_to_string, concrete, empty_attrs,
+    group, i64, id_eq,
+    ident, param_many, sentinel, show_identifier, show_module_path, term_peel,
+    Cubical, face_eq0, face_eq1, hcomp, i0, i1, ijoin, imeet, ineg, interval,
+    is_one, it_is_one, pathp, transp, glue, glue_elim, glue_intro,
 }
 use llvm::ir {
-  DbgLoc, LLVMBasicBlock, LLVMDeclaration, LLVMFunction, LLVMGlobal,
-  LLVMInstruction, LLVMModule, LLVMType, LLVMValue, NativeOp, ParamPair,
-  PhiPair, emit_module, llvm_symbol_ref, llvm_value_type, show_llvm_type
+    DbgLoc, LLVMBasicBlock, LLVMDeclaration, LLVMFunction, LLVMGlobal,
+    LLVMInstruction, LLVMModule, LLVMType, LLVMValue, NativeOp, ParamPair,
+    PhiPair, emit_module, llvm_symbol_ref, llvm_value_type, show_llvm_type
 }
 use runtime::natives {runtime_native_functions}
 use lib::validate {
-  build_defined_symbol_set, collect_call_targets, missing_call_targets,
-  strip_db_lams, validate_export_defs, validate_no_colliding_def_symbols,
-  report_elab_stats, validate_no_undesugared_struct_lits,
-  validate_no_undesugared_elims,
-  validate_no_monad_externs, validate_no_unwired_natives,
-  validate_native_target_availability,
+    build_defined_symbol_set, collect_call_targets, missing_call_targets,
+    strip_db_lams, validate_export_defs, validate_no_colliding_def_symbols,
+    report_elab_stats, validate_no_undesugared_struct_lits,
+    validate_no_undesugared_elims,
+    validate_no_monad_externs, validate_no_unwired_natives,
+    validate_native_target_availability,
 }
 use lib::ctors {
-  bare_ctor_tag, build_constructor_arity_map,
-  build_constructor_arity_map_with_structs, build_constructor_tag_map,
-  builtin_ctor_arities, builtin_ctor_tags, constructor_arity, constructor_tag,
-  ctor_composite_key, is_constructor_var,
+    bare_ctor_tag, build_constructor_arity_map,
+    build_constructor_arity_map_with_structs, build_constructor_tag_map,
+    builtin_ctor_arities, builtin_ctor_tags, constructor_arity, constructor_tag,
+    ctor_composite_key, is_constructor_var,
 }
 use lib::natives {
-  NativeWrapKind, lookup_native, lookup_native_any,
-  native_op_table, native_runtime_fn_name, runtime_declarations,
-  runtime_declarations_for,
+    NativeWrapKind, lookup_native, lookup_native_any,
+    native_op_table, native_runtime_fn_name, runtime_declarations,
+    runtime_declarations_for,
 }
 use llvm::target {TargetKind}
 use lib::decls {
-  build_def_name_map, collect_all_decls_from_modules, def_name_str, export_names,
-  export_pairs, export_roots, extract_defs, extract_inductives, extract_structs,
-  filter_reachable_decls, reachable_defs_from,
+    build_def_name_map, collect_all_decls_from_modules, def_name_str, export_names,
+    export_pairs, export_roots, extract_defs, extract_inductives, extract_structs,
+    filter_reachable_decls, reachable_defs_from,
 }
 use lib::tco {apply_self_tco}
 use lib::qualify {qtest_def, qualified_def_name_str, qualify_modules}
@@ -56,39 +56,39 @@ use lib::free_names {collect_referenced_names, free_names_of_term}
 use lang::typecheck::traverse {term_map_children}
 use lang::elim_lower {elim_to_literal}
 use lib::ctx {
-  CodegenCtx, CtxInstrsVal, CtxInstrsVals, CtxStrPair, LocalBinding,
-  build_arity_table, build_type_level_table, collect_db_params, ctx_bind_local,
-  ctx_lookup_arity, ctx_lookup_ctor_arity, ctx_lookup_ctor_tag, ctx_lookup_local,
-  ctx_lookup_type_level, ctx_reset_locals, ctx_restore_locals, dbg_loc_of_location,
-  empty_ctx, fresh_label, fresh_temp, lookup_binding, resolve_call_name
+    CodegenCtx, CtxInstrsVal, CtxInstrsVals, CtxStrPair, LocalBinding,
+    build_arity_table, build_type_level_table, collect_db_params, ctx_bind_local,
+    ctx_lookup_arity, ctx_lookup_ctor_arity, ctx_lookup_ctor_tag, ctx_lookup_local,
+    ctx_lookup_type_level, ctx_reset_locals, ctx_restore_locals, dbg_loc_of_location,
+    empty_ctx, fresh_label, fresh_temp, lookup_binding, resolve_call_name
 }
 use lib::symbols {
-  bare_modpath, def_symbol_name, ends_with_main, extract_base_name,
-  bare_npath, mangle_identifiers, name_path_to_str, module_path_to_str,
-  ref_symbol_name,
-  replace_dots_with_underscores, string_find_last, symbol_identifier,
+    bare_modpath, def_symbol_name, ends_with_main, extract_base_name,
+    bare_npath, mangle_identifiers, name_path_to_str, module_path_to_str,
+    ref_symbol_name,
+    replace_dots_with_underscores, string_find_last, symbol_identifier,
 }
 use lang::name_text {unqualify_def_name}
 use lib::attrs {find_attr_args, find_named_arg}
 use lang::elaborate {names_of_decls}
 use lib::util {
-  dedup_idents, dedup_idents_go, dedup_strs, dedup_strs_go, drop_last_instr,
-  ident_in_list, identifier_eq, join_semicolon_msgs, list_contains_str, rev_vals
+    dedup_idents, dedup_idents_go, dedup_strs, dedup_strs_go, drop_last_instr,
+    ident_in_list, identifier_eq, join_semicolon_msgs, list_contains_str, rev_vals
 }
 use lang::module {
-  BestEffortElab, LoadedModules, ModuleInfo, bench_step, best_effort_decls,
-  best_effort_errors, best_effort_failed, decl_display_name, elaborate_def_typs, elaborate_module_decls_best_effort,
-  elaborate_module_decls_reporting, get_loaded_all, get_loaded_main,
-  resolve_open_aliases_in_modules
+    BestEffortElab, LoadedModules, ModuleInfo, bench_step, best_effort_decls,
+    best_effort_errors, best_effort_failed, decl_display_name, elaborate_def_typs, elaborate_module_decls_best_effort,
+    elaborate_module_decls_reporting, get_loaded_all, get_loaded_main,
+    resolve_open_aliases_in_modules
 }
 use lang::scope {
-  add_constraint_dict_params_decls, alias_map_empty, alias_map_insert,
-  alias_map_lookup, build_scope_from_decls, collect_classes, collect_open_aliases,
-  modpath_eq, refine_scope_instances, scope_find_inductive,
-  resolve_open_alias_decls,
-  collect_infixes, promote_instance_defs,
-  resolve_infix_decls, strip_all_leading_binders,
-  validate_no_unresolved_class_calls,
+    add_constraint_dict_params_decls, alias_map_empty, alias_map_insert,
+    alias_map_lookup, build_scope_from_decls, collect_classes, collect_open_aliases,
+    modpath_eq, refine_scope_instances, scope_find_inductive,
+    resolve_open_alias_decls,
+    collect_infixes, promote_instance_defs,
+    resolve_infix_decls, strip_all_leading_binders,
+    validate_no_unresolved_class_calls,
 }
 // Shared with the type checker's own struct-literal path
 // (`type_check_struct_lit`): reusing its head-name/param-order helpers
@@ -110,9 +110,9 @@ use std::log {fail_line, stage}
 open IO {println}
 open LLVMType {i1_, i8_, i32_, i64_, f32_, f64_, ptr, void}
 open LLVMValue {
-  add, alloc_closure, alloc_constructor, bitcast, bool_, call, gep, global_,
-  icmp_eq, icmp_ne, icmp_sgt, icmp_slt, int32_, int_, inttoptr, load, mul, native_op,
-  parm_, phi, ptrtoint, sdiv, sext, sub, trunc, typed, var_, void_val, zext,
+    add, alloc_closure, alloc_constructor, bitcast, bool_, call, gep, global_,
+    icmp_eq, icmp_ne, icmp_sgt, icmp_slt, int32_, int_, inttoptr, load, mul, native_op,
+    parm_, phi, ptrtoint, sdiv, sext, sub, trunc, typed, var_, void_val, zext,
 }
 
 pub type CompileResult {
@@ -2357,7 +2357,7 @@ def compile_db_term_ir (c : CodegenCtx) (term_ : Term) : CompileResult := match 
                             Option.some level =>
                                 CompileResult.ok c List.empty (LLVMValue.int_ level) List.empty List.empty List.empty,
                             Option.none =>
-                        if is_constructor_var c name && Bool.not also_a_real_fn then
+                            if is_constructor_var c name && Bool.not also_a_real_fn then
                             let tag_val := constructor_tag c name in
                             let ctor_arity := constructor_arity c name in
                             if I64.beq ctor_arity 0 then
@@ -2412,7 +2412,7 @@ def compile_db_term_ir (c : CodegenCtx) (term_ : Term) : CompileResult := match 
                                         let assign_instr := LLVMInstruction.assign temp box_val in
                                         CompileResult.ok ctx_t (List.cons assign_instr List.empty) (LLVMValue.var_ temp) List.empty (List.cons shim_func List.empty) List.empty,
                                 }
-                        else
+                            else
                             // A bare reference to a global (non-local,
                             // non-constructor) name, in VALUE position --
                             // i.e. reached here rather than being
@@ -3416,9 +3416,9 @@ def try_compile_let_beta_db (c : CodegenCtx) (fun : Term) (arg : Term) : Option 
                         { ctx := ctx1b, instrs := bool_instrs, val := val1 } =>
                             match compose_seq ({ instrs := instrs1, blocks := blocks1, val := val1_raw }) ({ instrs := bool_instrs, blocks := List.empty, val := val1 }) {
                                 { instrs := instrs1m, blocks := blocks1m, val := val1m } =>
-                            let ctx_bound := ctx_bind_local ctx1b name val1 in
-                            match compile_db_term_ir ctx_bound body {
-                                CompileResult.ok ctx2 instrs2_raw val2_raw blocks2 funcs2 globals2 =>
+                                let ctx_bound := ctx_bind_local ctx1b name val1 in
+                                match compile_db_term_ir ctx_bound body {
+                                    CompileResult.ok ctx2 instrs2_raw val2_raw blocks2 funcs2 globals2 =>
                                     // `body` (the let's own continuation)
                                     // needs the same materialization as
                                     // `arg` above -- confirmed via a real
@@ -3451,7 +3451,7 @@ def try_compile_let_beta_db (c : CodegenCtx) (fun : Term) (arg : Term) : Option 
                                                     Option.some (CompileResult.ok ctx2m combined last_val all_blocks (List.append funcs1 funcs2) (List.append globals1 globals2)),
                                             },
                                     },
-                            },
+                                },
                             },
                     },
             },
@@ -3988,8 +3988,8 @@ def compile_general_db_call (c : CodegenCtx) (fun : Term) (arg : Term) : Compile
                     // the write_file/user-defined-constructor fixes.
                     match materialize_branch_val ctx_h_raw head instrs_h_raw val_h_raw {
                         { ctx := ctx_h, instrs := instrs_h, val := val_h } =>
-                    match compile_spine_args ctx_h args {
-                        { ctx := ctx_a, instrs := instrs_a, blocks := blocks_a, funcs := funcs_a, globals := globals_a, vals := vals_a, last_val := last_val_a } =>
+                        match compile_spine_args ctx_h args {
+                            { ctx := ctx_a, instrs := instrs_a, blocks := blocks_a, funcs := funcs_a, globals := globals_a, vals := vals_a, last_val := last_val_a } =>
                             // `compose_seq_acc`: an all-PURE spine (every
                             // argument a literal/bare reference --
                             // `triple_is_pure`) must keep `val_h` as the
@@ -4035,7 +4035,7 @@ def compile_general_db_call (c : CodegenCtx) (fun : Term) (arg : Term) : Compile
                                             combine_indirect_call ctx_a val_h vals_a combined all_blocks all_funcs all_globals combined_val,
                                     },
                             },
-                    },
+                        },
                     },
             },
     }
@@ -5387,105 +5387,105 @@ def dbg_loc_of_body (body : Term) : Option DbgLoc :=
 
 #[partial]
 def compile_db_def_ir_body (c : CodegenCtx) (fn_name : String) (typ : Term) (term_ : Term) (params : List Param) (llvm_params : List ParamPair) : DefResult :=
-        let body := strip_db_lams term_ in
-        let c0 := bind_params_in_ctx_db c params in
-        // See `unwrap_io_return_blocks`'s own doc comment: an `IO`-typed
-        // `main` needs its returned value's payload unwrapped before it
-        // reaches the C runtime's plain-`int`-returning `main()`.
-        // `IO Unit` takes the `ret 0` route, every other `IO A` the unwrap
-        // -- see `emit_type_is_io_unit`.
-        let main_io_unit := ends_with_main fn_name && emit_type_is_io_unit typ in
-        let needs_io_unwrap := ends_with_main fn_name && emit_type_head_is_io typ && Bool.not main_io_unit in
-        match compile_db_term_ir c0 body {
-            CompileResult.ok ctx_r instrs_r val_r blocks_r funcs_r globals_r =>
-                match val_r {
-                    LLVMValue.void_val =>
-                        match fresh_temp ctx_r {
-                            CtxStrPair.mk ctx_t temp =>
-                                // Create a call to alloc_constructor with tag 0 (Unit) and 0 fields
-                                // This ensures we return a proper i64 value that represents Unit
-                                let zero_val := LLVMValue.int_ 0 in
-                                let unit_val := LLVMValue.alloc_constructor 0 List.empty in
-                                let assign := LLVMInstruction.assign temp unit_val in
-                                let new_instrs := List.append instrs_r (List.cons assign List.empty) in
-                                let entry_instrs := List.append new_instrs (List.cons (LLVMInstruction.ret (LLVMValue.var_ temp)) List.empty) in
-                                let entry_block := LLVMBasicBlock.mk "entry" entry_instrs in
-                                let all_blocks_raw := append_blocks (List.cons entry_block List.empty) blocks_r in
-                                let tco := apply_self_tco ctx_t fn_name (List.length llvm_params) all_blocks_raw in
-                                // `tco.ctx`/`tco.blocks` bound ONCE here,
-                                // not inlined into each if/else arm below
-                                // -- a struct field access is itself a
-                                // branching (single-constructor-match-
-                                // shaped) sub-term, and evaluating it a
-                                // SECOND time inside a sibling arm of the
-                                // very `if` that consumes it (rather than
-                                // once, before the `if`) hit a genuine,
-                                // separate compose_seq-splicing gap here
-                                // (confirmed live via a real self-compile:
-                                // `llc`'s verifier rejected the result --
-                                // "PHINode should have one entry for each
-                                // predecessor", dead code stranded after
-                                // an unrelated terminator). Binding once
-                                // avoids the whole class, matching how
-                                // every other multi-field struct result in
-                                // this file (`bmr.val`/`bmr.instrs`, ...)
-                                // is already used.
-                                let tco_ctx := tco.ctx in
-                                let tco_blocks := tco.blocks in
-                                let all_blocks := if main_io_unit then zero_return_blocks tco_blocks else if needs_io_unwrap then unwrap_io_return_blocks tco_blocks 0 else tco_blocks in
-                                let main_func := LLVMFunction.mk fn_name llvm_params LLVMType.i64_ all_blocks (dbg_loc_of_body body) in
-                                { ctx := tco_ctx, funcs := (List.cons main_func funcs_r), globals := globals_r, externs := List.empty }
-                        },
-                    _ =>
-                        // A def whose whole (stripped-of-params) body is
-                        // itself an if/match (e.g. List.last, List.is_empty,
-                        // Option.get_or_default -- each just one top-level
-                        // match) compiles `instrs_r` already ending in its
-                        // OWN terminator (a jump/branch into the if/match's
-                        // own block chain, which itself ends in `ret`).
-                        // Unconditionally appending another `ret val_r`
-                        // after that would put two terminators in one
-                        // block (invalid LLVM IR) and reference `val_r`
-                        // (e.g. a match's phi temp) outside the block it's
-                        // actually defined in. Only append `ret` when the
-                        // body is a plain, non-branching computation.
-                        //
-                        // A body that's a BARE native comparison (e.g.
-                        // `String.is_empty s := I64.beq (String.length s)
-                        // 0`) needs the same boxing `materialize_branch_
-                        // val`/`materialize_native_bool_arg` already give
-                        // call arguments/let-bindings/if-branches -- `ret`,
-                        // like `phi` and an ordinary call argument, doesn't
-                        // tolerate a raw `i1` declared as `i64` either.
-                        // Confirmed via a direct repro (`line_col_scan_
-                        // direct`'s own `String.is_empty` call):
-                        // `llc: '%tN' defined with type 'i1' but expected
-                        // 'i64'` at the `ret i64 %tN` itself.
-                        let already_terminated := ends_with_terminator instrs_r in
-                        let bmr := materialize_branch_val ctx_r body instrs_r val_r in
-                        // With the value living in a terminal block,
-                        // `materialize_branch_val` above short-circuited
-                        // and never boxed -- box that block's own `ret`
-                        // instead (see `materialize_terminal_ret`'s doc
-                        // comment for the raw-i1 hole this closes).
-                        let tb := materialize_terminal_ret already_terminated bmr.ctx body val_r blocks_r in
-                        let entry_instrs :=
-                            if already_terminated
-                            then instrs_r
-                            else List.append bmr.instrs (List.cons (LLVMInstruction.ret bmr.val) List.empty) in
-                        let entry_block := LLVMBasicBlock.mk "entry" entry_instrs in
-                        let all_blocks_raw := append_blocks (List.cons entry_block List.empty) tb.blocks in
-                        let tco := apply_self_tco tb.ctx fn_name (List.length llvm_params) all_blocks_raw in
-                        // See the `void_val` arm above for why `tco.ctx`/
-                        // `tco.blocks` are bound once here rather than
-                        // inlined into each `if`/else arm.
-                        let tco_ctx := tco.ctx in
-                        let tco_blocks := tco.blocks in
-                        let all_blocks := if main_io_unit then zero_return_blocks tco_blocks else if needs_io_unwrap then unwrap_io_return_blocks tco_blocks 0 else tco_blocks in
-                        let main_func := LLVMFunction.mk fn_name llvm_params LLVMType.i64_ all_blocks (dbg_loc_of_body body) in
-                        { ctx := tco_ctx, funcs := (List.cons main_func funcs_r), globals := globals_r, externs := List.empty }
-                },
-        }
+    let body := strip_db_lams term_ in
+    let c0 := bind_params_in_ctx_db c params in
+    // See `unwrap_io_return_blocks`'s own doc comment: an `IO`-typed
+    // `main` needs its returned value's payload unwrapped before it
+    // reaches the C runtime's plain-`int`-returning `main()`.
+    // `IO Unit` takes the `ret 0` route, every other `IO A` the unwrap
+    // -- see `emit_type_is_io_unit`.
+    let main_io_unit := ends_with_main fn_name && emit_type_is_io_unit typ in
+    let needs_io_unwrap := ends_with_main fn_name && emit_type_head_is_io typ && Bool.not main_io_unit in
+    match compile_db_term_ir c0 body {
+        CompileResult.ok ctx_r instrs_r val_r blocks_r funcs_r globals_r =>
+            match val_r {
+                LLVMValue.void_val =>
+                    match fresh_temp ctx_r {
+                        CtxStrPair.mk ctx_t temp =>
+                            // Create a call to alloc_constructor with tag 0 (Unit) and 0 fields
+                            // This ensures we return a proper i64 value that represents Unit
+                            let zero_val := LLVMValue.int_ 0 in
+                            let unit_val := LLVMValue.alloc_constructor 0 List.empty in
+                            let assign := LLVMInstruction.assign temp unit_val in
+                            let new_instrs := List.append instrs_r (List.cons assign List.empty) in
+                            let entry_instrs := List.append new_instrs (List.cons (LLVMInstruction.ret (LLVMValue.var_ temp)) List.empty) in
+                            let entry_block := LLVMBasicBlock.mk "entry" entry_instrs in
+                            let all_blocks_raw := append_blocks (List.cons entry_block List.empty) blocks_r in
+                            let tco := apply_self_tco ctx_t fn_name (List.length llvm_params) all_blocks_raw in
+                            // `tco.ctx`/`tco.blocks` bound ONCE here,
+                            // not inlined into each if/else arm below
+                            // -- a struct field access is itself a
+                            // branching (single-constructor-match-
+                            // shaped) sub-term, and evaluating it a
+                            // SECOND time inside a sibling arm of the
+                            // very `if` that consumes it (rather than
+                            // once, before the `if`) hit a genuine,
+                            // separate compose_seq-splicing gap here
+                            // (confirmed live via a real self-compile:
+                            // `llc`'s verifier rejected the result --
+                            // "PHINode should have one entry for each
+                            // predecessor", dead code stranded after
+                            // an unrelated terminator). Binding once
+                            // avoids the whole class, matching how
+                            // every other multi-field struct result in
+                            // this file (`bmr.val`/`bmr.instrs`, ...)
+                            // is already used.
+                            let tco_ctx := tco.ctx in
+                            let tco_blocks := tco.blocks in
+                            let all_blocks := if main_io_unit then zero_return_blocks tco_blocks else if needs_io_unwrap then unwrap_io_return_blocks tco_blocks 0 else tco_blocks in
+                            let main_func := LLVMFunction.mk fn_name llvm_params LLVMType.i64_ all_blocks (dbg_loc_of_body body) in
+                            { ctx := tco_ctx, funcs := (List.cons main_func funcs_r), globals := globals_r, externs := List.empty }
+                    },
+                _ =>
+                    // A def whose whole (stripped-of-params) body is
+                    // itself an if/match (e.g. List.last, List.is_empty,
+                    // Option.get_or_default -- each just one top-level
+                    // match) compiles `instrs_r` already ending in its
+                    // OWN terminator (a jump/branch into the if/match's
+                    // own block chain, which itself ends in `ret`).
+                    // Unconditionally appending another `ret val_r`
+                    // after that would put two terminators in one
+                    // block (invalid LLVM IR) and reference `val_r`
+                    // (e.g. a match's phi temp) outside the block it's
+                    // actually defined in. Only append `ret` when the
+                    // body is a plain, non-branching computation.
+                    //
+                    // A body that's a BARE native comparison (e.g.
+                    // `String.is_empty s := I64.beq (String.length s)
+                    // 0`) needs the same boxing `materialize_branch_
+                    // val`/`materialize_native_bool_arg` already give
+                    // call arguments/let-bindings/if-branches -- `ret`,
+                    // like `phi` and an ordinary call argument, doesn't
+                    // tolerate a raw `i1` declared as `i64` either.
+                    // Confirmed via a direct repro (`line_col_scan_
+                    // direct`'s own `String.is_empty` call):
+                    // `llc: '%tN' defined with type 'i1' but expected
+                    // 'i64'` at the `ret i64 %tN` itself.
+                    let already_terminated := ends_with_terminator instrs_r in
+                    let bmr := materialize_branch_val ctx_r body instrs_r val_r in
+                    // With the value living in a terminal block,
+                    // `materialize_branch_val` above short-circuited
+                    // and never boxed -- box that block's own `ret`
+                    // instead (see `materialize_terminal_ret`'s doc
+                    // comment for the raw-i1 hole this closes).
+                    let tb := materialize_terminal_ret already_terminated bmr.ctx body val_r blocks_r in
+                    let entry_instrs :=
+                        if already_terminated
+                        then instrs_r
+                        else List.append bmr.instrs (List.cons (LLVMInstruction.ret bmr.val) List.empty) in
+                    let entry_block := LLVMBasicBlock.mk "entry" entry_instrs in
+                    let all_blocks_raw := append_blocks (List.cons entry_block List.empty) tb.blocks in
+                    let tco := apply_self_tco tb.ctx fn_name (List.length llvm_params) all_blocks_raw in
+                    // See the `void_val` arm above for why `tco.ctx`/
+                    // `tco.blocks` are bound once here rather than
+                    // inlined into each `if`/else arm.
+                    let tco_ctx := tco.ctx in
+                    let tco_blocks := tco.blocks in
+                    let all_blocks := if main_io_unit then zero_return_blocks tco_blocks else if needs_io_unwrap then unwrap_io_return_blocks tco_blocks 0 else tco_blocks in
+                    let main_func := LLVMFunction.mk fn_name llvm_params LLVMType.i64_ all_blocks (dbg_loc_of_body body) in
+                    { ctx := tco_ctx, funcs := (List.cons main_func funcs_r), globals := globals_r, externs := List.empty }
+            },
+    }
 
 /// Compile a list of canonical Defs to LLVM functions.
 #[partial]
@@ -5996,8 +5996,8 @@ def located_fixture_def : Def :=
     Def.mk (NamePath.mk [Identifier.id "myfunc"]) (Term.sort (SortLevel.concrete 1))
         (Term.ctx (Location.mk 40 9 7)
             (Term.lit (Literal.if_ (Term.lit (Literal.num 1 NumSuffix.i64))
-                                   (Term.lit (Literal.num 2 NumSuffix.i64))
-                                   (Term.lit (Literal.num 3 NumSuffix.i64)))))
+                (Term.lit (Literal.num 2 NumSuffix.i64))
+                (Term.lit (Literal.num 3 NumSuffix.i64)))))
         List.empty empty_attrs Visibility.package_private List.empty
 
 /// `debug_fixture_def` with the position a located parse puts on the
@@ -6278,7 +6278,7 @@ def desugar_struct_lit_con (scope : Scope) (fields : List StructLitField) (tn : 
                             },
                     },
             },
-}
+    }
 
 /// A struct literal's own FIELD VALUES may themselves hold struct
 /// literals -- always walk them, even on the leave-the-literal-alone
@@ -6624,192 +6624,192 @@ pub def compile_loaded_modules_to_ir_with_debug (loaded : LoadedModules) (verbos
     // death before that.
     let qualify_result <- qualify_modules verbose aliased_mods;
     match qualify_result {
-      Result.err e => do {
-        if verbose then do { fail_line ("FAILED at stage: qualify_modules (" ++ e ++ ")"); return unit } else return unit;
-        return (Result.err e)
-      },
-      Result.ok qualified_mods => do {
-    if verbose then do {
-        Bench.report_since "qualify_modules" t_qualify;
-        return unit
-    } else return unit;
-
-    // The shared front end (`compile_input_of_modules`), then the syntactic
-    // class-call pass over its elaborated decls.
-    stage verbose "front end";
-    let t_elab : I64 <- Bench.now;
-    let target_mp : ModulePath := match get_loaded_main loaded { ModuleInfo.mk mp_ _ _ => mp_ };
-    let input : CompileInput <- compile_input_of_modules target_mp qualified_mods verbose;
-    let elab_report : BestEffortElab := input.report;
-    let elaborated : List Decl := input.decls;
-    if verbose then report_elab_failures (best_effort_failed elab_report) else return unit;
-    // The checker's elaboration IS the dispatch now: the old syntactic
-    // `resolve_class_calls_decls` pass is retired (a no-op probe produced
-    // byte-identical IR for the whole golden corpus and a clean full-corpus
-    // `check` before it was deleted).
-    let dispatched_decls := elaborated;
-    let _t_dispatch : I64 <- bench_step verbose "  front end: elaborated decls" t_elab (List.length dispatched_decls);
-    if verbose then do {
-        Bench.report_since "elaborate_class" t_elab;
-        return unit
-    } else return unit;
-
-    // Stage 5: only compile Defs actually reachable (transitively) from `main` --
-    // compiling the FULL 264-def loaded set unconditionally meant any
-    // codegen bug anywhere in the whole standard library, reached or
-    // not, blocked compiling any program at all. See
-    // filter_reachable_decls's own doc comment.
-    stage verbose "filter reachable decls";
-    let t_reach : I64 <- Bench.now;
-    // Bound to a local first: field access lowers only on a plain
-    // identifier, not on a parenthesised call result.
-    let main_mi : ModuleInfo := get_loaded_main loaded;
-    let main_root : String := qualified_def_name_str main_mi.path (bare_npath "main");
-    // `#[export "c"]` defs are entered from JS, not from `main`, so they are
-    // extra roots -- and only on the web profile, where an export is a real
-    // thing. On every other target the attribute is ignored: a library that
-    // declares exports must still be testable natively.
-    let export_roots_: List String :=
-        if String.beq (TargetKind.name (TargetKind.of_triple triple)) "web"
-        then export_roots dispatched_decls
-        else List.empty;
-    let root_list : List String := List.cons main_root export_roots_;
-    let reachable_decls := filter_reachable_decls root_list dispatched_decls;
-    report_elab_stats verbose (best_effort_errors elab_report) elaborated reachable_decls;
-    if verbose then do {
-        let reachable_count := List.length reachable_decls;
-        Bench.report_since "filter_reachable" t_reach;
-        println ("Reachable decl_list: " ++ I64.to_string reachable_count)
-    } else return unit;
-
-    // `resolve_class_calls_decls` can leave a `ClassName.method` call
-    // unresolved with no matching instance (its own doc comment) -- check
-    // the REACHABLE decls (not the full loaded graph: a bug in dead code
-    // the program never uses must not block a compile that otherwise
-    // works, see `validate_no_unresolved_class_calls`'s own doc comment
-    // for the direct repro that found this the hard way) and fail here,
-    // with a precise message, instead of proceeding to codegen/`llc` and
-    // surfacing it many stages later as an undefined-symbol error.
-    let dispatched_classes := collect_classes dispatched_decls;
-    // BOTH gates can fail here, and `gate_then` returns whichever did first
-    // (the elaboration gate is unconditional since Item 11), so the stage
-    // line names both -- same convention as the unwired-native/monad-extern
-    // pair below. The message itself says which condition tripped.
-    match gate_then (validate_reachable_elaborated elab_report reachable_decls) (validate_no_unresolved_class_calls dispatched_classes reachable_decls) {
         Result.err e => do {
-            if verbose then do { fail_line ("FAILED at stage: validate_reachable_elaborated/validate_no_unresolved_class_calls (" ++ e ++ ")"); return unit } else return unit;
+            if verbose then do { fail_line ("FAILED at stage: qualify_modules (" ++ e ++ ")"); return unit } else return unit;
             return (Result.err e)
         },
-        Result.ok _ =>
-            // Same fail-fast reasoning as `validate_no_unresolved_class_calls`
-            // just above, for the silent-"return Unit"-stub bug family --
-            // a reachable bodyless `#[native X]` def wired nowhere would
-            // otherwise compile to a stub only discovered as a runtime
-            // SIGSEGV in the resulting binary (`String_to_list`'s v25
-            // crash; see `validate_no_unwired_natives`'s own doc comment).
-            match gate_then (validate_no_unwired_natives reachable_decls)
-                            (validate_no_monad_externs reachable_decls) {
+        Result.ok qualified_mods => do {
+            if verbose then do {
+                Bench.report_since "qualify_modules" t_qualify;
+                return unit
+            } else return unit;
+
+            // The shared front end (`compile_input_of_modules`), then the syntactic
+            // class-call pass over its elaborated decls.
+            stage verbose "front end";
+            let t_elab : I64 <- Bench.now;
+            let target_mp : ModulePath := match get_loaded_main loaded { ModuleInfo.mk mp_ _ _ => mp_ };
+            let input : CompileInput <- compile_input_of_modules target_mp qualified_mods verbose;
+            let elab_report : BestEffortElab := input.report;
+            let elaborated : List Decl := input.decls;
+            if verbose then report_elab_failures (best_effort_failed elab_report) else return unit;
+            // The checker's elaboration IS the dispatch now: the old syntactic
+            // `resolve_class_calls_decls` pass is retired (a no-op probe produced
+            // byte-identical IR for the whole golden corpus and a clean full-corpus
+            // `check` before it was deleted).
+            let dispatched_decls := elaborated;
+            let _t_dispatch : I64 <- bench_step verbose "  front end: elaborated decls" t_elab (List.length dispatched_decls);
+            if verbose then do {
+                Bench.report_since "elaborate_class" t_elab;
+                return unit
+            } else return unit;
+
+            // Stage 5: only compile Defs actually reachable (transitively) from `main` --
+            // compiling the FULL 264-def loaded set unconditionally meant any
+            // codegen bug anywhere in the whole standard library, reached or
+            // not, blocked compiling any program at all. See
+            // filter_reachable_decls's own doc comment.
+            stage verbose "filter reachable decls";
+            let t_reach : I64 <- Bench.now;
+            // Bound to a local first: field access lowers only on a plain
+            // identifier, not on a parenthesised call result.
+            let main_mi : ModuleInfo := get_loaded_main loaded;
+            let main_root : String := qualified_def_name_str main_mi.path (bare_npath "main");
+            // `#[export "c"]` defs are entered from JS, not from `main`, so they are
+            // extra roots -- and only on the web profile, where an export is a real
+            // thing. On every other target the attribute is ignored: a library that
+            // declares exports must still be testable natively.
+            let export_roots_ : List String :=
+            if String.beq (TargetKind.name (TargetKind.of_triple triple)) "web"
+            then export_roots dispatched_decls
+            else List.empty;
+            let root_list : List String := List.cons main_root export_roots_;
+            let reachable_decls := filter_reachable_decls root_list dispatched_decls;
+            report_elab_stats verbose (best_effort_errors elab_report) elaborated reachable_decls;
+            if verbose then do {
+                let reachable_count := List.length reachable_decls;
+                Bench.report_since "filter_reachable" t_reach;
+                println ("Reachable decl_list: " ++ I64.to_string reachable_count)
+            } else return unit;
+
+            // `resolve_class_calls_decls` can leave a `ClassName.method` call
+            // unresolved with no matching instance (its own doc comment) -- check
+            // the REACHABLE decls (not the full loaded graph: a bug in dead code
+            // the program never uses must not block a compile that otherwise
+            // works, see `validate_no_unresolved_class_calls`'s own doc comment
+            // for the direct repro that found this the hard way) and fail here,
+            // with a precise message, instead of proceeding to codegen/`llc` and
+            // surfacing it many stages later as an undefined-symbol error.
+            let dispatched_classes := collect_classes dispatched_decls;
+            // BOTH gates can fail here, and `gate_then` returns whichever did first
+            // (the elaboration gate is unconditional since Item 11), so the stage
+            // line names both -- same convention as the unwired-native/monad-extern
+            // pair below. The message itself says which condition tripped.
+            match gate_then (validate_reachable_elaborated elab_report reachable_decls) (validate_no_unresolved_class_calls dispatched_classes reachable_decls) {
                 Result.err e => do {
-                    if verbose then do { fail_line ("FAILED at stage: validate_no_unwired_natives/validate_no_monad_externs (" ++ e ++ ")"); return unit } else return unit;
+                    if verbose then do { fail_line ("FAILED at stage: validate_reachable_elaborated/validate_no_unresolved_class_calls (" ++ e ++ ")"); return unit } else return unit;
                     return (Result.err e)
                 },
                 Result.ok _ =>
-                  match validate_native_target_availability (TargetKind.of_triple triple) triple reachable_decls {
+                // Same fail-fast reasoning as `validate_no_unresolved_class_calls`
+                // just above, for the silent-"return Unit"-stub bug family --
+                // a reachable bodyless `#[native X]` def wired nowhere would
+                // otherwise compile to a stub only discovered as a runtime
+                // SIGSEGV in the resulting binary (`String_to_list`'s v25
+                // crash; see `validate_no_unwired_natives`'s own doc comment).
+                match gate_then (validate_no_unwired_natives reachable_decls)
+                (validate_no_monad_externs reachable_decls) {
                     Result.err e => do {
-                        if verbose then do { fail_line ("FAILED at stage: validate_native_target_availability (" ++ e ++ ")"); return unit } else return unit;
+                        if verbose then do { fail_line ("FAILED at stage: validate_no_unwired_natives/validate_no_monad_externs (" ++ e ++ ")"); return unit } else return unit;
                         return (Result.err e)
                     },
                     Result.ok _ =>
-                  match validate_export_defs (TargetKind.of_triple triple) triple reachable_decls {
-                    Result.err e => do {
-                        if verbose then do { fail_line ("FAILED at stage: validate_export_defs (" ++ e ++ ")"); return unit } else return unit;
-                        return (Result.err e)
-                    },
-                    Result.ok _ =>
-                  // And once more for the OTHER silent-placeholder path
-                  // codegen has: a struct literal that best-effort
-                  // elaboration never desugared still compiles to
-                  // `void_val` (see `validate_no_undesugared_struct_lits`).
-                  match gate_then
-                            (validate_no_undesugared_struct_lits reachable_decls)
-                            (validate_no_undesugared_elims reachable_decls) {
-                    Result.err e => do {
-                        if verbose then do { fail_line ("FAILED at stage: validate_no_undesugared_struct_lits/validate_no_undesugared_elims (" ++ e ++ ")"); return unit } else return unit;
-                          return (Result.err e)
-                    },
-                    Result.ok _ =>
-                      // And the collision gate: after qualification no two
-                      // SOURCE defs can share a symbol, so anything this
-                      // finds is a synthesized or runtime-symbol clash.
-                      match validate_no_colliding_def_symbols reachable_decls {
+                    match validate_native_target_availability (TargetKind.of_triple triple) triple reachable_decls {
                         Result.err e => do {
-                            if verbose then do { fail_line ("FAILED at stage: validate_no_colliding_def_symbols (" ++ e ++ ")"); return unit } else return unit;
+                            if verbose then do { fail_line ("FAILED at stage: validate_native_target_availability (" ++ e ++ ")"); return unit } else return unit;
                             return (Result.err e)
                         },
-                        Result.ok _ => do {
-                    // Stage 6: compile the reachable, infix-resolved declarations to LLVM IR
-                    stage verbose "emit LLVM IR";
-                    let t_llvm : I64 <- Bench.now;
-                    let mod_raw : LLVMModule := compile_db_module_with_debug reachable_decls source_path debug_files triple;
-                    // The thunks the `--export=` flags name (web only, the
-                    // same condition the roots used above).
-                    let shim_pairs : List (Pair String String) :=
-                        if String.beq (TargetKind.name (TargetKind.of_triple triple)) "web"
-                        then export_pairs dispatched_decls
-                        else List.empty;
-                    let mod_ : LLVMModule := add_export_shims shim_pairs mod_raw;
-                    if verbose then do {
-                        Bench.report_since "compile_db_module" t_llvm;
-                        return unit
-                    } else return unit;
+                        Result.ok _ =>
+                        match validate_export_defs (TargetKind.of_triple triple) triple reachable_decls {
+                            Result.err e => do {
+                                if verbose then do { fail_line ("FAILED at stage: validate_export_defs (" ++ e ++ ")"); return unit } else return unit;
+                                return (Result.err e)
+                            },
+                            Result.ok _ =>
+                            // And once more for the OTHER silent-placeholder path
+                            // codegen has: a struct literal that best-effort
+                            // elaboration never desugared still compiles to
+                            // `void_val` (see `validate_no_undesugared_struct_lits`).
+                            match gate_then
+                            (validate_no_undesugared_struct_lits reachable_decls)
+                            (validate_no_undesugared_elims reachable_decls) {
+                                Result.err e => do {
+                                    if verbose then do { fail_line ("FAILED at stage: validate_no_undesugared_struct_lits/validate_no_undesugared_elims (" ++ e ++ ")"); return unit } else return unit;
+                                    return (Result.err e)
+                                },
+                                Result.ok _ =>
+                                // And the collision gate: after qualification no two
+                                // SOURCE defs can share a symbol, so anything this
+                                // finds is a synthesized or runtime-symbol clash.
+                                match validate_no_colliding_def_symbols reachable_decls {
+                                    Result.err e => do {
+                                        if verbose then do { fail_line ("FAILED at stage: validate_no_colliding_def_symbols (" ++ e ++ ")"); return unit } else return unit;
+                                        return (Result.err e)
+                                    },
+                                    Result.ok _ => do {
+                                        // Stage 6: compile the reachable, infix-resolved declarations to LLVM IR
+                                        stage verbose "emit LLVM IR";
+                                        let t_llvm : I64 <- Bench.now;
+                                        let mod_raw : LLVMModule := compile_db_module_with_debug reachable_decls source_path debug_files triple;
+                                        // The thunks the `--export=` flags name (web only, the
+                                        // same condition the roots used above).
+                                        let shim_pairs : List (Pair String String) :=
+                                        if String.beq (TargetKind.name (TargetKind.of_triple triple)) "web"
+                                        then export_pairs dispatched_decls
+                                        else List.empty;
+                                        let mod_ : LLVMModule := add_export_shims shim_pairs mod_raw;
+                                        if verbose then do {
+                                            Bench.report_since "compile_db_module" t_llvm;
+                                            return unit
+                                        } else return unit;
 
-                    // Stage 7: the emitted module must not call a symbol
-                    // nothing defines. Nothing else in this pipeline
-                    // catches that -- it renders happily into the `.ll`
-                    // and dies at `llc` as `undefined value '@x'`, at the
-                    // END of a 15-25 minute self-compile, naming one
-                    // symbol and no call site.
-                    // Timed, and the enclosing total moved BELOW it: the
-                    // total used to print at the end of stage 6, so stage 7
-                    // fell outside both it and `link_ir`'s own spans -- part
-                    // of the 52189ms of a 275424ms self-compile (19%) that
-                    // was attributed nowhere. It walks every instruction in
-                    // the module, so it is not free by inspection.
-                    // Sub-timed in the two halves that could own it: the
-                    // total walk of every `LLVMValue` node in the module
-                    // (`collect_call_targets`), versus building the defined
-                    // set and probing it once per target. 47800ms of a
-                    // 266178ms compile (18%) is worth knowing the shape of
-                    // before deciding whether to make it cheap or to defer
-                    // it to llc's own failure path.
-                    //
-                    // `#[extern "c"]` targets need no special case here:
-                    // each one emits a `declare <ret> @<link>(...)` into
-                    // `module_decls`, and `build_defined_symbol_set` folds
-                    // those in (`add_decl_symbols`, `codegen/validate.mo`),
-                    // so an extern call is already a defined symbol.
-                    let t_closed : I64 <- Bench.now;
-                    let gate_targets : List String := collect_call_targets (module_funcs mod_);
-                    let t_gate_walk : I64 <- bench_step verbose "  gate: collect_call_targets" t_closed (List.length gate_targets);
-                    let gate_defined : HashMap String Bool := build_defined_symbol_set (module_funcs mod_) (module_decls mod_);
-                    let t_gate_set : I64 <- bench_step verbose "  gate: build_defined_symbol_set" t_gate_walk (gate_set_probe gate_defined);
-                    let gate_missing : List String := missing_call_targets gate_targets gate_defined;
-                    let _t_gate_probe : I64 <- bench_step verbose "  gate: missing_call_targets" t_gate_set (List.length gate_missing);
-                    let closed : Result String LLVMModule := gate_result gate_missing mod_;
-                    let _t_closed : I64 <- bench_step verbose "call-target gate" t_closed (call_target_gate_probe closed);
-                    if verbose then do {
-                        Bench.report_since "compile_loaded_modules_to_ir total" total_start;
-                        return unit
-                    } else return unit;
-                    return closed
+                                        // Stage 7: the emitted module must not call a symbol
+                                        // nothing defines. Nothing else in this pipeline
+                                        // catches that -- it renders happily into the `.ll`
+                                        // and dies at `llc` as `undefined value '@x'`, at the
+                                        // END of a 15-25 minute self-compile, naming one
+                                        // symbol and no call site.
+                                        // Timed, and the enclosing total moved BELOW it: the
+                                        // total used to print at the end of stage 6, so stage 7
+                                        // fell outside both it and `link_ir`'s own spans -- part
+                                        // of the 52189ms of a 275424ms self-compile (19%) that
+                                        // was attributed nowhere. It walks every instruction in
+                                        // the module, so it is not free by inspection.
+                                        // Sub-timed in the two halves that could own it: the
+                                        // total walk of every `LLVMValue` node in the module
+                                        // (`collect_call_targets`), versus building the defined
+                                        // set and probing it once per target. 47800ms of a
+                                        // 266178ms compile (18%) is worth knowing the shape of
+                                        // before deciding whether to make it cheap or to defer
+                                        // it to llc's own failure path.
+                                        //
+                                        // `#[extern "c"]` targets need no special case here:
+                                        // each one emits a `declare <ret> @<link>(...)` into
+                                        // `module_decls`, and `build_defined_symbol_set` folds
+                                        // those in (`add_decl_symbols`, `codegen/validate.mo`),
+                                        // so an extern call is already a defined symbol.
+                                        let t_closed : I64 <- Bench.now;
+                                        let gate_targets : List String := collect_call_targets (module_funcs mod_);
+                                        let t_gate_walk : I64 <- bench_step verbose "  gate: collect_call_targets" t_closed (List.length gate_targets);
+                                        let gate_defined : HashMap String Bool := build_defined_symbol_set (module_funcs mod_) (module_decls mod_);
+                                        let t_gate_set : I64 <- bench_step verbose "  gate: build_defined_symbol_set" t_gate_walk (gate_set_probe gate_defined);
+                                        let gate_missing : List String := missing_call_targets gate_targets gate_defined;
+                                        let _t_gate_probe : I64 <- bench_step verbose "  gate: missing_call_targets" t_gate_set (List.length gate_missing);
+                                        let closed : Result String LLVMModule := gate_result gate_missing mod_;
+                                        let _t_closed : I64 <- bench_step verbose "call-target gate" t_closed (call_target_gate_probe closed);
+                                        if verbose then do {
+                                            Bench.report_since "compile_loaded_modules_to_ir total" total_start;
+                                            return unit
+                                        } else return unit;
+                                        return closed
+                                    },
+                                },
+                            },
                         },
-                      },
-                  },
-                  },
-            },
-            },
-    }
-      },
+                    },
+                },
+            }
+        },
     }
 }
 

@@ -3,30 +3,30 @@
 use lib::decls {filter_reachable_decls}
 use lib::qualify {qtest_def, qualified_def_name_str, qualify_modules}
 use lang::types {
-  Attribute, Class, DebugName, Decl, Def, ModulePath, NamePath, Term, has_attr, i64, id, no_attrs, num, package_private,
-  show_identifier, struct_lit, use_bare,
+    Attribute, Class, DebugName, Decl, Def, ModulePath, NamePath, Term, has_attr, i64, id, no_attrs, num, package_private,
+    show_identifier, struct_lit, use_bare,
 }
 use lib::emit {
-  CompileInput, compile_db_module_with_debug, compile_input_of_modules, emit_type_head_is_io,
-  gate_then, validate_reachable_elaborated
+    CompileInput, compile_db_module_with_debug, compile_input_of_modules, emit_type_head_is_io,
+    gate_then, validate_reachable_elaborated
 }
 use lib::symbols {
-  bare_npath, module_path_to_str, name_path_to_str, symbol_identifier,
+    bare_npath, module_path_to_str, name_path_to_str, symbol_identifier,
 }
 use parsec::number {parse_i64}
 use lib::validate {
-  report_elab_stats, validate_no_colliding_def_symbols,
-  validate_no_undesugared_struct_lits, validate_no_undesugared_elims,
-  validate_no_unwired_natives
+    report_elab_stats, validate_no_colliding_def_symbols,
+    validate_no_undesugared_struct_lits, validate_no_undesugared_elims,
+    validate_no_unwired_natives
 }
 use llvm::ir {LLVMModule}
 use lang::module {
-  BestEffortElab, LoadedModules, ModuleInfo, best_effort_errors, get_loaded_all,
-  get_loaded_main, resolve_open_aliases_in_modules, try_parse_decls,
+    BestEffortElab, LoadedModules, ModuleInfo, best_effort_errors, get_loaded_all,
+    get_loaded_main, resolve_open_aliases_in_modules, try_parse_decls,
 }
 use lang::scope {
-  collect_classes, strip_all_leading_binders,
-  validate_no_unresolved_class_calls,
+    collect_classes, strip_all_leading_binders,
+    validate_no_unresolved_class_calls,
 }
 use std::list {List.intercalate, List.length}
 use std::log {fail_line}

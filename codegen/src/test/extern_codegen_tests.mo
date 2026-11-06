@@ -1,7 +1,7 @@
 use lang::types {
-  Term, TypeConstraint, binder_named, group, hole, lam, named, 
-  package_private, sort_n,
-  str, var,
+    Term, TypeConstraint, binder_named, group, hole, lam, named,
+    package_private, sort_n,
+    str, var,
 }
 use lang::module {}
 use llvm::ir {emit_module}

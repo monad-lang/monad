@@ -1,7 +1,7 @@
 use lang::types {
-  Def, Identifier, TypeConstraint, app, binder_named, empty_attrs, i64, lam, lit,
-  named, 
-  num, package_private, sort_n, var,
+    Def, Identifier, TypeConstraint, app, binder_named, empty_attrs, i64, lam, lit,
+    named,
+    num, package_private, sort_n, var,
 }
 use llvm::ir {emit_module}
 use lib::emit {check_contains, compile_db_decls_ir}

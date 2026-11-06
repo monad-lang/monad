@@ -15,20 +15,20 @@
 use llvm::strmap {str_map_empty, str_map_insert, str_map_lookup}
 use std::bench {Bench.now}
 use lang::types {
-  Attribute, Decl, Def, Identifier, LocalScope, ModulePath, NamePath, Scope, StructField,
-  TypeConstraint, binder_named, hole, lam, many, named, package_private, sentinel,
-  module_path_to_string_colon, show_identifier, show_module_path, show_name_path, use_items, use_name, var,
+    Attribute, Decl, Def, Identifier, LocalScope, ModulePath, NamePath, Scope, StructField,
+    TypeConstraint, binder_named, hole, lam, many, named, package_private, sentinel,
+    module_path_to_string_colon, show_identifier, show_module_path, show_name_path, use_items, use_name, var,
 }
 use lang::module {ModuleInfo, bench_step, best_effort_failed, elaborate_module_decls_reporting}
 use lang::scope {
-  OpenAlias, alias_map_empty, alias_map_insert, alias_map_lookup,
-  build_scope_from_decls, collect_open_aliases, modpath_eq, modpath_of, resolve_open_alias_decls,
+    OpenAlias, alias_map_empty, alias_map_insert, alias_map_lookup,
+    build_scope_from_decls, collect_open_aliases, modpath_eq, modpath_of, resolve_open_alias_decls,
 }
 use lib::free_names {collect_referenced_names, free_names_of_term}
 use lib::symbols {bare_modpath, bare_npath, symbol_identifier}
 use lang::name_text {unqualify_def_name}
 use lib::util {
-  join_semicolon_msgs, list_contains_str
+    join_semicolon_msgs, list_contains_str
 }
 use std::map {HashMap}
 use std::list {List.intercalate, List.length}
@@ -250,8 +250,8 @@ def resolve_owner (mpath : ModulePath) (own_aliases : List OpenAlias) (imports :
             List.cons e _ =>
                 Result.err (String.concat "module " (String.concat (module_path_to_string_colon mpath)
                     (String.concat " both declares `" (String.concat name
-                    (String.concat "` and imports it from " (String.concat (module_path_to_string_colon e)
-                    " -- drop one, they are not interchangeable")))))),
+                        (String.concat "` and imports it from " (String.concat (module_path_to_string_colon e)
+                            " -- drop one, they are not interchangeable")))))),
         }
     else match explicit {
         List.cons e erest =>
@@ -287,9 +287,9 @@ def resolve_owner (mpath : ModulePath) (own_aliases : List OpenAlias) (imports :
 def ambiguous_owner_msg (mpath : ModulePath) (name : String) (candidates : List ModulePath) : String :=
     String.concat "`" (String.concat name
         (String.concat "` is referenced from " (String.concat (module_path_to_string_colon mpath)
-        (String.concat " but declared in " (String.concat (join_modpaths candidates)
-        " -- add an explicit `use <module> {"
-        )))))
+            (String.concat " but declared in " (String.concat (join_modpaths candidates)
+                " -- add an explicit `use <module> {"
+            )))))
         ++ name ++ "}` to say which"
 
 #[partial]

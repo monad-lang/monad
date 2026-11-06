@@ -4,9 +4,9 @@
 // file stays in lang because it speaks Term.
 
 use lang::types {
-  Def, NamePath, app, binder_named, concrete, i64, id, lam, lit, named, num,
-  package_private,
-  sort, var,
+    Def, NamePath, app, binder_named, concrete, i64, id, lam, lit, named, num,
+    package_private,
+    sort, var,
 }
 use llvm::ir {emit_module}
 use lib::emit {check_contains, compile_db_decls_ir}

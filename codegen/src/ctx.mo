@@ -14,8 +14,8 @@
 use llvm::strmap {str_map_empty, str_map_insert, str_map_lookup}
 use std::list {List.length}
 use lang::types {
-  DebugName, Def, Identifier, Inductive, Location, ModulePath, Param, Struct, Term,
-  binder_is_explicit, binder_name, param_many, term_peel,
+    DebugName, Def, Identifier, Inductive, Location, ModulePath, Param, Struct, Term,
+    binder_is_explicit, binder_name, param_many, term_peel,
 }
 use llvm::ir {DbgLoc, LLVMInstruction, LLVMValue}
 use lib::symbols {def_symbol_name, extract_base_name, symbol_identifier}
