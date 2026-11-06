@@ -25,7 +25,7 @@ use llvm::target {TargetSpec, TargetPlan}
 use runtime {}
 use codegen::emit {compile_db_module_with_debug, compile_loaded_modules_to_ir_with_debug}
 use codegen::decls {collect_all_decls_from_modules, export_names}
-use lang::module {CheckDiagnostics, ElaboratedAndCache, collect_link_libs, collect_link_pkgs, get_loaded_all, ElaboratedModules, FileCheckAndCache, LoadedModules, ModuleInfo, ModuleInfoCache, bench_step, check_file_cached, check_module_with_scope_path, elaborate_loaded_modules, elaborate_loaded_modules_cached, elaborate_module_decls_best_effort, expand_check_paths, extract_directory, load_file_modules, load_module_with_info, module_name_from_path, module_info_cache_empty, resolve_runtime_src, try_parse_decls, try_parse_decls_strict}
+use lang::module {BatchCheckResult, CheckDiagnostics, ElaboratedAndCache, collect_link_libs, collect_link_pkgs, get_loaded_all, ElaboratedModules, FileCheckAndCache, FileCheckResult, LoadedModules, ModuleInfo, ModuleInfoCache, bench_step, check_file_cached, check_files_cached, check_module_with_scope_path, elaborate_loaded_modules, elaborate_loaded_modules_cached, elaborate_module_decls_best_effort, expand_check_paths, extract_directory, load_file_modules, load_module_with_info, module_name_from_path, module_info_cache_empty, resolve_runtime_src, try_parse_decls, try_parse_decls_strict}
 use lang::mote {
   Mote.discover, Mote.discover_config_target_dir, Mote.target_roots,
   Mote.discover, Mote.workspace_members, Mote.manifest_at,
@@ -1647,6 +1647,56 @@ struct CheckOptions {
     target_dir : String,
 }
 
+/// The precomputed result for `f`, from the run's one batched check.
+#[partial]
+def lookup_check_result (f : String) (results : List (Pair String FileCheckResult)) : Option FileCheckResult :=
+    match results {
+        List.empty => Option.none,
+        List.cons p rest =>
+            match p {
+                Pair.pair file result =>
+                    if String.beq file f then Option.some result else lookup_check_result f rest,
+            },
+    }
+
+/// The files this run must actually check: every file with no key and
+/// every file whose key has no stored entry. Cache hits are replayed in
+/// place by `run_check_loop` and are not part of the batch.
+#[partial]
+def planned_misses (plan : CachePlan) (files : List String) : IO (List String) :=
+    match files {
+        List.empty => IO.pure List.empty,
+        List.cons f rest => do {
+            let rest_misses <- planned_misses plan rest;
+            match Build.cache_plan_key plan f {
+                Option.none => IO.pure (List.cons f rest_misses),
+                Option.some key => do {
+                    let stored <- Build.check_entry_read (Build.cache_plan_root plan) key;
+                    match stored {
+                        Option.some _ => IO.pure rest_misses,
+                        Option.none => IO.pure (List.cons f rest_misses),
+                    }
+                },
+            }
+        },
+    }
+
+def empty_batch (cache : ModuleInfoCache) : BatchCheckResult :=
+    let out : BatchCheckResult := { results := List.empty, cache := cache } in
+    out
+
+/// `MONAD_CHECK_BATCH` is an escape hatch in the same shape as
+/// `MONAD_NO_CACHE`: any non-empty value turns the batched run off and
+/// restores the per-file path.
+#[partial]
+def check_batch_enabled : IO Bool := do {
+    let e <- IO.get_env "MONAD_CHECK_BATCH";
+    match e {
+        Option.none => IO.pure true,
+        Option.some v => IO.pure (String.is_empty v),
+    }
+}
+
 /// `checked`/`errors` accumulate across all files — errors are counted
 /// per-diagnostic (a file with 3 failing defs contributes 3), matching
 /// `monad-rs check`'s own error-tally convention. Every file gets an
@@ -1671,7 +1721,7 @@ struct CheckOptions {
 /// checked, nothing is recorded, and the output is byte-identical to what
 /// this command printed before any cache existed.
 #[partial]
-def run_check_loop (cache : ModuleInfoCache) (files : List String) (checked : I64) (errors : I64) (warns : I64) (opts : CheckOptions) (plan : CachePlan) : IO I64 :=
+def run_check_loop (cache : ModuleInfoCache) (files : List String) (checked : I64) (errors : I64) (warns : I64) (opts : CheckOptions) (plan : CachePlan) (batch : List (Pair String FileCheckResult)) : IO I64 :=
     match files {
         List.empty => do {
             let summary : String := I64.to_string checked ++ " file(s) checked, " ++ I64.to_string errors ++ " error(s)";
@@ -1699,7 +1749,7 @@ def run_check_loop (cache : ModuleInfoCache) (files : List String) (checked : I6
             match Build.cache_plan_key plan f {
                 // No key for this file (the plan is inactive, or its
                 // digest failed): check it, and record nothing.
-                Option.none => run_check_file cache f rest checked errors warns opts plan Option.none,
+                Option.none => run_check_file cache f rest checked errors warns opts plan Option.none batch,
                 Option.some key => do {
                     let stored <- Build.check_entry_read (Build.cache_plan_root plan) key;
                     match stored {
@@ -1710,10 +1760,10 @@ def run_check_loop (cache : ModuleInfoCache) (files : List String) (checked : I6
                             match p {
                                 Pair.pair tally block => do {
                                     println block;
-                                    run_check_loop cache rest (checked + 1) (errors + tally.errors) (warns + tally.warnings) opts plan
+                                    run_check_loop cache rest (checked + 1) (errors + tally.errors) (warns + tally.warnings) opts plan batch
                                 }
                             },
-                        Option.none => run_check_file cache f rest checked errors warns opts plan (Option.some key)
+                        Option.none => run_check_file cache f rest checked errors warns opts plan (Option.some key) batch
                     }
                 }
             }
@@ -1736,26 +1786,37 @@ def run_check_loop (cache : ModuleInfoCache) (files : List String) (checked : I6
 /// other mote fails). See `lang/module.mo`'s
 /// `check_file_cached`/`check_module_with_scope_classified`.
 #[partial]
-def run_check_file (cache : ModuleInfoCache) (f : String) (rest : List String) (checked : I64) (errors : I64) (warns : I64) (opts : CheckOptions) (plan : CachePlan) (key : Option String) : IO I64 := do {
-    let checked_and_cache <- check_file_cached cache f opts.verbose;
-    match checked_and_cache {
-        FileCheckAndCache.mk result updated_cache =>
-            match result {
-                FileCheckResult.mk path diags warnings => do {
-                    let block : String := Build.check_block path diags warnings;
-                    // `counted` is ERRORS ONLY -- warnings neither fail
-                    // the file nor feed the error total, so a replayed
-                    // hit and a fresh miss count the same file the same
-                    // way. The warning count is stored beside it so the
-                    // summary's total survives the hit.
-                    let counted : I64 := List.length diags;
-                    println block;
-                    let _rec <- Build.check_maybe_write plan key counted (List.length warnings) block;
-                    run_check_loop updated_cache rest (checked + 1) (errors + counted) (warns + List.length warnings) opts plan
-                }
+def run_check_file (cache : ModuleInfoCache) (f : String) (rest : List String) (checked : I64) (errors : I64) (warns : I64) (opts : CheckOptions) (plan : CachePlan) (key : Option String) (batch : List (Pair String FileCheckResult)) : IO I64 :=
+    match lookup_check_result f batch {
+        Option.some result => run_check_result cache result rest checked errors warns opts plan key batch,
+        Option.none => do {
+            let checked_and_cache <- check_file_cached cache f opts.verbose;
+            match checked_and_cache {
+                FileCheckAndCache.mk result updated_cache =>
+                    run_check_result updated_cache result rest checked errors warns opts plan key batch,
             }
+        },
     }
-}
+
+/// Record and print one file's result. The only place a `check` result is
+/// produced, replayed or not; a batched result and a per-file fallback
+/// both land here, so the two paths cannot print or store differently.
+#[partial]
+def run_check_result (cache : ModuleInfoCache) (result : FileCheckResult) (rest : List String) (checked : I64) (errors : I64) (warns : I64) (opts : CheckOptions) (plan : CachePlan) (key : Option String) (batch : List (Pair String FileCheckResult)) : IO I64 :=
+    match result {
+        FileCheckResult.mk path diags warnings => do {
+            let block : String := Build.check_block path diags warnings;
+            // `counted` is ERRORS ONLY -- warnings neither fail
+            // the file nor feed the error total, so a replayed
+            // hit and a fresh miss count the same file the same
+            // way. The warning count is stored beside it so the
+            // summary's total survives the hit.
+            let counted : I64 := List.length diags;
+            println block;
+            let _rec <- Build.check_maybe_write plan key counted (List.length warnings) block;
+            run_check_loop cache rest (checked + 1) (errors + counted) (warns + List.length warnings) opts plan batch
+        }
+    }
 
 /// Parse + typecheck each file with `lang.module.check_file_cached` — no
 /// execution, no compilation. See lang/module.mo's `check_file_cached`/
@@ -2263,8 +2324,13 @@ def run_check_body (files : List String) (opts : CheckOptions) : IO I64 := do {
             // already covers.
             let plan <- Build.check_plan expanded target_dir (requested && Bool.not opts.verbose);
             let _prep <- announce_check_cache plan;
-            let cache : ModuleInfoCache := module_info_cache_empty;
-            run_check_loop cache expanded 0 0 0 opts plan
+            let misses <- planned_misses plan expanded;
+            let batch_enabled <- check_batch_enabled;
+            let batch <-
+                if batch_enabled && Bool.not (List.is_empty misses)
+                then check_files_cached module_info_cache_empty misses opts.verbose
+                else IO.pure (empty_batch module_info_cache_empty);
+            run_check_loop batch.cache expanded 0 0 0 opts plan batch.results
         },
         // Nothing named, inside no mote: say why, and fail. The usage
         // screen with its exit 0 was the behaviour before any of this existed,

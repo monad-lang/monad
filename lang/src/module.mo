@@ -1423,6 +1423,34 @@ def list_contains_module_info (xs : List ModuleInfo) (x : ModulePath) : Bool :=
             }
     }
 
+/// Union `incoming` into `acc`, preserving `acc`'s order and appending
+/// each not-yet-present module at the end. A grouped batch uses this to
+/// fold the targets' per-file closures into the group's one module set.
+#[partial]
+def union_modules (incoming : List ModuleInfo) (acc : List ModuleInfo) : List ModuleInfo :=
+    match incoming {
+        List.empty => acc,
+        List.cons m rest =>
+            let acc2 : List ModuleInfo :=
+                if list_contains_module_info acc m.path
+                then acc
+                else List.append acc [m] in
+            union_modules rest acc2
+    }
+
+/// The `ModuleInfo` for `mp`, or `none` when this loaded set does not
+/// contain it. The batch `check` uses this to pull each target's own
+/// (post-expansion) decl list out of the one shared load.
+#[partial]
+def find_module_info (mods : List ModuleInfo) (mp : ModulePath) : Option ModuleInfo :=
+    match mods {
+        List.empty => Option.none,
+        List.cons m rest =>
+            if modpath_eq m.path mp
+            then Option.some m
+            else find_module_info rest mp
+    }
+
 /// Walk a module's transitive `use`-dependency closure AND load each
 /// reached module with its OWN resolved directory as the base, returning
 /// the loaded `ModuleInfo`s directly. This replaces the old two-step
@@ -5781,6 +5809,29 @@ def flatten_visible_module_decl_groups (target : ModulePath) (modules : List Mod
             flatten_visible_module_decl_groups target rest (List.cons (DeclGroup.mk mod_.path visible) acc),
     }
 
+/// `flatten_visible_module_decl_groups` for a BATCH `check`: every module
+/// named in `targets` is a target in this run, so its own `priv` decls are
+/// kept; every other module's `priv` decls are dropped exactly as in the
+/// single-target version.
+///
+/// The batch elaboration builds ONE scope over this union. Each target's
+/// per-file gates (`gate_loaded_modules`, run per target before this) are
+/// what keep a target from reaching another target's `priv` name: the
+/// scope is wide, but the load-time visibility gate is still per target.
+#[partial]
+def flatten_visible_module_decl_groups_for_targets (targets : List ModulePath)
+    (modules : List ModuleInfo) (acc : List DeclGroup) : List DeclGroup :=
+    match modules {
+        List.empty => acc,
+        List.cons mod_ rest =>
+            let visible : List Decl :=
+                if list_contains targets mod_.path
+                then mod_.decl_list
+                else drop_priv_decls mod_.decl_list in
+            flatten_visible_module_decl_groups_for_targets targets rest
+                (List.cons (DeclGroup.mk mod_.path visible) acc),
+    }
+
 #[partial]
 def drop_priv_decls (decls : List Decl) : List Decl :=
     match decls {
@@ -6425,10 +6476,27 @@ pub def elaborate_loaded_modules_pure
     (loaded : LoadedModules) (check_deps : Bool) : Result String ElaboratedModules :=
     let target_module : ModuleInfo := get_loaded_main loaded in
     let target_path : ModulePath := target_module.path in
+    elaborate_loaded_modules_pure_for_targets loaded [target_path] check_deps
+
+/// `elaborate_loaded_modules_pure` with every TARGET of a batch named.
+///
+/// The only difference from the single-target half is the visible
+/// flatten: every named target keeps its own `priv` decls, every other
+/// module's are dropped. Everything else -- the infix/promotion/dict-param
+/// passes, the one scope, the whole-graph expansion, `known_names` -- is
+/// built once over the union, which is what lets a multi-file `check`
+/// stop re-elaborating the closure per file. The expansion's own
+/// "target" is still the first loaded module (`get_loaded_main`); a batch
+/// caller checks the other targets against the resulting shared scope.
+pub def elaborate_loaded_modules_pure_for_targets
+    (loaded : LoadedModules) (targets : List ModulePath) (check_deps : Bool)
+    : Result String ElaboratedModules :=
+    let target_module : ModuleInfo := get_loaded_main loaded in
+    let target_path : ModulePath := target_module.path in
     let decl_groups : List DeclGroup :=
         if check_deps
         then flatten_module_decl_groups (get_loaded_all loaded) List.empty
-        else flatten_visible_module_decl_groups target_path (get_loaded_all loaded) List.empty in
+        else flatten_visible_module_decl_groups_for_targets targets (get_loaded_all loaded) List.empty in
     let all_decls : List Decl := decl_groups_flatten decl_groups in
     let infixes : List Infix := collect_infixes all_decls in
     let resolved : List DeclGroup := resolve_infix_decl_groups infixes decl_groups in
@@ -6468,6 +6536,498 @@ pub def elaborate_loaded_modules_pure
             let elaborated : ElaboratedModules :=
                 { scope := scope2, target_decls := target_decls, elaborated_decls := dict_paramed2, loaded := loaded2 } in
             Result.ok elaborated,
+    }
+
+// --- Batched check: one load + one elaboration per run -----------------
+//
+// `check_file_cached` reloads and re-elaborates the whole closure for every
+// file, which is O(files x closure) and is why a corpus `check` takes
+// minutes. This run-level entry loads each target's closure through the
+// shared `ModuleInfoCache`, builds ONE union, gates each target, elaborates
+// the union once, and then checks each target's own decls against the
+// shared scope. It is the `check` analogue of build's one-pass front end.
+//
+// Two conservative fallbacks keep it honest: a target whose gate fails or
+// that declares a macro/decl-gen beyond the first target falls back to the
+// old per-file path for the whole run, so an order-sensitive or
+// macro-expanding batch never silently changes an answer.
+
+pub struct BatchCheckResult {
+    results : List (Pair String FileCheckResult),
+    cache : ModuleInfoCache,
+}
+
+struct LoadedBatch {
+    loaded : LoadedModules,
+    targets : List (Pair String ModulePath),
+    cache : ModuleInfoCache,
+}
+
+struct LoadedTarget {
+    file : String,
+    loaded : LoadedModules,
+    /// The mote root (`mote.toml`'s directory), or the file's own
+    /// directory when it is not inside a mote. Files in one mote share
+    /// one batch and therefore one scope; two motes never do.
+    group : String,
+}
+
+struct LoadedTargets {
+    targets : List LoadedTarget,
+    cache : ModuleInfoCache,
+}
+
+/// Load every target's closure once through the shared parse cache and
+/// tag it with its mote root.
+#[partial]
+def load_targets_go (files : List String) (cache : ModuleInfoCache) (verbose : Bool)
+    (acc : List LoadedTarget) : IO (Result String LoadedTargets) :=
+    match files {
+        List.empty =>
+            let out : LoadedTargets := { targets := acc, cache := cache } in
+            IO.pure (Result.ok out),
+        List.cons f rest => do {
+            let lc <- load_file_modules_cached_go f Option.none cache verbose;
+            match lc.loaded {
+                Result.err e => IO.pure (Result.err e),
+                Result.ok lm => do {
+                    let man <- Mote.discover (extract_directory f);
+                    let key : String :=
+                        match man {
+                            Option.some m => m.dir,
+                            Option.none => extract_directory f,
+                        };
+                    let target : LoadedTarget := { file := f, loaded := lm, group := key };
+                    load_targets_go rest lc.cache verbose (List.append acc [target])
+                },
+            }
+        },
+    }
+
+/// Split `rest` into the targets whose group equals `key` and the rest,
+/// preserving input order in both halves.
+#[partial]
+def split_group (key : String) (rest : List LoadedTarget)
+    (group : List LoadedTarget) (others : List LoadedTarget)
+    : Pair (List LoadedTarget) (List LoadedTarget) :=
+    match rest {
+        List.empty => Pair.pair (List.reverse group) (List.reverse others),
+        List.cons t tail =>
+            if String.beq t.group key
+            then split_group key tail (List.cons t group) others
+            else split_group key tail group (List.cons t others),
+    }
+
+#[partial]
+def batch_pair_file (pt : Pair String ModulePath) : String :=
+    match pt { Pair.pair f _p => f }
+
+#[partial]
+def batch_pair_path (pt : Pair String ModulePath) : ModulePath :=
+    match pt { Pair.pair _f p => p }
+
+#[partial]
+def batch_target_paths (targets : List (Pair String ModulePath)) : List ModulePath :=
+    match targets {
+        List.empty => List.empty,
+        List.cons pt rest =>
+            match pt {
+                Pair.pair _f mp => List.cons mp (batch_target_paths rest),
+            },
+    }
+
+/// The per-file gates, run once per target over a `LoadedModules` view
+/// whose main is that target. The returned loaded set is unchanged; this
+/// exists only to decide whether the batch may run.
+#[partial]
+def decls_declare_macros (decls : List Decl) : Bool :=
+    Bool.not (List.is_empty (build_decl_gen_registry decls))
+        || Bool.not (List.is_empty (build_term_macro_registry decls))
+
+#[partial]
+def insert_names (names : List Identifier) (seen : HashMap String Bool)
+    : Option (HashMap String Bool) :=
+    match names {
+        List.empty => Option.some seen,
+        List.cons n rest =>
+            let key : NamePath := NamePath.mk (List.cons n List.empty) in
+            match npath_map_lookup key seen {
+                Option.some _ => Option.none,
+                Option.none => insert_names rest (npath_map_insert key true seen),
+            },
+    }
+
+#[partial]
+def ctor_names (ctors : List InductConstructor) : List Identifier :=
+    match ctors {
+        List.empty => List.empty,
+        List.cons c rest =>
+            match c {
+                InductConstructor.mk n _params _typ =>
+                    List.cons (Identifier.id (show_name_path n)) (ctor_names rest),
+            },
+    }
+
+#[partial]
+def method_names (methods : List ClassDef) : List Identifier :=
+    match methods {
+        List.empty => List.empty,
+        List.cons m rest =>
+            match m {
+                ClassDef.mk n _typ _default => List.cons n (method_names rest),
+            },
+    }
+
+/// Every bare name a declaration introduces: its own name plus, for an
+/// inductive, every constructor, and for a class, every method. A shared
+/// scope resolves constructor and method names by bare name too, so the
+/// collision gate must see them. Struct `mk` is deliberately absent: it is
+/// the one universally shared constructor and is owner-disambiguated.
+#[partial]
+def decl_all_names (d : Decl) : List Identifier :=
+    let own : List Identifier := names_of_decls (List.cons d List.empty) in
+    match d {
+        Decl.inductive_d i =>
+            match i {
+                Inductive.mk _name _params _typ ctors _attrs _vis =>
+                    List.append own (ctor_names ctors),
+            },
+        Decl.class_d c =>
+            match c {
+                Class.mk _name _params _constraints methods _vis _sort =>
+                    List.append own (method_names methods),
+            },
+        _ => own,
+    }
+
+#[partial]
+def insert_decl_names (decls : List Decl) (seen : HashMap String Bool)
+    : Option (HashMap String Bool) :=
+    match decls {
+        List.empty => Option.some seen,
+        List.cons d rest =>
+            match insert_names (decl_all_names d) seen {
+                Option.none => Option.none,
+                Option.some seen2 => insert_decl_names rest seen2,
+            },
+    }
+
+#[partial]
+def collect_module_names (mods : List ModuleInfo) (seen : HashMap String Bool)
+    : Option (HashMap String Bool) :=
+    match mods {
+        List.empty => Option.some seen,
+        List.cons m rest =>
+            match insert_decl_names m.decl_list seen {
+                Option.none => Option.none,
+                Option.some seen2 => collect_module_names rest seen2,
+            },
+    }
+
+/// Whether two modules in this set declare the same bare name anywhere
+/// (def, type, constructor, class, method). A shared scope cannot answer
+/// such a name per module before the canonical-key work lands, so the
+/// batch falls back to the per-file path for the whole group: same
+/// diagnostics, no collision ever resolved by load order.
+#[partial]
+def group_has_name_collisions (mods : List ModuleInfo) : Bool :=
+    match collect_module_names mods (npath_map_empty) {
+        Option.some _ => false,
+        Option.none => true,
+    }
+
+#[partial]
+def target_has_macros (t : LoadedTarget) : Bool :=
+    let m : ModuleInfo := get_loaded_main t.loaded in
+    decls_declare_macros m.decl_list
+
+/// Split a group into the targets the batch may elaborate together and the
+/// ones that declare a macro/decl-gen. The latter are checked through the
+/// ordinary per-file path: their expansion registers macros, and a shared
+/// registry would make priority target-dependent. Excluding just those,
+/// rather than the whole group, keeps a corpus with two macro snippets from
+/// disabling the batch for every other file.
+#[partial]
+def split_macro_targets (targets : List LoadedTarget)
+    (batchable : List LoadedTarget) (macro_targets : List LoadedTarget)
+    : Pair (List LoadedTarget) (List LoadedTarget) :=
+    match targets {
+        List.empty => Pair.pair (List.reverse batchable) (List.reverse macro_targets),
+        List.cons t rest =>
+            if target_has_macros t
+            then split_macro_targets rest batchable (List.cons t macro_targets)
+            else split_macro_targets rest (List.cons t batchable) macro_targets,
+    }
+
+#[partial]
+def elaborated_scope_data (em : ElaboratedModules) : ScopeData :=
+    match em {
+        ElaboratedModules.mk sc _td _ed _ld =>
+            match sc {
+                Scope.mk _mid sd _parent _inc => sd,
+            },
+    }
+
+#[partial]
+def finish_batch (em : ElaboratedModules) (targets : List (Pair String ModulePath))
+    (cache : ModuleInfoCache) (verbose : Bool) : IO BatchCheckResult :=
+    let scope_data : ScopeData := elaborated_scope_data em in
+    let infixes : List Infix := collect_infixes em.elaborated_decls in
+    let known : List Identifier := names_of_decls em.elaborated_decls in
+    finish_batch_go em targets (get_loaded_all em.loaded) scope_data infixes known cache verbose List.empty
+
+#[partial]
+def finish_batch_go (em : ElaboratedModules) (targets : List (Pair String ModulePath))
+    (all : List ModuleInfo) (scope_data : ScopeData) (infixes : List Infix)
+    (known : List Identifier) (cache : ModuleInfoCache) (verbose : Bool)
+    (acc : List (Pair String FileCheckResult)) : IO BatchCheckResult :=
+    match targets {
+        List.empty =>
+            let out : BatchCheckResult := { results := acc, cache := cache } in
+            IO.pure out,
+        List.cons pt rest => finish_batch_one em pt rest all scope_data infixes known cache verbose acc,
+    }
+
+#[partial]
+def finish_batch_one (em : ElaboratedModules) (pt : Pair String ModulePath)
+    (rest : List (Pair String ModulePath)) (all : List ModuleInfo)
+    (scope_data : ScopeData) (infixes : List Infix) (known : List Identifier)
+    (cache : ModuleInfoCache) (verbose : Bool)
+    (acc : List (Pair String FileCheckResult)) : IO BatchCheckResult := do {
+    let file : String := batch_pair_file pt;
+    let mp : ModulePath := batch_pair_path pt;
+    let empty_locs : LocalScope := { vars := List.empty, parent := Option.none };
+    let result <- check_one_batch_target file mp all scope_data infixes known empty_locs verbose;
+    finish_batch_go em rest all scope_data infixes known cache verbose
+        (List.append acc [Pair.pair file result])
+}
+
+#[partial]
+def check_one_batch_target (file : String) (mp : ModulePath) (all : List ModuleInfo)
+    (scope_data : ScopeData) (infixes : List Infix) (known : List Identifier)
+    (empty_locs : LocalScope) (verbose : Bool) : IO FileCheckResult :=
+    match find_module_info all mp {
+        Option.none =>
+            let diags : List String := ["error: batch check: target module not found: " ++ file] in
+            let r : FileCheckResult := { path := file, diagnostics := diags, warnings := List.empty } in
+            IO.pure r,
+        Option.some info => do {
+            let raw : List Decl := info.decl_list;
+            let decls : List Decl :=
+                elaborate_def_typs
+                    (add_constraint_dict_params_decls
+                        (promote_instance_defs (resolve_infix_decls infixes raw)))
+                    known;
+            let scope : Scope :=
+                { module_id := mp, scope := scope_data, parent := Option.none, incomplete_match_ok := false };
+            let mode <- Mote.affine_mode_of_path file;
+            let checked <- check_module_with_scope_classified mode scope decls empty_locs (Option.some file) verbose;
+            let r : FileCheckResult :=
+                { path := file,
+                    diagnostics := CheckDiagnostics.errors checked,
+                    warnings := CheckDiagnostics.warnings checked };
+            IO.pure r
+        },
+    }
+
+#[partial]
+def fallback_check_files (cache : ModuleInfoCache) (files : List String)
+    (verbose : Bool) : IO BatchCheckResult :=
+    fallback_check_files_go cache files verbose List.empty
+
+#[partial]
+def fallback_check_files_go (cache : ModuleInfoCache) (files : List String)
+    (verbose : Bool) (acc : List (Pair String FileCheckResult)) : IO BatchCheckResult :=
+    match files {
+        List.empty =>
+            let out : BatchCheckResult := { results := acc, cache := cache } in
+            IO.pure out,
+        List.cons f rest => do {
+            let cc <- check_file_cached cache f verbose;
+            match cc {
+                FileCheckAndCache.mk result cache2 =>
+                    fallback_check_files_go cache2 rest verbose
+                        (List.append acc [Pair.pair f result]),
+            }
+        },
+    }
+
+#[partial]
+def check_batch_loaded (batch : LoadedBatch) (files : List String)
+    (verbose : Bool) : IO BatchCheckResult :=
+    match elaborate_loaded_modules_pure_for_targets batch.loaded (batch_target_paths batch.targets) false {
+        Result.err _e => fallback_check_files batch.cache files verbose,
+        Result.ok em => finish_batch em batch.targets batch.cache verbose,
+    }
+
+#[partial]
+def target_pair (t : LoadedTarget) : Pair String ModulePath :=
+    let m : ModuleInfo := get_loaded_main t.loaded in
+    Pair.pair t.file m.path
+
+#[partial]
+def group_target_pairs (group : List LoadedTarget) : List (Pair String ModulePath) :=
+    match group {
+        List.empty => List.empty,
+        List.cons t rest => List.cons (target_pair t) (group_target_pairs rest),
+    }
+
+#[partial]
+def group_files (group : List LoadedTarget) : List String :=
+    match group {
+        List.empty => List.empty,
+        List.cons t rest => List.cons t.file (group_files rest),
+    }
+
+#[partial]
+def group_modules_go (group : List LoadedTarget) (acc : List ModuleInfo) : List ModuleInfo :=
+    match group {
+        List.empty => acc,
+        List.cons t rest =>
+            group_modules_go rest (union_modules (get_loaded_all t.loaded) acc),
+    }
+
+/// The per-file gates, each against that target's OWN closure -- the same
+/// loader view the per-file path used. Running them against the group's
+/// union instead would rebuild the use-completeness index over every
+/// module for every target, which is the one cost this batch must not
+/// reintroduce.
+#[partial]
+def gate_group_targets (group : List LoadedTarget) : IO (Option String) :=
+    match group {
+        List.empty => IO.pure Option.none,
+        List.cons t rest => do {
+            let g <- gate_loaded_modules Option.none (Result.ok t.loaded);
+            match g {
+                Result.err e => IO.pure (Option.some e),
+                Result.ok _ => gate_group_targets rest,
+            }
+        },
+    }
+
+#[partial]
+def check_batch_group (main_target : LoadedTarget) (group : List LoadedTarget)
+    (all : List ModuleInfo) (cache : ModuleInfoCache) (verbose : Bool)
+    : IO BatchCheckResult := do {
+    let main : ModuleInfo := get_loaded_main main_target.loaded;
+    let loaded : LoadedModules := LoadedModules.mk main all;
+    let target_pairs : List (Pair String ModulePath) := group_target_pairs group;
+    let files : List String := group_files group;
+    let batch : LoadedBatch := { loaded := loaded, targets := target_pairs, cache := cache };
+    check_batch_loaded batch files verbose
+}
+
+#[partial]
+def fallback_group (group : List LoadedTarget) (cache : ModuleInfoCache)
+    (acc : List (Pair String FileCheckResult))
+    (pending_rest : List LoadedTarget) (verbose : Bool) : IO BatchCheckResult := do {
+    let result <- fallback_check_files cache (group_files group) verbose;
+    check_groups_go pending_rest result.cache verbose (List.append acc result.results)
+}
+
+#[partial]
+def check_one_group (group : List LoadedTarget)
+    (cache : ModuleInfoCache) (verbose : Bool)
+    (acc : List (Pair String FileCheckResult))
+    (pending_rest : List LoadedTarget) : IO BatchCheckResult := do {
+    let split : Pair (List LoadedTarget) (List LoadedTarget) :=
+        split_macro_targets group List.empty List.empty;
+    match split {
+        Pair.pair batchable macros =>
+            match batchable {
+                List.empty => fallback_group group cache acc pending_rest verbose,
+                List.cons main_target batchable_rest => do {
+                    let batchable_group : List LoadedTarget := List.cons main_target batchable_rest;
+                    let all : List ModuleInfo := group_modules_go batchable_group List.empty;
+                    if group_has_name_collisions all
+                    then fallback_group group cache acc pending_rest verbose
+                    else do {
+                        let gate_err <- gate_group_targets batchable_group;
+                        match gate_err {
+                            Option.some _e => fallback_group group cache acc pending_rest verbose,
+                            Option.none => do {
+                                let bres <- check_batch_group main_target batchable_group all cache verbose;
+                                let mres <- fallback_check_files bres.cache (group_files macros) verbose;
+                                check_groups_go pending_rest mres.cache verbose
+                                    (List.append (List.append acc bres.results) mres.results)
+                            },
+                        }
+                    }
+                },
+            },
+    }
+}
+
+#[partial]
+def check_groups_go (pending : List LoadedTarget)
+    (cache : ModuleInfoCache) (verbose : Bool)
+    (acc : List (Pair String FileCheckResult)) : IO BatchCheckResult :=
+    match pending {
+        List.empty =>
+            let out : BatchCheckResult := { results := acc, cache := cache } in
+            IO.pure out,
+        List.cons first rest =>
+            let split : Pair (List LoadedTarget) (List LoadedTarget) :=
+                split_group first.group rest List.empty List.empty in
+            match split {
+                Pair.pair group others =>
+                    let group2 : List LoadedTarget := List.cons first group in
+                    check_one_group group2 cache verbose acc others,
+            },
+    }
+
+/// Check a whole run's files with one closure load and one elaboration
+/// per distinct closure. Results are looked up by path, so grouping order
+/// does not reach the caller; a load/gate/macro failure falls back to the
+/// per-file path for that group, so the answer is the same either way.
+#[partial]
+pub def check_files_cached (cache : ModuleInfoCache) (files : List String)
+    (verbose : Bool) : IO BatchCheckResult := do {
+    let loaded <- load_targets_go files cache verbose List.empty;
+    match loaded {
+        Result.err _e => fallback_check_files cache files verbose,
+        Result.ok lt => check_groups_go lt.targets lt.cache verbose List.empty,
+    }
+}
+
+#[test]
+def test_flatten_for_targets_keeps_a_targets_priv : Bool :=
+    let targets : List ModulePath :=
+        List.cons (ModulePath.mk (List.cons (Identifier.id "Owner") List.empty)) List.empty in
+    let groups : List DeclGroup :=
+        flatten_visible_module_decl_groups_for_targets targets
+            (List.cons priv_module_info List.empty) List.empty in
+    let names : List String :=
+        List.map (fn (d : Decl) => show_name_path (Decl.to_name d)) (decl_groups_flatten groups) in
+    List.any (fn (n : String) => String.beq n "hidden") names
+
+#[partial]
+def dummy_loaded_target (name : String) (group_key : String) : LoadedTarget :=
+    let mp : ModulePath :=
+        ModulePath.mk (List.cons (Identifier.id name) List.empty) in
+    let file_name : String := String.concat name ".mo" in
+    let mi : ModuleInfo := ModuleInfo.mk mp file_name List.empty in
+    let lm : LoadedModules := LoadedModules.mk mi (List.cons mi List.empty) in
+    let t : LoadedTarget := { file := file_name, loaded := lm, group := group_key } in
+    t
+
+#[test]
+def test_split_group_by_mote_preserves_order : Bool :=
+    let b := dummy_loaded_target "b" "lang" in
+    let c := dummy_loaded_target "c" "init" in
+    let split : Pair (List LoadedTarget) (List LoadedTarget) :=
+        split_group "lang" (List.cons b (List.cons c List.empty)) List.empty List.empty in
+    match split {
+        Pair.pair group others =>
+            match group {
+                List.cons g rest =>
+                    String.beq g.file "b.mo" && List.is_empty rest
+                        && (match others {
+                            List.cons o orest => String.beq o.file "c.mo" && List.is_empty orest,
+                            List.empty => false,
+                        }),
+                List.empty => false,
+            },
     }
 
 /// The three pre-elaboration gates the compiled pipeline runs over a
