@@ -5081,6 +5081,27 @@ def nth_llvm_type (xs : List LLVMType) (idx : I64) : LLVMType :=
 /// e.g. `double` for `sin`) via `typed` so `show_args_typed` emits
 /// `call double @sin(double %t3)` — a bare `var_` would hardcode `i64`
 /// and `llc` would reject the mismatch.
+/// The one-instruction cast tail shared by every ABI arm below: mint a
+/// temp, assign it the already-built cast value, and hand back the value
+/// (untyped -- the wrapper's uniform i64 word) plus the instruction.
+#[partial]
+def emit_cast_var (c : CodegenCtx) (cast_val : LLVMValue) : CtxInstrsVal :=
+    match fresh_temp c {
+        CtxStrPair.mk ctx1 temp =>
+            let cast_instr := LLVMInstruction.assign temp cast_val in
+            CtxInstrsVal.mk ctx1 (List.cons cast_instr List.empty) (LLVMValue.var_ temp),
+    }
+
+/// `emit_cast_var`'s typed sibling: the same instruction, but the value
+/// carries `ty` (the ABI's true type, not the wrapper's i64 word).
+#[partial]
+def emit_cast_typed (c : CodegenCtx) (cast_val : LLVMValue) (ty : LLVMType) : CtxInstrsVal :=
+    match fresh_temp c {
+        CtxStrPair.mk ctx1 temp =>
+            let cast_instr := LLVMInstruction.assign temp cast_val in
+            CtxInstrsVal.mk ctx1 (List.cons cast_instr List.empty) (LLVMValue.typed (LLVMValue.var_ temp) ty),
+    }
+
 #[partial]
 def emit_extern_param_cast (c : CodegenCtx) (param_val : LLVMValue) (wrapper_ty : LLVMType) (true_ty : LLVMType) : CtxInstrsVal :=
     match true_ty {
@@ -5097,18 +5118,8 @@ def emit_extern_param_cast (c : CodegenCtx) (param_val : LLVMValue) (wrapper_ty 
         LLVMType.i32_ => emit_trunc_param c param_val wrapper_ty true_ty,
         LLVMType.i8_ => emit_trunc_param c param_val wrapper_ty true_ty,
         LLVMType.i1_ => emit_trunc_param c param_val wrapper_ty true_ty,
-        LLVMType.ptr _ =>
-            match fresh_temp c {
-                CtxStrPair.mk ctx1 temp =>
-                    let cast_instr := LLVMInstruction.assign temp (LLVMValue.inttoptr param_val wrapper_ty true_ty) in
-                    CtxInstrsVal.mk ctx1 (List.cons cast_instr List.empty) (LLVMValue.typed (LLVMValue.var_ temp) true_ty),
-            },
-        _ =>
-            match fresh_temp c {
-                CtxStrPair.mk ctx1 temp =>
-                    let cast_instr := LLVMInstruction.assign temp (LLVMValue.bitcast param_val wrapper_ty true_ty) in
-                    CtxInstrsVal.mk ctx1 (List.cons cast_instr List.empty) (LLVMValue.typed (LLVMValue.var_ temp) true_ty),
-            },
+        LLVMType.ptr _ => emit_cast_typed c (LLVMValue.inttoptr param_val wrapper_ty true_ty) true_ty,
+        _ => emit_cast_typed c (LLVMValue.bitcast param_val wrapper_ty true_ty) true_ty,
     }
 
 /// `emit_extern_param_cast`'s one-step narrow-int arm — `trunc` picks up
@@ -5116,11 +5127,7 @@ def emit_extern_param_cast (c : CodegenCtx) (param_val : LLVMValue) (wrapper_ty 
 /// textual casts carry the source type explicitly.)
 #[partial]
 def emit_trunc_param (c : CodegenCtx) (param_val : LLVMValue) (wrapper_ty : LLVMType) (true_ty : LLVMType) : CtxInstrsVal :=
-    match fresh_temp c {
-        CtxStrPair.mk ctx1 temp =>
-            let cast_instr := LLVMInstruction.assign temp (LLVMValue.trunc param_val wrapper_ty true_ty) in
-            CtxInstrsVal.mk ctx1 (List.cons cast_instr List.empty) (LLVMValue.typed (LLVMValue.var_ temp) true_ty),
-    }
+    emit_cast_typed c (LLVMValue.trunc param_val wrapper_ty true_ty) true_ty
 
 /// Emits the cast chain widening the extern call's raw result (typed as
 /// the extern's `ret_ty`, e.g. `i32` for `puts`, `f64` for `sin`) back to
@@ -5141,36 +5148,16 @@ def emit_trunc_param (c : CodegenCtx) (param_val : LLVMValue) (wrapper_ty : LLVM
 #[partial]
 def emit_extern_return_cast (c : CodegenCtx) (val : LLVMValue) (ret_ty : LLVMType) : CtxInstrsVal :=
     match ret_ty {
-        LLVMType.i64_ =>
-            match fresh_temp c {
-                CtxStrPair.mk ctx1 temp =>
-                    let cast_instr := LLVMInstruction.assign temp (LLVMValue.bitcast val ret_ty LLVMType.i64_) in
-                    CtxInstrsVal.mk ctx1 (List.cons cast_instr List.empty) (LLVMValue.var_ temp),
-            },
+        LLVMType.i64_ => emit_cast_var c (LLVMValue.bitcast val ret_ty LLVMType.i64_),
         // The word arm: a C function returning a pointer-sized value
         // already IS the wrapper's word, so it takes the same bitcast the
         // i64_ arm does -- and on wasm32 the word is i32, which `ret_ty`
         // itself now carries.
-        LLVMType.word =>
-            match fresh_temp c {
-                CtxStrPair.mk ctx1 temp =>
-                    let cast_instr := LLVMInstruction.assign temp (LLVMValue.bitcast val ret_ty LLVMType.word) in
-                    CtxInstrsVal.mk ctx1 (List.cons cast_instr List.empty) (LLVMValue.var_ temp),
-            },
+        LLVMType.word => emit_cast_var c (LLVMValue.bitcast val ret_ty LLVMType.word),
         LLVMType.i32_ => emit_sext_return c val ret_ty,
         LLVMType.i8_ => emit_sext_return c val ret_ty,
-        LLVMType.i1_ =>
-            match fresh_temp c {
-                CtxStrPair.mk ctx1 temp =>
-                    let cast_instr := LLVMInstruction.assign temp (LLVMValue.zext val ret_ty LLVMType.i64_) in
-                    CtxInstrsVal.mk ctx1 (List.cons cast_instr List.empty) (LLVMValue.var_ temp),
-            },
-        LLVMType.f64_ =>
-            match fresh_temp c {
-                CtxStrPair.mk ctx1 temp =>
-                    let cast_instr := LLVMInstruction.assign temp (LLVMValue.bitcast val ret_ty LLVMType.i64_) in
-                    CtxInstrsVal.mk ctx1 (List.cons cast_instr List.empty) (LLVMValue.var_ temp),
-            },
+        LLVMType.i1_ => emit_cast_var c (LLVMValue.zext val ret_ty LLVMType.i64_),
+        LLVMType.f64_ => emit_cast_var c (LLVMValue.bitcast val ret_ty LLVMType.i64_),
         LLVMType.f32_ =>
             match fresh_temp c {
                 CtxStrPair.mk ctx1 t32 =>
@@ -5191,21 +5178,13 @@ def emit_extern_return_cast (c : CodegenCtx) (val : LLVMValue) (ret_ty : LLVMTyp
 /// C returns to the wrapper's `i64`.
 #[partial]
 def emit_sext_return (c : CodegenCtx) (val : LLVMValue) (ret_ty : LLVMType) : CtxInstrsVal :=
-    match fresh_temp c {
-        CtxStrPair.mk ctx1 temp =>
-            let cast_instr := LLVMInstruction.assign temp (LLVMValue.sext val ret_ty LLVMType.i64_) in
-            CtxInstrsVal.mk ctx1 (List.cons cast_instr List.empty) (LLVMValue.var_ temp),
-    }
+    emit_cast_var c (LLVMValue.sext val ret_ty LLVMType.i64_)
 
 /// `emit_extern_return_cast`'s pointer arm — a pointer result
 /// (`i8*` for `strlen`'s `String`-returning cousins) narrows to `i64`.
 #[partial]
 def emit_ptrtoint_return (c : CodegenCtx) (val : LLVMValue) (ret_ty : LLVMType) : CtxInstrsVal :=
-    match fresh_temp c {
-        CtxStrPair.mk ctx1 temp =>
-            let cast_instr := LLVMInstruction.assign temp (LLVMValue.ptrtoint val ret_ty LLVMType.i64_) in
-            CtxInstrsVal.mk ctx1 (List.cons cast_instr List.empty) (LLVMValue.var_ temp),
-    }
+    emit_cast_var c (LLVMValue.ptrtoint val ret_ty LLVMType.i64_)
 
 #[partial]
 def parm_values_for (params : List Param) : List LLVMValue := parm_values_for_go params 0
