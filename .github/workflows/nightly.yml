@@ -3,6 +3,17 @@ name: Nightly release
 on:
   push:
     branches: ["main"]
+    # A commit whose ONLY change is the pin (nix/nightly.nix) must not publish
+    # a nightly. The scheduled `Bump nightly pin` workflow adopts the newest
+    # release and merges a pin-only commit; releasing that commit would make a
+    # newer nightly whose only content is the bump, which the next scheduled
+    # run would adopt -- a nightly that begets a nightly, forever. Skipping the
+    # pin-only push terminates the chain: the adopted nightly stays the newest,
+    # and the next run's bump is a no-op. A change that bumps the pin ALONGSIDE
+    # other files is not pin-only, so it still releases (that is the two-step
+    # rollout case, where the pin bump accompanies the construct's adoption).
+    paths-ignore:
+      - "nix/nightly.nix"
   workflow_dispatch:
 
 permissions:
