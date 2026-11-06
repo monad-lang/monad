@@ -24,7 +24,7 @@ pub def WeaverCli.version : String := "0.1.0"
 
 pub def WeaverCli.provider_text (c : WeaverCli) : String :=
     match c {
-        WeaverCli.weaver provider _model _turns _resume _cont _no_color _mcp =>
+        WeaverCli.weaver provider _model _turns _resume _cont _no_color _trust _mcp =>
             match provider {
                 Option.none => "",
                 Option.some p => p,
@@ -33,7 +33,7 @@ pub def WeaverCli.provider_text (c : WeaverCli) : String :=
 
 pub def WeaverCli.model_text (c : WeaverCli) : String :=
     match c {
-        WeaverCli.weaver _provider model _turns _resume _cont _no_color _mcp =>
+        WeaverCli.weaver _provider model _turns _resume _cont _no_color _trust _mcp =>
             match model {
                 Option.none => "",
                 Option.some m => m,
@@ -42,14 +42,14 @@ pub def WeaverCli.model_text (c : WeaverCli) : String :=
 
 pub def WeaverCli.max_turns_of (c : WeaverCli) : Option I64 :=
     match c {
-        WeaverCli.weaver _provider _model max_turns _resume _cont _no_color _mcp => max_turns,
+        WeaverCli.weaver _provider _model max_turns _resume _cont _no_color _trust _mcp => max_turns,
     }
 
 /// `--resume`'s value with absent spelled as "" (the Plan layer's own
 /// convention, unchanged by the typed parse).
 pub def WeaverCli.resume_text (c : WeaverCli) : String :=
     match c {
-        WeaverCli.weaver _provider _model _turns resume _cont _no_color _mcp =>
+        WeaverCli.weaver _provider _model _turns resume _cont _no_color _trust _mcp =>
             match resume {
                 Option.none => "",
                 Option.some r => r,
@@ -59,7 +59,7 @@ pub def WeaverCli.resume_text (c : WeaverCli) : String :=
 /// `--resume` was given at all, empty value included.
 pub def WeaverCli.resume_asked (c : WeaverCli) : Bool :=
     match c {
-        WeaverCli.weaver _provider _model _turns resume _cont _no_color _mcp =>
+        WeaverCli.weaver _provider _model _turns resume _cont _no_color _trust _mcp =>
             match resume {
                 Option.none => false,
                 Option.some _ => true,
@@ -68,15 +68,20 @@ pub def WeaverCli.resume_asked (c : WeaverCli) : Bool :=
 
 pub def WeaverCli.cont_of (c : WeaverCli) : Bool :=
     match c {
-        WeaverCli.weaver _provider _model _turns _resume cont _no_color _mcp => cont,
+        WeaverCli.weaver _provider _model _turns _resume cont _no_color _trust _mcp => cont,
     }
 
 pub def WeaverCli.no_color_of (c : WeaverCli) : Bool :=
     match c {
-        WeaverCli.weaver _provider _model _turns _resume _cont no_color _mcp => no_color,
+        WeaverCli.weaver _provider _model _turns _resume _cont no_color _trust _mcp => no_color,
     }
 
 pub def WeaverCli.mcps (c : WeaverCli) : List String :=
     match c {
-        WeaverCli.weaver _provider _model _turns _resume _cont _no_color mcp => mcp,
+        WeaverCli.weaver _provider _model _turns _resume _cont _no_color _trust mcp => mcp,
+    }
+
+pub def WeaverCli.trust_of (c : WeaverCli) : Bool :=
+    match c {
+        WeaverCli.weaver _provider _model _turns _resume _cont _no_color trust _mcp => trust,
     }

@@ -57,6 +57,7 @@ use weaver::permissions {
 use weaver::settings {SettingsUpdate, Settings.save}
 use weaver::procs {ProcEntry, Procs.list, Procs.kill}
 use weaver::logs {Logs.latest_path, Logs.tail, Logs.detect_crash}
+use weaver::trust {Trust.items, Trust.record_path, Trust.remember}
 
 /// Everything the interactive session carries between inputs.
 /// `run` is shuttle's own state (session, registry, turn budget, gate,
@@ -108,6 +109,9 @@ pub struct WeaverState {
     /// The session's name as the top of the screen shows it: `/name`, the
     /// generated title, or the first message's; none for a fresh session.
     name : Option String := Option.none,
+    /// The user trusts this project's AGENTS.md and `.weaver/config.toml`
+    /// (`trust.mo`): asked at startup, or `/trust`.
+    trusted : Bool := false,
     /// The active session directory, when persistence is available; none
     /// degrades to the pre-store in-memory behaviour.
     store : Option StoreState,
@@ -183,7 +187,8 @@ pub def command_table : BTreeMap String SlashCommand :=
             Pair.pair "/procs" (SlashCommand.mk cmd_processes),
             Pair.pair "/thinking" (SlashCommand.mk cmd_thinking),
             Pair.pair "/todos" (SlashCommand.mk cmd_todos),
-            Pair.pair "/tools" (SlashCommand.mk cmd_tools)]
+            Pair.pair "/tools" (SlashCommand.mk cmd_tools),
+            Pair.pair "/trust" (SlashCommand.mk cmd_trust)]
 
 def command_map (cs : List (Pair String SlashCommand)) : BTreeMap String SlashCommand :=
     match cs {
@@ -1471,6 +1476,25 @@ def cmd_quit (arg : String) (st : WeaverState) : IO (Result WeaverError Effect) 
 def cmd_help (arg : String) (st : WeaverState) : IO (Result WeaverError Effect) :=
     respond st help_text
 
+/// `/trust`: record that the user trusts this project, the same record
+/// the startup question writes. Project settings apply from the next start.
+def cmd_trust (_arg : String) (st : WeaverState) : IO (Result WeaverError Effect) :=
+    if st.trusted then respond st "this project is already trusted"
+    else match st.place {
+        Option.none => respond st "no project here to trust (PWD is unset)",
+        Option.some p => trust_place st p,
+    }
+
+def trust_place (st : WeaverState) (p : SessionPlace) : IO (Result WeaverError Effect) := do {
+    let items <- Trust.items p;
+    let rp <- Trust.record_path;
+    let saved <- Trust.remember rp p.repo items;
+    let st2 : WeaverState := { st with trusted := true };
+    respond st2 (String.concat_list ["trusted ", Path.to_string p.repo,
+        if saved then "" else " for this session (HOME is unset, so it is not recorded)",
+        "; .weaver/config.toml applies from the next start"])
+}
+
 def help_text : String :=
     List.intercalate "\n" [
         "/mode [manual|plan|allow_edit|auto]  show or set the approval mode",
@@ -1481,6 +1505,7 @@ def help_text : String :=
         "/permissions [allow|revoke ...]      list or manage session approval grants",
         "/settings [<key> <value>|save project|global]  change or save settings",
         "/tools                               list tools with their capability tags",
+        "/trust                               trust this project's AGENTS.md and .weaver/config.toml",
         "/tasks [kill <id>]                    background processes and subagent runs (TUI monitor)",
         "/todos                               the task's todo list (Ctrl+T folds it in the TUI)",
         "/thinking [on|off]                   show or set the reasoning channel",

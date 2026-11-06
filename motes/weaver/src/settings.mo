@@ -145,13 +145,13 @@ pub def Loaded.empty : Loaded := {
 pub def Settings.load : IO Loaded := do {
     let g <- Settings.load_global;
     let p <- Settings.load_project;
-    return (merge_loaded g p)
+    return (Settings.combine g p)
 }
 
 /// The resolution order's last step: settings merge field by field,
 /// warnings concatenate in load order, and the project-file key names
 /// ride along (the global file is never the project file).
-def merge_loaded (g : Loaded) (p : Loaded) : Loaded := {
+pub def Settings.combine (g : Loaded) (p : Loaded) : Loaded := {
     settings := Settings.merge g.settings p.settings,
     warnings := List.append g.warnings p.warnings,
     project_keys := List.append g.project_keys p.project_keys,

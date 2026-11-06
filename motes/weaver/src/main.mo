@@ -31,7 +31,7 @@ use weaver::cli {*}
 use weaver::cli_spec {
     weaver_cli_spec, WeaverCli.provider_text, WeaverCli.model_text, WeaverCli.max_turns_of,
     WeaverCli.resume_text, WeaverCli.resume_asked, WeaverCli.cont_of, WeaverCli.no_color_of,
-    WeaverCli.mcps, WeaverCli.version,
+    WeaverCli.mcps, WeaverCli.version, WeaverCli.trust_of,
 }
 use weaver::commands {WeaverState, Commands.set_plan, Commands.session_name}
 use weaver::monad_tools {MonadCheck.tool, MonadEval.tool}
@@ -55,7 +55,9 @@ use std::map {BTreeMap}
 use std::ref {Ref, Ref.new}
 use weaver::permissions {PermGrant}
 use weaver::place {SessionPlace, Place.probe, Place.cwd_of, Place.moved_note}
-use weaver::settings {Settings, Settings.load, Settings.cap_of, Settings.validate}
+use weaver::settings {Settings, Settings.load_global, Settings.load_project, Settings.combine, Settings.cap_of, Settings.validate, Loaded, Loaded.empty}
+use weaver::trust {TrustOutcome, Trust.decide, Trust.record_path, Trust.forced_by}
+use tui::terminal {Terminal.enter_raw_mode, Terminal.leave_raw_mode}
 use weaver::error {WeaverError, WeaverError.show}
 use weaver::tui_app {Tui.run_resumed}
 use log::logger {Logger}
@@ -141,6 +143,8 @@ struct Plan {
     /// problems (unknown keys, parse failures), a configured model that
     /// did not belong to the provider, and the crash note.
     model_note : Option String,
+    /// The project is trusted for this run (`trust.mo`).
+    trusted : Bool := false,
 }
 
 /// The start plan, resolved RUNTIME -> PROJECT -> GLOBAL -> default:
@@ -401,7 +405,7 @@ def initial_state (p : Plan) (reg : ToolRegistry) (s : Settings) (colors : Bool)
     let left : I64 := if p.max_turns - session.turns < 0 then 0 else p.max_turns - session.turns in
     let run : RunState := { session := session, reg := reg, turns_left := left, emit := stdout_write, gate := Gate.auto, always := List.empty, retries := 3, sleep_ms := Dumb.poll_sleep, on_usage := silent_usage, should_stop := silent_stop, inbox := silent_inbox, side_spend := silent_side_spend, stopped := false } in
     let prov : String := Weaver.provider_of p.provider session.config in
-    let st : WeaverState := { run := run, mode := initial_mode s, provider := prov, budget := p.max_turns, context_window := p.context_window, compact_at := p.compact_at, plan := Option.none, last_context := 0, grants := grants, place := place, mcps := p.mcps, keys := s.api_keys, catalog := BTreeMap.empty, quit := false, colors := colors, fatal := Option.none, name := Option.none, store := store } in
+    let st : WeaverState := { run := run, mode := initial_mode s, provider := prov, budget := p.max_turns, context_window := p.context_window, compact_at := p.compact_at, plan := Option.none, last_context := 0, grants := grants, place := place, mcps := p.mcps, keys := s.api_keys, catalog := BTreeMap.empty, quit := false, colors := colors, fatal := Option.none, name := Option.none, trusted := p.trusted, store := store } in
     st
 
 /// The mode the session starts in: the settings' `mode` key when it parses,
@@ -423,10 +427,8 @@ pub def main (args : List String) : IO I64 := do {
     let _ <- Logs.info setup.log (String.concat "ev=process_start argv=" (I64.to_string (List.length args)));
     Logs.log_rss setup.log "start";
     let colors_on_main <- colors_probe;
-    let loaded <- Settings.load;
-    let _ <- warn_settings setup.log loaded.warnings;
-    let _ <- warn_project_keys loaded.project_keys;
-    let code <- Cli.run weaver_cli_spec args decode_weavercli (fn (c : WeaverCli) => main_plan setup colors_on_main loaded.settings loaded.warnings c);
+    let global <- Settings.load_global;
+    let code <- Cli.run weaver_cli_spec args decode_weavercli (fn (c : WeaverCli) => main_trusted setup colors_on_main global c);
     Logs.finish setup.log code;
     IO.pure code
 }
@@ -460,7 +462,51 @@ def warn_project_keys (names : List String) : IO Unit :=
             write_errln (String.concat "warning: api key(s) for " (String.concat (List.intercalate ", " names) " came from .weaver/config.toml -- plaintext on disk; ~/.weaver/config.toml is the recommended home")),
     }
 
-def main_plan (setup : LogSetup) (colors : Bool) (s : Settings) (ws : List WeaverError) (c : WeaverCli) : IO I64 :=
+/// Phase 19: the project's files load only once the user trusts the
+/// project, so the trust question comes before `.weaver/config.toml` is
+/// read. `--trust` or `WEAVER_TRUST=1` trusts this run without asking.
+def main_trusted (setup : LogSetup) (colors : Bool) (global : Loaded) (c : WeaverCli) : IO I64 := do {
+    let place <- Place.probe;
+    let env <- IO.get_env "WEAVER_TRUST";
+    let forced : Bool := Trust.forced_by (WeaverCli.trust_of c) env;
+    let rp <- Trust.record_path;
+    let outcome <- Trust.decide rp place forced tty_probe stdin_line prompt_write;
+    let _ <- Logs.info setup.log (String.concat "ev=trust trusted=" (if outcome.trusted then "true" else "false"));
+    let project <- if outcome.trusted then Settings.load_project else IO.pure Loaded.empty;
+    let loaded : Loaded := Settings.combine global project;
+    let _ <- warn_settings setup.log loaded.warnings;
+    let _ <- warn_project_keys loaded.project_keys;
+    main_plan setup colors loaded.settings loaded.warnings c place outcome
+}
+
+/// Stdin is a terminal: raw mode can be entered (and is left at once,
+/// flushing pending input), so only a start with a question runs it.
+/// It and `stdin_line` are thunks for `Trust.decide`: a zero-argument
+/// `IO` def passed as an argument runs at the call when compiled.
+def tty_probe (_ : Unit) : IO Bool := do {
+    let is_tty <- Terminal.enter_raw_mode;
+    let _ <- if is_tty then Terminal.leave_raw_mode else IO.pure false;
+    IO.pure is_tty
+}
+
+def stdin_line (_ : Unit) : IO (Option String) := read_stdin_line
+
+def prompt_write (s : String) : IO Unit := do {
+    IO.write_stdout s;
+    IO.flush_stdout
+}
+
+/// Two startup notes as one, either possibly absent.
+def join_notes (a : Option String) (b : Option String) : Option String :=
+    match a {
+        Option.none => b,
+        Option.some x => match b {
+            Option.none => a,
+            Option.some y => Option.some (String.concat_list [x, "\n", y]),
+        },
+    }
+
+def main_plan (setup : LogSetup) (colors : Bool) (s : Settings) (ws : List WeaverError) (c : WeaverCli) (place : Option SessionPlace) (outcome : TrustOutcome) : IO I64 :=
     let effective : Bool := Bool.and colors (Bool.not (WeaverCli.no_color_of c)) in
     match plan_of s ws c {
         Result.err e => do {
@@ -468,14 +514,15 @@ def main_plan (setup : LogSetup) (colors : Bool) (s : Settings) (ws : List Weave
             Logs.error setup.log (String.concat "ev=config_error " (WeaverError.show e));
             return 1
         },
-        Result.ok p => run_plan setup effective p s,
+        Result.ok p =>
+            let trusted : Plan := { p with trusted := outcome.trusted, model_note := join_notes p.model_note outcome.note } in
+            run_plan setup effective trusted s place,
     }
 
-def run_plan (setup : LogSetup) (colors : Bool) (p : Plan) (s : Settings) : IO I64 := do {
+def run_plan (setup : LogSetup) (colors : Bool) (p : Plan) (s : Settings) (place : Option SessionPlace) : IO I64 := do {
     let cache <- Ref.new module_info_cache_empty;
     let empty_buf : List String := List.empty;
     let eval_buf <- Ref.new empty_buf;
-    let place <- Place.probe;
     let r <- mount_all client_info p.mcps s (weaver_registry setup.log cache eval_buf (cwd_text place)) [];
     mounted_plan setup colors p s place r
 }
