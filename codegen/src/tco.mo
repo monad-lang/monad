@@ -151,16 +151,11 @@ def build_ssa_def_map_instrs (block : String) (instrs : List LLVMInstruction) (a
             LLVMInstruction.assign target value =>
                 let site : SsaDefSite := { val := value, block := block } in
                 build_ssa_def_map_instrs block rest (str_map_insert target site acc),
-            LLVMInstruction.branch _cond _t _e => build_ssa_def_map_instrs block rest acc,
-            LLVMInstruction.jump _label => build_ssa_def_map_instrs block rest acc,
-            LLVMInstruction.ret _val => build_ssa_def_map_instrs block rest acc,
-            LLVMInstruction.store _val _pty _ptr => build_ssa_def_map_instrs block rest acc,
-            LLVMInstruction.comment _text => build_ssa_def_map_instrs block rest acc,
-            // A void call defines no SSA name either -- same treatment
-            // as `store`/`comment` above.
-            LLVMInstruction.call_void _val => build_ssa_def_map_instrs block rest acc,
-            // Defines no SSA name, exactly like a comment.
-            LLVMInstruction.loc_marker _loc => build_ssa_def_map_instrs block rest acc,
+            // Every other instruction defines no SSA name: skip it. A
+            // wildcard, so a future constructor gets the same harmless
+            // treatment instead of being silently omitted (the arm list
+            // is not checked for exhaustiveness).
+            _ => build_ssa_def_map_instrs block rest acc,
         },
 }
 
@@ -187,14 +182,10 @@ def find_sites_in_block (fn_name : String) (arity : I64) (defs : HashMap String 
             Option.some last_instr =>
                 match last_instr {
                     LLVMInstruction.ret v => trace_tail_value fn_name arity defs v label,
-                    LLVMInstruction.assign _t _v => List.empty,
-                    LLVMInstruction.branch _c _t _e => List.empty,
-                    LLVMInstruction.jump _l => List.empty,
-                    LLVMInstruction.store _v _pty _p => List.empty,
-                    LLVMInstruction.comment _t => List.empty,
-                    // Not a `ret` -- no tail-call site here either.
-                    LLVMInstruction.call_void _v => List.empty,
-                    LLVMInstruction.loc_marker _loc => List.empty,
+                    // Not a `ret` -- no tail-call site here. Wildcard, so
+                    // a future constructor is skipped rather than omitted
+                    // from an unchecked enumeration.
+                    _ => List.empty,
                 },
             Option.none => List.empty,
         },
@@ -478,18 +469,12 @@ def remove_assign_of (instrs : List LLVMInstruction) (target : String) : List LL
                 if String.beq t target
                 then rest
                 else List.cons i (remove_assign_of rest target),
-            LLVMInstruction.branch _c _tl _el => List.cons i (remove_assign_of rest target),
-            LLVMInstruction.jump _l => List.cons i (remove_assign_of rest target),
-            LLVMInstruction.ret _v => List.cons i (remove_assign_of rest target),
-            LLVMInstruction.store _val _pty _ptr => List.cons i (remove_assign_of rest target),
-            LLVMInstruction.comment _t => List.cons i (remove_assign_of rest target),
-            // A void call (the shape M3's drop calls take) is a
-            // statement like the rest, so it passes through. Required,
-            // not optional: neither compiler checks arm exhaustiveness,
-            // so a missing arm silently mishandles the instruction
-            // rather than failing the build.
-            LLVMInstruction.call_void _v => List.cons i (remove_assign_of rest target),
-            LLVMInstruction.loc_marker _loc => List.cons i (remove_assign_of rest target),
+            // Every other instruction (including a void call, the shape
+            // M3's drop calls take) is a statement like the rest: keep it
+            // and continue. The wildcard matters because neither compiler
+            // checks arm exhaustiveness -- a missing constructor would be
+            // silently dropped, whereas this keeps every future one.
+            _ => List.cons i (remove_assign_of rest target),
         },
 }
 
@@ -549,14 +534,9 @@ def prune_phi_in_instrs (instrs : List LLVMInstruction) (stale_label : String) :
                     // `trace_tail_value`'s identical note above.
                     _ => prune_phi_in_instrs_rest i rest stale_label,
                 },
-            LLVMInstruction.branch _c _tl _el => prune_phi_in_instrs_rest i rest stale_label,
-            LLVMInstruction.jump _l => prune_phi_in_instrs_rest i rest stale_label,
-            LLVMInstruction.ret _v => prune_phi_in_instrs_rest i rest stale_label,
-            LLVMInstruction.store _val _pty _ptr => prune_phi_in_instrs_rest i rest stale_label,
-            LLVMInstruction.comment _t => prune_phi_in_instrs_rest i rest stale_label,
-            // Same missing-arm hazard as `remove_assign_of` above.
-            LLVMInstruction.call_void _v => prune_phi_in_instrs_rest i rest stale_label,
-            LLVMInstruction.loc_marker _loc => prune_phi_in_instrs_rest i rest stale_label,
+            // Same wildcard reasoning as `remove_assign_of` above: every
+            // other instruction passes through, including future ones.
+            _ => prune_phi_in_instrs_rest i rest stale_label,
         },
 }
 
