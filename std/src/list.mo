@@ -195,7 +195,7 @@ def List.intercalate_rest (sep : String) (xs : List String) : String :=
 
 /// Drop later duplicates, keeping the first occurrence (left-biased).
 /// Replaces `union_ids`/`dedup_idents`/`dedup_funcs_by_name`.
-def List.dedup_by {A : Type} (eq : A -> A -> Bool) (xs : List A) : List A :=
+pub def List.dedup_by {A : Type} (eq : A -> A -> Bool) (xs : List A) : List A :=
     List.dedup_by_go (Shared.of eq) xs (Shared.of (List.empty : List A))
 
 def List.dedup_by_go {A : Type} (eq : Shared (A -> A -> Bool)) (xs : List A) (seen : Shared (List A)) : List A :=

@@ -19,7 +19,7 @@ use lang::types {
     union_ids,
 }
 use lib::symbols {symbol_identifier}
-use lib::util {ident_in_list, identifier_eq}
+use lib::util {ident_in_list}
 use std::map {}
 
 #[partial]

@@ -6,12 +6,12 @@ use std::bench {Bench.now, Bench.report_since}
 // naming `std.map`'s exports — see `lang/scope.mo`'s comment on the same
 // line, and std/map_tests.mo's note for why the suspicion is gone.
 use std::map {HashMap}
-use std::list {List.any, List.intercalate, List.length}
+use std::list {List.any, List.dedup_by, List.intercalate, List.length}
 use lang::mote {Mote.toolchain_root}
 use lang::types {
     AttrArg, Attribute, Binder, Con, DebugName, Decl, Def, Identifier, InductConstructor,
     Inductive, Literal, LocalScope, Location, MatchCase, ModulePath, Multiplicity,
-    NamePath, Native, Operator, Param, Scope, ScopeData, Struct, StructField,
+    NamePath, Native, Param, Scope, ScopeData, Struct, StructField,
     StructLitField, Term, TypeConstraint, UseFilter, UseItem, Visibility,
     binder_is_explicit, binder_name, binder_named, char_to_string, concrete, empty_attrs,
     group, i64, id_eq,
@@ -66,15 +66,15 @@ use lib::symbols {
     bare_modpath, def_symbol_name, ends_with_main, extract_base_name,
     bare_npath, mangle_identifiers, name_path_to_str, module_path_to_str,
     ref_symbol_name,
-    replace_dots_with_underscores, string_find_last, symbol_identifier,
+    replace_dots_with_underscores, symbol_identifier,
 }
 use lang::name_text {unqualify_def_name}
 use lib::attrs {find_attr_args, find_named_arg}
 use lang::elaborate {names_of_decls}
 use lib::errors {CodegenError}
 use lib::util {
-    dedup_idents, dedup_idents_go, dedup_strs, dedup_strs_go, drop_last_instr,
-    ident_in_list, identifier_eq, join_semicolon_msgs, list_contains_str, rev_vals
+    dedup_idents, dedup_idents_go, drop_last_instr,
+    ident_in_list, join_semicolon_msgs
 }
 use lang::module {
     BestEffortElab, LoadedModules, ModuleInfo, bench_step, best_effort_decls,
@@ -455,11 +455,6 @@ def constructor_tag_owned_nonbuiltin (c : CodegenCtx) (base_name : String) (typ_
         Option.some tag => tag,
         Option.none => bare_ctor_tag c base_name,
     }
-
-#[partial]
-def show_operator (op : Operator) : String := match op {
-    Operator.mk s => s,
-}
 
 // `is_arith_native_op` (below) gates every call site in
 // `compile_native_app_db`: the 4 non-arithmetic `NativeOp`s it excludes
@@ -1016,7 +1011,7 @@ def compile_ntv_args_go (c : CodegenCtx) (args : List (Option Term)) (acc_instrs
                     compile_ntv_args_go c rest acc_instrs acc_blocks acc_funcs acc_globals acc_vals acc_val,
             },
         List.empty =>
-            { ctx := c, instrs := acc_instrs, vals := rev_vals acc_vals List.empty, blocks := acc_blocks, funcs := acc_funcs, globals := acc_globals, last_val := acc_val },
+            { ctx := c, instrs := acc_instrs, vals := List.reverse acc_vals, blocks := acc_blocks, funcs := acc_funcs, globals := acc_globals, last_val := acc_val },
     }
 
 #[partial]
@@ -3865,7 +3860,7 @@ def compile_spine_args_go (c : CodegenCtx) (terms : List Term) (acc_instrs : Lis
     match terms {
         // Trailing comma load-bearing -- see `build_get_env_instrs`'s
         // doc comment (codegen/emit.mo) for why.
-        List.empty => { ctx := c, instrs := acc_instrs, blocks := acc_blocks, funcs := acc_funcs, globals := acc_globals, vals := (rev_vals acc_vals List.empty), last_val := acc_val },
+        List.empty => { ctx := c, instrs := acc_instrs, blocks := acc_blocks, funcs := acc_funcs, globals := acc_globals, vals := List.reverse acc_vals, last_val := acc_val },
         List.cons t rest =>
             match compile_db_term_ir c t {
                 CompileResult.ok ctx1 instrs1 val1_raw blocks1 funcs1 globals1 =>
@@ -6205,7 +6200,7 @@ def gate_result (missing : List String) (m : LLVMModule) : Result CodegenError L
         List.cons _ _ =>
             Result.err (CodegenError.undefined_symbols
                 (String.concat "call to undefined symbol(s): "
-                    (String.concat (join_semicolon_msgs (dedup_strs missing) "")
+                    (String.concat (join_semicolon_msgs (List.dedup_by (fn a b => String.beq a b) missing) "")
                         " -- a reference resolved to a name nothing defines; def_symbol_name and ref_symbol_name must agree"))),
     }
 

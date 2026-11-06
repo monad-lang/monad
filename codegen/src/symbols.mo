@@ -19,8 +19,9 @@ use lang::types {
 use std::map {}
 use lang::name_text {unqualify_def_name}
 
-/// A genuine, previously-undiscovered bug lived here (and in
-/// `string_find_last_loop` below) until this session: `String.slice`'s
+/// A genuine, previously-undiscovered bug lived here (and in the local
+/// `string_find_last` loop this file used to carry, since replaced by
+/// `String.find_last`) until this session: `String.slice`'s
 /// own signature (`init/string.mo`) is `(s, start, LEN)` -- a LENGTH,
 /// not an end index -- but both call sites here passed `String.length
 /// name` (the WHOLE string's own length, an end-index-shaped value) as
@@ -34,12 +35,12 @@ use lang::name_text {unqualify_def_name}
 /// actually stripping a qualifier correctly. Confirmed via an isolated
 /// unit test bypassing the whole self-hosted pipeline: `extract_base_
 /// name "Option.Some"` returned `"Option.Some"` unchanged (the `last_dot
-/// > -1` branch's own slice never actually fired due to `string_find_
-/// last`'s OWN identical bug below, so this line's fix matters once that
-/// one is fixed too).
+/// > -1` branch's own slice never actually fired due to the local
+/// `string_find_last`'s OWN identical bug, so this line's fix mattered
+/// once that one was fixed too).
 #[partial]
 def extract_base_name (name : String) : String :=
-    let last_dot := string_find_last name "." in
+    let last_dot := String.find_last name "." in
     if I64.gt last_dot (-1)
     then String.slice name (last_dot + 1) (String.length name - last_dot - 1)
     else name
@@ -120,22 +121,6 @@ def remove_quotes_loop (s : String) (acc : String) : String :=
             remove_quotes_loop (String.slice s 1 (String.length s - 1)) acc
         else
             remove_quotes_loop (String.slice s 1 (String.length s - 1)) (String.concat acc (String.slice s 0 1))
-
-/// Find the last occurrence of a substring in a string, return its index or -1
-#[partial]
-def string_find_last (haystack : String) (needle : String) : I64 :=
-    if String.beq needle "" then -1
-    else if I64.gt (String.length needle) (String.length haystack) then -1
-    else string_find_last_loop haystack needle (String.length haystack - String.length needle)
-
-/// `String.slice`'s own third argument is a LENGTH (`init/string.mo`),
-/// not an end index -- see `extract_base_name`'s own doc comment for
-/// the full story on this bug (fixed alongside it here).
-#[partial]
-def string_find_last_loop (haystack : String) (needle : String) (start_idx : I64) : I64 :=
-    if I64.lt start_idx 0 then -1
-    else if String.beq (String.slice haystack start_idx (String.length needle)) needle then start_idx
-    else string_find_last_loop haystack needle (start_idx - 1)
 
 #[partial]
 def module_path_to_str (mp : ModulePath) : String := match mp {

@@ -24,7 +24,7 @@ use lang::types {
 }
 use lang::scope {collect_classes, find_unresolved_class_calls_decls}
 use lib::ctors {CtorClaim, collect_ctor_claims_inds}
-use std::list {List.length}
+use std::list {List.contains_by, List.length}
 use lib::errors {CodegenDiagnostic, CodegenError}
 open IO {get_env, println}
 use llvm::ir {
@@ -42,7 +42,7 @@ use llvm::target {TargetKind}
 use lib::symbols {def_symbol_name, ends_with_main, name_path_to_str}
 use lang::name_text {unqualify_def_name}
 use lib::util {
-    dedup_strs, join_semicolon_msgs, list_contains_str
+    join_semicolon_msgs
 }
 use std::map {HashMap}
 
@@ -373,7 +373,7 @@ def export_msgs_for (plain : String) (d : Def) (seen : List String) (acc : List 
 
 #[partial]
 def export_dup_msg (plain : String) (seen : List String) : List CodegenDiagnostic :=
-    if list_contains_str seen plain
+    if List.contains_by (fn a b => String.beq a b) plain seen
     then List.cons (CodegenDiagnostic.duplicate_export plain) List.empty
     else List.empty
 

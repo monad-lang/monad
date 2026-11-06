@@ -292,7 +292,7 @@ def String.find_last_loop (haystack : String) (needle : String) (start_idx : I64
     else if String.beq (String.slice haystack start_idx (String.length needle)) needle then start_idx
     else String.find_last_loop haystack needle (start_idx - 1)
 
-def String.find_last (haystack : String) (needle : String) : I64 :=
+pub def String.find_last (haystack : String) (needle : String) : I64 :=
     if String.beq needle "" then -1
     else if I64.gt (String.length needle) (String.length haystack) then -1
     else String.find_last_loop haystack needle (String.length haystack - String.length needle)

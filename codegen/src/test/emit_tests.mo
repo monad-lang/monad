@@ -63,13 +63,13 @@ use lib::symbols {
     bare_modpath, def_symbol_name, ends_with_main, extract_base_name,
     bare_npath, mangle_identifiers, name_path_to_str, module_path_to_str,
     ref_symbol_name,
-    replace_dots_with_underscores, string_find_last, symbol_identifier,
+    replace_dots_with_underscores, symbol_identifier,
 }
 use lang::name_text {unqualify_def_name}
 use lang::elaborate {names_of_decls}
 use lib::util {
-    dedup_idents, dedup_idents_go, dedup_strs, dedup_strs_go, drop_last_instr,
-    ident_in_list, identifier_eq, join_semicolon_msgs, list_contains_str, rev_vals
+    dedup_idents, dedup_idents_go, drop_last_instr,
+    ident_in_list, join_semicolon_msgs
 }
 use lang::module {
     BestEffortElab, LoadedModules, ModuleInfo, bench_step, best_effort_decls,

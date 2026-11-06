@@ -20,7 +20,7 @@ use lang::types {
 use llvm::ir {DbgLoc, LLVMInstruction, LLVMValue}
 use lib::symbols {def_symbol_name, extract_base_name, symbol_identifier}
 use lang::name_text {unqualify_def_name}
-use lib::util {identifier_eq}
+use lang::types {id_eq}
 use std::map {HashMap}
 
 pub struct LocalBinding {
@@ -326,7 +326,7 @@ def lookup_binding (bindings : List LocalBinding) (name : Identifier) : Option L
     List.cons b rest =>
         match b {
             { name := lname, val := lval } =>
-                if identifier_eq lname name
+                if id_eq lname name
                 then Option.some lval
                 else lookup_binding rest name,
         },

@@ -5,6 +5,13 @@ use lang::types {
     TypeConstraint, Visibility, sentinel,
 }
 use lib::symbols {bare_npath}
+use std::list {List.contains_by}
+
+/// Membership for a `List String`, kept for the test call sites that read
+/// naturally with it. Production code uses `List.contains_by` directly.
+#[partial]
+def list_contains_str (xs : List String) (x : String) : Bool :=
+    List.contains_by (fn a b => String.beq a b) x xs
 
 #[partial]
 def qtest_def (name : String) (body_ref : String) : Decl :=

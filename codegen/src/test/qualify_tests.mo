@@ -15,9 +15,8 @@ use lang::scope {
 use lib::free_names {collect_referenced_names, free_names_of_term}
 use lib::symbols {bare_modpath, bare_npath, symbol_identifier}
 use lang::name_text {unqualify_def_name}
-use lib::util {
-    join_semicolon_msgs, list_contains_str
-}
+use lib::util {join_semicolon_msgs}
+use lib::test::support {list_contains_str, qtest_def}
 use std::map {HashMap}
 use std::list {List.intercalate, List.length}
 use lib::errors {CodegenDiagnostic}

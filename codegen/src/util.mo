@@ -10,7 +10,7 @@
 /// Deliberately dependency-light -- `lang.types` and `llvm.ir`
 /// only -- so that every other backend module can import this one
 /// without creating a cycle.
-use lang::types {Decl, Identifier}
+use lang::types {Decl, Identifier, id_eq}
 use llvm::ir {
     LLVMBasicBlock, LLVMFunction, LLVMGlobal, LLVMInstruction, LLVMValue, ParamPair,
 }
@@ -23,22 +23,9 @@ use llvm::ir {
 pub use llvm::strmap {str_map_empty, str_map_insert, str_map_lookup}
 
 #[partial]
-def identifier_eq (a : Identifier) (b : Identifier) : Bool := match a {
-    Identifier.id as => match b {
-        Identifier.id bs => String.beq as bs,
-    },
-}
-
-#[partial]
-def rev_vals (xs : List LLVMValue) (acc : List LLVMValue) : List LLVMValue := match xs {
-    List.cons x rest => rev_vals rest (List.cons x acc),
-    List.empty => acc,
-}
-
-#[partial]
 def ident_in_list (xs : List Identifier) (x : Identifier) : Bool := match xs {
     List.empty => false,
-    List.cons y rest => if identifier_eq y x then true else ident_in_list rest x,
+    List.cons y rest => if id_eq y x then true else ident_in_list rest x,
 }
 
 #[partial]
@@ -71,24 +58,6 @@ def join_semicolon_msgs (msgs : List String) (acc : String) : String :=
             then join_semicolon_msgs rest m
             else join_semicolon_msgs rest (String.concat acc (String.concat "; " m)),
     }
-
-#[partial]
-def dedup_strs (xs : List String) : List String := dedup_strs_go xs List.empty
-
-#[partial]
-def dedup_strs_go (xs : List String) (seen : List String) : List String := match xs {
-    List.empty => List.empty,
-    List.cons x rest =>
-        if list_contains_str seen x
-        then dedup_strs_go rest seen
-        else List.cons x (dedup_strs_go rest (List.cons x seen)),
-}
-
-#[partial]
-def list_contains_str (xs : List String) (x : String) : Bool := match xs {
-    List.empty => false,
-    List.cons hd rest => if String.beq hd x then true else list_contains_str rest x,
-}
 
 #[partial]
 def drop_last_instr (instrs : List LLVMInstruction) : List LLVMInstruction := match instrs {
