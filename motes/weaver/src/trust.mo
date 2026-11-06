@@ -8,7 +8,7 @@
 /// user trusted: when any of those files is new or edited since (a
 /// `git pull`), weaver asks again and can show what changed.
 use std::io {IO.read_file, IO.write_file, IO.get_env}
-use std::path {Path, Path.to_string, Path.join}
+use std::path {Path, Path.to_string, Path.join, Path.beq}
 use std::process {exec_cmd}
 use std::map {Map, BTreeMap}
 use std::list {List.intercalate, List.filter, List.any, List.filter_map}
@@ -16,7 +16,7 @@ use json::json {
     Json, Json.parse, Json.to_string, Json.make_object, Json.make_object_pairs, Json.make_array,
     Json.make_str, Json.get_object, Json.get_array, Json.get_str, Json.object_get,
 }
-use weaver::instructions {InstrFile, Instructions.project, Instructions.read_one, Instructions.size_text}
+use weaver::instructions {InstrFile, Instructions.project, Instructions.read_one, Instructions.size_text, Instructions.nested, Instructions.read_all}
 use weaver::place {SessionPlace}
 use weaver::diff {Diff.render, Diff.lines}
 
@@ -44,9 +44,14 @@ pub def Trust.config_name : String := ".weaver/config.toml"
 
 // ── the files ───────────────────────────────────────────────────────────
 
-/// The project's AGENTS.md files, then `.weaver/config.toml` in the cwd.
+/// The project's AGENTS.md files -- the ones down to the cwd, then every
+/// other tracked one, which a tool may attach later -- then
+/// `.weaver/config.toml` in the cwd.
 pub def Trust.items (place : SessionPlace) : IO (List TrustItem) := do {
-    let fs <- Instructions.project place;
+    let chain <- Instructions.project place;
+    let nested_paths <- Instructions.nested place.repo;
+    let nested <- Instructions.read_all (List.filter (fn (p : Path) => Bool.not (in_files chain p)) nested_paths);
+    let fs : List InstrFile := List.append chain nested;
     let cfg <- Instructions.read_one (Path.join place.cwd (Path.path Trust.config_name)) "config";
     let docs : List TrustItem := List.map (item_of place) fs;
     IO.pure (match cfg {
@@ -54,6 +59,9 @@ pub def Trust.items (place : SessionPlace) : IO (List TrustItem) := do {
         Option.none => docs,
     })
 }
+
+def in_files (fs : List InstrFile) (p : Path) : Bool :=
+    List.any (fn (f : InstrFile) => Path.beq f.path p) fs
 
 def item_of (place : SessionPlace) (f : InstrFile) : TrustItem :=
     let t : TrustItem := { name := Trust.relative place.repo f.path, text := f.text } in

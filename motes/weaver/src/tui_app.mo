@@ -52,7 +52,7 @@ use weaver::ui::rows {DisplayRow, Rows.of_line, Rows.widget}
 use weaver::logs {Logs.info, Logs.debug, Logs.warn, Logs.error, Logs.log_rss, Logs.sanitize}
 use weaver::title {Title.generate, Title.needed}
 use weaver::subagent {Subagent.task_tool, Subagent.drain}
-use weaver::instructions {Instructions.take_notes}
+use weaver::instructions {Instructions.take_notes, Instructions.attaching}
 use weaver::todo {TodoItem, TodoTool.impl, Todo.read, Todo.same}
 use weaver::procs {Procs.tail, Procs.kill, Procs.log_kill, Procs.log_exit}
 use weaver::format {format_elapsed}
@@ -1317,9 +1317,10 @@ def error_line (e : WeaverError) : TLine :=
 /// as-is (Phase 9: `drive_loop` is already `ResultT WeaverError IO`).
 def drive_tui (log : Option Logger) (gen : I64) (st : WeaverState) (text : String) (on_usage : Usage -> IO Unit) (spend : Ref Usage) : ResultT WeaverError IO RunState := do {
     let stop : Unit -> IO Bool := Stop.predicate st.store gen;
-    let with_task : RunState := { (st.run) with reg := ToolRegistry.register (TodoTool.impl st.store)
-        (ToolRegistry.register (WeaverShell.impl log stop (WeaverShell.fg_path st.store))
-            (ToolRegistry.register (Subagent.task_tool st.run.session.config st.instructions log st.store stop spend) st.run.reg)) };
+    let with_task : RunState := { (st.run) with reg := Instructions.attaching st.instr_seen st.place st.trusted
+        (ToolRegistry.register (TodoTool.impl st.store)
+            (ToolRegistry.register (WeaverShell.impl log stop (WeaverShell.fg_path st.store))
+                (ToolRegistry.register (Subagent.task_tool st.run.session.config st.instructions log st.store stop spend) st.run.reg))) };
     let gated : RunState := { with_task with gate := Gate.weaver_tui log st.mode st.colors st.store st.grants (Place.cwd_of st.place),
         emit := progress_live log st.store, on_usage := on_usage,
         should_stop := stop, inbox := Inbox.seam st.store, side_spend := Subagent.drain spend, stopped := false };

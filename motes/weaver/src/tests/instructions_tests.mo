@@ -4,8 +4,15 @@ use weaver::instructions {
     Instructions.capped, Instructions.cap_total, Instructions.render, Instructions.label,
     Instructions.note, Prompt.base, Prompt.system, Prompt.with_files,
     Instructions.read_one, Instructions.refresh, Instructions.take_notes,
+    Instructions.attaching, Instructions.inside,
 }
-use std::ref {Ref, Ref.new, Ref.get}
+use shuttle::tools::file_tools {ReadTool.impl}
+use shuttle::registry {ToolRegistry}
+use shuttle::message_types {Content}
+use init::transformers {ResultT}
+use json::json {Json, Json.make_object, Json.make_str}
+use std::map {Map, BTreeMap}
+use std::ref {Ref.new, Ref.get}
 use weaver::place {SessionPlace}
 use std::path {Path, Path.to_string}
 use std::list {List.length, List.intercalate, List.all}
@@ -144,4 +151,66 @@ def test_refresh_notes_an_edit_once_and_a_removal : IO Bool := do {
         && List.is_empty second
         && String.contains (List.intercalate "" gone) "was deleted during the session"
         && List.is_empty left)
+}
+
+// ── a subdirectory's AGENTS.md ──
+
+def attach_root : String :=
+    String.concat "/tmp/weaver_instr_attach_" (I64.to_string process_id)
+
+#[test]
+def test_inside_is_the_repo_or_below : Bool :=
+    Instructions.inside (Path.path "/r") (Path.path "/r")
+        && Instructions.inside (Path.path "/r") (Path.path "/r/a/b")
+        && Bool.not (Instructions.inside (Path.path "/r") (Path.path "/rx/a"))
+        && Bool.not (Instructions.inside (Path.path "/r") (Path.path "/elsewhere"))
+
+def read_input (path : String) : Json :=
+    Json.make_object (Map.insert "path" (Json.make_str path) BTreeMap.empty)
+
+def output_of (r : Result String Content) : String :=
+    match r {
+        Result.ok c => match c { Content.tool_result _ out _ => out, _ => "" },
+        Result.err e => e,
+    }
+
+/// Run the wrapped `read` on `path`.
+def read_via (reg : ToolRegistry) (path : String) : IO String :=
+    match ToolRegistry.lookup "read" reg {
+        Option.none => IO.pure "",
+        Option.some impl => match impl {
+            { run, .. } => do {
+                let r <- ResultT.run (run "id-1" (read_input path));
+                IO.pure (output_of r)
+            },
+        },
+    }
+
+/// The first read under `motes/x` attaches its AGENTS.md; the second
+/// does not; an untrusted project attaches nothing.
+#[test]
+def test_a_read_attaches_a_nested_file_once : IO Bool := do {
+    let root : String := attach_root;
+    let _ <- exec_cmd "mkdir" ["-p", String.concat root "/motes/x/src"];
+    let _ <- IO.write_file (Path.path (String.concat root "/AGENTS.md")) "root rules\n";
+    let _ <- IO.write_file (Path.path (String.concat root "/motes/x/AGENTS.md")) "x rules\n";
+    let _ <- IO.write_file (Path.path (String.concat root "/motes/x/src/a.mo")) "def a : I64 := 1\n";
+    let place : SessionPlace := { cwd := Path.path root, repo := Path.path root };
+    let start <- Instructions.discover Option.none (Option.some place) true;
+    let seen <- Ref.new start;
+    let reg : ToolRegistry := Instructions.attaching (Option.some seen) (Option.some place) true (ToolRegistry.register ReadTool.impl ToolRegistry.empty);
+    let file : String := String.concat root "/motes/x/src/a.mo";
+    let first <- read_via reg file;
+    let second <- read_via reg file;
+    let fresh <- Ref.new start;
+    let untrusted <- read_via (Instructions.attaching (Option.some fresh) (Option.some place) false (ToolRegistry.register ReadTool.impl ToolRegistry.empty)) file;
+    let now <- Ref.get seen;
+    let _ <- exec_cmd "rm" ["-rf", root];
+    IO.pure (String.contains first "def a : I64 := 1"
+        && String.contains first "[Instructions for "
+        && String.contains first "x rules"
+        && Bool.not (String.contains first "root rules")
+        && Bool.not (String.contains second "[Instructions for ")
+        && Bool.not (String.contains untrusted "[Instructions for ")
+        && List.length now == 2)
 }

@@ -31,7 +31,7 @@ use weaver::theme {Theme.tint, theme_status_code, class_code, LineClass}
 use log::logger {Logger}
 use shuttle::registry {ToolRegistry}
 use weaver::subagent {Subagent.task_tool, Subagent.drain}
-use weaver::instructions {Instructions.take_notes}
+use weaver::instructions {Instructions.take_notes, Instructions.attaching}
 use weaver::inbox {Inbox.with_notes}
 use weaver::todo {TodoTool.impl}
 use weaver::usage {UsageTracker.start, UsageTracker.silent, UsageTracker.last}
@@ -322,8 +322,9 @@ def drive_ready (read : Unit -> IO (Option String)) (write : String -> IO Unit) 
 
 def drive_spending (read : Unit -> IO (Option String)) (write : String -> IO Unit) (st : WeaverState) (text : String) (spend : Ref Usage) : ResultT WeaverError IO RunState := do {
     let base : RunState := st.run;
-    let with_task : RunState := { base with reg := ToolRegistry.register (TodoTool.impl st.store)
-        (ToolRegistry.register (Subagent.task_tool base.session.config st.instructions Option.none Option.none silent_stop spend) base.reg),
+    let with_task : RunState := { base with reg := Instructions.attaching st.instr_seen st.place st.trusted
+        (ToolRegistry.register (TodoTool.impl st.store)
+            (ToolRegistry.register (Subagent.task_tool base.session.config st.instructions Option.none Option.none silent_stop spend) base.reg)),
         side_spend := Subagent.drain spend };
     let gated : RunState := gate_for st read (theme_write write st.colors) with_task;
     let ready : RunState := append_user gated text;

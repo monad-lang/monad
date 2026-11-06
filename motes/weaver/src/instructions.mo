@@ -6,11 +6,17 @@
 /// boundary; a cut file says so and names its path, so the model can read
 /// the rest. Whether a project's files are loaded at all is `trust.mo`'s
 /// decision; this module only finds and renders them.
-use std::io {IO.read_file, IO.get_env}
-use std::path {Path, Path.to_string, Path.join, Path.parent, Path.beq}
-use std::list {List.intercalate}
+use std::io {IO.read_file, IO.get_env, IO.is_dir}
+use std::path {Path, Path.of, Path.to_string, Path.join, Path.parent, Path.beq}
+use std::list {List.intercalate, List.filter, List.any}
+use std::process {Proc.capture}
+use init::transformers {ResultT}
+use json::json {Json, Json.get_object, Json.object_get, Json.get_str}
+use shuttle::tool {ToolImpl}
+use shuttle::registry {ToolRegistry}
+use shuttle::message_types {Content}
 use weaver::place {SessionPlace}
-use weaver::diff {Diff.render}
+use weaver::diff {Diff.render, Diff.lines}
 use std::ref {Ref, Ref.get, Ref.set}
 
 /// One loaded file. `scope` is `user`, `repo` or `dir`.
@@ -283,4 +289,164 @@ pub def Instructions.reset (seen : Option (Ref (List InstrFile))) (fs : List Ins
     match seen {
         Option.none => IO.pure unit,
         Option.some r => Ref.set r fs,
+    }
+
+// ── a subdirectory's AGENTS.md ────────────────────────────────────────
+// A file below the cwd (a mote in a monorepo) is not in the system
+// prompt. The first time a path tool reaches its directory, the file is
+// attached to that tool's result, once per session, and joins the set
+// the change notes watch.
+
+/// The most nested files a project lists for trust.
+pub def Instructions.nested_cap : I64 := 32
+
+/// Every tracked AGENTS.md below the repo root, as git lists them; none
+/// outside a git repo.
+pub def Instructions.nested (repo : Path) : IO (List Path) := do {
+    let r <- Proc.capture "git" ["-C", Path.to_string repo, "ls-files", "--", "*/AGENTS.md"];
+    IO.pure (match r {
+        Pair.pair code out =>
+            if code == 0 then take_n Instructions.nested_cap (nested_paths repo (Diff.lines out))
+            else List.empty,
+    })
+}
+
+def take_n (n : I64) (ps : List Path) : List Path :=
+    if n < 1 then List.empty
+    else match ps {
+        List.empty => List.empty,
+        List.cons p rest => List.cons p (take_n (n - 1) rest),
+    }
+
+def nested_paths (repo : Path) (lines : List String) : List Path :=
+    match lines {
+        List.empty => List.empty,
+        List.cons l rest =>
+            if String.is_empty (String.trim l) then nested_paths repo rest
+            else List.cons (Path.join repo (Path.path (String.trim l))) (nested_paths repo rest),
+    }
+
+/// Read `ps` as `dir`-scoped files, skipping missing ones.
+#[partial]
+pub def Instructions.read_all (ps : List Path) : IO (List InstrFile) :=
+    match ps {
+        List.empty => IO.pure List.empty,
+        List.cons p rest => do {
+            let one <- Instructions.read_one p "dir";
+            let more <- Instructions.read_all rest;
+            IO.pure (push_some one more)
+        },
+    }
+
+def is_loaded (fs : List InstrFile) (p : Path) : Bool :=
+    List.any (fn (f : InstrFile) => Path.beq f.path p) fs
+
+/// `dir` is `repo` or below it.
+pub def Instructions.inside (repo : Path) (dir : Path) : Bool :=
+    Path.beq repo dir || String.starts_with (String.concat (Path.to_string repo) "/") (Path.to_string dir)
+
+/// The AGENTS.md files from `repo` down to `dir` that `loaded` lacks.
+pub def Instructions.unseen (loaded : List InstrFile) (repo : Path) (dir : Path) : IO (List InstrFile) :=
+    if Bool.not (Instructions.inside repo dir) then IO.pure List.empty
+    else Instructions.read_all (List.filter (fn (p : Path) => Bool.not (is_loaded loaded p))
+        (List.map (fn (d : Path) => Path.join d (Path.path Instructions.file_name)) (Instructions.chain repo dir)))
+
+pub def Instructions.attach_note (f : InstrFile) : String :=
+    let dir : String := match Path.parent f.path { Option.some d => Path.to_string d, Option.none => "" } in
+    String.concat_list ["[Instructions for ", dir, "/ from ", Path.to_string f.path,
+        " (loaded now: a tool reached this directory for the first time):\n", f.text,
+        if f.truncated then "\n[truncated; read the file for the rest]" else "", "]"]
+
+/// The tools whose `path` input names a place in the workspace.
+pub def Instructions.path_tools : List String := ["read", "edit", "write", "grep", "glob"]
+
+/// `reg` with its path tools attaching unseen AGENTS.md files to their
+/// results; unchanged without a seen set, a place or trust.
+pub def Instructions.attaching (seen : Option (Ref (List InstrFile))) (place : Option SessionPlace) (trusted : Bool) (reg : ToolRegistry) : ToolRegistry :=
+    match seen {
+        Option.none => reg,
+        Option.some r => match place {
+            Option.none => reg,
+            Option.some p => if trusted then wrap_tools r p.repo Instructions.path_tools reg else reg,
+        },
+    }
+
+#[partial]
+def wrap_tools (r : Ref (List InstrFile)) (repo : Path) (names : List String) (reg : ToolRegistry) : ToolRegistry :=
+    match names {
+        List.empty => reg,
+        List.cons n rest => wrap_tools r repo rest (wrap_one r repo n reg),
+    }
+
+def wrap_one (r : Ref (List InstrFile)) (repo : Path) (name : String) (reg : ToolRegistry) : ToolRegistry :=
+    match ToolRegistry.lookup name reg {
+        Option.none => reg,
+        Option.some impl => ToolRegistry.register (attached r repo impl) reg,
+    }
+
+def attached (r : Ref (List InstrFile)) (repo : Path) (impl : ToolImpl) : ToolImpl :=
+    match impl {
+        { spec, cap, run } =>
+            let t : ToolImpl := { spec := spec, cap := cap, run := fn (id : String) (j : Json) => attach_run r repo run id j } in
+            t,
+    }
+
+def attach_run (r : Ref (List InstrFile)) (repo : Path) (run : String -> Json -> ResultT String IO Content) (id : String) (j : Json) : ResultT String IO Content :=
+    ResultT.mk (do {
+        let res <- ResultT.run (run id j);
+        after_run r repo j res
+    })
+
+def after_run (r : Ref (List InstrFile)) (repo : Path) (j : Json) (res : Result String Content) : IO (Result String Content) :=
+    match res {
+        Result.err e => IO.pure (Result.err e),
+        Result.ok c => do {
+            let notes <- Instructions.attach_for r repo (input_path j);
+            IO.pure (Result.ok (with_attached notes c))
+        },
+    }
+
+/// The notes for the files a tool at `p` reaches for the first time;
+/// they join `r`, so each is attached once.
+pub def Instructions.attach_for (r : Ref (List InstrFile)) (repo : Path) (p : Option Path) : IO (List String) :=
+    match p {
+        Option.none => IO.pure List.empty,
+        Option.some path => do {
+            let dir <- dir_of path;
+            let loaded <- Ref.get r;
+            let fs <- Instructions.unseen loaded repo dir;
+            let _ <- Ref.set r (List.append loaded fs);
+            IO.pure (List.map Instructions.attach_note fs)
+        },
+    }
+
+/// A directory is itself; a file (or a path not there yet) is its parent.
+def dir_of (p : Path) : IO Path := do {
+    let d <- IO.is_dir p;
+    IO.pure (if d then p else match Path.parent p { Option.some q => q, Option.none => p })
+}
+
+def input_path (j : Json) : Option Path :=
+    match Json.get_object j {
+        Result.err _ => Option.none,
+        Result.ok obj => match Json.object_get "path" obj {
+            Option.none => Option.none,
+            Option.some v => match Json.get_str v {
+                Result.err _ => Option.none,
+                Result.ok s => match Path.of s {
+                    Result.ok p => Option.some p,
+                    Result.err _ => Option.none,
+                },
+            },
+        },
+    }
+
+def with_attached (notes : List String) (c : Content) : Content :=
+    match notes {
+        List.empty => c,
+        List.cons _ _ => match c {
+            Content.tool_result id output failed =>
+                Content.tool_result id (String.concat output (String.concat "\n\n" (List.intercalate "\n" notes))) failed,
+            _ => c,
+        },
     }

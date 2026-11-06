@@ -3,7 +3,7 @@
 use weaver::trust {
     TrustItem, TrustState, TrustAnswer, Trust.state, Trust.parse_record, Trust.with_root,
     Trust.recorded, Trust.answer_of, Trust.relative, Trust.decide, Trust.forced_by,
-    Trust.view,
+    Trust.view, Trust.items,
 }
 use weaver::place {SessionPlace}
 use std::path {Path}
@@ -139,3 +139,21 @@ def test_forced_by_flag_or_env_one : Bool :=
         && Trust.forced_by false (Option.some "1")
         && Bool.not (Trust.forced_by false (Option.some "0"))
         && Bool.not (Trust.forced_by false Option.none)
+
+def git_root : String := String.concat "/tmp/weaver_trust_git_" (I64.to_string process_id)
+
+/// A tracked AGENTS.md below the cwd is listed for trust: a tool may
+/// attach it later, so the user must have seen it.
+#[test]
+def test_items_list_tracked_nested_files : IO Bool := do {
+    let _ <- exec_cmd "rm" ["-rf", git_root];
+    let _ <- exec_cmd "mkdir" ["-p", String.concat git_root "/motes/x"];
+    let _ <- IO.write_file (Path.path (String.concat git_root "/AGENTS.md")) "root rules\n";
+    let _ <- IO.write_file (Path.path (String.concat git_root "/motes/x/AGENTS.md")) "x rules\n";
+    let _ <- exec_cmd "git" ["-C", git_root, "init", "-q"];
+    let _ <- exec_cmd "git" ["-C", git_root, "add", "AGENTS.md", "motes/x/AGENTS.md"];
+    let p : SessionPlace := { cwd := Path.path git_root, repo := Path.path git_root };
+    let its <- Trust.items p;
+    let _ <- exec_cmd "rm" ["-rf", git_root];
+    IO.pure (String.beq (List.intercalate "|" (List.map (fn (it : TrustItem) => it.name) its)) "AGENTS.md|motes/x/AGENTS.md")
+}
