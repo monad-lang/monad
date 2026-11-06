@@ -6,7 +6,7 @@ use lib::widgets::dialog {
     DialogModel, DialogOption, DialogStep, Dialog.make, Dialog.step, Dialog.paste,
     Dialog.note_text, Dialog.with_default, Dialog.apply, Dialog.rows, Dialog.body_rows,
     Dialog.total_rows, Dialog.frame_width, Dialog.frame_height, Dialog.content_width,
-    Dialog.with_notes, Dialog.clamp_scroll, ModalState, ModalNext, Modal.fold, Modal.idle, modal_quiet, Dialog.refresh_due,
+    Dialog.with_notes, Dialog.clamp_scroll, Dialog.footer_line, ModalState, ModalNext, Modal.fold, Modal.idle, modal_quiet, Dialog.refresh_due,
 }
 use lib::input {InputReader, input_reader}
 use lib::types {Key, Event, MouseEvent, MouseButton}
@@ -303,3 +303,9 @@ def test_quiet_polls_run_the_refresh : IO Bool := do {
     IO.pure (sa.idle == 1 && Bool.not sa.dirty && sb.idle == 2 && Bool.not (String.beq sb.d.title "refreshed")
         && sc.idle == 0 && sc.dirty && String.beq sc.d.title "refreshed")
 }
+
+/// A body taller than its frame names the scroll keys in the footer.
+#[test]
+def test_footer_names_scroll_keys_on_overflow : Bool :=
+    String.contains (Dialog.footer_line dialog true) "PgUp/PgDn"
+        && Bool.not (String.contains (Dialog.footer_line dialog false) "PgUp/PgDn")

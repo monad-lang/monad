@@ -259,29 +259,38 @@ pub def Gate.assessment_lines (root : Option Path) (a : Assessment) : String :=
 
 /// The `path` a pick's input names (`write`, `edit`, `read`), when it
 /// has one: the dialog must say WHICH file is about to change.
-pub def pick_target (p : Pick) : Option String :=
+pub def pick_target (p : Pick) : Option String := input_str "path" p
+
+/// The shell command a pick will run, when its input carries one.
+pub def pick_command (p : Pick) : Option String := input_str "command" p
+
+/// The string field `key` of the pick's input object.
+def input_str (key : String) (p : Pick) : Option String :=
     match Json.get_object p.input {
         Result.err _ => Option.none,
-        Result.ok obj => match Json.object_get "path" obj {
+        Result.ok obj => match Json.object_get key obj {
             Option.none => Option.none,
             Option.some j => match Json.get_str j {
-                Result.ok path => Option.some path,
+                Result.ok v => Option.some v,
                 Result.err _ => Option.none,
             },
         },
     }
 
-/// One line: `[approve] write write -> /path`, or the input JSON when
-/// the tool names no path. For a `write`/`edit` pick the diff block
-/// follows on its own lines, then the answer prompt. The model's input
-/// JSON is the whole contract, truncated only so a huge pick cannot
-/// bury the prompt.
+/// `[approve] write write -> /path`; for a pick that runs a command,
+/// the whole command (the human approves exactly what runs, so it is
+/// never cut; the TUI dialog scrolls it); otherwise the input JSON,
+/// truncated so a huge pick cannot bury the prompt. For a `write`/`edit`
+/// pick the diff block follows on its own lines, then the answer prompt.
 def pick_header (p : Pick) : String :=
     let base : String := String.concat "[approve] "
         (String.concat (cap_name p.cap) (String.concat " " p.name)) in
     match pick_target p {
         Option.some path => String.concat base (String.concat " -> " path),
-        Option.none => String.concat base (String.concat " " (String.concat (summarize p.input) " ")),
+        Option.none => match pick_command p {
+            Option.some cmd => String.concat base (String.concat ": " (String.concat cmd " ")),
+            Option.none => String.concat base (String.concat " " (String.concat (summarize p.input) " ")),
+        },
     }
 
 /// The diff block: a blank line, the capped render, a blank line.

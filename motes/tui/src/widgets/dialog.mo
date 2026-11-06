@@ -299,9 +299,13 @@ pub def Dialog.rows (width : I64) (height : I64) (d : DialogModel) (body : List 
         option_rows d 0 width,
         blank,
         if d.notes then Dialog.text_rows dim width (note_text d) else List.empty,
-        Dialog.text_rows dim width (footer_text d),
+        Dialog.text_rows dim width (Dialog.footer_line d (I64.lt body_budget (List.length body))),
     ] in
     take budget (List.flatten parts)
+
+/// The footer, naming the scroll keys when the body does not fit.
+pub def Dialog.footer_line (d : DialogModel) (overflow : Bool) : String :=
+    if overflow then String.concat (footer_text d) " · PgUp/PgDn scroll" else footer_text d
 
 def footer_text (d : DialogModel) : String :=
     match d.field {

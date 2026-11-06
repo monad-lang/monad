@@ -33,3 +33,11 @@ def test_pick_header_falls_back_to_the_input : Bool :=
         Option.none => String.contains (pick_header p) "make test",
         Option.some _ => false,
     }
+
+/// A long command is shown whole: the human approves exactly what runs.
+#[test]
+def test_pick_header_shows_a_long_command_whole : Bool :=
+    let cmd : String := String.concat (String.repeat "x " 150) " && echo the-end" in
+    let input : Json := Json.make_object (Map.insert "command" (Json.make_str cmd) BTreeMap.empty) in
+    let p : Pick := { name := "shell", cap := Capability.exec, input := input } in
+    String.contains (pick_header p) "the-end"

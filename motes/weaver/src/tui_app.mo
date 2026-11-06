@@ -1570,7 +1570,7 @@ def prompt_overlay (colors : Bool) (store : Option StoreState) (grants : Option 
         Option.some path => List.cons (String.concat "file: " path) List.empty,
     };
     let place : List String := theme_split_lines (Gate.assessment_lines root a);
-    let body : List String := List.append (List.append (List.append [pick_header p] place) target) (diff_lines_of diff_pair);
+    let body : List String := List.append (List.append (List.append (theme_split_lines (pick_header p)) place) target) (diff_lines_of diff_pair);
     let repo_ok : Bool := Reach.is_inside a.scope;
     let opts : List DialogOption := perm_options p.cap repo_ok;
     let subtitle : String := String.concat (cap_name p.cap) (String.concat " " p.name);
