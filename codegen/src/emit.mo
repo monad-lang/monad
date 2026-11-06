@@ -51,7 +51,7 @@ use lib::decls {
     filter_reachable_decls, reachable_defs_from,
 }
 use lib::tco {apply_self_tco}
-use lib::qualify {qtest_def, qualified_def_name_str, qualify_modules}
+use lib::qualify {qualified_def_name_str, qualify_modules}
 use lib::free_names {collect_referenced_names, free_names_of_term}
 use lang::typecheck::traverse {term_map_children}
 use lang::elim_lower {elim_to_literal}
@@ -5915,140 +5915,6 @@ def strs_have_no_i8_star (ss : List String) : Bool :=
 /// A hand-built single-field Param -- the fixture shape for the
 /// composite-keying test below (see `point_ind` in lang/tests/infer_tests.mo
 /// for the source of the pattern).
-#[partial]
-def unit_test_param (nm : String) : Param :=
-    Param.mk (Identifier.id nm) (Term.sort (SortLevel.concrete 1)) Multiplicity.many Option.none List.empty
-
-/// A `Struct` with one field per name given, as a decl-list-free value
-/// (`extract_structs` is what turns real decls into these).
-#[partial]
-def unit_test_struct (type_name : String) (field_names : List String) : Struct :=
-    Struct.mk (Identifier.id type_name)
-        (List.map (fn n => StructField.mk (Identifier.id n) (Term.sort (SortLevel.concrete 1)) Option.none Multiplicity.many) field_names)
-        List.empty Visibility.package_private
-
-/// Regression tests for `native_runtime_fn_name`/`compile_native_def_wrapper_ir`:
-/// a `#[native string_concat]`/`#[native string_eq]`-attributed def
-/// (`String.concat`/`String.beq`'s own shape, init/string.mo) must
-/// compile to a real call into its whitelisted runtime function, not
-/// the generic hole-bodied-native fallback's `alloc_constructor(0, 0)`
-/// "return Unit" stub (confirmed as a real gap: that stub was
-/// `String.concat`'s own actual compiled body, silently discarding both
-/// arguments and producing an empty/meaningless result at runtime).
-#[partial]
-def native_attr (target : String) : List Attribute :=
-    List.cons (Attribute.mk (Identifier.id "native") (List.cons (AttrArg.ident (Identifier.id target)) List.empty)) List.empty
-
-/// A 2-param, hole-bodied `#[native <target>]` def -- `lam_params`
-/// (lang/parser.mo) always wraps even a hole body in one lambda per
-/// param, so a REAL parsed native def's own body looks exactly like
-/// this, not a bare `Term.hole`.
-#[partial]
-def native_def_fixture (name : String) (target : String) : Def :=
-    let body := Term.lam (binder_named (Identifier.id "a")) Term.hole
-        (Term.lam (binder_named (Identifier.id "b")) Term.hole Term.hole) in
-    Def.mk (NamePath.mk (List.cons (Identifier.id name) List.empty)) Term.hole body
-        List.empty (native_attr target) Visibility.package_private List.empty
-
-#[partial]
-def compile_native_def_fixture_text (name : String) (target : String) : String :=
-    match compile_db_def_ir (empty_ctx empty_arities str_map_empty str_map_empty str_map_empty str_map_empty) (native_def_fixture name target) {
-        { ctx := _, funcs := funcs, globals := _, .. } =>
-            emit_module (LLVMModule.mk "x86_64-unknown-linux-gnu" List.empty funcs List.empty Option.none List.empty),
-    }
-
-/// `Option.some _ => true` -- a presence test without needing a `BEq`
-/// instance for `NativeWrapKind` (there is none, and deriving one just to
-/// compare against `Option.none` would be the tail wagging the dog).
-#[partial]
-def native_wrap_is_some (attrs : List Attribute) : Bool :=
-    match native_runtime_fn_name attrs {
-        Option.some _ => true,
-        Option.none => false,
-    }
-
-/// A single, unlocated `myfunc` fixture def -- used by the
-/// `compile_db_decls_ir_with_debug` tests below.
-#[partial]
-def debug_fixture_def : Def :=
-    Def.mk (NamePath.mk [Identifier.id "myfunc"]) (Term.sort (SortLevel.concrete 1))
-        (Term.lit (Literal.num 42 NumSuffix.i64)) List.empty empty_attrs Visibility.package_private List.empty
-
-/// A def with a source position on an INNER term, as
-/// `decls_parser_located` produces.
-///
-/// Two things this fixture's shape is deliberate about, both learned by
-/// getting them wrong first:
-///
-///   - **The wrapper is on the body, and `strip_db_lams` must keep it.**
-///     That helper peels wrappers to see THROUGH them to a binder, but
-///     returns the final term wrapped -- `compile_db_def_ir_body` compiles
-///     exactly that term, so peeling it there would silently discard the
-///     body's own position. Getting this wrong is invisible: the def still
-///     compiles and still carries the function-level location.
-///   - **The located term is an `if`, not a literal.** A literal compiles to
-///     a VALUE and emits no instructions, so there is nothing to attach a
-///     position to and `prepend_loc_marker` correctly emits no marker. That
-///     is exactly why `factorial`'s `then 1` produces no line-6 entry: the
-///     constant is folded into a phi operand.
-#[partial]
-def located_fixture_def : Def :=
-    Def.mk (NamePath.mk [Identifier.id "myfunc"]) (Term.sort (SortLevel.concrete 1))
-        (Term.ctx (Location.mk 40 9 7)
-            (Term.lit (Literal.if_ (Term.lit (Literal.num 1 NumSuffix.i64))
-                (Term.lit (Literal.num 2 NumSuffix.i64))
-                (Term.lit (Literal.num 3 NumSuffix.i64)))))
-        List.empty empty_attrs Visibility.package_private List.empty
-
-/// `debug_fixture_def` with the position a located parse puts on the
-/// body -- line 2, column 3, at offset 5.
-#[partial]
-def located_num_fixture_def : Def :=
-    Def.mk (NamePath.mk [Identifier.id "myfunc"]) (Term.sort (SortLevel.concrete 1))
-        (Term.ctx (Location.mk 5 2 3) (Term.lit (Literal.num 42 NumSuffix.i64)))
-        List.empty empty_attrs Visibility.package_private List.empty
-
-/// A def whose body is a native Bool comparison over a BRANCHING
-/// operand -- `I64.beq (if b then x else y) (-1)` -- the exact shape
-/// that ended the bootstrap at `llc` (`lang.types::parse_span_is_unknown`,
-/// whose real operand is a struct field access: that compiles as a
-/// single-case match with the same entry/check/merge block chain this
-/// `if` produces). The comparison's `icmp` gets spliced into the
-/// operand's merge block, which `compose_seq` re-closes with
-/// `ret <raw i1>`; the def's own entry list ends in the operand's
-/// branch, so `already_terminated` is true and the plain-ret boxing
-/// (`materialize_branch_val`) never runs.
-#[partial]
-def native_bool_over_branching_fixture_def : Def :=
-    Def.mk (NamePath.mk [Identifier.id "spbeq"]) (Term.sort (SortLevel.concrete 1))
-        (Term.lam (binder_named (Identifier.id "b")) (Term.sort (SortLevel.concrete 1))
-            (Term.lam (binder_named (Identifier.id "x")) (Term.sort (SortLevel.concrete 1))
-                (Term.lam (binder_named (Identifier.id "y")) (Term.sort (SortLevel.concrete 1))
-                    (Term.app
-                        (Term.app (Term.var 3 (DebugName.named (Identifier.id "I64.beq")))
-                            (Term.lit (Literal.if_
-                                (Term.var 2 (DebugName.named (Identifier.id "b")))
-                                (Term.var 1 (DebugName.named (Identifier.id "x")))
-                                (Term.var 0 (DebugName.named (Identifier.id "y"))))))
-                        (Term.lit (Literal.num (-1) NumSuffix.i64))))))
-        List.empty empty_attrs Visibility.package_private List.empty
-
-#[partial]
-def check_contains (text : String) (needle : String) : Bool :=
-    if String.beq text "" then false
-    else if String.beq (String.slice text 0 (String.length needle)) needle then true
-    else check_contains (String.slice text 1 (String.length text - 1)) needle
-
-/// `check_contains`'s counting sibling -- for tests that must pin an
-/// occurrence count EXACTLY (e.g. one `alloc_constructor`, where a
-/// wrong wrap kind would emit two) rather than detect mere presence.
-#[partial]
-def check_count (text : String) (needle : String) : I64 :=
-    if String.beq text "" then 0
-    else if String.beq (String.slice text 0 (String.length needle)) needle
-    then 1 + check_count (String.slice text 1 (String.length text - 1)) needle
-    else check_count (String.slice text 1 (String.length text - 1)) needle
-
 // === Multi-module compilation ===
 
 /// Compile all loaded modules to a single LLVM module.
@@ -6834,10 +6700,3 @@ pub def compile_loaded_modules_to_ir_with_debug (loaded : LoadedModules) (verbos
 // field 0 with no tag check, giving `strcmp("List", 0x1)`.
 // See AGENTS.md items 18/19, which name this exact fix as the
 // principled one.
-
-// ─── Tests: module-qualified symbols ────────────────────────────────
-//
-// These build `ModuleInfo`s by hand rather than going through the
-// loader, so they exercise exactly the qualification pass -- the shape
-// that matters is two modules and one shared name, which no real
-// fixture file can express as compactly.

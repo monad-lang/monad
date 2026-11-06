@@ -11,7 +11,7 @@ use lang::name_text {unqualify_def_name}
 use lib::free_names {collect_referenced_names}
 use lib::util {}
 use std::map {HashMap}
-use lib::decls {extract_defs, extract_inductives, extract_structs, filter_reachable_decls, unit_test_inductive_decl, unit_test_struct_decl}
+use lib::decls {extract_defs, extract_inductives, extract_structs, filter_reachable_decls}
 
 /// `filter_reachable_decls` must carry STRUCT decls through, exactly as
 /// it carries inductives: the constructor-arity table codegen builds
@@ -26,6 +26,22 @@ use lib::decls {extract_defs, extract_inductives, extract_structs, filter_reacha
 /// def closure empty, so what comes back is exactly "inductives, structs,
 /// and nothing else" -- asserted all three ways so a future filter that
 /// keeps too much fails here too.
+// ─── Tests ──────────────────────────────────────────────────────────
+
+/// A one-field `Struct`, built by hand (`extract_structs` is what turns
+/// real decls into these).
+#[partial]
+def unit_test_struct_decl (type_name : String) : Struct :=
+    Struct.mk (Identifier.id type_name)
+        [StructField.mk (Identifier.id "x") (Term.sort (SortLevel.concrete 1)) Option.none Multiplicity.many]
+        List.empty Visibility.package_private
+
+/// A one-constructor `Inductive`, by hand -- the comparison case below.
+#[partial]
+def unit_test_inductive_decl (type_name : String) : Inductive :=
+    Inductive.mk (NamePath.mk (List.cons (Identifier.id type_name) List.empty))
+        List.empty (Term.sort (SortLevel.concrete 1)) List.empty List.empty Visibility.package_private
+
 #[test]
 def test_filter_reachable_decls_keeps_structs : Bool :=
     let decls : List Decl := List.cons (Decl.struct_d (unit_test_struct_decl "Point"))

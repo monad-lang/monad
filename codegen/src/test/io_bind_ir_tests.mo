@@ -18,7 +18,7 @@
 use lib::test::e2e_harness {
     compile_source_ir, compile_source_run_expect, ir_function,
 }
-use lib::emit {check_contains}
+use lib::test::support {check_contains}
 open IO {println}
 
 /// A self-recursive IO loop with one do-bind: pre-fusion this is

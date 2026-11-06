@@ -1,7 +1,8 @@
 /// Tests moved out of `codegen::test_driver` so the production module stays readable.
 
 use lib::decls {filter_reachable_decls}
-use lib::qualify {qtest_def, qualified_def_name_str, qualify_modules}
+use lib::qualify {qualified_def_name_str, qualify_modules}
+use lib::test::support {qtest_def}
 use lang::types {
     Attribute, Class, DebugName, Decl, Def, ModulePath, NamePath, Term, has_attr, i64, id, no_attrs, num, package_private,
     show_identifier, struct_lit, use_bare,
@@ -31,7 +32,81 @@ use lang::scope {
 use std::list {List.intercalate, List.length}
 use std::log {fail_line}
 use std::stream {StreamError, StreamError.is_not_found}
-use lib::test_driver {TestSpec, bool_spec, bool_specs_upto, classify_test_def, decl_list_has_exactly_one_main, discover_test_defs, display_prefix_of, dummy_def, dummy_module_path, dummy_npath, fmt_dur_ns, fmt_dur_source, io_result_spec, io_spec, is_no_tests_error, is_test_def, no_tests_error_message, parse_driver_result, rename_user_main, result_file_marker, result_spec, synth_test_stmts, synthesize_test_driver_source, test_attr, test_driver_gates, test_result_path, ty_var, typed_def}
+use lib::test_driver {
+    TestSpec, classify_test_def, discover_test_defs, display_prefix_of,
+    fmt_dur_ns, fmt_dur_source, is_no_tests_error, is_test_def,
+    no_tests_error_message, parse_driver_result, rename_user_main,
+    result_file_marker, synth_test_stmts, synthesize_test_driver_source,
+    test_driver_gates,
+}
+
+// ─── Tests ───────────────────────────────────────────────────────────
+//
+// Hand-built `Decl.def_d` fixtures (some `#[test]`-attributed, some
+// not), same construction style as `codegen/link.mo`'s own
+// existing `test_link_compile_defs_to_ir` fixture. No pipeline wiring
+// exercised here — pure discovery-function unit tests.
+
+def test_attr : List Attribute := List.cons (Attribute.mk (Identifier.id "test") List.empty) List.empty
+/// A one-segment MODULE path -- the `use`-path role
+/// (`test_discover_test_defs_ignores_non_def_decls` builds a `Decl.use_d`
+/// with it, and `Decl.use_d` is the one decl form that kept a real
+/// `ModulePath` through the qualified-names split).
+def dummy_module_path (name : String) : ModulePath := ModulePath.mk (List.cons (Identifier.id name) List.empty)
+
+/// The DEF-name role of the same one-segment shape -- `Def.name` is a
+/// `NamePath`, so the fixtures below cannot reuse `dummy_module_path`.
+def dummy_npath (name : String) : NamePath := NamePath.mk (List.cons (Identifier.id name) List.empty)
+
+def dummy_def (name : String) (attrs : List Attribute) : Def :=
+    Def.mk (dummy_npath name) Term.hole (Term.lit (Literal.num 1 NumSuffix.i64)) List.empty attrs Visibility.package_private List.empty
+
+/// A `Def` whose declared type is `Bool` / `IO Bool`, for
+/// `classify_test_def`. The type term is built the same way the parser
+/// would leave it: a bare `Term.var` head for `Bool`, and an
+/// application of the `IO` head to it for `IO Bool`.
+def typed_def (name : String) (typ : Term) : Def :=
+    Def.mk (dummy_npath name) typ (Term.lit (Literal.num 1 NumSuffix.i64)) List.empty test_attr Visibility.package_private List.empty
+
+def ty_var (name : String) : Term := Term.var 0 (DebugName.named (Identifier.id name))
+
+def bool_spec (name : String) : TestSpec :=
+    { display := "m::" ++ name, call := name, io_test := false, result_test := false }
+
+def io_spec (name : String) : TestSpec :=
+    { display := "m::" ++ name, call := name, io_test := true, result_test := false }
+
+def result_spec (name : String) : TestSpec :=
+    { display := "m::" ++ name, call := name, io_test := false, result_test := true }
+
+def io_result_spec (name : String) : TestSpec :=
+    { display := "m::" ++ name, call := name, io_test := true, result_test := true }
+
+// Every unit test below synthesizes with the same result path -- only
+// presence in the emitted source is asserted; nothing is ever written.
+def test_result_path : String := "/tmp/__monad_test_driver_result.txt"
+
+#[partial]
+def decl_list_has_exactly_one_main (decl_list : List Decl) : Bool :=
+    I64.beq (count_main_defs decl_list) 1
+
+#[partial]
+def count_main_defs (decl_list : List Decl) : I64 :=
+    match decl_list {
+        List.empty => 0,
+        List.cons d rest =>
+            let here : I64 := match d {
+                Decl.def_d def_val => if String.beq (name_path_to_str (Def.name def_val)) "main" then 1 else 0,
+                _ => 0,
+            } in
+            here + count_main_defs rest,
+    }
+
+#[partial]
+def bool_specs_upto (n : I64) : List TestSpec :=
+    if I64.lt n 1
+    then List.empty
+    else List.cons (bool_spec "t") (bool_specs_upto (n - 1))
 
 #[test]
 def test_is_test_def_true_for_tagged : Bool :=

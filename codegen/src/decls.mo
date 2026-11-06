@@ -288,19 +288,3 @@ pub def collect_all_decls_from_modules (modules : List ModuleInfo) (acc : List D
         let mod_decls := mod_.decl_list in
         collect_all_decls_from_modules rest (List.append mod_decls acc),
 }
-
-// ─── Tests ──────────────────────────────────────────────────────────
-
-/// A one-field `Struct`, built by hand (`extract_structs` is what turns
-/// real decls into these).
-#[partial]
-def unit_test_struct_decl (type_name : String) : Struct :=
-    Struct.mk (Identifier.id type_name)
-        [StructField.mk (Identifier.id "x") (Term.sort (SortLevel.concrete 1)) Option.none Multiplicity.many]
-        List.empty Visibility.package_private
-
-/// A one-constructor `Inductive`, by hand -- the comparison case below.
-#[partial]
-def unit_test_inductive_decl (type_name : String) : Inductive :=
-    Inductive.mk (NamePath.mk (List.cons (Identifier.id type_name) List.empty))
-        List.empty (Term.sort (SortLevel.concrete 1)) List.empty List.empty Visibility.package_private

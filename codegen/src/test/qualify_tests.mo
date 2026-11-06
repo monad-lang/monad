@@ -20,7 +20,8 @@ use lib::util {
 }
 use std::map {HashMap}
 use std::list {List.intercalate, List.length}
-use lib::qualify {ambiguous_owner_msg, qtest_body_refs, qtest_class, qtest_class_names, qtest_def, qtest_def_names, qtest_elab_failures_of_modules, qtest_field, qtest_lam_annotations, qtest_module, qtest_struct, qtest_struct_entries, qtest_struct_has_entry, qtest_type, qtest_type_names, qualify_modules, qualify_one_decl_name, struct_default_ref_names}
+use lib::qualify {ambiguous_owner_msg, decl_def_name, identifier_names, qualify_modules, qualify_one_decl_name}
+use lib::test::support {qtest_def}
 
 /// The collision that crashed the self-compiled compiler: one bare name,
 /// two modules. Both must survive, under distinct symbols.
@@ -336,3 +337,217 @@ def test_ambiguous_owner_msg_spells_module_paths_with_colons : Bool :=
     let b : ModulePath := ModulePath.mk [Identifier.id "std", Identifier.id "fs"] in
     String.beq (ambiguous_owner_msg a "read" [b])
         "`read` is referenced from std::io but declared in std::fs -- add an explicit `use <module> {read}` to say which"
+
+#[partial]
+def qtest_module (name : String) (decls : List Decl) : ModuleInfo :=
+    ModuleInfo.mk (bare_modpath name) "" decls
+
+/// `def <name> := <body_ref>` -- a def whose whole body is one bare
+/// reference, which is all these tests need to watch a reference move.
+#[partial]
+def qtest_def_names (modules : List ModuleInfo) : List String :=
+    match modules {
+        List.empty => List.empty,
+        List.cons m rest => List.append (qtest_names_of_decls (m.decl_list)) (qtest_def_names rest),
+    }
+
+#[partial]
+def qtest_names_of_decls (decls : List Decl) : List String := match decls {
+    List.empty => List.empty,
+    List.cons d rest =>
+        match decl_def_name d {
+            Option.some n => List.cons (show_name_path n) (qtest_names_of_decls rest),
+            Option.none => qtest_names_of_decls rest,
+        },
+}
+
+#[partial]
+def qtest_body_refs (modules : List ModuleInfo) : List String :=
+    match modules {
+        List.empty => List.empty,
+        List.cons m rest => List.append (qtest_refs_of_decls (m.decl_list)) (qtest_body_refs rest),
+    }
+
+#[partial]
+def qtest_refs_of_decls (decls : List Decl) : List String := match decls {
+    List.empty => List.empty,
+    List.cons d rest =>
+        match d {
+            Decl.def_d dd =>
+                match dd {
+                    Def.mk {name := _n, typ := _t, term := term_, constraints := _c, attrs := _a, vis := _v, ..} =>
+                        List.append (collect_referenced_names term_ List.empty) (qtest_refs_of_decls rest),
+                },
+            _ => qtest_refs_of_decls rest,
+        },
+}
+
+#[partial]
+def struct_default_ref_names (modules : List ModuleInfo) : List String :=
+    match modules {
+        List.empty => List.empty,
+        List.cons m rest => List.append (struct_default_ref_names_of_decls (m.decl_list)) (struct_default_ref_names rest),
+    }
+
+#[partial]
+def struct_default_ref_names_of_decls (decls : List Decl) : List String := match decls {
+    List.empty => List.empty,
+    List.cons d rest =>
+        match d {
+            Decl.struct_d st =>
+                match st {
+                    Struct.mk _n fields _attrs _v => List.append (struct_field_default_refs fields) (struct_default_ref_names_of_decls rest),
+                },
+            _ => struct_default_ref_names_of_decls rest,
+        },
+}
+
+#[partial]
+def struct_field_default_refs (fields : List StructField) : List String := match fields {
+    List.empty => List.empty,
+    List.cons f rest =>
+        match f {
+            StructField.mk _n _t default _m =>
+                match default {
+                    Option.some t => List.append (identifier_names (free_names_of_term List.empty t)) (struct_field_default_refs rest),
+                    Option.none => struct_field_default_refs rest,
+                },
+        },
+}
+
+#[partial]
+def qtest_type (name : String) : Decl :=
+    Decl.inductive_d (Inductive.mk (bare_npath name) List.empty Term.hole List.empty List.empty Visibility.package_private)
+
+#[partial]
+def qtest_struct (name : String) (fields : List StructField) : Decl :=
+    Decl.struct_d (Struct.mk (Identifier.id name) fields List.empty Visibility.package_private)
+
+#[partial]
+def qtest_class (name : String) : Decl :=
+    Decl.class_d (Class.mk (Identifier.id name) List.empty List.empty List.empty Visibility.package_private Option.none)
+
+#[partial]
+def qtest_field (name : String) : StructField :=
+    StructField.mk (Identifier.id name) Term.hole Option.none Multiplicity.many
+
+#[partial]
+def qtest_type_names (modules : List ModuleInfo) : List String :=
+    match modules {
+        List.empty => List.empty,
+        List.cons m rest => List.append (qtest_type_names_of_decls (m.decl_list)) (qtest_type_names rest),
+    }
+
+#[partial]
+def qtest_type_names_of_decls (decls : List Decl) : List String := match decls {
+    List.empty => List.empty,
+    List.cons d rest =>
+        match d {
+            Decl.inductive_d ind =>
+                match ind {
+                    Inductive.mk name _ _ _ _ _ => List.cons (show_name_path name) (qtest_type_names_of_decls rest),
+                },
+            _ => qtest_type_names_of_decls rest,
+        },
+}
+
+#[partial]
+def qtest_struct_entries (modules : List ModuleInfo) : List (Pair String (List String)) :=
+    match modules {
+        List.empty => List.empty,
+        List.cons m rest => List.append (qtest_struct_entries_of_decls (m.decl_list)) (qtest_struct_entries rest),
+    }
+
+#[partial]
+def qtest_struct_entries_of_decls (decls : List Decl) : List (Pair String (List String)) := match decls {
+    List.empty => List.empty,
+    List.cons d rest =>
+        match d {
+            Decl.struct_d st =>
+                match st {
+                    Struct.mk name fields _attrs _vis =>
+                        List.cons (Pair.pair (show_identifier name) (qtest_field_names fields)) (qtest_struct_entries_of_decls rest),
+                },
+            _ => qtest_struct_entries_of_decls rest,
+        },
+}
+
+#[partial]
+def qtest_field_names (fields : List StructField) : List String := match fields {
+    List.empty => List.empty,
+    List.cons f rest =>
+        match f {
+            StructField.mk name _typ _default _mult => List.cons (show_identifier name) (qtest_field_names rest),
+        },
+}
+
+#[partial]
+def qtest_struct_has_entry (entries : List (Pair String (List String))) (name : String) (field : String) : Bool :=
+    match entries {
+        List.empty => false,
+        List.cons e rest =>
+            match e {
+                Pair.pair n fs => if String.beq n name
+                    then list_contains_str fs field
+                    else qtest_struct_has_entry rest name field,
+            },
+    }
+
+#[partial]
+def qtest_class_names (modules : List ModuleInfo) : List String :=
+    match modules {
+        List.empty => List.empty,
+        List.cons m rest => List.append (qtest_class_names_of_decls (m.decl_list)) (qtest_class_names rest),
+    }
+
+#[partial]
+def qtest_class_names_of_decls (decls : List Decl) : List String := match decls {
+    List.empty => List.empty,
+    List.cons d rest =>
+        match d {
+            Decl.class_d cls =>
+                match cls {
+                    Class.mk name _params _constraints _methods _vis _ => List.cons (show_identifier name) (qtest_class_names_of_decls rest),
+                },
+            _ => qtest_class_names_of_decls rest,
+        },
+}
+
+#[partial]
+def qtest_lam_annotations (modules : List ModuleInfo) : List String :=
+    match modules {
+        List.empty => List.empty,
+        List.cons m rest => List.append (qtest_lam_annotations_of_decls (m.decl_list)) (qtest_lam_annotations rest),
+    }
+
+#[partial]
+def qtest_lam_annotations_of_decls (decls : List Decl) : List String := match decls {
+    List.empty => List.empty,
+    List.cons d rest =>
+        match d {
+            Decl.def_d df =>
+                match df {
+                    Def.mk _n _typ term _c _a _v _p =>
+                        match term {
+                            Term.lam _b ann _body => List.append (identifier_names (free_names_of_term List.empty ann)) (qtest_lam_annotations_of_decls rest),
+                            _ => qtest_lam_annotations_of_decls rest,
+                        },
+                },
+            _ => qtest_lam_annotations_of_decls rest,
+        },
+}
+
+/// The decls that fail to elaborate once the whole-program scope is
+/// built from the QUALIFIED modules -- the pipeline shape
+/// `compile_input_of_modules` runs after this pass.
+#[partial]
+def qtest_elab_failures_of_modules (modules : List ModuleInfo) : List String :=
+    match modules {
+        List.empty => List.empty,
+        List.cons m rest =>
+            let sd := build_scope_from_decls m.path m.decl_list in
+            let scope : Scope := { module_id := m.path, scope := sd, parent := Option.none, incomplete_match_ok := false } in
+            let locals : LocalScope := { vars := List.empty, parent := Option.none } in
+            List.append (best_effort_failed (elaborate_module_decls_reporting scope m.decl_list locals))
+                (qtest_elab_failures_of_modules rest),
+    }

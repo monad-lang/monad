@@ -4,7 +4,8 @@ use lang::types {
     num, package_private, sort_n, var,
 }
 use llvm::ir {emit_module}
-use lib::emit {check_contains, compile_db_decls_ir}
+use lib::emit {compile_db_decls_ir}
+use lib::test::support {check_contains}
 
 open Term {lam, lit}
 open Literal {num}

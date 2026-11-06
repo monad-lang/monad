@@ -42,7 +42,7 @@
 /// `std/src/concurrent/{fiber,combine,poll}_test.mo` run through this
 /// driver; the gate remains the guard for any future unwired native.
 use lib::decls {filter_reachable_decls}
-use lib::qualify {qtest_def, qualified_def_name_str, qualify_modules}
+use lib::qualify {qualified_def_name_str, qualify_modules}
 use lang::types {
     Attribute, Class, DebugName, Decl, Def, ModulePath, NamePath, Term, has_attr, i64, id, no_attrs, num, package_private,
     show_identifier, struct_lit, use_bare,
@@ -443,6 +443,7 @@ def synth_all_test_stmts (specs : List TestSpec) (idx : I64) (esc : String) : St
 /// driver is a standalone program that cannot call back into the
 /// compiler, so the logic has to exist as text; `test_fmt_dur_source_
 /// rounds_half_up` guards the two against drifting apart.
+
 def fmt_dur_source : String :=
     "def __pad2 (n : I64) : String :=\n" ++
     "    if I64.lt n 10 then \"0\" ++ I64.to_string n else I64.to_string n\n" ++
@@ -751,78 +752,10 @@ def rename_user_main_in_modules (target_mp : ModulePath) (mods : List ModuleInfo
             List.cons renamed (rename_user_main_in_modules target_mp rest),
     }
 
-// ─── Tests ───────────────────────────────────────────────────────────
-//
-// Hand-built `Decl.def_d` fixtures (some `#[test]`-attributed, some
-// not), same construction style as `codegen/link.mo`'s own
-// existing `test_link_compile_defs_to_ir` fixture. No pipeline wiring
-// exercised here — pure discovery-function unit tests.
-
-def test_attr : List Attribute := List.cons (Attribute.mk (Identifier.id "test") List.empty) List.empty
-/// A one-segment MODULE path -- the `use`-path role
-/// (`test_discover_test_defs_ignores_non_def_decls` builds a `Decl.use_d`
-/// with it, and `Decl.use_d` is the one decl form that kept a real
-/// `ModulePath` through the qualified-names split).
-def dummy_module_path (name : String) : ModulePath := ModulePath.mk (List.cons (Identifier.id name) List.empty)
-
-/// The DEF-name role of the same one-segment shape -- `Def.name` is a
-/// `NamePath`, so the fixtures below cannot reuse `dummy_module_path`.
-def dummy_npath (name : String) : NamePath := NamePath.mk (List.cons (Identifier.id name) List.empty)
-
-def dummy_def (name : String) (attrs : List Attribute) : Def :=
-    Def.mk (dummy_npath name) Term.hole (Term.lit (Literal.num 1 NumSuffix.i64)) List.empty attrs Visibility.package_private List.empty
-
-/// A `Def` whose declared type is `Bool` / `IO Bool`, for
-/// `classify_test_def`. The type term is built the same way the parser
-/// would leave it: a bare `Term.var` head for `Bool`, and an
-/// application of the `IO` head to it for `IO Bool`.
-def typed_def (name : String) (typ : Term) : Def :=
-    Def.mk (dummy_npath name) typ (Term.lit (Literal.num 1 NumSuffix.i64)) List.empty test_attr Visibility.package_private List.empty
-
-def ty_var (name : String) : Term := Term.var 0 (DebugName.named (Identifier.id name))
-
-def bool_spec (name : String) : TestSpec :=
-    { display := "m::" ++ name, call := name, io_test := false, result_test := false }
-
-def io_spec (name : String) : TestSpec :=
-    { display := "m::" ++ name, call := name, io_test := true, result_test := false }
-
-def result_spec (name : String) : TestSpec :=
-    { display := "m::" ++ name, call := name, io_test := false, result_test := true }
-
-def io_result_spec (name : String) : TestSpec :=
-    { display := "m::" ++ name, call := name, io_test := true, result_test := true }
-
-// Every unit test below synthesizes with the same result path -- only
-// presence in the emitted source is asserted; nothing is ever written.
-def test_result_path : String := "/tmp/__monad_test_driver_result.txt"
-
-#[partial]
-def decl_list_has_exactly_one_main (decl_list : List Decl) : Bool :=
-    I64.beq (count_main_defs decl_list) 1
-
-#[partial]
-def count_main_defs (decl_list : List Decl) : I64 :=
-    match decl_list {
-        List.empty => 0,
-        List.cons d rest =>
-            let here : I64 := match d {
-                Decl.def_d def_val => if String.beq (name_path_to_str (Def.name def_val)) "main" then 1 else 0,
-                _ => 0,
-            } in
-            here + count_main_defs rest,
-    }
-
 // ─── Duration formatting ────────────────────────────────────────────
 //
 // Reference: `format_duration` (rust/core/src/lib.rs) -- `{nanos}ns`,
 // `{:.0}µs` on `as_micros()`, `{:.2}ms`, `{:.2}s`.
-
-#[partial]
-def bool_specs_upto (n : I64) : List TestSpec :=
-    if I64.lt n 1
-    then List.empty
-    else List.cons (bool_spec "t") (bool_specs_upto (n - 1))
 
 // ─── `parse_driver_result` ──────────────────────────────────────────
 //
