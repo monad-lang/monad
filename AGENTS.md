@@ -138,6 +138,7 @@ monad fmt --workspace [--check]        # format/verify every workspace mote
 monad lsp                              # language server on stdio
 cargo build --manifest-path rust/Cargo.toml -p monad-core   # build the Rust host crate
 cargo test --manifest-path rust/Cargo.toml -p monad-core <name>   # one Rust test
+scripts/bump-nightly-pin.sh [--check|--dry-run]   # move nix/nightly.nix to the newest nightly
 ```
 
 - `monad fmt` canonicalizes whitespace and indentation; it never reorders or
@@ -193,6 +194,27 @@ change is in this surface too.
 A red gate means the change used something the nightly lacks (split it), the
 tree advanced past a nightly that cannot build it (wait for the next nightly —
 do not weaken the gate), or the nightly miscompiles (fix it).
+
+**Keep the pin fresh.** `nix/nightly.nix`'s pin is the host of the release's
+rung 1 (`monadNightlyRung1`), so it must never lag the compiler-source
+surface. Adopt a new nightly as soon as one is published:
+`scripts/bump-nightly-pin.sh` reads the newest `nightly-*` release from the
+releases API, fetches each platform's published `.sha256`, and rewrites the
+tag, URL and SRI of every pin entry in one atomic write (`--dry-run` previews,
+`--check` exits 1 when the pin is behind; `devenv tasks run monad:bump-nightly`
+is the local task, and the scheduled `Bump nightly pin` workflow runs the same
+script daily and opens a PR). Commit the bump — do not hand-edit the entries.
+The 2026-11-06 nightly outage is the worked example: the prelude started using
+a class-head `{u : Universe}` binder in `03bf783e`, but the pin still named
+`nightly-2026-11-01-d6238985`, published two hours before the parser support
+landed (`f74a03eb`), so rung 1 could not parse the prelude and both native legs
+failed. The tree itself was fine — the latest nightly compiled it — the pin
+was stale. A bump PR touches **only** `nix/nightly.nix`, and `nightly.yml`
+ignores a push whose only change is that file: otherwise each merge would
+publish a nightly whose only content is the bump, the next scheduled run would
+adopt it, and a nightly would beget a nightly forever. Keep the bump PR
+pin-only; a pin bump alongside a real change still releases (it is not
+pin-only), which is the two-step-rollout case.
 
 `bootstrap/nightly-floor.txt` is a one-time bootstrap window: while the latest
 nightly predates the commit named there, the script says so and uses the Rust
