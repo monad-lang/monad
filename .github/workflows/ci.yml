@@ -321,6 +321,15 @@ jobs:
       - name: Nightly compatibility gate self-test
         run: scripts/check-nightly-gate.sh
 
+      # The pin-bump script's own tests: a `file://` releases API and checksum
+      # tree drive the rewrite and every failure path, so they need no network
+      # and no release (scripts/check-nightly-pin.sh). Runs inside the dev shell
+      # because the script uses python3, which the runner host does not carry.
+      - name: Nightly pin bump self-test
+        run: |
+          nix develop --no-pure-eval --accept-flake-config \
+            -c scripts/check-nightly-pin.sh
+
       - name: Self-compile with the latest nightly (required)
         run: |
           nix develop --no-pure-eval --accept-flake-config \
