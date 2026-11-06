@@ -26,7 +26,7 @@ use weaver::error {WeaverError}
 use weaver::policy {Mode}
 use weaver::instructions {InstrFile, Instructions.capped}
 use weaver::permissions {PermGrant}
-use std::ref {Ref}
+use std::ref {Ref, Ref.new}
 use weaver::store {
     StoreState, TLine, TLine.user_line, Store.new_session, Store.append_transcript,
     SessionInfo, Store.read_meta,
@@ -70,7 +70,8 @@ def state_of (mode : Mode) (mcps : List String) : WeaverState := {
     quit := false,
     fatal := Option.none,
     colors := true,
-    name := Option.none, store := Option.none,
+    name := Option.none, trusted := false, instructions := List.empty, instr_seen := Option.none,
+    store := Option.none,
 }
 
 def run_of : RunState := {
@@ -1092,4 +1093,23 @@ def test_clear_rebuilds_the_prompt_from_the_files : IO Bool := do {
     let st : WeaverState := { (state_of Mode.manual []) with instructions := [haiku_file] };
     let r <- Commands.dispatch "/clear" st;
     IO.pure (String.contains (prompt_of r) "Always answer in haiku.")
+}
+
+/// A resumed session's prompt carries the files as last seen, not the
+/// startup ones: a change the notes already told is not lost.
+#[test]
+def test_resume_takes_the_files_as_last_seen : IO Bool := do {
+    let root : Path := test_root "resume_instr";
+    clean_dir root;
+    let newer : InstrFile := Instructions.capped (Path.path "/r/AGENTS.md") "repo" "Answer in limericks.\n" 32768;
+    let seen <- Ref.new [newer];
+    let base : WeaverState := { (state_of Mode.manual []) with instructions := [haiku_file], instr_seen := Option.some seen };
+    let r <- Store.new_session root Option.none base.run.session;
+    match r {
+        Result.err _ => IO.pure false,
+        Result.ok s0 => do {
+            let e <- Commands.dispatch (String.concat "/resume " (Path.to_string s0.dir)) (with_store base s0);
+            IO.pure (String.contains (prompt_of e) "Answer in limericks." && Bool.not (String.contains (prompt_of e) "haiku"))
+        },
+    }
 }

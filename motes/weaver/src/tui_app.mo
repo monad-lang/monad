@@ -52,6 +52,7 @@ use weaver::ui::rows {DisplayRow, Rows.of_line, Rows.widget}
 use weaver::logs {Logs.info, Logs.debug, Logs.warn, Logs.error, Logs.log_rss, Logs.sanitize}
 use weaver::title {Title.generate, Title.needed}
 use weaver::subagent {Subagent.task_tool, Subagent.drain}
+use weaver::instructions {Instructions.take_notes}
 use weaver::todo {TodoItem, TodoTool.impl, Todo.read, Todo.same}
 use weaver::procs {Procs.tail, Procs.kill, Procs.log_kill, Procs.log_exit}
 use weaver::format {format_elapsed}
@@ -69,7 +70,7 @@ use weaver::store {
 }
 use weaver::shell_tool {WeaverShell.impl, WeaverShell.fg_path}
 use weaver::stop {Stop.predicate, Stop.request, Stop.reset}
-use weaver::inbox {Inbox.post, Inbox.take, Inbox.seam}
+use weaver::inbox {Inbox.post, Inbox.take, Inbox.seam, Inbox.with_notes}
 use weaver::overlay {
     OverlayState, Overlay.read, Overlay.reset, Overlay.ack, Overlay.begin, Overlay.finish,
     Overlay.monitor_open, Overlay.monitor_close, Overlay.wait_monitor,
@@ -1267,10 +1268,12 @@ def drive_turn_tui (log : Option Logger) (gen : I64) (st : WeaverState) (text : 
                 let _ <- live_seam u;
                 UsageTracker.silent tracker u
             };
-            // Exit notes no tool boundary took ride the typed line.
+            // Exit notes no tool boundary took, and changes to the loaded
+            // AGENTS.md files, ride the typed line.
             let notes <- Inbox.take st2.store;
+            let instr <- Instructions.take_notes st2.instr_seen;
             let spend <- Ref.new usage_zero;
-            let r <- ResultT.run (drive_tui log gen st2 (TuiApp.with_task_notes notes text) on_u spend);
+            let r <- ResultT.run (drive_tui log gen st2 (Inbox.with_notes (List.append instr notes) text) on_u spend);
             let last <- UsageTracker.last tracker;
             let last_context : I64 := match r {
                 Result.err _ => st2.last_context,
@@ -2326,9 +2329,3 @@ pub def TuiApp.title_step (m : TuiModel) (t : Option (Pair String String)) : Tui
 /// Draw the next frame (a dispatched message makes the batch non-empty;
 /// `stop_sent` folds to nothing). A plain diff, unlike `repaint_cmd`.
 def draw_next : Cmd WeaverMsg := Cmd.dispatch WeaverMsg.stop_sent
-
-/// The message the model gets: the typed line, then the exit notes no
-/// tool boundary delivered.
-pub def TuiApp.with_task_notes (notes : List String) (text : String) : String :=
-    if List.is_empty notes then text
-    else String.concat text (String.concat "\n\n" (List.intercalate "\n" notes))

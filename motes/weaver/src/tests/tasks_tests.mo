@@ -6,10 +6,11 @@ use weaver::tasks {
     Tasks.exit_notes, Tasks.line,
 }
 use weaver::tui_app {
-    TuiApp.monitor_list_next, TuiApp.detail_action, TuiApp.detail_options, TuiApp.with_task_notes,
+    TuiApp.monitor_list_next, TuiApp.detail_action, TuiApp.detail_options,
     TuiApp.monitor_dialog, TuiApp.monitor_refreshed,
     MonitorView, DetailAction,
 }
+use weaver::inbox {Inbox.with_notes}
 use tui::widgets::dialog {DialogStep, DialogModel}
 use std::list {List.length, List.intercalate}
 
@@ -78,8 +79,8 @@ def test_detail_choices : Bool :=
 
 #[test]
 def test_notes_ride_the_next_message : Bool :=
-    String.beq (TuiApp.with_task_notes List.empty "go") "go"
-        && String.beq (TuiApp.with_task_notes ["[background task p-1 exited (0): make]"] "go") "go\n\n[background task p-1 exited (0): make]"
+    String.beq (Inbox.with_notes List.empty "go") "go"
+        && String.beq (Inbox.with_notes ["[background task p-1 exited (0): make]"] "go") "go\n\n[background task p-1 exited (0): make]"
 
 /// A refresh that finds a new task keeps the selected task selected: it
 /// moved down one row. The selection never runs past the last option.

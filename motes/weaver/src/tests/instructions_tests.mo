@@ -3,7 +3,9 @@ use weaver::instructions {
     InstrFile, Instructions.chain, Instructions.user_path_of, Instructions.discover, Instructions.cut_at,
     Instructions.capped, Instructions.cap_total, Instructions.render, Instructions.label,
     Instructions.note, Prompt.base, Prompt.system, Prompt.with_files,
+    Instructions.read_one, Instructions.refresh, Instructions.take_notes,
 }
+use std::ref {Ref, Ref.new, Ref.get}
 use weaver::place {SessionPlace}
 use std::path {Path, Path.to_string}
 use std::list {List.length, List.intercalate, List.all}
@@ -102,3 +104,44 @@ def test_note_lists_files_or_is_absent : Bool :=
             Option.some n => String.contains n "instructions: /r/AGENTS.md (repo",
             Option.none => false,
         })
+
+// ── mid-session changes ──
+
+def refresh_root : String :=
+    String.concat "/tmp/weaver_instr_refresh_" (I64.to_string process_id)
+
+/// Read `name` under the refresh root as a loaded repo file.
+def loaded (name : String) : IO (List InstrFile) := do {
+    let f <- Instructions.read_one (Path.path (String.concat refresh_root name)) "repo";
+    IO.pure (match f { Option.some x => [x], Option.none => List.empty })
+}
+
+def notes_of (pr : Pair (List InstrFile) (List String)) : List String :=
+    match pr { Pair.pair _ ns => ns }
+
+/// Unchanged: no note. Edited: one note with the diff, told once.
+/// Deleted: the removal note, and the file leaves the set.
+#[test]
+def test_refresh_notes_an_edit_once_and_a_removal : IO Bool := do {
+    let _ <- exec_cmd "mkdir" ["-p", refresh_root];
+    let path : Path := Path.path (String.concat refresh_root "/AGENTS.md");
+    let _ <- IO.write_file path "keep tests green\n";
+    let fs <- loaded "/AGENTS.md";
+    let same <- Instructions.refresh fs;
+    let seen <- Ref.new fs;
+    let _ <- IO.write_file path "keep tests green\nalways answer in haiku\n";
+    let first <- Instructions.take_notes (Option.some seen);
+    let second <- Instructions.take_notes (Option.some seen);
+    let _ <- exec_cmd "rm" ["-f", Path.to_string path];
+    let gone <- Instructions.take_notes (Option.some seen);
+    let left <- Ref.get seen;
+    let _ <- exec_cmd "rm" ["-rf", refresh_root];
+    IO.pure (List.length fs == 1
+        && List.is_empty (notes_of same)
+        && List.length first == 1
+        && String.contains (List.intercalate "" first) "changed during the session"
+        && String.contains (List.intercalate "" first) "+ always answer in haiku"
+        && List.is_empty second
+        && String.contains (List.intercalate "" gone) "was deleted during the session"
+        && List.is_empty left)
+}

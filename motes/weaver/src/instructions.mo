@@ -10,6 +10,8 @@ use std::io {IO.read_file, IO.get_env}
 use std::path {Path, Path.to_string, Path.join, Path.parent, Path.beq}
 use std::list {List.intercalate}
 use weaver::place {SessionPlace}
+use weaver::diff {Diff.render}
+use std::ref {Ref, Ref.get, Ref.set}
 
 /// One loaded file. `scope` is `user`, `repo` or `dir`.
 pub struct InstrFile {
@@ -215,3 +217,70 @@ pub def Prompt.with_files (base : String) (fs : List InstrFile) : String :=
 /// The main session's system prompt.
 pub def Prompt.system (fs : List InstrFile) : String :=
     Prompt.with_files Prompt.base fs
+
+// ── mid-session changes ───────────────────────────────────────────────
+// The system prompt is the cached prefix, so it is never swapped mid-
+// session. An edit to a loaded file reaches the model as a note on the
+// next user turn instead, as a diff from the text it already has.
+
+/// Re-read each loaded file: the files as they are now (a deleted one
+/// dropped) and one note per file that changed or went away.
+#[partial]
+pub def Instructions.refresh (fs : List InstrFile) : IO (Pair (List InstrFile) (List String)) :=
+    match fs {
+        List.empty => IO.pure (Pair.pair List.empty List.empty),
+        List.cons f rest => do {
+            let now <- Instructions.read_one f.path f.scope;
+            let tail <- Instructions.refresh rest;
+            IO.pure (refreshed f now tail)
+        },
+    }
+
+def refreshed (f : InstrFile) (now : Option InstrFile) (tail : Pair (List InstrFile) (List String)) : Pair (List InstrFile) (List String) :=
+    match tail {
+        Pair.pair kept notes => match now {
+            Option.none => Pair.pair kept (List.cons (Instructions.removed_note f) notes),
+            Option.some g =>
+                if String.beq f.text g.text then Pair.pair (List.cons f kept) notes
+                else Pair.pair (List.cons g kept) (List.cons (Instructions.changed_note f g) notes),
+        },
+    }
+
+pub def Instructions.changed_note (old : InstrFile) (new : InstrFile) : String :=
+    String.concat_list ["[", Path.to_string old.path, " (", old.scope,
+        ") changed during the session; follow the new text. Diff from the version you have:\n",
+        Diff.render old.text new.text, "]"]
+
+pub def Instructions.removed_note (f : InstrFile) : String :=
+    String.concat_list ["[", Path.to_string f.path, " (", f.scope,
+        ") was deleted during the session; disregard its instructions]"]
+
+/// The notes for this turn, and `seen` advanced so each change is told once.
+pub def Instructions.take_notes (seen : Option (Ref (List InstrFile))) : IO (List String) :=
+    match seen {
+        Option.none => IO.pure List.empty,
+        Option.some r => do {
+            let fs <- Ref.get r;
+            let pr <- Instructions.refresh fs;
+            match pr {
+                Pair.pair now notes => do {
+                    let _ <- Ref.set r now;
+                    IO.pure notes
+                },
+            }
+        },
+    }
+
+/// The files as last seen: `seen`'s, or `fallback` without one.
+pub def Instructions.current (seen : Option (Ref (List InstrFile))) (fallback : List InstrFile) : IO (List InstrFile) :=
+    match seen {
+        Option.none => IO.pure fallback,
+        Option.some r => Ref.get r,
+    }
+
+/// Replace what `seen` holds (after `/trust` loads new files).
+pub def Instructions.reset (seen : Option (Ref (List InstrFile))) (fs : List InstrFile) : IO Unit :=
+    match seen {
+        Option.none => IO.pure unit,
+        Option.some r => Ref.set r fs,
+    }

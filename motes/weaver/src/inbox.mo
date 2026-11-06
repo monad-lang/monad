@@ -50,3 +50,9 @@ pub def Inbox.take (store : Option StoreState) : IO (List String) := do {
 /// The seam `RunState.inbox` takes.
 pub def Inbox.seam (store : Option StoreState) : Unit -> IO (List String) :=
     fn (_ : Unit) => Inbox.take store
+
+/// `text` with `notes` after it, as one user message: the notes ride the
+/// next typed line (task exits, instruction-file changes).
+pub def Inbox.with_notes (notes : List String) (text : String) : String :=
+    if List.is_empty notes then text
+    else String.concat text (String.concat "\n\n" (List.intercalate "\n" notes))

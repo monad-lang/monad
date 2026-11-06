@@ -28,6 +28,7 @@ use weaver::pty::processes {run_start_process_list_and_kill, run_exit_note_mid_t
 use weaver::pty::approvals {run_auto_mode_holds_destructive_commands}
 use weaver::pty::todos {run_todo_panel_shows_and_folds}
 use weaver::pty::trust {run_trust_asks_records_and_reasks}
+use weaver::pty::instructions {run_instructions_note_a_mid_session_edit}
 use weaver::pty::resize {run_resize_clears_and_rewraps}
 use weaver::pty::resume {
     run_resume_picker_lists_current_and_esc,
@@ -163,3 +164,6 @@ def test_name_shows_in_the_frame : IO Bool := run_name_shows_in_the_frame
 
 #[test]
 def test_trust_asks_records_and_reasks : IO Bool := run_trust_asks_records_and_reasks
+
+#[test]
+def test_instructions_note_a_mid_session_edit : IO Bool := run_instructions_note_a_mid_session_edit

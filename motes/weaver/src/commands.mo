@@ -58,7 +58,7 @@ use weaver::settings {SettingsUpdate, Settings.save}
 use weaver::procs {ProcEntry, Procs.list, Procs.kill}
 use weaver::logs {Logs.latest_path, Logs.tail, Logs.detect_crash}
 use weaver::trust {Trust.items, Trust.record_path, Trust.remember}
-use weaver::instructions {InstrFile, Instructions.user_path, Instructions.discover, Instructions.note, Prompt.system}
+use weaver::instructions {InstrFile, Instructions.user_path, Instructions.discover, Instructions.note, Instructions.current, Instructions.reset, Prompt.system}
 
 /// Everything the interactive session carries between inputs.
 /// `run` is shuttle's own state (session, registry, turn budget, gate,
@@ -115,6 +115,9 @@ pub struct WeaverState {
     trusted : Bool := false,
     /// The AGENTS.md files in the system prompt (`instructions.mo`).
     instructions : List InstrFile := List.empty,
+    /// The instruction files as the model last saw them: a turn's change
+    /// notes diff against this and advance it (`Instructions.take_notes`).
+    instr_seen : Option (Ref (List InstrFile)) := Option.none,
     /// The active session directory, when persistence is available; none
     /// degrades to the pre-store in-memory behaviour.
     store : Option StoreState,
@@ -975,9 +978,13 @@ def cmd_name (arg : String) (st : WeaverState) : IO (Result WeaverError Effect) 
 def cmd_describe (arg : String) (st : WeaverState) : IO (Result WeaverError Effect) :=
     cmd_title TitleField.title_description arg st
 
+/// The resumed session's prompt takes the files as they are now (what
+/// the change notes have told this session), not the startup ones.
 def resume_path (st : WeaverState) (p : Path) (label : String) : IO (Result WeaverError Effect) := do {
+    let fs <- Instructions.current st.instr_seen st.instructions;
+    let st2 : WeaverState := { st with instructions := fs };
     let isd <- IO.is_dir p;
-    if isd then resume_dir st p label else resume_by_id st label;
+    if isd then resume_dir st2 p label else resume_by_id st2 label;
 }
 
 def resume_by_id (st : WeaverState) (label : String) : IO (Result WeaverError Effect) :=
@@ -1100,10 +1107,13 @@ def rekey_config (st : WeaverState) (cfg : ProviderConfig) : ProviderConfig :=
 /// resumable.
 def cmd_clear (arg : String) (st : WeaverState) : IO (Result WeaverError Effect) := do {
     let base : Session := st.run.session;
-    let fresh : Session := clear_session base (Prompt.system st.instructions);
+    // The new session's prompt carries the files as they are now, which
+    // folds in any change the turns only saw as notes.
+    let fs <- Instructions.current st.instr_seen st.instructions;
+    let fresh : Session := clear_session base (Prompt.system fs);
     // A new session has no plan: the old one belongs to the session that
     // produced it (and its store directory, when persistence is on).
-    let st2 : WeaverState := Commands.set_plan (set_session st fresh st.budget) Option.none;
+    let st2 : WeaverState := Commands.set_plan (set_session { st with instructions := fs } fresh st.budget) Option.none;
     let _ <- Permissions.clear st.grants;
     match st.store {
         Option.none => do {
@@ -1496,6 +1506,7 @@ def trust_place (st : WeaverState) (p : SessionPlace) : IO (Result WeaverError E
     let saved <- Trust.remember rp p.repo items;
     let user <- Instructions.user_path;
     let fs <- Instructions.discover user st.place true;
+    let _ <- Instructions.reset st.instr_seen fs;
     let st2 : WeaverState := with_instructions { st with trusted := true } fs;
     respond st2 (String.concat_list ["trusted ", Path.to_string p.repo,
         if saved then "" else " for this session (HOME is unset, so it is not recorded)",

@@ -31,6 +31,8 @@ use weaver::theme {Theme.tint, theme_status_code, class_code, LineClass}
 use log::logger {Logger}
 use shuttle::registry {ToolRegistry}
 use weaver::subagent {Subagent.task_tool, Subagent.drain}
+use weaver::instructions {Instructions.take_notes}
+use weaver::inbox {Inbox.with_notes}
 use weaver::todo {TodoTool.impl}
 use weaver::usage {UsageTracker.start, UsageTracker.silent, UsageTracker.last}
 use weaver::format {format_tokens}
@@ -165,7 +167,9 @@ def drive_turn (read : Unit -> IO (Option String)) (write : String -> IO Unit) (
             // prompt per call); the tracker owns that distinction.
             let tracker <- UsageTracker.start st2.run.session.spent;
             let st_t : WeaverState := set_on_usage st2 (UsageTracker.silent tracker);
-            let r <- ResultT.run (drive read write st_t text);
+            // Changes to the loaded AGENTS.md files ride the typed line.
+            let instr <- Instructions.take_notes st2.instr_seen;
+            let r <- ResultT.run (drive read write st_t (Inbox.with_notes instr text));
             let last <- UsageTracker.last tracker;
             let st3 : WeaverState := set_last_context_from st2 last r;
             // A plan-mode turn's text is captured and persisted; other

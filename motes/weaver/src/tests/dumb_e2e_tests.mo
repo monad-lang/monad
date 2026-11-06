@@ -226,7 +226,8 @@ def state_of (reg : ToolRegistry) : WeaverState := {
     quit := false,
     fatal := Option.none,
     colors := true,
-    name := Option.none, store := Option.none,
+    name := Option.none, trusted := false, instructions := List.empty, instr_seen := Option.none,
+    store := Option.none,
 }
 
 def run_of (reg : ToolRegistry) : RunState := {
