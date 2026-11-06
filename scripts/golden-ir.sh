@@ -8,7 +8,11 @@
 set -u
 mode=${1:?usage: golden-ir.sh snapshot|diff <dir>}
 dir=${2:?usage: golden-ir.sh snapshot|diff <dir>}
-bin=${MONAD_BIN:-rust/target/release/monad-rs}
+# The installed self-hosted compiler is the default host: it runs the
+# WORKTREE's compiler source (which is what the oracle is testing), much
+# faster than the Rust host interpreting it. Override with MONAD_BIN
+# (e.g. MONAD_BIN=rust/target/release/monad-rs) to pin a specific host.
+bin=${MONAD_BIN:-monad}
 files="examples/hello.mo examples/factorial.mo examples/do_block.mo examples/raw_strings.mo
 examples/structs.mo examples/located_terms.mo examples/sha256.mo examples/json.mo examples/toml.mo
 examples/view_cell.mo"
