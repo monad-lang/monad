@@ -90,6 +90,19 @@ instance Copy Html.Node {
     def copy (n : Html.Node) : Pair Html.Node Html.Node := Pair.pair n n
 }
 
+/// Two lists sharing the same (immutable) nodes: one for a reader that
+/// consumes them (the link gate), one to keep.
+pub def Passes.dup_nodes (ns : List Html.Node) : Pair (List Html.Node) (List Html.Node) :=
+    match ns {
+        List.empty => Pair.pair List.empty List.empty,
+        List.cons n rest => cons_both n (Passes.dup_nodes rest),
+    }
+
+def cons_both (n : Html.Node) (p : Pair (List Html.Node) (List Html.Node)) : Pair (List Html.Node) (List Html.Node) :=
+    match p {
+        Pair.pair a b => Pair.pair (List.cons n a) (List.cons n b),
+    }
+
 /// A blockquote whose first paragraph opens with `[!KIND]` → an admonition;
 /// anything else stays a blockquote.
 def blockquote (children : List Html.Node) : Html.Node :=

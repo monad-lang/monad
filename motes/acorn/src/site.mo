@@ -6,13 +6,16 @@
 use std::io {IO.read_file, IO.write_file, IO.list_dir}
 use std::path {Path, Path.of, Path.to_string, Path.file_name}
 use std::process {exec_cmd}
+use std::list {List.intercalate}
+use xml_html::html {Html.Node}
 use markdown::types {Markdown.Document}
 use markdown::options {Markdown.HtmlOptions, Markdown.default_html_options, Markdown.site_options}
 use markdown::parse {Markdown.parse_with}
 use markdown::html {Markdown.heading_texts, Markdown.to_html_nodes_with}
 use lib::config {SiteConfig}
 use lib::layout {Layout.render, PageSpec, BookNav}
-use lib::passes {Passes.chapter}
+use lib::passes {Passes.chapter, Passes.dup_nodes}
+use lib::links {PageLinks, Links.of_page, Links.broken}
 use lib::summary {NavEntry, NavChapter, Summary.parse, Summary.chapters}
 
 /// The rendering options for book chapters: heading ids on, so the TOC and
@@ -27,16 +30,28 @@ def chapter_title (stem : String) (doc : Markdown.Document) : String :=
         List.empty => stem,
     }
 
-/// Render one chapter's markdown to a full page. `stem` names the chapter
-/// when it has no heading; `book` is its place in the book (none renders
-/// the page without a sidebar). Pure: the IO layer only reads and writes.
-pub def Site.render_chapter (cfg : SiteConfig) (book : Option BookNav) (stem : String) (src : String) : String :=
+/// A chapter's title and its rendered body, passes applied.
+pub struct ChapterBody {
+    title : String,
+    body : List Html.Node,
+}
+
+/// Render one chapter's markdown. `stem` names the chapter when it has no
+/// heading. Pure: the IO layer only reads and writes.
+pub def Site.chapter_body (stem : String) (src : String) : ChapterBody :=
     let doc : Shared Markdown.Document := Shared.of (Markdown.parse_with Markdown.site_options src) in
-    let page : PageSpec :=
-        { title := chapter_title stem (Shared.get doc), root := "../",
-            body := Passes.chapter (Markdown.to_html_nodes_with chapter_html_options (Shared.get doc)),
-            book := book } in
-    Layout.render cfg page
+    { title := chapter_title stem (Shared.get doc),
+        body := Passes.chapter (Markdown.to_html_nodes_with chapter_html_options (Shared.get doc)) }
+
+def page_of (book : Option BookNav) (b : ChapterBody) : PageSpec :=
+    match b {
+        { title, body } => { title := title, root := "../", body := body, book := book },
+    }
+
+/// One chapter as a full page; `book` is its place in the book (none renders
+/// it without a sidebar).
+pub def Site.render_chapter (cfg : SiteConfig) (book : Option BookNav) (stem : String) (src : String) : String :=
+    Layout.render cfg (page_of book (Site.chapter_body stem src))
 
 /// One chapter to build, with its neighbours in reading order.
 pub struct ChapterPage {
@@ -114,26 +129,75 @@ instance Copy BookDirs {
     def copy (d : BookDirs) : Pair BookDirs BookDirs := Pair.pair d d
 }
 
-def write_chapter (cfg : SiteConfig) (dirs : BookDirs) (entries : Shared (List NavEntry)) (page : ChapterPage) : IO (Result String Unit) :=
-    match page {
-        { chapter, prev, next } =>
-            let nav : BookNav :=
-                { entries := Shared.get entries, current := chapter.stem, prev := prev, next := next } in
-            render_from cfg dirs chapter.stem nav,
+instance Copy ChapterPage {
+    def copy (p : ChapterPage) : Pair ChapterPage ChapterPage := Pair.pair p p
+}
+
+/// A chapter read from disk.
+struct Loaded {
+    page : ChapterPage,
+    src : String,
+}
+
+/// Read every chapter's source, stopping at the first error.
+def load_all (dirs : BookDirs) (pages : List ChapterPage) (acc : List Loaded) : IO (Result String (List Loaded)) :=
+    match pages {
+        List.empty => return (Result.ok (List.reverse acc)),
+        List.cons p rest => load_then dirs p rest acc,
     }
 
-def render_from (cfg : SiteConfig) (dirs : BookDirs) (stem : String) (nav : BookNav) : IO (Result String Unit) := do {
-    let read <- read_text (join dirs.src (String.concat stem ".md"));
+// Mutual recursion with `load_all` on a strictly shorter `rest`.
+#[terminating]
+def load_then (dirs : BookDirs) (p : ChapterPage) (rest : List ChapterPage) (acc : List Loaded) : IO (Result String (List Loaded)) := do {
+    let read <- read_text (join dirs.src (String.concat p.chapter.stem ".md"));
     match read {
         Result.err e => return (Result.err e),
         Result.ok src =>
-            write_page (join dirs.out (String.concat stem ".html"))
-                (Site.render_chapter cfg (Option.some nav) stem src),
+            let one : Loaded := { page := p, src := src } in
+            load_all dirs rest (List.cons one acc),
     }
 }
 
-/// Write every chapter, stopping at the first error; returns the count.
-def write_all (cfg : SiteConfig) (dirs : BookDirs) (entries : Shared (List NavEntry)) (pages : List ChapterPage) (done : I64) : IO (Result String I64) :=
+/// A chapter rendered, before the page shell.
+struct Rendered {
+    page : ChapterPage,
+    body : ChapterBody,
+}
+
+def render_loaded (l : Loaded) : Rendered :=
+    match l {
+        { page, src } => { page := page, body := Site.chapter_body page.chapter.stem src },
+    }
+
+/// The page's links for the gate, and the page itself, still whole.
+def scan_rendered (book_dir : String) (r : Rendered) : Pair PageLinks Rendered :=
+    match r {
+        { page, body } => scan_body book_dir page body,
+    }
+
+def scan_body (book_dir : String) (page : ChapterPage) (b : ChapterBody) : Pair PageLinks Rendered :=
+    match b {
+        { title, body } =>
+            match Passes.dup_nodes body {
+                Pair.pair for_links for_page =>
+                    let path : String := join book_dir (String.concat page.chapter.stem ".html") in
+                    let kept : ChapterBody := { title := title, body := for_page } in
+                    let r : Rendered := { page := page, body := kept } in
+                    Pair.pair (Links.of_page path for_links) r,
+            },
+    }
+
+def write_rendered (cfg : SiteConfig) (dirs : BookDirs) (entries : Shared (List NavEntry)) (r : Rendered) : IO (Result String Unit) :=
+    match r {
+        { page, body } =>
+            let nav : BookNav :=
+                { entries := entries, current := page.chapter.stem, prev := page.prev, next := page.next } in
+            write_page (join dirs.out (String.concat page.chapter.stem ".html"))
+                (Layout.render cfg (page_of (Option.some nav) body)),
+    }
+
+/// Write every page, stopping at the first error; returns the count.
+def write_all (cfg : SiteConfig) (dirs : BookDirs) (entries : Shared (List NavEntry)) (pages : List Rendered) (done : I64) : IO (Result String I64) :=
     match pages {
         List.empty => return (Result.ok done),
         List.cons p rest => write_then cfg dirs entries p rest done,
@@ -142,8 +206,8 @@ def write_all (cfg : SiteConfig) (dirs : BookDirs) (entries : Shared (List NavEn
 // Mutual recursion with `write_all` on a strictly shorter `rest`; the checker
 // does not see through the IO bind between them.
 #[terminating]
-def write_then (cfg : SiteConfig) (dirs : BookDirs) (entries : Shared (List NavEntry)) (p : ChapterPage) (rest : List ChapterPage) (done : I64) : IO (Result String I64) := do {
-    let one <- write_chapter cfg dirs entries p;
+def write_then (cfg : SiteConfig) (dirs : BookDirs) (entries : Shared (List NavEntry)) (p : Rendered) (rest : List Rendered) (done : I64) : IO (Result String I64) := do {
+    let one <- write_rendered cfg dirs entries p;
     match one {
         Result.err e => return (Result.err e),
         Result.ok _ => write_all cfg dirs entries rest (done + 1),
@@ -229,6 +293,38 @@ def read_summary (cfg : SiteConfig) (dirs : BookDirs) : IO (Result String I64) :
     }
 }
 
-def build_from_summary (cfg : SiteConfig) (dirs : BookDirs) (summary : String) : IO (Result String I64) :=
-    let entries : Shared (List NavEntry) := Shared.of (Summary.parse summary) in
-    write_all cfg dirs entries (Site.with_neighbours Option.none (Summary.chapters (Shared.get entries))) 0
+def build_from_summary (cfg : SiteConfig) (dirs : BookDirs) (summary : String) : IO (Result String I64) := do {
+    let entries : Shared (List NavEntry) := Shared.of (Summary.parse summary);
+    let loaded <- load_all dirs (Site.with_neighbours Option.none (Summary.chapters (Shared.get entries))) List.empty;
+    match loaded {
+        Result.err e => return (Result.err e),
+        Result.ok ls => gate_then_write cfg dirs entries (List.map (scan_rendered cfg.book_dir) (List.map render_loaded ls)),
+    }
+}
+
+/// Write the pages only when no internal link is broken.
+def gate_then_write (cfg : SiteConfig) (dirs : BookDirs) (entries : Shared (List NavEntry)) (scanned : List (Pair PageLinks Rendered)) : IO (Result String I64) :=
+    match unzip scanned {
+        Pair.pair links pages =>
+            match Links.broken links {
+                List.empty => write_all cfg dirs entries pages 0,
+                List.cons first more => return (Result.err (broken_report (List.cons first more))),
+            },
+    }
+
+def broken_report (problems : List String) : String :=
+    String.concat "broken internal links:\n  " (List.intercalate "\n  " problems)
+
+def unzip (ps : List (Pair PageLinks Rendered)) : Pair (List PageLinks) (List Rendered) :=
+    match ps {
+        List.empty => Pair.pair List.empty List.empty,
+        List.cons p rest => cons_pair p (unzip rest),
+    }
+
+def cons_pair (p : Pair PageLinks Rendered) (acc : Pair (List PageLinks) (List Rendered)) : Pair (List PageLinks) (List Rendered) :=
+    match p {
+        Pair.pair l r =>
+            match acc {
+                Pair.pair ls rs => Pair.pair (List.cons l ls) (List.cons r rs),
+            },
+    }

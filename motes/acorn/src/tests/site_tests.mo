@@ -23,7 +23,7 @@ def test_render_falls_back_to_stem : Bool :=
 def intro : NavChapter := { title := "Intro", stem := "intro" }
 
 def nav : BookNav :=
-    { entries := [NavEntry.chapter "Intro" "intro" 0, NavEntry.part "Tutorial", NavEntry.chapter "Types" "types" 0],
+    { entries := Shared.of [NavEntry.chapter "Intro" "intro" 0, NavEntry.part "Tutorial", NavEntry.chapter "Types" "types" 0],
         current := "types", prev := Option.some intro, next := Option.none }
 
 #[test]

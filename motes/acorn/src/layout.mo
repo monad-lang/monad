@@ -16,7 +16,8 @@ use lib::summary {NavEntry, NavChapter}
 /// A book page's place in the book: the sidebar entries, the current
 /// chapter's stem, and its neighbours in reading order.
 pub struct BookNav {
-    entries : List NavEntry,
+    /// Shared by every page of the book.
+    entries : Shared (List NavEntry),
     current : String,
     prev : Option NavChapter,
     next : Option NavChapter,
@@ -74,9 +75,9 @@ def sidebar_item (cfg : SiteConfig) (root : String) (current : String) (e : NavE
                 [Html.a [Html.href (Layout.chapter_href cfg root stem)] [Html.text title]],
     }
 
-def sidebar (cfg : SiteConfig) (root : String) (entries : List NavEntry) (current : String) : Oak.Node Unit :=
+def sidebar (cfg : SiteConfig) (root : String) (entries : Shared (List NavEntry)) (current : String) : Oak.Node Unit :=
     Html.nav [Html.class_ ["sidebar"]]
-        [Html.ol [Html.class_ ["chapters"]] (List.map (sidebar_item cfg root current) entries)]
+        [Html.ol [Html.class_ ["chapters"]] (List.map (sidebar_item cfg root current) (Shared.get entries))]
 
 def pager_link (cfg : SiteConfig) (root : String) (cls : String) (label : String) (c : Option NavChapter) : List (Oak.Node Unit) :=
     match c {
