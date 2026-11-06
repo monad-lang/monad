@@ -13,13 +13,13 @@
 
 pub use lib::types {Decl, ModulePath, LocalScope}
 pub use lib::module {
-  ElaboratedModules, LoadedModules, ModuleInfo,
-  check_file_cached, elaborate_loaded_modules, expand_check_paths, load_file_modules,
-  parse_all_decls,
+    ElaboratedModules, LoadedModules, ModuleInfo,
+    check_file_cached, elaborate_loaded_modules, expand_check_paths, load_file_modules,
+    parse_all_decls,
 }
 pub use lib::pretty {show_decls}
 pub use lib::features {
-  DepPolicy, FeaturePackage, FeatureSelection, Features.resolve,
+    DepPolicy, FeaturePackage, FeatureSelection, Features.resolve,
 }
 // The backend is the `codegen` mote, which depends on `lang`. Re-exporting
 // its pipeline entry here would make `lang` depend back on `codegen`, so

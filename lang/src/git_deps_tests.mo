@@ -11,7 +11,7 @@
 
 use std::list {List.length}
 use lang::mote {
-  Mote.fill_dep_dirs, Mote.git_checkout_dir, Mote.parse_manifest, MoteManifest,
+    Mote.fill_dep_dirs, Mote.git_checkout_dir, Mote.parse_manifest, MoteManifest,
 }
 use lang::lock {GitPin, Lockfile, LockedGit, LockedMote}
 

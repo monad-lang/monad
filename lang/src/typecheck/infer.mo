@@ -1,51 +1,51 @@
 use std::map {HashMap.to_list}
 use lang::types {
-  Binder, Class, Con, Cubical, CubicalPrim, DebugName, Def, Elim, FieldPattern,
-  FieldPatternEntry, Identifier, InductConstructor, Inductive, Instance, Literal,
-  LocalScope, LocalVar, Location, MatchCase, ModulePath, NamePath, NameRef,
-  Native, NumSuffix, Param, Scope, ScopeClassDef, ScopeData, ScopeDef,
-  ScopeError, Similar, SortLevel, StructLitField, Term, TypeConstraint,
-  TypeError, binder_anon, binder_is_explicit, binder_is_level, binder_name,
-  binder_named,
-  concrete, cub_glue, cub_glue_elim, cub_glue_intro, cub_hcomp, cub_i0, cub_i1,
-  cub_interval, cub_is_one,
-  cub_pathp, cubical_arity,
-  cubical_prim_eq, cubical_prim_name, field_access_chain,
-  id_eq, id_member, level_lt, level_of_type, list_rev_loop, list_reverse, many,
-  has_attr, max, package_private, sentinel, show_identifier, show_name_path,
-  sort_level_of, sort_n, succ, term_peel,
-  cub, cub_transp,
+    Binder, Class, Con, Cubical, CubicalPrim, DebugName, Def, Elim, FieldPattern,
+    FieldPatternEntry, Identifier, InductConstructor, Inductive, Instance, Literal,
+    LocalScope, LocalVar, Location, MatchCase, ModulePath, NamePath, NameRef,
+    Native, NumSuffix, Param, Scope, ScopeClassDef, ScopeData, ScopeDef,
+    ScopeError, Similar, SortLevel, StructLitField, Term, TypeConstraint,
+    TypeError, binder_anon, binder_is_explicit, binder_is_level, binder_name,
+    binder_named,
+    concrete, cub_glue, cub_glue_elim, cub_glue_intro, cub_hcomp, cub_i0, cub_i1,
+    cub_interval, cub_is_one,
+    cub_pathp, cubical_arity,
+    cubical_prim_eq, cubical_prim_name, field_access_chain,
+    id_eq, id_member, level_lt, level_of_type, list_rev_loop, list_reverse, many,
+    has_attr, max, package_private, sentinel, show_identifier, show_name_path,
+    sort_level_of, sort_n, succ, term_peel,
+    cub, cub_transp,
 }
 use lang::scope {
-  ClassMethodRef, DictBinding, bind_term_vars, build_dict_field_projection_checked,
-  build_scope_def, bare_map_lookup, carrier_bindings, class_method_declared_type, class_method_ref,
-  class_default_carrier, class_name_eq,
-  class_method_var_names, class_param_names, dict_binding_class_of, final_result_type,
-  method_carrier_hint, method_sig_carrier,
-  dict_hint_marker_terms, dict_hint_name, dict_param_name, emitted_dict_constraints,
-  find_constructor_in_inductive, find_matching_instance,
-  flatten_call_spine, identifier_tail, inductive_has_constructor, instance_module_prefix,
-  instance_wildcard_names, instance_head_is_concrete, list_append, mangle_instance_dict_name,
-  mangle_instance_method_name, mangled_to_identifier, param_names,
-  rebuild_call,
-  resolve_dict_arg, resolve_dict_args, scope_data_add_def, scope_data_add_inductive, scope_data_classes, scope_data_dict_classes,
-  scope_data_empty, scope_find_all_inductives_by_constructor, scope_find_class,
-  scope_find_class_def_by_name, scope_find_class_def_for_ref, scope_find_def_constraints,
-  scope_find_def_dict_constraints,
-  scope_find_def_params, scope_find_def_return_type,
-  scope_find_def_sig, scope_find_inductive, scope_find_inductive_by_constructor,
-  scope_find_instance_by_name, scope_find_local, scope_globals,
-  scope_all_instances_in, scope_instance_candidates_in, scope_push_local,
-  scope_find_cubical_prim, scope_resolve_name, strip_all_leading_binders,
-  strip_dict_hint_args,
-  type_mentions_any, validate_dict_hints,
+    ClassMethodRef, DictBinding, bind_term_vars, build_dict_field_projection_checked,
+    build_scope_def, bare_map_lookup, carrier_bindings, class_method_declared_type, class_method_ref,
+    class_default_carrier, class_name_eq,
+    class_method_var_names, class_param_names, dict_binding_class_of, final_result_type,
+    method_carrier_hint, method_sig_carrier,
+    dict_hint_marker_terms, dict_hint_name, dict_param_name, emitted_dict_constraints,
+    find_constructor_in_inductive, find_matching_instance,
+    flatten_call_spine, identifier_tail, inductive_has_constructor, instance_module_prefix,
+    instance_wildcard_names, instance_head_is_concrete, list_append, mangle_instance_dict_name,
+    mangle_instance_method_name, mangled_to_identifier, param_names,
+    rebuild_call,
+    resolve_dict_arg, resolve_dict_args, scope_data_add_def, scope_data_add_inductive, scope_data_classes, scope_data_dict_classes,
+    scope_data_empty, scope_find_all_inductives_by_constructor, scope_find_class,
+    scope_find_class_def_by_name, scope_find_class_def_for_ref, scope_find_def_constraints,
+    scope_find_def_dict_constraints,
+    scope_find_def_params, scope_find_def_return_type,
+    scope_find_def_sig, scope_find_inductive, scope_find_inductive_by_constructor,
+    scope_find_instance_by_name, scope_find_local, scope_globals,
+    scope_all_instances_in, scope_instance_candidates_in, scope_push_local,
+    scope_find_cubical_prim, scope_resolve_name, strip_all_leading_binders,
+    strip_dict_hint_args,
+    type_mentions_any, validate_dict_hints,
 }
 use lib::typecheck::name_subst {name_subst_term}
 use lib::typecheck::subst {beta_reduce, term_abstract_var, term_permute, term_subst, term_shift, term_shift_above}
 use lib::typecheck::levels {solve_levels, subst_levels_term}
 use lib::typecheck::traverse {term_children, term_map_children, term_map_children_at_depth}
 use lib::typecheck::cubical {
-  PathParts, endpoint_of, path_parts_of, peels_to_bare_interval,
+    PathParts, endpoint_of, path_parts_of, peels_to_bare_interval,
 }
 use lib::typecheck::unify {unify, unify_structural}
 use lib::typecheck::whnf {whnf}
@@ -1753,8 +1753,8 @@ def type_check_match (value_ : Term) (cases : List MatchCase) (expected_type : T
                     match reject_opaque_match maybe_ind {
                         Option.some e => err e,
                         Option.none =>
-                    match type_check_cases_accum cases sc_term sc_typ maybe_ind expected_type scope local_types locals Term.hole List.empty {
-                        ok acc =>
+                        match type_check_cases_accum cases sc_term sc_typ maybe_ind expected_type scope local_types locals Term.hole List.empty {
+                            ok acc =>
                             match acc {
                                 mk body_typ checked_cases =>
                                     match unify body_typ expected_type scope locals {
@@ -1786,16 +1786,16 @@ def type_check_match (value_ : Term) (cases : List MatchCase) (expected_type : T
                                             },
                                     },
                             },
-                        // Legacy rejected it. Try dependent refinement; when
-                        // it does not APPLY, the legacy diagnostic is the
-                        // honest one. When it applies and fails, its own
-                        // diagnostic is.
-                        err legacy_err =>
+                            // Legacy rejected it. Try dependent refinement; when
+                            // it does not APPLY, the legacy diagnostic is the
+                            // honest one. When it applies and fails, its own
+                            // diagnostic is.
+                            err legacy_err =>
                             match try_dependent_match cases sc_term sc_typ maybe_ind expected_type scope local_types locals {
                                 Option.none => err legacy_err,
                                 Option.some dependent => dependent,
                             },
-                    },
+                        },
                     },
             },
         err e => err e,
@@ -1816,7 +1816,7 @@ def reject_opaque_match (maybe_ind : Option Inductive) : Option TypeError :=
                     if has_attr (Identifier.id "opaque") attrs
                     then Option.some (TypeError.custom
                         (String.concat "cannot match on the opaque type `" (String.concat (show_name_path name)
-                        "`; its values have a native representation and no constructor to dispatch on")))
+                            "`; its values have a native representation and no constructor to dispatch on")))
                     else Option.none,
             },
     }
@@ -1996,30 +1996,30 @@ def type_check_elim (e : Elim) (expected_type : Term) (scope : Scope)
     (local_types : List Term) (locals : LocalScope) : Result TypeError TypedTerm :=
     match e {
         { inductive := inductive, levels := _, params := params, indices := indices,
-          motive := _, minors := _, scrutinee := scrutinee } =>
-            match scope_find_inductive inductive scope {
-                err _ => err (TypeError.custom
-                    (String.concat "Term.elim: unknown inductive " (show_name_path inductive))),
-                ok ind =>
-                    match type_check scrutinee Term.hole scope local_types locals {
-                        err err_ => err err_,
-                        ok sc_tt =>
-                            // R4c: `indices` extends the scrutinee's own
-                            // claimed type spine alongside `params` --
-                            // `Eq T x y`'s full spine is `params ++
-                            // indices = [T, x] ++ [y]`, not `params` alone.
-                            let expected_scrutinee_typ : Term :=
-                                rebuild_call (free_var_ref inductive) (List.append params indices) in
-                            let sc_typ_c : Term := canonicalize_type_head scope sc_tt.typ in
-                            let expected_c : Term := canonicalize_type_head scope expected_scrutinee_typ in
-                            match unify sc_typ_c expected_c scope locals {
-                                err err_ => err err_,
-                                ok _ =>
-                                    type_check_elim_motive e ind sc_tt.term sc_tt.typ
-                                        expected_type scope local_types locals,
-                            },
-                    },
-            },
+            motive := _, minors := _, scrutinee := scrutinee } =>
+                match scope_find_inductive inductive scope {
+                    err _ => err (TypeError.custom
+                        (String.concat "Term.elim: unknown inductive " (show_name_path inductive))),
+                    ok ind =>
+                        match type_check scrutinee Term.hole scope local_types locals {
+                            err err_ => err err_,
+                            ok sc_tt =>
+                                // R4c: `indices` extends the scrutinee's own
+                                // claimed type spine alongside `params` --
+                                // `Eq T x y`'s full spine is `params ++
+                                // indices = [T, x] ++ [y]`, not `params` alone.
+                                let expected_scrutinee_typ : Term :=
+                                    rebuild_call (free_var_ref inductive) (List.append params indices) in
+                                let sc_typ_c : Term := canonicalize_type_head scope sc_tt.typ in
+                                let expected_c : Term := canonicalize_type_head scope expected_scrutinee_typ in
+                                match unify sc_typ_c expected_c scope locals {
+                                    err err_ => err err_,
+                                    ok _ =>
+                                        type_check_elim_motive e ind sc_tt.term sc_tt.typ
+                                            expected_type scope local_types locals,
+                                },
+                        },
+                },
     }
 
 /// Rewrite an INDUCTIVE type's head to the spelling the scope registered,
@@ -2095,40 +2095,40 @@ def type_check_elim_motive (e : Elim) (ind : Inductive) (sc_term : Term) (sc_typ
     : Result TypeError TypedTerm :=
     match e {
         { inductive := _, levels := _, params := _, indices := indices, motive := motive,
-          minors := _, scrutinee := _ } =>
-            match type_check motive Term.hole scope local_types locals {
-                err err_ => err err_,
-                ok motive_tt =>
-                    match type_check_elim_motive_pis indices motive_tt.typ sc_typ scope
-                        local_types locals {
-                        err err_ => err err_,
-                        ok cod =>
-                            match sort_level_of cod {
-                                Option.some _l =>
-                                    type_check_elim_minors e ind motive_tt.term sc_term
-                                        sc_typ expected_type scope local_types locals,
-                                // A CONSTANT motive (`fn _ => T`) whose body type
-                                // the checker cannot kind (`type_check P` for a
-                                // bare inductive name answers a hole today) is
-                                // accepted when the caller supplies an
-                                // informative expected type: the elim's result
-                                // type is then `T`, which the final unify checks
-                                // against that expectation. A hole BODY or a
-                                // hole expectation still fails -- the negative
-                                // pin (`lambda _ => hole`, expected `hole`) keeps
-                                // its answer.
-                                Option.none =>
-                                    if is_hole cod
-                                        && Bool.not (is_hole expected_type)
-                                        && elim_motive_body_is_informative motive_tt.term
-                                    then
+            minors := _, scrutinee := _ } =>
+                match type_check motive Term.hole scope local_types locals {
+                    err err_ => err err_,
+                    ok motive_tt =>
+                        match type_check_elim_motive_pis indices motive_tt.typ sc_typ scope
+                            local_types locals {
+                            err err_ => err err_,
+                            ok cod =>
+                                match sort_level_of cod {
+                                    Option.some _l =>
                                         type_check_elim_minors e ind motive_tt.term sc_term
-                                            sc_typ expected_type scope local_types locals
-                                    else err (TypeError.custom
-                                        "Term.elim's motive must be a function into a sort"),
-                            },
-                    },
-            },
+                                            sc_typ expected_type scope local_types locals,
+                                    // A CONSTANT motive (`fn _ => T`) whose body type
+                                    // the checker cannot kind (`type_check P` for a
+                                    // bare inductive name answers a hole today) is
+                                    // accepted when the caller supplies an
+                                    // informative expected type: the elim's result
+                                    // type is then `T`, which the final unify checks
+                                    // against that expectation. A hole BODY or a
+                                    // hole expectation still fails -- the negative
+                                    // pin (`lambda _ => hole`, expected `hole`) keeps
+                                    // its answer.
+                                    Option.none =>
+                                        if is_hole cod
+                                            && Bool.not (is_hole expected_type)
+                                            && elim_motive_body_is_informative motive_tt.term
+                                        then
+                                            type_check_elim_minors e ind motive_tt.term sc_term
+                                                sc_typ expected_type scope local_types locals
+                                        else err (TypeError.custom
+                                            "Term.elim's motive must be a function into a sort"),
+                                },
+                        },
+                },
     }
 
 /// Peels one `Term.pi` per entry in `indices`, checking each index TERM's
@@ -4727,31 +4727,31 @@ def type_check_free_var (dbg : DebugName) (expected_type : Term) (scope : Scope)
                                     match e {
                                         TypeError.missing_instance _ _ => err e,
                                         _ =>
-                                    // Fall back to the class method's own
-                                    // abstract signature (not resolved) --
-                                    // e.g. a heterogeneous/multi-param
-                                    // class `carrier_from_expected_type`
-                                    // deliberately doesn't cover, or an
-                                    // operand whose real type this pure-
-                                    // infer-mode checker can't recover
-                                    // (`ScopeDef.sig` is always `Term.hole`
-                                    // for an ordinary global, by existing,
-                                    // documented design -- `lang.scope`'s
-                                    // `build_scope_def` -- so a class-
-                                    // method carrier derived purely from
-                                    // bidirectional propagation can't see
-                                    // through an ordinary function call in
-                                    // an otherwise-uninformative context;
-                                    // `lang.scope`'s own syntactic
-                                    // `resolve_class_calls_decls` pass,
-                                    // which every codegen path still runs
-                                    // after this, covers that case
-                                    // instead via `infer_carrier_type`'s
-                                    // own declared-return-type lookup).
-                                    match cd {
-                                        mk _class_name _full_name _ sig =>
+                                        // Fall back to the class method's own
+                                        // abstract signature (not resolved) --
+                                        // e.g. a heterogeneous/multi-param
+                                        // class `carrier_from_expected_type`
+                                        // deliberately doesn't cover, or an
+                                        // operand whose real type this pure-
+                                        // infer-mode checker can't recover
+                                        // (`ScopeDef.sig` is always `Term.hole`
+                                        // for an ordinary global, by existing,
+                                        // documented design -- `lang.scope`'s
+                                        // `build_scope_def` -- so a class-
+                                        // method carrier derived purely from
+                                        // bidirectional propagation can't see
+                                        // through an ordinary function call in
+                                        // an otherwise-uninformative context;
+                                        // `lang.scope`'s own syntactic
+                                        // `resolve_class_calls_decls` pass,
+                                        // which every codegen path still runs
+                                        // after this, covers that case
+                                        // instead via `infer_carrier_type`'s
+                                        // own declared-return-type lookup).
+                                        match cd {
+                                            mk _class_name _full_name _ sig =>
                                             ok (mk_typed (Term.var sentinel dbg) sig),
-                                    },
+                                        },
                                     },
                             },
                         err _ =>
@@ -5366,8 +5366,8 @@ def try_type_check_def_call (app_term : Term) (expected_type : Term) (scope : Sc
             // still sees the hint.
             match strip_dict_hint_args args {
                 Pair.pair dict_hints real_args =>
-            match head {
-                Term.var idx dbg =>
+                match head {
+                    Term.var idx dbg =>
                     match dbg {
                         DebugName.named id =>
                             if not (I64.beq idx sentinel) then Option.none
@@ -5401,9 +5401,9 @@ def try_type_check_def_call (app_term : Term) (expected_type : Term) (scope : Sc
                                                 match validate_dict_hints id (Option.some resolved_name) dict_hints scope {
                                                     Option.some e => Option.some (err e),
                                                     Option.none =>
-                                                match scope_find_def_sig resolved_name scope {
-                                                    Option.none => Option.none,
-                                                    Option.some sig =>
+                                                    match scope_find_def_sig resolved_name scope {
+                                                        Option.none => Option.none,
+                                                        Option.some sig =>
                                                         // Phase 3's leading dict Pis are not
                                                         // arguments of the call being solved;
                                                         // keeping them here shifted every
@@ -5529,14 +5529,14 @@ def try_type_check_def_call (app_term : Term) (expected_type : Term) (scope : Sc
                                                                             },
                                                                     },
                                                         },
+                                                    },
                                                 },
-                                        },
                                         },
                                 },
                         DebugName.unnamed => Option.none,
                     },
-                _ => Option.none,
-            },
+                    _ => Option.none,
+                },
             },
     }
 
@@ -6352,15 +6352,15 @@ def def_call_continue (arg : Term) (a_tt : TypedTerm) (param_ty : Term) (rest : 
     match call_arg_type_error arg a_typ param_ty next_subst next_levels scope locals {
         Option.some e => CallArgOutcome.type_error e,
         Option.none =>
-    match def_call_check_args rest rest_params next_subst next_levels scope local_types locals {
-        CallArgOutcome.decline => CallArgOutcome.decline,
-        CallArgOutcome.type_error e => CallArgOutcome.type_error e,
-        CallArgOutcome.ok pair =>
+        match def_call_check_args rest rest_params next_subst next_levels scope local_types locals {
+            CallArgOutcome.decline => CallArgOutcome.decline,
+            CallArgOutcome.type_error e => CallArgOutcome.type_error e,
+            CallArgOutcome.ok pair =>
             match pair {
                 DccPair.mk rest_elab rest_subst rest_levels =>
                     CallArgOutcome.ok (DccPair.mk (List.cons (a_tt.term) rest_elab) rest_subst rest_levels),
             },
-    }
+        }
     }
 
 /// A signature decomposed for `try_type_check_def_call`: its explicit
@@ -6734,59 +6734,59 @@ def type_check_app (f : Term) (a : Term) (expected_type : Term) (scope : Scope) 
         // pre-existing body, untouched.
         Option.some hint => try_type_check_hinted_app f hint expected_type scope local_types locals,
         Option.none =>
-    match try_type_check_cubical_call (Term.app f a) expected_type scope local_types locals {
-        Option.some r => r,
-        Option.none =>
-    match try_type_check_def_call (Term.app f a) expected_type scope local_types locals {
-        Option.some r => r,
-        Option.none =>
-    match try_type_check_con_call (Term.app f a) expected_type scope local_types locals {
-        Option.some r => r,
-        Option.none =>
-    match infer_position_hole f a {
-        Option.some e => err e,
-        Option.none =>
-    let a_expected : Term := app_arg_expected_type_from_callee f a expected_type scope local_types locals in
-    match type_check a a_expected scope local_types locals {
-        ok a_tt0 =>
-            let a_tt : TypedTerm := recheck_against_callee_domain f a a_tt0 a_expected expected_type scope local_types locals in
-            if not (struct_literal_arg_matches_expected a a_expected scope) then
-                // The argument's ordinary check SUCCEEDED, but only
-                // vacuously -- see `struct_literal_arg_matches_expected`.
-                // Treat it as not applying, so the named-call spread
-                // below gets its chance, exactly as the reference does
-                // (`core_check.rs`, `Ok(()) if struct_literal_arg_
-                // matches_expected(..)`).
-                match named_call_fields_of a {
-                    Option.none => type_check_app_ordinary a_tt f expected_type scope local_types locals,
-                    Option.some fields =>
-                        match type_check_named_call f fields expected_type scope local_types locals {
-                            err e2 => err e2,
-                            ok result => match result {
-                                Option.some tt => ok tt,
+        match try_type_check_cubical_call (Term.app f a) expected_type scope local_types locals {
+            Option.some r => r,
+            Option.none =>
+            match try_type_check_def_call (Term.app f a) expected_type scope local_types locals {
+                Option.some r => r,
+                Option.none =>
+                match try_type_check_con_call (Term.app f a) expected_type scope local_types locals {
+                    Option.some r => r,
+                    Option.none =>
+                    match infer_position_hole f a {
+                        Option.some e => err e,
+                        Option.none =>
+                        let a_expected : Term := app_arg_expected_type_from_callee f a expected_type scope local_types locals in
+                        match type_check a a_expected scope local_types locals {
+                            ok a_tt0 =>
+                            let a_tt : TypedTerm := recheck_against_callee_domain f a a_tt0 a_expected expected_type scope local_types locals in
+                            if not (struct_literal_arg_matches_expected a a_expected scope) then
+                            // The argument's ordinary check SUCCEEDED, but only
+                            // vacuously -- see `struct_literal_arg_matches_expected`.
+                            // Treat it as not applying, so the named-call spread
+                            // below gets its chance, exactly as the reference does
+                            // (`core_check.rs`, `Ok(()) if struct_literal_arg_
+                            // matches_expected(..)`).
+                            match named_call_fields_of a {
                                 Option.none => type_check_app_ordinary a_tt f expected_type scope local_types locals,
+                                Option.some fields =>
+                                match type_check_named_call f fields expected_type scope local_types locals {
+                                    err e2 => err e2,
+                                    ok result => match result {
+                                        Option.some tt => ok tt,
+                                        Option.none => type_check_app_ordinary a_tt f expected_type scope local_types locals,
+                                    },
+                                }
+                            }
+                            else
+                            type_check_app_ordinary a_tt f expected_type scope local_types locals,
+                            err e =>
+                            match named_call_fields_of a {
+                                Option.none => err e,
+                                Option.some fields =>
+                                match type_check_named_call f fields expected_type scope local_types locals {
+                                    err e2 => err e2,
+                                    ok result => match result {
+                                        Option.some tt => ok tt,
+                                        Option.none => err e,
+                                    },
+                                }
                             },
                         }
-                }
-            else
-            type_check_app_ordinary a_tt f expected_type scope local_types locals,
-        err e =>
-            match named_call_fields_of a {
-                Option.none => err e,
-                Option.some fields =>
-                    match type_check_named_call f fields expected_type scope local_types locals {
-                        err e2 => err e2,
-                        ok result => match result {
-                            Option.some tt => ok tt,
-                            Option.none => err e,
-                        },
                     }
-            },
-    }
-    }
-    }
-    }
-    }
+                }
+            }
+        }
     }
 
 /// The `f #Named.Instance` arm of `type_check_app` (below). The hint
@@ -6845,10 +6845,10 @@ def try_type_check_hinted_app (f : Term) (hint : String) (expected_type : Term) 
                         Option.some owner_pair =>
                             match owner_pair {
                                 Pair.pair owner_cls method_name =>
-                            let one_hint : List String := List.cons hint List.empty in
-                            match scope_find_instance_by_name scope hint {
-                                Option.none => err (TypeError.custom (String.concat "no instance named '" (String.concat hint "'"))),
-                                Option.some ins =>
+                                let one_hint : List String := List.cons hint List.empty in
+                                match scope_find_instance_by_name scope hint {
+                                    Option.none => err (TypeError.custom (String.concat "no instance named '" (String.concat hint "'"))),
+                                    Option.some ins =>
                                     match ins {
                                         Instance.mk insname ins_cls _ ins_args _ _ _ =>
                                             if not (class_name_eq ins_cls owner_cls)
@@ -6873,7 +6873,7 @@ def try_type_check_hinted_app (f : Term) (hint : String) (expected_type : Term) 
                                                     carrier_bindings (instance_wildcard_names ins) ins_args hint_carrier in
                                                 resolve_class_method_d4 insname ins_cls method_name (emitted_dict_constraints (scope_data_dict_classes (scope_globals scope)) (scope_data_classes (scope_globals scope)) ins method_name) ins_args hint_carrier bindings expected_type scope locals,
                                     },
-                            },
+                                },
                             },
                         Option.none =>
                             // Not a class-method callee: validate the hint against
@@ -6976,20 +6976,20 @@ def infer_position_hole (f : Term) (a : Term) : Option TypeError :=
 /// literal declined to become a named call -- share it verbatim
 /// instead of duplicating the sequence.
 def type_check_app_ordinary (a_tt : TypedTerm) (f : Term) (expected_type : Term) (scope : Scope) (local_types : List Term) (locals : LocalScope) : Result TypeError TypedTerm :=
-            let a_term : Term := a_tt.term in
-            let a_typ : Term := a_tt.typ in
-            let f_expected : Term := Term.pi binder_anon a_typ expected_type in
-            match type_check f f_expected scope local_types locals {
-                ok f_tt =>
-                    let f_term : Term := f_tt.term in
-                    let f_typ : Term := f_tt.typ in
-                    match callee_domain_error f a_term a_typ f_typ scope locals {
-                        Option.some e => err e,
-                        Option.none =>
-                    extract_pi_ret f_term a_term f_typ a_typ expected_type scope local_types locals,
-                    },
-                err e => err e,
-            }
+    let a_term : Term := a_tt.term in
+    let a_typ : Term := a_tt.typ in
+    let f_expected : Term := Term.pi binder_anon a_typ expected_type in
+    match type_check f f_expected scope local_types locals {
+        ok f_tt =>
+            let f_term : Term := f_tt.term in
+            let f_typ : Term := f_tt.typ in
+            match callee_domain_error f a_term a_typ f_typ scope locals {
+                Option.some e => err e,
+                Option.none =>
+                extract_pi_ret f_term a_term f_typ a_typ expected_type scope local_types locals,
+            },
+        err e => err e,
+    }
 
 /// The ordinary path's argument check: the callee's own Pi domain against
 /// the argument's inferred type.
@@ -7370,9 +7370,9 @@ def instance_result_match (ins : Instance) (ret_idx : I64) (exp : Term) (scope :
         Option.some arg_at =>
             informative_value arg_at scope
                 && (match unify_structural arg_at exp scope empty_locals {
-                        Result.ok _ => true,
-                        Result.err _ => false,
-                    }),
+                    Result.ok _ => true,
+                    Result.err _ => false,
+                }),
     }
 
 /// Do all surviving matches answer every argument the same way `first`
@@ -7406,9 +7406,9 @@ def args_agree_go (aargs : List Term) (bargs : List Term) (scope : Scope) : Bool
                         Result.err _ => false,
                     })
                         && (match unify_structural xb xa scope empty_locals {
-                                Result.ok _ => true,
-                                Result.err _ => false,
-                            })
+                            Result.ok _ => true,
+                            Result.err _ => false,
+                        })
                         && args_agree_go rest restb scope,
             },
     }
@@ -9172,11 +9172,11 @@ def type_check_struct_lit (fields : List StructLitField) (type_name : Option Ter
                                             match field_set_validate "struct literal" params fields {
                                                 err e => err e,
                                                 ok _ =>
-                                            let args : List (Option Term) := struct_lit_build_args params fields in
-                                            let bindings : List (Pair Identifier Term) := con_own_param_bindings ind expected_type in
-                                            match check_con_args_against_params args params bindings scope local_types locals {
-                                                err e => err e,
-                                                ok elab_args =>
+                                                let args : List (Option Term) := struct_lit_build_args params fields in
+                                                let bindings : List (Pair Identifier Term) := con_own_param_bindings ind expected_type in
+                                                match check_con_args_against_params args params bindings scope local_types locals {
+                                                    err e => err e,
+                                                    ok elab_args =>
                                                     let mk_name : Identifier := struct_lit_con_name con_name in
                                                     let c : Con := Con.mk mk_name typ_mp (List.length params) elab_args in
                                                     let result_typ : Term := match type_name {
@@ -9184,7 +9184,7 @@ def type_check_struct_lit (fields : List StructLitField) (type_name : Option Ter
                                                         Option.none => expected_type,
                                                     } in
                                                     ok (mk_typed (Term.con c) result_typ),
-                                            }
+                                                }
                                             }
                                     }
                             }
@@ -9774,27 +9774,27 @@ def type_check_struct_update (base : Term) (fields : List StructLitField) (expec
                                                     match field_set_check_unknown "struct update" params fields {
                                                         err e => err e,
                                                         ok _ =>
-                                                    let n : I64 := List.length params in
-                                                    let binders : List Identifier := struct_update_binders params in
-                                                    // Only the OVERRIDES are type-checked, each against
-                                                    // the struct's own DECLARED field type (`params`) --
-                                                    // `{ p with x := 5 }` where `p.x : String` rejects
-                                                    // the mismatch, the same `check_con_args_against_
-                                                    // params` reuse ordinary struct literals get. An
-                                                    // untouched field needs no check: it becomes a
-                                                    // binder of the wrapping match, typed by the
-                                                    // constructor itself.
-                                                    let bindings : List (Pair Identifier Term) := con_own_param_bindings ind base_typ in
-                                                    match check_con_args_against_params (struct_update_override_args params fields) params bindings scope local_types locals {
-                                                        err e => err e,
-                                                        ok elab_overrides =>
+                                                        let n : I64 := List.length params in
+                                                        let binders : List Identifier := struct_update_binders params in
+                                                        // Only the OVERRIDES are type-checked, each against
+                                                        // the struct's own DECLARED field type (`params`) --
+                                                        // `{ p with x := 5 }` where `p.x : String` rejects
+                                                        // the mismatch, the same `check_con_args_against_
+                                                        // params` reuse ordinary struct literals get. An
+                                                        // untouched field needs no check: it becomes a
+                                                        // binder of the wrapping match, typed by the
+                                                        // constructor itself.
+                                                        let bindings : List (Pair Identifier Term) := con_own_param_bindings ind base_typ in
+                                                        match check_con_args_against_params (struct_update_override_args params fields) params bindings scope local_types locals {
+                                                            err e => err e,
+                                                            ok elab_overrides =>
                                                             let mk_name : Identifier := struct_lit_con_name con_name in
                                                             let args : List (Option Term) := struct_update_arm_args elab_overrides binders n 0 in
                                                             let body : Term := Term.con (Con.mk mk_name typ_mp n args) in
                                                             let no_fp : Option FieldPattern := Option.none in
                                                             let case_ : MatchCase := MatchCase.mk mk_name binders body no_fp (Option.some (inductive_type_path ind)) in
                                                             ok (mk_typed (Term.lit (Literal.match_ base_term (List.cons case_ List.empty))) base_typ),
-                                                    }
+                                                        }
                                                     },
                                             }
                                     }

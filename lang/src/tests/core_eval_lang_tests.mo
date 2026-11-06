@@ -2,13 +2,13 @@ use std::list {List.length}
 use lib::core_eval {basic_native_table, eval}
 use lib::core_ir {CoreIr, IrLit}
 use lang::core_value {
-  GlobalTable, Value, env_nil, global_cache_new, global_table_len,
+    GlobalTable, Value, env_nil, global_cache_new, global_table_len,
 }
 use lib::lower_core_ir {LowerCtx, lower_ctx_from_decls, lower_root}
 use lang::types {
-  Attribute, DebugName, Decl, InductConstructor, ModulePath, NamePath, Param,
-  Term, binder_explicit, def_d, i64, id, ident, if_, inductive_d, many, match_, num,
-  open_d, open_only, package_private,
+    Attribute, DebugName, Decl, InductConstructor, ModulePath, NamePath, Param,
+    Term, binder_explicit, def_d, i64, id, ident, if_, inductive_d, many, match_, num,
+    open_d, open_only, package_private,
 }
 
 /// End-to-end tests: real checked `Term` -> `LowerCtx` (built via
@@ -54,48 +54,48 @@ def free_var (s : String) : Term := Term.var sentinel (named s)
 def num (n : I64) : Term := Term.lit (Literal.num n NumSuffix.i64)
 
 def def_decl (name : String) (term : Term) : Decl :=
-  Decl.def_d (Def.mk (np1 name) Term.hole term List.empty List.empty Visibility.package_private List.empty)
+    Decl.def_d (Def.mk (np1 name) Term.hole term List.empty List.empty Visibility.package_private List.empty)
 
 def build_ctx (decl_list : List Decl) : LowerCtx :=
-  lower_ctx_from_decls (mp1 "test") decl_list
+    lower_ctx_from_decls (mp1 "test") decl_list
 
 /// Lower `root`'s body against `ctx` and evaluate it to a `Value`,
 /// against the (real, worklist-built) `GlobalTable` `lower_root` returns.
 def lower_and_run (ctx : LowerCtx) (root : String) : Option Value :=
-  match lower_root ctx (np1 root) {
-    Result.err _ => Option.none,
-    Result.ok pr => run_lowered pr,
-  }
+    match lower_root ctx (np1 root) {
+        Result.err _ => Option.none,
+        Result.ok pr => run_lowered pr,
+    }
 
 def run_lowered (pr : Pair CoreIr GlobalTable) : Option Value :=
-  match pr {
-    Pair.pair ir globals =>
-      match eval ir Env.env_nil globals basic_native_table (global_cache_new (global_table_len globals)) {
-        Pair.pair r _ =>
-          match r {
-            Result.ok v => Option.some v,
-            Result.err _ => Option.none,
-          },
-      },
-  }
+    match pr {
+        Pair.pair ir globals =>
+            match eval ir Env.env_nil globals basic_native_table (global_cache_new (global_table_len globals)) {
+                Pair.pair r _ =>
+                    match r {
+                        Result.ok v => Option.some v,
+                        Result.err _ => Option.none,
+                    },
+            },
+    }
 
 def value_num_is (v : Value) (expected : I64) : Bool :=
-  match v {
-    Value.v_lit l => irlit_num_is l expected,
-    _ => false,
-  }
+    match v {
+        Value.v_lit l => irlit_num_is l expected,
+        _ => false,
+    }
 
 def irlit_num_is (l : IrLit) (expected : I64) : Bool :=
-  match l {
-    IrLit.ir_num n _ => I64.beq n expected,
-    _ => false,
-  }
+    match l {
+        IrLit.ir_num n _ => I64.beq n expected,
+        _ => false,
+    }
 
 def opt_value_num_is (ov : Option Value) (expected : I64) : Bool :=
-  match ov {
-    Option.some v => value_num_is v expected,
-    Option.none => false,
-  }
+    match ov {
+        Option.some v => value_num_is v expected,
+        Option.none => false,
+    }
 
 // ─── Test 1: an escaping closure that captures an outer global's arg ───
 // The exact shape the OLD self-hosted evaluator (lang/eval.mo) gets
@@ -104,23 +104,23 @@ def opt_value_num_is (ov : Option Value) (expected : I64) : Bool :=
 // different call site (`main`'s own environment, not const_fn's).
 
 def const_fn_term : Term :=
-  // fn x => fn y => x
-  Term.lam (binder_explicit (named "x")) Term.hole
-    (Term.lam (binder_explicit (named "y")) Term.hole
-      (Term.var 1 (named "x")))
+    // fn x => fn y => x
+    Term.lam (binder_explicit (named "x")) Term.hole
+        (Term.lam (binder_explicit (named "y")) Term.hole
+            (Term.var 1 (named "x")))
 
 def closure_main_term : Term :=
-  // const_fn 111 222 -- must yield 111, proving the inner lambda closed
-  // over x=111 rather than reading whatever's live at the *application*
-  // site.
-  Term.app (Term.app (free_var "const_fn") (num 111)) (num 222)
+    // const_fn 111 222 -- must yield 111, proving the inner lambda closed
+    // over x=111 rather than reading whatever's live at the *application*
+    // site.
+    Term.app (Term.app (free_var "const_fn") (num 111)) (num 222)
 
 def closure_test_decls : List Decl :=
-  [def_decl "const_fn" const_fn_term, def_decl "main" closure_main_term]
+    [def_decl "const_fn" const_fn_term, def_decl "main" closure_main_term]
 
 #[test]
 def test_escaping_closure_captures_global_arg_end_to_end : Bool :=
-  opt_value_num_is (lower_and_run (build_ctx closure_test_decls) "main") 111
+    opt_value_num_is (lower_and_run (build_ctx closure_test_decls) "main") 111
 
 // ─── Test 2: self-recursive addition over a hand-built 2-constructor ───
 // inductive, dispatched through match_ -- the two other gaps found in
@@ -133,7 +133,7 @@ def z_ctor : InductConstructor := InductConstructor.mk (np1 "z") List.empty Term
 def s_ctor : InductConstructor := InductConstructor.mk (np1 "s") List.empty Term.hole
 
 def mynat_decl : Decl :=
-  Decl.inductive_d (Inductive.mk mynat_path List.empty Term.hole [z_ctor, s_ctor] List.empty Visibility.package_private)
+    Decl.inductive_d (Inductive.mk mynat_path List.empty Term.hole [z_ctor, s_ctor] List.empty Visibility.package_private)
 
 def mynat_z : Term := Term.con (Con.mk (Identifier.id "z") mynat_path 0 List.empty)
 
@@ -141,60 +141,60 @@ def mynat_s (n : Term) : Term := Term.con (Con.mk (Identifier.id "s") mynat_path
 
 /// def my_add (a b : MyNat) : MyNat := match a { z => b, s n => s (my_add n b) }
 def my_add_term : Term :=
-  Term.lam (binder_explicit (named "a")) Term.hole
-    (Term.lam (binder_explicit (named "b")) Term.hole
-      (Term.lit (Literal.match_
-        (Term.var 1 (named "a"))
-        [
-          MatchCase.mk (Identifier.id "z") List.empty (Term.var 0 (named "b")) Option.none Option.none,
-          MatchCase.mk (Identifier.id "s") [Identifier.id "n"]
-            (mynat_s (Term.app (Term.app (free_var "my_add") (Term.var 0 (named "n"))) (Term.var 1 (named "b")))) Option.none Option.none,
-        ])))
+    Term.lam (binder_explicit (named "a")) Term.hole
+        (Term.lam (binder_explicit (named "b")) Term.hole
+            (Term.lit (Literal.match_
+                (Term.var 1 (named "a"))
+                [
+                    MatchCase.mk (Identifier.id "z") List.empty (Term.var 0 (named "b")) Option.none Option.none,
+                    MatchCase.mk (Identifier.id "s") [Identifier.id "n"]
+                        (mynat_s (Term.app (Term.app (free_var "my_add") (Term.var 0 (named "n"))) (Term.var 1 (named "b")))) Option.none Option.none,
+                ])))
 
 def two_term : Term := mynat_s (mynat_s mynat_z)
 def one_term : Term := mynat_s mynat_z
 
 def add_main_term : Term :=
-  // my_add 2 1 -- should reduce to 3 = s (s (s z))
-  Term.app (Term.app (free_var "my_add") two_term) one_term
+    // my_add 2 1 -- should reduce to 3 = s (s (s z))
+    Term.app (Term.app (free_var "my_add") two_term) one_term
 
 def recursion_test_decls : List Decl :=
-  [mynat_decl, def_decl "my_add" my_add_term, def_decl "main" add_main_term]
+    [mynat_decl, def_decl "my_add" my_add_term, def_decl "main" add_main_term]
 
 /// Count how deep a `s (s (... z))` chain goes -- `z`'s tag is 0 (first
 /// declared), `s`'s tag is 1 (second declared), matching `mynat_decl`'s
 /// constructor order.
 #[partial]
 def count_succ (v : Value) : Option I64 :=
-  match v {
-    Value.v_con tag args =>
-      if I64.beq tag 0
-      then Option.some 0
-      else count_succ_s args,
-    _ => Option.none,
-  }
+    match v {
+        Value.v_con tag args =>
+            if I64.beq tag 0
+            then Option.some 0
+            else count_succ_s args,
+        _ => Option.none,
+    }
 
 #[partial]
 def count_succ_s (args : List Value) : Option I64 :=
-  match args {
-    List.cons inner _ =>
-      match count_succ inner {
-        Option.some n => Option.some (n + 1),
-        Option.none => Option.none,
-      },
-    List.empty => Option.none,
-  }
+    match args {
+        List.cons inner _ =>
+            match count_succ inner {
+                Option.some n => Option.some (n + 1),
+                Option.none => Option.none,
+            },
+        List.empty => Option.none,
+    }
 
 #[test]
 def test_self_recursive_match_over_custom_inductive_end_to_end : Bool :=
-  match lower_and_run (build_ctx recursion_test_decls) "main" {
-    Option.some v =>
-      match count_succ v {
-        Option.some n => I64.beq n 3,
+    match lower_and_run (build_ctx recursion_test_decls) "main" {
+        Option.some v =>
+            match count_succ v {
+                Option.some n => I64.beq n 3,
+                Option.none => false,
+            },
         Option.none => false,
-      },
-    Option.none => false,
-  }
+    }
 
 // ─── Test 3: if, end-to-end through lower_root/eval ─────────────────────
 // `lower_if` compiles `Literal.if_` straight to `match_` against Bool's
@@ -211,7 +211,7 @@ def true_ctor : InductConstructor := InductConstructor.mk (np1 "true") List.empt
 def false_ctor : InductConstructor := InductConstructor.mk (np1 "false") List.empty Term.hole
 
 def bool_decl : Decl :=
-  Decl.inductive_d (Inductive.mk bool_path List.empty Term.hole [true_ctor, false_ctor] List.empty Visibility.package_private)
+    Decl.inductive_d (Inductive.mk bool_path List.empty Term.hole [true_ctor, false_ctor] List.empty Visibility.package_private)
 
 def bool_true : Term := Term.con (Con.mk (Identifier.id "true") bool_path 0 List.empty)
 
@@ -222,7 +222,7 @@ def if_test_decls : List Decl := [bool_decl, def_decl "main" if_main_term]
 
 #[test]
 def test_if_end_to_end : Bool :=
-  opt_value_num_is (lower_and_run (build_ctx if_test_decls) "main") 100
+    opt_value_num_is (lower_and_run (build_ctx if_test_decls) "main") 100
 
 // ─── Test 4: a point-free (unapplied) constructor reference ────────────
 // `lang/lower_core_ir.mo`'s `lower_free_var_fallback` -- a nullary
@@ -239,33 +239,33 @@ def hd_param : Param := Param.mk (Identifier.id "hd") Term.hole Multiplicity.man
 def tl_param : Param := Param.mk (Identifier.id "tl") Term.hole Multiplicity.many Option.none List.empty
 
 def mycons_ctor : InductConstructor :=
-  InductConstructor.mk (np1 "mycons") [hd_param, tl_param] Term.hole
+    InductConstructor.mk (np1 "mycons") [hd_param, tl_param] Term.hole
 
 def mylist_decl : Decl :=
-  Decl.inductive_d (Inductive.mk mylist_path List.empty Term.hole [mynil_ctor, mycons_ctor] List.empty Visibility.package_private)
+    Decl.inductive_d (Inductive.mk mylist_path List.empty Term.hole [mynil_ctor, mycons_ctor] List.empty Visibility.package_private)
 
 /// `def empty_case (n : I64) : MyList := MyList.mynil` -- ignores its
 /// own arg entirely and returns the bare, unapplied nullary
 /// constructor -- exactly the shape a `List.map`/`List.filter`-style
 /// function's own empty-input case takes.
 def empty_case_term : Term :=
-  Term.lam (binder_explicit (named "n")) Term.hole (free_var "MyList.mynil")
+    Term.lam (binder_explicit (named "n")) Term.hole (free_var "MyList.mynil")
 
 def point_free_ctor_test_decls : List Decl :=
-  [mylist_decl, def_decl "empty_case" empty_case_term, def_decl "main" (Term.app (free_var "empty_case") (num 0))]
+    [mylist_decl, def_decl "empty_case" empty_case_term, def_decl "main" (Term.app (free_var "empty_case") (num 0))]
 
 #[test]
 def test_point_free_nullary_constructor_reference_end_to_end : Bool :=
-  match lower_and_run (build_ctx point_free_ctor_test_decls) "main" {
-    Option.some v => is_con_with_tag_and_arity v 0 0,
-    Option.none => false,
-  }
+    match lower_and_run (build_ctx point_free_ctor_test_decls) "main" {
+        Option.some v => is_con_with_tag_and_arity v 0 0,
+        Option.none => false,
+    }
 
 def is_con_with_tag_and_arity (v : Value) (expected_tag : I64) (expected_arity : I64) : Bool :=
-  match v {
-    Value.v_con tag args => I64.beq tag expected_tag && I64.beq (List.length args) expected_arity,
-    _ => false,
-  }
+    match v {
+        Value.v_con tag args => I64.beq tag expected_tag && I64.beq (List.length args) expected_arity,
+        _ => false,
+    }
 
 // ─── Test 4b: a wildcard match arm against a non-nullary constructor ──
 // Regression for a real bug: `lower_one_match_arm`'s synthesized arms
@@ -280,22 +280,22 @@ def is_con_with_tag_and_arity (v : Value) (expected_tag : I64) (expected_arity :
 def mylist_nil : Term := Term.con (Con.mk (Identifier.id "mynil") mylist_path 0 List.empty)
 
 def mylist_cons (hd : Term) (tl : Term) : Term :=
-  Term.con (Con.mk (Identifier.id "mycons") mylist_path 1 [Option.some hd, Option.some tl])
+    Term.con (Con.mk (Identifier.id "mycons") mylist_path 1 [Option.some hd, Option.some tl])
 
 def wildcard_arity_match_term : Term :=
-  Term.lit (Literal.match_
-    (mylist_cons (num 1) mylist_nil)
-    [
-      MatchCase.mk (Identifier.id "mynil") List.empty (num 0) Option.none Option.none,
-      MatchCase.mk (Identifier.id "_") List.empty (num 99) Option.none Option.none,
-    ])
+    Term.lit (Literal.match_
+        (mylist_cons (num 1) mylist_nil)
+        [
+            MatchCase.mk (Identifier.id "mynil") List.empty (num 0) Option.none Option.none,
+            MatchCase.mk (Identifier.id "_") List.empty (num 99) Option.none Option.none,
+        ])
 
 def wildcard_arity_test_decls : List Decl :=
-  [mylist_decl, def_decl "main" wildcard_arity_match_term]
+    [mylist_decl, def_decl "main" wildcard_arity_match_term]
 
 #[test]
 def test_wildcard_match_arm_against_nonnullary_constructor_end_to_end : Bool :=
-  opt_value_num_is (lower_and_run (build_ctx wildcard_arity_test_decls) "main") 99
+    opt_value_num_is (lower_and_run (build_ctx wildcard_arity_test_decls) "main") 99
 
 // ─── Test 5: a native-attributed stub def referenced as a free var ────
 // `lang/lower_core_ir.mo`'s `lower_one_global` -- `#[native i64_add]
@@ -312,16 +312,16 @@ def add_native_term : Term := Term.lam (binder_explicit (named "a")) Term.hole (
 def add_native_decl : Decl := Decl.def_d (Def.mk (np1 "add_native") Term.hole add_native_term List.empty native_attr Visibility.package_private List.empty)
 
 def native_stub_main_term : Term :=
-  // add_native 3 4 -- should reduce to 7 via the SAME i64_add native
-  // `add_one_term`'s own hand-lowered `Term.ntv` uses directly.
-  Term.app (Term.app (free_var "add_native") (num 3)) (num 4)
+    // add_native 3 4 -- should reduce to 7 via the SAME i64_add native
+    // `add_one_term`'s own hand-lowered `Term.ntv` uses directly.
+    Term.app (Term.app (free_var "add_native") (num 3)) (num 4)
 
 def native_stub_test_decls : List Decl :=
-  [add_native_decl, def_decl "main" native_stub_main_term]
+    [add_native_decl, def_decl "main" native_stub_main_term]
 
 #[test]
 def test_native_attributed_stub_def_referenced_as_free_var_end_to_end : Bool :=
-  opt_value_num_is (lower_and_run (build_ctx native_stub_test_decls) "main") 7
+    opt_value_num_is (lower_and_run (build_ctx native_stub_test_decls) "main") 7
 
 // ─── Test 6: a BARE (`open`-aliased) constructor reference used as a ───
 // global -- `lang/lower_core_ir.mo`'s `lower_one_global` own new
@@ -338,14 +338,14 @@ def test_native_attributed_stub_def_referenced_as_free_var_end_to_end : Bool :=
 def open_mynil_decl : Decl := Decl.open_d mylist_path (OpenFilter.open_only [Identifier.id "mynil"])
 
 def bare_ctor_global_test_decls : List Decl :=
-  [mylist_decl, open_mynil_decl, def_decl "empty_case" (Term.lam (binder_explicit (named "n")) Term.hole (free_var "mynil")), def_decl "main" (Term.app (free_var "empty_case") (num 0))]
+    [mylist_decl, open_mynil_decl, def_decl "empty_case" (Term.lam (binder_explicit (named "n")) Term.hole (free_var "mynil")), def_decl "main" (Term.app (free_var "empty_case") (num 0))]
 
 #[test]
 def test_bare_open_aliased_constructor_reference_as_global_end_to_end : Bool :=
-  match lower_and_run (build_ctx bare_ctor_global_test_decls) "main" {
-    Option.some v => is_con_with_tag_and_arity v 0 0,
-    Option.none => false,
-  }
+    match lower_and_run (build_ctx bare_ctor_global_test_decls) "main" {
+        Option.some v => is_con_with_tag_and_arity v 0 0,
+        Option.none => false,
+    }
 
 // ─── Test 7: a 3-field constructor match, extracting the MIDDLE field ──
 // Every existing fixture above only matches 0-2-field constructors --
@@ -363,24 +363,24 @@ def triple_ctor : InductConstructor := InductConstructor.mk (np1 "triple_mk") [a
 def triple_decl : Decl := Decl.inductive_d (Inductive.mk triple_path List.empty Term.hole [triple_ctor] List.empty Visibility.package_private)
 
 def triple_con (x y z : Term) : Term :=
-  Term.con (Con.mk (Identifier.id "triple_mk") triple_path 3 [Option.some x, Option.some y, Option.some z])
+    Term.con (Con.mk (Identifier.id "triple_mk") triple_path 3 [Option.some x, Option.some y, Option.some z])
 
 /// `def get_b (t : Triple) : I64 := match t { triple_mk a b c => b }`
 def get_b_term : Term :=
-  Term.lam (binder_explicit (named "t")) Term.hole
-    (Term.lit (Literal.match_
-      (Term.var 0 (named "t"))
-      [MatchCase.mk (Identifier.id "triple_mk") [Identifier.id "a", Identifier.id "b", Identifier.id "c"] (Term.var 1 (named "b")) Option.none Option.none]))
+    Term.lam (binder_explicit (named "t")) Term.hole
+        (Term.lit (Literal.match_
+            (Term.var 0 (named "t"))
+            [MatchCase.mk (Identifier.id "triple_mk") [Identifier.id "a", Identifier.id "b", Identifier.id "c"] (Term.var 1 (named "b")) Option.none Option.none]))
 
 def get_b_main_term : Term :=
-  Term.app (free_var "get_b") (triple_con (num 10) (num 20) (num 30))
+    Term.app (free_var "get_b") (triple_con (num 10) (num 20) (num 30))
 
 def three_field_test_decls : List Decl :=
-  [triple_decl, def_decl "get_b" get_b_term, def_decl "main" get_b_main_term]
+    [triple_decl, def_decl "get_b" get_b_term, def_decl "main" get_b_main_term]
 
 #[test]
 def test_three_field_constructor_match_extracts_middle_field : Bool :=
-  opt_value_num_is (lower_and_run (build_ctx three_field_test_decls) "main") 20
+    opt_value_num_is (lower_and_run (build_ctx three_field_test_decls) "main") 20
 
 // ─── Test 8: the four attribute-parsing natives (ids 8-11) ─────────────
 // `motes/clap`'s `derive_cli_meta` scans `FieldInfo.attrs` strings such as
@@ -391,64 +391,64 @@ def str_term (s : String) : CoreIr := CoreIr.lit (IrLit.ir_str s)
 def int_term (n : I64) : CoreIr := CoreIr.lit (IrLit.ir_num n NumSuffix.i64)
 
 def eval_native (id : I64) (args : List CoreIr) : Option Value :=
-  match eval (CoreIr.ntv id args) Env.env_nil (GlobalTable.global_table List.empty) basic_native_table (global_cache_new 0) {
-    Pair.pair r _ =>
-      match r {
-        Result.ok v => Option.some v,
-        Result.err _ => Option.none,
-      },
-  }
+    match eval (CoreIr.ntv id args) Env.env_nil (GlobalTable.global_table List.empty) basic_native_table (global_cache_new 0) {
+        Pair.pair r _ =>
+            match r {
+                Result.ok v => Option.some v,
+                Result.err _ => Option.none,
+            },
+    }
 
 def value_str_is (v : Value) (expected : String) : Bool :=
-  match v {
-    Value.v_lit l => match l {
-      IrLit.ir_str s => String.beq s expected,
-      _ => false,
-    },
-    _ => false,
-  }
+    match v {
+        Value.v_lit l => match l {
+            IrLit.ir_str s => String.beq s expected,
+            _ => false,
+        },
+        _ => false,
+    }
 
 def value_bool_is (v : Value) (expected : Bool) : Bool :=
-  match v {
-    Value.v_con tag _ =>
-      if expected then I64.beq tag 0 else I64.beq tag 1,
-    _ => false,
-  }
+    match v {
+        Value.v_con tag _ =>
+            if expected then I64.beq tag 0 else I64.beq tag 1,
+        _ => false,
+    }
 
 #[test]
 def test_ntv_string_length : Bool :=
-  match eval_native 8 [str_term "hello"] {
-    Option.some v => value_num_is v 5,
-    Option.none => false,
-  }
+    match eval_native 8 [str_term "hello"] {
+        Option.some v => value_num_is v 5,
+        Option.none => false,
+    }
 
 #[test]
 def test_ntv_string_slice : Bool :=
-  match eval_native 9 [str_term "hello", int_term 1, int_term 3] {
-    Option.some v => value_str_is v "ell",
-    Option.none => false,
-  }
+    match eval_native 9 [str_term "hello", int_term 1, int_term 3] {
+        Option.some v => value_str_is v "ell",
+        Option.none => false,
+    }
 
 #[test]
 def test_ntv_string_drop : Bool :=
-  match eval_native 10 [int_term 2, str_term "hello"] {
-    Option.some v => value_str_is v "llo",
-    Option.none => false,
-  }
+    match eval_native 10 [int_term 2, str_term "hello"] {
+        Option.some v => value_str_is v "llo",
+        Option.none => false,
+    }
 
 #[test]
 def test_ntv_string_starts_with : Bool :=
-  match eval_native 11 [str_term "he", str_term "hello"] {
-    Option.some v => value_bool_is v true,
-    Option.none => false,
-  }
+    match eval_native 11 [str_term "he", str_term "hello"] {
+        Option.some v => value_bool_is v true,
+        Option.none => false,
+    }
 
 #[test]
 def test_ntv_string_starts_with_false : Bool :=
-  match eval_native 11 [str_term "xx", str_term "hello"] {
-    Option.some v => value_bool_is v false,
-    Option.none => false,
-  }
+    match eval_native 11 [str_term "xx", str_term "hello"] {
+        Option.some v => value_bool_is v false,
+        Option.none => false,
+    }
 
 // ─── Test 7: a TYPE NAME in value position ──────────────────────────────
 // `idT I64 5`: `I64` has no `Def` and no constructor, so `lower_one_global`
@@ -457,20 +457,20 @@ def test_ntv_string_starts_with_false : Bool :=
 // mirroring the immediate codegen emits for the same reference.
 
 def i64_decl : Decl :=
-  Decl.inductive_d (Inductive.mk (np1 "I64") List.empty Term.hole List.empty List.empty Visibility.package_private)
+    Decl.inductive_d (Inductive.mk (np1 "I64") List.empty Term.hole List.empty List.empty Visibility.package_private)
 
 /// def idT (T : Type) (x : T) : T := x
 def idt_decl : Decl :=
-  def_decl "idT"
-    (Term.lam (binder_explicit (named "T")) Term.hole
-      (Term.lam (binder_explicit (named "x")) Term.hole (Term.var 0 (named "x"))))
+    def_decl "idT"
+        (Term.lam (binder_explicit (named "T")) Term.hole
+            (Term.lam (binder_explicit (named "x")) Term.hole (Term.var 0 (named "x"))))
 
 def type_arg_main_term : Term :=
-  Term.app (Term.app (free_var "idT") (free_var "I64")) (num 5)
+    Term.app (Term.app (free_var "idT") (free_var "I64")) (num 5)
 
 def type_arg_test_decls : List Decl :=
-  [i64_decl, idt_decl, def_decl "main" type_arg_main_term]
+    [i64_decl, idt_decl, def_decl "main" type_arg_main_term]
 
 #[test]
 def test_inductive_name_as_type_argument_end_to_end : Bool :=
-  opt_value_num_is (lower_and_run (build_ctx type_arg_test_decls) "main") 5
+    opt_value_num_is (lower_and_run (build_ctx type_arg_test_decls) "main") 5

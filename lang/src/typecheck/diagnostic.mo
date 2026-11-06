@@ -24,8 +24,8 @@
 /// attempted here.
 
 use lang::types {
-  Identifier, NameRef, TypeError, concrete, id, show_identifier, show_name_path,
-  show_operator, show_qualified_name, sort,
+    Identifier, NameRef, TypeError, concrete, id, show_identifier, show_name_path,
+    show_operator, show_qualified_name, sort,
 }
 use lib::pretty {show_term}
 
@@ -34,103 +34,103 @@ use lib::pretty {show_term}
 /// `Operator`, each of which already has one.
 #[partial]
 pub def name_ref_to_string (n : NameRef) : String :=
-	match n {
-		// A `nid` may hold a FLATTENED qualified reference: the parse
-		// lowering renders a `nqn` in the def-side symbol convention
-		// (`std.process::process_id`) so references and definitions agree
-		// for codegen, and the checker rebuilds it as a bare `nid`.
-		// Printing that verbatim shows an internal spelling the user
-		// never wrote -- restore the SOURCE form for display.
-		NameRef.nid id => show_source_spelling id,
-		NameRef.nnp np => show_name_path np,
-		NameRef.nqn qn => show_qualified_name qn,
-		NameRef.nop op => show_operator op,
-	}
+    match n {
+        // A `nid` may hold a FLATTENED qualified reference: the parse
+        // lowering renders a `nqn` in the def-side symbol convention
+        // (`std.process::process_id`) so references and definitions agree
+        // for codegen, and the checker rebuilds it as a bare `nid`.
+        // Printing that verbatim shows an internal spelling the user
+        // never wrote -- restore the SOURCE form for display.
+        NameRef.nid id => show_source_spelling id,
+        NameRef.nnp np => show_name_path np,
+        NameRef.nqn qn => show_qualified_name qn,
+        NameRef.nop op => show_operator op,
+    }
 
 /// A human-readable description of what went wrong — one line per
 /// `TypeError` variant (`lang/types.mo:252`).
 #[partial]
 pub def type_error_message (e : TypeError) : String :=
-	match e {
-		TypeError.mismatch expected actual =>
-			String.concat "type mismatch: expected " (String.concat (show_term expected) (String.concat ", found " (show_term actual))),
-		TypeError.unknown_var name =>
-			String.concat "unknown variable '" (String.concat (name_ref_to_string name) "'"),
-		TypeError.unknown_type name =>
-			String.concat "unknown type '" (String.concat (name_ref_to_string name) "'"),
-		TypeError.unknown_constructor name =>
-			String.concat "unknown constructor '" (String.concat (name_ref_to_string name) "'"),
-		TypeError.not_a_function term =>
-			String.concat "not a function: " (show_term term),
-		TypeError.not_a_type term =>
-			String.concat "not a type: " (show_term term),
-		TypeError.infinite_type term =>
-			String.concat "infinite type: " (show_term term),
-		TypeError.custom msg => msg,
-		// The affine-by-default experiment's three
-		// (Milestone 2).
-		// Each names the remedy that actually applies rather than just
-		// reporting a count, because under Design B the three cases
-		// have genuinely different fixes.
-		TypeError.copy_required name typ uses =>
-			String.concat "`" (String.concat (show_identifier name)
-				(String.concat "` : " (String.concat (show_term typ)
-				(String.concat " is used " (String.concat (I64.to_string uses)
-				" times but is affine; share it with `Shared`, give its type a Copy instance, or copy it with `Clone.clone`"))))),
-		TypeError.value_used_after_move name typ owning =>
-			String.concat "`" (String.concat (show_identifier name)
-				(String.concat "` : " (String.concat (show_term typ)
-				(String.concat " is moved " (String.concat (I64.to_string owning)
-				" times; a shared view cannot fix this -- it needs Copy, Clone, or a rewrite"))))),
-		TypeError.linear_unused name typ =>
-			String.concat "linear `" (String.concat (show_identifier name)
-				(String.concat "` : " (String.concat (show_term typ)
-				" is never used; linear means exactly once"))),
-		// The view rule. Named for the fix: the payload has an owner
-		// already, so either read the view or copy it deliberately.
-		TypeError.borrowed_value_escapes name typ =>
-			String.concat "`" (String.concat (show_identifier name)
-				(String.concat "` : " (String.concat (show_term typ)
-				" is a borrowed view from `Shared.get`; it cannot be stored, returned, or passed to an owning parameter -- read it, or copy it with `Clone.clone`"))),
-		// A class with no instance for this carrier: name the class and the
-		// carrier, because the fix is an `instance C T`. Two callers reach
-		// this — a def whose DECLARED constraint is unsatisfied, and a
-		// class-METHOD call with no instance — so the wording names the need,
-		// not the declaration shape.
-		TypeError.missing_instance cls typ =>
-			String.concat "no instance of `" (String.concat (show_name_path cls)
-				(String.concat "` for `" (String.concat (show_term typ)
-				"` -- a dictionary is needed here, and none can be defaulted"))),
-		// View types / `#[linear]`. Each names the rule it enforces, because
-		// the fixes differ: remove the instance, remove the annotation, or
-		// stop hiding the handle.
-		TypeError.proof_copied typ =>
-			String.concat "`Copy`/`Clone` is not allowed for the linear or proof type "
-				(String.concat (show_term typ) "; such a value must never be duplicated"),
-		TypeError.proof_erased_binder name typ =>
-			String.concat "proof `" (String.concat (show_identifier name)
-				(String.concat "` : " (String.concat (show_term typ)
-				" is forced linear; `?` and `%` are not allowed on a proof binder"))),
-		TypeError.proof_at_runtime_position name typ =>
-			String.concat "proof `" (String.concat (show_identifier name)
-				(String.concat "` : " (String.concat (show_term typ)
-				" has no run-time representation; user proof binders and returns are not supported yet"))),
-		TypeError.view_captured name typ =>
-			String.concat "linear `" (String.concat (show_identifier name)
-				(String.concat "` : " (String.concat (show_term typ)
-				" is captured by a closure; a linear or proof value may not be captured"))),
-		TypeError.view_stored_in_container name typ =>
-			String.concat "linear `" (String.concat (show_identifier name)
-				(String.concat "` : " (String.concat (show_term typ)
-				" is stored in a re-readable container (`Shared`/`Ref`/`Array`); that could hand out two handles"))),
-		TypeError.view_in_container typ =>
-			String.concat "`" (String.concat (show_term typ)
-				"` wraps a linear or proof type in `Shared`/`Ref`/`Array`, which is re-readable; that could hand out two handles"),
-		TypeError.linear_erased_binder name typ =>
-			String.concat "linear `" (String.concat (show_identifier name)
-				(String.concat "` : " (String.concat (show_term typ)
-				" cannot be erased with `%`; a linear value has a run-time representation"))),
-	}
+    match e {
+        TypeError.mismatch expected actual =>
+            String.concat "type mismatch: expected " (String.concat (show_term expected) (String.concat ", found " (show_term actual))),
+        TypeError.unknown_var name =>
+            String.concat "unknown variable '" (String.concat (name_ref_to_string name) "'"),
+        TypeError.unknown_type name =>
+            String.concat "unknown type '" (String.concat (name_ref_to_string name) "'"),
+        TypeError.unknown_constructor name =>
+            String.concat "unknown constructor '" (String.concat (name_ref_to_string name) "'"),
+        TypeError.not_a_function term =>
+            String.concat "not a function: " (show_term term),
+        TypeError.not_a_type term =>
+            String.concat "not a type: " (show_term term),
+        TypeError.infinite_type term =>
+            String.concat "infinite type: " (show_term term),
+        TypeError.custom msg => msg,
+        // The affine-by-default experiment's three
+        // (Milestone 2).
+        // Each names the remedy that actually applies rather than just
+        // reporting a count, because under Design B the three cases
+        // have genuinely different fixes.
+        TypeError.copy_required name typ uses =>
+            String.concat "`" (String.concat (show_identifier name)
+                (String.concat "` : " (String.concat (show_term typ)
+                    (String.concat " is used " (String.concat (I64.to_string uses)
+                        " times but is affine; share it with `Shared`, give its type a Copy instance, or copy it with `Clone.clone`"))))),
+        TypeError.value_used_after_move name typ owning =>
+            String.concat "`" (String.concat (show_identifier name)
+                (String.concat "` : " (String.concat (show_term typ)
+                    (String.concat " is moved " (String.concat (I64.to_string owning)
+                        " times; a shared view cannot fix this -- it needs Copy, Clone, or a rewrite"))))),
+        TypeError.linear_unused name typ =>
+            String.concat "linear `" (String.concat (show_identifier name)
+                (String.concat "` : " (String.concat (show_term typ)
+                    " is never used; linear means exactly once"))),
+        // The view rule. Named for the fix: the payload has an owner
+        // already, so either read the view or copy it deliberately.
+        TypeError.borrowed_value_escapes name typ =>
+            String.concat "`" (String.concat (show_identifier name)
+                (String.concat "` : " (String.concat (show_term typ)
+                    " is a borrowed view from `Shared.get`; it cannot be stored, returned, or passed to an owning parameter -- read it, or copy it with `Clone.clone`"))),
+        // A class with no instance for this carrier: name the class and the
+        // carrier, because the fix is an `instance C T`. Two callers reach
+        // this — a def whose DECLARED constraint is unsatisfied, and a
+        // class-METHOD call with no instance — so the wording names the need,
+        // not the declaration shape.
+        TypeError.missing_instance cls typ =>
+            String.concat "no instance of `" (String.concat (show_name_path cls)
+                (String.concat "` for `" (String.concat (show_term typ)
+                    "` -- a dictionary is needed here, and none can be defaulted"))),
+        // View types / `#[linear]`. Each names the rule it enforces, because
+        // the fixes differ: remove the instance, remove the annotation, or
+        // stop hiding the handle.
+        TypeError.proof_copied typ =>
+            String.concat "`Copy`/`Clone` is not allowed for the linear or proof type "
+                (String.concat (show_term typ) "; such a value must never be duplicated"),
+        TypeError.proof_erased_binder name typ =>
+            String.concat "proof `" (String.concat (show_identifier name)
+                (String.concat "` : " (String.concat (show_term typ)
+                    " is forced linear; `?` and `%` are not allowed on a proof binder"))),
+        TypeError.proof_at_runtime_position name typ =>
+            String.concat "proof `" (String.concat (show_identifier name)
+                (String.concat "` : " (String.concat (show_term typ)
+                    " has no run-time representation; user proof binders and returns are not supported yet"))),
+        TypeError.view_captured name typ =>
+            String.concat "linear `" (String.concat (show_identifier name)
+                (String.concat "` : " (String.concat (show_term typ)
+                    " is captured by a closure; a linear or proof value may not be captured"))),
+        TypeError.view_stored_in_container name typ =>
+            String.concat "linear `" (String.concat (show_identifier name)
+                (String.concat "` : " (String.concat (show_term typ)
+                    " is stored in a re-readable container (`Shared`/`Ref`/`Array`); that could hand out two handles"))),
+        TypeError.view_in_container typ =>
+            String.concat "`" (String.concat (show_term typ)
+                "` wraps a linear or proof type in `Shared`/`Ref`/`Array`, which is re-readable; that could hand out two handles"),
+        TypeError.linear_erased_binder name typ =>
+            String.concat "linear `" (String.concat (show_identifier name)
+                (String.concat "` : " (String.concat (show_term typ)
+                    " cannot be erased with `%`; a linear value has a run-time representation"))),
+    }
 
 /// Render a full diagnostic for a type error — same visual family as
 /// `render_parse_error`'s header/arrow-line
@@ -138,7 +138,7 @@ pub def type_error_message (e : TypeError) : String :=
 /// file's header comment).
 #[partial]
 pub def render_type_error (context_name : String) (path : Option String) (e : TypeError) : String :=
-	render_type_diagnostic "error: " context_name path e
+    render_type_diagnostic "error: " context_name path e
 
 /// The warning sibling -- same header/arrow shape, severity word
 /// `warning`. `e` is usually a `TypeError.custom`: a warning is rendered
@@ -146,7 +146,7 @@ pub def render_type_error (context_name : String) (path : Option String) (e : Ty
 /// non-exhaustive match's gap), not a demoted error.
 #[partial]
 pub def render_type_warning (context_name : String) (path : Option String) (e : TypeError) : String :=
-	render_type_diagnostic "warning: " context_name path e
+    render_type_diagnostic "warning: " context_name path e
 
 /// The shared body. `severity` is the whole prefix, trailing space included.
 ///
@@ -155,47 +155,47 @@ pub def render_type_warning (context_name : String) (path : Option String) (e : 
 /// never read `warning: error: ...`.
 #[partial]
 def render_type_diagnostic (severity : String) (context_name : String) (path : Option String) (e : TypeError) : String :=
-	let msg : String := type_error_message e in
-	let header : String := String.concat severity (String.concat msg (String.concat " in " (String.concat context_name "\n"))) in
-	let path_str : String := match path {
-		Option.some p => p,
-		Option.none => "",
-	} in
-	String.concat header (String.concat "  --> " (String.concat path_str "\n"))
+    let msg : String := type_error_message e in
+    let header : String := String.concat severity (String.concat msg (String.concat " in " (String.concat context_name "\n"))) in
+    let path_str : String := match path {
+        Option.some p => p,
+        Option.none => "",
+    } in
+    String.concat header (String.concat "  --> " (String.concat path_str "\n"))
 
 // --- Tests ---
 
 #[test]
 def test_type_error_message_mismatch : Bool :=
-	String.beq (type_error_message (TypeError.mismatch (Term.sort (SortLevel.concrete 1)) (Term.sort (SortLevel.concrete 2)))) "type mismatch: expected Type, found Type 1"
+    String.beq (type_error_message (TypeError.mismatch (Term.sort (SortLevel.concrete 1)) (Term.sort (SortLevel.concrete 2)))) "type mismatch: expected Type, found Type 1"
 
 #[test]
 def test_type_error_message_unknown_var : Bool :=
-	String.beq (type_error_message (TypeError.unknown_var (NameRef.nid (Identifier.id "foo")))) "unknown variable 'foo'"
+    String.beq (type_error_message (TypeError.unknown_var (NameRef.nid (Identifier.id "foo")))) "unknown variable 'foo'"
 
 #[test]
 def test_type_error_message_unknown_type : Bool :=
-	String.beq (type_error_message (TypeError.unknown_type (NameRef.nid (Identifier.id "Bar")))) "unknown type 'Bar'"
+    String.beq (type_error_message (TypeError.unknown_type (NameRef.nid (Identifier.id "Bar")))) "unknown type 'Bar'"
 
 #[test]
 def test_type_error_message_unknown_constructor : Bool :=
-	String.beq (type_error_message (TypeError.unknown_constructor (NameRef.nid (Identifier.id "Baz")))) "unknown constructor 'Baz'"
+    String.beq (type_error_message (TypeError.unknown_constructor (NameRef.nid (Identifier.id "Baz")))) "unknown constructor 'Baz'"
 
 #[test]
 def test_type_error_message_custom : Bool :=
-	String.beq (type_error_message (TypeError.custom "something went wrong")) "something went wrong"
+    String.beq (type_error_message (TypeError.custom "something went wrong")) "something went wrong"
 
 #[test]
 def test_render_type_error_includes_context_and_path : Bool :=
-	let rendered : String := render_type_error "my_def" (Option.some "examples/foo.mo") (TypeError.custom "bad thing") in
-	String.contains rendered "error: bad thing in my_def"
-		&& String.contains rendered "--> examples/foo.mo"
+    let rendered : String := render_type_error "my_def" (Option.some "examples/foo.mo") (TypeError.custom "bad thing") in
+    String.contains rendered "error: bad thing in my_def"
+        && String.contains rendered "--> examples/foo.mo"
 
 #[test]
 def test_render_type_error_no_path : Bool :=
-	let rendered : String := render_type_error "my_def" Option.none (TypeError.custom "bad thing") in
-	String.contains rendered "error: bad thing in my_def"
-		&& String.contains rendered "-->"
+    let rendered : String := render_type_error "my_def" Option.none (TypeError.custom "bad thing") in
+    String.contains rendered "error: bad thing in my_def"
+        && String.contains rendered "-->"
 
 /// The warning sibling: same body, severity word swapped. `warning:` and
 /// never `warning: error:` -- the prefix-free message is what makes that
@@ -203,30 +203,29 @@ def test_render_type_error_no_path : Bool :=
 /// caller at all.
 #[test]
 def test_render_type_warning_includes_context_and_path : Bool :=
-	let rendered : String := render_type_warning "my_def" (Option.some "examples/foo.mo") (TypeError.custom "gap here") in
-	String.contains rendered "warning: gap here in my_def"
-		&& String.contains rendered "--> examples/foo.mo"
-
+    let rendered : String := render_type_warning "my_def" (Option.some "examples/foo.mo") (TypeError.custom "gap here") in
+    String.contains rendered "warning: gap here in my_def"
+        && String.contains rendered "--> examples/foo.mo"
 
 /// An identifier as the user would have written it. Only a flattened
 /// qualified reference differs: its module half is dot-joined internally
 /// and `::`-joined in source. Everything else passes through untouched.
 #[partial]
 def show_source_spelling (id : Identifier) : String :=
-	let text : String := show_identifier id in
-	let cut : I64 := source_spelling_sep text 0 in
-	if cut < 0 then text
-	else String.concat (dots_to_colons (String.slice text 0 cut)) (String.drop cut text)
+    let text : String := show_identifier id in
+    let cut : I64 := source_spelling_sep text 0 in
+    if cut < 0 then text
+    else String.concat (dots_to_colons (String.slice text 0 cut)) (String.drop cut text)
 
 /// Index of the `::` separating the module half from the name half, or
 /// -1 when there is none. Only the FIRST `::` matters: a minted name has
 /// exactly one, and the name half's own `.`s must be left alone.
 #[partial]
 def source_spelling_sep (s : String) (i : I64) : I64 :=
-	if i + 1 < String.length s then
-		if String.beq (String.slice s i 2) "::" then i
-		else source_spelling_sep s (i + 1)
-	else (0 - 1)
+    if i + 1 < String.length s then
+        if String.beq (String.slice s i 2) "::" then i
+        else source_spelling_sep s (i + 1)
+    else (0 - 1)
 
 /// Rewrite `.` to `::` in a module half. Byte-wise rebuild rather than
 /// split+intercalate: the list-accumulator form tripped the self-hosted
@@ -237,58 +236,58 @@ def dots_to_colons (s : String) : String := dots_to_colons_go s 0 ""
 
 #[partial]
 def dots_to_colons_go (s : String) (i : I64) (acc : String) : String :=
-	if i < String.length s then
-		match String.get s i {
-			Option.some b =>
-				if U8.beq b 46u8
-				then dots_to_colons_go s (i + 1) (String.concat acc "::")
-				else dots_to_colons_go s (i + 1) (String.concat acc (String.slice s i 1)),
-			Option.none => acc,
-		}
-	else acc
+    if i < String.length s then
+        match String.get s i {
+            Option.some b =>
+                if U8.beq b 46u8
+                then dots_to_colons_go s (i + 1) (String.concat acc "::")
+                else dots_to_colons_go s (i + 1) (String.concat acc (String.slice s i 1)),
+            Option.none => acc,
+        }
+    else acc
 
 /// A flattened qualified reference prints as the user WROTE it: module
 /// half `::`-joined, not the dot-joined internal symbol spelling.
 #[test]
 def test_flattened_qualified_prints_source_spelling : Bool :=
-	String.beq
-		(name_ref_to_string (NameRef.nid (Identifier.id "std.process::process_id")))
-		"std::process::process_id"
+    String.beq
+        (name_ref_to_string (NameRef.nid (Identifier.id "std.process::process_id")))
+        "std::process::process_id"
 
 /// The NAME half keeps its dots -- `IO.println` is a dotted def name,
 /// not a module path, and must not become `IO::println`.
 #[test]
 def test_flattened_qualified_keeps_dotted_name_half : Bool :=
-	String.beq
-		(name_ref_to_string (NameRef.nid (Identifier.id "std.io::IO.println")))
-		"std::io::IO.println"
+    String.beq
+        (name_ref_to_string (NameRef.nid (Identifier.id "std.io::IO.println")))
+        "std::io::IO.println"
 
 /// An ordinary dotted name has no `::` and passes through untouched.
 #[test]
 def test_plain_dotted_name_is_unchanged : Bool :=
-	String.beq
-		(name_ref_to_string (NameRef.nid (Identifier.id "List.cons")))
-		"List.cons"
+    String.beq
+        (name_ref_to_string (NameRef.nid (Identifier.id "List.cons")))
+        "List.cons"
 
 #[test]
 def test_type_error_message_copy_required : Bool :=
-	// The message must name the remedy, not just the count -- the
-	// whole point of splitting this from `value_used_after_move`.
-	let e : TypeError := TypeError.copy_required (Identifier.id "s") (Term.sort (SortLevel.concrete 1)) 3 in
-	String.contains (type_error_message e) "share it with `Shared`, give its type a Copy instance, or copy it with `Clone.clone`"
+    // The message must name the remedy, not just the count -- the
+    // whole point of splitting this from `value_used_after_move`.
+    let e : TypeError := TypeError.copy_required (Identifier.id "s") (Term.sort (SortLevel.concrete 1)) 3 in
+    String.contains (type_error_message e) "share it with `Shared`, give its type a Copy instance, or copy it with `Clone.clone`"
 
 #[test]
 def test_type_error_message_value_used_after_move : Bool :=
-	let e : TypeError := TypeError.value_used_after_move (Identifier.id "t") (Term.sort (SortLevel.concrete 1)) 2 in
-	String.contains (type_error_message e) "a shared view cannot fix this"
+    let e : TypeError := TypeError.value_used_after_move (Identifier.id "t") (Term.sort (SortLevel.concrete 1)) 2 in
+    String.contains (type_error_message e) "a shared view cannot fix this"
 
 #[test]
 def test_type_error_message_linear_unused : Bool :=
-	let e : TypeError := TypeError.linear_unused (Identifier.id "h") (Term.sort (SortLevel.concrete 1)) in
-	String.contains (type_error_message e) "never used"
+    let e : TypeError := TypeError.linear_unused (Identifier.id "h") (Term.sort (SortLevel.concrete 1)) in
+    String.contains (type_error_message e) "never used"
 
 #[test]
 def test_type_error_message_borrowed_value_escapes : Bool :=
-	let e : TypeError := TypeError.borrowed_value_escapes (Identifier.id "v") (Term.sort (SortLevel.concrete 1)) in
-	String.contains (type_error_message e) "is a borrowed view from `Shared.get`"
-		&& String.contains (type_error_message e) "Clone.clone"
+    let e : TypeError := TypeError.borrowed_value_escapes (Identifier.id "v") (Term.sort (SortLevel.concrete 1)) in
+    String.contains (type_error_message e) "is a borrowed view from `Shared.get`"
+        && String.contains (type_error_message e) "Clone.clone"

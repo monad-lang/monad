@@ -23,9 +23,9 @@
 /// All three are ERRORS in every `[affine]` mode (logical consistency is not
 /// a migration warning), on the CLI, buffer and LSP paths.
 use lib::types {
-  Class, ClassDef, Con, DebugName, Decl, Def, Identifier, InductConstructor, Inductive,
-  Instance, Literal, MatchCase, NamePath, Native, Scope, Struct, StructField, StructLitField,
-  Term, TypeError, has_attr, show_identifier, show_name_path,
+    Class, ClassDef, Con, DebugName, Decl, Def, Identifier, InductConstructor, Inductive,
+    Instance, Literal, MatchCase, NamePath, Native, Scope, Struct, StructField, StructLitField,
+    Term, TypeError, has_attr, show_identifier, show_name_path,
 }
 use lib::scope {scope_globals}
 use lib::typecheck::type_kinds {kind_head_name}
@@ -85,7 +85,7 @@ def opaque_diags_go (path : Option String) (scope : Scope) (names : HashMap Stri
         List.empty => List.empty,
         List.cons d rest =>
             List.append (opaque_diags_decl path scope names d)
-                        (opaque_diags_go path scope names rest),
+                (opaque_diags_go path scope names rest),
     }
 
 #[partial]
@@ -97,7 +97,7 @@ def opaque_diags_decl (path : Option String) (scope : Scope) (names : HashMap St
             if is_dict_value_def df then List.empty
             else render_errors (show_name_path df.name) path
                 (List.append (opaque_refs_in_def names df)
-                             (native_return_errors scope df)),
+                    (native_return_errors scope df)),
         Decl.class_d cls => render_errors (class_name cls) path (class_default_refs names cls),
         Decl.instance_d ins => render_errors (instance_name ins) path (instance_refs names ins),
         Decl.struct_d s =>
@@ -136,8 +136,8 @@ def native_return_errors_ind (d : Def) (ind : Inductive) : List TypeError :=
 def empty_return_error (d : Def) (name : NamePath) : List TypeError :=
     List.cons (TypeError.custom
         (String.concat "native `" (String.concat (show_name_path d.name)
-        (String.concat "` returns the empty type `" (String.concat (show_name_path name)
-        "` (no constructors); a native may not construct an empty/False type -- give it a witness constructor or return an inhabited wrapper")))))
+            (String.concat "` returns the empty type `" (String.concat (show_name_path name)
+                "` (no constructors); a native may not construct an empty/False type -- give it a witness constructor or return an inhabited wrapper")))))
         List.empty
 
 #[partial]
@@ -237,7 +237,7 @@ def validate_opaque_ctors (name : NamePath) (ctors : List InductConstructor) : L
         List.empty =>
             List.cons (TypeError.custom
                 (String.concat "opaque type `" (String.concat (show_name_path name)
-                 "` has no constructors; declare exactly one nullary witness constructor (an empty inductive is False)")))
+                    "` has no constructors; declare exactly one nullary witness constructor (an empty inductive is False)")))
                 List.empty,
         List.cons c rest =>
             match rest {
@@ -245,7 +245,7 @@ def validate_opaque_ctors (name : NamePath) (ctors : List InductConstructor) : L
                 List.cons _ _ =>
                     List.cons (TypeError.custom
                         (String.concat "opaque type `" (String.concat (show_name_path name)
-                         "` declares more than one constructor; it must have exactly one nullary witness")))
+                            "` declares more than one constructor; it must have exactly one nullary witness")))
                         List.empty,
             },
     }
@@ -261,7 +261,7 @@ def validate_opaque_struct (s : Struct) : List TypeError :=
             if has_attr (Identifier.id "opaque") attrs
             then List.cons (TypeError.custom
                 (String.concat "opaque struct `" (String.concat (show_identifier name)
-                 "`: an opaque type must be declared as a `type` with one nullary witness constructor, not a struct (a struct literal would bypass the witness ban)")))
+                    "`: an opaque type must be declared as a `type` with one nullary witness constructor, not a struct (a struct literal would bypass the witness ban)")))
                 List.empty
             else List.empty,
     }
@@ -273,7 +273,7 @@ def validate_opaque_witness (name : NamePath) (c : InductConstructor) : List Typ
             if List.is_empty params then List.empty
             else List.cons (TypeError.custom
                 (String.concat "opaque type `" (String.concat (show_name_path name)
-                 "`'s witness constructor must be nullary; an opaque value comes from its natives, not from source")))
+                    "`'s witness constructor must be nullary; an opaque value comes from its natives, not from source")))
                 List.empty,
     }
 
@@ -290,7 +290,7 @@ def opaque_refs_in_def (names : HashMap String Bool) (d : Def) : List TypeError 
 def opaque_witness_ref_error (hit : String) : TypeError :=
     TypeError.custom
         (String.concat "`" (String.concat hit
-         "` is an `#[opaque]` witness constructor; it may be neither constructed nor matched (values come from the type's natives)"))
+            "` is an `#[opaque]` witness constructor; it may be neither constructed nor matched (values come from the type's natives)"))
 
 #[partial]
 def opaque_ref_in_term (names : HashMap String Bool) (t : Term) : Option String :=
@@ -329,11 +329,11 @@ def opaque_ref_in_term (names : HashMap String Bool) (t : Term) : Option String 
         Term.elim e =>
             match e {
                 { inductive := _, levels := _, params := _, indices := _,
-                  motive := _, minors := minors, scrutinee := scrutinee } =>
-                    match opaque_ref_in_term names scrutinee {
-                        Option.some hit => Option.some hit,
-                        Option.none => opaque_ref_in_terms names minors,
-                    },
+                    motive := _, minors := minors, scrutinee := scrutinee } =>
+                        match opaque_ref_in_term names scrutinee {
+                            Option.some hit => Option.some hit,
+                            Option.none => opaque_ref_in_terms names minors,
+                        },
             },
         Term.sort _level => Option.none,
         Term.hole => Option.none,
@@ -495,7 +495,7 @@ def render_errors (context_name : String) (path : Option String) (errs : List Ty
         List.empty => List.empty,
         List.cons e rest =>
             List.cons (render_type_error context_name path e)
-                     (render_errors context_name path rest),
+                (render_errors context_name path rest),
     }
 
 #[partial]

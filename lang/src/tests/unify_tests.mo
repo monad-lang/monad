@@ -1,8 +1,8 @@
 use lang::types {
-  Decl, Def, LocalScope, Location, ModulePath, Scope, Term, TypeError, app,
-  binder_anon, binder_binder, binder_is_explicit, binder_named, concrete, hole, id, lit, named,
-  pi, result_is_ok, sentinel, sort_n, str, term_loc, unnamed, var,
-  cub, i0, i1, ineg, cub_i0, cub_i1, cub_interval, cub_pathp,
+    Decl, Def, LocalScope, Location, ModulePath, Scope, Term, TypeError, app,
+    binder_anon, binder_binder, binder_is_explicit, binder_named, concrete, hole, id, lit, named,
+    pi, result_is_ok, sentinel, sort_n, str, term_loc, unnamed, var,
+    cub, i0, i1, ineg, cub_i0, cub_i1, cub_interval, cub_pathp,
 }
 use lib::typecheck::unify {unify}
 use lib::typecheck::infer {type_check}
@@ -195,7 +195,7 @@ def test_unify_reduces_both_sides : Bool :=
     // its argument, also `P`. Neither side is structurally anything
     // like the other.
     run_unify_conv (Term.app (conv_free "konst") (sort_n 0))
-                   (Term.app (conv_free "idt") (conv_free "P"))
+        (Term.app (conv_free "idt") (conv_free "P"))
 
 #[test]
 def test_unify_still_rejects_when_reduction_disagrees : Bool :=
@@ -224,7 +224,7 @@ def test_unify_still_rejects_irreducible_mismatch : Bool :=
 #[test]
 def test_unify_same_level_var_is_reflexive : Bool :=
     run_unify (Term.sort (SortLevel.var (Identifier.id "u")))
-              (Term.sort (SortLevel.var (Identifier.id "u")))
+        (Term.sort (SortLevel.var (Identifier.id "u")))
 
 /// ...and two DIFFERENT level variables still do not, which is what
 /// keeps the arm above from being a blanket "any unresolved level
@@ -234,7 +234,7 @@ def test_unify_same_level_var_is_reflexive : Bool :=
 #[test]
 def test_unify_distinct_level_vars_still_refuse : Bool :=
     not (run_unify (Term.sort (SortLevel.var (Identifier.id "u")))
-                   (Term.sort (SortLevel.var (Identifier.id "v"))))
+        (Term.sort (SortLevel.var (Identifier.id "v"))))
 
 /// Reflexivity reaches UNDER a binder too: `unify_go`'s `Term.pi` arm
 /// recurses through `unify`, so a Pi over a level variable is compared
@@ -428,10 +428,10 @@ def test_probe_a_child_wrapper_survives_the_peel : Bool :=
     let loc : Location := { offset := 0, line := 7, column := 3 } in
     let left : Term :=
         Term.app (Term.ctx loc (Term.var 0 (DebugName.unnamed)))
-                 (Term.var 1 (DebugName.unnamed)) in
+            (Term.var 1 (DebugName.unnamed)) in
     let right : Term :=
         Term.app (Term.var 2 (DebugName.unnamed))
-                 (Term.var 3 (DebugName.unnamed)) in
+            (Term.var 3 (DebugName.unnamed)) in
     match unify left right test_scope test_locals {
         ok _ => false,
         err e => match probe_payload_term e {

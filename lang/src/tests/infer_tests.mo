@@ -1,21 +1,21 @@
 use std::list {List.length}
 use lang::types {
-  Attribute, Binder, BinderInfo, DebugName, Decl, Def, Elim, FieldPattern, FieldPatternEntry,
-  Identifier, CubicalPrim, InductConstructor, Inductive, MatchCase, ModulePath,
-  NamePath, Param, Scope, ScopeClassDef, ScopeData, Similar, SortLevel, Term, TypeError,
-  binder_anon, binder_binder, binder_explicit, binder_named, char, cub_i0, cub_i1, cub_ijoin,
-  cub_imeet, cub_ineg,
-  cub_interval, if_, many, match_, package_private, sentinel, sort_n,
-  cub,
+    Attribute, Binder, BinderInfo, DebugName, Decl, Def, Elim, FieldPattern, FieldPatternEntry,
+    Identifier, CubicalPrim, InductConstructor, Inductive, MatchCase, ModulePath,
+    NamePath, Param, Scope, ScopeClassDef, ScopeData, Similar, SortLevel, Term, TypeError,
+    binder_anon, binder_binder, binder_explicit, binder_named, char, cub_i0, cub_i1, cub_ijoin,
+    cub_imeet, cub_ineg,
+    cub_interval, if_, many, match_, package_private, sentinel, sort_n,
+    cub,
 }
 use lib::module {try_parse_decls}
 use lib::scope {build_scope_from_decls, scope_find_inductive}
 use lib::typecheck::diagnostic {type_error_message}
 use lib::typecheck::infer {
-  CalleeDomain, TypedTerm, ctor_index_values, derive_motive, elaborate_if_to_elim, elaborate_match_to_elim,
-  empty_local_types, empty_locals,
-  is_uninformative_carrier, lam_binder_hint, match_coverage_warning, type_check,
-  type_check_bound_var, type_check_elim, type_check_match_case
+    CalleeDomain, TypedTerm, ctor_index_values, derive_motive, elaborate_if_to_elim, elaborate_match_to_elim,
+    empty_local_types, empty_locals,
+    is_uninformative_carrier, lam_binder_hint, match_coverage_warning, type_check,
+    type_check_bound_var, type_check_elim, type_check_match_case
 }
 use lib::typecheck::subst {term_shift}
 
@@ -438,7 +438,7 @@ def test_match_multi_case_second_fails : Bool :=
     let cases : List MatchCase := List.cons case1 (List.cons case2 List.empty) in
     let t : Term := Term.lit (Literal.match_ scrutinee cases) in
     match run_check t Term.hole {
-        ok _ => false,  // Should fail because second case references unknown var
+        ok _ => false, // Should fail because second case references unknown var
         err _ => true,
     }
 
@@ -460,7 +460,7 @@ def test_match_case_args_bound : Bool :=
     let cases : List MatchCase := List.cons case_ List.empty in
     let t : Term := Term.lit (Literal.match_ scrutinee cases) in
     match run_check t Term.hole {
-        ok _ => true,   // Pattern arg "x" is now bound
+        ok _ => true, // Pattern arg "x" is now bound
         err _ => false,
     }
 
@@ -554,7 +554,7 @@ def test_match_invalid_constructor : Bool :=
     let cases : List MatchCase := List.cons case_some (List.cons case_bogus List.empty) in
     let t : Term := Term.lit (Literal.match_ scrutinee cases) in
     match type_check t Term.hole maybe_scope empty_local_types empty_locals {
-        ok _ => false,    // Should fail because bogus is not a Maybe constructor
+        ok _ => false, // Should fail because bogus is not a Maybe constructor
         err _ => true,
     }
 
@@ -593,8 +593,8 @@ def test_match_wildcard_rejects_args : Bool :=
     let cases : List MatchCase := List.cons case_ List.empty in
     let t : Term := Term.lit (Literal.match_ scrutinee cases) in
     match run_check t Term.hole {
-        ok _ => false,  // Wildcard with args should fail
-        err _ => true,  // Correctly fails
+        ok _ => false, // Wildcard with args should fail
+        err _ => true, // Correctly fails
     }
 
 // --- Match tests: scrutinee type resolution ---
@@ -635,8 +635,8 @@ def test_match_branch_type_conflict : Bool :=
     let cases : List MatchCase := List.cons case1 (List.cons case2 List.empty) in
     let t : Term := Term.lit (Literal.match_ scrutinee cases) in
     match run_check t Term.hole {
-        ok _ => false,  // Should fail due to type conflict
-        err _ => true,  // Correctly detects the conflict
+        ok _ => false, // Should fail due to type conflict
+        err _ => true, // Correctly detects the conflict
     }
 
 // --- Match exhaustiveness (strict-exhaustiveness.md, Phase 1) ---
@@ -1563,7 +1563,7 @@ def lift_def : Def :=
     let params : List Param := [Param.mk a level Multiplicity.many Option.none List.empty] in
     let lift_name : NamePath := NamePath.mk [id "lift"] in
     Def.mk lift_name (pi (binder_named a) level level) (var 0 (named a))
-           List.empty List.empty Visibility.package_private params
+        List.empty List.empty Visibility.package_private params
 
 /// A VALUE def (`three : I64`): its declared type is not a sort, so a call
 /// whose parameter is `Sort u` gets no level evidence from it.
@@ -1571,7 +1571,7 @@ def three_def : Def :=
     let i64_ty : Term := var sentinel (named (id "I64")) in
     let three_name : NamePath := NamePath.mk [id "three"] in
     Def.mk three_name i64_ty Term.hole
-           List.empty List.empty Visibility.package_private List.empty
+        List.empty List.empty Visibility.package_private List.empty
 
 def scope_with_decls (decl_list : List Decl) : Scope := {
     module_id := empty_path,
@@ -1643,7 +1643,7 @@ def dup_def : Def :=
     ] in
     let dup_name : NamePath := NamePath.mk [id "dup"] in
     Def.mk dup_name (pi (binder_named a) level (pi (binder_named b) level level))
-           (var 0 (named b)) List.empty List.empty Visibility.package_private params
+        (var 0 (named b)) List.empty List.empty Visibility.package_private params
 
 def dup_scope : Scope := scope_with_decls [Decl.def_d dup_def]
 

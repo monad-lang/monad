@@ -1,18 +1,17 @@
 use lib::typecheck::levels {free_level_vars}
 use lang::types {
-  Attribute, BinderInfo, Class, ClassDef, DebugName, Decl, Def, Identifier,
-  InductConstructor, Inductive, Instance, MatchCase, ModulePath, NamePath, Param,
-  Similar, SortLevel, Struct, StructLitField, Term, TypeConstraint, binder_binder,
-  binder_info_of, binder_is_level, binder_level, binder_name, char, flt, id_eq,
-  id_member, if_, match_, num, package_private, sentinel, show_identifier,
-  str, struct_lit, struct_update, union_ids,
+    Attribute, BinderInfo, Class, ClassDef, DebugName, Decl, Def, Identifier,
+    InductConstructor, Inductive, Instance, MatchCase, ModulePath, NamePath, Param,
+    Similar, SortLevel, Struct, StructLitField, Term, TypeConstraint, binder_binder,
+    binder_info_of, binder_is_level, binder_level, binder_name, char, flt, id_eq,
+    id_member, if_, match_, num, package_private, sentinel, show_identifier,
+    str, struct_lit, struct_update, union_ids,
 }
 // `HashMap` is what this file reaches from `std.map`, named like any
 // other import — see scope.mo's comment on the same line for the history.
 use std::map {HashMap}
 use lib::name_text {unqualify_def_name}
 use llvm::strmap {str_map_empty, str_map_insert, str_map_lookup}
-
 
 /// Collect all free type variables from a Term.
 /// A free variable is a var with de Bruijn index == sentinel (-1)
@@ -97,12 +96,12 @@ def free_vars (typ : Term) (known_names : List Identifier) : List Identifier :=
         Term.elim e =>
             match e {
                 { inductive := _, levels := _, params := params, indices := indices,
-                  motive := e_motive, minors := minors, scrutinee := scrutinee } =>
-                    union_ids (free_vars_of_terms params known_names)
-                        (union_ids (free_vars_of_terms indices known_names)
-                            (union_ids (free_vars e_motive known_names)
-                                (union_ids (free_vars_of_terms minors known_names)
-                                    (free_vars scrutinee known_names)))),
+                    motive := e_motive, minors := minors, scrutinee := scrutinee } =>
+                        union_ids (free_vars_of_terms params known_names)
+                            (union_ids (free_vars_of_terms indices known_names)
+                                (union_ids (free_vars e_motive known_names)
+                                    (union_ids (free_vars_of_terms minors known_names)
+                                        (free_vars scrutinee known_names)))),
             },
     }
 
@@ -678,7 +677,7 @@ def test_elaborate_type_level_generalization_is_idempotent : Bool :=
 def test_bound_level_var_names_finds_the_level_binder : Bool :=
     let inner : Term := Term.pi (binder_binder (Identifier.id "A")) (Term.sort (SortLevel.concrete 1)) Term.hole in
     let t : Term := Term.pi (binder_level (Identifier.id "u"))
-                            (Term.sort (SortLevel.concrete 0)) inner in
+        (Term.sort (SortLevel.concrete 0)) inner in
     match bound_level_var_names t {
         List.cons hd rest =>
             List.is_empty rest && Similar.similar hd (Identifier.id "u"),

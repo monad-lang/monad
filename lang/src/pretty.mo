@@ -1,23 +1,23 @@
 use lang::types {
-  AttrArg, Attribute, Binder, BinderInfo, Class, ClassDef, Con, Cubical, DebugName, Decl,
-  Def,
-  FieldPattern, Identifier, InductConstructor, Inductive, Instance, Literal,
-  MatchCase, ModulePath, Multiplicity, NamePath, Native, NumSuffix, OpenFilter,
-  Operator, Param, SortLevel, Struct, StructField, StructLitField, Term, UseFilter,
-  UseItem, Visibility, binder_anon, binder_explicit, binder_is_explicit, binder_name,
-  binder_named, char_to_string,
-  cubical_prim_name, level_const,
-  package_private, priv_, pub_, show_identifier, show_module_path, show_name_path,
-  show_operator,
-  binder_binder,
+    AttrArg, Attribute, Binder, BinderInfo, Class, ClassDef, Con, Cubical, DebugName, Decl,
+    Def,
+    FieldPattern, Identifier, InductConstructor, Inductive, Instance, Literal,
+    MatchCase, ModulePath, Multiplicity, NamePath, Native, NumSuffix, OpenFilter,
+    Operator, Param, SortLevel, Struct, StructField, StructLitField, Term, UseFilter,
+    UseItem, Visibility, binder_anon, binder_explicit, binder_is_explicit, binder_name,
+    binder_named, char_to_string,
+    cubical_prim_name, level_const,
+    package_private, priv_, pub_, show_identifier, show_module_path, show_name_path,
+    show_operator,
+    binder_binder,
 }
 use std::list {List.intercalate}
 
 open Term {app, con, cubical, hole, lam, lit, ntv, pi, var}
 open Literal {char, flt, if_, match_, num, str}
 open Decl {
-  class_d, def_d, inductive_d, infix_d, instance_d, mote_d, open_d, scoped_open_d,
-  struct_d, use_d,
+    class_d, def_d, inductive_d, infix_d, instance_d, mote_d, open_d, scoped_open_d,
+    struct_d, use_d,
 }
 open Multiplicity {affine, linear, many, zero}
 open DebugName {named, unnamed}
@@ -182,7 +182,6 @@ def show_app_spine (t : Term) : String := match t {
         String.concat head (String.concat " " (show_term arg)),
     _ => show_term t,
 }
-
 
 /// Escape a string's content for a `"..."` literal, so that what
 /// `show_literal` prints reads back as the same value. Escapes `\` and `"`
@@ -403,7 +402,7 @@ pub def show_inductive (ind : Inductive) : String := match ind {
         let name_str := show_name_path name in
         let header := String.concat (show_vis_prefix vis) (String.concat "type " name_str) in
         let with_params := if list_param_is_empty params then header
-                           else String.concat header (String.concat " " (show_params params)) in
+            else String.concat header (String.concat " " (show_params params)) in
         let ctors_str := show_induct_constructors constructors in
         let ob := String.concat with_params " {\n  " in
         let inner := String.concat ob ctors_str in
@@ -811,20 +810,20 @@ def test_show_ntv : Bool :=
 #[test]
 def test_show_con_named_args : Bool :=
     let args := List.cons (Option.some (Term.var 0 DebugName.unnamed))
-                         List.empty in
+        List.empty in
     let con := Con.mk (Identifier.id "some")
-                      (NamePath.mk (List.cons (Identifier.id "Option") List.empty))
-                      (1i64)
-                      args in
+        (NamePath.mk (List.cons (Identifier.id "Option") List.empty))
+        (1i64)
+        args in
     let t := Term.con con in
     show_term t == "(Option.some _)"
 
 #[test]
 def test_show_con_no_args : Bool :=
     let con := Con.mk (Identifier.id "true_")
-                      (NamePath.mk (List.cons (Identifier.id "Bool") List.empty))
-                      (0i64)
-                      List.empty in
+        (NamePath.mk (List.cons (Identifier.id "Bool") List.empty))
+        (0i64)
+        List.empty in
     let t := Term.con con in
     show_term t == "Bool.true_"
 
@@ -1052,5 +1051,3 @@ def test_show_decls_single : Bool :=
 def test_show_decls_multiple_separated_by_blank_line : Bool :=
     let decls := List.cons (simple_def_decl "a") (List.cons (simple_def_decl "b") List.empty) in
     show_decls decls == String.concat (show_decl (simple_def_decl "a")) (String.concat "\n\n" (show_decl (simple_def_decl "b")))
-
-

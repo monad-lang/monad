@@ -1,6 +1,6 @@
 use lang::types {
-  Decl, Def, InductConstructor, Inductive, LocalScope, ModulePath, Scope,
-  ScopeData, Term, id,
+    Decl, Def, InductConstructor, Inductive, LocalScope, ModulePath, Scope,
+    ScopeData, Term, id,
 }
 use lib::module {elaborate_module_decls, locals_with_def_typevars, parse_all_decls}
 use parsec::core {fail, success}
@@ -19,13 +19,13 @@ def make_scope (path : ModulePath) (sd : ScopeData) : Scope := {
     incomplete_match_ok := false,
 }
 
-def is_hole (t : Term) : Bool := 
+def is_hole (t : Term) : Bool :=
     match t {
         Term.hole => true,
         _ => false
     }
 
-def typecheck_module (path : ModulePath) (scope : Scope) (decl_list : List Decl) : Bool := 
+def typecheck_module (path : ModulePath) (scope : Scope) (decl_list : List Decl) : Bool :=
     match decl_list {
         List.empty => true,
         List.cons d rest =>
@@ -36,11 +36,11 @@ def typecheck_module (path : ModulePath) (scope : Scope) (decl_list : List Decl)
                 false
     }
 
-def typecheck_decl (d : Decl) (path : ModulePath) (scope : Scope) : Bool := 
+def typecheck_decl (d : Decl) (path : ModulePath) (scope : Scope) : Bool :=
     match d {
         Decl.def_d df => typecheck_def df scope,
         Decl.inductive_d ind => typecheck_inductive ind scope,
-        _ => true  // Skip use, open, infix, class, instance for now
+        _ => true // Skip use, open, infix, class, instance for now
     }
 
 def typecheck_def (df : Def) (scope : Scope) : Bool :=
@@ -74,7 +74,7 @@ def typecheck_inductive (ind : Inductive) (scope : Scope) : Bool :=
             typecheck_constructors constructors scope
     }
 
-def typecheck_constructors (cons : List InductConstructor) (scope : Scope) : Bool := 
+def typecheck_constructors (cons : List InductConstructor) (scope : Scope) : Bool :=
     match cons {
         List.empty => true,
         List.cons c rest =>
@@ -85,7 +85,7 @@ def typecheck_constructors (cons : List InductConstructor) (scope : Scope) : Boo
                 false
     }
 
-def typecheck_constructor (c : InductConstructor) (scope : Scope) : Bool := 
+def typecheck_constructor (c : InductConstructor) (scope : Scope) : Bool :=
     match c {
         mk _name params typ =>
             match type_check typ Term.hole scope empty_local_types empty_locals {
@@ -174,7 +174,6 @@ def test_typecheck_rejects_a_generic_body_of_the_wrong_type : Bool :=
 #[test]
 def test_typecheck_accepts_a_generic_body_of_the_right_type : Bool :=
     typecheck_source "def good (A : Type) (x : A) : A := x"
-
 
 // --- signature-driven application typing (`ScopeData.def_sigs`,
 // `try_type_check_def_call`, lang/typecheck/infer.mo) -- regression

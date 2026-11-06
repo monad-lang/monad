@@ -17,9 +17,9 @@
 // `def_body_block_or_none` fail arm must take all six.
 
 use lib::types {
-  CubicalPrim, ModulePath, NamePath, Scope, ScopeData,
-  cubical_prim_eq,
-  id,
+    CubicalPrim, ModulePath, NamePath, Scope, ScopeData,
+    cubical_prim_eq,
+    id,
 }
 use lib::module {parse_all_decls}
 use parsec::core {fail, success}
@@ -41,20 +41,20 @@ def synthetic_path : ModulePath := ModulePath.mk (List.cons (Identifier.id "synt
 def cubical_source : String :=
     String.concat "#[cubical \"interval\"] def I : Type\n"
     (String.concat "#[cubical \"i0\"] def i0 : I\n"
-    (String.concat "#[cubical \"i1\"] def i1 : I\n"
-    (String.concat "#[cubical \"ineg\"] def ineg (i : I) : I\n"
-    (String.concat "#[cubical \"imeet\"] def imeet (i : I) (j : I) : I\n"
-    (String.concat "#[cubical \"ijoin\"] def ijoin (i : I) (j : I) : I\n"
-    (String.concat "#[cubical \"pathp\"] def PathP (A : I -> Type) (a : A i0) (b : A i1) : Type\n"
-    (String.concat "#[cubical \"transp\"] def transp (A : I -> Type) (a : A i0) : A i1\n"
-    (String.concat "#[cubical \"face_eq0\"] def face_eq0 (i : I) : I\n"
-    (String.concat "#[cubical \"face_eq1\"] def face_eq1 (i : I) : I\n"
-    (String.concat "#[cubical \"is_one\"] def is_one (i : I) : Type\n"
-    (String.concat "#[cubical \"hcomp\"] def hcomp (A : Type) (phi : I) (u : I -> is_one phi -> A) (u0 : A) : A\n"
-    (String.concat "#[cubical \"it_is_one\"] def it_is_one : is_one i1\n"
-    (String.concat "#[cubical \"glue\"] def Glue (A : Type) (phi : I) (T : is_one phi -> Type) (w : is_one phi -> Type) : Type\n"
-    (String.concat "#[cubical \"glue_intro\"] def glue (A : Type) (phi : I) (T : is_one phi -> Type) (w : is_one phi -> Type) (t : is_one phi -> Type) (a : A) : Glue A phi T w\n"
-    "#[cubical \"glue_elim\"] def unglue (g : Type) : Type\n"))))))))))))))
+        (String.concat "#[cubical \"i1\"] def i1 : I\n"
+            (String.concat "#[cubical \"ineg\"] def ineg (i : I) : I\n"
+                (String.concat "#[cubical \"imeet\"] def imeet (i : I) (j : I) : I\n"
+                    (String.concat "#[cubical \"ijoin\"] def ijoin (i : I) (j : I) : I\n"
+                        (String.concat "#[cubical \"pathp\"] def PathP (A : I -> Type) (a : A i0) (b : A i1) : Type\n"
+                            (String.concat "#[cubical \"transp\"] def transp (A : I -> Type) (a : A i0) : A i1\n"
+                                (String.concat "#[cubical \"face_eq0\"] def face_eq0 (i : I) : I\n"
+                                    (String.concat "#[cubical \"face_eq1\"] def face_eq1 (i : I) : I\n"
+                                        (String.concat "#[cubical \"is_one\"] def is_one (i : I) : Type\n"
+                                            (String.concat "#[cubical \"hcomp\"] def hcomp (A : Type) (phi : I) (u : I -> is_one phi -> A) (u0 : A) : A\n"
+                                                (String.concat "#[cubical \"it_is_one\"] def it_is_one : is_one i1\n"
+                                                    (String.concat "#[cubical \"glue\"] def Glue (A : Type) (phi : I) (T : is_one phi -> Type) (w : is_one phi -> Type) : Type\n"
+                                                        (String.concat "#[cubical \"glue_intro\"] def glue (A : Type) (phi : I) (T : is_one phi -> Type) (w : is_one phi -> Type) (t : is_one phi -> Type) (a : A) : Glue A phi T w\n"
+                                                            "#[cubical \"glue_elim\"] def unglue (g : Type) : Type\n"))))))))))))))
 
 /// A scope carrying whatever `source` declares. A snippet that fails to
 /// parse yields an empty scope, which makes the binding tests below

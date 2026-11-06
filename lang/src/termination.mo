@@ -73,8 +73,8 @@
 /// `plans/bootstrapping/check-deps-memory-blowup.md`.
 
 use lang::types {
-  AttrArg, Attribute, DebugName, Decl, Def, Identifier, MatchCase, Term,
-  attr_args, binder_name, binder_named, has_attr, if_, match_, package_private, show_identifier, show_name_path,
+    AttrArg, Attribute, DebugName, Decl, Def, Identifier, MatchCase, Term,
+    attr_args, binder_name, binder_named, has_attr, if_, match_, package_private, show_identifier, show_name_path,
 }
 use lib::pretty {show_term}
 

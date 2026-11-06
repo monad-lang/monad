@@ -14,8 +14,8 @@
 /// Diagnostic text is asserted, not merely its presence: a pin that only
 /// counts errors would go green on an unrelated unknown-name failure.
 use lib::module {
-  Diagnostic, check_file_cached_from_source_ranged, diagnostic_message,
-  module_info_cache_empty, ranged_file_diagnostics,
+    Diagnostic, check_file_cached_from_source_ranged, diagnostic_message,
+    module_info_cache_empty, ranged_file_diagnostics,
 }
 use std::process {exec_cmd, process_id}
 use std::test {Test.write_fixture}
@@ -254,7 +254,7 @@ def test_a_dimension_used_twice_is_accepted : IO Bool :=
 def test_a_non_copy_type_used_twice_is_still_rejected : IO Bool :=
     rejected_with "dup_nocopy" "is moved 2 times"
         ("type NoCopy { mk }\n"
-        ++ "def dup_nocopy (x : NoCopy) : Pair NoCopy NoCopy := Pair.pair x x\n")
+            ++ "def dup_nocopy (x : NoCopy) : Pair NoCopy NoCopy := Pair.pair x x\n")
 
 // --- The `#[proof]` def exemption ---------------------------------------
 //
@@ -267,8 +267,8 @@ def test_a_non_copy_type_used_twice_is_still_rejected : IO Bool :=
 def test_a_proof_def_may_duplicate_a_value : IO Bool :=
     accepted
         ("type NoCopyP { mk }\n"
-        ++ "#[proof]\n"
-        ++ "def dup_proof (x : NoCopyP) : Pair NoCopyP NoCopyP := Pair.pair x x\n")
+            ++ "#[proof]\n"
+            ++ "def dup_proof (x : NoCopyP) : Pair NoCopyP NoCopyP := Pair.pair x x\n")
 
 /// ... and the exemption is opt-in: the SAME body without the marker is still
 /// an error, so the rule did not become a blanket switch.
@@ -276,5 +276,4 @@ def test_a_proof_def_may_duplicate_a_value : IO Bool :=
 def test_the_same_duplication_without_the_proof_marker_is_rejected : IO Bool :=
     rejected_with "dup_plain" "is moved 2 times"
         ("type NoCopyP { mk }\n"
-        ++ "def dup_plain (x : NoCopyP) : Pair NoCopyP NoCopyP := Pair.pair x x\n")
-
+            ++ "def dup_plain (x : NoCopyP) : Pair NoCopyP NoCopyP := Pair.pair x x\n")

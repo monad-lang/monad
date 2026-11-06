@@ -39,10 +39,10 @@ use lang::core_ir {IrLit, match_}
 use lib::core_value {Value}
 use lib::scope {struct_fields_to_params}
 use lang::types {
-  AttrArg, Attribute, Decl, Def, Identifier, InductConstructor, Inductive, MatchCase,
-  NamePath, Param, Struct, Term, TypeConstraint, binder_anon, binder_named, i64, if_,
-  many, match_, named, no_attrs, num, package_private, pub_, sentinel, show_name_path, str,
-  unnamed,
+    AttrArg, Attribute, Decl, Def, Identifier, InductConstructor, Inductive, MatchCase,
+    NamePath, Param, Struct, Term, TypeConstraint, binder_anon, binder_named, i64, if_,
+    many, match_, named, no_attrs, num, package_private, pub_, sentinel, show_name_path, str,
+    unnamed,
 }
 
 // ─── Value-construction helpers (host -> Value, the INPUT side) ────────
@@ -1173,7 +1173,7 @@ def setter_shape_val : Value :=
             (e_match_val (e_var_val "s")
                 (List.cons (match_arm_val "mk" (List.cons "x" (List.cons "y" List.empty))
                     (e_ctor_val "Point.mk" (List.cons (e_var_val "v") (List.cons (e_var_val "y") List.empty))))
-                List.empty)))
+                    List.empty)))
 
 #[test]
 def test_reify_e_ctor_args_reference_correct_outer_and_field_indices : Bool :=

@@ -12,9 +12,9 @@
 // BEFORE the endpoint argument.
 
 use lang::types {
-  DebugName, Identifier, LocalScope, ModulePath, Scope, Similar, Term,
-  binder_anon, binder_named, cub_i0, cub_i1, cub_interval, cub_pathp,
-  sentinel,
+    DebugName, Identifier, LocalScope, ModulePath, Scope, Similar, Term,
+    binder_anon, binder_named, cub_i0, cub_i1, cub_interval, cub_pathp,
+    sentinel,
 }
 use lib::scope {build_scope_from_decls}
 use lib::typecheck::infer {normalize_path_boundary}

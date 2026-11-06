@@ -6,40 +6,34 @@ use parsec::combinators {take_while_byte}
 
 open ParseResult {fail, success}
 
-
 // --- Whitespace ---
 
 #[partial]
 def spaces (input : String) : ParseResult String :=
-	take_while_byte is_space_byte input
-
+    take_while_byte is_space_byte input
 
 #[partial]
 def ws0 (input : String) : ParseResult String :=
-	take_while_byte is_space_byte input
-
+    take_while_byte is_space_byte input
 
 #[partial]
 def ws1 (input : String) : ParseResult String :=
-	ws1_body (take_while_byte is_space_byte input) input
-
+    ws1_body (take_while_byte is_space_byte input) input
 
 #[partial]
 def ws1_body (r : ParseResult String) (input : String) : ParseResult String :=
-	match r {
-		success rem out => if is_empty out then fail (ParseError.custom "expected whitespace" input) else success rem out,
-		fail e => fail e
-	}
-
+    match r {
+        success rem out => if is_empty out then fail (ParseError.custom "expected whitespace" input) else success rem out,
+        fail e => fail e
+    }
 
 #[partial]
 pub def skip_spaces (input : String) : String :=
-	skip_spaces_match (take_while_byte is_space_byte input) input
-
+    skip_spaces_match (take_while_byte is_space_byte input) input
 
 #[partial]
 def skip_spaces_match (r : ParseResult String) (orig : String) : String :=
-	match r {
-		success rem _ => rem,
-		fail _ => orig
-	}
+    match r {
+        success rem _ => rem,
+        fail _ => orig
+    }

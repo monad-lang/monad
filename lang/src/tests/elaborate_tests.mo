@@ -1,11 +1,11 @@
 use lang::types {
-  Attribute, Class, ClassDef, Decl, Def, Identifier, ModulePath, NamePath, Param,
-  Term, TypeConstraint, binder_anon, binder_is_explicit, binder_name, id_eq, id_member,
-  many, package_private, sentinel, sort_n, unnamed, use_bare,
+    Attribute, Class, ClassDef, Decl, Def, Identifier, ModulePath, NamePath, Param,
+    Term, TypeConstraint, binder_anon, binder_is_explicit, binder_name, id_eq, id_member,
+    many, package_private, sentinel, sort_n, unnamed, use_bare,
 }
 use lib::elaborate {
-  elaborate_class, elaborate_decls, elaborate_def, elaborate_type, free_vars,
-  names_of_decl, names_of_decls
+    elaborate_class, elaborate_decls, elaborate_def, elaborate_type, free_vars,
+    names_of_decl, names_of_decls
 }
 
 open Term {hole, pi, var}

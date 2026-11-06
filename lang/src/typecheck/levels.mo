@@ -21,8 +21,8 @@
 /// space, and `term_shift`/`term_subst`/`term_permute` need no change --
 /// they reach a sort through their existing catch-alls.
 use lang::types {
-  Identifier, Similar, SortLevel, Term, binder_anon, binder_level, free_level_vars_of,
-  level_const, level_subst, sort_level_of, union_ids,
+    Identifier, Similar, SortLevel, Term, binder_anon, binder_level, free_level_vars_of,
+    level_const, level_subst, sort_level_of, union_ids,
 }
 use lib::typecheck::traverse {term_map_children}
 
@@ -34,7 +34,7 @@ use lib::typecheck::traverse {term_map_children}
 /// `Term.sort` as a leaf for exactly this reason, which is what makes
 /// the catch-all safe here).
 #[partial]
-pub def subst_levels_term (t: Term) (binds: List (Pair Identifier SortLevel)) : Term := match t {
+pub def subst_levels_term (t : Term) (binds : List (Pair Identifier SortLevel)) : Term := match t {
     Term.sort l => Term.sort (level_subst l binds),
     _ => term_map_children (fn c => subst_levels_term c binds) t,
 }
@@ -103,7 +103,7 @@ def level_binds_has (name : Identifier) (binds : List (Pair Identifier SortLevel
 /// that matter are the binders and the sort; everything else either
 /// holds no level or holds one only under a child listed here.
 #[partial]
-pub def free_level_vars (t: Term) : List Identifier := match t {
+pub def free_level_vars (t : Term) : List Identifier := match t {
     Term.sort l => free_level_vars_of l,
     Term.lam _dbg typ body => union_ids (free_level_vars typ) (free_level_vars body),
     Term.pi _b arg cod => union_ids (free_level_vars arg) (free_level_vars cod),
@@ -176,7 +176,7 @@ def test_free_level_vars_of_concrete_is_empty : Bool :=
 #[test]
 def test_free_level_vars_of_reaches_both_sides_and_through_succ : Bool :=
     let l : SortLevel := SortLevel.max (SortLevel.var (Identifier.id "u"))
-                                       (SortLevel.succ (SortLevel.var (Identifier.id "v"))) in
+        (SortLevel.succ (SortLevel.var (Identifier.id "v"))) in
     ids_are_exactly_two (free_level_vars_of l) (Identifier.id "u") (Identifier.id "v")
 
 #[test]
@@ -205,7 +205,7 @@ def test_level_subst_goes_under_succ_and_max : Bool :=
     let binds : List (Pair Identifier SortLevel) :=
         List.cons (Pair.pair (Identifier.id "u") (SortLevel.concrete 1)) List.empty in
     let l : SortLevel := SortLevel.max (SortLevel.succ (SortLevel.var (Identifier.id "u")))
-                                       (SortLevel.concrete 0) in
+        (SortLevel.concrete 0) in
     match level_const (level_subst l binds) {
         // max (succ 1) 0 = 2
         Option.some n => I64.beq n 2,
@@ -270,7 +270,7 @@ def bound_level_of (binds : List (Pair Identifier SortLevel)) (name : Identifier
 def test_solve_levels_binds_a_concrete_level : Bool :=
     let binds : List (Pair Identifier SortLevel) :=
         solve_levels (Term.sort (SortLevel.var (Identifier.id "u")))
-                     (Term.sort (SortLevel.concrete 1)) List.empty in
+            (Term.sort (SortLevel.concrete 1)) List.empty in
     match bound_level_of binds (Identifier.id "u") {
         Option.some l => match l {
             SortLevel.concrete n => I64.beq n 1,
@@ -287,7 +287,7 @@ def test_solve_levels_binds_a_concrete_level : Bool :=
 def test_solve_levels_normalizes_a_succ : Bool :=
     let binds : List (Pair Identifier SortLevel) :=
         solve_levels (Term.sort (SortLevel.var (Identifier.id "u")))
-                     (Term.sort (SortLevel.succ (SortLevel.concrete 0))) List.empty in
+            (Term.sort (SortLevel.succ (SortLevel.concrete 0))) List.empty in
     match bound_level_of binds (Identifier.id "u") {
         Option.some l => match l {
             SortLevel.concrete n => I64.beq n 1,
@@ -302,10 +302,10 @@ def test_solve_levels_normalizes_a_succ : Bool :=
 def test_solve_levels_first_binding_wins : Bool :=
     let first : List (Pair Identifier SortLevel) :=
         solve_levels (Term.sort (SortLevel.var (Identifier.id "u")))
-                     (Term.sort (SortLevel.concrete 1)) List.empty in
+            (Term.sort (SortLevel.concrete 1)) List.empty in
     let second : List (Pair Identifier SortLevel) :=
         solve_levels (Term.sort (SortLevel.var (Identifier.id "u")))
-                     (Term.sort (SortLevel.concrete 2)) first in
+            (Term.sort (SortLevel.concrete 2)) first in
     match bound_level_of second (Identifier.id "u") {
         Option.some l => match l {
             SortLevel.concrete n => I64.beq n 1,
@@ -328,7 +328,7 @@ def test_solve_levels_leaves_a_non_sort_alone : Bool :=
 #[test]
 def test_solve_levels_ignores_a_max_parameter : Bool :=
     let max_param : Term := Term.sort (SortLevel.max (SortLevel.var (Identifier.id "u"))
-                                                     (SortLevel.var (Identifier.id "v"))) in
+        (SortLevel.var (Identifier.id "v"))) in
     let binds : List (Pair Identifier SortLevel) :=
         solve_levels max_param (Term.sort (SortLevel.concrete 1)) List.empty in
     List.is_empty binds
@@ -339,7 +339,7 @@ def test_solve_levels_ignores_a_max_parameter : Bool :=
 def test_solve_levels_ignores_a_concrete_parameter : Bool :=
     let binds : List (Pair Identifier SortLevel) :=
         solve_levels (Term.sort (SortLevel.concrete 1))
-                     (Term.sort (SortLevel.concrete 2)) List.empty in
+            (Term.sort (SortLevel.concrete 2)) List.empty in
     List.is_empty binds
 
 /// Two level VARIABLES: the parameter's takes the argument's, so a later
@@ -348,7 +348,7 @@ def test_solve_levels_ignores_a_concrete_parameter : Bool :=
 def test_solve_levels_binds_a_level_var_to_a_level_var : Bool :=
     let binds : List (Pair Identifier SortLevel) :=
         solve_levels (Term.sort (SortLevel.var (Identifier.id "u")))
-                     (Term.sort (SortLevel.var (Identifier.id "v"))) List.empty in
+            (Term.sort (SortLevel.var (Identifier.id "v"))) List.empty in
     match bound_level_of binds (Identifier.id "u") {
         Option.some l => match l {
             SortLevel.var n => Similar.similar n (Identifier.id "v"),
@@ -363,10 +363,10 @@ def test_solve_levels_binds_a_level_var_to_a_level_var : Bool :=
 def test_solve_levels_does_not_duplicate_a_binding : Bool :=
     let first : List (Pair Identifier SortLevel) :=
         solve_levels (Term.sort (SortLevel.var (Identifier.id "u")))
-                     (Term.sort (SortLevel.concrete 1)) List.empty in
+            (Term.sort (SortLevel.concrete 1)) List.empty in
     let second : List (Pair Identifier SortLevel) :=
         solve_levels (Term.sort (SortLevel.var (Identifier.id "u")))
-                     (Term.sort (SortLevel.concrete 2)) first in
+            (Term.sort (SortLevel.concrete 2)) first in
     match second {
         List.cons _ rest => List.is_empty rest,
         List.empty => false,

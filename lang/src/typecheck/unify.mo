@@ -1,6 +1,6 @@
 use lib::types {
-  LocalScope, Scope, Similar, SortLevel, Term, TypeError, binder_is_explicit,
-  binder_name, cubical_prim_eq, level_le, sentinel, sort_level_of, term_peel
+    LocalScope, Scope, Similar, SortLevel, Term, TypeError, binder_is_explicit,
+    binder_name, cubical_prim_eq, level_le, sentinel, sort_level_of, term_peel
 }
 use lib::typecheck::subst {term_shift}
 use lib::typecheck::whnf {whnf}

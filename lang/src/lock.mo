@@ -28,8 +28,8 @@ use std::list {List.filter, List.sort_by}
 use std::map {BTreeMap}
 use std::stream {StreamError, StreamError.is_not_found}
 use toml::toml {
-  Toml.ParseError.to_string, Toml.Value, Toml.array_at, Toml.parse, Toml.table_get,
-  Toml.value_to_string,
+    Toml.ParseError.to_string, Toml.Value, Toml.array_at, Toml.parse, Toml.table_get,
+    Toml.value_to_string,
 }
 
 /// What a git entry was asked to follow. `head` is the remote's default

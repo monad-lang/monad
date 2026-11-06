@@ -49,12 +49,12 @@
 /// attribution had to fail closed on exactly this — and a wrong pick in
 /// *this* predicate frees memory that is still live.
 use lib::types {
-  CubicalPrim, DebugName, Identifier, Instance, NamePath, Scope, Term, Visibility,
-  binder_anon, cubical_prim_eq, id_member, term_peel,
+    CubicalPrim, DebugName, Identifier, Instance, NamePath, Scope, Term, Visibility,
+    binder_anon, cubical_prim_eq, id_member, term_peel,
 }
 use lib::scope {
-  instance_args_match_carrier, instance_is_fully_concrete, instance_wildcard_names,
-  scope_globals, scope_instance_candidates_in, term_is_wildcard,
+    instance_args_match_carrier, instance_is_fully_concrete, instance_wildcard_names,
+    scope_globals, scope_instance_candidates_in, term_is_wildcard,
 }
 
 /// The gate's verdict. Three outcomes, not two, because "I could not

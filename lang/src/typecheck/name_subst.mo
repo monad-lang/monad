@@ -39,10 +39,10 @@
 /// binders of the same name) — flagged here rather than silently
 /// assumed correct.
 use lang::types {
-  Attribute, Binder, Class, ClassDef, Con, Decl, Def, Identifier, InductConstructor,
-  Inductive, Instance, Literal, MatchCase, ModulePath, Native, Param, Struct,
-  StructField, StructLitField, Term, TypeConstraint, concrete, id_eq, level_const,
-  named, package_private, sentinel, unnamed, use_bare, binder_name, list_reverse, binder_named,
+    Attribute, Binder, Class, ClassDef, Con, Decl, Def, Identifier, InductConstructor,
+    Inductive, Instance, Literal, MatchCase, ModulePath, Native, Param, Struct,
+    StructField, StructLitField, Term, TypeConstraint, concrete, id_eq, level_const,
+    named, package_private, sentinel, unnamed, use_bare, binder_name, list_reverse, binder_named,
 }
 use lib::typecheck::traverse {con_map_children, native_map_children, opt_term_map_children, opt_terms_map_children, term_map_children}
 
@@ -155,7 +155,6 @@ def con_name_subst (target : Identifier) (replacement : Term) (c : Con) : Con :=
 #[partial]
 def native_name_subst (target : Identifier) (replacement : Term) (n : Native) : Native :=
     native_map_children (name_subst_term target replacement) n
-
 
 // ─── Param / signature-level walk ───────────────────────────────────
 

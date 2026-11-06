@@ -33,11 +33,11 @@
 /// requeuing is a follow-up if a real template ever needs it.
 use std::list {List.any, List.length}
 use lang::types {
-  AttrArg, Attribute, Class, ClassDef, Decl, Def, Identifier, InductConstructor,
-  Inductive, Instance, ModulePath, NamePath, Param, Struct, StructField, Term,
-  TypeConstraint, binder_anon, concrete, empty_attrs, id_eq, level_const, many,
-  named,
-  package_private, sentinel, show_identifier, show_module_path, show_name_path, unnamed,
+    AttrArg, Attribute, Class, ClassDef, Decl, Def, Identifier, InductConstructor,
+    Inductive, Instance, ModulePath, NamePath, Param, Struct, StructField, Term,
+    TypeConstraint, binder_anon, concrete, empty_attrs, id_eq, level_const, many,
+    named,
+    package_private, sentinel, show_identifier, show_module_path, show_name_path, unnamed,
 }
 use lib::typecheck::macro_apply {expand_decl_gen_call}
 use lib::typecheck::macro_expand {expand_term, macro_call_head, scan_live_call}
@@ -45,8 +45,8 @@ use lib::typecheck::traverse {result_bind, term_map_children_result}
 
 // ─── Registry ───────────────────────────────────────────────────────
 
-type TermMacroEntry { tm_entry (name: Identifier) (body: Term) }
-type DeclGenEntry { dg_entry (name: Identifier) (params: List Param) (decl_list: List Decl) (targets: List Identifier) }
+type TermMacroEntry { tm_entry (name : Identifier) (body : Term) }
+type DeclGenEntry { dg_entry (name : Identifier) (params : List Param) (decl_list : List Decl) (targets : List Identifier) }
 
 /// A decl NAME's own last segment (`Def`/`DeclGenDef` names are
 /// `NamePath`s since the qualified-names split) -- the bare name a
@@ -917,7 +917,7 @@ pub def derive_handler_for_target (registry : List DeclGenEntry) (target : Ident
             match e {
                 DeclGenEntry.dg_entry name _ _ targets =>
                     (if List.any (fn (t : Identifier) => id_eq t target) targets then Option.some name
-                     else derive_handler_for_target rest target),
+                        else derive_handler_for_target rest target),
             },
     }
 

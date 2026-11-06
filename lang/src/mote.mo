@@ -14,7 +14,7 @@
 use std::list {List.filter, List.filter_map, List.intercalate, List.length}
 use lib::features {DepPolicy}
 use toml::toml {
-  Toml.Value, Toml.parse, Toml.table_get, Toml.array_at, array, integer, string, table,
+    Toml.Value, Toml.parse, Toml.table_get, Toml.array_at, array, integer, string, table,
 }
 use lang::types {AffineMode, AttrArg, Attribute, id, show_identifier}
 use lang::lock {Lock.read, LockRead, Lockfile, LockedMote}
@@ -807,10 +807,10 @@ def Mote.root_dep_entries (w : MoteWorkspaceRoot) : List (Pair String ManifestDe
     }
 
 def Mote.resolve_entries
-        (lookup : MoteRootLookup)
-        (root_entries : List (Pair String ManifestDepEntry))
-        (entries : List (Pair String ManifestDepEntry))
-        : List (Pair String ManifestDepEntry) :=
+    (lookup : MoteRootLookup)
+    (root_entries : List (Pair String ManifestDepEntry))
+    (entries : List (Pair String ManifestDepEntry))
+    : List (Pair String ManifestDepEntry) :=
     match entries {
         List.empty => List.empty,
         List.cons e rest => match e {
@@ -821,11 +821,11 @@ def Mote.resolve_entries
     }
 
 def Mote.resolve_entry
-        (lookup : MoteRootLookup)
-        (name : String)
-        (root_entries : List (Pair String ManifestDepEntry))
-        (entry : ManifestDepEntry)
-        : ManifestDepEntry :=
+    (lookup : MoteRootLookup)
+    (name : String)
+    (root_entries : List (Pair String ManifestDepEntry))
+    (entry : ManifestDepEntry)
+    : ManifestDepEntry :=
     match entry {
         ManifestDepEntry.inherited => Mote.resolve_inherited lookup name root_entries,
         _ => entry,
@@ -858,7 +858,7 @@ def Mote.inherit_chained_message (name : String) : String :=
         (String.concat name "] cannot itself set `workspace = true`")
 
 def Mote.resolve_root_entry
-        (w : MoteWorkspaceRoot) (name : String) (entry : ManifestDepEntry) : ManifestDepEntry :=
+    (w : MoteWorkspaceRoot) (name : String) (entry : ManifestDepEntry) : ManifestDepEntry :=
     match entry {
         ManifestDepEntry.found d => ManifestDepEntry.found d,
         ManifestDepEntry.invalid reason => ManifestDepEntry.invalid (Mote.inherit_root_invalid_message w name reason),
@@ -867,18 +867,18 @@ def Mote.resolve_root_entry
     }
 
 def Mote.resolve_from_root
-        (w : MoteWorkspaceRoot) (name : String)
-        (root_entries : List (Pair String ManifestDepEntry)) : ManifestDepEntry :=
+    (w : MoteWorkspaceRoot) (name : String)
+    (root_entries : List (Pair String ManifestDepEntry)) : ManifestDepEntry :=
     match Mote.lookup_dep_entry root_entries name {
         Option.none => ManifestDepEntry.invalid (Mote.inherit_missing_name_message w name),
         Option.some entry => Mote.resolve_root_entry w name entry,
     }
 
 def Mote.resolve_inherited
-        (lookup : MoteRootLookup)
-        (name : String)
-        (root_entries : List (Pair String ManifestDepEntry))
-        : ManifestDepEntry :=
+    (lookup : MoteRootLookup)
+    (name : String)
+    (root_entries : List (Pair String ManifestDepEntry))
+    : ManifestDepEntry :=
     match lookup {
         MoteRootLookup.root_none => ManifestDepEntry.invalid (Mote.inherit_missing_root_message name),
         MoteRootLookup.root_rejected root_dir => ManifestDepEntry.invalid (Mote.inherit_not_member_message root_dir),
@@ -893,14 +893,14 @@ def Mote.manifest_of_table (dir : String) (root : BTreeMap String Toml.Value) : 
 /// as a separate entry point so callers with no workspace context keep the
 /// pure signature.
 pub def Mote.manifest_of_table_in_workspace
-        (dir : String) (root_dir : String) (root_table : BTreeMap String Toml.Value)
-        (table : BTreeMap String Toml.Value) : Option MoteManifest :=
+    (dir : String) (root_dir : String) (root_table : BTreeMap String Toml.Value)
+    (table : BTreeMap String Toml.Value) : Option MoteManifest :=
     let w : MoteWorkspaceRoot := { dir := root_dir, table := root_table } in
     Mote.manifest_of_table_root dir (MoteRootLookup.root_found w) table
 
 def Mote.manifest_of_table_root
-        (dir : String) (lookup : MoteRootLookup) (root : BTreeMap String Toml.Value)
-        : Option MoteManifest :=
+    (dir : String) (lookup : MoteRootLookup) (root : BTreeMap String Toml.Value)
+    : Option MoteManifest :=
     match Mote.table_string (Toml.table_get "mote" root) "name" {
         Option.none => Option.none,
         Option.some name =>
@@ -1065,7 +1065,7 @@ def Mote.workspace_root_above (dir : String) (name : String) (depth : I64) : IO 
 /// member must be listed (by name) in `[workspace] members`.
 #[partial]
 def Mote.workspace_root_found
-        (dir : String) (name : String) (root : BTreeMap String Toml.Value) : IO MoteRootLookup := do {
+    (dir : String) (name : String) (root : BTreeMap String Toml.Value) : IO MoteRootLookup := do {
     let own := Mote.table_string (Toml.table_get "mote" root) "name";
     let is_self := match own {
         Option.some n => String.beq n name,
@@ -1091,7 +1091,7 @@ def Mote.workspace_root_found
 
 /// `parse_manifest` with a root lookup already decided.
 def Mote.parse_manifest_with_lookup
-        (dir : String) (lookup : MoteRootLookup) (text : String) : Option MoteManifest :=
+    (dir : String) (lookup : MoteRootLookup) (text : String) : Option MoteManifest :=
     match Toml.parse text {
         err _ => Option.none,
         ok root => Mote.manifest_of_table_root dir lookup root,
@@ -1170,9 +1170,9 @@ pub def Mote.manifest_problem (dir : String) : IO (Option String) := do {
 }
 
 def Mote.inherited_problem
-        (manifest : String) (lookup : MoteRootLookup)
-        (root_entries : List (Pair String ManifestDepEntry)) (names : List String)
-        : Option String :=
+    (manifest : String) (lookup : MoteRootLookup)
+    (root_entries : List (Pair String ManifestDepEntry)) (names : List String)
+    : Option String :=
     match names {
         List.empty => Option.none,
         List.cons name rest => match Mote.resolve_entry lookup name root_entries ManifestDepEntry.inherited {
@@ -1641,11 +1641,11 @@ def Mote.bin_target_of (dir : String) (mote_name : String) (sub : BTreeMap Strin
 // ─── Features and dependency policy ────────────────────────────────────
 
 def Mote.feature_entries_go (entries : List (Pair String Toml.Value)) :
-        List (Pair String (List String)) :=
+    List (Pair String (List String)) :=
     Mote.feature_entries_go_list entries List.empty
 
 def Mote.feature_entries_go_list (entries : List (Pair String Toml.Value))
-        (acc : List (Pair String (List String))) : List (Pair String (List String)) :=
+    (acc : List (Pair String (List String))) : List (Pair String (List String)) :=
     match entries {
         List.empty => List.reverse acc,
         List.cons p rest =>
@@ -1658,7 +1658,7 @@ def Mote.feature_entries_go_list (entries : List (Pair String Toml.Value))
     }
 
 def Mote.feature_entries (root : BTreeMap String Toml.Value) :
-        List (Pair String (List String)) :=
+    List (Pair String (List String)) :=
     match Toml.table_get "features" root {
         Option.some v => match v {
             Toml.Value.table sub => Mote.feature_entries_go (BTreeMap.to_list sub),
@@ -1691,15 +1691,15 @@ def Mote.dep_policy_of_table (sub : BTreeMap String Toml.Value) : DepPolicy :=
     let default_features := Mote.default_features_flag sub in
     let p : DepPolicy :=
         { optional := optional, features := features,
-          default_features := default_features } in
+            default_features := default_features } in
     p
 
 def Mote.policies_of_entries (entries : List (Pair String Toml.Value)) :
-        List (Pair String DepPolicy) :=
+    List (Pair String DepPolicy) :=
     Mote.policies_of_entries_go entries List.empty
 
 def Mote.policies_of_entries_go (entries : List (Pair String Toml.Value))
-        (acc : List (Pair String DepPolicy)) : List (Pair String DepPolicy) :=
+    (acc : List (Pair String DepPolicy)) : List (Pair String DepPolicy) :=
     match entries {
         List.empty => List.reverse acc,
         List.cons p rest =>
@@ -1712,7 +1712,7 @@ def Mote.policies_of_entries_go (entries : List (Pair String Toml.Value))
     }
 
 def Mote.policies_of_table (found : Option Toml.Value) :
-        List (Pair String DepPolicy) :=
+    List (Pair String DepPolicy) :=
     match found {
         Option.some v => match v {
             Toml.Value.table sub => Mote.policies_of_entries (BTreeMap.to_list sub),
@@ -1722,11 +1722,11 @@ def Mote.policies_of_table (found : Option Toml.Value) :
     }
 
 def Mote.policies_of_dep_tables (tables : List (BTreeMap String Toml.Value)) :
-        List (Pair String DepPolicy) :=
+    List (Pair String DepPolicy) :=
     Mote.policies_of_dep_tables_go tables List.empty
 
 def Mote.policies_of_dep_tables_go (tables : List (BTreeMap String Toml.Value))
-        (acc : List (Pair String DepPolicy)) : List (Pair String DepPolicy) :=
+    (acc : List (Pair String DepPolicy)) : List (Pair String DepPolicy) :=
     match tables {
         List.empty => List.reverse acc,
         List.cons t rest =>
@@ -1735,7 +1735,7 @@ def Mote.policies_of_dep_tables_go (tables : List (BTreeMap String Toml.Value))
     }
 
 def Mote.script_dep_policies (root : BTreeMap String Toml.Value) :
-        List (Pair String DepPolicy) :=
+    List (Pair String DepPolicy) :=
     Mote.policies_of_dep_tables (Mote.script_dep_tables root)
 
 // ─── Scripts ───────────────────────────────────────────────────────────
@@ -1822,7 +1822,7 @@ pub def Mote.script_dep_names (root : BTreeMap String Toml.Value) : List String 
 
 #[terminating]
 def Mote.script_dep_entries_go (dir : String) (tables : List (BTreeMap String Toml.Value)) :
-        List (Pair String ManifestDepEntry) :=
+    List (Pair String ManifestDepEntry) :=
     match tables {
         List.empty => List.empty,
         List.cons t rest =>
@@ -1831,7 +1831,7 @@ def Mote.script_dep_entries_go (dir : String) (tables : List (BTreeMap String To
     }
 
 pub def Mote.script_dep_entries (dir : String) (root : BTreeMap String Toml.Value) :
-        List (Pair String ManifestDepEntry) :=
+    List (Pair String ManifestDepEntry) :=
     Mote.script_dep_entries_go dir (Mote.script_dep_tables root)
 
 /// A table's string field, joined onto the mote's own directory so the
@@ -2302,7 +2302,7 @@ def mote_attr_unknown_keys_of (keys : List String) (acc : List String) : List St
 
 def unknown_mote_key_error (key : String) : String :=
     String.concat "error: unknown `#![mote { ... }]` key `" (String.concat key
-    (String.concat "`\n  accepted keys: " (join_with_commas mote_attr_known_keys)))
+        (String.concat "`\n  accepted keys: " (join_with_commas mote_attr_known_keys)))
 
 def join_with_commas (xs : List String) : String :=
     match xs {
@@ -2364,7 +2364,7 @@ def Mote.manifest_of_attr (dir : String) (attr : Attribute) : Option MoteManifes
 // ─── Tests ───
 
 def mote_manifest_fixture : String :=
-  "# a comment\n[mote]\nname = \"lang\"\nversion = \"0.1.2\"\n\n[lib]\npath = \"src/lib.mo\"\n\n[dependencies.init]\npath = \"../init\"\n\n[dependencies.std]\npath = \"../std\"\n"
+    "# a comment\n[mote]\nname = \"lang\"\nversion = \"0.1.2\"\n\n[lib]\npath = \"src/lib.mo\"\n\n[dependencies.init]\npath = \"../init\"\n\n[dependencies.std]\npath = \"../std\"\n"
 
 // --- What a bare `monad check`/`monad test` covers ------------------
 //
@@ -2389,7 +2389,7 @@ def roots_joined (roots : List String) : String :=
 /// A manifest that declares no targets at all, so the conventional
 /// defaults are what `Mote.target_roots` has to work from.
 def no_target_manifest_fixture : String :=
-  "[mote]\nname = \"plain\"\nversion = \"0.1.0\"\n"
+    "[mote]\nname = \"plain\"\nversion = \"0.1.0\"\n"
 
 /// `[mote] targets` is parsed so the declaration is real data. Availability
 /// itself is enforced per extern/native at codegen, not per mote.
@@ -2487,7 +2487,7 @@ def test_manifest_rejects_undeclared_mote : Bool :=
 /// rather than by the `#[extern "c"]` def, because it is a property of
 /// the package's build, not of the function being declared.
 def link_manifest_fixture : String :=
-  "[mote]\nname = \"ffi\"\nversion = \"0.1.0\"\n\n[link]\nlibs = [\"m\", \"pthread\"]\n"
+    "[mote]\nname = \"ffi\"\nversion = \"0.1.0\"\n\n[link]\nlibs = [\"m\", \"pthread\"]\n"
 
 #[test]
 def test_manifest_reads_link_libs : Bool :=
@@ -2515,7 +2515,7 @@ def test_manifest_without_link_table_has_no_libs : Bool :=
 /// `[link] pkg-config` names where the libs live, beside the `libs` that
 /// name what to link -- the shape `motes/tls` declares.
 def link_pkg_config_manifest_fixture : String :=
-  "[mote]\nname = \"tls\"\nversion = \"0.1.0\"\n\n[link]\nlibs = [\"ssl\", \"crypto\"]\npkg-config = [\"openssl\"]\n"
+    "[mote]\nname = \"tls\"\nversion = \"0.1.0\"\n\n[link]\nlibs = [\"ssl\", \"crypto\"]\npkg-config = [\"openssl\"]\n"
 
 #[test]
 def test_manifest_reads_link_pkg_config : Bool :=
@@ -2540,7 +2540,7 @@ def test_manifest_link_libs_alone_has_no_pkg_config : Bool :=
 /// A dev-dependency counts as declared -- this is how `init` stays free of
 /// production dependencies while its own test files use `std.test`.
 def init_manifest_fixture : String :=
-  "[mote]\nname = \"init\"\nversion = \"0.1.2\"\n\n[dev-dependencies.std]\npath = \"../std\"\n"
+    "[mote]\nname = \"init\"\nversion = \"0.1.2\"\n\n[dev-dependencies.std]\npath = \"../std\"\n"
 
 #[test]
 def test_dev_dependencies_count_as_declared : Bool :=
@@ -2587,7 +2587,7 @@ def test_dependency_path_is_joined_onto_the_mote_dir : Bool :=
 /// a `use foo::x` is legal), while resolution has no directory to try and
 /// falls through to the name convention.
 def no_path_manifest_fixture : String :=
-  "[mote]\nname = \"here\"\nversion = \"0.1.0\"\n\n[dependencies.there]\nversion = \"0.1.0\"\n"
+    "[mote]\nname = \"here\"\nversion = \"0.1.0\"\n\n[dependencies.there]\nversion = \"0.1.0\"\n"
 
 #[test]
 def test_dependency_without_a_path_is_declared_but_not_located : Bool :=
@@ -2651,7 +2651,7 @@ def dep_error_is_reported (m : MoteManifest) (name : String) (manifest : String)
     }
 
 def git_tag_manifest_fixture : String :=
-  "[mote]\nname = \"app\"\n\n[dependencies.http]\ngit = \"https://example.org/http\"\ntag = \"v0.1.0\"\n"
+    "[mote]\nname = \"app\"\n\n[dependencies.http]\ngit = \"https://example.org/http\"\ntag = \"v0.1.0\"\n"
 
 /// A git dependency is declared and keeps its source, but is NOT located:
 /// its directory is the checkout `monad fetch` resolves, which the manifest
@@ -2668,7 +2668,7 @@ def test_git_dependency_is_declared_with_its_source : Bool :=
     }
 
 def inline_sources_manifest_fixture : String :=
-  "[mote]\nname = \"app\"\n\n[dependencies]\njson = \">=0.2.0\"\nmono = { git = \"https://example.org/mono\", branch = \"main\", subdir = \"motes/foo\" }\nmylib = { path = \"../mylib\" }\n"
+    "[mote]\nname = \"app\"\n\n[dependencies]\njson = \">=0.2.0\"\nmono = { git = \"https://example.org/mono\", branch = \"main\", subdir = \"motes/foo\" }\nmylib = { path = \"../mylib\" }\n"
 
 /// The inline-table and bare-string spellings of §2a read the same as the
 /// sub-table form: a registry requirement, a git branch with a `subdir`,
@@ -2700,7 +2700,7 @@ def test_version_only_dependency_is_not_located_at_the_declaring_mote : Bool :=
     }
 
 def sourceless_manifest_fixture : String :=
-  "[mote]\nname = \"app\"\n\n[dependencies.shared]\nworkspace = true\n"
+    "[mote]\nname = \"app\"\n\n[dependencies.shared]\nworkspace = true\n"
 
 /// `workspace = true` is declared by name, but with no workspace root above
 /// it there is nothing to inherit: that is an error naming the dependency,
@@ -2716,7 +2716,7 @@ def test_workspace_marker_without_a_root_is_an_error : Bool :=
     }
 
 def bad_deps_manifest_fixture : String :=
-  "[mote]\nname = \"app\"\n\n[dependencies]\nboth = { path = \"../x\", git = \"https://example.org/x\" }\npins = { git = \"https://example.org/y\", tag = \"v1\", rev = \"abc\" }\nstray = { path = \"../z\", tag = \"v1\" }\ntyped = { git = \"https://example.org/w\", tag = 1 }\nscalar = 3\nfine = { path = \"../ok\" }\n"
+    "[mote]\nname = \"app\"\n\n[dependencies]\nboth = { path = \"../x\", git = \"https://example.org/x\" }\npins = { git = \"https://example.org/y\", tag = \"v1\", rev = \"abc\" }\nstray = { path = \"../z\", tag = \"v1\" }\ntyped = { git = \"https://example.org/w\", tag = 1 }\nscalar = 3\nfine = { path = \"../ok\" }\n"
 
 /// Each malformed entry records one error naming it and the manifest, has
 /// no source (nothing is guessed), and stays DECLARED -- the error, not an
@@ -2742,11 +2742,11 @@ def test_malformed_dependencies_are_reported_not_guessed : Bool :=
 /// The `[[bin]]` target, which is what `monad build <mote dir>` builds.
 /// Same shape as `cli/mote.toml` (spelled out as an array of tables).
 def bin_manifest_fixture : String :=
-  "[mote]\nname = \"cli\"\nversion = \"0.1.0\"\n\n[lib]\npath = \"src/lib.mo\"\n\n[[bin]]\nname = \"monad\"\npath = \"src/main.mo\"\n"
+    "[mote]\nname = \"cli\"\nversion = \"0.1.0\"\n\n[lib]\npath = \"src/lib.mo\"\n\n[[bin]]\nname = \"monad\"\npath = \"src/main.mo\"\n"
 
 /// Two targets, which is what the singular `[bin]` spelling could not say.
 def two_bin_manifest_fixture : String :=
-  "[mote]\nname = \"cli\"\nversion = \"0.1.0\"\n\n[[bin]]\nname = \"app\"\npath = \"src/main.mo\"\n\n[[bin]]\nname = \"tool\"\npath = \"src/bin/tool.mo\"\n"
+    "[mote]\nname = \"cli\"\nversion = \"0.1.0\"\n\n[[bin]]\nname = \"app\"\npath = \"src/main.mo\"\n\n[[bin]]\nname = \"tool\"\npath = \"src/bin/tool.mo\"\n"
 
 /// The `n`th bin target, or `none` past the end. Recursive rather than
 /// `List.get` so the tests need no import this module does not already
@@ -2914,7 +2914,7 @@ def test_lib_path_defaults_to_src_lib : Bool :=
 /// answer by accident. No manifest in this repo has one, which is why the
 /// fixture is written here rather than borrowed.
 def declared_lib_manifest_fixture : String :=
-  "[mote]\nname = \"lang\"\nversion = \"0.1.0\"\n\n[lib]\npath = \"lib/main.mo\"\n"
+    "[mote]\nname = \"lang\"\nversion = \"0.1.0\"\n\n[lib]\npath = \"lib/main.mo\"\n"
 
 /// ...and a declared `[lib] path` wins over that default.
 ///
@@ -3191,9 +3191,9 @@ def attr_mote_self_hosted : Attribute :=
 def attr_mote_rust : Attribute :=
     Attribute.mk (Identifier.id "mote")
         [attr_named "name" (AttrArg.str "structs"),
-         attr_named "deps" (AttrArg.group [
-            AttrArg.ident (Identifier.id "init"),
-            AttrArg.ident (Identifier.id "std")])]
+            attr_named "deps" (AttrArg.group [
+                AttrArg.ident (Identifier.id "init"),
+                AttrArg.ident (Identifier.id "std")])]
 
 #[test]
 def test_manifest_of_attr_reads_both_parser_shapes : Bool :=
@@ -3225,7 +3225,7 @@ def attr_one_dep_self_hosted : Attribute :=
 def attr_one_dep_rust : Attribute :=
     Attribute.mk (Identifier.id "mote")
         [attr_named "name" (AttrArg.str "solo"),
-         attr_named "deps" (AttrArg.ident (Identifier.id "init"))]
+            attr_named "deps" (AttrArg.ident (Identifier.id "init"))]
 
 #[test]
 def test_manifest_of_attr_reads_one_element_deps_both_shapes : Bool :=
@@ -3247,7 +3247,7 @@ def test_mote_attr_quoted_names_are_accepted : Bool :=
     // attribute is a manifest, and a manifest's names are strings.
     let a := Attribute.mk (Identifier.id "mote")
         [attr_named "name" (AttrArg.str "solo"),
-         attr_named "deps" (AttrArg.str "init")] in
+            attr_named "deps" (AttrArg.str "init")] in
     match Mote.manifest_of_attr "examples" a {
         Option.none => false,
         Option.some m => MoteManifest.declares m "init"
@@ -3279,7 +3279,7 @@ def test_mote_attr_known_keys_are_not_reported : Bool :=
 def test_mote_attr_unsupported_key_is_reported : Bool :=
     let a := Attribute.mk (Identifier.id "mote")
         [attr_named "name" (AttrArg.str "solo"),
-         attr_named "bin" (AttrArg.ident (Identifier.id "true"))] in
+            attr_named "bin" (AttrArg.ident (Identifier.id "true"))] in
     match Mote.mote_attr_unknown_keys a {
         List.empty => false,
         List.cons _ rest => match rest { List.empty => true, List.cons _ _ => false }
@@ -3289,7 +3289,7 @@ def test_mote_attr_unsupported_key_is_reported : Bool :=
 def test_mote_attr_unknown_key_error_names_the_key : Bool :=
     let a := Attribute.mk (Identifier.id "mote")
         [attr_named "name" (AttrArg.str "solo"),
-         attr_named "bin" (AttrArg.ident (Identifier.id "true"))] in
+            attr_named "bin" (AttrArg.ident (Identifier.id "true"))] in
     match Mote.mote_attr_unknown_keys a {
         List.empty => false,
         List.cons e _ => String.beq e (unknown_mote_key_error "bin")
@@ -3321,7 +3321,7 @@ def candidate_is (root : String) (segs : List String) (expected : String) : Bool
 #[test]
 def test_version_dir_is_the_monadup_layout : Bool :=
     String.beq (Mote.version_dir "/home/u/.monad" "nightly-2026-09-21")
-              "/home/u/.monad/downloads/nightly-2026-09-21"
+        "/home/u/.monad/downloads/nightly-2026-09-21"
 
 /// `monadup` writes the active tag with `echo`, so the file's contents end
 /// in a newline. Keeping it names a directory that never exists, and the
@@ -3461,7 +3461,7 @@ def test_missing_toolchain_hint_names_the_ways_out : Bool :=
         Option.some line =>
             if String.contains line "monadup"
             then (if String.contains line "MONAD_ROOT" then String.contains line "MONAD_HOME"
-                  else false)
+                else false)
             else false
     }
 

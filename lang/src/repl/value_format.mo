@@ -18,8 +18,8 @@ use lang::scope {scope_data_empty, scope_find_inductive}
 use lang::typecheck::infer {empty_locals, last_dotted_segment}
 use lang::typecheck::whnf {whnf}
 use lang::types {
-  DebugName, Identifier, ModulePath, NamePath, NumSuffix, Param, Scope, Term,
-  show_name_path
+    DebugName, Identifier, ModulePath, NamePath, NumSuffix, Param, Scope, Term,
+    show_name_path
 }
 
 pub def max_depth : I64 := 64
@@ -139,7 +139,7 @@ def format_list_go (scope : Scope) (elem : Term) (args : List Value) (depth : I6
                     if Bool.not (I64.lt count max_elements)
                     then String.concat "[" (String.concat (join_with ", " (List.reverse acc)) ", …]")
                     else format_list_go scope elem (list_value_tail tail) depth
-                            (List.cons (format_at scope elem head (depth + 1)) acc) (count + 1),
+                        (List.cons (format_at scope elem head (depth + 1)) acc) (count + 1),
             },
     }
 
@@ -255,7 +255,7 @@ def format_args (scope : Scope) (depth : I64) (args : List Value) : String :=
             match rest {
                 List.empty => format_at scope Term.hole a (depth + 1),
                 List.cons _ _ => String.concat (format_at scope Term.hole a (depth + 1))
-                        (String.concat ", " (format_args scope depth rest)),
+                    (String.concat ", " (format_args scope depth rest)),
             },
     }
 
@@ -263,9 +263,9 @@ def format_args (scope : Scope) (depth : I64) (args : List Value) : String :=
 /// its recursive calls print literals/closures only.
 def raw_scope : Scope :=
     { module_id := ModulePath.mk List.empty,
-      scope := scope_data_empty,
-      parent := Option.none,
-      incomplete_match_ok := false }
+        scope := scope_data_empty,
+        parent := Option.none,
+        incomplete_match_ok := false }
 
 // ─── Type inspection ──────────────────────────────────────────────────
 

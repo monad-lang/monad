@@ -54,16 +54,16 @@
 /// `Copy (A -> B)` instance — the closure is never duplicated, so its
 /// captured environment is never double-owned.
 use lib::types {
-  Similar,
-  Attribute, Binder, Con, DebugName, FieldPattern, Identifier, InductConstructor, Inductive,
-  Literal, Location, MatchCase, ModulePath, Multiplicity, NamePath, Native, Param, Scope,
-  ScopeData, SortLevel, StructLitField, Term, Visibility, binder_anon, binder_binder,
-  binder_explicit, binder_is_explicit, binder_mult, binder_name, binder_named,
-  binder_named_mult, has_attr, show_identifier, show_name_path, term_peel,
+    Similar,
+    Attribute, Binder, Con, DebugName, FieldPattern, Identifier, InductConstructor, Inductive,
+    Literal, Location, MatchCase, ModulePath, Multiplicity, NamePath, Native, Param, Scope,
+    ScopeData, SortLevel, StructLitField, Term, Visibility, binder_anon, binder_binder,
+    binder_explicit, binder_is_explicit, binder_mult, binder_name, binder_named,
+    binder_named_mult, has_attr, show_identifier, show_name_path, term_peel,
 }
 use lib::scope {
-  find_constructor_in_inductive, scope_data_empty, scope_find_all_inductives_by_constructor,
-  scope_find_def_return_type, scope_globals,
+    find_constructor_in_inductive, scope_data_empty, scope_find_all_inductives_by_constructor,
+    scope_find_def_return_type, scope_globals,
 }
 use llvm::strmap {str_map_empty, str_map_insert, str_map_lookup}
 use std::map {HashMap}
@@ -121,8 +121,8 @@ def uses_of (target : I64) (t : Term) : I64 :=
         Term.elim e =>
             match e {
                 { inductive := _, levels := _, params := _, indices := _,
-                  motive := _, minors := minors, scrutinee := scrutinee } =>
-                    uses_of target scrutinee + uses_of_minors target minors,
+                    motive := _, minors := minors, scrutinee := scrutinee } =>
+                        uses_of target scrutinee + uses_of_minors target minors,
             },
     }
 
@@ -273,9 +273,9 @@ def captured_uses_go (free : I64) (target : I64) (inside : Bool) (t : Term) : I6
         Term.elim e =>
             match e {
                 { inductive := _, levels := _, params := _, indices := _,
-                  motive := _, minors := minors, scrutinee := scrutinee } =>
-                    captured_uses_go free target inside scrutinee
-                        + captured_uses_minors free target inside minors,
+                    motive := _, minors := minors, scrutinee := scrutinee } =>
+                        captured_uses_go free target inside scrutinee
+                            + captured_uses_minors free target inside minors,
             },
     }
 
@@ -305,7 +305,7 @@ def captured_uses_literal (free : I64) (target : I64) (inside : Bool) (l : Liter
         Literal.if_ cond then_ else_ =>
             captured_uses_go free target inside cond
                 + i64_max (captured_uses_go free target inside then_)
-                          (captured_uses_go free target inside else_),
+                    (captured_uses_go free target inside else_),
         Literal.match_ scrut cases =>
             captured_uses_go free target inside scrut + captured_uses_cases free target inside cases,
         Literal.struct_lit fields _type_name => captured_uses_fields free target inside fields,
@@ -784,9 +784,9 @@ def borrow_aware_at (borrows : HashMap String Bool) (borrowed_here : Bool) (targ
         Term.elim e =>
             match e {
                 { inductive := _, levels := _, params := _, indices := _,
-                  motive := _, minors := minors, scrutinee := scrutinee } =>
-                    borrow_aware_at borrows false target scrutinee
-                        + borrow_aware_minors borrows borrowed_here target minors,
+                    motive := _, minors := minors, scrutinee := scrutinee } =>
+                        borrow_aware_at borrows false target scrutinee
+                            + borrow_aware_minors borrows borrowed_here target minors,
             },
     }
 
@@ -928,9 +928,9 @@ def owning_at_mode (ctors : HashMap String Bool) (borrows : HashMap String Bool)
         Term.elim e =>
             match e {
                 { inductive := _, levels := _, params := _, indices := _,
-                  motive := _, minors := minors, scrutinee := scrutinee } =>
-                    owning_at_mode ctors borrows fn_mode UsePos.up_scrutinee target scrutinee
-                        + owning_at_minors ctors borrows fn_mode ctx target minors,
+                    motive := _, minors := minors, scrutinee := scrutinee } =>
+                        owning_at_mode ctors borrows fn_mode UsePos.up_scrutinee target scrutinee
+                            + owning_at_minors ctors borrows fn_mode ctx target minors,
             },
     }
 
@@ -1266,9 +1266,9 @@ pub def expr_is_view (shareds : HashMap String Bool) (e : ViewEnv) (t : Term) : 
         Term.elim elim =>
             match elim {
                 { inductive := _, levels := _, params := _, indices := _, motive := _,
-                  minors := minors, scrutinee := scrutinee } =>
-                    let sv : Bool := expr_is_view shareds e scrutinee in
-                    sv || expr_is_view_minors shareds e sv minors,
+                    minors := minors, scrutinee := scrutinee } =>
+                        let sv : Bool := expr_is_view shareds e scrutinee in
+                        sv || expr_is_view_minors shareds e sv minors,
             },
     }
 
@@ -1439,17 +1439,17 @@ def leading_use (ctors : HashMap String Bool) (borrows : HashMap String Bool) (b
     let raw : I64 := uses_of 0 body in
     let own : I64 := owning_uses ctors borrows 0 body in
     { name := binder_ident b,
-      kind := BinderKind.bk_lam,
-      typ := typ,
-      count := raw,
-      borrowed := raw - borrow_aware_uses borrows 0 body,
-      owning := own,
-      moves := if typ_is_function typ then function_moves ctors borrows 0 body else own,
-      ctor := Identifier.id "",
-      pos := 0 - 1,
-      view := false,
-      declared := declared, init := Option.none,
-      captured := captured_uses_of_with_free free 0 body }
+        kind := BinderKind.bk_lam,
+        typ := typ,
+        count := raw,
+        borrowed := raw - borrow_aware_uses borrows 0 body,
+        owning := own,
+        moves := if typ_is_function typ then function_moves ctors borrows 0 body else own,
+        ctor := Identifier.id "",
+        pos := 0 - 1,
+        view := false,
+        declared := declared, init := Option.none,
+        captured := captured_uses_of_with_free free 0 body }
 
 /// A binder that is not one of a def's declared parameters: an implicit
 /// `{A : Type}` binder (`BinderInfo.binder`/`level`) or a generated
@@ -1616,18 +1616,18 @@ def collect_uses_term (ctors : HashMap String Bool) (borrows : HashMap String Bo
                     let own : I64 := owning_uses ctors borrows 0 bc.body in
                     let u : BinderUse :=
                         { name := binder_ident bc.binder,
-                          kind := BinderKind.bk_lam,
-                          typ := bc.typ,
-                          count := raw,
-                          borrowed := raw - borrow_aware_uses borrows 0 bc.body,
-                          owning := own,
-                          moves := if typ_is_function bc.typ then function_moves ctors borrows 0 bc.body else own,
-                          ctor := Identifier.id "",
-                          pos := 0 - 1,
-                          view := v,
-                          declared := binder_mult bc.binder,
-                          init := Option.some bc.initializer,
-                          captured := captured_uses_of 0 bc.body } in
+                            kind := BinderKind.bk_lam,
+                            typ := bc.typ,
+                            count := raw,
+                            borrowed := raw - borrow_aware_uses borrows 0 bc.body,
+                            owning := own,
+                            moves := if typ_is_function bc.typ then function_moves ctors borrows 0 bc.body else own,
+                            ctor := Identifier.id "",
+                            pos := 0 - 1,
+                            view := v,
+                            declared := binder_mult bc.binder,
+                            init := Option.some bc.initializer,
+                            captured := captured_uses_of 0 bc.body } in
                     collect_uses_term ctors borrows (view_push v venv) bc.body
                         (collect_uses_term ctors borrows venv callee (List.cons u acc)),
                 Option.none =>
@@ -1638,18 +1638,18 @@ def collect_uses_term (ctors : HashMap String Bool) (borrows : HashMap String Bo
                             let own : I64 := owning_uses ctors borrows 0 r.body in
                             let u : BinderUse :=
                                 { name := binder_ident r.binder,
-                                  kind := BinderKind.bk_lam,
-                                  typ := r.typ,
-                                  count := raw,
-                                  borrowed := raw - borrow_aware_uses borrows 0 r.body,
-                                  owning := own,
-                                  moves := if typ_is_function r.typ then function_moves ctors borrows 0 r.body else own,
-                                  ctor := Identifier.id "",
-                                  pos := 0 - 1,
-                                  view := v,
-                                  declared := binder_mult r.binder,
-                                  init := Option.none,
-                                  captured := captured_uses_of 0 r.body } in
+                                    kind := BinderKind.bk_lam,
+                                    typ := r.typ,
+                                    count := raw,
+                                    borrowed := raw - borrow_aware_uses borrows 0 r.body,
+                                    owning := own,
+                                    moves := if typ_is_function r.typ then function_moves ctors borrows 0 r.body else own,
+                                    ctor := Identifier.id "",
+                                    pos := 0 - 1,
+                                    view := v,
+                                    declared := binder_mult r.binder,
+                                    init := Option.none,
+                                    captured := captured_uses_of 0 r.body } in
                             collect_uses_term ctors borrows (view_push v venv) r.body
                                 (collect_uses_term ctors borrows venv arg (List.cons u acc)),
                         Option.none =>
@@ -1662,18 +1662,18 @@ def collect_uses_term (ctors : HashMap String Bool) (borrows : HashMap String Bo
             let own : I64 := owning_uses ctors borrows 0 body in
             let u : BinderUse :=
                 { name := binder_ident b,
-                  kind := BinderKind.bk_lam,
-                  typ := typ,
-                  count := raw,
-                  borrowed := raw - borrow_aware_uses borrows 0 body,
-                  owning := own,
-                  moves := if typ_is_function typ then function_moves ctors borrows 0 body else own,
-                  ctor := Identifier.id "",
-                  pos := 0 - 1,
-                  view := v,
-                  declared := binder_mult b,
-                  init := Option.none,
-                  captured := captured_uses_of 0 body } in
+                    kind := BinderKind.bk_lam,
+                    typ := typ,
+                    count := raw,
+                    borrowed := raw - borrow_aware_uses borrows 0 body,
+                    owning := own,
+                    moves := if typ_is_function typ then function_moves ctors borrows 0 body else own,
+                    ctor := Identifier.id "",
+                    pos := 0 - 1,
+                    view := v,
+                    declared := binder_mult b,
+                    init := Option.none,
+                    captured := captured_uses_of 0 body } in
             collect_uses_term ctors borrows (view_push v venv) body (List.cons u acc),
         // A non-explicit `pi` (the former `forall`) binds a TYPE variable.
         // It is erased before run time, so it is not a runtime binder and
@@ -1707,11 +1707,11 @@ def collect_uses_term (ctors : HashMap String Bool) (borrows : HashMap String Bo
         Term.elim e =>
             match e {
                 { inductive := _, levels := _, params := _, indices := _,
-                  motive := _, minors := minors, scrutinee := scrutinee } =>
-                    let sv : Bool := view_binder (expr_is_view borrows venv scrutinee) venv in
-                    let minor_env : ViewEnv := { flags := venv.flags, inherit := sv } in
-                    collect_uses_terms ctors borrows minor_env minors
-                        (collect_uses_term ctors borrows venv scrutinee acc),
+                    motive := _, minors := minors, scrutinee := scrutinee } =>
+                        let sv : Bool := view_binder (expr_is_view borrows venv scrutinee) venv in
+                        let minor_env : ViewEnv := { flags := venv.flags, inherit := sv } in
+                        collect_uses_terms ctors borrows minor_env minors
+                            (collect_uses_term ctors borrows venv scrutinee acc),
             },
     }
 
@@ -1782,16 +1782,16 @@ def collect_case_args (ctors : HashMap String Bool) (borrows : HashMap String Bo
             let raw : I64 := uses_of idx body in
             let u : BinderUse :=
                 { name := nm,
-                  kind := BinderKind.bk_match,
-                  typ := Term.hole,
-                  count := raw,
-                  borrowed := raw - borrow_aware_uses borrows idx body,
-                  owning := owning_uses ctors borrows idx body,
-                  ctor := ctor,
-                  pos := i,
-                  view := view,
-                  declared := Multiplicity.many, init := Option.none,
-                  captured := captured_uses_of idx body } in
+                    kind := BinderKind.bk_match,
+                    typ := Term.hole,
+                    count := raw,
+                    borrowed := raw - borrow_aware_uses borrows idx body,
+                    owning := owning_uses ctors borrows idx body,
+                    ctor := ctor,
+                    pos := i,
+                    view := view,
+                    declared := Multiplicity.many, init := Option.none,
+                    captured := captured_uses_of idx body } in
             collect_case_args ctors borrows view ctor rest (i + 1) n body (List.cons u acc),
     }
 
@@ -1992,7 +1992,7 @@ def linear_field_scope : Scope :=
 def test_lam_binder_carries_declared_mult : Bool :=
     let body : Term :=
         Term.lam (binder_named_mult (Identifier.id "x") Multiplicity.linear)
-                 Term.hole t_var0 in
+            Term.hole t_var0 in
     match collect_binder_uses probe_ctors str_map_empty body {
         List.cons u _rest =>
             match BinderUse.declared u {
@@ -2052,7 +2052,7 @@ def test_a_sibling_parameter_is_not_a_capture : Bool :=
         Term.lam cb Term.hole
             (Term.lam ab Term.hole (Term.var 1 (DebugName.named (Identifier.id "c")))) in
     match collect_binder_uses_with_params
-            (List.cons p_c (List.cons p_a List.empty)) probe_ctors str_map_empty body {
+        (List.cons p_c (List.cons p_a List.empty)) probe_ctors str_map_empty body {
         List.cons u _rest => I64.beq (BinderUse.captured u) 0,
         List.empty => false,
     }
@@ -2061,8 +2061,8 @@ def test_a_sibling_parameter_is_not_a_capture : Bool :=
 def test_match_binder_takes_field_mult : Bool :=
     let u : BinderUse :=
         { name := Identifier.id "x", kind := BinderKind.bk_match, typ := Term.hole,
-          count := 1, owning := 1, ctor := Identifier.id "mkp", pos := 0,
-          view := false, declared := Multiplicity.many, init := Option.none } in
+            count := 1, owning := 1, ctor := Identifier.id "mkp", pos := 0,
+            view := false, declared := Multiplicity.many, init := Option.none } in
     match attribute_binder_types linear_field_scope (List.cons u List.empty) {
         List.cons out _rest =>
             match BinderUse.declared out {
@@ -2237,9 +2237,9 @@ def test_collect_skips_implicit_pi_binders : Bool :=
 
 def empty_scope : Scope :=
     { module_id := ModulePath.mk (List.cons (Identifier.id "probe") List.empty),
-      scope := scope_data_empty,
-      parent := Option.none,
-      incomplete_match_ok := false }
+        scope := scope_data_empty,
+        parent := Option.none,
+        incomplete_match_ok := false }
 
 def probe_param (name : String) (ty : String) : Param :=
     let ty_term : Term := Term.var (0 - 1) (DebugName.named (Identifier.id ty)) in
@@ -2279,8 +2279,8 @@ def test_attribute_leaves_lambda_binders_alone : Bool :=
     let annotated : Term := Term.var (0 - 1) (DebugName.named (Identifier.id "I64")) in
     let u : BinderUse :=
         { name := Identifier.id "x", kind := BinderKind.bk_lam, typ := annotated,
-          count := 1, owning := 1, ctor := Identifier.id "", pos := 0 - 1,
-          view := false, declared := Multiplicity.many, init := Option.none } in
+            count := 1, owning := 1, ctor := Identifier.id "", pos := 0 - 1,
+            view := false, declared := Multiplicity.many, init := Option.none } in
     match attribute_binder_types empty_scope (List.cons u List.empty) {
         List.cons out _rest =>
             match BinderUse.typ out {
@@ -2300,8 +2300,8 @@ def test_attribute_fails_closed_on_an_unknown_constructor : Bool :=
     // rather than acquiring a confident wrong type.
     let u : BinderUse :=
         { name := Identifier.id "f", kind := BinderKind.bk_match, typ := Term.hole,
-          count := 2, owning := 2, ctor := Identifier.id "nope", pos := 0,
-          view := false, declared := Multiplicity.many, init := Option.none } in
+            count := 2, owning := 2, ctor := Identifier.id "nope", pos := 0,
+            view := false, declared := Multiplicity.many, init := Option.none } in
     match attribute_binder_types empty_scope (List.cons u List.empty) {
         List.cons out _rest =>
             match BinderUse.typ out {

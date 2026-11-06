@@ -19,15 +19,15 @@
 ///   it).
 use lang::core_value {Value}
 use lang::types {
-  Con, Decl, Identifier, Inductive, Literal, MatchCase, NamePath, Native,
-  StructLitField, Term, binder_anon, concrete, id_eq, level_const, named,
-  sentinel, show_identifier, term_peel, unnamed,
+    Con, Decl, Identifier, Inductive, Literal, MatchCase, NamePath, Native,
+    StructLitField, Term, binder_anon, concrete, id_eq, level_const, named,
+    sentinel, show_identifier, term_peel, unnamed,
 }
 use lib::typecheck::macro_apply {apply_term_macro}
 use lib::typecheck::meta_eval {meta_eval_invoke}
 use lib::typecheck::meta_reflect {
-  build_type_info_value, find_inductive_by_bare_name, reify_value_to_term,
-  str_val, strip_term_ctx, term_free_var_name,
+    build_type_info_value, find_inductive_by_bare_name, reify_value_to_term,
+    str_val, strip_term_ctx, term_free_var_name,
 }
 use lib::typecheck::traverse {result_bind, term_map_children_result}
 

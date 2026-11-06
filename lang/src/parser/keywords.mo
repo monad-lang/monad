@@ -41,22 +41,20 @@
 /// bind fields to a local literally named `as`) went from parsing fine
 /// to truncating entirely.
 def kw_list : List String :=
-	["def", "let", "in", "use", "open", "class", "struct", "instance",
-	 "type", "fn", "match", "if", "then", "else", "infix",
-	 "do", "return", "for", "quote", "with", "defmacro",
-	 "pub", "priv"]
-
+    ["def", "let", "in", "use", "open", "class", "struct", "instance",
+        "type", "fn", "match", "if", "then", "else", "infix",
+        "do", "return", "for", "quote", "with", "defmacro",
+        "pub", "priv"]
 
 #[partial]
-def kw_member (s : String) (kws : List String) : Bool := 
-	match kws {
-		List.cons kw rest => if String.beq kw s then true else kw_member s rest,
-		List.empty => false
-		}
-
+def kw_member (s : String) (kws : List String) : Bool :=
+    match kws {
+        List.cons kw rest => if String.beq kw s then true else kw_member s rest,
+        List.empty => false
+    }
 
 /// Is this identifier one of the words above? Moved here from
 /// `char_preds.mo`, whose remaining predicates are all character classes.
 #[partial]
 def is_keyword (s : String) : Bool :=
-	kw_member s kw_list
+    kw_member s kw_list

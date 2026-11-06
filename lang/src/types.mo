@@ -31,7 +31,6 @@ pub instance BEq Identifier {
     def beq (a b : Identifier) : Bool := id_eq a b
 }
 
-
 /// Check if an identifier is in a list of identifiers.
 def id_member (id : Identifier) (ids : List Identifier) : Bool :=
     match ids {
@@ -55,11 +54,11 @@ pub def union_ids (a : List Identifier) (b : List Identifier) : List Identifier 
 /// cost of supporting them now is near-zero and avoids a later
 /// breaking retype of `Attribute.args` once one does.
 pub type AttrArg {
-    ident (id: Identifier),
-    str (value: String),
-    num (value: I64),
-    named (name: Identifier) (value: AttrArg),
-    group (items: List AttrArg),
+    ident (id : Identifier),
+    str (value : String),
+    num (value : I64),
+    named (name : Identifier) (value : AttrArg),
+    group (items : List AttrArg),
 }
 
 /// A single `#[name arg1 arg2 ...]` declaration/param annotation, e.g.
@@ -72,8 +71,8 @@ pub type AttrArg {
 /// here (`Def`, `Inductive`, ...) carries source-location data, and
 /// nothing downstream would read it.
 pub struct Attribute {
-    name: Identifier,
-    args: List AttrArg,
+    name : Identifier,
+    args : List AttrArg,
 }
 
 /// The empty attribute list, under both names the corpus already uses
@@ -211,11 +210,11 @@ def test_attr_args_missing_is_none_but_argless_is_some_empty : Bool :=
         }
 
 pub struct Operator {
-    symbol: String,
+    symbol : String,
 }
 
 pub struct ModulePath {
-    segments: List Identifier,
+    segments : List Identifier,
 }
 
 /// The mote a canonical module path belongs to: its first segment.
@@ -242,7 +241,7 @@ pub def module_path_is_empty (mp : ModulePath) : Bool :=
 /// `use`d with `::`) since the qualified-names split; see
 /// plans/implementations/qualified-names.md.
 pub struct NamePath {
-    segments: List Identifier,
+    segments : List Identifier,
 }
 
 /// A module-qualified term reference (`std::list::List.cons`) — the
@@ -308,7 +307,6 @@ pub def module_path_to_string_colon (mp : ModulePath) : String := match mp {
 /// `codegen/emit.mo`'s `mangle_identifiers`.
 def join_identifiers (ids : List Identifier) : String :=
     List.intercalate "." (List.map show_identifier ids)
-
 
 pub instance Show ModulePath {
     def show (mp : ModulePath) : String := show_module_path mp
@@ -397,23 +395,23 @@ pub struct LocatedSpan {
 
 // Canonical Param uses de Bruijn Term; `ParseParam` is the parser's.
 pub struct Param {
-    name: Identifier,
-    type_: Term,
-    mult: Multiplicity,
-    default: Option Term,
-    attrs: List Attribute,
+    name : Identifier,
+    type_ : Term,
+    mult : Multiplicity,
+    default : Option Term,
+    attrs : List Attribute,
 }
 
 /// Create a canonical Param with multiplicity=Many, no default value, and
 /// no attributes.
-def parse_param_many (name: Identifier) (type_: ParseTerm) : ParseParam :=
+def parse_param_many (name : Identifier) (type_ : ParseTerm) : ParseParam :=
     let none : Option ParseTerm := Option.none in
     let no_attrs : List Attribute := List.empty in
     ParseParam.mk name type_ Multiplicity.many none no_attrs
 
 /// Like `parse_param_many` but with an explicit multiplicity — for
 /// `!`/`?`/`%` prefixes on def/lambda params.
-def parse_param_with_mult (name: Identifier) (type_: ParseTerm) (mult: Multiplicity) : ParseParam :=
+def parse_param_with_mult (name : Identifier) (type_ : ParseTerm) (mult : Multiplicity) : ParseParam :=
     let none : Option ParseTerm := Option.none in
     let no_attrs : List Attribute := List.empty in
     ParseParam.mk name type_ mult none no_attrs
@@ -421,14 +419,14 @@ def parse_param_with_mult (name: Identifier) (type_: ParseTerm) (mult: Multiplic
 /// Canonical sibling of `parse_param_many`, for code that already holds
 /// a lowered `Term`.
 #[partial]
-pub def param_many (name: Identifier) (type_: Term) : Param :=
+pub def param_many (name : Identifier) (type_ : Term) : Param :=
     let none : Option Term := Option.none in
     let no_attrs : List Attribute := List.empty in
     Param.mk name type_ Multiplicity.many none no_attrs
 
 /// Create a canonical Param with explicit multiplicity, no default
 /// value, and no attributes.
-pub def mk_param (name: Identifier) (type_: Term) (mult: Multiplicity) : Param :=
+pub def mk_param (name : Identifier) (type_ : Term) (mult : Multiplicity) : Param :=
     let none : Option Term := Option.none in
     let no_attrs : List Attribute := List.empty in
     Param.mk name type_ mult none no_attrs
@@ -436,7 +434,7 @@ pub def mk_param (name: Identifier) (type_: Term) (mult: Multiplicity) : Param :
 /// Create a canonical Param with multiplicity=Many, no default value,
 /// and explicit attrs — the one constructor/def-param path that
 /// actually needs a non-empty `attrs` list (e.g. `#[arg]`).
-pub def param_with_attrs (name: Identifier) (type_: Term) (attrs: List Attribute) : Param :=
+pub def param_with_attrs (name : Identifier) (type_ : Term) (attrs : List Attribute) : Param :=
     let none : Option Term := Option.none in
     Param.mk name type_ Multiplicity.many none attrs
 
@@ -469,11 +467,11 @@ pub def param_with_attrs (name: Identifier) (type_: Term) (attrs: List Attribute
 // directly for owner-qualified ctor-tag dispatch instead of guessing
 // from the bare name/arity alone (stage 11.4).
 pub struct MatchCase {
-    name: Identifier,
-    args: List Identifier,
-    body: Term,
-    field_pattern: Option FieldPattern,
-    typ_name: Option NamePath,
+    name : Identifier,
+    args : List Identifier,
+    body : Term,
+    field_pattern : Option FieldPattern,
+    typ_name : Option NamePath,
 }
 
 /// One `{ field, other := binder, .. }` pattern -- mirrors the Rust
@@ -483,8 +481,8 @@ pub struct MatchCase {
 /// `..` is present (unlisted fields are discarded, not brought into
 /// scope).
 pub struct FieldPattern {
-    fields: List FieldPatternEntry,
-    rest: Bool,
+    fields : List FieldPatternEntry,
+    rest : Bool,
 }
 
 /// One `field` or `field := binder` entry inside a `FieldPattern` --
@@ -493,8 +491,8 @@ pub struct FieldPattern {
 /// doesn't need a cross-module dependency on `init/prelude.mo`'s `Pair`
 /// for its own canonical AST.
 pub struct FieldPatternEntry {
-    field: Identifier,
-    binder: Identifier,
+    field : Identifier,
+    binder : Identifier,
 }
 
 /// Nested bare-form field-pattern `Match` chain desugaring a dotted-path
@@ -547,8 +545,8 @@ pub def field_access_chain (scrutinee : Term) (fields : List Identifier) : Term 
 /// A parameter as WRITTEN, before lowering -- parse-stage, so it holds
 /// `ParseParam`. Used only by `lang/parser.mo`.
 type ParsedParam {
-    plain (param: ParseParam),
-    destructured (param: ParseParam) (fp: FieldPattern),
+    plain (param : ParseParam),
+    destructured (param : ParseParam) (fp : FieldPattern),
 }
 
 pub type NumSuffix {
@@ -557,7 +555,7 @@ pub type NumSuffix {
 
 // Canonical Literal uses de Bruijn Term; `ParseLiteral` is the parser's.
 pub type Literal {
-    str (value: String),
+    str (value : String),
     /// A `'c'` literal. Carries a real `Char` -- one Unicode codepoint,
     /// mirroring the Rust reference's `Literal::Char(char)` and feeding
     /// `IrLit.ir_char` (`lang/core_ir.mo`), which has always wanted a
@@ -565,8 +563,8 @@ pub type Literal {
     /// shape (`init/prelude.mo`, `of_bytes (List U8)`) holds the
     /// codepoint's UTF-8 bytes, and the parser slices exactly one
     /// codepoint (`utf8_char_width`) before building it.
-    char (value: Char),
-    num (value: I64) (suffix: NumSuffix),
+    char (value : Char),
+    num (value : I64) (suffix : NumSuffix),
     /// A literal written with a decimal point (`3.0`, `3.14f32`). Kept as
     /// the exact source text rather than a numeric value: self-hosted
     /// Monad code has no native bridge to parse a decimal string into an
@@ -576,9 +574,9 @@ pub type Literal {
     /// round-tripping through `show_term`/parsing back, though genuine
     /// float codegen (`codegen/emit.mo` has no float `LLVMValue`
     /// variant at all yet) remains a separate, unstarted piece of work.
-    flt (text: String) (suffix: NumSuffix),
-    if_ (one: Term) (two: Term) (three: Term),
-    match_ (value: Term) (cases: List MatchCase),
+    flt (text : String) (suffix : NumSuffix),
+    if_ (one : Term) (two : Term) (three : Term),
+    match_ (value : Term) (cases : List MatchCase),
     /// DEPRECATED: never constructed on purpose. Both typechecking
     /// (`type_check_struct_lit`, `lang/typecheck/infer.mo`) and codegen
     /// (`desugar_struct_lits_decls`, `codegen/emit.mo`) rewrite an
@@ -595,7 +593,7 @@ pub type Literal {
     /// expected type from context (a struct literal doesn't always have
     /// one, e.g. passed to a generic function). Mirrors the Rust
     /// reference's `CoreLit::StructLit` (rust/core/src/core_term.rs).
-    struct_lit (fields: List StructLitField) (type_name: Option Term),
+    struct_lit (fields : List StructLitField) (type_name : Option Term),
     /// DEPRECATED: never constructed on purpose. Both typechecking
     /// (`type_check_struct_update`, `lang/typecheck/infer.mo`) and
     /// codegen (`desugar_struct_lits_decls`, `codegen/emit.mo`)
@@ -615,7 +613,7 @@ pub type Literal {
     /// directly, matching every other variable reference elsewhere in
     /// this file (`Term.var`/`variable`). Mirrors the Rust reference's
     /// `CoreLit::StructUpdate`.
-    struct_update (base: Term) (fields: List StructLitField),
+    struct_update (base : Term) (fields : List StructLitField),
 }
 
 /// A single `name := value` field inside a struct-literal EXPRESSION
@@ -628,21 +626,21 @@ pub type Literal {
 /// final constructor-argument order once `type_check_lit` resolves
 /// this into a `Term.con`.
 pub struct StructLitField {
-    name: Identifier,
-    value: Term,
+    name : Identifier,
+    value : Term,
 }
 
 pub struct Con {
-    name: Identifier,
-    typ_name: NamePath,
-    num_args: I64,
-    args: List (Option Term),
+    name : Identifier,
+    typ_name : NamePath,
+    num_args : I64,
+    args : List (Option Term),
 }
 
 pub struct Native {
-    native_name: Identifier,
-    num_args: I64,
-    args: List (Option Term),
+    native_name : Identifier,
+    num_args : I64,
+    args : List (Option Term),
 }
 
 // ─── Cubical primitives ────────────────────────────────────────────────
@@ -797,7 +795,7 @@ pub instance Copy CubicalPrim {
 // determine identity. DebugName exists solely for error messages
 // and pretty-printing during debugging.
 pub type DebugName {
-    named (id: Identifier),
+    named (id : Identifier),
     unnamed,
 }
 
@@ -944,7 +942,6 @@ def pt_ (k : ParseTermKind) : ParseTerm :=
 def pt_at (input : String) (rem : String) (k : ParseTermKind) : ParseTerm :=
     { span := { start_rem := String.length input, end_rem := String.length rem }, kind := k }
 
-
 /// Span a compound term from the start of its LEFTMOST sub-term to
 /// `rem`. The grammar builds application chains and infix climbs
 /// bottom-up, so by the time the combined term exists the text where it
@@ -961,7 +958,6 @@ def pt_from (left : ParseTerm) (rem : String) (k : ParseTermKind) : ParseTerm :=
     if parse_span_is_unknown left.span
     then pt_ k
     else { span := { start_rem := left.span.start_rem, end_rem := String.length rem }, kind := k }
-
 
 // Same-arity constructors for each kind, so converting a grammar site is
 // a token rename (`Term.app` -> `pt_app`) rather than a wrap that would
@@ -1017,7 +1013,6 @@ def pt_dict_hint (name : Identifier) : ParseTerm := pt_ (ParseTermKind.dict_hint
 
 def pt_hole : ParseTerm := pt_ ParseTermKind.hole
 
-
 // --- The declaration half of the parse stage -------------------------
 //
 // Each mirrors its canonical twin with every `Term` replaced by
@@ -1068,13 +1063,13 @@ pub struct ParseClassDef {
 }
 
 pub struct ParseDef {
-    name: NamePath,
-    typ: ParseTerm,
-    term: ParseTerm,
-    constraints: List TypeConstraint,
-    attrs: List Attribute,
-    vis: Visibility,
-    params: List ParseParam
+    name : NamePath,
+    typ : ParseTerm,
+    term : ParseTerm,
+    constraints : List TypeConstraint,
+    attrs : List Attribute,
+    vis : Visibility,
+    params : List ParseParam
 }
 
 pub struct ParseInductive {
@@ -1143,13 +1138,13 @@ pub type ParseDeclKind {
     struct_d (ParseStruct),
     class_d (ParseClass),
     instance_d (ParseInstance),
-    infix_d (op: Operator) (path: NamePath) (vis: Visibility),
-    use_d (path: ModulePath) (filter: UseFilter) (public: Bool),
-    open_d (path: NamePath) (filter: OpenFilter),
-    scoped_open_d (path: NamePath) (filter: OpenFilter) (decl: ParseDecl),
+    infix_d (op : Operator) (path : NamePath) (vis : Visibility),
+    use_d (path : ModulePath) (filter : UseFilter) (public : Bool),
+    open_d (path : NamePath) (filter : OpenFilter),
+    scoped_open_d (path : NamePath) (filter : OpenFilter) (decl : ParseDecl),
     def_macro_d (ParseDef),
-    decl_gen_d (name: NamePath) (params: List ParseParam) (decl_list: List ParseDecl) (attrs: List Attribute),
-    macro_call_d (name: Identifier) (args: List ParseTerm),
+    decl_gen_d (name : NamePath) (params : List ParseParam) (decl_list : List ParseDecl) (attrs : List Attribute),
+    macro_call_d (name : Identifier) (args : List ParseTerm),
     /// `with Dotted.Name { <decls> }` — a name-prefixing decl block
     /// that is OPEN inside its own body: every named declaration inside
     /// gets `Dotted.Name.` prepended to its name (`with Cubical { def i0
@@ -1161,13 +1156,13 @@ pub type ParseDeclKind {
     /// dotted name as one identifier ("Dotted.Name"), the same
     /// `join_dotted_identifiers` shape `dotted_def_name` gives a def's
     /// own dotted name (`lang/parser.mo`).
-    with_d (prefix: Identifier) (decl_list: List ParseDecl),
+    with_d (prefix : Identifier) (decl_list : List ParseDecl),
     /// `#![mote { ... }]` — the file-level INNER attribute, carried until
     /// lowering as `Decl.mote_d`. Appended LAST deliberately: these are
     /// constructor-named variants, so nothing is positional, but a
     /// variant's TAG is its declaration order and appending is what
     /// guarantees no existing tag moves.
-    mote_d (attr: Attribute),
+    mote_d (attr : Attribute),
 }
 
 /// Build a `ParseDecl` whose position has not been recorded yet.
@@ -1180,7 +1175,6 @@ def pd_ (k : ParseDeclKind) : ParseDecl :=
 #[partial]
 def pd_at (input : String) (rem : String) (k : ParseDeclKind) : ParseDecl :=
     { span := { start_rem := String.length input, end_rem := String.length rem }, kind := k }
-
 
 // Same-arity constructors per declaration kind, for the same reason the
 // `pt_*` family exists: a grammar site converts by renaming
@@ -1245,13 +1239,13 @@ def pd_mote_d (attr : Attribute) : ParseDecl :=
     pd_ (ParseDeclKind.mote_d attr)
 
 pub type ParseTermKind {
-    var (name: NameRef),
+    var (name : NameRef),
     /// Term-position `name!`. Kept a separate variant rather than a
     /// tagged `var` for the same reason `Term.var_macro` is (see its own
     /// doc comment): macro names resolve in a separate namespace.
-    var_macro (name: NameRef),
-    lam (name: Identifier) (typ: ParseTerm) (body: ParseTerm),
-    forall (name: Identifier) (typ: ParseTerm) (body: ParseTerm),
+    var_macro (name : NameRef),
+    lam (name : Identifier) (typ : ParseTerm) (body : ParseTerm),
+    forall (name : Identifier) (typ : ParseTerm) (body : ParseTerm),
     /// `arg_name` is `some` for a written dependent arrow
     /// (`(n : T) -> body`, which binds `n` over `body`) AND, since R2a',
     /// for each parameter `build_param_pi_chain` folds out of a `def`'s
@@ -1266,9 +1260,9 @@ pub type ParseTermKind {
     /// field to carry a binder name, so a name dropped here is gone for
     /// good and every use of it inside `ret` resolves to `sentinel`.
     /// This branch shipped exactly that regression once.
-    pi (arg_name: Option Identifier) (arg: ParseTerm) (ret: ParseTerm),
-    app (fun: ParseTerm) (arg: ParseTerm),
-    lit (value: ParseLiteral),
+    pi (arg_name : Option Identifier) (arg : ParseTerm) (ret : ParseTerm),
+    app (fun : ParseTerm) (arg : ParseTerm),
+    lit (value : ParseLiteral),
     // `forall`, `ntv` and `con` were spelled here to mirror the old
     // `Term`; no syntax produces one: there is no `forall` keyword in the
     // grammar,
@@ -1280,28 +1274,28 @@ pub type ParseTermKind {
     // touching the lowering arms for no gain. They carry no `pt_*` smart
     // constructor for that reason -- only the lowering arms and
     // exhaustive matches name them.
-    ntv (native: ParseNative),
-    con (c: ParseCon),
+    ntv (native : ParseNative),
+    con (c : ParseCon),
     /// A sort, as a `SortLevel` -- which covers a concrete numeral exactly as
     /// well as a level VARIABLE or a computed `max`/`succ`. The sole sort
     /// spelling: a sibling `type_ (universe: I64)` used to carry the concrete
     /// levels, which meant every level could be written two ways and every
     /// match site had to absorb both shapes.
-    sort (level: SortLevel),
-    quote_ (term: ParseTerm),
+    sort (level : SortLevel),
+    quote_ (term : ParseTerm),
     /// A `do { }` block, kept as STATEMENTS rather than desugared during
     /// parsing. Do-notation is syntax, so it belongs in the parse AST;
     /// Preserved as syntax and desugared by `lower_parse_do` once the
     /// binder context is known. The grammar used to desugar inline,
     /// which is only possible while it also threads `ctx`.
-    do_ (stmts: List DoStmt),
+    do_ (stmts : List DoStmt),
     /// `f #Named.Instance args`'s instance hint -- the parsed `#` marker.
     /// Only ever appears as the FIRST argument of an application
     /// (`pt_dict_hint` is emitted by `dict_hint_term`, lang/src/parser.mo,
     /// as `app <callee> (dict_hint ...)`), never free-standing. Lowering
     /// turns it into the `Term.var` marker argument the dict-resolution
     /// pass strips back off; it survives lowering ONLY as that marker.
-    dict_hint (name: Identifier),
+    dict_hint (name : Identifier),
     hole,
 }
 
@@ -1313,19 +1307,19 @@ pub struct ParseMatchCase {
 }
 
 type ParseLiteral {
-    str (value: String),
+    str (value : String),
     /// Parse-level sibling of `Literal.char` -- same `Char` payload, see
     /// its doc comment there.
-    char (value: Char),
-    num (value: I64) (suffix: NumSuffix),
-    flt (text: String) (suffix: NumSuffix),
-    if_ (one: ParseTerm) (two: ParseTerm) (three: ParseTerm),
-    match_ (value: ParseTerm) (cases: List ParseMatchCase),
-    struct_lit (fields: List ParseStructLitField) (type_name: Option ParseTerm),
+    char (value : Char),
+    num (value : I64) (suffix : NumSuffix),
+    flt (text : String) (suffix : NumSuffix),
+    if_ (one : ParseTerm) (two : ParseTerm) (three : ParseTerm),
+    match_ (value : ParseTerm) (cases : List ParseMatchCase),
+    struct_lit (fields : List ParseStructLitField) (type_name : Option ParseTerm),
     /// `base` is a `ParseTerm` here for the same reason it is a `Term`
     /// in `Literal` -- it is an expression, not a name -- but at THIS
     /// stage it is still the unresolved one the source wrote.
-    struct_update (base: ParseTerm) (fields: List ParseStructLitField),
+    struct_update (base : ParseTerm) (fields : List ParseStructLitField),
 }
 
 pub struct ParseStructLitField {
@@ -1334,16 +1328,16 @@ pub struct ParseStructLitField {
 }
 
 pub struct ParseCon {
-    name: Identifier,
-    typ_name: NamePath,
-    num_args: I64,
-    args: List (Option ParseTerm),
+    name : Identifier,
+    typ_name : NamePath,
+    num_args : I64,
+    args : List (Option ParseTerm),
 }
 
 pub struct ParseNative {
-    native_name: Identifier,
-    num_args: I64,
-    args: List (Option ParseTerm),
+    native_name : Identifier,
+    num_args : I64,
+    args : List (Option ParseTerm),
 }
 
 // The universe level of a sort. `Prop`/`Type`/`Sort n` are `concrete n`; a
@@ -1359,10 +1353,10 @@ pub struct ParseNative {
 // depth counter to keep in step (the trap `lang/typecheck/whnf.mo` records
 // for its many-at-once binder shift).
 pub type SortLevel {
-    concrete (level: I64),
-    var (name: Identifier),
-    max (left: SortLevel) (right: SortLevel),
-    succ (inner: SortLevel),
+    concrete (level : I64),
+    var (name : Identifier),
+    max (left : SortLevel) (right : SortLevel),
+    succ (inner : SortLevel),
 }
 
 /// How a binder BEHAVES — everything about a binder that is not its name.
@@ -1607,14 +1601,14 @@ pub struct Elim {
 }
 
 pub type Term {
-    var (idx: I64) (dbg: DebugName),
+    var (idx : I64) (dbg : DebugName),
     /// The lambda, and the ONLY binder over a term. Its binder is an
     /// ANNOTATION, exactly as `pi`'s below is, and its `info` is ALWAYS
     /// `explicit` -- a lambda's argument is written, never implicit -- so
     /// nothing discriminates on it. R2c gave it the `Binder` `pi` already
     /// had, for uniformity; `binder_is_explicit` answering `true` for a
     /// lambda is the contract that buys.
-    lam (b: Binder) (typ: Term) (body: Term),
+    lam (b : Binder) (typ : Term) (body : Term),
     /// A function type, and the ONLY binder over a type. `forall` used to sit
     /// beside it as a second spelling; R2b folded it in, so `b`'s `info` is
     /// now what tells a quantified type variable (`binder`), a universe level
@@ -1630,11 +1624,11 @@ pub type Term {
     /// `term_map_children_at_depth` already walks `ret` at depth 1. R2a stopped
     /// `pi` from DROPPING the name it was given; R2a' made the grammar actually
     /// give it one for a `def`'s parameter list (`binder_named` above).
-    pi (b : Binder) (arg : Term) (ret: Term),
-    app (fun: Term) (arg: Term),
-    lit (value: Literal),
-    ntv (native: Native),
-    con (c: Con),
+    pi (b : Binder) (arg : Term) (ret : Term),
+    app (fun : Term) (arg : Term),
+    lit (value : Literal),
+    ntv (native : Native),
+    con (c : Con),
     hole,
     /// `quote { <term> }` -- syntax as data. Mirrors the Rust reference's
     /// `Term::Quote { term: Box<Term> }` (rust/core/src/term.rs). Named
@@ -1647,7 +1641,7 @@ pub type Term {
     /// itself needs no special grammar at all, since it's just an
     /// ordinary identifier at parse time (recognized as magic only at
     /// expansion time, mirroring the reference exactly).
-    quote_ (term: Term),
+    quote_ (term : Term),
     /// Term-position `name!` (`foo!`, `foo! 1 2`). Structurally
     /// identical to `Term.var` (`idx`/`dbg`) -- `idx` is always
     /// `sentinel` in practice, since macro names are resolved in a
@@ -1664,7 +1658,7 @@ pub type Term {
     /// a 3rd `DebugName` variant, ruled out as live-regression-risky
     /// since `DebugName` is matched exhaustively in several real
     /// hot-path files).
-    var_macro (idx: I64) (dbg: DebugName),
+    var_macro (idx : I64) (dbg : DebugName),
     /// A source position attached to the term it wraps. Mirrors the Rust
     /// reference's `Term::Ctx { loc, module, term }` (`rust/core/src/term.rs`),
     /// minus the module -- DWARF needs a point, and the file is known at
@@ -1706,7 +1700,7 @@ pub type Term {
     /// excludes the kinds whose position is not worth recording, and a
     /// located def's BODY carries one by construction
     /// (`codegen/src/ctx.mo`).
-    ctx (loc: Location) (term: Term),
+    ctx (loc : Location) (term : Term),
     /// A sort, at a level that may be a plain numeral or a level expression
     /// (`var`/`max`/`succ`). The ONLY sort spelling at the canonical term
     /// level: `Term.type_ n` was deleted in favour of it, so there is no
@@ -1721,15 +1715,15 @@ pub type Term {
     /// disproves: no numeric tag is read, assigned, compared or serialized
     /// anywhere. A FIELD would still be wrong -- see `ctx` above for the
     /// arity breakage that causes.
-    sort (level: SortLevel),
+    sort (level : SortLevel),
     /// A cubical primitive application -- see `CubicalPrim`/`Cubical` above.
     /// One variant rather than one per primitive, for the reason recorded
     /// there: `similar_term_go` is a hand-expanded cross product over this
     /// type's variants and nothing checks it for exhaustiveness.
-    cubical (c: Cubical),
+    cubical (c : Cubical),
     /// The one eliminator -- see `Elim` above. R3c: `if`/`match` elaborate
     /// into this; the backends lower it via `lang/src/elim_lower.mo`.
-    elim (e: Elim),
+    elim (e : Elim),
 }
 
 /// Strip location wrappers, exposing the term a shape test wants.
@@ -1757,14 +1751,14 @@ pub def term_loc (t : Term) : Option Location := match t {
 
 /// Canonical TypeError uses de Bruijn Term. TypeErrorV0 is the legacy V0 variant.
 pub type TypeError {
-    mismatch (expected: Term) (actual: Term),
-    unknown_var (name: NameRef),
-    unknown_type (name: NameRef),
-    unknown_constructor (name: NameRef),
-    not_a_function (term: Term),
-    not_a_type (term: Term),
-    infinite_type (term: Term),
-    custom (msg: String),
+    mismatch (expected : Term) (actual : Term),
+    unknown_var (name : NameRef),
+    unknown_type (name : NameRef),
+    unknown_constructor (name : NameRef),
+    not_a_function (term : Term),
+    not_a_type (term : Term),
+    infinite_type (term : Term),
+    custom (msg : String),
     /// A binder used more than once where a borrow or a `Copy`
     /// instance would make it legal — at most ONE of those uses takes
     /// ownership, so the value is never actually moved twice.
@@ -1775,56 +1769,56 @@ pub type TypeError {
     /// which is exactly why these live on `TypeError` rather than in a
     /// separate warning type — promotion becomes a caller-side switch
     /// instead of new plumbing.
-    copy_required (name: Identifier) (typ: Term) (uses: I64),
+    copy_required (name : Identifier) (typ : Term) (uses : I64),
     /// A binder whose value is genuinely moved twice — two or more
     /// OWNING uses (stored into a constructor, or produced as a
     /// scope's value). No borrow discipline rescues this one; it needs
     /// `Copy`, `Clone`, or a rewrite.
-    value_used_after_move (name: Identifier) (typ: Term) (owning: I64),
+    value_used_after_move (name : Identifier) (typ : Term) (owning : I64),
     /// A `!x` binder that is never used. The one case affine's
     /// weakening does not excuse: linear means exactly once, so
     /// dropping it is as wrong as using it twice.
-    linear_unused (name: Identifier) (typ: Term),
+    linear_unused (name : Identifier) (typ : Term),
     /// A borrowed view of a `Shared` payload used where an OWNER is
     /// required: stored into a constructor/struct, returned from the def,
     /// or passed to an owning parameter. A view aliases the payload its
     /// `Shared` handle points at; handing it out as an owner would give
     /// two owners to one value. Read it, pass the `Shared` handle on, or
     /// make an explicit copy with `Clone.clone`.
-    borrowed_value_escapes (name: Identifier) (typ: Term),
+    borrowed_value_escapes (name : Identifier) (typ : Term),
     /// A call to a def declaring `[C A]` where every constraint variable
     /// is solved to a concrete type, and no instance of `C` matches it.
     /// Without this the dictionary is silently defaulted (and a
     /// dict-generating constraint leaves the call a parameter short).
-    missing_instance (cls: NamePath) (typ: Term),
+    missing_instance (cls : NamePath) (typ : Term),
     /// A `Copy` (or `Clone`) instance declared for a `#[linear]` or
     /// `#[proof]` type. Linear and proof values must never be duplicated;
     /// `is_copy` also refuses to grant ω to their carriers, so this is the
     /// declaration-site diagnostic.
-    proof_copied (typ: Term),
+    proof_copied (typ : Term),
     /// A proof-typed binder annotated `?` or `%`. A proof is forced
     /// linear (`view-types` rule 1) and has no run-time representation, so
     /// neither relaxation is legal.
-    proof_erased_binder (name: Identifier) (typ: Term),
+    proof_erased_binder (name : Identifier) (typ : Term),
     /// A proof-typed value used where a run-time value is required: a
     /// user def binding or returning one, or storing one. v1 proofs are
     /// phantom (no constructors, no values); real erasure is deferred.
-    proof_at_runtime_position (name: Identifier) (typ: Term),
+    proof_at_runtime_position (name : Identifier) (typ : Term),
     /// A linear or proof value captured by a closure. The closure body
     /// counts the capture once but may run many times (and, with eager
     /// fibers, on another thread), which would duplicate the value.
-    view_captured (name: Identifier) (typ: Term),
+    view_captured (name : Identifier) (typ : Term),
     /// A linear or proof value passed to `Shared.of` (or another
     /// re-readable container). `Shared` is `Copy`, so it could hand out
     /// two handles to one allocation.
-    view_stored_in_container (name: Identifier) (typ: Term),
+    view_stored_in_container (name : Identifier) (typ : Term),
     /// A signature or field whose type is `Shared`/`Ref`/`Array` applied
     /// to a linear or proof type. Those containers are re-readable, so
     /// the value could be extracted more than once.
-    view_in_container (typ: Term),
+    view_in_container (typ : Term),
     /// A `#[linear]`-typed binder annotated `%` (erased). A linear value
     /// has a run-time representation, so it cannot be erased.
-    linear_erased_binder (name: Identifier) (typ: Term),
+    linear_erased_binder (name : Identifier) (typ : Term),
 }
 
 /// `f #Named.Instance args`'s lowered marker argument: a sentinel `Term.var`
@@ -1840,66 +1834,66 @@ pub def dict_hint_marker_prefix : String := "__hint_"
 
 /// Canonical EvalError uses de Bruijn Term. EvalErrorV0 is the legacy V0 variant.
 type EvalError {
-    undefined_var (name: NameRef),
-    not_a_function (term: Term),
-    match_failure (term: Term),
-    custom (msg: String),
+    undefined_var (name : NameRef),
+    not_a_function (term : Term),
+    match_failure (term : Term),
+    custom (msg : String),
 }
 
 pub struct TypeConstraint {
-    cls: NamePath,
-    vars: List Identifier,
+    cls : NamePath,
+    vars : List Identifier,
 }
 
 /// Canonical Def uses de Bruijn Term. DefV0 is the legacy V0 variant.
 pub struct Def {
-    name: NamePath,
-    typ: Term,
-    term: Term,
-    constraints: List TypeConstraint,
-    attrs: List Attribute,
-    vis: Visibility,
-    params: List Param
+    name : NamePath,
+    typ : Term,
+    term : Term,
+    constraints : List TypeConstraint,
+    attrs : List Attribute,
+    vis : Visibility,
+    params : List Param
 }
 
 pub def Def.name (d : Def) : NamePath := d.name
 
 // Canonical InductConstructor uses de Bruijn Term. InductConstructorV0 is the legacy V0 variant.
 pub struct InductConstructor {
-    name: NamePath,
-    params: List Param,
-    typ: Term,
+    name : NamePath,
+    params : List Param,
+    typ : Term,
 }
 
 // Canonical Inductive uses de Bruijn Term. InductiveV0 is the legacy V0 variant.
 pub struct Inductive {
-    name: NamePath,
-    params: List Param,
-    typ: Term,
-    constructors: List InductConstructor,
-    attrs: List Attribute,
-    vis: Visibility,
+    name : NamePath,
+    params : List Param,
+    typ : Term,
+    constructors : List InductConstructor,
+    attrs : List Attribute,
+    vis : Visibility,
 }
 
 // Canonical ClassDef uses de Bruijn Term. ClassDefV0 is the legacy V0 variant.
 pub struct ClassDef {
-    name: Identifier,
-    typ: Term,
-    default: Option Term,
+    name : Identifier,
+    typ : Term,
+    default : Option Term,
 }
 
 // Canonical Class uses de Bruijn Term. ClassV0 is the legacy V0 variant.
 pub struct Class {
-    name: Identifier,
-    params: List Param,
-    constraints: List TypeConstraint,
-    methods: List ClassDef,
-    vis: Visibility,
+    name : Identifier,
+    params : List Param,
+    constraints : List TypeConstraint,
+    methods : List ClassDef,
+    vis : Visibility,
     /// The class's declared RESULT SORT — the `: Sort (max 1 u)` / `: Prop`
     /// clause after the params, or `None` when the head omits it (default
     /// `Sort 1`). Kept because the class is checked as a type former; the
     /// host represents the same clause in its `Inductive.typ`'s codomain.
-    sort: Option Term,
+    sort : Option Term,
 }
 
 // Canonical StructField uses de Bruijn Term. StructFieldV0 is the legacy V0 variant.
@@ -1909,12 +1903,11 @@ pub struct StructField {
     /// once), `?name : T` (Affine, at most once), `%name : T` (Zero /
     /// Erased), or no prefix at all (Many, the default — the common
     /// case). See examples/structs.mo's `Buffer.data` for a live `!` use.
-    name: Identifier,
-    typ: Term,
-    default: Option Term,
-    mult: Multiplicity,
+    name : Identifier,
+    typ : Term,
+    default : Option Term,
+    mult : Multiplicity,
 }
-
 
 // Canonical Struct uses de Bruijn Term. StructV0 is the legacy V0 variant.
 pub struct Struct {
@@ -1924,34 +1917,34 @@ pub struct Struct {
     /// request at the point where decl-gen macros are
     /// resolved (`lang/typecheck/macro_queue.mo`) — the attribute itself
     /// is not a term or a type, so nothing else could carry it.
-    name: Identifier,
-    fields: List StructField,
-    attrs: List Attribute,
-    vis: Visibility,
+    name : Identifier,
+    fields : List StructField,
+    attrs : List Attribute,
+    vis : Visibility,
 }
 
 /// A single item inside a `use Module { ... }` brace filter. Mirrors the
 /// Rust host's `UseItem` (rust/core/src/term.rs).
 pub type UseItem {
-    use_name (name: Identifier),
-    use_rename (name: Identifier) (alias: Identifier),
+    use_name (name : Identifier),
+    use_rename (name : Identifier) (alias : Identifier),
     use_glob,
-    use_sub (name: Identifier) (items: List UseItem),
-    use_sub_rename (name: Identifier) (alias: Identifier) (items: List UseItem),
+    use_sub (name : Identifier) (items : List UseItem),
+    use_sub_rename (name : Identifier) (alias : Identifier) (items : List UseItem),
 }
 
 /// What names a `use` declaration imports. Bare `use Module` (no braces)
 /// is deprecated but still parses. Mirrors Rust's `UseFilter`.
 pub type UseFilter {
     use_bare,
-    use_items (items: List UseItem),
+    use_items (items : List UseItem),
 }
 
 /// What names an `open` declaration makes unqualified. Mirrors Rust's
 /// `OpenFilter`.
 type OpenFilter {
     open_all,
-    open_only (names: List Identifier),
+    open_only (names : List Identifier),
 }
 
 // Canonical Decl uses de Bruijn Term. DeclV0 is the legacy variant.
@@ -1961,13 +1954,13 @@ pub type Decl {
     struct_d (Struct),
     class_d (Class),
     instance_d (Instance),
-    infix_d (op: Operator) (path: NamePath) (vis: Visibility),
-    use_d (path: ModulePath) (filter: UseFilter) (public: Bool),
-    open_d (path: NamePath) (filter: OpenFilter),
+    infix_d (op : Operator) (path : NamePath) (vis : Visibility),
+    use_d (path : ModulePath) (filter : UseFilter) (public : Bool),
+    open_d (path : NamePath) (filter : OpenFilter),
     /// `open ModulePath [{filter}] in <decl>` — the module is opened only
     /// for the scope of the wrapped declaration (def/type/struct/class/
     /// instance). Mirrors Rust's `Decl::ScopedOpen`.
-    scoped_open_d (path: NamePath) (filter: OpenFilter) (decl: Decl),
+    scoped_open_d (path : NamePath) (filter : OpenFilter) (decl : Decl),
     /// `defmacro name params := <term>` — mirrors the Rust reference's
     /// `Decl::DefMacro(Def)` (rust/core/src/term.rs): literally reuses `Def`
     /// (`typ` forced to `Term.hole`, `term` wrapped in one lambda per
@@ -1984,14 +1977,14 @@ pub type Decl {
     /// wrapper struct) rather than introduced as its own named type.
     /// `decl_list` is the literal, unexpanded list of declarations parsed
     /// out of the `decls { ... }` body.
-    decl_gen_d (name: NamePath) (params: List Param) (decl_list: List Decl) (attrs: List Attribute),
+    decl_gen_d (name : NamePath) (params : List Param) (decl_list : List Decl) (attrs : List Attribute),
     /// Declaration-position `name! arg1 arg2 ...` (e.g. `derive_beq!
     /// Point`, `reflect_type_info! T some_meta`). `name` is a bare
     /// `Identifier`, NOT a `ModulePath` — differs from `defmacro`'s own
     /// name shape, mirroring the Rust reference's `Decl::MacroCall`
     /// exactly (rust/core/src/term.rs). `args` are whitespace-separated
     /// terms, not a comma/paren-delimited call.
-    macro_call_d (name: Identifier) (args: List Term),
+    macro_call_d (name : Identifier) (args : List Term),
     /// `#![mote { name := "x", deps := [init, std] }]` — a file-level
     /// INNER attribute declaring this file's mote inline, so a module
     /// with no `mote.toml` above it is a mote rather than "script mode"
@@ -2005,7 +1998,7 @@ pub type Decl {
     /// comment for why the parser is the wrong place to reject it.
     ///
     /// Appended LAST for the same reason as `ParseDeclKind.mote_d`.
-    mote_d (attr: Attribute),
+    mote_d (attr : Attribute),
 }
 
 def Decl.to_name (d : Decl) : NamePath :=
@@ -2038,13 +2031,13 @@ pub struct Instance {
     /// class method's own abstract signature. See
     /// plans/bootstrapping/self-hosted-compiler.md's dictionary-passing
     /// plan (Phase 1) for the full context.
-    name: Identifier,
-    cls: NamePath,
-    constraints: List TypeConstraint,
-    args: List Term,
-    vis: Visibility,
-    implicit_params: List Param,
-    defs: List Def,
+    name : Identifier,
+    cls : NamePath,
+    constraints : List TypeConstraint,
+    args : List Term,
+    vis : Visibility,
+    implicit_params : List Param,
+    defs : List Def,
 }
 
 // --- Do-notation ---
@@ -2068,10 +2061,10 @@ pub struct Instance {
 // self-hosted-compiler.md's changelog for the cli/src/main.mo `main` repro
 // this was found from).
 type DoStmt {
-    bind_s (name: Identifier) (typ: ParseTerm) (expr: ParseTerm),
-    let_s (name: Identifier) (typ: ParseTerm) (expr: ParseTerm),
-    ret_s (expr: ParseTerm),
-    expr_s (expr: ParseTerm),
+    bind_s (name : Identifier) (typ : ParseTerm) (expr : ParseTerm),
+    let_s (name : Identifier) (typ : ParseTerm) (expr : ParseTerm),
+    ret_s (expr : ParseTerm),
+    expr_s (expr : ParseTerm),
 }
 
 def list_rev_loop {A : Type} (xs : List A) (acc : List A) : List A :=
@@ -2463,7 +2456,6 @@ def struct_lit_fields_similar (a : List StructLitField) (b : List StructLitField
         },
     }
 
-
 // --- Similar instances for de Bruijn types (Phase 0) ---
 
 pub instance Similar BinderInfo {
@@ -2513,7 +2505,7 @@ pub instance Similar DebugName {
 /// The larger of two `I64`s. `I64.max` is not a function in this tree (the
 /// sentinel comment that mentions it means `I64`'s maximum value), so the
 /// two-line version is spelled out.
-def level_i64_max (a: I64) (b: I64) : I64 := if I64.gt a b then a else b
+def level_i64_max (a : I64) (b : I64) : I64 := if I64.gt a b then a else b
 
 /// The concrete value of a level, when it has one.
 ///
@@ -2528,7 +2520,7 @@ def level_i64_max (a: I64) (b: I64) : I64 := if I64.gt a b then a else b
 /// the comparisons below all refuse it, which is the sound direction (an
 /// unresolved level costs completeness, never soundness), and W1.5's
 /// normalizing comparison is what resolves these structurally.
-pub def level_const (l: SortLevel) : Option I64 := match l {
+pub def level_const (l : SortLevel) : Option I64 := match l {
     SortLevel.concrete n => Option.some n,
     SortLevel.var _ => Option.none,
     SortLevel.succ inner => match level_const inner {
@@ -2548,7 +2540,7 @@ pub def level_const (l: SortLevel) : Option I64 := match l {
 /// a `succ`/`max` that happens to be concrete still matches a literal. A
 /// variable equals only the same name; anything partially unresolved is NOT
 /// equal, again refusing rather than guessing.
-def level_eq (l: SortLevel) (r: SortLevel) : Bool := match level_const l {
+def level_eq (l : SortLevel) (r : SortLevel) : Bool := match level_const l {
     Option.some a => match level_const r {
         Option.some b => I64.beq a b,
         Option.none => false,
@@ -2580,7 +2572,7 @@ def level_eq (l: SortLevel) (r: SortLevel) : Bool := match level_const l {
 /// `level_lt` is unaffected by the reflexive arm, which is the point of
 /// spelling it `level_le (succ l) r`: `level_eq (succ u) u` is false (they
 /// are not the same level), so `Sort u : Sort u` stays rejected.
-def level_le (l: SortLevel) (r: SortLevel) : Bool :=
+def level_le (l : SortLevel) (r : SortLevel) : Bool :=
     if level_eq l r then true
     else match level_const l {
         Option.some a => match level_const r {
@@ -2595,7 +2587,7 @@ def level_le (l: SortLevel) (r: SortLevel) : Bool :=
 /// relation that makes `Sort n : Sort (n+1)` true, which is the shape the
 /// check had before W1.0's fix and the reason that fix was a one-line
 /// deletion rather than a special case.
-def level_lt (l: SortLevel) (r: SortLevel) : Bool := level_le (SortLevel.succ l) r
+def level_lt (l : SortLevel) (r : SortLevel) : Bool := level_le (SortLevel.succ l) r
 
 /// `Sort n : Sort n` is Type-in-Type and must stay rejected -- the one
 /// thing `level_le`'s reflexive arm must NOT have loosened. `level_lt`
@@ -2620,7 +2612,7 @@ def test_level_le_is_reflexive_on_a_level_var : Bool :=
 #[test]
 def test_level_le_refuses_two_distinct_level_vars : Bool :=
     Bool.not (level_le (SortLevel.var (Identifier.id "u"))
-                       (SortLevel.var (Identifier.id "v")))
+        (SortLevel.var (Identifier.id "v")))
 
 /// The sort level of a term, if that term is a sort.
 ///
@@ -2628,7 +2620,7 @@ def test_level_le_refuses_two_distinct_level_vars : Bool :=
 /// inductive kind validation), which ask "is this term a sort" the same way
 /// `unify_sort` already does.
 #[partial]
-pub def sort_level_of (t: Term) : Option SortLevel := match term_peel t {
+pub def sort_level_of (t : Term) : Option SortLevel := match term_peel t {
     Term.sort level => Option.some level,
     _ => Option.none,
 }
@@ -2669,7 +2661,7 @@ pub def sort_n (n : I64) : Term := Term.sort (SortLevel.concrete n)
 /// its old contribution. A component whose type IS a sort
 /// contributes that sort's level, which is the standard rule: the sort of
 /// `Pi A B` is the max of the sorts of `A` and `B`.
-def level_of_type (t: Term) : SortLevel := match sort_level_of t {
+def level_of_type (t : Term) : SortLevel := match sort_level_of t {
     Option.some l => l,
     Option.none => SortLevel.concrete 1,
 }
@@ -2684,7 +2676,7 @@ def level_of_type (t: Term) : SortLevel := match sort_level_of t {
 // maintain.
 
 /// Every free level variable in a level, in first-seen order.
-def free_level_vars_of (l: SortLevel) : List Identifier := match l {
+def free_level_vars_of (l : SortLevel) : List Identifier := match l {
     SortLevel.concrete _ => List.empty,
     SortLevel.var name => List.cons name List.empty,
     SortLevel.succ inner => free_level_vars_of inner,
@@ -2695,7 +2687,7 @@ def free_level_vars_of (l: SortLevel) : List Identifier := match l {
 /// Substitute level variables inside a LEVEL. Unmentioned variables are
 /// left alone rather than defaulted, so a partial solution stays partial
 /// -- the same non-committal discipline `solve_typevars` follows.
-def level_subst (l: SortLevel) (binds: List (Pair Identifier SortLevel)) : SortLevel := match l {
+def level_subst (l : SortLevel) (binds : List (Pair Identifier SortLevel)) : SortLevel := match l {
     SortLevel.concrete n => SortLevel.concrete n,
     SortLevel.var name => match level_lookup name binds {
         Option.some replacement => replacement,
@@ -2709,7 +2701,7 @@ def level_subst (l: SortLevel) (binds: List (Pair Identifier SortLevel)) : SortL
 /// First binding for `name`, or none. A plain assoc walk: a level
 /// substitution holds one entry per generalized binder, so this is
 /// never long enough to want a map.
-def level_lookup (name: Identifier) (binds: List (Pair Identifier SortLevel)) : Option SortLevel :=
+def level_lookup (name : Identifier) (binds : List (Pair Identifier SortLevel)) : Option SortLevel :=
     match binds {
         List.cons entry rest => match entry {
             Pair.pair key val =>
@@ -2912,12 +2904,12 @@ pub def cubical_prim_name (prim : CubicalPrim) : String := match prim {
 pub def cubical_prims_all : List CubicalPrim :=
     List.cons CubicalPrim.interval (List.cons CubicalPrim.i0 (List.cons CubicalPrim.i1
         (List.cons CubicalPrim.ineg (List.cons CubicalPrim.imeet (List.cons CubicalPrim.ijoin
-        (List.cons CubicalPrim.pathp (List.cons CubicalPrim.transp (List.cons CubicalPrim.face_eq0
-        (List.cons CubicalPrim.face_eq1 (List.cons CubicalPrim.is_one
-        (List.cons CubicalPrim.hcomp (List.cons CubicalPrim.it_is_one
-        (List.cons CubicalPrim.glue (List.cons CubicalPrim.glue_intro
-        (List.cons CubicalPrim.glue_elim
-        List.empty)))))))))))))))
+            (List.cons CubicalPrim.pathp (List.cons CubicalPrim.transp (List.cons CubicalPrim.face_eq0
+                (List.cons CubicalPrim.face_eq1 (List.cons CubicalPrim.is_one
+                    (List.cons CubicalPrim.hcomp (List.cons CubicalPrim.it_is_one
+                        (List.cons CubicalPrim.glue (List.cons CubicalPrim.glue_intro
+                            (List.cons CubicalPrim.glue_elim
+                                List.empty)))))))))))))))
 
 /// The string a `#[cubical "..."]` MARKER names a primitive by -- the
 /// marker key, which is NOT the surface name `cubical_prim_name` returns:
@@ -3012,138 +3004,138 @@ pub instance Similar Term {
 // `quote_`/`var_macro` coverage this function genuinely needs.
 #[partial]
 def similar_term_go (a : Term) (b : Term) : Bool :=
-        match a {
-            var i1 d1 => match b {
-                var i2 d2 => I64.beq i1 i2 && Similar.similar d1 d2,
-                lam _ _ _ => false, pi _ _ _ => false,
-                app _ _ => false, lit _ => false, ntv _ => false,
-                con _ => false, hole => false,
-                sort _ => false, cubical _ => false,
-                quote_ _ => false, var_macro _ _ => false, ctx _ _ => false,
-                elim _ => false
-            },
-            // R2c: `d1`/`d2` are `Binder`s now, so this compares `info` and
-            // NOT the name, where it compared names before -- the arm's text
-            // never changed, the type under it did. The one widening R2c
-            // makes; `test_lam_similarity_ignores_the_name` pins it.
-            lam d1 t1 bd1 => match b {
-                lam d2 t2 bd2 => Similar.similar d1 d2 && Similar.similar t1 t2 && Similar.similar bd1 bd2,
-                var _ _ => false, pi _ _ _ => false,
-                app _ _ => false, lit _ => false, ntv _ => false,
-                con _ => false, hole => false,
-                sort _ => false, cubical _ => false,
-                quote_ _ => false, var_macro _ _ => false, ctx _ _ => false,
-                elim _ => false
-            },
-            // The two binders are compared, and the domain and codomain with
-            // them. Comparing `b1`/`b2` is not decoration: it is what keeps a
-            // level binder at level 0 -- whose domain is `Term.sort (concrete
-            // 0)`, i.e. `Prop` -- from being similar to an explicit
-            // `(x : Prop) -> …`. See `Similar Binder` for the full reason.
-            pi b1 a1 r1 => match b {
-                pi b2 a2 r2 => Similar.similar b1 b2 && Similar.similar a1 a2 && Similar.similar r1 r2,
-                var _ _ => false, lam _ _ _ => false,
-                app _ _ => false, lit _ => false, ntv _ => false,
-                con _ => false, hole => false,
-                sort _ => false, cubical _ => false,
-                quote_ _ => false, var_macro _ _ => false, ctx _ _ => false,
-                elim _ => false
-            },
-            app f1 a1 => match b {
-                app f2 a2 => Similar.similar f1 f2 && Similar.similar a1 a2,
-                var _ _ => false, lam _ _ _ => false,
-                pi _ _ _ => false, lit _ => false, ntv _ => false,
-                con _ => false, hole => false,
-                sort _ => false, cubical _ => false,
-                quote_ _ => false, var_macro _ _ => false, ctx _ _ => false,
-                elim _ => false
-            },
-            lit v1 => match b {
-                lit v2 => Similar.similar v1 v2,
-                var _ _ => false, lam _ _ _ => false,
-                pi _ _ _ => false, app _ _ => false, ntv _ => false,
-                con _ => false, hole => false,
-                sort _ => false, cubical _ => false,
-                quote_ _ => false, var_macro _ _ => false, ctx _ _ => false,
-                elim _ => false
-            },
-            ntv n1 => match b {
-                ntv n2 => Similar.similar n1 n2,
-                var _ _ => false, lam _ _ _ => false,
-                pi _ _ _ => false, app _ _ => false, lit _ => false,
-                con _ => false, hole => false,
-                sort _ => false, cubical _ => false,
-                quote_ _ => false, var_macro _ _ => false, ctx _ _ => false,
-                elim _ => false
-            },
-            con c1 => match b {
-                con c2 => Similar.similar c1 c2,
-                var _ _ => false, lam _ _ _ => false,
-                pi _ _ _ => false, app _ _ => false, lit _ => false,
-                ntv _ => false, hole => false,
-                sort _ => false, cubical _ => false,
-                quote_ _ => false, var_macro _ _ => false, ctx _ _ => false,
-                elim _ => false
-            },
-            sort l1 => match b {
-                sort l2 => level_eq l1 l2,
-                var _ _ => false, lam _ _ _ => false,
-                pi _ _ _ => false, app _ _ => false, lit _ => false,
-                ntv _ => false, con _ => false, hole => false, cubical _ => false,
-                quote_ _ => false, var_macro _ _ => false, ctx _ _ => false,
-                elim _ => false
-            },
-            hole => match b {
-                hole => true,
-                var _ _ => false, lam _ _ _ => false,
-                pi _ _ _ => false, app _ _ => false, lit _ => false,
-                ntv _ => false, con _ => false,
-                sort _ => false, cubical _ => false,
-                quote_ _ => false, var_macro _ _ => false, ctx _ _ => false,
-                elim _ => false
-            },
-            cubical c1 => match b {
-                cubical c2 => similar_cubical c1 c2,
-                var _ _ => false, lam _ _ _ => false,
-                pi _ _ _ => false, app _ _ => false, lit _ => false,
-                ntv _ => false, con _ => false, hole => false,
-                sort _ => false,
-                quote_ _ => false, var_macro _ _ => false, ctx _ _ => false,
-                elim _ => false
-            },
-            quote_ i1 => match b {
-                quote_ i2 => Similar.similar i1 i2,
-                var _ _ => false, lam _ _ _ => false,
-                pi _ _ _ => false, app _ _ => false, lit _ => false,
-                ntv _ => false, con _ => false, hole => false,
-                sort _ => false, cubical _ => false,
-                var_macro _ _ => false, ctx _ _ => false,
-                elim _ => false
-            },
-            var_macro idx1 dbg1 => match b {
-                var_macro idx2 dbg2 => I64.beq idx1 idx2 && Similar.similar dbg1 dbg2,
-                var _ _ => false, lam _ _ _ => false,
-                pi _ _ _ => false, app _ _ => false, lit _ => false,
-                ntv _ => false, con _ => false, hole => false,
-                sort _ => false, cubical _ => false,
-                quote_ _ => false, ctx _ _ => false,
-                elim _ => false
-            },
-            // Provably unreachable -- see this def's own doc comment above.
-            ctx _loc1 _inner1 => false,
-            // `motive`/`params`/`minors` compare pointwise, `inductive`
-            // compares by `Similar NamePath`, `levels` by `level_eq`
-            // (documented there as "for `Similar`") -- same componentwise
-            // discipline as every other multi-field arm above.
-            elim e1 => match b {
-                elim e2 => similar_elim e1 e2,
-                var _ _ => false, lam _ _ _ => false,
-                pi _ _ _ => false, app _ _ => false, lit _ => false,
-                ntv _ => false, con _ => false, hole => false,
-                sort _ => false, cubical _ => false,
-                quote_ _ => false, var_macro _ _ => false, ctx _ _ => false
-            },
-        }
+    match a {
+        var i1 d1 => match b {
+            var i2 d2 => I64.beq i1 i2 && Similar.similar d1 d2,
+            lam _ _ _ => false, pi _ _ _ => false,
+            app _ _ => false, lit _ => false, ntv _ => false,
+            con _ => false, hole => false,
+            sort _ => false, cubical _ => false,
+            quote_ _ => false, var_macro _ _ => false, ctx _ _ => false,
+            elim _ => false
+        },
+        // R2c: `d1`/`d2` are `Binder`s now, so this compares `info` and
+        // NOT the name, where it compared names before -- the arm's text
+        // never changed, the type under it did. The one widening R2c
+        // makes; `test_lam_similarity_ignores_the_name` pins it.
+        lam d1 t1 bd1 => match b {
+            lam d2 t2 bd2 => Similar.similar d1 d2 && Similar.similar t1 t2 && Similar.similar bd1 bd2,
+            var _ _ => false, pi _ _ _ => false,
+            app _ _ => false, lit _ => false, ntv _ => false,
+            con _ => false, hole => false,
+            sort _ => false, cubical _ => false,
+            quote_ _ => false, var_macro _ _ => false, ctx _ _ => false,
+            elim _ => false
+        },
+        // The two binders are compared, and the domain and codomain with
+        // them. Comparing `b1`/`b2` is not decoration: it is what keeps a
+        // level binder at level 0 -- whose domain is `Term.sort (concrete
+        // 0)`, i.e. `Prop` -- from being similar to an explicit
+        // `(x : Prop) -> …`. See `Similar Binder` for the full reason.
+        pi b1 a1 r1 => match b {
+            pi b2 a2 r2 => Similar.similar b1 b2 && Similar.similar a1 a2 && Similar.similar r1 r2,
+            var _ _ => false, lam _ _ _ => false,
+            app _ _ => false, lit _ => false, ntv _ => false,
+            con _ => false, hole => false,
+            sort _ => false, cubical _ => false,
+            quote_ _ => false, var_macro _ _ => false, ctx _ _ => false,
+            elim _ => false
+        },
+        app f1 a1 => match b {
+            app f2 a2 => Similar.similar f1 f2 && Similar.similar a1 a2,
+            var _ _ => false, lam _ _ _ => false,
+            pi _ _ _ => false, lit _ => false, ntv _ => false,
+            con _ => false, hole => false,
+            sort _ => false, cubical _ => false,
+            quote_ _ => false, var_macro _ _ => false, ctx _ _ => false,
+            elim _ => false
+        },
+        lit v1 => match b {
+            lit v2 => Similar.similar v1 v2,
+            var _ _ => false, lam _ _ _ => false,
+            pi _ _ _ => false, app _ _ => false, ntv _ => false,
+            con _ => false, hole => false,
+            sort _ => false, cubical _ => false,
+            quote_ _ => false, var_macro _ _ => false, ctx _ _ => false,
+            elim _ => false
+        },
+        ntv n1 => match b {
+            ntv n2 => Similar.similar n1 n2,
+            var _ _ => false, lam _ _ _ => false,
+            pi _ _ _ => false, app _ _ => false, lit _ => false,
+            con _ => false, hole => false,
+            sort _ => false, cubical _ => false,
+            quote_ _ => false, var_macro _ _ => false, ctx _ _ => false,
+            elim _ => false
+        },
+        con c1 => match b {
+            con c2 => Similar.similar c1 c2,
+            var _ _ => false, lam _ _ _ => false,
+            pi _ _ _ => false, app _ _ => false, lit _ => false,
+            ntv _ => false, hole => false,
+            sort _ => false, cubical _ => false,
+            quote_ _ => false, var_macro _ _ => false, ctx _ _ => false,
+            elim _ => false
+        },
+        sort l1 => match b {
+            sort l2 => level_eq l1 l2,
+            var _ _ => false, lam _ _ _ => false,
+            pi _ _ _ => false, app _ _ => false, lit _ => false,
+            ntv _ => false, con _ => false, hole => false, cubical _ => false,
+            quote_ _ => false, var_macro _ _ => false, ctx _ _ => false,
+            elim _ => false
+        },
+        hole => match b {
+            hole => true,
+            var _ _ => false, lam _ _ _ => false,
+            pi _ _ _ => false, app _ _ => false, lit _ => false,
+            ntv _ => false, con _ => false,
+            sort _ => false, cubical _ => false,
+            quote_ _ => false, var_macro _ _ => false, ctx _ _ => false,
+            elim _ => false
+        },
+        cubical c1 => match b {
+            cubical c2 => similar_cubical c1 c2,
+            var _ _ => false, lam _ _ _ => false,
+            pi _ _ _ => false, app _ _ => false, lit _ => false,
+            ntv _ => false, con _ => false, hole => false,
+            sort _ => false,
+            quote_ _ => false, var_macro _ _ => false, ctx _ _ => false,
+            elim _ => false
+        },
+        quote_ i1 => match b {
+            quote_ i2 => Similar.similar i1 i2,
+            var _ _ => false, lam _ _ _ => false,
+            pi _ _ _ => false, app _ _ => false, lit _ => false,
+            ntv _ => false, con _ => false, hole => false,
+            sort _ => false, cubical _ => false,
+            var_macro _ _ => false, ctx _ _ => false,
+            elim _ => false
+        },
+        var_macro idx1 dbg1 => match b {
+            var_macro idx2 dbg2 => I64.beq idx1 idx2 && Similar.similar dbg1 dbg2,
+            var _ _ => false, lam _ _ _ => false,
+            pi _ _ _ => false, app _ _ => false, lit _ => false,
+            ntv _ => false, con _ => false, hole => false,
+            sort _ => false, cubical _ => false,
+            quote_ _ => false, ctx _ _ => false,
+            elim _ => false
+        },
+        // Provably unreachable -- see this def's own doc comment above.
+        ctx _loc1 _inner1 => false,
+        // `motive`/`params`/`minors` compare pointwise, `inductive`
+        // compares by `Similar NamePath`, `levels` by `level_eq`
+        // (documented there as "for `Similar`") -- same componentwise
+        // discipline as every other multi-field arm above.
+        elim e1 => match b {
+            elim e2 => similar_elim e1 e2,
+            var _ _ => false, lam _ _ _ => false,
+            pi _ _ _ => false, app _ _ => false, lit _ => false,
+            ntv _ => false, con _ => false, hole => false,
+            sort _ => false, cubical _ => false,
+            quote_ _ => false, var_macro _ _ => false, ctx _ _ => false
+        },
+    }
 
 /// Componentwise `Elim` comparison -- see `similar_term_go`'s `elim` arm.
 def similar_elim (a : Elim) (b : Elim) : Bool :=
@@ -3377,7 +3369,7 @@ def test_similar_binder_ignores_mult : Bool :=
     // Multiplicity is a usage annotation, not de Bruijn shape: two
     // binders that differ only in `!`/`?`/`%` are the same binder.
     Similar.similar (binder_named_mult (Identifier.id "x") Multiplicity.many)
-                    (binder_named_mult (Identifier.id "x") Multiplicity.linear)
+        (binder_named_mult (Identifier.id "x") Multiplicity.linear)
 
 // --- Phase 2: Scope types ---
 

@@ -1,14 +1,14 @@
 use lang::types {
-  Attribute, Class, ClassDef, Con, Decl, Def, Identifier, InductConstructor,
-  Inductive, Instance, Literal, MatchCase, ModulePath, NamePath, Native, Operator,
-  Param, Struct, StructField, Term, TypeConstraint, affine, binder_anon, binder_binder,
-  binder_named, f64, i32, i64, i8,
-  linear, many, named, open_all, package_private, show_identifier,
-  show_module_path, sort_n, u32, unnamed, use_bare, zero,
+    Attribute, Class, ClassDef, Con, Decl, Def, Identifier, InductConstructor,
+    Inductive, Instance, Literal, MatchCase, ModulePath, NamePath, Native, Operator,
+    Param, Struct, StructField, Term, TypeConstraint, affine, binder_anon, binder_binder,
+    binder_named, f64, i32, i64, i8,
+    linear, many, named, open_all, package_private, show_identifier,
+    show_module_path, sort_n, u32, unnamed, use_bare, zero,
 }
 use lib::pretty {
-  escape_string, show_decl, show_instance, show_match_case, show_multiplicity,
-  show_num_suffix, show_term, show_universe,
+    escape_string, show_decl, show_instance, show_match_case, show_multiplicity,
+    show_num_suffix, show_term, show_universe,
 }
 
 open Term {app, con, hole, lam, lit, ntv, pi, var}

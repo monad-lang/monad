@@ -1,23 +1,23 @@
 /// Self-hosted Monad grammar parser.
 /// Split into modules for maintainability.
 use lang::types {
-  Similar,
-  AttrArg, Attribute, Decl, DebugName, Def, DoStmt, FieldPattern, FieldPatternEntry, Identifier,
-  InductConstructor, Inductive, LocatedSpan, Location, ModulePath, Multiplicity, NamePath,
-  NameRef, OpenFilter, Param, ParseClass, ParseClassDef, ParseDecl, ParseDef,
-  ParseInductConstructor, ParseInstance, ParseMatchCase, ParseParam, ParseSpan,
-  ParseStruct, ParseStructField, ParseStructLitField, ParseTerm, ParsedParam,
-  QualifiedName, SortLevel, SourceRange, Term, TypeConstraint, UseFilter, UseItem, Visibility,
-  affine, app, char, char_to_string, concrete, destructured, f32, f64, flt, group,
-  has_attr, i64, id_eq, ident, if_, linear, list_reverse, many, match_, named, num, package_private, parse_param_many, parse_param_with_mult,
-  pd_at, pd_class_d, pd_decl_gen_d, pd_def_d, pd_def_macro_d, pd_inductive_d,
-  pd_infix_d, pd_instance_d, pd_macro_call_d, pd_mote_d, pd_open_d,
-  dict_hint, do_,
-  pd_scoped_open_d, pd_struct_d, pd_use_d, pd_with_d, pi, plain, priv_, pt_app, pt_at, pt_dict_hint, pt_do,
-  pt_from, pt_hole, pt_lam, pt_lit, pt_pi, pt_quote_, pt_sort, pt_var,
-  pt_var_macro, pub_, sentinel, show_identifier, show_name_path, str, struct_lit,
-  struct_update, term_loc, u32, u64, var, zero,
-  forall,
+    Similar,
+    AttrArg, Attribute, Decl, DebugName, Def, DoStmt, FieldPattern, FieldPatternEntry, Identifier,
+    InductConstructor, Inductive, LocatedSpan, Location, ModulePath, Multiplicity, NamePath,
+    NameRef, OpenFilter, Param, ParseClass, ParseClassDef, ParseDecl, ParseDef,
+    ParseInductConstructor, ParseInstance, ParseMatchCase, ParseParam, ParseSpan,
+    ParseStruct, ParseStructField, ParseStructLitField, ParseTerm, ParsedParam,
+    QualifiedName, SortLevel, SourceRange, Term, TypeConstraint, UseFilter, UseItem, Visibility,
+    affine, app, char, char_to_string, concrete, destructured, f32, f64, flt, group,
+    has_attr, i64, id_eq, ident, if_, linear, list_reverse, many, match_, named, num, package_private, parse_param_many, parse_param_with_mult,
+    pd_at, pd_class_d, pd_decl_gen_d, pd_def_d, pd_def_macro_d, pd_inductive_d,
+    pd_infix_d, pd_instance_d, pd_macro_call_d, pd_mote_d, pd_open_d,
+    dict_hint, do_,
+    pd_scoped_open_d, pd_struct_d, pd_use_d, pd_with_d, pi, plain, priv_, pt_app, pt_at, pt_dict_hint, pt_do,
+    pt_from, pt_hole, pt_lam, pt_lit, pt_pi, pt_quote_, pt_sort, pt_var,
+    pt_var_macro, pub_, sentinel, show_identifier, show_name_path, str, struct_lit,
+    struct_update, term_loc, u32, u64, var, zero,
+    forall,
 }
 use std::list {List.intercalate, List.length}
 // For `HashMap` (the located parser's position table) and the monomorphic
@@ -26,21 +26,21 @@ use std::list {List.intercalate, List.length}
 use std::map {HashMap}
 use llvm::strmap {str_map_empty, str_map_insert, str_map_lookup}
 use lang::parser::lower_parse {
-  ParseLowerCtx, collect_decl_rems, collect_decl_spans, lower_ctx_bare,
-  lower_ctx_bind_all, lower_ctx_locating, lower_parse_decl, lower_parse_decls,
-  lower_parse_term, name_ref_to_string,
+    ParseLowerCtx, collect_decl_rems, collect_decl_spans, lower_ctx_bare,
+    lower_ctx_bind_all, lower_ctx_locating, lower_parse_decl, lower_parse_decls,
+    lower_parse_term, name_ref_to_string,
 }
 use parsec::core {ParseResult, custom, is_empty, parse_error_remaining}
 use lang::parser::op_table {
-  op_char_member, op_chars, op_entry_prec, op_entry_rassoc, op_lookup_entry,
-  op_lookup_prec, op_table,
+    op_char_member, op_chars, op_entry_prec, op_entry_rassoc, op_lookup_entry,
+    op_lookup_prec, op_table,
 }
 use parsec::char_preds {
-  is_ident_char_byte, is_prefix, is_space, is_space_byte,
+    is_ident_char_byte, is_prefix, is_space, is_space_byte,
 }
 use parsec::combinators {
-  alt, alt_fold, bind_parse, delimited_by, many1, map_parse, opt, preceded_by,
-  separated_by, tag, tag_keyword, take_while, take_while_byte, terminated_by,
+    alt, alt_fold, bind_parse, delimited_by, many1, map_parse, opt, preceded_by,
+    separated_by, tag, tag_keyword, take_while, take_while_byte, terminated_by,
 }
 use parsec::number {number}
 use lib::parser::numeric_literal {numeric_literal}
@@ -50,14 +50,14 @@ use lib::parser::identifier {identifier}
 use lib::parser::string {char_literal, raw_string_parse, string_parse}
 use lib::parser::diagnostic {render_parse_error}
 open parsec.core {
-  ParseResult, custom, fail, is_empty, mk, success, tag,
+    ParseResult, custom, fail, is_empty, mk, success, tag,
 }
 open lang.parser.op_table {op_char_member, op_chars, op_lookup_prec, op_table}
 open ParseResult {fail, success}
 
 #[partial]
 def at_least_two (ids : List String) : Bool :=
-	Bool.not (List.is_empty (List.tail ids))
+    Bool.not (List.is_empty (List.tail ids))
 
 /// `separated_by` is genuinely zero-or-more (many other callers rely on
 /// that -- an empty comma-separated list is a legitimate result for
@@ -78,17 +78,17 @@ def at_least_two (ids : List String) : Bool :=
 /// a parse error at the actual point of confusion. Requiring at least
 /// one identifier here turns that into a loud, immediate parse error.
 def dotted_identifier (input : String) : ParseResult (List String) :=
-	dotted_identifier_require_nonempty (separated_by (tag ".") identifier input) input
+    dotted_identifier_require_nonempty (separated_by (tag ".") identifier input) input
 
 #[partial]
 def dotted_identifier_require_nonempty (r : ParseResult (List String)) (orig : String) : ParseResult (List String) :=
-	match r {
-		success rem ids =>
-			if List.is_empty ids
-			then fail (ParseError.custom "expected an identifier" orig)
-			else success rem ids,
-		fail e => fail e,
-	}
+    match r {
+        success rem ids =>
+            if List.is_empty ids
+            then fail (ParseError.custom "expected an identifier" orig)
+            else success rem ids,
+        fail e => fail e,
+    }
 
 /// Join a list of identifiers into a dotted string (e.g., ["Unit", "unit"] -> "Unit.unit")
 ///
@@ -124,13 +124,13 @@ def module_path_to_string (mp : ModulePath) : String := match mp {
 
 #[partial]
 def name_path_variable (input : String) : ParseResult NameRef :=
-        match dotted_identifier input {
-                success rem ids =>
-                        if at_least_two ids
-                        then success rem (NameRef.nnp (NamePath.mk (List.map Identifier.id ids)))
-                        else fail (ParseError.custom "not a dotted path" rem),
-                fail e => fail e
-        }
+    match dotted_identifier input {
+        success rem ids =>
+            if at_least_two ids
+            then success rem (NameRef.nnp (NamePath.mk (List.map Identifier.id ids)))
+            else fail (ParseError.custom "not a dotted path" rem),
+        fail e => fail e
+    }
 
 /// A module-qualified term reference, `std::list::List.cons`:
 /// `ident ("::" ident)+ ("." ident)*`, split at the LAST `::` --
@@ -140,121 +140,121 @@ def name_path_variable (input : String) : ParseResult NameRef :=
 /// Rust host's `qualified_name_expression` (rust/core/src/parser.rs).
 #[partial]
 def qualified_variable (input : String) : ParseResult NameRef :=
-	match separated_by (tag "::") identifier input {
-		success rem ids =>
-			if at_least_two ids
-			then qualified_dotted_tail rem ids List.empty
-			else fail (ParseError.custom "not a qualified name" rem),
-		fail e => fail e
-	}
+    match separated_by (tag "::") identifier input {
+        success rem ids =>
+            if at_least_two ids
+            then qualified_dotted_tail rem ids List.empty
+            else fail (ParseError.custom "not a qualified name" rem),
+        fail e => fail e
+    }
 
 /// The `("." ident)*` tail after the `::`-chain: prepended onto `acc`,
 /// reversed once at the end (lists are singly linked).
 #[partial]
 def qualified_dotted_tail (rem : String) (ids : List String) (acc : List String) : ParseResult NameRef :=
-	match tag "." rem {
-		success dot_rem _ => match identifier dot_rem {
-			success rem2 id => qualified_dotted_tail rem2 ids (List.cons id acc),
-			fail e => fail e
-		},
-		fail _ => qualified_finish rem ids (list_reverse acc)
-	}
+    match tag "." rem {
+        success dot_rem _ => match identifier dot_rem {
+            success rem2 id => qualified_dotted_tail rem2 ids (List.cons id acc),
+            fail e => fail e
+        },
+        fail _ => qualified_finish rem ids (list_reverse acc)
+    }
 
 /// Split the `::`-chain at its last segment: the head is the module
 /// half, the last segment leads the name half (joined by the dotted
 /// tail collected by `qualified_dotted_tail`).
 #[partial]
 def qualified_finish (rem : String) (ids : List String) (tail : List String) : ParseResult NameRef :=
-	match list_reverse ids {
-		List.cons last_id rev_init =>
-			let module_part : ModulePath := ModulePath.mk (List.map Identifier.id (list_reverse rev_init)) in
-			let name_ids : List String := List.cons last_id tail in
-			let name_part : NamePath := NamePath.mk (List.map Identifier.id name_ids) in
-			// This is the ONLY use of the `QualifiedName` import. The
-			// host's unused-import analysis does not count a
-			// module-qualified CONSTRUCTOR path as a reference, so it
-			// reports `unused import 'QualifiedName'` against line 3 and
-			// advises removing it -- do not: the file stops typechecking.
-			success rem (NameRef.nqn (QualifiedName.mk module_part name_part)),
-		List.empty => fail (ParseError.custom "not a qualified name" rem)
-	}
+    match list_reverse ids {
+        List.cons last_id rev_init =>
+            let module_part : ModulePath := ModulePath.mk (List.map Identifier.id (list_reverse rev_init)) in
+            let name_ids : List String := List.cons last_id tail in
+            let name_part : NamePath := NamePath.mk (List.map Identifier.id name_ids) in
+            // This is the ONLY use of the `QualifiedName` import. The
+            // host's unused-import analysis does not count a
+            // module-qualified CONSTRUCTOR path as a reference, so it
+            // reports `unused import 'QualifiedName'` against line 3 and
+            // advises removing it -- do not: the file stops typechecking.
+            success rem (NameRef.nqn (QualifiedName.mk module_part name_part)),
+        List.empty => fail (ParseError.custom "not a qualified name" rem)
+    }
 
 #[partial]
 def do_stmts_tail (input : String) : String :=
-	do_stmts_tail_sp (take_while_byte is_space_byte input) input
+    do_stmts_tail_sp (take_while_byte is_space_byte input) input
 
 #[partial]
 def do_stmts_tail_sp (r : ParseResult String) (orig : String) : String :=
-	match r {
-		success rem _ => do_stmts_tail_semi (tag ";" rem) rem orig,
-		fail _ => orig
-	}
+    match r {
+        success rem _ => do_stmts_tail_semi (tag ";" rem) rem orig,
+        fail _ => orig
+    }
 
 #[partial]
 def do_stmts_tail_semi (r : ParseResult String) (after_sp : String) (orig : String) : String :=
-	match r {
-		success rem _ => skip_docstrings (skip_spaces rem),
-		fail _ => after_sp
-	}
+    match r {
+        success rem _ => skip_docstrings (skip_spaces rem),
+        fail _ => after_sp
+    }
 
 // `tag_keyword`, not `tag`: a bare `is_prefix` check on "return" wrongly
 // matches an ordinary identifier like `return_foo` too (`return` + `_foo`
 // left as if it were a separate expression) -- see `tag_keyword`'s own
 // doc comment for the confirmed real bug this caused.
 #[partial]
-def do_stmt_return (input: String) : ParseResult DoStmt :=
+def do_stmt_return (input : String) : ParseResult DoStmt :=
     do_stmt_ret_kw (tag_keyword "return" input) input
 
 #[partial]
-def do_stmt_ret_kw (r: ParseResult String) (orig: String) : ParseResult DoStmt :=
+def do_stmt_ret_kw (r : ParseResult String) (orig : String) : ParseResult DoStmt :=
     match r {
         success rem _ => do_stmt_ret_expr (expression (skip_docstrings (skip_spaces rem))),
         fail _ => do_stmt_try_let (tag "let" (skip_spaces orig)) orig
     }
 
 #[partial]
-def do_stmt_ret_expr (r: ParseResult ParseTerm) : ParseResult DoStmt :=
+def do_stmt_ret_expr (r : ParseResult ParseTerm) : ParseResult DoStmt :=
     match r {
         success rem value => success rem (DoStmt.ret_s value),
         fail e => fail e
     }
 
 #[partial]
-def do_stmt_try_let (r: ParseResult String) (orig: String) : ParseResult DoStmt :=
+def do_stmt_try_let (r : ParseResult String) (orig : String) : ParseResult DoStmt :=
     match r {
         success rem _ => do_stmt_let_name (identifier (skip_spaces rem)),
         fail _ => do_stmt_expr (expression (skip_docstrings (skip_spaces orig)))
     }
 
 #[partial]
-def do_stmt_let_name (r: ParseResult String) : ParseResult DoStmt :=
+def do_stmt_let_name (r : ParseResult String) : ParseResult DoStmt :=
     match r {
         success rem name => do_stmt_let_kind rem (Identifier.id name),
         fail e => fail e
     }
 
 #[partial]
-def do_stmt_let_kind (input: String) (name: Identifier) : ParseResult DoStmt :=
+def do_stmt_let_kind (input : String) (name : Identifier) : ParseResult DoStmt :=
     do_stmt_let_kind_try (tag ":=" (skip_spaces input)) name input
 
 #[partial]
-def do_stmt_let_kind_try (r: ParseResult String) (name: Identifier) (orig: String) : ParseResult DoStmt :=
+def do_stmt_let_kind_try (r : ParseResult String) (name : Identifier) (orig : String) : ParseResult DoStmt :=
     match r {
-        success rem _ => do_stmt_let_value (expression (skip_docstrings (skip_spaces rem))) name pt_hole ,
+        success rem _ => do_stmt_let_value (expression (skip_docstrings (skip_spaces rem))) name pt_hole,
         fail _ => do_stmt_bind_arrow (tag "<-" (skip_spaces orig)) name orig
     }
 
 #[partial]
-def do_stmt_let_value (r: ParseResult ParseTerm) (name: Identifier) (typ: ParseTerm) : ParseResult DoStmt :=
+def do_stmt_let_value (r : ParseResult ParseTerm) (name : Identifier) (typ : ParseTerm) : ParseResult DoStmt :=
     match r {
         success rem value => success rem (DoStmt.let_s name typ value),
         fail e => fail e
     }
 
 #[partial]
-def do_stmt_bind_arrow (r: ParseResult String) (name: Identifier) (orig: String) : ParseResult DoStmt :=
+def do_stmt_bind_arrow (r : ParseResult String) (name : Identifier) (orig : String) : ParseResult DoStmt :=
     match r {
-        success rem _ => do_stmt_bind_value (expression (skip_docstrings (skip_spaces rem))) name pt_hole ,
+        success rem _ => do_stmt_bind_value (expression (skip_docstrings (skip_spaces rem))) name pt_hole,
         fail _ => do_stmt_let_try_type (tag ":" (skip_spaces orig)) name orig
     }
 
@@ -265,53 +265,53 @@ def do_stmt_bind_arrow (r: ParseResult String) (name: Identifier) (orig: String)
 // own type (`Term.hole` when unannotated -- the two call sites above --
 // or the real parsed type here). `desugar_do_inner` uses it directly.
 #[partial]
-def do_stmt_let_try_type (r: ParseResult String) (name: Identifier) (orig: String) : ParseResult DoStmt :=
+def do_stmt_let_try_type (r : ParseResult String) (name : Identifier) (orig : String) : ParseResult DoStmt :=
     match r {
         success rem _ => do_stmt_let_typed (type_expression rem) name orig,
         fail _ => fail (ParseError.custom "expected := or <- after let in do block" orig)
     }
 
 #[partial]
-def do_stmt_let_typed (r: ParseResult ParseTerm) (name: Identifier) (orig: String) : ParseResult DoStmt :=
+def do_stmt_let_typed (r : ParseResult ParseTerm) (name : Identifier) (orig : String) : ParseResult DoStmt :=
     match r {
         success rem typ => do_stmt_let_typed_kind (tag ":=" (skip_spaces rem)) name typ rem,
         fail e => fail e
     }
 
 #[partial]
-def do_stmt_let_typed_kind (r: ParseResult String) (name: Identifier) (typ: ParseTerm) (orig: String) : ParseResult DoStmt :=
+def do_stmt_let_typed_kind (r : ParseResult String) (name : Identifier) (typ : ParseTerm) (orig : String) : ParseResult DoStmt :=
     match r {
         success rem _ => do_stmt_let_value (expression (skip_docstrings (skip_spaces rem))) name typ,
         fail _ => do_stmt_let_typed_bind (tag "<-" (skip_spaces orig)) name typ orig
     }
 
 #[partial]
-def do_stmt_let_typed_bind (r: ParseResult String) (name: Identifier) (typ: ParseTerm) (orig: String) : ParseResult DoStmt :=
+def do_stmt_let_typed_bind (r : ParseResult String) (name : Identifier) (typ : ParseTerm) (orig : String) : ParseResult DoStmt :=
     match r {
         success rem _ => do_stmt_bind_value (expression (skip_docstrings (skip_spaces rem))) name typ,
         fail _ => fail (ParseError.custom "expected := or <- after let in do block" orig)
     }
 
 #[partial]
-def do_stmt_bind_value (r: ParseResult ParseTerm) (name: Identifier) (typ: ParseTerm) : ParseResult DoStmt :=
+def do_stmt_bind_value (r : ParseResult ParseTerm) (name : Identifier) (typ : ParseTerm) : ParseResult DoStmt :=
     match r {
         success rem value => success rem (DoStmt.bind_s name typ value),
         fail e => fail e
     }
 
 #[partial]
-def do_stmt_expr (r: ParseResult ParseTerm) : ParseResult DoStmt :=
+def do_stmt_expr (r : ParseResult ParseTerm) : ParseResult DoStmt :=
     match r {
         success rem value => success rem (DoStmt.expr_s value),
         fail e => fail e
     }
 
 #[partial]
-def do_stmts (input: String) : ParseResult (List DoStmt) :=
+def do_stmts (input : String) : ParseResult (List DoStmt) :=
     do_stmts_check_end (tag "}" (skip_docstrings (skip_spaces input))) input
 
 #[partial]
-def do_stmts_check_end (r: ParseResult String) (orig: String) : ParseResult (List DoStmt) :=
+def do_stmts_check_end (r : ParseResult String) (orig : String) : ParseResult (List DoStmt) :=
     match r {
         success rem _ =>
             let empty : List DoStmt := List.empty in
@@ -320,46 +320,46 @@ def do_stmts_check_end (r: ParseResult String) (orig: String) : ParseResult (Lis
     }
 
 #[partial]
-def do_stmts_first (r: ParseResult DoStmt) (orig: String) : ParseResult (List DoStmt) :=
+def do_stmts_first (r : ParseResult DoStmt) (orig : String) : ParseResult (List DoStmt) :=
     match r {
         success rem stmt => do_stmts_next2 (do_stmts (do_stmts_tail rem)) stmt,
         fail e => fail e
     }
 
 #[partial]
-def do_stmts_next2 (r: ParseResult (List DoStmt)) (first: DoStmt) : ParseResult (List DoStmt) :=
+def do_stmts_next2 (r : ParseResult (List DoStmt)) (first : DoStmt) : ParseResult (List DoStmt) :=
     match r {
         success rem rest => success rem (List.cons first rest),
         fail e => fail e
     }
 
 #[partial]
-def do_parser (input: String) : ParseResult ParseTerm :=
+def do_parser (input : String) : ParseResult ParseTerm :=
     do_parser_kw (tag "do" input)
 
 #[partial]
-def do_parser_kw (r: ParseResult String) : ParseResult ParseTerm :=
+def do_parser_kw (r : ParseResult String) : ParseResult ParseTerm :=
     match r {
         success rem _ => do_parser_open (tag "{" (skip_spaces rem)),
         fail e => fail e
     }
 
 #[partial]
-def do_parser_open (r: ParseResult String) : ParseResult ParseTerm :=
+def do_parser_open (r : ParseResult String) : ParseResult ParseTerm :=
     match r {
         success rem _ => do_parser_stmts (do_stmts rem),
         fail e => fail e
     }
 
 #[partial]
-def do_parser_stmts (r: ParseResult (List DoStmt)) : ParseResult ParseTerm :=
+def do_parser_stmts (r : ParseResult (List DoStmt)) : ParseResult ParseTerm :=
     match r {
         success rem stmts => do_parser_desugar rem stmts,
         fail e => fail e
     }
 
 #[partial]
-def do_parser_desugar (rem: String) (stmts: List DoStmt) : ParseResult ParseTerm :=
+def do_parser_desugar (rem : String) (stmts : List DoStmt) : ParseResult ParseTerm :=
     success rem (pt_do stmts)
 
 // ─── `return term` -- shorthand for `do { return term }` ───────────────
@@ -396,18 +396,18 @@ def do_parser_desugar (rem: String) (stmts: List DoStmt) : ParseResult ParseTerm
 // `return_foo 41` (an ordinary call to a def literally named
 // `return_foo`) as the keyword `return` applied to `_foo 41`.
 #[partial]
-def return_shorthand_parser (input: String) : ParseResult ParseTerm :=
+def return_shorthand_parser (input : String) : ParseResult ParseTerm :=
     return_shorthand_kw (tag_keyword "return" input)
 
 #[partial]
-def return_shorthand_kw (r: ParseResult String) : ParseResult ParseTerm :=
+def return_shorthand_kw (r : ParseResult String) : ParseResult ParseTerm :=
     match r {
         success rem _ => return_shorthand_value (expression (skip_docstrings (skip_spaces rem))),
         fail e => fail e
     }
 
 #[partial]
-def return_shorthand_value (r: ParseResult ParseTerm) : ParseResult ParseTerm :=
+def return_shorthand_value (r : ParseResult ParseTerm) : ParseResult ParseTerm :=
     match r {
         success rem value => success rem (pt_do (List.cons (DoStmt.ret_s value) List.empty)),
         fail e => fail e
@@ -415,45 +415,45 @@ def return_shorthand_value (r: ParseResult ParseTerm) : ParseResult ParseTerm :=
 
 #[partial]
 def is_not_newline (c : String) : Bool :=
-	if String.beq c "\n" then false
-	else true
+    if String.beq c "\n" then false
+    else true
 
 #[partial]
 def is_not_close_curly (c : String) : Bool :=
-	if String.beq c "}" then false
-	else true
+    if String.beq c "}" then false
+    else true
 
 #[partial]
 def is_op_char (c : String) : Bool :=
-	op_char_member c op_chars
+    op_char_member c op_chars
 
 #[partial]
 def op_check (s : String) (rem : String) : ParseResult String :=
-	if is_empty s
-	then fail (ParseError.custom "expected operator" rem)
-	else if I64.beq 0 (op_precedence s)
-		then fail (ParseError.custom "unknown operator" rem)
-		else success rem s
+    if is_empty s
+    then fail (ParseError.custom "expected operator" rem)
+    else if I64.beq 0 (op_precedence s)
+        then fail (ParseError.custom "unknown operator" rem)
+        else success rem s
 
 #[partial]
 def operator_parse (input : String) : ParseResult String :=
-	bind_parse (take_while is_op_char) op_check input
+    bind_parse (take_while is_op_char) op_check input
 
 #[partial]
 def op_precedence (op : String) : I64 :=
-	op_lookup_prec op op_table
+    op_lookup_prec op op_table
 
 #[partial]
 def ids_to_module_path (ids : List String) : ModulePath :=
-	ModulePath.mk (List.map Identifier.id ids)
+    ModulePath.mk (List.map Identifier.id ids)
 
 #[partial]
 def module_path_parser (input : String) : ParseResult ModulePath :=
-	map_parse ids_to_module_path dotted_identifier input
+    map_parse ids_to_module_path dotted_identifier input
 
 #[partial]
 def ids_to_name_path (ids : List String) : NamePath :=
-	NamePath.mk (List.map Identifier.id ids)
+    NamePath.mk (List.map Identifier.id ids)
 
 /// A `.`-joined decl NAME (`open Bool`, `infix (+) := List.add`):
 /// distinct from `module_path_parser` since the qualified-names split
@@ -461,7 +461,7 @@ def ids_to_name_path (ids : List String) : NamePath :=
 /// path).
 #[partial]
 def name_path_parser (input : String) : ParseResult NamePath :=
-	map_parse ids_to_name_path dotted_identifier input
+    map_parse ids_to_name_path dotted_identifier input
 
 /// The separator in a `use` path: `::`, and only `::`. The `.` spelling
 /// was a transition crutch while the corpus migrated file by file; that
@@ -473,26 +473,26 @@ def name_path_parser (input : String) : ParseResult NamePath :=
 /// module path apart from a name path at parse time, with no scope
 /// knowledge needed. See plans/implementations/qualified-names.md.
 def use_path_sep (input : String) : ParseResult String :=
-	tag "::" input
+    tag "::" input
 
 def use_path_identifier (input : String) : ParseResult (List String) :=
-	dotted_identifier_require_nonempty (separated_by use_path_sep identifier input) input
+    dotted_identifier_require_nonempty (separated_by use_path_sep identifier input) input
 
 #[partial]
 def use_path_parser (input : String) : ParseResult ModulePath :=
-	map_parse ids_to_module_path use_path_identifier input
+    map_parse ids_to_module_path use_path_identifier input
 
 // use module.path
 
 #[partial]
 def is_not_bracket (c : String) : Bool :=
-	if String.beq "]" c then false
-	else true
+    if String.beq "]" c then false
+    else true
 
 #[partial]
 def is_not_attr_end (c : String) : Bool :=
-	if String.beq "]" c then false
-	else true
+    if String.beq "]" c then false
+    else true
 
 /// Skip one leading `#[...]` attribute clause (e.g. `#[terminating]`),
 /// if present — a no-op (returns `input` unchanged) otherwise. Reused
@@ -508,25 +508,25 @@ def is_not_attr_end (c : String) : Bool :=
 /// it in the file).
 #[partial]
 def skip_one_attr (input : String) : String :=
-	skip_one_attr_try (tag "#[" input) input
+    skip_one_attr_try (tag "#[" input) input
 
 #[partial]
 def skip_one_attr_try (r : ParseResult String) (orig : String) : String :=
-	match r {
-		success rem _ => skip_one_attr_content (take_while is_not_attr_end rem) orig,
-		fail _ => orig
-	}
+    match r {
+        success rem _ => skip_one_attr_content (take_while is_not_attr_end rem) orig,
+        fail _ => orig
+    }
 
 #[partial]
 def skip_one_attr_content (r : ParseResult String) (orig : String) : String :=
-	match r {
-		success rem _ =>
-			match tag "]" rem {
-				success rem2 _ => skip_spaces rem2,
-				fail _ => orig
-			},
-		fail _ => orig
-	}
+    match r {
+        success rem _ =>
+            match tag "]" rem {
+                success rem2 _ => skip_spaces rem2,
+                fail _ => orig
+            },
+        fail _ => orig
+    }
 
 // ─── Real attribute (`#[name arg1 arg2 ...]`) parsing ──────────────────
 //
@@ -547,90 +547,90 @@ def skip_one_attr_content (r : ParseResult String) (orig : String) : String :=
 /// lower-confidence/less-tested.
 #[partial]
 def attr_arg_parser (input : String) : ParseResult (List AttrArg) :=
-	attr_arg_try_group (tag "[" input) input
+    attr_arg_try_group (tag "[" input) input
 
 /// Rust's `wrap_args`: a single element collapses; anything else (including
 /// no element at all) becomes one group.
 def attr_wrap_args (args : List AttrArg) : AttrArg :=
-	match args {
-		List.cons only rest =>
-			match rest {
-				List.empty => only,
-				_ => AttrArg.group args,
-			},
-		List.empty => AttrArg.group args,
-	}
+    match args {
+        List.cons only rest =>
+            match rest {
+                List.empty => only,
+                _ => AttrArg.group args,
+            },
+        List.empty => AttrArg.group args,
+    }
 
 #[partial]
 def attr_arg_try_group (r : ParseResult String) (orig : String) : ParseResult (List AttrArg) :=
-	match r {
-		success rem _ => attr_arg_group_items (skip_spaces rem) List.empty,
-		fail _ => attr_arg_try_named_block (tag "{" orig) orig
-	}
+    match r {
+        success rem _ => attr_arg_group_items (skip_spaces rem) List.empty,
+        fail _ => attr_arg_try_named_block (tag "{" orig) orig
+    }
 
 #[partial]
 def attr_arg_group_items (input : String) (acc : List AttrArg) : ParseResult (List AttrArg) :=
-	match attr_arg_parser input {
-		success rem items => attr_arg_group_sep (skip_spaces rem) (List.append acc items),
-		fail _ => attr_arg_group_close input acc
-	}
+    match attr_arg_parser input {
+        success rem items => attr_arg_group_sep (skip_spaces rem) (List.append acc items),
+        fail _ => attr_arg_group_close input acc
+    }
 
 #[partial]
 def attr_arg_group_sep (input : String) (acc : List AttrArg) : ParseResult (List AttrArg) :=
-	match tag "," input {
-		success rem _ => attr_arg_group_items (skip_spaces rem) acc,
-		fail _ => attr_arg_group_close input acc
-	}
+    match tag "," input {
+        success rem _ => attr_arg_group_items (skip_spaces rem) acc,
+        fail _ => attr_arg_group_close input acc
+    }
 
 #[partial]
 def attr_arg_group_close (input : String) (items : List AttrArg) : ParseResult (List AttrArg) :=
-	match tag "]" (skip_spaces input) {
-		success rem _ => success rem [AttrArg.group items],
-		fail e => fail (ParseError.custom "expected ] to close attribute arg group" input)
-	}
+    match tag "]" (skip_spaces input) {
+        success rem _ => success rem [AttrArg.group items],
+        fail e => fail (ParseError.custom "expected ] to close attribute arg group" input)
+    }
 
 #[partial]
 def attr_arg_try_named_block (r : ParseResult String) (orig : String) : ParseResult (List AttrArg) :=
-	match r {
-		success rem _ => attr_arg_named_items (skip_spaces rem) List.empty,
-		fail _ => attr_arg_try_bare orig
-	}
+    match r {
+        success rem _ => attr_arg_named_items (skip_spaces rem) List.empty,
+        fail _ => attr_arg_try_bare orig
+    }
 
 #[partial]
 def attr_arg_named_items (input : String) (acc : List AttrArg) : ParseResult (List AttrArg) :=
-	match attr_arg_named_one input {
-		success rem item => attr_arg_named_sep (skip_spaces rem) (List.append acc [item]),
-		fail _ => attr_arg_named_close input acc
-	}
+    match attr_arg_named_one input {
+        success rem item => attr_arg_named_sep (skip_spaces rem) (List.append acc [item]),
+        fail _ => attr_arg_named_close input acc
+    }
 
 #[partial]
 def attr_arg_named_one (input : String) : ParseResult AttrArg :=
-	match identifier input {
-		success rem name => attr_arg_named_val (tag ":=" (skip_spaces rem)) (Identifier.id name),
-		fail e => fail e
-	}
+    match identifier input {
+        success rem name => attr_arg_named_val (tag ":=" (skip_spaces rem)) (Identifier.id name),
+        fail e => fail e
+    }
 
 #[partial]
 def attr_arg_named_val (r : ParseResult String) (name : Identifier) : ParseResult AttrArg :=
-	match r {
-		success rem _ => attr_arg_named_value (attr_arg_parser (skip_spaces rem)) name,
-		fail e => fail e
-	}
+    match r {
+        success rem _ => attr_arg_named_value (attr_arg_parser (skip_spaces rem)) name,
+        fail e => fail e
+    }
 
 /// A named value's own args collapse exactly like Rust's `wrap_args`.
 #[partial]
 def attr_arg_named_value (r : ParseResult (List AttrArg)) (name : Identifier) : ParseResult AttrArg :=
-	match r {
-		success rem args => success rem (AttrArg.named name (attr_wrap_args args)),
-		fail e => fail e
-	}
+    match r {
+        success rem args => success rem (AttrArg.named name (attr_wrap_args args)),
+        fail e => fail e
+    }
 
 #[partial]
 def attr_arg_named_sep (input : String) (acc : List AttrArg) : ParseResult (List AttrArg) :=
-	match tag "," input {
-		success rem _ => attr_arg_named_items (skip_spaces rem) acc,
-		fail _ => attr_arg_named_close input acc
-	}
+    match tag "," input {
+        success rem _ => attr_arg_named_items (skip_spaces rem) acc,
+        fail _ => attr_arg_named_close input acc
+    }
 
 /// A `{name := value, ...}` block FLATTENS its entries onto the enclosing
 /// attribute's arg list, matching the Rust reference's `attr_arg_parser`
@@ -639,25 +639,25 @@ def attr_arg_named_sep (input : String) (acc : List AttrArg) : ParseResult (List
 /// `FieldInfo.attrs`.
 #[partial]
 def attr_arg_named_close (input : String) (items : List AttrArg) : ParseResult (List AttrArg) :=
-	match tag "}" (skip_spaces input) {
-		success rem _ => success rem items,
-		fail e => fail (ParseError.custom "expected } to close attribute named block" input)
-	}
+    match tag "}" (skip_spaces input) {
+        success rem _ => success rem items,
+        fail e => fail (ParseError.custom "expected } to close attribute named block" input)
+    }
 
 #[partial]
 def attr_arg_try_bare (input : String) : ParseResult (List AttrArg) :=
-	attr_arg_try_str (string_parse input) input
+    attr_arg_try_str (string_parse input) input
 
 #[partial]
 def attr_arg_try_str (r : ParseResult ParseTerm) (orig : String) : ParseResult (List AttrArg) :=
-	match r {
-		success rem t =>
-			match term_lit_to_attr_str t {
-				Option.some a => success rem [a],
-				Option.none => attr_arg_try_num (numeric_literal orig) orig,
-			},
-		fail _ => attr_arg_try_num (numeric_literal orig) orig
-	}
+    match r {
+        success rem t =>
+            match term_lit_to_attr_str t {
+                Option.some a => success rem [a],
+                Option.none => attr_arg_try_num (numeric_literal orig) orig,
+            },
+        fail _ => attr_arg_try_num (numeric_literal orig) orig
+    }
 
 /// `string_parse` only ever succeeds with a `Term.lit (Literal.str _)`
 /// shape — but "only ever" is an invariant, not a type, and this is the
@@ -667,79 +667,79 @@ def attr_arg_try_str (r : ParseResult ParseTerm) (orig : String) : ParseResult (
 /// through the parse chain, which fails loudly, rather than converting
 /// something that is not a string.
 def term_lit_to_attr_str (t : ParseTerm) : Option AttrArg :=
-	match t.kind {
-		ParseTermKind.lit l =>
-			match l {
-				ParseLiteral.str s => Option.some (AttrArg.str s),
-				_ => Option.none,
-			},
-		_ => Option.none,
-	}
+    match t.kind {
+        ParseTermKind.lit l =>
+            match l {
+                ParseLiteral.str s => Option.some (AttrArg.str s),
+                _ => Option.none,
+            },
+        _ => Option.none,
+    }
 
 #[partial]
 def attr_arg_try_num (r : ParseResult ParseTerm) (orig : String) : ParseResult (List AttrArg) :=
-	match r {
-		success rem t =>
-			match term_lit_to_attr_num t {
-				Option.some a => success rem [a],
-				Option.none => attr_arg_try_ident (identifier orig),
-			},
-		fail _ => attr_arg_try_ident (identifier orig)
-	}
+    match r {
+        success rem t =>
+            match term_lit_to_attr_num t {
+                Option.some a => success rem [a],
+                Option.none => attr_arg_try_ident (identifier orig),
+            },
+        fail _ => attr_arg_try_ident (identifier orig)
+    }
 
 /// `numeric_literal` only ever succeeds with a `Term.lit (Literal.num _
 /// _)` shape here — see `term_lit_to_attr_str`'s own doc comment.
 def term_lit_to_attr_num (t : ParseTerm) : Option AttrArg :=
-	match t.kind {
-		ParseTermKind.lit l =>
-			match l {
-				ParseLiteral.num n _ => Option.some (AttrArg.num n),
-				_ => Option.none,
-			},
-		_ => Option.none,
-	}
+    match t.kind {
+        ParseTermKind.lit l =>
+            match l {
+                ParseLiteral.num n _ => Option.some (AttrArg.num n),
+                _ => Option.none,
+            },
+        _ => Option.none,
+    }
 
 #[partial]
 def attr_arg_try_ident (r : ParseResult String) : ParseResult (List AttrArg) :=
-	match r {
-		success rem name => success rem [AttrArg.ident (Identifier.id name)],
-		fail e => fail e
-	}
+    match r {
+        success rem name => success rem [AttrArg.ident (Identifier.id name)],
+        fail e => fail e
+    }
 
 /// One `#[name arg1 arg2 ...]` attribute. Mirrors `attribute_parser`
 /// (rust/core/src/parser.rs): `"#["`, the attribute's own name, then zero or
 /// more whitespace-separated args, `"]"`.
 #[partial]
 def attribute_parser (input : String) : ParseResult Attribute :=
-	attribute_open (tag "#[" input)
+    attribute_open (tag "#[" input)
 
 #[partial]
 def attribute_open (r : ParseResult String) : ParseResult Attribute :=
-	match r {
-		success rem _ => attribute_name (identifier (skip_spaces rem)),
-		fail e => fail e
-	}
+    match r {
+        success rem _ => attribute_name (identifier (skip_spaces rem)),
+        fail e => fail e
+    }
 
 #[partial]
 def attribute_name (r : ParseResult String) : ParseResult Attribute :=
-	match r {
-		success rem name => attribute_args (skip_spaces rem) (Identifier.id name) List.empty,
-		fail e => fail e
-	}
+    match r {
+        success rem name => attribute_args (skip_spaces rem) (Identifier.id name) List.empty,
+        fail e => fail e
+    }
 
 #[partial]
 def attribute_args (input : String) (name : Identifier) (acc : List AttrArg) : ParseResult Attribute :=
-	match attr_arg_parser input {
-		success rem args => attribute_args (skip_spaces rem) name (List.append acc args),
-		fail _ => attribute_close input name acc
-	}
+    match attr_arg_parser input {
+        success rem args => attribute_args (skip_spaces rem) name (List.append acc args),
+        fail _ => attribute_close input name acc
+    }
 
 #[partial]
 def attribute_close (input : String) (name : Identifier) (args : List AttrArg) : ParseResult Attribute :=
-	match tag "]" (skip_spaces input) {
-		success rem _ => success rem (Attribute.mk name args),
-		fail e => fail (ParseError.custom "expected ] to close attribute" input)
-	}
+    match tag "]" (skip_spaces input) {
+        success rem _ => success rem (Attribute.mk name args),
+        fail e => fail (ParseError.custom "expected ] to close attribute" input)
+    }
 
 /// `#![mote { name := "x", deps := [init, std] }]` -- the file-level
 /// INNER attribute, i.e. `attribute_parser` with a `!` after the `#`.
@@ -759,54 +759,53 @@ def attribute_close (input : String) (name : Identifier) (args : List AttrArg) :
 /// parser-level rejection here would silently truncate the file.
 #[partial]
 def mote_attr_parser (input : String) : ParseResult ParseDecl :=
-	mote_attr_decl (attribute_open (tag "#![" input))
+    mote_attr_decl (attribute_open (tag "#![" input))
 
 #[partial]
 def mote_attr_decl (r : ParseResult Attribute) : ParseResult ParseDecl :=
-	match r {
-		success rem attr => success rem (pd_mote_d attr),
-		fail e => fail e
-	}
+    match r {
+        success rem attr => success rem (pd_mote_d attr),
+        fail e => fail e
+    }
 
 /// Zero or more stacked attributes ahead of a declaration (`#[a]\n#[b]\n
 /// def ...`). Mirrors `opt_attributes` (rust/core/src/parser.rs).
 #[partial]
 def opt_attributes (input : String) : ParseResult (List Attribute) :=
-	opt_attributes_go (skip_spaces input) List.empty
+    opt_attributes_go (skip_spaces input) List.empty
 
 #[partial]
 def opt_attributes_go (input : String) (acc : List Attribute) : ParseResult (List Attribute) :=
-	match attribute_parser input {
-		success rem attr => opt_attributes_go (skip_spaces rem) (List.cons attr acc),
-		fail _ => success input (list_reverse acc)
-	}
+    match attribute_parser input {
+        success rem attr => opt_attributes_go (skip_spaces rem) (List.cons attr acc),
+        fail _ => success input (list_reverse acc)
+    }
 
 #[partial]
 def lam_params (params : List ParseParam) (body : ParseTerm) : ParseTerm :=
-	let rev : List ParseParam := list_reverse params in
-	lam_params_loop rev body
+    let rev : List ParseParam := list_reverse params in
+    lam_params_loop rev body
 
 #[partial]
 def lam_params_loop (params : List ParseParam) (body : ParseTerm) : ParseTerm :=
-	match params {
-		List.cons p rest =>
-			match p {
-				ParseParam.mk name type_ mult default _attrs =>
-					lam_params_loop rest (pt_lam name type_ body)
-			},
-		List.empty => body
-	}
+    match params {
+        List.cons p rest =>
+            match p {
+                ParseParam.mk name type_ mult default _attrs =>
+                    lam_params_loop rest (pt_lam name type_ body)
+            },
+        List.empty => body
+    }
 
 #[partial]
 def def_to_decl (body : ParseTerm) (name : Identifier) (typ : ParseTerm) (vis : Visibility) (params : List ParseParam) : ParseDecl :=
-	let empty_constraints : List TypeConstraint := List.empty in
-	let empty_attrs : List Attribute := List.empty in
-	pd_def_d  (ParseDef.mk (NamePath.mk (List.cons name List.empty)) typ body empty_constraints empty_attrs vis params)
+    let empty_constraints : List TypeConstraint := List.empty in
+    let empty_attrs : List Attribute := List.empty in
+    pd_def_d (ParseDef.mk (NamePath.mk (List.cons name List.empty)) typ body empty_constraints empty_attrs vis params)
 
 // --- Canonical declaration parsers (de Bruijn Term) ---
 
 // Helper: build de Bruijn binding context from param names (reversed = innermost first).
-
 
 // ─── `def` parameter destructuring (`plans/implementations/
 // struct-field-destructuring.md`'s Phase 8) ─────────────────────────────
@@ -822,25 +821,24 @@ def def_to_decl (body : ParseTerm) (name : Identifier) (typ : ParseTerm) (vis : 
 
 #[partial]
 def parsed_param_as_param (pp : ParsedParam) : ParseParam :=
-	match pp {
-		ParsedParam.plain p => p,
-		ParsedParam.destructured p _fp => p,
-	}
+    match pp {
+        ParsedParam.plain p => p,
+        ParsedParam.destructured p _fp => p,
+    }
 
 #[partial]
 def parsed_params_as_params (pps : List ParsedParam) : List ParseParam :=
-	match pps {
-		List.cons pp rest => List.cons (parsed_param_as_param pp) (parsed_params_as_params rest),
-		List.empty => List.empty
-	}
+    match pps {
+        List.cons pp rest => List.cons (parsed_param_as_param pp) (parsed_params_as_params rest),
+        List.empty => List.empty
+    }
 
 #[partial]
 def plain_params_as_parsed (params : List ParseParam) : List ParsedParam :=
-	match params {
-		List.cons p rest => List.cons (ParsedParam.plain p) (plain_params_as_parsed rest),
-		List.empty => List.empty
-	}
-
+    match params {
+        List.cons p rest => List.cons (ParsedParam.plain p) (plain_params_as_parsed rest),
+        List.empty => List.empty
+    }
 
 /// `lam_params`, but wraps a `destructured` param's body in one extra
 /// `match` first -- same shape as the Rust reference's own `def_parser`/
@@ -860,34 +858,34 @@ def plain_params_as_parsed (params : List ParseParam) : List ParsedParam :=
 /// would be -- no reindexing needed at this point either.
 #[partial]
 def lam_parsed_params (pps : List ParsedParam) (body : ParseTerm) : ParseTerm :=
-	let rev : List ParsedParam := list_reverse pps in
-	lam_parsed_params_loop rev body
+    let rev : List ParsedParam := list_reverse pps in
+    lam_parsed_params_loop rev body
 
 #[partial]
 def lam_parsed_params_loop (pps : List ParsedParam) (body : ParseTerm) : ParseTerm :=
-	match pps {
-		List.cons pp rest =>
-			match pp {
-				ParsedParam.plain p =>
-					match p {
-						ParseParam.mk name type_ mult default_ attrs =>
-							lam_parsed_params_loop rest (pt_lam name type_ body)
-					},
-				ParsedParam.destructured p fp =>
-					match p {
-						ParseParam.mk name type_ mult default_ attrs =>
-							let bare_name : Identifier := Identifier.id "" in
-							let binders : List Identifier := field_pattern_binder_names fp in
-							let some_fp : Option FieldPattern := Option.some fp in
-							let case_ : ParseMatchCase := ParseMatchCase.mk bare_name binders body some_fp in
-							let cases : List ParseMatchCase := List.cons case_ List.empty in
-							let scrutinee : ParseTerm := pt_var (NameRef.nid name) in
-							let wrapped : ParseTerm := pt_lit  (ParseLiteral.match_ scrutinee cases) in
-							lam_parsed_params_loop rest (pt_lam name type_ wrapped)
-					},
-			},
-		List.empty => body
-	}
+    match pps {
+        List.cons pp rest =>
+            match pp {
+                ParsedParam.plain p =>
+                    match p {
+                        ParseParam.mk name type_ mult default_ attrs =>
+                            lam_parsed_params_loop rest (pt_lam name type_ body)
+                    },
+                ParsedParam.destructured p fp =>
+                    match p {
+                        ParseParam.mk name type_ mult default_ attrs =>
+                            let bare_name : Identifier := Identifier.id "" in
+                            let binders : List Identifier := field_pattern_binder_names fp in
+                            let some_fp : Option FieldPattern := Option.some fp in
+                            let case_ : ParseMatchCase := ParseMatchCase.mk bare_name binders body some_fp in
+                            let cases : List ParseMatchCase := List.cons case_ List.empty in
+                            let scrutinee : ParseTerm := pt_var (NameRef.nid name) in
+                            let wrapped : ParseTerm := pt_lit (ParseLiteral.match_ scrutinee cases) in
+                            lam_parsed_params_loop rest (pt_lam name type_ wrapped)
+                    },
+            },
+        List.empty => body
+    }
 
 // Shared `{ ... }` brace-list helpers for `use`/`open` filters. `brace_open`
 // consumes `{` plus any following whitespace so the item parser starts
@@ -895,22 +893,22 @@ def lam_parsed_params_loop (pps : List ParsedParam) (body : ParseTerm) : ParseTe
 // the item/separator parsers don't skip trailing whitespace themselves.
 
 def brace_open (input : String) : ParseResult String :=
-	match tag "{" input {
-		success rem out => success (skip_spaces rem) out,
-		fail e => fail e
-	}
+    match tag "{" input {
+        success rem out => success (skip_spaces rem) out,
+        fail e => fail e
+    }
 
 def brace_close (input : String) : ParseResult String :=
-	tag "}" (skip_spaces input)
+    tag "}" (skip_spaces input)
 
 def brace_sep (input : String) : ParseResult String :=
-	match tag "," (skip_spaces input) {
-		success rem out => success (skip_spaces rem) out,
-		fail e => fail e
-	}
+    match tag "," (skip_spaces input) {
+        success rem out => success (skip_spaces rem) out,
+        fail e => fail e
+    }
 
 def as_kw (input : String) : ParseResult String :=
-	tag "as" (skip_spaces input)
+    tag "as" (skip_spaces input)
 
 // use module.path { items }
 //
@@ -923,14 +921,14 @@ def as_kw (input : String) : ParseResult String :=
 
 #[partial]
 def use_brace_item (input : String) : ParseResult UseItem :=
-	alt_fold [use_brace_item_glob, use_brace_item_sub_rename, use_brace_item_sub,
-	          use_brace_item_rename, use_brace_item_name] input
+    alt_fold [use_brace_item_glob, use_brace_item_sub_rename, use_brace_item_sub,
+        use_brace_item_rename, use_brace_item_name] input
 
 def use_brace_item_glob (input : String) : ParseResult UseItem :=
-	match tag "*" input {
-		success rem _ => success rem UseItem.use_glob,
-		fail e => fail e
-	}
+    match tag "*" input {
+        success rem _ => success rem UseItem.use_glob,
+        fail e => fail e
+    }
 
 /// The name position of a `use Module { ... }` item: an ordinary
 /// identifier, or a `.`-separated dotted SPELLING (`List.length`) naming a
@@ -946,120 +944,120 @@ def use_brace_item_glob (input : String) : ParseResult UseItem :=
 /// `Sub.x` on the name arm and `Sub {x}` on the sub-module arm.
 #[partial]
 def use_brace_item_name_dotted (input : String) : ParseResult String :=
-	map_parse join_dotted_identifiers dotted_identifier input
+    map_parse join_dotted_identifiers dotted_identifier input
 
 def use_brace_item_name (input : String) : ParseResult UseItem :=
-	match use_brace_item_name_dotted input {
-		success rem name => success rem (UseItem.use_name (Identifier.id name)),
-		fail e => fail e
-	}
+    match use_brace_item_name_dotted input {
+        success rem name => success rem (UseItem.use_name (Identifier.id name)),
+        fail e => fail e
+    }
 
 #[partial]
 def use_brace_item_rename (input : String) : ParseResult UseItem :=
-	match use_brace_item_name_dotted input {
-		success rem name => use_brace_item_rename_alias name rem,
-		fail e => fail e
-	}
+    match use_brace_item_name_dotted input {
+        success rem name => use_brace_item_rename_alias name rem,
+        fail e => fail e
+    }
 
 def use_brace_item_rename_alias (name : String) (input : String) : ParseResult UseItem :=
-	match as_kw (skip_spaces input) {
-		success rem _ => match identifier (skip_spaces rem) {
-			success rem2 alias => success rem2 (UseItem.use_rename (Identifier.id name) (Identifier.id alias)),
-			fail e => fail e
-		},
-		fail e => fail e
-	}
+    match as_kw (skip_spaces input) {
+        success rem _ => match identifier (skip_spaces rem) {
+            success rem2 alias => success rem2 (UseItem.use_rename (Identifier.id name) (Identifier.id alias)),
+            fail e => fail e
+        },
+        fail e => fail e
+    }
 
 #[partial]
 def use_brace_item_sub (input : String) : ParseResult UseItem :=
-	match identifier input {
-		success rem name => use_brace_item_sub_items name rem,
-		fail e => fail e
-	}
+    match identifier input {
+        success rem name => use_brace_item_sub_items name rem,
+        fail e => fail e
+    }
 
 #[partial]
 def use_brace_item_sub_items (name : String) (input : String) : ParseResult UseItem :=
-	match use_brace_items (skip_spaces input) {
-		success rem items => success rem (UseItem.use_sub (Identifier.id name) items),
-		fail e => fail e
-	}
+    match use_brace_items (skip_spaces input) {
+        success rem items => success rem (UseItem.use_sub (Identifier.id name) items),
+        fail e => fail e
+    }
 
 #[partial]
 def use_brace_item_sub_rename (input : String) : ParseResult UseItem :=
-	match identifier input {
-		success rem name => use_brace_item_sub_rename_alias name rem,
-		fail e => fail e
-	}
+    match identifier input {
+        success rem name => use_brace_item_sub_rename_alias name rem,
+        fail e => fail e
+    }
 
 #[partial]
 def use_brace_item_sub_rename_alias (name : String) (input : String) : ParseResult UseItem :=
-	match as_kw (skip_spaces input) {
-		success rem _ => match identifier (skip_spaces rem) {
-			success rem2 alias => use_brace_item_sub_rename_items name alias rem2,
-			fail e => fail e
-		},
-		fail e => fail e
-	}
+    match as_kw (skip_spaces input) {
+        success rem _ => match identifier (skip_spaces rem) {
+            success rem2 alias => use_brace_item_sub_rename_items name alias rem2,
+            fail e => fail e
+        },
+        fail e => fail e
+    }
 
 #[partial]
 def use_brace_item_sub_rename_items (name : String) (alias : String) (input : String) : ParseResult UseItem :=
-	match use_brace_items (skip_spaces input) {
-		success rem items => success rem (UseItem.use_sub_rename (Identifier.id name) (Identifier.id alias) items),
-		fail e => fail e
-	}
+    match use_brace_items (skip_spaces input) {
+        success rem items => success rem (UseItem.use_sub_rename (Identifier.id name) (Identifier.id alias) items),
+        fail e => fail e
+    }
 
 #[partial]
 def use_brace_items (input : String) : ParseResult (List UseItem) :=
-	delimited_by brace_open (separated_by brace_sep use_brace_item) brace_close input
+    delimited_by brace_open (separated_by brace_sep use_brace_item) brace_close input
 
 def use_brace_filter (input : String) : ParseResult UseFilter :=
-	map_parse UseFilter.use_items use_brace_items input
+    map_parse UseFilter.use_items use_brace_items input
 
 /// Optional `{ items }` filter after `use Module`. Absent braces yield
 /// `UseFilter.use_bare` (deprecated bare use) without failing the parse.
 def use_opt_filter (input : String) : ParseResult UseFilter :=
-	let after_ws : String := skip_spaces input in
-	match use_brace_filter after_ws {
-		success rem filter => success rem filter,
-		fail e => success after_ws UseFilter.use_bare
-	}
+    let after_ws : String := skip_spaces input in
+    match use_brace_filter after_ws {
+        success rem filter => success rem filter,
+        fail e => success after_ws UseFilter.use_bare
+    }
 
 /// `use` has its own binary `pub use` handling rather than the shared
 /// `Visibility` type (there's no `priv use` form) — an optional `pub `
 /// prefix directly before the `use` keyword.
 #[partial]
 def use_parser (input : String) : ParseResult ParseDecl :=
-	use_try_pub (tag "pub" input) input
+    use_try_pub (tag "pub" input) input
 
 #[partial]
 def use_try_pub (r : ParseResult String) (orig : String) : ParseResult ParseDecl :=
-	match r {
-		success rem _ => use_pub_require_ws rem orig,
-		fail _ => use_kw (tag "use" orig) false
-	}
+    match r {
+        success rem _ => use_pub_require_ws rem orig,
+        fail _ => use_kw (tag "use" orig) false
+    }
 
 #[partial]
 def use_pub_require_ws (rem : String) (orig : String) : ParseResult ParseDecl :=
-	match ws1 rem {
-		success rem2 _ => use_kw (tag "use" rem2) true,
-		fail _ => use_kw (tag "use" orig) false
-	}
+    match ws1 rem {
+        success rem2 _ => use_kw (tag "use" rem2) true,
+        fail _ => use_kw (tag "use" orig) false
+    }
 
 #[partial]
 def use_kw (r : ParseResult String) (public : Bool) : ParseResult ParseDecl :=
-	match r {
-		success rem _ => match use_path_parser (skip_spaces rem) {
-			success rem2 path => use_after_path path public rem2,
-			fail e => fail e
-		},
-		fail e => fail e
-	}
+    match r {
+        success rem _ => match use_path_parser (skip_spaces rem) {
+            success rem2 path => use_after_path path public rem2,
+            fail e => fail e
+        },
+        fail e => fail e
+    }
 
 def use_after_path (path : ModulePath) (public : Bool) (input : String) : ParseResult ParseDecl :=
-	match use_opt_filter input {
-		success rem filter => success rem (pd_use_d  path filter public),
-		fail e => fail e
-	}
+    match use_opt_filter input {
+        success rem filter => success rem (pd_use_d path filter public),
+        fail e => fail e
+    }
 
 // open module.path [{names}] [in decl]
 //
@@ -1069,20 +1067,20 @@ def use_after_path (path : ModulePath) (public : Bool) (input : String) : ParseR
 // open apply only to that one wrapped declaration.
 
 def open_names (input : String) : ParseResult (List Identifier) :=
-	map_parse (List.map Identifier.id) (separated_by brace_sep identifier) input
+    map_parse (List.map Identifier.id) (separated_by brace_sep identifier) input
 
 def open_filter_only (input : String) : ParseResult OpenFilter :=
-	map_parse OpenFilter.open_only (delimited_by brace_open open_names brace_close) input
+    map_parse OpenFilter.open_only (delimited_by brace_open open_names brace_close) input
 
 def open_opt_filter (input : String) : ParseResult OpenFilter :=
-	let after_ws : String := skip_spaces input in
-	match open_filter_only after_ws {
-		success rem filter => success rem filter,
-		fail e => success after_ws OpenFilter.open_all
-	}
+    let after_ws : String := skip_spaces input in
+    match open_filter_only after_ws {
+        success rem filter => success rem filter,
+        fail e => success after_ws OpenFilter.open_all
+    }
 
 def in_kw (input : String) : ParseResult String :=
-	tag "in" (skip_spaces input)
+    tag "in" (skip_spaces input)
 
 /// The one declaration that does NOT go through `decl_parser` (it admits
 /// only the five forms that can be scoped by an `open ... in`), so it
@@ -1090,41 +1088,41 @@ def in_kw (input : String) : ParseResult String :=
 /// already dropped, not the raw `input`, so the span covers the
 /// declaration rather than the gap before it.
 def scoped_open_inner_decl (input : String) : ParseResult ParseDecl :=
-	scoped_open_inner_decl_at (skip_spaces input)
+    scoped_open_inner_decl_at (skip_spaces input)
 
 #[partial]
 def scoped_open_inner_decl_at (src : String) : ParseResult ParseDecl :=
-	decl_at src (alt_fold [def_parser, class_parser, instance_parser, struct_parser, type_parser] src)
+    decl_at src (alt_fold [def_parser, class_parser, instance_parser, struct_parser, type_parser] src)
 
 #[partial]
 def open_parser (input : String) : ParseResult ParseDecl :=
-	match tag "open" input {
-		success rem _ => match name_path_parser (skip_spaces rem) {
-			success rem2 path => open_after_path path rem2,
-			fail e => fail e
-		},
-		fail e => fail e
-	}
+    match tag "open" input {
+        success rem _ => match name_path_parser (skip_spaces rem) {
+            success rem2 path => open_after_path path rem2,
+            fail e => fail e
+        },
+        fail e => fail e
+    }
 
 #[partial]
 def open_after_path (path : NamePath) (input : String) : ParseResult ParseDecl :=
-	match open_opt_filter input {
-		success rem filter => open_after_filter path filter rem,
-		fail e => fail e
-	}
+    match open_opt_filter input {
+        success rem filter => open_after_filter path filter rem,
+        fail e => fail e
+    }
 
 #[partial]
 def open_after_filter (path : NamePath) (filter : OpenFilter) (input : String) : ParseResult ParseDecl :=
-	match opt (preceded_by in_kw scoped_open_inner_decl) input {
-		success rem maybe_decl => success rem (open_build path filter maybe_decl),
-		fail e => fail e
-	}
+    match opt (preceded_by in_kw scoped_open_inner_decl) input {
+        success rem maybe_decl => success rem (open_build path filter maybe_decl),
+        fail e => fail e
+    }
 
 def open_build (path : NamePath) (filter : OpenFilter) (maybe_decl : Option ParseDecl) : ParseDecl :=
-	match maybe_decl {
-		Option.some decl => pd_scoped_open_d  path filter decl,
-		Option.none => pd_open_d  path filter
-	}
+    match maybe_decl {
+        Option.some decl => pd_scoped_open_d path filter decl,
+        Option.none => pd_open_d path filter
+    }
 
 // infix (op) := path
 //
@@ -1135,46 +1133,46 @@ def open_build (path : NamePath) (filter : OpenFilter) (maybe_decl : Option Pars
 // the two compilers agree.
 
 def infix_parser (input : String) : ParseResult ParseDecl :=
-	match vis_parser input {
-		success rem vis => infix_vis rem vis,
-		fail e => fail e
-	}
+    match vis_parser input {
+        success rem vis => infix_vis rem vis,
+        fail e => fail e
+    }
 
 def infix_vis (input : String) (vis : Visibility) : ParseResult ParseDecl :=
-	match tag "infix" input {
-		success rem _ => infix_paren rem vis,
-		fail e => fail e
-	}
+    match tag "infix" input {
+        success rem _ => infix_paren rem vis,
+        fail e => fail e
+    }
 
 def infix_paren (input : String) (vis : Visibility) : ParseResult ParseDecl :=
-	match tag "(" (skip_spaces input) {
-		success rem _ => infix_op rem vis,
-		fail e => fail e
-	}
+    match tag "(" (skip_spaces input) {
+        success rem _ => infix_op rem vis,
+        fail e => fail e
+    }
 
 def infix_op (input : String) (vis : Visibility) : ParseResult ParseDecl :=
-	match operator_parse (skip_spaces input) {
-		success rem op => infix_close rem op vis,
-		fail e => fail e
-	}
+    match operator_parse (skip_spaces input) {
+        success rem op => infix_close rem op vis,
+        fail e => fail e
+    }
 
 def infix_close (input : String) (op : String) (vis : Visibility) : ParseResult ParseDecl :=
-	match tag ")" (skip_spaces input) {
-		success rem _ => infix_assign rem op vis,
-		fail e => fail e
-	}
+    match tag ")" (skip_spaces input) {
+        success rem _ => infix_assign rem op vis,
+        fail e => fail e
+    }
 
 def infix_assign (input : String) (op : String) (vis : Visibility) : ParseResult ParseDecl :=
-	match tag ":=" (skip_spaces input) {
-		success rem _ => infix_path rem op vis,
-		fail e => fail e
-	}
+    match tag ":=" (skip_spaces input) {
+        success rem _ => infix_path rem op vis,
+        fail e => fail e
+    }
 
 def infix_path (input : String) (op : String) (vis : Visibility) : ParseResult ParseDecl :=
-	match name_path_parser (skip_spaces input) {
-		success rem path => success rem (pd_infix_d  (Operator.mk op) path vis),
-		fail e => fail e
-	}
+    match name_path_parser (skip_spaces input) {
+        success rem path => success rem (pd_infix_d (Operator.mk op) path vis),
+        fail e => fail e
+    }
 
 // struct Name { field1 : Type, field2 : Type := default }
 //
@@ -1188,80 +1186,80 @@ def infix_path (input : String) (op : String) (vis : Visibility) : ParseResult P
 
 #[partial]
 def struct_parser (input : String) : ParseResult ParseDecl :=
-	struct_try_attrs (opt_attributes input) input
+    struct_try_attrs (opt_attributes input) input
 
 // Same `skip_docstrings (skip_spaces rem)` gap-fix as `type_try_attrs`
 // documents on itself: `#[attr] // comment` immediately above `struct`
 // has no other skip point.
 #[partial]
 def struct_try_attrs (r : ParseResult (List Attribute)) (orig : String) : ParseResult ParseDecl :=
-	match r {
-		success rem attrs => struct_apply_attrs (struct_vis_entry (skip_docstrings (skip_spaces rem))) attrs,
-		fail _ => struct_vis_entry orig
-	}
+    match r {
+        success rem attrs => struct_apply_attrs (struct_vis_entry (skip_docstrings (skip_spaces rem))) attrs,
+        fail _ => struct_vis_entry orig
+    }
 
 #[partial]
 def struct_vis_entry (input : String) : ParseResult ParseDecl :=
-	match vis_parser input {
-		success rem vis => struct_vis rem vis,
-		fail e => fail e
-	}
+    match vis_parser input {
+        success rem vis => struct_vis rem vis,
+        fail e => fail e
+    }
 
 #[partial]
 def struct_apply_attrs (dr : ParseResult ParseDecl) (attrs : List Attribute) : ParseResult ParseDecl :=
-	match dr {
-		success rem decl =>
-			match decl.kind {
-				struct_d s =>
-					match s {
-						ParseStruct.mk name fields _ vis =>
-							success rem (pd_struct_d  (ParseStruct.mk name fields attrs vis))
-					},
-				_ => success rem decl
-			},
-		fail e => fail e
-	}
+    match dr {
+        success rem decl =>
+            match decl.kind {
+                struct_d s =>
+                    match s {
+                        ParseStruct.mk name fields _ vis =>
+                            success rem (pd_struct_d (ParseStruct.mk name fields attrs vis))
+                    },
+                _ => success rem decl
+            },
+        fail e => fail e
+    }
 
 #[partial]
 def struct_vis (input : String) (vis : Visibility) : ParseResult ParseDecl :=
-	struct_kw (tag "struct" input) vis
+    struct_kw (tag "struct" input) vis
 
 #[partial]
 def struct_kw (r : ParseResult String) (vis : Visibility) : ParseResult ParseDecl :=
-	match r {
-		success rem _ => struct_name (dotted_def_name (skip_spaces rem)) vis,
-		fail e => fail e
-	}
+    match r {
+        success rem _ => struct_name (dotted_def_name (skip_spaces rem)) vis,
+        fail e => fail e
+    }
 
 #[partial]
 def struct_name (r : ParseResult String) (vis : Visibility) : ParseResult ParseDecl :=
-	match r {
-		success rem name => struct_brace (tag "{" (skip_spaces rem)) (Identifier.id name) vis,
-		fail e => fail e
-	}
+    match r {
+        success rem name => struct_brace (tag "{" (skip_spaces rem)) (Identifier.id name) vis,
+        fail e => fail e
+    }
 
 #[partial]
 def struct_brace (r : ParseResult String) (name : Identifier) (vis : Visibility) : ParseResult ParseDecl :=
-	match r {
-		success rem _ => struct_fields rem name vis,
-		fail e => fail e
-	}
+    match r {
+        success rem _ => struct_fields rem name vis,
+        fail e => fail e
+    }
 
 #[partial]
 def struct_fields (input : String) (name : Identifier) (vis : Visibility) : ParseResult ParseDecl :=
-	match separated_by (tag ",") (preceded_by ws0_and_comments (struct_one_field)) input {
-		success rem fields =>
-			match tag "}" (skip_docstrings (skip_spaces rem)) {
-				// `List.empty` is the placeholder this whole parsing
-				// chain builds with; `struct_apply_attrs` above patches
-				// the real attribute list onto the finished decl,
-				// matching how `type_apply_attrs` treats
-				// `ParseInductive`'s own `attrs` slot.
-				success rem2 _ => success rem2 (pd_struct_d  (ParseStruct.mk name fields List.empty vis)),
-				fail e => fail (ParseError.custom "expected }" rem)
-			},
-		fail e => fail e
-	}
+    match separated_by (tag ",") (preceded_by ws0_and_comments (struct_one_field)) input {
+        success rem fields =>
+            match tag "}" (skip_docstrings (skip_spaces rem)) {
+                // `List.empty` is the placeholder this whole parsing
+                // chain builds with; `struct_apply_attrs` above patches
+                // the real attribute list onto the finished decl,
+                // matching how `type_apply_attrs` treats
+                // `ParseInductive`'s own `attrs` slot.
+                success rem2 _ => success rem2 (pd_struct_d (ParseStruct.mk name fields List.empty vis)),
+                fail e => fail (ParseError.custom "expected }" rem)
+            },
+        fail e => fail e
+    }
 
 /// Parse an optional multiplicity-prefix character before a struct
 /// field's name — `%` (Zero/Erased), `!` (Linear), `?` (Affine), or none
@@ -1270,74 +1268,74 @@ def struct_fields (input : String) (name : Identifier) (vis : Visibility) : Pars
 /// shape as `vis_parser` always succeeding with a default.
 #[partial]
 def multiplicity_prefix (input : String) : ParseResult Multiplicity :=
-	multiplicity_try_zero (tag "%" input) input
+    multiplicity_try_zero (tag "%" input) input
 
 #[partial]
 def multiplicity_try_zero (r : ParseResult String) (orig : String) : ParseResult Multiplicity :=
-	match r {
-		success rem _ => success rem Multiplicity.zero,
-		fail _ => multiplicity_try_linear (tag "!" orig) orig
-	}
+    match r {
+        success rem _ => success rem Multiplicity.zero,
+        fail _ => multiplicity_try_linear (tag "!" orig) orig
+    }
 
 #[partial]
 def multiplicity_try_linear (r : ParseResult String) (orig : String) : ParseResult Multiplicity :=
-	match r {
-		success rem _ => success rem Multiplicity.linear,
-		fail _ => multiplicity_try_affine (tag "?" orig) orig
-	}
+    match r {
+        success rem _ => success rem Multiplicity.linear,
+        fail _ => multiplicity_try_affine (tag "?" orig) orig
+    }
 
 #[partial]
 def multiplicity_try_affine (r : ParseResult String) (orig : String) : ParseResult Multiplicity :=
-	match r {
-		success rem _ => success rem Multiplicity.affine,
-		fail _ => success orig Multiplicity.many
-	}
+    match r {
+        success rem _ => success rem Multiplicity.affine,
+        fail _ => success orig Multiplicity.many
+    }
 
 #[partial]
 def struct_one_field (input : String) : ParseResult ParseStructField :=
-	match multiplicity_prefix input {
-		success rem mult => struct_field_name (identifier rem) mult,
-		fail e => fail e
-	}
+    match multiplicity_prefix input {
+        success rem mult => struct_field_name (identifier rem) mult,
+        fail e => fail e
+    }
 
 #[partial]
 def struct_field_name (r : ParseResult String) (mult : Multiplicity) : ParseResult ParseStructField :=
-	match r {
-		success rem name => struct_field_colon (tag ":" (skip_spaces rem)) (Identifier.id name) mult,
-		fail e => fail e
-	}
+    match r {
+        success rem name => struct_field_colon (tag ":" (skip_spaces rem)) (Identifier.id name) mult,
+        fail e => fail e
+    }
 
 #[partial]
 def struct_field_colon (r : ParseResult String) (name : Identifier) (mult : Multiplicity) : ParseResult ParseStructField :=
-	match r {
-		success rem _ => struct_field_type (type_expression (skip_docstrings (skip_spaces rem))) name mult,
-		fail e => fail e
-	}
+    match r {
+        success rem _ => struct_field_type (type_expression (skip_docstrings (skip_spaces rem))) name mult,
+        fail e => fail e
+    }
 
 #[partial]
 def struct_field_type (r : ParseResult ParseTerm) (name : Identifier) (mult : Multiplicity) : ParseResult ParseStructField :=
-	match r {
-		success rem typ => struct_field_default (tag ":=" (skip_spaces rem)) rem name typ mult,
-		fail e => fail e
-	}
+    match r {
+        success rem typ => struct_field_default (tag ":=" (skip_spaces rem)) rem name typ mult,
+        fail e => fail e
+    }
 
 #[partial]
 def struct_field_default (r : ParseResult String) (orig : String) (name : Identifier) (typ : ParseTerm) (mult : Multiplicity) : ParseResult ParseStructField :=
-	match r {
-		success rem _ => struct_field_default_val (expression (skip_docstrings (skip_spaces rem))) name typ mult,
-		fail _ =>
-			let none : Option ParseTerm := Option.none in
-			success orig (ParseStructField.mk name typ none mult)
-	}
+    match r {
+        success rem _ => struct_field_default_val (expression (skip_docstrings (skip_spaces rem))) name typ mult,
+        fail _ =>
+            let none : Option ParseTerm := Option.none in
+            success orig (ParseStructField.mk name typ none mult)
+    }
 
 #[partial]
 def struct_field_default_val (r : ParseResult ParseTerm) (name : Identifier) (typ : ParseTerm) (mult : Multiplicity) : ParseResult ParseStructField :=
-	match r {
-		success rem defval =>
-			let some_val : Option ParseTerm := Option.some defval in
-			success rem (ParseStructField.mk name typ some_val mult),
-		fail e => fail e
-	}
+    match r {
+        success rem defval =>
+            let some_val : Option ParseTerm := Option.some defval in
+            success rem (ParseStructField.mk name typ some_val mult),
+        fail e => fail e
+    }
 
 // type Name { constructor1 (args), constructor2 }
 //
@@ -1350,7 +1348,7 @@ def struct_field_default_val (r : ParseResult ParseTerm) (name : Identifier) (ty
 
 #[partial]
 def type_parser (input : String) : ParseResult ParseDecl :=
-	type_try_attrs (opt_attributes input) input
+    type_try_attrs (opt_attributes input) input
 
 // Same fix, same reason as `def_try_attrs` just above: `skip_docstrings
 // (skip_spaces rem)`, not `rem` bare -- a `#[attr] // comment` line
@@ -1358,52 +1356,52 @@ def type_parser (input : String) : ParseResult ParseDecl :=
 // (not even bare whitespace) between the attribute and `type_vis_entry`.
 #[partial]
 def type_try_attrs (r : ParseResult (List Attribute)) (orig : String) : ParseResult ParseDecl :=
-	match r {
-		success rem attrs => type_apply_attrs (type_vis_entry (skip_docstrings (skip_spaces rem))) attrs,
-		fail _ => type_vis_entry orig
-	}
+    match r {
+        success rem attrs => type_apply_attrs (type_vis_entry (skip_docstrings (skip_spaces rem))) attrs,
+        fail _ => type_vis_entry orig
+    }
 
 #[partial]
 def type_vis_entry (input : String) : ParseResult ParseDecl :=
-	match vis_parser input {
-		success rem vis => type_vis rem vis,
-		fail e => fail e
-	}
+    match vis_parser input {
+        success rem vis => type_vis rem vis,
+        fail e => fail e
+    }
 
 #[partial]
 def type_apply_attrs (dr : ParseResult ParseDecl) (attrs : List Attribute) : ParseResult ParseDecl :=
-	match dr {
-		success rem decl =>
-			match decl.kind {
-				inductive_d ind =>
-					match ind {
-						ParseInductive.mk name params kind cons _ vis =>
-							success rem (pd_inductive_d  (ParseInductive.mk name params kind cons attrs vis))
-					},
-				_ => success rem decl
-			},
-		fail e => fail e
-	}
+    match dr {
+        success rem decl =>
+            match decl.kind {
+                inductive_d ind =>
+                    match ind {
+                        ParseInductive.mk name params kind cons _ vis =>
+                            success rem (pd_inductive_d (ParseInductive.mk name params kind cons attrs vis))
+                    },
+                _ => success rem decl
+            },
+        fail e => fail e
+    }
 
 #[partial]
 def type_vis (input : String) (vis : Visibility) : ParseResult ParseDecl :=
-	type_kw (tag "type" input) vis
+    type_kw (tag "type" input) vis
 
 #[partial]
 def type_kw (r : ParseResult String) (vis : Visibility) : ParseResult ParseDecl :=
-	match r {
-		success rem _ => type_name (dotted_def_name (skip_spaces rem)) vis,
-		fail e => fail e
-	}
+    match r {
+        success rem _ => type_name (dotted_def_name (skip_spaces rem)) vis,
+        fail e => fail e
+    }
 
 #[partial]
 def type_name (r : ParseResult String) (vis : Visibility) : ParseResult ParseDecl :=
-	match r {
-		success rem name =>
-			let empty_params : List ParseParam := List.empty in
-			type_params_loop rem (Identifier.id name) empty_params vis,
-		fail e => fail e
-	}
+    match r {
+        success rem name =>
+            let empty_params : List ParseParam := List.empty in
+            type_params_loop rem (Identifier.id name) empty_params vis,
+        fail e => fail e
+    }
 
 // Type-level params come in two shapes: bare identifiers (`type Either E
 // A {`, kind defaulted to `Type`/Sort 1) and, previously entirely
@@ -1415,21 +1413,21 @@ def type_name (r : ParseResult String) (vis : Visibility) : ParseResult ParseDec
 // case parsed: `type_to_decl` hardcoded empty params and `Sort 1`).
 #[partial]
 def type_params_loop (input : String) (name : Identifier) (params : List ParseParam) (vis : Visibility) : ParseResult ParseDecl :=
-	type_params_try_bare (identifier (skip_spaces input)) input name params vis
+    type_params_try_bare (identifier (skip_spaces input)) input name params vis
 
 #[partial]
 def type_params_try_bare (r : ParseResult String) (orig : String) (name : Identifier) (params : List ParseParam) (vis : Visibility) : ParseResult ParseDecl :=
-	match r {
-		success rem next => type_params_loop rem name (List.cons (parse_param_many (Identifier.id next) (pt_sort (SortLevel.concrete 1))) params) vis,
-		fail _ => type_params_try_paren (tag "(" (skip_spaces orig)) orig name params vis
-	}
+    match r {
+        success rem next => type_params_loop rem name (List.cons (parse_param_many (Identifier.id next) (pt_sort (SortLevel.concrete 1))) params) vis,
+        fail _ => type_params_try_paren (tag "(" (skip_spaces orig)) orig name params vis
+    }
 
 #[partial]
 def type_params_try_paren (r : ParseResult String) (orig : String) (name : Identifier) (params : List ParseParam) (vis : Visibility) : ParseResult ParseDecl :=
-	match r {
-		success rem _ => type_params_paren_name (identifier (skip_spaces rem)) name params vis,
-		fail _ => type_params_try_universe (tag "{" (skip_spaces orig)) orig name params vis
-	}
+    match r {
+        success rem _ => type_params_paren_name (identifier (skip_spaces rem)) name params vis,
+        fail _ => type_params_try_universe (tag "{" (skip_spaces orig)) orig name params vis
+    }
 
 /// A universe-level parameter clause on a `type` head: `{u}` or
 /// `{u : Universe}`, the `type` analogue of the `def` grammar's `{…}`
@@ -1447,41 +1445,41 @@ def type_params_try_paren (r : ParseResult String) (orig : String) (name : Ident
 /// body — see `type_params_universe_continue`.
 #[partial]
 def type_params_try_universe (r : ParseResult String) (orig : String) (name : Identifier) (params : List ParseParam) (vis : Visibility) : ParseResult ParseDecl :=
-	match r {
-		success rem _ => type_params_universe_name (identifier (skip_spaces rem)) orig name params vis,
-		fail _ => type_kind_or_brace orig name params vis
-	}
+    match r {
+        success rem _ => type_params_universe_name (identifier (skip_spaces rem)) orig name params vis,
+        fail _ => type_kind_or_brace orig name params vis
+    }
 
 #[partial]
 def type_params_universe_name (r : ParseResult String) (orig : String) (name : Identifier) (params : List ParseParam) (vis : Visibility) : ParseResult ParseDecl :=
-	match r {
-		success rem _ => type_params_universe_colon (tag ":" (skip_spaces rem)) rem orig name params vis,
-		fail _ => type_kind_or_brace orig name params vis
-	}
+    match r {
+        success rem _ => type_params_universe_colon (tag ":" (skip_spaces rem)) rem orig name params vis,
+        fail _ => type_kind_or_brace orig name params vis
+    }
 
 #[partial]
 def type_params_universe_colon (r : ParseResult String) (rem : String) (orig : String) (name : Identifier) (params : List ParseParam) (vis : Visibility) : ParseResult ParseDecl :=
-	match r {
-		success rem2 _ => type_params_universe_annotation (tag_keyword "Universe" (skip_spaces rem2)) orig name params vis,
-		fail _ => type_params_universe_close (tag "}" (skip_spaces rem)) orig name params vis
-	}
+    match r {
+        success rem2 _ => type_params_universe_annotation (tag_keyword "Universe" (skip_spaces rem2)) orig name params vis,
+        fail _ => type_params_universe_close (tag "}" (skip_spaces rem)) orig name params vis
+    }
 
 /// The annotation is required to be `Universe`: a body constructor that
 /// happens to be followed by `:` (`{ refl : Eq A a a }`) must not be
 /// mistaken for a clause, so any other annotation backtracks to the body.
 #[partial]
 def type_params_universe_annotation (r : ParseResult String) (orig : String) (name : Identifier) (params : List ParseParam) (vis : Visibility) : ParseResult ParseDecl :=
-	match r {
-		success rem _ => type_params_universe_close (tag "}" (skip_spaces rem)) orig name params vis,
-		fail _ => type_kind_or_brace orig name params vis
-	}
+    match r {
+        success rem _ => type_params_universe_close (tag "}" (skip_spaces rem)) orig name params vis,
+        fail _ => type_kind_or_brace orig name params vis
+    }
 
 #[partial]
 def type_params_universe_close (r : ParseResult String) (orig : String) (name : Identifier) (params : List ParseParam) (vis : Visibility) : ParseResult ParseDecl :=
-	match r {
-		success rem _ => type_params_universe_continue rem orig name params vis,
-		fail _ => type_kind_or_brace orig name params vis
-	}
+    match r {
+        success rem _ => type_params_universe_continue rem orig name params vis,
+        fail _ => type_kind_or_brace orig name params vis
+    }
 
 /// After a `}`-closed universe clause, continue only if the next token can
 /// begin another param (`(`/`{`/a bare identifier) or the kind (`:`).
@@ -1493,93 +1491,93 @@ def type_params_universe_close (r : ParseResult String) (orig : String) (name : 
 /// consume them.
 #[partial]
 def type_params_universe_continue (input : String) (orig : String) (name : Identifier) (params : List ParseParam) (vis : Visibility) : ParseResult ParseDecl :=
-	let rem : String := skip_docstrings (skip_spaces input) in
-	type_params_universe_continue_try (tag "(" rem) rem orig name params vis
+    let rem : String := skip_docstrings (skip_spaces input) in
+    type_params_universe_continue_try (tag "(" rem) rem orig name params vis
 
 #[partial]
 def type_params_universe_continue_try (r : ParseResult String) (rem : String) (orig : String) (name : Identifier) (params : List ParseParam) (vis : Visibility) : ParseResult ParseDecl :=
-	match r {
-		success _ _ => type_params_loop rem name params vis,
-		fail _ => type_params_universe_continue_brace (tag "{" rem) rem orig name params vis
-	}
+    match r {
+        success _ _ => type_params_loop rem name params vis,
+        fail _ => type_params_universe_continue_brace (tag "{" rem) rem orig name params vis
+    }
 
 #[partial]
 def type_params_universe_continue_brace (r : ParseResult String) (rem : String) (orig : String) (name : Identifier) (params : List ParseParam) (vis : Visibility) : ParseResult ParseDecl :=
-	match r {
-		success _ _ => type_params_loop rem name params vis,
-		fail _ => type_params_universe_continue_kind (tag ":" rem) rem orig name params vis
-	}
+    match r {
+        success _ _ => type_params_loop rem name params vis,
+        fail _ => type_params_universe_continue_kind (tag ":" rem) rem orig name params vis
+    }
 
 #[partial]
 def type_params_universe_continue_kind (r : ParseResult String) (rem : String) (orig : String) (name : Identifier) (params : List ParseParam) (vis : Visibility) : ParseResult ParseDecl :=
-	match r {
-		success _ _ => type_kind_or_brace rem name params vis,
-		fail _ => type_params_universe_continue_bare (identifier rem) rem orig name params vis
-	}
+    match r {
+        success _ _ => type_kind_or_brace rem name params vis,
+        fail _ => type_params_universe_continue_bare (identifier rem) rem orig name params vis
+    }
 
 #[partial]
 def type_params_universe_continue_bare (r : ParseResult String) (rem : String) (orig : String) (name : Identifier) (params : List ParseParam) (vis : Visibility) : ParseResult ParseDecl :=
-	match r {
-		success _ _ => type_params_loop rem name params vis,
-		fail _ => type_kind_or_brace orig name params vis
-	}
+    match r {
+        success _ _ => type_params_loop rem name params vis,
+        fail _ => type_kind_or_brace orig name params vis
+    }
 
 #[partial]
 def type_params_paren_name (r : ParseResult String) (name : Identifier) (params : List ParseParam) (vis : Visibility) : ParseResult ParseDecl :=
-	match r {
-		success rem pname => type_params_paren_colon (tag ":" (skip_spaces rem)) pname name params vis,
-		fail e => fail e
-	}
+    match r {
+        success rem pname => type_params_paren_colon (tag ":" (skip_spaces rem)) pname name params vis,
+        fail e => fail e
+    }
 
 #[partial]
 def type_params_paren_colon (r : ParseResult String) (pname : String) (name : Identifier) (params : List ParseParam) (vis : Visibility) : ParseResult ParseDecl :=
-	match r {
-		success rem _ =>
-			type_params_paren_type (type_expression rem) pname name params vis,
-		fail e => fail e
-	}
+    match r {
+        success rem _ =>
+            type_params_paren_type (type_expression rem) pname name params vis,
+        fail e => fail e
+    }
 
 #[partial]
 def type_params_paren_type (r : ParseResult ParseTerm) (pname : String) (name : Identifier) (params : List ParseParam) (vis : Visibility) : ParseResult ParseDecl :=
-	match r {
-		success rem typ => type_params_paren_close (tag ")" (skip_spaces rem)) (parse_param_many (Identifier.id pname) typ) name params vis,
-		fail e => fail e
-	}
+    match r {
+        success rem typ => type_params_paren_close (tag ")" (skip_spaces rem)) (parse_param_many (Identifier.id pname) typ) name params vis,
+        fail e => fail e
+    }
 
 #[partial]
 def type_params_paren_close (r : ParseResult String) (p : ParseParam) (name : Identifier) (params : List ParseParam) (vis : Visibility) : ParseResult ParseDecl :=
-	match r {
-		success rem _ => type_params_loop rem name (List.cons p params) vis,
-		fail e => fail e
-	}
+    match r {
+        success rem _ => type_params_loop rem name (List.cons p params) vis,
+        fail e => fail e
+    }
 
 /// After all params: an optional `: Kind` (`Prop`, `Sort n`, ...) before
 /// the `{`, defaulting to `Type` (Sort 1) when absent.
 #[partial]
 def type_kind_or_brace (input : String) (name : Identifier) (params : List ParseParam) (vis : Visibility) : ParseResult ParseDecl :=
-	type_try_kind (tag ":" (skip_spaces input)) input name params vis
+    type_try_kind (tag ":" (skip_spaces input)) input name params vis
 
 #[partial]
 def type_try_kind (r : ParseResult String) (orig : String) (name : Identifier) (params : List ParseParam) (vis : Visibility) : ParseResult ParseDecl :=
-	match r {
-		success rem _ =>
-			type_kind_expr (type_expression rem) name params vis,
-		fail _ => type_brace (tag "{" (skip_spaces orig)) name params (pt_sort (SortLevel.concrete 1)) vis
-	}
+    match r {
+        success rem _ =>
+            type_kind_expr (type_expression rem) name params vis,
+        fail _ => type_brace (tag "{" (skip_spaces orig)) name params (pt_sort (SortLevel.concrete 1)) vis
+    }
 
 #[partial]
 def type_kind_expr (r : ParseResult ParseTerm) (name : Identifier) (params : List ParseParam) (vis : Visibility) : ParseResult ParseDecl :=
-	match r {
-		success rem kind => type_brace (tag "{" (skip_spaces rem)) name params kind vis,
-		fail e => fail e
-	}
+    match r {
+        success rem kind => type_brace (tag "{" (skip_spaces rem)) name params kind vis,
+        fail e => fail e
+    }
 
 #[partial]
 def type_brace (r : ParseResult String) (name : Identifier) (params : List ParseParam) (kind : ParseTerm) (vis : Visibility) : ParseResult ParseDecl :=
-	match r {
-		success rem _ => type_constructors rem name params kind vis,
-		fail e => fail e
-	}
+    match r {
+        success rem _ => type_constructors rem name params kind vis,
+        fail e => fail e
+    }
 
 /// `preceded_by`'s own `before` parser needs a `String -> ParseResult
 /// String` shape (matching `ws0`'s), so a comment-aware skip can't be
@@ -1594,29 +1592,29 @@ def type_brace (r : ParseResult String) (name : Identifier) (params : List Parse
 /// of a hand-written per-branch chain.
 #[partial]
 def ws0_and_comments (input : String) : ParseResult String :=
-	success (skip_docstrings (skip_spaces input)) input
+    success (skip_docstrings (skip_spaces input)) input
 
 #[partial]
 def type_constructors (input : String) (name : Identifier) (params : List ParseParam) (kind : ParseTerm) (vis : Visibility) : ParseResult ParseDecl :=
-	match separated_by (tag ",") (preceded_by ws0_and_comments (type_one_constructor)) input {
-		success rem cons =>
-			match tag "}" (skip_docstrings (skip_spaces rem)) {
-				success rem2 _ => success rem2 (type_to_decl name (list_reverse params) kind cons vis),
-				fail e => fail (ParseError.custom "expected }" rem)
-			},
-		fail e => fail e
-	}
+    match separated_by (tag ",") (preceded_by ws0_and_comments (type_one_constructor)) input {
+        success rem cons =>
+            match tag "}" (skip_docstrings (skip_spaces rem)) {
+                success rem2 _ => success rem2 (type_to_decl name (list_reverse params) kind cons vis),
+                fail e => fail (ParseError.custom "expected }" rem)
+            },
+        fail e => fail e
+    }
 
 #[partial]
 def type_one_constructor (input : String) : ParseResult ParseInductConstructor :=
-	type_cons_name (identifier input)
+    type_cons_name (identifier input)
 
 #[partial]
 def type_cons_name (r : ParseResult String) : ParseResult ParseInductConstructor :=
-	match r {
-		success rem name => type_cons_try_gadt (tag ":" (skip_spaces rem)) rem (Identifier.id name),
-		fail e => fail e
-	}
+    match r {
+        success rem name => type_cons_try_gadt (tag ":" (skip_spaces rem)) rem (Identifier.id name),
+        fail e => fail e
+    }
 
 /// GADT-style constructor: `name : FullType` (e.g. `refl : Eq A a a` in
 /// `init/prelude.mo`'s `Eq` type), as opposed to `name (args)`/bare
@@ -1624,20 +1622,20 @@ def type_cons_name (r : ParseResult String) : ParseResult ParseInductConstructor
 /// `:` directly after its name.
 #[partial]
 def type_cons_try_gadt (r : ParseResult String) (orig : String) (name : Identifier) : ParseResult ParseInductConstructor :=
-	match r {
-		success rem _ =>
-			type_cons_gadt_type (type_expression rem) name,
-		fail _ => type_cons_paren_or_nil (tag "(" (skip_spaces orig)) orig name
-	}
+    match r {
+        success rem _ =>
+            type_cons_gadt_type (type_expression rem) name,
+        fail _ => type_cons_paren_or_nil (tag "(" (skip_spaces orig)) orig name
+    }
 
 #[partial]
 def type_cons_gadt_type (r : ParseResult ParseTerm) (name : Identifier) : ParseResult ParseInductConstructor :=
-	match r {
-		success rem typ =>
-			let empty_params : List ParseParam := List.empty in
-			success rem (ParseInductConstructor.mk (NamePath.mk (List.cons name List.empty)) empty_params typ),
-		fail e => fail e
-	}
+    match r {
+        success rem typ =>
+            let empty_params : List ParseParam := List.empty in
+            success rem (ParseInductConstructor.mk (NamePath.mk (List.cons name List.empty)) empty_params typ),
+        fail e => fail e
+    }
 
 // Constructor field parsing needs to support all of: a bare unnamed type
 // with no parens at all (`io A`, `tag String`), a single parenthesized
@@ -1651,10 +1649,10 @@ def type_cons_gadt_type (r : ParseResult ParseTerm) (name : Identifier) : ParseR
 // lang/parser/core.mo's own foundational types use exactly these shapes).
 #[partial]
 def type_cons_paren_or_nil (r : ParseResult String) (orig : String) (name : Identifier) : ParseResult ParseInductConstructor :=
-	match r {
-		success rem _ => type_cons_one_group_content rem name List.empty,
-		fail _ => type_cons_bare_or_implicit orig name
-	}
+    match r {
+        success rem _ => type_cons_one_group_content rem name List.empty,
+        fail _ => type_cons_bare_or_implicit orig name
+    }
 
 /// No `(` at all right after the constructor name — `plans/
 /// implementations/struct-field-destructuring.md`'s Phase 5 adds a FIRST
@@ -1674,15 +1672,15 @@ def type_cons_paren_or_nil (r : ParseResult String) (orig : String) (name : Iden
 /// support exactly.
 #[partial]
 def type_cons_bare_or_implicit (orig : String) (name : Identifier) : ParseResult ParseInductConstructor :=
-	type_cons_try_brace_fields (tag "{" (skip_spaces orig)) orig name
+    type_cons_try_brace_fields (tag "{" (skip_spaces orig)) orig name
 
 #[partial]
 def type_cons_try_brace_fields (r : ParseResult String) (orig : String) (name : Identifier) : ParseResult ParseInductConstructor :=
-	match r {
-		success rem _ =>
-			type_cons_brace_probe (struct_one_field (skip_spaces rem)) orig name (skip_spaces rem),
-		fail _ => type_cons_try_bare (type_expression orig) orig name
-	}
+    match r {
+        success rem _ =>
+            type_cons_brace_probe (struct_one_field (skip_spaces rem)) orig name (skip_spaces rem),
+        fail _ => type_cons_try_bare (type_expression orig) orig name
+    }
 
 /// `fields_start` is the position right after the opening `{` (before the
 /// first field) — kept around so a CONFIRMED multi-field brace
@@ -1705,43 +1703,43 @@ def type_cons_try_brace_fields (r : ParseResult String) (orig : String) (name : 
 /// of being rejected by `type_cons_brace_to_constructor` below.
 #[partial]
 def type_cons_brace_probe (r : ParseResult ParseStructField) (orig : String) (name : Identifier) (fields_start : String) : ParseResult ParseInductConstructor :=
-	match r {
-		success rem field => type_cons_brace_probe_field field rem orig name fields_start,
-		// Not even one field parses (e.g. `{}`, or genuinely malformed) —
-		// not a brace-field declaration at all — fall back to the
-		// pre-existing chain, unchanged, from the ORIGINAL pre-`{` position.
-		fail _ => type_cons_try_bare (type_expression orig) orig name
-	}
+    match r {
+        success rem field => type_cons_brace_probe_field field rem orig name fields_start,
+        // Not even one field parses (e.g. `{}`, or genuinely malformed) —
+        // not a brace-field declaration at all — fall back to the
+        // pre-existing chain, unchanged, from the ORIGINAL pre-`{` position.
+        fail _ => type_cons_try_bare (type_expression orig) orig name
+    }
 
 #[partial]
 def type_cons_brace_probe_field (field : ParseStructField) (rem : String) (orig : String) (name : Identifier) (fields_start : String) : ParseResult ParseInductConstructor :=
-	match field {
-		ParseStructField.mk _ _ fdefault _ =>
-			match fdefault {
-				Option.some _ =>
-					let confirmed : ParseResult String := success rem "" in
-					type_cons_brace_confirm confirmed orig name fields_start,
-				Option.none => type_cons_brace_confirm (tag "," (skip_spaces rem)) orig name fields_start,
-			}
-	}
+    match field {
+        ParseStructField.mk _ _ fdefault _ =>
+            match fdefault {
+                Option.some _ =>
+                    let confirmed : ParseResult String := success rem "" in
+                    type_cons_brace_confirm confirmed orig name fields_start,
+                Option.none => type_cons_brace_confirm (tag "," (skip_spaces rem)) orig name fields_start,
+            }
+    }
 
 #[partial]
 def type_cons_brace_confirm (r : ParseResult String) (orig : String) (name : Identifier) (fields_start : String) : ParseResult ParseInductConstructor :=
-	match r {
-		success _ _ =>
-			match separated_by (tag ",") (preceded_by ws0_and_comments (struct_one_field)) fields_start {
-				success rem fields => type_cons_brace_close (tag "}" (skip_spaces rem)) name fields,
-				fail e => fail e
-			},
-		fail _ => type_cons_try_bare (type_expression orig) orig name
-	}
+    match r {
+        success _ _ =>
+            match separated_by (tag ",") (preceded_by ws0_and_comments (struct_one_field)) fields_start {
+                success rem fields => type_cons_brace_close (tag "}" (skip_spaces rem)) name fields,
+                fail e => fail e
+            },
+        fail _ => type_cons_try_bare (type_expression orig) orig name
+    }
 
 #[partial]
 def type_cons_brace_close (r : ParseResult String) (name : Identifier) (fields : List ParseStructField) : ParseResult ParseInductConstructor :=
-	match r {
-		success rem _ => type_cons_brace_to_constructor rem name fields,
-		fail e => fail e
-	}
+    match r {
+        success rem _ => type_cons_brace_to_constructor rem name fields,
+        fail e => fail e
+    }
 
 /// `StructField -> Param`, REJECTING any field with a default value —
 /// mirrors `core/`'s own `fields_to_cons_params` (`rust/core/src/term.rs`,
@@ -1756,12 +1754,12 @@ def type_cons_brace_close (r : ParseResult String) (name : Identifier) (fields :
 /// `core/` side.
 #[partial]
 def type_cons_brace_to_constructor (rem : String) (name : Identifier) (fields : List ParseStructField) : ParseResult ParseInductConstructor :=
-	match cons_fields_to_params fields {
-		Option.some params =>
-			success rem (ParseInductConstructor.mk (NamePath.mk (List.cons name List.empty)) params (pt_hole )),
-		Option.none =>
-			fail (ParseError.custom "a brace-declared constructor field has a default value, which is not supported on a bare `type` constructor (only `struct` bodies support field defaults)" rem)
-	}
+    match cons_fields_to_params fields {
+        Option.some params =>
+            success rem (ParseInductConstructor.mk (NamePath.mk (List.cons name List.empty)) params (pt_hole)),
+        Option.none =>
+            fail (ParseError.custom "a brace-declared constructor field has a default value, which is not supported on a bare `type` constructor (only `struct` bodies support field defaults)" rem)
+    }
 
 /// `StructField -> Param`, REJECTING any field with a default value (by
 /// returning `Option.none` for the WHOLE list rather than the offending
@@ -1777,36 +1775,36 @@ def type_cons_brace_to_constructor (rem : String) (name : Identifier) (fields : 
 /// split already established on the `core/` side.
 #[partial]
 def cons_fields_to_params (fields : List ParseStructField) : Option (List ParseParam) :=
-	match fields {
-		List.empty =>
-			let empty_params : List ParseParam := List.empty in
-			Option.some empty_params,
-		List.cons f rest =>
-			match f {
-				ParseStructField.mk fname ftyp fdefault fmult =>
-					match fdefault {
-						Option.some _ => Option.none,
-						Option.none =>
-							match cons_fields_to_params rest {
-								Option.some ps =>
-									let no_attrs : List Attribute := List.empty in
-									let none : Option ParseTerm := Option.none in
-									let p : ParseParam := ParseParam.mk fname ftyp fmult none no_attrs in
-									Option.some (List.cons p ps),
-								Option.none => Option.none
-							}
-					}
-			}
-	}
+    match fields {
+        List.empty =>
+            let empty_params : List ParseParam := List.empty in
+            Option.some empty_params,
+        List.cons f rest =>
+            match f {
+                ParseStructField.mk fname ftyp fdefault fmult =>
+                    match fdefault {
+                        Option.some _ => Option.none,
+                        Option.none =>
+                            match cons_fields_to_params rest {
+                                Option.some ps =>
+                                    let no_attrs : List Attribute := List.empty in
+                                    let none : Option ParseTerm := Option.none in
+                                    let p : ParseParam := ParseParam.mk fname ftyp fmult none no_attrs in
+                                    Option.some (List.cons p ps),
+                                Option.none => Option.none
+                            }
+                    }
+            }
+    }
 
 #[partial]
 def type_cons_try_bare (r : ParseResult ParseTerm) (orig : String) (name : Identifier) : ParseResult ParseInductConstructor :=
-	match r {
-		success rem typ =>
-			let p : ParseParam := parse_param_many (Identifier.id "_") typ in
-			success rem (ParseInductConstructor.mk (NamePath.mk (List.cons name List.empty)) (List.cons p List.empty) (pt_hole )),
-		fail _ => type_cons_implicit (tag "{" (skip_spaces orig)) orig name
-	}
+    match r {
+        success rem typ =>
+            let p : ParseParam := parse_param_many (Identifier.id "_") typ in
+            success rem (ParseInductConstructor.mk (NamePath.mk (List.cons name List.empty)) (List.cons p List.empty) (pt_hole)),
+        fail _ => type_cons_implicit (tag "{" (skip_spaces orig)) orig name
+    }
 
 /// Parse one field inside an already-open `(...)` group: named (`a: A`,
 /// possibly MULTIPLE names sharing one type — `(b0 b1 ... b15 : List
@@ -1817,35 +1815,35 @@ def type_cons_try_bare (r : ParseResult ParseTerm) (orig : String) (name : Ident
 /// single-name-only) implementation.
 #[partial]
 def type_cons_one_group_content (input : String) (name : Identifier) (params : List ParseParam) : ParseResult ParseInductConstructor :=
-	// Capture zero-or-more `#[attr]`s before the field itself (e.g.
-	// `motes/clap/src/tests/cli_derive_tests.mo`'s `compile (path : String)
-	// (#[arg] verbose : Bool)` -- a per-FIELD attribute, distinct from
-	// `def_try_attrs`'s own per-DEF attribute list this constructor-field
-	// grammar never shared code with) and thread them down to the built
-	// `Param` (`ctor_params_for_names_attrs`). Without the skip,
-	// `identifier`/`type_expression` both failed outright on the leading
-	// `#`, failing the whole constructor, the whole enclosing `type`,
-	// and (via `decls_try`'s "any failure silently truncates the rest of
-	// the file" leniency) silently dropping every declaration after it --
-	// which is why the skip came first; the CAPTURE is what
-	// `#[derive Cli]` needs on top (see `ctor_params_for_names_attrs`'s
-	// own doc comment for the concrete bug a discarded list caused).
-	let empty_attrs : List Attribute := List.empty in
-	match opt_attributes_go (skip_spaces input) empty_attrs {
-		success cleaned attrs => type_cons_group_name (identifier cleaned) cleaned attrs name params,
-		fail _ =>
-			let cleaned : String := skip_spaces input in
-			type_cons_group_name (identifier cleaned) cleaned empty_attrs name params,
-	}
+    // Capture zero-or-more `#[attr]`s before the field itself (e.g.
+    // `motes/clap/src/tests/cli_derive_tests.mo`'s `compile (path : String)
+    // (#[arg] verbose : Bool)` -- a per-FIELD attribute, distinct from
+    // `def_try_attrs`'s own per-DEF attribute list this constructor-field
+    // grammar never shared code with) and thread them down to the built
+    // `Param` (`ctor_params_for_names_attrs`). Without the skip,
+    // `identifier`/`type_expression` both failed outright on the leading
+    // `#`, failing the whole constructor, the whole enclosing `type`,
+    // and (via `decls_try`'s "any failure silently truncates the rest of
+    // the file" leniency) silently dropping every declaration after it --
+    // which is why the skip came first; the CAPTURE is what
+    // `#[derive Cli]` needs on top (see `ctor_params_for_names_attrs`'s
+    // own doc comment for the concrete bug a discarded list caused).
+    let empty_attrs : List Attribute := List.empty in
+    match opt_attributes_go (skip_spaces input) empty_attrs {
+        success cleaned attrs => type_cons_group_name (identifier cleaned) cleaned attrs name params,
+        fail _ =>
+            let cleaned : String := skip_spaces input in
+            type_cons_group_name (identifier cleaned) cleaned empty_attrs name params,
+    }
 
 #[partial]
 def type_cons_group_name (r : ParseResult String) (orig : String) (attrs : List Attribute) (name : Identifier) (params : List ParseParam) : ParseResult ParseInductConstructor :=
-	match r {
-		success rem pname =>
-			let names : List Identifier := List.cons (Identifier.id pname) List.empty in
-			type_cons_group_more_names rem attrs name params names orig,
-		fail _ => type_cons_group_bare (type_expression orig) orig attrs name params
-	}
+    match r {
+        success rem pname =>
+            let names : List Identifier := List.cons (Identifier.id pname) List.empty in
+            type_cons_group_more_names rem attrs name params names orig,
+        fail _ => type_cons_group_bare (type_expression orig) orig attrs name params
+    }
 
 /// After the first field name, try more space-separated names sharing
 /// one type before requiring `:` — see `type_cons_one_group_content`'s
@@ -1862,21 +1860,21 @@ def type_cons_group_name (r : ParseResult String) (orig : String) (attrs : List 
 /// constructor, whose sole field is exactly this shape).
 #[partial]
 def type_cons_group_more_names (input : String) (attrs : List Attribute) (name : Identifier) (params : List ParseParam) (names : List Identifier) (field_start : String) : ParseResult ParseInductConstructor :=
-	type_cons_group_more_names_try (identifier (skip_spaces input)) input attrs name params names field_start
+    type_cons_group_more_names_try (identifier (skip_spaces input)) input attrs name params names field_start
 
 #[partial]
 def type_cons_group_more_names_try (r : ParseResult String) (orig : String) (attrs : List Attribute) (name : Identifier) (params : List ParseParam) (names : List Identifier) (field_start : String) : ParseResult ParseInductConstructor :=
-	match r {
-		success rem pname => type_cons_group_more_names rem attrs name params (List.cons (Identifier.id pname) names) field_start,
-		fail _ => type_cons_group_colon (tag ":" (skip_spaces orig)) attrs name params names field_start
-	}
+    match r {
+        success rem pname => type_cons_group_more_names rem attrs name params (List.cons (Identifier.id pname) names) field_start,
+        fail _ => type_cons_group_colon (tag ":" (skip_spaces orig)) attrs name params names field_start
+    }
 
 #[partial]
 def type_cons_group_colon (r : ParseResult String) (attrs : List Attribute) (name : Identifier) (params : List ParseParam) (names : List Identifier) (field_start : String) : ParseResult ParseInductConstructor :=
-	match r {
-		success rem _ => type_cons_group_type (type_expression (skip_docstrings (skip_spaces rem))) attrs name params names,
-		fail _ => type_cons_group_bare (type_expression field_start) field_start attrs name params
-	}
+    match r {
+        success rem _ => type_cons_group_type (type_expression (skip_docstrings (skip_spaces rem))) attrs name params names,
+        fail _ => type_cons_group_bare (type_expression field_start) field_start attrs name params
+    }
 
 /// Builds one `Param` per name (all sharing `typ`) directly onto the
 /// OUTER field accumulator `params` via the shared `params_for_names`
@@ -1887,47 +1885,47 @@ def type_cons_group_colon (r : ParseResult String) (attrs : List Attribute) (nam
 /// step.
 #[partial]
 def type_cons_group_type (r : ParseResult ParseTerm) (attrs : List Attribute) (name : Identifier) (params : List ParseParam) (names : List Identifier) : ParseResult ParseInductConstructor :=
-	match r {
-		success rem typ =>
-			let new_params : List ParseParam := ctor_params_for_names_attrs (list_reverse names) typ attrs params in
-			type_cons_group_after_item rem name new_params,
-		fail e => fail e
-	}
+    match r {
+        success rem typ =>
+            let new_params : List ParseParam := ctor_params_for_names_attrs (list_reverse names) typ attrs params in
+            type_cons_group_after_item rem name new_params,
+        fail e => fail e
+    }
 
 #[partial]
 def type_cons_group_bare (r : ParseResult ParseTerm) (orig : String) (attrs : List Attribute) (name : Identifier) (params : List ParseParam) : ParseResult ParseInductConstructor :=
-	match r {
-		success rem typ =>
-			let p : ParseParam := match parse_param_many (Identifier.id "_") typ {
-				ParseParam.mk n t m d _ => ParseParam.mk n t m d attrs,
-			} in
-			type_cons_group_after_item rem name (List.cons p params),
-		fail e => fail e
-	}
+    match r {
+        success rem typ =>
+            let p : ParseParam := match parse_param_many (Identifier.id "_") typ {
+                ParseParam.mk n t m d _ => ParseParam.mk n t m d attrs,
+            } in
+            type_cons_group_after_item rem name (List.cons p params),
+        fail e => fail e
+    }
 
 /// After one field: another comma-separated field in the SAME group, or
 /// the group's closing `)`.
 #[partial]
 def type_cons_group_after_item (input : String) (name : Identifier) (params : List ParseParam) : ParseResult ParseInductConstructor :=
-	type_cons_group_try_comma (tag "," (skip_spaces input)) input name params
+    type_cons_group_try_comma (tag "," (skip_spaces input)) input name params
 
 #[partial]
 def type_cons_group_try_comma (r : ParseResult String) (orig : String) (name : Identifier) (params : List ParseParam) : ParseResult ParseInductConstructor :=
-	match r {
-		success rem _ => type_cons_one_group_content (skip_spaces rem) name params,
-		fail _ => type_cons_group_close orig name params
-	}
+    match r {
+        success rem _ => type_cons_one_group_content (skip_spaces rem) name params,
+        fail _ => type_cons_group_close orig name params
+    }
 
 #[partial]
 def type_cons_group_close (input : String) (name : Identifier) (params : List ParseParam) : ParseResult ParseInductConstructor :=
-	type_cons_group_close_try (tag ")" (skip_spaces input)) input name params
+    type_cons_group_close_try (tag ")" (skip_spaces input)) input name params
 
 #[partial]
 def type_cons_group_close_try (r : ParseResult String) (orig : String) (name : Identifier) (params : List ParseParam) : ParseResult ParseInductConstructor :=
-	match r {
-		success rem _ => type_cons_more_groups rem name params,
-		fail _ => fail (ParseError.custom "expected , or ) in constructor fields" orig)
-	}
+    match r {
+        success rem _ => type_cons_more_groups rem name params,
+        fail _ => fail (ParseError.custom "expected , or ) in constructor fields" orig)
+    }
 
 /// After a group closes: another curried `(...)` group, or done.
 /// `skip_docstrings` (not just `skip_spaces`) before probing for the next
@@ -1949,14 +1947,14 @@ def type_cons_group_close_try (r : ParseResult String) (orig : String) (name : I
 /// cause, not a signature-visibility or instance-dispatch bug.
 #[partial]
 def type_cons_more_groups (input : String) (name : Identifier) (params : List ParseParam) : ParseResult ParseInductConstructor :=
-	type_cons_try_next_group (tag "(" (skip_docstrings (skip_spaces input))) input name params
+    type_cons_try_next_group (tag "(" (skip_docstrings (skip_spaces input))) input name params
 
 #[partial]
 def type_cons_try_next_group (r : ParseResult String) (orig : String) (name : Identifier) (params : List ParseParam) : ParseResult ParseInductConstructor :=
-	match r {
-		success rem _ => type_cons_one_group_content rem name params,
-		fail _ => type_cons_try_return_type orig name params
-	}
+    match r {
+        success rem _ => type_cons_one_group_content rem name params,
+        fail _ => type_cons_try_return_type orig name params
+    }
 
 /// After all of a constructor's `(...)` param groups: an optional
 /// GADT-style trailing `: ReturnType` (`cons (a : A) (List A) : List
@@ -1969,50 +1967,49 @@ def type_cons_try_next_group (r : ParseResult String) (orig : String) (name : Id
 /// expression.
 #[partial]
 def type_cons_try_return_type (orig : String) (name : Identifier) (params : List ParseParam) : ParseResult ParseInductConstructor :=
-	match tag ":" (skip_spaces orig) {
-		success rem _ => type_cons_return_type (type_expression (skip_docstrings (skip_spaces rem))) orig name params,
-		fail _ => success orig (ParseInductConstructor.mk (NamePath.mk (List.cons name List.empty)) (list_reverse params) (pt_hole ))
-	}
+    match tag ":" (skip_spaces orig) {
+        success rem _ => type_cons_return_type (type_expression (skip_docstrings (skip_spaces rem))) orig name params,
+        fail _ => success orig (ParseInductConstructor.mk (NamePath.mk (List.cons name List.empty)) (list_reverse params) (pt_hole))
+    }
 
 #[partial]
 def type_cons_return_type (r : ParseResult ParseTerm) (orig : String) (name : Identifier) (params : List ParseParam) : ParseResult ParseInductConstructor :=
-	match r {
-		success rem typ => success rem (ParseInductConstructor.mk (NamePath.mk (List.cons name List.empty)) (list_reverse params) typ),
-		fail _ => success orig (ParseInductConstructor.mk (NamePath.mk (List.cons name List.empty)) (list_reverse params) (pt_hole )),
-	}
+    match r {
+        success rem typ => success rem (ParseInductConstructor.mk (NamePath.mk (List.cons name List.empty)) (list_reverse params) typ),
+        fail _ => success orig (ParseInductConstructor.mk (NamePath.mk (List.cons name List.empty)) (list_reverse params) (pt_hole)),
+    }
 
 #[partial]
 def type_cons_implicit (r : ParseResult String) (orig : String) (name : Identifier) : ParseResult ParseInductConstructor :=
-	match r {
-		success rem _ => type_cons_implicit_skip (take_while is_not_close_curly rem) rem orig name,
-		fail _ =>
-			let empty_params : List ParseParam := List.empty in
-			success orig (ParseInductConstructor.mk (NamePath.mk (List.cons name List.empty)) empty_params (pt_hole ))
-	}
+    match r {
+        success rem _ => type_cons_implicit_skip (take_while is_not_close_curly rem) rem orig name,
+        fail _ =>
+            let empty_params : List ParseParam := List.empty in
+            success orig (ParseInductConstructor.mk (NamePath.mk (List.cons name List.empty)) empty_params (pt_hole))
+    }
 
 #[partial]
 def type_cons_implicit_skip (r : ParseResult String) (rem : String) (orig : String) (name : Identifier) : ParseResult ParseInductConstructor :=
-	match r {
-		success after_bracket _ => type_cons_implicit_close (tag "}" (skip_spaces after_bracket)) after_bracket orig name,
-		fail _ =>
-			let empty_params : List ParseParam := List.empty in
-			success orig (ParseInductConstructor.mk (NamePath.mk (List.cons name List.empty)) empty_params (pt_hole ))
-	}
+    match r {
+        success after_bracket _ => type_cons_implicit_close (tag "}" (skip_spaces after_bracket)) after_bracket orig name,
+        fail _ =>
+            let empty_params : List ParseParam := List.empty in
+            success orig (ParseInductConstructor.mk (NamePath.mk (List.cons name List.empty)) empty_params (pt_hole))
+    }
 
 #[partial]
 def type_cons_implicit_close (r : ParseResult String) (after_bracket : String) (orig : String) (name : Identifier) : ParseResult ParseInductConstructor :=
-	match r {
-		success rem _ => type_cons_paren_or_nil (tag "(" (skip_spaces rem)) rem name,
-		fail _ =>
-			let empty_params : List ParseParam := List.empty in
-			success after_bracket (ParseInductConstructor.mk (NamePath.mk (List.cons name List.empty)) empty_params (pt_hole ))
-	}
-
+    match r {
+        success rem _ => type_cons_paren_or_nil (tag "(" (skip_spaces rem)) rem name,
+        fail _ =>
+            let empty_params : List ParseParam := List.empty in
+            success after_bracket (ParseInductConstructor.mk (NamePath.mk (List.cons name List.empty)) empty_params (pt_hole))
+    }
 
 #[partial]
 def type_to_decl (name : Identifier) (params : List ParseParam) (kind : ParseTerm) (cons : List ParseInductConstructor) (vis : Visibility) : ParseDecl :=
-	let empty_attrs : List Attribute := List.empty in
-	pd_inductive_d  (ParseInductive.mk (NamePath.mk (List.cons name List.empty)) params kind cons empty_attrs vis)
+    let empty_attrs : List Attribute := List.empty in
+    pd_inductive_d (ParseInductive.mk (NamePath.mk (List.cons name List.empty)) params kind cons empty_attrs vis)
 
 /// Optional `pub `/`priv ` prefix before a declaration keyword (parsed
 /// after any attributes) — defaults to `Visibility.package_private` when
@@ -2028,28 +2025,28 @@ def type_to_decl (name : Identifier) (params : List ParseParam) (kind : ParseTer
 /// use` isn't a real form) or `open` (no visibility concept at all).
 #[partial]
 def vis_parser (input : String) : ParseResult Visibility :=
-	vis_try_pub (tag "pub" input) input
+    vis_try_pub (tag "pub" input) input
 
 #[partial]
 def vis_try_pub (r : ParseResult String) (orig : String) : ParseResult Visibility :=
-	match r {
-		success rem _ => vis_require_ws rem Visibility.pub_ orig,
-		fail _ => vis_try_priv (tag "priv" orig) orig
-	}
+    match r {
+        success rem _ => vis_require_ws rem Visibility.pub_ orig,
+        fail _ => vis_try_priv (tag "priv" orig) orig
+    }
 
 #[partial]
 def vis_try_priv (r : ParseResult String) (orig : String) : ParseResult Visibility :=
-	match r {
-		success rem _ => vis_require_ws rem Visibility.priv_ orig,
-		fail _ => success orig Visibility.package_private
-	}
+    match r {
+        success rem _ => vis_require_ws rem Visibility.priv_ orig,
+        fail _ => success orig Visibility.package_private
+    }
 
 #[partial]
 def vis_require_ws (rem : String) (v : Visibility) (orig : String) : ParseResult Visibility :=
-	match ws1 rem {
-		success rem2 _ => success rem2 v,
-		fail _ => success orig Visibility.package_private
-	}
+    match ws1 rem {
+        success rem2 _ => success rem2 v,
+        fail _ => success orig Visibility.package_private
+    }
 
 // def [#attrs] name {implicit} (explicit) : ret_type := body
 // `#[...]` attributes are now captured for real via `opt_attributes`
@@ -2063,7 +2060,7 @@ def vis_require_ws (rem : String) (v : Visibility) (orig : String) : ParseResult
 
 #[partial]
 def def_parser (input : String) : ParseResult ParseDecl :=
-	def_try_attrs (opt_attributes input) input
+    def_try_attrs (opt_attributes input) input
 
 // `skip_docstrings` (not just `skip_spaces`) between the closing `]` and
 // whatever comes next -- `#[attr] // trailing comment\ndef ...` (a real
@@ -2081,10 +2078,10 @@ def def_parser (input : String) : ParseResult ParseDecl :=
 // via the STRICT parser, working fine all along).
 #[partial]
 def def_try_attrs (r : ParseResult (List Attribute)) (orig : String) : ParseResult ParseDecl :=
-	match r {
-		success rem attrs => def_apply_attrs (def_vis_done (vis_parser (skip_docstrings (skip_spaces rem)))) attrs,
-		fail _ => def_vis_done (vis_parser (skip_spaces orig))
-	}
+    match r {
+        success rem attrs => def_apply_attrs (def_vis_done (vis_parser (skip_docstrings (skip_spaces rem)))) attrs,
+        fail _ => def_vis_done (vis_parser (skip_spaces orig))
+    }
 
 /// Patch the real attrs onto the fully-parsed `Decl` — see
 /// `def_try_attrs`'s doc comment above. `attrs` is `List.empty` for
@@ -2095,35 +2092,35 @@ def def_try_attrs (r : ParseResult (List Attribute)) (orig : String) : ParseResu
 /// was one.
 #[partial]
 def def_apply_attrs (dr : ParseResult ParseDecl) (attrs : List Attribute) : ParseResult ParseDecl :=
-	match dr {
-		success rem decl =>
-			match decl.kind {
-				def_d d =>
-					match d {
-						ParseDef.mk {name, typ, term, constraints, vis, params, ..} =>
-							success rem (pd_def_d  (ParseDef.mk name typ term constraints attrs vis params))
-					},
-				_ => success rem decl
-			},
-		fail e => fail e
-	}
+    match dr {
+        success rem decl =>
+            match decl.kind {
+                def_d d =>
+                    match d {
+                        ParseDef.mk {name, typ, term, constraints, vis, params, ..} =>
+                            success rem (pd_def_d (ParseDef.mk name typ term constraints attrs vis params))
+                    },
+                _ => success rem decl
+            },
+        fail e => fail e
+    }
 
 /// `vis_parser` never itself fails (defaults to `package_private`), so
 /// this always takes the success branch — matches the shape every other
 /// `Result`-consuming step in this parser uses, no special case needed.
 #[partial]
 def def_vis_done (r : ParseResult Visibility) : ParseResult ParseDecl :=
-	match r {
-		success rem vis => def_kw (tag "def" (skip_spaces rem)) vis,
-		fail e => fail e
-	}
+    match r {
+        success rem vis => def_kw (tag "def" (skip_spaces rem)) vis,
+        fail e => fail e
+    }
 
 #[partial]
 def def_kw (r : ParseResult String) (vis : Visibility) : ParseResult ParseDecl :=
-	match r {
-		success rem _ => def_name (dotted_def_name (skip_spaces rem)) vis,
-		fail e => fail e
-	}
+    match r {
+        success rem _ => def_name (dotted_def_name (skip_spaces rem)) vis,
+        fail e => fail e
+    }
 
 /// A def's name, e.g. `foo` or the very common method-style
 /// `Option.get_or_default`/`IO.println`. `def_name` previously parsed
@@ -2134,14 +2131,14 @@ def def_kw (r : ParseResult String) (vis : Visibility) : ParseResult ParseDecl :
 /// it went unnoticed until real files were loaded end-to-end.
 #[partial]
 def dotted_def_name (input : String) : ParseResult String :=
-	map_parse join_dotted_identifiers dotted_identifier input
+    map_parse join_dotted_identifiers dotted_identifier input
 
 #[partial]
 def def_name (r : ParseResult String) (vis : Visibility) : ParseResult ParseDecl :=
-	match r {
-		success rem name => def_try_constraints (tag "[" (skip_spaces rem)) (skip_spaces rem) (Identifier.id name) vis,
-		fail e => fail e
-	}
+    match r {
+        success rem name => def_try_constraints (tag "[" (skip_spaces rem)) (skip_spaces rem) (Identifier.id name) vis,
+        fail e => fail e
+    }
 
 /// A `def`-level `[Constraint A, ...]` clause between the name and its
 /// params (real usage: `std/map.mo`'s `def BTreeMap.beq [BEq K, BEq V]
@@ -2156,73 +2153,73 @@ def def_name (r : ParseResult String) (vis : Visibility) : ParseResult ParseDecl
 /// `def_body`/... chain down to `def_to_decl`.
 #[partial]
 def def_try_constraints (r : ParseResult String) (orig : String) (name : Identifier) (vis : Visibility) : ParseResult ParseDecl :=
-	match r {
-		success rem _ => def_constraints_content (take_while is_not_bracket rem) rem name vis,
-		fail _ => def_params_entry orig name vis
-	}
+    match r {
+        success rem _ => def_constraints_content (take_while is_not_bracket rem) rem name vis,
+        fail _ => def_params_entry orig name vis
+    }
 
 #[partial]
 def def_constraints_content (r : ParseResult String) (orig : String) (name : Identifier) (vis : Visibility) : ParseResult ParseDecl :=
-	match r {
-		success rem content => def_constraints_then_close (type_constraint_list content) rem name vis,
-		fail _ => fail (ParseError.custom "expected ]" orig)
-	}
+    match r {
+        success rem content => def_constraints_then_close (type_constraint_list content) rem name vis,
+        fail _ => fail (ParseError.custom "expected ]" orig)
+    }
 
 #[partial]
 def def_constraints_then_close (cr : ParseResult (List TypeConstraint)) (input : String) (name : Identifier) (vis : Visibility) : ParseResult ParseDecl :=
-	match cr {
-		success _ constraints => def_constraints_close_bracket (tag "]" input) constraints name vis,
-		fail _ =>
-			let empty_cs : List TypeConstraint := List.empty in
-			def_constraints_close_bracket (tag "]" input) empty_cs name vis
-	}
+    match cr {
+        success _ constraints => def_constraints_close_bracket (tag "]" input) constraints name vis,
+        fail _ =>
+            let empty_cs : List TypeConstraint := List.empty in
+            def_constraints_close_bracket (tag "]" input) empty_cs name vis
+    }
 
 #[partial]
 def def_constraints_close_bracket (r : ParseResult String) (constraints : List TypeConstraint) (name : Identifier) (vis : Visibility) : ParseResult ParseDecl :=
-	match r {
-		success rem _ => def_apply_constraints (def_params_entry (skip_spaces rem) name vis) constraints,
-		fail e => fail (ParseError.custom "expected ] after def constraint" (parse_error_remaining e))
-	}
+    match r {
+        success rem _ => def_apply_constraints (def_params_entry (skip_spaces rem) name vis) constraints,
+        fail e => fail (ParseError.custom "expected ] after def constraint" (parse_error_remaining e))
+    }
 
 #[partial]
 def def_params_entry (input : String) (name : Identifier) (vis : Visibility) : ParseResult ParseDecl :=
-	let empty : List ParsedParam := List.empty in
-	def_params (def_params_loop input empty) name vis
+    let empty : List ParsedParam := List.empty in
+    def_params (def_params_loop input empty) name vis
 
 /// Patch the real constraints onto the fully-parsed `Decl` — see
 /// `def_try_constraints`'s doc comment above.
 #[partial]
 def def_apply_constraints (dr : ParseResult ParseDecl) (constraints : List TypeConstraint) : ParseResult ParseDecl :=
-	match dr {
-		success rem decl =>
-			match decl.kind {
-				def_d d =>
-					match d {
-						ParseDef.mk {name, typ, term, attrs, vis, params, ..} =>
-							success rem (pd_def_d  (ParseDef.mk name typ term constraints attrs vis params))
-					},
-				_ => success rem decl
-			},
-		fail e => fail e
-	}
+    match dr {
+        success rem decl =>
+            match decl.kind {
+                def_d d =>
+                    match d {
+                        ParseDef.mk {name, typ, term, attrs, vis, params, ..} =>
+                            success rem (pd_def_d (ParseDef.mk name typ term constraints attrs vis params))
+                    },
+                _ => success rem decl
+            },
+        fail e => fail e
+    }
 
 #[partial]
 def def_params_loop (input : String) (params : List ParsedParam) : ParseResult (List ParsedParam) :=
-	def_params_try_implicit (tag "{" input) input params
+    def_params_try_implicit (tag "{" input) input params
 
 #[partial]
 def def_params_try_implicit (r : ParseResult String) (orig : String) (params : List ParsedParam) : ParseResult (List ParsedParam) :=
-	match r {
-		success rem _ => def_implicit_param (identifier (skip_spaces rem)) rem params,
-		fail _ => def_params_try_explicit (tag "(" orig) orig params
-	}
+    match r {
+        success rem _ => def_implicit_param (identifier (skip_spaces rem)) rem params,
+        fail _ => def_params_try_explicit (tag "(" orig) orig params
+    }
 
 #[partial]
 def def_implicit_param (r : ParseResult String) (rem : String) (params : List ParsedParam) : ParseResult (List ParsedParam) :=
-	match r {
-		success rem2 name => def_implicit_more_names rem2 rem name params,
-		fail e => fail e
-	}
+    match r {
+        success rem2 name => def_implicit_more_names rem2 rem name params,
+        fail e => fail e
+    }
 
 /// After the first name in a `{...}` implicit-param clause, try more
 /// space-separated names sharing one type (`{K V : Type}`, not just
@@ -2234,29 +2231,29 @@ def def_implicit_param (r : ParseResult String) (rem : String) (params : List Pa
 /// hard-failing on the second name.
 #[partial]
 def def_implicit_more_names (input : String) (brace_rem : String) (name : String) (params : List ParsedParam) : ParseResult (List ParsedParam) :=
-	def_implicit_more_names_try (identifier (skip_spaces input)) input brace_rem name params
+    def_implicit_more_names_try (identifier (skip_spaces input)) input brace_rem name params
 
 #[partial]
 def def_implicit_more_names_try (r : ParseResult String) (orig : String) (brace_rem : String) (name : String) (params : List ParsedParam) : ParseResult (List ParsedParam) :=
-	match r {
-		success rem2 _ => def_implicit_more_names rem2 brace_rem name params,
-		fail _ => def_implicit_colon (tag ":" (skip_spaces orig)) brace_rem orig name params
-	}
+    match r {
+        success rem2 _ => def_implicit_more_names rem2 brace_rem name params,
+        fail _ => def_implicit_colon (tag ":" (skip_spaces orig)) brace_rem orig name params
+    }
 
 #[partial]
 def def_implicit_colon (r : ParseResult String) (brace_rem : String) (rem : String) (name : String) (params : List ParsedParam) : ParseResult (List ParsedParam) :=
-	match r {
-		success rem2 _ =>
-			def_implicit_type (type_expression rem2) brace_rem rem name params,
-		fail e => fail e
-	}
+    match r {
+        success rem2 _ =>
+            def_implicit_type (type_expression rem2) brace_rem rem name params,
+        fail e => fail e
+    }
 
 #[partial]
 def def_implicit_type (r : ParseResult ParseTerm) (brace_rem : String) (rem : String) (name : String) (params : List ParsedParam) : ParseResult (List ParsedParam) :=
-	match r {
-		success rem2 typ => def_implicit_close (tag "}" rem2) brace_rem name typ params,
-		fail e => fail e
-	}
+    match r {
+        success rem2 typ => def_implicit_close (tag "}" rem2) brace_rem name typ params,
+        fail e => fail e
+    }
 
 /// Closes a `{name : type}` implicit-param clause. On success this
 /// deliberately drops `name`/`typ` and restarts `params` from empty,
@@ -2291,12 +2288,12 @@ def def_implicit_type (r : ParseResult ParseTerm) (brace_rem : String) (rem : St
 /// comma-less clause never produces.
 #[partial]
 def def_implicit_close (r : ParseResult String) (brace_rem : String) (name : String) (typ : ParseTerm) (params : List ParsedParam) : ParseResult (List ParsedParam) :=
-	match r {
-		success rem2 _ =>
-			let empty : List ParsedParam := List.empty in
-			def_params_loop (skip_spaces rem2) empty,
-		fail _ => def_params_try_brace_block_parsed brace_rem params
-	}
+    match r {
+        success rem2 _ =>
+            let empty : List ParsedParam := List.empty in
+            def_params_loop (skip_spaces rem2) empty,
+        fail _ => def_params_try_brace_block_parsed brace_rem params
+    }
 
 /// `def_params_try_brace_block`'s own internal chain stays entirely
 /// `List Param`-typed, unchanged -- the brace-block spelling never
@@ -2307,10 +2304,10 @@ def def_implicit_close (r : ParseResult String) (brace_rem : String) (name : Str
 /// the (destructuring-aware) main `def_params_loop` chain.
 #[partial]
 def def_params_try_brace_block_parsed (input : String) (params : List ParsedParam) : ParseResult (List ParsedParam) :=
-	match def_params_try_brace_block input (parsed_params_as_params params) {
-		success rem plain => success rem (plain_params_as_parsed plain),
-		fail e => fail e
-	}
+    match def_params_try_brace_block input (parsed_params_as_params params) {
+        success rem plain => success rem (plain_params_as_parsed plain),
+        fail e => fail e
+    }
 
 /// A def's whole parameter list as one brace block (`{x : T, y : T2}`),
 /// an alternative spelling of the usual separate `(x : T) (y : T2)`
@@ -2323,56 +2320,56 @@ def def_params_try_brace_block_parsed (input : String) (params : List ParsedPara
 /// dropped.
 #[partial]
 def def_params_try_brace_block (input : String) (params : List ParseParam) : ParseResult (List ParseParam) :=
-	def_brace_param (identifier (skip_spaces input)) params
+    def_brace_param (identifier (skip_spaces input)) params
 
 #[partial]
 def def_brace_param (r : ParseResult String) (params : List ParseParam) : ParseResult (List ParseParam) :=
-	match r {
-		success rem name => def_brace_colon (tag ":" (skip_spaces rem)) name params,
-		fail e => fail e
-	}
+    match r {
+        success rem name => def_brace_colon (tag ":" (skip_spaces rem)) name params,
+        fail e => fail e
+    }
 
 #[partial]
 def def_brace_colon (r : ParseResult String) (name : String) (params : List ParseParam) : ParseResult (List ParseParam) :=
-	match r {
-		success rem _ =>
-			def_brace_type (type_expression rem) name params,
-		fail e => fail e
-	}
+    match r {
+        success rem _ =>
+            def_brace_type (type_expression rem) name params,
+        fail e => fail e
+    }
 
 #[partial]
 def def_brace_type (r : ParseResult ParseTerm) (name : String) (params : List ParseParam) : ParseResult (List ParseParam) :=
-	match r {
-		success rem typ => def_brace_try_default (tag ":=" (skip_spaces rem)) rem name typ params,
-		fail e => fail e
-	}
+    match r {
+        success rem typ => def_brace_try_default (tag ":=" (skip_spaces rem)) rem name typ params,
+        fail e => fail e
+    }
 
 #[partial]
 def def_brace_try_default (r : ParseResult String) (orig : String) (name : String) (typ : ParseTerm) (params : List ParseParam) : ParseResult (List ParseParam) :=
-	match r {
-		success rem _ =>
-			match expression (skip_spaces rem) {
-				success rem2 default_val =>
-					let no_attrs : List Attribute := List.empty in
-					let p : ParseParam := ParseParam.mk (Identifier.id name) typ Multiplicity.many (Option.some default_val) no_attrs in
-					def_brace_sep (skip_spaces rem2) (List.cons p params),
-				fail e => fail e
-			},
-		fail _ =>
-			let new_params : List ParseParam := List.cons (parse_param_many (Identifier.id name) typ) params in
-			def_brace_sep (skip_spaces orig) new_params
-	}
+    match r {
+        success rem _ =>
+            match expression (skip_spaces rem) {
+                success rem2 default_val =>
+                    let no_attrs : List Attribute := List.empty in
+                    let p : ParseParam := ParseParam.mk (Identifier.id name) typ Multiplicity.many (Option.some default_val) no_attrs in
+                    def_brace_sep (skip_spaces rem2) (List.cons p params),
+                fail e => fail e
+            },
+        fail _ =>
+            let new_params : List ParseParam := List.cons (parse_param_many (Identifier.id name) typ) params in
+            def_brace_sep (skip_spaces orig) new_params
+    }
 
 #[partial]
 def def_brace_sep (input : String) (params : List ParseParam) : ParseResult (List ParseParam) :=
-	def_brace_sep_try (tag "," input) input params
+    def_brace_sep_try (tag "," input) input params
 
 #[partial]
 def def_brace_sep_try (r : ParseResult String) (orig : String) (params : List ParseParam) : ParseResult (List ParseParam) :=
-	match r {
-		success rem _ => def_params_try_brace_block (skip_spaces rem) params,
-		fail _ => def_brace_close (tag "}" (skip_spaces orig)) params
-	}
+    match r {
+        success rem _ => def_params_try_brace_block (skip_spaces rem) params,
+        fail _ => def_brace_close (tag "}" (skip_spaces orig)) params
+    }
 
 /// Closes the brace block — a genuine, final stop (unlike `def_explicit_
 /// close`, this does NOT loop back into `def_params_loop`): the whole
@@ -2381,41 +2378,41 @@ def def_brace_sep_try (r : ParseResult String) (orig : String) (params : List Pa
 /// paren/brace groups are attempted after it.
 #[partial]
 def def_brace_close (r : ParseResult String) (params : List ParseParam) : ParseResult (List ParseParam) :=
-	match r {
-		success rem _ =>
-			let rev : List ParseParam := list_reverse params in
-			success rem rev,
-		fail e => fail e
-	}
+    match r {
+        success rem _ =>
+            let rev : List ParseParam := list_reverse params in
+            success rem rev,
+        fail e => fail e
+    }
 
 #[partial]
 def def_params_try_explicit (r : ParseResult String) (orig : String) (params : List ParsedParam) : ParseResult (List ParsedParam) :=
-	match r {
-		// `opt_attributes` captured right after the opening `(` -- the
-		// one real per-param attribute shape (`#[arg]`, e.g.
-		// `(#[arg] verbose : Bool)` in an `#[derive Cli]`-annotated type's
-		// constructor) is on a CONSTRUCTOR field, not a `def` param
-		// (see motes/clap/src/tests/cli_derive_tests.mo, now running under
-		// both hosts per its own doc comment) -- so this specific path has no
-		// in-scope real corpus target, unlike every other piece of this
-		// plan. Lower-confidence, hand-repro-only per
-		// plans/bootstrapping/self-hosted-compiler.md's own staging.
-		success rem _ => def_explicit_attrs (opt_attributes rem) rem params,
-		fail _ =>
-			let rev : List ParsedParam := list_reverse params in
-			success orig rev
-	}
+    match r {
+        // `opt_attributes` captured right after the opening `(` -- the
+        // one real per-param attribute shape (`#[arg]`, e.g.
+        // `(#[arg] verbose : Bool)` in an `#[derive Cli]`-annotated type's
+        // constructor) is on a CONSTRUCTOR field, not a `def` param
+        // (see motes/clap/src/tests/cli_derive_tests.mo, now running under
+        // both hosts per its own doc comment) -- so this specific path has no
+        // in-scope real corpus target, unlike every other piece of this
+        // plan. Lower-confidence, hand-repro-only per
+        // plans/bootstrapping/self-hosted-compiler.md's own staging.
+        success rem _ => def_explicit_attrs (opt_attributes rem) rem params,
+        fail _ =>
+            let rev : List ParsedParam := list_reverse params in
+            success orig rev
+    }
 
 #[partial]
 def def_explicit_attrs (r : ParseResult (List Attribute)) (close_rem : String) (params : List ParsedParam) : ParseResult (List ParsedParam) :=
-	match r {
-		success rem attrs =>
-			match multiplicity_prefix (skip_spaces rem) {
-				success rem2 mult => def_explicit_try_destructured (field_pattern_parser rem2) rem2 close_rem params attrs mult,
-				fail e => fail e
-			},
-		fail e => fail e
-	}
+    match r {
+        success rem attrs =>
+            match multiplicity_prefix (skip_spaces rem) {
+                success rem2 mult => def_explicit_try_destructured (field_pattern_parser rem2) rem2 close_rem params attrs mult,
+                fail e => fail e
+            },
+        fail e => fail e
+    }
 
 /// `({ x, y } : T)` -- a destructured `def` parameter (`plans/
 /// implementations/struct-field-destructuring.md`'s Phase 8), tried
@@ -2431,47 +2428,47 @@ def def_explicit_attrs (r : ParseResult (List Attribute)) (close_rem : String) (
 /// gets one for free.
 #[partial]
 def def_explicit_try_destructured (r : ParseResult FieldPattern) (orig : String) (close_rem : String) (params : List ParsedParam) (attrs : List Attribute) (mult : Multiplicity) : ParseResult (List ParsedParam) :=
-	match r {
-		success rem fp => def_explicit_destructured_colon (tag ":" (skip_spaces rem)) close_rem fp params attrs mult,
-		fail _ => def_explicit_param (identifier orig) close_rem params attrs mult
-	}
+    match r {
+        success rem fp => def_explicit_destructured_colon (tag ":" (skip_spaces rem)) close_rem fp params attrs mult,
+        fail _ => def_explicit_param (identifier orig) close_rem params attrs mult
+    }
 
 #[partial]
 def def_explicit_destructured_colon (r : ParseResult String) (close_rem : String) (fp : FieldPattern) (params : List ParsedParam) (attrs : List Attribute) (mult : Multiplicity) : ParseResult (List ParsedParam) :=
-	match r {
-		success rem _ =>
-			def_explicit_destructured_type (type_expression rem) close_rem fp params attrs mult,
-		fail e => fail e
-	}
+    match r {
+        success rem _ =>
+            def_explicit_destructured_type (type_expression rem) close_rem fp params attrs mult,
+        fail e => fail e
+    }
 
 #[partial]
 def def_explicit_destructured_type (r : ParseResult ParseTerm) (close_rem : String) (fp : FieldPattern) (params : List ParsedParam) (attrs : List Attribute) (mult : Multiplicity) : ParseResult (List ParsedParam) :=
-	match r {
-		success rem typ => def_explicit_destructured_close (tag ")" rem) close_rem fp typ params attrs mult,
-		fail e => fail e
-	}
+    match r {
+        success rem typ => def_explicit_destructured_close (tag ")" rem) close_rem fp typ params attrs mult,
+        fail e => fail e
+    }
 
 #[partial]
 def def_explicit_destructured_close (r : ParseResult String) (close_rem : String) (fp : FieldPattern) (typ : ParseTerm) (params : List ParsedParam) (attrs : List Attribute) (mult : Multiplicity) : ParseResult (List ParsedParam) :=
-	match r {
-		success rem _ =>
-			let none : Option ParseTerm := Option.none in
-			// `mult`, not a hardcoded `Multiplicity.many`: `def_explicit_attrs`
-			// parses a `!`/`?`/`%` prefix for BOTH param forms, and the
-			// destructured branch used to accept one and silently discard it,
-			// so `(!{x, y} : P)` compiled as an unrestricted param.
-			let p : ParseParam := ParseParam.mk (Identifier.id "__struct_param") typ mult none attrs in
-			let pp : ParsedParam := ParsedParam.destructured p fp in
-			def_params_loop (skip_spaces rem) (List.cons pp params),
-		fail e => fail e
-	}
+    match r {
+        success rem _ =>
+            let none : Option ParseTerm := Option.none in
+            // `mult`, not a hardcoded `Multiplicity.many`: `def_explicit_attrs`
+            // parses a `!`/`?`/`%` prefix for BOTH param forms, and the
+            // destructured branch used to accept one and silently discard it,
+            // so `(!{x, y} : P)` compiled as an unrestricted param.
+            let p : ParseParam := ParseParam.mk (Identifier.id "__struct_param") typ mult none attrs in
+            let pp : ParsedParam := ParsedParam.destructured p fp in
+            def_params_loop (skip_spaces rem) (List.cons pp params),
+        fail e => fail e
+    }
 
 #[partial]
 def def_explicit_param (r : ParseResult String) (close_rem : String) (params : List ParsedParam) (attrs : List Attribute) (mult : Multiplicity) : ParseResult (List ParsedParam) :=
-	match r {
-		success rem name => def_explicit_more_names rem close_rem (List.cons (Identifier.id name) List.empty) params attrs mult,
-		fail e => fail e
-	}
+    match r {
+        success rem name => def_explicit_more_names rem close_rem (List.cons (Identifier.id name) List.empty) params attrs mult,
+        fail e => fail e
+    }
 
 /// After the first param name, try to parse MORE space-separated names
 /// sharing one type before requiring `:` — supports `(a b : Type)`, the
@@ -2480,36 +2477,36 @@ def def_explicit_param (r : ParseResult String) (close_rem : String) (params : L
 /// (reverse declaration order), mirroring how `params` itself accumulates.
 #[partial]
 def def_explicit_more_names (input : String) (close_rem : String) (names : List Identifier) (params : List ParsedParam) (attrs : List Attribute) (mult : Multiplicity) : ParseResult (List ParsedParam) :=
-	def_explicit_more_names_try (identifier (skip_spaces input)) input close_rem names params attrs mult
+    def_explicit_more_names_try (identifier (skip_spaces input)) input close_rem names params attrs mult
 
 #[partial]
 def def_explicit_more_names_try (r : ParseResult String) (orig : String) (close_rem : String) (names : List Identifier) (params : List ParsedParam) (attrs : List Attribute) (mult : Multiplicity) : ParseResult (List ParsedParam) :=
-	match r {
-		success rem name => def_explicit_more_names rem close_rem (List.cons (Identifier.id name) names) params attrs mult,
-		fail _ => def_explicit_colon (tag ":" (skip_spaces orig)) close_rem names params attrs mult
-	}
+    match r {
+        success rem name => def_explicit_more_names rem close_rem (List.cons (Identifier.id name) names) params attrs mult,
+        fail _ => def_explicit_colon (tag ":" (skip_spaces orig)) close_rem names params attrs mult
+    }
 
 #[partial]
 def def_explicit_colon (r : ParseResult String) (close_rem : String) (names : List Identifier) (params : List ParsedParam) (attrs : List Attribute) (mult : Multiplicity) : ParseResult (List ParsedParam) :=
-	match r {
-		success rem _ =>
-			def_explicit_type (type_expression rem) close_rem names params attrs mult,
-		fail e => fail e
-	}
+    match r {
+        success rem _ =>
+            def_explicit_type (type_expression rem) close_rem names params attrs mult,
+        fail e => fail e
+    }
 
 #[partial]
 def def_explicit_type (r : ParseResult ParseTerm) (close_rem : String) (names : List Identifier) (params : List ParsedParam) (attrs : List Attribute) (mult : Multiplicity) : ParseResult (List ParsedParam) :=
-	match r {
-		success rem typ => def_explicit_close (tag ")" rem) close_rem names typ params attrs mult,
-		fail e => fail e
-	}
+    match r {
+        success rem typ => def_explicit_close (tag ")" rem) close_rem names typ params attrs mult,
+        fail e => fail e
+    }
 
 #[partial]
 def def_explicit_close (r : ParseResult String) (close_rem : String) (names : List Identifier) (typ : ParseTerm) (params : List ParsedParam) (attrs : List Attribute) (mult : Multiplicity) : ParseResult (List ParsedParam) :=
-	match r {
-		success rem _ => def_params_loop (skip_spaces rem) (params_for_names_attrs (list_reverse names) typ attrs mult params),
-		fail e => fail e
-	}
+    match r {
+        success rem _ => def_params_loop (skip_spaces rem) (params_for_names_attrs (list_reverse names) typ attrs mult params),
+        fail e => fail e
+    }
 
 /// Build one `Param` per name (all sharing `typ`), consing each onto
 /// `params` in declaration order — `names` must already be in original
@@ -2518,8 +2515,8 @@ def def_explicit_close (r : ParseResult String) (close_rem : String) (names : Li
 /// `params` itself follows throughout this parser.
 #[partial]
 def params_for_names (names : List Identifier) (typ : ParseTerm) (params : List ParseParam) : List ParseParam := match names {
-	List.empty => params,
-	List.cons n rest => params_for_names rest typ (List.cons (parse_param_many n typ) params),
+    List.empty => params,
+    List.cons n rest => params_for_names rest typ (List.cons (parse_param_many n typ) params),
 }
 
 /// Sibling to `params_for_names` used only by the explicit-param chain
@@ -2539,11 +2536,11 @@ def params_for_names (names : List Identifier) (typ : ParseTerm) (params : List 
 /// `#[arg]` with a multi-name group either way).
 #[partial]
 def params_for_names_attrs (names : List Identifier) (typ : ParseTerm) (attrs : List Attribute) (mult : Multiplicity) (params : List ParsedParam) : List ParsedParam := match names {
-	List.empty => params,
-	List.cons n rest =>
-		let none : Option ParseTerm := Option.none in
-		let p : ParseParam := ParseParam.mk n typ mult none attrs in
-		params_for_names_attrs rest typ attrs mult (List.cons (ParsedParam.plain p) params),
+    List.empty => params,
+    List.cons n rest =>
+        let none : Option ParseTerm := Option.none in
+        let p : ParseParam := ParseParam.mk n typ mult none attrs in
+        params_for_names_attrs rest typ attrs mult (List.cons (ParsedParam.plain p) params),
 }
 
 /// `params_for_names` with a captured per-FIELD `#[...]` attribute list —
@@ -2565,73 +2562,73 @@ def params_for_names_attrs (names : List Identifier) (typ : ParseTerm) (attrs : 
 /// expected, which nothing on the generated-code path re-verifies).
 #[partial]
 def ctor_params_for_names_attrs (names : List Identifier) (typ : ParseTerm) (attrs : List Attribute) (params : List ParseParam) : List ParseParam := match names {
-	List.empty => params,
-	List.cons n rest =>
-		match parse_param_many n typ {
-			ParseParam.mk n2 t2 m2 d2 _ => ctor_params_for_names_attrs rest typ attrs (List.cons (ParseParam.mk n2 t2 m2 d2 attrs) params),
-		},
+    List.empty => params,
+    List.cons n rest =>
+        match parse_param_many n typ {
+            ParseParam.mk n2 t2 m2 d2 _ => ctor_params_for_names_attrs rest typ attrs (List.cons (ParseParam.mk n2 t2 m2 d2 attrs) params),
+        },
 }
 
 #[partial]
 def def_params (r : ParseResult (List ParsedParam)) (name : Identifier) (vis : Visibility) : ParseResult ParseDecl :=
-	match r {
-		success rem params => def_ret_type (tag ":" (skip_spaces rem)) rem name params vis,
-		fail e => fail e
-	}
+    match r {
+        success rem params => def_ret_type (tag ":" (skip_spaces rem)) rem name params vis,
+        fail e => fail e
+    }
 
 #[partial]
 def def_ret_type (r : ParseResult String) (orig : String) (name : Identifier) (params : List ParsedParam) (vis : Visibility) : ParseResult ParseDecl :=
-	match r {
-		success rem _ =>
-			def_ret_expr (type_expression rem) name params vis,
-		fail _ => fail (ParseError.custom "expected : return type" orig)
-	}
+    match r {
+        success rem _ =>
+            def_ret_expr (type_expression rem) name params vis,
+        fail _ => fail (ParseError.custom "expected : return type" orig)
+    }
 
 #[partial]
 def def_ret_expr (r : ParseResult ParseTerm) (name : Identifier) (params : List ParsedParam) (vis : Visibility) : ParseResult ParseDecl :=
-	match r {
-		success rem typ => def_body rem name params typ vis,
-		fail e => fail e
-	}
+    match r {
+        success rem typ => def_body rem name params typ vis,
+        fail e => fail e
+    }
 
 #[partial]
 def def_body (input : String) (name : Identifier) (params : List ParsedParam) (typ : ParseTerm) (vis : Visibility) : ParseResult ParseDecl :=
-	def_body_assign (tag ":=" (skip_spaces input)) name params typ vis input
+    def_body_assign (tag ":=" (skip_spaces input)) name params typ vis input
 
 #[partial]
 def def_body_assign (r : ParseResult String) (name : Identifier) (params : List ParsedParam) (typ : ParseTerm) (vis : Visibility) (orig : String) : ParseResult ParseDecl :=
-	match r {
-		// type_expression, not plain expression -- a def's value can
-		// itself be a type-level Pi-arrow chain used as a value (a type
-		// synonym: `def Lens ... : Type := (A -> F B) -> S -> F T`,
-		// init/prelude.mo). type_expression is a strict superset of
-		// expression here: it falls through to plain `expression`
-		// (type_plain) whenever the dependent-paren-binder form doesn't
-		// apply, then ALSO checks for a trailing `->` that expression
-		// alone never looks for (`->` isn't a general value-level infix
-		// operator, so expression's own operator-precedence climbing
-		// correctly backtracks over it, leaving it unconsumed) --
-		// ordinary value defs with no top-level `->` parse identically
-		// either way. Previously `Lens` parsed as SUCCESS but silently
-		// left `-> S -> F T` unconsumed, which decls_try's lenient
-		// truncate-on-failure then hit as a bogus "next declaration"
-		// starting with `->`, truncating everything after it (including
-		// List.last, further down the same file).
-		// `skip_docstrings (skip_spaces rem)`, not bare `skip_spaces rem`
-		// -- a comment directly after `:=`, before a def's body expression,
-		// must be skipped like whitespace here too (same comment-skip fix
-		// applied throughout this file's `if`/`match`-arm/do-block entry
-		// points).
-		success rem _ => def_body_expr (type_expression (skip_docstrings (skip_spaces rem))) name params typ vis,
-		fail _ => def_body_block_or_none (tag "{" (skip_spaces orig)) name params typ vis orig
-	}
+    match r {
+        // type_expression, not plain expression -- a def's value can
+        // itself be a type-level Pi-arrow chain used as a value (a type
+        // synonym: `def Lens ... : Type := (A -> F B) -> S -> F T`,
+        // init/prelude.mo). type_expression is a strict superset of
+        // expression here: it falls through to plain `expression`
+        // (type_plain) whenever the dependent-paren-binder form doesn't
+        // apply, then ALSO checks for a trailing `->` that expression
+        // alone never looks for (`->` isn't a general value-level infix
+        // operator, so expression's own operator-precedence climbing
+        // correctly backtracks over it, leaving it unconsumed) --
+        // ordinary value defs with no top-level `->` parse identically
+        // either way. Previously `Lens` parsed as SUCCESS but silently
+        // left `-> S -> F T` unconsumed, which decls_try's lenient
+        // truncate-on-failure then hit as a bogus "next declaration"
+        // starting with `->`, truncating everything after it (including
+        // List.last, further down the same file).
+        // `skip_docstrings (skip_spaces rem)`, not bare `skip_spaces rem`
+        // -- a comment directly after `:=`, before a def's body expression,
+        // must be skipped like whitespace here too (same comment-skip fix
+        // applied throughout this file's `if`/`match`-arm/do-block entry
+        // points).
+        success rem _ => def_body_expr (type_expression (skip_docstrings (skip_spaces rem))) name params typ vis,
+        fail _ => def_body_block_or_none (tag "{" (skip_spaces orig)) name params typ vis orig
+    }
 
 #[partial]
 def def_body_block_or_none (r : ParseResult String) (name : Identifier) (params : List ParsedParam) (typ : ParseTerm) (vis : Visibility) (orig : String) : ParseResult ParseDecl :=
-	match r {
-		success rem _ => def_body_do (do_stmts rem) name params typ vis,
-		fail _ => success orig (def_to_decl (lam_parsed_params params (pt_hole )) name (build_param_pi_chain (parsed_params_as_params params) typ) vis (parsed_params_as_params params))
-	}
+    match r {
+        success rem _ => def_body_do (do_stmts rem) name params typ vis,
+        fail _ => success orig (def_to_decl (lam_parsed_params params (pt_hole)) name (build_param_pi_chain (parsed_params_as_params params) typ) vis (parsed_params_as_params params))
+    }
 
 /// The body is correctly wrapped in one lambda per param via `lam_params`,
 /// but the DECLARED type (`typ`, just the bare return-type expression at
@@ -2647,42 +2644,42 @@ def def_body_block_or_none (r : ParseResult String) (name : Identifier) (params 
 /// a matching Pi-typed expectation.
 #[partial]
 def def_body_expr (r : ParseResult ParseTerm) (name : Identifier) (params : List ParsedParam) (typ : ParseTerm) (vis : Visibility) : ParseResult ParseDecl :=
-	match r {
-		success rem body => success rem (def_to_decl (lam_parsed_params params body) name (build_param_pi_chain (parsed_params_as_params params) typ) vis (parsed_params_as_params params)),
-		fail e => fail e
-	}
+    match r {
+        success rem body => success rem (def_to_decl (lam_parsed_params params body) name (build_param_pi_chain (parsed_params_as_params params) typ) vis (parsed_params_as_params params)),
+        fail e => fail e
+    }
 
 #[partial]
 def def_body_do (r : ParseResult (List DoStmt)) (name : Identifier) (params : List ParsedParam) (typ : ParseTerm) (vis : Visibility) : ParseResult ParseDecl :=
-	match r {
-		success rem stmts => success rem (def_to_decl (lam_parsed_params params (pt_do stmts)) name (build_param_pi_chain (parsed_params_as_params params) typ) vis (parsed_params_as_params params)),
-		fail e => fail e
-	}
+    match r {
+        success rem stmts => success rem (def_to_decl (lam_parsed_params params (pt_do stmts)) name (build_param_pi_chain (parsed_params_as_params params) typ) vis (parsed_params_as_params params)),
+        fail e => fail e
+    }
 
 // ---------- TypeConstraint parser ----------
 
 #[partial]
 def type_constraint_one (input : String) : ParseResult TypeConstraint :=
-	type_constraint_one_name (name_path_parser input) input
+    type_constraint_one_name (name_path_parser input) input
 
 #[partial]
 def type_constraint_one_name (r : ParseResult NamePath) (orig : String) : ParseResult TypeConstraint :=
-	match r {
-		success rem cls =>
-			let empty_vars : List Identifier := List.empty in
-			type_constraint_vars (take_while_byte is_ident_char_byte (skip_spaces rem)) cls empty_vars rem,
-		fail _ => fail (ParseError.custom "expected class name in constraint" orig)
-	}
+    match r {
+        success rem cls =>
+            let empty_vars : List Identifier := List.empty in
+            type_constraint_vars (take_while_byte is_ident_char_byte (skip_spaces rem)) cls empty_vars rem,
+        fail _ => fail (ParseError.custom "expected class name in constraint" orig)
+    }
 
 #[partial]
 def type_constraint_vars (r : ParseResult String) (cls : NamePath) (acc : List Identifier) (orig : String) : ParseResult TypeConstraint :=
-	match r {
-		success rest ident =>
-			if is_empty ident
-			then success rest (TypeConstraint.mk cls (list_reverse acc))
-			else type_constraint_vars (take_while_byte is_ident_char_byte (skip_spaces rest)) cls (List.cons (Identifier.id ident) acc) orig,
-		fail _ => success orig (TypeConstraint.mk cls (list_reverse acc))
-	}
+    match r {
+        success rest ident =>
+            if is_empty ident
+            then success rest (TypeConstraint.mk cls (list_reverse acc))
+            else type_constraint_vars (take_while_byte is_ident_char_byte (skip_spaces rest)) cls (List.cons (Identifier.id ident) acc) orig,
+        fail _ => success orig (TypeConstraint.mk cls (list_reverse acc))
+    }
 
 #[partial]
 def type_constraint_list (input : String) : ParseResult (List TypeConstraint) :=
@@ -2702,32 +2699,32 @@ def type_constraint_list (input : String) : ParseResult (List TypeConstraint) :=
 
 #[partial]
 def class_parser (input : String) : ParseResult ParseDecl :=
-	match vis_parser input {
-		success rem vis => class_vis rem vis,
-		fail e => fail e
-	}
+    match vis_parser input {
+        success rem vis => class_vis rem vis,
+        fail e => fail e
+    }
 
 #[partial]
 def class_vis (input : String) (vis : Visibility) : ParseResult ParseDecl :=
-	class_kw (tag "class" input) vis
+    class_kw (tag "class" input) vis
 
 #[partial]
 def class_kw (r : ParseResult String) (vis : Visibility) : ParseResult ParseDecl :=
-	match r {
-		success rem _ => class_constraints_or_name rem vis,
-		fail e => fail e
-	}
+    match r {
+        success rem _ => class_constraints_or_name rem vis,
+        fail e => fail e
+    }
 
 #[partial]
 def class_constraints_or_name (input : String) (vis : Visibility) : ParseResult ParseDecl :=
-	class_try_constraints (tag "[" (skip_spaces input)) input vis
+    class_try_constraints (tag "[" (skip_spaces input)) input vis
 
 #[partial]
 def class_try_constraints (r : ParseResult String) (orig : String) (vis : Visibility) : ParseResult ParseDecl :=
-	match r {
-		success rem _ => class_constraints_bracket rem vis,
-		fail _ => class_name (dotted_def_name (skip_spaces orig)) vis
-	}
+    match r {
+        success rem _ => class_constraints_bracket rem vis,
+        fail _ => class_name (dotted_def_name (skip_spaces orig)) vis
+    }
 
 /// Parse the actual `[...]` constraint-list content (`type_constraint_list`,
 /// same helper `instance`'s own constraint parsing already used) instead
@@ -2738,99 +2735,99 @@ def class_try_constraints (r : ParseResult String) (orig : String) (vis : Visibi
 /// parsed constraints reach `Class.mk`.
 #[partial]
 def class_constraints_bracket (input : String) (vis : Visibility) : ParseResult ParseDecl :=
-	class_constraints_parsed (take_while is_not_bracket input) input vis
+    class_constraints_parsed (take_while is_not_bracket input) input vis
 
 #[partial]
 def class_constraints_parsed (r : ParseResult String) (orig : String) (vis : Visibility) : ParseResult ParseDecl :=
-	match r {
-		success rem content =>
-			class_constraints_then_name (type_constraint_list content) rem vis,
-		fail _ => fail (ParseError.custom "expected ]" orig)
-	}
+    match r {
+        success rem content =>
+            class_constraints_then_name (type_constraint_list content) rem vis,
+        fail _ => fail (ParseError.custom "expected ]" orig)
+    }
 
 #[partial]
 def class_constraints_then_name (cr : ParseResult (List TypeConstraint)) (input : String) (vis : Visibility) : ParseResult ParseDecl :=
-	match cr {
-		success _ constraints =>
-			class_constraints_close_bracket (tag "]" input) constraints vis,
-		fail _ =>
-			let empty_cs : List TypeConstraint := List.empty in
-			class_constraints_close_bracket (tag "]" input) empty_cs vis
-	}
+    match cr {
+        success _ constraints =>
+            class_constraints_close_bracket (tag "]" input) constraints vis,
+        fail _ =>
+            let empty_cs : List TypeConstraint := List.empty in
+            class_constraints_close_bracket (tag "]" input) empty_cs vis
+    }
 
 #[partial]
 def class_constraints_close_bracket (r : ParseResult String) (constraints : List TypeConstraint) (vis : Visibility) : ParseResult ParseDecl :=
-	match r {
-		success rem _ =>
-			class_apply_constraints (class_name (dotted_def_name (skip_spaces rem)) vis) constraints,
-		fail e => fail (ParseError.custom "expected ] after class constraint" (parse_error_remaining e))
-	}
+    match r {
+        success rem _ =>
+            class_apply_constraints (class_name (dotted_def_name (skip_spaces rem)) vis) constraints,
+        fail e => fail (ParseError.custom "expected ] after class constraint" (parse_error_remaining e))
+    }
 
 /// Patch the real constraints onto the fully-parsed `Class` — see
 /// `class_params`'s doc comment for why this is done after the fact.
 #[partial]
 def class_apply_constraints (dr : ParseResult ParseDecl) (constraints : List TypeConstraint) : ParseResult ParseDecl :=
-	match dr {
-		success rem decl =>
-			match decl.kind {
-				class_d cls =>
-					match cls {
-						ParseClass.mk name params _ methods vis sort =>
-							success rem (pd_class_d  (ParseClass.mk name params constraints methods vis sort))
-					},
-				_ => success rem decl
-			},
-		fail e => fail e
-	}
+    match dr {
+        success rem decl =>
+            match decl.kind {
+                class_d cls =>
+                    match cls {
+                        ParseClass.mk name params _ methods vis sort =>
+                            success rem (pd_class_d (ParseClass.mk name params constraints methods vis sort))
+                    },
+                _ => success rem decl
+            },
+        fail e => fail e
+    }
 
 #[partial]
 def class_name (r : ParseResult String) (vis : Visibility) : ParseResult ParseDecl :=
-	match r {
-		success rem name =>
-			let empty_params : List ParseParam := List.empty in
-			// `{u : Universe}` / `{u}` after the class name, the level
-			// analogue of the `def`/`type` parameter clause. Parsed and
-			// dropped: `u` becomes a level binder only because a `Sort u`
-			// in the surviving params mentions it (`free_level_vars`), the
-			// same rule `def_implicit_close` documents.
-			class_try_universe (tag "{" (skip_spaces rem)) rem (Identifier.id name) empty_params vis,
-		fail e => fail e
-	}
+    match r {
+        success rem name =>
+            let empty_params : List ParseParam := List.empty in
+            // `{u : Universe}` / `{u}` after the class name, the level
+            // analogue of the `def`/`type` parameter clause. Parsed and
+            // dropped: `u` becomes a level binder only because a `Sort u`
+            // in the surviving params mentions it (`free_level_vars`), the
+            // same rule `def_implicit_close` documents.
+            class_try_universe (tag "{" (skip_spaces rem)) rem (Identifier.id name) empty_params vis,
+        fail e => fail e
+    }
 
 #[partial]
 def class_try_universe (r : ParseResult String) (orig : String) (name : Identifier) (params : List ParseParam) (vis : Visibility) : ParseResult ParseDecl :=
-	match r {
-		success rem _ => class_universe_name (identifier (skip_spaces rem)) orig name params vis,
-		fail _ => class_params orig name params vis
-	}
+    match r {
+        success rem _ => class_universe_name (identifier (skip_spaces rem)) orig name params vis,
+        fail _ => class_params orig name params vis
+    }
 
 #[partial]
 def class_universe_name (r : ParseResult String) (orig : String) (name : Identifier) (params : List ParseParam) (vis : Visibility) : ParseResult ParseDecl :=
-	match r {
-		success rem _ => class_universe_optional (tag ":" (skip_spaces rem)) rem orig name params vis,
-		fail _ => class_params orig name params vis
-	}
+    match r {
+        success rem _ => class_universe_optional (tag ":" (skip_spaces rem)) rem orig name params vis,
+        fail _ => class_params orig name params vis
+    }
 
 #[partial]
 def class_universe_optional (r : ParseResult String) (rem : String) (orig : String) (name : Identifier) (params : List ParseParam) (vis : Visibility) : ParseResult ParseDecl :=
-	match r {
-		success rem2 _ => class_universe_kw (tag_keyword "Universe" (skip_spaces rem2)) orig name params vis,
-		fail _ => class_universe_close (tag "}" (skip_spaces rem)) orig name params vis
-	}
+    match r {
+        success rem2 _ => class_universe_kw (tag_keyword "Universe" (skip_spaces rem2)) orig name params vis,
+        fail _ => class_universe_close (tag "}" (skip_spaces rem)) orig name params vis
+    }
 
 #[partial]
 def class_universe_kw (r : ParseResult String) (orig : String) (name : Identifier) (params : List ParseParam) (vis : Visibility) : ParseResult ParseDecl :=
-	match r {
-		success rem _ => class_universe_close (tag "}" (skip_spaces rem)) orig name params vis,
-		fail _ => class_params orig name params vis
-	}
+    match r {
+        success rem _ => class_universe_close (tag "}" (skip_spaces rem)) orig name params vis,
+        fail _ => class_params orig name params vis
+    }
 
 #[partial]
 def class_universe_close (r : ParseResult String) (orig : String) (name : Identifier) (params : List ParseParam) (vis : Visibility) : ParseResult ParseDecl :=
-	match r {
-		success rem _ => class_params (skip_spaces rem) name params vis,
-		fail _ => class_params orig name params vis
-	}
+    match r {
+        success rem _ => class_params (skip_spaces rem) name params vis,
+        fail _ => class_params orig name params vis
+    }
 
 /// Class-level params, same shape as `type_params_loop` (which fixed this
 /// exact bug for `type`/inductive params): bare identifiers (`class Map M
@@ -2849,24 +2846,24 @@ def class_universe_close (r : ParseResult String) (orig : String) (name : Identi
 /// `instance_parser` already uses for `vis`/constraints/implicit params).
 #[partial]
 def class_params (input : String) (name : Identifier) (params : List ParseParam) (vis : Visibility) : ParseResult ParseDecl :=
-	class_params_try_bare (identifier (skip_spaces input)) input name params vis
+    class_params_try_bare (identifier (skip_spaces input)) input name params vis
 
 #[partial]
 def class_params_try_bare (r : ParseResult String) (orig : String) (name : Identifier) (params : List ParseParam) (vis : Visibility) : ParseResult ParseDecl :=
-	match r {
-		success rem next =>
-			class_params rem name (List.cons (parse_param_many (Identifier.id next) (pt_sort (SortLevel.concrete 1))) params) vis,
-		fail _ => class_params_try_paren (tag "(" (skip_spaces orig)) orig name params vis
-	}
+    match r {
+        success rem next =>
+            class_params rem name (List.cons (parse_param_many (Identifier.id next) (pt_sort (SortLevel.concrete 1))) params) vis,
+        fail _ => class_params_try_paren (tag "(" (skip_spaces orig)) orig name params vis
+    }
 
 #[partial]
 def class_params_try_paren (r : ParseResult String) (orig : String) (name : Identifier) (params : List ParseParam) (vis : Visibility) : ParseResult ParseDecl :=
-	match r {
-		success rem _ => class_params_paren_name (identifier (skip_spaces rem)) name params vis,
-		fail _ =>
-			let rev : List ParseParam := list_reverse params in
-			class_apply_params (class_try_kind (tag ":" (skip_spaces orig)) orig name vis) rev
-	}
+    match r {
+        success rem _ => class_params_paren_name (identifier (skip_spaces rem)) name params vis,
+        fail _ =>
+            let rev : List ParseParam := list_reverse params in
+            class_apply_params (class_try_kind (tag ":" (skip_spaces orig)) orig name vis) rev
+    }
 
 /// An optional result sort after a class's params — the `: Sort (max 1 u)`
 /// in `class Inhabited {u : Universe} (a : Sort u) : Sort (max 1 u)`.
@@ -2876,135 +2873,135 @@ def class_params_try_paren (r : ParseResult String) (orig : String) (name : Iden
 /// clause) is the common case and defaults to `Sort 1`.
 #[partial]
 def class_try_kind (r : ParseResult String) (orig : String) (name : Identifier) (vis : Visibility) : ParseResult ParseDecl :=
-	match r {
-		success rem _ => class_kind_expr (type_expression (skip_spaces rem)) orig name vis,
-		fail _ => class_brace (tag "{" (skip_spaces orig)) name vis
-	}
+    match r {
+        success rem _ => class_kind_expr (type_expression (skip_spaces rem)) orig name vis,
+        fail _ => class_brace (tag "{" (skip_spaces orig)) name vis
+    }
 
 #[partial]
 def class_kind_expr (r : ParseResult ParseTerm) (orig : String) (name : Identifier) (vis : Visibility) : ParseResult ParseDecl :=
-	match r {
-		success rem kind => class_apply_sort (class_brace (tag "{" (skip_spaces rem)) name vis) (Option.some kind),
-		fail e => fail e
-	}
+    match r {
+        success rem kind => class_apply_sort (class_brace (tag "{" (skip_spaces rem)) name vis) (Option.some kind),
+        fail e => fail e
+    }
 
 /// Patch the parsed result sort onto the finished `ParseClass`, the same
 /// patch-after-the-method-subtree pattern as `class_apply_params`/
 /// `class_apply_constraints`.
 #[partial]
 def class_apply_sort (dr : ParseResult ParseDecl) (sort : Option ParseTerm) : ParseResult ParseDecl :=
-	match dr {
-		success rem decl =>
-			match decl.kind {
-				class_d cls =>
-					match cls {
-						ParseClass.mk name params constraints methods vis _ =>
-							success rem (pd_class_d (ParseClass.mk name params constraints methods vis sort))
-					},
-				_ => success rem decl
-			},
-		fail e => fail e
-	}
+    match dr {
+        success rem decl =>
+            match decl.kind {
+                class_d cls =>
+                    match cls {
+                        ParseClass.mk name params constraints methods vis _ =>
+                            success rem (pd_class_d (ParseClass.mk name params constraints methods vis sort))
+                    },
+                _ => success rem decl
+            },
+        fail e => fail e
+    }
 
 #[partial]
 def class_params_paren_name (r : ParseResult String) (name : Identifier) (params : List ParseParam) (vis : Visibility) : ParseResult ParseDecl :=
-	match r {
-		success rem pname => class_params_paren_colon (tag ":" (skip_spaces rem)) pname name params vis,
-		fail e => fail e
-	}
+    match r {
+        success rem pname => class_params_paren_colon (tag ":" (skip_spaces rem)) pname name params vis,
+        fail e => fail e
+    }
 
 #[partial]
 def class_params_paren_colon (r : ParseResult String) (pname : String) (name : Identifier) (params : List ParseParam) (vis : Visibility) : ParseResult ParseDecl :=
-	match r {
-		success rem _ =>
-			class_params_paren_type (type_expression rem) pname name params vis,
-		fail e => fail e
-	}
+    match r {
+        success rem _ =>
+            class_params_paren_type (type_expression rem) pname name params vis,
+        fail e => fail e
+    }
 
 #[partial]
 def class_params_paren_type (r : ParseResult ParseTerm) (pname : String) (name : Identifier) (params : List ParseParam) (vis : Visibility) : ParseResult ParseDecl :=
-	match r {
-		success rem typ => class_params_paren_default (tag ":=" (skip_spaces rem)) rem pname typ name params vis,
-		fail e => fail e
-	}
+    match r {
+        success rem typ => class_params_paren_default (tag ":=" (skip_spaces rem)) rem pname typ name params vis,
+        fail e => fail e
+    }
 
 /// An optional `:= default` after a paren param's type — real usage:
 /// `init/prelude.mo`'s `class FromListLiteral (L : Type -> Type := List)`.
 /// Mirrors `struct_field_default`/`struct_field_default_val`'s shape.
 #[partial]
 def class_params_paren_default (r : ParseResult String) (orig : String) (pname : String) (typ : ParseTerm) (name : Identifier) (params : List ParseParam) (vis : Visibility) : ParseResult ParseDecl :=
-	match r {
-		success rem _ =>
-			class_params_paren_default_val (expression (skip_docstrings (skip_spaces rem))) pname typ name params vis,
-		fail _ =>
-			let none : Option ParseTerm := Option.none in
-			class_params_paren_close (tag ")" (skip_spaces orig)) (ParseParam.mk (Identifier.id pname) typ Multiplicity.many none List.empty) name params vis
-	}
+    match r {
+        success rem _ =>
+            class_params_paren_default_val (expression (skip_docstrings (skip_spaces rem))) pname typ name params vis,
+        fail _ =>
+            let none : Option ParseTerm := Option.none in
+            class_params_paren_close (tag ")" (skip_spaces orig)) (ParseParam.mk (Identifier.id pname) typ Multiplicity.many none List.empty) name params vis
+    }
 
 #[partial]
 def class_params_paren_default_val (r : ParseResult ParseTerm) (pname : String) (typ : ParseTerm) (name : Identifier) (params : List ParseParam) (vis : Visibility) : ParseResult ParseDecl :=
-	match r {
-		success rem defval =>
-			let some_val : Option ParseTerm := Option.some defval in
-			class_params_paren_close (tag ")" (skip_spaces rem)) (ParseParam.mk (Identifier.id pname) typ Multiplicity.many some_val List.empty) name params vis,
-		fail e => fail e
-	}
+    match r {
+        success rem defval =>
+            let some_val : Option ParseTerm := Option.some defval in
+            class_params_paren_close (tag ")" (skip_spaces rem)) (ParseParam.mk (Identifier.id pname) typ Multiplicity.many some_val List.empty) name params vis,
+        fail e => fail e
+    }
 
 #[partial]
 def class_params_paren_close (r : ParseResult String) (p : ParseParam) (name : Identifier) (params : List ParseParam) (vis : Visibility) : ParseResult ParseDecl :=
-	match r {
-		success rem _ => class_params rem name (List.cons p params) vis,
-		fail e => fail e
-	}
+    match r {
+        success rem _ => class_params rem name (List.cons p params) vis,
+        fail e => fail e
+    }
 
 /// Patch the real params onto the fully-parsed `Class` — see
 /// `class_params`'s doc comment for why this is done after the fact
 /// rather than threaded through the method-parsing subtree.
 #[partial]
 def class_apply_params (dr : ParseResult ParseDecl) (params : List ParseParam) : ParseResult ParseDecl :=
-	match dr {
-		success rem decl =>
-			match decl.kind {
-				class_d cls =>
-					match cls {
-						ParseClass.mk name _ constraints methods vis sort =>
-							success rem (pd_class_d  (ParseClass.mk name params constraints methods vis sort))
-					},
-				_ => success rem decl
-			},
-		fail e => fail e
-	}
+    match dr {
+        success rem decl =>
+            match decl.kind {
+                class_d cls =>
+                    match cls {
+                        ParseClass.mk name _ constraints methods vis sort =>
+                            success rem (pd_class_d (ParseClass.mk name params constraints methods vis sort))
+                    },
+                _ => success rem decl
+            },
+        fail e => fail e
+    }
 
 #[partial]
 def class_brace (r : ParseResult String) (name : Identifier) (vis : Visibility) : ParseResult ParseDecl :=
-	match r {
-		success rem _ =>
-			let empty_methods : List ParseClassDef := List.empty in
-			class_methods rem name empty_methods vis,
-		fail e => fail e
-	}
+    match r {
+        success rem _ =>
+            let empty_methods : List ParseClassDef := List.empty in
+            class_methods rem name empty_methods vis,
+        fail e => fail e
+    }
 
 #[partial]
 def class_methods (input : String) (name : Identifier) (methods : List ParseClassDef) (vis : Visibility) : ParseResult ParseDecl :=
-	class_try_close_or_method (tag "def" (skip_docstrings (skip_spaces input))) (skip_docstrings (skip_spaces input)) name methods vis
+    class_try_close_or_method (tag "def" (skip_docstrings (skip_spaces input))) (skip_docstrings (skip_spaces input)) name methods vis
 
 #[partial]
 def class_try_close_or_method (r : ParseResult String) (orig : String) (name : Identifier) (methods : List ParseClassDef) (vis : Visibility) : ParseResult ParseDecl :=
-	match r {
-		success rem _ => class_methods_single rem name methods vis,
-		fail _ => class_close (tag "}" (skip_spaces orig)) name methods vis
-	}
+    match r {
+        success rem _ => class_methods_single rem name methods vis,
+        fail _ => class_close (tag "}" (skip_spaces orig)) name methods vis
+    }
 
 #[partial]
 def class_methods_single (input : String) (name : Identifier) (methods : List ParseClassDef) (vis : Visibility) : ParseResult ParseDecl :=
-	class_method_name (identifier (skip_spaces input)) name methods vis
+    class_method_name (identifier (skip_spaces input)) name methods vis
 
 #[partial]
 def class_method_name (r : ParseResult String) (name : Identifier) (methods : List ParseClassDef) (vis : Visibility) : ParseResult ParseDecl :=
-	match r {
-		success rem mname => class_method_try_own_constraint rem (Identifier.id mname) name methods vis,
-		fail e => fail e
-	}
+    match r {
+        success rem mname => class_method_try_own_constraint rem (Identifier.id mname) name methods vis,
+        fail e => fail e
+    }
 
 /// Skip an optional `[Constraint1, Constraint2]`-shaped per-method
 /// constraint list right after a class method's own name and before its
@@ -3029,32 +3026,32 @@ def class_method_name (r : ParseResult String) (name : Identifier) (methods : Li
 /// second).
 #[partial]
 def class_method_try_own_constraint (input : String) (mname : Identifier) (name : Identifier) (methods : List ParseClassDef) (vis : Visibility) : ParseResult ParseDecl :=
-	class_method_try_own_constraint_bracket (tag "[" (skip_spaces input)) input mname name methods vis
+    class_method_try_own_constraint_bracket (tag "[" (skip_spaces input)) input mname name methods vis
 
 #[partial]
 def class_method_try_own_constraint_bracket (r : ParseResult String) (orig : String) (mname : Identifier) (name : Identifier) (methods : List ParseClassDef) (vis : Visibility) : ParseResult ParseDecl :=
-	match r {
-		success rem _ => class_method_own_constraint_skip (take_while is_not_bracket rem) rem mname name methods vis,
-		fail _ => class_method_colon_or_sig orig mname name methods vis,
-	}
+    match r {
+        success rem _ => class_method_own_constraint_skip (take_while is_not_bracket rem) rem mname name methods vis,
+        fail _ => class_method_colon_or_sig orig mname name methods vis,
+    }
 
 #[partial]
 def class_method_own_constraint_skip (r : ParseResult String) (rem : String) (mname : Identifier) (name : Identifier) (methods : List ParseClassDef) (vis : Visibility) : ParseResult ParseDecl :=
-	match r {
-		success after_bracket _ => class_method_own_constraint_close (tag "]" (skip_spaces after_bracket)) after_bracket mname name methods vis,
-		fail _ => class_method_colon_or_sig rem mname name methods vis,
-	}
+    match r {
+        success after_bracket _ => class_method_own_constraint_close (tag "]" (skip_spaces after_bracket)) after_bracket mname name methods vis,
+        fail _ => class_method_colon_or_sig rem mname name methods vis,
+    }
 
 #[partial]
 def class_method_own_constraint_close (r : ParseResult String) (after_bracket : String) (mname : Identifier) (name : Identifier) (methods : List ParseClassDef) (vis : Visibility) : ParseResult ParseDecl :=
-	match r {
-		success rem _ => class_method_colon_or_sig rem mname name methods vis,
-		fail _ => class_method_colon_or_sig after_bracket mname name methods vis,
-	}
+    match r {
+        success rem _ => class_method_colon_or_sig rem mname name methods vis,
+        fail _ => class_method_colon_or_sig after_bracket mname name methods vis,
+    }
 
 #[partial]
 def class_method_colon_or_sig (input : String) (mname : Identifier) (name : Identifier) (methods : List ParseClassDef) (vis : Visibility) : ParseResult ParseDecl :=
-	class_method_try_implicit (tag "{" (skip_spaces input)) input mname name methods vis
+    class_method_try_implicit (tag "{" (skip_spaces input)) input mname name methods vis
 
 /// Skip an optional `{A B : Type}`-shaped implicit-param block before a
 /// class method's own explicit `(...)` params (e.g. `init/foldable.mo`'s
@@ -3076,38 +3073,38 @@ def class_method_colon_or_sig (input : String) (mname : Identifier) (name : Iden
 /// declares its own generic context), so there's nothing useful to keep.
 #[partial]
 def class_method_try_implicit (r : ParseResult String) (orig : String) (mname : Identifier) (name : Identifier) (methods : List ParseClassDef) (vis : Visibility) : ParseResult ParseDecl :=
-	match r {
-		success rem _ => class_method_implicit_skip (take_while is_not_close_curly rem) rem mname name methods vis,
-		fail _ => class_method_params_try (tag "(" (skip_spaces orig)) orig mname name methods List.empty List.empty vis,
-	}
+    match r {
+        success rem _ => class_method_implicit_skip (take_while is_not_close_curly rem) rem mname name methods vis,
+        fail _ => class_method_params_try (tag "(" (skip_spaces orig)) orig mname name methods List.empty List.empty vis,
+    }
 
 #[partial]
 def class_method_implicit_skip (r : ParseResult String) (rem : String) (mname : Identifier) (name : Identifier) (methods : List ParseClassDef) (vis : Visibility) : ParseResult ParseDecl :=
-	match r {
-		success after_bracket _ => class_method_implicit_close (tag "}" (skip_spaces after_bracket)) after_bracket mname name methods vis,
-		fail _ => class_method_params_try (tag "(" (skip_spaces rem)) rem mname name methods List.empty List.empty vis,
-	}
+    match r {
+        success after_bracket _ => class_method_implicit_close (tag "}" (skip_spaces after_bracket)) after_bracket mname name methods vis,
+        fail _ => class_method_params_try (tag "(" (skip_spaces rem)) rem mname name methods List.empty List.empty vis,
+    }
 
 #[partial]
 def class_method_implicit_close (r : ParseResult String) (after_bracket : String) (mname : Identifier) (name : Identifier) (methods : List ParseClassDef) (vis : Visibility) : ParseResult ParseDecl :=
-	match r {
-		success rem _ => class_method_params_try (tag "(" (skip_spaces rem)) rem mname name methods List.empty List.empty vis,
-		fail _ => class_method_params_try (tag "(" (skip_spaces after_bracket)) after_bracket mname name methods List.empty List.empty vis,
-	}
+    match r {
+        success rem _ => class_method_params_try (tag "(" (skip_spaces rem)) rem mname name methods List.empty List.empty vis,
+        fail _ => class_method_params_try (tag "(" (skip_spaces after_bracket)) after_bracket mname name methods List.empty List.empty vis,
+    }
 
 /// `param_names` runs parallel to `param_types` (same order) so a `:=` default
 /// can be lambda-wrapped over the real param names. An unnamed param pushes
 /// the empty identifier, as the host's `cons_param` does.
 #[partial]
 def class_method_params_try (r : ParseResult String) (orig : String) (mname : Identifier) (name : Identifier) (methods : List ParseClassDef) (param_types : List ParseTerm) (param_names : List Identifier) (vis : Visibility) : ParseResult ParseDecl :=
-	match r {
-		success rem _ => class_method_param_loop rem mname name methods param_types param_names vis,
-		fail _ => class_method_ret_type (tag ":" (skip_spaces orig)) mname name methods vis
-	}
+    match r {
+        success rem _ => class_method_param_loop rem mname name methods param_types param_names vis,
+        fail _ => class_method_ret_type (tag ":" (skip_spaces orig)) mname name methods vis
+    }
 
 #[partial]
 def class_method_param_loop (input : String) (mname : Identifier) (name : Identifier) (methods : List ParseClassDef) (param_types : List ParseTerm) (param_names : List Identifier) (vis : Visibility) : ParseResult ParseDecl :=
-	class_method_one_param (identifier (skip_spaces input)) input mname name methods param_types param_names vis
+    class_method_one_param (identifier (skip_spaces input)) input mname name methods param_types param_names vis
 
 /// `group_start` is the position right after the group's `(`, before any
 /// name has been consumed — kept around so that if this turns out to be
@@ -3116,83 +3113,83 @@ def class_method_param_loop (input : String) (mname : Identifier) (name : Identi
 /// whole group can be re-parsed from scratch as one bare type expression.
 #[partial]
 def class_method_one_param (r : ParseResult String) (orig : String) (mname : Identifier) (name : Identifier) (methods : List ParseClassDef) (param_types : List ParseTerm) (param_names : List Identifier) (vis : Visibility) : ParseResult ParseDecl :=
-	match r {
-		success rem pname => class_method_more_names rem mname name methods param_types param_names (List.cons (Identifier.id pname) List.empty) 1 orig vis,
-		fail _ => class_method_unnamed_param orig mname name methods param_types param_names vis
-	}
+    match r {
+        success rem pname => class_method_more_names rem mname name methods param_types param_names (List.cons (Identifier.id pname) List.empty) 1 orig vis,
+        fail _ => class_method_unnamed_param orig mname name methods param_types param_names vis
+    }
 
 /// After the first name in a `(...)` param group, try MORE space-separated
 /// names sharing one type (`(a b : A)`). `group_names` holds this group's names
 /// (most-recent-first); `class_method_param_type` folds them onto `param_names`.
 #[partial]
 def class_method_more_names (input : String) (mname : Identifier) (name : Identifier) (methods : List ParseClassDef) (param_types : List ParseTerm) (param_names : List Identifier) (group_names : List Identifier) (count : I64) (group_start : String) (vis : Visibility) : ParseResult ParseDecl :=
-	class_method_more_names_try (identifier (skip_spaces input)) input mname name methods param_types param_names group_names count group_start vis
+    class_method_more_names_try (identifier (skip_spaces input)) input mname name methods param_types param_names group_names count group_start vis
 
 #[partial]
 def class_method_more_names_try (r : ParseResult String) (orig : String) (mname : Identifier) (name : Identifier) (methods : List ParseClassDef) (param_types : List ParseTerm) (param_names : List Identifier) (group_names : List Identifier) (count : I64) (group_start : String) (vis : Visibility) : ParseResult ParseDecl :=
-	match r {
-		success rem pname => class_method_more_names rem mname name methods param_types param_names (List.cons (Identifier.id pname) group_names) (count + 1) group_start vis,
-		fail _ => class_method_param_colon_or_unnamed (tag ":" (skip_spaces orig)) mname name methods param_types param_names group_names count group_start vis
-	}
+    match r {
+        success rem pname => class_method_more_names rem mname name methods param_types param_names (List.cons (Identifier.id pname) group_names) (count + 1) group_start vis,
+        fail _ => class_method_param_colon_or_unnamed (tag ":" (skip_spaces orig)) mname name methods param_types param_names group_names count group_start vis
+    }
 
 /// No `:` follows the names: re-parse from `group_start` as one bare type,
 /// e.g. `(L A)` is an application, not two names.
 #[partial]
 def class_method_param_colon_or_unnamed (r : ParseResult String) (mname : Identifier) (name : Identifier) (methods : List ParseClassDef) (param_types : List ParseTerm) (param_names : List Identifier) (group_names : List Identifier) (count : I64) (group_start : String) (vis : Visibility) : ParseResult ParseDecl :=
-	match r {
-		success rem _ =>
-			class_method_param_type (type_expression rem) mname name methods param_types param_names group_names count vis,
-		fail _ => class_method_unnamed_param group_start mname name methods param_types param_names vis
-	}
+    match r {
+        success rem _ =>
+            class_method_param_type (type_expression rem) mname name methods param_types param_names group_names count vis,
+        fail _ => class_method_unnamed_param group_start mname name methods param_types param_names vis
+    }
 
 /// Parse a group as one bare type; its name is the empty-identifier placeholder.
 #[partial]
 def class_method_unnamed_param (input : String) (mname : Identifier) (name : Identifier) (methods : List ParseClassDef) (param_types : List ParseTerm) (param_names : List Identifier) (vis : Visibility) : ParseResult ParseDecl :=
-	class_method_param_type (type_expression input) mname name methods param_types param_names (List.cons (Identifier.id "") List.empty) 1 vis
+    class_method_param_type (type_expression input) mname name methods param_types param_names (List.cons (Identifier.id "") List.empty) 1 vis
 
 #[partial]
 def class_method_param_type (r : ParseResult ParseTerm) (mname : Identifier) (name : Identifier) (methods : List ParseClassDef) (param_types : List ParseTerm) (param_names : List Identifier) (group_names : List Identifier) (count : I64) (vis : Visibility) : ParseResult ParseDecl :=
-	match r {
-		success rem typ => class_method_close_or_next rem mname name methods (push_n_terms typ count param_types) (push_ids group_names param_names) vis,
-		fail e => fail e
-	}
+    match r {
+        success rem typ => class_method_close_or_next rem mname name methods (push_n_terms typ count param_types) (push_ids group_names param_names) vis,
+        fail e => fail e
+    }
 
 /// Cons `n` copies of `typ` onto `acc` — one per shared-type param name in
 /// a `(a b c : Type)` group.
 #[partial]
 def push_n_terms (typ : ParseTerm) (n : I64) (acc : List ParseTerm) : List ParseTerm :=
-	if I64.gt n 0 then push_n_terms typ (n - 1) (List.cons typ acc) else acc
+    if I64.gt n 0 then push_n_terms typ (n - 1) (List.cons typ acc) else acc
 
 /// `ids ++ acc`; both are most-recent-first, like `param_types`.
 #[partial]
 def push_ids (ids : List Identifier) (acc : List Identifier) : List Identifier :=
-	match ids {
-		List.empty => acc,
-		List.cons hd rest => List.cons hd (push_ids rest acc),
-	}
+    match ids {
+        List.empty => acc,
+        List.cons hd rest => List.cons hd (push_ids rest acc),
+    }
 
 #[partial]
 def class_method_close_or_next (input : String) (mname : Identifier) (name : Identifier) (methods : List ParseClassDef) (param_types : List ParseTerm) (param_names : List Identifier) (vis : Visibility) : ParseResult ParseDecl :=
-	class_method_try_close_param (tag ")" (skip_spaces input)) input mname name methods param_types param_names vis
+    class_method_try_close_param (tag ")" (skip_spaces input)) input mname name methods param_types param_names vis
 
 #[partial]
 def class_method_try_close_param (r : ParseResult String) (orig : String) (mname : Identifier) (name : Identifier) (methods : List ParseClassDef) (param_types : List ParseTerm) (param_names : List Identifier) (vis : Visibility) : ParseResult ParseDecl :=
-	match r {
-		success rem _ => class_method_ret_or_more rem mname name methods param_types param_names vis,
-		fail _ => class_method_next_param (tag "(" (skip_spaces orig)) orig mname name methods param_types param_names vis
-	}
+    match r {
+        success rem _ => class_method_ret_or_more rem mname name methods param_types param_names vis,
+        fail _ => class_method_next_param (tag "(" (skip_spaces orig)) orig mname name methods param_types param_names vis
+    }
 
 #[partial]
 def class_method_ret_or_more (input : String) (mname : Identifier) (name : Identifier) (methods : List ParseClassDef) (param_types : List ParseTerm) (param_names : List Identifier) (vis : Visibility) : ParseResult ParseDecl :=
-	class_method_try_ret_type (tag ":" (skip_spaces input)) input mname name methods param_types param_names vis
+    class_method_try_ret_type (tag ":" (skip_spaces input)) input mname name methods param_types param_names vis
 
 #[partial]
 def class_method_try_ret_type (r : ParseResult String) (orig : String) (mname : Identifier) (name : Identifier) (methods : List ParseClassDef) (param_types : List ParseTerm) (param_names : List Identifier) (vis : Visibility) : ParseResult ParseDecl :=
-	match r {
-		success rem _ =>
-			class_method_ret_type_val (type_expression rem) mname name methods param_types param_names vis,
-		fail _ => class_method_next_param (tag "(" (skip_spaces orig)) orig mname name methods param_types param_names vis
-	}
+    match r {
+        success rem _ =>
+            class_method_ret_type_val (type_expression rem) mname name methods param_types param_names vis,
+        fail _ => class_method_next_param (tag "(" (skip_spaces orig)) orig mname name methods param_types param_names vis
+    }
 
 /// Combine every explicit param's type (parsed via `(...)` groups) with
 /// the trailing return type into a real Pi chain `T1 -> T2 -> ... -> Ret`.
@@ -3205,10 +3202,10 @@ def class_method_try_ret_type (r : ParseResult String) (orig : String) (mname : 
 /// and worse than, the multi-name parsing failure this fix also covers.
 #[partial]
 def class_method_ret_type_val (r : ParseResult ParseTerm) (mname : Identifier) (name : Identifier) (methods : List ParseClassDef) (param_types : List ParseTerm) (param_names : List Identifier) (vis : Visibility) : ParseResult ParseDecl :=
-	match r {
-		success rem ret_typ => class_method_default_or_done rem mname (build_pi_chain param_types ret_typ) param_names name methods vis,
-		fail e => fail e
-	}
+    match r {
+        success rem ret_typ => class_method_default_or_done rem mname (build_pi_chain param_types ret_typ) param_names name methods vis,
+        fail e => fail e
+    }
 
 /// Fold accumulated param types (most-recent-first / reverse declaration
 /// order, same invariant `def`'s own `List Param` follows) with the
@@ -3218,88 +3215,88 @@ def class_method_ret_type_val (r : ParseResult ParseTerm) (mname : Identifier) (
 /// lowered flat. `build_param_pi_chain` below is the one that has names.
 #[partial]
 def build_pi_chain (param_types : List ParseTerm) (ret : ParseTerm) : ParseTerm := match param_types {
-	List.empty => ret,
-	List.cons t rest => build_pi_chain rest (pt_pi Option.none t ret),
+    List.empty => ret,
+    List.cons t rest => build_pi_chain rest (pt_pi Option.none t ret),
 }
 
 #[partial]
 def class_method_next_param (r : ParseResult String) (orig : String) (mname : Identifier) (name : Identifier) (methods : List ParseClassDef) (param_types : List ParseTerm) (param_names : List Identifier) (vis : Visibility) : ParseResult ParseDecl :=
-	match r {
-		success rem _ => class_method_param_loop rem mname name methods param_types param_names vis,
-		fail _ => fail (ParseError.custom "expected ) or another parameter" orig)
-	}
+    match r {
+        success rem _ => class_method_param_loop rem mname name methods param_types param_names vis,
+        fail _ => fail (ParseError.custom "expected ) or another parameter" orig)
+    }
 
 #[partial]
 def class_method_ret_type (r : ParseResult String) (mname : Identifier) (name : Identifier) (methods : List ParseClassDef) (vis : Visibility) : ParseResult ParseDecl :=
-	match r {
-		success rem _ =>
-			class_method_sig_type (type_expression rem) mname name methods vis,
-		fail e => fail (ParseError.custom "expected : return type" (parse_error_remaining e))
-	}
+    match r {
+        success rem _ =>
+            class_method_sig_type (type_expression rem) mname name methods vis,
+        fail e => fail (ParseError.custom "expected : return type" (parse_error_remaining e))
+    }
 
 #[partial]
 def class_method_sig_type (r : ParseResult ParseTerm) (mname : Identifier) (name : Identifier) (methods : List ParseClassDef) (vis : Visibility) : ParseResult ParseDecl :=
-	match r {
-		success rem typ => class_method_default_or_done rem mname typ List.empty name methods vis,
-		fail e => fail e
-	}
+    match r {
+        success rem typ => class_method_default_or_done rem mname typ List.empty name methods vis,
+        fail e => fail e
+    }
 
 #[partial]
 def class_method_default_or_done (input : String) (mname : Identifier) (typ : ParseTerm) (param_names : List Identifier) (name : Identifier) (methods : List ParseClassDef) (vis : Visibility) : ParseResult ParseDecl :=
-	class_method_try_default (tag ":=" (skip_spaces input)) input mname typ param_names name methods vis
+    class_method_try_default (tag ":=" (skip_spaces input)) input mname typ param_names name methods vis
 
 /// A method param as a `ParseParam`: no multiplicity, default or attrs.
 def class_method_lam_param (pname : Identifier) (typ : ParseTerm) : ParseParam :=
-	ParseParam.mk pname typ Multiplicity.many Option.none List.empty
+    ParseParam.mk pname typ Multiplicity.many Option.none List.empty
 
 /// Pair declaration-order `param_names` with `typ`'s leading Pi domains.
 #[partial]
 def class_method_lam_params_of (param_names : List Identifier) (typ : ParseTerm) : List ParseParam :=
-	match param_names {
-		List.empty => List.empty,
-		List.cons pname rest =>
-			match typ.kind {
-				ParseTermKind.pi _b dom ret =>
-					List.cons (class_method_lam_param pname dom) (class_method_lam_params_of rest ret),
-				_ => List.empty,
-			},
-	}
+    match param_names {
+        List.empty => List.empty,
+        List.cons pname rest =>
+            match typ.kind {
+                ParseTermKind.pi _b dom ret =>
+                    List.cons (class_method_lam_param pname dom) (class_method_lam_params_of rest ret),
+                _ => List.empty,
+            },
+    }
 
 #[partial]
 def class_method_try_default (r : ParseResult String) (orig : String) (mname : Identifier) (typ : ParseTerm) (param_names : List Identifier) (name : Identifier) (methods : List ParseClassDef) (vis : Visibility) : ParseResult ParseDecl :=
-	match r {
-		success rem _ =>
-			class_method_default_val (expression (skip_docstrings (skip_spaces rem))) orig mname typ param_names name methods vis,
-		fail _ =>
-			let none_val : Option ParseTerm := Option.none in
-			class_methods orig name (List.cons (ParseClassDef.mk mname typ none_val) methods) vis
-	}
+    match r {
+        success rem _ =>
+            class_method_default_val (expression (skip_docstrings (skip_spaces rem))) orig mname typ param_names name methods vis,
+        fail _ =>
+            let none_val : Option ParseTerm := Option.none in
+            class_methods orig name (List.cons (ParseClassDef.mk mname typ none_val) methods) vis
+    }
 
 /// Lambda-wrap the default over the method's own param names, as an ordinary
 /// `def` body is; `lam_params` reverses, so pass declaration order.
 #[partial]
 def class_method_default_val (r : ParseResult ParseTerm) (orig : String) (mname : Identifier) (typ : ParseTerm) (param_names : List Identifier) (name : Identifier) (methods : List ParseClassDef) (vis : Visibility) : ParseResult ParseDecl :=
-	match r {
-		success rem defval =>
-			let wrapped : ParseTerm := lam_params (class_method_lam_params_of (list_reverse param_names) typ) defval in
-			let some_val : Option ParseTerm := Option.some wrapped in
-			class_methods rem name (List.cons (ParseClassDef.mk mname typ some_val) methods) vis,
-		fail e => fail e
-	}
+    match r {
+        success rem defval =>
+            let wrapped : ParseTerm := lam_params (class_method_lam_params_of (list_reverse param_names) typ) defval in
+            let some_val : Option ParseTerm := Option.some wrapped in
+            class_methods rem name (List.cons (ParseClassDef.mk mname typ some_val) methods) vis,
+        fail e => fail e
+    }
 
 #[partial]
 def class_close (r : ParseResult String) (name : Identifier) (methods : List ParseClassDef) (vis : Visibility) : ParseResult ParseDecl :=
-	match r {
-		success rem _ =>
-			let rev_methods : List ParseClassDef := list_reverse methods in
-			let empty_params : List ParseParam := List.empty in
-			let empty_constraints : List TypeConstraint := List.empty in
-			// Placeholders — class_apply_params/class_apply_constraints
-			// patch the real values in afterward (see class_params's doc
-			// comment; same pattern instance_close uses for vis).
-			success rem (pd_class_d  (ParseClass.mk name empty_params empty_constraints rev_methods vis Option.none)),
-		fail e => fail e
-	}
+    match r {
+        success rem _ =>
+            let rev_methods : List ParseClassDef := list_reverse methods in
+            let empty_params : List ParseParam := List.empty in
+            let empty_constraints : List TypeConstraint := List.empty in
+            // Placeholders — class_apply_params/class_apply_constraints
+            // patch the real values in afterward (see class_params's doc
+            // comment; same pattern instance_close uses for vis).
+            success rem (pd_class_d (ParseClass.mk name empty_params empty_constraints rev_methods vis Option.none)),
+        fail e => fail e
+    }
 
 // instance [constraints] Class args { def method := body }
 //
@@ -3317,34 +3314,34 @@ def class_close (r : ParseResult String) (name : Identifier) (methods : List Par
 /// function in `instance_methods`' loop.
 #[partial]
 def instance_parser (input : String) : ParseResult ParseDecl :=
-	match vis_parser input {
-		success rem vis => instance_apply_vis (instance_kw (tag "instance" rem)) vis,
-		fail e => fail e
-	}
+    match vis_parser input {
+        success rem vis => instance_apply_vis (instance_kw (tag "instance" rem)) vis,
+        fail e => fail e
+    }
 
 #[partial]
 def instance_apply_vis (dr : ParseResult ParseDecl) (vis : Visibility) : ParseResult ParseDecl :=
-	match dr {
-		success rem decl =>
-			match decl.kind {
-				instance_d inst =>
-					match inst {
-						ParseInstance.mk name cls constraints args _ implicit_params defs =>
-							success rem (pd_instance_d  (ParseInstance.mk name cls constraints args vis implicit_params defs))
-					},
-				_ => success rem decl
-			},
-		fail e => fail e
-	}
+    match dr {
+        success rem decl =>
+            match decl.kind {
+                instance_d inst =>
+                    match inst {
+                        ParseInstance.mk name cls constraints args _ implicit_params defs =>
+                            success rem (pd_instance_d (ParseInstance.mk name cls constraints args vis implicit_params defs))
+                    },
+                _ => success rem decl
+            },
+        fail e => fail e
+    }
 
 #[partial]
 def instance_kw (r : ParseResult String) : ParseResult ParseDecl :=
-	match r {
-		success rem _ =>
-			let empty : List ParseParam := List.empty in
-			instance_implicit_params_loop (skip_spaces rem) empty,
-		fail e => fail e
-	}
+    match r {
+        success rem _ =>
+            let empty : List ParseParam := List.empty in
+            instance_implicit_params_loop (skip_spaces rem) empty,
+        fail e => fail e
+    }
 
 /// Parse zero or more `{name : Type}` implicit-binder clauses right after
 /// the `instance` keyword (e.g. `instance {A : Type} Show A { ... }`),
@@ -3358,52 +3355,52 @@ def instance_kw (r : ParseResult String) : ParseResult ParseDecl :=
 /// auto-generalization step to fall back on here.
 #[partial]
 def instance_implicit_params_loop (input : String) (params : List ParseParam) : ParseResult ParseDecl :=
-	instance_implicit_try (tag "{" input) input params
+    instance_implicit_try (tag "{" input) input params
 
 #[partial]
 def instance_implicit_try (r : ParseResult String) (orig : String) (params : List ParseParam) : ParseResult ParseDecl :=
-	match r {
-		success rem _ => instance_implicit_param (identifier (skip_spaces rem)) rem params,
-		fail _ =>
-			let rev : List ParseParam := list_reverse params in
-			instance_apply_params (instance_try_constraints (tag "[" (skip_spaces orig)) orig) rev
-	}
+    match r {
+        success rem _ => instance_implicit_param (identifier (skip_spaces rem)) rem params,
+        fail _ =>
+            let rev : List ParseParam := list_reverse params in
+            instance_apply_params (instance_try_constraints (tag "[" (skip_spaces orig)) orig) rev
+    }
 
 #[partial]
 def instance_implicit_param (r : ParseResult String) (brace_rem : String) (params : List ParseParam) : ParseResult ParseDecl :=
-	match r {
-		success rem2 name => instance_implicit_more_names rem2 brace_rem (List.cons (Identifier.id name) List.empty) params,
-		fail e => fail e
-	}
+    match r {
+        success rem2 name => instance_implicit_more_names rem2 brace_rem (List.cons (Identifier.id name) List.empty) params,
+        fail e => fail e
+    }
 
 /// After the first name in a `{...}` clause, try more space-separated
 /// names sharing one type (`{K V : Type}`), same shape as
 /// `def_explicit_more_names`.
 #[partial]
 def instance_implicit_more_names (input : String) (brace_rem : String) (names : List Identifier) (params : List ParseParam) : ParseResult ParseDecl :=
-	instance_implicit_more_names_try (identifier (skip_spaces input)) input brace_rem names params
+    instance_implicit_more_names_try (identifier (skip_spaces input)) input brace_rem names params
 
 #[partial]
 def instance_implicit_more_names_try (r : ParseResult String) (orig : String) (brace_rem : String) (names : List Identifier) (params : List ParseParam) : ParseResult ParseDecl :=
-	match r {
-		success rem2 name => instance_implicit_more_names rem2 brace_rem (List.cons (Identifier.id name) names) params,
-		fail _ => instance_implicit_colon (tag ":" (skip_spaces orig)) names params
-	}
+    match r {
+        success rem2 name => instance_implicit_more_names rem2 brace_rem (List.cons (Identifier.id name) names) params,
+        fail _ => instance_implicit_colon (tag ":" (skip_spaces orig)) names params
+    }
 
 #[partial]
 def instance_implicit_colon (r : ParseResult String) (names : List Identifier) (params : List ParseParam) : ParseResult ParseDecl :=
-	match r {
-		success rem2 _ =>
-			instance_implicit_type (type_expression rem2) names params,
-		fail e => fail e
-	}
+    match r {
+        success rem2 _ =>
+            instance_implicit_type (type_expression rem2) names params,
+        fail e => fail e
+    }
 
 #[partial]
 def instance_implicit_type (r : ParseResult ParseTerm) (names : List Identifier) (params : List ParseParam) : ParseResult ParseDecl :=
-	match r {
-		success rem2 typ => instance_implicit_close (tag "}" rem2) names typ params,
-		fail e => fail e
-	}
+    match r {
+        success rem2 typ => instance_implicit_close (tag "}" rem2) names typ params,
+        fail e => fail e
+    }
 
 /// Closes a `{name : type}` clause and loops back for another one (the
 /// Rust reference's `fold_many0`) — unlike `def_implicit_close`, this
@@ -3412,11 +3409,11 @@ def instance_implicit_type (r : ParseResult ParseTerm) (names : List Identifier)
 /// retrying.
 #[partial]
 def instance_implicit_close (r : ParseResult String) (names : List Identifier) (typ : ParseTerm) (params : List ParseParam) : ParseResult ParseDecl :=
-	match r {
-		success rem2 _ =>
-			instance_implicit_params_loop (skip_spaces rem2) (params_for_names (list_reverse names) typ params),
-		fail e => fail e
-	}
+    match r {
+        success rem2 _ =>
+            instance_implicit_params_loop (skip_spaces rem2) (params_for_names (list_reverse names) typ params),
+        fail e => fail e
+    }
 
 /// Patch the collected implicit params onto the fully-parsed `Instance`,
 /// same "parse with a placeholder, patch the real value in afterward"
@@ -3425,18 +3422,18 @@ def instance_implicit_close (r : ParseResult String) (names : List Identifier) (
 /// every function from here down to `instance_close`.
 #[partial]
 def instance_apply_params (dr : ParseResult ParseDecl) (params : List ParseParam) : ParseResult ParseDecl :=
-	match dr {
-		success rem decl =>
-			match decl.kind {
-				instance_d inst =>
-					match inst {
-						ParseInstance.mk name cls constraints args vis _ defs =>
-							success rem (pd_instance_d  (ParseInstance.mk name cls constraints args vis params defs))
-					},
-				_ => success rem decl
-			},
-		fail e => fail e
-	}
+    match dr {
+        success rem decl =>
+            match decl.kind {
+                instance_d inst =>
+                    match inst {
+                        ParseInstance.mk name cls constraints args vis _ defs =>
+                            success rem (pd_instance_d (ParseInstance.mk name cls constraints args vis params defs))
+                    },
+                _ => success rem decl
+            },
+        fail e => fail e
+    }
 
 /// Try to parse a named instance prefix `Name :` before the class name.
 /// Returns the instance name (or `Identifier.id "_"` if unnamed) and the
@@ -3460,133 +3457,133 @@ def instance_apply_params (dr : ParseResult ParseDecl) (params : List ParseParam
 /// `instance Json.Serializer Bool`, eight sites in `lang/src/json.mo` --
 /// so the fallback re-parses from `input` unchanged.
 def instance_try_named (input : String) : Pair Identifier String :=
-	match dotted_identifier (skip_spaces input) {
-		success after_name ids =>
-			match tag ":" (skip_spaces after_name) {
-				success after_colon _ => Pair.pair (Identifier.id (join_dotted_identifiers ids)) after_colon,
-				fail _ => Pair.pair (Identifier.id "_") input
-			},
-		fail _ => Pair.pair (Identifier.id "_") input
-	}
+    match dotted_identifier (skip_spaces input) {
+        success after_name ids =>
+            match tag ":" (skip_spaces after_name) {
+                success after_colon _ => Pair.pair (Identifier.id (join_dotted_identifiers ids)) after_colon,
+                fail _ => Pair.pair (Identifier.id "_") input
+            },
+        fail _ => Pair.pair (Identifier.id "_") input
+    }
 
 /// Patch the instance name onto a fully-parsed `ParseInstance`, same
 /// "parse with placeholder, patch later" pattern as `instance_apply_vis`.
 #[partial]
 def instance_apply_name (dr : ParseResult ParseDecl) (name : Identifier) : ParseResult ParseDecl :=
-	match dr {
-		success rem decl =>
-			match decl.kind {
-				instance_d inst =>
-					match inst {
-						ParseInstance.mk _ cls constraints args vis implicit_params defs =>
-							success rem (pd_instance_d  (ParseInstance.mk name cls constraints args vis implicit_params defs))
-					},
-				_ => success rem decl
-			},
-		fail e => fail e
-	}
+    match dr {
+        success rem decl =>
+            match decl.kind {
+                instance_d inst =>
+                    match inst {
+                        ParseInstance.mk _ cls constraints args vis implicit_params defs =>
+                            success rem (pd_instance_d (ParseInstance.mk name cls constraints args vis implicit_params defs))
+                    },
+                _ => success rem decl
+            },
+        fail e => fail e
+    }
 
 #[partial]
 def instance_try_constraints (r : ParseResult String) (orig : String) : ParseResult ParseDecl :=
-	match r {
-		success rem _ => instance_parse_bracket rem,
-		fail _ => instance_name_with_named (skip_spaces orig)
-	}
+    match r {
+        success rem _ => instance_parse_bracket rem,
+        fail _ => instance_name_with_named (skip_spaces orig)
+    }
 
 /// Parse the optional named-instance prefix (`Name :`) then the class name.
 /// `instance_try_named` returns the name (or `_`) and the remaining input;
 /// `instance_apply_name` patches the name onto the fully-parsed result.
 def instance_name_with_named (input : String) : ParseResult ParseDecl :=
-	match instance_try_named input {
-		Pair.pair name rem =>
-			instance_apply_name (instance_name (name_path_parser (skip_spaces rem))) name
-	}
+    match instance_try_named input {
+        Pair.pair name rem =>
+            instance_apply_name (instance_name (name_path_parser (skip_spaces rem))) name
+    }
 
 #[partial]
 def instance_parse_bracket (input : String) : ParseResult ParseDecl :=
-	instance_constraints_with_bracket (take_while is_not_bracket input) input
+    instance_constraints_with_bracket (take_while is_not_bracket input) input
 
 #[partial]
 def instance_constraints_with_bracket (r : ParseResult String) (orig : String) : ParseResult ParseDecl :=
-	match r {
-		success rem content =>
-			instance_constraints_then_name (type_constraint_list content) rem,
-		fail _ => fail (ParseError.custom "expected ]" orig)
-	}
+    match r {
+        success rem content =>
+            instance_constraints_then_name (type_constraint_list content) rem,
+        fail _ => fail (ParseError.custom "expected ]" orig)
+    }
 
 #[partial]
 def instance_constraints_then_name (cr : ParseResult (List TypeConstraint)) (input : String) : ParseResult ParseDecl :=
-	match cr {
-		success _ constraints =>
-			instance_constraints_close_bracket (tag "]" input) constraints,
-		fail _ =>
-			let empty_cs : List TypeConstraint := List.empty in
-			instance_constraints_close_bracket (tag "]" input) empty_cs
-	}
+    match cr {
+        success _ constraints =>
+            instance_constraints_close_bracket (tag "]" input) constraints,
+        fail _ =>
+            let empty_cs : List TypeConstraint := List.empty in
+            instance_constraints_close_bracket (tag "]" input) empty_cs
+    }
 
 #[partial]
 def instance_constraints_close_bracket (r : ParseResult String) (constraints : List TypeConstraint) : ParseResult ParseDecl :=
-	match r {
-		success rem _ =>
-			instance_set_constraints (instance_name_with_named (skip_spaces rem)) constraints,
-		fail e => fail (ParseError.custom "expected ] after instance constraint" (parse_error_remaining e))
-	}
+    match r {
+        success rem _ =>
+            instance_set_constraints (instance_name_with_named (skip_spaces rem)) constraints,
+        fail e => fail (ParseError.custom "expected ] after instance constraint" (parse_error_remaining e))
+    }
 
 #[partial]
 def instance_set_constraints (dr : ParseResult ParseDecl) (constraints : List TypeConstraint) : ParseResult ParseDecl :=
-	match dr {
-		success rem decl =>
-			match decl.kind {
-				instance_d inst =>
-					match inst {
-						ParseInstance.mk name cls _ args vis implicit_params defs =>
-							success rem (pd_instance_d  (ParseInstance.mk name cls constraints args vis implicit_params defs))
-					},
-				_ => success rem decl
-			},
-		fail e => fail e
-	}
+    match dr {
+        success rem decl =>
+            match decl.kind {
+                instance_d inst =>
+                    match inst {
+                        ParseInstance.mk name cls _ args vis implicit_params defs =>
+                            success rem (pd_instance_d (ParseInstance.mk name cls constraints args vis implicit_params defs))
+                    },
+                _ => success rem decl
+            },
+        fail e => fail e
+    }
 
 #[partial]
 def instance_name (r : ParseResult NamePath) : ParseResult ParseDecl :=
-	match r {
-		success rem path =>
-			let empty_args : List ParseTerm := List.empty in
-			instance_args_or_brace rem path empty_args,
-		fail e => fail e
-	}
+    match r {
+        success rem path =>
+            let empty_args : List ParseTerm := List.empty in
+            instance_args_or_brace rem path empty_args,
+        fail e => fail e
+    }
 
 #[partial]
 def instance_args_or_brace (input : String) (cls : NamePath) (args : List ParseTerm) : ParseResult ParseDecl :=
-	instance_try_arg (atom_term (skip_spaces input)) input cls args
+    instance_try_arg (atom_term (skip_spaces input)) input cls args
 
 #[partial]
 def instance_try_arg (r : ParseResult ParseTerm) (orig : String) (cls : NamePath) (args : List ParseTerm) : ParseResult ParseDecl :=
-	match r {
-		success rem arg => instance_args_or_brace rem cls (List.cons arg args),
-		fail _ => instance_brace (tag "{" (skip_spaces orig)) cls args
-	}
+    match r {
+        success rem arg => instance_args_or_brace rem cls (List.cons arg args),
+        fail _ => instance_brace (tag "{" (skip_spaces orig)) cls args
+    }
 
 #[partial]
 def instance_brace (r : ParseResult String) (cls : NamePath) (args : List ParseTerm) : ParseResult ParseDecl :=
-	match r {
-		success rem _ =>
-			let empty_methods : List ParseDef := List.empty in
-			instance_methods rem cls args empty_methods,
-		fail e => fail e
-	}
+    match r {
+        success rem _ =>
+            let empty_methods : List ParseDef := List.empty in
+            instance_methods rem cls args empty_methods,
+        fail e => fail e
+    }
 
 #[partial]
 def instance_methods (input : String) (cls : NamePath) (args : List ParseTerm) (methods : List ParseDef) : ParseResult ParseDecl :=
-	let cleaned : String := skip_one_attr (skip_docstrings (skip_spaces input)) in
-	instance_try_close_or_def (tag "def" cleaned) cleaned cls args methods
+    let cleaned : String := skip_one_attr (skip_docstrings (skip_spaces input)) in
+    instance_try_close_or_def (tag "def" cleaned) cleaned cls args methods
 
 #[partial]
 def instance_try_close_or_def (r : ParseResult String) (orig : String) (cls : NamePath) (args : List ParseTerm) (methods : List ParseDef) : ParseResult ParseDecl :=
-	match r {
-		success rem _ => instance_method_single rem cls args methods,
-		fail _ => instance_close (tag "}" (skip_spaces orig)) cls args methods
-	}
+    match r {
+        success rem _ => instance_method_single rem cls args methods,
+        fail _ => instance_close (tag "}" (skip_spaces orig)) cls args methods
+    }
 
 // Instance methods use a real, typed `def`-shaped signature in every real
 // example in the corpus (`def beq (a b : Bool) : Bool := ...`), matching
@@ -3602,25 +3599,25 @@ def instance_try_close_or_def (r : ParseResult String) (orig : String) (cls : Na
 // in one lambda per param via the existing `lam_params`.
 #[partial]
 def instance_method_single (input : String) (cls : NamePath) (args : List ParseTerm) (methods : List ParseDef) : ParseResult ParseDecl :=
-	instance_method_name (dotted_def_name (skip_spaces input)) cls args methods
+    instance_method_name (dotted_def_name (skip_spaces input)) cls args methods
 
 #[partial]
 def instance_method_name (r : ParseResult String) (cls : NamePath) (args : List ParseTerm) (methods : List ParseDef) : ParseResult ParseDecl :=
-	match r {
-		success rem name => instance_method_params rem (Identifier.id name) cls args methods,
-		fail e => fail e
-	}
+    match r {
+        success rem name => instance_method_params rem (Identifier.id name) cls args methods,
+        fail e => fail e
+    }
 
 #[partial]
 def instance_method_params (input : String) (name : Identifier) (cls : NamePath) (args : List ParseTerm) (methods : List ParseDef) : ParseResult ParseDecl :=
-	instance_method_params_done (def_params_loop (skip_spaces input) List.empty) name cls args methods
+    instance_method_params_done (def_params_loop (skip_spaces input) List.empty) name cls args methods
 
 #[partial]
 def instance_method_params_done (r : ParseResult (List ParsedParam)) (name : Identifier) (cls : NamePath) (args : List ParseTerm) (methods : List ParseDef) : ParseResult ParseDecl :=
-	match r {
-		success rem params => instance_method_ret_type (tag ":" (skip_spaces rem)) rem name params cls args methods,
-		fail e => fail e
-	}
+    match r {
+        success rem params => instance_method_ret_type (tag ":" (skip_spaces rem)) rem name params cls args methods,
+        fail e => fail e
+    }
 
 /// The dominant real-corpus shape is a full `def`-style typed signature
 /// (`def beq (a b : Bool) : Bool := ...`), handled by `def_params_loop`
@@ -3633,22 +3630,22 @@ def instance_method_params_done (r : ParseResult (List ParsedParam)) (name : Ide
 /// that case instead of hard-failing.
 #[partial]
 def instance_method_ret_type (r : ParseResult String) (orig : String) (name : Identifier) (params : List ParsedParam) (cls : NamePath) (args : List ParseTerm) (methods : List ParseDef) : ParseResult ParseDecl :=
-	match r {
-		// `tag ":"` also matches the leading character of `:=` (the
-		// zero-arg untyped shape, `def m := a`) — check for that exact
-		// case first so it doesn't get misread as "found a `:` return
-		// type" and then fail trying to parse a type starting at `= a`.
-		success rem _ => instance_method_ret_type_not_assign (tag "=" rem) orig rem name params cls args methods,
-		fail _ => instance_method_untyped_args_loop orig List.empty name cls args methods
-	}
+    match r {
+        // `tag ":"` also matches the leading character of `:=` (the
+        // zero-arg untyped shape, `def m := a`) — check for that exact
+        // case first so it doesn't get misread as "found a `:` return
+        // type" and then fail trying to parse a type starting at `= a`.
+        success rem _ => instance_method_ret_type_not_assign (tag "=" rem) orig rem name params cls args methods,
+        fail _ => instance_method_untyped_args_loop orig List.empty name cls args methods
+    }
 
 #[partial]
 def instance_method_ret_type_not_assign (r : ParseResult String) (orig : String) (after_colon : String) (name : Identifier) (params : List ParsedParam) (cls : NamePath) (args : List ParseTerm) (methods : List ParseDef) : ParseResult ParseDecl :=
-	match r {
-		success rem _ => instance_method_untyped_args_loop orig List.empty name cls args methods,
-		fail _ =>
-			instance_method_ret_expr (type_expression after_colon) name params cls args methods
-	}
+    match r {
+        success rem _ => instance_method_untyped_args_loop orig List.empty name cls args methods,
+        fail _ =>
+            instance_method_ret_expr (type_expression after_colon) name params cls args methods
+    }
 
 /// Untyped fallback: bare pattern-style args (`f m := ...`, possibly
 /// zero), matching the pre-existing (if semantically incomplete — the
@@ -3657,87 +3654,87 @@ def instance_method_ret_type_not_assign (r : ParseResult String) (orig : String)
 /// behavior for this shape.
 #[partial]
 def instance_method_untyped_args_loop (input : String) (body_args : List ParseTerm) (name : Identifier) (cls : NamePath) (args : List ParseTerm) (methods : List ParseDef) : ParseResult ParseDecl :=
-	instance_method_untyped_args_next (atom_term (skip_spaces input)) input body_args name cls args methods
+    instance_method_untyped_args_next (atom_term (skip_spaces input)) input body_args name cls args methods
 
 #[partial]
 def instance_method_untyped_args_next (r : ParseResult ParseTerm) (orig : String) (body_args : List ParseTerm) (name : Identifier) (cls : NamePath) (args : List ParseTerm) (methods : List ParseDef) : ParseResult ParseDecl :=
-	match r {
-		success rem arg => instance_method_untyped_args_loop rem (List.cons arg body_args) name cls args methods,
-		fail _ => instance_method_untyped_finish (tag ":=" (skip_spaces orig)) name cls args methods
-	}
+    match r {
+        success rem arg => instance_method_untyped_args_loop rem (List.cons arg body_args) name cls args methods,
+        fail _ => instance_method_untyped_finish (tag ":=" (skip_spaces orig)) name cls args methods
+    }
 
 #[partial]
 def instance_method_untyped_finish (r : ParseResult String) (name : Identifier) (cls : NamePath) (args : List ParseTerm) (methods : List ParseDef) : ParseResult ParseDecl :=
-	match r {
-		success rem _ =>
-			instance_method_untyped_body (expression (skip_docstrings (skip_spaces rem))) name cls args methods,
-		fail e => fail (ParseError.custom "expected := in instance method" (parse_error_remaining e))
-	}
+    match r {
+        success rem _ =>
+            instance_method_untyped_body (expression (skip_docstrings (skip_spaces rem))) name cls args methods,
+        fail e => fail (ParseError.custom "expected := in instance method" (parse_error_remaining e))
+    }
 
 #[partial]
 def instance_method_untyped_body (r : ParseResult ParseTerm) (name : Identifier) (cls : NamePath) (args : List ParseTerm) (methods : List ParseDef) : ParseResult ParseDecl :=
-	match r {
-		success rem body =>
-			let empty_constraints : List TypeConstraint := List.empty in
-			let empty_attrs : List Attribute := List.empty in
-			let d : ParseDef := ParseDef.mk (NamePath.mk (List.cons name List.empty)) (pt_hole ) body empty_constraints empty_attrs Visibility.package_private List.empty in
-			instance_methods rem cls args (List.cons d methods),
-		fail e => fail e
-	}
+    match r {
+        success rem body =>
+            let empty_constraints : List TypeConstraint := List.empty in
+            let empty_attrs : List Attribute := List.empty in
+            let d : ParseDef := ParseDef.mk (NamePath.mk (List.cons name List.empty)) (pt_hole) body empty_constraints empty_attrs Visibility.package_private List.empty in
+            instance_methods rem cls args (List.cons d methods),
+        fail e => fail e
+    }
 
 #[partial]
 def instance_method_ret_expr (r : ParseResult ParseTerm) (name : Identifier) (params : List ParsedParam) (cls : NamePath) (args : List ParseTerm) (methods : List ParseDef) : ParseResult ParseDecl :=
-	match r {
-		success rem ret_typ => instance_method_body_start rem name params ret_typ cls args methods,
-		fail e => fail e
-	}
+    match r {
+        success rem ret_typ => instance_method_body_start rem name params ret_typ cls args methods,
+        fail e => fail e
+    }
 
 #[partial]
 def instance_method_body_start (input : String) (name : Identifier) (params : List ParsedParam) (ret_typ : ParseTerm) (cls : NamePath) (args : List ParseTerm) (methods : List ParseDef) : ParseResult ParseDecl :=
-	instance_method_body_assign (tag ":=" (skip_spaces input)) name params ret_typ cls args methods
+    instance_method_body_assign (tag ":=" (skip_spaces input)) name params ret_typ cls args methods
 
 #[partial]
 def instance_method_body_assign (r : ParseResult String) (name : Identifier) (params : List ParsedParam) (ret_typ : ParseTerm) (cls : NamePath) (args : List ParseTerm) (methods : List ParseDef) : ParseResult ParseDecl :=
-	match r {
-		success rem _ => instance_method_body_block_or_expr rem name params ret_typ cls args methods,
-		fail e => fail (ParseError.custom "expected := in instance method" (parse_error_remaining e))
-	}
+    match r {
+        success rem _ => instance_method_body_block_or_expr rem name params ret_typ cls args methods,
+        fail e => fail (ParseError.custom "expected := in instance method" (parse_error_remaining e))
+    }
 
 /// Body is either a `do { ... }` block or a bare expression — mirrors
 /// `def`'s own `def_body_block_or_none`/`def_body_do` alternative.
 #[partial]
 def instance_method_body_block_or_expr (input : String) (name : Identifier) (params : List ParsedParam) (ret_typ : ParseTerm) (cls : NamePath) (args : List ParseTerm) (methods : List ParseDef) : ParseResult ParseDecl :=
-	instance_method_try_block (tag "{" (skip_spaces input)) input name params ret_typ cls args methods
+    instance_method_try_block (tag "{" (skip_spaces input)) input name params ret_typ cls args methods
 
 #[partial]
 def instance_method_try_block (r : ParseResult String) (orig : String) (name : Identifier) (params : List ParsedParam) (ret_typ : ParseTerm) (cls : NamePath) (args : List ParseTerm) (methods : List ParseDef) : ParseResult ParseDecl :=
-	match r {
-		success rem _ => instance_method_body_do (do_stmts rem) name params ret_typ cls args methods,
-		fail _ =>
-			instance_method_body_expr (expression (skip_docstrings (skip_spaces orig))) name params ret_typ cls args methods
-	}
+    match r {
+        success rem _ => instance_method_body_do (do_stmts rem) name params ret_typ cls args methods,
+        fail _ =>
+            instance_method_body_expr (expression (skip_docstrings (skip_spaces orig))) name params ret_typ cls args methods
+    }
 
 #[partial]
 def instance_method_body_do (r : ParseResult (List DoStmt)) (name : Identifier) (params : List ParsedParam) (ret_typ : ParseTerm) (cls : NamePath) (args : List ParseTerm) (methods : List ParseDef) : ParseResult ParseDecl :=
-	match r {
-		success rem stmts => instance_method_finish rem name params ret_typ (pt_do stmts) cls args methods,
-		fail e => fail e
-	}
+    match r {
+        success rem stmts => instance_method_finish rem name params ret_typ (pt_do stmts) cls args methods,
+        fail e => fail e
+    }
 
 #[partial]
 def instance_method_body_expr (r : ParseResult ParseTerm) (name : Identifier) (params : List ParsedParam) (ret_typ : ParseTerm) (cls : NamePath) (args : List ParseTerm) (methods : List ParseDef) : ParseResult ParseDecl :=
-	match r {
-		success rem body => instance_method_finish rem name params ret_typ body cls args methods,
-		fail e => fail e
-	}
+    match r {
+        success rem body => instance_method_finish rem name params ret_typ body cls args methods,
+        fail e => fail e
+    }
 
 #[partial]
 def instance_method_finish (input : String) (name : Identifier) (params : List ParsedParam) (ret_typ : ParseTerm) (body : ParseTerm) (cls : NamePath) (args : List ParseTerm) (methods : List ParseDef) : ParseResult ParseDecl :=
-	let empty_constraints : List TypeConstraint := List.empty in
-	let empty_attrs : List Attribute := List.empty in
-	let full_typ := build_param_pi_chain (parsed_params_as_params params) ret_typ in
-	let d : ParseDef := ParseDef.mk (NamePath.mk (List.cons name List.empty)) full_typ (lam_parsed_params params body) empty_constraints empty_attrs Visibility.package_private (parsed_params_as_params params) in
-	instance_methods input cls args (List.cons d methods)
+    let empty_constraints : List TypeConstraint := List.empty in
+    let empty_attrs : List Attribute := List.empty in
+    let full_typ := build_param_pi_chain (parsed_params_as_params params) ret_typ in
+    let d : ParseDef := ParseDef.mk (NamePath.mk (List.cons name List.empty)) full_typ (lam_parsed_params params body) empty_constraints empty_attrs Visibility.package_private (parsed_params_as_params params) in
+    instance_methods input cls args (List.cons d methods)
 
 /// Fold a `List Param` (already in left-to-right declaration order — the
 /// `def_params_loop` result, same as `def` itself consumes) into a Pi
@@ -3756,32 +3753,32 @@ def instance_method_finish (input : String) (name : Identifier) (params : List P
 /// lambda chain.
 #[partial]
 def build_param_pi_chain (params : List ParseParam) (ret : ParseTerm) : ParseTerm := match params {
-	List.empty => ret,
-	List.cons p rest =>
-		match p {
-			ParseParam.mk pname typ mult default _attrs => pt_pi (Option.some pname) typ (build_param_pi_chain rest ret)
-		},
+    List.empty => ret,
+    List.cons p rest =>
+        match p {
+            ParseParam.mk pname typ mult default _attrs => pt_pi (Option.some pname) typ (build_param_pi_chain rest ret)
+        },
 }
 
 #[partial]
 def instance_close (r : ParseResult String) (cls : NamePath) (args : List ParseTerm) (methods : List ParseDef) : ParseResult ParseDecl :=
-	match r {
-		success rem _ =>
-			let rev_methods : List ParseDef := list_reverse methods in
-			let rev_args : List ParseTerm := list_reverse args in
-			let empty_constraints : List TypeConstraint := List.empty in
-			let empty_params : List ParseParam := List.empty in
-			// Placeholder — instance_parser's instance_apply_vis and
-			// instance_apply_params patch the real values in afterward.
-			// `rev_methods` (this instance's own parsed method defs) is
-			// NOT a placeholder — it's the real, final value, threaded
-			// through the whole instance_methods/instance_try_close_or_def
-			// loop above and kept from here on (previously built
-			// correctly, then discarded outright — see Instance.defs's
-			// own doc comment, lang/types.mo).
-			success rem (pd_instance_d  (ParseInstance.mk (Identifier.id "_") cls empty_constraints rev_args Visibility.package_private empty_params rev_methods)),
-		fail e => fail e
-	}
+    match r {
+        success rem _ =>
+            let rev_methods : List ParseDef := list_reverse methods in
+            let rev_args : List ParseTerm := list_reverse args in
+            let empty_constraints : List TypeConstraint := List.empty in
+            let empty_params : List ParseParam := List.empty in
+            // Placeholder — instance_parser's instance_apply_vis and
+            // instance_apply_params patch the real values in afterward.
+            // `rev_methods` (this instance's own parsed method defs) is
+            // NOT a placeholder — it's the real, final value, threaded
+            // through the whole instance_methods/instance_try_close_or_def
+            // loop above and kept from here on (previously built
+            // correctly, then discarded outright — see Instance.defs's
+            // own doc comment, lang/types.mo).
+            success rem (pd_instance_d (ParseInstance.mk (Identifier.id "_") cls empty_constraints rev_args Visibility.package_private empty_params rev_methods)),
+        fail e => fail e
+    }
 
 // ─── `defmacro` (both forms) ─────────────────────────────────────────────
 //
@@ -3807,71 +3804,71 @@ def instance_close (r : ParseResult String) (cls : NamePath) (args : List ParseT
 /// be unverified complexity with nothing to test it against.
 #[partial]
 def macro_param (input : String) : ParseResult ParseParam :=
-	macro_param_try_paren (tag "(" input) input
+    macro_param_try_paren (tag "(" input) input
 
 #[partial]
 def macro_param_try_paren (r : ParseResult String) (orig : String) : ParseResult ParseParam :=
-	match r {
-		success rem _ => macro_param_paren_mult (multiplicity_prefix rem) rem,
-		fail _ => macro_param_try_bare orig
-	}
+    match r {
+        success rem _ => macro_param_paren_mult (multiplicity_prefix rem) rem,
+        fail _ => macro_param_try_bare orig
+    }
 
 #[partial]
 def macro_param_try_bare (input : String) : ParseResult ParseParam :=
-	match identifier input {
-		success rem name => success rem (parse_param_many (Identifier.id name) pt_hole ),
-		fail e => fail e
-	}
+    match identifier input {
+        success rem name => success rem (parse_param_many (Identifier.id name) pt_hole),
+        fail e => fail e
+    }
 
 #[partial]
 def macro_param_paren_mult (r : ParseResult Multiplicity) (orig : String) : ParseResult ParseParam :=
-	match r {
-		success rem mult => macro_param_paren_name (identifier (skip_spaces rem)) mult,
-		fail e => fail e
-	}
+    match r {
+        success rem mult => macro_param_paren_name (identifier (skip_spaces rem)) mult,
+        fail e => fail e
+    }
 
 #[partial]
 def macro_param_paren_name (r : ParseResult String) (mult : Multiplicity) : ParseResult ParseParam :=
-	match r {
-		success rem name => macro_param_paren_colon (tag ":" (skip_spaces rem)) (Identifier.id name) mult,
-		fail e => fail e
-	}
+    match r {
+        success rem name => macro_param_paren_colon (tag ":" (skip_spaces rem)) (Identifier.id name) mult,
+        fail e => fail e
+    }
 
 #[partial]
 def macro_param_paren_colon (r : ParseResult String) (name : Identifier) (mult : Multiplicity) : ParseResult ParseParam :=
-	match r {
-		success rem _ =>
-			macro_param_paren_type (type_expression (skip_spaces rem)) name mult,
-		fail e => fail e
-	}
+    match r {
+        success rem _ =>
+            macro_param_paren_type (type_expression (skip_spaces rem)) name mult,
+        fail e => fail e
+    }
 
 #[partial]
 def macro_param_paren_type (r : ParseResult ParseTerm) (name : Identifier) (mult : Multiplicity) : ParseResult ParseParam :=
-	match r {
-		success rem typ => macro_param_paren_close (tag ")" (skip_spaces rem)) name typ mult,
-		fail e => fail e
-	}
+    match r {
+        success rem typ => macro_param_paren_close (tag ")" (skip_spaces rem)) name typ mult,
+        fail e => fail e
+    }
 
 #[partial]
 def macro_param_paren_close (r : ParseResult String) (name : Identifier) (typ : ParseTerm) (mult : Multiplicity) : ParseResult ParseParam :=
-	match r {
-		success rem _ =>
-			let none : Option ParseTerm := Option.none in
-			let no_attrs : List Attribute := List.empty in
-			success rem (ParseParam.mk name typ mult none no_attrs),
-		fail e => fail e
-	}
+    match r {
+        success rem _ =>
+            let none : Option ParseTerm := Option.none in
+            let no_attrs : List Attribute := List.empty in
+            success rem (ParseParam.mk name typ mult none no_attrs),
+        fail e => fail e
+    }
 
 #[partial]
 def macro_params (input : String) : ParseResult (List ParseParam) :=
-	macro_params_loop (skip_spaces input) List.empty
+    macro_params_loop (skip_spaces input) List.empty
 
 #[partial]
 def macro_params_loop (input : String) (acc : List ParseParam) : ParseResult (List ParseParam) :=
-	match macro_param input {
-		success rem p => macro_params_loop (skip_spaces rem) (List.cons p acc),
-		fail _ => success input (list_reverse acc)
-	}
+    match macro_param input {
+        success rem p => macro_params_loop (skip_spaces rem) (List.cons p acc),
+        fail _ => success input (list_reverse acc)
+    }
 
 // Attributes are captured here via `opt_attributes` and threaded through
 // the chain to both payload sites — same "placeholder now, patch later"
@@ -3881,72 +3878,72 @@ def macro_params_loop (input : String) (acc : List ParseParam) : ParseResult (Li
 // `#[derive_handler <Name>]` registration rides).
 #[partial]
 def defmacro_parser (input : String) : ParseResult ParseDecl :=
-	defmacro_try_attrs (opt_attributes input) input
+    defmacro_try_attrs (opt_attributes input) input
 
 // Same `skip_docstrings (skip_spaces rem)` gap-fix as `type_try_attrs`:
 // a `#[attr] // comment` line right before `defmacro` needs skipping
 // between the attribute and the keyword.
 #[partial]
 def defmacro_try_attrs (r : ParseResult (List Attribute)) (orig : String) : ParseResult ParseDecl :=
-	match r {
-		success rem attrs => defmacro_kw (tag "defmacro" (skip_docstrings (skip_spaces rem))) attrs,
-		fail _ => defmacro_kw (tag "defmacro" orig) List.empty,
-	}
+    match r {
+        success rem attrs => defmacro_kw (tag "defmacro" (skip_docstrings (skip_spaces rem))) attrs,
+        fail _ => defmacro_kw (tag "defmacro" orig) List.empty,
+    }
 
 #[partial]
 def defmacro_kw (r : ParseResult String) (attrs : List Attribute) : ParseResult ParseDecl :=
-	match r {
-		success rem _ => defmacro_ws1 (ws1 rem) attrs,
-		fail e => fail e
-	}
+    match r {
+        success rem _ => defmacro_ws1 (ws1 rem) attrs,
+        fail e => fail e
+    }
 
 #[partial]
 def defmacro_ws1 (r : ParseResult String) (attrs : List Attribute) : ParseResult ParseDecl :=
-	match r {
-		success rem _ => defmacro_name (dotted_def_name (skip_spaces rem)) attrs,
-		fail e => fail e
-	}
+    match r {
+        success rem _ => defmacro_name (dotted_def_name (skip_spaces rem)) attrs,
+        fail e => fail e
+    }
 
 #[partial]
 def defmacro_name (r : ParseResult String) (attrs : List Attribute) : ParseResult ParseDecl :=
-	match r {
-		success rem name => defmacro_params_result (macro_params rem) (Identifier.id name) attrs,
-		fail e => fail e
-	}
+    match r {
+        success rem name => defmacro_params_result (macro_params rem) (Identifier.id name) attrs,
+        fail e => fail e
+    }
 
 #[partial]
 def defmacro_params_result (r : ParseResult (List ParseParam)) (name : Identifier) (attrs : List Attribute) : ParseResult ParseDecl :=
-	match r {
-		success rem params => defmacro_assign (tag ":=" (skip_spaces rem)) name params attrs,
-		fail e => fail e
-	}
+    match r {
+        success rem params => defmacro_assign (tag ":=" (skip_spaces rem)) name params attrs,
+        fail e => fail e
+    }
 
 #[partial]
 def defmacro_assign (r : ParseResult String) (name : Identifier) (params : List ParseParam) (attrs : List Attribute) : ParseResult ParseDecl :=
-	match r {
-		success rem _ =>
-			let after_assign : String := skip_spaces rem in
-			defmacro_try_decls_block (tag "decls" after_assign) after_assign name params attrs,
-		fail e => fail e
-	}
+    match r {
+        success rem _ =>
+            let after_assign : String := skip_spaces rem in
+            defmacro_try_decls_block (tag "decls" after_assign) after_assign name params attrs,
+        fail e => fail e
+    }
 
 #[partial]
 def defmacro_try_decls_block (r : ParseResult String) (orig : String) (name : Identifier) (params : List ParseParam) (attrs : List Attribute) : ParseResult ParseDecl :=
-	match r {
-		success rem _ => defmacro_decls_open (tag "{" (skip_spaces rem)) name params attrs,
-		fail _ => defmacro_term_body (type_expression (skip_docstrings (skip_spaces orig))) name params attrs
-	}
+    match r {
+        success rem _ => defmacro_decls_open (tag "{" (skip_spaces rem)) name params attrs,
+        fail _ => defmacro_term_body (type_expression (skip_docstrings (skip_spaces orig))) name params attrs
+    }
 
 #[partial]
 def defmacro_term_body (r : ParseResult ParseTerm) (name : Identifier) (params : List ParseParam) (attrs : List Attribute) : ParseResult ParseDecl :=
-	match r {
-		success rem term =>
-			let body : ParseTerm := lam_params params term in
-			let np_ : NamePath := NamePath.mk (List.cons name List.empty) in
-			let no_constraints : List TypeConstraint := List.empty in
-			success rem (pd_def_macro_d  (ParseDef.mk np_ pt_hole  body no_constraints attrs Visibility.package_private List.empty)),
-		fail e => fail e
-	}
+    match r {
+        success rem term =>
+            let body : ParseTerm := lam_params params term in
+            let np_ : NamePath := NamePath.mk (List.cons name List.empty) in
+            let no_constraints : List TypeConstraint := List.empty in
+            success rem (pd_def_macro_d (ParseDef.mk np_ pt_hole body no_constraints attrs Visibility.package_private List.empty)),
+        fail e => fail e
+    }
 
 /// `decls { ... }` (Form A's body) reuses the EXISTING `decls_skip`
 /// truncate-on-fail loop directly — the same one `decls_parser` (the
@@ -3962,26 +3959,26 @@ def defmacro_term_body (r : ParseResult ParseTerm) (name : Identifier) (params :
 /// exactly, and needs no new termination-guarding machinery.
 #[partial]
 def defmacro_decls_open (r : ParseResult String) (name : Identifier) (params : List ParseParam) (attrs : List Attribute) : ParseResult ParseDecl :=
-	match r {
-		success rem _ => defmacro_decls_result (decls_skip (skip_spaces rem) List.empty) name params attrs,
-		fail e => fail e
-	}
+    match r {
+        success rem _ => defmacro_decls_result (decls_skip (skip_spaces rem) List.empty) name params attrs,
+        fail e => fail e
+    }
 
 #[partial]
 def defmacro_decls_result (r : ParseResult (List ParseDecl)) (name : Identifier) (params : List ParseParam) (attrs : List Attribute) : ParseResult ParseDecl :=
-	match r {
-		success rem decl_list => defmacro_decls_close (tag "}" (skip_spaces rem)) name params decl_list attrs,
-		fail e => fail e
-	}
+    match r {
+        success rem decl_list => defmacro_decls_close (tag "}" (skip_spaces rem)) name params decl_list attrs,
+        fail e => fail e
+    }
 
 #[partial]
 def defmacro_decls_close (r : ParseResult String) (name : Identifier) (params : List ParseParam) (decl_list : List ParseDecl) (attrs : List Attribute) : ParseResult ParseDecl :=
-	match r {
-		success rem _ =>
-			let np_ : NamePath := NamePath.mk (List.cons name List.empty) in
-			success rem (pd_decl_gen_d  np_ params decl_list attrs),
-		fail e => fail (ParseError.custom "expected } to close decl_list block" "")
-	}
+    match r {
+        success rem _ =>
+            let np_ : NamePath := NamePath.mk (List.cons name List.empty) in
+            success rem (pd_decl_gen_d np_ params decl_list attrs),
+        fail e => fail (ParseError.custom "expected } to close decl_list block" "")
+    }
 
 // ─── `with Dotted.Name { ... }` — a flat name-prefixing decl block ──────
 //
@@ -3999,117 +3996,117 @@ def defmacro_decls_close (r : ParseResult String) (name : Identifier) (params : 
 
 #[partial]
 def with_parser (input : String) : ParseResult ParseDecl :=
-	with_kw (tag_keyword "with" input) input
+    with_kw (tag_keyword "with" input) input
 
 #[partial]
 def with_kw (r : ParseResult String) (input : String) : ParseResult ParseDecl :=
-	match r {
-		success rem _ => with_name (dotted_def_name (skip_spaces rem)),
-		fail e => fail e
-	}
+    match r {
+        success rem _ => with_name (dotted_def_name (skip_spaces rem)),
+        fail e => fail e
+    }
 
 #[partial]
 def with_name (r : ParseResult String) : ParseResult ParseDecl :=
-	match r {
-		success rem name => with_open (tag "{" (skip_spaces rem)) (Identifier.id name),
-		fail e => fail e
-	}
+    match r {
+        success rem name => with_open (tag "{" (skip_spaces rem)) (Identifier.id name),
+        fail e => fail e
+    }
 
 #[partial]
 def with_open (r : ParseResult String) (prefix : Identifier) : ParseResult ParseDecl :=
-	match r {
-		success rem _ => with_decls (decls_skip (skip_spaces rem) List.empty) prefix,
-		fail e => fail e
-	}
+    match r {
+        success rem _ => with_decls (decls_skip (skip_spaces rem) List.empty) prefix,
+        fail e => fail e
+    }
 
 #[partial]
 def with_decls (r : ParseResult (List ParseDecl)) (prefix : Identifier) : ParseResult ParseDecl :=
-	match r {
-		success rem decl_list => with_close (tag "}" (skip_spaces rem)) prefix decl_list,
-		fail e => fail e
-	}
+    match r {
+        success rem decl_list => with_close (tag "}" (skip_spaces rem)) prefix decl_list,
+        fail e => fail e
+    }
 
 #[partial]
 def with_close (r : ParseResult String) (prefix : Identifier) (decl_list : List ParseDecl) : ParseResult ParseDecl :=
-	match r {
-		success rem _ => success rem (pd_with_d prefix decl_list),
-		fail _ => fail (ParseError.custom "expected } to close with block" "")
-	}
+    match r {
+        success rem _ => success rem (pd_with_d prefix decl_list),
+        fail _ => fail (ParseError.custom "expected } to close with block" "")
+    }
 
 #[test]
 def test_with_block_prefixes_def_name : Bool :=
-	match decls_parser "with Cubical { def i0 : Cubical.I }" {
-		success rem ds =>
-			String.beq rem ""
-				&& I64.beq (debug_decl_count ds) 1
-				&& match ds {
-					List.cons d _ =>
-						match d {
-							Decl.def_d def_ =>
-								String.beq (show_name_path def_.name) "Cubical.i0",
-							_ => false,
-						},
-					List.empty => false,
-				},
-		fail _ => false
-	}
+    match decls_parser "with Cubical { def i0 : Cubical.I }" {
+        success rem ds =>
+            String.beq rem ""
+                && I64.beq (debug_decl_count ds) 1
+                && match ds {
+                    List.cons d _ =>
+                        match d {
+                            Decl.def_d def_ =>
+                                String.beq (show_name_path def_.name) "Cubical.i0",
+                            _ => false,
+                        },
+                    List.empty => false,
+                },
+        fail _ => false
+    }
 
 /// Two decls in one block splice out flat AND a decl after the block
 /// still parses -- the block contributes its inner decls directly to
 /// the stream, not as one wrapped declaration.
 #[test]
 def test_with_block_splices_inner_decls_flat : Bool :=
-	match decls_parser "with Ns { def a : I64 := 1\ndef b : I64 := 2 }\ndef c : I64 := 3" {
-		success rem ds =>
-			String.beq rem ""
-				&& I64.beq (debug_decl_count ds) 3
-				&& match ds {
-					List.cons a rest =>
-						match a {
-							Decl.def_d da =>
-								match rest {
-									List.cons b rest2 =>
-										match b {
-											Decl.def_d db =>
-												match rest2 {
-													List.cons c _ =>
-														match c {
-															Decl.def_d dc =>
-																String.beq (show_name_path da.name) "Ns.a"
-																	&& String.beq (show_name_path db.name) "Ns.b"
-																	&& String.beq (show_name_path dc.name) "c",
-															_ => false,
-														},
-													List.empty => false,
-												},
-											_ => false,
-										},
-									List.empty => false,
-								},
-							_ => false,
-						},
-					List.empty => false,
-				},
-		fail _ => false
-	}
+    match decls_parser "with Ns { def a : I64 := 1\ndef b : I64 := 2 }\ndef c : I64 := 3" {
+        success rem ds =>
+            String.beq rem ""
+                && I64.beq (debug_decl_count ds) 3
+                && match ds {
+                    List.cons a rest =>
+                        match a {
+                            Decl.def_d da =>
+                                match rest {
+                                    List.cons b rest2 =>
+                                        match b {
+                                            Decl.def_d db =>
+                                                match rest2 {
+                                                    List.cons c _ =>
+                                                        match c {
+                                                            Decl.def_d dc =>
+                                                                String.beq (show_name_path da.name) "Ns.a"
+                                                                    && String.beq (show_name_path db.name) "Ns.b"
+                                                                    && String.beq (show_name_path dc.name) "c",
+                                                            _ => false,
+                                                        },
+                                                    List.empty => false,
+                                                },
+                                            _ => false,
+                                        },
+                                    List.empty => false,
+                                },
+                            _ => false,
+                        },
+                    List.empty => false,
+                },
+        fail _ => false
+    }
 
 /// A multi-segment header prefixes with the WHOLE dotted name, not just
 /// the last segment.
 #[test]
 def test_with_block_dotted_prefix : Bool :=
-	match decls_parser "with Dotted.Name { def a : I64 := 1 }" {
-		success _ ds =>
-			match ds {
-				List.cons d _ =>
-					match d {
-						Decl.def_d def_ =>
-							String.beq (show_name_path def_.name) "Dotted.Name.a",
-						_ => false,
-					},
-				List.empty => false,
-			},
-		fail _ => false
-	}
+    match decls_parser "with Dotted.Name { def a : I64 := 1 }" {
+        success _ ds =>
+            match ds {
+                List.cons d _ =>
+                    match d {
+                        Decl.def_d def_ =>
+                            String.beq (show_name_path def_.name) "Dotted.Name.a",
+                        _ => false,
+                    },
+                List.empty => false,
+            },
+        fail _ => false
+    }
 
 /// Every NAMED declaration form gets prefixed -- the block is not
 /// def-only sugar. Classes, structs and instances carry `Identifier`
@@ -4117,37 +4114,37 @@ def test_with_block_dotted_prefix : Bool :=
 /// (`prefix_ident`, `lang/parser/lower_parse.mo`).
 #[test]
 def test_with_block_prefixes_class_struct_instance : Bool :=
-	match decls_parser "with Ns { class K A { def m : A -> A }\nstruct S { f : I64 }\ninstance Inst : K I64 { def m (x : I64) : I64 := x } }" {
-		success _ ds =>
-			match ds {
-				List.cons c rest =>
-					match c {
-						Decl.class_d k =>
-							match rest {
-								List.cons s rest2 =>
-									match s {
-										Decl.struct_d st =>
-											match rest2 {
-												List.cons i _ =>
-													match i {
-														Decl.instance_d ins =>
-															String.beq (show_identifier k.name) "Ns.K"
-																&& String.beq (show_identifier st.name) "Ns.S"
-																&& String.beq (show_identifier ins.name) "Ns.Inst",
-														_ => false,
-													},
-												List.empty => false,
-											},
-										_ => false,
-									},
-								List.empty => false,
-							},
-						_ => false,
-					},
-				List.empty => false,
-			},
-		fail _ => false
-	}
+    match decls_parser "with Ns { class K A { def m : A -> A }\nstruct S { f : I64 }\ninstance Inst : K I64 { def m (x : I64) : I64 := x } }" {
+        success _ ds =>
+            match ds {
+                List.cons c rest =>
+                    match c {
+                        Decl.class_d k =>
+                            match rest {
+                                List.cons s rest2 =>
+                                    match s {
+                                        Decl.struct_d st =>
+                                            match rest2 {
+                                                List.cons i _ =>
+                                                    match i {
+                                                        Decl.instance_d ins =>
+                                                            String.beq (show_identifier k.name) "Ns.K"
+                                                                && String.beq (show_identifier st.name) "Ns.S"
+                                                                && String.beq (show_identifier ins.name) "Ns.Inst",
+                                                        _ => false,
+                                                    },
+                                                List.empty => false,
+                                            },
+                                        _ => false,
+                                    },
+                                List.empty => false,
+                            },
+                        _ => false,
+                    },
+                List.empty => false,
+            },
+        fail _ => false
+    }
 
 /// A nested block composes its prefixes -- `with A { with B { def c } }`
 /// declares `A.B.c`. The composition happens on the INNER prefix at the
@@ -4155,19 +4152,19 @@ def test_with_block_prefixes_class_struct_instance : Bool :=
 /// block's own lowering needs no outer knowledge.
 #[test]
 def test_nested_with_composes_prefixes : Bool :=
-	match decls_parser "with A { with B { def c : I64 := 1 } }" {
-		success _ ds =>
-			match ds {
-				List.cons d _ =>
-					match d {
-						Decl.def_d def_ =>
-							String.beq (show_name_path def_.name) "A.B.c",
-						_ => false,
-					},
-				List.empty => false,
-			},
-		fail _ => false
-	}
+    match decls_parser "with A { with B { def c : I64 := 1 } }" {
+        success _ ds =>
+            match ds {
+                List.cons d _ =>
+                    match d {
+                        Decl.def_d def_ =>
+                            String.beq (show_name_path def_.name) "A.B.c",
+                        _ => false,
+                    },
+                List.empty => false,
+            },
+        fail _ => false
+    }
 
 /// The one expansion in `lower_parse_decls` must stay invisible to the
 /// span/decl zip: one span per lowered decl, counting the block's inner
@@ -4175,12 +4172,12 @@ def test_nested_with_composes_prefixes : Bool :=
 /// lowering does -- see its own doc comment in `lang/parser/lower_parse.mo`).
 #[test]
 def test_with_block_keeps_span_count_aligned : Bool :=
-	match decls_skip (skip_docstrings (skip_spaces "with Ns { def a : I64 := 1\ndef b : I64 := 2 }\ndef c : I64 := 3")) List.empty {
-		success _ ds =>
-			I64.beq (List.length (collect_decl_spans ds List.empty))
-				(debug_decl_count (lower_parse_decls lower_ctx_bare ds)),
-		fail _ => false
-	}
+    match decls_skip (skip_docstrings (skip_spaces "with Ns { def a : I64 := 1\ndef b : I64 := 2 }\ndef c : I64 := 3")) List.empty {
+        success _ ds =>
+            I64.beq (List.length (collect_decl_spans ds List.empty))
+                (debug_decl_count (lower_parse_decls lower_ctx_bare ds)),
+        fail _ => false
+    }
 
 /// The strict parser reports an unclosed block at the block, with the
 /// block-specific message -- not silently truncating the way the lenient
@@ -4189,20 +4186,20 @@ def test_with_block_keeps_span_count_aligned : Bool :=
 /// keeps the specific error).
 #[test]
 def test_with_block_unclosed_fails_strict : Bool :=
-	match decls_parser_strict "with Ns { def a : I64 := 1" {
-		success _ _ => false,
-		fail e => String.contains (render_parse_error "with Ns { def a : I64 := 1" Option.none e) "expected } to close with block",
-	}
+    match decls_parser_strict "with Ns { def a : I64 := 1" {
+        success _ _ => false,
+        fail e => String.contains (render_parse_error "with Ns { def a : I64 := 1" Option.none e) "expected } to close with block",
+    }
 
 /// `tag_keyword`'s boundary check: `withdraw` is an ordinary identifier,
 /// not a `with` block. A bare unknown decl like this fails strict
 /// parsing outright rather than misbinding `draw` as a block prefix.
 #[test]
 def test_with_keyword_requires_word_boundary : Bool :=
-	match decls_parser_strict "withdraw" {
-		success _ _ => false,
-		fail e => Bool.not (String.contains (render_parse_error "withdraw" Option.none e) "close with block"),
-	}
+    match decls_parser_strict "withdraw" {
+        success _ _ => false,
+        fail e => Bool.not (String.contains (render_parse_error "withdraw" Option.none e) "close with block"),
+    }
 
 // ─── `with` opens its own names (Item 7) ────────────────────────────────
 //
@@ -4215,186 +4212,186 @@ def test_with_keyword_requires_word_boundary : Bool :=
 
 #[partial]
 def test_with_def_body (nm : String) (ds : List Decl) : Option Term :=
-	match ds {
-		List.empty => Option.none,
-		List.cons d rest =>
-			match d {
-				Decl.def_d def_ =>
-					if String.beq (show_name_path def_.name) nm
-					then Option.some def_.term
-					else test_with_def_body nm rest,
-				_ => test_with_def_body nm rest,
-			},
-	}
+    match ds {
+        List.empty => Option.none,
+        List.cons d rest =>
+            match d {
+                Decl.def_d def_ =>
+                    if String.beq (show_name_path def_.name) nm
+                    then Option.some def_.term
+                    else test_with_def_body nm rest,
+                _ => test_with_def_body nm rest,
+            },
+    }
 
 #[partial]
 def test_with_def_typ (nm : String) (ds : List Decl) : Option Term :=
-	match ds {
-		List.empty => Option.none,
-		List.cons d rest =>
-			match d {
-				Decl.def_d def_ =>
-					if String.beq (show_name_path def_.name) nm
-					then Option.some def_.typ
-					else test_with_def_typ nm rest,
-				_ => test_with_def_typ nm rest,
-			},
-	}
+    match ds {
+        List.empty => Option.none,
+        List.cons d rest =>
+            match d {
+                Decl.def_d def_ =>
+                    if String.beq (show_name_path def_.name) nm
+                    then Option.some def_.typ
+                    else test_with_def_typ nm rest,
+                _ => test_with_def_typ nm rest,
+            },
+    }
 
 #[partial]
 def test_term_is_global (t : Term) (nm : String) : Bool :=
-	match t {
-		Term.var idx dbg =>
-			I64.beq idx sentinel
-				&& match dbg {
-					DebugName.named id => String.beq (show_identifier id) nm,
-					DebugName.unnamed => false,
-				},
-		_ => false,
-	}
+    match t {
+        Term.var idx dbg =>
+            I64.beq idx sentinel
+                && match dbg {
+                    DebugName.named id => String.beq (show_identifier id) nm,
+                    DebugName.unnamed => false,
+                },
+        _ => false,
+    }
 
 #[partial]
 def test_body_is_global (def_name : String) (global_name : String) (ds : List Decl) : Bool :=
-	match test_with_def_body def_name ds {
-		Option.some body => test_term_is_global body global_name,
-		Option.none => false,
-	}
+    match test_with_def_body def_name ds {
+        Option.some body => test_term_is_global body global_name,
+        Option.none => false,
+    }
 
 #[test]
 def test_with_block_opens_a_bare_sibling : Bool :=
-	match decls_parser "with Ns { def a : I64 := 1\ndef b : I64 := a }" {
-		success rem ds => String.beq rem "" && test_body_is_global "Ns.b" "Ns.a" ds,
-		fail _ => false
-	}
+    match decls_parser "with Ns { def a : I64 := 1\ndef b : I64 := a }" {
+        success rem ds => String.beq rem "" && test_body_is_global "Ns.b" "Ns.a" ds,
+        fail _ => false
+    }
 
 #[test]
 def test_with_block_opens_a_type_annotation : Bool :=
-	match decls_parser "with Ns { def T : Type := I64\ndef v : T := 1 }" {
-		success rem ds =>
-			String.beq rem ""
-				&& match test_with_def_typ "Ns.v" ds {
-					Option.some typ => test_term_is_global typ "Ns.T",
-					Option.none => false,
-				},
-		fail _ => false
-	}
+    match decls_parser "with Ns { def T : Type := I64\ndef v : T := 1 }" {
+        success rem ds =>
+            String.beq rem ""
+                && match test_with_def_typ "Ns.v" ds {
+                    Option.some typ => test_term_is_global typ "Ns.T",
+                    Option.none => false,
+                },
+        fail _ => false
+    }
 
 /// A local binder always wins: `fn (a : I64) => a` binds `a`, so the
 /// inner reference is de Bruijn 0, not the sibling `Ns.a`.
 #[test]
 def test_with_block_binder_shadows_the_sibling : Bool :=
-	match decls_parser "with Ns { def a : I64 := 1\ndef b : I64 := fn (a : I64) => a }" {
-		success rem ds =>
-			String.beq rem ""
-				&& match test_with_def_body "Ns.b" ds {
-					Option.some body =>
-						match body {
-							Term.lam _ _ inner =>
-								match inner {
-									Term.var idx _ => I64.beq idx 0,
-									_ => false,
-								},
-							_ => false,
-						},
-					Option.none => false,
-				},
-		fail _ => false
-	}
+    match decls_parser "with Ns { def a : I64 := 1\ndef b : I64 := fn (a : I64) => a }" {
+        success rem ds =>
+            String.beq rem ""
+                && match test_with_def_body "Ns.b" ds {
+                    Option.some body =>
+                        match body {
+                            Term.lam _ _ inner =>
+                                match inner {
+                                    Term.var idx _ => I64.beq idx 0,
+                                    _ => false,
+                                },
+                            _ => false,
+                        },
+                    Option.none => false,
+                },
+        fail _ => false
+    }
 
 /// A nested block's names are its own, composed with the outer prefix.
 #[test]
 def test_nested_with_block_opens_its_sibling : Bool :=
-	match decls_parser "with A { with B { def c : I64 := 1\ndef d : I64 := c } }" {
-		success rem ds => String.beq rem "" && test_body_is_global "A.B.d" "A.B.c" ds,
-		fail _ => false
-	}
+    match decls_parser "with A { with B { def c : I64 := 1\ndef d : I64 := c } }" {
+        success rem ds => String.beq rem "" && test_body_is_global "A.B.d" "A.B.c" ds,
+        fail _ => false
+    }
 
 /// The outer block's names stay visible inside the nested one.
 #[test]
 def test_nested_with_block_sees_the_outer_names : Bool :=
-	match decls_parser "with A { def e : I64 := 1\nwith B { def f : I64 := e } }" {
-		success rem ds => String.beq rem "" && test_body_is_global "A.B.f" "A.e" ds,
-		fail _ => false
-	}
+    match decls_parser "with A { def e : I64 := 1\nwith B { def f : I64 := e } }" {
+        success rem ds => String.beq rem "" && test_body_is_global "A.B.f" "A.e" ds,
+        fail _ => false
+    }
 
 /// An inner declaration shadows the outer spelling of the same name.
 #[test]
 def test_nested_with_block_shadows_the_outer_name : Bool :=
-	match decls_parser "with A { def x : I64 := 1\nwith B { def x : I64 := 2\ndef y : I64 := x } }" {
-		success rem ds => String.beq rem "" && test_body_is_global "A.B.y" "A.B.x" ds,
-		fail _ => false
-	}
+    match decls_parser "with A { def x : I64 := 1\nwith B { def x : I64 := 2\ndef y : I64 := x } }" {
+        success rem ds => String.beq rem "" && test_body_is_global "A.B.y" "A.B.x" ds,
+        fail _ => false
+    }
 
 #[test]
 def test_with_block_leaves_an_undeclared_name_bare : Bool :=
-	match decls_parser "with Ns { def a : I64 := z }" {
-		success rem ds => String.beq rem "" && test_body_is_global "Ns.a" "z" ds,
-		fail _ => false
-	}
+    match decls_parser "with Ns { def a : I64 := z }" {
+        success rem ds => String.beq rem "" && test_body_is_global "Ns.a" "z" ds,
+        fail _ => false
+    }
 
 /// A written qualified name is a name PATH, not a bare identifier, and
 /// lowering leaves paths alone.
 #[test]
 def test_with_block_leaves_a_qualified_reference_alone : Bool :=
-	match decls_parser "with Ns { def a : I64 := 1\ndef b : I64 := Other.a }" {
-		success rem ds => String.beq rem "" && test_body_is_global "Ns.b" "Other.a" ds,
-		fail _ => false
-	}
+    match decls_parser "with Ns { def a : I64 := 1\ndef b : I64 := Other.a }" {
+        success rem ds => String.beq rem "" && test_body_is_global "Ns.b" "Other.a" ds,
+        fail _ => false
+    }
 
 /// The open stops at the closing brace.
 #[test]
 def test_with_block_does_not_leak_past_its_brace : Bool :=
-	match decls_parser "with Ns { def a : I64 := 1 }\ndef b : I64 := a" {
-		success rem ds => String.beq rem "" && test_body_is_global "b" "a" ds,
-		fail _ => false
-	}
+    match decls_parser "with Ns { def a : I64 := 1 }\ndef b : I64 := a" {
+        success rem ds => String.beq rem "" && test_body_is_global "b" "a" ds,
+        fail _ => false
+    }
 
 /// A term-position macro reference resolves in the macro namespace by
 /// its bare spelling, so an opened one carries the block's prefix too.
 #[test]
 def test_with_block_opens_a_term_macro_reference : Bool :=
-	match decls_parser "with A { defmacro m := 1\ndef b : I64 := m! }" {
-		success rem ds =>
-			String.beq rem ""
-				&& match test_with_def_body "A.b" ds {
-					Option.some body =>
-						match body {
-							Term.var_macro _ dbg =>
-								match dbg {
-									DebugName.named id => String.beq (show_identifier id) "A.m",
-									DebugName.unnamed => false,
-								},
-							_ => false,
-						},
-					Option.none => false,
-				},
-		fail _ => false
-	}
+    match decls_parser "with A { defmacro m := 1\ndef b : I64 := m! }" {
+        success rem ds =>
+            String.beq rem ""
+                && match test_with_def_body "A.b" ds {
+                    Option.some body =>
+                        match body {
+                            Term.var_macro _ dbg =>
+                                match dbg {
+                                    DebugName.named id => String.beq (show_identifier id) "A.m",
+                                    DebugName.unnamed => false,
+                                },
+                            _ => false,
+                        },
+                    Option.none => false,
+                },
+        fail _ => false
+    }
 
 /// A declaration-position macro call keys the registry on its bare
 /// spelling too.
 #[partial]
 def test_first_macro_call (ds : List Decl) : Option Identifier :=
-	match ds {
-		List.empty => Option.none,
-		List.cons d rest =>
-			match d {
-				Decl.macro_call_d nm _ => Option.some nm,
-				_ => test_first_macro_call rest,
-			},
-	}
+    match ds {
+        List.empty => Option.none,
+        List.cons d rest =>
+            match d {
+                Decl.macro_call_d nm _ => Option.some nm,
+                _ => test_first_macro_call rest,
+            },
+    }
 
 #[test]
 def test_with_block_opens_a_decl_macro_call : Bool :=
-	match decls_parser "with A { m! 1\ndef m : I64 := 1 }" {
-		success rem ds =>
-			String.beq rem ""
-				&& match test_first_macro_call ds {
-					Option.some nm => String.beq (show_identifier nm) "A.m",
-					Option.none => false,
-				},
-		fail _ => false
-	}
+    match decls_parser "with A { m! 1\ndef m : I64 := 1 }" {
+        success rem ds =>
+            String.beq rem ""
+                && match test_first_macro_call ds {
+                    Option.some nm => String.beq (show_identifier nm) "A.m",
+                    Option.none => false,
+                },
+        fail _ => false
+    }
 
 // ─── Declaration-position `name! args...` ───────────────────────────────
 //
@@ -4409,14 +4406,14 @@ def test_with_block_opens_a_decl_macro_call : Bool :=
 
 #[partial]
 def macro_call_decl_arg (input : String) : ParseResult ParseTerm :=
-	macro_call_decl_arg_guard (peek_not_macro_call input) input
+    macro_call_decl_arg_guard (peek_not_macro_call input) input
 
 #[partial]
 def macro_call_decl_arg_guard (r : ParseResult String) (input : String) : ParseResult ParseTerm :=
-	match r {
-		success _ _ => macro_call_decl_arg_alt input,
-		fail e => fail e
-	}
+    match r {
+        success _ _ => macro_call_decl_arg_alt input,
+        fail e => fail e
+    }
 
 /// `peek(not(pair(identifier, tag "!")))` — succeeds (consuming
 /// nothing) unless `input` starts with `<identifier>!`, in which case
@@ -4424,56 +4421,56 @@ def macro_call_decl_arg_guard (r : ParseResult String) (input : String) : ParseR
 /// swallowing another macro call as an argument).
 #[partial]
 def peek_not_macro_call (input : String) : ParseResult String :=
-	match identifier input {
-		success rem _ =>
-			match tag "!" rem {
-				success _ _ => fail (ParseError.custom "unexpected macro call in argument position" input),
-				fail _ => success input ""
-			},
-		fail _ => success input ""
-	}
+    match identifier input {
+        success rem _ =>
+            match tag "!" rem {
+                success _ _ => fail (ParseError.custom "unexpected macro call in argument position" input),
+                fail _ => success input ""
+            },
+        fail _ => success input ""
+    }
 
 #[partial]
 def macro_call_decl_arg_alt (input : String) : ParseResult ParseTerm :=
-	alt_fold [quote_term_parser, do_parser, let_term_parser,
-	          if_parser, match_parser, variable,
-	          literal_parser, lambda_parser, paren_expr] input
+    alt_fold [quote_term_parser, do_parser, let_term_parser,
+        if_parser, match_parser, variable,
+        literal_parser, lambda_parser, paren_expr] input
 
 #[partial]
 def macro_call_decl_parser (input : String) : ParseResult ParseDecl :=
-	macro_call_decl_guard (peek_not_macro_call input) input
+    macro_call_decl_guard (peek_not_macro_call input) input
 
 #[partial]
 def macro_call_decl_guard (r : ParseResult String) (input : String) : ParseResult ParseDecl :=
-	match r {
-		// `peek_not_macro_call` succeeding here (no `!`) means this ISN'T
-		// a macro call at all -- correctly fail so `decl_parsers`' other
-		// alternatives get a chance instead of misreporting "unexpected
-		// macro call" for completely ordinary input.
-		success _ _ => fail (ParseError.custom "not a macro call" input),
-		fail _ => macro_call_decl_name (identifier input) input
-	}
+    match r {
+        // `peek_not_macro_call` succeeding here (no `!`) means this ISN'T
+        // a macro call at all -- correctly fail so `decl_parsers`' other
+        // alternatives get a chance instead of misreporting "unexpected
+        // macro call" for completely ordinary input.
+        success _ _ => fail (ParseError.custom "not a macro call" input),
+        fail _ => macro_call_decl_name (identifier input) input
+    }
 
 #[partial]
 def macro_call_decl_name (r : ParseResult String) (orig : String) : ParseResult ParseDecl :=
-	match r {
-		success rem name => macro_call_decl_bang (tag "!" rem) (Identifier.id name),
-		fail e => fail e
-	}
+    match r {
+        success rem name => macro_call_decl_bang (tag "!" rem) (Identifier.id name),
+        fail e => fail e
+    }
 
 #[partial]
 def macro_call_decl_bang (r : ParseResult String) (name : Identifier) : ParseResult ParseDecl :=
-	match r {
-		success rem _ => macro_call_decl_args (skip_spaces rem) name List.empty,
-		fail e => fail e
-	}
+    match r {
+        success rem _ => macro_call_decl_args (skip_spaces rem) name List.empty,
+        fail e => fail e
+    }
 
 #[partial]
 def macro_call_decl_args (input : String) (name : Identifier) (acc : List ParseTerm) : ParseResult ParseDecl :=
-	match macro_call_decl_arg input {
-		success rem t => macro_call_decl_args (skip_spaces rem) name (List.cons t acc),
-		fail _ => success input (pd_macro_call_d  name (list_reverse acc))
-	}
+    match macro_call_decl_arg input {
+        success rem t => macro_call_decl_args (skip_spaces rem) name (List.cons t acc),
+        fail _ => success input (pd_macro_call_d name (list_reverse acc))
+    }
 
 // Canonical decl dispatcher
 
@@ -4485,8 +4482,8 @@ def macro_call_decl_args (input : String) (name : Identifier) (acc : List ParseT
 // expression grammar the same way).
 #[partial]
 def decl_parsers : List (String -> ParseResult ParseDecl) :=
-	[mote_attr_parser, use_parser, open_parser, infix_parser, defmacro_parser, def_parser,
-	 struct_parser, type_parser, class_parser, instance_parser, with_parser, macro_call_decl_parser]
+    [mote_attr_parser, use_parser, open_parser, infix_parser, defmacro_parser, def_parser,
+        struct_parser, type_parser, class_parser, instance_parser, with_parser, macro_call_decl_parser]
 
 /// `input` is the exact text the declaration starts at -- `decls_skip`
 /// has already skipped the whitespace and docstrings ahead of it -- so
@@ -4497,7 +4494,7 @@ def decl_parsers : List (String -> ParseResult ParseDecl) :=
 /// resting point.
 #[partial]
 def decl_parser (input : String) : ParseResult ParseDecl :=
-	decl_at input (decl_fail_to_unknown (alt_fold decl_parsers input) input)
+    decl_at input (decl_fail_to_unknown (alt_fold decl_parsers input) input)
 
 /// Now that `alt_fold` tracks furthest-progress-wins across
 /// `decl_parsers`'s alternatives (see `lang/parser/combinators.mo`'s
@@ -4510,13 +4507,13 @@ def decl_parser (input : String) : ParseResult ParseDecl :=
 /// input didn't match the start of any known declaration form at all).
 #[partial]
 def decl_fail_to_unknown (r : ParseResult ParseDecl) (input : String) : ParseResult ParseDecl :=
-	match r {
-		success rem out => success rem out,
-		fail e =>
-			if I64.beq (String.length (parse_error_remaining e)) (String.length input)
-			then fail (ParseError.custom "unknown declaration" (parse_error_remaining e))
-			else fail e
-	}
+    match r {
+        success rem out => success rem out,
+        fail e =>
+            if I64.beq (String.length (parse_error_remaining e)) (String.length input)
+            then fail (ParseError.custom "unknown declaration" (parse_error_remaining e))
+            else fail e
+    }
 
 // ─── Multiple declaration parser (file-level) ──────────────────────────
 //
@@ -4529,16 +4526,14 @@ def decl_fail_to_unknown (r : ParseResult ParseDecl) (input : String) : ParseRes
 
 #[partial]
 def lower_decls_result (r : ParseResult (List ParseDecl)) : ParseResult (List Decl) :=
-	match r {
-		success rem ds => success rem (lower_parse_decls lower_ctx_bare ds),
-		fail e => fail e,
-	}
-
+    match r {
+        success rem ds => success rem (lower_parse_decls lower_ctx_bare ds),
+        fail e => fail e,
+    }
 
 #[partial]
 pub def decls_parser (input : String) : ParseResult (List Decl) :=
-	lower_decls_result (decls_skip (skip_docstrings (skip_spaces input)) List.empty)
-
+    lower_decls_result (decls_skip (skip_docstrings (skip_spaces input)) List.empty)
 
 // ─── The located parser ────────────────────────────────────────────────
 //
@@ -4561,15 +4556,15 @@ pub def decls_parser (input : String) : ParseResult (List Decl) :=
 
 #[partial]
 pub def decls_parser_located (input : String) : ParseResult (List Decl) :=
-	locate_and_lower input (decls_skip (skip_docstrings (skip_spaces input)) List.empty)
+    locate_and_lower input (decls_skip (skip_docstrings (skip_spaces input)) List.empty)
 
 #[partial]
 def locate_and_lower (whole_file : String) (r : ParseResult (List ParseDecl)) : ParseResult (List Decl) :=
-	match r {
-		success rem ds =>
-			success rem (lower_parse_decls (lower_ctx_locating (build_loc_table whole_file ds)) ds),
-		fail e => fail e,
-	}
+    match r {
+        success rem ds =>
+            success rem (lower_parse_decls (lower_ctx_locating (build_loc_table whole_file ds)) ds),
+        fail e => fail e,
+    }
 
 /// A located parse, as both things a consumer needs: the lowered
 /// declarations, and one `SourceRange` per declaration IN THE SAME ORDER.
@@ -4586,8 +4581,8 @@ def locate_and_lower (whole_file : String) (r : ParseResult (List ParseDecl)) : 
 ///
 /// No `Parse*` type appears here, per the section comment above.
 pub struct LocatedDecls {
-	decl_list : List Decl,
-	spans : List SourceRange,
+    decl_list : List Decl,
+    spans : List SourceRange,
 }
 
 /// `decls_parser_located`'s sibling: the same located parse, plus one
@@ -4611,20 +4606,20 @@ pub struct LocatedDecls {
 /// of the contract and the test that pins it).
 #[partial]
 pub def decls_parser_located_with_ranges (input : String) : ParseResult LocatedDecls :=
-	located_decls_with_ranges input (decls_skip (skip_docstrings (skip_spaces input)) List.empty)
+    located_decls_with_ranges input (decls_skip (skip_docstrings (skip_spaces input)) List.empty)
 
 #[partial]
 def located_decls_with_ranges (whole_file : String) (r : ParseResult (List ParseDecl)) : ParseResult LocatedDecls :=
-	match r {
-		success rem ds => success rem (build_located_decls whole_file ds),
-		fail e => fail e,
-	}
+    match r {
+        success rem ds => success rem (build_located_decls whole_file ds),
+        fail e => fail e,
+    }
 
 #[partial]
 def build_located_decls (whole_file : String) (ds : List ParseDecl) : LocatedDecls :=
-	LocatedDecls.mk
-		(lower_parse_decls (lower_ctx_locating (build_loc_table whole_file ds)) ds)
-		(build_decl_ranges whole_file ds)
+    LocatedDecls.mk
+        (lower_parse_decls (lower_ctx_locating (build_loc_table whole_file ds)) ds)
+        (build_decl_ranges whole_file ds)
 
 /// Resolve every span in the parse tree to a position, keyed back by
 /// `start_rem` so lowering needs no arithmetic per node.
@@ -4644,30 +4639,30 @@ def build_located_decls (whole_file : String) (ds : List ParseDecl) : LocatedDec
 /// here needs to change, but do not re-derive the false invariant.
 #[partial]
 pub def build_loc_table (whole_file : String) (ds : List ParseDecl) : HashMap String Location :=
-	let total : I64 := String.length whole_file in
-	let rems : List I64 := list_reverse (collect_decl_rems ds List.empty) in
-	let resolved : List (Pair I64 Location) :=
-		resolve_offsets_in_file whole_file (rems_to_offsets total rems List.empty) in
-	rekey_by_rem total resolved str_map_empty
+    let total : I64 := String.length whole_file in
+    let rems : List I64 := list_reverse (collect_decl_rems ds List.empty) in
+    let resolved : List (Pair I64 Location) :=
+        resolve_offsets_in_file whole_file (rems_to_offsets total rems List.empty) in
+    rekey_by_rem total resolved str_map_empty
 
 #[partial]
 pub def rems_to_offsets (total : I64) (rems : List I64) (acc : List I64) : List I64 := match rems {
-	List.empty => list_reverse acc,
-	List.cons r rest => rems_to_offsets total rest (List.cons (total - r) acc),
+    List.empty => list_reverse acc,
+    List.cons r rest => rems_to_offsets total rest (List.cons (total - r) acc),
 }
 
 #[partial]
 pub def rekey_by_rem (total : I64) (pairs : List (Pair I64 Location)) (acc : HashMap String Location) : HashMap String Location :=
-	match pairs {
-		List.empty => acc,
-		List.cons p rest => rekey_by_rem total rest (rekey_one total p acc),
-	}
+    match pairs {
+        List.empty => acc,
+        List.cons p rest => rekey_by_rem total rest (rekey_one total p acc),
+    }
 
 #[partial]
 def rekey_one (total : I64) (p : Pair I64 Location) (acc : HashMap String Location) : HashMap String Location :=
-	match p {
-		Pair.pair off loc => str_map_insert (I64.to_string (total - off)) loc acc,
-	}
+    match p {
+        Pair.pair off loc => str_map_insert (I64.to_string (total - off)) loc acc,
+    }
 
 // ─── Declaration ranges (what navigation reads) ────────────────────────
 //
@@ -4691,9 +4686,9 @@ def rekey_one (total : I64) (p : Pair I64 Location) (acc : HashMap String Locati
 /// the later `str_map_insert` writes back the same value.
 #[partial]
 def build_offset_loc_table (whole_file : String) (ds : List ParseDecl) : HashMap String Location :=
-	let total : I64 := String.length whole_file in
-	let offsets : List I64 := span_offsets total (collect_decl_spans ds List.empty) List.empty in
-	index_by_offset (resolve_offsets_in_file whole_file offsets) str_map_empty
+    let total : I64 := String.length whole_file in
+    let offsets : List I64 := span_offsets total (collect_decl_spans ds List.empty) List.empty in
+    index_by_offset (resolve_offsets_in_file whole_file offsets) str_map_empty
 
 /// `(start_rem, end_rem)` -> absolute `[start, end)`.
 ///
@@ -4708,27 +4703,27 @@ def build_offset_loc_table (whole_file : String) (ds : List ParseDecl) : HashMap
 /// silently wrong range, which is worse than a missing one.
 #[partial]
 def span_offsets (total : I64) (spans : List (Pair I64 I64)) (acc : List I64) : List I64 :=
-	match spans {
-		List.empty => acc,
-		List.cons p rest => match p {
-			Pair.pair s e => span_offsets total rest (span_offsets_one total s e acc),
-		},
-	}
+    match spans {
+        List.empty => acc,
+        List.cons p rest => match p {
+            Pair.pair s e => span_offsets total rest (span_offsets_one total s e acc),
+        },
+    }
 
 #[partial]
 def span_offsets_one (total : I64) (s : I64) (e : I64) (acc : List I64) : List I64 :=
-	if I64.beq s -1 then acc
-	else if I64.beq e -1 then List.cons (total - s) acc
-	else List.cons (total - s) (List.cons (total - e) acc)
+    if I64.beq s -1 then acc
+    else if I64.beq e -1 then List.cons (total - s) acc
+    else List.cons (total - s) (List.cons (total - e) acc)
 
 #[partial]
 def index_by_offset (pairs : List (Pair I64 Location)) (acc : HashMap String Location) : HashMap String Location :=
-	match pairs {
-		List.empty => acc,
-		List.cons p rest => match p {
-			Pair.pair off loc => index_by_offset rest (str_map_insert (I64.to_string off) loc acc),
-		},
-	}
+    match pairs {
+        List.empty => acc,
+        List.cons p rest => match p {
+            Pair.pair off loc => index_by_offset rest (str_map_insert (I64.to_string off) loc acc),
+        },
+    }
 
 /// The one place a `HashMap String Location` turns into an answer.
 ///
@@ -4739,14 +4734,14 @@ def index_by_offset (pairs : List (Pair I64 Location)) (acc : HashMap String Loc
 /// written down removes the question.
 #[partial]
 def loc_at_offset (table : HashMap String Location) (off : I64) : Option Location :=
-	str_map_lookup (I64.to_string off) table
+    str_map_lookup (I64.to_string off) table
 
 #[partial]
 def offset_loc_or (table : HashMap String Location) (off : I64) (fallback : Location) : Location :=
-	match loc_at_offset table off {
-		Option.some l => l,
-		Option.none => fallback,
-	}
+    match loc_at_offset table off {
+        Option.some l => l,
+        Option.none => fallback,
+    }
 
 /// One declaration's `SourceRange`. `fallback` stands in for an end that
 /// did not resolve -- `Location.mk 0 1 1`, the start of the file, which
@@ -4754,19 +4749,19 @@ def offset_loc_or (table : HashMap String Location) (off : I64) (fallback : Loca
 /// could itself produce.
 #[partial]
 def span_range (total : I64) (table : HashMap String Location) (fallback : Location) (s : I64) (e : I64) : SourceRange :=
-	SourceRange.mk (offset_loc_or table (total - s) fallback) (offset_loc_or table (total - e) fallback) Option.none
+    SourceRange.mk (offset_loc_or table (total - s) fallback) (offset_loc_or table (total - e) fallback) Option.none
 
 /// One range per span, accumulated in reverse: the caller reverses once.
 #[partial]
 def ranges_of_spans (total : I64) (table : HashMap String Location) (fallback : Location)
-	(spans : List (Pair I64 I64)) (acc : List SourceRange) : List SourceRange :=
-	match spans {
-		List.empty => acc,
-		List.cons p rest => match p {
-			Pair.pair s e =>
-				ranges_of_spans total table fallback rest (List.cons (span_range total table fallback s e) acc),
-		},
-	}
+    (spans : List (Pair I64 I64)) (acc : List SourceRange) : List SourceRange :=
+    match spans {
+        List.empty => acc,
+        List.cons p rest => match p {
+            Pair.pair s e =>
+                ranges_of_spans total table fallback rest (List.cons (span_range total table fallback s e) acc),
+        },
+    }
 
 /// Every top-level declaration's range, in DECLARATION ORDER -- i.e.
 /// element-for-element with `lower_parse_decls`'s output for the same `ds`.
@@ -4776,36 +4771,36 @@ def ranges_of_spans (total : I64) (table : HashMap String Location) (fallback : 
 /// `list_reverse` is applied to each.
 #[partial]
 def build_decl_ranges (whole_file : String) (ds : List ParseDecl) : List SourceRange :=
-	let total : I64 := String.length whole_file in
-	let table : HashMap String Location := build_offset_loc_table whole_file ds in
-	let spans : List (Pair I64 I64) := list_reverse (collect_decl_spans ds List.empty) in
-	list_reverse (ranges_of_spans total table (Location.mk 0 1 1) spans List.empty)
+    let total : I64 := String.length whole_file in
+    let table : HashMap String Location := build_offset_loc_table whole_file ds in
+    let spans : List (Pair I64 I64) := list_reverse (collect_decl_spans ds List.empty) in
+    list_reverse (ranges_of_spans total table (Location.mk 0 1 1) spans List.empty)
 
 #[partial]
 pub def decls_skip (input : String) (acc : List ParseDecl) : ParseResult (List ParseDecl) :=
-	decls_try (decl_parser input) input acc
+    decls_try (decl_parser input) input acc
 
 #[partial]
 def decls_try (r : ParseResult ParseDecl) (orig : String) (acc : List ParseDecl) : ParseResult (List ParseDecl) :=
-	match r {
-		success rem decl => decls_skip (skip_docstrings (skip_spaces rem)) (List.cons decl acc),
-		// KNOWN GAP: on a real parse failure with content still remaining
-		// (not true end-of-file), this silently stops and reports success
-		// with whatever was accumulated so far — every declaration from
-		// here to EOF is discarded with no diagnostic. A line-by-line
-		// resync-and-continue fix was tried and reached much further into
-		// real files, but it can misparse an orphaned inner line of a
-		// broken multi-line construct (e.g. a class method whose own
-		// signature also happens to be valid as a standalone top-level
-		// def) as a spurious extra declaration — confirmed to regress
-		// `slow_tests/typecheck_init_tests.mo` /
-		// `slow_tests/typecheck_std_tests.mo` (12 tests). Reverted until
-		// resync can be scoped to not leak decl_list from inside a construct
-		// that failed as a whole (e.g. only resync at genuine top-level
-		// keyword boundaries AND validate recovered decl_list don't reference
-		// names that were never in scope at the top level).
-		fail _ => success orig (list_reverse acc)
-	}
+    match r {
+        success rem decl => decls_skip (skip_docstrings (skip_spaces rem)) (List.cons decl acc),
+        // KNOWN GAP: on a real parse failure with content still remaining
+        // (not true end-of-file), this silently stops and reports success
+        // with whatever was accumulated so far — every declaration from
+        // here to EOF is discarded with no diagnostic. A line-by-line
+        // resync-and-continue fix was tried and reached much further into
+        // real files, but it can misparse an orphaned inner line of a
+        // broken multi-line construct (e.g. a class method whose own
+        // signature also happens to be valid as a standalone top-level
+        // def) as a spurious extra declaration — confirmed to regress
+        // `slow_tests/typecheck_init_tests.mo` /
+        // `slow_tests/typecheck_std_tests.mo` (12 tests). Reverted until
+        // resync can be scoped to not leak decl_list from inside a construct
+        // that failed as a whole (e.g. only resync at genuine top-level
+        // keyword boundaries AND validate recovered decl_list don't reference
+        // names that were never in scope at the top level).
+        fail _ => success orig (list_reverse acc)
+    }
 
 /// A `decls_parser` twin that actually propagates a real failure instead
 /// of silently truncating (`decls_try`'s own doc comment above explains
@@ -4829,57 +4824,57 @@ def decls_try (r : ParseResult ParseDecl) (orig : String) (acc : List ParseDecl)
 /// compile-failure path.
 #[partial]
 def decls_parser_strict (input : String) : ParseResult (List Decl) :=
-	lower_decls_result (decls_skip_strict (skip_docstrings (skip_spaces input)) List.empty)
+    lower_decls_result (decls_skip_strict (skip_docstrings (skip_spaces input)) List.empty)
 
 #[partial]
 def decls_skip_strict (input : String) (acc : List ParseDecl) : ParseResult (List ParseDecl) :=
-	if is_empty input
-	then success input (list_reverse acc)
-	else decls_try_strict (decl_parser input) acc
+    if is_empty input
+    then success input (list_reverse acc)
+    else decls_try_strict (decl_parser input) acc
 
 #[partial]
 def decls_try_strict (r : ParseResult ParseDecl) (acc : List ParseDecl) : ParseResult (List ParseDecl) :=
-	match r {
-		success rem decl => decls_skip_strict (skip_docstrings (skip_spaces rem)) (List.cons decl acc),
-		fail e => fail e
-	}
+    match r {
+        success rem decl => decls_skip_strict (skip_docstrings (skip_spaces rem)) (List.cons decl acc),
+        fail e => fail e
+    }
 
 // Top-level declaration dispatcher
 
 #[test]
 def test_tag_hello : Bool :=
-	match tag "hello" "hello world" {
-		success rem out => String.beq rem " world",
-		fail _ => false
-	}
+    match tag "hello" "hello world" {
+        success rem out => String.beq rem " world",
+        fail _ => false
+    }
 
 #[test]
 def test_identifier_abc : Bool :=
-	match identifier "abc def" {
-		success rem out => String.beq out "abc" && String.beq rem " def",
-		fail _ => false
-	}
+    match identifier "abc def" {
+        success rem out => String.beq out "abc" && String.beq rem " def",
+        fail _ => false
+    }
 
 #[test]
 def test_identifier_rejects_keyword : Bool :=
-	match identifier "def x" {
-		success _ _ => false,
-		fail _ => true
-	}
+    match identifier "def x" {
+        success _ _ => false,
+        fail _ => true
+    }
 
 #[test]
 def test_identifier_rejects_digit_start : Bool :=
-	match identifier "123abc" {
-		success _ _ => false,
-		fail _ => true
-	}
+    match identifier "123abc" {
+        success _ _ => false,
+        fail _ => true
+    }
 
 #[test]
 def test_number_42 : Bool :=
-	match number "42 abc" {
-		success rem out => I64.beq out 42 && String.beq rem " abc",
-		fail _ => false
-	}
+    match number "42 abc" {
+        success rem out => I64.beq out 42 && String.beq rem " abc",
+        fail _ => false
+    }
 
 /// Regression test for suffixed numeric literals: `33u64` used to
 /// mis-parse as juxtaposed application (`app (lit 33 i64) (var "u64")`)
@@ -4889,93 +4884,93 @@ def test_number_42 : Bool :=
 /// `numeric_literal`'s doc comment (lang/parser/number.mo).
 #[test]
 def test_numeric_literal_suffix_u64 : Bool :=
-	match numeric_literal "33u64" {
-		success rem out =>
-			String.beq rem "" && (match out.kind {
-				ParseTermKind.lit lit_val => match lit_val {
-					ParseLiteral.num n suffix => I64.beq n 33 && (match suffix {
-						NumSuffix.u64 => true,
-						_ => false
-					}),
-					_ => false
-				},
-				_ => false
-			}),
-		fail _ => false
-	}
+    match numeric_literal "33u64" {
+        success rem out =>
+            String.beq rem "" && (match out.kind {
+                ParseTermKind.lit lit_val => match lit_val {
+                    ParseLiteral.num n suffix => I64.beq n 33 && (match suffix {
+                        NumSuffix.u64 => true,
+                        _ => false
+                    }),
+                    _ => false
+                },
+                _ => false
+            }),
+        fail _ => false
+    }
 
 /// Hex integer literal (`0xBADBEEF`) — see `numeric_literal_digits`'s
 /// `0x`/`0X`-prefix try in `lang/parser/number.mo`.
 #[test]
 def test_numeric_literal_hex : Bool :=
-	match numeric_literal "0xBADBEEF" {
-		success rem out =>
-			String.beq rem "" && (match out.kind {
-				ParseTermKind.lit lit_val => match lit_val {
-					ParseLiteral.num n suffix => I64.beq n 195935983 && (match suffix {
-						NumSuffix.i64 => true,
-						_ => false
-					}),
-					_ => false
-				},
-				_ => false
-			}),
-		fail _ => false
-	}
+    match numeric_literal "0xBADBEEF" {
+        success rem out =>
+            String.beq rem "" && (match out.kind {
+                ParseTermKind.lit lit_val => match lit_val {
+                    ParseLiteral.num n suffix => I64.beq n 195935983 && (match suffix {
+                        NumSuffix.i64 => true,
+                        _ => false
+                    }),
+                    _ => false
+                },
+                _ => false
+            }),
+        fail _ => false
+    }
 
 /// Uppercase `0X` prefix variant.
 #[test]
 def test_numeric_literal_hex_uppercase_prefix : Bool :=
-	match numeric_literal "0XFF" {
-		success rem out =>
-			String.beq rem "" && (match out.kind {
-				ParseTermKind.lit lit_val => match lit_val {
-					ParseLiteral.num n suffix => I64.beq n 255 && (match suffix {
-						NumSuffix.i64 => true,
-						_ => false
-					}),
-					_ => false
-				},
-				_ => false
-			}),
-		fail _ => false
-	}
+    match numeric_literal "0XFF" {
+        success rem out =>
+            String.beq rem "" && (match out.kind {
+                ParseTermKind.lit lit_val => match lit_val {
+                    ParseLiteral.num n suffix => I64.beq n 255 && (match suffix {
+                        NumSuffix.i64 => true,
+                        _ => false
+                    }),
+                    _ => false
+                },
+                _ => false
+            }),
+        fail _ => false
+    }
 
 /// Hex literal with a numeric suffix (`0xFFu32`).
 #[test]
 def test_numeric_literal_hex_suffix : Bool :=
-	match numeric_literal "0xFFu32" {
-		success rem out =>
-			String.beq rem "" && (match out.kind {
-				ParseTermKind.lit lit_val => match lit_val {
-					ParseLiteral.num n suffix => I64.beq n 255 && (match suffix {
-						NumSuffix.u32 => true,
-						_ => false
-					}),
-					_ => false
-				},
-				_ => false
-			}),
-		fail _ => false
-	}
+    match numeric_literal "0xFFu32" {
+        success rem out =>
+            String.beq rem "" && (match out.kind {
+                ParseTermKind.lit lit_val => match lit_val {
+                    ParseLiteral.num n suffix => I64.beq n 255 && (match suffix {
+                        NumSuffix.u32 => true,
+                        _ => false
+                    }),
+                    _ => false
+                },
+                _ => false
+            }),
+        fail _ => false
+    }
 
 /// Negative hex literal (`-0x10`) — same leading-`-` handling as decimal.
 #[test]
 def test_numeric_literal_hex_negative : Bool :=
-	match numeric_literal "-0x10" {
-		success rem out =>
-			String.beq rem "" && (match out.kind {
-				ParseTermKind.lit lit_val => match lit_val {
-					ParseLiteral.num n suffix => I64.beq n (0 - 16) && (match suffix {
-						NumSuffix.i64 => true,
-						_ => false
-					}),
-					_ => false
-				},
-				_ => false
-			}),
-		fail _ => false
-	}
+    match numeric_literal "-0x10" {
+        success rem out =>
+            String.beq rem "" && (match out.kind {
+                ParseTermKind.lit lit_val => match lit_val {
+                    ParseLiteral.num n suffix => I64.beq n (0 - 16) && (match suffix {
+                        NumSuffix.i64 => true,
+                        _ => false
+                    }),
+                    _ => false
+                },
+                _ => false
+            }),
+        fail _ => false
+    }
 
 /// Regression test for float literals: `3.0` used to mis-parse through
 /// the registered `.` infix operator (juxtaposed int-dot-int
@@ -4984,37 +4979,37 @@ def test_numeric_literal_hex_negative : Bool :=
 /// Rust reference).
 #[test]
 def test_numeric_literal_float : Bool :=
-	match numeric_literal "3.0" {
-		success rem out =>
-			String.beq rem "" && (match out.kind {
-				ParseTermKind.lit lit_val => match lit_val {
-					ParseLiteral.flt text suffix => String.beq text "3.0" && (match suffix {
-						NumSuffix.f64 => true,
-						_ => false
-					}),
-					_ => false
-				},
-				_ => false
-			}),
-		fail _ => false
-	}
+    match numeric_literal "3.0" {
+        success rem out =>
+            String.beq rem "" && (match out.kind {
+                ParseTermKind.lit lit_val => match lit_val {
+                    ParseLiteral.flt text suffix => String.beq text "3.0" && (match suffix {
+                        NumSuffix.f64 => true,
+                        _ => false
+                    }),
+                    _ => false
+                },
+                _ => false
+            }),
+        fail _ => false
+    }
 
 #[test]
 def test_numeric_literal_float_suffix : Bool :=
-	match numeric_literal "3.14f32" {
-		success rem out =>
-			String.beq rem "" && (match out.kind {
-				ParseTermKind.lit lit_val => match lit_val {
-					ParseLiteral.flt text suffix => String.beq text "3.14" && (match suffix {
-						NumSuffix.f32 => true,
-						_ => false
-					}),
-					_ => false
-				},
-				_ => false
-			}),
-		fail _ => false
-	}
+    match numeric_literal "3.14f32" {
+        success rem out =>
+            String.beq rem "" && (match out.kind {
+                ParseTermKind.lit lit_val => match lit_val {
+                    ParseLiteral.flt text suffix => String.beq text "3.14" && (match suffix {
+                        NumSuffix.f32 => true,
+                        _ => false
+                    }),
+                    _ => false
+                },
+                _ => false
+            }),
+        fail _ => false
+    }
 
 /// Regression test for negative literals — this language's only form of
 /// unary minus (see `numeric_literal`'s doc comment for why there's no
@@ -5024,17 +5019,17 @@ def test_numeric_literal_float_suffix : Bool :=
 /// the self-hosted parser.
 #[test]
 def test_numeric_literal_negative : Bool :=
-	match numeric_literal "-1" {
-		success rem out =>
-			String.beq rem "" && (match out.kind {
-				ParseTermKind.lit lit_val => match lit_val {
-					ParseLiteral.num n _suffix => I64.beq n (-1),
-					_ => false
-				},
-				_ => false
-			}),
-		fail _ => false
-	}
+    match numeric_literal "-1" {
+        success rem out =>
+            String.beq rem "" && (match out.kind {
+                ParseTermKind.lit lit_val => match lit_val {
+                    ParseLiteral.num n _suffix => I64.beq n (-1),
+                    _ => false
+                },
+                _ => false
+            }),
+        fail _ => false
+    }
 
 /// Confirms the negative-literal fix doesn't break binary subtraction:
 /// `a - 1` (spaced, the universal style for infix operators) must still
@@ -5045,52 +5040,52 @@ def test_numeric_literal_negative : Bool :=
 /// fails `numeric_literal` and falls through to operator parsing.
 #[test]
 def test_expr_subtraction_not_negative_literal : Bool :=
-	match expression "a - 1" {
-		success rem out => String.beq rem "" && term_is_app_not_lit out,
-		fail _ => false
-	}
+    match expression "a - 1" {
+        success rem out => String.beq rem "" && term_is_app_not_lit out,
+        fail _ => false
+    }
 
 #[partial]
 def term_is_app_not_lit (t : ParseTerm) : Bool :=
-	match t.kind {
-		ParseTermKind.app _ _ => true,
-		_ => false
-	}
+    match t.kind {
+        ParseTermKind.app _ _ => true,
+        _ => false
+    }
 
 #[test]
 def test_number_fail_empty : Bool :=
-	match number "abc" {
-		success _ _ => false,
-		fail _ => true
-	}
+    match number "abc" {
+        success _ _ => false,
+        fail _ => true
+    }
 
 #[test]
 def test_alt_tag : Bool :=
-	match (alt (tag "foo") (tag "bar")) "foobar" {
-		success rem out => String.beq out "foo" && String.beq rem "bar",
-		fail _ => false
-	}
+    match (alt (tag "foo") (tag "bar")) "foobar" {
+        success rem out => String.beq out "foo" && String.beq rem "bar",
+        fail _ => false
+    }
 
 #[test]
 def test_many1_single : Bool :=
-	match many1 (tag "a") "a" {
-		success rem out => String.beq rem "",
-		fail _ => false
-	}
+    match many1 (tag "a") "a" {
+        success rem out => String.beq rem "",
+        fail _ => false
+    }
 
 #[test]
 def test_many1_multiple : Bool :=
-	match many1 (tag "a") "aaab" {
-		success rem out => String.beq rem "b",
-		fail _ => false
-	}
+    match many1 (tag "a") "aaab" {
+        success rem out => String.beq rem "b",
+        fail _ => false
+    }
 
 #[test]
 def test_many1_fail : Bool :=
-	match many1 (tag "a") "b" {
-		success _ _ => false,
-		fail _ => true
-	}
+    match many1 (tag "a") "b" {
+        success _ _ => false,
+        fail _ => true
+    }
 
 #[test]
 def test_do_empty : Bool :=
@@ -5161,17 +5156,17 @@ def always_tag_y (a : String) (input : String) : ParseResult String := tag "y" i
 
 #[test]
 def test_map_parse_tag : Bool :=
-	match map_parse id_str (tag "x") "xy" {
-		success rem out => String.beq out "x",
-		fail _ => false
-	}
+    match map_parse id_str (tag "x") "xy" {
+        success rem out => String.beq out "x",
+        fail _ => false
+    }
 
 #[test]
 def test_map_parse_fail : Bool :=
-	match map_parse id_str (tag "x") "y" {
-		success rem out => false,
-		fail e => true
-	}
+    match map_parse id_str (tag "x") "y" {
+        success rem out => false,
+        fail e => true
+    }
 
 // Was two near-duplicate tests (test_map_parse_simple/test_map_parse_mapped)
 // on the same input through the same parser, neither checking the mapped
@@ -5180,213 +5175,213 @@ def test_map_parse_fail : Bool :=
 // String vs String -> I64) with real signal instead of two weak copies.
 #[test]
 def test_map_parse_transforms_output : Bool :=
-	match map_parse str_len identifier "abc def" {
-		success rem out => String.beq rem " def" && I64.beq out 3,
-		fail _ => false
-	}
+    match map_parse str_len identifier "abc def" {
+        success rem out => String.beq rem " def" && I64.beq out 3,
+        fail _ => false
+    }
 
 #[test]
 def test_bind_parse : Bool :=
-	match bind_parse (tag "x") always_tag_y "xyz" {
-		success rem out => String.beq rem "z",
-		fail _ => false
-	}
+    match bind_parse (tag "x") always_tag_y "xyz" {
+        success rem out => String.beq rem "z",
+        fail _ => false
+    }
 
 #[test]
 def test_bind_parse_fail_first : Bool :=
-	match bind_parse (tag "x") always_tag_y "abc" {
-		success rem out => false,
-		fail e => true
-	}
+    match bind_parse (tag "x") always_tag_y "abc" {
+        success rem out => false,
+        fail e => true
+    }
 
 #[test]
 def test_bind_parse_fail_second : Bool :=
-	match bind_parse (tag "x") always_tag_y "xab" {
-		success rem out => false,
-		fail e => true
-	}
+    match bind_parse (tag "x") always_tag_y "xab" {
+        success rem out => false,
+        fail e => true
+    }
 
 #[test]
 def test_alt_fold_first : Bool :=
-	match alt_fold (List.cons (tag "a") (List.cons (tag "b") (List.cons (tag "c") List.empty))) "abc" {
-		success rem out => String.beq rem "bc",
-		fail _ => false
-	}
+    match alt_fold (List.cons (tag "a") (List.cons (tag "b") (List.cons (tag "c") List.empty))) "abc" {
+        success rem out => String.beq rem "bc",
+        fail _ => false
+    }
 
 #[test]
 def test_alt_fold_second : Bool :=
-	match alt_fold (List.cons (tag "x") (List.cons (tag "y") (List.cons (tag "z") List.empty))) "y" {
-		success rem out => String.beq rem "",
-		fail _ => false
-	}
+    match alt_fold (List.cons (tag "x") (List.cons (tag "y") (List.cons (tag "z") List.empty))) "y" {
+        success rem out => String.beq rem "",
+        fail _ => false
+    }
 
 #[test]
 def test_alt_fold_none : Bool :=
-	match alt_fold (List.cons (tag "x") (List.cons (tag "y") List.empty)) "abc" {
-		success rem out => false,
-		fail e => true
-	}
+    match alt_fold (List.cons (tag "x") (List.cons (tag "y") List.empty)) "abc" {
+        success rem out => false,
+        fail e => true
+    }
 
 #[test]
 def test_preceded_by : Bool :=
-	match preceded_by (tag "(") (tag "x") "(x" {
-		success rem out => String.beq rem "",
-		fail _ => false
-	}
+    match preceded_by (tag "(") (tag "x") "(x" {
+        success rem out => String.beq rem "",
+        fail _ => false
+    }
 
 #[test]
 def test_preceded_by_fail : Bool :=
-	match preceded_by (tag "(") (tag "x") "x" {
-		success rem out => false,
-		fail e => true
-	}
+    match preceded_by (tag "(") (tag "x") "x" {
+        success rem out => false,
+        fail e => true
+    }
 
 #[test]
 def test_terminated_by : Bool :=
-	match terminated_by (tag "x") (tag ")") "x)" {
-		success rem out => String.beq rem "",
-		fail _ => false
-	}
+    match terminated_by (tag "x") (tag ")") "x)" {
+        success rem out => String.beq rem "",
+        fail _ => false
+    }
 
 #[test]
 def test_terminated_by_fail : Bool :=
-	match terminated_by (tag "x") (tag ")") "x(" {
-		success rem out => false,
-		fail e => true
-	}
+    match terminated_by (tag "x") (tag ")") "x(" {
+        success rem out => false,
+        fail e => true
+    }
 
 #[test]
 def test_delimited_by : Bool :=
-	match delimited_by (tag "(") (tag "x") (tag ")") "(x)" {
-		success rem out => String.beq rem "",
-		fail _ => false
-	}
+    match delimited_by (tag "(") (tag "x") (tag ")") "(x)" {
+        success rem out => String.beq rem "",
+        fail _ => false
+    }
 
 #[test]
 def test_delimited_by_fail_open : Bool :=
-	match delimited_by (tag "(") (tag "x") (tag ")") "x)" {
-		success rem out => false,
-		fail e => true
-	}
+    match delimited_by (tag "(") (tag "x") (tag ")") "x)" {
+        success rem out => false,
+        fail e => true
+    }
 
 #[test]
 def test_delimited_by_fail_close : Bool :=
-	match delimited_by (tag "(") (tag "x") (tag ")") "(x(" {
-		success rem out => false,
-		fail e => true
-	}
+    match delimited_by (tag "(") (tag "x") (tag ")") "(x(" {
+        success rem out => false,
+        fail e => true
+    }
 
 #[test]
 def test_separated_by_single : Bool :=
-	match separated_by (tag ",") (tag "a") "a" {
-		success rem out => String.beq rem "",
-		fail _ => false
-	}
+    match separated_by (tag ",") (tag "a") "a" {
+        success rem out => String.beq rem "",
+        fail _ => false
+    }
 
 #[test]
 def test_separated_by_multi : Bool :=
-	match separated_by (tag ",") (tag "a") "a,a,a" {
-		success rem out => String.beq rem "",
-		fail _ => false
-	}
+    match separated_by (tag ",") (tag "a") "a,a,a" {
+        success rem out => String.beq rem "",
+        fail _ => false
+    }
 
 #[test]
 def test_separated_by_empty : Bool :=
-	match separated_by (tag ",") (tag "a") "b" {
-		success rem out => String.beq rem "b",
-		fail e => false
-	}
+    match separated_by (tag ",") (tag "a") "b" {
+        success rem out => String.beq rem "b",
+        fail e => false
+    }
 
 #[test]
 def test_opt_some : Bool :=
-	match opt (tag "x") "xy" {
-		success rem out => match out {
-			Option.some val => String.beq val "x",
-			Option.none => false
-		},
-		fail _ => false
-	}
+    match opt (tag "x") "xy" {
+        success rem out => match out {
+            Option.some val => String.beq val "x",
+            Option.none => false
+        },
+        fail _ => false
+    }
 
 #[test]
 def test_opt_none : Bool :=
-	match opt (tag "x") "yz" {
-		success rem out => match out {
-			Option.some val => false,
-			Option.none => String.beq rem "yz"
-		},
-		fail _ => false
-	}
+    match opt (tag "x") "yz" {
+        success rem out => match out {
+            Option.some val => false,
+            Option.none => String.beq rem "yz"
+        },
+        fail _ => false
+    }
 
 #[test]
 def test_ws0 : Bool :=
-	match ws0 "  abc" {
-		success rem out => String.beq rem "abc",
-		fail _ => false
-	}
+    match ws0 "  abc" {
+        success rem out => String.beq rem "abc",
+        fail _ => false
+    }
 
 #[test]
 def test_ws0_empty : Bool :=
-	match ws0 "abc" {
-		success rem out => String.beq rem "abc",
-		fail _ => false
-	}
+    match ws0 "abc" {
+        success rem out => String.beq rem "abc",
+        fail _ => false
+    }
 
 #[test]
 def test_ws1 : Bool :=
-	match ws1 "  abc" {
-		success rem out => String.beq rem "abc",
-		fail _ => false
-	}
+    match ws1 "  abc" {
+        success rem out => String.beq rem "abc",
+        fail _ => false
+    }
 
 #[test]
 def test_ws1_fail : Bool :=
-	match ws1 "abc" {
-		success rem out => false,
-		fail e => true
-	}
+    match ws1 "abc" {
+        success rem out => false,
+        fail e => true
+    }
 
 // --- Position tracking tests (Phase 1.2) ---
 
 #[test]
 def test_new_span : Bool :=
-	let span : LocatedSpan := new_span "hello" in
-	let frag : String := span_fragment span in
-	I64.beq (String.length frag) 5
+    let span : LocatedSpan := new_span "hello" in
+    let frag : String := span_fragment span in
+    I64.beq (String.length frag) 5
 
 #[test]
 def test_new_span_location : Bool :=
-	let span : LocatedSpan := new_span "x" in
-	let loc : Location := span_location span in
-	match loc {
-		mk off line col => I64.beq off 0 && I64.beq line 1 && I64.beq col 1
-	}
+    let span : LocatedSpan := new_span "x" in
+    let loc : Location := span_location span in
+    match loc {
+        mk off line col => I64.beq off 0 && I64.beq line 1 && I64.beq col 1
+    }
 
 #[test]
 def test_consume_no_newline : Bool :=
-	let span : LocatedSpan := new_span "hello world" in
-	let next : LocatedSpan := consume_span span 5 in
-	let loc : Location := span_location next in
-	match loc {
-		mk off line col => I64.beq off 5 && I64.beq line 1 && I64.beq col 6
-	}
+    let span : LocatedSpan := new_span "hello world" in
+    let next : LocatedSpan := consume_span span 5 in
+    let loc : Location := span_location next in
+    match loc {
+        mk off line col => I64.beq off 5 && I64.beq line 1 && I64.beq col 6
+    }
 
 #[test]
 def test_consume_single_newline : Bool :=
-	let span : LocatedSpan := new_span "a\nb" in
-	let next : LocatedSpan := consume_span span 2 in
-	let loc : Location := span_location next in
-	match loc {
-		mk off line col => I64.beq off 2 && I64.beq line 2 && I64.beq col 1
-	}
+    let span : LocatedSpan := new_span "a\nb" in
+    let next : LocatedSpan := consume_span span 2 in
+    let loc : Location := span_location next in
+    match loc {
+        mk off line col => I64.beq off 2 && I64.beq line 2 && I64.beq col 1
+    }
 
 #[test]
 def test_consume_multi_newline : Bool :=
-	let span : LocatedSpan := new_span "a\n\nb" in
-	let next : LocatedSpan := consume_span span 3 in
-	let loc : Location := span_location next in
-	match loc {
-		mk off line col => I64.beq off 3 && I64.beq line 3 && I64.beq col 1
-	}
+    let span : LocatedSpan := new_span "a\n\nb" in
+    let next : LocatedSpan := consume_span span 3 in
+    let loc : Location := span_location next in
+    match loc {
+        mk off line col => I64.beq off 3 && I64.beq line 3 && I64.beq col 1
+    }
 
 /// Regression test for the `advance_location` bug found while activating
 /// this dead code for `location_of_remaining`: consuming *past* a
@@ -5396,33 +5391,33 @@ def test_consume_multi_newline : Bool :=
 /// instead of the correct 3.
 #[test]
 def test_consume_newline_then_more_chars : Bool :=
-	let span : LocatedSpan := new_span "a\nbcd" in
-	let next : LocatedSpan := consume_span span 4 in
-	let loc : Location := span_location next in
-	match loc {
-		mk off line col => I64.beq off 4 && I64.beq line 2 && I64.beq col 3
-	}
+    let span : LocatedSpan := new_span "a\nbcd" in
+    let next : LocatedSpan := consume_span span 4 in
+    let loc : Location := span_location next in
+    match loc {
+        mk off line col => I64.beq off 4 && I64.beq line 2 && I64.beq col 3
+    }
 
 #[test]
 def test_location_of_remaining_no_consumption : Bool :=
-	let loc : Location := location_of_remaining "hello world" "hello world" in
-	match loc {
-		mk off line col => I64.beq off 0 && I64.beq line 1 && I64.beq col 1
-	}
+    let loc : Location := location_of_remaining "hello world" "hello world" in
+    match loc {
+        mk off line col => I64.beq off 0 && I64.beq line 1 && I64.beq col 1
+    }
 
 #[test]
 def test_location_of_remaining_single_line : Bool :=
-	let loc : Location := location_of_remaining "def add (a) : I64" ") : I64" in
-	match loc {
-		mk off line col => I64.beq off 10 && I64.beq line 1 && I64.beq col 11
-	}
+    let loc : Location := location_of_remaining "def add (a) : I64" ") : I64" in
+    match loc {
+        mk off line col => I64.beq off 10 && I64.beq line 1 && I64.beq col 11
+    }
 
 #[test]
 def test_location_of_remaining_multi_line : Bool :=
-	let loc : Location := location_of_remaining "def f :=\n  bad" "bad" in
-	match loc {
-		mk off line col => I64.beq off 11 && I64.beq line 2 && I64.beq col 3
-	}
+    let loc : Location := location_of_remaining "def f :=\n  bad" "bad" in
+    match loc {
+        mk off line col => I64.beq off 11 && I64.beq line 2 && I64.beq col 3
+    }
 
 /// `location_of_remaining` must correctly account for a multi-byte
 /// character already consumed when computing the column of what's left
@@ -5430,20 +5425,20 @@ def test_location_of_remaining_multi_line : Bool :=
 /// fixed for scanning itself (lang/parser/combinators.mo).
 #[test]
 def test_location_of_remaining_utf8 : Bool :=
-	let loc : Location := location_of_remaining "// — x" "x" in
-	match loc {
-		// "// — " is 5 *characters* (the em dash is 3 bytes but 1
-		// character) even though it's 7 bytes, so column 6 (1-indexed),
-		// not the byte-count-derived 8.
-		mk off line col => I64.beq off 7 && I64.beq line 1 && I64.beq col 6
-	}
+    let loc : Location := location_of_remaining "// — x" "x" in
+    match loc {
+        // "// — " is 5 *characters* (the em dash is 3 bytes but 1
+        // character) even though it's 7 bytes, so column 6 (1-indexed),
+        // not the byte-count-derived 8.
+        mk off line col => I64.beq off 7 && I64.beq line 1 && I64.beq col 6
+    }
 
 #[test]
 def test_span_fragment_after_consume : Bool :=
-	let span : LocatedSpan := new_span "hello world" in
-	let next : LocatedSpan := consume_span span 6 in
-	let rest : String := span_fragment next in
-	String.beq rest "world"
+    let span : LocatedSpan := new_span "hello world" in
+    let next : LocatedSpan := consume_span span 6 in
+    let rest : String := span_fragment next in
+    String.beq rest "world"
 
 // ─── Recorded spans ────────────────────────────────────────────────────
 //
@@ -5454,61 +5449,61 @@ def test_span_fragment_after_consume : Bool :=
 
 #[partial]
 def span_text_of_term (r : ParseResult ParseTerm) (src : String) : String :=
-	match r {
-		success _ t => span_text src t.span,
-		fail _ => "<parse failed>",
-	}
+    match r {
+        success _ t => span_text src t.span,
+        fail _ => "<parse failed>",
+    }
 
 #[test]
 def test_span_covers_atom_only : Bool :=
-	// The atom stops at `foo`; the rest of the line is not its extent.
-	String.beq (span_text_of_term (atom_term "foo bar") "foo bar") "foo"
+    // The atom stops at `foo`; the rest of the line is not its extent.
+    String.beq (span_text_of_term (atom_term "foo bar") "foo bar") "foo"
 
 #[test]
 def test_span_covers_whole_application : Bool :=
-	String.beq (span_text_of_term (expression "f x y") "f x y") "f x y"
+    String.beq (span_text_of_term (expression "f x y") "f x y") "f x y"
 
 #[test]
 def test_span_covers_infix_from_left_operand : Bool :=
-	// Nothing threads the start of `a` down to where the `+` application
-	// is built — `pt_from` reads it back off the left operand's own span.
-	String.beq (span_text_of_term (expression "a + b") "a + b") "a + b"
+    // Nothing threads the start of `a` down to where the `+` application
+    // is built — `pt_from` reads it back off the left operand's own span.
+    String.beq (span_text_of_term (expression "a + b") "a + b") "a + b"
 
 /// A parenthesised expression's span includes its parentheses: that is
 /// what was written at this position.
 #[test]
 def test_span_covers_parens : Bool :=
-	String.beq (span_text_of_term (atom_term "(a + b)") "(a + b)") "(a + b)"
+    String.beq (span_text_of_term (atom_term "(a + b)") "(a + b)") "(a + b)"
 
 /// The compound's span must not overwrite its operands'. `a + b` builds
 /// `app (app (var "+") a) b`, so two `app` layers down on the left is
 /// the original `a` atom, which has to still claim just `a`.
 #[test]
 def test_span_of_nested_operand_is_its_own : Bool :=
-	match expression "foo + 1" {
-		success _ t =>
-			match t.kind {
-				ParseTermKind.app f _ =>
-					match f.kind {
-						ParseTermKind.app _ lhs => String.beq (span_text "foo + 1" lhs.span) "foo",
-						_ => false,
-					},
-				_ => false,
-			},
-		fail _ => false,
-	}
+    match expression "foo + 1" {
+        success _ t =>
+            match t.kind {
+                ParseTermKind.app f _ =>
+                    match f.kind {
+                        ParseTermKind.app _ lhs => String.beq (span_text "foo + 1" lhs.span) "foo",
+                        _ => false,
+                    },
+                _ => false,
+            },
+        fail _ => false,
+    }
 
 /// Multi-byte source: spans are byte lengths throughout, so a span
 /// recorded after an em dash still slices back to exactly its construct.
 #[test]
 def test_span_after_multibyte_char : Bool :=
-	let src : String := "// — comment\nfoo" in
-	// The comment is skipped BEFORE parsing, exactly as `decls_skip` does
-	// -- `expression` itself skips whitespace only. The span is still
-	// measured against the full `src`, which is the whole point: both
-	// remainders are suffixes of the same string, so the byte arithmetic
-	// has to survive the 3-byte em dash sitting in the skipped part.
-	String.beq (span_text_of_term (expression (skip_docstrings (skip_spaces src))) src) "foo"
+    let src : String := "// — comment\nfoo" in
+    // The comment is skipped BEFORE parsing, exactly as `decls_skip` does
+    // -- `expression` itself skips whitespace only. The span is still
+    // measured against the full `src`, which is the whole point: both
+    // remainders are suffixes of the same string, so the byte arithmetic
+    // has to survive the 3-byte em dash sitting in the skipped part.
+    String.beq (span_text_of_term (expression (skip_docstrings (skip_spaces src))) src) "foo"
 
 // --- The located parser -----------------------------------------------
 //
@@ -5522,57 +5517,56 @@ def test_span_after_multibyte_char : Bool :=
 /// it is the position of the BODY, not of the `def` line.
 #[test]
 def test_located_parser_records_a_position : Bool :=
-	// `1` sits on line 2, column 5; `def` is on line 1.
-	match decls_parser_located "def f : I64 :=\n    1\n" {
-		success _ ds => first_def_body_at ds 2,
-		fail _ => false,
-	}
+    // `1` sits on line 2, column 5; `def` is on line 1.
+    match decls_parser_located "def f : I64 :=\n    1\n" {
+        success _ ds => first_def_body_at ds 2,
+        fail _ => false,
+    }
 
 /// The plain parser records nothing -- the `--debug` gate is structural,
 /// and this is what says so.
 #[test]
 def test_plain_parser_records_nothing : Bool :=
-	match decls_parser "def f : I64 :=\n    1\n" {
-		success _ ds => first_def_body_unlocated ds,
-		fail _ => false,
-	}
+    match decls_parser "def f : I64 :=\n    1\n" {
+        success _ ds => first_def_body_unlocated ds,
+        fail _ => false,
+    }
 
 #[partial]
 def first_def_body_at (ds : List Decl) (want_line : I64) : Bool := match ds {
-	List.empty => false,
-	List.cons d _ => decl_body_line_is d want_line,
+    List.empty => false,
+    List.cons d _ => decl_body_line_is d want_line,
 }
 
 #[partial]
 def decl_body_line_is (d : Decl) (want_line : I64) : Bool := match d {
-	Decl.def_d def_ => term_loc_line_is def_.term want_line,
-	_ => false,
+    Decl.def_d def_ => term_loc_line_is def_.term want_line,
+    _ => false,
 }
 
 #[partial]
 def term_loc_line_is (t : Term) (want_line : I64) : Bool := match term_loc t {
-	Option.some loc => I64.beq loc.line want_line,
-	Option.none => false,
+    Option.some loc => I64.beq loc.line want_line,
+    Option.none => false,
 }
 
 #[partial]
 def first_def_body_unlocated (ds : List Decl) : Bool := match ds {
-	List.empty => false,
-	List.cons d _ => decl_body_unlocated d,
+    List.empty => false,
+    List.cons d _ => decl_body_unlocated d,
 }
 
 #[partial]
 def decl_body_unlocated (d : Decl) : Bool := match d {
-	Decl.def_d def_ => term_is_unlocated def_.term,
-	_ => false,
+    Decl.def_d def_ => term_is_unlocated def_.term,
+    _ => false,
 }
 
 #[partial]
 def term_is_unlocated (t : Term) : Bool := match term_loc t {
-	Option.some _ => false,
-	Option.none => true,
+    Option.some _ => false,
+    Option.none => true,
 }
-
 
 /// `(n : I64) -> Vec n` BINDS `n` over its body. This is the only arrow
 /// in the grammar that binds. `Term.pi` carries the name on its `Binder`
@@ -5607,80 +5601,79 @@ def term_is_unlocated (t : Term) : Bool := match term_loc t {
 /// bound `x`.
 #[test]
 def test_do_desugars_in_source_order : Bool :=
-	match do_parser "do { let x <- e1; x }" {
-		success _ out => do_outer_bind_value_is_free (lower_parse_term lower_ctx_bare out),
-		fail _ => false,
-	}
+    match do_parser "do { let x <- e1; x }" {
+        success _ out => do_outer_bind_value_is_free (lower_parse_term lower_ctx_bare out),
+        fail _ => false,
+    }
 
 /// The continuation's own reference to `x` must resolve to index 0: it
 /// sits directly under the lambda the `bind` introduces. This is the
 /// half that a shape-only assertion could not see.
 #[test]
 def test_do_bound_name_resolves_in_continuation : Bool :=
-	match do_parser "do { let x <- e1; x }" {
-		success _ out => do_continuation_var_idx (lower_parse_term lower_ctx_bare out) 0,
-		fail _ => false,
-	}
+    match do_parser "do { let x <- e1; x }" {
+        success _ out => do_continuation_var_idx (lower_parse_term lower_ctx_bare out) 0,
+        fail _ => false,
+    }
 
 #[partial]
 def do_outer_bind_value_is_free (t : Term) : Bool :=
-	match t {
-		Term.app bind_app _lam => do_bind_app_value_is_free bind_app,
-		_ => false,
-	}
+    match t {
+        Term.app bind_app _lam => do_bind_app_value_is_free bind_app,
+        _ => false,
+    }
 
 #[partial]
 def do_bind_app_value_is_free (bind_app : Term) : Bool :=
-	match bind_app {
-		Term.app _head value => dep_pi_var_idx value sentinel,
-		_ => false,
-	}
+    match bind_app {
+        Term.app _head value => dep_pi_var_idx value sentinel,
+        _ => false,
+    }
 
 #[partial]
 def do_continuation_var_idx (t : Term) (want : I64) : Bool :=
-	match t {
-		Term.app _bind_app lam_term => do_lam_body_var_idx lam_term want,
-		_ => false,
-	}
+    match t {
+        Term.app _bind_app lam_term => do_lam_body_var_idx lam_term want,
+        _ => false,
+    }
 
 #[partial]
 def do_lam_body_var_idx (lam_term : Term) (want : I64) : Bool :=
-	match lam_term {
-		Term.lam _dbg _typ body => dep_pi_var_idx body want,
-		_ => false,
-	}
-
+    match lam_term {
+        Term.lam _dbg _typ body => dep_pi_var_idx body want,
+        _ => false,
+    }
 
 #[test]
 def test_dep_pi_binds_its_own_name : Bool :=
-	match type_expression "(n : I64) -> Vec n" {
-		success _ out => dep_pi_body_arg_idx (lower_parse_term lower_ctx_bare out) 0,
-		fail _ => false,
-	}
+    match type_expression "(n : I64) -> Vec n" {
+        success _ out => dep_pi_body_arg_idx (lower_parse_term lower_ctx_bare out) 0,
+        fail _ => false,
+    }
 
 /// The de Bruijn index of the argument in a pi body of the shape
 /// `Term.pi _ (Term.app _ (Term.var i _))`. Nested patterns are not
 /// supported, hence the ladder.
 #[partial]
 def dep_pi_body_arg_idx (t : Term) (want : I64) : Bool :=
-	match t {
-		Term.pi _ _arg ret => dep_pi_app_arg_idx ret want,
-		_ => false,
-	}
+    match t {
+        Term.pi _ _arg ret => dep_pi_app_arg_idx ret want,
+        _ => false,
+    }
 
 #[partial]
 def dep_pi_app_arg_idx (ret : Term) (want : I64) : Bool :=
-	match ret {
-		Term.app _f a => dep_pi_var_idx a want,
-		_ => false,
-	}
+    match ret {
+        Term.app _f a => dep_pi_var_idx a want,
+        _ => false,
+    }
 
 #[partial]
 def dep_pi_var_idx (a : Term) (want : I64) : Bool :=
-	match a {
-		Term.var i _ => I64.beq i want,
-		_ => false,
-	}
+    match a {
+        Term.var i _ => I64.beq i want,
+        _ => false,
+    }
 
 /// R2a' — a `def`'s DECLARED signature is dependent when it says it is.
 /// `build_param_pi_chain` folds `def pick (A : Type) (a : A) : A` into
@@ -5746,16 +5739,16 @@ def sig_ret_var_idx (t : Term) (want : I64) : Bool :=
 /// reported as unknown, so a consumer cannot tell it from a real one.
 #[test]
 def test_dep_pi_span_starts_at_the_paren : Bool :=
-	let src : String := "(n : I64) -> Vec n" in
-	String.beq (span_text_of_term (type_expression src) src) src
+    let src : String := "(n : I64) -> Vec n" in
+    String.beq (span_text_of_term (type_expression src) src) src
 
 #[test]
 def test_decl_span_covers_declaration : Bool :=
-	let src : String := "def f : I64 := 1" in
-	match decl_parser src {
-		success _ d => String.beq (span_text src d.span) src,
-		fail _ => false,
-	}
+    let src : String := "def f : I64 := 1" in
+    match decl_parser src {
+        success _ d => String.beq (span_text src d.span) src,
+        fail _ => false,
+    }
 
 /// The second of two declarations: its span must start at its own text,
 /// not at the file. A `Location`-level twin of this used to exist over
@@ -5764,24 +5757,24 @@ def test_decl_span_covers_declaration : Bool :=
 /// what `build_loc_table` actually reads.
 #[test]
 def test_decl_span_second_decl_starts_at_itself : Bool :=
-	let src : String := "def a : I64 := 1\n\ndef b : I64 := 2" in
-	match decls_skip (skip_docstrings (skip_spaces src)) List.empty {
-		// Nested patterns are not supported by this parser, so the tail
-		// is destructured by a second match rather than `cons _ (cons ..)`.
-		success _ ds =>
-			match ds {
-				List.cons _ rest => second_decl_span_is src rest,
-				List.empty => false,
-			},
-		fail _ => false,
-	}
+    let src : String := "def a : I64 := 1\n\ndef b : I64 := 2" in
+    match decls_skip (skip_docstrings (skip_spaces src)) List.empty {
+        // Nested patterns are not supported by this parser, so the tail
+        // is destructured by a second match rather than `cons _ (cons ..)`.
+        success _ ds =>
+            match ds {
+                List.cons _ rest => second_decl_span_is src rest,
+                List.empty => false,
+            },
+        fail _ => false,
+    }
 
 #[partial]
 def second_decl_span_is (src : String) (rest : List ParseDecl) : Bool :=
-	match rest {
-		List.cons second _ => String.beq (span_text src second.span) "def b : I64 := 2",
-		List.empty => false,
-	}
+    match rest {
+        List.cons second _ => String.beq (span_text src second.span) "def b : I64 := 2",
+        List.empty => false,
+    }
 
 // ─── Sort forms: `Prop`, `Pred`, `Type`, `Sort N`, `Sort u` ────────────
 //
@@ -5830,53 +5823,53 @@ def second_decl_span_is (src : String) (rest : List ParseDecl) : Bool :=
 //     keeps them usable as plain names.
 #[partial]
 def sort_form_parser (input : String) : ParseResult ParseTerm :=
-	alt_fold [sort_form_prop, sort_form_pred, sort_form_type, sort_form_sort] input
+    alt_fold [sort_form_prop, sort_form_pred, sort_form_type, sort_form_sort] input
 
 #[partial]
 def sort_form_prop (input : String) : ParseResult ParseTerm :=
-	sort_form_prop_kw (tag_keyword "Prop" input)
+    sort_form_prop_kw (tag_keyword "Prop" input)
 
 #[partial]
 def sort_form_prop_kw (r : ParseResult String) : ParseResult ParseTerm :=
-	match r {
-		success rem _ => success rem (pt_sort (SortLevel.concrete 0)),
-		fail e => fail e
-	}
+    match r {
+        success rem _ => success rem (pt_sort (SortLevel.concrete 0)),
+        fail e => fail e
+    }
 
 /// `Pred` is a plain alias for `Prop` -- level 0, same as the Rust
 /// reference's own table.
 #[partial]
 def sort_form_pred (input : String) : ParseResult ParseTerm :=
-	sort_form_pred_kw (tag_keyword "Pred" input)
+    sort_form_pred_kw (tag_keyword "Pred" input)
 
 #[partial]
 def sort_form_pred_kw (r : ParseResult String) : ParseResult ParseTerm :=
-	match r {
-		success rem _ => success rem (pt_sort (SortLevel.concrete 0)),
-		fail e => fail e
-	}
+    match r {
+        success rem _ => success rem (pt_sort (SortLevel.concrete 0)),
+        fail e => fail e
+    }
 
 #[partial]
 def sort_form_type (input : String) : ParseResult ParseTerm :=
-	sort_form_type_kw (tag_keyword "Type" input)
+    sort_form_type_kw (tag_keyword "Type" input)
 
 #[partial]
 def sort_form_type_kw (r : ParseResult String) : ParseResult ParseTerm :=
-	match r {
-		success rem _ => success rem (pt_sort (SortLevel.concrete 1)),
-		fail e => fail e
-	}
+    match r {
+        success rem _ => success rem (pt_sort (SortLevel.concrete 1)),
+        fail e => fail e
+    }
 
 #[partial]
 def sort_form_sort (input : String) : ParseResult ParseTerm :=
-	sort_form_sort_kw (tag_keyword "Sort" input)
+    sort_form_sort_kw (tag_keyword "Sort" input)
 
 #[partial]
 def sort_form_sort_kw (r : ParseResult String) : ParseResult ParseTerm :=
-	match r {
-		success rem _ => sort_form_sort_level (skip_spaces rem),
-		fail e => fail e
-	}
+    match r {
+        success rem _ => sort_form_sort_level (skip_spaces rem),
+        fail e => fail e
+    }
 
 /// `Sort` takes a NUMERAL (`Sort 2`), a level VARIABLE (`Sort u`), or a
 /// parenthesized level EXPRESSION (`Sort (max u v)`). The numeral is
@@ -5890,14 +5883,14 @@ def sort_form_sort_kw (r : ParseResult String) : ParseResult ParseTerm :=
 /// global working as it did before any of this.
 #[partial]
 def sort_form_sort_level (rem : String) : ParseResult ParseTerm :=
-	sort_form_sort_num (number rem) rem
+    sort_form_sort_num (number rem) rem
 
 #[partial]
 def sort_form_sort_num (r : ParseResult I64) (rem : String) : ParseResult ParseTerm :=
-	match r {
-		success rest n => success rest (pt_sort (SortLevel.concrete n)),
-		fail _ => sort_form_sort_paren (tag "(" rem) rem
-	}
+    match r {
+        success rest n => success rest (pt_sort (SortLevel.concrete n)),
+        fail _ => sort_form_sort_paren (tag "(" rem) rem
+    }
 
 /// `Sort (…)`. The parenthesis is only consumed when its content is a
 /// well-formed LEVEL expression and the `)` closes it; any other shape
@@ -5906,24 +5899,24 @@ def sort_form_sort_num (r : ParseResult I64) (rem : String) : ParseResult ParseT
 /// the `Sort` global), with no separate fallback needed.
 #[partial]
 def sort_form_sort_paren (r : ParseResult String) (rem : String) : ParseResult ParseTerm :=
-	match r {
-		success rest _ => sort_form_sort_paren_level (sort_level_expr (skip_spaces rest)),
-		fail _ => sort_form_sort_var (identifier rem)
-	}
+    match r {
+        success rest _ => sort_form_sort_paren_level (sort_level_expr (skip_spaces rest)),
+        fail _ => sort_form_sort_var (identifier rem)
+    }
 
 #[partial]
 def sort_form_sort_paren_level (r : ParseResult SortLevel) : ParseResult ParseTerm :=
-	match r {
-		success rest l => sort_form_sort_paren_close (tag ")" (skip_spaces rest)) l,
-		fail e => fail e
-	}
+    match r {
+        success rest l => sort_form_sort_paren_close (tag ")" (skip_spaces rest)) l,
+        fail e => fail e
+    }
 
 #[partial]
 def sort_form_sort_paren_close (r : ParseResult String) (l : SortLevel) : ParseResult ParseTerm :=
-	match r {
-		success rest _ => success rest (pt_sort l),
-		fail e => fail e
-	}
+    match r {
+        success rest _ => success rest (pt_sort l),
+        fail e => fail e
+    }
 
 /// One level expression: `max <atom> <atom>` or a bare atom.
 ///
@@ -5937,116 +5930,116 @@ def sort_form_sort_paren_close (r : ParseResult String) (l : SortLevel) : ParseR
 /// internally synthesized (`type_check_sort_full`) for now.
 #[partial]
 def sort_level_expr (input : String) : ParseResult SortLevel :=
-	sort_level_try_max (tag_keyword "max" input) input
+    sort_level_try_max (tag_keyword "max" input) input
 
 #[partial]
 def sort_level_try_max (r : ParseResult String) (orig : String) : ParseResult SortLevel :=
-	match r {
-		success rem _ => sort_level_max_left (sort_level_atom (skip_spaces rem)) (skip_spaces rem),
-		fail _ => sort_level_atom orig
-	}
+    match r {
+        success rem _ => sort_level_max_left (sort_level_atom (skip_spaces rem)) (skip_spaces rem),
+        fail _ => sort_level_atom orig
+    }
 
 #[partial]
 def sort_level_max_left (r : ParseResult SortLevel) (after_max : String) : ParseResult SortLevel :=
-	match r {
-		success rem left => sort_level_max_right left (sort_level_atom (skip_spaces rem)),
-		fail e => fail e
-	}
+    match r {
+        success rem left => sort_level_max_right left (sort_level_atom (skip_spaces rem)),
+        fail e => fail e
+    }
 
 /// A `max` whose left operand is missing is not a level expression; the
 /// `max` reading has already been committed to, so this fails rather than
 /// re-reading the text as a bare atom.
 #[partial]
 def sort_level_max_right (left : SortLevel) (r : ParseResult SortLevel) : ParseResult SortLevel :=
-	match r {
-		success rem right => success rem (SortLevel.max left right),
-		fail e => fail e
-	}
+    match r {
+        success rem right => success rem (SortLevel.max left right),
+        fail e => fail e
+    }
 
 #[partial]
 def sort_level_atom (input : String) : ParseResult SortLevel :=
-	sort_level_atom_paren (tag "(" input) input
+    sort_level_atom_paren (tag "(" input) input
 
 #[partial]
 def sort_level_atom_paren (r : ParseResult String) (orig : String) : ParseResult SortLevel :=
-	match r {
-		success rem _ => sort_level_atom_inner (sort_level_expr (skip_spaces rem)),
-		fail _ => sort_level_atom_num (number orig) orig
-	}
+    match r {
+        success rem _ => sort_level_atom_inner (sort_level_expr (skip_spaces rem)),
+        fail _ => sort_level_atom_num (number orig) orig
+    }
 
 #[partial]
 def sort_level_atom_inner (r : ParseResult SortLevel) : ParseResult SortLevel :=
-	match r {
-		success rest l => sort_level_atom_close (tag ")" (skip_spaces rest)) l,
-		fail e => fail e
-	}
+    match r {
+        success rest l => sort_level_atom_close (tag ")" (skip_spaces rest)) l,
+        fail e => fail e
+    }
 
 #[partial]
 def sort_level_atom_close (r : ParseResult String) (l : SortLevel) : ParseResult SortLevel :=
-	match r {
-		success rest _ => success rest l,
-		fail e => fail e
-	}
+    match r {
+        success rest _ => success rest l,
+        fail e => fail e
+    }
 
 #[partial]
 def sort_level_atom_num (r : ParseResult I64) (orig : String) : ParseResult SortLevel :=
-	match r {
-		success rest n => success rest (SortLevel.concrete n),
-		fail _ => sort_level_atom_var (identifier orig)
-	}
+    match r {
+        success rest n => success rest (SortLevel.concrete n),
+        fail _ => sort_level_atom_var (identifier orig)
+    }
 
 #[partial]
 def sort_level_atom_var (r : ParseResult String) : ParseResult SortLevel :=
-	match r {
-		success rest name => success rest (SortLevel.var (Identifier.id name)),
-		fail e => fail e
-	}
+    match r {
+        success rest name => success rest (SortLevel.var (Identifier.id name)),
+        fail e => fail e
+    }
 
 /// The level-variable arm. `identifier` already rejects reserved
 /// keywords and validates the start character, so `Sort match` does not
 /// become a level named `match`.
 #[partial]
 def sort_form_sort_var (r : ParseResult String) : ParseResult ParseTerm :=
-	match r {
-		success rest name =>
-			success rest (pt_sort (SortLevel.var (Identifier.id name))),
-		fail e => fail e
-	}
+    match r {
+        success rest name =>
+            success rest (pt_sort (SortLevel.var (Identifier.id name))),
+        fail e => fail e
+    }
 
 #[partial]
-def variable (input: String) : ParseResult ParseTerm :=
+def variable (input : String) : ParseResult ParseTerm :=
     variable_try_qualified (qualified_variable input) input
 
 #[partial]
-def variable_try_qualified (r: ParseResult NameRef) (input: String) : ParseResult ParseTerm :=
+def variable_try_qualified (r : ParseResult NameRef) (input : String) : ParseResult ParseTerm :=
     match r {
         success rem nref => success rem (pt_var nref),
         fail _ => variable_try_path (name_path_variable input) input
     }
 
 #[partial]
-def variable_try_path (r: ParseResult NameRef) (input: String) : ParseResult ParseTerm :=
+def variable_try_path (r : ParseResult NameRef) (input : String) : ParseResult ParseTerm :=
     match r {
         success rem nref => success rem (pt_var nref),
-		fail _ => variable_try_sort input
-	}
+        fail _ => variable_try_sort input
+    }
 
 /// The fallback once a dotted path has declined: one of the four sort
 /// forms, else an ordinary identifier (which is what every one of them
 /// was before W1.1b).
 #[partial]
 def variable_try_sort (input : String) : ParseResult ParseTerm :=
-	variable_try_sort_alt (sort_form_parser input) input
+    variable_try_sort_alt (sort_form_parser input) input
 
 #[partial]
 def variable_try_sort_alt (r : ParseResult ParseTerm) (input : String) : ParseResult ParseTerm :=
-	match r {
-		success rem t => success rem t,
-        fail _ => variable_got (identifier input)
+    match r {
+        success rem t => success rem t,
+            fail _ => variable_got (identifier input)
     }
 
 #[partial]
-def variable_got (r: ParseResult String) : ParseResult ParseTerm :=
+def variable_got (r : ParseResult String) : ParseResult ParseTerm :=
     match r {
         success rem out =>
             if String.beq out "_"
@@ -6062,7 +6055,7 @@ def variable_got (r: ParseResult String) : ParseResult ParseTerm :=
 // in one parser. See its doc comment for why the sign lives here rather
 // than as a separate unary-minus operator.
 #[partial]
-def literal_parser (input: String) : ParseResult ParseTerm :=
+def literal_parser (input : String) : ParseResult ParseTerm :=
     alt_fold [string_parse, numeric_literal] input
 
 // Skip // and /// comment lines (consumed as whitespace). Named
@@ -6074,26 +6067,26 @@ def literal_parser (input: String) : ParseResult ParseTerm :=
 // on `"//"` (a prefix of `"///"` too) skips both forms uniformly.
 #[partial]
 pub def skip_docstrings (input : String) : String :=
-	skip_docstrings_block_try (skip_docstrings_try (tag "//" input) input) input
+    skip_docstrings_block_try (skip_docstrings_try (tag "//" input) input) input
 
 #[partial]
 def skip_docstrings_try (r : ParseResult String) (orig : String) : String :=
-	match r {
-		success rem _ => skip_docstrings_eol (take_while is_not_newline rem) rem,
-		fail _ => orig
-	}
+    match r {
+        success rem _ => skip_docstrings_eol (take_while is_not_newline rem) rem,
+        fail _ => orig
+    }
 
 #[partial]
 def skip_docstrings_eol (r : ParseResult String) (orig : String) : String :=
-	let after_eol : String := skip_spaces_match r orig in
-	skip_docstrings_try_newline (tag "\n" after_eol) after_eol
+    let after_eol : String := skip_spaces_match r orig in
+    skip_docstrings_try_newline (tag "\n" after_eol) after_eol
 
 #[partial]
 def skip_docstrings_try_newline (r : ParseResult String) (orig : String) : String :=
-	match r {
-		success rem _ => skip_docstrings (skip_spaces rem),
-		fail _ => orig
-	}
+    match r {
+        success rem _ => skip_docstrings (skip_spaces rem),
+        fail _ => orig
+    }
 
 // --- `/* ... */` block comments ---
 //
@@ -6114,7 +6107,7 @@ def skip_docstrings_try_newline (r : ParseResult String) (orig : String) : Strin
 /// `skip_docstrings_try` returns `orig` unchanged on no match.
 #[partial]
 def skip_docstrings_block_try (after_line : String) (orig : String) : String :=
-	if String.beq after_line orig then skip_docstrings_block orig else after_line
+    if String.beq after_line orig then skip_docstrings_block orig else after_line
 
 /// Skip a `/* ... */` block comment and then continue skipping any
 /// following whitespace + comments. Returns `orig` unchanged when it does
@@ -6123,14 +6116,14 @@ def skip_docstrings_block_try (after_line : String) (orig : String) : String :=
 /// plain `String -> String` skipper matching `skip_spaces`/`skip_docstrings`.
 #[partial]
 def skip_docstrings_block (input : String) : String :=
-	skip_docstrings_block_body (is_prefix "/*" input) input
+    skip_docstrings_block_body (is_prefix "/*" input) input
 
 #[partial]
 def skip_docstrings_block_body (starts_block : Bool) (orig : String) : String :=
-	match starts_block {
-		Bool.true => skip_docstrings (skip_spaces (skip_block_comment_end (String.drop 2 orig))),
-		Bool.false => orig
-	}
+    match starts_block {
+        Bool.true => skip_docstrings (skip_spaces (skip_block_comment_end (String.drop 2 orig))),
+        Bool.false => orig
+    }
 
 /// Scan forward for the closing `*/` of a block comment, returning the
 /// remainder after it. The leading `/*` has already been consumed by
@@ -6141,9 +6134,9 @@ def skip_docstrings_block_body (starts_block : Bool) (orig : String) : String :=
 /// unterminated block comment, returns the empty string.
 #[partial]
 def skip_block_comment_end (input : String) : String :=
-	if String.length input == 0 then input
-	else if is_prefix "*/" input then String.drop 2 input
-	else skip_block_comment_end (String.drop 1 input)
+    if String.length input == 0 then input
+    else if is_prefix "*/" input then String.drop 2 input
+    else skip_block_comment_end (String.drop 1 input)
 
 // ─── Term atom ──────────────────────────────────────────────────────────
 
@@ -6197,7 +6190,7 @@ def let_term_name (r : ParseResult String) : ParseResult ParseTerm :=
 #[partial]
 def let_term_try_assign_no_type (r : ParseResult String) (orig : String) (name : Identifier) : ParseResult ParseTerm :=
     match r {
-        success rem _ => let_term_value (expression (skip_docstrings (skip_spaces rem))) name pt_hole ,
+        success rem _ => let_term_value (expression (skip_docstrings (skip_spaces rem))) name pt_hole,
         fail _ => let_term_try_type (tag ":" (skip_spaces orig)) orig name
     }
 
@@ -6347,7 +6340,7 @@ def let_term_body (r : ParseResult ParseTerm) (name : Identifier) (typ : ParseTe
     match r {
         success rem body =>
             let lam_term : ParseTerm := pt_lam name typ body in
-            success rem (pt_app  lam_term value),
+            success rem (pt_app lam_term value),
         fail e => fail e
     }
 
@@ -6435,7 +6428,7 @@ def build_list_literal (elems : List ParseTerm) : ParseTerm :=
         List.empty => pt_var (NameRef.nid (Identifier.id "FromListLiteral.empty")),
         List.cons e rest =>
             let cons_var : ParseTerm := pt_var (NameRef.nid (Identifier.id "FromListLiteral.cons")) in
-            pt_app  (pt_app  cons_var e) (build_list_literal rest),
+            pt_app (pt_app cons_var e) (build_list_literal rest),
     }
 
 /// Desugar a tuple literal's element list into right-nested `Pair.pair`
@@ -6450,13 +6443,13 @@ def build_list_literal (elems : List ParseTerm) : ParseTerm :=
 #[partial]
 def build_tuple_literal (elems : List ParseTerm) : ParseTerm :=
     match elems {
-        List.empty => pt_hole ,
+        List.empty => pt_hole,
         List.cons e rest =>
             match rest {
                 List.empty => e,
                 List.cons _ _ =>
                     let pair_var : ParseTerm := pt_var (NameRef.nid (Identifier.id "Pair.pair")) in
-                    pt_app  (pt_app  pair_var e) (build_tuple_literal rest),
+                    pt_app (pt_app pair_var e) (build_tuple_literal rest),
             },
     }
 
@@ -6475,7 +6468,7 @@ def build_tuple_literal (elems : List ParseTerm) : ParseTerm :=
 // `type_check_struct_update` desugars it into an ordinary `Term.con`
 // (mirroring plain struct literals, just below), so it compiles too.
 #[partial]
-def struct_lit_parser (input: String) : ParseResult ParseTerm :=
+def struct_lit_parser (input : String) : ParseResult ParseTerm :=
     struct_lit_open (tag "{" input)
 
 #[partial]
@@ -6558,7 +6551,7 @@ def struct_update_field_sep (input : String) (base : ParseTerm) (acc : List Pars
 #[partial]
 def struct_update_finish (input : String) (base : ParseTerm) (fields : List ParseStructLitField) : ParseResult ParseTerm :=
     match tag "}" (skip_docstrings (skip_spaces input)) {
-        success rem _ => success rem (pt_lit  (ParseLiteral.struct_update base fields)),
+        success rem _ => success rem (pt_lit (ParseLiteral.struct_update base fields)),
         fail e => fail (ParseError.custom "expected } to close struct update" input)
     }
 
@@ -6620,7 +6613,7 @@ def struct_lit_type_name (r : ParseResult ParseTerm) (fields : List ParseStructL
 #[partial]
 def struct_lit_finish (input : String) (fields : List ParseStructLitField) (type_name : Option ParseTerm) : ParseResult ParseTerm :=
     match tag "}" (skip_docstrings (skip_spaces input)) {
-        success rem _ => success rem (pt_lit  (ParseLiteral.struct_lit fields type_name)),
+        success rem _ => success rem (pt_lit (ParseLiteral.struct_lit fields type_name)),
         fail e => fail (ParseError.custom "expected } to close struct literal" input)
     }
 
@@ -6668,9 +6661,9 @@ def decl_at (input : String) (r : ParseResult ParseDecl) : ParseResult ParseDecl
 /// it a usable assertion over multi-byte source too.
 #[partial]
 def span_text (whole_file : String) (sp : ParseSpan) : String :=
-	let total : I64 := String.length whole_file in
-	let start : I64 := I64.sub total sp.start_rem in
-	String.slice (String.drop start whole_file) 0 (I64.sub sp.start_rem sp.end_rem)
+    let total : I64 := String.length whole_file in
+    let start : I64 := I64.sub total sp.start_rem in
+    String.slice (String.drop start whole_file) 0 (I64.sub sp.start_rem sp.end_rem)
 
 /// Every atom -- variable, literal, `match`, `if`, `do`, lambda, list
 /// and struct literal, and a parenthesised expression -- reaches the
@@ -6680,11 +6673,11 @@ def span_text (whole_file : String) (sp : ParseSpan) : String :=
 /// atom as written, and the inner expression is not what appeared at
 /// this position.
 #[partial]
-def atom_term (input: String) : ParseResult ParseTerm :=
+def atom_term (input : String) : ParseResult ParseTerm :=
     term_at input (atom_term_unlocated input)
 
 #[partial]
-def atom_term_unlocated (input: String) : ParseResult ParseTerm :=
+def atom_term_unlocated (input : String) : ParseResult ParseTerm :=
     match alt_fold (atom_parsers) input {
         success rem out => success rem out,
         fail _ =>
@@ -6707,7 +6700,7 @@ def atom_term_unlocated (input: String) : ParseResult ParseTerm :=
 // bare-`quote`-named variable to worry about; nothing needed here
 // beyond adding the new atom parser itself.
 #[partial]
-def quote_term_parser (input: String) : ParseResult ParseTerm :=
+def quote_term_parser (input : String) : ParseResult ParseTerm :=
     quote_term_kw (tag "quote" input)
 
 #[partial]
@@ -6741,7 +6734,7 @@ def quote_term_body (r : ParseResult ParseTerm) : ParseResult ParseTerm :=
 #[partial]
 def quote_term_finish (r : ParseResult String) (t : ParseTerm) (orig : String) : ParseResult ParseTerm :=
     match r {
-        success rem _ => success rem (pt_quote_  t),
+        success rem _ => success rem (pt_quote_ t),
         fail e => fail (ParseError.custom "expected } to close quote" orig)
     }
 
@@ -6849,60 +6842,60 @@ def dict_hint_name (r : ParseResult (List String)) (callee : ParseTerm) : ParseR
 /// lowered marker is a sentinel var, so a shallow walk suffices.
 #[partial]
 def term_has_hint_name (t : Term) (nm : String) : Bool :=
-	match t {
-		Term.var _ dbg =>
-			match dbg {
-				DebugName.named id => String.beq (show_identifier id) nm,
-				DebugName.unnamed => false,
-			},
-		Term.app f a => term_has_hint_name f nm || term_has_hint_name a nm,
-		Term.lam _ _ b => term_has_hint_name b nm,
-		_ => false,
-	}
+    match t {
+        Term.var _ dbg =>
+            match dbg {
+                DebugName.named id => String.beq (show_identifier id) nm,
+                DebugName.unnamed => false,
+            },
+        Term.app f a => term_has_hint_name f nm || term_has_hint_name a nm,
+        Term.lam _ _ b => term_has_hint_name b nm,
+        _ => false,
+    }
 
 /// `f #Named.Instance x` lowers to `(f marker) x` -- the marker rides the
 /// innermost argument slot, the one spelling the checker's app path and
 /// the dict pass peel back off the spine's head.
 #[test]
 def test_dict_hint_lowers_to_marker_arg : Bool :=
-	match decls_parser "def pick (x : I64) : String := show #ShowB x" {
-		success _ ds =>
-			match ds {
-				List.cons d _ =>
-					match d {
-						Decl.def_d df => term_has_hint_name df.term "__hint_ShowB",
-						_ => false,
-					},
-				List.empty => false,
-			},
-		fail _ => false
-	}
+    match decls_parser "def pick (x : I64) : String := show #ShowB x" {
+        success _ ds =>
+            match ds {
+                List.cons d _ =>
+                    match d {
+                        Decl.def_d df => term_has_hint_name df.term "__hint_ShowB",
+                        _ => false,
+                    },
+                List.empty => false,
+            },
+        fail _ => false
+    }
 
 /// A dotted instance name stays joined: the hint names
 /// `My.Ord`, not `My` applied to `Ord`.
 #[test]
 def test_dict_hint_keeps_dotted_name : Bool :=
-	match decls_parser "def q (x : I64) : String := show #My.Ord x" {
-		success _ ds =>
-			match ds {
-				List.cons d _ =>
-					match d {
-						Decl.def_d df => term_has_hint_name df.term "__hint_My.Ord",
-						_ => false,
-					},
-				List.empty => false,
-			},
-		fail _ => false
-	}
+    match decls_parser "def q (x : I64) : String := show #My.Ord x" {
+        success _ ds =>
+            match ds {
+                List.cons d _ =>
+                    match d {
+                        Decl.def_d df => term_has_hint_name df.term "__hint_My.Ord",
+                        _ => false,
+                    },
+                List.empty => false,
+            },
+        fail _ => false
+    }
 
 /// A `#` NOT following a variable callee is not a hint: no atom accepts
 /// it, so the strict decl parse fails rather than silently dropping it.
 #[test]
 def test_dict_hint_requires_variable_callee : Bool :=
-	match decls_parser_strict "def q : I64 := #Solo" {
-		success _ _ => false,
-		fail _ => true,
-	}
+    match decls_parser_strict "def q : I64 := #Solo" {
+        success _ _ => false,
+        fail _ => true,
+    }
 
 #[partial]
 def atom_parsers : List (String -> ParseResult ParseTerm) :=
@@ -7032,7 +7025,7 @@ def field_pattern_entries_binders (entries : List FieldPatternEntry) : List Iden
 // rather than `nom`'s automatic `alt` backtracking).
 
 #[partial]
-def match_case_parser (input: String) : ParseResult ParseMatchCase :=
+def match_case_parser (input : String) : ParseResult ParseMatchCase :=
     match_case_try_bare_field_pattern (field_pattern_parser (skip_docstrings (skip_spaces input))) (skip_docstrings (skip_spaces input))
 
 #[partial]
@@ -7072,7 +7065,7 @@ def match_case_field_pattern_body (r : ParseResult ParseTerm) (name : Identifier
 /// pattern failed to parse at all — this blocked lang/types.mo itself
 /// (`match a { Identifier.id as => ... }`), a self-hosting blocker.
 #[partial]
-def match_case_name (r: ParseResult (List String)) : ParseResult ParseMatchCase :=
+def match_case_name (r : ParseResult (List String)) : ParseResult ParseMatchCase :=
     match r {
         success rem names =>
             let name : Identifier := Identifier.id (list_last_or "" names) in
@@ -7125,7 +7118,7 @@ def match_case_arg_names_loop (input : String) (acc : List String) : ParseResult
     }
 
 #[partial]
-def match_case_args (r: ParseResult (List String)) (name: Identifier) : ParseResult ParseMatchCase :=
+def match_case_args (r : ParseResult (List String)) (name : Identifier) : ParseResult ParseMatchCase :=
     match r {
         // `skip_docstrings (skip_spaces rem)` -- a comment can sit right
         // before `=>` too (documenting a case's binder args), not only
@@ -7155,7 +7148,7 @@ def id_list_of (names : List String) : List Identifier :=
 /// indexed bound one: it still PARSES (free-variable references are
 /// never a parse error), but fails to self-hosted-typecheck.
 #[partial]
-def match_case_arrow (r: ParseResult String) (name: Identifier) (args : List Identifier) : ParseResult ParseMatchCase :=
+def match_case_arrow (r : ParseResult String) (name : Identifier) (args : List Identifier) : ParseResult ParseMatchCase :=
     match r {
         // `skip_docstrings (skip_spaces rem)`, not bare `skip_spaces rem`
         // -- a `//`/`///` comment right after `=>`, before the arm's body
@@ -7174,7 +7167,7 @@ def match_case_arrow (r: ParseResult String) (name: Identifier) (args : List Ide
 /// downstream by `lang/typecheck/infer.mo`'s `type_check_match_case` to
 /// bind them as locals, and by `lang/pretty.mo`'s printer).
 #[partial]
-def match_case_body (r: ParseResult ParseTerm) (name: Identifier) (args : List Identifier) : ParseResult ParseMatchCase :=
+def match_case_body (r : ParseResult ParseTerm) (name : Identifier) (args : List Identifier) : ParseResult ParseMatchCase :=
     match r {
         success rem body =>
             let no_fp : Option FieldPattern := Option.none in
@@ -7193,7 +7186,7 @@ def match_case_body (r: ParseResult ParseTerm) (name: Identifier) (args : List I
 /// `lang/parser/combinators.mo`'s own `utf8_char_width`, which has
 /// exactly this shape.
 #[partial]
-def match_case_tail (input: String) : String :=
+def match_case_tail (input : String) : String :=
     match take_while_byte is_space_byte input {
         success after_sp _ =>
             match tag "," after_sp {
@@ -7206,48 +7199,48 @@ def match_case_tail (input: String) : String :=
 // ─── Canonical match expression parser (Phase 9) ───────────────────────
 
 #[partial]
-def match_parser (input: String) : ParseResult ParseTerm :=
+def match_parser (input : String) : ParseResult ParseTerm :=
     match_kw (tag "match" input)
 
 #[partial]
-def match_kw (r: ParseResult String) : ParseResult ParseTerm :=
+def match_kw (r : ParseResult String) : ParseResult ParseTerm :=
     match r {
         success rem _ => match_scrutinee (expression (skip_docstrings (skip_spaces rem))),
         fail e => fail e
     }
 
 #[partial]
-def match_scrutinee (r: ParseResult ParseTerm) : ParseResult ParseTerm :=
+def match_scrutinee (r : ParseResult ParseTerm) : ParseResult ParseTerm :=
     match r {
         success rem scrutinee => match_brace_open (tag "{" (skip_spaces rem)) scrutinee,
         fail e => fail e
     }
 
 #[partial]
-def match_brace_open (r: ParseResult String) (scrutinee: ParseTerm) : ParseResult ParseTerm :=
+def match_brace_open (r : ParseResult String) (scrutinee : ParseTerm) : ParseResult ParseTerm :=
     match r {
         success rem _ => match_cases_parse (many1 (match_case_parser) rem) scrutinee,
         fail e => fail e
     }
 
 #[partial]
-def match_cases_parse (r: ParseResult (List ParseMatchCase)) (scrutinee: ParseTerm) : ParseResult ParseTerm :=
+def match_cases_parse (r : ParseResult (List ParseMatchCase)) (scrutinee : ParseTerm) : ParseResult ParseTerm :=
     match r {
         success rem cases => match_close (tag "}" (skip_docstrings (skip_spaces rem))) scrutinee cases,
         fail e => fail e
     }
 
 #[partial]
-def match_close (r: ParseResult String) (scrutinee: ParseTerm) (cases: List ParseMatchCase) : ParseResult ParseTerm :=
+def match_close (r : ParseResult String) (scrutinee : ParseTerm) (cases : List ParseMatchCase) : ParseResult ParseTerm :=
     match r {
-        success rem _ => success rem (pt_lit  (ParseLiteral.match_ scrutinee cases)),
+        success rem _ => success rem (pt_lit (ParseLiteral.match_ scrutinee cases)),
         fail e => fail e
     }
 
 // ─── Canonical if expression parser (Phase 9) ─────────────────────────
 
 #[partial]
-def if_parser (input: String) : ParseResult ParseTerm :=
+def if_parser (input : String) : ParseResult ParseTerm :=
     if_kw (tag "if" input)
 
 // `skip_docstrings (skip_spaces rem)`, not bare `skip_spaces rem`, at each
@@ -7257,7 +7250,7 @@ def if_parser (input: String) : ParseResult ParseTerm :=
 // here too, same as `match_case_arrow`'s/`match_cases_parse`'s own
 // comment fixes elsewhere in this file.
 #[partial]
-def if_kw (r: ParseResult String) : ParseResult ParseTerm :=
+def if_kw (r : ParseResult String) : ParseResult ParseTerm :=
     match r {
         success rem _ => if_cond (expression (skip_docstrings (skip_spaces rem))),
         fail e => fail e
@@ -7269,49 +7262,49 @@ def if_kw (r: ParseResult String) : ParseResult ParseTerm :=
 // if` branch, codegen/emit.mo's `constructor_tag`), not only right
 // after it.
 #[partial]
-def if_cond (r: ParseResult ParseTerm) : ParseResult ParseTerm :=
+def if_cond (r : ParseResult ParseTerm) : ParseResult ParseTerm :=
     match r {
         success rem cond => if_then_kw (tag "then" (skip_docstrings (skip_spaces rem))) cond,
         fail e => fail e
     }
 
 #[partial]
-def if_then_kw (r: ParseResult String) (cond: ParseTerm) : ParseResult ParseTerm :=
+def if_then_kw (r : ParseResult String) (cond : ParseTerm) : ParseResult ParseTerm :=
     match r {
         success rem _ => if_then_branch (expression (skip_docstrings (skip_spaces rem))) cond,
         fail e => fail e
     }
 
 #[partial]
-def if_then_branch (r: ParseResult ParseTerm) (cond: ParseTerm) : ParseResult ParseTerm :=
+def if_then_branch (r : ParseResult ParseTerm) (cond : ParseTerm) : ParseResult ParseTerm :=
     match r {
         success rem then_b => if_else_kw (tag "else" (skip_docstrings (skip_spaces rem))) cond then_b,
         fail e => fail e
     }
 
 #[partial]
-def if_else_kw (r: ParseResult String) (cond: ParseTerm) (then_b: ParseTerm) : ParseResult ParseTerm :=
+def if_else_kw (r : ParseResult String) (cond : ParseTerm) (then_b : ParseTerm) : ParseResult ParseTerm :=
     match r {
         success rem _ => if_else_branch (expression (skip_docstrings (skip_spaces rem))) cond then_b,
         fail e => fail e
     }
 
 #[partial]
-def if_else_branch (r: ParseResult ParseTerm) (cond: ParseTerm) (then_b: ParseTerm) : ParseResult ParseTerm :=
+def if_else_branch (r : ParseResult ParseTerm) (cond : ParseTerm) (then_b : ParseTerm) : ParseResult ParseTerm :=
     match r {
-        success rem else_b => success rem (pt_lit  (ParseLiteral.if_ cond then_b else_b)),
+        success rem else_b => success rem (pt_lit (ParseLiteral.if_ cond then_b else_b)),
         fail e => fail e
     }
 
 #[partial]
-def paren_expr (input: String) : ParseResult ParseTerm :=
+def paren_expr (input : String) : ParseResult ParseTerm :=
     match tag "(" input {
         success rem _ => paren_inner (type_expression rem),
         fail e => fail e
     }
 
 #[partial]
-def paren_inner (r: ParseResult ParseTerm) : ParseResult ParseTerm :=
+def paren_inner (r : ParseResult ParseTerm) : ParseResult ParseTerm :=
     match r {
         success rem out => paren_try_tuple (skip_spaces rem) out,
         fail e => fail e
@@ -7430,7 +7423,7 @@ def paren_ann_value (typ : ParseTerm) (value : ParseTerm) : ParseTerm :=
     pt_app (pt_lam (Identifier.id "__ann_asc") typ (pt_var (NameRef.nid (Identifier.id "__ann_asc")))) value
 
 #[partial]
-def paren_close (r: ParseResult String) (out: ParseTerm) : ParseResult ParseTerm :=
+def paren_close (r : ParseResult String) (out : ParseTerm) : ParseResult ParseTerm :=
     match r {
         success rem _ => success rem out,
         fail e => fail e
@@ -7448,11 +7441,11 @@ def paren_close (r: ParseResult String) (out: ParseTerm) : ParseResult ParseTerm
 /// wouldn't even get partway through, since a failed lambda anywhere
 /// inside an expression fails the whole enclosing declaration.
 #[partial]
-def lambda_parser (input: String) : ParseResult ParseTerm :=
+def lambda_parser (input : String) : ParseResult ParseTerm :=
     lambda_kw (alt (alt (tag "fn") (tag "ꟛ")) (tag "\\") input)
 
 #[partial]
-def lambda_kw (r: ParseResult String) : ParseResult ParseTerm :=
+def lambda_kw (r : ParseResult String) : ParseResult ParseTerm :=
     match r {
         success rem _ => lambda_dispatch (skip_spaces rem),
         fail e => fail e
@@ -7516,7 +7509,6 @@ def lambda_typed_arrow_tag (r : ParseResult String) (params : List ParseParam) :
         success rem _ => lambda_typed_body (expression (skip_docstrings (skip_spaces rem))) params,
         fail e => fail e,
     }
-
 
 #[partial]
 def lambda_typed_body (r : ParseResult ParseTerm) (params : List ParseParam) : ParseResult ParseTerm :=
@@ -7592,15 +7584,14 @@ def lambda_names_done (input : String) (acc : List Identifier) : ParseResult Par
     else lambda_arrow (tag "=>" input) (list_reverse acc)
 
 #[partial]
-def lambda_arrow (r: ParseResult String) (names: List Identifier) : ParseResult ParseTerm :=
+def lambda_arrow (r : ParseResult String) (names : List Identifier) : ParseResult ParseTerm :=
     match r {
         success rem2 _ => lambda_body (expression (skip_docstrings (skip_spaces rem2))) names,
         fail e => fail e
     }
 
-
 #[partial]
-def lambda_body (r: ParseResult ParseTerm) (names: List Identifier) : ParseResult ParseTerm :=
+def lambda_body (r : ParseResult ParseTerm) (names : List Identifier) : ParseResult ParseTerm :=
     match r {
         success rem body => success rem (build_nested_lambdas names body),
         fail e => fail e
@@ -7687,11 +7678,11 @@ def build_nested_lambdas (names : List Identifier) (body : ParseTerm) : ParseTer
 //    this level's own continuation).
 
 #[partial]
-def expression (input: String) : ParseResult ParseTerm :=
+def expression (input : String) : ParseResult ParseTerm :=
     expr_climb input 0
 
 #[partial]
-def expr_climb (input: String) (min_prec: I64) : ParseResult ParseTerm :=
+def expr_climb (input : String) (min_prec : I64) : ParseResult ParseTerm :=
     expr_climb_at (skip_spaces input) min_prec
 
 /// `skip_spaces` hoisted out of the two call sites below, which each
@@ -7700,7 +7691,7 @@ def expr_climb (input: String) (min_prec: I64) : ParseResult ParseTerm :=
 /// (the one term form reaching `expr_climb` without passing through
 /// `atom_term`).
 #[partial]
-def expr_climb_at (src: String) (min_prec: I64) : ParseResult ParseTerm :=
+def expr_climb_at (src : String) (min_prec : I64) : ParseResult ParseTerm :=
     expr_climb_try_return (term_at src (return_shorthand_parser src)) src min_prec
 
 // Tried before `atom_term` -- see `return_shorthand_parser`'s own doc
@@ -7709,21 +7700,21 @@ def expr_climb_at (src: String) (min_prec: I64) : ParseResult ParseTerm :=
 // climbing (the inner `expression` call inside `return_shorthand_parser`
 // already consumed everything climbable for the return's value).
 #[partial]
-def expr_climb_try_return (r: ParseResult ParseTerm) (input: String) (min_prec: I64) : ParseResult ParseTerm :=
+def expr_climb_try_return (r : ParseResult ParseTerm) (input : String) (min_prec : I64) : ParseResult ParseTerm :=
     match r {
         success rem out => success rem out,
         fail _ => expr_climb_first (atom_term input) min_prec
     }
 
 #[partial]
-def expr_climb_first (r: ParseResult ParseTerm) (min_prec: I64) : ParseResult ParseTerm :=
+def expr_climb_first (r : ParseResult ParseTerm) (min_prec : I64) : ParseResult ParseTerm :=
     match r {
         success rem lhs => expr_climb_rest rem lhs min_prec,
         fail e => fail e
     }
 
 #[partial]
-def expr_climb_rest (input: String) (lhs: ParseTerm) (min_prec: I64) : ParseResult ParseTerm :=
+def expr_climb_rest (input : String) (lhs : ParseTerm) (min_prec : I64) : ParseResult ParseTerm :=
     expr_climb_rest_ws (take_while_byte is_space_byte input) lhs min_prec
 
 /// Deliberately whitespace-only here (NOT comment-skipping too) --
@@ -7747,14 +7738,14 @@ def expr_climb_rest (input: String) (lhs: ParseTerm) (min_prec: I64) : ParseResu
 /// body/declaration with `|>`/`&&`/`++`/..., so seeing one is only ever
 /// a genuine continuation of THIS expression.
 #[partial]
-def expr_climb_rest_ws (r: ParseResult String) (lhs: ParseTerm) (min_prec: I64) : ParseResult ParseTerm :=
+def expr_climb_rest_ws (r : ParseResult String) (lhs : ParseTerm) (min_prec : I64) : ParseResult ParseTerm :=
     match r {
         success rem _ => expr_climb_rest_next (atom_term rem) rem lhs min_prec,
         fail e => fail e
     }
 
 #[partial]
-def expr_climb_rest_next (r: ParseResult ParseTerm) (input: String) (lhs: ParseTerm) (min_prec: I64) : ParseResult ParseTerm :=
+def expr_climb_rest_next (r : ParseResult ParseTerm) (input : String) (lhs : ParseTerm) (min_prec : I64) : ParseResult ParseTerm :=
     match r {
         success rem rhs => expr_climb_rest rem (pt_from lhs rem (ParseTermKind.app lhs rhs)) min_prec,
         fail _ => expr_climb_op input lhs min_prec
@@ -7772,11 +7763,11 @@ def expr_climb_rest_next (r: ParseResult ParseTerm) (input: String) (lhs: ParseT
 /// exactly this shape, both truncated the rest of their own file before
 /// this fix.
 #[partial]
-def expr_climb_op (input: String) (lhs: ParseTerm) (min_prec: I64) : ParseResult ParseTerm :=
+def expr_climb_op (input : String) (lhs : ParseTerm) (min_prec : I64) : ParseResult ParseTerm :=
     expr_climb_op_try (operator_parse (skip_docstrings (skip_spaces input))) input lhs min_prec
 
 #[partial]
-def expr_climb_op_try (r: ParseResult String) (input: String) (lhs: ParseTerm) (min_prec: I64) : ParseResult ParseTerm :=
+def expr_climb_op_try (r : ParseResult String) (input : String) (lhs : ParseTerm) (min_prec : I64) : ParseResult ParseTerm :=
     match r {
         success rem op => expr_climb_op_prec input lhs op rem min_prec,
         fail _ => success input lhs
@@ -7788,7 +7779,7 @@ def expr_climb_op_try (r: ParseResult String) (input: String) (lhs: ParseTerm) (
 // SAME call path, a second full table scan for no reason. Threading the
 // looked-up `rassoc` through as a parameter instead removes it.
 #[partial]
-def expr_climb_op_prec (input: String) (lhs: ParseTerm) (op: String) (rem: String) (min_prec: I64) : ParseResult ParseTerm :=
+def expr_climb_op_prec (input : String) (lhs : ParseTerm) (op : String) (rem : String) (min_prec : I64) : ParseResult ParseTerm :=
     match op_lookup_entry op op_table {
         Option.none => success input lhs,
         Option.some entry =>
@@ -7810,7 +7801,7 @@ def expr_climb_op_prec (input: String) (lhs: ParseTerm) (op: String) (rem: Strin
 /// decl (and everything after it in the file) silently truncated --
 /// while the Rust host parses the same file fine.
 #[partial]
-def expr_climb_op_rhs_ws (r: ParseResult String) (lhs: ParseTerm) (op: String) (prec: I64) (rassoc: Bool) (min_prec: I64) : ParseResult ParseTerm :=
+def expr_climb_op_rhs_ws (r : ParseResult String) (lhs : ParseTerm) (op : String) (prec : I64) (rassoc : Bool) (min_prec : I64) : ParseResult ParseTerm :=
     match r {
         success rem _ =>
             let next_min : I64 := if rassoc then prec else (prec + 1) in
@@ -7842,7 +7833,7 @@ def expr_climb_op_rhs_ws (r: ParseResult String) (lhs: ParseTerm) (op: String) (
 /// is available -- parsing alone doesn't know what `+`/`==`/a custom
 /// operator ultimately resolves to, only scope-building does.
 #[partial]
-def expr_climb_op_rhs_expr (r: ParseResult ParseTerm) (lhs: ParseTerm) (op: String) (min_prec: I64) : ParseResult ParseTerm :=
+def expr_climb_op_rhs_expr (r : ParseResult ParseTerm) (lhs : ParseTerm) (op : String) (min_prec : I64) : ParseResult ParseTerm :=
     match r {
         success rem rhs =>
             // Spanned from `lhs`'s own start to `rem` in every branch --
@@ -7866,46 +7857,46 @@ def expr_climb_op_rhs_expr (r: ParseResult ParseTerm) (lhs: ParseTerm) (op: Stri
 // ─── Term type expression (like expression but with -> for pi) ─────────
 
 #[partial]
-def type_expression (input: String) : ParseResult ParseTerm :=
+def type_expression (input : String) : ParseResult ParseTerm :=
     type_expr_ws (take_while_byte is_space_byte input) input
 
 #[partial]
-def type_expr_ws (r: ParseResult String) (input: String) : ParseResult ParseTerm :=
+def type_expr_ws (r : ParseResult String) (input : String) : ParseResult ParseTerm :=
     match r {
         success rem _ => type_try_dep (tag "(" (skip_spaces rem)) input,
         fail e => fail e
     }
 
 #[partial]
-def type_try_dep (r: ParseResult String) (input: String) : ParseResult ParseTerm :=
+def type_try_dep (r : ParseResult String) (input : String) : ParseResult ParseTerm :=
     match r {
         success rem _ => type_dep_id (identifier (skip_spaces rem)) input,
         fail _ => type_plain input
     }
 
 #[partial]
-def type_dep_id (r: ParseResult String) (input: String) : ParseResult ParseTerm :=
+def type_dep_id (r : ParseResult String) (input : String) : ParseResult ParseTerm :=
     match r {
         success rem name => type_dep_colon (tag ":" (skip_spaces rem)) input name,
         fail _ => type_plain input
     }
 
 #[partial]
-def type_dep_colon (r: ParseResult String) (input: String) (name: String) : ParseResult ParseTerm :=
+def type_dep_colon (r : ParseResult String) (input : String) (name : String) : ParseResult ParseTerm :=
     match r {
         success rem _ => type_dep_typ (type_expression (skip_docstrings (skip_spaces rem))) input name,
         fail _ => type_plain input
     }
 
 #[partial]
-def type_dep_typ (r: ParseResult ParseTerm) (input: String) (name: String) : ParseResult ParseTerm :=
+def type_dep_typ (r : ParseResult ParseTerm) (input : String) (name : String) : ParseResult ParseTerm :=
     match r {
         success rem typ => type_dep_close (tag ")" (skip_spaces rem)) input name typ,
         fail _ => type_plain input
     }
 
 #[partial]
-def type_dep_close (r: ParseResult String) (input: String) (name: String) (typ: ParseTerm) : ParseResult ParseTerm :=
+def type_dep_close (r : ParseResult String) (input : String) (name : String) (typ : ParseTerm) : ParseResult ParseTerm :=
     match r {
         success rem _ => type_dep_arrow input rem name typ,
         fail _ => type_plain input
@@ -7919,18 +7910,18 @@ def type_dep_close (r: ParseResult String) (input: String) (name: String) (typ: 
 // this change's own AGENTS.md item 30 warns about.
 
 #[partial]
-def type_dep_arrow (input: String) (rem: String) (name: String) (typ: ParseTerm) : ParseResult ParseTerm :=
+def type_dep_arrow (input : String) (rem : String) (name : String) (typ : ParseTerm) : ParseResult ParseTerm :=
     type_dep_arrow_ws (take_while_byte is_space_byte rem) input rem name typ
 
 #[partial]
-def type_dep_arrow_ws (r: ParseResult String) (input: String) (rem: String) (name: String) (typ: ParseTerm) : ParseResult ParseTerm :=
+def type_dep_arrow_ws (r : ParseResult String) (input : String) (rem : String) (name : String) (typ : ParseTerm) : ParseResult ParseTerm :=
     match r {
         success rem2 _ => type_dep_arrow_tag (tag "->" rem2) input rem name typ,
         fail e => fail e
     }
 
 #[partial]
-def type_dep_arrow_tag (r: ParseResult String) (input: String) (rem: String) (name: String) (typ: ParseTerm) : ParseResult ParseTerm :=
+def type_dep_arrow_tag (r : ParseResult String) (input : String) (rem : String) (name : String) (typ : ParseTerm) : ParseResult ParseTerm :=
     match r {
         success rem2 _ => type_dep_body (type_expression (skip_docstrings (skip_spaces rem2))) input name typ,
         // No arrow after `(name : typ)` -- just a parenthesised
@@ -7945,7 +7936,7 @@ def type_dep_arrow_tag (r: ParseResult String) (input: String) (rem: String) (na
 /// over `body`. Dropping it (which this branch did, until review caught it)
 /// makes every use of `name` inside `body` resolve to `sentinel`.
 #[partial]
-def type_dep_body (r: ParseResult ParseTerm) (input: String) (name: String) (typ: ParseTerm) : ParseResult ParseTerm :=
+def type_dep_body (r : ParseResult ParseTerm) (input : String) (name : String) (typ : ParseTerm) : ParseResult ParseTerm :=
     match r {
         success rem body =>
             success rem (pt_at input rem (ParseTermKind.pi (Option.some (Identifier.id name)) typ body)),
@@ -7957,36 +7948,36 @@ def type_dep_body (r: ParseResult ParseTerm) (input: String) (name: String) (typ
 // Parses expression, then checks for non-dependent -> arrow.
 
 #[partial]
-def type_plain (input: String) : ParseResult ParseTerm :=
+def type_plain (input : String) : ParseResult ParseTerm :=
     type_plain_expr (expression input)
 
 #[partial]
-def type_plain_expr (r: ParseResult ParseTerm) : ParseResult ParseTerm :=
+def type_plain_expr (r : ParseResult ParseTerm) : ParseResult ParseTerm :=
     match r {
         success rem lhs => type_check_arrow rem lhs,
         fail e => fail e
     }
 
 #[partial]
-def type_check_arrow (input: String) (lhs: ParseTerm) : ParseResult ParseTerm :=
+def type_check_arrow (input : String) (lhs : ParseTerm) : ParseResult ParseTerm :=
     type_arrow_ws (take_while_byte is_space_byte input) input lhs
 
 #[partial]
-def type_arrow_ws (r: ParseResult String) (input: String) (lhs: ParseTerm) : ParseResult ParseTerm :=
+def type_arrow_ws (r : ParseResult String) (input : String) (lhs : ParseTerm) : ParseResult ParseTerm :=
     match r {
         success rem _ => type_arrow_tag (tag "->" rem) input lhs,
         fail e => fail e
     }
 
 #[partial]
-def type_arrow_tag (r: ParseResult String) (input: String) (lhs: ParseTerm) : ParseResult ParseTerm :=
+def type_arrow_tag (r : ParseResult String) (input : String) (lhs : ParseTerm) : ParseResult ParseTerm :=
     match r {
         success rem _ => type_arrow_rhs lhs (type_expression (skip_docstrings (skip_spaces rem))),
         fail _ => success input lhs
     }
 
 #[partial]
-def type_arrow_rhs (lhs: ParseTerm) (r: ParseResult ParseTerm) : ParseResult ParseTerm :=
+def type_arrow_rhs (lhs : ParseTerm) (r : ParseResult ParseTerm) : ParseResult ParseTerm :=
     match r {
         success rem rhs => success rem (pt_from lhs rem (ParseTermKind.pi Option.none lhs rhs)),
         fail e => fail e
@@ -7996,18 +7987,18 @@ def type_arrow_rhs (lhs: ParseTerm) (r: ParseResult ParseTerm) : ParseResult Par
 
 #[test]
 def test_skip_docstrings_none : Bool :=
-	let rem : String := skip_docstrings "use prelude" in
-	String.beq rem "use prelude"
+    let rem : String := skip_docstrings "use prelude" in
+    String.beq rem "use prelude"
 
 #[test]
 def test_skip_docstrings_one : Bool :=
-	let rem : String := skip_docstrings "/// doc\nuse prelude" in
-	String.beq rem "use prelude"
+    let rem : String := skip_docstrings "/// doc\nuse prelude" in
+    String.beq rem "use prelude"
 
 #[test]
 def test_skip_docstrings_multi : Bool :=
-	let rem : String := skip_docstrings "/// line1\n/// line2\n\ndef x := 1" in
-	String.beq rem "def x := 1"
+    let rem : String := skip_docstrings "/// line1\n/// line2\n\ndef x := 1" in
+    String.beq rem "def x := 1"
 
 /// Regression test for the UTF-8 byte-vs-codepoint stepping bug
 /// (`utf8_char_width`, lang/parser/combinators.mo): a multi-byte
@@ -8019,34 +8010,34 @@ def test_skip_docstrings_multi : Bool :=
 /// blocked first declaration (an em dash in a doc comment before it).
 #[test]
 def test_skip_docstrings_utf8_em_dash : Bool :=
-	let rem : String := skip_docstrings "/// an em dash — right here\ndef x := 1" in
-	String.beq rem "def x := 1"
+    let rem : String := skip_docstrings "/// an em dash — right here\ndef x := 1" in
+    String.beq rem "def x := 1"
 
 /// Same bug, but inside a string literal's plain (non-escaped) content
 /// rather than a comment — exercises `string_body_loop`'s own
 /// `utf8_char_width` stepping (lang/parser/string.mo).
 #[test]
 def test_string_parse_utf8_em_dash : Bool :=
-	match string_parse "\"an em dash — right here\"" {
-		success rem out => String.beq rem "" && term_lit_str_eq out "an em dash — right here",
-		fail _ => false
-	}
+    match string_parse "\"an em dash — right here\"" {
+        success rem out => String.beq rem "" && term_lit_str_eq out "an em dash — right here",
+        fail _ => false
+    }
 
 #[test]
 def test_decls_with_docstring : Bool :=
-	match decls_parser "/// A test declaration\ndef x : I64 := 42" {
-		success rem decl_list =>
-			let rem_stripped : String := skip_spaces rem in
-			String.beq rem_stripped "" && I64.beq (debug_decl_count decl_list) 1,
-		fail _ => false
-	}
+    match decls_parser "/// A test declaration\ndef x : I64 := 42" {
+        success rem decl_list =>
+            let rem_stripped : String := skip_spaces rem in
+            String.beq rem_stripped "" && I64.beq (debug_decl_count decl_list) 1,
+        fail _ => false
+    }
 
 #[test]
 def test_type_implicit_params : Bool :=
-	match type_parser "type Any { any {A : Type} (value : A) }" {
-		success rem decl => String.beq rem "",
-		fail _ => false
-	}
+    match type_parser "type Any { any {A : Type} (value : A) }" {
+        success rem decl => String.beq rem "",
+        fail _ => false
+    }
 
 // ─── `type` universe clauses (W1.4 grammar) ───────────────────────────
 //
@@ -8057,76 +8048,76 @@ def test_type_implicit_params : Bool :=
 
 #[test]
 def test_type_universe_params_and_max_kind : Bool :=
-	match decls_parser "type Sigma {u} {v} (A : Sort u) (B : A -> Sort v) : Sort (max u v) { dpair (fst : A) (snd : B fst) }\ndef after : Type := Bool" {
-		success rem decl_list =>
-			String.beq (skip_spaces rem) "" &&
-			match decl_list {
-				List.cons first rest =>
-					I64.beq (decl_param_count first) 2 &&
-					decl_inductive_has_constructor first "dpair" &&
-					decl_kind_is_max_u_v first &&
-					match rest {
-						List.cons second rest2 =>
-							match second {
-								Decl.def_d _ => I64.beq (List.length rest2) 0,
-								_ => false,
-							},
-						List.empty => false,
-					},
-				List.empty => false,
-			},
-		fail _ => false
-	}
+    match decls_parser "type Sigma {u} {v} (A : Sort u) (B : A -> Sort v) : Sort (max u v) { dpair (fst : A) (snd : B fst) }\ndef after : Type := Bool" {
+        success rem decl_list =>
+            String.beq (skip_spaces rem) "" &&
+            match decl_list {
+                List.cons first rest =>
+                    I64.beq (decl_param_count first) 2 &&
+                    decl_inductive_has_constructor first "dpair" &&
+                    decl_kind_is_max_u_v first &&
+                    match rest {
+                        List.cons second rest2 =>
+                            match second {
+                                Decl.def_d _ => I64.beq (List.length rest2) 0,
+                                _ => false,
+                            },
+                        List.empty => false,
+                    },
+                List.empty => false,
+            },
+        fail _ => false
+    }
 
 /// `{ unit }` is a single-nullary-constructor BODY, not a universe clause:
 /// the clause arm only continues when a param, the kind, or the body can
 /// follow its `}`.
 #[test]
 def test_type_brace_body_is_not_a_universe_clause : Bool :=
-	match decls_parser "type Unit { unit }\ndef after : Type := Bool" {
-		success rem decl_list =>
-			String.beq (skip_spaces rem) "" &&
-			match decl_list {
-				List.cons first rest =>
-					I64.beq (decl_param_count first) 0 &&
-					decl_inductive_has_constructor first "unit" &&
-					I64.beq (List.length rest) 1,
-				List.empty => false,
-			},
-		fail _ => false
-	}
+    match decls_parser "type Unit { unit }\ndef after : Type := Bool" {
+        success rem decl_list =>
+            String.beq (skip_spaces rem) "" &&
+            match decl_list {
+                List.cons first rest =>
+                    I64.beq (decl_param_count first) 0 &&
+                    decl_inductive_has_constructor first "unit" &&
+                    I64.beq (List.length rest) 1,
+                List.empty => false,
+            },
+        fail _ => false
+    }
 
 /// `{a, b}` is a two-constructor body; the comma cannot start a clause.
 #[test]
 def test_type_comma_body_is_not_a_universe_clause : Bool :=
-	match decls_parser "type Two { a, b }" {
-		success rem decl_list =>
-			String.beq (skip_spaces rem) "" &&
-			match decl_list {
-				List.cons first rest =>
-					decl_inductive_has_constructor first "a" &&
-					decl_inductive_has_constructor first "b" &&
-					I64.beq (List.length rest) 0,
-				List.empty => false,
-			},
-		fail _ => false
-	}
+    match decls_parser "type Two { a, b }" {
+        success rem decl_list =>
+            String.beq (skip_spaces rem) "" &&
+            match decl_list {
+                List.cons first rest =>
+                    decl_inductive_has_constructor first "a" &&
+                    decl_inductive_has_constructor first "b" &&
+                    I64.beq (List.length rest) 0,
+                List.empty => false,
+            },
+        fail _ => false
+    }
 
 /// The annotated `{u : Universe}` spelling, followed by a real term param.
 #[test]
 def test_type_universe_clause_annotation_form : Bool :=
-	match decls_parser "type Box {u : Universe} (A : Sort u) : Sort u { mk (a : A) }" {
-		success rem decl_list =>
-			String.beq (skip_spaces rem) "" &&
-			match decl_list {
-				List.cons first rest =>
-					I64.beq (decl_param_count first) 1 &&
-					decl_inductive_has_constructor first "mk" &&
-					I64.beq (List.length rest) 0,
-				List.empty => false,
-			},
-		fail _ => false
-	}
+    match decls_parser "type Box {u : Universe} (A : Sort u) : Sort u { mk (a : A) }" {
+        success rem decl_list =>
+            String.beq (skip_spaces rem) "" &&
+            match decl_list {
+                List.cons first rest =>
+                    I64.beq (decl_param_count first) 1 &&
+                    decl_inductive_has_constructor first "mk" &&
+                    I64.beq (List.length rest) 0,
+                List.empty => false,
+            },
+        fail _ => false
+    }
 
 /// A GADT-style body whose constructor is followed by `:` must NOT be
 /// taken for a clause: the annotation is required to be `Universe`, and
@@ -8134,179 +8125,179 @@ def test_type_universe_clause_annotation_form : Bool :=
 /// is exactly this shape.
 #[test]
 def test_type_gadt_body_is_not_a_universe_clause : Bool :=
-	match decls_parser "type Eq2 (A : Sort 1) (a : A) (b : A) : Prop { refl : Eq2 A a a }\ndef after : Type := Bool" {
-		success rem decl_list =>
-			String.beq (skip_spaces rem) "" &&
-			match decl_list {
-				List.cons first rest =>
-					decl_inductive_has_constructor first "refl" &&
-					I64.beq (List.length rest) 1,
-				List.empty => false,
-			},
-		fail _ => false
-	}
+    match decls_parser "type Eq2 (A : Sort 1) (a : A) (b : A) : Prop { refl : Eq2 A a a }\ndef after : Type := Bool" {
+        success rem decl_list =>
+            String.beq (skip_spaces rem) "" &&
+            match decl_list {
+                List.cons first rest =>
+                    decl_inductive_has_constructor first "refl" &&
+                    I64.beq (List.length rest) 1,
+                List.empty => false,
+            },
+        fail _ => false
+    }
 
 /// A clause directly followed by the `: Kind`, with no term param in
 /// between: the continuation may also be the kind.
 #[test]
 def test_type_universe_clause_before_the_kind : Bool :=
-	match decls_parser "type Box {u} : Sort u { mk }" {
-		success rem decl_list =>
-			String.beq (skip_spaces rem) "" &&
-			match decl_list {
-				List.cons first rest =>
-					decl_kind_level_is_var first "u" &&
-					decl_inductive_has_constructor first "mk" &&
-					I64.beq (List.length rest) 0,
-				List.empty => false,
-			},
-		fail _ => false
-	}
+    match decls_parser "type Box {u} : Sort u { mk }" {
+        success rem decl_list =>
+            String.beq (skip_spaces rem) "" &&
+            match decl_list {
+                List.cons first rest =>
+                    decl_kind_level_is_var first "u" &&
+                    decl_inductive_has_constructor first "mk" &&
+                    I64.beq (List.length rest) 0,
+                List.empty => false,
+            },
+        fail _ => false
+    }
 
 /// A comment between the clause and the next param must not defeat the
 /// continuation check, and must be consumed before `type_params_loop`
 /// (whose own `skip_spaces` leaves comments alone).
 #[test]
 def test_type_universe_clause_before_a_comment : Bool :=
-	match decls_parser "type Box {u}\n// between\n(A : Sort u) : Sort u { mk (a : A) }" {
-		success rem decl_list =>
-			String.beq (skip_spaces rem) "" &&
-			match decl_list {
-				List.cons first rest =>
-					I64.beq (decl_param_count first) 1 &&
-					decl_inductive_has_constructor first "mk" &&
-					I64.beq (List.length rest) 0,
-				List.empty => false,
-			},
-		fail _ => false
-	}
+    match decls_parser "type Box {u}\n// between\n(A : Sort u) : Sort u { mk (a : A) }" {
+        success rem decl_list =>
+            String.beq (skip_spaces rem) "" &&
+            match decl_list {
+                List.cons first rest =>
+                    I64.beq (decl_param_count first) 1 &&
+                    decl_inductive_has_constructor first "mk" &&
+                    I64.beq (List.length rest) 0,
+                List.empty => false,
+            },
+        fail _ => false
+    }
 
 /// `max` over numerals as well as variables.
 #[test]
 def test_sort_max_of_numerals_parses : Bool :=
-	match expression "Sort (max 1 2)" {
-		success rem out =>
-			String.beq rem "" &&
-			match out.kind {
-				ParseTermKind.sort level => match level {
-					SortLevel.max left right =>
-						match left {
-							SortLevel.concrete a => I64.beq a 1,
-							_ => false,
-						} &&
-						match right {
-							SortLevel.concrete b => I64.beq b 2,
-							_ => false,
-						},
-					_ => false,
-				},
-				_ => false,
-			},
-		fail _ => false
-	}
+    match expression "Sort (max 1 2)" {
+        success rem out =>
+            String.beq rem "" &&
+            match out.kind {
+                ParseTermKind.sort level => match level {
+                    SortLevel.max left right =>
+                        match left {
+                            SortLevel.concrete a => I64.beq a 1,
+                            _ => false,
+                        } &&
+                        match right {
+                            SortLevel.concrete b => I64.beq b 2,
+                            _ => false,
+                        },
+                    _ => false,
+                },
+                _ => false,
+            },
+        fail _ => false
+    }
 
 /// `{u : Universe}` on a `def` is DOCUMENTATION, exactly like
 /// `{A : Type}`: the clause is dropped and `u` survives only through the
 /// `(A : Sort u)` parameter, whose sort `wrap_level_forall` generalizes.
 #[test]
 def test_def_universe_clause_is_dropped : Bool :=
-	match decls_parser "def id {u : Universe} (A : Sort u) (x : A) : A := x" {
-		success rem decl_list =>
-			String.beq (skip_spaces rem) "" &&
-			match decl_list {
-				List.cons first rest =>
-					I64.beq (decl_param_count first) 2 &&
-					def_first_domain_is_level_var first "u" &&
-					I64.beq (List.length rest) 0,
-				List.empty => false,
-			},
-		fail _ => false
-	}
+    match decls_parser "def id {u : Universe} (A : Sort u) (x : A) : A := x" {
+        success rem decl_list =>
+            String.beq (skip_spaces rem) "" &&
+            match decl_list {
+                List.cons first rest =>
+                    I64.beq (decl_param_count first) 2 &&
+                    def_first_domain_is_level_var first "u" &&
+                    I64.beq (List.length rest) 0,
+                List.empty => false,
+            },
+        fail _ => false
+    }
 
 #[partial]
 def decl_param_count (d : Decl) : I64 :=
-	match d {
-		Decl.inductive_d ind => match ind {
-			Inductive.mk _name params _typ _cons _attrs _vis => List.length params,
-		},
-		Decl.def_d df => match df {
-			Def.mk {
-				name := _n, typ := _t, term := _tm, constraints := _c,
-				attrs := _a, vis := _v, params := ps,
-			} => List.length ps,
-		},
-		_ => 0,
-	}
+    match d {
+        Decl.inductive_d ind => match ind {
+            Inductive.mk _name params _typ _cons _attrs _vis => List.length params,
+        },
+        Decl.def_d df => match df {
+            Def.mk {
+                name := _n, typ := _t, term := _tm, constraints := _c,
+                attrs := _a, vis := _v, params := ps,
+            } => List.length ps,
+        },
+        _ => 0,
+    }
 
 #[partial]
 def decl_inductive_kind_level (d : Decl) : Option SortLevel :=
-	match d {
-		Decl.inductive_d ind => match ind {
-			Inductive.mk _name _params typ _cons _attrs _vis =>
-				match typ {
-					Term.sort level => Option.some level,
-					_ => Option.none,
-				},
-		},
-		_ => Option.none,
-	}
+    match d {
+        Decl.inductive_d ind => match ind {
+            Inductive.mk _name _params typ _cons _attrs _vis =>
+                match typ {
+                    Term.sort level => Option.some level,
+                    _ => Option.none,
+                },
+        },
+        _ => Option.none,
+    }
 
 #[partial]
 def decl_kind_is_max_u_v (d : Decl) : Bool :=
-	match decl_inductive_kind_level d {
-		Option.some level => level_is_max_u_v level,
-		Option.none => false,
-	}
+    match decl_inductive_kind_level d {
+        Option.some level => level_is_max_u_v level,
+        Option.none => false,
+    }
 
 #[partial]
 def decl_kind_level_is_var (d : Decl) (want : String) : Bool :=
-	match decl_inductive_kind_level d {
-		Option.some level => match level {
-			SortLevel.var n => Similar.similar n (Identifier.id want),
-			_ => false,
-		},
-		Option.none => false,
-	}
+    match decl_inductive_kind_level d {
+        Option.some level => match level {
+            SortLevel.var n => Similar.similar n (Identifier.id want),
+            _ => false,
+        },
+        Option.none => false,
+    }
 
 #[partial]
 def decl_inductive_has_constructor (d : Decl) (want : String) : Bool :=
-	match d {
-		Decl.inductive_d ind => match ind {
-			Inductive.mk _name _params _typ cons _attrs _vis => ctor_named cons want,
-		},
-		_ => false,
-	}
+    match d {
+        Decl.inductive_d ind => match ind {
+            Inductive.mk _name _params _typ cons _attrs _vis => ctor_named cons want,
+        },
+        _ => false,
+    }
 
 #[partial]
 def ctor_named (cons : List InductConstructor) (want : String) : Bool :=
-	match cons {
-		List.empty => false,
-		List.cons c rest =>
-			match c {
-				InductConstructor.mk n _params _typ => String.beq (show_name_path n) want,
-			} || ctor_named rest want,
-	}
+    match cons {
+        List.empty => false,
+        List.cons c rest =>
+            match c {
+                InductConstructor.mk n _params _typ => String.beq (show_name_path n) want,
+            } || ctor_named rest want,
+    }
 
 #[partial]
 def def_first_domain_is_level_var (d : Decl) (want : String) : Bool :=
-	match d {
-		Decl.def_d df => match df {
-			Def.mk {
-				name := _n, typ, term := _tm, constraints := _c,
-				attrs := _a, vis := _v, params := _p,
-			} => match typ {
-				Term.pi _b dom _cod => match dom {
-					Term.sort level => match level {
-						SortLevel.var name => Similar.similar name (Identifier.id want),
-						_ => false,
-					},
-					_ => false,
-				},
-				_ => false,
-			},
-		},
-		_ => false,
-	}
+    match d {
+        Decl.def_d df => match df {
+            Def.mk {
+                name := _n, typ, term := _tm, constraints := _c,
+                attrs := _a, vis := _v, params := _p,
+            } => match typ {
+                Term.pi _b dom _cod => match dom {
+                    Term.sort level => match level {
+                        SortLevel.var name => Similar.similar name (Identifier.id want),
+                        _ => false,
+                    },
+                    _ => false,
+                },
+                _ => false,
+            },
+        },
+        _ => false,
+    }
 
 /// Regression test for `type_cons_group_more_names`: multiple
 /// constructor-field names sharing one type in a single group
@@ -8316,10 +8307,10 @@ def def_first_domain_is_level_var (d : Decl) (want : String) : Bool :=
 /// declaration on the second name.
 #[test]
 def test_type_constructor_multi_name_group : Bool :=
-	match type_parser "type Buckets3 { buckets (b0 b1 b2 : I64) }" {
-		success rem decl => String.beq rem "",
-		fail _ => false
-	}
+    match type_parser "type Buckets3 { buckets (b0 b1 b2 : I64) }" {
+        success rem decl => String.beq rem "",
+        fail _ => false
+    }
 
 /// Regression test for `type_cons_one_group_content`'s missing
 /// `skip_spaces`: a newline right after a constructor field group's
@@ -8330,10 +8321,10 @@ def test_type_constructor_multi_name_group : Bool :=
 /// single-line test.
 #[test]
 def test_type_constructor_group_leading_newline : Bool :=
-	match type_parser "type Buckets3 { buckets (\n  b0 b1 b2 : I64) }" {
-		success rem decl => String.beq rem "",
-		fail _ => false
-	}
+    match type_parser "type Buckets3 { buckets (\n  b0 b1 b2 : I64) }" {
+        success rem decl => String.beq rem "",
+        fail _ => false
+    }
 
 /// Regression test for `type_cons_group_colon`'s backtrack-to-bare-type
 /// fallback: `map (Buckets16 K V)` — a bare/unnamed field whose type is
@@ -8344,17 +8335,17 @@ def test_type_constructor_group_leading_newline : Bool :=
 /// usage: `std/map.mo`'s `HashMap` constructor.
 #[test]
 def test_type_constructor_bare_multi_word_type : Bool :=
-	match type_parser "type HashMap K V { map (Buckets16 K V) }" {
-		success rem decl => String.beq rem "",
-		fail _ => false
-	}
+    match type_parser "type HashMap K V { map (Buckets16 K V) }" {
+        success rem decl => String.beq rem "",
+        fail _ => false
+    }
 
 #[test]
 def test_type_implicit_no_parens : Bool :=
-	match type_parser "type All { mk {A : Type} (val : A) }" {
-		success rem decl => String.beq rem "",
-		fail _ => false
-	}
+    match type_parser "type All { mk {A : Type} (val : A) }" {
+        success rem decl => String.beq rem "",
+        fail _ => false
+    }
 
 // --- def-level implicit param clause tests ---
 // `{A: Type}`'s content is intentionally discarded (see
@@ -8364,53 +8355,53 @@ def test_type_implicit_no_parens : Bool :=
 
 #[test]
 def test_def_implicit_single_name : Bool :=
-	match def_parser "def id {A : Type} (x : A) : A := x" {
-		success rem out => match out.kind {
-			def_d d => match d {
-				ParseDef.mk {name := _name, typ := _typ, term, constraints := _constraints, attrs := _attrs, vis := _vis, ..} => match term.kind {
-					ParseTermKind.lam dbg _ptyp _body => Similar.similar dbg (Identifier.id "x"),
-					_ => false,
-				}
-			},
-			_ => false,
-		},
-		fail _ => false
-	}
+    match def_parser "def id {A : Type} (x : A) : A := x" {
+        success rem out => match out.kind {
+            def_d d => match d {
+                ParseDef.mk {name := _name, typ := _typ, term, constraints := _constraints, attrs := _attrs, vis := _vis, ..} => match term.kind {
+                    ParseTermKind.lam dbg _ptyp _body => Similar.similar dbg (Identifier.id "x"),
+                    _ => false,
+                }
+            },
+            _ => false,
+        },
+        fail _ => false
+    }
 
 #[test]
 def test_def_implicit_multi_name : Bool :=
-	match def_parser "def create_node {K V : Type} (key : K) (val : V) : K := key" {
-		success rem out => match out.kind {
-			def_d d => match d {
-				ParseDef.mk {name := _name, typ := _typ, term, constraints := _constraints, attrs := _attrs, vis := _vis, ..} =>
-					// Exactly the two EXPLICIT params should have made it
-					// through as lambdas — {K V : Type}'s two names must
-					// not have leaked in as extra bindings.
-					match term.kind {
-						ParseTermKind.lam dbg1 _ inner => outer_binding_ok dbg1 inner,
-						_ => false,
-					}
-			},
-			_ => false,
-		},
-		fail _ => false
-	}
+    match def_parser "def create_node {K V : Type} (key : K) (val : V) : K := key" {
+        success rem out => match out.kind {
+            def_d d => match d {
+                ParseDef.mk {name := _name, typ := _typ, term, constraints := _constraints, attrs := _attrs, vis := _vis, ..} =>
+                    // Exactly the two EXPLICIT params should have made it
+                    // through as lambdas — {K V : Type}'s two names must
+                    // not have leaked in as extra bindings.
+                    match term.kind {
+                        ParseTermKind.lam dbg1 _ inner => outer_binding_ok dbg1 inner,
+                        _ => false,
+                    }
+            },
+            _ => false,
+        },
+        fail _ => false
+    }
 
 #[partial]
 def outer_binding_ok (dbg1 : Identifier) (inner : ParseTerm) : Bool :=
-	Similar.similar dbg1 (Identifier.id "key") && inner_binding_ok inner
+    Similar.similar dbg1 (Identifier.id "key") && inner_binding_ok inner
 
 #[partial]
 def inner_binding_ok (t : ParseTerm) : Bool := match t.kind {
-	ParseTermKind.lam dbg2 _ body =>
-		Similar.similar dbg2 (Identifier.id "val") && is_body_non_lambda body,
-	_ => false,
+    ParseTermKind.lam dbg2 _ body =>
+        Similar.similar dbg2 (Identifier.id "val") && is_body_non_lambda body,
+    _ => false,
 }
 
 #[partial]
 def is_body_non_lambda (t : ParseTerm) : Bool := match t.kind {
-	ParseTermKind.lam _ _ _ => false,
-	_ => true,
+    ParseTermKind.lam _ _ _ => false,
+    _ => true,
 }
 
 // --- Def-param brace-declaration convenience tests (Phase 7 of
@@ -8418,79 +8409,79 @@ def is_body_non_lambda (t : ParseTerm) : Bool := match t.kind {
 
 #[test]
 def test_def_params_brace_block_matches_paren_form : Bool :=
-	match def_parser "def scale {factor : I64, p : I64} : I64 := factor * p" {
-		success rem out => match out.kind {
-			def_d d => match d {
-				ParseDef.mk {name := _name, typ := _typ, term, constraints := _constraints, attrs := _attrs, vis := _vis, ..} =>
-					match term.kind {
-						ParseTermKind.lam dbg1 _ inner =>
-							Similar.similar dbg1 (Identifier.id "factor")
-								&& inner_binding_ok_named inner "p",
-						_ => false,
-					}
-			},
-			_ => false,
-		},
-		fail _ => false
-	}
+    match def_parser "def scale {factor : I64, p : I64} : I64 := factor * p" {
+        success rem out => match out.kind {
+            def_d d => match d {
+                ParseDef.mk {name := _name, typ := _typ, term, constraints := _constraints, attrs := _attrs, vis := _vis, ..} =>
+                    match term.kind {
+                        ParseTermKind.lam dbg1 _ inner =>
+                            Similar.similar dbg1 (Identifier.id "factor")
+                                && inner_binding_ok_named inner "p",
+                        _ => false,
+                    }
+            },
+            _ => false,
+        },
+        fail _ => false
+    }
 
 #[partial]
 def inner_binding_ok_named (t : ParseTerm) (expected_name : String) : Bool := match t.kind {
-	ParseTermKind.lam dbg2 _ body =>
-		Similar.similar dbg2 (Identifier.id expected_name) && is_body_non_lambda body,
-	_ => false,
+    ParseTermKind.lam dbg2 _ body =>
+        Similar.similar dbg2 (Identifier.id expected_name) && is_body_non_lambda body,
+    _ => false,
 }
 
 #[test]
 def test_def_params_brace_block_single_field_still_implicit : Bool :=
-	// `{ x : T }` (one comma-less field) still means an implicit/forall
-	// param, unaffected by this plan -- `def_params_try_brace_block` is
-	// structurally unreachable here (`def_implicit_close` only falls
-	// through to it on a genuine `}`-expected failure, which a comma-less
-	// clause never produces).
-	match def_parser "def f {x : Type} (y : x) : x := y" {
-		success rem out => match out.kind {
-			def_d d => match d {
-				ParseDef.mk {name := _name, typ := _typ, term, constraints := _constraints, attrs := _attrs, vis := _vis, ..} =>
-					match term.kind {
-						ParseTermKind.lam dbg _ body =>
-							Similar.similar dbg (Identifier.id "y") && is_body_non_lambda body,
-						_ => false,
-					}
-			},
-			_ => false,
-		},
-		fail _ => false
-	}
+    // `{ x : T }` (one comma-less field) still means an implicit/forall
+    // param, unaffected by this plan -- `def_params_try_brace_block` is
+    // structurally unreachable here (`def_implicit_close` only falls
+    // through to it on a genuine `}`-expected failure, which a comma-less
+    // clause never produces).
+    match def_parser "def f {x : Type} (y : x) : x := y" {
+        success rem out => match out.kind {
+            def_d d => match d {
+                ParseDef.mk {name := _name, typ := _typ, term, constraints := _constraints, attrs := _attrs, vis := _vis, ..} =>
+                    match term.kind {
+                        ParseTermKind.lam dbg _ body =>
+                            Similar.similar dbg (Identifier.id "y") && is_body_non_lambda body,
+                        _ => false,
+                    }
+            },
+            _ => false,
+        },
+        fail _ => false
+    }
 
 #[test]
 def test_def_params_implicit_multi_name_form_still_unaffected : Bool :=
-	// `{K V : Type}` (existing test_def_implicit_multi_name coverage,
-	// re-asserted here specifically as this phase's own regression pin)
-	// must still parse as an implicit clause, not attempt (and fail on,
-	// since it has no commas) the new brace-block form.
-	match def_parser "def create_node {K V : Type} (key : K) (val : V) : K := key" {
-		success rem out => match out.kind {
-			def_d d => match d {
-				ParseDef.mk {name := _name, typ := _typ, term, constraints := _constraints, attrs := _attrs, vis := _vis, ..} =>
-					match term.kind {
-						ParseTermKind.lam dbg1 _ inner => outer_binding_ok dbg1 inner,
-						_ => false,
-					}
-			},
-			_ => false,
-		},
-		fail _ => false
-	}
+    // `{K V : Type}` (existing test_def_implicit_multi_name coverage,
+    // re-asserted here specifically as this phase's own regression pin)
+    // must still parse as an implicit clause, not attempt (and fail on,
+    // since it has no commas) the new brace-block form.
+    match def_parser "def create_node {K V : Type} (key : K) (val : V) : K := key" {
+        success rem out => match out.kind {
+            def_d d => match d {
+                ParseDef.mk {name := _name, typ := _typ, term, constraints := _constraints, attrs := _attrs, vis := _vis, ..} =>
+                    match term.kind {
+                        ParseTermKind.lam dbg1 _ inner => outer_binding_ok dbg1 inner,
+                        _ => false,
+                    }
+            },
+            _ => false,
+        },
+        fail _ => false
+    }
 
 #[test]
 def test_def_params_brace_block_default_now_accepted : Bool :=
-	// `:=` defaults in the brace-block form are now accepted (gap §5):
-	// parsed and stored on ParseParam.default, matching the Rust host.
-	match def_parser "def scale {factor : I64 := 1, p : I64} : I64 := factor * p" {
-		success rem _ => String.beq rem "",
-		fail _ => false
-	}
+    // `:=` defaults in the brace-block form are now accepted (gap §5):
+    // parsed and stored on ParseParam.default, matching the Rust host.
+    match def_parser "def scale {factor : I64 := 1, p : I64} : I64 := factor * p" {
+        success rem _ => String.beq rem "",
+        fail _ => false
+    }
 
 // -------------------------------------------------------------------
 // Phase 5 of `plans/implementations/struct-field-destructuring.md`:
@@ -8501,186 +8492,186 @@ def test_def_params_brace_block_default_now_accepted : Bool :=
 
 #[partial]
 def params_similar (a : List Param) (b : List Param) : Bool :=
-	match a {
-		List.empty => match b { List.empty => true, List.cons _ _ => false },
-		List.cons pa ra =>
-			match b {
-				List.empty => false,
-				List.cons pb rb => Similar.similar pa pb && params_similar ra rb,
-			}
-	}
+    match a {
+        List.empty => match b { List.empty => true, List.cons _ _ => false },
+        List.cons pa ra =>
+            match b {
+                List.empty => false,
+                List.cons pb rb => Similar.similar pa pb && params_similar ra rb,
+            }
+    }
 
 #[partial]
 def cons_list_params_similar (a : List InductConstructor) (b : List InductConstructor) : Bool :=
-	match a {
-		List.empty => match b { List.empty => true, List.cons _ _ => false },
-		List.cons ca ra =>
-			match b {
-				List.empty => false,
-				List.cons cb rb =>
-					match ca {
-						InductConstructor.mk _ pa _ =>
-							match cb { InductConstructor.mk _ pb _ => params_similar pa pb }
-					} && cons_list_params_similar ra rb,
-			}
-	}
+    match a {
+        List.empty => match b { List.empty => true, List.cons _ _ => false },
+        List.cons ca ra =>
+            match b {
+                List.empty => false,
+                List.cons cb rb =>
+                    match ca {
+                        InductConstructor.mk _ pa _ =>
+                            match cb { InductConstructor.mk _ pb _ => params_similar pa pb }
+                    } && cons_list_params_similar ra rb,
+            }
+    }
 
 #[partial]
 def decl_cons_params_similar (a : Decl) (b : Decl) : Bool :=
-	match a {
-		Decl.inductive_d inda =>
-			match inda {
-				Inductive.mk _ _ _ consa _ _ =>
-					match b {
-						Decl.inductive_d indb =>
-							match indb { Inductive.mk _ _ _ consb _ _ => cons_list_params_similar consa consb },
-						_ => false,
-					}
-			},
-		_ => false,
-	}
+    match a {
+        Decl.inductive_d inda =>
+            match inda {
+                Inductive.mk _ _ _ consa _ _ =>
+                    match b {
+                        Decl.inductive_d indb =>
+                            match indb { Inductive.mk _ _ _ consb _ _ => cons_list_params_similar consa consb },
+                        _ => false,
+                    }
+            },
+        _ => false,
+    }
 
 #[test]
 def test_type_cons_brace_form_matches_paren_form : Bool :=
-	// Both constructors need >= 2 fields: a single-field, comma-less
-	// brace group is structurally identical to this constructor's own
-	// per-constructor implicit type-param clause and is consumed there
-	// FIRST -- see `test_type_cons_brace_form_single_field_still_implicit`
-	// below (same boundary case `core/`'s own Phase 0 has).
-	match type_parser "type Shape { circle { radius : F64, border : Bool }, rectangle { width : F64, height : F64 }, }" {
-		success _ brace_out =>
-			match type_parser "type Shape { circle (radius : F64) (border : Bool), rectangle (width : F64) (height : F64), }" {
-				success _ paren_out => decl_cons_params_similar (lower_parse_decl lower_ctx_bare brace_out) (lower_parse_decl lower_ctx_bare paren_out),
-				fail _ => false,
-			},
-		fail _ => false,
-	}
+    // Both constructors need >= 2 fields: a single-field, comma-less
+    // brace group is structurally identical to this constructor's own
+    // per-constructor implicit type-param clause and is consumed there
+    // FIRST -- see `test_type_cons_brace_form_single_field_still_implicit`
+    // below (same boundary case `core/`'s own Phase 0 has).
+    match type_parser "type Shape { circle { radius : F64, border : Bool }, rectangle { width : F64, height : F64 }, }" {
+        success _ brace_out =>
+            match type_parser "type Shape { circle (radius : F64) (border : Bool), rectangle (width : F64) (height : F64), }" {
+                success _ paren_out => decl_cons_params_similar (lower_parse_decl lower_ctx_bare brace_out) (lower_parse_decl lower_ctx_bare paren_out),
+                fail _ => false,
+            },
+        fail _ => false,
+    }
 
 #[test]
 def test_type_cons_brace_form_multiplicity_prefix : Bool :=
-	match type_parser "type Wrapper { wrap { !val : String, tag : String }, }" {
-		success _ out =>
-			match out.kind {
-				ParseDeclKind.inductive_d ind =>
-					match ind {
-						ParseInductive.mk _ _ _ cons _ _ =>
-							match cons {
-								List.cons c _ =>
-									match c {
-										ParseInductConstructor.mk _ params _ =>
-											match params {
-												List.cons p _ =>
-													match p { ParseParam.mk _ _ mult _ _ => match mult { Multiplicity.linear => true, _ => false } },
-												List.empty => false,
-											}
-									},
-								List.empty => false,
-							}
-					},
-				_ => false,
-			},
-		fail _ => false,
-	}
+    match type_parser "type Wrapper { wrap { !val : String, tag : String }, }" {
+        success _ out =>
+            match out.kind {
+                ParseDeclKind.inductive_d ind =>
+                    match ind {
+                        ParseInductive.mk _ _ _ cons _ _ =>
+                            match cons {
+                                List.cons c _ =>
+                                    match c {
+                                        ParseInductConstructor.mk _ params _ =>
+                                            match params {
+                                                List.cons p _ =>
+                                                    match p { ParseParam.mk _ _ mult _ _ => match mult { Multiplicity.linear => true, _ => false } },
+                                                List.empty => false,
+                                            }
+                                    },
+                                List.empty => false,
+                            }
+                    },
+                _ => false,
+            },
+        fail _ => false,
+    }
 
 #[test]
 def test_type_cons_brace_form_rejects_default_value : Bool :=
-	// Single field but WITH a default -- disambiguates away from the
-	// implicit-clause grammar (no `:=` support there either), so this
-	// must be rejected by `type_cons_brace_to_constructor`, not silently
-	// swallowed as a discarded implicit clause.
-	match type_parser "type Shape { circle { radius : F64 := 1.0 }, }" {
-		success _ _ => false,
-		fail _ => true,
-	}
+    // Single field but WITH a default -- disambiguates away from the
+    // implicit-clause grammar (no `:=` support there either), so this
+    // must be rejected by `type_cons_brace_to_constructor`, not silently
+    // swallowed as a discarded implicit clause.
+    match type_parser "type Shape { circle { radius : F64 := 1.0 }, }" {
+        success _ _ => false,
+        fail _ => true,
+    }
 
 #[test]
 def test_type_cons_brace_form_single_field_still_implicit : Bool :=
-	// A single, comma-less, default-less field is consumed as this
-	// constructor's own per-constructor implicit type-param clause, same
-	// boundary case `core/`'s own Phase 0 has for `constructor_parser`'s
-	// `implicit_params` -- the constructor ends up with ZERO real params
-	// from this clause (matching `type_cons_implicit`'s existing
-	// behavior), not one, since this plan's brace-field form is never
-	// reached for it.
-	match type_parser "type Wrapper { wrap { val : String }, }" {
-		success _ out =>
-			match out.kind {
-				ParseDeclKind.inductive_d ind =>
-					match ind {
-						ParseInductive.mk _ _ _ cons _ _ =>
-							match cons {
-								List.cons c _ =>
-									match c { ParseInductConstructor.mk _ params _ => I64.beq (List.length params) 0 },
-								List.empty => false,
-							}
-					},
-				_ => false,
-			},
-		fail _ => false,
-	}
+    // A single, comma-less, default-less field is consumed as this
+    // constructor's own per-constructor implicit type-param clause, same
+    // boundary case `core/`'s own Phase 0 has for `constructor_parser`'s
+    // `implicit_params` -- the constructor ends up with ZERO real params
+    // from this clause (matching `type_cons_implicit`'s existing
+    // behavior), not one, since this plan's brace-field form is never
+    // reached for it.
+    match type_parser "type Wrapper { wrap { val : String }, }" {
+        success _ out =>
+            match out.kind {
+                ParseDeclKind.inductive_d ind =>
+                    match ind {
+                        ParseInductive.mk _ _ _ cons _ _ =>
+                            match cons {
+                                List.cons c _ =>
+                                    match c { ParseInductConstructor.mk _ params _ => I64.beq (List.length params) 0 },
+                                List.empty => false,
+                            }
+                    },
+                _ => false,
+            },
+        fail _ => false,
+    }
 
 #[test]
 def test_type_cons_paren_form_still_parses_unchanged : Bool :=
-	match type_parser "type Pair A B { pair (first : A) (second : B), }" {
-		success _ out =>
-			match out.kind {
-				ParseDeclKind.inductive_d ind =>
-					match ind {
-						ParseInductive.mk _ _ _ cons _ _ =>
-							match cons {
-								List.cons c _ =>
-									match c { ParseInductConstructor.mk _ params _ => I64.beq (List.length params) 2 },
-								List.empty => false,
-							}
-					},
-				_ => false,
-			},
-		fail _ => false,
-	}
+    match type_parser "type Pair A B { pair (first : A) (second : B), }" {
+        success _ out =>
+            match out.kind {
+                ParseDeclKind.inductive_d ind =>
+                    match ind {
+                        ParseInductive.mk _ _ _ cons _ _ =>
+                            match cons {
+                                List.cons c _ =>
+                                    match c { ParseInductConstructor.mk _ params _ => I64.beq (List.length params) 2 },
+                                List.empty => false,
+                            }
+                    },
+                _ => false,
+            },
+        fail _ => false,
+    }
 
 // --- TypeConstraint parsing tests ---
 
 #[test]
 def test_type_constraint_one_simple : Bool :=
-	match type_constraint_one "Functor F" {
-		success rem _ => String.beq rem "",
-		fail _ => false
-	}
+    match type_constraint_one "Functor F" {
+        success rem _ => String.beq rem "",
+        fail _ => false
+    }
 
 #[test]
 def test_type_constraint_one_two_vars : Bool :=
-	match type_constraint_one "HAdd A A A" {
-		success rem _ => String.beq rem "",
-		fail _ => false
-	}
+    match type_constraint_one "HAdd A A A" {
+        success rem _ => String.beq rem "",
+        fail _ => false
+    }
 
 #[test]
 def test_type_constraint_one_no_vars : Bool :=
-	match type_constraint_one "Show" {
-		success rem _ => String.beq rem "",
-		fail _ => false
-	}
+    match type_constraint_one "Show" {
+        success rem _ => String.beq rem "",
+        fail _ => false
+    }
 
 #[test]
 def test_type_constraint_list_single : Bool :=
-	match type_constraint_list "Functor F" {
-		success rem _ => String.beq rem "",
-		fail _ => false
-	}
+    match type_constraint_list "Functor F" {
+        success rem _ => String.beq rem "",
+        fail _ => false
+    }
 
 #[test]
 def test_type_constraint_list_multi : Bool :=
-	match type_constraint_list "Functor F, Applicative M" {
-		success rem _ => String.beq rem "",
-		fail _ => false
-	}
+    match type_constraint_list "Functor F, Applicative M" {
+        success rem _ => String.beq rem "",
+        fail _ => false
+    }
 
 #[test]
 def test_type_constraint_list_empty : Bool :=
-	match type_constraint_list "" {
-		success rem _ => String.beq rem "",
-		fail _ => false
-	}
+    match type_constraint_list "" {
+        success rem _ => String.beq rem "",
+        fail _ => false
+    }
 
 /// Strengthened beyond a bare `success` check: `class_close` used to
 /// hardcode an empty constraint list regardless of what was actually
@@ -8688,49 +8679,49 @@ def test_type_constraint_list_empty : Bool :=
 /// `success`/`rem == ""` couldn't have caught that.
 #[test]
 def test_class_with_constraints : Bool :=
-	match class_parser "class [Functor F] Applicative F { def pure (a : A) : F A }" {
-		success rem out =>
-			String.beq rem "" && (match out.kind {
-				class_d c => class_has_one_functor_f_constraint c,
-				_ => false
-			}),
-		fail _ => false
-	}
+    match class_parser "class [Functor F] Applicative F { def pure (a : A) : F A }" {
+        success rem out =>
+            String.beq rem "" && (match out.kind {
+                class_d c => class_has_one_functor_f_constraint c,
+                _ => false
+            }),
+        fail _ => false
+    }
 
 #[partial]
 def class_has_one_functor_f_constraint (c : ParseClass) : Bool :=
-	match c {
-		ParseClass.mk _name _params constraints _methods _vis _ =>
-			match constraints {
-				List.cons tc rest => constraint_is_functor_f tc && list_is_empty_tc rest,
-				List.empty => false
-			}
-	}
+    match c {
+        ParseClass.mk _name _params constraints _methods _vis _ =>
+            match constraints {
+                List.cons tc rest => constraint_is_functor_f tc && list_is_empty_tc rest,
+                List.empty => false
+            }
+    }
 
 #[partial]
 def constraint_is_functor_f (tc : TypeConstraint) : Bool :=
-	match tc {
-		TypeConstraint.mk cls vars =>
-			Similar.similar cls (NamePath.mk (List.cons (Identifier.id "Functor") List.empty))
-				&& (match vars {
-					List.cons v _ => Similar.similar v (Identifier.id "F"),
-					List.empty => false
-				})
-	}
+    match tc {
+        TypeConstraint.mk cls vars =>
+            Similar.similar cls (NamePath.mk (List.cons (Identifier.id "Functor") List.empty))
+                && (match vars {
+                    List.cons v _ => Similar.similar v (Identifier.id "F"),
+                    List.empty => false
+                })
+    }
 
 #[partial]
 def list_is_empty_tc (cs : List TypeConstraint) : Bool :=
-	match cs {
-		List.empty => true,
-		List.cons _ _ => false
-	}
+    match cs {
+        List.empty => true,
+        List.cons _ _ => false
+    }
 
 #[test]
 def test_instance_with_constraints : Bool :=
-  match instance_parser "instance [Show A] Show A { def m := a }" {
-    success rem _ => String.beq rem "",
-    fail _ => false
-  }
+    match instance_parser "instance [Show A] Show A { def m := a }" {
+        success rem _ => String.beq rem "",
+        fail _ => false
+    }
 
 /// Regression test for `skip_one_attr`: an attributed instance method
 /// (`#[terminating] def ... := ...`) — previously broke the ENTIRE
@@ -8740,88 +8731,88 @@ def test_instance_with_constraints : Bool :=
 /// #[terminating] def insert ... }`.
 #[test]
 def test_instance_method_with_attribute : Bool :=
-  match instance_parser "instance Show A { #[terminating] def m := a }" {
-    success rem _ => String.beq rem "",
-    fail _ => false
-  }
+    match instance_parser "instance Show A { #[terminating] def m := a }" {
+        success rem _ => String.beq rem "",
+        fail _ => false
+    }
 
 /// Regression test for the `instance {Param : Type} Class ...` implicit
 /// binder (unlike `def`'s implicit params, these are captured for real —
 /// see `instance_implicit_params_loop`'s doc comment).
 #[test]
 def test_instance_implicit_params : Bool :=
-	match instance_parser "instance {A : Type} Show A { def show x := x }" {
-		success rem out =>
-			String.beq rem "" && (match out.kind {
-				instance_d i => instance_has_one_param_named_A i,
-				_ => false
-			}),
-		fail _ => false
-	}
+    match instance_parser "instance {A : Type} Show A { def show x := x }" {
+        success rem out =>
+            String.beq rem "" && (match out.kind {
+                instance_d i => instance_has_one_param_named_A i,
+                _ => false
+            }),
+        fail _ => false
+    }
 
 #[partial]
 def instance_has_one_param_named_A (i : ParseInstance) : Bool :=
-	match i {
-		ParseInstance.mk _name _cls _constraints _args _vis implicit_params _defs =>
-			match implicit_params {
-				List.cons p rest => param_named_A p && list_is_empty rest,
-				List.empty => false
-			}
-	}
+    match i {
+        ParseInstance.mk _name _cls _constraints _args _vis implicit_params _defs =>
+            match implicit_params {
+                List.cons p rest => param_named_A p && list_is_empty rest,
+                List.empty => false
+            }
+    }
 
 #[partial]
 def param_named_A (p : ParseParam) : Bool :=
-	match p {
-		ParseParam.mk pname _typ _mult _default _attrs => Similar.similar pname (Identifier.id "A")
-	}
+    match p {
+        ParseParam.mk pname _typ _mult _default _attrs => Similar.similar pname (Identifier.id "A")
+    }
 
 #[partial]
 def list_is_empty (ps : List ParseParam) : Bool :=
-	match ps {
-		List.empty => true,
-		List.cons _ _ => false
-	}
+    match ps {
+        List.empty => true,
+        List.cons _ _ => false
+    }
 
 /// Multi-name implicit clause `{K V : Type}` — both names should produce
 /// their own `Param`, sharing the type (mirrors `test_def_implicit_multi_name`
 /// but, unlike that test, both names must actually survive into the AST).
 #[test]
 def test_instance_implicit_params_multi_name : Bool :=
-	match instance_parser "instance {K V : Type} Show K { def show x := x }" {
-		success rem out =>
-			String.beq rem "" && (match out.kind {
-				instance_d i => instance_has_two_params_named_K_V i,
-				_ => false
-			}),
-		fail _ => false
-	}
+    match instance_parser "instance {K V : Type} Show K { def show x := x }" {
+        success rem out =>
+            String.beq rem "" && (match out.kind {
+                instance_d i => instance_has_two_params_named_K_V i,
+                _ => false
+            }),
+        fail _ => false
+    }
 
 #[partial]
 def instance_has_two_params_named_K_V (i : ParseInstance) : Bool :=
-	match i {
-		ParseInstance.mk _name _cls _constraints _args _vis implicit_params _defs =>
-			match implicit_params {
-				List.cons p1 rest1 =>
-					match rest1 {
-						List.cons p2 rest2 =>
-							param_named_K p1 && param_named_V p2 && list_is_empty rest2,
-						List.empty => false
-					},
-				List.empty => false
-			}
-	}
+    match i {
+        ParseInstance.mk _name _cls _constraints _args _vis implicit_params _defs =>
+            match implicit_params {
+                List.cons p1 rest1 =>
+                    match rest1 {
+                        List.cons p2 rest2 =>
+                            param_named_K p1 && param_named_V p2 && list_is_empty rest2,
+                        List.empty => false
+                    },
+                List.empty => false
+            }
+    }
 
 #[partial]
 def param_named_K (p : ParseParam) : Bool :=
-	match p {
-		ParseParam.mk pname _typ _mult _default _attrs => Similar.similar pname (Identifier.id "K")
-	}
+    match p {
+        ParseParam.mk pname _typ _mult _default _attrs => Similar.similar pname (Identifier.id "K")
+    }
 
 #[partial]
 def param_named_V (p : ParseParam) : Bool :=
-	match p {
-		ParseParam.mk pname _typ _mult _default _attrs => Similar.similar pname (Identifier.id "V")
-	}
+    match p {
+        ParseParam.mk pname _typ _mult _default _attrs => Similar.similar pname (Identifier.id "V")
+    }
 
 /// Strengthened beyond a bare `success` check — same rationale as
 /// `test_class_with_constraints`: `class_close` used to hardcode an
@@ -8829,64 +8820,64 @@ def param_named_V (p : ParseParam) : Bool :=
 /// actually parsed.
 #[test]
 def test_class_with_paren_params : Bool :=
-  match class_parser "class Functor (F : Type -> Type) { def map (f : A -> B) : F A -> F B }" {
-    success rem out =>
-      String.beq rem "" && (match out.kind {
-        class_d c => class_has_one_param_named_F c,
-        _ => false
-      }),
-    fail _ => false
-  }
+    match class_parser "class Functor (F : Type -> Type) { def map (f : A -> B) : F A -> F B }" {
+        success rem out =>
+            String.beq rem "" && (match out.kind {
+                class_d c => class_has_one_param_named_F c,
+                _ => false
+            }),
+        fail _ => false
+    }
 
 #[partial]
 def class_has_one_param_named_F (c : ParseClass) : Bool :=
-	match c {
-		ParseClass.mk _name params _constraints _methods _vis _ =>
-			match params {
-				List.cons p rest => param_named_F p && list_is_empty rest,
-				List.empty => false
-			}
-	}
+    match c {
+        ParseClass.mk _name params _constraints _methods _vis _ =>
+            match params {
+                List.cons p rest => param_named_F p && list_is_empty rest,
+                List.empty => false
+            }
+    }
 
 #[partial]
 def param_named_F (p : ParseParam) : Bool :=
-	match p {
-		ParseParam.mk pname _typ _mult _default _attrs => Similar.similar pname (Identifier.id "F")
-	}
+    match p {
+        ParseParam.mk pname _typ _mult _default _attrs => Similar.similar pname (Identifier.id "F")
+    }
 
 /// Strengthened beyond a bare `success` check: verifies the `:= List`
 /// default actually reaches the parsed `Param`, not just that the whole
 /// clause parses without error.
 #[test]
 def test_class_with_default_param : Bool :=
-  match class_parser "class FromListLiteral (L : Type -> Type := List) { def cons (a : A) : L A -> L A }" {
-    success rem out =>
-      String.beq rem "" && (match out.kind {
-        class_d c => class_has_one_param_L_with_default c,
-        _ => false
-      }),
-    fail _ => false
-  }
+    match class_parser "class FromListLiteral (L : Type -> Type := List) { def cons (a : A) : L A -> L A }" {
+        success rem out =>
+            String.beq rem "" && (match out.kind {
+                class_d c => class_has_one_param_L_with_default c,
+                _ => false
+            }),
+        fail _ => false
+    }
 
 #[partial]
 def class_has_one_param_L_with_default (c : ParseClass) : Bool :=
-	match c {
-		ParseClass.mk _name params _constraints _methods _vis _ =>
-			match params {
-				List.cons p rest => param_named_L_with_default p && list_is_empty rest,
-				List.empty => false
-			}
-	}
+    match c {
+        ParseClass.mk _name params _constraints _methods _vis _ =>
+            match params {
+                List.cons p rest => param_named_L_with_default p && list_is_empty rest,
+                List.empty => false
+            }
+    }
 
 #[partial]
 def param_named_L_with_default (p : ParseParam) : Bool :=
-	match p {
-		ParseParam.mk pname _typ _mult default _attrs =>
-			Similar.similar pname (Identifier.id "L") && (match default {
-				Option.some _ => true,
-				Option.none => false
-			})
-	}
+    match p {
+        ParseParam.mk pname _typ _mult default _attrs =>
+            Similar.similar pname (Identifier.id "L") && (match default {
+                Option.some _ => true,
+                Option.none => false
+            })
+    }
 
 /// Regression test for the nested-parens bug: the previous param parser
 /// used `take_while is_not_close_paren`, which stops at the *first* `)`
@@ -8895,11 +8886,10 @@ def param_named_L_with_default (p : ParseParam) : Bool :=
 /// exact shape.
 #[test]
 def test_class_with_nested_paren_param_type : Bool :=
-  match class_parser "class Map (M: (K : Type) -> (V : Type) -> Type) { def empty : M K V }" {
-    success rem _ => String.beq rem "",
-    fail _ => false
-  }
-
+    match class_parser "class Map (M: (K : Type) -> (V : Type) -> Type) { def empty : M K V }" {
+        success rem _ => String.beq rem "",
+        fail _ => false
+    }
 
 /// Does this parse-stage term reference exactly the written name
 /// `expected`? `ParseTermKind.var` carries a `NameRef` -- the name AS
@@ -8925,62 +8915,62 @@ def parse_nref_named (nref : NameRef) (expected : String) : Bool :=
 
 #[test]
 def test_t_var_bound : Bool :=
-	let ctx : ParseLowerCtx := { binders := List.cons (Identifier.id "x") List.empty, opened := List.empty, locs := Option.none } in
-	match expression "x" {
-		success rem out =>
-			match (lower_parse_term ctx out) {
-				Term.var idx dbg =>
-					I64.beq idx 0 && String.beq rem "",
-				Term.lam _ _ _ => false,
-				Term.pi _ _ _ => false, Term.app _ _ => false,
-				Term.lit _ => false, Term.ntv _ => false,
-				Term.con _ => false, Term.sort _ => false, Term.hole => false,
-				Term.cubical _ => false,
-				Term.quote_ _ => false, Term.var_macro _ _ => false, Term.ctx _ _ => false,
-				Term.elim _ => false
-			},
-		fail _ => false
-	}
+    let ctx : ParseLowerCtx := { binders := List.cons (Identifier.id "x") List.empty, opened := List.empty, locs := Option.none } in
+    match expression "x" {
+        success rem out =>
+            match (lower_parse_term ctx out) {
+                Term.var idx dbg =>
+                    I64.beq idx 0 && String.beq rem "",
+                Term.lam _ _ _ => false,
+                Term.pi _ _ _ => false, Term.app _ _ => false,
+                Term.lit _ => false, Term.ntv _ => false,
+                Term.con _ => false, Term.sort _ => false, Term.hole => false,
+                Term.cubical _ => false,
+                Term.quote_ _ => false, Term.var_macro _ _ => false, Term.ctx _ _ => false,
+                Term.elim _ => false
+            },
+        fail _ => false
+    }
 
 #[test]
 def test_t_var_unbound : Bool :=
-	match expression "y" {
-		success rem out =>
-			match (lower_parse_term lower_ctx_bare out) {
-				Term.var idx dbg =>
-					I64.beq idx sentinel && String.beq rem "",
-				Term.lam _ _ _ => false,
-				Term.pi _ _ _ => false, Term.app _ _ => false,
-				Term.lit _ => false, Term.ntv _ => false,
-				Term.con _ => false, Term.sort _ => false, Term.hole => false,
-				Term.cubical _ => false,
-				Term.quote_ _ => false, Term.var_macro _ _ => false, Term.ctx _ _ => false,
-				Term.elim _ => false
-			},
-		fail _ => false
-	}
+    match expression "y" {
+        success rem out =>
+            match (lower_parse_term lower_ctx_bare out) {
+                Term.var idx dbg =>
+                    I64.beq idx sentinel && String.beq rem "",
+                Term.lam _ _ _ => false,
+                Term.pi _ _ _ => false, Term.app _ _ => false,
+                Term.lit _ => false, Term.ntv _ => false,
+                Term.con _ => false, Term.sort _ => false, Term.hole => false,
+                Term.cubical _ => false,
+                Term.quote_ _ => false, Term.var_macro _ _ => false, Term.ctx _ _ => false,
+                Term.elim _ => false
+            },
+        fail _ => false
+    }
 
 #[test]
 def test_t_var_shadow : Bool :=
-	// In [x, y, x] (outer x first), the inner x should be index 0
-	let x : Identifier := Identifier.id "x" in
-	let y : Identifier := Identifier.id "y" in
-	let ctx : ParseLowerCtx := { binders := List.cons y (List.cons x (List.cons x List.empty)), opened := List.empty, locs := Option.none } in
-	match expression "x" {
-		success rem out =>
-			match (lower_parse_term ctx out) {
-				Term.var idx dbg =>
-					I64.beq idx 1 && String.beq rem "",
-				Term.lam _ _ _ => false,
-				Term.pi _ _ _ => false, Term.app _ _ => false,
-				Term.lit _ => false, Term.ntv _ => false,
-				Term.con _ => false, Term.sort _ => false, Term.hole => false,
-				Term.cubical _ => false,
-				Term.quote_ _ => false, Term.var_macro _ _ => false, Term.ctx _ _ => false,
-				Term.elim _ => false
-			},
-		fail _ => false
-	}
+    // In [x, y, x] (outer x first), the inner x should be index 0
+    let x : Identifier := Identifier.id "x" in
+    let y : Identifier := Identifier.id "y" in
+    let ctx : ParseLowerCtx := { binders := List.cons y (List.cons x (List.cons x List.empty)), opened := List.empty, locs := Option.none } in
+    match expression "x" {
+        success rem out =>
+            match (lower_parse_term ctx out) {
+                Term.var idx dbg =>
+                    I64.beq idx 1 && String.beq rem "",
+                Term.lam _ _ _ => false,
+                Term.pi _ _ _ => false, Term.app _ _ => false,
+                Term.lit _ => false, Term.ntv _ => false,
+                Term.con _ => false, Term.sort _ => false, Term.hole => false,
+                Term.cubical _ => false,
+                Term.quote_ _ => false, Term.var_macro _ _ => false, Term.ctx _ _ => false,
+                Term.elim _ => false
+            },
+        fail _ => false
+    }
 
 // ─── `Sort u`: the level-variable form (W1.3) ─────────────────────────
 
@@ -8992,52 +8982,52 @@ def test_t_var_shadow : Bool :=
 /// merely that some level survived.
 #[test]
 def test_sort_numeral_still_parses_concrete : Bool :=
-	match expression "Sort 2" {
-		success rem out =>
-			String.beq rem "" &&
-			match out.kind {
-				ParseTermKind.sort level =>
-					match level {
-						SortLevel.concrete u => I64.beq u 2,
-						_ => false,
-					},
-				_ => false,
-			},
-		fail _ => false
-	}
+    match expression "Sort 2" {
+        success rem out =>
+            String.beq rem "" &&
+            match out.kind {
+                ParseTermKind.sort level =>
+                    match level {
+                        SortLevel.concrete u => I64.beq u 2,
+                        _ => false,
+                    },
+                _ => false,
+            },
+        fail _ => false
+    }
 
 /// `Sort u` is the form that had NO representation before this change: the
 /// parse-level sort carried a bare `I64`, so a level variable could not be
 /// built at all.
 #[test]
 def test_sort_variable_parses_as_a_level_var : Bool :=
-	match expression "Sort u" {
-		success rem out =>
-			String.beq rem "" &&
-			match out.kind {
-				ParseTermKind.sort level => match level {
-					SortLevel.var name => Similar.similar name (Identifier.id "u"),
-					_ => false,
-				},
-				_ => false,
-			},
-		fail _ => false
-	}
+    match expression "Sort u" {
+        success rem out =>
+            String.beq rem "" &&
+            match out.kind {
+                ParseTermKind.sort level => match level {
+                    SortLevel.var name => Similar.similar name (Identifier.id "u"),
+                    _ => false,
+                },
+                _ => false,
+            },
+        fail _ => false
+    }
 
 /// A BARE `Sort` (no numeral, no variable) must still fall through to
 /// the ordinary variable path and reach the hole-typed `Sort` global --
 /// the pre-W1.1b behaviour that everything before this work relied on.
 #[test]
 def test_bare_sort_is_still_an_ordinary_variable : Bool :=
-	match expression "Sort" {
-		success rem out =>
-			String.beq rem "" &&
-			match out.kind {
-				ParseTermKind.var _ => true,
-				_ => false,
-			},
-		fail _ => false
-	}
+    match expression "Sort" {
+        success rem out =>
+            String.beq rem "" &&
+            match out.kind {
+                ParseTermKind.var _ => true,
+                _ => false,
+            },
+        fail _ => false
+    }
 
 // ─── `Sort (max u v)`: the level-expression form (W1.4 grammar) ───────
 //
@@ -9047,100 +9037,100 @@ def test_bare_sort_is_still_an_ordinary_variable : Bool :=
 
 #[partial]
 def level_is_max_u_v (level : SortLevel) : Bool :=
-	match level {
-		SortLevel.max left right =>
-			match left {
-				SortLevel.var n => Similar.similar n (Identifier.id "u"),
-				_ => false,
-			} &&
-			match right {
-				SortLevel.var n => Similar.similar n (Identifier.id "v"),
-				_ => false,
-			},
-		_ => false,
-	}
+    match level {
+        SortLevel.max left right =>
+            match left {
+                SortLevel.var n => Similar.similar n (Identifier.id "u"),
+                _ => false,
+            } &&
+            match right {
+                SortLevel.var n => Similar.similar n (Identifier.id "v"),
+                _ => false,
+            },
+        _ => false,
+    }
 
 #[test]
 def test_sort_max_parses_as_a_level_max : Bool :=
-	match expression "Sort (max u v)" {
-		success rem out =>
-			String.beq rem "" &&
-			match out.kind {
-				ParseTermKind.sort level => level_is_max_u_v level,
-				_ => false,
-			},
-		fail _ => false
-	}
+    match expression "Sort (max u v)" {
+        success rem out =>
+            String.beq rem "" &&
+            match out.kind {
+                ParseTermKind.sort level => level_is_max_u_v level,
+                _ => false,
+            },
+        fail _ => false
+    }
 
 #[test]
 def test_sort_nested_max_parses : Bool :=
-	match expression "Sort (max (max u v) w)" {
-		success rem out =>
-			String.beq rem "" &&
-			match out.kind {
-				ParseTermKind.sort level => match level {
-					SortLevel.max left right =>
-						level_is_max_u_v left &&
-						match right {
-							SortLevel.var n => Similar.similar n (Identifier.id "w"),
-							_ => false,
-						},
-					_ => false,
-				},
-				_ => false,
-			},
-		fail _ => false
-	}
+    match expression "Sort (max (max u v) w)" {
+        success rem out =>
+            String.beq rem "" &&
+            match out.kind {
+                ParseTermKind.sort level => match level {
+                    SortLevel.max left right =>
+                        level_is_max_u_v left &&
+                        match right {
+                            SortLevel.var n => Similar.similar n (Identifier.id "w"),
+                            _ => false,
+                        },
+                    _ => false,
+                },
+                _ => false,
+            },
+        fail _ => false
+    }
 
 /// `maxish` is not `max`: the keyword needs a word boundary, so this keeps
 /// the pre-existing application reading of `Sort (…)`.
 #[test]
 def test_sort_max_needs_a_word_boundary : Bool :=
-	match expression "Sort (maxish u v)" {
-		success _ out =>
-			match out.kind {
-				ParseTermKind.sort _ => false,
-				ParseTermKind.app _ _ => true,
-				_ => false,
-			},
-		fail _ => false
-	}
+    match expression "Sort (maxish u v)" {
+        success _ out =>
+            match out.kind {
+                ParseTermKind.sort _ => false,
+                ParseTermKind.app _ _ => true,
+                _ => false,
+            },
+        fail _ => false
+    }
 
 #[test]
 def test_t_lambda_identity : Bool :=
-	// fn x => x  →  lam (named "x") (hole) (var 0 (named "x"))
-	match expression "fn x => x" {
-		success rem out =>
-			match out.kind {
-				ParseTermKind.lam dbg typ body =>
-					match typ.kind {
-						ParseTermKind.hole => String.beq rem "",
-						ParseTermKind.var _ => false, ParseTermKind.lam _ _ _ => false,
-						ParseTermKind.forall _ _ _ => false, ParseTermKind.pi _ _ _ => false,
-						ParseTermKind.app _ _ => false, ParseTermKind.lit _ => false,
-						ParseTermKind.ntv _ => false, ParseTermKind.con _ => false,
-						ParseTermKind.sort _ => false,
-						ParseTermKind.var_macro _ => false, ParseTermKind.quote_ _ => false,
-						ParseTermKind.do_ _ => false, ParseTermKind.dict_hint _ => false
-					},
-				ParseTermKind.var _ => false, ParseTermKind.forall _ _ _ => false,
-				ParseTermKind.pi _ _ _ => false, ParseTermKind.app _ _ => false,
-				ParseTermKind.lit _ => false, ParseTermKind.ntv _ => false,
-				ParseTermKind.con _ => false,
-				ParseTermKind.sort _ => false, ParseTermKind.hole => false,
-				ParseTermKind.var_macro _ => false, ParseTermKind.quote_ _ => false,
-				ParseTermKind.do_ _ => false, ParseTermKind.dict_hint _ => false
-			},
-		fail _ => false
-	}
+    // fn x => x  →  lam (named "x") (hole) (var 0 (named "x"))
+    match expression "fn x => x" {
+        success rem out =>
+            match out.kind {
+                ParseTermKind.lam dbg typ body =>
+                    match typ.kind {
+                        ParseTermKind.hole => String.beq rem "",
+                        ParseTermKind.var _ => false, ParseTermKind.lam _ _ _ => false,
+                        ParseTermKind.forall _ _ _ => false, ParseTermKind.pi _ _ _ => false,
+                        ParseTermKind.app _ _ => false, ParseTermKind.lit _ => false,
+                        ParseTermKind.ntv _ => false, ParseTermKind.con _ => false,
+                        ParseTermKind.sort _ => false,
+                        ParseTermKind.var_macro _ => false, ParseTermKind.quote_ _ => false,
+                        ParseTermKind.do_ _ => false, ParseTermKind.dict_hint _ => false
+                    },
+                ParseTermKind.var _ => false, ParseTermKind.forall _ _ _ => false,
+                ParseTermKind.pi _ _ _ => false, ParseTermKind.app _ _ => false,
+                ParseTermKind.lit _ => false, ParseTermKind.ntv _ => false,
+                ParseTermKind.con _ => false,
+                ParseTermKind.sort _ => false, ParseTermKind.hole => false,
+                ParseTermKind.var_macro _ => false, ParseTermKind.quote_ _ => false,
+                ParseTermKind.do_ _ => false, ParseTermKind.dict_hint _ => false
+            },
+        fail _ => false
+    }
 
 #[test]
 def test_t_lambda_nested : Bool :=
-	// fn x => fn y => y  →  lam/named/x (lam/named/y (var 0))
-	match expression "fn x => fn y => y" {
-		success rem out => String.beq rem "",
-		fail _ => false
-	}
+    // fn x => fn y => y  →  lam/named/x (lam/named/y (var 0))
+    match expression "fn x => fn y => y" {
+        success rem out => String.beq rem "",
+        fail _ => false
+    }
 
 /// Regression test for `lambda_names`: `fn a b c => body` multi-param
 /// sugar for `fn a => fn b => fn c => body` — previously only a single
@@ -9149,49 +9139,49 @@ def test_t_lambda_nested : Bool :=
 /// nests correctly (3 lambdas deep), not just that it parses.
 #[test]
 def test_t_lambda_multi_param : Bool :=
-	match expression "fn a b c => a" {
-		success rem out => String.beq rem "" && term_is_three_deep_lam out,
-		fail _ => false
-	}
+    match expression "fn a b c => a" {
+        success rem out => String.beq rem "" && term_is_three_deep_lam out,
+        fail _ => false
+    }
 
 #[partial]
 def term_is_three_deep_lam (t : ParseTerm) : Bool :=
-	match t.kind {
-		ParseTermKind.lam _dbg1 _typ1 body1 =>
-			match body1.kind {
-				ParseTermKind.lam _dbg2 _typ2 body2 =>
-					match body2.kind {
-						ParseTermKind.lam _dbg3 _typ3 _body3 => true,
-						_ => false
-					},
-				_ => false
-			},
-		_ => false
-	}
+    match t.kind {
+        ParseTermKind.lam _dbg1 _typ1 body1 =>
+            match body1.kind {
+                ParseTermKind.lam _dbg2 _typ2 body2 =>
+                    match body2.kind {
+                        ParseTermKind.lam _dbg3 _typ3 _body3 => true,
+                        _ => false
+                    },
+                _ => false
+            },
+        _ => false
+    }
 
 #[test]
 def test_t_app_simple : Bool :=
-	// f x  →  app (var SENTINEL f) (var SENTINEL x)
-	match expression "f x" {
-		success rem out => String.beq rem "",
-		fail _ => false
-	}
+    // f x  →  app (var SENTINEL f) (var SENTINEL x)
+    match expression "f x" {
+        success rem out => String.beq rem "",
+        fail _ => false
+    }
 
 #[test]
 def test_t_app_chain : Bool :=
-	// f x y  →  app (app (var SENTINEL f) (var SENTINEL x)) (var SENTINEL y)
-	match expression "f x y" {
-		success rem out => String.beq rem "",
-		fail _ => false
-	}
+    // f x y  →  app (app (var SENTINEL f) (var SENTINEL x)) (var SENTINEL y)
+    match expression "f x y" {
+        success rem out => String.beq rem "",
+        fail _ => false
+    }
 
 #[test]
 def test_t_operator : Bool :=
-	// a ++ b  →  app (app (var SENTINEL _) (var SENTINEL a)) (var SENTINEL b)
-	match expression "a ++ b" {
-		success rem out => String.beq rem "",
-		fail _ => false
-	}
+    // a ++ b  →  app (app (var SENTINEL _) (var SENTINEL a)) (var SENTINEL b)
+    match expression "a ++ b" {
+        success rem out => String.beq rem "",
+        fail _ => false
+    }
 
 /// Regression test for the operator-resolution fix: the parsed term's
 /// own head must now NAME the operator symbol itself
@@ -9200,20 +9190,20 @@ def test_t_operator : Bool :=
 /// makes `lang.scope`'s `resolve_infix_decls` able to resolve it later.
 #[test]
 def test_t_operator_preserves_op_name : Bool :=
-	match expression "a ++ b" {
-		success rem out =>
-			String.beq rem "" &&
-			match out.kind {
-				ParseTermKind.app fun_outer _arg_outer =>
-					match fun_outer.kind {
-						ParseTermKind.app op_var _lhs =>
-							parse_var_named op_var "++",
-						_ => false,
-					},
-				_ => false,
-			},
-		fail _ => false
-	}
+    match expression "a ++ b" {
+        success rem out =>
+            String.beq rem "" &&
+            match out.kind {
+                ParseTermKind.app fun_outer _arg_outer =>
+                    match fun_outer.kind {
+                        ParseTermKind.app op_var _lhs =>
+                            parse_var_named op_var "++",
+                        _ => false,
+                    },
+                _ => false,
+            },
+        fail _ => false
+    }
 
 /// Regression test for expr_climb's precedence-climbing rewrite:
 /// `a |> f |> g` must parse LEFT-associatively (matching `|>`'s
@@ -9226,29 +9216,29 @@ def test_t_operator_preserves_op_name : Bool :=
 /// same precedence — is examples/hello.mo's entire `main` function.
 #[test]
 def test_t_operator_chain_left_associative : Bool :=
-	match expression "a |> f |> g" {
-		success rem out =>
-			String.beq rem "" &&
-			match out.kind {
-				ParseTermKind.app fun_outer arg_outer =>
-					parse_var_named fun_outer "g" &&
-					match arg_outer.kind {
-						ParseTermKind.app fun_inner arg_inner =>
-							parse_var_named fun_inner "f" && parse_var_named arg_inner "a",
-						_ => false,
-					},
-				_ => false,
-			},
-		fail _ => false
-	}
+    match expression "a |> f |> g" {
+        success rem out =>
+            String.beq rem "" &&
+            match out.kind {
+                ParseTermKind.app fun_outer arg_outer =>
+                    parse_var_named fun_outer "g" &&
+                    match arg_outer.kind {
+                        ParseTermKind.app fun_inner arg_inner =>
+                            parse_var_named fun_inner "f" && parse_var_named arg_inner "a",
+                        _ => false,
+                    },
+                _ => false,
+            },
+        fail _ => false
+    }
 
 #[test]
 def test_t_parens : Bool :=
-	// (x)  →  var (SENTINEL, x)
-	match expression "(x)" {
-		success rem out => String.beq rem "",
-		fail _ => false
-	}
+    // (x)  →  var (SENTINEL, x)
+    match expression "(x)" {
+        success rem out => String.beq rem "",
+        fail _ => false
+    }
 
 /// Regression test for `paren_try_ann`: a type ascription inside parens
 /// (`(x : List I64)`) parses on its own — previously unparseable,
@@ -9256,10 +9246,10 @@ def test_t_parens : Bool :=
 /// String)`.
 #[test]
 def test_t_paren_type_ascription : Bool :=
-	match expression "(x : List I64)" {
-		success rem out => String.beq rem "",
-		fail _ => false
-	}
+    match expression "(x : List I64)" {
+        success rem out => String.beq rem "",
+        fail _ => false
+    }
 
 /// Pins the ASSCRIPTION'S DESUGARING (`paren_ann_value`), which the
 /// `String.beq rem ""` test above cannot see: `(x : List I64)` must
@@ -9270,37 +9260,37 @@ def test_t_paren_type_ascription : Bool :=
 /// asserting the shape is the only cheap place to catch it.
 #[test]
 def test_t_paren_type_ascription_desugars : Bool :=
-	match expression "(x : List I64)" {
-		success _ out =>
-			match out.kind {
-				app f a =>
-					match f.kind {
-						// The parameter type is `List I64`, an app, not a
-						// hole or a bare var: the ascription's TYPE is
-						// what the desugaring has to carry.
-						lam _name typ body =>
-							match typ.kind {
-								app _ _ =>
-									match body.kind {
-										var _nref => true,
-										_ => false
-									},
-								_ => false
-							},
-						_ => false
-					},
-				_ => false
-			},
-		fail _ => false
-	}
+    match expression "(x : List I64)" {
+        success _ out =>
+            match out.kind {
+                app f a =>
+                    match f.kind {
+                        // The parameter type is `List I64`, an app, not a
+                        // hole or a bare var: the ascription's TYPE is
+                        // what the desugaring has to carry.
+                        lam _name typ body =>
+                            match typ.kind {
+                                app _ _ =>
+                                    match body.kind {
+                                        var _nref => true,
+                                        _ => false
+                                    },
+                                _ => false
+                            },
+                        _ => false
+                    },
+                _ => false
+            },
+        fail _ => false
+    }
 
 #[test]
 def test_t_literal_num : Bool :=
-	// 42  →  lit (num 42 i64)
-	match expression "42" {
-		success rem out => String.beq rem "",
-		fail _ => false
-	}
+    // 42  →  lit (num 42 i64)
+    match expression "42" {
+        success rem out => String.beq rem "",
+        fail _ => false
+    }
 
 #[test]
 def test_match_simple : Bool :=
@@ -10919,17 +10909,17 @@ def test_use_parser_rejects_dotted : Bool :=
                 _ => false
             }
             && (match use_parser "use std.list {intercalate}" {
-                    success rem dot_out =>
-                        match dot_out.kind {
-                            use_d dot_path _fd _pd =>
-                                // Never two segments, and the tail is
-                                // left behind rather than swallowed.
-                                String.beq (module_path_to_string dot_path) "std"
-                                && String.contains rem "list",
-                            _ => false
-                        },
-                    fail _ => true
-                }),
+                success rem dot_out =>
+                    match dot_out.kind {
+                        use_d dot_path _fd _pd =>
+                            // Never two segments, and the tail is
+                            // left behind rather than swallowed.
+                            String.beq (module_path_to_string dot_path) "std"
+                            && String.contains rem "list",
+                        _ => false
+                    },
+                fail _ => true
+            }),
         fail _ => false
     }
 
@@ -11299,44 +11289,44 @@ def test_def_parser_negative_body : Bool :=
 
 #[test]
 def test_string_parse_plain : Bool :=
-	match string_parse "\"hello\"" {
-		success rem out => String.beq rem "" && term_lit_str_eq out "hello",
-		fail _ => false
-	}
+    match string_parse "\"hello\"" {
+        success rem out => String.beq rem "" && term_lit_str_eq out "hello",
+        fail _ => false
+    }
 
 #[test]
 def test_string_parse_escaped_quote : Bool :=
-	match string_parse "\"a\\\"b\"" {
-		success rem out => String.beq rem "" && term_lit_str_eq out "a\"b",
-		fail _ => false
-	}
+    match string_parse "\"a\\\"b\"" {
+        success rem out => String.beq rem "" && term_lit_str_eq out "a\"b",
+        fail _ => false
+    }
 
 /// The specific ambiguity `string_body_escape`'s doc comment calls out:
 /// an escaped backslash immediately followed by the REAL closing quote
 /// must not be misread as "the quote is escaped too".
 #[test]
 def test_string_parse_escaped_backslash_before_close : Bool :=
-	match string_parse "\"a\\\\\"" {
-		success rem out => String.beq rem "" && term_lit_str_eq out "a\\",
-		fail _ => false
-	}
+    match string_parse "\"a\\\\\"" {
+        success rem out => String.beq rem "" && term_lit_str_eq out "a\\",
+        fail _ => false
+    }
 
 /// The exact corpus case that motivated this fix: `lang/json.mo`'s own
 /// test fixture string, containing escaped quotes, backslash-n, and
 /// backslash-t all in one literal.
 #[test]
 def test_string_parse_json_fixture : Bool :=
-	match string_parse "\"\\\"a\\\\nb\\\\tc\\\\\\\"d\\\"\"" {
-		success rem out => String.beq rem "" && term_lit_str_eq out "\"a\\nb\\tc\\\"d\"",
-		fail _ => false
-	}
+    match string_parse "\"\\\"a\\\\nb\\\\tc\\\\\\\"d\\\"\"" {
+        success rem out => String.beq rem "" && term_lit_str_eq out "\"a\\nb\\tc\\\"d\"",
+        fail _ => false
+    }
 
 #[test]
 def test_string_parse_unknown_escape_fails : Bool :=
-	match string_parse "\"a\\qb\"" {
-		success _ _ => false,
-		fail _ => true
-	}
+    match string_parse "\"a\\qb\"" {
+        success _ _ => false,
+        fail _ => true
+    }
 
 // --- raw_string_parse tests ---
 //
@@ -11348,100 +11338,100 @@ def test_string_parse_unknown_escape_fails : Bool :=
 
 #[test]
 def test_raw_string_parse_plain : Bool :=
-	match raw_string_parse "r\"hello\"" {
-		success rem out => String.beq rem "" && term_lit_str_eq out "hello",
-		fail _ => false
-	}
+    match raw_string_parse "r\"hello\"" {
+        success rem out => String.beq rem "" && term_lit_str_eq out "hello",
+        fail _ => false
+    }
 
 /// Backslashes are verbatim -- no escape processing.
 #[test]
 def test_raw_string_parse_backslash_literal : Bool :=
-	match raw_string_parse "r\"\\n\\t\"" {
-		success rem out => String.beq rem "" && term_lit_str_eq out "\\n\\t",
-		fail _ => false
-	}
+    match raw_string_parse "r\"\\n\\t\"" {
+        success rem out => String.beq rem "" && term_lit_str_eq out "\\n\\t",
+        fail _ => false
+    }
 
 /// n = 1: the user's example `r#" blab\"\"\" "#`.
 #[test]
 def test_raw_string_parse_n1 : Bool :=
-	match raw_string_parse "r#\" blab\"\"\" \"#" {
-		success rem out => String.beq rem "" && term_lit_str_eq out " blab\"\"\" ",
-		fail _ => false
-	}
+    match raw_string_parse "r#\" blab\"\"\" \"#" {
+        success rem out => String.beq rem "" && term_lit_str_eq out " blab\"\"\" ",
+        fail _ => false
+    }
 
 /// n = 1: a `"` followed by fewer than 1 `#` is not a closer. `r#"a\"b\"#`
 /// -> body `a\"b`, closer is the final `\"#`.
 #[test]
 def test_raw_string_parse_n1_embed_quote : Bool :=
-	match raw_string_parse "r#\"a\"b\"#" {
-		success rem out => String.beq rem "" && term_lit_str_eq out "a\"b",
-		fail _ => false
-	}
+    match raw_string_parse "r#\"a\"b\"#" {
+        success rem out => String.beq rem "" && term_lit_str_eq out "a\"b",
+        fail _ => false
+    }
 
 /// n = 2: embeds `"#` (one hash, fewer than n) in the body.
 #[test]
 def test_raw_string_parse_n2_embed_hash : Bool :=
-	match raw_string_parse "r##\"a\"#b\"##" {
-		success rem out => String.beq rem "" && term_lit_str_eq out "a\"#b",
-		fail _ => false
-	}
+    match raw_string_parse "r##\"a\"#b\"##" {
+        success rem out => String.beq rem "" && term_lit_str_eq out "a\"#b",
+        fail _ => false
+    }
 
 /// n = 3: embeds `"##` and `"#` in the body.
 #[test]
 def test_raw_string_parse_n3 : Bool :=
-	match raw_string_parse "r###\"x\"##\"y\"#z\"###" {
-		success rem out => String.beq rem "" && term_lit_str_eq out "x\"##\"y\"#z",
-		fail _ => false
-	}
+    match raw_string_parse "r###\"x\"##\"y\"#z\"###" {
+        success rem out => String.beq rem "" && term_lit_str_eq out "x\"##\"y\"#z",
+        fail _ => false
+    }
 
 /// Extra `#` beyond n are left in the remainder (rustc caps closing hashes
 /// at n). `r##\"a\"###b\"##` -> body `a`, rest `#b\"##`.
 #[test]
 def test_raw_string_parse_extra_hashes : Bool :=
-	match raw_string_parse "r##\"a\"###b\"##" {
-		success rem out => term_lit_str_eq out "a" && String.beq rem "#b\"##",
-		fail _ => false
-	}
+    match raw_string_parse "r##\"a\"###b\"##" {
+        success rem out => term_lit_str_eq out "a" && String.beq rem "#b\"##",
+        fail _ => false
+    }
 
 /// Multi-line body: newlines are literal content.
 #[test]
 def test_raw_string_parse_multiline : Bool :=
-	match raw_string_parse "r\"line1\nline2\"" {
-		success rem out => String.beq rem "" && term_lit_str_eq out "line1\nline2",
-		fail _ => false
-	}
+    match raw_string_parse "r\"line1\nline2\"" {
+        success rem out => String.beq rem "" && term_lit_str_eq out "line1\nline2",
+        fail _ => false
+    }
 
 /// Failures -- must backtrack cleanly so `variable ctx` handles a bare `r` /
 /// `regex` / `r#`-not-followed-by-`\"` as an identifier.
 #[test]
 def test_raw_string_parse_failures : Bool :=
-	let f1 : Bool := match raw_string_parse "hello" { success _ _ => false, fail _ => true } in
-	let f2 : Bool := match raw_string_parse "r" { success _ _ => false, fail _ => true } in
-	let f3 : Bool := match raw_string_parse "r#" { success _ _ => false, fail _ => true } in
-	let f4 : Bool := match raw_string_parse "rx" { success _ _ => false, fail _ => true } in
-	let f5 : Bool := match raw_string_parse "r\"unterminated" { success _ _ => false, fail _ => true } in
-	let f6 : Bool := match raw_string_parse "r#\"unterminated" { success _ _ => false, fail _ => true } in
-	f1 && f2 && f3 && f4 && f5 && f6
+    let f1 : Bool := match raw_string_parse "hello" { success _ _ => false, fail _ => true } in
+    let f2 : Bool := match raw_string_parse "r" { success _ _ => false, fail _ => true } in
+    let f3 : Bool := match raw_string_parse "r#" { success _ _ => false, fail _ => true } in
+    let f4 : Bool := match raw_string_parse "rx" { success _ _ => false, fail _ => true } in
+    let f5 : Bool := match raw_string_parse "r\"unterminated" { success _ _ => false, fail _ => true } in
+    let f6 : Bool := match raw_string_parse "r#\"unterminated" { success _ _ => false, fail _ => true } in
+    f1 && f2 && f3 && f4 && f5 && f6
 
 /// Disambiguation at the atom level: `r"..."` parses via `raw_string_parse`
 /// (ahead of `variable ctx` in `atom_parsers`), so `atom_term` yields a Lit,
 /// not `App(r, "...")`.
 #[test]
 def test_raw_string_atom_disambiguation : Bool :=
-	match atom_term "r\"hello\"" {
-		success rem out => String.beq rem "" && term_lit_str_eq out "hello",
-		fail _ => false
-	}
+    match atom_term "r\"hello\"" {
+        success rem out => String.beq rem "" && term_lit_str_eq out "hello",
+        fail _ => false
+    }
 
 #[partial]
 def term_lit_str_eq (t : ParseTerm) (expected : String) : Bool :=
-	match t.kind {
-		ParseTermKind.lit lit_val => match lit_val {
-			ParseLiteral.str s => String.beq s expected,
-			_ => false
-		},
-		_ => false
-	}
+    match t.kind {
+        ParseTermKind.lit lit_val => match lit_val {
+            ParseLiteral.str s => String.beq s expected,
+            _ => false
+        },
+        _ => false
+    }
 
 #[test]
 def test_def_do_block : Bool :=
@@ -11466,9 +11456,9 @@ def return_shorthand_is_pure_of_num (t : ParseTerm) (n : I64) : Bool :=
             match head {
                 Term.var idx _ => I64.beq idx (-1) &&
                     match arg { Term.lit lit_val => match lit_val {
-                            Literal.num m _suffix => I64.beq m n,
-                            _ => false
-                        },
+                        Literal.num m _suffix => I64.beq m n,
+                        _ => false
+                    },
                         _ => false
                     },
                 _ => false
@@ -11816,7 +11806,7 @@ def test_decls_fromlist_empty_sig_nl : Bool :=
 
 #[test]
 def test_is_space_newline : Bool :=
-  is_space "\n"
+    is_space "\n"
 
 // --- Multiplicity prefix on def/lambda params (gap §1) ---
 
@@ -11878,7 +11868,6 @@ def test_explicit_param_defaults_to_many_mult : Bool :=
 #[test]
 def test_destructured_param_defaults_to_many_mult : Bool :=
     mult_is_many (first_param_mult "({x, y} : P)")
-
 
 #[test]
 def test_def_param_linear_prefix : Bool :=

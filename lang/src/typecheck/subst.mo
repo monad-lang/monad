@@ -25,8 +25,8 @@
 /// (mirroring the reference's own `subst_macro`/`subst_decl_var` much
 /// more directly) — a different module, not this one.
 use lang::types {
-  Con, Cubical, FieldPattern, Literal, MatchCase, Native, StructLitField, Term,
-  binder_anon, concrete, cub_ineg, id, level_const, sentinel, unnamed,
+    Con, Cubical, FieldPattern, Literal, MatchCase, Native, StructLitField, Term,
+    binder_anon, concrete, cub_ineg, id, level_const, sentinel, unnamed,
 }
 
 use lib::typecheck::traverse {term_map_children_at_depth}
@@ -64,7 +64,6 @@ def term_shift_go (d : I64) (cutoff : I64) (t : Term) : Term :=
         // (1 for a lam/forall/pi BODY, 0 everywhere else).
         _ => term_map_children_at_depth (fn (under : I64) => fn (child : Term) => term_shift_go d (cutoff + under) child) t,
     }
-
 
 // ─── Permutation ─────────────────────────────────────────────────────
 //
@@ -120,7 +119,6 @@ def term_permute_go (old_n : I64) (new_n : I64) (old_depths : List I64) (new_dep
         _ => term_map_children_at_depth (fn (under : I64) => fn (child : Term) => term_permute_go old_n new_n old_depths new_depths (cutoff + under) child) t,
     }
 
-
 /// `local`'s remapped position, or `local` unchanged if not found in
 /// `old_depths` (see this section's own doc comment for why that
 /// shouldn't happen for a well-formed call, but a safe identity
@@ -169,7 +167,6 @@ def term_subst_go (j : I64) (s : Term) (depth : I64) (t : Term) : Term :=
             else Term.var_macro idx dbg,
         _ => term_map_children_at_depth (fn (under : I64) => fn (child : Term) => term_subst_go j s (depth + under) child) t,
     }
-
 
 // ─── Abstraction (core-term-simplification.md R4b) ────────────────────
 //

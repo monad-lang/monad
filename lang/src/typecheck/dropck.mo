@@ -149,11 +149,11 @@ pub def drop_leaves (ctors : HashMap String Bool) (borrows : HashMap String Bool
         Term.elim elim =>
             match elim {
                 { inductive := _, levels := _, params := _, indices := _, motive := _,
-                  minors := minors, scrutinee := scrutinee } =>
-                    let branch_leaves : List Bool := drop_leaves_minors ctors borrows target minors in
-                    if I64.gt (owning_at ctors borrows UsePos.up_scrutinee target scrutinee) 0
-                    then all_false branch_leaves
-                    else branch_leaves,
+                    minors := minors, scrutinee := scrutinee } =>
+                        let branch_leaves : List Bool := drop_leaves_minors ctors borrows target minors in
+                        if I64.gt (owning_at ctors borrows UsePos.up_scrutinee target scrutinee) 0
+                        then all_false branch_leaves
+                        else branch_leaves,
             },
         // Nothing else in `Term` branches control flow -- `app`, `con`,
         // `ntv`, a nested `lam`'s own body (a SEPARATE scope, not a
@@ -294,8 +294,8 @@ def collect_drop_term (ctors : HashMap String Bool) (borrows : HashMap String Bo
         Term.elim e =>
             match e {
                 { inductive := _, levels := _, params := _, indices := _,
-                  motive := _, minors := minors, scrutinee := scrutinee } =>
-                    collect_drop_terms ctors borrows minors (collect_drop_term ctors borrows scrutinee acc),
+                    motive := _, minors := minors, scrutinee := scrutinee } =>
+                        collect_drop_terms ctors borrows minors (collect_drop_term ctors borrows scrutinee acc),
             },
     }
 

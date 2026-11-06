@@ -7,21 +7,21 @@ use parsec::combinators {utf8_char_width}
 /// Create a new LocatedSpan starting at offset 0, line 1, column 1
 #[partial]
 def new_span (s : String) : LocatedSpan :=
-	LocatedSpan.mk s (Location.mk 0 1 1)
+    LocatedSpan.mk s (Location.mk 0 1 1)
 
 /// Extract the location from a LocatedSpan
 #[partial]
 def span_location (span : LocatedSpan) : Location :=
-	match span {
-		mk frag loc => loc
-	}
+    match span {
+        mk frag loc => loc
+    }
 
 /// Extract the fragment string from a LocatedSpan
 #[partial]
 def span_fragment (span : LocatedSpan) : String :=
-	match span {
-		mk frag loc => frag
-	}
+    match span {
+        mk frag loc => frag
+    }
 
 // --- Line/column scanning ---
 //
@@ -52,10 +52,10 @@ def span_fragment (span : LocatedSpan) : String :=
 // building a frame per character. `line_col_scan_direct` below survives
 // as the REFERENCE implementation the tests check the natives against.
 pub struct LineColScan {
-	newlines : I64,
-	/// Characters since the last newline -- or, if there is no newline at
-	/// all, the character count of the whole string.
-	trailing : I64,
+    newlines : I64,
+    /// Characters since the last newline -- or, if there is no newline at
+    /// all, the character count of the whole string.
+    trailing : I64,
 }
 
 /// The character-at-a-time reference implementation, kept ONLY so the
@@ -73,24 +73,24 @@ pub struct LineColScan {
 /// ceiling is why the old `dc_threshold` existed.
 #[partial]
 def line_col_scan_direct (s : String) (nl : I64) (trailing : I64) : LineColScan :=
-	if String.is_empty s
-	then { newlines := nl, trailing := trailing }
-	else
-		let width : I64 := utf8_char_width s in
-		let ch : String := String.slice s 0 width in
-		let rest : String := String.drop width s in
-		if String.beq "\n" ch
-		then line_col_scan_direct rest (I64.add nl 1) 0
-		else line_col_scan_direct rest nl (I64.add trailing 1)
+    if String.is_empty s
+    then { newlines := nl, trailing := trailing }
+    else
+        let width : I64 := utf8_char_width s in
+        let ch : String := String.slice s 0 width in
+        let rest : String := String.drop width s in
+        if String.beq "\n" ch
+        then line_col_scan_direct rest (I64.add nl 1) 0
+        else line_col_scan_direct rest nl (I64.add trailing 1)
 
 /// Scan `s` for the newline/trailing-column bookkeeping `advance_location`
 /// needs. Two native passes over the bytes: no recursion, no allocation,
 /// and no length limit.
 #[partial]
 def line_col_scan (s : String) : LineColScan :=
-	let len : I64 := String.length s in
-	{ newlines := String.count_newlines s len,
-	  trailing := String.trailing_chars s len }
+    let len : I64 := String.length s in
+    { newlines := String.count_newlines s len,
+        trailing := String.trailing_chars s len }
 
 /// A byte in the 0x80-0xBF (128-191) range is a UTF-8 *continuation*
 /// byte — never a character on its own, since it is the middle of a
@@ -106,7 +106,7 @@ def line_col_scan (s : String) : LineColScan :=
 /// a comment.
 #[partial]
 def is_utf8_continuation_byte (byte : U8) : Bool :=
-	U8.gt byte 127u8 && U8.lt byte 192u8
+    U8.gt byte 127u8 && U8.lt byte 192u8
 
 /// Advance a location past the given consumed string. Safe for a
 /// consumed prefix of any size — `line_col_scan` is two native passes,
@@ -115,28 +115,28 @@ def is_utf8_continuation_byte (byte : U8) : Bool :=
 /// `String.drop`'s byte semantics).
 #[partial]
 def advance_location (loc : Location) (consumed : String) : Location :=
-	match loc {
-		mk off line col =>
-			let byte_len : I64 := String.length consumed in
-			let new_off : I64 := I64.add off byte_len in
-			match line_col_scan consumed {
-				mk newlines trailing =>
-					if I64.beq newlines 0
-					then Location.mk new_off line (I64.add col trailing)
-					else Location.mk new_off (I64.add line newlines) (I64.add 1 trailing)
-			}
-	}
+    match loc {
+        mk off line col =>
+            let byte_len : I64 := String.length consumed in
+            let new_off : I64 := I64.add off byte_len in
+            match line_col_scan consumed {
+                mk newlines trailing =>
+                    if I64.beq newlines 0
+                    then Location.mk new_off line (I64.add col trailing)
+                    else Location.mk new_off (I64.add line newlines) (I64.add 1 trailing)
+            }
+    }
 
 /// Consume n bytes from a LocatedSpan, advancing the location
 #[partial]
 def consume_span (span : LocatedSpan) (n : I64) : LocatedSpan :=
-	match span {
-		mk frag loc =>
-			let consumed : String := String.slice frag 0 n in
-			let rest : String := String.drop n frag in
-			let new_loc : Location := advance_location loc consumed in
-			LocatedSpan.mk rest new_loc
-	}
+    match span {
+        mk frag loc =>
+            let consumed : String := String.slice frag 0 n in
+            let rest : String := String.drop n frag in
+            let new_loc : Location := advance_location loc consumed in
+            LocatedSpan.mk rest new_loc
+    }
 
 /// Compute the `Location` where `remaining` begins within `original` —
 /// how this parser surfaces error positions: rather than threading a
@@ -152,7 +152,7 @@ def consume_span (span : LocatedSpan) (n : I64) : LocatedSpan :=
 /// byte), so the byte-length diff below always lands on one too.
 #[partial]
 def location_of_remaining (original : String) (remaining : String) : Location :=
-	location_of_remaining_len original (String.length remaining)
+    location_of_remaining_len original (String.length remaining)
 
 /// The same arithmetic from a recorded remaining-input LENGTH rather
 /// than the remainder string itself, which is what a `ParseSpan` stores
@@ -163,10 +163,9 @@ def location_of_remaining (original : String) (remaining : String) : Location :=
 /// span rather than a second parse that re-derives it.
 #[partial]
 def location_of_remaining_len (original : String) (remaining_len : I64) : Location :=
-	let consumed_len : I64 := String.length original - remaining_len in
-	let consumed : String := String.slice original 0 consumed_len in
-	advance_location (Location.mk 0 1 1) consumed
-
+    let consumed_len : I64 := String.length original - remaining_len in
+    let consumed : String := String.slice original 0 consumed_len in
+    advance_location (Location.mk 0 1 1) consumed
 
 // --- Bulk offset resolution ------------------------------------------
 //
@@ -283,7 +282,7 @@ def resolve_advance (rest : String) (len : I64) (loc : Location) : Location :=
 /// which is the cost this rewrite removed) and nothing else.
 #[partial]
 def resolve_walk (rest : String) (loc : Location) (limit : I64) (offsets : List I64)
-                 (out : List (Pair I64 Location)) : List (Pair I64 Location) :=
+    (out : List (Pair I64 Location)) : List (Pair I64 Location) :=
     match offsets {
         List.empty => out,
         List.cons off more =>
@@ -473,7 +472,6 @@ def list_reverse_pairs (xs : List (Pair I64 Location)) (acc : List (Pair I64 Loc
         List.cons x rest => list_reverse_pairs rest (List.cons x acc),
     }
 
-
 // --- Tests -----------------------------------------------------------
 //
 // The oracle for bulk resolution is the single-offset path it replaces:
@@ -578,7 +576,7 @@ def test_trailing_chars_matches_continuation_byte_rule : Bool :=
     I64.beq (String.length s) 8
         && I64.beq (count_non_continuation s 0 0) 5
         && I64.beq (String.trailing_chars s (String.length s))
-                   (count_non_continuation s 0 0)
+            (count_non_continuation s 0 0)
 
 /// Characters in `s` from byte `i` on, counting a byte iff it is not a
 /// UTF-8 continuation byte. Deliberately byte-indexed and deliberately

@@ -4,14 +4,14 @@ use lib::core_eval {basic_native_table, native_id_for_name}
 use lib::core_ir {CoreIr, IrLit, MatchArm}
 use lib::core_value {GlobalDef, GlobalTable, NativeTable}
 use lib::scope {
-  build_scope_from_decls, modpath_eq, modpath_of, npath_eq, scope_data_empty,
-  scope_find_inductive,
-  scope_find_inductive_by_constructor, scope_globals, scope_resolve_name,
+    build_scope_from_decls, modpath_eq, modpath_of, npath_eq, scope_data_empty,
+    scope_find_inductive,
+    scope_find_inductive_by_constructor, scope_globals, scope_resolve_name,
 }
 use lang::types {
-  AttrArg, Attribute, Con, DebugName, Decl, Def, Identifier, InductConstructor,
-  Inductive, Literal, MatchCase, ModulePath, NamePath, Native, Scope, ScopeData,
-  ScopeDef, Term, i64, id_eq, nid, sentinel, show_module_path, show_name_path,
+    AttrArg, Attribute, Con, DebugName, Decl, Def, Identifier, InductConstructor,
+    Inductive, Literal, MatchCase, ModulePath, NamePath, Native, Scope, ScopeData,
+    ScopeDef, Term, i64, id_eq, nid, sentinel, show_module_path, show_name_path,
 }
 use lib::typecheck::infer {empty_locals, last_dotted_segment}
 use lib::elim_lower {elim_to_literal}
@@ -83,113 +83,113 @@ use lib::elim_lower {elim_to_literal}
 /// identity and inductive/constructor structure) plus the flat `List
 /// Def` giving real bodies (see this module's doc comment).
 type LowerCtx {
-  lower_ctx (scope: Scope) (defs: List Def),
+    lower_ctx (scope : Scope) (defs : List Def),
 }
 
 def ctx_scope (ctx : LowerCtx) : Scope :=
-  match ctx {
-    LowerCtx.lower_ctx s _ => s,
-  }
+    match ctx {
+        LowerCtx.lower_ctx s _ => s,
+    }
 
 def ctx_defs (ctx : LowerCtx) : List Def :=
-  match ctx {
-    LowerCtx.lower_ctx _ d => d,
-  }
+    match ctx {
+        LowerCtx.lower_ctx _ d => d,
+    }
 
 #[partial]
 def find_def_body (defs : List Def) (path : NamePath) : Option Term :=
-  match defs {
-    List.empty => Option.none,
-    List.cons d rest =>
-      match d {
-        Def.mk {name, typ := _typ, term, constraints := _constraints, attrs := _attrs, vis := _vis, ..} =>
-          if npath_eq name path
-          then Option.some term
-          else find_def_body rest path,
-      },
-  }
+    match defs {
+        List.empty => Option.none,
+        List.cons d rest =>
+            match d {
+                Def.mk {name, typ := _typ, term, constraints := _constraints, attrs := _attrs, vis := _vis, ..} =>
+                    if npath_eq name path
+                    then Option.some term
+                    else find_def_body rest path,
+            },
+    }
 
 /// The whole `Def` (not just its `.term`) -- `lower_one_global` needs
 /// `.attrs` too, to detect a `#[native ...]` stub (see its own doc
 /// comment).
 #[partial]
 def find_def (defs : List Def) (path : NamePath) : Option Def :=
-  match defs {
-    List.empty => Option.none,
-    List.cons d rest =>
-      match d {
-        Def.mk {name, typ := _typ, term := _term, constraints := _constraints, attrs := _attrs, vis := _vis, ..} =>
-          if npath_eq name path
-          then Option.some d
-          else find_def rest path,
-      },
-  }
+    match defs {
+        List.empty => Option.none,
+        List.cons d rest =>
+            match d {
+                Def.mk {name, typ := _typ, term := _term, constraints := _constraints, attrs := _attrs, vis := _vis, ..} =>
+                    if npath_eq name path
+                    then Option.some d
+                    else find_def rest path,
+            },
+    }
 
 pub type LowerError {
-  le_unresolved_name (name: Identifier),
-  le_unresolved_module_path (path: ModulePath),
-  le_unknown_inductive (path: ModulePath),
-  le_unknown_constructor (path: ModulePath),
-  le_unknown_native (name: Identifier),
-  /// `Term.pi`/`type_`/`hole` reached at lowering time -- these
-  /// are type-level-only and should never occur in a well-typed
-  /// runtime-relevant subterm.
-  le_type_level_term,
-  /// A constructor's `args : List (Option Term)` had a hole before a
-  /// filled slot -- see this module's own doc comment.
-  le_con_hole_before_filled_arg,
-  /// `inner` occurred while lowering `path`'s own body -- wrapped by
-  /// `lower_one_global`/`lower_root` so a failure deep in a large
-  /// whole-graph worklist (e.g. `reflect_type_info!`'s meta-eval,
-  /// `lang/typecheck/meta_eval.mo`, reaching hundreds of transitively
-  /// referenced stdlib defs) still names which specific def it was in,
-  /// not just the underlying error kind.
-  le_in_def (path: ModulePath) (inner: LowerError),
-  /// A `Literal.struct_lit`/`Literal.struct_update` survived all
-  /// desugaring and reached lowering -- the type checker's
-  /// `type_check_struct_lit` (`lang/typecheck/infer.mo`) and codegen's
-  /// `desugar_struct_lits_decls` pass (`codegen/emit.mo`) should
-  /// both have turned it into a `Term.con` before here. The eval-path
-  /// (`lower_root`/`meta_eval`) counterpart of `codegen/emit.mo`'s
-  /// `validate_no_undesugared_struct_lits` compile gate: this used to
-  /// be a bare missing arm, i.e. a non-exhaustive-match crash with no
-  /// named cause.
-  le_struct_lit_survived,
-  /// A float literal reached lowering: the eval IR has no way to carry
-  /// one. `IrLit.ir_float` exists and every consumer already has an arm
-  /// for it, but nothing can CONSTRUCT one -- the literal arrives as
-  /// text (`Literal.flt`) and the only text-to-float conversion in the
-  /// prelude is `F64.bits_of_string`, which answers with the bit pattern
-  /// as an `I64` for codegen to emit. Closing this needs a decision
-  /// about what the eval IR should hold (the bits, the text, or a real
-  /// `F64` behind a native that does not exist yet), which is why this
-  /// is a named diagnostic rather than a silent fall-through:
-  /// `lower_literal` is `#[partial]` and a missing arm took the LAST
-  /// one, so `def main : F64 := 1.5` reported a struct-literal error and
-  /// sent its reader to the wrong file entirely.
-  /// `plans/implementations/2026-09-26-external-mote-gaps-for-forge.md`,
-  /// Gap 5.
-  le_float_literal_unsupported,
-  /// A `Term.quote_`/`Term.var_macro` reached lowering. Unlike
-  /// `le_type_level_term`'s callers, this one has no type-check
-  /// prerequisite (this module's own doc comment, and `meta_eval.mo`'s
-  /// caller contract): `expand_decls_graph`'s best-effort macro expansion
-  /// can legitimately leave either shape in place mid-expansion. Named
-  /// rather than reused, following `le_struct_lit_survived`'s own
-  /// precedent -- this used to be a bare missing arm too.
-  le_unresolved_macro_artifact,
-  /// A `Term.elim` that `elim_to_literal` could not lower: an unresolvable
-  /// inductive, a minor with fewer lambdas than its constructor has fields,
-  /// or a minor/constructor count mismatch. Every `Term.elim` the checker
-  /// produces is well-formed, so this is a defensive diagnostic for a
-  /// hand-built or best-effort term rather than a reachable program state.
-  le_elim_ill_formed (reason : String),
+    le_unresolved_name (name : Identifier),
+    le_unresolved_module_path (path : ModulePath),
+    le_unknown_inductive (path : ModulePath),
+    le_unknown_constructor (path : ModulePath),
+    le_unknown_native (name : Identifier),
+    /// `Term.pi`/`type_`/`hole` reached at lowering time -- these
+    /// are type-level-only and should never occur in a well-typed
+    /// runtime-relevant subterm.
+    le_type_level_term,
+    /// A constructor's `args : List (Option Term)` had a hole before a
+    /// filled slot -- see this module's own doc comment.
+    le_con_hole_before_filled_arg,
+    /// `inner` occurred while lowering `path`'s own body -- wrapped by
+    /// `lower_one_global`/`lower_root` so a failure deep in a large
+    /// whole-graph worklist (e.g. `reflect_type_info!`'s meta-eval,
+    /// `lang/typecheck/meta_eval.mo`, reaching hundreds of transitively
+    /// referenced stdlib defs) still names which specific def it was in,
+    /// not just the underlying error kind.
+    le_in_def (path : ModulePath) (inner : LowerError),
+    /// A `Literal.struct_lit`/`Literal.struct_update` survived all
+    /// desugaring and reached lowering -- the type checker's
+    /// `type_check_struct_lit` (`lang/typecheck/infer.mo`) and codegen's
+    /// `desugar_struct_lits_decls` pass (`codegen/emit.mo`) should
+    /// both have turned it into a `Term.con` before here. The eval-path
+    /// (`lower_root`/`meta_eval`) counterpart of `codegen/emit.mo`'s
+    /// `validate_no_undesugared_struct_lits` compile gate: this used to
+    /// be a bare missing arm, i.e. a non-exhaustive-match crash with no
+    /// named cause.
+    le_struct_lit_survived,
+    /// A float literal reached lowering: the eval IR has no way to carry
+    /// one. `IrLit.ir_float` exists and every consumer already has an arm
+    /// for it, but nothing can CONSTRUCT one -- the literal arrives as
+    /// text (`Literal.flt`) and the only text-to-float conversion in the
+    /// prelude is `F64.bits_of_string`, which answers with the bit pattern
+    /// as an `I64` for codegen to emit. Closing this needs a decision
+    /// about what the eval IR should hold (the bits, the text, or a real
+    /// `F64` behind a native that does not exist yet), which is why this
+    /// is a named diagnostic rather than a silent fall-through:
+    /// `lower_literal` is `#[partial]` and a missing arm took the LAST
+    /// one, so `def main : F64 := 1.5` reported a struct-literal error and
+    /// sent its reader to the wrong file entirely.
+    /// `plans/implementations/2026-09-26-external-mote-gaps-for-forge.md`,
+    /// Gap 5.
+    le_float_literal_unsupported,
+    /// A `Term.quote_`/`Term.var_macro` reached lowering. Unlike
+    /// `le_type_level_term`'s callers, this one has no type-check
+    /// prerequisite (this module's own doc comment, and `meta_eval.mo`'s
+    /// caller contract): `expand_decls_graph`'s best-effort macro expansion
+    /// can legitimately leave either shape in place mid-expansion. Named
+    /// rather than reused, following `le_struct_lit_survived`'s own
+    /// precedent -- this used to be a bare missing arm too.
+    le_unresolved_macro_artifact,
+    /// A `Term.elim` that `elim_to_literal` could not lower: an unresolvable
+    /// inductive, a minor with fewer lambdas than its constructor has fields,
+    /// or a minor/constructor count mismatch. Every `Term.elim` the checker
+    /// produces is well-formed, so this is a defensive diagnostic for a
+    /// hand-built or best-effort term rather than a reachable program state.
+    le_elim_ill_formed (reason : String),
 }
 
 /// Accumulates whole-program global discovery + lowering. See this
 /// module's doc comment.
 type LowerAcc {
-  lower_acc (seen: List NamePath) (done: List GlobalDef),
+    lower_acc (seen : List NamePath) (done : List GlobalDef),
 }
 
 def lower_acc_empty : LowerAcc := LowerAcc.lower_acc List.empty List.empty
@@ -198,69 +198,69 @@ def lower_acc_empty : LowerAcc := LowerAcc.lower_acc List.empty List.empty
 
 #[partial]
 def npath_index_from (i : I64) (path : NamePath) (paths : List NamePath) : Option I64 :=
-  match paths {
-    List.empty => Option.none,
-    List.cons hd rest =>
-      if npath_eq path hd
-      then Option.some i
-      else npath_index_from (i + 1) path rest,
-  }
+    match paths {
+        List.empty => Option.none,
+        List.cons hd rest =>
+            if npath_eq path hd
+            then Option.some i
+            else npath_index_from (i + 1) path rest,
+    }
 
 def npath_index (path : NamePath) (paths : List NamePath) : Option I64 :=
-  npath_index_from 0 path paths
+    npath_index_from 0 path paths
 
 /// Assign (or reuse) a stable global index for `path` -- does not lower
 /// its body; that happens later, in `process_pending`.
 def intern_path (path : NamePath) (acc : LowerAcc) : Pair I64 LowerAcc :=
-  match acc {
-    LowerAcc.lower_acc seen done =>
-      match npath_index path seen {
-        Option.some idx => Pair.pair idx acc,
-        Option.none => Pair.pair (List.length seen) (LowerAcc.lower_acc (List.append seen [path]) done),
-      },
-  }
+    match acc {
+        LowerAcc.lower_acc seen done =>
+            match npath_index path seen {
+                Option.some idx => Pair.pair idx acc,
+                Option.none => Pair.pair (List.length seen) (LowerAcc.lower_acc (List.append seen [path]) done),
+            },
+    }
 
 def single_segment_npath (id : Identifier) : NamePath := NamePath.mk [id]
 
 // ─── The Result-plus-threaded-accumulator "monad" this module runs in ──
 
 def lower_ok (ir : CoreIr) (acc : LowerAcc) : Pair (Result LowerError CoreIr) LowerAcc :=
-  Pair.pair (Result.ok ir) acc
+    Pair.pair (Result.ok ir) acc
 
 def lower_err (e : LowerError) (acc : LowerAcc) : Pair (Result LowerError CoreIr) LowerAcc :=
-  Pair.pair (Result.err e) acc
+    Pair.pair (Result.err e) acc
 
 def lower_then
     (outcome : Pair (Result LowerError CoreIr) LowerAcc)
     (f : CoreIr -> LowerAcc -> Pair (Result LowerError CoreIr) LowerAcc)
     : Pair (Result LowerError CoreIr) LowerAcc :=
-  match outcome {
-    Pair.pair r acc =>
-      match r {
-        Result.ok ir => f ir acc,
-        Result.err e => Pair.pair (Result.err e) acc,
-      },
-  }
+    match outcome {
+        Pair.pair r acc =>
+            match r {
+                Result.ok ir => f ir acc,
+                Result.err e => Pair.pair (Result.err e) acc,
+            },
+    }
 
 // ─── Free-variable / global resolution ──────────────────────────────
 
 def lower_resolved_name (sdef : ScopeDef) (acc : LowerAcc) : Pair (Result LowerError CoreIr) LowerAcc :=
-  match sdef {
-    ScopeDef.mk name _module _sig _body _vis =>
-      match intern_path name acc {
-        Pair.pair idx acc1 => lower_ok (CoreIr.global idx) acc1,
-      },
-  }
+    match sdef {
+        ScopeDef.mk name _module _sig _body _vis =>
+            match intern_path name acc {
+                Pair.pair idx acc1 => lower_ok (CoreIr.global idx) acc1,
+            },
+    }
 
 def lower_free_var (ctx : LowerCtx) (dbg : DebugName) (acc : LowerAcc) : Pair (Result LowerError CoreIr) LowerAcc :=
-  match dbg {
-    DebugName.named id =>
-      match scope_resolve_name (NameRef.nid id) (ctx_scope ctx) empty_locals {
-        Result.ok sdef => lower_resolved_name sdef acc,
-        Result.err _ => lower_free_var_fallback ctx id acc,
-      },
-    DebugName.unnamed => lower_err (LowerError.le_unresolved_name (Identifier.id "<unnamed>")) acc,
-  }
+    match dbg {
+        DebugName.named id =>
+            match scope_resolve_name (NameRef.nid id) (ctx_scope ctx) empty_locals {
+                Result.ok sdef => lower_resolved_name sdef acc,
+                Result.err _ => lower_free_var_fallback ctx id acc,
+            },
+        DebugName.unnamed => lower_err (LowerError.le_unresolved_name (Identifier.id "<unnamed>")) acc,
+    }
 
 /// `scope_resolve_name`'s ordinary def-name lookup only ever finds
 /// `ScopeData.def_refs` entries -- a constructor referenced POINT-FREE
@@ -290,16 +290,16 @@ def lower_free_var (ctx : LowerCtx) (dbg : DebugName) (acc : LowerAcc) : Pair (R
 /// the ordinary `le_unresolved_name` error, unchanged, if the
 /// constructor-owner search doesn't find a match either.
 def lower_free_var_fallback (ctx : LowerCtx) (id : Identifier) (acc : LowerAcc) : Pair (Result LowerError CoreIr) LowerAcc :=
-  match lower_point_free_ctor ctx (identifier_bare_ctor_name id) {
-    Option.some ir => lower_ok ir acc,
-    Option.none => lower_err (LowerError.le_unresolved_name id) acc,
-  }
+    match lower_point_free_ctor ctx (identifier_bare_ctor_name id) {
+        Option.some ir => lower_ok ir acc,
+        Option.none => lower_err (LowerError.le_unresolved_name id) acc,
+    }
 
 def identifier_bare_ctor_name (id : Identifier) : String :=
-  match id { Identifier.id s => last_dotted_segment s }
+    match id { Identifier.id s => last_dotted_segment s }
 
 def name_path_last_segment (path : NamePath) : String :=
-  identifier_bare_ctor_name (npath_last_id path)
+    identifier_bare_ctor_name (npath_last_id path)
 
 /// The named constructor's own (tag, arity), searched by BARE name
 /// alone across every inductive in scope (same "if ambiguous, first
@@ -309,22 +309,22 @@ def name_path_last_segment (path : NamePath) : String :=
 /// variable OCCURRENCE, needs a `CoreIr`) and `lower_one_global` (a
 /// GLOBAL SLOT with no ordinary `Def`, needs a `GlobalDef`).
 def find_ctor_tag_arity (ctx : LowerCtx) (bare_name : String) : Option (Pair I64 I64) :=
-  let con_mp : NamePath := single_segment_npath (Identifier.id bare_name) in
-  match scope_find_inductive_by_constructor con_mp (ctx_scope ctx) {
-    Option.none => Option.none,
-    Option.some ind =>
-      match ind {
-        Inductive.mk _ _ _ constructors _ _ =>
-          match find_ctor_tag constructors (Identifier.id bare_name) {
-            Option.none => Option.none,
-            Option.some tag =>
-              match find_ctor_arity constructors (Identifier.id bare_name) {
-                Option.none => Option.none,
-                Option.some arity => Option.some (Pair.pair tag arity),
-              },
-          },
-      },
-  }
+    let con_mp : NamePath := single_segment_npath (Identifier.id bare_name) in
+    match scope_find_inductive_by_constructor con_mp (ctx_scope ctx) {
+        Option.none => Option.none,
+        Option.some ind =>
+            match ind {
+                Inductive.mk _ _ _ constructors _ _ =>
+                    match find_ctor_tag constructors (Identifier.id bare_name) {
+                        Option.none => Option.none,
+                        Option.some tag =>
+                            match find_ctor_arity constructors (Identifier.id bare_name) {
+                                Option.none => Option.none,
+                                Option.some arity => Option.some (Pair.pair tag arity),
+                            },
+                    },
+            },
+    }
 
 /// A bare (unapplied) `CoreIr.con tag arity []` for the named
 /// constructor -- `apply` (`lang/core_eval.mo`) already fills further
@@ -333,26 +333,26 @@ def find_ctor_tag_arity (ctx : LowerCtx) (bare_name : String) : Option (Pair I64
 /// exactly the correct "constructor value, ready to be (partially)
 /// applied later" shape, matching `CoreIr.con`'s own doc comment.
 def lower_point_free_ctor (ctx : LowerCtx) (bare_name : String) : Option CoreIr :=
-  match find_ctor_tag_arity ctx bare_name {
-    Option.none => Option.none,
-    Option.some pr => match pr { Pair.pair tag arity => Option.some (CoreIr.con tag arity List.empty) },
-  }
+    match find_ctor_tag_arity ctx bare_name {
+        Option.none => Option.none,
+        Option.some pr => match pr { Pair.pair tag arity => Option.some (CoreIr.con tag arity List.empty) },
+    }
 
 #[partial]
 def find_ctor_arity_from (i : I64) (ctors : List InductConstructor) (name : Identifier) : Option I64 :=
-  match ctors {
-    List.empty => Option.none,
-    List.cons ctor rest =>
-      if constructor_simple_name_eq ctor name
-      then Option.some (ctor_field_count ctor)
-      else find_ctor_arity_from (i + 1) rest name,
-  }
+    match ctors {
+        List.empty => Option.none,
+        List.cons ctor rest =>
+            if constructor_simple_name_eq ctor name
+            then Option.some (ctor_field_count ctor)
+            else find_ctor_arity_from (i + 1) rest name,
+    }
 
 def find_ctor_arity (ctors : List InductConstructor) (name : Identifier) : Option I64 :=
-  find_ctor_arity_from 0 ctors name
+    find_ctor_arity_from 0 ctors name
 
 def ctor_field_count (ctor : InductConstructor) : I64 :=
-  match ctor { InductConstructor.mk _ params _ => List.length params }
+    match ctor { InductConstructor.mk _ params _ => List.length params }
 
 // ─── if / match -> match_ ────────────────────────────────────────────
 
@@ -363,10 +363,10 @@ def ctor_field_count (ctor : InductConstructor) : I64 :=
 /// dispatches on.
 #[partial]
 def lower_if (ctx : LowerCtx) (cond : Term) (then_ : Term) (else_ : Term) (acc : LowerAcc) : Pair (Result LowerError CoreIr) LowerAcc :=
-  lower_then (lower_term ctx cond acc) (fn cir => fn acc1 =>
-    lower_then (lower_term ctx then_ acc1) (fn tir => fn acc2 =>
-      lower_then (lower_term ctx else_ acc2) (fn eir => fn acc3 =>
-        lower_ok (CoreIr.match_ cir [MatchArm.arm 0 tir, MatchArm.arm 0 eir]) acc3)))
+    lower_then (lower_term ctx cond acc) (fn cir => fn acc1 =>
+        lower_then (lower_term ctx then_ acc1) (fn tir => fn acc2 =>
+            lower_then (lower_term ctx else_ acc2) (fn eir => fn acc3 =>
+                lower_ok (CoreIr.match_ cir [MatchArm.arm 0 tir, MatchArm.arm 0 eir]) acc3)))
 
 // `ScopeData.inductives` is a `HashMap ModulePath Inductive` (see its own
 // doc comment in `lang/types.mo`) -- `find_inductive_by_case_name` below
@@ -374,8 +374,8 @@ def lower_if (ctx : LowerCtx) (cond : Term) (then_ : Term) (else_ : Term) (acc :
 // so this still has to flatten to a plain `List Inductive` first via
 // `HashMap.to_list` + dropping each pair's key.
 def scope_all_inductives (s : Scope) : List Inductive :=
-  let sd : ScopeData := scope_globals s in
-  inductive_pairs_values (HashMap.to_list sd.inductives)
+    let sd : ScopeData := scope_globals s in
+    inductive_pairs_values (HashMap.to_list sd.inductives)
 
 /// Accumulator-passing: this runs over every inductive in the program,
 /// and `List.cons ind (recurse rest)` holds a native frame per entry.
@@ -387,35 +387,35 @@ def scope_all_inductives (s : Scope) : List Inductive :=
 /// build.
 #[partial]
 def inductive_pairs_values (pairs : List (Pair String Inductive)) : List Inductive :=
-  List.reverse (inductive_pairs_values_go pairs List.empty)
+    List.reverse (inductive_pairs_values_go pairs List.empty)
 
 #[partial]
 def inductive_pairs_values_go (pairs : List (Pair String Inductive)) (acc : List Inductive) : List Inductive :=
-  match pairs {
-    List.empty => acc,
-    List.cons p rest =>
-      match p {
-        Pair.pair _ ind => inductive_pairs_values_go rest (List.cons ind acc),
-      },
-  }
+    match pairs {
+        List.empty => acc,
+        List.cons p rest =>
+            match p {
+                Pair.pair _ ind => inductive_pairs_values_go rest (List.cons ind acc),
+            },
+    }
 
 def constructor_simple_name_eq (c : InductConstructor) (name : Identifier) : Bool :=
-  match c {
-    InductConstructor.mk cname _ _ => npath_eq cname (single_segment_npath name),
-  }
+    match c {
+        InductConstructor.mk cname _ _ => npath_eq cname (single_segment_npath name),
+    }
 
 #[partial]
 def list_has_constructor_named (cs : List InductConstructor) (name : Identifier) : Bool :=
-  match cs {
-    List.empty => false,
-    List.cons c rest =>
-      if constructor_simple_name_eq c name then true else list_has_constructor_named rest name,
-  }
+    match cs {
+        List.empty => false,
+        List.cons c rest =>
+            if constructor_simple_name_eq c name then true else list_has_constructor_named rest name,
+    }
 
 def inductive_has_constructor_named (ind : Inductive) (name : Identifier) : Bool :=
-  match ind {
-    Inductive.mk _ _ _ constructors _ _ => list_has_constructor_named constructors name,
-  }
+    match ind {
+        Inductive.mk _ _ _ constructors _ _ => list_has_constructor_named constructors name,
+    }
 
 /// The inductive owning a constructor named `name`.
 ///
@@ -454,65 +454,65 @@ def inductive_has_constructor_named (ind : Inductive) (name : Identifier) : Bool
 /// case keeps resolving exactly as before.
 #[partial]
 def find_inductive_by_case_name (inds : List Inductive) (name : Identifier) (arity_hint : Option I64) : Option Inductive :=
-  match find_inductive_by_case_name_go_arity inds name arity_hint Option.none {
-    Option.some ind => Option.some ind,
-    Option.none => find_inductive_by_case_name_go inds name Option.none,
-  }
+    match find_inductive_by_case_name_go_arity inds name arity_hint Option.none {
+        Option.some ind => Option.some ind,
+        Option.none => find_inductive_by_case_name_go inds name Option.none,
+    }
 
 #[partial]
 def find_inductive_by_case_name_go_arity (inds : List Inductive) (name : Identifier) (arity_hint : Option I64) (best : Option Inductive) : Option Inductive :=
-  match arity_hint {
-    Option.none => Option.none,
-    Option.some arity =>
-      match inds {
-        List.empty => best,
-        List.cons ind rest =>
-          if inductive_has_constructor_named_with_arity ind name arity
-          then find_inductive_by_case_name_go_arity rest name arity_hint (lower_inductive_path_of best ind)
-          else find_inductive_by_case_name_go_arity rest name arity_hint best,
-      },
-  }
+    match arity_hint {
+        Option.none => Option.none,
+        Option.some arity =>
+            match inds {
+                List.empty => best,
+                List.cons ind rest =>
+                    if inductive_has_constructor_named_with_arity ind name arity
+                    then find_inductive_by_case_name_go_arity rest name arity_hint (lower_inductive_path_of best ind)
+                    else find_inductive_by_case_name_go_arity rest name arity_hint best,
+            },
+    }
 
 #[partial]
 def find_inductive_by_case_name_go (inds : List Inductive) (name : Identifier) (best : Option Inductive) : Option Inductive :=
-  match inds {
-    List.empty => best,
-    List.cons ind rest =>
-      if inductive_has_constructor_named ind name
-      then find_inductive_by_case_name_go rest name (lower_inductive_path_of best ind)
-      else find_inductive_by_case_name_go rest name best,
-  }
+    match inds {
+        List.empty => best,
+        List.cons ind rest =>
+            if inductive_has_constructor_named ind name
+            then find_inductive_by_case_name_go rest name (lower_inductive_path_of best ind)
+            else find_inductive_by_case_name_go rest name best,
+    }
 
 def inductive_has_constructor_named_with_arity (ind : Inductive) (name : Identifier) (arity : I64) : Bool :=
-  match ind {
-    Inductive.mk _ _ _ constructors _ _ => list_has_constructor_named_with_arity constructors name arity,
-  }
+    match ind {
+        Inductive.mk _ _ _ constructors _ _ => list_has_constructor_named_with_arity constructors name arity,
+    }
 
 #[partial]
 def list_has_constructor_named_with_arity (cs : List InductConstructor) (name : Identifier) (arity : I64) : Bool :=
-  match cs {
-    List.empty => false,
-    List.cons c rest =>
-      if constructor_simple_name_eq c name && I64.beq (ctor_field_count c) arity
-      then true
-      else list_has_constructor_named_with_arity rest name arity,
-  }
+    match cs {
+        List.empty => false,
+        List.cons c rest =>
+            if constructor_simple_name_eq c name && I64.beq (ctor_field_count c) arity
+            then true
+            else list_has_constructor_named_with_arity rest name arity,
+    }
 
 /// Keep whichever of the two inductives has the lower path, so the
 /// choice does not depend on visit order.
 #[partial]
 def lower_inductive_path_of (best : Option Inductive) (candidate : Inductive) : Option Inductive :=
-  match best {
-    Option.none => Option.some candidate,
-    Option.some current =>
-      if String.lt (inductive_path_str candidate) (inductive_path_str current)
-      then Option.some candidate
-      else Option.some current,
-  }
+    match best {
+        Option.none => Option.some candidate,
+        Option.some current =>
+            if String.lt (inductive_path_str candidate) (inductive_path_str current)
+            then Option.some candidate
+            else Option.some current,
+    }
 
 #[partial]
 def inductive_path_str (ind : Inductive) : String :=
-  match ind { Inductive.mk ind_name _ _ _ _ _ => show_name_path ind_name }
+    match ind { Inductive.mk ind_name _ _ _ _ _ => show_name_path ind_name }
 
 /// A `match`'s `MatchCase`s don't carry the scrutinee's inductive path
 /// directly (`MatchCase.mk`'s `name` is a bare `Identifier`, per
@@ -546,34 +546,34 @@ def inductive_path_str (ind : Inductive) : String :=
 /// (arity-hinted, then name-only) when the all-cases filter finds
 /// nothing, so no previously-resolved match changes.
 def find_case_inductive (scope : Scope) (cases : List MatchCase) : Option Inductive :=
-  if has_any_explicit_case cases
-  then
-    match find_inductive_matching_all_cases (scope_all_inductives scope) cases Option.none {
-      Option.some ind => Option.some ind,
-      Option.none => find_case_inductive_by_first_case scope cases,
-    }
-  else find_case_inductive_by_first_case scope cases
+    if has_any_explicit_case cases
+    then
+        match find_inductive_matching_all_cases (scope_all_inductives scope) cases Option.none {
+            Option.some ind => Option.some ind,
+            Option.none => find_case_inductive_by_first_case scope cases,
+        }
+    else find_case_inductive_by_first_case scope cases
 
 /// Resolve a match's inductive, preferring an EXPLICIT `MatchCase.typ_name`
 /// when a caller supplied one. The `Elim` reconstruction sets it on every
 /// case, which is strictly better than the name/arity search below; ordinary
 /// parsed cases leave it `Option.none` and keep that search unchanged.
 def find_case_inductive_typed (scope : Scope) (cases : List MatchCase) : Option Inductive :=
-  match case_typ_name cases {
-    Option.none => find_case_inductive scope cases,
-    Option.some np =>
-      match scope_find_inductive np scope {
-        Result.err _ => find_case_inductive scope cases,
-        Result.ok ind => Option.some ind,
-      },
-  }
+    match case_typ_name cases {
+        Option.none => find_case_inductive scope cases,
+        Option.some np =>
+            match scope_find_inductive np scope {
+                Result.err _ => find_case_inductive scope cases,
+                Result.ok ind => Option.some ind,
+            },
+    }
 
 /// The head case's own `typ_name`, if it carries one.
 def case_typ_name (cases : List MatchCase) : Option NamePath :=
-  match cases {
-    List.empty => Option.none,
-    List.cons c _ => match c { MatchCase.mk _ _ _ _ typ_name => typ_name },
-  }
+    match cases {
+        List.empty => Option.none,
+        List.cons c _ => match c { MatchCase.mk _ _ _ _ typ_name => typ_name },
+    }
 
 /// Guards `find_inductive_matching_all_cases` against a match built from
 /// nothing but wildcard cases (e.g. `match v { _ => default }`) -- with
@@ -585,96 +585,96 @@ def case_typ_name (cases : List MatchCase) : Option NamePath :=
 /// the "first case" IS the wildcard, same as before this fix).
 #[partial]
 def has_any_explicit_case (cases : List MatchCase) : Bool :=
-  match cases {
-    List.empty => false,
-    List.cons c rest => if is_wildcard_case c then has_any_explicit_case rest else true,
-  }
+    match cases {
+        List.empty => false,
+        List.cons c rest => if is_wildcard_case c then has_any_explicit_case rest else true,
+    }
 
 def find_case_inductive_by_first_case (scope : Scope) (cases : List MatchCase) : Option Inductive :=
-  match cases {
-    List.empty => Option.none,
-    List.cons c _ =>
-      match c {
-        MatchCase.mk name case_args _ _ _ =>
-          find_inductive_by_case_name (scope_all_inductives scope) name (Option.some (List.length case_args)),
-      },
-  }
+    match cases {
+        List.empty => Option.none,
+        List.cons c _ =>
+            match c {
+                MatchCase.mk name case_args _ _ _ =>
+                    find_inductive_by_case_name (scope_all_inductives scope) name (Option.some (List.length case_args)),
+            },
+    }
 
 #[partial]
 def find_inductive_matching_all_cases (inds : List Inductive) (cases : List MatchCase) (best : Option Inductive) : Option Inductive :=
-  match inds {
-    List.empty => best,
-    List.cons ind rest =>
-      if inductive_matches_all_cases ind cases
-      then find_inductive_matching_all_cases rest cases (lower_inductive_path_of best ind)
-      else find_inductive_matching_all_cases rest cases best,
-  }
+    match inds {
+        List.empty => best,
+        List.cons ind rest =>
+            if inductive_matches_all_cases ind cases
+            then find_inductive_matching_all_cases rest cases (lower_inductive_path_of best ind)
+            else find_inductive_matching_all_cases rest cases best,
+    }
 
 #[partial]
 def inductive_matches_all_cases (ind : Inductive) (cases : List MatchCase) : Bool :=
-  match cases {
-    List.empty => true,
-    List.cons c rest =>
-      if is_wildcard_case c
-      then inductive_matches_all_cases ind rest
-      else
-        match c {
-          MatchCase.mk name case_args _ _ _ =>
-            if inductive_has_constructor_named_with_arity ind name (List.length case_args)
+    match cases {
+        List.empty => true,
+        List.cons c rest =>
+            if is_wildcard_case c
             then inductive_matches_all_cases ind rest
-            else false,
-        },
-  }
+            else
+                match c {
+                    MatchCase.mk name case_args _ _ _ =>
+                        if inductive_has_constructor_named_with_arity ind name (List.length case_args)
+                        then inductive_matches_all_cases ind rest
+                        else false,
+                },
+    }
 
 def is_wildcard_case (c : MatchCase) : Bool :=
-  match c {
-    MatchCase.mk name _ _ _ _ =>
-      match name {
-        Identifier.id s => String.beq s "_",
-      },
-  }
+    match c {
+        MatchCase.mk name _ _ _ _ =>
+            match name {
+                Identifier.id s => String.beq s "_",
+            },
+    }
 
 #[partial]
 def find_case_for_ctor (ctor : InductConstructor) (cases : List MatchCase) : Option MatchCase :=
-  match cases {
-    List.empty => Option.none,
-    List.cons c rest =>
-      match c {
-        MatchCase.mk name _ _ _ _ =>
-          if constructor_simple_name_eq ctor name
-          then Option.some c
-          else find_case_for_ctor ctor rest,
-      },
-  }
+    match cases {
+        List.empty => Option.none,
+        List.cons c rest =>
+            match c {
+                MatchCase.mk name _ _ _ _ =>
+                    if constructor_simple_name_eq ctor name
+                    then Option.some c
+                    else find_case_for_ctor ctor rest,
+            },
+    }
 
 #[partial]
 def find_wildcard_case (cases : List MatchCase) : Option MatchCase :=
-  match cases {
-    List.empty => Option.none,
-    List.cons c rest =>
-      if is_wildcard_case c then Option.some c else find_wildcard_case rest,
-  }
+    match cases {
+        List.empty => Option.none,
+        List.cons c rest =>
+            if is_wildcard_case c then Option.some c else find_wildcard_case rest,
+    }
 
 def ctor_name (ctor : InductConstructor) : Identifier :=
-  match ctor {
-    InductConstructor.mk name _ _ => npath_last_id name,
-  }
+    match ctor {
+        InductConstructor.mk name _ _ => npath_last_id name,
+    }
 
 def npath_last_id (np : NamePath) : Identifier :=
-  match np {
-    NamePath.mk ids => list_last_or_empty ids,
-  }
+    match np {
+        NamePath.mk ids => list_last_or_empty ids,
+    }
 
 #[partial]
 def list_last_or_empty (ids : List Identifier) : Identifier :=
-  match ids {
-    List.empty => Identifier.id "",
-    List.cons hd rest =>
-      match rest {
-        List.empty => hd,
-        List.cons _ _ => list_last_or_empty rest,
-      },
-  }
+    match ids {
+        List.empty => Identifier.id "",
+        List.cons hd rest =>
+            match rest {
+                List.empty => hd,
+                List.cons _ _ => list_last_or_empty rest,
+            },
+    }
 
 /// One arm per constructor of `ind`, in declaration order: an explicit
 /// case if the source `match` covered it, else the wildcard case's body
@@ -684,25 +684,25 @@ def lower_one_match_arm
     (ctx : LowerCtx) (ind_name : NamePath) (ctor : InductConstructor) (cases : List MatchCase)
     (acc : LowerAcc) (k : MatchArm -> LowerAcc -> Pair (Result LowerError CoreIr) LowerAcc)
     : Pair (Result LowerError CoreIr) LowerAcc :=
-  match find_case_for_ctor ctor cases {
-    Option.some found_case => lower_explicit_match_case ctx found_case acc k,
-    Option.none =>
-      match find_wildcard_case cases {
-        Option.some wc => lower_wildcard_match_case ctx (ctor_field_count ctor) wc acc k,
-        Option.none => k (MatchArm.arm (ctor_field_count ctor) (CoreIr.match_fail (modpath_of ind_name) (ctor_name ctor))) acc,
-      },
-  }
+    match find_case_for_ctor ctor cases {
+        Option.some found_case => lower_explicit_match_case ctx found_case acc k,
+        Option.none =>
+            match find_wildcard_case cases {
+                Option.some wc => lower_wildcard_match_case ctx (ctor_field_count ctor) wc acc k,
+                Option.none => k (MatchArm.arm (ctor_field_count ctor) (CoreIr.match_fail (modpath_of ind_name) (ctor_name ctor))) acc,
+            },
+    }
 
 #[partial]
 def lower_explicit_match_case
     (ctx : LowerCtx) (found_case : MatchCase) (acc : LowerAcc)
     (k : MatchArm -> LowerAcc -> Pair (Result LowerError CoreIr) LowerAcc)
     : Pair (Result LowerError CoreIr) LowerAcc :=
-  match found_case {
-    MatchCase.mk _ case_args case_body _ _ =>
-      lower_then (lower_term ctx case_body acc) (fn bir => fn acc1 =>
-        k (MatchArm.arm (List.length case_args) bir) acc1),
-  }
+    match found_case {
+        MatchCase.mk _ case_args case_body _ _ =>
+            lower_then (lower_term ctx case_body acc) (fn bir => fn acc1 =>
+                k (MatchArm.arm (List.length case_args) bir) acc1),
+    }
 
 /// A wildcard-filled arm's body binds none of the matched constructor's
 /// own fields (it never named them), but `dispatch_arm` (core_eval.mo)
@@ -715,88 +715,88 @@ def lower_wildcard_match_case
     (ctx : LowerCtx) (arity : I64) (wc : MatchCase) (acc : LowerAcc)
     (k : MatchArm -> LowerAcc -> Pair (Result LowerError CoreIr) LowerAcc)
     : Pair (Result LowerError CoreIr) LowerAcc :=
-  match wc {
-    MatchCase.mk _ _ wc_body _ _ =>
-      lower_then (lower_term ctx wc_body acc) (fn bir => fn acc1 =>
-        k (MatchArm.arm arity bir) acc1),
-  }
+    match wc {
+        MatchCase.mk _ _ wc_body _ _ =>
+            lower_then (lower_term ctx wc_body acc) (fn bir => fn acc1 =>
+                k (MatchArm.arm arity bir) acc1),
+    }
 
 #[partial]
 def lower_match_arms_for_ctors
     (ctx : LowerCtx) (ind_name : NamePath) (ctors : List InductConstructor) (cases : List MatchCase)
     (acc : LowerAcc) (k : List MatchArm -> LowerAcc -> Pair (Result LowerError CoreIr) LowerAcc)
     : Pair (Result LowerError CoreIr) LowerAcc :=
-  match ctors {
-    List.empty => k List.empty acc,
-    List.cons ctor rest =>
-      lower_one_match_arm ctx ind_name ctor cases acc (fn arm_ir => fn acc1 =>
-        lower_match_arms_for_ctors ctx ind_name rest cases acc1 (fn arms => fn acc2 =>
-          k (List.cons arm_ir arms) acc2)),
-  }
+    match ctors {
+        List.empty => k List.empty acc,
+        List.cons ctor rest =>
+            lower_one_match_arm ctx ind_name ctor cases acc (fn arm_ir => fn acc1 =>
+                lower_match_arms_for_ctors ctx ind_name rest cases acc1 (fn arms => fn acc2 =>
+                    k (List.cons arm_ir arms) acc2)),
+    }
 
 #[partial]
 def lower_match_arms
     (ctx : LowerCtx) (ind : Inductive) (cases : List MatchCase) (acc : LowerAcc)
     (k : List MatchArm -> LowerAcc -> Pair (Result LowerError CoreIr) LowerAcc)
     : Pair (Result LowerError CoreIr) LowerAcc :=
-  match ind {
-    Inductive.mk ind_name _ _ constructors _ _ =>
-      lower_match_arms_for_ctors ctx ind_name constructors cases acc k,
-  }
+    match ind {
+        Inductive.mk ind_name _ _ constructors _ _ =>
+            lower_match_arms_for_ctors ctx ind_name constructors cases acc k,
+    }
 
 #[partial]
 def lower_match (ctx : LowerCtx) (value : Term) (cases : List MatchCase) (acc : LowerAcc) : Pair (Result LowerError CoreIr) LowerAcc :=
-  if is_dict_projection_scrutinee value then lower_dict_projection ctx value cases acc
-  else
-  match find_case_inductive_typed (ctx_scope ctx) cases {
-    Option.none => lower_err (LowerError.le_unknown_inductive (ModulePath.mk List.empty)) acc,
-    Option.some ind =>
-      lower_then (lower_term ctx value acc) (fn vir => fn acc1 =>
-        lower_match_arms ctx ind cases acc1 (fn arms => fn acc2 =>
-          lower_ok (CoreIr.match_ vir arms) acc2)),
-  }
+    if is_dict_projection_scrutinee value then lower_dict_projection ctx value cases acc
+    else
+    match find_case_inductive_typed (ctx_scope ctx) cases {
+        Option.none => lower_err (LowerError.le_unknown_inductive (ModulePath.mk List.empty)) acc,
+        Option.some ind =>
+            lower_then (lower_term ctx value acc) (fn vir => fn acc1 =>
+                lower_match_arms ctx ind cases acc1 (fn arms => fn acc2 =>
+                    lower_ok (CoreIr.match_ vir arms) acc2)),
+    }
 
 #[partial]
 def lower_dict_projection (ctx : LowerCtx) (value : Term) (cases : List MatchCase) (acc : LowerAcc) : Pair (Result LowerError CoreIr) LowerAcc :=
-  match cases {
-    List.cons c _ =>
-      lower_then (lower_term ctx value acc) (fn vir => fn acc1 =>
-        lower_explicit_match_case ctx c acc1 (fn arm => fn acc2 =>
-          lower_ok (CoreIr.match_ vir [arm]) acc2)),
-    List.empty => lower_err (LowerError.le_unknown_inductive (ModulePath.mk List.empty)) acc,
-  }
+    match cases {
+        List.cons c _ =>
+            lower_then (lower_term ctx value acc) (fn vir => fn acc1 =>
+                lower_explicit_match_case ctx c acc1 (fn arm => fn acc2 =>
+                    lower_ok (CoreIr.match_ vir [arm]) acc2)),
+        List.empty => lower_err (LowerError.le_unknown_inductive (ModulePath.mk List.empty)) acc,
+    }
 
 #[partial]
 def lower_literal (ctx : LowerCtx) (l : Literal) (acc : LowerAcc) : Pair (Result LowerError CoreIr) LowerAcc :=
-  match l {
-    Literal.str s => lower_ok (CoreIr.lit (IrLit.ir_str s)) acc,
-    // `IrLit.ir_char` has always taken a `Char` (`lang/core_ir.mo`), and
-    // `Literal.char` now carries one -- straight through, no conversion.
-    Literal.char c => lower_ok (CoreIr.lit (IrLit.ir_char c)) acc,
-    Literal.num n suffix => lower_ok (CoreIr.lit (IrLit.ir_num n suffix)) acc,
-    // Named, not fallen through -- see `le_float_literal_unsupported`.
-    Literal.flt _text _suffix => lower_err LowerError.le_float_literal_unsupported acc,
-    Literal.if_ cond then_ else_ => lower_if ctx cond then_ else_ acc,
-    Literal.match_ value cases => lower_match ctx value cases acc,
-    // Backstop, not codegen: see `le_struct_lit_survived`'s own doc
-    // comment. A struct literal reaching here used to be a bare
-    // non-exhaustive-match crash; now it diagnoses like every other
-    // lower failure (wrapped in `le_in_def` by `lower_one_global`).
-    Literal.struct_lit _fields _type_name => lower_err LowerError.le_struct_lit_survived acc,
-    Literal.struct_update _base _fields => lower_err LowerError.le_struct_lit_survived acc,
-  }
+    match l {
+        Literal.str s => lower_ok (CoreIr.lit (IrLit.ir_str s)) acc,
+        // `IrLit.ir_char` has always taken a `Char` (`lang/core_ir.mo`), and
+        // `Literal.char` now carries one -- straight through, no conversion.
+        Literal.char c => lower_ok (CoreIr.lit (IrLit.ir_char c)) acc,
+        Literal.num n suffix => lower_ok (CoreIr.lit (IrLit.ir_num n suffix)) acc,
+        // Named, not fallen through -- see `le_float_literal_unsupported`.
+        Literal.flt _text _suffix => lower_err LowerError.le_float_literal_unsupported acc,
+        Literal.if_ cond then_ else_ => lower_if ctx cond then_ else_ acc,
+        Literal.match_ value cases => lower_match ctx value cases acc,
+        // Backstop, not codegen: see `le_struct_lit_survived`'s own doc
+        // comment. A struct literal reaching here used to be a bare
+        // non-exhaustive-match crash; now it diagnoses like every other
+        // lower failure (wrapped in `le_in_def` by `lower_one_global`).
+        Literal.struct_lit _fields _type_name => lower_err LowerError.le_struct_lit_survived acc,
+        Literal.struct_update _base _fields => lower_err LowerError.le_struct_lit_survived acc,
+    }
 
 // ─── Con / Native (both share the same sparse-args shape) ──────────────
 
 def list_all_none (args : List (Option Term)) : Bool :=
-  match args {
-    List.empty => true,
-    List.cons hd rest =>
-      match hd {
-        Option.none => list_all_none rest,
-        Option.some _ => false,
-      },
-  }
+    match args {
+        List.empty => true,
+        List.cons hd rest =>
+            match hd {
+                Option.none => list_all_none rest,
+                Option.some _ => false,
+            },
+    }
 
 /// Lowers `args`'s filled prefix, stopping at the first hole (a valid,
 /// ordinary partial application) -- but only if every remaining slot
@@ -808,108 +808,108 @@ def lower_sparse_args
     (ctx : LowerCtx) (args : List (Option Term)) (acc : LowerAcc)
     (k : List CoreIr -> LowerAcc -> Pair (Result LowerError CoreIr) LowerAcc)
     : Pair (Result LowerError CoreIr) LowerAcc :=
-  match args {
-    List.empty => k List.empty acc,
-    List.cons hd rest =>
-      match hd {
-        Option.some t =>
-          lower_then (lower_term ctx t acc) (fn ir => fn acc1 =>
-            lower_sparse_args ctx rest acc1 (fn more => fn acc2 => k (List.cons ir more) acc2)),
-        Option.none =>
-          if list_all_none rest
-          then k List.empty acc
-          else lower_err LowerError.le_con_hole_before_filled_arg acc,
-      },
-  }
+    match args {
+        List.empty => k List.empty acc,
+        List.cons hd rest =>
+            match hd {
+                Option.some t =>
+                    lower_then (lower_term ctx t acc) (fn ir => fn acc1 =>
+                        lower_sparse_args ctx rest acc1 (fn more => fn acc2 => k (List.cons ir more) acc2)),
+                Option.none =>
+                    if list_all_none rest
+                    then k List.empty acc
+                    else lower_err LowerError.le_con_hole_before_filled_arg acc,
+            },
+    }
 
 #[partial]
 def find_ctor_tag_from (i : I64) (ctors : List InductConstructor) (name : Identifier) : Option I64 :=
-  match ctors {
-    List.empty => Option.none,
-    List.cons ctor rest =>
-      if constructor_simple_name_eq ctor name
-      then Option.some i
-      else find_ctor_tag_from (i + 1) rest name,
-  }
+    match ctors {
+        List.empty => Option.none,
+        List.cons ctor rest =>
+            if constructor_simple_name_eq ctor name
+            then Option.some i
+            else find_ctor_tag_from (i + 1) rest name,
+    }
 
 def find_ctor_tag (ctors : List InductConstructor) (name : Identifier) : Option I64 :=
-  find_ctor_tag_from 0 ctors name
+    find_ctor_tag_from 0 ctors name
 
 #[partial]
 def lower_con_with_inductive
     (ctx : LowerCtx) (ind : Inductive) (name : Identifier) (num_args : I64) (args : List (Option Term))
     (acc : LowerAcc)
     : Pair (Result LowerError CoreIr) LowerAcc :=
-  match ind {
-    Inductive.mk _ _ _ constructors _ _ =>
-      match find_ctor_tag constructors name {
-        Option.some tag =>
-          lower_sparse_args ctx args acc (fn present_args => fn acc1 =>
-            lower_ok (CoreIr.con tag num_args present_args) acc1),
-        Option.none => lower_err (LowerError.le_unknown_constructor (ModulePath.mk [name])) acc,
-      },
-  }
+    match ind {
+        Inductive.mk _ _ _ constructors _ _ =>
+            match find_ctor_tag constructors name {
+                Option.some tag =>
+                    lower_sparse_args ctx args acc (fn present_args => fn acc1 =>
+                        lower_ok (CoreIr.con tag num_args present_args) acc1),
+                Option.none => lower_err (LowerError.le_unknown_constructor (ModulePath.mk [name])) acc,
+            },
+    }
 
 #[partial]
 def lower_con (ctx : LowerCtx) (c : Con) (acc : LowerAcc) : Pair (Result LowerError CoreIr) LowerAcc :=
-  match c {
-    Con.mk name typ_name num_args args =>
-      match scope_find_inductive typ_name (ctx_scope ctx) {
-        Result.ok ind => lower_con_with_inductive ctx ind name num_args args acc,
-        Result.err _ =>
-          // A dictionary value (`__Dict_<Cls>_<args>`) is typed by its own
-          // minted name, which names no inductive: it is a one-constructor product.
-          if is_dict_value_con name typ_name then
-            lower_sparse_args ctx args acc (fn present_args => fn acc1 =>
-              lower_ok (CoreIr.con 0 num_args present_args) acc1)
-          else lower_err (LowerError.le_unknown_inductive (modpath_of typ_name)) acc,
-      },
-  }
+    match c {
+        Con.mk name typ_name num_args args =>
+            match scope_find_inductive typ_name (ctx_scope ctx) {
+                Result.ok ind => lower_con_with_inductive ctx ind name num_args args acc,
+                Result.err _ =>
+                    // A dictionary value (`__Dict_<Cls>_<args>`) is typed by its own
+                    // minted name, which names no inductive: it is a one-constructor product.
+                    if is_dict_value_con name typ_name then
+                        lower_sparse_args ctx args acc (fn present_args => fn acc1 =>
+                            lower_ok (CoreIr.con 0 num_args present_args) acc1)
+                    else lower_err (LowerError.le_unknown_inductive (modpath_of typ_name)) acc,
+            },
+    }
 
 def is_dict_value_con (ctor : Identifier) (typ_name : NamePath) : Bool :=
-  match ctor {
-    Identifier.id c =>
-      if String.beq c "mk"
-      then String.contains (show_name_path typ_name) "__Dict_"
-      else false,
-  }
+    match ctor {
+        Identifier.id c =>
+            if String.beq c "mk"
+            then String.contains (show_name_path typ_name) "__Dict_"
+            else false,
+    }
 
 /// A D5 dictionary projection: `match __dict_Cls { mk f1 .. fn => body }`.
 def is_dict_projection_scrutinee (value : Term) : Bool :=
-  match value {
-    Term.var _ dbg =>
-      match dbg {
-        DebugName.named id =>
-          match id {
-            Identifier.id text => String.starts_with "__dict_" text,
-          },
-        DebugName.unnamed => false,
-      },
-    _ => false,
-  }
+    match value {
+        Term.var _ dbg =>
+            match dbg {
+                DebugName.named id =>
+                    match id {
+                        Identifier.id text => String.starts_with "__dict_" text,
+                    },
+                DebugName.unnamed => false,
+            },
+        _ => false,
+    }
 
 /// Rendered diagnostics for `LowerError`. Moved here from the CLI so the
 /// browser REPL's engine shares the same wording.
 pub def show_identifier (id : Identifier) : String :=
-  match id {
-    Identifier.id s => s,
-  }
+    match id {
+        Identifier.id s => s,
+    }
 
 pub def show_lower_error (e : LowerError) : String :=
-  match e {
-    LowerError.le_unresolved_name name => String.concat "unresolved name " (show_identifier name),
-    LowerError.le_unresolved_module_path path => String.concat "unresolved module path " (show_module_path path),
-    LowerError.le_unknown_inductive path => String.concat "unknown inductive " (show_module_path path),
-    LowerError.le_unknown_constructor path => String.concat "unknown constructor " (show_module_path path),
-    LowerError.le_unknown_native name => String.concat "unknown native " (show_identifier name),
-    LowerError.le_type_level_term => "type-level term reached lowering",
-    LowerError.le_con_hole_before_filled_arg => "constructor hole before a filled arg",
-    LowerError.le_struct_lit_survived => "struct literal reached lowering un-desugared (give the literal an explicit `: StructName` annotation, or bind it to an annotated local)",
-    LowerError.le_float_literal_unsupported => "float literals are not supported by the evaluator (the eval IR cannot carry one yet)",
-    LowerError.le_unresolved_macro_artifact => "an unresolved macro-template variable or quote reached lowering",
-    LowerError.le_elim_ill_formed reason => String.concat "a dependent match/if could not be lowered: " reason,
-    LowerError.le_in_def path inner => String.concat "in def " (String.concat (show_module_path path) (String.concat ": " (show_lower_error inner))),
-  }
+    match e {
+        LowerError.le_unresolved_name name => String.concat "unresolved name " (show_identifier name),
+        LowerError.le_unresolved_module_path path => String.concat "unresolved module path " (show_module_path path),
+        LowerError.le_unknown_inductive path => String.concat "unknown inductive " (show_module_path path),
+        LowerError.le_unknown_constructor path => String.concat "unknown constructor " (show_module_path path),
+        LowerError.le_unknown_native name => String.concat "unknown native " (show_identifier name),
+        LowerError.le_type_level_term => "type-level term reached lowering",
+        LowerError.le_con_hole_before_filled_arg => "constructor hole before a filled arg",
+        LowerError.le_struct_lit_survived => "struct literal reached lowering un-desugared (give the literal an explicit `: StructName` annotation, or bind it to an annotated local)",
+        LowerError.le_float_literal_unsupported => "float literals are not supported by the evaluator (the eval IR cannot carry one yet)",
+        LowerError.le_unresolved_macro_artifact => "an unresolved macro-template variable or quote reached lowering",
+        LowerError.le_elim_ill_formed reason => String.concat "a dependent match/if could not be lowered: " reason,
+        LowerError.le_in_def path inner => String.concat "in def " (String.concat (show_module_path path) (String.concat ": " (show_lower_error inner))),
+    }
 
 /// `native_id_for_name` lives in `lang/core_eval.mo` beside `native_specs`
 /// (imported above): the id is a position in that one spec list, so this
@@ -917,72 +917,72 @@ pub def show_lower_error (e : LowerError) : String :=
 
 #[partial]
 def lower_native (ctx : LowerCtx) (native : Native) (acc : LowerAcc) : Pair (Result LowerError CoreIr) LowerAcc :=
-  match native {
-    Native.mk native_name num_args args =>
-      match native_id_for_name native_name {
-        Option.some nid =>
-          lower_sparse_args ctx args acc (fn present_args => fn acc1 =>
-            lower_ok (CoreIr.ntv nid present_args) acc1),
-        Option.none => lower_err (LowerError.le_unknown_native native_name) acc,
-      },
-  }
+    match native {
+        Native.mk native_name num_args args =>
+            match native_id_for_name native_name {
+                Option.some nid =>
+                    lower_sparse_args ctx args acc (fn present_args => fn acc1 =>
+                        lower_ok (CoreIr.ntv nid present_args) acc1),
+                Option.none => lower_err (LowerError.le_unknown_native native_name) acc,
+            },
+    }
 
 // ─── Term -> CoreIr, per node ────────────────────────────────────────
 
 #[partial]
 def lower_term (ctx : LowerCtx) (t : Term) (acc : LowerAcc) : Pair (Result LowerError CoreIr) LowerAcc :=
-  match t {
-    Term.var idx dbg =>
-      if I64.beq idx sentinel
-      then lower_free_var ctx dbg acc
-      else lower_ok (CoreIr.local idx) acc,
-    Term.lam _dbg _typ body =>
-      lower_then (lower_term ctx body acc) (fn ir => fn acc1 => lower_ok (CoreIr.lam ir) acc1),
-    Term.app fun_ arg =>
-      lower_then (lower_term ctx fun_ acc) (fn fir => fn acc1 =>
-        lower_then (lower_term ctx arg acc1) (fn air => fn acc2 =>
-          lower_ok (CoreIr.app fir air) acc2)),
-    Term.lit value => lower_literal ctx value acc,
-    Term.ntv native => lower_native ctx native acc,
-    Term.con c => lower_con ctx c acc,
-    Term.pi _ _ _ => lower_err LowerError.le_type_level_term acc,
-    // A sort is a type-level term, so it has no runtime lowering.
-    Term.sort _level => lower_err LowerError.le_type_level_term acc,
-    Term.hole => lower_err LowerError.le_type_level_term acc,
-    // Transparent. This is the meta-eval lowering, not codegen; positions
-    // are of no use to it, so it lowers straight through.
-    Term.ctx _loc inner => lower_term ctx inner acc,
-    // The meta-eval interpreter has no cubical runtime, and Stage 1 does not
-    // owe it one: no surface syntax produces a cubical term yet. `interval`
-    // genuinely IS a type-level term, so the existing error is the right one
-    // for it; the value-level primitives share it rather than lowering to a
-    // silent placeholder. `plans/type-system/univalence.md` records when the
-    // runtime story comes due -- the first EXECUTABLE cubical proof.
-    Term.cubical _c => lower_err LowerError.le_type_level_term acc,
-    // See `le_unresolved_macro_artifact`'s own doc comment: this pass has
-    // no type-check prerequisite, so either shape can legitimately still
-    // be here mid-macro-expansion.
-    Term.quote_ _inner => lower_err LowerError.le_unresolved_macro_artifact acc,
-    Term.var_macro _idx _dbg => lower_err LowerError.le_unresolved_macro_artifact acc,
-    // `core-term-simplification.md` R3c: the checker returns a `Term.elim`
-    // for `if`/`match`. Lower it through the same conversion codegen's
-    // whole-program pass uses (`elim_to_literal`), then re-enter this
-    // function on the `Literal` form -- `lower_term` is `#[partial]`, and the
-    // converted term is a `Term.lit`, so this is a representation step, not a
-    // new evaluation rule.
-    Term.elim e =>
-      match elim_to_literal (ctx_scope ctx) e {
-        Result.err reason => lower_err (LowerError.le_elim_ill_formed reason) acc,
-        Result.ok converted => lower_term ctx converted acc,
-      },
-  }
+    match t {
+        Term.var idx dbg =>
+            if I64.beq idx sentinel
+            then lower_free_var ctx dbg acc
+            else lower_ok (CoreIr.local idx) acc,
+        Term.lam _dbg _typ body =>
+            lower_then (lower_term ctx body acc) (fn ir => fn acc1 => lower_ok (CoreIr.lam ir) acc1),
+        Term.app fun_ arg =>
+            lower_then (lower_term ctx fun_ acc) (fn fir => fn acc1 =>
+                lower_then (lower_term ctx arg acc1) (fn air => fn acc2 =>
+                    lower_ok (CoreIr.app fir air) acc2)),
+        Term.lit value => lower_literal ctx value acc,
+        Term.ntv native => lower_native ctx native acc,
+        Term.con c => lower_con ctx c acc,
+        Term.pi _ _ _ => lower_err LowerError.le_type_level_term acc,
+        // A sort is a type-level term, so it has no runtime lowering.
+        Term.sort _level => lower_err LowerError.le_type_level_term acc,
+        Term.hole => lower_err LowerError.le_type_level_term acc,
+        // Transparent. This is the meta-eval lowering, not codegen; positions
+        // are of no use to it, so it lowers straight through.
+        Term.ctx _loc inner => lower_term ctx inner acc,
+        // The meta-eval interpreter has no cubical runtime, and Stage 1 does not
+        // owe it one: no surface syntax produces a cubical term yet. `interval`
+        // genuinely IS a type-level term, so the existing error is the right one
+        // for it; the value-level primitives share it rather than lowering to a
+        // silent placeholder. `plans/type-system/univalence.md` records when the
+        // runtime story comes due -- the first EXECUTABLE cubical proof.
+        Term.cubical _c => lower_err LowerError.le_type_level_term acc,
+        // See `le_unresolved_macro_artifact`'s own doc comment: this pass has
+        // no type-check prerequisite, so either shape can legitimately still
+        // be here mid-macro-expansion.
+        Term.quote_ _inner => lower_err LowerError.le_unresolved_macro_artifact acc,
+        Term.var_macro _idx _dbg => lower_err LowerError.le_unresolved_macro_artifact acc,
+        // `core-term-simplification.md` R3c: the checker returns a `Term.elim`
+        // for `if`/`match`. Lower it through the same conversion codegen's
+        // whole-program pass uses (`elim_to_literal`), then re-enter this
+        // function on the `Literal` form -- `lower_term` is `#[partial]`, and the
+        // converted term is a `Term.lit`, so this is a representation step, not a
+        // new evaluation rule.
+        Term.elim e =>
+            match elim_to_literal (ctx_scope ctx) e {
+                Result.err reason => lower_err (LowerError.le_elim_ill_formed reason) acc,
+                Result.ok converted => lower_term ctx converted acc,
+            },
+    }
 
 // ─── Whole-program global table: the worklist pass ──────────────────
 
 def push_done (acc : LowerAcc) (gd : GlobalDef) : LowerAcc :=
-  match acc {
-    LowerAcc.lower_acc seen done => LowerAcc.lower_acc seen (List.append done [gd]),
-  }
+    match acc {
+        LowerAcc.lower_acc seen done => LowerAcc.lower_acc seen (List.append done [gd]),
+    }
 
 /// Whether `attrs` carries `#[native some_name]` and, if so, the bare
 /// native name -- mirrors real corpus source exactly (`init/string.mo`
@@ -990,30 +990,30 @@ def push_done (acc : LowerAcc) (gd : GlobalDef) : LowerAcc :=
 /// never a quoted string).
 #[partial]
 def find_native_attr_name (attrs : List Attribute) : Option String :=
-  match attrs {
-    List.empty => Option.none,
-    List.cons a rest =>
-      match a {
-        Attribute.mk name args =>
-          if id_eq name (Identifier.id "native")
-          then native_attr_arg_name args
-          else find_native_attr_name rest,
-      },
-  }
+    match attrs {
+        List.empty => Option.none,
+        List.cons a rest =>
+            match a {
+                Attribute.mk name args =>
+                    if id_eq name (Identifier.id "native")
+                    then native_attr_arg_name args
+                    else find_native_attr_name rest,
+            },
+    }
 
 def native_attr_arg_name (args : List AttrArg) : Option String :=
-  match args {
-    List.cons a _ =>
-      match a {
-        AttrArg.ident id => Option.some (identifier_text id),
-        // `#[native "ptr_null"]` (quoted) is the same declaration as
-        // `#[native ptr_null]`; `init/src/prelude.mo`'s pointer constants
-        // use the quoted form.
-        AttrArg.str s => Option.some s,
-        _ => Option.none,
-      },
-    List.empty => Option.none,
-  }
+    match args {
+        List.cons a _ =>
+            match a {
+                AttrArg.ident id => Option.some (identifier_text id),
+                // `#[native "ptr_null"]` (quoted) is the same declaration as
+                // `#[native ptr_null]`; `init/src/prelude.mo`'s pointer constants
+                // use the quoted form.
+                AttrArg.str s => Option.some s,
+                _ => Option.none,
+            },
+        List.empty => Option.none,
+    }
 
 def identifier_text (id : Identifier) : String := match id { Identifier.id s => s }
 
@@ -1025,10 +1025,10 @@ def identifier_text (id : Identifier) : String := match id { Identifier.id s => 
 /// term shape alone -- no separate param-count bookkeeping needed.
 #[partial]
 def lam_chain_arity (t : Term) : I64 :=
-  match t {
-    Term.lam _ _ body => 1 + lam_chain_arity body,
-    _ => 0,
-  }
+    match t {
+        Term.lam _ _ body => 1 + lam_chain_arity body,
+        _ => 0,
+    }
 
 /// `path`'s own `Def` -- an ordinary body (`lower_term`), or, for a
 /// `#[native ...]` stub (a lambda chain wrapping a placeholder
@@ -1061,42 +1061,42 @@ def lam_chain_arity (t : Term) : I64 :=
 /// constructor. No `Term.sort` is lowered here, so `le_type_level_term`
 /// cannot fire for this shape.
 def lower_missing_global (ctx : LowerCtx) (path : NamePath) (acc : LowerAcc) : Result LowerError LowerAcc :=
-  match scope_find_inductive path (ctx_scope ctx) {
-    Result.ok _ind =>
-      Result.ok (push_done acc (GlobalDef.gd_def (CoreIr.lit (IrLit.ir_sort 0)))),
-    Result.err _ =>
-      match find_ctor_tag_arity ctx (name_path_last_segment path) {
-        Option.some pr =>
-          match pr { Pair.pair tag arity => Result.ok (push_done acc (GlobalDef.gd_constructor tag arity)) },
-        Option.none => Result.ok (push_done acc (GlobalDef.gd_unresolved (modpath_of path))),
-      },
-  }
+    match scope_find_inductive path (ctx_scope ctx) {
+        Result.ok _ind =>
+            Result.ok (push_done acc (GlobalDef.gd_def (CoreIr.lit (IrLit.ir_sort 0)))),
+        Result.err _ =>
+            match find_ctor_tag_arity ctx (name_path_last_segment path) {
+                Option.some pr =>
+                    match pr { Pair.pair tag arity => Result.ok (push_done acc (GlobalDef.gd_constructor tag arity)) },
+                Option.none => Result.ok (push_done acc (GlobalDef.gd_unresolved (modpath_of path))),
+            },
+    }
 
 def lower_one_global (ctx : LowerCtx) (path : NamePath) (acc : LowerAcc) : Result LowerError LowerAcc :=
-  match find_def (ctx_defs ctx) path {
-    // Not an ordinary `Def` -- see `lower_missing_global`'s own doc
-    // comment for what a resolved-but-not-a-def path can be.
-    Option.none => lower_missing_global ctx path acc,
-    Option.some def_ =>
-      match def_ {
-        Def.mk {name := _name, typ := _typ, term, constraints := _constraints, attrs, vis := _vis, ..} =>
-          match find_native_attr_name attrs {
-            Option.some native_name =>
-              match native_id_for_name (Identifier.id native_name) {
-                Option.some nid => Result.ok (push_done acc (GlobalDef.gd_native nid (lam_chain_arity term))),
-                Option.none => Result.err (LowerError.le_in_def (modpath_of path) (LowerError.le_unknown_native (Identifier.id native_name))),
-              },
-            Option.none =>
-              match lower_term ctx term acc {
-                Pair.pair r acc1 =>
-                  match r {
-                    Result.ok ir => Result.ok (push_done acc1 (GlobalDef.gd_def ir)),
-                    Result.err e => Result.err (LowerError.le_in_def (modpath_of path) e),
-                  },
-              },
-          },
-      },
-  }
+    match find_def (ctx_defs ctx) path {
+        // Not an ordinary `Def` -- see `lower_missing_global`'s own doc
+        // comment for what a resolved-but-not-a-def path can be.
+        Option.none => lower_missing_global ctx path acc,
+        Option.some def_ =>
+            match def_ {
+                Def.mk {name := _name, typ := _typ, term, constraints := _constraints, attrs, vis := _vis, ..} =>
+                    match find_native_attr_name attrs {
+                        Option.some native_name =>
+                            match native_id_for_name (Identifier.id native_name) {
+                                Option.some nid => Result.ok (push_done acc (GlobalDef.gd_native nid (lam_chain_arity term))),
+                                Option.none => Result.err (LowerError.le_in_def (modpath_of path) (LowerError.le_unknown_native (Identifier.id native_name))),
+                            },
+                        Option.none =>
+                            match lower_term ctx term acc {
+                                Pair.pair r acc1 =>
+                                    match r {
+                                        Result.ok ir => Result.ok (push_done acc1 (GlobalDef.gd_def ir)),
+                                        Result.err e => Result.err (LowerError.le_in_def (modpath_of path) e),
+                                    },
+                            },
+                    },
+            },
+    }
 
 /// Process the worklist to a fixed point: `seen`'s `i`-th path gets
 /// lowered once `done` reaches length `i`. Terminates because every step
@@ -1107,17 +1107,17 @@ def lower_one_global (ctx : LowerCtx) (path : NamePath) (acc : LowerAcc) : Resul
 /// forever between two fixed sizes of `done`.
 #[partial]
 def process_pending (ctx : LowerCtx) (acc : LowerAcc) : Result LowerError LowerAcc :=
-  match acc {
-    LowerAcc.lower_acc seen done =>
-      match List.get (List.length done) seen {
-        Option.none => Result.ok acc,
-        Option.some path =>
-          match lower_one_global ctx path acc {
-            Result.ok acc1 => process_pending ctx acc1,
-            Result.err e => Result.err e,
-          },
-      },
-  }
+    match acc {
+        LowerAcc.lower_acc seen done =>
+            match List.get (List.length done) seen {
+                Option.none => Result.ok acc,
+                Option.some path =>
+                    match lower_one_global ctx path acc {
+                        Result.ok acc1 => process_pending ctx acc1,
+                        Result.err e => Result.err e,
+                    },
+            },
+    }
 
 /// Lower the `root` def's body to `CoreIr`, plus a `GlobalTable` covering
 /// every def transitively reachable from it -- ready to feed straight
@@ -1125,27 +1125,27 @@ def process_pending (ctx : LowerCtx) (acc : LowerAcc) : Result LowerError LowerA
 /// `lang.core_eval.basic_native_table`).
 #[partial]
 pub def lower_root (ctx : LowerCtx) (root : NamePath) : Result LowerError (Pair CoreIr GlobalTable) :=
-  match find_def_body (ctx_defs ctx) root {
-    Option.none => Result.err (LowerError.le_unresolved_module_path (modpath_of root)),
-    Option.some body =>
-      match lower_term ctx body lower_acc_empty {
-        Pair.pair r acc1 =>
-          match r {
-            Result.err e => Result.err e,
-            Result.ok ir => lower_root_finish ir acc1 ctx,
-          },
-      },
-  }
+    match find_def_body (ctx_defs ctx) root {
+        Option.none => Result.err (LowerError.le_unresolved_module_path (modpath_of root)),
+        Option.some body =>
+            match lower_term ctx body lower_acc_empty {
+                Pair.pair r acc1 =>
+                    match r {
+                        Result.err e => Result.err e,
+                        Result.ok ir => lower_root_finish ir acc1 ctx,
+                    },
+            },
+    }
 
 #[partial]
 def lower_root_finish (ir : CoreIr) (acc1 : LowerAcc) (ctx : LowerCtx) : Result LowerError (Pair CoreIr GlobalTable) :=
-  match process_pending ctx acc1 {
-    Result.err e => Result.err e,
-    Result.ok acc2 =>
-      match acc2 {
-        LowerAcc.lower_acc _ done => Result.ok (Pair.pair ir (GlobalTable.global_table done)),
-      },
-  }
+    match process_pending ctx acc1 {
+        Result.err e => Result.err e,
+        Result.ok acc2 =>
+            match acc2 {
+                LowerAcc.lower_acc _ done => Result.ok (Pair.pair ir (GlobalTable.global_table done)),
+            },
+    }
 
 /// The native table this lowering pass targets -- re-exported so callers
 /// don't need to import both this module and `lang.core_eval` just to
@@ -1156,123 +1156,123 @@ def natives : NativeTable := basic_native_table
 /// directly (for `find_def_body`) and builds a `Scope` from the same
 /// decl_list (for `scope_resolve_name`/`scope_find_inductive`).
 pub def lower_ctx_from_decls (path : ModulePath) (decl_list : List Decl) : LowerCtx :=
-  LowerCtx.lower_ctx (Scope.mk path (build_scope_from_decls path decl_list) Option.none false) (decls_to_defs decl_list)
+    LowerCtx.lower_ctx (Scope.mk path (build_scope_from_decls path decl_list) Option.none false) (decls_to_defs decl_list)
 
 #[partial]
 def decls_to_defs (decl_list : List Decl) : List Def :=
-  match decl_list {
-    List.empty => List.empty,
-    List.cons d rest =>
-      match d {
-        Decl.def_d df => List.cons df (decls_to_defs rest),
-        _ => decls_to_defs rest,
-      },
-  }
+    match decl_list {
+        List.empty => List.empty,
+        List.cons d rest =>
+            match d {
+                Decl.def_d df => List.cons df (decls_to_defs rest),
+                _ => decls_to_defs rest,
+            },
+    }
 
 // ─── Tests: pure helpers only (no real Scope/Term needed) ─────────────
 
 #[test]
 def test_npath_index_finds_existing : Bool :=
-  let a : NamePath := NamePath.mk [Identifier.id "A"] in
-  let b : NamePath := NamePath.mk [Identifier.id "B"] in
-  I64.beq (Option.get_or_default (-1) (npath_index b [a, b])) 1
+    let a : NamePath := NamePath.mk [Identifier.id "A"] in
+    let b : NamePath := NamePath.mk [Identifier.id "B"] in
+    I64.beq (Option.get_or_default (-1) (npath_index b [a, b])) 1
 
 #[test]
 def test_npath_index_missing_is_none : Bool :=
-  let a : NamePath := NamePath.mk [Identifier.id "A"] in
-  let z : NamePath := NamePath.mk [Identifier.id "Z"] in
-  match npath_index z [a] {
-    Option.none => true,
-    Option.some _ => false,
-  }
-
-#[test]
-def test_intern_path_reuses_existing_index : Bool :=
-  let a : NamePath := NamePath.mk [Identifier.id "A"] in
-  match intern_path a lower_acc_empty {
-    Pair.pair idx0 acc1 =>
-      match intern_path a acc1 {
-        Pair.pair idx1 _ => I64.beq idx0 0 && I64.beq idx1 0,
-      },
-  }
-
-#[test]
-def test_intern_path_assigns_fresh_indices : Bool :=
-  let a : NamePath := NamePath.mk [Identifier.id "A"] in
-  let b : NamePath := NamePath.mk [Identifier.id "B"] in
-  match intern_path a lower_acc_empty {
-    Pair.pair idx_a acc1 =>
-      match intern_path b acc1 {
-        Pair.pair idx_b _ => I64.beq idx_a 0 && I64.beq idx_b 1,
-      },
-  }
-
-#[test]
-def test_list_all_none_true_on_all_holes : Bool :=
-  let holes : List (Option Term) := [Option.none, Option.none] in
-  list_all_none holes
-
-#[test]
-def test_list_all_none_false_when_one_filled : Bool :=
-  let mixed : List (Option Term) := [Option.none, Option.some Term.hole] in
-  Bool.not (list_all_none mixed)
-
-#[test]
-def test_find_ctor_tag_matches_declaration_order : Bool :=
-  let none_ctor : InductConstructor := InductConstructor.mk (single_segment_npath (Identifier.id "none")) List.empty Term.hole in
-  let some_ctor : InductConstructor := InductConstructor.mk (single_segment_npath (Identifier.id "some")) List.empty Term.hole in
-  let ctors : List InductConstructor := [none_ctor, some_ctor] in
-  I64.beq (Option.get_or_default (-1) (find_ctor_tag ctors (Identifier.id "none"))) 0
-    && I64.beq (Option.get_or_default (-1) (find_ctor_tag ctors (Identifier.id "some"))) 1
-
-#[test]
-def test_find_ctor_tag_unknown_is_none : Bool :=
-  let some_ctor : InductConstructor := InductConstructor.mk (single_segment_npath (Identifier.id "some")) List.empty Term.hole in
-  match find_ctor_tag [some_ctor] (Identifier.id "nope") {
-    Option.none => true,
-    Option.some _ => false,
-  }
-
-#[test]
-def test_native_id_for_name_known_and_unknown : Bool :=
-  I64.beq (Option.get_or_default (-1) (native_id_for_name (Identifier.id "i64_add"))) 0
-    && I64.beq (Option.get_or_default (-1) (native_id_for_name (Identifier.id "i64_lt"))) 4
-    && I64.beq (Option.get_or_default (-1) (native_id_for_name (Identifier.id "string_concat"))) 5
-    && I64.beq (Option.get_or_default (-1) (native_id_for_name (Identifier.id "string_eq"))) 6
-    && I64.beq (Option.get_or_default (-1) (native_id_for_name (Identifier.id "string_to_lowercase"))) 7
-    && match native_id_for_name (Identifier.id "not_a_native") {
-      Option.none => true,
-      Option.some _ => false,
+    let a : NamePath := NamePath.mk [Identifier.id "A"] in
+    let z : NamePath := NamePath.mk [Identifier.id "Z"] in
+    match npath_index z [a] {
+        Option.none => true,
+        Option.some _ => false,
     }
 
 #[test]
+def test_intern_path_reuses_existing_index : Bool :=
+    let a : NamePath := NamePath.mk [Identifier.id "A"] in
+    match intern_path a lower_acc_empty {
+        Pair.pair idx0 acc1 =>
+            match intern_path a acc1 {
+                Pair.pair idx1 _ => I64.beq idx0 0 && I64.beq idx1 0,
+            },
+    }
+
+#[test]
+def test_intern_path_assigns_fresh_indices : Bool :=
+    let a : NamePath := NamePath.mk [Identifier.id "A"] in
+    let b : NamePath := NamePath.mk [Identifier.id "B"] in
+    match intern_path a lower_acc_empty {
+        Pair.pair idx_a acc1 =>
+            match intern_path b acc1 {
+                Pair.pair idx_b _ => I64.beq idx_a 0 && I64.beq idx_b 1,
+            },
+    }
+
+#[test]
+def test_list_all_none_true_on_all_holes : Bool :=
+    let holes : List (Option Term) := [Option.none, Option.none] in
+    list_all_none holes
+
+#[test]
+def test_list_all_none_false_when_one_filled : Bool :=
+    let mixed : List (Option Term) := [Option.none, Option.some Term.hole] in
+    Bool.not (list_all_none mixed)
+
+#[test]
+def test_find_ctor_tag_matches_declaration_order : Bool :=
+    let none_ctor : InductConstructor := InductConstructor.mk (single_segment_npath (Identifier.id "none")) List.empty Term.hole in
+    let some_ctor : InductConstructor := InductConstructor.mk (single_segment_npath (Identifier.id "some")) List.empty Term.hole in
+    let ctors : List InductConstructor := [none_ctor, some_ctor] in
+    I64.beq (Option.get_or_default (-1) (find_ctor_tag ctors (Identifier.id "none"))) 0
+        && I64.beq (Option.get_or_default (-1) (find_ctor_tag ctors (Identifier.id "some"))) 1
+
+#[test]
+def test_find_ctor_tag_unknown_is_none : Bool :=
+    let some_ctor : InductConstructor := InductConstructor.mk (single_segment_npath (Identifier.id "some")) List.empty Term.hole in
+    match find_ctor_tag [some_ctor] (Identifier.id "nope") {
+        Option.none => true,
+        Option.some _ => false,
+    }
+
+#[test]
+def test_native_id_for_name_known_and_unknown : Bool :=
+    I64.beq (Option.get_or_default (-1) (native_id_for_name (Identifier.id "i64_add"))) 0
+        && I64.beq (Option.get_or_default (-1) (native_id_for_name (Identifier.id "i64_lt"))) 4
+        && I64.beq (Option.get_or_default (-1) (native_id_for_name (Identifier.id "string_concat"))) 5
+        && I64.beq (Option.get_or_default (-1) (native_id_for_name (Identifier.id "string_eq"))) 6
+        && I64.beq (Option.get_or_default (-1) (native_id_for_name (Identifier.id "string_to_lowercase"))) 7
+        && match native_id_for_name (Identifier.id "not_a_native") {
+            Option.none => true,
+            Option.some _ => false,
+        }
+
+#[test]
 def test_lower_simple_literal_needs_no_scope_lookup : Bool :=
-  // `Term.lit (Literal.num 7 i64)` never touches `ctx` -- any `LowerCtx`
-  // value would do; since building a real one from scratch is
-  // significant machinery on its own, exercise the literal path in
-  // isolation here and leave real end-to-end lowering (which does need a
-  // real, built `LowerCtx`) to lang/tests/core_eval_lang_tests.mo.
-  match lower_literal dummy_ctx (Literal.num 7 NumSuffix.i64) lower_acc_empty {
-    Pair.pair r _ =>
-      match r {
-        Result.ok ir => ir_is_num_lit ir 7,
-        Result.err _ => false,
-      },
-  }
+    // `Term.lit (Literal.num 7 i64)` never touches `ctx` -- any `LowerCtx`
+    // value would do; since building a real one from scratch is
+    // significant machinery on its own, exercise the literal path in
+    // isolation here and leave real end-to-end lowering (which does need a
+    // real, built `LowerCtx`) to lang/tests/core_eval_lang_tests.mo.
+    match lower_literal dummy_ctx (Literal.num 7 NumSuffix.i64) lower_acc_empty {
+        Pair.pair r _ =>
+            match r {
+                Result.ok ir => ir_is_num_lit ir 7,
+                Result.err _ => false,
+            },
+    }
 
 def ir_is_num_lit (ir : CoreIr) (expected : I64) : Bool :=
-  match ir {
-    CoreIr.lit l => irlit_is_num l expected,
-    _ => false,
-  }
+    match ir {
+        CoreIr.lit l => irlit_is_num l expected,
+        _ => false,
+    }
 
 def irlit_is_num (l : IrLit) (expected : I64) : Bool :=
-  match l {
-    IrLit.ir_num n _ => I64.beq n expected,
-    _ => false,
-  }
+    match l {
+        IrLit.ir_num n _ => I64.beq n expected,
+        _ => false,
+    }
 
 def dummy_ctx : LowerCtx := LowerCtx.lower_ctx dummy_scope List.empty
 
 def dummy_scope : Scope :=
-  Scope.mk (ModulePath.mk List.empty) scope_data_empty Option.none false
+    Scope.mk (ModulePath.mk List.empty) scope_data_empty Option.none false

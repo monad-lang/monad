@@ -70,11 +70,11 @@ pub def term_map_children (f : Term -> Term) (t : Term) : Term :=
 
 def elim_map_children (f : Term -> Term) (e : Elim) : Elim :=
     { e with
-      params := terms_map_children f e.params,
-      indices := terms_map_children f e.indices,
-      motive := f e.motive,
-      minors := terms_map_children f e.minors,
-      scrutinee := f e.scrutinee }
+        params := terms_map_children f e.params,
+        indices := terms_map_children f e.indices,
+        motive := f e.motive,
+        minors := terms_map_children f e.minors,
+        scrutinee := f e.scrutinee }
 
 /// `args` is positional and its length is the primitive's arity, so this
 /// maps in place and never reshapes the list.
@@ -399,11 +399,11 @@ def term_map_children_at_depth (f : I64 -> Term -> Term) (t : Term) : Term :=
 
 def elim_map_children_at_depth (f : I64 -> Term -> Term) (e : Elim) : Elim :=
     { e with
-      params := terms_map_children (f 0) e.params,
-      indices := terms_map_children (f 0) e.indices,
-      motive := f 0 e.motive,
-      minors := terms_map_children (f 0) e.minors,
-      scrutinee := f 0 e.scrutinee }
+        params := terms_map_children (f 0) e.params,
+        indices := terms_map_children (f 0) e.indices,
+        motive := f 0 e.motive,
+        minors := terms_map_children (f 0) e.minors,
+        scrutinee := f 0 e.scrutinee }
 
 #[partial]
 def literal_map_children_at_depth (f : I64 -> Term -> Term) (l : Literal) : Literal :=

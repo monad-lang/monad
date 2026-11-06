@@ -21,10 +21,10 @@
 use std::test {Test.write_fixture}
 use lib::types {Location, SourceRange}
 use lib::module {
-  DeclRange, Diagnostic, check_file_cached_from_source_ranged,
-  decl_range_kind, decl_range_name, decl_range_span, decl_ranges_of_source,
-  diagnostic_message, diagnostic_range, located_decl_list, located_decl_spans,
-  module_info_cache_empty, ranged_file_diagnostics,
+    DeclRange, Diagnostic, check_file_cached_from_source_ranged,
+    decl_range_kind, decl_range_name, decl_range_span, decl_ranges_of_source,
+    diagnostic_message, diagnostic_range, located_decl_list, located_decl_spans,
+    module_info_cache_empty, ranged_file_diagnostics,
 }
 use lib::parser {LocatedDecls, decls_parser_located_with_ranges}
 use parsec::core {fail, success}

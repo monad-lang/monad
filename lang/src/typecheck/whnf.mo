@@ -1,14 +1,14 @@
 use std::list {List.length}
 use lib::types {
-  Con, Cubical, CubicalPrim, DebugName, Elim, Identifier, InductConstructor,
-  Literal, LocalScope, MatchCase, NamePath, NameRef, Scope, Similar, Term,
-  cub_face_eq0, cub_face_eq1, cub_i0, cub_i1, cub_it_is_one, cubical_arity, cubical_prim_eq, id_eq,
-  show_identifier, sentinel, term_peel,
+    Con, Cubical, CubicalPrim, DebugName, Elim, Identifier, InductConstructor,
+    Literal, LocalScope, MatchCase, NamePath, NameRef, Scope, Similar, Term,
+    cub_face_eq0, cub_face_eq1, cub_i0, cub_i1, cub_it_is_one, cubical_arity, cubical_prim_eq, id_eq,
+    show_identifier, sentinel, term_peel,
 }
 use lib::scope {
-  CallSpine, flatten_call_spine, last_dot_index, scope_find_cubical_prim, scope_find_def_body,
-  scope_find_inductive, scope_find_inductive_by_constructor, scope_find_local,
-  scope_resolve_name,
+    CallSpine, flatten_call_spine, last_dot_index, scope_find_cubical_prim, scope_find_def_body,
+    scope_find_inductive, scope_find_inductive_by_constructor, scope_find_local,
+    scope_resolve_name,
 }
 use lib::typecheck::faces {face_decide}
 use lib::typecheck::subst {beta_reduce, term_shift, term_subst}

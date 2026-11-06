@@ -1,9 +1,9 @@
 use lang::types {
-  DebugName, Elim, Identifier, Literal, LocalScope, LocalVar, Location, MatchCase,
-  ModulePath, NamePath, Scope, ScopeData, Similar, Term, binder_anon, binder_explicit,
-  cub_i0, cub_i1, cub_ijoin, cub_interval,
-  cub_imeet, cub_ineg, many, sentinel, sort_n,
-  cub, imeet, ineg,
+    DebugName, Elim, Identifier, Literal, LocalScope, LocalVar, Location, MatchCase,
+    ModulePath, NamePath, Scope, ScopeData, Similar, Term, binder_anon, binder_explicit,
+    cub_i0, cub_i1, cub_ijoin, cub_interval,
+    cub_imeet, cub_ineg, many, sentinel, sort_n,
+    cub, imeet, ineg,
 }
 use lib::module {parse_all_decls}
 use parsec::core {fail, success}

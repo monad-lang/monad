@@ -39,18 +39,18 @@
 ///   write.
 
 use lang::types {
-  Attribute, Class, ClassDef, DebugName, Decl, Def, Identifier, InductConstructor,
-  Inductive, Instance, Literal, MatchCase, ModulePath, NamePath, Param, Struct, StructField,
-  Term, TypeConstraint, UseFilter, UseItem, OpenFilter, StructLitField, Visibility,
-  id_eq, module_mote_of, module_path_is_empty, module_path_to_string_colon, open_all, open_only,
-  sentinel, show_identifier, show_module_path, show_name_path,
-  use_bare, use_glob, use_items, use_name, use_rename, use_sub, use_sub_rename,
+    Attribute, Class, ClassDef, DebugName, Decl, Def, Identifier, InductConstructor,
+    Inductive, Instance, Literal, MatchCase, ModulePath, NamePath, Param, Struct, StructField,
+    Term, TypeConstraint, UseFilter, UseItem, OpenFilter, StructLitField, Visibility,
+    id_eq, module_mote_of, module_path_is_empty, module_path_to_string_colon, open_all, open_only,
+    sentinel, show_identifier, show_module_path, show_name_path,
+    use_bare, use_glob, use_items, use_name, use_rename, use_sub, use_sub_rename,
 }
 use lib::parser {decls_parser_located}
 use parsec::core {ParseResult}
 use lib::scope {modpath_eq}
 use lib::typecheck::macro_queue {
-  DeriveHandlerReg, derive_handler_regs_of_decls, derive_targets_of_args,
+    DeriveHandlerReg, derive_handler_regs_of_decls, derive_targets_of_args,
 }
 use llvm::strmap {str_map_empty, str_map_insert, str_map_lookup}
 use std::map {HashMap}
@@ -1306,7 +1306,7 @@ def judge_qualified (j : Judge) (items : List (Pair ModulePath String)) (seen : 
                                         else FindingKind.fk_unimported in
                                     let finding : Finding :=
                                         { name := name, owner := mp, spelling := item_spelling row,
-                                          kind := kind, vis := row.vis } in
+                                            kind := kind, vis := row.vis } in
                                     judge_qualified j rest (str_map_insert name true seen) (List.append acc (List.cons finding List.empty)),
                     },
             },
@@ -1349,13 +1349,13 @@ def bare_finding (j : Judge) (name : String) (rows : List DeclRow) : Finding :=
         Option.some hidden =>
             let f : Finding :=
                 { name := name, owner := hidden.owner, spelling := item_spelling hidden,
-                  kind := FindingKind.fk_hidden, vis := hidden.vis } in
+                    kind := FindingKind.fk_hidden, vis := hidden.vis } in
             f,
         Option.none =>
             let picked : DeclRow := pick_row j rows (first_row rows) in
             let f : Finding :=
                 { name := name, owner := picked.owner, spelling := item_spelling picked,
-                  kind := FindingKind.fk_unimported, vis := picked.vis } in
+                    kind := FindingKind.fk_unimported, vis := picked.vis } in
             f,
     }
 
@@ -1457,7 +1457,7 @@ def judge_open_names (j : Judge) (path : NamePath) (names : List Identifier)
                     else
                         let finding : Finding :=
                             { name := name, owner := row.owner, spelling := name,
-                              kind := FindingKind.fk_hidden, vis := row.vis } in
+                                kind := FindingKind.fk_hidden, vis := row.vis } in
                         judge_open_names j path names_rest rest
                             (str_map_insert name true seen)
                             (List.append acc (List.cons finding List.empty)),
@@ -1500,8 +1500,8 @@ def judge_all (file_path : String) (consumer : ModulePath) (consumer_mote : Opti
     let refs : Refs := collect_decls pre_decls refs_start in
     let j : Judge :=
         { consumer := consumer, consumer_mote := consumer_mote, opens := opens.names,
-          selection := selection, ambient := ambient, index := index, own := own,
-          file_path := file_path } in
+            selection := selection, ambient := ambient, index := index, own := own,
+            file_path := file_path } in
     // `open`s first: an opened name is skipped by the two reference
     // judges (`set_member name j.opens`), so a hidden declaration reached
     // that way has to be caught at the `open` site itself.
@@ -1555,10 +1555,10 @@ def probe_world (world : List (Pair ModulePath String)) (acc : List (Pair Module
 /// rule).
 def probe_errors (world : List (Pair ModulePath String)) (consumer : ModulePath) (src : String) : List String :=
     match probe_world world List.empty {
-        Option.none => [ "the probe world did not parse" ],
+        Option.none => ["the probe world did not parse"],
         Option.some w =>
             match probe_parse src {
-                Option.none => [ "the probe consumer did not parse" ],
+                Option.none => ["the probe consumer did not parse"],
                 Option.some ds => use_completeness_errors "consumer.mo" consumer (module_mote_of consumer) ds ds w,
             },
     }
@@ -1606,7 +1606,7 @@ def sibling_path : ModulePath := ModulePath.mk [Identifier.id "consumer", Identi
 #[test]
 def test_cross_mote_package_private_is_hidden : Bool :=
     match probe_errors [Pair.pair widgets_path "def widget : I64 := 1\n"] consumer_path
-            "use widgets {widget}\ndef use_it : I64 := widget" {
+        "use widgets {widget}\ndef use_it : I64 := widget" {
         List.cons msg rest =>
             Bool.and (List.is_empty rest)
                 (Bool.and (String.contains msg "`widget` is not visible here")
@@ -1635,7 +1635,7 @@ def test_pub_declaration_crosses_motes : Bool :=
 #[test]
 def test_priv_is_hidden_from_a_sibling_module : Bool :=
     match probe_errors [Pair.pair sibling_path "priv def widget : I64 := 1\n"] child_path
-            "use consumer::widgets {widget}\ndef use_it : I64 := widget" {
+        "use consumer::widgets {widget}\ndef use_it : I64 := widget" {
         List.cons msg rest =>
             Bool.and (List.is_empty rest)
                 (Bool.and (String.contains msg "`widget` is not visible here")
@@ -1655,7 +1655,7 @@ def test_priv_is_visible_in_its_own_module : Bool :=
 #[test]
 def test_a_constructor_inherits_its_type_visibility : Bool :=
     match probe_errors [Pair.pair widgets_path "type Opt { some (a : I64), none }\n"] consumer_path
-            "use widgets {Opt, Opt.some, Opt.none}\ndef f (o : Opt) : I64 := match o { Opt.some x => x, Opt.none => 0 }" {
+        "use widgets {Opt, Opt.some, Opt.none}\ndef f (o : Opt) : I64 := match o { Opt.some x => x, Opt.none => 0 }" {
         List.cons msg _rest => String.contains msg "is not visible here",
         List.empty => false,
     }
@@ -1681,7 +1681,7 @@ def test_a_modules_own_opened_constructor_is_visible : Bool :=
 def test_a_class_method_inherits_the_class_visibility : Bool :=
     let cls_src : String := "class C A { def m (a : A) : I64 := 1 }\n" in
     match probe_errors [Pair.pair widgets_path cls_src] consumer_path
-            "use widgets {C}\ndef f : I64 := C.m 1" {
+        "use widgets {C}\ndef f : I64 := C.m 1" {
         List.cons msg _rest => String.contains msg "`C.m` is not visible here",
         List.empty => false,
     }
@@ -1698,7 +1698,7 @@ def test_a_pub_class_method_crosses_motes : Bool :=
 #[test]
 def test_a_cross_mote_open_of_a_package_private_is_hidden : Bool :=
     match probe_errors [Pair.pair widgets_path "type MetaParam A { meta_param (a : A) }\n"] consumer_path
-            "open MetaParam {meta_param}\ndef f : I64 := 0" {
+        "open MetaParam {meta_param}\ndef f : I64 := 0" {
         List.cons msg _rest => String.contains msg "`meta_param` is not visible here",
         List.empty => false,
     }
@@ -1714,7 +1714,7 @@ def test_a_same_mote_open_of_a_package_private_is_allowed : Bool :=
 #[test]
 def test_an_ambient_package_private_name_is_hidden : Bool :=
     match probe_errors [Pair.pair prelude_module_path "def widget : I64 := 1\n"] consumer_path
-            "def use_it : I64 := widget" {
+        "def use_it : I64 := widget" {
         List.cons msg _rest => String.contains msg "`widget` is not visible here",
         List.empty => false,
     }
@@ -1751,12 +1751,12 @@ def test_dotted_prefix_selects_members : Bool :=
             (probe_errors [Pair.pair widgets_path dotted] consumer_path
                 "use widgets {List}\ndef use_it : I64 := List.length"))
         (match probe_errors [Pair.pair widgets_path dotted] consumer_path
-                "use widgets {length}\ndef use_it : I64 := List.length" {
-            List.cons msg _rest =>
+            "use widgets {length}\ndef use_it : I64 := List.length" {
+                List.cons msg _rest =>
                 Bool.and (String.contains msg "`List.length` is not imported")
                     (String.contains msg "use widgets {List.length}` names it"),
-            List.empty => false,
-        })
+                List.empty => false,
+            })
 
 /// The consumer's own struct constructor is never an unimported name,
 /// even when another loaded module declares the same spelling -- the
@@ -1861,10 +1861,10 @@ def test_dotted_prefix_selects_pattern_constructors : Bool :=
             (probe_errors [Pair.pair widgets_path kind_src] consumer_path
                 "use widgets {Kind}\ndef f (k : Kind) : I64 := match k { Kind.denied => 1, _ => 0 }"))
         (match probe_errors [Pair.pair widgets_path kind_src] consumer_path
-                "def f (k : Kind) : I64 := match k { Kind.denied => 1, _ => 0 }" {
-            List.cons msg _rest => String.contains msg "`Kind` is not imported",
-            List.empty => false,
-        })
+            "def f (k : Kind) : I64 := match k { Kind.denied => 1, _ => 0 }" {
+                List.cons msg _rest => String.contains msg "`Kind` is not imported",
+                List.empty => false,
+            })
 
 /// An `open T {n}` file owns the open's PATH name as well (the host's
 /// `own` set is every decl's `to_ref`, and an `open`'s ref IS its path):

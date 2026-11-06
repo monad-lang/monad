@@ -33,16 +33,16 @@
 /// interprocedural information gap as `Shared.get`'s owning-argument case,
 /// QTT Known Gap 12) and is documented as a residual.
 use lib::types {
-  Decl, Def, Identifier, InductConstructor, Inductive, Instance, NamePath,
-  Param, Scope, Struct, StructField, Term, TypeError, show_identifier, show_name_path,
+    Decl, Def, Identifier, InductConstructor, Inductive, Instance, NamePath,
+    Param, Scope, Struct, StructField, Term, TypeError, show_identifier, show_name_path,
 }
 use lib::typecheck::usage {
-  BinderUse, attribute_binder_types, collect_binder_uses_with_params,
-  ctor_name_set, shared_name_set,
+    BinderUse, attribute_binder_types, collect_binder_uses_with_params,
+    ctor_name_set, shared_name_set,
 }
 use lib::typecheck::type_kinds {
-  TypeKinds, container_wraps_linear, is_linear_or_proof, is_proof_type,
-  mentions_linear_or_proof, type_kinds,
+    TypeKinds, container_wraps_linear, is_linear_or_proof, is_proof_type,
+    mentions_linear_or_proof, type_kinds,
 }
 use std::map {HashMap}
 use lib::typecheck::diagnostic {render_type_error}
@@ -62,7 +62,7 @@ def check_module_view_go (kinds : TypeKinds) (ctors : HashMap String Bool) (borr
         List.empty => List.empty,
         List.cons d rest =>
             List.append (check_decl_view kinds ctors borrows scope d)
-                        (check_module_view_go kinds ctors borrows scope rest),
+                (check_module_view_go kinds ctors borrows scope rest),
     }
 
 /// The same errors, rendered with the owning declaration's name as the
@@ -91,7 +91,7 @@ def render_view_errors (context_name : String) (path : Option String) (errs : Li
         List.empty => List.empty,
         List.cons e rest =>
             List.cons (render_type_error context_name path e)
-                     (render_view_errors context_name path rest),
+                (render_view_errors context_name path rest),
     }
 
 #[partial]
@@ -266,7 +266,7 @@ def check_ctor_shapes (kinds : TypeKinds) (ctors : List InductConstructor) : Lis
             match c {
                 InductConstructor.mk _name params _typ =>
                     List.append (check_param_shapes kinds params)
-                                (check_ctor_shapes kinds rest),
+                        (check_ctor_shapes kinds rest),
             },
     }
 

@@ -7,30 +7,30 @@ use std::process {exec_cmd, process_id}
 use std::stream {StreamError, StreamError.is_not_found}
 use lib::elaborate {free_vars, names_of_decls, elaborate_def}
 use lang::types {
-  AffineMode, Attribute, Class, ClassDef, DebugName, Decl, DeclGroup, Def, Identifier,
-  InductConstructor, Inductive, Infix, Instance, Literal, LocalScope, LocalVar, Location,
-  MatchCase, ModulePath, NamePath, NameRef, Param, Scope, ScopeData, ScopeInstance, SourceRange,
-  Struct, StructField, Term, TypeConstraint, TypeError, UseFilter, UseItem,
-  binder_anon, binder_is_explicit, binder_is_level, binder_name, concrete,
-  has_incomplete_match_exemption, id_eq,
-  list_reverse, many, module_path_to_string_colon, package_private, priv_,
-  show_identifier, show_module_path, show_name_path, sort_level_of, term_peel, union_ids,
-  use_bare, use_glob, use_items, use_name, use_rename, use_sub, use_sub_rename,
-  visibility_beq,
+    AffineMode, Attribute, Class, ClassDef, DebugName, Decl, DeclGroup, Def, Identifier,
+    InductConstructor, Inductive, Infix, Instance, Literal, LocalScope, LocalVar, Location,
+    MatchCase, ModulePath, NamePath, NameRef, Param, Scope, ScopeData, ScopeInstance, SourceRange,
+    Struct, StructField, Term, TypeConstraint, TypeError, UseFilter, UseItem,
+    binder_anon, binder_is_explicit, binder_is_level, binder_name, concrete,
+    has_incomplete_match_exemption, id_eq,
+    list_reverse, many, module_path_to_string_colon, package_private, priv_,
+    show_identifier, show_module_path, show_name_path, sort_level_of, term_peel, union_ids,
+    use_bare, use_glob, use_items, use_name, use_rename, use_sub, use_sub_rename,
+    visibility_beq,
 }
 use lib::name_text {unqualify_def_name}
 use lib::parser {
-  LocatedDecls, decls_parser, decls_parser_located, decls_parser_located_with_ranges,
-  decls_parser_strict, module_path_to_string,
+    LocatedDecls, decls_parser, decls_parser_located, decls_parser_located_with_ranges,
+    decls_parser_strict, module_path_to_string,
 }
 use parsec::core {ParseError, ParseResult, parse_error_remaining}
 use lib::parser::diagnostic {parse_error_location, render_parse_error}
 use lang::mote {
-  BinTarget, Mote.affine_mode_of_path, Mote.discover, Mote.manifest_at, Mote.manifest_of_attr,
-  Mote.manifest_problem,
-  Mote.mote_attr_unknown_keys, Mote.parse_manifest, Mote.toolchain_candidates,
-  Mote.toolchain_missing_hint, Mote.toolchain_root, Mote.workspace_members, MoteManifest,
-  MoteManifest.dep_errors_for, ScriptTarget, ScriptTarget.script_path,
+    BinTarget, Mote.affine_mode_of_path, Mote.discover, Mote.manifest_at, Mote.manifest_of_attr,
+    Mote.manifest_problem,
+    Mote.mote_attr_unknown_keys, Mote.parse_manifest, Mote.toolchain_candidates,
+    Mote.toolchain_missing_hint, Mote.toolchain_root, Mote.workspace_members, MoteManifest,
+    MoteManifest.dep_errors_for, ScriptTarget, ScriptTarget.script_path,
 }
 use lib::pretty {show_term, show_decls}
 use lib::typecheck::name_subst {close_named_vars}
@@ -39,8 +39,8 @@ use lib::typecheck::macro_expand {MetaIntrinsicCtx, expand_term_with_meta}
 use lib::typecheck::macro_queue {DeclGenEntry, DeriveHandlerReg, TermMacroEntry, build_decl_gen_registry, build_term_macro_registry, check_macro_declarations, check_macro_uses, decls_have_live_term_call, derive_bridge_decls, derive_handler_regs_of_decls, expand_decls, expand_decls_terms_res, find_duplicate_derive_target, lookup_decl_gen, lookup_term_macro}
 use lib::typecheck::meta_eval {meta_eval_invoke}
 use lib::typecheck::meta_reflect {
-  build_type_info_value, collect_inductives, find_inductive_by_bare_name,
-  reify_decls_value_to_decls, term_free_var_name,
+    build_type_info_value, collect_inductives, find_inductive_by_bare_name,
+    reify_decls_value_to_decls, term_free_var_name,
 }
 // Deliberately does NOT import `list_append`: this module declares its
 // own (see the comment above it), and AGENTS.md item 19 records that the
@@ -48,19 +48,19 @@ use lib::typecheck::meta_reflect {
 // binder, and both sit on `merge_scope_data`'s measured hot path.
 // Importing it here as well made which one won a coin flip.
 use lib::scope {
-  OpenAlias,
-  add_constraint_dict_params_decl_groups, add_constraint_dict_params_decls,
-  bare_aliases_merge,
-  build_scope_from_decls, build_scope_from_groups, decl_groups_flatten,
-  collect_def_names, collect_infixes, collect_open_aliases, constraint_vars,
-  dict_param_name,
-  filter_valid_open_aliases,
-  modpath_eq, npath_map_empty, npath_map_insert, npath_map_lookup, npath_of,
-  param_names, promote_instance_decl_groups, promote_instance_defs, refine_scope_instances,
-  alias_map_empty, build_alias_map,
-  resolve_infix_decl_groups, resolve_infix_decls, resolve_open_alias_decls,
-  scope_data_add_def_sig, scope_data_empty, scope_data_find_def_sig,
-  scope_find_inductive, scope_push_local, scope_resolve_name,
+    OpenAlias,
+    add_constraint_dict_params_decl_groups, add_constraint_dict_params_decls,
+    bare_aliases_merge,
+    build_scope_from_decls, build_scope_from_groups, decl_groups_flatten,
+    collect_def_names, collect_infixes, collect_open_aliases, constraint_vars,
+    dict_param_name,
+    filter_valid_open_aliases,
+    modpath_eq, npath_map_empty, npath_map_insert, npath_map_lookup, npath_of,
+    param_names, promote_instance_decl_groups, promote_instance_defs, refine_scope_instances,
+    alias_map_empty, build_alias_map,
+    resolve_infix_decl_groups, resolve_infix_decls, resolve_open_alias_decls,
+    scope_data_add_def_sig, scope_data_empty, scope_data_find_def_sig,
+    scope_find_inductive, scope_push_local, scope_resolve_name,
 }
 use lib::termination {check_termination_all}
 use lib::typecheck::diagnostic {render_type_error, render_type_warning}
@@ -601,9 +601,9 @@ def normalize_path (p : String) : String :=
 def path_segments_go (s : String) (i : I64) (start : I64) (acc : List String) : List String :=
     if I64.lt i (String.length s)
     then (if String.beq (String.slice s i 1) "/"
-          then path_segments_go s (I64.add i 1) (I64.add i 1)
-                   (path_push_segment (String.slice s start (I64.sub i start)) acc)
-          else path_segments_go s (I64.add i 1) start acc)
+        then path_segments_go s (I64.add i 1) (I64.add i 1)
+            (path_push_segment (String.slice s start (I64.sub i start)) acc)
+        else path_segments_go s (I64.add i 1) start acc)
     else List.reverse (path_push_segment (String.slice s start (I64.sub (String.length s) start)) acc)
 
 /// Accumulate one segment, skipping an empty one.
@@ -621,14 +621,14 @@ def normalize_segments_go (segs : List String) (acc : List String) : List String
         List.cons s rest =>
             if String.beq s "." then normalize_segments_go rest acc
             else (if String.beq s ".."
-                  then (match acc {
-                          List.empty => normalize_segments_go rest (List.cons s acc),
-                          List.cons hd tl =>
-                              if String.beq hd ".."
-                              then normalize_segments_go rest (List.cons s acc)
-                              else normalize_segments_go rest tl
-                        })
-                  else normalize_segments_go rest (List.cons s acc))
+                then (match acc {
+                    List.empty => normalize_segments_go rest (List.cons s acc),
+                    List.cons hd tl =>
+                        if String.beq hd ".."
+                        then normalize_segments_go rest (List.cons s acc)
+                        else normalize_segments_go rest tl
+                })
+                else normalize_segments_go rest (List.cons s acc))
     }
 
 /// Re-join segments with a single `/` between them and none at either end.
@@ -692,7 +692,7 @@ def mote_segments (mp : ModulePath) : List String :=
                         List.empty => [mote, "src", "lib.mo"],
                         List.cons _ _ =>
                             [mote, "src",
-                             String.concat (module_path_to_file (ModulePath.mk rest)) ".mo"]
+                                String.concat (module_path_to_file (ModulePath.mk rest)) ".mo"]
                     }
             }
     }
@@ -1130,7 +1130,7 @@ def mote_dep_files (m : MoteManifest) (mp : ModulePath) : IO (List String) := do
                         return xs
                     }
                     else return (mote_dep_file_of m (identifier_to_string hd)
-                             (module_path_to_file (ModulePath.mk rest)))
+                        (module_path_to_file (ModulePath.mk rest)))
             }
     }
 }
@@ -2252,7 +2252,7 @@ def check_module_decls_affine_go (warning : Bool) (kinds : TypeKinds) (ctors : H
         List.empty => List.empty,
         List.cons d rest =>
             list_append (check_decl_affine_only warning kinds d ctors borrows scope path)
-                        (check_module_decls_affine_go warning kinds ctors borrows scope rest path),
+                (check_module_decls_affine_go warning kinds ctors borrows scope rest path),
     }
 
 /// `check_def` for a def; empty for every other decl. A dict value def
@@ -3001,8 +3001,8 @@ def check_file_cached_mode (mode : AffineMode) (cache : ModuleInfoCache) (file_p
                 // it, and the caller needs the extended one.
                 let ok_result : FileCheckResult :=
                     { path := file_path,
-                      diagnostics := CheckDiagnostics.errors checked,
-                      warnings := CheckDiagnostics.warnings checked };
+                        diagnostics := CheckDiagnostics.errors checked,
+                        warnings := CheckDiagnostics.warnings checked };
                 let ok_bundle : FileCheckAndCache := { result := ok_result, cache := out_cache };
                 return ok_bundle
             },
@@ -3041,8 +3041,8 @@ pub def check_file_cached_from_source (cache : ModuleInfoCache) (file_path : Str
             let checked <- check_module_with_scope_classified mode em.scope em.target_decls empty_locs (Option.some file_path) verbose;
             let ok_result : FileCheckResult :=
                 { path := file_path,
-                  diagnostics := CheckDiagnostics.errors checked,
-                  warnings := CheckDiagnostics.warnings checked };
+                    diagnostics := CheckDiagnostics.errors checked,
+                    warnings := CheckDiagnostics.warnings checked };
             let ok_bundle : FileCheckAndCache := { result := ok_result, cache := out_cache };
             return ok_bundle
         },
@@ -3333,7 +3333,7 @@ def collect_mo_files_entries (entries : List Path) : IO (List String) :=
             let path : String := Path.to_string entry;
             let is_directory : Bool <- is_dir entry;
             let here : List String <- if is_directory then
-                    collect_mo_files path
+                collect_mo_files path
                 else if String.ends_with path ".mo" then do {
                     return [path]
                 } else do {
@@ -4359,8 +4359,8 @@ def misplaced_mote_attr (file : String) (decl_list : List Decl) : List String :=
 
 def misplaced_mote_attr_error (file : String) : String :=
     String.concat "error: `#![mote { ... }]` must be the first declaration in " (String.concat file
-    (String.concat "\n  it is a FILE-level annotation, so any declaration above it puts it in the wrong place"
-    "\n  hint: move it to the very top of the file, above every declaration"))
+        (String.concat "\n  it is a FILE-level annotation, so any declaration above it puts it in the wrong place"
+            "\n  hint: move it to the very top of the file, above every declaration"))
 
 /// Keys of an `#![mote { ... }]` that no reader consumes. Only the FIRST
 /// declaration is inspected, matching `validate_mote_attr_position`: a
@@ -4895,7 +4895,7 @@ def probe_targets (targets : List (Pair ModulePath String)) (acc : List ModuleIn
 /// Empty means the check passed.
 def probe_use_names (targets : List (Pair ModulePath String)) (importing_src : String) : List String :=
     match probe_targets targets List.empty {
-        Option.none => [ "the probe target did not parse" ],
+        Option.none => ["the probe target did not parse"],
         Option.some targets =>
             let importing : ModuleInfo := probe_module_info importing_src in
             validate_use_names (List.cons importing targets) importing
@@ -5813,8 +5813,8 @@ def priv_module_info : ModuleInfo :=
     let shown : Def := Def.mk (NamePath.mk [Identifier.id "shown"]) Term.hole Term.hole
         ([] : List TypeConstraint) ([] : List Attribute) Visibility.package_private List.empty in
     { path := owner,
-      file_path := "Owner.mo",
-      decl_list := [Decl.def_d hidden, Decl.def_d shown] }
+        file_path := "Owner.mo",
+        decl_list := [Decl.def_d hidden, Decl.def_d shown] }
 
 def priv_flatten_names (target : ModulePath) : List String :=
     List.map (fn (d : Decl) => show_name_path (Decl.to_name d))
@@ -8445,14 +8445,14 @@ def test_elaborate_loaded_modules_resolves_file_with_no_use_decls : IO Bool := d
 /// (sub-table headers, not inline tables -- `lang/src/toml.mo` reads the
 /// former).
 def lang_manifest_fixture : String :=
-  "[mote]\nname = \"lang\"\nversion = \"0.1.0\"\n\n[dependencies.init]\npath = \"../init\"\n\n[dependencies.std]\npath = \"../std\"\n\n[dependencies.llvm]\npath = \"../llvm\"\n"
+    "[mote]\nname = \"lang\"\nversion = \"0.1.0\"\n\n[dependencies.init]\npath = \"../init\"\n\n[dependencies.std]\npath = \"../std\"\n\n[dependencies.llvm]\npath = \"../llvm\"\n"
 
 /// A manifest declaring a NON-default `[lib] path`, which no manifest in this
 /// tree does -- the default restated is indistinguishable from no declaration
 /// at all, so only this shape can tell "the declaration won" from "the default
 /// was returned".
 def declared_lib_fixture : String :=
-  "[mote]\nname = \"init\"\nversion = \"0.1.0\"\n\n[lib]\npath = \"lib/main.mo\"\n"
+    "[mote]\nname = \"init\"\nversion = \"0.1.0\"\n\n[lib]\npath = \"lib/main.mo\"\n"
 
 /// One candidate, checked as a single-element list -- every
 /// `mote_dep_files` case below yields exactly one.
@@ -8516,7 +8516,7 @@ def test_mote_dep_files_bare_name_is_that_motes_lib : IO Bool := do {
             let init_xs <- mote_dep_files m init_module_path;
             let std_xs <- mote_dep_files m std_module_path;
             return (sole_candidate_is init_xs "../init/src/lib.mo"
-                    && sole_candidate_is std_xs "../std/src/lib.mo")
+                && sole_candidate_is std_xs "../std/src/lib.mo")
         }
     }
 }
@@ -8555,7 +8555,7 @@ def test_mote_dep_files_qualified_path_names_the_dep_file : IO Bool := do {
             let list_xs <- mote_dep_files m (ModulePath.mk [Identifier.id "std", Identifier.id "list"]);
             let ir_xs <- mote_dep_files m (ModulePath.mk [Identifier.id "llvm", Identifier.id "ir"]);
             return (sole_candidate_is list_xs "../std/src/list.mo"
-                    && sole_candidate_is ir_xs "../llvm/src/ir.mo")
+                && sole_candidate_is ir_xs "../llvm/src/ir.mo")
         }
     }
 }
@@ -8840,12 +8840,12 @@ def test_undeclared_mote_error_names_working_directory_paths : Bool :=
             let msg : String := undeclared_mote_error m info u "foo" "foo" in
             if String.contains msg "to mote.toml"
             then (if String.contains msg "which is at `foo`"
-                  then (if String.contains msg "path = \"foo\""
-                        then Bool.not (String.contains msg "/mote.toml")
-                        else false)
-                  else false)
+                then (if String.contains msg "path = \"foo\""
+                    then Bool.not (String.contains msg "/mote.toml")
+                    else false)
+                else false)
             else false
-}
+    }
 
 /// The sibling layout through the same renderer: the manifest's own
 /// directory in the hint, so the two halves agree about where the file is.
@@ -8866,12 +8866,12 @@ def test_undeclared_mote_error_names_a_nested_manifest : Bool :=
 /// The depender's manifest, in its own shape: a lib target and no
 /// dependencies -- which is what makes the `use foo::lib` above undeclared.
 def bare_depender_manifest_fixture : String :=
-  "[mote]\nname = \"game\"\nversion = \"0.1.0\"\n\n[lib]\npath = \"src/lib.mo\"\n"
+    "[mote]\nname = \"game\"\nversion = \"0.1.0\"\n\n[lib]\npath = \"src/lib.mo\"\n"
 
 /// `init`'s own manifest, in its real shape: `std` as a DEV-dependency
 /// and, being the pure core, nothing else -- least of all itself.
 def init_self_manifest_fixture : String :=
-  "[mote]\nname = \"init\"\nversion = \"0.1.0\"\n\n[dev-dependencies.std]\npath = \"../std\"\n"
+    "[mote]\nname = \"init\"\nversion = \"0.1.0\"\n\n[dev-dependencies.std]\npath = \"../std\"\n"
 
 /// The self-reference arm of `dep_dir_of`, and why it is load-bearing
 /// rather than a convenience: `prelude` belongs to `init`
@@ -8964,7 +8964,7 @@ def test_normalize_path_collapses_the_manifest_join_to_the_cascade_spelling : Bo
 #[test]
 def test_normalize_path_makes_both_spellings_of_one_file_agree : Bool :=
     String.beq (normalize_path "../lang/../init/src/number.mo")
-               (normalize_path "../init/src/number.mo")
+        (normalize_path "../init/src/number.mo")
 
 #[test]
 def test_normalize_path_drops_a_leading_dot_segment : Bool :=
@@ -9402,4 +9402,3 @@ def test_view_errors_survive_a_warn_mote : IO Bool := do {
         "#[linear] type Cell { }\ndef leak (c : Cell) : Unit := let f := fn (u : Unit) => c in unit";
     return (diags_contain "is captured by a closure" (CheckDiagnostics.errors d))
 }
-

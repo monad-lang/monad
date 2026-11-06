@@ -1,11 +1,11 @@
 use lib::core_ir {CoreIr, IrLit, MatchArm}
 use lib::core_value {
-  CoreEvalCycle, Env, GlobalCache, GlobalDef, GlobalTable, NativeTable, Value,
-  env_extend, env_get, global_cache_begin, global_cache_fail, global_cache_get,
-  global_cache_depth, global_cache_depth_limit, global_cache_fuel,
-  global_cache_new, global_cache_new_fueled, global_cache_store,
-  global_cache_with_depth, global_cache_with_fuel, global_table_get,
-  global_table_len, native_table_arity, native_table_name,
+    CoreEvalCycle, Env, GlobalCache, GlobalDef, GlobalTable, NativeTable, Value,
+    env_extend, env_get, global_cache_begin, global_cache_fail, global_cache_get,
+    global_cache_depth, global_cache_depth_limit, global_cache_fuel,
+    global_cache_new, global_cache_new_fueled, global_cache_store,
+    global_cache_with_depth, global_cache_with_fuel, global_table_get,
+    global_table_len, native_table_arity, native_table_name,
 }
 use lang::types {Identifier, ModulePath, NumSuffix, i64}
 use std::list {List.length}
@@ -42,58 +42,58 @@ use std::list {List.length}
 /// programs in tests), not full parity with `core_native.rs`'s ~60 ops.
 
 pub type CoreEvalError {
-  /// A `local i` with no matching environment frame -- an internal
-  /// lowering bug, not a normal runtime condition.
-  ce_unbound_local (idx: I64),
-  /// A `global i` past the end of `GlobalTable` -- also an internal
-  /// lowering bug.
-  ce_unknown_global (idx: I64),
-  /// A `global` slot recorded as `gd_unresolved` (a known,
-  /// already-diagnosed gap) was actually forced at runtime.
-  ce_unresolved_global (path: ModulePath),
-  /// Applied a `Value` that isn't a function, constructor, or native --
-  /// only `v_lit` can reach this.
-  ce_not_a_function (v: Value) (arg: Value),
-  /// A `match_` scrutinee reduced to something other than `v_con`.
-  ce_not_a_constructor (v: Value),
-  /// A `match_`'s scrutinee tag has no corresponding arm -- an internal
-  /// lowering bug (`match_` should have one arm per constructor of the
-  /// scrutinee's inductive).
-  ce_case_index_out_of_bounds (tag: I64),
-  /// A matched constructor's field count didn't match its arm's declared
-  /// `bind_count` -- another internal-invariant violation.
-  ce_arity_mismatch (expected: I64) (got: I64),
-  /// Forcing a global re-entered its own still-in-progress slot -- a
-  /// genuine reference cycle.
-  ce_cycle (idx: I64),
-  /// A `ntv`/`v_partial_ntv` referenced a `native_id` with no entry in
-  /// `NativeTable` -- an internal lowering bug.
-  ce_unknown_native (id: I64),
-  /// The evaluator's step budget (`eval_fueled`) ran out. Not an internal
-  /// bug: the browser REPL uses it to stop a runaway program without
-  /// freezing the page.
-  ce_out_of_fuel,
-  /// More than `max_call_depth` nested user calls, on a cache that carries
-  /// that limit (only `eval_fueled` does). The wasm stack would trap a few
-  /// hundred frames later, so this reports cleanly first.
-  ce_recursion_too_deep,
-  /// A native fired with the wrong number or shape of arguments.
-  ce_native_arg_error (msg: String),
-  /// A `match` with no wildcard, and no case for `ctor` either, actually
-  /// produced a value of `ctor` at runtime.
-  ce_non_exhaustive_match (inductive: ModulePath) (ctor: Identifier),
+    /// A `local i` with no matching environment frame -- an internal
+    /// lowering bug, not a normal runtime condition.
+    ce_unbound_local (idx : I64),
+    /// A `global i` past the end of `GlobalTable` -- also an internal
+    /// lowering bug.
+    ce_unknown_global (idx : I64),
+    /// A `global` slot recorded as `gd_unresolved` (a known,
+    /// already-diagnosed gap) was actually forced at runtime.
+    ce_unresolved_global (path : ModulePath),
+    /// Applied a `Value` that isn't a function, constructor, or native --
+    /// only `v_lit` can reach this.
+    ce_not_a_function (v : Value) (arg : Value),
+    /// A `match_` scrutinee reduced to something other than `v_con`.
+    ce_not_a_constructor (v : Value),
+    /// A `match_`'s scrutinee tag has no corresponding arm -- an internal
+    /// lowering bug (`match_` should have one arm per constructor of the
+    /// scrutinee's inductive).
+    ce_case_index_out_of_bounds (tag : I64),
+    /// A matched constructor's field count didn't match its arm's declared
+    /// `bind_count` -- another internal-invariant violation.
+    ce_arity_mismatch (expected : I64) (got : I64),
+    /// Forcing a global re-entered its own still-in-progress slot -- a
+    /// genuine reference cycle.
+    ce_cycle (idx : I64),
+    /// A `ntv`/`v_partial_ntv` referenced a `native_id` with no entry in
+    /// `NativeTable` -- an internal lowering bug.
+    ce_unknown_native (id : I64),
+    /// The evaluator's step budget (`eval_fueled`) ran out. Not an internal
+    /// bug: the browser REPL uses it to stop a runaway program without
+    /// freezing the page.
+    ce_out_of_fuel,
+    /// More than `max_call_depth` nested user calls, on a cache that carries
+    /// that limit (only `eval_fueled` does). The wasm stack would trap a few
+    /// hundred frames later, so this reports cleanly first.
+    ce_recursion_too_deep,
+    /// A native fired with the wrong number or shape of arguments.
+    ce_native_arg_error (msg : String),
+    /// A `match` with no wildcard, and no case for `ctor` either, actually
+    /// produced a value of `ctor` at runtime.
+    ce_non_exhaustive_match (inductive : ModulePath) (ctor : Identifier),
 }
 
 // ─── The Result-plus-threaded-cache "monad" this module runs in ────────
 
 def eval_ok (v : Value) (cache : GlobalCache) : Pair (Result CoreEvalError Value) GlobalCache :=
-  Pair.pair (Result.ok v) cache
+    Pair.pair (Result.ok v) cache
 
 def eval_err (e : CoreEvalError) (cache : GlobalCache) : Pair (Result CoreEvalError Value) GlobalCache :=
-  Pair.pair (Result.err e) cache
+    Pair.pair (Result.err e) cache
 
 def lift_result (r : Result CoreEvalError Value) (cache : GlobalCache) : Pair (Result CoreEvalError Value) GlobalCache :=
-  Pair.pair r cache
+    Pair.pair r cache
 
 /// Chain a sub-evaluation into a continuation that receives its `Value`
 /// and its (possibly-updated) `GlobalCache`. On error, the cache as of
@@ -103,13 +103,13 @@ def eval_then
     (outcome : Pair (Result CoreEvalError Value) GlobalCache)
     (f : Value -> GlobalCache -> Pair (Result CoreEvalError Value) GlobalCache)
     : Pair (Result CoreEvalError Value) GlobalCache :=
-  match outcome {
-    Pair.pair r cache =>
-      match r {
-        Result.ok v => f v cache,
-        Result.err e => Pair.pair (Result.err e) cache,
-      },
-  }
+    match outcome {
+        Pair.pair r cache =>
+            match r {
+                Result.ok v => f v cache,
+                Result.err e => Pair.pair (Result.err e) cache,
+            },
+    }
 
 /// Evaluate a list of `CoreIr` args left-to-right, threading the cache
 /// through each, then hand the fully-evaluated `List Value` (in the same
@@ -120,13 +120,13 @@ def eval_args
     (cache : GlobalCache)
     (k : List Value -> GlobalCache -> Pair (Result CoreEvalError Value) GlobalCache)
     : Pair (Result CoreEvalError Value) GlobalCache :=
-  match args {
-    List.empty => k List.empty cache,
-    List.cons hd rest =>
-      eval_then (eval hd env globals natives cache) (fn v => fn cache1 =>
-        eval_args rest env globals natives cache1 (fn vs => fn cache2 =>
-          k (List.cons v vs) cache2)),
-  }
+    match args {
+        List.empty => k List.empty cache,
+        List.cons hd rest =>
+            eval_then (eval hd env globals natives cache) (fn v => fn cache1 =>
+                eval_args rest env globals natives cache1 (fn vs => fn cache2 =>
+                    k (List.cons v vs) cache2)),
+    }
 
 /// Evaluate `ir` to a `Value` in environment `env`, against whole-program
 /// `globals`/`natives`, memoizing any global references forced along the
@@ -136,10 +136,10 @@ pub def eval
     (ir : CoreIr) (env : Env) (globals : GlobalTable) (natives : NativeTable)
     (cache : GlobalCache)
     : Pair (Result CoreEvalError Value) GlobalCache :=
-  match burn_fuel cache {
-    Result.err e => Pair.pair (Result.err e) cache,
-    Result.ok cache1 => eval_go ir env globals natives cache1,
-  }
+    match burn_fuel cache {
+        Result.err e => Pair.pair (Result.err e) cache,
+        Result.ok cache1 => eval_go ir env globals natives cache1,
+    }
 
 /// Evaluate with an explicit step budget. `fuel < 0` is unlimited; any
 /// other value burns one step per IR node and fails with
@@ -153,53 +153,53 @@ pub def eval
 pub def eval_fueled
     (fuel : I64) (ir : CoreIr) (globals : GlobalTable) (natives : NativeTable)
     : Pair (Result CoreEvalError Value) GlobalCache :=
-  eval ir Env.env_nil globals natives
-    (global_cache_new_fueled (global_table_len globals) fuel max_call_depth)
+    eval ir Env.env_nil globals natives
+        (global_cache_new_fueled (global_table_len globals) fuel max_call_depth)
 
 /// One node of the budget. `-1` (every ordinary caller) is one compare and
 /// no write; a finite budget decrements in the returned cache, which the
 /// recursion already threads everywhere.
 def burn_fuel (cache : GlobalCache) : Result CoreEvalError GlobalCache :=
-  let fuel : I64 := global_cache_fuel cache
-  in
-  if I64.lt fuel 0 then Result.ok cache
-  else if I64.beq fuel 0 then Result.err CoreEvalError.ce_out_of_fuel
-  else Result.ok (global_cache_with_fuel cache (fuel - 1))
+    let fuel : I64 := global_cache_fuel cache
+    in
+    if I64.lt fuel 0 then Result.ok cache
+    else if I64.beq fuel 0 then Result.err CoreEvalError.ce_out_of_fuel
+    else Result.ok (global_cache_with_fuel cache (fuel - 1))
 
 #[partial]
 def eval_go
     (ir : CoreIr) (env : Env) (globals : GlobalTable) (natives : NativeTable)
     (cache : GlobalCache)
     : Pair (Result CoreEvalError Value) GlobalCache :=
-  match ir {
-    CoreIr.local idx =>
-      match env_get env idx {
-        Option.some v => eval_ok v cache,
-        Option.none => eval_err (CoreEvalError.ce_unbound_local idx) cache,
-      },
-    CoreIr.global idx => force_global idx globals natives cache,
-    CoreIr.lam body => eval_ok (Value.v_closure body env) cache,
-    CoreIr.app fun_ arg =>
-      // Strict call-by-value: both sides are fully reduced to a Value
-      // before `apply` ever runs -- no unevaluated thunk is ever carried
-      // forward, unlike the old `EvalTerm` evaluator's naive threaded-env
-      // scheme.
-      eval_then (eval fun_ env globals natives cache) (fn f => fn cache1 =>
-        eval_then (eval arg env globals natives cache1) (fn a => fn cache2 =>
-          apply f a globals natives cache2)),
-    CoreIr.lit l => eval_ok (Value.v_lit l) cache,
-    CoreIr.match_ scrutinee arms =>
-      eval_then (eval scrutinee env globals natives cache) (fn v => fn cache1 =>
-        dispatch v arms env globals natives cache1),
-    CoreIr.match_fail inductive ctor =>
-      eval_err (CoreEvalError.ce_non_exhaustive_match inductive ctor) cache,
-    CoreIr.con tag arity args =>
-      eval_args args env globals natives cache (fn vs => fn cache_n =>
-        eval_ok (Value.v_con tag vs) cache_n),
-    CoreIr.ntv native_id args =>
-      eval_args args env globals natives cache (fn vs => fn cache_n =>
-        fire_or_accumulate native_id vs natives cache_n),
-  }
+    match ir {
+        CoreIr.local idx =>
+            match env_get env idx {
+                Option.some v => eval_ok v cache,
+                Option.none => eval_err (CoreEvalError.ce_unbound_local idx) cache,
+            },
+        CoreIr.global idx => force_global idx globals natives cache,
+        CoreIr.lam body => eval_ok (Value.v_closure body env) cache,
+        CoreIr.app fun_ arg =>
+            // Strict call-by-value: both sides are fully reduced to a Value
+            // before `apply` ever runs -- no unevaluated thunk is ever carried
+            // forward, unlike the old `EvalTerm` evaluator's naive threaded-env
+            // scheme.
+            eval_then (eval fun_ env globals natives cache) (fn f => fn cache1 =>
+                eval_then (eval arg env globals natives cache1) (fn a => fn cache2 =>
+                    apply f a globals natives cache2)),
+        CoreIr.lit l => eval_ok (Value.v_lit l) cache,
+        CoreIr.match_ scrutinee arms =>
+            eval_then (eval scrutinee env globals natives cache) (fn v => fn cache1 =>
+                dispatch v arms env globals natives cache1),
+        CoreIr.match_fail inductive ctor =>
+            eval_err (CoreEvalError.ce_non_exhaustive_match inductive ctor) cache,
+        CoreIr.con tag arity args =>
+            eval_args args env globals natives cache (fn vs => fn cache_n =>
+                eval_ok (Value.v_con tag vs) cache_n),
+        CoreIr.ntv native_id args =>
+            eval_args args env globals natives cache (fn vs => fn cache_n =>
+                fire_or_accumulate native_id vs natives cache_n),
+    }
 
 /// Apply `f` to `a`. The `v_closure` case is the direct fix for the old
 /// `EvalTerm` evaluator's substitution-shaped bug: extend the closure's
@@ -211,22 +211,22 @@ def apply
     (f : Value) (a : Value) (globals : GlobalTable) (natives : NativeTable)
     (cache : GlobalCache)
     : Pair (Result CoreEvalError Value) GlobalCache :=
-  match f {
-    Value.v_closure body closure_env =>
-      match enter_depth cache {
-        Result.err e => eval_err e cache,
-        Result.ok cache1 =>
-          match eval body (env_extend closure_env a) globals natives cache1 {
-            Pair.pair r cache2 => Pair.pair r (leave_depth cache2),
-          },
-      },
-    Value.v_con tag args =>
-      eval_ok (Value.v_con tag (List.append args [a])) cache,
-    Value.v_partial_ntv native_id args =>
-      fire_or_accumulate native_id (List.append args [a]) natives cache,
-    Value.v_lit l =>
-      eval_err (CoreEvalError.ce_not_a_function (Value.v_lit l) a) cache,
-  }
+    match f {
+        Value.v_closure body closure_env =>
+            match enter_depth cache {
+                Result.err e => eval_err e cache,
+                Result.ok cache1 =>
+                    match eval body (env_extend closure_env a) globals natives cache1 {
+                        Pair.pair r cache2 => Pair.pair r (leave_depth cache2),
+                    },
+            },
+        Value.v_con tag args =>
+            eval_ok (Value.v_con tag (List.append args [a])) cache,
+        Value.v_partial_ntv native_id args =>
+            fire_or_accumulate native_id (List.append args [a]) natives cache,
+        Value.v_lit l =>
+            eval_err (CoreEvalError.ce_not_a_function (Value.v_lit l) a) cache,
+    }
 
 /// Constructor-tag dispatch: index straight into `arms` by the
 /// scrutinee's tag (no scan), then extend the *enclosing* environment
@@ -241,41 +241,41 @@ def dispatch
     (scrutinee : Value) (arms : List MatchArm) (env : Env) (globals : GlobalTable)
     (natives : NativeTable) (cache : GlobalCache)
     : Pair (Result CoreEvalError Value) GlobalCache :=
-  match scrutinee {
-    Value.v_con tag args => dispatch_con tag args arms env globals natives cache,
-    Value.v_lit _ => eval_err (CoreEvalError.ce_not_a_constructor scrutinee) cache,
-    Value.v_closure _ _ => eval_err (CoreEvalError.ce_not_a_constructor scrutinee) cache,
-    Value.v_partial_ntv _ _ => eval_err (CoreEvalError.ce_not_a_constructor scrutinee) cache,
-  }
+    match scrutinee {
+        Value.v_con tag args => dispatch_con tag args arms env globals natives cache,
+        Value.v_lit _ => eval_err (CoreEvalError.ce_not_a_constructor scrutinee) cache,
+        Value.v_closure _ _ => eval_err (CoreEvalError.ce_not_a_constructor scrutinee) cache,
+        Value.v_partial_ntv _ _ => eval_err (CoreEvalError.ce_not_a_constructor scrutinee) cache,
+    }
 
 #[partial]
 def dispatch_con
     (tag : I64) (args : List Value) (arms : List MatchArm) (env : Env)
     (globals : GlobalTable) (natives : NativeTable) (cache : GlobalCache)
     : Pair (Result CoreEvalError Value) GlobalCache :=
-  match List.get tag arms {
-    Option.some matched_arm => dispatch_arm matched_arm args env globals natives cache,
-    Option.none => eval_err (CoreEvalError.ce_case_index_out_of_bounds tag) cache,
-  }
+    match List.get tag arms {
+        Option.some matched_arm => dispatch_arm matched_arm args env globals natives cache,
+        Option.none => eval_err (CoreEvalError.ce_case_index_out_of_bounds tag) cache,
+    }
 
 #[partial]
 def dispatch_arm
     (matched_arm : MatchArm) (args : List Value) (env : Env) (globals : GlobalTable)
     (natives : NativeTable) (cache : GlobalCache)
     : Pair (Result CoreEvalError Value) GlobalCache :=
-  match matched_arm {
-    MatchArm.arm bind_count body =>
-      if I64.beq (List.length args) bind_count
-      then eval body (extend_env_with_fields env args) globals natives cache
-      else eval_err (CoreEvalError.ce_arity_mismatch bind_count (List.length args)) cache,
-  }
+    match matched_arm {
+        MatchArm.arm bind_count body =>
+            if I64.beq (List.length args) bind_count
+            then eval body (extend_env_with_fields env args) globals natives cache
+            else eval_err (CoreEvalError.ce_arity_mismatch bind_count (List.length args)) cache,
+    }
 
 #[partial]
 def extend_env_with_fields (env : Env) (args : List Value) : Env :=
-  match args {
-    List.empty => env,
-    List.cons hd rest => extend_env_with_fields (env_extend env hd) rest,
-  }
+    match args {
+        List.empty => env,
+        List.cons hd rest => extend_env_with_fields (env_extend env hd) rest,
+    }
 
 /// The most nested user calls `eval_fueled` allows. Measured on the web
 /// profile: ~120 KiB of wasm stack per user call (the self-hosted codegen
@@ -287,17 +287,17 @@ def extend_env_with_fields (env : Env) (args : List Value) : Env :=
 pub def max_call_depth : I64 := 200
 
 def enter_depth (cache : GlobalCache) : Result CoreEvalError GlobalCache :=
-  let d : I64 := global_cache_depth cache
-  in
-  let limit : I64 := global_cache_depth_limit cache
-  in
-  if I64.lt limit 0 then Result.ok (global_cache_with_depth cache (I64.add d 1))
-  else if I64.lt limit d
-  then Result.err CoreEvalError.ce_recursion_too_deep
-  else Result.ok (global_cache_with_depth cache (I64.add d 1))
+    let d : I64 := global_cache_depth cache
+    in
+    let limit : I64 := global_cache_depth_limit cache
+    in
+    if I64.lt limit 0 then Result.ok (global_cache_with_depth cache (I64.add d 1))
+    else if I64.lt limit d
+    then Result.err CoreEvalError.ce_recursion_too_deep
+    else Result.ok (global_cache_with_depth cache (I64.add d 1))
 
 def leave_depth (cache : GlobalCache) : GlobalCache :=
-  global_cache_with_depth cache (I64.sub (global_cache_depth cache) 1)
+    global_cache_with_depth cache (I64.sub (global_cache_depth cache) 1)
 
 /// Force global slot `idx` to a `Value`, memoizing the result into the
 /// returned cache -- each global's body is walked to a `Value` at most
@@ -307,14 +307,14 @@ def leave_depth (cache : GlobalCache) : GlobalCache :=
 def force_global
     (idx : I64) (globals : GlobalTable) (natives : NativeTable) (cache : GlobalCache)
     : Pair (Result CoreEvalError Value) GlobalCache :=
-  match global_cache_get cache idx {
-    Option.some v => eval_ok v cache,
-    Option.none =>
-      match global_table_get globals idx {
-        Option.some gd => force_global_def idx gd globals natives cache,
-        Option.none => eval_err (CoreEvalError.ce_unknown_global idx) cache,
-      },
-  }
+    match global_cache_get cache idx {
+        Option.some v => eval_ok v cache,
+        Option.none =>
+            match global_table_get globals idx {
+                Option.some gd => force_global_def idx gd globals natives cache,
+                Option.none => eval_err (CoreEvalError.ce_unknown_global idx) cache,
+            },
+    }
 
 /// NOTE: every `gd_def` here is memoized unconditionally, with none of
 /// the effect carve-out the Rust evaluator's own `force_global` has
@@ -333,41 +333,41 @@ def force_global_def
     (idx : I64) (gd : GlobalDef) (globals : GlobalTable) (natives : NativeTable)
     (cache : GlobalCache)
     : Pair (Result CoreEvalError Value) GlobalCache :=
-  match gd {
-    GlobalDef.gd_constructor tag arity => eval_ok (Value.v_con tag List.empty) cache,
-    // A 0-arity native (Ptr.null, Ptr.minus_one) is a VALUE, not a partial
-    // application: forcing it must fire it. Every table native is pure, so
-    // firing on each force is safe (the memoized path only covers `gd_def`).
-    GlobalDef.gd_native native_id _arity => fire_or_accumulate native_id List.empty natives cache,
-    GlobalDef.gd_unresolved path => eval_err (CoreEvalError.ce_unresolved_global path) cache,
-    GlobalDef.gd_def body =>
-      match global_cache_begin cache idx {
-        Result.err cycle => force_global_cycle_error cycle cache,
-        Result.ok cache1 => force_global_body idx body globals natives cache1,
-      },
-  }
+    match gd {
+        GlobalDef.gd_constructor tag arity => eval_ok (Value.v_con tag List.empty) cache,
+        // A 0-arity native (Ptr.null, Ptr.minus_one) is a VALUE, not a partial
+        // application: forcing it must fire it. Every table native is pure, so
+        // firing on each force is safe (the memoized path only covers `gd_def`).
+        GlobalDef.gd_native native_id _arity => fire_or_accumulate native_id List.empty natives cache,
+        GlobalDef.gd_unresolved path => eval_err (CoreEvalError.ce_unresolved_global path) cache,
+        GlobalDef.gd_def body =>
+            match global_cache_begin cache idx {
+                Result.err cycle => force_global_cycle_error cycle cache,
+                Result.ok cache1 => force_global_body idx body globals natives cache1,
+            },
+    }
 
 def force_global_cycle_error (cycle : CoreEvalCycle) (cache : GlobalCache) : Pair (Result CoreEvalError Value) GlobalCache :=
-  match cycle {
-    CoreEvalCycle.core_eval_cycle idx => eval_err (CoreEvalError.ce_cycle idx) cache,
-  }
+    match cycle {
+        CoreEvalCycle.core_eval_cycle idx => eval_err (CoreEvalError.ce_cycle idx) cache,
+    }
 
 #[partial]
 def force_global_body
     (idx : I64) (body : CoreIr) (globals : GlobalTable) (natives : NativeTable)
     (cache1 : GlobalCache)
     : Pair (Result CoreEvalError Value) GlobalCache :=
-  match eval body Env.env_nil globals natives cache1 {
-    Pair.pair r cache2 =>
-      match r {
-        Result.ok v => eval_ok v (global_cache_store cache2 idx v),
-        // On failure, release the in-progress marker (rather than leave
-        // it stuck forever) so a later, unrelated force of the same slot
-        // doesn't see a spurious cycle -- see `global_cache_fail`'s doc
-        // comment in `lang/core_value.mo`.
-        Result.err e => eval_err e (global_cache_fail cache2 idx),
-      },
-  }
+    match eval body Env.env_nil globals natives cache1 {
+        Pair.pair r cache2 =>
+            match r {
+                Result.ok v => eval_ok v (global_cache_store cache2 idx v),
+                // On failure, release the in-progress marker (rather than leave
+                // it stuck forever) so a later, unrelated force of the same slot
+                // doesn't see a spurious cycle -- see `global_cache_fail`'s doc
+                // comment in `lang/core_value.mo`.
+                Result.err e => eval_err e (global_cache_fail cache2 idx),
+            },
+    }
 
 /// Fire a native call once `args`'s length reaches its declared arity;
 /// below that, stay a `v_partial_ntv`, exactly like an under-saturated
@@ -375,14 +375,14 @@ def force_global_body
 def fire_or_accumulate
     (native_id : I64) (args : List Value) (natives : NativeTable) (cache : GlobalCache)
     : Pair (Result CoreEvalError Value) GlobalCache :=
-  let arity : I64 := native_table_arity natives native_id in
-  if I64.lt (List.length args) arity
-  then eval_ok (Value.v_partial_ntv native_id args) cache
-  else
-    match native_table_name natives native_id {
-      Option.some name => lift_result (exec_native name args) cache,
-      Option.none => eval_err (CoreEvalError.ce_unknown_native native_id) cache,
-    }
+    let arity : I64 := native_table_arity natives native_id in
+    if I64.lt (List.length args) arity
+    then eval_ok (Value.v_partial_ntv native_id args) cache
+    else
+        match native_table_name natives native_id {
+            Option.some name => lift_result (exec_native name args) cache,
+            Option.none => eval_err (CoreEvalError.ce_unknown_native native_id) cache,
+        }
 
 // ─── A small native table ─────────────────────────────────────────────
 // Executing a native op calls through to Monad's own stdlib function of
@@ -407,43 +407,43 @@ def fire_or_accumulate
 // need representations this evaluator does not have.
 
 def value_as_i64 (v : Value) : Option I64 :=
-  match v {
-    Value.v_lit l => irlit_as_i64 l,
-    Value.v_closure _ _ => Option.none,
-    Value.v_con _ _ => Option.none,
-    Value.v_partial_ntv _ _ => Option.none,
-  }
+    match v {
+        Value.v_lit l => irlit_as_i64 l,
+        Value.v_closure _ _ => Option.none,
+        Value.v_con _ _ => Option.none,
+        Value.v_partial_ntv _ _ => Option.none,
+    }
 
 def irlit_as_i64 (l : IrLit) : Option I64 :=
-  match l {
-    IrLit.ir_num n _ => Option.some n,
-    IrLit.ir_str _ => Option.none,
-    IrLit.ir_char _ => Option.none,
-    IrLit.ir_float _ _ => Option.none,
-    IrLit.ir_sort _ => Option.none,
-  }
+    match l {
+        IrLit.ir_num n _ => Option.some n,
+        IrLit.ir_str _ => Option.none,
+        IrLit.ir_char _ => Option.none,
+        IrLit.ir_float _ _ => Option.none,
+        IrLit.ir_sort _ => Option.none,
+    }
 
 def value_as_str (v : Value) : Option String :=
-  match v {
-    Value.v_lit l => irlit_as_str l,
-    Value.v_closure _ _ => Option.none,
-    Value.v_con _ _ => Option.none,
-    Value.v_partial_ntv _ _ => Option.none,
-  }
+    match v {
+        Value.v_lit l => irlit_as_str l,
+        Value.v_closure _ _ => Option.none,
+        Value.v_con _ _ => Option.none,
+        Value.v_partial_ntv _ _ => Option.none,
+    }
 
 def irlit_as_str (l : IrLit) : Option String :=
-  match l {
-    IrLit.ir_str s => Option.some s,
-    IrLit.ir_num _ _ => Option.none,
-    IrLit.ir_char _ => Option.none,
-    IrLit.ir_float _ _ => Option.none,
-    IrLit.ir_sort _ => Option.none,
-  }
+    match l {
+        IrLit.ir_str s => Option.some s,
+        IrLit.ir_num _ _ => Option.none,
+        IrLit.ir_char _ => Option.none,
+        IrLit.ir_float _ _ => Option.none,
+        IrLit.ir_sort _ => Option.none,
+    }
 
 /// `Bool { true, false }` (`init/prelude.mo`) -- `true` is declared
 /// first, so tag 0; `false` is tag 1.
 def bool_value (b : Bool) : Value :=
-  if b then Value.v_con 0 List.empty else Value.v_con 1 List.empty
+    if b then Value.v_con 0 List.empty else Value.v_con 1 List.empty
 
 def i64_value (n : I64) : Value := Value.v_lit (IrLit.ir_num n NumSuffix.i64)
 
@@ -456,17 +456,17 @@ def str_value (s : String) : Value := Value.v_lit (IrLit.ir_str s)
 /// `x / INT64_MIN` cases cannot overflow the product because `q * width`
 /// is exactly the multiple that was subtracted.
 def wrap (width : I64) (x : I64) : I64 :=
-  let q : I64 := I64.div x width
-  in
-  let r : I64 := I64.sub x (I64.mul q width)
-  in
-  if I64.lt r 0 then I64.add r width else r
+    let q : I64 := I64.div x width
+    in
+    let r : I64 := I64.sub x (I64.mul q width)
+    in
+    if I64.lt r 0 then I64.add r width else r
 
 /// Sign-extend the low `width` bits (`(x as i8/i16/i32) as i64`).
 def sign_extend (width : I64) (half : I64) (x : I64) : I64 :=
-  let m : I64 := wrap width x
-  in
-  if I64.gt m half then I64.sub m width else m
+    let m : I64 := wrap width x
+    in
+    if I64.gt m half then I64.sub m width else m
 
 def mask_u8 (x : I64) : I64 := wrap 256 x
 
@@ -486,26 +486,26 @@ def mask_i32 (x : I64) : I64 := sign_extend 4294967296 2147483647 x
 // ─── The i64 integer family ───────────────────────────────────────────
 
 def native_i64_binop (f : I64 -> I64 -> I64) (args : List Value) : Result CoreEvalError Value :=
-  match args {
-    List.empty => Result.err (CoreEvalError.ce_native_arg_error "expected 2 args, got 0"),
-    List.cons a rest1 => native_i64_binop_arg2 f a rest1,
-  }
+    match args {
+        List.empty => Result.err (CoreEvalError.ce_native_arg_error "expected 2 args, got 0"),
+        List.cons a rest1 => native_i64_binop_arg2 f a rest1,
+    }
 
 def native_i64_binop_arg2 (f : I64 -> I64 -> I64) (a : Value) (rest1 : List Value) : Result CoreEvalError Value :=
-  match rest1 {
-    List.empty => Result.err (CoreEvalError.ce_native_arg_error "expected 2 args, got 1"),
-    List.cons b _ => native_i64_binop_run f a b,
-  }
+    match rest1 {
+        List.empty => Result.err (CoreEvalError.ce_native_arg_error "expected 2 args, got 1"),
+        List.cons b _ => native_i64_binop_run f a b,
+    }
 
 def native_i64_binop_run (f : I64 -> I64 -> I64) (a : Value) (b : Value) : Result CoreEvalError Value :=
-  match value_as_i64 a {
-    Option.some x =>
-      match value_as_i64 b {
-        Option.some y => Result.ok (i64_value (f x y)),
+    match value_as_i64 a {
+        Option.some x =>
+            match value_as_i64 b {
+                Option.some y => Result.ok (i64_value (f x y)),
+                Option.none => Result.err (CoreEvalError.ce_native_arg_error "expected I64 arg"),
+            },
         Option.none => Result.err (CoreEvalError.ce_native_arg_error "expected I64 arg"),
-      },
-    Option.none => Result.err (CoreEvalError.ce_native_arg_error "expected I64 arg"),
-  }
+    }
 
 /// `i64`'s minimum, without writing an unrepresentable literal:
 /// `(0 - MAX) - 1`.
@@ -515,54 +515,54 @@ def i64_min : I64 := I64.sub (I64.sub 0 9223372036854775807) 1
 /// case is guarded too: `sdiv` traps on that overflow in wasm (and is UB in
 /// LLVM), while the reference's `wrapping_div` returns MIN.
 def native_i64_div_binop (args : List Value) : Result CoreEvalError Value :=
-  native_i64_binop
-    (fn (a : I64) => fn (b : I64) =>
-        if I64.beq b 0 then 0
-        else if I64.beq a i64_min && I64.beq b (-1) then a
-        else I64.div a b)
-    args
+    native_i64_binop
+        (fn (a : I64) => fn (b : I64) =>
+            if I64.beq b 0 then 0
+            else if I64.beq a i64_min && I64.beq b (-1) then a
+            else I64.div a b)
+        args
 
 def native_i64_bool_binop (f : I64 -> I64 -> Bool) (args : List Value) : Result CoreEvalError Value :=
-  match args {
-    List.empty => Result.err (CoreEvalError.ce_native_arg_error "expected 2 args, got 0"),
-    List.cons a rest1 => native_i64_bool_binop_arg2 f a rest1,
-  }
+    match args {
+        List.empty => Result.err (CoreEvalError.ce_native_arg_error "expected 2 args, got 0"),
+        List.cons a rest1 => native_i64_bool_binop_arg2 f a rest1,
+    }
 
 def native_i64_bool_binop_arg2 (f : I64 -> I64 -> Bool) (a : Value) (rest1 : List Value) : Result CoreEvalError Value :=
-  match rest1 {
-    List.empty => Result.err (CoreEvalError.ce_native_arg_error "expected 2 args, got 1"),
-    List.cons b _ => native_i64_bool_binop_run f a b,
-  }
+    match rest1 {
+        List.empty => Result.err (CoreEvalError.ce_native_arg_error "expected 2 args, got 1"),
+        List.cons b _ => native_i64_bool_binop_run f a b,
+    }
 
 def native_i64_bool_binop_run (f : I64 -> I64 -> Bool) (a : Value) (b : Value) : Result CoreEvalError Value :=
-  match value_as_i64 a {
-    Option.some x =>
-      match value_as_i64 b {
-        Option.some y => Result.ok (bool_value (f x y)),
+    match value_as_i64 a {
+        Option.some x =>
+            match value_as_i64 b {
+                Option.some y => Result.ok (bool_value (f x y)),
+                Option.none => Result.err (CoreEvalError.ce_native_arg_error "expected I64 arg"),
+            },
         Option.none => Result.err (CoreEvalError.ce_native_arg_error "expected I64 arg"),
-      },
-    Option.none => Result.err (CoreEvalError.ce_native_arg_error "expected I64 arg"),
-  }
+    }
 
 def native_i64_to_string (f : I64 -> String) (args : List Value) : Result CoreEvalError Value :=
-  match args {
-    List.empty => Result.err (CoreEvalError.ce_native_arg_error "expected 1 arg, got 0"),
-    List.cons a _ =>
-      match value_as_i64 a {
-        Option.some x => Result.ok (str_value (f x)),
-        Option.none => Result.err (CoreEvalError.ce_native_arg_error "expected I64 arg"),
-      },
-  }
+    match args {
+        List.empty => Result.err (CoreEvalError.ce_native_arg_error "expected 1 arg, got 0"),
+        List.cons a _ =>
+            match value_as_i64 a {
+                Option.some x => Result.ok (str_value (f x)),
+                Option.none => Result.err (CoreEvalError.ce_native_arg_error "expected I64 arg"),
+            },
+    }
 
 def native_i64_to_i64_value (suffix : NumSuffix) (f : I64 -> I64) (args : List Value) : Result CoreEvalError Value :=
-  match args {
-    List.empty => Result.err (CoreEvalError.ce_native_arg_error "expected 1 arg, got 0"),
-    List.cons a _ =>
-      match value_as_i64 a {
-        Option.some x => Result.ok (int_value (f x) suffix),
-        Option.none => Result.err (CoreEvalError.ce_native_arg_error "expected I64 arg"),
-      },
-  }
+    match args {
+        List.empty => Result.err (CoreEvalError.ce_native_arg_error "expected 1 arg, got 0"),
+        List.cons a _ =>
+            match value_as_i64 a {
+                Option.some x => Result.ok (int_value (f x) suffix),
+                Option.none => Result.err (CoreEvalError.ce_native_arg_error "expected I64 arg"),
+            },
+    }
 
 // ─── Width-correct integer families ────────────────────────────────────
 // The evaluator mirror of the reference's `int_binop_width`/
@@ -577,22 +577,22 @@ def native_i64_to_i64_value (suffix : NumSuffix) (f : I64 -> I64) (args : List V
 /// it with the op's own width. The pre-masked operands keep `f` a
 /// plain i64 closure -- a masked u16 product cannot overflow i64.
 def native_int_binop_width (suffix : NumSuffix) (mask : I64 -> I64) (f : I64 -> I64 -> I64) (args : List Value) : Result CoreEvalError Value :=
-  match args {
-    List.empty => Result.err (CoreEvalError.ce_native_arg_error "expected 2 args, got 0"),
-    List.cons a rest1 =>
-      match rest1 {
-        List.empty => Result.err (CoreEvalError.ce_native_arg_error "expected 2 args, got 1"),
-        List.cons b _ =>
-          match value_as_i64 a {
-            Option.some x =>
-              match value_as_i64 b {
-                Option.some y => Result.ok (int_value (mask (f (mask x) (mask y))) suffix),
-                Option.none => Result.err (CoreEvalError.ce_native_arg_error "expected I64 arg"),
-              },
-            Option.none => Result.err (CoreEvalError.ce_native_arg_error "expected I64 arg"),
-          },
-      },
-  }
+    match args {
+        List.empty => Result.err (CoreEvalError.ce_native_arg_error "expected 2 args, got 0"),
+        List.cons a rest1 =>
+            match rest1 {
+                List.empty => Result.err (CoreEvalError.ce_native_arg_error "expected 2 args, got 1"),
+                List.cons b _ =>
+                    match value_as_i64 a {
+                        Option.some x =>
+                            match value_as_i64 b {
+                                Option.some y => Result.ok (int_value (mask (f (mask x) (mask y))) suffix),
+                                Option.none => Result.err (CoreEvalError.ce_native_arg_error "expected I64 arg"),
+                            },
+                        Option.none => Result.err (CoreEvalError.ce_native_arg_error "expected I64 arg"),
+                    },
+            },
+    }
 
 /// `int_div_width`: mask both operands, yield 0 for a zero divisor (the
 /// ledger's uniform convention), mask and tag the quotient. The masked
@@ -600,24 +600,24 @@ def native_int_binop_width (suffix : NumSuffix) (mask : I64 -> I64) (f : I64 -> 
 /// cannot arise at any of these widths -- `I8.div (-128) (-1)` is 128,
 /// which the result mask folds back to -128.
 def native_int_div_width (suffix : NumSuffix) (mask : I64 -> I64) (args : List Value) : Result CoreEvalError Value :=
-  match args {
-    List.empty => Result.err (CoreEvalError.ce_native_arg_error "expected 2 args, got 0"),
-    List.cons a rest1 =>
-      match rest1 {
-        List.empty => Result.err (CoreEvalError.ce_native_arg_error "expected 2 args, got 1"),
-        List.cons b _ =>
-          match value_as_i64 a {
-            Option.some x =>
-              match value_as_i64 b {
-                Option.some y =>
-                  let q : I64 := if I64.beq (mask y) 0 then 0 else I64.div (mask x) (mask y) in
-                  Result.ok (int_value (mask q) suffix),
-                Option.none => Result.err (CoreEvalError.ce_native_arg_error "expected I64 arg"),
-              },
-            Option.none => Result.err (CoreEvalError.ce_native_arg_error "expected I64 arg"),
-          },
-      },
-  }
+    match args {
+        List.empty => Result.err (CoreEvalError.ce_native_arg_error "expected 2 args, got 0"),
+        List.cons a rest1 =>
+            match rest1 {
+                List.empty => Result.err (CoreEvalError.ce_native_arg_error "expected 2 args, got 1"),
+                List.cons b _ =>
+                    match value_as_i64 a {
+                        Option.some x =>
+                            match value_as_i64 b {
+                                Option.some y =>
+                                    let q : I64 := if I64.beq (mask y) 0 then 0 else I64.div (mask x) (mask y) in
+                                    Result.ok (int_value (mask q) suffix),
+                                Option.none => Result.err (CoreEvalError.ce_native_arg_error "expected I64 arg"),
+                            },
+                        Option.none => Result.err (CoreEvalError.ce_native_arg_error "expected I64 arg"),
+                    },
+            },
+    }
 
 /// `int_cmp_width`: mask both operands, compare in the width's
 /// canonical range. For the unsigned widths the masked operands are
@@ -625,134 +625,134 @@ def native_int_div_width (suffix : NumSuffix) (mask : I64 -> I64) (args : List V
 /// ones too; u64 is the one width needing a genuine unsigned compare
 /// (its mask is the identity, so nothing rescues a signed answer).
 def native_int_cmp_width (mask : I64 -> I64) (f : I64 -> I64 -> Bool) (args : List Value) : Result CoreEvalError Value :=
-  match args {
-    List.empty => Result.err (CoreEvalError.ce_native_arg_error "expected 2 args, got 0"),
-    List.cons a rest1 =>
-      match rest1 {
-        List.empty => Result.err (CoreEvalError.ce_native_arg_error "expected 2 args, got 1"),
-        List.cons b _ =>
-          match value_as_i64 a {
-            Option.some x =>
-              match value_as_i64 b {
-                Option.some y => Result.ok (bool_value (f (mask x) (mask y))),
-                Option.none => Result.err (CoreEvalError.ce_native_arg_error "expected I64 arg"),
-              },
-            Option.none => Result.err (CoreEvalError.ce_native_arg_error "expected I64 arg"),
-          },
-      },
-  }
+    match args {
+        List.empty => Result.err (CoreEvalError.ce_native_arg_error "expected 2 args, got 0"),
+        List.cons a rest1 =>
+            match rest1 {
+                List.empty => Result.err (CoreEvalError.ce_native_arg_error "expected 2 args, got 1"),
+                List.cons b _ =>
+                    match value_as_i64 a {
+                        Option.some x =>
+                            match value_as_i64 b {
+                                Option.some y => Result.ok (bool_value (f (mask x) (mask y))),
+                                Option.none => Result.err (CoreEvalError.ce_native_arg_error "expected I64 arg"),
+                            },
+                        Option.none => Result.err (CoreEvalError.ce_native_arg_error "expected I64 arg"),
+                    },
+            },
+    }
 
 // ─── U32: the width-correct family, via its own U32 natives ────────────
 
 def native_u32_binop (f : U32 -> U32 -> U32) (args : List Value) : Result CoreEvalError Value :=
-  match args {
-    List.empty => Result.err (CoreEvalError.ce_native_arg_error "expected 2 args, got 0"),
-    List.cons a rest1 =>
-      match rest1 {
-        List.empty => Result.err (CoreEvalError.ce_native_arg_error "expected 2 args, got 1"),
-        List.cons b _ => native_u32_binop_run f a b,
-      },
-  }
+    match args {
+        List.empty => Result.err (CoreEvalError.ce_native_arg_error "expected 2 args, got 0"),
+        List.cons a rest1 =>
+            match rest1 {
+                List.empty => Result.err (CoreEvalError.ce_native_arg_error "expected 2 args, got 1"),
+                List.cons b _ => native_u32_binop_run f a b,
+            },
+    }
 
 def native_u32_binop_run (f : U32 -> U32 -> U32) (a : Value) (b : Value) : Result CoreEvalError Value :=
-  match value_as_i64 a {
-    Option.some x =>
-      match value_as_i64 b {
-        Option.some y =>
-          Result.ok (int_value (U32.to_i64 (f (I64.to_u32 x) (I64.to_u32 y))) NumSuffix.u32),
+    match value_as_i64 a {
+        Option.some x =>
+            match value_as_i64 b {
+                Option.some y =>
+                    Result.ok (int_value (U32.to_i64 (f (I64.to_u32 x) (I64.to_u32 y))) NumSuffix.u32),
+                Option.none => Result.err (CoreEvalError.ce_native_arg_error "expected I64 arg"),
+            },
         Option.none => Result.err (CoreEvalError.ce_native_arg_error "expected I64 arg"),
-      },
-    Option.none => Result.err (CoreEvalError.ce_native_arg_error "expected I64 arg"),
-  }
+    }
 
 def native_u32_cmp (f : U32 -> U32 -> Bool) (args : List Value) : Result CoreEvalError Value :=
-  match args {
-    List.empty => Result.err (CoreEvalError.ce_native_arg_error "expected 2 args, got 0"),
-    List.cons a rest1 =>
-      match rest1 {
-        List.empty => Result.err (CoreEvalError.ce_native_arg_error "expected 2 args, got 1"),
-        List.cons b _ =>
-          match value_as_i64 a {
-            Option.some x =>
-              match value_as_i64 b {
-                Option.some y => Result.ok (bool_value (f (I64.to_u32 x) (I64.to_u32 y))),
-                Option.none => Result.err (CoreEvalError.ce_native_arg_error "expected I64 arg"),
-              },
-            Option.none => Result.err (CoreEvalError.ce_native_arg_error "expected I64 arg"),
-          },
-      },
-  }
+    match args {
+        List.empty => Result.err (CoreEvalError.ce_native_arg_error "expected 2 args, got 0"),
+        List.cons a rest1 =>
+            match rest1 {
+                List.empty => Result.err (CoreEvalError.ce_native_arg_error "expected 2 args, got 1"),
+                List.cons b _ =>
+                    match value_as_i64 a {
+                        Option.some x =>
+                            match value_as_i64 b {
+                                Option.some y => Result.ok (bool_value (f (I64.to_u32 x) (I64.to_u32 y))),
+                                Option.none => Result.err (CoreEvalError.ce_native_arg_error "expected I64 arg"),
+                            },
+                        Option.none => Result.err (CoreEvalError.ce_native_arg_error "expected I64 arg"),
+                    },
+            },
+    }
 
 /// `int_div_width` for the one family routed through its own U32
 /// natives: mask, yield 0 for a zero divisor (the uniform convention
 /// the reference adopted in Phase 1 -- this used to be the one family
 /// that hard-errored), mask the quotient.
 def native_u32_div (args : List Value) : Result CoreEvalError Value :=
-  match args {
-    List.empty => Result.err (CoreEvalError.ce_native_arg_error "expected 2 args, got 0"),
-    List.cons a rest1 =>
-      match rest1 {
-        List.empty => Result.err (CoreEvalError.ce_native_arg_error "expected 2 args, got 1"),
-        List.cons b _ =>
-          match value_as_i64 a {
-            Option.some x =>
-              match value_as_i64 b {
-                Option.some y =>
-                  if I64.beq (mask_u32 y) 0
-                  then Result.ok (int_value 0 NumSuffix.u32)
-                  else Result.ok (int_value (U32.to_i64 (U32.div (I64.to_u32 x) (I64.to_u32 y))) NumSuffix.u32),
-                Option.none => Result.err (CoreEvalError.ce_native_arg_error "expected I64 arg"),
-              },
-            Option.none => Result.err (CoreEvalError.ce_native_arg_error "expected I64 arg"),
-          },
-      },
-  }
+    match args {
+        List.empty => Result.err (CoreEvalError.ce_native_arg_error "expected 2 args, got 0"),
+        List.cons a rest1 =>
+            match rest1 {
+                List.empty => Result.err (CoreEvalError.ce_native_arg_error "expected 2 args, got 1"),
+                List.cons b _ =>
+                    match value_as_i64 a {
+                        Option.some x =>
+                            match value_as_i64 b {
+                                Option.some y =>
+                                    if I64.beq (mask_u32 y) 0
+                                    then Result.ok (int_value 0 NumSuffix.u32)
+                                    else Result.ok (int_value (U32.to_i64 (U32.div (I64.to_u32 x) (I64.to_u32 y))) NumSuffix.u32),
+                                Option.none => Result.err (CoreEvalError.ce_native_arg_error "expected I64 arg"),
+                            },
+                        Option.none => Result.err (CoreEvalError.ce_native_arg_error "expected I64 arg"),
+                    },
+            },
+    }
 
 // ─── U64: unsigned division/modulo, raw i64 otherwise ──────────────────
 
 def native_u64_div (args : List Value) : Result CoreEvalError Value :=
-  native_u64_div_go (fn (a : U64) => fn (b : U64) => if U64.beq b 0u64 then 0u64 else U64.div a b) args
+    native_u64_div_go (fn (a : U64) => fn (b : U64) => if U64.beq b 0u64 then 0u64 else U64.div a b) args
 
 def native_u64_mod (args : List Value) : Result CoreEvalError Value :=
-  native_u64_div_go (fn (a : U64) => fn (b : U64) => if U64.beq b 0u64 then 0u64 else U64.mod a b) args
+    native_u64_div_go (fn (a : U64) => fn (b : U64) => if U64.beq b 0u64 then 0u64 else U64.mod a b) args
 
 def native_u64_div_go (f : U64 -> U64 -> U64) (args : List Value) : Result CoreEvalError Value :=
-  match args {
-    List.empty => Result.err (CoreEvalError.ce_native_arg_error "expected 2 args, got 0"),
-    List.cons a rest1 =>
-      match rest1 {
-        List.empty => Result.err (CoreEvalError.ce_native_arg_error "expected 2 args, got 1"),
-        List.cons b _ =>
-          match value_as_i64 a {
-            Option.some x =>
-              match value_as_i64 b {
-                Option.some y =>
-                  Result.ok (int_value (U64.to_i64 (f (I64.to_u64 x) (I64.to_u64 y))) NumSuffix.u64),
-                Option.none => Result.err (CoreEvalError.ce_native_arg_error "expected I64 arg"),
-              },
-            Option.none => Result.err (CoreEvalError.ce_native_arg_error "expected I64 arg"),
-          },
-      },
-  }
+    match args {
+        List.empty => Result.err (CoreEvalError.ce_native_arg_error "expected 2 args, got 0"),
+        List.cons a rest1 =>
+            match rest1 {
+                List.empty => Result.err (CoreEvalError.ce_native_arg_error "expected 2 args, got 1"),
+                List.cons b _ =>
+                    match value_as_i64 a {
+                        Option.some x =>
+                            match value_as_i64 b {
+                                Option.some y =>
+                                    Result.ok (int_value (U64.to_i64 (f (I64.to_u64 x) (I64.to_u64 y))) NumSuffix.u64),
+                                Option.none => Result.err (CoreEvalError.ce_native_arg_error "expected I64 arg"),
+                            },
+                        Option.none => Result.err (CoreEvalError.ce_native_arg_error "expected I64 arg"),
+                    },
+            },
+    }
 
 def native_u64_xor (args : List Value) : Result CoreEvalError Value :=
-  match args {
-    List.empty => Result.err (CoreEvalError.ce_native_arg_error "expected 2 args, got 0"),
-    List.cons a rest1 =>
-      match rest1 {
-        List.empty => Result.err (CoreEvalError.ce_native_arg_error "expected 2 args, got 1"),
-        List.cons b _ =>
-          match value_as_i64 a {
-            Option.some x =>
-              match value_as_i64 b {
-                Option.some y =>
-                  Result.ok (int_value (U64.to_i64 (U64.xor (I64.to_u64 x) (I64.to_u64 y))) NumSuffix.u64),
-                Option.none => Result.err (CoreEvalError.ce_native_arg_error "expected I64 arg"),
-              },
-            Option.none => Result.err (CoreEvalError.ce_native_arg_error "expected I64 arg"),
-          },
-      },
-  }
+    match args {
+        List.empty => Result.err (CoreEvalError.ce_native_arg_error "expected 2 args, got 0"),
+        List.cons a rest1 =>
+            match rest1 {
+                List.empty => Result.err (CoreEvalError.ce_native_arg_error "expected 2 args, got 1"),
+                List.cons b _ =>
+                    match value_as_i64 a {
+                        Option.some x =>
+                            match value_as_i64 b {
+                                Option.some y =>
+                                    Result.ok (int_value (U64.to_i64 (U64.xor (I64.to_u64 x) (I64.to_u64 y))) NumSuffix.u64),
+                                Option.none => Result.err (CoreEvalError.ce_native_arg_error "expected I64 arg"),
+                            },
+                        Option.none => Result.err (CoreEvalError.ce_native_arg_error "expected I64 arg"),
+                    },
+            },
+    }
 
 /// The sign-bit flip that turns a signed i64 compare into an unsigned
 /// u64 one: XOR with 2^63 maps [0, 2^63) onto [2^63, 2^64) and back, so
@@ -763,162 +763,162 @@ def native_u64_xor (args : List Value) : Result CoreEvalError Value :=
 /// surface — it must stay readable by the last published nightly, which
 /// predates any visibility change.
 def u64_flip_sign_bit (x : I64) : I64 :=
-  U64.to_i64 (U64.xor (I64.to_u64 x) 0x8000000000000000u64)
+    U64.to_i64 (U64.xor (I64.to_u64 x) 0x8000000000000000u64)
 
 /// `u64_lt`: UNSIGNED — a payload at or above 2^63 is a negative i64,
 /// and the signed compare this arm used to run flipped every such
 /// comparison. Mirrors the reference's `uint_cmp` (core_native.rs) and
 /// the emitted `icmp_ult` (runtime/src/natives.mo).
 def native_u64_lt (args : List Value) : Result CoreEvalError Value :=
-  native_i64_bool_binop
-    (fn (a : I64) => fn (b : I64) => I64.lt (u64_flip_sign_bit a) (u64_flip_sign_bit b))
-    args
+    native_i64_bool_binop
+        (fn (a : I64) => fn (b : I64) => I64.lt (u64_flip_sign_bit a) (u64_flip_sign_bit b))
+        args
 
 /// `u64_gt`: the `native_u64_lt` twin.
 def native_u64_gt (args : List Value) : Result CoreEvalError Value :=
-  native_i64_bool_binop
-    (fn (a : I64) => fn (b : I64) => I64.gt (u64_flip_sign_bit a) (u64_flip_sign_bit b))
-    args
+    native_i64_bool_binop
+        (fn (a : I64) => fn (b : I64) => I64.gt (u64_flip_sign_bit a) (u64_flip_sign_bit b))
+        args
 
 // ─── String ───────────────────────────────────────────────────────────
 
 def native_string_binop_str_result (f : String -> String -> String) (args : List Value) : Result CoreEvalError Value :=
-  match args {
-    List.empty => Result.err (CoreEvalError.ce_native_arg_error "expected 2 args, got 0"),
-    List.cons a rest1 => native_string_binop_str_result_arg2 f a rest1,
-  }
+    match args {
+        List.empty => Result.err (CoreEvalError.ce_native_arg_error "expected 2 args, got 0"),
+        List.cons a rest1 => native_string_binop_str_result_arg2 f a rest1,
+    }
 
 def native_string_binop_str_result_arg2 (f : String -> String -> String) (a : Value) (rest1 : List Value) : Result CoreEvalError Value :=
-  match rest1 {
-    List.empty => Result.err (CoreEvalError.ce_native_arg_error "expected 2 args, got 1"),
-    List.cons b _ => native_string_binop_str_result_run f a b,
-  }
+    match rest1 {
+        List.empty => Result.err (CoreEvalError.ce_native_arg_error "expected 2 args, got 1"),
+        List.cons b _ => native_string_binop_str_result_run f a b,
+    }
 
 def native_string_binop_str_result_run (f : String -> String -> String) (a : Value) (b : Value) : Result CoreEvalError Value :=
-  match value_as_str a {
-    Option.some x =>
-      match value_as_str b {
-        Option.some y => Result.ok (str_value (f x y)),
+    match value_as_str a {
+        Option.some x =>
+            match value_as_str b {
+                Option.some y => Result.ok (str_value (f x y)),
+                Option.none => Result.err (CoreEvalError.ce_native_arg_error "expected String arg"),
+            },
         Option.none => Result.err (CoreEvalError.ce_native_arg_error "expected String arg"),
-      },
-    Option.none => Result.err (CoreEvalError.ce_native_arg_error "expected String arg"),
-  }
+    }
 
 def native_string_binop_bool_result (f : String -> String -> Bool) (args : List Value) : Result CoreEvalError Value :=
-  match args {
-    List.empty => Result.err (CoreEvalError.ce_native_arg_error "expected 2 args, got 0"),
-    List.cons a rest1 => native_string_binop_bool_result_arg2 f a rest1,
-  }
+    match args {
+        List.empty => Result.err (CoreEvalError.ce_native_arg_error "expected 2 args, got 0"),
+        List.cons a rest1 => native_string_binop_bool_result_arg2 f a rest1,
+    }
 
 def native_string_binop_bool_result_arg2 (f : String -> String -> Bool) (a : Value) (rest1 : List Value) : Result CoreEvalError Value :=
-  match rest1 {
-    List.empty => Result.err (CoreEvalError.ce_native_arg_error "expected 2 args, got 1"),
-    List.cons b _ => native_string_binop_bool_result_run f a b,
-  }
+    match rest1 {
+        List.empty => Result.err (CoreEvalError.ce_native_arg_error "expected 2 args, got 1"),
+        List.cons b _ => native_string_binop_bool_result_run f a b,
+    }
 
 def native_string_binop_bool_result_run (f : String -> String -> Bool) (a : Value) (b : Value) : Result CoreEvalError Value :=
-  match value_as_str a {
-    Option.some x =>
-      match value_as_str b {
-        Option.some y => Result.ok (bool_value (f x y)),
+    match value_as_str a {
+        Option.some x =>
+            match value_as_str b {
+                Option.some y => Result.ok (bool_value (f x y)),
+                Option.none => Result.err (CoreEvalError.ce_native_arg_error "expected String arg"),
+            },
         Option.none => Result.err (CoreEvalError.ce_native_arg_error "expected String arg"),
-      },
-    Option.none => Result.err (CoreEvalError.ce_native_arg_error "expected String arg"),
-  }
+    }
 
 def native_string_unop_str_result (f : String -> String) (args : List Value) : Result CoreEvalError Value :=
-  match args {
-    List.empty => Result.err (CoreEvalError.ce_native_arg_error "expected 1 arg, got 0"),
-    List.cons a _ =>
-      match value_as_str a {
-        Option.some x => Result.ok (str_value (f x)),
-        Option.none => Result.err (CoreEvalError.ce_native_arg_error "expected String arg"),
-      },
-  }
+    match args {
+        List.empty => Result.err (CoreEvalError.ce_native_arg_error "expected 1 arg, got 0"),
+        List.cons a _ =>
+            match value_as_str a {
+                Option.some x => Result.ok (str_value (f x)),
+                Option.none => Result.err (CoreEvalError.ce_native_arg_error "expected String arg"),
+            },
+    }
 
 def native_string_length_result (args : List Value) : Result CoreEvalError Value :=
-  native_string_to_i64 (fn (s : String) => String.length s) args
+    native_string_to_i64 (fn (s : String) => String.length s) args
 
 /// A one-String-argument native whose result is an i64.
 def native_string_to_i64 (f : String -> I64) (args : List Value) : Result CoreEvalError Value :=
-  match args {
-    List.empty => Result.err (CoreEvalError.ce_native_arg_error "expected 1 arg, got 0"),
-    List.cons a _ =>
-      match value_as_str a {
-        Option.some x => Result.ok (i64_value (f x)),
-        Option.none => Result.err (CoreEvalError.ce_native_arg_error "expected String arg"),
-      },
-  }
+    match args {
+        List.empty => Result.err (CoreEvalError.ce_native_arg_error "expected 1 arg, got 0"),
+        List.cons a _ =>
+            match value_as_str a {
+                Option.some x => Result.ok (i64_value (f x)),
+                Option.none => Result.err (CoreEvalError.ce_native_arg_error "expected String arg"),
+            },
+    }
 
 /// A `(String, I64)` native whose result is an i64 -- the two primitives
 /// that take an explicit byte length (`String.count_newlines`,
 /// `String.trailing_chars`). The length is part of the call, not
 /// recomputed: the reference counts only that prefix.
 def native_string_len_i64 (f : String -> I64 -> I64) (args : List Value) : Result CoreEvalError Value :=
-  match args {
-    List.empty => Result.err (CoreEvalError.ce_native_arg_error "expected 2 args, got 0"),
-    List.cons s rest =>
-      match rest {
-        List.empty => Result.err (CoreEvalError.ce_native_arg_error "expected 2 args, got 1"),
-        List.cons n _ =>
-          match value_as_str s {
-            Option.some x =>
-              match value_as_i64 n {
-                Option.some len => Result.ok (i64_value (f x len)),
-                Option.none => Result.err (CoreEvalError.ce_native_arg_error "expected I64 length"),
-              },
-            Option.none => Result.err (CoreEvalError.ce_native_arg_error "expected String arg"),
-          },
-      },
-  }
+    match args {
+        List.empty => Result.err (CoreEvalError.ce_native_arg_error "expected 2 args, got 0"),
+        List.cons s rest =>
+            match rest {
+                List.empty => Result.err (CoreEvalError.ce_native_arg_error "expected 2 args, got 1"),
+                List.cons n _ =>
+                    match value_as_str s {
+                        Option.some x =>
+                            match value_as_i64 n {
+                                Option.some len => Result.ok (i64_value (f x len)),
+                                Option.none => Result.err (CoreEvalError.ce_native_arg_error "expected I64 length"),
+                            },
+                        Option.none => Result.err (CoreEvalError.ce_native_arg_error "expected String arg"),
+                    },
+            },
+    }
 
 def native_string_slice_result (args : List Value) : Result CoreEvalError Value :=
-  match args {
-    List.empty => Result.err (CoreEvalError.ce_native_arg_error "expected 3 args, got 0"),
-    List.cons s rest1 =>
-      match rest1 {
-        List.empty => Result.err (CoreEvalError.ce_native_arg_error "expected 3 args, got 1"),
-        List.cons start rest2 =>
-          match rest2 {
-            List.empty => Result.err (CoreEvalError.ce_native_arg_error "expected 3 args, got 2"),
-            List.cons len _ => native_string_slice_run s start len,
-          },
-      },
-  }
+    match args {
+        List.empty => Result.err (CoreEvalError.ce_native_arg_error "expected 3 args, got 0"),
+        List.cons s rest1 =>
+            match rest1 {
+                List.empty => Result.err (CoreEvalError.ce_native_arg_error "expected 3 args, got 1"),
+                List.cons start rest2 =>
+                    match rest2 {
+                        List.empty => Result.err (CoreEvalError.ce_native_arg_error "expected 3 args, got 2"),
+                        List.cons len _ => native_string_slice_run s start len,
+                    },
+            },
+    }
 
 def native_string_slice_run (s : Value) (start : Value) (len : Value) : Result CoreEvalError Value :=
-  match value_as_i64 start {
-    Option.some i =>
-      match value_as_i64 len {
-        Option.some n =>
-          match value_as_str s {
-            Option.some x => Result.ok (str_value (String.slice x i n)),
-            Option.none => Result.err (CoreEvalError.ce_native_arg_error "expected String arg"),
-          },
-        Option.none => Result.err (CoreEvalError.ce_native_arg_error "expected I64 length"),
-      },
-    Option.none => Result.err (CoreEvalError.ce_native_arg_error "expected I64 start"),
-  }
+    match value_as_i64 start {
+        Option.some i =>
+            match value_as_i64 len {
+                Option.some n =>
+                    match value_as_str s {
+                        Option.some x => Result.ok (str_value (String.slice x i n)),
+                        Option.none => Result.err (CoreEvalError.ce_native_arg_error "expected String arg"),
+                    },
+                Option.none => Result.err (CoreEvalError.ce_native_arg_error "expected I64 length"),
+            },
+        Option.none => Result.err (CoreEvalError.ce_native_arg_error "expected I64 start"),
+    }
 
 def native_string_drop_result (args : List Value) : Result CoreEvalError Value :=
-  match args {
-    List.empty => Result.err (CoreEvalError.ce_native_arg_error "expected 2 args, got 0"),
-    List.cons n rest1 =>
-      match rest1 {
-        List.empty => Result.err (CoreEvalError.ce_native_arg_error "expected 2 args, got 1"),
-        List.cons s _ => native_string_drop_run n s,
-      },
-  }
+    match args {
+        List.empty => Result.err (CoreEvalError.ce_native_arg_error "expected 2 args, got 0"),
+        List.cons n rest1 =>
+            match rest1 {
+                List.empty => Result.err (CoreEvalError.ce_native_arg_error "expected 2 args, got 1"),
+                List.cons s _ => native_string_drop_run n s,
+            },
+    }
 
 def native_string_drop_run (n : Value) (s : Value) : Result CoreEvalError Value :=
-  match value_as_i64 n {
-    Option.some i =>
-      match value_as_str s {
-        Option.some x => Result.ok (str_value (String.drop i x)),
-        Option.none => Result.err (CoreEvalError.ce_native_arg_error "expected String arg"),
-      },
-    Option.none => Result.err (CoreEvalError.ce_native_arg_error "expected I64 count"),
-  }
+    match value_as_i64 n {
+        Option.some i =>
+            match value_as_str s {
+                Option.some x => Result.ok (str_value (String.drop i x)),
+                Option.none => Result.err (CoreEvalError.ce_native_arg_error "expected String arg"),
+            },
+        Option.none => Result.err (CoreEvalError.ce_native_arg_error "expected I64 count"),
+    }
 
 /// `String -> List U8` / `List U8 -> String` bridge. The compiled natives
 /// return and take real Monad values; the evaluator needs `Value`s, so
@@ -926,130 +926,130 @@ def native_string_drop_run (n : Value) (s : Value) : Result CoreEvalError Value 
 def u8_value (b : U8) : Value := Value.v_lit (IrLit.ir_num (U8.to_i64 b) NumSuffix.u8)
 
 def list_u8_to_value (xs : List U8) : Value :=
-  match xs {
-    List.empty => Value.v_con 0 List.empty,
-    List.cons h t =>
-      Value.v_con 1 (List.cons (u8_value h) (List.cons (list_u8_to_value t) List.empty)),
-  }
+    match xs {
+        List.empty => Value.v_con 0 List.empty,
+        List.cons h t =>
+            Value.v_con 1 (List.cons (u8_value h) (List.cons (list_u8_to_value t) List.empty)),
+    }
 
 def native_string_to_list (args : List Value) : Result CoreEvalError Value :=
-  match args {
-    List.empty => Result.err (CoreEvalError.ce_native_arg_error "expected 1 arg, got 0"),
-    List.cons a _ =>
-      match value_as_str a {
-        Option.some x => Result.ok (list_u8_to_value (String.to_list x)),
-        Option.none => Result.err (CoreEvalError.ce_native_arg_error "expected String arg"),
-      },
-  }
+    match args {
+        List.empty => Result.err (CoreEvalError.ce_native_arg_error "expected 1 arg, got 0"),
+        List.cons a _ =>
+            match value_as_str a {
+                Option.some x => Result.ok (list_u8_to_value (String.to_list x)),
+                Option.none => Result.err (CoreEvalError.ce_native_arg_error "expected String arg"),
+            },
+    }
 
 def native_string_from_list (args : List Value) : Result CoreEvalError Value :=
-  match args {
-    List.empty => Result.err (CoreEvalError.ce_native_arg_error "expected 1 arg, got 0"),
-    List.cons a _ =>
-      match value_to_list_u8 a {
-        Result.err e => Result.err e,
-        Result.ok bytes => Result.ok (str_value (String.from_list bytes)),
-      },
-  }
+    match args {
+        List.empty => Result.err (CoreEvalError.ce_native_arg_error "expected 1 arg, got 0"),
+        List.cons a _ =>
+            match value_to_list_u8 a {
+                Result.err e => Result.err e,
+                Result.ok bytes => Result.ok (str_value (String.from_list bytes)),
+            },
+    }
 
 def byte_of_value (v : Value) : Result CoreEvalError U8 :=
-  match v {
-    Value.v_lit l =>
-      match irlit_as_i64 l {
-        Option.some n => Result.ok (U32.to_u8 (I64.to_u32 n)),
-        Option.none => Result.err (CoreEvalError.ce_native_arg_error "expected a byte"),
-      },
-    Value.v_con _ _ => Result.err (CoreEvalError.ce_native_arg_error "expected a byte"),
-    Value.v_closure _ _ => Result.err (CoreEvalError.ce_native_arg_error "expected a byte"),
-    Value.v_partial_ntv _ _ => Result.err (CoreEvalError.ce_native_arg_error "expected a byte"),
-  }
+    match v {
+        Value.v_lit l =>
+            match irlit_as_i64 l {
+                Option.some n => Result.ok (U32.to_u8 (I64.to_u32 n)),
+                Option.none => Result.err (CoreEvalError.ce_native_arg_error "expected a byte"),
+            },
+        Value.v_con _ _ => Result.err (CoreEvalError.ce_native_arg_error "expected a byte"),
+        Value.v_closure _ _ => Result.err (CoreEvalError.ce_native_arg_error "expected a byte"),
+        Value.v_partial_ntv _ _ => Result.err (CoreEvalError.ce_native_arg_error "expected a byte"),
+    }
 
 def value_to_list_u8 (v : Value) : Result CoreEvalError (List U8) :=
-  match v {
-    Value.v_con tag args =>
-      if I64.beq tag 0
-      then Result.ok List.empty
-      else match args {
-        List.cons hd rest =>
-          match byte_of_value hd {
-            Result.err e => Result.err e,
-            Result.ok b =>
-              match rest {
-                List.cons tail _ =>
-                  match value_to_list_u8 tail {
-                    Result.err e => Result.err e,
-                    Result.ok t => Result.ok (List.cons b t),
-                  },
+    match v {
+        Value.v_con tag args =>
+            if I64.beq tag 0
+            then Result.ok List.empty
+            else match args {
+                List.cons hd rest =>
+                    match byte_of_value hd {
+                        Result.err e => Result.err e,
+                        Result.ok b =>
+                            match rest {
+                                List.cons tail _ =>
+                                    match value_to_list_u8 tail {
+                                        Result.err e => Result.err e,
+                                        Result.ok t => Result.ok (List.cons b t),
+                                    },
+                                List.empty => Result.err (CoreEvalError.ce_native_arg_error "malformed List U8"),
+                            },
+                    },
                 List.empty => Result.err (CoreEvalError.ce_native_arg_error "malformed List U8"),
-              },
-          },
-        List.empty => Result.err (CoreEvalError.ce_native_arg_error "malformed List U8"),
-      },
-    Value.v_lit _ => Result.err (CoreEvalError.ce_native_arg_error "expected List U8"),
-    Value.v_closure _ _ => Result.err (CoreEvalError.ce_native_arg_error "expected List U8"),
-    Value.v_partial_ntv _ _ => Result.err (CoreEvalError.ce_native_arg_error "expected List U8"),
-  }
+            },
+        Value.v_lit _ => Result.err (CoreEvalError.ce_native_arg_error "expected List U8"),
+        Value.v_closure _ _ => Result.err (CoreEvalError.ce_native_arg_error "expected List U8"),
+        Value.v_partial_ntv _ _ => Result.err (CoreEvalError.ce_native_arg_error "expected List U8"),
+    }
 
 def native_string_get (args : List Value) : Result CoreEvalError Value :=
-  match args {
-    List.empty => Result.err (CoreEvalError.ce_native_arg_error "expected 2 args, got 0"),
-    List.cons s rest =>
-      match rest {
-        List.empty => Result.err (CoreEvalError.ce_native_arg_error "expected 2 args, got 1"),
-        List.cons i _ =>
-          match value_as_str s {
-            Option.some x =>
-              match value_as_i64 i {
-                Option.some n => Result.ok (option_u8_to_value (String.get x n)),
-                Option.none => Result.err (CoreEvalError.ce_native_arg_error "expected I64 index"),
-              },
-            Option.none => Result.err (CoreEvalError.ce_native_arg_error "expected String arg"),
-          },
-      },
-  }
+    match args {
+        List.empty => Result.err (CoreEvalError.ce_native_arg_error "expected 2 args, got 0"),
+        List.cons s rest =>
+            match rest {
+                List.empty => Result.err (CoreEvalError.ce_native_arg_error "expected 2 args, got 1"),
+                List.cons i _ =>
+                    match value_as_str s {
+                        Option.some x =>
+                            match value_as_i64 i {
+                                Option.some n => Result.ok (option_u8_to_value (String.get x n)),
+                                Option.none => Result.err (CoreEvalError.ce_native_arg_error "expected I64 index"),
+                            },
+                        Option.none => Result.err (CoreEvalError.ce_native_arg_error "expected String arg"),
+                    },
+            },
+    }
 
 def option_u8_to_value (o : Option U8) : Value :=
-  match o {
-    Option.some b => Value.v_con 0 (List.cons (u8_value b) List.empty),
-    Option.none => Value.v_con 1 List.empty,
-  }
+    match o {
+        Option.some b => Value.v_con 0 (List.cons (u8_value b) List.empty),
+        Option.none => Value.v_con 1 List.empty,
+    }
 
 def option_char_to_value (o : Option Char) : Value :=
-  match o {
-    Option.some c =>
-      match c {
-        Char.of_bytes bytes => Value.v_con 0 (List.cons (list_u8_to_value bytes) List.empty),
-      },
-    Option.none => Value.v_con 1 List.empty,
-  }
+    match o {
+        Option.some c =>
+            match c {
+                Char.of_bytes bytes => Value.v_con 0 (List.cons (list_u8_to_value bytes) List.empty),
+            },
+        Option.none => Value.v_con 1 List.empty,
+    }
 
 def native_string_get_char (args : List Value) : Result CoreEvalError Value :=
-  match args {
-    List.empty => Result.err (CoreEvalError.ce_native_arg_error "expected 2 args, got 0"),
-    List.cons s rest =>
-      match rest {
-        List.empty => Result.err (CoreEvalError.ce_native_arg_error "expected 2 args, got 1"),
-        List.cons i _ =>
-          match value_as_str s {
-            Option.some x =>
-              match value_as_i64 i {
-                Option.some n => Result.ok (option_char_to_value (String.get_char x n)),
-                Option.none => Result.err (CoreEvalError.ce_native_arg_error "expected I64 index"),
-              },
-            Option.none => Result.err (CoreEvalError.ce_native_arg_error "expected String arg"),
-          },
-      },
-  }
+    match args {
+        List.empty => Result.err (CoreEvalError.ce_native_arg_error "expected 2 args, got 0"),
+        List.cons s rest =>
+            match rest {
+                List.empty => Result.err (CoreEvalError.ce_native_arg_error "expected 2 args, got 1"),
+                List.cons i _ =>
+                    match value_as_str s {
+                        Option.some x =>
+                            match value_as_i64 i {
+                                Option.some n => Result.ok (option_char_to_value (String.get_char x n)),
+                                Option.none => Result.err (CoreEvalError.ce_native_arg_error "expected I64 index"),
+                            },
+                        Option.none => Result.err (CoreEvalError.ce_native_arg_error "expected String arg"),
+                    },
+            },
+    }
 
 def native_string_hash (args : List Value) : Result CoreEvalError Value :=
-  match args {
-    List.empty => Result.err (CoreEvalError.ce_native_arg_error "expected 1 arg, got 0"),
-    List.cons a _ =>
-      match value_as_str a {
-        Option.some x => Result.ok (int_value (U64.to_i64 (String.hash x)) NumSuffix.u64),
-        Option.none => Result.err (CoreEvalError.ce_native_arg_error "expected String arg"),
-      },
-  }
+    match args {
+        List.empty => Result.err (CoreEvalError.ce_native_arg_error "expected 1 arg, got 0"),
+        List.cons a _ =>
+            match value_as_str a {
+                Option.some x => Result.ok (int_value (U64.to_i64 (String.hash x)) NumSuffix.u64),
+                Option.none => Result.err (CoreEvalError.ce_native_arg_error "expected String arg"),
+            },
+    }
 
 /// `u64::MAX` in digits, the bound `U64.bits_of_string`'s fold checks
 /// a 20-digit text against. The evaluator duplicates the constant
@@ -1066,28 +1066,28 @@ def u64_max_digits : String := "18446744073709551615"
 /// and the C runtime.
 #[partial]
 def u64_bits_of_digits (digits : String) (i : I64) (acc : I64) : I64 :=
-  if I64.beq i (String.length digits)
-  then acc
-  else
-    match String.get digits i {
-      Option.none => 0,
-      Option.some b =>
-        let d : I64 := I64.sub (U8.to_i64 b) 48 in
-        if Bool.or (I64.lt d 0) (I64.gt d 9)
-        then 0
-        else u64_bits_of_digits digits (I64.add i 1) (I64.add (I64.mul acc 10) d),
-    }
+    if I64.beq i (String.length digits)
+    then acc
+    else
+        match String.get digits i {
+            Option.none => 0,
+            Option.some b =>
+                let d : I64 := I64.sub (U8.to_i64 b) 48 in
+                if Bool.or (I64.lt d 0) (I64.gt d 9)
+                then 0
+                else u64_bits_of_digits digits (I64.add i 1) (I64.add (I64.mul acc 10) d),
+        }
 
 /// `digits` from index `i` on, without its leading `0`s (`""` for an
 /// all-zero text). Only `0` bytes are dropped, so a non-digit byte
 /// still reaches the fold's strict check.
 #[partial]
 def u64_strip_leading_zeros (digits : String) (i : I64) : String :=
-  if I64.beq i (String.length digits)
-  then ""
-  else if String.beq "0" (String.slice digits i 1)
-  then u64_strip_leading_zeros digits (I64.add i 1)
-  else String.drop i digits
+    if I64.beq i (String.length digits)
+    then ""
+    else if String.beq "0" (String.slice digits i 1)
+    then u64_strip_leading_zeros digits (I64.add i 1)
+    else String.drop i digits
 
 /// The range gate plus the fold, on the SIGNIFICANT digits (leading
 /// zeros stripped first, as `u64::from_str` and `strtoull` accept any
@@ -1098,188 +1098,188 @@ def u64_strip_leading_zeros (digits : String) (i : I64) : String :=
 /// all-zero strip and the fold's empty case both land there, and the
 /// other two backends reject `""` to 0.
 def u64_bits_of_string_checked (text : String) : I64 :=
-  let digits : String := u64_strip_leading_zeros text 0 in
-  let len : I64 := String.length digits in
-  if I64.gt len 20
-  then 0
-  else if I64.lt len 20
-  then u64_bits_of_digits digits 0 0
-  else if Bool.or (String.lt digits u64_max_digits) (String.beq digits u64_max_digits)
-  then u64_bits_of_digits digits 0 0
-  else 0
+    let digits : String := u64_strip_leading_zeros text 0 in
+    let len : I64 := String.length digits in
+    if I64.gt len 20
+    then 0
+    else if I64.lt len 20
+    then u64_bits_of_digits digits 0 0
+    else if Bool.or (String.lt digits u64_max_digits) (String.beq digits u64_max_digits)
+    then u64_bits_of_digits digits 0 0
+    else 0
 
 /// `U64.bits_of_string` (`init/number.mo`): the evaluator's exact
 /// decimal parse, digit text to its u64 bit pattern.
 def native_string_to_u64_bits (args : List Value) : Result CoreEvalError Value :=
-  match args {
-    List.empty => Result.err (CoreEvalError.ce_native_arg_error "expected 1 arg, got 0"),
-    List.cons a _ =>
-      match value_as_str a {
-        Option.some x => Result.ok (int_value (u64_bits_of_string_checked x) NumSuffix.i64),
-        Option.none => Result.err (CoreEvalError.ce_native_arg_error "expected String arg"),
-      },
-  }
+    match args {
+        List.empty => Result.err (CoreEvalError.ce_native_arg_error "expected 1 arg, got 0"),
+        List.cons a _ =>
+            match value_as_str a {
+                Option.some x => Result.ok (int_value (u64_bits_of_string_checked x) NumSuffix.i64),
+                Option.none => Result.err (CoreEvalError.ce_native_arg_error "expected String arg"),
+            },
+    }
 
 // ─── Dispatch ─────────────────────────────────────────────────────────
 
 def exec_native (name : Identifier) (args : List Value) : Result CoreEvalError Value :=
-  match name {
-    Identifier.id s => exec_native_by_name s args,
-  }
+    match name {
+        Identifier.id s => exec_native_by_name s args,
+    }
 
 def exec_native_by_name (s : String) (args : List Value) : Result CoreEvalError Value :=
-  if String.beq s "i64_add" then native_i64_binop I64.add args
-  else if String.beq s "i64_sub" then native_i64_binop I64.sub args
-  else if String.beq s "i64_mul" then native_i64_binop I64.mul args
-  else if String.beq s "i64_div" then native_i64_div_binop args
-  else if String.beq s "i64_eq" then native_i64_bool_binop I64.beq args
-  else if String.beq s "i64_lt" then native_i64_bool_binop I64.lt args
-  else if String.beq s "i64_gt" then native_i64_bool_binop I64.gt args
-  else if String.beq s "i64_to_string" then native_i64_to_string I64.to_string args
-  else if String.beq s "i64_to_u64" then native_i64_to_i64_value NumSuffix.u64 (fn (x : I64) => x) args
-  else if String.beq s "i64_to_u32" then native_i64_to_i64_value NumSuffix.u32 mask_u32 args
-  else if String.beq s "i64_to_i32" then native_i64_to_i64_value NumSuffix.i32 (sign_extend 4294967296 2147483647) args
-  // I8 / I16 / I32: the width-correct families -- operands masked to
-  // the signed width's canonical range, results masked and tagged with
-  // the width's own suffix (the evaluator mirror of Phase 1).
-  else if String.beq s "i8_add" then native_int_binop_width NumSuffix.i8 mask_i8 I64.add args
-  else if String.beq s "i8_sub" then native_int_binop_width NumSuffix.i8 mask_i8 I64.sub args
-  else if String.beq s "i8_mul" then native_int_binop_width NumSuffix.i8 mask_i8 I64.mul args
-  else if String.beq s "i8_div" then native_int_div_width NumSuffix.i8 mask_i8 args
-  else if String.beq s "i8_eq" then native_int_cmp_width mask_i8 I64.beq args
-  else if String.beq s "i8_lt" then native_int_cmp_width mask_i8 I64.lt args
-  else if String.beq s "i8_gt" then native_int_cmp_width mask_i8 I64.gt args
-  else if String.beq s "i8_to_string" then native_i64_to_string (fn (x : I64) => I64.to_string (mask_i8 x)) args
-  else if String.beq s "i16_add" then native_int_binop_width NumSuffix.i16 mask_i16 I64.add args
-  else if String.beq s "i16_sub" then native_int_binop_width NumSuffix.i16 mask_i16 I64.sub args
-  else if String.beq s "i16_mul" then native_int_binop_width NumSuffix.i16 mask_i16 I64.mul args
-  else if String.beq s "i16_div" then native_int_div_width NumSuffix.i16 mask_i16 args
-  else if String.beq s "i16_eq" then native_int_cmp_width mask_i16 I64.beq args
-  else if String.beq s "i16_lt" then native_int_cmp_width mask_i16 I64.lt args
-  else if String.beq s "i16_gt" then native_int_cmp_width mask_i16 I64.gt args
-  else if String.beq s "i16_to_string" then native_i64_to_string (fn (x : I64) => I64.to_string (mask_i16 x)) args
-  else if String.beq s "i32_add" then native_int_binop_width NumSuffix.i32 mask_i32 I64.add args
-  else if String.beq s "i32_sub" then native_int_binop_width NumSuffix.i32 mask_i32 I64.sub args
-  else if String.beq s "i32_mul" then native_int_binop_width NumSuffix.i32 mask_i32 I64.mul args
-  else if String.beq s "i32_div" then native_int_div_width NumSuffix.i32 mask_i32 args
-  else if String.beq s "i32_eq" then native_int_cmp_width mask_i32 I64.beq args
-  else if String.beq s "i32_lt" then native_int_cmp_width mask_i32 I64.lt args
-  else if String.beq s "i32_gt" then native_int_cmp_width mask_i32 I64.gt args
-  else if String.beq s "i32_to_string" then native_i64_to_string (fn (x : I64) => I64.to_string (mask_i32 x)) args
-  else if String.beq s "i32_to_i64" then native_i64_to_i64_value NumSuffix.i64 (fn (x : I64) => x) args
-  // U8 / U16: the width-correct families, masked like the reference
-  // since Phase 1; to_string keeps printing the width's canonical value.
-  else if String.beq s "u8_add" then native_int_binop_width NumSuffix.u8 mask_u8 I64.add args
-  else if String.beq s "u8_sub" then native_int_binop_width NumSuffix.u8 mask_u8 I64.sub args
-  else if String.beq s "u8_mul" then native_int_binop_width NumSuffix.u8 mask_u8 I64.mul args
-  else if String.beq s "u8_div" then native_int_div_width NumSuffix.u8 mask_u8 args
-  else if String.beq s "u8_eq" then native_int_cmp_width mask_u8 I64.beq args
-  else if String.beq s "u8_lt" then native_int_cmp_width mask_u8 I64.lt args
-  else if String.beq s "u8_gt" then native_int_cmp_width mask_u8 I64.gt args
-  else if String.beq s "u8_to_string" then native_i64_to_string (fn (x : I64) => I64.to_string (mask_u8 x)) args
-  else if String.beq s "u8_to_u32" then native_i64_to_i64_value NumSuffix.u32 mask_u32 args
-  else if String.beq s "u8_to_u64" then native_i64_to_i64_value NumSuffix.u64 (fn (x : I64) => x) args
-  else if String.beq s "u8_to_i64" then native_i64_to_i64_value NumSuffix.i64 (fn (x : I64) => x) args
-  else if String.beq s "u16_add" then native_int_binop_width NumSuffix.u16 mask_u16 I64.add args
-  else if String.beq s "u16_sub" then native_int_binop_width NumSuffix.u16 mask_u16 I64.sub args
-  else if String.beq s "u16_mul" then native_int_binop_width NumSuffix.u16 mask_u16 I64.mul args
-  else if String.beq s "u16_div" then native_int_div_width NumSuffix.u16 mask_u16 args
-  else if String.beq s "u16_eq" then native_int_cmp_width mask_u16 I64.beq args
-  else if String.beq s "u16_lt" then native_int_cmp_width mask_u16 I64.lt args
-  else if String.beq s "u16_gt" then native_int_cmp_width mask_u16 I64.gt args
-  else if String.beq s "u16_to_string" then native_i64_to_string (fn (x : I64) => I64.to_string (mask_u16 x)) args
-  else if String.beq s "u16_to_i64" then native_i64_to_i64_value NumSuffix.i64 (fn (x : I64) => x) args
-  // U32: the width-correct family.
-  else if String.beq s "u32_add" then native_u32_binop U32.add args
-  else if String.beq s "u32_sub" then native_u32_binop U32.sub args
-  else if String.beq s "u32_mul" then native_u32_binop U32.mul args
-  else if String.beq s "u32_div" then native_u32_div args
-  else if String.beq s "u32_and" then native_u32_binop U32.and args
-  else if String.beq s "u32_or" then native_u32_binop U32.or args
-  else if String.beq s "u32_xor" then native_u32_binop U32.xor args
-  else if String.beq s "u32_shl" then native_u32_binop U32.shl args
-  else if String.beq s "u32_shr" then native_u32_binop U32.shr args
-  else if String.beq s "u32_eq" then native_u32_cmp U32.beq args
-  else if String.beq s "u32_lt" then native_u32_cmp U32.lt args
-  else if String.beq s "u32_gt" then native_u32_cmp U32.gt args
-  else if String.beq s "u32_to_string" then native_i64_to_string (fn (x : I64) => U32.to_string (I64.to_u32 x)) args
-  else if String.beq s "u32_to_u8" then native_i64_to_i64_value NumSuffix.u8 mask_u8 args
-  else if String.beq s "u32_to_i64" then native_i64_to_i64_value NumSuffix.i64 mask_u32 args
-  // U64: raw i64 payloads -- the width mask is the identity at 64
-  // bits, so only the result TAG differs from the generic family --
-  // except the unsigned division/remainder/xor and the unsigned
-  // compares below.
-  else if String.beq s "u64_add" then native_int_binop_width NumSuffix.u64 (fn (x : I64) => x) I64.add args
-  else if String.beq s "u64_sub" then native_int_binop_width NumSuffix.u64 (fn (x : I64) => x) I64.sub args
-  else if String.beq s "u64_mul" then native_int_binop_width NumSuffix.u64 (fn (x : I64) => x) I64.mul args
-  else if String.beq s "u64_div" then native_u64_div args
-  else if String.beq s "u64_mod" then native_u64_mod args
-  else if String.beq s "u64_xor" then native_u64_xor args
-  else if String.beq s "u64_eq" then native_i64_bool_binop I64.beq args
-  else if String.beq s "u64_lt" then native_u64_lt args
-  else if String.beq s "u64_gt" then native_u64_gt args
-  else if String.beq s "u64_to_string" then native_i64_to_string (fn (x : I64) => U64.to_string (I64.to_u64 x)) args
-  else if String.beq s "u64_to_i64" then native_i64_to_i64_value NumSuffix.i64 (fn (x : I64) => x) args
-  else if String.beq s "string_to_u64_bits" then native_string_to_u64_bits args
-  // String
-  else if String.beq s "string_concat" then native_string_binop_str_result String.concat args
-  else if String.beq s "string_eq" then native_string_binop_bool_result String.beq args
-  else if String.beq s "string_lt" then native_string_binop_bool_result String.lt args
-  else if String.beq s "string_gt" then native_string_binop_bool_result String.gt args
-  else if String.beq s "string_to_lowercase" then native_string_unop_str_result String.to_lowercase args
-  else if String.beq s "string_length" then native_string_length_result args
-  else if String.beq s "string_slice" then native_string_slice_result args
-  else if String.beq s "string_drop" then native_string_drop_result args
-  else if String.beq s "string_starts_with" then native_string_binop_bool_result String.starts_with args
-  else if String.beq s "string_count_newlines" then native_string_len_i64 String.count_newlines args
-  else if String.beq s "string_trailing_chars" then native_string_len_i64 String.trailing_chars args
-  else if String.beq s "string_get" then native_string_get args
-  else if String.beq s "string_get_char" then native_string_get_char args
-  else if String.beq s "string_to_list" then native_string_to_list args
-  else if String.beq s "string_from_list" then native_string_from_list args
-  else if String.beq s "string_concat_list" then native_string_concat_list args
-  else if String.beq s "string_hash" then native_string_hash args
-  // Pure constants (`init/prelude.mo`). Their whole implementation is the
-  // constant, so exposing them costs nothing.
-  else if String.beq s "ptr_null" then Result.ok (i64_value 0)
-  else if String.beq s "ptr_minus_one" then Result.ok (i64_value (-1))
-  else Result.err (CoreEvalError.ce_native_arg_error (String.concat "unknown native: " s))
+    if String.beq s "i64_add" then native_i64_binop I64.add args
+    else if String.beq s "i64_sub" then native_i64_binop I64.sub args
+    else if String.beq s "i64_mul" then native_i64_binop I64.mul args
+    else if String.beq s "i64_div" then native_i64_div_binop args
+    else if String.beq s "i64_eq" then native_i64_bool_binop I64.beq args
+    else if String.beq s "i64_lt" then native_i64_bool_binop I64.lt args
+    else if String.beq s "i64_gt" then native_i64_bool_binop I64.gt args
+    else if String.beq s "i64_to_string" then native_i64_to_string I64.to_string args
+    else if String.beq s "i64_to_u64" then native_i64_to_i64_value NumSuffix.u64 (fn (x : I64) => x) args
+    else if String.beq s "i64_to_u32" then native_i64_to_i64_value NumSuffix.u32 mask_u32 args
+    else if String.beq s "i64_to_i32" then native_i64_to_i64_value NumSuffix.i32 (sign_extend 4294967296 2147483647) args
+    // I8 / I16 / I32: the width-correct families -- operands masked to
+    // the signed width's canonical range, results masked and tagged with
+    // the width's own suffix (the evaluator mirror of Phase 1).
+    else if String.beq s "i8_add" then native_int_binop_width NumSuffix.i8 mask_i8 I64.add args
+    else if String.beq s "i8_sub" then native_int_binop_width NumSuffix.i8 mask_i8 I64.sub args
+    else if String.beq s "i8_mul" then native_int_binop_width NumSuffix.i8 mask_i8 I64.mul args
+    else if String.beq s "i8_div" then native_int_div_width NumSuffix.i8 mask_i8 args
+    else if String.beq s "i8_eq" then native_int_cmp_width mask_i8 I64.beq args
+    else if String.beq s "i8_lt" then native_int_cmp_width mask_i8 I64.lt args
+    else if String.beq s "i8_gt" then native_int_cmp_width mask_i8 I64.gt args
+    else if String.beq s "i8_to_string" then native_i64_to_string (fn (x : I64) => I64.to_string (mask_i8 x)) args
+    else if String.beq s "i16_add" then native_int_binop_width NumSuffix.i16 mask_i16 I64.add args
+    else if String.beq s "i16_sub" then native_int_binop_width NumSuffix.i16 mask_i16 I64.sub args
+    else if String.beq s "i16_mul" then native_int_binop_width NumSuffix.i16 mask_i16 I64.mul args
+    else if String.beq s "i16_div" then native_int_div_width NumSuffix.i16 mask_i16 args
+    else if String.beq s "i16_eq" then native_int_cmp_width mask_i16 I64.beq args
+    else if String.beq s "i16_lt" then native_int_cmp_width mask_i16 I64.lt args
+    else if String.beq s "i16_gt" then native_int_cmp_width mask_i16 I64.gt args
+    else if String.beq s "i16_to_string" then native_i64_to_string (fn (x : I64) => I64.to_string (mask_i16 x)) args
+    else if String.beq s "i32_add" then native_int_binop_width NumSuffix.i32 mask_i32 I64.add args
+    else if String.beq s "i32_sub" then native_int_binop_width NumSuffix.i32 mask_i32 I64.sub args
+    else if String.beq s "i32_mul" then native_int_binop_width NumSuffix.i32 mask_i32 I64.mul args
+    else if String.beq s "i32_div" then native_int_div_width NumSuffix.i32 mask_i32 args
+    else if String.beq s "i32_eq" then native_int_cmp_width mask_i32 I64.beq args
+    else if String.beq s "i32_lt" then native_int_cmp_width mask_i32 I64.lt args
+    else if String.beq s "i32_gt" then native_int_cmp_width mask_i32 I64.gt args
+    else if String.beq s "i32_to_string" then native_i64_to_string (fn (x : I64) => I64.to_string (mask_i32 x)) args
+    else if String.beq s "i32_to_i64" then native_i64_to_i64_value NumSuffix.i64 (fn (x : I64) => x) args
+    // U8 / U16: the width-correct families, masked like the reference
+    // since Phase 1; to_string keeps printing the width's canonical value.
+    else if String.beq s "u8_add" then native_int_binop_width NumSuffix.u8 mask_u8 I64.add args
+    else if String.beq s "u8_sub" then native_int_binop_width NumSuffix.u8 mask_u8 I64.sub args
+    else if String.beq s "u8_mul" then native_int_binop_width NumSuffix.u8 mask_u8 I64.mul args
+    else if String.beq s "u8_div" then native_int_div_width NumSuffix.u8 mask_u8 args
+    else if String.beq s "u8_eq" then native_int_cmp_width mask_u8 I64.beq args
+    else if String.beq s "u8_lt" then native_int_cmp_width mask_u8 I64.lt args
+    else if String.beq s "u8_gt" then native_int_cmp_width mask_u8 I64.gt args
+    else if String.beq s "u8_to_string" then native_i64_to_string (fn (x : I64) => I64.to_string (mask_u8 x)) args
+    else if String.beq s "u8_to_u32" then native_i64_to_i64_value NumSuffix.u32 mask_u32 args
+    else if String.beq s "u8_to_u64" then native_i64_to_i64_value NumSuffix.u64 (fn (x : I64) => x) args
+    else if String.beq s "u8_to_i64" then native_i64_to_i64_value NumSuffix.i64 (fn (x : I64) => x) args
+    else if String.beq s "u16_add" then native_int_binop_width NumSuffix.u16 mask_u16 I64.add args
+    else if String.beq s "u16_sub" then native_int_binop_width NumSuffix.u16 mask_u16 I64.sub args
+    else if String.beq s "u16_mul" then native_int_binop_width NumSuffix.u16 mask_u16 I64.mul args
+    else if String.beq s "u16_div" then native_int_div_width NumSuffix.u16 mask_u16 args
+    else if String.beq s "u16_eq" then native_int_cmp_width mask_u16 I64.beq args
+    else if String.beq s "u16_lt" then native_int_cmp_width mask_u16 I64.lt args
+    else if String.beq s "u16_gt" then native_int_cmp_width mask_u16 I64.gt args
+    else if String.beq s "u16_to_string" then native_i64_to_string (fn (x : I64) => I64.to_string (mask_u16 x)) args
+    else if String.beq s "u16_to_i64" then native_i64_to_i64_value NumSuffix.i64 (fn (x : I64) => x) args
+    // U32: the width-correct family.
+    else if String.beq s "u32_add" then native_u32_binop U32.add args
+    else if String.beq s "u32_sub" then native_u32_binop U32.sub args
+    else if String.beq s "u32_mul" then native_u32_binop U32.mul args
+    else if String.beq s "u32_div" then native_u32_div args
+    else if String.beq s "u32_and" then native_u32_binop U32.and args
+    else if String.beq s "u32_or" then native_u32_binop U32.or args
+    else if String.beq s "u32_xor" then native_u32_binop U32.xor args
+    else if String.beq s "u32_shl" then native_u32_binop U32.shl args
+    else if String.beq s "u32_shr" then native_u32_binop U32.shr args
+    else if String.beq s "u32_eq" then native_u32_cmp U32.beq args
+    else if String.beq s "u32_lt" then native_u32_cmp U32.lt args
+    else if String.beq s "u32_gt" then native_u32_cmp U32.gt args
+    else if String.beq s "u32_to_string" then native_i64_to_string (fn (x : I64) => U32.to_string (I64.to_u32 x)) args
+    else if String.beq s "u32_to_u8" then native_i64_to_i64_value NumSuffix.u8 mask_u8 args
+    else if String.beq s "u32_to_i64" then native_i64_to_i64_value NumSuffix.i64 mask_u32 args
+    // U64: raw i64 payloads -- the width mask is the identity at 64
+    // bits, so only the result TAG differs from the generic family --
+    // except the unsigned division/remainder/xor and the unsigned
+    // compares below.
+    else if String.beq s "u64_add" then native_int_binop_width NumSuffix.u64 (fn (x : I64) => x) I64.add args
+    else if String.beq s "u64_sub" then native_int_binop_width NumSuffix.u64 (fn (x : I64) => x) I64.sub args
+    else if String.beq s "u64_mul" then native_int_binop_width NumSuffix.u64 (fn (x : I64) => x) I64.mul args
+    else if String.beq s "u64_div" then native_u64_div args
+    else if String.beq s "u64_mod" then native_u64_mod args
+    else if String.beq s "u64_xor" then native_u64_xor args
+    else if String.beq s "u64_eq" then native_i64_bool_binop I64.beq args
+    else if String.beq s "u64_lt" then native_u64_lt args
+    else if String.beq s "u64_gt" then native_u64_gt args
+    else if String.beq s "u64_to_string" then native_i64_to_string (fn (x : I64) => U64.to_string (I64.to_u64 x)) args
+    else if String.beq s "u64_to_i64" then native_i64_to_i64_value NumSuffix.i64 (fn (x : I64) => x) args
+    else if String.beq s "string_to_u64_bits" then native_string_to_u64_bits args
+    // String
+    else if String.beq s "string_concat" then native_string_binop_str_result String.concat args
+    else if String.beq s "string_eq" then native_string_binop_bool_result String.beq args
+    else if String.beq s "string_lt" then native_string_binop_bool_result String.lt args
+    else if String.beq s "string_gt" then native_string_binop_bool_result String.gt args
+    else if String.beq s "string_to_lowercase" then native_string_unop_str_result String.to_lowercase args
+    else if String.beq s "string_length" then native_string_length_result args
+    else if String.beq s "string_slice" then native_string_slice_result args
+    else if String.beq s "string_drop" then native_string_drop_result args
+    else if String.beq s "string_starts_with" then native_string_binop_bool_result String.starts_with args
+    else if String.beq s "string_count_newlines" then native_string_len_i64 String.count_newlines args
+    else if String.beq s "string_trailing_chars" then native_string_len_i64 String.trailing_chars args
+    else if String.beq s "string_get" then native_string_get args
+    else if String.beq s "string_get_char" then native_string_get_char args
+    else if String.beq s "string_to_list" then native_string_to_list args
+    else if String.beq s "string_from_list" then native_string_from_list args
+    else if String.beq s "string_concat_list" then native_string_concat_list args
+    else if String.beq s "string_hash" then native_string_hash args
+    // Pure constants (`init/prelude.mo`). Their whole implementation is the
+    // constant, so exposing them costs nothing.
+    else if String.beq s "ptr_null" then Result.ok (i64_value 0)
+    else if String.beq s "ptr_minus_one" then Result.ok (i64_value (-1))
+    else Result.err (CoreEvalError.ce_native_arg_error (String.concat "unknown native: " s))
 
 def native_string_concat_list (args : List Value) : Result CoreEvalError Value :=
-  match args {
-    List.empty => Result.err (CoreEvalError.ce_native_arg_error "expected 1 arg, got 0"),
-    List.cons a _ =>
-      match value_to_list_string a {
-        Result.err e => Result.err e,
-        Result.ok ss => Result.ok (str_value (String.concat_list ss)),
-      },
-  }
+    match args {
+        List.empty => Result.err (CoreEvalError.ce_native_arg_error "expected 1 arg, got 0"),
+        List.cons a _ =>
+            match value_to_list_string a {
+                Result.err e => Result.err e,
+                Result.ok ss => Result.ok (str_value (String.concat_list ss)),
+            },
+    }
 
 def value_to_list_string (v : Value) : Result CoreEvalError (List String) :=
-  match v {
-    Value.v_con tag args =>
-      if I64.beq tag 0
-      then Result.ok List.empty
-      else match args {
-        List.cons hd rest =>
-          match value_as_str hd {
-            Option.none => Result.err (CoreEvalError.ce_native_arg_error "expected List String"),
-            Option.some s =>
-              match rest {
-                List.cons tail _ =>
-                  match value_to_list_string tail {
-                    Result.err e => Result.err e,
-                    Result.ok t => Result.ok (List.cons s t),
-                  },
+    match v {
+        Value.v_con tag args =>
+            if I64.beq tag 0
+            then Result.ok List.empty
+            else match args {
+                List.cons hd rest =>
+                    match value_as_str hd {
+                        Option.none => Result.err (CoreEvalError.ce_native_arg_error "expected List String"),
+                        Option.some s =>
+                            match rest {
+                                List.cons tail _ =>
+                                    match value_to_list_string tail {
+                                        Result.err e => Result.err e,
+                                        Result.ok t => Result.ok (List.cons s t),
+                                    },
+                                List.empty => Result.err (CoreEvalError.ce_native_arg_error "malformed List String"),
+                            },
+                    },
                 List.empty => Result.err (CoreEvalError.ce_native_arg_error "malformed List String"),
-              },
-          },
-        List.empty => Result.err (CoreEvalError.ce_native_arg_error "malformed List String"),
-      },
-    Value.v_lit _ => Result.err (CoreEvalError.ce_native_arg_error "expected List String"),
-    Value.v_closure _ _ => Result.err (CoreEvalError.ce_native_arg_error "expected List String"),
-    Value.v_partial_ntv _ _ => Result.err (CoreEvalError.ce_native_arg_error "expected List String"),
-  }
+            },
+        Value.v_lit _ => Result.err (CoreEvalError.ce_native_arg_error "expected List String"),
+        Value.v_closure _ _ => Result.err (CoreEvalError.ce_native_arg_error "expected List String"),
+        Value.v_partial_ntv _ _ => Result.err (CoreEvalError.ce_native_arg_error "expected List String"),
+    }
 
 /// One `NativeSpec` per implemented native, in id order: the i-th entry's
 /// position IS its native id (`Value.v_partial_ntv` / `CoreIr.ntv` carry
@@ -1403,382 +1403,381 @@ def native_specs : List NativeSpec := [
 ]
 
 def spec_names (specs : List NativeSpec) : List Identifier :=
-  match specs {
-    List.empty => List.empty,
-    List.cons s rest => List.cons (Identifier.id s.name) (spec_names rest),
-  }
+    match specs {
+        List.empty => List.empty,
+        List.cons s rest => List.cons (Identifier.id s.name) (spec_names rest),
+    }
 
 def spec_arities (specs : List NativeSpec) : List I64 :=
-  match specs {
-    List.empty => List.empty,
-    List.cons s rest => List.cons s.arity (spec_arities rest),
-  }
+    match specs {
+        List.empty => List.empty,
+        List.cons s rest => List.cons s.arity (spec_arities rest),
+    }
 
 def spec_index (name : String) (specs : List NativeSpec) (i : I64) : Option I64 :=
-  match specs {
-    List.empty => Option.none,
-    List.cons s rest =>
-      if String.beq s.name name then Option.some i else spec_index name rest (i + 1),
-  }
+    match specs {
+        List.empty => Option.none,
+        List.cons s rest =>
+            if String.beq s.name name then Option.some i else spec_index name rest (i + 1),
+    }
 
 /// The native table every lowering/interpretation path builds. Ids are
 /// positions in `native_specs`; `lang/lower_core_ir.mo` uses
 /// `native_id_for_name` directly, so a new native is added in ONE place.
 pub def basic_native_table : NativeTable :=
-  NativeTable.native_table (spec_names native_specs) (spec_arities native_specs)
+    NativeTable.native_table (spec_names native_specs) (spec_arities native_specs)
 
 pub def native_id_for_name (name : Identifier) : Option I64 :=
-  match name {
-    Identifier.id s => spec_index s native_specs 0,
-  }
-
+    match name {
+        Identifier.id s => spec_index s native_specs 0,
+    }
 
 // ─── Tests (mirror core_eval.rs's #[cfg(test)] module) ─────────────────
 
 def empty_globals : GlobalTable := GlobalTable.global_table List.empty
 
 def run (ir : CoreIr) : Pair (Result CoreEvalError Value) GlobalCache :=
-  eval ir Env.env_nil empty_globals basic_native_table (global_cache_new 0)
+    eval ir Env.env_nil empty_globals basic_native_table (global_cache_new 0)
 
 def is_num (outcome : Pair (Result CoreEvalError Value) GlobalCache) (expected : I64) : Bool :=
-  match outcome {
-    Pair.pair r _ =>
-      match r {
-        Result.ok v =>
-          match value_as_i64 v {
-            Option.some n => I64.beq n expected,
-            Option.none => false,
-          },
-        Result.err _ => false,
-      },
-  }
+    match outcome {
+        Pair.pair r _ =>
+            match r {
+                Result.ok v =>
+                    match value_as_i64 v {
+                        Option.some n => I64.beq n expected,
+                        Option.none => false,
+                    },
+                Result.err _ => false,
+            },
+    }
 
 def is_err (outcome : Pair (Result CoreEvalError Value) GlobalCache) : Bool :=
-  match outcome {
-    Pair.pair r _ =>
-      match r {
-        Result.ok _ => false,
-        Result.err _ => true,
-      },
-  }
+    match outcome {
+        Pair.pair r _ =>
+            match r {
+                Result.ok _ => false,
+                Result.err _ => true,
+            },
+    }
 
 def num_lit (n : I64) : CoreIr := CoreIr.lit (IrLit.ir_num n NumSuffix.i64)
 
 def str_lit (s : String) : CoreIr := CoreIr.lit (IrLit.ir_str s)
 
 def is_str (outcome : Pair (Result CoreEvalError Value) GlobalCache) (expected : String) : Bool :=
-  match outcome {
-    Pair.pair r _ =>
-      match r {
-        Result.ok v =>
-          match value_as_str v {
-            Option.some s => String.beq s expected,
-            Option.none => false,
-          },
-        Result.err _ => false,
-      },
-  }
+    match outcome {
+        Pair.pair r _ =>
+            match r {
+                Result.ok v =>
+                    match value_as_str v {
+                        Option.some s => String.beq s expected,
+                        Option.none => false,
+                    },
+                Result.err _ => false,
+            },
+    }
 
 def is_con_with_tag_and_arity (v : Value) (expected_tag : I64) (expected_arity : I64) : Bool :=
-  match v {
-    Value.v_con tag args => I64.beq tag expected_tag && I64.beq (List.length args) expected_arity,
-    Value.v_lit _ => false,
-    Value.v_closure _ _ => false,
-    Value.v_partial_ntv _ _ => false,
-  }
+    match v {
+        Value.v_con tag args => I64.beq tag expected_tag && I64.beq (List.length args) expected_arity,
+        Value.v_lit _ => false,
+        Value.v_closure _ _ => false,
+        Value.v_partial_ntv _ _ => false,
+    }
 
 def is_closure (v : Value) : Bool :=
-  match v {
-    Value.v_closure _ _ => true,
-    Value.v_lit _ => false,
-    Value.v_con _ _ => false,
-    Value.v_partial_ntv _ _ => false,
-  }
+    match v {
+        Value.v_closure _ _ => true,
+        Value.v_lit _ => false,
+        Value.v_con _ _ => false,
+        Value.v_partial_ntv _ _ => false,
+    }
 
 #[test]
 def test_eval_lit : Bool := is_num (run (num_lit 7)) 7
 
 #[test]
 def test_eval_identity_application : Bool :=
-  // (\x -> x) 99
-  is_num (run (CoreIr.app (CoreIr.lam (CoreIr.local 0)) (num_lit 99))) 99
+    // (\x -> x) 99
+    is_num (run (CoreIr.app (CoreIr.lam (CoreIr.local 0)) (num_lit 99))) 99
 
 #[test]
 def test_k_combinator_closure_captures_correct_binding : Bool :=
-  // (\x -> \y -> x) 1 2 -- only correct if `lam` captures the environment
-  // live when it was BUILT (here: the one where x=1 is already bound),
-  // not the caller's environment. This is exactly the shape the old
-  // `EvalTerm` evaluator (lang/eval.mo) gets wrong.
-  let k : CoreIr := CoreIr.lam (CoreIr.lam (CoreIr.local 1)) in
-  let applied : CoreIr := CoreIr.app (CoreIr.app k (num_lit 1)) (num_lit 2) in
-  is_num (run applied) 1
+    // (\x -> \y -> x) 1 2 -- only correct if `lam` captures the environment
+    // live when it was BUILT (here: the one where x=1 is already bound),
+    // not the caller's environment. This is exactly the shape the old
+    // `EvalTerm` evaluator (lang/eval.mo) gets wrong.
+    let k : CoreIr := CoreIr.lam (CoreIr.lam (CoreIr.local 1)) in
+    let applied : CoreIr := CoreIr.app (CoreIr.app k (num_lit 1)) (num_lit 2) in
+    is_num (run applied) 1
 
 #[test]
 def test_nested_lambdas_independent_applications_do_not_interfere : Bool :=
-  // Two separate partial applications of the same closure must capture
-  // independent environments -- persistence, not mutation.
-  let k : CoreIr := CoreIr.lam (CoreIr.lam (CoreIr.local 1)) in
-  match eval k Env.env_nil empty_globals basic_native_table (global_cache_new 0) {
-    Pair.pair r cache0 =>
-      match r {
-        Result.ok k_val =>
-          match apply k_val (i64_value 10) empty_globals basic_native_table cache0 {
-            Pair.pair r1 cache1 =>
-              match r1 {
-                Result.ok f1 =>
-                  match apply k_val (i64_value 20) empty_globals basic_native_table cache1 {
-                    Pair.pair r2 cache2 =>
-                      match r2 {
-                        Result.ok f2 =>
-                          is_num (apply f1 (i64_value 999) empty_globals basic_native_table cache2) 10
-                            && is_num (apply f2 (i64_value 999) empty_globals basic_native_table cache2) 20,
-                        Result.err _ => false,
-                      },
-                  },
+    // Two separate partial applications of the same closure must capture
+    // independent environments -- persistence, not mutation.
+    let k : CoreIr := CoreIr.lam (CoreIr.lam (CoreIr.local 1)) in
+    match eval k Env.env_nil empty_globals basic_native_table (global_cache_new 0) {
+        Pair.pair r cache0 =>
+            match r {
+                Result.ok k_val =>
+                    match apply k_val (i64_value 10) empty_globals basic_native_table cache0 {
+                        Pair.pair r1 cache1 =>
+                            match r1 {
+                                Result.ok f1 =>
+                                    match apply k_val (i64_value 20) empty_globals basic_native_table cache1 {
+                                        Pair.pair r2 cache2 =>
+                                            match r2 {
+                                                Result.ok f2 =>
+                                                    is_num (apply f1 (i64_value 999) empty_globals basic_native_table cache2) 10
+                                                        && is_num (apply f2 (i64_value 999) empty_globals basic_native_table cache2) 20,
+                                                Result.err _ => false,
+                                            },
+                                    },
+                                Result.err _ => false,
+                            },
+                    },
                 Result.err _ => false,
-              },
-          },
-        Result.err _ => false,
-      },
-  }
+            },
+    }
 
 #[test]
 def test_match_arm_body_can_reach_an_outer_enclosing_binding : Bool :=
-  // \x -> match (con #0/2 a b) { [2 fields] => x }
-  // The arm's body (`local 2`) must walk past the 2 newly-bound fields to
-  // reach the outer `x` (`local 0` at the point the lambda body starts).
-  let scrutinee : CoreIr := CoreIr.con 0 2 [num_lit 111, num_lit 222] in
-  let matcher : CoreIr := CoreIr.match_ scrutinee [MatchArm.arm 2 (CoreIr.local 2)] in
-  let outer_fn : CoreIr := CoreIr.lam matcher in
-  is_num (run (CoreIr.app outer_fn (num_lit 42))) 42
+    // \x -> match (con #0/2 a b) { [2 fields] => x }
+    // The arm's body (`local 2`) must walk past the 2 newly-bound fields to
+    // reach the outer `x` (`local 0` at the point the lambda body starts).
+    let scrutinee : CoreIr := CoreIr.con 0 2 [num_lit 111, num_lit 222] in
+    let matcher : CoreIr := CoreIr.match_ scrutinee [MatchArm.arm 2 (CoreIr.local 2)] in
+    let outer_fn : CoreIr := CoreIr.lam matcher in
+    is_num (run (CoreIr.app outer_fn (num_lit 42))) 42
 
 #[test]
 def test_con_partial_application_via_apply : Bool :=
-  // A 2-arity constructor applied one argument at a time.
-  match eval (CoreIr.con 0 2 List.empty) Env.env_nil empty_globals basic_native_table (global_cache_new 0) {
-    Pair.pair r cache0 =>
-      match r {
-        Result.ok partial =>
-          match apply partial (i64_value 1) empty_globals basic_native_table cache0 {
-            Pair.pair r1 cache1 =>
-              match r1 {
-                Result.ok partial2 =>
-                  match apply partial2 (i64_value 2) empty_globals basic_native_table cache1 {
-                    Pair.pair r2 _ =>
-                      match r2 {
-                        Result.ok v => is_con_with_tag_and_arity v 0 2,
-                        Result.err _ => false,
-                      },
-                  },
+    // A 2-arity constructor applied one argument at a time.
+    match eval (CoreIr.con 0 2 List.empty) Env.env_nil empty_globals basic_native_table (global_cache_new 0) {
+        Pair.pair r cache0 =>
+            match r {
+                Result.ok partial =>
+                    match apply partial (i64_value 1) empty_globals basic_native_table cache0 {
+                        Pair.pair r1 cache1 =>
+                            match r1 {
+                                Result.ok partial2 =>
+                                    match apply partial2 (i64_value 2) empty_globals basic_native_table cache1 {
+                                        Pair.pair r2 _ =>
+                                            match r2 {
+                                                Result.ok v => is_con_with_tag_and_arity v 0 2,
+                                                Result.err _ => false,
+                                            },
+                                    },
+                                Result.err _ => false,
+                            },
+                    },
                 Result.err _ => false,
-              },
-          },
-        Result.err _ => false,
-      },
-  }
+            },
+    }
 
 #[test]
 def test_ntv_i64_add : Bool :=
-  is_num (run (CoreIr.ntv 0 [num_lit 3, num_lit 4])) 7
+    is_num (run (CoreIr.ntv 0 [num_lit 3, num_lit 4])) 7
 
 #[test]
 def test_ntv_i64_lt_true_branch_via_match : Bool :=
-  // if (3 < 4) then 100 else 200, compiled through match_ against Bool's
-  // two tags (true=0, false=1), exactly like a real `if` lowering would.
-  let cond : CoreIr := CoreIr.ntv 4 [num_lit 3, num_lit 4] in // i64_lt
-  let iff : CoreIr := CoreIr.match_ cond [MatchArm.arm 0 (num_lit 100), MatchArm.arm 0 (num_lit 200)] in
-  is_num (run iff) 100
+    // if (3 < 4) then 100 else 200, compiled through match_ against Bool's
+    // two tags (true=0, false=1), exactly like a real `if` lowering would.
+    let cond : CoreIr := CoreIr.ntv 4 [num_lit 3, num_lit 4] in // i64_lt
+    let iff : CoreIr := CoreIr.match_ cond [MatchArm.arm 0 (num_lit 100), MatchArm.arm 0 (num_lit 200)] in
+    is_num (run iff) 100
 
 #[test]
 def test_ntv_string_concat : Bool :=
-  is_str (run (CoreIr.ntv 5 [str_lit "foo", str_lit "bar"])) "foobar"
+    is_str (run (CoreIr.ntv 5 [str_lit "foo", str_lit "bar"])) "foobar"
 
 #[test]
 def test_ntv_string_eq_true : Bool :=
-  // string_eq -> Bool, dispatched through match_ against Bool's two
-  // tags exactly like i64_lt's own test above.
-  let cond : CoreIr := CoreIr.ntv 6 [str_lit "abc", str_lit "abc"] in
-  let iff : CoreIr := CoreIr.match_ cond [MatchArm.arm 0 (num_lit 1), MatchArm.arm 0 (num_lit 0)] in
-  is_num (run iff) 1
+    // string_eq -> Bool, dispatched through match_ against Bool's two
+    // tags exactly like i64_lt's own test above.
+    let cond : CoreIr := CoreIr.ntv 6 [str_lit "abc", str_lit "abc"] in
+    let iff : CoreIr := CoreIr.match_ cond [MatchArm.arm 0 (num_lit 1), MatchArm.arm 0 (num_lit 0)] in
+    is_num (run iff) 1
 
 #[test]
 def test_ntv_string_eq_false : Bool :=
-  let cond : CoreIr := CoreIr.ntv 6 [str_lit "abc", str_lit "xyz"] in
-  let iff : CoreIr := CoreIr.match_ cond [MatchArm.arm 0 (num_lit 1), MatchArm.arm 0 (num_lit 0)] in
-  is_num (run iff) 0
+    let cond : CoreIr := CoreIr.ntv 6 [str_lit "abc", str_lit "xyz"] in
+    let iff : CoreIr := CoreIr.match_ cond [MatchArm.arm 0 (num_lit 1), MatchArm.arm 0 (num_lit 0)] in
+    is_num (run iff) 0
 
 #[test]
 def test_ntv_string_to_lowercase : Bool :=
-  is_str (run (CoreIr.ntv 7 [str_lit "MixedCase"])) "mixedcase"
+    is_str (run (CoreIr.ntv 7 [str_lit "MixedCase"])) "mixedcase"
 
 #[test]
 def test_ntv_u64_lt_is_unsigned : Bool :=
-  // u64::MAX (payload -1) < 1u64 is FALSE unsigned -- the old arm ran
-  // the signed i64 compare and answered TRUE, flipping every compare
-  // that crossed 2^63. Native ids are positions in `native_specs`, so
-  // the name is looked up rather than hardcoded at a position that a
-  // mid-list insertion would silently re-point.
-  match native_id_for_name (Identifier.id "u64_lt") {
-    Option.some n =>
-      let cond : CoreIr := CoreIr.ntv n [num_lit (I64.sub 0 1), num_lit 1] in
-      let iff : CoreIr := CoreIr.match_ cond [MatchArm.arm 0 (num_lit 100), MatchArm.arm 0 (num_lit 200)] in
-      is_num (run iff) 200,
-    Option.none => false,
-  }
+    // u64::MAX (payload -1) < 1u64 is FALSE unsigned -- the old arm ran
+    // the signed i64 compare and answered TRUE, flipping every compare
+    // that crossed 2^63. Native ids are positions in `native_specs`, so
+    // the name is looked up rather than hardcoded at a position that a
+    // mid-list insertion would silently re-point.
+    match native_id_for_name (Identifier.id "u64_lt") {
+        Option.some n =>
+            let cond : CoreIr := CoreIr.ntv n [num_lit (I64.sub 0 1), num_lit 1] in
+            let iff : CoreIr := CoreIr.match_ cond [MatchArm.arm 0 (num_lit 100), MatchArm.arm 0 (num_lit 200)] in
+            is_num (run iff) 200,
+        Option.none => false,
+    }
 
 #[test]
 def test_ntv_u64_gt_is_unsigned : Bool :=
-  // u64::MAX (payload -1) > 1u64 is TRUE unsigned -- the sign-bit twin
-  // of the test above, on the other compare direction.
-  match native_id_for_name (Identifier.id "u64_gt") {
-    Option.some n =>
-      let cond : CoreIr := CoreIr.ntv n [num_lit (I64.sub 0 1), num_lit 1] in
-      let iff : CoreIr := CoreIr.match_ cond [MatchArm.arm 0 (num_lit 100), MatchArm.arm 0 (num_lit 200)] in
-      is_num (run iff) 100,
-    Option.none => false,
-  }
+    // u64::MAX (payload -1) > 1u64 is TRUE unsigned -- the sign-bit twin
+    // of the test above, on the other compare direction.
+    match native_id_for_name (Identifier.id "u64_gt") {
+        Option.some n =>
+            let cond : CoreIr := CoreIr.ntv n [num_lit (I64.sub 0 1), num_lit 1] in
+            let iff : CoreIr := CoreIr.match_ cond [MatchArm.arm 0 (num_lit 100), MatchArm.arm 0 (num_lit 200)] in
+            is_num (run iff) 100,
+        Option.none => false,
+    }
 
 /// Zero padding is not significant: `u64::from_str` and `strtoull` both
 /// read "000...01" (21 characters) as 1, so the evaluator's length gate
 /// must bound the stripped digits, not the raw text.
 #[test]
 def test_ntv_u64_bits_of_string_ignores_leading_zeros : Bool :=
-  match native_id_for_name (Identifier.id "string_to_u64_bits") {
-    Option.some n =>
-      is_num (run (CoreIr.ntv n [str_lit "000000000000000000001"])) 1
-        && is_num (run (CoreIr.ntv n [str_lit "0018446744073709551615"])) (I64.sub 0 1)
-        && is_num (run (CoreIr.ntv n [str_lit "0018446744073709551616"])) 0
-        && is_num (run (CoreIr.ntv n [str_lit "000"])) 0,
-    Option.none => false,
-  }
+    match native_id_for_name (Identifier.id "string_to_u64_bits") {
+        Option.some n =>
+            is_num (run (CoreIr.ntv n [str_lit "000000000000000000001"])) 1
+                && is_num (run (CoreIr.ntv n [str_lit "0018446744073709551615"])) (I64.sub 0 1)
+                && is_num (run (CoreIr.ntv n [str_lit "0018446744073709551616"])) 0
+                && is_num (run (CoreIr.ntv n [str_lit "000"])) 0,
+        Option.none => false,
+    }
 
 #[test]
 def test_ntv_i8_add_wraps_to_width : Bool :=
-  // 100 + 100 = 200 -> -56 in i8's canonical range. The arm used to run
-  // unmasked i64 arithmetic tagged I64, which kept 200 and made the
-  // width's own `I8.add 100i8 100i8 == -56i8` compare false.
-  match native_id_for_name (Identifier.id "i8_add") {
-    Option.some n => is_num (run (CoreIr.ntv n [num_lit 100, num_lit 100])) (I64.sub 0 56),
-    Option.none => false,
-  }
+    // 100 + 100 = 200 -> -56 in i8's canonical range. The arm used to run
+    // unmasked i64 arithmetic tagged I64, which kept 200 and made the
+    // width's own `I8.add 100i8 100i8 == -56i8` compare false.
+    match native_id_for_name (Identifier.id "i8_add") {
+        Option.some n => is_num (run (CoreIr.ntv n [num_lit 100, num_lit 100])) (I64.sub 0 56),
+        Option.none => false,
+    }
 
 #[test]
 def test_ntv_u16_mul_wraps_to_width : Bool :=
-  // 300 * 300 = 90000 -> 24464 (mod 2^16), same masking rule for the
-  // unsigned widths.
-  match native_id_for_name (Identifier.id "u16_mul") {
-    Option.some n => is_num (run (CoreIr.ntv n [num_lit 300, num_lit 300])) 24464,
-    Option.none => false,
-  }
+    // 300 * 300 = 90000 -> 24464 (mod 2^16), same masking rule for the
+    // unsigned widths.
+    match native_id_for_name (Identifier.id "u16_mul") {
+        Option.some n => is_num (run (CoreIr.ntv n [num_lit 300, num_lit 300])) 24464,
+        Option.none => false,
+    }
 
 #[test]
 def test_ntv_i8_div_min_over_neg_one_masks_quotient : Bool :=
-  // i8: -128 / -1 = 128, out of range, folded back to -128 by the
-  // result mask -- the width-level twin of i64's guarded MIN / -1 case.
-  match native_id_for_name (Identifier.id "i8_div") {
-    Option.some n =>
-      is_num (run (CoreIr.ntv n [num_lit (I64.sub 0 128), num_lit (I64.sub 0 1)])) (I64.sub 0 128),
-    Option.none => false,
-  }
+    // i8: -128 / -1 = 128, out of range, folded back to -128 by the
+    // result mask -- the width-level twin of i64's guarded MIN / -1 case.
+    match native_id_for_name (Identifier.id "i8_div") {
+        Option.some n =>
+            is_num (run (CoreIr.ntv n [num_lit (I64.sub 0 128), num_lit (I64.sub 0 1)])) (I64.sub 0 128),
+        Option.none => false,
+    }
 
 #[test]
 def test_ntv_u8_eq_masks_operands : Bool :=
-  // 256 is not a canonical U8 payload; the operand mask projects it to
-  // 0, so this compares 0 == 0 and answers true. The unmasked compare
-  // would answer false -- the operand masking IS the assertion.
-  match native_id_for_name (Identifier.id "u8_eq") {
-    Option.some n =>
-      let cond : CoreIr := CoreIr.ntv n [num_lit 256, num_lit 0] in
-      let iff : CoreIr := CoreIr.match_ cond [MatchArm.arm 0 (num_lit 1), MatchArm.arm 0 (num_lit 0)] in
-      is_num (run iff) 1,
-    Option.none => false,
-  }
+    // 256 is not a canonical U8 payload; the operand mask projects it to
+    // 0, so this compares 0 == 0 and answers true. The unmasked compare
+    // would answer false -- the operand masking IS the assertion.
+    match native_id_for_name (Identifier.id "u8_eq") {
+        Option.some n =>
+            let cond : CoreIr := CoreIr.ntv n [num_lit 256, num_lit 0] in
+            let iff : CoreIr := CoreIr.match_ cond [MatchArm.arm 0 (num_lit 1), MatchArm.arm 0 (num_lit 0)] in
+            is_num (run iff) 1,
+        Option.none => false,
+    }
 
 #[test]
 def test_ntv_u32_div_by_zero_is_zero : Bool :=
-  // The uniform zero-divisor convention the reference adopted; this
-  // family used to be the one that hard-errored instead.
-  match native_id_for_name (Identifier.id "u32_div") {
-    Option.some n => is_num (run (CoreIr.ntv n [num_lit 7, num_lit 0])) 0,
-    Option.none => false,
-  }
+    // The uniform zero-divisor convention the reference adopted; this
+    // family used to be the one that hard-errored instead.
+    match native_id_for_name (Identifier.id "u32_div") {
+        Option.some n => is_num (run (CoreIr.ntv n [num_lit 7, num_lit 0])) 0,
+        Option.none => false,
+    }
 
 #[test]
 def test_not_a_function_error : Bool :=
-  is_err (run (CoreIr.app (num_lit 1) (num_lit 2)))
+    is_err (run (CoreIr.app (num_lit 1) (num_lit 2)))
 
 #[test]
 def test_non_exhaustive_match_error : Bool :=
-  let mf : CoreIr := CoreIr.match_fail (ModulePath.mk [Identifier.id "Option"]) (Identifier.id "some") in
-  is_err (run mf)
+    let mf : CoreIr := CoreIr.match_fail (ModulePath.mk [Identifier.id "Option"]) (Identifier.id "some") in
+    is_err (run mf)
 
 def globals_with (defs : List GlobalDef) : GlobalTable := GlobalTable.global_table defs
 
 #[test]
 def test_global_memoization : Bool :=
-  let globals : GlobalTable := globals_with [GlobalDef.gd_def (num_lit 42)] in
-  match force_global 0 globals basic_native_table (global_cache_new 1) {
-    Pair.pair r1 cache1 =>
-      match r1 {
-        Result.ok v1 =>
-          match value_as_i64 v1 {
-            Option.some n1 =>
-              I64.beq n1 42
-                // Already memoized -- a fresh force_global re-reads the
-                // cache without re-walking the body.
-                && is_num (force_global 0 globals basic_native_table cache1) 42,
-            Option.none => false,
-          },
-        Result.err _ => false,
-      },
-  }
+    let globals : GlobalTable := globals_with [GlobalDef.gd_def (num_lit 42)] in
+    match force_global 0 globals basic_native_table (global_cache_new 1) {
+        Pair.pair r1 cache1 =>
+            match r1 {
+                Result.ok v1 =>
+                    match value_as_i64 v1 {
+                        Option.some n1 =>
+                            I64.beq n1 42
+                                // Already memoized -- a fresh force_global re-reads the
+                                // cache without re-walking the body.
+                                && is_num (force_global 0 globals basic_native_table cache1) 42,
+                        Option.none => false,
+                    },
+                Result.err _ => false,
+            },
+    }
 
 #[test]
 def test_cycle_detection_on_unguarded_self_reference : Bool :=
-  // Global 0's own body directly references global 0, with no `lam` in
-  // between to defer the reference -- a genuine, unguarded cycle.
-  let globals : GlobalTable := globals_with [GlobalDef.gd_def (CoreIr.global 0)] in
-  is_err (force_global 0 globals basic_native_table (global_cache_new 1))
+    // Global 0's own body directly references global 0, with no `lam` in
+    // between to defer the reference -- a genuine, unguarded cycle.
+    let globals : GlobalTable := globals_with [GlobalDef.gd_def (CoreIr.global 0)] in
+    is_err (force_global 0 globals basic_native_table (global_cache_new 1))
 
 #[test]
 def test_safe_recursion_behind_lam_does_not_trigger_cycle : Bool :=
-  // Global 0's body is `\n -> global0 n` -- a recursive reference, but
-  // guarded behind a `lam`, so simply *forcing* global 0 to a value (a
-  // closure) never re-enters its own in-progress slot.
-  let self_recursive_body : CoreIr := CoreIr.lam (CoreIr.app (CoreIr.global 0) (CoreIr.local 0)) in
-  let globals : GlobalTable := globals_with [GlobalDef.gd_def self_recursive_body] in
-  match force_global 0 globals basic_native_table (global_cache_new 1) {
-    Pair.pair r _ =>
-      match r {
-        Result.ok v => is_closure v,
-        Result.err _ => false,
-      },
-  }
+    // Global 0's body is `\n -> global0 n` -- a recursive reference, but
+    // guarded behind a `lam`, so simply *forcing* global 0 to a value (a
+    // closure) never re-enters its own in-progress slot.
+    let self_recursive_body : CoreIr := CoreIr.lam (CoreIr.app (CoreIr.global 0) (CoreIr.local 0)) in
+    let globals : GlobalTable := globals_with [GlobalDef.gd_def self_recursive_body] in
+    match force_global 0 globals basic_native_table (global_cache_new 1) {
+        Pair.pair r _ =>
+            match r {
+                Result.ok v => is_closure v,
+                Result.err _ => false,
+            },
+    }
 
 #[test]
 def test_depth_limit_is_off_for_plain_caches : Bool :=
-  // Only the browser REPL's cache carries a nesting cap: its wasm stack is
-  // a fixed 32 MiB, and a trap there is uncatchable. Every other entry
-  // point -- `monad eval`, and the compiler's own meta-evaluator, which
-  // legitimately nests past 200 frames compiling a derive-heavy type --
-  // must stay uncapped. A cap here broke the weaver build in CI with
-  // `ce_recursion_too_deep`.
-  match enter_depth (global_cache_with_depth (global_cache_new 0) (I64.add max_call_depth 100)) {
-    Result.ok cache => I64.beq (global_cache_depth cache) (I64.add max_call_depth 101),
-    Result.err _ => false,
-  }
+    // Only the browser REPL's cache carries a nesting cap: its wasm stack is
+    // a fixed 32 MiB, and a trap there is uncatchable. Every other entry
+    // point -- `monad eval`, and the compiler's own meta-evaluator, which
+    // legitimately nests past 200 frames compiling a derive-heavy type --
+    // must stay uncapped. A cap here broke the weaver build in CI with
+    // `ce_recursion_too_deep`.
+    match enter_depth (global_cache_with_depth (global_cache_new 0) (I64.add max_call_depth 100)) {
+        Result.ok cache => I64.beq (global_cache_depth cache) (I64.add max_call_depth 101),
+        Result.err _ => false,
+    }
 
 #[test]
 def test_depth_limit_is_enforced_for_fueled_caches : Bool :=
-  // The cap `eval_fueled` installs: at `depth_limit` the call is still
-  // allowed, one past it fails cleanly instead of trapping the stack.
-  let cache : GlobalCache := global_cache_with_depth (global_cache_new_fueled 0 (-1) 3) 4
-  in
-  match enter_depth cache {
-    Result.ok _ => false,
-    Result.err e =>
-      match e {
-        CoreEvalError.ce_recursion_too_deep => true,
-        _ => false,
-      },
-  }
+    // The cap `eval_fueled` installs: at `depth_limit` the call is still
+    // allowed, one past it fails cleanly instead of trapping the stack.
+    let cache : GlobalCache := global_cache_with_depth (global_cache_new_fueled 0 (-1) 3) 4
+    in
+    match enter_depth cache {
+        Result.ok _ => false,
+        Result.err e =>
+            match e {
+                CoreEvalError.ce_recursion_too_deep => true,
+                _ => false,
+            },
+    }

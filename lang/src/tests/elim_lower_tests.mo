@@ -14,8 +14,8 @@
 
 use std::list {List.length}
 use lang::types {
-  DebugName, Elim, Identifier, Inductive, Literal, MatchCase, ModulePath, NamePath, Scope,
-  ScopeData, Similar, Term, binder_anon, binder_named, sentinel,
+    DebugName, Elim, Identifier, Inductive, Literal, MatchCase, ModulePath, NamePath, Scope,
+    ScopeData, Similar, Term, binder_anon, binder_named, sentinel,
 }
 use lib::module {try_parse_decls}
 use lib::scope {build_scope_from_decls, scope_find_inductive}

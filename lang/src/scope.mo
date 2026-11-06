@@ -1,21 +1,21 @@
 use lang::types {
-  Attribute, Binder, Class, ClassDef, Con, CubicalPrim, DebugName, Decl, DeclGroup, Def,
-  FieldPattern, FieldPatternEntry, Identifier, InductConstructor, Inductive,
-  Infix, Instance, InstanceKey, Literal, LocalScope, LocalVar, MatchCase, Module,
-  ModulePath, ModuleRegistry, NamePath, NameRef, Native, NumSuffix, OpenFilter,
-  Operator, Param, QualifiedName, Scope, ScopeClassDef, ScopeData, ScopeDef,
-  ScopeError, ScopeInstance, Similar, SortLevel, Struct, StructField,
-  OwnedInstance, StructLitField, Term, TypeConstraint, TypeError, UseFilter, UseItem, Visibility,
-  attr_args, binder_anon, binder_binder, binder_explicit, binder_is_explicit,
-  binder_is_level,
-  binder_level, binder_name, binder_named, cubical_prim_of_name, dict_hint_marker_prefix,
-  f32, f64, i16, i32,
-  i64, i8, id_eq, id_member,
-  many, module_mote_of, module_path_is_empty, name_path_similar, open_all, open_only, package_private, param_many,
-  priv_, pub_, sentinel, show_identifier, show_module_path, show_name_path, show_operator,
-  term_peel, u16, u32, u64, u8, union_ids, use_bare, use_glob, use_items,
-  use_name, use_rename, use_sub, use_sub_rename,
-  AttrArg,
+    Attribute, Binder, Class, ClassDef, Con, CubicalPrim, DebugName, Decl, DeclGroup, Def,
+    FieldPattern, FieldPatternEntry, Identifier, InductConstructor, Inductive,
+    Infix, Instance, InstanceKey, Literal, LocalScope, LocalVar, MatchCase, Module,
+    ModulePath, ModuleRegistry, NamePath, NameRef, Native, NumSuffix, OpenFilter,
+    Operator, Param, QualifiedName, Scope, ScopeClassDef, ScopeData, ScopeDef,
+    ScopeError, ScopeInstance, Similar, SortLevel, Struct, StructField,
+    OwnedInstance, StructLitField, Term, TypeConstraint, TypeError, UseFilter, UseItem, Visibility,
+    attr_args, binder_anon, binder_binder, binder_explicit, binder_is_explicit,
+    binder_is_level,
+    binder_level, binder_name, binder_named, cubical_prim_of_name, dict_hint_marker_prefix,
+    f32, f64, i16, i32,
+    i64, i8, id_eq, id_member,
+    many, module_mote_of, module_path_is_empty, name_path_similar, open_all, open_only, package_private, param_many,
+    priv_, pub_, sentinel, show_identifier, show_module_path, show_name_path, show_operator,
+    term_peel, u16, u32, u64, u8, union_ids, use_bare, use_glob, use_items,
+    use_name, use_rename, use_sub, use_sub_rename,
+    AttrArg,
 }
 use lib::typecheck::name_subst {name_subst_term}
 use lib::typecheck::traverse {con_map_children, native_map_children, term_map_children}
@@ -31,9 +31,9 @@ use lib::name_text {string_matches_bare, unqualify_def_name}
 // naming `std.map`'s `Map`-class-instance exports; see
 // std/map_tests.mo's note for why that suspicion is gone.
 use std::map {
-  HashMap, HashMap.bucket_insert_str, HashMap.bucket_lookup_str,
-  HashMap.bucket_of, HashMap.empty_buckets, HashMap.get_bucket,
-  HashMap.set_bucket, HashMap.to_list, map,
+    HashMap, HashMap.bucket_insert_str, HashMap.bucket_lookup_str,
+    HashMap.bucket_of, HashMap.empty_buckets, HashMap.get_bucket,
+    HashMap.set_bucket, HashMap.to_list, map,
 }
 use std::list {List.filter, List.filter_map, List.length}
 use llvm::strmap {str_map_empty, str_map_insert, str_map_lookup}
@@ -2471,12 +2471,12 @@ def resolve_open_alias_term_scoped (names : HashMap String String) (bound : List
             let rewritten_scrutinee : Term := resolve_open_alias_term_scoped names bound e.scrutinee in
             Term.elim
                 { e with
-                  inductive := rewritten_inductive,
-                  params := rewritten_params,
-                  indices := rewritten_indices,
-                  motive := rewritten_motive,
-                  minors := rewritten_minors,
-                  scrutinee := rewritten_scrutinee },
+                    inductive := rewritten_inductive,
+                    params := rewritten_params,
+                    indices := rewritten_indices,
+                    motive := rewritten_motive,
+                    minors := rewritten_minors,
+                    scrutinee := rewritten_scrutinee },
     }
 
 #[partial]
@@ -4078,9 +4078,9 @@ def qualifier_of (id : Identifier) : Option Identifier :=
         let sep_len :=
             if cut < 2 then 1
             else match String.get s (cut - 2) {
-                     Option.some b => if U8.beq b 58u8 then 2 else 1,
-                     Option.none => 1,
-                 } in
+                Option.some b => if U8.beq b 58u8 then 2 else 1,
+                Option.none => 1,
+            } in
         let qlen := cut - sep_len in
         if qlen < 1 then Option.none else Option.some (Identifier.id (String.slice s 0 qlen))
 
@@ -5868,7 +5868,6 @@ def carrier_params_of (bindings : List (Pair Identifier Term)) (owner_params : L
             },
     }
 
-
 /// Bind a constructor's declared FIELD TYPES positionally against a
 /// call's own argument carriers: `List.cons`'s `[A, List A]` against
 /// `[42, rest]` records `A := I64`. The same walk
@@ -6633,76 +6632,76 @@ def resolve_dict_arg (classes : List Class) (instances : List Instance) (dict_en
                             Option.some (Term.var (0 - 1) (DebugName.named (mangled_to_identifier (mangle_instance_dict_name found_insname found_cls ins_args)))),
                     },
                 Option.none =>
-            match concrete_constraint_dict instances cls_name (bound_constraint_carrier bindings vars) {
-                Option.some t => Option.some t,
-                Option.none =>
-            match lookup_dict_binding dict_env cls_name {
-                Option.some bound_id => Option.some (Term.var 0 (DebugName.named bound_id)),
-                Option.none =>
-                    // The constraint's own type VARIABLE (`[Show A]`'s
-                    // `A`), bound by the matched instance's head against
-                    // the carrier (`instance [Show A] Show (List A)` with
-                    // `A := I64`), is the RIGHT carrier for this dict --
-                    // the whole call-site carrier (`List I64`) resolves
-                    // straight back to the instance being expanded, which
-                    // is how the self-referential `__Dict_Show_List_A`
-                    // element dict was born. `constraint_carriers` keeps
-                    // the old order (whole carrier, then `extra_carriers`)
-                    // as its fallback for a constraint whose variable the
-                    // instance head does not bind.
-                    //
-                    // The fallback is deliberately the PLAIN first-match
-                    // order: its candidates are exactly the ones no bound
-                    // carrier could be read from, so there is nothing to
-                    // prefer between them. (Screening it instead -- a
-                    // bare-head candidate `List` against `instance [BEq A]
-                    // BEq (List A)` matched without reaching `A` -- was
-                    // tried and measured inert on B3; see
-                    // `find_constraint_bound_carrier_any`.)
-                    let cands : List Term := constraint_carriers bindings vars carrier in
-                    // A candidate that IS one of the constraint's own
-                    // variables, still unresolved (`M` in `[Monad M]`
-                    // when the call site never solved `M`), is not weak
-                    // evidence but NO evidence: it names the very thing
-                    // the constraint is asking for. A catch-all instance
-                    // matches it regardless -- MEASURED
-                    // (motes/tui/src/tests/tuit_tests.mo's do-notation at
-                    // equal indices): the bind call's carrier came from
-                    // its first argument's own polymorphic type
-                    // (`TI M Rw Rw (Pair I64 I64)`, `M` free), the
-                    // wrapper instance bound its `M` to that free var,
-                    // and `[Monad M]` then resolved the bare `M` against
-                    // the prelude's bridge `instance {I : Type}
-                    // [IndexedMonad M] Monad (M I I)` -- whose pattern
-                    // head is ALSO spelled `M` -- so the wrapper's
-                    // promoted method was committed with the BRIDGE's
-                    // dictionary and the compiled driver died on the
-                    // mismatched dict layout. Dropped rather than demoted
-                    // (the `demote_uninformative_carriers` treatment):
-                    // a demoted self-variable still wins when it is the
-                    // only candidate, and any instance it "matches" is
-                    // a catch-all lie, not a resolution.
-                    let searched : List Term :=
+                match concrete_constraint_dict instances cls_name (bound_constraint_carrier bindings vars) {
+                    Option.some t => Option.some t,
+                    Option.none =>
+                    match lookup_dict_binding dict_env cls_name {
+                        Option.some bound_id => Option.some (Term.var 0 (DebugName.named bound_id)),
+                        Option.none =>
+                        // The constraint's own type VARIABLE (`[Show A]`'s
+                        // `A`), bound by the matched instance's head against
+                        // the carrier (`instance [Show A] Show (List A)` with
+                        // `A := I64`), is the RIGHT carrier for this dict --
+                        // the whole call-site carrier (`List I64`) resolves
+                        // straight back to the instance being expanded, which
+                        // is how the self-referential `__Dict_Show_List_A`
+                        // element dict was born. `constraint_carriers` keeps
+                        // the old order (whole carrier, then `extra_carriers`)
+                        // as its fallback for a constraint whose variable the
+                        // instance head does not bind.
+                        //
+                        // The fallback is deliberately the PLAIN first-match
+                        // order: its candidates are exactly the ones no bound
+                        // carrier could be read from, so there is nothing to
+                        // prefer between them. (Screening it instead -- a
+                        // bare-head candidate `List` against `instance [BEq A]
+                        // BEq (List A)` matched without reaching `A` -- was
+                        // tried and measured inert on B3; see
+                        // `find_constraint_bound_carrier_any`.)
+                        let cands : List Term := constraint_carriers bindings vars carrier in
+                        // A candidate that IS one of the constraint's own
+                        // variables, still unresolved (`M` in `[Monad M]`
+                        // when the call site never solved `M`), is not weak
+                        // evidence but NO evidence: it names the very thing
+                        // the constraint is asking for. A catch-all instance
+                        // matches it regardless -- MEASURED
+                        // (motes/tui/src/tests/tuit_tests.mo's do-notation at
+                        // equal indices): the bind call's carrier came from
+                        // its first argument's own polymorphic type
+                        // (`TI M Rw Rw (Pair I64 I64)`, `M` free), the
+                        // wrapper instance bound its `M` to that free var,
+                        // and `[Monad M]` then resolved the bare `M` against
+                        // the prelude's bridge `instance {I : Type}
+                        // [IndexedMonad M] Monad (M I I)` -- whose pattern
+                        // head is ALSO spelled `M` -- so the wrapper's
+                        // promoted method was committed with the BRIDGE's
+                        // dictionary and the compiled driver died on the
+                        // mismatched dict layout. Dropped rather than demoted
+                        // (the `demote_uninformative_carriers` treatment):
+                        // a demoted self-variable still wins when it is the
+                        // only candidate, and any instance it "matches" is
+                        // a catch-all lie, not a resolution.
+                        let searched : List Term :=
                         List.filter (fn (t : Term) => Bool.not (carrier_is_constraint_var t vars)) (List.append cands extra_carriers) in
-                    // The constraint's own variable, bound by the matched
-                    // instance's head against the candidate, is the RIGHT
-                    // carrier -- and when the caller had no bindings to
-                    // give (the ordinary constrained-def call path), this
-                    // is the only place that binding can come from. See
-                    // `find_constraint_bound_carrier_any`: without it the
-                    // whole carrier answers for `[BEq A]`, re-matches the
-                    // instance being expanded, and the `List A` dict lands
-                    // in the element slot (B3's SIGSEGV).
-                    //
-                    // `extra_carriers` is deliberately NOT threaded into
-                    // the recursive call: they are the arg-derived
-                    // fallbacks for the ORIGINAL constraint, and
-                    // re-supplying them re-offers the very candidate that
-                    // sent us here (an unbounded refinement loop). A bound
-                    // carrier is concrete by construction, so it needs no
-                    // fallback.
-                    match find_constraint_bound_carrier_any instances cls_name vars searched {
-                        Option.some p =>
+                        // The constraint's own variable, bound by the matched
+                        // instance's head against the candidate, is the RIGHT
+                        // carrier -- and when the caller had no bindings to
+                        // give (the ordinary constrained-def call path), this
+                        // is the only place that binding can come from. See
+                        // `find_constraint_bound_carrier_any`: without it the
+                        // whole carrier answers for `[BEq A]`, re-matches the
+                        // instance being expanded, and the `List A` dict lands
+                        // in the element slot (B3's SIGSEGV).
+                        //
+                        // `extra_carriers` is deliberately NOT threaded into
+                        // the recursive call: they are the arg-derived
+                        // fallbacks for the ORIGINAL constraint, and
+                        // re-supplying them re-offers the very candidate that
+                        // sent us here (an unbounded refinement loop). A bound
+                        // carrier is concrete by construction, so it needs no
+                        // fallback.
+                        match find_constraint_bound_carrier_any instances cls_name vars searched {
+                            Option.some p =>
                             match p {
                                 Pair.pair bound _matched_ins =>
                                     match resolve_dict_arg classes instances dict_env hints List.empty bound List.empty c {
@@ -6710,10 +6709,10 @@ def resolve_dict_arg (classes : List Class) (instances : List Instance) (dict_en
                                         Option.none => resolve_dict_arg_plain instances cls_name searched,
                                     },
                             },
-                        Option.none => resolve_dict_arg_plain instances cls_name searched,
+                            Option.none => resolve_dict_arg_plain instances cls_name searched,
+                        },
                     },
-            },
-            },
+                },
             },
     }
 
@@ -7089,9 +7088,9 @@ def concrete_hint (ptyp : Term) (names : List Identifier) (bindings : List (Pair
 def hint_arrow_domain (names : List Identifier) (dom : Term) : Term :=
     if type_mentions_any names dom then Term.hole
     else match expected_carrier_of dom {
-             Option.some d => d,
-             Option.none => Term.hole,
-         }
+        Option.some d => d,
+        Option.none => Term.hole,
+    }
 
 /// Does any bare name in `names` occur anywhere in `t`?
 #[partial]
@@ -8382,7 +8381,6 @@ def test_class_method_var_names_includes_bare_domains : Bool :=
     id_member (Identifier.id "T") names
     && id_member (Identifier.id "A") names
     && id_member (Identifier.id "B") names
-
 
 // --- Qualified-name re-split (`split_qualified_identifier`) ---
 //

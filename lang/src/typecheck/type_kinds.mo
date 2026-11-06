@@ -18,8 +18,8 @@
 /// the bare last segment, because an elaborated type head is usually the
 /// bare identifier (`Cell`, not `init::view::Cell`).
 use lib::types {
-  Attribute, DebugName, Identifier, Inductive, ModulePath, NamePath, Scope, ScopeData,
-  Term, Visibility, has_attr, show_identifier, show_name_path,
+    Attribute, DebugName, Identifier, Inductive, ModulePath, NamePath, Scope, ScopeData,
+    Term, Visibility, has_attr, show_identifier, show_name_path,
 }
 use lib::scope {scope_data_empty, scope_globals}
 use std::map {HashMap}
@@ -195,9 +195,9 @@ def ind_named (name : String) (attrs : List Attribute) : Inductive :=
 
 def probe_scope_base : Scope :=
     { module_id := ModulePath.mk (List.cons (Identifier.id "probe") List.empty),
-      scope := scope_data_empty,
-      parent := Option.none,
-      incomplete_match_ok := false }
+        scope := scope_data_empty,
+        parent := Option.none,
+        incomplete_match_ok := false }
 
 def scope_with_inds (inds : List Inductive) : Scope :=
     let m : HashMap String Inductive := scope_with_inds_go inds str_map_empty in

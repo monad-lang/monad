@@ -1,15 +1,14 @@
 use lang::types {
-  Attribute, Decl, Def, Identifier, InductConstructor, Inductive,
-  LocalScope, LocalVar, ModulePath, NamePath, NameRef, Param, Scope,
-  ScopeData, ScopeDef, ScopeError, Term, TypeConstraint, hole, package_private,
-  binder_anon, binder_explicit, named, sentinel, sort_n, str,
+    Attribute, Decl, Def, Identifier, InductConstructor, Inductive,
+    LocalScope, LocalVar, ModulePath, NamePath, NameRef, Param, Scope,
+    ScopeData, ScopeDef, ScopeError, Term, TypeConstraint, hole, package_private,
+    binder_anon, binder_explicit, named, sentinel, sort_n, str,
 }
 use lib::module {def_body_diagnostics}
 use lib::scope {
-  build_scope_from_decls, resolve_def_in_scope_by_name, scope_find_inductive,
-  scope_resolve_name,
+    build_scope_from_decls, resolve_def_in_scope_by_name, scope_find_inductive,
+    scope_resolve_name,
 }
-
 
 // --- Helpers ---
 

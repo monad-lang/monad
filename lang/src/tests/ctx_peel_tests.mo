@@ -33,13 +33,13 @@
 
 use std::list {List.length}
 use lang::types {
-  Identifier, Location, ModulePath, Scope, ScopeData, Similar, Term, binder_anon, named,
-  sentinel,
+    Identifier, Location, ModulePath, Scope, ScopeData, Similar, Term, binder_anon, named,
+    sentinel,
 }
 use lang::module {try_parse_decls}
 use lang::scope {build_scope_from_decls, type_head_name_local}
 use lang::typecheck::infer {
-  con_spine_result_typ, solve_typevars, type_head_name,
+    con_spine_result_typ, solve_typevars, type_head_name,
 }
 
 def ctx_peel_synthetic_path : ModulePath :=

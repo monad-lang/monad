@@ -11,7 +11,6 @@ use lib::pretty {show_term}
 
 open ParseResult {fail, success}
 
-
 /// Did `expression` parse the whole input (no remainder left to consume)?
 #[partial]
 def parse_full (r : ParseResult ParseTerm) (input : String) : Bool :=

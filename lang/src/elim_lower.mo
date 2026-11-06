@@ -16,8 +16,8 @@
 // (a de-Bruijn-misaligned arm) and is reported rather than realigned.
 
 use lib::types {
-  Binder, DebugName, Elim, Identifier, InductConstructor, Inductive, Literal, MatchCase,
-  NamePath, Scope, Term, binder_name, list_reverse, show_name_path, term_peel,
+    Binder, DebugName, Elim, Identifier, InductConstructor, Inductive, Literal, MatchCase,
+    NamePath, Scope, Term, binder_name, list_reverse, show_name_path, term_peel,
 }
 use lib::scope {npath_eq, scope_find_inductive}
 use std::list {List.length}

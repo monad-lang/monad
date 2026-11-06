@@ -1,19 +1,19 @@
 use lang::types {
-  Attribute, Decl, DebugName, Def, Identifier, InductConstructor, Inductive, Infix, Instance,
-  InstanceKey, LocalScope, LocalVar, Module, ModulePath, ModuleRegistry, NamePath,
-  NameRef, Param, QualifiedName, Scope, ScopeData, ScopeDef, ScopeError,
-  ScopeInstance, Similar, Term, TypeConstraint, Visibility, binder_binder, many, named,
-  package_private, param_many, priv_, pub_, sentinel, show_identifier, sort_n, unnamed,
+    Attribute, Decl, DebugName, Def, Identifier, InductConstructor, Inductive, Infix, Instance,
+    InstanceKey, LocalScope, LocalVar, Module, ModulePath, ModuleRegistry, NamePath,
+    NameRef, Param, QualifiedName, Scope, ScopeData, ScopeDef, ScopeError,
+    ScopeInstance, Similar, Term, TypeConstraint, Visibility, binder_binder, many, named,
+    package_private, param_many, priv_, pub_, sentinel, show_identifier, sort_n, unnamed,
 }
 use lang::scope {
-  LocalTypeBinding, add_constraint_dict_params, bare_map_empty, bare_map_insert, bind_term_vars, build_scope_from_decls,
-  build_scope_from_modules, find_constraint_bound_carrier_any, infer_carrier_type,
-  list_append, lookup_binding, mk, npath_eq, placeholder_carrier, refine_scope_instances,
-  resolve_def_in_scope_by_name,
-  resolve_dict_args, scope_data_add_def, scope_data_add_inductive, scope_data_add_instance,
-  scope_data_empty, scope_find_inductive, scope_find_inductive_by_constructor,
-  scope_find_local, scope_globals, scope_instance_candidates_in, scope_push_local, scope_resolve_instance,
-  scope_resolve_name, term_to_slug,
+    LocalTypeBinding, add_constraint_dict_params, bare_map_empty, bare_map_insert, bind_term_vars, build_scope_from_decls,
+    build_scope_from_modules, find_constraint_bound_carrier_any, infer_carrier_type,
+    list_append, lookup_binding, mk, npath_eq, placeholder_carrier, refine_scope_instances,
+    resolve_def_in_scope_by_name,
+    resolve_dict_args, scope_data_add_def, scope_data_add_inductive, scope_data_add_instance,
+    scope_data_empty, scope_find_inductive, scope_find_inductive_by_constructor,
+    scope_find_local, scope_globals, scope_instance_candidates_in, scope_push_local, scope_resolve_instance,
+    scope_resolve_name, term_to_slug,
 }
 use lang::typecheck::copy_class {copy_verdict, copy_verdict_grants_omega}
 use llvm::strmap {str_map_empty, str_map_insert}
@@ -666,7 +666,7 @@ def test_instance_key_matches_type_args : Bool :=
 def test_instance_key_matches_wrong_type_args : Bool :=
     let cls_name : NamePath := NamePath.mk (List.cons (Identifier.id "Show") List.empty) in
     let i64_typ : Term := sort_n 1 in
-    let string_typ : Term := sort_n 2 in  // different from type_1
+    let string_typ : Term := sort_n 2 in // different from type_1
     let show_i64 : Instance := Instance.mk
         (Identifier.id "showI64")
         cls_name
@@ -1292,7 +1292,6 @@ def test_copy_verdict_grants_omega_to_a_qualified_interval_instance : Bool :=
     let no_decls : List Decl := List.empty in
     let refined : ScopeData := refine_scope_instances no_decls sd in
     let path : ModulePath := ModulePath.mk (List.cons (Identifier.id "Test") List.empty) in
-    let s : Scope :={ module_id := path, scope := refined, parent := Option.none, incomplete_match_ok := false } in
+    let s : Scope := { module_id := path, scope := refined, parent := Option.none, incomplete_match_ok := false } in
     let carrier : Term := Term.var sentinel (DebugName.named (Identifier.id "Cubical.I")) in
     copy_verdict_grants_omega (copy_verdict s carrier)
-

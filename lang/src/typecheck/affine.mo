@@ -69,7 +69,7 @@ use lib::scope {scope_data_empty}
 use lib::typecheck::usage {BinderKind, BinderUse, attribute_binder_types, collect_binder_uses, collect_binder_uses_with_params, typ_is_function}
 use lib::typecheck::copy_class {is_copy}
 use lib::typecheck::type_kinds {
-  TypeKinds, is_linear_type, is_proof_type, type_kinds_empty,
+    TypeKinds, is_linear_type, is_proof_type, type_kinds_empty,
 }
 use std::map {HashMap}
 use llvm::strmap {str_map_empty, str_map_insert}
@@ -208,8 +208,8 @@ pub def check_binder_with (kinds : TypeKinds) (scope : Scope) (copy_vars : List 
         then Option.some (TypeError.borrowed_value_escapes name typ)
         else Option.none
     else if Bool.not strict
-       && is_unannotated declared
-       && Bool.not (typ_is_attributable typ)
+        && is_unannotated declared
+        && Bool.not (typ_is_attributable typ)
     then Option.none
     // A proof is forced linear (view-types rule 1): `?`/`%` are not legal
     // spellings for one. This is checked before the ordinary rule because
@@ -435,39 +435,39 @@ def check_binders_go (kinds : TypeKinds) (scope : Scope) (copy_vars : List Ident
 
 def probe_scope : Scope :=
     { module_id := ModulePath.mk (List.cons (Identifier.id "probe") List.empty),
-      scope := scope_data_empty,
-      parent := Option.none,
-      incomplete_match_ok := false }
+        scope := scope_data_empty,
+        parent := Option.none,
+        incomplete_match_ok := false }
 
 def a_type : Term := Term.var (0 - 1) (DebugName.named (Identifier.id "Term"))
 
 /// A binder with the given use and owning counts.
 def binder (uses : I64) (owning : I64) : BinderUse :=
     { name := Identifier.id "x", kind := BinderKind.bk_lam, typ := a_type,
-      count := uses, owning := owning, ctor := Identifier.id "", pos := 0 - 1,
-      view := false, declared := Multiplicity.many, init := Option.none }
+        count := uses, owning := owning, ctor := Identifier.id "", pos := 0 - 1,
+        view := false, declared := Multiplicity.many, init := Option.none }
 
 /// A function-typed binder with `moves` transfers of the closure.
 def fn_binder (uses : I64) (moves : I64) : BinderUse :=
     let typ : Term := Term.pi (binder_explicit (DebugName.named (Identifier.id "a"))) Term.hole Term.hole in
     { name := Identifier.id "f", kind := BinderKind.bk_lam, typ := typ,
-      count := uses, owning := moves, moves := moves,
-      ctor := Identifier.id "", pos := 0 - 1, view := false,
-      declared := Multiplicity.many, init := Option.none }
+        count := uses, owning := moves, moves := moves,
+        ctor := Identifier.id "", pos := 0 - 1, view := false,
+        declared := Multiplicity.many, init := Option.none }
 
 /// A binder whose uses split between real and borrowed.
 def borrowable (uses : I64) (borrowed : I64) (owning : I64) : BinderUse :=
     { name := Identifier.id "x", kind := BinderKind.bk_lam, typ := a_type,
-      count := uses, borrowed := borrowed, owning := owning,
-      ctor := Identifier.id "", pos := 0 - 1, view := false,
-      declared := Multiplicity.many, init := Option.none }
+        count := uses, borrowed := borrowed, owning := owning,
+        ctor := Identifier.id "", pos := 0 - 1, view := false,
+        declared := Multiplicity.many, init := Option.none }
 
 /// A binder carrying a declared prefix, for the rule's declared-mult
 /// path.
 def declared_binder (m : Multiplicity) (uses : I64) : BinderUse :=
     { name := Identifier.id "x", kind := BinderKind.bk_lam, typ := a_type,
-      count := uses, owning := 0, ctor := Identifier.id "", pos := 0 - 1,
-      view := false, declared := m, init := Option.none }
+        count := uses, owning := 0, ctor := Identifier.id "", pos := 0 - 1,
+        view := false, declared := m, init := Option.none }
 
 #[test]
 def test_check_binders_go_uses_declared : Bool :=
@@ -476,7 +476,7 @@ def test_check_binders_go_uses_declared : Bool :=
     // discriminator that the declared multiplicity actually reaches the
     // judgement.
     match check_binders_go type_kinds_empty probe_scope List.empty false
-            (List.cons (declared_binder Multiplicity.linear 0) List.empty) List.empty {
+        (List.cons (declared_binder Multiplicity.linear 0) List.empty) List.empty {
         List.cons _ _ => true,
         List.empty => false,
     }
@@ -721,9 +721,9 @@ def test_two_borrows_are_not_an_over_use : Bool :=
             I64.beq (BinderUse.count u) 2
                 && I64.beq (BinderUse.borrowed u) 2
                 && (match check_binder probe_scope Multiplicity.many u {
-                        Option.none => true,
-                        Option.some _ => false,
-                    }),
+                    Option.none => true,
+                    Option.some _ => false,
+                }),
         List.empty => false,
     }
 
@@ -780,13 +780,13 @@ def list_of_a : Term :=
 
 def hole_binder (uses : I64) (owning : I64) : BinderUse :=
     { name := Identifier.id "x", kind := BinderKind.bk_lam, typ := Term.hole,
-      count := uses, owning := owning, view := false,
-      declared := Multiplicity.many, init := Option.none }
+        count := uses, owning := owning, view := false,
+        declared := Multiplicity.many, init := Option.none }
 
 def var_binder (uses : I64) (owning : I64) : BinderUse :=
     { name := Identifier.id "x", kind := BinderKind.bk_lam, typ := a_type_var,
-      count := uses, owning := owning, view := false,
-      declared := Multiplicity.many, init := Option.none }
+        count := uses, owning := owning, view := false,
+        declared := Multiplicity.many, init := Option.none }
 
 #[test]
 def test_copy_constrained_var_may_be_shared : Bool :=
