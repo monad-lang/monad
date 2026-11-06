@@ -57,6 +57,7 @@ use weaver::permissions {PermGrant}
 use weaver::place {SessionPlace, Place.probe, Place.cwd_of, Place.moved_note}
 use weaver::settings {Settings, Settings.load_global, Settings.load_project, Settings.combine, Settings.cap_of, Settings.validate, Loaded, Loaded.empty}
 use weaver::trust {TrustOutcome, Trust.decide, Trust.record_path, Trust.forced_by}
+use weaver::instructions {InstrFile, Instructions.user_path, Instructions.discover, Instructions.note, Prompt.system}
 use tui::terminal {Terminal.enter_raw_mode, Terminal.leave_raw_mode}
 use weaver::error {WeaverError, WeaverError.show}
 use weaver::tui_app {Tui.run_resumed}
@@ -93,9 +94,6 @@ def weaver_registry (log : Option Logger) (check_cache : Ref ModuleInfoCache) (e
                                         (ToolRegistry.register GlobTool.impl
                                             (ToolRegistry.register GrepTool.impl
                                                 (ToolRegistry.register ReadTool.impl ToolRegistry.empty)))))))))))
-
-def system_prompt : String :=
-    "You are Weaver, an interactive coding assistant. Inspect the workspace with read, grep and glob before changing anything; prefer edit over write for existing files; explain what you are about to do before doing it. For Monad code, use monad_check to type-check a file or snippet and monad_eval to try expressions in the self-hosted interpreter (pure programs only). For a task of three or more steps, keep a todo list with todo_write and update it as each step starts and finishes."
 
 /// `IO.write_stderr` does not append a newline; every one-line
 /// diagnostic this entry prints goes through here.
@@ -145,6 +143,8 @@ struct Plan {
     model_note : Option String,
     /// The project is trusted for this run (`trust.mo`).
     trusted : Bool := false,
+    /// The AGENTS.md files the system prompt carries (`instructions.mo`).
+    instructions : List InstrFile := List.empty,
 }
 
 /// The start plan, resolved RUNTIME -> PROJECT -> GLOBAL -> default:
@@ -381,11 +381,12 @@ def dispose_all (servers : List McpServer) : IO Unit :=
 
 /// A fresh session: nothing spent, no history.
 def fresh_session (p : Plan) (reg : ToolRegistry) : Session :=
-    let s : Session := { config := p.cfg, system_prompt := system_prompt, tools := ToolRegistry.specs reg, history := List.empty, turns := 0, spent := usage_zero } in
+    let s : Session := { config := p.cfg, system_prompt := Prompt.system p.instructions, tools := ToolRegistry.specs reg, history := List.empty, turns := 0, spent := usage_zero } in
     s
 
 /// The loaded session with its key re-resolved from this run's settings
-/// (a checkpoint never carries one). The saved model is kept as-is: it
+/// (a checkpoint never carries one) and its system prompt rebuilt from
+/// this run's instruction files. The saved model is kept as-is: it
 /// was what that session ran with, and availability is the provider's
 /// answer, not a name table's. The key comes from the provider the
 /// SAVED config talks to, not from this run's flag: a session resumed
@@ -394,7 +395,7 @@ def rekey_loaded (p : Plan) (s : Settings) (sess : Session) : Pair Session (Opti
     let cfg0 : ProviderConfig := sess.config in
     let prov : String := Weaver.provider_of p.provider cfg0 in
     let cfg2 : ProviderConfig := { cfg0 with api_key := Map.lookup prov s.api_keys } in
-    let sess2 : Session := { sess with config := cfg2 } in
+    let sess2 : Session := { sess with config := cfg2, system_prompt := Prompt.system p.instructions } in
     Pair.pair sess2 Option.none
 
 /// The initial interactive state: the opened session, the remaining
@@ -405,7 +406,7 @@ def initial_state (p : Plan) (reg : ToolRegistry) (s : Settings) (colors : Bool)
     let left : I64 := if p.max_turns - session.turns < 0 then 0 else p.max_turns - session.turns in
     let run : RunState := { session := session, reg := reg, turns_left := left, emit := stdout_write, gate := Gate.auto, always := List.empty, retries := 3, sleep_ms := Dumb.poll_sleep, on_usage := silent_usage, should_stop := silent_stop, inbox := silent_inbox, side_spend := silent_side_spend, stopped := false } in
     let prov : String := Weaver.provider_of p.provider session.config in
-    let st : WeaverState := { run := run, mode := initial_mode s, provider := prov, budget := p.max_turns, context_window := p.context_window, compact_at := p.compact_at, plan := Option.none, last_context := 0, grants := grants, place := place, mcps := p.mcps, keys := s.api_keys, catalog := BTreeMap.empty, quit := false, colors := colors, fatal := Option.none, name := Option.none, trusted := p.trusted, store := store } in
+    let st : WeaverState := { run := run, mode := initial_mode s, provider := prov, budget := p.max_turns, context_window := p.context_window, compact_at := p.compact_at, plan := Option.none, last_context := 0, grants := grants, place := place, mcps := p.mcps, keys := s.api_keys, catalog := BTreeMap.empty, quit := false, colors := colors, fatal := Option.none, name := Option.none, trusted := p.trusted, instructions := p.instructions, store := store } in
     st
 
 /// The mode the session starts in: the settings' `mode` key when it parses,
@@ -476,7 +477,10 @@ def main_trusted (setup : LogSetup) (colors : Bool) (global : Loaded) (c : Weave
     let loaded : Loaded := Settings.combine global project;
     let _ <- warn_settings setup.log loaded.warnings;
     let _ <- warn_project_keys loaded.project_keys;
-    main_plan setup colors loaded.settings loaded.warnings c place outcome
+    let user <- Instructions.user_path;
+    let fs <- Instructions.discover user place outcome.trusted;
+    let _ <- Logs.info setup.log (String.concat "ev=instructions files=" (I64.to_string (List.length fs)));
+    main_plan setup colors loaded.settings loaded.warnings c place outcome fs
 }
 
 /// Stdin is a terminal: raw mode can be entered (and is left at once,
@@ -506,7 +510,7 @@ def join_notes (a : Option String) (b : Option String) : Option String :=
         },
     }
 
-def main_plan (setup : LogSetup) (colors : Bool) (s : Settings) (ws : List WeaverError) (c : WeaverCli) (place : Option SessionPlace) (outcome : TrustOutcome) : IO I64 :=
+def main_plan (setup : LogSetup) (colors : Bool) (s : Settings) (ws : List WeaverError) (c : WeaverCli) (place : Option SessionPlace) (outcome : TrustOutcome) (fs : List InstrFile) : IO I64 :=
     let effective : Bool := Bool.and colors (Bool.not (WeaverCli.no_color_of c)) in
     match plan_of s ws c {
         Result.err e => do {
@@ -515,7 +519,8 @@ def main_plan (setup : LogSetup) (colors : Bool) (s : Settings) (ws : List Weave
             return 1
         },
         Result.ok p =>
-            let trusted : Plan := { p with trusted := outcome.trusted, model_note := join_notes p.model_note outcome.note } in
+            let trusted : Plan := { p with trusted := outcome.trusted, instructions := fs,
+                model_note := join_notes p.model_note (join_notes outcome.note (Instructions.note fs)) } in
             run_plan setup effective trusted s place,
     }
 

@@ -319,7 +319,7 @@ def drive_ready (read : Unit -> IO (Option String)) (write : String -> IO Unit) 
 def drive_spending (read : Unit -> IO (Option String)) (write : String -> IO Unit) (st : WeaverState) (text : String) (spend : Ref Usage) : ResultT WeaverError IO RunState := do {
     let base : RunState := st.run;
     let with_task : RunState := { base with reg := ToolRegistry.register (TodoTool.impl st.store)
-        (ToolRegistry.register (Subagent.task_tool base.session.config Option.none Option.none silent_stop spend) base.reg),
+        (ToolRegistry.register (Subagent.task_tool base.session.config st.instructions Option.none Option.none silent_stop spend) base.reg),
         side_spend := Subagent.drain spend };
     let gated : RunState := gate_for st read (theme_write write st.colors) with_task;
     let ready : RunState := append_user gated text;

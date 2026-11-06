@@ -24,6 +24,7 @@ use weaver::commands {
 use weaver::catalog {Catalog.lookup}
 use weaver::error {WeaverError}
 use weaver::policy {Mode}
+use weaver::instructions {InstrFile, Instructions.capped}
 use weaver::permissions {PermGrant}
 use std::ref {Ref}
 use weaver::store {
@@ -1075,3 +1076,20 @@ def test_place_suffix_names_the_repo : Bool :=
     let p : SessionPlace := { cwd := Path.path "/src/a/x", repo := Path.path "/src/a" } in
     String.beq (Commands.place_suffix (Option.some p)) " in /src/a"
         && String.beq (Commands.place_suffix Option.none) " in (unknown)"
+
+def haiku_file : InstrFile :=
+    Instructions.capped (Path.path "/r/AGENTS.md") "repo" "Always answer in haiku.\n" 32768
+
+def prompt_of (r : Result WeaverError Effect) : String :=
+    match effect_state r {
+        Option.none => "",
+        Option.some st => st.run.session.system_prompt,
+    }
+
+/// `/clear` starts the new session from the state's instruction files.
+#[test]
+def test_clear_rebuilds_the_prompt_from_the_files : IO Bool := do {
+    let st : WeaverState := { (state_of Mode.manual []) with instructions := [haiku_file] };
+    let r <- Commands.dispatch "/clear" st;
+    IO.pure (String.contains (prompt_of r) "Always answer in haiku.")
+}

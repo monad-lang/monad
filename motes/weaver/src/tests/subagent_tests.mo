@@ -81,7 +81,7 @@ def task_input : Json :=
 def test_task_tool_runs_a_child_loop : IO Bool := do {
     let _ <- IO.write_file (Path.path script_path) (Json.to_string (Json.make_array [Turn.serialize_json child_turn]));
     let spend <- Ref.new usage_zero;
-    let tool := Subagent.task_tool mock_cfg Option.none Option.none silent_stop spend;
+    let tool := Subagent.task_tool mock_cfg List.empty Option.none Option.none silent_stop spend;
     let r <- ResultT.run (tool.run "c1" task_input);
     let _ <- exec_cmd "rm" ["-f", script_path];
     let first <- Subagent.drain spend unit;

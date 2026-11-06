@@ -32,6 +32,7 @@ use weaver::logs {Logs.debug, Logs.info}
 use weaver::subagent_args {TaskArgs}
 use weaver::store {StoreState, Store.child}
 use std::list {List.intercalate}
+use weaver::instructions {InstrFile, Prompt.with_files}
 
 pub def Subagent.system_prompt : String :=
     "You are a read-only planning subagent. Inspect the workspace with read, grep and glob, then return a concrete, ordered plan with risks and validation steps. You cannot modify files or run commands; do not ask for approval."
@@ -77,8 +78,10 @@ def user_message (text : String) : Message :=
     let m : Message := { role := Role.user, content := List.cons (Content.text text) List.empty } in
     m
 
-def child_session (cfg : ProviderConfig) (prompt : String) : Session :=
-    let s : Session := { config := cfg, system_prompt := Subagent.system_prompt,
+/// `files` is the parent's rendered instruction files: the child
+/// explores the same project, under the same rules.
+def child_session (cfg : ProviderConfig) (files : List InstrFile) (prompt : String) : Session :=
+    let s : Session := { config := cfg, system_prompt := Prompt.with_files Subagent.system_prompt files,
         tools := ToolRegistry.specs Subagent.read_registry,
         history := List.cons (user_message prompt) List.empty,
         turns := 0, spent := usage_zero } in
@@ -150,14 +153,14 @@ def task_result (id : String) (log : Option Logger) (store : Option StoreState) 
         Result.ok final => task_success id log store final,
     }
 
-def run_task (cfg : ProviderConfig) (log : Option Logger) (store : Option StoreState)
+def run_task (cfg : ProviderConfig) (files : List InstrFile) (log : Option Logger) (store : Option StoreState)
     (stop : Unit -> IO Bool) (spend : Ref Usage) (id : String) (j : Json) : ResultT String IO Content :=
     match TaskArgs.deserialize_json j {
         Result.err e => ResultT.mk (return (Result.ok (Content.tool_result id e true))),
         Result.ok args =>
             ResultT.mk (do {
                 let n : I64 := if args.max_turns < 1 then 24 else if 50 < args.max_turns then 50 else args.max_turns;
-                let sess : Session := child_session cfg args.prompt;
+                let sess : Session := child_session cfg files args.prompt;
                 let st : RunState := { session := sess, reg := Subagent.read_registry, turns_left := n,
                     emit := child_emit log, gate := Gate.read_only, always := List.empty,
                     retries := 1, sleep_ms := silent_sleep, on_usage := child_usage log,
@@ -214,7 +217,8 @@ def run_summary (r : Result String Session) (c : Content) : String :=
 /// The per-turn `task` tool. The registry is built each turn so the child
 /// uses the CURRENT provider/model and the run's store/log; `stop` is the
 /// parent's stop predicate, so Esc also ends a child at its boundaries.
-/// `spend` collects the children's usage for `Subagent.drain`.
-pub def Subagent.task_tool (cfg : ProviderConfig) (log : Option Logger)
+/// `spend` collects the children's usage for `Subagent.drain`; `files`
+/// are the parent's instruction files.
+pub def Subagent.task_tool (cfg : ProviderConfig) (files : List InstrFile) (log : Option Logger)
     (store : Option StoreState) (stop : Unit -> IO Bool) (spend : Ref Usage) : ToolImpl :=
-    { spec := Subagent.spec, cap := Capability.exec, run := run_task cfg log store stop spend }
+    { spec := Subagent.spec, cap := Capability.exec, run := run_task cfg files log store stop spend }

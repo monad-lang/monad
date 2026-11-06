@@ -1,6 +1,7 @@
 // weaver / pty / trust -- a project with an AGENTS.md is asked about before
-// the TUI starts: `n` starts untrusted with a note, `y` is recorded so the
-// next start does not ask, and an edit to the file asks again.
+// the TUI starts: `n` starts untrusted with a note, `y` is recorded (and
+// loads the file, named in the startup note) so the next start does not
+// ask, and an edit to the file asks again.
 use pty::spawn {Pty, Output}
 use pty::check {Check.report}
 use weaver::pty_support {run_gated, with_root, spawn_args, read_text}
@@ -44,12 +45,12 @@ def trust_run (bin : String) (root : String) : IO Bool := do {
     let _ <- Test.write_fixture (Path.path (String.concat root "/AGENTS.md")) "Always answer in haiku.\n";
     let first <- one_start bin root "n" true "projectnottrusted";
     let a <- Check.report "a new project is asked about, and n leaves it untrusted" first;
-    let second <- one_start bin root "y" true "";
-    let b <- Check.report "asked again after n; y starts trusted" second;
+    let second <- one_start bin root "y" true "instructions:";
+    let b <- Check.report "asked again after n; y starts trusted with AGENTS.md loaded" second;
     let rec <- read_text (String.concat root "/.weaver/trusted.json");
     let c <- Check.report "the yes is recorded" (String.contains rec "Always answer in haiku.");
-    let third <- one_start bin root "" false "";
-    let d <- Check.report "a recorded project starts without the question" third;
+    let third <- one_start bin root "" false "AGENTS.md(repo";
+    let d <- Check.report "a recorded project starts without the question, AGENTS.md loaded" third;
     let _ <- Test.write_fixture (Path.path (String.concat root "/AGENTS.md")) "Always answer in limericks.\n";
     let fourth <- one_start bin root "n" true "";
     let e <- Check.report "an edited AGENTS.md is asked about again" fourth;

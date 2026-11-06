@@ -2,6 +2,7 @@
 use weaver::instructions {
     InstrFile, Instructions.chain, Instructions.user_path_of, Instructions.discover, Instructions.cut_at,
     Instructions.capped, Instructions.cap_total, Instructions.render, Instructions.label,
+    Instructions.note, Prompt.base, Prompt.system, Prompt.with_files,
 }
 use weaver::place {SessionPlace}
 use std::path {Path, Path.to_string}
@@ -74,3 +75,30 @@ def test_discover_reads_root_and_nested_but_only_when_trusted : IO Bool := do {
     let _ <- IO.write_file (Path.path (String.concat root "/sub/AGENTS.md")) "sub rules\n";
     discover_case root
 }
+
+def one_file : InstrFile :=
+    Instructions.capped (Path.path "/r/AGENTS.md") "repo" "Always answer in haiku.\n" 32768
+
+/// No files leaves the base prompt byte-identical; a file is appended
+/// after it under the instructions header.
+#[test]
+def test_system_prompt_appends_the_files : Bool :=
+    let p : String := Prompt.system [one_file] in
+    String.beq (Prompt.system List.empty) Prompt.base
+        && String.starts_with Prompt.base p
+        && String.contains p "# Project instructions"
+        && String.contains p "Always answer in haiku."
+
+/// A subagent's prompt gets the same block after its own base.
+#[test]
+def test_with_files_keeps_its_own_base : Bool :=
+    let p : String := Prompt.with_files "child base" [one_file] in
+    String.starts_with "child base" p && String.contains p "Always answer in haiku."
+
+#[test]
+def test_note_lists_files_or_is_absent : Bool :=
+    (match Instructions.note List.empty { Option.none => true, Option.some _ => false })
+        && (match Instructions.note [one_file] {
+            Option.some n => String.contains n "instructions: /r/AGENTS.md (repo",
+            Option.none => false,
+        })

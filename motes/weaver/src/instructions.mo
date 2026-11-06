@@ -194,3 +194,24 @@ pub def Instructions.label (f : InstrFile) : String :=
 pub def Instructions.size_text (n : I64) : String :=
     if n < 1024 then String.concat (I64.to_string n) " B"
     else String.concat (I64.to_string ((n + 512) / 1024)) " KiB"
+
+/// The startup note: one label per loaded file; none when nothing loaded.
+pub def Instructions.note (fs : List InstrFile) : Option String :=
+    match fs {
+        List.empty => Option.none,
+        List.cons _ _ => Option.some (String.concat "instructions: " (List.intercalate ", " (List.map Instructions.label fs))),
+    }
+
+/// Weaver's own system prompt, before any instructions file.
+pub def Prompt.base : String :=
+    "You are Weaver, an interactive coding assistant. Inspect the workspace with read, grep and glob before changing anything; prefer edit over write for existing files; explain what you are about to do before doing it. For Monad code, use monad_check to type-check a file or snippet and monad_eval to try expressions in the self-hosted interpreter (pure programs only). For a task of three or more steps, keep a todo list with todo_write and update it as each step starts and finishes."
+
+/// `base` followed by the rendered instruction files, when there are any.
+/// Built once per session: it is the cached prefix of every request.
+pub def Prompt.with_files (base : String) (fs : List InstrFile) : String :=
+    let block : String := Instructions.render fs in
+    if String.is_empty block then base else String.concat_list [base, "\n\n", block]
+
+/// The main session's system prompt.
+pub def Prompt.system (fs : List InstrFile) : String :=
+    Prompt.with_files Prompt.base fs

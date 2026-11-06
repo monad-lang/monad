@@ -58,6 +58,7 @@ use weaver::settings {SettingsUpdate, Settings.save}
 use weaver::procs {ProcEntry, Procs.list, Procs.kill}
 use weaver::logs {Logs.latest_path, Logs.tail, Logs.detect_crash}
 use weaver::trust {Trust.items, Trust.record_path, Trust.remember}
+use weaver::instructions {InstrFile, Instructions.user_path, Instructions.discover, Instructions.note, Prompt.system}
 
 /// Everything the interactive session carries between inputs.
 /// `run` is shuttle's own state (session, registry, turn budget, gate,
@@ -112,6 +113,8 @@ pub struct WeaverState {
     /// The user trusts this project's AGENTS.md and `.weaver/config.toml`
     /// (`trust.mo`): asked at startup, or `/trust`.
     trusted : Bool := false,
+    /// The AGENTS.md files in the system prompt (`instructions.mo`).
+    instructions : List InstrFile := List.empty,
     /// The active session directory, when persistence is available; none
     /// degrades to the pre-store in-memory behaviour.
     store : Option StoreState,
@@ -1057,8 +1060,10 @@ def resume_effect (st : WeaverState) (s : Session) (store : Option StoreState) (
     then Effect.reset st4 (String.concat out " -- the whole turn budget is already spent")
     else Effect.reset st4 out
 
+/// The resumed session also takes this run's instruction files: the
+/// prompt cache is cold after a resume anyway.
 def rekey_session (st : WeaverState) (s : Session) : Session :=
-    let s2 : Session := { s with config := rekey_config st s.config } in
+    let s2 : Session := { s with config := rekey_config st s.config, system_prompt := Prompt.system st.instructions } in
     s2
 
 /// The store for a directory opened in place: keep the CURRENT root so
@@ -1095,7 +1100,7 @@ def rekey_config (st : WeaverState) (cfg : ProviderConfig) : ProviderConfig :=
 /// resumable.
 def cmd_clear (arg : String) (st : WeaverState) : IO (Result WeaverError Effect) := do {
     let base : Session := st.run.session;
-    let fresh : Session := clear_session base;
+    let fresh : Session := clear_session base (Prompt.system st.instructions);
     // A new session has no plan: the old one belongs to the session that
     // produced it (and its store directory, when persistence is on).
     let st2 : WeaverState := Commands.set_plan (set_session st fresh st.budget) Option.none;
@@ -1110,8 +1115,8 @@ def cmd_clear (arg : String) (st : WeaverState) : IO (Result WeaverError Effect)
     }
 }
 
-def clear_session (s : Session) : Session :=
-    let s2 : Session := { s with history := List.empty, turns := 0, spent := usage_zero } in
+def clear_session (s : Session) (prompt : String) : Session :=
+    let s2 : Session := { s with history := List.empty, turns := 0, spent := usage_zero, system_prompt := prompt } in
     s2
 
 def clear_with_store (st : WeaverState) (s : StoreState) (fresh : Session) : IO (Result WeaverError Effect) := do {
@@ -1489,11 +1494,27 @@ def trust_place (st : WeaverState) (p : SessionPlace) : IO (Result WeaverError E
     let items <- Trust.items p;
     let rp <- Trust.record_path;
     let saved <- Trust.remember rp p.repo items;
-    let st2 : WeaverState := { st with trusted := true };
+    let user <- Instructions.user_path;
+    let fs <- Instructions.discover user st.place true;
+    let st2 : WeaverState := with_instructions { st with trusted := true } fs;
     respond st2 (String.concat_list ["trusted ", Path.to_string p.repo,
         if saved then "" else " for this session (HOME is unset, so it is not recorded)",
-        "; .weaver/config.toml applies from the next start"])
+        "; .weaver/config.toml applies from the next start",
+        trust_loaded_text fs])
 }
+
+def trust_loaded_text (fs : List InstrFile) : String :=
+    match Instructions.note fs {
+        Option.none => "",
+        Option.some n => String.concat_list ["\n", n, " (the system prompt changed, so the prompt cache starts cold)"],
+    }
+
+/// `fs` as the session's instruction files, and its system prompt rebuilt.
+pub def with_instructions (st : WeaverState) (fs : List InstrFile) : WeaverState :=
+    let run : RunState := st.run in
+    let sess : Session := { (run.session) with system_prompt := Prompt.system fs } in
+    let run2 : RunState := { run with session := sess } in
+    { st with instructions := fs, run := run2 }
 
 def help_text : String :=
     List.intercalate "\n" [
