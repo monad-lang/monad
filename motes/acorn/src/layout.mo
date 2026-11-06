@@ -6,11 +6,21 @@
 use oak::typed {Oak.Node, Oak.of_html, Oak.to_html}
 use xml_html::html {Html.Node, Html.to_string}
 use oak::elements {
-    Html.a, Html.attr, Html.charset, Html.class_, Html.document_with, Html.footer,
-    Html.header, Html.href, Html.lang, Html.link, Html.main_, Html.meta, Html.nav,
-    Html.rel, Html.text, Html.title,
+    Html.a, Html.attr, Html.charset, Html.class_, Html.div, Html.document_with, Html.footer,
+    Html.header, Html.href, Html.lang, Html.li, Html.link, Html.main_, Html.meta, Html.nav,
+    Html.ol, Html.rel, Html.span, Html.text, Html.title,
 }
 use lib::config {SiteConfig}
+use lib::summary {NavEntry, NavChapter}
+
+/// A book page's place in the book: the sidebar entries, the current
+/// chapter's stem, and its neighbours in reading order.
+pub struct BookNav {
+    entries : List NavEntry,
+    current : String,
+    prev : Option NavChapter,
+    next : Option NavChapter,
+}
 
 /// What one page contributes to the shell.
 pub struct PageSpec {
@@ -22,6 +32,8 @@ pub struct PageSpec {
     root : String,
     /// The page body, already rendered.
     body : List Html.Node,
+    /// The book navigation, for a book chapter; none for other pages.
+    book : Option BookNav,
 }
 
 def head_nodes (cfg : SiteConfig) (title : String) (root : String) : List (Oak.Node Unit) :=
@@ -43,16 +55,71 @@ def site_header (cfg : SiteConfig) (root : String) : Oak.Node Unit :=
 def site_footer : Oak.Node Unit :=
     Html.footer [Html.class_ ["site-footer"]] [Html.text "Built with acorn."]
 
+/// The link to a chapter page, from a page `root` away from the output root.
+pub def Layout.chapter_href (cfg : SiteConfig) (root : String) (stem : String) : String :=
+    String.concat root (String.concat cfg.book_dir (String.concat "/" (String.concat stem ".html")))
+
+def depth_class (depth : I64) : String :=
+    String.concat "depth-" (I64.to_string depth)
+
+def sidebar_item (cfg : SiteConfig) (root : String) (current : String) (e : NavEntry) : Oak.Node Unit :=
+    match e {
+        NavEntry.part title => Html.li [Html.class_ ["part-title"]] [Html.text title],
+        NavEntry.chapter title stem depth =>
+            let classes : List String :=
+                if String.beq stem current
+                then ["chapter", depth_class depth, "active"]
+                else ["chapter", depth_class depth] in
+            Html.li [Html.class_ classes]
+                [Html.a [Html.href (Layout.chapter_href cfg root stem)] [Html.text title]],
+    }
+
+def sidebar (cfg : SiteConfig) (root : String) (entries : List NavEntry) (current : String) : Oak.Node Unit :=
+    Html.nav [Html.class_ ["sidebar"]]
+        [Html.ol [Html.class_ ["chapters"]] (List.map (sidebar_item cfg root current) entries)]
+
+def pager_link (cfg : SiteConfig) (root : String) (cls : String) (label : String) (c : Option NavChapter) : List (Oak.Node Unit) :=
+    match c {
+        Option.none => List.empty,
+        Option.some chapter => [pager_anchor cfg root cls label chapter],
+    }
+
+def pager_anchor (cfg : SiteConfig) (root : String) (cls : String) (label : String) (c : NavChapter) : Oak.Node Unit :=
+    match c {
+        { title, stem } =>
+            Html.a [Html.class_ [cls], Html.href (Layout.chapter_href cfg root stem)]
+                [Html.span [Html.class_ ["pager-label"]] [Html.text label], Html.text title],
+    }
+
+def pager (cfg : SiteConfig) (root : String) (prev : Option NavChapter) (next : Option NavChapter) : Oak.Node Unit :=
+    Html.nav [Html.class_ ["pager"]]
+        (List.append (pager_link cfg root "prev" "Previous" prev) (pager_link cfg root "next" "Next" next))
+
+/// The page body: content alone, or the sidebar beside content and pager.
+def body_nodes (cfg : SiteConfig) (root : String) (content : List (Oak.Node Unit)) (book : Option BookNav) : List (Oak.Node Unit) :=
+    match book {
+        Option.none => [Html.main_ [Html.class_ ["content"]] content],
+        Option.some nav => [book_body cfg root content nav],
+    }
+
+def book_body (cfg : SiteConfig) (root : String) (content : List (Oak.Node Unit)) (nav : BookNav) : Oak.Node Unit :=
+    match nav {
+        { entries, current, prev, next } =>
+            Html.div [Html.class_ ["book"]]
+                [sidebar cfg root entries current,
+                    Html.main_ [Html.class_ ["content"]]
+                        (List.append content [pager cfg root prev next])],
+    }
+
 /// The whole document for one page.
 pub def Layout.page (cfg : SiteConfig) (page : PageSpec) : Oak.Node Unit :=
     match page {
-        { title, root, body } =>
+        { title, root, body, book } =>
             let content : List (Oak.Node Unit) := List.map Oak.of_html body in
             Html.document_with [Html.lang "en"] List.empty List.empty
                 (head_nodes cfg title root)
-                [site_header cfg root,
-                    Html.main_ [Html.class_ ["content"]] content,
-                    site_footer],
+                (List.cons (site_header cfg root)
+                    (List.append (body_nodes cfg root content book) [site_footer])),
     }
 
 /// The page serialized to HTML text.
