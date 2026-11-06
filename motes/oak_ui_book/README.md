@@ -4,9 +4,25 @@ A storybook-style explorer for [`oak_ui`](../oak_ui/README.md): browse every
 component, tweak it with knobs, and inspect what it renders.
 
 ```bash
-scripts/build-oak-ui-book.sh            # inside `nix develop` (needs the wasm toolchain)
-python3 -m http.server -d target-monad/oak-ui-book
+cd motes/oak_ui_book
+monad script serve                      # build, then serve on http://127.0.0.1:8000/
+monad script serve -- --port 9000 --no-build
 ```
+
+The `serve` script (`scripts/serve.mo`) runs `scripts/build-oak-ui-book.sh`
+from the repo root. If `WASI_SDK_PATH` is unset, it runs the build inside
+`nix develop`. It then serves `target-monad/oak-ui-book` with moon's static
+handler.
+
+Options:
+- `--port N`: listen on port N (default 8000).
+- `--host H`: bind address (default 127.0.0.1).
+- `--out DIR`: build into and serve `DIR`.
+- `--no-build`: serve the existing output without rebuilding.
+
+moon is a script-only dependency (`[script-dependencies.serve]`), so the
+wasm bins never link it. Any static server also works:
+`scripts/build-oak-ui-book.sh && python3 -m http.server -d target-monad/oak-ui-book`.
 
 `index.html` is the live explorer (a wasm SPA on `oak_wasm`);
 `gallery/index.html` renders every story statically, light and dark side by

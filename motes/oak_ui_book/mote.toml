@@ -24,6 +24,19 @@ path = "src/main.mo"
 name = "book_static"
 path = "src/static.mo"
 
+# `monad script serve` (from this directory): build the explorer with
+# scripts/build-oak-ui-book.sh, then serve it with moon on 127.0.0.1:8000.
+# moon is a script-only dependency, so the wasm bins never link it.
+[[script]]
+name = "serve"
+path = "scripts/serve.mo"
+
+[script-dependencies.serve.moon]
+workspace = true
+
+[script-dependencies.serve.http]
+workspace = true
+
 [dependencies.init]
 workspace = true
 
