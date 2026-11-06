@@ -31,6 +31,20 @@
 # lag. (`bootstrap/nightly-floor.txt` still gates the CI side against the
 # TRUE latest nightly, which stays the stricter of the two.)
 #
+# Keep it fresh mechanically rather than by memory: scripts/bump-nightly-pin.sh
+# reads the newest `nightly-*` release from the releases API, fetches each
+# platform's `.sha256`, and rewrites both entries below (tag, URL and SRI) in
+# one atomic write. `--check` exits 1 when the pin is behind (no writes);
+# `--dry-run` prints the planned bump. The `Bump nightly pin` workflow runs it
+# on a schedule and opens a PR, and `devenv tasks run monad:bump-nightly` is
+# the local entry point. Run it whenever a nightly is published -- a pin that
+# lags the compiler-source surface is exactly how the 2026-11-06 nightly broke
+# (the prelude adopted a class-head `{u : Universe}` binder while this pin
+# still named a nightly published before that parser landed). A bump commit
+# changes only this file, and nightly.yml's push trigger ignores a push whose
+# only change is this file, so adopting a release cannot publish a fresh
+# nightly for the next bump to adopt.
+#
 # The asset is the bare release binary, fetched read-only into the store: the
 # Linux one is fully static and the Darwin one needs only libSystem
 # (nix/monad.nix links gc statically and `-static` on Linux for exactly this
@@ -44,18 +58,20 @@
 # the tree reads the same sources the interpreted rung would.
 #
 # `unsafeDiscardReferences`, on both derivations, is not hygiene relaxation
-# for its own sake: the LINUX asset embeds /nix/store paths as STRINGS --
-# measured on nightly-2026-11-01-d6238985: five, all static glibc's compiled-in
-# defaults (its gconv module dir, locale archive, ld.so.cache and getconf
-# paths; `-static` links the `.a` that carries them) -- and a fixed-output
-# download refuses content that scans as referencing store paths. The strings
-# are inert -- `ldd` reports "not a dynamic executable" and
-# scripts/nightly-release.sh's own check greps it clean of live dependencies --
-# so discarding the scan states the truth: the binary's runtime closure is
-# empty, and nothing in this flake should ever pull the asset's build-time
-# glibc in as a dependency. The Darwin asset scans clean (0 hits, measured on
-# the same nightly); the attribute is set for both anyway so the two platforms
-# differ only in their pin entries.
+# for its own sake: the LINUX asset embeds /nix/store paths as STRINGS -- static
+# glibc's compiled-in defaults (its gconv module dir, locale archive,
+# ld.so.cache and getconf paths; `-static` links the `.a` that carries them)
+# plus the libidn2 and xgcc libgcc paths its closure links, ten unique strings
+# on the current pin -- and a fixed-output download refuses content that scans
+# as referencing store paths. The strings are inert -- `ldd` reports "not a
+# dynamic executable" and scripts/nightly-release.sh's own check greps it clean
+# of live dependencies -- so discarding the scan states the truth: the
+# binary's runtime closure is empty, and nothing in this flake should ever pull
+# the asset's build-time glibc in as a dependency. The Darwin asset scans clean
+# (0 hits); the attribute is set for both anyway so the two platforms differ
+# only in their pin entries. (The counts are measured on the assets, which is
+# why scripts/bump-nightly-pin.sh's bump should be spot-checked with
+# `strings <asset> | grep -c /nix/store` if the asset's build changes.)
 #
 # The two derivations below spell the discard differently because THIS nix
 # (2.35, Determinate) reads the attribute from a different place depending on
@@ -100,16 +116,16 @@
       # version` says which nightly a release was hosted by.
       pins = {
         x86_64-linux = {
-          tag = "nightly-2026-11-01-d6238985";
-          url = "https://github.com/monad-lang/monad/releases/download/nightly-2026-11-01-d6238985/monad-nightly-x86_64-linux";
-          # curl -fsSL "<url>.sha256" -> 30d58afce10ca25929057dcff946290c10158bca07aa3974a90cd29073e13085
-          sha256 = "sha256-MNWK/OEMolkpBX3P+UYpDBAVi8oHqjl0qQzSkHPhMIU=";
+          tag = "nightly-2026-11-04-36ebc202";
+          url = "https://github.com/monad-lang/monad/releases/download/nightly-2026-11-04-36ebc202/monad-nightly-x86_64-linux";
+          # curl -fsSL "<url>.sha256" -> eb1084deb5e5aa6a990d6d261189adbba1131124cb5d38285c882806e097400d
+          sha256 = "sha256-6xCE3rXlqmqZDW0mEYmtu6ETESTLXTgoXIgoBuCXQA0=";
         };
         aarch64-darwin = {
-          tag = "nightly-2026-11-01-d6238985";
-          url = "https://github.com/monad-lang/monad/releases/download/nightly-2026-11-01-d6238985/monad-nightly-aarch64-darwin";
-          # curl -fsSL "<url>.sha256" -> f5467116dc17bbc7f61222b1c34015d3e54da6030c8109aba7bee83500c53f72
-          sha256 = "sha256-9UZxFtwXu8f2EiKxw0AV0+VNpgMMgQmrp77oNQDFP3I=";
+          tag = "nightly-2026-11-04-36ebc202";
+          url = "https://github.com/monad-lang/monad/releases/download/nightly-2026-11-04-36ebc202/monad-nightly-aarch64-darwin";
+          # curl -fsSL "<url>.sha256" -> a7658edeef04de1282b1c57d7fb43f1542697c394075a805f489d4631b69a24c
+          sha256 = "sha256-p2WO3u8E3hKCscV9f7Q/FUJpfDlAdagF9InUYxtpokw=";
         };
       };
 
