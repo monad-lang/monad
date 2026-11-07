@@ -510,7 +510,7 @@ pub def TuiApp.subscriptions (m : TuiModel) : Subs WeaverMsg :=
         IO.pure (WeaverMsg.tasks_polled ts)
     }) in
     if m.turn_pending
-    then Subs.batch [overlay, banner, todos, tasks, Subs.map WeaverMsg.live (Live.subscriptions store m.live)]
+    then Subs.batch [overlay, banner, todos, tasks, Subs.map WeaverMsg.live (Live.subscriptions store (WeaverShell.fg_path store) m.live)]
     else Subs.batch [overlay, banner, todos, tasks]
 
 /// A polled todo list. Only a change refreshes the rows (the panel's

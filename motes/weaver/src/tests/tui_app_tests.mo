@@ -15,7 +15,7 @@ use shuttle::session {Session}
 use weaver::commands {WeaverState, Effect, TranscriptChange, set_fatal, Commands.setting_rows}
 use weaver::error {WeaverError}
 use weaver::policy {Mode}
-use weaver::ui::live {LiveModel, LiveMsg, LiveDelta, Live.start, Live.status_text}
+use weaver::ui::live {LiveModel, LiveMsg, LiveDelta, LiveView, Live.start, Live.status_text, Live.last_line, Live.height, Live.rows, Live.thinking_height}
 use tui::component {Subs.pure_on}
 use tui::widgets::picker {Picker.count, Picker.selected}
 use weaver::ui::rows {DisplayRow, Rows.of_line, Rows.wrap, Rows.cap_bytes}
@@ -269,7 +269,7 @@ def test_polled_live_delta_appends_streamed_text : Bool :=
     let base0 : TuiModel := model_of Mode.manual in
     let l0 : LiveModel := Live.start Option.none in
     let base : TuiModel := { base0 with turn_pending := true, live := { l0 with text_seen := 4 } } in
-    let d : LiveDelta := { text := "he", thinking := "hm", text_seen := 6, thinking_seen := 2, activity := Option.some "read" } in
+    let d : LiveDelta := { text := "he", thinking := "hm", text_seen := 6, thinking_seen := 2, activity := Option.some "read", output := Option.none } in
     match TuiApp.update base (WeaverMsg.live (LiveMsg.delta (Option.some d))) {
         Pair.pair m2 _ =>
             let l : LiveModel := m2.live in
@@ -283,7 +283,7 @@ def test_polled_live_delta_appends_streamed_text : Bool :=
 
 #[test]
 def test_polled_live_delta_ignored_when_idle : Bool :=
-    let d : LiveDelta := { text := "late", thinking := "", text_seen := 4, thinking_seen := 0, activity := Option.none } in
+    let d : LiveDelta := { text := "late", thinking := "", text_seen := 4, thinking_seen := 0, activity := Option.none, output := Option.none } in
     match TuiApp.update (model_of Mode.manual) (WeaverMsg.live (LiveMsg.delta (Option.some d))) {
         Pair.pair m2 _ => String.is_empty m2.live.text
     }
@@ -1070,3 +1070,48 @@ def test_title_result_names_the_session : Bool :=
     let titled : TuiModel := model_of_step (model_of Mode.manual) (WeaverMsg.title_result (Option.some (Pair.pair "Fix the flake" "why"))) in
     let kept : TuiModel := model_of_step titled (WeaverMsg.title_result Option.none) in
     (match kept.state.name { Option.some n => String.beq n "Fix the flake", Option.none => false })
+
+// ── the waited-on command's output line ─────────────────────────────────
+
+#[test]
+def test_last_line_is_the_last_non_blank_line : Bool :=
+    Live.last_line "first\nsecond\n\n" == "second"
+        && Live.last_line "" == ""
+        && Live.last_line "\n  \n" == ""
+
+/// A progress bar redraws after `\r`; the latest drawing is the line.
+#[test]
+def test_last_line_takes_the_last_redraw : Bool :=
+    Live.last_line "10%\r50%\r90%" == "90%"
+
+#[test]
+def test_last_line_drops_escapes_and_controls : Bool :=
+    Live.last_line "\u{1b}[32mok\u{1b}[0m done\u{7}\n" == "ok done"
+
+def live_with (out : Option String) : LiveModel :=
+    let l : LiveModel := Live.start Option.none in
+    { l with activity := Option.some "shell", output := out }
+
+#[test]
+def test_status_names_ctrl_b_only_while_a_command_is_waited_on : Bool :=
+    String.contains (Live.status_text (live_with (Option.some ""))) "Ctrl+B background"
+        && Bool.not (String.contains (Live.status_text (live_with Option.none)) "Ctrl+B")
+
+#[test]
+def test_output_line_takes_one_row_under_the_spinner : Bool :=
+    let v : LiveView := { colors := false, width := 40, panel := 10 } in
+    Live.height v (live_with (Option.some "tick-2")) == Live.height v (live_with Option.none) + 1
+        && Live.height v (live_with (Option.some "")) == Live.height v (live_with Option.none)
+
+#[terminating]
+def thinking_lines (n : I64) : String :=
+    if n < 1 then "" else String.concat "thought\n" (thinking_lines (n - 1))
+
+/// The output line's row is taken only while it shows: without one the
+/// reasoning keeps its whole share, and with one the block still fits.
+#[test]
+def test_output_row_is_reserved_only_while_it_shows : Bool :=
+    let v : LiveView := { colors := false, width := 40, panel := 7 } in
+    let plain : LiveModel := { (live_with Option.none) with thinking := thinking_lines 20 } in
+    let shown : LiveModel := { (live_with (Option.some "tick")) with thinking := thinking_lines 20 } in
+    Live.thinking_height v plain == 3 && Live.height v shown < 8
