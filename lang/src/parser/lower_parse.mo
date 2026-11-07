@@ -59,6 +59,7 @@ use lib::types {Location, ParseSpan, field_access_chain, parse_span_is_unknown, 
 // whose generic dispatch can resolve to the wrong instance
 // (`codegen/util.mo` documents the live bug).
 use llvm::strmap {str_map_lookup}
+use lib::cfg {CfgEnv, CfgEnv.keep}
 use std::map {HashMap}
 
 /// What lowering carries down the tree.
@@ -402,6 +403,7 @@ def collect_decl_kind_rems (k : ParseDeclKind) (acc : List I64) : List I64 := ma
     ParseDeclKind.use_d _p _f _pub => acc,
     ParseDeclKind.open_d _p _f => acc,
     ParseDeclKind.with_d _p decls => collect_decl_rems decls acc,
+    ParseDeclKind.attrs_d _a inner => collect_decl_kind_rems inner.kind acc,
 }
 
 #[partial]
@@ -1069,6 +1071,9 @@ def lower_parse_decl_kind (ctx : ParseLowerCtx) (k : ParseDeclKind) : Decl :=
         // `Attribute`, and an `Attribute` contains no `ParseTerm` to
         // de-Bruijn.
         ParseDeclKind.mote_d attr => Decl.mote_d attr,
+        // Unreachable after `cfg_filter_parse_decls`; lowered as its
+        // wrappee should a caller skip the filter.
+        ParseDeclKind.attrs_d _attrs inner => lower_parse_decl ctx inner,
     }
 
 /// `with Dotted.Name { ... }`'s name prefixing, applied here rather
@@ -1123,6 +1128,38 @@ def prefix_npath (prefix : Identifier) (np : NamePath) : NamePath :=
     NamePath.mk (List.cons
         (Identifier.id (String.concat (show_identifier prefix) (String.concat "." (show_name_path np))))
         List.empty)
+
+/// Drop the declarations whose `#[cfg]` is false under `env`, and unwrap
+/// the parser-internal `attrs_d` (attributes on a `use`/`open`) to its
+/// wrappee, keeping the wrapper's span. Recurses into `with` blocks.
+#[partial]
+pub def cfg_filter_parse_decls (env : CfgEnv) (ds : List ParseDecl) : List ParseDecl :=
+    match ds {
+        List.empty => List.empty,
+        List.cons d rest =>
+            match cfg_filter_one env d {
+                Option.some kept => List.cons kept (cfg_filter_parse_decls env rest),
+                Option.none => cfg_filter_parse_decls env rest,
+            },
+    }
+
+#[partial]
+def cfg_filter_one (env : CfgEnv) (d : ParseDecl) : Option ParseDecl :=
+    match d.kind {
+        ParseDeclKind.attrs_d attrs inner =>
+            if CfgEnv.keep env attrs then Option.some { inner with span := d.span } else Option.none,
+        ParseDeclKind.def_d pd => cfg_keep_if (CfgEnv.keep env pd.attrs) d,
+        ParseDeclKind.def_macro_d pd => cfg_keep_if (CfgEnv.keep env pd.attrs) d,
+        ParseDeclKind.inductive_d pi => cfg_keep_if (CfgEnv.keep env pi.attrs) d,
+        ParseDeclKind.struct_d ps => cfg_keep_if (CfgEnv.keep env ps.attrs) d,
+        ParseDeclKind.decl_gen_d _n _p _ds attrs => cfg_keep_if (CfgEnv.keep env attrs) d,
+        ParseDeclKind.with_d prefix inner =>
+            Option.some { d with kind := ParseDeclKind.with_d prefix (cfg_filter_parse_decls env inner) },
+        _ => Option.some d,
+    }
+
+def cfg_keep_if (keep : Bool) (d : ParseDecl) : Option ParseDecl :=
+    if keep then Option.some d else Option.none
 
 /// The single entry point. The grammar's three top-level parsers call
 /// this with an empty context; everything downstream keeps seeing `Decl`.

@@ -11,7 +11,7 @@ use lang::types {
     affine, app, char, char_to_string, concrete, destructured, f32, f64, flt, group,
     has_attr, i64, id_eq, ident, if_, linear, list_reverse, many, match_, named, num, package_private, parse_param_many, parse_param_with_mult,
     pd_at, pd_class_d, pd_decl_gen_d, pd_def_d, pd_def_macro_d, pd_inductive_d,
-    pd_infix_d, pd_instance_d, pd_macro_call_d, pd_mote_d, pd_open_d,
+    pd_attrs_d, pd_infix_d, pd_instance_d, pd_macro_call_d, pd_mote_d, pd_open_d,
     dict_hint, do_,
     pd_scoped_open_d, pd_struct_d, pd_use_d, pd_with_d, pi, plain, priv_, pt_app, pt_at, pt_dict_hint, pt_do,
     pt_from, pt_hole, pt_lam, pt_lit, pt_pi, pt_quote_, pt_sort, pt_var,
@@ -26,7 +26,7 @@ use std::list {List.intercalate, List.length}
 use std::map {HashMap}
 use llvm::strmap {str_map_empty, str_map_insert, str_map_lookup}
 use lang::parser::lower_parse {
-    ParseLowerCtx, collect_decl_rems, collect_decl_spans, lower_ctx_bare,
+    ParseLowerCtx, cfg_filter_parse_decls, collect_decl_rems, collect_decl_spans, lower_ctx_bare,
     lower_ctx_bind_all, lower_ctx_locating, lower_parse_decl, lower_parse_decls,
     lower_parse_term, name_ref_to_string,
 }
@@ -49,6 +49,7 @@ use lib::parser::position {consume_span, location_of_remaining, new_span, resolv
 use lib::parser::identifier {identifier}
 use lib::parser::string {char_literal, raw_string_parse, string_parse}
 use lib::parser::diagnostic {render_parse_error}
+use lib::cfg {CfgEnv, CfgEnv.empty}
 open parsec.core {
     ParseResult, custom, fail, is_empty, mk, success, tag,
 }
@@ -577,9 +578,11 @@ def attr_arg_group_items (input : String) (acc : List AttrArg) : ParseResult (Li
 
 #[partial]
 def attr_arg_group_sep (input : String) (acc : List AttrArg) : ParseResult (List AttrArg) :=
+    // The comma is optional, as in Rust's `opt(char(','))`:
+    // `[not {feature := "x"}]` is two whitespace-separated items.
     match tag "," input {
         success rem _ => attr_arg_group_items (skip_spaces rem) acc,
-        fail _ => attr_arg_group_close input acc
+        fail _ => attr_arg_group_items input acc
     }
 
 #[partial]
@@ -629,7 +632,7 @@ def attr_arg_named_value (r : ParseResult (List AttrArg)) (name : Identifier) : 
 def attr_arg_named_sep (input : String) (acc : List AttrArg) : ParseResult (List AttrArg) :=
     match tag "," input {
         success rem _ => attr_arg_named_items (skip_spaces rem) acc,
-        fail _ => attr_arg_named_close input acc
+        fail _ => attr_arg_named_items input acc
     }
 
 /// A `{name := value, ...}` block FLATTENS its entries onto the enclosing
@@ -1122,6 +1125,30 @@ def open_build (path : NamePath) (filter : OpenFilter) (maybe_decl : Option Pars
     match maybe_decl {
         Option.some decl => pd_scoped_open_d path filter decl,
         Option.none => pd_open_d path filter
+    }
+
+/// `#[...]`-attributed `use`/`open`. Neither carries an attribute slot,
+/// so the attributes ride on the parser-internal `attrs_d` wrapper until
+/// `cfg_filter_parse_decls` resolves it.
+#[partial]
+def attributed_use_open_parser (input : String) : ParseResult ParseDecl :=
+    match opt_attributes input {
+        success rem attrs => attributed_use_open_nonempty attrs rem input,
+        fail e => fail e
+    }
+
+#[partial]
+def attributed_use_open_nonempty (attrs : List Attribute) (rem : String) (input : String) : ParseResult ParseDecl :=
+    match attrs {
+        List.empty => fail (ParseError.custom "expected attributes" input),
+        List.cons a more => attributed_use_open_body (List.cons a more) (alt_fold [use_parser, open_parser] rem),
+    }
+
+#[partial]
+def attributed_use_open_body (attrs : List Attribute) (r : ParseResult ParseDecl) : ParseResult ParseDecl :=
+    match r {
+        success rem d => success rem (pd_attrs_d attrs d),
+        fail e => fail e
     }
 
 // infix (op) := path
@@ -4483,7 +4510,8 @@ def macro_call_decl_args (input : String) (name : Identifier) (acc : List ParseT
 #[partial]
 def decl_parsers : List (String -> ParseResult ParseDecl) :=
     [mote_attr_parser, use_parser, open_parser, infix_parser, defmacro_parser, def_parser,
-        struct_parser, type_parser, class_parser, instance_parser, with_parser, macro_call_decl_parser]
+        struct_parser, type_parser, class_parser, instance_parser, with_parser, attributed_use_open_parser,
+        macro_call_decl_parser]
 
 /// `input` is the exact text the declaration starts at -- `decls_skip`
 /// has already skipped the whitespace and docstrings ahead of it -- so
@@ -4527,7 +4555,7 @@ def decl_fail_to_unknown (r : ParseResult ParseDecl) (input : String) : ParseRes
 #[partial]
 def lower_decls_result (r : ParseResult (List ParseDecl)) : ParseResult (List Decl) :=
     match r {
-        success rem ds => success rem (lower_parse_decls lower_ctx_bare ds),
+        success rem ds => success rem (lower_parse_decls lower_ctx_bare (cfg_filter_parse_decls CfgEnv.empty ds)),
         fail e => fail e,
     }
 
@@ -4556,7 +4584,20 @@ pub def decls_parser (input : String) : ParseResult (List Decl) :=
 
 #[partial]
 pub def decls_parser_located (input : String) : ParseResult (List Decl) :=
-    locate_and_lower input (decls_skip (skip_docstrings (skip_spaces input)) List.empty)
+    decls_parser_located_cfg CfgEnv.empty input
+
+/// `decls_parser_located` under a feature set: declarations whose
+/// `#[cfg]` is false under `env` are dropped before lowering.
+#[partial]
+pub def decls_parser_located_cfg (env : CfgEnv) (input : String) : ParseResult (List Decl) :=
+    locate_and_lower input (cfg_filter_result env (decls_skip (skip_docstrings (skip_spaces input)) List.empty))
+
+#[partial]
+def cfg_filter_result (env : CfgEnv) (r : ParseResult (List ParseDecl)) : ParseResult (List ParseDecl) :=
+    match r {
+        success rem ds => success rem (cfg_filter_parse_decls env ds),
+        fail e => fail e,
+    }
 
 #[partial]
 def locate_and_lower (whole_file : String) (r : ParseResult (List ParseDecl)) : ParseResult (List Decl) :=
@@ -4606,7 +4647,7 @@ pub struct LocatedDecls {
 /// of the contract and the test that pins it).
 #[partial]
 pub def decls_parser_located_with_ranges (input : String) : ParseResult LocatedDecls :=
-    located_decls_with_ranges input (decls_skip (skip_docstrings (skip_spaces input)) List.empty)
+    located_decls_with_ranges input (cfg_filter_result CfgEnv.empty (decls_skip (skip_docstrings (skip_spaces input)) List.empty))
 
 #[partial]
 def located_decls_with_ranges (whole_file : String) (r : ParseResult (List ParseDecl)) : ParseResult LocatedDecls :=

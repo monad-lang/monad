@@ -1164,6 +1164,11 @@ pub type ParseDeclKind {
     /// variant's TAG is its declaration order and appending is what
     /// guarantees no existing tag moves.
     mote_d (attr : Attribute),
+    /// `#[...]` attributes ahead of a `use`/`open`, which carry no
+    /// attribute slot of their own. Parser-internal: every entry point
+    /// runs `cfg_filter_parse_decls` (`lang/src/parser/lower_parse.mo`),
+    /// which drops it or unwraps it to `decl` before lowering.
+    attrs_d (attrs : List Attribute) (decl : ParseDecl),
 }
 
 /// Build a `ParseDecl` whose position has not been recorded yet.
@@ -1238,6 +1243,10 @@ def pd_with_d (prefix : Identifier) (decl_list : List ParseDecl) : ParseDecl :=
 #[partial]
 def pd_mote_d (attr : Attribute) : ParseDecl :=
     pd_ (ParseDeclKind.mote_d attr)
+
+#[partial]
+def pd_attrs_d (attrs : List Attribute) (inner : ParseDecl) : ParseDecl :=
+    pd_ (ParseDeclKind.attrs_d attrs inner)
 
 pub type ParseTermKind {
     var (name : NameRef),
