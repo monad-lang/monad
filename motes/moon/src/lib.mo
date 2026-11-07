@@ -7,6 +7,7 @@
 
 pub use lib::server {
     Server.serve, Server.serve_result, Server.serve_concurrent, Server.static,
+    Server.serve_static,
     Server.handle_connection, Server.serve_connection,
     Server.max_keep_alive_requests, Server.max_header_bytes, Server.max_body_bytes,
     ServerConfig, ServerConfig.default, ServerConfig.on, ServerConfig.with_host,

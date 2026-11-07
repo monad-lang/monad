@@ -59,7 +59,7 @@ use http::wire {
 use lib::handler {Handler.try}
 use lib::handler_t {HandlerT, HandlerT.run_io, HttpError, HttpError.to_response}
 use http::body_io {Body.write_chunked}
-use lib::static_files {Static.handler, StaticConfig.default}
+use lib::static_files {Static.handler, StaticConfig, StaticConfig.default}
 
 // ── socket bytes ────────────────────────────────────────────────────────
 
@@ -589,6 +589,45 @@ pub def Server.static (root : String) (req : Request) : IO Response := do {
   match r {
     Result.ok res => return res,
     Result.err _ => return Server.internal_error_response
+  }
+}
+
+/// Serve `cfg.root` with one fiber per connection, on `host:port`: the
+/// preview server behind `moon static`.
+///
+/// `Server.run` is sequential, so a browser's parallel requests wait out the
+/// first connection's keep-alive; each accepted socket gets its own fiber
+/// with bounded idle/write timeouts instead. A local preview does not cap
+/// in-flight connections; Ctrl-C stops it (there is no signal native to
+/// catch, and the accept loop never returns on its own).
+#[terminating]
+def Server.serve_static_loop (handler : Request -> IO Response) (listener : FdStream) : IO (Result String Unit) := do {
+  let accept_res <- IO.tcp_accept listener;
+  match accept_res {
+    Result.err e => return (Result.err e.message),
+    Result.ok sock => do {
+      let _ <- forkIO (fn (_ : Unit) => Server.serve_static_socket handler sock);
+      Server.serve_static_loop handler listener
+    }
+  }
+}
+
+/// One connection: bounded idle and write waits, then the ordinary
+/// keep-alive loop.
+def Server.serve_static_socket (handler : Request -> IO Response) (sock : FdStream) : IO Unit := do {
+  let _ <- FdStream.set_timeout sock 15000 30000;
+  Server.serve_connection handler sock List.empty 1
+}
+
+/// Print where the preview listens, then serve until Ctrl-C.
+pub def Server.serve_static (cfg : StaticConfig) (host : String) (port : U16) : IO (Result String Unit) := do {
+  let listen_res <- IO.tcp_listen_on host port;
+  match listen_res {
+    Result.err e => return (Result.err e.message),
+    Result.ok listener => do {
+      IO.println (String.concat "moon static: serving " (String.concat cfg.root (String.concat " on http://" (String.concat host (String.concat ":" (String.concat (U16.to_string port) "/  (Ctrl-C to stop)"))))));
+      Server.serve_static_loop (Handler.try Server.internal_error_response (Static.handler cfg)) listener
+    }
   }
 }
 

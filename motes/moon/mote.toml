@@ -17,6 +17,25 @@ workspace = true
 [dependencies.crypto]
 workspace = true
 
+# The `moon` bin (`moon static <dir>`, the local preview server) parses its
+# arguments with clap. The library does not.
+#
+# TODO(per-bin deps): the dependency belongs to the BIN, not the mote, so
+# `monad test motes/moon` and every library consumer stop resolving and
+# loading clap. Until per-bin dependencies (or optional dependencies) are
+# implemented, this feature records which target needs it; see
+# plans/packaging/optional-dependencies-and-features.md.
+[dependencies.clap]
+workspace = true
+
+[features]
+cli = []
+
+[[bin]]
+name = "moon"
+path = "src/main.mo"
+features = ["cli"]
+
 # Affine-by-default migration exception (measured 2026-10-22).
 # Delete this table when the mote reaches zero violations; the default
 # (no table) is `mode = "error"`. See plans/type-system/quantitative-types.md.
