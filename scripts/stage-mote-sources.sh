@@ -60,7 +60,7 @@ neutral="$out_dir/monad-src.tar.gz"
 # for the archive and for `--workspace`; it is written this way so the list
 # can be read against the manifests.
 member_manifests=(init/mote.toml std/mote.toml llvm/mote.toml runtime/mote.toml)
-members=(init std llvm runtime)
+members=(init std sys llvm runtime)
 
 # Not staged: `lang`, `codegen`, `cli` and `eval` are compiler internals.
 # They reach consumers as the toolchain binary, not as sources to compile, so

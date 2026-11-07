@@ -190,7 +190,7 @@ write_manifest "$nodeps" no
 # independent of the tarball's own packaging, which `check-monadup.sh` covers.
 toolchain="$work/nested/toolchain"
 mkdir -p "$toolchain"
-for m in init std llvm runtime; do
+for m in init std sys llvm runtime; do
   cp -R "$root/$m" "$toolchain/$m"
 done
 cat > "$toolchain/mote.toml" <<'TOML'

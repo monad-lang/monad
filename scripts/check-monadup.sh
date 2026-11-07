@@ -45,7 +45,7 @@ ok "sources asset carries the four motes' manifests, sources and runtime.c"
 root_manifest="$(tar -xzOf "$asset" mote.toml)"
 grep -qF 'members = ["init", "std", "llvm", "runtime"]' <<<"$root_manifest" \
   || die "sources asset's root mote.toml does not declare the four motes as members"
-for m in init std llvm runtime; do
+for m in init std sys llvm runtime; do
   grep -qF "[workspace.dependencies.$m]" <<<"$root_manifest" \
     || die "sources asset's root mote.toml does not declare [workspace.dependencies.$m]; the staged member inherits it"
 done
@@ -265,7 +265,7 @@ for platform in x86_64-linux aarch64-linux riscv64-linux aarch64-darwin; do
   vdir="$home/downloads/${tag}"
   [ -x "$vdir/monad-nightly-${platform}" ] || die "no executable ${platform} binary in ${vdir}"
   [ "$(cat "$vdir/commit.txt")" = deadbeef ] || die "commit.txt was not installed for ${platform}"
-  for m in init std llvm runtime; do
+  for m in init std sys llvm runtime; do
     [ -d "$vdir/$m" ] || die "the sources asset was not unpacked for ${platform}: ${vdir}/${m} is missing"
   done
   [ -f "$vdir/mote.toml" ] || die "the generated root mote.toml is missing from ${vdir}"
@@ -357,7 +357,7 @@ MONAD_HOME="$home_old" MONADUP_API_URL="file://${fix_old}/releases" \
   "$MONADUP_BIN" install > "$work/reinstall.log" 2>&1 \
   || { cat "$work/reinstall.log" >&2; die "re-running install failed"; }
 grep -q "already installed" "$work/reinstall.log" || die "re-running install did not take the already-installed path"
-for m in init std llvm runtime; do [ -d "$vdir_old/$m" ] || die "re-running install did not add ${m}/"; done
+for m in init std sys llvm runtime; do [ -d "$vdir_old/$m" ] || die "re-running install did not add ${m}/"; done
 ok "re-running install repairs a binary-only version directory"
 
 # 4e-bis. Checksum verification: a published `.sha256` is enforced.

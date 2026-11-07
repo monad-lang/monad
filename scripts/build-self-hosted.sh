@@ -55,7 +55,7 @@
 # The three callers -- check-monad-tests.sh, bootstrap-compile.sh, and
 # debug-oracle.sh -- each had their own copy of this check with a narrower
 # or wider input set. This is the single definition, at the widest coverage:
-# every tree the compiler is built FROM (init, std, lang, cli, llvm, runtime,
+# every tree the compiler is built FROM (init, std, sys, lang, cli, llvm, runtime,
 # build, eval, and the motes it imports -- motes/clap, which cli/src/main.mo parses
 # its own argv with, motes/fmt, which backs `monad fmt`, motes/lsp,
 # motes/toolkit, motes/json and motes/log, which reach the binary through
@@ -118,7 +118,7 @@ out="$(cd -- "$out" && pwd)"
 if [ ! -x "$out/monad" ]; then
   needs_build=1
 else
-  newer="$(find init std lang codegen cli llvm runtime build eval \
+  newer="$(find init std sys lang codegen cli llvm runtime build eval \
     motes/clap motes/fmt motes/json motes/log motes/lsp motes/parsec motes/toml motes/toolkit \
     \( -name '*.mo' -o -name '*.c' -o -name '*.h' -o -name mote.toml \) \
     -newer "$out/monad" -print -quit)" || {

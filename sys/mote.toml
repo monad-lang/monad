@@ -1,0 +1,16 @@
+# The OS floor: every `#[native]` that reaches the operating system.
+#
+# Top-level, like init/ and std/, because std, build and monadup depend on it
+# and none of them may depend on motes/. It depends on `init` only -- all of
+# its pure logic (errno decoding, signal tables, the directory walk) lives
+# above the few flag-multiplexed natives in src/raw.mo.
+[mote]
+name = "sys"
+version = "0.1.0"
+edition = "2026"
+
+[lib]
+path = "src/lib.mo"
+
+[dependencies.init]
+workspace = true

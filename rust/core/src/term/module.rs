@@ -3635,6 +3635,17 @@ fn std_dir() -> std::path::PathBuf {
     .unwrap_or_else(|| std::path::PathBuf::from("std").join("src"))
 }
 
+/// Sibling of `std_dir()` for the `sys` mote: the OS floor `std` is built
+/// on. Same derivation, so a relocated toolchain keeps the three side by
+/// side.
+fn sys_dir() -> std::path::PathBuf {
+  stdlib_dir()
+    .parent()
+    .and_then(|p| p.parent())
+    .map(|p| p.join("sys").join("src"))
+    .unwrap_or_else(|| std::path::PathBuf::from("sys").join("src"))
+}
+
 /// `(module path, source text)` pairs for the always-loaded `init`+`std`
 /// packages, in dependency order (`prelude`/`init.id`/`init.io`/
 /// `init.number` have no deps; `init.math` depends on `init.number`;

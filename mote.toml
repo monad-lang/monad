@@ -26,6 +26,7 @@
 members = [
   "init",
   "std",
+  "sys",
   "lang",
   "codegen",
   "cli",
@@ -158,6 +159,9 @@ path = "motes/shuttle"
 
 [workspace.dependencies.std]
 path = "std"
+
+[workspace.dependencies.sys]
+path = "sys"
 
 [workspace.dependencies.toml]
 path = "motes/toml"

@@ -268,6 +268,7 @@
               [
                 "init"
                 "std"
+                "sys"
                 "lang"
                 "codegen"
                 "cli"
