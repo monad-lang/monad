@@ -9,7 +9,7 @@
 use moose::client {
   Client.close, Client.connect, Client.connect_with_timeout,
   Client.connect_with_timeout_io, Client.get,
-  Client.get_timeout, Client.host_port, Client.read_response,
+  Client.get_timeout, Client.host_port, Client.prepare_request, Client.read_response,
   Client.redirect_request, Client.stream_response, Client.stream_response_timeout,
   Client.write_request, Connection,
 }
@@ -20,7 +20,7 @@ use http::types {
   Method, Request, Response, Status.found, Status.moved_permanently, Status.ok,
   Status.permanent_redirect, Status.see_other, Status.temporary_redirect, Uri,
 }
-use http::wire {Wire.format_response, Wire.parse_request}
+use http::wire {Wire.format_request, Wire.format_response, Wire.parse_request}
 use http::body {Body.from_text, Body.to_bytes_pure}
 use http::uri {Uri.parse, Uri.resolve}
 
@@ -160,6 +160,22 @@ def server_check_host_send (sock : FdStream) (read_res : Result String (List U8)
           } in
           server_write_close sock (Response.ok_text body)
       }
+  }
+
+/// Server reads the whole request and echoes its RAW bytes back as the
+/// response body text -- the one server helper that pins what actually
+/// went on the wire rather than what `Wire.parse_request` made of it.
+/// The parser accepts both request-target forms, which is exactly how an
+/// absolute-form client slipped through every roundtrip test here.
+def server_read_echo_raw (sock : FdStream) : IO Unit := do {
+  let read_res <- tcp_read_bytes sock 8192;
+  server_echo_raw_send sock read_res
+}
+
+def server_echo_raw_send (sock : FdStream) (read_res : Result String (List U8)) : IO Unit :=
+  match read_res {
+    Result.err _ => Stream.close sock,
+    Result.ok req_bytes => server_write_close sock (Response.ok_text (String.from_list req_bytes))
   }
 
 /// Build a 302 redirect response pointing to the given port.
@@ -420,6 +436,96 @@ def test_get_with_headers : IO Bool := do {
               let resp : Result String Response <- Client.read_response conn.socket Method.GET;
               Client.close conn;
               let want := String.concat "host:127.0.0.1:" (U16.to_string port);
+              return (resp_ok resp Status.ok want)
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
+// ── request-target form ────────────────────────────────────────────────
+//
+// A client talking directly to an origin must send the origin-form
+// request target (`GET /p?q=1 HTTP/1.1`, RFC 9112 §3.2.1); absolute-form
+// (`GET https://h/p?q=1 HTTP/1.1`, §3.2.2) is for proxies, and servers
+// that do not route it answer 404 — RFC 9112's "MUST accept" on their
+// side notwithstanding. `Client.prepare_request` is where moose rewrites
+// the URI, after `Host` is computed from the full one, and every send
+// path serialises through it — so these pin its output, and the socket
+// test below pins that those are the bytes that actually leave.
+
+/// A GET for any `url`, with no headers and no body.
+def target_req (url : String) : Request :=
+  { method := Method.GET, uri := uri_of url, headers := Headers.empty, version := HttpVersion.http1_1, body := Body.empty }
+
+/// The wire text moose sends for `req`: `prepare_request`, then the same
+/// `Wire.format_request` every send path hands its bytes to.
+def prepared_text (req : Request) : String :=
+  match Wire.format_request (Client.prepare_request req) {
+    Result.ok bytes => String.from_list bytes,
+    Result.err _ => "SERIALIZE-FAILED"
+  }
+
+/// A scheme-bearing URI renders its path and query in the request line —
+/// never the absolute form — and `Host` names the authority.
+#[test]
+def test_prepare_request_origin_form : Bool :=
+  String.beq (prepared_text (target_req "https://example.com/p?q=1")) "GET /p?q=1 HTTP/1.1\r\ncontent-length: 0\r\nhost: example.com\r\n\r\n"
+
+/// `https://example.com` parses with path `""`; origin-form never has an
+/// empty target, so it defaults to `/`.
+#[test]
+def test_prepare_request_empty_path_becomes_slash : Bool :=
+  String.beq (prepared_text (target_req "https://example.com")) "GET / HTTP/1.1\r\ncontent-length: 0\r\nhost: example.com\r\n\r\n"
+
+/// A hand-built rootless path (`p`, not `/p` — `Uri.parse` never makes
+/// one) is not an absolute-path, so it gains the separator: the same
+/// normalization `Uri.format` applied for the absolute form.
+#[test]
+def test_prepare_request_rootless_path_gains_slash : Bool :=
+  let u : Uri := Uri.uri "https" Option.none "example.com" Option.none "p" Option.none Option.none in
+  let req : Request :=
+    { method := Method.GET, uri := u, headers := Headers.empty, version := HttpVersion.http1_1, body := Body.empty } in
+  String.beq (prepared_text req) "GET /p HTTP/1.1\r\ncontent-length: 0\r\nhost: example.com\r\n\r\n"
+
+/// A non-default port stays in `Host` and out of the target.
+#[test]
+def test_prepare_request_non_default_port_stays_in_host : Bool :=
+  String.beq (prepared_text (target_req "https://example.com:8443/p")) "GET /p HTTP/1.1\r\ncontent-length: 0\r\nhost: example.com:8443\r\n\r\n"
+
+/// Userinfo and fragment never appear in the target (RFC 9110 §4.2.4,
+/// §4.2.5): the request line names the path and the query, nothing else.
+#[test]
+def test_prepare_request_drops_userinfo_and_fragment : Bool :=
+  String.beq (prepared_text (target_req "https://user:pw@example.com/p#f")) "GET /p HTTP/1.1\r\ncontent-length: 0\r\nhost: example.com\r\n\r\n"
+
+/// End to end: the bytes that leave the socket are origin-form, with the
+/// port-qualified `Host` and no scheme, userinfo or fragment anywhere in
+/// the raw request.
+#[test]
+def test_send_writes_origin_form_target : IO Bool := do {
+  let listen_res <- IO.tcp_listen 0u16;
+  match listen_res {
+    Result.err _ => return false,
+    Result.ok listener => do {
+      let port <- IO.tcp_local_port listener;
+      let url : String := String.concat (String.concat "http://127.0.0.1:" (U16.to_string port)) "/path?q=1";
+      let conn_res : Result String Connection <- Client.connect url;
+      match conn_res {
+        Result.err _ => do { Stream.close listener; return false },
+        Result.ok conn => do {
+          let accept_res <- IO.tcp_accept listener;
+          Stream.close listener;
+          match accept_res {
+            Result.err _ => do { Client.close conn; return false },
+            Result.ok sock => do {
+              Client.write_request conn (target_req url);
+              server_read_echo_raw sock;
+              let resp : Result String Response <- Client.read_response conn.socket Method.GET;
+              Client.close conn;
+              let want : String := String.concat (String.concat "GET /path?q=1 HTTP/1.1\r\ncontent-length: 0\r\nhost: 127.0.0.1:" (U16.to_string port)) "\r\n\r\n";
               return (resp_ok resp Status.ok want)
             }
           }

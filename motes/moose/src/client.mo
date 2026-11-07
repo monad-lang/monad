@@ -208,10 +208,44 @@ def Client.host_header_value (u : Uri) : String :=
       else String.concat u.host (String.concat ":" (U16.to_string p))
   }
 
-/// Ensure the `Host` header is set on the request before sending.
+/// The URI rewritten to the request-target form an origin expects
+/// (RFC 9112 §3.2.1): an empty scheme, so `Wire.request_target` takes its
+/// origin-form branch, no userinfo and no fragment (neither belongs in a
+/// target, RFC 9110 §4.2.4 and §4.2.5), and a path that is an
+/// absolute-path (RFC 9110 §4.2): `https://example.com` parses with
+/// path `""` but origin-form always names a resource, so an empty path
+/// defaults to `/`, and a rootless one -- `Uri.parse` never makes one, a
+/// hand-built `Uri.uri` can -- gains the separator, the same
+/// normalization `Uri.format`'s path join applies to the absolute form.
+def Client.origin_form (u : Uri) : Uri :=
+  match u {
+    Uri.uri _ _ host port path query _ =>
+      let p : String :=
+        if String.is_empty path then "/"
+        else if Bool.not (String.starts_with "/" path) then String.concat "/" path
+        else path
+      in
+      Uri.uri "" Option.none host port p query Option.none
+  }
+
+/// Ensure the `Host` header is set and the request line carries an
+/// origin-form target before sending.
+///
+/// `moose` always connects to the origin -- it has no proxy support -- so
+/// the request line must be `GET /p?q=1 HTTP/1.1` (origin-form, RFC 9112
+/// §3.2.1), never `GET https://h/p?q=1 HTTP/1.1` (absolute-form, §3.2.2,
+/// the proxy form). RFC 9112 asks servers to accept absolute-form, but
+/// many route only origin-form and answer 404 for the rest. `Host` is
+/// computed BEFORE the rewrite: the default-port elision needs the
+/// scheme. Only the message to serialise changes -- connection setup
+/// (host, port, TLS choice) and redirect resolution keep reading the
+/// original `req.uri`, and `prepare_request`'s result never outlives the
+/// `Wire.format_request` it feeds.
 def Client.prepare_request (req : Request) : Request :=
   let host := Client.host_header_value req.uri in
-  { req with headers := Headers.set "Host" host req.headers }
+  { req with
+      uri := Client.origin_form req.uri,
+      headers := Headers.set "Host" host req.headers }
 
 // ── reading a response ──────────────────────────────────────────────────
 //
