@@ -69,15 +69,10 @@ pub def sigma_snd (A : Type) (B : A -> Type) (p : Sigma A B) : B (Sigma.fst p) :
         Sigma.dpair a b => b,
     }
 
-/// The implicit-argument spelling. `A` and `B` are inferred from `p`'s
-/// `Sigma A B` type; the dependent arm then checks exactly as above. Kept in
-/// `proofs/` because the Rust host cannot check the refined arm (see
-/// `init/src/prelude.mo`'s `Sigma.fst` note), not because the self-hosted
-/// checker cannot.
-pub def Sigma.snd {A : Type} {B : A -> Type} (p : Sigma A B) : B (Sigma.fst p) :=
-    match p {
-        Sigma.dpair a b => b,
-    }
+/// The implicit-argument spelling lives in the PRELUDE (`Sigma.snd`, next to
+/// `Sigma.fst`): both compilers check the refined arm now, so it belongs
+/// with the type it projects. `sigma_snd` above stays here as the explicit
+/// spelling the `dependent_runtime.mo` pins and this file's prose refer to.
 
 /// A case split over `Sigma` into an arbitrary family: the arm receives the
 /// constructor under the refinement, and the result is `C p`.

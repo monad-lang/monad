@@ -442,21 +442,21 @@ pub def Exists (A : Type) (P : A -> Prop) : Prop := Sigma A P
 
 /// First projection. Non-dependent, so ordinary match typing suffices.
 ///
-/// Constructing `Sigma.dpair a b` requires `B a` to reduce, i.e. conversion
-/// checking, which the self-hosted checker has. The Rust host can now TYPE a
-/// generic `Sigma A B` application (its kind's Pi binders carry names), but
-/// it still does not construct one; construction is covered by source-string
-/// tests in `lang/src/tests/typecheck_examples_tests.mo`.
-///
-/// The second projection `Sigma.snd (p : Sigma A B) : B (Sigma.fst p)` is
-/// self-hosted-only and lives in `proofs/src/dependent.mo` (`sigma_snd`, with
-/// the implicit form `Sigma.snd`). Checking it needs the arm's expected type
-/// to see the scrutinee refined to `Sigma.dpair a b`; the Rust host does not
-/// implement that refinement, so putting it in `init/` would break the host
-/// check (measured: `monad-rs check init/src/prelude.mo` rejects it). This is
-/// a recorded parity gap, not a prelude concern.
+/// The second projection is the dependent one: `snd`'s declared field type
+/// is `B fst`, so checking `match p { Sigma.dpair a b => b }` needs the arm's
+/// expected type to see the scrutinee refined to `Sigma.dpair a b`, and
+/// `Sigma.fst (Sigma.dpair a b)` reduced to `a`. Both compilers do that now:
+/// the self-hosted checker's dependent-match rule, and the Rust host's
+/// arm refinement plus a narrow beta/delta/iota normalizer
+/// (`core_check::whnf_core`).
 pub def Sigma.fst {A : Type} {B : A -> Type} (p : Sigma A B) : A :=
     match p { Sigma.dpair a _ => a }
+
+/// Second projection. The arm's expected type `B (Sigma.fst p)` is refined
+/// with `p := Sigma.dpair a b`; `Sigma.fst`'s own body then reduces to `a`,
+/// so the field `b : B a` checks.
+pub def Sigma.snd {A : Type} {B : A -> Type} (p : Sigma A B) : B (Sigma.fst p) :=
+    match p { Sigma.dpair a b => b }
 
 open Result {err, ok}
 

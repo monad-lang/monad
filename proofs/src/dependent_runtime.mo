@@ -12,8 +12,11 @@
 // (`Sigma.snd (Sigma.dpair 1 2)`); a type APPLICATION as a value
 // (`List I64`) and a type-level lambda whose body applies a type
 // constructor remain inexpressible.
+//
+// `Sigma.snd` is ambient (the prelude defines it next to `Sigma.fst`), so
+// only the explicit `sigma_snd` theorem is imported here.
 
-use lib::dependent {Sigma.snd, sigma_snd}
+use lib::dependent {sigma_snd}
 
 /// The minimal polymorphic identity; its first argument is type-level only.
 pub def idT (T : Type) (x : T) : T := x
