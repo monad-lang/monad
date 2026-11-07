@@ -381,22 +381,24 @@ jobs:
             -c "$PWD/target-monad/ci-self-compile/monad" test \
                  motes/http motes/moon motes/jsgen motes/web_wasm motes/xml_html \
                  motes/oak_wasm motes/oak motes/web_event motes/oak_ui motes/oak_ui_book \
-                 motes/acorn \
+                 motes/acorn docs/site/monad_website \
                  std/src/ref_tests.mo std/src/watch_tests.mo
 
-      # acorn (motes/acorn) publishes monad-lang.org (`site.yml`). Building
-      # the site here is the only check of the book's internal links: the
-      # build renders every page and fails before writing anything when a
-      # chapter points at a page or an `#anchor` that does not exist, or when
-      # SUMMARY.md names a chapter the tree does not have. `--skip-try`
-      # leaves the /try wasm to `site.yml` (it needs the WASI SDK build); the
-      # tracked page shell and static files still copy.
+      # `docs/site/monad_website` (on acorn) publishes monad-lang.org
+      # (`site.yml`). Building the site here is the only check of the book's
+      # internal links: the build renders every page and fails before writing
+      # anything when a chapter points at a page or an `#anchor` that does not
+      # exist, or when SUMMARY.md names a chapter the tree does not have.
+      # `--skip-try` leaves the /try wasm to `site.yml` (it needs the WASI SDK
+      # build); the tracked page shell and static files still copy.
+      # `--with-moon` compiles the `moon` CLI (`moon static`), which only
+      # `monad test motes/moon` would otherwise never build.
       - name: Build the docs site
         run: |
           nix develop --no-pure-eval --accept-flake-config \
             --profile "$HOME/.monad-ci-devshell" \
             -c env MONAD="$PWD/target-monad/ci-self-compile/monad" \
-                 scripts/build-docs.sh --skip-try
+                 scripts/build-docs.sh --skip-try --with-moon
 
       # `monad repl` end to end through the self-hosted binary: a scripted
       # session covering expressions, a definition then a call, `use`,

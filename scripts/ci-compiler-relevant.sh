@@ -68,6 +68,9 @@ fi
 while IFS= read -r path; do
   [ -n "$path" ] || continue
   case "$path" in
+    # The monad-lang.org website mote: Monad source that the site build
+    # compiles, and whose tests the compiler job runs.
+    docs/site/monad_website/*) echo true; exit 0 ;;
     # A book chapter or the site config: `scripts/build-docs.sh` renders
     # them with the self-compiled compiler and fails on a broken internal
     # link, a `#anchor` that does not exist or a chapter SUMMARY.md names

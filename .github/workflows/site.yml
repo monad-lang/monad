@@ -1,12 +1,14 @@
 # Build monad-lang.org with acorn and deploy it to GitHub Pages.
 #
-# `acorn` (motes/acorn) renders the landing page, the book under /docs/ and
-# the 404 page, and copies the static tree (/try, /install, the favicon and
-# stylesheets). It needs the self-hosted compiler, and /try needs it too for
-# its wasm modules, so the whole build runs where ci.yml's compiler job runs
-# and hands the Pages artifact to the deploy job below. This workflow is
-# main-only, so PR coverage for the wasm is `scripts/check-try.sh` in ci.yml's
-# compiler-checks, and acorn is covered by `monad test motes/acorn` there.
+# `docs/site/monad_website` renders the landing page, the book under /docs/
+# and the 404 page with `acorn` (motes/acorn, the generic generator), and
+# acorn copies the static tree (/try, /install, the favicon and stylesheets).
+# It needs the self-hosted compiler, and /try needs it too for its wasm
+# modules, so the whole build runs where ci.yml's compiler job runs and hands
+# the Pages artifact to the deploy job below. This workflow is main-only, so
+# PR coverage for the wasm is `scripts/check-try.sh` in ci.yml's
+# compiler-checks, and the site build itself (and its tests) runs in that
+# job's "Build the docs site" step.
 name: Deploy site to Pages
 
 on:
