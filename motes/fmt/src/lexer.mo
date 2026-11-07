@@ -56,7 +56,13 @@ pub type TokKind {
     /// Decimal/hex digits, optional fraction, optional suffix.
     number,
     /// Ordinary strings, raw strings, and char literals (the text says which).
-    string,
+    ///
+    /// Not named `string`: a bare constructor name is resolved by the
+    /// compiled backend across the whole program, and `Toml.Value.string`
+    /// (arity 1) then makes every `TokKind.str_lit` match or construction
+    /// take `Toml.Value.string`'s tag (see
+    /// `plans/implementations/2026-10-21-constructor-bare-name-arity-collision.md`).
+    str_lit,
     /// `// ...` or `/* ... */`.
     comment,
     /// `(` `[` `{`
@@ -351,20 +357,20 @@ def scan_r_word (s : String) : Result LexError Scan :=
     if head_is after_hashes 34u8 then
         match raw_body_len (tail after_hashes) n (I64.add n 2) {
             Result.err e => Result.err e,
-            Result.ok len => ok_scan TokKind.string len,
+            Result.ok len => ok_scan TokKind.str_lit len,
         }
     else ok_scan TokKind.word (I64.add 1 (ident_run after_r 0))
 
 def scan_string (s : String) : Result LexError Scan :=
     match string_len (tail s) 1 {
         Result.err e => Result.err e,
-        Result.ok len => ok_scan TokKind.string len,
+        Result.ok len => ok_scan TokKind.str_lit len,
     }
 
 def scan_char (s : String) : Result LexError Scan :=
     match char_len (tail s) 1 {
         Result.err e => Result.err e,
-        Result.ok len => ok_scan TokKind.string len,
+        Result.ok len => ok_scan TokKind.str_lit len,
     }
 
 def scan_colon (s : String) : Result LexError Scan :=
@@ -406,7 +412,7 @@ pub def Lex.kind_tag (k : TokKind) : I64 :=
     match k {
         TokKind.word => 0,
         TokKind.number => 1,
-        TokKind.string => 2,
+        TokKind.str_lit => 2,
         TokKind.comment => 3,
         TokKind.opener => 4,
         TokKind.closer => 5,

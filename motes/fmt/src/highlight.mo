@@ -26,8 +26,10 @@ pub type HlClass {
     num,
     str,
     comment,
-    /// An attribute, `#[` through its `]`.
-    attr,
+    /// An attribute, `#[` through its `]`. Not named `attr`: `Html.Attr.attr`
+    /// (arity 2) would share the bare name in any program linking both motes
+    /// (see `TokKind.str_lit` in `lexer.mo`).
+    attribute,
 }
 
 pub struct Span {
@@ -46,7 +48,7 @@ pub def Highlight.css_class (c : HlClass) : String :=
         HlClass.num => "num",
         HlClass.str => "str",
         HlClass.comment => "comment",
-        HlClass.attr => "attr",
+        HlClass.attribute => "attr",
     }
 
 /// The reserved keywords (`RESERVED_KEYWORDS`, `rust/core/src/parser.rs`).
@@ -73,7 +75,7 @@ struct State {
 }
 
 def word_class (st : State) (w : String) : HlClass :=
-    if st.in_attr then HlClass.attr
+    if st.in_attr then HlClass.attribute
     else if Highlight.is_keyword w then HlClass.kw
     else if st.after_def then HlClass.fn_name
     else if starts_upper w then HlClass.type_name
@@ -85,11 +87,11 @@ instance Copy State {
 
 def token_class (st : State) (tag : I64) (text : String) : HlClass :=
     if I64.beq tag (Lex.kind_tag TokKind.word) then word_class st text
-    else if st.in_attr then HlClass.attr
+    else if st.in_attr then HlClass.attribute
     else if I64.beq tag (Lex.kind_tag TokKind.number) then HlClass.num
-    else if I64.beq tag (Lex.kind_tag TokKind.string) then HlClass.str
+    else if I64.beq tag (Lex.kind_tag TokKind.str_lit) then HlClass.str
     else if I64.beq tag (Lex.kind_tag TokKind.comment) then HlClass.comment
-    else if I64.beq tag (Lex.kind_tag TokKind.punct) && String.starts_with "#" text && String.ends_with text "[" then HlClass.attr
+    else if I64.beq tag (Lex.kind_tag TokKind.punct) && String.starts_with "#" text && String.ends_with text "[" then HlClass.attribute
     else HlClass.plain
 
 def next_state (st : State) (tag : I64) (text : String) : State :=

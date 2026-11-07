@@ -75,3 +75,9 @@ def test_section_headings_get_self_links : Bool :=
     String.contains html "<h2 id=\"basic-syntax\">Basic Syntax<a class=\"anchor\" href=\"#basic-syntax\" aria-hidden=\"true\">#</a></h2>"
         && String.contains html "<a class=\"anchor\" href=\"#deep\""
         && Bool.not (String.contains html "href=\"#title\"")
+
+#[test]
+def test_fence_punctuation_is_plain : Bool :=
+    let html : String := render "```monad\n#[test]\ndef f (a : I64) := a\n```\n" in
+    String.contains html "<span class=\"attr\">#[</span>"
+        && String.contains html "(a : <span class=\"type\">I64</span>) := a"
