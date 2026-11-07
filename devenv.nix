@@ -39,9 +39,14 @@
   scripts.docs-serve.exec = ''
     set -euo pipefail
     if ! ${config.devenv.root}/scripts/build-docs.sh; then
-      echo "warning: /try wasm not rebuilt (run 'devenv tasks run monad:bootstrap-compile' or 'monadup default', then restart docs-serve); the served /try may be stale" >&2
+      echo "warning: the site build failed (run scripts/build-docs.sh directly for the error); serving what is already in docs/public, which may be stale" >&2
     fi
-    python3 -m http.server 8000 --directory ${config.devenv.root}/docs/public
+    if [ ! -f ${config.devenv.root}/docs/public/index.html ]; then
+      echo "docs-serve: no site to serve -- docs/public is empty and the build failed above" >&2
+      exit 1
+    fi
+    echo "docs-serve: serving docs/public on http://127.0.0.1:''${PORT:-8000} (Ctrl-C to stop; re-run after an edit)" >&2
+    python3 -m http.server "''${PORT:-8000}" --directory ${config.devenv.root}/docs/public
   '';
 
   scripts.docs-build.exec = ''
