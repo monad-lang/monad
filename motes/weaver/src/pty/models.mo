@@ -27,8 +27,9 @@ def models_go (m : Pty) : IO Bool := do {
     let d <- Check.report "S1 the API list is shown" (found o1 "   mock");
     let e <- Check.report "S1 nothing was selected yet" (not_found o1 "model: mock");
     Pty.send_text m "\r";
+    // The banner can land a frame after the echo: wait for both.
     let selected <- Pty.wait_until m (fn (o : Output) =>
-        Bool.and (not_found o "Select a model") (found o "model: mock")) 4000;
+        Bool.and (not_found o "Select a model") (Bool.and (found o "model: mock") (found o "mock/mock"))) 4000;
     let f <- Check.report "S2 Enter closes the picker" selected;
     let o2 <- Pty.output m;
     let g <- Check.report "S2 the choice is echoed" (found o2 "model: mock");
