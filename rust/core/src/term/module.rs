@@ -3399,12 +3399,22 @@ fn filter_cfg_feature_decls(
   if !gated {
     return Ok(decls);
   }
-  let mote = context
+  // The file's own mote and its manifest `[features]`; a file outside any
+  // mote falls back to its module path's first segment, with no defaults.
+  let manifest = context
     .file
     .as_deref()
-    .and_then(mote_name_of_file)
+    .and_then(|f| f.parent())
+    .and_then(crate::term::mote::Manifest::discover)
+    .map(|(_, m)| m);
+  let mote = manifest
+    .as_ref()
+    .and_then(|m| m.mote.as_ref().map(|meta| meta.name.clone()))
     .or_else(|| context.path.first().map(|i| i.as_str().to_owned()));
-  let set = crate::cfg::active();
+  let mut set = crate::cfg::active();
+  if let (Some(m), Some(name)) = (&manifest, &mote) {
+    set = set.with_manifest_features(name, &m.features);
+  }
   let mut kept = Vec::with_capacity(decls.len());
   for d in decls {
     if crate::cfg::keep(

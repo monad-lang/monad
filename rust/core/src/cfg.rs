@@ -9,7 +9,7 @@
 //! load-time filter here drops a declaration only when its predicate is
 //! false whether or not `test` holds.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::RwLock;
 
 use crate::term::{AttrArg, Attribute, Decl};
@@ -54,6 +54,36 @@ impl CfgSet {
 
   pub fn enable(&mut self, mote: &str, feature: &str) {
     self.features.insert((mote.to_owned(), feature.to_owned()));
+  }
+
+  /// This set plus `mote`'s manifest features: its `default` (when
+  /// declared), and every plain feature an enabled one lists in `table`
+  /// (`[features]`), transitively. `dep:x` and `x/f` items name
+  /// dependencies, not this mote's features, and are not followed here.
+  pub fn with_manifest_features(
+    &self,
+    mote: &str,
+    table: &BTreeMap<String, Vec<String>>,
+  ) -> CfgSet {
+    let mut out = self.clone();
+    let mut work: Vec<String> = self
+      .features
+      .iter()
+      .filter(|(m, _)| m == mote)
+      .map(|(_, f)| f.clone())
+      .collect();
+    if table.contains_key("default") {
+      work.push("default".to_owned());
+    }
+    while let Some(f) = work.pop() {
+      for item in table.get(&f).into_iter().flatten() {
+        if !item.contains(':') && !item.contains('/') && !out.has_feature(mote, item) {
+          work.push(item.clone());
+        }
+      }
+      out.enable(mote, &f);
+    }
+    out
   }
 
   pub fn has_feature(&self, mote: &str, feature: &str) -> bool {
@@ -254,6 +284,24 @@ use std::io {}
   fn cfg_feature_of_another_mote_is_off() {
     let set = CfgSet::parse_features("other/x, m/y").unwrap();
     assert_eq!(decl_names(SRC, &set), vec!["b", "c", "d"]);
+  }
+
+  #[test]
+  fn cfg_manifest_defaults_expand() {
+    let table: BTreeMap<String, Vec<String>> = [
+      ("default".to_owned(), vec!["y".to_owned()]),
+      ("y".to_owned(), vec!["x".to_owned(), "dep:z".to_owned()]),
+      ("x".to_owned(), vec![]),
+    ]
+    .into_iter()
+    .collect();
+    let set = CfgSet::default().with_manifest_features("m", &table);
+    assert!(set.has_feature("m", "x") && set.has_feature("m", "y"));
+    assert!(!set.has_feature("m", "dep:z"));
+    assert_eq!(
+      decl_names(SRC, &set),
+      vec!["a", "c", "d", "e", "use std.io"]
+    );
   }
 
   #[test]
