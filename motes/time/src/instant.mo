@@ -8,7 +8,7 @@
 use lib::types {Instant, Duration}
 use lib::internal {i64_floor_div, i64_floor_mod}
 use lib::duration {Duration.normalize}
-use std::io {IO.current_time_nano}
+use std::io {IO.epoch_time_nano}
 use std::base {Ord, Ordering}
 open Ordering {eq, gt, lt}
 
@@ -66,14 +66,10 @@ pub instance Ord Instant {
         }
 }
 
-/// The current instant from `IO.current_time_nano`.
-///
-/// That clock read is epoch-based under the interpreter and the web profile,
-/// but `CLOCK_MONOTONIC` at an arbitrary origin in native/wasi compiled
-/// binaries -- a pre-existing runtime divergence this mote inherits as-is.
-/// Use it for ordering and differences; do not assume compiled native values
-/// are Unix timestamps.
+/// The current instant from the wall clock (`IO.epoch_time_nano`), a Unix
+/// timestamp on every backend. A clock step can move it backwards, so time
+/// intervals with `IO.current_time_nano` instead.
 pub def Instant.now : IO Instant := do {
-    let t <- IO.current_time_nano;
+    let t <- IO.epoch_time_nano;
     return (Instant.normalize (i64_floor_div t 1000000000) (i64_floor_mod t 1000000000))
 }

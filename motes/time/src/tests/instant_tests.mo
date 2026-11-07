@@ -55,17 +55,9 @@ def test_instant_ord_compare_equal : Bool :=
         Ordering.gt => false
     }
 
-def is_non_negative (i : Instant) : Bool :=
-    match Ord.compare (instant_at 0 0) i {
-        Ordering.lt => true,
-        Ordering.eq => true,
-        Ordering.gt => false
-    }
-
-/// The clock read is only asserted to be non-negative: the web profile is
-/// epoch-based, while native/wasi compiled binaries use a monotonic origin.
+/// The clock is the wall clock: after 2020-01-01 on every backend.
 #[test]
-def test_instant_now_is_non_negative : IO Bool := do {
+def test_instant_now_is_a_real_timestamp : IO Bool := do {
     let i <- Instant.now;
-    return (is_non_negative i)
+    return (i.epoch_sec > 1577836800)
 }
