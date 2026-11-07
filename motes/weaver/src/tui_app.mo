@@ -68,7 +68,7 @@ use weaver::store {
     SessionInfo, Store.list_sessions, Store.read_meta, Store.write_title, Store.derive_name,
     Store.derive_description, TitleField, StoreMeta,
 }
-use weaver::shell_tool {WeaverShell.impl, WeaverShell.fg_path}
+use weaver::shell_tool {WeaverShell.impl, WeaverShell.fg_path, WeaverShell.request_background}
 use weaver::process_tools {ReadProcessTool.impl_with}
 use weaver::stop {Stop.predicate, Stop.request, Stop.reset}
 use weaver::inbox {Inbox.post, Inbox.take, Inbox.seam, Inbox.with_notes}
@@ -828,6 +828,7 @@ def editor_key (m : TuiModel) (k : Key) : Pair TuiModel (Cmd WeaverMsg) :=
             else if c == "d" then ctrl_d_step m
             else if c == "o" then toggle_details m
             else if c == "t" then toggle_todos m
+            else if c == "b" then background_key m
             else if c == "u" then scroll_with_pages m (half_page m)
             else Pair.pair (streak_reset_input m k) Cmd.none,
         Key.end => Pair.pair (with_streak_reset (fn (mm : TuiModel) => pane_only mm PaneMsg.repin) m) Cmd.none,
@@ -837,6 +838,20 @@ def editor_key (m : TuiModel) (k : Key) : Pair TuiModel (Cmd WeaverMsg) :=
         Key.home => pane_paged_step m PaneMsg.top,
         Key.escape => escape_key m,
         _ => Pair.pair (streak_reset_input m k) Cmd.none,
+    }
+
+/// Ctrl+B: while a turn waits on a `shell` command, stop waiting and leave
+/// the command running as a background task. A no-op otherwise.
+def background_key (m : TuiModel) : Pair TuiModel (Cmd WeaverMsg) :=
+    if m.turn_pending
+    then Pair.pair (with_streak_reset (fn (mm : TuiModel) => mm) m)
+        (Cmd.inspect (background_cmd (WeaverShell.fg_path m.state.store)))
+    else Pair.pair (with_streak_reset (fn (mm : TuiModel) => mm) m) Cmd.none
+
+def background_cmd (fg : Path) : Unit -> IO WeaverMsg :=
+    fn (_ : Unit) => do {
+        let _ <- WeaverShell.request_background fg;
+        IO.pure WeaverMsg.stop_sent
     }
 
 /// The Esc stop request's IO: write the generation into the signal file

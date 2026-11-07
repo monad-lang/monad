@@ -1,6 +1,6 @@
 /// weaver's `shell` tool against a temp task store: output and exit status,
 /// the output cap, Esc, Ctrl+B, the wait budget, and `wait_seconds: 0`.
-use weaver::shell_tool {ShellEnv, WeaverShell.run, WeaverShell.never_stop, WeaverShell.trim_output}
+use weaver::shell_tool {ShellEnv, WeaverShell.run, WeaverShell.never_stop, WeaverShell.trim_output, WeaverShell.request_background}
 use weaver::procs {ProcEntry, ProcStatus, Procs.scan_at, Procs.kill}
 use shuttle::message_types {Content}
 use json::json {Json, Json.parse, Json.make_str}
@@ -133,14 +133,11 @@ def test_the_budget_detaches_instead_of_killing : IO Bool := do {
     detached_case root c
 }
 
-/// Ctrl+B: the UI touches `<task dir>/background`, named by the fg file.
+/// Ctrl+B, as the TUI's key does it.
 def press_ctrl_b (fg : String) : IO Unit := do {
     sleepIO 300;
-    let dir <- IO.read_file (Path.path fg);
-    match dir {
-        Result.ok d => do { let _ <- IO.write_file (Path.path (String.concat d "/background")) "1"; IO.pure unit },
-        Result.err _ => IO.pure unit,
-    }
+    let _ <- WeaverShell.request_background (Path.path fg);
+    IO.pure unit
 }
 
 def ctrl_b_case (root : String) (c : Content) : IO Bool := do {
@@ -171,4 +168,11 @@ def test_wait_zero_starts_in_the_background : IO Bool := do {
     let _ <- cleanup root;
     IO.pure (Bool.not (is_err c) && List.length listed == 1
         && String.starts_with "started in the background: task p-" (text_of c))
+}
+
+/// With no command being waited on, Ctrl+B does nothing.
+#[test]
+def test_a_background_request_without_a_wait_is_a_no_op : IO Bool := do {
+    let asked <- WeaverShell.request_background (Path.path (temp_root "no-fg-file"));
+    IO.pure (Bool.not asked)
 }

@@ -21,7 +21,7 @@ use shuttle::tool {ToolSpec, ToolImpl}
 use shuttle::gate {Capability}
 use shuttle::message_types {Content}
 use json::json {Json, Json.get_object, Json.object_get, Json.get_str}
-use std::io {IO.current_time_nano, IO.file_exists, IO.file_size, IO.write_file}
+use std::io {IO.current_time_nano, IO.file_exists, IO.file_size, IO.write_file, IO.read_file, IO.is_dir}
 use std::path {Path, Path.to_string}
 use std::process {process_id, exec_cmd, Proc.capture, Proc.shell_quote}
 use std::concurrent::combine {sleepIO}
@@ -68,6 +68,27 @@ pub struct ShellEnv {
     stop : Unit -> IO Bool,
     log : Option Logger,
     budget_ms : I64,
+}
+
+/// Ctrl+B: ask the waiting `shell` call to stop waiting, by putting the
+/// `background` marker in the task dir `fg` names. False when no command
+/// is being waited on.
+pub def WeaverShell.request_background (fg : Path) : IO Bool := do {
+    let dir <- IO.read_file fg;
+    match dir {
+        Result.err _ => IO.pure false,
+        Result.ok d => mark_background (Path.path (String.trim d)),
+    }
+}
+
+def mark_background (dir : Path) : IO Bool := do {
+    let there <- IO.is_dir dir;
+    if there
+    then do {
+        let _ <- IO.write_file (Store.child dir "background") "1";
+        IO.pure true
+    }
+    else IO.pure false
 }
 
 pub def WeaverShell.never_stop : Unit -> IO Bool := fn (_ : Unit) => IO.pure false
