@@ -19,6 +19,14 @@
 # task is the RUST checker, which has no path types and no level
 # variables). It gates CI through `scripts/check-monad-tests.sh`, which
 # sweeps it with the SELF-HOSTED runner -- the one this project ships.
+#
+# The Rust host may still be pointed at this directory (`monad-rs check
+# proofs`); the `[host]` table below tells it to parse and resolve these
+# files but not to type-check proof bodies. Monad is the verification
+# authority (AGENTS.md, "Compiler roles").
+
+[host]
+verify = "declarations"
 
 [mote]
 name = "proofs"

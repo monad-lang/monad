@@ -108,8 +108,8 @@
 
 use crate::core_check::{
   ClassMethodInfo, ConstructorInfo, DictScope, InferError, KnownClassMethods, KnownInstanceInfo,
-  KnownInstances, StructFields, StructInfo, StructKind, TyCtx, check, desugar_struct_literals,
-  head_atom_of, infer, is_class_atom,
+  KnownInstances, StructFields, StructInfo, StructKind, TyCtx, body_is_reducible_eliminator, check,
+  desugar_struct_literals, head_atom_of, infer, is_class_atom,
 };
 use crate::core_program::{
   CheckedCoreDef, CoreConstructorInfo, CoreInductiveInfo, CoreInstanceInfo, CoreProgram,
@@ -1839,6 +1839,12 @@ fn check_one_def(
     // polymorphic function; this is correct, not a shortcut.
     ctx.insert(self_atom, typ_c.clone());
 
+    // Mirrors `check_one_def_new`: proof definitions are accepted without
+    // body checking by the Rust host (AGENTS.md "Compiler roles").
+    if mctx.proof_only() || def.has_proof_attr() {
+      return Ok(());
+    }
+
     let (peeled_vars, residual_typ) = peel_foralls(typ_c);
     let mut overrides = Map::new();
     for (name, atom, var_typ) in &peeled_vars {
@@ -1856,8 +1862,14 @@ fn check_one_def(
       &def.term,
     )
     .map_err(DefFailure::LowerBody)?;
+    if body_is_reducible_eliminator(&body_c) {
+      mctx.register_def_body(self_atom, body_c.clone());
+    }
     check(mctx, ctx, structs, &body_c, &residual_typ).map_err(DefFailure::Check)
   } else {
+    if mctx.proof_only() || def.has_proof_attr() {
+      return Ok(());
+    }
     let body_c = lower_term(
       &mut LowerContext::with_config(config.clone(), mctx.atoms_mut()),
       &def.term,
@@ -2485,6 +2497,15 @@ fn check_one_def_new(
       new_def.typ = raise_core(&typ_c, &atom_paths);
     }
 
+    // Declaration-only checking for a proof module (`[host] verify =
+    // "declarations"`, i.e. `proofs/`) or a `#[proof]` def in any mote. The
+    // parse/resolve/elaborate/register work above stays; the body and its
+    // proof term are the SELF-HOSTED compiler's job. This is deliberately an
+    // acceptance policy, not verification — see AGENTS.md "Compiler roles".
+    if mctx.proof_only() || def.has_proof_attr() {
+      return Ok(new_def);
+    }
+
     let (peeled_vars, residual_typ) = peel_foralls(typ_c);
     let mut overrides = Map::new();
     for (name, atom, var_typ) in &peeled_vars {
@@ -2611,9 +2632,17 @@ fn check_one_def_new(
       .map(|(p, a)| (*a, p.clone()))
       .collect();
     atom_paths.extend(fallback_atoms);
+    if body_is_reducible_eliminator(&body_c) {
+      mctx.register_def_body(self_atom, body_c.clone());
+    }
     new_def.term = raise_core(&body_c, &atom_paths);
     Ok(new_def)
   } else {
+    // Same declaration-only policy as the annotated branch above; nothing
+    // can be checked here without an inferred body type anyway.
+    if mctx.proof_only() || def.has_proof_attr() {
+      return Ok(new_def);
+    }
     let mut body_lower_ctx = LowerContext::with_config(config.clone(), mctx.atoms_mut());
     let body_c = lower_term(&mut body_lower_ctx, &def.term).map_err(lower_error_to_type_error)?;
     let mut atom_paths = global_atom_paths.clone();
@@ -2694,6 +2723,9 @@ fn check_one_def_new(
       .map(|(p, a)| (*a, p.clone()))
       .collect();
     atom_paths.extend(fallback_atoms);
+    if body_is_reducible_eliminator(&body_c) {
+      mctx.register_def_body(self_atom, body_c.clone());
+    }
     new_def.typ = raise_core(&ty_generalized, &atom_paths);
     new_def.term = raise_core(&body_c, &atom_paths);
     Ok(new_def)
@@ -3076,6 +3108,14 @@ pub fn type_check_module_decls_new_inner(
   }
 
   let mut mctx = MetaContext::new_with_atoms(atoms);
+  // `[host] verify = "declarations"` on the module's mote (`proofs/`): parse,
+  // resolve, register — but do not check proof bodies or proof terms. Monad
+  // is the verification gate; see AGENTS.md "Compiler roles".
+  let proof_only = path.segments().first().is_some_and(|mote| {
+    crate::term::module::mote_host_verify(mote.as_str())
+      == crate::term::mote::HostVerify::Declarations
+  });
+  mctx.set_proof_only(proof_only);
   if core_out.is_some() {
     mctx.enable_match_capture();
   }
@@ -4168,6 +4208,66 @@ mod test {
     assert!(
       report.defs[0].result.is_err(),
       "got {:?}",
+      report.defs[0].result
+    );
+  }
+
+  #[test]
+  fn test_match_refines_expected_type_through_projection() {
+    // `b : B a`, while the declared result type mentions the scrutinee
+    // (`B (sfirst p)`). The arm refines `p := Sigma.dpair a b`, and the
+    // narrow beta/delta/iota normalizer unfolds `sfirst`'s body and
+    // iota-reduces it to `a`, so `B a` is the expected type. Before this,
+    // the host checked the body against `B (sfirst p)` and rejected it.
+    // The projection is declared in the SAME module on purpose:
+    // `MetaContext::def_bodies` is per-module (see its field doc comment).
+    let env = ModuleCheckEnv::new();
+    let source = "def sfirst {A : Type} {B : A -> Type} (p : Sigma A B) : A := \
+                    match p { Sigma.dpair a _ => a }\n\
+                  def second {A : Type} {B : A -> Type} (p : Sigma A B) : B (sfirst p) := \
+                    match p { Sigma.dpair a b => b }\n";
+    let report = check_module_source(&env, source);
+    assert_eq!(report.passed(), 2, "report: {report:?}");
+  }
+
+  #[test]
+  fn test_match_refinement_still_rejects_wrong_arm_value() {
+    // The refinement must not turn the arm into "anything goes": `a` has
+    // type `A`, not the refined `B a`.
+    let env = ModuleCheckEnv::new();
+    let source = "def sfirst {A : Type} {B : A -> Type} (p : Sigma A B) : A := \
+                    match p { Sigma.dpair a _ => a }\n\
+                  def second {A : Type} {B : A -> Type} (p : Sigma A B) : B (sfirst p) := \
+                    match p { Sigma.dpair a b => a }\n";
+    let report = check_module_source(&env, source);
+    assert_eq!(report.defs.len(), 2);
+    assert!(
+      report.defs[1].result.is_err(),
+      "got {:?}",
+      report.defs[1].result
+    );
+  }
+
+  #[test]
+  fn test_proof_def_body_is_accepted_unchecked_by_host() {
+    // The Rust host is an acceptance gate for proof declarations, not their
+    // verifier (AGENTS.md "Compiler roles"). An ill-typed body under
+    // `#[proof]` is the self-hosted compiler's problem.
+    let env = ModuleCheckEnv::new();
+    let source = "#[proof] def bogus_but_proof : Bool := 1\n";
+    let report = check_module_source(&env, source);
+    assert_eq!(report.passed(), 1, "report: {report:?}");
+  }
+
+  #[test]
+  fn test_unmarked_def_body_is_still_checked() {
+    let env = ModuleCheckEnv::new();
+    let source = "def bogus : Bool := 1\n";
+    let report = check_module_source(&env, source);
+    assert_eq!(report.defs.len(), 1);
+    assert!(
+      report.defs[0].result.is_err(),
+      "a non-proof def must stay checked, got {:?}",
       report.defs[0].result
     );
   }

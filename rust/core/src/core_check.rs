@@ -396,6 +396,126 @@ fn match_case_field_types(
   )
 }
 
+/// Beta/delta/iota normalization for ONE narrow job: reducing a match arm's
+/// refined expected type (`Sigma.snd`'s `B (Sigma.fst p)` must become `B a`
+/// once the arm refines `p := Sigma.dpair a b`). Deliberately NOT wired into
+/// `unify` — the Rust host has no general reducer, and widening this would
+/// change every conversion check in the bootstrap compiler. Fuel-bounded;
+/// on exhaustion the term is returned stuck, never an error.
+///
+/// Delta looks in `MetaContext::def_bodies`, which holds bodies declared
+/// earlier in the SAME module (`Sigma.fst` precedes `Sigma.snd` in
+/// `init/src/prelude.mo` — the only consumer today).
+fn whnf_core(mctx: &MetaContext, structs: &StructFields, term: &CoreTerm, fuel: u32) -> CoreTerm {
+  let term = term.strip_ctx();
+  if fuel == 0 {
+    return term.clone();
+  }
+  match term {
+    CoreTerm::App { fun, arg } => {
+      let reduced_fun = whnf_core(mctx, structs, fun, fuel - 1);
+      match reduced_fun.strip_ctx() {
+        CoreTerm::Lam { body, .. } => whnf_core(mctx, structs, &open_with(body, arg), fuel - 1),
+        _ => {
+          let reduced_arg = whnf_core(mctx, structs, arg, fuel - 1);
+          CoreTerm::App {
+            fun: Box::new(reduced_fun),
+            arg: Box::new(reduced_arg),
+          }
+        }
+      }
+    }
+    CoreTerm::Free(atom) => match mctx.def_body(*atom) {
+      Some(body) => whnf_core(mctx, structs, body, fuel - 1),
+      None => term.clone(),
+    },
+    CoreTerm::Lit(CoreLit::Match { scrutinee, cases }) => {
+      let reduced_scrutinee = whnf_core(mctx, structs, scrutinee, fuel - 1);
+      match reduced_scrutinee.strip_ctx() {
+        CoreTerm::Con(con) => match cases.iter().find(|c| c.name == con.name) {
+          Some(case) => {
+            let body = substitute_con_args(&case.value, &con.args);
+            whnf_core(mctx, structs, &body, fuel - 1)
+          }
+          None => CoreTerm::Lit(CoreLit::Match {
+            scrutinee: Box::new(reduced_scrutinee),
+            cases: cases.clone(),
+          }),
+        },
+        _ => CoreTerm::Lit(CoreLit::Match {
+          scrutinee: Box::new(reduced_scrutinee),
+          cases: cases.clone(),
+        }),
+      }
+    }
+    _ => term.clone(),
+  }
+}
+
+/// Bind a match case's pattern variables to a constructor application's
+/// actual arguments. `open_n` opens `n` binders at once and returns the
+/// opened atoms INNERMOST-FIRST; `Con.args` is in DECLARED (outermost-first)
+/// order, so pair the lists by reversing one of them.
+fn substitute_con_args(case_body: &CoreTerm, args: &[Option<CoreTerm>]) -> CoreTerm {
+  let (atoms, opened) = open_n(case_body, 0, args.len() as u32);
+  let mut out = opened;
+  for (innermost, atom) in atoms.iter().enumerate() {
+    let declared = args.len() - 1 - innermost;
+    if let Some(Some(arg)) = args.get(declared) {
+      out = open_with(&close(&out, *atom), arg);
+    }
+  }
+  out
+}
+
+/// Whether a checked def body is worth remembering for `whnf_core`'s delta
+/// step: a lambda chain ending in a `match`. Storing EVERY body would
+/// retain a whole module's terms in `MetaContext`; the refinement only ever
+/// unfolds projection/eliminator defs (`Sigma.fst`, `Nat.add`, ...), so the
+/// narrow shape test also bounds the memory the table adds.
+pub(crate) fn body_is_reducible_eliminator(body: &CoreTerm) -> bool {
+  match body.strip_ctx() {
+    CoreTerm::Lam { body, .. } => body_is_reducible_eliminator(body),
+    CoreTerm::Lit(CoreLit::Match { .. }) => true,
+    _ => false,
+  }
+}
+
+/// Refine a match arm's EXPECTED type with the constructor the arm binds:
+/// `match p { Sigma.dpair a b => ... }` seen against `B (Sigma.fst p)` must
+/// check the body against `B (Sigma.fst (Sigma.dpair a b))`, then normalize
+/// that to `B a`. Returns `None` when the scrutinee is not a plain local, or
+/// the case does not resolve to a registered constructor — callers then use
+/// the unrefined expected type exactly as before.
+fn refine_match_expected(
+  mctx: &mut MetaContext,
+  structs: &StructFields,
+  scrutinee: &CoreTerm,
+  scrutinee_ty: &CoreTerm,
+  case_name: &Identifier,
+  binders: &[Atom],
+  expected: &CoreTerm,
+) -> Option<CoreTerm> {
+  let ind_atom = resolve_match_inductive_atom(mctx, structs, scrutinee_ty)?;
+  structs.constructors.get(&(ind_atom, case_name.clone()))?;
+  let ind_path = structs.inductive_paths.get(&ind_atom)?.clone();
+  let scrutinee_atom = match scrutinee.strip_ctx() {
+    CoreTerm::Free(atom) => *atom,
+    _ => return None,
+  };
+  let con = CoreTerm::Con(CoreConstructor {
+    name: case_name.clone(),
+    typ_name: ind_path,
+    num_args: binders.len(),
+    args: binders
+      .iter()
+      .map(|atom| Some(CoreTerm::Free(*atom)))
+      .collect(),
+  });
+  let refined = open_with(&close(expected.strip_ctx(), scrutinee_atom), &con);
+  Some(whnf_core(mctx, structs, &refined, 1000))
+}
+
 /// The atoms a constructor's own field telescope binds, in field order
 /// — the ones `match_case_field_types`' returned types still mention for
 /// earlier fields. Looked up the same way that function does.
@@ -2011,7 +2131,17 @@ pub fn check(
           .unwrap_or(CoreTerm::Hole);
         ctx2 = ctx2.extend(*atom, field_ty);
       }
-      check(mctx, &ctx2, structs, &opened_value, expected)?;
+      let arm_expected = refine_match_expected(
+        mctx,
+        structs,
+        scrutinee,
+        &scrutinee_ty,
+        &case.name,
+        &declared_binders,
+        expected,
+      )
+      .unwrap_or_else(|| expected.clone());
+      check(mctx, &ctx2, structs, &opened_value, &arm_expected)?;
     }
     return Ok(());
   }

@@ -55,6 +55,19 @@ pub struct MetaContext {
   /// existing caller that never calls `enable_match_capture` pays
   /// nothing extra.
   match_resolutions: Option<Vec<(Vec<Identifier>, Atom)>>,
+  /// Checked `def` bodies, keyed by the def's own global atom. Used only by
+  /// `core_check::whnf_core`, the narrow beta/delta/iota normalizer that
+  /// refines a match arm's expected type (`Sigma.snd`'s `B (Sigma.fst p)`
+  /// must reduce to `B a` under the arm). Per-module: a def can unfold a
+  /// body declared earlier in the SAME module, which is all the refinement
+  /// needs (`Sigma.fst` precedes `Sigma.snd` in `init/src/prelude.mo`).
+  def_bodies: Map<Atom, CoreTerm>,
+  /// When true the Rust host checks this module's declarations only: parse,
+  /// resolve names, lower declaration types — never bodies or proof terms.
+  /// Set from a `[host] verify = "declarations"` mote policy (`proofs/`) and
+  /// from `#[proof]` on an individual def. Monad verifies those bodies (see
+  /// AGENTS.md "Compiler roles").
+  proof_only: bool,
 }
 
 impl MetaContext {
@@ -80,6 +93,25 @@ impl MetaContext {
   /// `MetaContext`'s own table.
   pub fn intern(&mut self, path: GlobalRef) -> Atom {
     self.atoms.intern(path)
+  }
+
+  /// Remember a checked `def` body for `core_check::whnf_core`'s delta step.
+  pub fn register_def_body(&mut self, atom: Atom, body: CoreTerm) {
+    self.def_bodies.insert(atom, body);
+  }
+
+  pub fn def_body(&self, atom: Atom) -> Option<&CoreTerm> {
+    self.def_bodies.get(&atom)
+  }
+
+  /// Declaration-only checking for a proof module (`proofs/`) or, per-def,
+  /// `#[proof]`. See the field's own doc comment.
+  pub fn set_proof_only(&mut self, proof_only: bool) {
+    self.proof_only = proof_only;
+  }
+
+  pub fn proof_only(&self) -> bool {
+    self.proof_only
   }
 
   pub fn atoms_mut(&mut self) -> &mut AtomTable {

@@ -2233,6 +2233,17 @@ fn mote_named_at(name: &str) -> Option<std::path::PathBuf> {
   None
 }
 
+/// `[host] verify` for the mote called `name`, through the same
+/// `<name>` / `motes/<name>` / `../<name>` probe `mote_named_at` uses.
+/// `Full` when the mote has no manifest or the key is absent.
+pub(crate) fn mote_host_verify(name: &str) -> crate::term::mote::HostVerify {
+  mote_named_at(name)
+    .and_then(|dir| {
+      crate::term::mote::Manifest::discover(&dir).map(|(_, manifest)| manifest.host_verify)
+    })
+    .unwrap_or_default()
+}
+
 /// Does this machine's toolchain root provide a mote called `name`? A mote
 /// in its own repository has no checkout and may declare nothing, and
 /// resolution answers a toolchain-provided name from the install, so the

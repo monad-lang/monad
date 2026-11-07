@@ -2215,6 +2215,12 @@ impl Def {
   pub fn has_test_attr(&self) -> bool {
     self.attributes.iter().any(|a| a.name.as_str() == "test")
   }
+
+  /// `#[proof]`: a theorem whose body the Rust bootstrap host does not check
+  /// (the self-hosted compiler verifies it). See AGENTS.md "Compiler roles".
+  pub fn has_proof_attr(&self) -> bool {
+    self.attributes.iter().any(|a| a.name.as_str() == "proof")
+  }
   pub fn has_terminating_attr(&self) -> bool {
     self
       .attributes

@@ -31,6 +31,21 @@ pub struct Manifest {
   pub dependency_policies: BTreeMap<String, DependencyPolicy>,
   pub dev_dependency_policies: BTreeMap<String, DependencyPolicy>,
   pub workspace: Option<Workspace>,
+  /// `[host] verify` — how much of this mote the RUST BOOTSTRAP HOST checks.
+  /// `Declarations` means parse/resolve/lower declaration types only; proof
+  /// bodies and proof terms are left to the self-hosted compiler. The
+  /// self-hosted reader ignores this table (`lang/src/mote.mo` reads only
+  /// known keys), so it never weakens `monad check`.
+  pub host_verify: HostVerify,
+}
+
+/// `[host] verify = "..."` — the Rust bootstrap host's checking policy for a
+/// mote. The default, `Full`, is the ordinary checker.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum HostVerify {
+  #[default]
+  Full,
+  Declarations,
 }
 
 /// Optional/feature policy on one dependency entry.
@@ -162,6 +177,12 @@ struct RawManifest {
   #[serde(default)]
   features: BTreeMap<String, Vec<String>>,
   workspace: Option<RawWorkspace>,
+  host: Option<RawHost>,
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+struct RawHost {
+  verify: Option<String>,
 }
 
 /// `[link] libs = ["m"]` -- the C libraries this mote links against.
@@ -368,6 +389,16 @@ impl Manifest {
       return Err("mote.toml must have a [mote] or [workspace] section".to_string());
     }
 
+    let host_verify = match raw.host.and_then(|h| h.verify).as_deref() {
+      None | Some("full") => HostVerify::Full,
+      Some("declarations") => HostVerify::Declarations,
+      Some(other) => {
+        return Err(format!(
+          "[host] verify = \"{other}\": expected \"full\" or \"declarations\""
+        ));
+      }
+    };
+
     Ok(Self {
       mote: raw.mote.map(|m| MoteMeta {
         name: m.name,
@@ -387,6 +418,7 @@ impl Manifest {
       features: raw.features,
       dependencies: convert_dependencies(raw.dependencies),
       dev_dependencies: convert_dependencies(raw.dev_dependencies),
+      host_verify,
     })
   }
 }
@@ -930,6 +962,48 @@ version = "0.1.0"
     assert_eq!(mote.version, "0.1.0");
     assert!(mote.edition.is_none());
     assert!(raw.dependencies.is_empty());
+  }
+
+  #[test]
+  fn test_parse_mote_toml_host_verify_declarations() {
+    let toml_str = r#"
+[mote]
+name = "proofs"
+version = "0.1.0"
+
+[host]
+verify = "declarations"
+"#;
+    let manifest = Manifest::parse_str(toml_str).unwrap();
+    assert_eq!(manifest.host_verify, HostVerify::Declarations);
+  }
+
+  #[test]
+  fn test_parse_mote_toml_host_verify_defaults_to_full() {
+    let toml_str = r#"
+[mote]
+name = "plain"
+version = "0.1.0"
+"#;
+    let manifest = Manifest::parse_str(toml_str).unwrap();
+    assert_eq!(manifest.host_verify, HostVerify::Full);
+  }
+
+  #[test]
+  fn test_parse_mote_toml_rejects_unknown_host_verify() {
+    let toml_str = r#"
+[mote]
+name = "proofs"
+version = "0.1.0"
+
+[host]
+verify = "everything"
+"#;
+    let err = Manifest::parse_str(toml_str).unwrap_err();
+    assert!(
+      err.contains("expected \"full\" or \"declarations\""),
+      "{err}"
+    );
   }
 
   #[test]

@@ -278,7 +278,14 @@ fn pi_type_expression<X: Clone>(input: Span<X>) -> Res<Term, X> {
         map(
           delimited(
             (char('('), ws0),
-            separated_pair(identifier, (ws0, char(':'), ws0), type_base_expression),
+            // A named binder's domain may itself be an arrow: a class
+            // parameter like `(bind : (A : Type) -> (f : A -> M B) -> M B)`
+            // has `(f : A -> M B) ->` in its telescope. `type_base_expression`
+            // stopped at the inner `->`, so the whole parameter-list parse
+            // failed ("unexpected character") and `proofs/src/lawful.mo`
+            // could not even be parsed by the host. The closing `)` bounds
+            // the inner expression, so this cannot swallow the outer `->`.
+            separated_pair(identifier, (ws0, char(':'), ws0), type_expression),
             (
               ws0,
               context("closing parenthesis for function type parameter", char(')')),

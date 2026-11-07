@@ -22,6 +22,13 @@ fn test_type_expression() {
   let (_, a) = application::<()>("F (A -> B)".into()).unwrap();
   similar!(a, app(var("F"), pi(var("A"), var("B"))),);
 
+  // A NAMED binder whose domain is itself an arrow. This is the class
+  // telescope shape `(bind : (A : Type) -> (f : A -> M B) -> M B)`; the
+  // domain parser used to stop at the inner `->`, so `proofs/src/lawful.mo`
+  // failed to parse at all.
+  let (_, a) = term("(f : A -> B) -> C".into()).unwrap();
+  similar!(a, pi_var(id("f"), pi(var("A"), var("B")), var("C")));
+
   let (_, a) = type_top_expression::<()>("F (A -> B) -> F A -> F B".into()).unwrap();
   similar!(
     a,
