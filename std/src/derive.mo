@@ -1,5 +1,6 @@
 /// Derive macros: `derive_lens`, `derive_debug`, `derive_beq`,
-/// `derive_bord` — written using Monad's own macro system.
+/// `derive_bord`, `derive_copy`, `derive_clone` — written using Monad's own
+/// macro system.
 ///
 /// Each `defmacro` registers its `#[derive ...]` target with
 /// `#[derive_handler <Target>]` — the registration the derive-target
@@ -7,7 +8,7 @@
 /// hardcoded target list anywhere). Two different macros registering
 /// the same target is a compile error.
 ///
-/// All four are ported to the reflection-as-data kernel (`init/meta.mo`'s
+/// All six are ported to the reflection-as-data kernel (`init/meta.mo`'s
 /// `TypeInfo`/`Expr`/`MetaDecl` values + `rust/core/src/eval/meta_compile.rs`'s
 /// `MetaEvalContext`, invoked via the `reflect_type_info!` intrinsic) —
 /// see `plans/review-and-reduce-the-greedy-nest.md`: each `derive_*`
@@ -23,7 +24,7 @@
 /// since been deleted outright — see `rust/core/src/eval/macro_expand.rs`'s
 /// `BUILTIN_INTRINSICS` doc comment for the current (`reflect_type_info!`-
 /// only) design.
-use init::meta {TypeInfo, CtorInfo, FieldInfo, Expr, MetaMatchArm, MetaDecl}
+use init::meta {TypeInfo, TypeShape, CtorInfo, FieldInfo, Expr, MetaMatchArm, MetaDecl}
 
 open TypeInfo {type_info}
 open CtorInfo {ctor_info}
@@ -31,7 +32,7 @@ open FieldInfo {field_info}
 open Expr {e_var, e_str, e_bool, e_app, e_lam, e_if, e_match, e_ctor}
 open MetaMatchArm {match_arm}
 open MetaParam {meta_param}
-open MetaDecl {d_def, d_instance}
+open MetaDecl {d_def, d_error, d_instance}
 
 def field_name_of (field : FieldInfo) : String :=
     match field { field_info name typ attrs default => name }
@@ -58,7 +59,7 @@ def lens_setter (type_name : String) (ctor_name : String) (field_names : List St
             (e_match (e_var "s")
                 [match_arm ctor_name (Shared.get names)
                     (e_ctor (String.concat type_name (String.concat "." ctor_name))
-                            (List.map (rebuild_field target) (Shared.get names)))]))
+                        (List.map (rebuild_field target) (Shared.get names)))]))
 
 def rebuild_field (target : String) (field_name : String) : Expr :=
     if field_name == target then e_var "v" else e_var field_name
@@ -74,7 +75,7 @@ def lens_field_decl (type_name : String) (ctor_name : String) (field_names : Lis
                 List.empty
                 (e_app (e_app (e_var "Lens") (e_var type_name)) (Shared.get typ))
                 (e_app (e_app (e_var "lens") (lens_getter type_name ctor_name (Shared.get names) fname))
-                       (lens_setter type_name ctor_name (Shared.get names) (Shared.get typ) fname))
+                    (lens_setter type_name ctor_name (Shared.get names) (Shared.get typ) fname))
     }
 
 /// `derive_lens_meta`'s work for one already-known-single constructor:
@@ -95,8 +96,8 @@ def lens_decls_for_ctor (type_name : String) (ctor : CtorInfo) : List MetaDecl :
 /// matching this port's scope — see `init.optics`'s `Prism` for sum-type
 /// variant access instead).
 pub def derive_lens_meta (info : TypeInfo) : List MetaDecl :=
-    match info {
-        type_info type_name ctors =>
+    match TypeInfo.shape info {
+        TypeShape.type_shape type_name _params ctors =>
             match ctors {
                 cons c tail =>
                     match tail {
@@ -118,7 +119,7 @@ defmacro derive_lens T := decls {
 /// not called here; only the code that will call it is built.
 def debug_piece (field_name : String) : Expr :=
     e_app (e_app (e_var "String.concat") (e_str (String.concat field_name ": ")))
-          (e_app (e_var "Debug.debug") (e_var field_name))
+        (e_app (e_var "Debug.debug") (e_var field_name))
 
 /// Right-folds a list of `Expr`s into one `String.concat`-chained `Expr`,
 /// each pair separated by the literal string `sep` — e.g. `[a, b, c]`
@@ -135,7 +136,7 @@ def join_with_sep (sep : String) (pieces : List Expr) : Expr :=
                 empty => p,
                 cons _ _ =>
                     e_app (e_app (e_var "String.concat") p)
-                          (e_app (e_app (e_var "String.concat") (e_str sep)) (join_with_sep sep tail)),
+                        (e_app (e_app (e_var "String.concat") (e_str sep)) (join_with_sep sep tail)),
             }
     }
 
@@ -159,7 +160,7 @@ def debug_arm_body (type_name : String) (ctor_name : String) (is_single : Bool) 
         cons _ _ =>
             let fields_expr := join_with_sep ", " (List.map debug_piece (Shared.get names)) in
             e_app (e_app (e_var "String.concat") (e_str (String.concat label " { ")))
-                  (e_app (e_app (e_var "String.concat") fields_expr) (e_str " }")),
+                (e_app (e_app (e_var "String.concat") fields_expr) (e_str " }")),
     }
 
 /// One constructor -> its whole `debug` match arm.
@@ -188,8 +189,8 @@ def is_single_ctor_list (ctors : List CtorInfo) : Bool :=
 /// is applied recursively, field by field) — `std/debug.mo` ships base
 /// instances for `String`/`I64`/`Bool`.
 pub def derive_debug_meta (info : TypeInfo) : List MetaDecl :=
-    match info {
-        type_info type_name ctors =>
+    match TypeInfo.shape info {
+        TypeShape.type_shape type_name _params ctors =>
             let cs := Shared.of ctors in
             let is_single := is_single_ctor_list (Shared.get cs) in
             let arms := List.map (debug_ctor_arm type_name is_single) (Shared.get cs) in
@@ -268,8 +269,8 @@ def beq_outer_arm (all_ctors : List CtorInfo) (i : I64) (ctor_a : CtorInfo) : Me
 /// `init/number.mo`/`init/string.mo` ship base instances for the numeric
 /// types, `Bool`, `String`, and `Nat`.
 pub def derive_beq_meta (info : TypeInfo) : List MetaDecl :=
-    match info {
-        type_info type_name ctors =>
+    match TypeInfo.shape info {
+        TypeShape.type_shape type_name _params ctors =>
             let cs := Shared.of ctors in
             let arms := map_indexed_ctor_arms 0 (beq_outer_arm (Shared.get cs)) (Shared.get cs) in
             [d_instance "BEq" (e_var type_name)
@@ -363,17 +364,224 @@ def bord_method (name : String) (chain_fn : List String -> Expr) (diff_lt_is_tru
 /// Every field's own type must have a `BOrd` instance in scope, same
 /// requirement as `derive_beq`'s `BEq` above.
 pub def derive_bord_meta (info : TypeInfo) : List MetaDecl :=
-    match info {
-        type_info type_name ctors =>
+    match TypeInfo.shape info {
+        TypeShape.type_shape type_name _params ctors =>
             let cs := Shared.of ctors in
             [d_instance "BOrd" (e_var type_name)
                 [bord_method "lt" lt_chain true false type_name (Shared.get cs),
-                 bord_method "gt" gt_chain false false type_name (Shared.get cs),
-                 bord_method "lte" gt_chain false true type_name (Shared.get cs),
-                 bord_method "gte" lt_chain true true type_name (Shared.get cs)]]
+                    bord_method "gt" gt_chain false false type_name (Shared.get cs),
+                    bord_method "lte" gt_chain false true type_name (Shared.get cs),
+                    bord_method "gte" lt_chain true true type_name (Shared.get cs)]]
     }
 
 #[derive_handler BOrd]
 defmacro derive_bord T := decls {
     reflect_type_info! T derive_bord_meta
+}
+
+// ─── Copy / Clone ─────────────────────────────────────────────────────
+//
+// Monomorphic only: `MetaDecl.d_instance` carries no constraints or implicit
+// params, and `copy_class.mo` refuses a constrained parametric `Copy`
+// instance, so a generic type is rejected by the meta function itself (its
+// `TypeInfo.params` is non-empty). A generic type keeps its hand-written
+// instance (`init/clone.mo`) or waits for the v2 meta surface. See
+// `plans/implementations/derive-copy-clone.md`.
+
+/// One field's declared type plus the two binders its `Copy.dup_with`
+/// continuation receives. The generated names are checked against the
+/// constructor's real field names (`fresh_against`), so a field literally
+/// named `cp_a_0` cannot be shadowed by a generated binder.
+struct CopyNames {
+    field : String,
+    typ : Expr,
+    a_name : String,
+    b_name : String,
+}
+
+def name_taken (name : String) (names : List String) : Bool :=
+    match names {
+        List.empty => false,
+        List.cons n rest => if String.beq n name then true else name_taken name rest,
+    }
+
+#[partial]
+def fresh_go (candidate : String) (taken : List String) (fuel : I64) : String :=
+    let taken_s := Shared.of taken in
+    let hit := name_taken candidate (Shared.get taken_s) in
+    if I64.lt fuel 1 then candidate
+    else if hit
+        then fresh_go (String.concat candidate "_") (Shared.get taken_s) (fuel - 1)
+        else candidate
+
+def fresh_against (candidate : String) (taken : List String) : String :=
+    fresh_go candidate taken 16
+
+def copy_names_for (i : I64) (taken : List String) (fields : List FieldInfo) : List CopyNames :=
+    match fields {
+        List.empty => List.empty,
+        List.cons f rest =>
+            match f {
+                field_info fname ftyp _attrs _default =>
+                    let taken_s := Shared.of taken in
+                    let a_name := fresh_against (String.concat "cp_a_" (I64.to_string i)) (Shared.get taken_s) in
+                    let taken1 : List String := List.cons a_name (Shared.get taken_s) in
+                    let taken1_s := Shared.of taken1 in
+                    let b_name := fresh_against (String.concat "cp_b_" (I64.to_string i)) (Shared.get taken1_s) in
+                    let taken2 : List String := List.cons b_name (Shared.get taken1_s) in
+                    let here : CopyNames := { field := fname, typ := ftyp, a_name := a_name, b_name := b_name } in
+                    List.cons here (copy_names_for (i + 1) taken2 rest),
+            },
+    }
+
+def copy_args_a (names : List CopyNames) : List Expr :=
+    match names {
+        List.empty => List.empty,
+        List.cons n rest =>
+            match n { { a_name, .. } => List.cons (e_var a_name) (copy_args_a rest) },
+    }
+
+def copy_args_b (names : List CopyNames) : List Expr :=
+    match names {
+        List.empty => List.empty,
+        List.cons n rest =>
+            match n { { b_name, .. } => List.cons (e_var b_name) (copy_args_b rest) },
+    }
+
+/// One `Copy.dup_with <field> (fn a => fn b => ...)` per field, nested in
+/// declared order; `body` is the final `Pair.pair (C a...) (C b...)`.
+///
+/// The continuation receives the pair components, so the generated code never
+/// writes a `Pair.pair` MATCH ARM. That matters: a meta-built arm carries only
+/// a bare `Identifier` (`MatchArm` has no type slot here), and the self-hosted
+/// lowerer resolves bare constructor names across the whole program, so a user
+/// `pair` constructor could capture the arm. `Copy.dup_with` keeps the one
+/// pattern in `init/src/copy.mo`, which sorts before every dependency.
+///
+/// `Copy.dup_with` (not `Copy.copy`) so `[Copy A]` is the obligation the
+/// checker will enforce once generated binders are attributed; today the
+/// rejection lands at codegen (`Copy.dup_with`'s comment records the limit).
+def wrap_copies (names : List CopyNames) (body : Expr) : Expr :=
+    match names {
+        List.empty => body,
+        List.cons n rest =>
+            match n {
+                { field, typ, a_name, b_name } =>
+                    let typ_s := Shared.of typ in
+                    e_app (e_app (e_var "Copy.dup_with") (e_var field))
+                        (e_lam a_name (Shared.get typ_s)
+                            (e_lam b_name (Shared.get typ_s) (wrap_copies rest body))),
+            },
+    }
+
+def copy_ctor_arm (type_name : String) (ctor : CtorInfo) : MetaMatchArm :=
+    match ctor {
+        ctor_info ctor_name fields =>
+            let fields_s := Shared.of fields in
+            let field_names := List.map field_name_of (Shared.get fields_s) in
+            let names_s := Shared.of field_names in
+            let names := copy_names_for 0 (Shared.get names_s) (Shared.get fields_s) in
+            let ctor_ref := String.concat type_name (String.concat "." ctor_name) in
+            let names2 := Shared.of names in
+            let left := e_ctor ctor_ref (copy_args_a (Shared.get names2)) in
+            let right := e_ctor ctor_ref (copy_args_b (Shared.get names2)) in
+            let pair := e_ctor "Pair.pair" [left, right] in
+            match_arm ctor_name (Shared.get names_s) (wrap_copies (Shared.get names2) pair),
+    }
+
+def copy_ctor_arms (type_name : String) (ctors : List CtorInfo) : List MetaMatchArm :=
+    match ctors {
+        List.empty => List.empty,
+        List.cons c rest =>
+            List.cons (copy_ctor_arm type_name c) (copy_ctor_arms type_name rest),
+    }
+
+/// `#[derive Copy] struct T { ... }` generates the structural instance:
+/// duplicate every field with `Copy.dup` and rebuild the constructor twice.
+/// Every field type must have a `Copy` instance; a `#[linear]`/`#[proof]`
+/// carrier is rejected by the instance-kind rule, and an `#[opaque]` carrier
+/// cannot rebuild its unreferenceable witness. A generic type is rejected here
+/// (`TypeInfo.params` is non-empty) because `MetaDecl.d_instance` cannot carry
+/// the `[Copy A]` constraints it would need.
+///
+/// Known limit: a monomorphic type whose field has no `Copy` instance is not
+/// caught by `monad check`. The generated match binders have no written type
+/// (QTT Known Gap #2), so the `Copy.dup` call fails open; the rejection is a
+/// codegen `no instance found` instead. The `Copy.dup` helper exists so the
+/// moment attribution improves, the call becomes a real check-time obligation.
+pub def derive_copy_meta (info : TypeInfo) : List MetaDecl :=
+    match TypeInfo.shape info {
+        TypeShape.type_shape type_name params ctors =>
+            match params {
+                List.cons _ _ =>
+                    [d_error "cannot derive Copy for a generic type: the generated instance cannot carry [Copy A] constraints; write the instance by hand"],
+                List.empty =>
+                    let ctors_s := Shared.of ctors in
+                    match Shared.get ctors_s {
+                        List.empty => [d_error "cannot derive Copy for a type with no constructors"],
+                        List.cons _ _ =>
+                            let pairs_typ := e_app (e_app (e_var "Pair") (e_var type_name)) (e_var type_name) in
+                            [d_instance "Copy" (e_var type_name)
+                                [d_def "copy" [meta_param "x" (e_var type_name)] pairs_typ
+                                    (e_match (e_var "x") (copy_ctor_arms type_name (Shared.get ctors_s)))]],
+                    },
+            },
+    }
+
+#[derive_handler Copy]
+defmacro derive_copy T := decls {
+    reflect_type_info! T derive_copy_meta
+}
+
+def clone_arg (field_name : String) : Expr :=
+    e_app (e_var "Clone.clone_field") (e_app (e_var "Shared.of") (e_var field_name))
+
+def clone_ctor_arm (type_name : String) (ctor : CtorInfo) : MetaMatchArm :=
+    match ctor {
+        ctor_info ctor_name fields =>
+            let names := List.map field_name_of fields in
+            let names_s := Shared.of names in
+            let args := List.map clone_arg (Shared.get names_s) in
+            match_arm ctor_name (Shared.get names_s)
+                (e_ctor (String.concat type_name (String.concat "." ctor_name)) args),
+    }
+
+def clone_ctor_arms (type_name : String) (ctors : List CtorInfo) : List MetaMatchArm :=
+    match ctors {
+        List.empty => List.empty,
+        List.cons c rest =>
+            List.cons (clone_ctor_arm type_name c) (clone_ctor_arms type_name rest),
+    }
+
+/// `#[derive Clone] struct T { ... }` generates the structural instance:
+/// match the borrowed source, and rebuild each constructor from
+/// `Clone.clone_field (Shared.of field)` — the same shape `init/clone.mo`'s
+/// hand-written `Pair`/`Option`/`Result`/`List` instances use. Every field
+/// type must have a `Clone` instance. A generic type is rejected here for the
+/// same reason as `derive_copy_meta`, and a monomorphic non-`Clone` field is
+/// likewise a codegen-time `no instance found` until match-binder attribution
+/// improves (see `derive_copy_meta`'s Known limit).
+pub def derive_clone_meta (info : TypeInfo) : List MetaDecl :=
+    match TypeInfo.shape info {
+        TypeShape.type_shape type_name params ctors =>
+            match params {
+                List.cons _ _ =>
+                    [d_error "cannot derive Clone for a generic type: the generated instance cannot carry [Clone A] constraints; write the instance by hand"],
+                List.empty =>
+                    let ctors_s := Shared.of ctors in
+                    match Shared.get ctors_s {
+                        List.empty => [d_error "cannot derive Clone for a type with no constructors"],
+                        List.cons _ _ =>
+                            let shared_typ := e_app (e_var "Shared") (e_var type_name) in
+                            [d_instance "Clone" (e_var type_name)
+                                [d_def "clone" [meta_param "x" shared_typ] (e_var type_name)
+                                    (e_match (e_app (e_var "Shared.get") (e_var "x"))
+                                        (clone_ctor_arms type_name (Shared.get ctors_s)))]],
+                    },
+            },
+    }
+
+#[derive_handler Clone]
+defmacro derive_clone T := decls {
+    reflect_type_info! T derive_clone_meta
 }

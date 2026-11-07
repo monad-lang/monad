@@ -46,14 +46,35 @@ pub type CtorInfo {
     ctor_info (name : String) (fields : List FieldInfo)
 }
 
-/// A type's full structure: its own name, and its constructors in
-/// declared order. Does not carry the type's own generic parameters
-/// (`Inductive.params`) or per-field defaults/multiplicity — no existing
-/// derive needs them; see the design doc for why this scope is
-/// deliberate, not an oversight.
+/// A type's full structure: its own name, its declared type parameters (in
+/// declaration order; `[]` for a monomorphic type), and its constructors in
+/// declared order.
+///
+/// TWO constructors, not one with a `params` field, for bootstrap
+/// compatibility: the installed nightly's `build_type_info_value` still emits
+/// the 2-field `type_info`, so every existing derive must keep matching it
+/// while the compiler source is built by that nightly. The new builder emits
+/// `type_info_params` only when the type actually HAS parameters; a
+/// monomorphic type keeps the 2-field form. `TypeInfo.shape` normalizes both
+/// so a derive never destructures either by hand.
 pub type TypeInfo {
-    type_info (name : String) (ctors : List CtorInfo)
+    type_info (name : String) (ctors : List CtorInfo),
+    type_info_params (name : String) (params : List String) (ctors : List CtorInfo),
 }
+
+/// The normalized view of a `TypeInfo`, whatever constructor built it. A
+/// `type` (not a `struct`) because the meta-evaluator's inductive context is
+/// built from `inductive_d` declarations; a struct's synthetic inductive is
+/// not visible to a meta function matching on it.
+pub type TypeShape {
+    type_shape (name : String) (params : List String) (ctors : List CtorInfo),
+}
+
+pub def TypeInfo.shape (info : TypeInfo) : TypeShape :=
+    match info {
+        type_info n cs => TypeShape.type_shape n List.empty cs,
+        type_info_params n ps cs => TypeShape.type_shape n ps cs,
+    }
 
 /// A minimal, constructible mirror of the compiler's own `Term` surface —
 /// deliberately NOT a full mirror. `Pi`/`Forall`/`Sort`/`Ann`/`Ntv`/`Ctx`/

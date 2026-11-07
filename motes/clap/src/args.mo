@@ -37,7 +37,7 @@ use std::list {List.length}
 // `cli/src/main.mo` and four test files down with it. `motes/json`
 // imports from `init.string` the same way.
 use init::string {}
-use init::meta {TypeInfo, CtorInfo, FieldInfo, Expr, MetaDecl}
+use init::meta {TypeInfo, TypeShape, CtorInfo, FieldInfo, Expr, MetaDecl}
 open List {length}
 open TypeInfo {type_info}
 open CtorInfo {ctor_info}
@@ -739,8 +739,8 @@ pub def cli_parse_expr (type_name : String) : Expr :=
 /// constructor/field, so a mistake is a derive-time error rather than
 /// generated code that fails with an unrelated type error.
 pub def derive_cli_meta (info : TypeInfo) : List MetaDecl :=
-    match info {
-        type_info type_name ctors =>
+    match TypeInfo.shape info {
+        TypeShape.type_shape type_name _params ctors =>
             match ctors {
                 List.empty =>
                     [d_error (String.concat_all ["#[derive Cli]: `", type_name, "` has no constructors"])],

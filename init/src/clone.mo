@@ -36,6 +36,15 @@ pub class Clone (A : Type) {
     def clone (x : Shared A) : A
 }
 
+/// The constrained clone step a `#[derive Clone]` body uses. Direct
+/// `Clone.clone` from generated code keeps the class's abstract signature for
+/// a `#[derive]`'d instance (the promotion gap); routing through this def makes
+/// `[Clone A]` the call-site obligation the checker will enforce once match
+/// binders are attributed. Today the generated binder is untyped, so a
+/// non-`Clone` field still fails at codegen (`no instance found`); see
+/// `Copy.dup`'s comment in `init/copy.mo`.
+pub def Clone.clone_field [Clone A] (x : Shared A) : A := Clone.clone x
+
 // ---------- Builtin instances ----------
 //
 // Their bodies are the identity: every one of these types is `Copy` and

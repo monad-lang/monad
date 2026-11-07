@@ -417,10 +417,30 @@ pub fn build_type_info_value(
   }
   let ctors_list = list_value(inductives, ctor_values)?;
   let name_v = str_value(induct.name().last().as_str());
-  Ok(Value::Con {
-    tag: type_info_tag,
-    args: Arc::new(vec![name_v, ctors_list].into()),
-  })
+  // A monomorphic type keeps the 2-field `type_info` shape so a compiler
+  // built by the previous nightly (whose builder emits only that shape) can
+  // still expand every existing derive. A generic type gets
+  // `type_info_params`; only `derive_copy`/`derive_clone` read the params,
+  // and they are the derives that must reject a generic type.
+  if induct.params().is_empty() {
+    Ok(Value::Con {
+      tag: type_info_tag,
+      args: Arc::new(vec![name_v, ctors_list].into()),
+    })
+  } else {
+    let type_info_params_tag =
+      ctor_tag(find_inductive(inductives, "TypeInfo")?, "type_info_params")?;
+    let param_values: Vec<Value> = induct
+      .params()
+      .iter()
+      .map(|p| str_value(p.name.as_str()))
+      .collect();
+    let params_v = list_value(inductives, param_values)?;
+    Ok(Value::Con {
+      tag: type_info_params_tag,
+      args: Arc::new(vec![name_v, params_v, ctors_list].into()),
+    })
+  }
 }
 
 /// `Expr` value -> real `Term`, recursively. The reify direction of

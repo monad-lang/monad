@@ -102,6 +102,29 @@ pub class Copy A {
     def copy : A -> Pair A A
 }
 
+/// The constrained duplication step a `#[derive Copy]` body uses. Calling
+/// `Copy.copy` directly from a generated instance keeps the class's abstract
+/// signature (the documented promotion gap for a `#[derive]`'d instance), so a
+/// non-`Copy` field would fail open at check time; routing through this def
+/// makes `[Copy A]` a real call-site obligation once match-binder attribution
+/// improves (today the generated accessors are untyped, so the failure still
+/// lands at codegen; see `Copy.dup_with` and the derive's Known limit).
+pub def Copy.dup [Copy A] (x : A) : Pair A A := Copy.copy x
+
+/// `Copy.dup` with the pair destructured inside `init` source. Generated
+/// derive code cannot write a `Pair.pair` match arm: the meta reifier's arm
+/// name is a bare `Identifier`, so a user `pair` constructor elsewhere in the
+/// program can capture the arm. Keeping the one `Pair.pair` pattern here, in
+/// the mote that sorts before every dependency, removes that hazard from
+/// generated code.
+pub def Copy.dup_with [Copy A] (x : A) (k : A -> A -> B) : B :=
+    match Copy.copy x {
+        Pair.pair a b =>
+            let a2 : A := a in
+            let b2 : A := b in
+            k a2 b2,
+    }
+
 // ---------- Builtin instances ----------
 //
 // Scalars, `Bool`, `Char`, `Unit` — Design B's *Copy policy for core

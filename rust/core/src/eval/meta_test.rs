@@ -114,6 +114,54 @@ fn test_reflect_type_info_round_trips_through_a_hand_written_meta_def() {
 }
 
 #[test]
+fn test_reflect_type_info_reports_params_for_a_generic_type() {
+  // The second `TypeInfo` constructor (`type_info_params`) is the one
+  // `derive_copy`/`derive_clone` use to reject a generic type. The
+  // monomorphic branch must stay on `type_info` so a compiler built by the
+  // previous nightly can still expand every existing derive.
+  let loaded = loaded_with_init_meta();
+  let parsed = parse_file(
+    r#"
+    use init::meta {TypeInfo, MetaDecl, Expr}
+
+    type Box A { box (value : A) }
+
+    def first_param (params : List String) : String :=
+        match params { List.cons p _ => p, List.empty => "none" }
+
+    def my_meta (info : TypeInfo) : List MetaDecl :=
+        match info {
+            type_info name ctors =>
+                [MetaDecl.d_def (String.concat name "_monomorphic") [] (Expr.e_var "String") (Expr.e_str name)]
+            type_info_params name params ctors =>
+                [MetaDecl.d_def (String.concat name (String.concat "_param_" (first_param params)))
+                    [] (Expr.e_var "String") (Expr.e_str name)]
+        }
+
+    reflect_type_info! Box my_meta
+    "#
+    .into(),
+  )
+  .unwrap();
+  let elaborated = elaborate_decls(parsed.decls, &loaded);
+  let path = ModulePath::top("test_meta");
+  let expanded = expand_macros(elaborated, &loaded, &path);
+  let expanded = match &expanded {
+    Ok(e) => e,
+    Err(e) => panic!("reflect_type_info! on a generic type errored: {e}"),
+  };
+  let found = expanded.iter().any(|ctx| match ctx.value() {
+    Decl::Def(def) => def.name.to_string() == "Box_param_A",
+    _ => false,
+  });
+  assert!(
+    found,
+    "a generic type must reflect as `type_info_params` with its declared params \
+     (expected a `Box_param_A` decl) — got: {expanded:#?}"
+  );
+}
+
+#[test]
 fn test_reflect_type_info_blocks_impure_natives_with_a_clear_error() {
   let loaded = loaded_with_init_meta();
   let r = expand_and_type_check_with(

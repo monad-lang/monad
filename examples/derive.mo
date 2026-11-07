@@ -1,21 +1,21 @@
-/// Derive Macros Example — BEq, BOrd, Debug, and Lens via `#[derive ...]`
+/// Derive Macros Example — BEq, BOrd, Debug, Lens, Copy, and Clone via
+/// `#[derive ...]`
 ///
 /// Demonstrates deriving structural equality, ordering, a rust-style debug
-/// representation, and per-field lenses for a struct and a plain
-/// multi-constructor `type`, all with a single `#[derive ...]` attribute
-/// per declaration. Each derive is a `.mo`-authored macro in
-/// `std/derive.mo`, built on a handful of reflection intrinsics in the
-/// compiler itself — see that file's doc comments for the full design.
+/// representation, per-field lenses, and the two duplication classes for a
+/// struct and a plain multi-constructor `type`, all with a single
+/// `#[derive ...]` attribute per declaration. Each derive is a `.mo`-authored
+/// macro in `std/derive.mo`, built on a handful of reflection intrinsics in
+/// the compiler itself — see that file's doc comments for the full design.
 #![mote { name := "derive", deps := [init, std] }]
 
 
-// `derive_beq`/`derive_bord`/`derive_debug`/`derive_lens` are only ever
-// invoked via the `#[derive BEq BOrd Debug Lens]` attribute below (macro
-// dispatch by name string, not an ordinary term reference), so the
-// checker's "unused import" analysis flags this line as a false
+// `derive_*` macros are only ever invoked via the `#[derive ...]` attribute
+// below (macro dispatch by name string, not an ordinary term reference), so
+// the checker's "unused import" analysis flags this line as a false
 // positive — confirmed by removing it: `#[derive BEq]` then fails with
 // "macro `derive_beq` not found". Keep this import despite the warning.
-use std::derive {derive_beq, derive_bord, derive_debug, derive_lens}
+use std::derive {derive_beq, derive_bord, derive_clone, derive_copy, derive_debug, derive_lens}
 use init::optics {Lens, set, view}
 use std::debug {Debug}
 
@@ -52,7 +52,7 @@ def test_point_lens : Bool :=
 /// cover every constructor; `Lens` is deliberately not requested here,
 /// since a lens focuses on exactly one field of exactly one shape and
 /// wouldn't apply to a sum type (see `init.optics`'s `Prism` instead).
-#[derive BEq BOrd Debug]
+#[derive BEq BOrd Debug Copy Clone]
 type Suit {
     hearts,
     spades,
@@ -70,3 +70,20 @@ def test_suit_ordering_follows_declaration_order : Bool :=
 #[test]
 def test_suit_debug : Bool :=
     Debug.debug Suit.hearts == "Suit::hearts" && Debug.debug (Suit.number 7) == "Suit::number { rank: 7 }"
+
+/// A derived `Copy` is the ω grant: the same binder may be moved twice. This
+/// would be `value_used_after_move` without the instance.
+#[test]
+def test_suit_copy_grants_omega : Bool :=
+    let a : Suit := Suit.number 7 in
+    let b : Suit := a in
+    let c : Suit := a in
+    b == c && a == c
+
+/// A derived `Clone` is the explicit deep copy; the source stays usable
+/// through the `Shared` borrow.
+#[test]
+def test_suit_clone : Bool :=
+    let s : Suit := Suit.number 7 in
+    let c : Suit := Clone.clone (Shared.of s) in
+    c == s && c == Suit.number 7

@@ -7,10 +7,12 @@
 /// EVALUATES a meta-`def` against the `Value` this module builds; this
 /// module only converts data shapes on both sides of that call.
 ///
-/// **Constructor tags are hardcoded, not looked up.** `TypeInfo`/
-/// `CtorInfo`/`FieldInfo` are single-constructor types (`init/meta.mo`),
-/// so their own constructor's tag is always 0 -- no lookup needed.
-/// `Expr`/`MetaDecl`/`MetaMatchArm`/`MetaParam` are also types THIS design fully
+/// **Constructor tags are hardcoded, not looked up.** `CtorInfo`/`FieldInfo`
+/// are single-constructor types (`init/meta.mo`), so their own constructor's
+/// tag is always 0. `TypeInfo` has two (`type_info` tag 0 for a monomorphic
+/// type, `type_info_params` tag 1 for a generic one; see `init/meta.mo`'s
+/// bootstrap note), so `type_info_val`/`type_info_params_val` name their tags
+/// directly. `Expr`/`MetaDecl`/`MetaMatchArm`/`MetaParam` are also types THIS design fully
 /// owns (`init/meta.mo`), so their tags are hardcoded directly from that
 /// file's own literal declaration order below, matching this whole
 /// codebase's own established precedent for this exact situation
@@ -78,6 +80,13 @@ def ctor_info_val (name : Value) (fields : Value) : Value :=
 
 def type_info_val (name : Value) (ctors : Value) : Value :=
     Value.v_con 0 (List.cons name (List.cons ctors List.empty))
+
+/// `TypeInfo.type_info_params` -- the SECOND declared constructor (tag 1),
+/// emitted only for a generic type. A monomorphic type keeps `type_info`
+/// (tag 0, two fields) so a compiler built by the previous nightly still
+/// expands every existing derive; see `init/meta.mo`'s `TypeInfo` comment.
+def type_info_params_val (name : Value) (params : Value) (ctors : Value) : Value :=
+    Value.v_con 1 (List.cons name (List.cons params (List.cons ctors List.empty)))
 
 // ─── Resolving the target type `T` -- Inductive/Struct collection ──────
 
@@ -313,12 +322,26 @@ def ctors_value (ctors : List InductConstructor) : Result String (List Value) :=
 /// via `lang/typecheck/meta_eval.mo`.
 def build_type_info_value (ind : Inductive) : Result String Value :=
     match ind {
-        Inductive.mk _name _params _typ constructors _attrs _vis =>
+        Inductive.mk _name params _typ constructors _attrs _vis =>
             match ctors_value constructors {
                 Result.err e => Result.err e,
-                Result.ok cvs => Result.ok (type_info_val (str_val (inductive_bare_name ind)) (list_value cvs)),
+                Result.ok cvs =>
+                    match params {
+                        List.empty => Result.ok (type_info_val (str_val (inductive_bare_name ind)) (list_value cvs)),
+                        List.cons _ _ =>
+                            Result.ok (type_info_params_val (str_val (inductive_bare_name ind))
+                                (list_value (List.map param_name_val params))
+                                (list_value cvs)),
+                    },
             },
     }
+
+/// A type parameter's declared name, for `TypeInfo.params`. `derive_copy`/
+/// `derive_clone` use the list to reject a generic type (their generated
+/// instance cannot carry the constraints a generic one needs).
+#[partial]
+def param_name_val (p : Param) : Value :=
+    match p { Param.mk name _typ _mult _default _attrs => str_val (show_identifier_ name) }
 
 /// Strip a `Term.ctx` location wrapper before matching -- a struct
 /// field's own declared default (`StructField.mk`'s `fdefault`, threaded

@@ -9,7 +9,7 @@
 /// own meta-def argument to be a bare top-level name, not a partially
 /// applied expression (`lang/src/module.mo`'s own
 /// `"reflect_type_info!: meta-def argument must be a plain name"`).
-use init::meta {TypeInfo, CtorInfo, FieldInfo, Expr, MetaMatchArm, MetaParam, MetaDecl}
+use init::meta {TypeInfo, TypeShape, CtorInfo, FieldInfo, Expr, MetaMatchArm, MetaParam, MetaDecl}
 
 open TypeInfo {type_info}
 open CtorInfo {ctor_info}
@@ -188,8 +188,8 @@ def serialize_decl_for_ctor (format_tag : String) (format_typ : Expr) (type_name
 /// a type's codec stays hand-written, as `agent-skills.md`'s `Role`/
 /// `Content`/`StopReason` already plan to be.
 pub def derive_serialize_meta (format_tag : String) (format_typ : Expr) (info : TypeInfo) : List MetaDecl :=
-    match info {
-        type_info type_name ctors =>
+    match TypeInfo.shape info {
+        TypeShape.type_shape type_name _params ctors =>
             match ctors {
                 List.cons c tail =>
                     match tail {
@@ -351,8 +351,8 @@ def deserialize_decl_for_ctor (format_tag : String) (format_typ : Expr) (type_na
     }
 
 pub def derive_deserialize_meta (format_tag : String) (format_typ : Expr) (info : TypeInfo) : List MetaDecl :=
-    match info {
-        type_info type_name ctors =>
+    match TypeInfo.shape info {
+        TypeShape.type_shape type_name _params ctors =>
             match ctors {
                 List.cons c tail =>
                     match tail {
