@@ -58,6 +58,13 @@ typedef struct {
    Cell handle and its payload must travel as one value; a fixed tag is
    available for exactly the constructors `builtin_ctor_tags` names. */
 #define MONAD_PAIR_TAG 15
+/* `Array.mk`'s builtin tag (16), registered in `builtin_ctor_tags`
+   alongside Option's 3/4 and List's 5/6. It has to be a builtin precisely
+   because the C array helpers allocate one: a C function cannot consult the
+   per-program constructor numbering a non-builtin type would get. Defined
+   here, before `alloc_constructor_impl`, so the allocation stats can tell an
+   Array cell from an ordinary constructor. */
+#define MONAD_ARRAY_TAG 16
 
 typedef struct {
     Header header;
@@ -99,6 +106,7 @@ typedef struct {
    captured value at the point it's actually referenced. */
 static rt_word alloc_closure_impl(rt_word entry, int64_t arity, int64_t env_size) {
     size_t size = sizeof(Closure) + (size_t)env_size * sizeof(rt_field);
+    MONAD_STAT(MONAD_STAT_CLOSURE, size);
     Closure* c = (Closure*)RT_PTR(monad_alloc((rt_size)size));
     if (c) {
         c->header.tag = 1;
@@ -325,6 +333,7 @@ static rt_word alloc_constructor_impl(int64_t tag, int64_t field_count) {
         if (cached) return RT_WORD(cached);
     }
     size_t size = sizeof(Constructor) + (size_t)field_count * sizeof(rt_field);
+    MONAD_STAT(tag == MONAD_ARRAY_TAG ? MONAD_STAT_ARRAY : MONAD_STAT_CTOR, size);
     Constructor* c = (Constructor*)RT_PTR(monad_alloc((rt_size)size));
     if (c) {
         c->header.tag = 2;
@@ -407,7 +416,6 @@ static void monad_set_field_impl(rt_word ptr, int64_t idx, rt_field value) {
    to be a builtin precisely because these C functions allocate one: a C
    function cannot consult the per-program constructor numbering a
    non-builtin type would get. */
-#define MONAD_ARRAY_TAG 16
 
 static rt_word monad_array_new_impl(int64_t n, rt_word fill) {
     int64_t len = n < 0 ? 0 : n;
@@ -562,6 +570,7 @@ static RefObj* ref_of(rt_word handle) {
 }
 
 static rt_word ref_new_impl(rt_word init) {
+    MONAD_STAT(MONAD_STAT_REF, sizeof(RefObj));
     RefObj* r = (RefObj*)RT_PTR(monad_alloc((rt_size)sizeof(RefObj)));
     if (!r) return 0;
     r->header.tag = MONAD_REF_TAG;
@@ -1363,7 +1372,9 @@ typedef struct {
 
 static BufObj* bytebuf_new(int64_t n) {
     size_t len = n > 0 ? (size_t)n : 0;
-    BufObj* obj = (BufObj*)RT_PTR(monad_alloc_atomic((rt_size)(sizeof(BufObj) + MONAD_BUF_ALIGN - 1 + len)));
+    size_t size = sizeof(BufObj) + MONAD_BUF_ALIGN - 1 + len;
+    MONAD_STAT(MONAD_STAT_BYTEBUF, size);
+    BufObj* obj = (BufObj*)RT_PTR(monad_alloc_atomic((rt_size)size));
     if (!obj) return NULL;
     obj->header.refcount = 1;
     obj->header.tag = MONAD_BUF_TAG;

@@ -82,6 +82,29 @@ rt_word monad_alloc_atomic(rt_size size);
 void monad_retain(rt_word ptr);
 void monad_release(rt_word ptr);
 
+/* Per-kind allocation counters (ownership-regions-memory O-M0; print with
+   MONAD_ALLOC_STATS=1). Native only: wasi/web compile the call sites away
+   (MONAD_STAT is a no-op) because they have no getenv/atexit contract, and
+   the counters would be process-local numbers nobody can print. The note
+   function is a branch on a startup flag, so the instrumentation is inert
+   when the variable is unset. */
+enum MonadAllocKind {
+    MONAD_STAT_CTOR = 0,
+    MONAD_STAT_CLOSURE,
+    MONAD_STAT_ARRAY,
+    MONAD_STAT_REF,
+    MONAD_STAT_BYTEBUF,
+    MONAD_STAT_ATOMIC,
+    MONAD_STAT_SCANNED,
+    MONAD_STAT_KIND_COUNT,
+};
+#ifdef MONAD_TARGET_NATIVE
+void monad_alloc_stats_note(int kind, rt_size bytes);
+#define MONAD_STAT(kind, bytes) monad_alloc_stats_note((int)(kind), (rt_size)(bytes))
+#else
+#define MONAD_STAT(kind, bytes) ((void)0)
+#endif
+
 /* Cooperative cancellation (async-threading S1).
  *
  * Every IO bind is a potential cancellation point: `monad_io_bind` checks

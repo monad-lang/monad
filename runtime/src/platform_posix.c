@@ -14,6 +14,7 @@
    meant 5.99 GiB allocated of which 98.24% was garbage, and `compile
    lang/main.mo` was OOM-killed at 29.7 GB. */
 void* monad_alloc(size_t size) {
+    MONAD_STAT(MONAD_STAT_SCANNED, size);
     void* ptr = GC_malloc(size);
     if (ptr) {
         Header* h = (Header*)ptr;
@@ -29,6 +30,7 @@ void* monad_alloc(size_t size) {
    arbitrary text bytes from being mistaken for heap addresses and
    pinning garbage alive. */
 void* monad_alloc_atomic(size_t size) {
+    MONAD_STAT(MONAD_STAT_ATOMIC, size);
     return GC_malloc_atomic(size);
 }
 
@@ -46,6 +48,61 @@ void monad_release(void* ptr) {
        still maintained so that the eventual linear-types work has a
        correct starting point -- at that point this regains its free. */
     atomic_fetch_sub(&h->refcount, 1);
+}
+
+/* ── Allocation stats (ownership-regions-memory O-M0) ─────────────────
+   Per-kind counters, printed at exit when MONAD_ALLOC_STATS=1. The split
+   between constructors/closures (Owned candidates) and strings/ByteBufs/
+   Ref/Array (Region candidates) is what decides how much O4's drop glue can
+   recover before regions exist. `monad_alloc` counts the SCANNED total and
+   `monad_alloc_atomic` the ATOMIC total; runtime_core.c adds the per-kind
+   entries for constructors, closures, Array, Ref and ByteBuf. */
+static unsigned long long monad_stat_counts[MONAD_STAT_KIND_COUNT];
+static unsigned long long monad_stat_bytes[MONAD_STAT_KIND_COUNT];
+static int monad_stats_on = 0;
+
+void monad_alloc_stats_note(int kind, rt_size bytes) {
+    if (!monad_stats_on) return;
+    if (kind < 0 || kind >= MONAD_STAT_KIND_COUNT) return;
+    /* Fibers are OS threads, and every one of them allocates: plain `+=`
+       here is a data race that loses increments. Relaxed atomics are enough
+       for counters; the printer runs after the main thread is joined. */
+    __atomic_fetch_add(&monad_stat_counts[kind], 1ULL, __ATOMIC_RELAXED);
+    __atomic_fetch_add(&monad_stat_bytes[kind], (unsigned long long)bytes, __ATOMIC_RELAXED);
+}
+
+static const char* monad_stat_label(int kind) {
+    switch (kind) {
+        case MONAD_STAT_CTOR: return "constructor";
+        case MONAD_STAT_CLOSURE: return "closure";
+        case MONAD_STAT_ARRAY: return "array";
+        case MONAD_STAT_REF: return "ref";
+        case MONAD_STAT_BYTEBUF: return "bytebuf";
+        case MONAD_STAT_ATOMIC: return "atomic-bytes";
+        case MONAD_STAT_SCANNED: return "scanned-bytes";
+        default: return "?";
+    }
+}
+
+static void monad_alloc_stats_print(void) {
+    for (int k = 0; k < MONAD_STAT_KIND_COUNT; k++) {
+        unsigned long long count =
+            __atomic_load_n(&monad_stat_counts[k], __ATOMIC_RELAXED);
+        unsigned long long bytes =
+            __atomic_load_n(&monad_stat_bytes[k], __ATOMIC_RELAXED);
+        fprintf(stderr, "[monad alloc] %-14s count=%llu bytes=%llu\n",
+                monad_stat_label(k), count, bytes);
+    }
+}
+
+/* Read the flag once, then register the printer. Called from `main` before
+   any Monad code runs; an unset/empty/"0" value leaves the note function a
+   single predictable branch. */
+void monad_alloc_stats_install(void) {
+    const char* v = getenv("MONAD_ALLOC_STATS");
+    if (!v || !*v || v[0] == '0') return;
+    monad_stats_on = 1;
+    atexit(monad_alloc_stats_print);
 }
 
 /* --- Fibers and scopes (`std/concurrent/{fiber,combine}.mo`) --------
@@ -2309,6 +2366,7 @@ static void* main_thread_main(void* p) {
 
 int main(int argc, char** argv) {
     raise_stack_limit();
+    monad_alloc_stats_install();
     GC_INIT();
     /* A write to a pipe or socket whose reader has gone must come back as
        EPIPE (a `Result.err` the caller can see), not kill the process --
