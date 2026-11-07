@@ -968,7 +968,15 @@ def build_scope_struct (s : Struct) (path : ModulePath) (acc : ScopeData) : Scop
             let mk_np : NamePath := NamePath.mk (List.cons (Identifier.id "mk") List.empty) in
             let mk_params : List Param := struct_fields_to_params fields in
             let mk_con : InductConstructor := InductConstructor.mk mk_np mk_params Term.hole in
-            let synthetic_ind : Inductive := Inductive.mk type_np List.empty Term.hole (List.cons mk_con List.empty) attrs vis in
+            // A struct has no kind clause and lives at `Sort 1`, like a
+            // `type` declaration that omits one. The kind is what
+            // `free_var_declared_typ` reports for a bare type name and what
+            // the inductive-application rule checks arguments against; a
+            // hole here made every `Point`/`Lens Point A` annotation look
+            // like a non-type.
+            let struct_kind : Term := Term.sort (SortLevel.concrete 1) in
+            let synthetic_ind : Inductive :=
+                Inductive.mk type_np List.empty struct_kind (List.cons mk_con List.empty) attrs vis in
             scope_data_add_inductive with_type_def synthetic_ind
     }
 

@@ -448,10 +448,13 @@ pub def Exists (A : Type) (P : A -> Prop) : Prop := Sigma A P
 /// it still does not construct one; construction is covered by source-string
 /// tests in `lang/src/tests/typecheck_examples_tests.mo`.
 ///
-/// The second projection `Sigma.snd (p : Sigma A B) : B (Sigma.fst p)` lives
-/// in `proofs/src/dependent.mo` (`sigma_snd`): checking it needs the arm's
-/// expected type to see the scrutinee refined to `Sigma.dpair a b`, which is
-/// the dependent-match rule, not a prelude concern.
+/// The second projection `Sigma.snd (p : Sigma A B) : B (Sigma.fst p)` is
+/// self-hosted-only and lives in `proofs/src/dependent.mo` (`sigma_snd`, with
+/// the implicit form `Sigma.snd`). Checking it needs the arm's expected type
+/// to see the scrutinee refined to `Sigma.dpair a b`; the Rust host does not
+/// implement that refinement, so putting it in `init/` would break the host
+/// check (measured: `monad-rs check init/src/prelude.mo` rejects it). This is
+/// a recorded parity gap, not a prelude concern.
 pub def Sigma.fst {A : Type} {B : A -> Type} (p : Sigma A B) : A :=
     match p { Sigma.dpair a _ => a }
 
@@ -719,6 +722,13 @@ with Cubical {
         (T : Cubical.is_one phi -> Type) (w : (u : Cubical.is_one phi) -> Type)
         (t : (u : Cubical.is_one phi) -> T u) (a : A) : Cubical.Glue A phi T w
     #[cubical "glue_elim"] pub def unglue (g : Type) : Type
+    // S1 (univalence.md Stage 6c): a two-clause partial SYSTEM. `ua` needs
+    // `A` on the `i0` face and `B` on the `i1` face; `is_one phi -> Type` is
+    // a total function out of the proposition and cannot be piecewise. The
+    // saturated call is typed by the checker's own `type_check_system`; this
+    // declaration supplies name resolution and the under-applied type.
+    #[cubical "system"] pub def system {A : Type} (phi1 : Cubical.I) (u1 : A)
+        (phi2 : Cubical.I) (u2 : A) : Cubical.is_one (Cubical.ijoin phi1 phi2) -> A
 }
 
 // ── Inhabited instances ────────────────────────────────────────────

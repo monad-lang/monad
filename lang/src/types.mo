@@ -777,6 +777,14 @@ pub type CubicalPrim {
     /// `w t = a`, which nothing enforces (the same unenforced shape as
     /// `hcomp`'s `u i0 = u0`), so a neutral `unglue` stays stuck.
     glue_elim,
+    /// A two-clause partial SYSTEM: `system φ1 u1 φ2 u2` is the partial
+    /// element that is `u1` on the face `φ1` and `u2` on `φ2`. It is typed as
+    /// the function `is_one (ijoin φ1 φ2) -> A` (the clauses' common type),
+    /// and its application rule selects a clause when the face decides at a
+    /// literal endpoint. This is what `ua` needs and `is_one φ -> Type`
+    /// cannot express: `∂ i` is true at BOTH endpoints, so a total function
+    /// out of the proposition cannot say which clause applies.
+    system,
 }
 
 /// One cubical primitive applied to `args`, whose length is its arity.
@@ -2546,51 +2554,75 @@ pub def level_const (l : SortLevel) : Option I64 := match l {
     },
 }
 
-/// Level equality, for `Similar`. Concrete-valued levels compare by value, so
-/// a `succ`/`max` that happens to be concrete still matches a literal. A
-/// variable equals only the same name; anything partially unresolved is NOT
-/// equal, again refusing rather than guessing.
-def level_eq (l : SortLevel) (r : SortLevel) : Bool := match level_const l {
-    Option.some a => match level_const r {
-        Option.some b => I64.beq a b,
-        Option.none => false,
-    },
-    Option.none => match l {
-        SortLevel.var n1 => match r {
-            SortLevel.var n2 => Similar.similar n1 n2,
-            _ => false,
-        },
-        _ => false,
-    },
-}
-
-/// `l <= r` -- cumulativity.
-///
-/// Two ways to hold. A level is `<=` ITSELF whatever it evaluates to, so
-/// `level_eq` settles the reflexive case first: `u <= u` is true under every
-/// valuation of `u`, and it is not a guess. Without it `unify` was not
-/// reflexive on sorts -- `unify_sort` (`lang/typecheck/unify.mo`) routes both
-/// spellings here before the structural `Similar.similar` fallback ever runs,
-/// so `Sort u` failed to unify with `Sort u` and a universe-polymorphic
-/// signature could not be compared against itself.
-///
-/// Otherwise both sides must be concrete, and an unresolved level answers
-/// FALSE (see `level_const`) -- the sound direction, which costs
-/// completeness and never soundness. Two DIFFERENT variables still do not
-/// unify; W1.5's normalizing comparison is what resolves those structurally.
-///
-/// `level_lt` is unaffected by the reflexive arm, which is the point of
-/// spelling it `level_le (succ l) r`: `level_eq (succ u) u` is false (they
-/// are not the same level), so `Sort u : Sort u` stays rejected.
-def level_le (l : SortLevel) (r : SortLevel) : Bool :=
-    if level_eq l r then true
-    else match level_const l {
-        Option.some a => match level_const r {
-            Option.some b => not (I64.gt a b),
-            Option.none => false,
-        },
-        Option.none => false,
+/// `var u <= succ^k (var u)` -- the one symbolic case where a variable is
+/// bounded by a successor of itself. Walks the successor/max structure
+/// until it reaches the variable (or a concrete level, which cannot bound a
+/// variable from above).
+#[terminating]
+def level_var_le_succ (u : Identifier) (inner : SortLevel) : Bool :=
+    match inner {
+        SortLevel.var v => Similar.similar u v,
+        SortLevel.succ inner2 => level_var_le_succ u inner2,
+        SortLevel.max a b => level_var_le_succ u a || level_var_le_succ u b,
+        SortLevel.concrete _ => false,
     }
+
+/// Structural cumulativity, W1.5.
+///
+/// The old implementation consulted `level_const` and answered FALSE for any
+/// `max`/`succ` containing a variable. That was not merely incomplete: it
+/// was non-reflexive (`level_le (max u v) (max u v)` and
+/// `level_le (succ u) (succ u)` were both false), which made `Sort (max u v)`
+/// fail to unify with itself.
+///
+/// The rules below are the standard ones for a max/succ lattice:
+///   - `max a b <= r` iff both components are `<= r`;
+///   - `l <= max a b` iff `l` is `<=` one component;
+///   - `succ a <= succ b` iff `a <= b`;
+///   - a variable is bounded by a successor of itself only;
+///   - concrete numerals compare numerically.
+///
+/// Unresolved cases still answer FALSE. That direction is sound (it costs
+/// completeness, never soundness); in particular `max u v <= w`, with a free
+/// `w`, is a CONSTRAINT to be recorded and checked at the use site, not a
+/// theorem this function may invent.
+#[terminating]
+def level_le (l : SortLevel) (r : SortLevel) : Bool :=
+    match l {
+        SortLevel.max a b => level_le a r && level_le b r,
+        _ =>
+            match r {
+                SortLevel.max c d => level_le l c || level_le l d,
+                SortLevel.concrete m =>
+                    match l {
+                        SortLevel.concrete n => Bool.not (I64.gt n m),
+                        SortLevel.succ inner =>
+                            if I64.beq m 0 then false
+                            else level_le inner (SortLevel.concrete (I64.sub m 1)),
+                        _ => false,
+                    },
+                SortLevel.succ inner =>
+                    match l {
+                        SortLevel.concrete n =>
+                            if I64.beq n 0 then true
+                            else level_le (SortLevel.concrete (I64.sub n 1)) inner,
+                        SortLevel.succ inner2 => level_le inner2 inner,
+                        SortLevel.var u => level_var_le_succ u inner,
+                        _ => false,
+                    },
+                SortLevel.var v =>
+                    match l {
+                        SortLevel.var u => Similar.similar u v,
+                        _ => false,
+                    },
+            },
+    }
+
+/// Level equality, for `Similar`: `l <= r` and `r <= l`. Reflexivity on
+/// symbolic `max`/`succ` follows from `level_le`, so two spellings of the
+/// same symbolic level now compare equal.
+def level_eq (l : SortLevel) (r : SortLevel) : Bool :=
+    level_le l r && level_le r l
 
 /// `l < r` -- the sort rule, and exactly `succ l <= r`. Spelling it this way
 /// is not a shortcut: it is what makes `Sort n : Sort n` false by the same
@@ -2623,6 +2655,31 @@ def test_level_le_is_reflexive_on_a_level_var : Bool :=
 def test_level_le_refuses_two_distinct_level_vars : Bool :=
     Bool.not (level_le (SortLevel.var (Identifier.id "u"))
         (SortLevel.var (Identifier.id "v")))
+
+/// W1.5: symbolic `max`/`succ` levels are reflexive and decompose. These are
+/// the cases the old `level_const`-only comparison answered FALSE for.
+#[test]
+def test_level_le_is_reflexive_on_symbolic_max_and_succ : Bool :=
+    let u : SortLevel := SortLevel.var (Identifier.id "u") in
+    let v : SortLevel := SortLevel.var (Identifier.id "v") in
+    let m : SortLevel := SortLevel.max u v in
+    level_le m m && level_le (SortLevel.succ u) (SortLevel.succ u)
+
+#[test]
+def test_level_le_decomposes_max : Bool :=
+    let u : SortLevel := SortLevel.var (Identifier.id "u") in
+    let v : SortLevel := SortLevel.var (Identifier.id "v") in
+    let m : SortLevel := SortLevel.max u v in
+    level_le u m
+        && Bool.not (level_le m u)
+        && level_eq m (SortLevel.max v u)
+        && Bool.not (level_eq m (SortLevel.max u (SortLevel.var (Identifier.id "w"))))
+
+#[test]
+def test_level_le_variable_is_below_its_own_successor : Bool :=
+    let u : SortLevel := SortLevel.var (Identifier.id "u") in
+    level_le u (SortLevel.succ u)
+        && Bool.not (level_le (SortLevel.succ u) u)
 
 /// The sort level of a term, if that term is a sort.
 ///
@@ -2809,6 +2866,12 @@ pub def cub_glue_intro (a_typ : Term) (a_face : Term) (a_partial : Term)
 pub def cub_glue_elim (a_glued : Term) : Term :=
     cub CubicalPrim.glue_elim [a_glued]
 
+/// `system φ1 u1 φ2 u2` -- a two-clause partial element. Its type is
+/// `is_one (ijoin φ1 φ2) -> A`, and `whnf`'s application rule selects the
+/// clause whose face is true when the face decides.
+pub def cub_system (a_face1 : Term) (a_val1 : Term) (a_face2 : Term) (a_val2 : Term) : Term :=
+    cub CubicalPrim.system [a_face1, a_val1, a_face2, a_val2]
+
 /// How many arguments a primitive takes. `args` is positional and this is
 /// the only statement of its expected length; `type_check_cubical` is what
 /// rejects a mismatch, exactly as `type_check_con` does for `Con.num_args`.
@@ -2831,6 +2894,7 @@ pub def cubical_arity (prim : CubicalPrim) : I64 := match prim {
     CubicalPrim.glue => 4,
     CubicalPrim.glue_intro => 6,
     CubicalPrim.glue_elim => 1,
+    CubicalPrim.system => 4,
 }
 
 /// Is this primitive one of the two interval ENDPOINTS? The reducer and the
@@ -2853,6 +2917,7 @@ pub def cubical_is_endpoint (prim : CubicalPrim) : Bool := match prim {
     CubicalPrim.glue => false,
     CubicalPrim.glue_intro => false,
     CubicalPrim.glue_elim => false,
+    CubicalPrim.system => false,
 }
 
 /// A dense tag per primitive. Total over `CubicalPrim`, so a primitive added
@@ -2882,6 +2947,7 @@ pub def cubical_prim_tag (prim : CubicalPrim) : I64 := match prim {
     CubicalPrim.glue => 13,
     CubicalPrim.glue_intro => 14,
     CubicalPrim.glue_elim => 15,
+    CubicalPrim.system => 16,
 }
 
 pub def cubical_prim_eq (a : CubicalPrim) (b : CubicalPrim) : Bool :=
@@ -2906,6 +2972,7 @@ pub def cubical_prim_name (prim : CubicalPrim) : String := match prim {
     CubicalPrim.glue => "Glue",
     CubicalPrim.glue_intro => "glue",
     CubicalPrim.glue_elim => "unglue",
+    CubicalPrim.system => "system",
 }
 
 /// Every primitive, in `cubical_prim_tag` order. Exists as one list so the
@@ -2919,7 +2986,8 @@ pub def cubical_prims_all : List CubicalPrim :=
                     (List.cons CubicalPrim.hcomp (List.cons CubicalPrim.it_is_one
                         (List.cons CubicalPrim.glue (List.cons CubicalPrim.glue_intro
                             (List.cons CubicalPrim.glue_elim
-                                List.empty)))))))))))))))
+                                (List.cons CubicalPrim.system
+                                List.empty))))))))))))))))
 
 /// The string a `#[cubical "..."]` MARKER names a primitive by -- the
 /// marker key, which is NOT the surface name `cubical_prim_name` returns:
@@ -2946,6 +3014,7 @@ pub def cubical_marker_key (prim : CubicalPrim) : String := match prim {
     CubicalPrim.glue => "glue",
     CubicalPrim.glue_intro => "glue_intro",
     CubicalPrim.glue_elim => "glue_elim",
+    CubicalPrim.system => "system",
 }
 
 /// Decode a `#[cubical "..."]` marker's string back to the primitive it

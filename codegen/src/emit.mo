@@ -17,7 +17,7 @@ use lang::types {
     group, i64, id_eq,
     ident, param_many, sentinel, show_identifier, show_module_path, term_peel,
     Cubical, face_eq0, face_eq1, hcomp, i0, i1, ijoin, imeet, ineg, interval,
-    is_one, it_is_one, pathp, transp, glue, glue_elim, glue_intro,
+    is_one, it_is_one, pathp, transp, glue, glue_elim, glue_intro, system,
 }
 use llvm::ir {
     DbgLoc, LLVMBasicBlock, LLVMDeclaration, LLVMFunction, LLVMGlobal,
@@ -2589,6 +2589,9 @@ def compile_cubical_ir (c : CodegenCtx) (cub_ : Cubical) : CompileResult :=
         CubicalPrim.glue => CompileResult.ok c List.empty LLVMValue.void_val List.empty List.empty List.empty,
         CubicalPrim.glue_intro => CompileResult.ok c List.empty LLVMValue.void_val List.empty List.empty List.empty,
         CubicalPrim.glue_elim => CompileResult.ok c List.empty LLVMValue.void_val List.empty List.empty List.empty,
+        // A two-clause partial system is TYPE-LEVEL (`ua` uses it under
+        // `Glue`); like the other non-endpoint cubical tags it erases.
+        CubicalPrim.system => CompileResult.ok c List.empty LLVMValue.void_val List.empty List.empty List.empty,
     }
 
 // ── View do-bind fusion (view-types P2) ─────────────────────────────

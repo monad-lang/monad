@@ -21,4 +21,5 @@ pub use lib::bool {*}
 pub use lib::nat {*}
 pub use lib::list {*}
 pub use lib::vec {*}
+pub use lib::univalence {*}
 pub use lib::lawful {*}

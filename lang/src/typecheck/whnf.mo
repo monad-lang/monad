@@ -6,7 +6,7 @@ use lib::types {
     show_identifier, sentinel, term_peel,
 }
 use lib::scope {
-    CallSpine, flatten_call_spine, last_dot_index, scope_find_cubical_prim, scope_find_def_body,
+    CallSpine, flatten_call_spine, identifier_tail, last_dot_index, scope_find_cubical_prim, scope_find_def_body,
     scope_find_inductive, scope_find_inductive_by_constructor, scope_find_local,
     scope_resolve_name,
 }
@@ -85,8 +85,174 @@ def whnf_fuel : I64 := 64
 /// reductions directly, not only through `type_check` -- the
 /// constant-family/variable-family distinction lives here and nowhere
 /// else.
+#[terminating]
 pub def whnf (scope : Scope) (locals : LocalScope) (t : Term) : Term :=
     whnf_go whnf_fuel scope locals t
+
+/// The endpoint law for a path-valued LOCAL: if `p : Path A a b` (however
+/// spelled -- `as_cubical_type` canonicalizes the surface/delta forms), then
+/// `p i0 ≡ a` and `p i1 ≡ b`. This is what makes
+/// `transp (fn i => Equiv A (p i)) (idEquiv A)` land on `Equiv A B` in
+/// `eqToEquiv`; `extract_pi_ret`'s endpoint clause handles the lambda and
+/// application shapes, not a variable with a path type.
+/// The endpoint of a path TYPE spelled as `Path A a b` (the library def) or
+/// `PathP L a b` (the primitive). Both carry the same three arguments, so the
+/// last two are the endpoints. This shape check is deliberate: `as_cubical_
+/// type` canonicalizes a primitive NAME, but the library's `Path` is an
+/// ordinary def whose body a `whnf` in an unrelated scope may not unfold to a
+/// registered primitive, and `eqToEquiv`'s `p i1` must reduce.
+#[partial]
+def last_two_args_go (xs : List Term) (a : Option Term) (b : Option Term)
+    : Pair (Option Term) (Option Term) :=
+    match xs {
+        List.empty => Pair.pair a b,
+        List.cons x rest => last_two_args_go rest b (Option.some x),
+    }
+
+/// The endpoint of a path TYPE spelled as `Path A a b` (the library def) or
+/// `PathP L a b` (the primitive). The last two APPLICATION arguments are the
+/// endpoints; the count is not fixed because an elaborated `Path` can carry
+/// its implicit universe level as an extra leading argument. This shape check
+/// is deliberate: `as_cubical_type` canonicalizes a primitive NAME, but the
+/// library's `Path` is an ordinary def whose body a `whnf` in an unrelated
+/// scope may not unfold to a registered primitive, and `eqToEquiv`'s `p i1`
+/// must reduce.
+#[partial]
+def path_endpoint_from_spine (typ : Term) (which : Term) (scope : Scope)
+    (locals : LocalScope) : Option Term :=
+    match flatten_call_spine (term_peel typ) {
+        CallSpine.mk head args =>
+            match head {
+                Term.var _idx dbg =>
+                    match dbg {
+                        DebugName.named id =>
+                            let name : String := identifier_tail id in
+                            if String.beq name "Path" || String.beq name "PathP" then
+                                let ends := last_two_args_go args Option.none Option.none in
+                                match ends {
+                                    Pair.pair left right =>
+                                        match left {
+                                            Option.some l =>
+                                                match right {
+                                                    Option.some r =>
+                                                        if Similar.similar which cub_i0 then Option.some l
+                                                        else if Similar.similar which cub_i1 then Option.some r
+                                                        else Option.none,
+                                                    Option.none => Option.none,
+                                                },
+                                            Option.none => Option.none,
+                                        },
+                                }
+                            else Option.none,
+                        DebugName.unnamed => Option.none,
+                    },
+                _ => Option.none,
+            },
+    }
+
+#[partial]
+def path_endpoint_from_type (typ : Term) (which : Term) (scope : Scope)
+    (locals : LocalScope) : Option Term :=
+    match path_endpoint_from_spine typ which scope locals {
+        Option.some t => Option.some t,
+        Option.none =>
+            match as_cubical_type (whnf scope locals typ) scope locals {
+                Term.cubical c =>
+                    match c {
+                        { prim := p, args := as } =>
+                            match p {
+                                CubicalPrim.pathp =>
+                                    match as {
+                                        List.cons _line rest1 =>
+                                            match rest1 {
+                                                List.cons left rest2 =>
+                                                    match rest2 {
+                                                        List.cons right _rest3 =>
+                                                            if Similar.similar which cub_i0 then Option.some left
+                                                            else if Similar.similar which cub_i1 then Option.some right
+                                                            else Option.none,
+                                                        List.empty => Option.none,
+                                                    },
+                                                List.empty => Option.none,
+                                            },
+                                        List.empty => Option.none,
+                                    },
+                                _ => Option.none,
+                            },
+                    },
+                _ => Option.none,
+            },
+    }
+
+#[partial]
+def whnf_path_endpoint_app (f : Term) (a : Term) (scope : Scope)
+    (locals : LocalScope) : Option Term :=
+    match term_peel f {
+        Term.var _idx dbg =>
+            match dbg {
+                DebugName.named id =>
+                    match scope_find_local id locals {
+                        Option.some lv => path_endpoint_from_type lv.typ a scope locals,
+                        Option.none => Option.none,
+                    },
+                DebugName.unnamed => Option.none,
+            },
+        _ => Option.none,
+    }
+
+/// Application of a two-clause `system`. The system itself is a value (a
+/// function out of `is_one (ijoin φ1 φ2)`), so the reduction lives here, in
+/// the app arm, not in `whnf_cubical_settled`. At a literal endpoint exactly
+/// one face decides true, and the corresponding clause is the answer; both
+/// true would require the clauses' agreement (a unify call this module cannot
+/// make without a cycle), so that case deliberately stays stuck. This is
+/// what makes `Glue B (∂ i) (system i0↦A i1↦B) e` reduce to `A` at `i0` and
+/// `B` at `i1`, and therefore what makes `ua`'s boundaries check.
+#[partial]
+def whnf_system_app (f : Term) (a : Term) : Option Term :=
+    match f {
+        Term.cubical c =>
+            match c {
+                { prim := p, args := as } =>
+                    match p {
+                        CubicalPrim.system =>
+                            match as {
+                                List.cons f1 rest1 =>
+                                    match rest1 {
+                                        List.cons u1 rest2 =>
+                                            match rest2 {
+                                                List.cons f2 rest3 =>
+                                                    match rest3 {
+                                                        List.cons u2 rest4 =>
+                                                            if Bool.not (List.is_empty rest4) then Option.none
+                                                            else if Bool.not (Similar.similar a cub_it_is_one) then Option.none
+                                                            else
+                                                                match face_decide f1 {
+                                                                    Option.some d1 =>
+                                                                        let b1 : Bool := d1 in
+                                                                        match face_decide f2 {
+                                                                            Option.some d2 =>
+                                                                                let b2 : Bool := d2 in
+                                                                                if b1 && Bool.not b2 then Option.some u1
+                                                                                else if Bool.not b1 && b2 then Option.some u2
+                                                                                else Option.none,
+                                                                            Option.none => Option.none,
+                                                                        },
+                                                                    Option.none => Option.none,
+                                                                },
+                                                        List.empty => Option.none,
+                                                    },
+                                                List.empty => Option.none,
+                                            },
+                                        List.empty => Option.none,
+                                    },
+                                List.empty => Option.none,
+                            },
+                        _ => Option.none,
+                    },
+            },
+        _ => Option.none,
+    }
 
 /// `#[partial]`: fuel-bounded, but the decrement is not a structural
 /// subterm the checker can see.
@@ -124,14 +290,23 @@ def whnf_go (fuel : I64) (scope : Scope) (locals : LocalScope) (t0 : Term) : Ter
                     // mismatch: expected (Path A b a), found (PathP (fn _
                     // => A) b a)").
                     _ =>
-                        // A canonical `Term.cubical` is a REDUCIBLE head
-                        // (the De Morgan arm below), so keep reducing it
-                        // rather than returning it: `ineg i0` reached as a
-                        // source spine should still come out `i1`.
-                        let canonical : Term := as_cubical_type (Term.app f_r a) scope locals in
-                        match canonical {
-                            Term.cubical _c => whnf_go (fuel - 1) scope locals canonical,
-                            _ => canonical,
+                        match whnf_path_endpoint_app f_r a scope locals {
+                            Option.some t => whnf_go (fuel - 1) scope locals t,
+                            Option.none =>
+                        match whnf_system_app f_r a {
+                            Option.some t => whnf_go (fuel - 1) scope locals t,
+                            Option.none =>
+                                // A canonical `Term.cubical` is a REDUCIBLE
+                                // head (the De Morgan arm below), so keep
+                                // reducing it rather than returning it:
+                                // `ineg i0` reached as a source spine should
+                                // still come out `i1`.
+                                let canonical : Term := as_cubical_type (Term.app f_r a) scope locals in
+                                match canonical {
+                                    Term.cubical _c => whnf_go (fuel - 1) scope locals canonical,
+                                    _ => canonical,
+                                },
+                        }
                         },
                 },
             Term.var idx dbg =>

@@ -8,10 +8,10 @@ use lang::types {
     TypeError, binder_anon, binder_is_explicit, binder_is_level, binder_name,
     binder_named,
     concrete, cub_glue, cub_glue_elim, cub_glue_intro, cub_hcomp, cub_i0, cub_i1,
-    cub_interval, cub_is_one,
+    cub_ijoin, cub_interval, cub_is_one,
     cub_pathp, cubical_arity,
     cubical_prim_eq, cubical_prim_name, field_access_chain,
-    id_eq, id_member, level_lt, level_of_type, list_rev_loop, list_reverse, many,
+    id_eq, id_member, level_const, level_le, level_lt, level_of_type, list_rev_loop, list_reverse, many,
     has_attr, max, package_private, sentinel, show_identifier, show_name_path,
     sort_level_of, sort_n, succ, term_peel,
     cub, cub_transp,
@@ -1555,19 +1555,39 @@ def nat_builder_owner_key (scope : Scope) (locals : LocalScope) : Option String 
 /// the literal's own type, the same fall-through the Rust reference
 /// keeps. `#[terminating]` for the same reason as
 /// `type_check_num_lit`.
+/// A small `Nat` literal as its canonical unary constructor chain. `Vec 3`
+/// must compare with `Vec (succ (succ (succ zero)))`; `Nat.of_i64 3` cannot
+/// reduce in the checker (its body tests a native `I64.lt`), so the index
+/// never becomes unary. Bounded: larger literals keep `Nat.of_i64` and stay
+/// stuck, which is recorded in `dependent-types-vec.md` rather than
+/// materializing an unbounded chain.
+#[partial]
+def nat_literal_term (n : I64) : Term :=
+    if I64.beq n 0 then
+        Term.var sentinel (DebugName.named (Identifier.id "Nat.zero"))
+    else
+        Term.app (Term.var sentinel (DebugName.named (Identifier.id "Nat.succ")))
+            (nat_literal_term (I64.sub n 1))
+
+def nat_literal_bound : I64 := 64
+
 #[terminating]
 def apply_nat_rewrite (n : I64) (scope : Scope) (local_types : List Term) (locals : LocalScope) : Result TypeError TypedTerm :=
     if I64.lt n 0
     then Result.err (TypeError.custom "a `Nat` literal cannot be negative")
     else
-        match nat_builder_key scope locals {
-            Option.none => typed_own_num n NumSuffix.i64,
-            Option.some key =>
-                type_check
-                    (Term.app (Term.var sentinel (DebugName.named (Identifier.id key)))
-                        (Term.lit (Literal.num n NumSuffix.i64)))
-                    (named_type_ref "Nat") scope local_types locals,
-        }
+        if I64.lt nat_literal_bound n then
+            match nat_builder_key scope locals {
+                Option.none => typed_own_num n NumSuffix.i64,
+                Option.some key =>
+                    type_check
+                        (Term.app (Term.var sentinel (DebugName.named (Identifier.id key)))
+                            (Term.lit (Literal.num n NumSuffix.i64)))
+                        (named_type_ref "Nat") scope local_types locals,
+            }
+        else
+            type_check (nat_literal_term n) (named_type_ref "Nat")
+                scope local_types locals
 
 /// `type_check_lit`'s `Literal.flt` arm: a bare (default `f64`) float
 /// literal retags only between float widths -- `3.14 : F32` re-suffixes
@@ -4605,9 +4625,34 @@ def ref_names_class_method (id : Identifier) (scope : Scope) : Bool :=
 /// resolve -- this is the same fix on the path a real qualified
 /// constructor reference actually takes.
 def free_var_declared_typ (resolved_name : NamePath) (sig : Term) (dbg : DebugName) (scope : Scope) : Term :=
-    match scope_find_def_sig resolved_name scope {
-        Option.some real_sig => real_sig,
-        Option.none => qualified_con_ref_typ dbg sig scope,
+    // A BARE inductive name is a type former, and its type is its declared
+    // kind (`Sort 1`, `Sigma`'s `Sort w`). Before this, only applied forms
+    // were typed (the app probe); the bare form fell through to the
+    // hole-valued `ScopeDef.sig`, so `def f : I64` could not even establish
+    // that `I64` is a type.
+    match scope_find_inductive resolved_name scope {
+        Result.ok ind =>
+            match ind {
+                Inductive.mk ind_name _ typ _ _ _ =>
+                    // Only the inductive's OWN name is a type former. A
+                    // constructor reference (`Bool.true`) also resolves
+                    // through the inductive registry's constructor fallback;
+                    // giving it the inductive's kind would type `Bool.true`
+                    // as a TYPE, which is how `t : F Bool.true` became
+                    // `expected Bool, found Prop` in every proofs module.
+                    if String.beq (show_name_path ind_name) (show_name_path resolved_name)
+                    then typ
+                    else
+                        match scope_find_def_sig resolved_name scope {
+                            Option.some real_sig => real_sig,
+                            Option.none => qualified_con_ref_typ dbg sig scope,
+                        },
+            },
+        Result.err _ =>
+            match scope_find_def_sig resolved_name scope {
+                Option.some real_sig => real_sig,
+                Option.none => qualified_con_ref_typ dbg sig scope,
+            },
     }
 
 /// A free variable's def lookup with item-5.1's bare-vs-qualified
@@ -6663,6 +6708,289 @@ def subst_has_id (subst : List (Pair Identifier Term)) (target : Identifier) : B
             },
     }
 
+// ── Inductive type applications ─────────────────────────────────────────
+//
+// A type former is an ordinary inductive (`Vec n A`, `Sigma A B`,
+// `Option A`). Its declared parameters are the argument types, and a later
+// parameter may depend on an earlier one (`Sigma`'s `B : A -> Type`). Before
+// this probe, `type_check_app_ordinary` saw a hole callee type and echoed the
+// expected type, so no index argument was ever checked (`Vec (-1)` and a
+// wrong-length `Vec` ascription were accepted). This is the self-hosted
+// counterpart of the Rust host's App arm (`core_check.rs:1117-1147`).
+//
+// The probe is deliberately conservative: it owns a spine only when it is
+// exactly saturated against the inductive's declared parameter count, and it
+// declines anything it cannot resolve (a local shadow, a non-var head, a
+// partial application). The old hole path remains for those shapes.
+
+struct IndAppBinds {
+    subst : List (Pair Identifier Term),
+    levels : List (Pair Identifier SortLevel),
+}
+
+/// Apply the already-checked argument substitutions to a later parameter
+/// type. Parameter references are NAME-keyed free vars (`A` in `B : A ->
+/// Type`), not de Bruijn indices, which is what `name_subst_term` rewrites.
+#[partial]
+def apply_param_subst (t : Term) (binds : List (Pair Identifier Term)) : Term :=
+    match binds {
+        List.empty => t,
+        List.cons b rest =>
+            match b {
+                Pair.pair name value =>
+                    apply_param_subst (name_subst_term name value t) rest,
+            },
+    }
+
+/// The largest CONCRETE level among the solved parameter levels, defaulting
+/// to `Sort 1`. Used only to give a bare declared result variable (`Sigma`'s
+/// `Sort w`) a value when the expected type is not itself a sort.
+#[partial]
+def max_level_of_binds (binds : List (Pair Identifier SortLevel))
+    (acc : SortLevel) : SortLevel :=
+    match binds {
+        List.empty => acc,
+        List.cons b rest =>
+            match b {
+                Pair.pair _ l =>
+                    match level_const l {
+                        Option.some n =>
+                            match level_const acc {
+                                Option.some m =>
+                                    max_level_of_binds rest
+                                        (if I64.gt n m then l else acc),
+                                Option.none => max_level_of_binds rest l,
+                            },
+                        Option.none => max_level_of_binds rest acc,
+                    },
+            },
+    }
+
+/// Solve level variables structurally through a Pi telescope. `solve_levels`
+/// only handles a parameter that is DIRECTLY `Sort (var u)`; a dependent
+/// parameter like `B : A -> Sort v` hides `v` in the codomain.
+#[partial]
+def solve_levels_deep (param : Term) (actual : Term)
+    (levels : List (Pair Identifier SortLevel))
+    : List (Pair Identifier SortLevel) :=
+    match sort_level_of (term_peel param) {
+        Option.some _ => solve_levels param actual levels,
+        Option.none =>
+            match term_peel param {
+                Term.pi _b dom cod =>
+                    match term_peel actual {
+                        Term.pi _b2 dom2 cod2 =>
+                            let levels2 := solve_levels_deep dom dom2 levels in
+                            solve_levels_deep cod cod2 levels2,
+                        _ => levels,
+                    },
+                _ => levels,
+            },
+    }
+
+/// Check each argument against its (substituted) declared parameter type and
+/// accumulate the parameter and level solutions for the next one.
+#[partial]
+def check_inductive_args (args : List Term) (params : List Param)
+    (binds : IndAppBinds) (scope : Scope) (local_types : List Term)
+    (locals : LocalScope) : Result TypeError IndAppBinds :=
+    match args {
+        List.empty => ok binds,
+        List.cons arg rest =>
+            match params {
+                List.empty =>
+                    err (TypeError.custom "too many arguments to an inductive type"),
+                List.cons p prest =>
+                    match p {
+                        Param.mk pname ptype _pmult _pdefault _pattrs =>
+                            let param_ty0 : Term :=
+                                apply_param_subst ptype binds.subst in
+                            let param_ty : Term :=
+                                subst_levels_term param_ty0 binds.levels in
+                            // A still-free type/level variable is opened to a
+                            // hole for the check (the def-call path does the
+                            // same); the argument then also SOLVES that
+                            // variable, which is what makes `Sigma I64 (fn _ =>
+                            // Bool)` work without an expected sort.
+                            let want : Term := open_free_type_vars param_ty scope in
+                            match type_check arg want scope local_types locals {
+                                err e => err e,
+                                ok a_tt =>
+                                    let levels2 : List (Pair Identifier SortLevel) :=
+                                        solve_levels_deep param_ty a_tt.typ binds.levels in
+                                    let subst2 : List (Pair Identifier Term) :=
+                                        List.cons (Pair.pair pname a_tt.term) binds.subst in
+                                    // Re-check against the SOLVED parameter type.
+                                    // The first check sees `Sort u` opened to a
+                                    // hole; once the level is solved, `Sigma`'s
+                                    // first parameter must really be a type, not
+                                    // an arbitrary function. A still-hole parameter
+                                    // type only gets the weaker sort/kind probe.
+                                    let solved : Term :=
+                                        subst_levels_term param_ty levels2 in
+                                    let final : Result TypeError Unit :=
+                                        if term_has_hole solved then
+                                            match sort_level_of (term_peel solved) {
+                                                Option.some _ =>
+                                                    match sort_level_of (term_peel a_tt.typ) {
+                                                        Option.some _ => ok unit,
+                                                        Option.none =>
+                                                            err (TypeError.mismatch a_tt.typ solved),
+                                                    },
+                                                Option.none => ok unit,
+                                            }
+                                        else
+                                            match type_check arg solved scope local_types locals {
+                                                ok _ => ok unit,
+                                                err e => err e,
+                                            } in
+                                    // A parameter whose type is a SORT takes a
+                                    // TYPE: the argument's own inferred type
+                                    // must be a sort. Without this a lambda
+                                    // (`fn x => I64`) passed where `Sigma`'s
+                                    // `A : Sort u` is expected checked cleanly,
+                                    // because the opened hole made the ordinary
+                                    // comparison vacuous.
+                                    let kind_err : Option TypeError :=
+                                        match sort_level_of (term_peel param_ty) {
+                                            Option.some _ =>
+                                                match sort_level_of (term_peel a_tt.typ) {
+                                                    Option.some _ => Option.none,
+                                                    Option.none =>
+                                                        Option.some
+                                                            (TypeError.mismatch a_tt.typ param_ty),
+                                                },
+                                            Option.none => Option.none,
+                                        } in
+                                    let final2 : Result TypeError Unit :=
+                                        match kind_err {
+                                            Option.some e => err e,
+                                            Option.none => final,
+                                        } in
+                                    match final2 {
+                                        err e => err e,
+                                        ok _ =>
+                                            check_inductive_args rest prest
+                                                { subst := subst2, levels := levels2 }
+                                                scope local_types locals,
+                                    },
+                            },
+                    },
+            },
+    }
+
+/// The instantiated result kind. A bare `Sort w` is an OUTPUT of an
+/// inductive (`Sigma`), so instantiate it from the expected sort when there
+/// is one, and otherwise from the largest parameter level. `Exists`'s
+/// `Prop` is the expected-sort case (0), which is what keeps it in `Prop`.
+def inductive_result_type (ind : Inductive) (binds : IndAppBinds)
+    (expected_type : Term) : Term :=
+    match ind {
+        Inductive.mk _ _ typ _ _ _ =>
+            let ret0 : Term := apply_param_subst typ binds.subst in
+            let ret : Term := subst_levels_term ret0 binds.levels in
+            match sort_level_of (term_peel ret) {
+                Option.some lvl =>
+                    match lvl {
+                        SortLevel.var _ =>
+                            match sort_level_of (term_peel expected_type) {
+                                Option.some expected_lvl => Term.sort expected_lvl,
+                                Option.none =>
+                                    Term.sort (max_level_of_binds binds.levels
+                                        (SortLevel.concrete 1)),
+                            },
+                        _ => ret,
+                    },
+                Option.none => ret,
+            },
+    }
+
+#[terminating]
+def try_type_check_inductive_call (app_term : Term) (expected_type : Term)
+    (scope : Scope) (local_types : List Term) (locals : LocalScope)
+    : Option (Result TypeError TypedTerm) :=
+    match flatten_call_spine app_term {
+        CallSpine.mk head args =>
+            match head {
+                Term.var idx dbg =>
+                    match dbg {
+                        DebugName.named id =>
+                            if Bool.not (I64.beq idx sentinel) then Option.none
+                            else if is_some_local (scope_find_local id locals) then Option.none
+                            else
+                                match scope_resolve_name (NameRef.nid id) scope locals {
+                                    Result.err _ => Option.none,
+                                    Result.ok sd =>
+                                        match sd {
+                                            mk resolved_name _ _ _ _ =>
+                                                match scope_find_inductive resolved_name scope {
+                                                    Result.err _ => Option.none,
+                                                    Result.ok ind =>
+                                                        match ind {
+                                                            Inductive.mk _ params _ _ _ _ =>
+                                                                // Exactly saturated only: a
+                                                                // partial type constructor keeps
+                                                                // the old hole/Pi path.
+                                                                if Bool.not (I64.beq
+                                                                    (List.length args)
+                                                                    (List.length params))
+                                                                then Option.none
+                                                                else
+                                                                    match check_inductive_args args params
+                                                                        (IndAppBinds.mk List.empty List.empty)
+                                                                        scope local_types locals {
+                                                                        Result.err e =>
+                                                                            Option.some (Result.err e),
+                                                                        Result.ok binds =>
+                                                                            let declared : Term :=
+                                                                                match ind {
+                                                                                    Inductive.mk _ _ typ _ _ _ => typ,
+                                                                                } in
+                                                                            let level_ok : Bool :=
+                                                                                match sort_level_of (term_peel declared) {
+                                                                                    Option.some declared_level =>
+                                                                                        match declared_level {
+                                                                                            SortLevel.var _ =>
+                                                                                                match sort_level_of (term_peel expected_type) {
+                                                                                                    Option.some expected_level =>
+                                                                                                        match level_const expected_level {
+                                                                                                            Option.some n =>
+                                                                                                                if I64.beq n 0 then true
+                                                                                                                else level_le (max_level_of_binds binds.levels (SortLevel.concrete 1)) expected_level,
+                                                                                                            Option.none => true,
+                                                                                                        },
+                                                                                                    Option.none => true,
+                                                                                                },
+                                                                                            _ => true,
+                                                                                        },
+                                                                                    Option.none => true,
+                                                                                } in
+                                                                            if Bool.not level_ok
+                                                                            then Option.some (Result.err (TypeError.custom "inductive result sort is too small for its parameters"))
+                                                                            else
+                                                                            let ret : Term :=
+                                                                                inductive_result_type ind binds
+                                                                                    expected_type in
+                                                                            match unify ret expected_type
+                                                                                scope locals {
+                                                                                Result.err e =>
+                                                                                    Option.some (Result.err e),
+                                                                                Result.ok _ =>
+                                                                                    Option.some
+                                                                                        (Result.ok
+                                                                                            (mk_typed app_term ret)),
+                                                                            },
+                                                                    },
+                                                        },
+                                                },
+                                        },
+                                },
+                        DebugName.unnamed => Option.none,
+                    },
+                _ => Option.none,
+            },
+    }
+
 /// Rewrite a saturated application of a bound cubical primitive into the
 /// `Term.cubical` it is: `ineg i0` checks, and is stored, as
 /// `{ prim := ineg, args := [i0] }`. FIRST probe in `type_check_app`,
@@ -6740,7 +7068,10 @@ def type_check_app (f : Term) (a : Term) (expected_type : Term) (scope : Scope) 
         match try_type_check_cubical_call (Term.app f a) expected_type scope local_types locals {
             Option.some r => r,
             Option.none =>
-            match try_type_check_def_call (Term.app f a) expected_type scope local_types locals {
+            match try_type_check_inductive_call (Term.app f a) expected_type scope local_types locals {
+                Option.some r => r,
+                Option.none =>
+                match try_type_check_def_call (Term.app f a) expected_type scope local_types locals {
                 Option.some r => r,
                 Option.none =>
                 match try_type_check_con_call (Term.app f a) expected_type scope local_types locals {
@@ -6788,6 +7119,7 @@ def type_check_app (f : Term) (a : Term) (expected_type : Term) (scope : Scope) 
                         }
                     }
                 }
+            }
             }
         }
     }
@@ -8260,6 +8592,8 @@ def type_check_cubical (c : Cubical) (expected_type : Term) (scope : Scope)
                 type_check_glue_intro c.args expected_type scope local_types locals,
             CubicalPrim.glue_elim =>
                 type_check_glue_elim c.args expected_type scope local_types locals,
+            CubicalPrim.system =>
+                type_check_system c expected_type scope local_types locals,
         }
 
 /// The generic tail of `type_check_cubical` shared by every Stage 1
@@ -8349,8 +8683,14 @@ def type_check_transp_go (a_line : Term) (a_elem : Term) (expected_type : Term)
                                                 ok _ =>
                                                     let rebuilt : Term :=
                                                         cub_transp line_tt.term elem_tt.term in
+                                                    // WHNF the endpoint too: `line`
+                                                    // is usually a lambda, and a
+                                                    // path-valued argument inside it
+                                                    // (`Equiv A (p i1)`) only
+                                                    // reduces through `whnf`'s path
+                                                    // endpoint rule.
                                                     let result : Term :=
-                                                        Term.app line_tt.term cub_i1 in
+                                                        whnf scope locals (Term.app line_tt.term cub_i1) in
                                                     match unify result expected_type scope locals {
                                                         err e => err e,
                                                         ok unified =>
@@ -8941,6 +9281,64 @@ def type_check_pathp_endpoints (line : Term) (a_left : Term) (a_right : Term) (s
 /// state -- but the rows exist all the same: they are what makes a
 /// missing arm a compile error rather than a silent future crash
 /// (`validate_match_coverage`, `lang/src/typecheck/infer.mo`).
+/// `system φ1 u1 φ2 u2` -- the two-clause partial element. Its type is
+/// `is_one (ijoin φ1 φ2) -> A`, where `A` is the common type of the two
+/// clause bodies. `is_one φ -> A` is a TOTAL function, so this former is what
+/// lets a partial type be piecewise: the application rule in `whnf` selects a
+/// clause by deciding its face, which a function out of the proposition
+/// cannot do.
+#[terminating]
+def type_check_system (c : Cubical) (expected_type : Term) (scope : Scope)
+    (local_types : List Term) (locals : LocalScope) : Result TypeError TypedTerm :=
+    match c.args {
+        List.cons face1 rest1 =>
+            match rest1 {
+                List.cons val1 rest2 =>
+                    match rest2 {
+                        List.cons face2 rest3 =>
+                            match rest3 {
+                                List.cons val2 rest4 =>
+                                    if Bool.not (List.is_empty rest4) then
+                                        err (TypeError.custom "system takes four arguments")
+                                    else
+                                        match type_check face1 cub_interval scope local_types locals {
+                                            err e => err e,
+                                            ok face1_tt =>
+                                                match type_check face2 cub_interval scope local_types locals {
+                                                    err e => err e,
+                                                    ok face2_tt =>
+                                                        match type_check val1 Term.hole scope local_types locals {
+                                                            err e => err e,
+                                                            ok val1_tt =>
+                                                                match type_check val2 val1_tt.typ scope local_types locals {
+                                                                    err e => err e,
+                                                                    ok val2_tt =>
+                                                                        let face : Term :=
+                                                                            cub_ijoin face1_tt.term face2_tt.term in
+                                                                        let typ : Term :=
+                                                                            Term.pi binder_anon (cub_is_one face) val1_tt.typ in
+                                                                        match unify typ expected_type scope locals {
+                                                                            err e => err e,
+                                                                            ok _ =>
+                                                                                ok (mk_typed
+                                                                                    (cub CubicalPrim.system
+                                                                                        [face1_tt.term, val1_tt.term,
+                                                                                         face2_tt.term, val2_tt.term])
+                                                                                    typ),
+                                                                        },
+                                                                },
+                                                        },
+                                                },
+                                        },
+                                List.empty => err (TypeError.custom "system takes four arguments"),
+                            },
+                        List.empty => err (TypeError.custom "system takes four arguments"),
+                    },
+                List.empty => err (TypeError.custom "system takes four arguments"),
+            },
+        List.empty => err (TypeError.custom "system takes four arguments"),
+    }
+
 def cubical_result_type (prim : CubicalPrim) : Term := match prim {
     CubicalPrim.interval => sort_n 1,
     CubicalPrim.i0 => cub_interval,
@@ -8961,6 +9359,7 @@ def cubical_result_type (prim : CubicalPrim) : Term := match prim {
     CubicalPrim.glue => Term.hole,
     CubicalPrim.glue_intro => Term.hole,
     CubicalPrim.glue_elim => Term.hole,
+    CubicalPrim.system => Term.hole,
 }
 
 /// Every Stage 1 argument is a dimension, i.e. an `I`. When `PathP` lands

@@ -1,7 +1,7 @@
 use lang::types {
     DebugName, Elim, Identifier, Literal, LocalScope, LocalVar, Location, MatchCase,
     ModulePath, NamePath, Scope, ScopeData, Similar, Term, binder_anon, binder_explicit,
-    cub_i0, cub_i1, cub_ijoin, cub_interval,
+    cub_i0, cub_i1, cub_ijoin, cub_interval, cub_pathp,
     cub_imeet, cub_ineg, many, sentinel, sort_n,
     cub, imeet, ineg,
 }
@@ -669,3 +669,46 @@ def test_whnf_elim_iota_reduces_scrutinee_first : Bool :=
     let scrut : Term := Term.app (free_var "konst") (sort_n 1) in
     let e : Term := elim_mk "P" (List.cons (free_var "Q") List.empty) scrut in
     Similar.similar (whnf s empty_locals e) (free_var "Q")
+
+/// A path-valued LOCAL's endpoints: `p i0 ≡ a`, `p i1 ≡ b`. `eqToEquiv`
+/// transports along `fn i => Equiv A (p i)`, so its result type is
+/// `Equiv A (p i1)`; without this rule the `p i1` never becomes `B`.
+#[test]
+def test_whnf_local_path_endpoint_i1 : Bool :=
+    let a : Term := free_var "A" in
+    let b : Term := free_var "B" in
+    let line : Term := Term.lam binder_anon cub_interval (sort_n 1) in
+    let p_typ : Term := cub_pathp line a b in
+    let lv : LocalVar := {
+        name := Identifier.id "p",
+        typ := p_typ,
+        multiplicity := many,
+    } in
+    let locals : LocalScope := {
+        vars := List.cons lv List.empty,
+        parent := Option.none,
+    } in
+    let pv : Term := Term.var 0 (DebugName.named (Identifier.id "p")) in
+    Similar.similar (whnf (scope_of "") locals (Term.app pv cub_i1)) b
+
+/// The same endpoint law for a path type spelled as the LIBRARY def
+/// (`Path A a b`), which is what `eqToEquiv`'s parameter has. The spine
+/// check is separate from `as_cubical_type` because the library def is not
+/// a registered primitive.
+#[test]
+def test_whnf_local_library_path_endpoint_i1 : Bool :=
+    let a : Term := free_var "A" in
+    let b : Term := free_var "B" in
+    let p_typ : Term :=
+        Term.app (Term.app (Term.app (free_var "proofs::Path") (sort_n 1)) a) b in
+    let lv : LocalVar := {
+        name := Identifier.id "p",
+        typ := p_typ,
+        multiplicity := many,
+    } in
+    let locals : LocalScope := {
+        vars := List.cons lv List.empty,
+        parent := Option.none,
+    } in
+    let pv : Term := Term.var 0 (DebugName.named (Identifier.id "p")) in
+    Similar.similar (whnf (scope_of "") locals (Term.app pv cub_i1)) b

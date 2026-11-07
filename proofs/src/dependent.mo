@@ -35,8 +35,10 @@
 // when the type argument is EXPLICIT (`sigma_snd I64 (fn (a : I64) => I64)
 // (Sigma.dpair 1 2)`): a type NAME in value position compiles to an inert
 // sort value in both backends. See `dependent_runtime.mo` for the
-// compile-and-run tier. Still missing: IMPLICIT type arguments (higher-order
-// inference is not implemented) and a type application used as a value.
+// compile-and-run tier. IMPLICIT type arguments now work where the argument's
+// type determines them (`Sigma.snd (Sigma.dpair 1 2)`; the checker solves
+// `A`/`B` from `p`'s `Sigma A B`), but a type APPLICATION used as a value is
+// still not expressible.
 
 /// The proof-relevant eliminator for `Bool` into an arbitrary type family:
 /// the `true` arm has type `F true`, the `false` arm `F false`, and the result
@@ -63,6 +65,16 @@ pub def nat_case_refl (E : Nat -> Nat -> Type) (reflf : (x : Nat) -> E x x) (n :
 /// arm's `b` is typed `B a`; the refined motive puts `Sigma.fst (dpair a b)`
 /// in the result type, and delta + iota reduce that to `a`.
 pub def sigma_snd (A : Type) (B : A -> Type) (p : Sigma A B) : B (Sigma.fst p) :=
+    match p {
+        Sigma.dpair a b => b,
+    }
+
+/// The implicit-argument spelling. `A` and `B` are inferred from `p`'s
+/// `Sigma A B` type; the dependent arm then checks exactly as above. Kept in
+/// `proofs/` because the Rust host cannot check the refined arm (see
+/// `init/src/prelude.mo`'s `Sigma.fst` note), not because the self-hosted
+/// checker cannot.
+pub def Sigma.snd {A : Type} {B : A -> Type} (p : Sigma A B) : B (Sigma.fst p) :=
     match p {
         Sigma.dpair a b => b,
     }

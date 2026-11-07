@@ -1,11 +1,15 @@
 // Basic `Vec` facts.
 //
-// `Vec` is INDEXED (`nil : Vec Nat.zero A`, `cons : … -> Vec (Nat.succ len) A`),
-// and the self-hosted dependent-match gate currently accepts only non-indexed
-// inductives. Indexed induction (`Vec.length`-style proofs over an arbitrary
-// length) is therefore out of scope here; these facts exercise constructor
-// typing and definitional (iota/delta) reduction, which the checker does
-// support.
+// `Vec` is INDEXED (`nil : Vec Nat.zero A`, `cons : … -> Vec (Nat.succ len) A`).
+// The self-hosted checker now checks the index argument of a `Vec` type
+// application (`Vec 3 I64`, negative indices) and normalizes small literals
+// to unary, but it does NOT yet refine a match's expected type (or a
+// constructor's declared return) from the constructor's index. `vhead` can
+// omit the impossible `nil` arm behind `#[allow_incomplete_match]` because
+// its result does not mention the index; `vtail` (`Vec n A`) and the
+// `vappend`/`vmap` length equations are blocked on that refinement. Indexed induction over an abstract `n`
+// (the `vappend`/`vmap` length equations) remains out of scope; these facts
+// exercise constructor typing and definitional (iota/delta) reduction.
 
 use proofs::equiv {Path}
 use proofs::paths {refl}
@@ -48,3 +52,21 @@ pub def vlength_nil {A : Type} :
 pub def vlength_cons {n : Nat} {A : Type} (a : A) (v : Vec n A) :
     Path Nat (vlength (Vec.cons a v)) (Nat.succ (vlength v)) :=
     refl (Nat.succ (vlength v))
+
+/// Head of a non-empty vector. The `nil` arm is impossible for
+/// `Vec (Nat.succ n) A`; the checker cannot prove that yet, so the omission
+/// is explicit. A wrong-length value cannot reach this function.
+#[allow_incomplete_match "Vec (Nat.succ n) A is never Vec.nil"]
+pub def vhead {n : Nat} {A : Type} (v : Vec (Nat.succ n) A) : A :=
+    match v {
+        Vec.cons a _ => a,
+    }
+
+#[test]
+def test_vhead_cons : Bool :=
+    I64.beq (vhead (Vec.cons 7 (Vec.nil : Vec Nat.zero I64))) 7
+
+#[proof]
+pub def vhead_cons {n : Nat} {A : Type} (a : A) (v : Vec n A) :
+    Path A (vhead (Vec.cons a v)) a :=
+    refl a

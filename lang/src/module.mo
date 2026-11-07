@@ -10,9 +10,9 @@ use lang::types {
     AffineMode, Attribute, Class, ClassDef, DebugName, Decl, DeclGroup, Def, Identifier,
     InductConstructor, Inductive, Infix, Instance, Literal, LocalScope, LocalVar, Location,
     MatchCase, ModulePath, NamePath, NameRef, Param, Scope, ScopeData, ScopeInstance, SourceRange,
-    Struct, StructField, Term, TypeConstraint, TypeError, UseFilter, UseItem,
+    SortLevel, Struct, StructField, Term, TypeConstraint, TypeError, UseFilter, UseItem,
     binder_anon, binder_is_explicit, binder_is_level, binder_name, concrete,
-    has_incomplete_match_exemption, id_eq,
+    has_incomplete_match_exemption, id_eq, level_const, level_le,
     list_reverse, many, module_path_to_string_colon, package_private, priv_,
     show_identifier, show_module_path, show_name_path, sort_level_of, term_peel, union_ids,
     use_bare, use_glob, use_items, use_name, use_rename, use_sub, use_sub_rename,
@@ -2544,6 +2544,25 @@ def scope_for_elab_body (attrs : List Attribute) (scope : Scope) : Scope :=
     let body_scope : Scope := scope_for_def_body attrs scope in
     { body_scope with incomplete_match_ok := true }
 
+/// Check the declared type itself, not only the body against it. Before
+/// this, `def bad : Vec (-1) I64 := Vec.nil` checked cleanly: the body check
+/// used the annotation as an expected type and no entry point ever asked
+/// whether the annotation was a well-formed TYPE. A declared type must infer
+/// a sort; the inductive-application rule then checks the indices inside it.
+pub def declared_type_diagnostics (name_str : String) (typ : Term) (scope : Scope)
+    (locals : LocalScope) (path : Option String) : List String :=
+    if is_term_hole typ then List.empty
+    else match type_check typ Term.hole scope empty_local_types locals {
+        Result.err e => [render_type_error name_str path e],
+        Result.ok tt =>
+            match sort_level_of (term_peel tt.typ) {
+                Option.some _ => List.empty,
+                Option.none =>
+                    [render_type_error name_str path
+                        (TypeError.custom "a def's declared type must be a sort")],
+            },
+    }
+
 #[partial]
 def check_def_with_scope (df : Def) (scope : Scope) (locals : LocalScope) (path : Option String) (verbose : Bool) : IO (List String) :=
     match df {
@@ -2562,7 +2581,9 @@ pub def def_body_diagnostics (df : Def) (scope : Scope) (locals : LocalScope) (p
         Def.mk {name, typ, term := body, constraints := _constraints, attrs, vis := _vis, ..} =>
             let locals_ : LocalScope := locals_with_def_typevars typ body scope locals in
             let body_scope : Scope := scope_for_def_body attrs scope in
-            body_signature_diagnostics (show_name_path name) typ body body_scope locals_ path
+            list_append
+                (declared_type_diagnostics (show_name_path name) typ scope locals_ path)
+                (body_signature_diagnostics (show_name_path name) typ body body_scope locals_ path)
     }
 
 /// The pure signature check shared by both def-body entry points: check
@@ -2956,14 +2977,119 @@ def check_strict_positivity_with_scope (scope : Scope) (ind : Inductive) (path :
             },
     }
 
+/// Bind an inductive's parameters with their DECLARED types, not as
+/// hole-typed skolems. `locals_with_inductive_params` deliberately binds the
+/// names as type variables for constructor checking; the field-sort rule
+/// needs the real type to ask `A : Sort 2`'s own sort.
+#[partial]
+def bind_param_types_go (params : List Param) (locals : LocalScope) : LocalScope :=
+    match params {
+        List.empty => locals,
+        List.cons p rest =>
+            match p {
+                Param.mk pname ptype _pmult _pdefault _pattrs =>
+                    let lv : LocalVar := { name := pname, typ := ptype, multiplicity := Multiplicity.many } in
+                    bind_param_types_go rest (scope_push_local lv locals),
+            },
+    }
+
+def locals_with_inductive_param_types (ind : Inductive) (locals : LocalScope) : LocalScope :=
+    match ind {
+        Inductive.mk _ params _ _ _ _ => bind_param_types_go params locals,
+    }
+
+/// The declared kind must be a sort. `Sigma`'s `Sort w` is one; `: I64` is
+/// not. This is the check `check_inductive_with_scope` used to skip by
+/// binding `_typ`.
+def inductive_kind_diagnostics (name : NamePath) (typ : Term) (path : Option String) : List String :=
+    match sort_level_of typ {
+        Option.some _ => List.empty,
+        Option.none =>
+            [render_type_error (show_name_path name) path
+                (TypeError.custom "inductive kind must be a sort")],
+    }
+
+#[partial]
+def ctor_field_sort_diags_go (cname : NamePath) (kind : SortLevel)
+    (params : List Param) (scope : Scope) (locals : LocalScope)
+    (path : Option String) : List String :=
+    match params {
+        List.empty => List.empty,
+        List.cons p rest =>
+            match p {
+                Param.mk _pname ptype _pmult _pdefault _pattrs =>
+                    let here : List String :=
+                        match type_check ptype Term.hole scope empty_local_types locals {
+                            Result.err _ => List.empty,
+                            Result.ok tt =>
+                                match sort_level_of (term_peel tt.typ) {
+                                    Option.none => List.empty,
+                                    Option.some field_level =>
+                                        if level_le field_level kind then List.empty
+                                        else [render_type_error (show_name_path cname) path
+                                            (TypeError.custom "constructor field sort exceeds the inductive's declared kind")],
+                                },
+                        } in
+                    list_append here
+                        (ctor_field_sort_diags_go cname kind rest scope locals path),
+            },
+    }
+
+/// A constructor's declared `typ` is often `Term.hole` for the ordinary
+/// (non-GADT) syntax; the real telescope is its `params`. Each field type is
+/// checked in the inductive's own parameter scope, so `TooBig (A : Sort 2) :
+/// Sort 1 { mk (x : A) }` is rejected on `x : A`.
+#[partial]
+def inductive_ctor_sort_diags_go (kind : SortLevel) (ctors : List InductConstructor)
+    (scope : Scope) (locals : LocalScope) (path : Option String) : List String :=
+    match ctors {
+        List.empty => List.empty,
+        List.cons c rest =>
+            match c {
+                InductConstructor.mk cname cparams _ctyp =>
+                    list_append
+                        (ctor_field_sort_diags_go cname kind cparams scope locals path)
+                        (inductive_ctor_sort_diags_go kind rest scope locals path),
+            },
+    }
+
+/// The field-sort companion to the kind check. A constructor's type is a Pi
+/// telescope; its own sort is the max of its field sorts and the return sort,
+/// so `constructor_sort <= declared_kind` is exactly "every field fits the
+/// kind". `Prop` is skipped deliberately: `Exists` is `Sigma` at `Sort 0`
+/// with a Type-level first component (the prelude documents the impredicative
+/// choice), and this checker does not implement the large-elimination
+/// restriction that makes it sound; that limitation is recorded in
+/// `type-universes.md`. A symbolic kind (`Sigma`'s `Sort w`) is checked at the
+/// USE site instead (`try_type_check_inductive_call`), where `w` can be
+/// instantiated and the parameter levels compared.
+def inductive_ctor_sort_diags (kind : SortLevel) (ctors : List InductConstructor)
+    (scope : Scope) (locals : LocalScope) (path : Option String) : List String :=
+    match kind {
+        SortLevel.var _ => List.empty,
+        SortLevel.concrete n => if I64.beq n 0 then List.empty
+            else inductive_ctor_sort_diags_go kind ctors scope locals path,
+        _ => inductive_ctor_sort_diags_go kind ctors scope locals path,
+    }
+
 #[partial]
 def check_inductive_with_scope (ind : Inductive) (scope : Scope) (locals : LocalScope) (path : Option String) (verbose : Bool) : IO (List String) :=
     match ind {
-        Inductive.mk name _params _typ constructors _attrs _vis => do {
+        Inductive.mk name _params typ constructors _attrs _vis => do {
             if verbose then println ("  checking type " ++ show_name_path name) else do { return unit };
             let locals_ : LocalScope := locals_with_inductive_params ind scope locals;
+            let kind_diags : List String := inductive_kind_diagnostics name typ path;
+            let sort_locals : LocalScope := locals_with_inductive_param_types ind locals;
+            let sort_diags : List String :=
+                match sort_level_of typ {
+                    Option.some kind =>
+                        inductive_ctor_sort_diags kind constructors scope sort_locals path,
+                    Option.none => List.empty,
+                };
             let cons_diags : List String <- check_constructors_with_scope constructors scope locals_ path verbose;
-            return (list_append (check_strict_positivity_with_scope scope ind path) cons_diags)
+            return (list_append kind_diags
+                (list_append sort_diags
+                    (list_append (check_strict_positivity_with_scope scope ind path) cons_diags)))
         }
     }
 
