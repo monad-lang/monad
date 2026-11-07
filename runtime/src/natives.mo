@@ -44,10 +44,10 @@ use std::list {}
 
 open LLVMType {i1_, i32_, i8_, i64_, ptr}
 open LLVMValue {
-  add, alloc_constructor, and_, call, icmp_eq, icmp_ne, icmp_sgt, icmp_slt,
-  icmp_ult, icmp_ugt,
-  int_, inttoptr, load, lshr_, mul, or_, parm_, phi, sdiv, sext, shl_, sub,
-  trunc, udiv, urem, var_, xor_, zext,
+    add, alloc_constructor, and_, call, icmp_eq, icmp_ne, icmp_sgt, icmp_slt,
+    icmp_ult, icmp_ugt,
+    int_, inttoptr, load, lshr_, mul, or_, parm_, phi, sdiv, sext, shl_, sub,
+    trunc, udiv, urem, var_, xor_, zext,
 }
 open LLVMInstruction {assign, branch, jump, ret}
 
@@ -78,31 +78,31 @@ def rt_tag_list_cons : I64 := 6
 /// nothing, which silently disabled every `--verbose` timing in a
 /// compiled binary.
 pub def runtime_native_functions : List LLVMFunction :=
-  List.append string_runtime_functions numeric_runtime_functions
+    List.append string_runtime_functions numeric_runtime_functions
 
 def string_runtime_functions : List LLVMFunction :=
-  [emit_string_starts_with, emit_string_to_list, emit_string_get,
-   emit_string_get_char]
+    [emit_string_starts_with, emit_string_to_list, emit_string_get,
+        emit_string_get_char]
 
 def numeric_runtime_functions : List LLVMFunction :=
-  [emit_u8_eq, emit_u8_lt, emit_u8_gt, emit_u64_eq,
-   emit_u8_sub, emit_u8_mul, emit_u8_div, emit_u64_mod, emit_u64_div,
-   emit_u64_add, emit_u64_sub, emit_u64_mul, emit_u64_xor,
-   emit_u64_lt, emit_u64_gt,
-   emit_u8_add, emit_u8_to_u32, emit_i64_to_u32, emit_u32_to_u8,
-   emit_u32_add, emit_u32_sub, emit_u32_mul, emit_u32_and, emit_u32_or,
-   emit_u32_xor,
-   emit_u32_shl, emit_u32_shr, emit_u32_eq, emit_u32_lt, emit_u32_gt,
-   emit_u32_div, emit_u32_to_string,
-   emit_i64_to_u64, emit_u8_to_u64,
-   emit_u8_to_i64, emit_u16_to_i64, emit_u32_to_i64, emit_u64_to_i64,
-   emit_u16_eq, emit_u16_lt, emit_u16_gt,
-   emit_u16_add, emit_u16_sub, emit_u16_mul, emit_u16_div,
-   emit_i8_eq, emit_i8_lt, emit_i8_gt,
-   emit_i32_eq, emit_i32_lt, emit_i32_gt,
-   emit_i32_to_i64, emit_i64_to_i32,
-   emit_i64_add, emit_i64_sub, emit_i64_mul, emit_i64_div,
-   emit_i64_eq, emit_i64_lt, emit_i64_gt]
+    [emit_u8_eq, emit_u8_lt, emit_u8_gt, emit_u64_eq,
+        emit_u8_sub, emit_u8_mul, emit_u8_div, emit_u64_mod, emit_u64_div,
+        emit_u64_add, emit_u64_sub, emit_u64_mul, emit_u64_xor,
+        emit_u64_lt, emit_u64_gt,
+        emit_u8_add, emit_u8_to_u32, emit_i64_to_u32, emit_u32_to_u8,
+        emit_u32_add, emit_u32_sub, emit_u32_mul, emit_u32_and, emit_u32_or,
+        emit_u32_xor,
+        emit_u32_shl, emit_u32_shr, emit_u32_eq, emit_u32_lt, emit_u32_gt,
+        emit_u32_div, emit_u32_to_string,
+        emit_i64_to_u64, emit_u8_to_u64,
+        emit_u8_to_i64, emit_u16_to_i64, emit_u32_to_i64, emit_u64_to_i64,
+        emit_u16_eq, emit_u16_lt, emit_u16_gt,
+        emit_u16_add, emit_u16_sub, emit_u16_mul, emit_u16_div,
+        emit_i8_eq, emit_i8_lt, emit_i8_gt,
+        emit_i32_eq, emit_i32_lt, emit_i32_gt,
+        emit_i32_to_i64, emit_i64_to_i32,
+        emit_i64_add, emit_i64_sub, emit_i64_mul, emit_i64_div,
+        emit_i64_eq, emit_i64_lt, emit_i64_gt]
 
 // ─── Shared emitter helpers ─────────────────────────────────────────
 
@@ -112,13 +112,13 @@ def numeric_runtime_functions : List LLVMFunction :=
 /// `parm_ N` values the wrapper's call arguments render as.
 #[partial]
 def i64_params (n : I64) : List ParamPair :=
-  if n < 1 then []
-  else List.cons (ParamPair.mk "p0" i64_) (i64_params_rest 1 n)
+    if n < 1 then []
+    else List.cons (ParamPair.mk "p0" i64_) (i64_params_rest 1 n)
 
 #[partial]
 def i64_params_rest (i : I64) (n : I64) : List ParamPair :=
-  if i < n then List.cons (ParamPair.mk ("p" ++ I64.to_string i) i64_) (i64_params_rest (i + 1) n)
-  else []
+    if i < n then List.cons (ParamPair.mk ("p" ++ I64.to_string i) i64_) (i64_params_rest (i + 1) n)
+    else []
 
 /// Instructions to load the byte at `base + idx` as an i64 (0-255):
 /// `%addr = add`, `%q = inttoptr ... to i8*`, `%b8 = load i8, i8* %q`,
@@ -134,10 +134,10 @@ def i64_params_rest (i : I64) (n : I64) : List ParamPair :=
 /// owned `String`.
 #[partial]
 def load_byte_instrs (base : LLVMValue) (idx : LLVMValue) (addr_n : Shared String) (q_n : Shared String) (b8_n : Shared String) (b_n : String) : List LLVMInstruction :=
-  [assign (Shared.get addr_n) (add base idx),
-   assign (Shared.get q_n) (inttoptr (var_ (Shared.get addr_n)) i64_ (ptr i8_)),
-   assign (Shared.get b8_n) (load i8_ (ptr i8_) (var_ (Shared.get q_n))),
-   assign b_n (zext (var_ (Shared.get b8_n)) i8_ i64_)]
+    [assign (Shared.get addr_n) (add base idx),
+        assign (Shared.get q_n) (inttoptr (var_ (Shared.get addr_n)) i64_ (ptr i8_)),
+        assign (Shared.get b8_n) (load i8_ (ptr i8_) (var_ (Shared.get q_n))),
+        assign b_n (zext (var_ (Shared.get b8_n)) i8_ i64_)]
 
 /// `@monad_set_field(obj, idx, val)` as an assign -- assigned to a
 /// throwaway temp because every instruction in this IR assigns, and
@@ -146,9 +146,9 @@ def load_byte_instrs (base : LLVMValue) (idx : LLVMValue) (addr_n : Shared Strin
 /// the ret-type mismatch).
 #[partial]
 def set_field_call (obj : LLVMValue) (idx : I64) (val : LLVMValue) (temp_n : String) : LLVMInstruction :=
-  assign temp_n
-    (call "monad_set_field" i64_
-      [obj, int_ idx, val] false)
+    assign temp_n
+        (call "monad_set_field" i64_
+            [obj, int_ idx, val] false)
 
 // ─── String natives ─────────────────────────────────────────────────
 
@@ -160,31 +160,31 @@ def set_field_call (obj : LLVMValue) (idx : I64) (val : LLVMValue) (temp_n : Str
 /// comparison, not a bounds check -- matching Rust's
 /// `s.starts_with(prefix)` exactly.
 def emit_string_starts_with : LLVMFunction :=
-  let entry :=
-    LLVMBasicBlock.mk "entry"
-      [assign "plen" (call "monad_string_length" i64_ [parm_ 0] false),
-       jump "loop"] in
-  let loop :=
-    LLVMBasicBlock.mk "loop"
-      [assign "i" (phi [PhiPair.mk (int_ 0) "entry", PhiPair.mk (var_ "i_next") "next"]),
-       assign "cont" (icmp_slt (var_ "i") (var_ "plen")),
-       branch (var_ "cont") "body" "done"] in
-  let body :=
-    LLVMBasicBlock.mk "body"
-      (List.append (load_byte_instrs (parm_ 1) (var_ "i") (Shared.of "addr_s") (Shared.of "qs") (Shared.of "s_b8") "sb")
-        (List.append (load_byte_instrs (parm_ 0) (var_ "i") (Shared.of "addr_p") (Shared.of "qp") (Shared.of "p_b8") "pb")
-          [assign "neq" (icmp_ne (var_ "pb") (var_ "sb")),
-           branch (var_ "neq") "fail" "next"])) in
-  let next :=
-    LLVMBasicBlock.mk "next"
-      [assign "i_next" (add (var_ "i") (int_ 1)), jump "loop"] in
-  let done := LLVMBasicBlock.mk "done" [ret (int_ 1)] in
-  let fail := LLVMBasicBlock.mk "fail" [ret (int_ 0)] in
-  { name := "monad_string_starts_with",
-    params := (i64_params 2),
-    ret_ty := i64_,
-    blocks := [entry, loop, body, next, done, fail],
-    dbg_loc := Option.none }
+    let entry :=
+        LLVMBasicBlock.mk "entry"
+            [assign "plen" (call "monad_string_length" i64_ [parm_ 0] false),
+                jump "loop"] in
+    let loop :=
+        LLVMBasicBlock.mk "loop"
+            [assign "i" (phi [PhiPair.mk (int_ 0) "entry", PhiPair.mk (var_ "i_next") "next"]),
+                assign "cont" (icmp_slt (var_ "i") (var_ "plen")),
+                branch (var_ "cont") "body" "done"] in
+    let body :=
+        LLVMBasicBlock.mk "body"
+            (List.append (load_byte_instrs (parm_ 1) (var_ "i") (Shared.of "addr_s") (Shared.of "qs") (Shared.of "s_b8") "sb")
+                (List.append (load_byte_instrs (parm_ 0) (var_ "i") (Shared.of "addr_p") (Shared.of "qp") (Shared.of "p_b8") "pb")
+                    [assign "neq" (icmp_ne (var_ "pb") (var_ "sb")),
+                        branch (var_ "neq") "fail" "next"])) in
+    let next :=
+        LLVMBasicBlock.mk "next"
+            [assign "i_next" (add (var_ "i") (int_ 1)), jump "loop"] in
+    let done := LLVMBasicBlock.mk "done" [ret (int_ 1)] in
+    let fail := LLVMBasicBlock.mk "fail" [ret (int_ 0)] in
+    { name := "monad_string_starts_with",
+        params := (i64_params 2),
+        ret_ty := i64_,
+        blocks := [entry, loop, body, next, done, fail],
+        dbg_loc := Option.none }
 
 /// `monad_string_to_list(s) -> List U8` (wired `passthrough`): walk the
 /// bytes right-to-left PREPENDING each `cons` -- the same shape as the
@@ -196,32 +196,32 @@ def emit_string_starts_with : LLVMFunction :=
 /// `i >= 0` is spelled `i > -1` because the IR has `icmp_sgt`/`slt`
 /// but no `sge`/`sle` variants.
 def emit_string_to_list : LLVMFunction :=
-  let entry :=
-    LLVMBasicBlock.mk "entry"
-      [assign "len" (call "monad_string_length" i64_ [parm_ 0] false),
-       assign "start" (sub (var_ "len") (int_ 1)),
-       assign "empty_con" (alloc_constructor rt_tag_list_empty []),
-       jump "loop"] in
-  let loop :=
-    LLVMBasicBlock.mk "loop"
-      [assign "i" (phi [PhiPair.mk (var_ "start") "entry", PhiPair.mk (var_ "i_next") "body"]),
-       assign "acc" (phi [PhiPair.mk (var_ "empty_con") "entry", PhiPair.mk (var_ "con") "body"]),
-       assign "cont" (icmp_sgt (var_ "i") (int_ (0 - 1))),
-       branch (var_ "cont") "body" "done"] in
-  let body :=
-    LLVMBasicBlock.mk "body"
-      (List.append (load_byte_instrs (parm_ 0) (var_ "i") (Shared.of "addr_b") (Shared.of "qb") (Shared.of "byte8") "byte")
-        [assign "con" (alloc_constructor rt_tag_list_cons [var_ "byte", var_ "acc"]),
-         set_field_call (var_ "con") 0 (var_ "byte") "sf0",
-         set_field_call (var_ "con") 1 (var_ "acc") "sf1",
-         assign "i_next" (sub (var_ "i") (int_ 1)),
-         jump "loop"]) in
-  let done := LLVMBasicBlock.mk "done" [ret (var_ "acc")] in
-  { name := "monad_string_to_list",
-    params := (i64_params 1),
-    ret_ty := i64_,
-    blocks := [entry, loop, body, done],
-    dbg_loc := Option.none }
+    let entry :=
+        LLVMBasicBlock.mk "entry"
+            [assign "len" (call "monad_string_length" i64_ [parm_ 0] false),
+                assign "start" (sub (var_ "len") (int_ 1)),
+                assign "empty_con" (alloc_constructor rt_tag_list_empty []),
+                jump "loop"] in
+    let loop :=
+        LLVMBasicBlock.mk "loop"
+            [assign "i" (phi [PhiPair.mk (var_ "start") "entry", PhiPair.mk (var_ "i_next") "body"]),
+                assign "acc" (phi [PhiPair.mk (var_ "empty_con") "entry", PhiPair.mk (var_ "con") "body"]),
+                assign "cont" (icmp_sgt (var_ "i") (int_ (0 - 1))),
+                branch (var_ "cont") "body" "done"] in
+    let body :=
+        LLVMBasicBlock.mk "body"
+            (List.append (load_byte_instrs (parm_ 0) (var_ "i") (Shared.of "addr_b") (Shared.of "qb") (Shared.of "byte8") "byte")
+                [assign "con" (alloc_constructor rt_tag_list_cons [var_ "byte", var_ "acc"]),
+                    set_field_call (var_ "con") 0 (var_ "byte") "sf0",
+                    set_field_call (var_ "con") 1 (var_ "acc") "sf1",
+                    assign "i_next" (sub (var_ "i") (int_ 1)),
+                    jump "loop"]) in
+    let done := LLVMBasicBlock.mk "done" [ret (var_ "acc")] in
+    { name := "monad_string_to_list",
+        params := (i64_params 1),
+        ret_ty := i64_,
+        blocks := [entry, loop, body, done],
+        dbg_loc := Option.none }
 
 /// `monad_string_get(s, i) -> Option U8` (wired `passthrough`):
 /// `none` (tag 3) for `i < 0 || i >= length(s)`, else `some` (tag 4)
@@ -237,43 +237,43 @@ def emit_string_to_list : LLVMFunction :=
 /// not dereference it). The `i < len` test is spelled with SWAPPED
 /// branch targets, since the IR has no `icmp_sge`.
 def emit_string_get : LLVMFunction :=
-  let entry :=
-    LLVMBasicBlock.mk "entry"
-      [assign "neg" (icmp_slt (parm_ 1) (int_ 0)),
-       branch (var_ "neg") "none_block" "zero_check"] in
-  let zero_check :=
-    LLVMBasicBlock.mk "zero_check"
-      [assign "is_zero" (icmp_eq (parm_ 1) (int_ 0)),
-       branch (var_ "is_zero") "null_check" "len_check"] in
-  let null_check :=
-    LLVMBasicBlock.mk "null_check"
-      [assign "is_null" (icmp_eq (parm_ 0) (int_ 0)),
-       branch (var_ "is_null") "none_block" "first_byte_check"] in
-  let first_byte_check :=
-    LLVMBasicBlock.mk "first_byte_check"
-      (List.append (load_byte_instrs (parm_ 0) (int_ 0) (Shared.of "addr_f") (Shared.of "qf") (Shared.of "fbyte8") "fbyte")
-        [assign "is_nul" (icmp_eq (var_ "fbyte") (int_ 0)),
-         branch (var_ "is_nul") "none_block" "some_block"]) in
-  let len_check :=
-    LLVMBasicBlock.mk "len_check"
-      [assign "len" (call "monad_string_length" i64_ [parm_ 0] false),
-       assign "in_range" (icmp_slt (parm_ 1) (var_ "len")),
-       branch (var_ "in_range") "some_block" "none_block"] in
-  let none_block :=
-    LLVMBasicBlock.mk "none_block"
-      [assign "none_con" (alloc_constructor rt_tag_none []),
-       ret (var_ "none_con")] in
-  let some_block :=
-    LLVMBasicBlock.mk "some_block"
-      (List.append (load_byte_instrs (parm_ 0) (parm_ 1) (Shared.of "addr_g") (Shared.of "qg") (Shared.of "gbyte8") "gbyte")
-        [assign "some_con" (alloc_constructor rt_tag_some [var_ "gbyte"]),
-         set_field_call (var_ "some_con") 0 (var_ "gbyte") "gsf",
-         ret (var_ "some_con")]) in
-  { name := "monad_string_get",
-    params := (i64_params 2),
-    ret_ty := i64_,
-    blocks := [entry, zero_check, null_check, first_byte_check, len_check, none_block, some_block],
-    dbg_loc := Option.none }
+    let entry :=
+        LLVMBasicBlock.mk "entry"
+            [assign "neg" (icmp_slt (parm_ 1) (int_ 0)),
+                branch (var_ "neg") "none_block" "zero_check"] in
+    let zero_check :=
+        LLVMBasicBlock.mk "zero_check"
+            [assign "is_zero" (icmp_eq (parm_ 1) (int_ 0)),
+                branch (var_ "is_zero") "null_check" "len_check"] in
+    let null_check :=
+        LLVMBasicBlock.mk "null_check"
+            [assign "is_null" (icmp_eq (parm_ 0) (int_ 0)),
+                branch (var_ "is_null") "none_block" "first_byte_check"] in
+    let first_byte_check :=
+        LLVMBasicBlock.mk "first_byte_check"
+            (List.append (load_byte_instrs (parm_ 0) (int_ 0) (Shared.of "addr_f") (Shared.of "qf") (Shared.of "fbyte8") "fbyte")
+                [assign "is_nul" (icmp_eq (var_ "fbyte") (int_ 0)),
+                    branch (var_ "is_nul") "none_block" "some_block"]) in
+    let len_check :=
+        LLVMBasicBlock.mk "len_check"
+            [assign "len" (call "monad_string_length" i64_ [parm_ 0] false),
+                assign "in_range" (icmp_slt (parm_ 1) (var_ "len")),
+                branch (var_ "in_range") "some_block" "none_block"] in
+    let none_block :=
+        LLVMBasicBlock.mk "none_block"
+            [assign "none_con" (alloc_constructor rt_tag_none []),
+                ret (var_ "none_con")] in
+    let some_block :=
+        LLVMBasicBlock.mk "some_block"
+            (List.append (load_byte_instrs (parm_ 0) (parm_ 1) (Shared.of "addr_g") (Shared.of "qg") (Shared.of "gbyte8") "gbyte")
+                [assign "some_con" (alloc_constructor rt_tag_some [var_ "gbyte"]),
+                    set_field_call (var_ "some_con") 0 (var_ "gbyte") "gsf",
+                    ret (var_ "some_con")]) in
+    { name := "monad_string_get",
+        params := (i64_params 2),
+        ret_ty := i64_,
+        blocks := [entry, zero_check, null_check, first_byte_check, len_check, none_block, some_block],
+        dbg_loc := Option.none }
 
 // ─── U8/U64 arithmetic + comparison natives ─────────────────────────
 
@@ -316,34 +316,34 @@ def emit_u64_gt : LLVMFunction := emit_icmp_native "monad_u64_gt" (icmp_ugt (par
 /// wrapping i64 add/sub/mul are bit-identical either way. Div and mod
 /// DO split -- they are the `uint_binop`/`udiv`/`urem` pair above.
 def emit_u64_add : LLVMFunction :=
-  let entry :=
-    LLVMBasicBlock.mk "entry"
-      [assign "r" (add (parm_ 0) (parm_ 1)), ret (var_ "r")] in
-  { name := "monad_u64_add",
-    params := (i64_params 2),
-    ret_ty := i64_,
-    blocks := [entry],
-    dbg_loc := Option.none }
+    let entry :=
+        LLVMBasicBlock.mk "entry"
+            [assign "r" (add (parm_ 0) (parm_ 1)), ret (var_ "r")] in
+    { name := "monad_u64_add",
+        params := (i64_params 2),
+        ret_ty := i64_,
+        blocks := [entry],
+        dbg_loc := Option.none }
 
 def emit_u64_sub : LLVMFunction :=
-  let entry :=
-    LLVMBasicBlock.mk "entry"
-      [assign "r" (sub (parm_ 0) (parm_ 1)), ret (var_ "r")] in
-  { name := "monad_u64_sub",
-    params := (i64_params 2),
-    ret_ty := i64_,
-    blocks := [entry],
-    dbg_loc := Option.none }
+    let entry :=
+        LLVMBasicBlock.mk "entry"
+            [assign "r" (sub (parm_ 0) (parm_ 1)), ret (var_ "r")] in
+    { name := "monad_u64_sub",
+        params := (i64_params 2),
+        ret_ty := i64_,
+        blocks := [entry],
+        dbg_loc := Option.none }
 
 def emit_u64_mul : LLVMFunction :=
-  let entry :=
-    LLVMBasicBlock.mk "entry"
-      [assign "r" (mul (parm_ 0) (parm_ 1)), ret (var_ "r")] in
-  { name := "monad_u64_mul",
-    params := (i64_params 2),
-    ret_ty := i64_,
-    blocks := [entry],
-    dbg_loc := Option.none }
+    let entry :=
+        LLVMBasicBlock.mk "entry"
+            [assign "r" (mul (parm_ 0) (parm_ 1)), ret (var_ "r")] in
+    { name := "monad_u64_mul",
+        params := (i64_params 2),
+        ret_ty := i64_,
+        blocks := [entry],
+        dbg_loc := Option.none }
 
 /// `monad_u64_xor` (wired `passthrough`): `int_binop(|a, b| a ^ b)`
 /// (`core_native.rs:213`), a plain i64 xor for the same reason as the
@@ -351,36 +351,36 @@ def emit_u64_mul : LLVMFunction :=
 /// `xor` is a keyword in this compiler's own grammar -- the same
 /// spelling `emit_u32_xor` uses.
 def emit_u64_xor : LLVMFunction :=
-  let entry :=
-    LLVMBasicBlock.mk "entry"
-      [assign "r" (xor_ (parm_ 0) (parm_ 1)), ret (var_ "r")] in
-  { name := "monad_u64_xor",
-    params := (i64_params 2),
-    ret_ty := i64_,
-    blocks := [entry],
-    dbg_loc := Option.none }
+    let entry :=
+        LLVMBasicBlock.mk "entry"
+            [assign "r" (xor_ (parm_ 0) (parm_ 1)), ret (var_ "r")] in
+    { name := "monad_u64_xor",
+        params := (i64_params 2),
+        ret_ty := i64_,
+        blocks := [entry],
+        dbg_loc := Option.none }
 
 #[partial]
 def emit_icmp_native (name : String) (cmp : LLVMValue) : LLVMFunction :=
-  let entry :=
-    LLVMBasicBlock.mk "entry"
-      [assign "raw" cmp,
-       assign "wide" (zext (var_ "raw") i1_ i64_),
-       ret (var_ "wide")] in
-  { name := name,
-    params := (i64_params 2),
-    ret_ty := i64_,
-    blocks := [entry],
-    dbg_loc := Option.none }
+    let entry :=
+        LLVMBasicBlock.mk "entry"
+            [assign "raw" cmp,
+                assign "wide" (zext (var_ "raw") i1_ i64_),
+                ret (var_ "wide")] in
+    { name := name,
+        params := (i64_params 2),
+        ret_ty := i64_,
+        blocks := [entry],
+        dbg_loc := Option.none }
 
 /// `monad_u8_sub(a, b)` (wired `passthrough`): both operands masked to
 /// 8 bits, wrapping sub, result masked -- the `int_binop_width(U8)`
 /// mirror, like the u8 family's other arithmetic.
 def emit_u8_sub : LLVMFunction :=
-  emit_masked_binop "monad_u8_sub" (Shared.of u8_mask) (sub (var_ "a") (var_ "b"))
+    emit_masked_binop "monad_u8_sub" (Shared.of u8_mask) (sub (var_ "a") (var_ "b"))
 
 def emit_u8_mul : LLVMFunction :=
-  emit_masked_binop "monad_u8_mul" (Shared.of u8_mask) (mul (var_ "a") (var_ "b"))
+    emit_masked_binop "monad_u8_mul" (Shared.of u8_mask) (mul (var_ "a") (var_ "b"))
 
 /// `monad_u8_div(a, b)`: masked operands, 0 when `b == 0`, else the
 /// masked quotient -- `int_div_width`'s mirror. `sdiv`, not `udiv`:
@@ -419,17 +419,17 @@ def emit_u64_div : LLVMFunction := emit_guarded_native "monad_u64_div" (udiv (pa
 
 #[partial]
 def emit_guarded_native (name : String) (op : LLVMValue) : LLVMFunction :=
-  let entry :=
-    LLVMBasicBlock.mk "entry"
-      [assign "zero_b" (icmp_eq (parm_ 1) (int_ 0)),
-       branch (var_ "zero_b") "zero" "calc"] in
-  let zero := LLVMBasicBlock.mk "zero" [ret (int_ 0)] in
-  let calc := LLVMBasicBlock.mk "calc" [assign "r" op, ret (var_ "r")] in
-  { name := name,
-    params := (i64_params 2),
-    ret_ty := i64_,
-    blocks := [entry, zero, calc],
-    dbg_loc := Option.none }
+    let entry :=
+        LLVMBasicBlock.mk "entry"
+            [assign "zero_b" (icmp_eq (parm_ 1) (int_ 0)),
+                branch (var_ "zero_b") "zero" "calc"] in
+    let zero := LLVMBasicBlock.mk "zero" [ret (int_ 0)] in
+    let calc := LLVMBasicBlock.mk "calc" [assign "r" op, ret (var_ "r")] in
+    { name := name,
+        params := (i64_params 2),
+        ret_ty := i64_,
+        blocks := [entry, zero, calc],
+        dbg_loc := Option.none }
 
 // ─── Fixed-width unsigned integer natives (u8 / u16 / u32) ──────────
 //
@@ -461,18 +461,18 @@ def u16_mask : LLVMValue := int_ 65535
 /// a borrow because it is read three times and never re-owned -- an
 /// IR value, like a String, may be moved once under the affine rule.
 def emit_masked_binop (name : String) (mask : Shared LLVMValue) (op : LLVMValue) : LLVMFunction :=
-  let entry :=
-    LLVMBasicBlock.mk "entry"
-      [assign "a" (and_ (parm_ 0) (Shared.get mask)),
-       assign "b" (and_ (parm_ 1) (Shared.get mask)),
-       assign "r" op,
-       assign "m" (and_ (var_ "r") (Shared.get mask)),
-       ret (var_ "m")] in
-  { name := name,
-    params := (i64_params 2),
-    ret_ty := i64_,
-    blocks := [entry],
-    dbg_loc := Option.none }
+    let entry :=
+        LLVMBasicBlock.mk "entry"
+            [assign "a" (and_ (parm_ 0) (Shared.get mask)),
+                assign "b" (and_ (parm_ 1) (Shared.get mask)),
+                assign "r" op,
+                assign "m" (and_ (var_ "r") (Shared.get mask)),
+                ret (var_ "m")] in
+    { name := name,
+        params := (i64_params 2),
+        ret_ty := i64_,
+        blocks := [entry],
+        dbg_loc := Option.none }
 
 /// A two-argument division that masks both operands to `mask`, yields 0
 /// for a zero divisor, and masks the quotient -- the `int_div_width`
@@ -480,45 +480,45 @@ def emit_masked_binop (name : String) (mask : Shared LLVMValue) (op : LLVMValue)
 /// unsigned operands are non-negative, so the signed `sdiv` is their
 /// unsigned divide too.
 def emit_masked_div_native (name : String) (mask : Shared LLVMValue) : LLVMFunction :=
-  let entry :=
-    LLVMBasicBlock.mk "entry"
-      [assign "a" (and_ (parm_ 0) (Shared.get mask)),
-       assign "b" (and_ (parm_ 1) (Shared.get mask)),
-       assign "zero_b" (icmp_eq (var_ "b") (int_ 0)),
-       branch (var_ "zero_b") "zero" "calc"] in
-  let zero := LLVMBasicBlock.mk "zero" [ret (int_ 0)] in
-  let calc :=
-    LLVMBasicBlock.mk "calc"
-      [assign "r" (sdiv (var_ "a") (var_ "b")),
-       assign "m" (and_ (var_ "r") (Shared.get mask)),
-       ret (var_ "m")] in
-  { name := name,
-    params := (i64_params 2),
-    ret_ty := i64_,
-    blocks := [entry, zero, calc],
-    dbg_loc := Option.none }
+    let entry :=
+        LLVMBasicBlock.mk "entry"
+            [assign "a" (and_ (parm_ 0) (Shared.get mask)),
+                assign "b" (and_ (parm_ 1) (Shared.get mask)),
+                assign "zero_b" (icmp_eq (var_ "b") (int_ 0)),
+                branch (var_ "zero_b") "zero" "calc"] in
+    let zero := LLVMBasicBlock.mk "zero" [ret (int_ 0)] in
+    let calc :=
+        LLVMBasicBlock.mk "calc"
+            [assign "r" (sdiv (var_ "a") (var_ "b")),
+                assign "m" (and_ (var_ "r") (Shared.get mask)),
+                ret (var_ "m")] in
+    { name := name,
+        params := (i64_params 2),
+        ret_ty := i64_,
+        blocks := [entry, zero, calc],
+        dbg_loc := Option.none }
 
 /// A one-argument width conversion: mask the operand and return it.
 /// Covers every `uN_to_uM`/`i64_to_uN` in the set, since the boxed
 /// representation is i64 either way and the conversion IS the mask.
 def emit_mask_convert (name : String) (mask : LLVMValue) : LLVMFunction :=
-  let entry :=
-    LLVMBasicBlock.mk "entry"
-      [assign "m" (and_ (parm_ 0) mask), ret (var_ "m")] in
-  { name := name,
-    params := (i64_params 1),
-    ret_ty := i64_,
-    blocks := [entry],
-    dbg_loc := Option.none }
+    let entry :=
+        LLVMBasicBlock.mk "entry"
+            [assign "m" (and_ (parm_ 0) mask), ret (var_ "m")] in
+    { name := name,
+        params := (i64_params 1),
+        ret_ty := i64_,
+        blocks := [entry],
+        dbg_loc := Option.none }
 
 def emit_u8_add : LLVMFunction :=
-  emit_masked_binop "monad_u8_add" (Shared.of u8_mask) (add (var_ "a") (var_ "b"))
+    emit_masked_binop "monad_u8_add" (Shared.of u8_mask) (add (var_ "a") (var_ "b"))
 
 def emit_u32_add : LLVMFunction :=
-  emit_masked_binop "monad_u32_add" (Shared.of u32_mask) (add (var_ "a") (var_ "b"))
+    emit_masked_binop "monad_u32_add" (Shared.of u32_mask) (add (var_ "a") (var_ "b"))
 
 def emit_u32_sub : LLVMFunction :=
-  emit_masked_binop "monad_u32_sub" (Shared.of u32_mask) (sub (var_ "a") (var_ "b"))
+    emit_masked_binop "monad_u32_sub" (Shared.of u32_mask) (sub (var_ "a") (var_ "b"))
 
 /// `monad_u32_mul(a, b)`: masked product, matching `int_binop_width`'s
 /// `mask_to_suffix(a.wrapping_mul(b), U32)`.
@@ -530,24 +530,24 @@ def emit_u32_sub : LLVMFunction :=
 /// a build failure rather than letting the def compile to a
 /// silent `return Unit` stub.
 def emit_u32_mul : LLVMFunction :=
-  emit_masked_binop "monad_u32_mul" (Shared.of u32_mask) (mul (var_ "a") (var_ "b"))
+    emit_masked_binop "monad_u32_mul" (Shared.of u32_mask) (mul (var_ "a") (var_ "b"))
 
 def emit_u32_and : LLVMFunction :=
-  emit_masked_binop "monad_u32_and" (Shared.of u32_mask) (and_ (var_ "a") (var_ "b"))
+    emit_masked_binop "monad_u32_and" (Shared.of u32_mask) (and_ (var_ "a") (var_ "b"))
 
 def emit_u32_or : LLVMFunction :=
-  emit_masked_binop "monad_u32_or" (Shared.of u32_mask) (or_ (var_ "a") (var_ "b"))
+    emit_masked_binop "monad_u32_or" (Shared.of u32_mask) (or_ (var_ "a") (var_ "b"))
 
 def emit_u32_xor : LLVMFunction :=
-  emit_masked_binop "monad_u32_xor" (Shared.of u32_mask) (xor_ (var_ "a") (var_ "b"))
+    emit_masked_binop "monad_u32_xor" (Shared.of u32_mask) (xor_ (var_ "a") (var_ "b"))
 
 /// Shifts mask the RESULT, which is what makes an overshift wrap the way
 /// the reference does rather than leaving high bits set.
 def emit_u32_shl : LLVMFunction :=
-  emit_masked_binop "monad_u32_shl" (Shared.of u32_mask) (shl_ (var_ "a") (var_ "b"))
+    emit_masked_binop "monad_u32_shl" (Shared.of u32_mask) (shl_ (var_ "a") (var_ "b"))
 
 def emit_u32_shr : LLVMFunction :=
-  emit_masked_binop "monad_u32_shr" (Shared.of u32_mask) (lshr_ (var_ "a") (var_ "b"))
+    emit_masked_binop "monad_u32_shr" (Shared.of u32_mask) (lshr_ (var_ "a") (var_ "b"))
 
 /// `monad_u32_div(a, b)`: masked operands, 0 when the masked divisor is 0,
 /// else the masked quotient. Newly reachable because the interpreter
@@ -559,16 +559,16 @@ def emit_u32_div : LLVMFunction := emit_masked_div_native "monad_u32_div" (Share
 /// u32's canonical range is non-negative, so the signed printer is
 /// exact). Same reason for the new reachability as `emit_u32_div`.
 def emit_u32_to_string : LLVMFunction :=
-  let entry :=
-    LLVMBasicBlock.mk "entry"
-      [assign "m" (and_ (parm_ 0) u32_mask),
-       assign "r" (call "monad_i64_to_string" i64_ [var_ "m"] false),
-       ret (var_ "r")] in
-  { name := "monad_u32_to_string",
-    params := (i64_params 1),
-    ret_ty := i64_,
-    blocks := [entry],
-    dbg_loc := Option.none }
+    let entry :=
+        LLVMBasicBlock.mk "entry"
+            [assign "m" (and_ (parm_ 0) u32_mask),
+                assign "r" (call "monad_i64_to_string" i64_ [var_ "m"] false),
+                ret (var_ "r")] in
+    { name := "monad_u32_to_string",
+        params := (i64_params 1),
+        ret_ty := i64_,
+        blocks := [entry],
+        dbg_loc := Option.none }
 
 /// A two-argument comparison native that masks both operands to `mask`
 /// before comparing, then widens the `i1` for the wrapper's `2 - raw`
@@ -582,18 +582,18 @@ def emit_u32_to_string : LLVMFunction :=
 /// first, so every value compared is non-negative and signed and
 /// unsigned ordering agree.
 def emit_masked_icmp_native (name : String) (mask : Shared LLVMValue) (cmp : LLVMValue) : LLVMFunction :=
-  let entry :=
-    LLVMBasicBlock.mk "entry"
-      [assign "a" (and_ (parm_ 0) (Shared.get mask)),
-       assign "b" (and_ (parm_ 1) (Shared.get mask)),
-       assign "c" cmp,
-       assign "r" (zext (var_ "c") i1_ i64_),
-       ret (var_ "r")] in
-  { name := name,
-    params := (i64_params 2),
-    ret_ty := i64_,
-    blocks := [entry],
-    dbg_loc := Option.none }
+    let entry :=
+        LLVMBasicBlock.mk "entry"
+            [assign "a" (and_ (parm_ 0) (Shared.get mask)),
+                assign "b" (and_ (parm_ 1) (Shared.get mask)),
+                assign "c" cmp,
+                assign "r" (zext (var_ "c") i1_ i64_),
+                ret (var_ "r")] in
+    { name := name,
+        params := (i64_params 2),
+        ret_ty := i64_,
+        blocks := [entry],
+        dbg_loc := Option.none }
 
 /// A two-argument comparison on a SIGNED width's canonical payload:
 /// truncate both operands to 8 bits and sign-extend back (`(v as i8)
@@ -603,39 +603,39 @@ def emit_masked_icmp_native (name : String) (mask : Shared LLVMValue) (cmp : LLV
 /// printer does not parenthesize a cast inside a cast (llc rejects
 /// `sext i8 trunc ... to i8 to i64`).
 def emit_i8_icmp_native (name : String) (cmp : LLVMValue) : LLVMFunction :=
-  let entry :=
-    LLVMBasicBlock.mk "entry"
-      [assign "t0" (trunc (parm_ 0) i64_ i8_),
-       assign "a" (sext (var_ "t0") i8_ i64_),
-       assign "t1" (trunc (parm_ 1) i64_ i8_),
-       assign "b" (sext (var_ "t1") i8_ i64_),
-       assign "c" cmp,
-       assign "r" (zext (var_ "c") i1_ i64_),
-       ret (var_ "r")] in
-  { name := name,
-    params := (i64_params 2),
-    ret_ty := i64_,
-    blocks := [entry],
-    dbg_loc := Option.none }
+    let entry :=
+        LLVMBasicBlock.mk "entry"
+            [assign "t0" (trunc (parm_ 0) i64_ i8_),
+                assign "a" (sext (var_ "t0") i8_ i64_),
+                assign "t1" (trunc (parm_ 1) i64_ i8_),
+                assign "b" (sext (var_ "t1") i8_ i64_),
+                assign "c" cmp,
+                assign "r" (zext (var_ "c") i1_ i64_),
+                ret (var_ "r")] in
+    { name := name,
+        params := (i64_params 2),
+        ret_ty := i64_,
+        blocks := [entry],
+        dbg_loc := Option.none }
 
 /// The i32 twin of `emit_i8_icmp_native` (`(v as i32) as i64`) -- the
 /// same trunc+sext pair `emit_i64_to_i32` spells for the conversion
 /// native, through temps for the same printer reason.
 def emit_i32_icmp_native (name : String) (cmp : LLVMValue) : LLVMFunction :=
-  let entry :=
-    LLVMBasicBlock.mk "entry"
-      [assign "t0" (trunc (parm_ 0) i64_ i32_),
-       assign "a" (sext (var_ "t0") i32_ i64_),
-       assign "t1" (trunc (parm_ 1) i64_ i32_),
-       assign "b" (sext (var_ "t1") i32_ i64_),
-       assign "c" cmp,
-       assign "r" (zext (var_ "c") i1_ i64_),
-       ret (var_ "r")] in
-  { name := name,
-    params := (i64_params 2),
-    ret_ty := i64_,
-    blocks := [entry],
-    dbg_loc := Option.none }
+    let entry :=
+        LLVMBasicBlock.mk "entry"
+            [assign "t0" (trunc (parm_ 0) i64_ i32_),
+                assign "a" (sext (var_ "t0") i32_ i64_),
+                assign "t1" (trunc (parm_ 1) i64_ i32_),
+                assign "b" (sext (var_ "t1") i32_ i64_),
+                assign "c" cmp,
+                assign "r" (zext (var_ "c") i1_ i64_),
+                ret (var_ "r")] in
+    { name := name,
+        params := (i64_params 2),
+        ret_ty := i64_,
+        blocks := [entry],
+        dbg_loc := Option.none }
 
 /// The signed ARITHMETIC families (i8/i16/i32 add/sub/mul/div and
 /// to_string) are NOT emitters: `LLVMType` has no `i16_` (adding one
@@ -647,17 +647,17 @@ def emit_i32_icmp_native (name : String) (cmp : LLVMValue) : LLVMFunction :=
 /// `runtime_declarations` entries in `lang/src/codegen/natives.mo`.
 
 def emit_u32_eq : LLVMFunction :=
-  emit_masked_icmp_native "monad_u32_eq" (Shared.of u32_mask) (icmp_eq (var_ "a") (var_ "b"))
+    emit_masked_icmp_native "monad_u32_eq" (Shared.of u32_mask) (icmp_eq (var_ "a") (var_ "b"))
 
 /// `monad_u32_lt`/`_gt` -- `BOrd U32`'s two methods. Needed by the same
 /// escape decoder as `emit_u32_mul` above: it rejects the surrogate
 /// range and picks a UTF-8 byte width by comparing the decoded codepoint
 /// against fixed bounds.
 def emit_u32_lt : LLVMFunction :=
-  emit_masked_icmp_native "monad_u32_lt" (Shared.of u32_mask) (icmp_slt (var_ "a") (var_ "b"))
+    emit_masked_icmp_native "monad_u32_lt" (Shared.of u32_mask) (icmp_slt (var_ "a") (var_ "b"))
 
 def emit_u32_gt : LLVMFunction :=
-  emit_masked_icmp_native "monad_u32_gt" (Shared.of u32_mask) (icmp_sgt (var_ "a") (var_ "b"))
+    emit_masked_icmp_native "monad_u32_gt" (Shared.of u32_mask) (icmp_sgt (var_ "a") (var_ "b"))
 
 /// `monad_string_get_char(s, i) -> Option Char` (wired `passthrough`):
 /// `none` for `i < 0` or an out-of-range index, else `some` wrapping the
@@ -676,59 +676,59 @@ def emit_u32_gt : LLVMFunction :=
 /// the index was in range. Decoding the full scalar value would be dead
 /// work today. Revisit if `Char` ever grows operations.
 def emit_string_get_char : LLVMFunction :=
-  let entry :=
-    LLVMBasicBlock.mk "entry"
-      [assign "neg" (icmp_slt (parm_ 1) (int_ 0)),
-       branch (var_ "neg") "none_block" "null_check"] in
-  let null_check :=
-    LLVMBasicBlock.mk "null_check"
-      [assign "is_null" (icmp_eq (parm_ 0) (int_ 0)),
-       branch (var_ "is_null") "none_block" "loop"] in
-  // `bi` = byte cursor, `ci` = how many character starts seen so far.
-  let loop_ :=
-    LLVMBasicBlock.mk "loop"
-      [assign "bi" (phi [PhiPair.mk (int_ 0) "null_check", PhiPair.mk (var_ "bi_next") "advance"]),
-       assign "ci" (phi [PhiPair.mk (int_ 0) "null_check", PhiPair.mk (var_ "ci_next") "advance"]),
-       jump "read"] in
-  let read :=
-    LLVMBasicBlock.mk "read"
-      (List.append (load_byte_instrs (parm_ 0) (var_ "bi") (Shared.of "addr_c") (Shared.of "qc") (Shared.of "cbyte8") "cbyte")
-        [assign "at_end" (icmp_eq (var_ "cbyte") (int_ 0)),
-         branch (var_ "at_end") "none_block" "classify"]) in
-  // A continuation byte is `0b10xxxxxx`: (b & 0xC0) == 0x80.
-  let classify :=
-    LLVMBasicBlock.mk "classify"
-      [assign "masked" (and_ (var_ "cbyte") (int_ 192)),
-       assign "is_cont" (icmp_eq (var_ "masked") (int_ 128)),
-       branch (var_ "is_cont") "advance" "at_char_start"] in
-  let at_char_start :=
-    LLVMBasicBlock.mk "at_char_start"
-      [assign "found" (icmp_eq (var_ "ci") (parm_ 1)),
-       branch (var_ "found") "some_block" "advance"] in
-  let advance :=
-    LLVMBasicBlock.mk "advance"
-      [assign "bi_next" (add (var_ "bi") (int_ 1)),
-       // `masked` (set in `classify`, which dominates every path here)
-       // is `0x80` exactly on continuation bytes; a non-continuation
-       // byte starts a character, so bump the character counter.
-       assign "starts" (icmp_ne (var_ "masked") (int_ 128)),
-       assign "starts_i" (zext (var_ "starts") i1_ i64_),
-       assign "ci_next" (add (var_ "ci") (var_ "starts_i")),
-       jump "loop"] in
-  let none_block :=
-    LLVMBasicBlock.mk "none_block"
-      [assign "none_con" (alloc_constructor rt_tag_none []),
-       ret (var_ "none_con")] in
-  let some_block :=
-    LLVMBasicBlock.mk "some_block"
-      [assign "some_con" (alloc_constructor rt_tag_some [var_ "cbyte"]),
-       set_field_call (var_ "some_con") 0 (var_ "cbyte") "csf",
-       ret (var_ "some_con")] in
-  { name := "monad_string_get_char",
-    params := (i64_params 2),
-    ret_ty := i64_,
-    blocks := [entry, null_check, loop_, read, classify, at_char_start, advance, none_block, some_block],
-    dbg_loc := Option.none }
+    let entry :=
+        LLVMBasicBlock.mk "entry"
+            [assign "neg" (icmp_slt (parm_ 1) (int_ 0)),
+                branch (var_ "neg") "none_block" "null_check"] in
+    let null_check :=
+        LLVMBasicBlock.mk "null_check"
+            [assign "is_null" (icmp_eq (parm_ 0) (int_ 0)),
+                branch (var_ "is_null") "none_block" "loop"] in
+    // `bi` = byte cursor, `ci` = how many character starts seen so far.
+    let loop_ :=
+        LLVMBasicBlock.mk "loop"
+            [assign "bi" (phi [PhiPair.mk (int_ 0) "null_check", PhiPair.mk (var_ "bi_next") "advance"]),
+                assign "ci" (phi [PhiPair.mk (int_ 0) "null_check", PhiPair.mk (var_ "ci_next") "advance"]),
+                jump "read"] in
+    let read :=
+        LLVMBasicBlock.mk "read"
+            (List.append (load_byte_instrs (parm_ 0) (var_ "bi") (Shared.of "addr_c") (Shared.of "qc") (Shared.of "cbyte8") "cbyte")
+                [assign "at_end" (icmp_eq (var_ "cbyte") (int_ 0)),
+                    branch (var_ "at_end") "none_block" "classify"]) in
+    // A continuation byte is `0b10xxxxxx`: (b & 0xC0) == 0x80.
+    let classify :=
+        LLVMBasicBlock.mk "classify"
+            [assign "masked" (and_ (var_ "cbyte") (int_ 192)),
+                assign "is_cont" (icmp_eq (var_ "masked") (int_ 128)),
+                branch (var_ "is_cont") "advance" "at_char_start"] in
+    let at_char_start :=
+        LLVMBasicBlock.mk "at_char_start"
+            [assign "found" (icmp_eq (var_ "ci") (parm_ 1)),
+                branch (var_ "found") "some_block" "advance"] in
+    let advance :=
+        LLVMBasicBlock.mk "advance"
+            [assign "bi_next" (add (var_ "bi") (int_ 1)),
+                // `masked` (set in `classify`, which dominates every path here)
+                // is `0x80` exactly on continuation bytes; a non-continuation
+                // byte starts a character, so bump the character counter.
+                assign "starts" (icmp_ne (var_ "masked") (int_ 128)),
+                assign "starts_i" (zext (var_ "starts") i1_ i64_),
+                assign "ci_next" (add (var_ "ci") (var_ "starts_i")),
+                jump "loop"] in
+    let none_block :=
+        LLVMBasicBlock.mk "none_block"
+            [assign "none_con" (alloc_constructor rt_tag_none []),
+                ret (var_ "none_con")] in
+    let some_block :=
+        LLVMBasicBlock.mk "some_block"
+            [assign "some_con" (alloc_constructor rt_tag_some [var_ "cbyte"]),
+                set_field_call (var_ "some_con") 0 (var_ "cbyte") "csf",
+                ret (var_ "some_con")] in
+    { name := "monad_string_get_char",
+        params := (i64_params 2),
+        ret_ty := i64_,
+        blocks := [entry, null_check, loop_, read, classify, at_char_start, advance, none_block, some_block],
+        dbg_loc := Option.none }
 
 def emit_u8_to_u32 : LLVMFunction := emit_mask_convert "monad_u8_to_u32" u8_mask
 def emit_i64_to_u32 : LLVMFunction := emit_mask_convert "monad_i64_to_u32" u32_mask
@@ -743,13 +743,13 @@ def emit_u32_to_u8 : LLVMFunction := emit_mask_convert "monad_u32_to_u8" u8_mask
 /// are unmasked i64s here too (the reference's own documented known
 /// gap, `core_native.rs`'s `int_cmp` group).
 def emit_identity_native (name : String) : LLVMFunction :=
-  let entry :=
-    LLVMBasicBlock.mk "entry" [ret (parm_ 0)] in
-  { name := name,
-    params := (i64_params 1),
-    ret_ty := i64_,
-    blocks := [entry],
-    dbg_loc := Option.none }
+    let entry :=
+        LLVMBasicBlock.mk "entry" [ret (parm_ 0)] in
+    { name := name,
+        params := (i64_params 1),
+        ret_ty := i64_,
+        blocks := [entry],
+        dbg_loc := Option.none }
 
 def emit_i64_to_u64 : LLVMFunction := emit_identity_native "monad_i64_to_u64"
 def emit_u8_to_u64 : LLVMFunction := emit_identity_native "monad_u8_to_u64"
@@ -795,34 +795,34 @@ def emit_u64_to_i64 : LLVMFunction := emit_identity_native "monad_u64_to_i64"
 /// for `i64_*` exactly, which is the same rule the u8/u16/i8 groups here
 /// already follow.
 def emit_i64_add : LLVMFunction :=
-  let entry :=
-    LLVMBasicBlock.mk "entry"
-      [assign "r" (add (parm_ 0) (parm_ 1)), ret (var_ "r")] in
-  { name := "monad_i64_add",
-    params := (i64_params 2),
-    ret_ty := i64_,
-    blocks := [entry],
-    dbg_loc := Option.none }
+    let entry :=
+        LLVMBasicBlock.mk "entry"
+            [assign "r" (add (parm_ 0) (parm_ 1)), ret (var_ "r")] in
+    { name := "monad_i64_add",
+        params := (i64_params 2),
+        ret_ty := i64_,
+        blocks := [entry],
+        dbg_loc := Option.none }
 
 def emit_i64_sub : LLVMFunction :=
-  let entry :=
-    LLVMBasicBlock.mk "entry"
-      [assign "r" (sub (parm_ 0) (parm_ 1)), ret (var_ "r")] in
-  { name := "monad_i64_sub",
-    params := (i64_params 2),
-    ret_ty := i64_,
-    blocks := [entry],
-    dbg_loc := Option.none }
+    let entry :=
+        LLVMBasicBlock.mk "entry"
+            [assign "r" (sub (parm_ 0) (parm_ 1)), ret (var_ "r")] in
+    { name := "monad_i64_sub",
+        params := (i64_params 2),
+        ret_ty := i64_,
+        blocks := [entry],
+        dbg_loc := Option.none }
 
 def emit_i64_mul : LLVMFunction :=
-  let entry :=
-    LLVMBasicBlock.mk "entry"
-      [assign "r" (mul (parm_ 0) (parm_ 1)), ret (var_ "r")] in
-  { name := "monad_i64_mul",
-    params := (i64_params 2),
-    ret_ty := i64_,
-    blocks := [entry],
-    dbg_loc := Option.none }
+    let entry :=
+        LLVMBasicBlock.mk "entry"
+            [assign "r" (mul (parm_ 0) (parm_ 1)), ret (var_ "r")] in
+    { name := "monad_i64_mul",
+        params := (i64_params 2),
+        ret_ty := i64_,
+        blocks := [entry],
+        dbg_loc := Option.none }
 
 def emit_i64_div : LLVMFunction := emit_guarded_native "monad_i64_div" (sdiv (parm_ 0) (parm_ 1))
 
@@ -850,13 +850,13 @@ def emit_u16_gt : LLVMFunction := emit_masked_icmp_native "monad_u16_gt" (Shared
 /// then; both sides mask now, so `U16.add 65535u16 1u16` comes out 0
 /// here exactly as it does there.
 def emit_u16_add : LLVMFunction :=
-  emit_masked_binop "monad_u16_add" (Shared.of u16_mask) (add (var_ "a") (var_ "b"))
+    emit_masked_binop "monad_u16_add" (Shared.of u16_mask) (add (var_ "a") (var_ "b"))
 
 def emit_u16_sub : LLVMFunction :=
-  emit_masked_binop "monad_u16_sub" (Shared.of u16_mask) (sub (var_ "a") (var_ "b"))
+    emit_masked_binop "monad_u16_sub" (Shared.of u16_mask) (sub (var_ "a") (var_ "b"))
 
 def emit_u16_mul : LLVMFunction :=
-  emit_masked_binop "monad_u16_mul" (Shared.of u16_mask) (mul (var_ "a") (var_ "b"))
+    emit_masked_binop "monad_u16_mul" (Shared.of u16_mask) (mul (var_ "a") (var_ "b"))
 
 /// `monad_u16_div(a, b)`: masked operands, 0 when the masked divisor is
 /// 0, else the masked quotient -- `int_div_width`'s mirror. Masked
@@ -885,17 +885,16 @@ def emit_i32_lt : LLVMFunction := emit_i32_icmp_native "monad_i32_lt" (icmp_slt 
 def emit_i32_gt : LLVMFunction := emit_i32_icmp_native "monad_i32_gt" (icmp_sgt (var_ "a") (var_ "b"))
 def emit_i32_to_i64 : LLVMFunction := emit_identity_native "monad_i32_to_i64"
 def emit_i64_to_i32 : LLVMFunction :=
-  let entry :=
-    LLVMBasicBlock.mk "entry"
-      [assign "t" (trunc (parm_ 0) i64_ i32_),
-       assign "s" (sext (var_ "t") i32_ i64_),
-       ret (var_ "s")] in
-  { name := "monad_i64_to_i32",
-    params := (i64_params 1),
-    ret_ty := i64_,
-    blocks := [entry],
-    dbg_loc := Option.none }
-
+    let entry :=
+        LLVMBasicBlock.mk "entry"
+            [assign "t" (trunc (parm_ 0) i64_ i32_),
+                assign "s" (sext (var_ "t") i32_ i64_),
+                ret (var_ "s")] in
+    { name := "monad_i64_to_i32",
+        params := (i64_params 1),
+        ret_ty := i64_,
+        blocks := [entry],
+        dbg_loc := Option.none }
 
 // ─── Bench stubs ────────────────────────────────────────────────────
 
