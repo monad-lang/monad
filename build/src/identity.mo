@@ -106,15 +106,36 @@ def Build.build_commit_override : IO String := do {
 /// binary's bytes -- and this is the key-facing composition, so nothing
 /// that merely wants to identify the compiler gets the stamp folded in by
 /// accident.
+///
+/// `$MONAD_FEATURES` is folded the same way: it changes which `#[cfg]`
+/// declarations load (`lang/src/cfg.mo`), so a feature-on build must not
+/// be served a feature-off artifact. Manifest `[features]` defaults need
+/// nothing here: the manifests are already in the closure digest.
 #[partial]
 pub def Build.compiler_key_with (tool : DigestTool) : IO (Result String String) := do {
     let stamp <- Build.build_commit_override;
+    let features <- Build.features_override;
     let d <- Build.compiler_digest_with tool;
     match d {
         err e => return (err e),
-        ok h =>
-            if String.is_empty stamp
-            then return (ok h)
-            else return (ok (Sha256.hash (String.concat h (String.concat "\n" stamp))))
+        ok h => return (ok (Build.fold_key_stamp (Build.fold_key_stamp h stamp) features))
+    }
+}
+
+/// `h` unchanged for an empty stamp, so an unset variable keeps every
+/// existing store entry valid.
+def Build.fold_key_stamp (h : String) (stamp : String) : String :=
+    if String.is_empty stamp then h else Sha256.hash (String.concat h (String.concat "\n" stamp))
+
+/// `$MONAD_FEATURES`, trimmed and tagged, or `""`. The tag keeps a feature
+/// list from ever hashing like a `MONAD_BUILD_COMMIT` value.
+#[partial]
+def Build.features_override : IO String := do {
+    let v <- IO.get_env "MONAD_FEATURES";
+    match v {
+        Option.none => return "",
+        Option.some s =>
+            let t : String := String.trim s in
+            if String.is_empty t then return "" else return (String.concat "features=" t)
     }
 }
