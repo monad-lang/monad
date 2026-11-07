@@ -68,12 +68,16 @@ fi
 while IFS= read -r path; do
   [ -n "$path" ] || continue
   case "$path" in
+    # A book chapter or the site config: `scripts/build-docs.sh` renders
+    # them with the self-compiled compiler and fails on a broken internal
+    # link, a `#anchor` that does not exist or a chapter SUMMARY.md names
+    # and the tree does not have -- so these need the compiler job.
+    docs/src/* | docs/site.toml) echo true; exit 0 ;;
     # Markdown is prose wherever this repository keeps it: the root
-    # README/AGENTS/CODE_OF_CONDUCT, docs/src's book sources, the
-    # per-directory READMEs, and .claude-plugin's.
+    # README/AGENTS/CODE_OF_CONDUCT, the per-directory READMEs, and
+    # .claude-plugin's.
     *.md) ;;
-    # The site sources and build output under docs/. `acorn build` only
-    # reads them; the deploy workflow is main-only.
+    # The rest of docs/: the static tree (copied verbatim), the README.
     docs/*) ;;
     # Opened by no nix expression, script or hook in the tree: nix's
     # `meta.license` names a nixpkgs value, not this file, and the ignore
