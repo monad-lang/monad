@@ -36,6 +36,7 @@ use crate::term::{
   SourceRange, Use,
 };
 
+pub mod cfg;
 pub mod core_check;
 pub mod core_check_module;
 pub mod core_eval;

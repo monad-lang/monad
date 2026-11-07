@@ -3374,13 +3374,48 @@ pub fn load_decls_from_text_with_path(
   context: &ModuleContext,
 ) -> Result<Vec<SourceContext<Decl>>, String> {
   let parsed = parse_file_with_path(text, &context).map_err(|e| format!("{e}"))?;
+  // Before `use` resolution, so a feature-gated `use` loads nothing.
+  let decls = filter_cfg_feature_decls(parsed.decls, context)?;
   // Here rather than in `load_decls`, because the file the user names on
   // the command line never goes through `load_decls` -- only its
   // dependencies do -- and `use lib.x` has to work in it too.
   Ok(match &context.file {
-    Some(file) => resolve_lib_alias_uses(parsed.decls, file),
-    None => parsed.decls,
+    Some(file) => resolve_lib_alias_uses(decls, file),
+    None => decls,
   })
+}
+
+/// Drop declarations whose `#[cfg]` is false under the active feature set
+/// (`crate::cfg`). A feature is a `(mote, feature)` pair; the file's mote
+/// is looked up only when some `#[cfg]` names a feature.
+fn filter_cfg_feature_decls(
+  decls: Vec<SourceContext<Decl>>,
+  context: &ModuleContext,
+) -> Result<Vec<SourceContext<Decl>>, String> {
+  let mut gated = false;
+  for d in &decls {
+    gated |= crate::cfg::mentions_feature(crate::cfg::decl_attributes(d.value()));
+  }
+  if !gated {
+    return Ok(decls);
+  }
+  let mote = context
+    .file
+    .as_deref()
+    .and_then(mote_name_of_file)
+    .or_else(|| context.path.first().map(|i| i.as_str().to_owned()));
+  let set = crate::cfg::active();
+  let mut kept = Vec::with_capacity(decls.len());
+  for d in decls {
+    if crate::cfg::keep(
+      crate::cfg::decl_attributes(d.value()),
+      &set,
+      mote.as_deref(),
+    ) {
+      kept.push(d);
+    }
+  }
+  Ok(kept)
 }
 
 fn filter_cfg_test_decls(
