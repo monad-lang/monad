@@ -12,7 +12,7 @@
 /// A command that outlives its wait is released into an ordinary background
 /// task: the model gets the output so far and the id, and the exit arrives
 /// later as an inbox note, like any task's. `wait_seconds: 0` starts a task
-/// without waiting at all, so this one tool covers what `start_process` did.
+/// without waiting at all.
 ///
 /// A command that finishes in time is discarded from the store after its
 /// output is read. The log is capped at 64 MiB; past that the group is

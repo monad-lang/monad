@@ -1,5 +1,6 @@
-/// `start_process` / `read_process` / `kill_process` / `list_processes`:
-/// the model-facing half of the background-process store (`procs.mo`).
+/// `read_process` / `kill_process` / `list_processes`: the model-facing
+/// half of the background-process store (`procs.mo`). `shell` starts the
+/// tasks (`shell_tool.mo`; `wait_seconds: 0` starts one without waiting).
 /// Schemas mirror shuttle's shell tool: a flat object of string params.
 use shuttle::tool {ToolSpec, ToolImpl}
 use shuttle::gate {Capability}
@@ -10,13 +11,13 @@ use json::json {
 }
 use parsec::number {parse_i64}
 use std::concurrent::combine {sleepIO}
-use weaver::process_args {StartProcessArgs, ReadProcessArgs, KillProcessArgs}
+use weaver::process_args {ReadProcessArgs, KillProcessArgs}
 use std::map {Map, BTreeMap}
 use std::io {IO.current_time_nano}
-use std::path {Path, Path.to_string}
+use std::path {Path}
 use init::transformers {ResultT}
 use weaver::procs {
-    ProcEntry, ProcStatus, ProcStatus.text, Procs.start, Procs.list, Procs.entry, Procs.entry_at, Procs.root, Procs.tail, Procs.kill, Procs.log_start, Procs.log_kill,
+    ProcEntry, ProcStatus, ProcStatus.text, Procs.list, Procs.entry, Procs.entry_at, Procs.root, Procs.tail, Procs.kill, Procs.log_kill,
 }
 use weaver::format {format_elapsed}
 use log::logger {Logger}
@@ -43,45 +44,13 @@ def params_schema (params : List (Pair String Json)) : Json :=
         (Map.insert "properties" (Json.make_object (params_to_map params BTreeMap.empty))
             (Map.insert "required" (Json.make_array (List.map pair_fst params)) BTreeMap.empty)))
 
-// ── start_process ───────────────────────────────────────────────────────
-
-def start_params : List (Pair String Json) :=
-    [str_param "command" "Shell command to run detached. Its stdout and stderr go to a per-task log.",
-        str_param "cwd" "Working directory, or \"\" to inherit weaver's."]
-
-pub def StartProcessTool.spec : ToolSpec :=
-    { name := "start_process", description := "Start a background shell command; returns its task id and log path.", schema := params_schema start_params }
-
-pub def StartProcessTool.impl (log : Option Logger) : ToolImpl :=
-    { spec := StartProcessTool.spec, cap := Capability.exec, run := start_run log }
-
-def start_run (log : Option Logger) (id : String) (j : Json) : ResultT String IO Content :=
-    match StartProcessArgs.deserialize_json j {
-        Result.err e => ResultT.mk (return (Result.ok (tool_err id e))),
-        Result.ok args =>
-            ResultT.mk (do {
-                let r <- Procs.start args.command args.cwd;
-                match r {
-                    Result.err e => IO.pure (Result.ok (tool_err id (String.concat "start_process: " e))),
-                    Result.ok e2 => do {
-                        let _ <- Procs.log_start log e2;
-                        let text : String := String.concat "started " (String.concat e2.id
-                            (String.concat " (pid " (String.concat (I64.to_string e2.pid)
-                                (String.concat ")\nlog: " (String.concat (Path.to_string e2.log)
-                                    "\nUse read_process to poll; kill_process to stop.")))));
-                        IO.pure (Result.ok (tool_ok id text))
-                    },
-                }
-            }),
-    }
-
 // ── read_process ────────────────────────────────────────────────────────
 
 def read_schema : Json :=
     let wait : Json := Json.make_object (Map.insert "type" (Json.make_str "integer")
         (Map.insert "description" (Json.make_str "Optional: wait up to this many seconds (max 60) for the task to exit before answering.") BTreeMap.empty)) in
     let props : BTreeMap String Json :=
-        Map.insert "wait_seconds" wait (params_to_map [str_param "id" "The task id returned by start_process."] BTreeMap.empty) in
+        Map.insert "wait_seconds" wait (params_to_map [str_param "id" "The task id returned by shell."] BTreeMap.empty) in
     Json.make_object (Map.insert "type" (Json.make_str "object")
         (Map.insert "properties" (Json.make_object props)
             (Map.insert "required" (Json.make_array [Json.make_str "id"]) BTreeMap.empty)))

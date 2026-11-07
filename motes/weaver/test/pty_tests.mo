@@ -24,7 +24,7 @@ use weaver::pty::dialogs {
 }
 use weaver::pty::input {run_input_caret_click_drag}
 use weaver::pty::models {run_model_picker_select_and_cancel}
-use weaver::pty::processes {run_start_process_list_and_kill, run_exit_note_mid_turn, run_monitor_refreshes_itself}
+use weaver::pty::processes {run_background_shell_list_and_kill, run_exit_note_mid_turn, run_monitor_refreshes_itself}
 use weaver::pty::approvals {run_auto_mode_holds_destructive_commands}
 use weaver::pty::todos {run_todo_panel_shows_and_folds}
 use weaver::pty::trust {run_trust_asks_records_and_reasks}
@@ -102,7 +102,7 @@ def test_input_caret_click_drag : IO Bool := run_input_caret_click_drag
 def test_model_picker_select_and_cancel : IO Bool := run_model_picker_select_and_cancel
 
 #[test]
-def test_start_process_list_and_kill : IO Bool := run_start_process_list_and_kill
+def test_background_shell_list_and_kill : IO Bool := run_background_shell_list_and_kill
 
 #[test]
 def test_exit_note_mid_turn : IO Bool := run_exit_note_mid_turn

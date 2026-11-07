@@ -82,14 +82,14 @@ pub def write_base_script (path : String) (note_path : String) : IO Bool :=
         [tool_use_turn_json "b1" "read" input,
             text_turn_json "done reading"]
 
-/// Turn 0 starts a detached process; turn 1 reports.
+/// Turn 0 starts a background task (`shell` with no wait); turn 1 reports.
 pub def write_process_script (path : String) (command : String) : IO Bool :=
     let input : Json :=
         Json.make_object_pairs
             [Pair.pair "command" (Json.make_str command),
-                Pair.pair "cwd" (Json.make_str "")] in
+                Pair.pair "wait_seconds" (Json.make_num_int 0)] in
     write_turns path
-        [tool_use_turn_json "p1" "start_process" input,
+        [tool_use_turn_json "p1" "shell" input,
             text_turn_json "started it"]
 
 /// A turn that starts `sleep 2` in the background, then runs a 5 s
@@ -97,10 +97,10 @@ pub def write_process_script (path : String) (command : String) : IO Bool :=
 /// boundary delivers it.
 pub def write_midturn_script (path : String) : IO Bool :=
     let start : Json := Json.make_object_pairs
-        [Pair.pair "command" (Json.make_str "exec sleep 2"), Pair.pair "cwd" (Json.make_str "")] in
+        [Pair.pair "command" (Json.make_str "exec sleep 2"), Pair.pair "wait_seconds" (Json.make_num_int 0)] in
     let wait : Json := Json.make_object_pairs [Pair.pair "command" (Json.make_str "sleep 5")] in
     write_turns path
-        [tool_use_turn_json "p1" "start_process" start,
+        [tool_use_turn_json "p1" "shell" start,
             tool_use_turn_json "s1" "shell" wait,
             text_turn_json "heard it"]
 

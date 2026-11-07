@@ -3,14 +3,6 @@
 /// `shell_args.mo` records.
 use json::serde_backend {derive_json_serialize, derive_json_deserialize}
 
-pub struct StartProcessArgs {
-    command : String,
-    cwd : String,
-}
-
-derive_json_serialize! StartProcessArgs
-derive_json_deserialize! StartProcessArgs
-
 pub struct ReadProcessArgs {
     id : String,
 }

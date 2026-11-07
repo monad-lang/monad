@@ -1,6 +1,6 @@
 /// weaver / assess -- where a tool pick reaches, read from its input before
-/// the gate decides. A file tool names its `path`; a `shell` or
-/// `start_process` command is tokenized (`shell_words.mo`) and every
+/// the gate decides. A file tool names its `path`; a `shell` command is
+/// tokenized (`shell_words.mo`) and every
 /// path-like word, `cd` target and redirect target is resolved against the
 /// working directory. Lexical, like `Permissions.within`: no symlinks are
 /// followed and nothing runs.
@@ -40,7 +40,7 @@ def scan_max_bytes : I64 := 16384
 def nest_max : I64 := 3
 
 pub def Assess.pick (root : Option Path) (p : Pick) : Assessment :=
-    if Bool.or (String.beq p.name "shell") (String.beq p.name "start_process")
+    if String.beq p.name "shell"
     then command_pick root p
     else match input_str "path" p.input {
         Option.none => Assess.unknown,
@@ -75,19 +75,7 @@ pub def Assess.path (root : Option Path) (path : String) : Assessment :=
 def command_pick (root : Option Path) (p : Pick) : Assessment :=
     match input_str "command" p.input {
         Option.none => Assess.unknown,
-        Option.some cmd =>
-            let base : Option Path := match input_str "cwd" p.input {
-                Option.none => root,
-                Option.some c => resolve_dir root c,
-            } in
-            let w0 : Walk := walk_start root root in
-            // A `cwd` outside the root is itself a place the command reaches.
-            let w1 : Walk := match input_str "cwd" p.input {
-                Option.none => w0,
-                Option.some c => note_word w0 (plain_word c),
-            } in
-            let w2 : Walk := { w1 with base := base } in
-            walk_result (walk_text 0 cmd w2),
+        Option.some cmd => Assess.command root cmd,
     }
 
 /// `command` run from the root.

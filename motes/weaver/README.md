@@ -75,7 +75,7 @@ overlay.mo         the dialog/stdin-ownership handshake and close sequence
 stop.mo            the generation-guarded Esc stop signal
 logs.mo            the debug log path/level/events and crash detector
 procs.mo           detached background processes (pid/log/meta files)
-process_tools.mo   start_process / read_process / kill_process / list_processes
+process_tools.mo   read_process / kill_process / list_processes
 subagent.mo        the read-only `task` subagent (child Loop.run_state)
 main.mo            the entry: settings load, flag resolution, MCP
                    mount (proxy tools default exec-cap), Tui.run with

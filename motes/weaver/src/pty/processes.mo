@@ -1,4 +1,4 @@
-// weaver / pty / processes -- a start_process turn opens the approval overlay;
+// weaver / pty / processes -- a background shell turn opens the approval overlay;
 // the footer counts the running task; `/tasks` lists it, Enter opens it and
 // `x` really stops the pid; the kill and the exit note reach the transcript.
 // Ported from pty_repro_processes.py (retired).
@@ -67,7 +67,7 @@ def process_go (m : Pty) (root : String) : IO Bool := do {
     let ready <- Pty.wait_until m placeholder_seen 6000;
     Pty.send_text m "go\n";
     let overlay <- Pty.wait_until m (fn (o : Output) => has_stripped o "Permission required") 6000;
-    let a <- Check.report "the start_process approval dialog appears" (Bool.and ready overlay);
+    let a <- Check.report "the shell approval dialog appears" (Bool.and ready overlay);
     Pty.send_text m "y";
     let done <- Pty.wait_until m started 8000;
     let b <- Check.report "the turn continues after starting" done;
@@ -101,7 +101,7 @@ def processes_run (bin : String) (root : String) : IO Bool := do {
     }
 }
 
-pub def run_start_process_list_and_kill : IO Bool :=
+pub def run_background_shell_list_and_kill : IO Bool :=
     run_gated "pty weaver processes" test_processes_body
 
 def test_processes_body (bin : String) : IO Bool :=

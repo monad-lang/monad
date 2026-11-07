@@ -62,16 +62,15 @@ def test_file_targets : Bool :=
         && String.beq (shape (Assess.path root "/repo-evil/b.mo")) "outside:/repo-evil/b.mo"
         && String.beq (shape (Assess.path Option.none "src/a.mo")) "unknown"
 
-def proc_pick (command : String) (cwd : String) : Pick :=
-    let input : Json := Json.make_object (Map.insert "command" (Json.make_str command)
-        (Map.insert "cwd" (Json.make_str cwd) BTreeMap.empty)) in
-    { name := "start_process", cap := Capability.exec, input := input }
+def shell_pick (command : String) : Pick :=
+    let input : Json := Json.make_object (Map.insert "command" (Json.make_str command) BTreeMap.empty) in
+    { name := "shell", cap := Capability.exec, input := input }
 
-/// `start_process` runs from its `cwd`, which is itself a reach.
+/// A `shell` pick is judged by its command's words.
 #[test]
-def test_start_process_cwd : Bool :=
-    String.beq (shape (Assess.pick root (proc_pick "ls" "/repo/sub"))) "inside"
-        && String.beq (shape (Assess.pick root (proc_pick "ls" "/srv"))) "outside:/srv"
+def test_shell_pick_reads_the_command : Bool :=
+    String.beq (shape (Assess.pick root (shell_pick "ls src"))) "inside"
+        && String.beq (shape (Assess.pick root (shell_pick "cat /srv/x"))) "outside:/srv/x"
 
 #[test]
 def test_scope_lines : Bool :=

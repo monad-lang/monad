@@ -64,7 +64,7 @@ use weaver::tui_app {Tui.run_resumed}
 use log::logger {Logger}
 use weaver::logs {LogSetup, Logs.setup, Logs.finish, Logs.info, Logs.error, Logs.log_rss}
 use weaver::process_tools {
-    StartProcessTool.impl, ReadProcessTool.impl, KillProcessTool.impl, ListProcessesTool.impl,
+    ReadProcessTool.impl, KillProcessTool.impl, ListProcessesTool.impl,
 }
 use weaver::procs {Procs.shutdown}
 use init::transformers {ResultT}
@@ -84,16 +84,15 @@ use std::map {Map}
 def weaver_registry (log : Option Logger) (check_cache : Ref ModuleInfoCache) (eval_buf : Ref (List String)) (root : Option String) : ToolRegistry :=
     ToolRegistry.register (MonadEval.tool eval_buf check_cache root)
         (ToolRegistry.register (MonadCheck.tool check_cache root)
-            (ToolRegistry.register (StartProcessTool.impl log)
-                (ToolRegistry.register ReadProcessTool.impl
-                    (ToolRegistry.register (KillProcessTool.impl log)
-                        (ToolRegistry.register ListProcessesTool.impl
-                            (ToolRegistry.register (WeaverShell.impl log WeaverShell.never_stop (WeaverShell.fg_path Option.none))
-                                (ToolRegistry.register EditTool.impl
-                                    (ToolRegistry.register WriteTool.impl
-                                        (ToolRegistry.register GlobTool.impl
-                                            (ToolRegistry.register GrepTool.impl
-                                                (ToolRegistry.register ReadTool.impl ToolRegistry.empty)))))))))))
+            (ToolRegistry.register ReadProcessTool.impl
+                (ToolRegistry.register (KillProcessTool.impl log)
+                    (ToolRegistry.register ListProcessesTool.impl
+                        (ToolRegistry.register (WeaverShell.impl log WeaverShell.never_stop (WeaverShell.fg_path Option.none))
+                            (ToolRegistry.register EditTool.impl
+                                (ToolRegistry.register WriteTool.impl
+                                    (ToolRegistry.register GlobTool.impl
+                                        (ToolRegistry.register GrepTool.impl
+                                            (ToolRegistry.register ReadTool.impl ToolRegistry.empty))))))))))
 
 /// `IO.write_stderr` does not append a newline; every one-line
 /// diagnostic this entry prints goes through here.
