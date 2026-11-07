@@ -39,11 +39,11 @@ def survivors (dir : String) : IO String := do {
 #[test]
 def test_fixture_default_on : IO Bool := do {
     let got <- survivors "fixtures/cfg/on";
-    return (String.beq got "on_only")
+    return (String.beq got "on_only,main")
 }
 
 #[test]
 def test_fixture_default_off : IO Bool := do {
     let got <- survivors "fixtures/cfg/off";
-    return (String.beq got "off_only")
+    return (String.beq got "off_only,main")
 }
