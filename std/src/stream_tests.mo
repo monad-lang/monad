@@ -8,7 +8,7 @@
 
 use std::process {exec_cmd, process_id}
 use std::bytebuf {ByteBuf, ByteBuf.free, ByteBuf.length, ByteBuf.of_string, ByteBuf.to_string}
-use std::stream {Stream, FdStream.read_line_bounded, StreamError, StreamError.kind_of_code, StreamErrorKind, FdStream, FdStream.open_file, FdStream.read_mode, FdStream.write_mode, FdStream.append_mode, PartialLinePolicy}
+use std::stream {Stream, FdStream.read_line_bounded, StreamError, StreamError.kind_of_code, StreamErrorKind, FdStream, FdStream.open_file, FdStream.read_mode, FdStream.write_mode, FdStream.append_mode, FdStream.seek, FdStream.seek_start, FdStream.seek_end, PartialLinePolicy}
 
 def st_path (name : String) : String :=
     "/tmp/monad_stream_tests_" ++ I64.to_string process_id ++ "_" ++ name
@@ -332,4 +332,38 @@ def test_read_line_at_the_bound_fits : IO Bool := do {
     let r <- st_bounded_line path 3;
     exec_cmd "rm" ["-f", path];
     return (st_line_is r "abc")
+}
+
+// ─── seek ───
+
+def st_offset_is (r : Result StreamError I64) (expected : I64) : Bool :=
+    match r {
+        Result.ok n => n == expected,
+        Result.err _ => false
+    }
+
+/// A line read carries the bytes past its newline; a seek drops them, so
+/// the next read starts at the new offset.
+def st_seek_after_line (s : Shared FdStream) : IO Bool := do {
+    let line <- FdStream.read_line_bounded (Shared.get s) 0 PartialLinePolicy.deliver;
+    let size <- FdStream.seek (Shared.get s) 0 FdStream.seek_end;
+    let at <- FdStream.seek (Shared.get s) 8 FdStream.seek_start;
+    let rest <- st_read_and_close s;
+    return (st_line_is line "first" && st_offset_is size 19 && st_offset_is at 8
+        && st_some_is rest "cond\nthird\n")
+}
+
+def st_seek_opened (opened : Result StreamError FdStream) : IO Bool :=
+    match opened {
+        Result.err _ => IO.pure false,
+        Result.ok s => st_seek_after_line (Shared.of s)
+    }
+
+#[test]
+def test_seek_moves_the_offset_and_drops_the_carry : IO Bool := do {
+    let path : String := st_path "seek";
+    let wrote <- st_write_file path "first\nsecond\nthird\n";
+    let opened <- FdStream.open_file (Path.path path) FdStream.read_mode;
+    let ok <- st_seek_opened opened;
+    return (wrote && ok)
 }

@@ -136,6 +136,13 @@ priv def stream_close (s : FdStream) : RawIO Unit
 #[native "stream_fd"]
 priv def stream_fd (s : FdStream) : RawIO I32
 
+/// `lseek(2)`: `whence` 0 from the start, 1 from the current offset, 2
+/// from the end; the ok payload is the new offset. Bytes a line read
+/// carried past its newline are dropped, since they belong to the old
+/// position.
+#[native "stream_seek"]
+priv def stream_seek (s : FdStream) (offset : I64) (whence : I64) : RawIO (Result (Pair I64 String) I64)
+
 #[native "stream_poll"]
 priv def stream_poll (s : FdStream) (events : I64) (timeout_ms : I64) : RawIO (Result (Pair I64 String) I64)
 
@@ -198,6 +205,19 @@ pub def FdStream.poll (s : FdStream) (events : I64) (timeout_ms : I64) : IO (Res
     Result.err e => Result.err e,
     Result.ok n => Result.ok (Bool.not (I64.beq n 0)),
   })
+}
+
+/// `FdStream.seek`'s origins (`lseek(2)`'s SEEK_SET/SEEK_CUR/SEEK_END).
+pub def FdStream.seek_start : I64 := 0
+pub def FdStream.seek_current : I64 := 1
+pub def FdStream.seek_end : I64 := 2
+
+/// Move the stream's offset to `offset` bytes from `whence` and return
+/// the new offset from the start. Only a file seeks; a pipe, socket or
+/// terminal is an error. `seek 0 seek_end` is the file's size.
+pub def FdStream.seek (s : FdStream) (offset : I64) (whence : I64) : IO (Result StreamError I64) := do {
+  let r <- IO.mk (stream_seek s offset whence);
+  return (stream_result r)
 }
 
 /// A socket's per-read and per-write timeout (`SO_RCVTIMEO`/`SO_SNDTIMEO`).

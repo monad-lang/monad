@@ -17,7 +17,8 @@ use lib::bytebuf {
 }
 use lib::stream {
     Stream, FdStream, FdStream.open_file, FdStream.read_line_bounded,
-    FdStream.read_mode, FdStream.stderr, FdStream.stdin, FdStream.stdout,
+    FdStream.read_mode, FdStream.seek, FdStream.seek_end, FdStream.seek_start,
+    FdStream.stderr, FdStream.stdin, FdStream.stdout,
     FdStream.write_mode, PartialLinePolicy, StreamError, stream_result,
 }
 
@@ -104,6 +105,66 @@ pub def IO.read_file_bytes (path : Path) : IO (Result StreamError (List U8)) := 
     let opened <- FdStream.open_file path FdStream.read_mode;
     IO.read_bytes_opened opened
 }
+
+/// The last `n` bytes of the file at `path`, read from `size - n` so the
+/// rest is never read: for following a log that may be large. A missing
+/// file is `not_found`, and a pipe (which cannot seek) is an error. The
+/// text never starts inside a UTF-8 character, and NUL bytes read as
+/// spaces.
+pub def IO.read_tail (path : Path) (n : I64) : IO (Result StreamError String) := do {
+    let opened <- FdStream.open_file path FdStream.read_mode;
+    IO.tail_opened opened n
+}
+
+def IO.tail_opened (opened : Result StreamError FdStream) (n : I64) : IO (Result StreamError String) :=
+    match opened {
+        Result.err e => IO.pure (Result.err e),
+        Result.ok s => IO.tail_of (Shared.of s) n
+    }
+
+def IO.tail_of (s : Shared FdStream) (n : I64) : IO (Result StreamError String) := do {
+    let size <- FdStream.seek (Shared.get s) 0 FdStream.seek_end;
+    IO.tail_sized s n size
+}
+
+def IO.tail_sized (s : Shared FdStream) (n : I64) (size : Result StreamError I64) : IO (Result StreamError String) :=
+    match size {
+        Result.err e => IO.tail_failed s e,
+        Result.ok z => IO.tail_from s (if z > n then z - n else 0)
+    }
+
+def IO.tail_failed (s : Shared FdStream) (e : StreamError) : IO (Result StreamError String) := do {
+    let _ <- Stream.close (Shared.get s);
+    return (Result.err e)
+}
+
+def IO.tail_from (s : Shared FdStream) (from : I64) : IO (Result StreamError String) := do {
+    let _ <- FdStream.seek (Shared.get s) from FdStream.seek_start;
+    let bytes <- IO.read_bytes_all s;
+    return (IO.tail_result from bytes)
+}
+
+def IO.tail_result (from : I64) (r : Result StreamError (List U8)) : Result StreamError String :=
+    match r {
+        Result.err e => Result.err e,
+        Result.ok bytes => Result.ok (IO.tail_text from bytes)
+    }
+
+/// A tail cut mid-file loses at most three continuation bytes (0b10xxxxxx)
+/// at its front; NUL becomes a space, since a String ends at one.
+pub def IO.tail_text (from : I64) (bytes : List U8) : String :=
+    let whole : List U8 := if from > 0 then IO.drop_continuations 3 bytes else bytes in
+    String.from_list (List.map (fn (b : U8) => if U8.beq b 0u8 then 32u8 else b) whole)
+
+#[partial]
+def IO.drop_continuations (budget : I64) (bytes : List U8) : List U8 :=
+    match bytes {
+        List.empty => bytes,
+        List.cons b rest =>
+            if Bool.and (budget > 0) (Bool.and (U8.to_i64 b > 127) (U8.to_i64 b < 192))
+            then IO.drop_continuations (budget - 1) rest
+            else bytes
+    }
 
 def IO.read_bytes_opened (opened : Result StreamError FdStream) : IO (Result StreamError (List U8)) :=
     match opened {

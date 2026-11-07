@@ -428,6 +428,7 @@ pub fn exec_native(
     // wrappers, except the pure `std_fd` (in `PURE_NATIVES`).
     "stream_open" => stream_open(args, natives),
     "stream_read" => stream_read(args, natives),
+    "stream_seek" => stream_seek(args, natives),
     "stream_write" => stream_write(args, natives),
     "stream_close" => stream_close(args, natives),
     "stream_fd" => stream_fd(args, natives),
@@ -2897,6 +2898,54 @@ fn stream_read(args: &[Value], natives: &NativeTable) -> Result<Value, CoreEvalE
     }
   };
   raw_io_wrap(natives, result)
+}
+
+/// `stream_seek : FdStream -> I64 -> I64 -> RawIO (Result (Pair I64
+/// String) I64)` -- `lseek(2)`; the ok payload is the new offset. Only a
+/// file seeks (its clone shares the descriptor's offset). A line read's
+/// carried bytes belong to the old position, so they go.
+fn stream_seek(args: &[Value], natives: &NativeTable) -> Result<Value, CoreEvalError> {
+  use std::io::{Seek, SeekFrom};
+  let args = stream_args(args, 3, "stream_seek")?;
+  let handle = extract_int(&args[0])?;
+  let offset = extract_int(&args[1])?;
+  let whence = extract_int(&args[2])?;
+  let invalid = || std::io::Error::from_raw_os_error(libc::EINVAL);
+  let to = match whence {
+    0 if offset >= 0 => Ok(SeekFrom::Start(offset as u64)),
+    0 => Err(invalid()),
+    1 => Ok(SeekFrom::Current(offset)),
+    2 => Ok(SeekFrom::End(offset)),
+    _ => Err(invalid()),
+  };
+  let target = fd_target(handle, "stream_seek")?;
+  let moved = to.and_then(|to| {
+    target.and_then(|t| match t {
+      FdTarget::File(mut f) => f.seek(to),
+      _ => Err(std::io::Error::from_raw_os_error(libc::ESPIPE)),
+    })
+  });
+  let result = match moved {
+    Err(e) => make_stream_err(natives, "stream_seek", &e)?,
+    Ok(at) => {
+      stream_carry_drop(handle)?;
+      make_result_ok(natives, Value::Lit(IrLit::Num(at as i64, NumSuffix::I64)))?
+    }
+  };
+  raw_io_wrap(natives, result)
+}
+
+/// Forget a registry-backed stream's carried bytes (after a seek).
+fn stream_carry_drop(handle: i64) -> Result<(), CoreEvalError> {
+  let mut reg = fd_streams()?;
+  if let Some(e) = usize::try_from(handle)
+    .ok()
+    .and_then(|i| reg.get_mut(i))
+    .and_then(|e| e.as_mut())
+  {
+    e.carry.clear();
+  }
+  Ok(())
 }
 
 /// `stream_write : FdStream -> ByteBuf -> RawIO (Result (Pair I64

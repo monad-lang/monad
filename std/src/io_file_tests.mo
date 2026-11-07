@@ -135,3 +135,45 @@ def test_file_size_of_a_missing_file_is_none : IO Bool := do {
     let n <- IO.file_size (Path.path (iof_path "no-such-file"));
     return (Option.get_or_default 7 n == 7)
 }
+
+def tail_is (got : Result StreamError String) (expected : String) : Bool :=
+    match got {
+        Result.ok s => s == expected,
+        Result.err _ => false,
+    }
+
+#[test]
+def test_read_tail_reads_the_last_bytes : IO Bool := do {
+    let p : String := iof_path "tail";
+    let w <- iof_write p "first line\nsecond line\n";
+    let got <- IO.read_tail (Path.path p) 12;
+    return (iof_wrote w && tail_is got "second line\n")
+}
+
+#[test]
+def test_read_tail_of_a_short_file_is_the_whole_file : IO Bool := do {
+    let p : String := iof_path "tail-short";
+    let w <- iof_write p "abc";
+    let got <- IO.read_tail (Path.path p) 100;
+    return (iof_wrote w && tail_is got "abc")
+}
+
+#[test]
+def test_read_tail_of_a_missing_file_is_not_found : IO Bool := do {
+    let got <- IO.read_tail (Path.path (iof_path "no-such-tail")) 10;
+    return (iof_read_not_found got)
+}
+
+/// "é" is two bytes (0xC3 0xA9): a 3-byte tail of "xé!\n" starts on its
+/// second byte, which is dropped.
+#[test]
+def test_read_tail_never_starts_inside_a_character : IO Bool := do {
+    let p : String := iof_path "tail-utf8";
+    let w <- iof_write p "xé!\n";
+    let got <- IO.read_tail (Path.path p) 3;
+    return (iof_wrote w && tail_is got "!\n")
+}
+
+#[test]
+def test_tail_text_turns_nul_into_a_space : Bool :=
+    IO.tail_text 0 [97u8, 0u8, 98u8] == "a b"

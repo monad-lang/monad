@@ -723,6 +723,7 @@ def native_runtime_fn_name (attrs : List Attribute) : Option NativeWrapKind :=
             else if String.beq target "stream_close" then Option.some (NativeWrapKind.raw_io_passthrough "monad_stream_close")
             else if String.beq target "stream_fd" then Option.some (NativeWrapKind.raw_io_passthrough "monad_stream_fd")
             else if String.beq target "stream_poll" then Option.some (NativeWrapKind.raw_io_passthrough "monad_stream_poll")
+            else if String.beq target "stream_seek" then Option.some (NativeWrapKind.raw_io_passthrough "monad_stream_seek")
             else if String.beq target "stream_set_timeout" then Option.some (NativeWrapKind.raw_io_passthrough "monad_stream_set_timeout")
             else if String.beq target "stream_read_line" then Option.some (NativeWrapKind.raw_io_passthrough "monad_stream_read_line")
             else if String.beq target "std_fd" then Option.some (NativeWrapKind.passthrough "monad_std_fd")
@@ -1041,6 +1042,7 @@ pub def runtime_declarations_for (kind : TargetKind) : List LLVMDeclaration :=
     let d98 := mk_decl "monad_stream_close" (List.cons "i64" List.empty) "i64" in
     let d99 := mk_decl "monad_stream_fd" (List.cons "i64" List.empty) "i64" in
     let d99a := mk_decl "monad_stream_poll" ["i64", "i64", "i64"] "i64" in
+    let d99a1 := mk_decl "monad_stream_seek" ["i64", "i64", "i64"] "i64" in
     let d99b := mk_decl "monad_stream_set_timeout" ["i64", "i64", "i64"] "i64" in
     let d100 := mk_decl "monad_std_fd" (List.cons "i64" List.empty) "i64" in
     // `ByteBuf.truncate` (runtime.c): buffer + new length in, Unit out.
@@ -1116,7 +1118,7 @@ pub def runtime_declarations_for (kind : TargetKind) : List LLVMDeclaration :=
         d57, d58, d59, d60, d61, d62, d63, d64,
         d65, d66, d66a, d67, d72,
         d74, d76, d78, d79, d79c, d80, d81, d82, d83, d84, d85, d87,
-        d88, d91, d91a, d92, d93, d94, d95, d96, d97, d98, d99, d99a, d99b, d100, d101, d102, d103,
+        d88, d91, d91a, d92, d93, d94, d95, d96, d97, d98, d99, d99a, d99a1, d99b, d100, d101, d102, d103,
         d104, d105, d106, d107, d108, d109, d110, d111, d112, d113, d114, d115, d116,
         d117, d118, d119, d120, d121, d122, d123, d124, d150,
         d160, d161, d162, d163, d164, d165,
@@ -1143,7 +1145,7 @@ def wasm_os_only_natives : List String := [
     "channel_try_take", "exec_cmd", "process_id", "proc_spawn",
     "proc_stream_fd", "proc_wait", "proc_kill_group", "tcp_connect_timeout", "tcp_listen",
     "tcp_listen_on", "tcp_accept", "tcp_local_port", "file_exists", "is_dir", "file_size", "list_dir",
-    "get_env", "stream_open", "stream_poll", "stream_set_timeout", "term_ctl",
+    "get_env", "stream_open", "stream_poll", "stream_seek", "stream_set_timeout", "term_ctl",
     "inotify_init", "inotify_add_watch", "inotify_rm_watch", "inotify_read",
 ]
 

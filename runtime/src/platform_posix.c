@@ -2107,6 +2107,18 @@ void* monad_stream_poll(int64_t fd, int64_t events, int64_t timeout_ms) {
     return tcp_ok((void*)(int64_t)(rc > 0 ? 1 : 0));
 }
 
+/* `stream_seek : FdStream -> I64 -> I64 -> RawIO (Result (Pair I64
+   String) I64)` -- `lseek(2)`; the ok payload is the new offset. A
+   line read's carried bytes belong to the old position, so they go. */
+void* monad_stream_seek(int64_t fd, int64_t offset, int64_t whence) {
+    if (whence < 0 || whence > 2) return stream_os_err("stream_seek", EINVAL);
+    int how = whence == 0 ? SEEK_SET : (whence == 1 ? SEEK_CUR : SEEK_END);
+    off_t at = lseek((int)fd, (off_t)offset, how);
+    if (at < 0) return stream_os_err("stream_seek", errno);
+    stream_carry_clear((int)fd);
+    return tcp_ok((void*)(int64_t)at);
+}
+
 /* `stream_set_timeout : FdStream -> I64 -> I64 -> RawIO (Result (Pair
    I64 String) Unit)` -- SO_RCVTIMEO/SO_SNDTIMEO on a socket. A zero
    bound leaves that direction unchanged. */
