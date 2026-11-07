@@ -641,7 +641,10 @@ def command_reset (m : TuiModel) (effect : Effect) : Pair TuiModel (Cmd WeaverMs
     let m2 : TuiModel := with_turn_end (fn (mm : TuiModel) => mm) m1 in
     match m2.state.store {
         Option.none => reset_in_memory m2 effect.output,
-        Option.some st => Pair.pair m2 (Cmd.perform (fn (_ : Unit) => reset_action st effect.output)),
+        // `/resume`'s picker painted outside the frame pipeline, and the
+        // overlay close's clearing repaint can lose `first_cmd` to this
+        // perform when both fold in one batch: clear here too.
+        Option.some st => Pair.pair m2 (Cmd.perform (fn (_ : Unit) => after_clear (reset_action st effect.output))),
     }
 
 def reset_in_memory (m : TuiModel) (output : String) : Pair TuiModel (Cmd WeaverMsg) :=
