@@ -6,7 +6,24 @@ typedef struct {
     rt_refcount refcount;
     uint16_t tag;
     uint16_t flags;
+#ifdef MONAD_OWNERSHIP
+    /* The allocation's own size, recorded only in ownership builds so
+       `monad_owned_free`'s poison mode can fill exactly the block. The GC
+       path never reads it, and default builds do not carry the field at
+       all -- every translation unit is compiled with the same defines
+       (`llvm/src/link.mo`), so the layout cannot disagree. */
+    rt_size size;
+#endif
 } Header;
+
+/* ── Region allocation (ownership-regions-memory O3) ────────────────────
+   The Region half of the ownership split: values that may be shared,
+   cyclic or `Copy`, and must never be freed individually. In this phase
+   these forward to the platform allocator, exactly as every allocation
+   did before -- the split is a naming boundary that a later region
+   implementation (O5) can move without touching a call site. */
+rt_word monad_region_alloc(rt_size size) { return monad_alloc(size); }
+rt_word monad_region_alloc_atomic(rt_size size) { return monad_alloc_atomic(size); }
 
 /* Allocation-KIND values for `Header.tag` (offset 8) -- deliberately
    distinct from a Constructor's own tag, which is a separate int64 field
@@ -107,7 +124,7 @@ typedef struct {
 static rt_word alloc_closure_impl(rt_word entry, int64_t arity, int64_t env_size) {
     size_t size = sizeof(Closure) + (size_t)env_size * sizeof(rt_field);
     MONAD_STAT(MONAD_STAT_CLOSURE, size);
-    Closure* c = (Closure*)RT_PTR(monad_alloc((rt_size)size));
+    Closure* c = (Closure*)RT_PTR(monad_region_alloc((rt_size)size));
     if (c) {
         c->header.tag = 1;
         c->entry = RT_PTR(entry);
@@ -334,7 +351,7 @@ static rt_word alloc_constructor_impl(int64_t tag, int64_t field_count) {
     }
     size_t size = sizeof(Constructor) + (size_t)field_count * sizeof(rt_field);
     MONAD_STAT(tag == MONAD_ARRAY_TAG ? MONAD_STAT_ARRAY : MONAD_STAT_CTOR, size);
-    Constructor* c = (Constructor*)RT_PTR(monad_alloc((rt_size)size));
+    Constructor* c = (Constructor*)RT_PTR(monad_region_alloc((rt_size)size));
     if (c) {
         c->header.tag = 2;
         c->tag = tag;
@@ -346,9 +363,35 @@ static rt_word alloc_constructor_impl(int64_t tag, int64_t field_count) {
     return RT_WORD(c);
 }
 
+/* The Owned allocation path (ownership-regions-memory O3/O4).
+ *
+ * Only callers whose value the ownership verdict classified Owned use this:
+ * a monomorphic inductive with no nullary constructor whose fields are all
+ * `Copy` or themselves Owned. Such a value is freed by generated drop glue,
+ * so it must come from `monad_owned_alloc` -- mixing a GC block in would
+ * hand `monad_owned_free` a pointer `free()` cannot take.
+ *
+ * Deliberately never consults `g_nullary`: those singletons are shared and
+ * static, and a type with a nullary constructor is Region by the verdict.
+ * The nullary arm below is a second defence only. `monad_owned_alloc`
+ * zeroes the block (Boehm does; `malloc` does not), so an unset field reads
+ * the same as on the GC path. */
+static rt_word alloc_constructor_owned_impl(int64_t tag, int64_t field_count) {
+    if (field_count == 0) return alloc_constructor_impl(tag, field_count);
+    size_t size = sizeof(Constructor) + (size_t)field_count * sizeof(rt_field);
+    MONAD_STAT(MONAD_STAT_OWNED_CTOR, size);
+    Constructor* c = (Constructor*)RT_PTR(monad_owned_alloc((rt_size)size));
+    if (c) {
+        c->header.tag = 2;
+        c->tag = tag;
+        c->field_count = field_count;
+    }
+    return RT_WORD(c);
+}
+
 static rt_word alloc_string_impl(rt_str data, int64_t length) {
     size_t size = sizeof(StringObj) + length + 1;
-    StringObj* s = (StringObj*)RT_PTR(monad_alloc((rt_size)size));
+    StringObj* s = (StringObj*)RT_PTR(monad_region_alloc((rt_size)size));
     if (s) {
         s->header.tag = 3;
         s->length = length;
@@ -571,7 +614,7 @@ static RefObj* ref_of(rt_word handle) {
 
 static rt_word ref_new_impl(rt_word init) {
     MONAD_STAT(MONAD_STAT_REF, sizeof(RefObj));
-    RefObj* r = (RefObj*)RT_PTR(monad_alloc((rt_size)sizeof(RefObj)));
+    RefObj* r = (RefObj*)RT_PTR(monad_region_alloc((rt_size)sizeof(RefObj)));
     if (!r) return 0;
     r->header.tag = MONAD_REF_TAG;
     __atomic_store_n(&r->value, init, __ATOMIC_RELEASE);
@@ -642,7 +685,7 @@ static CellObj* cell_of(rt_word handle) {
 }
 
 static rt_word view_new_impl(rt_word init) {
-    CellObj* c = (CellObj*)RT_PTR(monad_alloc((rt_size)sizeof(CellObj)));
+    CellObj* c = (CellObj*)RT_PTR(monad_region_alloc((rt_size)sizeof(CellObj)));
     if (!c) return 0;
     c->header.tag = MONAD_CELL_TAG;
     c->payload = init;
@@ -716,7 +759,7 @@ static SlotObj* slot_of(rt_word handle) {
 }
 
 static rt_word slot_new_impl(rt_word init) {
-    SlotObj* s = (SlotObj*)RT_PTR(monad_alloc((rt_size)sizeof(SlotObj)));
+    SlotObj* s = (SlotObj*)RT_PTR(monad_region_alloc((rt_size)sizeof(SlotObj)));
     if (!s) return 0;
     s->header.tag = MONAD_SLOT_TAG;
     s->payload = init;
@@ -725,7 +768,7 @@ static rt_word slot_new_impl(rt_word init) {
 }
 
 static rt_word slot_empty_impl(void) {
-    SlotObj* s = (SlotObj*)RT_PTR(monad_alloc((rt_size)sizeof(SlotObj)));
+    SlotObj* s = (SlotObj*)RT_PTR(monad_region_alloc((rt_size)sizeof(SlotObj)));
     if (!s) return 0;
     s->header.tag = MONAD_SLOT_TAG;
     s->payload = 0;
@@ -838,7 +881,7 @@ static int64_t monad_string_trailing_chars_impl(char* s, int64_t len) {
 static char* monad_string_concat_impl(char* a, char* b) {
     size_t la = a ? strlen(a) : 0;
     size_t lb = b ? strlen(b) : 0;
-    char* out = (char*)RT_PTR(monad_alloc_atomic((rt_size)(la + lb + 1)));
+    char* out = (char*)RT_PTR(monad_region_alloc_atomic((rt_size)(la + lb + 1)));
     if (!out) return NULL;
     if (la) memcpy(out, a, la);
     if (lb) memcpy(out + la, b, lb);
@@ -960,14 +1003,14 @@ static char* monad_string_slice_impl(char* s, int64_t start_in, int64_t len_in) 
     /* start lands mid-character: the byte there is a continuation byte
        (a NUL here is the end of the string, which IS a boundary). */
     if (s[start] != '\0' && monad_utf8_continuation(s[start])) {
-        char* out = (char*)RT_PTR(monad_alloc_atomic(1));
+        char* out = (char*)RT_PTR(monad_region_alloc_atomic(1));
         if (!out) return NULL;
         out[0] = '\0';
         return out;
     }
     size_t len = len_in < 0 ? 0 : (size_t)len_in;
     if (len == 0) {
-        char* out = (char*)RT_PTR(monad_alloc_atomic(1));
+        char* out = (char*)RT_PTR(monad_region_alloc_atomic(1));
         if (!out) return NULL;
         out[0] = '\0';
         return out;
@@ -978,12 +1021,12 @@ static char* monad_string_slice_impl(char* s, int64_t start_in, int64_t len_in) 
        a continuation byte (a NUL means the slice ran to the string's
        end, which IS a boundary). */
     if (s[start + avail] != '\0' && monad_utf8_continuation(s[start + avail])) {
-        char* out = (char*)RT_PTR(monad_alloc_atomic(1));
+        char* out = (char*)RT_PTR(monad_region_alloc_atomic(1));
         if (!out) return NULL;
         out[0] = '\0';
         return out;
     }
-    char* out = (char*)RT_PTR(monad_alloc_atomic(avail + 1));
+    char* out = (char*)RT_PTR(monad_region_alloc_atomic(avail + 1));
     if (!out) return NULL;
     if (avail) memcpy(out, s + start, avail);
     out[avail] = '\0';
@@ -1024,7 +1067,7 @@ static char* monad_string_drop_impl(int64_t n, char* s) {
        is the string's end, which IS a boundary and yields the empty
        tail). */
     if (s[i] != '\0' && monad_utf8_continuation(s[i])) {
-        char* out = (char*)RT_PTR(monad_alloc_atomic(1));
+        char* out = (char*)RT_PTR(monad_region_alloc_atomic(1));
         if (!out) return NULL;
         out[0] = '\0';
         return out;
@@ -1118,7 +1161,7 @@ static char* monad_string_concat_list_impl(rt_word parts) {
         if (piece) total += strlen(piece);
     }
 
-    char* out = (char*)RT_PTR(monad_alloc_atomic((rt_size)(total + 1)));
+    char* out = (char*)RT_PTR(monad_region_alloc_atomic((rt_size)(total + 1)));
     if (!out) return NULL;
     size_t at = 0;
     for (rt_word n = parts; n && monad_get_tag_impl(n) == 6; n = monad_get_field_impl(n, 1)) {
@@ -1142,7 +1185,7 @@ static char* monad_string_concat_list_impl(rt_word parts) {
 static char* monad_string_to_lowercase_impl(char* s) {
     if (!s) return NULL;
     size_t n = strlen(s);
-    char* out = (char*)RT_PTR(monad_alloc_atomic(n + 1));
+    char* out = (char*)RT_PTR(monad_region_alloc_atomic(n + 1));
     if (!out) return NULL;
     for (size_t i = 0; i < n; i++) {
         unsigned char c = (unsigned char)s[i];
@@ -1164,7 +1207,7 @@ static char* monad_string_from_list_impl(rt_word list) {
         n++;
         cur = monad_get_field_impl(cur, 1);
     }
-    char* out = (char*)RT_PTR(monad_alloc_atomic((rt_size)((size_t)n + 1)));
+    char* out = (char*)RT_PTR(monad_region_alloc_atomic((rt_size)((size_t)n + 1)));
     if (!out) return NULL;
     int64_t i = 0;
     for (rt_word cur = list; cur && monad_get_tag_impl(cur) == 6; ) {
@@ -1374,7 +1417,7 @@ static BufObj* bytebuf_new(int64_t n) {
     size_t len = n > 0 ? (size_t)n : 0;
     size_t size = sizeof(BufObj) + MONAD_BUF_ALIGN - 1 + len;
     MONAD_STAT(MONAD_STAT_BYTEBUF, size);
-    BufObj* obj = (BufObj*)RT_PTR(monad_alloc_atomic((rt_size)size));
+    BufObj* obj = (BufObj*)RT_PTR(monad_region_alloc_atomic((rt_size)size));
     if (!obj) return NULL;
     obj->header.refcount = 1;
     obj->header.tag = MONAD_BUF_TAG;
@@ -1451,7 +1494,7 @@ static void* monad_bytebuf_to_string_impl(rt_word buf, int64_t len) {
     BufObj* obj = (BufObj*)RT_PTR(buf);
     if (!obj || len < 0) len = 0;
     if (obj && len > obj->len) len = obj->len;
-    char* out = (char*)RT_PTR(monad_alloc_atomic((rt_size)((size_t)len + 1)));
+    char* out = (char*)RT_PTR(monad_region_alloc_atomic((rt_size)((size_t)len + 1)));
     if (!out) return NULL;
     if (len) memcpy(out, obj->payload, (size_t)len);
     out[len] = '\0';
@@ -1567,6 +1610,7 @@ int64_t apply_closure7(rt_word clos, int64_t a0, int64_t a1, int64_t a2, int64_t
 int64_t apply_closure8(rt_word clos, int64_t a0, int64_t a1, int64_t a2, int64_t a3, int64_t a4, int64_t a5, int64_t a6, int64_t a7) { return apply_closure8_impl(RT_PTR(clos), a0, a1, a2, a3, a4, a5, a6, a7); }
 
 rt_word alloc_constructor(int64_t tag, int64_t field_count) { return alloc_constructor_impl(tag, field_count); }
+rt_word alloc_constructor_owned(int64_t tag, int64_t field_count) { return alloc_constructor_owned_impl(tag, field_count); }
 rt_word alloc_string(rt_str data, int64_t length) { return alloc_string_impl(data, length); }
 int64_t monad_get_tag(rt_word ptr) { return monad_get_tag_impl(ptr); }
 rt_word monad_get_field(rt_word ptr, int64_t idx) { return monad_get_field_impl(ptr, idx); }

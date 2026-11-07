@@ -23,6 +23,15 @@
 #define MONAD_TARGET_WASM 1
 #endif
 
+/* Ownership mode allocates with `calloc`/`free` and its drop glue emits
+   `call void @monad_owned_free`; the wasm profiles keep the IR-facing
+   declaration as i64 (`rt_void`) and have no allocator to return memory to.
+   `llvm/src/link.mo` therefore turns the combination into this define, so
+   the build fails with a message instead of emitting invalid IR. */
+#ifdef MONAD_OWNERSHIP_UNSUPPORTED_TARGET
+#error "MONAD_OWNERSHIP is native-only: the wasm profiles have no allocator to free to"
+#endif
+
 #ifdef MONAD_TARGET_WASM
 /* Every wasm-facing boundary is exactly the i64 the IR declares. */
 typedef int64_t rt_word;   /* any pointer-valued codegen word */
@@ -82,6 +91,26 @@ rt_word monad_alloc_atomic(rt_size size);
 void monad_retain(rt_word ptr);
 void monad_release(rt_word ptr);
 
+/* Ownership / region split (ownership-regions-memory O3/O4).
+ *
+ * `monad_region_alloc[_atomic]` are the Region halves: values that may be
+ * shared, cyclic or Copy, and must never be freed individually. In this
+ * phase they forward to the platform allocator exactly as before, so the
+ * split is a naming boundary, not a behaviour change.
+ *
+ * `monad_owned_alloc`/`monad_owned_free` are the Owned halves. Default
+ * builds forward to `monad_alloc` and a no-op (the block is GC-owned, and
+ * `free()` on it would corrupt the collector's heap). Under
+ * `-DMONAD_OWNERSHIP` they are `calloc`/`free`; under
+ * `-DMONAD_OWNERSHIP_POISON` the free poisons the allocation and never
+ * frees, so a use-after-free is deterministic during bring-up. Ownership
+ * mode is native-only: `llvm/src/link.mo` refuses it for wasm/web, and the
+ * wasi/web blocks below forward so the runtime still compiles. */
+rt_word monad_owned_alloc(rt_size size);
+void monad_owned_free(rt_word ptr);
+rt_word monad_region_alloc(rt_size size);
+rt_word monad_region_alloc_atomic(rt_size size);
+
 /* Per-kind allocation counters (ownership-regions-memory O-M0; print with
    MONAD_ALLOC_STATS=1). Native only: wasi/web compile the call sites away
    (MONAD_STAT is a no-op) because they have no getenv/atexit contract, and
@@ -96,6 +125,14 @@ enum MonadAllocKind {
     MONAD_STAT_BYTEBUF,
     MONAD_STAT_ATOMIC,
     MONAD_STAT_SCANNED,
+    /* Appended after the original kinds so their indices stay stable:
+       `owned-constructors` counts every `alloc_constructor_owned`, and
+       `owned-frees` every `monad_owned_free` call. Under
+       MONAD_OWNERSHIP=1 the two must balance for a program whose Owned
+       values are all dropped; under poison every free still counts even
+       though nothing is actually returned to the allocator. */
+    MONAD_STAT_OWNED_CTOR,
+    MONAD_STAT_OWNED_FREE,
     MONAD_STAT_KIND_COUNT,
 };
 #ifdef MONAD_TARGET_NATIVE

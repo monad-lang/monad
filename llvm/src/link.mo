@@ -289,6 +289,27 @@ pub def build_commit_define (from_env : Option String) (compiler_commit : String
         (if String.is_empty (String.trim compiler_commit) then "unknown" else String.trim compiler_commit)
     else env_commit_hash from_env
 
+/// The runtime-object defines for `$MONAD_OWNERSHIP` (ownership phase 1).
+///
+/// `1` enables the owned allocator (real `calloc`/`free`); `poison` enables
+/// it and makes every free a 0xDE fill instead, so a use-after-free is
+/// deterministic during bring-up. Unset, empty and `0` add nothing, which
+/// keeps the default build's argv and runtime identical to before.
+///
+/// The compiler reads the same variable to decide whether to emit owned
+/// allocations and drop calls, so the two halves of the ABI cannot disagree.
+/// Anything else (`yes`, `true`, ...) is treated as `1`: the value is a
+/// switch, not a configuration language.
+pub def ownership_runtime_flags (from_env : Option String) : List String :=
+    match from_env {
+        Option.none => List.empty,
+        Option.some raw =>
+            let v : String := String.trim raw in
+            if String.is_empty v || String.beq v "0" then List.empty
+            else if String.beq v "poison" then ["-DMONAD_OWNERSHIP", "-DMONAD_OWNERSHIP_POISON"]
+            else ["-DMONAD_OWNERSHIP"],
+    }
+
 /// `mkdir -p` the directory `p` sits in; nothing when it names none
 /// (the current directory). The exit status, 0 for nothing to make.
 pub def mkdir_parent (p : Path) : IO I64 :=
@@ -432,7 +453,20 @@ def link_ir_plan (runtime_c : String) (ir_text : String) (ir_path : Path) (outpu
             let from_env <- IO.get_env "MONAD_BUILD_COMMIT";
             let build_hash : String := build_commit_define from_env compiler_commit;
             let commit_flag := "-DMONAD_BUILD_COMMIT=\"" ++ build_hash ++ "\"";
-            let result <- compile_runtime_obj_for plan runtime_c (List.append [commit_flag] (verbose_argv verbose)) runtime_obj_s;
+            // Ownership mode is a compile-time define on the runtime object,
+            // not a run-time flag: the compiler emits `alloc_constructor_owned`
+            // and `monad_owned_free` calls, and the C must agree about which
+            // of those are real. Read here so both halves come from one value.
+            // The mode is native-only (the wasm profiles have no allocator to
+            // free to); a wasm build gets a define that turns into a clear
+            // `#error` in `runtime_abi.h` instead of invalid IR at `llc`.
+            let own_env <- IO.get_env "MONAD_OWNERSHIP";
+            let ownership_flags : List String := ownership_runtime_flags own_env;
+            let runtime_flags : List String :=
+                if Bool.not (List.is_empty ownership_flags) && TargetKind.is_wasm plan.kind
+                then ["-DMONAD_OWNERSHIP_UNSUPPORTED_TARGET"]
+                else List.append ownership_flags (List.append [commit_flag] (verbose_argv verbose));
+            let result <- compile_runtime_obj_for plan runtime_c runtime_flags runtime_obj_s;
             if verbose then do {
                 Bench.report_since "link_ir: clang runtime.c" t_rtc;
                 return unit

@@ -40,6 +40,50 @@ void monad_retain(void* ptr) {
     atomic_fetch_add(&h->refcount, 1);
 }
 
+/* ── Owned allocation (ownership-regions-memory O3/O4) ──────────────────
+   The Owned half of the split. A default build forwards to the GC, so the
+   flag being unset is byte-for-byte the old behaviour. Under
+   `-DMONAD_OWNERSHIP` the block is real `calloc` memory: zeroed like
+   Boehm's, but owned by the program and returned by `monad_owned_free`.
+   `calloc` rather than `malloc` because codegen reads an unset
+   Constructor field the same way on both paths.
+
+   `-DMONAD_OWNERSHIP_POISON` keeps the real allocation but never frees:
+   the free path fills the whole block with 0xDE instead. That makes a
+   use-after-free deterministic (a tag read returns garbage immediately)
+   without needing a sanitizer. */
+rt_word monad_owned_alloc(rt_size size) {
+#if defined(MONAD_OWNERSHIP)
+    void* ptr = calloc(1, (size_t)size);
+    if (ptr) {
+        Header* h = (Header*)ptr;
+        h->refcount = 1;
+        h->tag = 0;
+        h->flags = 0;
+        h->size = size;
+    }
+    return ptr;
+#else
+    return monad_alloc(size);
+#endif
+}
+
+void monad_owned_free(rt_word ptr) {
+#if defined(MONAD_OWNERSHIP)
+    if (!ptr) return;
+    MONAD_STAT(MONAD_STAT_OWNED_FREE, 0);
+#ifdef MONAD_OWNERSHIP_POISON
+    Header* h = (Header*)RT_PTR(ptr);
+    memset(ptr, 0xDE, (size_t)h->size);
+#else
+    free(RT_PTR(ptr));
+#endif
+#else
+    /* GC-owned: freeing it would corrupt the collector's heap. */
+    (void)ptr;
+#endif
+}
+
 void monad_release(void* ptr) {
     if (!ptr) return;
     Header* h = (Header*)ptr;
@@ -80,6 +124,8 @@ static const char* monad_stat_label(int kind) {
         case MONAD_STAT_BYTEBUF: return "bytebuf";
         case MONAD_STAT_ATOMIC: return "atomic-bytes";
         case MONAD_STAT_SCANNED: return "scanned-bytes";
+        case MONAD_STAT_OWNED_CTOR: return "owned-constructors";
+        case MONAD_STAT_OWNED_FREE: return "owned-frees";
         default: return "?";
     }
 }

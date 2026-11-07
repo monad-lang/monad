@@ -16,7 +16,7 @@
 rt_str monad_i64_to_string(int64_t n) {
     char buf[32];
     int len = snprintf(buf, sizeof(buf), "%lld", (long long)n);
-    char* out = (char*)RT_PTR(monad_alloc_atomic((rt_size)((size_t)len + 1)));
+    char* out = (char*)RT_PTR(monad_region_alloc_atomic((rt_size)((size_t)len + 1)));
     if (out) memcpy(out, buf, (size_t)len + 1);
     return RT_STR_WORD(out);
 }
@@ -42,7 +42,7 @@ rt_str monad_i64_to_string(int64_t n) {
 rt_str monad_i32_to_string(int64_t n) {
     char buf[32];
     int len = snprintf(buf, sizeof(buf), "%d", (int)(int32_t)n);
-    char* out = (char*)RT_PTR(monad_alloc_atomic((rt_size)((size_t)len + 1)));
+    char* out = (char*)RT_PTR(monad_region_alloc_atomic((rt_size)((size_t)len + 1)));
     if (out) memcpy(out, buf, (size_t)len + 1);
     return RT_STR_WORD(out);
 }
@@ -67,7 +67,7 @@ rt_str monad_i16_to_string(int64_t n) {
 rt_str monad_u8_to_string(int64_t n) {
     char buf[32];
     int len = snprintf(buf, sizeof(buf), "%u", (unsigned)(uint8_t)n);
-    char* out = (char*)RT_PTR(monad_alloc_atomic((rt_size)((size_t)len + 1)));
+    char* out = (char*)RT_PTR(monad_region_alloc_atomic((rt_size)((size_t)len + 1)));
     if (out) memcpy(out, buf, (size_t)len + 1);
     return RT_STR_WORD(out);
 }
@@ -75,7 +75,7 @@ rt_str monad_u8_to_string(int64_t n) {
 rt_str monad_u16_to_string(int64_t n) {
     char buf[32];
     int len = snprintf(buf, sizeof(buf), "%u", (unsigned)(uint16_t)n);
-    char* out = (char*)RT_PTR(monad_alloc_atomic((rt_size)((size_t)len + 1)));
+    char* out = (char*)RT_PTR(monad_region_alloc_atomic((rt_size)((size_t)len + 1)));
     if (out) memcpy(out, buf, (size_t)len + 1);
     return RT_STR_WORD(out);
 }
@@ -83,7 +83,7 @@ rt_str monad_u16_to_string(int64_t n) {
 rt_str monad_u64_to_string(int64_t n) {
     char buf[32];
     int len = snprintf(buf, sizeof(buf), "%llu", (unsigned long long)n);
-    char* out = (char*)RT_PTR(monad_alloc_atomic((rt_size)((size_t)len + 1)));
+    char* out = (char*)RT_PTR(monad_region_alloc_atomic((rt_size)((size_t)len + 1)));
     if (out) memcpy(out, buf, (size_t)len + 1);
     return RT_STR_WORD(out);
 }
@@ -200,7 +200,7 @@ static rt_str monad_float_to_string_impl(double d, int is_f32) {
     }
     out[n] = '\0';
 
-    char* res = (char*)RT_PTR(monad_alloc_atomic((rt_size)((size_t)n + 1)));
+    char* res = (char*)RT_PTR(monad_region_alloc_atomic((rt_size)((size_t)n + 1)));
     if (res) memcpy(res, out, (size_t)n + 1);
     return RT_STR_WORD(res);
 }

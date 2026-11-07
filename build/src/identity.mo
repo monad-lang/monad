@@ -115,10 +115,11 @@ def Build.build_commit_override : IO String := do {
 pub def Build.compiler_key_with (tool : DigestTool) : IO (Result String String) := do {
     let stamp <- Build.build_commit_override;
     let features <- Build.features_override;
+    let ownership <- Build.ownership_override;
     let d <- Build.compiler_digest_with tool;
     match d {
         err e => return (err e),
-        ok h => return (ok (Build.fold_key_stamp (Build.fold_key_stamp h stamp) features))
+        ok h => return (ok (Build.fold_key_stamp (Build.fold_key_stamp (Build.fold_key_stamp h stamp) features) ownership))
     }
 }
 
@@ -137,5 +138,20 @@ def Build.features_override : IO String := do {
         Option.some s =>
             let t : String := String.trim s in
             if String.is_empty t then return "" else return (String.concat "features=" t)
+    }
+}
+
+/// `$MONAD_OWNERSHIP`, trimmed and tagged, or `""`. Ownership mode changes
+/// which allocations are `malloc`-backed and which drop calls are emitted,
+/// so an artifact built with it must never be served to (or from) a default
+/// build. The tag keeps it from hashing like a commit or feature list.
+#[partial]
+def Build.ownership_override : IO String := do {
+    let v <- IO.get_env "MONAD_OWNERSHIP";
+    match v {
+        Option.none => return "",
+        Option.some s =>
+            let t : String := String.trim s in
+            if String.is_empty t || String.beq t "0" then return "" else return (String.concat "ownership=" t)
     }
 }

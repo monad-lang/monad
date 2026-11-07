@@ -105,6 +105,12 @@ rt_word monad_alloc_atomic(rt_size size) {
     return web_alloc(size, 1);
 }
 
+/* Ownership mode is native-only (`llvm/src/link.mo` refuses it for wasm),
+   so these forward exactly as the default native build does. The web
+   profile has no allocator to free to in any case. */
+rt_word monad_owned_alloc(rt_size size) { return monad_alloc(size); }
+void monad_owned_free(rt_word ptr) { (void)ptr; }
+
 /* The /try engine stages the source text JS wants evaluated here: JS calls
  * `try_alloc(len + 1)`, writes UTF-8 plus a NUL, then calls the module's
  * `try_run(source : String)` export with the returned Number.

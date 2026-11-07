@@ -2203,10 +2203,25 @@ def run_fmt_stdin (check : Bool) (diff : Bool) : IO I64 := do {
 def cache_enabled (no_cache : Bool) : IO Bool := do {
     if no_cache then return false
     else do {
-        let e <- IO.get_env "MONAD_NO_CACHE";
-        match e {
-            Option.none => return true,
-            Option.some v => return (String.is_empty v)
+        // Ownership mode changes the emitted IR (owned allocations, drop
+        // calls) and the separately compiled runtime object, so an artifact
+        // must never cross modes. Disabling the cache also guarantees the
+        // warn-mode refusal gate runs on a real compile: a cache hit has no
+        // loaded module set to inspect.
+        let own <- IO.get_env "MONAD_OWNERSHIP";
+        let ownership_on : Bool := match own {
+            Option.none => false,
+            Option.some v =>
+                let t : String := String.trim v in
+                Bool.not (String.is_empty t) && Bool.not (String.beq t "0"),
+        };
+        if ownership_on then return false
+        else do {
+            let e <- IO.get_env "MONAD_NO_CACHE";
+            match e {
+                Option.none => return true,
+                Option.some v => return (String.is_empty v)
+            }
         }
     }
 }
