@@ -43,13 +43,13 @@ done
 ok "sources asset carries the four motes' manifests, sources and runtime.c"
 
 root_manifest="$(tar -xzOf "$asset" mote.toml)"
-grep -qF 'members = ["init", "std", "llvm", "runtime"]' <<<"$root_manifest" \
-  || die "sources asset's root mote.toml does not declare the four motes as members"
+grep -qF 'members = ["init", "std", "sys", "llvm", "runtime"]' <<<"$root_manifest" \
+  || die "sources asset's root mote.toml does not declare the motes as members"
 for m in init std sys llvm runtime; do
   grep -qF "[workspace.dependencies.$m]" <<<"$root_manifest" \
     || die "sources asset's root mote.toml does not declare [workspace.dependencies.$m]; the staged member inherits it"
 done
-ok "sources asset's root mote.toml is a workspace naming all four motes and their inherited edges"
+ok "sources asset's root mote.toml is a workspace naming every mote and its inherited edges"
 
 if grep -qE '^(lang|cli)/' <<<"$listing"; then
   die "sources asset contains lang/ or cli/ -- the compiler itself is already in the binary"

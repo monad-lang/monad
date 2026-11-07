@@ -59,7 +59,7 @@ neutral="$out_dir/monad-src.tar.gz"
 # it, and both after `init`/`std`, which they declare. The order is cosmetic
 # for the archive and for `--workspace`; it is written this way so the list
 # can be read against the manifests.
-member_manifests=(init/mote.toml std/mote.toml llvm/mote.toml runtime/mote.toml)
+member_manifests=(init/mote.toml std/mote.toml sys/mote.toml llvm/mote.toml runtime/mote.toml)
 members=(init std sys llvm runtime)
 
 # Not staged: `lang`, `codegen`, `cli` and `eval` are compiler internals.
@@ -94,7 +94,7 @@ cat > "$staging/mote.toml" <<'TOML'
 # the self-hosted reader (motes/toml/src/toml.mo) supports headers only.
 
 [workspace]
-members = ["init", "std", "llvm", "runtime"]
+members = ["init", "std", "sys", "llvm", "runtime"]
 
 # Members inherit these with `workspace = true`; an inherited path is
 # root-relative, which is why the unpacked root (not the member) names them.
@@ -103,6 +103,9 @@ path = "init"
 
 [workspace.dependencies.std]
 path = "std"
+
+[workspace.dependencies.sys]
+path = "sys"
 
 [workspace.dependencies.llvm]
 path = "llvm"
