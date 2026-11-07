@@ -1400,6 +1400,167 @@ int64_t monad_sys_int(int64_t op, int64_t a, int64_t b) {
     }
 }
 
+/* `Result`/`Option` construction for the floor's string-shaped calls:
+   `ok` is tag 10 and `err` tag 11 (the fixed prelude tags `tcp_ok` above
+   uses); a field is a raw word, so a `char*` and an `int64_t` go in
+   directly. */
+static void* sys_ok_str(char* s) {
+    Constructor* ok = (Constructor*)alloc_constructor_impl(10, 1);
+    if (ok) ok->fields[0] = s;
+    return ok;
+}
+
+static void* sys_err(int64_t e) {
+    Constructor* err = (Constructor*)alloc_constructor_impl(11, 1);
+    if (err) err->fields[0] = (void*)e;
+    return err;
+}
+
+/* A GC-owned copy of `len` bytes plus a terminator, from a byte range that
+   may not be NUL-terminated (`readlink`, `/proc` reads). */
+static char* sys_copy_bytes(const char* src, size_t len) {
+    char* copy = (char*)monad_alloc_atomic(len + 1);
+    if (!copy) return NULL;
+    memcpy(copy, src, len);
+    copy[len] = '\0';
+    return copy;
+}
+
+/* `#[native "sys_str"]` (sys/src/raw.mo): the floor's string-shaped
+   syscalls, `Result.err <errno>` on failure. `op` selects the call:
+   0 readlink, 1 uname field, 2 getenv, 3 list_dir (entries newline-joined
+   and sorted), 4 read_small (open/read-to-EOF/close, for /proc and /sys
+   files, which stat() as size 0).
+
+   The list separator is '\n', not NUL: a compiled `String` is a char* whose
+   length is strlen, so a NUL-joined payload truncates at the first entry
+   under the compiled backend while the interpreter (a real byte string)
+   keeps all of them -- measured as `list_dir` answering 1 entry compiled
+   and 8 interpreted. */
+void* monad_sys_str(int64_t op, char* arg) {
+    switch (op) {
+    case 0: {
+        if (!arg) return sys_err(EINVAL);
+        size_t cap = 256;
+        for (;;) {
+            char* buf = (char*)monad_alloc_atomic(cap);
+            if (!buf) return sys_err(ENOMEM);
+            ssize_t n = readlink(arg, buf, cap);
+            if (n < 0) return sys_err(errno);
+            if ((size_t)n < cap) return sys_ok_str(sys_copy_bytes(buf, (size_t)n));
+            cap *= 2;
+            if (cap > (1u << 20)) return sys_err(ENAMETOOLONG);
+        }
+    }
+    case 1: {
+        struct utsname u;
+        if (uname(&u) != 0) return sys_err(errno);
+        const char* field = "sysname";
+        if (arg) field = arg;
+        const char* v;
+        if (strcmp(field, "sysname") == 0) v = u.sysname;
+        else if (strcmp(field, "release") == 0) v = u.release;
+        else if (strcmp(field, "machine") == 0) v = u.machine;
+        else if (strcmp(field, "nodename") == 0) v = u.nodename;
+        else return sys_err(EINVAL);
+        char* copy = sys_copy_bytes(v, strlen(v));
+        return copy ? sys_ok_str(copy) : sys_err(ENOMEM);
+    }
+    case 2: {
+        const char* val = arg ? getenv(arg) : NULL;
+        if (!val) return sys_err(ENOENT);
+        char* copy = sys_copy_bytes(val, strlen(val));
+        return copy ? sys_ok_str(copy) : sys_err(ENOMEM);
+    }
+    case 3: {
+        DIR* d = arg ? opendir(arg) : NULL;
+        if (!d) return sys_err(errno);
+        size_t cap = 256, n = 0;
+        char* joined = (char*)monad_alloc_atomic(cap);
+        if (!joined) { closedir(d); return sys_err(ENOMEM); }
+        joined[0] = '\0';
+        struct dirent* e;
+        while ((e = readdir(d)) != NULL) {
+            if (strcmp(e->d_name, ".") == 0 || strcmp(e->d_name, "..") == 0) continue;
+            size_t len = strlen(e->d_name);
+            if (n + len + 2 > cap) {
+                while (n + len + 2 > cap) cap *= 2;
+                char* grown = (char*)monad_alloc_atomic(cap);
+                if (!grown) { closedir(d); return sys_err(ENOMEM); }
+                memcpy(grown, joined, n);
+                grown[n] = '\0';
+                joined = grown;
+            }
+            memcpy(joined + n, e->d_name, len);
+            n += len;
+            joined[n++] = '\n';
+            joined[n] = '\0';
+        }
+        closedir(d);
+        return sys_ok_str(sys_copy_bytes(joined, n));
+    }
+    case 4: {
+        int fd = arg ? open(arg, O_RDONLY) : -1;
+        if (fd < 0) return sys_err(errno);
+        size_t cap = 4096, n = 0;
+        char* buf = (char*)monad_alloc_atomic(cap);
+        if (!buf) { close(fd); return sys_err(ENOMEM); }
+        for (;;) {
+            if (n == cap) {
+                size_t grown_cap = cap * 2;
+                char* grown = (char*)monad_alloc_atomic(grown_cap);
+                if (!grown) { close(fd); return sys_err(ENOMEM); }
+                memcpy(grown, buf, n);
+                buf = grown;
+                cap = grown_cap;
+            }
+            ssize_t got = read(fd, buf + n, cap - n);
+            if (got < 0) {
+                if (errno == EINTR) continue;
+                int e = errno;
+                close(fd);
+                return sys_err(e);
+            }
+            if (got == 0) break;
+            n += (size_t)got;
+        }
+        close(fd);
+        return sys_ok_str(sys_copy_bytes(buf, n));
+    }
+    default: return sys_err(EINVAL);
+    }
+}
+
+/* `#[native "sys_stat"]` (sys/src/raw.mo): `stat`/`lstat` fields and
+   `statvfs`, packed as space-separated decimal words because the floor may
+   not name a `ByteBuf`. The Monad side splits them; the order is the
+   contract:
+   0 stat(path)    -> "mode size mtime"
+   1 lstat(path)   -> the same, without following a symlink
+   2 statvfs(path) -> "bsize frsize blocks bfree bavail files ffree" */
+void* monad_sys_stat(int64_t op, char* path) {
+    if (!path) return sys_err(EINVAL);
+    char out[256];
+    if (op == 2) {
+        struct statvfs v;
+        if (statvfs(path, &v) != 0) return sys_err(errno);
+        snprintf(out, sizeof out, "%llu %llu %llu %llu %llu %llu %llu",
+                 (unsigned long long)v.f_bsize, (unsigned long long)v.f_frsize,
+                 (unsigned long long)v.f_blocks, (unsigned long long)v.f_bfree,
+                 (unsigned long long)v.f_bavail, (unsigned long long)v.f_files,
+                 (unsigned long long)v.f_ffree);
+        return sys_ok_str(sys_copy_bytes(out, strlen(out)));
+    }
+    if (op != 0 && op != 1) return sys_err(EINVAL);
+    struct stat st;
+    int rc = op == 1 ? lstat(path, &st) : stat(path, &st);
+    if (rc != 0) return sys_err(errno);
+    snprintf(out, sizeof out, "%llu %lld %lld",
+             (unsigned long long)st.st_mode, (long long)st.st_size,
+             (long long)st.st_mtime);
+    return sys_ok_str(sys_copy_bytes(out, strlen(out)));
+}
+
 /* `#[native "list_dir"]` (std/io.mo's IO.list_dir_native): bare entry
    names, one directory level, SORTED -- the sort is load-bearing, not
    cosmetic: readdir order is filesystem-dependent, and the reference

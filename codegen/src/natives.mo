@@ -548,6 +548,8 @@ def native_runtime_fn_name (attrs : List Attribute) : Option NativeWrapKind :=
             // The OS floor (`sys/src/raw.mo`): one entry point for the scalar
             // syscalls, `-errno` on failure.
             else if String.beq target "sys_int" then Option.some (NativeWrapKind.raw_io_passthrough "monad_sys_int")
+            else if String.beq target "sys_str" then Option.some (NativeWrapKind.raw_io_passthrough "monad_sys_str")
+            else if String.beq target "sys_stat" then Option.some (NativeWrapKind.raw_io_passthrough "monad_sys_stat")
             else if String.beq target "build_commit" then Option.some (NativeWrapKind.passthrough "monad_build_commit")
             // C: libc-shaped or growable-buffer-shaped.
             else if String.beq target "string_to_lowercase" then Option.some (NativeWrapKind.passthrough "monad_string_to_lowercase")
@@ -887,6 +889,8 @@ pub def runtime_declarations_for_with_ownership (kind : TargetKind) (ownership_o
     let d38b := mk_decl "monad_string_to_u64_bits" (List.cons "i64" List.empty) "i64" in
     let d39 := mk_decl "monad_process_id" List.empty "i64" in
     let dSysInt := mk_decl "monad_sys_int" ["i64", "i64", "i64"] "i64" in
+    let dSysStr := mk_decl "monad_sys_str" ["i64", "i64"] "i64" in
+    let dSysStat := mk_decl "monad_sys_stat" ["i64", "i64"] "i64" in
     let d40 := mk_decl "monad_build_commit" List.empty "i64" in
     // `std/array.mo`'s six (runtime.c). Same "no implicit declare"
     // requirement as every native above -- without these, the
@@ -1133,7 +1137,8 @@ pub def runtime_declarations_for_with_ownership (kind : TargetKind) (ownership_o
     let d167 := mk_decl "monad_owned_free" ["i64"] void_ret in
     [d1, d2, d3, d7, d7b, d7b1, d7c, d7d, d7e, d7f, d8, d9, d10, d11, d12, d13,
         d14, d15, d16, d17, d18, d19, d20, d21, d22, d23, d23a, d23b, d24, d24b, d25, d26, d27, d28, d29, d30, d31,
-        d32, d33, d34, d35, d35b, d36, d37, d38, d38b, d39, dSysInt, d40, d41, d42, d43, d44, d45, d46, d47,
+        d32, d33, d34, d35, d35b, d36, d37, d38, d38b, d39, dSysInt, dSysStr, dSysStat, d40, d41, d42, d43, d44,
+        d45, d46, d47,
         d48, d49, d50, d51, d52, d53, d54, d55, d56,
         d57, d58, d59, d60, d61, d62, d63, d64,
         d65, d66, d66a, d67, d72,
@@ -1162,7 +1167,8 @@ pub type NativeAvailability {
 def wasm_os_only_natives : List String := [
     "fork_io", "await_fiber", "poll_fiber", "cancel_fiber", "scope_new", "scope_fork",
     "scope_drop", "sleep_io", "channel_new", "channel_put", "channel_take",
-    "channel_try_take", "exec_cmd", "exec_child_output", "process_id", "sys_int", "proc_spawn",
+    "channel_try_take", "exec_cmd", "exec_child_output", "process_id", "sys_int",
+    "sys_str", "sys_stat", "proc_spawn",
     "proc_stream_fd", "proc_wait", "proc_kill_group", "tcp_connect_timeout", "tcp_listen",
     "tcp_listen_on", "tcp_accept", "tcp_local_port", "file_exists", "is_dir", "file_size", "list_dir",
     "get_env", "stream_open", "stream_poll", "stream_seek", "stream_set_timeout", "term_ctl",

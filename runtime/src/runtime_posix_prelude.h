@@ -30,6 +30,8 @@
 #include <sys/stat.h>
 #include <dirent.h>
 #include <sys/resource.h>
+#include <sys/statvfs.h>
+#include <sys/utsname.h>
 #include <sys/wait.h>
 #include <spawn.h>
 #include <signal.h>

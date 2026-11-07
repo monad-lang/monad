@@ -405,6 +405,8 @@ pub fn exec_native(
     "channel_try_take" => channel_try_take(args, natives),
     "process_id" => process_id(),
     "sys_int" => sys_int(args, natives),
+    "sys_str" => sys_str(args, natives),
+    "sys_stat" => sys_stat(args, natives),
     "build_commit" => build_commit(),
     // `Ptr.null : Ptr` (init/prelude.mo) — the NULL pointer, for C
     // functions whose callback argument is NULL (`SSL_set_verify` in
@@ -3836,6 +3838,144 @@ fn clock_now(args: &[Value], natives: &NativeTable) -> Result<Value, CoreEvalErr
       .as_nanos() as i64
   };
   raw_io_wrap(natives, Value::Lit(IrLit::Num(now, NumSuffix::I64)))
+}
+
+/// `Value` for `Result.err <errno>` -- the floor's failure channel.
+fn make_result_err_int(natives: &NativeTable, e: i32) -> Result<Value, CoreEvalError> {
+  let err = require_ctor(natives.well_known.result_err, "Result.err")?;
+  Ok(Value::Con {
+    tag: err.tag,
+    args: std::sync::Arc::new(vec![Value::Lit(IrLit::Num(e as i64, NumSuffix::I64))].into()),
+  })
+}
+
+fn ok_string(natives: &NativeTable, s: String) -> Result<Value, CoreEvalError> {
+  let ok = make_result_ok(natives, Value::Lit(IrLit::Str(s.into())))?;
+  raw_io_wrap(natives, ok)
+}
+
+fn err_errno(natives: &NativeTable, e: i32) -> Result<Value, CoreEvalError> {
+  let err = make_result_err_int(natives, e)?;
+  raw_io_wrap(natives, err)
+}
+
+/// `errno` for a failed `std::io` operation: the OS error it carries, or
+/// `EIO` when it has none. Reading the process's `errno` instead would
+/// report whatever an unrelated earlier call left there -- and for
+/// `NotPresent` (an unset variable) nothing sets it at all.
+fn io_errno(e: &std::io::Error) -> i32 {
+  e.raw_os_error().unwrap_or(libc::EIO)
+}
+
+fn last_errno() -> i32 {
+  sys_errno()
+}
+
+/// `sys_str op arg` (`sys/src/raw.mo`): readlink, uname field, getenv,
+/// list_dir and read_small, mirroring `monad_sys_str`.
+fn sys_str(args: &[Value], natives: &NativeTable) -> Result<Value, CoreEvalError> {
+  let op = extract_int(
+    args
+      .first()
+      .ok_or_else(|| CoreEvalError::NativeArgError("sys_str needs 2 args".into()))?,
+  )?;
+  let arg = extract_string(
+    args
+      .get(1)
+      .ok_or_else(|| CoreEvalError::NativeArgError("sys_str needs 2 args".into()))?,
+  )?;
+  match op {
+    0 => match std::fs::read_link(arg) {
+      Ok(p) => ok_string(natives, p.to_string_lossy().into_owned()),
+      Err(e) => err_errno(natives, io_errno(&e)),
+    },
+    1 => match uname_field(arg) {
+      Some(v) => ok_string(natives, v),
+      None => err_errno(natives, libc::EINVAL),
+    },
+    2 => match std::env::var(arg) {
+      Ok(v) => ok_string(natives, v),
+      // Unset is ENOENT, the same answer the C gives; the other
+      // `VarError` (not valid Unicode) is EILSEQ.
+      Err(std::env::VarError::NotPresent) => err_errno(natives, libc::ENOENT),
+      Err(std::env::VarError::NotUnicode(_)) => err_errno(natives, libc::EILSEQ),
+    },
+    3 => match std::fs::read_dir(arg) {
+      Ok(entries) => {
+        let mut names: Vec<String> = entries
+          .filter_map(|e| e.ok())
+          .map(|e| e.file_name().to_string_lossy().into_owned())
+          .filter(|n| n != "." && n != "..")
+          .collect();
+        ok_string(natives, names.join("\n"))
+      }
+      Err(e) => err_errno(natives, io_errno(&e)),
+    },
+    4 => match std::fs::read_to_string(arg) {
+      Ok(v) => ok_string(natives, v),
+      Err(e) => err_errno(natives, io_errno(&e)),
+    },
+    _ => err_errno(natives, libc::EINVAL),
+  }
+}
+
+/// One `uname` field, the same set `monad_sys_str` answers.
+fn uname_field(field: &str) -> Option<String> {
+  let mut u: libc::utsname = unsafe { std::mem::zeroed() };
+  if unsafe { libc::uname(&mut u) } != 0 {
+    return None;
+  }
+  let pick = |bytes: &[libc::c_char]| -> String {
+    let end = bytes.iter().position(|c| *c == 0).unwrap_or(bytes.len());
+    String::from_utf8_lossy(&bytes[..end].iter().map(|c| *c as u8).collect::<Vec<u8>>())
+      .into_owned()
+  };
+  match field {
+    "sysname" => Some(pick(&u.sysname)),
+    "release" => Some(pick(&u.release)),
+    "machine" => Some(pick(&u.machine)),
+    "nodename" => Some(pick(&u.nodename)),
+    _ => None,
+  }
+}
+
+/// `sys_stat op path` (`sys/src/raw.mo`): the packed `"mode size mtime"`
+/// and statvfs lines, mirroring `monad_sys_stat`.
+fn sys_stat(args: &[Value], natives: &NativeTable) -> Result<Value, CoreEvalError> {
+  let op = extract_int(
+    args
+      .first()
+      .ok_or_else(|| CoreEvalError::NativeArgError("sys_stat needs 2 args".into()))?,
+  )?;
+  let path = extract_string(
+    args
+      .get(1)
+      .ok_or_else(|| CoreEvalError::NativeArgError("sys_stat needs 2 args".into()))?,
+  )?;
+  use std::os::unix::fs::MetadataExt;
+  if op == 2 {
+    let mut v: libc::statvfs = unsafe { std::mem::zeroed() };
+    let c = std::ffi::CString::new(path).unwrap_or_default();
+    if unsafe { libc::statvfs(c.as_ptr(), &mut v) } != 0 {
+      return err_errno(natives, last_errno());
+    }
+    return ok_string(
+      natives,
+      format!(
+        "{} {} {} {} {} {} {}",
+        v.f_bsize, v.f_frsize, v.f_blocks, v.f_bfree, v.f_bavail, v.f_files, v.f_ffree
+      ),
+    );
+  }
+  let md = if op == 1 {
+    std::fs::symlink_metadata(&path)
+  } else {
+    std::fs::metadata(&path)
+  };
+  match md {
+    Ok(m) => ok_string(natives, format!("{} {} {}", m.mode(), m.size(), m.mtime())),
+    Err(e) => err_errno(natives, io_errno(&e)),
+  }
 }
 
 fn process_id() -> Result<Value, CoreEvalError> {
