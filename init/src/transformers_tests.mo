@@ -296,3 +296,15 @@ def idt_bind_result : IdentityT Id I64 :=
 #[test]
 def test_idt_bind : Bool :=
     (Id.run (IdentityT.run idt_bind_result)) == 11
+
+// `ResultT.lift`'s `Monad.pure (Result.ok a)` is the underlying `M`'s
+// `pure`, not `Result`'s: once `Monad (Result E)` existed the dictionary
+// override read the carrier off the element argument and the def stopped
+// elaborating (`expected (M (Result E A)), found (Result E (Result E A))`).
+#[test]
+def test_resultt_lift_uses_the_underlying_monad : Bool :=
+    let m : ResultT String Id I64 := ResultT.lift (Id.id 7) in
+    match Id.run (ResultT.run m) {
+        Result.ok v => v == 7,
+        Result.err _ => false
+    }

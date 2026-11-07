@@ -1058,22 +1058,10 @@ def resolve_class_method ({ class_name, name := method_name, .. } : ScopeClassDe
                             resolve_class_method_carrier class_name method_name carrier expected_type scope locals,
                     },
                 Option.none =>
-                    // The first Pi domain is the carrier only when the
-                    // method takes the carrier first (`Show.show : A ->
-                    // String`). For a higher-kinded method it is the
-                    // ELEMENT (`Monad.pure : A -> M A`), and an element
-                    // that happens to have an instance of its own is a
-                    // wrong answer, not a miss: `return (Id.id x)` in an
-                    // `IO (Id I64)` do-block resolved `Monad.pure` to
-                    // `Monad Id` and typed the block `Id (Id I64)`. Such a
-                    // method's carrier is read through its
-                    // own signature instead (`M A` against `IO X` binds
-                    // `M := IO`); `Option.none` there leaves the hint chain
-                    // below to answer, as before.
-                    let carrier_opt : Option Term :=
-                        if class_has_single_param cls && Bool.not (method_carrier_is_first_arg cls method_name)
-                        then method_sig_carrier cls method_name expected_type
-                        else carrier_from_expected_type expected_type in
+                    // The carrier is read through the method's own signature
+                    // when its first domain is the element (`method_call_carrier`);
+                    // `Option.none` there leaves the hint chain below to answer.
+                    let carrier_opt : Option Term := method_call_carrier cls method_name expected_type in
                     let direct : Result TypeError TypedTerm :=
                         match carrier_opt {
                             Option.none => err (TypeError.custom "cannot infer carrier type for class method"),
@@ -1299,7 +1287,7 @@ def resolve_class_method_carrier (class_name : NamePath) (method_name : Identifi
 /// matches), so every call that forwards correctly today forwards exactly
 /// as it did.
 def dict_forwarding_override (cls_name : NamePath) (cls : Class) (method_name : Identifier) (expected_type : Term) (scope : Scope) : Option Term :=
-    match carrier_from_expected_type expected_type {
+    match method_call_carrier cls method_name expected_type {
         Option.none => Option.none,
         Option.some carrier =>
             if carrier_is_class_param cls method_name carrier
@@ -1323,6 +1311,21 @@ def dict_forwarding_override (cls_name : NamePath) (cls : Class) (method_name : 
                 Option.some ins => if instance_head_is_concrete ins then Option.some carrier else Option.none,
             },
     }
+
+/// The carrier a class-method call's expected type names. The first Pi
+/// domain is the carrier only when the method takes the carrier first
+/// (`Show.show : A -> String`); for a higher-kinded method it is the
+/// ELEMENT (`Monad.pure : A -> M A`), so that method's carrier is read
+/// through its own signature instead (`M A` against `IO X` binds
+/// `M := IO`). Both `resolve_class_method`'s instance lookup and
+/// `dict_forwarding_override` read it: taking the element there sent
+/// `return (Id.id x)` in an `IO` block to `Monad Id`, and, inside a
+/// `[Monad M]` def, `Monad.pure (Result.ok a)` to `Monad (Result E)`
+/// instead of the local `M` dictionary (`ResultT.lift`).
+def method_call_carrier (cls : Class) (method_name : Identifier) (expected_type : Term) : Option Term :=
+    if class_has_single_param cls && Bool.not (method_carrier_is_first_arg cls method_name)
+    then method_sig_carrier cls method_name expected_type
+    else carrier_from_expected_type expected_type
 
 /// Is `carrier` written AT the class's own dictionary type -- a bare
 /// `Term.var` naming one of the class's own parameters (or of the
