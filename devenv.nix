@@ -38,15 +38,19 @@
   # docs-build fails.
   scripts.docs-serve.exec = ''
     set -euo pipefail
-    if ! ${config.devenv.root}/scripts/build-docs.sh; then
+    if ! ${config.devenv.root}/scripts/build-docs.sh --with-moon; then
       echo "warning: the site build failed (run scripts/build-docs.sh directly for the error); serving what is already in docs/public, which may be stale" >&2
     fi
     if [ ! -f ${config.devenv.root}/docs/public/index.html ]; then
       echo "docs-serve: no site to serve -- docs/public is empty and the build failed above" >&2
       exit 1
     fi
-    echo "docs-serve: serving docs/public on http://127.0.0.1:''${PORT:-8000} (Ctrl-C to stop; re-run after an edit)" >&2
-    python3 -m http.server "''${PORT:-8000}" --directory ${config.devenv.root}/docs/public
+    if [ ! -x ${config.devenv.root}/target-docs/moon ]; then
+      echo "docs-serve: the moon CLI was not built (scripts/build-docs.sh --with-moon)" >&2
+      exit 1
+    fi
+    echo "docs-serve: serving docs/public on http://127.0.0.1:''${PORT:-8000}/ (Ctrl-C to stop; re-run after an edit)" >&2
+    exec ${config.devenv.root}/target-docs/moon static ${config.devenv.root}/docs/public --port "''${PORT:-8000}" --host 127.0.0.1
   '';
 
   scripts.docs-build.exec = ''

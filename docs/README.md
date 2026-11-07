@@ -1,15 +1,19 @@
 # Documentation
 
-The Monad language site is built by **acorn** (`motes/acorn`), the Monad
-site generator, and published to <https://monad-lang.org> by
-`.github/workflows/site.yml` on every push to `main`.
+The Monad language site is built by **`docs/site/monad_website`** (the
+monad-lang.org site: landing page and chrome) on **acorn** (`motes/acorn`,
+the generic static book/site generator), and published to
+<https://monad-lang.org> by `.github/workflows/site.yml` on every push to
+`main`.
 
-- The landing page is `landing.mo`, rendered to `monad-lang.org/`.
+- The landing page is `docs/site/monad_website/src/landing.mo`, rendered to
+  `monad-lang.org/`.
 - The book's sources are `docs/src/` (`SUMMARY.md` and 22 chapters), rendered
   to `monad-lang.org/docs/` at the same URLs mdBook used, plus `index.html`,
   `print.html` and `404.html`.
 - `docs/site/static/` is copied as-is: the landing stylesheet and icons, the
-  favicon and logo, `/try` and `/install`.
+  favicon and logo, `/try` and `/install`. `motes/acorn/assets/acorn.css` is
+  the book theme.
 - The configuration is `docs/site.toml`.
 
 ```bash
@@ -18,14 +22,23 @@ docs-serve            # devenv script: build it, then serve docs/public on :8000
 ```
 
 `scripts/build-docs.sh` does the work: it stages `/install` and the `/try`
-wasm into `docs/site/static/`, builds acorn with the tree's compiler, and runs
-`acorn build`. The static tree is copied by acorn, so those two steps must
-come first. The build fails before writing anything if an internal link points
-at a page or anchor that does not exist.
+wasm into `docs/site/static/`, builds acorn and `monad_website` with the
+tree's compiler, and runs `monad_website build`. The static tree is copied by
+acorn, so those two steps must come first. The build fails before writing
+anything if an internal link points at a page or anchor that does not exist.
 
-The old pipeline (mdBook for the book, Zola for the landing page) is gone with
-its `docs/book.toml`, `docs/site/config.toml`, `docs/site/templates/` and
-`docs/theme/`.
+`docs-serve` serves the output with **`moon static`** (`motes/moon`, built by
+the same script with `--with-moon`), the repository's own replacement for
+`python3 -m http.server`:
+
+```bash
+moon static [DIR] [--port N] [--host H]    # DIR defaults to ., port 8000,
+                                           # host 127.0.0.1
+```
+
+`acorn build` on its own is the generic builder: it renders the book in
+acorn's own plain chrome and writes no landing page, which is what makes
+acorn reusable by another site.
 
 ## Keeping the examples correct
 

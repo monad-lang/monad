@@ -13,8 +13,25 @@
 # MONAD selects the compiler that builds acorn; the first argument is passed
 # to `scripts/build-try.sh`'s own compiler selection (see its header).
 #
-# Usage: scripts/build-docs.sh [--skip-try]
+# Usage: scripts/build-docs.sh [--skip-try] [--with-moon]
+#
+#   --skip-try   do not rebuild the /try wasm
+#   --with-moon  also build the `moon` binary into target-docs/ (docs-serve
+#                serves with `moon static`, CI compiles it here)
 set -euo pipefail
+
+skip_try=0
+with_moon=0
+for arg in "$@"; do
+    case "$arg" in
+        --skip-try) skip_try=1 ;;
+        --with-moon) with_moon=1 ;;
+        *)
+            echo "build-docs: unknown argument '$arg' (--skip-try, --with-moon)" >&2
+            exit 2
+            ;;
+    esac
+done
 
 root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 
@@ -45,7 +62,7 @@ cd "$root"
 export MONAD_STDLIB="$root/init/src"
 
 "$root/scripts/sync-install.sh"
-if [ "${1:-}" = "--skip-try" ]; then
+if [ "$skip_try" -eq 1 ]; then
     echo "build-docs: /try wasm not rebuilt (--skip-try)" >&2
 else
     "$root/scripts/build-try.sh"
@@ -57,4 +74,7 @@ fi
 mkdir -p "$root/target-docs"
 "$monad" build "$root/motes/acorn" -o "$root/target-docs/acorn"
 "$monad" build "$root/docs/site/monad_website" -o "$root/target-docs/monad_website"
+if [ "$with_moon" -eq 1 ]; then
+    "$monad" build "$root/motes/moon" -o "$root/target-docs/moon"
+fi
 "$root/target-docs/monad_website" build
