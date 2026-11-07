@@ -2,13 +2,14 @@ use lang::types {
     DebugName, Elim, Identifier, Literal, LocalScope, LocalVar, Location, MatchCase,
     ModulePath, NamePath, Scope, ScopeData, Similar, Term, binder_anon, binder_explicit,
     cub_i0, cub_i1, cub_ijoin, cub_interval, cub_pathp,
-    cub_imeet, cub_ineg, many, sentinel, sort_n,
+    cub_imeet, cub_ineg, sentinel, sort_n,
+    Multiplicity.many,
     cub, imeet, ineg,
 }
 use lib::module {parse_all_decls}
 use parsec::core {fail, success}
 use lib::scope {build_scope_from_decls}
-use lib::typecheck::whnf {whnf}
+use lib::typecheck::whnf {normalize_path_endpoints, whnf}
 
 // Unit tests for the WHNF reducer. Scopes are built by PARSING a real
 // source snippet rather than hand-assembling `Def`s: `build_scope_from_
@@ -682,7 +683,7 @@ def test_whnf_local_path_endpoint_i1 : Bool :=
     let lv : LocalVar := {
         name := Identifier.id "p",
         typ := p_typ,
-        multiplicity := many,
+        multiplicity := Multiplicity.many,
     } in
     let locals : LocalScope := {
         vars := List.cons lv List.empty,
@@ -704,7 +705,7 @@ def test_whnf_local_library_path_endpoint_i1 : Bool :=
     let lv : LocalVar := {
         name := Identifier.id "p",
         typ := p_typ,
-        multiplicity := many,
+        multiplicity := Multiplicity.many,
     } in
     let locals : LocalScope := {
         vars := List.cons lv List.empty,
@@ -712,3 +713,31 @@ def test_whnf_local_library_path_endpoint_i1 : Bool :=
     } in
     let pv : Term := Term.var 0 (DebugName.named (Identifier.id "p")) in
     Similar.similar (whnf (scope_of "") locals (Term.app pv cub_i1)) b
+
+/// The DEEP form: after `Equiv` unfolds to a `Sigma`, the endpoint
+/// application sits under a Pi codomain and a lambda body, where structural
+/// comparison never hands the application node to `whnf` again. The deep
+/// normalizer must rewrite it, which is what makes `eqToEquiv` return
+/// `Equiv A B` rather than `Equiv A (p i1)`.
+#[test]
+def test_normalize_path_endpoints_reaches_under_binders : Bool :=
+    let a : Term := free_var "A" in
+    let b : Term := free_var "B" in
+    let p_typ : Term :=
+        Term.app (Term.app (Term.app (free_var "proofs::Path") (sort_n 1)) a) b in
+    let lv : LocalVar := {
+        name := Identifier.id "p",
+        typ := p_typ,
+        multiplicity := Multiplicity.many,
+    } in
+    let locals : LocalScope := {
+        vars := List.cons lv List.empty,
+        parent := Option.none,
+    } in
+    let pv : Term := Term.var 0 (DebugName.named (Identifier.id "p")) in
+    let deep : Term :=
+        Term.pi binder_anon (sort_n 1)
+            (Term.pi binder_anon (Term.app pv cub_i1) (Term.app pv cub_i1)) in
+    let expected : Term :=
+        Term.pi binder_anon (sort_n 1) (Term.pi binder_anon b b) in
+    Similar.similar (normalize_path_endpoints (scope_of "") locals deep) expected

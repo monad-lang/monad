@@ -1,17 +1,18 @@
 use std::list {List.length}
 use lib::types {
-    Con, Cubical, CubicalPrim, DebugName, Elim, Identifier, InductConstructor,
-    Literal, LocalScope, MatchCase, NamePath, NameRef, Scope, Similar, Term,
+    Binder, Con, Cubical, CubicalPrim, DebugName, Elim, Identifier, InductConstructor,
+    Literal, LocalScope, LocalVar, MatchCase, NamePath, NameRef, Scope, Similar, Term,
     cub_face_eq0, cub_face_eq1, cub_i0, cub_i1, cub_it_is_one, cubical_arity, cubical_prim_eq, id_eq,
     show_identifier, sentinel, term_peel,
 }
 use lib::scope {
     CallSpine, flatten_call_spine, identifier_tail, last_dot_index, scope_find_cubical_prim, scope_find_def_body,
     scope_find_inductive, scope_find_inductive_by_constructor, scope_find_local,
-    scope_resolve_name,
+    scope_push_local, scope_resolve_name,
 }
 use lib::typecheck::faces {face_decide}
 use lib::typecheck::subst {beta_reduce, term_shift, term_subst}
+use lib::typecheck::traverse {term_map_children}
 
 // ─── Weak-head normal form ───────────────────────────────────────────
 //
@@ -198,6 +199,61 @@ def whnf_path_endpoint_app (f : Term) (a : Term) (scope : Scope)
                 DebugName.unnamed => Option.none,
             },
         _ => Option.none,
+    }
+
+/// Rewrite every path application at a literal endpoint INSIDE `t`, not only
+/// at its head. `whnf_path_endpoint_app` fires on a top-level `p i0`/`p i1`,
+/// but a result type can bury the application under the binders an unfolded
+/// definition introduced: `transp (fn i => Equiv A (p i)) (idEquiv A)` whnf's
+/// to `Equiv A (p i1)`, whose `Sigma` spelling mentions `p i1` in a `Pi`
+/// codomain and a lambda body. Structural comparison then descends into
+/// those binders and never gives `whnf` the node with the right locals, so
+/// `p i1` stayed stuck and `eqToEquiv` could not return `Equiv A B`.
+///
+/// `LocalScope` is NAME-keyed, so descending under a binder needs no de
+/// Bruijn shifting: push the binder (when it has a spellable name) so a
+/// shadowing occurrence resolves to the binder, and leave the outer entries
+/// alone.
+#[terminating]
+pub def normalize_path_endpoints (scope : Scope) (locals : LocalScope) (t : Term) : Term :=
+    normalize_path_endpoints_go scope locals t
+
+def normalize_path_endpoints_binder (b : Binder) (typ : Term)
+    (locals : LocalScope) : LocalScope :=
+    match b.name {
+        DebugName.named id =>
+            let lv : LocalVar := { name := id, typ := typ, multiplicity := b.mult } in
+            scope_push_local lv locals,
+        DebugName.unnamed => locals,
+    }
+
+#[terminating]
+def normalize_path_endpoints_go (scope : Scope) (locals : LocalScope)
+    (t0 : Term) : Term :=
+    let t : Term := term_peel t0 in
+    match t {
+        Term.pi b arg ret =>
+            let arg_n : Term := normalize_path_endpoints_go scope locals arg in
+            let locals_n : LocalScope :=
+                normalize_path_endpoints_binder b arg locals in
+            Term.pi b arg_n (normalize_path_endpoints_go scope locals_n ret),
+        Term.lam b typ body =>
+            let typ_n : Term := normalize_path_endpoints_go scope locals typ in
+            let locals_n : LocalScope :=
+                normalize_path_endpoints_binder b typ locals in
+            Term.lam b typ_n (normalize_path_endpoints_go scope locals_n body),
+        Term.app f a =>
+            let f_n : Term := normalize_path_endpoints_go scope locals f in
+            let a_n : Term := normalize_path_endpoints_go scope locals a in
+            match whnf_path_endpoint_app f_n a_n scope locals {
+                Option.some endpoint =>
+                    normalize_path_endpoints_go scope locals endpoint,
+                Option.none => Term.app f_n a_n,
+            },
+        _ =>
+            term_map_children
+                (fn (child : Term) => normalize_path_endpoints_go scope locals child)
+                t,
     }
 
 /// Application of a two-clause `system`. The system itself is a value (a

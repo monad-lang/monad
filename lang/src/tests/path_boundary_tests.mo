@@ -62,6 +62,20 @@ def test_normalize_rewrites_an_applied_path_at_i0 : Bool :=
     rewrites_to (applied_spine cub_i0) [applied_h_ty]
         (Term.app (fv "f") (fv "x"))
 
+/// The BARE-variable arm reads the stored local type at the occurrence's
+/// depth, so it must shift it by `idx + 1` (the same rule
+/// `type_check_bound_var` uses). `p_ty` is written at p's binder position,
+/// where its endpoints are the `a` binder just outside; at occurrence index
+/// 0 the endpoint is therefore `var 1`, not `var 0`. Without the shift the
+/// rewrite returned the wrong variable, which is why `fn i => p i` failed
+/// its i0 boundary whenever the endpoints were bound (not ground) terms.
+#[test]
+def test_normalize_bare_path_shifts_the_stored_local_type : Bool :=
+    let p_ty : Term :=
+        cub_pathp (Term.lam binder_anon cub_interval (fv "A"))
+            (lv 0 "a") (lv 0 "a") in
+    rewrites_to (Term.app (lv 0 "p") cub_i0) [p_ty] (lv 1 "a")
+
 #[test]
 def test_normalize_rewrites_an_applied_path_at_i1 : Bool :=
     rewrites_to (applied_spine cub_i1) [applied_h_ty]

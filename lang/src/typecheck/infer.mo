@@ -48,7 +48,7 @@ use lib::typecheck::cubical {
     PathParts, endpoint_of, path_parts_of, peels_to_bare_interval,
 }
 use lib::typecheck::unify {unify, unify_structural}
-use lib::typecheck::whnf {whnf}
+use lib::typecheck::whnf {normalize_path_endpoints, whnf}
 use lang::parser::numeric_literal {int_value_fits}
 use std::list {List.length}
 
@@ -5310,11 +5310,20 @@ def rewrite_stuck_path_app (f : Term) (d : Term) (scope : Scope) (local_types : 
                 match nth_type idx local_types {
                     Option.none => Option.none,
                     Option.some f_typ =>
+                        // A stored local type is written at its binder's
+                        // depth; read it at the occurrence's depth the same
+                        // way `type_check_bound_var` does (`idx + 1`, the
+                        // binder itself included). Without the shift, a path
+                        // type whose endpoints are BOUND variables
+                        // (`PPath A a b` with explicit `a`/`b`) yielded the
+                        // wrong endpoint, so `fn i => p i` failed its i0
+                        // boundary while the ground-endpoint version passed.
+                        let f_typ_at_depth : Term := term_shift (idx + 1) f_typ in
                         // Reduced first: a local's declared type can be a
                         // `Path` SPELLED as the library def, and only
                         // `whnf` turns that into the `Term.cubical`
                         // `path_parts_of` recognizes.
-                        match path_parts_of (whnf scope locals f_typ) {
+                        match path_parts_of (whnf scope locals f_typ_at_depth) {
                             Option.none => Option.none,
                             Option.some parts =>
                                 match endpoint_of (whnf scope locals d) {
@@ -8688,9 +8697,18 @@ def type_check_transp_go (a_line : Term) (a_elem : Term) (expected_type : Term)
                                                     // path-valued argument inside it
                                                     // (`Equiv A (p i1)`) only
                                                     // reduces through `whnf`'s path
-                                                    // endpoint rule.
+                                                    // endpoint rule. The deep
+                                                    // rewrite matters because the
+                                                    // application can sit under the
+                                                    // binders an unfolded definition
+                                                    // introduced (`Sigma`'s Pi
+                                                    // codomain and lambda body), where
+                                                    // structural comparison never
+                                                    // hands the application node to
+                                                    // `whnf` again.
                                                     let result : Term :=
-                                                        whnf scope locals (Term.app line_tt.term cub_i1) in
+                                                        normalize_path_endpoints scope locals
+                                                            (whnf scope locals (Term.app line_tt.term cub_i1)) in
                                                     match unify result expected_type scope locals {
                                                         err e => err e,
                                                         ok unified =>
