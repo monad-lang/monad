@@ -128,10 +128,12 @@ land in the input box, and Enter QUEUES them: the line is echoed as
 `queued: ...` and runs as the next turn when the running one ends (a
 failed or stopped turn starts it too). Esc asks the turn to stop: the row says `stopping…`, the in-flight model call or
 foreground tool finishes, and the turn ends at the next boundary with a
-`[stopped]` line -- the partial session is kept. Background processes
-keep running and retry backoffs are not interrupted, so stop waits for
-the current call; a stalled provider read is bounded by moose's request
-timeouts, and a foreground `shell` by its 300 s wall-clock cap. While a
+`[stopped]` line -- the partial session is kept. A `shell`
+command the turn waits on is killed at once, and a `read_process` wait
+ends (its task keeps running); background tasks keep running and retry
+backoffs are not interrupted, and a stalled provider read is bounded by
+moose's request timeouts. Ctrl+B ends a `shell` wait without killing the
+command: it becomes a background task. While a
 dialog owns stdin the loop stops reading and drawing, and the dialog's
 close forces a clear+repaint, so a confirmed prompt never lingers. An approval prompt (`manual`/`allow_edit`'s `ask`
 cells) opens a centered dialog: the diff for a `write`/`edit` pick,
@@ -234,10 +236,8 @@ runaway one comes back as an `out of fuel` / `recursion too deep` tool
 error instead of pinning the turn (Esc cannot interrupt the evaluator).
 
 `read` streams to a 256 KiB cap and says so, instead of loading a
-multi-GB file (or `/dev/zero`) whole and cutting afterwards. `shell` wraps its command in GNU `timeout` (300 s,
-`-k 5s`), which also puts it in its own process group -- a command that
-stops printing no longer hangs the turn, and a kill reaches its
-grandchildren.
+multi-GB file (or `/dev/zero`) whole and cutting afterwards. `shell` runs its command as a task (below) and
+waits for it on a budget, not a deadline.
 
 The provider decides which models exist: `/model` with no argument
 fetches its `/v1/models` list (the mock wire answers `mock` offline),
@@ -261,19 +261,38 @@ MCP servers mount with `--mcp <executable>`; their proxy tools default
 to `exec` capability (a server's catalogue is arbitrary code) and are
 listed by `/mcp`.
 
-## Background processes
+## Shell commands and background tasks
 
-`start_process {command, cwd}` launches a detached `sh -c` with merged
-stdout/stderr under `<sessions root>/procs/p-<pid>/` (`WEAVER_PROC_ROOT`
-overrides); `read_process {id, wait_seconds?}` returns status, elapsed
-time and the last 40 output lines -- with `wait_seconds` (at most 60) it
-first waits for the task to exit, so the model does not poll in a loop
-of full requests -- `list_processes` lists them, and `kill_process {id}`
-sends TERM then KILL. `/processes` prints the same snapshot and accepts
-`kill <id>`. Tasks are killed when weaver exits (`WEAVER_PROC_KEEP` opts
-out). Limitations: no process group (a detached grandchild can survive a
-kill), the log file is not size-capped, and a task can outlive a weaver
-crash (its files remain under the proc root).
+Every `shell {command, wait_seconds?}` is a task: a detached `sh -c` in
+its own process group, with merged stdout/stderr going to a log under
+`<sessions root>/procs/p-<pid>/` (`WEAVER_PROC_ROOT` overrides). The
+call waits up to `wait_seconds` (default 30, at most 300) for it to
+exit. That is a budget, not a deadline:
+
+- A command that exits in time returns its output (the log's last 200
+  lines within 64 KiB, with a note on how many were left out) and its
+  task is discarded.
+- One still running when the budget is spent is not killed. It becomes
+  a background task, the model gets the output so far and its id, and
+  its exit later arrives as a note on the next turn or tool boundary.
+- `wait_seconds: 0` starts a background task without waiting.
+- While the turn waits, the live row shows the command's last output
+  line (read from the end of its log, `IO.read_tail`). Ctrl+B stops
+  waiting and leaves the command running as a background task; Esc
+  kills its process group and stops the turn.
+
+`read_process {id, wait_seconds?}` returns a task's status, elapsed time
+and last 40 output lines; with `wait_seconds` (at most 60) it first
+waits for the exit, so the model does not poll with a request per look,
+and Esc ends that wait. `list_processes` lists the tasks and
+`kill_process {id}` sends TERM, then KILL, to the group. `/tasks` opens
+the same list as a monitor (Enter shows a task's output, `x` kills it).
+A log past 64 MiB gets its task killed, with a note at the end of the
+log saying so; weaver checks once a second in the TUI and before each
+turn otherwise. Tasks are killed when weaver exits (`WEAVER_PROC_KEEP`
+opts out). Limitations: a grandchild that calls `setsid` itself leaves
+the group and survives a kill, and a task can outlive a weaver crash
+(its files remain under the proc root).
 
 ## Logging and crash reports
 
