@@ -92,6 +92,17 @@ pub def write_process_script (path : String) (command : String) : IO Bool :=
         [tool_use_turn_json "p1" "shell" input,
             text_turn_json "started it"]
 
+/// Turn 0 runs `command` through `shell` with a long wait; turn 1 says
+/// `done waiting`. The pty drives Esc or Ctrl+B during the wait.
+pub def write_shell_wait_script (path : String) (command : String) : IO Bool :=
+    let input : Json :=
+        Json.make_object_pairs
+            [Pair.pair "command" (Json.make_str command),
+                Pair.pair "wait_seconds" (Json.make_num_int 120)] in
+    write_turns path
+        [tool_use_turn_json "w1" "shell" input,
+            text_turn_json "done waiting"]
+
 /// A turn that starts `sleep 2` in the background, then runs a 5 s
 /// shell call: the exit lands while the shell runs, so the next tool
 /// boundary delivers it.

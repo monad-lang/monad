@@ -29,6 +29,7 @@ use weaver::pty::approvals {run_auto_mode_holds_destructive_commands}
 use weaver::pty::todos {run_todo_panel_shows_and_folds}
 use weaver::pty::trust {run_trust_asks_records_and_reasks}
 use weaver::pty::instructions {run_instructions_note_a_mid_session_edit}
+use weaver::pty::shell_wait {run_shell_wait_esc, run_shell_wait_ctrl_b}
 use weaver::pty::resize {run_resize_clears_and_rewraps}
 use weaver::pty::resume {
     run_resume_picker_lists_current_and_esc,
@@ -167,3 +168,9 @@ def test_trust_asks_records_and_reasks : IO Bool := run_trust_asks_records_and_r
 
 #[test]
 def test_instructions_note_a_mid_session_edit : IO Bool := run_instructions_note_a_mid_session_edit
+
+#[test]
+def test_shell_wait_esc_kills_the_command : IO Bool := run_shell_wait_esc
+
+#[test]
+def test_shell_wait_ctrl_b_moves_it_to_the_background : IO Bool := run_shell_wait_ctrl_b
