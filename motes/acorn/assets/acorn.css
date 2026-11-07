@@ -252,3 +252,13 @@ pre code { font-size: 13.5px; }
   }
   .content { padding: 24px 16px 48px; }
 }
+
+/* ---- Print (print.html, or any page): the content alone ---- */
+@media print {
+  :root { color-scheme: light; }
+  body { background: #fff; color: #000; }
+  .site-header, .sidebar, .toc, .pager, .site-footer, .content .anchor { display: none; }
+  .book { display: block; }
+  .content { max-width: none; padding: 0; }
+  pre, :not(pre) > code { background: #f6f8fa; border-color: #d0d7de; }
+}
