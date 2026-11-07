@@ -479,6 +479,18 @@ priv def current_time_nano_raw : RawIO I64
 // (`lang/codegen/test_driver.mo`).
 pub def IO.current_time_nano : IO I64 := IO.mk current_time_nano_raw
 
+/// `clock_gettime(2)`: 0 is CLOCK_REALTIME, 1 is CLOCK_MONOTONIC, in
+/// nanoseconds; `-errno` on failure (`-EINVAL` for another id), the sys
+/// floor's convention. It moves to `sys/src/time.mo` with
+/// `current_time_nano` once `std` builds on `sys`.
+#[native "clock_now"]
+priv def clock_now_raw (clock : I64) : RawIO I64
+
+/// Nanoseconds since the Unix epoch from the wall clock, on every backend
+/// (compiled `IO.current_time_nano` is monotonic). For timestamps, not
+/// intervals: a clock step can move it backwards.
+pub def IO.epoch_time_nano : IO I64 := IO.mk (clock_now_raw 0)
+
 pub def IO.file_exists (path : Path) : IO Bool :=
     IO.file_exists_native (Path.to_string path)
 

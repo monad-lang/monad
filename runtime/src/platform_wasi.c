@@ -68,6 +68,16 @@ int64_t monad_current_time_nano(void) {
     return (int64_t)ts.tv_sec * 1000000000 + (int64_t)ts.tv_nsec;
 }
 
+/* `#[native "clock_now"]` (WASI clocks) --
+   clock_gettime: 0 is CLOCK_REALTIME, 1 is CLOCK_MONOTONIC, in ns;
+   -errno on failure, the sys floor's convention (sys/src/raw.mo). */
+int64_t monad_clock_now(int64_t clock) {
+    if (clock != 0 && clock != 1) return -(int64_t)EINVAL;
+    struct timespec ts;
+    if (clock_gettime(clock == 1 ? CLOCK_MONOTONIC : CLOCK_REALTIME, &ts) != 0) return -(int64_t)errno;
+    return (int64_t)ts.tv_sec * 1000000000 + (int64_t)ts.tv_nsec;
+}
+
 rt_str monad_read_stdin_exact(int64_t n) {
     if (n <= 0) {
         char* empty = (char*)RT_PTR(monad_alloc_atomic(1));

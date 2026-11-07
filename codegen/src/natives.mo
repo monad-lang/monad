@@ -267,6 +267,7 @@ def native_runtime_fn_name (attrs : List Attribute) : Option NativeWrapKind :=
             // conversion itself, in Monad -- see
             // `codegen/test_driver.mo`.
             else if String.beq target "current_time_nano" then Option.some (NativeWrapKind.raw_io_passthrough "monad_current_time_nano")
+            else if String.beq target "clock_now" then Option.some (NativeWrapKind.raw_io_passthrough "monad_clock_now")
             // `String.lt`/`String.gt` (`init/string.mo`, `instance BOrd
             // String`'s own backing natives) -- same previously-unwired
             // gap as `string_length`/`string_hash` above (a `#[native]`
@@ -774,6 +775,7 @@ pub def runtime_declarations_for (kind : TargetKind) : List LLVMDeclaration :=
     let d7c := mk_decl "monad_string_hash" (List.cons "i64" List.empty) "i64" in
     let d7d := mk_decl "monad_current_time" List.empty "i64" in
     let d7e := mk_decl "monad_current_time_nano" List.empty "i64" in
+    let d7f := mk_decl "monad_clock_now" ["i64"] "i64" in
     let d8 := mk_decl "alloc_closure" (List.cons "i64" (List.cons "i64" (List.cons "i64" List.empty))) "i64" in
     let d9 := mk_decl "alloc_constructor" (List.cons "i64" (List.cons "i64" List.empty)) "i64" in
     let d10 := mk_decl "alloc_string" (List.cons "i64" (List.cons "i64" List.empty)) "i64" in
@@ -1115,7 +1117,7 @@ pub def runtime_declarations_for (kind : TargetKind) : List LLVMDeclaration :=
     let d114 := mk_decl "monad_channel_put" ["i64", "i64"] "i64" in
     let d115 := mk_decl "monad_channel_take" ["i64"] "i64" in
     let d116 := mk_decl "monad_channel_try_take" ["i64"] "i64" in
-    [d1, d2, d3, d7, d7b, d7b1, d7c, d7d, d7e, d8, d9, d10, d11, d12, d13,
+    [d1, d2, d3, d7, d7b, d7b1, d7c, d7d, d7e, d7f, d8, d9, d10, d11, d12, d13,
         d14, d15, d16, d17, d18, d19, d20, d21, d22, d23, d23a, d23b, d24, d24b, d25, d26, d27, d28, d29, d30, d31,
         d32, d33, d34, d35, d36, d37, d38, d38b, d39, dSysInt, d40, d41, d42, d43, d44, d45, d46, d47,
         d48, d49, d50, d51, d52, d53, d54, d55, d56,

@@ -361,6 +361,7 @@ pub fn exec_native(
     "io_pure" => io_pure(args, natives),
     "current_time" => current_time(natives),
     "current_time_nano" => current_time_nano(natives),
+    "clock_now" => clock_now(args, natives),
     "bench_report" => bench_report(args, natives),
     "file_exists" => file_exists(args, natives),
     "is_dir" => is_dir(args, natives),
@@ -3734,6 +3735,33 @@ fn sys_int(args: &[Value], natives: &NativeTable) -> Result<Value, CoreEvalError
     _ => errno(libc::EINVAL),
   };
   raw_io_wrap(natives, Value::Lit(IrLit::Num(rc, NumSuffix::I64)))
+}
+
+/// `clock_now (clock : I64) : RawIO I64` -- `clock_gettime`: 0 is the
+/// wall clock (ns since the Unix epoch), 1 a monotonic clock (ns since
+/// this process first read it); any other id is `-EINVAL`, the sys
+/// floor's `-errno` convention.
+fn clock_now(args: &[Value], natives: &NativeTable) -> Result<Value, CoreEvalError> {
+  static ORIGIN: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+  let clock = extract_int(
+    args
+      .first()
+      .ok_or_else(|| CoreEvalError::NativeArgError("clock_now needs 1 arg".into()))?,
+  )?;
+  let now = if clock != 0 && clock != 1 {
+    -(libc::EINVAL as i64)
+  } else if clock == 1 {
+    ORIGIN
+      .get_or_init(std::time::Instant::now)
+      .elapsed()
+      .as_nanos() as i64
+  } else {
+    std::time::SystemTime::now()
+      .duration_since(std::time::UNIX_EPOCH)
+      .unwrap_or_default()
+      .as_nanos() as i64
+  };
+  raw_io_wrap(natives, Value::Lit(IrLit::Num(now, NumSuffix::I64)))
 }
 
 fn process_id() -> Result<Value, CoreEvalError> {

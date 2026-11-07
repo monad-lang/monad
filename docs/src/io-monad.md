@@ -69,6 +69,7 @@ Other operations in `std.io`:
 | `IO.list_dir` | `Path -> IO (List Path)` (entries joined onto the directory, sorted) |
 | `IO.get_env` | `String -> IO (Option String)` |
 | `IO.current_time` | `IO I64` (monotonic milliseconds) |
+| `IO.epoch_time_nano` | `IO I64` (wall clock, nanoseconds since the Unix epoch) |
 
 An operation that can fail returns its failure as a `Result.err` carrying a
 `std.stream` `StreamError`: a `kind` to match on (`not_found`,

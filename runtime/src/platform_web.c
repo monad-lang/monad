@@ -659,6 +659,13 @@ int64_t monad_current_time_nano(void) {
     return monad_js_now_ms() * 1000000;
 }
 
+/* `clock_now`: the page has one millisecond clock (`Date.now`) for both
+   ids; any other id is -EINVAL (22), as on posix. */
+int64_t monad_clock_now(int64_t clock) {
+    if (clock != 0 && clock != 1) return -22;
+    return monad_js_now_ms() * 1000000;
+}
+
 rt_str monad_read_stdin_exact(int64_t n) {
     if (n <= 0) {
         char* empty = (char*)RT_PTR(monad_alloc_atomic(1));

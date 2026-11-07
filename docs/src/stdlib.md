@@ -113,7 +113,8 @@ is not for call sites and is meant to become an implementation detail.
 `is_dir`, `list_dir` (all `Path`-typed, `list_dir` returning `List Path`;
 `read_file`/`write_file` return `Result StreamError _`, a missing file being
 `not_found`), plus `IO.get_env` and
-`IO.current_time` (monotonic milliseconds — only differences are meaningful).
+`IO.current_time` (monotonic milliseconds — only differences are meaningful)
+and `IO.epoch_time_nano` (the wall clock, for timestamps).
 
 It also holds TCP's setup calls: `tcp_connect`, `tcp_listen`, `tcp_accept`
 and `tcp_local_port`, all blocking. Connections and listeners are `std.stream`

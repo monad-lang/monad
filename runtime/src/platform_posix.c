@@ -1265,6 +1265,16 @@ int64_t monad_current_time_nano(void) {
     return (int64_t)ts.tv_sec * 1000000000 + (int64_t)ts.tv_nsec;
 }
 
+/* `#[native "clock_now"]` (std/io.mo's `IO.epoch_time_nano`) --
+   clock_gettime: 0 is CLOCK_REALTIME, 1 is CLOCK_MONOTONIC, in ns;
+   -errno on failure, the sys floor's convention (sys/src/raw.mo). */
+int64_t monad_clock_now(int64_t clock) {
+    if (clock != 0 && clock != 1) return -(int64_t)EINVAL;
+    struct timespec ts;
+    if (clock_gettime(clock == 1 ? CLOCK_MONOTONIC : CLOCK_REALTIME, &ts) != 0) return -(int64_t)errno;
+    return (int64_t)ts.tv_sec * 1000000000 + (int64_t)ts.tv_nsec;
+}
+
 /* `#[native "process_id"]` (std/process.mo's `process_id : I64`) -- returns
    the OS process ID, used to build unique /tmp paths for parallel test
    isolation. Declared pure (no `IO`) on the Monad side, unlike
