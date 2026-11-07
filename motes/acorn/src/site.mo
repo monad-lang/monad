@@ -15,6 +15,7 @@ use markdown::html {Markdown.heading_texts, Markdown.to_html_nodes_with}
 use lib::config {SiteConfig}
 use lib::layout {Layout.render, PageSpec, BookNav}
 use lib::passes {Passes.chapter, Passes.dup_nodes}
+use lib::toc {TocEntry, Toc.of_nodes}
 use lib::links {PageLinks, Links.of_page, Links.broken}
 use lib::summary {NavEntry, NavChapter, Summary.parse, Summary.chapters}
 
@@ -30,9 +31,10 @@ def chapter_title (stem : String) (doc : Markdown.Document) : String :=
         List.empty => stem,
     }
 
-/// A chapter's title and its rendered body, passes applied.
+/// A chapter's title, its on-page TOC and its rendered body, passes applied.
 pub struct ChapterBody {
     title : String,
+    toc : List TocEntry,
     body : List Html.Node,
 }
 
@@ -40,12 +42,17 @@ pub struct ChapterBody {
 /// heading. Pure: the IO layer only reads and writes.
 pub def Site.chapter_body (stem : String) (src : String) : ChapterBody :=
     let doc : Shared Markdown.Document := Shared.of (Markdown.parse_with Markdown.site_options src) in
-    { title := chapter_title stem (Shared.get doc),
-        body := Passes.chapter (Markdown.to_html_nodes_with chapter_html_options (Shared.get doc)) }
+    with_toc (chapter_title stem (Shared.get doc))
+        (Passes.dup_nodes (Passes.chapter (Markdown.to_html_nodes_with chapter_html_options (Shared.get doc))))
+
+def with_toc (title : String) (nodes : Pair (List Html.Node) (List Html.Node)) : ChapterBody :=
+    match nodes {
+        Pair.pair for_toc body => { title := title, toc := Toc.of_nodes for_toc, body := body },
+    }
 
 def page_of (book : Option BookNav) (b : ChapterBody) : PageSpec :=
     match b {
-        { title, body } => { title := title, root := "../", body := body, book := book },
+        { title, toc, body } => { title := title, root := "../", body := body, toc := toc, book := book },
     }
 
 /// One chapter as a full page; `book` is its place in the book (none renders
@@ -177,11 +184,11 @@ def scan_rendered (book_dir : String) (r : Rendered) : Pair PageLinks Rendered :
 
 def scan_body (book_dir : String) (page : ChapterPage) (b : ChapterBody) : Pair PageLinks Rendered :=
     match b {
-        { title, body } =>
+        { title, toc, body } =>
             match Passes.dup_nodes body {
                 Pair.pair for_links for_page =>
                     let path : String := join book_dir (String.concat page.chapter.stem ".html") in
-                    let kept : ChapterBody := { title := title, body := for_page } in
+                    let kept : ChapterBody := { title := title, toc := toc, body := for_page } in
                     let r : Rendered := { page := page, body := kept } in
                     Pair.pair (Links.of_page path for_links) r,
             },

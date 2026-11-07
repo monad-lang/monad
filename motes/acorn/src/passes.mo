@@ -9,7 +9,8 @@
 ///   `<div class="admonition warning">` with a title paragraph;
 /// - a fenced block's info string (`monad,ignore`) splits into the language
 ///   (`<code class="language-monad">`) and its flags (`<pre class="ignore">`),
-///   and a `monad` block's text becomes highlighted spans.
+///   and a `monad` block's text becomes highlighted spans;
+/// - an `h2`–`h4` with an id gains a trailing `<a class="anchor">` self-link.
 use xml_html::html {Html.Node, Html.Attr}
 use std::list {List.intercalate}
 use fmt::highlight {Span, Highlight.css_class, Highlight.spans}
@@ -90,17 +91,22 @@ instance Copy Html.Node {
     def copy (n : Html.Node) : Pair Html.Node Html.Node := Pair.pair n n
 }
 
-/// Two lists sharing the same (immutable) nodes: one for a reader that
-/// consumes them (the link gate), one to keep.
-pub def Passes.dup_nodes (ns : List Html.Node) : Pair (List Html.Node) (List Html.Node) :=
-    match ns {
+/// Two lists sharing the same (immutable) elements: one for a reader that
+/// consumes them (the link gate, the TOC), one to keep.
+pub def Passes.dup_list [Copy A] (xs : List A) : Pair (List A) (List A) :=
+    match xs {
         List.empty => Pair.pair List.empty List.empty,
-        List.cons n rest => cons_both n (Passes.dup_nodes rest),
+        List.cons x rest => cons_both x (Passes.dup_list rest),
     }
 
-def cons_both (n : Html.Node) (p : Pair (List Html.Node) (List Html.Node)) : Pair (List Html.Node) (List Html.Node) :=
+/// `Passes.dup_list` at `Html.Node`, resolved here: the node `Copy`
+/// instance above is not found from other modules of the mote.
+pub def Passes.dup_nodes (ns : List Html.Node) : Pair (List Html.Node) (List Html.Node) :=
+    Passes.dup_list ns
+
+def cons_both [Copy A] (x : A) (p : Pair (List A) (List A)) : Pair (List A) (List A) :=
     match p {
-        Pair.pair a b => Pair.pair (List.cons n a) (List.cons n b),
+        Pair.pair a b => Pair.pair (List.cons x a) (List.cons x b),
     }
 
 /// A blockquote whose first paragraph opens with `[!KIND]` → an admonition;
@@ -181,7 +187,48 @@ pub def Passes.node (n : Html.Node) : Html.Node :=
 def element (tag : String) (attrs : List Html.Attr) (children : List Html.Node) : Html.Node :=
     if String.beq tag "blockquote" then blockquote children
     else if String.beq tag "pre" then pre_block attrs children
+    else if Passes.is_anchored_heading tag then heading tag attrs children
     else Html.Node.node_element tag attrs children
+
+/// The headings that get a self-link (and, at `h2`/`h3`, a TOC entry).
+pub def Passes.is_anchored_heading (tag : String) : Bool :=
+    String.beq tag "h2" || String.beq tag "h3" || String.beq tag "h4"
+
+/// The value of the `id` attribute, when there is one.
+pub def Passes.id_of (attrs : List Html.Attr) : Option String :=
+    match attrs {
+        List.empty => Option.none,
+        List.cons a rest => id_attr a rest,
+    }
+
+// Mutual recursion with `Passes.id_of` on the list's own tail.
+#[terminating]
+def id_attr (a : Html.Attr) (rest : List Html.Attr) : Option String :=
+    match a {
+        Html.Attr.attr name value => if String.beq name "id" then Option.some value else Passes.id_of rest,
+        Html.Attr.bool_attr _ => Passes.id_of rest,
+    }
+
+instance Copy Html.Attr {
+    def copy (a : Html.Attr) : Pair Html.Attr Html.Attr := Pair.pair a a
+}
+
+/// `<hN id="x">…</hN>` → `<hN id="x">… <a class="anchor" href="#x">#</a></hN>`.
+def heading (tag : String) (attrs : List Html.Attr) (children : List Html.Node) : Html.Node :=
+    match Passes.dup_list attrs {
+        Pair.pair for_id kept => heading_with tag (Passes.id_of for_id) kept children,
+    }
+
+def heading_with (tag : String) (id_opt : Option String) (attrs : List Html.Attr) (children : List Html.Node) : Html.Node :=
+    match id_opt {
+        Option.none => Html.Node.node_element tag attrs children,
+        Option.some id => Html.Node.node_element tag attrs (List.append children [anchor_link id]),
+    }
+
+def anchor_link (id : String) : Html.Node :=
+    Html.Node.node_element "a"
+        [Html.Attr.attr "class" "anchor", Html.Attr.attr "href" (String.concat "#" id), Html.Attr.attr "aria-hidden" "true"]
+        [Html.Node.node_text "#"]
 
 /// A fence's info string, split at its first comma: the language and the
 /// comma-separated flags after it.

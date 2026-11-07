@@ -33,3 +33,20 @@ def test_render_marks_current_and_links_prev : Bool :=
         && String.contains html "<li class=\"part-title\">Tutorial</li>"
         && String.contains html "class=\"prev\" href=\"../docs/intro.html\""
         && Bool.not (String.contains html "class=\"next\"")
+
+def toc_src : String :=
+    "# Types\n\n## First `code` part\n\nText.\n\n### Detail\n\n#### Too deep\n\n## Second\n"
+
+#[test]
+def test_book_page_has_on_page_toc : Bool :=
+    let html : String := Site.render_chapter cfg (Option.some nav) "types" toc_src in
+    String.contains html "<aside class=\"toc\"><p class=\"toc-title\">On this page</p><ol>"
+        && String.contains html "<li class=\"toc-h2\"><a href=\"#first-code-part\">First code part</a></li>"
+        && String.contains html "<li class=\"toc-h3\"><a href=\"#detail\">Detail</a></li>"
+        && String.contains html "<li class=\"toc-h2\"><a href=\"#second\">Second</a></li>"
+        && Bool.not (String.contains html "href=\"#too-deep\">Too deep")
+
+#[test]
+def test_single_section_page_has_no_toc : Bool :=
+    let html : String := Site.render_chapter cfg (Option.some nav) "types" "# Types\n\n## Only\n" in
+    Bool.not (String.contains html "class=\"toc\"")

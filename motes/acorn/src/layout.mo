@@ -8,10 +8,11 @@ use xml_html::html {Html.Node, Html.to_string}
 use oak::elements {
     Html.a, Html.attr, Html.charset, Html.class_, Html.div, Html.document_with, Html.footer,
     Html.header, Html.href, Html.lang, Html.li, Html.link, Html.main_, Html.meta, Html.nav,
-    Html.ol, Html.rel, Html.span, Html.text, Html.title,
+    Html.ol, Html.rel, Html.span, Html.text, Html.title, Html.aside, Html.p,
 }
 use lib::config {SiteConfig}
 use lib::summary {NavEntry, NavChapter}
+use lib::toc {TocEntry}
 
 /// A book page's place in the book: the sidebar entries, the current
 /// chapter's stem, and its neighbours in reading order.
@@ -33,6 +34,8 @@ pub struct PageSpec {
     root : String,
     /// The page body, already rendered.
     body : List Html.Node,
+    /// The on-page table of contents (`aside.toc`); empty renders none.
+    toc : List TocEntry := List.empty,
     /// The book navigation, for a book chapter; none for other pages.
     book : Option BookNav,
 }
@@ -96,31 +99,55 @@ def pager (cfg : SiteConfig) (root : String) (prev : Option NavChapter) (next : 
     Html.nav [Html.class_ ["pager"]]
         (List.append (pager_link cfg root "prev" "Previous" prev) (pager_link cfg root "next" "Next" next))
 
-/// The page body: content alone, or the sidebar beside content and pager.
-def body_nodes (cfg : SiteConfig) (root : String) (content : List (Oak.Node Unit)) (book : Option BookNav) : List (Oak.Node Unit) :=
-    match book {
-        Option.none => [Html.main_ [Html.class_ ["content"]] content],
-        Option.some nav => [book_body cfg root content nav],
+def toc_item (e : TocEntry) : Oak.Node Unit :=
+    match e {
+        { level, id, text } =>
+            Html.li [Html.class_ [String.concat "toc-h" (I64.to_string level)]]
+                [Html.a [Html.href (String.concat "#" id)] [Html.text text]],
     }
 
-def book_body (cfg : SiteConfig) (root : String) (content : List (Oak.Node Unit)) (nav : BookNav) : Oak.Node Unit :=
+/// The on-page TOC; nothing when the page has fewer than two sections.
+def toc_aside (toc : List TocEntry) : List (Oak.Node Unit) :=
+    match toc {
+        List.empty => List.empty,
+        List.cons first rest => toc_after first rest,
+    }
+
+def toc_after (first : TocEntry) (rest : List TocEntry) : List (Oak.Node Unit) :=
+    match rest {
+        List.empty => List.empty,
+        List.cons second more =>
+            [Html.aside [Html.class_ ["toc"]]
+                [Html.p [Html.class_ ["toc-title"]] [Html.text "On this page"],
+                    Html.ol List.empty (List.map toc_item (List.cons first (List.cons second more)))]],
+    }
+
+/// The page body: content alone, or the sidebar beside content, pager and
+/// the on-page TOC.
+def body_nodes (cfg : SiteConfig) (root : String) (content : List (Oak.Node Unit)) (toc : List TocEntry) (book : Option BookNav) : List (Oak.Node Unit) :=
+    match book {
+        Option.none => [Html.main_ [Html.class_ ["content"]] content],
+        Option.some nav => [book_body cfg root content toc nav],
+    }
+
+def book_body (cfg : SiteConfig) (root : String) (content : List (Oak.Node Unit)) (toc : List TocEntry) (nav : BookNav) : Oak.Node Unit :=
     match nav {
         { entries, current, prev, next } =>
             Html.div [Html.class_ ["book"]]
-                [sidebar cfg root entries current,
-                    Html.main_ [Html.class_ ["content"]]
-                        (List.append content [pager cfg root prev next])],
+                (List.cons (sidebar cfg root entries current)
+                    (List.cons (Html.main_ [Html.class_ ["content"]] (List.append content [pager cfg root prev next]))
+                        (toc_aside toc))),
     }
 
 /// The whole document for one page.
 pub def Layout.page (cfg : SiteConfig) (page : PageSpec) : Oak.Node Unit :=
     match page {
-        { title, root, body, book } =>
+        { title, root, body, toc, book } =>
             let content : List (Oak.Node Unit) := List.map Oak.of_html body in
             Html.document_with [Html.lang "en"] List.empty List.empty
                 (head_nodes cfg title root)
                 (List.cons (site_header cfg root)
-                    (List.append (body_nodes cfg root content book) [site_footer])),
+                    (List.append (body_nodes cfg root content toc book) [site_footer])),
     }
 
 /// The page serialized to HTML text.

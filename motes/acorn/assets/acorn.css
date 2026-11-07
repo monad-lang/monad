@@ -148,6 +148,49 @@ pre code { font-size: 13.5px; }
 .comment { color: var(--text-muted); font-style: italic; }
 .attr { color: var(--orange); }
 
+/* ---- Heading self-links ---- */
+.content h2, .content h3, .content h4 { scroll-margin-top: 64px; }
+.content .anchor {
+  margin-left: 0.35em;
+  color: var(--text-muted);
+  font-weight: 400;
+  opacity: 0;
+  transition: opacity 0.1s;
+}
+.content h2:hover .anchor, .content h3:hover .anchor, .content h4:hover .anchor,
+.content .anchor:focus { opacity: 1; text-decoration: none; }
+
+/* ---- On-page TOC (wide screens only) ---- */
+.toc { display: none; }
+@media (min-width: 1200px) {
+  .book { grid-template-columns: var(--sidebar) minmax(0, 1fr) 220px; }
+  .toc {
+    display: block;
+    position: sticky;
+    top: 50px;
+    align-self: start;
+    max-height: calc(100vh - 50px);
+    overflow-y: auto;
+    padding: 32px 20px 40px 8px;
+    font-size: 13px;
+    scrollbar-width: thin;
+    scrollbar-color: var(--border) transparent;
+  }
+  .toc-title {
+    margin: 0 0 8px;
+    color: var(--text-muted);
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+  }
+  .toc ol { list-style: none; margin: 0; padding: 0; }
+  .toc li { margin: 0; }
+  .toc a { display: block; padding: 3px 0; color: var(--text-muted); }
+  .toc a:hover { color: var(--text); text-decoration: none; }
+  .toc .toc-h3 { padding-left: 12px; }
+}
+
 /* ---- Admonitions ---- */
 .admonition {
   margin: 0 0 1em;

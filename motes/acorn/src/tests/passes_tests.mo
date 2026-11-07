@@ -68,3 +68,10 @@ def test_monad_fence_is_highlighted_and_flagged : Bool :=
 def test_other_fences_are_left_plain : Bool :=
     let html : String := render "```bash\nmonad run x.mo\n```\n" in
     String.contains html "<pre><code class=\"language-bash\">monad run x.mo"
+
+#[test]
+def test_section_headings_get_self_links : Bool :=
+    let html : String := render "# Title\n\n## Basic Syntax\n\n#### Deep\n" in
+    String.contains html "<h2 id=\"basic-syntax\">Basic Syntax<a class=\"anchor\" href=\"#basic-syntax\" aria-hidden=\"true\">#</a></h2>"
+        && String.contains html "<a class=\"anchor\" href=\"#deep\""
+        && Bool.not (String.contains html "href=\"#title\"")
