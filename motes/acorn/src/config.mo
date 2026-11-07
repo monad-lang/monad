@@ -15,11 +15,13 @@ pub struct SiteConfig {
     book_dir : String,
     /// The output root (`docs/public`).
     out_dir : String,
-    /// The site's own assets (`acorn.css`), copied into the output root.
-    assets_dir : String := "motes/acorn/assets",
-    /// A tree copied as-is into the output root: the landing page's
-    /// stylesheet and icons, the favicon, `/try` and `/install`.
-    static_dir : String := "docs/site/static",
+    /// A tree copied as-is into the output root (a stylesheet, icons,
+    /// images); `""` when the site has none.
+    assets_dir : String := "",
+    /// A second tree copied as-is into the output root, for content the
+    /// site owns rather than the generator (a landing page's assets, static
+    /// sub-sites); `""` when the site has none.
+    static_dir : String := "",
 }
 
 /// Every field is a `String`, so duplicating the record shares only pointers.
@@ -78,8 +80,8 @@ def of_value (root_value : Toml.Value) : Result String SiteConfig :=
         let title <- string_or "title" "Monad language" (Shared.get root);
         let base_url <- string_or "base_url" "/" (Shared.get root);
         let out_dir <- string_or "out" "docs/public" (Shared.get root);
-        let assets_dir <- string_or "assets" "motes/acorn/assets" (Shared.get root);
-        let static_dir <- string_or "static" "docs/site/static" (Shared.get root);
+        let assets_dir <- string_or "assets" "" (Shared.get root);
+        let static_dir <- string_or "static" "" (Shared.get root);
         book_of (Shared.of (table_or_empty "book" (Shared.get root))) title base_url out_dir assets_dir static_dir
     }
 

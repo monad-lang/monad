@@ -8,7 +8,7 @@ use markdown::types {Markdown.Block, Markdown.Document}
 use markdown::options {Markdown.site_options}
 use markdown::parse {Markdown.parse_with}
 use fmt::highlight {Span, Highlight.spans}
-use lib::passes {FenceInfo, Passes.fence_info}
+use acorn::passes {FenceInfo, Passes.fence_info}
 
 def round_trips (src : String) : Bool :=
     String.beq (String.concat_list (List.map (fn (s : Span) => s.text) (Highlight.spans src))) src

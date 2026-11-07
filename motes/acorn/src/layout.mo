@@ -3,6 +3,9 @@
 /// Pages are Oak views at `Msg = Unit`: a static page binds no handlers, and
 /// `Oak.to_html` drops none. Content that is already markup (a rendered
 /// markdown chapter) embeds with `Oak.of_html`.
+///
+/// The chrome around the content (head links, header, footer) is the site's,
+/// supplied as data in a `Shell`; `Shell.default` is acorn's own plain chrome.
 use oak::typed {Oak.Node, Oak.of_html, Oak.to_html}
 use xml_html::html {Html.Node, Html.to_string}
 use oak::elements {
@@ -11,8 +14,45 @@ use oak::elements {
     Html.ol, Html.rel, Html.span, Html.text, Html.title, Html.aside, Html.p,
 }
 use lib::config {SiteConfig}
+use lib::passes {Passes.prefix_root}
 use lib::summary {NavEntry, NavChapter}
 use lib::toc {TocEntry}
+
+/// The site chrome around a book page. Relative `href`/`src` values are
+/// prefixed with the page's `root` at render time (`Passes.prefix_root`), so
+/// one shell works at every depth; absolute URLs, site-absolute paths and
+/// fragments are left alone.
+pub struct Shell {
+    /// Emitted after `charset`, `viewport` and the page's `<title>`.
+    head : List Html.Node,
+    /// Replaces acorn's built-in header.
+    header : List Html.Node,
+    /// Replaces acorn's built-in footer.
+    footer : List Html.Node,
+}
+
+def default_head (cfg : SiteConfig) : List Html.Node :=
+    if String.is_empty cfg.assets_dir
+    then List.empty
+    else [Oak.to_html (Html.link [Html.rel "stylesheet", Html.href "acorn.css"])]
+
+/// The brand links to the book's own `index.html`, which acorn always
+/// writes. Nothing else: a site's navigation (its first chapter's name, its
+/// `/try`, its source host) belongs to the site, which supplies its own
+/// `Shell` through `Site.build_with`.
+def default_header (cfg : SiteConfig) : List Html.Node :=
+    [Oak.to_html
+        (Html.header [Html.class_ ["site-header"]]
+            [Html.a [Html.class_ ["brand"], Html.href (String.concat cfg.book_dir "/index.html")]
+                [Html.text cfg.title]])]
+
+def default_footer : List Html.Node :=
+    [Oak.to_html (Html.footer [Html.class_ ["site-footer"]] [Html.text "Built with acorn."])]
+
+/// acorn's own chrome: the stylesheet when the site has an `assets` tree, a
+/// brand and a `Docs` link, and a one-line footer.
+pub def Shell.default (cfg : SiteConfig) : Shell :=
+    { head := default_head cfg, header := default_header cfg, footer := default_footer }
 
 /// A book page's place in the book: the sidebar entries, the current
 /// chapter's stem, and its neighbours in reading order.
@@ -40,24 +80,25 @@ pub struct PageSpec {
     book : Option BookNav,
 }
 
-def head_nodes (cfg : SiteConfig) (title : String) (root : String) : List (Oak.Node Unit) :=
-    [Html.meta [Html.charset "utf-8"],
-        Html.meta [Html.attr "name" "viewport", Html.attr "content" "width=device-width, initial-scale=1"],
-        Html.title List.empty [Html.text (String.concat title (String.concat " - " cfg.title))],
-        Html.link [Html.rel "icon", Html.href (String.concat root "favicon.svg")],
-        Html.link [Html.rel "stylesheet", Html.href (String.concat root "acorn.css")]]
+/// One shell list, prefixed for this page's depth and ready to embed.
+def shell_nodes (root : String) (shell : Shared Shell) (pick : Shell -> List Html.Node) : List (Oak.Node Unit) :=
+    List.map Oak.of_html (Passes.prefix_root root (pick (Shared.get shell)))
 
-def site_header (cfg : SiteConfig) (root : String) : Oak.Node Unit :=
-    Html.header [Html.class_ ["site-header"]]
-        [Html.a [Html.class_ ["brand"], Html.href (String.concat root "index.html")]
-            [Html.text cfg.title],
-            Html.nav [Html.class_ ["site-nav"]]
-                [Html.a [Html.href (String.concat root (String.concat cfg.book_dir "/introduction.html"))]
-                    [Html.text "Docs"],
-                    Html.a [Html.href (String.concat root "try/")] [Html.text "Try"]]]
+def shell_head (s : Shell) : List Html.Node :=
+    match s { { head, .. } => head }
 
-def site_footer : Oak.Node Unit :=
-    Html.footer [Html.class_ ["site-footer"]] [Html.text "Built with acorn."]
+def shell_header (s : Shell) : List Html.Node :=
+    match s { { header, .. } => header }
+
+def shell_footer (s : Shell) : List Html.Node :=
+    match s { { footer, .. } => footer }
+
+def head_nodes (cfg : SiteConfig) (title : String) (root : String) (shell : Shared Shell) : List (Oak.Node Unit) :=
+    List.append
+        [Html.meta [Html.charset "utf-8"],
+            Html.meta [Html.attr "name" "viewport", Html.attr "content" "width=device-width, initial-scale=1"],
+            Html.title List.empty [Html.text (String.concat title (String.concat " - " cfg.title))]]
+        (shell_nodes root shell shell_head)
 
 /// The link to a chapter page, from a page `root` away from the output root.
 pub def Layout.chapter_href (cfg : SiteConfig) (root : String) (stem : String) : String :=
@@ -139,21 +180,31 @@ def book_body (cfg : SiteConfig) (root : String) (content : List (Oak.Node Unit)
                         (toc_aside toc))),
     }
 
-/// The whole document for one page.
-pub def Layout.page (cfg : SiteConfig) (page : PageSpec) : Oak.Node Unit :=
+/// The whole document for one page, in the site's chrome.
+pub def Layout.page_with (cfg : SiteConfig) (shell : Shared Shell) (page : PageSpec) : Oak.Node Unit :=
     match page {
         { title, root, body, toc, book } =>
             let content : List (Oak.Node Unit) := List.map Oak.of_html body in
             Html.document_with [Html.lang "en"] List.empty List.empty
-                (head_nodes cfg title root)
-                (List.cons (site_header cfg root)
-                    (List.append (body_nodes cfg root content toc book) [site_footer])),
+                (head_nodes cfg title root shell)
+                (List.append (shell_nodes root shell shell_header)
+                    (List.append (body_nodes cfg root content toc book) (shell_nodes root shell shell_footer))),
     }
 
+/// The whole document in acorn's own `Shell.default` chrome.
+pub def Layout.page (cfg : SiteConfig) (page : PageSpec) : Oak.Node Unit :=
+    Layout.page_with cfg (Shared.of (Shell.default cfg)) page
+
 /// The page as one `Html.Node` document (what the link gate reads).
+pub def Layout.document_with (cfg : SiteConfig) (shell : Shared Shell) (page : PageSpec) : Html.Node :=
+    Oak.to_html (Layout.page_with cfg shell page)
+
 pub def Layout.document (cfg : SiteConfig) (page : PageSpec) : Html.Node :=
     Oak.to_html (Layout.page cfg page)
 
 /// The page serialized to HTML text.
+pub def Layout.render_with (cfg : SiteConfig) (shell : Shared Shell) (page : PageSpec) : String :=
+    Html.to_string (Layout.document_with cfg shell page)
+
 pub def Layout.render (cfg : SiteConfig) (page : PageSpec) : String :=
     Html.to_string (Layout.document cfg page)

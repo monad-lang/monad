@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
-# Build the monad-lang.org site into docs/public with `acorn`, the Monad site
-# generator (motes/acorn). Replaces the mdBook + Zola pipeline.
+# Build the monad-lang.org site into docs/public.
+#
+# Two binaries: `motes/acorn` is the generic generator (book pages, link
+# gate), and `docs/site/monad_website` is this site (its chrome and landing
+# page), which builds on acorn as a library and does the actual build.
 #
 # Order matters: `acorn build` copies the static tree (docs/site/static) into
 # the output, so the /try wasm and the /install script must be staged there
@@ -49,6 +52,9 @@ else
 fi
 
 # `-o` is the output BINARY (its `.ll` and `.o` land beside it).
+# acorn is built too: `monad test motes/acorn` never compiles its `main.mo`,
+# so this is the only build of the generic CLI.
 mkdir -p "$root/target-docs"
 "$monad" build "$root/motes/acorn" -o "$root/target-docs/acorn"
-"$root/target-docs/acorn" build
+"$monad" build "$root/docs/site/monad_website" -o "$root/target-docs/monad_website"
+"$root/target-docs/monad_website" build

@@ -1,7 +1,7 @@
 /// The landing page document.
 use xml_html::html {Html.to_string}
 use oak::typed {Oak.to_html}
-use lib::config {SiteConfig}
+use acorn::config {SiteConfig}
 use lib::landing {Landing.page}
 
 def cfg : SiteConfig :=

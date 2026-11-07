@@ -1,7 +1,9 @@
 # Acorn: the monad-lang.org site generator, built on Oak.
 #
-# Replaces Zola (landing page) and mdBook (the book under /docs/), and will
-# render docs.rs-style API pages for a mote. The plan is
+# A generic static book/site generator (mdBook-compatible). monad-lang.org
+# itself is `docs/site/monad_website`, which uses this mote as a library and
+# supplies the site's chrome and landing page; `Site.build` is the
+# configuration-only builder. The plan is
 # plans/implementations/2026-11-05-acorn-docs-site.md.
 #
 # Pages are Oak views at `Msg = Unit` lowered with `Oak.to_html` -- a static

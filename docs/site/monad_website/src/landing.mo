@@ -13,7 +13,7 @@ use oak::elements {
     Html.span, Html.src, Html.style_attr, Html.text, Html.title, Html.width,
 }
 use fmt::highlight {Span, Highlight.css_class, Highlight.spans}
-use lib::config {SiteConfig}
+use acorn::config {SiteConfig}
 
 def description : String :=
     "A purely functional, dependently typed systems programming language with LLVM native compilation."

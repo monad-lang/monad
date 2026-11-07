@@ -1,0 +1,36 @@
+# monad-lang.org: the site's own code (landing page, chrome), built on acorn.
+#
+# Not a workspace member: it lives under docs/ with the rest of the site, and
+# the dependency direction is website -> acorn, never the reverse, so acorn
+# stays a generic generator. Everything is therefore a path dependency.
+#
+# `../..`-relative paths, like motes/try_ui's.
+[mote]
+name = "monad_website"
+version = "0.1.0"
+edition = "2026"
+
+[dependencies.init]
+path = "../../../init"
+
+[dependencies.std]
+path = "../../../std"
+
+[dependencies.oak]
+path = "../../../motes/oak"
+
+[dependencies.xml_html]
+path = "../../../motes/xml_html"
+
+[dependencies.fmt]
+path = "../../../motes/fmt"
+
+# The fence-corpus test parses docs/src with the book's own markdown options.
+[dependencies.markdown]
+path = "../../../motes/markdown"
+
+[dependencies.clap]
+path = "../../../motes/clap"
+
+[dependencies.acorn]
+path = "../../../motes/acorn"

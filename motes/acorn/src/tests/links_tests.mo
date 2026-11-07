@@ -1,7 +1,7 @@
 /// The broken-link gate: target resolution and the cross-page check.
 use std::list {List.intercalate}
 use xml_html::html {Html.Node, Html.Attr}
-use lib::links {PageLinks, Links.of_page, Links.target, Links.broken}
+use lib::links {PageLinks, Links.of_page, Links.with_aliases, Links.target, Links.broken}
 
 def target_text (page : String) (href : String) : String :=
     match Links.target page href {
@@ -35,3 +35,17 @@ def site : List PageLinks :=
 def test_broken_reports_missing_pages_and_anchors : Bool :=
     String.beq (List.intercalate "|" (Links.broken site))
         "docs/a.html: ./b.html#nowhere (no such anchor)|docs/a.html: ./c.html (no such page)"
+
+/// A page written to several paths (the book `index.html`, the 404) answers
+/// at every one of them.
+#[test]
+def test_aliases_resolve_as_pages : Bool :=
+    let chapter : PageLinks := Links.with_aliases [join_path "docs" "index.html"] (Links.of_page (join_path "docs" "b.html") [heading "there"]) in
+    let pages : List PageLinks := [Links.of_page "docs/a.html" [link "./index.html#there"], chapter] in
+    match Links.broken pages {
+        List.empty => true,
+        _ => false,
+    }
+
+def join_path (a : String) (b : String) : String :=
+    String.concat a (String.concat "/" b)

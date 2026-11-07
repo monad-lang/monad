@@ -1,8 +1,10 @@
 /// Site assembly: read the sources, render each page, gate, write.
 ///
-/// The landing page (`landing.mo`) renders to `<out>/index.html`; the
-/// `assets` (acorn's own stylesheet) and `static` (landing CSS, icons,
-/// favicon, `/try`, `/install`) trees are copied into the output root.
+/// The site's chrome is its caller's (`Site.build_with` takes a `Shell`), and
+/// so are any pages that are not book pages (`extra`, e.g. a landing page at
+/// `index.html`); `Site.build` is the plain configuration-only builder. The
+/// `assets` (acorn's own stylesheet) and `static` trees are copied into the
+/// output root when the configuration names them.
 ///
 /// The book's chapters come from `SUMMARY.md`, in its order, and render to
 /// `<out>/<book_dir>/<chapter>.html` (mdBook's URLs), each with the sidebar
@@ -12,21 +14,22 @@
 /// beside the pages. mdBook's `toc.html` is its no-JavaScript sidebar
 /// fallback, which a static sidebar does not need.
 use std::io {IO.read_file, IO.write_file, IO.list_dir, IO.is_dir}
-use oak::typed {Oak.to_html}
 use std::path {Path, Path.of, Path.to_string, Path.file_name}
 use std::process {exec_cmd}
-use std::list {List.intercalate, List.filter}
+use std::list {List.intercalate, List.filter, List.any}
 use xml_html::html {Html.Node, Html.Attr, Html.to_string}
 use markdown::types {Markdown.Document}
 use markdown::options {Markdown.HtmlOptions, Markdown.default_html_options, Markdown.site_options}
 use markdown::parse {Markdown.parse_with}
 use markdown::html {Markdown.heading_texts, Markdown.to_html_nodes_with}
 use lib::config {SiteConfig}
-use lib::layout {Layout.render, Layout.document, Layout.chapter_href, PageSpec, BookNav}
-use lib::landing {Landing.page}
+use lib::layout {
+    Layout.render, Layout.render_with, Layout.document, Layout.document_with,
+    Layout.chapter_href, PageSpec, BookNav, Shell,
+}
 use lib::passes {Passes.chapter, Passes.dup_nodes, Passes.dup_node, Passes.dup_list}
 use lib::toc {TocEntry, Toc.of_nodes}
-use lib::links {PageLinks, Links.of_page, Links.broken}
+use lib::links {PageLinks, Links.of_page, Links.with_aliases, Links.broken}
 use lib::summary {NavEntry, NavChapter, Summary.parse, Summary.chapters}
 
 /// The rendering options for book chapters: heading ids on, so the TOC and
@@ -69,6 +72,10 @@ def page_of (book : Option BookNav) (b : ChapterBody) : PageSpec :=
 /// it without a sidebar).
 pub def Site.render_chapter (cfg : SiteConfig) (book : Option BookNav) (stem : String) (src : String) : String :=
     Layout.render cfg (page_of book (Site.chapter_body stem src))
+
+/// One chapter in the caller's chrome (see `Layout.page_with`).
+pub def Site.render_chapter_with (cfg : SiteConfig) (shell : Shared Shell) (book : Option BookNav) (stem : String) (src : String) : String :=
+    Layout.render_with cfg shell (page_of book (Site.chapter_body stem src))
 
 /// One chapter to build, with its neighbours in reading order.
 pub struct ChapterPage {
@@ -218,21 +225,30 @@ def print_page (title : String) (body : List Html.Node) : Rendered :=
 
 /// A finished page: its whole document and the paths under the output root
 /// it is written to. The link gate reads it at the first path.
-struct Built {
+pub struct Built {
     paths : List String,
     doc : Html.Node,
 }
 
+/// A page written to one path.
+pub def Built.page (path : String) (doc : Html.Node) : Built :=
+    { paths := [path], doc := doc }
+
+/// A page written to several paths from one document (`index.html` repeats
+/// the first chapter; the 404 page is served from the root and the book).
+pub def Built.pages (paths : List String) (doc : Html.Node) : Built :=
+    { paths := paths, doc := doc }
+
 /// A chapter in the book shell; the chapter named `index_stem` is written
 /// again as the book's `index.html`.
-def built_chapter (cfg : SiteConfig) (entries : Shared (List NavEntry)) (index_stem : String) (r : Rendered) : Built :=
+def built_chapter (cfg : SiteConfig) (shell : Shared Shell) (entries : Shared (List NavEntry)) (index_stem : String) (r : Rendered) : Built :=
     match r {
         { page, body } =>
             let stem : String := page.chapter.stem in
             let nav : BookNav := { entries := entries, current := stem, prev := page.prev, next := page.next } in
             let own : String := join cfg.book_dir (String.concat stem ".html") in
             let paths : List String := if String.beq stem index_stem then [own, join cfg.book_dir "index.html"] else [own] in
-            { paths := paths, doc := Layout.document cfg (page_of (Option.some nav) body) },
+            { paths := paths, doc := Layout.document_with cfg shell (page_of (Option.some nav) body) },
     }
 
 /// The site root as an absolute URL prefix, for a page served at any depth.
@@ -257,20 +273,12 @@ def not_found_page (cfg : SiteConfig) (entries : Shared (List NavEntry)) (index_
 /// Written at the book's `404.html` (mdBook's location, for parity) and at
 /// the output root: GitHub Pages only serves a custom `/404.html` from the
 /// root, and the page's links are absolute so one document fits both.
-def built_not_found (cfg : SiteConfig) (entries : Shared (List NavEntry)) (index_stem : String) : Built :=
+def built_not_found (cfg : SiteConfig) (shell : Shared Shell) (entries : Shared (List NavEntry)) (index_stem : String) : Built :=
     { paths := [join cfg.book_dir "404.html", "404.html"],
-        doc := Layout.document cfg (not_found_page cfg entries index_stem) }
+        doc := Layout.document_with cfg shell (not_found_page cfg entries index_stem) }
 
-def built_landing (cfg : SiteConfig) : Built :=
-    { paths := ["index.html"], doc := Oak.to_html (Landing.page cfg) }
-
-def first_path (paths : List String) : String :=
-    match paths {
-        List.empty => "",
-        List.cons p _ => p,
-    }
-
-/// The page's links for the gate, and the page itself, still whole.
+/// The page's links for the gate (at its first path, with the rest as
+/// aliases), and the page itself, still whole.
 def scan_built (b : Built) : Pair PageLinks Built :=
     match b {
         { paths, doc } =>
@@ -279,9 +287,15 @@ def scan_built (b : Built) : Pair PageLinks Built :=
                     match Passes.dup_node doc {
                         Pair.pair for_links kept_doc =>
                             let kept : Built := { paths := kept_paths, doc := kept_doc } in
-                            Pair.pair (Links.of_page (first_path for_gate) [for_links]) kept,
+                            Pair.pair (links_for_paths for_gate [for_links]) kept,
                     },
             },
+    }
+
+def links_for_paths (paths : List String) (nodes : List Html.Node) : PageLinks :=
+    match paths {
+        List.empty => Links.of_page "" nodes,
+        List.cons first rest => Links.with_aliases rest (Links.of_page first nodes),
     }
 
 /// Write one page to each of its paths; returns the number of files.
@@ -324,31 +338,56 @@ def write_then (out : String) (p : Built) (rest : List Built) (done : I64) : IO 
     }
 }
 
-/// Build the site; returns the number of files written (a copied directory
-/// counts once).
-pub def Site.build (cfg : SiteConfig) : IO (Result String I64) := do {
+/// What the caller supplies beyond the configuration: the site chrome and
+/// any pages that are not part of the book. Both are shared because every
+/// page of the build reads them.
+pub struct SiteSpec {
+    shell : Shared Shell,
+    extra : Shared (List Built),
+}
+
+/// Every field is shared, so the spec is cheap to thread through the build.
+pub instance Copy SiteSpec {
+    def copy (s : SiteSpec) : Pair SiteSpec SiteSpec := Pair.pair s s
+}
+
+/// Build the site in acorn's own chrome, without extra pages; returns the
+/// number of files written (a copied directory counts once).
+pub def Site.build (cfg : SiteConfig) : IO (Result String I64) :=
+    Site.build_with cfg (Shared.of (Shell.default cfg)) List.empty
+
+/// Build the site in the caller's chrome, appending its extra pages.
+pub def Site.build_with (cfg : SiteConfig) (shell : Shared Shell) (extra : List Built) : IO (Result String I64) := do {
+    let spec : SiteSpec := { shell := shell, extra := Shared.of extra };
     let made <- mkdir_p cfg.out_dir;
     match made {
         Result.err e => return (Result.err e),
-        Result.ok _ => trees_then_pages cfg,
+        Result.ok _ => trees_then_pages cfg spec,
     }
 }
 
-def trees_then_pages (cfg : SiteConfig) : IO (Result String I64) := do {
-    let assets <- copy_entries cfg.assets_dir cfg.out_dir false;
+def trees_then_pages (cfg : SiteConfig) (spec : SiteSpec) : IO (Result String I64) := do {
+    let assets <- copy_if cfg.assets_dir cfg.out_dir false;
     match assets {
         Result.err e => return (Result.err e),
-        Result.ok n => count_then n (static_then_pages cfg),
+        Result.ok n => count_then n (static_then_pages cfg spec),
     }
 }
 
-def static_then_pages (cfg : SiteConfig) : IO (Result String I64) := do {
-    let copied <- copy_entries cfg.static_dir cfg.out_dir false;
+def static_then_pages (cfg : SiteConfig) (spec : SiteSpec) : IO (Result String I64) := do {
+    let copied <- copy_if cfg.static_dir cfg.out_dir false;
     match copied {
         Result.err e => return (Result.err e),
-        Result.ok n => count_then n (build_book cfg { src := cfg.book_src, out := join cfg.out_dir cfg.book_dir }),
+        Result.ok n => count_then n (build_book cfg spec { src := cfg.book_src, out := join cfg.out_dir cfg.book_dir }),
     }
 }
+
+/// Copy a tree when the configuration names one; `""` means the site has no
+/// such tree.
+def copy_if (dir : String) (out : String) (skip_md : Bool) : IO (Result String I64) :=
+    if String.is_empty dir
+    then return (Result.ok 0)
+    else copy_entries dir out skip_md
 
 /// `n` plus what `rest` reports.
 def count_then (n : I64) (rest : IO (Result String I64)) : IO (Result String I64) := do {
@@ -409,55 +448,99 @@ def cp_then (f : Path) (rest : List Path) (out : String) (done : I64) : IO (Resu
 
 /// The book: its source's non-markdown entries (`images/`) copied beside
 /// the pages, as mdBook does, then every page.
-def build_book (cfg : SiteConfig) (dirs : BookDirs) : IO (Result String I64) := do {
+def build_book (cfg : SiteConfig) (spec : SiteSpec) (dirs : BookDirs) : IO (Result String I64) := do {
     let made <- mkdir_p dirs.out;
     match made {
         Result.err e => return (Result.err e),
-        Result.ok _ => book_files_then_pages cfg dirs,
+        Result.ok _ => book_files_then_pages cfg spec dirs,
     }
 }
 
-def book_files_then_pages (cfg : SiteConfig) (dirs : BookDirs) : IO (Result String I64) := do {
+def book_files_then_pages (cfg : SiteConfig) (spec : SiteSpec) (dirs : BookDirs) : IO (Result String I64) := do {
     let copied <- copy_entries dirs.src dirs.out true;
     match copied {
         Result.err e => return (Result.err e),
-        Result.ok n => count_then n (read_summary cfg dirs),
+        Result.ok n => count_then n (read_summary cfg spec dirs),
     }
 }
 
-def read_summary (cfg : SiteConfig) (dirs : BookDirs) : IO (Result String I64) := do {
+def read_summary (cfg : SiteConfig) (spec : SiteSpec) (dirs : BookDirs) : IO (Result String I64) := do {
     let read <- read_text (join dirs.src "SUMMARY.md");
     match read {
         Result.err e => return (Result.err e),
-        Result.ok src => build_from_summary cfg dirs src,
+        Result.ok src => build_from_summary cfg spec dirs src,
     }
 }
 
-def build_from_summary (cfg : SiteConfig) (dirs : BookDirs) (summary : String) : IO (Result String I64) := do {
+def build_from_summary (cfg : SiteConfig) (spec : SiteSpec) (dirs : BookDirs) (summary : String) : IO (Result String I64) := do {
     let entries : Shared (List NavEntry) := Shared.of (Summary.parse summary);
     let loaded <- load_all dirs (Site.with_neighbours Option.none (Summary.chapters (Shared.get entries))) List.empty;
     match loaded {
         Result.err e => return (Result.err e),
-        Result.ok ls => gate_then_write cfg.out_dir (site_pages cfg entries ls),
+        Result.ok ls => gate_then_write cfg.out_dir (site_pages cfg spec entries ls),
     }
 }
 
-/// Every page of the site: the chapters, `print.html`, `404.html` and the
-/// landing page.
-def site_pages (cfg : SiteConfig) (entries : Shared (List NavEntry)) (ls : List Loaded) : List Built :=
+/// Every page of the book: the chapters, `print.html` and `404.html`, then
+/// the caller's extra pages.
+def site_pages (cfg : SiteConfig) (spec : SiteSpec) (entries : Shared (List NavEntry)) (ls : List Loaded) : List Built :=
     let index_stem : String := first_stem (Summary.chapters (Shared.get entries)) in
-    List.append (List.map (built_chapter cfg entries index_stem) (with_print cfg.title (List.map render_loaded ls)))
-        [built_not_found cfg entries index_stem, built_landing cfg]
+    let chapters : List Built :=
+        List.map (built_chapter cfg spec.shell entries index_stem) (with_print cfg.title (List.map render_loaded ls)) in
+    List.append chapters
+        (List.cons (built_not_found cfg spec.shell entries index_stem) (Shared.get spec.extra))
 
 /// Write the pages only when no internal link is broken. The gate reads whole
 /// documents: the shell's header, sidebar and pager links as well as the body.
+/// A path claimed twice is a build error, not a silent overwrite.
 def gate_then_write (out : String) (pages : List Built) : IO (Result String I64) :=
-    match unzip (List.map scan_built pages) {
-        Pair.pair links built =>
-            match Links.broken links {
-                List.empty => write_all out built 0,
-                List.cons first more => return (Result.err (broken_report (List.cons first more))),
+    let all : Shared (List Built) := Shared.of pages in
+    match first_duplicate_path (Shared.get all) List.empty {
+        Option.some p => return (Result.err (String.concat "duplicate output path: " p)),
+        Option.none =>
+            match unzip (List.map scan_built (Shared.get all)) {
+                Pair.pair links built =>
+                    match Links.broken links {
+                        List.empty => write_all out built 0,
+                        List.cons first more => return (Result.err (broken_report (List.cons first more))),
+                    },
             },
+    }
+
+/// The first output path two pages claim, if any.
+#[terminating]
+def first_duplicate_path (pages : List Built) (seen : List String) : Option String :=
+    match pages {
+        List.empty => Option.none,
+        List.cons b rest => duplicate_for_page b rest seen,
+    }
+
+// Part of the `first_duplicate_path` cycle; `rest` shrinks on every turn.
+#[terminating]
+def duplicate_for_page (b : Built) (rest : List Built) (seen : List String) : Option String :=
+    match b {
+        { paths, .. } =>
+            match Passes.dup_list paths {
+                Pair.pair for_check for_seen =>
+                    let shared : Shared (List String) := Shared.of seen in
+                    match first_duplicate_in for_check (Shared.get shared) {
+                        Option.some p => Option.some p,
+                        Option.none => first_duplicate_path rest (List.append for_seen (Shared.get shared)),
+                    },
+            },
+    }
+
+/// A duplicate within one page's own paths, or against the paths already
+/// seen.
+def first_duplicate_in (paths : List String) (seen : List String) : Option String :=
+    match paths {
+        List.empty => Option.none,
+        List.cons p rest =>
+            let shared : Shared (List String) := Shared.of seen in
+            let hit : Bool := List.any (fn (q : String) => String.beq q p) (Shared.get shared) in
+            if hit
+            then Option.some p
+            else first_duplicate_in rest (List.cons p (Shared.get shared)),
     }
 
 /// The first chapter's stem, the one the book's `index.html` repeats.

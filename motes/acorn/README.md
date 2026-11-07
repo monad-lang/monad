@@ -1,9 +1,10 @@
 # acorn
 
-The monad-lang.org site generator, built on Oak. It is replacing Zola (the
-landing page) and mdBook (the book under `/docs/`), and will render
-docs.rs-style API pages for a mote with runnable examples. Plan:
-`plans/implementations/2026-11-05-acorn-docs-site.md`.
+A static book/site generator built on Oak, mdBook-compatible: chapters come
+from `SUMMARY.md` and render to `<out>/<book dir>/<chapter>.html`, with a
+sidebar, prev/next pager, on-page TOC, heading self-links, GFM admonitions, a
+`monad` syntax highlighter (`motes/fmt`), and a broken-internal-link gate that
+fails the build before writing anything.
 
 ```bash
 monad build motes/acorn -o target/acorn
@@ -12,6 +13,8 @@ target/acorn build --out /tmp/site  # override the output root
 monad test motes/acorn
 ```
 
-Phase 0 renders every chapter in `docs/src` to `<out>/docs/<chapter>.html`
-(mdBook's URLs) through the Oak page shell in `src/layout.mo`. SUMMARY
-navigation, highlighting, the landing page and the cut-over come next.
+`acorn` is the **generic** builder: it renders the book in acorn's own plain
+chrome (`Shell.default`) and has no landing page. A site supplies its own
+chrome and extra pages through `Site.build_with`; monad-lang.org's live in
+`docs/site/monad_website`, which is the binary `scripts/build-docs.sh` runs.
+Plan: `plans/implementations/2026-11-05-acorn-docs-site.md`.

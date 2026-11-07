@@ -10,7 +10,11 @@ use std::list {List.any, List.filter_map, List.intercalate}
 
 /// The ids a page defines and the hrefs it links to.
 pub struct PageLinks {
+    /// The path the page is reported at.
     path : String,
+    /// The other paths the same document is written to (`index.html` repeats
+    /// the first chapter; the 404 page is served from two).
+    aliases : List String,
     ids : List String,
     hrefs : List String,
 }
@@ -61,8 +65,12 @@ def found_node (n : Html.Node) (acc : Found) : Found :=
 /// The links of a page at `path` whose markup is `nodes`.
 pub def Links.of_page (path : String) (nodes : List Html.Node) : PageLinks :=
     match found_nodes nodes { ids := List.empty, hrefs := List.empty } {
-        { ids, hrefs } => { path := path, ids := ids, hrefs := hrefs },
+        { ids, hrefs } => { path := path, aliases := List.empty, ids := ids, hrefs := hrefs },
     }
+
+/// The same page, reachable at `aliases` too.
+pub def Links.with_aliases (aliases : List String) (p : PageLinks) : PageLinks :=
+    { p with aliases := aliases }
 
 /// The index of the last `/` in `s`, or -1.
 def last_slash (s : String) : I64 :=
@@ -115,7 +123,10 @@ def split_target (page : String) (href : String) (hash : I64) : Option (Pair Str
 def has_page (pages : List PageLinks) (path : String) : Option PageLinks :=
     match pages {
         List.empty => Option.none,
-        List.cons p rest => if String.beq p.path path then Option.some p else has_page rest path,
+        List.cons p rest =>
+            if String.beq p.path path || List.any (fn (a : String) => String.beq a path) p.aliases
+            then Option.some p
+            else has_page rest path,
     }
 
 def has_id (page : PageLinks) (frag : String) : Bool :=

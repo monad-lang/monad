@@ -341,3 +341,37 @@ def span_node (s : Span) : Html.Node :=
 /// Apply every pass to a rendered chapter body.
 pub def Passes.chapter (nodes : List Html.Node) : List Html.Node :=
     List.map Passes.node nodes
+
+/// A link the browser resolves relative to the page: not empty, not a
+/// fragment, not site-absolute, not an absolute URL or `mailto:`.
+pub def Passes.is_relative_url (s : String) : Bool :=
+    Bool.not (String.is_empty s)
+        && Bool.not (String.starts_with "/" s)
+        && Bool.not (String.starts_with "#" s)
+        && Bool.not (String.starts_with "mailto:" s)
+        && Bool.not (String.contains s "://")
+
+/// Prefix `root` onto every relative `href`/`src` in `nodes`, so one piece of
+/// chrome works on a page at any depth. Shell markup supplies final `.html`
+/// URLs (unlike chapter prose, which `Passes.rewrite_href` converts).
+pub def Passes.prefix_root (root : String) (nodes : List Html.Node) : List Html.Node :=
+    if String.is_empty root then nodes else List.map (Passes.prefix_node root) nodes
+
+#[terminating]
+pub def Passes.prefix_node (root : String) (n : Html.Node) : Html.Node :=
+    match n {
+        Html.Node.node_element tag attrs children =>
+            Html.Node.node_element tag (List.map (prefix_attr root) attrs) (List.map (Passes.prefix_node root) children),
+        Html.Node.node_void tag attrs => Html.Node.node_void tag (List.map (prefix_attr root) attrs),
+        Html.Node.node_fragment children => Html.Node.node_fragment (List.map (Passes.prefix_node root) children),
+        _ => n,
+    }
+
+def prefix_attr (root : String) (a : Html.Attr) : Html.Attr :=
+    match a {
+        Html.Attr.attr name value =>
+            if (String.beq name "href" || String.beq name "src") && Passes.is_relative_url value
+            then Html.Attr.attr name (String.concat root value)
+            else a,
+        Html.Attr.bool_attr _ => a,
+    }

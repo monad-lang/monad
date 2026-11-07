@@ -5,6 +5,8 @@ base_url = "https://monad-lang.org"
 out = "docs/public"
 # Copied as-is into the output root (landing.css, icons, favicon, /try, /install).
 static = "docs/site/static"
+# acorn's book stylesheet, copied into the output root.
+assets = "motes/acorn/assets"
 
 [book]
 src = "docs/src"
