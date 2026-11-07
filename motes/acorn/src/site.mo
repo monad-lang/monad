@@ -1,4 +1,8 @@
-/// Site assembly: read the sources, render each page, write the output.
+/// Site assembly: read the sources, render each page, gate, write.
+///
+/// The landing page (`landing.mo`) renders to `<out>/index.html`; the
+/// `assets` (acorn's own stylesheet) and `static` (landing CSS, icons,
+/// favicon, `/try`, `/install`) trees are copied into the output root.
 ///
 /// The book's chapters come from `SUMMARY.md`, in its order, and render to
 /// `<out>/<book_dir>/<chapter>.html` (mdBook's URLs), each with the sidebar
@@ -8,17 +12,19 @@
 /// beside the pages. mdBook's `toc.html` is its no-JavaScript sidebar
 /// fallback, which a static sidebar does not need.
 use std::io {IO.read_file, IO.write_file, IO.list_dir, IO.is_dir}
+use oak::typed {Oak.to_html}
 use std::path {Path, Path.of, Path.to_string, Path.file_name}
 use std::process {exec_cmd}
 use std::list {List.intercalate, List.filter}
-use xml_html::html {Html.Node, Html.Attr}
+use xml_html::html {Html.Node, Html.Attr, Html.to_string}
 use markdown::types {Markdown.Document}
 use markdown::options {Markdown.HtmlOptions, Markdown.default_html_options, Markdown.site_options}
 use markdown::parse {Markdown.parse_with}
 use markdown::html {Markdown.heading_texts, Markdown.to_html_nodes_with}
 use lib::config {SiteConfig}
-use lib::layout {Layout.render, Layout.chapter_href, PageSpec, BookNav}
-use lib::passes {Passes.chapter, Passes.dup_nodes, Passes.dup_list}
+use lib::layout {Layout.render, Layout.document, Layout.chapter_href, PageSpec, BookNav}
+use lib::landing {Landing.page}
+use lib::passes {Passes.chapter, Passes.dup_nodes, Passes.dup_node, Passes.dup_list}
 use lib::toc {TocEntry, Toc.of_nodes}
 use lib::links {PageLinks, Links.of_page, Links.broken}
 use lib::summary {NavEntry, NavChapter, Summary.parse, Summary.chapters}
@@ -180,77 +186,6 @@ def render_loaded (l : Loaded) : Rendered :=
         { page, src } => { page := page, body := Site.chapter_body page.chapter.stem src },
     }
 
-/// The page's links for the gate, and the page itself, still whole.
-def scan_rendered (book_dir : String) (r : Rendered) : Pair PageLinks Rendered :=
-    match r {
-        { page, body } => scan_body book_dir page body,
-    }
-
-def scan_body (book_dir : String) (page : ChapterPage) (b : ChapterBody) : Pair PageLinks Rendered :=
-    match b {
-        { title, toc, body } =>
-            match Passes.dup_nodes body {
-                Pair.pair for_links for_page =>
-                    let path : String := join book_dir (String.concat page.chapter.stem ".html") in
-                    let kept : ChapterBody := { title := title, toc := toc, body := for_page } in
-                    let r : Rendered := { page := page, body := kept } in
-                    Pair.pair (Links.of_page path for_links) r,
-            },
-    }
-
-/// Write one page; the chapter named `index_stem` is written again as
-/// `index.html`. Returns the number of files written.
-def write_rendered (cfg : SiteConfig) (dirs : BookDirs) (entries : Shared (List NavEntry)) (index_stem : String) (r : Rendered) : IO (Result String I64) :=
-    match r {
-        { page, body } =>
-            let nav : BookNav :=
-                { entries := entries, current := page.chapter.stem, prev := page.prev, next := page.next } in
-            let html : String := Layout.render cfg (page_of (Option.some nav) body) in
-            write_twice (join dirs.out (String.concat page.chapter.stem ".html"))
-                (if String.beq page.chapter.stem index_stem then Option.some (join dirs.out "index.html") else Option.none)
-                html,
-    }
-
-def write_twice (target : String) (also : Option String) (html : String) : IO (Result String I64) := do {
-    let wrote <- write_page target html;
-    match wrote {
-        Result.err e => return (Result.err e),
-        Result.ok _ => write_also also html,
-    }
-}
-
-def write_also (also : Option String) (html : String) : IO (Result String I64) :=
-    match also {
-        Option.none => return (Result.ok 1),
-        Option.some target => count_write 2 (write_page target html),
-    }
-
-def count_write (n : I64) (w : IO (Result String Unit)) : IO (Result String I64) := do {
-    let wrote <- w;
-    match wrote {
-        Result.err e => return (Result.err e),
-        Result.ok _ => return (Result.ok n),
-    }
-}
-
-/// Write every page, stopping at the first error; returns the count.
-def write_all (cfg : SiteConfig) (dirs : BookDirs) (entries : Shared (List NavEntry)) (index_stem : String) (pages : List Rendered) (done : I64) : IO (Result String I64) :=
-    match pages {
-        List.empty => return (Result.ok done),
-        List.cons p rest => write_then cfg dirs entries index_stem p rest done,
-    }
-
-// Mutual recursion with `write_all` on a strictly shorter `rest`; the checker
-// does not see through the IO bind between them.
-#[terminating]
-def write_then (cfg : SiteConfig) (dirs : BookDirs) (entries : Shared (List NavEntry)) (index_stem : String) (p : Rendered) (rest : List Rendered) (done : I64) : IO (Result String I64) := do {
-    let one <- write_rendered cfg dirs entries index_stem p;
-    match one {
-        Result.err e => return (Result.err e),
-        Result.ok n => write_all cfg dirs entries index_stem rest (done + n),
-    }
-}
-
 instance Copy Rendered {
     def copy (r : Rendered) : Pair Rendered Rendered := Pair.pair r r
 }
@@ -281,6 +216,25 @@ def print_page (title : String) (body : List Html.Node) : Rendered :=
     let b : ChapterBody := { title := title, toc := List.empty, body := body } in
     { page := page, body := b }
 
+/// A finished page: its whole document and the paths under the output root
+/// it is written to. The link gate reads it at the first path.
+struct Built {
+    paths : List String,
+    doc : Html.Node,
+}
+
+/// A chapter in the book shell; the chapter named `index_stem` is written
+/// again as the book's `index.html`.
+def built_chapter (cfg : SiteConfig) (entries : Shared (List NavEntry)) (index_stem : String) (r : Rendered) : Built :=
+    match r {
+        { page, body } =>
+            let stem : String := page.chapter.stem in
+            let nav : BookNav := { entries := entries, current := stem, prev := page.prev, next := page.next } in
+            let own : String := join cfg.book_dir (String.concat stem ".html") in
+            let paths : List String := if String.beq stem index_stem then [own, join cfg.book_dir "index.html"] else [own] in
+            { paths := paths, doc := Layout.document cfg (page_of (Option.some nav) body) },
+    }
+
 /// The site root as an absolute URL prefix, for a page served at any depth.
 def absolute_root (base_url : String) : String :=
     if String.ends_with base_url "/" then base_url else String.concat base_url "/"
@@ -300,48 +254,121 @@ def not_found_page (cfg : SiteConfig) (entries : Shared (List NavEntry)) (index_
     { title := "Page not found", root := root,
         body := not_found_body (Layout.chapter_href cfg root index_stem), book := Option.some nav }
 
-def write_not_found (cfg : SiteConfig) (dirs : BookDirs) (entries : Shared (List NavEntry)) (index_stem : String) (written : I64) : IO (Result String I64) :=
-    count_write (written + 1)
-        (write_page (join dirs.out "404.html") (Layout.render cfg (not_found_page cfg entries index_stem)))
+def built_not_found (cfg : SiteConfig) (entries : Shared (List NavEntry)) (index_stem : String) : Built :=
+    { paths := [join cfg.book_dir "404.html"], doc := Layout.document cfg (not_found_page cfg entries index_stem) }
 
-/// Build the site; returns the number of files written.
+def built_landing (cfg : SiteConfig) : Built :=
+    { paths := ["index.html"], doc := Oak.to_html (Landing.page cfg) }
+
+def first_path (paths : List String) : String :=
+    match paths {
+        List.empty => "",
+        List.cons p _ => p,
+    }
+
+/// The page's links for the gate, and the page itself, still whole.
+def scan_built (b : Built) : Pair PageLinks Built :=
+    match b {
+        { paths, doc } =>
+            match Passes.dup_list paths {
+                Pair.pair for_gate kept_paths =>
+                    match Passes.dup_node doc {
+                        Pair.pair for_links kept_doc =>
+                            let kept : Built := { paths := kept_paths, doc := kept_doc } in
+                            Pair.pair (Links.of_page (first_path for_gate) [for_links]) kept,
+                    },
+            },
+    }
+
+/// Write one page to each of its paths; returns the number of files.
+def write_built (out : String) (b : Built) : IO (Result String I64) :=
+    match b {
+        { paths, doc } => write_paths out paths (Html.to_string doc) 0,
+    }
+
+def write_paths (out : String) (paths : List String) (html : String) (done : I64) : IO (Result String I64) :=
+    match paths {
+        List.empty => return (Result.ok done),
+        List.cons p rest => write_path_then out p rest html done,
+    }
+
+// Mutual recursion with `write_paths` on a strictly shorter `rest`.
+#[terminating]
+def write_path_then (out : String) (p : String) (rest : List String) (html : String) (done : I64) : IO (Result String I64) := do {
+    let wrote <- write_page (join out p) html;
+    match wrote {
+        Result.err e => return (Result.err e),
+        Result.ok _ => write_paths out rest html (done + 1),
+    }
+}
+
+/// Write every page, stopping at the first error; returns the count.
+def write_all (out : String) (pages : List Built) (done : I64) : IO (Result String I64) :=
+    match pages {
+        List.empty => return (Result.ok done),
+        List.cons p rest => write_then out p rest done,
+    }
+
+// Mutual recursion with `write_all` on a strictly shorter `rest`; the checker
+// does not see through the IO bind between them.
+#[terminating]
+def write_then (out : String) (p : Built) (rest : List Built) (done : I64) : IO (Result String I64) := do {
+    let one <- write_built out p;
+    match one {
+        Result.err e => return (Result.err e),
+        Result.ok n => write_all out rest (done + n),
+    }
+}
+
+/// Build the site; returns the number of files written (a copied directory
+/// counts once).
 pub def Site.build (cfg : SiteConfig) : IO (Result String I64) := do {
     let made <- mkdir_p cfg.out_dir;
     match made {
         Result.err e => return (Result.err e),
-        Result.ok _ => assets_then_book cfg,
+        Result.ok _ => trees_then_pages cfg,
     }
 }
 
-def assets_then_book (cfg : SiteConfig) : IO (Result String I64) := do {
-    let copied <- copy_assets cfg.assets_dir cfg.out_dir;
+def trees_then_pages (cfg : SiteConfig) : IO (Result String I64) := do {
+    let assets <- copy_entries cfg.assets_dir cfg.out_dir false;
+    match assets {
+        Result.err e => return (Result.err e),
+        Result.ok n => count_then n (static_then_pages cfg),
+    }
+}
+
+def static_then_pages (cfg : SiteConfig) : IO (Result String I64) := do {
+    let copied <- copy_entries cfg.static_dir cfg.out_dir false;
     match copied {
         Result.err e => return (Result.err e),
-        Result.ok n => book_then_count cfg n,
+        Result.ok n => count_then n (build_book cfg { src := cfg.book_src, out := join cfg.out_dir cfg.book_dir }),
     }
 }
 
-def book_then_count (cfg : SiteConfig) (assets : I64) : IO (Result String I64) := do {
-    let dirs : BookDirs := { src := cfg.book_src, out := join cfg.out_dir cfg.book_dir };
-    let pages <- build_book cfg dirs;
-    match pages {
+/// `n` plus what `rest` reports.
+def count_then (n : I64) (rest : IO (Result String I64)) : IO (Result String I64) := do {
+    let built <- rest;
+    match built {
         Result.err e => return (Result.err e),
-        Result.ok n => return (Result.ok (n + assets)),
+        Result.ok m => return (Result.ok (n + m)),
     }
 }
 
-/// Copy every file in the assets directory into the output root.
-def copy_assets (assets : String) (out : String) : IO (Result String I64) :=
-    match Path.of assets {
+/// Copy a directory's entries into `out` with `cp -R` (binary files and
+/// subdirectories whole); `skip_md` leaves out markdown sources.
+def copy_entries (src : String) (out : String) (skip_md : Bool) : IO (Result String I64) :=
+    match Path.of src {
         Result.err e => return (Result.err e),
-        Result.ok dir => list_and_copy dir out,
+        Result.ok dir => list_then_copy dir out skip_md,
     }
 
-def list_and_copy (dir : Path) (out : String) : IO (Result String I64) := do {
+def list_then_copy (dir : Path) (out : String) (skip_md : Bool) : IO (Result String I64) := do {
     let listed <- entries_of dir;
     match listed {
         Result.err e => return (Result.err e),
-        Result.ok files => copy_all files out 0,
+        Result.ok entries =>
+            cp_all (List.filter (fn (p : Path) => Bool.not (skip_md && String.ends_with (Path.file_name p) ".md")) entries) out 0,
     }
 }
 
@@ -360,71 +387,6 @@ def listed_ok (dir : Path) : IO (Result String (List Path)) := do {
     return (Result.ok files)
 }
 
-def copy_all (files : List Path) (out : String) (done : I64) : IO (Result String I64) :=
-    match files {
-        List.empty => return (Result.ok done),
-        List.cons f rest => copy_then f rest out done,
-    }
-
-// Mutual recursion with `copy_all` on a strictly shorter `rest`.
-#[terminating]
-def copy_then (f : Path) (rest : List Path) (out : String) (done : I64) : IO (Result String I64) := do {
-    let one <- copy_file f out;
-    match one {
-        Result.err e => return (Result.err e),
-        Result.ok _ => copy_all rest out (done + 1),
-    }
-}
-
-def copy_file (f : Path) (out : String) : IO (Result String Unit) := do {
-    let target : String := join out (Path.file_name f);
-    let read <- read_path f;
-    match read {
-        Result.err e => return (Result.err e),
-        Result.ok text => write_page target text,
-    }
-}
-
-def build_book (cfg : SiteConfig) (dirs : BookDirs) : IO (Result String I64) := do {
-    let made <- mkdir_p dirs.out;
-    match made {
-        Result.err e => return (Result.err e),
-        Result.ok _ => book_files_then_pages cfg dirs,
-    }
-}
-
-def book_files_then_pages (cfg : SiteConfig) (dirs : BookDirs) : IO (Result String I64) := do {
-    let copied <- copy_book_files dirs;
-    match copied {
-        Result.err e => return (Result.err e),
-        Result.ok n => pages_plus n (read_summary cfg dirs),
-    }
-}
-
-def pages_plus (n : I64) (pages : IO (Result String I64)) : IO (Result String I64) := do {
-    let built <- pages;
-    match built {
-        Result.err e => return (Result.err e),
-        Result.ok m => return (Result.ok (n + m)),
-    }
-}
-
-/// Copy the book source's non-markdown entries (`images/`) beside the
-/// pages, as mdBook does. `cp -R` keeps binary files and directories whole.
-def copy_book_files (dirs : BookDirs) : IO (Result String I64) :=
-    match Path.of dirs.src {
-        Result.err e => return (Result.err e),
-        Result.ok dir => list_book_files dir dirs.out,
-    }
-
-def list_book_files (dir : Path) (out : String) : IO (Result String I64) := do {
-    let listed <- entries_of dir;
-    match listed {
-        Result.err e => return (Result.err e),
-        Result.ok entries => cp_all (List.filter (fn (p : Path) => Bool.not (String.ends_with (Path.file_name p) ".md")) entries) out 0,
-    }
-}
-
 def cp_all (files : List Path) (out : String) (done : I64) : IO (Result String I64) :=
     match files {
         List.empty => return (Result.ok done),
@@ -441,6 +403,24 @@ def cp_then (f : Path) (rest : List Path) (out : String) (done : I64) : IO (Resu
     else return (Result.err (String.concat "cp -R failed: " from))
 }
 
+/// The book: its source's non-markdown entries (`images/`) copied beside
+/// the pages, as mdBook does, then every page.
+def build_book (cfg : SiteConfig) (dirs : BookDirs) : IO (Result String I64) := do {
+    let made <- mkdir_p dirs.out;
+    match made {
+        Result.err e => return (Result.err e),
+        Result.ok _ => book_files_then_pages cfg dirs,
+    }
+}
+
+def book_files_then_pages (cfg : SiteConfig) (dirs : BookDirs) : IO (Result String I64) := do {
+    let copied <- copy_entries dirs.src dirs.out true;
+    match copied {
+        Result.err e => return (Result.err e),
+        Result.ok n => count_then n (read_summary cfg dirs),
+    }
+}
+
 def read_summary (cfg : SiteConfig) (dirs : BookDirs) : IO (Result String I64) := do {
     let read <- read_text (join dirs.src "SUMMARY.md");
     match read {
@@ -454,31 +434,29 @@ def build_from_summary (cfg : SiteConfig) (dirs : BookDirs) (summary : String) :
     let loaded <- load_all dirs (Site.with_neighbours Option.none (Summary.chapters (Shared.get entries))) List.empty;
     match loaded {
         Result.err e => return (Result.err e),
-        Result.ok ls =>
-            gate_then_write cfg dirs entries (first_stem (Summary.chapters (Shared.get entries)))
-                (List.map (scan_rendered cfg.book_dir) (with_print cfg.title (List.map render_loaded ls))),
+        Result.ok ls => gate_then_write cfg.out_dir (site_pages cfg entries ls),
     }
 }
 
-/// Write the pages only when no internal link is broken.
-def gate_then_write (cfg : SiteConfig) (dirs : BookDirs) (entries : Shared (List NavEntry)) (index_stem : String) (scanned : List (Pair PageLinks Rendered)) : IO (Result String I64) :=
-    match unzip scanned {
-        Pair.pair links pages =>
+/// Every page of the site: the chapters, `print.html`, `404.html` and the
+/// landing page.
+def site_pages (cfg : SiteConfig) (entries : Shared (List NavEntry)) (ls : List Loaded) : List Built :=
+    let index_stem : String := first_stem (Summary.chapters (Shared.get entries)) in
+    List.append (List.map (built_chapter cfg entries index_stem) (with_print cfg.title (List.map render_loaded ls)))
+        [built_not_found cfg entries index_stem, built_landing cfg]
+
+/// Write the pages only when no internal link is broken. The gate reads whole
+/// documents: the shell's header, sidebar and pager links as well as the body.
+def gate_then_write (out : String) (pages : List Built) : IO (Result String I64) :=
+    match unzip (List.map scan_built pages) {
+        Pair.pair links built =>
             match Links.broken links {
-                List.empty => pages_then_not_found cfg dirs entries index_stem pages,
+                List.empty => write_all out built 0,
                 List.cons first more => return (Result.err (broken_report (List.cons first more))),
             },
     }
 
-def pages_then_not_found (cfg : SiteConfig) (dirs : BookDirs) (entries : Shared (List NavEntry)) (index_stem : String) (pages : List Rendered) : IO (Result String I64) := do {
-    let wrote <- write_all cfg dirs entries index_stem pages 0;
-    match wrote {
-        Result.err e => return (Result.err e),
-        Result.ok n => write_not_found cfg dirs entries index_stem n,
-    }
-}
-
-/// The first chapter's stem, the one `index.html` repeats.
+/// The first chapter's stem, the one the book's `index.html` repeats.
 def first_stem (cs : List NavChapter) : String :=
     match cs {
         List.empty => "",
@@ -488,13 +466,13 @@ def first_stem (cs : List NavChapter) : String :=
 def broken_report (problems : List String) : String :=
     String.concat "broken internal links:\n  " (List.intercalate "\n  " problems)
 
-def unzip (ps : List (Pair PageLinks Rendered)) : Pair (List PageLinks) (List Rendered) :=
+def unzip (ps : List (Pair PageLinks Built)) : Pair (List PageLinks) (List Built) :=
     match ps {
         List.empty => Pair.pair List.empty List.empty,
         List.cons p rest => cons_pair p (unzip rest),
     }
 
-def cons_pair (p : Pair PageLinks Rendered) (acc : Pair (List PageLinks) (List Rendered)) : Pair (List PageLinks) (List Rendered) :=
+def cons_pair (p : Pair PageLinks Built) (acc : Pair (List PageLinks) (List Built)) : Pair (List PageLinks) (List Built) :=
     match p {
         Pair.pair l r =>
             match acc {

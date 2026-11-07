@@ -17,6 +17,9 @@ pub struct SiteConfig {
     out_dir : String,
     /// The site's own assets (`acorn.css`), copied into the output root.
     assets_dir : String := "motes/acorn/assets",
+    /// A tree copied as-is into the output root: the landing page's
+    /// stylesheet and icons, the favicon, `/try` and `/install`.
+    static_dir : String := "docs/site/static",
 }
 
 /// Every field is a `String`, so duplicating the record shares only pointers.
@@ -60,12 +63,12 @@ def parse_error_text (e : Toml.ParseError) : String :=
         Toml.ParseError.generic msg => msg,
     }
 
-def book_of (book : Shared Toml.Value) (title : String) (base_url : String) (out_dir : String) (assets_dir : String) : Result String SiteConfig := do {
+def book_of (book : Shared Toml.Value) (title : String) (base_url : String) (out_dir : String) (assets_dir : String) (static_dir : String) : Result String SiteConfig := do {
     let book_src <- string_or "src" "docs/src" (Shared.get book);
     let book_dir <- string_or "dir" "docs" (Shared.get book);
     let cfg : SiteConfig :=
         { title := title, base_url := base_url, book_src := book_src,
-            book_dir := book_dir, out_dir := out_dir, assets_dir := assets_dir };
+            book_dir := book_dir, out_dir := out_dir, assets_dir := assets_dir, static_dir := static_dir };
     return cfg
 }
 
@@ -76,7 +79,8 @@ def of_value (root_value : Toml.Value) : Result String SiteConfig :=
         let base_url <- string_or "base_url" "/" (Shared.get root);
         let out_dir <- string_or "out" "docs/public" (Shared.get root);
         let assets_dir <- string_or "assets" "motes/acorn/assets" (Shared.get root);
-        book_of (Shared.of (table_or_empty "book" (Shared.get root))) title base_url out_dir assets_dir
+        let static_dir <- string_or "static" "docs/site/static" (Shared.get root);
+        book_of (Shared.of (table_or_empty "book" (Shared.get root))) title base_url out_dir assets_dir static_dir
     }
 
 /// Parse `site.toml` text. Absent keys take the monad-lang.org defaults.

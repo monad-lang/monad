@@ -150,6 +150,10 @@ pub def Layout.page (cfg : SiteConfig) (page : PageSpec) : Oak.Node Unit :=
                     (List.append (body_nodes cfg root content toc book) [site_footer])),
     }
 
+/// The page as one `Html.Node` document (what the link gate reads).
+pub def Layout.document (cfg : SiteConfig) (page : PageSpec) : Html.Node :=
+    Oak.to_html (Layout.page cfg page)
+
 /// The page serialized to HTML text.
 pub def Layout.render (cfg : SiteConfig) (page : PageSpec) : String :=
-    Html.to_string (Oak.to_html (Layout.page cfg page))
+    Html.to_string (Layout.document cfg page)

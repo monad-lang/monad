@@ -104,6 +104,10 @@ pub def Passes.dup_list [Copy A] (xs : List A) : Pair (List A) (List A) :=
 pub def Passes.dup_nodes (ns : List Html.Node) : Pair (List Html.Node) (List Html.Node) :=
     Passes.dup_list ns
 
+/// One node shared twice (see `Passes.dup_nodes`).
+pub def Passes.dup_node (n : Html.Node) : Pair Html.Node Html.Node :=
+    Pair.pair n n
+
 def cons_both [Copy A] (x : A) (p : Pair (List A) (List A)) : Pair (List A) (List A) :=
     match p {
         Pair.pair a b => Pair.pair (List.cons x a) (List.cons x b),
