@@ -19,8 +19,9 @@ use lang::types {
     visibility_beq,
 }
 use lib::name_text {unqualify_def_name}
+use lib::cfg {CfgEnv, CfgEnv.empty, CfgEnv.for_mote}
 use lib::parser {
-    LocatedDecls, decls_parser, decls_parser_located, decls_parser_located_with_ranges,
+    LocatedDecls, decls_parser, decls_parser_located, decls_parser_located_cfg, decls_parser_located_with_ranges,
     decls_parser_strict, module_path_to_string,
 }
 use parsec::core {ParseError, ParseResult, parse_error_remaining}
@@ -152,9 +153,39 @@ def std_test_module_path : ModulePath := ModulePath.mk [Identifier.id "std", Ide
 /// rendered parse-error diagnostics on a cold path, so it has no reason
 /// to build wrappers. Locating it would be harmless, not useful.)
 pub def parse_all_decls (input : String) : ParseResult (List Decl) :=
-    match decls_parser_located input {
+    parse_all_decls_cfg CfgEnv.empty input
+
+/// `parse_all_decls` under a feature set (`lang/src/cfg.mo`): declarations
+/// whose `#[cfg]` is false under `env` are dropped before expansion.
+pub def parse_all_decls_cfg (env : CfgEnv) (input : String) : ParseResult (List Decl) :=
+    match decls_parser_located_cfg env input {
         ParseResult.success rem decl_list => ParseResult.success rem (expand_decls decl_list),
         ParseResult.fail e => ParseResult.fail e,
+    }
+
+/// The `#[cfg]` feature set for `file_path`: its mote's manifest
+/// `[features]` (`default` included) plus `MONAD_FEATURES`
+/// (`mote/feature,...`). A file with no `#[cfg` skips the manifest walk.
+/// Mirrors `filter_cfg_feature_decls` (`rust/core/src/term/module.rs`).
+pub def cfg_env_for_file (file_path : String) (content : String) : IO CfgEnv :=
+    // A cheap gate, not a parse: any spelling the grammar accepts
+    // (`#[cfg`, `#[ cfg`, stacked attributes) contains "cfg", so a file
+    // without one skips the manifest walk. A false positive only costs
+    // the walk.
+    if String.contains content "cfg"
+    then cfg_env_discover file_path
+    else IO.pure CfgEnv.empty
+
+def cfg_env_discover (file_path : String) : IO CfgEnv := do {
+    let manifest <- Mote.discover (extract_directory file_path);
+    let spec <- IO.get_env "MONAD_FEATURES";
+    return (cfg_env_of_manifest manifest spec)
+}
+
+def cfg_env_of_manifest (manifest : Option MoteManifest) (spec : Option String) : CfgEnv :=
+    match manifest {
+        Option.some m => CfgEnv.for_mote m.name m.features spec,
+        Option.none => CfgEnv.empty,
     }
 
 /// Parse source text, returning the parsed declarations or none on parse error.
@@ -1255,8 +1286,9 @@ def load_module_decls (base_dir : String) (mp : ModulePath) : IO (Option (List D
 /// a genuinely fully-parsed file always leaves it empty; non-empty means
 /// real, un-parsed source content remains.
 #[partial]
-def load_module_decls_of_text (mp : ModulePath) (content : String) : IO (Option (List Decl)) := do {
-    let result : ParseResult (List Decl) := parse_all_decls content;
+def load_module_decls_of_text (file_path : String) (mp : ModulePath) (content : String) : IO (Option (List Decl)) := do {
+    let env <- cfg_env_for_file file_path content;
+    let result : ParseResult (List Decl) := parse_all_decls_cfg env content;
     match result {
         ParseResult.success rem decl_list =>
             if String.is_empty rem
@@ -1303,7 +1335,7 @@ def load_module_decls_at (file_path : String) (mp : ModulePath) : IO (Option (Li
 /// on, so it never passes for a module that is simply absent.
 def load_module_decls_read (file_path : String) (mp : ModulePath) (read : Result StreamError String) : IO (Option (List Decl)) :=
     match read {
-        Result.ok content => load_module_decls_of_text mp content,
+        Result.ok content => load_module_decls_of_text file_path mp content,
         Result.err e =>
             if StreamError.is_not_found e
             then IO.pure Option.none
@@ -4172,7 +4204,7 @@ def load_module_with_info_from_source (base_dir : String) (mp : ModulePath) (sou
         Option.none => do { return Option.none },
         Option.some file_path => do {
             let actual_base_dir : String := extract_directory file_path;
-            let raw_decls : Option (List Decl) <- load_module_decls_of_text mp source;
+            let raw_decls : Option (List Decl) <- load_module_decls_of_text file_path mp source;
             let decl_list <- resolve_lib_alias_decls_opt actual_base_dir raw_decls;
             match decl_list {
                 Option.some decl_list => do {
@@ -5369,23 +5401,30 @@ def gate_mote_targets (r : Result String LoadedModules) : IO (Result String Load
 /// ever sensibly name. `Option.none` on parse failure: a file that does
 /// not parse fails below with a real diagnostic; the gate has nothing
 /// to add there.
-def pre_expansion_parse (src : String) : Option (List Decl) :=
-    match decls_parser_located src {
+def pre_expansion_parse (env : CfgEnv) (src : String) : Option (List Decl) :=
+    match decls_parser_located_cfg env src {
         ParseResult.success _ decls => Option.some decls,
         ParseResult.fail _ => Option.none,
     }
+
+/// `pre_expansion_parse` under the same feature set the load used, so the
+/// completeness walk sees exactly the `use` lines the load kept.
+def pre_expansion_parse_at (file_path : String) (src : String) : IO (Option (List Decl)) := do {
+    let env <- cfg_env_for_file file_path src;
+    return (pre_expansion_parse env src)
+}
 
 /// The pre-expansion decls of the main module: the buffer a language
 /// server handed down when there is one, the file on disk otherwise.
 #[partial]
 def pre_expansion_decls (source : Option String) (file_path : String) : IO (Option (List Decl)) := do {
     match source {
-        Option.some src => return (pre_expansion_parse src),
+        Option.some src => pre_expansion_parse_at file_path src,
         Option.none => do {
             let read : Result StreamError String <- IO.read_file (Path.path file_path);
             match read {
                 Result.err _ => return Option.none,
-                Result.ok src => return (pre_expansion_parse src),
+                Result.ok src => pre_expansion_parse_at file_path src,
             }
         },
     }

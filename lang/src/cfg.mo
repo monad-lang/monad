@@ -9,6 +9,7 @@
 
 use lang::types {AttrArg, Attribute, Identifier}
 use std::list {List.length}
+use lib::features {Features.split_slash}
 
 pub type CfgPred {
     flag (name : String),
@@ -151,4 +152,93 @@ def cfg_keep_pred (env : CfgEnv) (p : Option CfgPred) : Bool :=
     match p {
         Option.none => true,
         Option.some q => CfgPred.eval q env true || CfgPred.eval q env false,
+    }
+
+// ─── The feature set of one mote ───────────────────────────────────────
+
+/// The features enabled for `mote`: the `mote/feature` items of `spec`
+/// (`MONAD_FEATURES`, comma- or whitespace-separated) plus `default` when
+/// `table` (`[features]`) declares it, closed over the plain features
+/// each enabled one lists. `dep:x` and `x/f` items name dependencies and
+/// are not followed. Mirrors `CfgSet::with_manifest_features`.
+pub def CfgEnv.for_mote (mote : String) (table : List (Pair String (List String))) (spec : Option String) : CfgEnv :=
+    let requested : List String := cfg_requested mote (cfg_split_spec spec) in
+    let start : List String :=
+        if cfg_table_has "default" table then List.cons "default" requested else requested in
+    let e : CfgEnv := { features := cfg_expand table start List.empty } in
+    e
+
+def cfg_split_spec (spec : Option String) : List String :=
+    match spec {
+        Option.none => List.empty,
+        Option.some s => cfg_split_go s 0 0 (String.length s) List.empty,
+    }
+
+#[terminating]
+def cfg_split_go (s : String) (i : I64) (start : I64) (n : I64) (acc : List String) : List String :=
+    if I64.lt i n
+    then
+        if cfg_is_sep (String.get s i)
+        then cfg_split_go s (i + 1) (i + 1) n (cfg_push s start i acc)
+        else cfg_split_go s (i + 1) start n acc
+    else List.reverse (cfg_push s start n acc)
+
+def cfg_is_sep (b : Option U8) : Bool :=
+    match b {
+        Option.some c =>
+            let x : I64 := U8.to_i64 c in
+            I64.beq x 44 || I64.beq x 32 || I64.beq x 10 || I64.beq x 9,
+        Option.none => false,
+    }
+
+def cfg_push (s : String) (start : I64) (stop : I64) (acc : List String) : List String :=
+    if I64.lt start stop then List.cons (String.slice s start (stop - start)) acc else acc
+
+def cfg_requested (mote : String) (items : List String) : List String :=
+    match items {
+        List.empty => List.empty,
+        List.cons item rest => cfg_requested_one mote (Features.split_slash item) (cfg_requested mote rest),
+    }
+
+def cfg_requested_one (mote : String) (p : Option (Pair String String)) (acc : List String) : List String :=
+    match p {
+        Option.some pr => match pr {
+            Pair.pair m f => if String.beq m mote then List.cons f acc else acc,
+        },
+        Option.none => acc,
+    }
+
+def cfg_table_has (name : String) (table : List (Pair String (List String))) : Bool :=
+    match table {
+        List.empty => false,
+        List.cons e rest => match e {
+            Pair.pair k _ => String.beq k name || cfg_table_has name rest,
+        },
+    }
+
+def cfg_lookup (name : String) (table : List (Pair String (List String))) : List String :=
+    match table {
+        List.empty => List.empty,
+        List.cons e rest => match e {
+            Pair.pair k items => if String.beq k name then items else cfg_lookup name rest,
+        },
+    }
+
+def cfg_plain (items : List String) : List String :=
+    match items {
+        List.empty => List.empty,
+        List.cons i rest =>
+            if String.contains i ":" || String.contains i "/"
+            then cfg_plain rest
+            else List.cons i (cfg_plain rest),
+    }
+
+#[terminating]
+def cfg_expand (table : List (Pair String (List String))) (work : List String) (acc : List String) : List String :=
+    match work {
+        List.empty => List.reverse acc,
+        List.cons f rest =>
+            if cfg_mem f acc
+            then cfg_expand table rest acc
+            else cfg_expand table (List.append (cfg_plain (cfg_lookup f table)) rest) (List.cons f acc),
     }

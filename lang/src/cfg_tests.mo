@@ -4,7 +4,7 @@
 
 use std::list {List.intercalate}
 use lang::types {AttrArg, Decl, Identifier, show_module_path, show_name_path}
-use lang::cfg {CfgEnv, CfgEnv.empty, CfgEnv.keep, CfgPred, CfgPred.eval, CfgPred.parse}
+use lang::cfg {CfgEnv, CfgEnv.empty, CfgEnv.for_mote, CfgEnv.keep, CfgPred, CfgPred.eval, CfgPred.parse}
 use lang::parser {decls_parser_located, decls_parser_located_cfg}
 use parsec::core {ParseResult}
 
@@ -72,3 +72,24 @@ def test_cfg_implicit_all : Bool :=
         Option.some p => Bool.not (CfgPred.eval p (env ["x"]) false),
         Option.none => false,
     }
+
+def table : List (Pair String (List String)) :=
+    [Pair.pair "default" ["y"], Pair.pair "y" ["x", "dep:z"], Pair.pair "x" List.empty, Pair.pair "w" List.empty]
+
+def features_of (e : CfgEnv) : String := List.intercalate "," e.features
+
+/// `default` is on and closes over the plain features it lists; `dep:`
+/// items are not features of this mote. Mirrors the Rust host's
+/// `cfg_manifest_defaults_expand`.
+#[test]
+def test_cfg_for_mote_defaults : Bool :=
+    String.beq (features_of (CfgEnv.for_mote "m" table Option.none)) "default,y,x"
+
+/// `MONAD_FEATURES` adds only this mote's `mote/feature` items.
+#[test]
+def test_cfg_for_mote_spec : Bool :=
+    String.beq (features_of (CfgEnv.for_mote "m" table (Option.some "other/q, m/w m/x"))) "default,y,x,w"
+
+#[test]
+def test_cfg_for_mote_no_table : Bool :=
+    String.beq (features_of (CfgEnv.for_mote "m" List.empty (Option.some "m/a,"))) "a"
