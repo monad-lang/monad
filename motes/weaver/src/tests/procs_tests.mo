@@ -4,7 +4,7 @@
 /// removes what it creates.
 use weaver::procs {
     ProcEntry, ProcStatus, Procs.detached_script, Procs.start_at, Procs.start_foreground, Procs.release, Procs.discard, Procs.shutdown_at,
-    Procs.scan_at, Procs.tail, Procs.kill, Procs.entry_at, Procs.log_start, Procs.log_kill, Procs.log_exit,
+    Procs.scan_at, Procs.tail, Procs.kill, Procs.entry_at, Procs.enforce_cap, Procs.log_start, Procs.log_kill, Procs.log_exit,
 }
 use log::logger {Logger}
 use log::level {LogLevel}
@@ -15,6 +15,8 @@ use std::path {Path, Path.to_string}
 use std::process {process_id, exec_cmd, Proc.kill_group}
 use tui::terminal {Terminal.poll}
 use std::io {IO.read_file, IO.is_dir, IO.current_time_nano}
+use std::stream {StreamError}
+use std::list {List.intercalate}
 use std::concurrent::combine {sleepIO}
 
 def temp_root (suffix : String) : String :=
@@ -287,4 +289,50 @@ def test_read_process_wait_ends_on_stop : IO Bool := do {
     let root : String := temp_root "wait-stop";
     let started <- Procs.start_at (Path.path root) "sleep 30" "" false;
     stopped_started root started
+}
+
+// ── the log cap ─────────────────────────────────────────────────────────
+
+def ends_with_note (r : Result StreamError String) : Bool :=
+    match r {
+        Result.ok text => String.contains text "MiB; killed by weaver]",
+        Result.err _ => false,
+    }
+
+def cap_case (root : String) (big : ProcEntry) (small : ProcEntry) : IO Bool := do {
+    sleepIO 300;
+    let killed <- Procs.enforce_cap Option.none (Path.path root) 65536;
+    let after_big <- Procs.entry_at (Path.path root) big.id;
+    let after_small <- Procs.entry_at (Path.path root) small.id;
+    let logged <- IO.read_file big.log;
+    let _ <- Procs.kill small;
+    cleanup root;
+    let ids : String := List.intercalate "," (List.map (fn (e : ProcEntry) => e.id) killed);
+    return (String.beq ids big.id && Bool.not (still_running after_big) && still_running after_small
+        && ends_with_note logged)
+}
+
+def still_running (o : Option ProcEntry) : Bool :=
+    match o {
+        Option.some e => is_running e.status,
+        Option.none => false,
+    }
+
+def cap_started (root : String) (big : Result String ProcEntry) (small : Result String ProcEntry) : IO Bool :=
+    match big {
+        Result.err _ => do { cleanup root; return false },
+        Result.ok b => match small {
+            Result.err _ => do { cleanup root; return false },
+            Result.ok s => cap_case root b s,
+        },
+    }
+
+/// A background task whose log passed the cap is killed and its log says
+/// why; one under the cap keeps running.
+#[test]
+def test_enforce_cap_kills_a_flooding_task : IO Bool := do {
+    let root : String := temp_root "cap";
+    let big <- Procs.start_at (Path.path root) "yes flood" "" false;
+    let small <- Procs.start_at (Path.path root) "echo quiet; sleep 30" "" false;
+    cap_started root big small
 }

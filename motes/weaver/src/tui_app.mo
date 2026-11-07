@@ -54,7 +54,7 @@ use weaver::title {Title.generate, Title.needed}
 use weaver::subagent {Subagent.task_tool, Subagent.drain}
 use weaver::instructions {Instructions.take_notes, Instructions.attaching}
 use weaver::todo {TodoItem, TodoTool.impl, Todo.read, Todo.same}
-use weaver::procs {Procs.tail, Procs.kill, Procs.log_kill, Procs.log_exit}
+use weaver::procs {Procs.tail, Procs.kill, Procs.log_kill, Procs.log_exit, Procs.root, Procs.enforce_cap, Procs.max_log_bytes}
 use weaver::format {format_elapsed}
 use std::io {IO.current_time_nano}
 use weaver::tasks {TaskEntry, TaskKind, Tasks.list, Tasks.line, Tasks.running_count, Tasks.running_ids, Tasks.exit_notes, Tasks.exited}
@@ -501,6 +501,9 @@ pub def TuiApp.subscriptions (m : TuiModel) : Subs WeaverMsg :=
     let seen : List String := m.tasks_seen in
     let log : Option Logger := m.log in
     let tasks : Subs WeaverMsg := Subs.poll 10 (fn (_ : Unit) => do {
+        // A task killed for flooding its log shows as exited below.
+        let root <- Procs.root;
+        let _ <- Procs.enforce_cap log root Procs.max_log_bytes;
         let ts <- Tasks.list store;
         let _ <- Inbox.post store (Tasks.exit_notes seen ts);
         let _ <- log_exits log (Tasks.exited seen ts);

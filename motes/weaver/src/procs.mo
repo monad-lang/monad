@@ -11,7 +11,7 @@
 /// task carries a `foreground` marker that hides it from every scan; one
 /// that finishes in time is discarded, and one that outlives the wait is
 /// released into an ordinary background task.
-use std::io {IO.get_env, IO.is_dir, IO.list_dir, IO.read_file, IO.write_file, IO.current_time_nano, IO.file_exists}
+use std::io {IO.get_env, IO.is_dir, IO.list_dir, IO.read_file, IO.write_file, IO.current_time_nano, IO.file_exists, IO.file_size}
 use std::path {Path, Path.to_string, Path.join, Path.file_name}
 use std::process {exec_cmd, process_id, Proc.capture, Proc.kill_group, Proc.sigterm, Proc.sigkill}
 use std::concurrent::combine {sleepIO}
@@ -466,6 +466,55 @@ def shutdown_go (xs : List ProcEntry) : IO Unit :=
         List.empty => IO.pure unit,
         List.cons e rest => shutdown_step e rest,
     }
+
+// ── the log cap ─────────────────────────────────────────────────────────
+
+/// The log size past which a running task is killed: a runaway writer
+/// would otherwise fill the disk. `shell`'s own wait checks its
+/// foreground task against the same bound.
+pub def Procs.max_log_bytes : I64 := 67108864
+
+/// Kill every running background task under `root` whose log passed
+/// `max` bytes, and say why at the end of its log. Foreground tasks are
+/// skipped: the shell wait owns them. Returns the tasks it killed.
+pub def Procs.enforce_cap (log : Option Logger) (root : Path) (max : I64) : IO (List ProcEntry) := do {
+    let es <- Procs.scan_at root;
+    cap_go log max es List.empty
+}
+
+#[terminating]
+def cap_go (log : Option Logger) (max : I64) (es : List ProcEntry) (acc : List ProcEntry) : IO (List ProcEntry) :=
+    match es {
+        List.empty => IO.pure (List.reverse acc),
+        List.cons e rest => cap_step log max e rest acc,
+    }
+
+#[terminating]
+def cap_step (log : Option Logger) (max : I64) (e : ProcEntry) (rest : List ProcEntry) (acc : List ProcEntry) : IO (List ProcEntry) := do {
+    let over <- over_cap max e;
+    if over
+    then do {
+        let _ <- kill_flooded log e;
+        cap_go log max rest (List.cons e acc)
+    }
+    else cap_go log max rest acc
+}
+
+def over_cap (max : I64) (e : ProcEntry) : IO Bool :=
+    match e.status {
+        ProcStatus.running => do {
+            let n <- IO.file_size e.log;
+            IO.pure (match n { Option.some b => b > max, Option.none => false })
+        },
+        _ => IO.pure false,
+    }
+
+def kill_flooded (log : Option Logger) (e : ProcEntry) : IO Unit := do {
+    let _ <- Procs.kill e;
+    let note : String := String.concat_list ["\n[output passed ", I64.to_string (Procs.max_log_bytes / 1048576), " MiB; killed by weaver]"];
+    let _ <- exec_cmd "sh" ["-c", String.concat_list ["printf '%s\\n' ", shell_quote note, " >> ", shell_quote (Path.to_string e.log)]];
+    Logs.info log (String.concat "ev=proc_flood id=" e.id)
+}
 
 // ── debug-log events ────────────────────────────────────────────────────
 

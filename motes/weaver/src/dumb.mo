@@ -33,6 +33,7 @@ use shuttle::registry {ToolRegistry}
 use weaver::subagent {Subagent.task_tool, Subagent.drain}
 use weaver::instructions {Instructions.take_notes, Instructions.attaching}
 use weaver::inbox {Inbox.with_notes}
+use weaver::procs {Procs.root, Procs.enforce_cap, Procs.max_log_bytes}
 use weaver::todo {TodoTool.impl}
 use weaver::usage {UsageTracker.start, UsageTracker.silent, UsageTracker.last}
 use weaver::format {format_tokens}
@@ -152,6 +153,9 @@ def budget_step (write : String -> IO Unit) (st : WeaverState) : IO Step := do {
 }
 
 def drive_turn (read : Unit -> IO (Option String)) (write : String -> IO Unit) (st : WeaverState) (text : String) : IO Step := do {
+    // No poll runs between lines here: cap the background logs per turn.
+    let root <- Procs.root;
+    let _ <- Procs.enforce_cap Option.none root Procs.max_log_bytes;
     // Autocompact BEFORE the user message lands (the post-turn delta and
     // the store's append-only blocks assume a stable base), and carry the
     // compacted state through the failure path too: `record_compacted`

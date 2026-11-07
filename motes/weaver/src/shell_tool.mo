@@ -29,7 +29,7 @@ use init::transformers {ResultT}
 use log::logger {Logger}
 use weaver::procs {
     ProcEntry, ProcStatus, Procs.root, Procs.start_at, Procs.start_foreground, Procs.release,
-    Procs.discard, Procs.kill, Procs.status_of, Procs.log_start, Procs.log_detach,
+    Procs.discard, Procs.kill, Procs.status_of, Procs.log_start, Procs.log_detach, Procs.max_log_bytes,
 }
 use weaver::process_tools {str_param, int_param, object_schema, int_arg}
 use weaver::store {StoreState, Store.child}
@@ -40,9 +40,6 @@ def tool_ok (id : String) (msg : String) : Content := Content.tool_result id msg
 /// The default and the longest wait, in seconds.
 pub def WeaverShell.default_wait : I64 := 30
 pub def WeaverShell.max_wait : I64 := 300
-
-/// The log size past which a running command is killed.
-pub def WeaverShell.max_log_bytes : I64 := 67108864
 
 /// What the tool shows of the output: the last lines within both caps.
 def shown_lines : I64 := 200
@@ -207,7 +204,7 @@ def tick_detach (e : ProcEntry) (deadline_ns : I64) (now : I64) (size_due : Bool
 def tick_size (e : ProcEntry) : IO ShellTick := do {
     let n <- IO.file_size e.log;
     IO.pure (match n {
-        Option.some b => if b > WeaverShell.max_log_bytes then ShellTick.flooded else ShellTick.pending,
+        Option.some b => if b > Procs.max_log_bytes then ShellTick.flooded else ShellTick.pending,
         Option.none => ShellTick.pending,
     })
 }
