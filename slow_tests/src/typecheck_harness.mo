@@ -11,7 +11,11 @@
 /// `lang/tests/`, in two spellings of the same value.
 open IO {println}
 use lang::types {LocalScope}
-use lang::module {ElaboratedModules, elaborate_loaded_modules, typecheck_module_with_scope}
+use lang::module {
+    ElaboratedModules, check_module_with_scope, check_module_with_scope_affine,
+    elaborate_loaded_modules, typecheck_module_with_scope,
+}
+use std::test {Test.write_fixture}
 
 pub def empty_local_scope : LocalScope := {
     vars := List.empty,
@@ -45,3 +49,47 @@ pub def typecheck_file (file_path : String) : IO Bool := do {
         },
     }
 }
+
+/// Whether any rendered diagnostic contains `needle`. The negative suites
+/// (`view_type_tests`, `derive_copy_clone_tests`, `typecheck_constraint_tests`)
+/// shared three byte-identical copies of this and the helper below.
+#[partial]
+pub def diags_contain (needle : String) (diags : List String) : Bool :=
+    match diags {
+        List.empty => false,
+        List.cons d rest => if String.contains d needle then true else diags_contain needle rest,
+    }
+
+/// Write `source` to a scratch fixture and return every diagnostic the real
+/// load + elaborate + check path reports for it. `affine` selects
+/// `check_module_with_scope_affine` (forces error mode and returns errors AND
+/// warnings — the copy/borrow rules) instead of the ordinary
+/// `check_module_with_scope`. The fixture name must be unique across suites;
+/// the path is `/tmp/monad_typecheck_<name>.mo`.
+#[partial]
+pub def check_source_diags_with (affine : Bool) (source : String) (fixture_name : String) : IO (List String) := do {
+    let path : String := String.concat "/tmp/monad_typecheck_" (String.concat fixture_name ".mo");
+    let _written <- Test.write_fixture (Path.path path) source;
+    let loaded <- elaborate_loaded_modules path false false;
+    match loaded {
+        Result.err e => do {
+            return (List.cons (String.concat "LOAD FAILED: " e) List.empty)
+        },
+        // Destructured, not projected twice: two `em.field` reads of an
+        // affine record would be an over-use.
+        Result.ok em => match em {
+            { scope, target_decls, .. } =>
+                if affine
+                then check_module_with_scope_affine scope target_decls empty_local_scope (Option.some path) false
+                else check_module_with_scope scope target_decls empty_local_scope (Option.some path) false,
+        },
+    }
+}
+
+/// The affine/kind-check variant: error mode, errors AND warnings.
+pub def check_source_diags (source : String) (fixture_name : String) : IO (List String) :=
+    check_source_diags_with true source fixture_name
+
+/// The ordinary type-check variant (constraint tests).
+pub def check_source_diags_plain (source : String) (fixture_name : String) : IO (List String) :=
+    check_source_diags_with false source fixture_name

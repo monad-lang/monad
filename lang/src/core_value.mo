@@ -134,24 +134,24 @@ def native_table_arity (table : NativeTable) (id : I64) : I64 :=
 /// One global slot's memoization state. `slot_in_progress` exists purely
 /// to turn a genuine reference cycle into a clear, immediate error
 /// instead of infinite recursion.
-type Slot {
+type CacheSlot {
     slot_empty,
     slot_in_progress,
     slot_done (v : Value),
 }
 
-def slot_done_value (slot : Slot) : Option Value :=
+def slot_done_value (slot : CacheSlot) : Option Value :=
     match slot {
-        Slot.slot_done v => Option.some v,
-        Slot.slot_empty => Option.none,
-        Slot.slot_in_progress => Option.none,
+        CacheSlot.slot_done v => Option.some v,
+        CacheSlot.slot_empty => Option.none,
+        CacheSlot.slot_in_progress => Option.none,
     }
 
-def slot_is_in_progress (slot : Slot) : Bool :=
+def slot_is_in_progress (slot : CacheSlot) : Bool :=
     match slot {
-        Slot.slot_in_progress => true,
-        Slot.slot_empty => false,
-        Slot.slot_done _ => false,
+        CacheSlot.slot_in_progress => true,
+        CacheSlot.slot_empty => false,
+        CacheSlot.slot_done _ => false,
     }
 
 /// Explicit, caller-threaded cache of forced global values -- one slot
@@ -174,7 +174,7 @@ def slot_is_in_progress (slot : Slot) : Bool :=
 /// (compiling shuttle's derives tripped a 200 cap), and a native stack is
 /// not the constraint there.
 type GlobalCache {
-    global_cache (slots : List Slot) (fuel : I64) (depth : I64) (depth_limit : I64),
+    global_cache (slots : List CacheSlot) (fuel : I64) (depth : I64) (depth_limit : I64),
 }
 
 /// A global slot was still `slot_in_progress` when it was referenced
@@ -184,19 +184,19 @@ type CoreEvalCycle {
 }
 
 #[partial]
-def list_replicate (n : I64) (v : Slot) : List Slot :=
+def list_replicate (n : I64) (v : CacheSlot) : List CacheSlot :=
     if I64.beq n 0
     then List.empty
     else List.cons v (list_replicate (n - 1) v)
 
 pub def global_cache_new (len : I64) : GlobalCache :=
-    GlobalCache.global_cache (list_replicate len Slot.slot_empty) (-1) 0 (-1)
+    GlobalCache.global_cache (list_replicate len CacheSlot.slot_empty) (-1) 0 (-1)
 
 /// The same cache with a finite step budget and a nesting limit (see
 /// `GlobalCache`'s own notes on `fuel` and `depth_limit`).
 /// `lang/core_eval.mo`'s `eval_fueled` is the entry point.
 pub def global_cache_new_fueled (len : I64) (fuel : I64) (depth_limit : I64) : GlobalCache :=
-    GlobalCache.global_cache (list_replicate len Slot.slot_empty) fuel 0 depth_limit
+    GlobalCache.global_cache (list_replicate len CacheSlot.slot_empty) fuel 0 depth_limit
 
 pub def global_cache_fuel (cache : GlobalCache) : I64 :=
     match cache {
@@ -241,7 +241,7 @@ def global_cache_get (cache : GlobalCache) (idx : I64) : Option Value :=
     }
 
 #[partial]
-def list_set_nth (idx : I64) (v : Slot) (l : List Slot) : List Slot :=
+def list_set_nth (idx : I64) (v : CacheSlot) (l : List CacheSlot) : List CacheSlot :=
     match l {
         List.empty => List.empty,
         List.cons hd rest =>
@@ -262,16 +262,16 @@ def global_cache_begin (cache : GlobalCache) (idx : I64) : Result CoreEvalCycle 
                 Option.some slot =>
                     if slot_is_in_progress slot
                     then Result.err (CoreEvalCycle.core_eval_cycle idx)
-                    else Result.ok (GlobalCache.global_cache (list_set_nth idx Slot.slot_in_progress slots) fuel depth limit),
+                    else Result.ok (GlobalCache.global_cache (list_set_nth idx CacheSlot.slot_in_progress slots) fuel depth limit),
                 Option.none =>
-                    Result.ok (GlobalCache.global_cache (list_set_nth idx Slot.slot_in_progress slots) fuel depth limit),
+                    Result.ok (GlobalCache.global_cache (list_set_nth idx CacheSlot.slot_in_progress slots) fuel depth limit),
             },
     }
 
 def global_cache_store (cache : GlobalCache) (idx : I64) (value : Value) : GlobalCache :=
     match cache {
         GlobalCache.global_cache slots fuel depth limit =>
-            GlobalCache.global_cache (list_set_nth idx (Slot.slot_done value) slots) fuel depth limit,
+            GlobalCache.global_cache (list_set_nth idx (CacheSlot.slot_done value) slots) fuel depth limit,
     }
 
 /// Release `idx`'s in-progress marker back to empty after its evaluation
@@ -283,7 +283,7 @@ def global_cache_store (cache : GlobalCache) (idx : I64) (value : Value) : Globa
 def global_cache_fail (cache : GlobalCache) (idx : I64) : GlobalCache :=
     match cache {
         GlobalCache.global_cache slots fuel depth limit =>
-            GlobalCache.global_cache (list_set_nth idx Slot.slot_empty slots) fuel depth limit,
+            GlobalCache.global_cache (list_set_nth idx CacheSlot.slot_empty slots) fuel depth limit,
     }
 
 // ─── Tests (mirror core_value.rs's #[cfg(test)] module) ────────────────

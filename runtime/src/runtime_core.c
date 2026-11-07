@@ -48,6 +48,11 @@ typedef struct {
    payload word. 23 is the next free slot after `MONAD_CHANNEL_TAG`. Like
    every handle it has no Constructor slot, so `monad_get_tag` names it. */
 #define MONAD_CELL_TAG 23
+/* A `Slot` (`init/src/view.mo`): an opaque linear handle that is either empty
+   or holds one value of any type. 24 is the next free slot after
+   `MONAD_CELL_TAG`. Like every handle it has no Constructor slot, so
+   `monad_get_tag` names it. */
+#define MONAD_SLOT_TAG 24
 /* `Pair.pair`'s builtin tag (`lang/src/codegen/ctors.mo`'s
    `builtin_ctor_tags`). `monad_view_get` builds the pair in C because a
    Cell handle and its payload must travel as one value; a fixed tag is
@@ -363,7 +368,8 @@ static int64_t monad_get_tag_impl(rt_word ptr) {
     Header* header = (Header*)RT_PTR(ptr);
     if (header->tag == MONAD_FIBER_TAG || header->tag == MONAD_SCOPE_TAG
         || header->tag == MONAD_BUF_TAG || header->tag == MONAD_REF_TAG
-        || header->tag == MONAD_CHANNEL_TAG || header->tag == MONAD_CELL_TAG) {
+        || header->tag == MONAD_CHANNEL_TAG || header->tag == MONAD_CELL_TAG
+        || header->tag == MONAD_SLOT_TAG) {
         return header->tag;
     }
     return ((Constructor*)RT_PTR(ptr))->tag;
@@ -673,6 +679,87 @@ static rt_word view_free_impl(rt_word handle) {
        reading a payload the program believes freed. */
     c->header.tag = 0;
     c->payload = 0;
+    return 0;
+}
+
+/* ── Slot (init/src/view.mo) ─────────────────────────────────────────────
+   A linear handle that is either EMPTY or FULL, with the state carried in
+   the type (`Slot Empty A` / `Slot Full A`), not a runtime tag the user can
+   branch on. Unlike `Cell`, the payload need not be `Copy`: `take` moves it
+   out and `fill` moves one in. The block is GC-SCANNED (a non-`Copy`
+   payload can be, or can contain, a pointer).
+
+   `slot_take` on an empty slot and `slot_peek` on a non-full one answer 0
+   the way `Cell.get` does on a bad handle: well-typed code cannot reach
+   them, and the state is enforced by the types plus linearity, not by a
+   runtime error. `slot_free` POISONS for the same reason `view_free_impl`
+   does (the block is Boehm-owned until ownership-regions O3/O4). */
+typedef struct {
+    Header header;
+    rt_word payload;
+    int64_t full;
+} SlotObj;
+
+static SlotObj* slot_of(rt_word handle) {
+    SlotObj* s = (SlotObj*)RT_PTR(handle);
+    if (!s || s->header.tag != MONAD_SLOT_TAG) return NULL;
+    return s;
+}
+
+static rt_word slot_new_impl(rt_word init) {
+    SlotObj* s = (SlotObj*)RT_PTR(monad_alloc((rt_size)sizeof(SlotObj)));
+    if (!s) return 0;
+    s->header.tag = MONAD_SLOT_TAG;
+    s->payload = init;
+    s->full = 1;
+    return RT_WORD(s);
+}
+
+static rt_word slot_empty_impl(void) {
+    SlotObj* s = (SlotObj*)RT_PTR(monad_alloc((rt_size)sizeof(SlotObj)));
+    if (!s) return 0;
+    s->header.tag = MONAD_SLOT_TAG;
+    s->payload = 0;
+    s->full = 0;
+    return RT_WORD(s);
+}
+
+static rt_word slot_take_impl(rt_word handle) {
+    SlotObj* s = slot_of(handle);
+    if (!s || !s->full) return 0;
+    Constructor* pair = (Constructor*)alloc_constructor_impl(MONAD_PAIR_TAG, 2);
+    if (!pair) return 0;
+    pair->fields[0] = s->payload;
+    pair->fields[1] = handle;
+    s->payload = 0;
+    s->full = 0;
+    return RT_WORD(pair);
+}
+
+static rt_word slot_fill_impl(rt_word handle, rt_word v) {
+    SlotObj* s = slot_of(handle);
+    if (!s) return 0;
+    s->payload = v;
+    s->full = 1;
+    return handle;
+}
+
+static rt_word slot_peek_impl(rt_word handle) {
+    SlotObj* s = slot_of(handle);
+    if (!s || !s->full) return 0;
+    Constructor* pair = (Constructor*)alloc_constructor_impl(MONAD_PAIR_TAG, 2);
+    if (!pair) return 0;
+    pair->fields[0] = s->payload;
+    pair->fields[1] = handle;
+    return RT_WORD(pair);
+}
+
+static rt_word slot_free_impl(rt_word handle) {
+    SlotObj* s = slot_of(handle);
+    if (!s) return 0;
+    s->header.tag = 0;
+    s->payload = 0;
+    s->full = 0;
     return 0;
 }
 
@@ -1499,6 +1586,13 @@ rt_word monad_view_get(rt_word handle) { return view_get_impl(handle); }
 rt_word monad_view_payload(rt_word handle) { return view_payload_impl(handle); }
 rt_word monad_view_set(rt_word handle, rt_word v) { return view_set_impl(handle, v); }
 rt_word monad_view_free(rt_word handle) { return view_free_impl(handle); }
+
+rt_word monad_slot_new(rt_word init) { return slot_new_impl(init); }
+rt_word monad_slot_empty(void) { return slot_empty_impl(); }
+rt_word monad_slot_take(rt_word handle) { return slot_take_impl(handle); }
+rt_word monad_slot_fill(rt_word handle, rt_word v) { return slot_fill_impl(handle, v); }
+rt_word monad_slot_peek(rt_word handle) { return slot_peek_impl(handle); }
+rt_word monad_slot_free(rt_word handle) { return slot_free_impl(handle); }
 
 int64_t monad_string_length(rt_str s) { return monad_string_length_impl(RT_STR(s)); }
 int64_t monad_string_count_newlines(rt_str s, int64_t len) { return monad_string_count_newlines_impl(RT_STR(s), len); }

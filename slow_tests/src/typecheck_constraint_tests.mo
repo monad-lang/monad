@@ -9,37 +9,8 @@
 /// check never runs. A bare reference is a partial application, and it used to
 /// compile and run with the dictionary left out, so it needs a fixture that
 /// goes through `elaborate_loaded_modules` exactly as `monad check` does.
-use lang::module {check_module_with_scope, elaborate_loaded_modules}
-use lib::typecheck_harness {empty_local_scope}
+use lib::typecheck_harness {check_source_diags_plain, diags_contain}
 use std::list {List.length}
-use std::test {Test.write_fixture}
-
-#[partial]
-def diags_contain (needle : String) (diags : List String) : Bool :=
-    match diags {
-        List.empty => false,
-        List.cons d rest => if String.contains d needle then true else diags_contain needle rest,
-    }
-
-/// Write `source` to a scratch fixture and return the diagnostics the real
-/// check path reports for it.
-#[partial]
-def check_source_diags (source : String) (fixture_name : String) : IO (List String) := do {
-    let path : String := String.concat "/tmp/monad_constraint_" (String.concat fixture_name ".mo");
-    let _written <- Test.write_fixture (Path.path path) source;
-    let loaded <- elaborate_loaded_modules path false false;
-    match loaded {
-        Result.err e => do {
-            return (List.cons (String.concat "LOAD FAILED: " e) List.empty)
-        },
-        // Destructured, not projected twice: two `em.field` reads of an
-        // affine record would be an over-use.
-        Result.ok em => match em {
-            { scope, target_decls, .. } =>
-                check_module_with_scope scope target_decls empty_local_scope (Option.some path) false,
-        },
-    }
-}
 
 /// `use_foo` referenced BARE with no `Foo Pt` in scope: a partial
 /// application whose dictionary is decided and absent.
@@ -50,7 +21,7 @@ def test_a_bare_reference_without_an_instance_is_rejected : IO Bool := do {
         ++ "struct Pt { x : I64 }\n"
         ++ "def use_foo [Foo S] (s : S) : S := Foo.foo s\n"
         ++ "def caller (p : Pt) : Pt := let f : Pt -> Pt := use_foo in f p\n";
-    let diags <- check_source_diags src "bare_missing";
+    let diags <- check_source_diags_plain src "bare_missing";
     return (diags_contain "no instance of `Foo` for `Pt`" diags)
 }
 
@@ -64,7 +35,7 @@ def test_a_bare_reference_with_the_instance_is_accepted : IO Bool := do {
         ++ "instance Foo Pt { def foo (p : Pt) : Pt := p }\n"
         ++ "def use_foo [Foo S] (s : S) : S := Foo.foo s\n"
         ++ "def caller (p : Pt) : Pt := let f : Pt -> Pt := use_foo in f p\n";
-    let diags <- check_source_diags src "bare_present";
+    let diags <- check_source_diags_plain src "bare_present";
     return (I64.beq (List.length diags) 0)
 }
 
@@ -78,7 +49,7 @@ def test_a_class_method_call_without_an_instance_is_rejected : IO Bool := do {
     let src : String :=
         "class Foo A { def foo (x : A) : A := x }\n"
         ++ "def caller (x : I64) : I64 := Foo.foo x\n";
-    let diags <- check_source_diags src "method_missing";
+    let diags <- check_source_diags_plain src "method_missing";
     return (diags_contain "no instance of `Foo` for `I64`" diags)
 }
 
@@ -89,6 +60,6 @@ def test_a_class_method_call_with_the_instance_is_accepted : IO Bool := do {
         "class Foo A { def foo (x : A) : A := x }\n"
         ++ "instance Foo I64 { def foo (x : I64) : I64 := x + 1 }\n"
         ++ "def caller (x : I64) : I64 := Foo.foo x\n";
-    let diags <- check_source_diags src "method_present";
+    let diags <- check_source_diags_plain src "method_present";
     return (I64.beq (List.length diags) 0)
 }

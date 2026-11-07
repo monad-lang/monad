@@ -348,6 +348,12 @@ pub fn exec_native(
     "view_get" => view_get(args, natives),
     "view_set" => view_set(args, natives),
     "view_free" => view_free(args, natives),
+    "slot_new" => slot_new(args, natives),
+    "slot_empty" => slot_empty(args, natives),
+    "slot_take" => slot_take(args, natives),
+    "slot_fill" => slot_fill(args, natives),
+    "slot_peek" => slot_peek(args, natives),
+    "slot_free" => slot_free(args, natives),
     "string_get" => string_get(args, natives),
     "string_get_char" => string_get_char(args, natives),
     "string_to_list" => string_to_list(args, natives),
@@ -2116,6 +2122,158 @@ fn view_free(args: &[Value], natives: &NativeTable) -> Result<Value, CoreEvalErr
   let slot = reg
     .get_mut(idx)
     .ok_or_else(|| CoreEvalError::NativeArgError(format!("view_free: no such Cell {handle}")))?;
+  *slot = None;
+  drop(reg);
+  raw_io_wrap(natives, unit_value())
+}
+
+// ── Slot (init/src/view.mo) ────────────────────────────────────────────
+//
+// The empty/full linear handle. Same registry-as-type-system discipline as
+// `Cell`: the host does not enforce linearity, so the state (`full`) and the
+// cleared slot are what make a use-after-free a native error. The handle
+// space is offset past `Cell`'s so the two registries cannot collide.
+
+struct SlotState {
+  full: bool,
+  payload: Option<Value>,
+}
+
+static SLOT_STATES: std::sync::LazyLock<std::sync::Mutex<Vec<Option<SlotState>>>> =
+  std::sync::LazyLock::new(|| std::sync::Mutex::new(Vec::new()));
+
+const SLOT_HANDLE_BASE: u64 = (1 << 40) + (1 << 39);
+
+fn slot_states() -> Result<std::sync::MutexGuard<'static, Vec<Option<SlotState>>>, CoreEvalError> {
+  SLOT_STATES
+    .lock()
+    .map_err(|_| CoreEvalError::NativeArgError("slot registry poisoned".into()))
+}
+
+fn slot_index(handle: u64, name: &str) -> Result<usize, CoreEvalError> {
+  if handle < SLOT_HANDLE_BASE {
+    return Err(CoreEvalError::NativeArgError(format!(
+      "{name}: not a Slot handle {handle}"
+    )));
+  }
+  usize::try_from(handle - SLOT_HANDLE_BASE)
+    .map_err(|_| CoreEvalError::NativeArgError(format!("{name}: no such Slot {handle}")))
+}
+
+fn slot_new(args: &[Value], natives: &NativeTable) -> Result<Value, CoreEvalError> {
+  let init = args
+    .first()
+    .ok_or_else(|| CoreEvalError::NativeArgError("slot_new needs 1 arg".into()))?;
+  let mut reg = slot_states()?;
+  reg.push(Some(SlotState {
+    full: true,
+    payload: Some(init.clone()),
+  }));
+  let id = (reg.len() - 1) as u64;
+  drop(reg);
+  raw_io_wrap(natives, handle_value(SLOT_HANDLE_BASE + id))
+}
+
+fn slot_empty(_args: &[Value], natives: &NativeTable) -> Result<Value, CoreEvalError> {
+  let mut reg = slot_states()?;
+  reg.push(Some(SlotState {
+    full: false,
+    payload: None,
+  }));
+  let id = (reg.len() - 1) as u64;
+  drop(reg);
+  raw_io_wrap(natives, handle_value(SLOT_HANDLE_BASE + id))
+}
+
+fn slot_take(args: &[Value], natives: &NativeTable) -> Result<Value, CoreEvalError> {
+  let handle = extract_handle_id(
+    args
+      .first()
+      .ok_or_else(|| CoreEvalError::NativeArgError("slot_take needs 1 arg".into()))?,
+  )?;
+  let idx = slot_index(handle, "slot_take")?;
+  let mut reg = slot_states()?;
+  let state = reg
+    .get_mut(idx)
+    .and_then(|slot| slot.as_mut())
+    .ok_or_else(|| CoreEvalError::NativeArgError(format!("slot_take: no such Slot {handle}")))?;
+  if !state.full {
+    return Err(CoreEvalError::NativeArgError(format!(
+      "slot_take: Slot {handle} is empty"
+    )));
+  }
+  let value = state.payload.take().ok_or_else(|| {
+    CoreEvalError::NativeArgError(format!("slot_take: Slot {handle} has no payload"))
+  })?;
+  state.full = false;
+  drop(reg);
+  let pair_ctor = require_ctor(natives.well_known.pair_pair, "Pair.pair")?;
+  let pair = Value::Con {
+    tag: pair_ctor.tag,
+    args: std::sync::Arc::new(vec![value, handle_value(handle)].into()),
+  };
+  raw_io_wrap(natives, pair)
+}
+
+fn slot_fill(args: &[Value], natives: &NativeTable) -> Result<Value, CoreEvalError> {
+  if args.len() < 2 {
+    return Err(CoreEvalError::NativeArgError(
+      "slot_fill needs 2 args".into(),
+    ));
+  }
+  let handle = extract_handle_id(&args[0])?;
+  let idx = slot_index(handle, "slot_fill")?;
+  let mut reg = slot_states()?;
+  let state = reg
+    .get_mut(idx)
+    .and_then(|slot| slot.as_mut())
+    .ok_or_else(|| CoreEvalError::NativeArgError(format!("slot_fill: no such Slot {handle}")))?;
+  state.payload = Some(args[1].clone());
+  state.full = true;
+  drop(reg);
+  raw_io_wrap(natives, handle_value(handle))
+}
+
+fn slot_peek(args: &[Value], natives: &NativeTable) -> Result<Value, CoreEvalError> {
+  let handle = extract_handle_id(
+    args
+      .first()
+      .ok_or_else(|| CoreEvalError::NativeArgError("slot_peek needs 1 arg".into()))?,
+  )?;
+  let idx = slot_index(handle, "slot_peek")?;
+  let reg = slot_states()?;
+  let state = reg
+    .get(idx)
+    .and_then(|slot| slot.as_ref())
+    .ok_or_else(|| CoreEvalError::NativeArgError(format!("slot_peek: no such Slot {handle}")))?;
+  if !state.full {
+    return Err(CoreEvalError::NativeArgError(format!(
+      "slot_peek: Slot {handle} is empty"
+    )));
+  }
+  let value = state.payload.clone().ok_or_else(|| {
+    CoreEvalError::NativeArgError(format!("slot_peek: Slot {handle} has no payload"))
+  })?;
+  drop(reg);
+  let pair_ctor = require_ctor(natives.well_known.pair_pair, "Pair.pair")?;
+  let pair = Value::Con {
+    tag: pair_ctor.tag,
+    args: std::sync::Arc::new(vec![value, handle_value(handle)].into()),
+  };
+  raw_io_wrap(natives, pair)
+}
+
+fn slot_free(args: &[Value], natives: &NativeTable) -> Result<Value, CoreEvalError> {
+  let handle = extract_handle_id(
+    args
+      .first()
+      .ok_or_else(|| CoreEvalError::NativeArgError("slot_free needs 1 arg".into()))?,
+  )?;
+  let idx = slot_index(handle, "slot_free")?;
+  let mut reg = slot_states()?;
+  let slot = reg
+    .get_mut(idx)
+    .ok_or_else(|| CoreEvalError::NativeArgError(format!("slot_free: no such Slot {handle}")))?;
   *slot = None;
   drop(reg);
   raw_io_wrap(natives, unit_value())

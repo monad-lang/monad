@@ -7,7 +7,7 @@
 /// The type-level half (linearity, no Copy, no capture, no Shared) is
 /// asserted by `lang/src/module.mo`'s e2e fixtures; these pin the four
 /// natives round-tripping on a real runtime.
-use init::view {Cell}
+use init::view {Cell, Empty, Slot}
 
 def finish_with_42 (p : Pair I64 (Cell I64)) : IO Bool :=
     match p {
@@ -72,4 +72,75 @@ def test_cell_holds_a_string : IO Bool := do {
             return (String.beq s "hi")
         },
     }
+}
+
+// ── Slot ────────────────────────────────────────────────────────────
+
+/// empty -> fill -> take -> fill -> take -> free. The state is in the type,
+/// so each step is a different `Slot` instantiation.
+#[test]
+def test_slot_roundtrip : IO Bool := do {
+    let s0 : Slot Empty I64 <- Slot.empty;
+    let s1 <- Slot.fill s0 41;
+    let p1 <- Slot.take s1;
+    match p1 {
+        Pair.pair v s2 => do {
+            let ok1 := I64.beq v 41;
+            let s3 <- Slot.fill s2 42;
+            let p2 <- Slot.take s3;
+            match p2 {
+                Pair.pair w s4 => do {
+                    let _ <- Slot.free s4;
+                    return (ok1 && I64.beq w 42)
+                },
+            }
+        },
+    }
+}
+
+/// `peek` reads a `Copy` payload without emptying the slot, so a following
+/// `take` still finds it.
+#[test]
+def test_slot_peek_keeps_the_value : IO Bool := do {
+    let s0 <- Slot.new 7;
+    let p1 <- Slot.peek s0;
+    match p1 {
+        Pair.pair a s1 => do {
+            let ok1 := I64.beq a 7;
+            let p2 <- Slot.take s1;
+            match p2 {
+                Pair.pair b s2 => do {
+                    let _ <- Slot.free s2;
+                    return (ok1 && I64.beq b 7)
+                },
+            }
+        },
+    }
+}
+
+/// The point of `Slot` over `Cell`: a NON-`Copy` payload moves in and out.
+/// `List I64` has no `Copy` instance, so `Cell` cannot hold it.
+#[test]
+def test_slot_moves_a_non_copy_payload : IO Bool := do {
+    let xs : List I64 := [1, 2, 3];
+    let s0 <- Slot.new xs;
+    let p <- Slot.take s0;
+    match p {
+        Pair.pair ys s1 => do {
+            let _ <- Slot.free s1;
+            return (match List.get 0 ys {
+                Option.some a => I64.beq a 1,
+                Option.none => false,
+            })
+        },
+    }
+}
+
+/// A fresh empty slot can be consumed directly; this is the shape
+/// `Slot.empty`'s `A` annotation is for.
+#[test]
+def test_slot_empty_can_be_freed : IO Bool := do {
+    let s : Slot Empty I64 <- Slot.empty;
+    let _ <- Slot.free s;
+    return true
 }

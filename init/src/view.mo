@@ -112,3 +112,77 @@ pub def Cell.set [Copy A] (!c : Cell A) (a : A) : IO (Cell A) :=
 /// (the collector owns it; see this file's header).
 pub def Cell.free [Copy A] (!c : Cell A) : IO Unit :=
     IO.mk (view_free_raw c)
+
+// ── Slot: the empty/full view ───────────────────────────────────────
+//
+// The second view-types shape: a linear handle whose STATE is in the type,
+// so a move is expressible without a `Copy` payload. `Slot Empty A` has no
+// value; `Slot Full A` holds exactly one. `take` moves the value out and
+// returns an empty slot; `fill` moves one in. A `Full` slot must be taken
+// before it can be freed, so a linear payload is never silently dropped.
+//
+// `Empty`/`Full` are ordinary inhabited phantom tags (never constructed);
+// they are deliberately not empty inductives — an inductive with no
+// constructors is `False`, which AGENTS.md reserves for `Void`.
+
+pub type Empty {
+    empty_tag,
+}
+
+pub type Full {
+    full_tag,
+}
+
+/// An opaque linear handle that is either empty or holds one value of any
+/// type. The witness is the inhabitation proof and is unreferenceable
+/// (`#[opaque]`); values come only from the natives below.
+#[linear]
+#[opaque]
+pub type Slot (s : Type) (A : Type) { slot_witness }
+
+#[native slot_new]
+priv def slot_new_raw (a : A) : RawIO (Slot Full A)
+
+#[native slot_empty]
+priv def slot_empty_raw {A : Type} : RawIO (Slot Empty A)
+
+#[native slot_take]
+priv def slot_take_raw (!s : Slot Full A) : RawIO (Pair A (Slot Empty A))
+
+#[native slot_fill]
+priv def slot_fill_raw (!s : Slot Empty A) (a : A) : RawIO (Slot Full A)
+
+#[native slot_peek]
+priv def slot_peek_raw [Copy A] (!s : Slot Full A) : RawIO (Pair A (Slot Full A))
+
+#[native slot_free]
+priv def slot_free_raw (!s : Slot Empty A) : RawIO Unit
+
+/// Allocate a full slot holding `a`. Any type moves in; no `Copy` needed.
+pub def Slot.new (a : A) : IO (Slot Full A) :=
+    IO.mk (slot_new_raw a)
+
+/// Allocate an empty slot. `A` is usually pinned by the annotation
+/// (`let s : Slot Empty I64 <- Slot.empty;`) because nothing else mentions it.
+pub def Slot.empty {A : Type} : IO (Slot Empty A) :=
+    IO.mk slot_empty_raw
+
+/// Move the value out, leaving the slot empty. Consumes and returns the
+/// handle (P2); the old `Slot Full A` is unusable after the call.
+pub def Slot.take (!s : Slot Full A) : IO (Pair A (Slot Empty A)) :=
+    IO.mk (slot_take_raw s)
+
+/// Move a value in, leaving the slot full.
+pub def Slot.fill (!s : Slot Empty A) (a : A) : IO (Slot Full A) :=
+    IO.mk (slot_fill_raw s a)
+
+/// Read a full slot of a `Copy` payload without emptying it. This is the
+/// only operation that duplicates the payload, so only a `Copy` one is
+/// allowed; use `take`/`fill` for a linear value.
+pub def Slot.peek [Copy A] (!s : Slot Full A) : IO (Pair A (Slot Full A)) :=
+    IO.mk (slot_peek_raw s)
+
+/// Consume an EMPTY slot. A full slot must be `take`n first, so a linear
+/// payload is never silently dropped.
+pub def Slot.free (!s : Slot Empty A) : IO Unit :=
+    IO.mk (slot_free_raw s)

@@ -7,32 +7,7 @@
 /// exactly as `monad check` does, which is what exercises the do-bind
 /// type attribution (`usage.mo`'s `init_payload_type`) -- the path that
 /// makes `let c <- Cell.new 1` a checked linear binder rather than a hole.
-use lang::module {check_module_with_scope_affine, elaborate_loaded_modules}
-use lib::typecheck_harness {empty_local_scope}
-use std::test {Test.write_fixture}
-
-#[partial]
-def diags_contain (needle : String) (diags : List String) : Bool :=
-    match diags {
-        List.empty => false,
-        List.cons d rest => if String.contains d needle then true else diags_contain needle rest,
-    }
-
-#[partial]
-def check_source_diags (source : String) (fixture_name : String) : IO (List String) := do {
-    let path : String := String.concat "/tmp/monad_view_" (String.concat fixture_name ".mo");
-    let _written <- Test.write_fixture (Path.path path) source;
-    let loaded <- elaborate_loaded_modules path false false;
-    match loaded {
-        Result.err e => do {
-            return (List.cons (String.concat "LOAD FAILED: " e) List.empty)
-        },
-        Result.ok em => match em {
-            { scope, target_decls, .. } =>
-                check_module_with_scope_affine scope target_decls empty_local_scope (Option.some path) false,
-        },
-    }
-}
+use lib::typecheck_harness {check_source_diags, diags_contain}
 
 /// `let c <- Cell.new 1` leaves the binder's WRITTEN type a hole. The
 /// collector attributes it from the initializer's `IO (Cell A)` payload,
@@ -102,4 +77,62 @@ def test_a_copy_instance_for_a_cell_is_rejected : IO Bool := do {
         ++ "}\n";
     let diags <- check_source_diags src "copy_instance";
     return (diags_contain "not allowed for the linear or proof type" diags)
+}
+
+// ── Slot: the state-in-the-type handle ──────────────────────────────
+
+/// A `Slot` is `#[linear]`, so dropping one is `linear_unused` (the same
+/// rule that makes a leaked Cell an error once `#[linear]` is on it).
+#[test]
+def test_a_dropped_slot_is_never_used : IO Bool := do {
+    let src : String :=
+        "use init::view {Full, Slot}\n"
+        ++ "def bad (s : Slot Full I64) : I64 := 0\n";
+    let diags <- check_source_diags src "slot_dropped";
+    return (diags_contain "never used" diags)
+}
+
+#[test]
+def test_a_slot_cannot_be_used_twice : IO Bool := do {
+    let src : String :=
+        "use init::view {Full, Slot}\n"
+        ++ "def bad (s : Slot Full I64) : IO Unit := do {\n"
+        ++ "  let _ <- Slot.take s;\n"
+        ++ "  let _ <- Slot.take s;\n"
+        ++ "  return unit\n"
+        ++ "}\n";
+    let diags <- check_source_diags src "slot_twice";
+    return (diags_contain "is used 2 times" diags)
+}
+
+/// `Slot.free` consumes an EMPTY slot only; freeing a full one does not
+/// typecheck (a linear payload must be moved out first).
+#[test]
+def test_a_full_slot_cannot_be_freed : IO Bool := do {
+    let src : String :=
+        "use init::view {Full, Slot}\n"
+        ++ "def bad (s : Slot Full I64) : IO Unit := Slot.free s\n";
+    let diags <- check_source_diags src "slot_free_full";
+    return (diags_contain "expected (Slot Empty I64), found (Slot Full I64)" diags)
+}
+
+#[test]
+def test_a_slot_captured_by_a_closure_is_rejected : IO Bool := do {
+    let src : String :=
+        "use init::view {Full, Slot}\n"
+        ++ "def bad (s : Slot Full I64) : I64 :=\n"
+        ++ "  let f := fn (u : Unit) => s in 0\n";
+    let diags <- check_source_diags src "slot_capture";
+    return (diags_contain "is captured by a closure" diags)
+}
+
+#[test]
+def test_a_copy_instance_for_a_slot_is_rejected : IO Bool := do {
+    let src : String :=
+        "use init::view {Full, Slot}\n"
+        ++ "instance Copy (Slot Full I64) {\n"
+        ++ "  def copy (s : Slot Full I64) : Pair (Slot Full I64) (Slot Full I64) := Pair.pair s s\n"
+        ++ "}\n";
+    let diags <- check_source_diags src "slot_copy";
+    return (diags_contain "is not allowed for the linear or proof type" diags)
 }

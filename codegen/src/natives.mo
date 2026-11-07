@@ -237,6 +237,14 @@ def native_runtime_fn_name (attrs : List Attribute) : Option NativeWrapKind :=
             else if String.beq target "view_get" then Option.some (NativeWrapKind.raw_io_passthrough "monad_view_get")
             else if String.beq target "view_set" then Option.some (NativeWrapKind.raw_io_passthrough "monad_view_set")
             else if String.beq target "view_free" then Option.some (NativeWrapKind.raw_io_passthrough "monad_view_free")
+            // `init/src/view.mo`'s `Slot Empty/Full`: same one-word handle
+            // ABI as `Cell`; `slot_empty` takes no argument.
+            else if String.beq target "slot_new" then Option.some (NativeWrapKind.raw_io_passthrough "monad_slot_new")
+            else if String.beq target "slot_empty" then Option.some (NativeWrapKind.raw_io_passthrough "monad_slot_empty")
+            else if String.beq target "slot_take" then Option.some (NativeWrapKind.raw_io_passthrough "monad_slot_take")
+            else if String.beq target "slot_fill" then Option.some (NativeWrapKind.raw_io_passthrough "monad_slot_fill")
+            else if String.beq target "slot_peek" then Option.some (NativeWrapKind.raw_io_passthrough "monad_slot_peek")
+            else if String.beq target "slot_free" then Option.some (NativeWrapKind.raw_io_passthrough "monad_slot_free")
             // `String.hash`'s `#[native string_hash]` -- pure `U64`
             // result, same shape as `string_length`. `IO.file_exists`/
             // `is_dir` (`std/io.mo`, `#[native "X_native"]` on the
@@ -985,6 +993,14 @@ pub def runtime_declarations_for (kind : TargetKind) : List LLVMDeclaration :=
     let d122 := mk_decl "monad_view_get" ["i64"] "i64" in
     let d123 := mk_decl "monad_view_set" ["i64", "i64"] "i64" in
     let d124 := mk_decl "monad_view_free" ["i64"] "i64" in
+    // `init/src/view.mo`'s `Slot`: the handle is one i64 word, the empty
+    // constructor takes none, and `take`/`peek` return a built `Pair`.
+    let d160 := mk_decl "monad_slot_new" ["i64"] "i64" in
+    let d161 := mk_decl "monad_slot_empty" [] "i64" in
+    let d162 := mk_decl "monad_slot_take" ["i64"] "i64" in
+    let d163 := mk_decl "monad_slot_fill" ["i64", "i64"] "i64" in
+    let d164 := mk_decl "monad_slot_peek" ["i64"] "i64" in
+    let d165 := mk_decl "monad_slot_free" ["i64"] "i64" in
     // `monad_view_payload` (runtime_core.c) -- the fused do-bind's read
     // half. Emitted DIRECTLY by `try_compile_view_bind_db`
     // (`codegen/src/emit.mo`), never reached through a native
@@ -1103,6 +1119,7 @@ pub def runtime_declarations_for (kind : TargetKind) : List LLVMDeclaration :=
         d88, d91, d91a, d92, d93, d94, d95, d96, d97, d98, d99, d99a, d99b, d100, d101, d102, d103,
         d104, d105, d106, d107, d108, d109, d110, d111, d112, d113, d114, d115, d116,
         d117, d118, d119, d120, d121, d122, d123, d124, d150,
+        d160, d161, d162, d163, d164, d165,
         d125, d126, d127, d128, d129, d130, d131, d132, d133,
         d134, d135, d136, d137, d138, d139, d140, d141,
         d142, d143, d144, d145, d146, d147, d148, d149]
