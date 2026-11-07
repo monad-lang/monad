@@ -31,11 +31,23 @@ def free_vars (typ : Term) (known_names : List Identifier) : List Identifier :=
                 DebugName.named id =>
                     if I64.beq idx sentinel
                     then
-                        if id_member id known_names
+                        // A QUALIFIED spelling is a resolved reference, never
+                        // an implicit type variable: `P Bool.true`'s
+                        // constructor argument, `Vec.cons`,
+                        // `std::base::Ordering`. Wrapping one in a Forall gave
+                        // it a bogus `Sort 1` type, and
+                        // `locals_with_def_typevars` then bound it to the
+                        // `Sort 0` placeholder — `proofs/`'s
+                        // `expected Bool, found Prop` came from HERE, not from
+                        // the checker's constructor rule.
+                        if String.contains (show_identifier id) "."
+                            || String.contains (show_identifier id) "::"
                         then List.empty
-                        else
-                            let rest : List Identifier := List.empty in
-                            List.cons id rest
+                        else if id_member id known_names
+                            then List.empty
+                            else
+                                let rest : List Identifier := List.empty in
+                                List.cons id rest
                     else List.empty,
                 DebugName.unnamed => List.empty,
             },

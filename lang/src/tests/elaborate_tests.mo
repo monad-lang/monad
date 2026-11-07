@@ -39,6 +39,26 @@ def none_term : Option Term := Option.none
 def test_sentinel : Bool :=
     sentinel == (-1)
 
+/// A qualified reference is a RESOLVED name, never an implicit type
+/// variable: `free_vars` must not collect `Bool.true` from `P Bool.true`.
+/// Before this it wrapped the constructor in a Forall, and
+/// `locals_with_def_typevars` then bound it to the `Sort 0` placeholder --
+/// the source of every `expected Bool, found Prop` failure in `proofs/`.
+#[test]
+def test_free_vars_skips_qualified_references : Bool :=
+    let t : Term :=
+        Term.app (var sentinel (named (Identifier.id "P")))
+            (var sentinel (named (Identifier.id "Bool.true"))) in
+    Bool.not (id_member (Identifier.id "Bool.true") (free_vars t no_ids))
+
+/// The positive control: a bare, unbound type variable is still collected.
+#[test]
+def test_free_vars_keeps_bare_type_variables : Bool :=
+    match free_vars v_A no_ids {
+        List.cons _ _ => true,
+        List.empty => false,
+    }
+
 // --- id_eq tests ---
 
 #[test]
