@@ -14,7 +14,11 @@ use std::list {List.length}
 use std::map {Map, BTreeMap}
 use std::io {IO.write_file, IO.file_exists}
 use std::path {Path}
-use std::process {Proc.capture, exec_cmd}
+use std::process {exec_cmd}
+use time::types {DateTime}
+use time::instant {Instant.now}
+use time::datetime {DateTime.of_instant}
+use time::date {Date.to_iso}
 use markdown::parse {Markdown.split_frontmatter}
 use markdown::scan {Markdown.split_lines}
 use markdown::types {Markdown.FrontSplit, Markdown.FrontFormat, Markdown.Frontmatter}
@@ -159,14 +163,11 @@ pub def PlanFile.save_session (st : StoreState) (d : PlanDoc) : IO (Result Strin
 
 // ─── Date and slug ─────────────────────────────────────────────────────
 
-/// The UTC calendar day, from the same `date` fork the log filenames use
-/// (the compiled clock is monotonic, so the time mote cannot supply a
-/// wall-clock date).
+/// The UTC calendar day.
 pub def PlanFile.today : IO String := do {
-    let r <- Proc.capture "date" ["+%Y-%m-%d"];
-    match r {
-        Pair.pair code out => if I64.beq code 0 then IO.pure (String.trim out) else IO.pure "unknown",
-    }
+    let now <- Instant.now;
+    let dt : DateTime := DateTime.of_instant now 0;
+    IO.pure (Date.to_iso dt.date)
 }
 
 def lower_u8 (b : U8) : U8 :=

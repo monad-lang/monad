@@ -48,12 +48,14 @@ workspace = true
 [dependencies.parsec]
 workspace = true
 
+[dependencies.time]
+workspace = true
+
 # Assistant Markdown is rendered through the markdown mote; plan files use
 # its YAML frontmatter split and the yaml mote. `xml_html` is here for the
 # same reason `llvm`/`runtime` are below: markdown's library root re-exports
 # its HTML renderer, so the module graph reaches `xml_html` even when weaver
-# only renders styled text. Dates come from `date +%s` (the compiled clock
-# is monotonic), so no `time` dependency is declared.
+# only renders styled text. Calendar dates come from the `time` mote.
 [dependencies.markdown]
 workspace = true
 

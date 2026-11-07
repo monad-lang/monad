@@ -10,9 +10,9 @@ use log::logger {
     LogFormat, Logger, Logger.file, Logger.with_field, Logger.with_format,
     Logger.debug, Logger.info, Logger.warn, Logger.error,
 }
-use std::io {IO.get_env, IO.read_file, IO.list_dir, IO.current_time_nano, IO.write_stderr}
+use std::io {IO.get_env, IO.read_file, IO.list_dir, IO.epoch_time_nano, IO.write_stderr}
 use std::path {Path, Path.to_string, Path.with_suffix}
-use std::process {process_id, exec_cmd, Proc.capture}
+use std::process {process_id, exec_cmd}
 use weaver::store {Store.sessions_root}
 use weaver::theme {theme_split_lines}
 use std::list {List.intercalate, List.length, List.sort_by}
@@ -76,24 +76,10 @@ pub def Logs.dir : IO Path := do {
     IO.pure (dir_of override sessions)
 }
 
-/// Wall-clock seconds for the filename: one `date +%s` (the compiled
-/// runtime's clock is monotonic, not epoch). Falls back to a monotonic id.
-def epoch_fallback : IO String := do {
-    let now <- IO.current_time_nano;
-    IO.pure (String.concat "m-" (I64.to_string now))
-}
-
-def epoch_of (code : I64) (out : String) : IO String :=
-    let t : String := String.trim out in
-    if Bool.and (I64.beq code 0) (Bool.not (String.is_empty t))
-    then IO.pure t
-    else epoch_fallback
-
+/// Wall-clock seconds since the Unix epoch, for the filename.
 pub def Logs.epoch : IO String := do {
-    let r <- Proc.capture "date" ["+%s"];
-    match r {
-        Pair.pair code out => epoch_of code out,
-    }
+    let now <- IO.epoch_time_nano;
+    IO.pure (I64.to_string (I64.div now 1000000000))
 }
 
 pub def Logs.current_path (dir : Path) (epoch : String) : IO String := do {
