@@ -1275,6 +1275,42 @@ int64_t monad_process_id(void) {
     return (int64_t)getpid();
 }
 
+/* `#[native "sys_int"]` (sys/src/raw.mo, the OS floor's integer call).
+   One entry point for the scalar syscalls so the floor costs one native:
+   `op` selects the call, unused arguments are 0, and a failure is
+   `-errno` (the `I64` convention the floor's `.mo` wrappers decode with
+   `SysError.of_errno`). `getpriority` is the one call whose result can
+   legitimately be negative, so it clears `errno` first and only reports a
+   value when `errno` stayed clear. */
+int64_t monad_sys_int(int64_t op, int64_t a, int64_t b) {
+    switch (op) {
+    case 0: return (int64_t)getpid();
+    case 1: return (int64_t)getppid();
+    case 2: return (int64_t)getuid();
+    case 3: return (int64_t)geteuid();
+    case 4:
+        if (kill((pid_t)a, (int)b) != 0) return -(int64_t)errno;
+        return 0;
+    case 5: {
+        errno = 0;
+        int prio = getpriority(PRIO_PROCESS, (id_t)a);
+        if (errno != 0) return -(int64_t)errno;
+        return (int64_t)prio;
+    }
+    case 6:
+        if (setpriority(PRIO_PROCESS, (id_t)a, (int)b) != 0) return -(int64_t)errno;
+        return 0;
+    case 7:
+        switch (a) {
+        case 0: return (int64_t)sysconf(_SC_CLK_TCK);
+        case 1: return (int64_t)sysconf(_SC_PAGESIZE);
+        case 2: return (int64_t)sysconf(_SC_NPROCESSORS_ONLN);
+        default: return -(int64_t)EINVAL;
+        }
+    default: return -(int64_t)EINVAL;
+    }
+}
+
 /* `#[native "list_dir"]` (std/io.mo's IO.list_dir_native): bare entry
    names, one directory level, SORTED -- the sort is load-bearing, not
    cosmetic: readdir order is filesystem-dependent, and the reference

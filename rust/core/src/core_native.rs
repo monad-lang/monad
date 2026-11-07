@@ -402,6 +402,7 @@ pub fn exec_native(
     "channel_take" => channel_take(args, natives),
     "channel_try_take" => channel_try_take(args, natives),
     "process_id" => process_id(),
+    "sys_int" => sys_int(args, natives),
     "build_commit" => build_commit(),
     // `Ptr.null : Ptr` (init/prelude.mo) — the NULL pointer, for C
     // functions whose callback argument is NULL (`SSL_set_verify` in
@@ -3658,6 +3659,81 @@ fn current_time_nano(natives: &NativeTable) -> Result<Value, CoreEvalError> {
     .unwrap_or_default()
     .as_nanos() as i64;
   raw_io_wrap(natives, Value::Lit(IrLit::Num(now, NumSuffix::I64)))
+}
+
+/// `sys_int op a b` (`sys/src/raw.mo`): the OS floor's scalar syscalls.
+/// Same op numbers and the same `-errno` failure channel as
+/// `monad_sys_int` in `runtime/src/platform_posix.c`, so the interpreter
+/// and a compiled binary agree.
+/// `errno` as this process sees it. `libc` exposes no portable accessor:
+/// glibc and musl use `__errno_location`, the BSDs/macOS `__error`.
+fn sys_errno() -> i32 {
+  #[cfg(any(target_os = "macos", target_os = "ios", target_os = "freebsd"))]
+  {
+    unsafe { *libc::__error() }
+  }
+  #[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "freebsd")))]
+  {
+    unsafe { *libc::__errno_location() }
+  }
+}
+
+fn sys_set_errno(v: i32) {
+  #[cfg(any(target_os = "macos", target_os = "ios", target_os = "freebsd"))]
+  {
+    unsafe { *libc::__error() = v }
+  }
+  #[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "freebsd")))]
+  {
+    unsafe { *libc::__errno_location() = v }
+  }
+}
+
+fn sys_int(args: &[Value], natives: &NativeTable) -> Result<Value, CoreEvalError> {
+  let arg = |i: usize| -> Result<i64, CoreEvalError> {
+    extract_int(
+      args
+        .get(i)
+        .ok_or_else(|| CoreEvalError::NativeArgError("sys_int needs 3 args".into()))?,
+    )
+  };
+  let (op, a, b) = (arg(0)?, arg(1)?, arg(2)?);
+  let errno = |e: i32| -(e as i64);
+  let rc = match op {
+    0 => (unsafe { libc::getpid() }) as i64,
+    1 => (unsafe { libc::getppid() }) as i64,
+    2 => (unsafe { libc::getuid() }) as i64,
+    3 => (unsafe { libc::geteuid() }) as i64,
+    4 => {
+      if unsafe { libc::kill(a as libc::pid_t, b as libc::c_int) } == 0 {
+        0
+      } else {
+        errno(std::io::Error::last_os_error().raw_os_error().unwrap_or(0))
+      }
+    }
+    5 => {
+      // `getpriority` can return a negative value legitimately, so the
+      // error is read from `errno` after clearing it, as the C does.
+      sys_set_errno(0);
+      let p = unsafe { libc::getpriority(libc::PRIO_PROCESS, a as libc::id_t) };
+      let e = sys_errno();
+      if e != 0 { errno(e) } else { p as i64 }
+    }
+    6 => {
+      sys_set_errno(0);
+      let r = unsafe { libc::setpriority(libc::PRIO_PROCESS, a as libc::id_t, b as libc::c_int) };
+      let e = sys_errno();
+      if r != 0 { errno(e) } else { 0 }
+    }
+    7 => match a {
+      0 => (unsafe { libc::sysconf(libc::_SC_CLK_TCK) }) as i64,
+      1 => (unsafe { libc::sysconf(libc::_SC_PAGESIZE) }) as i64,
+      2 => (unsafe { libc::sysconf(libc::_SC_NPROCESSORS_ONLN) }) as i64,
+      _ => errno(libc::EINVAL),
+    },
+    _ => errno(libc::EINVAL),
+  };
+  raw_io_wrap(natives, Value::Lit(IrLit::Num(rc, NumSuffix::I64)))
 }
 
 fn process_id() -> Result<Value, CoreEvalError> {
