@@ -29,30 +29,24 @@
   # services.postgres.enable = true;
 
   # https://devenv.sh/scripts/
-  # /try is served from docs/site/static/try. Its page shell (index.html,
-  # style.css, worker.js) is tracked, but the host and both wasm modules are
-  # build output, and `zola serve` snapshots static/ at startup -- so the
-  # build must run BEFORE Zola, or the site mixes a new page with a stale
-  # host (worker protocol mismatch: empty results, or `[object Event]` for
-  # load failures). `scripts/build-try.sh` copies every file, so one run
-  # leaves a consistent directory. A missing/stale compiler must not block
-  # the docs, so serve warns; docs-build fails.
+  # The site is built by `acorn` (motes/acorn), which also copies the static
+  # tree (docs/site/static) -- so the /try wasm and the /install script must
+  # be staged there first; `scripts/build-docs.sh` does both, in order.
+  # `scripts/build-try.sh` copies every /try file in one run, so the page
+  # never mixes a new host with stale wasm (worker protocol mismatch). A
+  # missing/stale compiler must not block the docs, so serve warns;
+  # docs-build fails.
   scripts.docs-serve.exec = ''
     set -euo pipefail
-    mdbook build ${config.devenv.root}/docs
-    ${config.devenv.root}/scripts/sync-install.sh
-    ${config.devenv.root}/scripts/build-try.sh || {
-      echo "warning: /try wasm not rebuilt (run 'devenv tasks run monad:bootstrap-compile' or 'monadup default', then restart docs-serve); the served /try is stale" >&2
-    }
-    zola --root ${config.devenv.root}/docs/site serve --open
+    if ! ${config.devenv.root}/scripts/build-docs.sh; then
+      echo "warning: /try wasm not rebuilt (run 'devenv tasks run monad:bootstrap-compile' or 'monadup default', then restart docs-serve); the served /try may be stale" >&2
+    fi
+    python3 -m http.server 8000 --directory ${config.devenv.root}/docs/public
   '';
 
   scripts.docs-build.exec = ''
     set -euo pipefail
-    mdbook build ${config.devenv.root}/docs
-    ${config.devenv.root}/scripts/sync-install.sh
-    ${config.devenv.root}/scripts/build-try.sh
-    zola --root ${config.devenv.root}/docs/site build -o ${config.devenv.root}/docs/public --force
+    ${config.devenv.root}/scripts/build-docs.sh
   '';
 
   scripts.bootstrap.exec = ''
@@ -234,7 +228,7 @@
       files = "^scripts/.*\\.sh$|^scripts/monadup$";
       pass_filenames = true;
     };
-    # `mdbook build` only RENDERS the book -- it never compiles the Monad
+    # A site build only RENDERS the book -- it never compiles the Monad
     # inside it, which is how docs/src drifted far enough from the compiler
     # that most of its samples had stopped parsing. This extracts every
     # ```monad block and type-checks it, so a language change that breaks

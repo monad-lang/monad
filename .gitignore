@@ -21,16 +21,18 @@ devenv.local.yaml
 # pre-commit
 .pre-commit-config.yaml
 
-# Docs build output (mdBook -> docs/site/static/docs, Zola -> docs/public)
+# The site build output (`scripts/build-docs.sh` -> docs/public) and the
+# acorn binary it builds first. `target-docs.*` is what `-o` names the
+# intermediates after when the output path has no file name.
 docs/public
-docs/site/public
-docs/site/static/docs
+target-docs
+target-docs.*
 # `scripts/sync-install.sh` generates this from the canonical
-# `scripts/monadup` for Zola to serve at /install; it is build output.
+# `scripts/monadup`; acorn copies it to /install. Build output.
 docs/site/static/install
 
 # `scripts/build-try.sh` stages the /try wasm, the generated host and the
-# served prelude sources into the Zola static tree; the page shell,
+# served prelude sources into the static tree acorn copies; the page shell,
 # stylesheet, worker and source-framing scripts beside them are source
 # (committed).
 docs/site/static/try/try_engine.wasm

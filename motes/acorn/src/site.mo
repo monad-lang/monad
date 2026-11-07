@@ -254,8 +254,12 @@ def not_found_page (cfg : SiteConfig) (entries : Shared (List NavEntry)) (index_
     { title := "Page not found", root := root,
         body := not_found_body (Layout.chapter_href cfg root index_stem), book := Option.some nav }
 
+/// Written at the book's `404.html` (mdBook's location, for parity) and at
+/// the output root: GitHub Pages only serves a custom `/404.html` from the
+/// root, and the page's links are absolute so one document fits both.
 def built_not_found (cfg : SiteConfig) (entries : Shared (List NavEntry)) (index_stem : String) : Built :=
-    { paths := [join cfg.book_dir "404.html"], doc := Layout.document cfg (not_found_page cfg entries index_stem) }
+    { paths := [join cfg.book_dir "404.html", "404.html"],
+        doc := Layout.document cfg (not_found_page cfg entries index_stem) }
 
 def built_landing (cfg : SiteConfig) : Built :=
     { paths := ["index.html"], doc := Oak.to_html (Landing.page cfg) }

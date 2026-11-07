@@ -101,14 +101,6 @@ in
     # surviving to the linker.
     pkg-config
 
-    # The docs/ book. `.github/workflows/mdbook.yml` installs its own copy
-    # to publish monad-lang.org; this is so a docs change can be previewed
-    # locally (`docs-serve`) before it ships, and so `mdbook build` is
-    # available to check that SUMMARY.md still resolves.
-    mdbook
-    # Zola generates the landing page (monad-lang.org) with Tera templates;
-    # mdBook output lands in Zola's static/docs/ so docs are served at /docs/.
-    zola
     file
 
     # The tools the CI scripts under scripts/ call, declared here because a

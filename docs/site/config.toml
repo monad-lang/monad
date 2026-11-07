@@ -1,6 +1,0 @@
-base_url = "https://monad-lang.org"
-title = "Monad"
-description = "A purely functional, dependently typed systems programming language with LLVM native compilation."
-compile_sass = true
-
-[extra]

@@ -1,26 +1,35 @@
 # Documentation
 
-The Monad language site, built with [Zola](https://www.getzola.org/) (landing
-page) and [mdBook](https://rust-lang.github.io/mdBook/) (documentation), and
-published to <https://monad-lang.org> by `.github/workflows/mdbook.yml` on
-every push to `main`.
+The Monad language site is built by **acorn** (`motes/acorn`), the Monad
+site generator, and published to <https://monad-lang.org> by
+`.github/workflows/site.yml` on every push to `main`.
 
-The landing page lives at `monad-lang.org/` and the documentation book at
-`monad-lang.org/docs/`.
+- The landing page is `landing.mo`, rendered to `monad-lang.org/`.
+- The book's sources are `docs/src/` (`SUMMARY.md` and 22 chapters), rendered
+  to `monad-lang.org/docs/` at the same URLs mdBook used, plus `index.html`,
+  `print.html` and `404.html`.
+- `docs/site/static/` is copied as-is: the landing stylesheet and icons, the
+  favicon and logo, `/try` and `/install`.
+- The configuration is `docs/site.toml`.
 
 ```bash
-docs-build            # devenv script: build both mdBook and Zola to docs/public
-docs-serve            # devenv script: build mdBook, then serve Zola with live reload
+docs-build            # devenv script: render the site into docs/public
+docs-serve            # devenv script: build it, then serve docs/public on :8000
 ```
 
-The Zola project is at `docs/site/` — templates in `docs/site/templates/`,
-styles in `docs/site/sass/`, static assets in `docs/site/static/`. mdBook
-output goes to `docs/site/static/docs/` (configured via `build-dir` in
-`docs/book.toml`), so Zola serves it at `/docs/`.
+`scripts/build-docs.sh` does the work: it stages `/install` and the `/try`
+wasm into `docs/site/static/`, builds acorn with the tree's compiler, and runs
+`acorn build`. The static tree is copied by acorn, so those two steps must
+come first. The build fails before writing anything if an internal link points
+at a page or anchor that does not exist.
+
+The old pipeline (mdBook for the book, Zola for the landing page) is gone with
+its `docs/book.toml`, `docs/site/config.toml`, `docs/site/templates/` and
+`docs/theme/`.
 
 ## Keeping the examples correct
 
-`mdbook build` only renders markdown — it does not compile the Monad inside it.
+A site build only renders markdown — it does not compile the Monad inside it.
 `scripts/check-docs.sh` does: it extracts every ` ```monad ` block, type-checks
 it with the real compiler, and runs as a git hook (and therefore in CI).
 

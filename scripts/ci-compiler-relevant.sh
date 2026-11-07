@@ -47,7 +47,7 @@
 # error all answer `true`. That is the only acceptable direction: a
 # misclassification may then cost an hour of runner time, never a missed
 # failure. The rules below are the paths a change can touch without the
-# compiler reading them -- markdown in any directory, the generated mdbook
+# compiler reading them -- markdown in any directory, the generated site
 # under docs/, and files no build in this repository opens.
 set -euo pipefail
 
@@ -72,8 +72,8 @@ while IFS= read -r path; do
     # README/AGENTS/CODE_OF_CONDUCT, docs/src's book sources, the
     # per-directory READMEs, and .claude-plugin's.
     *.md) ;;
-    # The mdbook's config and its COMMITTED build output (docs/book/*.html).
-    # Generated, and nothing compiles it -- mdbook.yml is disabled_manually.
+    # The site sources and build output under docs/. `acorn build` only
+    # reads them; the deploy workflow is main-only.
     docs/*) ;;
     # Opened by no nix expression, script or hook in the tree: nix's
     # `meta.license` names a nixpkgs value, not this file, and the ignore

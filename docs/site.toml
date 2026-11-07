@@ -1,5 +1,5 @@
-# The acorn site configuration (motes/acorn). Replaces docs/book.toml and
-# docs/site/config.toml once the cut-over lands; until then both coexist.
+# The acorn site configuration (motes/acorn). Replaces mdBook's docs/book.toml
+# and Zola's docs/site/config.toml, both removed by the cut-over.
 title = "Monad language"
 base_url = "https://monad-lang.org"
 out = "docs/public"

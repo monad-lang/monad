@@ -1,6 +1,6 @@
 /// The site configuration, read from `docs/site.toml`.
 ///
-/// It replaces `docs/book.toml` (mdBook) and `docs/site/config.toml` (Zola).
+/// It replaced `docs/book.toml` (mdBook) and `docs/site/config.toml` (Zola).
 /// Paths are relative to the directory `acorn` runs in (the repo root).
 use toml::toml {Toml.Value, Toml.ParseError, Toml.parse, Toml.table_get}
 

@@ -123,7 +123,7 @@ if [ -n "$floor" ]; then
     # required check decides below -- strict can only be harder than the
     # window, never easier, so a tree the latest nightly cannot build still
     # fails. (Each gate job checks out full history so the window stays
-    # decidable; see the `fetch-depth: 0` on ci.yml's and mdbook.yml's.)
+    # decidable; see the `fetch-depth: 0` on ci.yml's and site.yml's.)
     say "bootstrap/nightly-floor.txt names '$floor', which is not in this clone"
     say "the bootstrap window cannot be evaluated: running the required check"
   else

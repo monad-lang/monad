@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 #
-# Copy the monadup bootstrap stub to the Zola site's static directory so it
-# is served at https://monad-lang.org/install.
+# Copy the monadup bootstrap stub to the site's static directory so it is
+# served at https://monad-lang.org/install.
 #
 # `scripts/monadup` stays canonical; `docs/site/static/install` is generated
-# build output (gitignored). The devenv docs tasks and the deploy workflow
-# run this before `zola build`.
+# build output (gitignored). `scripts/build-docs.sh` runs this before
+# `acorn build`, which copies the static tree into docs/public.
 #
 # Usage: scripts/sync-install.sh
 set -euo pipefail

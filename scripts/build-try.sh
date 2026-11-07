@@ -10,16 +10,17 @@
 # tree are gitignored. `web.js` is generated here (`scripts/gen-web-js.sh`)
 # rather than copied from a tracked file. This script stages ALL of them on
 # every run -- one invocation always leaves a self-consistent, servable
-# directory. Restart `zola serve` after a rebuild (it snapshots static/ at
-# startup).
+# directory. `scripts/build-docs.sh` runs this before `acorn build`, which
+# copies the staged directory into docs/public; re-run it to refresh a
+# `docs-serve` preview.
 #
 # The engine embeds no prelude: the page fetches the real `init/src/*.mo`
 # files from `sources/` (indexed by `sources.json`) and hands their text to
 # the wasm. That is why the source tree is staged here, in the same run as
 # the engine that parses it.
 #
-# MONAD selects the compiler binary (the deploy workflow passes the nix
-# build's `.#monad`); the first argument overrides the output directory.
+# MONAD selects the compiler binary (the deploy workflow passes the tree's
+# self-compiled binary); the first argument overrides the output directory.
 set -euo pipefail
 
 root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"

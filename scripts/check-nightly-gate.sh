@@ -135,7 +135,7 @@ else
 fi
 
 # 2. The floor names a commit the clone cannot resolve (a depth-1 checkout of
-#    a tree whose floor is older than HEAD, mdbook.yml's try-wasm before it
+#    a tree whose floor is older than HEAD, site.yml's build before it
 #    got a full-history checkout). The window is undecidable; the strict check
 #    decides, not the clone's shape.
 printf '0000000000000000000000000000000000000000\n' > "$work/floor-missing"

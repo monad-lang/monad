@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Type-check every Monad code block in the mdBook under docs/.
 #
-# `mdbook build` only renders markdown -- it never compiles the code inside
+# A site build only renders markdown -- it never compiles the code inside
 # the chapters, which is how the book drifted far enough from the compiler
 # that most of its samples stopped parsing. This script closes that gap.
 #
