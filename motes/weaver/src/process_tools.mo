@@ -60,10 +60,13 @@ pub def ReadProcessTool.spec : ToolSpec :=
         description := "Show a background task's status and its last 40 output lines. To wait for a task, pass wait_seconds instead of calling read_process repeatedly.",
         schema := read_schema }
 
-pub def ReadProcessTool.impl : ToolImpl :=
-    { spec := ReadProcessTool.spec, cap := Capability.read, run := read_run }
+pub def ReadProcessTool.impl : ToolImpl := ReadProcessTool.impl_with (fn (_ : Unit) => IO.pure false)
 
-def read_entry (id : String) (e : ProcEntry) : IO Content := do {
+/// The tool with the turn's stop request (Esc), which ends a wait early.
+pub def ReadProcessTool.impl_with (stop : Unit -> IO Bool) : ToolImpl :=
+    { spec := ReadProcessTool.spec, cap := Capability.read, run := read_run stop }
+
+def read_entry (id : String) (e : ProcEntry) (note : String) : IO Content := do {
     let now <- IO.current_time_nano;
     let lines <- Procs.tail e 40;
     let body : String := if List.is_empty lines then "(no output)" else String.concat_list lines;
@@ -72,18 +75,18 @@ def read_entry (id : String) (e : ProcEntry) : IO Content := do {
             (String.concat "  " (String.concat (format_elapsed ((now - e.started_ns) / 100000000))
                 (String.concat "\ncommand: " (String.concat e.command
                     "\n--- last 40 lines ---\n")))))));
-    IO.pure (tool_ok id (String.concat head body))
+    IO.pure (tool_ok id (String.concat_list [head, body, note]))
 }
 
-def read_found (id : String) (task : String) (found : Option ProcEntry) : IO Content :=
+def read_found (id : String) (task : String) (note : String) (found : Option ProcEntry) : IO Content :=
     match found {
         Option.none => IO.pure (tool_err id (String.concat "unknown task: " task)),
-        Option.some e => read_entry id e,
+        Option.some e => read_entry id e note,
     }
 
-def read_lookup (root : Path) (id : String) (task : String) : IO Content := do {
+def read_lookup (root : Path) (id : String) (task : String) (note : String) : IO Content := do {
     let found <- Procs.entry_at root task;
-    read_found id task found
+    read_found id task note found
 }
 
 /// The longest `wait_seconds` honoured.
@@ -139,34 +142,44 @@ def still_running (found : Option ProcEntry) : Bool :=
         Option.none => false,
     }
 
-/// Poll the task's own directory every 250 ms until it stops running or
-/// the deadline passes: one tool call instead of a model call per poll.
+/// Poll the task's own directory every 250 ms until it stops running,
+/// the deadline passes, or the turn is asked to stop: one tool call
+/// instead of a model call per poll. True when the stop ended it.
 #[partial]
-def wait_exit (root : Path) (task : String) (deadline : I64) : IO Unit := do {
+def wait_exit (root : Path) (task : String) (deadline : I64) (stop : Unit -> IO Bool) : IO Bool := do {
     let found <- Procs.entry_at root task;
     let now <- IO.current_time_nano;
     if Bool.and (still_running found) (now < deadline)
-    then do {
+    then wait_unless_stopped root task deadline stop
+    else IO.pure false
+}
+
+#[partial]
+def wait_unless_stopped (root : Path) (task : String) (deadline : I64) (stop : Unit -> IO Bool) : IO Bool := do {
+    let stopped <- stop unit;
+    if stopped
+    then IO.pure true
+    else do {
         sleepIO 250;
-        wait_exit root task deadline
+        wait_exit root task deadline stop
     }
-    else IO.pure unit
 }
 
-/// `read_process` against the task store at `root`: wait first when asked.
-def read_at (root : Path) (id : String) (task : String) (secs : I64) : IO Content := do {
+/// `read_process` against the task store at `root`: wait first when
+/// asked. Esc ends the wait (the task keeps running) and says so.
+pub def read_at (root : Path) (id : String) (task : String) (secs : I64) (stop : Unit -> IO Bool) : IO Content := do {
     let now <- IO.current_time_nano;
-    let _ <- if secs > 0 then wait_exit root task (now + secs * 1000000000) else IO.pure unit;
-    read_lookup root id task
+    let stopped <- if secs > 0 then wait_exit root task (now + secs * 1000000000) stop else IO.pure false;
+    read_lookup root id task (if stopped then "\n[wait interrupted by the user; the task is still running]" else "")
 }
 
-def read_run (id : String) (j : Json) : ResultT String IO Content :=
+def read_run (stop : Unit -> IO Bool) (id : String) (j : Json) : ResultT String IO Content :=
     match ReadProcessArgs.deserialize_json j {
         Result.err e => ResultT.mk (return (Result.ok (tool_err id e))),
         Result.ok args =>
             ResultT.mk (do {
                 let root <- Procs.root;
-                let c <- read_at root id args.id (wait_of j);
+                let c <- read_at root id args.id (wait_of j) stop;
                 IO.pure (Result.ok c)
             }),
     }

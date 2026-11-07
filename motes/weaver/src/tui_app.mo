@@ -69,6 +69,7 @@ use weaver::store {
     Store.derive_description, TitleField, StoreMeta,
 }
 use weaver::shell_tool {WeaverShell.impl, WeaverShell.fg_path}
+use weaver::process_tools {ReadProcessTool.impl_with}
 use weaver::stop {Stop.predicate, Stop.request, Stop.reset}
 use weaver::inbox {Inbox.post, Inbox.take, Inbox.seam, Inbox.with_notes}
 use weaver::overlay {
@@ -1320,7 +1321,8 @@ def drive_tui (log : Option Logger) (gen : I64) (st : WeaverState) (text : Strin
     let with_task : RunState := { (st.run) with reg := Instructions.attaching st.instr_seen st.place st.trusted
         (ToolRegistry.register (TodoTool.impl st.store)
             (ToolRegistry.register (WeaverShell.impl log stop (WeaverShell.fg_path st.store))
-                (ToolRegistry.register (Subagent.task_tool st.run.session.config st.instructions log st.store stop spend) st.run.reg))) };
+                (ToolRegistry.register (ReadProcessTool.impl_with stop)
+                    (ToolRegistry.register (Subagent.task_tool st.run.session.config st.instructions log st.store stop spend) st.run.reg)))) };
     let gated : RunState := { with_task with gate := Gate.weaver_tui log st.mode st.colors st.store st.grants (Place.cwd_of st.place),
         emit := progress_live log st.store, on_usage := on_usage,
         should_stop := stop, inbox := Inbox.seam st.store, side_spend := Subagent.drain spend, stopped := false };

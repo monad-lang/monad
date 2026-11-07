@@ -14,7 +14,7 @@ use json::json {Json, Json.parse}
 use std::path {Path, Path.to_string}
 use std::process {process_id, exec_cmd, Proc.kill_group}
 use tui::terminal {Terminal.poll}
-use std::io {IO.read_file, IO.is_dir}
+use std::io {IO.read_file, IO.is_dir, IO.current_time_nano}
 use std::concurrent::combine {sleepIO}
 
 def temp_root (suffix : String) : String :=
@@ -152,7 +152,7 @@ def content_text (c : Content) : String :=
     }
 
 def wait_case (root : String) (e : ProcEntry) : IO Bool := do {
-    let c <- read_at (Path.path root) "call-1" e.id 10;
+    let c <- read_at (Path.path root) "call-1" e.id 10 (fn (_ : Unit) => IO.pure false);
     let out : String := content_text c;
     cleanup root;
     return (String.contains out "exited (0)" && String.contains out "done")
@@ -262,4 +262,29 @@ def test_shutdown_kills_a_foreground_task : IO Bool := do {
         Result.err _ => do { let _ <- cleanup root; IO.pure false },
         Result.ok e => shutdown_case root e,
     }
+}
+
+def stopped_case (root : String) (e : ProcEntry) : IO Bool := do {
+    let t0 <- IO.current_time_nano;
+    let c <- read_at (Path.path root) "call-2" e.id 30 (fn (_ : Unit) => IO.pure true);
+    let t1 <- IO.current_time_nano;
+    let out : String := content_text c;
+    let _ <- Procs.kill e;
+    cleanup root;
+    return (t1 - t0 < 1000000000 && String.contains out "running"
+        && String.contains out "[wait interrupted by the user; the task is still running]")
+}
+
+def stopped_started (root : String) (r : Result String ProcEntry) : IO Bool :=
+    match r {
+        Result.err _ => do { cleanup root; return false },
+        Result.ok e => stopped_case root e,
+    }
+
+/// Esc ends a `read_process` wait at once; the task keeps running.
+#[test]
+def test_read_process_wait_ends_on_stop : IO Bool := do {
+    let root : String := temp_root "wait-stop";
+    let started <- Procs.start_at (Path.path root) "sleep 30" "" false;
+    stopped_started root started
 }
