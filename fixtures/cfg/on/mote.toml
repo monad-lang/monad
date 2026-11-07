@@ -1,0 +1,13 @@
+# Fixture for `#[cfg]` feature evaluation (`lang/src/cfg_tests.mo`):
+# this mote turns its feature on through `[features] default`.
+[mote]
+name = "cfg_on"
+version = "0.1.0"
+edition = "2026"
+
+[lib]
+path = "src/main.mo"
+
+[features]
+default = ["on"]
+on = []
