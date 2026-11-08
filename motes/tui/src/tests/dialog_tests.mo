@@ -6,6 +6,7 @@ use lib::widgets::dialog {
     DialogModel, DialogOption, DialogStep, Dialog.make, Dialog.step, Dialog.paste,
     Dialog.note_text, Dialog.with_default, Dialog.apply, Dialog.rows, Dialog.body_rows,
     Dialog.total_rows, Dialog.frame_width, Dialog.frame_height, Dialog.content_width,
+    Dialog.frame_width_for, Dialog.frame_height_for,
     Dialog.with_notes, Dialog.clamp_scroll, Dialog.footer_line, ModalState, ModalNext, Modal.fold, Modal.idle, modal_quiet, Dialog.refresh_due,
 }
 use lib::input {InputReader, input_reader}
@@ -115,6 +116,15 @@ def test_frame_width_clamps : Bool :=
 #[test]
 def test_frame_height_fits_or_caps : Bool :=
     Dialog.frame_height 40 10 == 14 && Dialog.frame_height 20 30 == 18 && Dialog.frame_height 4 30 == 6
+
+/// A fullscreen dialog takes the whole terminal; a normal one keeps the
+/// centred, capped frame.
+#[test]
+def test_fullscreen_frame_fills_the_terminal : Bool :=
+    let d : DialogModel := Dialog.make "t" "" List.empty List.empty in
+    let full : DialogModel := { d with fullscreen := true } in
+    Dialog.frame_width_for full 200 == 200 && Dialog.frame_height_for full 40 3 == 40
+        && Dialog.frame_width_for d 200 == 88 && Dialog.frame_height_for d 40 10 == 14
 
 /// A body that fits is shown whole: title, subtitle, blank, body, blank,
 /// three options, blank, footer -- plus a blank and the note row when the

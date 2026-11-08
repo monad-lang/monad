@@ -51,6 +51,9 @@ pub struct DialogModel {
     /// The option whose value is being edited, and the edit itself.
     field : Option I64 := Option.none,
     field_input : InputState,
+    /// Fill the whole terminal instead of a centred box of at most 88
+    /// columns: for long documents such as a plan.
+    fullscreen : Bool := false,
 }
 
 pub type DialogStep {
@@ -76,6 +79,7 @@ pub def Dialog.make (title : String) (subtitle : String) (body : List String) (o
         notes := false,
         field := Option.none,
         field_input := input_state "" "",
+        fullscreen := false,
     } in
     d
 
@@ -225,6 +229,14 @@ pub def Dialog.frame_height (rows : I64) (total : I64) : I64 :=
     let max_h : I64 := if rows - 2 < 6 then 6 else rows - 2 in
     if total + 4 < max_h then total + 4 else max_h
 
+/// `frame_width`, or every column for a fullscreen dialog.
+pub def Dialog.frame_width_for (d : DialogModel) (cols : I64) : I64 :=
+    if d.fullscreen then (if cols < 1 then 1 else cols) else Dialog.frame_width cols
+
+/// `frame_height`, or every row for a fullscreen dialog (at least 6).
+pub def Dialog.frame_height_for (d : DialogModel) (rows : I64) (total : I64) : I64 :=
+    if d.fullscreen then (if rows < 6 then 6 else rows) else Dialog.frame_height rows total
+
 #[partial]
 def take {A : Type} (n : I64) (xs : List A) : List A :=
     if n < 1 then List.empty
@@ -342,10 +354,10 @@ pub def Dialog.paint (border : TextStyle) (body : I64 -> DialogModel -> List Siz
     let size <- Terminal.size;
     match size {
         Pair.pair rows cols => do {
-            let frame_w : I64 := Dialog.frame_width cols;
+            let frame_w : I64 := Dialog.frame_width_for d cols;
             let width : I64 := Dialog.content_width frame_w;
             let body_all : List SizedWidget := body width d;
-            let height : I64 := Dialog.frame_height rows (Dialog.total_rows d (List.length body_all));
+            let height : I64 := Dialog.frame_height_for d rows (Dialog.total_rows d (List.length body_all));
             let d2 : DialogModel := Dialog.clamp_scroll height (List.length body_all) d;
             let rect : Rect := center_rect_in (mk_rect 0 0 cols rows) frame_w height;
             let base : Option Screen := same_screen prev rows cols;
