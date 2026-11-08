@@ -191,10 +191,18 @@ first argument (`Show.show`, `BEq.beq`); a higher-kinded carrier
 fallback. A caller that is itself generic (`[Copy T]` forwarding its own
 parameter) is not decidable and stays accepted.
 
-Two caveats matter. **Nothing frees memory yet.** Codegen still emits no
-`monad_release`, `Shared` is boxed rather than erased, and `String` is
-collector-owned, so the GC described in
-[Compiling and Running](./compiling.md#memory) is not going anywhere yet.
+Two caveats matter. **Freeing is opt-in and narrow.** Codegen still emits no
+`monad_release` for ordinary values and `Shared` is boxed rather than erased,
+so the GC described in
+[Compiling and Running](./compiling.md#memory) remains the default and is not
+going anywhere yet. A build with `MONAD_OWNERSHIP=1` instead allocates
+monomorphic, non-`Copy` constructors with `malloc` and frees them with
+generated `drop_<T>` glue at a definition's exits — but only for binders that
+are completely unused, which is what makes the drop sound before a full move
+analysis exists. Closures, generic data (`List A`) and anything reachable from
+a `Ref`, `Array` or `Shared` stay region-owned and leak, and the build refuses
+any mote still in `[affine] mode = "warn"`. See
+`plans/bootstrapping/ownership-regions-memory.md`.
 Second, the rule only sees the binders it can *type*: a binder whose type is
 still an unannotated hole, or a match field whose constructor is ambiguous
 corpus-wide (`mk`, `cons`, `ok`), is exempt from enforcement rather than
