@@ -111,7 +111,50 @@ declare -a origins=()
 declare -A checked_in=()
 declare -a must_check=(AGENTS.md README.md)
 
-for md in docs/src/*.md AGENTS.md README.md; do
+# Which sources to read.
+#
+# With arguments, only those files: the pre-commit hook passes the changed
+# set, so a commit touching one chapter pays for that chapter rather than the
+# whole book (measured 2026-11-08: 121 blocks in one `check`, >600 s, because
+# every block's module closure is loaded). Non-`.md` arguments are ignored --
+# the hook matches `.mo`/`.rs` too, and those carry no fences.
+#
+# With no arguments, the full sweep (`scripts/check-docs.sh` bare). CI does
+# NOT use that shape: `prek run -a` passes every matching file, and prek
+# batches a list that long, so each of its invocations is scoped too. Every
+# file is still checked across the batches -- CI just pays the same corpus
+# cost it always did, while a developer's commit pays only for its own files.
+scoped=0
+declare -a sources=()
+declare -A in_scope=()
+if [ "$#" -gt 0 ]; then
+  scoped=1
+  for arg in "$@"; do
+    case "$arg" in
+      *.md)
+        [ -f "$arg" ] || continue
+        # Repo-relative, whatever spelling the caller used (`./AGENTS.md`, an
+        # absolute path). Everything downstream keys on this: the pin below,
+        # and the `docs/src` opt-out default, which an absolute path would
+        # otherwise miss -- silently skipping the whole chapter.
+        rel=${arg#./}
+        case "$rel" in
+          "$PWD"/*) rel=${rel#"$PWD"/} ;;
+        esac
+        sources+=("$rel")
+        in_scope["$rel"]=1
+        ;;
+    esac
+  done
+  if [ "${#sources[@]}" -eq 0 ]; then
+    echo "check-docs: no changed .md file to check"
+    exit 0
+  fi
+else
+  sources=(docs/src/*.md AGENTS.md README.md)
+fi
+
+for md in "${sources[@]}"; do
   [ -f "$md" ] || continue
   # Resolved BEFORE the loop, not inside it: a `$(basename "$md" ...)` in the
   # body of a `while ... done < "$md"` reads as writing the file it redirects
@@ -176,9 +219,16 @@ done
 
 # The opt-in files, each of which must still be contributing something. See
 # MUST_CHECK in the header: this is what keeps the gate from going quiet.
+# Judged per FILE, not per run: a pinned file is held to the pin when it is in
+# this run's set, and skipped when it is not. The full sweep names all of
+# them, and so does CI -- prek hands each file to exactly one batch -- so
+# gating the pin on "the full sweep" would mean CI never ran it at all.
 missing=0
 for md in "${must_check[@]}"; do
   [ -f "$md" ] || continue
+  if [ "$scoped" -eq 1 ] && [ -z "${in_scope["$md"]:-}" ]; then
+    continue
+  fi
   if [ "${checked_in["$md"]:-0}" -eq 0 ]; then
     echo "check-docs: $md contributed no checked block -- it is opt-in, so a" >&2
     echo "  fence it should check needs the \`\`\`monad,check tag (a bare" >&2
@@ -189,9 +239,21 @@ for md in "${must_check[@]}"; do
 done
 [ "$missing" -eq 0 ] || exit 1
 
-if [ "$total" -eq 0 ] && [ "$skipped" -eq 0 ]; then
+if [ "$scoped" -eq 0 ] && [ "$total" -eq 0 ] && [ "$skipped" -eq 0 ]; then
   echo "check-docs: no \`\`\`monad blocks found at all -- is the tag right?" >&2
   exit 1
+fi
+
+# Nothing to check is fine -- but NEVER fall through to the `check` below with
+# an empty array: `"${blocks[@]}"` then expands to nothing, and a bare `monad
+# check` checks the whole workspace. The hook is handed every changed file
+# matching `\.(md|mo|rs)$`, so a commit touching only prose (a chapter whose
+# fences are all `bash`, or a README with no fences at all) would otherwise
+# pay a full corpus check and fail on errors from files it was never asked
+# about. CI hit exactly this.
+if [ "$total" -eq 0 ]; then
+  echo "check-docs: no \`\`\`monad blocks to check"
+  exit 0
 fi
 
 echo "check-docs: checking $total block(s), skipping $skipped"

@@ -243,14 +243,23 @@
     # ```monad block and type-checks it, so a language change that breaks
     # a documented example fails here instead of shipping to
     # monad-lang.org. Runs on .md too (a doc edit can break a block on its
-    # own) and takes ~3s once the release binary is warm. Blocks tagged
-    # ```monad,ignore are deliberately skipped -- see the script's header.
+    # own). Blocks tagged ```monad,ignore are deliberately skipped -- see the
+    # script's header.
+    #
+    # COST, measured 2026-11-08: the whole book is 121 blocks in one `check`
+    # and took OVER 600s, because every block's module closure is loaded.
+    # This comment used to claim "~3s once the release binary is warm" --
+    # wrong by two orders of magnitude, which is why this sat in the commit
+    # path. `pass_filenames = true` matters for that: the script then checks
+    # only the .md files the commit touches (one chapter: ~39s). CI runs
+    # `prek run -a`, which hands over every file (in batches), so the whole
+    # book is still checked there.
     docs-check = {
       enable = true;
       entry = ''
         ${config.devenv.root}/scripts/check-docs.sh
       '';
-      pass_filenames = false;
+      pass_filenames = true;
       files = "\\.(md|mo|rs)$";
     };
   };
