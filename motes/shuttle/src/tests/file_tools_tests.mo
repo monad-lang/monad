@@ -6,9 +6,9 @@ use shuttle::message_types {Content}
 use json::json {Json}
 use json::serde_backend {}
 use init::transformers {ResultT}
-use std::io {IO.get_env, IO.write_file}
+use std::io {IO.get_env, IO.write_file, IO.read_file}
 use std::path {Path}
-use std::process {process_id}
+use std::process {process_id, exec_cmd}
 
 /// PID-qualified so two sessions' test runs sharing this filesystem's
 /// /tmp never collide on the same path.
@@ -186,4 +186,19 @@ def test_read_up_to_reports_a_complete_file : IO Bool := do {
             }
         },
     }
+}
+
+/// A write into a directory that does not exist yet creates it (the log
+/// review's F5: `stream_open: No such file or directory`).
+#[test]
+def test_write_creates_missing_parent_directories : IO Bool := do {
+    let dir : String := scratch_path "newdir";
+    let _ <- exec_cmd "rm" ["-rf", dir];
+    let args : WriteArgs := { path := String.concat dir "/a/b/c.txt", content := "nested" };
+    let wr <- ResultT.run (write_run "w9" (WriteArgs.serialize_json args));
+    let back <- IO.read_file (Path.path (String.concat dir "/a/b/c.txt"));
+    let _ <- exec_cmd "rm" ["-rf", dir];
+    let wrote : Bool := match wr { Result.ok c => is_ok_result c, Result.err _ => false };
+    let read : Bool := match back { Result.ok t => t == "nested", Result.err _ => false };
+    return (wrote && read)
 }

@@ -7,10 +7,11 @@ use init::transformers {ResultT}
 use shuttle::message_types {Content}
 use shuttle::tools::file_args {ReadArgs, WriteArgs, EditArgs}
 use json::json {Json}
-use std::io {IO.read_file, IO.write_file}
+use std::io {IO.read_file, IO.write_file, IO.is_dir}
+use std::process {exec_cmd}
 use std::stream {FdStream, Stream, StreamError}
 use std::bytebuf {ByteBuf, ByteBuf.length, ByteBuf.to_string, ByteBuf.free}
-use std::path {Path, Path.of}
+use std::path {Path, Path.of, Path.parent, Path.to_string}
 use http::strings {Strings.split_on}
 
 def tool_err (id : String) (msg : String) : Content := Content.tool_result id msg true
@@ -191,11 +192,28 @@ pub def write_run (id : String) (j : Json) : ResultT String IO Content :=
                 match Path.of args.path {
                     Result.err e => return (Result.ok (tool_err id e)),
                     Result.ok p => do {
+                        // A new file in a new directory: create the parents
+                        // first (the write alone failed with ENOENT).
+                        ensure_parent p;
                         let w <- IO.write_file p args.content;
                         return (Result.ok (written_content id "wrote file" w))
                     }
                 }
             })
+    }
+
+/// `mkdir -p` the directory `p` sits in, when it has one and it is missing.
+def ensure_parent (p : Path) : IO Unit :=
+    match Path.parent p {
+        Option.none => IO.pure unit,
+        Option.some dir => do {
+            let there <- IO.is_dir dir;
+            if there then IO.pure unit
+            else do {
+                let _ <- exec_cmd "mkdir" ["-p", Path.to_string dir];
+                IO.pure unit
+            }
+        },
     }
 
 def edit_with_check (id : String) (p : Path) (expected : String) (new_content : String) : IO (Result String Content) := do {
