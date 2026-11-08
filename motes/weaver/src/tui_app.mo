@@ -53,7 +53,8 @@ use weaver::ui::pane {
     Pane.page_wanted, Pane.page_requested, Pane.page_loaded, Pane.page_failed,
 }
 use weaver::ui::rows {DisplayRow, Rows.of_line, Rows.widget, Rows.markdown_full}
-use weaver::logs {Logs.info, Logs.debug, Logs.warn, Logs.error, Logs.log_rss, Logs.sanitize}
+use weaver::logs {Logs.info, Logs.debug, Logs.warn, Logs.error, Logs.log_rss, Logs.sanitize, Logs.latest_path}
+use std::process {Process.quiet_terminal}
 use weaver::title {Title.generate, Title.needed}
 use weaver::subagent {Subagent.task_tool, Subagent.drain}
 use weaver::instructions {Instructions.take_notes, Instructions.attaching}
@@ -149,10 +150,27 @@ def run_tui_with_size (log : Option Logger) (st : WeaverState) (tr : Transcript)
             let app : App TuiModel WeaverMsg :=
                 App.app_ticked start on_event TuiApp.update Model.view 100
                     tick_redraw reads_input;
+            // Nothing but the frame may write to the terminal: weaver's own
+            // stderr (a GC warning, a runtime diagnostic) and every helper
+            // command's output go to the debug log while the TUI runs, and
+            // helpers read /dev/null instead of the keyboard.
+            let _ <- quiet_children log;
             let _ <- run_app app;
+            let _ <- Process.quiet_terminal "";
             return true
         }
     }
+
+/// Where stderr and helper output go while the TUI owns the terminal: this
+/// run's debug log, or /dev/null with logging off.
+def quiet_children (log : Option Logger) : IO I64 := do {
+    let p <- match log {
+        Option.none => IO.pure Option.none,
+        Option.some _ => Logs.latest_path,
+    };
+    let path : String := match p { Option.some x => x, Option.none => "/dev/null" };
+    Process.quiet_terminal path
+}
 
 /// Draw a tick-only batch only when the spinner/banner moved, and never
 /// while a dialog owns the terminal (`modal`).
