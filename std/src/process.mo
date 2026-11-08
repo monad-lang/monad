@@ -14,6 +14,18 @@ priv def exec_cmd_raw (cmd : String) (args : List String) : RawIO I64
 pub def exec_cmd (cmd : String) (args : List String) : IO I64 :=
     IO.mk (exec_cmd_raw cmd args)
 
+#[native "exec_child_output"]
+priv def exec_child_output_raw (path : String) : RawIO I64
+
+/// Keep the terminal for the screen: this process's own stderr and every
+/// later `exec_cmd` child's stdout and stderr are appended to `path`, and a
+/// child reads /dev/null instead of the keyboard. `""` restores both. For a
+/// full-screen program, whose screen a GC warning or a helper command's
+/// message would otherwise overwrite. 0, or `-errno` when `path` cannot be
+/// opened.
+pub def Process.quiet_terminal (path : String) : IO I64 :=
+    IO.mk (exec_child_output_raw path)
+
 #[native "process_id"]
 pub def process_id : I64
 

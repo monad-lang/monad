@@ -367,3 +367,31 @@ def test_kill_group_refuses_init_and_the_broadcast_ids : IO Bool := do {
     let c <- Proc.kill_group 1 0;
     return (Bool.not a && Bool.not b && Bool.not c)
 }
+
+/// With `quiet_terminal` set, this process's own stderr and an `exec_cmd`
+/// child's stdout and stderr land in the file (appended) instead of the
+/// terminal; "" restores both, after which nothing more reaches the file.
+#[test]
+def test_quiet_terminal_takes_stdout_and_stderr : IO Bool := do {
+    let path : String := String.concat "/tmp/monad_child_output_" (String.concat (I64.to_string process_id) ".log");
+    let _ <- exec_cmd "rm" ["-f", path];
+    let set <- Process.quiet_terminal path;
+    let rc <- exec_cmd "sh" ["-c", "echo to-out; echo to-err >&2"];
+    IO.write_stderr "own-stderr\n";
+    let reset <- Process.quiet_terminal "";
+    let _ <- exec_cmd "sh" ["-c", "echo after-reset >&2"];
+    let got <- IO.read_file (Path.path path);
+    let _ <- exec_cmd "rm" ["-f", path];
+    let text : String := match got { Result.ok t => t, Result.err _ => "" };
+    return (set == 0 && reset == 0 && rc == 0
+        && String.contains text "to-out" && String.contains text "to-err"
+        && String.contains text "own-stderr" && Bool.not (String.contains text "after-reset"))
+}
+
+/// An unopenable path is reported as -errno and changes nothing.
+#[test]
+def test_quiet_terminal_reports_an_unopenable_path : IO Bool := do {
+    let rc <- Process.quiet_terminal "/nonexistent-dir-monad/x.log";
+    let reset <- Process.quiet_terminal "";
+    return (I64.lt rc 0 && reset == 0)
+}

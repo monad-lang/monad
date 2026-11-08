@@ -375,6 +375,7 @@ pub fn exec_native(
     "read_stdin_exact" => read_stdin_exact(args, natives),
     "flush_stdout" => flush_stdout(natives),
     "exec_cmd" => exec_cmd(args, natives),
+    "exec_child_output" => exec_child_output(args, natives),
     // The piped-subprocess family (`std/src/process.mo`, agent-skills.md
     // Phase 4) -- IO-returning, so none of them belongs in PURE_NATIVES.
     // Reads and writes are NOT natives: `proc_stream_fd` hands out an
@@ -3260,12 +3261,85 @@ fn exec_cmd(args: &[Value], natives: &NativeTable) -> Result<Value, CoreEvalErro
     use std::io::Write;
     let _ = std::io::stdout().flush();
   }
-  let status = std::process::Command::new(cmd)
-    .args(&cmd_args)
+  let mut command = std::process::Command::new(cmd);
+  command.args(&cmd_args);
+  // `exec_child_output`: a set file takes the child's stdout and stderr,
+  // and its stdin is /dev/null (see `monad_exec_child_output`).
+  if let Some(file) = EXEC_CHILD_OUTPUT
+    .lock()
+    .ok()
+    .and_then(|g| g.as_ref().and_then(|f| f.try_clone().ok()))
+  {
+    if let Ok(err) = file.try_clone() {
+      command
+        .stdout(file)
+        .stderr(err)
+        .stdin(std::process::Stdio::null());
+    }
+  }
+  let status = command
     .status()
     .map_err(|e| CoreEvalError::NativeArgError(format!("exec_cmd \"{cmd}\" failed: {e}")))?;
   let exit_code = status.code().unwrap_or(-1) as i64;
   raw_io_wrap(natives, Value::Lit(IrLit::Num(exit_code, NumSuffix::I64)))
+}
+
+/// Where `exec_cmd` children write while one is set (`exec_child_output`).
+static EXEC_CHILD_OUTPUT: std::sync::Mutex<Option<std::fs::File>> = std::sync::Mutex::new(None);
+/// This process's stderr from before `exec_child_output` pointed fd 2 at
+/// the file, for the restore.
+static SAVED_STDERR: std::sync::Mutex<Option<libc::c_int>> = std::sync::Mutex::new(None);
+
+/// `exec_child_output path`: this process's stderr (fd 2) and every later
+/// `exec_cmd` child's stdout and stderr go to `path` (appended), and the
+/// child reads /dev/null; "" restores. 0, or `-errno` when the file cannot
+/// be opened. Mirrors `monad_exec_child_output`.
+fn exec_child_output(args: &[Value], natives: &NativeTable) -> Result<Value, CoreEvalError> {
+  use std::os::fd::AsRawFd;
+  let path = extract_string(
+    args
+      .first()
+      .ok_or_else(|| CoreEvalError::NativeArgError("exec_child_output needs 1 arg".into()))?,
+  )?;
+  if let Ok(mut g) = EXEC_CHILD_OUTPUT.lock() {
+    *g = None;
+  }
+  if let Ok(mut saved) = SAVED_STDERR.lock() {
+    if let Some(fd) = saved.take() {
+      // SAFETY: `fd` is the descriptor this function duplicated from fd 2.
+      unsafe {
+        libc::dup2(fd, 2);
+        libc::close(fd);
+      }
+    }
+  }
+  let rc: i64 = if path.is_empty() {
+    0
+  } else {
+    match std::fs::OpenOptions::new()
+      .create(true)
+      .append(true)
+      .open(&path)
+    {
+      Ok(f) => {
+        // SAFETY: plain descriptor duplication; the saved copy is restored
+        // and closed by the next call.
+        let saved = unsafe { libc::fcntl(2, libc::F_DUPFD_CLOEXEC, 3) };
+        if saved >= 0 {
+          unsafe { libc::dup2(f.as_raw_fd(), 2) };
+          if let Ok(mut g) = SAVED_STDERR.lock() {
+            *g = Some(saved);
+          }
+        }
+        if let Ok(mut g) = EXEC_CHILD_OUTPUT.lock() {
+          *g = Some(f);
+        }
+        0
+      }
+      Err(e) => -(e.raw_os_error().unwrap_or(libc::EIO) as i64),
+    }
+  };
+  raw_io_wrap(natives, Value::Lit(IrLit::Num(rc, NumSuffix::I64)))
 }
 
 // ── Piped subprocesses (std/src/process.mo, agent-skills.md Phase 4) ──

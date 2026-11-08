@@ -592,6 +592,7 @@ def native_runtime_fn_name (attrs : List Attribute) : Option NativeWrapKind :=
             // it, so without it a self-compiled compiler can never run
             // its own `compile` command at all.
             else if String.beq target "exec_cmd" then Option.some (NativeWrapKind.raw_io_passthrough "monad_exec_cmd")
+            else if String.beq target "exec_child_output" then Option.some (NativeWrapKind.raw_io_passthrough "monad_exec_child_output")
             // The piped-subprocess family (std/process.mo,
             // agent-skills.md Phase 4) -- `proc_spawn`, `proc_wait`, and
             // `proc_stream_fd`, which hands out an `FdStream` view of one
@@ -871,6 +872,7 @@ pub def runtime_declarations_for (kind : TargetKind) : List LLVMDeclaration :=
     // the CONVENTION comment at the head of this list.
     let d34 := mk_decl "monad_i32_to_string" (List.cons "i64" List.empty) "i64" in
     let d35 := mk_decl "monad_exec_cmd" (List.cons "i64" (List.cons "i64" List.empty)) "i64" in
+    let d35b := mk_decl "monad_exec_child_output" ["i64"] "i64" in
     let d36 := mk_decl "monad_list_dir" (List.cons "i64" List.empty) "i64" in
     let d37 := mk_decl "monad_u8_to_string" (List.cons "i64" List.empty) "i64" in
     let d38 := mk_decl "monad_u64_to_string" (List.cons "i64" List.empty) "i64" in
@@ -1119,7 +1121,7 @@ pub def runtime_declarations_for (kind : TargetKind) : List LLVMDeclaration :=
     let d116 := mk_decl "monad_channel_try_take" ["i64"] "i64" in
     [d1, d2, d3, d7, d7b, d7b1, d7c, d7d, d7e, d7f, d8, d9, d10, d11, d12, d13,
         d14, d15, d16, d17, d18, d19, d20, d21, d22, d23, d23a, d23b, d24, d24b, d25, d26, d27, d28, d29, d30, d31,
-        d32, d33, d34, d35, d36, d37, d38, d38b, d39, dSysInt, d40, d41, d42, d43, d44, d45, d46, d47,
+        d32, d33, d34, d35, d35b, d36, d37, d38, d38b, d39, dSysInt, d40, d41, d42, d43, d44, d45, d46, d47,
         d48, d49, d50, d51, d52, d53, d54, d55, d56,
         d57, d58, d59, d60, d61, d62, d63, d64,
         d65, d66, d66a, d67, d72,
@@ -1148,7 +1150,7 @@ pub type NativeAvailability {
 def wasm_os_only_natives : List String := [
     "fork_io", "await_fiber", "poll_fiber", "cancel_fiber", "scope_new", "scope_fork",
     "scope_drop", "sleep_io", "channel_new", "channel_put", "channel_take",
-    "channel_try_take", "exec_cmd", "process_id", "sys_int", "proc_spawn",
+    "channel_try_take", "exec_cmd", "exec_child_output", "process_id", "sys_int", "proc_spawn",
     "proc_stream_fd", "proc_wait", "proc_kill_group", "tcp_connect_timeout", "tcp_listen",
     "tcp_listen_on", "tcp_accept", "tcp_local_port", "file_exists", "is_dir", "file_size", "list_dir",
     "get_env", "stream_open", "stream_poll", "stream_seek", "stream_set_timeout", "term_ctl",

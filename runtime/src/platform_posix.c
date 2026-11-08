@@ -768,6 +768,36 @@ static int spawn_child(pid_t* pid, const char* cmd, char** argv, int in_fd, int 
    signal -- matching the reference's `status.code().unwrap_or(-1)`. The wrapper
    (native_runtime_fn_name's raw_io_passthrough kind) does the RawIO.io
    boxing; the `.mo` wrapper adds IO.mk. */
+/* `#[native "exec_child_output"]` (std/process.mo, `Process.quiet_terminal`).
+   Unset (-1), this process writes its own diagnostics to the terminal and
+   an `exec_cmd` child inherits stdin/stdout/stderr -- what the compiler's
+   own llc/clang calls want. Set, for a full-screen program (weaver's TUI):
+   fd 2 itself is pointed at the file, so this process's own stderr (a GC
+   warning, a runtime diagnostic) lands there too, and every later
+   `exec_cmd` child reads /dev/null and writes stdout and stderr to the
+   file. An empty path restores the saved stderr and inheritance. Returns
+   0, or -errno when the file cannot be opened. */
+static int exec_child_out_fd = -1;
+static int saved_stderr_fd = -1;
+
+int64_t monad_exec_child_output(char* path) {
+    if (exec_child_out_fd >= 0) { close(exec_child_out_fd); exec_child_out_fd = -1; }
+    if (saved_stderr_fd >= 0) {
+        fflush(stderr);
+        dup2(saved_stderr_fd, 2);
+        close(saved_stderr_fd);
+        saved_stderr_fd = -1;
+    }
+    if (!path || !path[0]) return 0;
+    int fd = open(path, O_WRONLY | O_CREAT | O_APPEND | O_CLOEXEC, 0600);
+    if (fd < 0) return -(int64_t)errno;
+    fflush(stderr);
+    saved_stderr_fd = fcntl(2, F_DUPFD_CLOEXEC, 3);
+    if (saved_stderr_fd >= 0) dup2(fd, 2);
+    exec_child_out_fd = fd;
+    return 0;
+}
+
 int64_t monad_exec_cmd(char* cmd, void* args) {
     char** argv = monad_build_argv(cmd, args);
     if (!argv) return -1;
@@ -782,7 +812,10 @@ int64_t monad_exec_cmd(char* cmd, void* args) {
     fflush(NULL);
 
     pid_t pid;
-    int rc = spawn_child(&pid, cmd, argv, -1, -1, -1);
+    int out_fd = exec_child_out_fd;
+    int in_fd = out_fd >= 0 ? open("/dev/null", O_RDONLY | O_CLOEXEC) : -1;
+    int rc = spawn_child(&pid, cmd, argv, in_fd, out_fd, out_fd);
+    if (in_fd >= 0) close(in_fd);
     free(argv);
     if (rc != 0) return (rc == EAGAIN || rc == ENOMEM) ? -1 : 127;
     int status = 0;
