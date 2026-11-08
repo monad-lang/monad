@@ -1014,6 +1014,37 @@ def test_markdown_body_rows_render_a_plan : Bool :=
         && Bool.not (row_contains rs "- wire it in")
         && row_contains rs "wire it in"
 
+/// `n` steps of `## Step i` plus a paragraph, in reading order (built
+/// back to front, so the result starts at Step 0).
+#[partial]
+def plan_lines (para : String) (n : I64) (acc : List String) : List String :=
+    if n < 1 then acc
+    else plan_lines para (n - 1) (List.append [String.concat "## Step " (I64.to_string (n - 1)), "", para, ""] acc)
+
+/// A plan past the transcript's 16 KB Markdown cap still renders as
+/// Markdown in the dialog: no heading marker or `**` survives.
+#[test]
+def test_markdown_body_rows_render_a_large_plan : Bool :=
+    let para : String := "Some **bold** prose that repeats to make the plan long enough." in
+    let lines : List String := plan_lines para 300 List.empty in
+    let rs : List DisplayRow := markdown_body_rows false 80 lines in
+    row_contains rs "Step 299" && Bool.not (row_contains rs "## ") && Bool.not (row_contains rs "**")
+
+/// Two paragraphs keep the blank row between them.
+#[test]
+def test_markdown_body_rows_separate_paragraphs : Bool :=
+    let rs : List DisplayRow := markdown_body_rows false 40 ["first para", "", "second para"] in
+    match rs {
+        List.cons a rest => match rest {
+            List.cons b rest2 => match rest2 {
+                List.cons c _ => a.text == "first para" && b.text == "" && c.text == "second para",
+                List.empty => false,
+            },
+            List.empty => false,
+        },
+        List.empty => false,
+    }
+
 /// An empty body is no rows (an empty document must not paint one).
 #[test]
 def test_markdown_body_rows_empty : Bool :=

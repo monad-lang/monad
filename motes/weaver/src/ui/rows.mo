@@ -149,11 +149,15 @@ def md_rows_go (colors : Bool) (width : I64) (lines : List Markdown.StyledLine) 
 pub def Rows.markdown (colors : Bool) (width : I64) (text : String) : List DisplayRow :=
     if I64.gt (String.length text) Rows.markdown_max_bytes
     then plain_line_list width (theme_split_lines text)
-    else
-        let doc := Markdown.parse text in
-        if colors
-        then md_rows_go colors width (Markdown.to_lines doc)
-        else plain_line_list width (Markdown.to_plain_lines doc)
+    else Rows.markdown_full colors width text
+
+/// `Rows.markdown` with no size fallback, for a document rendered once
+/// and kept (a dialog body), not a transcript block re-rendered per frame.
+pub def Rows.markdown_full (colors : Bool) (width : I64) (text : String) : List DisplayRow :=
+    let doc := Markdown.parse text in
+    if colors
+    then md_rows_go colors width (Markdown.to_lines doc)
+    else plain_line_list width (Markdown.to_plain_lines doc)
 
 /// One transcript line, split on its own newlines and wrapped. The kind
 /// wins over the text: a Markdown block is rendered as Markdown, a

@@ -21,6 +21,12 @@ def grid_has (o : Output) (needle : String) : Bool :=
         Option.none => false
     }
 
+def frame_at_origin (o : Output) : Bool :=
+    match Output.find o "╭" {
+        Option.some p => match p { Pair.pair r c => Bool.and (r == 0) (c == 0) },
+        Option.none => false
+    }
+
 def placeholder_seen (o : Output) : Bool :=
     grid_has o "type a message"
 
@@ -62,6 +68,9 @@ def bigplan_go (m : Pty) (sessions : String) : IO Bool := do {
     Pty.send_text m "/plan\r";
     let ready_dialog <- Pty.wait_until m (fn (o : Output) => I64.lt 1 (count_occurrences (Output.tight o) "Planready")) 10000;
     let d <- timed_report "the plan dialog opens promptly" t2 ready_dialog;
+    // Fullscreen: the frame's top-left corner sits at row 0, column 0.
+    let full <- Pty.wait_until m frame_at_origin 3000;
+    let g <- Check.report "the plan dialog fills the screen" full;
     Pty.send_text m "e";
     let editing <- Pty.wait_until m (fn (o : Output) => grid_has o "note:") 3000;
     let t3 <- IO.current_time_nano;
@@ -73,7 +82,7 @@ def bigplan_go (m : Pty) (sessions : String) : IO Bool := do {
     let closed <- Pty.wait_until m (fn (o : Output) => I64.lt 1 (count_occurrences (Output.tight o) "plannotapproved")) 8000;
     let f <- Check.report "Esc still closes the dialog after a paste" closed;
     Pty.finish m;
-    return (Bool.and (Bool.and ready a0) (Bool.and a (Bool.and b (Bool.and c (Bool.and d (Bool.and editing (Bool.and e f)))))))
+    return (Bool.and (Bool.and ready a0) (Bool.and a (Bool.and b (Bool.and c (Bool.and (Bool.and d g) (Bool.and editing (Bool.and e f)))))))
 }
 
 def bigplan_run (bin : String) (root : String) : IO Bool := do {

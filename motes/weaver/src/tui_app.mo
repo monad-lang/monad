@@ -48,7 +48,7 @@ use weaver::ui::pane {
     PaneModel, PaneMsg, Pane.reset, Pane.end_drag, Pane.selecting,
     Pane.page_wanted, Pane.page_requested, Pane.page_loaded, Pane.page_failed,
 }
-use weaver::ui::rows {DisplayRow, Rows.of_line, Rows.widget}
+use weaver::ui::rows {DisplayRow, Rows.of_line, Rows.widget, Rows.markdown_full}
 use weaver::logs {Logs.info, Logs.debug, Logs.warn, Logs.error, Logs.log_rss, Logs.sanitize}
 use weaver::title {Title.generate, Title.needed}
 use weaver::subagent {Subagent.task_tool, Subagent.drain}
@@ -89,6 +89,7 @@ use tui::clipboard {Clipboard.copy}
 use tui::widgets::dialog {
     DialogModel, DialogOption, DialogStep, Dialog.make, Dialog.with_default, Dialog.with_notes, Dialog.note_text,
     Dialog.paint, Dialog.modal, Dialog.modal_refresh, Dialog.option_count,
+    Dialog.frame_width_for, Dialog.content_width,
 }
 use tui::terminal {
     Terminal.clear_screen, Terminal.cursor_move, Terminal.enter_raw_mode, Terminal.size,
@@ -1983,7 +1984,7 @@ def plan_dialog_step (st : WeaverState) (text : String) : IO WeaverMsg :=
 def plan_view_step (st : WeaverState) : IO WeaverMsg := do {
     let o0 : DialogOption := { label := "Close", hint := "Esc", key := "" };
     let d0 : DialogModel := Dialog.make "Current plan" "read-only -- switch to plan mode to revise or approve" (plan_body st) [o0];
-    let d : DialogModel := { d0 with markdown := true, footer := "PageUp/PageDown or wheel scroll -- Enter/Esc close" };
+    let d : DialogModel := { d0 with markdown := true, fullscreen := true, footer := "PageUp/PageDown or wheel scroll -- Enter/Esc close" };
     let pr <- dialog_run st.colors st.store d;
     match pr {
         Pair.pair _ _ => IO.pure (WeaverMsg.command_result (plan_effect st "plan closed")),
@@ -1996,7 +1997,7 @@ def plan_approval_step (st : WeaverState) : IO WeaverMsg := do {
     let o2 : DialogOption := { label := "Revise with a note", hint := "r", key := "r" };
     let o3 : DialogOption := { label := "Cancel", hint := "Esc", key := "" };
     let d0 : DialogModel := Dialog.make "Plan ready" "approve it to leave plan mode" (plan_body st) [o0, o1, o2, o3];
-    let d : DialogModel := { (Dialog.with_notes d0) with markdown := true, footer := "PageUp/PageDown scroll -- e note, a approve/edit, m manual, r revise, Esc cancel" };
+    let d : DialogModel := { (Dialog.with_notes d0) with markdown := true, fullscreen := true, footer := "PageUp/PageDown scroll -- e note, a approve/edit, m manual, r revise, Esc cancel" };
     let pr <- dialog_run st.colors st.store d;
     match pr {
         Pair.pair final step => match step {
@@ -2054,7 +2055,7 @@ def plan_approval_step (st : WeaverState) : IO WeaverMsg := do {
 pub def markdown_body_rows (colors : Bool) (width : I64) (lines : List String) : List DisplayRow :=
     if List.length lines < 1
     then List.empty
-    else Rows.of_line colors width (TLine.markdown_line (List.intercalate "\n" lines))
+    else Rows.markdown_full colors width (List.intercalate "\n" lines)
 
 /// The body as transcript rows: a Markdown dialog renders its body as one
 /// document, any other keeps the transcript's line styling.
@@ -2068,6 +2069,36 @@ def dialog_body_rows (colors : Bool) (width : I64) (d : DialogModel) : List Size
 def paint_dialog (colors : Bool) (prev : Option Screen) (d : DialogModel) : IO (Pair Screen DialogModel) :=
     Dialog.paint (theme_border_style_with colors) (dialog_body_rows colors) prev d
 
+/// A body rendered at one content width, kept across paints.
+struct BodyMemo {
+    width : I64,
+    rows : List SizedWidget,
+}
+
+/// `paint_dialog` for a dialog whose body never changes while it is
+/// open (a plan): the body renders once per content width, so a scroll
+/// or a keypress does not re-parse the document.
+def paint_dialog_memo (colors : Bool) (memo : Ref (Option BodyMemo)) (prev : Option Screen) (d : DialogModel) : IO (Pair Screen DialogModel) := do {
+    let size <- Terminal.size;
+    let width : I64 := match size { Pair.pair _ cols => Dialog.content_width (Dialog.frame_width_for d cols) };
+    let held <- Ref.get memo;
+    let rows <- memo_rows colors memo width held d;
+    Dialog.paint (theme_border_style_with colors) (fn (_ : I64) (_ : DialogModel) => rows) prev d
+}
+
+def memo_rows (colors : Bool) (memo : Ref (Option BodyMemo)) (width : I64) (held : Option BodyMemo) (d : DialogModel) : IO (List SizedWidget) :=
+    match held {
+        Option.some m => if m.width == width then IO.pure m.rows else memo_fill colors memo width d,
+        Option.none => memo_fill colors memo width d,
+    }
+
+def memo_fill (colors : Bool) (memo : Ref (Option BodyMemo)) (width : I64) (d : DialogModel) : IO (List SizedWidget) := do {
+    let rows : List SizedWidget := dialog_body_rows colors width d;
+    let m : BodyMemo := { width := width, rows := rows };
+    Ref.set memo (Option.some m);
+    IO.pure rows
+}
+
 /// Run a dialog. The overlay handshake brackets the whole modal --
 /// confirm, cancel or EOF: `begin` takes stdin from the main loop;
 /// `finish` releases it and bumps the close sequence the loop's poll
@@ -2076,7 +2107,10 @@ def dialog_run (colors : Bool) (store : Option StoreState) (d : DialogModel) : I
     // The /tasks monitor owns stdin while it is open: wait it out.
     Overlay.wait_monitor store;
     Overlay.begin store;
-    let r <- Dialog.modal (paint_dialog colors) d;
+    let memo <- Ref.new (Option.none : Option BodyMemo);
+    let paint : Option Screen -> DialogModel -> IO (Pair Screen DialogModel) :=
+        if d.markdown then paint_dialog_memo colors memo else paint_dialog colors;
+    let r <- Dialog.modal paint d;
     Overlay.finish store;
     IO.pure r
 }
