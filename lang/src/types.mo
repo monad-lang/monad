@@ -2987,7 +2987,7 @@ pub def cubical_prims_all : List CubicalPrim :=
                         (List.cons CubicalPrim.glue (List.cons CubicalPrim.glue_intro
                             (List.cons CubicalPrim.glue_elim
                                 (List.cons CubicalPrim.system
-                                List.empty))))))))))))))))
+                                    List.empty))))))))))))))))
 
 /// The string a `#[cubical "..."]` MARKER names a primitive by -- the
 /// marker key, which is NOT the surface name `cubical_prim_name` returns:

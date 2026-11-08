@@ -2314,7 +2314,6 @@ def parse_term_is_universe (t : ParseTerm) : Bool :=
         _ => false,
     }
 
-
 /// Patch the real constraints onto the fully-parsed `Decl` — see
 /// `def_try_constraints`'s doc comment above.
 #[partial]

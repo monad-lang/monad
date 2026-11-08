@@ -349,9 +349,9 @@ def whnf_go (fuel : I64) (scope : Scope) (locals : LocalScope) (t0 : Term) : Ter
                         match whnf_path_endpoint_app f_r a scope locals {
                             Option.some t => whnf_go (fuel - 1) scope locals t,
                             Option.none =>
-                        match whnf_system_app f_r a {
-                            Option.some t => whnf_go (fuel - 1) scope locals t,
-                            Option.none =>
+                            match whnf_system_app f_r a {
+                                Option.some t => whnf_go (fuel - 1) scope locals t,
+                                Option.none =>
                                 // A canonical `Term.cubical` is a REDUCIBLE
                                 // head (the De Morgan arm below), so keep
                                 // reducing it rather than returning it:
@@ -362,7 +362,7 @@ def whnf_go (fuel : I64) (scope : Scope) (locals : LocalScope) (t0 : Term) : Ter
                                     Term.cubical _c => whnf_go (fuel - 1) scope locals canonical,
                                     _ => canonical,
                                 },
-                        }
+                            }
                         },
                 },
             Term.var idx dbg =>

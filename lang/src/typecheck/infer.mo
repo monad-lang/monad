@@ -7102,54 +7102,54 @@ def type_check_app (f : Term) (a : Term) (expected_type : Term) (scope : Scope) 
                 Option.some r => r,
                 Option.none =>
                 match try_type_check_def_call (Term.app f a) expected_type scope local_types locals {
-                Option.some r => r,
-                Option.none =>
-                match try_type_check_con_call (Term.app f a) expected_type scope local_types locals {
                     Option.some r => r,
                     Option.none =>
-                    match infer_position_hole f a {
-                        Option.some e => err e,
+                    match try_type_check_con_call (Term.app f a) expected_type scope local_types locals {
+                        Option.some r => r,
                         Option.none =>
-                        let a_expected : Term := app_arg_expected_type_from_callee f a expected_type scope local_types locals in
-                        match type_check a a_expected scope local_types locals {
-                            ok a_tt0 =>
-                            let a_tt : TypedTerm := recheck_against_callee_domain f a a_tt0 a_expected expected_type scope local_types locals in
-                            if not (struct_literal_arg_matches_expected a a_expected scope) then
-                            // The argument's ordinary check SUCCEEDED, but only
-                            // vacuously -- see `struct_literal_arg_matches_expected`.
-                            // Treat it as not applying, so the named-call spread
-                            // below gets its chance, exactly as the reference does
-                            // (`core_check.rs`, `Ok(()) if struct_literal_arg_
-                            // matches_expected(..)`).
-                            match named_call_fields_of a {
-                                Option.none => type_check_app_ordinary a_tt f expected_type scope local_types locals,
-                                Option.some fields =>
-                                match type_check_named_call f fields expected_type scope local_types locals {
-                                    err e2 => err e2,
-                                    ok result => match result {
-                                        Option.some tt => ok tt,
-                                        Option.none => type_check_app_ordinary a_tt f expected_type scope local_types locals,
-                                    },
+                        match infer_position_hole f a {
+                            Option.some e => err e,
+                            Option.none =>
+                            let a_expected : Term := app_arg_expected_type_from_callee f a expected_type scope local_types locals in
+                            match type_check a a_expected scope local_types locals {
+                                ok a_tt0 =>
+                                let a_tt : TypedTerm := recheck_against_callee_domain f a a_tt0 a_expected expected_type scope local_types locals in
+                                if not (struct_literal_arg_matches_expected a a_expected scope) then
+                                // The argument's ordinary check SUCCEEDED, but only
+                                // vacuously -- see `struct_literal_arg_matches_expected`.
+                                // Treat it as not applying, so the named-call spread
+                                // below gets its chance, exactly as the reference does
+                                // (`core_check.rs`, `Ok(()) if struct_literal_arg_
+                                // matches_expected(..)`).
+                                match named_call_fields_of a {
+                                    Option.none => type_check_app_ordinary a_tt f expected_type scope local_types locals,
+                                    Option.some fields =>
+                                    match type_check_named_call f fields expected_type scope local_types locals {
+                                        err e2 => err e2,
+                                        ok result => match result {
+                                            Option.some tt => ok tt,
+                                            Option.none => type_check_app_ordinary a_tt f expected_type scope local_types locals,
+                                        },
+                                    }
                                 }
+                                else
+                                type_check_app_ordinary a_tt f expected_type scope local_types locals,
+                                err e =>
+                                match named_call_fields_of a {
+                                    Option.none => err e,
+                                    Option.some fields =>
+                                    match type_check_named_call f fields expected_type scope local_types locals {
+                                        err e2 => err e2,
+                                        ok result => match result {
+                                            Option.some tt => ok tt,
+                                            Option.none => err e,
+                                        },
+                                    }
+                                },
                             }
-                            else
-                            type_check_app_ordinary a_tt f expected_type scope local_types locals,
-                            err e =>
-                            match named_call_fields_of a {
-                                Option.none => err e,
-                                Option.some fields =>
-                                match type_check_named_call f fields expected_type scope local_types locals {
-                                    err e2 => err e2,
-                                    ok result => match result {
-                                        Option.some tt => ok tt,
-                                        Option.none => err e,
-                                    },
-                                }
-                            },
                         }
                     }
                 }
-            }
             }
         }
     }
@@ -9383,7 +9383,7 @@ def type_check_system (c : Cubical) (expected_type : Term) (scope : Scope)
                                                                                 ok (mk_typed
                                                                                     (cub CubicalPrim.system
                                                                                         [face1_tt.term, val1_tt.term,
-                                                                                         face2_tt.term, val2_tt.term])
+                                                                                            face2_tt.term, val2_tt.term])
                                                                                     typ),
                                                                         },
                                                                 },
