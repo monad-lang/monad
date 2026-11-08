@@ -151,7 +151,7 @@ def constructor_tag (c : CodegenCtx) (name : String) : I64 :=
                 Option.some tag => tag,
                 Option.none =>
                     match ctx_lookup_ctor_tag c name {
-                        Option.some tag => tag,
+                        Option.some tag => if I64.lt tag 0 then bare_ctor_tag c base_name else tag,
                         Option.none => bare_ctor_tag c base_name,
                     },
             },
@@ -297,6 +297,19 @@ def bare_ctor_tag (c : CodegenCtx) (bare : String) : I64 :=
         Option.none => 0,
     }
 
+/// `repro::Tick.exited` -> `Tick.exited`: the owner-qualified alias with
+/// the owner's module dropped. The whole-program pass qualifies a type's
+/// name with its module, but a value-position reference (`Tick.exited`)
+/// keeps the spelling the source wrote, so without this key the lookup
+/// fell through to the bare name -- the FIRST claimant's arity and an
+/// ambiguous tag. A `Tick.exited` (nullary) beside a `Status.exited
+/// (code)` then compiled as a one-field constructor closure, and every
+/// `match` on it took `_`.
+def ctor_short_alias (qualified : String) : String :=
+    let i := String.find_last qualified "::" in
+    if I64.lt i 0 then qualified
+    else String.slice qualified (i + 2) (String.length qualified - i - 2)
+
 /// One constructor "claim" collected from the declared `Inductive`s:
 /// the constructor's BARE rendered name (how match dispatch will refer
 /// to it), its declared FIELD COUNT (how the composite key
@@ -411,7 +424,13 @@ def add_ctor_alias_tags (claims : List CtorClaim) (scan : BareArityScan) (tags :
                     Option.some amb => if amb then (-1) else tag,
                     Option.none => tag,
                 } in
-                add_ctor_alias_tags rest scan (str_map_insert bare bare_entry (str_map_insert qualified tag tags)),
+                let short := ctor_short_alias qualified in
+                let short_entry := match str_map_lookup short tags {
+                    Option.some prev => if I64.beq prev tag then tag else (-1),
+                    Option.none => tag,
+                } in
+                let with_short := if String.beq short qualified then tags else str_map_insert short short_entry tags in
+                add_ctor_alias_tags rest scan (str_map_insert bare bare_entry (str_map_insert qualified tag with_short)),
         },
 }
 
@@ -493,6 +512,11 @@ def add_ctor_arity_keys (claims : List CtorClaim) (scan : BareArityScan) (acc : 
                         else arity,
                     Option.none => arity,
                 } in
-                add_ctor_arity_keys rest scan (str_map_insert bare bare_entry (str_map_insert qualified arity acc)),
+                let short := ctor_short_alias qualified in
+                let with_short := match str_map_lookup short acc {
+                    Option.some _ => acc,
+                    Option.none => str_map_insert short arity acc,
+                } in
+                add_ctor_arity_keys rest scan (str_map_insert bare bare_entry (str_map_insert qualified arity with_short)),
         },
 }

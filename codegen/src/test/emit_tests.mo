@@ -411,6 +411,32 @@ def test_ctor_tags_distinguish_same_name_differing_arity : Bool :=
         && I64.beq (constructor_arity c "Wide.mk") 3
         && is_constructor_var c "mk"
 
+/// The whole-program pass names a type with its module (`repro::Tick`),
+/// but a value-position reference is written `Tick.exited`. A nullary
+/// `Tick.exited` beside `Status.exited (code)` must answer its OWN arity
+/// (0, not `Status`'s 1) and tag through the module-less alias; it used
+/// to fall to the bare name and compile as a one-field closure, so every
+/// `match` on it took `_`.
+#[test]
+def test_ctor_reference_resolves_through_the_module_less_owner : Bool :=
+    let st_exited := InductConstructor.mk (NamePath.mk (List.cons (Identifier.id "exited") List.empty))
+        [unit_test_param "code"] (Term.sort (SortLevel.concrete 1)) in
+    let status := Inductive.mk (NamePath.mk (List.cons (Identifier.id "repro::Status") List.empty))
+        List.empty (Term.sort (SortLevel.concrete 1)) [st_exited] empty_attrs Visibility.package_private in
+    let tk_waiting := InductConstructor.mk (NamePath.mk (List.cons (Identifier.id "waiting") List.empty))
+        List.empty (Term.sort (SortLevel.concrete 1)) in
+    let tk_exited := InductConstructor.mk (NamePath.mk (List.cons (Identifier.id "exited") List.empty))
+        List.empty (Term.sort (SortLevel.concrete 1)) in
+    let tick := Inductive.mk (NamePath.mk (List.cons (Identifier.id "repro::Tick") List.empty))
+        List.empty (Term.sort (SortLevel.concrete 1)) [tk_waiting, tk_exited] empty_attrs Visibility.package_private in
+    let inds := List.cons status (List.cons tick List.empty) in
+    let c := empty_ctx empty_arities (build_constructor_tag_map inds) (build_constructor_arity_map inds) str_map_empty str_map_empty in
+    I64.beq (constructor_arity c "Tick.exited") 0
+        && I64.beq (constructor_arity c "Status.exited") 1
+        && I64.beq (constructor_tag c "Tick.exited") (constructor_tag_at c "exited" 0)
+        && I64.beq (constructor_tag c "Status.exited") (constructor_tag_at c "exited" 1)
+        && Bool.not (I64.beq (constructor_tag c "Tick.exited") (constructor_tag c "Status.exited"))
+
 #[test]
 def test_native_string_concat_calls_runtime_fn_not_unit_stub : Bool :=
     let text := compile_native_def_fixture_text "String.concat" "string_concat" in
