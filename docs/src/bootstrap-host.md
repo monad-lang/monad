@@ -8,6 +8,15 @@ in Rust. It exists to bootstrap the first one, and it is still what runs the
 self-hosted compiler's source before you have a binary. It is a **host**, not
 the language.
 
+Its role is deliberately narrow and **second priority**: it must keep
+accepting the compiler-source surface so bootstrap works, but it does not
+define the language and is not the verification authority. `monad check` /
+`monad test` decide whether a program — and every proof — type-checks. A mote
+may declare `[host] verify = "declarations"` in its `mote.toml` (as `proofs/`
+does); the host then parses, resolves and registers that mote's declarations
+without type-checking proof bodies or `#[proof]`-annotated defs. The
+self-hosted compiler ignores that table and checks everything.
+
 This appendix exists because the two are not yet identical, and because the host
 currently provides some things the self-hosted compiler does not have at all —
 including every piece of editor tooling. Nothing in here is a language feature.

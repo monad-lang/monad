@@ -313,7 +313,8 @@ equivalent.
   `#[derive <Target>]` backend; duplicate targets across *different* macros
   are a compile error
 - Derives are library code in `std/derive.mo`, not compiler built-ins
-- Both compilers expand `#[derive …]` and term macros; the bootstrap host
+- The self-hosted compiler expands `#[derive …]` and term macros; the Rust
+  bootstrap host expands them too for the compiler-source surface, but
   requires a `quote`-bodied term macro, which the self-hosted compiler also
   accepts (a bare body is its own extension)
 - `fmt! "…{name}…"` is a compile-time format macro in `init::format`

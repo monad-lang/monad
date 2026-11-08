@@ -191,8 +191,9 @@ number of flips between the declaration and the occurrence — which is exactly
 the shape that lets you write a non-terminating term without any recursion at
 all.
 
-This is checked for `type`, not for `struct`. The two compilers agree on the
-rule and both reject the example above.
+This is checked for `type`, not for `struct`. The self-hosted compiler is the
+authority for the rule; the Rust bootstrap host's checker implements the same
+rejection for the compiler-source surface.
 
 ## Type Parameters
 

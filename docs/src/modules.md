@@ -334,9 +334,11 @@ mote, and to no other mote. `priv` is narrower (that one module), `pub` is
 wider (everywhere). `pub use module {*}` re-exports an import, which is how
 the `init` and `std` hubs work.
 
-Both boundaries are **enforced** — by the self-hosted compiler and by
-`monad-rs check`, on every load path (`check`, `run`, `test`, `build`, the
-LSP). The rule is judged where a name is *used*, not where it is imported:
+The self-hosted compiler **enforces both boundaries** on every load path
+(`check`, `run`, `test`, `build`, the LSP). The Rust bootstrap host enforces
+the same rule in its own loader so the compiler-source surface stays honest,
+but the self-hosted compiler is the definition. The rule is judged where a
+name is *used*, not where it is imported:
 if another mote reaches a declaration that is not `pub`, the file fails to
 load with `` `X` is not visible here ``, and the remedy is to mark the
 declaration `pub` (or to stop reaching it). Declarations a `derive` generates

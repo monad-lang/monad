@@ -40,6 +40,37 @@ monad/
 └── nix/ + flake.nix   # Packaging; CI pushes to monad-lang.cachix.org
 ```
 
+## Compiler roles: Monad is the reference; the Rust host bootstraps
+
+`monad` (the self-hosted compiler built from `cli/src/main.mo` on top of
+`lang/` and `codegen/`) is the **reference implementation and the only
+verification authority**. Every answer to "does this type-check?" comes
+from `monad check` / `monad test`; every rule in this document describes
+what the self-hosted checker does.
+
+`monad-rs` / `rust/` is the **Rust bootstrap host**, and is second priority.
+It exists to build the first rung of the self-hosted compiler and to serve
+the bootstrap-window fallback (`bootstrap/nightly-floor.txt`). It must keep
+**accepting the compiler-source surface** (`init std lang cli llvm runtime
+build` and the compiler motes) so bootstrap works, but it is not required to
+implement proof types, cubical semantics, level variables, affine usage or
+the other rules the self-hosted checker owns. Where the two differ on
+anything outside that surface, the self-hosted answer wins.
+
+A proof mote may declare a host policy in its `mote.toml`:
+
+```toml
+[host]
+verify = "declarations"
+```
+
+The Rust host then parses, resolves and registers the mote's declarations
+but does not type-check proof bodies or proof terms; `#[proof]`-annotated
+defs are treated the same way in every mote. `proofs/` opts in. This is an
+**acceptance policy, not verification** — `monad check proofs` / the
+self-hosted test sweep is the gate. Do not use it to hide checking in a mote
+the compiler source depends on.
+
 ## Motes
 
 `init/`, `std/`, `lang/`, `cli/`, `eval/`, and everything under `motes/` are
@@ -67,9 +98,11 @@ def package_private : I64 := 2  // visible inside this mote (the default)
 priv def module_only : I64 := 3 // visible only in this file's module
 ```
 
-Both boundaries are **enforced as load errors** by both compilers, on every
-load path (`check`/`run`/`test`/`build`/the LSP): a `priv` declaration is
-invisible outside its own module, and a package-private (unmarked) one is
+Both boundaries are **enforced as load errors by the self-hosted compiler**
+on every load path (`check`/`run`/`test`/`build`/the LSP); the Rust bootstrap
+host enforces the same rule in its own loader (`rust/core/src/term/module.rs`)
+so the compiler-source surface stays honest, but the rule is defined by the
+self-hosted compiler. A `priv` declaration is invisible outside its own module, and a package-private (unmarked) one is
 invisible outside its own mote. The rule is judged at the *reference* — every
 name a file reaches, including dotted member names, glob imports, `open`ed
 names and the ambient prelude — by the `use`-completeness gate
@@ -83,19 +116,21 @@ because `MetaDecl.d_def`/`d_instance` carry no visibility either and a
 derive's output is the type's public API.
 
 The **affine usage rule** (an unannotated binder may be used at most once
-unless `Copy A` resolves) is likewise enforced only by the self-hosted
-compiler, on every check/compile path. `monad-rs check` does not enforce it.
+unless `Copy A` resolves) is enforced by the self-hosted compiler, on every
+check/compile path. `monad-rs check` does not enforce it, and is not required
+to: the Rust host only bootstraps.
 A mote's `mote.toml` may carry `[affine] mode = "warn"` while it migrates;
 the default (no table) is `error`, and there is no off switch. `String` is
 `Copy` (an immutable pointer); `ByteBuf` is not (it is mutable).
 
 A def's declared single-variable constraints are its **dictionary
-parameters** in both compilers, decided from the declaration alone: every
-`[Foo A]` whose class has a method (`[Copy A]` included) becomes one,
-whether or not the body visibly uses it; a body-less `#[native]` and a def
-returning a type take none. They are likewise a **call-site obligation** in
-the self-hosted compiler: once the call's types are solved, every constraint
-needs a matching instance, or the call is a `no instance of ...` error. A
+parameters**, decided by the self-hosted compiler from the declaration
+alone: every `[Foo A]` whose class has a method (`[Copy A]` included) becomes
+one, whether or not the body visibly uses it; a body-less `#[native]` and a
+def returning a type take none. They are likewise a **call-site obligation**
+in the self-hosted compiler: once the call's types are solved, every
+constraint needs a matching instance, or the call is a `no instance of ...`
+error. A
 still-generic caller forwarding its own parameter is not decidable and stays
 accepted, and so is a bare reference (`let f : S -> S := op`). A class
 *method* call on a single-param class whose method takes the carrier as its
@@ -169,8 +204,10 @@ The **last published nightly must be able to compile the next compiler.**
 `scripts/ci-self-compile.sh` enforces that in CI: it installs the latest
 nightly with `monadup default`, forces a fresh build of `cli/src/main.mo` with
 that nightly, and then runs the built binary's `check cli/src/main.mo`. A
-failure is a failure — the Rust host is not a fallback, because falling back is
-how an incompatible tree used to pass.
+failure is a failure — the in-tree Rust host is not a substitute for the
+nightly gate. It is the *bootstrap-window fallback* only, used while the
+newest nightly predates `bootstrap/nightly-floor.txt`; falling back past that
+window is how an incompatible tree used to pass.
 
 The **compiler-source surface** is exactly what `scripts/build-self-hosted.sh`
 scans: `init std lang cli llvm runtime build`, the motes in its input list
@@ -384,6 +421,19 @@ field access.
 
 ## Modifying the Compiler
 
+**Primary — the self-hosted compiler (authoritative):**
+
+| Concern | File |
+|---|---|
+| Syntax | `lang/src/parser.mo` + `lang/src/parser/` |
+| Term/AST representation | `lang/src/types.mo` |
+| Type checking | `lang/src/typecheck/` (`infer.mo`, `unify.mo`, `whnf.mo`, ...), `lang/src/module.mo` |
+| Codegen | `codegen/src/` (emit.mo, natives.mo, validate.mo, ...); IR is `llvm/src/ir.mo` |
+| Module loading / motes | `lang/src/module.mo`, `lang/src/mote.mo` |
+
+**Bootstrap host — second priority (must accept the compiler-source surface;
+not a reference for semantics):**
+
 | Concern | File |
 |---|---|
 | Syntax | `rust/core/src/parser.rs` + `rust/core/src/parser/` |
@@ -392,25 +442,31 @@ field access.
 | Evaluation | `rust/core/src/core_eval.rs` |
 | Natives | `rust/core/src/core_native.rs` (`exec_native` dispatch) |
 | Lowering to IR | `rust/core/src/lower_core_ir.rs`, `core_ir.rs` |
-| Self-hosted codegen | `codegen/src/` (emit.mo, natives.mo, validate.mo, ...); IR is `llvm/src/ir.mo` |
-| Module loading / motes | `rust/core/src/term/module.rs`, `lang/src/module.mo`, `lang/src/mote.mo` |
+| Module loading / motes | `rust/core/src/term/module.rs` |
 
 The self-hosted pipeline: parse → scope → elaborate → typecheck → codegen
-(LLVM IR → llc → clang, via `llvm/src/link.mo`). Both compilers must agree
-on any surface change; a divergence usually shows up only in the
-self-compiled binary, so `devenv tasks run monad:bootstrap-compile` is the
-gate for anything touching `lang/`, `runtime/`, `init/` or `std/`.
+(LLVM IR → llc → clang, via `llvm/src/link.mo`). The self-hosted compiler is
+the definition of the language; the Rust host must keep **accepting** the
+compiler-source surface so bootstrap compiles, but it need not mirror the
+type-system rules (proof types, cubical, levels, affine usage). A surface
+change is gated by `devenv tasks run monad:bootstrap-compile` for anything
+touching `lang/`, `runtime/`, `init/` or `std/`; a divergence that only shows
+up in the self-compiled binary is a bug in whichever side is wrong — and the
+self-hosted answer wins unless the host cannot build the tree at all.
 
 ## Testing and Memory Discipline
 
 ```bash
-cargo test --manifest-path rust/Cargo.toml -p monad-core <name>   # one Rust test (cheap iteration)
-monad test std/src/process_tests.mo  # one Monad test file
+monad test std/src/process_tests.mo  # one Monad test file (VERIFIES the language)
 monad test std                       # directory sweep
+monad check proofs                    # the proof corpus, with the self-hosted checker
+cargo test --manifest-path rust/Cargo.toml -p monad-core <name>   # one bootstrap-host test
 scripts/check-docs.sh                # type-check md/AGENTS code fences
 ```
 
-**A whole-corpus check or full `cargo test --manifest-path rust/Cargo.toml --release` can exhaust system
+`monad` is the verification authority; `cargo test` and `monad-rs check` only
+cover the bootstrap host. **A whole-corpus check or full `cargo test
+--manifest-path rust/Cargo.toml --release` can exhaust system
 memory when name resolution regresses** — it has hard-restarted machines.
 The safeguards, in order:
 

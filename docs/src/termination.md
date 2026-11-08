@@ -83,8 +83,9 @@ The error prints the recursive call *after elaboration*, so the subtraction
 arrives as its desugared `Sub` dispatch — and the two compilers spell that
 dispatch differently (the host inlines the dictionary into a `match`, this
 compiler keeps it as a call), so the middle line is the one line of the message
-that differs between them. It is noisy either way, but the parameter names at
-the end tell you what it wanted.
+that differs between them. The self-hosted message is the reference; the
+host's spelling is bootstrap-only. The parameter names at the end tell you
+what it wanted either way.
 
 ## The Attributes
 
