@@ -500,9 +500,9 @@ So `monad_alloc` calls `GC_malloc`, string buffers go through `GC_malloc_atomic`
 The refcount field is currently vestigial.
 
 The intended replacement is for the compiler to track ownership through the
-[linear and affine multiplicities](./linear-types.md) the language is designed
-around, at which point the allocator gets real frees and the GC dependency goes
-away. The first step of that is available now: a `MONAD_OWNERSHIP=1` build
+[affine usage rule](./linear-types.md) the language is designed around, at
+which point the allocator gets real frees and the GC dependency goes away. The
+first step of that is available now: a `MONAD_OWNERSHIP=1` build
 routes monomorphic, non-`Copy` constructors through `calloc` and frees them with
 generated `drop_<T>` glue at definition exits (unused binders only). Everything
 else stays region-owned and leaks; the mode refuses any mote still in

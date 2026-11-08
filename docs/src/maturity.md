@@ -41,7 +41,7 @@ commit this book ships with, not inferred from intent.
 | Optics | **Working** | `Lens` and `Prism` in `init.optics`. |
 | Indexed monads | **Experimental** | `IndexedMonad`, `IndexedMonadState` and `IndexedMonadLift` exist and type-check, and `examples/indexed_monads.mo` exercises them. The `Monad (M I I)` bridge instance in the prelude does not dispatch (variable head), so an indexed monad still needs its own `Monad` instance written out. |
 | [Termination checking](./termination.md) | **Working** | A structural subterm check, run once per module over that module's own declarations by both compilers, with the same message either way. Recursion over an inductive type is accepted; counting down an `I64` needs `#[terminating]`, `#[decreasing ...]` or `#[partial]`. |
-| [Linear & affine types](./linear-types.md) | **Partial** | The syntax parses everywhere it is meant to: struct fields, `def` and lambda parameters, and destructured parameters (`(!{x, y} : P)`, which the *host* still rejects). The **affine default is enforced** on every check/compile path (an unannotated binder is `≤1` unless `Copy A` resolves; per-mote `[affine] mode = "warn"` while a mote migrates). Explicit `!`/`%` are parsed but still dropped. Freeing is experimental: the default build emits no drop glue (Boehm reclaims), and `MONAD_OWNERSHIP=1` frees a narrow Owned class (see [Memory Model](./memory-model.md)). |
+| [Linear & affine types](./linear-types.md) | **Partial** | The **affine default is enforced** on every check/compile path: an unannotated binder is `≤1` unless `Copy A` resolves (per-mote `[affine] mode = "warn"` while a mote migrates, and a single def can opt out with `#[allow_non_affine "<reason>"]`). There is no annotation syntax — the `!`/`?`/`%` prefixes were parsed but never enforced and have been removed; linearity is declared on the type (`#[linear]`, `#[proof]`). Freeing is experimental: the default build emits no drop glue (Boehm reclaims), and `MONAD_OWNERSHIP=1` frees a narrow Owned class (see [Memory Model](./memory-model.md)). |
 | `#[derive BEq BOrd Debug Lens Copy Clone]` | **Working** | Both compilers bridge the attribute to the same `std/derive.mo` macros. The backend must be imported — `#[derive BEq]` dispatches to `derive_beq` by name. `Copy`/`Clone` are monomorphic-only: a generic type is rejected because the generated instance cannot carry the constraints it would need. |
 | Char literals `'M'` | **Working** | Parse, type-check and compile, escapes included, `\u{...}` on both. `Char` itself is a **stub**: no operations, no `BEq`, no `ToString` — you can write, type and pass one, not inspect it. |
 | `_` holes in term position | **Partial** | In *type* position (`(x : _)`) it works. In *value* position both compilers accept it and both lower it to a value that is not what you meant (`I64.beq _ 0` fails under each) — write the value. A hole in *infer* position, where no expected type reaches it (`def k : I64 := (fn x => x) _`), is rejected by **both**, with the host's own *"cannot infer the type of a hole"*; that divergence used to open the other way and closed on this branch. |
@@ -104,15 +104,15 @@ Monad is a real, self-hosting language: the compiler is written in Monad,
 compiles itself, and reaches a fixpoint. The type checker, the class system, the
 module system, and a genuine macro system all work.
 
-What it is not yet: **safe by construction** (the self-hosted compiler checks
-termination but not linearity — the multiplicity syntax parses everywhere now,
-and means nothing), **scalable in concurrency** (fibers are 1:1 pthreads
-with 128 MB stacks, real but not the design that ships), or **distributable**
-(nightly binaries exist; a lockfile and a registry do not). Its test runner
-compiles and runs a driver binary per test file, and covers the whole corpus
-with no exclusion list — every file that used to be reported as a gap now runs
-self-hosted.
+What it is not yet: **safe by construction** (the affine usage rule is enforced
+and `#[linear]` types are used exactly once, but nothing frees memory yet —
+compiled binaries still need a garbage collector), **scalable in concurrency**
+(fibers are 1:1 pthreads with 128 MB stacks, real but not the design that
+ships), or **distributable** (nightly binaries exist; a lockfile and a registry
+do not). Its test runner compiles and runs a driver binary per test file, and
+covers the whole corpus with no exclusion list — every file that used to be
+reported as a gap now runs self-hosted.
 
-The single largest gap is linear types — and because deterministic memory
-management is meant to be built on them, that gap is also why compiled binaries
-need a garbage collector.
+The single largest gap is deterministic memory management — the affine rule is
+the precondition for it, and freeing is the milestone that replaces the
+collector.

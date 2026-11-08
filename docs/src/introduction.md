@@ -51,10 +51,11 @@ where the `monad` binary itself comes from.
 - **Self-hosting**: the compiler in `lang/` is written in Monad and compiles
   itself
 
-Linear and affine types are a stated goal of the language. Their syntax is
-accepted everywhere it is meant to be — struct fields, parameters, lambdas — but
-nothing is **enforced** yet; the multiplicity is dropped before type checking.
-See [Linear Types](./linear-types.md).
+Linear and affine types are a stated goal of the language, and the affine usage
+rule is **enforced** on every check and compile path: an unannotated binder may
+be used at most once unless its type is `Copy`. There is no annotation syntax —
+linearity comes from the type (`#[linear]`, `#[proof]`), not from a binder
+prefix. See [Linear Types](./linear-types.md).
 
 ## Quick Example
 

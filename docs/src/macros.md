@@ -294,8 +294,7 @@ calls, so there is no run-time template walking.
   a compiler limit. Unregistered macros are called with `!` syntax.
 - `Expr` is not a full mirror of the compiler's `Term`: `Pi`, `Forall`, `Sort`,
   `Ann`, and `Quote` are excluded, because no shipped derive needs them.
-- `TypeInfo` does not carry a type's generic parameters, per-field defaults, or
-  field multiplicities.
+- `TypeInfo` does not carry a type's generic parameters or per-field defaults.
 
 `cli/src/main.mo` hand-writes its own argv parser rather than using
 `#[derive Cli]`, and stays free of macro syntax on purpose: the self-hosted

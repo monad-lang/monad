@@ -116,8 +116,10 @@ belong to the host, and resolution there is relative to the working directory.
 
 This section used to be a syntax table, and it is **empty now**. Everything that
 was in it has been implemented self-hosted: char literals, named instances, `_`
-holes, multi-binding `let`, brace-parameter declarations, multiplicity prefixes
-on parameters, `#[derive …]`, `\u{XXXX}` escapes and dotted instance names.
+holes, multi-binding `let`, brace-parameter declarations, `#[derive …]`,
+`\u{XXXX}` escapes and dotted instance names. (The multiplicity prefixes that
+used to be in this list were later removed from both compilers — see
+[Linear Types](./linear-types.md).)
 
 "Empty" means the entries that table held, not every construct either grammar
 can spell, and one family sits outside it. A lambda's **parameter** list:
@@ -190,7 +192,7 @@ twelve.
 
 ## Syntax the self-hosted compiler accepts and the host rejects
 
-Five, in this direction.
+Four, in this direction.
 
 A **bare-bodied** term macro:
 
@@ -205,15 +207,6 @@ fails on a bare body with *"macro `double` did not return a Term value"*, while
 the self-hosted compiler accepts both. Declaration macros
 (`defmacro name T := decls { … }`) work on both. See
 [Macros and Derive](./macros.md).
-
-A multiplicity prefix on a **destructured** parameter:
-
-```monad,ignore
-def sum_coord (!{fst, snd} : Coord) : I64 := fst + snd
-```
-
-The host's destructured-parameter parser never reads a prefix, so this is a
-parse error there. See [Linear Types](./linear-types.md).
 
 An **atom in function position** — an application whose head is a literal
 rather than a path:

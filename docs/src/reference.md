@@ -75,8 +75,7 @@ spelling that allows defaults:
 def scale {factor : I64 := 2, p : I64} : I64 := factor * p
 ```
 
-The block is all-or-nothing: no further `(…)` groups may follow it, and it takes
-no multiplicity prefixes. A one-parameter block needs the `:=` default or a
+The block is all-or-nothing: no further `(…)` groups may follow it. A one-parameter block needs the `:=` default or a
 trailing comma — `def f {x : I64} : I64 := x` is read as an implicit *type*
 binder clause instead.
 
@@ -435,13 +434,13 @@ type Truthy : Prop {
 struct Point {
     x : I64,
     y : I64,
-    z : I64 := 0,     // default value
-    !name : String,   // linear field (`!`) or affine (`?`)
-    ?tag : String
+    z : I64 := 0      // default value
 }
 ```
 
-Multiplicity annotations are not enforced — see [Linear Types](./linear-types.md).
+A type declaration can also carry a **kind attribute**: `#[linear]` makes every
+binder of that type linear (used exactly once), and `#[proof]` additionally
+gives it no run-time representation. See [Linear Types](./linear-types.md).
 
 ## Class Definitions
 
@@ -497,34 +496,28 @@ instance ColourEq : BEq Colour2 {
 The name is recorded and nothing reads it: no syntax selects an instance by name
 in either implementation.
 
-## Multiplicities
+## The Affine Usage Rule
 
-Struct fields accept `!` (linear), `?` (affine) and `%` (erased) in both
-implementations:
-
-```monad
-struct Res { !handle : String, ?tag : String, size : I64 }
-```
-
-Parameters accept them too — on definitions and on typed lambda parameters:
+There is no multiplicity annotation syntax. Every binder is **affine by
+default** — usable at most once — unless its type has a `Copy` instance or the
+enclosing def declares `[Copy A]` for it. A second use is a compile error:
 
 ```monad
-def f (!linear : I64) (?affine : I64) (%erased : I64) (many : I64) : I64 :=
-    linear + affine + many
-
-def g : I64 -> I64 := fn (!x : I64) => x
+def ok (x : I64) : I64 := x + x           // passes: I64 is Copy
 ```
 
-`%erased` may not appear in a run-time position at all, which is why `f` above
-does not add it in; `linear-types.md` covers that rule.
+```monad,ignore
+struct P { v : I64 }
 
-The prefix applies to the whole group, so `(!x y : I64)` makes *both* names
-linear. A destructured parameter takes one as well — `(!{fst, snd} : Coord)` —
-though that spelling is self-hosted only; the bootstrap host rejects it.
+def bad (p : P) : I64 :=                 // error: p is used twice
+    p.v + p.v
+```
 
-> **The self-hosted compiler enforces multiplicities; the Rust host does
-> not.** An erased (`%`) parameter may not be used at run time, a linear one
-> must be used exactly once — see [Linear Types](./linear-types.md).
+The second block is deliberately invalid — it is the shape the rule rejects.
+
+A type whose binders must be used **exactly once** is declared `#[linear]`, and
+an erased compile-time-only type is `#[proof]`. Sharing, borrows and the
+diagnostics are in [Linear Types](./linear-types.md).
 
 ## Modules
 
@@ -589,10 +582,10 @@ monad pretty file.mo                 # parse and pretty-print
 monad version                        # the git commit this binary was built from
 ```
 
-`compile` and `run` take `--verbose`/`-v`, `--debug`/`-g` and `--release`;
-`eval`, `check` and `test` take `--verbose`/`-v`; `repl` takes no flags.
-Debug info is on unless you pass `--release`. Flags may go before or after the paths, `--output=NAME` is not
-recognised (use a space), and a **relative** output name lands in
-`/tmp/monad_out_<pid>`. See [Compiling and Running](./compiling.md), and
-[The Bootstrap Host](./bootstrap-host.md) for the Rust implementation's
-additional commands.
+`build`/`run` take `--verbose`/`-v`, `--debug`/`-g` and `--release`; `eval`,
+`check` and `test` take `--verbose`/`-v`; `repl` takes no flags. Debug info is
+on unless you pass `--release`. Flags may go before or after the paths, and a
+**relative** output name lands inside the target directory (see
+[Where the binary lands](./compiling.md#where-the-binary-lands)) — use an
+absolute `-o` when you want the binary somewhere specific. The full command
+surface is in [the Command-line Reference](./cli.md).

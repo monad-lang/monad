@@ -78,10 +78,6 @@
 # reports is therefore a real problem, and docs/src/bootstrap-host.md is where
 # the differences that remain between the two compilers are recorded.
 #
-# The reverse also exists, which is why a few blocks are tagged
-# ```monad,ignore even though they are correct: a multiplicity prefix on a
-# destructured parameter parses self-hosted and is a parse error on the host.
-#
 # Module resolution is relative to the working directory, so this must run
 # from the repository root (it cd's there itself).
 

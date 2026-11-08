@@ -156,22 +156,6 @@ like a `struct`/`type` field's: `scale { p := 4 }` is 8 everywhere, and an
 omitted parameter is an error only when it declares no default. See
 [The Bootstrap Host](./bootstrap-host.md) for what is still host-only.
 
-## Linear and Affine Fields
-
-Fields can carry a multiplicity annotation — `!` (linear, exactly once), `?`
-(affine, at most once), or nothing (unrestricted):
-
-```monad
-struct Buffer {
-    !data : String,
-    ?label : String,
-    size : I64
-}
-```
-
-These parse and are stored, but are **not currently enforced** — see
-[Linear Types](./linear-types.md).
-
 ## Structs vs Types
 
 A struct is a single-constructor type whose constructor is named `mk`. This
@@ -218,5 +202,7 @@ def b : Box I64 := Box.mk 42
 - Constructors and defs accept keyword arguments; brace-form params take defaults
 - Dot notation is field access, not method dispatch
 - Generic structs are not usable yet — use a `type` instead
+- Every binder is affine by default; a `Copy` type may be shared — see
+  [Linear Types](./linear-types.md)
 
 Next, we'll explore **error handling** patterns in Monad.
