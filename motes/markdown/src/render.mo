@@ -258,14 +258,28 @@ def Markdown.block_spans
 
 // ─── Blocks ────────────────────────────────────────────────────────────
 
+/// The blank line between two blocks: it keeps the indent and prefix, so
+/// a block quote's gap still shows its `│`.
+def Markdown.gap_line (indent : I64) (prefix : List Markdown.StyledSpan) : Markdown.StyledLine :=
+    Markdown.line (List.append (Markdown.indent_spans indent) prefix)
+
+/// Sibling blocks, one blank line between each pair when `spaced` (a
+/// document, a quote, a loose list item); a tight list item packs them.
 #[partial]
 def Markdown.blocks_lines
-    (blocks : List Markdown.Block) (indent : I64) (prefix : List Markdown.StyledSpan)
+    (blocks : List Markdown.Block) (spaced : Bool) (indent : I64) (prefix : List Markdown.StyledSpan)
     : List Markdown.StyledLine :=
     match blocks {
         List.empty => List.empty,
         List.cons b rest =>
-            List.append (Markdown.block_lines b indent prefix) (Markdown.blocks_lines rest indent prefix),
+            let here : List Markdown.StyledLine := Markdown.block_lines b indent prefix in
+            match rest {
+                List.empty => here,
+                List.cons _ _ =>
+                    let gap : List Markdown.StyledLine :=
+                        if spaced then List.cons (Markdown.gap_line indent prefix) List.empty else List.empty in
+                    List.append here (List.append gap (Markdown.blocks_lines rest spaced indent prefix)),
+            },
     }
 
 def Markdown.block_lines
@@ -282,7 +296,7 @@ def Markdown.block_lines
         block_code_block _info literal =>
             Markdown.code_lines literal indent prefix,
         block_quote inner =>
-            Markdown.blocks_lines inner indent
+            Markdown.blocks_lines inner true indent
                 (List.append prefix (List.cons (Markdown.span "│ " Markdown.SpanStyle.span_quote) List.empty)),
         block_list kind tight items =>
             Markdown.list_lines kind tight items 0 indent prefix,
@@ -362,9 +376,14 @@ def Markdown.list_lines
                     (List.append prefix (List.cons marker List.empty)) in
             let rest_prefix : List Markdown.StyledSpan := Markdown.indent_spans (indent + 2) in
             let inner : List Markdown.StyledLine :=
-                Markdown.blocks_lines item.blocks 0 List.empty in
+                Markdown.blocks_lines item.blocks (Bool.not tight) 0 List.empty in
+            let gap : List Markdown.StyledLine :=
+                match rest {
+                    List.cons _ _ => if tight then List.empty else List.cons (Markdown.gap_line indent prefix) List.empty,
+                    List.empty => List.empty,
+                } in
             List.append (Markdown.mark_item first_prefix rest_prefix inner)
-                (Markdown.list_lines kind tight rest (index + 1) indent prefix),
+                (List.append gap (Markdown.list_lines kind tight rest (index + 1) indent prefix)),
     }
 
 /// Put `first_prefix` on the first line and `rest_prefix` on the others.
@@ -375,7 +394,9 @@ def Markdown.mark_item
         List.empty => List.cons (Markdown.line first_prefix) List.empty,
         List.cons l rest =>
             List.cons (Markdown.line (List.append first_prefix l.spans))
-                (List.map (fn (r : Markdown.StyledLine) => Markdown.line (List.append rest_prefix r.spans)) rest),
+                (List.map (fn (r : Markdown.StyledLine) =>
+                    // A gap stays empty: no trailing indent on a blank line.
+                    if List.is_empty r.spans then r else Markdown.line (List.append rest_prefix r.spans)) rest),
     }
 
 #[partial]
@@ -425,7 +446,7 @@ def Markdown.table_lines
 // ─── Entry points ──────────────────────────────────────────────────────
 
 pub def Markdown.to_lines (doc : Markdown.Document) : List Markdown.StyledLine :=
-    Markdown.blocks_lines doc.blocks 0 List.empty
+    Markdown.blocks_lines doc.blocks true 0 List.empty
 
 pub def Markdown.to_plain_lines (doc : Markdown.Document) : List String :=
     List.map Markdown.line_text (Markdown.to_lines doc)

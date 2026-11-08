@@ -97,3 +97,27 @@ def test_soft_break_keeps_the_line : Bool :=
 #[test]
 def test_nested_list_is_indented : Bool :=
     plain "- one\n  - two" == "• one\n  • two"
+
+#[test]
+def test_paragraphs_are_separated_by_a_blank_line : Bool :=
+    plain "a\n\nb" == "a\n\nb"
+
+#[test]
+def test_heading_and_paragraph_are_separated : Bool :=
+    plain "# T\n\npara" == "T\n\npara"
+
+#[test]
+def test_loose_list_items_are_separated : Bool :=
+    plain "- a\n\n- b" == "• a\n\n• b"
+
+#[test]
+def test_tight_list_items_stay_packed : Bool :=
+    plain "- a\n- b" == "• a\n• b"
+
+#[test]
+def test_quote_gap_keeps_its_bar : Bool :=
+    plain "> a\n>\n> b" == "│ a\n│ \n│ b"
+
+#[test]
+def test_list_after_paragraph_is_separated : Bool :=
+    plain "intro\n\n- one\n- two" == "intro\n\n• one\n• two"
