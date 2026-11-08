@@ -19,12 +19,15 @@ pub type LineClass {
     user,
     assistant,
     running,
-    thinking,
+    /// `class_thinking`/`class_plain`, not `thinking`/`plain`: shuttle's
+    /// `Content.thinking (..)` and http's `Transport.plain (..)` share those
+    /// names with fields (the shared-name match miscompile, fixed in #212).
+    class_thinking,
     error,
     diff_plus,
     diff_minus,
     hint,
-    plain,
+    class_plain,
 }
 
 /// The role of a line, by prefix: diff marks, error/denial entries,
@@ -49,12 +52,12 @@ pub def class_style (c : LineClass) : TextStyle :=
         LineClass.user => { style_default with fg := some Color.cyan },
         LineClass.assistant => style_default,
         LineClass.running => { style_default with dim := true, fg := some Color.cyan },
-        LineClass.thinking => { style_default with dim := true, fg := some Color.magenta },
+        LineClass.class_thinking => { style_default with dim := true, fg := some Color.magenta },
         LineClass.error => { style_default with fg := some Color.red },
         LineClass.diff_plus => { style_default with fg := some Color.green },
         LineClass.diff_minus => { style_default with fg := some Color.red },
         LineClass.hint => { style_default with dim := true },
-        LineClass.plain => style_default,
+        LineClass.class_plain => style_default,
     }
 
 pub def theme_line_style (line : String) : TextStyle :=
@@ -72,7 +75,7 @@ pub def theme_running_style_with (colors : Bool) : TextStyle :=
 /// Reasoning rows: dim magenta, distinct from the dim-cyan running line and
 /// from the assistant's default color.
 pub def theme_thinking_style_with (colors : Bool) : TextStyle :=
-    if colors then class_style LineClass.thinking else style_default
+    if colors then class_style LineClass.class_thinking else style_default
 
 /// The scrollbar thumb: readable against the dim track without competing
 /// with the transcript text.
@@ -152,12 +155,12 @@ pub def class_code (c : LineClass) : String :=
         LineClass.user => "\u{1b}[36m",
         LineClass.assistant => "",
         LineClass.running => "\u{1b}[36;2m",
-        LineClass.thinking => "\u{1b}[35;2m",
+        LineClass.class_thinking => "\u{1b}[35;2m",
         LineClass.error => "\u{1b}[31m",
         LineClass.diff_plus => "\u{1b}[32m",
         LineClass.diff_minus => "\u{1b}[31m",
         LineClass.hint => "\u{1b}[2m",
-        LineClass.plain => "",
+        LineClass.class_plain => "",
     }
 
 /// The dumb line's tint: EVERY line of the write classified and

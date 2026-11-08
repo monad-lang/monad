@@ -176,13 +176,17 @@ def waiting (env : ShellEnv) (id : String) (e : ProcEntry) (ms : I64) : IO Conte
 // ── the wait ────────────────────────────────────────────────────────────
 
 /// One tick's verdict.
+/// The constructor names are unique on purpose: `ShellTick.tick_done` beside
+/// tui's `ModalNext.done (result)` hit the shared-name match miscompile
+/// (fixed in #212) and reported quick commands as "output passed 64 MiB;
+/// command killed" on every compiler without that fix.
 pub type ShellTick {
-    pending,
-    done,
-    interrupted,
+    tick_pending,
+    tick_done,
+    tick_interrupted,
     detached_by_user,
     detached_by_budget,
-    flooded,
+    tick_flooded,
 }
 
 /// Sleep, look, and either go round again (doubling the sleep up to
@@ -195,7 +199,7 @@ def wait_loop (env : ShellEnv) (e : ProcEntry) (deadline_ns : I64) (delay : I64)
     let size_due : Bool := now - sized_ns > 1000000000;
     let t <- tick env e deadline_ns now size_due;
     match t {
-        ShellTick.pending =>
+        ShellTick.tick_pending =>
             wait_loop env e deadline_ns (if delay * 2 > max_tick_ms then max_tick_ms else delay * 2)
                 (if size_due then now else sized_ns),
         _ => IO.pure t,
@@ -206,12 +210,12 @@ def wait_loop (env : ShellEnv) (e : ProcEntry) (deadline_ns : I64) (delay : I64)
 /// and a stop wins over a detach.
 def tick (env : ShellEnv) (e : ProcEntry) (deadline_ns : I64) (now : I64) (size_due : Bool) : IO ShellTick := do {
     let done <- IO.file_exists (Store.child e.dir "exit");
-    if done then IO.pure ShellTick.done else tick_stop env e deadline_ns now size_due
+    if done then IO.pure ShellTick.tick_done else tick_stop env e deadline_ns now size_due
 }
 
 def tick_stop (env : ShellEnv) (e : ProcEntry) (deadline_ns : I64) (now : I64) (size_due : Bool) : IO ShellTick := do {
     let stop <- env.stop unit;
-    if stop then IO.pure ShellTick.interrupted else tick_detach e deadline_ns now size_due
+    if stop then IO.pure ShellTick.tick_interrupted else tick_detach e deadline_ns now size_due
 }
 
 def tick_detach (e : ProcEntry) (deadline_ns : I64) (now : I64) (size_due : Bool) : IO ShellTick := do {
@@ -219,14 +223,14 @@ def tick_detach (e : ProcEntry) (deadline_ns : I64) (now : I64) (size_due : Bool
     if asked then IO.pure ShellTick.detached_by_user
     else if now > deadline_ns then IO.pure ShellTick.detached_by_budget
     else if size_due then tick_size e
-    else IO.pure ShellTick.pending
+    else IO.pure ShellTick.tick_pending
 }
 
 def tick_size (e : ProcEntry) : IO ShellTick := do {
     let n <- IO.file_size e.log;
     IO.pure (match n {
-        Option.some b => if b > Procs.max_log_bytes then ShellTick.flooded else ShellTick.pending,
-        Option.none => ShellTick.pending,
+        Option.some b => if b > Procs.max_log_bytes then ShellTick.tick_flooded else ShellTick.tick_pending,
+        Option.none => ShellTick.tick_pending,
     })
 }
 
@@ -234,9 +238,9 @@ def tick_size (e : ProcEntry) : IO ShellTick := do {
 
 def finish (env : ShellEnv) (id : String) (e : ProcEntry) (ms : I64) (t : ShellTick) : IO Content :=
     match t {
-        ShellTick.done => finish_exited id e,
-        ShellTick.interrupted => finish_killed id e "[interrupted by the user]\n",
-        ShellTick.flooded => finish_killed id e "[output passed 64 MiB; command killed]\n",
+        ShellTick.tick_done => finish_exited id e,
+        ShellTick.tick_interrupted => finish_killed id e "[interrupted by the user]\n",
+        ShellTick.tick_flooded => finish_killed id e "[output passed 64 MiB; command killed]\n",
         ShellTick.detached_by_user => finish_detached env id e "by the user",
         _ => finish_detached env id e (String.concat_list ["after ", I64.to_string (ms / 1000), "s"]),
     }

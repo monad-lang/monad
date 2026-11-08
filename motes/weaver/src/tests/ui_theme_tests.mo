@@ -55,7 +55,7 @@ def test_theme_plain_reply_is_default : Bool :=
 #[test]
 def test_class_style_and_code_agree_on_the_enum : Bool :=
     class_style LineClass.assistant == ({ fg := none, bg := none, bold := false, dim := false, italic := false, underline := false, strikethrough := false, reverse := false } : TextStyle)
-        && class_code LineClass.plain == ""
+        && class_code LineClass.class_plain == ""
 
 #[test]
 def test_theme_status_style_manual_dim : Bool :=
