@@ -1,7 +1,7 @@
 // weaver / pty / side -- side commands and /btw run beside a turn: /help
 // opens its dialog while the spinner is live, /btw's answer opens in a
 // dialog while the turn keeps going, the turn's reply still lands, and keys
-// reach the prompt after the dialogs close.
+// reach the prompt after the dialogs and the /tasks monitor close.
 use pty::spawn {Pty, Output}
 use pty::check {Check.report}
 use weaver::pty_support {run_gated, with_root, fixture_path, spawn, quit_cleanly}
@@ -48,10 +48,20 @@ def side_go (m : Pty) : IO Bool := do {
     Pty.send_text m "zz-typed";
     let typed <- Pty.wait_until m (fn (o : Output) => grid_has o "zz-typed") 3000;
     let d <- Check.report "keys reach the prompt after the dialogs" typed;
+    // The log review's F8: keys were lost after the /tasks monitor closed.
+    // Clear "zz-typed" from the box first (8 backspaces).
+    Pty.send_text m (String.repeat "\u{7f}" 8);
+    Pty.send_text m "/tasks\r";
+    let _ <- Pty.wait_until m (fn (o : Output) => grid_has o "Esc") 3000;
+    Pty.send_text m "\u{1b}";
+    Pty.pump m 500;
+    Pty.send_text m "after-monitor";
+    let typed2 <- Pty.wait_until m (fn (o : Output) => grid_has o "after-monitor") 3000;
+    let f <- Check.report "keys reach the prompt after the /tasks monitor" typed2;
     let restored <- quit_cleanly m 3000;
     let e <- Check.report "clean exit after the side dialogs" restored;
     Pty.finish m;
-    return (up && a && b && c && d && e)
+    return (up && a && b && c && d && f && e)
 }
 
 def side_run (bin : String) (root : String) : IO Bool := do {
