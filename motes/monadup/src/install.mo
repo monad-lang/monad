@@ -57,7 +57,7 @@ pub def Install.active_tag (h : Layout.Home) : IO (Option String) := do {
 }
 
 pub def Install.fetch_releases (ctx : Install.Context) : IO (Result String (List Release.Info)) := do {
-    let r <- Shell.curl_fetch ctx.api_url;
+    let r <- Shell.curl_fetch_auth ctx.api_url;
     match r {
         Pair.pair code out =>
             if I64.beq code 0
@@ -68,7 +68,7 @@ pub def Install.fetch_releases (ctx : Install.Context) : IO (Result String (List
 
 pub def Install.fetch_release (ctx : Install.Context) (tag : String) : IO (Result String Release.Info) := do {
     let url : String := ctx.api_url ++ "/tags/" ++ tag;
-    let r <- Shell.curl_fetch url;
+    let r <- Shell.curl_fetch_auth url;
     match r {
         Pair.pair code out =>
             if I64.beq code 0
@@ -93,7 +93,7 @@ pub def Install.latest (ctx : Install.Context) : IO (Result String Release.Info)
 /// Releases before checksums existed have no sibling, so `none` means
 /// "cannot verify", not "bad".
 def Install.fetch_checksum (url : String) : IO (Option String) := do {
-    let r <- Shell.curl_fetch (url ++ ".sha256");
+    let r <- Shell.curl_fetch_auth (url ++ ".sha256");
     match r {
         Pair.pair code out =>
             if I64.beq code 0
@@ -109,7 +109,7 @@ def Install.fetch_checksum (url : String) : IO (Option String) := do {
 /// accepted (older releases), but a published checksum that cannot be
 /// checked is an error rather than a silent pass.
 pub def Install.download_to (url : String) (dest : Path) : IO (Result String Unit) := do {
-    let code <- Shell.curl_download url dest;
+    let code <- Shell.curl_download_auth url dest;
     if Bool.not (I64.beq code 0) then return (Result.err ("failed to download " ++ url))
     else do {
         let expected <- Install.fetch_checksum url;

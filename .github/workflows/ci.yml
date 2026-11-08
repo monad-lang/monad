@@ -52,6 +52,14 @@ env:
   # the PATH exports, the `.devenv/run` symlink, `mkdir -p "$PREK_HOME"` -- sit
   # OUTSIDE the guard and are unaffected.
   DEVENV_SKIP_TASKS: "1"
+  # GitHub throttles unauthenticated release downloads hard enough to answer
+  # HTTP 504s for hours (measured 2026-11-08: every nightly asset 504s bare
+  # and 200s with a token). `monadup default`, `monadup`'s own self-checks and
+  # `scripts/bump-nightly-pin.sh` all fetch release assets, so the workflow
+  # token authenticates them. `GITHUB_TOKEN` is what `monadup` reads;
+  # `GH_TOKEN` is what the `gh` CLI reads.
+  GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+  GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
 # The compile-heavy work is ONE job (`compiler-checks`), because the two jobs
 # it replaces could overtake each other. This file ran `test` and `bootstrap`

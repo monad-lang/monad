@@ -64,6 +64,17 @@ while [ $# -gt 0 ]; do
 done
 
 command -v curl >/dev/null 2>&1 || die "curl is required (run inside 'nix develop')"
+
+# GitHub throttles UNAUTHENTICATED release downloads hard enough to answer
+# 504s for hours (measured 2026-11-08: every nightly asset 504s bare and 200s
+# with a token), which fails this script, `monadup` and CI alike. Any of the
+# usual token variables is honoured; without one the fetches stay bare, so an
+# existing local setup behaves exactly as before.
+token="${MONADUP_GITHUB_TOKEN:-${GH_TOKEN:-${GITHUB_TOKEN:-}}}"
+auth=()
+if [ -n "$token" ]; then
+  auth=(-H "Authorization: Bearer $token")
+fi
 command -v python3 >/dev/null 2>&1 || die "python3 is required (run inside 'nix develop')"
 [ -f "$pin_file" ] || die "no pin file at $pin_file"
 
@@ -93,7 +104,7 @@ PY
 if [ -n "$tag_override" ]; then
   tag="$tag_override"
 else
-  json="$(curl -fsSL "$api_url")" || die "failed to query the releases API ($api_url)"
+  json="$(curl -fsSL "${auth[@]}" "$api_url")" || die "failed to query the releases API ($api_url)"
   tag="$(printf '%s' "$json" | python3 -I -c '
 import json
 import sys
@@ -134,7 +145,7 @@ updates="$work/updates"
 for plat in $stale; do
   [[ "$plat" =~ ^[0-9A-Za-z_.-]+$ ]] || die "unexpected platform '$plat' in $pin_file"
   url="$download_base/$tag/monad-nightly-$plat"
-  sums="$(curl -fsSL "$url.sha256")" || die "no checksum at $url.sha256 (is the asset published yet?)"
+  sums="$(curl -fsSL "${auth[@]}" "$url.sha256")" || die "no checksum at $url.sha256 (is the asset published yet?)"
   hex="${sums%%[[:space:]]*}"
   [[ "$hex" =~ ^[0-9a-f]{64}$ ]] || die "$url.sha256 does not hold a sha256 hex digest: '$sums'"
   printf '%s\t%s\t%s\n' "$plat" "$hex" "$url" >> "$updates"

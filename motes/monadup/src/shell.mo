@@ -63,11 +63,80 @@ pub def Shell.cp (from : Path) (to : Path) : IO I64 :=
 pub def Shell.untar (archive : Path) (dest : Path) : IO I64 :=
     Shell.run "tar" ["-xzf", Path.to_string archive, "-C", Path.to_string dest]
 
+/// The token a GitHub fetch authenticates with, if any.
+/// `MONADUP_GITHUB_TOKEN` wins over `GITHUB_TOKEN` and `GH_TOKEN`, so a CI
+/// run can use its own token without disturbing a developer's `gh` login.
+///
+/// GitHub throttles UNAUTHENTICATED release downloads hard enough to answer
+/// HTTP 504 for hours (measured 2026-11-08: every nightly asset 504s bare
+/// and 200s with a token), which is what made `monadup default` fail for
+/// users who had a perfectly good token sitting in their environment.
+pub def Shell.github_token : IO (Option String) := do {
+    let a <- IO.get_env "MONADUP_GITHUB_TOKEN";
+    match a {
+        Option.some t => return (Option.some t),
+        Option.none => do {
+            let b <- IO.get_env "GITHUB_TOKEN";
+            match b {
+                Option.some t => return (Option.some t),
+                Option.none => do {
+                    let c <- IO.get_env "GH_TOKEN";
+                    match c {
+                        Option.some t => return (Option.some t),
+                        Option.none => Shell.gh_auth_token,
+                    }
+                },
+            }
+        },
+    }
+}
+
+/// The token the `gh` CLI is logged in with, if any.
+///
+/// Last resort behind the environment variables: a developer who ran
+/// `gh auth login` should not have to export their token for `monadup` to
+/// get an authenticated download. Absent `gh`, a logged-out one, or any
+/// other failure is simply `none` -- never an error, because plenty of
+/// machines have no `gh` at all and still install fine unauthenticated.
+def Shell.gh_auth_token : IO (Option String) := do {
+    let r <- Shell.capture "sh" ["-c", "command -v gh >/dev/null 2>&1 && gh auth token 2>/dev/null || true"];
+    match r {
+        Pair.pair code out =>
+            if Bool.not (I64.beq code 0) then return Option.none
+            else
+                let t : String := Text.trim out in
+                if I64.beq (String.length t) 0
+                then return Option.none
+                else return (Option.some t),
+    }
+}
+
+/// `-H "Authorization: ..."` when a token is set, nothing otherwise. The
+/// header is only meaningful for github.com URLs, so it is added to the
+/// release fetches and the API query, not to every `curl` in the tool.
+pub def Shell.github_auth_args : IO (List String) := do {
+    let t <- Shell.github_token;
+    match t {
+        Option.none => IO.pure List.empty,
+        Option.some tok => IO.pure ["-H", String.concat "Authorization: Bearer " tok],
+    }
+}
+
+pub def Shell.curl_download_auth (url : String) (dest : Path) : IO I64 := do {
+    let auth <- Shell.github_auth_args;
+    Shell.run "curl" (List.append auth ["-fsSL", "-o", Path.to_string dest, url])
+}
+
 pub def Shell.curl_download (url : String) (dest : Path) : IO I64 :=
     Shell.run "curl" ["-fsSL", "-o", Path.to_string dest, url]
 
 pub def Shell.curl_fetch (url : String) : IO (Pair I64 String) :=
     Shell.capture "curl" ["-fsSL", url]
+
+pub def Shell.curl_fetch_auth (url : String) : IO (Pair I64 String) := do {
+    let auth <- Shell.github_auth_args;
+    Shell.capture "curl" (List.append auth ["-fsSL", url])
+}
 
 pub def Shell.curl_head (url : String) : IO I64 := do {
     let r <- Shell.capture "curl" ["-fsSI", "--max-time", "5", url];
