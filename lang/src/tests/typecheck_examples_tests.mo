@@ -134,6 +134,15 @@ def typecheck_source (source : String) : Bool :=
 def test_typecheck_module_self_contained_def : Bool :=
     typecheck_source "def id (x : Type) : Type := x"
 
+/// A TERM-level implicit parameter (`{a : A}`) must keep its declared type.
+/// The parser now gives the clause a `forall a : A` binder, and
+/// `bind_leading_implicit_binders` reads that domain into `locals`; before
+/// this, `a` was a `Sort 0` placeholder and `f a` failed with
+/// `expected A, found Prop` (the `proofs/src/paths.mo` failure).
+#[test]
+def test_implicit_term_parameter_keeps_its_declared_type : Bool :=
+    typecheck_source "def use_a {A B : Type} {a : A} (f : A -> B) : B := f a"
+
 #[test]
 def test_typecheck_module_rejects_unbound_variable : Bool :=
     not (typecheck_source "def bad (x : Type) : Type := totally_undefined_name")

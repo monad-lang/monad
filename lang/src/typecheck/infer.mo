@@ -5294,10 +5294,31 @@ def rewrite_applied_path (spine : Term) (scope : Scope) (local_types : List Term
 /// type and rewrites the last one. A head already of path type is left to the
 /// bare-variable arm and to `normalize_path_boundary`'s recursion, so
 /// `(p i0) x` resolves through the inner `p i0`.
+/// The endpoint `d` selects from a path TYPE, when both are decidable.
+/// Shared by the bound-variable and sentinel (implicit-parameter) arms of
+/// `rewrite_stuck_path_app`.
+def endpoint_from_path_type (typ : Term) (d : Term) (scope : Scope)
+    (locals : LocalScope) : Option Term :=
+    // Reduced first: a local's declared type can be a `Path` SPELLED as the
+    // library def, and only `whnf` turns that into a `Term.cubical`
+    // `path_parts_of` recognizes.
+    match path_parts_of (whnf scope locals typ) {
+        Option.none => Option.none,
+        Option.some parts =>
+            match endpoint_of (whnf scope locals d) {
+                Option.some ep =>
+                    match cubical_prim_eq ep CubicalPrim.i0 {
+                        true => Option.some parts.left,
+                        false => Option.some parts.right,
+                    },
+                Option.none => Option.none,
+            },
+    }
+
 def rewrite_stuck_path_app (f : Term) (d : Term) (scope : Scope) (local_types : List Term)
     (locals : LocalScope) : Option Term :=
     match term_peel f {
-        Term.var idx _dbg =>
+        Term.var idx dbg =>
             // `if`, not `match`, on the `I64.beq`: the native bool ops
             // (`op_eq`/`op_lt`/`op_gt`/`op_ne`, `term_is_native_bool_op`)
             // compile to a RAW `icmp` i1, and the match scrutinee path
@@ -5305,7 +5326,23 @@ def rewrite_stuck_path_app (f : Term) (d : Term) (scope : Scope) (local_types : 
             // is a codegen trap the corpus never hits (this was its first
             // site). An `if` condition goes through `ensure_i1_cond`,
             // which expects exactly that raw shape.
-            if I64.beq idx sentinel then Option.none
+            if I64.beq idx sentinel
+            then
+                // An implicit parameter: its type lives in the NAME-keyed
+                // `locals`, in the name-based (sentinel) form
+                // `bind_leading_implicit_binders` stores, so no index
+                // shift is needed. Refusing sentinel heads left
+                // `proofs/src/paths.mo`'s `q i0` unreduced in `path_pair`'s
+                // boundary.
+                match dbg {
+                    DebugName.named id =>
+                        match scope_find_local id locals {
+                            Option.some lv =>
+                                endpoint_from_path_type lv.typ d scope locals,
+                            Option.none => Option.none,
+                        },
+                    DebugName.unnamed => Option.none,
+                }
             else
                 match nth_type idx local_types {
                     Option.none => Option.none,
@@ -5318,23 +5355,7 @@ def rewrite_stuck_path_app (f : Term) (d : Term) (scope : Scope) (local_types : 
                         // (`PPath A a b` with explicit `a`/`b`) yielded the
                         // wrong endpoint, so `fn i => p i` failed its i0
                         // boundary while the ground-endpoint version passed.
-                        let f_typ_at_depth : Term := term_shift (idx + 1) f_typ in
-                        // Reduced first: a local's declared type can be a
-                        // `Path` SPELLED as the library def, and only
-                        // `whnf` turns that into the `Term.cubical`
-                        // `path_parts_of` recognizes.
-                        match path_parts_of (whnf scope locals f_typ_at_depth) {
-                            Option.none => Option.none,
-                            Option.some parts =>
-                                match endpoint_of (whnf scope locals d) {
-                                    Option.some ep =>
-                                        match cubical_prim_eq ep CubicalPrim.i0 {
-                                            true => Option.some parts.left,
-                                            false => Option.some parts.right,
-                                        },
-                                    Option.none => Option.none,
-                                },
-                        },
+                        endpoint_from_path_type (term_shift (idx + 1) f_typ) d scope locals,
                 },
         // An APPLICATION spine: `h x i0`, where `h`'s own type is what
         // decides the endpoint.
@@ -8402,11 +8423,25 @@ def con_spine_result_typ (f_term : Term) (fallback : Term) (scope : Scope) : Ter
 /// `forall` rule preserved, so a signature's variable names would silently
 /// go) and the info (which would turn every generalization this rule types
 /// into an ordinary arrow the next time anything looked at it).
+/// Push a Pi binder into the NAME-keyed scope for `type_check_pi`. Path
+/// rewriting resolves a variable's declared type through `locals`, and an
+/// explicit Pi binder is not a lambda the body rule opens here: `apd`'s
+/// `PathP (fn x => B (p x))` could not reduce `p i0` and reported
+/// `expected (B a), found (B (p i0))`.
+def push_pi_binder_local (b : Binder) (dom : Term) (locals : LocalScope) : LocalScope :=
+    let lv : LocalVar := {
+        name := debug_name_to_id (binder_name b),
+        typ := dom,
+        multiplicity := Multiplicity.many,
+    } in
+    scope_push_local lv locals
+
 def type_check_pi (b : Binder) (dom : Term) (cod : Term) (scope : Scope) (local_types : List Term) (locals : LocalScope) : Result TypeError TypedTerm :=
     match type_check dom Term.hole scope local_types locals {
         ok dom_tt =>
             let extended_types : List Term := List.cons dom local_types in
-            match type_check cod Term.hole scope extended_types locals {
+            let extended_locals : LocalScope := push_pi_binder_local b dom locals in
+            match type_check cod Term.hole scope extended_types extended_locals {
                 ok cod_tt =>
                     let pi_term : Term := Term.pi b dom cod in
                     let universe : Term :=
@@ -9268,14 +9303,21 @@ def path_line_dom_ok (dom : Term) (scope : Scope) (local_types : List Term)
 /// checked components.
 def type_check_pathp_endpoints (line : Term) (a_left : Term) (a_right : Term) (scope : Scope)
     (local_types : List Term) (locals : LocalScope) : Result TypeError Term :=
-    let left_typ : Term := Term.app line cub_i0 in
+    // WHNF + the deep endpoint rewrite, not just the bare application: a
+    // dependent line (`fn x => B (p x)`) applied at `i0` is a beta-redex
+    // whose body still contains `p i0`; without reducing both, `apd`'s
+    // `f a` was checked against the literal `(fn x => B (p x)) i0`.
+    let left_typ : Term :=
+        normalize_path_endpoints scope locals (whnf scope locals (Term.app line cub_i0)) in
     match type_check a_left left_typ scope local_types locals {
         err e => err e,
         ok left_tt =>
             match unify left_tt.typ left_typ scope locals {
                 err e => err e,
                 ok _ =>
-                    let right_typ : Term := Term.app line cub_i1 in
+                    let right_typ : Term :=
+                        normalize_path_endpoints scope locals
+                            (whnf scope locals (Term.app line cub_i1)) in
                     match type_check a_right right_typ scope local_types locals {
                         err e => err e,
                         ok right_tt =>

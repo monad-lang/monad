@@ -5,13 +5,115 @@
 /// parses -- they were just sitting outside the fast pre-commit sweep for
 /// no reason.
 
-use lang::types {Decl, ParseDecl}
+use lang::types {
+    DebugName, Decl, Def, Identifier, ParseDecl, Term, term_peel,
+    show_identifier, show_name_path,
+}
+use lib::module {parse_all_decls}
 use lib::parser {open_parser, use_parser}
 use lib::parser::lower_parse {lower_parse_decl, lower_ctx_bare}
 use parsec::core {ParseResult}
 use lib::pretty {show_decl}
 
 open ParseResult {fail, success}
+
+/// The `Def` named `name` in a parsed module, if any.
+#[terminating]
+def parsed_def_typ (name : String) (decls : List Decl) : Option Term :=
+    match decls {
+        List.empty => Option.none,
+        List.cons d rest =>
+            match d {
+                Decl.def_d df =>
+                    match df {
+                        Def.mk { name := np, typ, .. } =>
+                            if String.beq (show_name_path np) name
+                            then Option.some typ
+                            else parsed_def_typ name rest,
+                    },
+                _ => parsed_def_typ name rest,
+            },
+    }
+
+/// The domain of the first leading binder named `target`.
+#[terminating]
+def binder_domain_named (target : String) (t : Term) : Option Term :=
+    match term_peel t {
+        Term.pi b arg ret =>
+            match b.name {
+                DebugName.named id =>
+                    if String.beq (show_identifier id) target
+                    then Option.some arg
+                    else binder_domain_named target ret,
+                DebugName.unnamed => binder_domain_named target ret,
+            },
+        _ => Option.none,
+    }
+
+/// Do `t`'s leading Pi binders spell `names`, in order?
+#[terminating]
+def starts_with_binder_names (names : List String) (t : Term) : Bool :=
+    match names {
+        List.empty => true,
+        List.cons nm rest =>
+            match term_peel t {
+                Term.pi b _ ret =>
+                    match b.name {
+                        DebugName.named id =>
+                            if String.beq (show_identifier id) nm
+                            then starts_with_binder_names rest ret
+                            else false,
+                        DebugName.unnamed => false,
+                    },
+                _ => false,
+            },
+    }
+
+/// Multiple implicit clauses bind in SOURCE order. The param loop reverses
+/// its accumulated list once at exit, which also flipped the relative order
+/// of separate clauses: `{A : Type} {B : A -> Type}` used to emit
+/// `B` before the `A` its own domain mentions.
+#[test]
+def test_implicit_clauses_keep_source_order : Bool :=
+    match parse_all_decls "def two {A : Type} {B : A -> Type} (p : I64) : I64 := 1" {
+        success _ decls =>
+            match parsed_def_typ "two" decls {
+                Option.some typ => starts_with_binder_names ["A", "B"] typ,
+                Option.none => false,
+            },
+        fail _ => false,
+    }
+
+/// Is `t` a variable occurrence spelled `name` (at any de Bruijn index)?
+def is_var_named (name : String) (t : Term) : Bool :=
+    match t {
+        Term.var _ dbg =>
+            match dbg {
+                DebugName.named id => String.beq (show_identifier id) name,
+                DebugName.unnamed => false,
+            },
+        _ => false,
+    }
+
+/// An implicit clause must keep its DECLARED type: `{a : A}` becomes a
+/// `forall a : A` binder, not a name elaboration re-invents with the
+/// `Sort 1`/`Sort 0` placeholder. This is what lets a term-level implicit
+/// parameter (`proofs/src/paths.mo`'s `{a b : A}`) be used at its real
+/// element type.
+#[test]
+def test_implicit_clause_keeps_its_declared_type : Bool :=
+    match parse_all_decls "def keep {A : Type} {a : A} (x : A) : A := x" {
+        success _ decls =>
+            match parsed_def_typ "keep" decls {
+                Option.some typ =>
+                    match binder_domain_named "a" typ {
+                        Option.some dom => is_var_named "A" dom,
+                        Option.none => false,
+                    },
+                Option.none => false,
+            },
+        fail _ => false,
+    }
 
 #[partial]
 def parse_decl_succeeds (r : ParseResult ParseDecl) : Bool :=

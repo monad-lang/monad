@@ -6,14 +6,14 @@ use lang::types {
     InductConstructor, Inductive, LocatedSpan, Location, ModulePath, Multiplicity, NamePath,
     NameRef, OpenFilter, Param, ParseClass, ParseClassDef, ParseDecl, ParseDef,
     ParseInductConstructor, ParseInstance, ParseMatchCase, ParseParam, ParseSpan,
-    ParseStruct, ParseStructField, ParseStructLitField, ParseTerm, ParsedParam,
+    ParseStruct, ParseStructField, ParseStructLitField, ParseTerm, ParseTermKind, ParsedParam,
     QualifiedName, SortLevel, SourceRange, Term, TypeConstraint, UseFilter, UseItem, Visibility,
     affine, app, char, char_to_string, concrete, destructured, f32, f64, flt, group,
     has_attr, i64, id_eq, ident, if_, linear, list_reverse, many, match_, named, num, package_private, parse_param_many, parse_param_with_mult,
     pd_at, pd_class_d, pd_decl_gen_d, pd_def_d, pd_def_macro_d, pd_inductive_d,
     pd_attrs_d, pd_infix_d, pd_instance_d, pd_macro_call_d, pd_mote_d, pd_open_d,
     dict_hint, do_,
-    pd_scoped_open_d, pd_struct_d, pd_use_d, pd_with_d, pi, plain, priv_, pt_app, pt_at, pt_dict_hint, pt_do,
+    pd_scoped_open_d, pd_struct_d, pd_use_d, pd_with_d, pi, plain, priv_, pt_, pt_app, pt_at, pt_dict_hint, pt_do,
     pt_from, pt_hole, pt_lam, pt_lit, pt_pi, pt_quote_, pt_sort, pt_var,
     pt_var_macro, pub_, sentinel, show_identifier, show_name_path, str, struct_lit,
     struct_update, term_loc, u32, u64, var, zero,
@@ -2213,6 +2213,108 @@ def def_params_entry (input : String) (name : Identifier) (vis : Visibility) : P
     let empty : List ParsedParam := List.empty in
     def_params (def_params_loop input empty) name vis
 
+// ─── Implicit-parameter clauses ───────────────────────────────────────
+//
+// An implicit clause (`{A : Type}`, `{a : A}`) is parsed into a marked
+// `ParsedParam` so the clause's DECLARED type survives to the type
+// builder. The marker never reaches `Def.params`: `explicit_params_of`
+// filters it out before the body lambda chain, the Pi chain and the
+// `Def` are built. The old behavior (dropping the clause and letting
+// `elaborate_type`'s `wrap_forall` invent a `Sort 1` domain for every
+// free name) could not type a TERM parameter like `{a : A}` -- it became
+// `a : Sort 1`, so `f a` in `proofs/src/paths.mo` failed with
+// `expected A, found Prop`. A declared clause's type is the only place
+// that information exists.
+
+def implicit_param_marker : Attribute := {
+    name := Identifier.id "__implicit_clause",
+    args := List.empty,
+}
+
+#[terminating]
+def attrs_mention_implicit (attrs : List Attribute) : Bool :=
+    match attrs {
+        List.empty => false,
+        List.cons a rest =>
+            if String.beq (show_identifier a.name) "__implicit_clause"
+            then true
+            else attrs_mention_implicit rest,
+    }
+
+def parse_param_is_implicit (p : ParseParam) : Bool :=
+    attrs_mention_implicit p.attrs
+
+def parsed_param_is_implicit (pp : ParsedParam) : Bool :=
+    match pp {
+        ParsedParam.plain p => parse_param_is_implicit p,
+        ParsedParam.destructured p _ => parse_param_is_implicit p,
+    }
+
+/// The EXPLICIT params, in the accumulated (reverse-source) order the rest
+/// of the param chain already uses.
+#[terminating]
+def explicit_params_of (pps : List ParsedParam) : List ParsedParam :=
+    match pps {
+        List.empty => List.empty,
+        List.cons p rest =>
+            if parsed_param_is_implicit p
+            then explicit_params_of rest
+            else List.cons p (explicit_params_of rest),
+    }
+
+/// The IMPLICIT params, in SOURCE order. A clause is parsed right-to-left
+/// (the name list grows by consing), so building the params by consing
+/// again restores source order at the head of the list.
+#[terminating]
+def implicit_params_of (pps : List ParsedParam) : List ParsedParam :=
+    match pps {
+        List.empty => List.empty,
+        List.cons p rest =>
+            if parsed_param_is_implicit p
+            then List.cons p (implicit_params_of rest)
+            else implicit_params_of rest,
+    }
+
+/// One marked `ParsedParam` per clause name, in `names` order (the caller
+/// passes source order).
+#[terminating]
+def marked_implicit_params (names : List Identifier) (typ : ParseTerm)
+    : List ParsedParam :=
+    match names {
+        List.empty => List.empty,
+        List.cons nm rest =>
+            let p : ParseParam := {
+                name := nm,
+                type_ := typ,
+                mult := Multiplicity.many,
+                default := Option.none,
+                attrs := List.cons implicit_param_marker List.empty,
+            } in
+            List.cons (ParsedParam.plain p) (marked_implicit_params rest typ),
+    }
+
+#[terminating]
+def append_parsed_params (before : List ParsedParam) (after : List ParsedParam)
+    : List ParsedParam :=
+    match before {
+        List.empty => after,
+        List.cons p rest => List.cons p (append_parsed_params rest after),
+    }
+
+/// `{u : Universe}` is the LEVEL clause; it is still dropped (its name
+/// becomes a `BinderInfo.level` binder via `free_level_vars`/
+/// `wrap_level_forall`), so it must not become a term `forall`.
+def parse_term_is_universe (t : ParseTerm) : Bool :=
+    match t.kind {
+        ParseTermKind.var nref =>
+            match nref {
+                NameRef.nid id => String.beq (show_identifier id) "Universe",
+                _ => false,
+            },
+        _ => false,
+    }
+
+
 /// Patch the real constraints onto the fully-parsed `Decl` — see
 /// `def_try_constraints`'s doc comment above.
 #[partial]
@@ -2244,60 +2346,72 @@ def def_params_try_implicit (r : ParseResult String) (orig : String) (params : L
 #[partial]
 def def_implicit_param (r : ParseResult String) (rem : String) (params : List ParsedParam) : ParseResult (List ParsedParam) :=
     match r {
-        success rem2 name => def_implicit_more_names rem2 rem name params,
+        success rem2 name =>
+            let names : List Identifier := List.cons (Identifier.id name) List.empty in
+            def_implicit_more_names rem2 rem names params,
         fail e => fail e
     }
 
 /// After the first name in a `{...}` implicit-param clause, try more
 /// space-separated names sharing one type (`{K V : Type}`, not just
 /// `{K : Type} {V : Type}`) — same shape as the already-fixed explicit
-/// `(a b : Type)` case. The clause's parsed content is discarded either
-/// way (see `def_implicit_close`'s doc comment) so, unlike the explicit
-/// case, there's no need to build a `Param` per name here — just consume
-/// the right amount of text so multi-name clauses parse instead of
-/// hard-failing on the second name.
+/// `(a b : Type)` case. Every name is kept: each one becomes a `forall`
+/// binder with the clause's declared type.
 #[partial]
-def def_implicit_more_names (input : String) (brace_rem : String) (name : String) (params : List ParsedParam) : ParseResult (List ParsedParam) :=
-    def_implicit_more_names_try (identifier (skip_spaces input)) input brace_rem name params
+def def_implicit_more_names (input : String) (brace_rem : String)
+    (names : List Identifier) (params : List ParsedParam)
+    : ParseResult (List ParsedParam) :=
+    def_implicit_more_names_try (identifier (skip_spaces input)) input brace_rem names params
 
 #[partial]
-def def_implicit_more_names_try (r : ParseResult String) (orig : String) (brace_rem : String) (name : String) (params : List ParsedParam) : ParseResult (List ParsedParam) :=
+def def_implicit_more_names_try (r : ParseResult String) (orig : String)
+    (brace_rem : String) (names : List Identifier) (params : List ParsedParam)
+    : ParseResult (List ParsedParam) :=
     match r {
-        success rem2 _ => def_implicit_more_names rem2 brace_rem name params,
-        fail _ => def_implicit_colon (tag ":" (skip_spaces orig)) brace_rem orig name params
+        success rem2 nm =>
+            def_implicit_more_names rem2 brace_rem
+                (List.cons (Identifier.id nm) names) params,
+        fail _ => def_implicit_colon (tag ":" (skip_spaces orig)) brace_rem orig names params
     }
 
 #[partial]
-def def_implicit_colon (r : ParseResult String) (brace_rem : String) (rem : String) (name : String) (params : List ParsedParam) : ParseResult (List ParsedParam) :=
+def def_implicit_colon (r : ParseResult String) (brace_rem : String) (rem : String)
+    (names : List Identifier) (params : List ParsedParam)
+    : ParseResult (List ParsedParam) :=
     match r {
         success rem2 _ =>
-            def_implicit_type (type_expression rem2) brace_rem rem name params,
+            def_implicit_type (type_expression rem2) brace_rem rem names params,
         fail e => fail e
     }
 
 #[partial]
-def def_implicit_type (r : ParseResult ParseTerm) (brace_rem : String) (rem : String) (name : String) (params : List ParsedParam) : ParseResult (List ParsedParam) :=
+def def_implicit_type (r : ParseResult ParseTerm) (brace_rem : String) (rem : String)
+    (names : List Identifier) (params : List ParsedParam)
+    : ParseResult (List ParsedParam) :=
     match r {
-        success rem2 typ => def_implicit_close (tag "}" rem2) brace_rem name typ params,
+        success rem2 typ => def_implicit_close (tag "}" rem2) brace_rem names typ params,
         fail e => fail e
     }
 
-/// Closes a `{name : type}` implicit-param clause. On success this
-/// deliberately drops `name`/`typ` and restarts `params` from empty,
-/// rather than adding the clause's binding(s) to the accumulated list —
-/// not a bug: `lang/elaborate.mo`'s `elaborate_def`/`wrap_forall` already
-/// auto-wraps any free type variable appearing elsewhere in the def's
-/// signature into an implicit forall regardless of whether the user wrote
-/// it explicitly, so an explicit `{A : Type}` clause and omitting it
-/// entirely elaborate to the identical final type. The clause still has
-/// to *parse* correctly (as documentation/DX, and so the def's remaining
-/// signature/body are found at the right offset) even though its content
-/// doesn't need to survive into the parsed `Param` list.
+/// Closes a `{name : type}` implicit-param clause.
 ///
-/// `{u : Universe}` is the LEVEL analogue and is dropped the same way: `u`
-/// becomes a `BinderInfo.level` binder because a `Sort u` in the SURVIVING
-/// signature puts it in `free_level_vars`, which `elaborate_type`
-/// (`lang/elaborate.mo`) wraps with `wrap_level_forall`. A clause in a def
+/// The clause's names/types are now KEPT, as marked `ParsedParam`s, so the
+/// type builder can give each one its declared domain (`{a : A}` must bind
+/// `a : A`, not the `Sort 1` placeholder `wrap_forall` used when the clause
+/// was discarded). `explicit_params_of` filters the markers out before the
+/// body lambda chain, the Pi chain and `Def.params` are built, so the
+/// def's arity and parsed param list are unchanged.
+///
+/// The old explicit-param RESET is preserved: a def's explicit params
+/// written before an implicit clause are dropped, because the language
+/// requires implicit clauses first (the previous code encoded that by
+/// restarting `params` from empty; this keeps only the already-collected
+/// implicit entries).
+///
+/// `{u : Universe}` is the LEVEL analogue and is still dropped: `u`
+/// becomes a `BinderInfo.level` binder because a `Sort u` in the
+/// surviving signature puts it in `free_level_vars`, which
+/// `elaborate_type` wraps with `wrap_level_forall`. A clause in a def
 /// whose signature never mentions `Sort u` therefore binds nothing.
 ///
 /// `plans/implementations/named-field-construction.md`'s Phase 7: on
@@ -2314,11 +2428,19 @@ def def_implicit_type (r : ParseResult ParseTerm) (brace_rem : String) (rem : St
 /// reached once `}` has already failed to match here, a shape a
 /// comma-less clause never produces.
 #[partial]
-def def_implicit_close (r : ParseResult String) (brace_rem : String) (name : String) (typ : ParseTerm) (params : List ParsedParam) : ParseResult (List ParsedParam) :=
+def def_implicit_close (r : ParseResult String) (brace_rem : String)
+    (names : List Identifier) (typ : ParseTerm) (params : List ParsedParam)
+    : ParseResult (List ParsedParam) :=
     match r {
         success rem2 _ =>
-            let empty : List ParsedParam := List.empty in
-            def_params_loop (skip_spaces rem2) empty,
+            let kept : List ParsedParam := implicit_params_of params in
+            let next : List ParsedParam :=
+                if parse_term_is_universe typ
+                then kept
+                else
+                    append_parsed_params kept
+                        (marked_implicit_params (list_reverse names) typ) in
+            def_params_loop (skip_spaces rem2) next,
         fail _ => def_params_try_brace_block_parsed brace_rem params
     }
 
@@ -2650,11 +2772,24 @@ def def_body_assign (r : ParseResult String) (name : Identifier) (params : List 
         fail _ => def_body_block_or_none (tag "{" (skip_spaces orig)) name params typ vis orig
     }
 
+/// Build the def's declaration from its parsed params. The implicit
+/// clauses stay in `ParseDef.params` (marked) for `lower_parse_def` to turn
+/// into leading `binder_binder` Pi binders; only the explicit entries
+/// become body lambdas and the lowered `Def.params`.
+#[partial]
+def def_decl_with_params (body : ParseTerm) (name : Identifier)
+    (params : List ParsedParam) (ret : ParseTerm) (vis : Visibility) : ParseDecl :=
+    let explicit : List ParsedParam := explicit_params_of params in
+    let full_typ : ParseTerm :=
+        build_param_pi_chain (parsed_params_as_params explicit) ret in
+    def_to_decl (lam_parsed_params explicit body) name full_typ vis
+        (parsed_params_as_params params)
+
 #[partial]
 def def_body_block_or_none (r : ParseResult String) (name : Identifier) (params : List ParsedParam) (typ : ParseTerm) (vis : Visibility) (orig : String) : ParseResult ParseDecl :=
     match r {
         success rem _ => def_body_do (do_stmts rem) name params typ vis,
-        fail _ => success orig (def_to_decl (lam_parsed_params params (pt_hole)) name (build_param_pi_chain (parsed_params_as_params params) typ) vis (parsed_params_as_params params))
+        fail _ => success orig (def_decl_with_params (pt_hole) name params typ vis)
     }
 
 /// The body is correctly wrapped in one lambda per param via `lam_params`,
@@ -2672,14 +2807,14 @@ def def_body_block_or_none (r : ParseResult String) (name : Identifier) (params 
 #[partial]
 def def_body_expr (r : ParseResult ParseTerm) (name : Identifier) (params : List ParsedParam) (typ : ParseTerm) (vis : Visibility) : ParseResult ParseDecl :=
     match r {
-        success rem body => success rem (def_to_decl (lam_parsed_params params body) name (build_param_pi_chain (parsed_params_as_params params) typ) vis (parsed_params_as_params params)),
+        success rem body => success rem (def_decl_with_params body name params typ vis),
         fail e => fail e
     }
 
 #[partial]
 def def_body_do (r : ParseResult (List DoStmt)) (name : Identifier) (params : List ParsedParam) (typ : ParseTerm) (vis : Visibility) : ParseResult ParseDecl :=
     match r {
-        success rem stmts => success rem (def_to_decl (lam_parsed_params params (pt_do stmts)) name (build_param_pi_chain (parsed_params_as_params params) typ) vis (parsed_params_as_params params)),
+        success rem stmts => success rem (def_decl_with_params (pt_do stmts) name params typ vis),
         fail e => fail e
     }
 
@@ -3759,8 +3894,10 @@ def instance_method_body_expr (r : ParseResult ParseTerm) (name : Identifier) (p
 def instance_method_finish (input : String) (name : Identifier) (params : List ParsedParam) (ret_typ : ParseTerm) (body : ParseTerm) (cls : NamePath) (args : List ParseTerm) (methods : List ParseDef) : ParseResult ParseDecl :=
     let empty_constraints : List TypeConstraint := List.empty in
     let empty_attrs : List Attribute := List.empty in
-    let full_typ := build_param_pi_chain (parsed_params_as_params params) ret_typ in
-    let d : ParseDef := ParseDef.mk (NamePath.mk (List.cons name List.empty)) full_typ (lam_parsed_params params body) empty_constraints empty_attrs Visibility.package_private (parsed_params_as_params params) in
+    let explicit : List ParsedParam := explicit_params_of params in
+    let full_typ :=
+        build_param_pi_chain (parsed_params_as_params explicit) ret_typ in
+    let d : ParseDef := ParseDef.mk (NamePath.mk (List.cons name List.empty)) full_typ (lam_parsed_params explicit body) empty_constraints empty_attrs Visibility.package_private (parsed_params_as_params params) in
     instance_methods input cls args (List.cons d methods)
 
 /// Fold a `List Param` (already in left-to-right declaration order — the

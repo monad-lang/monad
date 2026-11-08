@@ -3,7 +3,7 @@ use lang::types {
     Attribute, BinderInfo, Class, ClassDef, DebugName, Decl, Def, Identifier,
     InductConstructor, Inductive, Instance, MatchCase, ModulePath, NamePath, Param,
     Similar, SortLevel, Struct, StructLitField, Term, TypeConstraint, binder_binder,
-    binder_info_of, binder_is_level, binder_level, binder_name, char, flt, id_eq,
+    binder_info_of, binder_is_explicit, binder_is_level, binder_level, binder_name, char, flt, id_eq,
     id_member, if_, match_, num, package_private, sentinel, show_identifier,
     str, struct_lit, struct_update, union_ids,
 }
@@ -190,7 +190,12 @@ def filter_known (ids : List Identifier) (known_names : List Identifier) : List 
 def elaborate_type (typ : Term) (constraints : List TypeConstraint) (known_names : List Identifier) : Term :=
     let fv := free_vars typ known_names in
     let cv := collect_constraint_vars constraints known_names in
-    let all_vars := union_ids fv cv in
+    // The parser now gives every implicit clause (`{a : A}`) a leading
+    // `binder_binder` Pi whose body keeps SENTINEL references (the
+    // `wrap_forall` convention). Those names are already bound, but
+    // `free_vars` cannot see that (it only sees sentinel names), so
+    // subtract the binder names instead of wrapping a duplicate.
+    let all_vars := ids_without (union_ids fv cv) (bound_term_binder_names typ) in
     // Level variables generalize the same way term-level type variables
     // do, and at the same boundary -- that is the whole reason levels
     // are name-keyed (see `lang/typecheck/levels.mo`'s header). A
@@ -207,6 +212,25 @@ def elaborate_type (typ : Term) (constraints : List TypeConstraint) (known_names
     // `forall u` on every pass.
     let lv := ids_without (free_level_vars typ) (bound_level_var_names typ) in
     wrap_level_forall (wrap_forall typ all_vars) lv
+
+/// The names `typ`'s leading non-explicit, non-level Pi binders bind. The
+/// term half of what `known_names` does; `bound_level_var_names` below is
+/// the level half. Stops at the first explicit binder for the same reason
+/// `bind_leading_implicit_binders` does: deeper binders are not this
+/// signature's own implicit parameters.
+#[partial]
+def bound_term_binder_names (typ : Term) : List Identifier :=
+    match typ {
+        Term.pi b _ ret =>
+            if binder_is_explicit b then List.empty
+            else if binder_is_level b then bound_term_binder_names ret
+            else
+                match b.name {
+                    DebugName.named id => List.cons id (bound_term_binder_names ret),
+                    DebugName.unnamed => bound_term_binder_names ret,
+                },
+        _ => List.empty,
+    }
 
 /// The level-variable names `typ`'s own `Forall` binders already bind.
 /// The level half of what `known_names` does for term variables -- see

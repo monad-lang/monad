@@ -7,17 +7,18 @@ use std::process {exec_cmd, process_id}
 use std::stream {StreamError, StreamError.is_not_found}
 use lib::elaborate {free_vars, names_of_decls, elaborate_def}
 use lang::types {
-    AffineMode, Attribute, Class, ClassDef, DebugName, Decl, DeclGroup, Def, Identifier,
+    AffineMode, Attribute, Binder, Class, ClassDef, DebugName, Decl, DeclGroup, Def, Identifier,
     InductConstructor, Inductive, Infix, Instance, Literal, LocalScope, LocalVar, Location,
-    MatchCase, ModulePath, NamePath, NameRef, Param, Scope, ScopeData, ScopeInstance, SourceRange,
+    MatchCase, ModulePath, Multiplicity, NamePath, NameRef, Param, Scope, ScopeData, ScopeInstance, SourceRange,
     SortLevel, Struct, StructField, Term, TypeConstraint, TypeError, UseFilter, UseItem,
     binder_anon, binder_is_explicit, binder_is_level, binder_name, concrete,
     has_incomplete_match_exemption, id_eq, level_const, level_le,
-    list_reverse, many, module_path_to_string_colon, package_private, priv_,
+    list_reverse, many, module_path_to_string_colon, package_private, priv_, sentinel,
     show_identifier, show_module_path, show_name_path, sort_level_of, term_peel, union_ids,
     use_bare, use_glob, use_items, use_name, use_rename, use_sub, use_sub_rename,
     visibility_beq,
 }
+use lib::typecheck::subst {term_subst}
 use lib::name_text {unqualify_def_name}
 use lib::cfg {CfgEnv, CfgEnv.empty, CfgEnv.for_mote}
 use lib::parser {
@@ -1957,13 +1958,69 @@ def forall_chain_binder_names (typ : Term) : List Identifier :=
 /// then skolemizes only those candidates that don't already resolve as a
 /// real global, so this is a strict superset of the pre-elaboration
 /// behaviour -- nothing that checked before stops checking.
+/// Bind a def's leading IMPLICIT binders with their DECLARED types, not the
+/// `Sort 0` placeholder `bind_unresolved_as_local_typevars` uses for names
+/// it cannot resolve.
+///
+/// The body has no lambdas for implicit parameters (they are not written
+/// arguments), so their occurrences lower as FREE variables and are typed
+/// from `locals` (`type_check_free_var`). The parser now gives each
+/// `{a : A}` clause a `forall a : A` binder (see
+/// `lang/parser.mo`'s `implicit_param_foralls`); without this walk, the
+/// fallback still shadowed it with `Sort 0`, which is why `f a` in
+/// `proofs/src/paths.mo` reported `expected A, found Prop` and
+/// `B (p x)` was not a line into a sort.
+///
+/// The chain's domains are de Bruijn-indexed; `locals` entries are NAME
+/// based. Each leading binder is therefore removed from the remaining type
+/// with `term_subst` (which also closes the index gap) and replaced by a
+/// free reference to its own name, so the next domain is already
+/// name-based. Stops at the first EXPLICIT binder: deeper binders are not
+/// this def's own implicit parameters.
+#[terminating]
+def bind_leading_implicit_binders (typ : Term) (locals : LocalScope) : LocalScope :=
+    match term_peel typ {
+        Term.pi b arg ret =>
+            if binder_is_explicit b
+            then locals
+            else bind_leading_implicit_binders_step b arg ret locals,
+        _ => locals,
+    }
+
+#[terminating]
+def bind_leading_implicit_binders_step (b : Binder) (arg : Term) (ret : Term)
+    (locals : LocalScope) : LocalScope :=
+    let ret_named : Term :=
+        term_subst 0 (Term.var sentinel (binder_name b)) ret in
+    let locals_next : LocalScope := bind_implicit_binder_local b arg locals in
+    bind_leading_implicit_binders ret_named locals_next
+
+/// One leading implicit binder's local entry, pushed onto `locals`.
+/// LEVEL binders bind a universe variable, not a term variable, so they
+/// get no entry (their name is already carried by `SortLevel.var`).
+def bind_implicit_binder_local (b : Binder) (arg : Term) (locals : LocalScope) : LocalScope :=
+    match binder_name b {
+        DebugName.named id =>
+            if binder_is_level b
+            then locals
+            else
+                let lv : LocalVar := {
+                    name := id,
+                    typ := arg,
+                    multiplicity := Multiplicity.many,
+                } in
+                scope_push_local lv locals,
+        DebugName.unnamed => locals,
+    }
+
 #[partial]
 def locals_with_def_typevars (df_typ : Term) (body : Term) (scope : Scope) (locals : LocalScope) : LocalScope :=
+    let named : LocalScope := bind_leading_implicit_binders df_typ locals in
     let fv := free_vars df_typ List.empty in
     let qv := forall_chain_binder_names df_typ in
     let pv := collect_param_annotation_names body in
     let candidates : List Identifier := union_ids (union_ids fv qv) pv in
-    bind_unresolved_as_local_typevars candidates scope locals
+    bind_unresolved_as_local_typevars candidates scope named
 
 /// Skolemize `cls`'s own declared type parameters (`A` in `class
 /// Semigroup A { def combine : A -> A -> A }`) plus any of its own

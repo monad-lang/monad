@@ -37,7 +37,7 @@
 /// old dotted-path copy predates the qualified-names split, when
 /// name paths and module paths shared one rendering and one type.
 use lang::types {
-    Binder, Class, ClassDef, Con, DebugName, Decl, Def, DoStmt, Identifier,
+    Attribute, Binder, Class, ClassDef, Con, DebugName, Decl, Def, DoStmt, Identifier,
     InductConstructor, Inductive, Instance, Literal, MatchCase, ModulePath,
     NamePath, NameRef, Native, Param, ParseClass, ParseClassDef, ParseCon,
     ParseDecl, ParseDeclKind, ParseDef, ParseInductConstructor, ParseInductive,
@@ -45,7 +45,7 @@ use lang::types {
     ParseStruct, ParseStructField, ParseStructLitField, ParseTerm, ParseTermKind,
     QualifiedName, Struct, StructField, StructLitField, Term, binder_anon, binder_binder,
     binder_named,
-    dict_hint_marker_prefix,
+    dict_hint_marker_prefix, list_reverse,
     sentinel,
     show_identifier,
 }
@@ -974,15 +974,72 @@ def lower_parse_class_defs (ctx : ParseLowerCtx) (ms : List ParseClassDef) : Lis
             List.cons (lower_parse_class_def ctx m) (lower_parse_class_defs ctx rest),
     }
 
+/// Does this param carry the parser's implicit-clause marker? The marker
+/// never reaches the lowered `Def.params` -- `lower_parse_def` turns those
+/// entries into leading `binder_binder` Pi binders instead.
+#[terminating]
+def attrs_have_implicit_marker (attrs : List Attribute) : Bool :=
+    match attrs {
+        List.empty => false,
+        List.cons a rest =>
+            if String.beq (show_identifier a.name) "__implicit_clause"
+            then true
+            else attrs_have_implicit_marker rest,
+    }
+
+def lowered_param_is_implicit (p : Param) : Bool :=
+    attrs_have_implicit_marker p.attrs
+
+#[terminating]
+def explicit_lowered_params (ps : List Param) : List Param :=
+    match ps {
+        List.empty => List.empty,
+        List.cons p rest =>
+            if lowered_param_is_implicit p
+            then explicit_lowered_params rest
+            else List.cons p (explicit_lowered_params rest),
+    }
+
+#[terminating]
+def implicit_lowered_params (ps : List Param) : List Param :=
+    match ps {
+        List.empty => List.empty,
+        List.cons p rest =>
+            if lowered_param_is_implicit p
+            then List.cons p (implicit_lowered_params rest)
+            else implicit_lowered_params rest,
+    }
+
+/// Wrap `typ` in one `binder_binder` Pi per implicit clause parameter,
+/// outermost first. The domains are the clause's lowered types; their
+/// references stay SENTINEL names (they were lowered outside the binder),
+/// which is exactly the convention `elaborate_type`'s `wrap_forall` used
+/// and that `check`'s sentinel-based body typing expects.
+#[partial]
+def wrap_implicit_params (ps : List Param) (typ : Term) : Term :=
+    match ps {
+        List.empty => typ,
+        List.cons p rest =>
+            Term.pi (binder_binder p.name) p.type_ (wrap_implicit_params rest typ),
+    }
+
 #[partial]
 def lower_parse_def (ctx : ParseLowerCtx) (d : ParseDef) : Def :=
+    let lowered_params : List Param := lower_parse_params ctx d.params in
+    let explicit : List Param := explicit_lowered_params lowered_params in
+    // `def_params_loop` returns the accumulated list REVERSED once at its
+    // final exit; that reverse also flips the relative order of multiple
+    // implicit-clause blocks. Reverse the implicit sublist back so each
+    // clause is bound in source order (`{A : Type} {B : A -> Type}` must
+    // not emit `B` before the `A` its domain mentions).
+    let implicit : List Param := list_reverse (implicit_lowered_params lowered_params) in
     { name := d.name,
-        typ := lower_parse_term_bare ctx d.typ,
+        typ := wrap_implicit_params implicit (lower_parse_term_bare ctx d.typ),
         term := lower_parse_term ctx d.term,
         constraints := d.constraints,
         attrs := d.attrs,
         vis := d.vis,
-        params := lower_parse_params ctx d.params }
+        params := explicit }
 
 #[partial]
 def lower_parse_defs (ctx : ParseLowerCtx) (ds : List ParseDef) : List Def :=
