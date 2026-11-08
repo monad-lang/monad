@@ -25,7 +25,7 @@ use llvm::target {TargetSpec, TargetPlan}
 use runtime {}
 use codegen::emit {compile_db_module_with_debug, compile_loaded_modules_to_ir_with_debug}
 use codegen::decls {collect_all_decls_from_modules, export_names}
-use lang::module {BatchCheckResult, CheckDiagnostics, ElaboratedAndCache, collect_link_libs, collect_link_pkgs, get_loaded_all, ElaboratedModules, FileCheckAndCache, FileCheckResult, LoadedModules, ModuleInfo, ModuleInfoCache, bench_step, check_file_cached, check_files_cached, check_module_with_scope_path, elaborate_loaded_modules, elaborate_loaded_modules_cached, elaborate_module_decls_best_effort, expand_check_paths, extract_directory, load_file_modules, load_module_with_info, module_name_from_path, module_info_cache_empty, resolve_runtime_src, try_parse_decls, try_parse_decls_strict}
+use lang::module {BatchCheckResult, CheckDiagnostics, ElaboratedAndCache, collect_link_libs, collect_link_pkgs, get_loaded_all, ElaboratedModules, FileCheckAndCache, FileCheckResult, LoadedModules, ModuleInfo, ModuleInfoCache, bench_step, check_file_cached, check_files_cached, check_module_with_scope_path, elaborate_loaded_modules, elaborate_loaded_modules_cached, elaborate_module_decls_best_effort, expand_check_paths, extract_directory, load_file_modules, load_module_with_info, module_name_from_path, module_info_cache_empty, ownership_refusal_of_loaded, resolve_runtime_src, try_parse_decls, try_parse_decls_strict}
 use lang::mote {
   Mote.discover, Mote.discover_config_target_dir, Mote.target_roots,
   Mote.discover, Mote.workspace_members, Mote.manifest_at,
@@ -1520,6 +1520,13 @@ def compile_file_codegen (file_path : String) (output_dir : Path) (output_name :
         };
     match res {
         Result.ok loaded => do {
+            // Ownership mode is only sound on error-mode affine code, so
+            // refuse a build whose loaded closure still contains a
+            // `[affine] mode = "warn"` mote rather than mis-freeing.
+            let refusal <- ownership_refusal_of_loaded loaded;
+            match refusal {
+                Option.some msg => do { println msg; return 1 },
+                Option.none => do {
             // `source_path` is only set under `--debug`: it is what the debug
             // info names as the compile's source file. `parse_all_decls`
             // (`lang/module.mo`) locates every term on every path now, so
@@ -1554,6 +1561,8 @@ def compile_file_codegen (file_path : String) (output_dir : Path) (output_name :
                 base_dir := extract_directory file_path,
                 output_dir := output_dir, output_name := output_name,
                 ir := ir, verbose := verbose, target := target }
+                },
+            }
         },
         Result.err e => do {
             println ("Failed to parse dependencies: " ++ e);

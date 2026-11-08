@@ -4569,6 +4569,56 @@ def mote_of_module (info : ModuleInfo) : IO (Option MoteManifest) := do {
     }
 }
 
+/// Refuse ownership mode for a loaded closure that still contains an
+/// `[affine] mode = "warn"` mote.
+///
+/// Ownership drop glue is only sound on code the CHECKER accepts under the
+/// error-mode rule (`plans/bootstrapping/ownership-regions-memory.md` O0):
+/// a warn-mode mote has known affine violations the ownership analysis
+/// would have to guess about. The check lives here, beside the module set,
+/// because the CLI and the codegen test driver both have a `LoadedModules`
+/// in hand and reading manifests is IO. `MONAD_OWNERSHIP` unset, empty or
+/// `"0"` is off; any other value is on.
+pub def ownership_refusal_of_loaded (loaded : LoadedModules) : IO (Option String) := do {
+    let env <- IO.get_env "MONAD_OWNERSHIP";
+    let on : Bool := match env {
+        Option.none => false,
+        Option.some raw =>
+            let t : String := String.trim raw in
+            Bool.not (String.is_empty t) && Bool.not (String.beq t "0"),
+    };
+    if on then do {
+        let r <- ownership_refusal_go (get_loaded_all loaded) List.empty;
+        return r
+    } else do {
+        return Option.none
+    }
+}
+
+#[partial]
+def ownership_refusal_go (mods : List ModuleInfo) (seen : List String) : IO (Option String) := do {
+    match mods {
+        List.empty => return Option.none,
+        List.cons info rest => do {
+            let dir : String := extract_directory info.file_path;
+            if List.contains_by (fn a b => String.beq a b) dir seen then do {
+                let r <- ownership_refusal_go rest seen;
+                return r
+            } else do {
+                let mode <- Mote.affine_mode_of_path info.file_path;
+                match mode {
+                    AffineMode.affine_warn =>
+                        return (Option.some (String.concat "error: " (String.concat dir " is [affine] mode = \"warn\"; an ownership build requires error mode"))),
+                    AffineMode.affine_error => do {
+                        let r <- ownership_refusal_go rest (List.cons dir seen);
+                        return r
+                    },
+                }
+            }
+        },
+    }
+}
+
 /// The file-level `#![mote { ... }]` is valid ONLY as the first declaration
 /// of a file.
 ///

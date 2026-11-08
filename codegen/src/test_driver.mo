@@ -42,14 +42,20 @@
 /// `std/src/concurrent/{fiber,combine,poll}_test.mo` run through this
 /// driver; the gate remains the guard for any future unwired native.
 use lib::decls {filter_reachable_decls}
+open IO {get_env}
 use lib::qualify {qualified_def_name_str, qualify_modules}
 use lang::types {
     Attribute, Class, DebugName, Decl, Def, ModulePath, NamePath, Term, has_attr, i64, id, no_attrs, num, package_private,
     show_identifier, struct_lit, use_bare,
 }
 use lib::emit {
-    CompileInput, class_gate_result, compile_db_module_with_debug, compile_input_of_modules,
+    CompileInput, class_gate_result, compile_db_module_with_debug,
+    compile_db_module_with_ownership, compile_input_of_modules,
     emit_type_head_is_io, gate_then, validate_reachable_elaborated
+}
+use lib::ownership {
+    OwnershipMode, OwnershipTables, classify_program, ownership_mode_of_env,
+    ownership_mode_on,
 }
 use lib::errors {CodegenError}
 use lib::symbols {
@@ -64,7 +70,8 @@ use lib::validate {
 use llvm::ir {LLVMModule}
 use lang::module {
     BestEffortElab, LoadedModules, ModuleInfo, best_effort_errors, get_loaded_all,
-    get_loaded_main, resolve_open_aliases_in_modules, try_parse_decls,
+    get_loaded_main, ownership_refusal_of_loaded, resolve_open_aliases_in_modules,
+    try_parse_decls,
 }
 use lang::scope {
     collect_classes, strip_all_leading_binders,
@@ -715,8 +722,28 @@ def compile_test_driver_with (loaded : LoadedModules) (driver_decls : List Decl)
             match validate_no_unwired_natives reachable {
                 Result.err e => return (Result.err e),
                 Result.ok _ => do {
-                    let result : TestIrResult := { mod_ := compile_db_module_with_debug reachable Option.none List.empty triple, total_tests := total_tests };
-                    return (Result.ok result)
+                    // Ownership mode (ownership-regions-memory O4) is the
+                    // same build-wide decision the `build` path makes: the
+                    // warn-mode refusal first, then one whole-program
+                    // verdict, then the ownership-aware module emitter.
+                    let refusal <- ownership_refusal_of_loaded loaded;
+                    match refusal {
+                        Option.some msg => return (Result.err (CodegenError.internal msg)),
+                        Option.none => do {
+                            let own_env <- get_env "MONAD_OWNERSHIP";
+                            let own_mode : OwnershipMode := ownership_mode_of_env own_env;
+                            let ownership : Option OwnershipTables :=
+                                if ownership_mode_on own_mode
+                                then Option.some (classify_program input.scope input.decls)
+                                else Option.none;
+                            let mod_ : LLVMModule := match ownership {
+                                Option.none => compile_db_module_with_debug reachable Option.none List.empty triple,
+                                Option.some tables => compile_db_module_with_ownership reachable tables Option.none List.empty triple,
+                            };
+                            let result : TestIrResult := { mod_ := mod_, total_tests := total_tests };
+                            return (Result.ok result)
+                        },
+                    }
                 },
             },
     }
