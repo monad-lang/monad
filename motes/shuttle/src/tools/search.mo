@@ -80,30 +80,54 @@ def search_grow (id : String) (c : Child) (count : I64) (acc : String) (s : Stri
     then search_truncate_bytes id c grown
     else search_read id c (count + 1) grown
 
+/// The command's end. Matches are success; so is "no match" (grep's
+/// rc 1 with no output), which used to come back as an empty tool ERROR.
+/// Another rc with output keeps the output (an unreadable file among
+/// matches) as a result; with none it is an error.
 def search_eof (id : String) (c : Child) (acc : String) : IO Content := do {
     let code <- Proc.wait c;
-    if code == 0
-    then IO.pure (tool_ok id acc)
-    else if code == 124
-    then IO.pure (tool_err id (acc ++ search_timeout_marker))
-    else IO.pure (tool_err id acc)
+    IO.pure (search_outcome id code acc)
 }
 
+pub def search_outcome (id : String) (code : I64) (acc : String) : Content :=
+    if code == 124 then tool_err id (acc ++ search_timeout_marker)
+    else if String.is_empty (String.trim acc)
+    then (if Bool.or (code == 0) (code == 1) then tool_ok id "no matches" else tool_err id (String.concat "search failed (exit " (String.concat (I64.to_string code) ")")))
+    else tool_ok id acc
+
+/// A truncated result is still a result: the marker says what was cut.
 def search_truncate_lines (id : String) (c : Child) (acc : String) : IO Content := do {
     search_reap_later c;
-    IO.pure (tool_err id (acc ++ search_line_marker ++ I64.to_string search_max_lines ++ " lines; output truncated]\n"))
+    IO.pure (tool_ok id (acc ++ search_line_marker ++ I64.to_string search_max_lines ++ " lines; output truncated]\n"))
 }
 
 def search_truncate_bytes (id : String) (c : Child) (acc : String) : IO Content := do {
     search_reap_later c;
-    IO.pure (tool_err id (acc ++ search_byte_marker ++ I64.to_string search_max_bytes ++ " bytes; output truncated]\n"))
+    IO.pure (tool_ok id (acc ++ search_byte_marker ++ I64.to_string search_max_bytes ++ " bytes; output truncated]\n"))
 }
 
-def grep_script : String :=
-    "exec 2>&1; grep -rn --exclude-dir=.git --exclude-dir=target --exclude-dir=node_modules --exclude-dir=build -- \"$1\" \"$2\""
+/// Inside a git work tree, `git grep` (tracked and untracked files,
+/// `.gitignore` respected, binaries skipped); elsewhere, or for a path git
+/// rejects (rc > 1), plain `grep -rnI` with the usual build directories
+/// pruned (`target*` covers `target-rust/` and `target-monad/`).
+pub def grep_script : String :=
+    String.concat_list [
+        "exec 2>&1; ",
+        "git grep -n -I --untracked --exclude-standard -e \"$1\" -- \"$2\" 2>/dev/null; rc=$?; ",
+        "[ $rc -le 1 ] && exit $rc; ",
+        "exec grep -rnI --exclude-dir=.git --exclude-dir='target*' --exclude-dir=node_modules --exclude-dir=build -- \"$1\" \"$2\""
+    ]
 
-def glob_script : String :=
-    "exec 2>&1; find \"$2\" \\( -name .git -o -name target -o -name node_modules -o -name build \\) -prune -o -type f -name \"$1\" -print"
+/// Inside a git work tree, the tracked and untracked (not ignored) files
+/// whose base name matches `$1`; elsewhere `find` with the build
+/// directories pruned.
+pub def glob_script : String :=
+    String.concat_list [
+        "exec 2>&1; ",
+        "if [ \"$(git rev-parse --is-inside-work-tree 2>/dev/null)\" = true ] && files=$(git ls-files -co --exclude-standard -- \"$2\" 2>/dev/null); then ",
+        "printf '%s\\n' \"$files\" | while IFS= read -r f; do case \"${f##*/}\" in $1) [ -n \"$f\" ] && printf '%s\\n' \"$f\";; esac; done; exit 0; fi; ",
+        "exec find \"$2\" \\( -name .git -o -name 'target*' -o -name node_modules -o -name build \\) -prune -o -type f -name \"$1\" -print"
+    ]
 
 pub def grep_run (id : String) (j : Json) : ResultT String IO Content :=
     match GrepArgs.deserialize_json j {

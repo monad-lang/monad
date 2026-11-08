@@ -1,5 +1,5 @@
 use std::test {Test.write_fixture}
-use shuttle::tools::search {grep_run, glob_run}
+use shuttle::tools::search {grep_run, glob_run, search_outcome}
 use shuttle::tools::search_args {GrepArgs, GlobArgs}
 use shuttle::message_types {Content}
 use init::transformers {ResultT}
@@ -49,3 +49,43 @@ def test_glob_finds_file : IO Bool := do {
         Result.err _ => false,
     })
 }
+
+/// No match is a result, not an error (the log review's F4: 110 empty
+/// tool errors in one week of sessions).
+#[test]
+def test_grep_without_a_match_is_not_an_error : IO Bool := do {
+    setup_fixture;
+    let args : GrepArgs := { pattern := "zz_no_such_text_qq", path := test_dir };
+    let r <- ResultT.run (grep_run "g2" (GrepArgs.serialize_json args));
+    return (match r {
+        Result.ok c => content_is_ok_and_contains c "no matches",
+        Result.err _ => false,
+    })
+}
+
+/// Outside a git work tree the fallback prunes `target*` build trees.
+#[test]
+def test_grep_skips_target_directories : IO Bool := do {
+    setup_fixture;
+    exec_cmd "mkdir" ["-p", String.concat test_dir "/target-rust"];
+    do { let _w <- Test.write_fixture (Path.path (String.concat test_dir "/target-rust/x.txt")) "needle in the build"; return unit };
+    let args : GrepArgs := { pattern := "needle", path := test_dir };
+    let r <- ResultT.run (grep_run "g3" (GrepArgs.serialize_json args));
+    return (match r {
+        Result.ok c => Bool.and (content_is_ok_and_contains c "haystack") (Bool.not (content_is_ok_and_contains c "build")),
+        Result.err _ => false,
+    })
+}
+
+def outcome_error (c : Content) : Bool :=
+    match c { Content.tool_result _ _ e => e, _ => false }
+
+/// The end-of-search table: matches and "no match" succeed, a timeout and
+/// an empty failure are errors, output with a non-zero rc is kept.
+#[test]
+def test_search_outcome_table : Bool :=
+    Bool.not (outcome_error (search_outcome "i" 0 "a:1:x"))
+        && Bool.not (outcome_error (search_outcome "i" 1 ""))
+        && Bool.not (outcome_error (search_outcome "i" 2 "a:1:x\ngrep: b: Permission denied"))
+        && outcome_error (search_outcome "i" 2 "")
+        && outcome_error (search_outcome "i" 124 "")
