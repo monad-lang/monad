@@ -24,6 +24,7 @@ use shuttle::message {Message}
 use shuttle::message_types {Role, Content}
 use weaver::text {Text.cut, Text.first_line}
 use weaver::place {SessionPlace, Place.same_repo}
+use weaver::theme {theme_split_lines}
 
 // ── the in-memory view ────────────────────────────────────────────────
 // Absolute line coordinates: `total` counts every line ever appended;
@@ -912,6 +913,82 @@ pub def Store.append_named (st : StoreState) (name : String) (text : String) : I
     let opened <- FdStream.open_file (Store.child st.dir name) FdStream.append_mode;
     write_chunk_to opened text
 }
+
+// ── prompt history ──────────────────────────────────────────────────────
+
+/// The session's submitted lines, one JSON string per line, oldest
+/// first: what Up recalls after a resume.
+pub def Store.prompts_file : String := "prompts.jsonl"
+
+/// How many lines a resume recalls (the prompt's own history cap).
+pub def Store.prompts_cap : I64 := 200
+
+/// Append one submitted line. A JSON string per line keeps a multi-line
+/// prompt whole.
+pub def Store.append_prompt (st : StoreState) (text : String) : IO Unit :=
+    Store.append_named st Store.prompts_file (String.concat (Json.to_string (Json.make_str text)) "\n")
+
+/// The recorded lines, newest first and capped; none when the session has
+/// no file (it predates this record) or a line does not decode.
+pub def Store.read_prompts (st : StoreState) : IO (List String) := do {
+    let r <- Store.read_named st Store.prompts_file;
+    match r {
+        Option.none => IO.pure List.empty,
+        Option.some text => IO.pure (newest_prompts (theme_split_lines text) List.empty),
+    }
+}
+
+/// Oldest-first lines folded into a newest-first list of their strings.
+#[partial]
+def newest_prompts (lines : List String) (acc : List String) : List String :=
+    match lines {
+        List.empty => cap_prompts acc Store.prompts_cap,
+        List.cons l rest => match Json.parse l {
+            Result.ok j => match Json.get_str j {
+                Result.ok s => newest_prompts rest (List.cons s acc),
+                Result.err _ => newest_prompts rest acc,
+            },
+            Result.err _ => newest_prompts rest acc,
+        },
+    }
+
+#[partial]
+def cap_prompts (xs : List String) (n : I64) : List String :=
+    if n < 1 then List.empty
+    else match xs {
+        List.empty => List.empty,
+        List.cons x rest => List.cons x (cap_prompts rest (n - 1)),
+    }
+
+/// The fallback for a session with no prompt record: the text the user
+/// sent, newest first. Tool results, notes weaver itself posted (they
+/// open with `[`, like the compaction summary) and empty texts are not
+/// prompts.
+pub def Store.prompts_of_history (history : List Message) : List String :=
+    cap_prompts (history_prompts history List.empty) Store.prompts_cap
+
+#[partial]
+def history_prompts (ms : List Message) (acc : List String) : List String :=
+    match ms {
+        List.empty => acc,
+        List.cons m rest => match m.role {
+            Role.user => history_prompts rest (user_texts m.content acc),
+            _ => history_prompts rest acc,
+        },
+    }
+
+#[partial]
+def user_texts (cs : List Content) (acc : List String) : List String :=
+    match cs {
+        List.empty => acc,
+        List.cons c rest => match c {
+            Content.text t =>
+                let s : String := String.trim t in
+                if Bool.or (String.is_empty s) (String.starts_with "[" s) then user_texts rest acc
+                else user_texts rest (List.cons t acc),
+            _ => user_texts rest acc,
+        },
+    }
 
 /// Replace a named aux file wholesale (`activity.txt` holds only the
 /// latest event).

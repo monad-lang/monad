@@ -40,7 +40,7 @@ use tui::text {Text.width}
 use std::concurrent::fiber {never_started}
 use tui::types {Event, Key}
 use tui::tui {Cmd}
-use std::list {List.length, List.filter}
+use std::list {List.length, List.filter, List.intercalate}
 
 // ── The offline state (commands_tests.mo's shape) ───────────────────────
 
@@ -1232,3 +1232,15 @@ def test_side_output_dialog_shows_the_output : Bool :=
     let wide : String := String.repeat "x" 100 in
     let big : DialogModel := side_output_dialog "/help" (Result.ok (Effect.ok st wide)) in
     d.title == "/mode" && List.length d.body == 1 && Bool.not d.fullscreen && big.fullscreen
+
+/// A `/resume`'s prompts land behind the current history, so Up walks the
+/// current run's lines first, then the resumed session's.
+#[test]
+def test_history_loaded_extends_up_history : Bool :=
+    match submit_text (model_of Mode.manual) "/mode" {
+        Pair.pair m1 _ =>
+            match TuiApp.update m1 (WeaverMsg.history_loaded ["older ask", "/mode"]) {
+                Pair.pair m2 cmd =>
+                    cmd_is_none cmd && List.intercalate "|" m2.prompt.hist == "/mode|older ask",
+            },
+    }

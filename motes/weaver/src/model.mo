@@ -94,6 +94,8 @@ pub type WeaverMsg {
     side_closed,
     /// A `/btw` question's answer, or why there is none.
     btw_result (question : String) (answer : Result String String),
+    /// A resumed session's submitted lines (newest first) for Up to recall.
+    history_loaded (prompts : List String),
 }
 
 /// `tui::App`'s `on_event : Event -> WeaverMsg` -- every raw event is a

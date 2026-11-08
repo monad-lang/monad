@@ -4,6 +4,7 @@
 /// prompt owns editing, the up/down history walk, paste, and mouse
 /// selection inside its own box.
 use tui::types {Key}
+use std::list {List.any}
 use tui::widget {Widget, text_input, padding}
 use tui::widgets::input {
     InputState, input_state, insert_text, handle_input_multiline_key,
@@ -84,6 +85,22 @@ pub def Prompt.submitted (p : PromptModel) (text : String) : PromptModel :=
         } in
     let cleared : PromptModel := Prompt.clear p in
     { cleared with hist := take Prompt.hist_cap pushed, hist_idx := 0 - 1 }
+
+/// `older` (newest first: a resumed session's prompts) behind this
+/// history. A line in both keeps its newest place; the walk resets and the
+/// cap holds.
+pub def Prompt.with_history (p : PromptModel) (older : List String) : PromptModel :=
+    { p with hist := take Prompt.hist_cap (dedup_newest (List.append p.hist older) List.empty), hist_idx := 0 - 1 }
+
+/// Keep each line's first (newest) occurrence, in order.
+#[partial]
+def dedup_newest (xs : List String) (seen : List String) : List String :=
+    match xs {
+        List.empty => List.empty,
+        List.cons x rest =>
+            if List.any (fn (s : String) => s == x) seen then dedup_newest rest seen
+            else List.cons x (dedup_newest rest (List.cons x seen)),
+    }
 
 def browsing (p : PromptModel) : Bool := Bool.not (p.hist_idx < 0)
 

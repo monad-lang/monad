@@ -8,7 +8,7 @@ use pty::check {Check.report}
 use pty::ansi {Ansi.has_color}
 use weaver::pty_support {
     run_gated, with_root, spawn_args, status_turns, send_paste, quit_cleanly,
-    rss_kb
+    rss_kb, count_occurrences
 }
 use weaver::pty_fixtures {
     LineSpec, write_text_script, write_generated_session, session_dir,
@@ -126,8 +126,17 @@ def persist_run (bin : String) (root : String) : IO Bool := do {
                                     let restored <- Pty.wait_until m2
                                         (fn (o : Output) => grid_has o "persisted-reply") 8000;
                                     let g <- Check.report "--resume restores the transcript" restored;
+                                    // Up recalls the resumed session's prompt: the
+                                    // placeholder gives way to one more "hi".
+                                    let o0 <- Pty.output m2;
+                                    let before : I64 := count_occurrences (Output.text o0) "hi";
+                                    Pty.send_text m2 "\u{1b}[A";
+                                    let recalled <- Pty.wait_until m2 (fn (o : Output) =>
+                                        Bool.and (Bool.not (grid_has o "type a message"))
+                                            (I64.lt before (count_occurrences (Output.text o) "hi"))) 3000;
+                                    let h <- Check.report "Up recalls the resumed session's prompt" recalled;
                                     Pty.finish m2;
-                                    return g
+                                    return (g && h)
                                 }
                             }
                         }

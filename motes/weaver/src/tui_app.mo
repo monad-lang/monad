@@ -82,7 +82,7 @@ use weaver::overlay {
 use weaver::commands {TranscriptChange}
 use shuttle::session {Session}
 use weaver::theme {theme_split_lines, theme_line_style_with, theme_border_style_with}
-use weaver::store {TLine, TLine.plain, TLine.user_line}
+use weaver::store {TLine, TLine.plain, TLine.user_line, Store.append_prompt, Store.read_prompts, Store.prompts_of_history}
 use weaver::error {WeaverError, WeaverError.show, WeaverError.recoverable}
 use std::concurrent::fiber {FiberError, FiberError.message}
 use tui::types {Event, Key, MouseEvent, MouseButton, Screen}
@@ -99,7 +99,7 @@ use tui::terminal {
 }
 use tui::tui {App, Cmd, run_app}
 use tui::widgets::picker {PickerModel, PickerStep, Picker.make, Picker.update}
-use weaver::ui::prompt {PromptMsg, Prompt.update, Prompt.text, Prompt.set_text, Prompt.clear, Prompt.submitted, Prompt.selecting, Prompt.clear_selection, Prompt.box_contains}
+use weaver::ui::prompt {PromptMsg, Prompt.update, Prompt.text, Prompt.set_text, Prompt.clear, Prompt.submitted, Prompt.with_history, Prompt.selecting, Prompt.clear_selection, Prompt.box_contains}
 use weaver::ui::banner {BannerMsg, Banner.shown, Banner.hidden, Banner.update, Banner.animating, Banner.subscriptions}
 use tui::component {Subs, Subs.map, Subs.on_tick}
 use weaver::ui::live {LiveMsg, Live.idle, Live.start, Live.update, Live.request_stop, Live.subscriptions, Live.write_usage, Live.store_usage}
@@ -141,8 +141,12 @@ def run_tui_with_size (log : Option Logger) (st : WeaverState) (tr : Transcript)
             // the next batch within one tick); idle ticks with an
             // unchanged model are zero-diff draws. The tui default (-1)
             // stays untouched.
+            // A resumed session's prompts seed Up's history.
+            let older <- load_prompts st;
+            let m0 : TuiModel := init_tui_model_with log st rows cols tr;
+            let start : TuiModel := { m0 with prompt := Prompt.with_history m0.prompt older };
             let app : App TuiModel WeaverMsg :=
-                App.app_ticked (init_tui_model_with log st rows cols tr) on_event TuiApp.update Model.view 100
+                App.app_ticked start on_event TuiApp.update Model.view 100
                     tick_redraw reads_input;
             let _ <- run_app app;
             return true
@@ -245,6 +249,7 @@ def update_msg (m : TuiModel) (msg : WeaverMsg) : Pair TuiModel (Cmd WeaverMsg) 
         WeaverMsg.repainted => Pair.pair { m with repaint_due := false } Cmd.none,
         WeaverMsg.side_closed => drain_btw m Cmd.none,
         WeaverMsg.btw_result q r => btw_result_step m q r,
+        WeaverMsg.history_loaded ps => Pair.pair { m with prompt := Prompt.with_history m.prompt ps } Cmd.none,
     }
 
 // ── persistence commands ─────────────────────────────────────────────────
@@ -686,13 +691,40 @@ def command_reset (m : TuiModel) (effect : Effect) : Pair TuiModel (Cmd WeaverMs
         // `/resume`'s picker painted outside the frame pipeline, and the
         // overlay close's clearing repaint can lose `first_cmd` to this
         // perform when both fold in one batch: clear here too.
-        Option.some st => Pair.pair m2 (Cmd.perform (fn (_ : Unit) => after_clear (reset_action st effect.output))),
+        Option.some st => Pair.pair m2 (Cmd.perform (fn (_ : Unit) => after_clear (reset_with_history m2.state st effect.output))),
     }
 
 def reset_in_memory (m : TuiModel) (output : String) : Pair TuiModel (Cmd WeaverMsg) :=
     let tr : Transcript := Transcript.append Transcript.empty (plain_lines (theme_split_lines output)) in
     let m2 : TuiModel := { m with pane := Pane.reset m.pane tr } in
     Pair.pair m2 Cmd.none
+
+/// The reset, plus the new session's prompts for Up (a `/resume` brings
+/// its history back; a `/clear`'s new session has none, so the current
+/// history stays).
+def reset_with_history (state : WeaverState) (st : StoreState) (output : String) : IO WeaverMsg := do {
+    let msg <- reset_action st output;
+    let older <- load_prompts state;
+    IO.pure (WeaverMsg.batch [msg, WeaverMsg.history_loaded older])
+}
+
+/// The session's recorded prompts, or, for a session that predates the
+/// record, the user's texts from its history.
+def load_prompts (st : WeaverState) : IO (List String) :=
+    match st.store {
+        Option.none => IO.pure (Store.prompts_of_history st.run.session.history),
+        Option.some s => do {
+            let ps <- Store.read_prompts s;
+            if List.is_empty ps then IO.pure (Store.prompts_of_history st.run.session.history) else IO.pure ps
+        },
+    }
+
+/// Record a submitted line for a later resume (no store: nothing to do).
+def persist_prompt (store : Option StoreState) (text : String) : IO Unit :=
+    match store {
+        Option.none => IO.pure unit,
+        Option.some s => Store.append_prompt s text,
+    }
 
 def reset_action (st : StoreState) (output : String) : IO WeaverMsg := do {
     let tr0 <- Store.startup_transcript st.dir;
@@ -1022,6 +1054,7 @@ def open_side (m : TuiModel) (text : String) : Pair TuiModel (Cmd WeaverMsg) :=
     Pair.pair cleared (Cmd.perform (fn (_ : Unit) => side_run m.state text))
 
 def side_run (st : WeaverState) (text : String) : IO WeaverMsg := do {
+    persist_prompt st.store text;
     Overlay.monitor_open st.store;
     let d <- side_dialog st text;
     let _ <- main_loop_modal st.colors d;
@@ -1064,10 +1097,11 @@ def start_btw (m : TuiModel) (text : String) (q : String) : Pair TuiModel (Cmd W
     let cfg : ProviderConfig := m.state.run.session.config in
     let hist : List Message := m.state.run.session.history in
     Pair.pair cleared (Cmd.perform_async
-        (fn (_ : Unit) => btw_action m.log cfg hist q)
+        (fn (_ : Unit) => btw_action m.log m.state.store text cfg hist q)
         (fn (e : FiberError) => WeaverMsg.btw_result q (Result.err (FiberError.message e))))
 
-def btw_action (log : Option Logger) (cfg : ProviderConfig) (hist : List Message) (q : String) : IO WeaverMsg := do {
+def btw_action (log : Option Logger) (store : Option StoreState) (text : String) (cfg : ProviderConfig) (hist : List Message) (q : String) : IO WeaverMsg := do {
+    persist_prompt store text;
     let r <- Btw.ask cfg hist q;
     let ok : String := match r { Result.ok _ => "1", Result.err _ => "0" };
     Logs.debug log (String.concat "ev=btw ok=" ok);
@@ -1163,6 +1197,7 @@ def submit_line (m : TuiModel) (text : String) : Pair TuiModel (Cmd WeaverMsg) :
             modal := modal_command st text } in
     Pair.pair m2 (Cmd.perform_async
         (fn (_ : Unit) => do {
+            persist_prompt store text;
             let _ <- write_echo store start block;
             run_submitted_line m.log gen st text
         })
@@ -2292,6 +2327,7 @@ def open_monitor (m : TuiModel) : Pair TuiModel (Cmd WeaverMsg) :=
     Pair.pair cleared (Cmd.perform (fn (_ : Unit) => monitor_run m.log st gen pending))
 
 def monitor_run (log : Option Logger) (st : WeaverState) (gen : I64) (pending : Bool) : IO WeaverMsg := do {
+    persist_prompt st.store "/tasks";
     Overlay.monitor_open st.store;
     let notes <- monitor_loop log st gen pending (MonitorView.mon_list 0) List.empty;
     Overlay.monitor_close st.store;
