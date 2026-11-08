@@ -20,6 +20,9 @@ use shuttle::agent {RunState}
 use shuttle::registry {ToolRegistry}
 use shuttle::gate {Pick, Approval, Gate, Capability}
 use shuttle::message {Message, Usage}
+use shuttle::provider {ProviderConfig}
+use weaver::side {Side.wanted, Side.btw_question, Side.fullscreen}
+use weaver::btw {Btw.ask}
 use shuttle::message_types {Role, Content}
 use weaver::usage {UsageTracker.start, UsageTracker.silent, UsageTracker.last}
 use std::ref {Ref, Ref.new, Ref.get, Ref.set}
@@ -240,6 +243,8 @@ def update_msg (m : TuiModel) (msg : WeaverMsg) : Pair TuiModel (Cmd WeaverMsg) 
         WeaverMsg.monitor_closed notes => monitor_closed_step m notes,
         WeaverMsg.batch msgs => batch_step m msgs,
         WeaverMsg.repainted => Pair.pair { m with repaint_due := false } Cmd.none,
+        WeaverMsg.side_closed => drain_btw m Cmd.none,
+        WeaverMsg.btw_result q r => btw_result_step m q r,
     }
 
 // ── persistence commands ─────────────────────────────────────────────────
@@ -579,7 +584,7 @@ def overlay_step (m : TuiModel) (ov : Option OverlayState) : Pair TuiModel (Cmd 
             else if Bool.or m.overlay_open (Bool.not (s.seq == m.dialog_seq))
             then
                 let closed : TuiModel := { m with overlay_open := false, modal := false, dialog_seq := s.seq, repaint_due := true } in
-                Pair.pair closed repaint_cmd
+                drain_btw closed repaint_cmd
             else Pair.pair m Cmd.none,
     }
 
@@ -999,8 +1004,121 @@ def enter_key (m : TuiModel) : Pair TuiModel (Cmd WeaverMsg) :=
     let text : String := String.trim (Prompt.text m.prompt) in
     if String.is_empty text then Pair.pair m Cmd.none
     else if monitor_wanted text then open_monitor m
-    else if m.turn_pending then queue_line m text
-    else submit_line m text
+    else if Side.wanted (mode_is_plan m.state.mode) text then open_side m text
+    else match Side.btw_question text {
+        Option.some q => start_btw m text q,
+        Option.none => if m.turn_pending then queue_line m text else submit_line m text,
+    }
+
+// ── side commands and /btw ─────────────────────────────────────────────
+// Both run beside a turn: a side command on the main loop (a perform that
+// owns the screen, like the /tasks monitor), a /btw question on its own
+// fiber whose answer opens a dialog. Both hold the monitor lock while a
+// dialog is up, so a turn's approval dialog waits for them.
+
+/// Run a read-only command now and show its output in a dialog.
+def open_side (m : TuiModel) (text : String) : Pair TuiModel (Cmd WeaverMsg) :=
+    let cleared : TuiModel := with_streak_reset (fn (mm : TuiModel) => { mm with prompt := Prompt.submitted mm.prompt text }) m in
+    Pair.pair cleared (Cmd.perform (fn (_ : Unit) => side_run m.state text))
+
+def side_run (st : WeaverState) (text : String) : IO WeaverMsg := do {
+    Overlay.monitor_open st.store;
+    let d <- side_dialog st text;
+    let _ <- main_loop_modal st.colors d;
+    Overlay.monitor_close st.store;
+    clear_terminal;
+    IO.pure WeaverMsg.side_closed
+}
+
+/// A dialog run from a perform on the main loop: the loop is blocked, so
+/// there is no read-gate handshake (`dialog_run` would wait for an ack
+/// that cannot come).
+def main_loop_modal (colors : Bool) (d : DialogModel) : IO (Pair DialogModel DialogStep) := do {
+    let memo <- Ref.new (Option.none : Option BodyMemo);
+    let paint : Option Screen -> DialogModel -> IO (Pair Screen DialogModel) :=
+        if d.markdown then paint_dialog_memo colors memo else paint_dialog colors;
+    Dialog.modal paint d
+}
+
+def side_dialog (st : WeaverState) (text : String) : IO DialogModel :=
+    if text == "/plan" then IO.pure (plan_view_dialog st)
+    else do {
+        let r <- Commands.dispatch text st;
+        IO.pure (side_output_dialog text r)
+    }
+
+/// A command's output as a dialog body; a failure shows its message.
+pub def side_output_dialog (text : String) (r : Result WeaverError Effect) : DialogModel :=
+    let lines : List String := match r {
+        Result.ok e => theme_split_lines e.output,
+        Result.err e => List.cons (WeaverError.show e) List.empty,
+    } in
+    let o0 : DialogOption := { label := "Close", hint := "Esc", key := "" } in
+    let d0 : DialogModel := Dialog.make text "" lines [o0] in
+    let d : DialogModel := { d0 with fullscreen := Side.fullscreen lines, footer := "Enter/Esc close" } in
+    d
+
+/// Ask on a fiber; the turn, if one runs, keeps going.
+def start_btw (m : TuiModel) (text : String) (q : String) : Pair TuiModel (Cmd WeaverMsg) :=
+    let cleared : TuiModel := with_streak_reset (fn (mm : TuiModel) => { mm with prompt := Prompt.submitted mm.prompt text }) m in
+    let cfg : ProviderConfig := m.state.run.session.config in
+    let hist : List Message := m.state.run.session.history in
+    Pair.pair cleared (Cmd.perform_async
+        (fn (_ : Unit) => btw_action m.log cfg hist q)
+        (fn (e : FiberError) => WeaverMsg.btw_result q (Result.err (FiberError.message e))))
+
+def btw_action (log : Option Logger) (cfg : ProviderConfig) (hist : List Message) (q : String) : IO WeaverMsg := do {
+    let r <- Btw.ask cfg hist q;
+    let ok : String := match r { Result.ok _ => "1", Result.err _ => "0" };
+    Logs.debug log (String.concat "ev=btw ok=" ok);
+    IO.pure (WeaverMsg.btw_result q r)
+}
+
+/// An answer opens its dialog now, or waits while a turn's dialog owns
+/// the screen (both would read stdin).
+def btw_result_step (m : TuiModel) (q : String) (r : Result String String) : Pair TuiModel (Cmd WeaverMsg) :=
+    let answer : String := match r {
+        Result.ok a => a,
+        Result.err e => String.concat "btw: no answer: " e,
+    } in
+    if Bool.or m.modal m.overlay_open
+    then Pair.pair { m with btw_ready := List.append m.btw_ready [Pair.pair q answer] } Cmd.none
+    else open_btw m q answer
+
+/// Show the oldest parked answer, if any; otherwise `fallback`.
+def drain_btw (m : TuiModel) (fallback : Cmd WeaverMsg) : Pair TuiModel (Cmd WeaverMsg) :=
+    match m.btw_ready {
+        List.empty => Pair.pair m fallback,
+        List.cons p rest => match p {
+            Pair.pair q a => open_btw { m with btw_ready := rest } q a,
+        },
+    }
+
+/// The answer joins the transcript (the question visible, the answer a
+/// detail block for Ctrl+O and a resume) and opens in a dialog.
+def open_btw (m : TuiModel) (q : String) (answer : String) : Pair TuiModel (Cmd WeaverMsg) :=
+    let lines : List TLine := List.cons (TLine.user_line (String.concat "btw: " q))
+        (List.map TLine.detail_line (theme_split_lines answer)) in
+    match append_block_at m lines {
+        Pair.pair m2 at => match at {
+            Pair.pair start block =>
+                Pair.pair m2 (Cmd.perform (fn (_ : Unit) => btw_show m2.state q answer start block)),
+        },
+    }
+
+def btw_show (st : WeaverState) (q : String) (answer : String) (start : I64) (block : List TLine) : IO WeaverMsg := do {
+    Overlay.monitor_open st.store;
+    let o0 : DialogOption := { label := "Close", hint := "Esc", key := "" };
+    let d0 : DialogModel := Dialog.make "btw" q (theme_split_lines answer) [o0];
+    let d : DialogModel := { d0 with markdown := true, fullscreen := true, footer := "PageUp/PageDown scroll -- Enter/Esc close" };
+    let _ <- main_loop_modal st.colors d;
+    Overlay.monitor_close st.store;
+    clear_terminal;
+    match st.store {
+        Option.none => IO.pure WeaverMsg.side_closed,
+        Option.some s => record_note s start block,
+    }
+}
 
 /// Enter while a turn runs QUEUES the line instead of dropping it: the
 /// head starts when the running turn's result folds in. The queue is
@@ -2016,10 +2134,14 @@ def plan_dialog_step (st : WeaverState) (text : String) : IO WeaverMsg :=
 
 /// Outside plan mode `/plan` is a read-only view: the plan the mode
 /// produced, still available after approval and later turns.
+def plan_view_dialog (st : WeaverState) : DialogModel :=
+    let o0 : DialogOption := { label := "Close", hint := "Esc", key := "" } in
+    let d0 : DialogModel := Dialog.make "Current plan" "read-only -- switch to plan mode to revise or approve" (plan_body st) [o0] in
+    let d : DialogModel := { d0 with markdown := true, fullscreen := true, footer := "PageUp/PageDown or wheel scroll -- Enter/Esc close" } in
+    d
+
 def plan_view_step (st : WeaverState) : IO WeaverMsg := do {
-    let o0 : DialogOption := { label := "Close", hint := "Esc", key := "" };
-    let d0 : DialogModel := Dialog.make "Current plan" "read-only -- switch to plan mode to revise or approve" (plan_body st) [o0];
-    let d : DialogModel := { d0 with markdown := true, fullscreen := true, footer := "PageUp/PageDown or wheel scroll -- Enter/Esc close" };
+    let d : DialogModel := plan_view_dialog st;
     let pr <- dialog_run st.colors st.store d;
     match pr {
         Pair.pair _ _ => IO.pure (WeaverMsg.command_result (plan_effect st "plan closed")),

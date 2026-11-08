@@ -12,7 +12,7 @@ use shuttle::gate {Gate}
 use shuttle::provider {ProviderConfig, Wire}
 use shuttle::registry {ToolRegistry}
 use shuttle::session {Session}
-use weaver::commands {WeaverState, Effect, TranscriptChange, set_fatal, Commands.setting_rows}
+use weaver::commands {WeaverState, Effect, Effect.ok, TranscriptChange, set_fatal, Commands.setting_rows}
 use weaver::error {WeaverError}
 use weaver::policy {Mode}
 use weaver::ui::live {LiveModel, LiveMsg, LiveDelta, LiveView, Live.start, Live.status_text, Live.last_line, Live.height, Live.rows, Live.thinking_height}
@@ -31,11 +31,11 @@ use std::map {Map, BTreeMap}
 use weaver::tui_app {
     TuiApp.update, TuiApp.subscriptions, turn_never_ran, TuiApp.resume_rows, TuiApp.resume_option,
     TuiApp.resume_action_at, TuiApp.settings_options, activity_name, markdown_body_rows, TuiApp.render_message,
-    clipboard_cmd, persist_block_cmd,
+    clipboard_cmd, persist_block_cmd, side_output_dialog,
     ResumeAction, ResumeChoice,
 }
 use weaver::commands {SessionPage, Commands.session_page}
-use tui::widgets::dialog {DialogOption}
+use tui::widgets::dialog {DialogOption, DialogModel}
 use tui::text {Text.width}
 use std::concurrent::fiber {never_started}
 use tui::types {Event, Key}
@@ -1174,3 +1174,61 @@ def test_output_row_is_reserved_only_while_it_shows : Bool :=
     let plain : LiveModel := { (live_with Option.none) with thinking := thinking_lines 20 } in
     let shown : LiveModel := { (live_with (Option.some "tick")) with thinking := thinking_lines 20 } in
     Live.thinking_height v plain == 3 && Live.height v shown < 8
+
+// ── side commands and /btw ──────────────────────────────────────────────
+
+/// Type `text` (one paste) and press Enter.
+def submit_text (m : TuiModel) (text : String) : Pair TuiModel (Cmd WeaverMsg) :=
+    match TuiApp.update m (WeaverMsg.key_event (Event.paste text)) {
+        Pair.pair m1 _ => TuiApp.update m1 (key_msg Key.enter),
+    }
+
+def cmd_is_main_perform (c : Cmd WeaverMsg) : Bool :=
+    match c { Cmd.perform _ => true, _ => false }
+
+/// `/help` mid-turn runs now (a dialog on the main loop), not queued.
+#[test]
+def test_side_command_runs_while_a_turn_runs : Bool :=
+    match submit_text (enter_pending (model_of Mode.manual)) "/help" {
+        Pair.pair m2 cmd =>
+            cmd_is_main_perform cmd && m2.turn_pending && List.is_empty m2.queued
+                && String.is_empty m2.prompt.input.value,
+    }
+
+/// `/btw <q>` mid-turn forks beside the turn; nothing is queued.
+#[test]
+def test_btw_forks_beside_the_turn : Bool :=
+    match submit_text (enter_pending (model_of Mode.manual)) "/btw what is left" {
+        Pair.pair m2 cmd => cmd_is_perform cmd && m2.turn_pending && List.is_empty m2.queued,
+    }
+
+/// A command that changes state still waits behind the turn.
+#[test]
+def test_mutating_command_still_queues : Bool :=
+    match submit_text (enter_pending (model_of Mode.manual)) "/mode auto" {
+        Pair.pair m2 _ => List.length m2.queued == 1,
+    }
+
+/// An answer that lands while a turn's dialog owns the screen waits, and
+/// the next dialog close shows it.
+#[test]
+def test_btw_answer_waits_for_a_turn_dialog : Bool :=
+    let busy : TuiModel := { (model_of Mode.manual) with modal := true } in
+    match TuiApp.update busy (WeaverMsg.btw_result "q" (Result.ok "a")) {
+        Pair.pair m1 c1 =>
+            let parked : Bool := List.length m1.btw_ready == 1 && cmd_is_none c1 in
+            match TuiApp.update { m1 with modal := false } WeaverMsg.side_closed {
+                Pair.pair m2 c2 => parked && List.is_empty m2.btw_ready && cmd_is_main_perform c2,
+            },
+    }
+
+/// A side command's output is the dialog body; a long table fills the
+/// screen.
+#[test]
+def test_side_output_dialog_shows_the_output : Bool :=
+    let m0 : TuiModel := model_of Mode.manual in
+    let st : WeaverState := m0.state in
+    let d : DialogModel := side_output_dialog "/mode" (Result.ok (Effect.ok st "mode: manual")) in
+    let wide : String := String.repeat "x" 100 in
+    let big : DialogModel := side_output_dialog "/help" (Result.ok (Effect.ok st wide)) in
+    d.title == "/mode" && List.length d.body == 1 && Bool.not d.fullscreen && big.fullscreen

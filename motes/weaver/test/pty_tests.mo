@@ -38,6 +38,7 @@ use weaver::pty::resume {
     , run_name_shows_in_the_frame}
 use weaver::pty::round2 {run_round2_scroll_multiline_history}
 use weaver::pty::selection {run_selection_drag_and_osc52}
+use weaver::pty::side {run_side_commands_beside_a_turn}
 use weaver::pty::sessions {
     run_sessions_persist_then_resume,
     run_sessions_home_pages_from_disk,
@@ -174,3 +175,6 @@ def test_shell_wait_esc_kills_the_command : IO Bool := run_shell_wait_esc
 
 #[test]
 def test_shell_wait_ctrl_b_moves_it_to_the_background : IO Bool := run_shell_wait_ctrl_b
+
+#[test]
+def test_side_commands_beside_a_turn : IO Bool := run_side_commands_beside_a_turn

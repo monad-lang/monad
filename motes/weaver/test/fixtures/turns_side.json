@@ -1,0 +1,1 @@
+[{"message": {"role": "assistant", "content": [{"type": "text", "text": "reply side: the turn finished after the side dialogs closed."}]}, "usage": {"input_tokens": 1, "output_tokens": 10, "cached_tokens": 0}, "stop": "end_turn"}]

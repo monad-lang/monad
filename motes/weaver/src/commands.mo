@@ -20,6 +20,7 @@
 /// it through `WeaverError.recoverable`.
 use weaver::tasks {TaskEntry, Tasks.list, Tasks.line}
 use weaver::todo {Todo.read, Todo.write, Todo.summary, Todo.lines}
+use weaver::btw {Btw.ask}
 use weaver::place {SessionPlace, Place.cwd_of}
 use shuttle::provider {ProviderConfig}
 use shuttle::registry {ToolRegistry}
@@ -169,7 +170,8 @@ def respond (st : WeaverState) (output : String) : IO (Result WeaverError Effect
 /// final shape.
 pub def command_table : BTreeMap String SlashCommand :=
     command_map
-        [Pair.pair "/budget" (SlashCommand.mk cmd_budget),
+        [Pair.pair "/btw" (SlashCommand.mk cmd_btw),
+            Pair.pair "/budget" (SlashCommand.mk cmd_budget),
             Pair.pair "/clear" (SlashCommand.mk cmd_clear),
             Pair.pair "/compact" (SlashCommand.mk cmd_compact),
             Pair.pair "/h" (SlashCommand.mk cmd_help),
@@ -577,6 +579,21 @@ def kill_proc (id : String) (xs : List ProcEntry) : IO String :=
     }
 
 /// `/todos`: the session's todo list (`todo_write` keeps it).
+/// `/btw <question>`: a side question answered from the conversation with
+/// no tools, leaving the session untouched. The TUI runs it beside a turn
+/// and shows the answer in a dialog; here (dumb mode, a bare `/btw`) it
+/// answers in sequence.
+def cmd_btw (arg : String) (st : WeaverState) : IO (Result WeaverError Effect) :=
+    if String.is_empty arg
+    then respond st "usage: /btw <question> -- ask about the session without interrupting the task"
+    else do {
+        let r <- Btw.ask st.run.session.config st.run.session.history arg;
+        match r {
+            Result.ok answer => respond st answer,
+            Result.err e => respond st (String.concat "btw: no answer: " e),
+        }
+    }
+
 def cmd_todos (arg : String) (st : WeaverState) : IO (Result WeaverError Effect) := do {
     let ts <- Todo.read st.store;
     if List.is_empty ts
@@ -1590,6 +1607,7 @@ def help_text : String :=
         "/describe [<text>|-]                 show, set or clear this session's description",
         "/clear                               start a new session and reset the budget",
         "/compact [instructions]              summarize the context and keep a recent tail",
+        "/btw <question>                      ask about the session without interrupting the task",
         "/help (or /h)                        this table",
         "/quit (or /q)                        exit (MCP servers are disposed)",
     ]

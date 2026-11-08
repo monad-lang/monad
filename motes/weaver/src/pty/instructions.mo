@@ -33,6 +33,14 @@ def instr_go (m : Pty) (root : String) : IO Bool := do {
     Pty.send_text m "/memory\n";
     let listed <- Pty.wait_until m (fn (o : Output) => tight_has o "AGENTS.md(repo,42B)") 4000;
     let e <- Check.report "/memory lists the file at its new size" listed;
+    // `/memory` is a side command: its dialog takes the first Ctrl+C. A
+    // lone Esc closes it only after the dialog's next quiet poll (100 ms),
+    // so give it that before quitting.
+    Pty.send_text m "\u{1b}";
+    Pty.pump m 500;
+    // On the grid, not the stream (the placeholder was painted at startup):
+    // wait for the dialog's footer to go, so the Ctrl+Cs reach the loop.
+    let _ <- Pty.wait_until m (fn (o : Output) => match Output.find o "Enter/Esc close" { Option.some _ => false, Option.none => true }) 3000;
     let quit <- quit_cleanly m 4000;
     Pty.finish m;
     let noted <- history_has root "changed during the session";
