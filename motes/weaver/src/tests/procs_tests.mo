@@ -13,7 +13,6 @@ use shuttle::message_types {Content}
 use json::json {Json, Json.parse}
 use std::path {Path, Path.to_string}
 use std::process {process_id, exec_cmd, Proc.kill_group}
-use tui::terminal {Terminal.poll}
 use std::io {IO.read_file, IO.is_dir, IO.current_time_nano}
 use std::stream {StreamError}
 use std::list {List.intercalate}
@@ -64,13 +63,49 @@ def test_detached_script_quotes_and_detaches : Bool :=
         && String.contains script "'/tmp/r/p-1/exit'"
         && String.contains script "2>&1 < /dev/null"
         && String.contains script "& echo $!"
+        && String.contains script "sh '/tmp/r/p-1/cmd.sh'"
+        && Bool.not (String.contains script "echo hi")
         && String.starts_with "set -m; " script
+
+/// A cwd with a `'` in it stays one quoted word.
+#[test]
+def test_detached_script_escapes_a_quote_in_the_cwd : Bool :=
+    let script : String := Procs.detached_script (Path.path "/tmp/r/p-1") "/tmp/it's here" "true" in
+    String.contains script "cd '/tmp/it'\\''s here' && "
+
+/// Commands the old one-line splice could not start (the log review's F3):
+/// a heredoc, whose terminator line swallowed the wrapper's `)`, and a
+/// trailing `#` comment, which commented it out. Both run and log.
+def runs_and_logs (suffix : String) (command : String) (expect : String) : IO Bool := do {
+    let root : String := temp_root suffix;
+    let _ <- cleanup root;
+    let r <- Procs.start_at (Path.path root) command "" false;
+    match r {
+        Result.err _ => do { let _ <- cleanup root; IO.pure false },
+        Result.ok e => do {
+            let _ <- sleepIO 400;
+            let entries <- Procs.scan_at (Path.path root);
+            let after <- after_or e.id entries e;
+            let lines <- Procs.tail after 5;
+            let _ <- cleanup root;
+            IO.pure (is_exited0 after.status && String.contains (String.concat_list lines) expect)
+        },
+    }
+}
+
+#[test]
+def test_a_heredoc_command_starts : IO Bool :=
+    runs_and_logs "heredoc" "cat <<'EOF'\nfrom-heredoc\nEOF" "from-heredoc"
+
+#[test]
+def test_a_trailing_comment_does_not_break_the_wrapper : IO Bool :=
+    runs_and_logs "comment" "echo commented # a trailing note" "commented"
 
 def after_or (id : String) (xs : List ProcEntry) (fallback : ProcEntry) : IO ProcEntry :=
     IO.pure (match find_entry id xs { Option.some x => x, Option.none => fallback })
 
 def exit_case (root : String) (e : ProcEntry) : IO Bool := do {
-    let _ <- Terminal.poll 400;
+    let _ <- sleepIO 400;
     let entries <- Procs.scan_at (Path.path root);
     let after <- after_or e.id entries e;
     let lines <- Procs.tail after 5;
@@ -91,14 +126,14 @@ def test_started_process_exits_and_keeps_its_log : IO Bool := do {
 }
 
 def sleep_case (root : String) (e : ProcEntry) : IO Bool := do {
-    let _ <- Terminal.poll 200;
+    let _ <- sleepIO 200;
     let entries <- Procs.scan_at (Path.path root);
     let running : Bool := match find_entry e.id entries {
         Option.some x => is_running x.status,
         Option.none => false,
     };
     let killed <- Procs.kill e;
-    let _ <- Terminal.poll 300;
+    let _ <- sleepIO 300;
     let entries2 <- Procs.scan_at (Path.path root);
     let dead : Bool := match find_entry e.id entries2 {
         Option.some x => is_killed x.status,

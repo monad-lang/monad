@@ -13,7 +13,7 @@
 /// released into an ordinary background task.
 use std::io {IO.get_env, IO.is_dir, IO.list_dir, IO.read_file, IO.write_file, IO.current_time_nano, IO.file_exists, IO.file_size}
 use std::path {Path, Path.to_string, Path.join, Path.file_name}
-use std::process {exec_cmd, process_id, Proc.capture, Proc.kill_group, Proc.sigterm, Proc.sigkill}
+use std::process {exec_cmd, process_id, Proc.capture, Proc.shell_quote, Proc.kill_group, Proc.sigterm, Proc.sigkill}
 use std::concurrent::combine {sleepIO}
 use json::json {
     Json, Json.parse, Json.to_string, Json.make_object, Json.make_str, Json.make_num_int,
@@ -100,9 +100,6 @@ def write_text (p : Path) (s : String) : IO Unit := do {
     let _ <- IO.write_file p s;
     IO.pure unit
 }
-
-def shell_quote (s : String) : String :=
-    String.concat "'" (String.concat s "'")
 
 def dir_child (e : ProcEntry) (name : String) : Path :=
     Store.child e.dir name
@@ -308,16 +305,19 @@ pub def Procs.list : IO (List ProcEntry) := do {
     Procs.scan_at root
 }
 
-/// The detached script. Paths are single-quoted; the command is shell
-/// script by contract (the shell tool's own rule), and `< /dev/null`
-/// detaches stdin so the child cannot read the terminal. `set -m` puts the
-/// background job in its own process group, whose id is the recorded pid.
+/// The detached script. The command itself is never spliced in: it runs
+/// from `<dir>/cmd.sh` (written verbatim by `start_at`), so a heredoc's
+/// terminator line or a trailing `#` comment cannot swallow this wrapper's
+/// own syntax. Paths are single-quoted; `< /dev/null` detaches stdin so the
+/// child cannot read the terminal. `set -m` puts the background job in its
+/// own process group, whose id is the recorded pid.
 pub def Procs.detached_script (dir : Path) (cwd : String) (command : String) : String :=
-    let log : String := shell_quote (Path.to_string (Store.child dir "log")) in
-    let pidp : String := shell_quote (Path.to_string (Store.child dir "pid")) in
-    let exitp : String := shell_quote (Path.to_string (Store.child dir "exit")) in
-    let cd : String := if String.is_empty cwd then "" else String.concat "cd " (String.concat (shell_quote cwd) " && ") in
-    String.concat_list ["set -m; ", cd, "{ ( ", command, " ) > ", log,
+    let log : String := Proc.shell_quote (Path.to_string (Store.child dir "log")) in
+    let pidp : String := Proc.shell_quote (Path.to_string (Store.child dir "pid")) in
+    let exitp : String := Proc.shell_quote (Path.to_string (Store.child dir "exit")) in
+    let script : String := Proc.shell_quote (Path.to_string (Store.child dir "cmd.sh")) in
+    let cd : String := if String.is_empty cwd then "" else String.concat "cd " (String.concat (Proc.shell_quote cwd) " && ") in
+    String.concat_list ["set -m; ", cd, "{ sh ", script, " > ", log,
         " 2>&1 < /dev/null; echo $? > ", exitp, "; } & echo $! > ", pidp]
 
 /// `foreground` writes the marker before the job starts, so no scan ever
@@ -332,6 +332,7 @@ pub def Procs.start_at (root : Path) (command : String) (cwd : String) (foregrou
         let dir : Path := Store.child root id;
         let _ <- exec_cmd "mkdir" ["-p", Path.to_string dir];
         let _ <- write_text (Store.child dir "meta.json") (meta_json command cwd now);
+        let _ <- write_text (Store.child dir "cmd.sh") (String.concat command "\n");
         let _ <- if foreground then write_text (Store.child dir "foreground") "1" else IO.pure unit;
         let script : String := Procs.detached_script dir cwd command;
         let _ <- exec_cmd "sh" ["-c", script];
@@ -372,7 +373,7 @@ pub def Procs.discard (e : ProcEntry) : IO Unit := do {
 pub def Procs.tail (e : ProcEntry) (n : I64) : IO (List String) := do {
     let cap : I64 := if n < 1 then 1 else n;
     let script : String := String.concat "tail -n " (String.concat (I64.to_string cap)
-        (String.concat " -- " (shell_quote (Path.to_string e.log))));
+        (String.concat " -- " (Proc.shell_quote (Path.to_string e.log))));
     let captured <- Proc.capture "sh" ["-c", script];
     match captured {
         Pair.pair _ out =>
@@ -512,7 +513,7 @@ def over_cap (max : I64) (e : ProcEntry) : IO Bool :=
 def kill_flooded (log : Option Logger) (e : ProcEntry) : IO Unit := do {
     let _ <- Procs.kill e;
     let note : String := String.concat_list ["\n[output passed ", I64.to_string (Procs.max_log_bytes / 1048576), " MiB; killed by weaver]"];
-    let _ <- exec_cmd "sh" ["-c", String.concat_list ["printf '%s\\n' ", shell_quote note, " >> ", shell_quote (Path.to_string e.log)]];
+    let _ <- exec_cmd "sh" ["-c", String.concat_list ["printf '%s\\n' ", Proc.shell_quote note, " >> ", Proc.shell_quote (Path.to_string e.log)]];
     Logs.info log (String.concat "ev=proc_flood id=" e.id)
 }
 
