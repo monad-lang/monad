@@ -2,6 +2,7 @@
 /// close sequence bump that makes the main loop repaint.
 use weaver::overlay {
     OverlayState, Overlay.reset, Overlay.read, Overlay.write_state, Overlay.ack, Overlay.finish,
+    Overlay.should_ack,
 }
 
 #[test]
@@ -39,3 +40,10 @@ def test_overlay_finish_releases_and_bumps_seq : IO Bool := do {
         Option.none => false,
     })
 }
+
+/// The read gate acks only once the model has folded the open: an ack
+/// before that let a spinner frame land on the dialog.
+#[test]
+def test_should_ack_needs_the_folded_open : Bool :=
+    Overlay.should_ack true true && Bool.not (Overlay.should_ack true false)
+        && Bool.not (Overlay.should_ack false true) && Bool.not (Overlay.should_ack false false)

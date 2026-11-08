@@ -16,7 +16,6 @@ use std::path {Path, Path.to_string}
 use std::io {IO.read_file, IO.write_file}
 use std::process {process_id, exec_cmd}
 use std::concurrent::combine {sleepIO}
-use tui::terminal {Terminal.poll}
 use weaver::store {StoreState, Store.child}
 
 pub struct OverlayState {
@@ -131,6 +130,12 @@ pub def Overlay.wait_monitor (store : Option StoreState) : IO Unit := do {
     else IO.pure unit
 }
 
+/// Whether the read gate acks a dialog: only while one wants stdin AND
+/// the loop's model has already folded the open (so it draws no more
+/// frames over the dialog).
+pub def Overlay.should_ack (want : Bool) (overlay_open : Bool) : Bool :=
+    Bool.and want overlay_open
+
 /// The main loop's acknowledgement: set only while `want` is up and not
 /// already acknowledged. Called from the loop's read gate, after the
 /// model has folded the open poll.
@@ -159,7 +164,11 @@ def wait_ack (store : Option StoreState) (seq : I64) (tries : I64) : IO Unit := 
         if acked
         then IO.pure unit
         else do {
-            let _ <- Terminal.poll 10;
+            // A real sleep: `Terminal.poll` returns at once while stdin
+            // holds bytes (a focus-regaining click, typed keys), which
+            // burned the ~1 s budget in microseconds and let the dialog
+            // paint while the main loop still drew and read.
+            let _ <- sleepIO 10;
             wait_ack store seq (tries + 1);
         }
     }

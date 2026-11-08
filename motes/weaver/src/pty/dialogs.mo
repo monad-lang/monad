@@ -72,11 +72,12 @@ def deny_go (m : Pty) (root : String) : IO Bool := do {
     let note := note_of root;
     let up <- Pty.wait_until m saw_alt 6000;
     Pty.send_text m "go\n";
+    // The whole dialog, not just its title: a frame can arrive in more than
+    // one read, and a snapshot taken on the title alone raced the options.
     let dlg <- Pty.wait_until m (fn (o : Output) =>
-        visible o "Permission required") 6000;
+        visible o "Permission required" && visible o "Approve once" && visible o "Deny") 6000;
     let o1 <- Pty.output m;
-    let a <- Check.report "permission dialog appears with its options"
-        (dlg && visible o1 "Approve once" && visible o1 "Deny");
+    let a <- Check.report "permission dialog appears with its options" dlg;
     let b <- Check.report "the dialog names the file it will write"
         (String.contains (Output.stripped o1) note);
     Pty.send_text m "e";

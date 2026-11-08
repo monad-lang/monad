@@ -31,6 +31,7 @@ use std::map {Map, BTreeMap}
 use weaver::tui_app {
     TuiApp.update, TuiApp.subscriptions, turn_never_ran, TuiApp.resume_rows, TuiApp.resume_option,
     TuiApp.resume_action_at, TuiApp.settings_options, activity_name, markdown_body_rows, TuiApp.render_message,
+    clipboard_cmd, persist_block_cmd,
     ResumeAction, ResumeChoice,
 }
 use weaver::commands {SessionPage, Commands.session_page}
@@ -534,6 +535,14 @@ def test_live_usage_updates_only_while_pending : Bool :=
 def cmd_is_inspect (c : Cmd WeaverMsg) : Bool :=
     match c { Cmd.inspect _ => true, _ => false }
 
+/// A command that writes no terminal cell must not be a `perform`: a
+/// perform forces a repaint from a blank model WITHOUT erasing, so cells
+/// that became plain spaces keep their old paint (the selection highlight
+/// left over the whitespace after a copy).
+#[test]
+def test_copy_and_block_writes_do_not_force_a_blank_repaint : Bool :=
+    cmd_is_inspect (clipboard_cmd "x") && cmd_is_inspect (persist_block_cmd store_st 0 List.empty)
+
 // A poll that sees a dialog's `want` marks the overlay open and stops
 // tick draws (modal).
 #[test]
@@ -554,6 +563,25 @@ def test_polled_close_repaints : Bool :=
             match TuiApp.update m1 (WeaverMsg.batch [WeaverMsg.overlay_polled (Option.some finished)]) {
                 Pair.pair m2 cmd =>
                     Bool.not m2.overlay_open && Bool.not m2.modal && m2.dialog_seq == 1 && cmd_is_perform_repaint cmd,
+            },
+    }
+
+// A close pays its own repaint at once; a repaint a batch dropped (the
+// flag still set) is paid by the next update, a tick included, and
+// leaves no debt behind.
+#[test]
+def test_dropped_close_repaint_comes_back : Bool :=
+    let opened : OverlayState := { want := true, ack := true, seq := 0 } in
+    let finished : OverlayState := { want := false, ack := false, seq := 1 } in
+    match TuiApp.update (enter_pending (model_of Mode.manual)) (WeaverMsg.overlay_polled (Option.some opened)) {
+        Pair.pair m1 _ =>
+            match TuiApp.update m1 (WeaverMsg.overlay_polled (Option.some finished)) {
+                Pair.pair m2 c2 =>
+                    let owed : TuiModel := { m2 with repaint_due := true } in
+                    let later : Bool := match TuiApp.update owed (WeaverMsg.key_event Event.tick) {
+                        Pair.pair m3 cmd => cmd_is_perform_repaint cmd && Bool.not m3.repaint_due,
+                    } in
+                    cmd_is_perform_repaint c2 && Bool.not m2.repaint_due && later,
             },
     }
 

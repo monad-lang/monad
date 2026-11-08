@@ -73,7 +73,7 @@ use weaver::process_tools {ReadProcessTool.impl_with}
 use weaver::stop {Stop.predicate, Stop.request, Stop.reset}
 use weaver::inbox {Inbox.post, Inbox.take, Inbox.seam, Inbox.with_notes}
 use weaver::overlay {
-    OverlayState, Overlay.read, Overlay.reset, Overlay.ack, Overlay.begin, Overlay.finish,
+    OverlayState, Overlay.read, Overlay.reset, Overlay.ack, Overlay.begin, Overlay.finish, Overlay.should_ack,
     Overlay.monitor_open, Overlay.monitor_close, Overlay.wait_monitor,
 }
 use weaver::commands {TranscriptChange}
@@ -166,7 +166,14 @@ def reads_input (m : TuiModel) : IO Bool := do {
         Option.none => m.overlay_open,
     };
     if want
-    then do { Overlay.ack m.state.store; IO.pure false }
+    then do {
+        // Ack only once the poll has folded the open (`overlay_open`, so
+        // `modal` already stops tick draws): an ack before that let one
+        // more spinner frame land on the dialog, in cells its own diff
+        // never repairs.
+        if Overlay.should_ack want m.overlay_open then Overlay.ack m.state.store else IO.pure unit;
+        IO.pure false
+    }
     else IO.pure true
 }
 
@@ -178,7 +185,25 @@ def reads_input (m : TuiModel) : IO Bool := do {
 pub def TuiApp.update (m : TuiModel) (msg : WeaverMsg) : Pair TuiModel (Cmd WeaverMsg) :=
     let step := update_msg m msg in
     match step {
-        Pair.pair m2 cmd => Pair.pair (Model.refresh_rows m2) cmd,
+        Pair.pair m2 cmd =>
+            if m2.repaint_due
+            then match with_due_repaint cmd {
+                Pair.pair paid c2 => Pair.pair (Model.refresh_rows { m2 with repaint_due := Bool.not paid }) c2,
+            }
+            else Pair.pair (Model.refresh_rows m2) cmd,
+    }
+
+/// A dialog close's repaint that a batch dropped is paid by the next
+/// update: no command becomes the repaint itself, and a `perform` or
+/// `inspect` (a tick's poll) clears the terminal before its own action and
+/// forces the repaint. `true` when the clear is now attached; a fork, a
+/// dispatch or a quit leave the debt to a later update.
+def with_due_repaint (cmd : Cmd WeaverMsg) : Pair Bool (Cmd WeaverMsg) :=
+    match cmd {
+        Cmd.none => Pair.pair true repaint_cmd,
+        Cmd.perform a => Pair.pair true (Cmd.perform (fn (u : Unit) => do { clear_terminal; a u })),
+        Cmd.inspect a => Pair.pair true (Cmd.perform (fn (u : Unit) => do { clear_terminal; a u })),
+        _ => Pair.pair false cmd,
     }
 
 #[partial]
@@ -214,6 +239,7 @@ def update_msg (m : TuiModel) (msg : WeaverMsg) : Pair TuiModel (Cmd WeaverMsg) 
         WeaverMsg.tasks_polled ts => tasks_step m ts,
         WeaverMsg.monitor_closed notes => monitor_closed_step m notes,
         WeaverMsg.batch msgs => batch_step m msgs,
+        WeaverMsg.repainted => Pair.pair { m with repaint_due := false } Cmd.none,
     }
 
 // ── persistence commands ─────────────────────────────────────────────────
@@ -254,10 +280,12 @@ def warning_of (r : Result String Unit) : Option String :=
         Result.ok _ => Option.none,
     }
 
-def persist_block_cmd (store : Option StoreState) (start : I64) (block : List TLine) : Cmd WeaverMsg :=
+/// An `inspect`: the write touches no terminal cell, and a `perform`
+/// would force a blank-model repaint with nothing erased (stale cells).
+pub def persist_block_cmd (store : Option StoreState) (start : I64) (block : List TLine) : Cmd WeaverMsg :=
     match store {
         Option.none => Cmd.none,
-        Option.some s => Cmd.perform (fn (_ : Unit) => do {
+        Option.some s => Cmd.inspect (fn (_ : Unit) => do {
             let r <- Store.append_transcript s.dir start block;
             IO.pure (WeaverMsg.store_result (warning_of r))
         }),
@@ -298,8 +326,11 @@ def record_turn_action (log : Option Logger) (s : StoreState) (run : RunState) (
     }
 }
 
+/// The dialog paints outside the frame pipeline, so the terminal is
+/// erased after it: the forced repaint that follows a perform assumes a
+/// blank screen.
 def plan_prompt_cmd (st : WeaverState) : Cmd WeaverMsg :=
-    Cmd.perform (fn (_ : Unit) => plan_approval_step st)
+    Cmd.perform (fn (_ : Unit) => after_clear (plan_approval_step st))
 
 def persist_turn_cmd (log : Option Logger) (store : Option StoreState) (run : RunState) (delta : List Message) (start : I64) (block : List TLine) (ready : Bool) (st : WeaverState) : Cmd WeaverMsg :=
     match store {
@@ -547,7 +578,7 @@ def overlay_step (m : TuiModel) (ov : Option OverlayState) : Pair TuiModel (Cmd 
                 else Pair.pair { m with overlay_open := true, modal := true } Cmd.none
             else if Bool.or m.overlay_open (Bool.not (s.seq == m.dialog_seq))
             then
-                let closed : TuiModel := { m with overlay_open := false, modal := false, dialog_seq := s.seq } in
+                let closed : TuiModel := { m with overlay_open := false, modal := false, dialog_seq := s.seq, repaint_due := true } in
                 Pair.pair closed repaint_cmd
             else Pair.pair m Cmd.none,
     }
@@ -588,7 +619,7 @@ def first_cmd (a : Cmd WeaverMsg) (b : Cmd WeaverMsg) : Cmd WeaverMsg :=
 def repaint_cmd : Cmd WeaverMsg :=
     Cmd.perform (fn (_ : Unit) => do {
         clear_terminal;
-        IO.pure (WeaverMsg.key_event Event.tick)
+        IO.pure WeaverMsg.repainted
     })
 
 def command_result_step (m : TuiModel) (effect : Effect) : Pair TuiModel (Cmd WeaverMsg) :=
@@ -750,9 +781,13 @@ def pane_only (m : TuiModel) (msg : PaneMsg) : TuiModel :=
         Pair.pair m2 _ => m2,
     }
 
-/// The OSC 52 copy command; the forced repaint also clears the highlight.
-def clipboard_cmd (t : String) : Cmd WeaverMsg :=
-    Cmd.perform (fn (_ : Unit) => do {
+/// The OSC 52 copy command. An `inspect`, not a `perform`: a perform
+/// forces a repaint from a BLANK model without erasing the terminal, so
+/// the de-highlighted cells that become plain spaces were never rewritten
+/// and the selection stayed painted over the whitespace. The release
+/// already dirtied the frame; the ordinary diff clears the highlight.
+pub def clipboard_cmd (t : String) : Cmd WeaverMsg :=
+    Cmd.inspect (fn (_ : Unit) => do {
         Clipboard.copy t;
         IO.pure (WeaverMsg.key_event Event.tick)
     })
