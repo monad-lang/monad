@@ -65,6 +65,64 @@ pub def Policy.decide (cap : Capability) (mode : Mode) (a : Assessment) : Decisi
             },
     }
 
+// ── Auto mode's classifier ──────────────────────────────────────────────
+
+/// A classifier model's reading of one pick (`classify.mo` asks for it).
+pub type Verdict {
+    safe,
+    dangerous (reason : String),
+}
+
+/// What auto mode does with a `dangerous` verdict: refuse it (the model
+/// reads the reason and adapts; the default) or ask the human. The
+/// constructor names are distinct on purpose: a nullary `deny` beside
+/// shuttle's `Approval.deny (reason)` is the shared-name match miscompile
+/// (`plans/implementations/2026-11-05-shared-ctor-name-match-miscompile.md`)
+/// on every nightly without the fix.
+pub type AutoDanger {
+    refuse_it,
+    ask_human,
+}
+
+pub def AutoDanger.parse (s : String) : Option AutoDanger :=
+    if s == "deny" then Option.some AutoDanger.refuse_it
+    else if s == "ask" then Option.some AutoDanger.ask_human
+    else Option.none
+
+pub def AutoDanger.show (d : AutoDanger) : String :=
+    match d {
+        AutoDanger.refuse_it => "deny",
+        AutoDanger.ask_human => "ask",
+    }
+
+/// The picks auto mode classifies: running code, the network, and a write
+/// outside the workspace. Reads and in-workspace writes need no verdict.
+pub def Policy.classified (cap : Capability) (a : Assessment) : Bool :=
+    match cap {
+        Capability.exec => true,
+        Capability.net => true,
+        Capability.write => match a.outside_write { Option.some _ => true, Option.none => false },
+        Capability.read => false,
+    }
+
+/// Auto mode with a verdict. `safe` runs, even a pick the static scanner
+/// flagged (its flag was in the classifier's prompt); `dangerous` is
+/// refused or asked per `on_danger`; no verdict (the call failed or timed
+/// out) falls back to the static rule, so a failure is never less safe
+/// than auto mode without a classifier. Every cell is pinned by
+/// `tests/policy_tests.mo`.
+pub def Policy.decide_auto (cap : Capability) (a : Assessment) (v : Option Verdict) (on_danger : AutoDanger) : Decision :=
+    match v {
+        Option.some verdict => match verdict {
+            Verdict.safe => Decision.allow,
+            Verdict.dangerous reason => match on_danger {
+                AutoDanger.refuse_it => Decision.refuse (String.concat "auto mode: the classifier blocked this: " reason),
+                AutoDanger.ask_human => Decision.ask,
+            },
+        },
+        Option.none => Policy.decide cap Mode.auto a,
+    }
+
 // ── The mode state machine ──────────────────────────────────────────────
 
 /// The `/mode` vocabulary: what the user types is what `Mode.show`

@@ -46,7 +46,7 @@ use weaver::store {
 }
 use weaver::theme {theme_split_lines}
 use weaver::dumb {Dumb.run, Dumb.poll_sleep}
-use weaver::policy {Mode}
+use weaver::policy {Mode, AutoDanger, AutoDanger.parse, Verdict}
 use weaver::providers {
     Weaver.preset, Weaver.provider_of, Weaver.default_max_tokens,
     Weaver.default_max_turns, Weaver.default_window,
@@ -405,7 +405,7 @@ def initial_state (p : Plan) (reg : ToolRegistry) (s : Settings) (colors : Bool)
     let left : I64 := if p.max_turns - session.turns < 0 then 0 else p.max_turns - session.turns in
     let run : RunState := { session := session, reg := reg, turns_left := left, emit := stdout_write, gate := Gate.auto, always := List.empty, retries := 3, sleep_ms := Dumb.poll_sleep, on_usage := silent_usage, should_stop := silent_stop, inbox := silent_inbox, side_spend := silent_side_spend, stopped := false } in
     let prov : String := Weaver.provider_of p.provider session.config in
-    let st : WeaverState := { run := run, mode := initial_mode s, provider := prov, budget := p.max_turns, context_window := p.context_window, compact_at := p.compact_at, plan := Option.none, last_context := 0, grants := grants, place := place, mcps := p.mcps, keys := s.api_keys, catalog := BTreeMap.empty, quit := false, colors := colors, fatal := Option.none, name := Option.none, trusted := p.trusted, instructions := p.instructions, instr_seen := Option.none, store := store } in
+    let st : WeaverState := { run := run, mode := initial_mode s, provider := prov, budget := p.max_turns, context_window := p.context_window, compact_at := p.compact_at, plan := Option.none, last_context := 0, grants := grants, place := place, mcps := p.mcps, keys := s.api_keys, catalog := BTreeMap.empty, quit := false, colors := colors, fatal := Option.none, name := Option.none, trusted := p.trusted, instructions := p.instructions, instr_seen := Option.none, store := store, auto_on_danger := auto_on_danger_of s, verdicts := Option.none } in
     st
 
 /// The mode the session starts in: the settings' `mode` key when it parses,
@@ -602,16 +602,29 @@ def stored_plan (store : Option StoreState) : IO (Option String) :=
         Option.some s => Store.read_plan s.dir,
     }
 
+/// The configured answer to a dangerous verdict; deny when unset or
+/// unrecognized.
+def auto_on_danger_of (s : Settings) : AutoDanger :=
+    match s.auto_on_danger {
+        Option.none => AutoDanger.refuse_it,
+        Option.some v => match AutoDanger.parse v {
+            Option.some d => d,
+            Option.none => AutoDanger.refuse_it,
+        },
+    }
+
 def run_opened (setup : LogSetup) (colors : Bool) (p : Plan) (s : Settings) (place : Option SessionPlace) (reg : ToolRegistry) (servers : List McpServer) (o : OpenedSession) : IO I64 := do {
     let o2 : OpenedSession := with_crash_note setup.crash o;
     let empty_grants : List PermGrant := List.empty;
     let grants <- Ref.new empty_grants;
+    let no_verdicts : BTreeMap String Verdict := BTreeMap.empty;
+    let verdicts <- Ref.new no_verdicts;
     let instr_seen <- Ref.new p.instructions;
     let plan <- stored_plan o.store;
     let st0 : WeaverState := initial_state p reg s colors o.store o.session (Option.some grants) place;
     let st1 : WeaverState := Commands.set_plan st0 plan;
     let name <- Commands.session_name st1;
-    let st : WeaverState := { st1 with name := name, instr_seen := Option.some instr_seen };
+    let st : WeaverState := { st1 with name := name, instr_seen := Option.some instr_seen, verdicts := Option.some verdicts };
     let _ <- Logs.info setup.log (String.concat "ev=session_open session=" (session_label o));
     let tr0 <- startup_transcript o2;
     let ran_tui <- Tui.run_resumed setup.log st tr0;

@@ -24,6 +24,7 @@ use weaver::commands {
     Commands.context_used, Commands.context_percent,
 }
 use weaver::gate {Gate.weaver}
+use weaver::classify {AutoCtx, Classify.intent}
 use weaver::policy {Mode, Mode.show, Mode.warns_auto}
 use weaver::error {WeaverError, WeaverError.show, WeaverError.recoverable, WeaverError.of_shuttle}
 use weaver::store {StoreState, Store.record_history, Store.write_plan}
@@ -330,7 +331,7 @@ def drive_spending (read : Unit -> IO (Option String)) (write : String -> IO Uni
         (ToolRegistry.register (TodoTool.impl st.store)
             (ToolRegistry.register (Subagent.task_tool base.session.config st.instructions Option.none Option.none silent_stop spend) base.reg)),
         side_spend := Subagent.drain spend };
-    let gated : RunState := gate_for st read (theme_write write st.colors) with_task;
+    let gated : RunState := gate_for st text read (theme_write write st.colors) with_task;
     let ready : RunState := append_user gated text;
     drive_loop ready
 }
@@ -359,8 +360,15 @@ def shuttle_result (r : Result String (Pair RunState Unit)) : Result WeaverError
 def run_of_pair (p : Pair RunState Unit) : RunState :=
     match p { Pair.pair r _ => r }
 
-def gate_for (st : WeaverState) (read : Unit -> IO (Option String)) (write : String -> IO Unit) (run : RunState) : RunState :=
-    let r2 : RunState := { run with gate := Gate.weaver st.mode st.grants (Place.cwd_of st.place) read write } in
+def gate_for (st : WeaverState) (line : String) (read : Unit -> IO (Option String)) (write : String -> IO Unit) (run : RunState) : RunState :=
+    let ctx : AutoCtx := {
+        cfg := st.run.session.config,
+        intent := Classify.intent st.run.session.history line,
+        cache := st.verdicts,
+        log := Option.none,
+        on_danger := st.auto_on_danger,
+    } in
+    let r2 : RunState := { run with gate := Gate.weaver st.mode st.grants (Place.cwd_of st.place) (Option.some ctx) read write } in
     r2
 
 def append_user (run : RunState) (text : String) : RunState :=

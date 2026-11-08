@@ -120,7 +120,7 @@ def no_read (_ : Unit) : IO (Option String) := IO.pure Option.none
 def no_write (_ : String) : IO Unit := IO.pure unit
 
 def precheck_of (mode : Mode) (grants : Option (Ref (List PermGrant))) (root : Option Path) (p : Pick) : IO (Option Approval) := do {
-    let g : Gate := Gate.weaver mode grants root no_read no_write;
+    let g : Gate := Gate.weaver mode grants root Option.none no_read no_write;
     let check : Pick -> IO (Option Approval) := g.precheck;
     let r <- check p;
     return r
@@ -238,7 +238,7 @@ def test_grants_never_cover_a_flagged_command : IO Bool := do {
 def test_auto_mode_holds_a_flagged_command_for_the_prompt : IO Bool := do {
     let empty_grants : List PermGrant := List.empty;
     let r <- Ref.new empty_grants;
-    let g : Gate := Gate.weaver Mode.auto (Option.some r) (Option.some (Path.path "/repo")) no_read no_write;
+    let g : Gate := Gate.weaver Mode.auto (Option.some r) (Option.some (Path.path "/repo")) Option.none no_read no_write;
     let ask : Pick -> IO Approval := g.ask;
     let plain <- ask (shell_pick "ls src");
     let flagged <- ask (shell_pick "rm -rf /");

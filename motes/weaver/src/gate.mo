@@ -19,7 +19,8 @@
 /// scripted pair -- the gate is testable without a tty, the same
 /// discipline as the mock wire.
 use shuttle::gate {Capability, Pick, Approval, Gate}
-use weaver::policy {Mode, Decision, Policy.decide, Policy.unguarded}
+use weaver::policy {Mode, Decision, Policy.decide, Policy.unguarded, Policy.classified}
+use weaver::classify {AutoCtx, Classify.decide}
 use weaver::diff {Diff.for_input, Diff.render}
 use weaver::permissions {
     PermGrant, PermScope, Permissions.matches, Permissions.get,
@@ -60,22 +61,71 @@ pub def cap_name (c : Capability) : String :=
 /// point it is passed (the compiled backend's `RawIO.io` is a strict
 /// box), so every approval would read the SAME line. The function form
 /// re-reads per ask.
-pub def Gate.weaver (mode : Mode) (grants : Option (Ref (List PermGrant))) (root : Option Path) (read : Unit -> IO (Option String)) (write : String -> IO Unit) : Gate :=
+pub def Gate.weaver (mode : Mode) (grants : Option (Ref (List PermGrant))) (root : Option Path) (auto : Option AutoCtx) (read : Unit -> IO (Option String)) (write : String -> IO Unit) : Gate :=
     let g : Gate := {
-        ask := weaver_ask mode grants root read write,
-        precheck := weaver_precheck mode grants root write,
+        ask := weaver_ask mode grants root auto read write,
+        precheck := weaver_precheck mode grants root auto write,
     } in
     g
+
+// ── auto mode's classifier at the gate ──────────────────────────────────
+
+/// The classifier context when this pick takes the classifier path: auto
+/// mode, a context, and a pick the classifier judges (`Policy.classified`).
+pub def Gate.auto_for (mode : Mode) (auto : Option AutoCtx) (cap : Capability) (a : Assessment) : Option AutoCtx :=
+    match mode {
+        Mode.auto => if Policy.classified cap a then auto else Option.none,
+        _ => Option.none,
+    }
+
+/// The classifier's precheck: a grant still covers the pick without a
+/// call; otherwise the verdict decides, and `ask` falls to the gate's ask
+/// (which reads the same verdict from the cache).
+pub def Gate.auto_precheck (ctx : AutoCtx) (grants : Option (Ref (List PermGrant))) (root : Option Path) (a : Assessment) (p : Pick) : IO (Option Approval) := do {
+    let gs <- Permissions.get grants;
+    if Gate.granted gs p.cap a
+    then IO.pure (Option.some Approval.once)
+    else do {
+        let d <- Classify.decide ctx root p a;
+        match d {
+            Decision.allow => IO.pure (Option.some Approval.once),
+            Decision.refuse reason => IO.pure (Option.some (Approval.deny reason)),
+            Decision.ask => IO.pure Option.none,
+        }
+    }
+}
 
 /// The policy half runs on EVERY pick, cached capability or not: a grant
 /// in manual mode must not let a later plan mode run writes, and a
 /// repo-scoped grant must not cover a pick outside the root. A refusal
 /// is also visible to the human (the line-based UI would otherwise stay
 /// silent about why nothing ran).
-def weaver_precheck (mode : Mode) (grants : Option (Ref (List PermGrant))) (root : Option Path) (write : String -> IO Unit) (p : Pick) : IO (Option Approval) :=
+def weaver_precheck (mode : Mode) (grants : Option (Ref (List PermGrant))) (root : Option Path) (auto : Option AutoCtx) (write : String -> IO Unit) (p : Pick) : IO (Option Approval) :=
     let a : Assessment := Assess.pick root p in
     if Policy.unguarded p.name then IO.pure (Option.some Approval.once)
-    else match Policy.decide p.cap mode a {
+    else match Gate.auto_for mode auto p.cap a {
+        Option.some ctx => auto_precheck_told ctx grants root write a p,
+        Option.none => static_precheck mode grants root write a p,
+    }
+
+/// The line UI says why the classifier refused, as it does for a policy
+/// refusal.
+def auto_precheck_told (ctx : AutoCtx) (grants : Option (Ref (List PermGrant))) (root : Option Path) (write : String -> IO Unit) (a : Assessment) (p : Pick) : IO (Option Approval) := do {
+    let r <- Gate.auto_precheck ctx grants root a p;
+    match r {
+        Option.some ap => match ap {
+            Approval.deny reason => do {
+                let _ <- write (String.concat "refused: " (String.concat reason "\n"));
+                IO.pure r
+            },
+            _ => IO.pure r,
+        },
+        Option.none => IO.pure r,
+    }
+}
+
+def static_precheck (mode : Mode) (grants : Option (Ref (List PermGrant))) (root : Option Path) (write : String -> IO Unit) (a : Assessment) (p : Pick) : IO (Option Approval) :=
+    match Policy.decide p.cap mode a {
         Decision.refuse reason => do {
             let _ <- write (String.concat "refused: " (String.concat reason "\n"));
             IO.pure (Option.some (Approval.deny reason))
@@ -89,12 +139,22 @@ def weaver_precheck (mode : Mode) (grants : Option (Ref (List PermGrant))) (root
         Decision.allow => IO.pure Option.none,
     }
 
-def weaver_ask (mode : Mode) (grants : Option (Ref (List PermGrant))) (root : Option Path) (read : Unit -> IO (Option String)) (write : String -> IO Unit) (p : Pick) : IO Approval :=
-    let a : Assessment := Assess.pick root p in
-    match Policy.decide p.cap mode a {
+def weaver_ask (mode : Mode) (grants : Option (Ref (List PermGrant))) (root : Option Path) (auto : Option AutoCtx) (read : Unit -> IO (Option String)) (write : String -> IO Unit) (p : Pick) : IO Approval := do {
+    let a : Assessment := Assess.pick root p;
+    let d <- Gate.decision mode auto root a p;
+    match d {
         Decision.allow => IO.pure Approval.once,
         Decision.ask => prompt_pick grants root a read write p,
         Decision.refuse reason => refused write reason,
+    }
+}
+
+/// The ask's decision: the classifier's for an auto-mode classified pick
+/// (cached from the precheck), the static policy's otherwise.
+pub def Gate.decision (mode : Mode) (auto : Option AutoCtx) (root : Option Path) (a : Assessment) (p : Pick) : IO Decision :=
+    match Gate.auto_for mode auto p.cap a {
+        Option.some ctx => Classify.decide ctx root p a,
+        Option.none => IO.pure (Policy.decide p.cap mode a),
     }
 
 /// A policy refusal is visible to the HUMAN too, not only to the

@@ -32,7 +32,7 @@ use shuttle::agent {RunState}
 use shuttle::context {usage_zero}
 use shuttle::tool {ToolSpec}
 use shuttle::gate {Capability}
-use weaver::policy {Mode, Mode.show, Mode.parse, Mode.approve_plan}
+use weaver::policy {Mode, Mode.show, Mode.parse, Mode.approve_plan, AutoDanger, AutoDanger.parse, AutoDanger.show, Verdict}
 use weaver::gate {cap_name}
 use weaver::providers {Weaver.preset, Weaver.config_for, Weaver.preferred_model, Weaver.model_for, Weaver.provider_of}
 use weaver::catalog {Catalog.fetch, Catalog.lookup, Catalog.remember, Catalog.render, Catalog.note}
@@ -122,6 +122,10 @@ pub struct WeaverState {
     /// The active session directory, when persistence is available; none
     /// degrades to the pre-store in-memory behaviour.
     store : Option StoreState,
+    /// Auto mode's answer to a dangerous verdict (`auto_on_danger`).
+    auto_on_danger : AutoDanger := AutoDanger.refuse_it,
+    /// Auto mode's verdicts, keyed per pick and intent (`classify.mo`).
+    verdicts : Option (Ref (BTreeMap String Verdict)) := Option.none,
 }
 
 /// What a command did to the transcript: ordinary output appends,
@@ -1286,7 +1290,8 @@ pub def Commands.setting_rows (st : WeaverState) : List SettingRow :=
     let r3 : SettingRow := { key := "max_turns", label := "Turn budget", value := I64.to_string st.budget, kind := SettingKind.setting_number } in
     let r4 : SettingRow := { key := "context_window", label := "Context window", value := I64.to_string st.context_window, kind := SettingKind.setting_number } in
     let r5 : SettingRow := { key := "compact_at", label := "Autocompact at (%)", value := I64.to_string st.compact_at, kind := SettingKind.setting_number } in
-    [r0, r1, r2, r3, r4, r5]
+    let r6 : SettingRow := { key := "auto_on_danger", label := "Auto mode on a dangerous verdict", value := AutoDanger.show st.auto_on_danger, kind := SettingKind.setting_cycle } in
+    [r0, r1, r2, r3, r4, r5, r6]
 
 /// Apply one setting by name. A value the knob rejects is an ordinary
 /// command-output error (the session stays as it was).
@@ -1331,8 +1336,15 @@ pub def Commands.apply_setting (st : WeaverState) (key : String) (value : String
             if Bool.or (I64.lt n 0) (I64.gt n 100) then Result.err "compact_at must be 0..100"
             else Result.ok (Pair.pair (set_compact_at st n) (String.concat "compact_at: " (String.concat (I64.to_string n) "%"))),
     }
+    else if key == "auto_on_danger"
+    then match AutoDanger.parse (String.trim value) {
+        Option.none => Result.err "auto_on_danger: deny | ask",
+        Option.some d =>
+            let st2 : WeaverState := { st with auto_on_danger := d } in
+            Result.ok (Pair.pair st2 (String.concat "auto_on_danger: " (AutoDanger.show d))),
+    }
     else Result.err (String.concat "unknown setting: "
-        (String.concat key " (mode | thinking | max_tokens | max_turns | context_window | compact_at)"))
+        (String.concat key " (mode | thinking | max_tokens | max_turns | context_window | compact_at | auto_on_danger)"))
 
 /// Step a cycling setting (mode, thinking) to its next value: the
 /// dialog's Enter on those rows. Number settings are typed instead.
@@ -1341,6 +1353,8 @@ pub def Commands.cycle_setting (st : WeaverState) (key : String) : Result String
     then Commands.apply_setting st key (Mode.show (Mode.cycle st.mode))
     else if key == "thinking"
     then Commands.apply_setting st key (if st.run.session.config.thinking then "off" else "on")
+    else if key == "auto_on_danger"
+    then Commands.apply_setting st key (match st.auto_on_danger { AutoDanger.refuse_it => "ask", AutoDanger.ask_human => "deny" })
     else Result.err (String.concat "not a cycling setting: " key)
 
 def settings_update (st : WeaverState) : SettingsUpdate :=
@@ -1354,6 +1368,7 @@ def settings_update (st : WeaverState) : SettingsUpdate :=
         max_tokens := Option.some cfg.max_tokens,
         context_window := Option.some st.context_window,
         compact_at := Option.some st.compact_at,
+        auto_on_danger := Option.some (AutoDanger.show st.auto_on_danger),
     } in
     u
 

@@ -23,6 +23,7 @@ use shuttle::message {Message, Usage}
 use shuttle::provider {ProviderConfig}
 use weaver::side {Side.wanted, Side.btw_question, Side.fullscreen}
 use weaver::btw {Btw.ask}
+use weaver::classify {AutoCtx, Classify.intent}
 use shuttle::message_types {Role, Content}
 use weaver::usage {UsageTracker.start, UsageTracker.silent, UsageTracker.last}
 use std::ref {Ref, Ref.new, Ref.get, Ref.set}
@@ -35,7 +36,7 @@ use weaver::commands {
 }
 use log::logger {Logger}
 use weaver::policy {Mode, Mode.show, Mode.cycle, Policy.decide, Policy.unguarded, Decision}
-use weaver::gate {pick_header, pick_target, cap_name, capped_diff, PickAnswer, record_answer, answer_approval, Gate.assessment_lines, Gate.granted}
+use weaver::gate {pick_header, pick_target, cap_name, capped_diff, PickAnswer, record_answer, answer_approval, Gate.assessment_lines, Gate.granted, Gate.auto_for, Gate.auto_precheck, Gate.decision}
 use weaver::permissions {PermGrant, Permissions.get, Permissions.render}
 use weaver::assess {Assessment, Reach.is_inside, Assess.pick}
 use weaver::diff {Diff.for_input, Diff.lines}
@@ -1530,7 +1531,7 @@ def drive_tui (log : Option Logger) (gen : I64) (st : WeaverState) (text : Strin
             (ToolRegistry.register (WeaverShell.impl log stop (WeaverShell.fg_path st.store))
                 (ToolRegistry.register (ReadProcessTool.impl_with stop)
                     (ToolRegistry.register (Subagent.task_tool st.run.session.config st.instructions log st.store stop spend) st.run.reg)))) };
-    let gated : RunState := { with_task with gate := Gate.weaver_tui log st.mode st.colors st.store st.grants (Place.cwd_of st.place),
+    let gated : RunState := { with_task with gate := Gate.weaver_tui log st.mode st.colors st.store st.grants (Place.cwd_of st.place) (auto_ctx log st text),
         emit := progress_live log st.store, on_usage := on_usage,
         should_stop := stop, inbox := Inbox.seam st.store, side_spend := Subagent.drain spend, stopped := false };
     let ready : RunState := append_user gated text;
@@ -1728,16 +1729,22 @@ def list_msg_length (xs : List Message) : I64 :=
 /// read for `y`/`n`/`a`. `mode` is the only parameter -- same shape as
 /// `Gate.weaver`, minus the read/write seams dumb mode needs and this
 /// does not (it owns its own screen and its own stdin read).
-pub def Gate.weaver_tui (log : Option Logger) (mode : Mode) (colors : Bool) (store : Option StoreState) (grants : Option (Ref (List PermGrant))) (root : Option Path) : Gate :=
+pub def Gate.weaver_tui (log : Option Logger) (mode : Mode) (colors : Bool) (store : Option StoreState) (grants : Option (Ref (List PermGrant))) (root : Option Path) (auto : Option AutoCtx) : Gate :=
     {
-        ask := weaver_tui_ask log mode colors store grants root,
-        precheck := weaver_tui_precheck mode grants root,
+        ask := weaver_tui_ask log mode colors store grants root auto,
+        precheck := weaver_tui_precheck mode grants root auto,
     }
 
-def weaver_tui_precheck (mode : Mode) (grants : Option (Ref (List PermGrant))) (root : Option Path) (p : Pick) : IO (Option Approval) :=
+def weaver_tui_precheck (mode : Mode) (grants : Option (Ref (List PermGrant))) (root : Option Path) (auto : Option AutoCtx) (p : Pick) : IO (Option Approval) :=
     let a : Assessment := Assess.pick root p in
     if Policy.unguarded p.name then IO.pure (Option.some Approval.once)
-    else match Policy.decide p.cap mode a {
+    else match Gate.auto_for mode auto p.cap a {
+        Option.some ctx => Gate.auto_precheck ctx grants root a p,
+        Option.none => tui_static_precheck mode grants a p,
+    }
+
+def tui_static_precheck (mode : Mode) (grants : Option (Ref (List PermGrant))) (a : Assessment) (p : Pick) : IO (Option Approval) :=
+    match Policy.decide p.cap mode a {
         Decision.refuse reason => IO.pure (Option.some (Approval.deny reason)),
         Decision.ask => do {
             let gs <- Permissions.get grants;
@@ -1748,9 +1755,10 @@ def weaver_tui_precheck (mode : Mode) (grants : Option (Ref (List PermGrant))) (
         Decision.allow => IO.pure Option.none,
     }
 
-def weaver_tui_ask (log : Option Logger) (mode : Mode) (colors : Bool) (store : Option StoreState) (grants : Option (Ref (List PermGrant))) (root : Option Path) (p : Pick) : IO Approval :=
-    let a : Assessment := Assess.pick root p in
-    match Policy.decide p.cap mode a {
+def weaver_tui_ask (log : Option Logger) (mode : Mode) (colors : Bool) (store : Option StoreState) (grants : Option (Ref (List PermGrant))) (root : Option Path) (auto : Option AutoCtx) (p : Pick) : IO Approval := do {
+    let a : Assessment := Assess.pick root p;
+    let d <- Gate.decision mode auto root a p;
+    match d {
         Decision.allow => IO.pure Approval.once,
         Decision.ask => do {
             let _ <- log_danger log p a;
@@ -1758,6 +1766,19 @@ def weaver_tui_ask (log : Option Logger) (mode : Mode) (colors : Bool) (store : 
         },
         Decision.refuse reason => IO.pure (Approval.deny reason),
     }
+}
+
+/// The classifier's context for a turn: the session's provider, the
+/// user's words with this turn's line, and the session's verdict cache.
+pub def auto_ctx (log : Option Logger) (st : WeaverState) (line : String) : Option AutoCtx :=
+    let ctx : AutoCtx := {
+        cfg := st.run.session.config,
+        intent := Classify.intent st.run.session.history line,
+        cache := st.verdicts,
+        log := log,
+        on_danger := st.auto_on_danger,
+    } in
+    Option.some ctx
 
 def log_danger (log : Option Logger) (p : Pick) (a : Assessment) : IO Unit :=
     match a.danger {

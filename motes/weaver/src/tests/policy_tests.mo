@@ -3,7 +3,7 @@
 /// transitions pinned, the `auto` warning flag pinned. All pure, no
 /// I/O -- the point of the decision table being a function.
 use weaver::policy {
-    Mode, Decision, Policy.decide,
+    Mode, Decision, Policy.decide, Policy.decide_auto, Policy.classified, Verdict, AutoDanger,
     Mode.parse, Mode.approve_plan, Mode.warns_auto, Mode.show, Mode.cycle,
 }
 use shuttle::gate {Capability}
@@ -170,3 +170,36 @@ def mode_opt_eq (a : Option Mode) (b : Option Mode) : Bool :=
 
 def roundtrip (m : Mode) : Bool :=
     mode_opt_eq (Mode.parse (Mode.show m)) (Option.some m)
+
+// ── auto mode with a classifier verdict ─────────────────────────────────
+
+def flagged : Assessment :=
+    let a : Assessment := { scope := Reach.inside, danger := Option.some "deletes files", outside_write := Option.none } in
+    a
+
+def outside_write : Assessment :=
+    let a : Assessment := { scope := Reach.unknown, danger := Option.none, outside_write := Option.some "writes outside the workspace: /etc/x" } in
+    a
+
+def auto_cell (cap : Capability) (a : Assessment) (v : Option Verdict) (d : AutoDanger) (expected : Decision) : Bool :=
+    decision_eq (Policy.decide_auto cap a v d) expected
+
+/// Every verdict cell: safe runs (flagged or not), dangerous refuses with
+/// the reason or asks, and no verdict is the static auto rule.
+#[test]
+def test_decide_auto_every_cell : Bool :=
+    let r : String := "auto mode: the classifier blocked this: pushes" in
+    auto_cell Capability.exec plain (Option.some Verdict.safe) AutoDanger.refuse_it Decision.allow
+        && auto_cell Capability.exec flagged (Option.some Verdict.safe) AutoDanger.refuse_it Decision.allow
+        && auto_cell Capability.exec plain (Option.some (Verdict.dangerous "pushes")) AutoDanger.refuse_it (Decision.refuse r)
+        && auto_cell Capability.exec plain (Option.some (Verdict.dangerous "pushes")) AutoDanger.ask_human Decision.ask
+        && auto_cell Capability.exec plain Option.none AutoDanger.refuse_it Decision.allow
+        && auto_cell Capability.exec flagged Option.none AutoDanger.refuse_it Decision.ask
+        && auto_cell Capability.write outside_write Option.none AutoDanger.refuse_it Decision.ask
+
+/// What the classifier judges: code, the network, and an outside write.
+#[test]
+def test_classified_picks : Bool :=
+    Policy.classified Capability.exec plain && Policy.classified Capability.net plain
+        && Policy.classified Capability.write outside_write
+        && Bool.not (Policy.classified Capability.write plain) && Bool.not (Policy.classified Capability.read plain)
