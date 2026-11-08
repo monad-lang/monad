@@ -13,6 +13,7 @@
 /// `constructor_tag` in `emit` for the three key shapes it uses.
 use llvm::strmap {str_map_empty, str_map_insert, str_map_lookup}
 use std::list {List.length}
+use lib::ownership {DropBinding, DropPlan, OwnershipTables}
 use lang::types {
     DebugName, Def, Identifier, Inductive, Location, ModulePath, Param, Struct, Term,
     binder_is_explicit, binder_name, param_many, term_peel,
@@ -81,6 +82,21 @@ pub struct CodegenCtx {
     /// name (`resolve_call_name`), so Monad calls reach the wrapper while
     /// the wrapper's inner call reaches the real C symbol.
     extern_wrappers : HashMap String String,
+    /// The whole-program ownership verdict, or `none` in the default build.
+    /// Every constructor allocation site and drop decision consults this one
+    /// table, so the two halves of the analysis cannot disagree (I2).
+    ownership : Option OwnershipTables,
+    /// The def currently being compiled, when ownership is on. Bind sites
+    /// consult it by binder name; `none` inside a lifted lambda (a separate
+    /// function, whose binders are not the def's).
+    drop_plan : Option DropPlan,
+    /// 0 in straight-line code, > 0 inside an if/match/io-bind arm. Only
+    /// entry-block-dominating bindings may be dropped at a def exit, so a
+    /// branch-scoped bind never gets a drop.
+    branch_depth : I64,
+    /// Values eligible for a drop at every reachable exit of the current
+    /// function, innermost first.
+    drops : List DropBinding,
 }
 
 pub struct CtxStrPair {
@@ -130,7 +146,30 @@ def resolve_call_name (c : CodegenCtx) (llvm_name : String) : String :=
 /// correct only for genuinely 0-arity defs).
 #[partial]
 def empty_ctx (arities : HashMap String I64) (ctor_tags : HashMap String I64) (ctor_arities : HashMap String I64) (extern_wrappers : HashMap String String) (type_levels : HashMap String I64) : CodegenCtx :=
-    { locals := List.empty, next_temp := 0, next_label := 0, arities := arities, ctor_tags := ctor_tags, ctor_arities := ctor_arities, current_loc := Option.none, extern_wrappers := extern_wrappers, type_levels := type_levels }
+    { locals := List.empty, next_temp := 0, next_label := 0, arities := arities, ctor_tags := ctor_tags, ctor_arities := ctor_arities, current_loc := Option.none, extern_wrappers := extern_wrappers, type_levels := type_levels, ownership := Option.none, drop_plan := Option.none, branch_depth := 0, drops := List.empty }
+
+/// Turn ownership on for a module compile. The caller
+/// (`compile_loaded_modules_to_ir_with_debug`) computes the tables once for
+/// the whole program.
+#[partial]
+def ctx_with_ownership (c : CodegenCtx) (t : OwnershipTables) : CodegenCtx :=
+    { c with ownership := Option.some t }
+
+/// Bind a local whose value the current def's plan says to drop at exit.
+#[partial]
+def ctx_bind_local_drop (c : CodegenCtx) (name : Identifier) (val : LLVMValue) (drop_fn : String) : CodegenCtx :=
+    let binding : LocalBinding := LocalBinding.mk name val in
+    let d : DropBinding := DropBinding.mk name val drop_fn in
+    { c with locals := List.cons binding c.locals, drops := List.cons d c.drops }
+
+/// Enter an if/match/io-bind arm: a binding made here is not guaranteed to
+/// dominate the function's exits, so it never gets a drop in v1.
+#[partial]
+def ctx_enter_branch (c : CodegenCtx) : CodegenCtx := { c with branch_depth := c.branch_depth + 1 }
+
+/// Leave a branch, restoring the depth the enclosing expression had.
+#[partial]
+def ctx_leave_branch (c : CodegenCtx) (depth : I64) : CodegenCtx := { c with branch_depth := depth }
 
 /// Convert a captured source position to the minimal
 /// `llvm.ir.DbgLoc` shape `LLVMFunction.dbg_loc` expects.
@@ -189,7 +228,8 @@ def ctx_lookup_ctor_arity (c : CodegenCtx) (name : String) : Option I64 := str_m
 /// for). Only the lambda's own param and its explicitly rebuilt
 /// captures (`build_get_env_instrs`) should be visible inside.
 #[partial]
-def ctx_reset_locals (c : CodegenCtx) : CodegenCtx := { c with locals := List.empty }
+def ctx_reset_locals (c : CodegenCtx) : CodegenCtx :=
+    { c with locals := List.empty, drops := List.empty, drop_plan := Option.none, branch_depth := 0 }
 
 /// The other half of `ctx_reset_locals`: after compiling a lifted
 /// function's own body (`compile_db_lam_ir`) with a reset-and-rebuilt
@@ -213,7 +253,8 @@ def ctx_reset_locals (c : CodegenCtx) : CodegenCtx := { c with locals := List.em
 /// instead and silently miscompiles into a bogus 0-arg call
 /// (`call i64 @n()`, `llc: use of undefined value '@n'`).
 #[partial]
-def ctx_restore_locals (outer : CodegenCtx) (inner : CodegenCtx) : CodegenCtx := { inner with locals := outer.locals }
+def ctx_restore_locals (outer : CodegenCtx) (inner : CodegenCtx) : CodegenCtx :=
+    { inner with locals := outer.locals, drops := outer.drops, drop_plan := outer.drop_plan, branch_depth := outer.branch_depth }
 
 /// Looks up a global's own known arity by its already-mangled
 /// `llvm_name` (see `CodegenCtx.arities`'s doc comment). `Option.none`

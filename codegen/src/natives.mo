@@ -752,7 +752,12 @@ def mk_decl (name : String) (params : List String) (ret_ty : String) : LLVMDecla
 /// wasm (wasm-ld checks signatures; native llc tolerates the historical
 /// `void` mismatch).
 #[partial]
+/// The default build's declaration list: ownership declarations omitted,
+/// so its IR stays byte-identical to the pre-ownership compiler.
 pub def runtime_declarations_for (kind : TargetKind) : List LLVMDeclaration :=
+    runtime_declarations_for_with_ownership kind false
+
+pub def runtime_declarations_for_with_ownership (kind : TargetKind) (ownership_on : Bool) : List LLVMDeclaration :=
     // CONVENTION: every parameter and return type below is i64. The
     // backend holds Strings (and pointers generally) as raw i64 values
     // ("a String is always a bare char*/i64", `NativeWrapKind`'s own doc
@@ -1119,6 +1124,13 @@ pub def runtime_declarations_for (kind : TargetKind) : List LLVMDeclaration :=
     let d114 := mk_decl "monad_channel_put" ["i64", "i64"] "i64" in
     let d115 := mk_decl "monad_channel_take" ["i64"] "i64" in
     let d116 := mk_decl "monad_channel_try_take" ["i64"] "i64" in
+    // Ownership (ownership-regions-memory O3/O4): the owned constructor
+    // allocator and the free the generated `drop_<T>` functions call.
+    // Both are emitted only in an ownership build; keeping the declarations
+    // target-independent means the wasm `void_ret` convention is right if
+    // the mode is ever widened.
+    let d166 := mk_decl "alloc_constructor_owned" ["i64", "i64"] "i64" in
+    let d167 := mk_decl "monad_owned_free" ["i64"] void_ret in
     [d1, d2, d3, d7, d7b, d7b1, d7c, d7d, d7e, d7f, d8, d9, d10, d11, d12, d13,
         d14, d15, d16, d17, d18, d19, d20, d21, d22, d23, d23a, d23b, d24, d24b, d25, d26, d27, d28, d29, d30, d31,
         d32, d33, d34, d35, d35b, d36, d37, d38, d38b, d39, dSysInt, d40, d41, d42, d43, d44, d45, d46, d47,
@@ -1132,7 +1144,7 @@ pub def runtime_declarations_for (kind : TargetKind) : List LLVMDeclaration :=
         d160, d161, d162, d163, d164, d165,
         d125, d126, d127, d128, d129, d130, d131, d132, d133,
         d134, d135, d136, d137, d138, d139, d140, d141,
-        d142, d143, d144, d145, d146, d147, d148, d149]
+        d142, d143, d144, d145, d146, d147, d148, d149] ++ (if ownership_on then [d166, d167] else List.empty)
 
 /// The native target's declaration list -- the historical name, kept for
 /// every existing caller and test.

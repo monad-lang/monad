@@ -15,7 +15,7 @@ use lang::types {
     StructLitField, Term, TypeConstraint, UseFilter, UseItem, Visibility,
     binder_is_explicit, binder_name, binder_named, char_to_string, concrete, empty_attrs,
     group, i64, id_eq,
-    ident, param_many, sentinel, show_identifier, show_module_path, term_peel,
+    ident, param_many, sentinel, show_identifier, show_module_path, show_name_path, term_peel,
     Cubical, face_eq0, face_eq1, hcomp, i0, i1, ijoin, imeet, ineg, interval,
     is_one, it_is_one, pathp, transp, glue, glue_elim, glue_intro, system,
 }
@@ -42,7 +42,7 @@ use lib::ctors {
 use lib::natives {
     NativeWrapKind, lookup_native, lookup_native_any,
     native_op_table, native_runtime_fn_name, runtime_declarations,
-    runtime_declarations_for,
+    runtime_declarations_for, runtime_declarations_for_with_ownership,
 }
 use llvm::target {TargetKind}
 use lib::decls {
@@ -58,9 +58,17 @@ use lang::elim_lower {elim_to_literal}
 use lib::ctx {
     CodegenCtx, CtxInstrsVal, CtxInstrsVals, CtxStrPair, LocalBinding,
     build_arity_table, build_type_level_table, collect_db_params, ctx_bind_local,
+    ctx_bind_local_drop, ctx_enter_branch, ctx_leave_branch, ctx_with_ownership,
     ctx_lookup_arity, ctx_lookup_ctor_arity, ctx_lookup_ctor_tag, ctx_lookup_local,
     ctx_lookup_type_level, ctx_reset_locals, ctx_restore_locals, dbg_loc_of_location,
     empty_ctx, fresh_label, fresh_temp, lookup_binding, resolve_call_name
+}
+use lib::ownership {
+    DropBinding, DropPlan, OwnershipMode, OwnershipTables, alloc_fn_for_ctor,
+    bare_name_string, classify_program, drop_fn_for_type, drop_plan_empty, drop_plan_for,
+    insert_drops_before_rets, ownership_mode_of_env, ownership_mode_on,
+    ownership_tables_empty,
+    plan_def,
 }
 use lib::symbols {
     bare_modpath, def_symbol_name, ends_with_main, extract_base_name,
@@ -108,7 +116,7 @@ use lang::typecheck::usage {spine_head_name}
 // are ungated, printing in both modes as they did before).
 use std::log {fail_line, stage}
 
-open IO {println}
+open IO {println, get_env}
 open LLVMType {i1_, i8_, i32_, i64_, f32_, f64_, ptr, void}
 open LLVMValue {
     add, alloc_closure, alloc_constructor, bitcast, bool_, call, gep, global_,
@@ -199,11 +207,11 @@ def shim_fwd_args (n : I64) (start_idx : I64) : List LLVMValue :=
 /// call, allocates a genuine tagged Constructor and sets each of its
 /// `arity` fields from the shim's own forwarded args.
 #[partial]
-def build_constructor_closure_shim_func (shim_name : String) (tag : I64) (arity : I64) : LLVMFunction :=
+def build_constructor_closure_shim_func (shim_name : String) (tag : I64) (arity : I64) (alloc_fn : String) : LLVMFunction :=
     let self_pair := ParamPair.mk "p0" LLVMType.i64_ in
     let real_params := build_llvm_params_from_db_shifted arity 1 in
     let params := List.cons self_pair real_params in
-    let alloc_val := LLVMValue.call "alloc_constructor" LLVMType.i64_
+    let alloc_val := LLVMValue.call alloc_fn LLVMType.i64_
         (List.cons (LLVMValue.int_ tag) (List.cons (LLVMValue.int_ arity) List.empty)) false in
     let alloc_instr := LLVMInstruction.assign "obj" alloc_val in
     let set_instrs := build_ctor_shim_set_fields arity 1 in
@@ -836,7 +844,7 @@ def build_match_case_block (c : CodegenCtx) (scrutinee_val : LLVMValue) (case_ :
         MatchCase.mk _name args body _fp _typ_name =>
             match bind_match_fields c scrutinee_val args 0 {
                 { ctx := c1, instrs := field_instrs } =>
-                    match compile_db_term_ir c1 body {
+                    match compile_db_term_ir (ctx_enter_branch c1) body {
                         CompileResult.ok ctx_r instrs_r val_r_raw blocks_r funcs_r globals_r =>
                             let raw_instrs := List.append field_instrs instrs_r in
                             let already_terminated := ends_with_terminator raw_instrs in
@@ -1222,7 +1230,12 @@ def compile_con_ir (c : CodegenCtx) (con : Con) : CompileResult :=
                             // composite bare#arity otherwise -- see
                             // `constructor_tag_owned`.
                             let tag_val := constructor_tag_owned c (symbol_identifier name) (Option.some typ_name) (List.length all_vals) in
-                            let alloc_val := LLVMValue.alloc_constructor tag_val all_vals in
+                            let alloc_fn := ctor_alloc_fn c name (Option.some typ_name) (List.length all_vals) in
+                            let alloc_val : LLVMValue :=
+                                if String.beq alloc_fn "alloc_constructor_owned"
+                                then LLVMValue.call "alloc_constructor_owned" LLVMType.i64_
+                                    (List.cons (LLVMValue.int_ tag_val) (List.cons (LLVMValue.int_ (List.length all_vals)) List.empty)) false
+                                else LLVMValue.alloc_constructor tag_val all_vals in
                             let assign_instr := LLVMInstruction.assign temp alloc_val in
                             // alloc_constructor only ALLOCATES the fields
                             // array -- it has no way to accept field
@@ -2044,7 +2057,11 @@ def is_native_bool_op_name (name : String) : Bool := match lookup_native_any nam
 
 #[partial]
 def build_db_if_blocks (ctx : CodegenCtx) (then_label : String) (else_label : String) (merge_label : String) (then_ : Term) (else_ : Term) (entry_instrs : List LLVMInstruction) (entry_blocks : List LLVMBasicBlock) (entry_funcs : List LLVMFunction) (entry_globals : List LLVMGlobal) : CompileResult :=
-    match compile_db_term_ir ctx then_ {
+    // Branch bodies are compiled one level deeper: an owned value bound
+    // inside one is not guaranteed to dominate the function's exits, so
+    // its `let` must not become a drop candidate.
+    let outer_depth : I64 := ctx.branch_depth in
+    match compile_db_term_ir (ctx_enter_branch ctx) then_ {
         CompileResult.ok ctx_then then_instrs_raw then_val_raw blocks_then funcs_then globals_then =>
             // A branch whose OWN instructions already end in a real
             // terminator (a nested if/match that itself returns
@@ -2079,7 +2096,7 @@ def build_db_if_blocks (ctx : CodegenCtx) (then_label : String) (else_label : St
                     let else_tm := materialize_terminal_ret (not else_reaches) else_bmr.ctx else_ else_bmr.val blocks_else in
                     let else_block := build_branch_block else_label merge_label else_bmr.instrs in
                     build_merge_result {
-                        ctx_else := else_tm.ctx,
+                        ctx_else := ctx_leave_branch else_tm.ctx outer_depth,
                         merge_label := merge_label,
                         then_reaches := then_reaches,
                         then_val := then_tm.val,
@@ -2402,7 +2419,8 @@ def compile_db_term_ir (c : CodegenCtx) (term_ : Term) : CompileResult := match 
                                 match fresh_temp c {
                                     CtxStrPair.mk ctx_t temp =>
                                         let shim_name := String.concat llvm_name "_ctor_closure_shim" in
-                                        let shim_func := build_constructor_closure_shim_func shim_name tag_val ctor_arity in
+                                        let shim_alloc_fn := ctor_alloc_fn c id Option.none ctor_arity in
+                                        let shim_func := build_constructor_closure_shim_func shim_name tag_val ctor_arity shim_alloc_fn in
                                         let entry_text := global_fn_ptr_text shim_name (ctor_arity + 1) in
                                         let box_val := LLVMValue.alloc_closure entry_text ctor_arity List.empty in
                                         let assign_instr := LLVMInstruction.assign temp box_val in
@@ -3215,13 +3233,13 @@ def compile_io_bind_cont (e : IoBindEntry) (kind : IoBindKind) (binder : Binder)
                             else ctx_bind_local ctx_payload name payload_val,
                         DebugName.unnamed => ctx_payload,
                     } in
-                    match compile_db_term_ir bound_ctx body {
+                    match compile_db_term_ir (ctx_enter_branch bound_ctx) body {
                         CompileResult.ok ctx_b instrs_b val_b blocks_b funcs_b globals_b =>
                             let reached := not (ends_with_terminator instrs_b) in
                             let bmr := materialize_branch_val ctx_b body instrs_b val_b in
                             let tm := materialize_terminal_ret (not reached) bmr.ctx body bmr.val blocks_b in
                             let prefix := List.cons raw_instr payload_instrs in
-                            let cont : IoBindCont := { ctx := tm.ctx, instrs := List.append prefix bmr.instrs, val := tm.val, blocks := tm.blocks, reached := reached, funcs := funcs_b, globals := globals_b } in
+                            let cont : IoBindCont := { ctx := ctx_leave_branch tm.ctx e.ctx.branch_depth, instrs := List.append prefix bmr.instrs, val := tm.val, blocks := tm.blocks, reached := reached, funcs := funcs_b, globals := globals_b } in
                             Option.some cont,
                     },
             },
@@ -3415,7 +3433,7 @@ def try_compile_let_beta_db (c : CodegenCtx) (fun : Term) (arg : Term) : Option 
                         { ctx := ctx1b, instrs := bool_instrs, val := val1 } =>
                             match compose_seq ({ instrs := instrs1, blocks := blocks1, val := val1_raw }) ({ instrs := bool_instrs, blocks := List.empty, val := val1 }) {
                                 { instrs := instrs1m, blocks := blocks1m, val := val1m } =>
-                                let ctx_bound := ctx_bind_local ctx1b name val1 in
+                                let ctx_bound := bind_let_with_plan ctx1b name val1 (term_is_fresh_ctor ctx1b arg) in
                                 match compile_db_term_ir ctx_bound body {
                                     CompileResult.ok ctx2 instrs2_raw val2_raw blocks2 funcs2 globals2 =>
                                     // `body` (the let's own continuation)
@@ -5363,10 +5381,41 @@ def dbg_loc_of_body (body : Term) : Option DbgLoc :=
         _ => Option.none,
     }
 
+/// Pair the leading lambda chain's names with the DECLARED parameter types
+/// from a def's signature. `collect_db_params` takes each binder's type
+/// from the `Term.lam` annotation, which elaboration frequently leaves as a
+/// hole; the `Def.typ` pi chain has the written type. Non-explicit binders
+/// (implicit/level) are skipped exactly as `collect_db_params` skips them.
+#[partial]
+def params_with_declared_types (params : List Param) (typ : Term) : List Param :=
+    match term_peel typ {
+        Term.pi b dom body =>
+            if binder_is_explicit b then
+                match params {
+                    List.empty => params,
+                    List.cons p rest =>
+                        List.cons (Param.mk p.name dom p.mult p.default p.attrs)
+                            (params_with_declared_types rest body),
+                }
+            else params_with_declared_types params body,
+        _ => params,
+    }
+
 #[partial]
 def compile_db_def_ir_body (c : CodegenCtx) (fn_name : String) (typ : Term) (term_ : Term) (params : List Param) (llvm_params : List ParamPair) : DefResult :=
     let body := strip_db_lams term_ in
-    let c0 := bind_params_in_ctx_db c params in
+    // The plan covers this def's declared binders (params and the
+    // let/do-bind chain), computed from the UNSTRIPPED term because the
+    // usage walker matches the leading lambda chain against `params`.
+    // Elaboration often leaves the lambda annotations as holes, so the
+    // parameter types are re-read from the declared signature (`typ`).
+    let plan : DropPlan := match c.ownership {
+        Option.none => drop_plan_empty,
+        Option.some tables => plan_def tables (params_with_declared_types params typ) term_,
+    } in
+    let c_reset : CodegenCtx := ctx_reset_locals c in
+    let c_plan : CodegenCtx := { c_reset with drop_plan := Option.some plan } in
+    let c0 := bind_params_with_idx_db c_plan params 0 in
     // See `unwrap_io_return_blocks`'s own doc comment: an `IO`-typed
     // `main` needs its returned value's payload unwrapped before it
     // reaches the C runtime's plain-`int`-returning `main()`.
@@ -5410,7 +5459,14 @@ def compile_db_def_ir_body (c : CodegenCtx) (fn_name : String) (typ : Term) (ter
                             // is already used.
                             let tco_ctx := tco.ctx in
                             let tco_blocks := tco.blocks in
-                            let all_blocks := if main_io_unit then zero_return_blocks tco_blocks else if needs_io_unwrap then unwrap_io_return_blocks tco_blocks 0 else tco_blocks in
+                            let all_blocks0 := if main_io_unit then zero_return_blocks tco_blocks else if needs_io_unwrap then unwrap_io_return_blocks tco_blocks 0 else tco_blocks in
+                            // Drops run after every ret rewrite (TCO, the
+                            // IO unwrap) so they land on real exits. A
+                            // TCO-rewritten def emits none: the
+                            // loop-carried value belongs to the next
+                            // iteration.
+                            let drops : List DropBinding := if tco.rewritten then List.empty else tco_ctx.drops in
+                            let all_blocks := insert_drops_before_rets drops all_blocks0 in
                             let main_func := LLVMFunction.mk fn_name llvm_params LLVMType.i64_ all_blocks (dbg_loc_of_body body) in
                             { ctx := tco_ctx, funcs := (List.cons main_func funcs_r), globals := globals_r, externs := List.empty }
                     },
@@ -5459,7 +5515,13 @@ def compile_db_def_ir_body (c : CodegenCtx) (fn_name : String) (typ : Term) (ter
                     // inlined into each `if`/else arm.
                     let tco_ctx := tco.ctx in
                     let tco_blocks := tco.blocks in
-                    let all_blocks := if main_io_unit then zero_return_blocks tco_blocks else if needs_io_unwrap then unwrap_io_return_blocks tco_blocks 0 else tco_blocks in
+                    let all_blocks0 := if main_io_unit then zero_return_blocks tco_blocks else if needs_io_unwrap then unwrap_io_return_blocks tco_blocks 0 else tco_blocks in
+                    // Drops run after every ret rewrite (TCO, the IO
+                    // unwrap) so they land on real exits. A TCO-rewritten
+                    // def emits none: the loop-carried value belongs to
+                    // the next iteration.
+                    let drops : List DropBinding := if tco.rewritten then List.empty else tco_ctx.drops in
+                    let all_blocks := insert_drops_before_rets drops all_blocks0 in
                     let main_func := LLVMFunction.mk fn_name llvm_params LLVMType.i64_ all_blocks (dbg_loc_of_body body) in
                     { ctx := tco_ctx, funcs := (List.cons main_func funcs_r), globals := globals_r, externs := List.empty }
             },
@@ -5536,6 +5598,18 @@ def compile_db_module (decl_list : List Decl) : LLVMModule :=
 /// `llvm/src/target.mo`.
 #[partial]
 pub def compile_db_module_with_debug (decl_list : List Decl) (source_path : Option String) (debug_files : List (Pair String String)) (triple : String) : LLVMModule :=
+    compile_db_module_ownership decl_list Option.none source_path debug_files triple
+
+/// `compile_db_module_with_debug` with a whole-program ownership verdict.
+/// The default build passes `ownership_tables_empty` through the sibling
+/// above; only an ownership build reaches `Option.some`, so no analysis or
+/// drop emission happens on the default path.
+#[partial]
+pub def compile_db_module_with_ownership (decl_list : List Decl) (tables : OwnershipTables) (source_path : Option String) (debug_files : List (Pair String String)) (triple : String) : LLVMModule :=
+    compile_db_module_ownership decl_list (Option.some tables) source_path debug_files triple
+
+#[partial]
+def compile_db_module_ownership (decl_list : List Decl) (tables : Option OwnershipTables) (source_path : Option String) (debug_files : List (Pair String String)) (triple : String) : LLVMModule :=
     let defs := extract_defs decl_list in
     let inds := extract_inductives decl_list in
     let structs := extract_structs decl_list in
@@ -5550,7 +5624,15 @@ pub def compile_db_module_with_debug (decl_list : List Decl) (source_path : Opti
     let arities := build_arity_table defs in
     let extern_wrappers := build_extern_wrapper_table defs in
     let type_levels := build_type_level_table inds structs in
-    match compile_db_def_list (empty_ctx arities ctor_tags ctor_arities extern_wrappers type_levels) defs {
+    let base_ctx : CodegenCtx := match tables {
+        Option.none => empty_ctx arities ctor_tags ctor_arities extern_wrappers type_levels,
+        Option.some t => ctx_with_ownership (empty_ctx arities ctor_tags ctor_arities extern_wrappers type_levels) t,
+    } in
+    let drop_funcs : List LLVMFunction := match tables {
+        Option.none => List.empty,
+        Option.some t => compile_drop_functions base_ctx inds t,
+    } in
+    match compile_db_def_list base_ctx defs {
         { ctx := _, funcs := compiled_funcs, globals := compiled_globals, externs := compiled_exts } =>
             // Prepend the GENERATED runtime natives (`codegen/
             // runtime.mo`) -- ordinary `define`s in this same module,
@@ -5558,10 +5640,14 @@ pub def compile_db_module_with_debug (decl_list : List Decl) (source_path : Opti
             // wires. They deliberately carry no matching `declare` (see
             // `runtime_declarations`' own note on the redefinition
             // error that would cause).
-            let all_funcs := List.append runtime_native_functions (List.append ctor_funcs compiled_funcs) in
+            let all_funcs := List.append runtime_native_functions (List.append ctor_funcs (List.append drop_funcs compiled_funcs)) in
             let funcs := ren_main_and_wrap all_funcs in
             let extra_decls := extern_declarations compiled_exts in
-            let all_decls := List.append (runtime_declarations_for (TargetKind.of_triple triple)) extra_decls in
+            let ownership_on : Bool := match tables {
+                Option.none => false,
+                Option.some _ => true,
+            } in
+            let all_decls := List.append (runtime_declarations_for_with_ownership (TargetKind.of_triple triple) ownership_on) extra_decls in
             LLVMModule.mk triple compiled_globals funcs all_decls source_path debug_files,
     }
 
@@ -5656,6 +5742,112 @@ def compile_db_inductive_decls (ind_decls : List Inductive) (ctor_tags : HashMap
         List.append funcs (compile_db_inductive_decls rest ctor_tags)
 }
 
+/// One `drop_<T>(i64 %obj)` per Owned inductive (ownership-regions-memory
+/// O4). Tag dispatch is an `icmp_eq`/`branch` chain (the IR has no
+/// `switch`); every field whose type is Owned is dropped recursively,
+/// `Copy`/Region/opaque fields are skipped (they leak, which is safe while
+/// Boehm is linked), and the cell itself is freed last.
+///
+/// A nullary constructor -- which the verdict excludes from Owned types as
+/// its own defence -- jumps straight to `ret void`: those values are
+/// `g_nullary` singletons and must never reach `monad_owned_free`.
+#[partial]
+pub def compile_drop_functions (c : CodegenCtx) (inds : List Inductive) (tables : OwnershipTables) : List LLVMFunction := match inds {
+    List.empty => List.empty,
+    List.cons ind rest =>
+        let here := compile_drop_function c ind tables in
+        List.append here (compile_drop_functions c rest tables)
+}
+
+def compile_drop_function (c : CodegenCtx) (ind : Inductive) (tables : OwnershipTables) : List LLVMFunction := match ind {
+    Inductive.mk name _params _typ ctors _attrs _vis =>
+        let full : String := show_name_path name in
+        match str_map_lookup full tables.owned {
+            Option.none => List.empty,
+            Option.some drop_name => List.cons (build_drop_function c drop_name name ctors tables) List.empty,
+        },
+}
+
+#[partial]
+def build_drop_function (c : CodegenCtx) (drop_name : String) (ind_name : NamePath) (ctors : List InductConstructor) (tables : OwnershipTables) : LLVMFunction :=
+    if List.is_empty ctors then
+        let empty_fn : LLVMBasicBlock := LLVMBasicBlock.mk "entry" [LLVMInstruction.ret LLVMValue.void_val] in
+        LLVMFunction.mk drop_name [ParamPair.mk "p0" LLVMType.i64_] LLVMType.void [empty_fn] Option.none
+    else
+        let entry : LLVMBasicBlock := LLVMBasicBlock.mk "entry" [
+            LLVMInstruction.assign "dtag" (LLVMValue.call "monad_get_tag" LLVMType.i64_ [LLVMValue.parm_ 0] false),
+            LLVMInstruction.jump "check_0",
+        ] in
+        let checks : List LLVMBasicBlock := build_drop_checks c ind_name ctors tables 0 List.empty in
+        let tails : List LLVMBasicBlock := [
+            LLVMBasicBlock.mk "drop_default" [LLVMInstruction.jump "drop_cell"],
+            LLVMBasicBlock.mk "drop_cell" [
+                LLVMInstruction.call_void (LLVMValue.call "monad_owned_free" LLVMType.void [LLVMValue.parm_ 0] false),
+                LLVMInstruction.ret LLVMValue.void_val,
+            ],
+            LLVMBasicBlock.mk "drop_void" [LLVMInstruction.ret LLVMValue.void_val],
+        ] in
+        let blocks : List LLVMBasicBlock := List.append [entry] (List.append checks tails) in
+        LLVMFunction.mk drop_name [ParamPair.mk "p0" LLVMType.i64_] LLVMType.void blocks Option.none
+
+#[partial]
+def build_drop_checks (c : CodegenCtx) (ind_name : NamePath) (ctors : List InductConstructor) (tables : OwnershipTables) (i : I64) (acc : List LLVMBasicBlock) : List LLVMBasicBlock :=
+    match ctors {
+        List.empty => acc,
+        List.cons ctor rest =>
+            let check_label := String.concat "check_" (I64.to_string i) in
+            let free_label := String.concat "free_" (I64.to_string i) in
+            let cmp_temp := String.concat "dcmp" (I64.to_string i) in
+            let next_label := if List.is_empty rest then "drop_default" else String.concat "check_" (I64.to_string (i + 1)) in
+            let tag := ctor_tag_of c ind_name ctor in
+            let check_block : LLVMBasicBlock := LLVMBasicBlock.mk check_label [
+                LLVMInstruction.assign cmp_temp (LLVMValue.icmp_eq (LLVMValue.var_ "dtag") (LLVMValue.int_ tag)),
+                LLVMInstruction.branch (LLVMValue.var_ cmp_temp) free_label next_label,
+            ] in
+            let free_block := build_drop_free_block free_label ctor tables in
+            build_drop_checks c ind_name rest tables (i + 1) (List.append acc [check_block, free_block]),
+    }
+
+#[partial]
+def build_drop_free_block (label : String) (c : InductConstructor) (tables : OwnershipTables) : LLVMBasicBlock :=
+    match c {
+        InductConstructor.mk _name params _typ =>
+            if List.is_empty params then LLVMBasicBlock.mk label [LLVMInstruction.jump "drop_void"]
+            else LLVMBasicBlock.mk label (List.append (build_drop_field_instrs params tables 0 List.empty) [LLVMInstruction.jump "drop_cell"]),
+    }
+
+#[partial]
+def build_drop_field_instrs (ps : List Param) (tables : OwnershipTables) (idx : I64) (acc : List LLVMInstruction) : List LLVMInstruction :=
+    match ps {
+        List.empty => acc,
+        List.cons p rest =>
+            match drop_fn_for_type tables p.type_ {
+                Option.none => build_drop_field_instrs rest tables (idx + 1) acc,
+                Option.some field_drop =>
+                    let field_temp := String.concat "dfl" (I64.to_string idx) in
+                    let get_instr := LLVMInstruction.assign field_temp
+                        (LLVMValue.call "monad_get_field" LLVMType.i64_ [LLVMValue.parm_ 0, LLVMValue.int_ idx] false) in
+                    let drop_instr := LLVMInstruction.call_void
+                        (LLVMValue.call field_drop LLVMType.void [LLVMValue.var_ field_temp] false) in
+                    build_drop_field_instrs rest tables (idx + 1) (List.append acc [get_instr, drop_instr]),
+            },
+    }
+
+#[partial]
+def ctor_tag_of (c : CodegenCtx) (ind_name : NamePath) (ctor : InductConstructor) : I64 :=
+    match ctor {
+        InductConstructor.mk name params _typ =>
+            // The SAME tier order the allocation site uses
+            // (`constructor_tag_owned`), so a constructor whose bare name
+            // shadows a builtin (`pair`, `cons`, ...) gets the identical
+            // tag here. A plain per-type map lookup would disagree with the
+            // builtin override and make every drop of that constructor take
+            // the `drop_default` arm (free the cell, skip its fields).
+            let bare : String := bare_name_string (show_name_path name) in
+            let arity := count_db_params params 0 in
+            constructor_tag_owned c bare (Option.some ind_name) arity,
+    }
+
 /// Compile an inductive type constructor to an LLVM wrapper function.
 /// Generates: define i64 @monad_ctor_<name>(i64 %p0, i64 %p1, ...) {
 ///   entry:
@@ -5694,6 +5886,69 @@ def build_fields_from (count : I64) (idx : I64) : List LLVMValue :=
     if idx == count then List.empty
     else List.cons (LLVMValue.parm_ idx) (build_fields_from count (idx + 1))
 
+/// The allocator symbol a constructor allocation must use: the owned path
+/// when the whole-program verdict says Owned, the GC/region path otherwise.
+/// One helper for every constructor-allocation site, so a value can never be
+/// allocated by one path and freed by the other.
+def ctor_alloc_fn (c : CodegenCtx) (name : Identifier) (owner : Option NamePath) (arity : I64) : String :=
+    match c.ownership {
+        Option.none => "alloc_constructor",
+        Option.some tables => alloc_fn_for_ctor tables name owner arity,
+    }
+
+/// Bind a parameter, attaching a drop when the current def's plan names it.
+/// Params are always bound in the entry block, so they dominate every exit.
+def bind_param_with_plan (c : CodegenCtx) (name : Identifier) (val : LLVMValue) : CodegenCtx :=
+    match c.drop_plan {
+        Option.none => ctx_bind_local c name val,
+        Option.some plan =>
+            match drop_plan_for plan name {
+                Option.some drop_fn => ctx_bind_local_drop c name val drop_fn,
+                Option.none => ctx_bind_local c name val,
+            },
+    }
+
+/// The same decision for a `let` binder, gated on the binding being in the
+/// entry block (`branch_depth == 0`) and the initializer being a FRESH
+/// constructor allocation. An alias `let y := x` must never be dropped: the
+/// source binder still owns the value, and freeing it through `y` would be a
+/// double free.
+def bind_let_with_plan (c : CodegenCtx) (name : Identifier) (val : LLVMValue) (fresh_ctor : Bool) : CodegenCtx :=
+    if Bool.not fresh_ctor || Bool.not (I64.beq c.branch_depth 0) then ctx_bind_local c name val
+    else
+        match c.drop_plan {
+            Option.none => ctx_bind_local c name val,
+            Option.some plan =>
+                match drop_plan_for plan name {
+                    Option.some drop_fn => ctx_bind_local_drop c name val drop_fn,
+                    Option.none => ctx_bind_local c name val,
+                },
+        }
+
+/// Is this initializer a fresh constructor allocation (as opposed to a
+/// variable alias or a call result)? `Term.con`, or an application spine
+/// headed by a constructor name that is not shadowed by a local.
+#[partial]
+def term_is_fresh_ctor (c : CodegenCtx) (t : Term) : Bool :=
+    match t {
+        Term.con _ => true,
+        Term.ctx _ inner => term_is_fresh_ctor c inner,
+        Term.app _ _ =>
+            match spine_head_name t {
+                Option.none => false,
+                Option.some s =>
+                    let nm : Identifier := Identifier.id s in
+                    is_constructor_var c s && not_a_local c nm,
+            },
+        _ => false,
+    }
+
+def not_a_local (c : CodegenCtx) (nm : Identifier) : Bool :=
+    match ctx_lookup_local c nm {
+        Option.none => true,
+        Option.some _ => false,
+    }
+
 /// Starts a fresh top-level def's own body with an EMPTY `locals` list
 /// (`ctx_reset_locals`) before binding its params -- the SAME
 /// cross-function-leak protection `compile_db_lam_ir` already has for a
@@ -5727,7 +5982,7 @@ def bind_params_in_ctx_db (c : CodegenCtx) (params : List Param) : CodegenCtx :=
 def bind_params_with_idx_db (c : CodegenCtx) (params : List Param) (idx : I64) : CodegenCtx := match params {
     List.empty => c,
     List.cons p rest =>
-        let c1 := ctx_bind_local c (param_name_db p) (LLVMValue.parm_ idx) in
+        let c1 := bind_param_with_plan c (param_name_db p) (LLVMValue.parm_ idx) in
         bind_params_with_idx_db c1 rest (idx + 1),
 }
 
@@ -6495,6 +6750,17 @@ pub def compile_loaded_modules_to_ir_with_debug (loaded : LoadedModules) (verbos
             let input : CompileInput <- compile_input_of_modules target_mp qualified_mods verbose;
             let elab_report : BestEffortElab := input.report;
             let elaborated : List Decl := input.decls;
+            // Ownership (ownership-regions-memory O3/O4): one whole-program
+            // verdict, computed from the FULL elaborated decl set (not the
+            // reachability-filtered subset -- the verdict is a property of
+            // every type the program can construct). Unset means no tables
+            // and a byte-identical default build.
+            let own_env <- get_env "MONAD_OWNERSHIP";
+            let own_mode : OwnershipMode := ownership_mode_of_env own_env;
+            let ownership : Option OwnershipTables :=
+                if ownership_mode_on own_mode
+                then Option.some (classify_program input.scope input.decls)
+                else Option.none;
             if verbose then report_elab_failures (best_effort_failed elab_report) else return unit;
             // The checker's elaboration IS the dispatch now: the old syntactic
             // `resolve_class_calls_decls` pass is retired (a no-op probe produced
@@ -6603,7 +6869,10 @@ pub def compile_loaded_modules_to_ir_with_debug (loaded : LoadedModules) (verbos
                                         // Stage 6: compile the reachable, infix-resolved declarations to LLVM IR
                                         stage verbose "emit LLVM IR";
                                         let t_llvm : I64 <- Bench.now;
-                                        let mod_raw : LLVMModule := compile_db_module_with_debug reachable_decls source_path debug_files triple;
+                                        let mod_raw : LLVMModule := match ownership {
+                                            Option.none => compile_db_module_with_debug reachable_decls source_path debug_files triple,
+                                            Option.some tables => compile_db_module_with_ownership reachable_decls tables source_path debug_files triple,
+                                        };
                                         // The thunks the `--export=` flags name (web only, the
                                         // same condition the roots used above).
                                         let shim_pairs : List (Pair String String) :=

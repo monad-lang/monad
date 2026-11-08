@@ -54,6 +54,11 @@ pub struct SelfTailCallSite {
 pub struct SelfTcoResult {
     ctx : CodegenCtx,
     blocks : List LLVMBasicBlock,
+    /// True when `try_apply_self_tco` actually rewrote a tail call into a
+    /// loop. Ownership drop emission must then be suppressed for the def:
+    /// the loop-carried parameter is owned by the NEXT iteration, so an
+    /// exit drop would free a value still in use.
+    rewritten : Bool,
 }
 
 /// Entry point -- called from `compile_db_def_ir_body` on a Def's own
@@ -66,11 +71,11 @@ pub struct SelfTcoResult {
 def apply_self_tco (ctx : CodegenCtx) (fn_name : String) (arity : I64) (blocks : List LLVMBasicBlock) : SelfTcoResult :=
     let sites := find_self_tail_call_sites fn_name arity blocks in
     match sites {
-        List.empty => { ctx := ctx, blocks := blocks },
+        List.empty => { ctx := ctx, blocks := blocks, rewritten := false },
         List.cons _ _ =>
             match try_apply_self_tco ctx fn_name arity blocks sites {
                 Option.some result => result,
-                Option.none => { ctx := ctx, blocks := blocks },
+                Option.none => { ctx := ctx, blocks := blocks, rewritten := false },
             },
     }
 
@@ -98,7 +103,7 @@ def try_apply_self_tco (ctx : CodegenCtx) (fn_name : String) (arity : I64) (bloc
                         Option.some pruned_blocks =>
                             match split_entry_for_tco pruned_blocks header_label arity loop_names sites1 {
                                 Option.some final_blocks =>
-                                    let tco : SelfTcoResult := { ctx := ctx2, blocks := final_blocks } in
+                                    let tco : SelfTcoResult := { ctx := ctx2, blocks := final_blocks, rewritten := true } in
                                     Option.some tco,
                                 Option.none => Option.none,
                             },
