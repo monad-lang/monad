@@ -1091,7 +1091,11 @@ def test_settings_options_make_the_number_rows_editable : Bool :=
         Option.some o => o.label == "Turn budget" && (match o.value { Option.some v => v == "10", Option.none => false }),
         Option.none => false,
     } in
-    List.length opts == 6 && editable_count opts == 4 && budget_shown
+    let danger_cycles : Bool := match List.get 6 opts {
+        Option.some o => String.starts_with "Auto mode on a dangerous verdict: " o.label,
+        Option.none => false,
+    } in
+    List.length opts == 7 && editable_count opts == 4 && budget_shown && danger_cycles
 
 /// A repo-scoped picker offers the switch to every repo's sessions, just
 /// before Cancel.
