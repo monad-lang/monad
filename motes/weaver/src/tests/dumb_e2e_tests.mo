@@ -25,11 +25,14 @@ use shuttle::tool {ToolSpec, ToolImpl}
 use shuttle::tools::file_tools {EditTool.impl, WriteTool.impl}
 use shuttle::tools::shell_tools {ShellTool.impl}
 use weaver::commands {WeaverState}
+use weaver::store {StoreState, Store.new_session}
+use weaver::plan_file {PlanRepo, PlanEntry, PlanRepo.list}
 use weaver::dumb {Dumb.run}
 use weaver::policy {Mode}
 use json::json {Json, Json.parse, Json.get_array, Json.get_str, Json.make_str, Json.make_array, Json.make_object, Json.make_null, Json.to_string}
 use parsec::number {parse_i64}
 use std::map {Map, BTreeMap}
+use std::list {List.length}
 use std::io {IO.file_exists}
 use std::path {Path, Path.of}
 use weaver::place {SessionPlace}
@@ -529,4 +532,55 @@ def test_dumb_e2e_plan_then_execute : IO Bool := do {
     let file <- read_target plan_exec_target;
     let _ <- exec_cmd "rm" ["-f", plan_exec_target];
     return (plan_exec_ok st cursor tap file)
+}
+
+// ── A plan-mode turn lands in the plan repo ────────────────────────────
+// Dumb mode stores the captured plan as a draft, `/plan approve` marks
+// it approved, and `/plans` lists it -- the record a later session loads.
+
+def stored_base : String := String.concat "/tmp/weaver_dumb_plans_" pid
+
+def stored_inputs : List String := ["/mode plan", "make a plan", "/plan approve manual", "/plans"]
+
+def write_stored_inputs : IO Unit :=
+    write_text inputs_path
+        (Json.to_string (Json.make_array (List.map (fn (s : String) => Json.make_str s) stored_inputs)))
+
+def stored_repo : PlanRepo :=
+    let r : PlanRepo := { root := String.concat stored_base "/plans", dir := String.concat stored_base "/plans/app", commit := false } in
+    r
+
+def with_store_and_repo (st : WeaverState) : IO WeaverState := do {
+    let _ <- exec_cmd "rm" ["-rf", stored_base];
+    let r <- Store.new_session (Path.path (String.concat stored_base "/sessions")) Option.none st.run.session;
+    IO.pure (with_store_of st r)
+}
+
+def with_store_of (st : WeaverState) (r : Result String StoreState) : WeaverState :=
+    match r {
+        Result.err _ => st,
+        Result.ok s =>
+            let st2 : WeaverState := { st with store := Option.some s, plan_repo := Option.some stored_repo } in
+            st2,
+    }
+
+def stored_status (es : List PlanEntry) : String :=
+    match es {
+        List.cons e _ => match e.doc { Option.some d => d.meta.status, Option.none => "" },
+        List.empty => "",
+    }
+
+#[test]
+def test_dumb_e2e_a_plan_is_stored_and_approved : IO Bool := do {
+    let _ <- write_plan_exec_script;
+    let _ <- write_stored_inputs;
+    let _ <- write_text cursor_path "0";
+    let _ <- write_text tap_path "";
+    let st0 <- with_store_and_repo (in_tmp (state_of plan_exec_registry));
+    let _ <- Dumb.run Option.none scripted_read tap_write st0;
+    let tap <- read_tap;
+    let es <- PlanRepo.list stored_repo;
+    return (List.length es == 1
+        && stored_status es == "approved"
+        && String.contains tap "1. PLAN: 1) write the file 2) run it · approved")
 }

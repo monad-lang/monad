@@ -384,3 +384,20 @@ def test_validate_refuses_out_of_range_knobs : Bool :=
         && (match Settings.validate big_compact { Result.err _ => true, Result.ok _ => false })
         && (match Settings.validate neg_window { Result.err _ => true, Result.ok _ => false })
         && (match Settings.validate off_window { Result.ok _ => true, Result.err _ => false })
+
+// ── [plans] ───────────────────────────────────────────────────────────
+
+#[test]
+def test_the_plans_table_parses : Bool :=
+    let s : Settings := parse_settings "[plans]\nrepo = \"plans\"\ndir = \"implementations\"\ncommit = false\n" in
+    (match s.plans.repo { Option.some r => r == "plans", Option.none => false })
+        && (match s.plans.dir { Option.some d => d == "implementations", Option.none => false })
+        && (match s.plans.commit { Option.some c => Bool.not c, Option.none => false })
+
+#[test]
+def test_a_project_plans_key_overrides_the_global_one : Bool :=
+    let g : Settings := parse_settings "[plans]\nrepo = \"~/notes\"\ncommit = false\n" in
+    let p : Settings := parse_settings "[plans]\nrepo = \"plans\"\n" in
+    let m : Settings := Settings.merge g p in
+    (match m.plans.repo { Option.some r => r == "plans", Option.none => false })
+        && (match m.plans.commit { Option.some c => Bool.not c, Option.none => false })

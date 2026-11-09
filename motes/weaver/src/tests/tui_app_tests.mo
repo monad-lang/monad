@@ -32,8 +32,9 @@ use weaver::tui_app {
     TuiApp.update, TuiApp.subscriptions, turn_never_ran, TuiApp.resume_rows, TuiApp.resume_option,
     TuiApp.resume_action_at, TuiApp.settings_options, activity_name, markdown_body_rows, TuiApp.render_message,
     clipboard_cmd, persist_block_cmd, side_output_dialog,
-    ResumeAction, ResumeChoice,
+    ResumeAction, ResumeChoice, TuiApp.plans_rows,
 }
+use weaver::plan_file {PlanEntry, PlanDoc, PlanMeta, PlanMeta.empty}
 use weaver::commands {SessionPage, Commands.session_page}
 use tui::widgets::dialog {DialogOption, DialogModel}
 use tui::text {Text.width}
@@ -1247,4 +1248,32 @@ def test_history_loaded_extends_up_history : Bool :=
                 Pair.pair m2 cmd =>
                     cmd_is_none cmd && List.intercalate "|" m2.prompt.hist == "/mode|older ask",
             },
+    }
+
+// ── the /plans picker ─────────────────────────────────────────────────
+
+def plan_entry (title : String) (status : String) : PlanEntry :=
+    let m : PlanMeta := { PlanMeta.empty with title := title, status := status, updated := "2026-11-09T10:00:00Z" } in
+    let d : PlanDoc := { meta := m, body := "b" } in
+    let e : PlanEntry := { path := String.concat "/p/" title, doc := Option.some d } in
+    e
+
+def unreadable_entry : PlanEntry :=
+    let e : PlanEntry := { path := "/p/2026-11-09-broken.md", doc := Option.none } in
+    e
+
+#[test]
+def test_the_plans_picker_lists_titles_then_cancel : Bool :=
+    let rows : List DialogOption := TuiApp.plans_rows [plan_entry "Ship it" "approved", unreadable_entry] in
+    match rows {
+        List.cons a rest => match rest {
+            List.cons b rest2 => match rest2 {
+                List.cons c _ => a.label == "Ship it" && a.hint == "approved · 2026-11-09"
+                    && String.contains b.label "(unreadable) 2026-11-09-broken.md"
+                    && c.label == "Cancel",
+                List.empty => false,
+            },
+            List.empty => false,
+        },
+        List.empty => false,
     }

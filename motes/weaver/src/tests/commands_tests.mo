@@ -20,8 +20,9 @@ use weaver::commands {
     WeaverState, Effect, Commands.dispatch, Commands.context_used, Commands.context_percent,
     Commands.set_plan, Commands.plan_after_turn, SessionPage, Commands.session_page,
     Commands.turns_label, Commands.turn_context, Commands.sessions_for, Commands.place_suffix,
-    Commands.memory_text,
+    Commands.memory_text, Commands.store_plan, Commands.linked_plan,
 }
+use weaver::plan_file {PlanRepo, PlanDoc, PlanFile.read}
 use weaver::catalog {Catalog.lookup}
 use weaver::error {WeaverError}
 use weaver::policy {Mode}
@@ -1130,4 +1131,157 @@ def test_resume_takes_the_files_as_last_seen : IO Bool := do {
             IO.pure (String.contains (prompt_of e) "Answer in limericks." && Bool.not (String.contains (prompt_of e) "haiku"))
         },
     }
+}
+
+// ── stored plans (/plans, the plan repo) ──────────────────────────────
+
+def plans_base (name : String) : String :=
+    String.concat "/tmp/weaver_cmdplans_" (String.concat (I64.to_string process_id) (String.concat "_" name))
+
+def plan_session (base : String) (id : String) : IO StoreState := do {
+    let dir : String := String.concat base (String.concat "/sessions/" id);
+    let _ <- exec_cmd "mkdir" ["-p", dir];
+    let st : StoreState := { root := Path.path (String.concat base "/sessions"), dir := Path.path dir, id := id };
+    IO.pure st
+}
+
+def plan_repo_at (base : String) : PlanRepo :=
+    let r : PlanRepo := { root := String.concat base "/plans", dir := String.concat base "/plans/app", commit := false } in
+    r
+
+def with_plans (base : String) (id : String) (mode : Mode) : IO WeaverState := do {
+    let s <- plan_session base id;
+    let st0 : WeaverState := state_of mode [];
+    let st : WeaverState := { st0 with store := Option.some s, plan_repo := Option.some (plan_repo_at base) };
+    IO.pure st
+}
+
+def plans_output_of (r : Result WeaverError Effect) : String :=
+    match r { Result.err _ => "", Result.ok e => e.output }
+
+#[test]
+def test_plans_without_a_repo_says_how_to_set_one : IO Bool := do {
+    let r <- Commands.dispatch "/plans" (state_of Mode.manual []);
+    IO.pure (String.contains (plans_output_of r) "no plan repo")
+}
+
+#[test]
+def test_plans_with_none_stored : IO Bool := do {
+    let base : String := plans_base "none";
+    let _ <- exec_cmd "rm" ["-rf", base];
+    let st <- with_plans base "s-1" Mode.manual;
+    let r <- Commands.dispatch "/plans" st;
+    IO.pure (String.contains (plans_output_of r) "no stored plans")
+}
+
+#[test]
+def test_a_stored_plan_is_listed_and_shown : IO Bool := do {
+    let base : String := plans_base "listed";
+    let _ <- exec_cmd "rm" ["-rf", base];
+    let st <- with_plans base "s-1" Mode.plan;
+    let _ <- Commands.store_plan st "# Ship the thing\n\n1. build\n";
+    let l <- Commands.dispatch "/plans" st;
+    let sh <- Commands.dispatch "/plans show 1" st;
+    let pl <- Commands.dispatch "/plan" (Commands.set_plan st (Option.some "# Ship the thing"));
+    IO.pure (String.contains (plans_output_of l) "1. Ship the thing · draft"
+        && String.contains (plans_output_of sh) "1. build"
+        && String.contains (plans_output_of pl) "stored: ")
+}
+
+#[test]
+def test_approving_the_plan_marks_the_file : IO Bool := do {
+    let base : String := plans_base "approve";
+    let _ <- exec_cmd "rm" ["-rf", base];
+    let st <- with_plans base "s-1" Mode.plan;
+    let _ <- Commands.store_plan st "# Approve me\n";
+    let _ <- Commands.dispatch "/plan approve manual" st;
+    let linked <- Commands.linked_plan st;
+    status_at linked "approved"
+}
+
+def status_at (path : Option String) (want : String) : IO Bool :=
+    match path {
+        Option.none => IO.pure false,
+        Option.some p => do {
+            let d <- PlanFile.read p;
+            match d {
+                Option.none => IO.pure false,
+                Option.some doc => IO.pure (doc.meta.status == want),
+            }
+        },
+    }
+
+#[test]
+def test_a_new_session_loads_a_stored_plan : IO Bool := do {
+    let base : String := plans_base "load";
+    let _ <- exec_cmd "rm" ["-rf", base];
+    let first <- with_plans base "s-1" Mode.plan;
+    let _ <- Commands.store_plan first "# Carry on\n\nstep 2 next\n";
+    let second <- with_plans base "s-2" Mode.manual;
+    let r <- Commands.dispatch "/plans load 1" second;
+    match r {
+        Result.err _ => IO.pure false,
+        Result.ok e => loaded_ok e,
+    }
+}
+
+def last_text (st : WeaverState) : String :=
+    match List.last st.run.session.history {
+        Option.none => "",
+        Option.some m => match m.content {
+            List.cons c _ => match c { Content.text t => t, _ => "" },
+            List.empty => "",
+        },
+    }
+
+def read_linked (linked : Option String) : IO (Option PlanDoc) :=
+    match linked {
+        Option.none => IO.pure Option.none,
+        Option.some p => PlanFile.read p,
+    }
+
+def loaded_ok (e : Effect) : IO Bool := do {
+    let linked <- Commands.linked_plan e.state;
+    let d <- read_linked linked;
+    let sessions_ok : Bool := match d {
+        Option.none => false,
+        Option.some doc => List.intercalate "," doc.meta.sessions == "s-1,s-2",
+    };
+    IO.pure (String.contains (last_text e.state) "Stored plan (draft"
+        && String.contains (last_text e.state) "step 2 next"
+        && sessions_ok
+        && match e.state.plan { Option.some p => String.contains p "Carry on", Option.none => false })
+}
+
+#[test]
+def test_plans_done_closes_the_plan : IO Bool := do {
+    let base : String := plans_base "done";
+    let _ <- exec_cmd "rm" ["-rf", base];
+    let st <- with_plans base "s-1" Mode.plan;
+    let _ <- Commands.store_plan st "# Finish\n";
+    let r <- Commands.dispatch "/plans done finish" st;
+    let linked <- Commands.linked_plan st;
+    let ok <- status_at linked "done";
+    IO.pure (ok && String.contains (plans_output_of r) "Finish: done")
+}
+
+#[test]
+def test_plans_with_a_bad_verb_prints_usage : IO Bool := do {
+    let base : String := plans_base "usage";
+    let st <- with_plans base "s-1" Mode.manual;
+    let a <- Commands.dispatch "/plans frob 1" st;
+    let b <- Commands.dispatch "/plans load" st;
+    IO.pure (String.contains (plans_output_of a) "usage: /plans" && String.contains (plans_output_of b) "usage: /plans")
+}
+
+#[test]
+def test_plans_all_lists_paths_that_load : IO Bool := do {
+    let base : String := plans_base "all";
+    let _ <- exec_cmd "rm" ["-rf", base];
+    let st <- with_plans base "s-1" Mode.plan;
+    let _ <- Commands.store_plan st "# Everywhere\n";
+    let l <- Commands.dispatch "/plans all" st;
+    let other <- with_plans base "s-2" Mode.manual;
+    let r <- Commands.dispatch "/plans show everywhere" other;
+    IO.pure (String.contains (plans_output_of l) "/plans/app/" && String.contains (plans_output_of r) "# Everywhere")
 }

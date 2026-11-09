@@ -13,6 +13,7 @@ use weaver::pty::async {
 }
 use weaver::pty::base {run_base_initial_frame_overlay_exit}
 use weaver::pty::bigplan {run_bigplan_paint_home_dialog_paste}
+use weaver::pty::plans {run_plans_survive_a_fresh_run}
 use weaver::pty::crash {run_crash_detect_and_clean_exit}
 use weaver::pty::ctrl_d {run_ctrl_d_single_and_cross_gesture, run_ctrl_d_double_exits}
 use weaver::pty::dialogs {
@@ -73,6 +74,9 @@ def test_base_initial_frame_overlay_exit : IO Bool := run_base_initial_frame_ove
 
 #[test]
 def test_bigplan_paint_home_dialog_paste : IO Bool := run_bigplan_paint_home_dialog_paste
+
+#[test]
+def test_plans_survive_a_fresh_run : IO Bool := run_plans_survive_a_fresh_run
 
 #[test]
 def test_crash_detect_and_clean_exit : IO Bool := run_crash_detect_and_clean_exit

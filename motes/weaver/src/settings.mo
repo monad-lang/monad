@@ -15,6 +15,7 @@
 use shuttle::gate {Capability}
 use weaver::policy {Mode, Mode.parse}
 use weaver::error {WeaverError}
+use weaver::plan_file {PlanSettings, PlanSettings.empty}
 use toml::toml {
     Toml.Value, Toml.ParseError, Toml.parse, Toml.get_string, Toml.get_integer,
     Toml.get_boolean, Toml.get_table, Toml.table_get, Toml.make_string, Toml.make_integer,
@@ -39,6 +40,8 @@ pub struct Settings {
     compact_at : Option I64,
     /// Auto mode's answer to a dangerous verdict: "deny" or "ask".
     auto_on_danger : Option String := Option.none,
+    /// The `[plans]` table: where captured plans are stored (`plan_file.mo`).
+    plans : PlanSettings := PlanSettings.empty,
     caps : BTreeMap String Capability,
     api_keys : BTreeMap String String,
 }
@@ -53,6 +56,7 @@ pub def Settings.empty : Settings := {
     context_window := Option.none,
     compact_at := Option.none,
     auto_on_danger := Option.none,
+    plans := PlanSettings.empty,
     caps := BTreeMap.empty,
     api_keys := BTreeMap.empty,
 }
@@ -102,9 +106,18 @@ pub def Settings.merge (base : Settings) (over : Settings) : Settings := {
     context_window := merge_opt base.context_window over.context_window,
     compact_at := merge_opt base.compact_at over.compact_at,
     auto_on_danger := merge_opt base.auto_on_danger over.auto_on_danger,
+    plans := merge_plans base.plans over.plans,
     caps := merge_table base.caps (BTreeMap.to_list over.caps),
     api_keys := merge_table base.api_keys (BTreeMap.to_list over.api_keys),
 }
+
+def merge_plans (base : PlanSettings) (over : PlanSettings) : PlanSettings :=
+    let p : PlanSettings := {
+        repo := merge_opt base.repo over.repo,
+        dir := merge_opt base.dir over.dir,
+        commit := merge_opt base.commit over.commit,
+    } in
+    p
 
 def merge_opt {A : Type} (base : Option A) (over : Option A) : Option A :=
     match over {
@@ -252,7 +265,7 @@ def parse_loaded (path : String) (root : BTreeMap String Toml.Value) : Loaded :=
 /// (`mcp_caps`, `api_keys`) hold user-named entries, so only the table
 /// names are checked -- their contents are free-form.
 pub def Settings.known_keys : List String :=
-    ["api_keys", "auto_on_danger", "compact_at", "context_window", "max_tokens", "max_turns", "mcp_caps", "mode", "model", "provider", "thinking"]
+    ["api_keys", "auto_on_danger", "compact_at", "context_window", "max_tokens", "max_turns", "mcp_caps", "mode", "model", "plans", "provider", "thinking"]
 
 #[partial]
 def known_key (k : String) (ks : List String) : Bool :=
@@ -349,9 +362,24 @@ def settings_of (root : BTreeMap String Toml.Value) : Settings := {
     context_window := int_at "context_window" root,
     compact_at := int_at "compact_at" root,
     auto_on_danger := str_at "auto_on_danger" root,
+    plans := plans_of (table_at "plans" root),
     caps := table_of (table_at "mcp_caps" root) parse_cap,
     api_keys := table_of (table_at "api_keys" root) key_value,
 }
+
+/// `[plans]`: `repo` (a path; `~/` is HOME, a relative path is the
+/// project's), `dir` (inside the repo) and `commit` (default true).
+def plans_of (t : Option (BTreeMap String Toml.Value)) : PlanSettings :=
+    match t {
+        Option.none => PlanSettings.empty,
+        Option.some tbl =>
+            let p : PlanSettings := {
+                repo := str_at "repo" tbl,
+                dir := str_at "dir" tbl,
+                commit := bool_at "commit" tbl,
+            } in
+            p,
+    }
 
 /// A TOML table of string values, every entry run through `validate`:
 /// a value that is not a string, or one the validator refuses, drops

@@ -20,7 +20,7 @@ use shuttle::message_types {Role, Content}
 use shuttle::session {Session}
 use weaver::commands {
     WeaverState, Effect, set_fatal, Commands.dispatch, Commands.autocompact,
-    Commands.plan_after_turn, Commands.set_plan, Commands.turn_context,
+    Commands.plan_after_turn, Commands.set_plan, Commands.turn_context, Commands.store_turn_plan,
     Commands.context_used, Commands.context_percent,
 }
 use weaver::gate {Gate.weaver}
@@ -36,6 +36,7 @@ use weaver::instructions {Instructions.take_notes, Instructions.attaching}
 use weaver::inbox {Inbox.with_notes}
 use weaver::procs {Procs.root, Procs.enforce_cap, Procs.max_log_bytes}
 use weaver::todo {TodoTool.impl}
+use weaver::plan_tool {PlanTool.impl}
 use weaver::usage {UsageTracker.start, UsageTracker.silent, UsageTracker.last}
 use weaver::format {format_tokens}
 use init::transformers {ResultT}
@@ -180,7 +181,8 @@ def drive_turn (read : Unit -> IO (Option String)) (write : String -> IO Unit) (
             // A plan-mode turn's text is captured and persisted; other
             // turns leave the stored plan untouched.
             let plan : Option String := Commands.plan_after_turn st2 before r;
-            let _ <- persist_plan st2.store plan;
+            let stored <- Commands.store_turn_plan st2 plan;
+            let _ <- write_note write stored;
             let st4 : WeaverState := match plan {
                 Option.none => st3,
                 Option.some p => Commands.set_plan st3 (Option.some p),
@@ -207,20 +209,6 @@ def set_on_usage (st : WeaverState) (f : Usage -> IO Unit) : WeaverState :=
     let run2 : RunState := { base with on_usage := f } in
     let st2 : WeaverState := { st with run := run2 } in
     st2
-
-/// Persist a plan-mode turn's text for later `/plan` displays. Silent
-/// on failure: the in-memory plan and the history remain the fallback.
-def persist_plan (store : Option StoreState) (p : Option String) : IO Unit :=
-    match p {
-        Option.none => IO.pure unit,
-        Option.some text => match store {
-            Option.none => IO.pure unit,
-            Option.some s => do {
-                let _ <- Store.write_plan s.dir text;
-                IO.pure unit
-            },
-        },
-    }
 
 def write_note (write : String -> IO Unit) (note : Option String) : IO Unit :=
     match note {
@@ -328,8 +316,8 @@ def drive_ready (read : Unit -> IO (Option String)) (write : String -> IO Unit) 
 def drive_spending (read : Unit -> IO (Option String)) (write : String -> IO Unit) (st : WeaverState) (text : String) (spend : Ref Usage) : ResultT WeaverError IO RunState := do {
     let base : RunState := st.run;
     let with_task : RunState := { base with reg := Instructions.attaching st.instr_seen st.place st.trusted
-        (ToolRegistry.register (TodoTool.impl st.store)
-            (ToolRegistry.register (Subagent.task_tool base.session.config st.instructions Option.none Option.none silent_stop spend) base.reg)),
+        (ToolRegistry.register (PlanTool.impl st.store st.plan_repo) (ToolRegistry.register (TodoTool.impl st.store)
+            (ToolRegistry.register (Subagent.task_tool base.session.config st.instructions Option.none Option.none silent_stop spend) base.reg))),
         side_spend := Subagent.drain spend };
     let gated : RunState := gate_for st text read (theme_write write st.colors) with_task;
     let ready : RunState := append_user gated text;

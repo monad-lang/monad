@@ -33,6 +33,7 @@ use weaver::commands {
     Commands.autocompact, Commands.last_assistant_text, Commands.current_plan,
     Commands.plan_after_turn, Commands.setting_rows, Commands.cycle_setting, Commands.apply_setting, SettingRow, SettingKind,
     SessionPage, Commands.session_page, Commands.sessions_for, Commands.turns_label, Commands.turn_context,
+    Commands.store_turn_plan, Commands.join_notes, Commands.note_into_state, Commands.persist_note,
 }
 use log::logger {Logger}
 use weaver::policy {Mode, Mode.show, Mode.cycle, Policy.decide, Policy.unguarded, Decision}
@@ -59,6 +60,8 @@ use weaver::title {Title.generate, Title.needed}
 use weaver::subagent {Subagent.task_tool, Subagent.drain}
 use weaver::instructions {Instructions.take_notes, Instructions.attaching}
 use weaver::todo {TodoItem, TodoTool.impl, Todo.read, Todo.same}
+use weaver::plan_tool {PlanTool.impl}
+use weaver::plan_file {PlanEntry, PlanDoc, PlanRepo.list, PlanFile.day_of}
 use weaver::procs {Procs.tail, Procs.kill, Procs.log_kill, Procs.log_exit, Procs.root, Procs.enforce_cap, Procs.max_log_bytes}
 use weaver::format {format_elapsed}
 use std::io {IO.current_time_nano}
@@ -106,7 +109,7 @@ use weaver::ui::banner {BannerMsg, Banner.shown, Banner.hidden, Banner.update, B
 use tui::component {Subs, Subs.map, Subs.on_tick}
 use weaver::ui::live {LiveMsg, Live.idle, Live.start, Live.update, Live.request_stop, Live.subscriptions, Live.write_usage, Live.store_usage}
 use init::transformers {ResultT}
-use std::path {Path}
+use std::path {Path, Path.file_name}
 use json::json {Json, Json.to_string}
 use std::list {List.intercalate, List.length}
 
@@ -1442,6 +1445,8 @@ def settings_choose_action (i : I64) (st : WeaverState) : IO WeaverMsg := do {
 def dispatch_submitted (log : Option Logger) (gen : I64) (st : WeaverState) (text : String) : IO WeaverMsg :=
     if text == "/resume"
     then resume_dialog_step st
+    else if text == "/plans"
+    then plans_dialog_step st
     else if text == "/settings"
     then settings_dialog_step st
     else if text == "/permissions"
@@ -1468,7 +1473,7 @@ def plan_dialog_wanted (st : WeaverState) (text : String) : Bool :=
 def modal_command (st : WeaverState) (text : String) : Bool :=
     Bool.or (plan_dialog_wanted st text)
         (Bool.or (text == "/settings")
-            (Bool.or (text == "/permissions") (text == "/resume")))
+            (Bool.or (text == "/permissions") (Bool.or (text == "/resume") (text == "/plans"))))
 
 def command_step_tui (st : WeaverState) (line : String) : IO WeaverMsg := do {
     let r0 <- Commands.dispatch line st;
@@ -1526,8 +1531,8 @@ def drive_turn_tui (log : Option Logger) (gen : I64) (st : WeaverState) (text : 
             // or it returns a partial application (the checker does not
             // reject an under-applied constructor/def in value position).
             let plan : Option String := Commands.plan_after_turn st2 before r;
-            let _ <- persist_plan st2.store plan;
-            return (turn_result_of st2 before note r last_context plan)
+            let stored <- Commands.store_turn_plan st2 plan;
+            return (turn_result_of st2 before (Commands.join_notes note stored) r last_context plan)
         }
     }
 }
@@ -1560,10 +1565,10 @@ def error_line (e : WeaverError) : TLine :=
 def drive_tui (log : Option Logger) (gen : I64) (st : WeaverState) (text : String) (on_usage : Usage -> IO Unit) (spend : Ref Usage) : ResultT WeaverError IO RunState := do {
     let stop : Unit -> IO Bool := Stop.predicate st.store gen;
     let with_task : RunState := { (st.run) with reg := Instructions.attaching st.instr_seen st.place st.trusted
-        (ToolRegistry.register (TodoTool.impl st.store)
+        (ToolRegistry.register (PlanTool.impl st.store st.plan_repo) (ToolRegistry.register (TodoTool.impl st.store)
             (ToolRegistry.register (WeaverShell.impl log stop (WeaverShell.fg_path st.store))
                 (ToolRegistry.register (ReadProcessTool.impl_with stop)
-                    (ToolRegistry.register (Subagent.task_tool st.run.session.config st.instructions log st.store stop spend) st.run.reg)))) };
+                    (ToolRegistry.register (Subagent.task_tool st.run.session.config st.instructions log st.store stop spend) st.run.reg))))) };
     let gated : RunState := { with_task with gate := Gate.weaver_tui log st.mode st.colors st.store st.grants (Place.cwd_of st.place) (auto_ctx log st text),
         emit := progress_live log st.store, on_usage := on_usage,
         should_stop := stop, inbox := Inbox.seam st.store, side_spend := Subagent.drain spend, stopped := false };
@@ -2044,6 +2049,116 @@ def resume_dialog_step (st : WeaverState) : IO WeaverMsg :=
         },
     }
 
+// ── the stored-plans picker (`/plans`) ─────────────────────────────────
+
+/// What the `/plans` dialogs ended with.
+pub type PlansChoice {
+    plans_pick_load (path : String),
+    plans_pick_done (path : String),
+    plans_pick_closed,
+}
+
+/// The most plans one picker page lists (a 24-row terminal fits ~11
+/// one-row options); `/plans` in a line lists them all.
+def plans_page : I64 := 10
+
+/// One stored plan's row: its title, hint `status · day`.
+pub def TuiApp.plans_option (e : PlanEntry) : DialogOption :=
+    match e.doc {
+        Option.none =>
+            let o : DialogOption := { label := ellipsize 48 (String.concat "(unreadable) " (Path.file_name (Path.path e.path))), hint := "", key := "" } in
+            o,
+        Option.some d =>
+            let hint : String := String.concat d.meta.status (String.concat " · " (PlanFile.day_of d.meta.updated)) in
+            let o : DialogOption := { label := ellipsize 48 d.meta.title, hint := hint, key := "" } in
+            o,
+    }
+
+#[partial]
+def plans_first_n (n : I64) (es : List PlanEntry) : List PlanEntry :=
+    if n < 1 then List.empty
+    else match es {
+        List.empty => List.empty,
+        List.cons e rest => List.cons e (plans_first_n (n - 1) rest),
+    }
+
+/// The picker's rows: up to `plans_page` plans, then Cancel.
+pub def TuiApp.plans_rows (es : List PlanEntry) : List DialogOption :=
+    let close_opt : DialogOption := { label := "Cancel", hint := "Esc", key := "" } in
+    List.append (List.map TuiApp.plans_option (plans_first_n plans_page es)) [close_opt]
+
+#[partial]
+def plan_entry_at (i : I64) (es : List PlanEntry) : Option PlanEntry :=
+    match es {
+        List.empty => Option.none,
+        List.cons e rest => if i < 1 then Option.some e else plan_entry_at (i - 1) rest,
+    }
+
+def plans_pick (st : WeaverState) (es : List PlanEntry) : IO PlansChoice := do {
+    let d0 : DialogModel := Dialog.make "Stored plans" "this project's plans · Enter opens · Esc cancels" List.empty (TuiApp.plans_rows es);
+    let d : DialogModel := { d0 with footer := "↑/↓ select · Enter open · Esc cancel" };
+    let pr <- Dialog.modal (paint_dialog st.colors) d;
+    match pr {
+        Pair.pair _ step => match step {
+            DialogStep.choose i => plans_open st (plan_entry_at i (plans_first_n plans_page es)),
+            _ => IO.pure PlansChoice.plans_pick_closed,
+        },
+    }
+}
+
+def plans_open (st : WeaverState) (e : Option PlanEntry) : IO PlansChoice :=
+    match e {
+        Option.none => IO.pure PlansChoice.plans_pick_closed,
+        Option.some entry => match entry.doc {
+            Option.none => IO.pure PlansChoice.plans_pick_closed,
+            Option.some d => plans_view st entry.path d,
+        },
+    }
+
+/// One stored plan, full screen: load it, close it as done, or go back.
+def plans_view (st : WeaverState) (path : String) (d : PlanDoc) : IO PlansChoice := do {
+    let o0 : DialogOption := { label := "Load into this session", hint := "l", key := "l" };
+    let o1 : DialogOption := { label := "Mark done", hint := "d", key := "d" };
+    let o2 : DialogOption := { label := "Close", hint := "Esc", key := "" };
+    let sub : String := String.concat d.meta.status (String.concat " · " path);
+    let d0 : DialogModel := Dialog.make d.meta.title sub (plan_body_of d.body) [o0, o1, o2];
+    let dm : DialogModel := { d0 with markdown := true, fullscreen := true, footer := "PageUp/PageDown scroll -- l load, d done, Esc close" };
+    let pr <- Dialog.modal (paint_dialog st.colors) dm;
+    match pr {
+        Pair.pair _ step => match step {
+            DialogStep.choose i =>
+                if i == 0 then IO.pure (PlansChoice.plans_pick_load path)
+                else if i == 1 then IO.pure (PlansChoice.plans_pick_done path)
+                else IO.pure PlansChoice.plans_pick_closed,
+            _ => IO.pure PlansChoice.plans_pick_closed,
+        },
+    }
+}
+
+/// Bare `/plans` in the TUI: pick a stored plan, view it, then load or
+/// close it through the ordinary command path. `/plans <args>` and the
+/// no-repo / no-plans answers stay plain commands.
+def plans_dialog_step (st : WeaverState) : IO WeaverMsg :=
+    match st.plan_repo {
+        Option.none => command_step_tui st "/plans",
+        Option.some r => do {
+            let es <- PlanRepo.list r;
+            if List.is_empty es then command_step_tui st "/plans"
+            else plans_dialog_run st es
+        },
+    }
+
+def plans_dialog_run (st : WeaverState) (es : List PlanEntry) : IO WeaverMsg := do {
+    let _ <- Overlay.begin st.store;
+    let choice <- plans_pick st es;
+    let _ <- Overlay.finish st.store;
+    match choice {
+        PlansChoice.plans_pick_load path => command_step_tui st (String.concat "/plans load " path),
+        PlansChoice.plans_pick_done path => command_step_tui st (String.concat "/plans done " path),
+        PlansChoice.plans_pick_closed => IO.pure (WeaverMsg.command_result (Effect.ok st "plans closed")),
+    }
+}
+
 // ── the plan dialog ────────────────────────────────────────────────────
 
 /// Display bounds for a plan preview. The full text stays in the session
@@ -2076,39 +2191,6 @@ def plan_body (st : WeaverState) : List String :=
     }
 
 def plan_effect (st : WeaverState) (output : String) : Effect := Effect.ok st output
-
-def note_into_state (st : WeaverState) (note : String) : WeaverState :=
-    let msg : Message := { role := Role.user, content := [Content.text note] } in
-    let base : Session := st.run.session in
-    let hist : List Message := base.history in
-    let sess : Session := { base with history := List.append hist [msg] } in
-    let run0 : RunState := st.run in
-    let run2 : RunState := { run0 with session := sess } in
-    { st with run := run2 }
-
-def persist_note (st : WeaverState) (note : String) : IO Unit :=
-    match st.store {
-        Option.none => IO.pure unit,
-        Option.some s => do {
-            let _ <- Store.append_history_note s st.run.session note;
-            IO.pure unit
-        },
-    }
-
-/// Persist a plan-mode turn's text for later `/plan` displays. A store
-/// failure is silent here: the plan still lives in `WeaverState`, and
-/// the transcript/history remains the fallback.
-def persist_plan (store : Option StoreState) (p : Option String) : IO Unit :=
-    match p {
-        Option.none => IO.pure unit,
-        Option.some text => match store {
-            Option.none => IO.pure unit,
-            Option.some s => do {
-                let _ <- Store.write_plan s.dir text;
-                IO.pure unit
-            },
-        },
-    }
 
 // ── agent-generated session titles ─────────────────────────────────────
 // After the first turn (or a plan) one small model call names the
@@ -2279,8 +2361,8 @@ def plan_approval_step (st : WeaverState) : IO WeaverMsg := do {
                                 if String.is_empty note
                                 then IO.pure (WeaverMsg.command_result e)
                                 else do {
-                                    persist_note e.state note;
-                                    let st2 : WeaverState := note_into_state e.state note;
+                                    Commands.persist_note e.state note;
+                                    let st2 : WeaverState := Commands.note_into_state e.state note;
                                     let out : String := String.concat e.output (String.concat "\nnote: " note);
                                     let e2 : Effect := { e with state := st2, output := out };
                                     IO.pure (WeaverMsg.command_result e2)

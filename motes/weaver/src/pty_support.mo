@@ -62,9 +62,10 @@ pub def temp_root (label : String) : IO String := do {
 def base_env (root : String) : List (Pair String (Option String)) :=
     List.cons (Pair.pair "HOME" (Option.some root))
         (List.cons (Pair.pair "WEAVER_SESSION_ROOT" (Option.some (String.concat root "/sessions")))
-            (List.cons (Pair.pair "WEAVER_PROC_ROOT" (Option.some (String.concat root "/procs")))
-                (List.cons (Pair.pair "NO_COLOR" Option.none)
-                    (List.cons (Pair.pair "WEAVER_TRUST" (Option.some "1")) List.empty))))
+            (List.cons (Pair.pair "WEAVER_PLAN_REPO" (Option.some (String.concat root "/plans")))
+                (List.cons (Pair.pair "WEAVER_PROC_ROOT" (Option.some (String.concat root "/procs")))
+                    (List.cons (Pair.pair "NO_COLOR" Option.none)
+                        (List.cons (Pair.pair "WEAVER_TRUST" (Option.some "1")) List.empty)))))
 
 def turns_env (fixture : Option String) : List (Pair String (Option String)) :=
     match fixture {

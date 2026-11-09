@@ -31,9 +31,10 @@ use weaver::cli {*}
 use weaver::cli_spec {
     weaver_cli_spec, WeaverCli.provider_text, WeaverCli.model_text, WeaverCli.max_turns_of,
     WeaverCli.resume_text, WeaverCli.resume_asked, WeaverCli.cont_of, WeaverCli.no_color_of,
-    WeaverCli.mcps, WeaverCli.version, WeaverCli.trust_of,
+    WeaverCli.mcps, WeaverCli.version, WeaverCli.trust_of, WeaverCli.plan_of,
 }
-use weaver::commands {WeaverState, Commands.set_plan, Commands.session_name}
+use weaver::plan_file {PlanRepo, PlanRepo.resolve}
+use weaver::commands {WeaverState, Commands.set_plan, Commands.session_name, Commands.find_plan, Commands.load_plan, Commands.join_notes}
 use weaver::monad_tools {MonadCheck.tool, MonadEval.tool}
 use lang::module {ModuleInfoCache, module_info_cache_empty}
 use weaver::store {
@@ -144,6 +145,8 @@ struct Plan {
     trusted : Bool := false,
     /// The AGENTS.md files the system prompt carries (`instructions.mo`).
     instructions : List InstrFile := List.empty,
+    /// `--plan`: a stored plan to load at startup (`plan_file.mo`).
+    plan_key : Option String := Option.none,
 }
 
 /// The start plan, resolved RUNTIME -> PROJECT -> GLOBAL -> default:
@@ -248,7 +251,7 @@ def turn_cap (n : I64) : Result String I64 :=
     if n < 1 then Result.err "--max-turns must be at least 1" else Result.ok n
 
 def plan_done (provider : String) (cfg : ProviderConfig) (n : I64) (c : WeaverCli) (note : Option String) (window : I64) (compact_at : I64) : Result WeaverError Plan :=
-    let p : Plan := { provider := provider, cfg := cfg, max_turns := n, mcps := WeaverCli.mcps c, resume := WeaverCli.resume_text c, cont := WeaverCli.cont_of c, context_window := window, compact_at := compact_at, model_note := note } in
+    let p : Plan := { provider := provider, cfg := cfg, max_turns := n, mcps := WeaverCli.mcps c, resume := WeaverCli.resume_text c, cont := WeaverCli.cont_of c, context_window := window, compact_at := compact_at, model_note := note, plan_key := WeaverCli.plan_of c } in
     Result.ok p
 
 // ── MCP mounting (shuttle main.mo's machinery, ported) ─────────────────
@@ -624,15 +627,67 @@ def run_opened (setup : LogSetup) (colors : Bool) (p : Plan) (s : Settings) (pla
     let st0 : WeaverState := initial_state p reg s colors o.store o.session (Option.some grants) place;
     let st1 : WeaverState := Commands.set_plan st0 plan;
     let name <- Commands.session_name st1;
-    let st : WeaverState := { st1 with name := name, instr_seen := Option.some instr_seen, verdicts := Option.some verdicts };
+    let repo <- plan_repo_of s place;
+    let st_r : WeaverState := { st1 with name := name, instr_seen := Option.some instr_seen, verdicts := Option.some verdicts, plan_repo := repo };
+    let loaded <- plan_at_start st_r p.plan_key;
+    let st : WeaverState := loaded.state;
+    let o3 : OpenedSession := { o2 with note := Commands.join_notes o2.note loaded.note };
     let _ <- Logs.info setup.log (String.concat "ev=session_open session=" (session_label o));
-    let tr0 <- startup_transcript o2;
+    let tr0 <- startup_transcript o3;
     let ran_tui <- Tui.run_resumed setup.log st tr0;
-    let _ <- if Bool.not ran_tui then announce_note o2 else IO.pure unit;
+    let _ <- if Bool.not ran_tui then announce_note o3 else IO.pure unit;
     let final <- run_fallback ran_tui st;
     let _ <- Procs.shutdown;
     let _ <- dispose_all servers;
     exit_of final
+}
+
+/// The plan repo: `WEAVER_PLAN_REPO`, else the `[plans]` settings, else
+/// `~/.weaver/plans`; a project's plans go in their own directory.
+def plan_repo_of (s : Settings) (place : Option SessionPlace) : IO (Option PlanRepo) := do {
+    let env <- IO.get_env "WEAVER_PLAN_REPO";
+    let home <- IO.get_env "HOME";
+    let project : Option String := match place {
+        Option.none => Option.none,
+        Option.some pl => Option.some (Path.to_string pl.repo),
+    };
+    IO.pure (PlanRepo.resolve env home s.plans project)
+}
+
+/// The state after `--plan`, and what to tell the user.
+struct PlanStart {
+    state : WeaverState,
+    note : Option String,
+}
+
+def plan_start (st : WeaverState) (note : Option String) : PlanStart :=
+    let p : PlanStart := { state := st, note := note } in
+    p
+
+/// `--plan`: load the named stored plan, and say what happened.
+def plan_at_start (st : WeaverState) (key : Option String) : IO PlanStart :=
+    match key {
+        Option.none => IO.pure (plan_start st Option.none),
+        Option.some k => match st.plan_repo {
+            Option.none => IO.pure (plan_start st (Option.some "--plan: no plan repo (set [plans] repo, or WEAVER_PLAN_REPO)")),
+            Option.some r => plan_found st r k,
+        },
+    }
+
+def plan_found (st : WeaverState) (r : PlanRepo) (k : String) : IO PlanStart := do {
+    let found <- Commands.find_plan r k;
+    match found {
+        Option.none => IO.pure (plan_start st (Option.some (String.concat "--plan: no stored plan " (String.concat k " (/plans lists them)")))),
+        Option.some path => plan_loaded st r path,
+    }
+}
+
+def plan_loaded (st : WeaverState) (r : PlanRepo) (path : String) : IO PlanStart := do {
+    let res <- Commands.load_plan r path st;
+    match res {
+        Result.err e => IO.pure (plan_start st (Option.some (String.concat "--plan: " e))),
+        Result.ok st2 => IO.pure (plan_start st2 (Option.some (String.concat "loaded plan " (String.concat path " -- the model sees it with your first message")))),
+    }
 }
 
 /// The degradation note rides the transcript for the TUI (where the

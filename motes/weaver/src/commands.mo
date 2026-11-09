@@ -41,11 +41,11 @@ use weaver::error {WeaverError, WeaverError.of_shuttle}
 use weaver::store {
     StoreState, Store.new_session, Store.load_session, Store.sessions_in,
     Store.import_session, Store.session_dir, Store.base_name, Store.record_compacted,
-    Store.read_plan, Store.write_plan,
+    Store.read_plan, Store.write_plan, Store.append_history_note,
     SessionInfo, TitleField, StoreMeta, Store.list_sessions, Store.read_meta, Store.write_title,
     Store.derive_name, Store.derive_description,
 }
-use std::path {Path, Path.of, Path.parent, Path.to_string, Path.beq}
+use std::path {Path, Path.of, Path.parent, Path.to_string, Path.beq, Path.file_name}
 use std::io {IO.is_dir, IO.current_time_nano}
 use std::map {Map, BTreeMap}
 use std::list {List.intercalate, List.any}
@@ -59,6 +59,10 @@ use weaver::settings {SettingsUpdate, Settings.save}
 use weaver::procs {ProcEntry, Procs.list, Procs.kill}
 use weaver::logs {Logs.latest_path, Logs.tail, Logs.detect_crash}
 use weaver::trust {Trust.items, Trust.record_path, Trust.remember}
+use weaver::plan_file {
+    PlanRepo, PlanDoc, PlanEntry, PlanEntry.line, PlanFile.read, PlanFile.linked, PlanFile.link,
+    PlanRepo.capture, PlanRepo.list, PlanRepo.list_all, PlanRepo.set_status, PlanRepo.add_session, Stored,
+}
 use weaver::instructions {InstrFile, Instructions.user_path, Instructions.discover, Instructions.note, Instructions.current, Instructions.reset, Instructions.label, Prompt.system}
 
 /// Everything the interactive session carries between inputs.
@@ -126,6 +130,9 @@ pub struct WeaverState {
     auto_on_danger : AutoDanger := AutoDanger.refuse_it,
     /// Auto mode's verdicts, keyed per pick and intent (`classify.mo`).
     verdicts : Option (Ref (BTreeMap String Verdict)) := Option.none,
+    /// Where captured plans are stored (`plan_file.mo`); none when nothing
+    /// names a place (no HOME, no setting).
+    plan_repo : Option PlanRepo := Option.none,
 }
 
 /// What a command did to the transcript: ordinary output appends,
@@ -188,6 +195,7 @@ pub def command_table : BTreeMap String SlashCommand :=
             Pair.pair "/permissions" (SlashCommand.mk cmd_permissions),
             Pair.pair "/settings" (SlashCommand.mk cmd_settings),
             Pair.pair "/plan" (SlashCommand.mk cmd_plan),
+            Pair.pair "/plans" (SlashCommand.mk cmd_plans),
             Pair.pair "/provider" (SlashCommand.mk cmd_provider),
             Pair.pair "/q" (SlashCommand.mk cmd_quit),
             Pair.pair "/quit" (SlashCommand.mk cmd_quit),
@@ -681,8 +689,19 @@ def strings_empty (xs : List String) : Bool :=
 /// approving user names, and any other mode has no plan to approve.
 def cmd_plan (arg : String) (st : WeaverState) : IO (Result WeaverError Effect) :=
     if String.is_empty arg
-    then respond st (plan_show st)
+    then plan_show_stored st
     else plan_arg arg st
+
+def plan_show_stored (st : WeaverState) : IO (Result WeaverError Effect) := do {
+    let linked <- Commands.linked_plan st;
+    respond st (String.concat (plan_show st) (stored_line linked))
+}
+
+def stored_line (linked : Option String) : String :=
+    match linked {
+        Option.none => "",
+        Option.some p => String.concat "\n\nstored: " p,
+    }
 
 /// The plan to display: the captured text, else the last assistant
 /// message (a plan-mode turn that has not landed, or a session written
@@ -738,8 +757,20 @@ def landing (target : String) : Mode :=
 def approve_to (target : Mode) (st : WeaverState) : IO (Result WeaverError Effect) :=
     let st2 : WeaverState := set_mode st (Mode.approve_plan target st.mode) in
     if mode_eq st.mode Mode.plan
-    then respond st2 (String.concat "plan approved -- mode: " (Mode.show target))
+    then approved_to target st2
     else respond st2 (String.concat "no plan to approve -- mode: " (Mode.show st2.mode))
+
+/// The stored plan follows the approval: its status becomes `approved`.
+def approved_to (target : Mode) (st2 : WeaverState) : IO (Result WeaverError Effect) := do {
+    let note <- Commands.mark_linked st2 "approved" (String.concat "approved, mode " (Mode.show target));
+    respond st2 (String.concat (String.concat "plan approved -- mode: " (Mode.show target)) (notice_line note))
+}
+
+def notice_line (n : Option String) : String :=
+    match n {
+        Option.none => "",
+        Option.some t => String.concat "\n" t,
+    }
 
 def mode_eq (a : Mode) (b : Mode) : Bool :=
     match a {
@@ -1605,6 +1636,7 @@ def help_text : String :=
         "/model [name]                        show/pick or set the model",
         "/provider [ollama|mistral|openrouter|anthropic|mock] [model]  show or set the provider",
         "/plan [approve manual|allow_edit]    show the current plan; approve drops plan mode",
+        "/plans [all|show|load|done|abandon <n>]  stored plans: list, view, load into this session, close",
         "/permissions [allow|revoke ...]      list or manage session approval grants",
         "/settings [<key> <value>|save project|global]  change or save settings",
         "/tools                               list tools with their capability tags",
@@ -1686,3 +1718,271 @@ def set_session (st : WeaverState) (s : Session) (budget : I64) : WeaverState :=
     let run2 : RunState := { (st.run) with session := s, turns_left := remaining, always := List.empty } in
     let st2 : WeaverState := { st with run := run2, last_context := 0 } in
     st2
+
+// ── stored plans (`plan_file.mo`) ───────────────────────────────────────
+
+/// The plan file this session is linked to, if any.
+pub def Commands.linked_plan (st : WeaverState) : IO (Option String) :=
+    match st.store {
+        Option.none => IO.pure Option.none,
+        Option.some s => PlanFile.linked s,
+    }
+
+/// Set the linked plan's status; a notice when that failed.
+pub def Commands.mark_linked (st : WeaverState) (status : String) (why : String) : IO (Option String) := do {
+    let linked <- Commands.linked_plan st;
+    match linked {
+        Option.none => IO.pure Option.none,
+        Option.some path => mark_at st path status why,
+    }
+}
+
+def mark_at (st : WeaverState) (path : String) (status : String) (why : String) : IO (Option String) :=
+    match st.plan_repo {
+        Option.none => IO.pure Option.none,
+        Option.some r => do {
+            let res <- PlanRepo.set_status r path status why;
+            match res {
+                Result.ok _ => IO.pure Option.none,
+                Result.err e => IO.pure (Option.some (String.concat "[plan not updated: " (String.concat e "]"))),
+            }
+        },
+    }
+
+def project_of (st : WeaverState) : String :=
+    match st.place {
+        Option.none => "",
+        Option.some p => Path.to_string p.repo,
+    }
+
+/// Persist a plan-mode turn's text: the session meta (what `/resume`
+/// restores) and the plan repo (what any later session can load). Never
+/// blocks the turn; the answer is a notice when storing failed.
+pub def Commands.store_plan (st : WeaverState) (text : String) : IO (Option String) :=
+    match st.store {
+        Option.none => IO.pure Option.none,
+        Option.some s => do {
+            let _ <- Store.write_plan s.dir text;
+            store_in_repo st s text
+        },
+    }
+
+/// The turn's captured plan, if any, stored.
+pub def Commands.store_turn_plan (st : WeaverState) (plan : Option String) : IO (Option String) :=
+    match plan {
+        Option.none => IO.pure Option.none,
+        Option.some text => Commands.store_plan st text,
+    }
+
+/// Two optional notices as one.
+pub def Commands.join_notes (a : Option String) (b : Option String) : Option String :=
+    match b {
+        Option.none => a,
+        Option.some n => match a {
+            Option.none => Option.some n,
+            Option.some x => Option.some (String.concat x (String.concat "\n" n)),
+        },
+    }
+
+def store_in_repo (st : WeaverState) (s : StoreState) (text : String) : IO (Option String) :=
+    match st.plan_repo {
+        Option.none => IO.pure Option.none,
+        Option.some r => do {
+            let out <- PlanRepo.capture r s st.run.session.config.model (project_of st) text;
+            IO.pure out.notice
+        },
+    }
+
+/// A user note appended to the history (the model sees it next turn).
+pub def Commands.note_into_state (st : WeaverState) (note : String) : WeaverState :=
+    let msg : Message := { role := Role.user, content := [Content.text note] } in
+    let base : Session := st.run.session in
+    let hist : List Message := base.history in
+    let sess : Session := { base with history := List.append hist [msg] } in
+    let run0 : RunState := st.run in
+    let run2 : RunState := { run0 with session := sess } in
+    { st with run := run2 }
+
+pub def Commands.persist_note (st : WeaverState) (note : String) : IO Unit :=
+    match st.store {
+        Option.none => IO.pure unit,
+        Option.some s => do {
+            let _ <- Store.append_history_note s st.run.session note;
+            IO.pure unit
+        },
+    }
+
+/// The note a loaded plan reaches the model as.
+pub def Commands.plan_note (path : String) (d : PlanDoc) : String :=
+    let next : String := if String.is_empty d.meta.next_action then "" else String.concat "\nNext action: " d.meta.next_action in
+    String.concat_list ["Stored plan (", d.meta.status, ", ", path, "):", next, "\n\n", d.body]
+
+def plans_usage : String :=
+    "usage: /plans [all] | /plans show|load|done|abandon <n|slug|path>"
+
+def no_repo : String :=
+    "no plan repo: set [plans] repo in ~/.weaver/config.toml, or WEAVER_PLAN_REPO"
+
+/// `/plans`: list this project's stored plans (`all`: every project's),
+/// show one, load one into this session, or close one.
+def cmd_plans (arg : String) (st : WeaverState) : IO (Result WeaverError Effect) :=
+    match st.plan_repo {
+        Option.none => respond st no_repo,
+        Option.some r => plans_arg r (String.trim arg) st,
+    }
+
+def plans_arg (r : PlanRepo) (arg : String) (st : WeaverState) : IO (Result WeaverError Effect) :=
+    if String.is_empty arg then plans_list r false st
+    else if arg == "all" then plans_list r true st
+    else match split_command arg {
+        Pair.pair word key =>
+            if Bool.not (is_plans_verb word) then respond st plans_usage
+            else if String.is_empty key then respond st plans_usage
+            else plans_find r word key st,
+    }
+
+def is_plans_verb (w : String) : Bool :=
+    w == "show" || w == "load" || w == "done" || w == "abandon"
+
+def list_for (r : PlanRepo) (all : Bool) : IO (List PlanEntry) :=
+    if all then PlanRepo.list_all r else PlanRepo.list r
+
+def plans_list (r : PlanRepo) (all : Bool) (st : WeaverState) : IO (Result WeaverError Effect) := do {
+    let es <- list_for r all;
+    respond st (Commands.plans_listing r all es)
+}
+
+#[partial]
+def numbered (n : I64) (es : List PlanEntry) : List String :=
+    match es {
+        List.empty => List.empty,
+        List.cons e rest => List.cons (PlanEntry.line n e) (numbered (n + 1) rest),
+    }
+
+/// This project's plans are numbered (`/plans load 2`); every project's
+/// are listed by path, which the same commands take.
+pub def Commands.plans_listing (r : PlanRepo) (all : Bool) (es : List PlanEntry) : String :=
+    let place : String := if all then r.root else r.dir in
+    let lines : List String := if all then List.map with_path_line es else numbered 1 es in
+    match es {
+        List.empty => String.concat "no stored plans in " (String.concat place " (plan mode captures one; /plans all lists every project)"),
+        List.cons _ _ => String.concat "plans in " (String.concat place (String.concat ":\n" (List.intercalate "\n" lines))),
+    }
+
+def with_path_line (e : PlanEntry) : String :=
+    String.concat_list ["- ", String.drop 3 (PlanEntry.line 1 e), "\n  ", e.path]
+
+/// `n` (this project's listing), a path, or a slug fragment of the file
+/// name -- the newest match wins.
+pub def Commands.find_plan (r : PlanRepo) (key : String) : IO (Option String) :=
+    match parse_i64 key {
+        Option.some n => do {
+            let es <- PlanRepo.list r;
+            IO.pure (nth_path n es)
+        },
+        Option.none =>
+            if String.contains key "/" then path_if_plan key
+            else slug_anywhere r key,
+    }
+
+/// A slug names this project's plan first, else any project's.
+def slug_anywhere (r : PlanRepo) (key : String) : IO (Option String) := do {
+    let es <- PlanRepo.list r;
+    match slug_match key es {
+        Option.some p => IO.pure (Option.some p),
+        Option.none => do {
+            let all <- PlanRepo.list_all r;
+            IO.pure (slug_match key all)
+        },
+    }
+}
+
+def path_if_plan (key : String) : IO (Option String) := do {
+    let d <- PlanFile.read key;
+    match d {
+        Option.none => IO.pure Option.none,
+        Option.some _ => IO.pure (Option.some key),
+    }
+}
+
+#[partial]
+def nth_path (n : I64) (es : List PlanEntry) : Option String :=
+    match es {
+        List.empty => Option.none,
+        List.cons e rest => if n == 1 then Option.some e.path else nth_path (n - 1) rest,
+    }
+
+#[partial]
+def slug_match (key : String) (es : List PlanEntry) : Option String :=
+    match es {
+        List.empty => Option.none,
+        List.cons e rest => if String.contains (Path.file_name (Path.path e.path)) key then Option.some e.path else slug_match key rest,
+    }
+
+def plans_find (r : PlanRepo) (word : String) (key : String) (st : WeaverState) : IO (Result WeaverError Effect) := do {
+    let found <- Commands.find_plan r key;
+    match found {
+        Option.none => respond st (String.concat "no stored plan " (String.concat key " -- /plans lists them")),
+        Option.some path => plans_act r word path st,
+    }
+}
+
+def plans_act (r : PlanRepo) (word : String) (path : String) (st : WeaverState) : IO (Result WeaverError Effect) :=
+    if word == "show" then plans_show path st
+    else if word == "load" then plans_load r path st
+    else if word == "done" then plans_close r path "done" st
+    else plans_close r path "abandoned" st
+
+def plans_show (path : String) (st : WeaverState) : IO (Result WeaverError Effect) := do {
+    let d <- PlanFile.read path;
+    match d {
+        Option.none => respond st (String.concat "could not read " path),
+        Option.some doc => respond st (String.concat (String.concat path "\n\n") doc.body),
+    }
+}
+
+def plans_close (r : PlanRepo) (path : String) (status : String) (st : WeaverState) : IO (Result WeaverError Effect) := do {
+    let res <- PlanRepo.set_status r path status "";
+    match res {
+        Result.err e => respond st e,
+        Result.ok d => respond st (String.concat_list ["plan ", d.meta.title, ": ", status]),
+    }
+}
+
+def plans_load (r : PlanRepo) (path : String) (st : WeaverState) : IO (Result WeaverError Effect) := do {
+    let res <- Commands.load_plan r path st;
+    match res {
+        Result.err e => respond st e,
+        Result.ok st2 => respond st2 (String.concat_list ["loaded plan ", path, " -- the model sees it with your next message"]),
+    }
+}
+
+/// Bring a stored plan into this session: it becomes `/plan`'s plan, the
+/// session is linked to the file (so a revision or the `plan` tool
+/// updates it) and recorded in its `sessions`, and the plan reaches the
+/// model as a note.
+pub def Commands.load_plan (r : PlanRepo) (path : String) (st : WeaverState) : IO (Result String WeaverState) := do {
+    let d <- PlanFile.read path;
+    match d {
+        Option.none => IO.pure (Result.err (String.concat "could not read " path)),
+        Option.some doc => load_doc r path doc st,
+    }
+}
+
+def load_doc (r : PlanRepo) (path : String) (doc : PlanDoc) (st : WeaverState) : IO (Result String WeaverState) := do {
+    let _ <- link_and_record r path st;
+    let note : String := Commands.plan_note path doc;
+    let st1 : WeaverState := Commands.set_plan st (Option.some doc.body);
+    let _ <- Commands.persist_note st1 note;
+    IO.pure (Result.ok (Commands.note_into_state st1 note))
+}
+
+def link_and_record (r : PlanRepo) (path : String) (st : WeaverState) : IO Unit :=
+    match st.store {
+        Option.none => IO.pure unit,
+        Option.some s => do {
+            let _ <- PlanFile.link s path;
+            let _ <- PlanRepo.add_session r path s.id;
+            IO.pure unit
+        },
+    }
