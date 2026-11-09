@@ -18,7 +18,7 @@
 
 use oak::typed {Oak.Node}
 use oak::elements {
-  Html.attr, Html.button, Html.div, Html.footer, Html.li, Html.p, Html.text, Html.ul,
+    Html.attr, Html.button, Html.div, Html.footer, Html.li, Html.p, Html.text, Html.ul,
 }
 use oak::events {Html.on_click}
 use oak::app {Command, Host, Program}

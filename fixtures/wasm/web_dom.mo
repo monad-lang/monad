@@ -12,8 +12,8 @@
 #![mote { name := "web_dom", deps := [web_wasm] }]
 
 use web_wasm::dom {
-  Dom.append, Dom.child, Dom.create, Dom.node_type, Dom.query, Dom.root, Dom.set_attr,
-  Dom.tag_name, Dom.text_node, Dom.value,
+    Dom.append, Dom.child, Dom.create, Dom.node_type, Dom.query, Dom.root, Dom.set_attr,
+    Dom.tag_name, Dom.text_node, Dom.value,
 }
 
 /// `name=ok ` on success; a wrong reading says so in the page.

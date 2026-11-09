@@ -19,8 +19,8 @@ use log::logger {Logger, Logger.info, Logger.with_format, Logger.with_sink, LogF
 def check_line (line : String) : IO Unit :=
     IO.write_stdout
         (if String.starts_with "{\"fields\":" line && String.contains line "\"msg\":\"hello\""
-        then "ok\n"
-        else "bad\n")
+            then "ok\n"
+            else "bad\n")
 
 def main : IO Unit := do {
     let logger : Logger :=

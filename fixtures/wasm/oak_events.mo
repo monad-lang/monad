@@ -59,18 +59,18 @@ def state_text (m : Model) : String :=
 def view (m : Model) : Oak.Node Msg :=
     let source : Oak.Node Msg :=
         Html.div
-            [ Html.id_ "source",
-              Html.draggable true,
-              Html.drag_payload "text/plain" m.payload,
-              Html.drag_effect "copy",
-              Html.on_dragstart_msg Msg.started ]
+            [Html.id_ "source",
+                Html.draggable true,
+                Html.drag_payload "text/plain" m.payload,
+                Html.drag_effect "copy",
+                Html.on_dragstart_msg Msg.started]
             [Html.text "src"] in
     let target : Oak.Node Msg :=
         Html.div
-            [ Html.id_ "target",
-              Html.on_dragover Msg.over,
-              Html.drop_effect "copy",
-              Html.on_drop drop_msg ]
+            [Html.id_ "target",
+                Html.on_dragover Msg.over,
+                Html.drop_effect "copy",
+                Html.on_drop drop_msg]
             [Html.text m.dropped] in
     let field : Oak.Node Msg :=
         Html.input [Html.id_ "field", Html.on_input input_msg] in

@@ -14,10 +14,10 @@ use json::json {Json}
 
 def main (args : List String) : IO I64 := do {
     let doc : Json := Json.make_array
-        [ Json.make_num_int 1i64,
-          Json.make_str "a",
-          Json.make_num_float 0.5,
-          Json.make_num_float (F64.div 1.0 3.0) ];
+        [Json.make_num_int 1i64,
+            Json.make_str "a",
+            Json.make_num_float 0.5,
+            Json.make_num_float (F64.div 1.0 3.0)];
     let _ <- IO.println (Json.to_string doc);
     return 0
 }

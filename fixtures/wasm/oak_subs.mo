@@ -32,9 +32,9 @@ def update (m : I64) (msg : Msg) : Pair I64 (Command Unit Msg) :=
     }
 
 def subs (_m : I64) : List (Subscription Msg) :=
-    [ Subscription.window_msg "resize" Msg.resized,
-      Subscription.document_msg "visibilitychange" Msg.hidden,
-      Subscription.animation_frame (fn (e : WebEvent) => Msg.frame e.time_stamp) ]
+    [Subscription.window_msg "resize" Msg.resized,
+        Subscription.document_msg "visibilitychange" Msg.hidden,
+        Subscription.animation_frame (fn (e : WebEvent) => Msg.frame e.time_stamp)]
 
 def view (m : I64) : Oak.Node Msg :=
     Html.div [Html.id_ "app"]
