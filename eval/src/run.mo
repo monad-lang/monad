@@ -47,18 +47,18 @@ pub type EvalStage {
 }
 
 pub struct EvalOptions {
-    fuel : I64,          // -1 unlimited
-    depth_limit : I64,   // -1 unlimited
+    fuel : I64, // -1 unlimited
+    depth_limit : I64, // -1 unlimited
     affine : AffineMode,
-    label : String,      // diagnostics path ("scratchpad.mo", "repl.mo", ...)
+    label : String, // diagnostics path ("scratchpad.mo", "repl.mo", ...)
     verbose : Bool,
-    want_type : Bool,    // compute the type-directed value/type renderings
+    want_type : Bool, // compute the type-directed value/type renderings
     require_entry : Bool // friendly no-entry / parameter errors
 }
 
 pub struct EvalTarget {
-    root : String,               // "main", or the REPL's "__repl_expr_<n>"
-    context_path : ModulePath    // the lowerer's root module
+    root : String, // "main", or the REPL's "__repl_expr_<n>"
+    context_path : ModulePath // the lowerer's root module
 }
 
 pub struct EvalCheck {
@@ -74,9 +74,9 @@ pub struct EvalFailure {
 }
 
 pub struct EvalSuccess {
-    value_text : String,   // format_value (want_type only)
-    type_text : String,    // format_type (want_type only)
-    debug_text : String,   // show_value_debug
+    value_text : String, // format_value (want_type only)
+    type_text : String, // format_type (want_type only)
+    debug_text : String, // show_value_debug
     warnings : List String
 }
 
@@ -100,9 +100,9 @@ def entry_error (stage : EvalStage) (root : String) (warnings : List String) : E
 
 def eval_error_of (e : CoreEvalError) (warnings : List String) : EvalFailure :=
     { stage := EvalStage.eval_stage_eval,
-      message := show_core_eval_error_debug e,
-      eval_error := Option.some e,
-      warnings := warnings }
+        message := show_core_eval_error_debug e,
+        eval_error := Option.some e,
+        warnings := warnings }
 
 // --- Checking ---------------------------------------------------------
 
@@ -113,10 +113,10 @@ pub def Eval.check_elaborated (em : ElaboratedModules) (affine : AffineMode)
     (label : String) (verbose : Bool) : IO EvalCheck := do {
     let locals : LocalScope := empty_locals;
     let diags <- check_module_with_scope_classified affine em.scope em.target_decls
-                    locals (Option.some label) verbose;
+        locals (Option.some label) verbose;
     let out : EvalCheck :=
         { errors := CheckDiagnostics.errors diags,
-          warnings := CheckDiagnostics.warnings diags };
+            warnings := CheckDiagnostics.warnings diags };
     return out
 }
 
@@ -163,7 +163,7 @@ def require_root (em : ElaboratedModules) (fuel : I64) (depth_limit : I64)
         Option.some d =>
             if List.is_empty d.params
             then dispatch em fuel depth_limit want_type root context_path
-                    (root_type em.scope d) warnings
+                (root_type em.scope d) warnings
             else IO.pure (Result.err
                 (entry_error EvalStage.eval_stage_entry_params root warnings)),
     }
@@ -218,7 +218,7 @@ def eval_ir (scope : Scope) (ir : CoreIr) (globals : GlobalTable) (fuel : I64)
     (depth_limit : I64) (want_type : Bool) (typ : Term) (warnings : List String)
     : IO (Result EvalFailure EvalSuccess) :=
     match eval ir Env.env_nil globals basic_native_table
-            (global_cache_new_fueled (global_table_len globals) fuel depth_limit) {
+        (global_cache_new_fueled (global_table_len globals) fuel depth_limit) {
         Pair.pair r _ =>
             match r {
                 Result.ok v => IO.pure (render_success scope v typ want_type warnings),
@@ -233,15 +233,15 @@ def eval_ir (scope : Scope) (ir : CoreIr) (globals : GlobalTable) (fuel : I64)
 def success_typed (scope : Scope) (typ : Term) (v : Value)
     (warnings : List String) : EvalSuccess :=
     { value_text := format_value scope typ v,
-      type_text := format_type scope typ,
-      debug_text := show_value_debug v,
-      warnings := warnings }
+        type_text := format_type scope typ,
+        debug_text := show_value_debug v,
+        warnings := warnings }
 
 def success_debug (v : Value) (warnings : List String) : EvalSuccess :=
     { value_text := "",
-      type_text := "",
-      debug_text := show_value_debug v,
-      warnings := warnings }
+        type_text := "",
+        debug_text := show_value_debug v,
+        warnings := warnings }
 
 def render_success (scope : Scope) (v : Value) (typ : Term) (want_type : Bool)
     (warnings : List String) : Result EvalFailure EvalSuccess :=

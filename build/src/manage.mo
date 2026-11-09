@@ -39,16 +39,16 @@ use build::hash {Build.file_digest_with, Build.probe_digest_tool, DigestTool}
 use build::identity {Build.compiler_key_with}
 use build::closure {Build.artifact_key, Build.closure_digest_with}
 use build::check {
-  Build.check_entry_leaf, Build.cache_plan_active, Build.check_plan_all,
-  Build.cache_plan_key, Build.cache_plan_reason, Build.mote_root_of,
-  Build.root_find, CachePlan,
+    Build.check_entry_leaf, Build.cache_plan_active, Build.check_plan_all,
+    Build.cache_plan_key, Build.cache_plan_reason, Build.mote_root_of,
+    Build.root_find, CachePlan,
 }
 use build::store {
-  Build.artifact_ir_path, Build.entry_root_dir, Build.entry_root_named,
-  Build.read_leaf, Build.store_path, Entry,
+    Build.artifact_ir_path, Build.entry_root_dir, Build.entry_root_named,
+    Build.read_leaf, Build.store_path, Entry,
 }
 use build::test_cache {
-  Build.test_entry_bin, Build.test_entry_ir, Build.test_plan_all,
+    Build.test_entry_bin, Build.test_entry_ir, Build.test_plan_all,
 }
 
 open Entry {artifact, check}
@@ -365,8 +365,8 @@ def Build.artifact_keys_for (file_digest : String) (closure : String) (compiler 
         List.empty => List.empty,
         List.cons t rest =>
             List.append (Build.artifact_keys_for_one { file_digest := file_digest,
-                    closure := closure, compiler := compiler, triple := t,
-                    profiles := profiles })
+                closure := closure, compiler := compiler, triple := t,
+                profiles := profiles })
                 (Build.artifact_keys_for { file_digest := file_digest, closure := closure,
                     compiler := compiler, triples := rest, profiles := profiles })
     }
@@ -378,7 +378,7 @@ def Build.artifact_keys_for_one (file_digest : String) (closure : String) (compi
         List.empty => List.empty,
         List.cons p rest =>
             List.append [Build.artifact_key { file_digest := file_digest, closure := closure,
-                    compiler := compiler, profile := p, triple := triple }]
+                compiler := compiler, profile := p, triple := triple }]
                 (Build.artifact_keys_for_one { file_digest := file_digest,
                     closure := closure, compiler := compiler, triple := triple,
                     profiles := rest })

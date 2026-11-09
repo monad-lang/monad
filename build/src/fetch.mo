@@ -18,16 +18,16 @@
 // closure in `mote.lock` would be worse than no lock at all.
 
 use build::git {
-  Git.available, Git.checkout, Git.checkout_dir, Git.db_dir, Git.ensure_mirror,
-  Git.fetch, Git.missing_error, Git.prune, Git.resolve, Git.url_allowed, Git.url_error,
+    Git.available, Git.checkout, Git.checkout_dir, Git.db_dir, Git.ensure_mirror,
+    Git.fetch, Git.missing_error, Git.prune, Git.resolve, Git.url_allowed, Git.url_error,
 }
 use build::hash {
-  Build.canonical_tree_checksum_with, Build.probe_digest_tool, DigestTool,
+    Build.canonical_tree_checksum_with, Build.probe_digest_tool, DigestTool,
 }
 use build::store {Build.monad_home}
 use lang::lock {
-  GitPin, Lock.pin_to_string, Lock.read, Lock.write, LockRead, LockedGit,
-  LockedMote, Lockfile,
+    GitPin, Lock.pin_to_string, Lock.read, Lock.write, LockRead, LockedGit,
+    LockedMote, Lockfile,
 }
 use lang::mote {Dependency, Mote.any_git_dep, Mote.discover, Mote.manifest_at, Mote.workspace_member_dirs, MoteManifest}
 use std::io {IO.println}
@@ -198,8 +198,8 @@ def Build.fetch_with (home : String) (root : MoteManifest) (mode : FetchMode) (o
 /// dependencies (inherited edges included) and write ONE root `mote.lock`.
 #[partial]
 def Build.fetch_workspace
-        (home : String) (dir : String) (members : List String)
-        (mode : FetchMode) (offline : Bool) : IO I64 := do {
+    (home : String) (dir : String) (members : List String)
+    (mode : FetchMode) (offline : Bool) : IO I64 := do {
     let ok <- Git.available;
     if Bool.not ok then do {
         IO.println ("error: " ++ Git.missing_error);
@@ -215,8 +215,8 @@ def Build.fetch_workspace
 
 #[partial]
 def Build.fetch_workspace_locked
-        (home : String) (dir : String) (members : List String)
-        (mode : FetchMode) (offline : Bool) (tool : DigestTool) : IO I64 := do {
+    (home : String) (dir : String) (members : List String)
+    (mode : FetchMode) (offline : Bool) (tool : DigestTool) : IO I64 := do {
     let lock_path : String := raw_path_join dir "mote.lock";
     let read <- Lock.read (Path.path lock_path);
     match read {
@@ -659,11 +659,11 @@ def Build.verify_home (home : String) (m : MoteManifest) (locked : Bool) : IO (R
     if Bool.not (Mote.any_git_dep m.deps_full)
     then return (Result.ok Unit.unit)
     else do {
-    let read <- Lock.read (Path.path (raw_path_join m.dir "mote.lock"));
-    match read {
-        Result.err e => return (Result.err e),
-        Result.ok found => Build.verify_entries home locked found m.deps_full
-    }
+        let read <- Lock.read (Path.path (raw_path_join m.dir "mote.lock"));
+        match read {
+            Result.err e => return (Result.err e),
+            Result.ok found => Build.verify_entries home locked found m.deps_full
+        }
     }
 }
 

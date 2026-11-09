@@ -1,11 +1,11 @@
 use std::list {List.length}
 open IO {
-  println, read_file, file_exists,
-  write_file, read_stdin_exact, write_stdout, flush_stdout, write_stderr,
+    println, read_file, file_exists,
+    write_file, read_stdin_exact, write_stdout, flush_stdout, write_stderr,
 }
 use std::process {
-  Child, Proc.kill, Proc.read_line, Proc.read_stderr_line, Proc.spawn, Proc.wait,
-  exec_cmd, process_id,
+    Child, Proc.kill, Proc.read_line, Proc.read_stderr_line, Proc.spawn, Proc.wait,
+    exec_cmd, process_id,
 }
 use std::watch {Watch, Watch.drain, Watch.close, Watch.default_ignored, Watch.recursive, WatchBatch}
 use std::stream {StreamError}
@@ -17,7 +17,7 @@ use std::stream {StreamError}
 use std::concurrent::fiber {Fiber, FiberError, FiberError.message, await_fiber, forkIO}
 use std::bench {Bench.now, Bench.report_since}
 use lang::types {
-  Decl, LocalScope, ModulePath, NamePath, id, module_path_to_string_colon, show_identifier, show_module_path,
+    Decl, LocalScope, ModulePath, NamePath, id, module_path_to_string_colon, show_identifier, show_module_path,
 }
 use llvm::ir {LLVMModule, emit_module}
 use llvm::link {link_ir, mkdir_parent}
@@ -27,30 +27,30 @@ use codegen::emit {compile_db_module_with_debug, compile_loaded_modules_to_ir_wi
 use codegen::decls {collect_all_decls_from_modules, export_names}
 use lang::module {BatchCheckResult, CheckDiagnostics, ElaboratedAndCache, collect_link_libs, collect_link_pkgs, get_loaded_all, ElaboratedModules, FileCheckAndCache, FileCheckResult, LoadedModules, ModuleInfo, ModuleInfoCache, bench_step, check_file_cached, check_files_cached, check_module_with_scope_path, elaborate_loaded_modules, elaborate_loaded_modules_cached, elaborate_module_decls_best_effort, expand_check_paths, extract_directory, load_file_modules, load_module_with_info, module_name_from_path, module_info_cache_empty, ownership_refusal_of_loaded, resolve_runtime_src, try_parse_decls, try_parse_decls_strict}
 use lang::mote {
-  Mote.discover, Mote.discover_config_target_dir, Mote.target_roots,
-  Mote.discover, Mote.workspace_members, Mote.manifest_at,
-  Mote.scripts_at_path, MoteManifest, BinTarget, ScriptTarget,
-  ScriptTarget.script_name, ScriptTarget.script_path, ScriptTarget.script_mote,
+    Mote.discover, Mote.discover_config_target_dir, Mote.target_roots,
+    Mote.discover, Mote.workspace_members, Mote.manifest_at,
+    Mote.scripts_at_path, MoteManifest, BinTarget, ScriptTarget,
+    ScriptTarget.script_name, ScriptTarget.script_path, ScriptTarget.script_mote,
 }
 use build::closure {Build.input_hash}
 use build::store {
-  Build.artifact_ir_path, Build.ensure_dir, Build.ensure_entry_dir, Build.monad_home,
-  Build.store_path, Build.target_dir_at, Build.target_dir_for,
-  Build.target_dir_of, artifact,
+    Build.artifact_ir_path, Build.ensure_dir, Build.ensure_entry_dir, Build.monad_home,
+    Build.store_path, Build.target_dir_at, Build.target_dir_for,
+    Build.target_dir_of, artifact,
 }
 use build::check {
-  Build.check_block, Build.check_entry_read, Build.check_maybe_write,
-  Build.check_plan, Build.cache_plan_active, Build.cache_plan_key,
-  Build.cache_plan_reason, Build.cache_plan_root, Build.mote_root_of, CachePlan,
+    Build.check_block, Build.check_entry_read, Build.check_maybe_write,
+    Build.check_plan, Build.cache_plan_active, Build.cache_plan_key,
+    Build.cache_plan_reason, Build.cache_plan_root, Build.mote_root_of, CachePlan,
 }
 use build::manage {
-  Build.clean_run, Build.gc_run, Build.store_ls, Build.store_verify,
+    Build.clean_run, Build.gc_run, Build.store_ls, Build.store_verify,
 }
 use build::fetch {Build.fetch_run, Build.verify_manifest, FetchMode}
 use build::test_cache {
-  Build.test_cached_ready, Build.test_entry_bin, Build.test_entry_dir,
-  Build.test_entry_count_read, Build.test_entry_count_write, Build.test_entry_prepare,
-  Build.test_entry_report, Build.test_plan,
+    Build.test_cached_ready, Build.test_entry_bin, Build.test_entry_dir,
+    Build.test_entry_count_read, Build.test_entry_count_write, Build.test_entry_prepare,
+    Build.test_entry_report, Build.test_plan,
 }
 use std::list {List.contains_by}
 use std::map {}
@@ -143,7 +143,7 @@ def link_compiled_module (mod_result : Result CodegenError LLVMModule) (link_lib
 /// extra flag required (confirmed directly -- a `-g`-style flag doesn't
 /// exist on `llc`, unlike `clang`'s own C-source `-g`).
 #[partial]
-def compile_parsed_decls (decl_list : List Decl) (base_dir : String) (output_dir : Path) (output_name : Path) (ir : Option Path) (verbose: Bool) (source_path : Option String) (target : TargetSpec) : IO I64 {
+def compile_parsed_decls (decl_list : List Decl) (base_dir : String) (output_dir : Path) (output_name : Path) (ir : Option Path) (verbose : Bool) (source_path : Option String) (target : TargetSpec) : IO I64 {
     let mod_ : LLVMModule := compile_db_module_with_debug decl_list source_path List.empty target.triple;
     let ir_text := emit_module mod_;
     let ir_path : Path := resolve_ir_path ir output_dir output_name;
@@ -313,8 +313,8 @@ def build_cached_at (src : String) (root : String) (dest_name : Path) (target_di
         Result.err m => do {
             stage verbose ("cache off: " ++ m);
             compile_file { file_path := src, output_dir := (Path.path dest_dir),
-            output_name := dest_name, ir := ir, verbose := verbose,
-            debug := debug, target := target }
+                output_name := dest_name, ir := ir, verbose := verbose,
+                debug := debug, target := target }
         },
         Result.ok h => build_cached_keyed { src := src, target_dir := target_dir,
             h := h, ir := ir, dest_name := dest_name, verbose := verbose,
@@ -733,34 +733,34 @@ def install_binary (home : String) (src : String) (name : String) : IO I64 := do
     let dest_dir : String := build_dest_dir target_dir false;
     let built : String := Path.to_string (Path.join (Path.path dest_dir) (Path.path name));
     let bin_dir : String := raw_path_join home "bin";
-            let dest : String := raw_path_join bin_dir name;
-            let tmp : String := dest ++ ".tmp";
-            let _ <- exec_cmd "mkdir" ["-p", bin_dir];
-            let link_status <- exec_cmd "test" ["-L", dest];
-            let cp_status <- exec_cmd "cp" ["-f", built, tmp];
-            if not (cp_status == 0) then do {
+        let dest : String := raw_path_join bin_dir name;
+        let tmp : String := dest ++ ".tmp";
+        let _ <- exec_cmd "mkdir" ["-p", bin_dir];
+        let link_status <- exec_cmd "test" ["-L", dest];
+        let cp_status <- exec_cmd "cp" ["-f", built, tmp];
+        if not (cp_status == 0) then do {
+            let _ <- exec_cmd "rm" ["-f", tmp];
+            println ("error: could not copy " ++ built ++ " to " ++ tmp);
+            return 1
+        } else do {
+            let mv_status <- exec_cmd "mv" ["-f", tmp, dest];
+            if not (mv_status == 0) then do {
                 let _ <- exec_cmd "rm" ["-f", tmp];
-                println ("error: could not copy " ++ built ++ " to " ++ tmp);
+                println ("error: could not install " ++ dest);
                 return 1
             } else do {
-                let mv_status <- exec_cmd "mv" ["-f", tmp, dest];
-                if not (mv_status == 0) then do {
-                    let _ <- exec_cmd "rm" ["-f", tmp];
-                    println ("error: could not install " ++ dest);
+                let chmod_status <- exec_cmd "chmod" ["755", dest];
+                if not (chmod_status == 0) then do {
+                    println ("error: could not make " ++ dest ++ " executable");
                     return 1
                 } else do {
-                    let chmod_status <- exec_cmd "chmod" ["755", dest];
-                    if not (chmod_status == 0) then do {
-                        println ("error: could not make " ++ dest ++ " executable");
-                        return 1
-                    } else do {
-                        let _ <- if link_status == 0 then println ("note: replaced the existing symlink at " ++ dest) else IO.pure Unit.unit;
-                        println ("installed " ++ name ++ " to " ++ dest);
-                        return 0
-                    }
+                    let _ <- if link_status == 0 then println ("note: replaced the existing symlink at " ++ dest) else IO.pure Unit.unit;
+                    println ("installed " ++ name ++ " to " ++ dest);
+                    return 0
                 }
             }
-    }
+        }
+}
 
 /// Parse a source file and compile + run it via LLVM. Stage 3 of
 /// `bootstrapping/unify-check-compile-test-elaboration.md`: gates on the
@@ -800,61 +800,61 @@ def compile_file (file_path : String) (output_dir : Path) (output_name : Path) (
         println ("error: file not found: " ++ file_path);
         return 1
     } else do {
-    let total_start : I64 <- Bench.now;
-    println <| "compiling: " ++ file_path ++ " to " ++ Path.to_string (Path.join output_dir output_name);
-    stage verbose "load + elaborate modules";
-    let t_elaborate : I64 <- Bench.now;
-    let elaborated_result <- elaborate_loaded_modules file_path false verbose;
-    if verbose then do {
-        Bench.report_since "elaborate_loaded_modules" t_elaborate;
-        return unit
-    } else return unit;
-    match elaborated_result {
-        Result.ok em =>
+        let total_start : I64 <- Bench.now;
+        println <| "compiling: " ++ file_path ++ " to " ++ Path.to_string (Path.join output_dir output_name);
+        stage verbose "load + elaborate modules";
+        let t_elaborate : I64 <- Bench.now;
+        let elaborated_result <- elaborate_loaded_modules file_path false verbose;
+        if verbose then do {
+            Bench.report_since "elaborate_loaded_modules" t_elaborate;
+            return unit
+        } else return unit;
+        match elaborated_result {
+            Result.ok em =>
             do {
-                    let empty_locs : LocalScope := { vars := List.empty, parent := Option.none };
-                    stage verbose "typecheck target";
-                    let t_check : I64 <- Bench.now;
-                    let checked <- check_module_with_scope_path em.scope em.target_decls empty_locs file_path verbose;
-                    if verbose then do {
-                        Bench.report_since "check_module_with_scope_path" t_check;
-                        return unit
-                    } else return unit;
-                    // Warnings (the affine rule in a `warn` mote) never
-                    // fail the stage; errors do, exactly as before.
-                    let _shown <- print_diagnostics (CheckDiagnostics.warnings checked);
-                    let diags : List String := CheckDiagnostics.errors checked;
-                    match diags {
-                        List.cons _ _ => do {
-                            fail_line "FAILED at stage: typecheck (target file did not typecheck cleanly)";
-                            print_diagnostics diags;
-                            if verbose then do {
-                                Bench.report_since "compile_file total (failed at typecheck)" total_start;
-                                return unit
-                            } else return unit;
-                            return 1
-                        },
-                        List.empty => do {
-                            stage verbose "codegen + link";
-                            let link_result <- compile_file_codegen { file_path := file_path, output_dir := output_dir, output_name := output_name, ir := ir, verbose := verbose, debug := debug, target := target, preloaded := Option.some em.loaded };
-                            if verbose then do {
-                                Bench.report_since "compile_file total" total_start;
-                                return unit
-                            } else return unit;
-                            return link_result
-                        },
-                    }
+                let empty_locs : LocalScope := { vars := List.empty, parent := Option.none };
+                stage verbose "typecheck target";
+                let t_check : I64 <- Bench.now;
+                let checked <- check_module_with_scope_path em.scope em.target_decls empty_locs file_path verbose;
+                if verbose then do {
+                    Bench.report_since "check_module_with_scope_path" t_check;
+                    return unit
+                } else return unit;
+                // Warnings (the affine rule in a `warn` mote) never
+                // fail the stage; errors do, exactly as before.
+                let _shown <- print_diagnostics (CheckDiagnostics.warnings checked);
+                let diags : List String := CheckDiagnostics.errors checked;
+                match diags {
+                    List.cons _ _ => do {
+                        fail_line "FAILED at stage: typecheck (target file did not typecheck cleanly)";
+                        print_diagnostics diags;
+                        if verbose then do {
+                            Bench.report_since "compile_file total (failed at typecheck)" total_start;
+                            return unit
+                        } else return unit;
+                        return 1
+                    },
+                    List.empty => do {
+                        stage verbose "codegen + link";
+                        let link_result <- compile_file_codegen { file_path := file_path, output_dir := output_dir, output_name := output_name, ir := ir, verbose := verbose, debug := debug, target := target, preloaded := Option.some em.loaded };
+                        if verbose then do {
+                            Bench.report_since "compile_file total" total_start;
+                            return unit
+                        } else return unit;
+                        return link_result
+                    },
+                }
             },
-        Result.err e => do {
-            fail_line ("FAILED at stage: load (could not load dependencies: " ++ e ++ ")");
-            let link_result <- compile_file_codegen { file_path := file_path, output_dir := output_dir, output_name := output_name, ir := ir, verbose := verbose, debug := debug, target := target, preloaded := Option.none };
-            if verbose then do {
-                Bench.report_since "compile_file total" total_start;
-                return unit
-            } else return unit;
-            return link_result
-        },
-    }
+            Result.err e => do {
+                fail_line ("FAILED at stage: load (could not load dependencies: " ++ e ++ ")");
+                let link_result <- compile_file_codegen { file_path := file_path, output_dir := output_dir, output_name := output_name, ir := ir, verbose := verbose, debug := debug, target := target, preloaded := Option.none };
+                if verbose then do {
+                    Bench.report_since "compile_file total" total_start;
+                    return unit
+                } else return unit;
+                return link_result
+            },
+        }
     }
 }
 
@@ -994,7 +994,7 @@ def script_owner_dir (base_dir : String) (mote_name : String) : IO (Option Strin
 
 #[partial]
 def script_find_in_members (root : String) (members : List String) (name : String) :
-        IO (Option (Pair String ScriptTarget)) :=
+    IO (Option (Pair String ScriptTarget)) :=
     match members {
         List.empty => IO.pure Option.none,
         List.cons m rest => do {
@@ -1057,9 +1057,9 @@ def script_build_and_run (manifest_dir : String) (t : ScriptTarget)
         Option.some owner =>
             if watch
             then script_watch manifest_dir owner t target_dir_flag verbose debug no_cache
-                     program_args
+                program_args
             else script_build_and_run_once owner t target_dir_flag verbose debug no_cache
-                     program_args
+                program_args
     }
 }
 
@@ -1108,136 +1108,136 @@ def script_binary_path (target_dir_flag : String) (src : String) (out_name : Pat
 def script_build_and_start (owner : String) (src : String) (out_name : Path)
     (target_dir_flag : String) (verbose : Bool) (debug : Bool) (no_cache : Bool)
     (spec : TargetSpec) (program_args : List String) : IO (Option Child) := do {
-  let rc <- build_cached_at src owner out_name target_dir_flag verbose debug no_cache spec;
-  if Bool.not (I64.beq rc 0i64)
-  then do {
-    println "script --watch: compilation failed; waiting for the next change";
-    IO.pure Option.none
-  }
-  else do {
-    let bin_path <- script_binary_path target_dir_flag src out_name debug;
-    let spawned <- Proc.spawn bin_path program_args;
-    match spawned {
-      Result.err e => do {
-        println (String.concat "script --watch: cannot run `"
-          (String.concat bin_path (String.concat "`: " e.message)));
+    let rc <- build_cached_at src owner out_name target_dir_flag verbose debug no_cache spec;
+    if Bool.not (I64.beq rc 0i64)
+    then do {
+        println "script --watch: compilation failed; waiting for the next change";
         IO.pure Option.none
-      },
-      Result.ok c => script_start_pumps c
     }
-  }
+    else do {
+        let bin_path <- script_binary_path target_dir_flag src out_name debug;
+        let spawned <- Proc.spawn bin_path program_args;
+        match spawned {
+            Result.err e => do {
+                println (String.concat "script --watch: cannot run `"
+                    (String.concat bin_path (String.concat "`: " e.message)));
+                IO.pure Option.none
+            },
+            Result.ok c => script_start_pumps c
+        }
+    }
 }
 
 def script_start_pumps (c : Child) : IO (Option Child) := do {
-  let _ <- forkIO (fn (_ : Unit) => script_pump_stdout c);
-  let _ <- forkIO (fn (_ : Unit) => script_pump_stderr c);
-  IO.pure (Option.some c)
+    let _ <- forkIO (fn (_ : Unit) => script_pump_stdout c);
+    let _ <- forkIO (fn (_ : Unit) => script_pump_stderr c);
+    IO.pure (Option.some c)
 }
 
 #[terminating]
 def script_pump_stdout (c : Child) : IO Unit := do {
-  let r <- Proc.read_line c;
-  match r {
-    Result.ok more => script_stdout_line c more,
-    Result.err _ => IO.pure Unit.unit
-  }
+    let r <- Proc.read_line c;
+    match r {
+        Result.ok more => script_stdout_line c more,
+        Result.err _ => IO.pure Unit.unit
+    }
 }
 
 #[terminating]
 def script_stdout_line (c : Child) (more : Option String) : IO Unit :=
-  match more {
-    Option.some line => do {
-      println line;
-      script_pump_stdout c
-    },
-    Option.none => IO.pure Unit.unit
-  }
+    match more {
+        Option.some line => do {
+            println line;
+            script_pump_stdout c
+        },
+        Option.none => IO.pure Unit.unit
+    }
 
 #[terminating]
 def script_pump_stderr (c : Child) : IO Unit := do {
-  let r <- Proc.read_stderr_line c;
-  match r {
-    Result.ok more => script_stderr_line c more,
-    Result.err _ => IO.pure Unit.unit
-  }
+    let r <- Proc.read_stderr_line c;
+    match r {
+        Result.ok more => script_stderr_line c more,
+        Result.err _ => IO.pure Unit.unit
+    }
 }
 
 #[terminating]
 def script_stderr_line (c : Child) (more : Option String) : IO Unit :=
-  match more {
-    Option.some line => do {
-      IO.write_stderr (String.concat line "\n");
-      script_pump_stderr c
-    },
-    Option.none => IO.pure Unit.unit
-  }
+    match more {
+        Option.some line => do {
+            IO.write_stderr (String.concat line "\n");
+            script_pump_stderr c
+        },
+        Option.none => IO.pure Unit.unit
+    }
 
 /// SIGKILL and reap the running script, if any. `Proc.kill` is idempotent, so
 /// a child that already exited is not an error.
 def script_stop (child : Option Child) : IO Unit :=
-  match child {
-    Option.none => IO.pure Unit.unit,
-    Option.some c => Proc.kill c
-  }
+    match child {
+        Option.none => IO.pure Unit.unit,
+        Option.some c => Proc.kill c
+    }
 
 /// Any event at all, or a lost-event overflow, means rerun.
 def script_batch_changed (batch : WatchBatch) : Bool :=
-  match batch.events {
-    List.empty => batch.overflow,
-    List.cons _ _ => true
-  }
+    match batch.events {
+        List.empty => batch.overflow,
+        List.cons _ _ => true
+    }
 
 /// Discard events that arrived while we reacted (killing, building): the build
 /// reads the files fresh, so swallowing them cannot lose a change, and it
 /// stops a burst from triggering a second rebuild.
 def script_settle (w : Watch) : IO Unit := do {
-  let _ <- Watch.drain (Shared.of w) 0 50;
-  IO.pure Unit.unit
+    let _ <- Watch.drain (Shared.of w) 0 50;
+    IO.pure Unit.unit
 }
 
 #[terminating]
 def script_watch_loop (w : Watch) (owner : String) (src : String) (out_name : Path)
     (target_dir_flag : String) (verbose : Bool) (debug : Bool) (no_cache : Bool)
     (spec : TargetSpec) (program_args : List String) (child : Option Child) : IO I64 := do {
-  let got <- Watch.drain (Shared.of w) 1000 50;
-  match got {
-    Result.err e => do {
-      let _ <- Watch.close w;
-      println (String.concat "script --watch: the tree changed under the watcher: " e.message);
-      script_stop child;
-      return 1
-    },
-    Result.ok batch =>
-      if script_batch_changed batch
-      then script_watch_rerun w owner src out_name target_dir_flag verbose debug no_cache spec
-             program_args child
-      else script_watch_loop w owner src out_name target_dir_flag verbose debug no_cache spec
-             program_args child
-  }
+    let got <- Watch.drain (Shared.of w) 1000 50;
+    match got {
+        Result.err e => do {
+            let _ <- Watch.close w;
+            println (String.concat "script --watch: the tree changed under the watcher: " e.message);
+            script_stop child;
+            return 1
+        },
+        Result.ok batch =>
+            if script_batch_changed batch
+            then script_watch_rerun w owner src out_name target_dir_flag verbose debug no_cache spec
+                program_args child
+            else script_watch_loop w owner src out_name target_dir_flag verbose debug no_cache spec
+                program_args child
+    }
 }
 
 #[terminating]
 def script_watch_rerun (w : Watch) (owner : String) (src : String) (out_name : Path)
     (target_dir_flag : String) (verbose : Bool) (debug : Bool) (no_cache : Bool)
     (spec : TargetSpec) (program_args : List String) (child : Option Child) : IO I64 := do {
-  script_stop child;
-  script_settle w;
-  let next <- script_build_and_start owner src out_name target_dir_flag verbose debug no_cache
-    spec program_args;
-  script_watch_loop w owner src out_name target_dir_flag verbose debug no_cache spec
-    program_args next
+    script_stop child;
+    script_settle w;
+    let next <- script_build_and_start owner src out_name target_dir_flag verbose debug no_cache
+        spec program_args;
+    script_watch_loop w owner src out_name target_dir_flag verbose debug no_cache spec
+        program_args next
 }
 
 def script_watch_opened (w : Watch) (owner : String) (t : ScriptTarget)
     (target_dir_flag : String) (verbose : Bool) (debug : Bool) (no_cache : Bool)
     (program_args : List String) : IO I64 := do {
-  let src := ScriptTarget.script_path t;
-  let out_name : Path := Path.path (ScriptTarget.script_name t);
-  let spec <- TargetSpec.native;
-  let child <- script_build_and_start owner src out_name target_dir_flag verbose debug no_cache
-    spec program_args;
-  script_watch_loop w owner src out_name target_dir_flag verbose debug no_cache spec
-    program_args child
+    let src := ScriptTarget.script_path t;
+    let out_name : Path := Path.path (ScriptTarget.script_name t);
+    let spec <- TargetSpec.native;
+    let child <- script_build_and_start owner src out_name target_dir_flag verbose debug no_cache
+        spec program_args;
+    script_watch_loop w owner src out_name target_dir_flag verbose debug no_cache spec
+        program_args child
 }
 
 /// `monad script <name> --watch`. The manifest's tree is the watch root: the
@@ -1248,22 +1248,22 @@ def script_watch_opened (w : Watch) (owner : String) (t : ScriptTarget)
 def script_watch (manifest_dir : String) (owner : String) (t : ScriptTarget)
     (target_dir_flag : String) (verbose : Bool) (debug : Bool) (no_cache : Bool)
     (program_args : List String) : IO I64 := do {
-  // The nearest-manifest walk reports "."'s manifest as `""`, which is a fine
-  // closure root (the build fills it in) but not a path to open.
-  let root : String := if String.is_empty manifest_dir then "." else manifest_dir;
-  let opened <- Watch.recursive (Path.path root) Watch.default_ignored;
-  match opened {
-    Result.err e => do {
-      println (String.concat "script --watch: cannot watch `"
-        (String.concat root (String.concat "`: " e.message)));
-      println "  hint: rerun without --watch to run the script once";
-      return 1
-    },
-    Result.ok w => do {
-      println (String.concat "script --watch: watching " root);
-      script_watch_opened w owner t target_dir_flag verbose debug no_cache program_args
+    // The nearest-manifest walk reports "."'s manifest as `""`, which is a fine
+    // closure root (the build fills it in) but not a path to open.
+    let root : String := if String.is_empty manifest_dir then "." else manifest_dir;
+    let opened <- Watch.recursive (Path.path root) Watch.default_ignored;
+    match opened {
+        Result.err e => do {
+            println (String.concat "script --watch: cannot watch `"
+                (String.concat root (String.concat "`: " e.message)));
+            println "  hint: rerun without --watch to run the script once";
+            return 1
+        },
+        Result.ok w => do {
+            println (String.concat "script --watch: watching " root);
+            script_watch_opened w owner t target_dir_flag verbose debug no_cache program_args
+        }
     }
-  }
 }
 
 #[partial]
@@ -1513,67 +1513,67 @@ def compile_file_codegen (file_path : String) (output_dir : Path) (output_name :
         println ("error: file not found: " ++ file_path);
         return 1
     } else do {
-    let res <-
+        let res <-
         match preloaded {
             Option.some already => do { return (Result.ok already) },
             Option.none => load_file_modules file_path verbose,
         };
-    match res {
-        Result.ok loaded => do {
-            // Ownership mode is only sound on error-mode affine code, so
-            // refuse a build whose loaded closure still contains a
-            // `[affine] mode = "warn"` mote rather than mis-freeing.
-            let refusal <- ownership_refusal_of_loaded loaded;
-            match refusal {
-                Option.some msg => do { println msg; return 1 },
-                Option.none => do {
-            // `source_path` is only set under `--debug`: it is what the debug
-            // info names as the compile's source file. `parse_all_decls`
-            // (`lang/module.mo`) locates every term on every path now, so
-            // there is no debug-only re-parse to gate on anything.
-            let source_path : Option String := if debug then Option.some file_path else Option.none;
-            // `verbose` thread-through: previously this branch dumped the
-            // ENTIRE `loaded : LoadedModules` struct (`Show.show loaded`,
-            // walking every loaded module's full content) on every
-            // successful compile -- pure noise on a working build AND a
-            // real perf hit. Now `verbose` is forwarded to
-            // `compile_loaded_modules_to_ir_with_debug`, whose own
-            // `--verbose`-gated stage trace (its per-stage printlns, plus
-            // the `Loaded N modules` count it prints on entry) is the one
-            // place that progress is reported -- a count printed here too
-            // would duplicate it two calls later.
-            let mod_result <- compile_loaded_modules_to_ir_with_debug loaded verbose source_path target.triple;
-            // `[link] libs` from every mote in the dependency closure --
-            // a package-level build property, read from the manifests
-            // rather than from any `#[extern "c"]` attribute.
-            let link_libs : List String <- collect_link_libs (get_loaded_all loaded);
-            let link_pkgs : List String <- collect_link_pkgs (get_loaded_all loaded);
-            // `#[export "c"]` symbols for the wasm link. Read from the
-            // LOADED decls (unqualified names, which `unqualify_def_name`
-            // leaves alone); `link_ir` only turns them into flags on the
-            // web profile. The same helper runs inside codegen over the
-            // qualified list, and both agree by construction -- see
-            // `decls.export_names`.
-            let export_syms : List String :=
-                export_names (collect_all_decls_from_modules (get_loaded_all loaded) List.empty);
-            link_compiled_module { mod_result := mod_result, link_libs := link_libs, link_pkgs := link_pkgs,
-                export_syms := export_syms,
-                base_dir := extract_directory file_path,
-                output_dir := output_dir, output_name := output_name,
-                ir := ir, verbose := verbose, target := target }
-                },
-            }
-        },
-        Result.err e => do {
-            println ("Failed to parse dependencies: " ++ e);
-            // Fallback to simple parsing without dependencies (for error reporting).
-            // `file_path` was already used successfully by `load_file_modules`
-            // just above (that's the error being handled), so it's known
-            // non-empty -- `Path.path` directly, not `Path.of`.
-            let source_read <- read_source_reporting file_path;
-            match source_read {
-                Option.none => do { return 1 },
-                Option.some source =>
+        match res {
+            Result.ok loaded => do {
+                // Ownership mode is only sound on error-mode affine code, so
+                // refuse a build whose loaded closure still contains a
+                // `[affine] mode = "warn"` mote rather than mis-freeing.
+                let refusal <- ownership_refusal_of_loaded loaded;
+                match refusal {
+                    Option.some msg => do { println msg; return 1 },
+                    Option.none => do {
+                        // `source_path` is only set under `--debug`: it is what the debug
+                        // info names as the compile's source file. `parse_all_decls`
+                        // (`lang/module.mo`) locates every term on every path now, so
+                        // there is no debug-only re-parse to gate on anything.
+                        let source_path : Option String := if debug then Option.some file_path else Option.none;
+                        // `verbose` thread-through: previously this branch dumped the
+                        // ENTIRE `loaded : LoadedModules` struct (`Show.show loaded`,
+                        // walking every loaded module's full content) on every
+                        // successful compile -- pure noise on a working build AND a
+                        // real perf hit. Now `verbose` is forwarded to
+                        // `compile_loaded_modules_to_ir_with_debug`, whose own
+                        // `--verbose`-gated stage trace (its per-stage printlns, plus
+                        // the `Loaded N modules` count it prints on entry) is the one
+                        // place that progress is reported -- a count printed here too
+                        // would duplicate it two calls later.
+                        let mod_result <- compile_loaded_modules_to_ir_with_debug loaded verbose source_path target.triple;
+                        // `[link] libs` from every mote in the dependency closure --
+                        // a package-level build property, read from the manifests
+                        // rather than from any `#[extern "c"]` attribute.
+                        let link_libs : List String <- collect_link_libs (get_loaded_all loaded);
+                        let link_pkgs : List String <- collect_link_pkgs (get_loaded_all loaded);
+                        // `#[export "c"]` symbols for the wasm link. Read from the
+                        // LOADED decls (unqualified names, which `unqualify_def_name`
+                        // leaves alone); `link_ir` only turns them into flags on the
+                        // web profile. The same helper runs inside codegen over the
+                        // qualified list, and both agree by construction -- see
+                        // `decls.export_names`.
+                        let export_syms : List String :=
+                        export_names (collect_all_decls_from_modules (get_loaded_all loaded) List.empty);
+                        link_compiled_module { mod_result := mod_result, link_libs := link_libs, link_pkgs := link_pkgs,
+                            export_syms := export_syms,
+                            base_dir := extract_directory file_path,
+                            output_dir := output_dir, output_name := output_name,
+                            ir := ir, verbose := verbose, target := target }
+                    },
+                }
+            },
+            Result.err e => do {
+                println ("Failed to parse dependencies: " ++ e);
+                // Fallback to simple parsing without dependencies (for error reporting).
+                // `file_path` was already used successfully by `load_file_modules`
+                // just above (that's the error being handled), so it's known
+                // non-empty -- `Path.path` directly, not `Path.of`.
+                let source_read <- read_source_reporting file_path;
+                match source_read {
+                    Option.none => do { return 1 },
+                    Option.some source =>
                     match try_parse_decls source {
                         Option.some decl_list => do {
                             let source_path : Option String := if debug then Option.some file_path else Option.none;
@@ -1606,9 +1606,9 @@ def compile_file_codegen (file_path : String) (output_dir : Path) (output_name :
                             }
                         }
                     }
+                }
             }
         }
-    }
     }
 }
 

@@ -12,8 +12,8 @@
 use std::list {List.all}
 use std::process {process_id}
 use build::git {
-  Git.available, Git.checkout, Git.checkout_dir, Git.ensure_mirror,
-  Git.fetch, Git.prune, Git.repo_key, Git.resolve, Git.url_allowed,
+    Git.available, Git.checkout, Git.checkout_dir, Git.ensure_mirror,
+    Git.fetch, Git.prune, Git.repo_key, Git.resolve, Git.url_allowed,
 }
 use lang::lock {GitPin}
 

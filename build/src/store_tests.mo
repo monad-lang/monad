@@ -8,9 +8,9 @@
 /// not the path.
 
 use build::store {
-  Build.artifact_ir_path, Build.entry_root_named, Build.resolve_target_dir,
-  Build.store_path, artifact,
-  check,
+    Build.artifact_ir_path, Build.entry_root_named, Build.resolve_target_dir,
+    Build.store_path, artifact,
+    check,
 }
 use build::identity {Build.compiler_digest, Build.compiler_exe_path}
 

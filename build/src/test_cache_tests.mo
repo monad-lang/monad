@@ -8,10 +8,10 @@
 
 use std::process {process_id}
 use build::test_cache {
-  Build.test_entry_bin, Build.test_entry_count, Build.test_entry_count_read,
-  Build.test_entry_count_write, Build.test_entry_dir, Build.test_entry_ir,
-  Build.test_entry_prepare, Build.test_entry_ready, Build.test_entry_report,
-  Build.test_key, Build.test_plan,
+    Build.test_entry_bin, Build.test_entry_count, Build.test_entry_count_read,
+    Build.test_entry_count_write, Build.test_entry_dir, Build.test_entry_ir,
+    Build.test_entry_prepare, Build.test_entry_ready, Build.test_entry_report,
+    Build.test_key, Build.test_plan,
 }
 use build::check {Build.cache_plan_active}
 

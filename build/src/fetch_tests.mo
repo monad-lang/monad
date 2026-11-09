@@ -12,8 +12,8 @@ use std::list {List.all, List.length}
 use std::process {process_id}
 use std::stream {StreamError}
 use build::fetch {
-  Build.fetch_run_with, Build.fetch_run_with_opts, Build.pin_of_dep,
-  Build.safe_subdir, Build.verify_manifest_at, FetchMode,
+    Build.fetch_run_with, Build.fetch_run_with_opts, Build.pin_of_dep,
+    Build.safe_subdir, Build.verify_manifest_at, FetchMode,
 }
 use build::hash {Build.canonical_tree_checksum}
 use lang::lock {GitPin, Lock.pin_to_string, Lock.read, LockRead, LockedMote}

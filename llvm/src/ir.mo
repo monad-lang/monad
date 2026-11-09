@@ -252,30 +252,30 @@ pub type LLVMDeclaration {
 
 pub type LLVMModule {
     mk (target_triple : String)
-       (globals : List LLVMGlobal)
-       (functions : List LLVMFunction)
-       (declarations : List LLVMDeclaration)
-       /// The `.mo` source path debug info was requested for -- `none`
-       /// means debug info is off (the default), in which case
-       /// `emit_module` emits exactly the same text it always has.
-       (debug_source : Option String)
-       /// One `(module path string, file path)` pair per loaded module,
-       /// attributing each function's `!DISubprogram` to the `!DIFile` of
-       /// the file it was actually written in. Keyed by the same
-       /// `show_module_path` string a function name's `<module>::<def>`
-       /// prefix uses, so a function's file is recoverable from its name
-       /// alone. Empty means every function is attributed to the target
-       /// file (`!3`) -- v1's behavior, and still the fallback for any
-       /// name the table has no entry for.
-       (debug_files : List (Pair String String)),
+        (globals : List LLVMGlobal)
+        (functions : List LLVMFunction)
+        (declarations : List LLVMDeclaration)
+        /// The `.mo` source path debug info was requested for -- `none`
+        /// means debug info is off (the default), in which case
+        /// `emit_module` emits exactly the same text it always has.
+        (debug_source : Option String)
+        /// One `(module path string, file path)` pair per loaded module,
+        /// attributing each function's `!DISubprogram` to the `!DIFile` of
+        /// the file it was actually written in. Keyed by the same
+        /// `show_module_path` string a function name's `<module>::<def>`
+        /// prefix uses, so a function's file is recoverable from its name
+        /// alone. Empty means every function is attributed to the target
+        /// file (`!3`) -- v1's behavior, and still the fallback for any
+        /// name the table has no entry for.
+        (debug_files : List (Pair String String)),
 }
 
 open LLVMType {fn_, f32_, f64_, i1_, i32_, i64_, i8_, ptr, struct_, void, word}
 open LLVMValue {
-  add, alloc_closure, alloc_constructor, and_, bitcast, bool_, call, fn_ref,
-  gep, global_, icmp_eq, icmp_ne, icmp_sgt, icmp_slt, icmp_ult, icmp_ugt, int32_,
-  int_, inttoptr, load, lshr_, mul, native_op, or_, parm_, phi, ptrtoint, sdiv,
-  sext, shl_, sub, trunc, udiv, urem, var_, void_val, xor_, zext,
+    add, alloc_closure, alloc_constructor, and_, bitcast, bool_, call, fn_ref,
+    gep, global_, icmp_eq, icmp_ne, icmp_sgt, icmp_slt, icmp_ult, icmp_ugt, int32_,
+    int_, inttoptr, load, lshr_, mul, native_op, or_, parm_, phi, ptrtoint, sdiv,
+    sext, shl_, sub, trunc, udiv, urem, var_, void_val, xor_, zext,
 }
 open LLVMInstruction {assign, branch, call_void, comment, jump, ret, store}
 open ParamPair {mk}
@@ -493,7 +493,7 @@ def show_llvm_value (bits : I64) (val : LLVMValue) : String := match val {
     load ty ptr_ty ptr_ =>
         String.concat "load " (String.concat (show_llvm_type_bits bits ty)
             (String.concat ", " (String.concat (show_llvm_type_bits bits ptr_ty)
-            (String.concat " " (show_llvm_value bits ptr_))))),
+                (String.concat " " (show_llvm_value bits ptr_))))),
     bitcast v from_ty to_ty =>
         String.concat "bitcast " (String.concat (show_llvm_type_bits bits from_ty)
             (String.concat " " (String.concat (show_llvm_value bits v)
@@ -501,7 +501,7 @@ def show_llvm_value (bits : I64) (val : LLVMValue) : String := match val {
     alloc_closure entry arity env =>
         String.concat "call i64 @alloc_closure(i64 " (String.concat entry
             (String.concat ", i64 " (String.concat (I64.to_string arity)
-            (String.concat ", i64 " (String.concat (I64.to_string (list_valu_len env)) ")"))))),
+                (String.concat ", i64 " (String.concat (I64.to_string (list_valu_len env)) ")"))))),
     alloc_constructor tag fields =>
         String.concat "call i64 @alloc_constructor(i64 " (String.concat (I64.to_string tag)
             (String.concat ", i64 " (String.concat (I64.to_string (list_valu_len fields)) ")"))),
@@ -610,7 +610,7 @@ def show_arith (bits : I64) (op : String) (lhs : LLVMValue) (rhs : LLVMValue) : 
 def show_ext (bits : I64) (op : String) (v : LLVMValue) (from_ty : LLVMType) (to_ty : LLVMType) : String :=
     String.concat (String.concat op " ") (String.concat (show_llvm_type_bits bits from_ty)
         (String.concat " " (String.concat (show_llvm_value bits v)
-        (String.concat " to " (show_llvm_type_bits bits to_ty)))))
+            (String.concat " to " (show_llvm_type_bits bits to_ty)))))
 
 // Real merge type (`phi_pairs_type`), not hardcoded `i64` -- see
 // `llvm_value_type`'s own `phi` arm doc comment for why (pointer-typed
@@ -661,14 +661,14 @@ def show_instruction (bits : I64) (instr : LLVMInstruction) (dbg_suffix : String
     branch cond then_label else_label =>
         String.concat "  br i1 " (String.concat (show_llvm_value bits cond)
             (String.concat ", label %" (String.concat then_label
-            (String.concat ", label %" (String.concat else_label dbg_suffix))))),
+                (String.concat ", label %" (String.concat else_label dbg_suffix))))),
     jump label =>
         String.concat "  br label %" (String.concat label dbg_suffix),
     store val ptr_ty ptr_ =>
         String.concat "  store " (String.concat (show_llvm_type_bits bits (llvm_pointee ptr_ty))
             (String.concat " " (String.concat (show_llvm_value bits val)
-            (String.concat ", " (String.concat (show_llvm_type_bits bits ptr_ty)
-            (String.concat " " (String.concat (show_llvm_value bits ptr_) dbg_suffix))))))),
+                (String.concat ", " (String.concat (show_llvm_type_bits bits ptr_ty)
+                    (String.concat " " (String.concat (show_llvm_value bits ptr_) dbg_suffix))))))),
     ret val => String.concat (show_ret_instr bits val) dbg_suffix,
     comment text =>
         String.concat "  ; " text,
@@ -761,7 +761,7 @@ def emit_instrs_step (bits : I64) (i : LLVMInstruction) (rest : List LLVMInstruc
     match i {
         LLVMInstruction.loc_marker loc => emit_instrs_go bits rest refs (dbg_suffix_for refs loc) acc,
         _ => emit_instrs_go bits rest refs current
-                (List.cons (String.concat "\n" (show_instruction bits i current)) acc),
+            (List.cons (String.concat "\n" (show_instruction bits i current)) acc),
     }
 
 /// A function's own two `!dbg` attachment forms -- LLVM needs BOTH, not
@@ -822,7 +822,7 @@ def emit_function (bits : I64) (func : LLVMFunction) (dbg_refs : List (Pair Stri
         let prefix := String.concat "\n; Function: " (String.concat name "\n") in
         let sig := String.concat "define "
             (String.concat (show_llvm_type_bits bits ret_ty)
-            (String.concat " " (String.concat (llvm_symbol_ref name) "("))) in
+                (String.concat " " (String.concat (llvm_symbol_ref name) "("))) in
         let refs := find_dbg_refs name dbg_refs in
         let sig2 := String.concat sig (String.concat (join_params bits params) (String.concat ")" (String.concat refs.define_suffix " {"))) in
         let body := emit_blocks bits blocks refs in
@@ -962,7 +962,7 @@ def show_llvm_global (g : LLVMGlobal) : String := match g {
         if constant
         then String.concat (llvm_symbol_ref name)
             (String.concat " = constant [" (String.concat (I64.to_string byte_len)
-            (String.concat " x i8] c\"" (String.concat (llvm_escape_string value) "\\00\""))))
+                (String.concat " x i8] c\"" (String.concat (llvm_escape_string value) "\\00\""))))
         else String.concat (llvm_symbol_ref name) (String.concat " = global " value),
 }
 
@@ -1466,8 +1466,8 @@ def test_loc_marker_switches_suffix_mid_block : Bool :=
     } in
     let instrs : List LLVMInstruction :=
         [LLVMInstruction.assign "t0" (add (parm_ 0) (parm_ 1)),
-         LLVMInstruction.loc_marker (DbgLoc.mk 9 5),
-         LLVMInstruction.assign "t1" (add (parm_ 0) (parm_ 1))] in
+            LLVMInstruction.loc_marker (DbgLoc.mk 9 5),
+            LLVMInstruction.assign "t1" (add (parm_ 0) (parm_ 1))] in
     // `t0` before the marker takes the function's own location; `t1` after
     // it takes the marked one; the marker itself occupies no line.
     String.beq (emit_instrs 64 instrs refs refs.instr_suffix)
@@ -1484,7 +1484,7 @@ def test_loc_marker_unknown_falls_back : Bool :=
     } in
     let instrs : List LLVMInstruction :=
         [LLVMInstruction.loc_marker (DbgLoc.mk 42 1),
-         LLVMInstruction.assign "t0" (add (parm_ 0) (parm_ 1))] in
+            LLVMInstruction.assign "t0" (add (parm_ 0) (parm_ 1))] in
     String.beq (emit_instrs 64 instrs refs refs.instr_suffix)
         "\n  %t0 = add i64 %p0, %p1, !dbg !7"
 
@@ -1504,7 +1504,7 @@ def test_build_loc_nodes_dedups_and_numbers : Bool :=
                             // the full rendering is knowable anyway.
                             String.beq s1 ", !dbg !8" && String.beq s2 ", !dbg !9"
                                 && String.beq text
-                                     "!8 = !DILocation(line: 5, column: 9, scope: !6)\n!9 = !DILocation(line: 6, column: 5, scope: !6)\n",
+                                    "!8 = !DILocation(line: 5, column: 9, scope: !6)\n!9 = !DILocation(line: 6, column: 5, scope: !6)\n",
                         Option.none => false,
                     },
                 Option.none => false,
@@ -1517,9 +1517,9 @@ def test_build_loc_nodes_dedups_and_numbers : Bool :=
 def test_collect_marker_locs_dedups : Bool :=
     let b : LLVMBasicBlock := LLVMBasicBlock.mk "entry"
         [LLVMInstruction.loc_marker (DbgLoc.mk 5 9),
-         LLVMInstruction.assign "t0" (parm_ 0),
-         LLVMInstruction.loc_marker (DbgLoc.mk 5 9),
-         LLVMInstruction.loc_marker (DbgLoc.mk 6 5)] in
+            LLVMInstruction.assign "t0" (parm_ 0),
+            LLVMInstruction.loc_marker (DbgLoc.mk 5 9),
+            LLVMInstruction.loc_marker (DbgLoc.mk 6 5)] in
     I64.beq (List.length (collect_marker_locs [b] List.empty)) 2
 
 /// The `lang/runtime.mo` generated-IR natives' byte-access shape: an

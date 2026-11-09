@@ -28,8 +28,8 @@ use build::closure {Build.closure_digest_with}
 use build::store {Build.ensure_dir, Build.entry_root_named, Build.read_leaf, Build.write_leaf}
 use parsec::number {parse_i64}
 use build::check {
-  Build.cache_plan_key, Build.check_worth_caching, CachePlan, Build.plan_keys,
-  Build.plan_roots,
+    Build.cache_plan_key, Build.check_worth_caching, CachePlan, Build.plan_keys,
+    Build.plan_roots,
 }
 
 /// `sha256(file bytes ++ mote closure ++ compiler identity ++ triple)`.

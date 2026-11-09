@@ -9,11 +9,11 @@
 use std::list {List.contains_by, List.intercalate, List.length}
 use std::sha256 {Sha256.hash}
 use lang::mote {
-  Mote.discover, Mote.toolchain_root, Mote.workspace_members, MoteManifest,
+    Mote.discover, Mote.toolchain_root, Mote.workspace_members, MoteManifest,
 }
 use build::hash {
-  Build.file_digest_with, Build.probe_digest_tool, Build.tree_digest_with,
-  DigestTool,
+    Build.file_digest_with, Build.probe_digest_tool, Build.tree_digest_with,
+    DigestTool,
 }
 use build::identity {Build.compiler_key_with}
 

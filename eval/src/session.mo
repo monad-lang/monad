@@ -27,13 +27,13 @@ use lib::run {
 }
 
 pub struct EvalSession {
-    source : String,          // committed declarations
-    cache : ModuleInfoCache,  // warm parse cache across inputs
-    file_path : String,       // "repl.mo" (cwd-relative)
-    module_name : String,     // module_name_from_path file_path
-    affine_warn : Bool,       // AffineMode is not Copy
-    decl_count : I64,         // declarations in `source`
-    next_expr : I64,          // the next synthetic expression name
+    source : String, // committed declarations
+    cache : ModuleInfoCache, // warm parse cache across inputs
+    file_path : String, // "repl.mo" (cwd-relative)
+    module_name : String, // module_name_from_path file_path
+    affine_warn : Bool, // AffineMode is not Copy
+    decl_count : I64, // declarations in `source`
+    next_expr : I64, // the next synthetic expression name
 }
 
 pub type EvalInput {
@@ -65,8 +65,8 @@ pub def Eval.new_session (file_path : String) : IO EvalSession := do {
         };
     let out : EvalSession :=
         { source := "", cache := module_info_cache_empty, file_path := file_path,
-          module_name := module_name_from_path file_path, affine_warn := warn,
-          decl_count := 0, next_expr := 0 };
+            module_name := module_name_from_path file_path, affine_warn := warn,
+            decl_count := 0, next_expr := 0 };
     return out
 }
 
@@ -217,7 +217,7 @@ def step_decls (s : EvalSession) (candidate : String) (decls : List Decl)
                     make_module_info (ModulePath.mk [Identifier.id module_name])
                         file_path rewritten;
                 let ec <- elaborate_loaded_modules_from_main main (Option.some candidate)
-                            false cache false;
+                    false cache false;
                 match ec.elaborated {
                     Result.err e => do {
                         let s2 : EvalSession := { s with cache := ec.cache };
@@ -225,7 +225,7 @@ def step_decls (s : EvalSession) (candidate : String) (decls : List Decl)
                     },
                     Result.ok em => do {
                         let checked <- Eval.check_elaborated em (mode_of affine_warn)
-                                        file_path false;
+                            file_path false;
                         match checked.errors {
                             List.cons first rest => do {
                                 let s2 : EvalSession := { s with cache := ec.cache };
@@ -272,12 +272,12 @@ def step_expr (s : EvalSession) (candidate : String) (decls : List Decl)
                             Result.ok em => do {
                                 let options : EvalOptions :=
                                     { fuel := -1, depth_limit := -1,
-                                      affine := mode_of affine_warn, label := file_path,
-                                      verbose := false, want_type := true,
-                                      require_entry := true };
+                                        affine := mode_of affine_warn, label := file_path,
+                                        verbose := false, want_type := true,
+                                        require_entry := true };
                                 let target : EvalTarget :=
                                     { root := root,
-                                      context_path := ModulePath.mk [Identifier.id module_name] };
+                                        context_path := ModulePath.mk [Identifier.id module_name] };
                                 let r <- Eval.run_elaborated em options target;
                                 match r {
                                     Result.ok success => do {
@@ -326,12 +326,12 @@ def step_type (s : EvalSession) (candidate : String) (decls : List Decl)
                             Result.ok em => do {
                                 let options : EvalOptions :=
                                     { fuel := -1, depth_limit := -1,
-                                      affine := mode_of affine_warn, label := file_path,
-                                      verbose := false, want_type := false,
-                                      require_entry := true };
+                                        affine := mode_of affine_warn, label := file_path,
+                                        verbose := false, want_type := false,
+                                        require_entry := true };
                                 let target : EvalTarget :=
                                     { root := root,
-                                      context_path := ModulePath.mk [Identifier.id module_name] };
+                                        context_path := ModulePath.mk [Identifier.id module_name] };
                                 let r <- Eval.type_of em options target;
                                 match r {
                                     Result.ok typ => do {
@@ -378,7 +378,7 @@ def declaration_starter (text : String) : Bool :=
     String.starts_with "#[" text
         || List.any (fn (word : String) => starts_word text word)
             ["def", "pub", "priv", "type", "struct", "class", "instance", "use",
-             "open", "infix", "defmacro"]
+                "open", "infix", "defmacro"]
 
 def starts_word (text : String) (word : String) : Bool :=
     if Bool.not (String.starts_with word text)

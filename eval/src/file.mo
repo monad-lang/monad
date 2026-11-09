@@ -33,7 +33,7 @@ pub def Eval.run_file_limited (fuel : I64) (depth_limit : I64) (file_path : Stri
             let mode <- Mote.affine_mode_of_path file_path;
             let options : EvalOptions :=
                 { fuel := fuel, depth_limit := depth_limit, affine := mode, label := file_path,
-                  verbose := verbose, want_type := false, require_entry := false };
+                    verbose := verbose, want_type := false, require_entry := false };
             let target : EvalTarget :=
                 { root := "main", context_path := ModulePath.mk [Identifier.id "main"] };
             let r <- Eval.run_elaborated em options target;

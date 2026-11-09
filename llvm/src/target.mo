@@ -152,21 +152,21 @@ pub def TargetPlan.for_wasm (kind : TargetKind) (triple : String) (clang : Strin
         TargetKind.web => TargetPlan.mk kind triple clang
             ["--target=wasm32-unknown-unknown", "-ffreestanding", "-fno-builtin"]
             ["--target=wasm32-unknown-unknown", "-nostdlib", "-Wl,--no-entry",
-             "-Wl,--export-memory",
-             // `monad_main` is exported by runtime/src/platform_web.c's
-             // `__attribute__((export_name("monad_main")))`; a
-             // `--export=monad_main` here would look for a C symbol of that
-             // name and fail, because the C function is `monad_web_entry`.
-             "-Wl,--export=monad_alloc", "-Wl,--export=monad_string_length",
-             // 32 MiB (the wasi profile uses 8). The browser REPL runs the
-             // compiler's own front end plus a recursive interpreter, and
-             // its step budget bounds *steps*, not stack depth. Measured:
-             // the interpreter uses ~120 KiB of wasm stack per user call
-             // (large codegen frames), so 1 MiB trapped at a few dozen
-             // frames and 32 MiB holds about 250. The evaluator's own
-             // `max_call_depth` (200) stops cleanly below that; this size
-             // is what makes the counter's bound safe.
-             "-Wl,--export=monad_i64_to_string", "-Wl,-z,stack-size=33554432"]
+                "-Wl,--export-memory",
+                // `monad_main` is exported by runtime/src/platform_web.c's
+                // `__attribute__((export_name("monad_main")))`; a
+                // `--export=monad_main` here would look for a C symbol of that
+                // name and fail, because the C function is `monad_web_entry`.
+                "-Wl,--export=monad_alloc", "-Wl,--export=monad_string_length",
+                // 32 MiB (the wasi profile uses 8). The browser REPL runs the
+                // compiler's own front end plus a recursive interpreter, and
+                // its step budget bounds *steps*, not stack depth. Measured:
+                // the interpreter uses ~120 KiB of wasm stack per user call
+                // (large codegen frames), so 1 MiB trapped at a few dozen
+                // frames and 32 MiB holds about 250. The evaluator's own
+                // `max_call_depth` (200) stops cleanly below that; this size
+                // is what makes the counter's bound safe.
+                "-Wl,--export=monad_i64_to_string", "-Wl,-z,stack-size=33554432"]
             ["-DMONAD_TARGET_WEB"] (TargetKind.output_ext kind),
         TargetKind.native => TargetPlan.native_plan triple,
     }
@@ -578,7 +578,7 @@ def TargetSpec.up_to (ch : String) (s : String) : String :=
 def TargetSpec.char_at (text : String) (len : I64) (from : I64) (ch : String) : I64 :=
     if I64.lt from len
     then if String.beq (String.slice text from 1) ch then from
-         else TargetSpec.char_at text len (from + 1) ch
+        else TargetSpec.char_at text len (from + 1) ch
     else -1
 
 /// The header line and the indented `arch - description` lines llc prints, with

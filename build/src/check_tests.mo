@@ -14,10 +14,10 @@
 
 use std::process {process_id}
 use build::check {
-  Build.check_block, Build.check_entry_dir, Build.check_entry_read,
-  Build.check_entry_write, Build.check_key, Build.check_plan,
-  Build.cache_plan_active, Build.cache_plan_key, Build.cache_plan_reason,
-  Build.cache_plan_root, Build.check_worth_caching, Build.mote_root_of, CachePlan,
+    Build.check_block, Build.check_entry_dir, Build.check_entry_read,
+    Build.check_entry_write, Build.check_key, Build.check_plan,
+    Build.cache_plan_active, Build.cache_plan_key, Build.cache_plan_reason,
+    Build.cache_plan_root, Build.check_worth_caching, Build.mote_root_of, CachePlan,
 }
 use build::store {Build.ensure_dir, Build.write_leaf}
 

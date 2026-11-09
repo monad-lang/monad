@@ -28,21 +28,21 @@ use std::list {List.filter, List.intercalate, List.length}
 use std::process {process_id}
 use lang::module {extract_directory}
 use build::check {
-  Build.check_plan, Build.cache_plan_active, Build.check_plan_all,
-  Build.cache_plan_key, Build.mote_root_of, CachePlan,
+    Build.check_plan, Build.cache_plan_active, Build.check_plan_all,
+    Build.cache_plan_key, Build.mote_root_of, CachePlan,
 }
 use build::closure {Build.artifact_key, Build.input_hash}
 use build::store {
-  Build.artifact_ir_path, Build.ensure_dir, Build.entry_root_dir, Build.write_leaf,
-  Build.store_path, artifact, check,
+    Build.artifact_ir_path, Build.ensure_dir, Build.entry_root_dir, Build.write_leaf,
+    Build.store_path, artifact, check,
 }
 use build::manage {
-  Build.artifact_keys, Build.artifact_name_key, Build.artifact_state,
-  Build.check_state, Build.clean_run, Build.droppable_name, Build.entry_views,
-  Build.gc_run, Build.is_key, Build.is_output_dir, Build.profile_names,
-  Build.strip_ir_suffix, Build.unreachable, Build.view_detail,
-  Build.view_is_artifact, Build.view_key, Build.view_kind, Build.view_not_ok,
-  EntryView,
+    Build.artifact_keys, Build.artifact_name_key, Build.artifact_state,
+    Build.check_state, Build.clean_run, Build.droppable_name, Build.entry_views,
+    Build.gc_run, Build.is_key, Build.is_output_dir, Build.profile_names,
+    Build.strip_ir_suffix, Build.unreachable, Build.view_detail,
+    Build.view_is_artifact, Build.view_key, Build.view_kind, Build.view_not_ok,
+    EntryView,
 }
 
 /// Two names of the only shape an entry may have -- 64 lowercase hex
@@ -278,8 +278,8 @@ def Build.manage_keys_agree (ks : List String) (ps : List String) : IO Bool := d
             List.empty => return false,
             List.cons p prest => do {
                 let ok : Bool := String.beq k (Build.artifact_key { file_digest := "f",
-                        closure := "c", compiler := "k", profile := p,
-                        triple := Build.manage_triple });
+                    closure := "c", compiler := "k", profile := p,
+                    triple := Build.manage_triple });
                 if ok then Build.manage_keys_agree rest prest else return false
             }
         }

@@ -31,8 +31,8 @@ pub def Build.compiler_exe_path : IO (Option String) := do {
         Pair.pair code out =>
             if code == 0
             then (if String.is_empty (String.trim out)
-                  then return Option.none
-                  else return (Option.some (String.trim out)))
+                then return Option.none
+                else return (Option.some (String.trim out)))
             else return Option.none
     }
 }

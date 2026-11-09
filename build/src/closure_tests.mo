@@ -10,8 +10,8 @@
 use std::list {List.contains_by}
 use std::process {process_id}
 use build::closure {
-  Build.closure_digest_with, Build.closure_seed, Build.input_hash,
-  Build.toolchain_seed_wanted,
+    Build.closure_digest_with, Build.closure_seed, Build.input_hash,
+    Build.toolchain_seed_wanted,
 }
 use build::hash {Build.probe_digest_tool}
 def Build.fix_root (tag : String) : String :=
