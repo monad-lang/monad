@@ -28,41 +28,41 @@ def with_double_hashes : String := r###"a "## b"###
 
 #[test]
 def test_regex_verbatim : Bool :=
-  // The raw body is the literal characters `\w+\s*"\s*\w+`.
-  String.beq regex "\\w+\\s*\"\\s*\\w+"
+    // The raw body is the literal characters `\w+\s*"\s*\w+`.
+    String.beq regex "\\w+\\s*\"\\s*\\w+"
 
 #[test]
 def test_json_snippet : Bool :=
-  String.beq json_snippet "{\"name\": \"monad\", \"version\": \"0.1\"}"
+    String.beq json_snippet "{\"name\": \"monad\", \"version\": \"0.1\"}"
 
 #[test]
 def test_windows_path : Bool :=
-  String.beq win_path "C:\\Users\\monad\\src\\main.mo"
+    String.beq win_path "C:\\Users\\monad\\src\\main.mo"
 
 #[test]
 def test_hash_escalation : Bool :=
-  // Body is `a "## b` (a space, a quote, two hashes, a space, b).
-  String.beq with_double_hashes "a \"## b"
+    // Body is `a "## b` (a space, a quote, two hashes, a space, b).
+    String.beq with_double_hashes "a \"## b"
 
 #[test]
 def test_raw_equals_escaped : Bool :=
-  // A raw string with a backslash-n equals an ordinary string that has to
-  // double the backslash: `r"\n"` == "\\n".
-  String.beq r"\n" "\\n"
+    // A raw string with a backslash-n equals an ordinary string that has to
+    // double the backslash: `r"\n"` == "\\n".
+    String.beq r"\n" "\\n"
 
 #[test]
 def test_raw_n0_closes_at_first_quote : Bool :=
-  // `r"done"` (n=0) is the raw string `done` -- the first `"` closes it.
-  String.beq r"done" "done"
+    // `r"done"` (n=0) is the raw string `done` -- the first `"` closes it.
+    String.beq r"done" "done"
 
 #[test]
 def test_raw_n1_keeps_inner_quote : Bool :=
-  // `r#"a"b"#` (n=1) keeps the inner `"` in the body -> body `a"b`.
-  String.beq r#"a"b"# "a\"b"
+    // `r#"a"b"#` (n=1) keeps the inner `"` in the body -> body `a"b`.
+    String.beq r#"a"b"# "a\"b"
 
 def main : IO Unit {
-  println regex;
-  println json_snippet;
-  println win_path;
-  println with_double_hashes
+    println regex;
+    println json_snippet;
+    println win_path;
+    println with_double_hashes
 }

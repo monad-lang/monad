@@ -1,7 +1,6 @@
 /// State monad example: a simple counter using the MonadState class
 #![mote { name := "state_monad" }]
 
-
 /// State monad wrapping a state-transformer function S -> (S, A)
 type State S A {
     state (run : S -> Pair S A)
@@ -44,9 +43,9 @@ def increment : State I64 I64 :=
 /// Three increments via explicit bind chain (avoiding do-notation MatchTraversalMismatch)
 def three_increments : State I64 Unit :=
     Monad.bind increment (fn _ =>
-    Monad.bind increment (fn _ =>
-    Monad.bind increment (fn _ =>
-    Monad.pure unit)))
+        Monad.bind increment (fn _ =>
+            Monad.bind increment (fn _ =>
+                Monad.pure unit)))
 
 /// Run a sequence of increments and return the final state
 def run_counter : I64 :=

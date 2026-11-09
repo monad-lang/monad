@@ -13,13 +13,13 @@ open IO {println}
 
 // A one-field record for the unannotated-bind probes below.
 struct Counter {
-    count: I64,
+    count : I64,
 }
 
 // Do block syntax - simple expression
 // Equivalent to: def say_hello : IO Unit := println "Hello from do block!"
 def say_hello : IO Unit {
-  println "Hello from do block!"
+    println "Hello from do block!"
 }
 
 // Do block syntax - with parameters
@@ -34,7 +34,7 @@ def say_hello : IO Unit {
 // checker; the self-hosted compiler resolves per module. The corpus has to
 // check clean under both, so it cannot contain the ambiguity.
 def greet_io (name : String) : IO Unit {
-  println name
+    println name
 }
 
 // Traditional syntax for comparison
@@ -54,33 +54,33 @@ def say_goodbye : IO Unit := println "Goodbye!"
 // `IO.pure`/`Monad.bind` is a class method with no registered signature, so a
 // real do-bind has no such rescue.
 def count_through_bind (c : Counter) : IO I64 := do {
-  let q <- IO.pure c;
-  return q.count
+    let q <- IO.pure c;
+    return q.count
 }
 
 // The annotated form the bug's workaround prescribed. Kept beside the above as
 // the control: this one took `type_check_lam`'s correct branch all along, so it
 // passed even with the defect.
 def count_through_annotated_bind (c : Counter) : IO I64 := do {
-  let q : Counter <- IO.pure c;
-  return q.count
+    let q : Counter <- IO.pure c;
+    return q.count
 }
 
 #[test]
 def test_count_through_unannotated_bind : IO Bool := do {
-  let c : Counter := { count := 7 };
-  let n <- count_through_bind c;
-  IO.pure (I64.beq n 7)
+    let c : Counter := { count := 7 };
+    let n <- count_through_bind c;
+    IO.pure (I64.beq n 7)
 }
 
 #[test]
 def test_count_through_annotated_bind : IO Bool := do {
-  let c : Counter := { count := 9 };
-  let n <- count_through_annotated_bind c;
-  IO.pure (I64.beq n 9)
+    let c : Counter := { count := 9 };
+    let n <- count_through_annotated_bind c;
+    IO.pure (I64.beq n 9)
 }
 
-def main (args: List String) : IO Unit :=
-  say_hello >>= fn _ =>
-  greet_io "World" >>= fn _ =>
-  say_goodbye
+def main (args : List String) : IO Unit :=
+    say_hello >>= fn _ =>
+    greet_io "World" >>= fn _ =>
+    say_goodbye

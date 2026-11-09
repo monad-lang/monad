@@ -8,8 +8,8 @@ open IO {println}
 
 // Basic struct definition
 struct Point {
-    x: I64,
-    y: I64,
+    x : I64,
+    y : I64,
 }
 
 // Struct with default field value. Named for its role rather than `Rect`,
@@ -18,14 +18,14 @@ struct Point {
 // name are a layout hazard and `tui`'s public four-field `Rect` claims that
 // one.
 struct Defaulted {
-    w: I64,
-    h: I64 := 100,
+    w : I64,
+    h : I64 := 100,
 }
 
 // Struct with linear field (must be consumed exactly once)
 struct Buffer {
-    !data: String,
-    size: I64,
+    !data : String,
+    size : I64,
 }
 
 #[test]
@@ -143,7 +143,7 @@ def print_point (pt : Point) : IO Unit {
     }
 }
 
-def main (args: List String) : IO Unit :=
+def main (args : List String) : IO Unit :=
     let p1 : Point := { x := 10, y := 20 } in
     let p2 : Point := { p1 with x := 30 } in
     print_point p1

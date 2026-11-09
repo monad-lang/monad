@@ -28,47 +28,47 @@ use oauth::session {OauthSessionStore.new}
 use oauth::state {OauthStateStore.new}
 
 def config : OauthConfig := {
-  issuer := "https://idp.example",
-  client_id := "monad-example",
-  redirect_uri := "https://app.example/callback",
-  client_secret := Option.none,
-  client_auth := ClientAuth.client_public,
-  scopes := ["openid", "profile"],
-  audience := Option.none,
-  roles_claim := "roles",
-  clock_skew_seconds := 60i64,
-  secure_cookies := true,
-  allow_insecure_localhost := false
+    issuer := "https://idp.example",
+    client_id := "monad-example",
+    redirect_uri := "https://app.example/callback",
+    client_secret := Option.none,
+    client_auth := ClientAuth.client_public,
+    scopes := ["openid", "profile"],
+    audience := Option.none,
+    roles_claim := "roles",
+    clock_skew_seconds := 60i64,
+    secure_cookies := true,
+    allow_insecure_localhost := false
 }
 
 def me_handler (p : Principal) (_req : Request) : IO (Result String Response) :=
-  IO.pure (Result.ok (Response.text Status.ok p.subject))
+    IO.pure (Result.ok (Response.text Status.ok p.subject))
 
 def main : IO Unit := do {
-  let http := OauthHttp.real;
-  let ep_res <- Discovery.load http config;
-  match ep_res {
-    Result.err e => IO.println (OauthError.to_string e),
-    Result.ok ep => do {
-      let states <- OauthStateStore.new 600i64 8i64;
-      let sessions_res <- OauthSessionStore.new 86400i64 3600i64 true;
-      match sessions_res {
+    let http := OauthHttp.real;
+    let ep_res <- Discovery.load http config;
+    match ep_res {
         Result.err e => IO.println (OauthError.to_string e),
-        Result.ok sessions => do {
-          let bearer <- BearerValidator.jwt config ep http JwtVerifier.real;
-          let login := Login.deps config ep states sessions http bearer;
-          let fallback : Response :=
-            Response.text Status.internal_server_error "login failed";
-          let routes : List Route := [
-            Router.get "/login" (Handler.try fallback (Login.handle_login login)),
-            Router.get "/callback" (Handler.try fallback (Login.handle_callback login)),
-            Router.get "/me"
-              (Handler.try fallback (Bearer.require bearer List.empty me_handler))
-          ];
-          let _ <- Server.run ServerConfig.default (Router.route routes);
-          return unit
+        Result.ok ep => do {
+            let states <- OauthStateStore.new 600i64 8i64;
+            let sessions_res <- OauthSessionStore.new 86400i64 3600i64 true;
+            match sessions_res {
+                Result.err e => IO.println (OauthError.to_string e),
+                Result.ok sessions => do {
+                    let bearer <- BearerValidator.jwt config ep http JwtVerifier.real;
+                    let login := Login.deps config ep states sessions http bearer;
+                    let fallback : Response :=
+                        Response.text Status.internal_server_error "login failed";
+                    let routes : List Route := [
+                        Router.get "/login" (Handler.try fallback (Login.handle_login login)),
+                        Router.get "/callback" (Handler.try fallback (Login.handle_callback login)),
+                        Router.get "/me"
+                            (Handler.try fallback (Bearer.require bearer List.empty me_handler))
+                    ];
+                    let _ <- Server.run ServerConfig.default (Router.route routes);
+                    return unit
+                }
+            }
         }
-      }
     }
-  }
 }

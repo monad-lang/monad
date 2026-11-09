@@ -2,7 +2,6 @@
 /// Demonstrates the IndexedMonad class with phantom type indices
 #![mote { name := "indexed_monads" }]
 
-
 // Protocol states
 type Init {}
 type Ready {}

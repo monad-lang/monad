@@ -44,20 +44,20 @@ def ignore_sort (_k : String) : PageMsg := PageMsg.page_noop
 
 def invite_form : Oak.Node PageMsg :=
     Ui.form [Ui.gap 3] PageMsg.page_noop [Html.action "/invite", Html.method_ "post"]
-        [ Ui.field [Ui.required] "email" "Email" "We send one invitation." ""
+        [Ui.field [Ui.required] "email" "Email" "We send one invitation." ""
             (Ui.input [Ui.full] "email" "" PageMsg.page_typed),
-          Ui.cluster List.empty List.empty
-            [ Ui.submit_button [Ui.primary] List.empty [Html.text "Invite"],
-              Ui.button [Ui.ghost] List.empty [Html.text "Cancel"] ] ]
+            Ui.cluster List.empty List.empty
+                [Ui.submit_button [Ui.primary] List.empty [Html.text "Invite"],
+                    Ui.button [Ui.ghost] List.empty [Html.text "Cancel"]]]
 
 def body : List (Oak.Node PageMsg) :=
     [Ui.container List.empty List.empty
         [Ui.stack [Ui.gap 5] List.empty
-            [ Ui.heading 1 List.empty List.empty [Html.text "Team"],
-              Ui.alert [Ui.success] "Saved" Option.none List.empty [Html.text "Your changes are live."],
-              Ui.card List.empty [Html.text "Invite a member"] [invite_form] List.empty,
-              Ui.table [Ui.small] "Members" columns [ada, grace] member_key Ui.SortState.none ignore_sort List.empty,
-              Ui.muted List.empty List.empty [Html.text "Rendered on the server; no JavaScript needed."] ]]]
+            [Ui.heading 1 List.empty List.empty [Html.text "Team"],
+                Ui.alert [Ui.success] "Saved" Option.none List.empty [Html.text "Your changes are live."],
+                Ui.card List.empty [Html.text "Invite a member"] [invite_form] List.empty,
+                Ui.table [Ui.small] "Members" columns [ada, grace] member_key Ui.SortState.none ignore_sort List.empty,
+                Ui.muted List.empty List.empty [Html.text "Rendered on the server; no JavaScript needed."]]]]
 
 def page : Oak.Node PageMsg :=
     Html.document_utf8

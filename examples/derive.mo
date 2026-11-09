@@ -9,7 +9,6 @@
 /// the compiler itself — see that file's doc comments for the full design.
 #![mote { name := "derive", deps := [init, std] }]
 
-
 // `derive_*` macros are only ever invoked via the `#[derive ...]` attribute
 // below (macro dispatch by name string, not an ordinary term reference), so
 // the checker's "unused import" analysis flags this line as a false

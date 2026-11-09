@@ -18,7 +18,6 @@
 // Usage: monad test examples/char_literals.mo
 #![mote { name := "char_literals" }]
 
-
 /// A plain ASCII character.
 def letter : Char := 'M'
 
