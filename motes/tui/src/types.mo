@@ -159,7 +159,13 @@ pub type Event {
     /// Tick event (frame update)
     tick,
     /// Bracketed-paste content, verbatim (newlines included).
-    paste (s : String)
+    paste (s : String),
+    /// The terminal window gained focus (`?1004` reporting): whatever
+    /// another program or the window system did to the screen meanwhile,
+    /// the owner of the screen repaints it in full.
+    focus_in,
+    /// The terminal window lost focus.
+    focus_out
 }
 
 /// The screen buffer — a 2D grid of cells represented as a list of rows

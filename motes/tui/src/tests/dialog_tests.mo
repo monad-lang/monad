@@ -12,6 +12,7 @@ use lib::widgets::dialog {
 use lib::input {InputReader, input_reader}
 use lib::types {Key, Event, MouseEvent, MouseButton}
 use lib::widget {SizedWidget}
+use lib::core {empty_screen}
 use std::list {List.length}
 
 def opt_y : DialogOption := { label := "Approve once", hint := "y", key := "y" }
@@ -281,6 +282,39 @@ def test_a_no_op_event_needs_no_repaint : Bool :=
         ModalNext.more s => Bool.not s.dirty,
         ModalNext.done _ => false,
     }
+
+/// A regained focus forgets the last paint: the next step clears and
+/// repaints the whole dialog.
+#[test]
+def test_focus_in_repaints_the_whole_dialog : Bool :=
+    let s0 : ModalState := modal_of dialog (input_reader 24 80) in
+    let s : ModalState := { s0 with prev := Option.some (empty_screen 24 80) } in
+    match Modal.fold s Event.focus_in List.empty {
+        ModalNext.more s2 => s2.dirty && (match s2.prev { Option.none => true, Option.some _ => false }),
+        ModalNext.done _ => false,
+    }
+
+#[test]
+def test_focus_out_needs_no_repaint : Bool :=
+    let s0 : ModalState := modal_of dialog (input_reader 24 80) in
+    let s : ModalState := { s0 with prev := Option.some (empty_screen 24 80) } in
+    match Modal.fold s Event.focus_out List.empty {
+        ModalNext.more s2 => Bool.not s2.dirty && (match s2.prev { Option.none => false, Option.some _ => true }),
+        ModalNext.done _ => false,
+    }
+
+/// A scheduled heal counts quiet polls down, then forgets the last paint
+/// once.
+#[test]
+def test_heal_repaints_once_after_its_quiet_polls : Bool :=
+    let s0 : ModalState := modal_of dialog (input_reader 24 80) in
+    let s : ModalState := { s0 with prev := Option.some (empty_screen 24 80), heal := 2 } in
+    let a : ModalState := quiet_state (Modal.idle s) in
+    let b : ModalState := quiet_state (Modal.idle a) in
+    let c : ModalState := quiet_state (Modal.idle { b with prev := Option.some (empty_screen 24 80), dirty := false }) in
+    a.heal == 1 && Bool.not a.dirty
+        && b.heal == 0 && b.dirty && (match b.prev { Option.none => true, Option.some _ => false })
+        && Bool.not c.dirty
 
 // ── the refresh ─────────────────────────────────────────────────────────
 

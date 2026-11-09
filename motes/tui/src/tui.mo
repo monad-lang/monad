@@ -87,7 +87,7 @@ use lib::widget {Widget}
 use lib::input {Input.produce, Input.produce_poll_only, InputReader, input_reader}
 use lib::terminal {
     Terminal.clear_screen, Terminal.cursor_hide, Terminal.cursor_move, Terminal.cursor_show,
-    Terminal.enable_mouse, Terminal.disable_mouse,
+    Terminal.enable_mouse, Terminal.disable_mouse, Terminal.enable_focus, Terminal.disable_focus,
     Terminal.enable_bracketed_paste, Terminal.disable_bracketed_paste,
     Terminal.enter_alt_screen, Terminal.enter_raw_mode, Terminal.leave_alt_screen,
     Terminal.disable_autowrap, Terminal.enable_autowrap,
@@ -153,6 +153,13 @@ pub type App (S : Type) (M : Type) {
     /// is pending, whether THIS loop may read stdin. Weaver returns false
     /// while a modal dialog on the fiber owns stdin; the app must ack
     /// only after it has stopped drawing (see `produce_for`).
+    ///
+    /// `paints` says, on the folded state, whether this loop owns the
+    /// screen. While it is false the loop writes nothing at all -- not a
+    /// diff, not a resize's repaint -- because another painter (weaver's
+    /// approval dialog on a fiber) is drawing, and a diff against this
+    /// loop's own last frame would paint over it unrepaired. The first
+    /// frame after it turns true again clears and repaints in full.
     app_ticked (init : S)
         (on_event : Event -> M)
         (update : S -> M -> Pair S (Cmd M))
@@ -160,6 +167,7 @@ pub type App (S : Type) (M : Type) {
         (tick_ms : I64)
         (tick_redraw : S -> Bool)
         (reads_input : S -> IO Bool)
+        (paints : S -> Bool)
 }
 
 /// The app loop. Enters the alternate screen and cbreak, then folds
@@ -174,6 +182,7 @@ pub def run_app {S : Type} {M : Type} (a : App S M) : IO Unit := do {
     Terminal.disable_autowrap;
     Terminal.cursor_hide;
     Terminal.enable_mouse;
+    Terminal.enable_focus;
     Terminal.enable_bracketed_paste;
     Terminal.clear_screen;
     Terminal.cursor_move 0 0;
@@ -189,7 +198,7 @@ def run_with_size {S : Type} {M : Type} (a : App S M) (size : Pair I64 I64) : IO
         Pair.pair rows cols =>
             match a {
                 App.app init _ _ vw _ => run_loop a (fn (_ : S) => true) init vw rows cols,
-                App.app_ticked init _ _ vw _ redraw _ => run_loop a redraw init vw rows cols,
+                App.app_ticked init _ _ vw _ redraw _ _ => run_loop a redraw init vw rows cols,
             }
     }
 
@@ -285,13 +294,13 @@ def loop_app {S : Type} {M : Type} (a : App S M) (redraw : S -> Bool) (reader : 
         // polymorphic-`.mo`-def result is exactly where its inference
         // goes wrong -- `poll_turns`'s own comment).
         App.app _ on_ev upd vw tick_ms =>
-            loop_body redraw on_ev upd vw tick_ms (fn (_ : S) => IO.pure true) reader model prev pending turns,
-        App.app_ticked _ on_ev upd vw tick_ms _ reads =>
-            loop_body redraw on_ev upd vw tick_ms reads reader model prev pending turns,
+            loop_body redraw on_ev upd vw (fn (_ : S) => true) tick_ms (fn (_ : S) => IO.pure true) reader model prev pending turns,
+        App.app_ticked _ on_ev upd vw tick_ms _ reads paints =>
+            loop_body redraw on_ev upd vw paints tick_ms reads reader model prev pending turns,
     }
 
 #[terminating]
-def loop_body {S : Type} {M : Type} (redraw : S -> Bool) (on_ev : Event -> M) (upd : S -> M -> Pair S (Cmd M)) (vw : S -> Widget) (tick_ms : I64) (reads : S -> IO Bool) (reader : InputReader) (model : S) (prev : Screen) (pending : List M) (turns : List (PendingTurn M)) : IO (LoopOutcome S M) :=
+def loop_body {S : Type} {M : Type} (redraw : S -> Bool) (on_ev : Event -> M) (upd : S -> M -> Pair S (Cmd M)) (vw : S -> Widget) (paints : S -> Bool) (tick_ms : I64) (reads : S -> IO Bool) (reader : InputReader) (model : S) (prev : Screen) (pending : List M) (turns : List (PendingTurn M)) : IO (LoopOutcome S M) :=
     Monad.bind (poll_turns turns) (fn (polled : Pair (List M) (List (PendingTurn M))) => do {
         match polled {
             Pair.pair tmsgs turns2 => do {
@@ -301,7 +310,7 @@ def loop_body {S : Type} {M : Type} (redraw : S -> Bool) (on_ev : Event -> M) (u
                 // it.
                 let batched : List M := List.append pending tmsgs;
                 let out <- produce_for turns2 reader tick_ms model reads;
-                after_produce redraw upd vw on_ev model prev batched turns2 out
+                after_produce redraw upd vw paints on_ev model prev batched turns2 out
             }
         }
     })
@@ -390,14 +399,14 @@ def split_head {M : Type} (head : Option (Result FiberError M)) (t : PendingTurn
 /// (a piped script's last keystrokes still count) and then stops -- a
 /// controlled exit, `after_frame` restores after us.
 #[terminating]
-def after_produce {S : Type} {M : Type} (redraw : S -> Bool) (upd : S -> M -> Pair S (Cmd M)) (vw : S -> Widget) (on_ev : Event -> M) (model : S) (prev : Screen) (pending : List M) (turns : List (PendingTurn M)) (out : Pair (List Event) InputReader) : IO (LoopOutcome S M) :=
+def after_produce {S : Type} {M : Type} (redraw : S -> Bool) (upd : S -> M -> Pair S (Cmd M)) (vw : S -> Widget) (paints : S -> Bool) (on_ev : Event -> M) (model : S) (prev : Screen) (pending : List M) (turns : List (PendingTurn M)) (out : Pair (List Event) InputReader) : IO (LoopOutcome S M) :=
     match out {
         Pair.pair evs reader2 =>
             let msgs : List M := List.map on_ev evs in
             let dirty : Bool := App.should_draw redraw model pending evs in
             if reader2.closed
-            then final_frame upd vw reader2 model prev pending msgs
-            else step_loop upd vw reader2 model prev turns pending msgs dirty
+            then final_frame upd vw paints reader2 model prev pending msgs
+            else step_loop upd vw paints reader2 model prev turns pending msgs dirty
     }
 
 /// The exit draw: one fold, one frame, no recursion -- the loop is over
@@ -406,19 +415,19 @@ def after_produce {S : Type} {M : Type} (redraw : S -> Bool) (upd : S -> M -> Pa
 /// nobody will poll -- and the host never runs a dropped action (fork
 /// defers), which makes this exit the CHEAPEST of the two backends.
 #[terminating]
-def final_frame {S : Type} {M : Type} (upd : S -> M -> Pair S (Cmd M)) (vw : S -> Widget) (reader : InputReader) (model : S) (prev : Screen) (pending : List M) (msgs : List M) : IO (LoopOutcome S M) := do {
+def final_frame {S : Type} {M : Type} (upd : S -> M -> Pair S (Cmd M)) (vw : S -> Widget) (paints : S -> Bool) (reader : InputReader) (model : S) (prev : Screen) (pending : List M) (msgs : List M) : IO (LoopOutcome S M) := do {
     let batch : List M := List.append pending msgs;
     let stepped <- step_batch upd model batch;
-    let _ <- final_draw vw reader prev batch stepped;
+    let _ <- final_draw vw paints reader prev batch stepped;
     IO.pure (LoopOutcome.loop_done : LoopOutcome S M)
 }
 
-def final_draw {S : Type} {M : Type} (vw : S -> Widget) (reader : InputReader) (prev : Screen) (batch : List M) (stepped : Pair (Pair S (Cmd M)) (Pair (List M) Bool)) : IO Unit :=
+def final_draw {S : Type} {M : Type} (vw : S -> Widget) (paints : S -> Bool) (reader : InputReader) (prev : Screen) (batch : List M) (stepped : Pair (Pair S (Cmd M)) (Pair (List M) Bool)) : IO Unit :=
     match stepped {
         Pair.pair inner tail => match inner {
             Pair.pair model2 _ => match tail {
                 Pair.pair _ forced => do {
-                    let frame <- draw_frame vw model2 reader prev (List.length batch > 0) forced;
+                    let frame <- draw_owned vw paints model2 reader prev (List.length batch > 0) forced;
                     return Unit.unit
                 }
             }
@@ -428,20 +437,20 @@ def final_draw {S : Type} {M : Type} (vw : S -> Widget) (reader : InputReader) (
 /// The batch `step_loop` folds: `pending` (last frame's
 /// dispatched/performed messages) in front of the freshly produced ones.
 #[terminating]
-def step_loop {S : Type} {M : Type} (upd : S -> M -> Pair S (Cmd M)) (vw : S -> Widget) (reader : InputReader) (model : S) (prev : Screen) (turns : List (PendingTurn M)) (pending : List M) (msgs : List M) (dirty : Bool) : IO (LoopOutcome S M) :=
+def step_loop {S : Type} {M : Type} (upd : S -> M -> Pair S (Cmd M)) (vw : S -> Widget) (paints : S -> Bool) (reader : InputReader) (model : S) (prev : Screen) (turns : List (PendingTurn M)) (pending : List M) (msgs : List M) (dirty : Bool) : IO (LoopOutcome S M) :=
     let batch : List M := List.append pending msgs in
     do {
         let stepped <- step_batch upd model batch;
-        after_step vw reader prev turns batch stepped dirty
+        after_step vw paints reader prev turns batch stepped dirty
     }
 
 /// The fold's continuation: `quit` ends the loop, anything else draws
 /// the frame (when the batch was nonempty, or `perform` forced a
 /// repaint) and recurses with the queued `dispatch`/`perform` messages.
 #[terminating]
-def after_step {S : Type} {M : Type} (vw : S -> Widget) (reader : InputReader) (prev : Screen) (turns : List (PendingTurn M)) (batch : List M) (stepped : Pair (Pair S (Cmd M)) (Pair (List M) Bool)) (dirty : Bool) : IO (LoopOutcome S M) :=
+def after_step {S : Type} {M : Type} (vw : S -> Widget) (paints : S -> Bool) (reader : InputReader) (prev : Screen) (turns : List (PendingTurn M)) (batch : List M) (stepped : Pair (Pair S (Cmd M)) (Pair (List M) Bool)) (dirty : Bool) : IO (LoopOutcome S M) :=
     match stepped {
-        Pair.pair inner tail => continue_step vw reader prev turns batch inner tail dirty
+        Pair.pair inner tail => continue_step vw paints reader prev turns batch inner tail dirty
     }
 
 /// One frame's end: hand the live state back to `frame_step`.
@@ -452,16 +461,16 @@ def hand_back {S : Type} {M : Type} (reader : InputReader) (model : S) (prev : S
 /// do-block in a `match` arm, which the checker mis-infers (AGENTS' recorded
 /// "let x <- inside a do-block inside a match arm" shape).
 #[terminating]
-def resume_after_draw {S : Type} {M : Type} (vw : S -> Widget) (reader : InputReader) (prev : Screen) (turns : List (PendingTurn M)) (model2 : S) (pending2 : List M) (dirty : Bool) (forced : Bool) : IO (LoopOutcome S M) := do {
-    let frame <- draw_frame vw model2 reader prev dirty forced;
+def resume_after_draw {S : Type} {M : Type} (vw : S -> Widget) (paints : S -> Bool) (reader : InputReader) (prev : Screen) (turns : List (PendingTurn M)) (model2 : S) (pending2 : List M) (dirty : Bool) (forced : Bool) : IO (LoopOutcome S M) := do {
+    let frame <- draw_owned vw paints model2 reader prev dirty forced;
     hand_back reader model2 frame pending2 turns
 }
 
 /// The `perform_async` arm: fork, draw, and continue with the new handle
 /// joined to the pending set.
 #[terminating]
-def resume_after_fork {S : Type} {M : Type} (vw : S -> Widget) (reader : InputReader) (prev : Screen) (turns : List (PendingTurn M)) (model2 : S) (pending2 : List M) (f : Fiber M) (on_error : FiberError -> M) (dirty : Bool) (forced : Bool) : IO (LoopOutcome S M) := do {
-    let frame <- draw_frame vw model2 reader prev dirty forced;
+def resume_after_fork {S : Type} {M : Type} (vw : S -> Widget) (paints : S -> Bool) (reader : InputReader) (prev : Screen) (turns : List (PendingTurn M)) (model2 : S) (pending2 : List M) (f : Fiber M) (on_error : FiberError -> M) (dirty : Bool) (forced : Bool) : IO (LoopOutcome S M) := do {
+    let frame <- draw_owned vw paints model2 reader prev dirty forced;
     hand_back reader model2 frame pending2 (List.cons (PendingTurn.waiting f on_error) turns)
 }
 
@@ -469,17 +478,17 @@ def resume_after_fork {S : Type} {M : Type} (vw : S -> Widget) (reader : InputRe
 /// do-block in a match arm: that shape is a recorded checker trap, and with
 /// a generic outcome here it solved the outcome's `M` as the monad (`IO`).
 #[terminating]
-def resume_after_fork_start {S : Type} {M : Type} (vw : S -> Widget) (reader : InputReader) (prev : Screen) (turns : List (PendingTurn M)) (model2 : S) (pending2 : List M) (action : Unit -> IO M) (on_error : FiberError -> M) (dirty : Bool) (forced : Bool) : IO (LoopOutcome S M) := do {
+def resume_after_fork_start {S : Type} {M : Type} (vw : S -> Widget) (paints : S -> Bool) (reader : InputReader) (prev : Screen) (turns : List (PendingTurn M)) (model2 : S) (pending2 : List M) (action : Unit -> IO M) (on_error : FiberError -> M) (dirty : Bool) (forced : Bool) : IO (LoopOutcome S M) := do {
     // The fork IS this frame's delivery: the handle joins the loop's
     // pending set, and the next `loop_app` polls it before it produces.
     // The handle is consumed exactly once -- here it is born, in
     // `poll_turns` it dies.
     let f <- forkIO action;
-    resume_after_fork vw reader prev turns model2 pending2 f on_error dirty forced
+    resume_after_fork vw paints reader prev turns model2 pending2 f on_error dirty forced
 }
 
 #[terminating]
-def continue_step {S : Type} {M : Type} (vw : S -> Widget) (reader : InputReader) (prev : Screen) (turns : List (PendingTurn M)) (batch : List M) (inner : Pair S (Cmd M)) (tail : Pair (List M) Bool) (dirty : Bool) : IO (LoopOutcome S M) :=
+def continue_step {S : Type} {M : Type} (vw : S -> Widget) (paints : S -> Bool) (reader : InputReader) (prev : Screen) (turns : List (PendingTurn M)) (batch : List M) (inner : Pair S (Cmd M)) (tail : Pair (List M) Bool) (dirty : Bool) : IO (LoopOutcome S M) :=
     match inner {
         Pair.pair model2 cmd =>
             match cmd {
@@ -487,11 +496,11 @@ def continue_step {S : Type} {M : Type} (vw : S -> Widget) (reader : InputReader
                 Cmd.perform_async action on_error =>
                     match tail {
                         Pair.pair pending2 forced =>
-                            resume_after_fork_start vw reader prev turns model2 pending2 action on_error dirty forced
+                            resume_after_fork_start vw paints reader prev turns model2 pending2 action on_error dirty forced
                     },
                 _ => match tail {
                     Pair.pair pending2 forced =>
-                        resume_after_draw vw reader prev turns model2 pending2 dirty forced
+                        resume_after_draw vw paints reader prev turns model2 pending2 dirty forced
                 }
             }
     }
@@ -582,6 +591,26 @@ def clear_before_paint : IO Unit := do {
     Terminal.cursor_move 0 0
 }
 
+/// A screen no terminal has: the `prev` a frame leaves when it did not
+/// own the screen. Its size never matches, so the next owned frame takes
+/// `frame_plan`'s clear branch and repaints everything the other painter
+/// left behind.
+pub def App.stale_screen : Screen := empty_screen 0 0
+
+/// Whether this frame may write: false while another painter owns the
+/// screen (the `app_ticked` `paints` predicate, on the folded state).
+pub def App.draw_plan {S : Type} (paints : S -> Bool) (model : S) (prev : Screen) : Option Screen :=
+    if paints model then Option.some prev else Option.none
+
+/// `draw_frame` behind the ownership gate: a frame that does not own the
+/// screen writes nothing and leaves `App.stale_screen` as the next `prev`.
+def draw_owned {S : Type} (vw : S -> Widget) (paints : S -> Bool) (model : S) (reader : InputReader) (prev : Screen) (dirty : Bool) (forced : Bool) : IO Screen :=
+    match App.draw_plan paints model prev {
+        Option.none => IO.pure App.stale_screen,
+        // Back from a stale frame: draw even an otherwise quiet batch.
+        Option.some p => draw_frame vw model reader p (Bool.or dirty (p.rows == 0)) forced,
+    }
+
 /// Render the model into a fresh screen and write the diff against
 /// `prev` -- unless the batch was empty AND no `perform` forced a
 /// repaint (nothing moved, no write). See `frame_plan` for the clear rule.
@@ -612,6 +641,7 @@ def restore_terminal : IO Unit := do {
     Terminal.reset_style;
     Terminal.disable_bracketed_paste;
     Terminal.disable_mouse;
+    Terminal.disable_focus;
     Terminal.enable_autowrap;
     Terminal.leave_alt_screen;
     Terminal.cursor_show;

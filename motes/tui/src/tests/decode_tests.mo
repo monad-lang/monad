@@ -236,6 +236,25 @@ def test_paste_in_one_buffer : Bool :=
     events_be (decoded_events "\u{1b}[200~hello\u{1b}[201~") [Event.paste "hello"]
 
 #[test]
+def test_focus_in_report : Bool :=
+    events_be (decoded_events "\u{1b}[I") [Event.focus_in]
+
+#[test]
+def test_focus_out_report : Bool :=
+    events_be (decoded_events "\u{1b}[O") [Event.focus_out]
+
+/// A focus report between keys and beside a mouse report.
+#[test]
+def test_focus_report_among_other_input : Bool :=
+    events_be (decoded_events "a\u{1b}[O\u{1b}[<0;3;2Mb\u{1b}[I")
+        [Event.key (Key.char "a"), Event.focus_out, Event.mouse (MouseEvent.press MouseButton.left 1 2), Event.key (Key.char "b"), Event.focus_in]
+
+/// `ESC [ 1 O` is not a focus report (only the bare form is).
+#[test]
+def test_focus_letter_with_params_is_dropped : Bool :=
+    events_be (decoded_events "\u{1b}[1O") List.empty
+
+#[test]
 def test_empty_paste : Bool :=
     events_be (decoded_events "\u{1b}[200~\u{1b}[201~") [Event.paste ""]
 

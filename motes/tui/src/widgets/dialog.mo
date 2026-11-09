@@ -407,7 +407,8 @@ def read_events (r : InputReader) : IO (Pair (List Event) InputReader) := do {
 /// The modal's loop state: the dialog, the input decoder, decoded events
 /// not yet folded, the last painted screen, and whether a repaint is due;
 /// with a refresh, how many quiet polls run between calls and how many
-/// have passed.
+/// have passed; `heal`, the quiet polls left before one full repaint
+/// (0 = none scheduled).
 struct ModalState {
     d : DialogModel,
     r : InputReader,
@@ -417,6 +418,7 @@ struct ModalState {
     refresh : Option (DialogModel -> IO (Option DialogModel)),
     every : I64,
     idle : I64,
+    heal : I64 := 0,
 }
 
 /// What one modal step decided: keep going, or end with this answer.
@@ -466,8 +468,22 @@ def modal_advance (s : ModalState) : IO ModalNext :=
     }
 
 /// Fold one decoded event: an answer ends the modal; otherwise a repaint
-/// is due only if the event changed what a paint shows.
+/// is due only if the event changed what a paint shows. A regained focus
+/// forgets the last paint, so the next step clears and repaints all of
+/// it: the dialog's diff only knows its own writes, and whatever touched
+/// the screen while the window was away is repaired here.
 def Modal.fold (s : ModalState) (e : Event) (rest : List Event) : ModalNext :=
+    match e {
+        Event.focus_in => ModalNext.more (Modal.forget { s with queued := rest }),
+        _ => Modal.fold_dialog s e rest,
+    }
+
+/// Drop the last paint: the next step clears the screen and paints the
+/// whole dialog.
+pub def Modal.forget (s : ModalState) : ModalState :=
+    { s with prev := Option.none, dirty := true }
+
+def Modal.fold_dialog (s : ModalState) (e : Event) (rest : List Event) : ModalNext :=
     match Dialog.apply s.d e {
         Pair.pair d2 step => match step {
             Option.some a => ModalNext.done (Pair.pair d2 a),
@@ -509,12 +525,15 @@ pub def Dialog.refresh_due (idle : I64) (every : I64) : Bool :=
     Bool.not (idle + 1 < every)
 
 /// A quiet poll: EOF cancels, a pending lone ESC becomes the Escape key
-/// (it leaves an open field or note, else cancels), anything else waits.
+/// (it leaves an open field or note, else cancels), a scheduled heal
+/// counts down to its full repaint, anything else waits.
 def Modal.idle (s : ModalState) : ModalNext :=
     if s.r.closed
     then ModalNext.done (Pair.pair s.d DialogStep.cancel)
     else if s.r.pending == "\u{1b}"
     then ModalNext.more { s with r := { s.r with pending := "" }, queued := [Event.key Key.escape] }
+    else if s.heal == 1 then ModalNext.more (Modal.forget { s with heal := 0 })
+    else if 1 < s.heal then ModalNext.more { s with heal := s.heal - 1 }
     else ModalNext.more s
 
 def modal_read (s : ModalState) : IO ModalNext := do {
@@ -531,18 +550,24 @@ def modal_read (s : ModalState) : IO ModalNext := do {
 /// stdin closes. The final dialog rides along so the caller can read the
 /// note.
 pub def Dialog.modal (paint : Option Screen -> DialogModel -> IO (Pair Screen DialogModel)) (d : DialogModel) : IO (Pair DialogModel DialogStep) :=
-    modal_start Option.none 0 paint d
+    modal_start Option.none 0 0 paint d
+
+/// `Dialog.modal`, repainting the whole dialog once after `heal` quiet
+/// polls (100 ms each). For a dialog that may have opened while another
+/// painter was still drawing (weaver: the main loop's ack timed out).
+pub def Dialog.modal_healing (heal : I64) (paint : Option Screen -> DialogModel -> IO (Pair Screen DialogModel)) (d : DialogModel) : IO (Pair DialogModel DialogStep) :=
+    modal_start Option.none 0 heal paint d
 
 /// `Dialog.modal`, calling `refresh` every `every` quiet polls (100 ms
 /// each): `some` replaces the dialog and repaints it, `none` keeps it.
 pub def Dialog.modal_refresh (every : I64) (refresh : DialogModel -> IO (Option DialogModel)) (paint : Option Screen -> DialogModel -> IO (Pair Screen DialogModel)) (d : DialogModel) : IO (Pair DialogModel DialogStep) :=
-    modal_start (Option.some refresh) every paint d
+    modal_start (Option.some refresh) every 0 paint d
 
-def modal_start (refresh : Option (DialogModel -> IO (Option DialogModel))) (every : I64) (paint : Option Screen -> DialogModel -> IO (Pair Screen DialogModel)) (d : DialogModel) : IO (Pair DialogModel DialogStep) := do {
+def modal_start (refresh : Option (DialogModel -> IO (Option DialogModel))) (every : I64) (heal : I64) (paint : Option Screen -> DialogModel -> IO (Pair Screen DialogModel)) (d : DialogModel) : IO (Pair DialogModel DialogStep) := do {
     let size <- Terminal.size;
     let start : ModalState := match size {
         Pair.pair rows cols => { d := d, r := input_reader rows cols, queued := List.empty, prev := Option.none, dirty := true,
-            refresh := refresh, every := every, idle := 0 },
+            refresh := refresh, every := every, idle := 0, heal := heal },
     };
     modal_loop paint start
 }

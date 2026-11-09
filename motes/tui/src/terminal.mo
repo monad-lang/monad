@@ -144,6 +144,11 @@ pub def Terminal.enable_mouse_code : String := "\u{1b}[?1002h\u{1b}[?1006h"
 /// Disable mouse reporting.
 pub def Terminal.disable_mouse_code : String := "\u{1b}[?1002l\u{1b}[?1006l"
 
+/// Focus reporting (DECSET 1004): the terminal sends `ESC[I` when its
+/// window gains focus and `ESC[O` when it loses it.
+pub def Terminal.enable_focus_code : String := "\u{1b}[?1004h"
+pub def Terminal.disable_focus_code : String := "\u{1b}[?1004l"
+
 // ==================== IO wrappers ====================
 
 pub def Terminal.cursor_move (row : I64) (col : I64) : IO Unit :=
@@ -184,6 +189,12 @@ pub def Terminal.enable_mouse : IO Unit :=
 
 pub def Terminal.disable_mouse : IO Unit :=
     IO.write_stdout Terminal.disable_mouse_code
+
+pub def Terminal.enable_focus : IO Unit :=
+    IO.write_stdout Terminal.enable_focus_code
+
+pub def Terminal.disable_focus : IO Unit :=
+    IO.write_stdout Terminal.disable_focus_code
 
 pub def Terminal.enable_bracketed_paste : IO Unit :=
     IO.write_stdout Terminal.enable_bracketed_paste_code
@@ -236,6 +247,11 @@ def test_alt_screen_codes : Bool :=
 def test_mouse_mode_codes : Bool :=
     Terminal.enable_mouse_code == "\u{1b}[?1002h\u{1b}[?1006h"
     && Terminal.disable_mouse_code == "\u{1b}[?1002l\u{1b}[?1006l"
+
+#[test]
+def test_focus_report_codes : Bool :=
+    Terminal.enable_focus_code == "\u{1b}[?1004h"
+    && Terminal.disable_focus_code == "\u{1b}[?1004l"
 
 #[test]
 def test_unpack_size_roundtrip : Bool :=

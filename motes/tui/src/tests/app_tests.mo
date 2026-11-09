@@ -8,7 +8,7 @@
 
 use lib::types {Event, Key}
 use lib::core {mk_screen}
-use lib::tui {App, Cmd, PendingTurn, poll_turns, step_batch, frame_plan}
+use lib::tui {App, App.draw_plan, App.stale_screen, Cmd, PendingTurn, poll_turns, step_batch, frame_plan}
 use std::concurrent::combine {sleepIO}
 use std::concurrent::fiber {Fiber, FiberError, await_fiber, cancel_fiber, forkIO}
 use std::ref {Ref, Ref.get, Ref.new, Ref.set}
@@ -281,6 +281,31 @@ def test_a_real_event_always_draws : Bool :=
 #[test]
 def test_a_queued_message_always_draws : Bool :=
     App.should_draw (fn (_ : I64) => false) 0 [1] List.empty
+
+// ── the paint gate (`App.app_ticked`'s `paints`) ──────────────────────
+
+/// Another painter owns the screen: the frame writes nothing at all.
+#[test]
+def test_a_frame_that_does_not_own_the_screen_writes_nothing : Bool :=
+    match App.draw_plan (fn (n : I64) => n == 0) 1 (mk_screen 1 2) {
+        Option.none => true,
+        Option.some _ => false,
+    }
+
+#[test]
+def test_an_owned_frame_diffs_against_its_last_screen : Bool :=
+    match App.draw_plan (fn (n : I64) => n == 0) 0 (mk_screen 1 2) {
+        Option.some p => p.rows == 1 && p.cols == 2,
+        Option.none => false,
+    }
+
+/// The first owned frame after a skipped one clears and repaints all of
+/// it: the stale `prev` never matches a real size.
+#[test]
+def test_the_frame_after_a_skipped_one_clears : Bool :=
+    match frame_plan App.stale_screen (mk_screen 1 2) false {
+        Pair.pair clear _ => clear,
+    }
 
 // ── frame_plan: clear on geometry change ──────────────────────────────
 

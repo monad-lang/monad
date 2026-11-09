@@ -438,6 +438,9 @@ def Input.key_next (s : String) (j : I64) : Pair (Option Event) (Option I64) :=
                 else if c == "F" then Option.some (Event.key Key.end)
                 else if c == "Z" then Option.some (Event.key Key.tab)
                 else if c == "~" then Input.tilde_event s j
+                // Focus reports (`?1004`): bare `ESC [ I` / `ESC [ O`.
+                else if Bool.and (c == "I") (fin == j) then Option.some Event.focus_in
+                else if Bool.and (c == "O") (fin == j) then Option.some Event.focus_out
                 else Option.none in
             Pair.pair ev (Option.some (fin + 1))
 
