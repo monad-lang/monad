@@ -7,7 +7,7 @@ use crate::{
   set_of,
   term::{
     ClassDefRef, Decl, DeclGenDef, Def, Identifier, Inductive, InductiveVariant, Instance,
-    InstanceKey, Literal, ModulePath, Multiplicity, NamePath,
+    InstanceKey, Literal, ModulePath, NamePath,
     NameRef::{self, Id},
     Named, Param, SourceContext, SourceRange,
     Term::{self, App, Ctx, Forall, Hole, Lit, Pi, Sort, Var},
@@ -78,12 +78,6 @@ pub enum TypeError {
   LinearUnused(Identifier, SourceRange),
   AffineUsedMultipleTimes(Identifier, SourceRange),
   ErasedUsedAtRuntime(Identifier, SourceRange),
-  QttSubsumption {
-    name: Identifier,
-    provided: Multiplicity,
-    expected: Multiplicity,
-    loc: SourceRange,
-  },
   StructNoConstructors {
     loc: SourceRange,
   },
@@ -262,31 +256,6 @@ impl Display for TypeError {
           f,
           "Erased variable '{}' used at runtime (erased vars are compile-time only)",
           id
-        )?;
-        fmt_loc(loc, f)
-      }
-      TypeError::QttSubsumption {
-        name,
-        provided,
-        expected,
-        loc,
-      } => {
-        write!(
-          f,
-          "Cannot pass {} variable '{}' where {} parameter is expected (subsumption failed)",
-          match provided {
-            Multiplicity::Linear => "linear",
-            Multiplicity::Affine => "affine",
-            Multiplicity::Zero => "erased",
-            Multiplicity::Many => "unrestricted",
-          },
-          name,
-          match expected {
-            Multiplicity::Linear => "linear",
-            Multiplicity::Affine => "affine",
-            Multiplicity::Zero => "erased",
-            Multiplicity::Many => "unrestricted",
-          },
         )?;
         fmt_loc(loc, f)
       }
@@ -619,35 +588,6 @@ fn err_to_diagnostic(err: &TypeError) -> crate::diag::Diagnostic {
       context_name: None,
       module_path: None,
     },
-    TypeError::QttSubsumption {
-      name,
-      provided,
-      expected,
-      loc,
-    } => Diagnostic {
-      severity: Severity::Error,
-      message: format!(
-        "Cannot pass {} variable '{name}' where {} parameter is expected",
-        match provided {
-          Multiplicity::Linear => "linear",
-          Multiplicity::Affine => "affine",
-          Multiplicity::Zero => "erased",
-          Multiplicity::Many => "unrestricted",
-        },
-        match expected {
-          Multiplicity::Linear => "linear",
-          Multiplicity::Affine => "affine",
-          Multiplicity::Zero => "erased",
-          Multiplicity::Many => "unrestricted",
-        },
-      ),
-      location: loc_opt(loc),
-      path: None,
-      sub_diagnostics: vec![],
-      suggestions: vec![],
-      context_name: None,
-      module_path: None,
-    },
     TypeError::Many(_errs) => Diagnostic {
       severity: Severity::Error,
       message: "Multiple type errors".to_string(),
@@ -932,100 +872,6 @@ impl Display for InstanceError {
 impl From<InstanceError> for TypeError {
   fn from(value: InstanceError) -> Self {
     TypeError::Instance(value, SourceRange::default())
-  }
-}
-
-/// Tracks variable usage counts for linear type checking (compile-time only)
-#[derive(Debug, Clone)]
-pub struct UsageEnv {
-  usages: Map<Identifier, (Multiplicity, usize)>,
-}
-
-impl UsageEnv {
-  pub fn new() -> Self {
-    UsageEnv { usages: Map::new() }
-  }
-
-  /// Register a new variable with its multiplicity
-  pub fn register(&mut self, name: Identifier, mult: Multiplicity) {
-    self.usages.insert(name, (mult, 0));
-  }
-
-  /// Check if a variable can be used (based on its multiplicity)
-  pub fn check_usage(&self, name: &Identifier) -> Result<(), TypeError> {
-    if let Some((mult, count)) = self.usages.get(name) {
-      match mult {
-        Multiplicity::Zero => {
-          return Err(TypeError::ErasedUsedAtRuntime(
-            name.clone(),
-            SourceRange::default(),
-          ));
-        }
-        Multiplicity::Linear => {
-          if *count >= 1 {
-            return Err(TypeError::LinearUsedMultipleTimes(
-              name.clone(),
-              SourceRange::default(),
-            ));
-          }
-        }
-        Multiplicity::Affine => {
-          if *count >= 1 {
-            return Err(TypeError::AffineUsedMultipleTimes(
-              name.clone(),
-              SourceRange::default(),
-            ));
-          }
-        }
-        Multiplicity::Many => {
-          // Always ok
-        }
-      }
-    }
-    Ok(())
-  }
-
-  /// Mark a variable as used (increment usage count)
-  pub fn mark_used(&mut self, name: &Identifier) {
-    if let Some((_, count)) = self.usages.get_mut(name) {
-      *count += 1;
-    }
-  }
-
-  /// Remove a variable from tracking (used to clean up after match branches)
-  pub fn remove(&mut self, name: &Identifier) {
-    self.usages.remove(name);
-  }
-
-  /// Verify all linear variables were used exactly once
-  pub fn verify_linear_usage(&self) -> Result<(), TypeError> {
-    for (name, (mult, count)) in &self.usages {
-      if *mult == Multiplicity::Linear && *count != 1 {
-        return Err(TypeError::LinearUnused(
-          name.clone(),
-          SourceRange::default(),
-        ));
-      }
-    }
-    Ok(())
-  }
-
-  pub fn lookup_mult(&self, name: &Identifier) -> Option<&Multiplicity> {
-    self.usages.get(name).map(|(mult, _)| mult)
-  }
-
-  /// Verify a single variable was used according to its multiplicity.
-  /// Used in Lam branches to avoid checking inner lambda params (scope leak fix).
-  pub fn verify_var(&self, name: &Identifier) -> Result<(), TypeError> {
-    if let Some((mult, count)) = self.usages.get(name) {
-      if *mult == Multiplicity::Linear && *count != 1 {
-        return Err(TypeError::LinearUnused(
-          name.clone(),
-          SourceRange::default(),
-        ));
-      }
-    }
-    Ok(())
   }
 }
 
@@ -1645,7 +1491,6 @@ pub fn elaborate_inductive(mut ind: Inductive, known_names: &Set<&NamePath>) -> 
           let lam_param = Param {
             name: p.name.clone(),
             typ: Box::new(p_typ.clone()),
-            mult: p.mult.clone(),
             default: p.default.clone(),
             attrs: p.attrs.clone(),
           };

@@ -23,7 +23,7 @@ use std::fmt;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::Map;
-use crate::term::{F64Wrap, FieldPattern, GlobalRef, Identifier, Multiplicity, NumSuffix};
+use crate::term::{F64Wrap, FieldPattern, GlobalRef, Identifier, NumSuffix};
 
 // ---------------------------------------------------------------------------
 // DebugName — display-only, never used for identity
@@ -340,7 +340,6 @@ pub enum CoreTerm {
     dbg: DebugName,
     arg: Box<CoreTerm>,
     ret: Box<CoreTerm>,
-    mult: Multiplicity,
   },
   Lam {
     dbg: DebugName,
@@ -439,18 +438,12 @@ impl PartialEq for CoreTerm {
       ) => t1 == t2 && b1 == b2,
       (
         Pi {
-          arg: a1,
-          ret: r1,
-          mult: m1,
-          ..
+          arg: a1, ret: r1, ..
         },
         Pi {
-          arg: a2,
-          ret: r2,
-          mult: m2,
-          ..
+          arg: a2, ret: r2, ..
         },
-      ) => a1 == a2 && r1 == r2 && m1 == m2,
+      ) => a1 == a2 && r1 == r2,
       (
         Lam {
           param_typ: p1,
@@ -500,11 +493,10 @@ impl std::hash::Hash for CoreTerm {
         typ.hash(state);
         body.hash(state);
       }
-      Pi { arg, ret, mult, .. } => {
+      Pi { arg, ret, .. } => {
         4u8.hash(state);
         arg.hash(state);
         ret.hash(state);
-        mult.hash(state);
       }
       Lam {
         param_typ, body, ..
@@ -587,18 +579,12 @@ impl Ord for CoreTerm {
       ) => t1.cmp(t2).then_with(|| b1.cmp(b2)),
       (
         Pi {
-          arg: a1,
-          ret: r1,
-          mult: m1,
-          ..
+          arg: a1, ret: r1, ..
         },
         Pi {
-          arg: a2,
-          ret: r2,
-          mult: m2,
-          ..
+          arg: a2, ret: r2, ..
         },
-      ) => a1.cmp(a2).then_with(|| r1.cmp(r2)).then_with(|| m1.cmp(m2)),
+      ) => a1.cmp(a2).then_with(|| r1.cmp(r2)),
       (
         Lam {
           param_typ: p1,
@@ -652,16 +638,10 @@ pub(crate) fn open_at(term: &CoreTerm, depth: u32, replacement: &CoreTerm) -> Co
       typ: Box::new(open_at(typ, depth, replacement)),
       body: Box::new(open_at(body, depth + 1, replacement)),
     },
-    CoreTerm::Pi {
-      dbg,
-      arg,
-      ret,
-      mult,
-    } => CoreTerm::Pi {
+    CoreTerm::Pi { dbg, arg, ret } => CoreTerm::Pi {
       dbg: dbg.clone(),
       arg: Box::new(open_at(arg, depth, replacement)),
       ret: Box::new(open_at(ret, depth + 1, replacement)),
-      mult: mult.clone(),
     },
     CoreTerm::Lam {
       dbg,
@@ -781,16 +761,10 @@ fn close_at(term: &CoreTerm, depth: u32, atom: Atom) -> CoreTerm {
       typ: Box::new(close_at(typ, depth, atom)),
       body: Box::new(close_at(body, depth + 1, atom)),
     },
-    CoreTerm::Pi {
-      dbg,
-      arg,
-      ret,
-      mult,
-    } => CoreTerm::Pi {
+    CoreTerm::Pi { dbg, arg, ret } => CoreTerm::Pi {
       dbg: dbg.clone(),
       arg: Box::new(close_at(arg, depth, atom)),
       ret: Box::new(close_at(ret, depth + 1, atom)),
-      mult: mult.clone(),
     },
     CoreTerm::Lam {
       dbg,
@@ -954,16 +928,10 @@ pub(crate) fn permute_binders(
       typ: Box::new(permute_binders(typ, cutoff, old_n, new_n, depth_map)),
       body: Box::new(permute_binders(body, cutoff + 1, old_n, new_n, depth_map)),
     },
-    CoreTerm::Pi {
-      dbg,
-      arg,
-      ret,
-      mult,
-    } => CoreTerm::Pi {
+    CoreTerm::Pi { dbg, arg, ret } => CoreTerm::Pi {
       dbg: dbg.clone(),
       arg: Box::new(permute_binders(arg, cutoff, old_n, new_n, depth_map)),
       ret: Box::new(permute_binders(ret, cutoff + 1, old_n, new_n, depth_map)),
-      mult: mult.clone(),
     },
     CoreTerm::Lam {
       dbg,
@@ -1094,16 +1062,10 @@ pub fn subst_meta(term: &CoreTerm, target: MetaId, replacement: &CoreTerm) -> Co
       typ: Box::new(subst_meta(typ, target, replacement)),
       body: Box::new(subst_meta(body, target, replacement)),
     },
-    CoreTerm::Pi {
-      dbg,
-      arg,
-      ret,
-      mult,
-    } => CoreTerm::Pi {
+    CoreTerm::Pi { dbg, arg, ret } => CoreTerm::Pi {
       dbg: dbg.clone(),
       arg: Box::new(subst_meta(arg, target, replacement)),
       ret: Box::new(subst_meta(ret, target, replacement)),
-      mult: mult.clone(),
     },
     CoreTerm::Lam {
       dbg,
@@ -1245,12 +1207,7 @@ impl Printer {
         self.names.pop();
         r
       }
-      CoreTerm::Pi {
-        dbg,
-        arg,
-        ret,
-        mult: _,
-      } => {
+      CoreTerm::Pi { dbg, arg, ret } => {
         let name = self.fresh_name(dbg);
         match dbg {
           DebugName::Anonymous => {
@@ -1436,7 +1393,6 @@ mod test {
         dbg: DebugName::Anonymous,
         arg: Box::new(CoreTerm::Bound(0)),
         ret: Box::new(CoreTerm::Bound(1)),
-        mult: Multiplicity::Many,
       }),
     };
     assert_eq!(mk("A"), mk("B"));
@@ -1454,7 +1410,6 @@ mod test {
         dbg: DebugName::Anonymous,
         arg: Box::new(CoreTerm::Bound(0)),
         ret: Box::new(CoreTerm::Sort { level: 0 }),
-        mult: Multiplicity::Many,
       }),
     };
     let a_to_a = CoreTerm::Forall {
@@ -1464,7 +1419,6 @@ mod test {
         dbg: DebugName::Anonymous,
         arg: Box::new(CoreTerm::Bound(0)),
         ret: Box::new(CoreTerm::Bound(1)),
-        mult: Multiplicity::Many,
       }),
     };
     assert_ne!(a_to_bool, a_to_a);
@@ -1485,7 +1439,6 @@ mod test {
       dbg: DebugName::Anonymous,
       arg: Box::new(CoreTerm::Bound(0)),
       ret: Box::new(CoreTerm::Bound(1)),
-      mult: Multiplicity::Many,
     };
     let (atom, opened) = open(&body);
     match &opened {
@@ -1508,7 +1461,6 @@ mod test {
       dbg: named("x"),
       arg: Box::new(CoreTerm::Bound(0)), // refs the Forall's var (A)
       ret: Box::new(CoreTerm::Bound(1)), // refs the Forall's var (A), one level deeper
-      mult: Multiplicity::Many,
     };
     let (atom, opened) = open(&body);
     match &opened {
@@ -1621,7 +1573,6 @@ mod test {
         dbg: DebugName::Anonymous,
         arg: Box::new(CoreTerm::Bound(0)),
         ret: Box::new(CoreTerm::Bound(1)),
-        mult: Multiplicity::Many,
       }),
     };
     assert_eq!(format!("{t}"), "{A : Sort 1} -> (A) -> A");

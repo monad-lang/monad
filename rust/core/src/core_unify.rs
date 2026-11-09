@@ -514,21 +514,12 @@ pub fn unify(mctx: &mut MetaContext, a: &CoreTerm, b: &CoreTerm) -> Result<(), U
     }
     (
       CoreTerm::Pi {
-        arg: a1,
-        ret: r1,
-        mult: m1,
-        ..
+        arg: a1, ret: r1, ..
       },
       CoreTerm::Pi {
-        arg: a2,
-        ret: r2,
-        mult: m2,
-        ..
+        arg: a2, ret: r2, ..
       },
     ) => {
-      if m1 != m2 {
-        return Err(mismatch(a.clone(), b.clone()));
-      }
       unify(mctx, a1, a2)?;
       unify_under_binder(mctx, r1, r2)
     }
@@ -855,16 +846,10 @@ pub fn zonk(mctx: &MetaContext, term: &CoreTerm) -> CoreTerm {
       typ: Box::new(zonk(mctx, typ)),
       body: Box::new(zonk(mctx, body)),
     },
-    CoreTerm::Pi {
-      dbg,
-      arg,
-      ret,
-      mult,
-    } => CoreTerm::Pi {
+    CoreTerm::Pi { dbg, arg, ret } => CoreTerm::Pi {
       dbg: dbg.clone(),
       arg: Box::new(zonk(mctx, arg)),
       ret: Box::new(zonk(mctx, ret)),
-      mult: mult.clone(),
     },
     CoreTerm::Lam {
       dbg,
@@ -969,16 +954,10 @@ fn close_meta_at(term: &CoreTerm, depth: u32, target: MetaId) -> CoreTerm {
       typ: Box::new(close_meta_at(typ, depth, target)),
       body: Box::new(close_meta_at(body, depth + 1, target)),
     },
-    CoreTerm::Pi {
-      dbg,
-      arg,
-      ret,
-      mult,
-    } => CoreTerm::Pi {
+    CoreTerm::Pi { dbg, arg, ret } => CoreTerm::Pi {
       dbg: dbg.clone(),
       arg: Box::new(close_meta_at(arg, depth, target)),
       ret: Box::new(close_meta_at(ret, depth + 1, target)),
-      mult: mult.clone(),
     },
     CoreTerm::Lam {
       dbg,
@@ -1182,7 +1161,7 @@ pub fn generalize(
 mod test {
   use super::*;
   use crate::core_term::DebugName;
-  use crate::term::{Identifier, Multiplicity};
+  use crate::term::Identifier;
 
   fn named(s: &str) -> DebugName {
     DebugName::Named(Identifier::new(s.to_string()))
@@ -1202,7 +1181,6 @@ mod test {
       dbg: DebugName::Anonymous,
       arg: Box::new(arg),
       ret: Box::new(ret),
-      mult: Multiplicity::Many,
     }
   }
 
@@ -1308,24 +1286,6 @@ mod test {
     let self_referential = non_dep_pi(CoreTerm::Meta(m), sort0());
     let err = unify(&mut mctx, &CoreTerm::Meta(m), &self_referential).unwrap_err();
     assert!(matches!(err, UnifyError::OccursCheck { meta, .. } if meta == m));
-  }
-
-  #[test]
-  fn test_unify_pi_different_mult_fails() {
-    let mut mctx = MetaContext::new();
-    let p1 = CoreTerm::Pi {
-      dbg: DebugName::Anonymous,
-      arg: Box::new(sort0()),
-      ret: Box::new(sort0()),
-      mult: Multiplicity::Many,
-    };
-    let p2 = CoreTerm::Pi {
-      dbg: DebugName::Anonymous,
-      arg: Box::new(sort0()),
-      ret: Box::new(sort0()),
-      mult: Multiplicity::Linear,
-    };
-    assert!(unify(&mut mctx, &p1, &p2).is_err());
   }
 
   // -------------------------------------------------------------------

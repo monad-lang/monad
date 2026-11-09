@@ -168,7 +168,7 @@ def param_texts (ps : List Param) : String :=
     }
 
 def param_text (p : Param) : String :=
-    let named := String.concat (mult_prefix p.mult) (show_identifier p.name) in
+    let named := show_identifier p.name in
     let core := String.concat named (String.concat " : " (show_term p.type_)) in
     String.concat "(" (String.concat (param_default_text core p.default) ")")
 
@@ -177,15 +177,6 @@ def param_default_text (core : String) (default : Option Term) : String :=
         Option.some value => String.concat core (String.concat " := " (show_term value)),
         Option.none => core,
     }
-
-/// Source spelling of a parameter's multiplicity prefix -- the parseable
-/// one (`%`/`!`/`?`), not `show_multiplicity`'s diagnostic spelling.
-def mult_prefix (mult : Multiplicity) : String := match mult {
-    Multiplicity.zero => "%",
-    Multiplicity.linear => "!",
-    Multiplicity.affine => "?",
-    Multiplicity.many => "",
-}
 
 def vis_prefix (vis : Vis) : String := match vis {
     Vis.vis_public => "pub ",

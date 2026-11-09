@@ -21,7 +21,7 @@ use crate::core_term::{
   close_n, open_with, permute_binders,
 };
 use crate::core_unify::{MetaContext, UnifyError, force, instantiate, open_n, unify, zonk};
-use crate::term::{GlobalRef, Identifier, Multiplicity, NamePath, NumSuffix, TypeConstraint};
+use crate::term::{GlobalRef, Identifier, NamePath, NumSuffix, TypeConstraint};
 use crate::{AtomPathMap, Map};
 use std::sync::Arc;
 
@@ -1067,14 +1067,14 @@ fn try_absorb_into_forall(
 fn expect_pi(
   mctx: &mut MetaContext,
   expected: &CoreTerm,
-) -> Result<(CoreTerm, CoreTerm, Multiplicity), InferError> {
+) -> Result<(CoreTerm, CoreTerm), InferError> {
   // `.into_stripped_ctx()`: this match's final arm is a wildcard
   // (`other => Err(InferError::ExpectedFunctionType(other))`), which the
   // compiler can't flag as missing a `Ctx` case — without stripping, a
   // `Ctx`-wrapped `Pi` would be spuriously reported as "not a function
   // type" instead of being recognized.
   match force(mctx, expected.clone()).into_stripped_ctx() {
-    CoreTerm::Pi { arg, ret, mult, .. } => Ok((*arg, *ret, mult)),
+    CoreTerm::Pi { arg, ret, .. } => Ok((*arg, *ret)),
     CoreTerm::Meta(m) => {
       let arg_meta = mctx.fresh_meta(CoreTerm::Sort { level: 1 });
       let ret_meta = mctx.fresh_meta(CoreTerm::Sort { level: 1 });
@@ -1084,10 +1084,9 @@ fn expect_pi(
         dbg: DebugName::Anonymous,
         arg: Box::new(arg.clone()),
         ret: Box::new(ret.clone()),
-        mult: Multiplicity::Many,
       };
       unify(mctx, &CoreTerm::Meta(m), &synthesized)?;
-      Ok((arg, ret, Multiplicity::Many))
+      Ok((arg, ret))
     }
     // A pattern-bound variable (`Lit::Match`'s "Known simplification":
     // its real per-field type isn't tracked, so it's typed `Hole`) being
@@ -1100,11 +1099,7 @@ fn expect_pi(
     CoreTerm::Hole => {
       let arg_meta = mctx.fresh_meta(CoreTerm::Sort { level: 1 });
       let ret_meta = mctx.fresh_meta(CoreTerm::Sort { level: 1 });
-      Ok((
-        CoreTerm::Meta(arg_meta),
-        CoreTerm::Meta(ret_meta),
-        Multiplicity::Many,
-      ))
+      Ok((CoreTerm::Meta(arg_meta), CoreTerm::Meta(ret_meta)))
     }
     other => Err(InferError::ExpectedFunctionType(other)),
   }
@@ -1203,7 +1198,6 @@ pub fn infer(
         dbg: dbg.clone(),
         arg: param_typ.clone(),
         ret: Box::new(ret),
-        mult: Multiplicity::Many,
       })
     }
 
@@ -1238,7 +1232,7 @@ pub fn infer(
       let fun_ty_raw = infer(mctx, ctx, structs, fun)?;
       let fun_ty = instantiate_foralls(mctx, structs, &fun_ty_raw);
       match expect_pi(mctx, &fun_ty) {
-        Ok((arg_ty, ret_ty, _mult)) => {
+        Ok((arg_ty, ret_ty)) => {
           let ordinary_result = check(mctx, ctx, structs, arg, &arg_ty);
           match ordinary_result {
             // See `struct_literal_arg_matches_expected`'s own doc comment
@@ -2016,7 +2010,7 @@ pub fn check(
     param_typ, body, ..
   } = term
   {
-    let (exp_arg, exp_ret, _mult) = expect_pi(mctx, expected)?;
+    let (exp_arg, exp_ret) = expect_pi(mctx, expected)?;
     unify(mctx, param_typ, &exp_arg)?;
     let atom = Atom::fresh();
     let ctx2 = open_ctx(ctx, atom, exp_arg);
@@ -2265,7 +2259,7 @@ pub fn check(
   if let CoreTerm::App { fun, arg } = term {
     let fun_ty_raw = infer(mctx, ctx, structs, fun)?;
     let fun_ty = instantiate_foralls(mctx, structs, &fun_ty_raw);
-    let (arg_ty, ret_ty, _mult) = match expect_pi(mctx, &fun_ty) {
+    let (arg_ty, ret_ty) = match expect_pi(mctx, &fun_ty) {
       Ok(triple) => triple,
       // E7: see `try_absorb_into_forall`'s own doc comment — `arg` may be
       // explicitly providing one of `fun`'s own implicit params (e.g.
@@ -4045,12 +4039,7 @@ pub fn desugar_struct_literals(
         None,
       )),
     },
-    CoreTerm::Pi {
-      dbg,
-      arg,
-      ret,
-      mult,
-    } => CoreTerm::Pi {
+    CoreTerm::Pi { dbg, arg, ret } => CoreTerm::Pi {
       dbg: dbg.clone(),
       arg: Box::new(desugar_struct_literals(
         mctx,
@@ -4074,7 +4063,6 @@ pub fn desugar_struct_literals(
         ret,
         None,
       )),
-      mult: mult.clone(),
     },
 
     CoreTerm::Lam {
@@ -4350,7 +4338,7 @@ pub fn desugar_struct_literals(
       // pins down instead of staying a bare, unresolved meta.
       let arg_ty = infer(mctx, ctx, structs, fun).ok().and_then(|fun_ty| {
         let fun_ty = instantiate_foralls(mctx, structs, &fun_ty);
-        let (arg_ty, ret_ty, _mult) = expect_pi(mctx, &fun_ty).ok()?;
+        let (arg_ty, ret_ty) = expect_pi(mctx, &fun_ty).ok()?;
         // Skipped when `ret_ty` is still a `Pi`/`Forall` (more curried
         // args remain after this one) -- see `check`'s own dedicated
         // `App` block for the full rationale and the real repro that
@@ -5221,7 +5209,6 @@ mod test {
       dbg: DebugName::Anonymous,
       arg: Box::new(arg),
       ret: Box::new(ret),
-      mult: Multiplicity::Many,
     }
   }
 
@@ -5329,7 +5316,6 @@ mod test {
       dbg: DebugName::Anonymous,
       arg: Box::new(sort0()),
       ret: Box::new(sort0()),
-      mult: Multiplicity::Many,
     };
     assert!(check(&mut mctx, &empty_ctx(), &empty_structs(), &core, &expected).is_ok());
   }
@@ -5349,7 +5335,6 @@ mod test {
       dbg: DebugName::Anonymous,
       arg: Box::new(CoreTerm::Sort { level: 1 }),
       ret: Box::new(sort0()),
-      mult: Multiplicity::Many,
     };
     assert!(check(&mut mctx, &empty_ctx(), &empty_structs(), &core, &expected).is_err());
   }

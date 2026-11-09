@@ -514,22 +514,17 @@ fn test_constructor_brace_form_single_field_is_implicit_param_not_brace_form() {
 
 #[test]
 fn test_constructor_brace_form_multiplicity_prefix() {
-  // Single-field, comma-less brace groups (`{ !val : String }`) are
-  // structurally identical to an ordinary implicit-param clause and are
-  // consumed there FIRST (`implicit_params` runs before this alternative
-  // in `constructor_parser`, same boundary case `def_params`'s own brace
-  // form documents) -- use two fields to unambiguously reach the new
-  // alternative, matching how the `def_params` tests do it.
+  // The `!`/`?`/`%` multiplicity prefixes were removed from the grammar:
+  // a field carrying one is now a parse error, brace form included.
   let s = r#"type Wrapper {
         wrap { !val : String, tag : String }
     }
     "#
   .into();
-  let (_, res) = inductive_parser(s).unwrap();
-  assert_eq!(res.constructors.len(), 1);
-  assert_eq!(res.constructors[0].params.len(), 2);
-  assert_eq!(res.constructors[0].params[0].mult, Multiplicity::Linear);
-  assert_eq!(res.constructors[0].params[1].mult, Multiplicity::Many);
+  assert!(
+    inductive_parser(s).is_err(),
+    "a multiplicity prefix on a constructor field must be a parse error"
+  );
 }
 
 #[test]
@@ -664,12 +659,10 @@ fn test_native() {
   let expected_term = Term::Lam {
     param: Par::I {
       typ: Box::new(typ("I64")),
-      mult: Multiplicity::Many,
     },
     body: Box::new(Term::Lam {
       param: Par::I {
         typ: Box::new(typ("I64")),
-        mult: Multiplicity::Many,
       },
       body: Box::new(native_term),
     }),
@@ -1212,28 +1205,21 @@ fn test_scoped_open_instance() {
 
 #[test]
 fn test_parse_erased_param() {
-  // %x : I64 — erased prefix parses as Zero
+  // %x : I64 — the erased prefix was removed from the grammar, so this
+  // is now a parse error.
   let s: Span<()> = "(%x : I64)".into();
-  let (_, res) = lam_param(s).unwrap();
-  assert_eq!(res.name, id("x"));
-  assert_eq!(*res.typ, typ("I64"));
-  assert_eq!(res.mult, Multiplicity::Zero);
+  assert!(lam_param(s).is_err(), "a `%` prefix must be a parse error");
 }
 
 #[test]
 fn test_parse_erased_def_param() {
-  // def f (%x : I64) : I64 — erased in def
+  // def f (%x : I64) : I64 — the `%` prefix was removed from the grammar,
+  // so the whole declaration is now a parse error.
   let s = r#"def f (%x : I64) : I64 := 42"#.into();
-  let (_, res) = decl_parser(s).unwrap();
-  match res.value() {
-    Decl::Def(def) => {
-      // The lam param should be erased
-      if let Term::Lam { param, .. } = &def.term {
-        assert_eq!(param.multiplicity(), &Multiplicity::Zero);
-      }
-    }
-    _ => panic!("Expected Def"),
-  }
+  assert!(
+    decl_parser(s).is_err(),
+    "a `%` prefix must be a parse error"
+  );
 }
 
 #[test]
@@ -1259,12 +1245,13 @@ fn test_parse_instance_with_multiple_forall_params() {
 
 #[test]
 fn test_parse_mixed_multiplicity_params() {
+  // The `!`/`?`/`%` multiplicity prefixes were removed from the grammar,
+  // so a def mixing them with ordinary params is now a parse error.
   let s = r#"def f (!x : I64) (?y : I64) (%z : I64) (w : I64) : I64 := x"#.into();
-  let (_, res) = decl_parser(s).unwrap();
-  match res.value() {
-    Decl::Def(_) => {} // Just verify it parses
-    _ => panic!("Expected Def"),
-  }
+  assert!(
+    decl_parser(s).is_err(),
+    "a multiplicity prefix on a def param must be a parse error"
+  );
 }
 
 #[test]

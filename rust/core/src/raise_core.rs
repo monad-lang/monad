@@ -59,7 +59,7 @@
 use crate::AtomPathMap;
 use crate::core_term::{CoreConstructor, CoreLit, CoreMatchCase, CoreNative, CoreTerm, DebugName};
 use crate::term::{
-  self, GlobalRef, Identifier, Literal, MatchCase, Multiplicity, NameRef, Native, Par, Param, Term,
+  self, GlobalRef, Identifier, Literal, MatchCase, NameRef, Native, Par, Param, Term,
 };
 
 /// The reverse of lower_core's `GlobalRef` construction: a raised global
@@ -291,12 +291,7 @@ impl<'p> Raiser<'p> {
         work.push(Item::PushName(name));
         work.push(Item::Expand(typ));
       }
-      CoreTerm::Pi {
-        dbg,
-        arg,
-        ret,
-        mult,
-      } => {
+      CoreTerm::Pi { dbg, arg, ret } => {
         // Always give the raised `Pi` a real name for its argument (never
         // `None`), even when `dbg` is `Anonymous` — sidesteps having to
         // prove `ret` never structurally references `Bound(0)` in that
@@ -307,7 +302,6 @@ impl<'p> Raiser<'p> {
         // downstream could bind correctly.
         let name = self.fresh_name(dbg);
         let name2 = name.clone();
-        let mult = mult.clone();
         work.push(Item::Reduce(
           2,
           Box::new(move |mut children| {
@@ -317,7 +311,6 @@ impl<'p> Raiser<'p> {
               arg_name: Some(name2),
               arg: Box::new(arg_t),
               ret: Box::new(ret_t),
-              mult,
             })
           }),
         ));
@@ -355,13 +348,11 @@ impl<'p> Raiser<'p> {
             let param = if is_anonymous {
               Par::I {
                 typ: Box::new(typ_t),
-                mult: Multiplicity::Many,
               }
             } else {
               Par::P(Param {
                 name: name2,
                 typ: Box::new(typ_t),
-                mult: Multiplicity::Many,
                 default: None,
                 attrs: Vec::new(),
               })

@@ -7,9 +7,9 @@
 /// - duplicating it is untypable (`Copy` has no instance for it);
 /// - dropping it is `linear_unused` (`#[linear]` forces every binder of
 ///   this type to be used exactly once);
-/// - its operations take `!c` and return the handle, so a use-after-free
-///   or double-free requires two uses of one binder, which the affine
-///   rule rejects.
+/// - its operations take the handle as an ordinary affine binder and
+///   return it, so a use-after-free or double-free requires two uses of
+///   one binder, which the affine rule rejects.
 ///
 /// ## Representation
 ///
@@ -84,13 +84,13 @@ pub type Cell (A : Type) { cell_witness }
 priv def view_new_raw [Copy A] (a : A) : RawIO (Cell A)
 
 #[native view_get]
-priv def view_get_raw [Copy A] (!c : Cell A) : RawIO (Pair A (Cell A))
+priv def view_get_raw [Copy A] (c : Cell A) : RawIO (Pair A (Cell A))
 
 #[native view_set]
-priv def view_set_raw [Copy A] (!c : Cell A) (a : A) : RawIO (Cell A)
+priv def view_set_raw [Copy A] (c : Cell A) (a : A) : RawIO (Cell A)
 
 #[native view_free]
-priv def view_free_raw [Copy A] (!c : Cell A) : RawIO Unit
+priv def view_free_raw [Copy A] (c : Cell A) : RawIO Unit
 
 // ── The user-facing operations ──────────────────────────────────────
 
@@ -101,16 +101,16 @@ pub def Cell.new [Copy A] (a : A) : IO (Cell A) :=
 /// Read the payload, returning it with the same handle. Consumes and
 /// returns the handle (view-types P2): the old handle is unusable after
 /// the call.
-pub def Cell.get [Copy A] (!c : Cell A) : IO (Pair A (Cell A)) :=
+pub def Cell.get [Copy A] (c : Cell A) : IO (Pair A (Cell A)) :=
     IO.mk (view_get_raw c)
 
 /// Overwrite the payload, leaving the cell intact.
-pub def Cell.set [Copy A] (!c : Cell A) (a : A) : IO (Cell A) :=
+pub def Cell.set [Copy A] (c : Cell A) (a : A) : IO (Cell A) :=
     IO.mk (view_set_raw c a)
 
 /// Consume the cell and release its storage. In v1 this poisons the block
 /// (the collector owns it; see this file's header).
-pub def Cell.free [Copy A] (!c : Cell A) : IO Unit :=
+pub def Cell.free [Copy A] (c : Cell A) : IO Unit :=
     IO.mk (view_free_raw c)
 
 // ── Slot: the empty/full view ───────────────────────────────────────
@@ -147,16 +147,16 @@ priv def slot_new_raw (a : A) : RawIO (Slot Full A)
 priv def slot_empty_raw {A : Type} : RawIO (Slot Empty A)
 
 #[native slot_take]
-priv def slot_take_raw (!s : Slot Full A) : RawIO (Pair A (Slot Empty A))
+priv def slot_take_raw (s : Slot Full A) : RawIO (Pair A (Slot Empty A))
 
 #[native slot_fill]
-priv def slot_fill_raw (!s : Slot Empty A) (a : A) : RawIO (Slot Full A)
+priv def slot_fill_raw (s : Slot Empty A) (a : A) : RawIO (Slot Full A)
 
 #[native slot_peek]
-priv def slot_peek_raw [Copy A] (!s : Slot Full A) : RawIO (Pair A (Slot Full A))
+priv def slot_peek_raw [Copy A] (s : Slot Full A) : RawIO (Pair A (Slot Full A))
 
 #[native slot_free]
-priv def slot_free_raw (!s : Slot Empty A) : RawIO Unit
+priv def slot_free_raw (s : Slot Empty A) : RawIO Unit
 
 /// Allocate a full slot holding `a`. Any type moves in; no `Copy` needed.
 pub def Slot.new (a : A) : IO (Slot Full A) :=
@@ -169,20 +169,20 @@ pub def Slot.empty {A : Type} : IO (Slot Empty A) :=
 
 /// Move the value out, leaving the slot empty. Consumes and returns the
 /// handle (P2); the old `Slot Full A` is unusable after the call.
-pub def Slot.take (!s : Slot Full A) : IO (Pair A (Slot Empty A)) :=
+pub def Slot.take (s : Slot Full A) : IO (Pair A (Slot Empty A)) :=
     IO.mk (slot_take_raw s)
 
 /// Move a value in, leaving the slot full.
-pub def Slot.fill (!s : Slot Empty A) (a : A) : IO (Slot Full A) :=
+pub def Slot.fill (s : Slot Empty A) (a : A) : IO (Slot Full A) :=
     IO.mk (slot_fill_raw s a)
 
 /// Read a full slot of a `Copy` payload without emptying it. This is the
 /// only operation that duplicates the payload, so only a `Copy` one is
 /// allowed; use `take`/`fill` for a linear value.
-pub def Slot.peek [Copy A] (!s : Slot Full A) : IO (Pair A (Slot Full A)) :=
+pub def Slot.peek [Copy A] (s : Slot Full A) : IO (Pair A (Slot Full A)) :=
     IO.mk (slot_peek_raw s)
 
 /// Consume an EMPTY slot. A full slot must be `take`n first, so a linear
 /// payload is never silently dropped.
-pub def Slot.free (!s : Slot Empty A) : IO Unit :=
+pub def Slot.free (s : Slot Empty A) : IO Unit :=
     IO.mk (slot_free_raw s)

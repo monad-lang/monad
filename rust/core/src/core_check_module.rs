@@ -124,9 +124,9 @@ use crate::parser::{ModuleContext, parse_file};
 use crate::raise_core::raise_core;
 use crate::term::module::{LoadedModules, ScopeError, default_modules, load_module_files};
 use crate::term::{
-  Decl, Def, GlobalRef, Identifier, Inductive, InductiveVariant, Instance, ModulePath,
-  Multiplicity, NamePath, NameRef, Named, Open, Operator, QualifiedName, SearchPaths,
-  SourceContext, SourceRange, Term, TypeConstraint, Typed, constructor, def, forall,
+  Decl, Def, GlobalRef, Identifier, Inductive, InductiveVariant, Instance, ModulePath, NamePath,
+  NameRef, Named, Open, Operator, QualifiedName, SearchPaths, SourceContext, SourceRange, Term,
+  TypeConstraint, Typed, constructor, def, forall,
 };
 use crate::{AtomPathMap, Map};
 
@@ -1796,7 +1796,6 @@ fn elaborate_constrained_type(
       dbg: DebugName::Named(Identifier::new(format!("${}", constraint.class()))),
       arg: Box::new(dict_typ),
       ret: Box::new(close(&with_dicts, dict_atom)),
-      mult: Multiplicity::Many,
     };
     wrapped_any = true;
   }

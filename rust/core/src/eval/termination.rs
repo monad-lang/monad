@@ -624,7 +624,6 @@ mod tests {
     let body = lam_par(
       Par::I {
         typ: Box::new(Term::Sort { level: 1 }),
-        mult: crate::term::Multiplicity::Many,
       },
       lam(param(id("x"), Term::Hole), var("x")),
     );

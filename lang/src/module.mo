@@ -10095,46 +10095,51 @@ def test_classified_warn_puts_the_rule_in_warnings : IO Bool := do {
         && I64.beq (List.length (CheckDiagnostics.warnings d)) 1)
 }
 
-// --- Tests: explicit multiplicities reach the rule ------------------
+// --- Tests: the `!`/`?`/`%` prefixes are gone from the grammar --------
 //
-// Before `collect_binder_uses_with_params`, a def parameter's `!`/`?`/`%`
-// was dropped at lowering and every binder arrived as `many` (which the
-// rule reads as affine). These parse REAL source through the real driver,
-// so they pin the whole chain: parser -> `Def.params` -> annotated
-// `Term.lam` -> `BinderUse.declared` -> the judgement.
+// A def parameter carrying one is now a PARSE error, before any rule ever
+// sees it. These run the STRICT parser -- the same `check`-path parse that
+// reports a real diagnostic -- because the lenient `parse_all_decls`
+// truncates on failure and would silently report success with the decl
+// dropped (`decls_try`'s own KNOWN GAP).
 
 #[test]
-def test_a_linear_parameter_used_twice_is_rejected : IO Bool := do {
-    // The same constructor-store shape as `over_use_source`, so the
-    // ordinary checker is clean and the ONE diagnostic is the rule's.
-    let d <- classified_probe AffineMode.affine_error
-        "type T { mk }\ntype P { mkp (l : T) (r : T) }\ndef pair (!a : T) : P := P.mkp a a";
-    return (I64.beq (List.length (CheckDiagnostics.errors d)) 1)
-}
+def test_a_linear_parameter_used_twice_is_rejected : Bool :=
+    match try_parse_decls_strict
+        "type T { mk }\ntype P { mkp (l : T) (r : T) }\ndef pair (!a : T) : P := P.mkp a a" Option.none {
+        Result.ok _ => false,
+        Result.err _ => true
+    }
 
 #[test]
-def test_a_linear_parameter_left_unused_is_rejected : IO Bool := do {
-    let d <- classified_probe AffineMode.affine_error
-        "def skip (!x : I64) : I64 := 0";
-    return (I64.beq (List.length (CheckDiagnostics.errors d)) 1)
-}
+def test_a_linear_parameter_left_unused_is_rejected : Bool :=
+    match try_parse_decls_strict "def skip (!x : I64) : I64 := 0" Option.none {
+        Result.ok _ => false,
+        Result.err _ => true
+    }
 
 #[test]
-def test_an_affine_parameter_may_be_dropped : IO Bool := do {
-    // The control: `?x` is the affine spelling, and weakening is
-    // admissible. Without this, the two rejections above could pass by
-    // rejecting every explicit annotation.
-    let d <- classified_probe AffineMode.affine_error
-        "def skip (?x : I64) : I64 := 0";
-    return (List.is_empty (CheckDiagnostics.errors d))
-}
+def test_an_affine_parameter_may_be_dropped : Bool :=
+    match try_parse_decls_strict "def skip (?x : I64) : I64 := 0" Option.none {
+        Result.ok _ => false,
+        Result.err _ => true
+    }
 
 #[test]
-def test_a_linear_parameter_used_once_is_accepted : IO Bool := do {
-    let d <- classified_probe AffineMode.affine_error
-        "def id_ (!x : I64) : I64 := x";
-    return (List.is_empty (CheckDiagnostics.errors d))
-}
+def test_a_linear_parameter_used_once_is_accepted : Bool :=
+    match try_parse_decls_strict "def id_ (!x : I64) : I64 := x" Option.none {
+        Result.ok _ => false,
+        Result.err _ => true
+    }
+
+/// The control: the same sources WITHOUT the prefix still parse clean,
+/// so the four rejections above cannot pass by rejecting everything.
+#[test]
+def test_unprefixed_params_still_parse : Bool :=
+    match try_parse_decls_strict "def skip (x : I64) : I64 := 0\ndef id_ (x : I64) : I64 := x" Option.none {
+        Result.ok decls => I64.beq (List.length decls) 2,
+        Result.err _ => false
+    }
 
 // --- Tests: view/proof safety rules --------------------------------
 //
@@ -10205,19 +10210,24 @@ def test_a_proof_parameter_is_rejected : IO Bool := do {
     return (diags_contain "has no run-time representation" (CheckDiagnostics.errors d))
 }
 
+// The `?`/`%` spellings these two used to pin are gone from the grammar:
+// a proof parameter carrying either is now a PARSE error, reported before
+// the rule's own diagnostic can fire. The rule's forced-linear behaviour
+// is still pinned by `test_a_proof_parameter_is_rejected` above (an
+// UNANNOTATED proof binder is rejected by the rule, not the parser).
 #[test]
-def test_a_proof_parameter_may_not_be_affine : IO Bool := do {
-    let d <- classified_probe AffineMode.affine_error
-        "#[proof] type At { }\ndef bad (?p : At) : I64 := 0";
-    return (diags_contain "is forced linear; `?` and `%` are not allowed" (CheckDiagnostics.errors d))
-}
+def test_a_proof_parameter_may_not_be_affine : Bool :=
+    match try_parse_decls_strict "#[proof] type At { }\ndef bad (?p : At) : I64 := 0" Option.none {
+        Result.ok _ => false,
+        Result.err _ => true
+    }
 
 #[test]
-def test_a_proof_parameter_may_not_be_erased : IO Bool := do {
-    let d <- classified_probe AffineMode.affine_error
-        "#[proof] type At { }\ndef bad (%p : At) : I64 := 0";
-    return (diags_contain "is forced linear; `?` and `%` are not allowed" (CheckDiagnostics.errors d))
-}
+def test_a_proof_parameter_may_not_be_erased : Bool :=
+    match try_parse_decls_strict "#[proof] type At { }\ndef bad (%p : At) : I64 := 0" Option.none {
+        Result.ok _ => false,
+        Result.err _ => true
+    }
 
 // --- Tests: opaque native types and empty types --------------------
 //

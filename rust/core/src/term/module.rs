@@ -4,9 +4,7 @@ pub mod test;
 use super::*;
 use crate::Set;
 use crate::diag::{Diagnostic, Severity, Suggestion};
-use crate::eval::r#type::{
-  TypeError, UsageEnv, derive_instance_key, render_type_error_with_source,
-};
+use crate::eval::r#type::{TypeError, derive_instance_key, render_type_error_with_source};
 use crate::parser::ModuleContext;
 use crate::term::{
   Inductive, Instance, InstanceKey, ModulePath, SourceContext, Term, TypeConstraint,
@@ -1673,14 +1671,12 @@ pub enum Scope<'a> {
   Top {
     global: &'a GlobalScope<'a>,
     module_path: &'a ModulePath,
-    usage_env: UsageEnv,
     constraints: Vec<TypeConstraint>,
   },
   Sub {
     local: LocalVar<'a>,
     parent: Box<Scope<'a>>,
     module_path: &'a ModulePath,
-    usage_env: UsageEnv,
     constraints: Vec<TypeConstraint>,
   },
 }
@@ -1690,24 +1686,7 @@ impl<'a> Scope<'a> {
     Scope::Top {
       global,
       module_path: global.current_path(),
-      usage_env: UsageEnv::new(),
       constraints: Vec::new(),
-    }
-  }
-
-  /// Get a reference to the usage environment
-  pub fn usage_env(&self) -> &UsageEnv {
-    match self {
-      Scope::Top { usage_env, .. } => usage_env,
-      Scope::Sub { usage_env, .. } => usage_env,
-    }
-  }
-
-  /// Get a mutable reference to the usage environment
-  pub fn usage_env_mut(&mut self) -> &mut UsageEnv {
-    match self {
-      Scope::Top { usage_env, .. } => usage_env,
-      Scope::Sub { usage_env, .. } => usage_env,
     }
   }
   pub fn constraints(&self) -> &[TypeConstraint] {
@@ -1722,25 +1701,21 @@ impl<'a> Scope<'a> {
       Scope::Top {
         global,
         module_path,
-        usage_env,
         ..
       } => Scope::Top {
         global,
         module_path,
-        usage_env: usage_env.clone(),
         constraints: cs,
       },
       Scope::Sub {
         local,
         parent,
         module_path,
-        usage_env,
         ..
       } => Scope::Sub {
         local: local.clone(),
         parent: parent.clone(),
         module_path,
-        usage_env: usage_env.clone(),
         constraints: cs,
       },
     }
@@ -1867,41 +1842,31 @@ impl<'a> Scope<'a> {
   }
 
   pub fn with_param(&self, param: &'a Par) -> Scope<'a> {
-    let mult = param.multiplicity();
-    let mut usage_env = self.usage_env().clone();
     let constraints = self.constraints().to_vec();
     let module_path = self.module_path();
     match param {
-      Par::P(param) => {
-        usage_env.register(param.name.clone(), mult.clone());
-        Scope::Sub {
-          local: local_var(&param.name, param.typ.as_ref()),
-          parent: Box::new(self.clone()),
-          module_path,
-          usage_env,
-          constraints,
-        }
-      }
+      Par::P(param) => Scope::Sub {
+        local: local_var(&param.name, param.typ.as_ref()),
+        parent: Box::new(self.clone()),
+        module_path,
+        constraints,
+      },
       Par::I { typ, .. } => {
-        // Anonymous implicit param - no name to register
+        // Anonymous implicit param
         Scope::Sub {
           local: local_index_var(typ.as_ref()),
           parent: Box::new(self.clone()),
           module_path,
-          usage_env,
           constraints,
         }
       }
     }
   }
   pub fn with_local_var(&self, name: &'a Identifier, typ: &'a Term) -> Scope<'a> {
-    let mut usage_env = self.usage_env().clone();
-    usage_env.register(name.clone(), Multiplicity::Many);
     Scope::Sub {
       local: local_var(name, typ),
       parent: Box::new(self.clone()),
       module_path: self.module_path(),
-      usage_env,
       constraints: self.constraints().to_vec(),
     }
   }
@@ -1910,7 +1875,6 @@ impl<'a> Scope<'a> {
       local: local_forall(name, typ),
       parent: Box::new(self.clone()),
       module_path: self.module_path(),
-      usage_env: self.usage_env().clone(),
       constraints: self.constraints().to_vec(),
     }
   }
@@ -1919,7 +1883,6 @@ impl<'a> Scope<'a> {
       local: local_index_var(typ),
       parent: Box::new(self.clone()),
       module_path: self.module_path(),
-      usage_env: self.usage_env().clone(),
       constraints: self.constraints().to_vec(),
     }
   }
@@ -1928,7 +1891,6 @@ impl<'a> Scope<'a> {
       local: local_var_owned(name, typ),
       parent: Box::new(self.clone()),
       module_path: self.module_path(),
-      usage_env: self.usage_env().clone(),
       constraints: self.constraints().to_vec(),
     }
   }

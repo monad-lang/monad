@@ -281,15 +281,13 @@ impl Similar for Term {
           arg: a1,
           ret: r1,
           arg_name: n1,
-          mult: m1,
         },
         Pi {
           arg: a2,
           ret: r2,
           arg_name: n2,
-          mult: m2,
         },
-      ) => (*a1).similar(&**a2) && (*r1).similar(&**r2) && n1 == n2 && m1 == m2,
+      ) => (*a1).similar(&**a2) && (*r1).similar(&**r2) && n1 == n2,
       (Var { name: n1 }, Var { name: n2 }) => n1 == n2,
       (
         Forall {

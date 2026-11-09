@@ -9,14 +9,22 @@
 ///
 /// ## The rule
 ///
-/// Design B's effective multiplicity, verbatim:
+/// Design B's effective multiplicity, verbatim. There is no
+/// multiplicity annotation syntax — the `!`/`?`/`%` prefixes an earlier
+/// design used were parsed but never enforced and have been removed
+/// from both grammars — so the only rows a source can reach are the
+/// `#[linear]`/`#[proof]` and unannotated ones:
 ///
 /// ```text
-/// 1   if annotated `!x`, or the type is #[linear]
-/// 0   if annotated `%x`
+/// 1   if the type is #[linear] or #[proof]
 /// ω   if `Copy A` resolves            // the only route to ω
 /// ≤1  otherwise                        // the default
 /// ```
+///
+/// The `declared` parameter and the arms that read it stay because
+/// `Param.mult` is a struct field the runtime matches positionally; the
+/// parser now always fills it with `many`, so those arms are the field's
+/// total-match requirement rather than a reachable feature.
 ///
 /// **`Multiplicity.many` is the parser's default for an UNANNOTATED
 /// binder, and under this rule that means affine, not ω.** Reading it
@@ -101,10 +109,12 @@ pub def effective_mult_with_vars (scope : Scope) (copy_vars : List Identifier) (
 
 /// The rule with `#[linear]`/`#[proof]` type kinds in hand.
 ///
-/// A proof type is ALWAYS linear (view-types rule 1), regardless of the
-/// prefix -- `?`/`%` on one is rejected by `check_binder_with`. A
-/// `#[linear]` type is linear unless `?x` explicitly relaxes it to affine
-/// (QTT Phase 7's override). `%` on a linear type is rejected too.
+/// A proof type is ALWAYS linear (view-types rule 1). A `#[linear]` type
+/// is linear. The `?`/`%` overrides this used to document — the
+/// annotation spellings that relaxed or erased a linear binder — were
+/// removed from the grammar with the rest of the prefix syntax, so no
+/// source can reach those arms; they remain only because `declared` is a
+/// struct field the runtime matches positionally.
 pub def effective_mult_with_kinds (kinds : TypeKinds) (scope : Scope) (copy_vars : List Identifier) (declared : Multiplicity) (typ : Term) : Multiplicity :=
     if is_proof_type kinds typ then Multiplicity.linear
     else

@@ -64,12 +64,11 @@ def show_sort_level (l : SortLevel) : String := match level_const l {
 
 #[partial]
 def show_param (p : Param) : String := match p {
-    Param.mk name type_ mult default _attrs =>
-        let mult_str := show_multiplicity mult in
+    Param.mk name type_ _mult default _attrs =>
         let name_str := show_identifier name in
         let type_str := show_term type_ in
         let colon_type := String.concat " : " type_str in
-        let base := String.concat mult_str (String.concat name_str colon_type) in
+        let base := String.concat name_str colon_type in
         match default {
             Option.some def_val =>
                 let def_str := show_term def_val in
@@ -469,23 +468,10 @@ pub def show_struct (s : Struct) : String := match s {
 def show_struct_fields (fs : List StructField) : String :=
     List.intercalate ",\n  " (List.map show_struct_field fs)
 
-/// Source-level multiplicity prefix (parseable, round-trips through
-/// `multiplicity_prefix`) — distinct from `Multiplicity`'s own `Display`
-/// impl on the Rust side (rust/core/src/term.rs), which uses "0"/"ω"/"!"/"?"
-/// for diagnostic printing, not source syntax. Many is the default and
-/// prints as nothing, matching `show_vis_prefix`'s package_private case.
-#[partial]
-def show_mult_prefix (mult : Multiplicity) : String := match mult {
-    Multiplicity.zero => "%",
-    Multiplicity.linear => "!",
-    Multiplicity.affine => "?",
-    Multiplicity.many => "",
-}
-
 #[partial]
 def show_struct_field (f : StructField) : String := match f {
-    StructField.mk name typ default mult =>
-        let name_str := String.concat (show_mult_prefix mult) (show_identifier name) in
+    StructField.mk name typ default _mult =>
+        let name_str := show_identifier name in
         let type_str := show_term typ in
         let colon_type := String.concat " : " type_str in
         let base := String.concat name_str colon_type in
@@ -928,12 +914,15 @@ def test_show_param_with_default : Bool :=
     let p := Param.mk id typ Multiplicity.many (Option.some dflt) List.empty in
     show_param p == "x : Type := Type"
 
+/// A param's `mult` field no longer reaches the rendering: the `!`
+/// prefix is gone from the grammar, so a pretty-printed param must not
+/// print one even if a synthetic term carries a non-`many` value.
 #[test]
 def test_show_param_linear : Bool :=
     let id := Identifier.id "x" in
     let typ := Term.sort (SortLevel.concrete 1) in
     let p := Param.mk id typ Multiplicity.linear Option.none List.empty in
-    show_param p == "!x : Type"
+    show_param p == "x : Type"
 
 #[test]
 def test_show_universe_prop : Bool :=

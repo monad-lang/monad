@@ -283,7 +283,6 @@ pub fn pi_var(name: Identifier, arg: Term, ret: Term) -> Term {
     arg_name: Some(name),
     arg: Box::new(arg),
     ret: Box::new(ret),
-    mult: Multiplicity::default(),
   }
 }
 
@@ -338,7 +337,6 @@ pub struct StructField {
   name: Identifier,
   typ: Term,
   default_value: Option<Term>,
-  pub mult: Multiplicity,
 }
 
 pub fn stru_field(name: Identifier, typ: Term, default_value: Option<Term>) -> StructField {
@@ -346,21 +344,6 @@ pub fn stru_field(name: Identifier, typ: Term, default_value: Option<Term>) -> S
     name,
     typ,
     default_value,
-    mult: Multiplicity::Many,
-  }
-}
-
-pub fn stru_field_with_mult(
-  name: Identifier,
-  typ: Term,
-  default_value: Option<Term>,
-  mult: Multiplicity,
-) -> StructField {
-  StructField {
-    name,
-    typ,
-    default_value,
-    mult,
   }
 }
 
@@ -381,7 +364,6 @@ pub fn stru_field_to_def_param(f: StructField) -> Param {
   Param {
     name: f.name,
     typ: Box::new(f.typ),
-    mult: f.mult,
     default: f.default_value.map(Box::new),
     attrs: Vec::new(),
   }
@@ -391,7 +373,7 @@ pub fn stru_field_to_def_param(f: StructField) -> Param {
 /// (`circle { radius : F64 }`, parsed via the same `struct_inner_parser`
 /// a `struct` declaration's own body uses) into an ordinary constructor
 /// `Param` list -- `plans/implementations/struct-field-destructuring.md`'s
-/// Phase 0. Same field-name/type/multiplicity mapping as `stru()`'s own
+/// Phase 0. Same field-name/type mapping as `stru()`'s own
 /// struct-field-to-constructor-param conversion just above (`stru()`,
 /// this file), but UNLIKE `stru_field_to_def_param` (immediately above,
 /// which keeps a field's default for `def`-brace-params), a `:= default`
@@ -409,7 +391,7 @@ pub fn fields_to_cons_params(fields: Vec<StructField>) -> Result<Vec<Param>, Ide
       if f.default_value.is_some() {
         Err(f.name.clone())
       } else {
-        Ok(param_with_mult(f.name, f.typ, f.mult))
+        Ok(param(f.name, f.typ))
       }
     })
     .collect()
@@ -435,10 +417,7 @@ pub fn stru(
     .iter()
     .filter_map(|d| d.default_value.clone().map(|v| (d.name.clone(), v)))
     .collect();
-  let con_params: Vec<Param> = fields
-    .into_iter()
-    .map(|d| param_with_mult(d.name, d.typ, d.mult))
-    .collect();
+  let con_params: Vec<Param> = fields.into_iter().map(|d| param(d.name, d.typ)).collect();
   let struct_type = mpvar(name.clone());
   let con_typ = if con_params.is_empty() {
     struct_type.clone()
@@ -536,14 +515,9 @@ fn params_to_inductive_type(params: &[Param], typ: Term) -> Term {
   // `Pi`'s `arg_name` into scope before lowering its codomain, so an
   // anonymous binder leaves the dependency unresolved (a `Hole`), which made
   // a generic application of such an inductive untypable in a def body.
-  // Mirrors `pi_named_with_mult`'s use in the def-param desugaring.
+  // Mirrors `pi_named`'s use in the def-param desugaring.
   params.iter().rev().fold(typ, |acc, p| {
-    pi_named_with_mult(
-      p.name.clone(),
-      p.typ.to_owned().replace_hole(sort1),
-      acc,
-      p.mult.clone(),
-    )
+    pi_named(p.name.clone(), p.typ.to_owned().replace_hole(sort1), acc)
   })
 }
 
@@ -909,49 +883,10 @@ impl Named for Inductive {
   }
 }
 
-/// Multiplicity for linear type system (Rust-style syntax)
-/// - Many: unrestricted (default), can be used any number of times
-/// - Linear: must be used exactly once (syntax: !x)
-/// - Affine: can be used 0 or 1 time (syntax: ?x)
-#[derive(Debug, Clone, PartialEq, Hash, Eq, PartialOrd, Ord)]
-pub enum Multiplicity {
-  Zero,   // 0 — erased at compile time, no runtime representation
-  Many,   // ω - unrestricted (default)
-  Linear, // 1 - must use exactly once
-  Affine, // ≤1 - can use 0 or 1 time
-}
-
-impl Multiplicity {
-  pub fn subsumes(&self, required: &Multiplicity) -> bool {
-    use Multiplicity::*;
-    match (self, required) {
-      (Zero, Many | Linear | Affine) => false,
-      _ => true,
-    }
-  }
-}
-
-impl Default for Multiplicity {
-  fn default() -> Self {
-    Multiplicity::Many
-  }
-}
-
-impl Display for Multiplicity {
-  fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-    match self {
-      Multiplicity::Zero => write!(f, "0"),
-      Multiplicity::Many => write!(f, "ω"),
-      Multiplicity::Linear => write!(f, "!"),
-      Multiplicity::Affine => write!(f, "?"),
-    }
-  }
-}
-
 #[derive(Debug, Clone, PartialEq, Hash, Eq, PartialOrd, Ord)]
 pub enum Par {
-  P(Param),                                 // explicit param (has mult in Param)
-  I { typ: Box<Term>, mult: Multiplicity }, // implicit param with multiplicity
+  P(Param),             // explicit param
+  I { typ: Box<Term> }, // implicit param
 }
 
 impl Par {
@@ -962,21 +897,11 @@ impl Par {
     }
   }
 
-  pub fn multiplicity(&self) -> &Multiplicity {
-    match self {
-      Par::P(param) => &param.mult,
-      Par::I { mult, .. } => mult,
-    }
-  }
-
   pub fn with_type(&self, typ: Term) -> Par {
     use Par::*;
     match self {
       P(param_) => P(param(param_.name.clone(), *param_.typ.clone())),
-      I { typ: _, mult } => I {
-        typ: Box::new(typ),
-        mult: mult.clone(),
-      },
+      I { typ: _ } => I { typ: Box::new(typ) },
     }
   }
 }
@@ -993,25 +918,21 @@ impl Display for Par {
 pub struct Param {
   pub name: Identifier,
   pub typ: Box<Term>,
-  pub mult: Multiplicity, // NEW: Many (default), Linear (!), or Affine (?)
   pub default: Option<Box<Term>>, // Default value for class parameters (:= syntax)
   /// Per-parameter attributes, e.g. `#[arg]` on a constructor field for
   /// `#[derive_cli]` generation (see `motes/clap/src/args.mo`'s `derive_cli_meta`,
   /// reflected into a `FieldInfo.attrs` list — `core/src/eval/meta_reflect.rs`).
   /// Purely additional metadata: excluded from equality/hashing/ordering below,
-  /// which stay structural over name/type/multiplicity/default — mirroring
+  /// which stay structural over name/type/default — mirroring
   /// `Attribute`'s own `PartialEq`, which likewise ignores provenance.
   pub attrs: Vec<Attribute>,
 }
 
-/// Structural equality over name/type/multiplicity/default only — `attrs` is
+/// Structural equality over name/type/default only — `attrs` is
 /// metadata, not part of a param's identity (see the field doc above).
 impl PartialEq for Param {
   fn eq(&self, other: &Self) -> bool {
-    self.name == other.name
-      && self.typ == other.typ
-      && self.mult == other.mult
-      && self.default == other.default
+    self.name == other.name && self.typ == other.typ && self.default == other.default
   }
 }
 impl Eq for Param {}
@@ -1020,7 +941,6 @@ impl std::hash::Hash for Param {
   fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
     self.name.hash(state);
     self.typ.hash(state);
-    self.mult.hash(state);
     self.default.hash(state);
   }
 }
@@ -1032,12 +952,7 @@ impl PartialOrd for Param {
 }
 impl Ord for Param {
   fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-    (&self.name, &self.typ, &self.mult, &self.default).cmp(&(
-      &other.name,
-      &other.typ,
-      &other.mult,
-      &other.default,
-    ))
+    (&self.name, &self.typ, &self.default).cmp(&(&other.name, &other.typ, &other.default))
   }
 }
 
@@ -1051,16 +966,12 @@ impl Display for Param {
   fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
     if self.typ.is_known() {
       if let Some(ref default) = self.default {
-        write!(
-          f,
-          "({}{} : {} := {})",
-          self.mult, self.name, self.typ, default
-        )
+        write!(f, "({} : {} := {})", self.name, self.typ, default)
       } else {
-        write!(f, "({}{} : {})", self.mult, self.name, self.typ)
+        write!(f, "({} : {})", self.name, self.typ)
       }
     } else {
-      write!(f, "{}{}", self.mult, self.name)
+      write!(f, "{}", self.name)
     }
   }
 }
@@ -1073,17 +984,6 @@ pub fn param(name: Identifier, typ: Term) -> Param {
   Param {
     name,
     typ: Box::new(typ),
-    mult: Multiplicity::default(),
-    default: None,
-    attrs: Vec::new(),
-  }
-}
-
-pub fn param_with_mult(name: Identifier, typ: Term, mult: Multiplicity) -> Param {
-  Param {
-    name,
-    typ: Box::new(typ),
-    mult,
     default: None,
     attrs: Vec::new(),
   }
@@ -1093,7 +993,6 @@ pub fn param_with_default(name: Identifier, typ: Term, default: Option<Term>) ->
   Param {
     name,
     typ: Box::new(typ),
-    mult: Multiplicity::default(),
     default: default.map(Box::new),
     attrs: Vec::new(),
   }
@@ -1155,37 +1054,27 @@ pub fn pi(arg: Term, ret: Term) -> Term {
     arg_name: None,
     arg: Box::new(arg),
     ret: Box::new(ret),
-    mult: Multiplicity::Many,
   }
 }
 
-pub fn pi_with_mult(arg: Term, ret: Term, mult: Multiplicity) -> Term {
-  Term::Pi {
-    arg_name: None,
-    arg: Box::new(arg),
-    ret: Box::new(ret),
-    mult,
-  }
-}
-/// Same as `pi_with_mult`, but also threads the parameter's real name
-/// through as `arg_name` — needed so a LATER parameter's type can refer
-/// to an EARLIER one by name (e.g. `def f (A : Type) (a : A) : ...`).
-/// `lower_core.rs`'s `Term::Pi` lowering arm pushes `arg_name` into scope
-/// before lowering `ret`, exactly like `Term::Forall`'s `name` already
-/// does for implicit parameters — `pi_with_mult`'s `arg_name: None`
-/// leaves nothing to push, so a later param's type-level reference to an
-/// earlier one falls through to free-name resolution instead of a
-/// `Bound` reference, independently (and inconsistently) on the type
-/// side vs. the body's own `Term::Lam` chain (which DOES carry real
-/// names) — see `def_param_names`'s doc comment for the historical
-/// context, and `plans/implementations/evaluator-recursion-and-eq-rec-
-/// followup.md` (Part 3, Fix A) for the bug this fixes.
-pub fn pi_named_with_mult(name: Identifier, arg: Term, ret: Term, mult: Multiplicity) -> Term {
+/// `pi`, but threads the parameter's real name through as `arg_name` —
+/// needed so a LATER parameter's type can refer to an EARLIER one by name
+/// (e.g. `def f (A : Type) (a : A) : ...`). `lower_core.rs`'s `Term::Pi`
+/// lowering arm pushes `arg_name` into scope before lowering `ret`,
+/// exactly like `Term::Forall`'s `name` already does for implicit
+/// parameters — `pi`'s `arg_name: None` leaves nothing to push, so a
+/// later param's type-level reference to an earlier one falls through to
+/// free-name resolution instead of a `Bound` reference, independently
+/// (and inconsistently) on the type side vs. the body's own `Term::Lam`
+/// chain (which DOES carry real names) — see `def_param_names`'s doc
+/// comment for the historical context, and
+/// `plans/implementations/evaluator-recursion-and-eq-rec-followup.md`
+/// (Part 3, Fix A) for the bug this fixes.
+pub fn pi_named(name: Identifier, arg: Term, ret: Term) -> Term {
   Term::Pi {
     arg_name: Some(name),
     arg: Box::new(arg),
     ret: Box::new(ret),
-    mult,
   }
 }
 pub fn pi_name(arg_name: Option<Identifier>, arg: Term, ret: Term) -> Term {
@@ -1193,7 +1082,6 @@ pub fn pi_name(arg_name: Option<Identifier>, arg: Term, ret: Term) -> Term {
     arg_name,
     arg: Box::new(arg),
     ret: Box::new(ret),
-    mult: Multiplicity::default(),
   }
 }
 
@@ -1652,7 +1540,6 @@ pub enum Term {
     arg_name: Option<Identifier>,
     arg: Box<Term>,
     ret: Box<Term>,
-    mult: Multiplicity, // NEW: Many, Linear (!), or Affine (?)
   },
   /// Variable
   Var {
@@ -2018,10 +1905,7 @@ pub fn apps(fun: Term, args: Vec<Term>) -> Term {
 
 pub fn lam_index(typ: Term, body: Term) -> Term {
   Term::Lam {
-    param: Par::I {
-      typ: Box::new(typ),
-      mult: Multiplicity::default(),
-    },
+    param: Par::I { typ: Box::new(typ) },
     body: Box::new(body),
   }
 }
@@ -2031,10 +1915,7 @@ pub fn lam_indecies(params: Vec<Param>, body: Term) -> Term {
   let mut body = body;
   for param in params.into_iter().rev() {
     body = Term::Lam {
-      param: Par::I {
-        typ: param.typ,
-        mult: Multiplicity::default(),
-      },
+      param: Par::I { typ: param.typ },
       body: Box::new(body),
     }
   }

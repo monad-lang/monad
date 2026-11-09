@@ -829,9 +829,8 @@ fn map_par(
       p.default = map_opt_child(f, p.default)?;
       Ok(Par::P(p))
     }
-    Par::I { typ, mult } => Ok(Par::I {
+    Par::I { typ } => Ok(Par::I {
       typ: Box::new(f(*typ)?),
-      mult,
     }),
   }
 }
@@ -1444,16 +1443,10 @@ fn expand_term(term: Term, ctx: &ExpandCtx, depth: u64) -> Result<Term, MacroErr
       term: Box::new(expand_term(*term, ctx, depth)?),
       module,
     }),
-    Pi {
-      arg_name,
-      arg,
-      ret,
-      mult,
-    } => Ok(Pi {
+    Pi { arg_name, arg, ret } => Ok(Pi {
       arg_name,
       arg: Box::new(expand_term(*arg, ctx, depth)?),
       ret: Box::new(expand_term(*ret, ctx, depth)?),
-      mult,
     }),
     Forall { name, typ, body } => Ok(Forall {
       name,
@@ -1620,16 +1613,10 @@ fn resolve_quote(term: Term, ctx: &ExpandCtx, depth: u64) -> Result<Term, MacroE
       term: Box::new(resolve_quote(*term, ctx, depth)?),
       module,
     }),
-    Pi {
-      arg_name,
-      arg,
-      ret,
-      mult,
-    } => Ok(Pi {
+    Pi { arg_name, arg, ret } => Ok(Pi {
       arg_name,
       arg: Box::new(resolve_quote(*arg, ctx, depth)?),
       ret: Box::new(resolve_quote(*ret, ctx, depth)?),
-      mult,
     }),
     Forall { name, typ, body } => Ok(Forall {
       name,
@@ -1818,16 +1805,10 @@ fn rename_macro_var(term: Term, old: &Identifier, new: &Identifier) -> Term {
         }
       }
     }
-    Pi {
-      arg_name,
-      arg,
-      ret,
-      mult,
-    } => Pi {
+    Pi { arg_name, arg, ret } => Pi {
       arg_name,
       arg: Box::new(rename_macro_var(*arg, old, new)),
       ret: Box::new(rename_macro_var(*ret, old, new)),
-      mult,
     },
     Forall {
       name: n,
@@ -1921,17 +1902,15 @@ fn alpha_rename_body(term: Term) -> Term {
             Par::P(Param {
               name: new_name,
               typ: Box::new(alpha_rename_body(*param.typ)),
-              mult: param.mult,
               default: param.default.clone(),
               attrs: param.attrs.clone(),
             }),
             alpha_rename_body(body),
           )
         }
-        Par::I { typ, mult } => (
+        Par::I { typ } => (
           Par::I {
             typ: Box::new(alpha_rename_body(*typ)),
-            mult,
           },
           alpha_rename_body(*b),
         ),
@@ -1956,16 +1935,10 @@ fn alpha_rename_body(term: Term) -> Term {
         }
       }
     }
-    Pi {
-      arg_name,
-      arg,
-      ret,
-      mult,
-    } => Pi {
+    Pi { arg_name, arg, ret } => Pi {
       arg_name,
       arg: Box::new(alpha_rename_body(*arg)),
       ret: Box::new(alpha_rename_body(*ret)),
-      mult,
     },
     Forall {
       name: n,
@@ -2055,9 +2028,8 @@ fn subst_par_typ(p: Par, name: &NameRef, replacement: &Term, under: bool) -> Par
       param.typ = Box::new(subst_macro_go(*param.typ, name, replacement, under));
       Par::P(param)
     }
-    Par::I { typ, mult } => Par::I {
+    Par::I { typ } => Par::I {
       typ: Box::new(subst_macro_go(*typ, name, replacement, under)),
-      mult,
     },
   }
 }
@@ -2084,16 +2056,10 @@ fn subst_macro_go(term: Term, name: &NameRef, replacement: &Term, under: bool) -
       fun: Box::new(subst_macro_go(*fun, name, replacement, under)),
       arg: Box::new(subst_macro_go(*arg, name, replacement, under)),
     },
-    Pi {
-      arg_name,
-      arg,
-      ret,
-      mult,
-    } => Pi {
+    Pi { arg_name, arg, ret } => Pi {
       arg_name,
       arg: Box::new(subst_macro_go(*arg, name, replacement, under)),
       ret: Box::new(subst_macro_go(*ret, name, replacement, under)),
-      mult,
     },
     Forall {
       name: n,

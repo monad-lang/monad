@@ -22,9 +22,9 @@ struct Defaulted {
     h : I64 := 100,
 }
 
-// Struct with linear field (must be consumed exactly once)
+// A struct whose fields are ordinary affine binders once matched
 struct Buffer {
-    !data : String,
+    data : String,
     size : I64,
 }
 

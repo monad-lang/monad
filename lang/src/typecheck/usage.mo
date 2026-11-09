@@ -1100,8 +1100,10 @@ pub struct BinderUse {
     /// the spliced def's `atom_paths`. Defaults that name a DEF (like
     /// `ctor`'s `Identifier.id ""`) are fine. Every literal supplies it.
     view : Bool,
-    /// The source's declared `!`/`?`/`%` prefix on this binder, or
-    /// `Multiplicity.many` when it wrote none. `collect_binder_uses_with_params`
+    /// The binder's `declared` multiplicity (`Param.mult`). Always
+    /// `Multiplicity.many` since the `!`/`?`/`%` prefix syntax was
+    /// removed from the grammar — the field stays because the runtime
+    /// matches `Param` positionally. `collect_binder_uses_with_params`
     /// fills a def's leading binders from `Def.params`; a match binder takes
     /// the constructor field's `Param.mult`. The affine judgement
     /// (`affine.mo`'s `check_binders_go`) reads this instead of hardcoding
@@ -1390,7 +1392,8 @@ pub def collect_binder_uses (ctors : HashMap String Bool) (borrows : HashMap Str
 /// its remaining sibling parameters. Walking that chain here gives each
 /// declared binder:
 ///
-/// - its real `declared` multiplicity (`Param.mult`), including `!`/`?`/`%`;
+/// - its `declared` multiplicity (`Param.mult`) — always `many` since
+///   the `!`/`?`/`%` prefix syntax was removed from the grammar;
 /// - a `captured` count that does NOT treat the remaining parameter
 ///   lambdas as closures (`captured_uses_of_with_free`).
 ///

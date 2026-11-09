@@ -9,7 +9,7 @@ use lang::types {
     ParseStruct, ParseStructField, ParseStructLitField, ParseTerm, ParseTermKind, ParsedParam,
     QualifiedName, SortLevel, SourceRange, Term, TypeConstraint, UseFilter, UseItem, Visibility,
     affine, app, char, char_to_string, concrete, destructured, f32, f64, flt, group,
-    has_attr, i64, id_eq, ident, if_, linear, list_reverse, many, match_, named, num, package_private, parse_param_many, parse_param_with_mult,
+    has_attr, i64, id_eq, ident, if_, linear, list_reverse, many, match_, named, num, package_private, parse_param_many,
     pd_at, pd_class_d, pd_decl_gen_d, pd_def_d, pd_def_macro_d, pd_inductive_d,
     pd_attrs_d, pd_infix_d, pd_instance_d, pd_macro_call_d, pd_mote_d, pd_open_d,
     dict_hint, do_,
@@ -1288,79 +1288,46 @@ def struct_fields (input : String) (name : Identifier) (vis : Visibility) : Pars
         fail e => fail e
     }
 
-/// Parse an optional multiplicity-prefix character before a struct
-/// field's name — `%` (Zero/Erased), `!` (Linear), `?` (Affine), or none
-/// at all (Many, the default). Mirrors the Rust reference's
-/// `multiplicity_prefix`. Never fails: an absent prefix is Many, same
-/// shape as `vis_parser` always succeeding with a default.
-#[partial]
-def multiplicity_prefix (input : String) : ParseResult Multiplicity :=
-    multiplicity_try_zero (tag "%" input) input
-
-#[partial]
-def multiplicity_try_zero (r : ParseResult String) (orig : String) : ParseResult Multiplicity :=
-    match r {
-        success rem _ => success rem Multiplicity.zero,
-        fail _ => multiplicity_try_linear (tag "!" orig) orig
-    }
-
-#[partial]
-def multiplicity_try_linear (r : ParseResult String) (orig : String) : ParseResult Multiplicity :=
-    match r {
-        success rem _ => success rem Multiplicity.linear,
-        fail _ => multiplicity_try_affine (tag "?" orig) orig
-    }
-
-#[partial]
-def multiplicity_try_affine (r : ParseResult String) (orig : String) : ParseResult Multiplicity :=
-    match r {
-        success rem _ => success rem Multiplicity.affine,
-        fail _ => success orig Multiplicity.many
-    }
-
 #[partial]
 def struct_one_field (input : String) : ParseResult ParseStructField :=
-    match multiplicity_prefix input {
-        success rem mult => struct_field_name (identifier rem) mult,
+    struct_field_name (identifier input)
+
+#[partial]
+def struct_field_name (r : ParseResult String) : ParseResult ParseStructField :=
+    match r {
+        success rem name => struct_field_colon (tag ":" (skip_spaces rem)) (Identifier.id name),
         fail e => fail e
     }
 
 #[partial]
-def struct_field_name (r : ParseResult String) (mult : Multiplicity) : ParseResult ParseStructField :=
+def struct_field_colon (r : ParseResult String) (name : Identifier) : ParseResult ParseStructField :=
     match r {
-        success rem name => struct_field_colon (tag ":" (skip_spaces rem)) (Identifier.id name) mult,
+        success rem _ => struct_field_type (type_expression (skip_docstrings (skip_spaces rem))) name,
         fail e => fail e
     }
 
 #[partial]
-def struct_field_colon (r : ParseResult String) (name : Identifier) (mult : Multiplicity) : ParseResult ParseStructField :=
+def struct_field_type (r : ParseResult ParseTerm) (name : Identifier) : ParseResult ParseStructField :=
     match r {
-        success rem _ => struct_field_type (type_expression (skip_docstrings (skip_spaces rem))) name mult,
+        success rem typ => struct_field_default (tag ":=" (skip_spaces rem)) rem name typ,
         fail e => fail e
     }
 
 #[partial]
-def struct_field_type (r : ParseResult ParseTerm) (name : Identifier) (mult : Multiplicity) : ParseResult ParseStructField :=
+def struct_field_default (r : ParseResult String) (orig : String) (name : Identifier) (typ : ParseTerm) : ParseResult ParseStructField :=
     match r {
-        success rem typ => struct_field_default (tag ":=" (skip_spaces rem)) rem name typ mult,
-        fail e => fail e
-    }
-
-#[partial]
-def struct_field_default (r : ParseResult String) (orig : String) (name : Identifier) (typ : ParseTerm) (mult : Multiplicity) : ParseResult ParseStructField :=
-    match r {
-        success rem _ => struct_field_default_val (expression (skip_docstrings (skip_spaces rem))) name typ mult,
+        success rem _ => struct_field_default_val (expression (skip_docstrings (skip_spaces rem))) name typ,
         fail _ =>
             let none : Option ParseTerm := Option.none in
-            success orig (ParseStructField.mk name typ none mult)
+            success orig (ParseStructField.mk name typ none Multiplicity.many)
     }
 
 #[partial]
-def struct_field_default_val (r : ParseResult ParseTerm) (name : Identifier) (typ : ParseTerm) (mult : Multiplicity) : ParseResult ParseStructField :=
+def struct_field_default_val (r : ParseResult ParseTerm) (name : Identifier) (typ : ParseTerm) : ParseResult ParseStructField :=
     match r {
         success rem defval =>
             let some_val : Option ParseTerm := Option.some defval in
-            success rem (ParseStructField.mk name typ some_val mult),
+            success rem (ParseStructField.mk name typ some_val Multiplicity.many),
         fail e => fail e
     }
 
@@ -2006,22 +1973,47 @@ def type_cons_return_type (r : ParseResult ParseTerm) (orig : String) (name : Id
         fail _ => success orig (ParseInductConstructor.mk (NamePath.mk (List.cons name List.empty)) (list_reverse params) (pt_hole)),
     }
 
+/// A constructor's per-constructor implicit type-param clause
+/// (`any {A : Type} (value : A)`): `{ id+ : Type }`, parsed STRICTLY --
+/// the same "accept the syntax, discard the content" contract as
+/// `def_implicit_close` (auto-generalization makes the clause's
+/// bindings redundant, but they still have to *parse*), and the same
+/// strictness the Rust reference's `implicit_param`
+/// (rust/core/src/parser.rs) applies. This used to skip the clause's
+/// content with `take_while is_not_close_curly`, accepting ANY text up
+/// to `}` -- including a `!`/`?`/`%` multiplicity prefix, which the
+/// prefix-removal grammar must reject, and any other malformed clause.
 #[partial]
 def type_cons_implicit (r : ParseResult String) (orig : String) (name : Identifier) : ParseResult ParseInductConstructor :=
     match r {
-        success rem _ => type_cons_implicit_skip (take_while is_not_close_curly rem) rem orig name,
+        success rem _ => type_cons_implicit_name (identifier (skip_spaces rem)) rem orig name,
         fail _ =>
             let empty_params : List ParseParam := List.empty in
             success orig (ParseInductConstructor.mk (NamePath.mk (List.cons name List.empty)) empty_params (pt_hole))
     }
 
+/// After the first name in the clause, try more space-separated names
+/// sharing one type (`{K V : Type}`), same shape as
+/// `def_implicit_more_names`.
 #[partial]
-def type_cons_implicit_skip (r : ParseResult String) (rem : String) (orig : String) (name : Identifier) : ParseResult ParseInductConstructor :=
+def type_cons_implicit_name (r : ParseResult String) (brace_rem : String) (orig : String) (name : Identifier) : ParseResult ParseInductConstructor :=
     match r {
-        success after_bracket _ => type_cons_implicit_close (tag "}" (skip_spaces after_bracket)) after_bracket orig name,
-        fail _ =>
-            let empty_params : List ParseParam := List.empty in
-            success orig (ParseInductConstructor.mk (NamePath.mk (List.cons name List.empty)) empty_params (pt_hole))
+        success rem2 _ => type_cons_implicit_name (identifier (skip_spaces rem2)) rem2 orig name,
+        fail _ => type_cons_implicit_colon (tag ":" (skip_spaces brace_rem)) brace_rem orig name
+    }
+
+#[partial]
+def type_cons_implicit_colon (r : ParseResult String) (brace_rem : String) (orig : String) (name : Identifier) : ParseResult ParseInductConstructor :=
+    match r {
+        success rem2 _ => type_cons_implicit_type (type_expression rem2) brace_rem orig name,
+        fail e => fail e
+    }
+
+#[partial]
+def type_cons_implicit_type (r : ParseResult ParseTerm) (brace_rem : String) (orig : String) (name : Identifier) : ParseResult ParseInductConstructor :=
+    match r {
+        success rem2 _ => type_cons_implicit_close (tag "}" (skip_spaces rem2)) rem2 orig name,
+        fail e => fail e
     }
 
 #[partial]
@@ -2555,10 +2547,7 @@ def def_params_try_explicit (r : ParseResult String) (orig : String) (params : L
 def def_explicit_attrs (r : ParseResult (List Attribute)) (close_rem : String) (params : List ParsedParam) : ParseResult (List ParsedParam) :=
     match r {
         success rem attrs =>
-            match multiplicity_prefix (skip_spaces rem) {
-                success rem2 mult => def_explicit_try_destructured (field_pattern_parser rem2) rem2 close_rem params attrs mult,
-                fail e => fail e
-            },
+            def_explicit_try_destructured (field_pattern_parser rem) rem close_rem params attrs,
         fail e => fail e
     }
 
@@ -2575,46 +2564,42 @@ def def_explicit_attrs (r : ParseResult (List Attribute)) (close_rem : String) (
 /// destructured or not, so the ordinary `:` + type parsing below already
 /// gets one for free.
 #[partial]
-def def_explicit_try_destructured (r : ParseResult FieldPattern) (orig : String) (close_rem : String) (params : List ParsedParam) (attrs : List Attribute) (mult : Multiplicity) : ParseResult (List ParsedParam) :=
+def def_explicit_try_destructured (r : ParseResult FieldPattern) (orig : String) (close_rem : String) (params : List ParsedParam) (attrs : List Attribute) : ParseResult (List ParsedParam) :=
     match r {
-        success rem fp => def_explicit_destructured_colon (tag ":" (skip_spaces rem)) close_rem fp params attrs mult,
-        fail _ => def_explicit_param (identifier orig) close_rem params attrs mult
+        success rem fp => def_explicit_destructured_colon (tag ":" (skip_spaces rem)) close_rem fp params attrs,
+        fail _ => def_explicit_param (identifier orig) close_rem params attrs
     }
 
 #[partial]
-def def_explicit_destructured_colon (r : ParseResult String) (close_rem : String) (fp : FieldPattern) (params : List ParsedParam) (attrs : List Attribute) (mult : Multiplicity) : ParseResult (List ParsedParam) :=
+def def_explicit_destructured_colon (r : ParseResult String) (close_rem : String) (fp : FieldPattern) (params : List ParsedParam) (attrs : List Attribute) : ParseResult (List ParsedParam) :=
     match r {
         success rem _ =>
-            def_explicit_destructured_type (type_expression rem) close_rem fp params attrs mult,
+            def_explicit_destructured_type (type_expression rem) close_rem fp params attrs,
         fail e => fail e
     }
 
 #[partial]
-def def_explicit_destructured_type (r : ParseResult ParseTerm) (close_rem : String) (fp : FieldPattern) (params : List ParsedParam) (attrs : List Attribute) (mult : Multiplicity) : ParseResult (List ParsedParam) :=
+def def_explicit_destructured_type (r : ParseResult ParseTerm) (close_rem : String) (fp : FieldPattern) (params : List ParsedParam) (attrs : List Attribute) : ParseResult (List ParsedParam) :=
     match r {
-        success rem typ => def_explicit_destructured_close (tag ")" rem) close_rem fp typ params attrs mult,
+        success rem typ => def_explicit_destructured_close (tag ")" rem) close_rem fp typ params attrs,
         fail e => fail e
     }
 
 #[partial]
-def def_explicit_destructured_close (r : ParseResult String) (close_rem : String) (fp : FieldPattern) (typ : ParseTerm) (params : List ParsedParam) (attrs : List Attribute) (mult : Multiplicity) : ParseResult (List ParsedParam) :=
+def def_explicit_destructured_close (r : ParseResult String) (close_rem : String) (fp : FieldPattern) (typ : ParseTerm) (params : List ParsedParam) (attrs : List Attribute) : ParseResult (List ParsedParam) :=
     match r {
         success rem _ =>
             let none : Option ParseTerm := Option.none in
-            // `mult`, not a hardcoded `Multiplicity.many`: `def_explicit_attrs`
-            // parses a `!`/`?`/`%` prefix for BOTH param forms, and the
-            // destructured branch used to accept one and silently discard it,
-            // so `(!{x, y} : P)` compiled as an unrestricted param.
-            let p : ParseParam := ParseParam.mk (Identifier.id "__struct_param") typ mult none attrs in
+            let p : ParseParam := ParseParam.mk (Identifier.id "__struct_param") typ Multiplicity.many none attrs in
             let pp : ParsedParam := ParsedParam.destructured p fp in
             def_params_loop (skip_spaces rem) (List.cons pp params),
         fail e => fail e
     }
 
 #[partial]
-def def_explicit_param (r : ParseResult String) (close_rem : String) (params : List ParsedParam) (attrs : List Attribute) (mult : Multiplicity) : ParseResult (List ParsedParam) :=
+def def_explicit_param (r : ParseResult String) (close_rem : String) (params : List ParsedParam) (attrs : List Attribute) : ParseResult (List ParsedParam) :=
     match r {
-        success rem name => def_explicit_more_names rem close_rem (List.cons (Identifier.id name) List.empty) params attrs mult,
+        success rem name => def_explicit_more_names rem close_rem (List.cons (Identifier.id name) List.empty) params attrs,
         fail e => fail e
     }
 
@@ -2624,35 +2609,35 @@ def def_explicit_param (r : ParseResult String) (close_rem : String) (params : L
 /// `(a : Type) (b : Type)`. `names` accumulates most-recently-parsed-first
 /// (reverse declaration order), mirroring how `params` itself accumulates.
 #[partial]
-def def_explicit_more_names (input : String) (close_rem : String) (names : List Identifier) (params : List ParsedParam) (attrs : List Attribute) (mult : Multiplicity) : ParseResult (List ParsedParam) :=
-    def_explicit_more_names_try (identifier (skip_spaces input)) input close_rem names params attrs mult
+def def_explicit_more_names (input : String) (close_rem : String) (names : List Identifier) (params : List ParsedParam) (attrs : List Attribute) : ParseResult (List ParsedParam) :=
+    def_explicit_more_names_try (identifier (skip_spaces input)) input close_rem names params attrs
 
 #[partial]
-def def_explicit_more_names_try (r : ParseResult String) (orig : String) (close_rem : String) (names : List Identifier) (params : List ParsedParam) (attrs : List Attribute) (mult : Multiplicity) : ParseResult (List ParsedParam) :=
+def def_explicit_more_names_try (r : ParseResult String) (orig : String) (close_rem : String) (names : List Identifier) (params : List ParsedParam) (attrs : List Attribute) : ParseResult (List ParsedParam) :=
     match r {
-        success rem name => def_explicit_more_names rem close_rem (List.cons (Identifier.id name) names) params attrs mult,
-        fail _ => def_explicit_colon (tag ":" (skip_spaces orig)) close_rem names params attrs mult
+        success rem name => def_explicit_more_names rem close_rem (List.cons (Identifier.id name) names) params attrs,
+        fail _ => def_explicit_colon (tag ":" (skip_spaces orig)) close_rem names params attrs
     }
 
 #[partial]
-def def_explicit_colon (r : ParseResult String) (close_rem : String) (names : List Identifier) (params : List ParsedParam) (attrs : List Attribute) (mult : Multiplicity) : ParseResult (List ParsedParam) :=
+def def_explicit_colon (r : ParseResult String) (close_rem : String) (names : List Identifier) (params : List ParsedParam) (attrs : List Attribute) : ParseResult (List ParsedParam) :=
     match r {
         success rem _ =>
-            def_explicit_type (type_expression rem) close_rem names params attrs mult,
+            def_explicit_type (type_expression rem) close_rem names params attrs,
         fail e => fail e
     }
 
 #[partial]
-def def_explicit_type (r : ParseResult ParseTerm) (close_rem : String) (names : List Identifier) (params : List ParsedParam) (attrs : List Attribute) (mult : Multiplicity) : ParseResult (List ParsedParam) :=
+def def_explicit_type (r : ParseResult ParseTerm) (close_rem : String) (names : List Identifier) (params : List ParsedParam) (attrs : List Attribute) : ParseResult (List ParsedParam) :=
     match r {
-        success rem typ => def_explicit_close (tag ")" rem) close_rem names typ params attrs mult,
+        success rem typ => def_explicit_close (tag ")" rem) close_rem names typ params attrs,
         fail e => fail e
     }
 
 #[partial]
-def def_explicit_close (r : ParseResult String) (close_rem : String) (names : List Identifier) (typ : ParseTerm) (params : List ParsedParam) (attrs : List Attribute) (mult : Multiplicity) : ParseResult (List ParsedParam) :=
+def def_explicit_close (r : ParseResult String) (close_rem : String) (names : List Identifier) (typ : ParseTerm) (params : List ParsedParam) (attrs : List Attribute) : ParseResult (List ParsedParam) :=
     match r {
-        success rem _ => def_params_loop (skip_spaces rem) (params_for_names_attrs (list_reverse names) typ attrs mult params),
+        success rem _ => def_params_loop (skip_spaces rem) (params_for_names_attrs (list_reverse names) typ attrs params),
         fail e => fail e
     }
 
@@ -2672,7 +2657,7 @@ def params_for_names (names : List Identifier) (typ : ParseTerm) (params : List 
 /// empty) — applies `attrs` to every `Param` built from this one
 /// `(...)` group. Its THIRD user is `ctor_params_for_names_attrs` just
 /// below (the constructor-field chain, `type_cons_group_type`); unlike
-/// this one it has no `FieldPattern`/multiplicity to thread, so it is a
+/// this one it has no `FieldPattern` to thread, so it is a
 /// separate, simpler sibling rather than the same function. Deliberately
 /// NOT merged into `params_for_names` itself: `def`'s own `{implicit}`
 /// params and `instance`'s implicit-param chain
@@ -2683,12 +2668,12 @@ def params_for_names (names : List Identifier) (typ : ParseTerm) (params : List 
 /// attributed — untested design choice (no real corpus example combines
 /// `#[arg]` with a multi-name group either way).
 #[partial]
-def params_for_names_attrs (names : List Identifier) (typ : ParseTerm) (attrs : List Attribute) (mult : Multiplicity) (params : List ParsedParam) : List ParsedParam := match names {
+def params_for_names_attrs (names : List Identifier) (typ : ParseTerm) (attrs : List Attribute) (params : List ParsedParam) : List ParsedParam := match names {
     List.empty => params,
     List.cons n rest =>
         let none : Option ParseTerm := Option.none in
-        let p : ParseParam := ParseParam.mk n typ mult none attrs in
-        params_for_names_attrs rest typ attrs mult (List.cons (ParsedParam.plain p) params),
+        let p : ParseParam := ParseParam.mk n typ Multiplicity.many none attrs in
+        params_for_names_attrs rest typ attrs (List.cons (ParsedParam.plain p) params),
 }
 
 /// `params_for_names` with a captured per-FIELD `#[...]` attribute list —
@@ -3214,8 +3199,8 @@ def class_method_own_constraint_close (r : ParseResult String) (after_bracket : 
 def class_method_colon_or_sig (input : String) (mname : Identifier) (name : Identifier) (methods : List ParseClassDef) (vis : Visibility) : ParseResult ParseDecl :=
     class_method_try_implicit (tag "{" (skip_spaces input)) input mname name methods vis
 
-/// Skip an optional `{A B : Type}`-shaped implicit-param block before a
-/// class method's own explicit `(...)` params (e.g. `init/foldable.mo`'s
+/// Parse an optional `{A B : Type}`-shaped implicit-param clause before
+/// a class method's own explicit `(...)` params (e.g. `init/foldable.mo`'s
 /// `class [Foldable T] Traversable (T : Type -> Type) { def traverse {A
 /// B : Type} (f : A -> F B) (t : T A) : F (T B) }`) -- previously
 /// unsupported at all: `class_method_colon_or_sig` went straight to
@@ -3223,27 +3208,44 @@ def class_method_colon_or_sig (input : String) (mname : Identifier) (name : Iden
 /// outright, failing the WHOLE enclosing class and (via `decls_try`'s
 /// own "any failure silently truncates the rest of the file" leniency)
 /// silently dropping every declaration after it -- confirmed live via
-/// `load_module_decls_at`'s new EOF check (this same session): `init/
-/// foldable.mo` was silently truncating right here, taking `Foldable`/
-/// `Semigroup`/`Monoid`'s own `List`/`String` instances down with it for
-/// the self-hosted checker. Mirrors `type_cons_implicit`'s identical
-/// "accept the syntax, discard the content" simplification for
-/// constructor implicit params (this section's own established
-/// precedent) -- a class method's own ABSTRACT signature doesn't need to
+/// `load_module_decls_at`'s EOF check: `init/foldable.mo` was silently
+/// truncating right here. The clause is parsed STRICTLY (`id+ : type`,
+/// mirroring the Rust reference's `implicit_param`) and its content
+/// discarded -- a class method's own ABSTRACT signature doesn't need to
 /// encode these (an INSTANCE method's own real body independently
-/// declares its own generic context), so there's nothing useful to keep.
+/// declares its own generic context). This used to skip the clause's
+/// content with `take_while is_not_close_curly`, which accepted any
+/// text up to `}` -- including a `!`/`?`/`%` multiplicity prefix, which
+/// the prefix-removal grammar must reject.
 #[partial]
 def class_method_try_implicit (r : ParseResult String) (orig : String) (mname : Identifier) (name : Identifier) (methods : List ParseClassDef) (vis : Visibility) : ParseResult ParseDecl :=
     match r {
-        success rem _ => class_method_implicit_skip (take_while is_not_close_curly rem) rem mname name methods vis,
+        success rem _ => class_method_implicit_name (identifier (skip_spaces rem)) rem mname name methods vis,
         fail _ => class_method_params_try (tag "(" (skip_spaces orig)) orig mname name methods List.empty List.empty vis,
     }
 
+/// After the first name in the clause, try more space-separated names
+/// sharing one type (`{A B : Type}`), same shape as
+/// `def_implicit_more_names`.
 #[partial]
-def class_method_implicit_skip (r : ParseResult String) (rem : String) (mname : Identifier) (name : Identifier) (methods : List ParseClassDef) (vis : Visibility) : ParseResult ParseDecl :=
+def class_method_implicit_name (r : ParseResult String) (brace_rem : String) (mname : Identifier) (name : Identifier) (methods : List ParseClassDef) (vis : Visibility) : ParseResult ParseDecl :=
     match r {
-        success after_bracket _ => class_method_implicit_close (tag "}" (skip_spaces after_bracket)) after_bracket mname name methods vis,
-        fail _ => class_method_params_try (tag "(" (skip_spaces rem)) rem mname name methods List.empty List.empty vis,
+        success rem2 _ => class_method_implicit_name (identifier (skip_spaces rem2)) rem2 mname name methods vis,
+        fail _ => class_method_implicit_colon (tag ":" (skip_spaces brace_rem)) brace_rem mname name methods vis
+    }
+
+#[partial]
+def class_method_implicit_colon (r : ParseResult String) (brace_rem : String) (mname : Identifier) (name : Identifier) (methods : List ParseClassDef) (vis : Visibility) : ParseResult ParseDecl :=
+    match r {
+        success rem2 _ => class_method_implicit_type (type_expression rem2) brace_rem mname name methods vis,
+        fail e => fail e
+    }
+
+#[partial]
+def class_method_implicit_type (r : ParseResult ParseTerm) (brace_rem : String) (mname : Identifier) (name : Identifier) (methods : List ParseClassDef) (vis : Visibility) : ParseResult ParseDecl :=
+    match r {
+        success rem2 _ => class_method_implicit_close (tag "}" (skip_spaces rem2)) rem2 mname name methods vis,
+        fail e => fail e
     }
 
 #[partial]
@@ -3956,11 +3958,11 @@ def instance_close (r : ParseResult String) (cls : NamePath) (args : List ParseT
 // `Decl.def_macro_d`/`decl_gen_d`'s own doc comments in lang/types.mo.
 
 /// One macro parameter: a bare identifier (untyped, `typ = Term.hole`)
-/// or a parenthesized `(x : T)` group (optional multiplicity prefix).
-/// Mirrors the reference's own `macro_param` (rust/core/src/parser.rs) --
-/// reuses the same building blocks `def`'s own explicit-param chain
-/// does (`multiplicity_prefix`), just without the `{implicit}`
-/// alternative (defmacro has no implicit-param syntax) and without
+/// or a parenthesized `(x : T)` group. Mirrors the reference's own
+/// `macro_param` (rust/core/src/parser.rs) -- reuses the same building
+/// blocks `def`'s own explicit-param chain does, just without the
+/// `{implicit}` alternative (defmacro has no implicit-param syntax) and
+/// without
 /// multi-name-sharing-one-type support (`(x y : T)`) -- confirmed via
 /// the corpus's own 4 real `defmacro`s (std/derive.mo) that every one
 /// uses a single bare-identifier param; multi-name support here would
@@ -3972,7 +3974,7 @@ def macro_param (input : String) : ParseResult ParseParam :=
 #[partial]
 def macro_param_try_paren (r : ParseResult String) (orig : String) : ParseResult ParseParam :=
     match r {
-        success rem _ => macro_param_paren_mult (multiplicity_prefix rem) rem,
+        success rem _ => macro_param_paren_name (identifier (skip_spaces rem)),
         fail _ => macro_param_try_bare orig
     }
 
@@ -3984,41 +3986,34 @@ def macro_param_try_bare (input : String) : ParseResult ParseParam :=
     }
 
 #[partial]
-def macro_param_paren_mult (r : ParseResult Multiplicity) (orig : String) : ParseResult ParseParam :=
+def macro_param_paren_name (r : ParseResult String) : ParseResult ParseParam :=
     match r {
-        success rem mult => macro_param_paren_name (identifier (skip_spaces rem)) mult,
+        success rem name => macro_param_paren_colon (tag ":" (skip_spaces rem)) (Identifier.id name),
         fail e => fail e
     }
 
 #[partial]
-def macro_param_paren_name (r : ParseResult String) (mult : Multiplicity) : ParseResult ParseParam :=
-    match r {
-        success rem name => macro_param_paren_colon (tag ":" (skip_spaces rem)) (Identifier.id name) mult,
-        fail e => fail e
-    }
-
-#[partial]
-def macro_param_paren_colon (r : ParseResult String) (name : Identifier) (mult : Multiplicity) : ParseResult ParseParam :=
+def macro_param_paren_colon (r : ParseResult String) (name : Identifier) : ParseResult ParseParam :=
     match r {
         success rem _ =>
-            macro_param_paren_type (type_expression (skip_spaces rem)) name mult,
+            macro_param_paren_type (type_expression (skip_spaces rem)) name,
         fail e => fail e
     }
 
 #[partial]
-def macro_param_paren_type (r : ParseResult ParseTerm) (name : Identifier) (mult : Multiplicity) : ParseResult ParseParam :=
+def macro_param_paren_type (r : ParseResult ParseTerm) (name : Identifier) : ParseResult ParseParam :=
     match r {
-        success rem typ => macro_param_paren_close (tag ")" (skip_spaces rem)) name typ mult,
+        success rem typ => macro_param_paren_close (tag ")" (skip_spaces rem)) name typ,
         fail e => fail e
     }
 
 #[partial]
-def macro_param_paren_close (r : ParseResult String) (name : Identifier) (typ : ParseTerm) (mult : Multiplicity) : ParseResult ParseParam :=
+def macro_param_paren_close (r : ParseResult String) (name : Identifier) (typ : ParseTerm) : ParseResult ParseParam :=
     match r {
         success rem _ =>
             let none : Option ParseTerm := Option.none in
             let no_attrs : List Attribute := List.empty in
-            success rem (ParseParam.mk name typ mult none no_attrs),
+            success rem (ParseParam.mk name typ Multiplicity.many none no_attrs),
         fail e => fail e
     }
 
@@ -7734,39 +7729,35 @@ def lambda_typed_param_group (input : String) : ParseResult ParseParam :=
 #[partial]
 def lambda_typed_param_open (r : ParseResult String) : ParseResult ParseParam :=
     match r {
-        success rem _ =>
-            match multiplicity_prefix (skip_spaces rem) {
-                success rem2 mult => lambda_typed_param_name (identifier rem2) mult,
-                fail e => fail e,
-            },
+        success rem _ => lambda_typed_param_name (identifier (skip_spaces rem)),
         fail e => fail e,
     }
 
 #[partial]
-def lambda_typed_param_name (r : ParseResult String) (mult : Multiplicity) : ParseResult ParseParam :=
+def lambda_typed_param_name (r : ParseResult String) : ParseResult ParseParam :=
     match r {
-        success rem name => lambda_typed_param_colon (tag ":" (skip_spaces rem)) name mult,
+        success rem name => lambda_typed_param_colon (tag ":" (skip_spaces rem)) name,
         fail e => fail e,
     }
 
 #[partial]
-def lambda_typed_param_colon (r : ParseResult String) (name : String) (mult : Multiplicity) : ParseResult ParseParam :=
+def lambda_typed_param_colon (r : ParseResult String) (name : String) : ParseResult ParseParam :=
     match r {
-        success rem _ => lambda_typed_param_type (type_expression (skip_spaces rem)) name mult,
+        success rem _ => lambda_typed_param_type (type_expression (skip_spaces rem)) name,
         fail e => fail e,
     }
 
 #[partial]
-def lambda_typed_param_type (r : ParseResult ParseTerm) (name : String) (mult : Multiplicity) : ParseResult ParseParam :=
+def lambda_typed_param_type (r : ParseResult ParseTerm) (name : String) : ParseResult ParseParam :=
     match r {
-        success rem typ => lambda_typed_param_close (tag ")" (skip_spaces rem)) name typ mult,
+        success rem typ => lambda_typed_param_close (tag ")" (skip_spaces rem)) name typ,
         fail e => fail e,
     }
 
 #[partial]
-def lambda_typed_param_close (r : ParseResult String) (name : String) (typ : ParseTerm) (mult : Multiplicity) : ParseResult ParseParam :=
+def lambda_typed_param_close (r : ParseResult String) (name : String) (typ : ParseTerm) : ParseResult ParseParam :=
     match r {
-        success rem _ => success rem (parse_param_with_mult (Identifier.id name) typ mult),
+        success rem _ => success rem (parse_param_many (Identifier.id name) typ),
         fail e => fail e,
     }
 
@@ -8747,30 +8738,15 @@ def test_type_cons_brace_form_matches_paren_form : Bool :=
         fail _ => false,
     }
 
+/// The `!`/`?`/`%` multiplicity prefixes were removed from the grammar:
+/// a constructor field carrying one is now a parse error, brace form
+/// included. Mirrors the Rust reference's own
+/// `test_constructor_brace_form_multiplicity_prefix`.
 #[test]
 def test_type_cons_brace_form_multiplicity_prefix : Bool :=
     match type_parser "type Wrapper { wrap { !val : String, tag : String }, }" {
-        success _ out =>
-            match out.kind {
-                ParseDeclKind.inductive_d ind =>
-                    match ind {
-                        ParseInductive.mk _ _ _ cons _ _ =>
-                            match cons {
-                                List.cons c _ =>
-                                    match c {
-                                        ParseInductConstructor.mk _ params _ =>
-                                            match params {
-                                                List.cons p _ =>
-                                                    match p { ParseParam.mk _ _ mult _ _ => match mult { Multiplicity.linear => true, _ => false } },
-                                                List.empty => false,
-                                            }
-                                    },
-                                List.empty => false,
-                            }
-                    },
-                _ => false,
-            },
-        fail _ => false,
+        success _ _ => false,
+        fail _ => true,
     }
 
 #[test]
@@ -11362,53 +11338,14 @@ def test_struct_parser : Bool :=
         fail _ => false
     }
 
-/// Regression test for struct field multiplicity markers
-/// (`instance_implicit_params_loop`'s sibling feature for structs — see
-/// `multiplicity_prefix`'s doc comment). `!data` should parse as Linear
-/// while the unmarked `size` field defaults to Many.
+/// The `!`/`?`/`%` multiplicity prefixes were removed from the grammar:
+/// a struct field carrying one is now a parse error. Mirrors the Rust
+/// reference's own `test_constructor_brace_form_multiplicity_prefix`.
 #[test]
 def test_struct_linear_field : Bool :=
     match struct_parser "struct Buffer { !data : String, size : I64 }" {
-        success rem out =>
-            String.beq rem "" && (match out.kind {
-                struct_d s => struct_first_field_is_linear s,
-                _ => false
-            }),
-        fail _ => false
-    }
-
-#[partial]
-def struct_first_field_is_linear (s : ParseStruct) : Bool :=
-    match s {
-        ParseStruct.mk _name fields _attrs _vis =>
-            match fields {
-                List.cons f rest => field_mult_is_linear f && field_mult_is_many_second rest,
-                List.empty => false
-            }
-    }
-
-#[partial]
-def field_mult_is_linear (f : ParseStructField) : Bool :=
-    match f {
-        ParseStructField.mk _name _typ _default mult =>
-            match mult {
-                Multiplicity.linear => true,
-                _ => false
-            }
-    }
-
-#[partial]
-def field_mult_is_many_second (fields : List ParseStructField) : Bool :=
-    match fields {
-        List.cons f _rest =>
-            match f {
-                ParseStructField.mk _name _typ _default mult =>
-                    match mult {
-                        Multiplicity.many => true,
-                        _ => false
-                    }
-            },
-        List.empty => false
+        success _ _ => false,
+        fail _ => true,
     }
 
 #[test]
@@ -12036,31 +11973,58 @@ def first_param_mult (input : String) : Option Multiplicity :=
         fail _ => Option.none,
     }
 
-def mult_is_linear (m : Option Multiplicity) : Bool := match m {
-    Option.some mm => match mm { Multiplicity.linear => true, _ => false },
-    Option.none => false,
-}
-
 def mult_is_many (m : Option Multiplicity) : Bool := match m {
     Option.some mm => match mm { Multiplicity.many => true, _ => false },
     Option.none => false,
 }
 
-/// Plain explicit param: `!` reaches `ParseParam.mult`.
+/// The `!`/`?`/`%` multiplicity prefixes were removed from the grammar:
+/// every one of these spellings is now a parse error, on the plain and
+/// the destructured param form alike. Mirrors the Rust reference's own
+/// `test_parse_mixed_multiplicity_params`.
 #[test]
-def test_explicit_param_keeps_linear_mult : Bool :=
-    mult_is_linear (first_param_mult "(!x : I64)")
+def test_def_param_linear_prefix : Bool :=
+    match def_parser "def f (!x : I64) : I64 := x" {
+        success _ _ => false,
+        fail _ => true
+    }
 
-/// DESTRUCTURED explicit param: `!` reaches `ParseParam.mult` too. This
-/// branch used to hardcode `Multiplicity.many` in
-/// `def_explicit_destructured_close`, silently discarding a prefix that
-/// `def_explicit_attrs` had already parsed -- so `(!{x, y} : P)` compiled
-/// as an unrestricted param.
 #[test]
-def test_destructured_param_keeps_linear_mult : Bool :=
-    mult_is_linear (first_param_mult "(!{x, y} : P)")
+def test_def_param_affine_prefix : Bool :=
+    match def_parser "def f (?x : I64) : I64 := x" {
+        success _ _ => false,
+        fail _ => true
+    }
 
-/// No prefix still means `many`, both forms.
+#[test]
+def test_def_param_zero_prefix : Bool :=
+    match def_parser "def f (%x : I64) : I64 := x" {
+        success _ _ => false,
+        fail _ => true
+    }
+
+#[test]
+def test_def_param_linear_multi_name : Bool :=
+    match def_parser "def f (!x y : I64) : I64 := x" {
+        success _ _ => false,
+        fail _ => true
+    }
+
+#[test]
+def test_destructured_param_linear_prefix : Bool :=
+    match def_parser "def f (!{x, y} : P) : I64 := x" {
+        success _ _ => false,
+        fail _ => true
+    }
+
+#[test]
+def test_lambda_typed_linear_prefix : Bool :=
+    match expression "fn (!x : I64) => x" {
+        success _ _ => false,
+        fail _ => true
+    }
+
+/// No prefix still means `many`, both param forms.
 #[test]
 def test_explicit_param_defaults_to_many_mult : Bool :=
     mult_is_many (first_param_mult "(x : I64)")
@@ -12068,49 +12032,6 @@ def test_explicit_param_defaults_to_many_mult : Bool :=
 #[test]
 def test_destructured_param_defaults_to_many_mult : Bool :=
     mult_is_many (first_param_mult "({x, y} : P)")
-
-#[test]
-def test_def_param_linear_prefix : Bool :=
-    match def_parser "def f (!x : I64) : I64 := x" {
-        success rem out =>
-            String.beq rem "" &&
-            match out.kind { ParseDeclKind.def_d _ => true, _ => false },
-        fail _ => false
-    }
-
-#[test]
-def test_def_param_affine_prefix : Bool :=
-    match def_parser "def f (?x : I64) : I64 := x" {
-        success rem out =>
-            String.beq rem "" &&
-            match out.kind { ParseDeclKind.def_d _ => true, _ => false },
-        fail _ => false
-    }
-
-#[test]
-def test_def_param_zero_prefix : Bool :=
-    match def_parser "def f (%x : I64) : I64 := x" {
-        success rem out =>
-            String.beq rem "" &&
-            match out.kind { ParseDeclKind.def_d _ => true, _ => false },
-        fail _ => false
-    }
-
-#[test]
-def test_def_param_linear_multi_name : Bool :=
-    match def_parser "def f (!x y : I64) : I64 := x" {
-        success rem out =>
-            String.beq rem "" &&
-            match out.kind { ParseDeclKind.def_d _ => true, _ => false },
-        fail _ => false
-    }
-
-#[test]
-def test_lambda_typed_linear_prefix : Bool :=
-    match expression "fn (!x : I64) => x" {
-        success rem out => String.beq rem "",
-        fail _ => false
-    }
 
 // --- Char literals (gap §2) ---
 

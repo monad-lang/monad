@@ -14,17 +14,16 @@ use crate::{
   term::{
     AttrArg, Attribute, ClassDef, Decl, DeclGenDef, Def, Documentation, FieldPattern, Identifier,
     InductConstructor, Inductive, Infix, Instance, LetVar, Literal, MatchCase, ModulePath,
-    Multiplicity, NamePath, NameRef, NumSuffix, Open, OpenFilter, Operator, Param, QualifiedName,
-    SourceContext, SourceRange, StructField,
+    NamePath, NameRef, NumSuffix, Open, OpenFilter, Operator, Param, QualifiedName, SourceContext,
+    SourceRange, StructField,
     Term::{self, Hole, Var},
     TypeConstraint, Use, UseFilter, UseItem, Visibility, app, apps, case, case_with_field_pattern,
     class, class_def, ctx, def, def_with_native, fields_to_cons_params, float_suffix, forall,
     foralls, id, if_term, induct_constructor, inductive, infix, instance, ivar, lam, lams, lets,
     match_term,
     module::ParsedModule,
-    mpvar, num_suffix, opr, param, param_with_attrs, param_with_default, param_with_mult, pi_name,
-    pi_named_with_mult, pi_typs, pvar, stru, stru_field_to_def_param, stru_field_with_mult,
-    type_constraint, var_id,
+    mpvar, num_suffix, opr, param, param_with_attrs, param_with_default, pi_name, pi_named,
+    pi_typs, pvar, stru, stru_field, stru_field_to_def_param, type_constraint, var_id,
   },
 };
 use locate::{LocatedSpan, info};
@@ -677,17 +676,6 @@ fn float_suffix_parser<X: Clone>(input: Span<X>) -> Res<NumSuffix, X> {
   Ok((input, suffix))
 }
 
-/// Parse multiplicity prefix: "%" = Erased, "!" = Linear, "?" = Affine, none = Many
-fn multiplicity_prefix<X: Clone>(input: Span<X>) -> Res<Multiplicity, X> {
-  map(opt(alt((char('%'), char('!'), char('?')))), |m| match m {
-    Some('%') => Multiplicity::Zero,
-    Some('!') => Multiplicity::Linear,
-    Some('?') => Multiplicity::Affine,
-    _ => Multiplicity::Many,
-  })
-  .parse(input)
-}
-
 fn lam_param<X: Clone>(input: Span<X>) -> Res<Param, X> {
   alt((
     map(identifier, |i| param(i, Hole)),
@@ -695,20 +683,13 @@ fn lam_param<X: Clone>(input: Span<X>) -> Res<Param, X> {
       (char('('), ws0),
       map(
         pair(
-          multiplicity_prefix,
+          terminated(identifier, ws0),
           pair(
-            terminated(identifier, ws0),
-            pair(
-              opt_type_annotation,
-              opt(preceded((ws0, tag(":="), ws0), term_inner)),
-            ),
+            opt_type_annotation,
+            opt(preceded((ws0, tag(":="), ws0), term_inner)),
           ),
         ),
-        |(mult, (name, (typ, default)))| {
-          let mut p = param_with_default(name, typ, default);
-          p.mult = mult;
-          p
-        },
+        |(name, (typ, default))| param_with_default(name, typ, default),
       ),
       (
         ws0,
@@ -816,16 +797,8 @@ fn implicit_param<X: Clone>(input: Span<X>) -> Res<Vec<Param>, X> {
   delimited(
     (char('{'), ws0),
     map(
-      pair(
-        multiplicity_prefix,
-        separated_pair(many1(terminated(identifier, ws0)), ws0, type_annotation),
-      ),
-      |(mult, (ids, typ))| {
-        ids
-          .into_iter()
-          .map(|i| param_with_mult(i, typ.clone(), mult.clone()))
-          .collect()
-      },
+      separated_pair(many1(terminated(identifier, ws0)), ws0, type_annotation),
+      |(ids, typ)| ids.into_iter().map(|i| param(i, typ.clone())).collect(),
     ),
     (
       ws0,
@@ -873,9 +846,8 @@ fn def_param<X: Clone>(input: Span<X>) -> Res<Vec<ParsedParam>, X> {
     // Reuses `struct_pattern_parser` (Phase 1's own match-case pattern
     // grammar) verbatim -- same `{ field, other := binder, .. }` syntax,
     // same reason to share the parser rather than duplicate it. Tried
-    // FIRST: `{` can never start `multiplicity_prefix`/`identifier`, so
-    // this never backtracks into (or is shadowed by) the plain
-    // alternative below.
+    // FIRST: `{` can never start `identifier`, so this never backtracks
+    // into (or is shadowed by) the plain alternative below.
     map(
       delimited(
         (char('('), ws0),
@@ -890,18 +862,15 @@ fn def_param<X: Clone>(input: Span<X>) -> Res<Vec<ParsedParam>, X> {
         vec![ParsedParam::Destructured(param(name, typ), fp)]
       },
     ),
-    // Existing: `(mult id+ : Type)`, unchanged.
+    // Existing: `(id+ : Type)`, unchanged.
     delimited(
       (char('('), ws0),
       map(
-        pair(
-          multiplicity_prefix,
-          separated_pair(many1(terminated(identifier, ws0)), ws0, type_annotation),
-        ),
-        |(mult, (ids, typ))| {
+        separated_pair(many1(terminated(identifier, ws0)), ws0, type_annotation),
+        |(ids, typ)| {
           ids
             .into_iter()
-            .map(|i| ParsedParam::Plain(param_with_mult(i, typ.clone(), mult.clone())))
+            .map(|i| ParsedParam::Plain(param(i, typ.clone())))
             .collect()
         },
       ),
@@ -2110,12 +2079,7 @@ fn def_parser(input: Span) -> Res<Def> {
   } else {
     let mut full_typ = return_typ;
     for param in plain_params.iter().rev() {
-      full_typ = pi_named_with_mult(
-        param.name.clone(),
-        (*param.typ).clone(),
-        full_typ,
-        param.mult.clone(),
-      );
+      full_typ = pi_named(param.name.clone(), (*param.typ).clone(), full_typ);
     }
     if !implicit_params.is_empty() {
       full_typ = foralls(implicit_params, full_typ);
@@ -2130,7 +2094,7 @@ fn def_parser(input: Span) -> Res<Def> {
 /// Project a `ParsedParam` down to the plain `Param` it wraps either way
 /// -- used wherever a def's param LIST shape (`Pi`-type-building,
 /// `lams`, a native's own param list) is being assembled, which only
-/// ever needs each param's name/type/multiplicity, never its
+/// ever needs each param's name/type, never its
 /// `FieldPattern` half (that's consumed separately, by the
 /// destructuring-`match`-wrapping loop above).
 fn parsed_param_as_param(pp: &ParsedParam) -> Param {
@@ -2148,16 +2112,8 @@ fn macro_param<X: Clone>(input: Span<X>) -> Res<Vec<Param>, X> {
     delimited(
       (char('('), ws0),
       map(
-        pair(
-          multiplicity_prefix,
-          separated_pair(many1(terminated(identifier, ws0)), ws0, type_annotation),
-        ),
-        |(mult, (ids, typ))| {
-          ids
-            .into_iter()
-            .map(|i| param_with_mult(i, typ.clone(), mult.clone()))
-            .collect()
-        },
+        separated_pair(many1(terminated(identifier, ws0)), ws0, type_annotation),
+        |(ids, typ)| ids.into_iter().map(|i| param(i, typ.clone())).collect(),
       ),
       (
         ws0,
@@ -2561,15 +2517,9 @@ fn constructor_parser<'a>(
           arg_name: None,
           arg: Box::new((*param.typ).clone()),
           ret: Box::new(full_typ),
-          mult: param.mult.clone(),
         }
       } else {
-        pi_named_with_mult(
-          param.name.clone(),
-          (*param.typ).clone(),
-          full_typ,
-          param.mult.clone(),
-        )
+        pi_named(param.name.clone(), (*param.typ).clone(), full_typ)
       };
     }
     if !implicit_params.is_empty() {
@@ -2665,14 +2615,13 @@ pub(crate) fn inductive_parser(input: Span) -> Res<Inductive> {
 }
 
 fn struct_field_parser<X: Clone>(input: Span<X>) -> Res<StructField, X> {
-  let (input, mult) = multiplicity_prefix(input)?;
   let (input, name) = identifier(input)?;
   let (input, _) = ws0(input)?;
   let (input, typ) = def_type_annotation(input)?;
   let (input, _) = ws0(input)?;
   let (input, default) = opt(preceded((assignment_operator, ws0), term)).parse(input)?;
 
-  Ok((input, stru_field_with_mult(name, typ, default, mult)))
+  Ok((input, stru_field(name, typ, default)))
 }
 
 fn struct_inner_parser<X: Clone>(input: Span<X>) -> Res<Vec<StructField>, X> {

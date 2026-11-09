@@ -220,12 +220,7 @@ pub fn lower_term(ctx: &mut LowerContext, term: &Term) -> Result<CoreTerm, Lower
       })
     }
 
-    Term::Pi {
-      arg_name,
-      arg,
-      ret,
-      mult,
-    } => {
+    Term::Pi { arg_name, arg, ret } => {
       let arg_c = lower_term(ctx, arg)?;
       let dbg = match arg_name {
         Some(n) => DebugName::Named(n.clone()),
@@ -245,7 +240,6 @@ pub fn lower_term(ctx: &mut LowerContext, term: &Term) -> Result<CoreTerm, Lower
         dbg,
         arg: Box::new(arg_c),
         ret: Box::new(ret_c?),
-        mult: mult.clone(),
       })
     }
 
@@ -603,7 +597,7 @@ fn lower_field_access_chain(scrutinee: CoreTerm, fields: &[Identifier]) -> CoreT
 mod test {
   use super::*;
   use crate::core_term::{close, open};
-  use crate::term::{Multiplicity, app, forall, id, lam, param, pi, pi_name, sort0, sort1, var};
+  use crate::term::{app, forall, id, lam, param, pi, pi_name, sort0, sort1, var};
 
   fn lower(term: &Term) -> CoreTerm {
     lower_term(&mut LowerContext::new(&mut AtomTable::new()), term)
@@ -864,20 +858,6 @@ mod test {
         other => panic!("expected inner Lam, got {other:?}"),
       },
       other => panic!("expected outer Lam, got {other:?}"),
-    }
-  }
-
-  #[test]
-  fn test_multiplicity_preserved_through_lowering() {
-    let term = Term::Pi {
-      arg_name: None,
-      arg: Box::new(sort1()),
-      ret: Box::new(sort1()),
-      mult: Multiplicity::Linear,
-    };
-    match lower(&term) {
-      CoreTerm::Pi { mult, .. } => assert_eq!(mult, Multiplicity::Linear),
-      other => panic!("expected Pi, got {other:?}"),
     }
   }
 
