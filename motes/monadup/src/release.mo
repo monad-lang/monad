@@ -39,8 +39,8 @@ pub def Release.release (tag : String) (assets : List Release.Asset) : Release.I
     let r : Release.Info := { tag := tag, assets := assets } in r
 
 pub def Release.selection
-        (tag : String) (platform : String) (asset : String) (url : String)
-        (fallback : Bool) (note : String) : Release.Selection :=
+    (tag : String) (platform : String) (asset : String) (url : String)
+    (fallback : Bool) (note : String) : Release.Selection :=
     let s : Release.Selection := {
         tag := tag,
         platform := platform,
@@ -163,8 +163,8 @@ def Release.no_asset_error (tag : String) (platform : String) : String :=
 
 #[partial]
 def Release.resolve_binary_chain
-        (tag : String) (original : String) (platforms : List String)
-        (assets : List Release.Asset) : Result String Release.Selection :=
+    (tag : String) (original : String) (platforms : List String)
+    (assets : List Release.Asset) : Result String Release.Selection :=
     match platforms {
         List.empty => Result.err (Release.no_asset_error tag original),
         List.cons p rest =>
@@ -186,8 +186,8 @@ pub def Release.resolve_binary (platform : String) (r : Release.Info) : Result S
 
 #[partial]
 def Release.resolve_up_chain
-        (tag : String) (original : String) (platforms : List String)
-        (assets : List Release.Asset) : Result String Release.Selection :=
+    (tag : String) (original : String) (platforms : List String)
+    (assets : List Release.Asset) : Result String Release.Selection :=
     match platforms {
         List.empty =>
             Result.err ("release '" ++ tag ++ "' has no " ++ Platform.up_asset original

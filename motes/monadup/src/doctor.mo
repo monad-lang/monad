@@ -448,8 +448,8 @@ def Doctor.sources_check (e : Doctor.Env) : Doctor.Check :=
             if List.is_empty missing
             then "missing: mote.toml"
             else if e.root_manifest
-                 then ("missing: " ++ Doctor.join_names missing)
-                 else ("missing: " ++ Doctor.join_names missing ++ " mote.toml") in
+                then ("missing: " ++ Doctor.join_names missing)
+                else ("missing: " ++ Doctor.join_names missing ++ " mote.toml") in
         Doctor.check "toolchain-root" Doctor.Status.st_warn detail
             "monadup install <tag> (re-running install repairs a source-less version directory)"
 
@@ -474,8 +474,8 @@ def Doctor.overrides_check (e : Doctor.Env) : Doctor.Check :=
     if e.monad_root_bad
     then Doctor.check "overrides" Doctor.Status.st_warn "MONAD_ROOT names a directory that does not exist" "unset MONAD_ROOT or point it at a directory holding init/std/runtime"
     else if List.is_empty e.overrides
-         then Doctor.check "overrides" Doctor.Status.st_ok "none" ""
-         else Doctor.check "overrides" Doctor.Status.st_ok (Doctor.join_names (Doctor.override_names e.overrides)) ""
+        then Doctor.check "overrides" Doctor.Status.st_ok "none" ""
+        else Doctor.check "overrides" Doctor.Status.st_ok (Doctor.join_names (Doctor.override_names e.overrides)) ""
 
 #[partial]
 pub def Doctor.override_names (xs : List (Pair String String)) : List String :=
@@ -488,8 +488,8 @@ def Doctor.api_check (e : Doctor.Env) : Doctor.Check :=
     if e.no_network
     then Doctor.check "api" Doctor.Status.st_ok "skipped (--no-network)" ""
     else if e.api_ok
-         then Doctor.check "api" Doctor.Status.st_ok "releases API reachable" ""
-         else Doctor.check "api" Doctor.Status.st_warn "releases API unreachable (offline is valid for local builds)" "check the network, or use --no-network"
+        then Doctor.check "api" Doctor.Status.st_ok "releases API reachable" ""
+        else Doctor.check "api" Doctor.Status.st_warn "releases API unreachable (offline is valid for local builds)" "check the network, or use --no-network"
 
 #[partial]
 def Doctor.download_join (xs : List String) : String :=

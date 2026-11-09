@@ -29,9 +29,9 @@ use json::json {Json}
 use lang::types {Location, SourceRange}
 use toolkit::jsonrpc {rpc_object}
 use toolkit::position {
-  LineIndex, PositionEncoding, WirePosition, WireRange, wire_position_character,
-  wire_position_line, wire_position_mk, wire_range_end, wire_range_mk, wire_range_of_points,
-  wire_range_start,
+    LineIndex, PositionEncoding, WirePosition, WireRange, wire_position_character,
+    wire_position_line, wire_position_mk, wire_range_end, wire_range_mk, wire_range_of_points,
+    wire_range_start,
 }
 
 // --- The origin ---
@@ -49,7 +49,7 @@ use toolkit::position {
 /// `pub` because `diagnostic.mo` -- the caller that takes this fallback -- is now
 /// a different module; it was module-local when it lived there.
 pub def wire_range_origin : WireRange :=
-  wire_range_mk (wire_position_mk 0 0) (wire_position_mk 0 0)
+    wire_range_mk (wire_position_mk 0 0) (wire_position_mk 0 0)
 
 // --- Reading `lang`'s two coordinates ---
 //
@@ -88,9 +88,9 @@ def location_offset (l : Location) : I64 := l.offset
 #[partial]
 pub def wire_range_of_source_range (enc : PositionEncoding) (ix : LineIndex) (source : String)
     (sr : SourceRange) : Option WireRange :=
-  wire_range_of_points enc ix source
-    (location_line (range_start sr)) (location_offset (range_start sr))
-    (location_line (range_end sr)) (location_offset (range_end sr))
+    wire_range_of_points enc ix source
+        (location_line (range_start sr)) (location_offset (range_start sr))
+        (location_line (range_end sr)) (location_offset (range_end sr))
 
 // --- Wire JSON ---
 //
@@ -108,17 +108,17 @@ pub def wire_range_of_source_range (enc : PositionEncoding) (ix : LineIndex) (so
 
 #[partial]
 pub def wire_position_json (p : WirePosition) : Json :=
-  rpc_object [
-    Pair.pair "line" (Json.make_num_int (wire_position_line p)),
-    Pair.pair "character" (Json.make_num_int (wire_position_character p)),
-  ]
+    rpc_object [
+        Pair.pair "line" (Json.make_num_int (wire_position_line p)),
+        Pair.pair "character" (Json.make_num_int (wire_position_character p)),
+    ]
 
 #[partial]
 pub def wire_range_json (r : WireRange) : Json :=
-  rpc_object [
-    Pair.pair "start" (wire_position_json (wire_range_start r)),
-    Pair.pair "end" (wire_position_json (wire_range_end r)),
-  ]
+    rpc_object [
+        Pair.pair "start" (wire_position_json (wire_range_start r)),
+        Pair.pair "end" (wire_position_json (wire_range_end r)),
+    ]
 
 /// A `Location`: a range, and which document it is in.
 ///
@@ -130,10 +130,10 @@ pub def wire_range_json (r : WireRange) : Json :=
 /// So the caller passes it, and the two are never conflated.
 #[partial]
 pub def location_json (uri : String) (r : WireRange) : Json :=
-  rpc_object [
-    Pair.pair "uri" (Json.make_str uri),
-    Pair.pair "range" (wire_range_json r),
-  ]
+    rpc_object [
+        Pair.pair "uri" (Json.make_str uri),
+        Pair.pair "range" (wire_range_json r),
+    ]
 
 /// The composed one, for the two features whose answer IS a location: definition,
 /// whose result is an array of these, and `documentSymbol`, whose every entry
@@ -147,7 +147,7 @@ pub def location_json (uri : String) (r : WireRange) : Json :=
 #[partial]
 pub def location_json_of_source_range (uri : String) (enc : PositionEncoding) (ix : LineIndex)
     (source : String) (sr : SourceRange) : Option Json :=
-  match wire_range_of_source_range enc ix source sr {
-    Option.none => Option.none,
-    Option.some r => Option.some (location_json uri r),
-  }
+    match wire_range_of_source_range enc ix source sr {
+        Option.none => Option.none,
+        Option.some r => Option.some (location_json uri r),
+    }

@@ -77,7 +77,7 @@ def sort_fails_with (ms : List Migration) (pred : MigrationError -> Bool) : Bool
     }
 
 def pending_fails_with (a : List AppliedMigration) (ms : List Migration)
-        (pred : MigrationError -> Bool) : Bool :=
+    (pred : MigrationError -> Bool) : Bool :=
     match Migrations.pending a ms {
         Result.ok _ => false,
         Result.err e => pred e

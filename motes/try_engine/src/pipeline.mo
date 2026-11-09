@@ -12,13 +12,13 @@
 
 use lang::core_eval {CoreEvalError}
 use lang::module {
-  ModuleInfo, ModuleSource, init_module_path, make_module_info,
-  make_module_source, prelude_module_path, try_parse_decls_strict
+    ModuleInfo, ModuleSource, init_module_path, make_module_info,
+    make_module_source, prelude_module_path, try_parse_decls_strict
 }
 use lang::types {AffineMode, Decl, Identifier, ModulePath, show_module_path}
 use lib::sources {SourceModule}
 use eval::run {
-  EvalFailure, EvalOptions, EvalStage, EvalSuccess, EvalTarget, Eval.run_sources
+    EvalFailure, EvalOptions, EvalStage, EvalSuccess, EvalTarget, Eval.run_sources
 }
 
 pub struct Outcome {
@@ -110,12 +110,12 @@ def run_parsed (sources : List SourceModule) (decls : List Decl) : IO Outcome :=
     let module_sources : List ModuleSource := to_sources sources List.empty;
     let options : EvalOptions :=
         { fuel := eval_fuel, depth_limit := eval_depth, affine := AffineMode.affine_warn,
-          label := "scratchpad.mo", verbose := false, want_type := true,
-          require_entry := true };
+            label := "scratchpad.mo", verbose := false, want_type := true,
+            require_entry := true };
     let target : EvalTarget :=
         { root := "main", context_path := scratch_module_path };
     let r <- Eval.run_sources main [prelude_module_path, init_module_path]
-                module_sources reject_module options target;
+        module_sources reject_module options target;
     match r {
         Result.ok success => IO.pure (outcome_of_success success),
         Result.err failure => IO.pure (outcome_of_failure failure),

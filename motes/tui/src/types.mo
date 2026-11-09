@@ -20,18 +20,18 @@
 // not; removing them makes every derive below fail with
 // "macro `derive_beq` not found".
 use std::derive {derive_beq, derive_lens}
-use std::ansi { Color }
+use std::ansi {Color}
 // `Lens` (the type) and `lens` (its builder) are referenced by name inside
 // the defs `#[derive Lens]` generates.
-use init::optics { Lens, lens }
+use init::optics {Lens, lens}
 
 /// A rectangular area of the terminal
 #[derive BEq Lens]
 pub struct Rect {
-    x: I64,
-    y: I64,
-    width: I64,
-    height: I64
+    x : I64,
+    y : I64,
+    width : I64,
+    height : I64
 }
 
 /// A composable text style: colors plus attribute flags. Unlike
@@ -39,14 +39,14 @@ pub struct Rect {
 /// `TextStyle` can express e.g. bold *and* a foreground color at the same time.
 #[derive BEq Lens]
 pub struct TextStyle {
-    fg: Option Color := none,
-    bg: Option Color := none,
-    bold: Bool := false,
-    dim: Bool := false,
-    italic: Bool := false,
-    underline: Bool := false,
-    strikethrough: Bool := false,
-    reverse: Bool := false
+    fg : Option Color := none,
+    bg : Option Color := none,
+    bold : Bool := false,
+    dim : Bool := false,
+    italic : Bool := false,
+    underline : Bool := false,
+    strikethrough : Bool := false,
+    reverse : Bool := false
 }
 
 /// A styled segment of one line. A plain row is one span; Markdown rows
@@ -55,15 +55,15 @@ pub struct TextStyle {
 /// struct literal in this types-only module trips the host's macro capture.
 #[derive BEq]
 pub struct TextSegment {
-    text: String,
-    style: TextStyle
+    text : String,
+    style : TextStyle
 }
 
 /// A single character cell with styling
 #[derive BEq]
 pub struct Cell {
-    char: String,
-    style: TextStyle
+    char : String,
+    style : TextStyle
 }
 
 /// Layout size constraints for flexible sizing
@@ -164,9 +164,9 @@ pub type Event {
 
 /// The screen buffer — a 2D grid of cells represented as a list of rows
 pub struct Screen {
-    rows: I64,
-    cols: I64,
-    row_cells: List (List Cell)
+    rows : I64,
+    cols : I64,
+    row_cells : List (List Cell)
 }
 
 /// A delta representing a change to a single cell

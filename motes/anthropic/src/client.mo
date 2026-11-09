@@ -45,7 +45,7 @@ def decode_messages_response (r : Response) : Result String MessagesResponse :=
     else
         Result.err (String.concat "anthropic: HTTP "
             (String.concat (U16.to_string r.status)
-            (String.concat ": " text)))
+                (String.concat ": " text)))
 
 def anthropic_complete_io (u : Uri) (headers : Headers) (body_str : String) : IO (Result String MessagesResponse) := do {
     let resp <- Client.post_timeout u headers (Body.from_text body_str) Client.default_timeout_ms;
@@ -126,7 +126,7 @@ def anthropic_models_io (u : Uri) (headers : Headers) : IO (Result String (List 
             then Anthropic.parse_models text
             else Result.err (String.concat "anthropic: HTTP "
                 (String.concat (U16.to_string r.status)
-                (String.concat ": " text))),
+                    (String.concat ": " text))),
     })
 }
 

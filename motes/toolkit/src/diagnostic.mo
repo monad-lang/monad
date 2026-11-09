@@ -54,7 +54,7 @@ use toolkit::bytes {byte_lf}
 use toolkit::jsonrpc {rpc_object}
 use toolkit::position {LineIndex, PositionEncoding, WireRange}
 use toolkit::wire {
-  wire_range_json, wire_range_of_source_range, wire_range_origin,
+    wire_range_json, wire_range_of_source_range, wire_range_origin,
 }
 
 // --- Severity ---
@@ -95,12 +95,12 @@ def error_prefix : String := "error: "
 /// and an empty popup reads as a broken server rather than as a missing detail,
 /// so the guard is here rather than left to a future producer to remember.
 pub def diagnostic_header (msg : String) : String :=
-  let i : I64 := newline_index (String.to_list msg) 0 in
-  let head : String := if I64.lt i 0 then msg else String.slice msg 0 i in
-  let body : String := strip_error_prefix head in
-  if String.is_empty body
-  then if String.is_empty head then msg else head
-  else body
+    let i : I64 := newline_index (String.to_list msg) 0 in
+    let head : String := if I64.lt i 0 then msg else String.slice msg 0 i in
+    let body : String := strip_error_prefix head in
+    if String.is_empty body
+    then if String.is_empty head then msg else head
+    else body
 
 /// The index of the first `\n`, or -1.
 ///
@@ -109,10 +109,10 @@ pub def diagnostic_header (msg : String) : String :=
 /// have been part of a multi-byte character.
 #[partial]
 def newline_index (bs : List U8) (i : I64) : I64 :=
-  match bs {
-    List.empty => 0 - 1,
-    List.cons b rest => if U8.beq b byte_lf then i else newline_index rest (I64.add i 1),
-  }
+    match bs {
+        List.empty => 0 - 1,
+        List.cons b rest => if U8.beq b byte_lf then i else newline_index rest (I64.add i 1),
+    }
 
 /// Drop a leading `error: `, if there is one.
 ///
@@ -121,21 +121,21 @@ def newline_index (bs : List U8) (i : I64) : I64 :=
 /// is a character boundary by construction, so `String.slice` cannot split a
 /// character here even for a message whose text begins with an em dash.
 def strip_error_prefix (s : String) : String :=
-  let n : I64 := String.length error_prefix in
-  if String.starts_with error_prefix s
-  then String.slice s n (I64.sub (String.length s) n)
-  else s
+    let n : I64 := String.length error_prefix in
+    if String.starts_with error_prefix s
+    then String.slice s n (I64.sub (String.length s) n)
+    else s
 
 // --- The wire diagnostic ---
 
 pub struct WireDiagnostic {
-  range : WireRange,
-  severity : I64,
-  message : String,
+    range : WireRange,
+    severity : I64,
+    message : String,
 }
 
 pub def wire_diagnostic_mk (range : WireRange) (severity : I64) (message : String) : WireDiagnostic :=
-  WireDiagnostic.mk range severity message
+    WireDiagnostic.mk range severity message
 
 pub def wire_diagnostic_range (d : WireDiagnostic) : WireRange := d.range
 
@@ -169,15 +169,15 @@ pub def wire_diagnostic_message (d : WireDiagnostic) : String := d.message
 #[partial]
 pub def wire_diagnostic_of_lang (enc : PositionEncoding) (ix : LineIndex) (source : String)
     (dg : Diagnostic) : WireDiagnostic :=
-  match diagnostic_range dg {
-    Option.none => wire_diagnostic_at_origin dg,
-    Option.some sr =>
-      match wire_range_of_source_range enc ix source sr {
+    match diagnostic_range dg {
         Option.none => wire_diagnostic_at_origin dg,
-        Option.some r => wire_diagnostic_mk r diag_severity_error
-          (diagnostic_header (diagnostic_message dg)),
-      },
-  }
+        Option.some sr =>
+            match wire_range_of_source_range enc ix source sr {
+                Option.none => wire_diagnostic_at_origin dg,
+                Option.some r => wire_diagnostic_mk r diag_severity_error
+                    (diagnostic_header (diagnostic_message dg)),
+            },
+    }
 
 /// The diagnostic at the origin, with its severity and reduced message -- the one
 /// shape both failure arms above answer. A named def rather than the same
@@ -185,8 +185,8 @@ pub def wire_diagnostic_of_lang (enc : PositionEncoding) (ix : LineIndex) (sourc
 /// reported a different message depending on WHICH way it could not be placed.
 #[partial]
 def wire_diagnostic_at_origin (dg : Diagnostic) : WireDiagnostic :=
-  wire_diagnostic_mk wire_range_origin diag_severity_error
-    (diagnostic_header (diagnostic_message dg))
+    wire_diagnostic_mk wire_range_origin diag_severity_error
+        (diagnostic_header (diagnostic_message dg))
 
 /// One diagnostic, as the `diagnostics` array of `textDocument/publishDiagnostics`
 /// wants it, minus the array.
@@ -195,12 +195,12 @@ def wire_diagnostic_at_origin (dg : Diagnostic) : WireDiagnostic :=
 /// (`rust/rust-cli/src/lsp.rs`), so this is the same wire shape with a better range.
 #[partial]
 pub def wire_diagnostic_json (d : WireDiagnostic) : Json :=
-  rpc_object [
-    Pair.pair "range" (wire_range_json (wire_diagnostic_range d)),
-    Pair.pair "severity" (Json.make_num_int (wire_diagnostic_severity d)),
-    Pair.pair "message" (Json.make_str (wire_diagnostic_message d)),
-    Pair.pair "source" (Json.make_str diagnostic_source_name),
-  ]
+    rpc_object [
+        Pair.pair "range" (wire_range_json (wire_diagnostic_range d)),
+        Pair.pair "severity" (Json.make_num_int (wire_diagnostic_severity d)),
+        Pair.pair "message" (Json.make_str (wire_diagnostic_message d)),
+        Pair.pair "source" (Json.make_str diagnostic_source_name),
+    ]
 
 /// The `diagnostics` array itself.
 ///
@@ -210,16 +210,16 @@ pub def wire_diagnostic_json (d : WireDiagnostic) : Json :=
 /// cost of ruling it out is one line.
 #[partial]
 pub def wire_diagnostics_json (ds : List WireDiagnostic) : Json :=
-  Json.make_array (wire_diagnostics_json_go ds diag_no_json_nodes)
+    Json.make_array (wire_diagnostics_json_go ds diag_no_json_nodes)
 
 def diag_no_json_nodes : List Json := List.empty
 
 #[partial]
 def wire_diagnostics_json_go (ds : List WireDiagnostic) (acc : List Json) : List Json :=
-  match ds {
-    List.empty => diag_json_reverse acc diag_no_json_nodes,
-    List.cons d rest => wire_diagnostics_json_go rest (List.cons (wire_diagnostic_json d) acc),
-  }
+    match ds {
+        List.empty => diag_json_reverse acc diag_no_json_nodes,
+        List.cons d rest => wire_diagnostics_json_go rest (List.cons (wire_diagnostic_json d) acc),
+    }
 
 /// Reversed locally rather than through `list_reverse`, which is a `lang` def
 /// that is not `pub` -- and reversing four lines is not worth widening this
@@ -227,7 +227,7 @@ def wire_diagnostics_json_go (ds : List WireDiagnostic) (acc : List Json) : List
 /// record for their own reverses.
 #[partial]
 def diag_json_reverse (ls : List Json) (acc : List Json) : List Json :=
-  match ls {
-    List.empty => acc,
-    List.cons l rest => diag_json_reverse rest (List.cons l acc),
-  }
+    match ls {
+        List.empty => acc,
+        List.cons l rest => diag_json_reverse rest (List.cons l acc),
+    }

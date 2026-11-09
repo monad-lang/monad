@@ -8,8 +8,8 @@
 // not `Event`s, keep the fold/merge assertions about SEMANTICS rather
 // than about any one event type.
 
-use lib::frp { EventStream, Signal }
-use std::list { List.length }
+use lib::frp {EventStream, Signal}
+use std::list {List.length}
 
 def ints_be (a : List I64) (b : List I64) : Bool :=
     match a {
@@ -20,7 +20,6 @@ def ints_be (a : List I64) (b : List I64) : Bool :=
                 cons y ys => x == y && ints_be xs ys
             }
     }
-
 
 def stream_events (s : EventStream I64) : List I64 :=
     EventStream.to_list s

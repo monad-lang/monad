@@ -15,45 +15,45 @@ use crypto::der {Der.ecdsa_raw_to_der}
 use crypto::pubkey {Pubkey.verify}
 
 def ffi_enabled : IO Bool := do {
-  let v <- IO.get_env "MONAD_CRYPTO_FFI_TESTS";
-  return (match v {
-    Option.some s => s == "1",
-    Option.none => false,
-  })
+    let v <- IO.get_env "MONAD_CRYPTO_FFI_TESTS";
+    return (match v {
+        Option.some s => s == "1",
+        Option.none => false,
+    })
 }
 
 def b64 (s : String) : List U8 :=
-  match B64Url.decode s {
-    Result.ok bs => bs,
-    Result.err _ => List.empty
-  }
+    match B64Url.decode s {
+        Result.ok bs => bs,
+        Result.err _ => List.empty
+    }
 
 def accepted (r : Result String Bool) : Bool :=
-  match r {
-    Result.ok b => b,
-    Result.err _ => false
-  }
+    match r {
+        Result.ok b => b,
+        Result.err _ => false
+    }
 
 /// A well-formed key and a wrong signature is `Ok false`, not `Err`.
 def rejected (r : Result String Bool) : Bool :=
-  match r {
-    Result.ok b => Bool.not b,
-    Result.err _ => false
-  }
+    match r {
+        Result.ok b => Bool.not b,
+        Result.err _ => false
+    }
 
 def failed (r : Result String Bool) : Bool :=
-  match r {
-    Result.ok _ => false,
-    Result.err _ => true
-  }
+    match r {
+        Result.ok _ => false,
+        Result.err _ => true
+    }
 
 #[terminating]
 def first_n (n : I64) (xs : List U8) : List U8 :=
-  if I64.beq n 0i64 then List.empty
-  else match xs {
-    List.empty => List.empty,
-    List.cons x rest => List.cons x (first_n (I64.sub n 1i64) rest)
-  }
+    if I64.beq n 0i64 then List.empty
+    else match xs {
+        List.empty => List.empty,
+        List.cons x rest => List.cons x (first_n (I64.sub n 1i64) rest)
+    }
 
 // ── RFC 7515 A.2 (RS256) ──────────────────────────────────────────────────
 
@@ -87,109 +87,109 @@ def ed_key : CryptoPublicKey := CryptoPublicKey.ed25519 (b64 ed_x)
 
 #[test]
 def test_pubkey_rs256_rfc7515 : IO Bool := do {
-  let on <- ffi_enabled;
-  if on
-  then do {
-    let r <- Pubkey.verify CryptoSigAlg.rs256 rsa_key
-      (String.to_list rsa_input) (b64 rsa_sig);
-    return (accepted r)
-  }
-  else return true
+    let on <- ffi_enabled;
+    if on
+    then do {
+        let r <- Pubkey.verify CryptoSigAlg.rs256 rsa_key
+            (String.to_list rsa_input) (b64 rsa_sig);
+        return (accepted r)
+    }
+    else return true
 }
 
 #[test]
 def test_pubkey_es256_rfc7515 : IO Bool := do {
-  let on <- ffi_enabled;
-  if on
-  then do {
-    let r <- Pubkey.verify CryptoSigAlg.es256 ec_key
-      (String.to_list ec_input) (b64 ec_sig);
-    return (accepted r)
-  }
-  else return true
+    let on <- ffi_enabled;
+    if on
+    then do {
+        let r <- Pubkey.verify CryptoSigAlg.es256 ec_key
+            (String.to_list ec_input) (b64 ec_sig);
+        return (accepted r)
+    }
+    else return true
 }
 
 #[test]
 def test_pubkey_eddsa_rfc8037 : IO Bool := do {
-  let on <- ffi_enabled;
-  if on
-  then do {
-    let r <- Pubkey.verify CryptoSigAlg.eddsa ed_key
-      (String.to_list ed_input) (b64 ed_sig);
-    return (accepted r)
-  }
-  else return true
+    let on <- ffi_enabled;
+    if on
+    then do {
+        let r <- Pubkey.verify CryptoSigAlg.eddsa ed_key
+            (String.to_list ed_input) (b64 ed_sig);
+        return (accepted r)
+    }
+    else return true
 }
 
 // ── negative matrix ───────────────────────────────────────────────────────
 
 #[test]
 def test_pubkey_tampered_message_is_rejected : IO Bool := do {
-  let on <- ffi_enabled;
-  if on
-  then do {
-    let r <- Pubkey.verify CryptoSigAlg.rs256 rsa_key
-      (String.to_list (String.concat rsa_input "x")) (b64 rsa_sig);
-    return (rejected r)
-  }
-  else return true
+    let on <- ffi_enabled;
+    if on
+    then do {
+        let r <- Pubkey.verify CryptoSigAlg.rs256 rsa_key
+            (String.to_list (String.concat rsa_input "x")) (b64 rsa_sig);
+        return (rejected r)
+    }
+    else return true
 }
 
 #[test]
 def test_pubkey_eddsa_tampered_signature_is_rejected : IO Bool := do {
-  let on <- ffi_enabled;
-  if on
-  then do {
-    // Length is preserved, so this reaches verification; only the
-    // signature bytes are wrong.
-    let sig := List.cons 0u8 (List.tail (b64 ed_sig));
-    let r <- Pubkey.verify CryptoSigAlg.eddsa ed_key (String.to_list ed_input) sig;
-    return (rejected r)
-  }
-  else return true
+    let on <- ffi_enabled;
+    if on
+    then do {
+        // Length is preserved, so this reaches verification; only the
+        // signature bytes are wrong.
+        let sig := List.cons 0u8 (List.tail (b64 ed_sig));
+        let r <- Pubkey.verify CryptoSigAlg.eddsa ed_key (String.to_list ed_input) sig;
+        return (rejected r)
+    }
+    else return true
 }
 
 #[test]
 def test_pubkey_algorithm_key_mismatch_fails : IO Bool := do {
-  let on <- ffi_enabled;
-  if on
-  then do {
-    let r <- Pubkey.verify CryptoSigAlg.rs256 ec_key
-      (String.to_list ec_input) (b64 rsa_sig);
-    return (failed r)
-  }
-  else return true
+    let on <- ffi_enabled;
+    if on
+    then do {
+        let r <- Pubkey.verify CryptoSigAlg.rs256 ec_key
+            (String.to_list ec_input) (b64 rsa_sig);
+        return (failed r)
+    }
+    else return true
 }
 
 #[test]
 def test_pubkey_wrong_signature_length_fails : IO Bool := do {
-  let on <- ffi_enabled;
-  if on
-  then do {
-    let r <- Pubkey.verify CryptoSigAlg.rs256 rsa_key
-      (String.to_list rsa_input) List.empty;
-    return (failed r)
-  }
-  else return true
+    let on <- ffi_enabled;
+    if on
+    then do {
+        let r <- Pubkey.verify CryptoSigAlg.rs256 rsa_key
+            (String.to_list rsa_input) List.empty;
+        return (failed r)
+    }
+    else return true
 }
 
 #[test]
 def test_pubkey_es256_treats_der_prefix_as_raw : IO Bool := do {
-  let on <- ffi_enabled;
-  if on
-  then do {
-    // A DER signature is 71 bytes, which the length gate would reject
-    // before the conversion runs. Truncate to 64 so it reaches the raw
-    // path: the bytes are re-encoded as if they were R || S and the
-    // signature must fail, not accidentally verify.
-    match Der.ecdsa_raw_to_der (b64 ec_sig) {
-      Result.err _ => return false,
-      Result.ok der => do {
-        let r <- Pubkey.verify CryptoSigAlg.es256 ec_key
-          (String.to_list ec_input) (first_n 64i64 der);
-        return (rejected r)
-      }
+    let on <- ffi_enabled;
+    if on
+    then do {
+        // A DER signature is 71 bytes, which the length gate would reject
+        // before the conversion runs. Truncate to 64 so it reaches the raw
+        // path: the bytes are re-encoded as if they were R || S and the
+        // signature must fail, not accidentally verify.
+        match Der.ecdsa_raw_to_der (b64 ec_sig) {
+            Result.err _ => return false,
+            Result.ok der => do {
+                let r <- Pubkey.verify CryptoSigAlg.es256 ec_key
+                    (String.to_list ec_input) (first_n 64i64 der);
+                return (rejected r)
+            }
+        }
     }
-  }
-  else return true
+    else return true
 }

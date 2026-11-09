@@ -13,11 +13,11 @@
 // against the UNION of the two types' constructors and was rejected. Calling
 // this one `TextStyle` removes the collision outright, and with it the reason
 // for the copy.
-use std::ansi { Color, color_fg_code, color_bg_code }
+use std::ansi {Color, color_fg_code, color_bg_code}
 
 // The types (and their derived `BEq`/`Lens` instances) come from the mote's
 // types-only module.
-use lib::types { Rect, TextStyle, Cell, TextSegment, LayoutSize, MouseButton, Key, MouseEvent, Event, Screen, CellDelta }
+use lib::types {Rect, TextStyle, Cell, TextSegment, LayoutSize, MouseButton, Key, MouseEvent, Event, Screen, CellDelta}
 
 use init::optics {view, set, over}
 
@@ -45,12 +45,12 @@ instance Copy TextStyle {
             { fg, bg, bold, dim, italic, underline, strikethrough, reverse } =>
                 let one : TextStyle :=
                     { fg := fg, bg := bg, bold := bold, dim := dim,
-                      italic := italic, underline := underline,
-                      strikethrough := strikethrough, reverse := reverse } in
+                        italic := italic, underline := underline,
+                        strikethrough := strikethrough, reverse := reverse } in
                 let two : TextStyle :=
                     { fg := fg, bg := bg, bold := bold, dim := dim,
-                      italic := italic, underline := underline,
-                      strikethrough := strikethrough, reverse := reverse } in
+                        italic := italic, underline := underline,
+                        strikethrough := strikethrough, reverse := reverse } in
                 Pair.pair one two,
         }
 }

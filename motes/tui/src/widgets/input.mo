@@ -12,9 +12,9 @@
 // access and struct literals trips the Rust host's meta-capture re-check
 // (`cannot infer the type of { .. }`).
 
-use lib::types { Key }
-use lib::core { clamp }
-use std::list { List.intercalate }
+use lib::types {Key}
+use lib::core {clamp}
+use std::list {List.intercalate}
 use lib::text {
     Text.col_of_byte, Text.byte_at_col, Text.prev_boundary, Text.next_boundary,
     Text.width, Text.drop_cols, Text.take_width, Text.slice_cols, Text.snap_span,
@@ -442,7 +442,7 @@ pub def InputState.selection_cols (st : InputState) (line_idx : I64) (line_text 
 
 #[terminating]
 def selection_text_go (st : InputState) (lines : List InputLine) (idx : I64)
-        (top : I64) (bottom : I64) (acc : List String) : List String :=
+    (top : I64) (bottom : I64) (acc : List String) : List String :=
     match lines {
         List.empty => List.reverse acc,
         List.cons l rest =>

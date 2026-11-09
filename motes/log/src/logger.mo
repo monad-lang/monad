@@ -113,9 +113,9 @@ pub def Logger.format_json_line (level : LogLevel) (msg : String) (fields : List
     let fields_json : Json := Json.make_object (json_fields fields BTreeMap.empty) in
     let obj : Json := Json.make_object
         (Map.insert "ts" (Json.make_num_int ts)
-        (Map.insert "level" (Json.make_str (LogLevel.name level))
-        (Map.insert "msg" (Json.make_str msg)
-        (Map.insert "fields" fields_json BTreeMap.empty)))) in
+            (Map.insert "level" (Json.make_str (LogLevel.name level))
+                (Map.insert "msg" (Json.make_str msg)
+                    (Map.insert "fields" fields_json BTreeMap.empty)))) in
     String.concat (Json.to_string obj) "\n"
 
 /// Whether `level` clears the logger's minimum.

@@ -198,18 +198,18 @@ def test_list_elements : Bool :=
 def test_table : Bool :=
     element_renders
         (Html.table List.empty
-            [ Html.thead List.empty
-                  [Html.tr List.empty [Html.th List.empty [Html.text "H"]]],
-              Html.tbody List.empty
-                  [Html.tr List.empty [Html.td List.empty [Html.text "D"]]] ])
+            [Html.thead List.empty
+                [Html.tr List.empty [Html.th List.empty [Html.text "H"]]],
+                Html.tbody List.empty
+                    [Html.tr List.empty [Html.td List.empty [Html.text "D"]]]])
         "<table><thead><tr><th>H</th></tr></thead><tbody><tr><td>D</td></tr></tbody></table>"
 
 #[test]
 def test_form : Bool :=
     element_renders
         (Html.form [Html.id_ "f"]
-            [ Html.label [Html.for_ "n"] [Html.text "Name"],
-              Html.input [Html.name_ "n"] ])
+            [Html.label [Html.for_ "n"] [Html.text "Name"],
+                Html.input [Html.name_ "n"]])
         "<form id=\"f\"><label for=\"n\">Name</label><input name=\"n\"></form>"
 
 #[test]

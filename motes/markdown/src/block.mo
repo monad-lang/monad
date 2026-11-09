@@ -277,7 +277,7 @@ pub def Markdown.try_atx (c : Markdown.Cursor) (base : I64) : Option Markdown.At
                             then
                                 let h : Markdown.Atx :=
                                     { level := n,
-                                      text := Markdown.atx_content (Markdown.Cursor.skip_spaces after) } in
+                                        text := Markdown.atx_content (Markdown.Cursor.skip_spaces after) } in
                                 Option.some h
                             else Option.none
                     }
@@ -482,7 +482,7 @@ def Markdown.finish_list_item
         if blank_item
         then true
         else Bool.or (U8.beq (Markdown.Cursor.byte after_marker) 32u8)
-                (U8.beq (Markdown.Cursor.byte after_marker) 9u8) in
+            (U8.beq (Markdown.Cursor.byte after_marker) 9u8) in
     if Bool.or interrupts (Bool.not separator_ok)
     then Option.none
     else
@@ -544,7 +544,7 @@ def Markdown.accepts_item
     if Bool.not (I64.lt (I64.sub first.column c.column) content_indent)
     then Option.some (Markdown.Cursor.step_many content_indent c)
     else if Bool.and (Markdown.Cursor.blank c)
-            (Bool.or (Bool.not (List.is_empty blocks)) has_child)
+        (Bool.or (Bool.not (List.is_empty blocks)) has_child)
     then Option.some first
     else Option.none
 
@@ -742,7 +742,7 @@ pub def Markdown.try_table (state : Markdown.BlockState) (first : Markdown.Curso
                         let header : List String := Markdown.split_cells (Markdown.Cursor.materialize first) in
                         let cells : List String := Markdown.split_cells header_line in
                         if Bool.and (Markdown.same_count cells aligns)
-                                (Markdown.any_pipe header_line (Markdown.Cursor.materialize first))
+                            (Markdown.any_pipe header_line (Markdown.Cursor.materialize first))
                         then
                             let prepared : Markdown.BlockState :=
                                 Markdown.close_list_tip (Markdown.drop_tip state) in
@@ -935,7 +935,7 @@ def Markdown.open_new_setext
                 // reference definitions is not a heading: the definitions go
                 // and the line stays paragraph text.
                 match Markdown.refs_of_text
-                        (Markdown.join_plain (List.reverse (Markdown.tip_paragraph_lines state))) {
+                    (Markdown.join_plain (List.reverse (Markdown.tip_paragraph_lines state))) {
                     Pair.pair _ remaining =>
                         if String.beq (Markdown.trim_space remaining) ""
                         then Markdown.Started.started_none state c false
@@ -1169,8 +1169,8 @@ def Markdown.incorporate_line (state : Markdown.BlockState) (line : String) : Ma
             Markdown.Started.started_line opened cursor => Markdown.add_content opened cursor,
             Markdown.Started.started_none opened_state opened_cursor opened_container =>
                 if Bool.and (Bool.not opened_container)
-                        (Bool.and (Bool.not all_matched)
-                            (Bool.and (Bool.not (Markdown.Cursor.blank m.cursor)) maybe_lazy))
+                    (Bool.and (Bool.not all_matched)
+                        (Bool.and (Bool.not (Markdown.Cursor.blank m.cursor)) maybe_lazy))
                 then
                     let first : Markdown.Cursor := Markdown.Cursor.skip_spaces m.cursor in
                     Markdown.append_paragraph_line (Markdown.Cursor.materialize first) state

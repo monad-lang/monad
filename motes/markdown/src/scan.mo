@@ -51,13 +51,13 @@ pub def Markdown.codepoint_at (s : String) : Option U32 :=
                 then Option.some (U32.or (U32.shl (U32.and b 31u32) 6u32) c1)
                 else if I64.beq w 3i64
                 then Option.some
-                        (U32.or (U32.or (U32.shl (U32.and b 15u32) 12u32) (U32.shl c1 6u32))
-                            (Markdown.cont_bits head 2i64))
+                    (U32.or (U32.or (U32.shl (U32.and b 15u32) 12u32) (U32.shl c1 6u32))
+                        (Markdown.cont_bits head 2i64))
                 else Option.some
-                        (U32.or
-                            (U32.or (U32.shl (U32.and b 7u32) 18u32)
-                                (U32.or (U32.shl c1 12u32) (U32.shl (Markdown.cont_bits head 2i64) 6u32)))
-                            (Markdown.cont_bits head 3i64))
+                    (U32.or
+                        (U32.or (U32.shl (U32.and b 7u32) 18u32)
+                            (U32.or (U32.shl c1 12u32) (U32.shl (Markdown.cont_bits head 2i64) 6u32)))
+                        (Markdown.cont_bits head 3i64))
     }
 
 /// The UTF-8 bytes of a codepoint. Surrogate halves, values past U+10FFFF
@@ -79,14 +79,14 @@ pub def Markdown.utf8_of_codepoint (cp : I64) : String :=
     then String.from_list [U32.to_u8 (U32.or 192u32 (U32.shr c 6u32)), U32.to_u8 c1]
     else if U32.lt c 65536u32
     then String.from_list
-            [ U32.to_u8 (U32.or 224u32 (U32.shr c 12u32)),
-              U32.to_u8 c2,
-              U32.to_u8 c1 ]
+        [U32.to_u8 (U32.or 224u32 (U32.shr c 12u32)),
+            U32.to_u8 c2,
+            U32.to_u8 c1]
     else String.from_list
-            [ U32.to_u8 (U32.or 240u32 (U32.shr c 18u32)),
-              U32.to_u8 c3,
-              U32.to_u8 c2,
-              U32.to_u8 c1 ]
+        [U32.to_u8 (U32.or 240u32 (U32.shr c 18u32)),
+            U32.to_u8 c3,
+            U32.to_u8 c2,
+            U32.to_u8 c1]
 
 // ─── Lines ───
 
@@ -104,7 +104,7 @@ def Markdown.line_length_go (s : String) (n : I64) : I64 :=
                     let w : I64 := Markdown.char_width s in
                     Markdown.line_length_go (String.drop w s) (I64.add n w),
             Option.none => n
-    }
+        }
 
 pub def Markdown.line_length (s : String) : I64 :=
     Markdown.line_length_go s 0i64
@@ -206,7 +206,7 @@ pub def Markdown.Cursor.step (c : Markdown.Cursor) : Markdown.Cursor :=
                     Markdown.mk_cursor (String.drop 1i64 c.text) (I64.add c.column 1i64)
                         (I64.sub next (I64.add c.column 1i64))
                 else Markdown.mk_cursor (String.drop (Markdown.char_width c.text) c.text)
-                        (I64.add c.column 1i64) 0i64
+                    (I64.add c.column 1i64) 0i64
         }
 
 #[partial]

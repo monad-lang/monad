@@ -444,18 +444,18 @@ with Html {
     /// children.
     pub def document {Msg : Type} (head : List (Oak.Node Msg)) (body : List (Oak.Node Msg)) : Oak.Node Msg :=
         Oak.Node.fragment
-            [ Oak.Node.raw (Html.Node.node_doctype "html"),
-              mk_element "html" List.empty
-                  [ mk_element "head" List.empty head,
-                    mk_element "body" List.empty body ] ]
+            [Oak.Node.raw (Html.Node.node_doctype "html"),
+                mk_element "html" List.empty
+                    [mk_element "head" List.empty head,
+                        mk_element "body" List.empty body]]
 
     /// A document with attributes on `<html>`, `<head>` and `<body>`.
     pub def document_with {Msg : Type} (html_attrs : List (Oak.Attr Msg)) (head_attrs : List (Oak.Attr Msg)) (body_attrs : List (Oak.Attr Msg)) (head : List (Oak.Node Msg)) (body : List (Oak.Node Msg)) : Oak.Node Msg :=
         Oak.Node.fragment
-            [ Oak.Node.raw (Html.Node.node_doctype "html"),
-              mk_element "html" html_attrs
-                  [ mk_element "head" head_attrs head,
-                    mk_element "body" body_attrs body ] ]
+            [Oak.Node.raw (Html.Node.node_doctype "html"),
+                mk_element "html" html_attrs
+                    [mk_element "head" head_attrs head,
+                        mk_element "body" body_attrs body]]
 
     /// The common case: a UTF-8 document with `<meta charset="utf-8">`
     /// prepended to the head.
@@ -473,6 +473,6 @@ with Html {
     pub def card {Msg : Type} (title : String) (body : String) : Oak.Node Msg :=
         Html.div
             [Html.class_ ["card"]]
-            [ Html.h2 List.empty [Html.text title],
-              Html.p List.empty [Html.text body] ]
+            [Html.h2 List.empty [Html.text title],
+                Html.p List.empty [Html.text body]]
 }

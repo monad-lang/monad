@@ -47,14 +47,14 @@ def Markdown.take_tag_name (c : Markdown.Cursor) (acc : List String) : Pair Stri
 
 /// The raw HTML tag names that open a type-6 block.
 def Markdown.html_block_tags : List String :=
-    [ "address", "article", "aside", "base", "basefont", "blockquote", "body",
-      "caption", "center", "col", "colgroup", "dd", "details", "dialog", "dir",
-      "div", "dl", "dt", "fieldset", "figcaption", "figure", "footer", "form",
-      "frame", "frameset", "h1", "h2", "h3", "h4", "h5", "h6", "head", "header",
-      "hr", "html", "iframe", "legend", "li", "link", "main", "menu", "menuitem",
-      "nav", "noframes", "ol", "optgroup", "option", "p", "param", "section",
-      "source", "summary", "table", "tbody", "td", "tfoot", "th", "thead",
-      "title", "tr", "track", "ul" ]
+    ["address", "article", "aside", "base", "basefont", "blockquote", "body",
+        "caption", "center", "col", "colgroup", "dd", "details", "dialog", "dir",
+        "div", "dl", "dt", "fieldset", "figcaption", "figure", "footer", "form",
+        "frame", "frameset", "h1", "h2", "h3", "h4", "h5", "h6", "head", "header",
+        "hr", "html", "iframe", "legend", "li", "link", "main", "menu", "menuitem",
+        "nav", "noframes", "ol", "optgroup", "option", "p", "param", "section",
+        "source", "summary", "table", "tbody", "td", "tfoot", "th", "thead",
+        "title", "tr", "track", "ul"]
 
 pub def Markdown.block_tag (name : String) : Bool :=
     Markdown.html_tag_member name Markdown.html_block_tags
@@ -121,7 +121,7 @@ def Markdown.html_type_tag (c : Markdown.Cursor) (in_paragraph : Bool) : Option 
             if String.beq name ""
             then Option.none
             else if Bool.and (Markdown.block_tag (String.to_lowercase name))
-                    (Markdown.tag_name_terminated after_name)
+                (Markdown.tag_name_terminated after_name)
             then Option.some 6i64
             else if in_paragraph
             then Option.none
@@ -236,8 +236,8 @@ def Markdown.skip_unquoted (c : Markdown.Cursor) : Bool :=
             if Bool.or (Markdown.is_tag_ws b) (U8.beq b 62u8)
             then Markdown.open_tag_tail c
             else if Bool.or (U8.beq b 34u8)
-                    (Bool.or (U8.beq b 39u8)
-                        (Bool.or (U8.beq b 60u8) (Bool.or (U8.beq b 61u8) (U8.beq b 96u8))))
+                (Bool.or (U8.beq b 39u8)
+                    (Bool.or (U8.beq b 60u8) (Bool.or (U8.beq b 61u8) (U8.beq b 96u8))))
             then false
             else Markdown.skip_unquoted (Markdown.Cursor.step c)
     }

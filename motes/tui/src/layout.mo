@@ -9,8 +9,8 @@
 // `…`, and these two simplifications are documented here, not silently
 // assumed). No native bindings, no I/O — pure layout math.
 
-use lib::types { Rect, LayoutSize }
-use lib::core { mk_rect, clamp }
+use lib::types {Rect, LayoutSize}
+use lib::core {mk_rect, clamp}
 
 /// Sum of the space reserved by `fixed`/`min` sizes — the part of `total`
 /// that is NOT available for `fill`/`max` distribution.
@@ -40,8 +40,8 @@ def layout_fill_weight (sizes : List LayoutSize) : I64 :=
 /// arms so the proportional-distribution arithmetic exists exactly once.
 #[terminating]
 def layout_walk_flex
-        (rest : List LayoutSize) (remaining : I64) (total_weight : I64)
-        (fill_allocated : I64) (cum_weight : I64) (weight : I64) : List I64 :=
+    (rest : List LayoutSize) (remaining : I64) (total_weight : I64)
+    (fill_allocated : I64) (cum_weight : I64) (weight : I64) : List I64 :=
     let next_cum := cum_weight + weight in
     let target := if total_weight < 1 then 0 else I64.div (I64.mul remaining next_cum) total_weight in
     List.cons (target - fill_allocated) (layout_walk rest remaining total_weight target next_cum)
@@ -54,8 +54,8 @@ def layout_walk_flex
 /// always sum to `reserved + remaining` (= `total` when `reserved <= total`).
 #[terminating]
 def layout_walk
-        (sizes : List LayoutSize) (remaining : I64) (total_weight : I64)
-        (fill_allocated : I64) (cum_weight : I64) : List I64 :=
+    (sizes : List LayoutSize) (remaining : I64) (total_weight : I64)
+    (fill_allocated : I64) (cum_weight : I64) : List I64 :=
     match sizes {
         empty => List.empty,
         cons s rest =>

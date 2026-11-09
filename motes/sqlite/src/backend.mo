@@ -28,19 +28,19 @@ use lib::conn {SqliteConn, Sqlite.close, Sqlite.error_at}
 // ─── Statement lifecycle ─────────────────────────────────────────────────
 
 def Sqlite.finalize_with {A : Type} (stmt : Ptr) (r : Result SqlError A) :
-        IO (Result SqlError A) := do {
+    IO (Result SqlError A) := do {
     let _ <- IO.mk (sqlite3_finalize stmt);
     return r
 }
 
 def Sqlite.finalize_error {A : Type} (db : Ptr) (stmt : Ptr) (rc : I32) :
-        IO (Result SqlError A) := do {
+    IO (Result SqlError A) := do {
     let _ <- IO.mk (sqlite3_finalize stmt);
     Sqlite.error_at db rc
 }
 
 def Sqlite.prepare (conn : SqliteConn) (sql : String) :
-        IO (Result SqlError Ptr) := do {
+    IO (Result SqlError Ptr) := do {
     let slot <- ByteBuf.alloc 8;
     let rc <- IO.mk (sqlite3_prepare_v2 conn.db sql (I64.to_i32 (0 - 1))
         (ByteBuf.ptr slot) Ptr.null);
@@ -59,7 +59,7 @@ def Sqlite.bind_rc (db : Ptr) (rc : I32) : IO (Result SqlError Unit) :=
     else Sqlite.error_at db rc
 
 def Sqlite.bind_blob (db : Ptr) (stmt : Ptr) (idx : I32) (bytes : List U8) :
-        IO (Result SqlError Unit) := do {
+    IO (Result SqlError Unit) := do {
     let buf <- ByteBuf.of_list bytes;
     let rc <- IO.mk (sqlite3_bind_blob stmt idx (ByteBuf.ptr buf)
         (I64.to_i32 (ByteBuf.length buf)) Sqlite.transient_destructor);
@@ -78,7 +78,7 @@ def Sqlite.bind_call (db : Ptr) (raw : RawIO I32) : IO (Result SqlError Unit) :=
 }
 
 def Sqlite.bind_one (db : Ptr) (stmt : Ptr) (idx : I32) (v : Value) :
-        IO (Result SqlError Unit) :=
+    IO (Result SqlError Unit) :=
     match v {
         Value.null =>
             Sqlite.bind_call db (sqlite3_bind_null stmt idx),
@@ -96,7 +96,7 @@ def Sqlite.bind_one (db : Ptr) (stmt : Ptr) (idx : I32) (v : Value) :
 
 #[terminating]
 def Sqlite.bind_params (db : Ptr) (stmt : Ptr) (params : List Value) (idx : I32) :
-        IO (Result SqlError Unit) :=
+    IO (Result SqlError Unit) :=
     match params {
         List.empty => IO.pure (Result.ok Unit.unit),
         List.cons v rest => do {
@@ -168,7 +168,7 @@ def Sqlite.decode_column (stmt : Ptr) (i : I32) : IO Value := do {
 /// values decoded in `decode_row`.)
 #[terminating]
 def Sqlite.column_names (stmt : Ptr) (i : I32) (acc : List String) :
-        IO (List String) :=
+    IO (List String) :=
     if I32.to_i64 i < 0
     then IO.pure acc
     else do {
@@ -183,7 +183,7 @@ def Sqlite.make_result_set (columns : List String) (rows : List Row) : ResultSet
     let rs : ResultSet := { columns := columns, rows := rows } in rs
 
 def Sqlite.decode_row (stmt : Ptr) (names : List String) (index : I64)
-        (acc : List (Pair String Value)) : IO (Result SqlError Row) :=
+    (acc : List (Pair String Value)) : IO (Result SqlError Row) :=
     match names {
         List.empty =>
             IO.pure (Result.ok (Sqlite.make_row (List.reverse acc))),
@@ -197,7 +197,7 @@ def Sqlite.decode_row (stmt : Ptr) (names : List String) (index : I64)
 
 #[terminating]
 def Sqlite.step_rows (db : Ptr) (stmt : Ptr) (names : List String)
-        (acc : List Row) : IO (Result SqlError (List Row)) := do {
+    (acc : List Row) : IO (Result SqlError (List Row)) := do {
     let rc <- IO.mk (sqlite3_step stmt);
     if I32.beq rc Sqlite.row
     then do {
@@ -229,7 +229,7 @@ def Sqlite.exec_done (db : Ptr) (stmt : Ptr) : IO (Result SqlError I64) := do {
 }
 
 def Sqlite.query_bound (db : Ptr) (stmt : Ptr) :
-        IO (Result SqlError ResultSet) := do {
+    IO (Result SqlError ResultSet) := do {
     let count := sqlite3_column_count stmt;
     let names <- Sqlite.column_names stmt (I64.to_i32 (I32.to_i64 count - 1)) List.empty;
     let rows <- Sqlite.step_rows db stmt names List.empty;
@@ -241,7 +241,7 @@ def Sqlite.query_bound (db : Ptr) (stmt : Ptr) :
 }
 
 def Sqlite.query_prepared (db : Ptr) (stmt : Ptr) (params : List Value) :
-        IO (Result SqlError ResultSet) := do {
+    IO (Result SqlError ResultSet) := do {
     let br <- Sqlite.bind_params db stmt params (I64.to_i32 1);
     match br {
         Result.err e => Sqlite.finalize_with stmt (Result.err e),
@@ -250,7 +250,7 @@ def Sqlite.query_prepared (db : Ptr) (stmt : Ptr) (params : List Value) :
 }
 
 def Sqlite.exec_prepared (db : Ptr) (stmt : Ptr) (params : List Value) :
-        IO (Result SqlError I64) := do {
+    IO (Result SqlError I64) := do {
     let br <- Sqlite.bind_params db stmt params (I64.to_i32 1);
     match br {
         Result.err e => Sqlite.finalize_with stmt (Result.err e),
@@ -261,7 +261,7 @@ def Sqlite.exec_prepared (db : Ptr) (stmt : Ptr) (params : List Value) :
 // ─── Public driver entry points ──────────────────────────────────────────
 
 pub def Sqlite.query_io (conn : SqliteConn) (sql : String) (params : List Value) :
-        IO (Result SqlError ResultSet) := do {
+    IO (Result SqlError ResultSet) := do {
     let prep <- Sqlite.prepare conn sql;
     match prep {
         Result.err e => return (Result.err e),
@@ -270,7 +270,7 @@ pub def Sqlite.query_io (conn : SqliteConn) (sql : String) (params : List Value)
 }
 
 pub def Sqlite.exec_io (conn : SqliteConn) (sql : String) (params : List Value) :
-        IO (Result SqlError I64) := do {
+    IO (Result SqlError I64) := do {
     let prep <- Sqlite.prepare conn sql;
     match prep {
         Result.err e => return (Result.err e),
@@ -279,7 +279,7 @@ pub def Sqlite.exec_io (conn : SqliteConn) (sql : String) (params : List Value) 
 }
 
 pub def Sqlite.exec_script_io (conn : SqliteConn) (sql : String) :
-        IO (Result SqlError Unit) := do {
+    IO (Result SqlError Unit) := do {
     let rc <- IO.mk (sqlite3_exec conn.db sql Ptr.null Ptr.null Ptr.null);
     if I32.beq rc Sqlite.ok
     then return (Result.ok Unit.unit)
@@ -294,11 +294,11 @@ pub def Sqlite.last_insert_rowid (conn : SqliteConn) : I64 :=
 pub instance Backend SqliteConn {
     def close (b : SqliteConn) : IO (Result SqlError Unit) := Sqlite.close b
     def exec (b : SqliteConn) (sql : String) (params : List Value) :
-            IO (Result SqlError I64) := Sqlite.exec_io b sql params
+        IO (Result SqlError I64) := Sqlite.exec_io b sql params
     def exec_script (b : SqliteConn) (sql : String) : IO (Result SqlError Unit) :=
         Sqlite.exec_script_io b sql
     def query (b : SqliteConn) (sql : String) (params : List Value) :
-            IO (Result SqlError ResultSet) := Sqlite.query_io b sql params
+        IO (Result SqlError ResultSet) := Sqlite.query_io b sql params
     def begin_tx (b : SqliteConn) : IO (Result SqlError Unit) :=
         Sqlite.exec_script_io b "BEGIN IMMEDIATE"
     def commit_tx (b : SqliteConn) : IO (Result SqlError Unit) :=

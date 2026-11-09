@@ -24,7 +24,7 @@ pub def SqliteM.underlying {A : Type} (m : SqliteM A) : DbM SqliteConn A :=
     }
 
 pub def SqliteM.run {A : Type} (m : SqliteM A) (conn : SqliteConn) :
-        IO (Result SqlError A) :=
+    IO (Result SqlError A) :=
     DbM.run (SqliteM.underlying m) conn
 
 pub def SqliteM.pure {A : Type} (a : A) : SqliteM A :=
@@ -34,7 +34,7 @@ pub def SqliteM.lift_io {A : Type} (m : IO A) : SqliteM A :=
     SqliteM.sqlite_m (DbM.lift_io m)
 
 def sqlite_bind_run {A : Type} {B : Type} (ma : SqliteM A) (f : A -> SqliteM B) :
-        DbM SqliteConn B :=
+    DbM SqliteConn B :=
     Monad.bind (SqliteM.underlying ma) (fn (a : A) => SqliteM.underlying (f a))
 
 pub instance Monad SqliteM {
@@ -60,7 +60,7 @@ pub def Sqlite.query (sql : String) (params : List Value) : SqliteM ResultSet :=
 
 /// The first row, or `none`. Extra rows are ignored.
 pub def Sqlite.query_one (sql : String) (params : List Value) :
-        SqliteM (Option Row) := do {
+    SqliteM (Option Row) := do {
     let rs <- Sqlite.query sql params;
     match rs.rows {
         List.empty => return Option.none,
@@ -81,7 +81,7 @@ pub def Sqlite.transaction {A : Type} (m : SqliteM A) : SqliteM A :=
         ResultT.mk (Sqlite.transaction_io conn m))))
 
 def Sqlite.transaction_io {A : Type} (conn : SqliteConn) (m : SqliteM A) :
-        IO (Result SqlError A) := do {
+    IO (Result SqlError A) := do {
     let b <- Sqlite.exec_script_io conn "BEGIN IMMEDIATE";
     match b {
         Result.err e => return (Result.err e),
@@ -90,7 +90,7 @@ def Sqlite.transaction_io {A : Type} (conn : SqliteConn) (m : SqliteM A) :
 }
 
 def Sqlite.transaction_body {A : Type} (conn : SqliteConn) (m : SqliteM A) :
-        IO (Result SqlError A) := do {
+    IO (Result SqlError A) := do {
     let r <- SqliteM.run m conn;
     match r {
         Result.ok a => Sqlite.transaction_commit conn a,
@@ -99,7 +99,7 @@ def Sqlite.transaction_body {A : Type} (conn : SqliteConn) (m : SqliteM A) :
 }
 
 def Sqlite.transaction_commit {A : Type} (conn : SqliteConn) (a : A) :
-        IO (Result SqlError A) := do {
+    IO (Result SqlError A) := do {
     let c <- Sqlite.exec_script_io conn "COMMIT";
     match c {
         Result.ok _ => return (Result.ok a),
@@ -108,7 +108,7 @@ def Sqlite.transaction_commit {A : Type} (conn : SqliteConn) (a : A) :
 }
 
 def Sqlite.transaction_abort {A : Type} (conn : SqliteConn) (e : SqlError) :
-        IO (Result SqlError A) := do {
+    IO (Result SqlError A) := do {
     let _ <- Sqlite.exec_script_io conn "ROLLBACK";
     return (Result.err e)
 }

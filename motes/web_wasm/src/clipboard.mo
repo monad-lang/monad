@@ -12,8 +12,8 @@
 
 use lib::types {ClipboardOp}
 use lib::ffi {
-  clipboard_available_raw, clipboard_read_begin_raw, clipboard_write_begin_raw,
-  clipboard_poll_raw, clipboard_read_raw, clipboard_error_raw,
+    clipboard_available_raw, clipboard_read_begin_raw, clipboard_write_begin_raw,
+    clipboard_poll_raw, clipboard_read_raw, clipboard_error_raw,
 }
 
 pub def Clipboard.available : IO Bool := do {

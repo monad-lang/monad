@@ -104,9 +104,9 @@ pub def Cli.split_first_eq_at (s : String) (i : I64) : Option (Pair String Strin
 
 #[partial]
 pub def Cli.scan
-        (spec : Cli.CommandSpec) (args : List String) (fenced : Bool)
-        (flags : List String) (options : List Cli.ArgValue)
-        (positionals : List Cli.ArgValue) (pos_index : I64) : Cli.ParseResult :=
+    (spec : Cli.CommandSpec) (args : List String) (fenced : Bool)
+    (flags : List String) (options : List Cli.ArgValue)
+    (positionals : List Cli.ArgValue) (pos_index : I64) : Cli.ParseResult :=
     match args {
         List.empty => Cli.finish spec flags options positionals pos_index,
         List.cons hd tl =>
@@ -118,16 +118,16 @@ pub def Cli.scan
             then Cli.scan_long spec hd tl flags options positionals pos_index
             else if String.starts_with "-" hd
             then if String.beq hd "-" || Cli.is_negative_number hd
-                 then Cli.add_positional spec hd tl false flags options positionals pos_index
-                 else Cli.scan_short spec hd tl flags options positionals pos_index
+                then Cli.add_positional spec hd tl false flags options positionals pos_index
+                else Cli.scan_short spec hd tl flags options positionals pos_index
             else Cli.add_positional spec hd tl false flags options positionals pos_index,
     }
 
 #[partial]
 pub def Cli.add_positional
-        (spec : Cli.CommandSpec) (value : String) (rest : List String) (fenced : Bool)
-        (flags : List String) (options : List Cli.ArgValue)
-        (positionals : List Cli.ArgValue) (pos_index : I64) : Cli.ParseResult :=
+    (spec : Cli.CommandSpec) (value : String) (rest : List String) (fenced : Bool)
+    (flags : List String) (options : List Cli.ArgValue)
+    (positionals : List Cli.ArgValue) (pos_index : I64) : Cli.ParseResult :=
     match Cli.find_positional_at pos_index spec {
         Option.none =>
             Cli.ParseResult.parse_err (String.concat "unexpected argument '" (String.concat value "'")),
@@ -141,15 +141,15 @@ pub def Cli.add_positional
 
 #[partial]
 pub def Cli.scan_long
-        (spec : Cli.CommandSpec) (hd : String) (tl : List String)
-        (flags : List String) (options : List Cli.ArgValue)
-        (positionals : List Cli.ArgValue) (pos_index : I64) : Cli.ParseResult :=
+    (spec : Cli.CommandSpec) (hd : String) (tl : List String)
+    (flags : List String) (options : List Cli.ArgValue)
+    (positionals : List Cli.ArgValue) (pos_index : I64) : Cli.ParseResult :=
     if String.beq hd "--help" && Bool.not (Cli.long_claimed spec "help")
     then Cli.ParseResult.parse_help (Cli.help_text spec)
     else if String.beq hd "--version" && Bool.not (Cli.long_claimed spec "version")
     then if String.is_empty spec.version
-         then Cli.ParseResult.parse_err "unknown flag: --version"
-         else Cli.ParseResult.parse_version (Cli.version_text spec)
+        then Cli.ParseResult.parse_err "unknown flag: --version"
+        else Cli.ParseResult.parse_version (Cli.version_text spec)
     else
         let body : String := String.drop 2 hd in
         match Cli.split_first_eq body {
@@ -174,9 +174,9 @@ pub def Cli.scan_long
 
 #[partial]
 pub def Cli.apply_long_equals
-        (spec : Cli.CommandSpec) (key : String) (value : String) (tl : List String)
-        (flags : List String) (options : List Cli.ArgValue)
-        (positionals : List Cli.ArgValue) (pos_index : I64) : Cli.ParseResult :=
+    (spec : Cli.CommandSpec) (key : String) (value : String) (tl : List String)
+    (flags : List String) (options : List Cli.ArgValue)
+    (positionals : List Cli.ArgValue) (pos_index : I64) : Cli.ParseResult :=
     match Cli.find_long key spec {
         Option.none => Cli.ParseResult.parse_err (String.concat "unknown flag: --" key),
         Option.some a =>
@@ -192,9 +192,9 @@ pub def Cli.apply_long_equals
 
 #[partial]
 pub def Cli.consume_option_value
-        (spec : Cli.CommandSpec) (a : Cli.ArgSpec) (tl : List String)
-        (flags : List String) (options : List Cli.ArgValue)
-        (positionals : List Cli.ArgValue) (pos_index : I64) : Cli.ParseResult :=
+    (spec : Cli.CommandSpec) (a : Cli.ArgSpec) (tl : List String)
+    (flags : List String) (options : List Cli.ArgValue)
+    (positionals : List Cli.ArgValue) (pos_index : I64) : Cli.ParseResult :=
     match tl {
         List.empty =>
             Cli.ParseResult.parse_err (String.concat "option '--" (String.concat a.long "' requires a value")),
@@ -208,22 +208,22 @@ pub def Cli.consume_option_value
 
 #[partial]
 pub def Cli.scan_short
-        (spec : Cli.CommandSpec) (hd : String) (tl : List String)
-        (flags : List String) (options : List Cli.ArgValue)
-        (positionals : List Cli.ArgValue) (pos_index : I64) : Cli.ParseResult :=
+    (spec : Cli.CommandSpec) (hd : String) (tl : List String)
+    (flags : List String) (options : List Cli.ArgValue)
+    (positionals : List Cli.ArgValue) (pos_index : I64) : Cli.ParseResult :=
     if String.beq hd "-h" && Bool.not (Cli.short_claimed spec "h")
     then Cli.ParseResult.parse_help (Cli.help_text spec)
     else if String.beq hd "-V" && Bool.not (Cli.short_claimed spec "V")
     then if String.is_empty spec.version
-         then Cli.ParseResult.parse_err "unknown flag: -V"
-         else Cli.ParseResult.parse_version (Cli.version_text spec)
+        then Cli.ParseResult.parse_err "unknown flag: -V"
+        else Cli.ParseResult.parse_version (Cli.version_text spec)
     else Cli.scan_short_cluster spec hd tl flags options positionals pos_index 1
 
 #[partial]
 pub def Cli.scan_short_cluster
-        (spec : Cli.CommandSpec) (token : String) (rest : List String)
-        (flags : List String) (options : List Cli.ArgValue)
-        (positionals : List Cli.ArgValue) (pos_index : I64) (i : I64) : Cli.ParseResult :=
+    (spec : Cli.CommandSpec) (token : String) (rest : List String)
+    (flags : List String) (options : List Cli.ArgValue)
+    (positionals : List Cli.ArgValue) (pos_index : I64) (i : I64) : Cli.ParseResult :=
     if I64.lt i (String.length token) then
         let c : String := String.slice token i 1 in
         match Cli.find_short c spec {
@@ -279,7 +279,7 @@ pub def Cli.check_required_options (args : List Cli.ArgSpec) (options : List Cli
 
 #[partial]
 pub def Cli.required_positional_after
-        (i : I64) (args : List Cli.ArgSpec) (positionals : List Cli.ArgValue) : Option String :=
+    (i : I64) (args : List Cli.ArgSpec) (positionals : List Cli.ArgValue) : Option String :=
     match args {
         List.empty => Option.none,
         List.cons a rest =>
@@ -288,8 +288,8 @@ pub def Cli.required_positional_after
                 if a.multiple
                 then Option.none
                 else if a.required && Bool.not (I64.lt i (List.length positionals))
-                     then Option.some (String.concat "missing required argument '<" (String.concat a.long ">'"))
-                     else Cli.required_positional_after (I64.add i 1) rest positionals
+                    then Option.some (String.concat "missing required argument '<" (String.concat a.long ">'"))
+                    else Cli.required_positional_after (I64.add i 1) rest positionals
             else Cli.required_positional_after i rest positionals,
     }
 
@@ -321,7 +321,7 @@ pub def Cli.first_bad_i64 (name : String) (options : List Cli.ArgValue) : Option
 
 #[partial]
 pub def Cli.check_i64_range
-        (i : I64) (long : String) (positionals : List Cli.ArgValue) : Option String :=
+    (i : I64) (long : String) (positionals : List Cli.ArgValue) : Option String :=
     match Cli.nth_positional i positionals {
         Option.none => Option.none,
         Option.some x =>
@@ -335,7 +335,7 @@ pub def Cli.check_i64_range
 
 #[partial]
 pub def Cli.check_i64_positionals_after
-        (i : I64) (args : List Cli.ArgSpec) (positionals : List Cli.ArgValue) : Option String :=
+    (i : I64) (args : List Cli.ArgSpec) (positionals : List Cli.ArgValue) : Option String :=
     match args {
         List.empty => Option.none,
         List.cons a rest =>
@@ -377,8 +377,8 @@ pub def Cli.same_value_type (a : Cli.ArgValueType) (b : Cli.ArgValueType) : Bool
 
 #[partial]
 pub def Cli.finish
-        (spec : Cli.CommandSpec) (flags : List String) (options : List Cli.ArgValue)
-        (positionals : List Cli.ArgValue) (pos_index : I64) : Cli.ParseResult :=
+    (spec : Cli.CommandSpec) (flags : List String) (options : List Cli.ArgValue)
+    (positionals : List Cli.ArgValue) (pos_index : I64) : Cli.ParseResult :=
     match Cli.check_required_options spec.args options {
         Option.some msg => Cli.ParseResult.parse_err msg,
         Option.none =>
@@ -400,7 +400,7 @@ pub def Cli.finish
 
 #[partial]
 pub def Cli.select_subcommand
-        (spec : Cli.CommandSpec) (name : String) (tl : List String) : Cli.ParseResult :=
+    (spec : Cli.CommandSpec) (name : String) (tl : List String) : Cli.ParseResult :=
     match Cli.find_subcommand name spec.subcommands {
         Option.none => Cli.ParseResult.parse_err (String.concat "unknown subcommand: " name),
         Option.some sub => Cli.parse sub tl,
@@ -415,7 +415,7 @@ pub def Cli.find_subcommand (name : String) (subs : List Cli.CommandSpec) : Opti
 
 #[terminating]
 pub def Cli.parse_sub
-        (spec : Cli.CommandSpec) (args : List String) (fenced : Bool) : Cli.ParseResult :=
+    (spec : Cli.CommandSpec) (args : List String) (fenced : Bool) : Cli.ParseResult :=
     match args {
         List.empty => Cli.ParseResult.parse_err "missing subcommand",
         List.cons hd tl =>
@@ -427,14 +427,14 @@ pub def Cli.parse_sub
             then Cli.parse_sub_flag_long spec hd tl
             else if String.starts_with "-" hd
             then if String.beq hd "-" || Cli.is_negative_number hd
-                 then Cli.select_subcommand spec hd tl
-                 else if String.beq hd "-h" && Bool.not (Cli.short_claimed spec "h")
-                      then Cli.ParseResult.parse_help (Cli.help_text spec)
-                      else if String.beq hd "-V" && Bool.not (Cli.short_claimed spec "V")
-                           then if String.is_empty spec.version
-                                then Cli.ParseResult.parse_err "unknown flag: -V"
-                                else Cli.ParseResult.parse_version (Cli.version_text spec)
-                           else Cli.parse_sub_flag_short spec (String.drop 1 hd) tl
+                then Cli.select_subcommand spec hd tl
+                else if String.beq hd "-h" && Bool.not (Cli.short_claimed spec "h")
+                    then Cli.ParseResult.parse_help (Cli.help_text spec)
+                    else if String.beq hd "-V" && Bool.not (Cli.short_claimed spec "V")
+                        then if String.is_empty spec.version
+                            then Cli.ParseResult.parse_err "unknown flag: -V"
+                            else Cli.ParseResult.parse_version (Cli.version_text spec)
+                        else Cli.parse_sub_flag_short spec (String.drop 1 hd) tl
             else Cli.select_subcommand spec hd tl,
     }
 
@@ -448,8 +448,8 @@ pub def Cli.parse_sub_flag_long (spec : Cli.CommandSpec) (hd : String) (tl : Lis
     then Cli.ParseResult.parse_help (Cli.help_text spec)
     else if String.beq hd "--version" && Bool.not (Cli.long_claimed spec "version")
     then if String.is_empty spec.version
-         then Cli.ParseResult.parse_err "unknown flag: --version"
-         else Cli.ParseResult.parse_version (Cli.version_text spec)
+        then Cli.ParseResult.parse_err "unknown flag: --version"
+        else Cli.ParseResult.parse_version (Cli.version_text spec)
     else
         let body : String := String.drop 2 hd in
         match Cli.split_first_eq body {
@@ -518,9 +518,9 @@ pub def Cli.parse (spec : Cli.CommandSpec) (args : List String) : Cli.ParseResul
 /// to stdout and return 0; a parse/decode error prints `error: ...` plus
 /// usage to stderr and returns 2.
 pub def Cli.run {A : Type}
-        (spec : Cli.CommandSpec) (args : List String)
-        (decode : Cli.Parsed -> Result String A)
-        (handler : A -> IO I64) : IO I64 := do {
+    (spec : Cli.CommandSpec) (args : List String)
+    (decode : Cli.Parsed -> Result String A)
+    (handler : A -> IO I64) : IO I64 := do {
     match Cli.parse spec args {
         Cli.ParseResult.parse_ok p =>
             match decode p {

@@ -75,7 +75,7 @@ with MigrationError {
 /// literal in argument position can compile to garbage self-hosted).
 with Migrations {
     pub def migration (version : I64) (name : String) (up : String)
-            (down : Option String) : Migration :=
+        (down : Option String) : Migration :=
         let m : Migration := { version := version, name := name, up := up, down := down } in m
 
     def insert (m : Migration) (sorted : List Migration) : List Migration :=
@@ -94,7 +94,7 @@ with Migrations {
         }
 
     def check_sorted (previous : I64) (ms : List Migration) :
-            Result MigrationError Unit :=
+        Result MigrationError Unit :=
         match ms {
             List.empty => Result.ok Unit.unit,
             List.cons m rest =>
@@ -105,7 +105,7 @@ with Migrations {
 
     /// Sort by numeric version and reject zero or duplicate versions.
     pub def sort_and_check (ms : List Migration) :
-            Result MigrationError (List Migration) :=
+        Result MigrationError (List Migration) :=
         let sorted := Migrations.sort_list ms in
         match Migrations.check_sorted 0 sorted {
             Result.ok _ => Result.ok sorted,
@@ -115,7 +115,7 @@ with Migrations {
     /// Compare one applied row against the next available migration and
     /// return the remaining available list, or the first mismatch.
     def check_applied_one (a : AppliedMigration) (available : List Migration) :
-            Result MigrationError (List Migration) :=
+        Result MigrationError (List Migration) :=
         match available {
             List.empty => Result.err (MigrationError.missing_migration a.version),
             List.cons m rest =>
@@ -129,15 +129,15 @@ with Migrations {
         }
 
     def check_prefix_step (rest : List AppliedMigration)
-            (r : Result MigrationError (List Migration)) :
-            Result MigrationError (List Migration) :=
+        (r : Result MigrationError (List Migration)) :
+        Result MigrationError (List Migration) :=
         match r {
             Result.ok available => Migrations.check_prefix rest available,
             Result.err e => Result.err e
         }
 
     def check_prefix (applied : List AppliedMigration) (available : List Migration) :
-            Result MigrationError (List Migration) :=
+        Result MigrationError (List Migration) :=
         match applied {
             List.empty => Result.ok available,
             List.cons a rest =>
@@ -151,11 +151,11 @@ with Migrations {
     /// same SHA-256 of each `up` script. A non-prefix history is an error,
     /// never silently skipped.
     pub def pending (applied : List AppliedMigration) (available : List Migration) :
-            Result MigrationError (List Migration) :=
+        Result MigrationError (List Migration) :=
         Migrations.check_prefix applied available
 
     def find_applied (version : I64) (applied : List AppliedMigration) :
-            Option AppliedMigration :=
+        Option AppliedMigration :=
         match applied {
             List.empty => Option.none,
             List.cons a rest =>
@@ -168,19 +168,19 @@ with Migrations {
             Option.none =>
                 let s : MigrationState :=
                     { version := m.version, name := m.name, applied := false,
-                      checksum_ok := true, name_ok := true } in s,
+                        checksum_ok := true, name_ok := true } in s,
             Option.some a =>
                 let checksum_ok := String.beq (Sha256.hash m.up) a.checksum in
                 let name_ok := String.beq m.name a.name in
                 let s : MigrationState :=
                     { version := m.version, name := m.name, applied := true,
-                      checksum_ok := checksum_ok, name_ok := name_ok } in s
+                        checksum_ok := checksum_ok, name_ok := name_ok } in s
         }
 
     /// Applied/pending state for every supplied migration. Checksums are
     /// checked for applied entries; unapplied entries report `true`.
     pub def status (applied : List AppliedMigration) (available : List Migration) :
-            List MigrationState :=
+        List MigrationState :=
         List.map (fn (m : Migration) => Migrations.state_of m applied) available
 
     /// The newest applied version, or 0 when nothing is applied.

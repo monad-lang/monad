@@ -16,30 +16,30 @@ def Hmac.opad_byte : U8 := 92u8
 def Hmac.zero_byte : U8 := 0u8
 
 def Hmac.xor_byte (a b : U8) : U8 :=
-  U32.to_u8 (U32.xor (U8.to_u32 a) (U8.to_u32 b))
+    U32.to_u8 (U32.xor (U8.to_u32 a) (U8.to_u32 b))
 
 #[terminating]
 def Hmac.xor_each (xs : List U8) (pad : U8) : List U8 :=
-  match xs {
-    List.empty => List.empty,
-    List.cons x rest => List.cons (Hmac.xor_byte x pad) (Hmac.xor_each rest pad)
-  }
+    match xs {
+        List.empty => List.empty,
+        List.cons x rest => List.cons (Hmac.xor_byte x pad) (Hmac.xor_each rest pad)
+    }
 
 /// Hash an over-long key, then zero-fill to the block size.
 #[terminating]
 def Hmac.pad_key (key : List U8) : List U8 :=
-  if I64.gt (List.length key) Hmac.block_bytes
-  then Hmac.pad_key (Sha256.hash_bytes key)
-  else Hmac.fill_key key
+    if I64.gt (List.length key) Hmac.block_bytes
+    then Hmac.pad_key (Sha256.hash_bytes key)
+    else Hmac.fill_key key
 
 #[terminating]
 def Hmac.fill_key (key : List U8) : List U8 :=
-  if I64.lt (List.length key) Hmac.block_bytes
-  then Hmac.fill_key (List.append key [Hmac.zero_byte])
-  else key
+    if I64.lt (List.length key) Hmac.block_bytes
+    then Hmac.fill_key (List.append key [Hmac.zero_byte])
+    else key
 
 pub def Hmac.sha256 (key : List U8) (msg : List U8) : List U8 :=
-  let padded := Hmac.pad_key key in
-  let inner := Sha256.hash_bytes
-    (List.append (Hmac.xor_each padded Hmac.ipad_byte) msg) in
-  Sha256.hash_bytes (List.append (Hmac.xor_each padded Hmac.opad_byte) inner)
+    let padded := Hmac.pad_key key in
+    let inner := Sha256.hash_bytes
+        (List.append (Hmac.xor_each padded Hmac.ipad_byte) msg) in
+    Sha256.hash_bytes (List.append (Hmac.xor_each padded Hmac.opad_byte) inner)

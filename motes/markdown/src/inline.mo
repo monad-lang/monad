@@ -47,7 +47,7 @@ pub def Markdown.mk_delim_rec (ch : U8) (count : I64) (orig : I64) (can_open : B
     (outer_len : I64) : Markdown.DelimRec :=
     let d : Markdown.DelimRec :=
         { ch := ch, count := count, orig := orig, can_open := can_open, can_close := can_close,
-          outer_len := outer_len } in d
+            outer_len := outer_len } in d
 
 struct Markdown.InlineBuild {
     pieces : List String,
@@ -65,7 +65,7 @@ def Markdown.mk_build
     : Markdown.InlineBuild :=
     let b : Markdown.InlineBuild :=
         { pieces := pieces, nodes := nodes, refs := refs, len := len, delims := delims,
-          prev := prev, opts := opts } in b
+            prev := prev, opts := opts } in b
 
 def Markdown.inline_start (opts : Markdown.Options) (refs : List Markdown.LinkRef) : Markdown.InlineBuild :=
     Markdown.mk_build List.empty List.empty refs 0i64 List.empty Option.none opts
@@ -91,8 +91,6 @@ def Markdown.push_node (n : Markdown.Inline) (b : Markdown.InlineBuild) : Markdo
 // ─── Escapes ───
 
 // ─── Character references ───
-
-
 
 /// Read up to `max` ASCII alphanumerics, returning (name, rest).
 #[partial]
@@ -535,7 +533,6 @@ def Markdown.scan_bang (b : Markdown.InlineBuild) (s : String) : Markdown.Inline
             else Markdown.inline_loop (Markdown.push_piece "!" b) next,
         Option.none => Markdown.push_piece "!" b
     }
-
 
 /// Find the `]` matching an already-consumed `[`. Skips escapes and code
 /// spans; nested brackets increase the depth. Returns the label text and the
@@ -995,7 +992,7 @@ def Markdown.match_one
                         if I64.lt left 1i64
                         then List.cons wrapped outer
                         else List.cons wrapped
-                                (List.cons (inline_text (Markdown.repeat_char ch left (Markdown.one_char ch) List.empty)) outer) in
+                            (List.cons (inline_text (Markdown.repeat_char ch left (Markdown.one_char ch) List.empty)) outer) in
                     let len1 : I64 :=
                         if I64.lt left 1i64
                         then I64.add opener.outer_len 1i64
@@ -1005,9 +1002,9 @@ def Markdown.match_one
                         if I64.lt left 1i64
                         then rest_delims
                         else List.cons
-                                (Markdown.mk_delim_rec ch left opener.orig opener.can_open
-                                    opener.can_close opener.outer_len)
-                                rest_delims in
+                            (Markdown.mk_delim_rec ch left opener.orig opener.can_open
+                                opener.can_close opener.outer_len)
+                            rest_delims in
                     let b1 : Markdown.InlineBuild :=
                         { b with pieces := List.empty, nodes := nodes1, len := len1, delims := delims1 } in
                     let remaining1 : I64 := I64.sub remaining width in

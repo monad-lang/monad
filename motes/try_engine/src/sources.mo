@@ -82,7 +82,7 @@ def parse_record_body (payload : String) (body : I64) (path_len : I64)
                 Pair.pair segments mote =>
                     let module_ : SourceModule :=
                         { segments := segments, mote := mote, file_path := path,
-                          source := source }
+                            source := source }
                     in
                     parse_records payload body_end total (List.cons module_ acc),
             },
@@ -129,9 +129,9 @@ def digits_go (payload : String) (pos : I64) (end : I64) (acc : I64)
                 if U8.lt b zero_digit || U8.gt b nine_digit
                 then Result.err (at_byte "a record length is not decimal" pos)
                 else if I64.gt acc 100000000
-                     then Result.err (at_byte "a record length is implausibly large" pos)
-                     else digits_go payload (I64.add pos 1) end
-                              (I64.add (I64.mul acc 10) (I64.sub (U8.to_i64 b) 48)),
+                    then Result.err (at_byte "a record length is implausibly large" pos)
+                    else digits_go payload (I64.add pos 1) end
+                        (I64.add (I64.mul acc 10) (I64.sub (U8.to_i64 b) 48)),
         }
 
 /// The module a served path names: `<mote>/src/<stem>.mo`.
@@ -177,8 +177,8 @@ def segments_of (mote : String) (stem : String) : List String :=
     if String.beq mote "init" && String.beq stem "prelude"
     then ["prelude"]
     else if String.beq stem "lib"
-         then [mote]
-         else List.cons mote (split_slashes stem)
+        then [mote]
+        else List.cons mote (split_slashes stem)
 
 #[terminating]
 def split_slashes (s : String) : List String :=

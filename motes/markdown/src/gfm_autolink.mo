@@ -17,8 +17,8 @@ def Markdown.linkish_go (s : String) (acc : List String) : Pair String String :=
         match String.get s 0 {
             Option.some b =>
                 if Bool.or (U8.beq b 32u8)
-                        (Bool.or (U8.beq b 9u8)
-                            (Bool.or (U8.beq b 10u8) (U8.beq b 60u8)))
+                    (Bool.or (U8.beq b 9u8)
+                        (Bool.or (U8.beq b 10u8) (U8.beq b 60u8)))
                 then Pair.pair (String.concat_list (List.reverse acc)) s
                 else
                     let w : I64 := Markdown.char_width s in
@@ -46,14 +46,14 @@ def Markdown.trim_end_punct (s : String) : String :=
         }
 
 def Markdown.is_trailing_punct (b : U8) : Bool :=
-    if U8.beq b 63u8 then true      // ?
-    else if U8.beq b 33u8 then true  // !
-    else if U8.beq b 46u8 then true  // .
-    else if U8.beq b 44u8 then true  // ,
-    else if U8.beq b 58u8 then true  // :
-    else if U8.beq b 42u8 then true  // *
-    else if U8.beq b 95u8 then true  // _
-    else U8.beq b 126u8              // ~
+    if U8.beq b 63u8 then true // ?
+    else if U8.beq b 33u8 then true // !
+    else if U8.beq b 46u8 then true // .
+    else if U8.beq b 44u8 then true // ,
+    else if U8.beq b 58u8 then true // :
+    else if U8.beq b 42u8 then true // *
+    else if U8.beq b 95u8 then true // _
+    else U8.beq b 126u8 // ~
 
 #[partial]
 def Markdown.count_char (s : String) (b : U8) : I64 :=
@@ -174,7 +174,7 @@ def Markdown.split_at_at (s : String) (current : List String) (parts : List Stri
             Option.some b =>
                 if Bool.and (U8.beq b 64u8) (Bool.not seen)
                 then Markdown.split_at_at (String.drop 1i64 s) List.empty
-                        (List.cons (String.concat_list (List.reverse current)) parts) true
+                    (List.cons (String.concat_list (List.reverse current)) parts) true
                 else
                     let w : I64 := Markdown.char_width s in
                     Markdown.split_at_at (String.drop w s) (List.cons (String.slice s 0 w) current) parts seen,

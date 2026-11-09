@@ -154,11 +154,11 @@ def test_drop_last_five : Bool :=
 #[test]
 def test_nested_child_count_change_patches_at_depth_three : Bool :=
     let old := element "div" List.empty
-        [ element "section" List.empty
-            [element "p" List.empty [text "x"], element "ul" List.empty List.empty] ] in
+        [element "section" List.empty
+            [element "p" List.empty [text "x"], element "ul" List.empty List.empty]] in
     let new := element "div" List.empty
-        [ element "section" List.empty
-            [element "p" List.empty [text "x"], element "ul" List.empty [text "a", text "b"]] ] in
+        [element "section" List.empty
+            [element "p" List.empty [text "x"], element "ul" List.empty [text "a", text "b"]]] in
     match first_patch (Patch.diff old new) {
         Option.none => false,
         Option.some p => match p {
@@ -363,5 +363,3 @@ def test_kind_ok_adopts_a_doctype_as_a_comment : Bool :=
 def test_kind_ok_never_adopts_a_fragment : Bool :=
     Bool.not (Patch.kind_ok (node_fragment List.empty) 1i64 "div")
         && Bool.not (Patch.kind_ok (node_fragment List.empty) 0i64 "")
-
-

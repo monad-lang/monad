@@ -17,11 +17,11 @@ def render_opts : Html.RenderOpts :=
 
 def ids_html_opts : Markdown.HtmlOptions :=
     { allow_raw_html := false, safe_urls := true, heading_ids := true,
-      heading_id_prefix := "" }
+        heading_id_prefix := "" }
 
 def unsafe_html_opts : Markdown.HtmlOptions :=
     { allow_raw_html := false, safe_urls := false, heading_ids := false,
-      heading_id_prefix := "" }
+        heading_id_prefix := "" }
 
 def render_with (html : Markdown.HtmlOptions) (parse : Markdown.Options) (src : String) : String :=
     Html.to_string_with render_opts (Markdown.to_html_with html (Markdown.parse_with parse src))
@@ -89,7 +89,7 @@ def test_heading_ids_are_off_by_default : Bool :=
 def test_heading_ids_prefix : Bool :=
     let opts : Markdown.HtmlOptions :=
         { allow_raw_html := false, safe_urls := true, heading_ids := true,
-          heading_id_prefix := "sec-" } in
+            heading_id_prefix := "sec-" } in
     String.beq
         (Html.to_string_with render_opts
             (Markdown.to_html_with opts (Markdown.parse_with Markdown.default_options "# Hi\n")))

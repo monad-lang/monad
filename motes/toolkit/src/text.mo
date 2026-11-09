@@ -71,7 +71,7 @@ pub def text_span_stop (sp : TextSpan) : I64 := sp.stop
 /// `String.slice` answers the empty string in that case rather than panicking --
 /// the behaviour `position.mo` relies on for the same reason.
 pub def text_span_text (src : String) (sp : TextSpan) : String :=
-  String.slice src sp.start (I64.sub sp.stop sp.start)
+    String.slice src sp.start (I64.sub sp.stop sp.start)
 
 /// The identifier the cursor is on, or the one it is at the end of.
 ///
@@ -106,14 +106,14 @@ pub def text_span_text (src : String) (sp : TextSpan) : String :=
 /// practice -- they are total anyway, because a cursor position is client input
 /// and a server that crashes on out-of-range input is a server that crashes.
 pub def text_identifier_at (src : String) (offset : I64) : Option TextSpan :=
-  text_scan (String.to_list src) 0 0 offset
+    text_scan (String.to_list src) 0 0 offset
 
 /// The identifier's text, for the caller that wants the name and not the bounds.
 pub def text_identifier_text (src : String) (offset : I64) : Option String :=
-  match text_identifier_at src offset {
-    Option.none => Option.none,
-    Option.some sp => Option.some (text_span_text src sp),
-  }
+    match text_identifier_at src offset {
+        Option.none => Option.none,
+        Option.some sp => Option.some (text_span_text src sp),
+    }
 
 /// One pass, carrying the start of the run in progress.
 ///
@@ -130,19 +130,19 @@ pub def text_identifier_text (src : String) (offset : I64) : Option String :=
 /// reading the rest of the file.
 #[partial]
 def text_scan (bs : List U8) (i : I64) (run_start : I64) (offset : I64) : Option TextSpan :=
-  match bs {
-    List.empty =>
-      if text_run_covers run_start i offset
-      then Option.some (TextSpan.mk run_start i)
-      else Option.none,
-    List.cons b rest =>
-      if text_byte_is_identifier b
-      then text_scan rest (I64.add i 1) run_start offset
-      else
-        if text_run_covers run_start i offset
-        then Option.some (TextSpan.mk run_start i)
-        else text_scan rest (I64.add i 1) (I64.add i 1) offset,
-  }
+    match bs {
+        List.empty =>
+            if text_run_covers run_start i offset
+            then Option.some (TextSpan.mk run_start i)
+            else Option.none,
+        List.cons b rest =>
+            if text_byte_is_identifier b
+            then text_scan rest (I64.add i 1) run_start offset
+            else
+                if text_run_covers run_start i offset
+                then Option.some (TextSpan.mk run_start i)
+                else text_scan rest (I64.add i 1) (I64.add i 1) offset,
+    }
 
 /// Whether the run `[run_start, stop)` is the one the cursor is on or at the end
 /// of: `run_start <= offset <= stop`, with a non-empty run.
@@ -160,7 +160,7 @@ def text_scan (bs : List U8) (i : I64) (run_start : I64) (offset : I64) : Option
 /// `offset < run_start` -- the same shape `docstore.mo` records for `U8.lt`, one
 /// type over.
 def text_run_covers (run_start : I64) (stop : I64) (offset : I64) : Bool :=
-  Bool.not (I64.lt offset run_start) && I64.gt stop run_start && Bool.not (I64.gt offset stop)
+    Bool.not (I64.lt offset run_start) && I64.gt stop run_start && Bool.not (I64.gt offset stop)
 
 /// Whether a byte can appear in an identifier.
 ///
@@ -169,16 +169,16 @@ def text_run_covers (run_start : I64) (stop : I64) (offset : I64) : Bool :=
 /// floor constants below are named for the byte they are, not for the range they
 /// bound. `docstore.mo` records the same dodge for the same reason.
 def text_byte_is_identifier (b : U8) : Bool :=
-  text_byte_is_alphanumeric b
-    || U8.beq b text_byte_underscore
-    || U8.beq b text_byte_dot
-    || U8.beq b text_byte_quote
+    text_byte_is_alphanumeric b
+        || U8.beq b text_byte_underscore
+        || U8.beq b text_byte_dot
+        || U8.beq b text_byte_quote
 
 #[partial]
 def text_byte_is_alphanumeric (b : U8) : Bool :=
-  (U8.gt b text_byte_slash && Bool.not (U8.gt b text_byte_nine))
-    || (U8.gt b text_byte_at_sign && Bool.not (U8.gt b text_byte_upper_z))
-    || (U8.gt b text_byte_backtick && Bool.not (U8.gt b text_byte_lower_z))
+    (U8.gt b text_byte_slash && Bool.not (U8.gt b text_byte_nine))
+        || (U8.gt b text_byte_at_sign && Bool.not (U8.gt b text_byte_upper_z))
+        || (U8.gt b text_byte_backtick && Bool.not (U8.gt b text_byte_lower_z))
 
 // The digits and the two letter runs, each floor named as the byte one below it
 // because that is the byte the comparison is against.

@@ -56,7 +56,7 @@ def openai_http_error (r : Response) : Option String :=
     else
         Option.some (String.concat "openai: HTTP "
             (String.concat (U16.to_string r.status)
-            (String.concat ": " (String.from_list (Body.to_bytes_pure r.body)))))
+                (String.concat ": " (String.from_list (Body.to_bytes_pure r.body)))))
 
 def decode_chat_response (r : Response) : Result String ChatResponse :=
     let text := String.from_list (Body.to_bytes_pure r.body) in
@@ -208,10 +208,10 @@ pub def OpenAI.request_json (req : ChatRequest) : Json :=
         ChatRequest.mk model messages tools max_tokens _ =>
             Json.make_object
                 (Map.insert "model" (Json.make_str model)
-                (Map.insert "messages" (Json.make_array (List.map msg_json messages))
-                (Map.insert "tools" (Json.make_array (List.map ToolDef.serialize_json tools))
-                (Map.insert "max_tokens" (opt_i64_json max_tokens)
-                (Map.insert "stream" (Json.make_bool req.stream) BTreeMap.empty)))))
+                    (Map.insert "messages" (Json.make_array (List.map msg_json messages))
+                        (Map.insert "tools" (Json.make_array (List.map ToolDef.serialize_json tools))
+                            (Map.insert "max_tokens" (opt_i64_json max_tokens)
+                                (Map.insert "stream" (Json.make_bool req.stream) BTreeMap.empty)))))
     }
 
 /// POST `{base_url}/v1/chat/completions`. `api_key` is `Option.none` for
@@ -526,22 +526,22 @@ def openai_apply_event (acc : OpenaiAcc) (data : String) : Pair OpenaiAcc (List 
         }
 
 def openai_apply_choices (acc : OpenaiAcc) (obj : BTreeMap String Json) : Pair OpenaiAcc (List String) :=
-                        match Json.object_get "choices" obj {
-                            Option.none => Pair.pair (openai_apply_usage acc obj) List.empty,
-                            Option.some cj =>
-                                match Json.get_array cj {
-                                    Result.err _ => Pair.pair (openai_apply_usage acc obj) List.empty,
-                                    Result.ok choices =>
-                                        match choices {
-                                            List.empty => Pair.pair (openai_apply_usage acc obj) List.empty,
-                                            List.cons first _ =>
-                                                match Json.get_object first {
-                                                    Result.err _ => Pair.pair (openai_apply_usage acc obj) List.empty,
-                                                    Result.ok cobj => openai_apply_choice (openai_apply_usage acc obj) cobj
-                                                }
-                                        }
-                                }
-                        }
+    match Json.object_get "choices" obj {
+        Option.none => Pair.pair (openai_apply_usage acc obj) List.empty,
+        Option.some cj =>
+            match Json.get_array cj {
+                Result.err _ => Pair.pair (openai_apply_usage acc obj) List.empty,
+                Result.ok choices =>
+                    match choices {
+                        List.empty => Pair.pair (openai_apply_usage acc obj) List.empty,
+                        List.cons first _ =>
+                            match Json.get_object first {
+                                Result.err _ => Pair.pair (openai_apply_usage acc obj) List.empty,
+                                Result.ok cobj => openai_apply_choice (openai_apply_usage acc obj) cobj
+                            }
+                    }
+            }
+    }
 
 /// Fold every event a byte push completed, reporting each non-empty
 /// text delta in wire order -- the pure half of `openai_stream_bytes`.

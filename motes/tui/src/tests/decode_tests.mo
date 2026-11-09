@@ -7,12 +7,12 @@
 // events: an incomplete sequence MUST come back whole (from its ESC),
 // because the reader's contract is to prefix it to the next chunk.
 
-use lib::types { Event, Key, MouseEvent, MouseButton }
+use lib::types {Event, Key, MouseEvent, MouseButton}
 use lib::input {
     Input.decode, Input.pending_escape, Input.step, Input.pasting, Input.paste_cap,
     InputReader, PasteState, input_reader,
 }
-use std::list { List.length }
+use std::list {List.length}
 
 def decoded_events (s : String) : List Event :=
     match Input.decode s {

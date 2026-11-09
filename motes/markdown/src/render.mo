@@ -191,7 +191,7 @@ def Markdown.split_newlines_go (s : String) (start : I64) (i : I64) (acc : List 
     then List.reverse (List.cons (String.slice s start (n - start)) acc)
     else if String.beq (String.slice s i 1) "\n"
     then Markdown.split_newlines_go s (i + 1) (i + 1)
-            (List.cons (Markdown.trim_cr (String.slice s start (i - start))) acc)
+        (List.cons (Markdown.trim_cr (String.slice s start (i - start))) acc)
     else Markdown.split_newlines_go s start (i + 1) acc
 
 pub def Markdown.split_newlines (s : String) : List String :=

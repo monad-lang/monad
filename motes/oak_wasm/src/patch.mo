@@ -24,9 +24,9 @@ use xml_html::html {Html.Attr, Html.Node, Html.beq}
 use oak::elements {Html.key_attr}
 use web_wasm::types {Node}
 use web_wasm::dom {
-  Dom.append, Dom.child, Dom.child_count, Dom.comment, Dom.create, Dom.insert_before,
-  Dom.node_type, Dom.remove, Dom.remove_attr, Dom.replace, Dom.set_attr, Dom.set_text,
-  Dom.tag_name, Dom.text_node,
+    Dom.append, Dom.child, Dom.child_count, Dom.comment, Dom.create, Dom.insert_before,
+    Dom.node_type, Dom.remove, Dom.remove_attr, Dom.replace, Dom.set_attr, Dom.set_text,
+    Dom.tag_name, Dom.text_node,
 }
 
 pub type Patch {
@@ -338,13 +338,13 @@ def Patch.keyed_located (path : List I64) (model : List Html.Node) (child : Html
 def Patch.keyed_move (path : List I64) (model : List Html.Node) (child : Html.Node) (old_node : Html.Node) (target : I64) (from : I64) : Pair (List Patch) (List Html.Node) :=
     if from == target
     then Pair.pair
-            (Patch.diff_at (Patch.child_path path target) old_node child)
-            model
+        (Patch.diff_at (Patch.child_path path target) old_node child)
+        model
     else Pair.pair
-            (List.cons
-                (Patch.move (Patch.child_path path from) (Patch.child_path path target))
-                (Patch.diff_at (Patch.child_path path target) old_node child))
-            (Patch.model_move from target old_node model)
+        (List.cons
+            (Patch.move (Patch.child_path path from) (Patch.child_path path target))
+            (Patch.diff_at (Patch.child_path path target) old_node child))
+        (Patch.model_move from target old_node model)
 
 #[terminating]
 def Patch.keyed_patches (path : List I64) (old_children : List Html.Node) (children : List Html.Node) : List Patch :=

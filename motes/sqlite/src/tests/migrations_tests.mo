@@ -254,7 +254,7 @@ def dir_check (conn : SqliteConn) (written : Bool) : IO Bool := do {
     let r <- Sqlite.migrate_dir conn migrations_dir;
     let st <- Sqlite.status conn
         [Migrations.migration 1 "a" "CREATE TABLE a (n INTEGER);" (Option.some "DROP TABLE a;"),
-         Migrations.migration 2 "b" "CREATE TABLE b (n INTEGER);" Option.none];
+            Migrations.migration 2 "b" "CREATE TABLE b (n INTEGER);" Option.none];
     return (written && applied_count_is r 2 && status_is st states_all_applied)
 }
 

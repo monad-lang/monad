@@ -84,7 +84,7 @@ def digit_value (b : U8) : Option I64 :=
 /// over-long numeric field is a `bad_filename` rather than a wrapped I64.
 #[terminating]
 def parse_version_step (rest : List U8) (acc : I64) (d : Option I64) :
-        Option I64 :=
+    Option I64 :=
     match d {
         Option.some n =>
             if acc > 100000000
@@ -105,7 +105,7 @@ def parse_version (s : String) : Option I64 :=
     else parse_version_list (String.to_list s) 0
 
 def parse_meta_name (file_name : String) (stem : String) (kind : ParsedKind)
-        (idx : I64) (version : I64) : Result MigrationError ParsedMeta :=
+    (idx : I64) (version : I64) : Result MigrationError ParsedMeta :=
     let name := String.slice stem (idx + 1) (String.length stem - idx - 1) in
     if version < 1 then Result.err (MigrationError.bad_filename file_name)
     else if String.is_empty name then Result.err (MigrationError.bad_filename file_name)
@@ -114,14 +114,14 @@ def parse_meta_name (file_name : String) (stem : String) (kind : ParsedKind)
         Result.ok meta
 
 def parse_meta_version (file_name : String) (stem : String) (kind : ParsedKind)
-        (idx : I64) : Result MigrationError ParsedMeta :=
+    (idx : I64) : Result MigrationError ParsedMeta :=
     match parse_version (String.slice stem 0 idx) {
         Option.none => Result.err (MigrationError.bad_filename file_name),
         Option.some version => parse_meta_name file_name stem kind idx version
     }
 
 def parse_meta_split (file_name : String) (stem : String) (kind : ParsedKind)
-        (idx : Option I64) : Result MigrationError ParsedMeta :=
+    (idx : Option I64) : Result MigrationError ParsedMeta :=
     match idx {
         Option.none => Result.err (MigrationError.bad_filename file_name),
         Option.some i => parse_meta_version file_name stem kind i
@@ -143,13 +143,13 @@ def parse_meta (file_name : String) : Option (Result MigrationError ParsedMeta) 
 // ─── IO: read and collect ────────────────────────────────────────────────
 
 def read_meta (path : Path) (meta : ParsedMeta) :
-        IO (Result MigrationError (Option ParsedFile)) := do {
+    IO (Result MigrationError (Option ParsedFile)) := do {
     let contents <- IO.read_file path;
     match contents {
         Result.ok text =>
             let f : ParsedFile :=
                 { version := meta.version, name := meta.name, kind := meta.kind,
-                  text := text, file_name := Path.file_name path } in
+                    text := text, file_name := Path.file_name path } in
             return (Result.ok (Option.some f)),
         Result.err e =>
             return (Result.err (MigrationError.io_error e.message))
@@ -157,7 +157,7 @@ def read_meta (path : Path) (meta : ParsedMeta) :
 }
 
 def read_meta_result (path : Path) (r : Result MigrationError ParsedMeta) :
-        IO (Result MigrationError (Option ParsedFile)) :=
+    IO (Result MigrationError (Option ParsedFile)) :=
     match r {
         Result.err e => IO.pure (Result.err e),
         Result.ok meta => read_meta path meta
@@ -173,7 +173,7 @@ def load_one (path : Path) : IO (Result MigrationError (Option ParsedFile)) := d
 
 #[terminating]
 def add_parsed (rest : List Path) (acc : List ParsedFile) (maybe : Option ParsedFile) :
-        IO (Result MigrationError (List ParsedFile)) :=
+    IO (Result MigrationError (List ParsedFile)) :=
     match maybe {
         Option.none => load_all rest acc,
         Option.some f => load_all rest (List.cons f acc)
@@ -181,15 +181,15 @@ def add_parsed (rest : List Path) (acc : List ParsedFile) (maybe : Option Parsed
 
 #[terminating]
 def load_all_step (rest : List Path) (acc : List ParsedFile)
-        (r : Result MigrationError (Option ParsedFile)) :
-        IO (Result MigrationError (List ParsedFile)) :=
+    (r : Result MigrationError (Option ParsedFile)) :
+    IO (Result MigrationError (List ParsedFile)) :=
     match r {
         Result.err e => IO.pure (Result.err e),
         Result.ok maybe => add_parsed rest acc maybe
     }
 
 def load_all (paths : List Path) (acc : List ParsedFile) :
-        IO (Result MigrationError (List ParsedFile)) :=
+    IO (Result MigrationError (List ParsedFile)) :=
     match paths {
         List.empty => IO.pure (Result.ok acc),
         List.cons p rest => do {
@@ -237,7 +237,7 @@ def sort_parsed (files : List ParsedFile) : List ParsedFile :=
 /// silent pairing: otherwise a typo would make a rollback execute the
 /// wrong script.
 def take_down (f : ParsedFile) (rest : List ParsedFile) :
-        Result MigrationError (Pair (Option ParsedFile) (List ParsedFile)) :=
+    Result MigrationError (Pair (Option ParsedFile) (List ParsedFile)) :=
     match rest {
         List.empty => Result.ok (Pair.pair Option.none rest),
         List.cons d rest2 =>
@@ -265,7 +265,7 @@ def same_version_head (version : I64) (files : List ParsedFile) : Bool :=
 
 #[terminating]
 def assemble_rest (f : ParsedFile) (down : Option ParsedFile) (rest : List ParsedFile) :
-        Result MigrationError (List Migration) :=
+    Result MigrationError (List Migration) :=
     if same_version_head f.version rest
     then Result.err (MigrationError.duplicate_version f.version)
     else
@@ -275,15 +275,15 @@ def assemble_rest (f : ParsedFile) (down : Option ParsedFile) (rest : List Parse
         }
 
 def assemble_down (f : ParsedFile)
-        (picked : Pair (Option ParsedFile) (List ParsedFile)) :
-        Result MigrationError (List Migration) :=
+    (picked : Pair (Option ParsedFile) (List ParsedFile)) :
+    Result MigrationError (List Migration) :=
     match picked {
         Pair.pair down rest2 => assemble_rest f down rest2
     }
 
 #[terminating]
 def assemble_up (f : ParsedFile) (rest : List ParsedFile) :
-        Result MigrationError (List Migration) :=
+    Result MigrationError (List Migration) :=
     match take_down f rest {
         Result.err e => Result.err e,
         Result.ok picked => assemble_down f picked
@@ -302,7 +302,7 @@ def assemble (files : List ParsedFile) : Result MigrationError (List Migration) 
 // ─── Public entry point ──────────────────────────────────────────────────
 
 def load_done (loaded : Result MigrationError (List ParsedFile)) :
-        IO (Result MigrationError (List Migration)) :=
+    IO (Result MigrationError (List Migration)) :=
     match loaded {
         Result.err e => IO.pure (Result.err e),
         Result.ok files => IO.pure (assemble (sort_parsed files))

@@ -21,7 +21,7 @@ use lib::core {
     mk_screen, screen_get_cell, screen_set_cell,
     style_default, style_merge, style_to_ansi, mk_rect, clamp, mk_text_segment
 }
-use lib::layout { layout_row, layout_column, pad_rect }
+use lib::layout {layout_row, layout_column, pad_rect}
 use lib::text {Glyph, Text.col_of_byte, Text.drop_cols, Text.glyphs, Text.take_width, Text.width, Text.wrap}
 // The Phase 5 stateful widgets' states -- matched on in the new
 // `LeafWidget` arms below.
@@ -29,7 +29,7 @@ use lib::widgets::input {
     InputState, input_lines, input_line_window, cursor_line, nth_lines, InputLine,
     InputState.selection_cols, InputState.press, InputState.drag,
 }
-use lib::widgets::list { ListState }
+use lib::widgets::list {ListState}
 // `LeafWidget`/`DecoratorKind` are matched on, never named in a term, so the
 // unused-import analysis reports them as unused -- the same blind spot
 // `docs/src/macros.md` records for macro-name dispatch. Removing them makes
@@ -328,7 +328,7 @@ def window_dropped (text : String) (caret_byte : I64) (width : I64) : I64 :=
 /// renderers use it.
 #[partial]
 def render_input_line (st : InputState) (line_idx : I64) (text : String) (caret_byte : I64)
-        (row : I64) (area : Rect) (screen : Screen) (active : TextStyle) : Screen :=
+    (row : I64) (area : Rect) (screen : Screen) (active : TextStyle) : Screen :=
     match input_line_window text caret_byte area.width {
         Pair.pair visible dropped =>
             let row_area : Rect := { area with y := row, height := 1 } in
@@ -349,7 +349,7 @@ def render_input_line (st : InputState) (line_idx : I64) (text : String) (caret_
 /// byte `cur`, rendered on row `row`.
 #[partial]
 def render_text_input_row (st : InputState) (text : String) (cur : I64) (row : I64) (line_idx : I64)
-        (area : Rect) (screen : Screen) (active : TextStyle) : Screen :=
+    (area : Rect) (screen : Screen) (active : TextStyle) : Screen :=
     let drawn : Screen := render_input_line st line_idx text cur row area screen active in
     let dropped : I64 := window_dropped text cur area.width in
     underline_at drawn row (area.x + (Text.col_of_byte text cur - dropped))

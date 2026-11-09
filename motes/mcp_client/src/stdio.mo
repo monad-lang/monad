@@ -44,8 +44,8 @@ use toolkit::framing {bad_header, frame, framing_read, need_more, newline_delimi
 
 /// One mounted transport: the child plus the frame buffer.
 pub struct McpStdio {
-  child : Child,
-  buf : String,
+    child : Child,
+    buf : String,
 }
 
 /// Spawn the server and hold its pipes (as `Stdio.start`; `open` is a reserved word). `Result.err` (with the OS
@@ -53,15 +53,15 @@ pub struct McpStdio {
 /// error; nothing here kills or reaps on failure, because there is
 /// nothing to kill or reap yet.
 pub def Stdio.start (cmd : String) (args : List String) : IO (Result String McpStdio) := do {
-  let r <- Proc.spawn cmd args;
-  match r {
-    Result.err e => return (Result.err e.message),
-    Result.ok c =>
-      // Annotated local: a bare struct literal in argument position is
-      // the recorded self-hosted checker gap, silent in a dependency.
-      let s : McpStdio := { child := c, buf := "" } in
-      return (Result.ok s),
-  }
+    let r <- Proc.spawn cmd args;
+    match r {
+        Result.err e => return (Result.err e.message),
+        Result.ok c =>
+            // Annotated local: a bare struct literal in argument position is
+            // the recorded self-hosted checker gap, silent in a dependency.
+            let s : McpStdio := { child := c, buf := "" } in
+            return (Result.ok s),
+    }
 }
 
 /// One frame OUT: the body plus its newline, then the transport.
@@ -69,11 +69,11 @@ pub def Stdio.start (cmd : String) (args : List String) : IO (Result String McpS
 /// A dead peer's EPIPE surfaces here as `Result.err` -- that is the
 /// signal to stop talking to this server.
 pub def Stdio.send (s : McpStdio) (body : String) : IO (Result String McpStdio) := do {
-  let w <- Proc.write s.child (String.concat body "\n");
-  match w {
-    Result.err e => return (Result.err e.message),
-    Result.ok _n => return (Result.ok s),
-  }
+    let w <- Proc.write s.child (String.concat body "\n");
+    match w {
+        Result.err e => return (Result.err e.message),
+        Result.ok _n => return (Result.ok s),
+    }
 }
 
 /// One complete frame IN, or `Result.err` at end of stream.
@@ -85,35 +85,35 @@ pub def Stdio.send (s : McpStdio) (body : String) : IO (Result String McpStdio) 
 /// yields a partial line, so the `need_more` loop's EOF case is the only
 /// way to get here.
 pub def Stdio.read_frame (s : McpStdio) : IO (Result String (Pair McpStdio String)) :=
-  stdio_frame_loop s.child s.buf
+    stdio_frame_loop s.child s.buf
 
 #[partial]
 def stdio_frame_loop (c : Child) (buf : String) : IO (Result String (Pair McpStdio String)) := do {
-  match framing_read FramingMode.newline_delimited buf {
-    FrameRead.need_more => do {
-      let l <- Proc.read_line c;
-      stdio_frame_on_line c buf l
-    },
-    FrameRead.frame body rest =>
-      let s2 : McpStdio := { child := c, buf := rest } in
-      return (Result.ok (Pair.pair s2 body)),
-    FrameRead.bad_header reason => return (Result.err reason),
-  }
+    match framing_read FramingMode.newline_delimited buf {
+        FrameRead.need_more => do {
+            let l <- Proc.read_line c;
+            stdio_frame_on_line c buf l
+        },
+        FrameRead.frame body rest =>
+            let s2 : McpStdio := { child := c, buf := rest } in
+            return (Result.ok (Pair.pair s2 body)),
+        FrameRead.bad_header reason => return (Result.err reason),
+    }
 }
 
 #[partial]
 def stdio_frame_on_line (c : Child) (buf : String) (l : Result StreamError (Option String)) : IO (Result String (Pair McpStdio String)) :=
-  match l {
-    Result.err e => return (Result.err e.message),
-    Result.ok o => stdio_frame_on_option c buf o,
-  }
+    match l {
+        Result.err e => return (Result.err e.message),
+        Result.ok o => stdio_frame_on_option c buf o,
+    }
 
 #[partial]
 def stdio_frame_on_option (c : Child) (buf : String) (o : Option String) : IO (Result String (Pair McpStdio String)) :=
-  match o {
-    Option.none => return (Result.err "connection closed mid-message"),
-    Option.some line => stdio_frame_loop c (String.concat (String.concat buf line) "\n"),
-  }
+    match o {
+        Option.none => return (Result.err "connection closed mid-message"),
+        Option.some line => stdio_frame_loop c (String.concat (String.concat buf line) "\n"),
+    }
 
 /// Send a request and read frames until its response arrives.
 ///
@@ -138,18 +138,18 @@ def stdio_frame_on_option (c : Child) (buf : String) (o : Option String) : IO (R
 /// the specification's own match rule, and text comparison cannot
 /// mis-parse a number the structural walk might.
 pub def Stdio.request (s : McpStdio) (id : Json) (body : String) : IO (Result String (Pair McpStdio String)) := do {
-  let w <- Stdio.send s body;
-  match w {
-    Result.err e => stdio_send_err s e,
-    Result.ok s2 => stdio_response_loop s2 (Json.to_string id),
-  }
+    let w <- Stdio.send s body;
+    match w {
+        Result.err e => stdio_send_err s e,
+        Result.ok s2 => stdio_response_loop s2 (Json.to_string id),
+    }
 }
 
 /// The send failed (EPIPE, most likely): the peer is gone, so tear the
 /// child down before handing the error back.
 def stdio_send_err (s : McpStdio) (e : String) : IO (Result String (Pair McpStdio String)) := do {
-  let _dead <- Stdio.dispose s;
-  return (Result.err e)
+    let _dead <- Stdio.dispose s;
+    return (Result.err e)
 }
 
 /// Read frames until one parses as a response carrying `want`. A failed
@@ -157,19 +157,19 @@ def stdio_send_err (s : McpStdio) (e : String) : IO (Result String (Pair McpStdi
 #[partial]
 #[terminating]
 def stdio_response_loop (s : McpStdio) (want : String) : IO (Result String (Pair McpStdio String)) := do {
-  let fr <- Stdio.read_frame s;
-  match fr {
-    Result.err e => stdio_read_err s e,
-    Result.ok _ => stdio_response_step want fr,
-  }
+    let fr <- Stdio.read_frame s;
+    match fr {
+        Result.err e => stdio_read_err s e,
+        Result.ok _ => stdio_response_step want fr,
+    }
 }
 
 /// The read failed (EOF mid-message, broken pipe, or a frame past
 /// `Proc.read_line`'s line bound): the child is in an unknown state, so
 /// kill and reap it before reporting.
 def stdio_read_err (s : McpStdio) (e : String) : IO (Result String (Pair McpStdio String)) := do {
-  let _dead <- Stdio.dispose s;
-  return (Result.err e)
+    let _dead <- Stdio.dispose s;
+    return (Result.err e)
 }
 
 /// One frame's verdict: the answer, or keep looking. The transport in
@@ -177,50 +177,50 @@ def stdio_read_err (s : McpStdio) (e : String) : IO (Result String (Pair McpStdi
 /// this step was handed has been consumed by the read.
 #[terminating]
 def stdio_response_step (want : String) (fr : Result String (Pair McpStdio String)) : IO (Result String (Pair McpStdio String)) :=
-  match fr {
-    Result.err e => return (Result.err e),
-    Result.ok p => stdio_response_pair want p,
-  }
+    match fr {
+        Result.err e => return (Result.err e),
+        Result.ok p => stdio_response_pair want p,
+    }
 
 #[terminating]
 def stdio_response_pair (want : String) (p : Pair McpStdio String) : IO (Result String (Pair McpStdio String)) :=
-  match p {
-    Pair.pair s2 body => stdio_response_body s2 want body,
-  }
+    match p {
+        Pair.pair s2 body => stdio_response_body s2 want body,
+    }
 
 /// A frame body: parse it, look for the id. Unparseable frames are the
 /// skippable ones -- banners and stray log lines that reached stdout.
 #[terminating]
 def stdio_response_body (s : McpStdio) (want : String) (body : String) : IO (Result String (Pair McpStdio String)) :=
-  match Json.parse body {
-    Result.err _pe => stdio_response_loop s want,
-    Result.ok j => stdio_response_json s want body j,
-  }
+    match Json.parse body {
+        Result.err _pe => stdio_response_loop s want,
+        Result.ok j => stdio_response_json s want body j,
+    }
 
 #[terminating]
 def stdio_response_json (s : McpStdio) (want : String) (body : String) (j : Json) : IO (Result String (Pair McpStdio String)) :=
-  match Json.get_object j {
-    Result.err _e => stdio_response_loop s want,
-    Result.ok obj => stdio_response_obj s want body obj,
-  }
+    match Json.get_object j {
+        Result.err _e => stdio_response_loop s want,
+        Result.ok obj => stdio_response_obj s want body obj,
+    }
 
 #[terminating]
 def stdio_response_obj (s : McpStdio) (want : String) (body : String) (obj : BTreeMap String Json) : IO (Result String (Pair McpStdio String)) :=
-  match Json.object_get "id" obj {
-    Option.none => stdio_response_loop s want,
-    Option.some idj =>
-      if String.beq (Json.to_string idj) want
-      then return (Result.ok (Pair.pair s body))
-      else stdio_response_mismatch s,
-  }
+    match Json.object_get "id" obj {
+        Option.none => stdio_response_loop s want,
+        Option.some idj =>
+            if String.beq (Json.to_string idj) want
+            then return (Result.ok (Pair.pair s body))
+            else stdio_response_mismatch s,
+    }
 
 /// A frame arrived with the WRONG id: the peer is confused about the
 /// conversation, and waiting past it would turn a protocol break into a
 /// hang -- so error out, tearing the child down first (same contract as
 /// every other error exit from `Stdio.request`).
 def stdio_response_mismatch (s : McpStdio) : IO (Result String (Pair McpStdio String)) := do {
-  let _dead <- Stdio.dispose s;
-  return (Result.err "response id does not match the request")
+    let _dead <- Stdio.dispose s;
+    return (Result.err "response id does not match the request")
 }
 
 /// One line of the server's stderr -- its log stream, NOT part of the
@@ -229,18 +229,18 @@ def stdio_response_mismatch (s : McpStdio) : IO (Result String (Pair McpStdio St
 /// `StreamError` is rendered to text here so this module's whole surface
 /// stays `Result String`.
 pub def Stdio.read_log (s : McpStdio) : IO (Result String (Option String)) := do {
-  let l <- Proc.read_stderr_line s.child;
-  return (match l {
-    Result.err e => Result.err e.message,
-    Result.ok o => Result.ok o,
-  })
+    let l <- Proc.read_stderr_line s.child;
+    return (match l {
+        Result.err e => Result.err e.message,
+        Result.ok o => Result.ok o,
+    })
 }
 
 /// Clean teardown: `Proc.wait` closes the pipes, reaps the child, and
 /// frees the slot. For a server that will not exit on its own, use
 /// `Stdio.dispose` -- SIGKILL and reap in one call.
 pub def Stdio.close (s : McpStdio) : IO I64 :=
-  Proc.wait s.child
+    Proc.wait s.child
 
 /// Forceful teardown: SIGKILL, then reap -- `Proc.kill` is the whole
 /// thing, one call that kills, reaps, and frees the slot. Idempotent by
@@ -249,4 +249,4 @@ pub def Stdio.close (s : McpStdio) : IO I64 :=
 /// death the reap already absorbed, so this returns `Unit` where it
 /// once returned a second wait's -1.
 pub def Stdio.dispose (s : McpStdio) : IO Unit :=
-  Proc.kill s.child
+    Proc.kill s.child

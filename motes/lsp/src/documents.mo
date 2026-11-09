@@ -31,7 +31,7 @@
 use json::json {Json}
 use lsp::params {lsp_param_index, lsp_param_nested_i64, lsp_param_nested_str, lsp_param_str}
 use toolkit::docstore {
-  DocStore, docstore_change, docstore_close, docstore_open, docstore_text, docstore_version,
+    DocStore, docstore_change, docstore_close, docstore_open, docstore_text, docstore_version,
 }
 use toolkit::jsonrpc {rpc_field}
 
@@ -63,7 +63,7 @@ pub def document_edit_changed (e : DocumentEdit) : Bool := e.changed
 /// a store.
 #[partial]
 pub def document_uri (params : Json) : Option String :=
-  lsp_param_nested_str "textDocument" "uri" params
+    lsp_param_nested_str "textDocument" "uri" params
 
 /// `didOpen`: the client is showing a document and sends its whole text.
 ///
@@ -76,17 +76,17 @@ pub def document_uri (params : Json) : Option String :=
 /// what it has, and what it has is the later statement.
 #[partial]
 pub def document_open (params : Json) (store : DocStore) : Option DocumentEdit :=
-  match document_uri params {
-    Option.none => Option.none,
-    Option.some uri =>
-      match lsp_param_nested_str "textDocument" "text" params {
+    match document_uri params {
         Option.none => Option.none,
-        Option.some text =>
-          let changed : Bool := document_text_changed uri store text in
-          let version : I64 := document_version params uri store in
-          Option.some (DocumentEdit.mk uri (docstore_open uri version text store) changed),
-      },
-  }
+        Option.some uri =>
+            match lsp_param_nested_str "textDocument" "text" params {
+                Option.none => Option.none,
+                Option.some text =>
+                    let changed : Bool := document_text_changed uri store text in
+                    let version : I64 := document_version params uri store in
+                    Option.some (DocumentEdit.mk uri (docstore_open uri version text store) changed),
+            },
+    }
 
 /// `didChange`: full-text sync, so the single element of `contentChanges` is the
 /// whole buffer.
@@ -101,17 +101,17 @@ pub def document_open (params : Json) (store : DocStore) : Option DocumentEdit :
 /// `document_version` has the argument.
 #[partial]
 pub def document_change (params : Json) (store : DocStore) : Option DocumentEdit :=
-  match document_uri params {
-    Option.none => Option.none,
-    Option.some uri =>
-      match lsp_param_str "text" (document_content_change params) {
+    match document_uri params {
         Option.none => Option.none,
-        Option.some text =>
-          let changed : Bool := document_text_changed uri store text in
-          let version : I64 := document_version params uri store in
-          Option.some (DocumentEdit.mk uri (docstore_change uri version text store) changed),
-      },
-  }
+        Option.some uri =>
+            match lsp_param_str "text" (document_content_change params) {
+                Option.none => Option.none,
+                Option.some text =>
+                    let changed : Bool := document_text_changed uri store text in
+                    let version : I64 := document_version params uri store in
+                    Option.some (DocumentEdit.mk uri (docstore_change uri version text store) changed),
+            },
+    }
 
 /// `didClose`: the document is gone from the client's view.
 ///
@@ -128,10 +128,10 @@ pub def document_change (params : Json) (store : DocStore) : Option DocumentEdit
 /// store has nothing to say.
 #[partial]
 pub def document_close (params : Json) (store : DocStore) : Option DocumentEdit :=
-  match document_uri params {
-    Option.none => Option.none,
-    Option.some uri => Option.some (DocumentEdit.mk uri (docstore_close uri store) true),
-  }
+    match document_uri params {
+        Option.none => Option.none,
+        Option.some uri => Option.some (DocumentEdit.mk uri (docstore_close uri store) true),
+    }
 
 /// The first element of `contentChanges`, whose node the caller reads `text` from.
 ///
@@ -144,10 +144,10 @@ pub def document_close (params : Json) (store : DocStore) : Option DocumentEdit 
 /// first is the arbitrary pick with the least machinery behind it.
 #[partial]
 def document_content_change (params : Json) : Json :=
-  match lsp_param_index 0 (rpc_field "contentChanges" params) {
-    Option.none => Json.make_null,
-    Option.some change => change,
-  }
+    match lsp_param_index 0 (rpc_field "contentChanges" params) {
+        Option.none => Json.make_null,
+        Option.some change => change,
+    }
 
 /// The version the client stated for this change, or the one already recorded.
 ///
@@ -165,17 +165,17 @@ def document_content_change (params : Json) : Json :=
 /// explicitly is a version like any other.
 #[partial]
 def document_version (params : Json) (uri : String) (store : DocStore) : I64 :=
-  match lsp_param_nested_i64 "textDocument" "version" params {
-    Option.some v => v,
-    Option.none => document_recorded_version uri store,
-  }
+    match lsp_param_nested_i64 "textDocument" "version" params {
+        Option.some v => v,
+        Option.none => document_recorded_version uri store,
+    }
 
 #[partial]
 def document_recorded_version (uri : String) (store : DocStore) : I64 :=
-  match docstore_version uri store {
-    Option.none => 0,
-    Option.some v => v,
-  }
+    match docstore_version uri store {
+        Option.none => 0,
+        Option.some v => v,
+    }
 
 /// Whether the incoming text differs from the text already held.
 ///
@@ -184,7 +184,7 @@ def document_recorded_version (uri : String) (store : DocStore) : I64 :=
 /// no earlier knowledge of.
 #[partial]
 def document_text_changed (uri : String) (store : DocStore) (text : String) : Bool :=
-  match docstore_text uri store {
-    Option.none => true,
-    Option.some old => Bool.not (String.beq old text),
-  }
+    match docstore_text uri store {
+        Option.none => true,
+        Option.some old => Bool.not (String.beq old text),
+    }

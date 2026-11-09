@@ -42,7 +42,7 @@ pub struct Spec {
 pub def spec (base : String) (param : String) (key_type : Term) (result_type : Term)
     (less_than : String) (fallback : Term) : Spec :=
     { base := base, param := param, key_type := key_type, result_type := result_type,
-      less_than := less_than, fallback := fallback }
+        less_than := less_than, fallback := fallback }
 
 /// A built node: its id is its position in the emitted list, and a fork
 /// names its children by id.
@@ -148,6 +148,6 @@ def helper_name (spec : Spec) (id : I64) : String :=
 def entry_text (spec : Spec) (root : I64) : String :=
     if I64.lt root 0
     then def_text [] Vis.vis_public spec.base [param spec.param spec.key_type]
-            spec.result_type spec.fallback
+        spec.result_type spec.fallback
     else def_text [] Vis.vis_public spec.base [param spec.param spec.key_type]
-            spec.result_type (app (global (helper_name spec root)) (var 0 spec.param))
+        spec.result_type (app (global (helper_name spec root)) (var 0 spec.param))

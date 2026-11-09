@@ -48,7 +48,7 @@ def read_source (p : Path) : IO (Option SourceModule) := do {
                         Pair.pair segments mote =>
                             let module_ : SourceModule :=
                                 { segments := segments, mote := mote,
-                                  file_path := Path.to_string p, source := source }
+                                    file_path := Path.to_string p, source := source }
                             in
                             IO.pure (Option.some module_),
                     },

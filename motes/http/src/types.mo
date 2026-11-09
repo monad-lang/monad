@@ -15,25 +15,25 @@ use std::stream {Stream, StreamError, FdStream, FdStream.poll, FdStream.poll_rea
 // Variants mirror RFC 9110 §9.
 
 pub type Method {
-  GET,
-  HEAD,
-  POST,
-  PUT,
-  DELETE,
-  CONNECT,
-  OPTIONS,
-  TRACE,
-  PATCH
+    GET,
+    HEAD,
+    POST,
+    PUT,
+    DELETE,
+    CONNECT,
+    OPTIONS,
+    TRACE,
+    PATCH
 }
-open Method { GET, HEAD, POST, PUT, DELETE, CONNECT, OPTIONS, TRACE, PATCH }
+open Method {GET, HEAD, POST, PUT, DELETE, CONNECT, OPTIONS, TRACE, PATCH}
 
 // ── HttpVersion ─────────────────────────────────────────────────────────
 
 pub type HttpVersion {
-  http1_0,
-  http1_1
+    http1_0,
+    http1_1
 }
-open HttpVersion { http1_0, http1_1 }
+open HttpVersion {http1_0, http1_1}
 
 // ── Status ──────────────────────────────────────────────────────────────
 // Status codes as U16 with named constants. An enum of 60+ variants is
@@ -72,65 +72,65 @@ pub def Status.service_unavailable : U16 := 503u16
 // `List` scan against an already-lowercased stored key.
 
 pub type Headers {
-  headers (pairs : List (Pair String String))
+    headers (pairs : List (Pair String String))
 }
-open Headers { headers }
+open Headers {headers}
 
 pub def Headers.empty : Headers :=
-  Headers.headers List.empty
+    Headers.headers List.empty
 
 /// Explicit deep copy. `Clone` is never inserted; a handler that needs an
 /// owned `Headers` from a shared one asks for it (e.g. the dev middleware
 /// when it rebuilds a response).
 pub instance Clone Headers {
-  def clone (h : Shared Headers) : Headers :=
-    match Shared.get h {
-      Headers.headers pairs => Headers.headers (Clone.clone (Shared.of pairs))
-    }
+    def clone (h : Shared Headers) : Headers :=
+        match Shared.get h {
+            Headers.headers pairs => Headers.headers (Clone.clone (Shared.of pairs))
+        }
 }
 
 pub def Headers.get (key : String) (h : Headers) : Option String :=
-  let lk : String := String.to_lowercase key in
-  match h {
-    Headers.headers pairs => headers_lookup lk pairs
-  }
+    let lk : String := String.to_lowercase key in
+    match h {
+        Headers.headers pairs => headers_lookup lk pairs
+    }
 
 def headers_lookup (lk : String) (pairs : List (Pair String String)) : Option String :=
-  match pairs {
-    List.empty => Option.none,
-    List.cons head rest =>
-      match head {
-        Pair.pair k v =>
-          if String.beq lk k
-          then Option.some v
-          else headers_lookup lk rest
-      }
-  }
+    match pairs {
+        List.empty => Option.none,
+        List.cons head rest =>
+            match head {
+                Pair.pair k v =>
+                    if String.beq lk k
+                    then Option.some v
+                    else headers_lookup lk rest
+            }
+    }
 
 pub def Headers.set (key : String) (val : String) (h : Headers) : Headers :=
-  let lk : String := String.to_lowercase key in
-  match h {
-    Headers.headers pairs =>
-      Headers.headers (List.cons (Pair.pair lk val) (headers_remove lk pairs))
-  }
+    let lk : String := String.to_lowercase key in
+    match h {
+        Headers.headers pairs =>
+            Headers.headers (List.cons (Pair.pair lk val) (headers_remove lk pairs))
+    }
 
 def headers_remove (lk : String) (pairs : List (Pair String String)) : List (Pair String String) :=
-  match pairs {
-    List.empty => List.empty,
-    List.cons head rest =>
-      match head {
-        Pair.pair k v =>
-          if String.beq lk k
-          then headers_remove lk rest
-          else List.cons (Pair.pair k v) (headers_remove lk rest)
-      }
-  }
+    match pairs {
+        List.empty => List.empty,
+        List.cons head rest =>
+            match head {
+                Pair.pair k v =>
+                    if String.beq lk k
+                    then headers_remove lk rest
+                    else List.cons (Pair.pair k v) (headers_remove lk rest)
+            }
+    }
 
 pub def Headers.add (key : String) (val : String) (h : Headers) : Headers :=
-  let lk : String := String.to_lowercase key in
-  match h {
-    Headers.headers pairs => Headers.headers (List.cons (Pair.pair lk val) pairs)
-  }
+    let lk : String := String.to_lowercase key in
+    match h {
+        Headers.headers pairs => Headers.headers (List.cons (Pair.pair lk val) pairs)
+    }
 
 // ── header validation ───────────────────────────────────────────────────
 //
@@ -141,85 +141,85 @@ pub def Headers.add (key : String) (val : String) (h : Headers) : Headers :=
 // CR or LF (that is the response/request-splitting shape).
 
 def Headers.is_token_char (b : U8) : Bool :=
-  if U8.lt b 33u8 then false
-  else if U8.lt 126u8 b then false
-  else if U8.beq b 34u8 then false
-  else if U8.beq b 40u8 then false
-  else if U8.beq b 41u8 then false
-  else if U8.beq b 44u8 then false
-  else if U8.beq b 47u8 then false
-  else if U8.beq b 58u8 then false
-  else if U8.beq b 59u8 then false
-  else if U8.beq b 60u8 then false
-  else if U8.beq b 61u8 then false
-  else if U8.beq b 62u8 then false
-  else if U8.beq b 63u8 then false
-  else if U8.beq b 64u8 then false
-  else if U8.beq b 91u8 then false
-  else if U8.beq b 92u8 then false
-  else if U8.beq b 93u8 then false
-  else if U8.beq b 123u8 then false
-  else if U8.beq b 125u8 then false
-  else true
+    if U8.lt b 33u8 then false
+    else if U8.lt 126u8 b then false
+    else if U8.beq b 34u8 then false
+    else if U8.beq b 40u8 then false
+    else if U8.beq b 41u8 then false
+    else if U8.beq b 44u8 then false
+    else if U8.beq b 47u8 then false
+    else if U8.beq b 58u8 then false
+    else if U8.beq b 59u8 then false
+    else if U8.beq b 60u8 then false
+    else if U8.beq b 61u8 then false
+    else if U8.beq b 62u8 then false
+    else if U8.beq b 63u8 then false
+    else if U8.beq b 64u8 then false
+    else if U8.beq b 91u8 then false
+    else if U8.beq b 92u8 then false
+    else if U8.beq b 93u8 then false
+    else if U8.beq b 123u8 then false
+    else if U8.beq b 125u8 then false
+    else true
 
 #[terminating]
 def Headers.token_all (bytes : List U8) : Bool :=
-  match bytes {
-    List.empty => true,
-    List.cons b rest => Bool.and (Headers.is_token_char b) (Headers.token_all rest)
-  }
+    match bytes {
+        List.empty => true,
+        List.cons b rest => Bool.and (Headers.is_token_char b) (Headers.token_all rest)
+    }
 
 pub def Headers.valid_name (name : String) : Bool :=
-  Bool.and (Bool.not (String.is_empty name)) (Headers.token_all (String.to_list name))
+    Bool.and (Bool.not (String.is_empty name)) (Headers.token_all (String.to_list name))
 
 /// A header value may not contain NUL, CR or LF (message splitting), nor
 /// any other C0 control except HTAB, nor DEL. `Headers.valid_value` is the
 /// backstop every serializer runs, so this is the strict set.
 def Headers.invalid_value_byte (b : U8) : Bool :=
-  if U8.beq b 9u8
-  then false
-  else if U8.lt b 32u8
-  then true
-  else U8.beq b 127u8
+    if U8.beq b 9u8
+    then false
+    else if U8.lt b 32u8
+    then true
+    else U8.beq b 127u8
 
 #[terminating]
 def Headers.value_all (bytes : List U8) : Bool :=
-  match bytes {
-    List.empty => true,
-    List.cons b rest =>
-      Bool.and (Bool.not (Headers.invalid_value_byte b)) (Headers.value_all rest)
-  }
+    match bytes {
+        List.empty => true,
+        List.cons b rest =>
+            Bool.and (Bool.not (Headers.invalid_value_byte b)) (Headers.value_all rest)
+    }
 
 pub def Headers.valid_value (value : String) : Bool :=
-  Headers.value_all (String.to_list value)
+    Headers.value_all (String.to_list value)
 
 /// `Headers.set`, but reject a non-token name or a value with CR/LF/NUL.
 pub def Headers.set_checked (key : String) (val : String) (h : Headers) : Result String Headers :=
-  if Bool.not (Headers.valid_name key)
-  then Result.err "invalid header name"
-  else if Bool.not (Headers.valid_value val)
-  then Result.err "invalid header value"
-  else Result.ok (Headers.set key val h)
+    if Bool.not (Headers.valid_name key)
+    then Result.err "invalid header name"
+    else if Bool.not (Headers.valid_value val)
+    then Result.err "invalid header value"
+    else Result.ok (Headers.set key val h)
 
 /// `Headers.add`, with the same validation.
 pub def Headers.add_checked (key : String) (val : String) (h : Headers) : Result String Headers :=
-  if Bool.not (Headers.valid_name key)
-  then Result.err "invalid header name"
-  else if Bool.not (Headers.valid_value val)
-  then Result.err "invalid header value"
-  else Result.ok (Headers.add key val h)
+    if Bool.not (Headers.valid_name key)
+    then Result.err "invalid header name"
+    else if Bool.not (Headers.valid_value val)
+    then Result.err "invalid header value"
+    else Result.ok (Headers.add key val h)
 
 /// Drop every value stored under `key`. Absent is not an error.
 pub def Headers.remove (key : String) (h : Headers) : Headers :=
-  let lk : String := String.to_lowercase key in
-  match h {
-    Headers.headers pairs => Headers.headers (headers_remove lk pairs)
-  }
+    let lk : String := String.to_lowercase key in
+    match h {
+        Headers.headers pairs => Headers.headers (headers_remove lk pairs)
+    }
 
 pub def Headers.is_empty (h : Headers) : Bool :=
-  match h {
-    Headers.headers pairs => List.is_empty pairs
-  }
+    match h {
+        Headers.headers pairs => List.is_empty pairs
+    }
 
 /// Every value stored under `key`, in stored (front-of-list) order.
 ///
@@ -229,35 +229,35 @@ pub def Headers.is_empty (h : Headers) : Bool :=
 /// request-smuggling shape, not a precedence question -- so framing needs to
 /// see all of them.
 pub def Headers.get_all (key : String) (h : Headers) : List String :=
-  let lk : String := String.to_lowercase key in
-  match h {
-    Headers.headers pairs => headers_lookup_all lk pairs
-  }
+    let lk : String := String.to_lowercase key in
+    match h {
+        Headers.headers pairs => headers_lookup_all lk pairs
+    }
 
 def headers_lookup_all (lk : String) (pairs : List (Pair String String)) : List String :=
-  match pairs {
-    List.empty => List.empty,
-    List.cons head rest =>
-      match head {
-        Pair.pair k v =>
-          if String.beq lk (String.to_lowercase k)
-          then List.cons v (headers_lookup_all lk rest)
-          else headers_lookup_all lk rest
-      }
-  }
+    match pairs {
+        List.empty => List.empty,
+        List.cons head rest =>
+            match head {
+                Pair.pair k v =>
+                    if String.beq lk (String.to_lowercase k)
+                    then List.cons v (headers_lookup_all lk rest)
+                    else headers_lookup_all lk rest
+            }
+    }
 
 // ── Uri ─────────────────────────────────────────────────────────────────
 // Structured URI. Built by the parser (uri.mo), never hand-constructed.
 
 pub type Uri {
-  uri (scheme : String) (userinfo : Option String) (host : String) (port : Option U16) (path : String) (query : Option String) (fragment : Option String)
+    uri (scheme : String) (userinfo : Option String) (host : String) (port : Option U16) (path : String) (query : Option String) (fragment : Option String)
 }
-open Uri { uri }
+open Uri {uri}
 
 pub def Uri.host (u : Uri) : String :=
-  match u {
-    Uri.uri _ _ h _ _ _ _ => h
-  }
+    match u {
+        Uri.uri _ _ h _ _ _ _ => h
+    }
 
 // ── Body ────────────────────────────────────────────────────────────────
 // A tagged union of transport representations, not content types. No `Json`
@@ -266,40 +266,40 @@ pub def Uri.host (u : Uri) : String :=
 // encoded JSON and set `Content-Type` themselves.
 
 pub type Body {
-  empty,
-  bytes (data : List U8),
-  text (data : String),
-  stream (next : Unit -> IO (Option (List U8))),
-  form (fields : List (Pair String String))
+    empty,
+    bytes (data : List U8),
+    text (data : String),
+    stream (next : Unit -> IO (Option (List U8))),
+    form (fields : List (Pair String String))
 }
-open Body { empty, bytes, text, stream, form }
+open Body {empty, bytes, text, stream, form}
 
 pub def Body.is_empty (b : Body) : Bool :=
-  match b {
-    Body.empty => true,
-    Body.bytes _ => false,
-    Body.text _ => false,
-    Body.stream _ => false,
-    Body.form _ => false
-  }
+    match b {
+        Body.empty => true,
+        Body.bytes _ => false,
+        Body.text _ => false,
+        Body.stream _ => false,
+        Body.form _ => false
+    }
 
 pub def Body.is_text (b : Body) (s : String) : Bool :=
-  match b {
-    Body.text data => String.beq data s,
-    Body.empty => false,
-    Body.bytes _ => false,
-    Body.stream _ => false,
-    Body.form _ => false
-  }
+    match b {
+        Body.text data => String.beq data s,
+        Body.empty => false,
+        Body.bytes _ => false,
+        Body.stream _ => false,
+        Body.form _ => false
+    }
 
 pub def Body.is_stream (b : Body) : Bool :=
-  match b {
-    Body.stream _ => true,
-    Body.empty => false,
-    Body.bytes _ => false,
-    Body.text _ => false,
-    Body.form _ => false
-  }
+    match b {
+        Body.stream _ => true,
+        Body.empty => false,
+        Body.bytes _ => false,
+        Body.text _ => false,
+        Body.form _ => false
+    }
 
 // ── Transport ───────────────────────────────────────────────────────────
 // A tagged union of byte-level transports, so `moose` (and later `moon`)
@@ -315,29 +315,29 @@ pub def Body.is_stream (b : Body) : Bool :=
 // write writes the whole buffer, which stays the caller's to free.
 
 pub type Transport {
-  plain (s : FdStream),
-  secure (read : I64 -> IO (Result StreamError ByteBuf))
-         (write : ByteBuf -> IO (Result StreamError I64))
-         (close : Unit -> IO Unit)
-         /// Decrypted bytes already buffered by TLS (`SSL_pending`); a
-         /// readiness wait must not sleep on those.
-         (pending : Unit -> IO I64)
-         (wait_read : I64 -> IO (Result StreamError Bool))
-         (wait_write : I64 -> IO (Result StreamError Bool))
+    plain (s : FdStream),
+    secure (read : I64 -> IO (Result StreamError ByteBuf))
+        (write : ByteBuf -> IO (Result StreamError I64))
+        (close : Unit -> IO Unit)
+        /// Decrypted bytes already buffered by TLS (`SSL_pending`); a
+        /// readiness wait must not sleep on those.
+        (pending : Unit -> IO I64)
+        (wait_read : I64 -> IO (Result StreamError Bool))
+        (wait_write : I64 -> IO (Result StreamError Bool))
 }
-open Transport { plain, secure }
+open Transport {plain, secure}
 
 pub def Transport.read (t : Transport) (max : I64) : IO (Result StreamError ByteBuf) :=
-  match t {
-    Transport.plain s => Stream.read s max,
-    Transport.secure read _ _ _ _ _ => read max
-  }
+    match t {
+        Transport.plain s => Stream.read s max,
+        Transport.secure read _ _ _ _ _ => read max
+    }
 
 pub def Transport.write (t : Transport) (buf : ByteBuf) : IO (Result StreamError I64) :=
-  match t {
-    Transport.plain s => Stream.write s buf,
-    Transport.secure _ write _ _ _ _ => write buf
-  }
+    match t {
+        Transport.plain s => Stream.write s buf,
+        Transport.secure _ write _ _ _ _ => write buf
+    }
 
 // `close` takes a `Unit` where the two payload fields are called with the
 // values they act on: in the compiled backend an action stored in a ctor
@@ -346,25 +346,25 @@ pub def Transport.write (t : Transport) (buf : ByteBuf) : IO (Result StreamError
 // shape that survives (probed 2026-10-08; `Body.stream`'s action field is
 // the same trap, never constructed anywhere).
 pub def Transport.close (t : Transport) : IO Unit :=
-  match t {
-    Transport.plain s => Stream.close s,
-    Transport.secure _ _ close _ _ _ => close unit
-  }
+    match t {
+        Transport.plain s => Stream.close s,
+        Transport.secure _ _ close _ _ _ => close unit
+    }
 
 /// Wait up to `timeout_ms` for readable: `ok true` ready, `ok false`
 /// timed out. Plain streams poll the descriptor; TLS first consults
 /// `pending` so plaintext already decrypted in the SSL object never waits.
 pub def Transport.wait_read (t : Transport) (timeout_ms : I64) : IO (Result StreamError Bool) :=
-  match t {
-    Transport.plain s => FdStream.poll s FdStream.poll_read timeout_ms,
-    Transport.secure _ _ _ _ wait_read _ => wait_read timeout_ms
-  }
+    match t {
+        Transport.plain s => FdStream.poll s FdStream.poll_read timeout_ms,
+        Transport.secure _ _ _ _ wait_read _ => wait_read timeout_ms
+    }
 
 pub def Transport.wait_write (t : Transport) (timeout_ms : I64) : IO (Result StreamError Bool) :=
-  match t {
-    Transport.plain s => FdStream.poll s FdStream.poll_write timeout_ms,
-    Transport.secure _ _ _ _ _ wait_write => wait_write timeout_ms
-  }
+    match t {
+        Transport.plain s => FdStream.poll s FdStream.poll_write timeout_ms,
+        Transport.secure _ _ _ _ _ wait_write => wait_write timeout_ms
+    }
 
 // The wire parsers work on `List U8`, so the clients and servers above the
 // transport convert at this boundary, once per read and once per write.
@@ -373,35 +373,35 @@ pub def Transport.wait_write (t : Transport) (timeout_ms : I64) : IO (Result Str
 /// One read of at most `max` bytes as a list; `Result.ok List.empty` at
 /// end of stream.
 pub def Transport.read_bytes (t : Transport) (max : I64) : IO (Result String (List U8)) := do {
-  let r <- Transport.read t max;
-  Transport.read_bytes_got r
+    let r <- Transport.read t max;
+    Transport.read_bytes_got r
 }
 
 def Transport.read_bytes_got (r : Result StreamError ByteBuf) : IO (Result String (List U8)) :=
-  match r {
-    Result.err e => IO.pure (Result.err e.message),
-    Result.ok buf => Transport.buf_bytes buf
-  }
+    match r {
+        Result.err e => IO.pure (Result.err e.message),
+        Result.ok buf => Transport.buf_bytes buf
+    }
 
 def Transport.buf_bytes (buf : ByteBuf) : IO (Result String (List U8)) := do {
-  let bytes <- ByteBuf.to_list buf (ByteBuf.length buf);
-  let _ <- ByteBuf.free buf;
-  return (Result.ok bytes)
+    let bytes <- ByteBuf.to_list buf (ByteBuf.length buf);
+    let _ <- ByteBuf.free buf;
+    return (Result.ok bytes)
 }
 
 /// Write all of `bytes`; the ok payload is the full length.
 pub def Transport.write_bytes (t : Transport) (bytes : List U8) : IO (Result String U64) := do {
-  let buf <- ByteBuf.of_list bytes;
-  let r <- Transport.write t buf;
-  let _ <- ByteBuf.free buf;
-  return (Transport.wrote r)
+    let buf <- ByteBuf.of_list bytes;
+    let r <- Transport.write t buf;
+    let _ <- ByteBuf.free buf;
+    return (Transport.wrote r)
 }
 
 def Transport.wrote (r : Result StreamError I64) : Result String U64 :=
-  match r {
-    Result.err e => Result.err e.message,
-    Result.ok n => Result.ok (I64.to_u64 n)
-  }
+    match r {
+        Result.err e => Result.err e.message,
+        Result.ok n => Result.ok (I64.to_u64 n)
+    }
 
 // ── Framing ─────────────────────────────────────────────────────────────
 // How a message's body is delimited (RFC 9110 §6.3). `no_body` is not the
@@ -416,133 +416,133 @@ def Transport.wrote (r : Result StreamError I64) : Result String U64 :=
 // either a length or a close.
 
 pub type Framing {
-  content_length (len : I64),
-  chunked,
-  until_eof,
-  no_body
+    content_length (len : I64),
+    chunked,
+    until_eof,
+    no_body
 }
-open Framing { content_length, chunked, until_eof, no_body }
+open Framing {content_length, chunked, until_eof, no_body}
 
 // ── Request / Response ──────────────────────────────────────────────────
 
 pub struct Request {
-  method : Method,
-  uri : Uri,
-  headers : Headers,
-  version : HttpVersion,
-  body : Body,
-  params : List (Pair String String) := List.empty
+    method : Method,
+    uri : Uri,
+    headers : Headers,
+    version : HttpVersion,
+    body : Body,
+    params : List (Pair String String) := List.empty
 }
 
 pub struct Response {
-  status : U16,
-  headers : Headers,
-  version : HttpVersion,
-  body : Body
+    status : U16,
+    headers : Headers,
+    version : HttpVersion,
+    body : Body
 }
 
 /// Convenience constructor: a GET request with empty headers, HTTP/1.1, no body.
 pub def Request.get (uri : Uri) : Request :=
-  { method := Method.GET, uri := uri, headers := Headers.empty, version := HttpVersion.http1_1, body := Body.empty }
+    { method := Method.GET, uri := uri, headers := Headers.empty, version := HttpVersion.http1_1, body := Body.empty }
 
 /// Convenience constructor: a 200 response with a text body and empty headers.
 pub def Response.ok_text (s : String) : Response :=
-  { status := Status.ok, headers := Headers.empty, version := HttpVersion.http1_1, body := Body.text s }
+    { status := Status.ok, headers := Headers.empty, version := HttpVersion.http1_1, body := Body.text s }
 
 /// A response with the given status and a text body.
 pub def Response.text (status : U16) (s : String) : Response :=
-  { status := status, headers := Headers.empty, version := HttpVersion.http1_1, body := Body.text s }
+    { status := status, headers := Headers.empty, version := HttpVersion.http1_1, body := Body.text s }
 
 /// A response with the given status and an HTML body.
 pub def Response.html (status : U16) (s : String) : Response :=
-  { status := status, headers := Headers.set "Content-Type" "text/html; charset=utf-8" Headers.empty, version := HttpVersion.http1_1, body := Body.text s }
+    { status := status, headers := Headers.set "Content-Type" "text/html; charset=utf-8" Headers.empty, version := HttpVersion.http1_1, body := Body.text s }
 
 /// A response with the given status and an already-encoded JSON body. The
 /// `http` motes never depend on a serializer: callers encode and pass the
 /// string.
 pub def Response.json (status : U16) (s : String) : Response :=
-  { status := status, headers := Headers.set "Content-Type" "application/json" Headers.empty, version := HttpVersion.http1_1, body := Body.text s }
+    { status := status, headers := Headers.set "Content-Type" "application/json" Headers.empty, version := HttpVersion.http1_1, body := Body.text s }
 
 /// JSON from raw bytes (for an encoder that produces bytes).
 pub def Response.json_bytes (status : U16) (b : List U8) : Response :=
-  { status := status, headers := Headers.set "Content-Type" "application/json" Headers.empty, version := HttpVersion.http1_1, body := Body.bytes b }
+    { status := status, headers := Headers.set "Content-Type" "application/json" Headers.empty, version := HttpVersion.http1_1, body := Body.bytes b }
 
 /// A response with the given status, raw bytes and content type.
 pub def Response.bytes (status : U16) (b : List U8) (content_type : String) : Response :=
-  { status := status, headers := Headers.set "Content-Type" content_type Headers.empty, version := HttpVersion.http1_1, body := Body.bytes b }
+    { status := status, headers := Headers.set "Content-Type" content_type Headers.empty, version := HttpVersion.http1_1, body := Body.bytes b }
 
 /// 204 No Content: no body, no representation.
 pub def Response.no_content : Response :=
-  { status := Status.no_content, headers := Headers.empty, version := HttpVersion.http1_1, body := Body.empty }
+    { status := Status.no_content, headers := Headers.empty, version := HttpVersion.http1_1, body := Body.empty }
 
 /// A redirect with a `Location` header. `307`/`308` preserve the method;
 /// `301`/`302`/`303` are the usual choices (`303` after a POST).
 pub def Response.redirect (status : U16) (location : String) : Response :=
-  { status := status, headers := Headers.set "Location" location Headers.empty, version := HttpVersion.http1_1, body := Body.empty }
+    { status := status, headers := Headers.set "Location" location Headers.empty, version := HttpVersion.http1_1, body := Body.empty }
 
 pub def Response.with_header (key : String) (value : String) (res : Response) : Response :=
-  { res with headers := Headers.set key value res.headers }
+    { res with headers := Headers.set key value res.headers }
 
 pub def Response.with_status (status : U16) (res : Response) : Response :=
-  { res with status := status }
+    { res with status := status }
 
 // ── Instances ───────────────────────────────────────────────────────────
 
 def Method.to_i64 (m : Method) : I64 :=
-  match m {
-    Method.GET => 0,
-    Method.HEAD => 1,
-    Method.POST => 2,
-    Method.PUT => 3,
-    Method.DELETE => 4,
-    Method.CONNECT => 5,
-    Method.OPTIONS => 6,
-    Method.TRACE => 7,
-    Method.PATCH => 8
-  }
+    match m {
+        Method.GET => 0,
+        Method.HEAD => 1,
+        Method.POST => 2,
+        Method.PUT => 3,
+        Method.DELETE => 4,
+        Method.CONNECT => 5,
+        Method.OPTIONS => 6,
+        Method.TRACE => 7,
+        Method.PATCH => 8
+    }
 
 pub instance BEq Method {
-  def beq (a b : Method) : Bool := I64.beq (Method.to_i64 a) (Method.to_i64 b)
+    def beq (a b : Method) : Bool := I64.beq (Method.to_i64 a) (Method.to_i64 b)
 }
 
 /// Nullary enum: a bitwise duplicate is a register move.
 pub instance Copy Method {
-  def copy (m : Method) : Pair Method Method := Pair.pair m m
+    def copy (m : Method) : Pair Method Method := Pair.pair m m
 }
 
 pub instance Show Method {
-  def show (m : Method) : String :=
-    match m {
-      Method.GET => "GET",
-      Method.HEAD => "HEAD",
-      Method.POST => "POST",
-      Method.PUT => "PUT",
-      Method.DELETE => "DELETE",
-      Method.CONNECT => "CONNECT",
-      Method.OPTIONS => "OPTIONS",
-      Method.TRACE => "TRACE",
-      Method.PATCH => "PATCH"
-    }
+    def show (m : Method) : String :=
+        match m {
+            Method.GET => "GET",
+            Method.HEAD => "HEAD",
+            Method.POST => "POST",
+            Method.PUT => "PUT",
+            Method.DELETE => "DELETE",
+            Method.CONNECT => "CONNECT",
+            Method.OPTIONS => "OPTIONS",
+            Method.TRACE => "TRACE",
+            Method.PATCH => "PATCH"
+        }
 }
 
 def HttpVersion.to_i64 (v : HttpVersion) : I64 :=
-  match v {
-    HttpVersion.http1_0 => 0,
-    HttpVersion.http1_1 => 1
-  }
+    match v {
+        HttpVersion.http1_0 => 0,
+        HttpVersion.http1_1 => 1
+    }
 
 pub instance BEq HttpVersion {
-  def beq (a b : HttpVersion) : Bool := I64.beq (HttpVersion.to_i64 a) (HttpVersion.to_i64 b)
+    def beq (a b : HttpVersion) : Bool := I64.beq (HttpVersion.to_i64 a) (HttpVersion.to_i64 b)
 }
 
 pub instance Copy HttpVersion {
-  def copy (v : HttpVersion) : Pair HttpVersion HttpVersion := Pair.pair v v
+    def copy (v : HttpVersion) : Pair HttpVersion HttpVersion := Pair.pair v v
 }
 
 pub instance Show HttpVersion {
-  def show (v : HttpVersion) : String :=
-    match v {
-      HttpVersion.http1_0 => "HTTP/1.0",
-      HttpVersion.http1_1 => "HTTP/1.1"
-    }
+    def show (v : HttpVersion) : String :=
+        match v {
+            HttpVersion.http1_0 => "HTTP/1.0",
+            HttpVersion.http1_1 => "HTTP/1.1"
+        }
 }

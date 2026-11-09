@@ -22,14 +22,14 @@ pub type DbM (Bk : Type) (A : Type) {
 }
 
 pub def DbM.underlying {Bk : Type} {A : Type} (m : DbM Bk A) :
-        ReaderT Bk (ResultT SqlError IO) A :=
+    ReaderT Bk (ResultT SqlError IO) A :=
     match m {
         DbM.mk r => r
     }
 
 /// Run the computation against a connection.
 pub def DbM.run {Bk : Type} {A : Type} (m : DbM Bk A) (conn : Bk) :
-        IO (Result SqlError A) :=
+    IO (Result SqlError A) :=
     ResultT.run (ReaderT.run (DbM.underlying m) conn)
 
 pub def DbM.pure {Bk : Type} {A : Type} (a : A) : DbM Bk A :=
@@ -53,21 +53,21 @@ pub def DbM.ask {Bk : Type} : DbM Bk Bk :=
 /// family as the constrained-generic bug), while `PageM`'s
 /// `page_bind_run` shows this direct shape is reliable.
 def dbm_bind_step {Bk : Type} {A : Type} {B : Type}
-        (f : A -> DbM Bk B) (conn : Bk) (r : Result SqlError A) :
-        IO (Result SqlError B) :=
+    (f : A -> DbM Bk B) (conn : Bk) (r : Result SqlError A) :
+    IO (Result SqlError B) :=
     match r {
         Result.ok a => ResultT.run (ReaderT.run (DbM.underlying (f a)) conn),
         Result.err e => IO.pure (Result.err e)
     }
 
 def dbm_bind_run {Bk : Type} {A : Type} {B : Type}
-        (ma : DbM Bk A) (f : A -> DbM Bk B) (conn : Bk) :
-        ResultT SqlError IO B :=
+    (ma : DbM Bk A) (f : A -> DbM Bk B) (conn : Bk) :
+    ResultT SqlError IO B :=
     ResultT.mk (Monad.bind (ResultT.run (ReaderT.run (DbM.underlying ma) conn))
         (dbm_bind_step f conn))
 
 def dbm_bind {Bk : Type} {A : Type} {B : Type}
-        (ma : DbM Bk A) (f : A -> DbM Bk B) : DbM Bk B :=
+    (ma : DbM Bk A) (f : A -> DbM Bk B) : DbM Bk B :=
     DbM.mk (ReaderT.mk (dbm_bind_run ma f))
 
 pub instance Monad (DbM Bk) {

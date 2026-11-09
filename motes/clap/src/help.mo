@@ -174,7 +174,7 @@ pub def Cli.help_text (s : Cli.CommandSpec) : String :=
     let builtins : List Cli.ArgSpec := List.append help_builtin version_builtin in
     let options : List Cli.ArgSpec :=
         List.append (List.append builtins (Cli.filter_args Cli.ArgKind.arg_option s.args))
-                    (Cli.filter_args Cli.ArgKind.arg_flag s.args) in
+            (Cli.filter_args Cli.ArgKind.arg_flag s.args) in
     let arg_width : I64 := Cli.string_len_max (Cli.arg_labels (List.append positionals options)) 0 in
     let sub_width : I64 := Cli.string_len_max (Cli.sub_labels s.subcommands) 0 in
     let about : String :=

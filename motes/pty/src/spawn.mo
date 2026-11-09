@@ -168,15 +168,15 @@ def slot_ptr (b : ByteBuf) (i : I64) (used : I64) : Ptr :=
 // ── The allocation-free fork/exec child path ─────────────────────────────
 
 def fork_exec (amaster : Ptr) (win : Ptr) (path : Ptr)
-               (a0 : Ptr) (a1 : Ptr) (a2 : Ptr) (a3 : Ptr)
-               (a4 : Ptr) (a5 : Ptr) (a6 : Ptr) (a7 : Ptr) : I32 :=
+    (a0 : Ptr) (a1 : Ptr) (a2 : Ptr) (a3 : Ptr)
+    (a4 : Ptr) (a5 : Ptr) (a6 : Ptr) (a7 : Ptr) : I32 :=
     let pid : I32 := forkpty amaster Ptr.null Ptr.null win in
     if I64.beq (I32.to_i64 pid) zero_i64
     then exec_die path a0 a1 a2 a3 a4 a5 a6 a7
     else pid
 
 def exec_die (path : Ptr) (a0 : Ptr) (a1 : Ptr) (a2 : Ptr) (a3 : Ptr)
-              (a4 : Ptr) (a5 : Ptr) (a6 : Ptr) (a7 : Ptr) : I32 :=
+    (a4 : Ptr) (a5 : Ptr) (a6 : Ptr) (a7 : Ptr) : I32 :=
     let _rc : I32 := execl8 path a0 a1 a2 a3 a4 a5 a6 a7 in
     exit_now code_127
 
@@ -184,15 +184,15 @@ def exec_die (path : Ptr) (a0 : Ptr) (a1 : Ptr) (a2 : Ptr) (a3 : Ptr)
 /// allocation-free; branching on `chdir`'s result keeps the extern
 /// observable (an unused pure call could be eliminated).
 def fork_exec_cwd (amaster : Ptr) (win : Ptr) (cwd : Ptr) (path : Ptr)
-                  (a0 : Ptr) (a1 : Ptr) (a2 : Ptr) (a3 : Ptr)
-                  (a4 : Ptr) (a5 : Ptr) (a6 : Ptr) (a7 : Ptr) : I32 :=
+    (a0 : Ptr) (a1 : Ptr) (a2 : Ptr) (a3 : Ptr)
+    (a4 : Ptr) (a5 : Ptr) (a6 : Ptr) (a7 : Ptr) : I32 :=
     let pid : I32 := forkpty amaster Ptr.null Ptr.null win in
     if I64.beq (I32.to_i64 pid) zero_i64
     then exec_die_cwd cwd path a0 a1 a2 a3 a4 a5 a6 a7
     else pid
 
 def exec_die_cwd (cwd : Ptr) (path : Ptr) (a0 : Ptr) (a1 : Ptr) (a2 : Ptr) (a3 : Ptr)
-                 (a4 : Ptr) (a5 : Ptr) (a6 : Ptr) (a7 : Ptr) : I32 :=
+    (a4 : Ptr) (a5 : Ptr) (a6 : Ptr) (a7 : Ptr) : I32 :=
     let rc : I32 := chdir cwd in
     if I64.beq (I32.to_i64 rc) zero_i64
     then exec_die path a0 a1 a2 a3 a4 a5 a6 a7
@@ -477,7 +477,7 @@ def quiet_go (m : Pty) (idle_ms : I64) (idle_at : I64) (deadline : I64) : IO Boo
 /// Everything the child writes until EOF or `deadline_ms` from now, joined
 /// into one String. Phase 0 only: Phase 1 replaces this with the incremental
 /// Output/grid state and `wait_until`.
-pub def Pty.read_all (m : Pty) (deadline_ms : I64) : IO String := do {    let start <- IO.current_time_nano;
+pub def Pty.read_all (m : Pty) (deadline_ms : I64) : IO String := do { let start <- IO.current_time_nano;
     let deadline := start + deadline_ms * 1000000;
     let view : FdStream := m.fd;
     read_loop view deadline List.empty

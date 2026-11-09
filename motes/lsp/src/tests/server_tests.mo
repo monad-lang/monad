@@ -26,8 +26,8 @@
 use log::level {LogLevel}
 use log::logger {Logger.should_emit}
 use lsp::server {
-  ServerState, ServerStep, lsp_at_eof, lsp_dispatch, lsp_frame, lsp_next_read, lsp_server_new,
-  server_initialized, server_step_exit, server_step_bodies, server_step_state, server_logger,
+    ServerState, ServerStep, lsp_at_eof, lsp_dispatch, lsp_frame, lsp_next_read, lsp_server_new,
+    server_initialized, server_step_exit, server_step_bodies, server_step_state, server_logger,
 }
 use toolkit::framing {content_length}
 use toolkit::jsonrpc {rpc_parse}
@@ -36,16 +36,16 @@ use toolkit::jsonrpc {rpc_parse}
 
 /// `initialize` from a client that offers utf-8 first -- what Helix 25.07 sends.
 def st_initialize_utf8 : String :=
-  "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"capabilities\":{\"general\":{\"positionEncodings\":[\"utf-8\",\"utf-16\"]}}}}"
+    "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"capabilities\":{\"general\":{\"positionEncodings\":[\"utf-8\",\"utf-16\"]}}}}"
 
 /// The same, offering only utf-16, so that the two tests together pin that the choice
 /// follows the client rather than a constant in this server.
 def st_initialize_utf16 : String :=
-  "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"capabilities\":{\"general\":{\"positionEncodings\":[\"utf-16\"]}}}}"
+    "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"capabilities\":{\"general\":{\"positionEncodings\":[\"utf-16\"]}}}}"
 
 /// A client with no `positionEncodings` at all, which is every client older than 3.17.
 def st_initialize_plain : String :=
-  "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"capabilities\":{}}}"
+    "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"capabilities\":{}}}"
 
 def st_initialized : String := "{\"jsonrpc\":\"2.0\",\"method\":\"initialized\",\"params\":{}}"
 
@@ -56,11 +56,11 @@ def st_exit : String := "{\"jsonrpc\":\"2.0\",\"method\":\"exit\"}"
 /// A hover on a file that is not open, which is enough to exercise the routing without
 /// reading anything.
 def st_hover : String :=
-  "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"textDocument/hover\",\"params\":{\"textDocument\":{\"uri\":\"file:///nonexistent.mo\"},\"position\":{\"line\":0,\"character\":0}}}"
+    "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"textDocument/hover\",\"params\":{\"textDocument\":{\"uri\":\"file:///nonexistent.mo\"},\"position\":{\"line\":0,\"character\":0}}}"
 
 /// A method this server does not implement.
 def st_completion : String :=
-  "{\"jsonrpc\":\"2.0\",\"id\":4,\"method\":\"textDocument/completion\",\"params\":{}}"
+    "{\"jsonrpc\":\"2.0\",\"id\":4,\"method\":\"textDocument/completion\",\"params\":{}}"
 
 /// A notification with no `params` at all, which is legal and which a client that
 /// omitted them sends.
@@ -71,12 +71,12 @@ def st_garbage : String := "{\"jsonrpc\":\"2.0\","
 
 /// The specification's own volume knob, turned up as far as it goes.
 def st_set_trace_verbose : String :=
-  "{\"jsonrpc\":\"2.0\",\"method\":\"$/setTrace\",\"params\":{\"value\":\"verbose\"}}"
+    "{\"jsonrpc\":\"2.0\",\"method\":\"$/setTrace\",\"params\":{\"value\":\"verbose\"}}"
 
 /// A trace value the specification does not name, which must land on quiet rather than
 /// on a guess.
 def st_set_trace_garbage : String :=
-  "{\"jsonrpc\":\"2.0\",\"method\":\"$/setTrace\",\"params\":{\"value\":\"noisy\"}}"
+    "{\"jsonrpc\":\"2.0\",\"method\":\"$/setTrace\",\"params\":{\"value\":\"noisy\"}}"
 
 // --- Reading a step without touching a field in a test body ---
 //
@@ -92,10 +92,10 @@ def st_set_trace_garbage : String :=
 /// handler ever produces.
 #[partial]
 def st_first (fs : List String) : String :=
-  match fs {
-    List.empty => "",
-    List.cons f _rest => f,
-  }
+    match fs {
+        List.empty => "",
+        List.cons f _rest => f,
+    }
 
 /// Dispatch one wire message, answering the step and its first body together.
 #[partial]
@@ -106,28 +106,28 @@ def st_ask (st : ServerState) (text : String) : IO (Pair ServerStep String) := d
 
 #[partial]
 def st_body_of (answer : Pair ServerStep String) : String :=
-  match answer {
-    Pair.pair _step f => f,
-  }
+    match answer {
+        Pair.pair _step f => f,
+    }
 
 #[partial]
 def st_step_of (answer : Pair ServerStep String) : ServerStep :=
-  match answer {
-    Pair.pair step _f => step,
-  }
+    match answer {
+        Pair.pair step _f => step,
+    }
 
 /// The state a step left, read through the accessor rather than the field.
 #[partial]
 def st_state_of (answer : Pair ServerStep String) : ServerState :=
-  server_step_state (st_step_of answer)
+    server_step_state (st_step_of answer)
 
 /// Whether the step asked to end the session with `expected`.
 #[partial]
 def st_code_is (step : ServerStep) (expected : I64) : Bool :=
-  match server_step_exit step {
-    Option.none => false,
-    Option.some c => I64.beq c expected,
-  }
+    match server_step_exit step {
+        Option.none => false,
+        Option.some c => I64.beq c expected,
+    }
 
 /// Run `initialize`, then `initialized`, and answer the state that leaves.
 #[partial]
@@ -167,10 +167,10 @@ def test_initialize_advertises_no_unimplemented_provider : IO Bool := do {
     let a <- st_ask lsp_server_new st_initialize_utf8;
     let f : String := st_body_of a;
     return (Bool.not (String.contains f "completionProvider")
-              && String.contains f "\"hoverProvider\":true"
-              && String.contains f "\"definitionProvider\":true"
-              && String.contains f "\"documentSymbolProvider\":true"
-              && String.contains f "\"workspaceSymbolProvider\":true")
+        && String.contains f "\"hoverProvider\":true"
+        && String.contains f "\"definitionProvider\":true"
+        && String.contains f "\"documentSymbolProvider\":true"
+        && String.contains f "\"workspaceSymbolProvider\":true")
 }
 
 #[test]
@@ -283,7 +283,7 @@ def test_shutdown_replies_and_leaves_the_session_running : IO Bool := do {
     let st : ServerState <- st_handshake st_initialize_utf8;
     let a <- st_ask st st_shutdown;
     return (String.contains (st_body_of a) "\"result\":null"
-              && Bool.not (st_code_is (st_step_of a) 0))
+        && Bool.not (st_code_is (st_step_of a) 0))
 }
 
 #[test]
@@ -338,28 +338,28 @@ def test_settrace_answers_nothing : IO Bool := do {
 /// after the fact, when turning the trace on is too late.
 #[test]
 def test_a_fresh_server_traces_at_messages : Bool :=
-  st_logs_at lsp_server_new LogLevel.info && Bool.not (st_logs_at lsp_server_new LogLevel.debug)
+    st_logs_at lsp_server_new LogLevel.info && Bool.not (st_logs_at lsp_server_new LogLevel.debug)
 
 /// Whether the session's logger writes a line at `level`.
 def st_logs_at (s : ServerState) (level : LogLevel) : Bool :=
-  Logger.should_emit (server_logger s) level
+    Logger.should_emit (server_logger s) level
 
 // --- The frame ---
 
 #[test]
 def test_a_frame_counts_the_body_in_bytes : Bool :=
-  String.beq (lsp_frame "hello") "Content-Length: 5\r\n\r\nhello"
+    String.beq (lsp_frame "hello") "Content-Length: 5\r\n\r\nhello"
 
 /// A two-byte character in a body the header says is two bytes long. This is the whole
 /// of the byte-counting decision, and it is asserted as an exact frame because the
 /// failure it guards -- a header that understates the body -- is silent.
 #[test]
 def test_a_frame_counts_a_non_ascii_body_in_bytes_not_characters : Bool :=
-  String.beq (lsp_frame "é") "Content-Length: 2\r\n\r\né"
+    String.beq (lsp_frame "é") "Content-Length: 2\r\n\r\né"
 
 #[test]
 def test_a_frame_of_an_empty_body_is_still_a_frame : Bool :=
-  String.beq (lsp_frame "") "Content-Length: 0\r\n\r\n"
+    String.beq (lsp_frame "") "Content-Length: 0\r\n\r\n"
 
 /// The header is added in exactly ONE place, and these are the two halves that say so:
 /// what a handler queues is a body that starts with `{` and carries no header, and what
@@ -375,8 +375,8 @@ def test_a_dispatched_reply_is_a_body_that_the_writer_frames : IO Bool := do {
     let body : String := st_body_of a;
     let wire : String := lsp_frame body;
     return (String.beq (String.slice body 0 1) "{"
-              && Bool.not (String.contains body "Content-Length")
-              && String.beq (String.slice wire 0 16) "Content-Length: ")
+        && Bool.not (String.contains body "Content-Length")
+        && String.beq (String.slice wire 0 16) "Content-Length: ")
 }
 
 // --- The read loop's two decisions ---
@@ -386,22 +386,22 @@ def test_a_dispatched_reply_is_a_body_that_the_writer_frames : IO Bool := do {
 /// that as the end would abandon the rest of a message the client is still sending.
 #[test]
 def test_only_an_empty_read_is_end_of_stream : Bool :=
-  lsp_at_eof "" && Bool.not (lsp_at_eof "a")
+    lsp_at_eof "" && Bool.not (lsp_at_eof "a")
 
 /// One byte while the header is still arriving -- asking for more would block until the
 /// peer filled the request, which for a request/response protocol is a deadlock.
 #[test]
 def test_the_read_is_one_byte_while_the_header_is_incomplete : Bool :=
-  I64.beq (lsp_next_read FramingMode.content_length "Content-Len") 1
+    I64.beq (lsp_next_read FramingMode.content_length "Content-Len") 1
 
 /// The whole outstanding body in one read once `Content-Length` is known: "hello" with
 /// two of its five bytes present.
 #[test]
 def test_the_read_is_the_outstanding_body_once_the_header_is_complete : Bool :=
-  I64.beq (lsp_next_read FramingMode.content_length "Content-Length: 5\r\n\r\nhe") 3
+    I64.beq (lsp_next_read FramingMode.content_length "Content-Length: 5\r\n\r\nhe") 3
 
 /// A floor rather than the true count, because `read_stdin_exact 0` answers the empty
 /// string, which the loop reads as end of stream.
 #[test]
 def test_the_read_is_never_zero : Bool :=
-  I64.beq (lsp_next_read FramingMode.content_length "Content-Length: 5\r\n\r\nhello") 1
+    I64.beq (lsp_next_read FramingMode.content_length "Content-Length: 5\r\n\r\nhello") 1

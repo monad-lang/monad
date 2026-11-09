@@ -250,14 +250,14 @@ def decode_value_expr (format_tag : String) (fmt_typ_name : String) (field_typ :
                 (result_ok (e_ctor "Option.none" List.empty))
                 (e_match (decode_value_expr format_tag fmt_typ_name inner raw_name)
                     (List.cons (match_arm "err" (List.cons "__e" List.empty) (result_err (e_var "__e")))
-                    (List.cons (match_arm "ok" (List.cons "__v" List.empty) (result_ok (e_ctor "Option.some" (List.cons (e_var "__v") List.empty)))) List.empty))),
+                        (List.cons (match_arm "ok" (List.cons "__v" List.empty) (result_ok (e_ctor "Option.some" (List.cons (e_var "__v") List.empty)))) List.empty))),
         Option.none =>
             match list_inner field_typ {
                 Option.some elem_typ =>
                     e_match (e_app (fmt_fn format_tag "_de_get_list") raw)
                         (List.cons (match_arm "err" (List.cons "__e" List.empty) (result_err (e_var "__e")))
-                        (List.cons (match_arm "ok" (List.cons "__items" List.empty)
-                            (e_app (e_app (e_var "traverse_decode_list") (decode_elem_fn format_tag fmt_typ_name elem_typ)) (e_var "__items"))) List.empty)),
+                            (List.cons (match_arm "ok" (List.cons "__items" List.empty)
+                                (e_app (e_app (e_var "traverse_decode_list") (decode_elem_fn format_tag fmt_typ_name elem_typ)) (e_var "__items"))) List.empty)),
                 Option.none =>
                     match expr_head_name field_typ {
                         Option.some name => e_app (primitive_deserialize_fn format_tag fmt_typ_name name) raw,
@@ -303,11 +303,11 @@ def decode_one_field (format_tag : String) (fmt_typ_name : String) (f : FieldInf
     let get_call := e_app (e_app (fmt_fn format_tag "_de_get_field") (e_var "d")) (e_str fname) in
     e_match get_call
         (List.cons (match_arm "err" (List.cons "__e" List.empty) (result_err (e_var "__e")))
-        (List.cons (match_arm "ok" (List.cons "__maybe" List.empty)
-            (e_match (e_var "__maybe")
-                (List.cons (match_arm "none" List.empty (decode_continue fname (missing_field_value fname ftyp (field_default_of f)) cont))
-                (List.cons (match_arm "some" (List.cons "__raw" List.empty)
-                    (decode_continue fname (decode_value_expr format_tag fmt_typ_name ftyp "__raw") cont)) List.empty)))) List.empty))
+            (List.cons (match_arm "ok" (List.cons "__maybe" List.empty)
+                (e_match (e_var "__maybe")
+                    (List.cons (match_arm "none" List.empty (decode_continue fname (missing_field_value fname ftyp (field_default_of f)) cont))
+                        (List.cons (match_arm "some" (List.cons "__raw" List.empty)
+                            (decode_continue fname (decode_value_expr format_tag fmt_typ_name ftyp "__raw") cont)) List.empty)))) List.empty))
 
 /// Thread one field's own `Result String <FieldType>` (`step`) into the
 /// rest of the chain (`cont`), binding the success value to the field's
@@ -317,7 +317,7 @@ def decode_one_field (format_tag : String) (fmt_typ_name : String) (f : FieldInf
 def decode_continue (field_name : String) (step : Expr) (cont : Expr) : Expr :=
     e_match step
         (List.cons (match_arm "err" (List.cons "__e" List.empty) (result_err (e_var "__e")))
-        (List.cons (match_arm "ok" (List.cons field_name List.empty) cont) List.empty))
+            (List.cons (match_arm "ok" (List.cons field_name List.empty) cont) List.empty))
 
 /// Build the whole field-by-field decode chain, outside-in: the
 /// INNERMOST expression (built first, here) is the final constructor

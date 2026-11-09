@@ -26,10 +26,10 @@ use toolkit::jsonrpc {rpc_field}
 /// A string field, absent if the field is absent or is not a string.
 #[partial]
 pub def lsp_param_str (key : String) (params : Json) : Option String :=
-  match rpc_field key params {
-    Option.none => Option.none,
-    Option.some node => lsp_node_str node,
-  }
+    match rpc_field key params {
+        Option.none => Option.none,
+        Option.some node => lsp_node_str node,
+    }
 
 /// An integer field.
 ///
@@ -40,10 +40,10 @@ pub def lsp_param_str (key : String) (params : Json) : Option String :=
 /// would be a version the client never sent.
 #[partial]
 pub def lsp_param_i64 (key : String) (params : Json) : Option I64 :=
-  match rpc_field key params {
-    Option.none => Option.none,
-    Option.some node => lsp_node_i64 node,
-  }
+    match rpc_field key params {
+        Option.none => Option.none,
+        Option.some node => lsp_node_i64 node,
+    }
 
 /// A field one level down, as in `textDocument.uri`.
 ///
@@ -52,10 +52,10 @@ pub def lsp_param_i64 (key : String) (params : Json) : Option I64 :=
 /// malformed request, and both are absent here.
 #[partial]
 pub def lsp_param_nested (outer : String) (inner : String) (params : Json) : Option Json :=
-  match rpc_field outer params {
-    Option.none => Option.none,
-    Option.some node => rpc_field inner node,
-  }
+    match rpc_field outer params {
+        Option.none => Option.none,
+        Option.some node => rpc_field inner node,
+    }
 
 /// The same, read as a string, and as an integer.
 ///
@@ -67,33 +67,33 @@ pub def lsp_param_nested (outer : String) (inner : String) (params : Json) : Opt
 /// one case where the absence means something.
 #[partial]
 pub def lsp_param_nested_str (outer : String) (inner : String) (params : Json) : Option String :=
-  match lsp_param_nested outer inner params {
-    Option.none => Option.none,
-    Option.some node => lsp_node_str node,
-  }
+    match lsp_param_nested outer inner params {
+        Option.none => Option.none,
+        Option.some node => lsp_node_str node,
+    }
 
 #[partial]
 pub def lsp_param_nested_i64 (outer : String) (inner : String) (params : Json) : Option I64 :=
-  match lsp_param_nested outer inner params {
-    Option.none => Option.none,
-    Option.some node => lsp_node_i64 node,
-  }
+    match lsp_param_nested outer inner params {
+        Option.none => Option.none,
+        Option.some node => lsp_node_i64 node,
+    }
 
 /// A string, from a node already in hand.
 #[partial]
 def lsp_node_str (node : Json) : Option String :=
-  match Json.get_str node {
-    Result.err _e => Option.none,
-    Result.ok s => Option.some s,
-  }
+    match Json.get_str node {
+        Result.err _e => Option.none,
+        Result.ok s => Option.some s,
+    }
 
 /// An integer, from a node already in hand.
 #[partial]
 def lsp_node_i64 (node : Json) : Option I64 :=
-  match Json.get_num_i64 (Json.get_num node) {
-    Result.err _e => Option.none,
-    Result.ok n => Option.some n,
-  }
+    match Json.get_num_i64 (Json.get_num node) {
+        Result.err _e => Option.none,
+        Result.ok n => Option.some n,
+    }
 
 /// Element `i` of an array-valued node, 0-based.
 ///
@@ -103,22 +103,22 @@ def lsp_node_i64 (node : Json) : Option I64 :=
 /// client chose -- it is the specification's shape for the single change.
 #[partial]
 pub def lsp_param_index (i : I64) (j : Option Json) : Option Json :=
-  match j {
-    Option.none => Option.none,
-    Option.some node =>
-      match Json.get_array node {
-        Result.err _e => Option.none,
-        Result.ok xs => lsp_param_list_at xs i,
-      },
-  }
+    match j {
+        Option.none => Option.none,
+        Option.some node =>
+            match Json.get_array node {
+                Result.err _e => Option.none,
+                Result.ok xs => lsp_param_list_at xs i,
+            },
+    }
 
 #[partial]
 def lsp_param_list_at (xs : List Json) (i : I64) : Option Json :=
-  match xs {
-    List.empty => Option.none,
-    List.cons x rest =>
-      if I64.beq i 0 then Option.some x else lsp_param_list_at rest (I64.sub i 1),
-  }
+    match xs {
+        List.empty => Option.none,
+        List.cons x rest =>
+            if I64.beq i 0 then Option.some x else lsp_param_list_at rest (I64.sub i 1),
+    }
 
 /// A field that is an array of strings, keeping the strings and dropping anything
 /// else rather than failing the whole read.
@@ -128,7 +128,7 @@ def lsp_param_list_at (xs : List Json) (i : I64) : Option Json :=
 /// dropping it loses a choice rather than a document.
 #[partial]
 pub def lsp_param_str_list (key : String) (params : Json) : List String :=
-  lsp_str_list_go (lsp_json_list (rpc_field key params)) lsp_no_strings
+    lsp_str_list_go (lsp_json_list (rpc_field key params)) lsp_no_strings
 
 /// The empty string list as a named def, so no caller writes a bare `List.empty`
 /// whose element type has to be inferred -- the `Map.empty` trap one type over.
@@ -136,35 +136,35 @@ def lsp_no_strings : List String := List.empty
 
 #[partial]
 def lsp_str_list_go (xs : List Json) (acc : List String) : List String :=
-  match xs {
-    List.empty => lsp_str_list_rev acc lsp_no_strings,
-    List.cons x rest =>
-      match Json.get_str x {
-        Result.err _e => lsp_str_list_go rest acc,
-        Result.ok s => lsp_str_list_go rest (List.cons s acc),
-      },
-  }
+    match xs {
+        List.empty => lsp_str_list_rev acc lsp_no_strings,
+        List.cons x rest =>
+            match Json.get_str x {
+                Result.err _e => lsp_str_list_go rest acc,
+                Result.ok s => lsp_str_list_go rest (List.cons s acc),
+            },
+    }
 
 /// Reversed locally rather than through a shared reverse, the same call
 /// `jsonrpc.mo` and `position.mo` make: four lines of list reversal is not worth
 /// widening a module's stated dependency surface for.
 #[partial]
 def lsp_str_list_rev (ls : List String) (acc : List String) : List String :=
-  match ls {
-    List.empty => acc,
-    List.cons l rest => lsp_str_list_rev rest (List.cons l acc),
-  }
+    match ls {
+        List.empty => acc,
+        List.cons l rest => lsp_str_list_rev rest (List.cons l acc),
+    }
 
 /// The nodes of an array-valued field, or none.
 #[partial]
 def lsp_json_list (j : Option Json) : List Json :=
-  match j {
-    Option.none => lsp_no_json_nodes,
-    Option.some node =>
-      match Json.get_array node {
-        Result.err _e => lsp_no_json_nodes,
-        Result.ok xs => xs,
-      },
-  }
+    match j {
+        Option.none => lsp_no_json_nodes,
+        Option.some node =>
+            match Json.get_array node {
+                Result.err _e => lsp_no_json_nodes,
+                Result.ok xs => xs,
+            },
+    }
 
 def lsp_no_json_nodes : List Json := List.empty

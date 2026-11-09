@@ -41,7 +41,7 @@ pub struct ResultSet {
 /// multi-step decoder here goes through this instead.
 with SqlResult {
     pub def and_then {E : Type} {A : Type} {B : Type}
-            (r : Result E A) (f : A -> Result E B) : Result E B :=
+        (r : Result E A) (f : A -> Result E B) : Result E B :=
         match r {
             Result.ok a => f a,
             Result.err e => Result.err e
@@ -149,7 +149,7 @@ def Row.find_cell (name : String) (cells : List (Pair String Value)) : Option Va
 
 #[terminating]
 def Row.find_cell_step (name : String) (rest : List (Pair String Value))
-        (found : Option Value) : Option Value :=
+    (found : Option Value) : Option Value :=
     match found {
         Option.some v => Option.some v,
         Option.none => Row.find_cell name rest

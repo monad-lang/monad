@@ -21,7 +21,7 @@ def forkpty (amaster : Ptr) (name : Ptr) (termp : Ptr) (winp : Ptr) : I32
 
 #[extern "c" {link_name := "execl"}]
 def execl8 (path : Ptr) (a0 : Ptr) (a1 : Ptr) (a2 : Ptr) (a3 : Ptr)
-           (a4 : Ptr) (a5 : Ptr) (a6 : Ptr) (a7 : Ptr) : I32
+    (a4 : Ptr) (a5 : Ptr) (a6 : Ptr) (a7 : Ptr) : I32
 
 #[extern "c" {link_name := "_exit"}]
 def exit_now (code : I32) : I32

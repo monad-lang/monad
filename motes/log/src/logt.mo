@@ -40,14 +40,14 @@ pub def LogT.local {M : Type -> Type} {A : Type} (f : Logger -> Logger) (m : Log
 
 /// Add one structured field for the duration of `m`.
 pub def LogT.with_field {M : Type -> Type} {A : Type}
-        (key : String) (value : String) (m : LogT M A) : LogT M A :=
+    (key : String) (value : String) (m : LogT M A) : LogT M A :=
     LogT.mk (fn (log : Logger) => LogT.run m (Logger.with_field log key value))
 
 /// Internal: run the continuation in the same environment. Extracted so
 /// the instance body stays single-line (the parser does not accept
 /// multi-line lambdas inside instance bodies).
 def LogT.bind_step [Monad M] {A : Type} {B : Type}
-        (f : A -> LogT M B) (log : Logger) : A -> M B :=
+    (f : A -> LogT M B) (log : Logger) : A -> M B :=
     fn (a : A) => LogT.run (f a) log
 
 /// The instance body references `Monad.bind`/`Monad.pure` directly, the

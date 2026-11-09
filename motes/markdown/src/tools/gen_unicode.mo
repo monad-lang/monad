@@ -108,8 +108,8 @@ struct ScanState {
 /// by category (they are `Cc`), so they seed the set; the rest is `Zs`.
 def empty_state : ScanState :=
     { ranges := { ws := List.cons (Pair.pair 9 10) (List.cons (Pair.pair 12 13) List.empty),
-                  punct := List.empty },
-      block := Option.none }
+        punct := List.empty },
+        block := Option.none }
 
 #[partial]
 def scan_lines (lines : List String) (st : ScanState) : ScanState :=
@@ -147,12 +147,12 @@ def close_block (hi : I64) (st : ScanState) : ScanState :=
 
 def include_block (b : Block) (hi : I64) (ranges : Ranges) : Ranges :=
     { ws := include_if b.ws ranges.ws b.lo hi,
-      punct := include_if b.punct ranges.punct b.lo hi }
+        punct := include_if b.punct ranges.punct b.lo hi }
 
 def scan_member (cp : I64) (ws : Bool) (punct : Bool) (st : ScanState) : ScanState :=
     { ranges := { ws := include_if ws st.ranges.ws cp cp,
-                  punct := include_if punct st.ranges.punct cp cp },
-      block := st.block }
+        punct := include_if punct st.ranges.punct cp cp },
+        block := st.block }
 
 def include_if (wanted : Bool) (rs : List (Pair I64 I64)) (lo : I64) (hi : I64)
     : List (Pair I64 I64) :=
@@ -274,7 +274,7 @@ def hex_value_go (digits : String) (i : I64) (acc : I64) : I64 :=
     if I64.lt (String.length digits) (I64.add i 1)
     then acc
     else hex_value_go digits (I64.add i 1)
-            (I64.add (I64.mul acc 16) (char_to_hex_digit (String.slice digits i 1)))
+        (I64.add (I64.mul acc 16) (char_to_hex_digit (String.slice digits i 1)))
 
 // --- Leaves and source ---
 
@@ -336,28 +336,28 @@ def tail_block : String :=
 def line_of (s : String) : String := String.concat s "\n"
 
 def tail_lines : List String :=
-    [ "/// Case-fold a string for reference-label comparison.",
-      "#[partial]",
-      "pub def Markdown.case_fold (s : String) : String :=",
-      "    String.concat_list (List.reverse (Markdown.case_fold_go s List.empty))",
-      "",
-      "#[partial]",
-      "def Markdown.case_fold_go (s : String) (acc : List String) : List String :=",
-      "    if is_empty s",
-      "    then acc",
-      "    else",
-      "        match Markdown.codepoint_at s {",
-      "            Option.none => acc,",
-      "            Option.some cp =>",
-      "                match Markdown.case_fold_cp cp {",
-      "                    Option.some folded =>",
-      "                        Markdown.case_fold_go (String.drop (Markdown.char_width s) s)",
-      "                            (List.cons folded acc),",
-      "                    Option.none =>",
-      "                        Markdown.case_fold_go (String.drop (Markdown.char_width s) s)",
-      "                            (List.cons (String.slice s 0 (Markdown.char_width s)) acc)",
-      "                }",
-      "        }" ]
+    ["/// Case-fold a string for reference-label comparison.",
+        "#[partial]",
+        "pub def Markdown.case_fold (s : String) : String :=",
+        "    String.concat_list (List.reverse (Markdown.case_fold_go s List.empty))",
+        "",
+        "#[partial]",
+        "def Markdown.case_fold_go (s : String) (acc : List String) : List String :=",
+        "    if is_empty s",
+        "    then acc",
+        "    else",
+        "        match Markdown.codepoint_at s {",
+        "            Option.none => acc,",
+        "            Option.some cp =>",
+        "                match Markdown.case_fold_cp cp {",
+        "                    Option.some folded =>",
+        "                        Markdown.case_fold_go (String.drop (Markdown.char_width s) s)",
+        "                            (List.cons folded acc),",
+        "                    Option.none =>",
+        "                        Markdown.case_fold_go (String.drop (Markdown.char_width s) s)",
+        "                            (List.cons (String.slice s 0 (Markdown.char_width s)) acc)",
+        "                }",
+        "        }"]
 
 def render (ud_text : String) (cf_text : String) : String :=
     let state : ScanState := scan_lines (Markdown.split_lines ud_text) empty_state in
@@ -365,23 +365,23 @@ def render (ud_text : String) (cf_text : String) : String :=
     let ws : List (Pair I64 I64) := List.reverse state.ranges.ws in
     let punct : List (Pair I64 I64) := List.reverse state.ranges.punct in
     let parts : List String :=
-        [ Gen.banner tool (banner_notes (List.length ws) (List.length punct) (List.length folds)),
-          use_lines,
-          Gen.emit ws_spec (range_leaves ws),
-          Gen.emit punct_spec (range_leaves punct),
-          Gen.emit fold_spec (fold_leaves folds),
-          tail_block ] in
+        [Gen.banner tool (banner_notes (List.length ws) (List.length punct) (List.length folds)),
+            use_lines,
+            Gen.emit ws_spec (range_leaves ws),
+            Gen.emit punct_spec (range_leaves punct),
+            Gen.emit fold_spec (fold_leaves folds),
+            tail_block] in
     String.concat_list parts
 
 def banner_notes (ws : I64) (punct : I64) (folds : I64) : List String :=
-    [ String.concat "UnicodeData: " ud_url,
-      String.concat "CaseFolding: " cf_url,
-      "",
-      String.concat (String.concat (I64.to_string ws) " whitespace ranges, ")
-          (String.concat (String.concat (I64.to_string punct) " punctuation ranges, ")
-              (String.concat (I64.to_string folds) " case folding entries.")),
-      "",
-      "Each classifier is a balanced tree of one small function per node, so a",
-      "lookup costs log2(ranges) comparisons and checking the whole corpus",
-      "cannot nest an `else if` chain on the elaborator's stack. The range and",
-      "folding tables are grouped under their `Markdown.` entry points." ]
+    [String.concat "UnicodeData: " ud_url,
+        String.concat "CaseFolding: " cf_url,
+        "",
+        String.concat (String.concat (I64.to_string ws) " whitespace ranges, ")
+            (String.concat (String.concat (I64.to_string punct) " punctuation ranges, ")
+                (String.concat (I64.to_string folds) " case folding entries.")),
+        "",
+        "Each classifier is a balanced tree of one small function per node, so a",
+        "lookup costs log2(ranges) comparisons and checking the whole corpus",
+        "cannot nest an `else if` chain on the elaborator's stack. The range and",
+        "folding tables are grouped under their `Markdown.` entry points."]

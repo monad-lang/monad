@@ -8,9 +8,9 @@
 /// remounts the textarea with the new text.
 use oak::app {Command, Host, Program}
 use oak::elements {
-  Html.button, Html.class_, Html.div, Html.disabled, Html.h1, Html.id_, Html.key,
-  Html.node, Html.p, Html.placeholder, Html.span, Html.spellcheck, Html.text,
-  Html.textarea
+    Html.button, Html.class_, Html.div, Html.disabled, Html.h1, Html.id_, Html.key,
+    Html.node, Html.p, Html.placeholder, Html.span, Html.spellcheck, Html.text,
+    Html.textarea
 }
 use oak::events {Html.on, Html.on_click, Html.on_input, Subscription}
 use oak::typed {Oak.Attr, Oak.Node}
@@ -65,7 +65,7 @@ pub type TryEffect {
 
 pub def try_init : TryModel :=
     { source := first_source, editor_text := first_source, editor_key := "0", editor_seq := 0,
-      running := false, status := "", value := "", typ := "", error := "", notes := "" }
+        running := false, status := "", value := "", typ := "", error := "", notes := "" }
 
 def first_source : String :=
     match try_examples {
@@ -111,8 +111,8 @@ def load_example_pair (m : TryModel) (index : I64) : Pair TryModel (Command TryE
             in
             Pair.pair
                 { m with source := e.source, editor_text := e.source,
-                  editor_key := I64.to_string next_seq, editor_seq := next_seq,
-                  running := false, status := "", value := "", typ := "", error := "", notes := "" }
+                    editor_key := I64.to_string next_seq, editor_seq := next_seq,
+                    running := false, status := "", value := "", typ := "", error := "", notes := "" }
                 cmd,
     }
 
@@ -165,10 +165,10 @@ pub def try_view (m : TryModel) : Oak.Node TryMsg :=
     let intro : Oak.Node TryMsg :=
         Html.div [Html.class_ ["try-intro"]]
             [Html.h1 [] [Html.text "Try Monad"],
-             Html.p [] [Html.text
-                 "One module, evaluated by the self-hosted Monad compiler compiled to WebAssembly. Define `main`; the page shows its value and type. Prelude only: no imports, no IO."],
-             Html.p [Html.class_ ["try-note"]]
-                 [Html.text "Experimental and unoptimised: the page interprets the program directly, with no optimisation passes and no native code. Expect it to be much slower than a compiled binary."]] in
+                Html.p [] [Html.text
+                    "One module, evaluated by the self-hosted Monad compiler compiled to WebAssembly. Define `main`; the page shows its value and type. Prelude only: no imports, no IO."],
+                Html.p [Html.class_ ["try-note"]]
+                    [Html.text "Experimental and unoptimised: the page interprets the program directly, with no optimisation passes and no native code. Expect it to be much slower than a compiled binary."]] in
     let editor : Oak.Node TryMsg := editor_pane m in
     let result : Oak.Node TryMsg := result_pane m in
     let grid : Oak.Node TryMsg :=
@@ -176,24 +176,24 @@ pub def try_view (m : TryModel) : Oak.Node TryMsg :=
     let foot : Oak.Node TryMsg :=
         Html.div [Html.class_ ["try-foot"]]
             [Html.text "Ctrl/Cmd+Enter runs. The evaluator has a 2,000,000-step budget; Cancel terminates the worker.",
-             Html.node "br" [] [],
-             Html.text "The engine is a separate WebAssembly module loaded in a worker; nothing leaves your browser."] in
+                Html.node "br" [] [],
+                Html.text "The engine is a separate WebAssembly module loaded in a worker; nothing leaves your browser."] in
     Html.div [Html.class_ ["try-page"]] [intro, grid, foot]
 
 def editor_pane (m : TryModel) : Oak.Node TryMsg :=
     let head : Oak.Node TryMsg :=
         Html.div [Html.key "head", Html.class_ ["try-pane-head"]]
             [Html.span [Html.class_ ["try-title"]] [Html.text "Scratchpad"],
-             Html.span [] [Html.text "Monad"]]
+                Html.span [] [Html.text "Monad"]]
     in
     let field : Oak.Node TryMsg :=
         Html.div [Html.key (String.concat "edit-" m.editor_key)]
             [Html.textarea
                 [Html.id_ "try-source", Html.class_ ["try-source"],
-                 Html.placeholder "def main : I64 := 2 + 3",
-                 Html.spellcheck false,
-                 Html.on_input TryMsg.source_changed,
-                 Html.on "keydown" ListenerFlags.none key_handler]
+                    Html.placeholder "def main : I64 := 2 + 3",
+                    Html.spellcheck false,
+                    Html.on_input TryMsg.source_changed,
+                    Html.on "keydown" ListenerFlags.none key_handler]
                 [Html.text m.editor_text]]
     in
     let actions : Oak.Node TryMsg :=
@@ -231,7 +231,7 @@ def result_pane (m : TryModel) : Oak.Node TryMsg :=
     let head : Oak.Node TryMsg :=
         Html.div [Html.class_ ["try-pane-head"]]
             [Html.span [Html.class_ ["try-title"]] [Html.text "Result"],
-             Html.span [] [Html.text (status_text m)]]
+                Html.span [] [Html.text (status_text m)]]
     in
     let body : Oak.Node TryMsg :=
         Html.div [Html.class_ ["try-output"], Html.id_ "try-result"]
@@ -253,12 +253,12 @@ def result_children (m : TryModel) : List (Oak.Node TryMsg) :=
     then [Html.div [Html.class_ ["try-running"]] [Html.text "Evaluating in the worker…"]]
     else if Bool.not (String.is_empty m.error)
     then [Html.div [Html.class_ ["try-error"]] [Html.text m.error],
-          notes_node m]
+        notes_node m]
     else if String.is_empty m.status
     then [Html.div [Html.class_ ["try-idle"]] [Html.text "Press Run to evaluate the program."]]
     else [Html.div [Html.class_ ["try-value"]] [Html.text m.value],
-          Html.div [Html.class_ ["try-type"]] [Html.text (String.concat ": " m.typ)],
-          notes_node m]
+        Html.div [Html.class_ ["try-type"]] [Html.text (String.concat ": " m.typ)],
+        notes_node m]
 
 def notes_node (m : TryModel) : Oak.Node TryMsg :=
     if String.is_empty m.notes

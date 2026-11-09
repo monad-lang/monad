@@ -12,38 +12,38 @@ use crypto::pubkey {Pubkey.verify}
 use lib::errors {JwtError}
 
 pub struct JwtVerifier {
-  check : CryptoSigAlg -> CryptoPublicKey -> List U8 -> List U8
-    -> IO (Result JwtError Bool)
+    check : CryptoSigAlg -> CryptoPublicKey -> List U8 -> List U8
+        -> IO (Result JwtError Bool)
 }
 
 pub def JwtVerifier.run
-  (v : JwtVerifier) (alg : CryptoSigAlg) (key : CryptoPublicKey)
-  (msg : List U8) (sig : List U8)
-  : IO (Result JwtError Bool) :=
-  match v {
-    { check, .. } => check alg key msg sig
-  }
+    (v : JwtVerifier) (alg : CryptoSigAlg) (key : CryptoPublicKey)
+    (msg : List U8) (sig : List U8)
+    : IO (Result JwtError Bool) :=
+    match v {
+        { check, .. } => check alg key msg sig
+    }
 
 /// A verifier that accepts or rejects every signature. Only for tests and
 /// for exercising the claim layer without a crypto backend.
 pub def JwtVerifier.fake (accept : Bool) : JwtVerifier :=
-  let v : JwtVerifier := {
-    check := fn (_alg : CryptoSigAlg) (_key : CryptoPublicKey)
-                  (_msg : List U8) (_sig : List U8) =>
-      IO.pure (Result.ok accept)
-  } in
-  v
+    let v : JwtVerifier := {
+        check := fn (_alg : CryptoSigAlg) (_key : CryptoPublicKey)
+            (_msg : List U8) (_sig : List U8) =>
+            IO.pure (Result.ok accept)
+    } in
+    v
 
 def JwtVerifier.real_check
-  (alg : CryptoSigAlg) (key : CryptoPublicKey) (msg : List U8) (sig : List U8)
-  : IO (Result JwtError Bool) := do {
-  let r <- Pubkey.verify alg key msg sig;
-  return (match r {
-    Result.err detail => Result.err (JwtError.verification_failed detail),
-    Result.ok ok => Result.ok ok
-  })
+    (alg : CryptoSigAlg) (key : CryptoPublicKey) (msg : List U8) (sig : List U8)
+    : IO (Result JwtError Bool) := do {
+    let r <- Pubkey.verify alg key msg sig;
+    return (match r {
+        Result.err detail => Result.err (JwtError.verification_failed detail),
+        Result.ok ok => Result.ok ok
+    })
 }
 
 pub def JwtVerifier.real : JwtVerifier :=
-  let v : JwtVerifier := { check := JwtVerifier.real_check } in
-  v
+    let v : JwtVerifier := { check := JwtVerifier.real_check } in
+    v

@@ -157,13 +157,13 @@ pub def Block.serialize_json (b : Block) : Json :=
         Block.text s cache =>
             Json.make_object (with_cache cache
                 (Map.insert "type" (Json.make_str "text")
-                (Map.insert "text" (Json.make_str s)
-                BTreeMap.empty))),
+                    (Map.insert "text" (Json.make_str s)
+                        BTreeMap.empty))),
         Block.thinking s signature cache =>
             let base :=
                 Map.insert "type" (Json.make_str "thinking")
                 (Map.insert "thinking" (Json.make_str s)
-                BTreeMap.empty) in
+                    BTreeMap.empty) in
             let with_sig :=
                 if String.beq signature "" then base
                 else Map.insert "signature" (Json.make_str signature) base in
@@ -171,16 +171,16 @@ pub def Block.serialize_json (b : Block) : Json :=
         Block.tool_use id name input cache =>
             Json.make_object (with_cache cache
                 (Map.insert "type" (Json.make_str "tool_use")
-                (Map.insert "id" (Json.make_str id)
-                (Map.insert "name" (Json.make_str name)
-                (Map.insert "input" input
-                BTreeMap.empty))))),
+                    (Map.insert "id" (Json.make_str id)
+                        (Map.insert "name" (Json.make_str name)
+                            (Map.insert "input" input
+                                BTreeMap.empty))))),
         Block.tool_result tool_use_id content is_error cache =>
             let base :=
                 Map.insert "type" (Json.make_str "tool_result")
                 (Map.insert "tool_use_id" (Json.make_str tool_use_id)
-                (Map.insert "content" (Json.make_str content)
-                BTreeMap.empty)) in
+                    (Map.insert "content" (Json.make_str content)
+                        BTreeMap.empty)) in
             let with_err :=
                 if is_error then Map.insert "is_error" (Json.make_bool true) base else base in
             Json.make_object (with_cache cache with_err),
@@ -286,8 +286,8 @@ pub struct AnthropicMessage {
 pub def AnthropicMessage.serialize_json (m : AnthropicMessage) : Json :=
     Json.make_object
         (Map.insert "role" (Json.make_str m.role)
-        (Map.insert "content" (Json.make_array (List.map (fn (b : Block) => Block.serialize_json b) m.content))
-        BTreeMap.empty))
+            (Map.insert "content" (Json.make_array (List.map (fn (b : Block) => Block.serialize_json b) m.content))
+                BTreeMap.empty))
 
 /// Anthropic's tool table is FLAT (`{name, description, input_schema}`)
 /// -- no `function` nesting, unlike the OpenAI wire. `input_schema` is
@@ -302,9 +302,9 @@ pub struct AnthropicTool {
 pub def AnthropicTool.serialize_json (t : AnthropicTool) : Json :=
     Json.make_object (with_cache t.cache
         (Map.insert "name" (Json.make_str t.name)
-        (Map.insert "description" (Json.make_str t.description)
-        (Map.insert "input_schema" t.input_schema
-        BTreeMap.empty))))
+            (Map.insert "description" (Json.make_str t.description)
+                (Map.insert "input_schema" t.input_schema
+                    BTreeMap.empty))))
 
 /// The request. `max_tokens` is REQUIRED by the wire (unlike the
 /// OpenAI side, where it is optional); `system`/`tools` are OMITTED
@@ -338,7 +338,7 @@ pub def MessagesRequest.serialize_json (r : MessagesRequest) : Json :=
             let base :=
                 Map.insert "model" (Json.make_str model)
                 (Map.insert "max_tokens" (Json.make_num_int max_tokens)
-                BTreeMap.empty) in
+                    BTreeMap.empty) in
             let with_system :=
                 match system {
                     List.empty => base,

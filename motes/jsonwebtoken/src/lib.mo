@@ -13,15 +13,15 @@ pub use lib::principal {Principal}
 pub use lib::jwt {Jwt, Jwt.parse, Jwt.verify}
 pub use lib::jwks {Jwks.key_for}
 pub use lib::claims {
-  Claims.check_access_token,
-  Claims.check_id_token,
-  Claims.validate_access_token,
-  Claims.validate_id_token,
-  ClaimsConfig,
+    Claims.check_access_token,
+    Claims.check_id_token,
+    Claims.validate_access_token,
+    Claims.validate_id_token,
+    ClaimsConfig,
 }
 pub use lib::verifier {
-  JwtVerifier,
-  JwtVerifier.fake,
-  JwtVerifier.real,
-  JwtVerifier.run,
+    JwtVerifier,
+    JwtVerifier.fake,
+    JwtVerifier.real,
+    JwtVerifier.run,
 }

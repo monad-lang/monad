@@ -169,10 +169,10 @@ def Markdown.parse_bare_destination (c : Markdown.Cursor) (acc : List String) (d
             let w : I64 := Markdown.char_width c.text in
             if U8.lt b 32u8
             then (if List.is_empty acc then Option.none
-                  else Option.some (Pair.pair (String.concat_list (List.reverse acc)) c))
+                else Option.some (Pair.pair (String.concat_list (List.reverse acc)) c))
             else if U8.beq b 32u8
             then (if List.is_empty acc then Option.none
-                  else Option.some (Pair.pair (String.concat_list (List.reverse acc)) c))
+                else Option.some (Pair.pair (String.concat_list (List.reverse acc)) c))
             else if U8.beq b 92u8
             then
                 let after : Markdown.Cursor := Markdown.Cursor.step c in
@@ -190,9 +190,9 @@ def Markdown.parse_bare_destination (c : Markdown.Cursor) (acc : List String) (d
             then Markdown.parse_bare_destination (Markdown.Cursor.step c) (List.cons "(" acc) (I64.add depth 1i64)
             else if U8.beq b 41u8
             then (if I64.lt depth 1i64
-                  then (if List.is_empty acc then Option.none
-                        else Option.some (Pair.pair (String.concat_list (List.reverse acc)) c))
-                  else Markdown.parse_bare_destination (Markdown.Cursor.step c) (List.cons ")" acc) (I64.sub depth 1i64))
+                then (if List.is_empty acc then Option.none
+                    else Option.some (Pair.pair (String.concat_list (List.reverse acc)) c))
+                else Markdown.parse_bare_destination (Markdown.Cursor.step c) (List.cons ")" acc) (I64.sub depth 1i64))
             else Markdown.parse_bare_destination (Markdown.Cursor.step c) (List.cons (String.slice c.text 0 w) acc) depth
     }
 

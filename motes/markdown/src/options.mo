@@ -27,24 +27,24 @@ pub struct Markdown.HtmlOptions {
 /// a reply that happens to start with `---` must not lose its middle.
 pub def Markdown.default_options : Markdown.Options :=
     { gfm_tables := true, gfm_task_lists := true, gfm_strikethrough := true,
-      gfm_autolinks := true, frontmatter := false, max_depth := 64 }
+        gfm_autolinks := true, frontmatter := false, max_depth := 64 }
 
 /// Strict CommonMark 0.31.2: every GFM extension off.
 pub def Markdown.commonmark_options : Markdown.Options :=
     { gfm_tables := false, gfm_task_lists := false, gfm_strikethrough := false,
-      gfm_autolinks := false, frontmatter := false, max_depth := 64 }
+        gfm_autolinks := false, frontmatter := false, max_depth := 64 }
 
 /// Site-generator shape: GFM on, frontmatter recognised.
 pub def Markdown.site_options : Markdown.Options :=
     { gfm_tables := true, gfm_task_lists := true, gfm_strikethrough := true,
-      gfm_autolinks := true, frontmatter := true, max_depth := 64 }
+        gfm_autolinks := true, frontmatter := true, max_depth := 64 }
 
 pub def Markdown.default_html_options : Markdown.HtmlOptions :=
     { allow_raw_html := false, safe_urls := true, heading_ids := false,
-      heading_id_prefix := "" }
+        heading_id_prefix := "" }
 
 /// What the CommonMark conformance harness renders with: verbatim HTML and
 /// no URL filtering, because the spec's expected output has both.
 pub def Markdown.conformance_html_options : Markdown.HtmlOptions :=
     { allow_raw_html := true, safe_urls := false, heading_ids := false,
-      heading_id_prefix := "" }
+        heading_id_prefix := "" }

@@ -154,8 +154,8 @@ def hex_nibble (v : U32) (shift : U32) : String :=
 /// `0x` + eight hex digits (BigInt parses this on the JS side).
 pub def Handler.hex (v : U32) : String :=
     String.concat "0x" (String.concat_list
-        [ hex_nibble v 28u32, hex_nibble v 24u32, hex_nibble v 20u32, hex_nibble v 16u32,
-          hex_nibble v 12u32, hex_nibble v 8u32, hex_nibble v 4u32, hex_nibble v 0u32 ])
+        [hex_nibble v 28u32, hex_nibble v 24u32, hex_nibble v 20u32, hex_nibble v 16u32,
+            hex_nibble v 12u32, hex_nibble v 8u32, hex_nibble v 4u32, hex_nibble v 0u32])
 
 /// The attribute value the JS host parses: `"<id><:flags>"`.
 pub def Handler.spec_of (id : U32) (flags : ListenerFlags) : String :=

@@ -146,7 +146,7 @@ def Markdown.valid_email_go (s : String) (i : I64) (at : I64) (dot : I64) : Bool
             Option.some b =>
                 if U8.beq b 64u8
                 then (if I64.lt (-1i64) at then false
-                      else Markdown.valid_email_go (String.drop 1i64 s) (I64.add i 1i64) i dot)
+                    else Markdown.valid_email_go (String.drop 1i64 s) (I64.add i 1i64) i dot)
                 else if U8.beq b 46u8
                 then Markdown.valid_email_go (String.drop 1i64 s) (I64.add i 1i64) at i
                 else Markdown.valid_email_go (String.drop 1i64 s) (I64.add i 1i64) at dot,

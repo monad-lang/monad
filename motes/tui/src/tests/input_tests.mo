@@ -150,7 +150,6 @@ def test_input_state_beq : Bool :=
     && Bool.not (input_state "a" "p" == input_state "a" "q")
     && Bool.not (at_cursor "ab" 1 "p" == input_state "ab" "p")
 
-
 // ==================== paste insertion ====================
 
 #[test]

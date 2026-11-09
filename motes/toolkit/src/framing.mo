@@ -60,7 +60,7 @@
 ///
 /// The reader loop itself lives with its consumer, `motes/lsp/src/server.mo`.
 
-use toolkit::bytes { byte_cr, byte_lf, byte_space }
+use toolkit::bytes {byte_cr, byte_lf, byte_space}
 
 /// How far into a buffer a `Content-Length` header may extend before it is
 /// treated as malformed rather than incomplete.
@@ -102,8 +102,8 @@ def content_length_max : I64 := 100000000
 /// caller already calls this value, so the qualified name says what the type
 /// is for rather than what module it happens to live in.
 pub type FramingMode {
-  content_length,
-  newline_delimited,
+    content_length,
+    newline_delimited,
 }
 
 /// The result of offering an accumulated buffer to `framing_read`.
@@ -114,9 +114,9 @@ pub type FramingMode {
 /// frame ended where it should but its header is unusable, which no amount of
 /// further reading fixes.
 pub type FrameRead {
-  need_more,
-  frame (body : String) (rest : String),
-  bad_header (reason : String),
+    need_more,
+    frame (body : String) (rest : String),
+    bad_header (reason : String),
 }
 
 // --- Byte-level helpers ---
@@ -132,10 +132,10 @@ pub type FrameRead {
 // never converted at all -- its length comes from `String.length`.
 
 def is_byte (o : Option U8) (b : U8) : Bool :=
-  match o {
-    Option.none => false,
-    Option.some x => U8.beq x b,
-  }
+    match o {
+        Option.none => false,
+        Option.some x => U8.beq x b,
+    }
 
 /// The digit `b` denotes, or -1 if it is not a digit.
 ///
@@ -151,14 +151,14 @@ def is_byte (o : Option U8) (b : U8) : Bool :=
 /// subtraction above -- the value still has to come out as an `I64`.)
 #[partial]
 def digit_value (b : U8) : I64 :=
-  digit_value_go (String.to_list digit_chars) b 0
+    digit_value_go (String.to_list digit_chars) b 0
 
 #[partial]
 def digit_value_go (bs : List U8) (b : U8) (i : I64) : I64 :=
-  match bs {
-    List.empty => -1,
-    List.cons x rest => if U8.beq x b then i else digit_value_go rest b (I64.add i 1),
-  }
+    match bs {
+        List.empty => -1,
+        List.cons x rest => if U8.beq x b then i else digit_value_go rest b (I64.add i 1),
+    }
 
 /// The index just past the first `\r\n\r\n` in `bs`, or -1 for none.
 ///
@@ -170,35 +170,35 @@ def digit_value_go (bs : List U8) (b : U8) (i : I64) : I64 :=
 /// completes the terminator, which is also where the body begins.
 #[partial]
 def find_terminator (bs : List U8) (i : I64) (p1 : Option U8) (p2 : Option U8) (p3 : Option U8) : I64 :=
-  match bs {
-    List.empty => -1,
-    List.cons b rest =>
-      let hit : Bool :=
-        is_byte p3 byte_cr && is_byte p2 byte_lf && is_byte p1 byte_cr && U8.beq b byte_lf
-      in
-      if hit
-      then I64.add i 1
-      else find_terminator rest (I64.add i 1) (Option.some b) p1 p2,
-  }
+    match bs {
+        List.empty => -1,
+        List.cons b rest =>
+            let hit : Bool :=
+                is_byte p3 byte_cr && is_byte p2 byte_lf && is_byte p1 byte_cr && U8.beq b byte_lf
+            in
+            if hit
+            then I64.add i 1
+            else find_terminator rest (I64.add i 1) (Option.some b) p1 p2,
+    }
 
 /// The index of the first `\n` in `bs`, or `Option.none` for none.
 #[partial]
 def find_lf (bs : List U8) (i : I64) : Option I64 :=
-  match bs {
-    List.empty => Option.none,
-    List.cons b rest =>
-      if U8.beq b byte_lf then Option.some i else find_lf rest (I64.add i 1),
-  }
+    match bs {
+        List.empty => Option.none,
+        List.cons b rest =>
+            if U8.beq b byte_lf then Option.some i else find_lf rest (I64.add i 1),
+    }
 
 /// Drop one trailing `\r` -- the carriage return of a line's `\r\n`.
 def trim_cr (line : String) : String :=
-  let n : I64 := String.length line in
-  if I64.lt 0 n
-  then
-    if String.beq (String.slice line (n - 1) 1) "\r"
-    then String.slice line 0 (n - 1)
+    let n : I64 := String.length line in
+    if I64.lt 0 n
+    then
+        if String.beq (String.slice line (n - 1) 1) "\r"
+        then String.slice line 0 (n - 1)
+        else line
     else line
-  else line
 
 // --- The `Content-Length` header ---
 
@@ -212,10 +212,10 @@ def trim_cr (line : String) : String :=
 /// is what lets the tests below run against nothing but the prelude.
 #[partial]
 def framing_reverse_lines (ss : List String) (acc : List String) : List String :=
-  match ss {
-    List.empty => acc,
-    List.cons s rest => framing_reverse_lines rest (List.cons s acc),
-  }
+    match ss {
+        List.empty => acc,
+        List.cons s rest => framing_reverse_lines rest (List.cons s acc),
+    }
 
 /// Split a header region into its `\r\n`-separated lines.
 ///
@@ -227,20 +227,20 @@ def framing_reverse_lines (ss : List String) (acc : List String) : List String :
 /// case here, and `trim_cr` handles the `\r` each line still carries.
 #[partial]
 pub def framing_header_lines (region : String) : List String :=
-  header_lines_go region (String.to_list region) 0 0 List.empty
+    header_lines_go region (String.to_list region) 0 0 List.empty
 
 #[partial]
 def header_lines_go (region : String) (bs : List U8) (i : I64) (start : I64) (acc : List String) : List String :=
-  match bs {
-    List.empty =>
-      framing_reverse_lines (List.cons (trim_cr (String.slice region start (i - start))) acc) List.empty,
-    List.cons b rest =>
-      if U8.beq b byte_lf
-      then
-        header_lines_go region rest (I64.add i 1) (I64.add i 1)
-          (List.cons (trim_cr (String.slice region start (i - start))) acc)
-      else header_lines_go region rest (I64.add i 1) start acc,
-  }
+    match bs {
+        List.empty =>
+            framing_reverse_lines (List.cons (trim_cr (String.slice region start (i - start))) acc) List.empty,
+        List.cons b rest =>
+            if U8.beq b byte_lf
+            then
+                header_lines_go region rest (I64.add i 1) (I64.add i 1)
+                    (List.cons (trim_cr (String.slice region start (i - start))) acc)
+            else header_lines_go region rest (I64.add i 1) start acc,
+    }
 
 /// The value of the `Content-Length` header, or `Option.none`.
 ///
@@ -251,21 +251,21 @@ def header_lines_go (region : String) (bs : List U8) (i : I64) (start : I64) (ac
 /// built to avoid, arrived at from the other direction.
 #[partial]
 def find_content_length (lines : List String) : Option I64 :=
-  match lines {
-    List.empty => Option.none,
-    List.cons l rest =>
-      if String.starts_with content_length_header l
-      then parse_len (String.drop (String.length content_length_header) l)
-      else find_content_length rest,
-  }
+    match lines {
+        List.empty => Option.none,
+        List.cons l rest =>
+            if String.starts_with content_length_header l
+            then parse_len (String.drop (String.length content_length_header) l)
+            else find_content_length rest,
+    }
 
 /// Every byte is a space.
 #[partial]
 def all_spaces (bs : List U8) : Bool :=
-  match bs {
-    List.empty => true,
-    List.cons b rest => if U8.beq b byte_space then all_spaces rest else false,
-  }
+    match bs {
+        List.empty => true,
+        List.cons b rest => if U8.beq b byte_space then all_spaces rest else false,
+    }
 
 /// Read a decimal length out of everything after `Content-Length:`.
 ///
@@ -288,30 +288,30 @@ def all_spaces (bs : List U8) : Bool :=
 /// exactly where the digits stopped.
 #[partial]
 def parse_len (value : String) : Option I64 :=
-  match parse_len_go (String.to_list value) false 0 {
-    Option.none => Option.none,
-    Option.some p =>
-      match p {
-        Pair.pair n tail => if all_spaces tail then Option.some n else Option.none,
-      },
-  }
+    match parse_len_go (String.to_list value) false 0 {
+        Option.none => Option.none,
+        Option.some p =>
+            match p {
+                Pair.pair n tail => if all_spaces tail then Option.some n else Option.none,
+            },
+    }
 
 #[partial]
 def parse_len_go (bs : List U8) (started : Bool) (acc : I64) : Option (Pair I64 (List U8)) :=
-  match bs {
-    List.empty => if started then Option.some (Pair.pair acc List.empty) else Option.none,
-    List.cons b rest =>
-      let d : I64 := digit_value b in
-      if I64.lt d 0
-      then
-        if started
-        then Option.some (Pair.pair acc bs)
-        else parse_len_go rest false acc
-      else
-        if I64.gt acc content_length_max
-        then Option.none
-        else parse_len_go rest true (I64.add (I64.mul acc 10) d),
-  }
+    match bs {
+        List.empty => if started then Option.some (Pair.pair acc List.empty) else Option.none,
+        List.cons b rest =>
+            let d : I64 := digit_value b in
+            if I64.lt d 0
+            then
+                if started
+                then Option.some (Pair.pair acc bs)
+                else parse_len_go rest false acc
+            else
+                if I64.gt acc content_length_max
+                then Option.none
+                else parse_len_go rest true (I64.add (I64.mul acc 10) d),
+    }
 
 // --- The two framings ---
 
@@ -322,26 +322,26 @@ def parse_len_go (bs : List U8) (started : Bool) (acc : I64) : Option (Pair I64 
 /// client may pipeline. Dropping it loses every message that arrived in the
 /// same read as this one -- a burst that a fast client produces routinely.
 pub def framing_read (mode : FramingMode) (buf : String) : FrameRead :=
-  match mode {
-    FramingMode.content_length => read_content_length buf,
-    FramingMode.newline_delimited => read_newline_delimited buf,
-  }
+    match mode {
+        FramingMode.content_length => read_content_length buf,
+        FramingMode.newline_delimited => read_newline_delimited buf,
+    }
 
 #[partial]
 def read_content_length (buf : String) : FrameRead :=
-  let len : I64 := String.length buf in
-  let window_len : I64 := if I64.lt len header_window_max then len else header_window_max in
-  let window : String := String.slice buf 0 window_len in
-  let after : I64 := find_terminator (String.to_list window) 0 Option.none Option.none Option.none in
-  if I64.lt after 0
-  then
-    // No terminator anywhere in the window. Under the window size that is a
-    // partial header and the answer is to wait; AT the window size the header
-    // cannot grow into a legal one, so waiting would hang on a broken peer.
-    if I64.lt len header_window_max
-    then FrameRead.need_more
-    else FrameRead.bad_header "no header terminator within the window"
-  else frame_after_header buf after
+    let len : I64 := String.length buf in
+    let window_len : I64 := if I64.lt len header_window_max then len else header_window_max in
+    let window : String := String.slice buf 0 window_len in
+    let after : I64 := find_terminator (String.to_list window) 0 Option.none Option.none Option.none in
+    if I64.lt after 0
+    then
+        // No terminator anywhere in the window. Under the window size that is a
+        // partial header and the answer is to wait; AT the window size the header
+        // cannot grow into a legal one, so waiting would hang on a broken peer.
+        if I64.lt len header_window_max
+        then FrameRead.need_more
+        else FrameRead.bad_header "no header terminator within the window"
+    else frame_after_header buf after
 
 /// Take the declared number of bytes after a located terminator.
 ///
@@ -350,17 +350,17 @@ def read_content_length (buf : String) : FrameRead :=
 /// neither the header nor the body.
 #[partial]
 def frame_after_header (buf : String) (after : I64) : FrameRead :=
-  let region : String := String.slice buf 0 (after - 4) in
-  match find_content_length (framing_header_lines region) {
-    Option.none => FrameRead.bad_header "missing or malformed Content-Length header",
-    Option.some n =>
-      if I64.lt (String.length buf) (I64.add after n)
-      then FrameRead.need_more
-      else
-        FrameRead.frame
-          (String.slice buf after n)
-          (String.drop (I64.add after n) buf),
-  }
+    let region : String := String.slice buf 0 (after - 4) in
+    match find_content_length (framing_header_lines region) {
+        Option.none => FrameRead.bad_header "missing or malformed Content-Length header",
+        Option.some n =>
+            if I64.lt (String.length buf) (I64.add after n)
+            then FrameRead.need_more
+            else
+                FrameRead.frame
+                    (String.slice buf after n)
+                    (String.drop (I64.add after n) buf),
+    }
 
 /// A whole JSON value per line, which is MCP's framing.
 ///
@@ -374,11 +374,11 @@ def frame_after_header (buf : String) (after : I64) : FrameRead :=
 /// this does and a peer that withholds one is the peer's bug.
 #[partial]
 def read_newline_delimited (buf : String) : FrameRead :=
-  match find_lf (String.to_list buf) 0 {
-    Option.none => FrameRead.need_more,
-    Option.some i =>
-      FrameRead.frame (trim_cr (String.slice buf 0 i)) (String.drop (I64.add i 1) buf),
-  }
+    match find_lf (String.to_list buf) 0 {
+        Option.none => FrameRead.need_more,
+        Option.some i =>
+            FrameRead.frame (trim_cr (String.slice buf 0 i)) (String.drop (I64.add i 1) buf),
+    }
 
 // --- How much more is needed ---
 
@@ -409,32 +409,32 @@ def read_newline_delimited (buf : String) : FrameRead :=
 /// question a caller asks only after being told `need_more`.
 #[partial]
 pub def framing_needed (mode : FramingMode) (buf : String) : Option I64 :=
-  match mode {
-    FramingMode.content_length => needed_content_length buf,
-    FramingMode.newline_delimited => Option.none,
-  }
+    match mode {
+        FramingMode.content_length => needed_content_length buf,
+        FramingMode.newline_delimited => Option.none,
+    }
 
 /// The same header scan `read_content_length` runs, stopping at the point where
 /// the two cases diverge.
 #[partial]
 def needed_content_length (buf : String) : Option I64 :=
-  let len : I64 := String.length buf in
-  let window_len : I64 := if I64.lt len header_window_max then len else header_window_max in
-  let window : String := String.slice buf 0 window_len in
-  let after : I64 := find_terminator (String.to_list window) 0 Option.none Option.none Option.none in
-  if I64.lt after 0
-  then Option.none
-  else needed_after_header buf after
+    let len : I64 := String.length buf in
+    let window_len : I64 := if I64.lt len header_window_max then len else header_window_max in
+    let window : String := String.slice buf 0 window_len in
+    let after : I64 := find_terminator (String.to_list window) 0 Option.none Option.none Option.none in
+    if I64.lt after 0
+    then Option.none
+    else needed_after_header buf after
 
 #[partial]
 def needed_after_header (buf : String) (after : I64) : Option I64 :=
-  let region : String := String.slice buf 0 (after - 4) in
-  match find_content_length (framing_header_lines region) {
-    Option.none => Option.none,
-    Option.some n =>
-      let want : I64 := I64.sub (I64.add after n) (String.length buf) in
-      if I64.lt want 1 then Option.some 1 else Option.some want,
-  }
+    let region : String := String.slice buf 0 (after - 4) in
+    match find_content_length (framing_header_lines region) {
+        Option.none => Option.none,
+        Option.some n =>
+            let want : I64 := I64.sub (I64.add after n) (String.length buf) in
+            if I64.lt want 1 then Option.some 1 else Option.some want,
+    }
 
 // --- Test-only helpers ---
 //
@@ -444,33 +444,33 @@ def needed_after_header (buf : String) (after : I64) : Option I64 :=
 
 /// The body of a completed frame, or `Option.none` for either other outcome.
 pub def frame_body (r : FrameRead) : Option String :=
-  match r {
-    FrameRead.need_more => Option.none,
-    FrameRead.frame body _rest => Option.some body,
-    FrameRead.bad_header _reason => Option.none,
-  }
+    match r {
+        FrameRead.need_more => Option.none,
+        FrameRead.frame body _rest => Option.some body,
+        FrameRead.bad_header _reason => Option.none,
+    }
 
 /// What is left after a completed frame, or `Option.none` for either other
 /// outcome.
 pub def frame_rest (r : FrameRead) : Option String :=
-  match r {
-    FrameRead.need_more => Option.none,
-    FrameRead.frame _body rest => Option.some rest,
-    FrameRead.bad_header _reason => Option.none,
-  }
+    match r {
+        FrameRead.need_more => Option.none,
+        FrameRead.frame _body rest => Option.some rest,
+        FrameRead.bad_header _reason => Option.none,
+    }
 
 /// The reason a header was rejected, or `Option.none` for either other
 /// outcome.
 pub def frame_reason (r : FrameRead) : Option String :=
-  match r {
-    FrameRead.need_more => Option.none,
-    FrameRead.frame _body _rest => Option.none,
-    FrameRead.bad_header reason => Option.some reason,
-  }
+    match r {
+        FrameRead.need_more => Option.none,
+        FrameRead.frame _body _rest => Option.none,
+        FrameRead.bad_header reason => Option.some reason,
+    }
 
 pub def is_need_more (r : FrameRead) : Bool :=
-  match r {
-    FrameRead.need_more => true,
-    FrameRead.frame _body _rest => false,
-    FrameRead.bad_header _reason => false,
-  }
+    match r {
+        FrameRead.need_more => true,
+        FrameRead.frame _body _rest => false,
+        FrameRead.bad_header _reason => false,
+    }

@@ -45,12 +45,12 @@
 use json::json {Json}
 use lang::module {RangedFileCheck, ranged_file_ranges}
 use toolkit::decl_text {
-  DeclText, decl_text_kind, decl_text_name, decl_text_name_span, decl_text_span, decl_texts,
-  decl_texts_of_source,
+    DeclText, decl_text_kind, decl_text_name, decl_text_name_span, decl_text_span, decl_texts,
+    decl_texts_of_source,
 }
 use toolkit::navigation {
-  NavTarget, nav_at_cursor, nav_target_detail, nav_target_file, nav_target_name,
-  nav_target_range,
+    NavTarget, nav_at_cursor, nav_target_detail, nav_target_file, nav_target_name,
+    nav_target_range,
 }
 use lang::mote {read_file_or_none}
 use lang::types {SourceRange}
@@ -60,14 +60,14 @@ use lsp::params {lsp_param_nested_i64, lsp_param_str}
 use toolkit::docstore {DocStore, docstore_text, docstore_uri_of_path}
 use toolkit::jsonrpc {rpc_object}
 use toolkit::position {
-  LineIndex, PositionEncoding, WirePosition, WireRange, line_index_of_source, offset_of_wire,
-  wire_position_mk, wire_range_of_offsets,
+    LineIndex, PositionEncoding, WirePosition, WireRange, line_index_of_source, offset_of_wire,
+    wire_position_mk, wire_range_of_offsets,
 }
 use toolkit::text {
-  TextSpan, text_identifier_at, text_span_start, text_span_stop, text_span_text,
+    TextSpan, text_identifier_at, text_span_start, text_span_stop, text_span_text,
 }
 use toolkit::wire {
-  location_json_of_source_range, wire_range_json, wire_range_of_source_range,
+    location_json_of_source_range, wire_range_json, wire_range_of_source_range,
 }
 
 // --- A resolved cursor ---
@@ -79,12 +79,12 @@ use toolkit::wire {
 /// stop counting. `index` is here rather than rebuilt per use because both hover and
 /// definition need it and building it is a pass over the whole buffer.
 pub struct Cursor {
-  uri : String,
-  text : String,
-  check : RangedFileCheck,
-  index : LineIndex,
-  ident : String,
-  span : TextSpan,
+    uri : String,
+    text : String,
+    check : RangedFileCheck,
+    index : LineIndex,
+    ident : String,
+    span : TextSpan,
 }
 
 pub def cursor_uri (c : Cursor) : String := c.uri
@@ -103,7 +103,7 @@ pub def cursor_span (c : Cursor) : TextSpan := c.span
 /// `nav_at_cursor`.
 #[partial]
 def nav_at_cursor_of (c : Cursor) : Option NavTarget :=
-  nav_at_cursor (cursor_check c) (cursor_text c) (cursor_ident c) (text_span_start (cursor_span c))
+    nav_at_cursor (cursor_check c) (cursor_text c) (cursor_ident c) (text_span_start (cursor_span c))
 
 /// Resolve a request's cursor: which document, where in it, and what identifier is
 /// there.
@@ -116,41 +116,41 @@ def nav_at_cursor_of (c : Cursor) : Option NavTarget :=
 #[partial]
 pub def lsp_cursor (checks : CheckStore) (enc : PositionEncoding) (params : Json)
     : Option Cursor :=
-  match document_uri params {
-    Option.none => Option.none,
-    Option.some uri =>
-      match checkstore_lookup uri checks {
+    match document_uri params {
         Option.none => Option.none,
-        Option.some ch => lsp_cursor_of_check uri ch enc params,
-      },
-  }
+        Option.some uri =>
+            match checkstore_lookup uri checks {
+                Option.none => Option.none,
+                Option.some ch => lsp_cursor_of_check uri ch enc params,
+            },
+    }
 
 #[partial]
 def lsp_cursor_of_check (uri : String) (ch : Check) (enc : PositionEncoding) (params : Json)
     : Option Cursor :=
-  let text : String := check_text ch in
-  lsp_cursor_in uri text (line_index_of_source text) (check_result ch) enc params
+    let text : String := check_text ch in
+    lsp_cursor_in uri text (line_index_of_source text) (check_result ch) enc params
 
 #[partial]
 def lsp_cursor_in (uri : String) (text : String) (ix : LineIndex) (check : RangedFileCheck)
     (enc : PositionEncoding) (params : Json) : Option Cursor :=
-  match lsp_position params {
-    Option.none => Option.none,
-    Option.some pos =>
-      match offset_of_wire enc ix text pos {
+    match lsp_position params {
         Option.none => Option.none,
-        Option.some offset => lsp_cursor_at uri text ix check offset,
-      },
-  }
+        Option.some pos =>
+            match offset_of_wire enc ix text pos {
+                Option.none => Option.none,
+                Option.some offset => lsp_cursor_at uri text ix check offset,
+            },
+    }
 
 #[partial]
 def lsp_cursor_at (uri : String) (text : String) (ix : LineIndex) (check : RangedFileCheck)
     (offset : I64) : Option Cursor :=
-  match text_identifier_at text offset {
-    Option.none => Option.none,
-    Option.some span =>
-      Option.some (Cursor.mk uri text check ix (text_span_text text span) span),
-  }
+    match text_identifier_at text offset {
+        Option.none => Option.none,
+        Option.some span =>
+            Option.some (Cursor.mk uri text check ix (text_span_text text span) span),
+    }
 
 /// `params.position`, the cursor.
 ///
@@ -165,18 +165,18 @@ def lsp_cursor_at (uri : String) (text : String) (ix : LineIndex) (check : Range
 /// cursor uses, and the reason `params.mo` has nested readers at all.
 #[partial]
 pub def lsp_position (params : Json) : Option WirePosition :=
-  match lsp_param_nested_i64 "position" "line" params {
-    Option.none => Option.none,
-    Option.some line =>
-      Option.some (wire_position_mk line (lsp_position_character params)),
-  }
+    match lsp_param_nested_i64 "position" "line" params {
+        Option.none => Option.none,
+        Option.some line =>
+            Option.some (wire_position_mk line (lsp_position_character params)),
+    }
 
 #[partial]
 def lsp_position_character (params : Json) : I64 :=
-  match lsp_param_nested_i64 "position" "character" params {
-    Option.none => 0,
-    Option.some c => c,
-  }
+    match lsp_param_nested_i64 "position" "character" params {
+        Option.none => 0,
+        Option.some c => c,
+    }
 
 // --- Hover ---
 
@@ -189,22 +189,22 @@ def lsp_position_character (params : Json) : I64 :=
 /// in this document.
 #[partial]
 pub def lsp_hover (checks : CheckStore) (enc : PositionEncoding) (params : Json) : Json :=
-  match lsp_cursor checks enc params {
-    Option.none => Json.make_null,
-    Option.some c => lsp_hover_of_cursor enc c,
-  }
+    match lsp_cursor checks enc params {
+        Option.none => Json.make_null,
+        Option.some c => lsp_hover_of_cursor enc c,
+    }
 
 #[partial]
 def lsp_hover_of_cursor (enc : PositionEncoding) (c : Cursor) : Json :=
-  match nav_at_cursor_of c {
-    Option.none => Json.make_null,
-    Option.some t => lsp_hover_json enc c t,
-  }
+    match nav_at_cursor_of c {
+        Option.none => Json.make_null,
+        Option.some t => lsp_hover_json enc c t,
+    }
 
 #[partial]
 def lsp_hover_json (enc : PositionEncoding) (c : Cursor) (t : NavTarget) : Json :=
-  rpc_object (List.cons (Pair.pair "contents" (lsp_markup (nav_target_detail t)))
-    (lsp_hover_range enc c))
+    rpc_object (List.cons (Pair.pair "contents" (lsp_markup (nav_target_detail t)))
+        (lsp_hover_range enc c))
 
 /// The `range` field, or NO FIELD AT ALL when the identifier's bytes cannot be placed
 /// on the wire.
@@ -217,11 +217,11 @@ def lsp_hover_json (enc : PositionEncoding) (c : Cursor) (t : NavTarget) : Json 
 /// the lie `wire.mo` refuses for jumps and would be no better here.
 #[partial]
 def lsp_hover_range (enc : PositionEncoding) (c : Cursor) : List (Pair String Json) :=
-  match wire_range_of_offsets enc (cursor_index c) (cursor_text c)
-      (text_span_start (cursor_span c)) (text_span_stop (cursor_span c)) {
-    Option.none => List.empty,
-    Option.some r => List.cons (Pair.pair "range" (wire_range_json r)) List.empty,
-  }
+    match wire_range_of_offsets enc (cursor_index c) (cursor_text c)
+        (text_span_start (cursor_span c)) (text_span_stop (cursor_span c)) {
+        Option.none => List.empty,
+        Option.some r => List.cons (Pair.pair "range" (wire_range_json r)) List.empty,
+    }
 
 /// A hover's `contents`: markdown, fenced, because the declaration being shown is
 /// often several lines.
@@ -238,10 +238,10 @@ def lsp_hover_range (enc : PositionEncoding) (c : Cursor) : List (Pair String Js
 /// highlight Monad as something it is not.
 #[partial]
 pub def lsp_markup (detail : String) : Json :=
-  rpc_object [
-    Pair.pair "kind" (Json.make_str "markdown"),
-    Pair.pair "value" (Json.make_str ("```monad\n" ++ detail ++ "\n```")),
-  ]
+    rpc_object [
+        Pair.pair "kind" (Json.make_str "markdown"),
+        Pair.pair "value" (Json.make_str ("```monad\n" ++ detail ++ "\n```")),
+    ]
 
 /// An empty `Json` list, pinned by a def rather than written as a bare `List.empty` in
 /// argument position -- the shape that resolved to the wrong instance in this
@@ -271,10 +271,10 @@ pub def lsp_definition (checks : CheckStore) (enc : PositionEncoding) (params : 
 
 #[partial]
 def lsp_definition_of_cursor (enc : PositionEncoding) (c : Cursor) : IO Json :=
-  match nav_at_cursor_of c {
-    Option.none => do { return Json.make_null },
-    Option.some t => lsp_definition_of_target enc c t,
-  }
+    match nav_at_cursor_of c {
+        Option.none => do { return Json.make_null },
+        Option.some t => lsp_definition_of_target enc c t,
+    }
 
 /// The target's span in this file if it has one, and its declaration in its own file if
 /// it does not.
@@ -285,10 +285,10 @@ def lsp_definition_of_cursor (enc : PositionEncoding) (c : Cursor) : IO Json :=
 /// struct, type, constructor or class the scope resolved in another module.
 #[partial]
 def lsp_definition_of_target (enc : PositionEncoding) (c : Cursor) (t : NavTarget) : IO Json :=
-  match nav_target_range t {
-    Option.some r => do { return (lsp_location_or_null enc (cursor_uri c) (cursor_index c) (cursor_text c) r) },
-    Option.none => lsp_definition_far enc t,
-  }
+    match nav_target_range t {
+        Option.some r => do { return (lsp_location_or_null enc (cursor_uri c) (cursor_index c) (cursor_text c) r) },
+        Option.none => lsp_definition_far enc t,
+    }
 
 /// A definition in another file: read that file and find the declaration by name.
 ///
@@ -323,10 +323,10 @@ def lsp_definition_far (enc : PositionEncoding) (t : NavTarget) : IO Json := do 
 #[partial]
 def lsp_location_in_file (enc : PositionEncoding) (path : String) (text : Option String)
     (name : String) : Json :=
-  match text {
-    Option.none => Json.make_null,
-    Option.some src => lsp_location_in_src enc (docstore_uri_of_path path) src name,
-  }
+    match text {
+        Option.none => Json.make_null,
+        Option.some src => lsp_location_in_src enc (docstore_uri_of_path path) src name,
+    }
 
 /// The same, given text the caller already read.
 ///
@@ -337,11 +337,11 @@ def lsp_location_in_file (enc : PositionEncoding) (path : String) (text : Option
 #[partial]
 def lsp_location_in_src (enc : PositionEncoding) (uri : String) (src : String) (name : String)
     : Json :=
-  let ix : LineIndex := line_index_of_source src in
-  match lsp_decl_named (decl_texts_of_source src) name {
-    Option.none => Json.make_null,
-    Option.some dr => lsp_location_or_null enc uri ix src (decl_text_name_span dr),
-  }
+    let ix : LineIndex := line_index_of_source src in
+    match lsp_decl_named (decl_texts_of_source src) name {
+        Option.none => Json.make_null,
+        Option.some dr => lsp_location_or_null enc uri ix src (decl_text_name_span dr),
+    }
 
 /// One location, as the one-element array a client expects, or null.
 ///
@@ -352,10 +352,10 @@ def lsp_location_in_src (enc : PositionEncoding) (uri : String) (src : String) (
 #[partial]
 def lsp_location_or_null (enc : PositionEncoding) (uri : String) (ix : LineIndex) (text : String)
     (r : SourceRange) : Json :=
-  match location_json_of_source_range uri enc ix text r {
-    Option.none => Json.make_null,
-    Option.some loc => Json.make_array (List.cons loc List.empty),
-  }
+    match location_json_of_source_range uri enc ix text r {
+        Option.none => Json.make_null,
+        Option.some loc => Json.make_array (List.cons loc List.empty),
+    }
 
 /// The declaration called `name` in a list of ranges, or nothing.
 ///
@@ -364,13 +364,13 @@ def lsp_location_or_null (enc : PositionEncoding) (uri : String) (ix : LineIndex
 /// shape for the same reason, in the same direction.
 #[partial]
 def lsp_decl_named (rs : List DeclText) (name : String) : Option DeclText :=
-  match rs {
-    List.empty => Option.none,
-    List.cons dr rest =>
-      if String.beq (decl_text_name dr) name
-      then Option.some dr
-      else lsp_decl_named rest name,
-  }
+    match rs {
+        List.empty => Option.none,
+        List.cons dr rest =>
+            if String.beq (decl_text_name dr) name
+            then Option.some dr
+            else lsp_decl_named rest name,
+    }
 
 // --- documentSymbol ---
 
@@ -388,32 +388,32 @@ def lsp_decl_named (rs : List DeclText) (name : String) : Option DeclText :=
 #[partial]
 pub def lsp_document_symbol (checks : CheckStore) (enc : PositionEncoding) (params : Json)
     : Json :=
-  match document_uri params {
-    Option.none => Json.make_array lsp_no_symbols,
-    Option.some uri =>
-      match checkstore_lookup uri checks {
+    match document_uri params {
         Option.none => Json.make_array lsp_no_symbols,
-        Option.some ch => lsp_symbols_of_check enc ch,
-      },
-  }
+        Option.some uri =>
+            match checkstore_lookup uri checks {
+                Option.none => Json.make_array lsp_no_symbols,
+                Option.some ch => lsp_symbols_of_check enc ch,
+            },
+    }
 
 #[partial]
 def lsp_symbols_of_check (enc : PositionEncoding) (ch : Check) : Json :=
-  let text : String := check_text ch in
-  Json.make_array (lsp_symbols_of enc text (line_index_of_source text)
-    (decl_texts text (ranged_file_ranges (check_result ch))))
+    let text : String := check_text ch in
+    Json.make_array (lsp_symbols_of enc text (line_index_of_source text)
+        (decl_texts text (ranged_file_ranges (check_result ch))))
 
 #[partial]
 def lsp_symbols_of (enc : PositionEncoding) (text : String) (ix : LineIndex)
     (rs : List DeclText) : List Json :=
-  match rs {
-    List.empty => List.empty,
-    List.cons dr rest =>
-      match lsp_symbol_of enc text ix dr {
-        Option.none => lsp_symbols_of enc text ix rest,
-        Option.some j => List.cons j (lsp_symbols_of enc text ix rest),
-      },
-  }
+    match rs {
+        List.empty => List.empty,
+        List.cons dr rest =>
+            match lsp_symbol_of enc text ix dr {
+                Option.none => lsp_symbols_of enc text ix rest,
+                Option.some j => List.cons j (lsp_symbols_of enc text ix rest),
+            },
+    }
 
 /// One declaration as a `DocumentSymbol`, or nothing when its kind is not a symbol.
 ///
@@ -429,31 +429,31 @@ def lsp_symbols_of (enc : PositionEncoding) (text : String) (ix : LineIndex)
 #[partial]
 def lsp_symbol_of (enc : PositionEncoding) (text : String) (ix : LineIndex) (dr : DeclText)
     : Option Json :=
-  match lsp_symbol_kind (decl_text_kind dr) {
-    Option.none => Option.none,
-    Option.some kind =>
-      lsp_symbol_json (decl_text_name dr) kind
-        (wire_range_of_source_range enc ix text (decl_text_span dr))
-        (wire_range_of_source_range enc ix text (decl_text_name_span dr)),
-  }
+    match lsp_symbol_kind (decl_text_kind dr) {
+        Option.none => Option.none,
+        Option.some kind =>
+            lsp_symbol_json (decl_text_name dr) kind
+                (wire_range_of_source_range enc ix text (decl_text_span dr))
+                (wire_range_of_source_range enc ix text (decl_text_name_span dr)),
+    }
 
 #[partial]
 def lsp_symbol_json (name : String) (kind : I64) (range : Option WireRange)
     (selection : Option WireRange) : Option Json :=
-  match range {
-    Option.none => Option.none,
-    Option.some r =>
-      match selection {
+    match range {
         Option.none => Option.none,
-        Option.some sel =>
-          Option.some (rpc_object [
-            Pair.pair "name" (Json.make_str name),
-            Pair.pair "kind" (Json.make_num_int kind),
-            Pair.pair "range" (wire_range_json r),
-            Pair.pair "selectionRange" (wire_range_json sel),
-          ]),
-      },
-  }
+        Option.some r =>
+            match selection {
+                Option.none => Option.none,
+                Option.some sel =>
+                    Option.some (rpc_object [
+                        Pair.pair "name" (Json.make_str name),
+                        Pair.pair "kind" (Json.make_num_int kind),
+                        Pair.pair "range" (wire_range_json r),
+                        Pair.pair "selectionRange" (wire_range_json sel),
+                    ]),
+            },
+    }
 
 /// The LSP `SymbolKind` number for a declaration kind, or nothing when a picker should
 /// not offer it.
@@ -465,12 +465,12 @@ def lsp_symbol_json (name : String) (kind : I64) (range : Option WireRange)
 /// provides -- and `monad-core`'s own mapping says so in a comment.
 #[partial]
 pub def lsp_symbol_kind (kind : String) : Option I64 :=
-  if String.beq kind "def" then Option.some 12
-  else if String.beq kind "struct" then Option.some 23
-  else if String.beq kind "class" then Option.some 5
-  else if String.beq kind "type" then Option.some 10
-  else if String.beq kind "instance" then Option.some 11
-  else Option.none
+    if String.beq kind "def" then Option.some 12
+    else if String.beq kind "struct" then Option.some 23
+    else if String.beq kind "class" then Option.some 5
+    else if String.beq kind "type" then Option.some 10
+    else if String.beq kind "instance" then Option.some 11
+    else Option.none
 
 // --- workspace/symbol ---
 
@@ -503,7 +503,7 @@ pub def lsp_workspace_symbol (docs : DocStore) (root : Option String)
 /// The query, lowercased once so the per-name comparison is not re-lowering it.
 #[partial]
 def lsp_query (params : Json) : String :=
-  String.to_lowercase (lsp_query_raw params)
+    String.to_lowercase (lsp_query_raw params)
 
 /// An absent `query` is the empty string, which matches every name -- so a client that
 /// sends no query gets the whole workspace, which is what the specification's `""`
@@ -511,10 +511,10 @@ def lsp_query (params : Json) : String :=
 /// question the client could have meant.
 #[partial]
 def lsp_query_raw (params : Json) : String :=
-  match lsp_param_str "query" params {
-    Option.none => "",
-    Option.some q => q,
-  }
+    match lsp_param_str "query" params {
+        Option.none => "",
+        Option.some q => q,
+    }
 
 #[partial]
 def lsp_workspace_items (docs : DocStore) (enc : PositionEncoding) (files : List String)
@@ -534,28 +534,28 @@ def lsp_workspace_items (docs : DocStore) (enc : PositionEncoding) (files : List
 #[partial]
 def lsp_items_in_file (enc : PositionEncoding) (path : String) (text : Option String)
     (query : String) : List Json :=
-  match text {
-    Option.none => List.empty,
-    Option.some src => lsp_items_in_src enc (docstore_uri_of_path path) src query,
-  }
+    match text {
+        Option.none => List.empty,
+        Option.some src => lsp_items_in_src enc (docstore_uri_of_path path) src query,
+    }
 
 #[partial]
 def lsp_items_in_src (enc : PositionEncoding) (uri : String) (src : String) (query : String)
     : List Json :=
-  let ix : LineIndex := line_index_of_source src in
-  lsp_items_of enc uri src ix (decl_texts_of_source src) query
+    let ix : LineIndex := line_index_of_source src in
+    lsp_items_of enc uri src ix (decl_texts_of_source src) query
 
 #[partial]
 def lsp_items_of (enc : PositionEncoding) (uri : String) (src : String) (ix : LineIndex)
     (rs : List DeclText) (query : String) : List Json :=
-  match rs {
-    List.empty => List.empty,
-    List.cons dr rest =>
-      match lsp_symbol_info enc uri src ix dr query {
-        Option.none => lsp_items_of enc uri src ix rest query,
-        Option.some j => List.cons j (lsp_items_of enc uri src ix rest query),
-      },
-  }
+    match rs {
+        List.empty => List.empty,
+        List.cons dr rest =>
+            match lsp_symbol_info enc uri src ix dr query {
+                Option.none => lsp_items_of enc uri src ix rest query,
+                Option.some j => List.cons j (lsp_items_of enc uri src ix rest query),
+            },
+    }
 
 /// One `SymbolInformation`: the same kind filter as `documentSymbol`, and a location
 /// rather than a bare range, because the declaration is not in the client's open
@@ -563,26 +563,26 @@ def lsp_items_of (enc : PositionEncoding) (uri : String) (src : String) (ix : Li
 #[partial]
 def lsp_symbol_info (enc : PositionEncoding) (uri : String) (src : String) (ix : LineIndex)
     (dr : DeclText) (query : String) : Option Json :=
-  match lsp_symbol_kind (decl_text_kind dr) {
-    Option.none => Option.none,
-    Option.some kind =>
-      if lsp_name_matches (decl_text_name dr) query
-      then lsp_symbol_info_of enc uri src ix dr kind
-      else Option.none,
-  }
+    match lsp_symbol_kind (decl_text_kind dr) {
+        Option.none => Option.none,
+        Option.some kind =>
+            if lsp_name_matches (decl_text_name dr) query
+            then lsp_symbol_info_of enc uri src ix dr kind
+            else Option.none,
+    }
 
 #[partial]
 def lsp_symbol_info_of (enc : PositionEncoding) (uri : String) (src : String) (ix : LineIndex)
     (dr : DeclText) (kind : I64) : Option Json :=
-  match location_json_of_source_range uri enc ix src (decl_text_span dr) {
-    Option.none => Option.none,
-    Option.some loc =>
-      Option.some (rpc_object [
-        Pair.pair "name" (Json.make_str (decl_text_name dr)),
-        Pair.pair "kind" (Json.make_num_int kind),
-        Pair.pair "location" loc,
-      ]),
-  }
+    match location_json_of_source_range uri enc ix src (decl_text_span dr) {
+        Option.none => Option.none,
+        Option.some loc =>
+            Option.some (rpc_object [
+                Pair.pair "name" (Json.make_str (decl_text_name dr)),
+                Pair.pair "kind" (Json.make_num_int kind),
+                Pair.pair "location" loc,
+            ]),
+    }
 
 /// Whether a name matches the query, case-insensitively and by substring.
 ///
@@ -598,7 +598,7 @@ def lsp_symbol_info_of (enc : PositionEncoding) (uri : String) (src : String) (i
 /// property of a def in `init`, one edit away from being different.
 #[partial]
 def lsp_name_matches (name : String) (query : String) : Bool :=
-  String.contains (String.to_lowercase name) query
+    String.contains (String.to_lowercase name) query
 
 // --- The workspace walk ---
 
@@ -641,9 +641,9 @@ def lsp_mo_entry (dir : String) (entry : Path) (rest : List Path) (acc : List St
 #[partial]
 def lsp_mo_file_entry (dir : String) (full : String) (is_dir : Bool) (rest : List Path)
     (acc : List String) : IO (List String) :=
-  if lsp_keep_mo full is_dir
-  then do { lsp_mo_files_in dir rest (List.append acc (List.cons full List.empty)) }
-  else do { lsp_mo_files_in dir rest acc }
+    if lsp_keep_mo full is_dir
+    then do { lsp_mo_files_in dir rest (List.append acc (List.cons full List.empty)) }
+    else do { lsp_mo_files_in dir rest acc }
 
 /// Whether a directory entry is a directory to walk into.
 ///
@@ -656,17 +656,17 @@ def lsp_mo_file_entry (dir : String) (full : String) (is_dir : Bool) (rest : Lis
 /// declaration the user wrote.
 #[partial]
 def lsp_walk_into (name : String) (is_dir : Bool) : Bool :=
-  if lsp_hidden name then false else is_dir
+    if lsp_hidden name then false else is_dir
 
 /// Whether a directory entry is a `.mo` file to keep.
 #[partial]
 def lsp_keep_mo (name : String) (is_dir : Bool) : Bool :=
-  if is_dir then false else String.ends_with name ".mo"
+    if is_dir then false else String.ends_with name ".mo"
 
 /// A name a walk should not descend into: a dotfile, or the build directory.
 #[partial]
 def lsp_hidden (name : String) : Bool :=
-  String.starts_with "." name || String.beq name "target"
+    String.starts_with "." name || String.beq name "target"
 
 /// A file's text: the client's buffer if the document is open, and the file on disk
 /// otherwise.
@@ -683,4 +683,3 @@ def lsp_file_text (docs : DocStore) (path : String) : IO (Option String) := do {
         Option.none => read_file_or_none (Path.path path)
     }
 }
-

@@ -9,7 +9,6 @@
 
 use std::list {}
 
-
 /// Every `fail` value carries not just a message but the input
 /// remaining right at the point of failure (`remaining` below) — this
 /// is what lets `lang/parser/position.mo`'s `location_of_remaining`
@@ -21,9 +20,9 @@ use std::list {}
 /// needed to change, not `ParseResult` itself. See
 /// `location_of_remaining`'s own doc comment for the full rationale.
 pub type ParseError {
-	tag (expected: String) (remaining: String),
-	custom (msg: String) (remaining: String),
-	}
+    tag (expected : String) (remaining : String),
+    custom (msg : String) (remaining : String),
+}
 
 /// Pull `remaining` back out of an already-failed `ParseError` — for the
 /// handful of call sites that want to re-describe a failure with a more
@@ -34,16 +33,15 @@ pub type ParseError {
 /// re-described, not a new one.
 #[partial]
 pub def parse_error_remaining (e : ParseError) : String :=
-	match e {
-		tag _ remaining => remaining,
-		custom _ remaining => remaining,
-	}
-
+    match e {
+        tag _ remaining => remaining,
+        custom _ remaining => remaining,
+    }
 
 pub type ParseResult O {
-	success (remaining: String) (output: O),
-	fail (error: ParseError)
-	}
+    success (remaining : String) (output : O),
+    fail (error : ParseError)
+}
 
 // O(1) on both sides: `String.get s 0` reads one byte (the native's
 // `i == 0` fast path skips the length call entirely in compiled
@@ -56,7 +54,7 @@ pub type ParseResult O {
 // this is semantics-preserving (including the NULL case: length is 0,
 // `get` yields none).
 pub def is_empty (s : String) : Bool :=
-	match String.get s 0 {
-		Option.some _ => false,
-		Option.none => true
-	}
+    match String.get s 0 {
+        Option.some _ => false,
+        Option.none => true
+    }

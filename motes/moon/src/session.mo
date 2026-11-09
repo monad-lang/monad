@@ -14,295 +14,295 @@ use std::process {process_id}
 use std::ref {Ref, Ref.add_i64, Ref.get, Ref.new, Ref.set, Ref.update}
 use std::sha256 {Sha256.hash}
 use http::cookie {
-  CookieAttrs, CookieAttrs.default, Cookie.clear, Cookie.lookup, Cookie.parse,
-  Cookie.parse_headers, Cookie.set_cookie, SameSite,
+    CookieAttrs, CookieAttrs.default, Cookie.clear, Cookie.lookup, Cookie.parse,
+    Cookie.parse_headers, Cookie.set_cookie, SameSite,
 }
 use http::types {Headers, Headers.add, Request, Response}
 
 pub struct Session {
-  id : String,
-  data : List (Pair String String),
-  expires_at : I64
+    id : String,
+    data : List (Pair String String),
+    expires_at : I64
 }
 
 pub struct SessionStore {
-  sessions : Ref (List Session),
-  counter : Ref I64,
-  cookie_name : String,
-  ttl_seconds : I64,
-  secure : Bool,
-  same_site : SameSite,
-  max_sessions : I64,
-  /// Optional CSPRNG-backed id generator. `None` keeps the historical
-  /// time/pid/counter hash; `moon::session_crypto` supplies one.
-  next_id : Option (Unit -> IO (Result String String))
+    sessions : Ref (List Session),
+    counter : Ref I64,
+    cookie_name : String,
+    ttl_seconds : I64,
+    secure : Bool,
+    same_site : SameSite,
+    max_sessions : I64,
+    /// Optional CSPRNG-backed id generator. `None` keeps the historical
+    /// time/pid/counter hash; `moon::session_crypto` supplies one.
+    next_id : Option (Unit -> IO (Result String String))
 }
 
 /// Explicit session policy. `default` is the historical behaviour; use
 /// `secure := true` and `same_site := SameSite.lax` on HTTPS.
 pub struct SessionConfig {
-  cookie_name : String,
-  ttl_seconds : I64,
-  secure : Bool,
-  same_site : SameSite,
-  max_sessions : I64,
-  next_id : Option (Unit -> IO (Result String String))
+    cookie_name : String,
+    ttl_seconds : I64,
+    secure : Bool,
+    same_site : SameSite,
+    max_sessions : I64,
+    next_id : Option (Unit -> IO (Result String String))
 }
 
 pub def SessionConfig.default (cookie_name : String) (ttl_seconds : I64) : SessionConfig :=
-  let c : SessionConfig :=
-    { cookie_name := cookie_name, ttl_seconds := ttl_seconds, secure := false,
-      same_site := SameSite.lax, max_sessions := 1000i64,
-      next_id := Option.none } in
-  c
+    let c : SessionConfig :=
+        { cookie_name := cookie_name, ttl_seconds := ttl_seconds, secure := false,
+            same_site := SameSite.lax, max_sessions := 1000i64,
+            next_id := Option.none } in
+    c
 
 /// A store with an explicit policy. `SameSite=None` requires `Secure`, per
 /// RFC 6265bis; a policy that asks for the combination is refused rather
 /// than silently downgraded.
 pub def SessionStore.new_with (cfg : SessionConfig) : IO (Result String SessionStore) := do {
-  match cfg.same_site {
-    SameSite.none =>
-      if Bool.not cfg.secure
-      then IO.pure (Result.err "SameSite=None requires Secure")
-      else SessionStore.make cfg,
-    SameSite.lax => SessionStore.make cfg,
-    SameSite.strict => SessionStore.make cfg
-  }
+    match cfg.same_site {
+        SameSite.none =>
+            if Bool.not cfg.secure
+            then IO.pure (Result.err "SameSite=None requires Secure")
+            else SessionStore.make cfg,
+        SameSite.lax => SessionStore.make cfg,
+        SameSite.strict => SessionStore.make cfg
+    }
 }
 
 def SessionStore.make (cfg : SessionConfig) : IO (Result String SessionStore) := do {
-  let sessions : Ref (List Session) <- Ref.new List.empty;
-  let counter : Ref I64 <- Ref.new 0i64;
-  let st : SessionStore :=
-    { sessions := sessions, counter := counter, cookie_name := cfg.cookie_name,
-      ttl_seconds := cfg.ttl_seconds, secure := cfg.secure,
-      same_site := cfg.same_site, max_sessions := cfg.max_sessions,
-      next_id := cfg.next_id };
-  IO.pure (Result.ok st)
+    let sessions : Ref (List Session) <- Ref.new List.empty;
+    let counter : Ref I64 <- Ref.new 0i64;
+    let st : SessionStore :=
+        { sessions := sessions, counter := counter, cookie_name := cfg.cookie_name,
+            ttl_seconds := cfg.ttl_seconds, secure := cfg.secure,
+            same_site := cfg.same_site, max_sessions := cfg.max_sessions,
+            next_id := cfg.next_id };
+    IO.pure (Result.ok st)
 }
 
 pub def SessionStore.new (cookie_name : String) (ttl_seconds : I64) : IO SessionStore := do {
-  let sessions : Ref (List Session) <- Ref.new List.empty;
-  let counter : Ref I64 <- Ref.new 0i64;
-  let st : SessionStore :=
-    { sessions := sessions, counter := counter, cookie_name := cookie_name,
-      ttl_seconds := ttl_seconds, secure := false, same_site := SameSite.lax,
-      max_sessions := 1000i64, next_id := Option.none };
-  return st
+    let sessions : Ref (List Session) <- Ref.new List.empty;
+    let counter : Ref I64 <- Ref.new 0i64;
+    let st : SessionStore :=
+        { sessions := sessions, counter := counter, cookie_name := cookie_name,
+            ttl_seconds := ttl_seconds, secure := false, same_site := SameSite.lax,
+            max_sessions := 1000i64, next_id := Option.none };
+    return st
 }
 
 /// The historical id: time/pid/counter hashed. Not a CSPRNG.
 def SessionStore.legacy_id (st : SessionStore) : IO String := do {
-  let n <- Ref.add_i64 st.counter 1;
-  let t <- IO.current_time_nano;
-  return (Sha256.hash
-    (String.concat (I64.to_string t)
-      (String.concat ":"
-        (String.concat (I64.to_string process_id)
-          (String.concat ":" (I64.to_string n))))))
+    let n <- Ref.add_i64 st.counter 1;
+    let t <- IO.current_time_nano;
+    return (Sha256.hash
+        (String.concat (I64.to_string t)
+            (String.concat ":"
+                (String.concat (I64.to_string process_id)
+                    (String.concat ":" (I64.to_string n))))))
 }
 
 /// A fresh id from the configured generator, or the legacy hash when none
 /// is configured. An error from a configured generator is reported; `new_id`
 /// (the historical signature) falls back to the legacy id.
 pub def SessionStore.new_id_checked (st : SessionStore) : IO (Result String String) := do {
-  match st.next_id {
-    Option.some generate => generate unit,
-    Option.none => do {
-      let id <- SessionStore.legacy_id st;
-      IO.pure (Result.ok id)
+    match st.next_id {
+        Option.some generate => generate unit,
+        Option.none => do {
+            let id <- SessionStore.legacy_id st;
+            IO.pure (Result.ok id)
+        }
     }
-  }
 }
 
 pub def SessionStore.new_id (st : SessionStore) : IO String := do {
-  let r <- SessionStore.new_id_checked st;
-  match r {
-    Result.ok id => IO.pure id,
-    Result.err _ => SessionStore.legacy_id st
-  }
+    let r <- SessionStore.new_id_checked st;
+    match r {
+        Result.ok id => IO.pure id,
+        Result.err _ => SessionStore.legacy_id st
+    }
 }
 
 def SessionStore.make_session (st : SessionStore) (id : String) : IO Session := do {
-  let now <- IO.current_time_nano;
-  let s : Session :=
-    { id := id, data := List.empty,
-      expires_at := I64.add now (I64.mul st.ttl_seconds 1000000000i64) };
-  IO.pure s
+    let now <- IO.current_time_nano;
+    let s : Session :=
+        { id := id, data := List.empty,
+            expires_at := I64.add now (I64.mul st.ttl_seconds 1000000000i64) };
+    IO.pure s
 }
 
 def SessionStore.begin_with (st : SessionStore) (id : String) :
     IO (Result String Session) := do {
-  let s <- SessionStore.make_session st id;
-  IO.pure (Result.ok s)
+    let s <- SessionStore.make_session st id;
+    IO.pure (Result.ok s)
 }
 
 def SessionStore.begin_legacy (st : SessionStore) : IO Session := do {
-  let id <- SessionStore.legacy_id st;
-  SessionStore.make_session st id
+    let id <- SessionStore.legacy_id st;
+    SessionStore.make_session st id
 }
 
 /// Checked begin: a configured generator's failure is returned, not
 /// silently downgraded.
 pub def SessionStore.begin_checked (st : SessionStore) : IO (Result String Session) := do {
-  let idr <- SessionStore.new_id_checked st;
-  match idr {
-    Result.err e => IO.pure (Result.err e),
-    Result.ok id => SessionStore.begin_with st id
-  }
+    let idr <- SessionStore.new_id_checked st;
+    match idr {
+        Result.err e => IO.pure (Result.err e),
+        Result.ok id => SessionStore.begin_with st id
+    }
 }
 
 pub def SessionStore.begin (st : SessionStore) : IO Session := do {
-  let r <- SessionStore.begin_checked st;
-  match r {
-    Result.ok s => IO.pure s,
-    Result.err _ => SessionStore.begin_legacy st
-  }
+    let r <- SessionStore.begin_checked st;
+    match r {
+        Result.ok s => IO.pure s,
+        Result.err _ => SessionStore.begin_legacy st
+    }
 }
 
 // ── session data ────────────────────────────────────────────────────────
 
 pub def Session.get (s : Session) (key : String) : Option String :=
-  Session.lookup key s.data
+    Session.lookup key s.data
 
 #[terminating]
 def Session.lookup (key : String) (data : List (Pair String String)) : Option String :=
-  match data {
-    List.empty => Option.none,
-    List.cons head rest =>
-      match head {
-        Pair.pair k v => if String.beq k key then Option.some v else Session.lookup key rest
-      }
-  }
+    match data {
+        List.empty => Option.none,
+        List.cons head rest =>
+            match head {
+                Pair.pair k v => if String.beq k key then Option.some v else Session.lookup key rest
+            }
+    }
 
 /// Replace `key`, preserving the other fields.
 pub def Session.put (s : Session) (key : String) (value : String) : Session :=
-  let data := List.cons (Pair.pair key value) (Session.remove_key key s.data) in
-  { s with data := data }
+    let data := List.cons (Pair.pair key value) (Session.remove_key key s.data) in
+    { s with data := data }
 
 #[terminating]
 def Session.remove_key (key : String) (data : List (Pair String String)) : List (Pair String String) :=
-  match data {
-    List.empty => List.empty,
-    List.cons head rest =>
-      match head {
-        Pair.pair k _ =>
-          if String.beq k key then Session.remove_key key rest
-          else List.cons head (Session.remove_key key rest)
-      }
-  }
+    match data {
+        List.empty => List.empty,
+        List.cons head rest =>
+            match head {
+                Pair.pair k _ =>
+                    if String.beq k key then Session.remove_key key rest
+                    else List.cons head (Session.remove_key key rest)
+            }
+    }
 
 // ── store ───────────────────────────────────────────────────────────────
 
 pub def SessionStore.load (st : SessionStore) (req : Request) : IO (Option Session) := do {
-  let cookies := Cookie.parse_headers req.headers;
-  SessionStore.load_cookies st cookies
+    let cookies := Cookie.parse_headers req.headers;
+    SessionStore.load_cookies st cookies
 }
 
 /// `load` from a single `Cookie` header value, for the transformer
 /// middleware (whose context exposes the header, not an owned Request).
 pub def SessionStore.load_header (st : SessionStore) (cookie : Option String) :
     IO (Option Session) :=
-  SessionStore.load_cookies st (Cookie.parse cookie)
+    SessionStore.load_cookies st (Cookie.parse cookie)
 
 pub def SessionStore.load_cookies (st : SessionStore)
     (cookies : List (Pair String String)) : IO (Option Session) := do {
-  match Cookie.lookup st.cookie_name cookies {
-    Option.none => return Option.none,
-    Option.some id => do {
-      let now <- IO.current_time_nano;
-      let sessions <- Ref.get st.sessions;
-      return (Session.find_live id now sessions)
+    match Cookie.lookup st.cookie_name cookies {
+        Option.none => return Option.none,
+        Option.some id => do {
+            let now <- IO.current_time_nano;
+            let sessions <- Ref.get st.sessions;
+            return (Session.find_live id now sessions)
+        }
     }
-  }
 }
 
 #[terminating]
 def Session.find_live (id : String) (now : I64) (sessions : List Session) : Option Session :=
-  match sessions {
-    List.empty => Option.none,
-    List.cons s rest =>
-      if String.beq s.id id
-      then (if I64.lt now s.expires_at then Option.some s else Option.none)
-      else Session.find_live id now rest
-  }
+    match sessions {
+        List.empty => Option.none,
+        List.cons s rest =>
+            if String.beq s.id id
+            then (if I64.lt now s.expires_at then Option.some s else Option.none)
+            else Session.find_live id now rest
+    }
 
 /// Store the session (upsert), sweep expired entries, and return the
 /// `Set-Cookie` pairs. Duplicate ids cannot exist: `upsert` removes the old
 /// entry first.
 pub def SessionStore.commit (st : SessionStore) (s : Session) : IO (List (Pair String String)) := do {
-  let now <- IO.current_time_nano;
-  let _ <- Ref.update st.sessions
-    (fn (sessions : List Session) => Session.upsert s now st.max_sessions sessions);
-  return (List.cons (Cookie.set_cookie st.cookie_name s.id (SessionStore.attrs st)) List.empty)
+    let now <- IO.current_time_nano;
+    let _ <- Ref.update st.sessions
+        (fn (sessions : List Session) => Session.upsert s now st.max_sessions sessions);
+    return (List.cons (Cookie.set_cookie st.cookie_name s.id (SessionStore.attrs st)) List.empty)
 }
 
 def SessionStore.attrs (st : SessionStore) : CookieAttrs :=
-  let base := CookieAttrs.default in
-  let attrs : CookieAttrs :=
-    { base with secure := st.secure, same_site := st.same_site,
-      max_age := Option.some st.ttl_seconds } in
-  attrs
+    let base := CookieAttrs.default in
+    let attrs : CookieAttrs :=
+        { base with secure := st.secure, same_site := st.same_site,
+            max_age := Option.some st.ttl_seconds } in
+    attrs
 
 #[terminating]
 def Session.upsert (s : Session) (now : I64) (max : I64) (sessions : List Session) : List Session :=
-  let live := Session.sweep now sessions in
-  let others := Session.remove_id s.id live in
-  Session.take max (List.cons s others)
+    let live := Session.sweep now sessions in
+    let others := Session.remove_id s.id live in
+    Session.take max (List.cons s others)
 
 #[terminating]
 def Session.sweep (now : I64) (sessions : List Session) : List Session :=
-  match sessions {
-    List.empty => List.empty,
-    List.cons s rest =>
-      if I64.lt now s.expires_at
-      then List.cons s (Session.sweep now rest)
-      else Session.sweep now rest
-  }
+    match sessions {
+        List.empty => List.empty,
+        List.cons s rest =>
+            if I64.lt now s.expires_at
+            then List.cons s (Session.sweep now rest)
+            else Session.sweep now rest
+    }
 
 #[terminating]
 def Session.remove_id (id : String) (sessions : List Session) : List Session :=
-  match sessions {
-    List.empty => List.empty,
-    List.cons s rest =>
-      if String.beq s.id id
-      then Session.remove_id id rest
-      else List.cons s (Session.remove_id id rest)
-  }
+    match sessions {
+        List.empty => List.empty,
+        List.cons s rest =>
+            if String.beq s.id id
+            then Session.remove_id id rest
+            else List.cons s (Session.remove_id id rest)
+    }
 
 #[terminating]
 def Session.take (n : I64) (sessions : List Session) : List Session :=
-  if I64.lt n 1
-  then List.empty
-  else
-    match sessions {
-      List.empty => List.empty,
-      List.cons s rest => List.cons s (Session.take (I64.sub n 1) rest)
-    }
+    if I64.lt n 1
+    then List.empty
+    else
+        match sessions {
+            List.empty => List.empty,
+            List.cons s rest => List.cons s (Session.take (I64.sub n 1) rest)
+        }
 
 /// New id and a fresh expiry. Call after a successful login. The old id is
 /// removed from the store here, in the same step: returning a new id while
 /// leaving the old one live would not defeat fixation.
 pub def SessionStore.rotate (st : SessionStore) (s : Session) : IO Session := do {
-  let _ <- Ref.update st.sessions (fn (sessions : List Session) => Session.remove_id s.id sessions);
-  let id <- SessionStore.new_id st;
-  let now <- IO.current_time_nano;
-  let rotated : Session :=
-    { s with id := id, expires_at := I64.add now (I64.mul st.ttl_seconds 1000000000i64) };
-  return rotated
+    let _ <- Ref.update st.sessions (fn (sessions : List Session) => Session.remove_id s.id sessions);
+    let id <- SessionStore.new_id st;
+    let now <- IO.current_time_nano;
+    let rotated : Session :=
+        { s with id := id, expires_at := I64.add now (I64.mul st.ttl_seconds 1000000000i64) };
+    return rotated
 }
 
 /// Remove the request's session and return the clearing cookie.
 pub def SessionStore.destroy (st : SessionStore) (req : Request) : IO (List (Pair String String)) := do {
-  let cookies := Cookie.parse_headers req.headers;
-  let found := Cookie.lookup st.cookie_name cookies;
-  match found {
-    Option.none => return (List.cons (Cookie.clear st.cookie_name (SessionStore.attrs st)) List.empty),
-    Option.some id => do {
-      let _ <- Ref.update st.sessions (fn (sessions : List Session) => Session.remove_id id sessions);
-      return (List.cons (Cookie.clear st.cookie_name (SessionStore.attrs st)) List.empty)
+    let cookies := Cookie.parse_headers req.headers;
+    let found := Cookie.lookup st.cookie_name cookies;
+    match found {
+        Option.none => return (List.cons (Cookie.clear st.cookie_name (SessionStore.attrs st)) List.empty),
+        Option.some id => do {
+            let _ <- Ref.update st.sessions (fn (sessions : List Session) => Session.remove_id id sessions);
+            return (List.cons (Cookie.clear st.cookie_name (SessionStore.attrs st)) List.empty)
+        }
     }
-  }
 }
 
 // ── middleware ─────────────────────────────────────────────────────────
@@ -310,20 +310,20 @@ pub def SessionStore.destroy (st : SessionStore) (req : Request) : IO (List (Pai
 /// The handler's view of the session: a mutable slot. `put` edits it; the
 /// middleware commits the final value on an `Ok` response.
 pub struct SessionHandle {
-  session : Ref Session
+    session : Ref Session
 }
 
 /// Build a handle around a session cell. The struct's field is not
 /// reachable from another module otherwise; the transformer middleware
 /// uses this instead of a bare literal.
 pub def SessionHandle.make (session : Ref Session) : SessionHandle :=
-  let h : SessionHandle := { session := session } in h
+    let h : SessionHandle := { session := session } in h
 
 pub def SessionHandle.get (h : SessionHandle) : IO Session := Ref.get h.session
 
 pub def SessionHandle.put (h : SessionHandle) (key : String) (value : String) : IO Unit := do {
-  let s <- Ref.get h.session;
-  Ref.set h.session (Session.put s key value)
+    let s <- Ref.get h.session;
+    Ref.set h.session (Session.put s key value)
 }
 
 /// Load or begin the session, hand the handler a mutable handle, then commit
@@ -334,26 +334,26 @@ pub def SessionStore.with_session
     (handler : SessionHandle -> Request -> IO (Result String Response))
     (req : Request)
     : IO (Result String Response) := do {
-  let loaded <- SessionStore.load st req;
-  let initial <- SessionStore.initial st loaded;
-  let session_ref : Ref Session <- Ref.new initial;
-  let handle : SessionHandle := { session := session_ref };
-  let r <- handler handle req;
-  match r {
-    Result.err e => return (Result.err e),
-    Result.ok res => do {
-      let final <- Ref.get session_ref;
-      let pairs <- SessionStore.commit st final;
-      return (Result.ok (SessionStore.add_cookies res pairs))
+    let loaded <- SessionStore.load st req;
+    let initial <- SessionStore.initial st loaded;
+    let session_ref : Ref Session <- Ref.new initial;
+    let handle : SessionHandle := { session := session_ref };
+    let r <- handler handle req;
+    match r {
+        Result.err e => return (Result.err e),
+        Result.ok res => do {
+            let final <- Ref.get session_ref;
+            let pairs <- SessionStore.commit st final;
+            return (Result.ok (SessionStore.add_cookies res pairs))
+        }
     }
-  }
 }
 
 def SessionStore.initial (st : SessionStore) (loaded : Option Session) : IO Session :=
-  match loaded {
-    Option.none => SessionStore.begin st,
-    Option.some s => IO.pure s
-  }
+    match loaded {
+        Option.none => SessionStore.begin st,
+        Option.some s => IO.pure s
+    }
 
 /// Ensure a session cookie exists without exposing the session to the
 /// handler. Handlers that mutate session data use `with_session` instead.
@@ -362,18 +362,18 @@ pub def SessionStore.middleware
     (handler : Request -> IO (Result String Response))
     (req : Request)
     : IO (Result String Response) :=
-  SessionStore.with_session st (fn (_ : SessionHandle) (r : Request) => handler r) req
+    SessionStore.with_session st (fn (_ : SessionHandle) (r : Request) => handler r) req
 
 pub def SessionStore.add_cookies (res : Response) (pairs : List (Pair String String)) : Response :=
-  let hs := SessionStore.add_cookie_pairs res.headers pairs in
-  { res with headers := hs }
+    let hs := SessionStore.add_cookie_pairs res.headers pairs in
+    { res with headers := hs }
 
 #[terminating]
 def SessionStore.add_cookie_pairs (headers : Headers) (pairs : List (Pair String String)) : Headers :=
-  match pairs {
-    List.empty => headers,
-    List.cons head rest =>
-      match head {
-        Pair.pair k v => SessionStore.add_cookie_pairs (Headers.add k v headers) rest
-      }
-  }
+    match pairs {
+        List.empty => headers,
+        List.cons head rest =>
+            match head {
+                Pair.pair k v => SessionStore.add_cookie_pairs (Headers.add k v headers) rest
+            }
+    }

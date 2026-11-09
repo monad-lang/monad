@@ -43,8 +43,8 @@
 /// printing already inside the dependency walk is a real hazard with a named place in
 /// the plan, not something a caller here can suppress.
 use lang::module {
-  ModuleInfoCache, RangedFileCheck, check_file_cached_from_source_ranged, module_info_cache_empty,
-  ranged_file_cache,
+    ModuleInfoCache, RangedFileCheck, check_file_cached_from_source_ranged, module_info_cache_empty,
+    ranged_file_cache,
 }
 use std::map {Map, BTreeMap, BTreeMap.to_list}
 use toolkit::docstore {docstore_path_of_uri}
@@ -57,8 +57,8 @@ use toolkit::docstore {docstore_path_of_uri}
 /// check without its text cannot be told from a stale one, and the text alone is
 /// already in `docstore` for every reader that wants only it.
 pub struct Check {
-  text : String,
-  result : RangedFileCheck,
+    text : String,
+    result : RangedFileCheck,
 }
 
 pub def check_text (c : Check) : String := c.text
@@ -74,8 +74,8 @@ pub def check_result (c : Check) : RangedFileCheck := c.result
 /// re-load every shared dependency once per open buffer -- the cost this design exists
 /// to avoid.
 pub struct CheckStore {
-  cache : ModuleInfoCache,
-  checks : BTreeMap String Check,
+    cache : ModuleInfoCache,
+    checks : BTreeMap String Check,
 }
 
 /// The empty map, and the three operations on it, each with the map type in a
@@ -97,14 +97,14 @@ def checkstore_no_checks : BTreeMap String Check := Map.empty
 
 #[partial]
 def checkstore_put (uri : String) (c : Check) (m : BTreeMap String Check) : BTreeMap String Check :=
-  Map.insert uri c m
+    Map.insert uri c m
 
 #[partial]
 def checkstore_get (uri : String) (m : BTreeMap String Check) : Option Check := Map.lookup uri m
 
 #[partial]
 def checkstore_drop (uri : String) (m : BTreeMap String Check) : BTreeMap String Check :=
-  Map.delete uri m
+    Map.delete uri m
 
 pub def checkstore_empty : CheckStore := CheckStore.mk module_info_cache_empty checkstore_no_checks
 
@@ -125,10 +125,10 @@ pub def checkstore_count (s : CheckStore) : I64 := checkstore_count_go (BTreeMap
 
 #[partial]
 def checkstore_count_go (cs : List (Pair String Check)) (acc : I64) : I64 :=
-  match cs {
-    List.empty => acc,
-    List.cons _c rest => checkstore_count_go rest (I64.add acc 1),
-  }
+    match cs {
+        List.empty => acc,
+        List.cons _c rest => checkstore_count_go rest (I64.add acc 1),
+    }
 
 /// Whether the stored check for a document was computed from exactly this text.
 ///
@@ -137,10 +137,10 @@ def checkstore_count_go (cs : List (Pair String Check)) (acc : I64) : I64 :=
 /// trust a result, and "there is no result" is not a yes.
 #[partial]
 pub def checkstore_is_current (uri : String) (text : String) (s : CheckStore) : Bool :=
-  match checkstore_lookup uri s {
-    Option.none => false,
-    Option.some c => String.beq (check_text c) text,
-  }
+    match checkstore_lookup uri s {
+        Option.none => false,
+        Option.some c => String.beq (check_text c) text,
+    }
 
 /// Check a document's text and record the result -- unless there is nothing to do.
 ///
@@ -170,13 +170,13 @@ pub def checkstore_recheck (uri : String) (text : String) (s : CheckStore) : IO 
 /// is one more arm here instead of a second condition at every caller.
 #[partial]
 def checkstore_path (uri : String) (text : String) (s : CheckStore) : Option String :=
-  match docstore_path_of_uri uri {
-    Option.none => Option.none,
-    Option.some path =>
-      if checkstore_is_current uri text s
-      then Option.none
-      else Option.some path,
-  }
+    match docstore_path_of_uri uri {
+        Option.none => Option.none,
+        Option.some path =>
+            if checkstore_is_current uri text s
+            then Option.none
+            else Option.some path,
+    }
 
 /// Record a check, taking the cache it answered as the store's new cache.
 ///
@@ -188,7 +188,7 @@ def checkstore_path (uri : String) (text : String) (s : CheckStore) : Option Str
 /// rather than left to be inferred from the field assignment.
 def checkstore_store (uri : String) (text : String) (r : RangedFileCheck) (s : CheckStore)
     : CheckStore :=
-  CheckStore.mk (ranged_file_cache r) (checkstore_put uri (Check.mk text r) s.checks)
+    CheckStore.mk (ranged_file_cache r) (checkstore_put uri (Check.mk text r) s.checks)
 
 /// `didClose`: forget the document's check and keep the cache it warmed.
 ///
@@ -204,4 +204,4 @@ def checkstore_store (uri : String) (text : String) (r : RangedFileCheck) (s : C
 /// regardless of what was dropped: `checkstore_is_current` compares text, so the skip
 /// for unchanged text simply does not apply to a document whose check is gone.
 pub def checkstore_close (uri : String) (s : CheckStore) : CheckStore :=
-  CheckStore.mk (checkstore_cache s) (checkstore_drop uri s.checks)
+    CheckStore.mk (checkstore_cache s) (checkstore_drop uri s.checks)

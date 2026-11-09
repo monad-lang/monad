@@ -99,9 +99,9 @@ pub def Cli.flag (long : String) (short : String) (help : String) : Cli.ArgSpec 
 /// The one option builder every typed/required/default variant delegates
 /// to.
 pub def Cli.option_spec
-        (value_type : Cli.ArgValueType) (long : String) (short : String)
-        (value_name : String) (required : Bool) (has_default : Bool)
-        (default : String) (multiple : Bool) (help : String) : Cli.ArgSpec :=
+    (value_type : Cli.ArgValueType) (long : String) (short : String)
+    (value_name : String) (required : Bool) (has_default : Bool)
+    (default : String) (multiple : Bool) (help : String) : Cli.ArgSpec :=
     let a : Cli.ArgSpec := {
         long := long,
         short := short,
@@ -137,8 +137,8 @@ pub def Cli.multi_option (long : String) (short : String) (value_name : String) 
     Cli.option_spec Cli.ArgValueType.arg_string long short value_name false false "" true help
 
 pub def Cli.positional_spec
-        (value_type : Cli.ArgValueType) (name : String) (required : Bool)
-        (has_default : Bool) (default : String) (multiple : Bool) (help : String) : Cli.ArgSpec :=
+    (value_type : Cli.ArgValueType) (name : String) (required : Bool)
+    (has_default : Bool) (default : String) (multiple : Bool) (help : String) : Cli.ArgSpec :=
     let a : Cli.ArgSpec := {
         long := name,
         short := "",

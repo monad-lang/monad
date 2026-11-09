@@ -8,18 +8,18 @@
 /// Split on every occurrence of `sep`. Empty segments are preserved;
 /// callers that want them gone use `List.filter`.
 pub def Split.on_byte (sep : U8) (s : String) : List String :=
-  Split.on_byte_go sep (String.to_list s) List.empty List.empty
+    Split.on_byte_go sep (String.to_list s) List.empty List.empty
 
 #[terminating]
 def Split.on_byte_go
-  (sep : U8) (rest : List U8) (cur : List U8) (out : List String)
-  : List String :=
-  match rest {
-    List.empty =>
-      List.reverse (List.cons (String.from_list (List.reverse cur)) out),
-    List.cons b more =>
-      if U8.beq b sep
-      then Split.on_byte_go sep more List.empty
-             (List.cons (String.from_list (List.reverse cur)) out)
-      else Split.on_byte_go sep more (List.cons b cur) out
-  }
+    (sep : U8) (rest : List U8) (cur : List U8) (out : List String)
+    : List String :=
+    match rest {
+        List.empty =>
+            List.reverse (List.cons (String.from_list (List.reverse cur)) out),
+        List.cons b more =>
+            if U8.beq b sep
+            then Split.on_byte_go sep more List.empty
+                (List.cons (String.from_list (List.reverse cur)) out)
+            else Split.on_byte_go sep more (List.cons b cur) out
+    }

@@ -22,9 +22,9 @@ use lib::tests::render {Markdown.render}
 /// limit (plans/implementations/compiled-read-file-second-chunk.md); the
 /// parts are the vendored bytes, split at line boundaries.
 pub def Markdown.spec_parts : List String :=
-    [ "motes/markdown/testdata/commonmark-0.31.2.part1.json",
-      "motes/markdown/testdata/commonmark-0.31.2.part2.json",
-      "motes/markdown/testdata/commonmark-0.31.2.part3.json" ]
+    ["motes/markdown/testdata/commonmark-0.31.2.part1.json",
+        "motes/markdown/testdata/commonmark-0.31.2.part2.json",
+        "motes/markdown/testdata/commonmark-0.31.2.part3.json"]
 
 pub def Markdown.spec_path : String :=
     "motes/markdown/testdata/commonmark-0.31.2.spec.json"
@@ -61,7 +61,7 @@ def Markdown.mk_failure
     : Markdown.SpecFailure :=
     let f : Markdown.SpecFailure :=
         { number := number, section := section, markdown := markdown,
-          expected := expected, actual := actual } in f
+            expected := expected, actual := actual } in f
 
 def Markdown.mk_report
     (passed : I64) (failed : I64) (total : I64)
@@ -69,7 +69,7 @@ def Markdown.mk_report
     (sections : List (Pair String (Pair I64 I64))) : Markdown.SpecReport :=
     let r : Markdown.SpecReport :=
         { passed := passed, failed := failed, total := total,
-          failures := failures, sections := sections } in r
+            failures := failures, sections := sections } in r
 
 // ─── JSON access ───
 
@@ -307,19 +307,19 @@ pub def Markdown.run_sections
 
 /// The leaf-block sections Phase 1 must pass outright.
 pub def Markdown.phase1_sections : List String :=
-    [ "Tabs", "Thematic breaks", "ATX headings", "Setext headings",
-      "Indented code blocks", "Fenced code blocks", "Paragraphs", "Blank lines" ]
+    ["Tabs", "Thematic breaks", "ATX headings", "Setext headings",
+        "Indented code blocks", "Fenced code blocks", "Paragraphs", "Blank lines"]
 
 /// The block-structure sections Phase 2 must pass outright.
 pub def Markdown.phase2_sections : List String :=
-    [ "Block quotes", "List items", "Lists", "Link reference definitions", "HTML blocks" ]
+    ["Block quotes", "List items", "Lists", "Link reference definitions", "HTML blocks"]
 
 /// The inline sections Phase 3 must pass outright.
 pub def Markdown.phase3_sections : List String :=
-    [ "Backslash escapes", "Entity and numeric character references", "Code spans",
-      "Emphasis and strong emphasis", "Links", "Images", "Autolinks", "Raw HTML",
-      "Hard line breaks", "Soft line breaks", "Textual content", "Inlines",
-      "Precedence" ]
+    ["Backslash escapes", "Entity and numeric character references", "Code spans",
+        "Emphasis and strong emphasis", "Links", "Images", "Autolinks", "Raw HTML",
+        "Hard line breaks", "Soft line breaks", "Textual content", "Inlines",
+        "Precedence"]
 
 // ─── Reading the report ───
 

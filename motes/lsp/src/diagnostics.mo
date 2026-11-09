@@ -36,19 +36,19 @@ use toolkit::position {LineIndex, PositionEncoding, line_index_of_source}
 /// and not the document store -- the text is right here.
 #[partial]
 pub def lsp_wire_diagnostics (enc : PositionEncoding) (ch : Check) : List WireDiagnostic :=
-  let src : String := check_text ch in
-  lsp_wire_diagnostics_of enc src (line_index_of_source src)
-    (ranged_file_diagnostics (check_result ch))
+    let src : String := check_text ch in
+    lsp_wire_diagnostics_of enc src (line_index_of_source src)
+        (ranged_file_diagnostics (check_result ch))
 
 #[partial]
 def lsp_wire_diagnostics_of (enc : PositionEncoding) (src : String) (ix : LineIndex)
     (ds : List Diagnostic) : List WireDiagnostic :=
-  match ds {
-    List.empty => List.empty,
-    List.cons d rest =>
-      List.cons (wire_diagnostic_of_lang enc ix src d)
-        (lsp_wire_diagnostics_of enc src ix rest),
-  }
+    match ds {
+        List.empty => List.empty,
+        List.cons d rest =>
+            List.cons (wire_diagnostic_of_lang enc ix src d)
+                (lsp_wire_diagnostics_of enc src ix rest),
+    }
 
 /// A check's diagnostics as the `diagnostics` array alone.
 ///
@@ -58,7 +58,7 @@ def lsp_wire_diagnostics_of (enc : PositionEncoding) (src : String) (ix : LineIn
 /// squiggles on screen.
 #[partial]
 pub def lsp_diagnostics_json (enc : PositionEncoding) (ch : Check) : Json :=
-  wire_diagnostics_json (lsp_wire_diagnostics enc ch)
+    wire_diagnostics_json (lsp_wire_diagnostics enc ch)
 
 // --- The notification ---
 
@@ -73,15 +73,15 @@ pub def lsp_diagnostics_json (enc : PositionEncoding) (ch : Check) : Json :=
 #[partial]
 pub def lsp_publish_notification (uri : String) (version : Option I64)
     (enc : PositionEncoding) (ch : Check) : String :=
-  rpc_encode_notification "textDocument/publishDiagnostics"
-    (lsp_publish_params uri version enc ch)
+    rpc_encode_notification "textDocument/publishDiagnostics"
+        (lsp_publish_params uri version enc ch)
 
 #[partial]
 pub def lsp_publish_params (uri : String) (version : Option I64) (enc : PositionEncoding)
     (ch : Check) : Json :=
-  rpc_object (List.cons (Pair.pair "uri" (Json.make_str uri))
-    (List.cons (Pair.pair "diagnostics" (lsp_diagnostics_json enc ch))
-      (lsp_publish_version version)))
+    rpc_object (List.cons (Pair.pair "uri" (Json.make_str uri))
+        (List.cons (Pair.pair "diagnostics" (lsp_diagnostics_json enc ch))
+            (lsp_publish_version version)))
 
 /// The optional `version` field, as a zero- or one-element field list.
 ///
@@ -92,10 +92,10 @@ pub def lsp_publish_params (uri : String) (version : Option I64) (enc : Position
 /// be got wrong.
 #[partial]
 def lsp_publish_version (version : Option I64) : List (Pair String Json) :=
-  match version {
-    Option.none => lsp_no_fields,
-    Option.some v => List.cons (Pair.pair "version" (Json.make_num_int v)) lsp_no_fields,
-  }
+    match version {
+        Option.none => lsp_no_fields,
+        Option.some v => List.cons (Pair.pair "version" (Json.make_num_int v)) lsp_no_fields,
+    }
 
 /// An empty field list, named for the reason `toolkit::diagnostic` names its own: an
 /// unannotated `List.empty` in argument position is the shape that resolved to the
@@ -115,8 +115,8 @@ def lsp_no_diagnostics : List Json := List.empty
 /// the one caller that has no check to convert.
 #[partial]
 pub def lsp_clear_notification (uri : String) : String :=
-  rpc_encode_notification "textDocument/publishDiagnostics"
-    (rpc_object [
-      Pair.pair "uri" (Json.make_str uri),
-      Pair.pair "diagnostics" (Json.make_array lsp_no_diagnostics),
-    ])
+    rpc_encode_notification "textDocument/publishDiagnostics"
+        (rpc_object [
+            Pair.pair "uri" (Json.make_str uri),
+            Pair.pair "diagnostics" (Json.make_array lsp_no_diagnostics),
+        ])

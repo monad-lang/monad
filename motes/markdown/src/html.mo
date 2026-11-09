@@ -149,7 +149,7 @@ def Markdown.slug_go (s : String) (acc : List String) : String :=
                 then Markdown.slug_go (String.drop w s) (List.cons piece acc)
                 else if Bool.and (U8.lt 64u8 b) (U8.lt b 91u8)
                 then Markdown.slug_go (String.drop w s)
-                        (List.cons (String.to_lowercase piece) acc)
+                    (List.cons (String.to_lowercase piece) acc)
                 else if Bool.and (U8.lt 96u8 b) (U8.lt b 123u8)
                 then Markdown.slug_go (String.drop w s) (List.cons piece acc)
                 else if Bool.or (U8.beq b 45u8) (U8.beq b 95u8)
@@ -279,9 +279,9 @@ def Markdown.block_nodes
         block_heading level inlines =>
             let taken : Markdown.HeadingId := Markdown.take_id opts ids in
             Pair.pair
-                [ Markdown.el (String.concat "h" (I64.to_string level)) taken.attrs
+                [Markdown.el (String.concat "h" (I64.to_string level)) taken.attrs
                     (Markdown.inline_nodes opts inlines),
-                  Markdown.txt "\n" ]
+                    Markdown.txt "\n"]
                 taken.rest,
         block_thematic_break => Pair.pair [Markdown.vo "hr" List.empty, Markdown.txt "\n"] ids,
         block_code_block info literal =>
@@ -293,47 +293,47 @@ def Markdown.block_nodes
                     Option.none => List.empty
                 } in
             Pair.pair
-                [ Markdown.el "pre" List.empty
+                [Markdown.el "pre" List.empty
                     [Markdown.el "code" attrs [Markdown.txt literal]],
-                  Markdown.txt "\n" ]
+                    Markdown.txt "\n"]
                 ids,
         block_html_block literal =>
             Pair.pair
                 (if opts.allow_raw_html
-                 then [Html.Node.node_raw_html literal, Markdown.txt "\n"]
-                 else [Markdown.txt literal, Markdown.txt "\n"])
+                    then [Html.Node.node_raw_html literal, Markdown.txt "\n"]
+                    else [Markdown.txt literal, Markdown.txt "\n"])
                 ids,
         block_quote blocks =>
             match Markdown.blocks_nodes opts ids blocks {
                 Pair.pair inner ids2 =>
                     Pair.pair
-                        [ Markdown.el "blockquote" List.empty
+                        [Markdown.el "blockquote" List.empty
                             (List.cons (Markdown.txt "\n") inner),
-                          Markdown.txt "\n" ]
+                            Markdown.txt "\n"]
                         ids2
             },
         block_list kind tight items =>
             match Markdown.items_nodes opts ids tight items {
                 Pair.pair inner ids2 =>
                     Pair.pair
-                        [ Markdown.el (Markdown.list_tag kind) (Markdown.list_attrs kind)
+                        [Markdown.el (Markdown.list_tag kind) (Markdown.list_attrs kind)
                             (List.cons (Markdown.txt "\n") inner),
-                          Markdown.txt "\n" ]
+                            Markdown.txt "\n"]
                         ids2
             },
         block_table aligns head rows =>
             Pair.pair
-                [ Markdown.el "table" List.empty
-                    [ Markdown.txt "\n",
-                      Markdown.el "thead" List.empty
-                        [ Markdown.txt "\n",
-                          Markdown.row_node opts "th" aligns head.cells,
-                          Markdown.txt "\n" ],
-                      Markdown.txt "\n",
-                      Markdown.el "tbody" List.empty
-                        (List.cons (Markdown.txt "\n") (Markdown.rows_nodes opts aligns rows)),
-                      Markdown.txt "\n" ],
-                  Markdown.txt "\n" ]
+                [Markdown.el "table" List.empty
+                    [Markdown.txt "\n",
+                        Markdown.el "thead" List.empty
+                            [Markdown.txt "\n",
+                                Markdown.row_node opts "th" aligns head.cells,
+                                Markdown.txt "\n"],
+                        Markdown.txt "\n",
+                        Markdown.el "tbody" List.empty
+                            (List.cons (Markdown.txt "\n") (Markdown.rows_nodes opts aligns rows)),
+                        Markdown.txt "\n"],
+                    Markdown.txt "\n"]
                 ids
     }
 
@@ -417,8 +417,8 @@ def Markdown.checkbox_prefix (checked : Option Bool) : List Html.Node :=
 def Markdown.checkbox (state : Bool) : Html.Node :=
     let attrs : List Html.Attr :=
         if state
-        then [ Markdown.at "type" "checkbox", Markdown.at "checked" "", Markdown.at "disabled" "" ]
-        else [ Markdown.at "type" "checkbox", Markdown.at "disabled" "" ] in
+        then [Markdown.at "type" "checkbox", Markdown.at "checked" "", Markdown.at "disabled" ""]
+        else [Markdown.at "type" "checkbox", Markdown.at "disabled" ""] in
     Html.Node.node_void "input" attrs
 
 /// cmark's `cr()`: a block child starts on its own line, so a loose item opens
@@ -467,7 +467,7 @@ def Markdown.block_nodes_prefixed
         block_paragraph inlines =>
             Pair.pair
                 (List.cons (Markdown.el "p" List.empty
-                        (List.append prefix (Markdown.inline_nodes opts inlines)))
+                    (List.append prefix (Markdown.inline_nodes opts inlines)))
                     (List.cons (Markdown.txt "\n") List.empty))
                 ids,
         _ =>
@@ -628,7 +628,7 @@ def Markdown.rows_nodes_rev
             let cells : List (List Markdown.Inline) := Markdown.normalize_row n r.cells in
             let nodes : List Html.Node :=
                 List.cons (Markdown.el "tr" List.empty
-                        (List.cons (Markdown.txt "\n") (Markdown.cell_nodes opts "td" aligns cells)))
+                    (List.cons (Markdown.txt "\n") (Markdown.cell_nodes opts "td" aligns cells)))
                     (List.cons (Markdown.txt "\n") List.empty) in
             Markdown.rows_nodes_rev opts aligns rest (Markdown.nodes_rev nodes acc)
     }

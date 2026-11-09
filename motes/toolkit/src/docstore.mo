@@ -56,8 +56,8 @@ pub def docstore_uri_scheme : String := "file://"
 /// checked against, and text without its version cannot be reported with a
 /// version at all.
 pub struct Doc {
-  version : I64,
-  text : String,
+    version : I64,
+    text : String,
 }
 
 pub def doc_mk (version : I64) (text : String) : Doc := Doc.mk version text
@@ -100,7 +100,7 @@ pub def doc_text (d : Doc) : String := d.text
 /// empty filter that avoided it is now a hard error under the enforced `use`
 /// completeness rule. See `jsonrpc.mo`'s import for the full argument.
 pub struct DocStore {
-  docs : BTreeMap String Doc,
+    docs : BTreeMap String Doc,
 }
 
 /// The empty map, named so that its carrier comes from a declared type.
@@ -121,14 +121,14 @@ def docstore_no_docs : BTreeMap String Doc := Map.empty
 /// already relies on for its own self-recursive calls.
 #[partial]
 def docstore_put (uri : String) (d : Doc) (m : BTreeMap String Doc) : BTreeMap String Doc :=
-  Map.insert uri d m
+    Map.insert uri d m
 
 #[partial]
 def docstore_get (uri : String) (m : BTreeMap String Doc) : Option Doc := Map.lookup uri m
 
 #[partial]
 def docstore_drop (uri : String) (m : BTreeMap String Doc) : BTreeMap String Doc :=
-  Map.delete uri m
+    Map.delete uri m
 
 pub def docstore_empty : DocStore := DocStore.mk docstore_no_docs
 
@@ -138,25 +138,25 @@ pub def docstore_lookup (uri : String) (s : DocStore) : Option Doc := docstore_g
 /// The text, if open. The caller that wants only the text should not have to
 /// reach into a `Doc` for it.
 pub def docstore_text (uri : String) (s : DocStore) : Option String :=
-  match docstore_get uri s.docs {
-    Option.none => Option.none,
-    Option.some d => Option.some (doc_text d),
-  }
+    match docstore_get uri s.docs {
+        Option.none => Option.none,
+        Option.some d => Option.some (doc_text d),
+    }
 
 /// The version, if open: what `publishDiagnostics` should report alongside the
 /// diagnostics computed from the text this call's sibling returns.
 pub def docstore_version (uri : String) (s : DocStore) : Option I64 :=
-  match docstore_get uri s.docs {
-    Option.none => Option.none,
-    Option.some d => Option.some (doc_version d),
-  }
+    match docstore_get uri s.docs {
+        Option.none => Option.none,
+        Option.some d => Option.some (doc_version d),
+    }
 
 /// `didOpen`. Replaces an entry that already exists rather than failing: a
 /// second `didOpen` for the same URI is a client bug, and ignoring it would
 /// leave the server checking the text from the first one for the rest of the
 /// session, which is a far worse outcome than tolerating it.
 pub def docstore_open (uri : String) (version : I64) (text : String) (s : DocStore) : DocStore :=
-  DocStore.mk (docstore_put uri (doc_mk version text) s.docs)
+    DocStore.mk (docstore_put uri (doc_mk version text) s.docs)
 
 /// `didChange`, full-text sync. See the module doc on why this is a separate
 /// entry point from `docstore_open` despite the identical body, and on why an
@@ -165,14 +165,14 @@ pub def docstore_open (uri : String) (version : I64) (text : String) (s : DocSto
 /// that file diagnosed from the disk for the rest of the session with no error
 /// anywhere to explain it.
 pub def docstore_change (uri : String) (version : I64) (text : String) (s : DocStore) : DocStore :=
-  DocStore.mk (docstore_put uri (doc_mk version text) s.docs)
+    DocStore.mk (docstore_put uri (doc_mk version text) s.docs)
 
 /// `didClose`. Deleting a URI that was never opened is a no-op rather than an
 /// error, for the same reason a repeated `didOpen` is tolerated: the client's
 /// view is the authority on what is open, and the server's job is to end up
 /// agreeing with it.
 pub def docstore_close (uri : String) (s : DocStore) : DocStore :=
-  DocStore.mk (docstore_drop uri s.docs)
+    DocStore.mk (docstore_drop uri s.docs)
 
 /// How many documents are open. Used by the shutdown path's log line and by
 /// tests; nothing makes a decision from it.
@@ -180,10 +180,10 @@ pub def docstore_count (s : DocStore) : I64 := docstore_count_go (BTreeMap.to_li
 
 #[partial]
 def docstore_count_go (ps : List (Pair String Doc)) (n : I64) : I64 :=
-  match ps {
-    List.empty => n,
-    List.cons _p rest => docstore_count_go rest (I64.add n 1),
-  }
+    match ps {
+        List.empty => n,
+        List.cons _p rest => docstore_count_go rest (I64.add n 1),
+    }
 
 /// Every open URI, in ascending order.
 ///
@@ -196,8 +196,8 @@ def docstore_count_go (ps : List (Pair String Doc)) (n : I64) : I64 :=
 /// map implementation. Ascending because a `BTreeMap`'s traversal is sorted, so
 /// the order is a property of the type rather than of the walk.
 pub def docstore_uris (s : DocStore) : List String :=
-  docstore_strings_reverse (docstore_uris_of (BTreeMap.to_list s.docs) uri_no_strings)
-    uri_no_strings
+    docstore_strings_reverse (docstore_uris_of (BTreeMap.to_list s.docs) uri_no_strings)
+        uri_no_strings
 
 def uri_no_strings : List String := List.empty
 
@@ -208,20 +208,20 @@ def uri_no_strings : List String := List.empty
 /// accumulator threaded in the other direction, which reads no better.
 #[partial]
 def docstore_uris_of (ps : List (Pair String Doc)) (acc : List String) : List String :=
-  match ps {
-    List.empty => acc,
-    List.cons p rest =>
-      match p {
-        Pair.pair k _v => docstore_uris_of rest (List.cons k acc),
-      },
-  }
+    match ps {
+        List.empty => acc,
+        List.cons p rest =>
+            match p {
+                Pair.pair k _v => docstore_uris_of rest (List.cons k acc),
+            },
+    }
 
 #[partial]
 def docstore_strings_reverse (ss : List String) (acc : List String) : List String :=
-  match ss {
-    List.empty => acc,
-    List.cons s rest => docstore_strings_reverse rest (List.cons s acc),
-  }
+    match ss {
+        List.empty => acc,
+        List.cons s rest => docstore_strings_reverse rest (List.cons s acc),
+    }
 
 // --- URI to path ---
 
@@ -240,13 +240,13 @@ def docstore_strings_reverse (ss : List String) (acc : List String) : List Strin
 /// wrong for the other.
 #[partial]
 pub def docstore_path_of_uri (uri : String) : Option String :=
-  if Bool.not (String.starts_with docstore_uri_scheme uri)
-  then Option.none
-  else
-    match uri_path_part (String.drop (String.length docstore_uri_scheme) uri) {
-      Option.none => Option.none,
-      Option.some p => Option.some (uri_percent_decode p),
-    }
+    if Bool.not (String.starts_with docstore_uri_scheme uri)
+    then Option.none
+    else
+        match uri_path_part (String.drop (String.length docstore_uri_scheme) uri) {
+            Option.none => Option.none,
+            Option.some p => Option.some (uri_percent_decode p),
+        }
 
 /// The path part of what follows `file://`: everything from the first `/`, or
 /// `Option.none` when there is no `/` at all.
@@ -257,19 +257,19 @@ pub def docstore_path_of_uri (uri : String) : Option String :=
 /// empty, and only looking for the `/` handles both.
 #[partial]
 def uri_path_part (rest : String) : Option String :=
-  if String.starts_with "/" rest
-  then Option.some rest
-  else
-    let i : I64 := uri_slash_index (String.to_list rest) 0 in
-    if I64.lt i 0 then Option.none else Option.some (String.drop i rest)
+    if String.starts_with "/" rest
+    then Option.some rest
+    else
+        let i : I64 := uri_slash_index (String.to_list rest) 0 in
+        if I64.lt i 0 then Option.none else Option.some (String.drop i rest)
 
 /// The index of the first `/`, or -1.
 #[partial]
 def uri_slash_index (bs : List U8) (i : I64) : I64 :=
-  match bs {
-    List.empty => 0 - 1,
-    List.cons b rest => if U8.beq b uri_byte_slash then i else uri_slash_index rest (I64.add i 1),
-  }
+    match bs {
+        List.empty => 0 - 1,
+        List.cons b rest => if U8.beq b uri_byte_slash then i else uri_slash_index rest (I64.add i 1),
+    }
 
 // --- Percent decoding ---
 
@@ -292,19 +292,19 @@ def uri_slash_index (bs : List U8) (i : I64) : I64 :=
 /// more informatively than this function could.
 #[partial]
 pub def uri_percent_decode (s : String) : String :=
-  String.from_list (uri_decode_go (String.to_list s) uri_no_bytes)
+    String.from_list (uri_decode_go (String.to_list s) uri_no_bytes)
 
 def uri_no_bytes : List U8 := List.empty
 
 #[partial]
 def uri_decode_go (bs : List U8) (acc : List U8) : List U8 :=
-  match bs {
-    List.empty => uri_bytes_reverse acc uri_no_bytes,
-    List.cons b rest =>
-      if U8.beq b uri_byte_percent
-      then uri_decode_escape rest acc
-      else uri_decode_go rest (List.cons b acc),
-  }
+    match bs {
+        List.empty => uri_bytes_reverse acc uri_no_bytes,
+        List.cons b rest =>
+            if U8.beq b uri_byte_percent
+            then uri_decode_escape rest acc
+            else uri_decode_go rest (List.cons b acc),
+    }
 
 /// A `%` has been consumed; `rest` is everything after it. The three ways to
 /// have nothing to decode -- no characters left, one character left, or two that
@@ -312,30 +312,30 @@ def uri_decode_go (bs : List U8) (acc : List U8) : List U8 :=
 /// text after the `%` under the rule the doc above states.
 #[partial]
 def uri_decode_escape (rest : List U8) (acc : List U8) : List U8 :=
-  match rest {
-    List.empty => uri_decode_go rest (List.cons uri_byte_percent acc),
-    List.cons h r1 =>
-      match r1 {
+    match rest {
         List.empty => uri_decode_go rest (List.cons uri_byte_percent acc),
-        List.cons l tail =>
-          match uri_hex_pair h l {
-            Option.none => uri_decode_go rest (List.cons uri_byte_percent acc),
-            Option.some v => uri_decode_go tail (List.cons v acc),
-          },
-      },
-  }
+        List.cons h r1 =>
+            match r1 {
+                List.empty => uri_decode_go rest (List.cons uri_byte_percent acc),
+                List.cons l tail =>
+                    match uri_hex_pair h l {
+                        Option.none => uri_decode_go rest (List.cons uri_byte_percent acc),
+                        Option.some v => uri_decode_go tail (List.cons v acc),
+                    },
+            },
+    }
 
 /// The byte two hex digits name.
 #[partial]
 def uri_hex_pair (h : U8) (l : U8) : Option U8 :=
-  match uri_hex_value h {
-    Option.none => Option.none,
-    Option.some hi =>
-      match uri_hex_value l {
+    match uri_hex_value h {
         Option.none => Option.none,
-        Option.some lo => Option.some (U8.add (U8.mul hi uri_sixteen) lo),
-      },
-  }
+        Option.some hi =>
+            match uri_hex_value l {
+                Option.none => Option.none,
+                Option.some lo => Option.some (U8.add (U8.mul hi uri_sixteen) lo),
+            },
+    }
 
 /// The value of one hex digit, or `Option.none` if it is not one.
 ///
@@ -349,13 +349,13 @@ def uri_hex_pair (h : U8) (l : U8) : Option U8 :=
 /// greater than its last", because `U8.lt` is not `pub` and `U8.gt` is.
 #[partial]
 def uri_hex_value (b : U8) : Option U8 :=
-  if U8.gt b uri_byte_zero_minus_one && Bool.not (U8.gt b uri_byte_nine)
-  then Option.some (U8.sub b uri_byte_zero)
-  else if U8.gt b uri_byte_upper_a_minus_one && Bool.not (U8.gt b uri_byte_upper_f)
-  then Option.some (U8.add (U8.sub b uri_byte_upper_a) uri_ten)
-  else if U8.gt b uri_byte_lower_a_minus_one && Bool.not (U8.gt b uri_byte_lower_f)
-  then Option.some (U8.add (U8.sub b uri_byte_lower_a) uri_ten)
-  else Option.none
+    if U8.gt b uri_byte_zero_minus_one && Bool.not (U8.gt b uri_byte_nine)
+    then Option.some (U8.sub b uri_byte_zero)
+    else if U8.gt b uri_byte_upper_a_minus_one && Bool.not (U8.gt b uri_byte_upper_f)
+    then Option.some (U8.add (U8.sub b uri_byte_upper_a) uri_ten)
+    else if U8.gt b uri_byte_lower_a_minus_one && Bool.not (U8.gt b uri_byte_lower_f)
+    then Option.some (U8.add (U8.sub b uri_byte_lower_a) uri_ten)
+    else Option.none
 
 // --- Path to URI ---
 
@@ -377,25 +377,25 @@ def uri_hex_value (b : U8) : Option U8 :=
 /// readable with its separators.
 #[partial]
 pub def docstore_uri_of_path (path : String) : String :=
-  String.concat docstore_uri_scheme (uri_percent_encode path)
+    String.concat docstore_uri_scheme (uri_percent_encode path)
 
 #[partial]
 def uri_percent_encode (s : String) : String :=
-  String.from_list (uri_bytes_reverse (uri_encode_go (String.to_list s) uri_no_bytes) uri_no_bytes)
+    String.from_list (uri_bytes_reverse (uri_encode_go (String.to_list s) uri_no_bytes) uri_no_bytes)
 
 #[partial]
 def uri_encode_go (bs : List U8) (acc : List U8) : List U8 :=
-  match bs {
-    List.empty => acc,
-    List.cons b rest =>
-      if uri_byte_is_literal b
-      then uri_encode_go rest (List.cons b acc)
-      else
-        let hi : U8 := U8.div b uri_sixteen in
-        let lo : U8 := U8.sub b (U8.mul hi uri_sixteen) in
-        uri_encode_go rest
-          (List.cons (uri_hex_digit lo) (List.cons (uri_hex_digit hi) (List.cons uri_byte_percent acc))),
-  }
+    match bs {
+        List.empty => acc,
+        List.cons b rest =>
+            if uri_byte_is_literal b
+            then uri_encode_go rest (List.cons b acc)
+            else
+                let hi : U8 := U8.div b uri_sixteen in
+                let lo : U8 := U8.sub b (U8.mul hi uri_sixteen) in
+                uri_encode_go rest
+                    (List.cons (uri_hex_digit lo) (List.cons (uri_hex_digit hi) (List.cons uri_byte_percent acc))),
+    }
 
 /// Is this byte left as itself in a path? The unreserved set, plus `/`.
 ///
@@ -405,18 +405,18 @@ def uri_encode_go (bs : List U8) (acc : List U8) : List U8 :=
 /// be one.
 #[partial]
 def uri_byte_is_literal (b : U8) : Bool :=
-  uri_byte_is_alpha b
-    || (U8.gt b uri_byte_zero_minus_one && Bool.not (U8.gt b uri_byte_nine))
-    || U8.beq b uri_byte_dash
-    || U8.beq b uri_byte_dot
-    || U8.beq b uri_byte_underscore
-    || U8.beq b uri_byte_tilde
-    || U8.beq b uri_byte_slash
+    uri_byte_is_alpha b
+        || (U8.gt b uri_byte_zero_minus_one && Bool.not (U8.gt b uri_byte_nine))
+        || U8.beq b uri_byte_dash
+        || U8.beq b uri_byte_dot
+        || U8.beq b uri_byte_underscore
+        || U8.beq b uri_byte_tilde
+        || U8.beq b uri_byte_slash
 
 #[partial]
 def uri_byte_is_alpha (b : U8) : Bool :=
-  (U8.gt b uri_byte_upper_a_minus_one && Bool.not (U8.gt b uri_byte_upper_z))
-    || (U8.gt b uri_byte_lower_a_minus_one && Bool.not (U8.gt b uri_byte_lower_z))
+    (U8.gt b uri_byte_upper_a_minus_one && Bool.not (U8.gt b uri_byte_upper_z))
+        || (U8.gt b uri_byte_lower_a_minus_one && Bool.not (U8.gt b uri_byte_lower_z))
 
 /// A nibble as an UPPERCASE hex digit.
 ///
@@ -435,17 +435,17 @@ def uri_byte_is_alpha (b : U8) : Bool :=
 /// for what they ARE and not for the digit they happen to spell.
 #[partial]
 def uri_hex_digit (n : U8) : U8 :=
-  if U8.gt n uri_value_nine then U8.add n uri_byte_upper_a_minus_ten else U8.add n uri_byte_zero
+    if U8.gt n uri_value_nine then U8.add n uri_byte_upper_a_minus_ten else U8.add n uri_byte_zero
 
 /// Reverse a byte list into `acc`. Local, like every other reverse in this mote:
 /// `List.reverse` is a `lang` def that is not `pub`, and reversing five lines is
 /// not worth a dependency edge on the compiler for.
 #[partial]
 def uri_bytes_reverse (bs : List U8) (acc : List U8) : List U8 :=
-  match bs {
-    List.empty => acc,
-    List.cons b rest => uri_bytes_reverse rest (List.cons b acc),
-  }
+    match bs {
+        List.empty => acc,
+        List.cons b rest => uri_bytes_reverse rest (List.cons b acc),
+    }
 
 // --- Byte constants ---
 //

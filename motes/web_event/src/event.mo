@@ -86,7 +86,7 @@ with ListenerFlags {
     /// No options: bubbling, non-passive, repeated.
     pub def none : ListenerFlags :=
         { capture := false, prevent_default := false, stop_propagation := false,
-          once := false, passive := false }
+            once := false, passive := false }
 
     /// The canonical letters, in encoding order.
     pub def letters : String := "cdsop"

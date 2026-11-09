@@ -15,15 +15,15 @@ use crypto::random {CryptoRandom.new}
 use lib::session {SessionConfig}
 
 def SessionConfig.crypto_token (_ : Unit) : IO (Result String String) := do {
-  let r <- Random.token CryptoRandom.new 32i64;
-  match r {
-    Result.ok token => IO.pure (Result.ok token),
-    Result.err e => IO.pure (Result.err (RandomError.to_string e))
-  }
+    let r <- Random.token CryptoRandom.new 32i64;
+    match r {
+        Result.ok token => IO.pure (Result.ok token),
+        Result.err e => IO.pure (Result.err (RandomError.to_string e))
+    }
 }
 
 /// Copy `cfg` with a 32-byte CSPRNG id source.
 pub def SessionConfig.with_crypto_ids (cfg : SessionConfig) : SessionConfig :=
-  let cfg2 : SessionConfig :=
-    { cfg with next_id := Option.some SessionConfig.crypto_token } in
-  cfg2
+    let cfg2 : SessionConfig :=
+        { cfg with next_id := Option.some SessionConfig.crypto_token } in
+    cfg2

@@ -9,12 +9,12 @@ use std::map {BTreeMap}
 use json::json {Json}
 
 pub struct Principal {
-  subject : String,
-  issuer : String,
-  audiences : List String,
-  scopes : List String,
-  roles : List String,
-  claims : BTreeMap String Json,
-  /// Epoch seconds, from `exp`.
-  expires_at : I64
+    subject : String,
+    issuer : String,
+    audiences : List String,
+    scopes : List String,
+    roles : List String,
+    claims : BTreeMap String Json,
+    /// Epoch seconds, from `exp`.
+    expires_at : I64
 }

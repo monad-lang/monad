@@ -29,9 +29,9 @@
 // every ASCII comparison (the whole escape-sequence grammar) is a plain
 // string compare and UTF-8 needs no numeric byte access.
 
-use lib::types { Event, Key, MouseButton, MouseEvent }
-use lib::terminal { Terminal.poll, Terminal.size }
-use std::io { IO.read_stdin_exact }
+use lib::types {Event, Key, MouseButton, MouseEvent}
+use lib::terminal {Terminal.poll, Terminal.size}
+use std::io {IO.read_stdin_exact}
 
 // ==================== byte and character probes ====================
 

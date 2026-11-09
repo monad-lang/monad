@@ -36,8 +36,8 @@
 /// miscompile.
 use json::json {Json}
 use lsp::lifecycle {
-  lsp_capabilities_json, lsp_choose_encoding, lsp_initialize_result, lsp_offered_encodings,
-  lsp_root_path, lsp_server_info_json,
+    lsp_capabilities_json, lsp_choose_encoding, lsp_initialize_result, lsp_offered_encodings,
+    lsp_root_path, lsp_server_info_json,
 }
 /// `PositionEncoding` the TYPE is not imported: nothing here writes it in a type
 /// annotation, so the only uses are its CONSTRUCTORS. Those are named by their
@@ -55,10 +55,10 @@ use toolkit::position {position_encoding_name, utf16, utf8}
 /// and is indistinguishable from a client that genuinely offered nothing -- hence
 /// `lc_roundtrips` below, which is run over every fixture so a typo cannot hide.
 def lc_json (s : String) : Json :=
-  match Json.parse s {
-    Result.err _e => Json.make_null,
-    Result.ok j => j,
-  }
+    match Json.parse s {
+        Result.err _e => Json.make_null,
+        Result.ok j => j,
+    }
 
 /// THE GUARD: the fixture parses, and parses to exactly the text written.
 ///
@@ -77,15 +77,15 @@ def lc_json (s : String) : Json :=
 def lc_roundtrips (s : String) : Bool := String.beq (Json.to_string (lc_json s)) s
 
 def lc_path (o : Option String) : String :=
-  match o {
-    Option.none => "<none>",
-    Option.some s => s,
-  }
+    match o {
+        Option.none => "<none>",
+        Option.some s => s,
+    }
 
 /// The encoding a client's params negotiate to, as its wire name -- the whole
 /// negotiation, read the way `server.mo` reads it.
 def lc_encoding (params : Json) : String :=
-  position_encoding_name (lsp_choose_encoding (lsp_offered_encodings params))
+    position_encoding_name (lsp_choose_encoding (lsp_offered_encodings params))
 
 def lc_encoding_of (s : String) : String := lc_encoding (lc_json s)
 
@@ -95,32 +95,32 @@ def lc_offered (s : String) : String := lc_join (lsp_offered_encodings (lc_json 
 
 #[partial]
 def lc_join (xs : List String) (acc : String) : String :=
-  match xs {
-    List.empty => acc,
-    List.cons x rest =>
-      if String.is_empty acc
-      then lc_join rest x
-      else lc_join rest (String.concat acc (String.concat "|" x)),
-  }
+    match xs {
+        List.empty => acc,
+        List.cons x rest =>
+            if String.is_empty acc
+            then lc_join rest x
+            else lc_join rest (String.concat acc (String.concat "|" x)),
+    }
 
 // --- Encoding fixtures ---
 
 /// A list of encodings where this server's preference and the client's order agree.
 def lc_enc_utf8_first : String :=
-  "{\"capabilities\":{\"general\":{\"positionEncodings\":[\"utf-8\",\"utf-16\"]}}}"
+    "{\"capabilities\":{\"general\":{\"positionEncodings\":[\"utf-8\",\"utf-16\"]}}}"
 
 /// THE OTHER ORDER, and the one that tells the two policies apart: same two
 /// encodings, offered utf-16 first. A server that answered utf-8 to both would fail
 /// here and pass the one above.
 def lc_enc_utf16_first : String :=
-  "{\"capabilities\":{\"general\":{\"positionEncodings\":[\"utf-16\",\"utf-8\"]}}}"
+    "{\"capabilities\":{\"general\":{\"positionEncodings\":[\"utf-16\",\"utf-8\"]}}}"
 
 /// A name this server does not speak, ahead of one it does.
 def lc_enc_unknown_first : String :=
-  "{\"capabilities\":{\"general\":{\"positionEncodings\":[\"utf-32\",\"utf-8\"]}}}"
+    "{\"capabilities\":{\"general\":{\"positionEncodings\":[\"utf-32\",\"utf-8\"]}}}"
 
 def lc_enc_unknown_first_utf16 : String :=
-  "{\"capabilities\":{\"general\":{\"positionEncodings\":[\"utf-32\",\"utf-16\"]}}}"
+    "{\"capabilities\":{\"general\":{\"positionEncodings\":[\"utf-32\",\"utf-16\"]}}}"
 
 /// Offering nothing, in the four shapes that means. The first three are a client that
 /// has no opinion; the last is the one a reader that trusted the specification's
@@ -135,13 +135,13 @@ def lc_caps_empty : String := "{\"capabilities\":{}}"
 def lc_bare_init : String := "{\"clientInfo\":{\"name\":\"helix\"},\"processId\":1}"
 
 def lc_enc_empty : String :=
-  "{\"capabilities\":{\"general\":{\"positionEncodings\":[]}}}"
+    "{\"capabilities\":{\"general\":{\"positionEncodings\":[]}}}"
 
 def lc_enc_only_unknown : String :=
-  "{\"capabilities\":{\"general\":{\"positionEncodings\":[\"utf-32\"]}}}"
+    "{\"capabilities\":{\"general\":{\"positionEncodings\":[\"utf-32\"]}}}"
 
 def lc_enc_not_a_list : String :=
-  "{\"capabilities\":{\"general\":{\"positionEncodings\":\"utf-8\"}}}"
+    "{\"capabilities\":{\"general\":{\"positionEncodings\":\"utf-8\"}}}"
 
 /// `positionEncodings` one level too high. The field is inside `general`, and a
 /// reader that searched the capabilities object recursively would take this as an
@@ -151,17 +151,17 @@ def lc_enc_wrong_path : String := "{\"capabilities\":{\"positionEncodings\":[\"u
 /// THE GUARD ITSELF, over every fixture in the file. See `lc_roundtrips`.
 #[test]
 def test_every_encoding_fixture_is_the_json_it_looks_like : Bool :=
-  lc_roundtrips lc_enc_utf8_first
-    && lc_roundtrips lc_enc_utf16_first
-    && lc_roundtrips lc_enc_unknown_first
-    && lc_roundtrips lc_enc_unknown_first_utf16
-    && lc_roundtrips lc_no_caps
-    && lc_roundtrips lc_caps_empty
-    && lc_roundtrips lc_bare_init
-    && lc_roundtrips lc_enc_empty
-    && lc_roundtrips lc_enc_only_unknown
-    && lc_roundtrips lc_enc_not_a_list
-    && lc_roundtrips lc_enc_wrong_path
+    lc_roundtrips lc_enc_utf8_first
+        && lc_roundtrips lc_enc_utf16_first
+        && lc_roundtrips lc_enc_unknown_first
+        && lc_roundtrips lc_enc_unknown_first_utf16
+        && lc_roundtrips lc_no_caps
+        && lc_roundtrips lc_caps_empty
+        && lc_roundtrips lc_bare_init
+        && lc_roundtrips lc_enc_empty
+        && lc_roundtrips lc_enc_only_unknown
+        && lc_roundtrips lc_enc_not_a_list
+        && lc_roundtrips lc_enc_wrong_path
 
 // --- Encoding negotiation ---
 
@@ -169,15 +169,15 @@ def test_every_encoding_fixture_is_the_json_it_looks_like : Bool :=
 /// always-utf-8 nor an always-utf-16 implementation passes.
 #[test]
 def test_the_clients_order_decides_the_encoding : Bool :=
-  String.beq (lc_encoding_of lc_enc_utf8_first) "utf-8"
-    && String.beq (lc_encoding_of lc_enc_utf16_first) "utf-16"
+    String.beq (lc_encoding_of lc_enc_utf8_first) "utf-8"
+        && String.beq (lc_encoding_of lc_enc_utf16_first) "utf-16"
 
 /// An unrecognized name is skipped rather than ending the search, so a client that
 /// offers something this server cannot do and then something it can gets the second.
 #[test]
 def test_an_unknown_encoding_is_skipped : Bool :=
-  String.beq (lc_encoding_of lc_enc_unknown_first) "utf-8"
-    && String.beq (lc_encoding_of lc_enc_unknown_first_utf16) "utf-16"
+    String.beq (lc_encoding_of lc_enc_unknown_first) "utf-8"
+        && String.beq (lc_encoding_of lc_enc_unknown_first_utf16) "utf-16"
 
 /// Everything that offers this server nothing answers the specification's default.
 ///
@@ -188,30 +188,30 @@ def test_an_unknown_encoding_is_skipped : Bool :=
 /// not make.
 #[test]
 def test_nothing_usable_offered_means_utf16 : Bool :=
-  String.beq (lc_encoding_of lc_no_caps) "utf-16"
-    && String.beq (lc_encoding_of lc_caps_empty) "utf-16"
-    && String.beq (lc_encoding_of lc_bare_init) "utf-16"
-    && String.beq (lc_encoding_of lc_enc_empty) "utf-16"
-    && String.beq (lc_encoding_of lc_enc_only_unknown) "utf-16"
-    && String.beq (lc_encoding_of lc_enc_not_a_list) "utf-16"
-    && String.beq (lc_encoding_of lc_enc_wrong_path) "utf-16"
+    String.beq (lc_encoding_of lc_no_caps) "utf-16"
+        && String.beq (lc_encoding_of lc_caps_empty) "utf-16"
+        && String.beq (lc_encoding_of lc_bare_init) "utf-16"
+        && String.beq (lc_encoding_of lc_enc_empty) "utf-16"
+        && String.beq (lc_encoding_of lc_enc_only_unknown) "utf-16"
+        && String.beq (lc_encoding_of lc_enc_not_a_list) "utf-16"
+        && String.beq (lc_encoding_of lc_enc_wrong_path) "utf-16"
 
 /// The reader itself, so the tests above are about the choice and not about where the
 /// list came from. The second case is the one that proves the path is exact: the same
 /// array of names, at the wrong level, reads as nothing.
 #[test]
 def test_the_offered_list_is_read_from_the_capabilities : Bool :=
-  String.beq (lc_offered lc_enc_utf16_first) "utf-16|utf-8"
-    && String.beq (lc_offered lc_enc_wrong_path) ""
-    && String.beq (lc_offered lc_no_caps) ""
+    String.beq (lc_offered lc_enc_utf16_first) "utf-16|utf-8"
+        && String.beq (lc_offered lc_enc_wrong_path) ""
+        && String.beq (lc_offered lc_no_caps) ""
 
 /// The choice made directly, without params, so the default is pinned independently
 /// of the reading -- and so a failure above can be attributed to the reader rather
 /// than to the policy.
 #[test]
 def test_the_choice_defaults_to_the_specifications_encoding : Bool :=
-  String.beq (position_encoding_name (lsp_choose_encoding (lc_no_offerings))) "utf-16"
-    && String.beq (position_encoding_name (lsp_choose_encoding (lc_utf8_offering))) "utf-8"
+    String.beq (position_encoding_name (lsp_choose_encoding (lc_no_offerings))) "utf-16"
+        && String.beq (position_encoding_name (lsp_choose_encoding (lc_utf8_offering))) "utf-8"
 
 /// Named locals rather than bare `List.empty`/`List.cons` in argument position: a
 /// bare `List.empty` whose element type has to be inferred from the callee is the
@@ -231,31 +231,31 @@ def lc_utf8_offering : List String := List.cons "utf-8" lc_no_offerings
 /// the second word, and
 /// `textDocumentSync` sits between `positionEncoding` and `workspaceSymbolProvider`.
 def lc_caps_utf16 : String :=
-  "{\"definitionProvider\":true,\"documentFormattingProvider\":true,\"documentSymbolProvider\":true,\"hoverProvider\":true,\"positionEncoding\":\"utf-16\",\"textDocumentSync\":1,\"workspaceSymbolProvider\":true}"
+    "{\"definitionProvider\":true,\"documentFormattingProvider\":true,\"documentSymbolProvider\":true,\"hoverProvider\":true,\"positionEncoding\":\"utf-16\",\"textDocumentSync\":1,\"workspaceSymbolProvider\":true}"
 
 def lc_caps_utf8 : String :=
-  "{\"definitionProvider\":true,\"documentFormattingProvider\":true,\"documentSymbolProvider\":true,\"hoverProvider\":true,\"positionEncoding\":\"utf-8\",\"textDocumentSync\":1,\"workspaceSymbolProvider\":true}"
+    "{\"definitionProvider\":true,\"documentFormattingProvider\":true,\"documentSymbolProvider\":true,\"hoverProvider\":true,\"positionEncoding\":\"utf-8\",\"textDocumentSync\":1,\"workspaceSymbolProvider\":true}"
 
 #[test]
 def test_the_capabilities_are_exactly_these_six : Bool :=
-  String.beq (Json.to_string (lsp_capabilities_json PositionEncoding.utf16)) lc_caps_utf16
-    && String.beq (Json.to_string (lsp_capabilities_json PositionEncoding.utf8)) lc_caps_utf8
+    String.beq (Json.to_string (lsp_capabilities_json PositionEncoding.utf16)) lc_caps_utf16
+        && String.beq (Json.to_string (lsp_capabilities_json PositionEncoding.utf8)) lc_caps_utf8
 
 def lc_server_info : String := "{\"name\":\"monad-lsp\",\"version\":\"0.1.0\"}"
 
 #[test]
 def test_the_server_info_names_this_server : Bool :=
-  String.beq (Json.to_string lsp_server_info_json) lc_server_info
+    String.beq (Json.to_string lsp_server_info_json) lc_server_info
 
 /// The initialize result as a whole, so the capabilities cannot drift out of the
 /// result they are sent in, and the negotiated encoding is the one in the RESULT
 /// rather than merely the one computed.
 #[test]
 def test_the_initialize_result_carries_the_negotiated_encoding : Bool :=
-  String.beq (Json.to_string (lsp_initialize_result PositionEncoding.utf16))
-      (String.concat "{\"capabilities\":" (String.concat lc_caps_utf16 (String.concat ",\"serverInfo\":" (String.concat lc_server_info "}"))))
-    && String.beq (Json.to_string (lsp_initialize_result PositionEncoding.utf8))
-      (String.concat "{\"capabilities\":" (String.concat lc_caps_utf8 (String.concat ",\"serverInfo\":" (String.concat lc_server_info "}"))))
+    String.beq (Json.to_string (lsp_initialize_result PositionEncoding.utf16))
+        (String.concat "{\"capabilities\":" (String.concat lc_caps_utf16 (String.concat ",\"serverInfo\":" (String.concat lc_server_info "}"))))
+        && String.beq (Json.to_string (lsp_initialize_result PositionEncoding.utf8))
+            (String.concat "{\"capabilities\":" (String.concat lc_caps_utf8 (String.concat ",\"serverInfo\":" (String.concat lc_server_info "}"))))
 
 // --- The workspace root ---
 
@@ -269,10 +269,10 @@ def lc_root_escaped : String := "{\"rootUri\":\"file:///home/u/my%20project\"}"
 def lc_root_folders : String := "{\"workspaceFolders\":[{\"uri\":\"file:///w\"}]}"
 
 def lc_root_untitled_with_folders : String :=
-  "{\"rootUri\":\"untitled:Untitled-1\",\"workspaceFolders\":[{\"uri\":\"file:///w\"}]}"
+    "{\"rootUri\":\"untitled:Untitled-1\",\"workspaceFolders\":[{\"uri\":\"file:///w\"}]}"
 
 def lc_root_two_folders : String :=
-  "{\"workspaceFolders\":[{\"uri\":\"file:///one\"},{\"uri\":\"file:///two\"}]}"
+    "{\"workspaceFolders\":[{\"uri\":\"file:///one\"},{\"uri\":\"file:///two\"}]}"
 
 def lc_root_empty : String := "{}"
 
@@ -288,17 +288,17 @@ def lc_root_folders_not_a_list : String := "{\"workspaceFolders\":{\"uri\":\"fil
 
 #[test]
 def test_every_root_fixture_is_the_json_it_looks_like : Bool :=
-  lc_roundtrips lc_root_plain
-    && lc_roundtrips lc_root_escaped
-    && lc_roundtrips lc_root_folders
-    && lc_roundtrips lc_root_untitled_with_folders
-    && lc_roundtrips lc_root_two_folders
-    && lc_roundtrips lc_root_empty
-    && lc_roundtrips lc_root_bare_file
-    && lc_roundtrips lc_root_no_folders
-    && lc_roundtrips lc_root_untitled_only
-    && lc_roundtrips lc_root_folder_no_uri
-    && lc_roundtrips lc_root_folders_not_a_list
+    lc_roundtrips lc_root_plain
+        && lc_roundtrips lc_root_escaped
+        && lc_roundtrips lc_root_folders
+        && lc_roundtrips lc_root_untitled_with_folders
+        && lc_roundtrips lc_root_two_folders
+        && lc_roundtrips lc_root_empty
+        && lc_roundtrips lc_root_bare_file
+        && lc_roundtrips lc_root_no_folders
+        && lc_roundtrips lc_root_untitled_only
+        && lc_roundtrips lc_root_folder_no_uri
+        && lc_roundtrips lc_root_folders_not_a_list
 
 def lc_root (s : String) : String := lc_path (lsp_root_path (lc_json s))
 
@@ -307,8 +307,8 @@ def lc_root (s : String) : String := lc_path (lsp_root_path (lc_json s))
 /// the directory a workspace scan walks.
 #[test]
 def test_the_root_uri_is_read_and_decoded : Bool :=
-  String.beq (lc_root lc_root_plain) "/home/u/project"
-    && String.beq (lc_root lc_root_escaped) "/home/u/my project"
+    String.beq (lc_root lc_root_plain) "/home/u/project"
+        && String.beq (lc_root lc_root_escaped) "/home/u/my project"
 
 /// `workspaceFolders` is the fallback, both when `rootUri` is absent and when it is
 /// present but names no directory this server can use. The second is the case worth
@@ -316,14 +316,14 @@ def test_the_root_uri_is_read_and_decoded : Bool :=
 /// decodes to no path must not end the search.
 #[test]
 def test_the_workspace_folders_are_the_fallback : Bool :=
-  String.beq (lc_root lc_root_folders) "/w"
-    && String.beq (lc_root lc_root_untitled_with_folders) "/w"
+    String.beq (lc_root lc_root_folders) "/w"
+        && String.beq (lc_root lc_root_untitled_with_folders) "/w"
 
 /// The FIRST folder is the workspace and a later one is not consulted -- a server
 /// that checked every folder would answer for a directory the user is not in.
 #[test]
 def test_the_first_workspace_folder_wins : Bool :=
-  String.beq (lc_root lc_root_two_folders) "/one"
+    String.beq (lc_root lc_root_two_folders) "/one"
 
 /// No root at all is `Option.none` rather than a guess. An empty string would be
 /// worse than useless: it is the path a scan of a relative path resolves against, so
@@ -333,9 +333,9 @@ def test_the_first_workspace_folder_wins : Bool :=
 /// equivalent would answer with the folder itself.
 #[test]
 def test_no_root_is_no_root : Bool :=
-  String.beq (lc_root lc_root_empty) "<none>"
-    && String.beq (lc_root lc_root_bare_file) "<none>"
-    && String.beq (lc_root lc_root_no_folders) "<none>"
-    && String.beq (lc_root lc_root_untitled_only) "<none>"
-    && String.beq (lc_root lc_root_folder_no_uri) "<none>"
-    && String.beq (lc_root lc_root_folders_not_a_list) "<none>"
+    String.beq (lc_root lc_root_empty) "<none>"
+        && String.beq (lc_root lc_root_bare_file) "<none>"
+        && String.beq (lc_root lc_root_no_folders) "<none>"
+        && String.beq (lc_root lc_root_untitled_only) "<none>"
+        && String.beq (lc_root lc_root_folder_no_uri) "<none>"
+        && String.beq (lc_root lc_root_folders_not_a_list) "<none>"

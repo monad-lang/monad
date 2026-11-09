@@ -42,7 +42,7 @@ pub def byte_ascii_max : U8 := 127u8
 ///
 /// `U8.gt b 127u8` negated: `b <= 0x7f`.
 pub def is_ascii_byte (b : U8) : Bool :=
-  Bool.not (U8.gt b byte_ascii_max)
+    Bool.not (U8.gt b byte_ascii_max)
 
 /// Is `b` a UTF-8 continuation byte, `0b10xxxxxx`?
 ///
@@ -61,7 +61,7 @@ pub def is_ascii_byte (b : U8) : Bool :=
 /// starts here".
 #[partial]
 pub def is_continuation_byte (b : U8) : Bool :=
-  U8.gt b 127u8 && Bool.not (U8.gt b 191u8)
+    U8.gt b 127u8 && Bool.not (U8.gt b 191u8)
 
 /// Is `b` the lead byte of a FOUR-byte UTF-8 sequence, `0b11110xxx`?
 ///
@@ -79,7 +79,7 @@ pub def is_continuation_byte (b : U8) : Bool :=
 /// one.
 #[partial]
 pub def is_four_byte_lead (b : U8) : Bool :=
-  U8.gt b 239u8
+    U8.gt b 239u8
 
 /// UTF-16 code units this byte contributes: 0 for a continuation byte, 2 for
 /// the lead of a four-byte sequence, 1 otherwise.
@@ -92,6 +92,6 @@ pub def is_four_byte_lead (b : U8) : Bool :=
 /// must not have opinions about text it is only counting.
 #[partial]
 pub def utf16_units_of_byte (b : U8) : I64 :=
-  if is_continuation_byte b
-  then 0
-  else if is_four_byte_lead b then 2 else 1
+    if is_continuation_byte b
+    then 0
+    else if is_four_byte_lead b then 2 else 1

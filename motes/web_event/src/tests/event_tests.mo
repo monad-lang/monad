@@ -10,7 +10,7 @@ def test_flags_none_encodes_empty : Bool :=
 def test_flags_encode_all_in_canonical_order : Bool :=
     let f : ListenerFlags :=
         { capture := true, prevent_default := true, stop_propagation := true,
-          once := true, passive := true } in
+            once := true, passive := true } in
     String.beq (ListenerFlags.encode f) ":cdsop"
 
 #[test]

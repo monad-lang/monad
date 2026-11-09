@@ -1,7 +1,7 @@
 /// Parser combinator functions for the self-hosted Monad parser.
 
 use lib::core {
-  ParseError, ParseResult, is_empty, parse_error_remaining
+    ParseError, ParseResult, is_empty, parse_error_remaining
 }
 use lib::char_preds {byte_at, is_ident_char, is_ident_char_byte, is_prefix, is_space, is_space_byte}
 use std::list {}
@@ -12,9 +12,9 @@ open ParseResult {fail, success}
 
 #[partial]
 pub def tag (s : String) (input : String) : ParseResult String :=
-	if is_prefix s input
-	then success (String.drop (String.length s) input) s
-	else fail (ParseError.tag s input)
+    if is_prefix s input
+    then success (String.drop (String.length s) input) s
+    else fail (ParseError.tag s input)
 
 /// Like `tag`, but for a KEYWORD specifically: `tag` alone is a bare
 /// `is_prefix` check, so `tag "return" "return_foo 41"` succeeds,
@@ -38,20 +38,19 @@ pub def tag (s : String) (input : String) : ParseResult String :=
 /// checked explicitly afterward instead of getting it for free).
 #[partial]
 pub def tag_keyword (s : String) (input : String) : ParseResult String :=
-	match tag s input {
-		success rem matched =>
-			if keyword_boundary_ok rem
-			then success rem matched
-			else fail (ParseError.tag s input),
-		fail e => fail e,
-	}
+    match tag s input {
+        success rem matched =>
+            if keyword_boundary_ok rem
+            then success rem matched
+            else fail (ParseError.tag s input),
+        fail e => fail e,
+    }
 
 #[partial]
 def keyword_boundary_ok (rem : String) : Bool :=
-	if String.is_empty rem
-	then true
-	else not (is_ident_char (String.slice rem 0 1))
-
+    if String.is_empty rem
+    then true
+    else not (is_ident_char (String.slice rem 0 1))
 
 /// "Furthest progress wins" error selection — mirrors the Rust
 /// reference's `ParseError::or`/`append` (rust/core/src/parser/error.rs),
@@ -107,33 +106,29 @@ def keyword_boundary_ok (rem : String) : Bool :=
 /// POSITION that is being compared.
 #[partial]
 def furthest_error (e1 : ParseError) (e2 : ParseError) : ParseError :=
-	if String.beq (parse_error_remaining e1) (parse_error_remaining e2)
-	then e1
-	else if I64.lt (String.length (parse_error_remaining e2)) (String.length (parse_error_remaining e1))
-	then e2
-	else e1
-
+    if String.beq (parse_error_remaining e1) (parse_error_remaining e2)
+    then e1
+    else if I64.lt (String.length (parse_error_remaining e2)) (String.length (parse_error_remaining e1))
+    then e2
+    else e1
 
 #[partial]
 pub def alt (a : String -> ParseResult A) (b : String -> ParseResult A) (input : String) : ParseResult A :=
-	alt_body (a input) b input
-
+    alt_body (a input) b input
 
 #[partial]
 def alt_body (r : ParseResult A) (b : String -> ParseResult A) (input : String) : ParseResult A :=
-	match r {
-		success rem out => success rem out,
-		fail e1 => alt_second (b input) e1 input
-	}
-
+    match r {
+        success rem out => success rem out,
+        fail e1 => alt_second (b input) e1 input
+    }
 
 #[partial]
 def alt_second (r : ParseResult A) (e1 : ParseError) (input : String) : ParseResult A :=
-	match r {
-		success rem out => success rem out,
-		fail e2 => fail (furthest_error e1 e2)
-	}
-
+    match r {
+        success rem out => success rem out,
+        fail e2 => fail (furthest_error e1 e2)
+    }
 
 // --- many0 / many1 ---
 
@@ -163,78 +158,67 @@ def alt_second (r : ParseResult A) (e1 : ParseError) (input : String) : ParseRes
 /// arm here returns its own `input` rather than an outer one.
 #[partial]
 pub def many0 (p : String -> ParseResult A) (input : String) : ParseResult (List A) :=
-	many0_go p input List.empty
-
+    many0_go p input List.empty
 
 #[partial]
 def many0_go (p : String -> ParseResult A) (input : String) (acc : List A) : ParseResult (List A) :=
-	match p input {
-		success rem out => many0_go p rem (List.cons out acc),
-		fail _ => success input (List.reverse acc)
-	}
-
+    match p input {
+        success rem out => many0_go p rem (List.cons out acc),
+        fail _ => success input (List.reverse acc)
+    }
 
 #[partial]
 pub def many1 (p : String -> ParseResult A) (input : String) : ParseResult (List A) :=
-	match many0 p input {
-		success rem out =>
-			if List.is_empty out
-			then fail (ParseError.custom "expected at least one" input)
-			else success rem out,
-		fail e => fail e
-	}
-
+    match many0 p input {
+        success rem out =>
+            if List.is_empty out
+            then fail (ParseError.custom "expected at least one" input)
+            else success rem out,
+        fail e => fail e
+    }
 
 // --- Extended combinators (Phase 1.1) ---
 
 #[partial]
 pub def map_parse (f : A -> B) (p : String -> ParseResult A) (input : String) : ParseResult B :=
-	map_parse_body (p input) f
-
+    map_parse_body (p input) f
 
 #[partial]
 def map_parse_body (r : ParseResult A) (f : A -> B) : ParseResult B :=
-	match r {
-		success rem out => map_parse_ok rem out f,
-		fail e => map_parse_fail e
-	}
-
+    match r {
+        success rem out => map_parse_ok rem out f,
+        fail e => map_parse_fail e
+    }
 
 #[partial]
 def map_parse_ok (rem : String) (out : A) (f : A -> B) : ParseResult B :=
-	success rem (f out)
-
+    success rem (f out)
 
 #[partial]
 def map_parse_fail (e : ParseError) : ParseResult B :=
-	fail e
-
+    fail e
 
 #[partial]
 pub def bind_parse (p : String -> ParseResult A) (f : A -> String -> ParseResult B) (input : String) : ParseResult B :=
-	bind_parse_body (p input) f
-
+    bind_parse_body (p input) f
 
 #[partial]
 def bind_parse_body (r : ParseResult A) (f : A -> String -> ParseResult B) : ParseResult B :=
-	match r {
-		success rem out => f out rem,
-		fail e => bind_parse_fail e
-	}
-
+    match r {
+        success rem out => f out rem,
+        fail e => bind_parse_fail e
+    }
 
 #[partial]
 def bind_parse_fail (e : ParseError) : ParseResult B :=
-	fail e
-
+    fail e
 
 #[partial]
 pub def alt_fold (parsers : List (String -> ParseResult A)) (input : String) : ParseResult A :=
-	match parsers {
-		List.cons p ps => alt_fold_try (p input) ps input Option.none,
-		List.empty => fail (ParseError.custom "alt_fold: empty list" input)
-	}
-
+    match parsers {
+        List.cons p ps => alt_fold_try (p input) ps input Option.none,
+        List.empty => fail (ParseError.custom "alt_fold: empty list" input)
+    }
 
 /// `best` is the furthest-progressed error seen across every alternative
 /// tried so far (see `furthest_error`) — threaded through the fold so
@@ -243,156 +227,133 @@ pub def alt_fold (parsers : List (String -> ParseResult A)) (input : String) : P
 /// to be tried last.
 #[partial]
 def alt_fold_try (r : ParseResult A) (parsers : List (String -> ParseResult A)) (input : String) (best : Option ParseError) : ParseResult A :=
-	match r {
-		success rem out => alt_fold_ok rem out,
-		fail e => alt_fold_next parsers input (Option.some (alt_fold_merge_best best e))
-	}
-
+    match r {
+        success rem out => alt_fold_ok rem out,
+        fail e => alt_fold_next parsers input (Option.some (alt_fold_merge_best best e))
+    }
 
 #[partial]
 def alt_fold_merge_best (best : Option ParseError) (e : ParseError) : ParseError :=
-	match best {
-		Option.some b => furthest_error b e,
-		Option.none => e
-	}
-
+    match best {
+        Option.some b => furthest_error b e,
+        Option.none => e
+    }
 
 #[partial]
 def alt_fold_next (parsers : List (String -> ParseResult A)) (input : String) (best : Option ParseError) : ParseResult A :=
-	match parsers {
-		List.cons p ps => alt_fold_try (p input) ps input best,
-		List.empty => fail (alt_fold_best_or_default best input)
-	}
-
+    match parsers {
+        List.cons p ps => alt_fold_try (p input) ps input best,
+        List.empty => fail (alt_fold_best_or_default best input)
+    }
 
 #[partial]
 def alt_fold_best_or_default (best : Option ParseError) (input : String) : ParseError :=
-	match best {
-		Option.some e => e,
-		Option.none => ParseError.custom "alt_fold: empty list" input
-	}
-
+    match best {
+        Option.some e => e,
+        Option.none => ParseError.custom "alt_fold: empty list" input
+    }
 
 #[partial]
 def alt_fold_ok (rem : String) (out : A) : ParseResult A :=
-	success rem out
-
+    success rem out
 
 // --- Position-based combinators ---
 
 #[partial]
 pub def preceded_by (before : String -> ParseResult A) (p : String -> ParseResult B) (input : String) : ParseResult B :=
-	preceded_by_body (before input) p
-
+    preceded_by_body (before input) p
 
 #[partial]
 def preceded_by_body (r : ParseResult A) (p : String -> ParseResult B) : ParseResult B :=
-	match r {
-		success rem _ => p rem,
-		fail e => preceded_by_err e
-	}
-
+    match r {
+        success rem _ => p rem,
+        fail e => preceded_by_err e
+    }
 
 #[partial]
 def preceded_by_err (e : ParseError) : ParseResult B :=
-	fail e
-
+    fail e
 
 #[partial]
 pub def terminated_by (p : String -> ParseResult A) (after : String -> ParseResult B) (input : String) : ParseResult A :=
-	terminated_by_body (p input) after
-
+    terminated_by_body (p input) after
 
 #[partial]
 def terminated_by_body (r : ParseResult A) (after : String -> ParseResult B) : ParseResult A :=
-	match r {
-		success rem out => terminated_by_after (after rem) out,
-		fail e => terminated_by_err e
-	}
-
+    match r {
+        success rem out => terminated_by_after (after rem) out,
+        fail e => terminated_by_err e
+    }
 
 #[partial]
 def terminated_by_after (r : ParseResult B) (out : A) : ParseResult A :=
-	match r {
-		success rem _ => terminated_by_ok rem out,
-		fail e => terminated_by_err e
-	}
-
+    match r {
+        success rem _ => terminated_by_ok rem out,
+        fail e => terminated_by_err e
+    }
 
 #[partial]
 def terminated_by_ok (rem : String) (out : A) : ParseResult A :=
-	success rem out
-
+    success rem out
 
 #[partial]
 def terminated_by_err (e : ParseError) : ParseResult A :=
-	fail e
-
+    fail e
 
 #[partial]
 pub def delimited_by (before : String -> ParseResult A) (p : String -> ParseResult B) (after : String -> ParseResult C) (input : String) : ParseResult B :=
-	delimited_by_before (before input) p after
-
+    delimited_by_before (before input) p after
 
 #[partial]
 def delimited_by_before (r : ParseResult A) (p : String -> ParseResult B) (after : String -> ParseResult C) : ParseResult B :=
-	match r {
-		success rem _ => delimited_by_body (p rem) after,
-		fail e => delimited_by_err e
-	}
-
+    match r {
+        success rem _ => delimited_by_body (p rem) after,
+        fail e => delimited_by_err e
+    }
 
 #[partial]
 def delimited_by_body (r : ParseResult B) (after : String -> ParseResult C) : ParseResult B :=
-	match r {
-		success rem out => delimited_by_after (after rem) out,
-		fail e => delimited_by_err e
-	}
-
+    match r {
+        success rem out => delimited_by_after (after rem) out,
+        fail e => delimited_by_err e
+    }
 
 #[partial]
 def delimited_by_after (r : ParseResult C) (out : B) : ParseResult B :=
-	match r {
-		success rem _ => delimited_by_ok rem out,
-		fail e => delimited_by_err e
-	}
-
+    match r {
+        success rem _ => delimited_by_ok rem out,
+        fail e => delimited_by_err e
+    }
 
 #[partial]
 def delimited_by_ok (rem : String) (out : B) : ParseResult B :=
-	success rem out
-
+    success rem out
 
 #[partial]
 def delimited_by_err (e : ParseError) : ParseResult B :=
-	fail e
-
+    fail e
 
 #[partial]
 pub def separated_by (sep : String -> ParseResult A) (p : String -> ParseResult B) (input : String) : ParseResult (List B) :=
-	separated_by_body (p input) p sep input List.empty
-
+    separated_by_body (p input) p sep input List.empty
 
 #[partial]
 def separated_by_body (r : ParseResult B) (p : String -> ParseResult B) (sep : String -> ParseResult A) (input : String) (acc : List B) : ParseResult (List B) :=
-	match r {
-		success rem out => separated_by_loop (sep rem) rem out p sep acc,
-		fail e => separated_by_ok input acc
-	}
-
+    match r {
+        success rem out => separated_by_loop (sep rem) rem out p sep acc,
+        fail e => separated_by_ok input acc
+    }
 
 #[partial]
 def separated_by_loop (r : ParseResult A) (rem : String) (out : B) (p : String -> ParseResult B) (sep : String -> ParseResult A) (acc : List B) : ParseResult (List B) :=
-	match r {
-		success rem2 _ => separated_by_body (p rem2) p sep rem2 (List.cons out acc),
-		fail e => separated_by_ok rem (List.cons out acc)
-	}
-
+    match r {
+        success rem2 _ => separated_by_body (p rem2) p sep rem2 (List.cons out acc),
+        fail e => separated_by_ok rem (List.cons out acc)
+    }
 
 #[partial]
 def separated_by_ok (input : String) (acc : List B) : ParseResult (List B) :=
-	success input (List.reverse acc)
-
+    success input (List.reverse acc)
 
 // --- UTF-8 codepoint-width stepping ---
 //
@@ -417,12 +378,12 @@ def separated_by_ok (input : String) (acc : List B) : ParseResult (List B) :=
 
 #[partial]
 pub def utf8_char_width (s : String) : I64 :=
-	match String.get s 0 {
-		Option.some byte => utf8_char_width_of_byte byte,
-		// Empty input — width is moot (take_while_loop already checks
-		// is_empty first), but 1 keeps this total.
-		Option.none => 1
-	}
+    match String.get s 0 {
+        Option.some byte => utf8_char_width_of_byte byte,
+        // Empty input — width is moot (take_while_loop already checks
+        // is_empty first), but 1 keeps this total.
+        Option.none => 1
+    }
 
 /// Standard UTF-8 lead-byte rule: `0xxxxxxx` (<0x80, i.e. <128u8) is a
 /// 1-byte ASCII char; `110xxxxx` (0xC0-0xDF, 192-223) starts a 2-byte
@@ -433,12 +394,11 @@ pub def utf8_char_width (s : String) : I64 :=
 /// than looping forever on malformed input.
 #[partial]
 def utf8_char_width_of_byte (byte : U8) : I64 :=
-	if U8.lt byte 128u8 then 1
-	else if U8.lt byte 192u8 then 1
-	else if U8.lt byte 224u8 then 2
-	else if U8.lt byte 240u8 then 3
-	else 4
-
+    if U8.lt byte 128u8 then 1
+    else if U8.lt byte 192u8 then 1
+    else if U8.lt byte 224u8 then 2
+    else if U8.lt byte 240u8 then 3
+    else 4
 
 // --- take_while combinator ---
 //
@@ -456,8 +416,7 @@ def utf8_char_width_of_byte (byte : U8) : I64 :=
 
 #[partial]
 pub def take_while (pred : String -> Bool) (input : String) : ParseResult String :=
-	take_while_loop pred input input
-
+    take_while_loop pred input input
 
 // Deliberately SELF-tail-recursive: the previous shape split the loop
 // into a `take_while_loop`/`take_while_check` MUTUAL tail recursion
@@ -476,22 +435,20 @@ pub def take_while (pred : String -> Bool) (input : String) : ParseResult String
 // per-char work, one call less).
 #[partial]
 def take_while_loop (pred : String -> Bool) (original : String) (input : String) : ParseResult String :=
-	if is_empty input
-	then take_while_done original input
-	else
-		let width : I64 := utf8_char_width input in
-		let ch : String := String.slice input 0 width in
-		let rest : String := String.drop width input in
-		if pred ch
-		then take_while_loop pred original rest
-		else take_while_done original input
-
+    if is_empty input
+    then take_while_done original input
+    else
+        let width : I64 := utf8_char_width input in
+        let ch : String := String.slice input 0 width in
+        let rest : String := String.drop width input in
+        if pred ch
+        then take_while_loop pred original rest
+        else take_while_done original input
 
 #[partial]
 def take_while_done (original : String) (remaining : String) : ParseResult String :=
-	let consumed : I64 := String.length original - String.length remaining in
-	success remaining (String.slice original 0 consumed)
-
+    let consumed : I64 := String.length original - String.length remaining in
+    success remaining (String.slice original 0 consumed)
 
 // --- Byte-indexed take_while --------------------------------------
 //
@@ -523,8 +480,7 @@ def take_while_done (original : String) (remaining : String) : ParseResult Strin
 // binary. `byte_at` (`char_preds.mo`) absorbs the `Option`.
 #[partial]
 pub def take_while_byte (pred : U8 -> Bool) (input : String) : ParseResult String :=
-	take_while_byte_go pred input input 0
-
+    take_while_byte_go pred input input 0
 
 /// `cur` is the byte at offset `n` of `original`, so the loop advances a
 /// POINTER (`String.drop 1`, a pointer add in the runtime) and counts, rather
@@ -544,59 +500,54 @@ pub def take_while_byte (pred : U8 -> Bool) (input : String) : ParseResult Strin
 /// per token, at the boundary.
 #[partial]
 def take_while_byte_go (pred : U8 -> Bool) (original : String) (cur : String) (n : I64) : ParseResult String :=
-	if is_empty cur
-	then success cur (String.slice original 0 n)
-	else if pred (byte_at cur 0)
-	then take_while_byte_go pred original (String.drop 1 cur) (n + 1)
-	else success cur (String.slice original 0 n)
-
+    if is_empty cur
+    then success cur (String.slice original 0 n)
+    else if pred (byte_at cur 0)
+    then take_while_byte_go pred original (String.drop 1 cur) (n + 1)
+    else success cur (String.slice original 0 n)
 
 // --- Optional parser ---
 
 #[partial]
 pub def opt (p : String -> ParseResult A) (input : String) : ParseResult (Option A) :=
-	opt_body (p input) input
-
+    opt_body (p input) input
 
 #[partial]
 def opt_body (r : ParseResult A) (input : String) : ParseResult (Option A) :=
-	match r {
-		success rem out => opt_some rem out,
-		fail e => opt_none input
-	}
-
+    match r {
+        success rem out => opt_some rem out,
+        fail e => opt_none input
+    }
 
 #[partial]
 def opt_some (rem : String) (out : A) : ParseResult (Option A) :=
-	success rem (Option.some out)
-
+    success rem (Option.some out)
 
 #[partial]
 def opt_none (input : String) : ParseResult (Option A) :=
-	success input Option.none
-
+    success input Option.none
 
 // --- Tests: furthest-failure-wins (alt / alt_fold) ---
 
 #[test]
 def test_furthest_error_picks_deeper : Bool :=
-	let e1 : ParseError := ParseError.tag "x" "abc" in
-	let e2 : ParseError := ParseError.custom "deep" "c" in
-	String.beq (parse_error_remaining (furthest_error e1 e2)) "c"
+    let e1 : ParseError := ParseError.tag "x" "abc" in
+    let e2 : ParseError := ParseError.custom "deep" "c" in
+    String.beq (parse_error_remaining (furthest_error e1 e2)) "c"
 
 #[test]
 def test_furthest_error_tie_keeps_first : Bool :=
-	let e1 : ParseError := ParseError.tag "x" "abc" in
-	let e2 : ParseError := ParseError.custom "other" "def" in
-	String.beq (parse_error_remaining (furthest_error e1 e2)) "abc"
+    let e1 : ParseError := ParseError.tag "x" "abc" in
+    let e2 : ParseError := ParseError.custom "other" "def" in
+    String.beq (parse_error_remaining (furthest_error e1 e2)) "abc"
 
 #[partial]
 def test_shallow_fail (input : String) : ParseResult String :=
-	fail (ParseError.tag "shallow" input)
+    fail (ParseError.tag "shallow" input)
 
 #[partial]
 def test_deep_fail (input : String) : ParseResult String :=
-	fail (ParseError.custom "deep failure" (String.drop 3 input))
+    fail (ParseError.custom "deep failure" (String.drop 3 input))
 
 /// Both branches of `alt` fail here, but `test_deep_fail` consumed more
 /// (dropped 3 chars) before failing — the combined error must report
@@ -604,29 +555,29 @@ def test_deep_fail (input : String) : ParseResult String :=
 /// very start of the input.
 #[test]
 def test_alt_prefers_deeper_failure : Bool :=
-	match alt test_shallow_fail test_deep_fail "abcdef" {
-		success _ _ => false,
-		fail e => String.beq (parse_error_remaining e) "def"
-	}
+    match alt test_shallow_fail test_deep_fail "abcdef" {
+        success _ _ => false,
+        fail e => String.beq (parse_error_remaining e) "def"
+    }
 
 #[test]
 def test_alt_order_independent : Bool :=
-	match alt test_deep_fail test_shallow_fail "abcdef" {
-		success _ _ => false,
-		fail e => String.beq (parse_error_remaining e) "def"
-	}
+    match alt test_deep_fail test_shallow_fail "abcdef" {
+        success _ _ => false,
+        fail e => String.beq (parse_error_remaining e) "def"
+    }
 
 #[partial]
 def test_fold_fail_a (input : String) : ParseResult String :=
-	fail (ParseError.tag "a" input)
+    fail (ParseError.tag "a" input)
 
 #[partial]
 def test_fold_fail_b (input : String) : ParseResult String :=
-	fail (ParseError.custom "deepest" (String.drop 4 input))
+    fail (ParseError.custom "deepest" (String.drop 4 input))
 
 #[partial]
 def test_fold_fail_c (input : String) : ParseResult String :=
-	fail (ParseError.tag "c" input)
+    fail (ParseError.tag "c" input)
 
 /// Same idea as `test_alt_prefers_deeper_failure` but across an
 /// `alt_fold` list of more than two alternatives, with the deepest
@@ -634,17 +585,17 @@ def test_fold_fail_c (input : String) : ParseResult String :=
 /// the whole fold, not just a pairwise comparison.
 #[test]
 def test_alt_fold_prefers_deepest_failure : Bool :=
-	match alt_fold [test_fold_fail_a, test_fold_fail_b, test_fold_fail_c] "abcdefgh" {
-		success _ _ => false,
-		fail e => String.beq (parse_error_remaining e) "efgh"
-	}
+    match alt_fold [test_fold_fail_a, test_fold_fail_b, test_fold_fail_c] "abcdefgh" {
+        success _ _ => false,
+        fail e => String.beq (parse_error_remaining e) "efgh"
+    }
 
 #[test]
 def test_alt_fold_empty_list_still_fails : Bool :=
-	match alt_fold ([] : List (String -> ParseResult String)) "abc" {
-		success _ _ => false,
-		fail _ => true
-	}
+    match alt_fold ([] : List (String -> ParseResult String)) "abc" {
+        success _ _ => false,
+        fail _ => true
+    }
 
 // --- End of combinators ---
 
@@ -658,37 +609,37 @@ def test_alt_fold_empty_list_still_fails : Bool :=
 
 #[partial]
 def tw_byte_out (r : ParseResult String) : String :=
-	match r {
-		success _ out => out,
-		fail _ => "<fail>"
-	}
+    match r {
+        success _ out => out,
+        fail _ => "<fail>"
+    }
 
 #[partial]
 def tw_byte_rem (r : ParseResult String) : String :=
-	match r {
-		success rem _ => rem,
-		fail _ => "<fail>"
-	}
+    match r {
+        success rem _ => rem,
+        fail _ => "<fail>"
+    }
 
 #[test]
 def test_take_while_byte_consumes_run : Bool :=
-	String.beq (tw_byte_out (take_while_byte is_space_byte "   xy")) "   "
+    String.beq (tw_byte_out (take_while_byte is_space_byte "   xy")) "   "
 
 #[test]
 def test_take_while_byte_leaves_remainder : Bool :=
-	String.beq (tw_byte_rem (take_while_byte is_space_byte "   xy")) "xy"
+    String.beq (tw_byte_rem (take_while_byte is_space_byte "   xy")) "xy"
 
 #[test]
 def test_take_while_byte_empty_run : Bool :=
-	String.beq (tw_byte_out (take_while_byte is_space_byte "xy")) ""
+    String.beq (tw_byte_out (take_while_byte is_space_byte "xy")) ""
 
 #[test]
 def test_take_while_byte_empty_input : Bool :=
-	String.beq (tw_byte_out (take_while_byte is_space_byte "")) ""
+    String.beq (tw_byte_out (take_while_byte is_space_byte "")) ""
 
 #[test]
 def test_take_while_byte_whole_input : Bool :=
-	String.beq (tw_byte_rem (take_while_byte is_ident_char_byte "abc")) ""
+    String.beq (tw_byte_rem (take_while_byte is_ident_char_byte "abc")) ""
 
 /// The correctness argument for scanning bytes rather than characters: a
 /// UTF-8 lead byte (>= 0xC0) fails every ASCII predicate, so the scan
@@ -697,23 +648,23 @@ def test_take_while_byte_whole_input : Bool :=
 /// before their first declaration (see `utf8_char_width`'s own note).
 #[test]
 def test_take_while_byte_stops_at_utf8_boundary : Bool :=
-	String.beq (tw_byte_out (take_while_byte is_ident_char_byte "ab—cd")) "ab"
+    String.beq (tw_byte_out (take_while_byte is_ident_char_byte "ab—cd")) "ab"
 
 #[test]
 def test_take_while_byte_utf8_remainder_intact : Bool :=
-	String.beq (tw_byte_rem (take_while_byte is_ident_char_byte "ab—cd")) "—cd"
+    String.beq (tw_byte_rem (take_while_byte is_ident_char_byte "ab—cd")) "—cd"
 
 /// Byte and string scanners must agree. This is the property
 /// `bench/parser_take_while.mo` asserts at scale; asserted here too so it
 /// is actually run.
 #[test]
 def test_take_while_byte_matches_string_scanner : Bool :=
-	let src : String := "  \tfoo_bar1 baz" in
-	String.beq (tw_byte_out (take_while_byte is_space_byte src))
-	           (tw_byte_out (take_while is_space src))
+    let src : String := "  \tfoo_bar1 baz" in
+    String.beq (tw_byte_out (take_while_byte is_space_byte src))
+        (tw_byte_out (take_while is_space src))
 
 #[test]
 def test_take_while_byte_matches_string_scanner_ident : Bool :=
-	let src : String := "foo_bar1 baz" in
-	String.beq (tw_byte_out (take_while_byte is_ident_char_byte src))
-	           (tw_byte_out (take_while is_ident_char src))
+    let src : String := "foo_bar1 baz" in
+    String.beq (tw_byte_out (take_while_byte is_ident_char_byte src))
+        (tw_byte_out (take_while is_ident_char src))

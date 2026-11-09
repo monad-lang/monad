@@ -40,9 +40,9 @@
 // dispatches (its head is a variable -- `KnownInstances` keys on the
 // first argument's head).
 
-use lib::core { empty_screen }
-use lib::render { apply_deltas, diff }
-use lib::types { Screen }
+use lib::core {empty_screen}
+use lib::render {apply_deltas, diff}
+use lib::types {Screen}
 use lib::terminal {
     Terminal.enter_raw_mode, Terminal.leave_raw_mode, Terminal.leave_alt_screen_code, Terminal.reset_style_code,
     Terminal.cursor_show_code, Terminal.poll, Terminal.size

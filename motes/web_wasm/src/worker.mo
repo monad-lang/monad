@@ -9,8 +9,8 @@
 /// No promise re-enters wasm: the worker's `onmessage` only stores values
 /// in the JS host, and the Oak UI polls on its animation-frame tick.
 use lib::ffi {
-  worker_cancel_raw, worker_error_raw, worker_notes_raw, worker_poll_raw,
-  worker_run_raw, worker_status_raw, worker_type_raw, worker_value_raw
+    worker_cancel_raw, worker_error_raw, worker_notes_raw, worker_poll_raw,
+    worker_run_raw, worker_status_raw, worker_type_raw, worker_value_raw
 }
 
 pub def Worker.run (source : String) : IO I64 := IO.mk (worker_run_raw source)

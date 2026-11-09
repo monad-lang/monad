@@ -32,35 +32,35 @@ pub def CryptoRandom.new : CryptoRandom := CryptoRandom.crypto_random
 priv def random_max_bytes : I64 := 1048576
 
 priv def random_clamp (n : I64) : I64 :=
-  if I64.lt n 0i64 then 0i64
-  else if I64.gt n random_max_bytes then random_max_bytes
-  else n
+    if I64.lt n 0i64 then 0i64
+    else if I64.gt n random_max_bytes then random_max_bytes
+    else n
 
 priv def random_draw (count : I64) : IO (Result RandomError (List U8)) := do {
-  let buf <- ByteBuf.alloc count;
-  let rc <- IO.mk (RAND_bytes (ByteBuf.ptr buf) (I64.to_i32 count));
-  if I64.beq (I32.to_i64 rc) 1i64
-  then random_draw_ok buf count
-  else random_draw_failed buf
+    let buf <- ByteBuf.alloc count;
+    let rc <- IO.mk (RAND_bytes (ByteBuf.ptr buf) (I64.to_i32 count));
+    if I64.beq (I32.to_i64 rc) 1i64
+    then random_draw_ok buf count
+    else random_draw_failed buf
 }
 
 priv def random_draw_ok (buf : ByteBuf) (count : I64) : IO (Result RandomError (List U8)) := do {
-  let xs <- ByteBuf.to_list buf count;
-  let _ <- ByteBuf.free buf;
-  return (Result.ok xs)
+    let xs <- ByteBuf.to_list buf count;
+    let _ <- ByteBuf.free buf;
+    return (Result.ok xs)
 }
 
 /// Never read a buffer `RAND_bytes` declined to fill.
 priv def random_draw_failed (buf : ByteBuf) : IO (Result RandomError (List U8)) := do {
-  let _ <- ByteBuf.free buf;
-  return (Result.err (RandomError.of "openssl RAND_bytes returned 0"))
+    let _ <- ByteBuf.free buf;
+    return (Result.err (RandomError.of "openssl RAND_bytes returned 0"))
 }
 
 pub instance Random CryptoRandom {
-  def bytes (r : CryptoRandom) (n : I64) : IO (Result RandomError (List U8)) := do {
-    let count := random_clamp n;
-    if I64.lt count 1i64
-    then return (Result.ok List.empty)
-    else random_draw count
-  }
+    def bytes (r : CryptoRandom) (n : I64) : IO (Result RandomError (List U8)) := do {
+        let count := random_clamp n;
+        if I64.lt count 1i64
+        then return (Result.ok List.empty)
+        else random_draw count
+    }
 }

@@ -95,15 +95,15 @@ def render_source (entries : BTreeMap String Json) : String :=
 /// two ordering/decoding decisions a reader of the table would otherwise
 /// have to rediscover.
 def banner_notes (count : I64) : List String :=
-    [ String.concat "Source: " url,
-      String.concat (I64.to_string count) " semicolon-terminated CommonMark entities.",
-      "",
-      "Names are ordered by the entity name with `&` and `;` stripped, not by",
-      "the raw JSON key: `;` sorts after the digits, which put `emsp13` before",
-      "`emsp`.",
-      "Values come from each entry's `codepoints` array, not `characters`:",
-      "motes/json does not combine UTF-16 surrogate pairs, so an astral",
-      "entity's `characters` decodes to U+FFFD pairs." ]
+    [String.concat "Source: " url,
+        String.concat (I64.to_string count) " semicolon-terminated CommonMark entities.",
+        "",
+        "Names are ordered by the entity name with `&` and `;` stripped, not by",
+        "the raw JSON key: `;` sorts after the digits, which put `emsp13` before",
+        "`emsp`.",
+        "Values come from each entry's `codepoints` array, not `characters`:",
+        "motes/json does not combine UTF-16 surrogate pairs, so an astral",
+        "entity's `characters` decodes to U+FFFD pairs."]
 
 def tool : String := "motes/markdown/src/tools/gen_entities.mo"
 

@@ -30,7 +30,7 @@
 
 // `List.filter` is the one list operation here the prelude does not
 // carry.
-use std::list { List.filter }
+use std::list {List.filter}
 
 /// A discrete stream of `A`s, in arrival order. Cold: the events are
 /// a fixed list, so every combinator is total and deterministic.

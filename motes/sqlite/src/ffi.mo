@@ -60,11 +60,11 @@ def sqlite3_bind_double (stmt : Ptr) (idx : I32) (value : F64) : RawIO I32
 
 #[extern "c"]
 def sqlite3_bind_text (stmt : Ptr) (idx : I32) (text : String) (n : I32)
-        (destructor : Ptr) : RawIO I32
+    (destructor : Ptr) : RawIO I32
 
 #[extern "c"]
 def sqlite3_bind_blob (stmt : Ptr) (idx : I32) (data : Ptr) (n : I32)
-        (destructor : Ptr) : RawIO I32
+    (destructor : Ptr) : RawIO I32
 
 #[extern "c"]
 def sqlite3_column_count (stmt : Ptr) : I32

@@ -40,7 +40,7 @@
 /// the convention of the side it came from. Only `wire_of_location` and
 /// `offset_of_wire` cross that boundary, and each does it once.
 
-use toolkit::bytes { byte_cr, byte_lf, is_ascii_byte, is_continuation_byte, utf16_units_of_byte }
+use toolkit::bytes {byte_cr, byte_lf, is_ascii_byte, is_continuation_byte, utf16_units_of_byte}
 
 /// Which unit LSP counts `Position.character` in.
 ///
@@ -48,8 +48,8 @@ use toolkit::bytes { byte_cr, byte_lf, is_ascii_byte, is_continuation_byte, utf1
 /// "utf-16"]` that this server supports wins. Both are supported because both
 /// are cheap here: the encoding decides one predicate, not the architecture.
 pub type PositionEncoding {
-  utf8,
-  utf16,
+    utf8,
+    utf16,
 }
 
 /// The specification's default, and what a client that announces nothing gets.
@@ -72,19 +72,19 @@ pub def position_encoding_default : PositionEncoding := PositionEncoding.utf16
 /// and was silently given utf-16 is the desynchronization this module is built
 /// to prevent.
 pub def position_encoding_from_string (s : String) : Option PositionEncoding :=
-  if String.beq s "utf-8"
-  then Option.some PositionEncoding.utf8
-  else
-    if String.beq s "utf-16"
-    then Option.some PositionEncoding.utf16
-    else Option.none
+    if String.beq s "utf-8"
+    then Option.some PositionEncoding.utf8
+    else
+        if String.beq s "utf-16"
+        then Option.some PositionEncoding.utf16
+        else Option.none
 
 /// The name to echo back in the `initialize` result.
 pub def position_encoding_name (e : PositionEncoding) : String :=
-  match e {
-    PositionEncoding.utf8 => "utf-8",
-    PositionEncoding.utf16 => "utf-16",
-  }
+    match e {
+        PositionEncoding.utf8 => "utf-8",
+        PositionEncoding.utf16 => "utf-16",
+    }
 
 /// A wire position. Both fields 0-based, as LSP defines them.
 pub struct WirePosition { line : I64, character : I64 }
@@ -92,7 +92,7 @@ pub struct WirePosition { line : I64, character : I64 }
 /// Build one, for callers that must not write a struct literal in argument
 /// position -- a recorded self-hosted codegen hazard in this repo.
 pub def wire_position_mk (line : I64) (character : I64) : WirePosition :=
-  WirePosition.mk line character
+    WirePosition.mk line character
 
 pub def wire_position_line (p : WirePosition) : I64 := p.line
 
@@ -112,7 +112,7 @@ pub struct WireRange { start : WirePosition, end : WirePosition }
 /// For callers that must not write a struct literal in argument position -- the
 /// same recorded self-hosted codegen hazard `wire_position_mk` exists for.
 pub def wire_range_mk (start : WirePosition) (end : WirePosition) : WireRange :=
-  WireRange.mk start end
+    WireRange.mk start end
 
 pub def wire_range_start (r : WireRange) : WirePosition := r.start
 
@@ -156,21 +156,21 @@ pub def line_count (ix : LineIndex) : I64 := line_count_go ix.lines 0
 
 #[partial]
 def line_count_go (ls : List LineInfo) (acc : I64) : I64 :=
-  match ls {
-    List.empty => acc,
-    List.cons _l rest => line_count_go rest (I64.add acc 1),
-  }
+    match ls {
+        List.empty => acc,
+        List.cons _l rest => line_count_go rest (I64.add acc 1),
+    }
 
 /// The extent of `line`, 1-based. `Option.none` past the last line.
 pub def line_at (ix : LineIndex) (line : I64) : Option LineInfo :=
-  line_at_go ix.lines line
+    line_at_go ix.lines line
 
 #[partial]
 def line_at_go (ls : List LineInfo) (line : I64) : Option LineInfo :=
-  match ls {
-    List.empty => Option.none,
-    List.cons l rest => if I64.beq line 1 then Option.some l else line_at_go rest (I64.sub line 1),
-  }
+    match ls {
+        List.empty => Option.none,
+        List.cons l rest => if I64.beq line 1 then Option.some l else line_at_go rest (I64.sub line 1),
+    }
 
 /// The line containing byte `offset`, 1-based -- the inverse of `line_at`'s
 /// question.
@@ -196,20 +196,20 @@ def line_at_go (ls : List LineInfo) (line : I64) : Option LineInfo :=
 /// and every caller here holds a source of a few thousand lines and asks twice.
 #[partial]
 pub def line_of_offset (ix : LineIndex) (offset : I64) : Option I64 :=
-  line_of_offset_go ix.lines offset 1 Option.none
+    line_of_offset_go ix.lines offset 1 Option.none
 
 /// Stops at the first line that STARTS after `offset`: the lines are in source
 /// order, so every line after that one starts later still. `n` counts 1-based and
 /// `best` carries the last start at or before the offset.
 #[partial]
 def line_of_offset_go (ls : List LineInfo) (offset : I64) (n : I64) (best : Option I64) : Option I64 :=
-  match ls {
-    List.empty => best,
-    List.cons li rest =>
-      if I64.gt (line_info_start li) offset
-      then best
-      else line_of_offset_go rest offset (I64.add n 1) (Option.some n),
-  }
+    match ls {
+        List.empty => best,
+        List.cons li rest =>
+            if I64.gt (line_info_start li) offset
+            then best
+            else line_of_offset_go rest offset (I64.add n 1) (Option.some n),
+    }
 
 /// The wire range spanning a byte span of the source.
 ///
@@ -226,15 +226,15 @@ def line_of_offset_go (ls : List LineInfo) (offset : I64) (n : I64) (best : Opti
 #[partial]
 pub def wire_range_of_offsets (enc : PositionEncoding) (ix : LineIndex) (source : String)
     (start_offset : I64) (stop_offset : I64) : Option WireRange :=
-  match line_of_offset ix start_offset {
-    Option.none => Option.none,
-    Option.some start_line =>
-      match line_of_offset ix stop_offset {
+    match line_of_offset ix start_offset {
         Option.none => Option.none,
-        Option.some stop_line =>
-          wire_range_of_points enc ix source start_line start_offset stop_line stop_offset,
-      },
-  }
+        Option.some start_line =>
+            match line_of_offset ix stop_offset {
+                Option.none => Option.none,
+                Option.some stop_line =>
+                    wire_range_of_points enc ix source start_line start_offset stop_line stop_offset,
+            },
+    }
 
 /// Split a source into its lines.
 ///
@@ -263,34 +263,34 @@ pub def wire_range_of_offsets (enc : PositionEncoding) (ix : LineIndex) (source 
 /// `toolkit/position_tests`' 320 KB scan is the pin on that shape.
 #[partial]
 pub def line_index_of_source (source : String) : LineIndex :=
-  line_index_go (String.to_list source) 0 0 true false List.empty
+    line_index_go (String.to_list source) 0 0 true false List.empty
 
 #[partial]
 def line_index_go (bs : List U8) (i : I64) (start : I64) (ascii : Bool) (prev_cr : Bool)
     (acc : List LineInfo) : LineIndex :=
-  match bs {
-    // The final line, whether or not the source ended with a newline: if it
-    // did, `start` already equals `i` and this is the empty last line the doc
-    // above promises.
-    List.empty => LineIndex.mk (line_index_rev (List.cons (LineInfo.mk start i ascii) acc) List.empty),
-    // ONE self-call, and no branching around it -- see this def's own doc above.
-    // Each helper below reads only the PRE-step values, so the order they are
-    // evaluated in does not matter.
-    List.cons b rest =>
-      line_index_go rest (I64.add i 1) (line_index_next_start i start b)
-        (line_index_next_ascii ascii b) (U8.beq b byte_cr)
-        (line_index_next_acc i start ascii prev_cr b acc),
-  }
+    match bs {
+        // The final line, whether or not the source ended with a newline: if it
+        // did, `start` already equals `i` and this is the empty last line the doc
+        // above promises.
+        List.empty => LineIndex.mk (line_index_rev (List.cons (LineInfo.mk start i ascii) acc) List.empty),
+        // ONE self-call, and no branching around it -- see this def's own doc above.
+        // Each helper below reads only the PRE-step values, so the order they are
+        // evaluated in does not matter.
+        List.cons b rest =>
+            line_index_go rest (I64.add i 1) (line_index_next_start i start b)
+                (line_index_next_ascii ascii b) (U8.beq b byte_cr)
+                (line_index_next_acc i start ascii prev_cr b acc),
+    }
 
 /// Where the line after `b` starts: one past a newline, and unchanged otherwise.
 def line_index_next_start (i : I64) (start : I64) (b : U8) : I64 :=
-  if U8.beq b byte_lf then I64.add i 1 else start
+    if U8.beq b byte_lf then I64.add i 1 else start
 
 /// Whether the line `b` is part of is still pure ASCII. A newline starts a new
 /// line, which is ASCII until a byte proves otherwise; any other byte can only
 /// take the flag away, never give it back.
 def line_index_next_ascii (ascii : Bool) (b : U8) : Bool :=
-  if U8.beq b byte_lf then true else ascii && is_ascii_byte b
+    if U8.beq b byte_lf then true else ascii && is_ascii_byte b
 
 /// The accumulator after `b`: a newline closes the line it terminates and adds
 /// it to the reversed list, any other byte contributes nothing.
@@ -300,21 +300,21 @@ def line_index_next_ascii (ascii : Bool) (b : U8) : Bool :=
 /// post-step state.
 def line_index_next_acc (i : I64) (start : I64) (ascii : Bool) (prev_cr : Bool) (b : U8)
     (acc : List LineInfo) : List LineInfo :=
-  if U8.beq b byte_lf
-  then List.cons (LineInfo.mk start (line_stop i prev_cr) ascii) acc
-  else acc
+    if U8.beq b byte_lf
+    then List.cons (LineInfo.mk start (line_stop i prev_cr) ascii) acc
+    else acc
 
 /// Where a line ends, given the index of its `\n` and whether a `\r` precedes
 /// it.
 def line_stop (lf_index : I64) (prev_cr : Bool) : I64 :=
-  if prev_cr then I64.sub lf_index 1 else lf_index
+    if prev_cr then I64.sub lf_index 1 else lf_index
 
 #[partial]
 def line_index_rev (ls : List LineInfo) (acc : List LineInfo) : List LineInfo :=
-  match ls {
-    List.empty => acc,
-    List.cons l rest => line_index_rev rest (List.cons l acc),
-  }
+    match ls {
+        List.empty => acc,
+        List.cons l rest => line_index_rev rest (List.cons l acc),
+    }
 
 /// The byte offset just past the character that starts at `offset`.
 ///
@@ -340,20 +340,20 @@ def line_index_rev (ls : List LineInfo) (acc : List LineInfo) : List LineInfo :=
 /// one-character range one character wide whatever that character is.
 #[partial]
 pub def offset_after_char (source : String) (offset : I64) : I64 :=
-  let n : I64 := String.length source in
-  let j : I64 := offset_after_char_go (String.to_list source) 0 (I64.add offset 1) in
-  if I64.gt j n then n else j
+    let n : I64 := String.length source in
+    let j : I64 := offset_after_char_go (String.to_list source) 0 (I64.add offset 1) in
+    if I64.gt j n then n else j
 
 #[partial]
 def offset_after_char_go (bs : List U8) (i : I64) (from : I64) : I64 :=
-  match bs {
-    List.empty => i,
-    List.cons b rest =>
-      if I64.lt i from
-      then offset_after_char_go rest (I64.add i 1) from
-      else if is_continuation_byte b then offset_after_char_go rest (I64.add i 1) from
-      else i,
-  }
+    match bs {
+        List.empty => i,
+        List.cons b rest =>
+            if I64.lt i from
+            then offset_after_char_go rest (I64.add i 1) from
+            else if is_continuation_byte b then offset_after_char_go rest (I64.add i 1) from
+            else i,
+    }
 
 /// The wire position of a `lang`-style coordinate.
 ///
@@ -374,12 +374,12 @@ def offset_after_char_go (bs : List U8) (i : I64) (from : I64) : I64 :=
 #[partial]
 pub def wire_of_location (enc : PositionEncoding) (ix : LineIndex) (source : String)
     (source_line : I64) (byte_offset : I64) : Option WirePosition :=
-  match line_at ix source_line {
-    Option.none => Option.none,
-    Option.some li =>
-      Option.some
-        (WirePosition.mk (I64.sub source_line 1) (wire_character enc li source byte_offset)),
-  }
+    match line_at ix source_line {
+        Option.none => Option.none,
+        Option.some li =>
+            Option.some
+                (WirePosition.mk (I64.sub source_line 1) (wire_character enc li source byte_offset)),
+    }
 
 /// The wire range of a source-space range, given as two points.
 ///
@@ -430,24 +430,24 @@ pub def wire_of_location (enc : PositionEncoding) (ix : LineIndex) (source : Str
 pub def wire_range_of_points (enc : PositionEncoding) (ix : LineIndex) (source : String)
     (start_line : I64) (start_offset : I64) (end_line : I64) (end_offset : I64)
     : Option WireRange :=
-  match wire_of_location enc ix source start_line start_offset {
-    Option.none => Option.none,
-    Option.some a =>
-      match wire_of_location enc ix source end_line end_offset {
+    match wire_of_location enc ix source start_line start_offset {
         Option.none => Option.none,
-        Option.some b =>
-          let e : WirePosition :=
-            if wire_same_position a b
-            then widen_end enc ix source end_line end_offset b
-            else b
-          in
-          Option.some (wire_range_mk a e),
-      },
-  }
+        Option.some a =>
+            match wire_of_location enc ix source end_line end_offset {
+                Option.none => Option.none,
+                Option.some b =>
+                    let e : WirePosition :=
+                        if wire_same_position a b
+                        then widen_end enc ix source end_line end_offset b
+                        else b
+                    in
+                    Option.some (wire_range_mk a e),
+            },
+    }
 
 def wire_same_position (a : WirePosition) (b : WirePosition) : Bool :=
-  I64.beq (wire_position_line a) (wire_position_line b)
-    && I64.beq (wire_position_character a) (wire_position_character b)
+    I64.beq (wire_position_line a) (wire_position_line b)
+        && I64.beq (wire_position_character a) (wire_position_character b)
 
 /// The end position widened by one character, or `fallback` -- the position
 /// itself -- when the character at `offset` is a terminator or the source ends
@@ -461,10 +461,10 @@ def wire_same_position (a : WirePosition) (b : WirePosition) : Bool :=
 #[partial]
 def widen_end (enc : PositionEncoding) (ix : LineIndex) (source : String) (line : I64)
     (offset : I64) (fallback : WirePosition) : WirePosition :=
-  match wire_of_location enc ix source line (offset_after_char source offset) {
-    Option.none => fallback,
-    Option.some p => p,
-  }
+    match wire_of_location enc ix source line (offset_after_char source offset) {
+        Option.none => fallback,
+        Option.some p => p,
+    }
 
 /// How far into its line `offset` sits, in `enc`'s unit.
 ///
@@ -477,14 +477,14 @@ def widen_end (enc : PositionEncoding) (ix : LineIndex) (source : String) (line 
 /// the subtraction is generally correct.
 #[partial]
 def wire_character (enc : PositionEncoding) (li : LineInfo) (source : String) (offset : I64) : I64 :=
-  let rel : I64 := I64.sub offset (line_info_start li) in
-  match enc {
-    PositionEncoding.utf8 => rel,
-    PositionEncoding.utf16 =>
-      if line_info_is_ascii li
-      then rel
-      else utf16_units_between source (line_info_start li) offset,
-  }
+    let rel : I64 := I64.sub offset (line_info_start li) in
+    match enc {
+        PositionEncoding.utf8 => rel,
+        PositionEncoding.utf16 =>
+            if line_info_is_ascii li
+            then rel
+            else utf16_units_between source (line_info_start li) offset,
+    }
 
 /// UTF-16 code units in `source` at byte indices `start` up to `stop`.
 ///
@@ -504,19 +504,19 @@ def wire_character (enc : PositionEncoding) (li : LineInfo) (source : String) (o
 /// declarations is a whole-file scan per declaration.
 #[partial]
 pub def utf16_units_between (source : String) (start : I64) (stop : I64) : I64 :=
-  utf16_units_go (String.to_list source) 0 start stop 0
+    utf16_units_go (String.to_list source) 0 start stop 0
 
 #[partial]
 def utf16_units_go (bs : List U8) (i : I64) (start : I64) (stop : I64) (acc : I64) : I64 :=
-  match bs {
-    List.empty => acc,
-    List.cons b rest =>
-      if I64.lt i stop
-      then
-        utf16_units_go rest (I64.add i 1) start stop
-          (if I64.lt i start then acc else I64.add acc (utf16_units_of_byte b))
-      else acc,
-  }
+    match bs {
+        List.empty => acc,
+        List.cons b rest =>
+            if I64.lt i stop
+            then
+                utf16_units_go rest (I64.add i 1) start stop
+                    (if I64.lt i start then acc else I64.add acc (utf16_units_of_byte b))
+            else acc,
+    }
 
 /// The byte offset a wire position names, or `Option.none` past the last line.
 ///
@@ -540,38 +540,38 @@ def utf16_units_go (bs : List U8) (i : I64) (start : I64) (stop : I64) (acc : I6
 #[partial]
 pub def offset_of_wire (enc : PositionEncoding) (ix : LineIndex) (source : String)
     (p : WirePosition) : Option I64 :=
-  match line_at ix (I64.add (wire_position_line p) 1) {
-    Option.none => Option.none,
-    Option.some li =>
-      Option.some (wire_offset_in_line enc li source (wire_position_character p)),
-  }
+    match line_at ix (I64.add (wire_position_line p) 1) {
+        Option.none => Option.none,
+        Option.some li =>
+            Option.some (wire_offset_in_line enc li source (wire_position_character p)),
+    }
 
 #[partial]
 def wire_offset_in_line (enc : PositionEncoding) (li : LineInfo) (source : String)
     (character : I64) : I64 :=
-  let start : I64 := line_info_start li in
-  let stop : I64 := line_info_stop li in
-  let plain : I64 := clamp_offset start stop (I64.add start character) in
-  if I64.lt character 0
-  then start
-  else
-    match enc {
-      PositionEncoding.utf8 => plain,
-      PositionEncoding.utf16 =>
-        if line_info_is_ascii li
-        then plain
-        else
-          match utf16_offset_in_line source start stop character {
-            Option.none => stop,
-            Option.some off => off,
-          },
-    }
+    let start : I64 := line_info_start li in
+    let stop : I64 := line_info_stop li in
+    let plain : I64 := clamp_offset start stop (I64.add start character) in
+    if I64.lt character 0
+    then start
+    else
+        match enc {
+            PositionEncoding.utf8 => plain,
+            PositionEncoding.utf16 =>
+                if line_info_is_ascii li
+                then plain
+                else
+                    match utf16_offset_in_line source start stop character {
+                        Option.none => stop,
+                        Option.some off => off,
+                    },
+        }
 
 /// Clamp `v` into `[start, stop]`.
 def clamp_offset (start : I64) (stop : I64) (v : I64) : I64 :=
-  if I64.lt v start
-  then start
-  else if I64.gt v stop then stop else v
+    if I64.lt v start
+    then start
+    else if I64.gt v stop then stop else v
 
 /// The first byte index at or after `start` whose UTF-16 offset is `target`, or
 /// `Option.none` when `target` is at or past the end of the line.
@@ -583,19 +583,19 @@ def clamp_offset (start : I64) (stop : I64) (v : I64) : I64 :=
 /// begins rather than stepping into its continuation bytes.
 #[partial]
 def utf16_offset_in_line (source : String) (start : I64) (stop : I64) (target : I64) : Option I64 :=
-  utf16_offset_go (String.to_list source) 0 start stop target 0
+    utf16_offset_go (String.to_list source) 0 start stop target 0
 
 #[partial]
 def utf16_offset_go (bs : List U8) (i : I64) (start : I64) (stop : I64) (target : I64)
     (acc : I64) : Option I64 :=
-  if I64.lt i stop
-  then
-    match bs {
-      List.empty => Option.none,
-      List.cons b rest =>
-        let u : I64 := if I64.lt i start then 0 else utf16_units_of_byte b in
-        if I64.lt target (I64.add acc u)
-        then Option.some i
-        else utf16_offset_go rest (I64.add i 1) start stop target (I64.add acc u),
-    }
-  else Option.none
+    if I64.lt i stop
+    then
+        match bs {
+            List.empty => Option.none,
+            List.cons b rest =>
+                let u : I64 := if I64.lt i start then 0 else utf16_units_of_byte b in
+                if I64.lt target (I64.add acc u)
+                then Option.some i
+                else utf16_offset_go rest (I64.add i 1) start stop target (I64.add acc u),
+        }
+    else Option.none

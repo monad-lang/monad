@@ -48,8 +48,8 @@ def test_void_element_with_bool_attr : Bool :=
 def test_fragment : Bool :=
     renders
         (Html.Node.node_fragment
-            [ Html.Node.node_text "a",
-              Html.Node.node_element "span" List.empty [Html.Node.node_text "b"] ])
+            [Html.Node.node_text "a",
+                Html.Node.node_element "span" List.empty [Html.Node.node_text "b"]])
         "a<span>b</span>"
 
 // ─── Escaping ───
@@ -95,9 +95,9 @@ def test_raw_html_is_verbatim : Bool :=
 def test_raw_html_in_a_fragment : Bool :=
     renders
         (Html.Node.node_fragment
-            [ Html.Node.node_text "a",
-              Html.Node.node_raw_html "<b>",
-              Html.Node.node_text "c" ])
+            [Html.Node.node_text "a",
+                Html.Node.node_raw_html "<b>",
+                Html.Node.node_text "c"])
         "a<b>c"
 
 #[test]
@@ -134,7 +134,7 @@ def test_xhtml_void_hr_and_attrs : Bool :=
         (String.beq
             (Html.to_string_with opts
                 (Html.Node.node_void "img"
-                    [ Html.Attr.attr "src" "/x.png", Html.Attr.attr "alt" "x" ]))
+                    [Html.Attr.attr "src" "/x.png", Html.Attr.attr "alt" "x"]))
             "<img src=\"/x.png\" alt=\"x\" />")
 
 #[test]

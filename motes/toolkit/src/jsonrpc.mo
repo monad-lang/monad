@@ -76,20 +76,20 @@ pub def rpc_version : String := "2.0"
 /// `RpcId`-style naming. That asymmetry is the specification's, not this
 /// module's.
 pub type RpcMessage {
-  /// A request: it has an id and it must be answered.
-  request (id : Json) (method : String) (params : Option Json),
-  /// A notification: no id, and answering it is a protocol violation.
-  notification (method : String) (params : Option Json),
-  /// A response to something this server sent. It never sends requests, so
-  /// this arrives only from a confused or hostile peer.
-  response (id : Json) (result : Json),
-  /// An error to send. Ids are absent when the request that would have carried
-  /// one was unreadable.
-  failure (id : Option Json) (code : I64) (message : String),
-  /// Input this module could not turn into any of the above. Carries a reason
-  /// for the log, and the server answers `rpc_code_parse_error` (or
-  /// `rpc_code_invalid_request`) with a null id.
-  unparseable (reason : String),
+    /// A request: it has an id and it must be answered.
+    request (id : Json) (method : String) (params : Option Json),
+    /// A notification: no id, and answering it is a protocol violation.
+    notification (method : String) (params : Option Json),
+    /// A response to something this server sent. It never sends requests, so
+    /// this arrives only from a confused or hostile peer.
+    response (id : Json) (result : Json),
+    /// An error to send. Ids are absent when the request that would have carried
+    /// one was unreadable.
+    failure (id : Option Json) (code : I64) (message : String),
+    /// Input this module could not turn into any of the above. Carries a reason
+    /// for the log, and the server answers `rpc_code_parse_error` (or
+    /// `rpc_code_invalid_request`) with a null id.
+    unparseable (reason : String),
 }
 
 /// Does this message demand an answer?
@@ -99,23 +99,23 @@ pub type RpcMessage {
 /// response on the stream, which clients report as an internal error; a request
 /// treated as a notification leaves the client waiting forever.
 pub def rpc_wants_reply (m : RpcMessage) : Bool :=
-  match m {
-    RpcMessage.request _id _method _params => true,
-    RpcMessage.notification _method _params => false,
-    RpcMessage.response _id _result => false,
-    RpcMessage.failure _id _code _message => false,
-    RpcMessage.unparseable _reason => false,
-  }
+    match m {
+        RpcMessage.request _id _method _params => true,
+        RpcMessage.notification _method _params => false,
+        RpcMessage.response _id _result => false,
+        RpcMessage.failure _id _code _message => false,
+        RpcMessage.unparseable _reason => false,
+    }
 
 /// The method name, or the empty string for a message that has none.
 pub def rpc_method (m : RpcMessage) : String :=
-  match m {
-    RpcMessage.request _id method _params => method,
-    RpcMessage.notification method _params => method,
-    RpcMessage.response _id _result => "",
-    RpcMessage.failure _id _code _message => "",
-    RpcMessage.unparseable _reason => "",
-  }
+    match m {
+        RpcMessage.request _id method _params => method,
+        RpcMessage.notification method _params => method,
+        RpcMessage.response _id _result => "",
+        RpcMessage.failure _id _code _message => "",
+        RpcMessage.unparseable _reason => "",
+    }
 
 /// The params node, or `Option.none` for a request that omitted it.
 ///
@@ -124,24 +124,24 @@ pub def rpc_method (m : RpcMessage) : String :=
 /// stays an `Option` all the way to the handler rather than being defaulted
 /// here.
 pub def rpc_params (m : RpcMessage) : Option Json :=
-  match m {
-    RpcMessage.request _id _method params => params,
-    RpcMessage.notification _method params => params,
-    RpcMessage.response _id _result => Option.none,
-    RpcMessage.failure _id _code _message => Option.none,
-    RpcMessage.unparseable _reason => Option.none,
-  }
+    match m {
+        RpcMessage.request _id _method params => params,
+        RpcMessage.notification _method params => params,
+        RpcMessage.response _id _result => Option.none,
+        RpcMessage.failure _id _code _message => Option.none,
+        RpcMessage.unparseable _reason => Option.none,
+    }
 
 /// The id node of a message that has one, so a caller can echo it into an error
 /// without re-deriving which constructor it came from.
 pub def rpc_id (m : RpcMessage) : Option Json :=
-  match m {
-    RpcMessage.request id _method _params => Option.some id,
-    RpcMessage.notification _method _params => Option.none,
-    RpcMessage.response id _result => Option.some id,
-    RpcMessage.failure id _code _message => id,
-    RpcMessage.unparseable _reason => Option.none,
-  }
+    match m {
+        RpcMessage.request id _method _params => Option.some id,
+        RpcMessage.notification _method _params => Option.none,
+        RpcMessage.response id _result => Option.some id,
+        RpcMessage.failure id _code _message => id,
+        RpcMessage.unparseable _reason => Option.none,
+    }
 
 // --- Object building ---
 
@@ -165,17 +165,17 @@ def rpc_empty_object : BTreeMap String Json := Map.empty
 /// signature is `List (Pair String Json) -> Json` and the map never appears.
 #[partial]
 pub def rpc_object (ps : List (Pair String Json)) : Json :=
-  rpc_object_go ps rpc_empty_object
+    rpc_object_go ps rpc_empty_object
 
 #[partial]
 def rpc_object_go (ps : List (Pair String Json)) (m : BTreeMap String Json) : Json :=
-  match ps {
-    List.empty => Json.make_object m,
-    List.cons p rest =>
-      match p {
-        Pair.pair k v => rpc_object_go rest (Map.insert k v m),
-      },
-  }
+    match ps {
+        List.empty => Json.make_object m,
+        List.cons p rest =>
+            match p {
+                Pair.pair k v => rpc_object_go rest (Map.insert k v m),
+            },
+    }
 
 /// One field of a JSON object, or `Option.none` when the value is not an object
 /// or the key is absent. Both are the same answer to every caller here: a
@@ -183,10 +183,10 @@ def rpc_object_go (ps : List (Pair String Json)) (m : BTreeMap String Json) : Js
 /// and neither is worth a distinct error.
 #[partial]
 pub def rpc_field (key : String) (j : Json) : Option Json :=
-  match Json.get_object j {
-    Result.err _e => Option.none,
-    Result.ok o => Json.object_get key o,
-  }
+    match Json.get_object j {
+        Result.err _e => Option.none,
+        Result.ok o => Json.object_get key o,
+    }
 
 /// Render a parse failure for the log.
 ///
@@ -195,11 +195,11 @@ pub def rpc_field (key : String) (j : Json) : Option Json :=
 /// type is the whole vocabulary and rendering it cannot drift from the type
 /// without a compile error.
 def rpc_parse_error_text (pe : Json.ParseError) : String :=
-  match pe {
-    Json.ParseError.expected e f =>
-      String.concat "expected " (String.concat e (String.concat ", found " f)),
-    Json.ParseError.generic s => s,
-  }
+    match pe {
+        Json.ParseError.expected e f =>
+            String.concat "expected " (String.concat e (String.concat ", found " f)),
+        Json.ParseError.generic s => s,
+    }
 
 // --- Parsing ---
 
@@ -218,25 +218,25 @@ def rpc_parse_error_text (pe : Json.ParseError) : String :=
 /// client.
 #[partial]
 pub def rpc_parse (text : String) : RpcMessage :=
-  match Json.parse text {
-    Result.err pe => RpcMessage.unparseable (rpc_parse_error_text pe),
-    Result.ok j => rpc_of_json j,
-  }
+    match Json.parse text {
+        Result.err pe => RpcMessage.unparseable (rpc_parse_error_text pe),
+        Result.ok j => rpc_of_json j,
+    }
 
 #[partial]
 def rpc_of_json (j : Json) : RpcMessage :=
-  match rpc_field "method" j {
-    Option.none => rpc_of_json_without_method j,
-    Option.some mj =>
-      match Json.get_str mj {
-        Result.err _e => RpcMessage.unparseable "method is not a string",
-        Result.ok method =>
-          match rpc_field "id" j {
-            Option.none => RpcMessage.notification method (rpc_field "params" j),
-            Option.some id => RpcMessage.request id method (rpc_field "params" j),
-          },
-      },
-  }
+    match rpc_field "method" j {
+        Option.none => rpc_of_json_without_method j,
+        Option.some mj =>
+            match Json.get_str mj {
+                Result.err _e => RpcMessage.unparseable "method is not a string",
+                Result.ok method =>
+                    match rpc_field "id" j {
+                        Option.none => RpcMessage.notification method (rpc_field "params" j),
+                        Option.some id => RpcMessage.request id method (rpc_field "params" j),
+                    },
+            },
+    }
 
 /// An object with no `method`. Either a response to a request this server never
 /// sent, or not a JSON-RPC message at all -- and it is `response` only when it
@@ -244,14 +244,14 @@ def rpc_of_json (j : Json) : RpcMessage :=
 /// a message the peer considers a reply.
 #[partial]
 def rpc_of_json_without_method (j : Json) : RpcMessage :=
-  match rpc_field "id" j {
-    Option.none => RpcMessage.unparseable "no method and no id",
-    Option.some id =>
-      match rpc_field "result" j {
-        Option.none => RpcMessage.unparseable "no method and no result",
-        Option.some result => RpcMessage.response id result,
-      },
-  }
+    match rpc_field "id" j {
+        Option.none => RpcMessage.unparseable "no method and no id",
+        Option.some id =>
+            match rpc_field "result" j {
+                Option.none => RpcMessage.unparseable "no method and no result",
+                Option.some result => RpcMessage.response id result,
+            },
+    }
 
 // --- Encoding ---
 //
@@ -262,62 +262,62 @@ def rpc_of_json_without_method (j : Json) : RpcMessage :=
 /// A response: the same id node the request carried, spliced back in untouched.
 #[partial]
 pub def rpc_encode_result (id : Json) (result : Json) : String :=
-  Json.to_string
-    (rpc_object [
-      Pair.pair "jsonrpc" (Json.make_str rpc_version),
-      Pair.pair "id" id,
-      Pair.pair "result" result,
-    ])
+    Json.to_string
+        (rpc_object [
+            Pair.pair "jsonrpc" (Json.make_str rpc_version),
+            Pair.pair "id" id,
+            Pair.pair "result" result,
+        ])
 
 /// An error with a known id.
 #[partial]
 pub def rpc_encode_error (id : Json) (code : I64) (message : String) : String :=
-  Json.to_string
-    (rpc_object [
-      Pair.pair "jsonrpc" (Json.make_str rpc_version),
-      Pair.pair "id" id,
-      Pair.pair "error" (rpc_error_node code message),
-    ])
+    Json.to_string
+        (rpc_object [
+            Pair.pair "jsonrpc" (Json.make_str rpc_version),
+            Pair.pair "id" id,
+            Pair.pair "error" (rpc_error_node code message),
+        ])
 
 /// An error with NO id, which is what a parse failure gets: the request that
 /// would have carried one could not be read, so the specification requires a
 /// null there rather than any guess.
 #[partial]
 pub def rpc_encode_error_no_id (code : I64) (message : String) : String :=
-  Json.to_string
-    (rpc_object [
-      Pair.pair "jsonrpc" (Json.make_str rpc_version),
-      Pair.pair "id" Json.make_null,
-      Pair.pair "error" (rpc_error_node code message),
-    ])
+    Json.to_string
+        (rpc_object [
+            Pair.pair "jsonrpc" (Json.make_str rpc_version),
+            Pair.pair "id" Json.make_null,
+            Pair.pair "error" (rpc_error_node code message),
+        ])
 
 def rpc_error_node (code : I64) (message : String) : Json :=
-  rpc_object [
-    Pair.pair "code" (Json.make_num_int code),
-    Pair.pair "message" (Json.make_str message),
-  ]
+    rpc_object [
+        Pair.pair "code" (Json.make_num_int code),
+        Pair.pair "message" (Json.make_str message),
+    ]
 
 /// A message the server initiates, which for this server means diagnostics and
 /// nothing else. A notification has no id by definition, so there is no id
 /// parameter to get wrong.
 #[partial]
 pub def rpc_encode_notification (method : String) (params : Json) : String :=
-  Json.to_string
-    (rpc_object [
-      Pair.pair "jsonrpc" (Json.make_str rpc_version),
-      Pair.pair "method" (Json.make_str method),
-      Pair.pair "params" params,
-    ])
+    Json.to_string
+        (rpc_object [
+            Pair.pair "jsonrpc" (Json.make_str rpc_version),
+            Pair.pair "method" (Json.make_str method),
+            Pair.pair "params" params,
+        ])
 
 /// A request, which this server sends only in tests and in the session replay
 /// harness -- it is a client-side message, and having it here is what lets the
 /// replay script be the same code path as a real client.
 #[partial]
 pub def rpc_encode_request (id : Json) (method : String) (params : Json) : String :=
-  Json.to_string
-    (rpc_object [
-      Pair.pair "jsonrpc" (Json.make_str rpc_version),
-      Pair.pair "id" id,
-      Pair.pair "method" (Json.make_str method),
-      Pair.pair "params" params,
-    ])
+    Json.to_string
+        (rpc_object [
+            Pair.pair "jsonrpc" (Json.make_str rpc_version),
+            Pair.pair "id" id,
+            Pair.pair "method" (Json.make_str method),
+            Pair.pair "params" params,
+        ])

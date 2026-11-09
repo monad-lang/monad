@@ -117,9 +117,9 @@ def close_here (b : U8) (s : Split) (target : I64) : Bool :=
 
 def split_append (s : Split) (b : U8) : Split :=
     { done := s.done,
-      current := List.cons b s.current,
-      size := I64.add s.size 1,
-      at_line_start := U8.beq b 10u8 }
+        current := List.cons b s.current,
+        size := I64.add s.size 1,
+        at_line_start := U8.beq b 10u8 }
 
 def close_part (s : Split) : Split :=
     finish_part s
@@ -130,7 +130,7 @@ def finish_part (s : Split) : Split :=
     then s
     else
         { done := List.cons (Pair.pair (List.reverse s.current) s.size) s.done,
-          current := List.empty, size := 0, at_line_start := true }
+            current := List.empty, size := 0, at_line_start := true }
 
 // --- Output ---
 
@@ -188,5 +188,5 @@ def stem (src : String) : String :=
     if String.ends_with src ".spec.json"
     then String.slice src 0 (I64.sub (String.length src) 10)
     else if String.ends_with src ".json"
-         then String.slice src 0 (I64.sub (String.length src) 5)
-         else src
+        then String.slice src 0 (I64.sub (String.length src) 5)
+        else src

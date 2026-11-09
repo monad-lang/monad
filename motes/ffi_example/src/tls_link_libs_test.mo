@@ -43,28 +43,28 @@ edition = "2026"
 /// spelled out (`String.beq` per element).
 #[terminating]
 def lib_listed (name : String) (libs : List String) : Bool :=
-  match libs {
-    List.empty => false,
-    List.cons h t => Bool.or (String.beq h name) (lib_listed name t)
-  }
+    match libs {
+        List.empty => false,
+        List.cons h t => Bool.or (String.beq h name) (lib_listed name t)
+    }
 
 /// A program outside the tls mote links no `-lssl`: Design 1's promise,
 /// checked where it is kept (`collect_link_libs` over the loaded
 /// closure), not where it is observed (a linker invocation).
 #[test]
 def test_link_libs_plain_program_gets_no_ssl : IO Bool := do {
-  let dir := "/tmp/monad_tls_libs_" ++ I64.to_string process_id;
-  exec_cmd "mkdir" ["-p", dir ++ "/src"];
-  let _w <- Test.write_fixture (Path.path (dir ++ "/mote.toml")) no_tls_fixture_manifest;
-  let _w <- Test.write_fixture (Path.path (dir ++ "/src/probe.mo")) no_tls_fixture_source;
-  let loaded <- load_file_modules (dir ++ "/src/probe.mo") false;
-  match loaded {
-    Result.err _ => return false,
-    Result.ok l => do {
-      let libs <- collect_link_libs (get_loaded_all l);
-      return (Bool.not (lib_listed "ssl" libs))
+    let dir := "/tmp/monad_tls_libs_" ++ I64.to_string process_id;
+    exec_cmd "mkdir" ["-p", dir ++ "/src"];
+    let _w <- Test.write_fixture (Path.path (dir ++ "/mote.toml")) no_tls_fixture_manifest;
+    let _w <- Test.write_fixture (Path.path (dir ++ "/src/probe.mo")) no_tls_fixture_source;
+    let loaded <- load_file_modules (dir ++ "/src/probe.mo") false;
+    match loaded {
+        Result.err _ => return false,
+        Result.ok l => do {
+            let libs <- collect_link_libs (get_loaded_all l);
+            return (Bool.not (lib_listed "ssl" libs))
+        }
     }
-  }
 }
 
 /// The tls mote's own manifest yields both of OpenSSL's libraries — the
@@ -72,14 +72,14 @@ def test_link_libs_plain_program_gets_no_ssl : IO Bool := do {
 /// manifest reading broke entirely.
 #[test]
 def test_link_libs_tls_manifest_yields_ssl_and_crypto : IO Bool := do {
-  let loaded <- load_file_modules "motes/tls/src/ffi.mo" false;
-  match loaded {
-    Result.err _ => return false,
-    Result.ok l => do {
-      let libs <- collect_link_libs (get_loaded_all l);
-      return (Bool.and (lib_listed "ssl" libs) (lib_listed "crypto" libs))
+    let loaded <- load_file_modules "motes/tls/src/ffi.mo" false;
+    match loaded {
+        Result.err _ => return false,
+        Result.ok l => do {
+            let libs <- collect_link_libs (get_loaded_all l);
+            return (Bool.and (lib_listed "ssl" libs) (lib_listed "crypto" libs))
+        }
     }
-  }
 }
 
 /// The tls mote names WHERE its libraries live as well as which: its
@@ -89,12 +89,12 @@ def test_link_libs_tls_manifest_yields_ssl_and_crypto : IO Bool := do {
 /// store-built compiler's wrapper overwrites -- CI's `cannot find -lssl`.
 #[test]
 def test_link_pkgs_tls_manifest_yields_openssl : IO Bool := do {
-  let loaded <- load_file_modules "motes/tls/src/ffi.mo" false;
-  match loaded {
-    Result.err _ => return false,
-    Result.ok l => do {
-      let pkgs <- collect_link_pkgs (get_loaded_all l);
-      return (lib_listed "openssl" pkgs)
+    let loaded <- load_file_modules "motes/tls/src/ffi.mo" false;
+    match loaded {
+        Result.err _ => return false,
+        Result.ok l => do {
+            let pkgs <- collect_link_pkgs (get_loaded_all l);
+            return (lib_listed "openssl" pkgs)
+        }
     }
-  }
 }

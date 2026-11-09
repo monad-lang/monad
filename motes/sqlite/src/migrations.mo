@@ -37,15 +37,15 @@ def Sqlite.decode_applied_row (row : Row) : Result SqlError AppliedMigration :=
 
 #[terminating]
 def Sqlite.decode_applied_step (rest : List Row) (acc : List AppliedMigration)
-        (r : Result SqlError AppliedMigration) :
-        Result SqlError (List AppliedMigration) :=
+    (r : Result SqlError AppliedMigration) :
+    Result SqlError (List AppliedMigration) :=
     match r {
         Result.err e => Result.err e,
         Result.ok a => Sqlite.decode_applied_rows rest (List.cons a acc)
     }
 
 def Sqlite.decode_applied_rows (rows : List Row) (acc : List AppliedMigration) :
-        Result SqlError (List AppliedMigration) :=
+    Result SqlError (List AppliedMigration) :=
     match rows {
         List.empty => Result.ok (List.reverse acc),
         List.cons row rest =>
@@ -53,7 +53,7 @@ def Sqlite.decode_applied_rows (rows : List Row) (acc : List AppliedMigration) :
     }
 
 pub def Sqlite.read_applied (conn : SqliteConn) :
-        IO (Result SqlError (List AppliedMigration)) := do {
+    IO (Result SqlError (List AppliedMigration)) := do {
     let rs <- Sqlite.query_io conn
         "SELECT version, name, checksum FROM _monad_migrations ORDER BY version ASC"
         List.empty;
@@ -67,13 +67,13 @@ pub def Sqlite.read_applied (conn : SqliteConn) :
 // ─── Applying migrations ─────────────────────────────────────────────────
 
 def Sqlite.abort_tx {A : Type} (conn : SqliteConn) (e : SqlError) :
-        IO (Result SqlError A) := do {
+    IO (Result SqlError A) := do {
     let _ <- Sqlite.exec_script_io conn "ROLLBACK";
     return (Result.err e)
 }
 
 def Sqlite.commit_one (conn : SqliteConn) (version : I64) :
-        IO (Result SqlError I64) := do {
+    IO (Result SqlError I64) := do {
     let c <- Sqlite.exec_script_io conn "COMMIT";
     match c {
         Result.ok _ => return (Result.ok version),
@@ -82,7 +82,7 @@ def Sqlite.commit_one (conn : SqliteConn) (version : I64) :
 }
 
 def Sqlite.record_migration (conn : SqliteConn) (m : Migration) :
-        IO (Result SqlError I64) := do {
+    IO (Result SqlError I64) := do {
     let ins <- Sqlite.exec_io conn
         "INSERT INTO _monad_migrations (version, name, checksum, applied_at) VALUES (?, ?, ?, datetime('now'))"
         [Value.integer m.version, Value.text m.name, Value.text (Sha256.hash m.up)];
@@ -93,7 +93,7 @@ def Sqlite.record_migration (conn : SqliteConn) (m : Migration) :
 }
 
 def Sqlite.apply_in_tx (conn : SqliteConn) (m : Migration) :
-        IO (Result SqlError I64) := do {
+    IO (Result SqlError I64) := do {
     let up <- Sqlite.exec_script_io conn m.up;
     match up {
         Result.err e => Sqlite.abort_tx conn e,
@@ -102,7 +102,7 @@ def Sqlite.apply_in_tx (conn : SqliteConn) (m : Migration) :
 }
 
 def Sqlite.apply_one (conn : SqliteConn) (m : Migration) :
-        IO (Result SqlError I64) := do {
+    IO (Result SqlError I64) := do {
     let b <- Sqlite.exec_script_io conn "BEGIN IMMEDIATE";
     match b {
         Result.err e => return (Result.err e),
@@ -112,7 +112,7 @@ def Sqlite.apply_one (conn : SqliteConn) (m : Migration) :
 
 #[terminating]
 def Sqlite.apply_pending (conn : SqliteConn) (ms : List Migration) (acc : List I64) :
-        IO (Result SqlError (List I64)) :=
+    IO (Result SqlError (List I64)) :=
     match ms {
         List.empty => IO.pure (Result.ok (List.reverse acc)),
         List.cons m rest => do {
@@ -126,28 +126,28 @@ def Sqlite.apply_pending (conn : SqliteConn) (ms : List Migration) (acc : List I
     }
 
 def Sqlite.migrate_plan (conn : SqliteConn) (history : List AppliedMigration)
-        (available : List Migration) : IO (Result SqlError (List I64)) :=
+    (available : List Migration) : IO (Result SqlError (List I64)) :=
     match Migrations.pending history available {
         Result.err e => IO.pure (Result.err (Sqlite.migration_error_to_sql e)),
         Result.ok ms => Sqlite.apply_pending conn ms List.empty
     }
 
 def Sqlite.migrate_with_history (conn : SqliteConn)
-        (history : Result SqlError (List AppliedMigration))
-        (available : List Migration) : IO (Result SqlError (List I64)) :=
+    (history : Result SqlError (List AppliedMigration))
+    (available : List Migration) : IO (Result SqlError (List I64)) :=
     match history {
         Result.err e => IO.pure (Result.err e),
         Result.ok h => Sqlite.migrate_plan conn h available
     }
 
 def Sqlite.migrate_checked (conn : SqliteConn) (available : List Migration) :
-        IO (Result SqlError (List I64)) := do {
+    IO (Result SqlError (List I64)) := do {
     let history <- Sqlite.read_applied conn;
     Sqlite.migrate_with_history conn history available
 }
 
 def Sqlite.migrate_source (conn : SqliteConn) (ms : List Migration) :
-        IO (Result SqlError (List I64)) :=
+    IO (Result SqlError (List I64)) :=
     match Migrations.sort_and_check ms {
         Result.err e => IO.pure (Result.err (Sqlite.migration_error_to_sql e)),
         Result.ok available => Sqlite.migrate_checked conn available
@@ -157,7 +157,7 @@ def Sqlite.migrate_source (conn : SqliteConn) (ms : List Migration) :
 /// `BEGIN IMMEDIATE` transaction and is recorded only if it succeeds.
 /// Returns the versions applied by this call.
 pub def Sqlite.migrate (conn : SqliteConn) (ms : List Migration) :
-        IO (Result SqlError (List I64)) := do {
+    IO (Result SqlError (List I64)) := do {
     let t <- Sqlite.ensure_table conn;
     match t {
         Result.err e => return (Result.err e),
@@ -167,7 +167,7 @@ pub def Sqlite.migrate (conn : SqliteConn) (ms : List Migration) :
 
 /// Load the migrations from a directory, then `migrate`.
 pub def Sqlite.migrate_dir (conn : SqliteConn) (dir : Path) :
-        IO (Result SqlError (List I64)) := do {
+    IO (Result SqlError (List I64)) := do {
     let loaded <- load_dir dir;
     match loaded {
         Result.err e => return (Result.err (Sqlite.migration_error_to_sql e)),
@@ -178,15 +178,15 @@ pub def Sqlite.migrate_dir (conn : SqliteConn) (dir : Path) :
 // ─── Status ──────────────────────────────────────────────────────────────
 
 def Sqlite.status_with_history (available : List Migration)
-        (history : Result SqlError (List AppliedMigration)) :
-        IO (Result SqlError (List MigrationState)) :=
+    (history : Result SqlError (List AppliedMigration)) :
+    IO (Result SqlError (List MigrationState)) :=
     match history {
         Result.err e => IO.pure (Result.err e),
         Result.ok h => IO.pure (Result.ok (Migrations.status h available))
     }
 
 def Sqlite.status_source (conn : SqliteConn) (ms : List Migration) :
-        IO (Result SqlError (List MigrationState)) :=
+    IO (Result SqlError (List MigrationState)) :=
     match Migrations.sort_and_check ms {
         Result.err e => IO.pure (Result.err (Sqlite.migration_error_to_sql e)),
         Result.ok available => do {
@@ -196,7 +196,7 @@ def Sqlite.status_source (conn : SqliteConn) (ms : List Migration) :
     }
 
 pub def Sqlite.status (conn : SqliteConn) (ms : List Migration) :
-        IO (Result SqlError (List MigrationState)) := do {
+    IO (Result SqlError (List MigrationState)) := do {
     let t <- Sqlite.ensure_table conn;
     match t {
         Result.err e => return (Result.err e),
@@ -208,7 +208,7 @@ pub def Sqlite.status (conn : SqliteConn) (ms : List Migration) :
 
 #[terminating]
 def Sqlite.find_migration (version : I64) (ms : List Migration) :
-        Option Migration :=
+    Option Migration :=
     match ms {
         List.empty => Option.none,
         List.cons m rest =>
@@ -220,7 +220,7 @@ def Sqlite.find_migration (version : I64) (ms : List Migration) :
 /// ascending, and each accepted row is prepended).
 #[terminating]
 def Sqlite.filter_above (target : I64) (history : List AppliedMigration)
-        (acc : List AppliedMigration) : List AppliedMigration :=
+    (acc : List AppliedMigration) : List AppliedMigration :=
     match history {
         List.empty => acc,
         List.cons a rest =>
@@ -236,7 +236,7 @@ def Sqlite.has_usable_down (m : Migration) : Bool :=
     }
 
 def Sqlite.preflight_one (a : AppliedMigration) (available : List Migration) :
-        Result MigrationError Unit :=
+    Result MigrationError Unit :=
     match Sqlite.find_migration a.version available {
         Option.none => Result.err (MigrationError.missing_migration a.version),
         Option.some m =>
@@ -247,7 +247,7 @@ def Sqlite.preflight_one (a : AppliedMigration) (available : List Migration) :
 
 #[terminating]
 def Sqlite.preflight_step (rest : List AppliedMigration) (available : List Migration)
-        (r : Result MigrationError Unit) : Result MigrationError Unit :=
+    (r : Result MigrationError Unit) : Result MigrationError Unit :=
     match r {
         Result.err e => Result.err e,
         Result.ok _ => Sqlite.preflight rest available
@@ -257,7 +257,7 @@ def Sqlite.preflight_step (rest : List AppliedMigration) (available : List Migra
 /// rollback never stops halfway for a missing script.
 #[terminating]
 def Sqlite.preflight (candidates : List AppliedMigration) (available : List Migration) :
-        Result MigrationError Unit :=
+    Result MigrationError Unit :=
     match candidates {
         List.empty => Result.ok Unit.unit,
         List.cons a rest =>
@@ -265,7 +265,7 @@ def Sqlite.preflight (candidates : List AppliedMigration) (available : List Migr
     }
 
 def Sqlite.delete_migration (conn : SqliteConn) (version : I64) :
-        IO (Result SqlError Unit) := do {
+    IO (Result SqlError Unit) := do {
     let r <- Sqlite.exec_io conn
         "DELETE FROM _monad_migrations WHERE version = ?" [Value.integer version];
     match r {
@@ -275,7 +275,7 @@ def Sqlite.delete_migration (conn : SqliteConn) (version : I64) :
 }
 
 def Sqlite.rollback_commit (conn : SqliteConn) (version : I64) :
-        IO (Result SqlError I64) := do {
+    IO (Result SqlError I64) := do {
     let c <- Sqlite.exec_script_io conn "COMMIT";
     match c {
         Result.ok _ => return (Result.ok version),
@@ -284,7 +284,7 @@ def Sqlite.rollback_commit (conn : SqliteConn) (version : I64) :
 }
 
 def Sqlite.rollback_delete (conn : SqliteConn) (version : I64) :
-        IO (Result SqlError I64) := do {
+    IO (Result SqlError I64) := do {
     let del <- Sqlite.delete_migration conn version;
     match del {
         Result.err e => Sqlite.abort_tx conn e,
@@ -293,7 +293,7 @@ def Sqlite.rollback_delete (conn : SqliteConn) (version : I64) :
 }
 
 def Sqlite.rollback_script (conn : SqliteConn) (down : String) (version : I64) :
-        IO (Result SqlError I64) := do {
+    IO (Result SqlError I64) := do {
     let d <- Sqlite.exec_script_io conn down;
     match d {
         Result.err e => Sqlite.abort_tx conn e,
@@ -302,7 +302,7 @@ def Sqlite.rollback_script (conn : SqliteConn) (down : String) (version : I64) :
 }
 
 def Sqlite.rollback_candidate (conn : SqliteConn) (candidate : AppliedMigration)
-        (available : List Migration) : IO (Result SqlError I64) :=
+    (available : List Migration) : IO (Result SqlError I64) :=
     match Sqlite.find_migration candidate.version available {
         Option.none => IO.pure (Result.err (Sqlite.migration_error_to_sql
             (MigrationError.missing_migration candidate.version))),
@@ -326,8 +326,8 @@ def Sqlite.rollback_candidate (conn : SqliteConn) (candidate : AppliedMigration)
 
 #[terminating]
 def Sqlite.rollback_candidates (conn : SqliteConn) (candidates : List AppliedMigration)
-        (available : List Migration) (acc : List I64) :
-        IO (Result SqlError (List I64)) :=
+    (available : List Migration) (acc : List I64) :
+    IO (Result SqlError (List I64)) :=
     match candidates {
         List.empty => IO.pure (Result.ok (List.reverse acc)),
         List.cons c rest => do {
@@ -341,8 +341,8 @@ def Sqlite.rollback_candidates (conn : SqliteConn) (candidates : List AppliedMig
     }
 
 def Sqlite.rollback_plan (conn : SqliteConn) (available : List Migration)
-        (target : I64) (history : List AppliedMigration) :
-        IO (Result SqlError (List I64)) :=
+    (target : I64) (history : List AppliedMigration) :
+    IO (Result SqlError (List I64)) :=
     match Migrations.pending history available {
         Result.err e => IO.pure (Result.err (Sqlite.migration_error_to_sql e)),
         Result.ok _ =>
@@ -350,8 +350,8 @@ def Sqlite.rollback_plan (conn : SqliteConn) (available : List Migration)
     }
 
 def Sqlite.rollback_preflight (conn : SqliteConn) (available : List Migration)
-        (target : I64) (history : List AppliedMigration) :
-        IO (Result SqlError (List I64)) :=
+    (target : I64) (history : List AppliedMigration) :
+    IO (Result SqlError (List I64)) :=
     let candidates := Sqlite.filter_above target history List.empty in
     match Sqlite.preflight candidates available {
         Result.err e => IO.pure (Result.err (Sqlite.migration_error_to_sql e)),
@@ -359,15 +359,15 @@ def Sqlite.rollback_preflight (conn : SqliteConn) (available : List Migration)
     }
 
 def Sqlite.rollback_with_history (conn : SqliteConn) (available : List Migration)
-        (target : I64) (history : Result SqlError (List AppliedMigration)) :
-        IO (Result SqlError (List I64)) :=
+    (target : I64) (history : Result SqlError (List AppliedMigration)) :
+    IO (Result SqlError (List I64)) :=
     match history {
         Result.err e => IO.pure (Result.err e),
         Result.ok h => Sqlite.rollback_plan conn available target h
     }
 
 def Sqlite.rollback_source (conn : SqliteConn) (ms : List Migration) (target : I64) :
-        IO (Result SqlError (List I64)) :=
+    IO (Result SqlError (List I64)) :=
     match Migrations.sort_and_check ms {
         Result.err e => IO.pure (Result.err (Sqlite.migration_error_to_sql e)),
         Result.ok available => do {
@@ -382,7 +382,7 @@ def Sqlite.rollback_source (conn : SqliteConn) (ms : List Migration) (target : I
 /// Ensures the tracking table first, so rolling back a database that was
 /// never migrated is `ok []`, not "no such table".
 pub def Sqlite.rollback_to (conn : SqliteConn) (ms : List Migration) (target : I64) :
-        IO (Result SqlError (List I64)) := do {
+    IO (Result SqlError (List I64)) := do {
     let t <- Sqlite.ensure_table conn;
     match t {
         Result.err e => return (Result.err e),
@@ -399,7 +399,7 @@ def Sqlite.previous_version (previous : I64) (rest : List AppliedMigration) : I6
 
 #[terminating]
 def Sqlite.previous_step (previous : I64) (version : I64)
-        (rest : List AppliedMigration) : I64 :=
+    (rest : List AppliedMigration) : I64 :=
     match rest {
         List.empty => previous,
         List.cons _ _ => Sqlite.previous_version version rest
@@ -419,7 +419,7 @@ def Sqlite.second_newest (history : List AppliedMigration) : I64 :=
 
 /// Roll back the newest applied migration only.
 pub def Sqlite.rollback_last (conn : SqliteConn) (ms : List Migration) :
-        IO (Result SqlError (List I64)) := do {
+    IO (Result SqlError (List I64)) := do {
     let t <- Sqlite.ensure_table conn;
     match t {
         Result.err e => return (Result.err e),
@@ -428,7 +428,7 @@ pub def Sqlite.rollback_last (conn : SqliteConn) (ms : List Migration) :
 }
 
 def Sqlite.rollback_last_ready (conn : SqliteConn) (ms : List Migration) :
-        IO (Result SqlError (List I64)) := do {
+    IO (Result SqlError (List I64)) := do {
     let history <- Sqlite.read_applied conn;
     match history {
         Result.err e => return (Result.err e),

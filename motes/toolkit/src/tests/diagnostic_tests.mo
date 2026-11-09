@@ -38,14 +38,14 @@ use json::json {Json}
 use lang::module {Diagnostic}
 use lang::types {Location, SourceRange}
 use toolkit::diagnostic {
-  WireDiagnostic, diag_severity_error, diag_severity_hint, diag_severity_information,
-  diag_severity_warning, diagnostic_header, diagnostic_source_name, wire_diagnostic_json,
-  wire_diagnostic_message, wire_diagnostic_of_lang, wire_diagnostic_range,
-  wire_diagnostic_severity, wire_diagnostics_json,
+    WireDiagnostic, diag_severity_error, diag_severity_hint, diag_severity_information,
+    diag_severity_warning, diagnostic_header, diagnostic_source_name, wire_diagnostic_json,
+    wire_diagnostic_message, wire_diagnostic_of_lang, wire_diagnostic_range,
+    wire_diagnostic_severity, wire_diagnostics_json,
 }
 use toolkit::position {
-  PositionEncoding, WireRange, line_index_of_source, wire_position_character,
-  wire_position_line, wire_range_end, wire_range_start,
+    PositionEncoding, WireRange, line_index_of_source, wire_position_character,
+    wire_position_line, wire_range_end, wire_range_start,
 }
 
 // --- Fixtures: real renderer output ---
@@ -54,7 +54,7 @@ use toolkit::position {
 /// diagnostic there is. Two lines: header and arrow, with no source context --
 /// that renderer has no source to quote, only a path.
 def dt_type_message : String :=
-  "error: unknown variable 'no_such_name' in bad\n" ++ "  --> /tmp/dt/probe.mo\n"
+    "error: unknown variable 'no_such_name' in bad\n" ++ "  --> /tmp/dt/probe.mo\n"
 
 /// `render_parse_error` on `def bad ((( :=`, the unterminated group. Header,
 /// arrow, and the `N | source` / caret context lines, ending with the blank line
@@ -63,11 +63,11 @@ def dt_type_message : String :=
 /// THREE leading spaces, and the caret sits at `6 + column - 1` -- fifteen
 /// spaces for column 10.
 def dt_parse_message : String :=
-  "error: expected identifier at 1:10\n"
-    ++ "  --> /tmp/dt/broken.mo:1:10\n"
-    ++ "  1 | def bad ((( :=\n"
-    ++ "               ^---\n"
-    ++ "  2 | \n"
+    "error: expected identifier at 1:10\n"
+        ++ "  --> /tmp/dt/broken.mo:1:10\n"
+        ++ "  1 | def bad ((( :=\n"
+        ++ "               ^---\n"
+        ++ "  2 | \n"
 
 /// The source declaration ranges are taken from: two defs, one per line, so the
 /// second one's offsets are arithmetic a reader can check by hand. Line 2 is
@@ -89,15 +89,15 @@ def dt_non_ascii : String := "// — x\ndef y : I64 := 1\n"
 /// slice starts before the multi-byte character and cannot split it -- but the
 /// assertion is what keeps a future change to the prefix's length honest.
 def dt_non_ascii_message : String :=
-  "error: unknown type '→' in fwd\n" ++ "  --> /tmp/dt/probe.mo\n"
+    "error: unknown type '→' in fwd\n" ++ "  --> /tmp/dt/probe.mo\n"
 
 // --- Accessors ---
 
 def dt_loc (offset : I64) (line : I64) (column : I64) : Location :=
-  Location.mk offset line column
+    Location.mk offset line column
 
 def dt_span (a : Location) (b : Location) : SourceRange :=
-  SourceRange.mk a b (Option.some "/tmp/dt/probe.mo")
+    SourceRange.mk a b (Option.some "/tmp/dt/probe.mo")
 
 def dt_make (msg : String) (r : Option SourceRange) : Diagnostic := Diagnostic.mk msg r
 
@@ -109,7 +109,7 @@ def dt_json_text (j : Json) : String := Json.to_string j
 
 #[partial]
 def dt_wire (enc : PositionEncoding) (src : String) (dg : Diagnostic) : WireDiagnostic :=
-  wire_diagnostic_of_lang enc (line_index_of_source src) src dg
+    wire_diagnostic_of_lang enc (line_index_of_source src) src dg
 
 def dt_msg (d : WireDiagnostic) : String := wire_diagnostic_message d
 
@@ -118,10 +118,10 @@ def dt_sev (d : WireDiagnostic) : I64 := wire_diagnostic_severity d
 def dt_range (d : WireDiagnostic) : WireRange := wire_diagnostic_range d
 
 def dt_start_line (d : WireDiagnostic) : I64 :=
-  wire_position_line (wire_range_start (dt_range d))
+    wire_position_line (wire_range_start (dt_range d))
 
 def dt_start_char (d : WireDiagnostic) : I64 :=
-  wire_position_character (wire_range_start (dt_range d))
+    wire_position_character (wire_range_start (dt_range d))
 
 def dt_end_line (d : WireDiagnostic) : I64 := wire_position_line (wire_range_end (dt_range d))
 
@@ -132,12 +132,12 @@ def dt_end_char (d : WireDiagnostic) : I64 := wire_position_character (wire_rang
 #[partial]
 def dt_span_of (msg : String) (enc : PositionEncoding) (src : String) (so : I64) (sl : I64)
     (sc : I64) (eo : I64) (el : I64) (ec : I64) : WireDiagnostic :=
-  dt_wire enc src (dt_make msg (Option.some (dt_span (dt_loc so sl sc) (dt_loc eo el ec))))
+    dt_wire enc src (dt_make msg (Option.some (dt_span (dt_loc so sl sc) (dt_loc eo el ec))))
 
 /// The declaration `def b : I64 := 2` on `dt_two_defs`, as a diagnostic.
 #[partial]
 def dt_decl_b (msg : String) (enc : PositionEncoding) : WireDiagnostic :=
-  dt_span_of msg enc dt_two_defs 17 2 1 33 2 17
+    dt_span_of msg enc dt_two_defs 17 2 1 33 2 17
 
 // --- The message reduction ---
 
@@ -147,7 +147,7 @@ def dt_decl_b (msg : String) (enc : PositionEncoding) : WireDiagnostic :=
 /// survives byte for byte.
 #[test]
 def test_a_type_error_message_reduces_to_its_header : Bool :=
-  String.beq (diagnostic_header dt_type_message) "unknown variable 'no_such_name' in bad"
+    String.beq (diagnostic_header dt_type_message) "unknown variable 'no_such_name' in bad"
 
 /// The other shape. A reduction that stopped at a fixed byte count, or that
 /// dropped a fixed number of trailing lines, would pass the test above and fail
@@ -155,7 +155,7 @@ def test_a_type_error_message_reduces_to_its_header : Bool :=
 /// length.
 #[test]
 def test_a_parse_error_message_reduces_to_its_header : Bool :=
-  String.beq (diagnostic_header dt_parse_message) "expected identifier at 1:10"
+    String.beq (diagnostic_header dt_parse_message) "expected identifier at 1:10"
 
 /// The position inside the header -- `at 1:10` -- is KEPT, and deliberately. For
 /// a parse error the range is one character wide and often on a later line than
@@ -163,42 +163,42 @@ def test_a_parse_error_message_reduces_to_its_header : Bool :=
 /// the range alone cannot. Nothing strips them.
 #[test]
 def test_the_position_inside_a_parse_header_is_kept : Bool :=
-  let h : String := diagnostic_header dt_parse_message in
-  String.contains h "at 1:10" && Bool.not (String.contains h "-->")
+    let h : String := diagnostic_header dt_parse_message in
+    String.contains h "at 1:10" && Bool.not (String.contains h "-->")
 
 /// A message with no newline at all never went through a renderer -- a
 /// termination check's, say -- and comes back unchanged.
 #[test]
 def test_a_single_line_message_with_no_prefix_is_unchanged : Bool :=
-  String.beq (diagnostic_header "strictly positive check failed")
-    "strictly positive check failed"
+    String.beq (diagnostic_header "strictly positive check failed")
+        "strictly positive check failed"
 
 /// ...and one that happens to carry the prefix has it stripped, since the
 /// prefix is a rendering convention rather than a guarantee about the producer.
 #[test]
 def test_a_single_line_message_with_a_prefix_is_stripped : Bool :=
-  String.beq (diagnostic_header "error: bad thing") "bad thing"
+    String.beq (diagnostic_header "error: bad thing") "bad thing"
 
 /// The prefix is matched EXACTLY, including its trailing space. `error:` with
 /// nothing after it is a message whose author meant the colon, and slicing seven
 /// bytes off it would leave nothing.
 #[test]
 def test_the_prefix_is_not_a_bare_colon : Bool :=
-  String.beq (diagnostic_header "error:") "error:"
+    String.beq (diagnostic_header "error:") "error:"
 
 /// The non-empty-out guard, first arm: a header that is nothing but the prefix
 /// falls back to the UNSTRIPPED header rather than returning "".
 #[test]
 def test_a_message_that_is_only_the_prefix_keeps_its_prefix : Bool :=
-  String.beq (diagnostic_header "error: ") "error: "
+    String.beq (diagnostic_header "error: ") "error: "
 
 /// The guard's second arm: a message whose own header line is empty falls back
 /// to the whole message. A leading newline is malformed, but a client showing a
 /// blank popup reads as a broken server rather than as a missing message.
 #[test]
 def test_a_message_whose_first_line_is_empty_falls_back_to_all_of_it : Bool :=
-  String.beq (diagnostic_header "\n  --> /tmp/dt/probe.mo\n")
-    "\n  --> /tmp/dt/probe.mo\n"
+    String.beq (diagnostic_header "\n  --> /tmp/dt/probe.mo\n")
+        "\n  --> /tmp/dt/probe.mo\n"
 
 /// An empty message stays empty: the guard is "non-empty in, non-empty out",
 /// and a caller that hands this module nothing gets nothing back rather than a
@@ -212,7 +212,7 @@ def test_an_empty_message_stays_empty : Bool := String.beq (diagnostic_header ""
 /// instead of by the prefix's known length.
 #[test]
 def test_a_prefix_is_stripped_before_a_multi_byte_character : Bool :=
-  String.beq (diagnostic_header dt_non_ascii_message) "unknown type '→' in fwd"
+    String.beq (diagnostic_header dt_non_ascii_message) "unknown type '→' in fwd"
 
 // --- The range ---
 
@@ -221,11 +221,11 @@ def test_a_prefix_is_stripped_before_a_multi_byte_character : Bool :=
 /// (0-based), end exclusive.
 #[test]
 def test_a_declaration_span_becomes_its_wire_range : Bool :=
-  let d : WireDiagnostic := dt_decl_b "type mismatch" PositionEncoding.utf8 in
-  I64.beq (dt_start_line d) 1
-    && I64.beq (dt_start_char d) 0
-    && I64.beq (dt_end_line d) 1
-    && I64.beq (dt_end_char d) 16
+    let d : WireDiagnostic := dt_decl_b "type mismatch" PositionEncoding.utf8 in
+    I64.beq (dt_start_line d) 1
+        && I64.beq (dt_start_char d) 0
+        && I64.beq (dt_end_line d) 1
+        && I64.beq (dt_end_char d) 16
 
 /// A `lang` `Location` is a POINT, and a parse failure builds a range whose two
 /// ends are the same point. A zero-width range highlights nothing in an editor,
@@ -233,10 +233,10 @@ def test_a_declaration_span_becomes_its_wire_range : Bool :=
 /// difference between a diagnostic the user can see and one they cannot.
 #[test]
 def test_a_point_range_is_widened_by_one_character : Bool :=
-  let d : WireDiagnostic :=
-    dt_span_of "expected identifier at 1:10" PositionEncoding.utf8 dt_two_defs 17 2 1 17 2 1
-  in
-  I64.beq (dt_start_char d) 0 && I64.beq (dt_end_char d) 1
+    let d : WireDiagnostic :=
+        dt_span_of "expected identifier at 1:10" PositionEncoding.utf8 dt_two_defs 17 2 1 17 2 1
+    in
+    I64.beq (dt_start_char d) 0 && I64.beq (dt_end_char d) 1
 
 /// A point ON the final newline widens OVER that newline and stops at the
 /// exclusive end of THAT line -- it does not land at the start of a next line,
@@ -251,13 +251,13 @@ def test_a_point_range_is_widened_by_one_character : Bool :=
 /// other answer and failed.)
 #[test]
 def test_a_point_on_the_final_newline_widens_over_it : Bool :=
-  let n : WireDiagnostic :=
-    dt_span_of "truncated" PositionEncoding.utf8 dt_two_defs 33 2 17 33 2 17
-  in
-  I64.beq (dt_start_line n) 1
-    && I64.beq (dt_start_char n) 16
-    && I64.beq (dt_end_line n) 1
-    && I64.beq (dt_end_char n) 17
+    let n : WireDiagnostic :=
+        dt_span_of "truncated" PositionEncoding.utf8 dt_two_defs 33 2 17 33 2 17
+    in
+    I64.beq (dt_start_line n) 1
+        && I64.beq (dt_start_char n) 16
+        && I64.beq (dt_end_line n) 1
+        && I64.beq (dt_end_char n) 17
 
 /// A point already AT the exclusive end of the last line -- offset 34 of a
 /// 34-byte source -- has no character left to widen over, so the range stays
@@ -265,13 +265,13 @@ def test_a_point_on_the_final_newline_widens_over_it : Bool :=
 /// is about the file ending, and there is nothing on screen to underline.
 #[test]
 def test_a_point_at_the_exclusive_end_stays_empty : Bool :=
-  let e : WireDiagnostic :=
-    dt_span_of "truncated" PositionEncoding.utf8 dt_two_defs 34 2 18 34 2 18
-  in
-  I64.beq (dt_start_line e) 1
-    && I64.beq (dt_start_char e) 17
-    && I64.beq (dt_end_line e) 1
-    && I64.beq (dt_end_char e) 17
+    let e : WireDiagnostic :=
+        dt_span_of "truncated" PositionEncoding.utf8 dt_two_defs 34 2 18 34 2 18
+    in
+    I64.beq (dt_start_line e) 1
+        && I64.beq (dt_start_char e) 17
+        && I64.beq (dt_end_line e) 1
+        && I64.beq (dt_end_char e) 17
 
 /// A diagnostic with NO range -- the truncation path, where the lenient parser
 /// stopped and there was no declaration to place it on -- is reported at the top
@@ -279,22 +279,22 @@ def test_a_point_at_the_exclusive_end_stays_empty : Bool :=
 /// cannot locate shows a broken file as clean.
 #[test]
 def test_a_diagnostic_with_no_range_lands_at_the_origin : Bool :=
-  let d : WireDiagnostic := dt_wire PositionEncoding.utf8 dt_two_defs (dt_make "boom" Option.none)
-  in
-  I64.beq (dt_start_line d) 0
-    && I64.beq (dt_start_char d) 0
-    && I64.beq (dt_end_line d) 0
-    && I64.beq (dt_end_char d) 0
+    let d : WireDiagnostic := dt_wire PositionEncoding.utf8 dt_two_defs (dt_make "boom" Option.none)
+    in
+    I64.beq (dt_start_line d) 0
+        && I64.beq (dt_start_char d) 0
+        && I64.beq (dt_end_line d) 0
+        && I64.beq (dt_end_char d) 0
 
 /// The message is reduced on the no-range path too. It is easy to route the
 /// reduction only through the arm that has a range and leave the fallbacks
 /// echoing the whole terminal rendering.
 #[test]
 def test_the_message_is_reduced_even_without_a_range : Bool :=
-  let d : WireDiagnostic :=
-    dt_wire PositionEncoding.utf8 dt_two_defs (dt_make dt_parse_message Option.none)
-  in
-  String.beq (dt_msg d) "expected identifier at 1:10"
+    let d : WireDiagnostic :=
+        dt_wire PositionEncoding.utf8 dt_two_defs (dt_make dt_parse_message Option.none)
+    in
+    String.beq (dt_msg d) "expected identifier at 1:10"
 
 /// THE end-to-end encoding test, and the one case where the two negotiated
 /// encodings disagree. A span covering `// — ` ends at byte 6; that is six
@@ -304,16 +304,16 @@ def test_the_message_is_reduced_even_without_a_range : Bool :=
 /// place.
 #[test]
 def test_a_non_ascii_span_differs_between_the_encodings : Bool :=
-  let u8 : WireDiagnostic :=
-    dt_span_of "type mismatch" PositionEncoding.utf8 dt_non_ascii 0 1 1 6 1 7
-  in
-  let u16 : WireDiagnostic :=
-    dt_span_of "type mismatch" PositionEncoding.utf16 dt_non_ascii 0 1 1 6 1 7
-  in
-  I64.beq (dt_start_char u8) 0
-    && I64.beq (dt_end_char u8) 6
-    && I64.beq (dt_start_char u16) 0
-    && I64.beq (dt_end_char u16) 4
+    let u8 : WireDiagnostic :=
+        dt_span_of "type mismatch" PositionEncoding.utf8 dt_non_ascii 0 1 1 6 1 7
+    in
+    let u16 : WireDiagnostic :=
+        dt_span_of "type mismatch" PositionEncoding.utf16 dt_non_ascii 0 1 1 6 1 7
+    in
+    I64.beq (dt_start_char u8) 0
+        && I64.beq (dt_end_char u8) 6
+        && I64.beq (dt_start_char u16) 0
+        && I64.beq (dt_end_char u16) 4
 
 /// Severity is uniformly Error here, and that is a statement about `lang`: its
 /// `Diagnostic` has no severity field and no producer emits anything softer. The
@@ -321,19 +321,19 @@ def test_a_non_ascii_span_differs_between_the_encodings : Bool :=
 /// rather than shipping every warning with an error's gutter glyph.
 #[test]
 def test_every_diagnostic_from_lang_is_an_error : Bool :=
-  I64.beq (dt_sev (dt_decl_b "x" PositionEncoding.utf8)) diag_severity_error
-    && I64.beq (dt_sev (dt_wire PositionEncoding.utf8 dt_two_defs (dt_make "x" Option.none)))
-      diag_severity_error
+    I64.beq (dt_sev (dt_decl_b "x" PositionEncoding.utf8)) diag_severity_error
+        && I64.beq (dt_sev (dt_wire PositionEncoding.utf8 dt_two_defs (dt_make "x" Option.none)))
+            diag_severity_error
 
 /// The four severity numbers are wire constants: a client draws its gutter glyph
 /// from the value, so a transposition between any two is invisible until a user
 /// notices the wrong icon. They are asserted in specification order.
 #[test]
 def test_the_severity_constants_are_the_specified_values : Bool :=
-  I64.beq diag_severity_error 1
-    && I64.beq diag_severity_warning 2
-    && I64.beq diag_severity_information 3
-    && I64.beq diag_severity_hint 4
+    I64.beq diag_severity_error 1
+        && I64.beq diag_severity_warning 2
+        && I64.beq diag_severity_information 3
+        && I64.beq diag_severity_hint 4
 
 /// The same string the Rust server being replaced sends, so a user switching
 /// servers sees no change in the gutter label beside their diagnostics.
@@ -352,12 +352,12 @@ def test_the_source_name_is_monad : Bool := String.beq diagnostic_source_name "m
 /// nests `start` and `end` as whole positions rather than flattening to
 /// `startLine`/`endLine`; and inside a position `character` precedes `line`.
 def dt_expected_decl : String :=
-  "{\"message\":\"unknown variable 'no_such_name' in bad\",\"range\":{\"end\":{\"character\":16,\"line\":1},\"start\":{\"character\":0,\"line\":1}},\"severity\":1,\"source\":\"monad\"}"
+    "{\"message\":\"unknown variable 'no_such_name' in bad\",\"range\":{\"end\":{\"character\":16,\"line\":1},\"start\":{\"character\":0,\"line\":1}},\"severity\":1,\"source\":\"monad\"}"
 
 /// The same for the widened point range, so the array test below can reuse both
 /// halves instead of repeating them.
 def dt_expected_point : String :=
-  "{\"message\":\"expected identifier at 1:10\",\"range\":{\"end\":{\"character\":1,\"line\":1},\"start\":{\"character\":0,\"line\":1}},\"severity\":1,\"source\":\"monad\"}"
+    "{\"message\":\"expected identifier at 1:10\",\"range\":{\"end\":{\"character\":1,\"line\":1},\"start\":{\"character\":0,\"line\":1}},\"severity\":1,\"source\":\"monad\"}"
 
 /// A list of diagnostics with nothing in it, pinned by a def rather than written
 /// as a bare `List.empty`. An unannotated empty list is the shape that resolved
@@ -368,10 +368,10 @@ def diag_no_wire : List WireDiagnostic := List.empty
 /// One diagnostic, byte for byte.
 #[test]
 def test_one_diagnostic_is_an_exact_object_on_the_wire : Bool :=
-  let d : WireDiagnostic :=
-    dt_decl_b "unknown variable 'no_such_name' in bad" PositionEncoding.utf8
-  in
-  String.beq (dt_json_text (wire_diagnostic_json d)) dt_expected_decl
+    let d : WireDiagnostic :=
+        dt_decl_b "unknown variable 'no_such_name' in bad" PositionEncoding.utf8
+    in
+    String.beq (dt_json_text (wire_diagnostic_json d)) dt_expected_decl
 
 /// An empty list is an empty ARRAY, not `null` and not an absent key. The
 /// difference is visible to a user as "the squiggles cleared" versus "the
@@ -380,7 +380,7 @@ def test_one_diagnostic_is_an_exact_object_on_the_wire : Bool :=
 /// that makes a fixed error look unfixed.
 #[test]
 def test_no_diagnostics_is_an_empty_array : Bool :=
-  String.beq (dt_json_text (wire_diagnostics_json diag_no_wire)) "[]"
+    String.beq (dt_json_text (wire_diagnostics_json diag_no_wire)) "[]"
 
 /// Two diagnostics, in the ORDER they were given. The array is built by folding,
 /// which reverses, so reversing back is a real step that could be dropped -- and
@@ -388,14 +388,14 @@ def test_no_diagnostics_is_an_empty_array : Bool :=
 /// reason a reader could see.
 #[test]
 def test_two_diagnostics_keep_their_order_on_the_wire : Bool :=
-  let a : WireDiagnostic :=
-    dt_decl_b "unknown variable 'no_such_name' in bad" PositionEncoding.utf8
-  in
-  let b : WireDiagnostic :=
-    dt_span_of "expected identifier at 1:10" PositionEncoding.utf8 dt_two_defs 17 2 1 17 2 1
-  in
-  String.beq (dt_json_text (wire_diagnostics_json (List.cons a (List.cons b diag_no_wire))))
-    ("[" ++ dt_expected_decl ++ "," ++ dt_expected_point ++ "]")
+    let a : WireDiagnostic :=
+        dt_decl_b "unknown variable 'no_such_name' in bad" PositionEncoding.utf8
+    in
+    let b : WireDiagnostic :=
+        dt_span_of "expected identifier at 1:10" PositionEncoding.utf8 dt_two_defs 17 2 1 17 2 1
+    in
+    String.beq (dt_json_text (wire_diagnostics_json (List.cons a (List.cons b diag_no_wire))))
+        ("[" ++ dt_expected_decl ++ "," ++ dt_expected_point ++ "]")
 
 /// A single-element array, which is the shape `publishDiagnostics` sends for the
 /// overwhelmingly common case. It exists because it is where a fold-and-reverse
@@ -405,8 +405,8 @@ def test_two_diagnostics_keep_their_order_on_the_wire : Bool :=
 /// which a naive join would introduce.
 #[test]
 def test_one_diagnostic_is_a_one_element_array : Bool :=
-  let b : WireDiagnostic :=
-    dt_span_of "expected identifier at 1:10" PositionEncoding.utf8 dt_two_defs 17 2 1 17 2 1
-  in
-  String.beq (dt_json_text (wire_diagnostics_json (List.cons b diag_no_wire)))
-    ("[" ++ dt_expected_point ++ "]")
+    let b : WireDiagnostic :=
+        dt_span_of "expected identifier at 1:10" PositionEncoding.utf8 dt_two_defs 17 2 1 17 2 1
+    in
+    String.beq (dt_json_text (wire_diagnostics_json (List.cons b diag_no_wire)))
+        ("[" ++ dt_expected_point ++ "]")

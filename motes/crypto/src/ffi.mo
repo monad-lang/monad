@@ -64,7 +64,7 @@ def EC_POINT_free (point : Ptr) : RawIO Unit
 /// Decode one uncompressed point (`0x04 || x || y`). `ctx` is NULL.
 #[extern "c"]
 def EC_POINT_oct2point
-  (group : Ptr) (point : Ptr) (buf : Ptr) (len : I64) (ctx : Ptr) : RawIO I32
+    (group : Ptr) (point : Ptr) (buf : Ptr) (len : I64) (ctx : Ptr) : RawIO I32
 
 /// The key copies the point, so the caller still frees its own `point`.
 #[extern "c"]
@@ -87,7 +87,7 @@ def EVP_PKEY_set1_EC_KEY (pkey : Ptr) (ec : Ptr) : RawIO I32
 /// Ed25519 takes its public key as 32 raw bytes; the engine argument is NULL.
 #[extern "c"]
 def EVP_PKEY_new_raw_public_key
-  (typ : I32) (engine : Ptr) (key : Ptr) (len : I64) : RawIO Ptr
+    (typ : I32) (engine : Ptr) (key : Ptr) (len : I64) : RawIO Ptr
 
 // ── verification ─────────────────────────────────────────────────────────
 
@@ -104,9 +104,9 @@ def EVP_sha256 : Ptr
 /// `pctx` and `engine` are NULL.
 #[extern "c"]
 def EVP_DigestVerifyInit
-  (ctx : Ptr) (pctx : Ptr) (md : Ptr) (engine : Ptr) (pkey : Ptr) : RawIO I32
+    (ctx : Ptr) (pctx : Ptr) (md : Ptr) (engine : Ptr) (pkey : Ptr) : RawIO I32
 
 /// 1 valid, 0 invalid, < 0 on a verification error.
 #[extern "c"]
 def EVP_DigestVerify
-  (ctx : Ptr) (sig : Ptr) (sig_len : I64) (msg : Ptr) (msg_len : I64) : RawIO I32
+    (ctx : Ptr) (sig : Ptr) (sig_len : I64) (msg : Ptr) (msg_len : I64) : RawIO I32

@@ -34,8 +34,8 @@
 /// documented miscompile.
 use json::json {Json}
 use lsp::params {
-  lsp_param_i64, lsp_param_index, lsp_param_nested, lsp_param_nested_i64, lsp_param_nested_str,
-  lsp_param_str, lsp_param_str_list,
+    lsp_param_i64, lsp_param_index, lsp_param_nested, lsp_param_nested_i64, lsp_param_nested_str,
+    lsp_param_str, lsp_param_str_list,
 }
 use toolkit::jsonrpc {rpc_field, rpc_object}
 
@@ -43,33 +43,33 @@ use toolkit::jsonrpc {rpc_field, rpc_object}
 
 /// Parse a fixture, or `null`. See the file doc: `null` is why `lp_roundtrips` exists.
 def lp_json (s : String) : Json :=
-  match Json.parse s {
-    Result.err _e => Json.make_null,
-    Result.ok j => j,
-  }
+    match Json.parse s {
+        Result.err _e => Json.make_null,
+        Result.ok j => j,
+    }
 
 /// THE GUARD: the fixture parses, and parses to exactly the text written.
 def lp_roundtrips (s : String) : Bool := String.beq (Json.to_string (lp_json s)) s
 
 def lp_str (o : Option String) : String :=
-  match o {
-    Option.none => "<none>",
-    Option.some s => s,
-  }
+    match o {
+        Option.none => "<none>",
+        Option.some s => s,
+    }
 
 def lp_i64 (o : Option I64) : String :=
-  match o {
-    Option.none => "<none>",
-    Option.some n => I64.to_string n,
-  }
+    match o {
+        Option.none => "<none>",
+        Option.some n => I64.to_string n,
+    }
 
 /// A node rendered back to its wire text, so a test can compare one read against an
 /// exact string instead of matching the constructor it happens to be.
 def lp_node (o : Option Json) : String :=
-  match o {
-    Option.none => "<none>",
-    Option.some j => Json.to_string j,
-  }
+    match o {
+        Option.none => "<none>",
+        Option.some j => Json.to_string j,
+    }
 
 /// The list joined with `|` and NO leading separator, so an empty list and a
 /// one-element list holding the empty string are different renderings.
@@ -77,13 +77,13 @@ def lp_list (xs : List String) : String := lp_join xs ""
 
 #[partial]
 def lp_join (xs : List String) (acc : String) : String :=
-  match xs {
-    List.empty => acc,
-    List.cons x rest =>
-      if String.is_empty acc
-      then lp_join rest x
-      else lp_join rest (String.concat acc (String.concat "|" x)),
-  }
+    match xs {
+        List.empty => acc,
+        List.cons x rest =>
+            if String.is_empty acc
+            then lp_join rest x
+            else lp_join rest (String.concat acc (String.concat "|" x)),
+    }
 
 // --- Fixtures: params that are objects but not the shape a method wants ---
 
@@ -151,50 +151,50 @@ def lp_f_encodings_ints : String := "{\"positionEncodings\":[1,2]}"
 
 #[test]
 def test_every_fixture_is_the_json_it_looks_like : Bool :=
-  lp_roundtrips lp_f_absent
-    && lp_roundtrips lp_f_null
-    && lp_roundtrips lp_f_array_params
-    && lp_roundtrips lp_f_uri_only
-    && lp_roundtrips lp_f_uri_int
-    && lp_roundtrips lp_f_uri_null
-    && lp_roundtrips lp_f_uri_array
-    && lp_roundtrips lp_f_uri_object
-    && lp_roundtrips lp_f_version_int
-    && lp_roundtrips lp_f_version_str
-    && lp_roundtrips lp_f_doc_ok
-    && lp_roundtrips lp_f_doc_str
-    && lp_roundtrips lp_f_doc_empty
-    && lp_roundtrips lp_f_doc_array
-    && lp_roundtrips lp_f_changes
-    && lp_roundtrips lp_f_changes_object
-    && lp_roundtrips lp_f_changes_str
-    && lp_roundtrips lp_f_changes_one
-    && lp_roundtrips lp_f_encodings
-    && lp_roundtrips lp_f_encodings_mixed
-    && lp_roundtrips lp_f_encodings_str
-    && lp_roundtrips lp_f_encodings_empty
-    && lp_roundtrips lp_f_encodings_ints
+    lp_roundtrips lp_f_absent
+        && lp_roundtrips lp_f_null
+        && lp_roundtrips lp_f_array_params
+        && lp_roundtrips lp_f_uri_only
+        && lp_roundtrips lp_f_uri_int
+        && lp_roundtrips lp_f_uri_null
+        && lp_roundtrips lp_f_uri_array
+        && lp_roundtrips lp_f_uri_object
+        && lp_roundtrips lp_f_version_int
+        && lp_roundtrips lp_f_version_str
+        && lp_roundtrips lp_f_doc_ok
+        && lp_roundtrips lp_f_doc_str
+        && lp_roundtrips lp_f_doc_empty
+        && lp_roundtrips lp_f_doc_array
+        && lp_roundtrips lp_f_changes
+        && lp_roundtrips lp_f_changes_object
+        && lp_roundtrips lp_f_changes_str
+        && lp_roundtrips lp_f_changes_one
+        && lp_roundtrips lp_f_encodings
+        && lp_roundtrips lp_f_encodings_mixed
+        && lp_roundtrips lp_f_encodings_str
+        && lp_roundtrips lp_f_encodings_empty
+        && lp_roundtrips lp_f_encodings_ints
 
 // --- Key-level reads ---
 
 /// A string field, at the top level.
 #[test]
 def test_a_top_level_string_field_is_read : Bool :=
-  String.beq (lp_str (lsp_param_str "uri" (lp_json lp_f_uri_only))) "file:///a.mo"
+    String.beq (lp_str (lsp_param_str "uri" (lp_json lp_f_uri_only))) "file:///a.mo"
 
 /// An integer field, at the top level.
 #[test]
 def test_a_top_level_integer_field_is_read : Bool :=
-  String.beq (lp_i64 (lsp_param_i64 "version" (lp_json lp_f_version_int))) "7"
+    String.beq (lp_i64 (lsp_param_i64 "version" (lp_json lp_f_version_int))) "7"
 
 /// A field that is not there, in the three shapes that means: a key the object does
 /// not have, no object at all, and an array.
 #[test]
 def test_an_absent_field_is_absent : Bool :=
-  String.beq (lp_str (lsp_param_str "uri" (lp_json lp_f_absent))) "<none>"
-    && String.beq (lp_str (lsp_param_str "uri" (lp_json lp_f_null))) "<none>"
-    && String.beq (lp_str (lsp_param_str "uri" (lp_json lp_f_array_params))) "<none>"
-    && String.beq (lp_i64 (lsp_param_i64 "version" (lp_json lp_f_absent))) "<none>"
+    String.beq (lp_str (lsp_param_str "uri" (lp_json lp_f_absent))) "<none>"
+        && String.beq (lp_str (lsp_param_str "uri" (lp_json lp_f_null))) "<none>"
+        && String.beq (lp_str (lsp_param_str "uri" (lp_json lp_f_array_params))) "<none>"
+        && String.beq (lp_i64 (lsp_param_i64 "version" (lp_json lp_f_absent))) "<none>"
 
 /// A field that is present and is the WRONG TYPE is absent, not an error and not a
 /// coerced value. The version-as-a-string case is the one a real client produces --
@@ -207,11 +207,11 @@ def test_an_absent_field_is_absent : Bool :=
 /// is the absent case, not a number this reader can hand on.
 #[test]
 def test_a_field_of_the_wrong_type_is_absent : Bool :=
-  String.beq (lp_i64 (lsp_param_i64 "version" (lp_json lp_f_version_str))) "<none>"
-    && String.beq (lp_str (lsp_param_str "uri" (lp_json lp_f_uri_int))) "<none>"
-    && String.beq (lp_str (lsp_param_str "uri" (lp_json lp_f_uri_null))) "<none>"
-    && String.beq (lp_str (lsp_param_str "uri" (lp_json lp_f_uri_array))) "<none>"
-    && String.beq (lp_str (lsp_param_str "uri" (lp_json lp_f_uri_object))) "<none>"
+    String.beq (lp_i64 (lsp_param_i64 "version" (lp_json lp_f_version_str))) "<none>"
+        && String.beq (lp_str (lsp_param_str "uri" (lp_json lp_f_uri_int))) "<none>"
+        && String.beq (lp_str (lsp_param_str "uri" (lp_json lp_f_uri_null))) "<none>"
+        && String.beq (lp_str (lsp_param_str "uri" (lp_json lp_f_uri_array))) "<none>"
+        && String.beq (lp_str (lsp_param_str "uri" (lp_json lp_f_uri_object))) "<none>"
 
 /// A number that is not an integer is not an integer version. `Json.get_num_i64`
 /// rejects a float rather than truncating it, and for this one field that is the
@@ -225,8 +225,8 @@ def test_a_field_of_the_wrong_type_is_absent : Bool :=
 /// this is the test of the reader, and the test below is the test of the parser.
 #[test]
 def test_a_float_is_not_an_integer_field : Bool :=
-  String.beq (lp_i64 (lsp_param_i64 "version" lp_version_float_node)) "<none>"
-    && String.beq (lp_i64 (lsp_param_i64 "version" (lp_json lp_f_version_int))) "7"
+    String.beq (lp_i64 (lsp_param_i64 "version" lp_version_float_node)) "<none>"
+        && String.beq (lp_i64 (lsp_param_i64 "version" (lp_json lp_f_version_int))) "7"
 
 /// Named empty list rather than a bare `List.empty` in argument position, whose
 /// element type would have to be inferred from the callee.
@@ -234,7 +234,7 @@ def lp_no_fields : List (Pair String Json) := List.empty
 
 /// `{"version":1.5}`, constructed rather than parsed.
 def lp_version_float_node : Json :=
-  rpc_object (List.cons (Pair.pair "version" (Json.make_num_float 1.5)) lp_no_fields)
+    rpc_object (List.cons (Pair.pair "version" (Json.make_num_float 1.5)) lp_no_fields)
 
 /// THE PARSER'S HALF, pinned as observed behaviour rather than fixed.
 ///
@@ -247,7 +247,7 @@ def lp_version_float_node : Json :=
 /// which is the point: the arm it describes is a gap in `lang`, not a decision here.
 #[test]
 def test_the_parser_rejects_a_float_outright : Bool :=
-  String.beq (lp_node (Option.some (lp_json lp_f_version_float))) "null"
+    String.beq (lp_node (Option.some (lp_json lp_f_version_float))) "null"
 
 // --- Nested reads ---
 
@@ -256,10 +256,10 @@ def test_the_parser_rejects_a_float_outright : Bool :=
 /// reads are checked, because they are three entry points over one path.
 #[test]
 def test_a_nested_field_is_read_at_both_levels : Bool :=
-  let p : Json := lp_json lp_f_doc_ok in
-  String.beq (lp_str (lsp_param_nested_str "textDocument" "uri" p)) "file:///a.mo"
-    && String.beq (lp_i64 (lsp_param_nested_i64 "textDocument" "version" p)) "3"
-    && String.beq (lp_node (lsp_param_nested "textDocument" "uri" p)) "\"file:///a.mo\""
+    let p : Json := lp_json lp_f_doc_ok in
+    String.beq (lp_str (lsp_param_nested_str "textDocument" "uri" p)) "file:///a.mo"
+        && String.beq (lp_i64 (lsp_param_nested_i64 "textDocument" "version" p)) "3"
+        && String.beq (lp_node (lsp_param_nested "textDocument" "uri" p)) "\"file:///a.mo\""
 
 /// BOTH levels must be objects for a nested read to answer, and the outer being
 /// wrong is the case worth pinning: a `textDocument` sent as a string is not a struct
@@ -268,20 +268,20 @@ def test_a_nested_field_is_read_at_both_levels : Bool :=
 /// here, and the value it answered with would be a document the client did not name.
 #[test]
 def test_nesting_requires_both_levels_to_be_objects : Bool :=
-  String.beq (lp_str (lsp_param_nested_str "textDocument" "uri" (lp_json lp_f_doc_str))) "<none>"
-    && String.beq (lp_str (lsp_param_nested_str "textDocument" "uri" (lp_json lp_f_absent))) "<none>"
-    && String.beq (lp_str (lsp_param_nested_str "textDocument" "uri" (lp_json lp_f_doc_empty))) "<none>"
-    && String.beq (lp_str (lsp_param_nested_str "textDocument" "uri" (lp_json lp_f_doc_array))) "<none>"
+    String.beq (lp_str (lsp_param_nested_str "textDocument" "uri" (lp_json lp_f_doc_str))) "<none>"
+        && String.beq (lp_str (lsp_param_nested_str "textDocument" "uri" (lp_json lp_f_absent))) "<none>"
+        && String.beq (lp_str (lsp_param_nested_str "textDocument" "uri" (lp_json lp_f_doc_empty))) "<none>"
+        && String.beq (lp_str (lsp_param_nested_str "textDocument" "uri" (lp_json lp_f_doc_array))) "<none>"
 
 // --- Array reads ---
 
 /// Array elements by index, which is `contentChanges[0]` and nothing else.
 #[test]
 def test_an_array_element_is_read_by_index : Bool :=
-  let p : Json := lp_json lp_f_changes in
-  String.beq (lp_node (lsp_param_index 0 (rpc_field "contentChanges" p))) "{\"text\":\"first\"}"
-    && String.beq (lp_node (lsp_param_index 1 (rpc_field "contentChanges" p))) "{\"text\":\"second\"}"
-    && String.beq (lp_node (lsp_param_index 2 (rpc_field "contentChanges" p))) "<none>"
+    let p : Json := lp_json lp_f_changes in
+    String.beq (lp_node (lsp_param_index 0 (rpc_field "contentChanges" p))) "{\"text\":\"first\"}"
+        && String.beq (lp_node (lsp_param_index 1 (rpc_field "contentChanges" p))) "{\"text\":\"second\"}"
+        && String.beq (lp_node (lsp_param_index 2 (rpc_field "contentChanges" p))) "<none>"
 
 /// An index into something that is not an array, or is not there, answers nothing --
 /// including index 0, which a reader that treated "one element or a scalar" as
@@ -290,30 +290,30 @@ def test_an_array_element_is_read_by_index : Bool :=
 /// index only ever decreases towards zero, and zero never arrives.
 #[test]
 def test_an_index_into_a_non_array_answers_nothing : Bool :=
-  String.beq (lp_node (lsp_param_index 0 (rpc_field "contentChanges" (lp_json lp_f_changes_object)))) "<none>"
-    && String.beq (lp_node (lsp_param_index 0 (rpc_field "contentChanges" (lp_json lp_f_changes_str)))) "<none>"
-    && String.beq (lp_node (lsp_param_index 0 (rpc_field "contentChanges" (lp_json lp_f_absent)))) "<none>"
-    && String.beq (lp_node (lsp_param_index (0 - 1) (rpc_field "contentChanges" (lp_json lp_f_changes_one)))) "<none>"
+    String.beq (lp_node (lsp_param_index 0 (rpc_field "contentChanges" (lp_json lp_f_changes_object)))) "<none>"
+        && String.beq (lp_node (lsp_param_index 0 (rpc_field "contentChanges" (lp_json lp_f_changes_str)))) "<none>"
+        && String.beq (lp_node (lsp_param_index 0 (rpc_field "contentChanges" (lp_json lp_f_absent)))) "<none>"
+        && String.beq (lp_node (lsp_param_index (0 - 1) (rpc_field "contentChanges" (lp_json lp_f_changes_one)))) "<none>"
 
 // --- String lists ---
 
 /// The one list-valued field this server reads: the encodings a client offers.
 #[test]
 def test_a_string_list_keeps_its_strings_in_order : Bool :=
-  String.beq (lp_list (lsp_param_str_list "positionEncodings" (lp_json lp_f_encodings))) "utf-16|utf-8"
+    String.beq (lp_list (lsp_param_str_list "positionEncodings" (lp_json lp_f_encodings))) "utf-16|utf-8"
 
 /// Non-strings are dropped rather than failing the read, and the strings around them
 /// keep their order. Dropping loses a choice; failing would lose every choice.
 #[test]
 def test_a_string_list_drops_what_is_not_a_string : Bool :=
-  String.beq (lp_list (lsp_param_str_list "positionEncodings" (lp_json lp_f_encodings_mixed))) "utf-8|utf-16"
+    String.beq (lp_list (lsp_param_str_list "positionEncodings" (lp_json lp_f_encodings_mixed))) "utf-8|utf-16"
 
 /// An absent list, a non-array, an empty list, and a list of nothing this reader can
 /// use are all the empty list -- the caller's default is what turns that into a
 /// decision, and this reader does not make it.
 #[test]
 def test_an_absent_string_list_is_empty : Bool :=
-  String.beq (lp_list (lsp_param_str_list "positionEncodings" (lp_json lp_f_absent))) ""
-    && String.beq (lp_list (lsp_param_str_list "positionEncodings" (lp_json lp_f_encodings_str))) ""
-    && String.beq (lp_list (lsp_param_str_list "positionEncodings" (lp_json lp_f_encodings_empty))) ""
-    && String.beq (lp_list (lsp_param_str_list "positionEncodings" (lp_json lp_f_encodings_ints))) ""
+    String.beq (lp_list (lsp_param_str_list "positionEncodings" (lp_json lp_f_absent))) ""
+        && String.beq (lp_list (lsp_param_str_list "positionEncodings" (lp_json lp_f_encodings_str))) ""
+        && String.beq (lp_list (lsp_param_str_list "positionEncodings" (lp_json lp_f_encodings_empty))) ""
+        && String.beq (lp_list (lsp_param_str_list "positionEncodings" (lp_json lp_f_encodings_ints))) ""

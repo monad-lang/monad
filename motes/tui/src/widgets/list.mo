@@ -10,9 +10,9 @@
 // generic `BEq (List A)` dispatch through a custom element type's
 // instance is the unreliable path this mote avoids throughout.
 
-use lib::types { Key }
-use lib::core { clamp }
-use std::list { List.length }
+use lib::types {Key}
+use lib::core {clamp}
+use std::list {List.length}
 
 /// A single-choice list's state: the full item list, the selected index,
 /// and `offset` -- the index of the first visible row. `offset` is

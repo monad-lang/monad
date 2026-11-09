@@ -92,28 +92,28 @@ def test_request_json_keeps_top_level_fields : Bool :=
 
 #[test]
 def test_parse_models_reads_ids : Bool :=
-  match OpenAI.parse_models "{\"object\":\"list\",\"data\":[{\"id\":\"a\"},{\"id\":\"b\"}]}" {
-    Result.ok ids => ids == ["a", "b"],
-    Result.err _ => false,
-  }
+    match OpenAI.parse_models "{\"object\":\"list\",\"data\":[{\"id\":\"a\"},{\"id\":\"b\"}]}" {
+        Result.ok ids => ids == ["a", "b"],
+        Result.err _ => false,
+    }
 
 #[test]
 def test_parse_models_accepts_an_empty_list : Bool :=
-  match OpenAI.parse_models "{\"data\":[]}" {
-    Result.ok ids => ids == [],
-    Result.err _ => false,
-  }
+    match OpenAI.parse_models "{\"data\":[]}" {
+        Result.ok ids => ids == [],
+        Result.err _ => false,
+    }
 
 #[test]
 def test_parse_models_rejects_missing_data : Bool :=
-  match OpenAI.parse_models "{\"object\":\"list\"}" {
-    Result.err e => String.contains e "missing data",
-    Result.ok _ => false,
-  }
+    match OpenAI.parse_models "{\"object\":\"list\"}" {
+        Result.err e => String.contains e "missing data",
+        Result.ok _ => false,
+    }
 
 #[test]
 def test_parse_models_names_a_malformed_entry : Bool :=
-  match OpenAI.parse_models "{\"data\":[{\"id\":\"a\"},{\"object\":\"model\"}]}" {
-    Result.err e => String.contains e "entry 1" && String.contains e "has no id",
-    Result.ok _ => false,
-  }
+    match OpenAI.parse_models "{\"data\":[{\"id\":\"a\"},{\"object\":\"model\"}]}" {
+        Result.err e => String.contains e "entry 1" && String.contains e "has no id",
+        Result.ok _ => false,
+    }

@@ -87,7 +87,7 @@ def crud : SqliteM Bool := do {
     let inserted <- Sqlite.exec
         "INSERT INTO t (name, score, ok, data) VALUES (?, ?, ?, ?)"
         [Value.text "ada", Value.real 1.5, Value.boolean true,
-         Value.blob [0u8, 255u8, 0u8]];
+            Value.blob [0u8, 255u8, 0u8]];
     let rowid <- Sqlite.last_insert_rowid_m;
     let rs <- Sqlite.query "SELECT id, name, score, ok, data FROM t" List.empty;
     return (inserted == 1 && rowid == 1 && row_ok rs)

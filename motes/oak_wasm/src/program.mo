@@ -153,9 +153,9 @@ def Runtime.collect_sub_handlers {Msg : Type} (subs : List (Subscription Msg))
 
 pub type RuntimeState (S : Type) (Msg : Type) {
     st (root : Node) (last : Html.Node) (model : S)
-       (queue : List Msg) (stopped : Bool)
-       (handlers : List (Pair U32 (WebEvent -> HandlerResult Msg)))
-       (subs : List (Subscription Msg))
+        (queue : List Msg) (stopped : Bool)
+        (handlers : List (Pair U32 (WebEvent -> HandlerResult Msg)))
+        (subs : List (Subscription Msg))
 }
 
 /// Mount a `Program` under the root the loader selected, and hand the state

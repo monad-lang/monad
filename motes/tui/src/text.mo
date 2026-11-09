@@ -84,7 +84,7 @@ def codepoint (bytes : List U8) (fallback : U32) : U32 :=
                         (U32.or (U32.shl (U32.and (U8.to_u32 b1) 0x3Fu32) 6u32) (U32.and (U8.to_u32 b2) 0x3Fu32)),
                     List.cons b3 _ => U32.or (U32.shl (U32.and (U8.to_u32 b0) 0x07u32) 18u32)
                         (U32.or (U32.shl (U32.and (U8.to_u32 b1) 0x3Fu32) 12u32)
-                        (U32.or (U32.shl (U32.and (U8.to_u32 b2) 0x3Fu32) 6u32) (U32.and (U8.to_u32 b3) 0x3Fu32))),
+                            (U32.or (U32.shl (U32.and (U8.to_u32 b2) 0x3Fu32) 6u32) (U32.and (U8.to_u32 b3) 0x3Fu32))),
                 },
             },
         },
@@ -103,35 +103,35 @@ def codepoint_width (cp : U32) : I64 :=
 def zero_width (cp : U32) : Bool :=
     Bool.or (in_range cp 0x0300u32 0x036Fu32)
         (Bool.or (in_range cp 0x1AB0u32 0x1AFFu32)
-        (Bool.or (in_range cp 0x1DC0u32 0x1DFFu32)
-        (Bool.or (in_range cp 0x200Bu32 0x200Fu32)
-        (Bool.or (in_range cp 0x202Au32 0x202Eu32)
-        (Bool.or (in_range cp 0x2060u32 0x2064u32)
-        (Bool.or (in_range cp 0x20D0u32 0x20F0u32)
-        (Bool.or (in_range cp 0xFE00u32 0xFE0Fu32)
-        (Bool.or (in_range cp 0xFE20u32 0xFE2Fu32)
-        (Bool.or (in_range cp 0x1F3FBu32 0x1F3FFu32)
-              (in_range cp 0xE0100u32 0xE01EFu32))))))))))
+            (Bool.or (in_range cp 0x1DC0u32 0x1DFFu32)
+                (Bool.or (in_range cp 0x200Bu32 0x200Fu32)
+                    (Bool.or (in_range cp 0x202Au32 0x202Eu32)
+                        (Bool.or (in_range cp 0x2060u32 0x2064u32)
+                            (Bool.or (in_range cp 0x20D0u32 0x20F0u32)
+                                (Bool.or (in_range cp 0xFE00u32 0xFE0Fu32)
+                                    (Bool.or (in_range cp 0xFE20u32 0xFE2Fu32)
+                                        (Bool.or (in_range cp 0x1F3FBu32 0x1F3FFu32)
+                                            (in_range cp 0xE0100u32 0xE01EFu32))))))))))
 
 def wide (cp : U32) : Bool :=
     Bool.or (in_range cp 0x1100u32 0x115Fu32)
         (Bool.or (in_range cp 0x2E80u32 0x303Eu32)
-        (Bool.or (in_range cp 0x3041u32 0x33FFu32)
-        (Bool.or (in_range cp 0x3400u32 0x4DBFu32)
-        (Bool.or (in_range cp 0x4E00u32 0x9FFFu32)
-        (Bool.or (in_range cp 0xA000u32 0xA4CFu32)
-        (Bool.or (in_range cp 0xA960u32 0xA97Fu32)
-        (Bool.or (in_range cp 0xAC00u32 0xD7A3u32)
-        (Bool.or (in_range cp 0xF900u32 0xFAFFu32)
-        (Bool.or (in_range cp 0xFE10u32 0xFE19u32)
-        (Bool.or (in_range cp 0xFE30u32 0xFE6Fu32)
-        (Bool.or (in_range cp 0xFF00u32 0xFF60u32)
-        (Bool.or (in_range cp 0xFFE0u32 0xFFE6u32)
-        (Bool.or (in_range cp 0x1F1E6u32 0x1F1FFu32)
-        (Bool.or (in_range cp 0x1F300u32 0x1FAFFu32)
-        (Bool.or (in_range cp 0x20000u32 0x2FFFFu32)
-        (Bool.or (in_range cp 0x30000u32 0x3FFFFu32)
-              (emoji_presentation cp)))))))))))))))))
+            (Bool.or (in_range cp 0x3041u32 0x33FFu32)
+                (Bool.or (in_range cp 0x3400u32 0x4DBFu32)
+                    (Bool.or (in_range cp 0x4E00u32 0x9FFFu32)
+                        (Bool.or (in_range cp 0xA000u32 0xA4CFu32)
+                            (Bool.or (in_range cp 0xA960u32 0xA97Fu32)
+                                (Bool.or (in_range cp 0xAC00u32 0xD7A3u32)
+                                    (Bool.or (in_range cp 0xF900u32 0xFAFFu32)
+                                        (Bool.or (in_range cp 0xFE10u32 0xFE19u32)
+                                            (Bool.or (in_range cp 0xFE30u32 0xFE6Fu32)
+                                                (Bool.or (in_range cp 0xFF00u32 0xFF60u32)
+                                                    (Bool.or (in_range cp 0xFFE0u32 0xFFE6u32)
+                                                        (Bool.or (in_range cp 0x1F1E6u32 0x1F1FFu32)
+                                                            (Bool.or (in_range cp 0x1F300u32 0x1FAFFu32)
+                                                                (Bool.or (in_range cp 0x20000u32 0x2FFFFu32)
+                                                                    (Bool.or (in_range cp 0x30000u32 0x3FFFFu32)
+                                                                        (emoji_presentation cp)))))))))))))))))
 
 /// Below U+1F300, the code points terminals draw as two-cell emoji by
 /// default (Unicode's Emoji_Presentation set): ✅ ❌ ⭐ ⌛ ⚡ and kin.
@@ -423,7 +423,7 @@ struct WrapSplit {
 
 #[terminating]
 def wrap_split_go (gs : List Glyph) (w : I64) (used : I64) (line_rev : List Glyph)
-        (space_line : List Glyph) (space_rest : List Glyph) : WrapSplit :=
+    (space_line : List Glyph) (space_rest : List Glyph) : WrapSplit :=
     match gs {
         List.empty => let r : WrapSplit := { line := List.reverse line_rev, rest := List.empty, broke := false } in r,
         List.cons g rest =>

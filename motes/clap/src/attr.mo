@@ -108,8 +108,8 @@ pub def Cli.unescape (s : String) : String :=
 #[partial]
 pub def Cli.decode_attr_value (v : String) : String :=
     if I64.lt 1 (String.length v)
-       && String.beq (String.slice v 0 1) "\""
-       && String.beq (String.slice v (I64.sub (String.length v) 1) 1) "\""
+        && String.beq (String.slice v 0 1) "\""
+        && String.beq (String.slice v (I64.sub (String.length v) 1) 1) "\""
     then Cli.unescape (String.slice v 1 (I64.sub (String.length v) 2))
     else v
 
@@ -127,20 +127,20 @@ pub def Cli.parse_kv (piece : String) : Option (Pair String String) :=
 /// `decode_attr_value` to handle.
 #[partial]
 pub def Cli.split_kv_loop
-        (body : String) (i : I64) (start : I64) (in_quote : Bool) (escaped : Bool)
-        (acc : List String) : List String :=
+    (body : String) (i : I64) (start : I64) (in_quote : Bool) (escaped : Bool)
+    (acc : List String) : List String :=
     if I64.lt i (String.length body) then
         let c : String := String.slice body i 1 in
         if escaped
         then Cli.split_kv_loop body (I64.add i 1) start in_quote false acc
         else if String.beq c "\\"
-             then Cli.split_kv_loop body (I64.add i 1) start in_quote true acc
-             else if String.beq c "\""
-                  then Cli.split_kv_loop body (I64.add i 1) start (Bool.not in_quote) false acc
-                  else if Bool.not in_quote && String.beq c ","
-                       then Cli.split_kv_loop body (I64.add i 1) (I64.add i 1) false false
-                                (List.append acc [String.slice body start (I64.sub i start)])
-                       else Cli.split_kv_loop body (I64.add i 1) start in_quote false acc
+            then Cli.split_kv_loop body (I64.add i 1) start in_quote true acc
+            else if String.beq c "\""
+                then Cli.split_kv_loop body (I64.add i 1) start (Bool.not in_quote) false acc
+                else if Bool.not in_quote && String.beq c ","
+                    then Cli.split_kv_loop body (I64.add i 1) (I64.add i 1) false false
+                        (List.append acc [String.slice body start (I64.sub i start)])
+                    else Cli.split_kv_loop body (I64.add i 1) start in_quote false acc
     else List.append acc [String.slice body start (I64.sub (String.length body) start)]
 
 #[partial]

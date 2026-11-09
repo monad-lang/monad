@@ -10,12 +10,12 @@
 // forward type references within a file, so `Widget` is declared first and
 // names the two later types in its constructor arguments.
 
-use lib::types { TextStyle, LayoutSize, TextSegment }
-use lib::core { style_default }
+use lib::types {TextStyle, LayoutSize, TextSegment}
+use lib::core {style_default}
 // The stateful widgets' pure state machines (Phase 5). One-directional:
 // those modules never import this one.
-use lib::widgets::input { InputState }
-use lib::widgets::list { ListState }
+use lib::widgets::input {InputState}
+use lib::widgets::list {ListState}
 
 /// Box-drawing style for the `border` decorator. The actual glyphs live in
 /// `render.mo` (`border_chars`) — this type only carries the choice.

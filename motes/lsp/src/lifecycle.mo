@@ -24,8 +24,8 @@ use json::json {Json}
 use toolkit::docstore {docstore_path_of_uri}
 use toolkit::jsonrpc {rpc_field, rpc_object}
 use toolkit::position {
-  PositionEncoding, position_encoding_default, position_encoding_from_string,
-  position_encoding_name,
+    PositionEncoding, position_encoding_default, position_encoding_from_string,
+    position_encoding_name,
 }
 use lsp::params {lsp_param_index, lsp_param_nested, lsp_param_str, lsp_param_str_list}
 
@@ -57,21 +57,21 @@ pub def lsp_server_version : String := "0.1.0"
 /// utf-16 is the one every client must support.
 #[partial]
 pub def lsp_choose_encoding (offered : List String) : PositionEncoding :=
-  match lsp_first_known_encoding offered {
-    Option.none => position_encoding_default,
-    Option.some e => e,
-  }
+    match lsp_first_known_encoding offered {
+        Option.none => position_encoding_default,
+        Option.some e => e,
+    }
 
 #[partial]
 def lsp_first_known_encoding (offered : List String) : Option PositionEncoding :=
-  match offered {
-    List.empty => Option.none,
-    List.cons s rest =>
-      match position_encoding_from_string s {
-        Option.none => lsp_first_known_encoding rest,
-        Option.some e => Option.some e,
-      },
-  }
+    match offered {
+        List.empty => Option.none,
+        List.cons s rest =>
+            match position_encoding_from_string s {
+                Option.none => lsp_first_known_encoding rest,
+                Option.some e => Option.some e,
+            },
+    }
 
 /// The encodings the client offered, or the empty list.
 ///
@@ -81,10 +81,10 @@ def lsp_first_known_encoding (offered : List String) : Option PositionEncoding :
 /// send it.
 #[partial]
 pub def lsp_offered_encodings (params : Json) : List String :=
-  match lsp_param_nested "capabilities" "general" params {
-    Option.none => lsp_no_encodings,
-    Option.some general => lsp_param_str_list "positionEncodings" general,
-  }
+    match lsp_param_nested "capabilities" "general" params {
+        Option.none => lsp_no_encodings,
+        Option.some general => lsp_param_str_list "positionEncodings" general,
+    }
 
 /// The empty encoding list as a named def, so no caller writes a bare
 /// `List.empty` whose element type has to be inferred.
@@ -111,25 +111,25 @@ pub def lsp_no_encodings : List String := List.empty
 /// `rootUri` or `workspaceFolders`.
 #[partial]
 pub def lsp_root_path (params : Json) : Option String :=
-  match lsp_param_str "rootUri" params {
-    Option.none => lsp_workspace_folder_path params,
-    Option.some uri =>
-      match docstore_path_of_uri uri {
+    match lsp_param_str "rootUri" params {
         Option.none => lsp_workspace_folder_path params,
-        Option.some p => Option.some p,
-      },
-  }
+        Option.some uri =>
+            match docstore_path_of_uri uri {
+                Option.none => lsp_workspace_folder_path params,
+                Option.some p => Option.some p,
+            },
+    }
 
 #[partial]
 def lsp_workspace_folder_path (params : Json) : Option String :=
-  match lsp_param_index 0 (rpc_field "workspaceFolders" params) {
-    Option.none => Option.none,
-    Option.some folder =>
-      match lsp_param_str "uri" folder {
+    match lsp_param_index 0 (rpc_field "workspaceFolders" params) {
         Option.none => Option.none,
-        Option.some uri => docstore_path_of_uri uri,
-      },
-  }
+        Option.some folder =>
+            match lsp_param_str "uri" folder {
+                Option.none => Option.none,
+                Option.some uri => docstore_path_of_uri uri,
+            },
+    }
 
 // --- The initialize result ---
 
@@ -148,27 +148,27 @@ pub def lsp_sync_full : I64 := 1
 /// it would receive no documents and have nothing to check.
 #[partial]
 pub def lsp_capabilities_json (enc : PositionEncoding) : Json :=
-  rpc_object [
-    Pair.pair "positionEncoding" (Json.make_str (position_encoding_name enc)),
-    Pair.pair "textDocumentSync" (Json.make_num_int lsp_sync_full),
-    Pair.pair "hoverProvider" (Json.make_bool true),
-    Pair.pair "definitionProvider" (Json.make_bool true),
-    Pair.pair "documentSymbolProvider" (Json.make_bool true),
-    Pair.pair "workspaceSymbolProvider" (Json.make_bool true),
-    Pair.pair "documentFormattingProvider" (Json.make_bool true),
-  ]
+    rpc_object [
+        Pair.pair "positionEncoding" (Json.make_str (position_encoding_name enc)),
+        Pair.pair "textDocumentSync" (Json.make_num_int lsp_sync_full),
+        Pair.pair "hoverProvider" (Json.make_bool true),
+        Pair.pair "definitionProvider" (Json.make_bool true),
+        Pair.pair "documentSymbolProvider" (Json.make_bool true),
+        Pair.pair "workspaceSymbolProvider" (Json.make_bool true),
+        Pair.pair "documentFormattingProvider" (Json.make_bool true),
+    ]
 
 #[partial]
 pub def lsp_server_info_json : Json :=
-  rpc_object [
-    Pair.pair "name" (Json.make_str lsp_server_name),
-    Pair.pair "version" (Json.make_str lsp_server_version),
-  ]
+    rpc_object [
+        Pair.pair "name" (Json.make_str lsp_server_name),
+        Pair.pair "version" (Json.make_str lsp_server_version),
+    ]
 
 /// The `initialize` result, for the encoding that was negotiated from these params.
 #[partial]
 pub def lsp_initialize_result (enc : PositionEncoding) : Json :=
-  rpc_object [
-    Pair.pair "capabilities" (lsp_capabilities_json enc),
-    Pair.pair "serverInfo" lsp_server_info_json,
-  ]
+    rpc_object [
+        Pair.pair "capabilities" (lsp_capabilities_json enc),
+        Pair.pair "serverInfo" lsp_server_info_json,
+    ]

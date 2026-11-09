@@ -503,8 +503,8 @@ pub def cli_decode_chain (type_name : String) (ctors : List CtorInfo) (rest : Ex
             match c {
                 ctor_info cname fields =>
                     e_if (cli_app2 "String.beq" (cli_app1 "Cli.command_name" (e_var "p")) (e_str (Cli.kebab cname)))
-                         (cli_ctor_decode_expr type_name cname false fields)
-                         (cli_decode_chain type_name tail rest),
+                        (cli_ctor_decode_expr type_name cname false fields)
+                        (cli_decode_chain type_name tail rest),
             },
     }
 
@@ -533,10 +533,10 @@ pub def cli_bad_short (k : Cli.ArgKind) (ctor_display : String) (f : FieldInfo) 
         Option.some s =>
             if String.is_empty s then Option.none
             else if I64.lt 1 (String.length s)
-                 then Option.some (String.concat_all ["#[derive Cli]: `", ctor_display, "`'s field `", cli_field_name f, "` has a `short` longer than one character"])
-                 else if String.beq s "-" || String.beq s "="
-                      then Option.some (String.concat_all ["#[derive Cli]: `", ctor_display, "`'s field `", cli_field_name f, "` has an invalid `short` (", s, ")"])
-                      else Option.none,
+                then Option.some (String.concat_all ["#[derive Cli]: `", ctor_display, "`'s field `", cli_field_name f, "` has a `short` longer than one character"])
+                else if String.beq s "-" || String.beq s "="
+                    then Option.some (String.concat_all ["#[derive Cli]: `", ctor_display, "`'s field `", cli_field_name f, "` has an invalid `short` (", s, ")"])
+                    else Option.none,
     }
 
 pub def cli_bad_field (struct_form : Bool) (ctor_display : String) (f : FieldInfo) : Option String :=
@@ -563,8 +563,8 @@ pub def cli_bad_field (struct_form : Bool) (ctor_display : String) (f : FieldInf
                             if cli_class_is_bool c
                             then Option.some (String.concat_all ["#[derive Cli]: `", ctor_display, "`'s Bool field `", name, "` must be annotated `#[arg]`"])
                             else if Bool.not (cli_required k f) && Bool.not (cli_has_default f) && Bool.not (cli_class_is_option c) && Bool.not (cli_class_is_list c)
-                                 then Option.some (String.concat_all ["#[derive Cli]: `", ctor_display, "`'s field `", name, "` is optional but has no default; use Option, List, or a `:=` default"])
-                                 else Option.none,
+                                then Option.some (String.concat_all ["#[derive Cli]: `", ctor_display, "`'s field `", name, "` is optional but has no default; use Option, List, or a `:=` default"])
+                                else Option.none,
                     },
             },
     }
@@ -637,8 +637,8 @@ pub def cli_short_conflicts_all (struct_form : Bool) (ctors : List CtorInfo) : O
 
 #[partial]
 pub def cli_long_conflict
-        (long : String) (own_name : String) (struct_form : Bool)
-        (fields : List FieldInfo) : Option String :=
+    (long : String) (own_name : String) (struct_form : Bool)
+    (fields : List FieldInfo) : Option String :=
     match fields {
         List.empty => Option.none,
         List.cons f rest =>
@@ -681,8 +681,8 @@ pub def cli_long_conflicts_all (struct_form : Bool) (ctors : List CtorInfo) : Op
 
 #[partial]
 pub def cli_check_positionals
-        (struct_form : Bool) (ctor_display : String) (fields : List FieldInfo)
-        (seen_optional : Bool) (seen_multiple : Bool) : Option String :=
+    (struct_form : Bool) (ctor_display : String) (fields : List FieldInfo)
+    (seen_optional : Bool) (seen_multiple : Bool) : Option String :=
     match fields {
         List.empty => Option.none,
         List.cons f rest =>
@@ -694,12 +694,12 @@ pub def cli_check_positionals
                 if seen_multiple
                 then Option.some (String.concat_all ["#[derive Cli]: `", ctor_display, "`'s `List String` positional `", name, "` must be last"])
                 else if cli_multiple f
-                     then cli_check_positionals struct_form ctor_display rest seen_optional true
-                     else if Bool.not (cli_required k f)
-                          then cli_check_positionals struct_form ctor_display rest true seen_multiple
-                          else if seen_optional
-                               then Option.some (String.concat_all ["#[derive Cli]: `", ctor_display, "`'s required positional `", name, "` follows an optional one"])
-                               else cli_check_positionals struct_form ctor_display rest false seen_multiple,
+                    then cli_check_positionals struct_form ctor_display rest seen_optional true
+                    else if Bool.not (cli_required k f)
+                        then cli_check_positionals struct_form ctor_display rest true seen_multiple
+                        else if seen_optional
+                            then Option.some (String.concat_all ["#[derive Cli]: `", ctor_display, "`'s required positional `", name, "` follows an optional one"])
+                            else cli_check_positionals struct_form ctor_display rest false seen_multiple,
     }
 
 #[partial]

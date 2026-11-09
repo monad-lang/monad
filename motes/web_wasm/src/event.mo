@@ -18,9 +18,9 @@
 
 use web_event::event {WebEvent, FileInfo}
 use lib::ffi {
-  event_i64_raw, event_f64_raw, event_str_raw, event_data_raw, event_types_raw,
-  event_files_count_raw, event_file_i64_raw, event_file_str_raw,
-  event_prevent_default_raw, event_stop_propagation_raw,
+    event_i64_raw, event_f64_raw, event_str_raw, event_data_raw, event_types_raw,
+    event_files_count_raw, event_file_i64_raw, event_file_str_raw,
+    event_prevent_default_raw, event_stop_propagation_raw,
 }
 
 // ─── Selectors ────────────────────────────────────────────────────────
@@ -108,88 +108,88 @@ pub def WebEvent.current : IO WebEvent := do {
 }
 
 def WebEvent.read_current (_valid : I64) : IO WebEvent := do {
-        let kind <- IO.mk (event_str_raw 1i64);
-        let pointer : Bool := is_pointer_kind kind;
-        let keyed : Bool := is_key_kind kind;
-        let form : Bool := is_form_kind kind;
-        let drag : Bool := is_drag_kind kind;
-        let clip : Bool := is_clipboard_kind kind;
-        let payload : Bool := drag || clip;
-        let pointer_type <- str_if pointer 2i64;
-        let key <- str_if keyed 3i64;
-        let code <- str_if keyed 4i64;
-        let value <- str_if form 5i64;
-        let effect_allowed <- str_if drag 6i64;
-        let drop_effect <- str_if drag 7i64;
-        let data <- if payload then IO.mk (event_data_raw "text/plain") else IO.pure "";
-        let types_text <- if payload then IO.mk event_types_raw else IO.pure "";
-        let file_count <- if payload then IO.mk event_files_count_raw else IO.pure 0i64;
-        let files <- if payload then read_files file_count 0i64 List.empty else IO.pure List.empty;
-        let time_stamp <- IO.mk (event_f64_raw 15i64);
-        let modifiers <- IO.mk (event_i64_raw 11i64);
-        let client_x <- IO.mk (event_f64_raw 1i64);
-        let client_y <- IO.mk (event_f64_raw 2i64);
-        let page_x <- IO.mk (event_f64_raw 3i64);
-        let page_y <- IO.mk (event_f64_raw 4i64);
-        let screen_x <- IO.mk (event_f64_raw 5i64);
-        let screen_y <- IO.mk (event_f64_raw 6i64);
-        let offset_x <- IO.mk (event_f64_raw 7i64);
-        let offset_y <- IO.mk (event_f64_raw 8i64);
-        let button <- IO.mk (event_i64_raw 1i64);
-        let buttons <- IO.mk (event_i64_raw 2i64);
-        let detail <- IO.mk (event_i64_raw 3i64);
-        let pointer_id <- IO.mk (event_i64_raw 4i64);
-        let pressure <- IO.mk (event_f64_raw 12i64);
-        let is_primary_raw <- IO.mk (event_i64_raw 8i64);
-        let width <- IO.mk (event_f64_raw 13i64);
-        let height <- IO.mk (event_f64_raw 14i64);
-        let repeat_raw <- IO.mk (event_i64_raw 7i64);
-        let location <- IO.mk (event_i64_raw 5i64);
-        let delta_x <- IO.mk (event_f64_raw 9i64);
-        let delta_y <- IO.mk (event_f64_raw 10i64);
-        let delta_z <- IO.mk (event_f64_raw 11i64);
-        let delta_mode <- IO.mk (event_i64_raw 6i64);
-        let checked_raw <- IO.mk (event_i64_raw 9i64);
-        let default_prevented_raw <- IO.mk (event_i64_raw 13i64);
-        let ev : WebEvent :=
-            { kind := kind,
-              valid := true,
-              time_stamp := time_stamp,
-              modifiers := modifiers,
-              client_x := client_x,
-              client_y := client_y,
-              page_x := page_x,
-              page_y := page_y,
-              screen_x := screen_x,
-              screen_y := screen_y,
-              offset_x := offset_x,
-              offset_y := offset_y,
-              button := button,
-              buttons := buttons,
-              detail := detail,
-              pointer_id := pointer_id,
-              pointer_type := pointer_type,
-              pressure := pressure,
-              is_primary := I64.beq is_primary_raw 1i64,
-              width := width,
-              height := height,
-              key := key,
-              code := code,
-              repeat := I64.beq repeat_raw 1i64,
-              location := location,
-              delta_x := delta_x,
-              delta_y := delta_y,
-              delta_z := delta_z,
-              delta_mode := delta_mode,
-              value := value,
-              checked := I64.beq checked_raw 1i64,
-              data := data,
-              data_types := WebEvent.split_lines types_text,
-              files := files,
-              effect_allowed := effect_allowed,
-              drop_effect := drop_effect,
-              default_prevented := I64.beq default_prevented_raw 1i64 };
-        IO.pure ev
+    let kind <- IO.mk (event_str_raw 1i64);
+    let pointer : Bool := is_pointer_kind kind;
+    let keyed : Bool := is_key_kind kind;
+    let form : Bool := is_form_kind kind;
+    let drag : Bool := is_drag_kind kind;
+    let clip : Bool := is_clipboard_kind kind;
+    let payload : Bool := drag || clip;
+    let pointer_type <- str_if pointer 2i64;
+    let key <- str_if keyed 3i64;
+    let code <- str_if keyed 4i64;
+    let value <- str_if form 5i64;
+    let effect_allowed <- str_if drag 6i64;
+    let drop_effect <- str_if drag 7i64;
+    let data <- if payload then IO.mk (event_data_raw "text/plain") else IO.pure "";
+    let types_text <- if payload then IO.mk event_types_raw else IO.pure "";
+    let file_count <- if payload then IO.mk event_files_count_raw else IO.pure 0i64;
+    let files <- if payload then read_files file_count 0i64 List.empty else IO.pure List.empty;
+    let time_stamp <- IO.mk (event_f64_raw 15i64);
+    let modifiers <- IO.mk (event_i64_raw 11i64);
+    let client_x <- IO.mk (event_f64_raw 1i64);
+    let client_y <- IO.mk (event_f64_raw 2i64);
+    let page_x <- IO.mk (event_f64_raw 3i64);
+    let page_y <- IO.mk (event_f64_raw 4i64);
+    let screen_x <- IO.mk (event_f64_raw 5i64);
+    let screen_y <- IO.mk (event_f64_raw 6i64);
+    let offset_x <- IO.mk (event_f64_raw 7i64);
+    let offset_y <- IO.mk (event_f64_raw 8i64);
+    let button <- IO.mk (event_i64_raw 1i64);
+    let buttons <- IO.mk (event_i64_raw 2i64);
+    let detail <- IO.mk (event_i64_raw 3i64);
+    let pointer_id <- IO.mk (event_i64_raw 4i64);
+    let pressure <- IO.mk (event_f64_raw 12i64);
+    let is_primary_raw <- IO.mk (event_i64_raw 8i64);
+    let width <- IO.mk (event_f64_raw 13i64);
+    let height <- IO.mk (event_f64_raw 14i64);
+    let repeat_raw <- IO.mk (event_i64_raw 7i64);
+    let location <- IO.mk (event_i64_raw 5i64);
+    let delta_x <- IO.mk (event_f64_raw 9i64);
+    let delta_y <- IO.mk (event_f64_raw 10i64);
+    let delta_z <- IO.mk (event_f64_raw 11i64);
+    let delta_mode <- IO.mk (event_i64_raw 6i64);
+    let checked_raw <- IO.mk (event_i64_raw 9i64);
+    let default_prevented_raw <- IO.mk (event_i64_raw 13i64);
+    let ev : WebEvent :=
+        { kind := kind,
+            valid := true,
+            time_stamp := time_stamp,
+            modifiers := modifiers,
+            client_x := client_x,
+            client_y := client_y,
+            page_x := page_x,
+            page_y := page_y,
+            screen_x := screen_x,
+            screen_y := screen_y,
+            offset_x := offset_x,
+            offset_y := offset_y,
+            button := button,
+            buttons := buttons,
+            detail := detail,
+            pointer_id := pointer_id,
+            pointer_type := pointer_type,
+            pressure := pressure,
+            is_primary := I64.beq is_primary_raw 1i64,
+            width := width,
+            height := height,
+            key := key,
+            code := code,
+            repeat := I64.beq repeat_raw 1i64,
+            location := location,
+            delta_x := delta_x,
+            delta_y := delta_y,
+            delta_z := delta_z,
+            delta_mode := delta_mode,
+            value := value,
+            checked := I64.beq checked_raw 1i64,
+            data := data,
+            data_types := WebEvent.split_lines types_text,
+            files := files,
+            effect_allowed := effect_allowed,
+            drop_effect := drop_effect,
+            default_prevented := I64.beq default_prevented_raw 1i64 };
+    IO.pure ev
 }
 
 /// Stop the browser's default action for the event in flight. Called by the

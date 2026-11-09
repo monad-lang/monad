@@ -41,7 +41,7 @@ def Sqlite.exec_pragma (db : Ptr) (sql : String) : IO (Result SqlError Unit) := 
 }
 
 def Sqlite.configure_failed (db : Ptr) (e : SqlError) :
-        IO (Result SqlError SqliteConn) := do {
+    IO (Result SqlError SqliteConn) := do {
     let _ <- IO.mk (sqlite3_close_v2 db);
     return (Result.err e)
 }
@@ -60,7 +60,7 @@ def Sqlite.configure_wal (db : Ptr) : IO (Result SqlError SqliteConn) := do {
 }
 
 def Sqlite.configure_abort (db : Ptr) (rc : I32) :
-        IO (Result SqlError SqliteConn) := do {
+    IO (Result SqlError SqliteConn) := do {
     let msg <- CString.read (sqlite3_errmsg db);
     let _ <- IO.mk (sqlite3_close_v2 db);
     return (Result.err (SqlError.backend msg (I32.to_i64 rc)))
@@ -82,7 +82,7 @@ def Sqlite.configure (db : Ptr) : IO (Result SqlError SqliteConn) := do {
 }
 
 def Sqlite.open_failed (db : Ptr) (rc : I32) :
-        IO (Result SqlError SqliteConn) := do {
+    IO (Result SqlError SqliteConn) := do {
     let msg <- CString.read (sqlite3_errstr rc);
     let _ <- IO.mk (sqlite3_close_v2 db);
     return (Result.err (SqlError.backend msg (I32.to_i64 rc)))

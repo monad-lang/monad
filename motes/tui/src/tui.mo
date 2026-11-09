@@ -80,11 +80,11 @@
 // need natives that do not exist yet; they stay unimplemented rather than
 // stubbed.
 
-use lib::types { CellDelta, Event, Screen }
-use lib::core { empty_screen, mk_rect }
-use lib::render { apply_deltas, diff, render }
-use lib::widget { Widget }
-use lib::input { Input.produce, Input.produce_poll_only, InputReader, input_reader }
+use lib::types {CellDelta, Event, Screen}
+use lib::core {empty_screen, mk_rect}
+use lib::render {apply_deltas, diff, render}
+use lib::widget {Widget}
+use lib::input {Input.produce, Input.produce_poll_only, InputReader, input_reader}
 use lib::terminal {
     Terminal.clear_screen, Terminal.cursor_hide, Terminal.cursor_move, Terminal.cursor_show,
     Terminal.enable_mouse, Terminal.disable_mouse,
@@ -94,8 +94,8 @@ use lib::terminal {
     Terminal.leave_raw_mode, Terminal.reset_style, Terminal.size
 }
 use std::concurrent::fiber {Fiber, FiberError, forkIO, pollFiber}
-use std::io { IO.flush_stdout, IO.write_stdout }
-use std::list { List.length }
+use std::io {IO.flush_stdout, IO.write_stdout}
+use std::list {List.length}
 
 /// Commands `update` returns instead of performing. `none` is the
 /// ordinary case, `quit` stops the loop (the terminal is restored),
@@ -351,8 +351,6 @@ type LoopOutcome (S : Type) (M : Type) {
     loop_done,
     loop_more (model : S) (prev : Screen) (reader : InputReader) (pending : List M) (turns : List (PendingTurn M))
 }
-
-
 
 /// Every pending turn fiber, polled once. A fiber that has completed
 /// drops from the list and its result message joins the next batch

@@ -9,17 +9,17 @@
 /// promise in a managed language.
 
 pub def Ct.eq (a : List U8) (b : List U8) : Bool :=
-  Ct.eq_go a b true
+    Ct.eq_go a b true
 
 #[terminating]
 def Ct.eq_go (a : List U8) (b : List U8) (same : Bool) : Bool :=
-  match a {
-    List.empty => match b {
-      List.empty => same,
-      List.cons _ _ => false
-    },
-    List.cons x xs => match b {
-      List.empty => false,
-      List.cons y ys => Ct.eq_go xs ys (Bool.and same (U8.beq x y))
+    match a {
+        List.empty => match b {
+            List.empty => same,
+            List.cons _ _ => false
+        },
+        List.cons x xs => match b {
+            List.empty => false,
+            List.cons y ys => Ct.eq_go xs ys (Bool.and same (U8.beq x y))
+        }
     }
-  }

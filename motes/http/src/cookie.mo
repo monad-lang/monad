@@ -13,86 +13,86 @@ use lib::types {Headers}
 use lib::strings {Strings.split_at_byte, Strings.split_on}
 
 pub type SameSite {
-  lax,
-  strict,
-  none
+    lax,
+    strict,
+    none
 }
 
 pub struct CookieAttrs {
-  path : String,
-  max_age : Option I64,
-  http_only : Bool,
-  secure : Bool,
-  same_site : SameSite
+    path : String,
+    max_age : Option I64,
+    http_only : Bool,
+    secure : Bool,
+    same_site : SameSite
 }
 
 /// The safe default: `/` path, `HttpOnly`, `SameSite=Lax`, no Max-Age.
 pub def CookieAttrs.default : CookieAttrs :=
-  let a : CookieAttrs :=
-    { path := "/", max_age := Option.none, http_only := true, secure := false, same_site := SameSite.lax } in
-  a
+    let a : CookieAttrs :=
+        { path := "/", max_age := Option.none, http_only := true, secure := false, same_site := SameSite.lax } in
+    a
 
 // ── parsing ─────────────────────────────────────────────────────────────
 
 /// Parse one `Cookie` header value. Order and duplicates are preserved.
 pub def Cookie.parse (header : Option String) : List (Pair String String) :=
-  match header {
-    Option.none => List.empty,
-    Option.some h => Cookie.parse_header h
-  }
+    match header {
+        Option.none => List.empty,
+        Option.some h => Cookie.parse_header h
+    }
 
 /// Parse every `Cookie` header on a request.
 pub def Cookie.parse_headers (headers : Headers) : List (Pair String String) :=
-  Cookie.parse_header_list (Headers.get_all "cookie" headers)
+    Cookie.parse_header_list (Headers.get_all "cookie" headers)
 
 def Cookie.parse_header (h : String) : List (Pair String String) :=
-  Cookie.parse_entries (Strings.split_on ";" h)
+    Cookie.parse_entries (Strings.split_on ";" h)
 
 #[terminating]
 def Cookie.parse_entries (entries : List String) : List (Pair String String) :=
-  match entries {
-    List.empty => List.empty,
-    List.cons e rest =>
-      let trimmed := String.trim e in
-      if String.is_empty trimmed
-      then Cookie.parse_entries rest
-      else
-        match Cookie.parse_one trimmed {
-          Option.none => Cookie.parse_entries rest,
-          Option.some pair => List.cons pair (Cookie.parse_entries rest)
-        }
-  }
+    match entries {
+        List.empty => List.empty,
+        List.cons e rest =>
+            let trimmed := String.trim e in
+            if String.is_empty trimmed
+            then Cookie.parse_entries rest
+            else
+                match Cookie.parse_one trimmed {
+                    Option.none => Cookie.parse_entries rest,
+                    Option.some pair => List.cons pair (Cookie.parse_entries rest)
+                }
+    }
 
 def Cookie.parse_one (e : String) : Option (Pair String String) :=
-  match Strings.split_at_byte 61u8 (String.to_list e) {
-    Pair.pair name_b value_b =>
-      let name := String.trim (String.from_list name_b) in
-      if String.is_empty name
-      then Option.none
-      else Option.some (Pair.pair name (String.trim (String.from_list value_b)))
-  }
+    match Strings.split_at_byte 61u8 (String.to_list e) {
+        Pair.pair name_b value_b =>
+            let name := String.trim (String.from_list name_b) in
+            if String.is_empty name
+            then Option.none
+            else Option.some (Pair.pair name (String.trim (String.from_list value_b)))
+    }
 
 #[terminating]
 def Cookie.parse_header_list (headers : List String) : List (Pair String String) :=
-  match headers {
-    List.empty => List.empty,
-    List.cons h rest => List.append (Cookie.parse_header h) (Cookie.parse_header_list rest)
-  }
+    match headers {
+        List.empty => List.empty,
+        List.cons h rest => List.append (Cookie.parse_header h) (Cookie.parse_header_list rest)
+    }
 
 /// First value for `name`, or `none`.
 pub def Cookie.lookup (name : String) (cookies : List (Pair String String)) : Option String :=
-  Cookie.lookup_go name cookies
+    Cookie.lookup_go name cookies
 
 #[terminating]
 def Cookie.lookup_go (name : String) (cookies : List (Pair String String)) : Option String :=
-  match cookies {
-    List.empty => Option.none,
-    List.cons head rest =>
-      match head {
-        Pair.pair k v =>
-          if String.beq k name then Option.some v else Cookie.lookup_go name rest
-      }
-  }
+    match cookies {
+        List.empty => Option.none,
+        List.cons head rest =>
+            match head {
+                Pair.pair k v =>
+                    if String.beq k name then Option.some v else Cookie.lookup_go name rest
+            }
+    }
 
 // ── serialization ───────────────────────────────────────────────────────
 
@@ -100,104 +100,104 @@ def Cookie.lookup_go (name : String) (cookies : List (Pair String String)) : Opt
 /// rather than escaped. The name is filtered to token bytes for the same
 /// reason: a `;`, `=` or CR in a name would forge attributes or a header.
 pub def Cookie.render (name : String) (value : String) : String :=
-  String.concat (Cookie.sanitize_name name)
-    (String.concat "=" (Cookie.sanitize value))
+    String.concat (Cookie.sanitize_name name)
+        (String.concat "=" (Cookie.sanitize value))
 
 /// A cookie name is an RFC 9110 token (the cookie grammar reuses it).
 #[terminating]
 def Cookie.sanitize_name (name : String) : String :=
-  String.from_list (Cookie.sanitize_name_go (String.to_list name))
+    String.from_list (Cookie.sanitize_name_go (String.to_list name))
 
 #[terminating]
 def Cookie.sanitize_name_go (bytes : List U8) : List U8 :=
-  match bytes {
-    List.empty => List.empty,
-    List.cons b rest =>
-      if Cookie.token_octet b
-      then List.cons b (Cookie.sanitize_name_go rest)
-      else Cookie.sanitize_name_go rest
-  }
+    match bytes {
+        List.empty => List.empty,
+        List.cons b rest =>
+            if Cookie.token_octet b
+            then List.cons b (Cookie.sanitize_name_go rest)
+            else Cookie.sanitize_name_go rest
+    }
 
 def Cookie.token_octet (b : U8) : Bool :=
-  if U8.lt b 33u8 then false
-  else if U8.lt 126u8 b then false
-  else if U8.beq b 34u8 then false
-  else if U8.beq b 40u8 then false
-  else if U8.beq b 41u8 then false
-  else if U8.beq b 44u8 then false
-  else if U8.beq b 47u8 then false
-  else if U8.beq b 58u8 then false
-  else if U8.beq b 59u8 then false
-  else if U8.beq b 60u8 then false
-  else if U8.beq b 61u8 then false
-  else if U8.beq b 62u8 then false
-  else if U8.beq b 63u8 then false
-  else if U8.beq b 64u8 then false
-  else if U8.beq b 91u8 then false
-  else if U8.beq b 92u8 then false
-  else if U8.beq b 93u8 then false
-  else if U8.beq b 123u8 then false
-  else if U8.beq b 125u8 then false
-  else true
+    if U8.lt b 33u8 then false
+    else if U8.lt 126u8 b then false
+    else if U8.beq b 34u8 then false
+    else if U8.beq b 40u8 then false
+    else if U8.beq b 41u8 then false
+    else if U8.beq b 44u8 then false
+    else if U8.beq b 47u8 then false
+    else if U8.beq b 58u8 then false
+    else if U8.beq b 59u8 then false
+    else if U8.beq b 60u8 then false
+    else if U8.beq b 61u8 then false
+    else if U8.beq b 62u8 then false
+    else if U8.beq b 63u8 then false
+    else if U8.beq b 64u8 then false
+    else if U8.beq b 91u8 then false
+    else if U8.beq b 92u8 then false
+    else if U8.beq b 93u8 then false
+    else if U8.beq b 123u8 then false
+    else if U8.beq b 125u8 then false
+    else true
 
 #[terminating]
 def Cookie.sanitize (value : String) : String :=
-  String.from_list (Cookie.sanitize_go (String.to_list value))
+    String.from_list (Cookie.sanitize_go (String.to_list value))
 
 #[terminating]
 def Cookie.sanitize_go (bytes : List U8) : List U8 :=
-  match bytes {
-    List.empty => List.empty,
-    List.cons b rest =>
-      if Cookie.cookie_octet b
-      then List.cons b (Cookie.sanitize_go rest)
-      else Cookie.sanitize_go rest
-  }
+    match bytes {
+        List.empty => List.empty,
+        List.cons b rest =>
+            if Cookie.cookie_octet b
+            then List.cons b (Cookie.sanitize_go rest)
+            else Cookie.sanitize_go rest
+    }
 
 /// Attribute values (`Path`) use the same permissive octet filter; the bytes
 /// that matter (`;` and the CTLs) are not cookie-octets.
 #[terminating]
 def Cookie.sanitize_attr (s : String) : String :=
-  String.from_list (Cookie.sanitize_go (String.to_list s))
+    String.from_list (Cookie.sanitize_go (String.to_list s))
 
 def Cookie.cookie_octet (b : U8) : Bool :=
-  if U8.lt b 33u8 then false
-  else if U8.lt 126u8 b then false
-  else if U8.beq b 34u8 then false
-  else if U8.beq b 44u8 then false
-  else if U8.beq b 59u8 then false
-  else if U8.beq b 92u8 then false
-  else true
+    if U8.lt b 33u8 then false
+    else if U8.lt 126u8 b then false
+    else if U8.beq b 34u8 then false
+    else if U8.beq b 44u8 then false
+    else if U8.beq b 59u8 then false
+    else if U8.beq b 92u8 then false
+    else true
 
 /// A `("Set-Cookie", rendered)` pair.
 pub def Cookie.set_cookie (name : String) (value : String) (attrs : CookieAttrs) : Pair String String :=
-  Pair.pair "Set-Cookie" (Cookie.render_with_attrs name value attrs)
+    Pair.pair "Set-Cookie" (Cookie.render_with_attrs name value attrs)
 
 /// An expiring cookie (`Max-Age=0`) that removes `name` from the client.
 pub def Cookie.clear (name : String) (attrs : CookieAttrs) : Pair String String :=
-  let cleared : CookieAttrs := { attrs with max_age := Option.some 0 } in
-  Cookie.set_cookie name "" cleared
+    let cleared : CookieAttrs := { attrs with max_age := Option.some 0 } in
+    Cookie.set_cookie name "" cleared
 
 def Cookie.render_with_attrs (name : String) (value : String) (attrs : CookieAttrs) : String :=
-  let base := Cookie.render name value in
-  let with_path :=
-    if String.is_empty attrs.path
-    then base
-    else String.concat base (String.concat "; Path=" (Cookie.sanitize_attr attrs.path)) in
-  let with_age :=
-    match attrs.max_age {
-      Option.none => with_path,
-      Option.some n => String.concat with_path (String.concat "; Max-Age=" (I64.to_string n))
-    } in
-  let with_http :=
-    if attrs.http_only then String.concat with_age "; HttpOnly" else with_age in
-  let with_secure :=
-    if attrs.secure then String.concat with_http "; Secure" else with_http in
-  String.concat with_secure (String.concat "; SameSite=" (Cookie.same_site_str attrs.same_site))
+    let base := Cookie.render name value in
+    let with_path :=
+        if String.is_empty attrs.path
+        then base
+        else String.concat base (String.concat "; Path=" (Cookie.sanitize_attr attrs.path)) in
+    let with_age :=
+        match attrs.max_age {
+            Option.none => with_path,
+            Option.some n => String.concat with_path (String.concat "; Max-Age=" (I64.to_string n))
+        } in
+    let with_http :=
+        if attrs.http_only then String.concat with_age "; HttpOnly" else with_age in
+    let with_secure :=
+        if attrs.secure then String.concat with_http "; Secure" else with_http in
+    String.concat with_secure (String.concat "; SameSite=" (Cookie.same_site_str attrs.same_site))
 
 def Cookie.same_site_str (s : SameSite) : String :=
-  match s {
-    SameSite.lax => "Lax",
-    SameSite.strict => "Strict",
-    SameSite.none => "None"
-  }
+    match s {
+        SameSite.lax => "Lax",
+        SameSite.strict => "Strict",
+        SameSite.none => "None"
+    }
