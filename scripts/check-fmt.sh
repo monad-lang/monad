@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Run `monad fmt --check` over the opt-in ratchet list.
+# Run `monad fmt --check` over the whole Monad source corpus.
 #
 # Usage: scripts/check-fmt.sh [monad-binary]
 #
@@ -8,9 +8,18 @@
 # target-monad/fmt-build/monad (scripts/build-self-hosted.sh), and the
 # fallback tries the usual local build directories, then `monad` on PATH.
 #
-# The ratchet is scripts/fmt-ratchet.txt: paths the project has decided to
-# keep formatted. Growing it is deliberate; the whole corpus is not formatted
-# yet (see the file's own header).
+# `paths` below is every parseable `.mo` source in the checkout. Two groups
+# are deliberately EXCLUDED because they are designed not to parse:
+#
+#   * fixtures/lsp/                      intentionally invalid, and
+#                                        byte-offset-sensitive LSP fixtures
+#                                        (scripts/replay-lsp-session.sh)
+#   * scripts/weaver-tui-repro/probes/   intentional parse-failure repros
+#
+# Markdown fences (docs/src/*.md, AGENTS.md) are not `.mo` files and are
+# outside `monad fmt`'s scope. A NEW top-level source root has to be added
+# to `paths`, or it is not gated; `motes` covers every mote, including ones
+# that are not workspace members.
 set -euo pipefail
 
 root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -35,25 +44,33 @@ if [ -z "$bin" ]; then
   exit 1
 fi
 
-list="$root/scripts/fmt-ratchet.txt"
-if [ ! -f "$list" ]; then
-  echo "check-fmt.sh: missing $list" >&2
-  exit 1
-fi
+paths=(
+  init
+  std
+  sys
+  lang
+  codegen
+  cli
+  llvm
+  runtime
+  build
+  eval
+  slow_tests
+  bench
+  proofs
+  motes
+  examples
+  docs/site/monad_website
+  fixtures/wasm
+  fixtures/cfg
+)
 
-paths=()
-while IFS= read -r line; do
-  line="${line%%#*}"
-  line="$(printf '%s' "$line" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')"
-  if [ -n "$line" ]; then
-    paths+=("$line")
+for path in "${paths[@]}"; do
+  if [ ! -e "$path" ]; then
+    echo "check-fmt.sh: missing corpus path $path" >&2
+    exit 1
   fi
-done < "$list"
-
-if [ "${#paths[@]}" -eq 0 ]; then
-  echo "check-fmt.sh: $list names no paths" >&2
-  exit 1
-fi
+done
 
 echo "check-fmt.sh: checking ${#paths[@]} path(s) with $bin"
 exec "$bin" fmt --check "${paths[@]}"

@@ -344,11 +344,11 @@ jobs:
             --profile "$HOME/.monad-ci-devshell" \
             -c scripts/ci-self-compile.sh
 
-      # The formatter ratchet runs on the compiler THIS tree just built, so
-      # the style it enforces is this commit's. It checks the opt-in
-      # scripts/fmt-ratchet.txt set; the rest of the corpus is not migrated
-      # yet. (scripts/ci-compiler-checks.sh also runs it for manual use.)
-      - name: Formatting ratchet
+      # The formatting gate runs on the compiler THIS tree just built, so the
+      # style it enforces is this commit's. It checks the whole corpus
+      # (scripts/check-fmt.sh); only the intentionally unparseable fixtures
+      # are excluded. (scripts/ci-compiler-checks.sh also runs it.)
+      - name: Formatting gate
         run: |
           nix develop --no-pure-eval --accept-flake-config \
             --profile "$HOME/.monad-ci-devshell" \

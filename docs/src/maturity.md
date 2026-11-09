@@ -81,7 +81,7 @@ commit this book ships with, not inferred from intent.
 | Editor tooling | **Host only** | The LSP server, MCP server, REPL, and `organize-imports` all live in the host. No syntax highlighting for any editor, and no tree-sitter grammar. |
 | CI | **Working** | Lint, full test sweep, and a self-hosting bootstrap check on every push. The release build runs inside the test and bootstrap jobs, not as a separate gate. The sweep runs the **self-hosted** runner against a freshly self-compiled binary, so `monad test` itself is covered. |
 | Documentation | **Partial** | This book. Every code block is type-checked; prose is not. |
-| Formatter | **Partial** | `monad fmt` canonicalizes whitespace, indentation and blank runs through a lossless tokenizer; it preserves comments and author line breaks and never rewrites tokens. No line-width reflow yet, and the whole corpus is not migrated: CI checks the opt-in `scripts/fmt-ratchet.txt` set. `organize-imports`, in the host, remains the only codemod. |
+| Formatter | **Working** | `monad fmt` canonicalizes whitespace, indentation and blank runs through a lossless tokenizer; it preserves comments and author line breaks and never rewrites tokens. The whole corpus is formatted and CI gates it with `scripts/check-fmt.sh`. No line-width reflow yet. `organize-imports`, in the host, remains the only codemod. |
 | Package registry | **Planned** | |
 | Doc generator | **Planned** | Docstrings are parsed and retained, but nothing renders them. |
 | Debugger integration | **Planned** | DWARF is emitted **by default** now (`--release` opts out) and carries a distinct location per term, not one per top-level definition — but nothing consumes it yet. |

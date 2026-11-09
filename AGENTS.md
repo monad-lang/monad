@@ -179,8 +179,8 @@ scripts/bump-nightly-pin.sh [--check|--dry-run]   # move nix/nightly.nix to the 
 - `monad fmt` canonicalizes whitespace and indentation; it never reorders or
   rewrites tokens, never moves a comment across a token, and preserves the
   author's line breaks. `--check` exits 1 if anything would change.
-  `scripts/check-fmt.sh` runs it over the opt-in `scripts/fmt-ratchet.txt`
-  set in CI (the whole corpus is not formatted yet). The library lives in
+  `scripts/check-fmt.sh` runs it over the whole corpus in CI (only the
+  intentionally unparseable fixtures are excluded). The library lives in
   `motes/fmt/`: a reusable lossless tokenizer (`lexer.mo`) plus the layout
   policy (`rules.mo`, `render.mo`).
 - Use `--release` for self-hosted workloads (anything running

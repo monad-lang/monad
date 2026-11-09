@@ -22,11 +22,14 @@ use lang::module {expand_check_paths, try_parse_decls_strict}
 use lang::pretty {show_decls}
 use fmt::fmt {Fmt.default_config, Fmt.format_source}
 
-/// The compiler corpus. Kept as explicit roots rather than the whole repo so
-/// an unrelated `.mo` fixture with intentionally invalid syntax (if one ever
-/// appears) does not turn this gate red for the wrong reason.
+/// The compiler corpus: the same roots `scripts/check-fmt.sh` gates in CI.
+/// The two groups that are designed not to parse are excluded:
+/// `fixtures/lsp/` (intentionally invalid, offset-sensitive) and
+/// `scripts/weaver-tui-repro/probes/` (parse-failure repros).
 def corpus_roots : List String :=
-    ["init", "std", "lang", "cli", "llvm", "runtime", "build", "eval", "motes", "examples"]
+    ["init", "std", "sys", "lang", "codegen", "cli", "llvm", "runtime", "build",
+        "eval", "slow_tests", "bench", "proofs", "motes", "examples",
+        "docs/site/monad_website", "fixtures/wasm", "fixtures/cfg"]
 
 def decls_render (src : String) (path : String) : Option String :=
     match try_parse_decls_strict src (Option.some path) {
