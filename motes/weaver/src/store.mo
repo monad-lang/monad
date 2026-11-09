@@ -833,9 +833,11 @@ def read_back (p : Path) (text : String) : IO Bool := do {
     }
 }
 
-/// Data first, cache second: `mv` makes the replacement atomic.
+/// Data first, cache second: `mv` makes the replacement atomic. The temp
+/// name carries the pid, so two weavers writing one file (a shared plan
+/// repo) never share a temp file.
 def write_atomic (p : Path) (text : String) : IO Bool := do {
-    let tmp : Path := Path.with_suffix p ".tmp";
+    let tmp : Path := Path.with_suffix p (String.concat "." (String.concat (I64.to_string process_id) ".tmp"));
     let ok <- write_verified tmp text;
     if Bool.not ok then IO.pure false
     else do {
@@ -843,6 +845,10 @@ def write_atomic (p : Path) (text : String) : IO Bool := do {
         return (rc == 0)
     }
 }
+
+/// The store's atomic write, for files outside a session (plan files).
+pub def Store.write_atomic_at (p : Path) (text : String) : IO Bool :=
+    write_atomic p text
 
 pub def Store.ensure_root (root : Path) : IO Bool := do {
     mkdir_p root;
