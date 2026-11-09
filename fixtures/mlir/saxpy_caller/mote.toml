@@ -1,0 +1,26 @@
+# The Phase 0 MLIR caller fixture: a Monad program that reaches the
+# hand-written kernel in `../saxpy.mlir` through `#[extern "c"]`.
+#
+# It is a MOTE and not a loose `.mo` file for one reason only: `[link]
+# libs` is the mechanism that puts `-lsaxpyfixture` on the link line, and
+# that is a property of the PACKAGE, not of the declaration
+# (`lang/src/mote.mo`'s `Mote.link_libs`; `codegen/src/emit.mo`'s
+# `ExternInfo` deliberately carries no library name for exactly this
+# reason). `scripts/check-mlir-toolchain.sh` builds `saxpy.mlir` into
+# `libsaxpyfixture.a` in a temp dir and puts that dir on `LIBRARY_PATH`,
+# so no store path is baked in here.
+#
+# NOT a workspace member: this mote is only ever built by that script,
+# which passes an explicit path. Adding it to the root `mote.toml` would
+# make `monad check --workspace` and every sweep load a fixture whose
+# kernels do not exist until the script has run, which is a failure mode
+# `fixtures/` exists to avoid (cf. `fixtures/cfg/`, also not a member).
+[mote]
+name = "saxpy_caller"
+version = "0.1.0"
+edition = "2026"
+
+# Resolved by the script through `LIBRARY_PATH`; this line is what makes
+# `clang` receive `-lsaxpyfixture`.
+[link]
+libs = ["saxpyfixture"]

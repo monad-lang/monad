@@ -8,6 +8,27 @@
 { pkgs, ... }:
 
 let
+  # The LLVM toolchain, pinned as ONE attribute set rather than as the bare
+  # `llvm`/`clang`/`lld` top-level aliases. Three of those four resolve to the
+  # same store path today (all 21.1.8 in this nixpkgs), so the pin changes
+  # nothing observable right now -- it exists because `mlir` has no bare alias
+  # at all, and the moment `mlir` joins the list the four have to agree. Bare
+  # `llvm`/`clang`/`lld` follow nixpkgs' DEFAULT LLVM, which moves
+  # independently of any `llvmPackages_NN` name; a `mlir-opt` 21 feeding
+  # `mlir-translate` output to an `llc` 22 is a real, silent failure mode (the
+  # textual `.ll` is not a versioned interface -- see
+  # plans/bootstrapping/mlir-codegen.md Decision 2), and it would surface as a
+  # confusing `llc` diagnostic rather than as a nix evaluation error.
+  #
+  # `mlir` is the MLIR backend's whole toolchain: `mlir-opt`,
+  # `mlir-translate`, `mlir-runner` (renamed from `mlir-cpu-runner` in
+  # LLVM 20), `mlir-query`, `mlir-reduce`, `mlir-lsp-server` -- textual MLIR
+  # through subprocesses, no libMLIR linkage and no C++ in the build.
+  # `scripts/check-mlir-toolchain.sh --inventory` prints what this attribute
+  # actually resolves to. `libmlir_cuda_runtime.so` is deliberately absent
+  # from it, and mlir-codegen Decision 4 relies on that absence.
+  llvmToolchain = pkgs.llvmPackages_21;
+
   # wasi-sdk is not packaged in the pinned nixpkgs, so pin the official release
   # tarball. The prebuilt clang needs libtinfo (and the runtime C needs zlib),
   # so autoPatchelfHook rewrites its RPATH against the nix store libraries.
@@ -65,9 +86,13 @@ in
     python3
     wasmtime
     nodejs
-    lld
-    llvm
-    clang
+    # Was `lld` `llvm` `clang`, three bare aliases. Now one pinned set (see
+    # `llvmToolchain` above) so `mlir` cannot desync from the `llc` that
+    # consumes its output.
+    llvmToolchain.lld
+    llvmToolchain.llvm
+    llvmToolchain.clang
+    llvmToolchain.mlir
     # Conservative GC for the GENERATED runtime (runtime/src/runtime.c),
     # not for anything in this repo's Rust host. The nix cc-wrapper puts
     # its include/lib paths on clang's search path, which is why

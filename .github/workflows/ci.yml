@@ -548,6 +548,25 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
+      # Phase 0 of plans/bootstrapping/mlir-codegen.md: the toolchain and
+      # ABI spike. Pins llvmPackages_21 (mlir included) in nix/packages.nix
+      # and drives ONE hand-written saxpy.mlir through
+      # mlir-opt --verify-each -> mlir-translate -> llc -> clang, linked
+      # into a .mo fixture that calls it via #[extern "c"]. No emitter.
+      #
+      # --require, not a bare run: this step exists to prove MLIR works, so
+      # a missing mlir-opt must be a RED job rather than the script's
+      # default clean SKIP. A dev shell built before nix/packages.nix
+      # gained the pin is the expected cause, and the message says so.
+      # Reuses the rung-1 binary the step above self-compiled, so it pays
+      # no second compiler build.
+      - name: MLIR toolchain proof (bare-pointer memref ABI, no emitter)
+        run: |
+          nix develop --no-pure-eval --accept-flake-config \
+            --profile "$HOME/.monad-ci-devshell" \
+            -c scripts/check-mlir-toolchain.sh --require \
+              "$PWD/target-monad/ci-self-compile/monad"
+
       # plans/implementations/async-runtime-thread-safety.md: the runtime's
       # shared state (fd carry table, child registry, nullary cache) under
       # concurrent threads, plain and under ThreadSanitizer. Builds the C

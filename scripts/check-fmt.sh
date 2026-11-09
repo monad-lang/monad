@@ -63,6 +63,7 @@ paths=(
   docs/site/monad_website
   fixtures/wasm
   fixtures/cfg
+  fixtures/mlir
 )
 
 for path in "${paths[@]}"; do
