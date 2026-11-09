@@ -93,7 +93,7 @@ use tui::text {Text.take_width, Text.width}
 use tui::clipboard {Clipboard.copy}
 use tui::widgets::dialog {
     DialogModel, DialogOption, DialogStep, Dialog.make, Dialog.with_default, Dialog.with_notes, Dialog.note_text,
-    Dialog.paint, Dialog.modal, Dialog.modal_refresh, Dialog.option_count,
+    Dialog.paint, Dialog.modal, Dialog.modal_healing, Dialog.modal_refresh, Dialog.option_count,
     Dialog.frame_width_for, Dialog.content_width,
 }
 use tui::terminal {
@@ -149,7 +149,7 @@ def run_tui_with_size (log : Option Logger) (st : WeaverState) (tr : Transcript)
             let start : TuiModel := { m0 with prompt := Prompt.with_history m0.prompt older };
             let app : App TuiModel WeaverMsg :=
                 App.app_ticked start on_event TuiApp.update Model.view 100
-                    tick_redraw reads_input;
+                    tick_redraw reads_input owns_screen;
             // Nothing but the frame may write to the terminal: weaver's own
             // stderr (a GC warning, a runtime diagnostic) and every helper
             // command's output go to the debug log while the TUI runs, and
@@ -177,6 +177,14 @@ def quiet_children (log : Option Logger) : IO I64 := do {
 pub def tick_redraw (m : TuiModel) : Bool :=
     Bool.or (Bool.and m.turn_pending (Bool.not m.modal))
         (Banner.animating m.banner)
+
+/// The loop's paint gate: while a turn's dialog is open it owns the
+/// screen, and this loop writes nothing -- not a message's diff, not a
+/// resize's repaint (a focus change under a tiling window manager is
+/// often a resize) -- so nothing lands in cells the dialog's own diff
+/// would never repair. `overlay_open` folds before the ack and clears
+/// only after the dialog's last paint.
+pub def owns_screen (m : TuiModel) : Bool := Bool.not m.overlay_open
 
 /// The loop's read gate: while a dialog is open, ack its ownership (only
 /// now -- the poll has already marked the overlay open and this model's
@@ -212,7 +220,9 @@ pub def TuiApp.update (m : TuiModel) (msg : WeaverMsg) : Pair TuiModel (Cmd Weav
     let step := update_msg m msg in
     match step {
         Pair.pair m2 cmd =>
-            if m2.repaint_due
+            // The debt waits while a dialog owns the screen: its clear
+            // would erase the dialog, and this loop may not repaint it.
+            if Bool.and m2.repaint_due (owns_screen m2)
             then match with_due_repaint cmd {
                 Pair.pair paid c2 => Pair.pair (Model.refresh_rows { m2 with repaint_due := Bool.not paid }) c2,
             }
@@ -764,6 +774,11 @@ def update_event (m : TuiModel) (e : Event) : Pair TuiModel (Cmd WeaverMsg) :=
             then Pair.pair m Cmd.none
             else Pair.pair (with_streak_reset (fn (mm : TuiModel) => prompt_step mm (PromptMsg.paste text)) m) Cmd.none,
         Event.mouse me => update_mouse m me,
+        // A regained focus repaints everything: whatever wrote to the
+        // screen while the window was away is overwritten. Not a key, so
+        // no streak reset.
+        Event.focus_in => Pair.pair { m with repaint_due := true } Cmd.none,
+        Event.focus_out => Pair.pair m Cmd.none,
         // The frame clock: each tick delivers what the subscriptions want
         // (the dialog handshake always; the banner sweep and a running
         // turn's live display while they animate). An idle tick folds to
@@ -1340,7 +1355,7 @@ def permissions_choose (i : I64) (st : WeaverState) : IO WeaverMsg := do {
 /// edits, with the last result (or a rejected value's error) as its
 /// subtitle, until Esc or an action closes it.
 def settings_dialog_step (st : WeaverState) : IO WeaverMsg := do {
-    Overlay.begin st.store;
+    let _ <- Overlay.begin st.store;
     let pr <- settings_loop st 0 "Enter edits or cycles -- Esc closes";
     Overlay.finish st.store;
     match pr { Pair.pair st2 action => settings_choose_action action st2 }
@@ -2337,11 +2352,13 @@ def memo_fill (colors : Bool) (memo : Ref (Option BodyMemo)) (width : I64) (d : 
 def dialog_run (colors : Bool) (store : Option StoreState) (d : DialogModel) : IO (Pair DialogModel DialogStep) := do {
     // The /tasks monitor owns stdin while it is open: wait it out.
     Overlay.wait_monitor store;
-    Overlay.begin store;
+    let acked <- Overlay.begin store;
     let memo <- Ref.new (Option.none : Option BodyMemo);
     let paint : Option Screen -> DialogModel -> IO (Pair Screen DialogModel) :=
         if d.markdown then paint_dialog_memo colors memo else paint_dialog colors;
-    let r <- Dialog.modal paint d;
+    // A late ack: the main loop stops drawing within a tick of the open
+    // fold; one full repaint 500 ms in covers anything it drew first.
+    let r <- Dialog.modal_healing (if acked then 0 else 5) paint d;
     Overlay.finish store;
     IO.pure r
 }

@@ -18,6 +18,7 @@ use weaver::pty::ctrl_d {run_ctrl_d_single_and_cross_gesture, run_ctrl_d_double_
 use weaver::pty::dialogs {
     run_dialog_deny_with_note,
     run_dialog_arrow_approves,
+    run_dialog_survives_resize_and_focus,
     run_dialog_plan_revise,
     run_dialog_settings_edit,
     run_dialog_open_long_keeps_the_stack_flat
@@ -87,6 +88,9 @@ def test_dialog_deny_with_note : IO Bool := run_dialog_deny_with_note
 
 #[test]
 def test_dialog_arrow_approves : IO Bool := run_dialog_arrow_approves
+
+#[test]
+def test_dialog_survives_resize_and_focus : IO Bool := run_dialog_survives_resize_and_focus
 
 #[test]
 def test_dialog_plan_revise : IO Bool := run_dialog_plan_revise

@@ -147,6 +147,60 @@ def approve_run (bin : String) (root : String) : IO Bool := do {
     }
 }
 
+// ── 2b. Nothing paints over an open dialog ────────────────────────────────
+
+// A focus change under a tiling window manager is often a resize (shrink,
+// then back), followed by the focus reports. The main loop used to repaint
+// its transcript on the resize while the turn's dialog was open, and the
+// dialog's own diff never repaired the cells: the dialog was gone.
+
+def dialog_whole (o : Output) : Bool :=
+    visible o "Permission required" && visible o "Approve once" && visible o "Deny"
+
+def survive_go (m : Pty) (root : String) : IO Bool := do {
+    let note := note_of root;
+    let up <- Pty.wait_until m saw_alt 6000;
+    Pty.send_text m "go\n";
+    let dlg <- Pty.wait_until m dialog_whole 6000;
+    let a <- Check.report "permission dialog opens" dlg;
+    Pty.resize m 20 70;
+    Pty.pump m 400;
+    Pty.resize m 24 80;
+    Pty.pump m 800;
+    let o1 <- Pty.output m;
+    let b <- Check.report "the dialog survives a shrink and grow" (dialog_whole o1);
+    Pty.send_text m "\u{1b}[O";
+    Pty.pump m 300;
+    Pty.send_text m "\u{1b}[I";
+    Pty.pump m 800;
+    let o2 <- Pty.output m;
+    let c <- Check.report "the dialog survives a lost and regained focus" (dialog_whole o2);
+    Pty.send_text m "\u{1b}[A";
+    Pty.pump m 150;
+    Pty.send_text m "\u{1b}[A";
+    Pty.pump m 150;
+    Pty.send_text m "\r";
+    let wrote <- Pty.wait_until m (fn (o : Output) => visible o "wrote it") 6000;
+    let file <- read_text note;
+    let d <- Check.report "the dialog still answers after the resize and focus change"
+        (wrote && file == "hello world");
+    let o3 <- Pty.output m;
+    let e <- Check.report "the transcript repaints with no frame left"
+        (Bool.and (not_found o3 "Permission required") (not_found o3 "Approve once"));
+    Pty.finish m;
+    return (up && a && b && c && d && e)
+}
+
+def survive_run (bin : String) (root : String) : IO Bool := do {
+    let _ <- write_text (note_of root) "hi";
+    let fixture <- edit_fixture root;
+    let r <- spawn_dialogs bin root fixture;
+    match r {
+        Result.err e => do { IO.println (String.concat "FAIL pty dialogs spawn: " e); return false },
+        Result.ok m => survive_go m root
+    }
+}
+
 // ── 3. Plan review: revise fills the input box ────────────────────────────
 
 def plan_go (m : Pty) : IO Bool := do {
@@ -309,6 +363,12 @@ pub def run_dialog_arrow_approves : IO Bool :=
 
 def test_dialog_approve_body (bin : String) : IO Bool :=
     with_root "dialogs_approve" (fn (root : String) => approve_run bin root)
+
+pub def run_dialog_survives_resize_and_focus : IO Bool :=
+    run_gated "pty weaver dialogs" test_dialog_survive_body
+
+def test_dialog_survive_body (bin : String) : IO Bool :=
+    with_root "dialogs_survive" (fn (root : String) => survive_run bin root)
 
 pub def run_dialog_plan_revise : IO Bool :=
     run_gated "pty weaver dialogs" test_dialog_plan_body

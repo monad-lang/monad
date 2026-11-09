@@ -152,9 +152,9 @@ pub def Overlay.ack (store : Option StoreState) : IO Unit := do {
 
 /// The dialog's wait for the main loop to yield stdin: same `seq`, acked.
 #[partial]
-def wait_ack (store : Option StoreState) (seq : I64) (tries : I64) : IO Unit := do {
+def wait_ack (store : Option StoreState) (seq : I64) (tries : I64) : IO Bool := do {
     if 100 < tries
-    then IO.pure unit
+    then IO.pure false
     else do {
         let cur <- Overlay.read store;
         let acked : Bool := match cur {
@@ -162,7 +162,7 @@ def wait_ack (store : Option StoreState) (seq : I64) (tries : I64) : IO Unit := 
             Option.none => false,
         };
         if acked
-        then IO.pure unit
+        then IO.pure true
         else do {
             // A real sleep: `Terminal.poll` returns at once while stdin
             // holds bytes (a focus-regaining click, typed keys), which
@@ -177,7 +177,9 @@ def wait_ack (store : Option StoreState) (seq : I64) (tries : I64) : IO Unit := 
 /// The dialog opening: publish `want` and wait (bounded, ~1 s) for the
 /// main loop to stop reading/drawing. A loop that never polls lets the
 /// dialog proceed; the lost-wake hazard is the caller's documented risk.
-pub def Overlay.begin (store : Option StoreState) : IO Unit := do {
+/// Answers whether the ack arrived: without it the main loop may still
+/// have drawn once over the dialog, which then heals itself.
+pub def Overlay.begin (store : Option StoreState) : IO Bool := do {
     let cur <- Overlay.read store;
     let s : OverlayState := match cur { Option.some x => x, Option.none => Overlay.default };
     let want : OverlayState := { want := true, ack := false, seq := s.seq };
