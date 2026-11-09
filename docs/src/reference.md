@@ -582,10 +582,13 @@ monad pretty file.mo                 # parse and pretty-print
 monad version                        # the git commit this binary was built from
 ```
 
-`build`/`run` take `--verbose`/`-v`, `--debug`/`-g` and `--release`; `eval`,
-`check` and `test` take `--verbose`/`-v`; `repl` takes no flags. Debug info is
-on unless you pass `--release`. Flags may go before or after the paths, and a
-**relative** output name lands inside the target directory (see
+`build`/`run` take `--verbose`/`-v`, `--debug`/`-g` and `--release`; `eval`
+takes `--verbose`/`-v`; `check` and `test` add `--workspace`/`-w`,
+`--no-cache`, `--locked`, `--target-dir` and `--offline` to it (`test` also
+has `--jobs`/`-j`). Debug info is on unless you pass `--release`. Flags may go
+before or after the paths, a long option may take its value joined with `=`
+(`--output=name`) or separate, and a **relative** output name lands inside the
+target directory (see
 [Where the binary lands](./compiling.md#where-the-binary-lands)) — use an
 absolute `-o` when you want the binary somewhere specific. The full command
 surface is in [the Command-line Reference](./cli.md).

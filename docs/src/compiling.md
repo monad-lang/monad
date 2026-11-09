@@ -121,96 +121,31 @@ monad build hello.mo -o "$PWD/hello"
 
 ## The Commands
 
-```text
-monad build [<path>] [name] [--bin <name>] [--output/-o <name>] [--target <triple>] [--verbose/-v] [--debug/-g] [--release] [--no-cache]
-        Parse, type-check and compile a .mo source file to a native binary.
-        <path> may also be a mote DIRECTORY, in which case one of its [[bin]]
-        targets is built: `monad build cli` builds cli/src/main.mo as `monad`,
-        the name that mote's [[bin]] declares. A mote that declares no [[bin]]
-        table has one target anyway -- src/main.mo, named after the mote --
-        and a library mote that declares none and has no src/main.mo is
-        refused rather than guessed at.
-        `--bin <name>` picks one when several of a mote's [[bin]] targets
-        exist on disk -- which is what the refusal above counts, rather than
-        what the manifest declares.
-        With NO <path>, builds the mote containing the working directory --
-        the same default `check` and `test` have. `monad build` and
-        `monad build .` are one code path.
-        `--target <triple>` builds for another target. The triple is the
-        spelling `monad print-targets` lists, which is the spelling the
-        emitter writes; a target whose ARCHITECTURE this llc does not register
-        is rejected by name rather than by a backend error further down. The
-        target is part of the build cache key, so one source built for two
-        targets keeps two entries.
-        It is not a C-compiler redirect. For native cross legs, `runtime.c`
-        and the link go through `clang` by bare name, so building for another
-        target needs THAT target's `clang` first on PATH -- which is what the
-        nightly's cross legs install as a shim. The two wasm profiles are the
-        exception: they are addressed through wasi-sdk's clang by absolute
-        path, selected by `WASI_SDK_PATH` (the dev shell sets it), and the
-        runtime is compiled with `-DMONAD_TARGET_WASI` / `-DMONAD_TARGET_WEB`.
-        See "WebAssembly" below.
+The full surface — every command, flag and exit code — is the
+[Command-line Reference](./cli.md); `monad <command> --help` prints each
+command's own options. The verbs a build touches:
 
-        This verb was called `monad compile` until 2026-09-29. There is no
-        alias: two verbs that both produce a binary differ only in which one
-        you remember.
-
-monad install [<path>] [-o <name>] [--bin <name>] [--target <triple>] [--verbose/-v] [--no-cache]
-        Build a RELEASE binary (the release profile, no DWARF debug info) by
-        the same cached path as `build`, then install it to
-        `$MONAD_HOME/bin/<name>`. `MONAD_HOME` defaults to `$HOME/.monad`, so
-        the binary lands beside the compiler in the layout `monadup` uses.
-        <path> has build's meaning: a mote directory installs its [[bin]]
-        target under its own name, while a single .mo file has no name of its
-        own and therefore needs `-o <name>`.
-        The destination is written as `<dest>.tmp` and moved into place, so an
-        existing file OR SYMLINK at the destination is replaced atomically --
-        `cp` alone would write through a monadup-managed `bin/monad` symlink.
-        Installing the compiler binary itself does not stage a toolchain root;
-        `monadup` owns the `active`/`downloads/<tag>` layout.
-
-monad run <path> [--verbose/-v] [--debug/-g] [--release]
-        Compile and then execute. The binary is always called `run_out`, so
-        there is no -o; the program's exit code becomes monad's.
-
-monad eval <path> [--verbose/-v]
-        Evaluate with the built-in interpreter. Pure programs only.
-
-monad repl
-        Interactive read-eval-print loop over the same interpreter.
-        Expressions print `value : type`; declarations persist in a session.
-
-monad pretty <path>
-        Parse and pretty-print a .mo source file.
-
-monad check [<path>...] [--workspace/-w] [--verbose/-v] [--no-cache]
-        Parse and type-check; no execution.
-        Any <path> that is a directory is expanded recursively to its *.mo files.
-        With no <path>, checks the mote containing the working directory;
-        --workspace checks every mote in the enclosing workspace.
-        --no-cache (or MONAD_NO_CACHE) skips the cache; a single-file run always does.
-        With no <path> and no mote above the working directory it prints why
-        and exits 1, rather than reporting a pass for having checked nothing.
-
-monad test [<path>...] [--workspace/-w] [--verbose/-v]
-        Compile each file's own #[test] defs into a native binary and run it.
-        Any <path> that is a directory is expanded recursively to its *.mo files.
-        With no <path>, tests the mote containing the working directory;
-        --workspace tests every mote in the enclosing workspace.
-        A file with no #[test]s is skipped rather than failed. A file that
-        defines its own main is fine: that main is renamed out of the way
-        and the generated test driver becomes the entry point.
-
-monad print-targets
-        List the triples --target accepts, and what this llc can build for.
-        Each is the spelling the emitter writes; `(llc ...)` adds the argv when
-        llc needs more than the triple to select the target, which today means
-        riscv64. Then this machine's own target, which is what no --target
-        means, and llc's whole registered architecture list.
-
-monad version
-        Print the git commit this binary was built from.
-```
+- `monad build [<path>]` — compile a `.mo` file, or a mote's `[[bin]]`
+  target, to a native binary. `monad build cli` builds `cli/src/main.mo`
+  as `monad`. A mote that declares no `[[bin]]` table has one target
+  anyway — `src/main.mo`, named after the mote — and a library mote
+  that declares none and has no `src/main.mo` is refused rather than
+  guessed at. `--bin <name>` picks one when several `[[bin]]` targets
+  exist on disk. With no `<path>`, builds the mote containing the
+  working directory. This verb was called `monad compile` until
+  2026-09-29; there is no alias.
+- `monad install [<path>]` — build a **release** binary (no debug info)
+  by the same cached path, then install it atomically to
+  `$MONAD_HOME/bin/<name>`.
+- `monad run <path> [--] [args...]` — compile and execute; everything
+  after `<path>` is the compiled program's own argv, and its exit code
+  becomes `monad`'s.
+- `monad check [<path>...]` / `monad test [<path>...]` — parse and
+  typecheck (no execution), or compile and run each file's own
+  `#[test]` defs. Both take the same path forms as each other, verify
+  `mote.lock` before compiling (`--locked` fails when a dependency's
+  declared tag/branch/rev no longer matches the lock), and accept
+  `--offline`, ignoring it: they never use the network.
 
 ## WebAssembly
 
@@ -255,12 +190,12 @@ float formatting (`f64_to_string`, `f64_of_string`). Console I/O (`IO.println`,
 `IO.write_stdout`, `IO.read_line`) and `std_fd`/`stream_read`/`stream_write`
 are available on both.
 
-Running `monad` with no arguments prints this usage.
+Running `monad` with no arguments prints the usage screen and exits 2.
 
 Flags are position-independent — `monad build -v hello.mo` and
-`monad build hello.mo -v` are the same command. `--output`/`-o` and `--target`
-take their value as a **separate argument**: `--output=NAME` and
-`--target=<triple>` are not recognised.
+`monad build hello.mo -v` are the same command. A long option takes its value
+either as a separate argument (`--output NAME`) or joined with `=`
+(`--output=NAME`); a valueless flag rejects the `=` form.
 
 `monad test` with no paths covers the mote containing the working directory, so
 it enumerates that mote's sources; `--workspace` covers every member. Pass
