@@ -19,8 +19,8 @@ open IO {println}
 use std::process {exec_cmd, process_id}
 use std::list {List.length}
 use lang::module {
-  FileCheckAndCache, FileCheckResult, check_file_cached, check_file_cached_from_source,
-  module_info_cache_empty,
+    FileCheckAndCache, FileCheckResult, check_file_cached, check_file_cached_from_source,
+    module_info_cache_empty,
 }
 
 /// An undefined name, so this is a real diagnostic rather than a clean

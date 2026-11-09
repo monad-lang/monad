@@ -20,8 +20,8 @@ use std::test {Test.write_fixture}
 use std::process {exec_cmd, process_id}
 use lang::types {LocalScope}
 use lang::module {
-  BestEffortElab, best_effort_decls, elaborate_module_decls_reporting,
-  elaborate_loaded_modules,
+    BestEffortElab, best_effort_decls, elaborate_module_decls_reporting,
+    elaborate_loaded_modules,
 }
 use codegen::decls {filter_reachable_decls}
 use codegen::emit {validate_reachable_elaborated}

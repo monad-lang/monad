@@ -17,7 +17,7 @@
 /// isolating per-call dispatch cost from the one-time overhead of a
 /// smaller test.
 use std::map {
-  Bucket16, HashMap.empty_buckets, HashMap.get_bucket, HashMap.set_bucket,
+    Bucket16, HashMap.empty_buckets, HashMap.get_bucket, HashMap.set_bucket,
 }
 use std::bench {Bench.now, Bench.report, Bench.since}
 use std::list {List.length}

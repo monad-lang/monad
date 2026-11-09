@@ -13,13 +13,13 @@ def make_scope (path : ModulePath) (sd : ScopeData) : Scope := {
     incomplete_match_ok := false,
 }
 
-def is_hole (t : Term) : Bool := 
+def is_hole (t : Term) : Bool :=
     match t {
         Term.hole => true,
         _ => false
     }
 
-def typecheck_module (path : ModulePath) (scope : Scope) (decls : List Decl) : Bool := 
+def typecheck_module (path : ModulePath) (scope : Scope) (decls : List Decl) : Bool :=
     match decls {
         List.empty => true,
         List.cons d rest =>
@@ -30,14 +30,14 @@ def typecheck_module (path : ModulePath) (scope : Scope) (decls : List Decl) : B
                 false
     }
 
-def typecheck_decl (d : Decl) (path : ModulePath) (scope : Scope) : Bool := 
+def typecheck_decl (d : Decl) (path : ModulePath) (scope : Scope) : Bool :=
     match d {
         Decl.def_d df => typecheck_def df scope,
         Decl.inductive_d ind => typecheck_inductive ind scope,
-        _ => true  // Skip use, open, infix, class, instance for now
+        _ => true // Skip use, open, infix, class, instance for now
     }
 
-def typecheck_def (df : Def) (scope : Scope) : Bool := 
+def typecheck_def (df : Def) (scope : Scope) : Bool :=
     match df {
         mk _name typ body _constraints _attrs =>
             // Skip native/abstract definitions (body is Term.hole)
@@ -50,13 +50,13 @@ def typecheck_def (df : Def) (scope : Scope) : Bool :=
                 }
     }
 
-def typecheck_inductive (ind : Inductive) (scope : Scope) : Bool := 
+def typecheck_inductive (ind : Inductive) (scope : Scope) : Bool :=
     match ind {
         mk _name _params _typ constructors _attrs =>
             typecheck_constructors constructors scope
     }
 
-def typecheck_constructors (cons : List InductConstructor) (scope : Scope) : Bool := 
+def typecheck_constructors (cons : List InductConstructor) (scope : Scope) : Bool :=
     match cons {
         List.empty => true,
         List.cons c rest =>
@@ -67,7 +67,7 @@ def typecheck_constructors (cons : List InductConstructor) (scope : Scope) : Boo
                 false
     }
 
-def typecheck_constructor (c : InductConstructor) (scope : Scope) : Bool := 
+def typecheck_constructor (c : InductConstructor) (scope : Scope) : Bool :=
     match c {
         mk _name params typ =>
             match type_check typ Term.hole scope empty_local_types empty_locals {

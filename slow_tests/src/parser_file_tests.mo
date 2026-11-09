@@ -11,13 +11,13 @@ open ParseResult {fail, success}
 #[partial]
 def init_files_safe : List String :=
     ["init/src/id.mo",
-     "init/src/lib.mo",
-     "init/src/list.mo",
-     "init/src/io.mo",
-     "init/src/math.mo",
-     "init/src/number.mo",
-     "init/src/string.mo",
-     "init/src/tests.mo"]
+        "init/src/lib.mo",
+        "init/src/list.mo",
+        "init/src/io.mo",
+        "init/src/math.mo",
+        "init/src/number.mo",
+        "init/src/string.mo",
+        "init/src/tests.mo"]
 
 /// All std/ files to parse
 // `std/derive.mo` added here specifically as the real-corpus
@@ -35,52 +35,52 @@ def std_files : List String :=
 #[partial]
 def example_files_safe : List String :=
     ["examples/do_block.mo",
-     "examples/factorial.mo",
-     "examples/hello.mo",
-     "examples/indexed_monads.mo",
-     "examples/iteration.mo",
-     "examples/iteration_advanced.mo",
-     "examples/pattern_matching.mo",
-     "examples/structs.mo",
-     "examples/test_mote.mo",
-     "examples/tests.mo"]
+        "examples/factorial.mo",
+        "examples/hello.mo",
+        "examples/indexed_monads.mo",
+        "examples/iteration.mo",
+        "examples/iteration_advanced.mo",
+        "examples/pattern_matching.mo",
+        "examples/structs.mo",
+        "examples/test_mote.mo",
+        "examples/tests.mo"]
 
 /// All lang/ files to parse (safe - no box-drawing characters)
 #[partial]
 def lang_files_safe : List String :=
     ["lang/src/elaborate.mo",
-     "cli/src/main.mo",
-     "lang/src/module.mo",
-     "lang/src/pretty.mo",
-     "lang/src/scope.mo"]
+        "cli/src/main.mo",
+        "lang/src/module.mo",
+        "lang/src/pretty.mo",
+        "lang/src/scope.mo"]
 
 /// All init/ files with UTF-8 characters (previously blocked by byte indexing)
 #[partial]
 def init_files_utf8 : List String :=
     ["init/src/string_profile.mo",
-     "init/src/optics.mo"]
+        "init/src/optics.mo"]
 
 /// All std/ files with UTF-8 characters
 #[partial]
 def std_files_utf8 : List String :=
     ["std/src/test_map_full.mo",
-     "std/src/list_tests3b.mo",
-     "std/src/map.mo",
-     "std/src/base.mo",
-     "std/src/list.mo"]
+        "std/src/list_tests3b.mo",
+        "std/src/map.mo",
+        "std/src/base.mo",
+        "std/src/list.mo"]
 
 /// All examples/ files with UTF-8 characters
 #[partial]
 def example_files_utf8 : List String :=
     ["examples/indexed_monads.mo",
-     "examples/optics.mo"]
+        "examples/optics.mo"]
 
 /// All lang/ files with UTF-8 characters (self hosting)
 #[partial]
 def lang_files_utf8 : List String :=
     ["lang/src/parser.mo",
-     "lang/src/types.mo",
-     "codegen/src/emit.mo"]
+        "lang/src/types.mo",
+        "codegen/src/emit.mo"]
 
 /// Parse a single file and return success status.
 ///

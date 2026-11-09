@@ -87,7 +87,7 @@ def main (args : List String) : IO I64 := do {
 }
 "# in
     do {
-      let ok <- compile_source_run_expect source "watch_native" 7;
-      let _ <- exec_cmd "rm" ["-rf", dir];
-      IO.pure ok
+        let ok <- compile_source_run_expect source "watch_native" 7;
+        let _ <- exec_cmd "rm" ["-rf", dir];
+        IO.pure ok
     }

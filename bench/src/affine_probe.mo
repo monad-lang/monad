@@ -22,8 +22,8 @@
 use std::io {IO.println}
 open IO {get_env, println}
 use lang::module {
-  ElaboratedAndCache, FileCheckAndCache, FileCheckResult, check_file_cached,
-  elaborate_loaded_modules_cached, module_info_cache_empty,
+    ElaboratedAndCache, FileCheckAndCache, FileCheckResult, check_file_cached,
+    elaborate_loaded_modules_cached, module_info_cache_empty,
 }
 use lang::scope {scope_globals, scope_instance_candidates}
 use lang::typecheck::copy_class {copy_verdict, CopyVerdict}

@@ -47,7 +47,6 @@ use parsec::char_preds {is_ident_char, is_ident_char_byte, is_space, is_space_by
 
 open ParseResult {fail, success}
 
-
 /// Repeatedly double `s` until it reaches `target` bytes. Doubling, not
 /// append-one-at-a-time: `String.concat` allocates a fresh string per
 /// call, so building an n-byte input one character at a time would be
@@ -57,7 +56,6 @@ def grow_to (s : String) (target : I64) : String :=
     if I64.lt (String.length s) target
     then grow_to (String.concat s s) target
     else s
-
 
 /// How much `take_while` consumed. Also the reason the loops below
 /// accumulate: without consuming the result the whole call could in
@@ -70,13 +68,11 @@ def consumed (r : ParseResult String) : I64 :=
         fail _ => 0
     }
 
-
 #[terminating]
 def scan_spaces (i : I64) (n : I64) (input : String) (acc : I64) : I64 :=
     if I64.beq i n
     then acc
     else scan_spaces (i + 1) n input (acc + consumed (take_while is_space input))
-
 
 #[terminating]
 def scan_idents (i : I64) (n : I64) (input : String) (acc : I64) : I64 :=
@@ -84,20 +80,17 @@ def scan_idents (i : I64) (n : I64) (input : String) (acc : I64) : I64 :=
     then acc
     else scan_idents (i + 1) n input (acc + consumed (take_while is_ident_char input))
 
-
 #[terminating]
 def scan_spaces_byte (i : I64) (n : I64) (input : String) (acc : I64) : I64 :=
     if I64.beq i n
     then acc
     else scan_spaces_byte (i + 1) n input (acc + consumed (take_while_byte is_space_byte input))
 
-
 #[terminating]
 def scan_idents_byte (i : I64) (n : I64) (input : String) (acc : I64) : I64 :=
     if I64.beq i n
     then acc
     else scan_idents_byte (i + 1) n input (acc + consumed (take_while_byte is_ident_char_byte input))
-
 
 /// `calls` * `run_len` characters scanned by each predicate, so the two
 /// shapes below are directly comparable per character.
@@ -126,12 +119,10 @@ def run_bench (calls : I64) (run_len : I64) (label : String) : IO Bool := do {
         && I64.beq spb_total sp_total && I64.beq idb_total id_total)
 }
 
-
 /// Token-shaped: short runs, high call volume. `grow_to` rounds up to a
 /// power of two, so this is 8 characters per call.
 #[test]
 def bench_take_while_short_runs : IO Bool := run_bench 4000 8 "short (4000 calls x 8 chars)"
-
 
 /// Character-cost-shaped: long runs, low call volume. Same total
 /// characters scanned as the short case (32000), so the two numbers

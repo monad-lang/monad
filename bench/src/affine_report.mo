@@ -53,17 +53,17 @@
 use std::io {IO.println}
 open IO {get_env, println}
 use lang::module {
-  ElaboratedAndCache, ElaboratedModules, ModuleInfoCache, elaborate_loaded_modules,
-  elaborate_loaded_modules_cached, expand_check_paths, module_info_cache_empty,
+    ElaboratedAndCache, ElaboratedModules, ModuleInfoCache, elaborate_loaded_modules,
+    elaborate_loaded_modules_cached, expand_check_paths, module_info_cache_empty,
 }
 use lang::types {
-  DebugName, Decl, Def, Identifier, ModulePath, Multiplicity, Scope, SortLevel,
-  Term, TypeError, binder_is_explicit, show_identifier,
+    DebugName, Decl, Def, Identifier, ModulePath, Multiplicity, Scope, SortLevel,
+    Term, TypeError, binder_is_explicit, show_identifier,
 }
 use lang::scope {scope_data_empty}
 use lang::typecheck::usage {
-  BinderKind, BinderUse, attribute_binder_types, collect_binder_uses, ctor_name_set,
-  shared_name_set, typ_is_function,
+    BinderKind, BinderUse, attribute_binder_types, collect_binder_uses, ctor_name_set,
+    shared_name_set, typ_is_function,
 }
 use lang::typecheck::copy_class {CopyVerdict, copy_verdict}
 use lang::typecheck::affine {check_def_strict, copy_vars_of_def, type_var_is_copy}
@@ -294,11 +294,11 @@ pub def Totals.samples (t : Totals) : List String := t.samples
 
 def totals_empty : Totals :=
     { binders := 0, zero := 0, one := 0, many := 0, many_non_copy := 0,
-      by_type := List.empty, unresolved := List.empty,
-      borrowable := 0, borrowed_uses := 0, needs_dup := 0, needs_dup_non_copy := 0,
-      copy_granted := 0, copy_ambiguous := 0,
-      diag_copy_required := 0, diag_used_after_move := 0, diag_linear_unused := 0,
-      diag_other := 0, samples := List.empty }
+        by_type := List.empty, unresolved := List.empty,
+        borrowable := 0, borrowed_uses := 0, needs_dup := 0, needs_dup_non_copy := 0,
+        copy_granted := 0, copy_ambiguous := 0,
+        diag_copy_required := 0, diag_used_after_move := 0, diag_linear_unused := 0,
+        diag_other := 0, samples := List.empty }
 
 /// How an unattributed over-used binder is labelled in the residue
 /// table. A `bk_lam` binder carries no constructor, and its blank name
@@ -643,7 +643,7 @@ def report_affine_usage_compiler : IO Bool := report_on "bench/src/affine_target
 /// with the new build system).
 def corpus_dirs : List String :=
     ["init", "std", "examples", "lang", "cli", "llvm", "runtime", "build",
-     "motes", "slow_tests", "bench", "proofs"]
+        "motes", "slow_tests", "bench", "proofs"]
 
 /// One corpus directory's measured totals, accumulated across the
 /// files expand_check_paths found under it.
@@ -688,7 +688,7 @@ pub def MoteTotal.totals (m : MoteTotal) : Totals := m.totals
 
 def sweep_empty : Sweep :=
     { cache := module_info_cache_empty, grand := totals_empty, motes := List.empty,
-      label := "", dir := totals_empty, dir_files := 0, failed := List.empty }
+        label := "", dir := totals_empty, dir_files := 0, failed := List.empty }
 
 /// The sweep's own file, skipped: this test runs INSIDE
 /// affine_report.mo, and elaborating the very module whose test is
@@ -724,7 +724,7 @@ def sweep_target (f : String) (st : Sweep) : IO Sweep := do {
             let grand : Totals := tally_decls (type_kinds em.scope) ctors borrows em.scope em.target_decls (Sweep.grand st);
             let out : Sweep :=
                 { st with cache := r.cache, dir := dir, grand := grand,
-                  dir_files := Sweep.dir_files st + 1 };
+                    dir_files := Sweep.dir_files st + 1 };
             return out
         },
     }
@@ -820,8 +820,8 @@ def report_affine_usage_corpus : IO Bool := do {
 
 def tally_of (count : I64) (typ : Term) : BinderUse :=
     { name := Identifier.id "x", kind := BinderKind.bk_lam, typ := typ, count := count,
-      owning := count, ctor := Identifier.id "", pos := 0 - 1, view := false,
-      declared := Multiplicity.many, init := Option.none }
+        owning := count, ctor := Identifier.id "", pos := 0 - 1, view := false,
+        declared := Multiplicity.many, init := Option.none }
 
 def i64_type : Term := Term.var (0 - 1) (DebugName.named (Identifier.id "I64"))
 
@@ -844,9 +844,9 @@ def test_type_head_name_reports_unknown_as_question : Bool :=
 /// can exercise (and which `report_affine_usage_compiler` does).
 def probe_scope : Scope :=
     { module_id := ModulePath.mk (List.cons (Identifier.id "probe") List.empty),
-      scope := scope_data_empty,
-      parent := Option.none,
-      incomplete_match_ok := false }
+        scope := scope_data_empty,
+        parent := Option.none,
+        incomplete_match_ok := false }
 
 #[test]
 def test_empty_scope_grants_no_copy : Bool :=
