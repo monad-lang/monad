@@ -26,7 +26,7 @@
 /// bytebuf_ptr`.
 
 pub type ByteBuf {
-  bytebuf
+    bytebuf
 }
 
 #[native "bytebuf_alloc"]
@@ -62,7 +62,7 @@ priv def bytebuf_of_list_raw (xs : List U8) : RawIO ByteBuf
 
 /// Copy `xs` into a fresh buffer.
 pub def ByteBuf.of_list (xs : List U8) : IO ByteBuf :=
-  IO.mk (bytebuf_of_list_raw xs)
+    IO.mk (bytebuf_of_list_raw xs)
 
 #[native "bytebuf_to_list"]
 priv def bytebuf_to_list_raw (b : ByteBuf) (len : I64) : RawIO (List U8)
@@ -70,7 +70,7 @@ priv def bytebuf_to_list_raw (b : ByteBuf) (len : I64) : RawIO (List U8)
 /// The first `len` bytes of the buffer as a list, clamped to the buffer's
 /// own length.
 pub def ByteBuf.to_list (b : ByteBuf) (len : I64) : IO (List U8) :=
-  IO.mk (bytebuf_to_list_raw b len)
+    IO.mk (bytebuf_to_list_raw b len)
 
 #[native "bytebuf_free"]
 priv def bytebuf_free_raw (b : ByteBuf) : RawIO Unit
@@ -85,18 +85,18 @@ pub def ByteBuf.free (b : ByteBuf) : IO Unit := IO.mk (bytebuf_free_raw b)
 /// (U+FFFD) under the interpreter, whose `String` must be UTF-8; the
 /// compiled backend copies them verbatim.
 pub def ByteBuf.to_string (b : ByteBuf) (len : I64) : IO String :=
-  IO.mk (bytebuf_to_string b len)
+    IO.mk (bytebuf_to_string b len)
 
 /// Copy `s`'s bytes into a fresh buffer -- `of_list`'s shape, from text.
 pub def ByteBuf.of_string (s : String) : IO ByteBuf :=
-  IO.mk (bytebuf_of_string s)
+    IO.mk (bytebuf_of_string s)
 
 /// Shrink the recorded length to `n`, keeping the first `n` bytes; `n`
 /// is clamped to `[0, length]`, so this never grows a buffer. The
 /// allocation itself is unchanged -- the bytes past `n` just stop
 /// being part of it.
 pub def ByteBuf.truncate (b : ByteBuf) (n : I64) : IO Unit :=
-  IO.mk (bytebuf_truncate b n)
+    IO.mk (bytebuf_truncate b n)
 
 /// Copy all of `src` into `dst` starting at byte `offset` -- one memmove.
 /// Clamped to `dst`'s length, so this never grows `dst`; an offset
@@ -109,7 +109,7 @@ pub def ByteBuf.truncate (b : ByteBuf) (n : I64) : IO Unit :=
 /// mutable buffer): the caller threads the returned handle on rather
 /// than mentioning the input twice.
 pub def ByteBuf.copy_into (dst : ByteBuf) (offset : I64) (src : ByteBuf) : IO ByteBuf :=
-  IO.mk (bytebuf_copy_into dst offset src)
+    IO.mk (bytebuf_copy_into dst offset src)
 
 #[native "bytebuf_to_string"]
 priv def bytebuf_to_string (b : ByteBuf) (len : I64) : RawIO String

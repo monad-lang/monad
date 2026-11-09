@@ -1,4 +1,3 @@
-
 /// Key-value map type class. Types implementing Map provide ordered
 /// key-value storage with insertion, lookup, and deletion.
 ///
@@ -16,252 +15,252 @@
 /// `HashMap` is already this codebase's own preferred `Map` instance
 /// (see `filter_reachable_decls`'s own doc comment on why), so it's the
 /// correct default here too.
-pub class Map (M: (K : Type) -> (V : Type) -> Type := HashMap) {
-  def empty : M K V
-  def insert (key: K) (val: V) (m: M K V) : M K V
-  def lookup (key: K) (m: M K V) : Option V
-  def delete (key: K) (m: M K V) : M K V
+pub class Map (M : (K : Type) -> (V : Type) -> Type := HashMap) {
+    def empty : M K V
+    def insert (key : K) (val : V) (m : M K V) : M K V
+    def lookup (key : K) (m : M K V) : Option V
+    def delete (key : K) (m : M K V) : M K V
 }
 
 /// Balanced binary search tree (AVL) key-value map.
 pub type BTreeMap K V {
-  empty,
-  node (key: K) (val: V) (left: BTreeMap K V) (right: BTreeMap K V) (height: I64)
+    empty,
+    node (key : K) (val : V) (left : BTreeMap K V) (right : BTreeMap K V) (height : I64)
 }
 
 def BTreeMap.beq [BEq K, BEq V] (a b : BTreeMap K V) : Bool :=
-  BTreeMap.fold (fn r ka va =>
-    r && Map.lookup ka b == some va
-  ) true a
+    BTreeMap.fold (fn r ka va =>
+        r && Map.lookup ka b == some va
+    ) true a
 
 pub instance [BEq K, BEq V] BEq BTreeMap K V {
-  def beq (a b : BTreeMap K V) : Bool := BTreeMap.beq a b
+    def beq (a b : BTreeMap K V) : Bool := BTreeMap.beq a b
 }
 
 /// Eliminator: apply a function if the tree is a node, otherwise return default.
-def BTreeMap.with_node (m: BTreeMap K V) (f: K -> V -> BTreeMap K V -> BTreeMap K V -> I64 -> A) (default: A) : A :=
-  match m {
-    BTreeMap.node k v l r h => f k v l r h,
-    BTreeMap.empty => default
-  }
+def BTreeMap.with_node (m : BTreeMap K V) (f : K -> V -> BTreeMap K V -> BTreeMap K V -> I64 -> A) (default : A) : A :=
+    match m {
+        BTreeMap.node k v l r h => f k v l r h,
+        BTreeMap.empty => default
+    }
 
 /// Return the height of a tree. Empty tree has height 0.
-def BTreeMap.height_of (m: BTreeMap K V) : I64 :=
-  BTreeMap.with_node m (fn k v l r h => h) 0
+def BTreeMap.height_of (m : BTreeMap K V) : I64 :=
+    BTreeMap.with_node m (fn k v l r h => h) 0
 
 /// Create a node, computing the height from children.
-def BTreeMap.create_node {K V : Type} (key: K) (val: V) (left: BTreeMap K V) (right: BTreeMap K V) : BTreeMap K V :=
-  let l := Shared.of left in
-  let r := Shared.of right in
-  let lh := BTreeMap.height_of (Shared.get l) in
-  let rh := BTreeMap.height_of (Shared.get r) in
-  if I64.gt lh rh
-  then BTreeMap.node key val (Shared.get l) (Shared.get r) (lh + 1)
-  else BTreeMap.node key val (Shared.get l) (Shared.get r) (rh + 1)
+def BTreeMap.create_node {K V : Type} (key : K) (val : V) (left : BTreeMap K V) (right : BTreeMap K V) : BTreeMap K V :=
+    let l := Shared.of left in
+    let r := Shared.of right in
+    let lh := BTreeMap.height_of (Shared.get l) in
+    let rh := BTreeMap.height_of (Shared.get r) in
+    if I64.gt lh rh
+    then BTreeMap.node key val (Shared.get l) (Shared.get r) (lh + 1)
+    else BTreeMap.node key val (Shared.get l) (Shared.get r) (rh + 1)
 
 /// Balance a key-value pair with left and right children.
 /// Detects AVL imbalance and applies rotations inline.
-def BTreeMap.balance {K V : Type} (key: K) (val: V) (left: BTreeMap K V) (right: BTreeMap K V) : BTreeMap K V :=
-  let l := Shared.of left in
-  let r := Shared.of right in
-  let lh := BTreeMap.height_of (Shared.get l) in
-  let rh := BTreeMap.height_of (Shared.get r) in
-  if I64.gt lh (rh + 1)
-  then BTreeMap.balance_left_heavy key val (Shared.get l) (Shared.get r)
-  else if I64.gt rh (lh + 1)
-  then BTreeMap.balance_right_heavy key val (Shared.get l) (Shared.get r)
-  else BTreeMap.create_node key val (Shared.get l) (Shared.get r)
+def BTreeMap.balance {K V : Type} (key : K) (val : V) (left : BTreeMap K V) (right : BTreeMap K V) : BTreeMap K V :=
+    let l := Shared.of left in
+    let r := Shared.of right in
+    let lh := BTreeMap.height_of (Shared.get l) in
+    let rh := BTreeMap.height_of (Shared.get r) in
+    if I64.gt lh (rh + 1)
+    then BTreeMap.balance_left_heavy key val (Shared.get l) (Shared.get r)
+    else if I64.gt rh (lh + 1)
+    then BTreeMap.balance_right_heavy key val (Shared.get l) (Shared.get r)
+    else BTreeMap.create_node key val (Shared.get l) (Shared.get r)
 
 /// Handle left-heavy imbalance: check children heights and apply LL or LR rotation.
-def BTreeMap.balance_left_heavy {K V : Type} (key: K) (val: V) (left: BTreeMap K V) (right: BTreeMap K V) : BTreeMap K V :=
-  let k := Shared.of key in
-  let v := Shared.of val in
-  let l := Shared.of left in
-  let r := Shared.of right in
-  BTreeMap.with_node (Shared.get l)
-    (fn lk lv ll lr _ =>
-      let llh := BTreeMap.height_of ll in
-      let lrh := BTreeMap.height_of lr in
-      if I64.gt lrh llh
-      then BTreeMap.rotate_lr (Shared.get k) (Shared.get v) lk lv ll lr (Shared.get r)
-      else BTreeMap.rotate_ll (Shared.get k) (Shared.get v) lk lv ll lr (Shared.get r))
-    (BTreeMap.create_node (Shared.get k) (Shared.get v) (Shared.get l) (Shared.get r))
+def BTreeMap.balance_left_heavy {K V : Type} (key : K) (val : V) (left : BTreeMap K V) (right : BTreeMap K V) : BTreeMap K V :=
+    let k := Shared.of key in
+    let v := Shared.of val in
+    let l := Shared.of left in
+    let r := Shared.of right in
+    BTreeMap.with_node (Shared.get l)
+        (fn lk lv ll lr _ =>
+            let llh := BTreeMap.height_of ll in
+            let lrh := BTreeMap.height_of lr in
+            if I64.gt lrh llh
+            then BTreeMap.rotate_lr (Shared.get k) (Shared.get v) lk lv ll lr (Shared.get r)
+            else BTreeMap.rotate_ll (Shared.get k) (Shared.get v) lk lv ll lr (Shared.get r))
+        (BTreeMap.create_node (Shared.get k) (Shared.get v) (Shared.get l) (Shared.get r))
 
 /// Left-right double rotation.
-def BTreeMap.rotate_lr {K V : Type} (root_key: K) (root_val: V) (l_key: K) (l_val: V) (ll: BTreeMap K V) (lr: BTreeMap K V) (right: BTreeMap K V) : BTreeMap K V :=
-  let rk := Shared.of root_key in
-  let rv := Shared.of root_val in
-  let lk := Shared.of l_key in
-  let lv := Shared.of l_val in
-  let sll := Shared.of ll in
-  let r := Shared.of right in
-  BTreeMap.with_node lr
-    (fn lrk lrv lrl lrr _ =>
-      let new_left := BTreeMap.create_node (Shared.get lk) (Shared.get lv) (Shared.get sll) lrl in
-      BTreeMap.create_node lrk lrv new_left (BTreeMap.create_node (Shared.get rk) (Shared.get rv) lrr (Shared.get r)))
-    (BTreeMap.create_node (Shared.get rk) (Shared.get rv) (BTreeMap.create_node (Shared.get lk) (Shared.get lv) (Shared.get sll) BTreeMap.empty) (Shared.get r))
+def BTreeMap.rotate_lr {K V : Type} (root_key : K) (root_val : V) (l_key : K) (l_val : V) (ll : BTreeMap K V) (lr : BTreeMap K V) (right : BTreeMap K V) : BTreeMap K V :=
+    let rk := Shared.of root_key in
+    let rv := Shared.of root_val in
+    let lk := Shared.of l_key in
+    let lv := Shared.of l_val in
+    let sll := Shared.of ll in
+    let r := Shared.of right in
+    BTreeMap.with_node lr
+        (fn lrk lrv lrl lrr _ =>
+            let new_left := BTreeMap.create_node (Shared.get lk) (Shared.get lv) (Shared.get sll) lrl in
+            BTreeMap.create_node lrk lrv new_left (BTreeMap.create_node (Shared.get rk) (Shared.get rv) lrr (Shared.get r)))
+        (BTreeMap.create_node (Shared.get rk) (Shared.get rv) (BTreeMap.create_node (Shared.get lk) (Shared.get lv) (Shared.get sll) BTreeMap.empty) (Shared.get r))
 
 /// Left-left single rotation.
-def BTreeMap.rotate_ll {K V : Type} (root_key: K) (root_val: V) (l_key: K) (l_val: V) (ll: BTreeMap K V) (lr: BTreeMap K V) (right: BTreeMap K V) : BTreeMap K V :=
-  BTreeMap.create_node l_key l_val ll (BTreeMap.create_node root_key root_val lr right)
+def BTreeMap.rotate_ll {K V : Type} (root_key : K) (root_val : V) (l_key : K) (l_val : V) (ll : BTreeMap K V) (lr : BTreeMap K V) (right : BTreeMap K V) : BTreeMap K V :=
+    BTreeMap.create_node l_key l_val ll (BTreeMap.create_node root_key root_val lr right)
 
 /// Handle right-heavy imbalance: check children heights and apply RR or RL rotation.
-def BTreeMap.balance_right_heavy {K V : Type} (key: K) (val: V) (left: BTreeMap K V) (right: BTreeMap K V) : BTreeMap K V :=
-  let k := Shared.of key in
-  let v := Shared.of val in
-  let l := Shared.of left in
-  let r := Shared.of right in
-  BTreeMap.with_node (Shared.get r)
-    (fn rk rv rl rr _ =>
-      let rlh := BTreeMap.height_of rl in
-      let rrh := BTreeMap.height_of rr in
-      if I64.gt rlh rrh
-      then BTreeMap.rotate_rl (Shared.get k) (Shared.get v) (Shared.get l) rk rv rl rr
-      else BTreeMap.rotate_rr (Shared.get k) (Shared.get v) (Shared.get l) rk rv rl rr)
-    (BTreeMap.create_node (Shared.get k) (Shared.get v) (Shared.get l) (Shared.get r))
+def BTreeMap.balance_right_heavy {K V : Type} (key : K) (val : V) (left : BTreeMap K V) (right : BTreeMap K V) : BTreeMap K V :=
+    let k := Shared.of key in
+    let v := Shared.of val in
+    let l := Shared.of left in
+    let r := Shared.of right in
+    BTreeMap.with_node (Shared.get r)
+        (fn rk rv rl rr _ =>
+            let rlh := BTreeMap.height_of rl in
+            let rrh := BTreeMap.height_of rr in
+            if I64.gt rlh rrh
+            then BTreeMap.rotate_rl (Shared.get k) (Shared.get v) (Shared.get l) rk rv rl rr
+            else BTreeMap.rotate_rr (Shared.get k) (Shared.get v) (Shared.get l) rk rv rl rr)
+        (BTreeMap.create_node (Shared.get k) (Shared.get v) (Shared.get l) (Shared.get r))
 
 /// Right-left double rotation.
-def BTreeMap.rotate_rl {K V : Type} (root_key: K) (root_val: V) (left: BTreeMap K V) (r_key: K) (r_val: V) (rl: BTreeMap K V) (rr: BTreeMap K V) : BTreeMap K V :=
-  let rk := Shared.of root_key in
-  let rv := Shared.of root_val in
-  let l := Shared.of left in
-  let rk2 := Shared.of r_key in
-  let rv2 := Shared.of r_val in
-  let srr := Shared.of rr in
-  BTreeMap.with_node rl
-    (fn rlk rlv rll rlr _ =>
-      let new_right := BTreeMap.create_node (Shared.get rk2) (Shared.get rv2) rlr (Shared.get srr) in
-      BTreeMap.create_node rlk rlv (BTreeMap.create_node (Shared.get rk) (Shared.get rv) (Shared.get l) rll) new_right)
-    (BTreeMap.create_node (Shared.get rk) (Shared.get rv) (Shared.get l) (BTreeMap.create_node (Shared.get rk2) (Shared.get rv2) BTreeMap.empty (Shared.get srr)))
+def BTreeMap.rotate_rl {K V : Type} (root_key : K) (root_val : V) (left : BTreeMap K V) (r_key : K) (r_val : V) (rl : BTreeMap K V) (rr : BTreeMap K V) : BTreeMap K V :=
+    let rk := Shared.of root_key in
+    let rv := Shared.of root_val in
+    let l := Shared.of left in
+    let rk2 := Shared.of r_key in
+    let rv2 := Shared.of r_val in
+    let srr := Shared.of rr in
+    BTreeMap.with_node rl
+        (fn rlk rlv rll rlr _ =>
+            let new_right := BTreeMap.create_node (Shared.get rk2) (Shared.get rv2) rlr (Shared.get srr) in
+            BTreeMap.create_node rlk rlv (BTreeMap.create_node (Shared.get rk) (Shared.get rv) (Shared.get l) rll) new_right)
+        (BTreeMap.create_node (Shared.get rk) (Shared.get rv) (Shared.get l) (BTreeMap.create_node (Shared.get rk2) (Shared.get rv2) BTreeMap.empty (Shared.get srr)))
 
 /// Right-right single rotation.
-def BTreeMap.rotate_rr {K V : Type} (root_key: K) (root_val: V) (left: BTreeMap K V) (r_key: K) (r_val: V) (rl: BTreeMap K V) (rr: BTreeMap K V) : BTreeMap K V :=
-  BTreeMap.create_node r_key r_val (BTreeMap.create_node root_key root_val left rl) rr
+def BTreeMap.rotate_rr {K V : Type} (root_key : K) (root_val : V) (left : BTreeMap K V) (r_key : K) (r_val : V) (rl : BTreeMap K V) (rr : BTreeMap K V) : BTreeMap K V :=
+    BTreeMap.create_node r_key r_val (BTreeMap.create_node root_key root_val left rl) rr
 
 /// Find the leftmost (minimum) node in the tree.
 #[terminating]
-def BTreeMap.min_node (m: BTreeMap K V) : BTreeMap K V :=
-  let s := Shared.of m in
-  BTreeMap.with_node (Shared.get s)
-    (fn k v left right h =>
-      BTreeMap.with_node left
-        (fn lk lv ll lr lh => BTreeMap.min_node left)
-        (Shared.get s))
-    BTreeMap.empty
+def BTreeMap.min_node (m : BTreeMap K V) : BTreeMap K V :=
+    let s := Shared.of m in
+    BTreeMap.with_node (Shared.get s)
+        (fn k v left right h =>
+            BTreeMap.with_node left
+                (fn lk lv ll lr lh => BTreeMap.min_node left)
+                (Shared.get s))
+        BTreeMap.empty
 
 /// Fold over the map in ascending key order.
-def BTreeMap.fold (f: A -> K -> V -> A) (init: A) (m: BTreeMap K V) : A :=
-  BTreeMap.fold_go (Shared.of f) init m
+def BTreeMap.fold (f : A -> K -> V -> A) (init : A) (m : BTreeMap K V) : A :=
+    BTreeMap.fold_go (Shared.of f) init m
 
-def BTreeMap.fold_go (f: Shared (A -> K -> V -> A)) (init: A) (m: BTreeMap K V) : A :=
-  let step : A -> K -> V -> A := Shared.get f in
-  match m {
-    BTreeMap.empty => init,
-    BTreeMap.node k v left right _ =>
-      let left_result := BTreeMap.fold_go f init left in
-      let current_result := step left_result k v in
-      BTreeMap.fold_go f current_result right
-  }
+def BTreeMap.fold_go (f : Shared (A -> K -> V -> A)) (init : A) (m : BTreeMap K V) : A :=
+    let step : A -> K -> V -> A := Shared.get f in
+    match m {
+        BTreeMap.empty => init,
+        BTreeMap.node k v left right _ =>
+            let left_result := BTreeMap.fold_go f init left in
+            let current_result := step left_result k v in
+            BTreeMap.fold_go f current_result right
+    }
 
 /// Convert the map to a list of (key, value) pairs in ascending key order.
-pub def BTreeMap.to_list {K V : Type} (m: BTreeMap K V) : List (Pair K V) :=
-  BTreeMap.to_list_asc m (List.empty : List (Pair K V))
+pub def BTreeMap.to_list {K V : Type} (m : BTreeMap K V) : List (Pair K V) :=
+    BTreeMap.to_list_asc m (List.empty : List (Pair K V))
 
-def BTreeMap.to_list_asc (m: BTreeMap K V) (acc: List (Pair K V)) : List (Pair K V) :=
-  match m {
-    BTreeMap.empty => acc,
-    BTreeMap.node k v left right _ =>
-      let acc1 := BTreeMap.to_list_asc right acc in
-      let acc2 := List.cons (Pair.pair k v) acc1 in
-      BTreeMap.to_list_asc left acc2
-  }
+def BTreeMap.to_list_asc (m : BTreeMap K V) (acc : List (Pair K V)) : List (Pair K V) :=
+    match m {
+        BTreeMap.empty => acc,
+        BTreeMap.node k v left right _ =>
+            let acc1 := BTreeMap.to_list_asc right acc in
+            let acc2 := List.cons (Pair.pair k v) acc1 in
+            BTreeMap.to_list_asc left acc2
+    }
 
 /// Recursive insert helper. The comparators and the key/value travel as
 /// `Shared` handles so the recursive self-calls never move them; the
 /// `Map BTreeMap` instance binds `BOrd.lt`/`gt` to locals and wraps each
 /// ONCE per operation.
 #[terminating]
-def BTreeMap.insert_loop {K V : Type} (lt: Shared (K -> K -> Bool)) (gt: Shared (K -> K -> Bool)) (key: Shared K) (val: Shared V) (m: BTreeMap K V) : BTreeMap K V :=
-  let lf : K -> K -> Bool := Shared.get lt in
-  let gf : K -> K -> Bool := Shared.get gt in
-  BTreeMap.with_node m
-    (fn k v left right h =>
-      let insert_left : BTreeMap K V := BTreeMap.insert_loop lt gt key val left in
-      let insert_right : BTreeMap K V := BTreeMap.insert_loop lt gt key val right in
-      if lf (Shared.get key) k
-      then BTreeMap.balance k v insert_left right
-      else if gf (Shared.get key) k
-      then BTreeMap.balance k v left insert_right
-      else BTreeMap.node (Shared.get key) (Shared.get val) left right h)
-    (BTreeMap.node (Shared.get key) (Shared.get val) BTreeMap.empty BTreeMap.empty 1)
+def BTreeMap.insert_loop {K V : Type} (lt : Shared (K -> K -> Bool)) (gt : Shared (K -> K -> Bool)) (key : Shared K) (val : Shared V) (m : BTreeMap K V) : BTreeMap K V :=
+    let lf : K -> K -> Bool := Shared.get lt in
+    let gf : K -> K -> Bool := Shared.get gt in
+    BTreeMap.with_node m
+        (fn k v left right h =>
+            let insert_left : BTreeMap K V := BTreeMap.insert_loop lt gt key val left in
+            let insert_right : BTreeMap K V := BTreeMap.insert_loop lt gt key val right in
+            if lf (Shared.get key) k
+            then BTreeMap.balance k v insert_left right
+            else if gf (Shared.get key) k
+            then BTreeMap.balance k v left insert_right
+            else BTreeMap.node (Shared.get key) (Shared.get val) left right h)
+        (BTreeMap.node (Shared.get key) (Shared.get val) BTreeMap.empty BTreeMap.empty 1)
 
 /// Recursive lookup helper.
 #[terminating]
-def BTreeMap.lookup_loop {K V : Type} (lt: Shared (K -> K -> Bool)) (gt: Shared (K -> K -> Bool)) (key: Shared K) (m: BTreeMap K V) : Option V :=
-  let lf : K -> K -> Bool := Shared.get lt in
-  let gf : K -> K -> Bool := Shared.get gt in
-  match m {
-    BTreeMap.empty => Option.none,
-    BTreeMap.node k v left right _ =>
-      let sk := Shared.of k in
-      if lf (Shared.get key) (Shared.get sk)
-      then BTreeMap.lookup_loop lt gt key left
-      else if gf (Shared.get key) (Shared.get sk)
-      then BTreeMap.lookup_loop lt gt key right
-      else Option.some v
-  }
+def BTreeMap.lookup_loop {K V : Type} (lt : Shared (K -> K -> Bool)) (gt : Shared (K -> K -> Bool)) (key : Shared K) (m : BTreeMap K V) : Option V :=
+    let lf : K -> K -> Bool := Shared.get lt in
+    let gf : K -> K -> Bool := Shared.get gt in
+    match m {
+        BTreeMap.empty => Option.none,
+        BTreeMap.node k v left right _ =>
+            let sk := Shared.of k in
+            if lf (Shared.get key) (Shared.get sk)
+            then BTreeMap.lookup_loop lt gt key left
+            else if gf (Shared.get key) (Shared.get sk)
+            then BTreeMap.lookup_loop lt gt key right
+            else Option.some v
+    }
 
 /// Recursive delete helper.
 #[terminating]
-def BTreeMap.delete_loop {K V : Type} (lt: Shared (K -> K -> Bool)) (gt: Shared (K -> K -> Bool)) (key: Shared K) (m: BTreeMap K V) : BTreeMap K V :=
-  let lf : K -> K -> Bool := Shared.get lt in
-  let gf : K -> K -> Bool := Shared.get gt in
-  BTreeMap.with_node m
-    (fn k v left right h =>
-      let delete_left : BTreeMap K V := BTreeMap.delete_loop lt gt key left in
-      let delete_right : BTreeMap K V := BTreeMap.delete_loop lt gt key right in
-      if lf (Shared.get key) k
-      then BTreeMap.balance k v delete_left right
-      else if gf (Shared.get key) k
-      then BTreeMap.balance k v left delete_right
-      else
-        BTreeMap.with_node left
-          (fn lk lv ll lr lh =>
-            BTreeMap.with_node right
-              (fn rk rv rl rr rh =>
-                BTreeMap.with_node (BTreeMap.min_node right)
-                  (fn mk mv _ _ _ =>
-                    BTreeMap.balance mk mv left (BTreeMap.delete_loop lt gt (Shared.of mk) right))
-                  right)
-              left)
-          right)
-    BTreeMap.empty
+def BTreeMap.delete_loop {K V : Type} (lt : Shared (K -> K -> Bool)) (gt : Shared (K -> K -> Bool)) (key : Shared K) (m : BTreeMap K V) : BTreeMap K V :=
+    let lf : K -> K -> Bool := Shared.get lt in
+    let gf : K -> K -> Bool := Shared.get gt in
+    BTreeMap.with_node m
+        (fn k v left right h =>
+            let delete_left : BTreeMap K V := BTreeMap.delete_loop lt gt key left in
+            let delete_right : BTreeMap K V := BTreeMap.delete_loop lt gt key right in
+            if lf (Shared.get key) k
+            then BTreeMap.balance k v delete_left right
+            else if gf (Shared.get key) k
+            then BTreeMap.balance k v left delete_right
+            else
+                BTreeMap.with_node left
+                    (fn lk lv ll lr lh =>
+                        BTreeMap.with_node right
+                            (fn rk rv rl rr rh =>
+                                BTreeMap.with_node (BTreeMap.min_node right)
+                                    (fn mk mv _ _ _ =>
+                                        BTreeMap.balance mk mv left (BTreeMap.delete_loop lt gt (Shared.of mk) right))
+                                    right)
+                            left)
+                    right)
+        BTreeMap.empty
 
 /// Instance: BTreeMap implements the Map type class.
 pub instance [BOrd K] Map BTreeMap {
-  def empty : BTreeMap K V := BTreeMap.empty
+    def empty : BTreeMap K V := BTreeMap.empty
 
-  // The recursive helpers own the recursion; the instance only wraps the
-  // key/value/comparators ONCE per operation. `BOrd.lt`/`gt` are bound to
-  // locals first: a bare method reference is the accepted shape, while a
-  // qualified call is resolved at the call site.
-  #[terminating]
-  def insert (key: K) (val: V) (m: BTreeMap K V) : BTreeMap K V :=
-    let lt : K -> K -> Bool := BOrd.lt in
-    let gt : K -> K -> Bool := BOrd.gt in
-    BTreeMap.insert_loop (Shared.of lt) (Shared.of gt) (Shared.of key) (Shared.of val) m
+    // The recursive helpers own the recursion; the instance only wraps the
+    // key/value/comparators ONCE per operation. `BOrd.lt`/`gt` are bound to
+    // locals first: a bare method reference is the accepted shape, while a
+    // qualified call is resolved at the call site.
+    #[terminating]
+    def insert (key : K) (val : V) (m : BTreeMap K V) : BTreeMap K V :=
+        let lt : K -> K -> Bool := BOrd.lt in
+        let gt : K -> K -> Bool := BOrd.gt in
+        BTreeMap.insert_loop (Shared.of lt) (Shared.of gt) (Shared.of key) (Shared.of val) m
 
-  #[terminating]
-  def lookup (key: K) (m: BTreeMap K V) : Option V :=
-    let lt : K -> K -> Bool := BOrd.lt in
-    let gt : K -> K -> Bool := BOrd.gt in
-    BTreeMap.lookup_loop (Shared.of lt) (Shared.of gt) (Shared.of key) m
+    #[terminating]
+    def lookup (key : K) (m : BTreeMap K V) : Option V :=
+        let lt : K -> K -> Bool := BOrd.lt in
+        let gt : K -> K -> Bool := BOrd.gt in
+        BTreeMap.lookup_loop (Shared.of lt) (Shared.of gt) (Shared.of key) m
 
-  #[terminating]
-  def delete (key: K) (m: BTreeMap K V) : BTreeMap K V :=
-    let lt : K -> K -> Bool := BOrd.lt in
-    let gt : K -> K -> Bool := BOrd.gt in
-    BTreeMap.delete_loop (Shared.of lt) (Shared.of gt) (Shared.of key) m
+    #[terminating]
+    def delete (key : K) (m : BTreeMap K V) : BTreeMap K V :=
+        let lt : K -> K -> Bool := BOrd.lt in
+        let gt : K -> K -> Bool := BOrd.gt in
+        BTreeMap.delete_loop (Shared.of lt) (Shared.of gt) (Shared.of key) m
 }
 
 /// ─── HashMap ────────────────────────────────────────────────
@@ -276,7 +275,7 @@ pub instance [BOrd K] Map BTreeMap {
 /// per bucket, and `bucket_lookup_eq` scans a bucket LINEARLY. That made
 /// every lookup ~130 key comparisons on the hottest paths in the
 /// backend. At 256 the same maps sit at ~16 per bucket.
-pub def HashMap.bucket_of (hash: U64) : U64 := U64.mod hash 256u64
+pub def HashMap.bucket_of (hash : U64) : U64 := U64.mod hash 256u64
 
 /// One level of 16-way dispatch, generic in what a slot holds.
 ///
@@ -285,51 +284,51 @@ pub def HashMap.bucket_of (hash: U64) : U64 := U64.mod hash 256u64
 /// from ONE 16-arm dispatch written once, rather than a 256-field
 /// constructor and two 256-arm chains.
 pub type Bucket16 P {
-  buckets (
-    b0 b1 b2 b3 b4 b5 b6 b7
-    b8 b9 b10 b11 b12 b13 b14 b15
-    : P)
+    buckets (
+        b0 b1 b2 b3 b4 b5 b6 b7
+        b8 b9 b10 b11 b12 b13 b14 b15
+        : P)
 }
 
 /// Hash map type: 256-bucket chaining hash table, as 16x16.
 pub type HashMap K V {
-  map (Bucket16 (Bucket16 (List (Pair K V))))
+    map (Bucket16 (Bucket16 (List (Pair K V))))
 }
 
 /// Every slot, in index order -- the basis for the whole-table folds
 /// (`to_list`, `is_empty`) that used to be written out 16 ways.
 def Bucket16.to_list {P : Type} (b : Bucket16 P) : List P :=
-  match b {
-    Bucket16.buckets b0 b1 b2 b3 b4 b5 b6 b7 b8 b9 b10 b11 b12 b13 b14 b15 =>
-      [b0, b1, b2, b3, b4, b5, b6, b7, b8, b9, b10, b11, b12, b13, b14, b15]
-  }
+    match b {
+        Bucket16.buckets b0 b1 b2 b3 b4 b5 b6 b7 b8 b9 b10 b11 b12 b13 b14 b15 =>
+            [b0, b1, b2, b3, b4, b5, b6, b7, b8, b9, b10, b11, b12, b13, b14, b15]
+    }
 
 /// All 16 slots set to the same value.
 def Bucket16.replicate {P : Type} (e : P) : Bucket16 P :=
-  let s := Shared.of e in
-  Bucket16.buckets
-    (Shared.get s) (Shared.get s) (Shared.get s) (Shared.get s)
-    (Shared.get s) (Shared.get s) (Shared.get s) (Shared.get s)
-    (Shared.get s) (Shared.get s) (Shared.get s) (Shared.get s)
-    (Shared.get s) (Shared.get s) (Shared.get s) (Shared.get s)
+    let s := Shared.of e in
+    Bucket16.buckets
+        (Shared.get s) (Shared.get s) (Shared.get s) (Shared.get s)
+        (Shared.get s) (Shared.get s) (Shared.get s) (Shared.get s)
+        (Shared.get s) (Shared.get s) (Shared.get s) (Shared.get s)
+        (Shared.get s) (Shared.get s) (Shared.get s) (Shared.get s)
 
 /// Slot-wise combine of two levels -- what `merge_buckets` is.
 def Bucket16.map2 {P : Type} (f : P -> P -> P) (x : Bucket16 P) (y : Bucket16 P) : Bucket16 P :=
-  match x {
-    Bucket16.buckets a0 a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 a11 a12 a13 a14 a15 =>
-      match y {
-        Bucket16.buckets c0 c1 c2 c3 c4 c5 c6 c7 c8 c9 c10 c11 c12 c13 c14 c15 =>
-          Bucket16.buckets
-            (f a0 c0) (f a1 c1) (f a2 c2) (f a3 c3)
-            (f a4 c4) (f a5 c5) (f a6 c6) (f a7 c7)
-            (f a8 c8) (f a9 c9) (f a10 c10) (f a11 c11)
-            (f a12 c12) (f a13 c13) (f a14 c14) (f a15 c15)
-      }
-  }
+    match x {
+        Bucket16.buckets a0 a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 a11 a12 a13 a14 a15 =>
+            match y {
+                Bucket16.buckets c0 c1 c2 c3 c4 c5 c6 c7 c8 c9 c10 c11 c12 c13 c14 c15 =>
+                    Bucket16.buckets
+                        (f a0 c0) (f a1 c1) (f a2 c2) (f a3 c3)
+                        (f a4 c4) (f a5 c5) (f a6 c6) (f a7 c7)
+                        (f a8 c8) (f a9 c9) (f a10 c10) (f a11 c11)
+                        (f a12 c12) (f a13 c13) (f a14 c14) (f a15 c15)
+            }
+    }
 
 /// 16 empty buckets.
 pub def HashMap.empty_buckets {K V : Type} : Bucket16 (Bucket16 (List (Pair K V))) :=
-  Bucket16.replicate (Bucket16.replicate (List.empty : List (Pair K V)))
+    Bucket16.replicate (Bucket16.replicate (List.empty : List (Pair K V)))
 
 /// One 16-way step per level. The index is a flat 0-255 so that every
 /// caller -- `str_map_*` (`lang/codegen/util.mo`), `modpath_map_*` and
@@ -337,54 +336,54 @@ pub def HashMap.empty_buckets {K V : Type} : Bucket16 (Bucket16 (List (Pair K V)
 /// `bucket_of`/`get_bucket`/`set_bucket`; the two-level shape is an
 /// implementation detail of this file.
 def Bucket16.get {P : Type} (b : Bucket16 P) (idx : U64) : P :=
-  match b {
-    Bucket16.buckets b0 b1 b2 b3 b4 b5 b6 b7 b8 b9 b10 b11 b12 b13 b14 b15 =>
-      if U64.beq 0u64 idx then b0 else
-      if U64.beq 1u64 idx then b1 else
-      if U64.beq 2u64 idx then b2 else
-      if U64.beq 3u64 idx then b3 else
-      if U64.beq 4u64 idx then b4 else
-      if U64.beq 5u64 idx then b5 else
-      if U64.beq 6u64 idx then b6 else
-      if U64.beq 7u64 idx then b7 else
-      if U64.beq 8u64 idx then b8 else
-      if U64.beq 9u64 idx then b9 else
-      if U64.beq 10u64 idx then b10 else
-      if U64.beq 11u64 idx then b11 else
-      if U64.beq 12u64 idx then b12 else
-      if U64.beq 13u64 idx then b13 else
-      if U64.beq 14u64 idx then b14 else b15
-  }
+    match b {
+        Bucket16.buckets b0 b1 b2 b3 b4 b5 b6 b7 b8 b9 b10 b11 b12 b13 b14 b15 =>
+            if U64.beq 0u64 idx then b0 else
+            if U64.beq 1u64 idx then b1 else
+            if U64.beq 2u64 idx then b2 else
+            if U64.beq 3u64 idx then b3 else
+            if U64.beq 4u64 idx then b4 else
+            if U64.beq 5u64 idx then b5 else
+            if U64.beq 6u64 idx then b6 else
+            if U64.beq 7u64 idx then b7 else
+            if U64.beq 8u64 idx then b8 else
+            if U64.beq 9u64 idx then b9 else
+            if U64.beq 10u64 idx then b10 else
+            if U64.beq 11u64 idx then b11 else
+            if U64.beq 12u64 idx then b12 else
+            if U64.beq 13u64 idx then b13 else
+            if U64.beq 14u64 idx then b14 else b15
+    }
 
 def Bucket16.set {P : Type} (b : Bucket16 P) (idx : U64) (v : P) : Bucket16 P :=
-  match b {
-    Bucket16.buckets b0 b1 b2 b3 b4 b5 b6 b7 b8 b9 b10 b11 b12 b13 b14 b15 =>
-      if U64.beq 0u64 idx then Bucket16.buckets v b1 b2 b3 b4 b5 b6 b7 b8 b9 b10 b11 b12 b13 b14 b15 else
-      if U64.beq 1u64 idx then Bucket16.buckets b0 v b2 b3 b4 b5 b6 b7 b8 b9 b10 b11 b12 b13 b14 b15 else
-      if U64.beq 2u64 idx then Bucket16.buckets b0 b1 v b3 b4 b5 b6 b7 b8 b9 b10 b11 b12 b13 b14 b15 else
-      if U64.beq 3u64 idx then Bucket16.buckets b0 b1 b2 v b4 b5 b6 b7 b8 b9 b10 b11 b12 b13 b14 b15 else
-      if U64.beq 4u64 idx then Bucket16.buckets b0 b1 b2 b3 v b5 b6 b7 b8 b9 b10 b11 b12 b13 b14 b15 else
-      if U64.beq 5u64 idx then Bucket16.buckets b0 b1 b2 b3 b4 v b6 b7 b8 b9 b10 b11 b12 b13 b14 b15 else
-      if U64.beq 6u64 idx then Bucket16.buckets b0 b1 b2 b3 b4 b5 v b7 b8 b9 b10 b11 b12 b13 b14 b15 else
-      if U64.beq 7u64 idx then Bucket16.buckets b0 b1 b2 b3 b4 b5 b6 v b8 b9 b10 b11 b12 b13 b14 b15 else
-      if U64.beq 8u64 idx then Bucket16.buckets b0 b1 b2 b3 b4 b5 b6 b7 v b9 b10 b11 b12 b13 b14 b15 else
-      if U64.beq 9u64 idx then Bucket16.buckets b0 b1 b2 b3 b4 b5 b6 b7 b8 v b10 b11 b12 b13 b14 b15 else
-      if U64.beq 10u64 idx then Bucket16.buckets b0 b1 b2 b3 b4 b5 b6 b7 b8 b9 v b11 b12 b13 b14 b15 else
-      if U64.beq 11u64 idx then Bucket16.buckets b0 b1 b2 b3 b4 b5 b6 b7 b8 b9 b10 v b12 b13 b14 b15 else
-      if U64.beq 12u64 idx then Bucket16.buckets b0 b1 b2 b3 b4 b5 b6 b7 b8 b9 b10 b11 v b13 b14 b15 else
-      if U64.beq 13u64 idx then Bucket16.buckets b0 b1 b2 b3 b4 b5 b6 b7 b8 b9 b10 b11 b12 v b14 b15 else
-      if U64.beq 14u64 idx then Bucket16.buckets b0 b1 b2 b3 b4 b5 b6 b7 b8 b9 b10 b11 b12 b13 v b15 else
-      Bucket16.buckets b0 b1 b2 b3 b4 b5 b6 b7 b8 b9 b10 b11 b12 b13 b14 v
-  }
+    match b {
+        Bucket16.buckets b0 b1 b2 b3 b4 b5 b6 b7 b8 b9 b10 b11 b12 b13 b14 b15 =>
+            if U64.beq 0u64 idx then Bucket16.buckets v b1 b2 b3 b4 b5 b6 b7 b8 b9 b10 b11 b12 b13 b14 b15 else
+            if U64.beq 1u64 idx then Bucket16.buckets b0 v b2 b3 b4 b5 b6 b7 b8 b9 b10 b11 b12 b13 b14 b15 else
+            if U64.beq 2u64 idx then Bucket16.buckets b0 b1 v b3 b4 b5 b6 b7 b8 b9 b10 b11 b12 b13 b14 b15 else
+            if U64.beq 3u64 idx then Bucket16.buckets b0 b1 b2 v b4 b5 b6 b7 b8 b9 b10 b11 b12 b13 b14 b15 else
+            if U64.beq 4u64 idx then Bucket16.buckets b0 b1 b2 b3 v b5 b6 b7 b8 b9 b10 b11 b12 b13 b14 b15 else
+            if U64.beq 5u64 idx then Bucket16.buckets b0 b1 b2 b3 b4 v b6 b7 b8 b9 b10 b11 b12 b13 b14 b15 else
+            if U64.beq 6u64 idx then Bucket16.buckets b0 b1 b2 b3 b4 b5 v b7 b8 b9 b10 b11 b12 b13 b14 b15 else
+            if U64.beq 7u64 idx then Bucket16.buckets b0 b1 b2 b3 b4 b5 b6 v b8 b9 b10 b11 b12 b13 b14 b15 else
+            if U64.beq 8u64 idx then Bucket16.buckets b0 b1 b2 b3 b4 b5 b6 b7 v b9 b10 b11 b12 b13 b14 b15 else
+            if U64.beq 9u64 idx then Bucket16.buckets b0 b1 b2 b3 b4 b5 b6 b7 b8 v b10 b11 b12 b13 b14 b15 else
+            if U64.beq 10u64 idx then Bucket16.buckets b0 b1 b2 b3 b4 b5 b6 b7 b8 b9 v b11 b12 b13 b14 b15 else
+            if U64.beq 11u64 idx then Bucket16.buckets b0 b1 b2 b3 b4 b5 b6 b7 b8 b9 b10 v b12 b13 b14 b15 else
+            if U64.beq 12u64 idx then Bucket16.buckets b0 b1 b2 b3 b4 b5 b6 b7 b8 b9 b10 b11 v b13 b14 b15 else
+            if U64.beq 13u64 idx then Bucket16.buckets b0 b1 b2 b3 b4 b5 b6 b7 b8 b9 b10 b11 b12 v b14 b15 else
+            if U64.beq 14u64 idx then Bucket16.buckets b0 b1 b2 b3 b4 b5 b6 b7 b8 b9 b10 b11 b12 b13 v b15 else
+            Bucket16.buckets b0 b1 b2 b3 b4 b5 b6 b7 b8 b9 b10 b11 b12 b13 b14 v
+    }
 
-pub def HashMap.get_bucket {K V : Type} (b: Bucket16 (Bucket16 (List (Pair K V)))) (idx: U64) : List (Pair K V) :=
-  Bucket16.get (Bucket16.get b (U64.div idx 16u64)) (U64.mod idx 16u64)
+pub def HashMap.get_bucket {K V : Type} (b : Bucket16 (Bucket16 (List (Pair K V)))) (idx : U64) : List (Pair K V) :=
+    Bucket16.get (Bucket16.get b (U64.div idx 16u64)) (U64.mod idx 16u64)
 
-pub def HashMap.set_bucket {K V : Type} (b: Bucket16 (Bucket16 (List (Pair K V)))) (idx: U64) (new_val: List (Pair K V)) : Bucket16 (Bucket16 (List (Pair K V))) :=
-  let s := Shared.of b in
-  let hi : U64 := U64.div idx 16u64 in
-  let lo : U64 := U64.mod idx 16u64 in
-  Bucket16.set (Shared.get s) hi (Bucket16.set (Bucket16.get (Shared.get s) hi) lo new_val)
+pub def HashMap.set_bucket {K V : Type} (b : Bucket16 (Bucket16 (List (Pair K V)))) (idx : U64) (new_val : List (Pair K V)) : Bucket16 (Bucket16 (List (Pair K V))) :=
+    let s := Shared.of b in
+    let hi : U64 := U64.div idx 16u64 in
+    let lo : U64 := U64.mod idx 16u64 in
+    Bucket16.set (Shared.get s) hi (Bucket16.set (Bucket16.get (Shared.get s) hi) lo new_val)
 
 /// Instance: HashMap implements the Map type class using hashing + ordering-based equality.
 /// NOTE: uses BOrd K instead of BEq K due to evaluator instance resolution limitation.
@@ -392,62 +391,62 @@ pub def HashMap.set_bucket {K V : Type} (b: Bucket16 (Bucket16 (List (Pair K V))
 /// (BOrd I64 is correctly first for I64 keys, but BEq Bool is first for BEq, producing
 /// wrong instance when abstract K is concrete I64 at runtime).
 pub instance [Hashable K, BOrd K] Map HashMap {
-  def empty : HashMap K V := HashMap.map HashMap.empty_buckets
+    def empty : HashMap K V := HashMap.map HashMap.empty_buckets
 
-  #[terminating]
-  def insert (key: K) (val: V) (m: HashMap K V) : HashMap K V :=
-    let lt : K -> K -> Bool := BOrd.lt in
-    let gt : K -> K -> Bool := BOrd.gt in
-    match m {
-      HashMap.map buckets =>
-        let s := Shared.of buckets in
-        let idx : U64 := HashMap.bucket_of (Hashable.hash key) in
-        let bucket : List (Pair K V) := HashMap.get_bucket (Shared.get s) idx in
-        let new_bucket : List (Pair K V) :=
-          HashMap.bucket_insert (Shared.of lt) (Shared.of gt) (Shared.of key) (Shared.of val) bucket in
-        HashMap.map (HashMap.set_bucket (Shared.get s) idx new_bucket)
-    }
+    #[terminating]
+    def insert (key : K) (val : V) (m : HashMap K V) : HashMap K V :=
+        let lt : K -> K -> Bool := BOrd.lt in
+        let gt : K -> K -> Bool := BOrd.gt in
+        match m {
+            HashMap.map buckets =>
+                let s := Shared.of buckets in
+                let idx : U64 := HashMap.bucket_of (Hashable.hash key) in
+                let bucket : List (Pair K V) := HashMap.get_bucket (Shared.get s) idx in
+                let new_bucket : List (Pair K V) :=
+                    HashMap.bucket_insert (Shared.of lt) (Shared.of gt) (Shared.of key) (Shared.of val) bucket in
+                HashMap.map (HashMap.set_bucket (Shared.get s) idx new_bucket)
+        }
 
-  #[terminating]
-  def lookup (key: K) (m: HashMap K V) : Option V :=
-    let lt : K -> K -> Bool := BOrd.lt in
-    let gt : K -> K -> Bool := BOrd.gt in
-    match m {
-      HashMap.map buckets =>
-        let idx : U64 := HashMap.bucket_of (Hashable.hash key) in
-        let bucket : List (Pair K V) := HashMap.get_bucket buckets idx in
-        HashMap.bucket_lookup (Shared.of lt) (Shared.of gt) (Shared.of key) bucket
-    }
+    #[terminating]
+    def lookup (key : K) (m : HashMap K V) : Option V :=
+        let lt : K -> K -> Bool := BOrd.lt in
+        let gt : K -> K -> Bool := BOrd.gt in
+        match m {
+            HashMap.map buckets =>
+                let idx : U64 := HashMap.bucket_of (Hashable.hash key) in
+                let bucket : List (Pair K V) := HashMap.get_bucket buckets idx in
+                HashMap.bucket_lookup (Shared.of lt) (Shared.of gt) (Shared.of key) bucket
+        }
 
-  #[terminating]
-  def delete (key: K) (m: HashMap K V) : HashMap K V :=
-    let lt : K -> K -> Bool := BOrd.lt in
-    let gt : K -> K -> Bool := BOrd.gt in
-    match m {
-      HashMap.map buckets =>
-        let s := Shared.of buckets in
-        let idx : U64 := HashMap.bucket_of (Hashable.hash key) in
-        let bucket : List (Pair K V) := HashMap.get_bucket (Shared.get s) idx in
-        let new_bucket : List (Pair K V) :=
-          HashMap.bucket_delete (Shared.of lt) (Shared.of gt) (Shared.of key) bucket in
-        HashMap.map (HashMap.set_bucket (Shared.get s) idx new_bucket)
-    }
+    #[terminating]
+    def delete (key : K) (m : HashMap K V) : HashMap K V :=
+        let lt : K -> K -> Bool := BOrd.lt in
+        let gt : K -> K -> Bool := BOrd.gt in
+        match m {
+            HashMap.map buckets =>
+                let s := Shared.of buckets in
+                let idx : U64 := HashMap.bucket_of (Hashable.hash key) in
+                let bucket : List (Pair K V) := HashMap.get_bucket (Shared.get s) idx in
+                let new_bucket : List (Pair K V) :=
+                    HashMap.bucket_delete (Shared.of lt) (Shared.of gt) (Shared.of key) bucket in
+                HashMap.map (HashMap.set_bucket (Shared.get s) idx new_bucket)
+        }
 }
 
-def HashMap.bucket_insert {K V : Type} (lt: Shared (K -> K -> Bool)) (gt: Shared (K -> K -> Bool)) (key: Shared K) (val: Shared V) (bucket: List (Pair K V)) : List (Pair K V) :=
-  let lf : K -> K -> Bool := Shared.get lt in
-  let gf : K -> K -> Bool := Shared.get gt in
-  match bucket {
-    List.empty => List.cons (Pair.pair (Shared.get key) (Shared.get val)) List.empty,
-    List.cons pair rest =>
-      match pair {
-        Pair.pair k v =>
-          let sk := Shared.of k in
-          if Bool.not (lf (Shared.get key) (Shared.get sk)) && Bool.not (gf (Shared.get key) (Shared.get sk))
-          then List.cons (Pair.pair (Shared.get key) (Shared.get val)) rest
-          else List.cons pair (HashMap.bucket_insert lt gt key val rest)
-      }
-  }
+def HashMap.bucket_insert {K V : Type} (lt : Shared (K -> K -> Bool)) (gt : Shared (K -> K -> Bool)) (key : Shared K) (val : Shared V) (bucket : List (Pair K V)) : List (Pair K V) :=
+    let lf : K -> K -> Bool := Shared.get lt in
+    let gf : K -> K -> Bool := Shared.get gt in
+    match bucket {
+        List.empty => List.cons (Pair.pair (Shared.get key) (Shared.get val)) List.empty,
+        List.cons pair rest =>
+            match pair {
+                Pair.pair k v =>
+                    let sk := Shared.of k in
+                    if Bool.not (lf (Shared.get key) (Shared.get sk)) && Bool.not (gf (Shared.get key) (Shared.get sk))
+                    then List.cons (Pair.pair (Shared.get key) (Shared.get val)) rest
+                    else List.cons pair (HashMap.bucket_insert lt gt key val rest)
+            }
+    }
 
 /// Equality-predicate variants of `bucket_insert`/`bucket_lookup`.
 ///
@@ -460,33 +459,33 @@ def HashMap.bucket_insert {K V : Type} (lt: Shared (K -> K -> Bool)) (gt: Shared
 /// the path via `List.map` + `intercalate`) that is four string
 /// constructions per step. These variants take a single `eq` instead.
 #[terminating]
-def HashMap.bucket_insert_eq {K V : Type} (eq: Shared (K -> K -> Bool)) (key: Shared K) (val: Shared V) (bucket: List (Pair K V)) : List (Pair K V) :=
-  let ef : K -> K -> Bool := Shared.get eq in
-  match bucket {
-    List.empty => List.cons (Pair.pair (Shared.get key) (Shared.get val)) List.empty,
-    List.cons pair rest =>
-      match pair {
-        Pair.pair k v =>
-          let sk := Shared.of k in
-          if ef (Shared.get key) (Shared.get sk)
-          then List.cons (Pair.pair (Shared.get key) (Shared.get val)) rest
-          else List.cons pair (HashMap.bucket_insert_eq eq key val rest)
-      }
-  }
+def HashMap.bucket_insert_eq {K V : Type} (eq : Shared (K -> K -> Bool)) (key : Shared K) (val : Shared V) (bucket : List (Pair K V)) : List (Pair K V) :=
+    let ef : K -> K -> Bool := Shared.get eq in
+    match bucket {
+        List.empty => List.cons (Pair.pair (Shared.get key) (Shared.get val)) List.empty,
+        List.cons pair rest =>
+            match pair {
+                Pair.pair k v =>
+                    let sk := Shared.of k in
+                    if ef (Shared.get key) (Shared.get sk)
+                    then List.cons (Pair.pair (Shared.get key) (Shared.get val)) rest
+                    else List.cons pair (HashMap.bucket_insert_eq eq key val rest)
+            }
+    }
 
 #[terminating]
-def HashMap.bucket_lookup_eq {K V : Type} (eq: Shared (K -> K -> Bool)) (key: Shared K) (bucket: List (Pair K V)) : Option V :=
-  let ef : K -> K -> Bool := Shared.get eq in
-  match bucket {
-    List.empty => Option.none,
-    List.cons pair rest =>
-      match pair {
-        Pair.pair k v =>
-          let sk := Shared.of k in
-          if ef (Shared.get key) (Shared.get sk) then Option.some v
-          else HashMap.bucket_lookup_eq eq key rest
-      }
-  }
+def HashMap.bucket_lookup_eq {K V : Type} (eq : Shared (K -> K -> Bool)) (key : Shared K) (bucket : List (Pair K V)) : Option V :=
+    let ef : K -> K -> Bool := Shared.get eq in
+    match bucket {
+        List.empty => Option.none,
+        List.cons pair rest =>
+            match pair {
+                Pair.pair k v =>
+                    let sk := Shared.of k in
+                    if ef (Shared.get key) (Shared.get sk) then Option.some v
+                    else HashMap.bucket_lookup_eq eq key rest
+            }
+    }
 
 /// `bucket_lookup_eq`/`bucket_insert_eq` specialised to `String` keys,
 /// calling `String.beq` directly instead of taking it as a parameter.
@@ -507,63 +506,63 @@ def HashMap.bucket_lookup_eq {K V : Type} (eq: Shared (K -> K -> Bool)) (key: Sh
 /// `lang/codegen/util.mo`, where they used to live) and `lang/scope.mo`'s
 /// `alias_map_*`.
 #[terminating]
-pub def HashMap.bucket_lookup_str {V : Type} (key: String) (bucket: List (Pair String V)) : Option V :=
-  match bucket {
-    List.empty => Option.none,
-    List.cons pair rest =>
-      match pair {
-        Pair.pair k v =>
-          if String.beq key k then Option.some v
-          else HashMap.bucket_lookup_str key rest
-      }
-  }
+pub def HashMap.bucket_lookup_str {V : Type} (key : String) (bucket : List (Pair String V)) : Option V :=
+    match bucket {
+        List.empty => Option.none,
+        List.cons pair rest =>
+            match pair {
+                Pair.pair k v =>
+                    if String.beq key k then Option.some v
+                    else HashMap.bucket_lookup_str key rest
+            }
+    }
 
 #[terminating]
-pub def HashMap.bucket_insert_str {V : Type} (key: String) (val: V) (bucket: List (Pair String V)) : List (Pair String V) :=
-  match bucket {
-    List.empty => List.cons (Pair.pair key val) List.empty,
-    List.cons pair rest =>
-      match pair {
-        Pair.pair k v =>
-          if String.beq key k
-          then List.cons (Pair.pair key val) rest
-          else List.cons pair (HashMap.bucket_insert_str key val rest)
-      }
-  }
+pub def HashMap.bucket_insert_str {V : Type} (key : String) (val : V) (bucket : List (Pair String V)) : List (Pair String V) :=
+    match bucket {
+        List.empty => List.cons (Pair.pair key val) List.empty,
+        List.cons pair rest =>
+            match pair {
+                Pair.pair k v =>
+                    if String.beq key k
+                    then List.cons (Pair.pair key val) rest
+                    else List.cons pair (HashMap.bucket_insert_str key val rest)
+            }
+    }
 
 /// Look up a key in a single bucket.
 #[terminating]
-def HashMap.bucket_lookup {K V : Type} (lt: Shared (K -> K -> Bool)) (gt: Shared (K -> K -> Bool)) (key: Shared K) (bucket: List (Pair K V)) : Option V :=
-  let lf : K -> K -> Bool := Shared.get lt in
-  let gf : K -> K -> Bool := Shared.get gt in
-  match bucket {
-    List.empty => Option.none,
-    List.cons pair rest =>
-      match pair {
-        Pair.pair k v =>
-          let sk := Shared.of k in
-          if Bool.not (lf (Shared.get key) (Shared.get sk)) && Bool.not (gf (Shared.get key) (Shared.get sk))
-          then Option.some v
-          else HashMap.bucket_lookup lt gt key rest
-      }
-  }
+def HashMap.bucket_lookup {K V : Type} (lt : Shared (K -> K -> Bool)) (gt : Shared (K -> K -> Bool)) (key : Shared K) (bucket : List (Pair K V)) : Option V :=
+    let lf : K -> K -> Bool := Shared.get lt in
+    let gf : K -> K -> Bool := Shared.get gt in
+    match bucket {
+        List.empty => Option.none,
+        List.cons pair rest =>
+            match pair {
+                Pair.pair k v =>
+                    let sk := Shared.of k in
+                    if Bool.not (lf (Shared.get key) (Shared.get sk)) && Bool.not (gf (Shared.get key) (Shared.get sk))
+                    then Option.some v
+                    else HashMap.bucket_lookup lt gt key rest
+            }
+    }
 
 /// Delete a key from a single bucket.
 #[terminating]
-def HashMap.bucket_delete {K V : Type} (lt: Shared (K -> K -> Bool)) (gt: Shared (K -> K -> Bool)) (key: Shared K) (bucket: List (Pair K V)) : List (Pair K V) :=
-  let lf : K -> K -> Bool := Shared.get lt in
-  let gf : K -> K -> Bool := Shared.get gt in
-  match bucket {
-    List.empty => List.empty,
-    List.cons pair rest =>
-      match pair {
-        Pair.pair k v =>
-          let sk := Shared.of k in
-          if Bool.not (lf (Shared.get key) (Shared.get sk)) && Bool.not (gf (Shared.get key) (Shared.get sk))
-          then rest
-          else List.cons pair (HashMap.bucket_delete lt gt key rest)
-      }
-  }
+def HashMap.bucket_delete {K V : Type} (lt : Shared (K -> K -> Bool)) (gt : Shared (K -> K -> Bool)) (key : Shared K) (bucket : List (Pair K V)) : List (Pair K V) :=
+    let lf : K -> K -> Bool := Shared.get lt in
+    let gf : K -> K -> Bool := Shared.get gt in
+    match bucket {
+        List.empty => List.empty,
+        List.cons pair rest =>
+            match pair {
+                Pair.pair k v =>
+                    let sk := Shared.of k in
+                    if Bool.not (lf (Shared.get key) (Shared.get sk)) && Bool.not (gf (Shared.get key) (Shared.get sk))
+                    then rest
+                    else List.cons pair (HashMap.bucket_delete lt gt key rest)
+            }
+    }
 
 /// Concatenate two `List (Pair K V)`s — a local helper rather than
 /// reaching for the prelude's own `List.append` (curried differently,
@@ -571,35 +570,35 @@ def HashMap.bucket_delete {K V : Type} (lt: Shared (K -> K -> Bool)) (gt: Shared
 /// helpers and their doc comments).
 #[terminating]
 def HashMap.concat_lists {K V : Type} (a : List (Pair K V)) (b : List (Pair K V)) : List (Pair K V) :=
-  match a {
-    List.empty => b,
-    List.cons x rest => List.cons x (HashMap.concat_lists rest b)
-  }
+    match a {
+        List.empty => b,
+        List.cons x rest => List.cons x (HashMap.concat_lists rest b)
+    }
 
 #[terminating]
 def HashMap.concat_all {K V : Type} (lists : List (List (Pair K V))) : List (Pair K V) :=
-  match lists {
-    List.empty => List.empty,
-    List.cons hd rest => HashMap.concat_lists hd (HashMap.concat_all rest)
-  }
+    match lists {
+        List.empty => List.empty,
+        List.cons hd rest => HashMap.concat_lists hd (HashMap.concat_all rest)
+    }
 
 /// Convert the map to a list of (key, value) pairs — unlike
 /// `BTreeMap.to_list`, in NO particular order (buckets are visited
 /// 0..15, each bucket's own chain in insertion order, which has no
 /// relationship to key order for a hash table).
-pub def HashMap.to_list {K V : Type} (m: HashMap K V) : List (Pair K V) :=
-  match m {
-    HashMap.map outer => HashMap.concat_inners (Bucket16.to_list outer)
-  }
+pub def HashMap.to_list {K V : Type} (m : HashMap K V) : List (Pair K V) :=
+    match m {
+        HashMap.map outer => HashMap.concat_inners (Bucket16.to_list outer)
+    }
 
 /// Flatten one outer level: each slot is itself 16 buckets.
 def HashMap.concat_inners {K V : Type} (inners : List (Bucket16 (List (Pair K V)))) : List (Pair K V) :=
-  match inners {
-    List.empty => List.empty,
-    List.cons inner rest =>
-      HashMap.concat_lists (HashMap.concat_all (Bucket16.to_list inner))
-        (HashMap.concat_inners rest)
-  }
+    match inners {
+        List.empty => List.empty,
+        List.cons inner rest =>
+            HashMap.concat_lists (HashMap.concat_all (Bucket16.to_list inner))
+                (HashMap.concat_inners rest)
+    }
 
 /// Emptiness without walking entries. Recursive over the two levels
 /// rather than two 8-wide `&&` chains: the chain-length rule that shaped
@@ -608,24 +607,24 @@ def HashMap.concat_inners {K V : Type} (inners : List (Bucket16 (List (Pair K V)
 /// Kept cheap because `lang/module.mo`'s `merge_scope_data` uses it to
 /// skip a `to_list`-then-reinsert merge entirely.
 def HashMap.lists_all_empty {K V : Type} (ls : List (List (Pair K V))) : Bool :=
-  match ls {
-    List.empty => true,
-    List.cons l rest => if List.is_empty l then HashMap.lists_all_empty rest else false
-  }
+    match ls {
+        List.empty => true,
+        List.cons l rest => if List.is_empty l then HashMap.lists_all_empty rest else false
+    }
 
 def HashMap.inners_all_empty {K V : Type} (inners : List (Bucket16 (List (Pair K V)))) : Bool :=
-  match inners {
-    List.empty => true,
-    List.cons inner rest =>
-      if HashMap.lists_all_empty (Bucket16.to_list inner)
-      then HashMap.inners_all_empty rest
-      else false
-  }
+    match inners {
+        List.empty => true,
+        List.cons inner rest =>
+            if HashMap.lists_all_empty (Bucket16.to_list inner)
+            then HashMap.inners_all_empty rest
+            else false
+    }
 
-pub def HashMap.is_empty {K V : Type} (m: HashMap K V) : Bool :=
-  match m {
-    HashMap.map outer => HashMap.inners_all_empty (Bucket16.to_list outer)
-  }
+pub def HashMap.is_empty {K V : Type} (m : HashMap K V) : Bool :=
+    match m {
+        HashMap.map outer => HashMap.inners_all_empty (Bucket16.to_list outer)
+    }
 
 /// NOTE: a generic `HashMap.insert_all [Hashable K, BOrd K] (pairs: List
 /// (Pair K V)) (acc: HashMap K V) : HashMap K V` (fold-inserting `pairs`
@@ -687,12 +686,11 @@ pub def HashMap.is_empty {K V : Type} (m: HashMap K V) : Bool :=
 /// re-walking/reallocating a bucket on every single insert; this does a
 /// fixed 16 bucket-pair appends regardless of N) — see AGENTS.md's
 /// performance section for the measured before/after.
-pub def HashMap.merge_buckets {K V : Type} (m1: HashMap K V) (m2: HashMap K V) : HashMap K V :=
-  match m1 {
-    HashMap.map a =>
-      match m2 {
-        HashMap.map b =>
-          HashMap.map (Bucket16.map2 (Bucket16.map2 List.append) a b)
-      }
-  }
-
+pub def HashMap.merge_buckets {K V : Type} (m1 : HashMap K V) (m2 : HashMap K V) : HashMap K V :=
+    match m1 {
+        HashMap.map a =>
+            match m2 {
+                HashMap.map b =>
+                    HashMap.map (Bucket16.map2 (Bucket16.map2 List.append) a b)
+            }
+    }

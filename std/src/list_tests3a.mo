@@ -1,6 +1,5 @@
 use std::list {List.filter, List.length}
 
-
 // Append tests (continued)
 
 #[test]

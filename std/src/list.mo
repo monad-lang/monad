@@ -10,7 +10,6 @@
 
 use lib::show {Show}
 
-
 pub class Show A {
     def show : A -> String
 }
@@ -36,7 +35,7 @@ def show_body (show_elem : A -> String) (xs : List A) : String :=
 
 // Element-wise Show (List A) - dispatches via runtime type inference
 pub instance [Show A] Show (List A) {
-    def show (xs: List A) : String :=
+    def show (xs : List A) : String :=
         list_show (fn a => Show.show a) xs
 }
 
@@ -121,7 +120,7 @@ def test_sum : Bool :=
     [1, 2, 3, 4]
         |> List.sum
         |> BEq.beq 10
-    
+
 // TODO fix instance resolution, then use `|> List.contains "c"` here instead.
 #[test]
 def test_contains : Bool :=
@@ -206,8 +205,8 @@ def List.dedup_by_go {A : Type} (eq : Shared (A -> A -> Bool)) (xs : List A) (se
             if List.contains_by (Shared.get eq) (Shared.get sa) (Shared.get seen)
             then List.dedup_by_go eq tail seen
             else List.cons (Shared.get sa)
-                    (List.dedup_by_go eq tail
-                        (Shared.of (List.cons (Shared.get sa) (Shared.get seen)))),
+                (List.dedup_by_go eq tail
+                    (Shared.of (List.cons (Shared.get sa) (Shared.get seen)))),
         _ => List.empty
     }
 

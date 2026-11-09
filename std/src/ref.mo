@@ -44,7 +44,7 @@ priv def cell_update_raw (r : Ref A) (f : A -> A) : RawIO A
 /// Apply a pure `f` to the current value and store the result atomically.
 /// Returns the new value. `f` may run more than once under contention.
 pub def Ref.update (r : Ref A) (f : A -> A) : IO A :=
-  IO.mk (cell_update_raw r f)
+    IO.mk (cell_update_raw r f)
 
 #[native cell_add_i64]
 priv def cell_add_i64_raw (r : Ref I64) (delta : I64) : RawIO I64
@@ -52,10 +52,10 @@ priv def cell_add_i64_raw (r : Ref I64) (delta : I64) : RawIO I64
 /// An atomic integer add, for counters (rate limits, sequence numbers) where
 /// a general `update` would allocate a closure per call.
 pub def Ref.add_i64 (r : Ref I64) (delta : I64) : IO I64 :=
-  IO.mk (cell_add_i64_raw r delta)
+    IO.mk (cell_add_i64_raw r delta)
 
 /// `Ref.update` with the result discarded.
 pub def Ref.modify (r : Ref A) (f : A -> A) : IO Unit := do {
-  let _ <- Ref.update r f;
-  return unit
+    let _ <- Ref.update r f;
+    return unit
 }

@@ -1,6 +1,5 @@
 use std::list {List.filter, List.sum}
 
-
 // Filter tests (continued)
 
 def is_even_fn (x : I64) : Bool :=

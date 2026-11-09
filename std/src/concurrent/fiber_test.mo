@@ -51,7 +51,7 @@ def test_fiber_error_codes : Bool :=
     is_cancelled (FiberError.of_code 1)
         && is_never_started (FiberError.of_code 2)
         && Bool.not (String.beq (FiberError.message FiberError.cancelled)
-                                (FiberError.message FiberError.never_started))
+            (FiberError.message FiberError.never_started))
 
 def ok_is (r : Result FiberError I64) (v : I64) : Bool :=
     match r {

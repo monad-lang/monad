@@ -21,40 +21,40 @@ use lib::concurrent::fiber {FiberError, await_fiber, cancel_fiber, forkIO, pollF
 use lib::concurrent::combine {sleepIO}
 
 def ok_is (r : Result FiberError I64) (v : I64) : Bool :=
-  match r {
-    Result.ok x => I64.beq x v,
-    Result.err _ => false
-  }
+    match r {
+        Result.ok x => I64.beq x v,
+        Result.err _ => false
+    }
 
 def polled_ok_is (o : Option (Result FiberError I64)) (v : I64) : Bool :=
-  match o {
-    Option.some r => ok_is r v,
-    Option.none => false
-  }
+    match o {
+        Option.some r => ok_is r v,
+        Option.none => false
+    }
 
 def err_is_cancelled (r : Result FiberError I64) : Bool :=
-  match r {
-    Result.ok _ => false,
-    Result.err e => match e {
-      FiberError.cancelled => true,
-      FiberError.never_started => false
+    match r {
+        Result.ok _ => false,
+        Result.err e => match e {
+            FiberError.cancelled => true,
+            FiberError.never_started => false
+        }
     }
-  }
 
 def ok_value (r : Result FiberError I64) : I64 :=
-  match r {
-    Result.ok x => x,
-    Result.err _ => -1
-  }
+    match r {
+        Result.ok x => x,
+        Result.err _ => -1
+    }
 
 def poll_300_then_42 (_ : Unit) : IO I64 := do {
-  sleepIO 300;
-  IO.pure 42
+    sleepIO 300;
+    IO.pure 42
 }
 
 def sleep_100_action (_ : Unit) : IO I64 := do {
-  sleepIO 100;
-  IO.pure 7
+    sleepIO 100;
+    IO.pure 7
 }
 
 // The compiled-only corner: the FIRST poll of a still-running fiber must
@@ -63,13 +63,13 @@ def sleep_100_action (_ : Unit) : IO I64 := do {
 // after it has stopped: `some`, carrying the value.
 #[test]
 def test_poll_none_then_some : IO Bool {
-  let f <- forkIO poll_300_then_42;
-  let sf := Shared.of f;
-  let first <- pollFiber (Shared.get sf);
-  let first_ok := match first { Option.none => true, Option.some _ => false };
-  sleepIO 700;
-  let later <- pollFiber (Shared.get sf);
-  return (polled_ok_is later 42 && first_ok)
+    let f <- forkIO poll_300_then_42;
+    let sf := Shared.of f;
+    let first <- pollFiber (Shared.get sf);
+    let first_ok := match first { Option.none => true, Option.some _ => false };
+    sleepIO 700;
+    let later <- pollFiber (Shared.get sf);
+    return (polled_ok_is later 42 && first_ok)
 }
 
 // The runner-agnostic corner: the polled value IS the action's result.
@@ -77,10 +77,10 @@ def test_poll_none_then_some : IO Bool {
 // the compiled backend (poll only answers once the fiber stops) both pass.
 #[test]
 def test_poll_value_is_the_result : IO Bool {
-  let f <- forkIO poll_300_then_42;
-  sleepIO 700;
-  let o <- pollFiber f;
-  return (polled_ok_is o 42)
+    let f <- forkIO poll_300_then_42;
+    sleepIO 700;
+    let o <- pollFiber f;
+    return (polled_ok_is o 42)
 }
 
 // A cancelled fiber answers `some (err cancelled)` once it has stopped,
@@ -88,15 +88,15 @@ def test_poll_value_is_the_result : IO Bool {
 // an abandoned fiber terminates instead of dangling.
 #[test]
 def test_poll_cancelled_fiber_is_err : IO Bool {
-  let f <- forkIO sleep_100_action;
-  let sf := Shared.of f;
-  cancel_fiber (Shared.get sf);
-  sleepIO 300;
-  let o <- pollFiber (Shared.get sf);
-  return (match o {
-    Option.some r => err_is_cancelled r,
-    Option.none => false
-  })
+    let f <- forkIO sleep_100_action;
+    let sf := Shared.of f;
+    cancel_fiber (Shared.get sf);
+    sleepIO 300;
+    let o <- pollFiber (Shared.get sf);
+    return (match o {
+        Option.some r => err_is_cancelled r,
+        Option.none => false
+    })
 }
 
 // The benign double-consume: on the compiled backend, whoever consumed
@@ -104,19 +104,19 @@ def test_poll_cancelled_fiber_is_err : IO Bool {
 // re-reads the same stored value rather than faulting or hanging.
 #[test]
 def test_poll_then_await_re_reads : IO Bool {
-  let f <- forkIO poll_300_then_42;
-  let sf := Shared.of f;
-  sleepIO 700;
-  let o <- pollFiber (Shared.get sf);
-  let v <- await_fiber (Shared.get sf);
-  return (polled_ok_is o (ok_value v))
+    let f <- forkIO poll_300_then_42;
+    let sf := Shared.of f;
+    sleepIO 700;
+    let o <- pollFiber (Shared.get sf);
+    let v <- await_fiber (Shared.get sf);
+    return (polled_ok_is o (ok_value v))
 }
 
 #[test]
 def test_await_then_poll_re_reads : IO Bool {
-  let f <- forkIO poll_300_then_42;
-  let sf := Shared.of f;
-  let v <- await_fiber (Shared.get sf);
-  let o <- pollFiber (Shared.get sf);
-  return (polled_ok_is o (ok_value v))
+    let f <- forkIO poll_300_then_42;
+    let sf := Shared.of f;
+    let v <- await_fiber (Shared.get sf);
+    let o <- pollFiber (Shared.get sf);
+    return (polled_ok_is o (ok_value v))
 }

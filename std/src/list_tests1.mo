@@ -53,7 +53,7 @@ def test_list_show_single : Bool :=
 def test_list_show_multi : Bool :=
     list_show I64.to_string [1, 2, 3] == "[1, 2, 3]"
 
-def show_bool_fn (b: Bool) : String :=
+def show_bool_fn (b : Bool) : String :=
     if b then "T" else "F"
 
 #[test]

@@ -237,7 +237,6 @@ def ordering_show (o : Ordering) : String :=
 
 // ---------- Tests ----------
 
-
 #[test]
 def test_beq_ordering_lt_lt : Bool :=
     BEq.beq lt lt

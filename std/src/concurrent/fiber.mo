@@ -6,37 +6,37 @@
 // in `combine.mo` import via `lib::` and are unaffected either way.
 
 pub type Fiber (A : Type) {
-  fiber
+    fiber
 }
 
 /// Why a fiber has no result to hand back.
 pub type FiberError {
-  /// `cancel_fiber` (or a dropped scope, or a lost `race`) reached the
-  /// fiber before it finished. Cancellation is cooperative: the body
-  /// stops at its next IO bind (a native or pure computation already in
-  /// progress finishes), and its result is discarded either way.
-  cancelled,
-  /// The runtime could not create the fiber's thread (a thread-count or
-  /// address-space limit), so the action never ran.
-  never_started
+    /// `cancel_fiber` (or a dropped scope, or a lost `race`) reached the
+    /// fiber before it finished. Cancellation is cooperative: the body
+    /// stops at its next IO bind (a native or pure computation already in
+    /// progress finishes), and its result is discarded either way.
+    cancelled,
+    /// The runtime could not create the fiber's thread (a thread-count or
+    /// address-space limit), so the action never ran.
+    never_started
 }
 
 /// The natives' error codes, in this order: 1 is `cancelled`, 2 is
 /// `never_started`.
 pub def FiberError.of_code (code : I64) : FiberError :=
-  if I64.beq code 2 then FiberError.never_started else FiberError.cancelled
+    if I64.beq code 2 then FiberError.never_started else FiberError.cancelled
 
 pub def FiberError.message (e : FiberError) : String :=
-  match e {
-    FiberError.cancelled => "fiber was cancelled",
-    FiberError.never_started => "fiber never started (no thread could be created)"
-  }
+    match e {
+        FiberError.cancelled => "fiber was cancelled",
+        FiberError.never_started => "fiber never started (no thread could be created)"
+    }
 
 def fiber_result (r : Result I64 A) : Result FiberError A :=
-  match r {
-    Result.ok a => Result.ok a,
-    Result.err code => Result.err (FiberError.of_code code)
-  }
+    match r {
+        Result.ok a => Result.ok a,
+        Result.err code => Result.err (FiberError.of_code code)
+    }
 
 #[native fork_io]
 priv def fork_io_raw (action : Unit -> IO A) : RawIO (Fiber A)
@@ -55,7 +55,7 @@ priv def await_fiber_raw (f : Fiber A) : RawIO (Result I64 A)
 /// answer; on the Rust host it is an error, because the host runs the
 /// action at the first await.
 pub def await_fiber (f : Fiber A) : IO (Result FiberError A) :=
-  Monad.bind (IO.mk (await_fiber_raw f)) (fn r => IO.pure (fiber_result r))
+    Monad.bind (IO.mk (await_fiber_raw f)) (fn r => IO.pure (fiber_result r))
 
 #[native cancel_fiber]
 priv def cancel_fiber_raw (f : Fiber A) : RawIO Unit
@@ -73,10 +73,10 @@ priv def poll_fiber_raw (f : Fiber A) : RawIO (Option (Result I64 A))
 /// to completion and always returns `some`, so no test may assert
 /// interleaving through pollFiber there.
 pub def pollFiber (f : Fiber A) : IO (Option (Result FiberError A)) :=
-  Monad.bind (IO.mk (poll_fiber_raw f)) (fn o => IO.pure (poll_result o))
+    Monad.bind (IO.mk (poll_fiber_raw f)) (fn o => IO.pure (poll_result o))
 
 def poll_result (o : Option (Result I64 A)) : Option (Result FiberError A) :=
-  match o {
-    Option.none => Option.none,
-    Option.some r => Option.some (fiber_result r)
-  }
+    match o {
+        Option.none => Option.none,
+        Option.some r => Option.some (fiber_result r)
+    }
