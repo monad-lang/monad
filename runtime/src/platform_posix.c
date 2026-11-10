@@ -312,6 +312,10 @@ static void* fiber_main(void* arg) {
     int64_t box = apply_closure1_impl(f->action, (int64_t)(intptr_t)unit);
     monad_set_cancel_flag(NULL);
     pthread_mutex_lock(&f->lock);
+    /* The closure has run: drop the handle's reference to it before the
+       result is published. A caller that still holds the handle (weaver's
+       poll loop does) must not pin the turn's whole captured environment. */
+    f->action = NULL;
     f->io_box = box;
     f->state = 1;
     pthread_cond_broadcast(&f->finished);
@@ -357,7 +361,9 @@ void* monad_fork_io(void* closure) {
     if (rc != 0) {
         /* No thread at all. Publish an already-finished state with no
            result rather than a handle that can never become ready: await
-           and poll answer it `err never_started` (fiber_answer). */
+           and poll answer it `err never_started` (fiber_answer). The
+           action never ran, so drop it too. */
+        f->action = NULL;
         f->state = 1;
         f->io_box = 0;
     }
