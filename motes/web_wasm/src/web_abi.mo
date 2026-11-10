@@ -137,6 +137,89 @@ def WebImport.storage_get_raw : WebImport :=
 def WebImport.storage_set : WebImport :=
     { module := "monad", name := "storage_set", params := ["i64", "i64", "i64", "i64"], result := "void" }
 
+/// Presence-aware storage: `has` distinguishes an absent key from an empty
+/// stored value (the old `""` sentinel conflated them); `remove`/`clear`
+/// delete. `has` returns an i64 truth value.
+def WebImport.storage_has : WebImport :=
+    { module := "monad", name := "storage_has", params := ["i64", "i64"], result := "i64" }
+
+def WebImport.storage_remove : WebImport :=
+    { module := "monad", name := "storage_remove", params := ["i64", "i64"], result := "void" }
+
+def WebImport.storage_clear : WebImport :=
+    { module := "monad", name := "storage_clear", params := List.empty, result := "void" }
+
+/// `performance.now()` in milliseconds, for measuring intervals (the page
+/// clock `now_ms` is wall-clock only).
+def WebImport.monotonic_ms : WebImport :=
+    { module := "monad", name := "monotonic_ms", params := List.empty, result := "i64" }
+
+/// `matchMedia(query).matches`, and a `change` listener whose spec carries
+/// the handler id (the live event is a `MediaQueryListEvent` snapshot).
+def WebImport.media_matches : WebImport :=
+    { module := "monad", name := "media_matches", params := ["i64", "i64"], result := "i64" }
+
+def WebImport.media_watch : WebImport :=
+    { module := "monad", name := "media_watch", params := ["i64", "i64", "i64", "i64"], result := "void" }
+
+def WebImport.media_unwatch : WebImport :=
+    { module := "monad", name := "media_unwatch", params := ["i64", "i64"], result := "void" }
+
+/// A hit test (`document.elementFromPoint`) and an attribute read, so a
+/// touch drag can work out which element is under the finger.
+def WebImport.dom_element_at : WebImport :=
+    { module := "monad", name := "dom_element_at", params := ["f64", "f64"], result := "i64" }
+
+def WebImport.dom_attr : WebImport :=
+    { module := "monad", name := "dom_attr", params := ["i64", "i64", "i64", "i64", "i64"], result := "i64" }
+
+/// Move focus to the first node matching a selector (used after a patch, so
+/// a dialog inserted this frame can take focus).
+def WebImport.dom_focus : WebImport :=
+    { module := "monad", name := "dom_focus", params := ["i64", "i64"], result := "void" }
+
+/// One-shot delayed message: returns a timer id in the top bit that
+/// `Handler.id` never uses; the wasm runtime stores the Msg and resolves it
+/// when the host calls `oak_dispatch_event(id)`.
+def WebImport.timer_after : WebImport :=
+    { module := "monad", name := "timer_after", params := ["i64"], result := "i64" }
+
+/// Request headers as a length-prefixed blob (`"<klen>:<key><vlen>:<value>"`
+/// repeated), plus the response-header reader over the same encoding.
+def WebImport.fetch_begin_headers : WebImport :=
+    { module := "monad", name := "fetch_begin_headers",
+        params := ["i64", "i64", "i64", "i64", "i64", "i64", "i64"], result := "i64" }
+
+def WebImport.fetch_headers : WebImport :=
+    { module := "monad", name := "fetch_headers", params := ["i64", "i64", "i64"], result := "i64" }
+
+/// `crypto.getRandomValues` into a caller-owned buffer (1 = filled,
+/// 0 = unavailable); SHA-256 is two-phase like fetch.
+def WebImport.crypto_random_fill : WebImport :=
+    { module := "monad", name := "crypto_random_fill", params := ["i64", "i64"], result := "i64" }
+
+def WebImport.crypto_sha256_begin : WebImport :=
+    { module := "monad", name := "crypto_sha256_begin", params := ["i64", "i64"], result := "i64" }
+
+def WebImport.crypto_poll : WebImport :=
+    { module := "monad", name := "crypto_poll", params := ["i64"], result := "i64" }
+
+def WebImport.crypto_result_hex : WebImport :=
+    { module := "monad", name := "crypto_result_hex", params := ["i64", "i64", "i64"], result := "i64" }
+
+/// `location.reload`/`assign`; a page that wants to recover from heap
+/// pressure persists first, then reloads.
+def WebImport.window_reload : WebImport :=
+    { module := "monad", name := "window_reload", params := List.empty, result := "void" }
+
+def WebImport.window_navigate : WebImport :=
+    { module := "monad", name := "window_navigate", params := ["i64", "i64"], result := "void" }
+
+/// The allocator's last word before it traps: `console.error` with the
+/// requested and committed sizes.
+def WebImport.oom : WebImport :=
+    { module := "monad", name := "oom", params := ["i64", "i64"], result := "void" }
+
 def WebImport.console_log : WebImport :=
     { module := "monad", name := "console_log", params := ["i64", "i64"], result := "void" }
 
@@ -262,6 +345,15 @@ pub def WebAbi.default : WebAbi :=
             WebImport.clipboard_read, WebImport.clipboard_error,
             WebImport.now_ms, WebImport.storage_get_raw,
             WebImport.storage_set, WebImport.console_log, WebImport.try_result,
+            WebImport.storage_has, WebImport.storage_remove, WebImport.storage_clear,
+            WebImport.monotonic_ms,
+            WebImport.media_matches, WebImport.media_watch, WebImport.media_unwatch,
+            WebImport.dom_element_at, WebImport.dom_attr, WebImport.dom_focus,
+            WebImport.timer_after,
+            WebImport.fetch_begin_headers, WebImport.fetch_headers,
+            WebImport.crypto_random_fill, WebImport.crypto_sha256_begin,
+            WebImport.crypto_poll, WebImport.crypto_result_hex,
+            WebImport.window_reload, WebImport.window_navigate, WebImport.oom,
             WebImport.worker_run, WebImport.worker_poll, WebImport.worker_status,
             WebImport.worker_value, WebImport.worker_type, WebImport.worker_error,
             WebImport.worker_notes, WebImport.worker_cancel,

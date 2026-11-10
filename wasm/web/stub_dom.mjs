@@ -16,6 +16,12 @@
 //     default-value behavior `Dom.value` reads);
 //   * `textContent` returns `_text` for non-element nodes and the joined
 //     children for elements.
+//
+// It also supplies the browser globals the newer web_wasm surface reads:
+// localStorage, matchMedia, elementFromPoint, location, performance and
+// crypto (Node's WebCrypto when the runtime has no global one).
+
+import { webcrypto } from 'node:crypto';
 
 export class FakeDataTransfer {
   constructor() {
@@ -80,6 +86,7 @@ export class FakeNode {
     this._text = '';
     this.value = '';
     this.checked = false;
+    this._capturedPointers = new Set();
   }
 
   appendChild(child) {
@@ -153,6 +160,35 @@ export class FakeNode {
     return evt;
   }
 
+  focus() {
+    const d = globalThis.document;
+    if (d) d.activeElement = this;
+  }
+
+  contains(node) {
+    if (!node) return false;
+    if (node === this) return true;
+    return this.childNodes.some((c) => c.contains && c.contains(node));
+  }
+
+  querySelectorAll(selector) {
+    return findAll(this, selector);
+  }
+
+  hasPointerCapture(pointerId) {
+    return this._capturedPointers.has(Number(pointerId));
+  }
+
+  setPointerCapture(pointerId) {
+    this._capturedPointers.add(Number(pointerId));
+  }
+
+  releasePointerCapture(pointerId) {
+    const id = Number(pointerId);
+    this._capturedPointers.delete(id);
+    stub.pointerReleases.push(id);
+  }
+
   get textContent() {
     if (this.nodeType === 1) return this.childNodes.map((c) => c.textContent).join('');
     return this._text;
@@ -183,12 +219,40 @@ export const stub = {
   createdCount: 0,
   clipboardText: 'from-clipboard',
   clipboardWritten: null,
+  // Media queries: `matchMedia(q).matches` reads this map and `fire` drives
+  // registered `change` listeners.
+  mediaMatches: {},
+  mediaQueries: [],
+  // Hit testing: `document.elementFromPoint` returns this node.
+  elementAt: null,
+  reloaded: 0,
+  navigated: null,
+  performanceNow: 1000,
+  pointerReleases: [],
 };
 
 export const body = new FakeNode(1, 'BODY');
 
 function matches(node, selector) {
+  if (!node || node.nodeType !== 1) return false;
   if (selector.startsWith('#')) return node.attrs && node.attrs.id === selector.slice(1);
+  if (selector.startsWith('.')) {
+    return (node.attrs && node.attrs.class || '').split(/\s+/).includes(selector.slice(1));
+  }
+  const notAttr = selector.match(/^([a-zA-Z0-9]*):not\(\[([-\w]+)(?:="([^"]*)")?\]\)$/);
+  if (notAttr) {
+    const [, tag, attr, value] = notAttr;
+    if (tag && (!node.tagName || node.tagName.toLowerCase() !== tag.toLowerCase())) return false;
+    if (!Object.prototype.hasOwnProperty.call(node.attrs, attr)) return true;
+    return value !== undefined && node.attrs[attr] !== value;
+  }
+  const attrOnly = selector.match(/^([a-zA-Z0-9]*)\[([-\w]+)(?:="([^"]*)")?\]$/);
+  if (attrOnly) {
+    const [, tag, attr, value] = attrOnly;
+    if (tag && (!node.tagName || node.tagName.toLowerCase() !== tag.toLowerCase())) return false;
+    if (!Object.prototype.hasOwnProperty.call(node.attrs, attr)) return false;
+    return value === undefined || node.attrs[attr] === value;
+  }
   return node.tagName && node.tagName.toLowerCase() === selector.toLowerCase();
 }
 
@@ -200,6 +264,20 @@ function find(node, selector) {
     if (deeper) return deeper;
   }
   return null;
+}
+
+function findAll(node, selector) {
+  const selectors = selector.split(',').map((s) => s.trim()).filter(Boolean);
+  const found = [];
+  const visit = (n) => {
+    for (const child of n.childNodes) {
+      if (child.nodeType !== 1) continue;
+      if (selectors.some((s) => matches(child, s))) found.push(child);
+      visit(child);
+    }
+  };
+  visit(node);
+  return found;
 }
 
 /// Install the `document` the runtime talks to. `#app` is the mount
@@ -214,9 +292,16 @@ export function installDocument() {
 
   globalThis.document = {
     body,
+    activeElement: body,
     querySelector(selector) {
       if (selector === 'body' || selector === '#app') return body;
       return find(body, selector);
+    },
+    querySelectorAll(selector) {
+      return findAll(body, selector);
+    },
+    elementFromPoint(_x, _y) {
+      return stub.elementAt;
     },
     createElement(tag) {
       stub.lastCreated = new FakeNode(1, tag.toUpperCase());
@@ -245,6 +330,66 @@ export function installDocument() {
     removeEventListener: windowEvents.removeEventListener.bind(windowEvents),
     fire: windowEvents.fire.bind(windowEvents),
   };
+
+  // localStorage: a Map with the Storage API. `getItem` returns null for a
+  // missing key, which is what `Storage.has` distinguishes from "". A
+  // harness that seeded its own store before `installDocument` keeps it.
+  if (!globalThis.localStorage) {
+    const store = new Map();
+    globalThis.localStorage = {
+      getItem: (k) => (store.has(String(k)) ? store.get(String(k)) : null),
+      setItem: (k, v) => { store.set(String(k), String(v)); },
+      removeItem: (k) => { store.delete(String(k)); },
+      clear: () => { store.clear(); },
+      key: (i) => Array.from(store.keys())[i] ?? null,
+      get length() { return store.size; },
+    };
+  }
+
+  // matchMedia: one object per query, with the runtime's `change` listener
+  // driven by `fire`.
+  globalThis.matchMedia = (query) => {
+    const mql = {
+      media: String(query),
+      matches: !!stub.mediaMatches[String(query)],
+      listeners: [],
+      addEventListener(event, handler) {
+        if (event === 'change') this.listeners.push(handler);
+      },
+      removeEventListener(event, handler) {
+        if (event !== 'change') return;
+        this.listeners = this.listeners.filter((h) => h !== handler);
+      },
+      fire(next) {
+        this.matches = !!next;
+        stub.mediaMatches[this.media] = this.matches;
+        for (const h of this.listeners.slice()) {
+          h({ type: 'change', matches: this.matches, media: this.media });
+        }
+      },
+    };
+    stub.mediaQueries.push(mql);
+    return mql;
+  };
+
+  globalThis.location = {
+    reload() { stub.reloaded += 1; },
+    assign(url) { stub.navigated = String(url); },
+  };
+
+  Object.defineProperty(globalThis, 'performance', {
+    value: { now: () => stub.performanceNow },
+    configurable: true,
+    writable: true,
+  });
+
+  if (!globalThis.crypto) {
+    Object.defineProperty(globalThis, 'crypto', {
+      value: webcrypto,
+      configurable: true,
+      writable: true,
+    });
+  }
 
   // Node exposes `navigator` as a getter-only global; define our own.
   Object.defineProperty(globalThis, 'navigator', {

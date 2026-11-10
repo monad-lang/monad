@@ -66,6 +66,10 @@ function importObject(memoryRef) {
       now_ms() {
         return BigInt(Date.now());
       },
+      oom(want, have) {
+        console.error(`monad: wasm heap exhausted (want ${Number(want)} bytes, have ${Number(have)})`);
+        return 0n;
+      },
       f64_to_string(bits, ptr, max) {
         const view = new DataView(new ArrayBuffer(8));
         view.setBigUint64(0, BigInt.asUintN(64, BigInt(bits)), true);

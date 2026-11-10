@@ -47,11 +47,22 @@ const nodeIds = new WeakMap(); // node -> id, so a re-read keeps its handle
 const listenerTables = new WeakMap(); // node -> Map(event -> { id, wrapper })
 const globalTables = new Map(); // "target:event" -> { flags, wrapper }
 let frameHandler = null; // the animation-frame subscription's handler id
-const fetches = []; // id -> { state, status, bytes, offset }
+const fetches = []; // id -> { state, status, bytes, offset, headers }
 const clips = []; // id -> { state, text, error }
+const cryptos = []; // id -> { state, hex, error }
+const mediaTables = new Map(); // query -> { mql, wrapper }
+let timerSeq = 0n;
+// Handler ids are masked to 31 bits (`Handler.id`), so the top bit is a
+// disjoint space for timer callbacks.
+const TIMER_BASE = 0x80000000n;
 
 const EVENT_PREFIX = 'data-oak-on-';
-const EVENT_FLAGS = 'cdsop';
+const EVENT_FLAGS = 'cdsopr';
+const FOCUS_TRAP_ATTR = 'data-oak-focus-trap';
+const FOCUSABLE =
+  'a[href],button:not([disabled]),input:not([disabled]),select:not([disabled]),' +
+  'textarea:not([disabled]),[tabindex]:not([tabindex="-1"])';
+const focusTraps = new WeakMap();
 
 // The live event, set only for the duration of the synchronous
 // `oak_dispatch_event` export call. Getters read it; after the call it is
@@ -76,7 +87,7 @@ function parseListenerSpec(text) {
   if (id === null) return null;
   const flags = {
     capture: false, preventDefault: false, stopPropagation: false,
-    once: false, passive: false,
+    once: false, passive: false, releaseCapture: false,
   };
   const letters = sep < 0 ? '' : text.slice(sep + 1);
   for (let i = 0; i < letters.length; i++) {
@@ -87,6 +98,7 @@ function parseListenerSpec(text) {
     else if (ch === 's') flags.stopPropagation = true;
     else if (ch === 'o') flags.once = true;
     else if (ch === 'p') flags.passive = true;
+    else if (ch === 'r') flags.releaseCapture = true;
   }
   return { id, flags };
 }
@@ -113,6 +125,7 @@ function addNode(n) {
 // life of the page, because patch/replace creates fresh nodes every time.
 function forget(n) {
   if (!n) return;
+  removeFocusTrap(n);
   const id = nodeIds.get(n);
   if (id !== undefined) {
     nodes[id] = null;
@@ -120,6 +133,71 @@ function forget(n) {
   }
   const children = n.childNodes || [];
   for (let i = 0; i < children.length; i++) forget(children[i]);
+}
+
+// ── focus trap (`data-oak-focus-trap`) ───────────────────────────────
+//
+// A dialog renders the attribute; Tab/Shift+Tab cycle inside it, and the
+// previously focused element gets focus back when the dialog leaves the
+// tree. Escape is the app's own keydown handler, so it needs focus inside.
+
+function focusablesIn(n) {
+  if (!n || typeof n.querySelectorAll !== 'function') return [];
+  try {
+    return Array.from(n.querySelectorAll(FOCUSABLE));
+  } catch {
+    return [];
+  }
+}
+
+function installFocusTrap(n) {
+  if (!n || typeof n.addEventListener !== 'function' || focusTraps.has(n)) return;
+  const previous = globalThis.document ? globalThis.document.activeElement : null;
+  const onKey = (evt) => {
+    if (!evt || evt.key !== 'Tab') return;
+    const list = focusablesIn(n);
+    const active = globalThis.document ? globalThis.document.activeElement : null;
+    if (list.length === 0) {
+      if (evt.preventDefault) evt.preventDefault();
+      return;
+    }
+    const first = list[0];
+    const last = list[list.length - 1];
+    if (!n.contains || !n.contains(active)) {
+      if (evt.preventDefault) evt.preventDefault();
+      first.focus();
+      return;
+    }
+    if (list.indexOf(active) < 0) {
+      if (evt.preventDefault) evt.preventDefault();
+      (evt.shiftKey ? last : first).focus();
+      return;
+    }
+    if (evt.shiftKey && active === first) {
+      evt.preventDefault();
+      last.focus();
+    } else if (!evt.shiftKey && active === last) {
+      evt.preventDefault();
+      first.focus();
+    }
+  };
+  n.addEventListener('keydown', onKey, true);
+  focusTraps.set(n, { onKey, previous });
+}
+
+function removeFocusTrap(n) {
+  const trap = focusTraps.get(n);
+  if (!trap) return;
+  n.removeEventListener('keydown', trap.onKey, true);
+  focusTraps.delete(n);
+  const active = globalThis.document ? globalThis.document.activeElement : null;
+  if (trap.previous && (!n.contains || !n.contains(active))) {
+    try {
+      trap.previous.focus();
+    } catch {
+      // the opener may itself have left the tree
+    }
+  }
 }
 
 function idFromText(text) {
@@ -177,9 +255,25 @@ function makeWrapper(n, event, id, flags) {
 }
 
 function removeEntry(n, event, entry) {
-  if (entry) {
-    n.removeEventListener(event, entry.wrapper, { capture: entry.flags.capture });
+  if (!entry) return;
+  n.removeEventListener(event, entry.wrapper, { capture: entry.flags.capture });
+  if (entry.release) {
+    n.removeEventListener('gotpointercapture', entry.release, { passive: true });
   }
+}
+
+// The browser implicitly captures a touch pointer to the element it went
+// down on; releasing it is what lets `pointerenter` fire on neighbours
+// during a drag. A mouse drag never captures, so this is a no-op there.
+function makeReleaseCapture(n) {
+  return (evt) => {
+    if (!evt || !n.hasPointerCapture) return;
+    try {
+      if (n.hasPointerCapture(evt.pointerId)) n.releasePointerCapture(evt.pointerId);
+    } catch {
+      // the pointer may already be gone
+    }
+  };
 }
 
 function setListener(n, event, spec) {
@@ -195,12 +289,14 @@ function setListener(n, event, spec) {
     return;
   }
   const wrapper = makeWrapper(n, event, parsed.id, parsed.flags);
+  const release = parsed.flags.releaseCapture ? makeReleaseCapture(n) : null;
   n.addEventListener(event, wrapper, {
     capture: parsed.flags.capture,
     once: parsed.flags.once,
     passive: parsed.flags.passive,
   });
-  table.set(event, { id: parsed.id, flags: parsed.flags, wrapper });
+  if (release) n.addEventListener('gotpointercapture', release, { passive: true });
+  table.set(event, { id: parsed.id, flags: parsed.flags, wrapper, release });
 }
 
 function clearListener(n, event) {
@@ -299,17 +395,62 @@ function tryStopWorker(state) {
   workerState = state;
 }
 
+// A wasm32 pointer is an unsigned 32-bit offset. `Number(ptr)` is signed, so
+// a heap above 2 GB produced a negative offset and an unexplained
+// `RangeError` (anidoku's crash) instead of addressing the right bytes.
+function u32(ptr) {
+  return Number(ptr) >>> 0;
+}
+
 function str(ptr, len) {
   // Re-read the buffer on every call: memory.grow detaches the old one.
-  return decoder.decode(new Uint8Array(memory.buffer, Number(ptr), Number(len)));
+  return decoder.decode(new Uint8Array(memory.buffer, u32(ptr), Number(len)));
 }
 
 // Copy `bytes` into the caller's wasm buffer, capped at `max`; returns the
 // byte count written.
 function writeBytes(ptr, bytes, max) {
   const n = Math.min(bytes.length, Number(max));
-  new Uint8Array(memory.buffer, Number(ptr), n).set(bytes.subarray(0, n));
+  new Uint8Array(memory.buffer, u32(ptr), n).set(bytes.subarray(0, n));
   return BigInt(n);
+}
+
+function hexBytes(bytes) {
+  let out = '';
+  for (let i = 0; i < bytes.length; i++) {
+    out += (bytes[i] < 16 ? '0' : '') + bytes[i].toString(16);
+  }
+  return out;
+}
+
+// The request/response header blob: `"<klen>:<key><vlen>:<value>"` repeated.
+// Length prefixes mean a value may contain `:` or a newline, and HTTP header
+// values cannot contain NUL, so nothing is escaped.
+function parseHeaderBlob(text) {
+  const out = {};
+  let i = 0;
+  while (i < text.length) {
+    const kColon = text.indexOf(':', i);
+    if (kColon < 0) break;
+    const klen = Number(text.slice(i, kColon));
+    if (!Number.isFinite(klen) || klen < 0) break;
+    const key = text.slice(kColon + 1, kColon + 1 + klen);
+    const vStart = kColon + 1 + klen;
+    const vColon = text.indexOf(':', vStart);
+    if (vColon < 0) break;
+    const vlen = Number(text.slice(vStart, vColon));
+    if (!Number.isFinite(vlen) || vlen < 0) break;
+    const value = text.slice(vColon + 1, vColon + 1 + vlen);
+    out[key] = value;
+    i = vColon + 1 + vlen;
+  }
+  return out;
+}
+
+function encodeHeaderBlob(pairs) {
+  return pairs
+    .map(([key, value]) => `${key.length}:${key}${value.length}:${value}`)
+    .join('');
 }
 
 function methodName(code) {
@@ -333,6 +474,38 @@ function storage() {
   } catch {
     return null; // a private window can throw on access
   }
+}
+
+// Start one fetch and record its status, body and response headers. The
+// promise never calls back into wasm; the Monad side polls.
+function beginFetch(url, method, bodyText, headers) {
+  const hasBody = Number(method) !== 0;
+  const body = hasBody ? bodyText : undefined;
+  const init = { method: methodName(method), body };
+  if (headers && Object.keys(headers).length > 0) init.headers = headers;
+  const record = {
+    state: 0, status: 0, bytes: new Uint8Array(0), offset: 0, headers: [],
+  };
+  fetches.push(record);
+  const id = BigInt(fetches.length - 1);
+  globalThis
+    .fetch(url, init)
+    .then((r) => {
+      record.status = r.status;
+      if (r.headers && typeof r.headers.forEach === 'function') {
+        r.headers.forEach((value, key) => { record.headers.push([key, value]); });
+      }
+      return r.arrayBuffer();
+    })
+    .then((buf) => {
+      record.bytes = new Uint8Array(buf);
+      record.state = 1;
+    })
+    .catch(() => {
+      record.state = 2;
+      record.bytes = new Uint8Array(0);
+    });
+  return id;
 }
 
 export const host = {
@@ -433,6 +606,7 @@ export const host = {
       setListener(n, name.slice(EVENT_PREFIX.length), value);
     }
     n.setAttribute(name, value);
+    if (name === FOCUS_TRAP_ATTR) installFocusTrap(n);
     return 0n;
   },
 
@@ -442,6 +616,7 @@ export const host = {
     const name = str(kptr, klen);
     if (name.startsWith(EVENT_PREFIX)) clearListener(n, name.slice(EVENT_PREFIX.length));
     n.removeAttribute(name);
+    if (name === FOCUS_TRAP_ATTR) removeFocusTrap(n);
     return 0n;
   },
 
@@ -631,27 +806,12 @@ export const host = {
 
   // ── fetch (two-phase: a promise must not re-enter wasm) ─────────────
   fetch_begin(uptr, ulen, method, bptr, blen) {
-    const url = str(uptr, ulen);
-    const hasBody = Number(method) !== 0;
-    const body = hasBody ? str(bptr, blen) : undefined;
-    const record = { state: 0, status: 0, bytes: new Uint8Array(0), offset: 0 };
-    fetches.push(record);
-    const id = BigInt(fetches.length - 1);
-    globalThis
-      .fetch(url, { method: methodName(method), body })
-      .then((r) => {
-        record.status = r.status;
-        return r.arrayBuffer();
-      })
-      .then((buf) => {
-        record.bytes = new Uint8Array(buf);
-        record.state = 1;
-      })
-      .catch(() => {
-        record.state = 2;
-        record.bytes = new Uint8Array(0);
-      });
-    return id;
+    return beginFetch(str(uptr, ulen), method, str(bptr, blen), null);
+  },
+
+  fetch_begin_headers(uptr, ulen, method, bptr, blen, hptr, hlen) {
+    const headers = parseHeaderBlob(str(hptr, hlen));
+    return beginFetch(str(uptr, ulen), method, str(bptr, blen), headers);
   },
 
   fetch_poll(id) {
@@ -662,6 +822,11 @@ export const host = {
   fetch_status(id) {
     const r = fetches[Number(id)];
     return BigInt(r ? r.status : 0);
+  },
+
+  fetch_headers(id, ptr, max) {
+    const r = fetches[Number(id)];
+    return writeBytes(ptr, encoder.encode(encodeHeaderBlob(r ? r.headers : [])), max);
   },
 
   fetch_read(id, ptr, max) {
@@ -746,6 +911,197 @@ export const host = {
   storage_set(kptr, klen, vptr, vlen) {
     const store = storage();
     if (store) store.setItem(str(kptr, klen), str(vptr, vlen));
+    return 0n;
+  },
+
+  storage_has(kptr, klen) {
+    const store = storage();
+    return store && store.getItem(str(kptr, klen)) !== null ? 1n : 0n;
+  },
+
+  storage_remove(kptr, klen) {
+    const store = storage();
+    if (store) store.removeItem(str(kptr, klen));
+    return 0n;
+  },
+
+  storage_clear() {
+    const store = storage();
+    if (store) store.clear();
+    return 0n;
+  },
+
+  monotonic_ms() {
+    const perf = globalThis.performance;
+    const ms = perf && typeof perf.now === 'function' ? perf.now() : Date.now();
+    return BigInt(Math.floor(ms));
+  },
+
+  // ── media queries ──────────────────────────────────────────────────
+  media_matches(qptr, qlen) {
+    const mm = globalThis.matchMedia;
+    if (typeof mm !== 'function') return 0n;
+    try {
+      return mm.call(globalThis, str(qptr, qlen)).matches ? 1n : 0n;
+    } catch {
+      return 0n;
+    }
+  },
+
+  // A `change` listener per query; the spec carries the handler id, and the
+  // live event is a MediaQueryListEvent snapshot.
+  media_watch(qptr, qlen, sptr, slen) {
+    const mm = globalThis.matchMedia;
+    const query = str(qptr, qlen);
+    const previous = mediaTables.get(query);
+    if (previous) {
+      previous.mql.removeEventListener('change', previous.wrapper);
+      mediaTables.delete(query);
+    }
+    if (typeof mm !== 'function') return 0n;
+    const parsed = parseListenerSpec(str(sptr, slen));
+    if (parsed === null) return 0n;
+    let mql;
+    try {
+      mql = mm.call(globalThis, query);
+    } catch {
+      return 0n;
+    }
+    const wrapper = (evt) => dispatchWith(
+      { type: 'change', matches: !!(evt && evt.matches), media: query, timeStamp: Date.now() },
+      parsed.id,
+    );
+    mql.addEventListener('change', wrapper);
+    mediaTables.set(query, { mql, wrapper });
+    return 0n;
+  },
+
+  media_unwatch(qptr, qlen) {
+    const query = str(qptr, qlen);
+    const previous = mediaTables.get(query);
+    if (previous) {
+      previous.mql.removeEventListener('change', previous.wrapper);
+      mediaTables.delete(query);
+    }
+    return 0n;
+  },
+
+  // ── hit testing, attribute reads, focus ────────────────────────────
+  dom_element_at(x, y) {
+    const d = doc();
+    if (!d || typeof d.elementFromPoint !== 'function') return 0n;
+    return addNode(d.elementFromPoint(Number(x), Number(y)));
+  },
+
+  dom_attr(node, kptr, klen, ptr, max) {
+    const n = nodeById(node);
+    const name = str(kptr, klen);
+    const value = n && typeof n.getAttribute === 'function'
+      ? (n.getAttribute(name) || '')
+      : '';
+    return writeBytes(ptr, encoder.encode(value), max);
+  },
+
+  dom_focus(ptr, len) {
+    const d = doc();
+    if (!d || typeof d.querySelector !== 'function') return 0n;
+    const el = d.querySelector(str(ptr, len));
+    if (el && typeof el.focus === 'function') {
+      try {
+        el.focus();
+      } catch {
+        // a detached or inert element cannot take focus; nothing to do
+      }
+    }
+    return 0n;
+  },
+
+  // One-shot delayed message. The id is reserved in the top bit, which
+  // `Handler.id` never uses; wasm keeps the Msg and resolves the id in
+  // `Runtime.dispatch`. `setTimeout` runs after the current export returns,
+  // so re-entering wasm through `oak_dispatch_event` is safe.
+  timer_after(ms) {
+    timerSeq += 1n;
+    const id = TIMER_BASE | timerSeq;
+    const delay = Math.max(0, Number(ms));
+    setTimeout(() => {
+      dispatchWith({ type: 'timer', timeStamp: Date.now() }, id);
+    }, delay);
+    return id;
+  },
+
+  // ── WebCrypto (random is synchronous; digest is two-phase) ──────────
+  crypto_random_fill(ptr, len) {
+    const c = globalThis.crypto;
+    if (!c || typeof c.getRandomValues !== 'function') return 0n;
+    const n = Math.max(0, Number(len));
+    if (n === 0) return 1n;
+    try {
+      c.getRandomValues(new Uint8Array(memory.buffer, u32(ptr), n));
+      return 1n;
+    } catch {
+      return 0n;
+    }
+  },
+
+  crypto_sha256_begin(ptr, len) {
+    const rec = { state: 0, hex: '', error: '' };
+    cryptos.push(rec);
+    const id = BigInt(cryptos.length - 1);
+    const subtle = globalThis.crypto && globalThis.crypto.subtle;
+    if (!subtle || typeof subtle.digest !== 'function') {
+      rec.state = 2;
+      rec.error = 'NotSupportedError';
+      return id;
+    }
+    // Copy before the promise: memory.grow detaches the old buffer.
+    const data = new Uint8Array(memory.buffer, u32(ptr), Number(len)).slice();
+    subtle.digest('SHA-256', data)
+      .then((buf) => { rec.hex = hexBytes(new Uint8Array(buf)); rec.state = 1; })
+      .catch((err) => { rec.error = (err && err.name) || 'Error'; rec.state = 2; });
+    return id;
+  },
+
+  crypto_poll(op) {
+    const rec = cryptos[Number(op)];
+    return BigInt(rec ? rec.state : 2);
+  },
+
+  crypto_result_hex(op, ptr, max) {
+    const rec = cryptos[Number(op)];
+    return writeBytes(ptr, encoder.encode(rec ? rec.hex : ''), max);
+  },
+
+  // ── window / navigation ────────────────────────────────────────────
+  window_reload() {
+    const loc = globalThis.location;
+    if (loc && typeof loc.reload === 'function') {
+      try {
+        loc.reload();
+      } catch {
+        // a sandboxed frame may refuse; nothing to do
+      }
+    }
+    return 0n;
+  },
+
+  window_navigate(ptr, len) {
+    const loc = globalThis.location;
+    if (loc && typeof loc.assign === 'function') {
+      try {
+        loc.assign(str(ptr, len));
+      } catch {
+        // see window_reload
+      }
+    }
+    return 0n;
+  },
+
+  // The allocator traps after this; the message is the user-visible half.
+  oom(want, have) {
+    console.error(
+      `monad: wasm heap exhausted (want ${Number(want)} bytes, have ${Number(have)})`,
+    );
     return 0n;
   },
 

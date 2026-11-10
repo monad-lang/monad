@@ -71,21 +71,50 @@ int strcmp(const char* a, const char* b) {
 /* ── bump allocator ─────────────────────────────────────────────────── */
 
 extern unsigned char __heap_base;
-static uintptr_t web_heap = 0;
+static uint64_t web_heap = 0;
+static uint64_t web_heap_base = 0;
+
+/* Heap exhaustion is a trap with a diagnostic, never a silent 0: a 0 word
+   is not a valid constructor pointer, and returning one turns the failure
+   into a negative-offset RangeError in the JS host (anidoku's 2 GB wall).
+   The import is declared here, ahead of the import block below, because
+   the allocator is its only caller. */
+__attribute__((import_module("monad"), import_name("oom")))
+extern int64_t monad_js_oom(int64_t want, int64_t have);
+
+static void web_oom(uint64_t want, uint64_t have) {
+    monad_js_oom((int64_t)want, (int64_t)have);
+    __builtin_trap();
+}
 
 static rt_word web_alloc(rt_size size, int zero) {
-    if (size < 0) return 0;
-    uintptr_t base = web_heap ? web_heap : (uintptr_t)&__heap_base;
-    uintptr_t p = (base + 15u) & ~(uintptr_t)15u;
-    uintptr_t end = p + (uintptr_t)size;
-    uintptr_t have = __builtin_wasm_memory_size(0) * 65536u;
+    if (size < 0) web_oom(0, 0);
+    uint64_t base = web_heap ? web_heap : (uint64_t)(uintptr_t)&__heap_base;
+    if (!web_heap_base) web_heap_base = base;
+    uint64_t p = (base + 15u) & ~(uint64_t)15u;
+    uint64_t end = p + (uint64_t)size;
+    /* 64-bit accounting: `uintptr_t` is 32 bits on wasm32, and
+       `pages * 65536` overflows it at 4 GB. */
+    if (end < p) web_oom((uint64_t)size, 0);
+    uint64_t have = (uint64_t)__builtin_wasm_memory_size(0) * 65536u;
     if (end > have) {
-        uintptr_t pages = (end - have + 65535u) / 65536u;
-        if (__builtin_wasm_memory_grow(0, pages) == (size_t)-1) return 0;
+        uint64_t pages = (end - have + 65535u) / 65536u;
+        if (__builtin_wasm_memory_grow(0, (size_t)pages) == (size_t)-1)
+            web_oom(end, have);
     }
     web_heap = end;
     if (zero && size) memset((void*)p, 0, (size_t)size);
-    return (rt_word)p;
+    return (rt_word)(uintptr_t)p;
+}
+
+/* Committed and used heap, for `web_wasm::memory`. C-only exports: no JS
+   import, so they do not appear in `WebAbi`. */
+int64_t web_memory_heap_bytes(void) {
+    return (int64_t)((uint64_t)__builtin_wasm_memory_size(0) * 65536u);
+}
+
+int64_t web_memory_heap_used(void) {
+    return (int64_t)(web_heap ? web_heap - web_heap_base : 0);
 }
 
 rt_word monad_alloc(rt_size size) {
@@ -119,7 +148,10 @@ void monad_owned_free(rt_word ptr) { (void)ptr; }
  * `monad_alloc`: the pointer never round-trips through Monad, so no Monad
  * code gains an address-producing primitive. It is a no-header allocation
  * (`monad_alloc_atomic`), so JS owns exactly the bytes it asked for and
- * must not read a header that is not there. Returns 0 on OOM. */
+ * must not read a header that is not there. Exhaustion traps (see
+ * `web_oom`); it never returns 0. The i32 return is the /try staging ABI
+ * (source text is small); a program whose heap crosses 2 GB must not use
+ * this channel. */
 __attribute__((export_name("try_alloc")))
 int32_t try_alloc(int64_t size) {
     return (int32_t)(intptr_t)RT_PTR(monad_alloc_atomic((rt_size)size));
@@ -318,6 +350,66 @@ extern int64_t monad_js_storage_get(int64_t kptr, int64_t klen, int64_t ptr, int
 
 __attribute__((import_module("monad"), import_name("storage_set")))
 extern int64_t monad_js_storage_set(int64_t kptr, int64_t klen, int64_t vptr, int64_t vlen);
+
+__attribute__((import_module("monad"), import_name("storage_has")))
+extern int64_t monad_js_storage_has(int64_t kptr, int64_t klen);
+
+__attribute__((import_module("monad"), import_name("storage_remove")))
+extern int64_t monad_js_storage_remove(int64_t kptr, int64_t klen);
+
+__attribute__((import_module("monad"), import_name("storage_clear")))
+extern int64_t monad_js_storage_clear(void);
+
+__attribute__((import_module("monad"), import_name("monotonic_ms")))
+extern int64_t monad_js_monotonic_ms(void);
+
+__attribute__((import_module("monad"), import_name("media_matches")))
+extern int64_t monad_js_media_matches(int64_t qptr, int64_t qlen);
+
+__attribute__((import_module("monad"), import_name("media_watch")))
+extern int64_t monad_js_media_watch(int64_t qptr, int64_t qlen, int64_t sptr, int64_t slen);
+
+__attribute__((import_module("monad"), import_name("media_unwatch")))
+extern int64_t monad_js_media_unwatch(int64_t qptr, int64_t qlen);
+
+__attribute__((import_module("monad"), import_name("dom_element_at")))
+extern int64_t monad_js_dom_element_at(double x, double y);
+
+__attribute__((import_module("monad"), import_name("dom_attr")))
+extern int64_t monad_js_dom_attr(int64_t node, int64_t kptr, int64_t klen,
+                                 int64_t ptr, int64_t max);
+
+__attribute__((import_module("monad"), import_name("dom_focus")))
+extern int64_t monad_js_dom_focus(int64_t ptr, int64_t len);
+
+__attribute__((import_module("monad"), import_name("timer_after")))
+extern int64_t monad_js_timer_after(int64_t ms);
+
+__attribute__((import_module("monad"), import_name("fetch_begin_headers")))
+extern int64_t monad_js_fetch_begin_headers(int64_t uptr, int64_t ulen, int64_t method,
+                                            int64_t bptr, int64_t blen,
+                                            int64_t hptr, int64_t hlen);
+
+__attribute__((import_module("monad"), import_name("fetch_headers")))
+extern int64_t monad_js_fetch_headers(int64_t request, int64_t ptr, int64_t max);
+
+__attribute__((import_module("monad"), import_name("crypto_random_fill")))
+extern int64_t monad_js_crypto_random_fill(int64_t ptr, int64_t len);
+
+__attribute__((import_module("monad"), import_name("crypto_sha256_begin")))
+extern int64_t monad_js_crypto_sha256_begin(int64_t ptr, int64_t len);
+
+__attribute__((import_module("monad"), import_name("crypto_poll")))
+extern int64_t monad_js_crypto_poll(int64_t op);
+
+__attribute__((import_module("monad"), import_name("crypto_result_hex")))
+extern int64_t monad_js_crypto_result_hex(int64_t op, int64_t ptr, int64_t max);
+
+__attribute__((import_module("monad"), import_name("window_reload")))
+extern int64_t monad_js_window_reload(void);
+
+__attribute__((import_module("monad"), import_name("window_navigate")))
+extern int64_t monad_js_window_navigate(int64_t ptr, int64_t len);
 
 __attribute__((import_module("monad"), import_name("console_log")))
 extern int64_t monad_js_console_log(int64_t ptr, int64_t len);
@@ -519,6 +611,102 @@ char* web_storage_get_raw(const char* key) {
 int64_t web_storage_set(const char* key, const char* value) {
     return monad_js_storage_set(web_str_ptr(key), web_str_len(key),
                                 web_str_ptr(value), web_str_len(value));
+}
+
+int64_t web_storage_has(const char* key) {
+    return monad_js_storage_has(web_str_ptr(key), web_str_len(key));
+}
+
+int64_t web_storage_remove(const char* key) {
+    return monad_js_storage_remove(web_str_ptr(key), web_str_len(key));
+}
+
+int64_t web_storage_clear(void) {
+    return monad_js_storage_clear();
+}
+
+int64_t web_monotonic_ms(void) {
+    return monad_js_monotonic_ms();
+}
+
+int64_t web_media_matches(const char* query) {
+    return monad_js_media_matches(web_str_ptr(query), web_str_len(query));
+}
+
+int64_t web_media_watch(const char* query, const char* spec) {
+    return monad_js_media_watch(web_str_ptr(query), web_str_len(query),
+                                web_str_ptr(spec), web_str_len(spec));
+}
+
+int64_t web_media_unwatch(const char* query) {
+    return monad_js_media_unwatch(web_str_ptr(query), web_str_len(query));
+}
+
+int64_t web_dom_element_at(double x, double y) {
+    return monad_js_dom_element_at(x, y);
+}
+
+char* web_dom_attr(int64_t node, const char* name) {
+    int64_t n = monad_js_dom_attr(node, web_str_ptr(name), web_str_len(name),
+                                  (int64_t)(intptr_t)web_scratch,
+                                  WEB_SCRATCH_BYTES - 1);
+    return web_take_str(web_scratch, n);
+}
+
+int64_t web_dom_focus(const char* selector) {
+    return monad_js_dom_focus(web_str_ptr(selector), web_str_len(selector));
+}
+
+int64_t web_timer_after(int64_t ms) {
+    return monad_js_timer_after(ms);
+}
+
+int64_t web_fetch_begin_headers(const char* url, int64_t method, const char* body,
+                                const char* headers) {
+    return monad_js_fetch_begin_headers(web_str_ptr(url), web_str_len(url), method,
+                                        web_str_ptr(body), web_str_len(body),
+                                        web_str_ptr(headers), web_str_len(headers));
+}
+
+char* web_fetch_headers(int64_t request) {
+    int64_t n = monad_js_fetch_headers(request, (int64_t)(intptr_t)web_scratch,
+                                       WEB_SCRATCH_BYTES - 1);
+    return web_take_str(web_scratch, n);
+}
+
+/* `crypto_random_fill` fills a caller-owned `ByteBuf` in place: the typed
+   buffer is the only channel, so no address-producing primitive appears on
+   the Monad side. Returns 1 when random bytes were written, 0 when the host
+   has no `crypto.getRandomValues`. */
+int64_t web_crypto_random_fill(int64_t buf) {
+    BufObj* obj = (BufObj*)RT_PTR(buf);
+    if (!obj || obj->len <= 0) return 1;
+    return monad_js_crypto_random_fill((int64_t)(intptr_t)obj->payload, obj->len);
+}
+
+int64_t web_crypto_sha256_begin(int64_t buf) {
+    BufObj* obj = (BufObj*)RT_PTR(buf);
+    int64_t len = obj ? obj->len : 0;
+    const char* data = obj ? (const char*)obj->payload : "";
+    return monad_js_crypto_sha256_begin((int64_t)(intptr_t)data, len);
+}
+
+int64_t web_crypto_poll(int64_t op) {
+    return monad_js_crypto_poll(op);
+}
+
+char* web_crypto_result_hex(int64_t op) {
+    int64_t n = monad_js_crypto_result_hex(op, (int64_t)(intptr_t)web_scratch,
+                                           WEB_SCRATCH_BYTES - 1);
+    return web_take_str(web_scratch, n);
+}
+
+int64_t web_window_reload(void) {
+    return monad_js_window_reload();
+}
+
+int64_t web_window_navigate(const char* url) {
+    return monad_js_window_navigate(web_str_ptr(url), web_str_len(url));
 }
 
 int64_t web_console_log(const char* s) {

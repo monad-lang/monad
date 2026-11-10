@@ -19,16 +19,21 @@ pub struct FileInfo {
 }
 
 /// Listener options, encoded into the handler attribute as the flag letters
-/// `cdsop` (`c` capture, `d` preventDefault before dispatch, `s`
-/// stopPropagation before dispatch, `o` once, `p` passive). The encoding is
-/// shared with `wasm/web/web_runtime.js`; keep `letters` and `encode` in step
-/// with `parseListenerSpec` there.
+/// `cdsopr` (`c` capture, `d` preventDefault before dispatch, `s`
+/// stopPropagation before dispatch, `o` once, `p` passive, `r` release an
+/// implicit pointer capture). The encoding is shared with
+/// `wasm/web/web_runtime.js`; keep `letters` and `encode` in step with
+/// `parseListenerSpec` there.
 pub struct ListenerFlags {
     capture : Bool := false,
     prevent_default : Bool := false,
     stop_propagation : Bool := false,
     once : Bool := false,
-    passive : Bool := false
+    passive : Bool := false,
+    /// Release the browser's implicit touch/pointer capture on
+    /// `gotpointercapture`, so `pointerenter` fires on neighbouring cells
+    /// during a touch drag. A mouse drag never captures implicitly.
+    release_capture : Bool := false
 }
 
 /// What a handler decided. `prevent_default`/`stop_propagation` are applied
@@ -86,21 +91,22 @@ with ListenerFlags {
     /// No options: bubbling, non-passive, repeated.
     pub def none : ListenerFlags :=
         { capture := false, prevent_default := false, stop_propagation := false,
-            once := false, passive := false }
+            once := false, passive := false, release_capture := false }
 
     /// The canonical letters, in encoding order.
-    pub def letters : String := "cdsop"
+    pub def letters : String := "cdsopr"
 
     /// The `:<flags>` suffix (empty when no flag is set).
     pub def encode (f : ListenerFlags) : String :=
         match f {
-            { capture, prevent_default, stop_propagation, once, passive } =>
+            { capture, prevent_default, stop_propagation, once, passive, release_capture } =>
                 let body : String :=
                     String.concat (if capture then "c" else "")
                         (String.concat (if prevent_default then "d" else "")
                             (String.concat (if stop_propagation then "s" else "")
                                 (String.concat (if once then "o" else "")
-                                    (if passive then "p" else "")))) in
+                                    (String.concat (if passive then "p" else "")
+                                        (if release_capture then "r" else ""))))) in
                 if String.is_empty body then "" else String.concat ":" body
         }
 }

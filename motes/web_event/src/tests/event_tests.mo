@@ -10,8 +10,13 @@ def test_flags_none_encodes_empty : Bool :=
 def test_flags_encode_all_in_canonical_order : Bool :=
     let f : ListenerFlags :=
         { capture := true, prevent_default := true, stop_propagation := true,
-            once := true, passive := true } in
-    String.beq (ListenerFlags.encode f) ":cdsop"
+            once := true, passive := true, release_capture := true } in
+    String.beq (ListenerFlags.encode f) ":cdsopr"
+
+#[test]
+def test_flags_encode_release_capture : Bool :=
+    let f : ListenerFlags := { release_capture := true } in
+    String.beq (ListenerFlags.encode f) ":r"
 
 #[test]
 def test_flags_encode_subset : Bool :=

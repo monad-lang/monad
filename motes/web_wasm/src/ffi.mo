@@ -15,7 +15,8 @@
 /// rebase supplies `std::cstring`/`Ptr` for length-carrying calls; switch
 /// the multi-byte-string externs to `(ptr, len)` when that lands.
 
-use lib::types {Node, RequestId, ClipboardOp}
+use lib::types {Node, RequestId, ClipboardOp, CryptoOp}
+use std::bytebuf {ByteBuf}
 use std::ref {Ref}
 
 #[extern "c" {link_name := "web_dom_create"}]
@@ -119,6 +120,75 @@ def storage_get_raw (key : String) : RawIO String
 
 #[extern "c" {link_name := "web_storage_set"}]
 def storage_set_raw (key : String) (value : String) : RawIO Unit
+
+#[extern "c" {link_name := "web_storage_has"}]
+def storage_has_raw (key : String) : RawIO I64
+
+#[extern "c" {link_name := "web_storage_remove"}]
+def storage_remove_raw (key : String) : RawIO Unit
+
+#[extern "c" {link_name := "web_storage_clear"}]
+def storage_clear_raw : RawIO Unit
+
+#[extern "c" {link_name := "web_monotonic_ms"}]
+def monotonic_ms_raw : RawIO I64
+
+#[extern "c" {link_name := "web_media_matches"}]
+def media_matches_raw (query : String) : RawIO I64
+
+#[extern "c" {link_name := "web_media_watch"}]
+def media_watch_raw (query : String) (spec : String) : RawIO Unit
+
+#[extern "c" {link_name := "web_media_unwatch"}]
+def media_unwatch_raw (query : String) : RawIO Unit
+
+#[extern "c" {link_name := "web_dom_element_at"}]
+def dom_element_at_raw (x : F64) (y : F64) : RawIO Node
+
+#[extern "c" {link_name := "web_dom_attr"}]
+def dom_attr_raw (n : Node) (name : String) : RawIO String
+
+#[extern "c" {link_name := "web_dom_focus"}]
+def dom_focus_raw (selector : String) : RawIO Unit
+
+#[extern "c" {link_name := "web_timer_after"}]
+def timer_after_raw (ms : I64) : RawIO I64
+
+#[extern "c" {link_name := "web_fetch_begin_headers"}]
+def fetch_begin_headers_raw (url : String) (method : I64) (body : String)
+    (headers : String) : RawIO RequestId
+
+#[extern "c" {link_name := "web_fetch_headers"}]
+def fetch_headers_raw (r : RequestId) : RawIO String
+
+/// Random bytes are written into a caller-owned `ByteBuf` (the typed
+/// boundary; no address crosses Monad code). The i64 result is 1 when the
+/// host filled it and 0 when `crypto.getRandomValues` is unavailable.
+#[extern "c" {link_name := "web_crypto_random_fill"}]
+def crypto_random_fill_raw (buf : ByteBuf) : RawIO I64
+
+#[extern "c" {link_name := "web_crypto_sha256_begin"}]
+def crypto_sha256_begin_raw (buf : ByteBuf) : RawIO CryptoOp
+
+#[extern "c" {link_name := "web_crypto_poll"}]
+def crypto_poll_raw (op : CryptoOp) : RawIO I64
+
+#[extern "c" {link_name := "web_crypto_result_hex"}]
+def crypto_result_hex_raw (op : CryptoOp) : RawIO String
+
+#[extern "c" {link_name := "web_window_reload"}]
+def window_reload_raw : RawIO Unit
+
+#[extern "c" {link_name := "web_window_navigate"}]
+def window_navigate_raw (url : String) : RawIO Unit
+
+/// C-only heap probes (`runtime/src/platform_web.c`): committed linear
+/// memory and the bump pointer's used bytes. No JS host function.
+#[extern "c" {link_name := "web_memory_heap_bytes"}]
+def memory_heap_bytes_raw : RawIO I64
+
+#[extern "c" {link_name := "web_memory_heap_used"}]
+def memory_heap_used_raw : RawIO I64
 
 #[extern "c" {link_name := "web_console_log"}]
 def console_log_raw (s : String) : RawIO Unit

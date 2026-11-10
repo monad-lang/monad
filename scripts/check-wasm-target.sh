@@ -155,6 +155,17 @@ echo "== web: web_wasm DOM surface (C wrappers + JS host) =="
     -o "$tmp/web_dom.wasm" --no-cache
 node wasm/web/dom_smoke.mjs "$tmp/web_dom.wasm"
 
+echo "== web: phase-1 surface (storage, clock, media, hit test, crypto, headers) =="
+# Presence-aware storage, monotonic clock, matchMedia, elementFromPoint +
+# attribute read, getRandomValues, request headers, memory probes and a
+# two-phase SHA-256 completed through a second export.
+"$MONAD" build --target wasm32-unknown-unknown fixtures/wasm/web_new_surface.mo \
+    -o "$tmp/web_new_surface.wasm" --no-cache
+node wasm/web/new_surface_smoke.mjs "$tmp/web_new_surface.wasm"
+
+echo "== web: heap exhaustion (diagnostic trap, not a RangeError) =="
+node wasm/web/oom_smoke.mjs "$tmp/web_new_surface.wasm"
+
 echo "== web: export state slot (Keep) =="
 "$MONAD" build --target wasm32-unknown-unknown fixtures/wasm/web_keep.mo \
     -o "$tmp/web_keep.wasm" --no-cache
@@ -199,6 +210,18 @@ echo "== web: subscriptions (window/document listeners, animation frame) =="
 "$MONAD" build --target wasm32-unknown-unknown fixtures/wasm/oak_subs.mo \
     -o "$tmp/oak_subs.wasm" --no-cache
 node wasm/web/subs_smoke.mjs "$tmp/oak_subs.wasm"
+
+echo "== web: Command.batch / Command.after / Command.focus =="
+# One click batches an immediate dispatch, a 10 ms timer and a focus; the
+# timer fires through oak_dispatch_event with no animation-frame loop.
+"$MONAD" build --target wasm32-unknown-unknown fixtures/wasm/oak_timer.mo \
+    -o "$tmp/oak_timer.wasm" --no-cache
+node wasm/web/timer_smoke.mjs "$tmp/oak_timer.wasm"
+
+echo "== web: render allocation guard (256 buttons, two handlers each) =="
+"$MONAD" build --target wasm32-unknown-unknown fixtures/wasm/oak_spa_alloc.mo \
+    -o "$tmp/oak_spa_alloc.wasm" --no-cache
+node wasm/web/oak_alloc_smoke.mjs "$tmp/oak_spa_alloc.wasm"
 
 echo "== web: oak_ui explorer (stories, knobs, themes, persisted prefs, modal) =="
 # The component explorer end to end: restores the stored story/theme on the

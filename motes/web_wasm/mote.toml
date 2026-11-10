@@ -4,8 +4,9 @@
 #
 # ALL web externs live here. Side-effecting externs are declared `RawIO A`
 # and exposed through the thin `IO` wrappers in `dom.mo`, `fetch.mo`,
-# `clock.mo`, `storage.mo`, `console.mo` and `keep.mo`. No other mote
-# declares a DOM/fetch/event/timer/storage extern.
+# `clock.mo`, `storage.mo`, `media.mo`, `crypto.mo`, `window.mo`,
+# `memory.mo`, `timer.mo`, `console.mo` and `keep.mo`. No other mote
+# declares a DOM/fetch/event/timer/storage/crypto extern.
 #
 # `targets` is parsed by both loaders but stays informational: availability
 # is enforced per declaration, at codegen. A reachable `web_*` extern on a

@@ -8,6 +8,7 @@ use lib::ffi {
     dom_remove_attr_raw, dom_set_text_raw, dom_add_listener_raw, dom_child_raw,
     dom_child_count_raw, dom_node_type_raw, dom_tag_name_raw, dom_value_raw, dom_query_raw,
     dom_add_listener_global_raw, dom_remove_listener_global_raw,
+    dom_element_at_raw, dom_attr_raw, dom_focus_raw,
 }
 
 pub def Dom.create (tag : String) : IO Node := IO.mk (dom_create_raw tag)
@@ -103,3 +104,18 @@ pub def Dom.value (n : Node) : IO String := IO.mk (dom_value_raw n)
 /// handle. An SPA handler only carries a message id, so this is how it
 /// addresses a node it did not create in this turn.
 pub def Dom.query (selector : String) : IO Node := IO.mk (dom_query_raw selector)
+
+/// The element under a viewport point (`document.elementFromPoint`), or the
+/// null handle. This is the hit test a touch drag needs: the browser
+/// implicitly captures a touch pointer to the element it started on, so
+/// `pointerenter` never fires on neighbours; ask the host instead.
+pub def Dom.element_at (x : F64) (y : F64) : IO Node := IO.mk (dom_element_at_raw x y)
+
+/// The attribute's value, empty when absent. Paired with `Dom.element_at`
+/// so a hit-tested node can be identified by an app attribute.
+pub def Dom.attr (n : Node) (name : String) : IO String := IO.mk (dom_attr_raw n name)
+
+/// Move focus to the first element matching `selector`. Run after the patch
+/// (the Oak runtime applies a `Command.focus` there), so a dialog inserted
+/// this frame can take focus -- `autofocus` is honoured only on page load.
+pub def Dom.focus (selector : String) : IO Unit := IO.mk (dom_focus_raw selector)
