@@ -27,6 +27,7 @@
 - [Compiling and Running](./compiling.md)
 - [Watching Files](./file-watching.md)
 - [Try Monad in the Browser](./try.md)
+- [Web and Oak](./web-and-oak.md)
 - [The Standard Library](./stdlib.md)
 
 # Reference

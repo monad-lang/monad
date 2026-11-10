@@ -55,7 +55,8 @@ Usage: monad build [<path>] [name] [--bin <name>] [--output/-o <name>] [--target
            --stdin reads a whole module from stdin and writes it (with --check/--diff,
            diagnostics go to stderr and the exit code is 1 when it would change).
        monad check [<path>...] [--workspace/-w] [--verbose/-v] [--no-cache]  Parse and typecheck .mo source files (no execution)
-         Any <path> that's a directory is recursively expanded to its *.mo files
+         Any <path> that's a directory is recursively expanded to its *.mo files;
+           hidden directories (.devenv, .git) are skipped by every walk
          With no <path>, checks the mote containing the working directory
          --workspace/-w checks every mote in the enclosing workspace
            (only directories that ARE motes: examples/ has no manifest)
@@ -68,7 +69,9 @@ Usage: monad build [<path>] [name] [--bin <name>] [--output/-o <name>] [--target
            `[affine] mode = "warn"` in its mote.toml; there is no off switch
        monad test [<path>...] [--workspace/-w] [--verbose/-v] [--jobs/-j <N>]  Compile and run each file's own #[test] defs as a native binary
          Any <path> that's a directory is recursively expanded to its *.mo files
-         With no <path>, tests the mote containing the working directory
+           (hidden directories are skipped)
+         With no <path>, tests the mote containing the working directory; the
+           mote's `[mote] targets` decides which [[bin]] roots are native-testable
          --workspace/-w tests every mote in the enclosing workspace
            (only directories that ARE motes: examples/ has no manifest)
          --verbose/-v prints per-file timing and module-cache statistics

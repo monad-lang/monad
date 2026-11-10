@@ -229,14 +229,23 @@ monad build --target wasm32-unknown-unknown fixtures/wasm/hello.mo -o hello.wasm
 node wasm/web/smoke.mjs hello.wasm
 ```
 
-`WASI_SDK_PATH` must name a wasi-sdk installation (the directory containing
-`bin/clang` and `share/wasi-sysroot`); `devenv.nix` pins one. The output name
-gets `.wasm` when it does not already end in it.
+The **web** profile is freestanding: it links `-nostdlib`, has no sysroot and
+needs no wasi-sdk, so `WASI_SDK_PATH` is not required. The C compiler is
+`MONAD_WEB_CC` if set, else `$WASI_SDK_PATH/bin/clang` when that is set, else
+the host `clang` (plus `wasm-ld`). A nixpkgs **wrapped** clang injects
+hardening flags the wasm target rejects; point `MONAD_WEB_CC` at
+`clang-unwrapped` there (the dev shell's gate does).
+
+The **wasi** profile needs `WASI_SDK_PATH` to name a wasi-sdk installation
+(the directory containing `bin/clang` and `share/wasi-sysroot`); `devenv.nix`
+pins one. The output name gets `.wasm` when it does not already end in it.
 
 The wasm runtime is a leaky allocator (`malloc` on wasi, a bump allocator
 over `__heap_base` on web): there is no Boehm GC on wasm32, and codegen
 never emits `monad_release`, so one-shot programs and reload-by-reinstantiating
-REPL sessions are the supported shape.
+REPL sessions are the supported shape. On web, heap exhaustion calls the
+host's `oom` import (a diagnostic) and traps; `web_wasm::Memory` exposes the
+committed/used sizes so an app can persist and reload itself.
 
 A reachable native the target cannot serve is a compile error naming the
 native and the target, not a link failure or a trap. The wasm profiles omit

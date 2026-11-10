@@ -8,7 +8,7 @@ the generic static book/site generator), and published to
 
 - The landing page is `docs/site/monad_website/src/landing.mo`, rendered to
   `monad-lang.org/`.
-- The book's sources are `docs/src/` (`SUMMARY.md` and 22 chapters), rendered
+- The book's sources are `docs/src/` (`SUMMARY.md` and 23 chapters), rendered
   to `monad-lang.org/docs/` at the same URLs mdBook used, plus `index.html`,
   `print.html` and `404.html`.
 - `docs/site/static/` is copied as-is: the landing stylesheet and icons, the
