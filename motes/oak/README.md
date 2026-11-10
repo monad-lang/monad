@@ -13,7 +13,7 @@ The pure builder is the primary API. Nothing here performs I/O except
 |---|---|---|
 | Builders | `src/elements.mo` | `Html.div [attrs] [children]`, `Html.text`, curated attributes, `Html.attr`/`Html.bool_attr` for the rest, `Html.document`/`document_with`/`document_utf8`. |
 | Page assembly | `src/html_t.mo` | `HtmlT M I J A`, an index-tracking transformer (`Open`/`Sealed`/`Emitted`) that accumulates `<head>`/`<body>` nodes; `PageM` is the production stack (`ResultT String IO`). |
-| App model | `src/app.mo` | `Program` (init/update/view), `Command` (`none`/`quit`/`dispatch`/`perform`), `Host` (effect interpreter), `Program.run_batch` (a batch fold that drains deferred dispatches). |
+| App model | `src/app.mo` | `Program` (init/update/view), `Command` (`none`/`quit`/`dispatch`/`perform`/`after`/`focus`/`batch`), `Host` (effect interpreter), `Program.run_batch` (a batch fold that drains deferred dispatches). |
 | SSR | `src/ssr.mo` | `Ssr.render_page`/`render_body`/`to_response`/`to_response_node`/`fragment_response`/`render_io`: an Oak page or fragment to an `http.Response`. |
 | Markup types | re-exported from `xml_html` | `Html.Node`, `Html.Attr`, `Html.to_string`, `Html.beq`. |
 
@@ -50,6 +50,24 @@ tables, modals, tabs, navigation, feedback) with theming, use
 children all carry a *distinct* key is reconciled by key by `oak_wasm`'s
 diff, so reordering preserves the DOM nodes; see
 `../oak_wasm/README.md`.
+
+## Handler ids and view shape
+
+A handler id is `FNV-1a("<revised patch path>:<event>")` masked to 31 bits,
+computed from the node's position in the view tree. Two consequences:
+
+- Ids are stable across renders only while the **view shape** is stable:
+  inserting, removing or reordering siblings changes the ids of everything
+  after the change, and the runtime then replaces those listeners. That is
+  correct, but it costs work. For a list that changes, use `Html.key` so the
+  diff reconciles by key and the nodes (and their listeners) keep their
+  identity.
+- The id must not collide with the timer id space: the runtime reserves the
+  top bit (`Timer.base`), and `Handler.id` masks it away.
+
+The path hash is integer-only (`Handler.id_rev` hashes a reversed path); it
+does not build a path string per node per render. `Handler.id` still takes
+the public root-to-leaf path and reverses it.
 
 ## Validation
 

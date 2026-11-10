@@ -43,74 +43,79 @@ pub type Patch {
 pub def Patch.diff (old : Html.Node) (new : Html.Node) : List Patch :=
     Patch.diff_at (List.cons 0i64 List.empty) old new
 
+/// Internal walk paths are INNERMOST-FIRST: a child costs one `List.cons`
+/// (the old `List.append path [index]` per node per render dominated patch
+/// allocation). `Patch.path_of` reverses once, only when a `Patch` is built,
+/// so the public `Patch` type and `apply` keep forward root-to-leaf paths.
+def Patch.path_of (rev : List I64) : List I64 := List.reverse rev
+
+def Patch.replace_at (rev : List I64) (node : Html.Node) : List Patch :=
+    List.cons (Patch.replace (Patch.path_of rev) node) List.empty
+
 #[terminating]
-def Patch.diff_at (path : List I64) (old : Html.Node) (new : Html.Node) : List Patch :=
-    if Html.beq old new then List.empty else Patch.diff_changed path old new
+def Patch.diff_at (rev : List I64) (old : Html.Node) (new : Html.Node) : List Patch :=
+    if Html.beq old new then List.empty else Patch.diff_changed rev old new
 
 #[partial]
-def Patch.diff_changed (path : List I64) (old : Html.Node) (new : Html.Node) : List Patch :=
+def Patch.diff_changed (rev : List I64) (old : Html.Node) (new : Html.Node) : List Patch :=
     match new {
-        Html.Node.node_text content => Patch.diff_text path old content,
-        Html.Node.node_element tag attrs children => Patch.diff_element path old tag attrs children,
-        Html.Node.node_void tag attrs => Patch.diff_void path old tag attrs,
-        _ => Patch.replace_at path new,
+        Html.Node.node_text content => Patch.diff_text rev old content,
+        Html.Node.node_element tag attrs children => Patch.diff_element rev old tag attrs children,
+        Html.Node.node_void tag attrs => Patch.diff_void rev old tag attrs,
+        _ => Patch.replace_at rev new,
     }
 
-def Patch.replace_at (path : List I64) (node : Html.Node) : List Patch :=
-    List.cons (Patch.replace path node) List.empty
-
 #[partial]
-def Patch.diff_text (path : List I64) (old : Html.Node) (content : String) : List Patch :=
+def Patch.diff_text (rev : List I64) (old : Html.Node) (content : String) : List Patch :=
     match old {
-        Html.Node.node_text _ => List.cons (Patch.set_text path content) List.empty,
-        _ => Patch.replace_at path (Html.Node.node_text content),
+        Html.Node.node_text _ => List.cons (Patch.set_text (Patch.path_of rev) content) List.empty,
+        _ => Patch.replace_at rev (Html.Node.node_text content),
     }
 
 #[partial]
-def Patch.diff_element (path : List I64) (old : Html.Node) (tag : String) (attrs : List Html.Attr) (children : List Html.Node) : List Patch :=
+def Patch.diff_element (rev : List I64) (old : Html.Node) (tag : String) (attrs : List Html.Attr) (children : List Html.Node) : List Patch :=
     match old {
         Html.Node.node_element old_tag old_attrs old_children =>
-            Patch.diff_same_element path old_tag old_attrs old_children tag attrs children,
-        _ => Patch.replace_at path (Html.Node.node_element tag attrs children),
+            Patch.diff_same_element rev old_tag old_attrs old_children tag attrs children,
+        _ => Patch.replace_at rev (Html.Node.node_element tag attrs children),
     }
 
 #[partial]
-def Patch.diff_same_element (path : List I64) (old_tag : String) (old_attrs : List Html.Attr) (old_children : List Html.Node) (tag : String) (attrs : List Html.Attr) (children : List Html.Node) : List Patch :=
+def Patch.diff_same_element (rev : List I64) (old_tag : String) (old_attrs : List Html.Attr) (old_children : List Html.Node) (tag : String) (attrs : List Html.Attr) (children : List Html.Node) : List Patch :=
     if Bool.not (String.beq old_tag tag)
-    then Patch.replace_at path (Html.Node.node_element tag attrs children)
+    then Patch.replace_at rev (Html.Node.node_element tag attrs children)
     else if Patch.keyed_mode old_children children
-    then List.append (Patch.attr_patches path old_attrs attrs) (Patch.keyed_patches path old_children children)
+    then List.append (Patch.attr_patches rev old_attrs attrs) (Patch.keyed_patches rev old_children children)
     else if Bool.not (List.length old_children == List.length children)
-    then Patch.replace_at path (Html.Node.node_element tag attrs children)
-    else List.append (Patch.attr_patches path old_attrs attrs) (Patch.child_patches path old_children children)
+    then Patch.replace_at rev (Html.Node.node_element tag attrs children)
+    else List.append (Patch.attr_patches rev old_attrs attrs) (Patch.child_patches rev old_children children)
 
 #[partial]
-def Patch.diff_void (path : List I64) (old : Html.Node) (tag : String) (attrs : List Html.Attr) : List Patch :=
+def Patch.diff_void (rev : List I64) (old : Html.Node) (tag : String) (attrs : List Html.Attr) : List Patch :=
     match old {
         Html.Node.node_void old_tag old_attrs =>
             if String.beq old_tag tag
-            then Patch.attr_patches path old_attrs attrs
-            else Patch.replace_at path (Html.Node.node_void tag attrs),
-        _ => Patch.replace_at path (Html.Node.node_void tag attrs),
+            then Patch.attr_patches rev old_attrs attrs
+            else Patch.replace_at rev (Html.Node.node_void tag attrs),
+        _ => Patch.replace_at rev (Html.Node.node_void tag attrs),
     }
 
 #[terminating]
-def Patch.child_patches (path : List I64) (old_children : List Html.Node) (children : List Html.Node) : List Patch :=
-    Patch.child_patches_at path old_children children 0i64
+def Patch.child_patches (rev : List I64) (old_children : List Html.Node) (children : List Html.Node) : List Patch :=
+    Patch.child_patches_at rev old_children children 0i64
 
 #[terminating]
 #[partial]
-def Patch.child_patches_at (path : List I64) (old_children : List Html.Node) (children : List Html.Node) (index : I64) : List Patch :=
+def Patch.child_patches_at (rev : List I64) (old_children : List Html.Node) (children : List Html.Node) (index : I64) : List Patch :=
     match old_children {
         List.empty => List.empty,
         List.cons old_child old_rest =>
             match children {
                 List.empty => List.empty,
                 List.cons child rest =>
-                    let child_path : List I64 := List.append path (List.cons index List.empty) in
                     List.append
-                        (Patch.diff_at child_path old_child child)
-                        (Patch.child_patches_at path old_rest rest (index + 1i64)),
+                        (Patch.diff_at (List.cons index rev) old_child child)
+                        (Patch.child_patches_at rev old_rest rest (index + 1i64)),
             },
     }
 
@@ -128,10 +133,6 @@ def Patch.child_patches_at (path : List I64) (old_children : List Html.Node) (ch
 // on `model`, so `model[i]` is `parent.childNodes[i]` when its patch runs.
 // Each apply operation mutates the DOM once and resolves every index before
 // mutating.
-
-/// `path ++ [index]`.
-def Patch.child_path (path : List I64) (index : I64) : List I64 :=
-    List.append path (List.cons index List.empty)
 
 #[terminating]
 #[partial]
@@ -209,23 +210,23 @@ def Patch.key_in_opt (key : String) (found : Option String) (rest : List Html.No
 /// is still valid when its patch runs, and no surviving node is moved to
 /// express a pure deletion.
 #[terminating]
-def Patch.keyed_removals (path : List I64) (rev : List Html.Node) (children : List Html.Node) (index : I64) : List Patch := match rev {
+def Patch.keyed_removals (rev : List I64) (rev_nodes : List Html.Node) (children : List Html.Node) (index : I64) : List Patch := match rev_nodes {
     List.empty => List.empty,
     List.cons node rest =>
         List.append
-            (Patch.keyed_removal path node children index)
-            (Patch.keyed_removals path rest children (index - 1i64)),
+            (Patch.keyed_removal rev node children index)
+            (Patch.keyed_removals rev rest children (index - 1i64)),
 }
 
-def Patch.keyed_removal (path : List I64) (node : Html.Node) (children : List Html.Node) (index : I64) : List Patch :=
-    Patch.keyed_removal_opt path (Patch.key_of node) children index
+def Patch.keyed_removal (rev : List I64) (node : Html.Node) (children : List Html.Node) (index : I64) : List Patch :=
+    Patch.keyed_removal_opt rev (Patch.key_of node) children index
 
-def Patch.keyed_removal_opt (path : List I64) (found : Option String) (children : List Html.Node) (index : I64) : List Patch := match found {
+def Patch.keyed_removal_opt (rev : List I64) (found : Option String) (children : List Html.Node) (index : I64) : List Patch := match found {
     Option.none => List.empty,
     Option.some key =>
         if Patch.key_in key children
         then List.empty
-        else List.cons (Patch.remove (Patch.child_path path index)) List.empty,
+        else List.cons (Patch.remove (Patch.path_of (List.cons index rev))) List.empty,
 }
 
 /// The old children whose key survives, in their original order: the model
@@ -290,69 +291,69 @@ def Patch.model_move (from : I64) (to : I64) (node : Html.Node) (model : List Ht
 
 /// Reconcile the new children against the model, left to right.
 #[terminating]
-def Patch.keyed_walk (path : List I64) (model : List Html.Node) (children : List Html.Node) (index : I64) : List Patch := match children {
+def Patch.keyed_walk (rev : List I64) (model : List Html.Node) (children : List Html.Node) (index : I64) : List Patch := match children {
     List.empty => List.empty,
-    List.cons child rest => Patch.keyed_step path model child rest index,
+    List.cons child rest => Patch.keyed_step rev model child rest index,
 }
 
 #[terminating]
-def Patch.keyed_step (path : List I64) (model : List Html.Node) (child : Html.Node) (rest : List Html.Node) (index : I64) : List Patch :=
-    Patch.keyed_step_opt path model child rest index (Patch.key_of child)
+def Patch.keyed_step (rev : List I64) (model : List Html.Node) (child : Html.Node) (rest : List Html.Node) (index : I64) : List Patch :=
+    Patch.keyed_step_opt rev model child rest index (Patch.key_of child)
 
 #[terminating]
-def Patch.keyed_step_opt (path : List I64) (model : List Html.Node) (child : Html.Node) (rest : List Html.Node) (index : I64) (found : Option String) : List Patch := match found {
+def Patch.keyed_step_opt (rev : List I64) (model : List Html.Node) (child : Html.Node) (rest : List Html.Node) (index : I64) (found : Option String) : List Patch := match found {
     Option.none => List.empty,
-    Option.some key => Patch.keyed_continue path key model child rest index,
+    Option.some key => Patch.keyed_continue rev key model child rest index,
 }
 
 #[terminating]
-def Patch.keyed_continue (path : List I64) (key : String) (model : List Html.Node) (child : Html.Node) (rest : List Html.Node) (index : I64) : List Patch :=
+def Patch.keyed_continue (rev : List I64) (key : String) (model : List Html.Node) (child : Html.Node) (rest : List Html.Node) (index : I64) : List Patch :=
     let step : Pair (List Patch) (List Html.Node) :=
-        Patch.keyed_match path key model child index (Patch.key_locate key model 0i64) in
-    Patch.keyed_append path step rest index
+        Patch.keyed_match rev key model child index (Patch.key_locate key model 0i64) in
+    Patch.keyed_append rev step rest index
 
-def Patch.keyed_append (path : List I64) (step : Pair (List Patch) (List Html.Node)) (rest : List Html.Node) (index : I64) : List Patch :=
+def Patch.keyed_append (rev : List I64) (step : Pair (List Patch) (List Html.Node)) (rest : List Html.Node) (index : I64) : List Patch :=
     match step {
         Pair.pair patches next_model =>
-            List.append patches (Patch.keyed_walk path next_model rest (index + 1i64)),
+            List.append patches (Patch.keyed_walk rev next_model rest (index + 1i64)),
     }
 
 #[terminating]
-def Patch.keyed_match (path : List I64) (key : String) (model : List Html.Node) (child : Html.Node) (target : I64) (found : Option (Pair I64 Html.Node)) : Pair (List Patch) (List Html.Node) := match found {
+def Patch.keyed_match (rev : List I64) (key : String) (model : List Html.Node) (child : Html.Node) (target : I64) (found : Option (Pair I64 Html.Node)) : Pair (List Patch) (List Html.Node) := match found {
     Option.none =>
         Pair.pair
-            (List.cons (Patch.insert (Patch.child_path path target) child) List.empty)
+            (List.cons (Patch.insert (Patch.path_of (List.cons target rev)) child) List.empty)
             (Patch.model_insert target child model),
-    Option.some located => Patch.keyed_located path model child target located,
+    Option.some located => Patch.keyed_located rev model child target located,
 }
 
 #[terminating]
-def Patch.keyed_located (path : List I64) (model : List Html.Node) (child : Html.Node) (target : I64) (located : Pair I64 Html.Node) : Pair (List Patch) (List Html.Node) := match located {
-    Pair.pair from old_node => Patch.keyed_move path model child old_node target from,
+def Patch.keyed_located (rev : List I64) (model : List Html.Node) (child : Html.Node) (target : I64) (located : Pair I64 Html.Node) : Pair (List Patch) (List Html.Node) := match located {
+    Pair.pair from old_node => Patch.keyed_move rev model child old_node target from,
 }
 
 /// A matched key: `from == target` diffs in place; `from > target` moves the
 /// node left first. `from < target` cannot happen -- keys are unique and the
 /// prefix `0..target-1` already holds the new keys.
 #[terminating]
-def Patch.keyed_move (path : List I64) (model : List Html.Node) (child : Html.Node) (old_node : Html.Node) (target : I64) (from : I64) : Pair (List Patch) (List Html.Node) :=
+def Patch.keyed_move (rev : List I64) (model : List Html.Node) (child : Html.Node) (old_node : Html.Node) (target : I64) (from : I64) : Pair (List Patch) (List Html.Node) :=
     if from == target
     then Pair.pair
-        (Patch.diff_at (Patch.child_path path target) old_node child)
+        (Patch.diff_at (List.cons target rev) old_node child)
         model
     else Pair.pair
         (List.cons
-            (Patch.move (Patch.child_path path from) (Patch.child_path path target))
-            (Patch.diff_at (Patch.child_path path target) old_node child))
+            (Patch.move (Patch.path_of (List.cons from rev)) (Patch.path_of (List.cons target rev)))
+            (Patch.diff_at (List.cons target rev) old_node child))
         (Patch.model_move from target old_node model)
 
 #[terminating]
-def Patch.keyed_patches (path : List I64) (old_children : List Html.Node) (children : List Html.Node) : List Patch :=
-    let rev : List Html.Node := List.reverse old_children in
+def Patch.keyed_patches (rev : List I64) (old_children : List Html.Node) (children : List Html.Node) : List Patch :=
+    let rev_nodes : List Html.Node := List.reverse old_children in
     let last_index : I64 := List.length old_children - 1i64 in
-    let removals : List Patch := Patch.keyed_removals path rev children last_index in
+    let removals : List Patch := Patch.keyed_removals rev rev_nodes children last_index in
     let kept : List Html.Node := Patch.keyed_kept old_children children in
-    List.append removals (Patch.keyed_walk path kept children 0i64)
+    List.append removals (Patch.keyed_walk rev kept children 0i64)
 
 // ─── Attributes ──────────────────────────────────────────────────────
 
@@ -367,30 +368,30 @@ def Patch.attr_value (a : Html.Attr) : String := match a {
 }
 
 #[terminating]
-def Patch.attr_patches (path : List I64) (old_attrs : List Html.Attr) (attrs : List Html.Attr) : List Patch :=
-    List.append (Patch.attr_sets path old_attrs attrs) (Patch.attr_removes path old_attrs attrs)
+def Patch.attr_patches (rev : List I64) (old_attrs : List Html.Attr) (attrs : List Html.Attr) : List Patch :=
+    List.append (Patch.attr_sets rev old_attrs attrs) (Patch.attr_removes rev old_attrs attrs)
 
 #[terminating]
 #[partial]
-def Patch.attr_sets (path : List I64) (old_attrs : List Html.Attr) (attrs : List Html.Attr) : List Patch := match attrs {
+def Patch.attr_sets (rev : List I64) (old_attrs : List Html.Attr) (attrs : List Html.Attr) : List Patch := match attrs {
     List.empty => List.empty,
     List.cons a rest =>
         let name := Patch.attr_name a in
         let value := Patch.attr_value a in
         if Patch.attr_has name value old_attrs
-        then Patch.attr_sets path old_attrs rest
-        else List.cons (Patch.set_attr path name value) (Patch.attr_sets path old_attrs rest),
+        then Patch.attr_sets rev old_attrs rest
+        else List.cons (Patch.set_attr (Patch.path_of rev) name value) (Patch.attr_sets rev old_attrs rest),
 }
 
 #[terminating]
 #[partial]
-def Patch.attr_removes (path : List I64) (old_attrs : List Html.Attr) (attrs : List Html.Attr) : List Patch := match old_attrs {
+def Patch.attr_removes (rev : List I64) (old_attrs : List Html.Attr) (attrs : List Html.Attr) : List Patch := match old_attrs {
     List.empty => List.empty,
     List.cons a rest =>
         let name := Patch.attr_name a in
         if Patch.attr_contains name attrs
-        then Patch.attr_removes path rest attrs
-        else List.cons (Patch.remove_attr path name) (Patch.attr_removes path rest attrs),
+        then Patch.attr_removes rev rest attrs
+        else List.cons (Patch.remove_attr (Patch.path_of rev) name) (Patch.attr_removes rev rest attrs),
 }
 
 #[terminating]

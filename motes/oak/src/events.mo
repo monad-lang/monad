@@ -26,7 +26,14 @@ pub type Subscription (Msg : Type) {
     none,
     window (event : String) (handler : WebEvent -> Msg),
     document (event : String) (handler : WebEvent -> Msg),
-    animation_frame (handler : WebEvent -> Msg)
+    animation_frame (handler : WebEvent -> Msg),
+    /// A window listener that may IGNORE an event: returning `Option.none`
+    /// produces no message, so the frame does not re-render. A `keydown`
+    /// subscription that only cares about Escape should use this.
+    window_filter (event : String) (handler : WebEvent -> Option Msg),
+    /// A `matchMedia(query)` change subscription (the `WebEvent` carries
+    /// `matches`, `media` and `time_stamp`).
+    media (query : String) (handler : WebEvent -> Msg)
 }
 
 pub def Subscription.window_msg {Msg : Type} (event : String) (m : Msg) : Subscription Msg :=

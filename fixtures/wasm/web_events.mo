@@ -63,6 +63,8 @@ def setup : IO Unit := do {
     let _ <- Dom.on_with probe "drop" "0x6:d";
     let _ <- Dom.on_with probe "paste" "0x7";
     let _ <- Dom.on_with probe "custom" "0x8:cpso";
+    // `r`: release the implicit touch pointer capture on gotpointercapture.
+    let _ <- Dom.on_with probe "pointerenter" "0xa:r";
     let _ <- Dom.on_with probe "wheel" "0x9";
     return unit
 }

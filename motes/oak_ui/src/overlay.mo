@@ -6,19 +6,21 @@
 // `WebEvent` carries no target node, so a click inside a dialog cannot be
 // told apart from a click on its backdrop when one contains the other. The
 // backdrop is therefore a SIBLING of the dialog, not its parent: clicking it
-// closes, clicks in the dialog never reach it. Escape closes too, from a
-// keydown listener on the dialog, but only while focus is inside it: the
-// close button carries `autofocus`, which browsers honour on page load and
-// not when the browser runtime inserts the dialog later, and Oak has no
-// focus command yet. Until it does, Escape works after the user tabs or
-// clicks into the dialog; the backdrop and close button always work.
+// closes, clicks in the dialog never reach it.
+//
+// Focus: the dialog is focusable (`tabindex=-1`) and carries
+// `data-oak-focus-trap`, which the browser runtime turns into a Tab trap
+// that restores the previous focus when the dialog leaves the tree. Opening
+// a dialog still needs the app to return `Command.focus ("#" ++ id)`; the
+// runtime applies it after the patch that inserted the dialog. Escape works
+// once focus is inside (the trap focuses the first control).
 
 use web_event::event {WebEvent, HandlerResult, ListenerFlags}
 use oak::typed {Oak.Attr, Oak.Node}
 use oak::elements {
     Html.div, Html.span, Html.h2, Html.button, Html.header, Html.footer, Html.type_, Html.id_,
     Html.aria, Html.role, Html.class_, Html.class_list, Html.text, Html.fragment, Html.tabindex,
-    Html.autofocus, Html.attrs_when,
+    Html.autofocus, Html.attrs_when, Html.attr,
 }
 use oak::events {Html.on, Html.on_click}
 use lib::vocab {Ui.Opt, Ui.Style, Ui.Size, Ui.Align, Ui.resolve, Ui.ghost, Ui.small}
@@ -56,7 +58,8 @@ def dialog_frame {Msg : Type} (block : String) (mods : List String) (s : Ui.Styl
             Html.div
                 (Ui.root_attrs block mods List.empty s
                     [Html.id_ id, Html.role "dialog", Html.aria "modal" "true",
-                        Html.aria "labelledby" title_id, Html.tabindex (-1), on_escape on_close])
+                        Html.aria "labelledby" title_id, Html.tabindex (-1),
+                        Html.attr "data-oak-focus-trap" "", on_escape on_close])
                 (List.append
                     [Html.header [Html.class_ ["oak-dialog__header"]]
                         [Html.h2 [Html.class_ ["oak-dialog__title"], Html.id_ title_id] [Html.text title],
@@ -111,8 +114,10 @@ def floating {Msg : Type} (block : String) (id : String) (label : String) (is_op
 
 with Ui {
     /// A modal dialog. Closes on the backdrop, the close button and
-    /// Escape (once focus is inside; see the file header), all via
-    /// `on_close`. `Ui.small`/`Ui.large` set the width. Focus is not trapped.
+    /// Escape, all via `on_close`. `Ui.small`/`Ui.large` set the width.
+    /// The dialog traps Tab and restores the previous focus when it leaves
+    /// the tree; the app opens it with `Command.focus ("#" ++ id)` so the
+    /// runtime focuses it after the patch that inserted it.
     pub def modal {Msg : Type} (opts : List Ui.Opt) (id : String) (is_open : Bool) (title : String)
         (on_close : Msg) (body : List (Oak.Node Msg)) (foot : List (Oak.Node Msg)) : Oak.Node Msg :=
         if is_open

@@ -11,7 +11,7 @@
 import { readFile } from 'node:fs/promises';
 import { imports } from './web.js';
 import { host } from './web_runtime.js';
-import { FakeDataTransfer, installDocument, body, fail } from './stub_dom.mjs';
+import { FakeDataTransfer, installDocument, body, fail, stub } from './stub_dom.mjs';
 
 const path = process.argv[2];
 if (!path) {
@@ -140,6 +140,13 @@ probe.fire('paste', { clipboardData: clip });
   if (!opts.capture || !opts.passive || !opts.once) {
     fail(`custom options are ${JSON.stringify(opts)}`);
   }
+}
+
+// ── `r`: release the browser's implicit pointer capture ──
+probe.setPointerCapture(7);
+probe.fire('gotpointercapture', { pointerId: 7 });
+if (!stub.pointerReleases.includes(7)) {
+  fail(`release_capture did not release pointer 7: ${JSON.stringify(stub.pointerReleases)}`);
 }
 
 // ── the slot is empty outside a dispatch ──

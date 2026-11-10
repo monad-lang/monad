@@ -57,6 +57,15 @@ def app_update (log : List String) (m : String) : Pair (List String) (Command St
     then Pair.pair (log_add log "silent") (Command.perform "silent")
     else if String.beq m "quit"
     then Pair.pair (log_add log "quit") Command.quit
+    else if String.beq m "batch-effect"
+    then Pair.pair (log_add log "batch-effect")
+        (Command.batch [Command.perform "effect", Command.dispatch "next"])
+    else if String.beq m "batch-quit"
+    then Pair.pair (log_add log "batch-quit")
+        (Command.batch [Command.perform "effect", Command.quit, Command.perform "late"])
+    else if String.beq m "batch-inert"
+    then Pair.pair (log_add log "batch-inert")
+        (Command.batch [Command.after 10i64 "x", Command.focus "#dialog", Command.none])
     else Pair.pair (log_add log m) Command.none
 
 def log_item (s : String) : Oak.Node String :=
@@ -144,6 +153,24 @@ def test_quit_stops_batch : Bool :=
 def test_empty_batch : Bool :=
     app_strs_eq (app_result_log List.empty) List.empty
     && Bool.not (app_result_quit List.empty)
+
+#[test]
+def test_batch_runs_effects_then_dispatches : Bool :=
+    app_strs_eq (app_result_log ["batch-effect"])
+        ["batch-effect", "done:effect", "next"]
+    && app_strs_eq (app_effects ["batch-effect"]) ["effect:effect"]
+
+#[test]
+def test_batch_quit_stops_later_commands : Bool :=
+    app_strs_eq (app_result_log ["batch-quit"]) ["batch-quit"]
+    && app_result_quit ["batch-quit"]
+    // The effect BEFORE `quit` still ran; the one after it did not.
+    && app_strs_eq (app_effects ["batch-quit"]) ["effect:effect"]
+
+#[test]
+def test_batch_after_and_focus_are_inert : Bool :=
+    app_strs_eq (app_result_log ["batch-inert", "z"]) ["batch-inert", "z"]
+    && Bool.not (app_result_quit ["batch-inert", "z"])
 
 #[test]
 def test_step_is_pure : Bool :=

@@ -3,7 +3,9 @@
 
 use std::list {List.length}
 use web_event::event {WebEvent, HandlerResult, ListenerFlags}
-use lib::typed {Oak.Node, Oak.Lowered, Oak.lower, Oak.to_html, Handler.spec}
+use lib::typed {
+    Oak.Node, Oak.Lowered, Oak.lower, Oak.to_html, Handler.spec, Handler.id,
+}
 use lib::elements {Html.attr, Html.div, Html.text}
 use lib::events {Html.on_click}
 use xml_html::html {Html.to_string}
@@ -36,3 +38,14 @@ def test_handler_spec_flags : Bool :=
     let flags : ListenerFlags := { prevent_default := true, once := true } in
     let path : List I64 := [0i64] in
     String.ends_with (Handler.spec path "drop" flags) ":do"
+
+// The integer path hash replaced the old `path_key` STRING, but must keep
+// the ids it produced (FNV-1a over "<path>:<event>", masked to 31 bits), or
+// every existing view would churn its listeners.
+#[test]
+def test_handler_ids_match_the_legacy_path_key : Bool :=
+    U32.beq (Handler.id List.empty "click") 0x5C7EA86Fu32
+        && U32.beq (Handler.id [0i64] "click") 0x6EEAFFA5u32
+        && U32.beq (Handler.id [0i64, 1i64] "click") 0x78DBFF70u32
+        && U32.beq (Handler.id [1i64, 0i64] "click") 0x1E9DE4CCu32
+        && U32.beq (Handler.id [0i64, 1i64, 0i64 - 1i64] "click") 0x7B3F5DB4u32

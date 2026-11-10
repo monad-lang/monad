@@ -6,6 +6,7 @@
 use oak::typed {Oak.Attr, Oak.Node}
 use oak::elements {
     Html.div, Html.hr, Html.header, Html.aside, Html.main_, Html.footer, Html.class_,
+    Html.style_attr,
 }
 use lib::vocab {
     Ui.Opt, Ui.Style, Ui.Align, Ui.Size, Ui.Style.default, Ui.resolve, Ui.resolve_from,
@@ -23,7 +24,19 @@ def row_base : Ui.Style := { Ui.Style.default with align := Ui.Align.align_cente
 def grid_mod (cols : I64) : String :=
     if I64.beq cols 0 then "auto"
     else if I64.lt cols 2 then ""
-    else String.concat "cols-" (I64.to_string (if I64.lt 6 cols then 6 else cols))
+    else if I64.gt cols 6 then "" // arbitrary counts use an inline style
+    else String.concat "cols-" (I64.to_string cols)
+
+/// Arbitrary column counts (`Ui.cols 16`) become an inline
+/// `grid-template-columns`; the 2-6 range keeps its generated classes so
+/// the narrow-screen collapse still applies.
+def grid_extra {Msg : Type} (cols : I64) : List (Oak.Attr Msg) :=
+    if I64.gt cols 6
+    then
+        [Html.style_attr
+            (String.concat "grid-template-columns: repeat("
+                (String.concat (I64.to_string cols) ", minmax(0, 1fr))"))]
+    else List.empty
 
 def container_mod (z : Ui.Size) : String :=
     match z {
@@ -52,12 +65,17 @@ with Ui {
         let s : Ui.Style := Ui.resolve_from { row_base with wrap := true, gap := 2 } opts in
         Html.div (Ui.root_attrs "oak-row" (wrap_mods s) (flex_extra s) s attrs) children
 
-    /// An equal-column grid. `Ui.cols n` (2-6) collapses to one column on
-    /// narrow screens; `Ui.cols 0` auto-fits columns of at least 16rem.
+    /// An equal-column grid. `Ui.cols n` uses a generated class for 2-6
+    /// (with the narrow-screen collapse); any larger `n` emits an inline
+    /// `repeat(n, minmax(0, 1fr))`; `Ui.cols 0` auto-fits columns of at
+    /// least 16rem.
     pub def grid {Msg : Type} (opts : List Ui.Opt) (attrs : List (Oak.Attr Msg))
         (children : List (Oak.Node Msg)) : Oak.Node Msg :=
         let s : Ui.Style := Ui.resolve opts in
-        Html.div (Ui.root_attrs "oak-grid" [grid_mod s.cols] [Ui.gap_class s.gap] s attrs) children
+        Html.div
+            (Ui.root_attrs "oak-grid" [grid_mod s.cols] [Ui.gap_class s.gap] s
+                (List.append (grid_extra s.cols) attrs))
+            children
 
     /// A centred, max-width page column (`Ui.small`/`Ui.large` for narrow
     /// and wide).

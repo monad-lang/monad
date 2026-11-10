@@ -58,7 +58,7 @@ def test_modal_closed_is_empty : Bool :=
 
 #[test]
 def test_modal_markup : Bool :=
-    ui_has open_modal "<div class=\"oak-overlay\"><div class=\"oak-backdrop\"></div><div class=\"oak-modal oak-modal--lg\" id=\"m\" role=\"dialog\" aria-modal=\"true\" aria-labelledby=\"m-title\" tabindex=\"-1\">"
+    ui_has open_modal "<div class=\"oak-overlay\"><div class=\"oak-backdrop\"></div><div class=\"oak-modal oak-modal--lg\" id=\"m\" role=\"dialog\" aria-modal=\"true\" aria-labelledby=\"m-title\" tabindex=\"-1\" data-oak-focus-trap=\"\">"
         && ui_has open_modal "<h2 class=\"oak-dialog__title\" id=\"m-title\">Edit</h2>"
         && ui_has open_modal "aria-label=\"Close\" title=\"Close\" autofocus>"
         && ui_has open_modal "<footer class=\"oak-dialog__footer\">foot</footer>"

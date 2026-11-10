@@ -32,8 +32,10 @@ use oak::typed {Oak.Node, Oak.Lowered, Oak.lower, Handler.id, Handler.spec_of}
 use oak::events {Subscription}
 use web_wasm::dom {
     Dom.root, Dom.on_window, Dom.on_document, Dom.on_frame,
-    Dom.off_window, Dom.off_document, Dom.off_frame,
+    Dom.off_window, Dom.off_document, Dom.off_frame, Dom.focus,
 }
+use web_wasm::timer {Timer.after, Timer.is_id}
+use web_wasm::media {Media.watch, Media.unwatch}
 use web_wasm::event {WebEvent.current, WebEvent.prevent_default, WebEvent.stop_propagation}
 use web_wasm::keep {Keep.load, Keep.save}
 use web_wasm::types {Node}
@@ -54,10 +56,21 @@ def Runtime.sub_key {Msg : Type} (sub : Subscription Msg) : String :=
         Subscription.window event _handler => String.concat "window:" event,
         Subscription.document event _handler => String.concat "document:" event,
         Subscription.animation_frame _handler => "frame",
+        Subscription.window_filter event _handler => String.concat "windowf:" event,
+        Subscription.media query _handler => String.concat "media:" query,
     }
 
 def Runtime.window_spec (event : String) : String :=
     Handler.spec_of (Handler.id List.empty (String.concat "window:" event)) ListenerFlags.none
+
+/// A filtered window subscription gets its own key/id space, so switching a
+/// `window` subscription to `window_filter` (or back) replaces the listener
+/// instead of stacking two.
+def Runtime.window_filter_spec (event : String) : String :=
+    Handler.spec_of (Handler.id List.empty (String.concat "windowf:" event)) ListenerFlags.none
+
+def Runtime.media_spec (query : String) : String :=
+    Handler.spec_of (Handler.id List.empty (String.concat "media:" query)) ListenerFlags.none
 
 def Runtime.document_spec (event : String) : String :=
     Handler.spec_of (Handler.id List.empty (String.concat "document:" event)) ListenerFlags.none
@@ -71,6 +84,9 @@ pub def Runtime.install_sub {Msg : Type} (sub : Subscription Msg) : IO Unit :=
         Subscription.window event _handler => Dom.on_window event (Runtime.window_spec event),
         Subscription.document event _handler => Dom.on_document event (Runtime.document_spec event),
         Subscription.animation_frame _handler => Dom.on_frame Runtime.frame_spec,
+        Subscription.window_filter event _handler =>
+            Dom.on_window event (Runtime.window_filter_spec event),
+        Subscription.media query _handler => Media.watch query (Runtime.media_spec query),
     }
 
 pub def Runtime.remove_sub {Msg : Type} (sub : Subscription Msg) : IO Unit :=
@@ -79,6 +95,8 @@ pub def Runtime.remove_sub {Msg : Type} (sub : Subscription Msg) : IO Unit :=
         Subscription.window event _handler => Dom.off_window event,
         Subscription.document event _handler => Dom.off_document event,
         Subscription.animation_frame _handler => Dom.off_frame,
+        Subscription.window_filter event _handler => Dom.off_window event,
+        Subscription.media query _handler => Media.unwatch query,
     }
 
 /// Install only the subscriptions whose key is not already applied.
@@ -117,8 +135,11 @@ def Runtime.remove_stale {Msg : Type} (old : List (Subscription Msg)) (new : Lis
     }
 
 pub def Runtime.apply_subs {Msg : Type} (old : List (Subscription Msg)) (new : List (Subscription Msg)) : IO Unit := do {
-    let _ <- Runtime.install_added old new;
-    Runtime.remove_stale old new
+    // Remove first: installing a new listener for an event can replace the
+    // old one (the JS host keys listeners by event), and removing after the
+    // install would then remove the new listener too.
+    let _ <- Runtime.remove_stale old new;
+    Runtime.install_added old new
 }
 
 def Runtime.sub_handler {Msg : Type} (sub : Subscription Msg)
@@ -140,6 +161,20 @@ def Runtime.sub_handler {Msg : Type} (sub : Subscription Msg)
                 (Pair.pair (Handler.id List.empty "frame")
                     (fn (e : WebEvent) => HandlerResult.msg (handler e)))
                 List.empty,
+        Subscription.window_filter event handler =>
+            List.cons
+                (Pair.pair (Handler.id List.empty (String.concat "windowf:" event))
+                    (fn (e : WebEvent) =>
+                        match handler e {
+                            Option.some m => HandlerResult.msg m,
+                            Option.none => HandlerResult.ignore,
+                        }))
+                List.empty,
+        Subscription.media query handler =>
+            List.cons
+                (Pair.pair (Handler.id List.empty (String.concat "media:" query))
+                    (fn (e : WebEvent) => HandlerResult.msg (handler e)))
+                List.empty,
     }
 
 #[terminating]
@@ -156,6 +191,10 @@ pub type RuntimeState (S : Type) (Msg : Type) {
         (queue : List Msg) (stopped : Bool)
         (handlers : List (Pair U32 (WebEvent -> HandlerResult Msg)))
         (subs : List (Subscription Msg))
+        /// Pending one-shot `Command.after` messages, keyed by timer id.
+        (timers : List (Pair I64 Msg))
+        /// Selectors a `Command.focus` asked for this batch.
+        (focus : List String)
 }
 
 /// Mount a `Program` under the root the loader selected, and hand the state
@@ -179,7 +218,8 @@ pub def Runtime.mount {S : Type} {Msg : Type} {E : Type}
             let _ <- Patch.hydrate_root root tree;
             let table := List.append handlers (Runtime.collect_sub_handlers subs);
             let state : Ref (RuntimeState S Msg) <-
-                Ref.new (RuntimeState.st root tree model List.empty false table subs);
+                Ref.new (RuntimeState.st root tree model List.empty false table subs
+                    List.empty List.empty);
             let _ <- Keep.save state;
             return unit
         },
@@ -195,9 +235,11 @@ pub def Runtime.dispatch {S : Type} {Msg : Type} (handler : I64) : IO Unit := do
     let state <- Runtime.load_state;
     let snapshot <- Ref.get state;
     match snapshot {
-        RuntimeState.st _root _last _model _queue stopped handlers _subs =>
+        RuntimeState.st _root _last _model _queue stopped handlers _subs timers _focus =>
             if stopped
             then IO.pure unit
+            else if Timer.is_id (I64.to_u32 handler)
+            then Runtime.dispatch_timer state handler timers
             else
                 match Runtime.lookup_handler (I64.to_u32 handler) handlers {
                     Option.none => IO.pure unit,
@@ -222,6 +264,41 @@ pub def Runtime.dispatch {S : Type} {Msg : Type} (handler : I64) : IO Unit := do
     }
 }
 
+/// A timer id is not in the render handler table: its message is stored in
+/// `RuntimeState.timers`, so the id resolves here and the message is queued
+/// for the next tick. An id already fired (or after `quit`) is ignored.
+def Runtime.dispatch_timer {S : Type} {Msg : Type} (state : Ref (RuntimeState S Msg))
+    (handler : I64) (timers : List (Pair I64 Msg)) : IO Unit :=
+    match Runtime.take_timer handler timers {
+        Pair.pair found remaining =>
+            match found {
+                Option.none => IO.pure unit,
+                Option.some m => do {
+                    let _ <- Ref.update state (Runtime.set_timers remaining);
+                    let _ <- Ref.update state (Runtime.enqueue m);
+                    return unit
+                },
+            },
+    }
+
+#[terminating]
+def Runtime.take_timer {Msg : Type} (id : I64) (timers : List (Pair I64 Msg))
+    : Pair (Option Msg) (List (Pair I64 Msg)) :=
+    match timers {
+        List.empty => Pair.pair Option.none List.empty,
+        List.cons entry rest =>
+            match entry {
+                Pair.pair key msg =>
+                    if I64.beq key id
+                    then Pair.pair (Option.some msg) rest
+                    else
+                        match Runtime.take_timer id rest {
+                            Pair.pair found remaining =>
+                                Pair.pair found (List.cons entry remaining),
+                        },
+            },
+    }
+
 #[terminating]
 def Runtime.lookup_handler {Msg : Type} (id : U32)
     (handlers : List (Pair U32 (WebEvent -> HandlerResult Msg)))
@@ -241,9 +318,44 @@ def Runtime.lookup_handler {Msg : Type} (id : U32)
 /// landed in one frame.
 def Runtime.enqueue {S : Type} {Msg : Type} (msg : Msg) (state : RuntimeState S Msg) : RuntimeState S Msg :=
     match state {
-        RuntimeState.st root last model queue stopped handlers subs =>
+        RuntimeState.st root last model queue stopped handlers subs timers focus =>
             RuntimeState.st root last model (List.append queue (List.cons msg List.empty))
-                stopped handlers subs,
+                stopped handlers subs timers focus,
+    }
+
+def Runtime.set_timers {S : Type} {Msg : Type} (timers : List (Pair I64 Msg))
+    (state : RuntimeState S Msg) : RuntimeState S Msg :=
+    match state {
+        RuntimeState.st root last model queue stopped handlers subs _old focus =>
+            RuntimeState.st root last model queue stopped handlers subs timers focus,
+    }
+
+def Runtime.add_timer {S : Type} {Msg : Type} (id : I64) (msg : Msg)
+    (state : RuntimeState S Msg) : RuntimeState S Msg :=
+    match state {
+        RuntimeState.st root last model queue stopped handlers subs timers focus =>
+            RuntimeState.st root last model queue stopped handlers subs
+                (List.append timers (List.cons (Pair.pair id msg) List.empty)) focus,
+    }
+
+def Runtime.add_focus {S : Type} {Msg : Type} (selector : String)
+    (state : RuntimeState S Msg) : RuntimeState S Msg :=
+    match state {
+        RuntimeState.st root last model queue stopped handlers subs timers focus =>
+            RuntimeState.st root last model queue stopped handlers subs timers
+                (List.append focus (List.cons selector List.empty)),
+    }
+
+/// Run a batch's focus requests, in order, after the patch has placed the
+/// nodes they name.
+#[terminating]
+def Runtime.apply_focus (selectors : List String) : IO Unit :=
+    match selectors {
+        List.empty => IO.pure unit,
+        List.cons selector rest => do {
+            let _ <- Dom.focus selector;
+            Runtime.apply_focus rest
+        },
     }
 
 /// One frame: drain the queue, fold it, re-render and patch. A no-op when
@@ -254,24 +366,25 @@ pub def Runtime.tick {S : Type} {Msg : Type} {E : Type}
     let state <- Runtime.load_state;
     let snapshot <- Ref.get state;
     match snapshot {
-        RuntimeState.st root last model queue stopped handlers subs =>
+        RuntimeState.st root last model queue stopped handlers subs timers focus =>
             if stopped
             then IO.pure unit
             else if List.is_empty queue
             then IO.pure unit
-            else Runtime.drain prog host state root last model queue handlers subs,
+            else Runtime.drain prog host state root last model queue handlers subs timers,
     }
 }
 
 def Runtime.drain {S : Type} {Msg : Type} {E : Type}
     (prog : Program S Msg E) (host : Host IO E Msg) (state : Ref (RuntimeState S Msg))
     (root : Node) (last : Html.Node) (model : S) (queue : List Msg)
-    (handlers : List (Pair U32 (WebEvent -> HandlerResult Msg))) (subs : List (Subscription Msg)) : IO Unit := do {
+    (handlers : List (Pair U32 (WebEvent -> HandlerResult Msg)))
+    (subs : List (Subscription Msg)) (timers : List (Pair I64 Msg)) : IO Unit := do {
     // Clear the queue first: a message dispatched while the batch runs lands
     // in the NEXT frame. The final write below reads the queue back so it is
     // not overwritten.
     let drained : RuntimeState S Msg :=
-        RuntimeState.st root last model List.empty false handlers subs;
+        RuntimeState.st root last model List.empty false handlers subs timers List.empty;
     let _ <- Ref.set state drained;
     let folded <- Runtime.run_batch prog host model queue;
     match folded {
@@ -280,20 +393,31 @@ def Runtime.drain {S : Type} {Msg : Type} {E : Type}
             match Oak.lower (Program.view prog next_model) {
                 Oak.Lowered.lowered tree next_handlers => do {
                     let table := List.append next_handlers (Runtime.collect_sub_handlers next_subs);
+                    // The batch may have scheduled timers and asked for
+                    // focus while it ran; carry those across the staging
+                    // write (which clears the queue).
+                    let after_batch <- Ref.get state;
+                    let batch_timers := Runtime.timers_of after_batch;
+                    let batch_focus := Runtime.focus_of after_batch;
                     // Make the new handlers reachable BEFORE the DOM changes:
                     // a patch can fire an event synchronously (e.g. an
                     // autofocused input), and that event must resolve to the
                     // handler just lowered, not the previous frame's table.
                     let staged : RuntimeState S Msg :=
-                        RuntimeState.st root last model List.empty false table next_subs;
+                        RuntimeState.st root last model List.empty false table next_subs
+                            batch_timers batch_focus;
                     let _ <- Ref.set state staged;
                     let patches := Patch.diff last tree;
                     let _ <- Patch.apply root patches;
                     let _ <- Runtime.apply_subs subs next_subs;
                     let current <- Ref.get state;
                     let pending := Runtime.pending_of current;
+                    // Focus runs after the patch, so a dialog inserted this
+                    // frame is already in the DOM and can take focus.
+                    let _ <- Runtime.apply_focus (Runtime.focus_of current);
                     let next : RuntimeState S Msg :=
-                        RuntimeState.st root tree next_model pending quit table next_subs;
+                        RuntimeState.st root tree next_model pending quit table next_subs
+                            (Runtime.timers_of current) List.empty;
                     let _ <- Ref.set state next;
                     return unit
                 },
@@ -305,7 +429,17 @@ def Runtime.drain {S : Type} {Msg : Type} {E : Type}
 /// The messages dispatched while the batch ran.
 def Runtime.pending_of {S : Type} {Msg : Type} (state : RuntimeState S Msg) : List Msg :=
     match state {
-        RuntimeState.st _root _last _model queue _stopped _handlers _subs => queue,
+        RuntimeState.st _root _last _model queue _stopped _handlers _subs _timers _focus => queue,
+    }
+
+def Runtime.timers_of {S : Type} {Msg : Type} (state : RuntimeState S Msg) : List (Pair I64 Msg) :=
+    match state {
+        RuntimeState.st _root _last _model _queue _stopped _handlers _subs timers _focus => timers,
+    }
+
+def Runtime.focus_of {S : Type} {Msg : Type} (state : RuntimeState S Msg) : List String :=
+    match state {
+        RuntimeState.st _root _last _model _queue _stopped _handlers _subs _timers focus => focus,
     }
 
 /// The state slot, typed for the caller. `Keep.load` is generic because the
@@ -381,4 +515,85 @@ def Runtime.step_cmd {S : Type} {Msg : Type} {E : Type}
                 Option.none => Runtime.step_batch prog host model rest,
             }
         },
+        // `after` schedules the host timer and parks the message in the state
+        // slot; `focus` is applied after the next patch; both let the fold
+        // continue with the rest of the batch.
+        Command.after ms msg => do {
+            let id <- Timer.after ms;
+            let state <- Runtime.load_state;
+            let _ <- Ref.update state (Runtime.add_timer id msg);
+            Runtime.step_batch prog host model rest
+        },
+        Command.focus selector => do {
+            let state <- Runtime.load_state;
+            let _ <- Ref.update state (Runtime.add_focus selector);
+            Runtime.step_batch prog host model rest
+        },
+        Command.batch cmds => Runtime.step_cmds prog host model rest cmds,
+    }
+
+/// The IO mirror of `oak::app`'s `step_cmds`/`collect_cmds`: effects run in
+/// order, dispatches queue for the next batch, `quit` stops later commands,
+/// and `after`/`focus` are performed as they are met.
+#[terminating]
+def Runtime.step_cmds {S : Type} {Msg : Type} {E : Type}
+    (prog : Program S Msg E) (host : Host IO E Msg) (model : S) (rest : List Msg)
+    (cmds : List (Command E Msg)) : IO (Pair (Pair S Bool) (List Msg)) := do {
+    let collected <- Runtime.collect_cmds host cmds List.empty List.empty false;
+    Runtime.finish_cmds prog host model rest collected
+}
+
+#[partial]
+def Runtime.finish_cmds {S : Type} {Msg : Type} {E : Type}
+    (prog : Program S Msg E) (host : Host IO E Msg) (model : S) (rest : List Msg)
+    (collected : Pair (Pair (List Msg) (List Msg)) Bool) : IO (Pair (Pair S Bool) (List Msg)) :=
+    match collected {
+        Pair.pair pair quit =>
+            match pair {
+                Pair.pair perf disp =>
+                    if quit
+                    then IO.pure (Pair.pair (Pair.pair model true) List.empty)
+                    else do {
+                        let stepped <- Runtime.step_batch prog host model
+                            (List.append (List.reverse perf) rest);
+                        match stepped {
+                            Pair.pair inner pending =>
+                                return (Pair.pair inner (List.append pending (List.reverse disp))),
+                        }
+                    },
+            },
+    }
+
+#[partial]
+def Runtime.collect_cmds {E : Type} {Msg : Type} (host : Host IO E Msg)
+    (cmds : List (Command E Msg)) (perf : List Msg) (disp : List Msg) (quit : Bool)
+    : IO (Pair (Pair (List Msg) (List Msg)) Bool) :=
+    match cmds {
+        List.empty => IO.pure (Pair.pair (Pair.pair perf disp) quit),
+        List.cons cmd more =>
+            match cmd {
+                Command.none => Runtime.collect_cmds host more perf disp quit,
+                Command.quit => IO.pure (Pair.pair (Pair.pair perf disp) true),
+                Command.dispatch d => Runtime.collect_cmds host more perf (List.cons d disp) quit,
+                Command.perform effect => do {
+                    let mo <- Host.run_effect host effect;
+                    match mo {
+                        Option.some m => Runtime.collect_cmds host more (List.cons m perf) disp quit,
+                        Option.none => Runtime.collect_cmds host more perf disp quit,
+                    }
+                },
+                Command.after ms msg => do {
+                    let id <- Timer.after ms;
+                    let state <- Runtime.load_state;
+                    let _ <- Ref.update state (Runtime.add_timer id msg);
+                    Runtime.collect_cmds host more perf disp quit
+                },
+                Command.focus selector => do {
+                    let state <- Runtime.load_state;
+                    let _ <- Ref.update state (Runtime.add_focus selector);
+                    Runtime.collect_cmds host more perf disp quit
+                },
+                Command.batch inner =>
+                    Runtime.collect_cmds host (List.append inner more) perf disp quit,
+            },
     }

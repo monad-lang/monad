@@ -53,12 +53,24 @@ globalThis.document.fire('visibilitychange');
 instance.exports.oak_tick();
 if (count() !== '11') fail(`after visibilitychange the count is ${count()}`);
 
+// ── a filtered window subscription: a non-matching key is ignored (no
+// message, no render); the matching one fires ──
+if ((globalThis.window.listeners.keydown || []).length !== 1) {
+  fail('the filtered keydown subscription did not register on window');
+}
+globalThis.window.fire('keydown', { key: 'x' });
+instance.exports.oak_tick();
+if (count() !== '11') fail(`a filtered-out keydown changed the count to ${count()}`);
+globalThis.window.fire('keydown', { key: 'k' });
+instance.exports.oak_tick();
+if (count() !== '1011') fail(`a matching keydown gave count ${count()}`);
+
 // ── the frame subscription is dispatched by the loader's rAF loop ──
 let pending = null;
 globalThis.requestAnimationFrame = (cb) => { pending = cb; };
 host.start_ticks(instance);
 if (typeof pending !== 'function') fail('start_ticks did not schedule a frame');
 pending();
-if (count() !== '111') fail(`after one frame the count is ${count()}`);
+if (count() !== '1111') fail(`after one frame the count is ${count()}`);
 
 console.log(`ok: ${path} -> window/document subscriptions and the frame loop`);

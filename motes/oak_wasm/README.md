@@ -40,7 +40,10 @@ Html.input [Html.on_input (fn (s : String) => Msg.set_text s)]
 
 `Oak.lower` turns each `Oak.Attr.on` into `data-oak-on-<event>="<hex-id><:flags>"`
 and collects the handler table. The id is derived from the node's patch
-path + event name, so it is stable across renders; the JS host keeps the DOM
+path + event name (integer FNV over the reversed path), so it is stable
+across renders **while the view shape is stable**; inserting/removing
+siblings changes later ids and replaces their listeners. Keyed lists
+(`Html.key`) are the stable-identity path. The JS host keeps the DOM
 listener in step (replace on change, remove when the attribute goes away) and
 `Runtime.dispatch` looks the id up, snapshots the live event into a
 `web_event::WebEvent`, and runs the pure handler. The `HandlerResult` it returns
@@ -67,6 +70,36 @@ The runtime diffs the list by (target, event) after every batch and
 registers/unregisters the difference. `animation_frame` is dispatched by the
 loader's `requestAnimationFrame` loop just before `oak_tick`, so a frame
 message is folded in the same frame.
+
+`Subscription.window_filter event (WebEvent -> Option Msg)` is the
+filtered variant: `Option.none` produces no message, so the frame does not
+re-render. Use it for a `keydown` that only cares about one key.
+
+## Commands
+
+`Command` has `none`, `quit`, `dispatch`, `perform`, and three runtime
+commands:
+
+- `Command.after ms msg` schedules one `setTimeout`; the message is parked
+  in the runtime state (never in JS), and the host calls
+  `oak_dispatch_event(id)` with a reserved top-bit id when it fires. It is
+  one-shot: there is no interval and no per-frame render.
+- `Command.focus selector` runs **after** the patch that inserted the node,
+  so a dialog inserted this frame can take focus (`autofocus` only works on
+  page load).
+- `Command.batch cmds` runs commands left-to-right: `perform` effects run
+  immediately in order, `dispatch` messages queue for the next batch, and
+  `quit` stops later commands. The pure `oak::app` fold treats `after` and
+  `focus` as inert (it has no scheduler or DOM).
+
+## Memory
+
+The web allocator is a bump allocator: it never frees. Exhaustion calls the
+host's `oom` import (a `console.error` naming the requested/committed sizes)
+and then traps — never a silent 0 or a negative-offset `RangeError`.
+`web_wasm::Memory.heap_bytes`/`heap_used` expose committed and used bytes;
+an app that cannot shed allocations can persist and call `Window.reload`.
+Avoid idle `animation_frame` subscriptions: every frame re-renders.
 
 ## Patch
 

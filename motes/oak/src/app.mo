@@ -23,7 +23,15 @@ pub type Command (E : Type) (Msg : Type) {
     none,
     quit,
     dispatch (msg : Msg),
-    perform (effect : E)
+    perform (effect : E),
+    /// A one-shot delayed message, resolved by the browser runtime. The pure
+    /// fold has no scheduler and treats it as inert.
+    after (ms : I64) (msg : Msg),
+    /// Move focus after the next patch. The pure fold has no DOM and treats
+    /// it as inert.
+    focus (selector : String),
+    /// Several commands, run left-to-right (see `step_cmds`).
+    batch (cmds : List (Command E Msg))
 }
 
 pub type Host (N : Type -> Type) (E : Type) (Msg : Type) {
@@ -139,7 +147,76 @@ def step_cmd [Monad N] {S : Type} {Msg : Type} {E : Type}
                 (fn (stepped : Pair (Pair S Bool) (List Msg)) =>
                     Monad.pure (queue_dispatched d stepped)),
         Command.perform effect =>
-            Monad.bind (Host.run_effect h effect) (perform_step a h model rest)
+            Monad.bind (Host.run_effect h effect) (perform_step a h model rest),
+        // The pure fold has no scheduler and no DOM: `after`/`focus` are
+        // runtime commands (oak_wasm's fold implements them), inert here.
+        Command.after _ms _msg => step_batch a h model rest,
+        Command.focus _selector => step_batch a h model rest,
+        Command.batch cmds => step_cmds a h model rest cmds
+    }
+
+/// Several commands, left-to-right. `perform` effects run immediately in
+/// order and their optional messages fold into this batch; `dispatch`
+/// messages queue for the NEXT batch; `quit` stops later commands. `after`
+/// and `focus` are inert here (the wasm runtime implements them).
+#[terminating]
+def step_cmds [Monad N] {S : Type} {Msg : Type} {E : Type}
+    (a : Program S Msg E) (h : Host N E Msg) (model : S) (rest : List Msg)
+    (cmds : List (Command E Msg)) : N (Pair (Pair S Bool) (List Msg)) :=
+    Monad.bind (collect_cmds h cmds List.empty List.empty false)
+        (fn (collected : Pair (Pair (List Msg) (List Msg)) Bool) =>
+            finish_cmds a h model rest collected)
+
+/// Runs a batch's collected effects through the model fold. The list it
+/// folds is not a structural subterm of the command batch, so the
+/// termination checker cannot see the measure; the recursion is bounded by
+/// the model's own `quit`/settling behaviour, like the rest of the fold.
+#[partial]
+def finish_cmds [Monad N] {S : Type} {Msg : Type} {E : Type}
+    (a : Program S Msg E) (h : Host N E Msg) (model : S) (rest : List Msg)
+    (collected : Pair (Pair (List Msg) (List Msg)) Bool) : N (Pair (Pair S Bool) (List Msg)) :=
+    match collected {
+        Pair.pair pair quit =>
+            match pair {
+                Pair.pair perf disp =>
+                    if quit
+                    then Monad.pure (Pair.pair (Pair.pair model true) List.empty)
+                    else Monad.bind (step_batch a h model (List.append (List.reverse perf) rest))
+                        (fn (stepped : Pair (Pair S Bool) (List Msg)) =>
+                            Monad.pure (append_dispatch disp stepped)),
+            },
+    }
+
+def append_dispatch {S : Type} {Msg : Type} (disp : List Msg)
+    (stepped : Pair (Pair S Bool) (List Msg)) : Pair (Pair S Bool) (List Msg) :=
+    match stepped {
+        Pair.pair inner pending => Pair.pair inner (List.append pending (List.reverse disp)),
+    }
+
+/// Collect a batch's effects and dispatches without running the model fold.
+/// `perf`/`disp` are reverse accumulators.
+#[terminating]
+def collect_cmds [Monad N] {E : Type} {Msg : Type} (h : Host N E Msg)
+    (cmds : List (Command E Msg)) (perf : List Msg) (disp : List Msg) (quit : Bool)
+    : N (Pair (Pair (List Msg) (List Msg)) Bool) :=
+    match cmds {
+        List.empty => Monad.pure (Pair.pair (Pair.pair perf disp) quit),
+        List.cons cmd more =>
+            match cmd {
+                Command.none => collect_cmds h more perf disp quit,
+                Command.quit => Monad.pure (Pair.pair (Pair.pair perf disp) true),
+                Command.dispatch d => collect_cmds h more perf (List.cons d disp) quit,
+                Command.perform effect =>
+                    Monad.bind (Host.run_effect h effect)
+                        (fn (mo : Option Msg) =>
+                            match mo {
+                                Option.some m => collect_cmds h more (List.cons m perf) disp quit,
+                                Option.none => collect_cmds h more perf disp quit,
+                            }),
+                Command.after _ms _msg => collect_cmds h more perf disp quit,
+                Command.focus _selector => collect_cmds h more perf disp quit,
+                Command.batch inner => collect_cmds h (List.append inner more) perf disp quit,
+            },
     }
 
 // ═══ Draining deferred dispatches ═══

@@ -115,18 +115,43 @@ def fnv_string (s : String) (i : I64) (h : U32) : U32 :=
             Option.none => h,
         }
 
-/// A stable textual key for a patch path (`"0.1.2."`).
+/// One ASCII digit as a byte.
+def digit_byte (d : I64) : U8 :=
+    U8.add 48u8 (U32.to_u8 (I64.to_u32 d))
+
+/// FNV-hash a decimal integer, most-significant digit first. This replaces
+/// the old `path_key` string (`"0.1.2."`): the handler id must stay stable,
+/// but building a string per node per render was most of a render's
+/// allocation. Negative indices keep the old `-` spelling.
 #[terminating]
-def path_key (path : List I64) (acc : String) : String :=
-    match path {
-        List.empty => acc,
-        List.cons i rest => path_key rest (String.concat acc (String.concat (I64.to_string i) ".")),
+def fnv_i64 (n : I64) (h : U32) : U32 :=
+    if I64.lt n 0i64
+    then fnv_i64 (I64.neg n) (fnv_byte h 45u8)
+    else if I64.lt n 10i64
+    then fnv_byte h (digit_byte n)
+    else
+        let q : I64 := I64.div n 10i64 in
+        let r : I64 := I64.sub n (I64.mul q 10i64) in
+        fnv_byte (fnv_i64 q h) (digit_byte r)
+
+/// `rev` is innermost-first (`[2, 1, 0]` for path `[0, 1, 2]`). The
+/// recursion hashes the outermost index first, so the byte sequence is
+/// exactly the old `path_key` output followed by the event name: handler
+/// ids are unchanged for every existing view.
+#[terminating]
+def fnv_path_rev (rev : List I64) (h : U32) : U32 :=
+    match rev {
+        List.empty => h,
+        List.cons i rest => fnv_byte (fnv_i64 i (fnv_path_rev rest h)) 46u8,
     }
 
-/// The handler id for one event binding at `path`.
+/// The handler id for one event binding at a reversed path.
+pub def Handler.id_rev (rev : List I64) (event : String) : U32 :=
+    U32.and (fnv_string event 0i64 (fnv_path_rev rev fnv_init)) 0x7FFFFFFFu32
+
+/// The handler id for one event binding at `path` (root-to-leaf order).
 pub def Handler.id (path : List I64) (event : String) : U32 :=
-    let key : String := String.concat (path_key path "") event in
-    U32.and (fnv_string key 0i64 fnv_init) 0x7FFFFFFFu32
+    Handler.id_rev (List.reverse path) event
 
 /// One hex digit. U32 has no `to_string` native wired in the compiled
 /// backends, so ids are rendered from the wired shift/and ops instead.
@@ -173,14 +198,17 @@ pub def Handler.prefix : String := "data-oak-on-"
 pub def Oak.lower (n : Oak.Node Msg) : Oak.Lowered Msg :=
     lower_at (List.cons 0i64 List.empty) n
 
+/// `rev` is the patch path INNERMOST-FIRST: a child costs one `List.cons`
+/// instead of `List.append path [index]` per node per render. Only handler
+/// ids consume it (`Handler.id_rev`), and it hashes back to the same bytes.
 #[partial]
-def lower_at (path : List I64) (n : Oak.Node Msg) : Oak.Lowered Msg :=
+def lower_at (rev : List I64) (n : Oak.Node Msg) : Oak.Lowered Msg :=
     match n {
         Oak.Node.raw node => Oak.Lowered.lowered node List.empty,
         Oak.Node.element tag attrs children =>
-            match lower_attrs path attrs List.empty List.empty {
+            match lower_attrs rev attrs List.empty List.empty {
                 Pair.pair nodes_attrs handlers =>
-                    match lower_children path children 0i64 List.empty List.empty {
+                    match lower_children rev children 0i64 List.empty List.empty {
                         Pair.pair nodes child_handlers =>
                             Oak.Lowered.lowered
                                 (Html.Node.node_element tag nodes_attrs nodes)
@@ -188,29 +216,29 @@ def lower_at (path : List I64) (n : Oak.Node Msg) : Oak.Lowered Msg :=
                     }
             },
         Oak.Node.void tag attrs =>
-            match lower_attrs path attrs List.empty List.empty {
+            match lower_attrs rev attrs List.empty List.empty {
                 Pair.pair nodes_attrs handlers =>
                     Oak.Lowered.lowered (Html.Node.node_void tag nodes_attrs) handlers
             },
         Oak.Node.raw_text tag attrs content =>
-            match lower_attrs path attrs List.empty List.empty {
+            match lower_attrs rev attrs List.empty List.empty {
                 Pair.pair nodes_attrs handlers =>
                     Oak.Lowered.lowered (Html.Node.node_raw_text tag nodes_attrs content) handlers
             },
         Oak.Node.fragment children =>
-            match lower_children path children 0i64 List.empty List.empty {
+            match lower_children rev children 0i64 List.empty List.empty {
                 Pair.pair nodes handlers =>
                     Oak.Lowered.lowered (Html.Node.node_fragment nodes) handlers
             },
     }
 
-def lower_attr (path : List I64) (a : Oak.Attr Msg)
+def lower_attr (rev : List I64) (a : Oak.Attr Msg)
     : Pair (List Html.Attr) (List (Pair U32 (WebEvent -> HandlerResult Msg))) :=
     match a {
         Oak.Attr.html attr =>
             Pair.pair (List.cons attr List.empty) List.empty,
         Oak.Attr.on event flags handler =>
-            let id : U32 := Handler.id path event in
+            let id : U32 := Handler.id_rev rev event in
             let name : String := String.concat Handler.prefix event in
             let attr : Html.Attr := Html.Attr.attr name (Handler.spec_of id flags) in
             Pair.pair (List.cons attr List.empty)
@@ -227,32 +255,32 @@ def prepend_all {A : Type} (xs : List A) (acc : List A) : List A :=
     }
 
 #[terminating]
-def lower_attrs (path : List I64) (attrs : List (Oak.Attr Msg))
+def lower_attrs (rev : List I64) (attrs : List (Oak.Attr Msg))
     (acc_attrs : List Html.Attr)
     (acc_handlers : List (Pair U32 (WebEvent -> HandlerResult Msg)))
     : Pair (List Html.Attr) (List (Pair U32 (WebEvent -> HandlerResult Msg))) :=
     match attrs {
         List.empty => Pair.pair (List.reverse acc_attrs) (List.reverse acc_handlers),
         List.cons a rest =>
-            match lower_attr path a {
+            match lower_attr rev a {
                 Pair.pair new_attrs new_handlers =>
-                    lower_attrs path rest
+                    lower_attrs rev rest
                         (prepend_all new_attrs acc_attrs)
                         (prepend_all new_handlers acc_handlers)
             },
     }
 
 #[terminating]
-def lower_children (path : List I64) (children : List (Oak.Node Msg)) (index : I64)
+def lower_children (rev : List I64) (children : List (Oak.Node Msg)) (index : I64)
     (acc_nodes : List Html.Node)
     (acc_handlers : List (Pair U32 (WebEvent -> HandlerResult Msg)))
     : Pair (List Html.Node) (List (Pair U32 (WebEvent -> HandlerResult Msg))) :=
     match children {
         List.empty => Pair.pair (List.reverse acc_nodes) (List.reverse acc_handlers),
         List.cons child rest =>
-            match lower_at (List.append path (List.cons index List.empty)) child {
+            match lower_at (List.cons index rev) child {
                 Oak.Lowered.lowered node handlers =>
-                    lower_children path rest
+                    lower_children rev rest
                         (index + 1i64)
                         (List.cons node acc_nodes)
                         (prepend_all handlers acc_handlers)

@@ -16,6 +16,7 @@ use oak_wasm::program {Runtime.dispatch, Runtime.mount, Runtime.tick}
 type Msg {
     resized,
     hidden,
+    keyed,
     frame (stamp : F64),
 }
 
@@ -25,15 +26,20 @@ def update (m : I64) (msg : Msg) : Pair I64 (Command Unit Msg) :=
     match msg {
         Msg.resized => Pair.pair (m + 1i64) Command.none,
         Msg.hidden => Pair.pair (m + 10i64) Command.none,
+        Msg.keyed => Pair.pair (m + 1000i64) Command.none,
         Msg.frame stamp =>
             if F64.gt stamp 0.0
             then Pair.pair (m + 100i64) Command.none
             else Pair.pair m Command.none,
     }
 
+def key_filter (e : WebEvent) : Option Msg :=
+    if String.beq e.key "k" then Option.some Msg.keyed else Option.none
+
 def subs (_m : I64) : List (Subscription Msg) :=
     [Subscription.window_msg "resize" Msg.resized,
         Subscription.document_msg "visibilitychange" Msg.hidden,
+        Subscription.window_filter "keydown" key_filter,
         Subscription.animation_frame (fn (e : WebEvent) => Msg.frame e.time_stamp)]
 
 def view (m : I64) : Oak.Node Msg :=
