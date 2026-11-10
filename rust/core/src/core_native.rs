@@ -407,6 +407,9 @@ pub fn exec_native(
     "sys_int" => sys_int(args, natives),
     "sys_str" => sys_str(args, natives),
     "sys_stat" => sys_stat(args, natives),
+    "sys_dir_open" => sys_dir_open(args, natives),
+    "sys_dir_next" => sys_dir_next(args, natives),
+    "sys_dir_close" => sys_dir_close(args, natives),
     "build_commit" => build_commit(),
     // `Ptr.null : Ptr` (init/prelude.mo) — the NULL pointer, for C
     // functions whose callback argument is NULL (`SSL_set_verify` in
@@ -3871,8 +3874,8 @@ fn last_errno() -> i32 {
   sys_errno()
 }
 
-/// `sys_str op arg` (`sys/src/raw.mo`): readlink, uname field, getenv,
-/// list_dir and read_small, mirroring `monad_sys_str`.
+/// `sys_str op arg` (`sys/src/raw.mo`): readlink, uname field, getenv and
+/// read_small, mirroring `monad_sys_str`.
 fn sys_str(args: &[Value], natives: &NativeTable) -> Result<Value, CoreEvalError> {
   let op = extract_int(
     args
@@ -3900,18 +3903,7 @@ fn sys_str(args: &[Value], natives: &NativeTable) -> Result<Value, CoreEvalError
       Err(std::env::VarError::NotPresent) => err_errno(natives, libc::ENOENT),
       Err(std::env::VarError::NotUnicode(_)) => err_errno(natives, libc::EILSEQ),
     },
-    3 => match std::fs::read_dir(arg) {
-      Ok(entries) => {
-        let mut names: Vec<String> = entries
-          .filter_map(|e| e.ok())
-          .map(|e| e.file_name().to_string_lossy().into_owned())
-          .filter(|n| n != "." && n != "..")
-          .collect();
-        ok_string(natives, names.join("\n"))
-      }
-      Err(e) => err_errno(natives, io_errno(&e)),
-    },
-    4 => match std::fs::read_to_string(arg) {
+    3 => match std::fs::read_to_string(arg) {
       Ok(v) => ok_string(natives, v),
       Err(e) => err_errno(natives, io_errno(&e)),
     },
@@ -3976,6 +3968,104 @@ fn sys_stat(args: &[Value], natives: &NativeTable) -> Result<Value, CoreEvalErro
     Ok(m) => ok_string(natives, format!("{} {} {}", m.mode(), m.size(), m.mtime())),
     Err(e) => err_errno(natives, io_errno(&e)),
   }
+}
+
+/// `sys_dir_open`/`sys_dir_next`/`sys_dir_close` (`sys/src/raw.mo`): a
+/// directory stream held in a registry, the `Child` trick -- the value
+/// Monad sees is the 1-based slot, never a pointer. The compiled backend's
+/// `Dir` is the `DIR*` word instead; a handle never crosses backends.
+static SYS_DIRS: std::sync::LazyLock<std::sync::Mutex<Vec<Option<std::fs::ReadDir>>>> =
+  std::sync::LazyLock::new(|| std::sync::Mutex::new(Vec::new()));
+
+fn dir_registry()
+-> Result<std::sync::MutexGuard<'static, Vec<Option<std::fs::ReadDir>>>, CoreEvalError> {
+  SYS_DIRS
+    .lock()
+    .map_err(|_| CoreEvalError::NativeArgError("dir registry poisoned".into()))
+}
+
+/// 1-based slot to vector index; 0 and negatives are not handles.
+fn dir_index(slot: i64) -> Option<usize> {
+  usize::try_from(slot).ok().and_then(|s| s.checked_sub(1))
+}
+
+fn sys_dir_open(args: &[Value], natives: &NativeTable) -> Result<Value, CoreEvalError> {
+  let path = extract_string(
+    args
+      .first()
+      .ok_or_else(|| CoreEvalError::NativeArgError("sys_dir_open needs 1 arg".into()))?,
+  )?;
+  let dir = match std::fs::read_dir(&path) {
+    Ok(d) => d,
+    Err(e) => return err_errno(natives, io_errno(&e)),
+  };
+  let slot = {
+    let mut reg = dir_registry()?;
+    reg.push(Some(dir));
+    reg.len() as i64
+  };
+  let ok = make_result_ok(natives, Value::Lit(IrLit::Num(slot, NumSuffix::I64)))?;
+  raw_io_wrap(natives, ok)
+}
+
+/// One entry; an EMPTY name is the end of the stream, matching the C.
+/// The registry lock IS held across `readdir` -- unlike a child's pipes,
+/// a directory does not block until another thread writes to it, and
+/// holding the slot keeps a concurrent close from resurrecting it.
+fn sys_dir_next(args: &[Value], natives: &NativeTable) -> Result<Value, CoreEvalError> {
+  let slot = extract_int(
+    args
+      .first()
+      .ok_or_else(|| CoreEvalError::NativeArgError("sys_dir_next needs 1 arg".into()))?,
+  )?;
+  let index = match dir_index(slot) {
+    Some(i) => i,
+    None => return err_errno(natives, libc::EBADF),
+  };
+  let mut reg = dir_registry()?;
+  let dir = match reg.get_mut(index).and_then(|cell| cell.as_mut()) {
+    Some(d) => d,
+    None => return err_errno(natives, libc::EBADF),
+  };
+  let step: Option<std::io::Result<String>> = loop {
+    match dir.next() {
+      None => break None,
+      Some(Err(e)) => break Some(Err(e)),
+      Some(Ok(entry)) => {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if name == "." || name == ".." {
+          continue;
+        }
+        break Some(Ok(name));
+      }
+    }
+  };
+  drop(reg);
+  match step {
+    None => ok_string(natives, String::new()),
+    Some(Err(e)) => err_errno(natives, io_errno(&e)),
+    Some(Ok(name)) => ok_string(natives, name),
+  }
+}
+
+/// `0` or `-errno`, the `sys_int` shape; the slot is dropped either way.
+fn sys_dir_close(args: &[Value], natives: &NativeTable) -> Result<Value, CoreEvalError> {
+  let slot = extract_int(
+    args
+      .first()
+      .ok_or_else(|| CoreEvalError::NativeArgError("sys_dir_close needs 1 arg".into()))?,
+  )?;
+  let rc = match dir_index(slot) {
+    None => -(libc::EBADF as i64),
+    Some(index) => {
+      let mut reg = dir_registry()?;
+      match reg.get_mut(index).and_then(|cell| cell.take()) {
+        Some(_) => 0,
+        None => -(libc::EBADF as i64),
+      }
+    }
+  };
+  raw_io_wrap(natives, Value::Lit(IrLit::Num(rc, NumSuffix::I64)))
 }
 
 fn process_id() -> Result<Value, CoreEvalError> {

@@ -7,9 +7,9 @@
 /// per-pid results.
 
 use lib::errno {SysError, SysError.of_errno, SysErrorKind}
-use lib::raw {sys_int, sys_stat, sys_str}
+use lib::raw {Dir, sys_dir_close, sys_dir_next, sys_dir_open, sys_int, sys_stat, sys_str}
 use lib::signal {Signal, Signal.number}
-use lib::text {Text.parse_i64, Text.sort, Text.split_byte, Text.words}
+use lib::text {Text.parse_i64, Text.sort, Text.words}
 
 /// `IO.map`, which `init` does not provide yet.
 def io_map (f : A -> B) (m : IO A) : IO B :=
@@ -60,22 +60,47 @@ pub def Sys.readlink (path : String) : IO (Result SysError String) :=
 pub def Sys.getenv (name : String) : IO (Result SysError String) :=
     io_map (sys_string "getenv") (IO.mk (sys_str 2 name))
 
-/// Bare entry names, one directory level, sorted. The floor newline-joins
-/// them (not NUL: a compiled `String` stops at the first NUL) and the split
-/// happens here, so nothing above it sees the encoding.
-pub def Sys.list_dir (path : String) : IO (Result SysError (List String)) :=
-    io_map (split_nul "list_dir") (IO.mk (sys_str 3 path))
-
-def split_nul (op : String) (r : Result I64 String) : Result SysError (List String) :=
-    match sys_string op r {
-        Result.ok s => Result.ok (Text.sort (Text.split_byte s 10u8)),
-        Result.err e => Result.err e,
+/// Bare entry names, one directory level, sorted. The loop runs HERE, over
+/// `sys_dir_next`; the floor only opens, hands out one name at a time and
+/// closes, so nothing above it sees a joined payload.
+pub def Sys.list_dir (path : String) : IO (Result SysError (List String)) := do {
+    let opened <- IO.mk (sys_dir_open path);
+    match opened {
+        Result.ok d => do {
+            // The handle is used to iterate AND to close, so it travels as
+            // a `Shared`: `Shared.get` is a read, and the close is a second
+            // read of the same owned stream (the `IO.write_bytes_all`
+            // idiom).
+            let handle : Shared Dir := Shared.of d;
+            let found <- dir_entries handle List.empty;
+            let _ <- IO.mk (sys_dir_close (Shared.get handle));
+            return found
+        },
+        Result.err e => IO.pure (Result.err (SysError.of_errno "list_dir" e)),
     }
+}
+
+/// One `sys_dir_next` per recursion. An empty name is the end of the
+/// stream (POSIX never yields one); the sorted list is built on the way
+/// back out, so an error discards the partial one.
+#[terminating]
+def dir_entries (handle : Shared Dir) (acc : List String) : IO (Result SysError (List String)) := do {
+    let next <- IO.mk (sys_dir_next (Shared.get handle));
+    match next {
+        // Typed local: the pattern binder itself infers as `A` before the
+        // affine check runs, and `A` is not `Copy`.
+        Result.ok name =>
+            let piece : String := name in
+            if String.beq piece "" then IO.pure (Result.ok (Text.sort acc))
+            else dir_entries handle (List.cons piece acc),
+        Result.err e => IO.pure (Result.err (SysError.of_errno "list_dir" e)),
+    }
+}
 
 /// A `/proc` or `/sys` file: these `stat()` as size 0, so a reader that
 /// trusts the reported size reads nothing.
 pub def Sys.read_small (path : String) : IO (Result SysError String) :=
-    io_map (sys_string "read_small") (IO.mk (sys_str 4 path))
+    io_map (sys_string "read_small") (IO.mk (sys_str 3 path))
 
 pub struct Stat {
     mode : I64,

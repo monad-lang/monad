@@ -1416,6 +1416,15 @@ static void* sys_err(int64_t e) {
     return err;
 }
 
+/* An ok payload that is a WORD, not a string: an opaque handle (`Dir`).
+   The Monad side never inspects it, so no representation is promised
+   beyond "it round-trips to the next sys_dir call". */
+static void* sys_ok_word(int64_t w) {
+    Constructor* ok = (Constructor*)alloc_constructor_impl(10, 1);
+    if (ok) ok->fields[0] = (void*)w;
+    return ok;
+}
+
 /* A GC-owned copy of `len` bytes plus a terminator, from a byte range that
    may not be NUL-terminated (`readlink`, `/proc` reads). */
 static char* sys_copy_bytes(const char* src, size_t len) {
@@ -1428,15 +1437,11 @@ static char* sys_copy_bytes(const char* src, size_t len) {
 
 /* `#[native "sys_str"]` (sys/src/raw.mo): the floor's string-shaped
    syscalls, `Result.err <errno>` on failure. `op` selects the call:
-   0 readlink, 1 uname field, 2 getenv, 3 list_dir (entries newline-joined
-   and sorted), 4 read_small (open/read-to-EOF/close, for /proc and /sys
-   files, which stat() as size 0).
+   0 readlink, 1 uname field, 2 getenv, 3 read_small (open/read-to-EOF/
+   close, for /proc and /sys files, which stat() as size 0).
 
-   The list separator is '\n', not NUL: a compiled `String` is a char* whose
-   length is strlen, so a NUL-joined payload truncates at the first entry
-   under the compiled backend while the interpreter (a real byte string)
-   keeps all of them -- measured as `list_dir` answering 1 entry compiled
-   and 8 interpreted. */
+   Directory listing is NOT here any more: it is the `sys_dir_*` family
+   below, whose loop lives in `sys/src/sys.mo`. */
 void* monad_sys_str(int64_t op, char* arg) {
     switch (op) {
     case 0: {
@@ -1473,33 +1478,6 @@ void* monad_sys_str(int64_t op, char* arg) {
         return copy ? sys_ok_str(copy) : sys_err(ENOMEM);
     }
     case 3: {
-        DIR* d = arg ? opendir(arg) : NULL;
-        if (!d) return sys_err(errno);
-        size_t cap = 256, n = 0;
-        char* joined = (char*)monad_alloc_atomic(cap);
-        if (!joined) { closedir(d); return sys_err(ENOMEM); }
-        joined[0] = '\0';
-        struct dirent* e;
-        while ((e = readdir(d)) != NULL) {
-            if (strcmp(e->d_name, ".") == 0 || strcmp(e->d_name, "..") == 0) continue;
-            size_t len = strlen(e->d_name);
-            if (n + len + 2 > cap) {
-                while (n + len + 2 > cap) cap *= 2;
-                char* grown = (char*)monad_alloc_atomic(cap);
-                if (!grown) { closedir(d); return sys_err(ENOMEM); }
-                memcpy(grown, joined, n);
-                grown[n] = '\0';
-                joined = grown;
-            }
-            memcpy(joined + n, e->d_name, len);
-            n += len;
-            joined[n++] = '\n';
-            joined[n] = '\0';
-        }
-        closedir(d);
-        return sys_ok_str(sys_copy_bytes(joined, n));
-    }
-    case 4: {
         int fd = arg ? open(arg, O_RDONLY) : -1;
         if (fd < 0) return sys_err(errno);
         size_t cap = 4096, n = 0;
@@ -1529,6 +1507,49 @@ void* monad_sys_str(int64_t op, char* arg) {
     }
     default: return sys_err(EINVAL);
     }
+}
+
+/* `#[native "sys_dir_open"|"sys_dir_next"|"sys_dir_close"]`
+   (sys/src/raw.mo): `opendir`/`readdir`/`closedir` as three calls, so the
+   listing loop is Monad (`Sys.list_dir`) instead of a C function that
+   joins entries into one string.
+
+   The handle is the `DIR*` itself, wrapped in a `Result.ok` word; Monad
+   treats it as opaque (`Dir`) and the interpreter uses a registry slot
+   instead -- the same split `FdStream` and `Child` use, and the two
+   never mix because a handle never leaves the backend that made it.
+
+   `sys_dir_next` answers an EMPTY name at the end of the stream (POSIX
+   never yields one), so end-of-dir needs no errno: `readdir` sets errno
+   only on a real failure, which is reported as `Result.err <errno>`. */
+void* monad_sys_dir_open(char* path) {
+    if (!path) return sys_err(EINVAL);
+    DIR* d = opendir(path);
+    if (!d) return sys_err(errno);
+    return sys_ok_word((int64_t)(intptr_t)d);
+}
+
+void* monad_sys_dir_next(void* handle) {
+    DIR* d = (DIR*)handle;
+    if (!d) return sys_err(EBADF);
+    for (;;) {
+        errno = 0;
+        struct dirent* e = readdir(d);
+        if (!e) {
+            if (errno != 0) return sys_err(errno);
+            return sys_ok_str(sys_copy_bytes("", 0));
+        }
+        if (strcmp(e->d_name, ".") == 0 || strcmp(e->d_name, "..") == 0) continue;
+        char* copy = sys_copy_bytes(e->d_name, strlen(e->d_name));
+        return copy ? sys_ok_str(copy) : sys_err(ENOMEM);
+    }
+}
+
+void* monad_sys_dir_close(void* handle) {
+    DIR* d = (DIR*)handle;
+    if (!d) return (void*)(int64_t)-EBADF;
+    if (closedir(d) != 0) return (void*)(int64_t)(-errno);
+    return (void*)0;
 }
 
 /* `#[native "sys_stat"]` (sys/src/raw.mo): `stat`/`lstat` fields and

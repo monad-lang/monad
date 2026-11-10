@@ -30,8 +30,7 @@ def sys_int (op : I64) (a : I64) (b : I64) : RawIO I64
 ///   0 readlink(path)           -- the target, not resolved
 ///   1 uname(field)             -- "sysname" | "release" | "machine" | "nodename"
 ///   2 getenv(name)
-///   3 list_dir(path)           -- entries joined by NUL, unsorted
-///   4 read_small(path)         -- open/read-to-EOF/close, for /proc and /sys
+///   3 read_small(path)         -- open/read-to-EOF/close, for /proc and /sys
 ///                                 files, which stat() as size 0
 /// `Result.err errno` on failure.
 #[native "sys_str"]
@@ -45,3 +44,28 @@ def sys_str (op : I64) (arg : String) : RawIO (Result I64 String)
 /// exactly what `file_exists`/`is_dir` turn into `false`.
 #[native "sys_stat"]
 def sys_stat (op : I64) (path : String) : RawIO (Result I64 String)
+
+/// A directory stream. Compiled, the value IS the `DIR*`; interpreted, it
+/// is a slot in the evaluator's directory registry -- the same opaque-word
+/// trick `FdStream` and `Child` use, but `#[opaque]`: unlike those two, the
+/// witness here is unreferenceable, so source cannot forge a handle that
+/// `sys_dir_close` would hand to `closedir`. Close it on every path that
+/// opened it; an open stream holds a descriptor.
+#[opaque]
+pub type Dir {
+    dir_witness
+}
+
+/// `opendir(path)`; the ok payload is the stream.
+#[native "sys_dir_open"]
+def sys_dir_open (path : String) : RawIO (Result I64 Dir)
+
+/// The next entry name. The OK PAYLOAD IS EMPTY at the end of the stream --
+/// POSIX never yields an empty name -- so `Sys.list_dir`'s loop stops on it
+/// rather than on an errno that cannot exist. `.` and `..` never appear.
+#[native "sys_dir_next"]
+def sys_dir_next (d : Dir) : RawIO (Result I64 String)
+
+/// `closedir`; `0` or `-errno`, the `I64` shape `sys_int` uses.
+#[native "sys_dir_close"]
+def sys_dir_close (d : Dir) : RawIO I64
