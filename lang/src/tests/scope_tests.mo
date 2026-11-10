@@ -1,12 +1,13 @@
 use lang::types {
     Attribute, Decl, DebugName, Def, Identifier, InductConstructor, Inductive, Infix, Instance,
-    InstanceKey, LocalScope, LocalVar, Module, ModulePath, ModuleRegistry, NamePath,
+    InstanceKey, LocalScope, LocalVar, Module, ModulePath, ModuleRegistry, NamePath, NameSet,
     NameRef, Param, QualifiedName, Scope, ScopeData, ScopeDef, ScopeError,
     ScopeInstance, Similar, Term, TypeConstraint, Visibility, binder_binder, many, named,
     package_private, param_many, priv_, pub_, sentinel, show_identifier, sort_n, unnamed,
+    name_set_empty, name_set_insert,
 }
 use lang::scope {
-    LocalTypeBinding, add_constraint_dict_params, bare_map_empty, bare_map_insert, bind_term_vars, build_scope_from_decls,
+    LocalTypeBinding, add_constraint_dict_params, bind_term_vars, build_scope_from_decls,
     build_scope_from_modules, find_constraint_bound_carrier_any, infer_carrier_type,
     list_append, lookup_binding, mk, npath_eq, placeholder_carrier, refine_scope_instances,
     resolve_def_in_scope_by_name,
@@ -777,7 +778,7 @@ def test_dict_param_type_is_hole : Bool :=
     let def_name : NamePath := NamePath.mk (List.cons (Identifier.id "HAdd_A_A_A_add") List.empty) in
     let empty_attrs : List Attribute := List.empty in
     let df : Def := Def.mk def_name Term.hole body constraints empty_attrs Visibility.package_private List.empty in
-    match add_constraint_dict_params (bare_map_insert "Add" List.empty bare_map_empty) df {
+    match add_constraint_dict_params (name_set_insert (Identifier.id "Add") name_set_empty) df {
         Def.mk {typ := _new_typ, term := new_term, ..} =>
             match new_term {
                 Term.lam _dbg param_typ _body =>

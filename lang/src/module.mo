@@ -15,7 +15,7 @@ use lang::types {
     has_incomplete_match_exemption, id_eq, level_const, level_le,
     list_reverse, many, module_path_to_string_colon, package_private, priv_, sentinel,
     show_identifier, show_module_path, show_name_path, sort_level_of, term_peel, union_ids,
-    name_map_merge, bare_name_map_merge,
+    name_map_merge, bare_name_map_merge, name_set_union,
     use_bare, use_glob, use_items, use_name, use_rename, use_sub, use_sub_rename,
     visibility_beq,
 }
@@ -53,7 +53,6 @@ use lib::typecheck::meta_reflect {
 use lib::scope {
     OpenAlias,
     add_constraint_dict_params_decl_groups, add_constraint_dict_params_decls,
-    bare_aliases_merge,
     build_scope_from_decls, build_scope_from_groups, decl_groups_flatten,
     collect_def_names, collect_infixes, collect_open_aliases, constraint_vars,
     dict_param_name,
@@ -1727,10 +1726,9 @@ def merge_scope_data (sd1 : ScopeData) (sd2 : ScopeData) : ScopeData :=
         // both inputs would phantom-ambiguate the miss fallbacks that
         // read the map.
         bare_aliases := bare_name_map_merge sd1.bare_aliases sd2.bare_aliases,
-        // Same shape and same reason as `bare_aliases` just above: the
-        // values are LISTS of class names, and a key named by both inputs
-        // must keep both spellings, not one module's.
-        dict_classes := bare_aliases_merge sd1.dict_classes sd2.dict_classes,
+        // A set union, same reason as `bare_aliases` just above: a class
+        // name present in both inputs must stay present in the result.
+        dict_classes := name_set_union sd1.dict_classes sd2.dict_classes,
     }
 
 /// Merge lists of ScopeData

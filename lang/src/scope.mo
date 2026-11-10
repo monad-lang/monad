@@ -1,5 +1,6 @@
 use lang::types {
     Attribute, Binder, Class, ClassDef, Con, CubicalPrim, DebugName, Decl, DeclGroup, Def,
+    NameSet,
     FieldPattern, FieldPatternEntry, Identifier, InductConstructor, Inductive,
     Infix, Instance, InstanceKey, Literal, LocalScope, LocalVar, MatchCase, Module,
     ModulePath, ModuleRegistry, NamePath, NameRef, Native, NumSuffix, OpenFilter,
@@ -15,6 +16,7 @@ use lang::types {
     priv_, pub_, sentinel, show_identifier, show_module_path, show_name_path, show_operator,
     name_map_empty, name_map_insert, name_map_lookup, name_map_values,
     bare_name_map_empty, bare_name_map_lookup, bare_name_map_note,
+    name_set_empty, name_set_insert, name_set_member,
     term_peel, u16, u32, u64, u8, union_ids, use_bare, use_glob, use_items,
     use_name, use_rename, use_sub, use_sub_rename,
     AttrArg,
@@ -160,70 +162,6 @@ pub def alias_map_lookup (key : String) (m : HashMap String String) : Option Str
             let idx := HashMap.bucket_of (String.hash key) in
             let bucket := HashMap.get_bucket buckets idx in
             HashMap.bucket_lookup_str key bucket
-    }
-
-/// `ScopeData.bare_aliases`'s map family -- same direct-bucket shape as
-/// `alias_map_*` just above, for the `String -> List String` value the
-/// bare-suffix side table carries (every owner key, so a 2+-owner bare
-/// name can be told apart from a miss).
-def bare_map_empty : HashMap String (List String) :=
-    HashMap.map HashMap.empty_buckets
-
-def bare_map_insert (key : String) (val : List String) (m : HashMap String (List String)) : HashMap String (List String) :=
-    match m {
-        HashMap.map buckets =>
-            let idx := HashMap.bucket_of (String.hash key) in
-            let bucket := HashMap.get_bucket buckets idx in
-            let new_bucket := HashMap.bucket_insert_str key val bucket in
-            HashMap.map (HashMap.set_bucket buckets idx new_bucket)
-    }
-
-def bare_map_lookup (key : String) (m : HashMap String (List String)) : Option (List String) :=
-    match m {
-        HashMap.map buckets =>
-            let idx := HashMap.bucket_of (String.hash key) in
-            let bucket := HashMap.get_bucket buckets idx in
-            HashMap.bucket_lookup_str key bucket
-    }
-
-#[partial]
-def string_list_has (xs : List String) (s : String) : Bool :=
-    match xs {
-        List.empty => false,
-        List.cons h rest => if String.beq h s then true else string_list_has rest s,
-    }
-
-/// `bare_aliases`'s `merge_scope_data` half: a UNION of owner lists, not
-/// `HashMap.merge_buckets` -- the values are LISTS, the same qualified
-/// key can be noted by both inputs, and a duplicate would make the type
-/// look self-ambiguous to the miss fallbacks that read the map.
-#[partial]
-def bare_aliases_merge (m1 : HashMap String (List String)) (m2 : HashMap String (List String)) : HashMap String (List String) :=
-    bare_aliases_merge_pairs (HashMap.to_list m2) m1
-
-#[partial]
-def bare_aliases_merge_pairs (pairs : List (Pair String (List String))) (acc : HashMap String (List String)) : HashMap String (List String) :=
-    match pairs {
-        List.empty => acc,
-        List.cons p rest =>
-            match p {
-                Pair.pair bare owners =>
-                    let merged : List String := match bare_map_lookup bare acc {
-                        Option.some ks => bare_aliases_merge_lists ks owners,
-                        Option.none => owners,
-                    } in
-                    bare_aliases_merge_pairs rest (bare_map_insert bare merged acc)
-            },
-    }
-
-#[partial]
-def bare_aliases_merge_lists (a : List String) (b : List String) : List String :=
-    match b {
-        List.empty => a,
-        List.cons h rest =>
-            if string_list_has a h
-            then bare_aliases_merge_lists a rest
-            else bare_aliases_merge_lists (List.cons h a) rest,
     }
 
 #[partial]
@@ -1057,7 +995,7 @@ def scope_data_classes (sd : ScopeData) : List Class :=
 /// The whole-graph dictionary-class set (`collect_dict_classes`), read
 /// back by the checker's D4 resolution so `emitted_dict_constraints`
 /// answers with the same predicate Phase 3 used.
-def scope_data_dict_classes (sd : ScopeData) : HashMap String (List String) :=
+def scope_data_dict_classes (sd : ScopeData) : NameSet :=
     sd.dict_classes
 
 pub def scope_find_class (name : NamePath) (s : Scope) : Option Class :=
@@ -3248,22 +3186,21 @@ def promote_instance_decl_groups_tail (groups : List DeclGroup) (classes : List 
 /// Every class that carries a DICTIONARY, keyed by its bare name: a class
 /// with at least one method. `Copy` is one (`WriterT.listen` calls
 /// `Copy.copy` on its abstract `W`); a method-less marker class is not.
-/// The value list is unused (always empty); the map shape is the
-/// `bare_map_*` one the scope already merges.
-def collect_dict_classes (decl_list : List Decl) : HashMap String (List String) :=
-    collect_dict_classes_go decl_list bare_map_empty
+/// A set, not a map: every consumer only asks whether a class is present.
+def collect_dict_classes (decl_list : List Decl) : NameSet :=
+    collect_dict_classes_go decl_list name_set_empty
 
 #[partial]
-def collect_dict_classes_go (decl_list : List Decl) (acc : HashMap String (List String)) : HashMap String (List String) :=
+def collect_dict_classes_go (decl_list : List Decl) (acc : NameSet) : NameSet :=
     match decl_list {
         List.empty => acc,
         List.cons d rest =>
             match d {
                 Decl.class_d cls =>
-                    let key : String := identifier_tail cls.name in
+                    let key : Identifier := Identifier.id (identifier_tail cls.name) in
                     if List.is_empty cls.methods
                     then collect_dict_classes_go rest acc
-                    else collect_dict_classes_go rest (bare_map_insert key List.empty acc),
+                    else collect_dict_classes_go rest (name_set_insert key acc),
                 _ => collect_dict_classes_go rest acc,
             },
     }
@@ -3304,23 +3241,21 @@ def spelled_in_ids (s : String) (ids : List Identifier) : Bool :=
 /// arity, and a TYPE-level def (`Lens [Functor F] ... : Type`) is
 /// expanded where it is used, as a type, not called.
 #[partial]
-pub def qualifying_dict_constraints (dict_classes : HashMap String (List String)) (constraints : List TypeConstraint) (typ : Term) (body : Term) : List TypeConstraint :=
+pub def qualifying_dict_constraints (dict_classes : NameSet) (constraints : List TypeConstraint) (typ : Term) (body : Term) : List TypeConstraint :=
     if def_body_is_real body && Bool.not (returns_sort typ)
     then dict_bearing_constraints dict_classes constraints
     else List.empty
 
 #[partial]
-def dict_bearing_constraints (dict_classes : HashMap String (List String)) (constraints : List TypeConstraint) : List TypeConstraint :=
+def dict_bearing_constraints (dict_classes : NameSet) (constraints : List TypeConstraint) : List TypeConstraint :=
     match constraints {
         List.empty => List.empty,
         List.cons c rest =>
             match c {
                 TypeConstraint.mk cls vars =>
                     let single_var : Bool := match vars { List.cons _ v_rest => List.is_empty v_rest, List.empty => false, } in
-                    let carries : Bool := match bare_map_lookup (identifier_tail (last_segment cls)) dict_classes {
-                        Option.some _ => true,
-                        Option.none => false,
-                    } in
+                    let carries : Bool := name_set_member
+                        (Identifier.id (identifier_tail (last_segment cls))) dict_classes in
                     if single_var && carries
                     then List.cons c (dict_bearing_constraints dict_classes rest)
                     else dict_bearing_constraints dict_classes rest,
@@ -3397,7 +3332,7 @@ pub def dict_param_name (cls : NamePath) : String :=
 /// unchanged) when no constraint qualifies -- the overwhelmingly common
 /// case (an ordinary, unconstrained def).
 #[partial]
-def add_constraint_dict_params (dict_classes : HashMap String (List String)) (d : Def) : Def :=
+def add_constraint_dict_params (dict_classes : NameSet) (d : Def) : Def :=
     match d {
         Def.mk {name, typ, term := term_, constraints, attrs, vis, params, ..} =>
             let qualifying := qualifying_dict_constraints dict_classes constraints typ term_ in
@@ -3427,7 +3362,7 @@ pub def add_constraint_dict_params_decls (decl_list : List Decl) : List Decl :=
     add_constraint_dict_params_decls_go (collect_dict_classes decl_list) decl_list
 
 #[partial]
-def add_constraint_dict_params_decls_go (dict_classes : HashMap String (List String)) (decl_list : List Decl) : List Decl :=
+def add_constraint_dict_params_decls_go (dict_classes : NameSet) (decl_list : List Decl) : List Decl :=
     match decl_list {
         List.empty => List.empty,
         List.cons d rest =>
@@ -3450,7 +3385,7 @@ pub def add_constraint_dict_params_decl_groups (groups : List DeclGroup) : List 
     add_constraint_dict_params_decl_groups_go (collect_dict_classes (decl_groups_flatten groups)) groups
 
 #[partial]
-def add_constraint_dict_params_decl_groups_go (dict_classes : HashMap String (List String)) (groups : List DeclGroup) : List DeclGroup :=
+def add_constraint_dict_params_decl_groups_go (dict_classes : NameSet) (groups : List DeclGroup) : List DeclGroup :=
     match groups {
         List.empty => List.empty,
         List.cons g rest =>
@@ -7154,7 +7089,7 @@ def first_param_default (params : List Param) : Option Term :=
 /// unfiltered: the mangled name is a dangling global either way -- a
 /// loud link-time undefined symbol, not a silent miscompile.
 #[partial]
-def emitted_dict_constraints (dict_classes : HashMap String (List String)) (classes : List Class) (ins : Instance) (method_name : Identifier) : List TypeConstraint :=
+def emitted_dict_constraints (dict_classes : NameSet) (classes : List Class) (ins : Instance) (method_name : Identifier) : List TypeConstraint :=
     match ins {
         Instance.mk _ cname ins_constraints _ _ _ defs =>
             match find_instance_method defs method_name {
@@ -8076,8 +8011,8 @@ def name_path_to_str_scope (np : NamePath) : String :=
 def phase3_show_constraint : TypeConstraint :=
     TypeConstraint.mk (NamePath.mk (List.cons (Identifier.id "Show") List.empty)) (List.cons (Identifier.id "A") List.empty)
 
-def phase3_dict_classes : HashMap String (List String) :=
-    bare_map_insert "Show" List.empty bare_map_empty
+def phase3_dict_classes : NameSet :=
+    name_set_insert (Identifier.id "Show") name_set_empty
 
 def phase3_string_typ : Term :=
     Term.pi binder_anon Term.hole (Term.var 0 (DebugName.named (Identifier.id "String")))
@@ -8124,7 +8059,7 @@ def test_add_constraint_dict_params_skips_dictionaryless_class : Bool :=
     let body := Term.lit (Literal.num 42 NumSuffix.i64) in
     let d := Def.mk (NamePath.mk [Identifier.id "unrelated"]) phase3_string_typ body
         (List.cons phase3_show_constraint List.empty) List.empty Visibility.package_private List.empty in
-    match add_constraint_dict_params bare_map_empty d {
+    match add_constraint_dict_params name_set_empty d {
         Def.mk {typ := new_typ, ..} => Similar.similar new_typ phase3_string_typ,
     }
 

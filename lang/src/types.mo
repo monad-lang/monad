@@ -501,6 +501,52 @@ def bare_name_map_merge_pairs (pairs : List (Pair String (List NamePath))) (acc 
 pub def bare_name_map_merge (a : BareNameMap) (b : BareNameMap) : BareNameMap :=
     match b { BareNameMap.bare_name_map buckets => bare_name_map_merge_pairs (HashMap.to_list buckets) a }
 
+/// An `Identifier`-keyed SET (presence only): `ScopeData.dict_classes`'s
+/// type. The table it replaces stored `List String` values that were
+/// never filled -- every consumer only asks whether a bare class spelling
+/// carries a dictionary -- so the value list encoded nothing.
+pub type NameSet {
+    name_set (HashMap String Bool)
+}
+
+pub def name_set_empty : NameSet :=
+    NameSet.name_set (HashMap.map HashMap.empty_buckets)
+
+pub def name_set_insert (key : Identifier) (s : NameSet) : NameSet :=
+    match s {
+        NameSet.name_set hm =>
+            match hm {
+                HashMap.map buckets =>
+                    let rendered : String := show_identifier key in
+                    let idx := HashMap.bucket_of (String.hash rendered) in
+                    let bucket := HashMap.get_bucket buckets idx in
+                    let new_bucket := HashMap.bucket_insert_str rendered true bucket in
+                    NameSet.name_set (HashMap.map (HashMap.set_bucket buckets idx new_bucket)),
+            },
+    }
+
+pub def name_set_member (key : Identifier) (s : NameSet) : Bool :=
+    match s {
+        NameSet.name_set hm =>
+            match hm {
+                HashMap.map buckets =>
+                    let rendered : String := show_identifier key in
+                    let idx := HashMap.bucket_of (String.hash rendered) in
+                    let bucket := HashMap.get_bucket buckets idx in
+                    match HashMap.bucket_lookup_str rendered bucket {
+                        Option.some present => present,
+                        Option.none => false,
+                    },
+            },
+    }
+
+pub def name_set_union (a : NameSet) (b : NameSet) : NameSet :=
+    match a {
+        NameSet.name_set ma => match b {
+            NameSet.name_set mb => NameSet.name_set (HashMap.merge_buckets ma mb),
+        },
+    }
+
 pub instance Show ModulePath {
     def show (mp : ModulePath) : String := show_module_path mp
 }
@@ -3883,7 +3929,7 @@ pub struct ScopeData {
     // of `qualifying_dict_constraints`. Seeded once per whole-graph scope
     // build, from the same decl list Phase 3 reads, so the callee's arity
     // and every call site agree.
-    dict_classes : HashMap String (List String) := HashMap.map HashMap.empty_buckets,
+    dict_classes : NameSet := name_set_empty,
     // Every registered name's BARE spelling (`prelude::Monad` ->
     // `Monad`) -> the qualified keys that own it. The read side of
     // item 5.1's bare-vs-qualified tolerance: `scope_data_find_
