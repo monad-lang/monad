@@ -38,10 +38,12 @@ use weaver::commands {
 }
 use log::logger {Logger}
 use weaver::policy {Mode, Mode.show, Mode.cycle, Policy.decide, Policy.unguarded, Decision}
-use weaver::gate {pick_header, pick_target, cap_name, capped_diff, PickAnswer, record_answer, answer_approval, Gate.assessment_lines, Gate.granted, Gate.auto_for, Gate.auto_precheck, Gate.decision}
+use weaver::gate {pick_header, pick_target, cap_name, PickAnswer, record_answer, answer_approval, Gate.assessment_lines, Gate.granted, Gate.auto_for, Gate.auto_precheck, Gate.decision}
 use weaver::permissions {PermGrant, Permissions.get, Permissions.render}
 use weaver::assess {Assessment, Reach.is_inside, Assess.pick}
 use weaver::diff {Diff.for_input, Diff.lines}
+use weaver::diff_hunks {DiffHunks.hunks}
+use weaver::ui::diff_rows {DiffRows.of_hunks}
 use weaver::dumb {append_user, drive_loop}
 use weaver::model {
     TuiModel, WeaverMsg, on_event, init_tui_model, init_tui_model_with,
@@ -54,7 +56,7 @@ use weaver::ui::pane {
     PaneModel, PaneMsg, Pane.reset, Pane.end_drag, Pane.selecting,
     Pane.page_wanted, Pane.page_requested, Pane.page_loaded, Pane.page_failed,
 }
-use weaver::ui::rows {DisplayRow, Rows.of_line, Rows.widget, Rows.markdown_full}
+use weaver::ui::rows {DisplayRow, Rows.of_line, Rows.widget, Rows.markdown_full, Rows.of_spans}
 use weaver::logs {Logs.info, Logs.debug, Logs.warn, Logs.error, Logs.log_rss, Logs.sanitize, Logs.latest_path}
 use std::process {Process.quiet_terminal}
 use weaver::title {Title.generate, Title.needed}
@@ -92,9 +94,10 @@ use weaver::theme {theme_split_lines, theme_line_style_with, theme_border_style_
 use weaver::store {TLine, TLine.plain, TLine.user_line, Store.append_prompt, Store.read_prompts, Store.prompts_of_history}
 use weaver::error {WeaverError, WeaverError.show, WeaverError.recoverable}
 use std::concurrent::fiber {FiberError, FiberError.message}
-use tui::types {Event, Key, MouseEvent, MouseButton, Screen}
+use tui::types {Event, Key, MouseEvent, MouseButton, Screen, TextSegment}
 use tui::widget {SizedWidget}
-use tui::text {Text.take_width, Text.width}
+use tui::text {Text.take_width, Text.width, Text.wrap_spans}
+use tui::core {style_default}
 use tui::clipboard {Clipboard.copy}
 use tui::widgets::dialog {
     DialogModel, DialogOption, DialogStep, Dialog.make, Dialog.with_default, Dialog.with_notes, Dialog.note_text,
@@ -1920,12 +1923,19 @@ def log_danger (log : Option Logger) (p : Pick) (a : Assessment) : IO Unit :=
             (String.concat " reason=" (Logs.sanitize reason)))),
     }
 
-def diff_lines_of (diff_pair : Option (Pair String String)) : List String :=
+def diff_span_of (old : String) (new : String) : Option (List (List TextSegment)) :=
+    match DiffHunks.hunks old new {
+        Option.some hs => Option.some (DiffRows.of_hunks hs),
+        Option.none => Option.none,
+    }
+
+/// The approval dialog's styled diff rows, when the pick is a file mutation.
+def diff_span_rows (diff_pair : Option (Pair String String)) : Option (List (List TextSegment)) :=
     match diff_pair {
-        Option.none => List.empty,
+        Option.none => Option.none,
         Option.some pr => match pr {
-            Pair.pair old new => Diff.lines (capped_diff old new),
-        }
+            Pair.pair old new => diff_span_of old new,
+        },
     }
 
 def prompt_overlay (colors : Bool) (store : Option StoreState) (grants : Option (Ref (List PermGrant))) (root : Option Path) (a : Assessment) (p : Pick) : IO Approval := do {
@@ -1937,11 +1947,13 @@ def prompt_overlay (colors : Bool) (store : Option StoreState) (grants : Option 
         Option.some path => List.cons (String.concat "file: " path) List.empty,
     };
     let place : List String := theme_split_lines (Gate.assessment_lines root a);
-    let body : List String := List.append (List.append (List.append (theme_split_lines (pick_header p)) place) target) (diff_lines_of diff_pair);
+    let body : List String := List.append (List.append (theme_split_lines (pick_header p)) place) target;
+    let spans : Option (List (List TextSegment)) := diff_span_rows diff_pair;
     let repo_ok : Bool := Reach.is_inside a.scope;
     let opts : List DialogOption := perm_options p.cap repo_ok;
     let subtitle : String := String.concat (cap_name p.cap) (String.concat " " p.name);
-    let d : DialogModel := Dialog.with_notes (Dialog.make "Permission required" subtitle body opts);
+    let d0 : DialogModel := Dialog.with_notes (Dialog.make "Permission required" subtitle body opts);
+    let d : DialogModel := { d0 with body_spans := spans };
     // A flagged pick defaults to Deny, reads included.
     let default_idx : I64 := match a.danger {
         Option.some _ => if repo_ok then 3 else 2,
@@ -2484,12 +2496,22 @@ pub def markdown_body_rows (colors : Bool) (width : I64) (lines : List String) :
 
 /// The body as transcript rows: a Markdown dialog renders its body as one
 /// document, any other keeps the transcript's line styling.
+def span_widgets (width : I64) (row : List TextSegment) : List SizedWidget :=
+    List.map Rows.widget (List.map (Rows.of_spans style_default) (Text.wrap_spans width row))
+
+def span_rows (width : I64) (rows : List (List TextSegment)) : List SizedWidget :=
+    List.flatten (List.map (span_widgets width) rows)
+
 def dialog_body_rows (colors : Bool) (width : I64) (d : DialogModel) : List SizedWidget :=
     let rows : List DisplayRow :=
         if d.markdown
         then markdown_body_rows colors width d.body
         else List.flatten (List.map (fn (l : String) => Rows.of_line colors width (TLine.plain l)) d.body) in
-    List.map Rows.widget rows
+    let text : List SizedWidget := List.map Rows.widget rows in
+    match d.body_spans {
+        Option.none => text,
+        Option.some spans => List.append text (span_rows width spans),
+    }
 
 def paint_dialog (colors : Bool) (prev : Option Screen) (d : DialogModel) : IO (Pair Screen DialogModel) :=
     Dialog.paint (theme_border_style_with colors) (dialog_body_rows colors) prev d

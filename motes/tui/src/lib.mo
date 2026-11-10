@@ -14,8 +14,8 @@
 // this file's job is to make `use tui` resolve. No `{*}` globs: a glob here
 // would pull six namespaces into every importer's scope.
 
-pub use lib::types {Rect, TextStyle, Cell, LayoutSize, MouseButton, Key, MouseEvent, Event, Screen, CellDelta}
-pub use lib::core {}
+pub use lib::types {Rect, TextStyle, TextSegment, Cell, LayoutSize, MouseButton, Key, MouseEvent, Event, Screen, CellDelta}
+pub use lib::core {style_default, mk_text_segment}
 pub use lib::layout {}
 pub use lib::terminal {}
 pub use lib::input {Input.decode, Input.pending_escape, Input.produce, InputReader, input_reader}

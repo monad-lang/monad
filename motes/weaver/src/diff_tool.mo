@@ -12,6 +12,13 @@ use weaver::diff_hunks {DiffHunks.hunks, DiffHunks.render_text}
 /// Byte cap on the appended diff. Past it the tail is dropped with a marker.
 pub def DiffTool.max_bytes : I64 := 32000
 
+/// Inputs larger than this are not diffed: Myers is bounded but the line
+/// split is not, and a full-file rewrite would spend the turn in the tool.
+pub def DiffTool.max_input : I64 := 1000000
+
+def too_big (old : String) (new : String) : Bool :=
+    I64.gt (String.length old + String.length new) DiffTool.max_input
+
 def result_output (c : Content) : Option String :=
     match c {
         Content.tool_result _ output is_error => if is_error then Option.none else Option.some output,
@@ -30,7 +37,14 @@ def capped (diff : String) : String :=
     else diff
 
 def append_hunks (c : Content) (old : String) (new : String) : Content :=
-    match DiffHunks.hunks old new {
+    if too_big old new
+    then
+        let note : String := "\n... (diff omitted: input over 1 MB)" in
+        match result_output c {
+            Option.none => c,
+            Option.some output => with_text c (String.concat output note),
+        }
+    else match DiffHunks.hunks old new {
         Option.none => c,
         Option.some hs =>
             let text : String := DiffHunks.render_text hs in

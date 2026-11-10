@@ -9,7 +9,7 @@
 // lines), or `Dialog.body_rows` wraps it as plain text. `Dialog.modal`
 // runs the dialog over stdin until it is chosen or cancelled.
 
-use lib::types {Key, Event, MouseEvent, LayoutSize, TextStyle, Rect, Screen}
+use lib::types {Key, Event, MouseEvent, LayoutSize, TextStyle, TextSegment, Rect, Screen}
 use lib::core {style_default, empty_screen, mk_rect}
 use lib::widget {Widget, SizedWidget, BorderStyle, border_with, padding, sized, label, with_style}
 use lib::widgets::input {InputState, input_state, handle_input_key, insert_text}
@@ -54,6 +54,10 @@ pub struct DialogModel {
     /// Fill the whole terminal instead of a centred box of at most 88
     /// columns: for long documents such as a plan.
     fullscreen : Bool := false,
+    /// Pre-rendered styled rows appended after `body`: a host that owns a
+    /// richer renderer (weaver's hunk diff) sets these instead of flattening
+    /// its styles into text.
+    body_spans : Option (List (List TextSegment)) := Option.none,
 }
 
 pub type DialogStep {
@@ -80,6 +84,7 @@ pub def Dialog.make (title : String) (subtitle : String) (body : List String) (o
         field := Option.none,
         field_input := input_state "" "",
         fullscreen := false,
+        body_spans := Option.none,
     } in
     d
 

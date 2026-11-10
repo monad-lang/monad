@@ -60,8 +60,11 @@ usage.mo           per-turn usage: last request (context) and turn delta
                    from shuttle's cumulative spend
 monad_tools.mo     monad_check (compiler checker) and monad_eval (a
                    REPL-style scratch module on the self-hosted interpreter)
-diff.mo            old -> new rendering for write/edit approvals,
-                   picked out of the tool input
+diff.mo            old -> new trim rendering for write/edit approvals
+                   (dumb mode's fallback), picked out of the tool input
+diff_hunks.mo      Myers line diff: hunks, @@ headers, gutters, +N -M stat
+diff_tool.mo       wraps write/edit so the result carries its hunk diff
+auto_continue.mo   auto mode's plan-anchored next-turn prompt
 dumb.mo            the line loop: read -> command-or-model -> print,
                    turns charged against the budget; the non-tty fallback
 model.mo           the TUI's pure half: TuiModel/WeaverMsg, on_event,
