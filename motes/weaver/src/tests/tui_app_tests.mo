@@ -999,6 +999,42 @@ def test_queued_lines_start_in_order : Bool :=
                 && transcript_user_contains "a" m3.pane.transcript.tail,
     }
 
+// ── auto-continue ──────────────────────────────────────────────────────
+
+def with_store (st : WeaverState) : WeaverState :=
+    let s : StoreState := { root := Path.path "/tmp/weaver_tui_store", dir := Path.path "/tmp/weaver_tui_store", id := "s-1" } in
+    let st2 : WeaverState := { st with store := Option.some s } in
+    st2
+
+def model_with_store (mode : Mode) : TuiModel :=
+    let m : TuiModel := init_tui_model Option.none (with_store (state_of mode)) 24 80 in
+    { m with banner := Banner.hidden }
+
+def queued_head (m : TuiModel) : String :=
+    match m.queued { List.cons h _ => h, List.empty => "" }
+
+/// The auto-continue prompt is queued silently behind the store write.
+#[test]
+def test_auto_continue_queues_behind_the_store_write : Bool :=
+    match TuiApp.update (model_with_store Mode.auto) (WeaverMsg.auto_continue "CONTINUE") {
+        Pair.pair m _ => List.length m.queued == 1 && queued_head m == "CONTINUE" && m.queued_ready,
+    }
+
+#[test]
+def test_auto_continue_is_off_outside_auto : Bool :=
+    match TuiApp.update (model_with_store Mode.manual) (WeaverMsg.auto_continue "CONTINUE") {
+        Pair.pair m _ => List.length m.queued == 0,
+    }
+
+/// A user line queued during the turn wins: the prompt is not added behind
+/// it, so the human keeps control.
+#[test]
+def test_auto_continue_yields_to_a_queued_user_line : Bool :=
+    let m0 : TuiModel := queue_entry (enter_pending (model_with_store Mode.auto)) "q" in
+    match TuiApp.update m0 (WeaverMsg.auto_continue "CONTINUE") {
+        Pair.pair m _ => List.length m.queued == 1 && queued_head m == "q",
+    }
+
 /// With a store the completion persists first and hands the queue to the
 /// store write, which starts the head when it lands.
 #[test]

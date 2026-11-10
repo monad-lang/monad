@@ -26,10 +26,10 @@ use shuttle::tools::file_tools {EditTool.impl, WriteTool.impl}
 use shuttle::tools::shell_tools {ShellTool.impl}
 use weaver::commands {WeaverState}
 use weaver::store {StoreState, Store.new_session}
-use weaver::plan_file {PlanRepo, PlanEntry, PlanRepo.list}
+use weaver::plan_file {PlanRepo, PlanEntry, PlanRepo.list, PlanRepo.capture}
 use weaver::dumb {Dumb.run}
 use weaver::policy {Mode}
-use json::json {Json, Json.parse, Json.get_array, Json.get_str, Json.make_str, Json.make_array, Json.make_object, Json.make_null, Json.to_string}
+use json::json {Json, Json.parse, Json.get_array, Json.get_str, Json.make_str, Json.make_array, Json.make_object, Json.make_null, Json.make_num_int, Json.to_string}
 use parsec::number {parse_i64}
 use std::map {Map, BTreeMap}
 use std::list {}
@@ -369,8 +369,9 @@ def diff_session_ok (st : WeaverState) (cursor : I64) (tap : String) (file : Str
         && Bool.not st.quit
         && st.run.session.turns == 2
         && cursor == 2
-        && String.contains tap "- line two"
-        && String.contains tap "+ line two changed"
+        && String.contains tap "@@"
+        && String.contains tap "| line two"
+        && String.contains tap "| line two changed"
         && history_mentions "edited file" st.run.session.history
         && file == "line one\nline two changed\n"
 
@@ -583,4 +584,55 @@ def test_dumb_e2e_a_plan_is_stored_and_approved : IO Bool := do {
     return (List.length es == 1
         && stored_status es == "approved"
         && String.contains tap "1. PLAN: 1) write the file 2) run it · approved")
+}
+
+// ── Auto-continue runs turn after turn until the linked plan is done ───
+
+def plan_input (status : String) (pct : I64) (next : String) : Json :=
+    Json.make_object (Map.insert "status" (Json.make_str status)
+        (Map.insert "completion" (Json.make_num_int pct)
+            (Map.insert "next_action" (Json.make_str next) BTreeMap.empty)))
+
+def plan_turn (id : String) (status : String) (pct : I64) (next : String) (n : I64) : Turn :=
+    let m : Message := { role := Role.assistant, content := [Content.tool_use id "plan" (plan_input status pct next)] } in
+    let t : Turn := { message := m, usage := usage_n n, stop := StopReason.tool_use_stop } in
+    t
+
+/// One input line, then no more: the second turn must start on its own.
+def write_auto_script : IO Unit :=
+    write_text script_path (Json.to_string (Json.make_array [
+        Turn.serialize_json (plan_turn "p1" "in-progress" 50 "step two" 1),
+        Turn.serialize_json (text_turn "step one" 2),
+        Turn.serialize_json (plan_turn "p2" "done" 100 "" 3),
+        Turn.serialize_json (text_turn "all done" 4),
+    ]))
+
+def write_auto_input : IO Unit :=
+    write_text inputs_path (Json.to_string (Json.make_array [Json.make_str "go"]))
+
+def link_auto_plan (st : WeaverState) : IO Unit :=
+    match st.store {
+        Option.none => IO.pure unit,
+        Option.some s => do {
+            let _ <- PlanRepo.capture stored_repo s "m" "" "# Auto plan\n";
+            IO.pure unit
+        },
+    }
+
+#[test]
+def test_dumb_e2e_auto_continues_until_the_plan_is_done : IO Bool := do {
+    let _ <- write_auto_script;
+    let _ <- write_auto_input;
+    let _ <- write_text cursor_path "0";
+    let _ <- write_text tap_path "";
+    let st1 <- with_store_and_repo (in_tmp (state_of plan_exec_registry));
+    let st0 : WeaverState := { st1 with mode := Mode.auto };
+    let _ <- link_auto_plan st0;
+    let _ <- Dumb.run Option.none scripted_read tap_write st0;
+    let cursor <- read_cursor;
+    let tap <- read_tap;
+    let es <- PlanRepo.list stored_repo;
+    return (cursor == 1
+        && stored_status es == "done"
+        && String.contains tap "all done")
 }

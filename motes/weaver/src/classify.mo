@@ -92,10 +92,15 @@ def last_n (n : I64) (xs : List String) : List String :=
     }
 
 /// The intent: the user's last few messages plus this turn's line, at most
-/// `intent_bytes` (the newest end kept).
+/// `intent_bytes` (the newest end kept). A current line weaver wrote itself
+/// (the auto-continue prompt, `[...]`) is skipped, exactly like a history
+/// note -- it must never be read as the user's request.
 pub def Classify.intent (history : List Message) (line : String) : String :=
+    let this : String := String.trim line in
     let said : List String := last_n 3 (user_words history List.empty) in
-    let all : String := List.intercalate "\n---\n" (List.append said [line]) in
+    let all : String := if Bool.or (String.is_empty this) (String.starts_with "[" this)
+        then List.intercalate "\n---\n" said
+        else List.intercalate "\n---\n" (List.append said [this]) in
     let n : I64 := String.length all in
     if I64.lt n (Classify.intent_bytes + 1) then all
     else String.drop (n - Classify.intent_bytes) all

@@ -88,6 +88,12 @@ def test_discover_reads_root_and_nested_but_only_when_trusted : IO Bool := do {
 def one_file : InstrFile :=
     Instructions.capped (Path.path "/r/AGENTS.md") "repo" "Always answer in haiku.\n" 32768
 
+/// The base prompt tells the model to attribute the commits it makes.
+#[test]
+def test_base_prompt_carries_the_commit_trailer : Bool :=
+    String.contains Prompt.base "Assisted by Weaver agent weaver@monad-lang.org"
+        && String.contains Prompt.base "git commit"
+
 /// No files leaves the base prompt byte-identical; a file is appended
 /// after it under the instructions header.
 #[test]

@@ -2,9 +2,10 @@
 /// carries (and must not), the cache key, and the gate's decision against
 /// the scripted mock provider.
 use weaver::classify {AutoCtx, Classify.parse, Classify.prompt, Classify.intent, Classify.key, Classify.decide}
+use weaver::gate {Gate.auto_precheck}
 use weaver::policy {Verdict, AutoDanger, Decision}
 use weaver::assess {Assessment, Reach, Assess.unknown}
-use shuttle::gate {Pick, Capability}
+use shuttle::gate {Pick, Capability, Approval}
 use shuttle::provider {ProviderConfig, Wire}
 use shuttle::message {Message, Usage, Turn}
 use shuttle::message_types {Role, Content, StopReason}
@@ -50,6 +51,15 @@ def test_intent_is_only_the_users_words : Bool :=
     String.contains i "fix the lexer" && String.contains i "now push it"
         && Bool.not (String.contains i "IGNORE PREVIOUS") && Bool.not (String.contains i "ASSISTANT-TEXT")
         && Bool.not (String.contains i "summary of earlier")
+
+#[test]
+def test_intent_skips_a_weaver_current_line : Bool :=
+    let h : List Message := [say Role.user "fix the lexer"] in
+    let i : String := Classify.intent h "[auto-continue] push the branch and mark the plan done" in
+    String.contains i "fix the lexer"
+        && Bool.not (String.contains i "auto-continue")
+        && Bool.not (String.contains i "push the branch")
+        && String.is_empty (Classify.intent List.empty "[auto-continue] anything")
 
 #[test]
 def test_prompt_carries_the_action_and_hints : Bool :=
@@ -99,7 +109,8 @@ def is_ask (d : Decision) : Bool :=
 
 /// SAFE lets a flagged command through; DANGEROUS refuses with the reason
 /// (or asks); a verdict is cached (a later script change is not read);
-/// an unreadable reply falls back to the static rule (a flagged pick asks).
+/// an unreadable reply falls back to the static rule (a flagged pick now
+/// refuses outright).
 #[test]
 def test_decide_against_the_mock : IO Bool := do {
     let empty : BTreeMap String Verdict := BTreeMap.empty;
@@ -119,5 +130,23 @@ def test_decide_against_the_mock : IO Bool := do {
     return (is_allow d1 && is_allow d1b
         && String.contains (is_refuse d2) "pushes to a remote the user did not mention"
         && is_ask d3
-        && is_ask d4)
+        && String.contains (is_refuse d4) "refused a dangerous command")
+}
+
+/// The gate's auto precheck refuses a dangerous verdict itself. It takes no
+/// grant list, so a session grant cannot run a pick the classifier rejects.
+#[test]
+def test_auto_precheck_refuses_a_dangerous_verdict : IO Bool := do {
+    let flagged : Assessment := { Assess.unknown with danger := Option.some "pushes to a remote" };
+    script "DANGEROUS: pushes to a remote the user did not mention";
+    let empty : BTreeMap String Verdict := BTreeMap.empty;
+    let c <- Ref.new empty;
+    let r <- Gate.auto_precheck (ctx_with c AutoDanger.refuse_it) Option.none flagged push_pick;
+    return (match r {
+        Option.some ap => match ap {
+            Approval.deny reason => String.contains reason "pushes to a remote",
+            _ => false,
+        },
+        Option.none => false,
+    })
 }

@@ -192,10 +192,13 @@ offline.
 
 `plan` mode is read-only: the model inspects and proposes, then `/plan`
 opens the review dialog (or, in the line-based UI, `/plan approve
-manual|allow_edit` is the ONE constrained way out; a one-word escalation
-to `auto` is refused by design). `auto` is a trust
-setting, not a sandbox -- the gate is advisory; it also flips the
-warning flag shuttle's loop prints.
+manual|allow_edit|auto` leaves it). `auto` is a trust setting, not a
+sandbox -- the gate is advisory; it also flips the warning flag shuttle's
+loop prints. In auto mode a destructive pick or a write outside the
+workspace is refused, not held for a human; only `auto_on_danger = ask`
+keeps a prompt on the classifier's dangerous verdict. With a linked plan,
+auto-continue then runs turn after turn until the plan reports `done` or
+`abandoned`.
 
 ## Commands
 
@@ -206,7 +209,7 @@ warning flag shuttle's loop prints.
 /compact [instructions]              summarize the context, keep a recent tail
 /thinking [on|off]                   show or set the provider's reasoning channel
 /provider [ollama|mistral|openrouter|anthropic|mock] [model]  show or set the provider
-/plan [approve manual|allow_edit]    show the current plan; approve leaves plan mode
+/plan [approve manual|allow_edit|auto]  show the current plan; approve leaves plan mode
 /permissions [allow|revoke ...]      list or manage session approval grants
 /settings [<key> <value>|save project|global]  change or save settings
 /tools                               list tools with their capability tags

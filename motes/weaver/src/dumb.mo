@@ -25,6 +25,7 @@ use weaver::commands {
 }
 use weaver::gate {Gate.weaver}
 use weaver::classify {AutoCtx, Classify.intent}
+use weaver::auto_continue {AutoContinue.next}
 use weaver::policy {Mode, Mode.show, Mode.warns_auto}
 use weaver::error {WeaverError, WeaverError.show, WeaverError.recoverable, WeaverError.of_shuttle}
 use weaver::store {StoreState, Store.record_history, Store.write_plan}
@@ -60,6 +61,8 @@ pub def Dumb.poll_sleep (ms : I64) : IO Unit := do {
 struct Step {
     state : WeaverState,
     again : Bool,
+    /// The auto-continue prompt to feed as the next line (none normally).
+    next : Option String,
 }
 
 /// Drive the session: prompt, read, route, repeat. EOF returns the
@@ -78,12 +81,28 @@ struct Step {
 /// which no structural measure sees.
 #[terminating]
 pub def Dumb.run (log : Option Logger) (read : Unit -> IO (Option String)) (write : String -> IO Unit) (st : WeaverState) : IO WeaverState := do {
-    let w : String -> IO Unit := theme_write write st.colors;
     let _ <- write (dumb_banner st);
-    let _ <- write (prompt_line st);
-    let line <- read unit;
+    dumb_loop log read write st Option.none
+}
+
+/// The session loop. `pending` is an auto-continue line: it skips the read
+/// (and the prompt) and runs as the next turn. The recursion is on the
+/// external input stream, which no structural measure sees.
+#[terminating]
+def dumb_loop (log : Option Logger) (read : Unit -> IO (Option String)) (write : String -> IO Unit) (st : WeaverState) (pending : Option String) : IO WeaverState := do {
+    let w : String -> IO Unit := theme_write write st.colors;
+    let line <- match pending {
+        Option.some text => do {
+            let _ <- write "[auto] continuing the plan\n";
+            IO.pure (Option.some text)
+        },
+        Option.none => do {
+            let _ <- write (prompt_line st);
+            read unit
+        },
+    };
     let step <- step_of read w st line;
-    if step.again then Dumb.run log read write step.state else IO.pure step.state
+    if step.again then dumb_loop log read write step.state step.next else IO.pure step.state
 }
 
 /// The line-based UI's one-line launch banner (the TUI renders the full
@@ -259,18 +278,74 @@ def failed_step (write : String -> IO Unit) (st : WeaverState) (e : WeaverError)
 /// .. }` parses only in a plain body, not inside a do-block.)
 def turn_ok (write : String -> IO Unit) (st : WeaverState) (before : I64) (run2 : RunState) : IO Step := do {
     let _ <- write "\n\n";
+    let _ <- print_diffs write before run2;
     let warn <- persist_turn st before run2;
     finish_turn write st run2 warn
 }
 
+/// The hunk diff a write/edit tool result carries, when it has one.
+def diff_part (out : String) : Option String :=
+    let i : I64 := String.find_last out "\n@@ " in
+    if I64.lt i 0 then Option.none else Option.some (String.drop (i + 1) out)
+
+def print_one_diff (write : String -> IO Unit) (c : Content) : IO Unit :=
+    match c {
+        Content.tool_result _ out is_error =>
+            if is_error then IO.pure unit
+            else match diff_part out {
+                Option.none => IO.pure unit,
+                Option.some d => write (String.concat d "\n"),
+            },
+        _ => IO.pure unit,
+    }
+
+#[partial]
+def print_content_diffs (write : String -> IO Unit) (cs : List Content) : IO Unit :=
+    match cs {
+        List.empty => IO.pure unit,
+        List.cons c rest => do {
+            let _ <- print_one_diff write c;
+            print_content_diffs write rest
+        },
+    }
+
+#[partial]
+def print_msg_diffs (write : String -> IO Unit) (ms : List Message) : IO Unit :=
+    match ms {
+        List.empty => IO.pure unit,
+        List.cons m rest => do {
+            let _ <- print_content_diffs write m.content;
+            print_msg_diffs write rest
+        },
+    }
+
+/// Dumb mode has no transcript pane: print the turn's hunk diffs after its
+/// text, so a write/edit is visible in every mode.
+def print_diffs (write : String -> IO Unit) (before : I64) (run2 : RunState) : IO Unit := do {
+    let delta : List Message := drop_msgs before run2.session.history;
+    print_msg_diffs write delta
+}
+
 /// Same contract as the TUI: a store error disables persistence and
 /// says so ONCE, instead of silently rewriting the same history block
-/// on every later turn.
+/// on every later turn. A clean turn asks `AutoContinue` whether the next
+/// turn should start on its own.
 def finish_turn (write : String -> IO Unit) (st : WeaverState) (run2 : RunState) (warn : Option String) : IO Step :=
     match warn {
-        Option.none => IO.pure (mk_step (advance_run st run2) true),
+        Option.none => do {
+            let st4 : WeaverState := advance_run st run2;
+            let cont <- AutoContinue.next st4 run2;
+            match cont {
+                Option.none => IO.pure (mk_step st4 true),
+                Option.some text => IO.pure (mk_continue st4 text),
+            }
+        },
         Option.some e => warn_turn write st run2 e,
     }
+
+def mk_continue (st : WeaverState) (text : String) : Step :=
+    let s : Step := { state := st, again := true, next := Option.some text } in
+    s
 
 def warn_turn (write : String -> IO Unit) (st : WeaverState) (run2 : RunState) (e : String) : IO Step := do {
     let line : String := String.concat "warning: session persistence disabled: " (String.concat e "\n");
@@ -445,5 +520,5 @@ def auto_warning (mode : Mode) : String :=
 // ── helpers ─────────────────────────────────────────────────────────────
 
 def mk_step (st : WeaverState) (again : Bool) : Step :=
-    let s : Step := { state := st, again := again } in
+    let s : Step := { state := st, again := again, next := Option.none } in
     s

@@ -53,6 +53,9 @@ pub type WeaverMsg {
     /// plan mode (none otherwise).
     turn_result (run : RunState) (lines : List TLine) (delta : List Message)
         (last_context : I64) (plan : Option String),
+    /// Auto mode's plan-anchored continuation: the next turn's line. The
+    /// update queues it silently behind the turn's store write.
+    auto_continue (text : String),
     turn_failed (run : RunState) (e : WeaverError),
     command_result (effect : Effect),
     command_failed (e : WeaverError),

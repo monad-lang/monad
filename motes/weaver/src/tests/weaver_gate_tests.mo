@@ -233,9 +233,10 @@ def test_grants_never_cover_a_flagged_command : IO Bool := do {
 }
 
 /// In auto mode the precheck lets a plain command through (no decision:
-/// the ask cell answers once) and leaves a flagged one to the prompt.
+/// the ask cell answers once) and refuses a flagged one outright -- no
+/// human is in the loop.
 #[test]
-def test_auto_mode_holds_a_flagged_command_for_the_prompt : IO Bool := do {
+def test_auto_mode_refuses_a_flagged_command : IO Bool := do {
     let empty_grants : List PermGrant := List.empty;
     let r <- Ref.new empty_grants;
     let g : Gate := Gate.weaver Mode.auto (Option.some r) (Option.some (Path.path "/repo")) Option.none no_read no_write;

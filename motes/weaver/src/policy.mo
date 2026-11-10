@@ -56,10 +56,14 @@ pub def Policy.decide (cap : Capability) (mode : Mode) (a : Assessment) : Decisi
                 Capability.read => Decision.allow,
             },
         Mode.auto =>
+            // Auto is unattended: a flagged pick is REFUSED, never held for a
+            // human. The refusal is a tool result the model reads and adapts
+            // to; only `auto_on_danger = ask` (the classifier's dangerous
+            // verdict, below) may still prompt.
             match a.danger {
-                Option.some _ => Decision.ask,
+                Option.some reason => Decision.refuse (String.concat "auto mode: refused a dangerous command: " reason),
                 Option.none => match a.outside_write {
-                    Option.some _ => Decision.ask,
+                    Option.some reason => Decision.refuse (String.concat "auto mode: refused a write outside the workspace: " reason),
                     Option.none => Decision.allow,
                 },
             },

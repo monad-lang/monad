@@ -415,8 +415,12 @@ pub def PlanFile.read (path : String) : IO (Option PlanDoc) := do {
     }
 }
 
+/// The attribution trailer every commit weaver makes itself carries.
+pub def PlanRepo.trailer : String := "Assisted by Weaver agent weaver@monad-lang.org"
+
 /// Commit one plan file in the plan repo when it is a git work tree.
-/// Never pushes. Hooks run. Answers a notice on failure.
+/// Never pushes. Hooks run. The message's second paragraph is the weaver
+/// attribution trailer. Answers a notice on failure.
 pub def PlanRepo.commit_file (r : PlanRepo) (path : String) (subject : String) : IO (Option String) :=
     if Bool.not r.commit then IO.pure Option.none
     else do {
@@ -435,7 +439,7 @@ def commit_in (r : PlanRepo) (path : String) (subject : String) : IO (Option Str
             if Bool.not (code == 0)
             then IO.pure (Option.some (String.concat "plan not committed: " (String.trim out)))
             else do {
-                let c <- Proc.capture "git" ["-C", r.root, "commit", "-q", "-m", subject, "--", path];
+                let c <- Proc.capture "git" ["-C", r.root, "commit", "-q", "-m", subject, "-m", PlanRepo.trailer, "--", path];
                 match c {
                     Pair.pair code2 out2 =>
                         if code2 == 0 then IO.pure Option.none

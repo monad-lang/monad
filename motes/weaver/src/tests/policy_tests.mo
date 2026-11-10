@@ -80,16 +80,16 @@ def test_allow_edit_asks_for_an_edit_outside_the_workspace : Bool :=
         && cell_at Capability.write Mode.plan out (Decision.refuse plan_refusal)
         && cell_at Capability.read Mode.auto out Decision.allow
 
-/// `auto` asks before a destructive pick or a write outside the workspace;
-/// every other mode
-/// decides as it would anyway (manual already asks, plan refuses).
+/// `auto` refuses a destructive pick or a write outside the workspace
+/// outright -- no human is in the loop. Every other mode decides as it
+/// would anyway (manual already asks, plan refuses).
 #[test]
-def test_auto_asks_for_a_flagged_pick : Bool :=
+def test_auto_refuses_a_flagged_pick : Bool :=
     let flagged : Assessment := { scope := Reach.inside, danger := Option.some "git push --force rewrites remote history", outside_write := Option.none } in
     let writes_out : Assessment := { scope := Reach.outside [Path.path "/etc/motd"], danger := Option.none, outside_write := Option.some "writes outside the workspace: /etc/motd" } in
-    cell_at Capability.exec Mode.auto flagged Decision.ask
-        && cell_at Capability.write Mode.auto writes_out Decision.ask
-        && cell_at Capability.write Mode.auto flagged Decision.ask
+    cell_at Capability.exec Mode.auto flagged (Decision.refuse "auto mode: refused a dangerous command: git push --force rewrites remote history")
+        && cell_at Capability.write Mode.auto writes_out (Decision.refuse "auto mode: refused a write outside the workspace: writes outside the workspace: /etc/motd")
+        && cell_at Capability.write Mode.auto flagged (Decision.refuse "auto mode: refused a dangerous command: git push --force rewrites remote history")
         && cell_at Capability.exec Mode.manual flagged Decision.ask
         && cell_at Capability.exec Mode.plan flagged (Decision.refuse plan_refusal)
 
@@ -185,17 +185,20 @@ def auto_cell (cap : Capability) (a : Assessment) (v : Option Verdict) (d : Auto
     decision_eq (Policy.decide_auto cap a v d) expected
 
 /// Every verdict cell: safe runs (flagged or not), dangerous refuses with
-/// the reason or asks, and no verdict is the static auto rule.
+/// the reason or asks, and no verdict is the static auto rule (which now
+/// refuses a flagged or outside-write pick).
 #[test]
 def test_decide_auto_every_cell : Bool :=
     let r : String := "auto mode: the classifier blocked this: pushes" in
+    let sd : String := "auto mode: refused a dangerous command: deletes files" in
+    let so : String := "auto mode: refused a write outside the workspace: writes outside the workspace: /etc/x" in
     auto_cell Capability.exec plain (Option.some Verdict.safe) AutoDanger.refuse_it Decision.allow
         && auto_cell Capability.exec flagged (Option.some Verdict.safe) AutoDanger.refuse_it Decision.allow
         && auto_cell Capability.exec plain (Option.some (Verdict.dangerous "pushes")) AutoDanger.refuse_it (Decision.refuse r)
         && auto_cell Capability.exec plain (Option.some (Verdict.dangerous "pushes")) AutoDanger.ask_human Decision.ask
         && auto_cell Capability.exec plain Option.none AutoDanger.refuse_it Decision.allow
-        && auto_cell Capability.exec flagged Option.none AutoDanger.refuse_it Decision.ask
-        && auto_cell Capability.write outside_write Option.none AutoDanger.refuse_it Decision.ask
+        && auto_cell Capability.exec flagged Option.none AutoDanger.refuse_it (Decision.refuse sd)
+        && auto_cell Capability.write outside_write Option.none AutoDanger.refuse_it (Decision.refuse so)
 
 /// What the classifier judges: code, the network, and an outside write.
 #[test]

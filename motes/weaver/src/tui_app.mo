@@ -24,6 +24,7 @@ use shuttle::provider {ProviderConfig}
 use weaver::side {Side.wanted, Side.btw_question, Side.fullscreen}
 use weaver::btw {Btw.ask}
 use weaver::classify {AutoCtx, Classify.intent}
+use weaver::auto_continue {AutoContinue.next}
 use shuttle::message_types {Role, Content}
 use weaver::usage {UsageTracker.start, UsageTracker.silent, UsageTracker.last}
 use std::ref {Ref, Ref.new, Ref.get, Ref.set}
@@ -251,6 +252,7 @@ def update_msg (m : TuiModel) (msg : WeaverMsg) : Pair TuiModel (Cmd WeaverMsg) 
     match msg {
         WeaverMsg.key_event e => update_event m e,
         WeaverMsg.turn_result run lines delta last_context plan => turn_result_step m run lines delta last_context plan,
+        WeaverMsg.auto_continue text => auto_continue_step m text,
         WeaverMsg.turn_failed run e => failure_step m run e,
         WeaverMsg.command_result effect => command_result_step m effect,
         WeaverMsg.command_failed e => failure_step m m.state.run e,
@@ -1290,11 +1292,12 @@ pub def run_submitted_line (log : Option Logger) (gen : I64) (st : WeaverState) 
         (String.concat " bytes=" (I64.to_string (String.length text)))));
     Logs.log_rss log "submit";
     let msg <- dispatch_submitted log gen st text;
+    let msg2 <- with_auto_continue st msg;
     let t1 <- IO.current_time;
     Logs.info log (String.concat "ev=submit_end elapsed_ms=" (I64.to_string (t1 - t0)));
     Logs.log_rss log "submit_end";
     Logs.info log (outcome_of msg);
-    IO.pure msg
+    IO.pure msg2
 }
 
 def outcome_of (msg : WeaverMsg) : String :=
@@ -1473,6 +1476,34 @@ def slash_step_tui (log : Option Logger) (gen : I64) (st : WeaverState) (text : 
 
 def mode_is_plan (m : Mode) : Bool :=
     match m { Mode.plan => true, _ => false }
+
+def mode_is_auto (m : Mode) : Bool :=
+    match m { Mode.auto => true, _ => false }
+
+/// The auto-continue prompt: queue it silently behind the turn's store write.
+/// `turn_result_step` already issued the persist command, and
+/// `batch_step`'s "first non-none command wins" rule keeps it, so this
+/// returns `Cmd.none`. The mode and queue are re-checked here: the user may
+/// have switched mode or queued a line during the turn, and then the human
+/// has taken control.
+def auto_continue_step (m : TuiModel) (text : String) : Pair TuiModel (Cmd WeaverMsg) :=
+    if Bool.not (mode_is_auto m.state.mode) || queued_waiting m
+    then Pair.pair m Cmd.none
+    else Pair.pair { m with queued := List.append m.queued (List.cons text List.empty), queued_ready := true } Cmd.none
+
+/// A turn result plus the auto-continue decision: the batch folds the result
+/// first (persisting the turn) and then the continuation into the queue.
+def with_auto_continue (st : WeaverState) (msg : WeaverMsg) : IO WeaverMsg :=
+    match msg {
+        WeaverMsg.turn_result run _ _ _ _ => do {
+            let cont <- AutoContinue.next st run;
+            match cont {
+                Option.none => IO.pure msg,
+                Option.some text => IO.pure (WeaverMsg.batch [msg, WeaverMsg.auto_continue text]),
+            }
+        },
+        _ => IO.pure msg,
+    }
 
 /// `/plan` opens the review dialog in plan mode and a read-only view
 /// outside it. `/plan approve …` stays a plain command (a deliberate
@@ -1703,7 +1734,57 @@ def tool_input_summary (input : Json) : String :=
 
 /// A tool result: the first three output lines plus a collapsed marker;
 /// the full output rides as detail lines (Ctrl+O), never lost.
+///
+/// A write/edit result carries a hunk diff after a leading `\n@@ `; the
+/// summary line gets the `(+N -M)` statistic and up to 24 diff rows show,
+/// the rest folded behind Ctrl+O.
 def tool_result_lines (output : String) (is_error : Bool) : List TLine :=
+    match diff_split output {
+        Option.some pr => match pr {
+            Pair.pair summary diff => diff_result_lines summary diff is_error,
+        },
+        Option.none => plain_result_lines output is_error,
+    }
+
+/// The first `\n@@ ` starts the appended hunk diff.
+def diff_split (output : String) : Option (Pair String String) :=
+    let i : I64 := String.find_last output "\n@@ " in
+    if I64.lt i 0
+    then Option.none
+    else Option.some (Pair.pair (String.slice output 0 i) (String.drop (i + 1) output))
+
+#[partial]
+def drop_strings (n : I64) (xs : List String) : List String :=
+    if I64.lt n 1 then xs
+    else match xs {
+        List.empty => xs,
+        List.cons _ rest => drop_strings (n - 1) rest,
+    }
+
+#[partial]
+def count_prefix (p : String) (ls : List String) : I64 :=
+    match ls {
+        List.empty => 0,
+        List.cons l rest => (if String.starts_with p l then 1 else 0) + count_prefix p rest,
+    }
+
+def diff_stat_text (diff : String) : String :=
+    let ls : List String := Diff.lines diff in
+    let a : I64 := count_prefix "+ " ls in
+    let r : I64 := count_prefix "- " ls in
+    if a == 0 && r == 0
+    then ""
+    else String.concat_list [" (+", I64.to_string a, " -", I64.to_string r, ")"]
+
+def diff_result_lines (summary : String) (diff : String) (is_error : Bool) : List TLine :=
+    let mark : String := if is_error then "✘ " else "✔ " in
+    let head : TLine := TLine.plain (String.concat mark (String.concat summary (diff_stat_text diff))) in
+    let ls : List String := Diff.lines diff in
+    let shown : List TLine := List.map TLine.plain (take_strings 24 ls) in
+    let folded : List TLine := List.map TLine.detail_line (drop_strings 24 ls) in
+    List.cons head (List.append shown folded)
+
+def plain_result_lines (output : String) (is_error : Bool) : List TLine :=
     let lines : List String := theme_split_lines output in
     let n : I64 := List.length lines in
     let mark : String := if is_error then "✘ " else "✔ " in
@@ -1791,7 +1872,7 @@ def weaver_tui_precheck (mode : Mode) (grants : Option (Ref (List PermGrant))) (
     let a : Assessment := Assess.pick root p in
     if Policy.unguarded p.name then IO.pure (Option.some Approval.once)
     else match Gate.auto_for mode auto p.cap a {
-        Option.some ctx => Gate.auto_precheck ctx grants root a p,
+        Option.some ctx => Gate.auto_precheck ctx root a p,
         Option.none => tui_static_precheck mode grants a p,
     }
 
@@ -2335,37 +2416,39 @@ def plan_view_step (st : WeaverState) : IO WeaverMsg := do {
 
 def plan_approval_step (st : WeaverState) : IO WeaverMsg := do {
     let o0 : DialogOption := { label := "Approve and execute (allow_edit)", hint := "a", key := "a" };
-    let o1 : DialogOption := { label := "Approve to manual", hint := "m", key := "m" };
-    let o2 : DialogOption := { label := "Revise with a note", hint := "r", key := "r" };
-    let o3 : DialogOption := { label := "Cancel", hint := "Esc", key := "" };
-    let d0 : DialogModel := Dialog.make "Plan ready" "approve it to leave plan mode" (plan_body st) [o0, o1, o2, o3];
-    let d : DialogModel := { (Dialog.with_notes d0) with markdown := true, fullscreen := true, footer := "PageUp/PageDown scroll -- e note, a approve/edit, m manual, r revise, Esc cancel" };
+    let o1 : DialogOption := { label := "Approve and run in auto (unattended)", hint := "A", key := "A" };
+    let o2 : DialogOption := { label := "Approve to manual", hint := "m", key := "m" };
+    let o3 : DialogOption := { label := "Revise with a note", hint := "r", key := "r" };
+    let o4 : DialogOption := { label := "Cancel", hint := "Esc", key := "" };
+    let d0 : DialogModel := Dialog.make "Plan ready" "approve it to leave plan mode" (plan_body st) [o0, o1, o2, o3, o4];
+    let d : DialogModel := { (Dialog.with_notes d0) with markdown := true, fullscreen := true, footer := "PageUp/PageDown scroll -- e note, a approve/edit, A approve/auto, m manual, r revise, Esc cancel" };
     let pr <- dialog_run st.colors st.store d;
     match pr {
         Pair.pair final step => match step {
             DialogStep.choose i =>
-                if i == 2
+                if i == 3
                 then do {
                     let note : String := Dialog.note_text final;
                     if String.is_empty note
                     then IO.pure (WeaverMsg.command_result (plan_effect st "plan not approved -- type your revision in the input box"))
                     else IO.pure (WeaverMsg.input_set note)
-                } else if i == 3
+                } else if i == 4
                 then IO.pure (WeaverMsg.command_result (plan_effect st "plan not approved"))
                 else do {
-                    let target : String := if i == 1 then "manual" else "allow_edit";
+                    let target : String :=
+                        if i == 1 then "auto" else if i == 2 then "manual" else "allow_edit";
                     let line : String := String.concat "/plan approve " target;
                     let r <- Commands.dispatch line st;
                     match r {
                         Result.err e => IO.pure (WeaverMsg.command_failed e),
                         Result.ok e => do {
                             let note : String := Dialog.note_text final;
-                            if i == 0
+                            if Bool.or (i == 0) (i == 1)
                             then do {
                                 // "Approve and execute": the mode change is
                                 // in `e.state`; start a real turn with the
-                                // instruction (the old code only switched
-                                // modes and sat idle).
+                                // instruction. The auto landing lets the
+                                // plan-anchored auto-continue take over.
                                 let text : String :=
                                     if String.is_empty note
                                     then "Implement the approved plan."

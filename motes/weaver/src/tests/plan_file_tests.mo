@@ -12,6 +12,7 @@ use weaver::plan_file {
     PlanDoc, PlanMeta, PlanMeta.empty, PlanParse, PlanFile.parse, PlanFile.render, PlanFile.slug, PlanFile.project_key,
     PlanFile.with_entry, PlanFile.revise_body, PlanFile.split_changelog, PlanFile.read, PlanFile.linked,
     PlanRepo, PlanRepo.resolve, PlanRepo.capture, PlanRepo.set_status, PlanRepo.list, PlanRepo.list_all, PlanRepo.add_session,
+    PlanRepo.trailer,
     PlanSettings, PlanSettings.empty, PlanEntry, PlanEntry.line, Stored,
 }
 
@@ -316,8 +317,15 @@ def test_a_git_plan_repo_gets_a_commit : IO Bool := do {
     let _ <- exec_cmd "git" ["-C", r.root, "config", "commit.gpgsign", "false"];
     let a <- PlanRepo.capture r st "m" "" "# Tracked\n";
     let log <- Proc.capture "git" ["-C", r.root, "log", "--format=%s"];
+    let body <- Proc.capture "git" ["-C", r.root, "log", "--format=%B"];
     match log {
-        Pair.pair code out => IO.pure (code == 0 && String.contains out "plan: Tracked -- draft" && Bool.not (String.is_empty (path_or a))),
+        Pair.pair code out => match body {
+            Pair.pair code2 out2 =>
+                IO.pure (code == 0 && code2 == 0
+                    && String.contains out "plan: Tracked -- draft"
+                    && String.contains out2 (String.concat "\n\n" PlanRepo.trailer)
+                    && Bool.not (String.is_empty (path_or a))),
+        },
     }
 }
 

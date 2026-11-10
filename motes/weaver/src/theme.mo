@@ -26,6 +26,7 @@ pub type LineClass {
     error,
     diff_plus,
     diff_minus,
+    diff_hunk,
     hint,
     class_plain,
 }
@@ -36,7 +37,8 @@ pub type LineClass {
 /// prefix.
 #[terminating]
 pub def line_class (line : String) : LineClass :=
-    if String.starts_with "+ " line then LineClass.diff_plus
+    if String.starts_with "@@ " line then LineClass.diff_hunk
+    else if String.starts_with "+ " line then LineClass.diff_plus
     else if String.starts_with "- " line then LineClass.diff_minus
     else if String.starts_with "error: " line then LineClass.error
     else if String.starts_with "denied: " line then LineClass.error
@@ -56,6 +58,7 @@ pub def class_style (c : LineClass) : TextStyle :=
         LineClass.error => { style_default with fg := some Color.red },
         LineClass.diff_plus => { style_default with fg := some Color.green },
         LineClass.diff_minus => { style_default with fg := some Color.red },
+        LineClass.diff_hunk => { style_default with fg := some Color.cyan, dim := true },
         LineClass.hint => { style_default with dim := true },
         LineClass.class_plain => style_default,
     }
@@ -159,6 +162,7 @@ pub def class_code (c : LineClass) : String :=
         LineClass.error => "\u{1b}[31m",
         LineClass.diff_plus => "\u{1b}[32m",
         LineClass.diff_minus => "\u{1b}[31m",
+        LineClass.diff_hunk => "\u{1b}[36;2m",
         LineClass.hint => "\u{1b}[2m",
         LineClass.class_plain => "",
     }

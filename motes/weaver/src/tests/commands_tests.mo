@@ -152,7 +152,7 @@ def test_mode_rejects_unknown_name : IO Bool := do {
 #[test]
 def test_plan_status_in_plan_mode : IO Bool := do {
     let r <- Commands.dispatch "/plan" (state_of Mode.plan []);
-    return (effect_is r Mode.plan "plan mode: only read tools run; produce the plan, then /plan approve [manual|allow_edit]")
+    return (effect_is r Mode.plan "plan mode: only read tools run; produce the plan, then /plan approve [manual|allow_edit|auto]")
 }
 
 #[test]
@@ -173,12 +173,12 @@ def test_plan_approve_lands_on_allow_edit : IO Bool := do {
     return (effect_is r Mode.allow_edit "plan approved -- mode: allow_edit")
 }
 
-/// `/plan approve auto` is a one-word trust escalation; the command
-/// refuses it and the session stays in plan mode.
+/// `/plan approve auto` is a named, explicit landing: the approving user
+/// chooses the unattended mode and the plan-anchored auto-continue takes over.
 #[test]
-def test_plan_approve_auto_is_refused : IO Bool := do {
+def test_plan_approve_lands_on_auto : IO Bool := do {
     let r <- Commands.dispatch "/plan approve auto" (state_of Mode.plan []);
-    return (effect_is r Mode.plan "plan approval drops to manual or allow_edit")
+    return (effect_is r Mode.auto "plan approved -- mode: auto")
 }
 
 #[test]

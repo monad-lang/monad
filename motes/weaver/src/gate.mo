@@ -22,6 +22,7 @@ use shuttle::gate {Capability, Pick, Approval, Gate}
 use weaver::policy {Mode, Decision, Policy.decide, Policy.unguarded, Policy.classified}
 use weaver::classify {AutoCtx, Classify.decide}
 use weaver::diff {Diff.for_input, Diff.render}
+use weaver::diff_hunks {DiffHunks.hunks, DiffHunks.render_text}
 use weaver::permissions {
     PermGrant, PermScope, Permissions.matches, Permissions.get,
     Permissions.add,
@@ -78,20 +79,17 @@ pub def Gate.auto_for (mode : Mode) (auto : Option AutoCtx) (cap : Capability) (
         _ => Option.none,
     }
 
-/// The classifier's precheck: a grant still covers the pick without a
-/// call; otherwise the verdict decides, and `ask` falls to the gate's ask
-/// (which reads the same verdict from the cache).
-pub def Gate.auto_precheck (ctx : AutoCtx) (grants : Option (Ref (List PermGrant))) (root : Option Path) (a : Assessment) (p : Pick) : IO (Option Approval) := do {
-    let gs <- Permissions.get grants;
-    if Gate.granted gs p.cap a
-    then IO.pure (Option.some Approval.once)
-    else do {
-        let d <- Classify.decide ctx root p a;
-        match d {
-            Decision.allow => IO.pure (Option.some Approval.once),
-            Decision.refuse reason => IO.pure (Option.some (Approval.deny reason)),
-            Decision.ask => IO.pure Option.none,
-        }
+/// The classifier's precheck: the verdict decides. Grants are deliberately
+/// NOT consulted first -- a session grant only names a capability, and
+/// `Gate.granted` sees the static flag alone, so a grant would run a pick the
+/// classifier calls dangerous. The classifier's cache is what avoids repeat
+/// calls.
+pub def Gate.auto_precheck (ctx : AutoCtx) (root : Option Path) (a : Assessment) (p : Pick) : IO (Option Approval) := do {
+    let d <- Classify.decide ctx root p a;
+    match d {
+        Decision.allow => IO.pure (Option.some Approval.once),
+        Decision.refuse reason => IO.pure (Option.some (Approval.deny reason)),
+        Decision.ask => IO.pure Option.none,
     }
 }
 
@@ -104,14 +102,14 @@ def weaver_precheck (mode : Mode) (grants : Option (Ref (List PermGrant))) (root
     let a : Assessment := Assess.pick root p in
     if Policy.unguarded p.name then IO.pure (Option.some Approval.once)
     else match Gate.auto_for mode auto p.cap a {
-        Option.some ctx => auto_precheck_told ctx grants root write a p,
+        Option.some ctx => auto_precheck_told ctx root write a p,
         Option.none => static_precheck mode grants root write a p,
     }
 
 /// The line UI says why the classifier refused, as it does for a policy
 /// refusal.
-def auto_precheck_told (ctx : AutoCtx) (grants : Option (Ref (List PermGrant))) (root : Option Path) (write : String -> IO Unit) (a : Assessment) (p : Pick) : IO (Option Approval) := do {
-    let r <- Gate.auto_precheck ctx grants root a p;
+def auto_precheck_told (ctx : AutoCtx) (root : Option Path) (write : String -> IO Unit) (a : Assessment) (p : Pick) : IO (Option Approval) := do {
+    let r <- Gate.auto_precheck ctx root a p;
     match r {
         Option.some ap => match ap {
             Approval.deny reason => do {
@@ -367,7 +365,11 @@ def write_diff (write : String -> IO Unit) (r : Option (Pair String String)) : I
 /// The same display-only truncation discipline as `summarize`: a
 /// huge write must not bury the terminal in a diff.
 def capped_diff (old : String) (new : String) : String :=
-    let d : String := Diff.render old new in
+    let d : String :=
+        match DiffHunks.hunks old new {
+            Option.some hs => DiffHunks.render_text hs,
+            Option.none => Diff.render old new,
+        } in
     if String.is_empty d
     then "(no changes)"
     else if String.length d > 1200

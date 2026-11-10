@@ -1,7 +1,8 @@
 // weaver / pty / approvals -- auto mode runs an ordinary command without
-// asking and holds a destructive one for approval: the first shell call
-// (`touch ran_ok`) must run unprompted, the second (`git push --force`)
-// must open the dialog with its danger reason, and a deny must stop it.
+// asking and REFUSES a destructive one: the first shell call (`touch
+// ran_ok`) runs unprompted, the second (`git push --force`) is denied with
+// its danger reason, and the turn continues to the model's final answer
+// with no keypress (a dialog would have blocked it).
 use pty::spawn {Pty, Output}
 use pty::check {Check.report}
 use weaver::pty_support {run_gated, with_root, spawn_args}
@@ -37,14 +38,12 @@ def approvals_go (m : Pty) (root : String) : IO Bool := do {
     let auto <- Pty.wait_until m (fn (o : Output) => grid_has o "auto") 3000;
     let a <- Check.report "auto mode is on" (Bool.and ready auto);
     Pty.send_text m "go\r";
-    let held <- Pty.wait_until m (fn (o : Output) =>
-        Bool.and (grid_has o "Permission required") (grid_has o "rewrites remote history")) 8000;
-    let b <- Check.report "git push --force opens the dialog with its reason" held;
+    let refused <- Pty.wait_until m (fn (o : Output) => grid_has o "refused a dangerous command") 8000;
+    let b <- Check.report "git push --force is refused with its reason" refused;
     let ran <- file_exists (String.concat root "/ran_ok");
     let c <- Check.report "the plain command ran without asking" ran;
-    Pty.send_text m "n";
     let done <- Pty.wait_until m (fn (o : Output) => grid_has o "finished both") 8000;
-    let d <- Check.report "the denied push ends the turn normally" done;
+    let d <- Check.report "the turn continues after the refusal, with no dialog" done;
     Pty.finish m;
     return (a && b && c && d)
 }
@@ -66,5 +65,5 @@ def approvals_run (bin : String) (root : String) : IO Bool := do {
     }
 }
 
-pub def run_auto_mode_holds_destructive_commands : IO Bool :=
+pub def run_auto_mode_refuses_destructive_commands : IO Bool :=
     run_gated "pty weaver approvals" (fn (bin : String) => with_root "approvals" (fn (root : String) => approvals_run bin root))

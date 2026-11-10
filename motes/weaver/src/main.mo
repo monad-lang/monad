@@ -22,6 +22,7 @@ use shuttle::provider {ProviderConfig}
 use shuttle::message_types {Content}
 use shuttle::tool {ToolSpec, ToolImpl}
 use shuttle::tools::file_tools {ReadTool.impl, WriteTool.impl, EditTool.impl}
+use weaver::diff_tool {DiffTool.wrap}
 use shuttle::tools::search_tools {GrepTool.impl, GlobTool.impl}
 use weaver::shell_tool {WeaverShell.impl, WeaverShell.never_stop, WeaverShell.fg_path}
 use clap::parse {Cli.run}
@@ -90,8 +91,8 @@ def weaver_registry (log : Option Logger) (check_cache : Ref ModuleInfoCache) (e
                 (ToolRegistry.register (KillProcessTool.impl log)
                     (ToolRegistry.register ListProcessesTool.impl
                         (ToolRegistry.register (WeaverShell.impl log WeaverShell.never_stop (WeaverShell.fg_path Option.none))
-                            (ToolRegistry.register EditTool.impl
-                                (ToolRegistry.register WriteTool.impl
+                            (ToolRegistry.register (DiffTool.wrap EditTool.impl)
+                                (ToolRegistry.register (DiffTool.wrap WriteTool.impl)
                                     (ToolRegistry.register GlobTool.impl
                                         (ToolRegistry.register GrepTool.impl
                                             (ToolRegistry.register ReadTool.impl ToolRegistry.empty))))))))))

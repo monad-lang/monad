@@ -729,7 +729,7 @@ def plan_show (st : WeaverState) : String :=
 
 def plan_status (m : Mode) : String :=
     match m {
-        Mode.plan => "plan mode: only read tools run; produce the plan, then /plan approve [manual|allow_edit]",
+        Mode.plan => "plan mode: only read tools run; produce the plan, then /plan approve [manual|allow_edit|auto]",
         _ => String.concat "not in plan mode (mode: " (String.concat (Mode.show m) "); switch with /mode plan"),
     }
 
@@ -738,20 +738,19 @@ def plan_arg (arg : String) (st : WeaverState) : IO (Result WeaverError Effect) 
         Pair.pair word rest =>
             if word == "approve"
             then plan_approve (String.trim rest) st
-            else respond st "usage: /plan | /plan approve [manual|allow_edit]",
+            else respond st "usage: /plan | /plan approve [manual|allow_edit|auto]",
     }
 
-/// The approval itself: only `manual` and `allow_edit` are acceptable
-/// landings -- `/plan approve auto` would be a one-word trust
-/// escalation, and the gate's whole point is that it costs more than
-/// that.
+/// The approval itself: `manual`, `allow_edit` or `auto` are acceptable
+/// landings. `auto` is an explicit, named escalation -- the approving user
+/// chooses it in the dialog (key `A`) or types it; it is never the default.
 def plan_approve (target : String) (st : WeaverState) : IO (Result WeaverError Effect) :=
     if Bool.not (is_landing target)
-    then respond st "plan approval drops to manual or allow_edit"
+    then respond st "plan approval drops to manual, allow_edit or auto"
     else approve_to (landing target) st
 
 def is_landing (target : String) : Bool :=
-    String.is_empty target || target == "manual" || target == "allow_edit"
+    String.is_empty target || target == "manual" || target == "allow_edit" || target == "auto"
 
 def landing (target : String) : Mode :=
     match Mode.parse target {
@@ -1643,7 +1642,7 @@ def help_text : String :=
         "/budget [n]                          show or raise the model-call budget",
         "/model [name]                        show/pick or set the model",
         "/provider [ollama|mistral|openrouter|anthropic|mock] [model]  show or set the provider",
-        "/plan [approve manual|allow_edit]    show the current plan; approve drops plan mode",
+        "/plan [approve manual|allow_edit|auto]  show the current plan; approve drops plan mode",
         "/plans [all|show|load|done|abandon <n>]  stored plans: list, view, load into this session, close",
         "/permissions [allow|revoke ...]      list or manage session approval grants",
         "/settings [<key> <value>|save project|global]  change or save settings",
