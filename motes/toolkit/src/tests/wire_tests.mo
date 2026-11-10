@@ -33,6 +33,7 @@
 /// with every other mote's tests.
 use json::json {Json}
 use lang::types {Location, SourceRange}
+use std::path {Path}
 use toolkit::position {
     LineIndex, PositionEncoding, WirePosition, WireRange, line_index_of_source,
     wire_position_character, wire_position_line, wire_range_end, wire_range_start,
@@ -74,7 +75,7 @@ def wt_loc (offset : I64) (line : I64) (column : I64) : Location :=
 
 #[partial]
 def wt_span_of (so : I64) (sl : I64) (sc : I64) (eo : I64) (el : I64) (ec : I64) : SourceRange :=
-    SourceRange.mk (wt_loc so sl sc) (wt_loc eo el ec) (Option.some wt_path)
+    SourceRange.mk (wt_loc so sl sc) (wt_loc eo el ec) (Option.some (Path.unsafe wt_path))
 
 /// `def b : I64 := 2` -- bytes 17 to 33, both on line 2.
 #[partial]
@@ -187,7 +188,7 @@ def test_an_unplaceable_range_has_no_wire_form : Bool :=
 #[test]
 def test_the_spans_own_path_is_not_on_the_wire : Bool :=
     let other : SourceRange :=
-        SourceRange.mk (wt_loc 17 2 1) (wt_loc 33 2 17) (Option.some "/a/path") in
+        SourceRange.mk (wt_loc 17 2 1) (wt_loc 33 2 17) (Option.some (Path.unsafe "/a/path")) in
     String.beq (wt_json_text (wire_range_json (wt_first (wt_convert PositionEncoding.utf8
         wt_two_defs other))))
         (wt_json_text (wire_range_json (wt_first (wt_convert PositionEncoding.utf8

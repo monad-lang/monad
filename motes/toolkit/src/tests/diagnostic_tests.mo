@@ -37,6 +37,7 @@
 use json::json {Json}
 use lang::module {Diagnostic}
 use lang::types {Location, SourceRange}
+use std::path {Path}
 use toolkit::diagnostic {
     WireDiagnostic, diag_severity_error, diag_severity_hint, diag_severity_information,
     diag_severity_warning, diagnostic_header, diagnostic_source_name, wire_diagnostic_json,
@@ -97,7 +98,7 @@ def dt_loc (offset : I64) (line : I64) (column : I64) : Location :=
     Location.mk offset line column
 
 def dt_span (a : Location) (b : Location) : SourceRange :=
-    SourceRange.mk a b (Option.some "/tmp/dt/probe.mo")
+    SourceRange.mk a b (Option.some (Path.unsafe "/tmp/dt/probe.mo"))
 
 def dt_make (msg : String) (r : Option SourceRange) : Diagnostic := Diagnostic.mk msg r
 

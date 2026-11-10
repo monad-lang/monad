@@ -3361,7 +3361,7 @@ def ranged_parse_failure (cache : ModuleInfoCache) (file_path : String) (source 
     (ranges : List DeclRange) (located : LocatedDecls) (e : ParseError) : RangedFileCheck :=
     let msg : String := render_parse_error source (Option.some file_path) e in
     let loc : Location := parse_error_location source e in
-    let span : SourceRange := SourceRange.mk loc loc (Option.some file_path) in
+    let span : SourceRange := SourceRange.mk loc loc (Option.some (Path.unsafe file_path)) in
     let one_diag : Diagnostic := Diagnostic.mk msg (Option.some span) in
     let no_scope : Option Scope := Option.none in
     let one : RangedFileCheck := {

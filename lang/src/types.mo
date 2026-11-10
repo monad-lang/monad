@@ -1,4 +1,5 @@
 use std::show {Show}
+use std::path {Path}
 // `ScopeData.def_refs` below is a `std.map` `HashMap ModulePath ScopeDef`.
 // This import is required here (not just at `scope_data_empty`'s own
 // call sites in `lang/scope.mo`) — a real, isolated evaluator
@@ -447,7 +448,7 @@ pub struct Location {
 pub struct SourceRange {
     start : Location,
     end : Location,
-    path : Option String,
+    path : Option Path,
 }
 
 pub struct LocatedSpan {
@@ -2432,10 +2433,10 @@ pub instance Similar Location {
         }
 }
 
-def opt_str_similar (a : Option String) (b : Option String) : Bool :=
+def opt_path_similar (a : Option Path) (b : Option Path) : Bool :=
     match a {
         Option.some x => match b {
-            Option.some y => String.beq x y,
+            Option.some y => Path.beq x y,
             Option.none => false
         },
         Option.none => match b {
@@ -2449,7 +2450,7 @@ pub instance Similar SourceRange {
         match a {
             mk start1 end1 path1 => match b {
                 mk start2 end2 path2 =>
-                    Similar.similar start1 start2 && Similar.similar end1 end2 && opt_str_similar path1 path2
+                    Similar.similar start1 start2 && Similar.similar end1 end2 && opt_path_similar path1 path2
             }
         }
 }
