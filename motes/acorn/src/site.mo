@@ -494,6 +494,17 @@ def site_pages (cfg : SiteConfig) (spec : SiteSpec) (entries : Shared (List NavE
 /// documents: the shell's header, sidebar and pager links as well as the body.
 /// A path claimed twice is a build error, not a silent overwrite.
 def gate_then_write (out : String) (pages : List Built) : IO (Result String I64) :=
+    Site.write_pages out pages
+
+/// The gate and the writer, without the book around them: a caller that built
+/// its own pages (the API-reference generator, a site's landing page) runs
+/// them through the same broken-link and duplicate-path checks the book's own
+/// pages go through, and gets the same write. `out` is the output root; the
+/// paths inside each `Built` are relative to it. Unlike the book build, whose
+/// output directories all exist before any page is written, this creates each
+/// page's parent directory first: a caller's paths may name subdirectories
+/// (`api/<mote>/<mod>.html`) that nothing else made.
+pub def Site.write_pages (out : String) (pages : List Built) : IO (Result String I64) :=
     let all : Shared (List Built) := Shared.of pages in
     match first_duplicate_path (Shared.get all) List.empty {
         Option.some p => return (Result.err (String.concat "duplicate output path: " p)),
@@ -501,11 +512,76 @@ def gate_then_write (out : String) (pages : List Built) : IO (Result String I64)
             match unzip (List.map scan_built (Shared.get all)) {
                 Pair.pair links built =>
                     match Links.broken links {
-                        List.empty => write_all out built 0,
+                        List.empty => write_pages_mkdir out built,
                         List.cons first more => return (Result.err (broken_report (List.cons first more))),
                     },
             },
     }
+
+/// Create the output root and every page's parent directory, then write.
+/// One `mkdir -p` per distinct parent: the book's own flow already made
+/// its directories, and a caller's pages usually share a few parents, so
+/// the count stays small.
+def write_pages_mkdir (out : String) (built : List Built) : IO (Result String I64) := do {
+    let shared : Shared (List Built) := Shared.of built;
+    let made <- mkdir_p out;
+    match made {
+        Result.err e => return (Result.err e),
+        Result.ok _ => mkdir_parents out (parent_dirs out (Shared.get shared) List.empty) (Shared.get shared),
+    }
+}
+
+#[terminating]
+def mkdir_parents (out : String) (dirs : List String) (built : List Built) : IO (Result String I64) :=
+    match dirs {
+        List.empty => write_all out built 0,
+        List.cons d rest => mkdir_parent_then out d rest built,
+    }
+
+#[terminating]
+def mkdir_parent_then (out : String) (d : String) (rest : List String) (built : List Built) : IO (Result String I64) := do {
+    let made <- mkdir_p d;
+    match made {
+        Result.err e => return (Result.err e),
+        Result.ok _ => mkdir_parents out rest built,
+    }
+}
+
+/// The distinct parent directories of the pages' paths, absolute under
+/// `out`. A path with no `/` names the root itself, which `write_pages_mkdir`
+/// already made.
+def parent_dirs (out : String) (built : List Built) (seen : List String) : List String :=
+    match built {
+        List.empty => seen,
+        List.cons b rest => parent_dirs out rest (add_parent_dirs out b seen),
+    }
+
+def add_parent_dirs (out : String) (b : Built) (seen : List String) : List String :=
+    match b {
+        { paths, .. } => add_parents_of_paths out paths seen,
+    }
+
+#[terminating]
+def add_parents_of_paths (out : String) (paths : List String) (seen : List String) : List String :=
+    match paths {
+        List.empty => seen,
+        List.cons p rest => add_parents_of_paths out rest (add_one_parent out p seen),
+    }
+
+/// `out` + the path's directory part, recorded when not already there.
+/// `String.find_last` finds the last `/`; a path with none (or a leading
+/// one only) keeps `seen` unchanged, because the root is already made.
+def add_one_parent (out : String) (p : String) (seen : List String) : List String :=
+    let idx : I64 := String.find_last p "/" in
+    if I64.beq idx -1 || I64.beq idx 0
+    then seen
+    else
+        let dir : String := String.slice p 0 idx in
+        let full : String := String.concat out (String.concat "/" dir) in
+        let shared : Shared (List String) := Shared.of seen in
+        if List.any (fn (q : String) => String.beq q full) (Shared.get shared)
+        then seen
+        else List.cons full (Shared.get shared)
 
 /// The first output path two pages claim, if any.
 #[terminating]

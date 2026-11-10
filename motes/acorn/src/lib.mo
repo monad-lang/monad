@@ -13,5 +13,5 @@ pub use lib::layout {
 pub use lib::toc {TocEntry, Toc.of_nodes, Toc.text_of}
 pub use lib::site {
     ChapterPage, Built, Built.page, Built.pages, SiteSpec, Site.build, Site.build_with,
-    Site.render_chapter, Site.render_chapter_with, Site.with_neighbours,
+    Site.render_chapter, Site.render_chapter_with, Site.with_neighbours, Site.write_pages,
 }

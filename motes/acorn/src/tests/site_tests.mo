@@ -1,8 +1,17 @@
 /// Chapter rendering through the page shell.
 use lib::config {SiteConfig}
-use lib::site {Site.render_chapter}
+use lib::site {Site.render_chapter, read_text}
 use lib::layout {BookNav}
 use lib::summary {NavEntry, NavChapter}
+use std::process {exec_cmd}
+use std::path {Path, Path.of}
+use xml_html::html {Html.Node, Html.Attr}
+
+/// Read a file under the test's output root, flattening the two error
+/// shapes (a bad path and a missing file) into the one this test means:
+/// "nothing was written".
+def read_out (path : String) : IO (Result String String) :=
+    read_text path
 
 def cfg : SiteConfig :=
     { title := "Monad language", base_url := "/", book_src := "docs/src",
@@ -50,3 +59,85 @@ def test_book_page_has_on_page_toc : Bool :=
 def test_single_section_page_has_no_toc : Bool :=
     let html : String := Site.render_chapter cfg (Option.some nav) "types" "# Types\n\n## Only\n" in
     Bool.not (String.contains html "class=\"toc\"")
+
+// --- Site.write_pages: the gate and writer without the book -------------
+//
+// The same checks the book's own pages go through, on a caller's own pages:
+// one page writes; a duplicate path is refused before anything is written;
+// a broken internal link is refused with the link named.
+
+use lib::site {Built, Site.write_pages}
+
+/// A one-link page, the way a caller (the API generator, a landing page)
+/// builds one.
+def link_page (path : String) (href : String) : Built :=
+    Built.page path (Html.Node.node_element "a" [Html.Attr.attr "href" href] [Html.Node.node_text "x"])
+
+#[test]
+def test_write_pages_writes_one_page : IO Bool := do {
+    let out : String := "/tmp/acorn-write-pages-ok";
+    let _ <- exec_cmd "rm" ["-rf", out];
+    let wrote <- Site.write_pages out [link_page "api/index.html" "./list.html", link_page "api/list.html" "./index.html"];
+    wrote_then_read wrote out
+}
+
+/// The write succeeded; the page must exist with the link, and the count
+/// must be the number of files written (two pages, one path each). Split
+/// out of the test body: nesting a match on the read's
+/// `Result String String` inside the write's `Result String I64` is the
+/// two-different-type-variables shape the checker cannot handle.
+def wrote_then_read (wrote : Result String I64) (out : String) : IO Bool := do {
+    match wrote {
+        Result.err _ => return false,
+        Result.ok n => read_and_check n out,
+    }
+}
+
+def read_and_check (n : I64) (out : String) : IO Bool := do {
+    let read <- read_out (String.concat out "/api/index.html");
+    match read {
+        Result.err _ => return false,
+        Result.ok html => return (I64.beq n 2 && String.contains html "<a href=\"./list.html\">"),
+    }
+}
+
+#[test]
+def test_write_pages_refuses_a_duplicate_path : IO Bool := do {
+    let out : String := "/tmp/acorn-write-pages-dup";
+    let _ <- exec_cmd "rm" ["-rf", out];
+    let wrote <- Site.write_pages out [link_page "api/index.html" "./list.html", link_page "api/index.html" "./list.html"];
+    dup_then_read wrote out
+}
+
+/// The duplicate must be refused with the path named, and refused BEFORE
+/// writing: nothing may exist at the path. Same split as above -- the
+/// read's `Result String String` cannot be matched inside the write's
+/// `Result String I64`.
+def dup_then_read (wrote : Result String I64) (out : String) : IO Bool := do {
+    match wrote {
+        Result.ok _ => return false,
+        Result.err e => dup_refused_before_write e out,
+    }
+}
+
+def dup_refused_before_write (e : String) (out : String) : IO Bool := do {
+    let read <- read_out (String.concat out "/api/index.html");
+    match read {
+        Result.err _ => return (String.contains e "duplicate output path: api/index.html"),
+        Result.ok _ => return false,
+    }
+}
+
+#[test]
+def test_write_pages_refuses_a_broken_link : IO Bool := do {
+    let out : String := "/tmp/acorn-write-pages-broken";
+    let _ <- exec_cmd "rm" ["-rf", out];
+    let wrote <- Site.write_pages out [link_page "api/index.html" "./missing.html"];
+    match wrote {
+        Result.ok _ => return false,
+        Result.err e =>
+            let shared : Shared String := Shared.of e in
+            return (String.contains (Shared.get shared) "broken internal links"
+                && String.contains (Shared.get shared) "missing.html"),
+    }
+}
