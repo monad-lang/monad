@@ -136,11 +136,11 @@ def Transaction.apply_commit (path : Option String) (language : String) (version
     match History.commit history rope (Shared.get shared_sel) changes 0 {
         Pair.pair grown _ =>
             { path := path,
-              rope := rope,
-              selections := Shared.get shared_sel,
-              history := grown,
-              language := language,
-              version := version + 1 }
+                rope := rope,
+                selections := Shared.get shared_sel,
+                history := grown,
+                language := language,
+                version := version + 1 }
     }
 
 /// Apply every change to the rope, highest-offset change first.

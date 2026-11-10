@@ -73,8 +73,8 @@ pub def Rope.slice (r : Rope) (start : I64) (len : I64) : String :=
             let lb := Rope.bytes l in
             if (start + len) > lb
             then (if start < lb
-                  then Rope.slice l start (lb - start) ++ Rope.slice rt 0 (len - (lb - start))
-                  else Rope.slice rt (start - lb) len)
+                then Rope.slice l start (lb - start) ++ Rope.slice rt 0 (len - (lb - start))
+                else Rope.slice rt (start - lb) len)
             else Rope.slice l start len
     }
 
@@ -318,7 +318,6 @@ pub def Rope.byte_at (r : Rope) (off : I64) : Option U8 :=
 pub def Rope.end_offset (r : Rope) : I64 := Rope.bytes r
 
 // ── Splitting, replacing, rebalancing ────────────────────────────────────
-
 
 /// Split the rope at byte offset `off` into `(before, after)`.
 ///

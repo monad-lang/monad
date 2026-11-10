@@ -72,11 +72,11 @@ pub def Document.of_text (text : String) : Document :=
     match History.commit History.empty rope (Selections.cursor 0) List.empty 0 {
         Pair.pair seeded _ =>
             { path := Option.none,
-              rope := rope,
-              selections := Selections.cursor 0,
-              history := History.mark_saved seeded,
-              language := "text",
-              version := 0 }
+                rope := rope,
+                selections := Selections.cursor 0,
+                history := History.mark_saved seeded,
+                language := "text",
+                version := 0 }
     }
 
 /// The document with its edit language set: the highlighter's table
@@ -170,15 +170,15 @@ pub struct EditorState {
 pub def EditorState.init (doc : Document) (rows : I64) (cols : I64) : EditorState :=
     let docs : List Document := List.cons doc List.empty in
     { docs := docs,
-      active := 0,
-      mode := Mode.normal,
-      pending := List.empty,
-      bindings := Keymap.default_bindings,
-      status := "",
-      scroll := 0,
-      rows := rows,
-      cols := cols,
-      registers := List.empty }
+        active := 0,
+        mode := Mode.normal,
+        pending := List.empty,
+        bindings := Keymap.default_bindings,
+        status := "",
+        scroll := 0,
+        rows := rows,
+        cols := cols,
+        registers := List.empty }
 
 /// The active document, or none when the state holds no buffer (the
 /// editor always has one; the `Option` keeps the accessor total).
@@ -315,14 +315,14 @@ pub instance Copy EditorState {
             { docs, active, mode, pending, bindings, status, scroll, rows, cols, registers } =>
                 let one : EditorState :=
                     { docs := copy_list docs, active := active, mode := mode,
-                      pending := copy_list pending, bindings := copy_list bindings,
-                      status := status, scroll := scroll, rows := rows, cols := cols,
-                      registers := copy_list registers } in
+                        pending := copy_list pending, bindings := copy_list bindings,
+                        status := status, scroll := scroll, rows := rows, cols := cols,
+                        registers := copy_list registers } in
                 let two : EditorState :=
                     { docs := copy_list docs, active := active, mode := mode,
-                      pending := copy_list pending, bindings := copy_list bindings,
-                      status := status, scroll := scroll, rows := rows, cols := cols,
-                      registers := copy_list registers } in
+                        pending := copy_list pending, bindings := copy_list bindings,
+                        status := status, scroll := scroll, rows := rows, cols := cols,
+                        registers := copy_list registers } in
                 Pair.pair one two
         }
 }

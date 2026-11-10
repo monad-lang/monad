@@ -85,24 +85,24 @@ pub def Highlight.style (k : TokenKind) : TextStyle :=
 /// highlighter marking `pub` as ordinary prose would be wrong.
 pub def LanguageConfig.monad : LanguageConfig :=
     { name := "monad",
-      keywords := ["def", "let", "in", "use", "open", "class", "struct",
-                   "instance", "type", "fn", "match", "if", "then", "else",
-                   "infix", "do", "return", "for", "quote", "with",
-                   "defmacro", "pub", "priv"],
-      keywords_case_sensitive := true,
-      line_comment := "//",
-      string_quotes := ["\""],
-      numbers := true }
+        keywords := ["def", "let", "in", "use", "open", "class", "struct",
+            "instance", "type", "fn", "match", "if", "then", "else",
+            "infix", "do", "return", "for", "quote", "with",
+            "defmacro", "pub", "priv"],
+        keywords_case_sensitive := true,
+        line_comment := "//",
+        string_quotes := ["\""],
+        numbers := true }
 
 /// The no-highlight default: `Document.language`'s `"text"` names it.
 /// Every token is plain, so the view paints one unstyled span.
 pub def LanguageConfig.text : LanguageConfig :=
     { name := "text",
-      keywords := List.empty,
-      keywords_case_sensitive := true,
-      line_comment := "",
-      string_quotes := List.empty,
-      numbers := false }
+        keywords := List.empty,
+        keywords_case_sensitive := true,
+        line_comment := "",
+        string_quotes := List.empty,
+        numbers := false }
 
 /// `LanguageConfig` is small immutable data, read several times per
 /// lexed run, so a duplicate of the VALUE is the correct duplicate --
@@ -113,20 +113,20 @@ pub instance Copy LanguageConfig {
     def copy (cfg : LanguageConfig) : Pair LanguageConfig LanguageConfig :=
         match cfg {
             { name, keywords, keywords_case_sensitive, line_comment,
-              string_quotes, numbers } =>
-                let one : LanguageConfig :=
-                    { name := name, keywords := copy_strs keywords,
-                      keywords_case_sensitive := keywords_case_sensitive,
-                      line_comment := line_comment,
-                      string_quotes := copy_strs string_quotes,
-                      numbers := numbers } in
-                let two : LanguageConfig :=
-                    { name := name, keywords := copy_strs keywords,
-                      keywords_case_sensitive := keywords_case_sensitive,
-                      line_comment := line_comment,
-                      string_quotes := copy_strs string_quotes,
-                      numbers := numbers } in
-                Pair.pair one two
+                string_quotes, numbers } =>
+                    let one : LanguageConfig :=
+                        { name := name, keywords := copy_strs keywords,
+                            keywords_case_sensitive := keywords_case_sensitive,
+                            line_comment := line_comment,
+                            string_quotes := copy_strs string_quotes,
+                            numbers := numbers } in
+                    let two : LanguageConfig :=
+                        { name := name, keywords := copy_strs keywords,
+                            keywords_case_sensitive := keywords_case_sensitive,
+                            line_comment := line_comment,
+                            string_quotes := copy_strs string_quotes,
+                            numbers := numbers } in
+                    Pair.pair one two
         }
 }
 
@@ -201,8 +201,8 @@ def lex_go (cfg : LanguageConfig) (bytes : List U8) : List Token :=
             // list ends here.
             if prefix_at cfg.line_comment (Shared.get shared)
             then List.cons
-                    (Token.mk (bytes_to_string (Shared.get shared)) TokenKind.comment)
-                    List.empty
+                (Token.mk (bytes_to_string (Shared.get shared)) TokenKind.comment)
+                List.empty
             else if quote_list_has cfg.string_quotes b
             then lex_string cfg (Shared.get shared)
             else if Bool.and cfg.numbers (digit b)
@@ -383,8 +383,8 @@ def plain_body (cfg : LanguageConfig) (bytes : List U8) (acc : String) : Pair St
         List.empty => Pair.pair acc List.empty,
         List.cons b rest =>
             if Bool.or
-                    (Bool.or (prefix_at cfg.line_comment (Shared.get shared)) (quote_at cfg b))
-                    (Bool.or (Bool.and cfg.numbers (digit b)) (word_byte b))
+                (Bool.or (prefix_at cfg.line_comment (Shared.get shared)) (quote_at cfg b))
+                (Bool.or (Bool.and cfg.numbers (digit b)) (word_byte b))
             then Pair.pair acc (List.cons b rest)
             else plain_run_on cfg (Shared.get shared) b rest acc
     }

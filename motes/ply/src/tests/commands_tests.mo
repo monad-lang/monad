@@ -240,4 +240,3 @@ def test_gg_goto_start : Bool :=
 def test_ge_goto_end : Bool :=
     let after : EditorState := cx_type (cx_state "abc") [cx_key "g", cx_key "e"] in
     String.beq (cx_span after) "3..3"
-

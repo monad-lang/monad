@@ -107,7 +107,7 @@ pub def Selection.map_through (s : Selection) (ch : Change) : Selection :=
 pub def Selection.map_through_changes (s : Selection) (chs : List Change) : Selection :=
     let shared : Shared (List Change) := Shared.of chs in
     { anchor := selection_map_point (Shared.get shared) 0 s.anchor,
-      head := selection_map_point (Shared.get shared) 0 s.head }
+        head := selection_map_point (Shared.get shared) 0 s.head }
 
 /// Every selection, mapped. The primary index survives: the list keeps its
 /// order, so the i-th selection out is the i-th in, whatever the changes
@@ -122,7 +122,7 @@ pub def Selections.map_through_changes (sel : Selections) (chs : List Change) : 
 /// The mapped rebuild, split out so the two fields are each used once.
 def selection_map_ranges (chs : List Change) (rs : List Selection) (primary : I64) : Selections :=
     { ranges := List.map (fn s => Selection.map_through_changes s chs) rs,
-      primary := primary }
+        primary := primary }
 
 /// A one-selection `Selections` spanning `[lo, hi)`, ordered regardless
 /// of which end the caller names first -- the builder every view-side
@@ -133,7 +133,7 @@ def selection_map_ranges (chs : List Change) (rs : List Selection) (primary : I6
 pub def Selections.span (lo : I64) (hi : I64) : Selections :=
     let one : Selection := { anchor := lo, head := hi } in
     { ranges := List.cons one List.empty,
-      primary := 0 }
+        primary := 0 }
 
 /// A one-selection `Selections` with a bare cursor at `off`.
 pub def Selections.cursor (off : I64) : Selections :=
@@ -143,7 +143,7 @@ pub def Selections.cursor (off : I64) : Selections :=
     // two-host gotcha -- AGENTS.md's "bind to an annotated local first").
     let sel : Selection := { anchor := off, head := off } in
     { ranges := List.cons sel List.empty,
-      primary := 0 }
+        primary := 0 }
 
 /// The primary selection, for the callers (status line, goto) that only
 /// want the one the user is driving. A `Selections` always has at least one
@@ -174,7 +174,7 @@ pub def Selections.collapse (sel : Selections) : Selections :=
 
 def selection_collapse_ranges (rs : List Selection) (primary : I64) : Selections :=
     { ranges := List.map selection_collapse_one rs,
-      primary := primary }
+        primary := primary }
 
 /// One selection, collapsed to its head. A def of its own so the literal
 /// sits in a declared-return position the Rust host can type -- the same

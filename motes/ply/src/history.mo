@@ -36,9 +36,9 @@ use lib::selection {Selections.cursor}
 /// the first `commit` creates revision 0.
 pub def History.empty : History :=
     { revisions := BTreeMap.empty,
-      current := 0 - 1,
-      next_id := 0,
-      saved := 0 - 1 }
+        current := 0 - 1,
+        next_id := 0,
+        saved := 0 - 1 }
 
 /// The current revision, if the history has one. `History.empty` has none;
 /// every history with a commit always does.
@@ -88,15 +88,15 @@ def History.commit_grown (revisions : BTreeMap I64 Revision) (current : I64) (ne
     : Pair History I64 :=
     let rev : Revision :=
         { parent := current,
-          rope := rope,
-          selections := selections,
-          changes := changes,
-          time_ms := time_ms } in
+            rope := rope,
+            selections := selections,
+            changes := changes,
+            time_ms := time_ms } in
     let grown : History :=
         { revisions := Map.insert next_id rev revisions,
-          current := next_id,
-          next_id := next_id + 1,
-          saved := saved } in
+            current := next_id,
+            next_id := next_id + 1,
+            saved := saved } in
     Pair.pair grown next_id
 
 /// Step to the current revision's parent: `u`. `Option.none` when there is
@@ -128,9 +128,9 @@ def History.undo_from (revisions : BTreeMap I64 Revision) (current : I64) (next_
                     then Option.none
                     else Option.some
                         { revisions := Shared.get shared,
-                          current := parent,
-                          next_id := next_id,
-                          saved := saved }
+                            current := parent,
+                            next_id := next_id,
+                            saved := saved }
             },
         Option.none => Option.none
     }

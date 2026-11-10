@@ -199,7 +199,7 @@ def test_replace_delete : Bool :=
 def test_replace_agrees_with_flat_oracle : Bool :=
     let shared : Shared (List (Pair (Pair I64 I64) String)) := Shared.of
         [Pair.pair (Pair.pair 0 0) "The ", Pair.pair (Pair.pair 8 13) "rope",
-         Pair.pair (Pair.pair 4 9) "a chunked", Pair.pair (Pair.pair 19 19) "!"] in
+            Pair.pair (Pair.pair 4 9) "a chunked", Pair.pair (Pair.pair 19 19) "!"] in
     let flat : String := rp_oracle_fold (Shared.get shared) "text is bytes" in
     let roped : String := rp_rope_fold (Shared.get shared) "text is bytes" in
     String.beq roped flat

@@ -209,9 +209,9 @@ def ply_row_of (doc : Document) (line : I64) : RowView :=
     let start : I64 := Rope.line_start rope line in
     let stop : I64 := Rope.line_content_end rope line in
     { line := line,
-      text := Rope.slice rope start (stop - start),
-      start := start,
-      stop := stop }
+        text := Rope.slice rope start (stop - start),
+        start := start,
+        stop := stop }
 
 // ── The styled text of one row ─────────────────────────────────────────────
 
