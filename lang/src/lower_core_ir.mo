@@ -11,7 +11,8 @@ use lib::scope {
 use lang::types {
     AttrArg, Attribute, Con, DebugName, Decl, Def, Identifier, InductConstructor,
     Inductive, Literal, MatchCase, ModulePath, NamePath, Native, Scope, ScopeData,
-    ScopeDef, Term, i64, id_eq, nid, sentinel, show_module_path, show_name_path,
+    ScopeDef, Term, i64, id_eq, name_map_values, nid, sentinel, show_module_path,
+    show_name_path,
 }
 use lib::typecheck::infer {empty_locals, last_dotted_segment}
 use lib::elim_lower {elim_to_literal}
@@ -368,14 +369,13 @@ def lower_if (ctx : LowerCtx) (cond : Term) (then_ : Term) (else_ : Term) (acc :
             lower_then (lower_term ctx else_ acc2) (fn eir => fn acc3 =>
                 lower_ok (CoreIr.match_ cir [MatchArm.arm 0 tir, MatchArm.arm 0 eir]) acc3)))
 
-// `ScopeData.inductives` is a `HashMap ModulePath Inductive` (see its own
-// doc comment in `lang/types.mo`) -- `find_inductive_by_case_name` below
-// needs to scan by CONSTRUCTOR, not by the map's own by-type-name key,
-// so this still has to flatten to a plain `List Inductive` first via
-// `HashMap.to_list` + dropping each pair's key.
+// `ScopeData.inductives` is a typed `NameMap` (see its own doc comment in
+// `lang/types.mo`) -- `find_inductive_by_case_name` below needs to scan
+// by CONSTRUCTOR, not by the map's own by-type-name key, so this still
+// has to flatten to a plain `List Inductive` first.
 def scope_all_inductives (s : Scope) : List Inductive :=
     let sd : ScopeData := scope_globals s in
-    inductive_pairs_values (HashMap.to_list sd.inductives)
+    inductive_values (name_map_values sd.inductives)
 
 /// Accumulator-passing: this runs over every inductive in the program,
 /// and `List.cons ind (recurse rest)` holds a native frame per entry.
@@ -386,17 +386,14 @@ def scope_all_inductives (s : Scope) : List Inductive :=
 /// an ambiguous constructor resolves to — a miscompile, not a slower
 /// build.
 #[partial]
-def inductive_pairs_values (pairs : List (Pair String Inductive)) : List Inductive :=
-    List.reverse (inductive_pairs_values_go pairs List.empty)
+def inductive_values (inds : List Inductive) : List Inductive :=
+    List.reverse (inductive_values_go inds List.empty)
 
 #[partial]
-def inductive_pairs_values_go (pairs : List (Pair String Inductive)) (acc : List Inductive) : List Inductive :=
-    match pairs {
+def inductive_values_go (inds : List Inductive) (acc : List Inductive) : List Inductive :=
+    match inds {
         List.empty => acc,
-        List.cons p rest =>
-            match p {
-                Pair.pair _ ind => inductive_pairs_values_go rest (List.cons ind acc),
-            },
+        List.cons ind rest => inductive_values_go rest (List.cons ind acc),
     }
 
 def constructor_simple_name_eq (c : InductConstructor) (name : Identifier) : Bool :=

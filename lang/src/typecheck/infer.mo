@@ -12,13 +12,14 @@ use lang::types {
     cub_pathp, cubical_arity,
     cubical_prim_eq, cubical_prim_name, field_access_chain,
     id_eq, id_member, level_const, level_le, level_lt, level_of_type, list_rev_loop, list_reverse, many,
-    has_attr, max, package_private, sentinel, show_identifier, show_name_path,
+    bare_name_map_lookup_spelling, has_attr, max, package_private, sentinel,
+    show_identifier, show_name_path,
     sort_level_of, sort_n, succ, term_peel,
     cub, cub_transp,
 }
 use lang::scope {
     ClassMethodRef, DictBinding, bind_term_vars, build_dict_field_projection_checked,
-    build_scope_def, bare_map_lookup, carrier_bindings, class_method_declared_type, class_method_ref,
+    build_scope_def, carrier_bindings, class_method_declared_type, class_method_ref,
     class_default_carrier, class_name_eq,
     class_method_var_names, class_param_names, dict_binding_class_of, final_result_type,
     method_carrier_hint, method_sig_carrier,
@@ -1530,14 +1531,14 @@ def nat_builder_key (scope : Scope) (locals : LocalScope) : Option String :=
 /// owner that does not resolve.
 def nat_builder_owner_key (scope : Scope) (locals : LocalScope) : Option String :=
     let g : ScopeData := scope_globals scope in
-    match bare_map_lookup "Nat.of_i64" g.bare_aliases {
-        Option.some keys =>
-            match keys {
-                List.cons k rest =>
+    match bare_name_map_lookup_spelling "Nat.of_i64" g.bare_aliases {
+        Option.some owners =>
+            match owners {
+                List.cons only rest =>
                     match rest {
                         List.empty =>
-                            match scope_resolve_name (NameRef.nid (Identifier.id k)) scope locals {
-                                Result.ok _ => Option.some k,
+                            match scope_resolve_name (NameRef.nnp only) scope locals {
+                                Result.ok _ => Option.some (show_name_path only),
                                 Result.err _ => Option.none,
                             },
                         List.cons _ _ => Option.none,
@@ -4196,12 +4197,12 @@ def resolve_dotted_head (head : String) (scope : Scope) (locals : LocalScope) : 
         ok d => Option.some (show_name_path d.name),
         err _ =>
             let g : ScopeData := scope_globals scope in
-            match bare_map_lookup head g.bare_aliases {
-                Option.some keys =>
-                    match keys {
-                        List.cons k rest =>
+            match bare_name_map_lookup_spelling head g.bare_aliases {
+                Option.some owners =>
+                    match owners {
+                        List.cons only rest =>
                             match rest {
-                                List.empty => Option.some k,
+                                List.empty => Option.some (show_name_path only),
                                 List.cons _ _ => Option.none,
                             },
                         List.empty => Option.none,
@@ -4679,12 +4680,12 @@ def resolve_free_var_def (id : Identifier) (scope : Scope) (locals : LocalScope)
         err _ =>
             let g : ScopeData := scope_globals scope in
             let bare : String := match id { Identifier.id s => s } in
-            match bare_map_lookup bare g.bare_aliases {
-                Option.some keys =>
-                    match keys {
-                        List.cons k rest =>
+            match bare_name_map_lookup_spelling bare g.bare_aliases {
+                Option.some owners =>
+                    match owners {
+                        List.cons only rest =>
                             match rest {
-                                List.empty => scope_resolve_name (NameRef.nid (Identifier.id k)) scope locals,
+                                List.empty => scope_resolve_name (NameRef.nnp only) scope locals,
                                 List.cons _ _ => exact,
                             },
                         List.empty => exact,

@@ -59,7 +59,8 @@ use lib::types {
     Literal, Location, MatchCase, ModulePath, Multiplicity, NamePath, Native, Param, Scope,
     ScopeData, SortLevel, StructLitField, Term, Visibility, binder_anon, binder_binder,
     binder_explicit, binder_is_explicit, binder_mult, binder_name, binder_named,
-    binder_named_mult, has_attr, show_identifier, show_name_path, term_peel,
+    binder_named_mult, has_attr, name_map_insert, name_map_values, show_identifier,
+    show_name_path, term_peel,
 }
 use lib::scope {
     find_constructor_in_inductive, scope_data_empty, scope_find_all_inductives_by_constructor,
@@ -491,19 +492,16 @@ def app_spine_head (t : Term) : Term :=
 /// spelling its `DebugName` carries.
 pub def ctor_name_set (s : Scope) : HashMap String Bool :=
     let sd : ScopeData := scope_globals s in
-    ctor_names_from_inds (HashMap.to_list sd.inductives) str_map_empty
+    ctor_names_from_inds (name_map_values sd.inductives) str_map_empty
 
 #[partial]
-def ctor_names_from_inds (pairs : List (Pair String Inductive)) (acc : HashMap String Bool) : HashMap String Bool :=
-    match pairs {
+def ctor_names_from_inds (inds : List Inductive) (acc : HashMap String Bool) : HashMap String Bool :=
+    match inds {
         List.empty => acc,
-        List.cons p rest =>
-            match p {
-                Pair.pair _key ind =>
-                    match ind {
-                        Inductive.mk name _params _typ ctors _attrs _vis =>
-                            ctor_names_from_inds rest (ctor_names_from_ctors (show_name_path name) ctors acc),
-                    },
+        List.cons ind rest =>
+            match ind {
+                Inductive.mk name _params _typ ctors _attrs _vis =>
+                    ctor_names_from_inds rest (ctor_names_from_ctors (show_name_path name) ctors acc),
             },
     }
 
@@ -641,26 +639,23 @@ def head_is_shared_get (shareds : HashMap String Bool) (t : Term) : Bool :=
 /// `copy_required`.
 pub def shared_inductive (s : Scope) : Option Inductive :=
     let sd : ScopeData := scope_globals s in
-    shared_inductive_go (HashMap.to_list sd.inductives) Option.none
+    shared_inductive_go (name_map_values sd.inductives) Option.none
 
 #[partial]
-def shared_inductive_go (pairs : List (Pair String Inductive)) (found : Option Inductive) : Option Inductive :=
-    match pairs {
+def shared_inductive_go (inds : List Inductive) (found : Option Inductive) : Option Inductive :=
+    match inds {
         List.empty => found,
-        List.cons p rest =>
-            match p {
-                Pair.pair _key ind =>
-                    match ind {
-                        // A second `#[shared]` type is ambiguous, not a
-                        // tie-break: stop and deny.
-                        Inductive.mk _name _params _typ _ctors attrs _vis =>
-                            if has_attr (Identifier.id "shared") attrs then
-                                match found {
-                                    Option.some _ => Option.none,
-                                    Option.none => shared_inductive_go rest (Option.some ind),
-                                }
-                            else shared_inductive_go rest found,
-                    },
+        List.cons ind rest =>
+            match ind {
+                // A second `#[shared]` type is ambiguous, not a tie-break:
+                // stop and deny.
+                Inductive.mk _name _params _typ _ctors attrs _vis =>
+                    if has_attr (Identifier.id "shared") attrs then
+                        match found {
+                            Option.some _ => Option.none,
+                            Option.none => shared_inductive_go rest (Option.some ind),
+                        }
+                    else shared_inductive_go rest found,
             },
     }
 
@@ -1986,7 +1981,7 @@ def linear_field_scope : Scope :=
         Inductive.mk (NamePath.mk (List.cons (Identifier.id "P") List.empty))
             List.empty Term.hole (List.cons con List.empty) List.empty Visibility.package_private in
     let sd0 : ScopeData := scope_globals empty_scope in
-    { empty_scope with scope := { sd0 with inductives := str_map_insert "P" ind sd0.inductives } }
+    { empty_scope with scope := { sd0 with inductives := name_map_insert (NamePath.mk (List.cons (Identifier.id "P") List.empty)) ind sd0.inductives } }
 
 #[test]
 def test_lam_binder_carries_declared_mult : Bool :=
@@ -2415,7 +2410,7 @@ def scope_with_shared : Scope :=
         Inductive.mk (NamePath.mk (List.cons (Identifier.id "Shared") List.empty))
             List.empty Term.hole (List.cons con List.empty) shared_attr Visibility.package_private in
     let sd0 : ScopeData := scope_globals empty_scope in
-    { empty_scope with scope := { sd0 with inductives := str_map_insert "Shared" ind sd0.inductives } }
+    { empty_scope with scope := { sd0 with inductives := name_map_insert (NamePath.mk (List.cons (Identifier.id "Shared") List.empty)) ind sd0.inductives } }
 
 /// `Shared.of <arg>`, spelled bare `of` -- the same spelling
 /// `head_is_shared_of` checks first.
@@ -2443,7 +2438,7 @@ def test_shared_name_set_ignores_a_shared_named_type_without_the_marker : Bool :
         Inductive.mk (NamePath.mk (List.cons (Identifier.id "Shared") List.empty))
             List.empty Term.hole (List.cons con List.empty) List.empty Visibility.package_private in
     let sd0 : ScopeData := scope_globals empty_scope in
-    let s : Scope := { empty_scope with scope := { sd0 with inductives := str_map_insert "Shared" ind sd0.inductives } } in
+    let s : Scope := { empty_scope with scope := { sd0 with inductives := name_map_insert (NamePath.mk (List.cons (Identifier.id "Shared") List.empty)) ind sd0.inductives } } in
     let names : HashMap String Bool := shared_name_set s in
     not (name_is_shared names "of") && not (name_is_shared names "Shared.of")
 
@@ -2459,7 +2454,7 @@ def test_shared_name_set_ignores_a_differently_named_marked_type : Bool :=
         Inductive.mk (NamePath.mk (List.cons (Identifier.id "Marked") List.empty))
             List.empty Term.hole (List.cons con List.empty) shared_attr Visibility.package_private in
     let sd0 : ScopeData := scope_globals empty_scope in
-    let s : Scope := { empty_scope with scope := { sd0 with inductives := str_map_insert "Marked" ind sd0.inductives } } in
+    let s : Scope := { empty_scope with scope := { sd0 with inductives := name_map_insert (NamePath.mk (List.cons (Identifier.id "Marked") List.empty)) ind sd0.inductives } } in
     let names : HashMap String Bool := shared_name_set s in
     name_is_shared names "of" && name_is_shared names "Marked.of"
 

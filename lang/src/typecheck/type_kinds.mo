@@ -18,8 +18,10 @@
 /// the bare last segment, because an elaborated type head is usually the
 /// bare identifier (`Cell`, not `init::view::Cell`).
 use lib::types {
-    Attribute, DebugName, Identifier, Inductive, ModulePath, NamePath, Scope, ScopeData,
-    Term, Visibility, has_attr, show_identifier, show_name_path,
+    Attribute, DebugName, Identifier, Inductive, ModulePath, NameMap, NamePath, Scope,
+    ScopeData,
+    Term, Visibility, has_attr, name_map_empty, name_map_insert, name_map_values,
+    show_identifier, show_name_path,
 }
 use lib::scope {scope_data_empty, scope_globals}
 use std::map {HashMap}
@@ -59,23 +61,20 @@ pub def type_kinds_linear (k : TypeKinds) : HashMap String Bool := k.linear
 /// Exact resolution through `scope_resolve_name` is the durable fix.
 pub def type_kinds (s : Scope) : TypeKinds :=
     let sd := scope_globals s in
-    type_kinds_go (HashMap.to_list sd.inductives) str_map_empty str_map_empty
+    type_kinds_go (name_map_values sd.inductives) str_map_empty str_map_empty
 
 #[partial]
-def type_kinds_go (pairs : List (Pair String Inductive)) (proofs : HashMap String Bool) (linears : HashMap String Bool) : TypeKinds :=
-    match pairs {
+def type_kinds_go (inds : List Inductive) (proofs : HashMap String Bool) (linears : HashMap String Bool) : TypeKinds :=
+    match inds {
         List.empty => { proof := proofs, linear := linears },
-        List.cons p rest =>
-            match p {
-                Pair.pair _key ind =>
-                    match ind {
-                        Inductive.mk name _params _typ _ctors attrs _vis =>
-                            if has_attr (Identifier.id "proof") attrs then
-                                type_kinds_go rest (insert_kind_names name proofs) linears
-                            else if has_attr (Identifier.id "linear") attrs then
-                                type_kinds_go rest proofs (insert_kind_names name linears)
-                            else type_kinds_go rest proofs linears,
-                    },
+        List.cons ind rest =>
+            match ind {
+                Inductive.mk name _params _typ _ctors attrs _vis =>
+                    if has_attr (Identifier.id "proof") attrs then
+                        type_kinds_go rest (insert_kind_names name proofs) linears
+                    else if has_attr (Identifier.id "linear") attrs then
+                        type_kinds_go rest proofs (insert_kind_names name linears)
+                    else type_kinds_go rest proofs linears,
             },
     }
 
@@ -200,17 +199,17 @@ def probe_scope_base : Scope :=
         incomplete_match_ok := false }
 
 def scope_with_inds (inds : List Inductive) : Scope :=
-    let m : HashMap String Inductive := scope_with_inds_go inds str_map_empty in
+    let m : NameMap Inductive := scope_with_inds_go inds name_map_empty in
     { probe_scope_base with scope := { scope_data_empty with inductives := m } }
 
 #[partial]
-def scope_with_inds_go (inds : List Inductive) (m : HashMap String Inductive) : HashMap String Inductive :=
+def scope_with_inds_go (inds : List Inductive) (m : NameMap Inductive) : NameMap Inductive :=
     match inds {
         List.empty => m,
         List.cons ind rest =>
             match ind {
                 Inductive.mk name _params _typ _ctors _attrs _vis =>
-                    scope_with_inds_go rest (str_map_insert (show_name_path name) ind m),
+                    scope_with_inds_go rest (name_map_insert name ind m),
             },
     }
 

@@ -25,7 +25,7 @@
 use lib::types {
     Class, ClassDef, Con, DebugName, Decl, Def, Identifier, InductConstructor, Inductive,
     Instance, Literal, MatchCase, NamePath, Native, Scope, Struct, StructField, StructLitField,
-    Term, TypeError, has_attr, show_identifier, show_name_path,
+    Term, TypeError, has_attr, name_map_values, show_identifier, show_name_path,
 }
 use lib::scope {scope_globals}
 use lib::typecheck::type_kinds {kind_head_name}
@@ -37,21 +37,18 @@ use llvm::strmap {str_map_empty, str_map_insert, str_map_lookup}
 /// `#[opaque]` inductive in scope.
 pub def opaque_ctor_names (s : Scope) : HashMap String Bool :=
     let sd := scope_globals s in
-    opaque_ctor_names_go (HashMap.to_list sd.inductives) str_map_empty
+    opaque_ctor_names_go (name_map_values sd.inductives) str_map_empty
 
 #[partial]
-def opaque_ctor_names_go (pairs : List (Pair String Inductive)) (acc : HashMap String Bool) : HashMap String Bool :=
-    match pairs {
+def opaque_ctor_names_go (inds : List Inductive) (acc : HashMap String Bool) : HashMap String Bool :=
+    match inds {
         List.empty => acc,
-        List.cons p rest =>
-            match p {
-                Pair.pair _key ind =>
-                    match ind {
-                        Inductive.mk name _params _typ ctors attrs _vis =>
-                            if has_attr (Identifier.id "opaque") attrs
-                            then opaque_ctor_names_go rest (add_ctor_names name ctors acc)
-                            else opaque_ctor_names_go rest acc,
-                    },
+        List.cons ind rest =>
+            match ind {
+                Inductive.mk name _params _typ ctors attrs _vis =>
+                    if has_attr (Identifier.id "opaque") attrs
+                    then opaque_ctor_names_go rest (add_ctor_names name ctors acc)
+                    else opaque_ctor_names_go rest acc,
             },
     }
 
@@ -143,21 +140,18 @@ def empty_return_error (d : Def) (name : NamePath) : List TypeError :=
 #[partial]
 def find_unique_inductive_by_name (s : Scope) (head : String) : Option Inductive :=
     let sd := scope_globals s in
-    find_unique_inductive_go (HashMap.to_list sd.inductives) head Option.none 0
+    find_unique_inductive_go (name_map_values sd.inductives) head Option.none 0
 
 #[partial]
-def find_unique_inductive_go (pairs : List (Pair String Inductive)) (head : String) (found : Option Inductive) (n : I64) : Option Inductive :=
-    match pairs {
+def find_unique_inductive_go (inds : List Inductive) (head : String) (found : Option Inductive) (n : I64) : Option Inductive :=
+    match inds {
         List.empty => if I64.beq n 1 then found else Option.none,
-        List.cons p rest =>
-            match p {
-                Pair.pair _key ind =>
-                    match ind {
-                        Inductive.mk name _params _typ _ctors _attrs _vis =>
-                            if String.beq (show_name_path name) head || name_matches_bare name head
-                            then find_unique_inductive_go rest head (Option.some ind) (n + 1)
-                            else find_unique_inductive_go rest head found n,
-                    },
+        List.cons ind rest =>
+            match ind {
+                Inductive.mk name _params _typ _ctors _attrs _vis =>
+                    if String.beq (show_name_path name) head || name_matches_bare name head
+                    then find_unique_inductive_go rest head (Option.some ind) (n + 1)
+                    else find_unique_inductive_go rest head found n,
             },
     }
 

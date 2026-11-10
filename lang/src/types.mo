@@ -1,6 +1,7 @@
 use std::show {Show}
 use std::path {Path}
-// `ScopeData.def_refs` below is a `std.map` `HashMap ModulePath ScopeDef`.
+// `ScopeData.def_refs`/`inductives` below are typed `NameMap`s backed by a
+// `std.map` `HashMap String _`.
 // This import is required here (not just at `scope_data_empty`'s own
 // call sites in `lang/scope.mo`) — a real, isolated evaluator
 // limitation: a nullary class method like `Map.empty` (no argument
@@ -12,9 +13,14 @@ use std::path {Path}
 // the names is what puts them in scope here; it used to be left empty
 // out of caution about naming `std.map`'s exports — see
 // std/map_tests.mo's note for why that caution is gone.
-use std::map {HashMap, HashMap.empty_buckets, map}
-use std::list {List.intercalate}
+use std::map {
+    HashMap, HashMap.bucket_insert_str, HashMap.bucket_lookup_str,
+    HashMap.bucket_of, HashMap.empty_buckets, HashMap.get_bucket,
+    HashMap.merge_buckets, HashMap.set_bucket, HashMap.to_list, map,
+}
+use std::list {List.intercalate, List.length}
 use init::copy {Copy}
+use lib::name_text {unqualify_def_name}
 
 pub type Identifier {
     id String
@@ -27,6 +33,14 @@ pub def id_eq (a : Identifier) (b : Identifier) : Bool :=
             Identifier.id bs => String.beq as bs,
         },
     }
+
+/// `Identifier` is an immutable `String` wrapper, so sharing one is a
+/// pointer copy -- the same argument `Copy String` makes (`init/copy.mo`).
+/// Deliberately NOT extended to `NamePath`/`ModulePath`: those hold a
+/// `List`, and `Copy` for heap-allocated inductives stays withheld there.
+pub instance Copy Identifier {
+    def copy (a : Identifier) : Pair Identifier Identifier := Pair.pair a a
+}
 
 pub instance BEq Identifier {
     def beq (a b : Identifier) : Bool := id_eq a b
@@ -326,6 +340,167 @@ pub def module_path_to_string_colon (mp : ModulePath) : String := match mp {
 def join_identifiers (ids : List Identifier) : String :=
     List.intercalate "." (List.map show_identifier ids)
 
+// --- Typed name-keyed scope maps ------------------------------------
+//
+// `ScopeData`'s tables are keyed by a NAME, and every consumer holds a
+// `NamePath`/`Identifier` for it. These wrappers give the fields and
+// their APIs the typed key while keeping the measured string-key
+// optimization: a `NamePath` is rendered ONCE per operation, not once
+// per bucket comparison (`lang/scope.mo`'s `npath_map_*` note records
+// the ~20x `elaborate` measurement). The stored hash key is the
+// rendering, so a map never re-derives one.
+
+pub type NameMap V {
+    name_map (HashMap String V)
+}
+
+pub def name_map_empty {V : Type} : NameMap V :=
+    NameMap.name_map (HashMap.map HashMap.empty_buckets)
+
+pub def name_map_insert {V : Type} (key : NamePath) (val : V) (m : NameMap V) : NameMap V :=
+    match m {
+        NameMap.name_map hm =>
+            match hm {
+                HashMap.map buckets =>
+                    let rendered : String := show_name_path key in
+                    let idx := HashMap.bucket_of (String.hash rendered) in
+                    let bucket := HashMap.get_bucket buckets idx in
+                    let new_bucket := HashMap.bucket_insert_str rendered val bucket in
+                    NameMap.name_map (HashMap.map (HashMap.set_bucket buckets idx new_bucket)),
+            },
+    }
+
+pub def name_map_lookup {V : Type} (key : NamePath) (m : NameMap V) : Option V :=
+    match m {
+        NameMap.name_map hm =>
+            match hm {
+                HashMap.map buckets =>
+                    let rendered : String := show_name_path key in
+                    let idx := HashMap.bucket_of (String.hash rendered) in
+                    let bucket := HashMap.get_bucket buckets idx in
+                    HashMap.bucket_lookup_str rendered bucket,
+            },
+    }
+
+#[partial]
+def map_values {V : Type} (ps : List (Pair String V)) : List V :=
+    match ps {
+        List.empty => List.empty,
+        List.cons p rest => match p { Pair.pair _ v => List.cons v (map_values rest) },
+    }
+
+/// Every value, in no particular order. Consumers look an entry up by
+/// name and then scan the values for a match on the entry's OWN recorded
+/// name, so the rendered key is not part of the read surface.
+pub def name_map_values {V : Type} (m : NameMap V) : List V :=
+    match m { NameMap.name_map buckets => map_values (HashMap.to_list buckets) }
+
+/// Bucket-wise union. `a`'s entries come first, so `a` wins a duplicate
+/// key -- the same "first argument wins" precedence `merge_scope_data`
+/// already relies on (`HashMap.merge_buckets`' own note).
+pub def name_map_merge {V : Type} (a : NameMap V) (b : NameMap V) : NameMap V :=
+    match a {
+        NameMap.name_map ba => match b {
+            NameMap.name_map bb => NameMap.name_map (HashMap.merge_buckets ba bb),
+        },
+    }
+
+/// A bare-spelling -> owner-paths table (`ScopeData.bare_aliases`): the
+/// last `::`-separated spelling of a registration key against the full
+/// `NamePath`s that end in it. A bare name is one segment, so the key is
+/// an `Identifier`; the owners stay `NamePath`s, so the miss fallback
+/// looks a real name up instead of re-splitting a rendered string.
+pub type BareNameMap {
+    bare_name_map (HashMap String (List NamePath))
+}
+
+pub def bare_name_map_empty : BareNameMap :=
+    BareNameMap.bare_name_map (HashMap.map HashMap.empty_buckets)
+
+pub def bare_name_map_lookup (key : Identifier) (m : BareNameMap) : Option (List NamePath) :=
+    bare_name_map_lookup_spelling (show_identifier key) m
+
+/// Lookup by the bare SPELLING itself (the map's keys are spellings, not
+/// parsed names). This is the entry point for a caller holding the text
+/// a bare reference was written as.
+pub def bare_name_map_lookup_spelling (spelling : String) (m : BareNameMap) : Option (List NamePath) :=
+    match m {
+        BareNameMap.bare_name_map hm =>
+            match hm {
+                HashMap.map buckets =>
+                    let idx := HashMap.bucket_of (String.hash spelling) in
+                    let bucket := HashMap.get_bucket buckets idx in
+                    HashMap.bucket_lookup_str spelling bucket,
+            },
+    }
+
+pub def bare_name_map_insert (key : Identifier) (owners : List NamePath) (m : BareNameMap) : BareNameMap :=
+    bare_name_map_insert_rendered (show_identifier key) owners m
+
+def bare_name_map_insert_rendered (rendered : String) (owners : List NamePath) (m : BareNameMap) : BareNameMap :=
+    match m {
+        BareNameMap.bare_name_map hm =>
+            match hm {
+                HashMap.map buckets =>
+                    let idx := HashMap.bucket_of (String.hash rendered) in
+                    let bucket := HashMap.get_bucket buckets idx in
+                    let new_bucket := HashMap.bucket_insert_str rendered owners bucket in
+                    BareNameMap.bare_name_map (HashMap.map (HashMap.set_bucket buckets idx new_bucket)),
+            },
+    }
+
+/// Prepend `owner` unless its rendering is already present.
+#[partial]
+def name_path_list_add (xs : List NamePath) (owner : NamePath) (rendered : String) : List NamePath :=
+    match xs {
+        List.empty => List.cons owner List.empty,
+        List.cons h rest =>
+            let tail : List NamePath := name_path_list_add rest owner rendered in
+            if String.beq (show_name_path h) rendered then List.cons h rest else List.cons h tail,
+    }
+
+pub def bare_name_map_add (bare : Identifier) (owner : NamePath) (m : BareNameMap) : BareNameMap :=
+    bare_name_map_add_rendered (show_identifier bare) owner m
+
+def bare_name_map_add_rendered (bare : String) (owner : NamePath) (m : BareNameMap) : BareNameMap :=
+    let rendered_owner : String := show_name_path owner in
+    match bare_name_map_lookup_spelling bare m {
+        Option.some owners =>
+            bare_name_map_insert_rendered bare (name_path_list_add owners owner rendered_owner) m,
+        Option.none => bare_name_map_insert_rendered bare (List.cons owner List.empty) m,
+    }
+
+/// Note `owner` under its bare spelling. A registration whose rendered
+/// key has no `::` is reachable by the exact lookup that always runs
+/// first, and noting it would phantom-ambiguate a qualified owner of the
+/// same name -- so it is skipped.
+pub def bare_name_map_note (owner : NamePath) (m : BareNameMap) : BareNameMap :=
+    let rendered : String := show_name_path owner in
+    let bare : String := unqualify_def_name rendered in
+    if String.beq bare rendered
+    then m
+    else bare_name_map_add (Identifier.id bare) owner m
+
+#[partial]
+def bare_name_map_add_owners (bare : String) (owners : List NamePath) (acc : BareNameMap) : BareNameMap :=
+    match owners {
+        List.empty => acc,
+        List.cons o rest => bare_name_map_add_owners bare rest (bare_name_map_add_rendered bare o acc),
+    }
+
+#[partial]
+def bare_name_map_merge_pairs (pairs : List (Pair String (List NamePath))) (acc : BareNameMap) : BareNameMap :=
+    match pairs {
+        List.empty => acc,
+        List.cons p rest =>
+            match p {
+                Pair.pair bare owners => bare_name_map_merge_pairs rest (bare_name_map_add_owners bare owners acc),
+            },
+    }
+
+pub def bare_name_map_merge (a : BareNameMap) (b : BareNameMap) : BareNameMap :=
+    match b { BareNameMap.bare_name_map buckets => bare_name_map_merge_pairs (HashMap.to_list buckets) a }
+
 pub instance Show ModulePath {
     def show (mp : ModulePath) : String := show_module_path mp
 }
@@ -364,11 +539,10 @@ pub instance BOrd ModulePath {
 /// Same "collision-free as a string key" property `BOrd`'s own
 /// delegation above already relies on — hash the dotted-string join
 /// rather than writing a separate combining hash over the segment list.
-/// Needed for `lang/scope.mo`'s `ScopeData.def_refs` to use
-/// `std.map`'s `HashMap ModulePath ScopeDef` (see
-/// `bench/scope_lookup.mo` for why: at realistic sizes, `HashMap`
-/// clearly outperforms both `List`+linear-scan and `BTreeMap` for
-/// scope's lookup-heavy access pattern).
+/// The key that `NameMap`'s backing `HashMap String _` hashes, so a
+/// name-keyed map needs no separate combining hash (see
+/// `bench/scope_lookup.mo` for why `HashMap` rather than a list or
+/// `BTreeMap` for scope's lookup-heavy access pattern).
 pub instance Hashable Identifier {
     def hash (a : Identifier) : U64 := String.hash (show_identifier a)
 }
@@ -3608,7 +3782,7 @@ pub struct LocalVar {
 // struct literal) -- only POSITIONAL `mk`/pattern-match destructuring
 // sites need updating for the new arity.
 pub struct ScopeData {
-    def_refs : HashMap String ScopeDef,
+    def_refs : NameMap ScopeDef,
     class_defs : List ScopeClassDef,
     instances : List ScopeInstance,
     // `HashMap`, not `List` -- mirrors `def_refs` (see bench/scope_lookup.mo):
@@ -3618,7 +3792,7 @@ pub struct ScopeData {
     // was pure waste. `classes`, the sibling field just below, stays a
     // `List` (by-name lookup is now `scope_find_class`, lower corpus
     // cardinality than inductives, no measured need for a HashMap yet).
-    inductives : HashMap String Inductive,
+    inductives : NameMap Inductive,
     // Full `Class` values (params/constraints/ordered methods), not a
     // synthetic zero-method `Inductive` stand-in -- `build_scope_class`
     // used to throw the real `Class` away and register a `dummy_ind`
@@ -3629,14 +3803,14 @@ pub struct ScopeData {
     classes : List Class,
     infixes : List Infix,
     conflicts : List ScopeConflict,
-    // `HashMap.map HashMap.empty_buckets` directly, not `Map.empty`: the
-    // latter is a CLASS method (`instance [Hashable K, BOrd K] Map
-    // HashMap`, `std/map.mo`) needing type-directed dispatch that a
-    // struct field's default-value expression doesn't get the same way
-    // an ordinary call site does (confirmed: `Map.empty` here fails at
-    // evaluation with "unresolved global: Map.empty") -- `HashMap.map`/
-    // `.empty_buckets` are ordinary functions, no dispatch needed.
-    def_params : HashMap String (List Param) := HashMap.map HashMap.empty_buckets,
+    // `name_map_empty` (an ordinary def over `HashMap.map
+    // HashMap.empty_buckets`), not `Map.empty`: the latter is a CLASS
+    // method (`instance [Hashable K, BOrd K] Map HashMap`, `std/map.mo`)
+    // needing type-directed dispatch that a struct field's
+    // default-value expression doesn't get the same way an ordinary call
+    // site does (confirmed: `Map.empty` here fails at evaluation with
+    // "unresolved global: Map.empty").
+    def_params : NameMap (List Param) := name_map_empty,
     // A def's own DECLARED return type (the final non-`Pi`/`Forall` type
     // at the end of its signature's own Pi-chain, `Def.typ` -- NOT its
     // body's inferred type, and NOT `ScopeDef.sig`, which stays
@@ -3654,7 +3828,7 @@ pub struct ScopeData {
     // fail loudly. Mirrors `def_params`'s own precedent exactly (added
     // for the analogous "recover param types without touching the
     // load-bearing `sig`/`body` hole sentinel" need).
-    def_return_types : HashMap String Term := HashMap.map HashMap.empty_buckets,
+    def_return_types : NameMap Term := name_map_empty,
     // A def's own FULL declared signature (`Def.typ` itself, e.g.
     // `forall V. Pi (xs : List V) (Option V)` for `def get_first {V :
     // Type} ...`) -- unlike `def_return_types` just above (the Pi-chain
@@ -3666,7 +3840,7 @@ pub struct ScopeData {
     // `sig`-hole rule) as `def_params`/`def_return_types`; populated by
     // `build_scope_def`, consumed by `type_check_app`'s signature-driven
     // path (`lang/typecheck/infer.mo`).
-    def_sigs : HashMap String Term := HashMap.map HashMap.empty_buckets,
+    def_sigs : NameMap Term := name_map_empty,
     // A def's own BODY (`Def.term`), kept for DELTA REDUCTION --
     // unfolding a global reference during conversion checking
     // (`lang/typecheck/whnf.mo`). Without it there is no name -> body
@@ -3680,7 +3854,7 @@ pub struct ScopeData {
     // PRE-elaboration, and still `Term.lam`-chain shaped for a def with
     // parameters, which is exactly what beta reduction then consumes
     // one argument at a time.
-    def_bodies : HashMap String Term := HashMap.map HashMap.empty_buckets,
+    def_bodies : NameMap Term := name_map_empty,
     // A def marked `#[cubical "..."]` (the `with Cubical` block in
     // `init/src/prelude.mo`) bound to
     // the `CubicalPrim` the marker names -- the name-binding half of the
@@ -3691,19 +3865,19 @@ pub struct ScopeData {
     // Keyed by the resolved `ScopeDef.name` exactly like `def_bodies`
     // above, and for the same reason: the lookup happens after
     // `scope_resolve_name`, under the qualified name it returns.
-    cubical_prims : HashMap String CubicalPrim := HashMap.map HashMap.empty_buckets,
+    cubical_prims : NameMap CubicalPrim := name_map_empty,
     // A def's declared `[Class V]` constraints (`Def.constraints`) -- the
     // `#Named.Instance` hint checker (`validate_dict_hints`,
     // lang/scope.mo) validates each hint against the callee's class
     // constraints, so the checker needs them by name. Side-table pattern
     // of `def_params`/`def_sigs` above; keyed by the resolved name.
-    def_constraints : HashMap String (List TypeConstraint) := HashMap.map HashMap.empty_buckets,
+    def_constraints : NameMap (List TypeConstraint) := name_map_empty,
     // The subset of `def_constraints` that became dictionary PARAMETERS
     // (`qualifying_dict_constraints`, computed once at registration from
     // the same declaration Phase 3 read). The checker's
     // ordinary-call reification reads this instead of re-walking the
     // callee's body at every call site.
-    def_dict_constraints : HashMap String (List TypeConstraint) := HashMap.map HashMap.empty_buckets,
+    def_dict_constraints : NameMap (List TypeConstraint) := name_map_empty,
     // Every class that carries a dictionary (has at least one method), by
     // bare name (`collect_dict_classes`, lang/scope.mo) -- the class half
     // of `qualifying_dict_constraints`. Seeded once per whole-graph scope
@@ -3722,7 +3896,7 @@ pub struct ScopeData {
     // guess), the same policy the per-miss scans already used.
     // Populated by `scope_data_note_bare` at every registration site
     // (`scope_data_add_def`/`_inductive`/`_class`/`_class_def`).
-    bare_aliases : HashMap String (List String) := HashMap.map HashMap.empty_buckets,
+    bare_aliases : BareNameMap := bare_name_map_empty,
 }
 
 // A scope node in the linked list.

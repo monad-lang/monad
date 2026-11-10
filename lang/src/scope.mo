@@ -13,6 +13,8 @@ use lang::types {
     i64, i8, id_eq, id_member,
     many, module_mote_of, module_path_is_empty, name_path_similar, open_all, open_only, package_private, param_many,
     priv_, pub_, sentinel, show_identifier, show_module_path, show_name_path, show_operator,
+    name_map_empty, name_map_insert, name_map_lookup, name_map_values,
+    bare_name_map_empty, bare_name_map_lookup, bare_name_map_note,
     term_peel, u16, u32, u64, u8, union_ids, use_bare, use_glob, use_items,
     use_name, use_rename, use_sub, use_sub_rename,
     AttrArg,
@@ -252,14 +254,14 @@ def build_alias_map (aliases : List OpenAlias) (acc : HashMap String String) : H
 // crossing that boundary, and the checker warns about it today.
 
 pub def scope_data_empty : ScopeData := {
-    def_refs := npath_map_empty,
+    def_refs := name_map_empty,
     class_defs := List.empty,
     instances := List.empty,
-    inductives := npath_map_empty,
+    inductives := name_map_empty,
     classes := List.empty,
     infixes := List.empty,
     conflicts := List.empty,
-    bare_aliases := bare_map_empty,
+    bare_aliases := bare_name_map_empty,
 }
 
 // --- Helpers: name path / module path equality ---
@@ -293,22 +295,21 @@ def modpath_str_eq (a : ModulePath) (b : ModulePath) : Bool :=
 /// noted is not added twice -- `build_scope_inductive` registers a
 /// type's name in BOTH `def_refs` and `inductives`, and a duplicate
 /// would make every type name look self-ambiguous.
-def scope_data_note_bare (sd : ScopeData) (key : String) : ScopeData :=
-    let bare : String := unqualify_def_name key in
-    if String.beq bare key
-    then sd
-    else
-        let owners : List String := match bare_map_lookup bare sd.bare_aliases {
-            Option.some ks => if string_list_has ks key then ks else List.cons key ks,
-            Option.none => List.cons key List.empty,
-        } in
-        { sd with bare_aliases := bare_map_insert bare owners sd.bare_aliases }
+def scope_data_note_bare (sd : ScopeData) (key : NamePath) : ScopeData :=
+    { sd with bare_aliases := bare_name_map_note key sd.bare_aliases }
+
+/// The `bare_aliases` key for `name`: its bare spelling (the part after
+/// the last `::`), which is how a registration key is noted. A name that
+/// is already bare is reachable by the exact lookup the caller ran
+/// first, so a caller reaching the fallback always wants this form.
+def bare_alias_key (name : NamePath) : Identifier :=
+    Identifier.id (unqualify_def_name (show_name_path name))
 
 def scope_data_add_def (sd : ScopeData) (d : ScopeDef) : ScopeData :=
     match d {
         mk dname _ _ _ _ =>
-            let noted : ScopeData := scope_data_note_bare sd (show_name_path dname) in
-            { noted with def_refs := npath_map_insert dname d noted.def_refs }
+            let noted : ScopeData := scope_data_note_bare sd dname in
+            { noted with def_refs := name_map_insert dname d noted.def_refs }
     }
 
 // --- Helper: add an Inductive to ScopeData ---
@@ -316,8 +317,8 @@ def scope_data_add_def (sd : ScopeData) (d : ScopeDef) : ScopeData :=
 def scope_data_add_inductive (sd : ScopeData) (ind : Inductive) : ScopeData :=
     match ind {
         mk indname _ _ _ _ _ =>
-            let noted : ScopeData := scope_data_note_bare sd (show_name_path indname) in
-            { noted with inductives := npath_map_insert indname ind noted.inductives }
+            let noted : ScopeData := scope_data_note_bare sd indname in
+            { noted with inductives := name_map_insert indname ind noted.inductives }
     }
 
 // --- build_scope_from_groups/build_scope_from_decls: build ScopeData
@@ -815,7 +816,7 @@ def scope_debug_name_to_id (dbg : DebugName) : Identifier :=
 /// Register `name -> params` into `sd.def_params`, ADDITIONAL to (never
 /// replacing) `scope_data_add_def`'s own `def_refs` registration.
 def scope_data_add_def_params (sd : ScopeData) (name : NamePath) (params : List Param) : ScopeData :=
-    { sd with def_params := npath_map_insert name params sd.def_params }
+    { sd with def_params := name_map_insert name params sd.def_params }
 
 /// Strips a def's own declared signature (`Def.typ`, a `Term.pi`
 /// chain) down to its final, non-binder return type --
@@ -834,37 +835,37 @@ def strip_pi_chain_to_return_type (t : Term) : Term :=
 /// to (never replacing) `scope_data_add_def`'s own `def_refs`
 /// registration -- see `ScopeData.def_return_types`'s own doc comment.
 def scope_data_add_def_return_type (sd : ScopeData) (name : NamePath) (ret_typ : Term) : ScopeData :=
-    { sd with def_return_types := npath_map_insert name ret_typ sd.def_return_types }
+    { sd with def_return_types := name_map_insert name ret_typ sd.def_return_types }
 
 /// Register `name -> sig` (the def's own FULL declared signature,
 /// `Def.typ` -- implicit binders and parameter types included, unlike
 /// `scope_data_add_def_return_type`'s stripped form) into
 /// `sd.def_sigs` -- see `ScopeData.def_sigs`'s own doc comment.
 def scope_data_add_def_sig (sd : ScopeData) (name : NamePath) (sig : Term) : ScopeData :=
-    { sd with def_sigs := npath_map_insert name sig sd.def_sigs }
+    { sd with def_sigs := name_map_insert name sig sd.def_sigs }
 
 def scope_data_add_def_body (sd : ScopeData) (name : NamePath) (body : Term) : ScopeData :=
-    { sd with def_bodies := npath_map_insert name body sd.def_bodies }
+    { sd with def_bodies := name_map_insert name body sd.def_bodies }
 
 /// Register `name -> prim` into `sd.cubical_prims` -- the write half of
 /// the cubical name-binding (`build_scope_def` calls it for a def whose
 /// `#[cubical "..."]` marker names a primitive). Same side-table shape
 /// as `scope_data_add_def_body` just above.
 def scope_data_add_cubical_prim (sd : ScopeData) (name : NamePath) (prim : CubicalPrim) : ScopeData :=
-    { sd with cubical_prims := npath_map_insert name prim sd.cubical_prims }
+    { sd with cubical_prims := name_map_insert name prim sd.cubical_prims }
 
 /// Register `name -> constraints` into `sd.def_constraints` -- the
 /// `#Named.Instance` hint checker reads them back via
 /// `scope_find_def_constraints`.
 def scope_data_add_def_constraints (sd : ScopeData) (name : NamePath) (constraints : List TypeConstraint) : ScopeData :=
-    { sd with def_constraints := npath_map_insert name constraints sd.def_constraints }
+    { sd with def_constraints := name_map_insert name constraints sd.def_constraints }
 
 /// Register `name -> qualifying constraints` into
 /// `sd.def_dict_constraints` -- the checker's call reification reads
 /// them back via `scope_find_def_dict_constraints`, so each call site
 /// does not re-walk the callee's body.
 def scope_data_add_def_dict_constraints (sd : ScopeData) (name : NamePath) (constraints : List TypeConstraint) : ScopeData :=
-    { sd with def_dict_constraints := npath_map_insert name constraints sd.def_dict_constraints }
+    { sd with def_dict_constraints := name_map_insert name constraints sd.def_dict_constraints }
 
 /// Registers `ind` two ways: into `.inductives` (constructor/arity
 /// lookups — `scope_find_inductive` and friends) *and*, like
@@ -1068,25 +1069,22 @@ pub def scope_find_inductive_by_constructor (con_name : NamePath) (s : Scope) : 
     let g : ScopeData := scope_globals s in
     scope_data_find_inductive_by_constructor g con_name
 
-// `inds` is a `HashMap ModulePath Inductive` (see `ScopeData`'s own doc
-// comment) -- there's no by-CONSTRUCTOR index, only by-type-name, so
-// this still has to scan every entry; `HashMap.to_list` walks the
-// buckets once to get there. Track C (self-hosted-compiler-perf.md)
-// measured this specific path as unreached in the corpus it tested, so
-// it's kept as a scan rather than given its own index preemptively.
+// `inds` is a `NameMap Inductive` (see `ScopeData`'s own doc comment) --
+// there's no by-CONSTRUCTOR index, only by-type-name, so this still has
+// to scan every entry; `name_map_values` walks the buckets once to get
+// there. Track C (self-hosted-compiler-perf.md) measured this specific
+// path as unreached in the corpus it tested, so it's kept as a scan
+// rather than given its own index preemptively.
 def scope_data_find_inductive_by_constructor (sd : ScopeData) (con_name : NamePath) : Option Inductive :=
-    find_inductive_by_constructor_in_pairs (HashMap.to_list sd.inductives) con_name
+    find_inductive_by_constructor_in_pairs (name_map_values sd.inductives) con_name
 
-def find_inductive_by_constructor_in_pairs (pairs : List (Pair String Inductive)) (con_name : NamePath) : Option Inductive :=
-    match pairs {
+def find_inductive_by_constructor_in_pairs (inds : List Inductive) (con_name : NamePath) : Option Inductive :=
+    match inds {
         List.empty => Option.none,
-        List.cons p rest =>
-            match p {
-                Pair.pair _ ind =>
-                    if inductive_has_constructor ind con_name
-                    then Option.some ind
-                    else find_inductive_by_constructor_in_pairs rest con_name
-            }
+        List.cons ind rest =>
+            if inductive_has_constructor ind con_name
+            then Option.some ind
+            else find_inductive_by_constructor_in_pairs rest con_name,
     }
 
 // --- scope_find_all_inductives_by_constructor: EVERY inductive with a
@@ -1117,23 +1115,20 @@ def scope_data_find_all_inductives_by_constructor (sd : ScopeData) (con_name : N
         // `test_find_all_inductives_by_constructor_matches_scope_data_arity`
         // below still calls this against a real `ScopeData`, so a runtime
         // arity failure of any future re-edit stays caught.
-        { inductives := inds, .. } => find_all_inductives_by_constructor_in_pairs (HashMap.to_list inds) con_name
+        { inductives := inds, .. } => find_all_inductives_by_constructor_in_pairs (name_map_values inds) con_name
     }
 
 def scope_find_all_inductives_by_constructor (con_name : NamePath) (s : Scope) : List Inductive :=
     let g : ScopeData := scope_globals s in
     scope_data_find_all_inductives_by_constructor g con_name
 
-def find_all_inductives_by_constructor_in_pairs (pairs : List (Pair String Inductive)) (con_name : NamePath) : List Inductive :=
-    match pairs {
+def find_all_inductives_by_constructor_in_pairs (inds : List Inductive) (con_name : NamePath) : List Inductive :=
+    match inds {
         List.empty => List.empty,
-        List.cons p rest =>
-            match p {
-                Pair.pair _ ind =>
-                    if inductive_has_constructor ind con_name
-                    then List.cons ind (find_all_inductives_by_constructor_in_pairs rest con_name)
-                    else find_all_inductives_by_constructor_in_pairs rest con_name
-            }
+        List.cons ind rest =>
+            if inductive_has_constructor ind con_name
+            then List.cons ind (find_all_inductives_by_constructor_in_pairs rest con_name)
+            else find_all_inductives_by_constructor_in_pairs rest con_name,
     }
 
 def inductive_has_constructor (ind : Inductive) (con_name : NamePath) : Bool :=
@@ -1439,7 +1434,7 @@ pub def qualified_name_to_name_path (qn : QualifiedName) : NamePath :=
 
 def resolve_def_in_scope_by_module (qn : QualifiedName) (s : Scope) : Result ScopeError ScopeDef :=
     let g : ScopeData := scope_globals s in
-    match find_def_by_module_and_name (HashMap.to_list g.def_refs) qn {
+    match find_def_by_module_and_name (name_map_values g.def_refs) qn {
         Option.some d => ok d,
         Option.none => err (ScopeError.name_not_found (NameRef.nqn qn)),
     }
@@ -1464,16 +1459,13 @@ def resolve_def_in_scope_by_module (qn : QualifiedName) (s : Scope) : Result Sco
 /// and it is a strict superset of the segment-wise test: equal segments
 /// always render equally. The module half keeps its rendering because
 /// `show_module_path` is what the key is built from.
-def find_def_by_module_and_name (pairs : List (Pair String ScopeDef)) (qn : QualifiedName) : Option ScopeDef :=
-    match pairs {
+def find_def_by_module_and_name (defs : List ScopeDef) (qn : QualifiedName) : Option ScopeDef :=
+    match defs {
         List.empty => Option.none,
-        List.cons p rest =>
-            match p {
-                Pair.pair _ sd =>
-                    if String.beq (show_name_path sd.name) (show_name_path qn.qname) && String.beq (show_module_path sd.module) (show_module_path qn.qmod)
-                    then Option.some sd
-                    else find_def_by_module_and_name rest qn,
-            },
+        List.cons sd rest =>
+            if String.beq (show_name_path sd.name) (show_name_path qn.qname) && String.beq (show_module_path sd.module) (show_module_path qn.qmod)
+            then Option.some sd
+            else find_def_by_module_and_name rest qn,
     }
 
 def resolve_def_in_scope_by_name (name : NamePath) (s : Scope) : Result ScopeError ScopeDef :=
@@ -1510,17 +1502,15 @@ def resolve_def_in_scope_by_name (name : NamePath) (s : Scope) : Result ScopeErr
 /// resolves (`scope_data_add_def` already notes the bare key), zero or 2+
 /// owners is a genuine miss.
 def scope_data_find_def (sd : ScopeData) (name : NamePath) : Option ScopeDef :=
-    match npath_map_lookup name sd.def_refs {
+    match name_map_lookup name sd.def_refs {
         Option.some d => Option.some d,
         Option.none =>
-            match bare_map_lookup (show_name_path name) sd.bare_aliases {
-                Option.some keys =>
-                    match keys {
+            match bare_name_map_lookup (bare_alias_key name) sd.bare_aliases {
+                Option.some owners =>
+                    match owners {
                         List.cons only rest =>
                             match rest {
-                                List.empty =>
-                                    npath_map_lookup (NamePath.mk (List.cons (Identifier.id only) List.empty))
-                                        sd.def_refs,
+                                List.empty => name_map_lookup only sd.def_refs,
                                 List.cons _ _ => Option.none,
                             },
                         List.empty => Option.none,
@@ -1533,7 +1523,7 @@ def scope_data_find_def (sd : ScopeData) (name : NamePath) : Option ScopeDef :=
 // (`plans/implementations/named-field-construction.md`'s Phase 6.)
 
 def scope_data_find_def_params (sd : ScopeData) (name : NamePath) : Option (List Param) :=
-    npath_map_lookup name sd.def_params
+    name_map_lookup name sd.def_params
 
 /// Top-level `Scope`-based wrapper, mirroring `scope_find_inductive_by_
 /// constructor`'s own plain-`Option` shape (not `Result`, unlike `scope_
@@ -1548,7 +1538,7 @@ def scope_find_def_params (name : NamePath) (s : Scope) : Option (List Param) :=
 // (see `ScopeData.def_return_types`'s own doc comment.)
 
 def scope_data_find_def_return_type (sd : ScopeData) (name : NamePath) : Option Term :=
-    npath_map_lookup name sd.def_return_types
+    name_map_lookup name sd.def_return_types
 
 /// Top-level `Scope`-based wrapper, same shape as `scope_find_def_params`.
 pub def scope_find_def_return_type (name : NamePath) (s : Scope) : Option Term :=
@@ -1558,12 +1548,12 @@ pub def scope_find_def_return_type (name : NamePath) (s : Scope) : Option Term :
 // --- ScopeData: find a def's own FULL declared signature ---
 
 def scope_data_find_def_sig (sd : ScopeData) (name : NamePath) : Option Term :=
-    npath_map_lookup name sd.def_sigs
+    name_map_lookup name sd.def_sigs
 
 // --- ScopeData: a def's BODY (delta reduction) ---
 
 def scope_data_find_def_body (sd : ScopeData) (name : NamePath) : Option Term :=
-    npath_map_lookup name sd.def_bodies
+    name_map_lookup name sd.def_bodies
 
 /// Top-level `Scope`-based wrapper, same shape as `scope_find_def_sig`.
 /// Globals only (`scope_globals`), which is the point: delta unfolds
@@ -1581,7 +1571,7 @@ pub def scope_find_def_sig (name : NamePath) (s : Scope) : Option Term :=
 // --- ScopeData: a def's CUBICAL MARKER binding ---
 
 def scope_data_find_cubical_prim (sd : ScopeData) (name : NamePath) : Option CubicalPrim :=
-    npath_map_lookup name sd.cubical_prims
+    name_map_lookup name sd.cubical_prims
 
 /// Top-level `Scope`-based wrapper, same shape as `scope_find_def_sig`/
 /// `scope_find_def_body`: globals only, because the binding is written by
@@ -1595,7 +1585,7 @@ pub def scope_find_cubical_prim (name : NamePath) (s : Scope) : Option CubicalPr
 // --- ScopeData: a def's declared [Class V] constraints ---
 
 def scope_data_find_def_constraints (sd : ScopeData) (name : NamePath) : Option (List TypeConstraint) :=
-    npath_map_lookup name sd.def_constraints
+    name_map_lookup name sd.def_constraints
 
 /// Globals only, same shape as `scope_find_def_sig` -- the constraints
 /// are a property of the DECLARATION, so a local shadowing the name
@@ -1607,7 +1597,7 @@ pub def scope_find_def_constraints (name : NamePath) (s : Scope) : Option (List 
 // --- ScopeData: the subset that became dictionary parameters ---
 
 def scope_data_find_def_dict_constraints (sd : ScopeData) (name : NamePath) : Option (List TypeConstraint) :=
-    npath_map_lookup name sd.def_dict_constraints
+    name_map_lookup name sd.def_dict_constraints
 
 /// Globals only, same shape as `scope_find_def_constraints`.
 pub def scope_find_def_dict_constraints (name : NamePath) (s : Scope) : Option (List TypeConstraint) :=
@@ -1638,31 +1628,21 @@ pub def scope_find_def_dict_constraints (name : NamePath) (s : Scope) : Option (
 /// `elaborate_module_decls`, misses being the common case
 /// post-qualification).
 def scope_data_find_inductive (sd : ScopeData) (name : NamePath) : Option Inductive :=
-    match npath_map_lookup name sd.inductives {
+    match name_map_lookup name sd.inductives {
         Option.some ind => Option.some ind,
         Option.none =>
-            match bare_map_lookup (show_name_path name) sd.bare_aliases {
-                Option.some keys =>
-                    match keys {
+            match bare_name_map_lookup (bare_alias_key name) sd.bare_aliases {
+                Option.some owners =>
+                    match owners {
                         List.cons only rest =>
                             match rest {
-                                List.empty => scope_data_find_inductive_by_key sd only,
+                                List.empty => name_map_lookup only sd.inductives,
                                 List.cons _ _ => Option.none,
                             },
                         List.empty => Option.none,
                     },
                 Option.none => Option.none,
             },
-    }
-
-/// The exact half of `scope_data_find_inductive`'s map pair, keyed by
-/// the rendered string `npath_map_lookup` hashes on.
-def scope_data_find_inductive_by_key (sd : ScopeData) (key : String) : Option Inductive :=
-    match sd.inductives {
-        HashMap.map buckets =>
-            let idx := HashMap.bucket_of (String.hash key) in
-            let bucket := HashMap.get_bucket buckets idx in
-            HashMap.bucket_lookup_str key bucket
     }
 
 // --- Instance handling helpers ---

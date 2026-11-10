@@ -15,6 +15,7 @@ use lang::types {
     has_incomplete_match_exemption, id_eq, level_const, level_le,
     list_reverse, many, module_path_to_string_colon, package_private, priv_, sentinel,
     show_identifier, show_module_path, show_name_path, sort_level_of, term_peel, union_ids,
+    name_map_merge, bare_name_map_merge,
     use_bare, use_glob, use_items, use_name, use_rename, use_sub, use_sub_rename,
     visibility_beq,
 }
@@ -1699,18 +1700,18 @@ def dependency_not_found_msg (mp : ModulePath) : String :=
 #[partial]
 def merge_scope_data (sd1 : ScopeData) (sd2 : ScopeData) : ScopeData :=
     {
-        def_refs := HashMap.merge_buckets sd1.def_refs sd2.def_refs,
+        def_refs := name_map_merge sd1.def_refs sd2.def_refs,
         class_defs := list_append sd1.class_defs sd2.class_defs,
         instances := merge_instances sd1.instances sd2.instances,
-        inductives := HashMap.merge_buckets sd1.inductives sd2.inductives,
+        inductives := name_map_merge sd1.inductives sd2.inductives,
         classes := list_append sd1.classes sd2.classes,
         infixes := list_append sd1.infixes sd2.infixes,
         conflicts := list_append sd1.conflicts sd2.conflicts,
         // Same bucket-to-bucket merge as `def_refs` just above -- see
         // this function's own doc comment for why `merge_buckets` (not
         // `to_list`+refold) is the right tool here.
-        def_params := HashMap.merge_buckets sd1.def_params sd2.def_params,
-        def_return_types := HashMap.merge_buckets sd1.def_return_types sd2.def_return_types,
+        def_params := name_map_merge sd1.def_params sd2.def_params,
+        def_return_types := name_map_merge sd1.def_return_types sd2.def_return_types,
         // Must be merged like every sibling side-table above: an
         // omitted field here silently takes `ScopeData`'s own DEFAULT
         // (an empty map) rather than keeping either input's entries, so
@@ -1720,12 +1721,12 @@ def merge_scope_data (sd1 : ScopeData) (sd2 : ScopeData) : ScopeData :=
         // lang/typecheck/infer.mo) then silently reverts to its
         // `Option.none` fallback for anything not declared in the file
         // being checked.
-        def_sigs := HashMap.merge_buckets sd1.def_sigs sd2.def_sigs,
-        // A UNION of owner lists (`bare_aliases_merge`), not
+        def_sigs := name_map_merge sd1.def_sigs sd2.def_sigs,
+        // A UNION of owner lists (`bare_name_map_merge`), not
         // `merge_buckets`: the values are lists, and a key noted by
         // both inputs would phantom-ambiguate the miss fallbacks that
         // read the map.
-        bare_aliases := bare_aliases_merge sd1.bare_aliases sd2.bare_aliases,
+        bare_aliases := bare_name_map_merge sd1.bare_aliases sd2.bare_aliases,
         // Same shape and same reason as `bare_aliases` just above: the
         // values are LISTS of class names, and a key named by both inputs
         // must keep both spellings, not one module's.
