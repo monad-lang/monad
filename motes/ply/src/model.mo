@@ -16,7 +16,7 @@ use init::shared {Shared}
 use init::copy {Copy}
 use lib::types {Rope, Selections, History, Mode}
 use lib::rope {Rope.of_string}
-use lib::history {History.empty, History.commit}
+use lib::history {History.empty, History.commit, History.mark_saved}
 use lib::selection {Selections.cursor}
 use lib::keymap {Binding, Keymap.default_bindings}
 use tui::types {Key, Event}
@@ -56,6 +56,13 @@ pub struct Document {
 /// empty would have nothing to undo after its first edit, and `:q`'s
 /// dirty check would read the wrong baseline.
 ///
+/// THE SEEDED REVISION IS ALSO THE SAVED ONE: the text a document is
+/// created over is the baseline it came from (a file's bytes on open, a
+/// scratch buffer's empty start), so the dirty flag -- `current !=
+/// saved`, Phase 4's `Space w`/`:q` rule -- reads FALSE on every fresh
+/// document. Without the mark the seeded revision would read dirty
+/// forever, and `:q` would refuse to quit a buffer nobody touched.
+///
 /// One constructor for every `Document` in the program (the plan's
 /// two-host struct-literal risk names why: a struct literal that omits a
 /// field checks clean on both hosts and reads garbage at runtime, so the
@@ -67,10 +74,18 @@ pub def Document.of_text (text : String) : Document :=
             { path := Option.none,
               rope := rope,
               selections := Selections.cursor 0,
-              history := seeded,
+              history := History.mark_saved seeded,
               language := "text",
               version := 0 }
     }
+
+/// The document with its edit language set: the highlighter's table
+/// choice (Phase 3) and the LSP client's `languageId` (Phase 6). Phase
+/// 4's open derives it from the file's extension; a test sets it
+/// directly, and nothing else does -- the language is open-time data,
+/// not a per-keystroke field.
+pub def Document.with_language (doc : Document) (lang : String) : Document :=
+    { doc with language := lang }
 
 // ── The editor model (the plan's §3 remainder) ──────────────────────────
 //
@@ -248,6 +263,39 @@ pub def EditorState.registers_of (st : EditorState) : List String :=
 /// The state with the registers set.
 pub def EditorState.with_registers (st : EditorState) (regs : List String) : EditorState :=
     { st with registers := regs }
+
+/// The document with its selections replaced -- the builder a view-side
+/// caller (a test's hand-set selection, a future mouse drag) wants, and
+/// the one `commands.mo`'s private `doc_with_selections` duplicated. An
+/// edit still goes through `transaction.mo`'s apply (which commits a
+/// revision); this is the selection-only swap, so no history moves.
+pub def Document.with_selections (doc : Document) (sel : Selections) : Document :=
+    { doc with selections := sel }
+
+/// The state with the scroll set. The view CLAMPS it around the primary
+/// head's line (`View.first_visible`), so a caller can hand it anything
+/// -- the stored value is the baseline, the clamp is the guarantee.
+pub def EditorState.with_scroll (st : EditorState) (line : I64) : EditorState :=
+    { st with scroll := line }
+
+/// The scroll field, read once. The view CLAMPS it (a cursor below the
+/// window pulls it down, one above pulls it up) rather than trusting the
+/// stored value: a resize or a jump can leave `scroll` naming a window
+/// the cursor is not in, and the view is where the geometry lives.
+pub def EditorState.scroll_of (st : EditorState) : I64 :=
+    match st { { scroll, .. } => scroll }
+
+/// The rows field, read once.
+pub def EditorState.rows_of (st : EditorState) : I64 :=
+    match st { { rows, .. } => rows }
+
+/// The cols field, read once.
+pub def EditorState.cols_of (st : EditorState) : I64 :=
+    match st { { cols, .. } => cols }
+
+/// The status field, read once.
+pub def EditorState.status_of (st : EditorState) : String :=
+    match st { { status, .. } => status }
 
 /// `EditorState` is a pure data record over persistent structures, so a
 /// duplicate of the VALUE is the correct duplicate -- the same reading

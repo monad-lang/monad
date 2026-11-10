@@ -124,6 +124,17 @@ def selection_map_ranges (chs : List Change) (rs : List Selection) (primary : I6
     { ranges := List.map (fn s => Selection.map_through_changes s chs) rs,
       primary := primary }
 
+/// A one-selection `Selections` spanning `[lo, hi)`, ordered regardless
+/// of which end the caller names first -- the builder every view-side
+/// caller of a KNOWN span wants (the status line's line/col, a test's
+/// hand-set selection), and the one `commands.mo`'s private `sel_from`
+/// duplicated. THE HEAD IS `hi`: a span built this way is forward, so
+/// the caret sits at the span's right end.
+pub def Selections.span (lo : I64) (hi : I64) : Selections :=
+    let one : Selection := { anchor := lo, head := hi } in
+    { ranges := List.cons one List.empty,
+      primary := 0 }
+
 /// A one-selection `Selections` with a bare cursor at `off`.
 pub def Selections.cursor (off : I64) : Selections :=
     // The literal is bound to an annotated local first: a bare struct

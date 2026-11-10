@@ -27,7 +27,8 @@
 use init::shared {Shared}
 use lib::types {Rope, Selection, Selections, Change, History, Mode}
 use lib::types {Rope}
-use lib::rope {Rope.line_start, Rope.byte_at, Rope.end_offset, Rope.slice}
+use lib::rope {Rope.line_start, Rope.line_of, Rope.line_content_end,
+    Rope.byte_at, Rope.end_offset, Rope.slice}
 use lib::selection {Selection.start, Selection.stop,
     Selections.cursor, Selections.collapse, Selections.primary_sel}
 use lib::history {History.undo, History.redo, History.current_rope, History.current_selections}
@@ -246,7 +247,7 @@ def with_selections (st : EditorState) (sel : Selections) : EditorState :=
 
 /// The document with new selections.
 def doc_with_selections (doc : Document) (sel : Selections) : Document :=
-    { doc with selections := sel }
+    Document.with_selections doc sel
 
 /// Replace the active doc's rope, selections and history in one step
 /// (the undo path: all three move together).
@@ -324,35 +325,10 @@ def line_step (st : EditorState) (delta : I64) : I64 :=
         Option.some doc =>
             let rope : Rope := doc_rope doc in
             let head : I64 := primary_head st in
-            let line : I64 := line_of rope head in
+            let line : I64 := Rope.line_of rope head in
             Rope.line_start rope (line + delta),
         Option.none => 0
     }
-
-/// The line an offset is on: the count of line starts at or below it.
-/// `Rope.line_start` clamps at the last line, so the walk terminates even
-/// for an offset past the end -- the answer is the last line, the same
-/// total-input rule the rope itself states.
-#[terminating]
-def line_of (rope : Rope) (off : I64) : I64 :=
-    line_of_go rope off 0
-
-#[terminating]
-def line_of_go (rope : Rope) (off : I64) (line : I64) : I64 :=
-    // The next line's start, and this line's. THE CLAMP IS CHECKED
-    // FIRST: `Rope.line_start` answers the LAST line's start for any
-    // larger argument, so a recursion past the last line would see
-    // `next == current` forever -- the earlier shape of this def hung a
-    // test suite exactly there. `next <= current` therefore means "there
-    // is no later line" and stops; only then does the offset comparison
-    // decide whether the offset is on the next line.
-    let next : I64 := Rope.line_start rope (line + 1) in
-    let cur : I64 := Rope.line_start rope line in
-    if next < cur + 1
-    then line
-    else if next < off + 1
-    then line_of_go rope off (line + 1)
-    else line
 
 // ── word motions (selection-first) ─────────────────────────────────────────
 
@@ -508,7 +484,7 @@ def extend_line_sel (rope : Rope) (sel : Selections) (head : I64) : Selections :
             let shared_sel : Shared Selection := Shared.of one in
             let lo : I64 := Selection.start (Shared.get shared_sel) in
             let hi : I64 := Selection.stop (Shared.get shared_sel) in
-            let first_line : I64 := line_of rope lo in
+            let first_line : I64 := Rope.line_of rope lo in
             // THE FIRST PRESS selects the head's line; A REPEAT
             // extends by one: an empty span covers its own line and
             // stops there, a non-empty span covers ONE PAST its last
@@ -516,30 +492,13 @@ def extend_line_sel (rope : Rope) (sel : Selections) (head : I64) : Selections :
             // the guard reads the span's start instead.)
             let last_covered : I64 :=
                 if I64.beq lo hi
-                then line_of rope lo
-                else line_of rope (hi - 1) + 1 in
+                then Rope.line_of rope lo
+                else Rope.line_of rope (hi - 1) + 1 in
             let span_lo : I64 := Rope.line_start rope first_line in
-            let span_hi : I64 := line_content_end rope last_covered in
+            let span_hi : I64 := Rope.line_content_end rope last_covered in
             sel_from span_lo span_hi,
         Option.none => sel_from head head
     }
-
-/// The last byte (exclusive) of line `line`'s CONTENT: the byte before
-/// the NEXT line's terminator... stated plainly, `line_start (line + 1)`
-/// is the first byte AFTER this line's `\n`, so one back from it is the
-/// `\n` itself and two back is the content's end. The CLAMP case (the
-/// last line, where `line_start (line+1) == line_start line`) answers
-/// the buffer's end.
-///
-/// A half-open line span excludes its own `\n`, so the delete operator
-/// leaves the terminator behind -- deleting a line joins the next one
-/// up rather than eating the blank line.
-def line_content_end (rope : Rope) (line : I64) : I64 :=
-    let next : I64 := Rope.line_start rope (line + 1) in
-    let cur : I64 := Rope.line_start rope line in
-    if next < cur + 1
-    then Rope.end_offset rope
-    else next - 1
 
 /// `%`: select the whole buffer.
 def cmd_select_all (st : EditorState) : Pair EditorState (Cmd EditorMsg) :=
@@ -771,8 +730,8 @@ def cmd_open_below (st : EditorState) : Pair EditorState (Cmd EditorMsg) :=
         Option.some doc =>
             let rope : Rope := doc_rope doc in
             let head : I64 := primary_head st in
-            let line : I64 := line_of rope head in
-            let at : I64 := line_content_end rope line in
+            let line : I64 := Rope.line_of rope head in
+            let at : I64 := Rope.line_content_end rope line in
             let step : Pair EditorState (Cmd EditorMsg) :=
                 apply_changes st (List.cons (paste_change at "\n") List.empty) in
             match step {
@@ -788,7 +747,7 @@ def cmd_open_above (st : EditorState) : Pair EditorState (Cmd EditorMsg) :=
         Option.some doc =>
             let rope : Rope := doc_rope doc in
             let head : I64 := primary_head st in
-            let line : I64 := line_of rope head in
+            let line : I64 := Rope.line_of rope head in
             let at : I64 := Rope.line_start rope line in
             let step : Pair EditorState (Cmd EditorMsg) :=
                 apply_changes st (List.cons (paste_change at "\n") List.empty) in
