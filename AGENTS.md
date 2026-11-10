@@ -228,6 +228,19 @@ change is in this surface too.
    surface fails loudly, at rung 1, with the host's own unknown-construct
    error. `plans/bootstrapping/native-rollout.md` specifies the native half.
 
+**Exercising a native before its nightly.** A native's wiring is usable from
+the compiler-source surface as soon as the tree can compile itself with it on,
+so a change does not have to wait for a nightly to prove it end to end. Put the
+uses behind a feature (`#[cfg {feature := "sys"}]`), list that feature in
+`bootstrap/next-features.txt`, and run `monad script bootstrap-next`:
+rung 1 is the current host compiling the tree with features OFF (the two-step
+gate above, unchanged), rung 2 is that binary compiling it again with
+`MONAD_FEATURES` set to the list. `--fixpoint` adds the ladder's own turn
+(rung 2 builds a third rung; the two `.ll` files must match), and
+`--test a,b` runs suites through rung 2. CI runs it only while the file names a
+pending feature, so an empty file costs nothing. Once the nightly lands,
+delete the line and (for a migration) flip the default.
+
 A red gate means the change used something the nightly lacks (split it), the
 tree advanced past a nightly that cannot build it (wait for the next nightly —
 do not weaken the gate), or the nightly miscompiles (fix it).

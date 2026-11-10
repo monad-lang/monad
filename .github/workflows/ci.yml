@@ -202,7 +202,8 @@ jobs:
         run: |
           nix develop --no-pure-eval --accept-flake-config -c \
             cargo run --manifest-path rust/Cargo.toml --release -- \
-              check init std sys examples lang codegen cli llvm runtime build eval motes
+              check init std sys examples lang codegen cli llvm runtime build eval motes \
+                    scripts/bootstrap_next.mo
 
       # This step is why `nix/host.nix` may set `doCheck = false`: the flake's
       # host derivation skips the workspace's own `cargo test`, on the premise
@@ -343,6 +344,26 @@ jobs:
           nix develop --no-pure-eval --accept-flake-config \
             --profile "$HOME/.monad-ci-devshell" \
             -c scripts/ci-self-compile.sh
+
+      # The two-rung bootstrap for a feature-gated native (M1 of
+      # plans/library-ideas/system.md). Rung 1 is the latest nightly compiling
+      # this tree with features OFF; rung 2 is THAT binary compiling it again
+      # with `bootstrap/next-features.txt` on, which is how a native that no
+      # nightly carries yet gets exercised before it ships. `--fixpoint` adds
+      # the ladder's own turn: rung 2 builds a third rung, and the two `.ll`
+      # files must match. Skipped while the file names no pending feature --
+      # rung 2 would then duplicate the self-compile step above.
+      - name: Two-rung bootstrap for pending features
+        run: |
+          if ! grep -qE '^[[:space:]]*[^#[:space:]]' bootstrap/next-features.txt; then
+            echo "bootstrap/next-features.txt has no pending feature; skipping"
+            exit 0
+          fi
+          nix develop --no-pure-eval --accept-flake-config \
+            --profile "$HOME/.monad-ci-devshell" \
+            -c "$PWD/target-monad/ci-self-compile/monad" script bootstrap-next -- \
+                 --host "$HOME/.monad/bin/monad" \
+                 --out "$PWD/target-monad/bootstrap-next" --fixpoint
 
       # The formatting gate runs on the compiler THIS tree just built, so the
       # style it enforces is this commit's. It checks the whole corpus

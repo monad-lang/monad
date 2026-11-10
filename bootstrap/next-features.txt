@@ -1,0 +1,10 @@
+# Features whose natives are WIRED but not yet in a published nightly.
+#
+# `monad script bootstrap-next` reads this file when `--features` is absent:
+# rung 1 compiles the tree with the current host and features OFF, rung 2
+# compiles it again with `MONAD_FEATURES` set to this list, so the tree can
+# use a brand-new native before any nightly carries it.
+#
+# One feature per line as `mote/feature` (`std/sys`), `#` starts a comment.
+# EMPTY when nothing is pending -- rung 2 is then a plain fixpoint turn.
+# CI runs `bootstrap-next` only while this file has at least one entry.

@@ -184,6 +184,15 @@ path = "motes/xml_html"
 [workspace.dependencies.yaml]
 path = "motes/yaml"
 
+# The two-rung bootstrap for a feature-gated native -- see
+# scripts/bootstrap_next.mo's header and bootstrap/next-features.txt.
+[[script]]
+name = "bootstrap-next"
+path = "scripts/bootstrap_next.mo"
+
+[script-dependencies.bootstrap-next.clap]
+workspace = true
+
 # Affine-by-default migration fallback (measured 2026-10-22). This is a
 # virtual workspace root, so the table covers paths with no manifest of
 # their own (`examples/`); a named mote overrides it in its own mote.toml.
