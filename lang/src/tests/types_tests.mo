@@ -5,7 +5,8 @@ use lang::types {
     ScopeDef, ScopeError, ScopeInstance, Similar, Term, cub_i0, cub_i1, cub_imeet,
     cub_ineg, cub_interval, cubical_arity, cubical_is_endpoint, cubical_prim_eq,
     cubical_prim_of, nid, nnp, nop, nqn, package_private, sort_n, visibility_beq,
-    Location,
+    Location, QualifiedName, npath_extend, npath_last, qn_of,
+    show_identifier, show_qualified_name,
 }
 use lib::scope {scope_data_add_def, scope_data_add_inductive, scope_data_empty}
 
@@ -379,3 +380,34 @@ def test_cubical_endpoint_predicate : Bool :=
         && cubical_is_endpoint CubicalPrim.i1
         && Bool.not (cubical_is_endpoint CubicalPrim.interval)
         && Bool.not (cubical_is_endpoint CubicalPrim.ineg)
+
+// --- QualifiedName / NamePath instances and helpers ---
+
+/// A qualified-name fixture; a top-level def rather than a local lambda so
+/// the affine rule does not count the repeated test uses as binder uses.
+def qn_fixture (m : String) (n : String) : QualifiedName :=
+    qn_of (ModulePath.mk [Identifier.id m]) (NamePath.mk [Identifier.id n])
+
+#[test]
+def test_qualified_name_beq_show_and_similar : Bool :=
+    BEq.beq (qn_fixture "list" "List.cons") (qn_fixture "list" "List.cons")
+        && Bool.not (BEq.beq (qn_fixture "list" "List.cons") (qn_fixture "option" "List.cons"))
+        && Similar.similar (qn_fixture "list" "List.cons") (qn_fixture "list" "List.cons")
+        && Bool.not (Similar.similar (qn_fixture "list" "List.cons") (qn_fixture "option" "List.cons"))
+        && String.beq (show_qualified_name (qn_fixture "list" "List.cons")) "list::List.cons"
+
+#[test]
+def test_name_path_extend_and_last : Bool :=
+    let np : NamePath := NamePath.mk [Identifier.id "List", Identifier.id "cons"] in
+    let extended : NamePath := npath_extend np (Identifier.id "map") in
+    match npath_last extended {
+        Option.some id => String.beq (show_identifier id) "map",
+        Option.none => false,
+    }
+
+#[test]
+def test_name_path_last_of_empty_is_none : Bool :=
+    match npath_last (NamePath.mk List.empty) {
+        Option.some _ => false,
+        Option.none => true,
+    }

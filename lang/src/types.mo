@@ -291,6 +291,22 @@ pub def show_qualified_name (qn : QualifiedName) : String :=
     String.concat (module_path_to_string_colon qn.qmod)
         (String.concat "::" (show_name_path qn.qname))
 
+/// Build a qualified name from its two halves. Mirrors the struct
+/// constructor, so call sites that already have a `ModulePath` and a
+/// `NamePath` do not have to spell `QualifiedName.mk`.
+pub def qn_of (m : ModulePath) (n : NamePath) : QualifiedName := QualifiedName.mk m n
+
+/// The last segment of a name path (`List.cons` -> `cons`), if any.
+/// This is the structural form of "the bare name" that scope resolution
+/// and bare-alias bookkeeping need; it replaces slicing the rendered
+/// string at the last dot.
+pub def npath_last (np : NamePath) : Option Identifier :=
+    match np { NamePath.mk ids => List.last ids }
+
+/// Append one segment to a name path (`Foo` + `bar` -> `Foo.bar`).
+pub def npath_extend (np : NamePath) (id : Identifier) : NamePath :=
+    match np { NamePath.mk ids => NamePath.mk (List.append ids [id]) }
+
 /// A module path spelled the way SOURCE spells it: `::`-joined
 /// (`std::process`). This is the right rendering for anything a user
 /// reads -- diagnostics, verbose progress lines, `use` decls -- because
@@ -319,6 +335,13 @@ pub instance Show ModulePath {
 /// because the two types are no longer interchangeable.
 pub instance Show NamePath {
     def show (np : NamePath) : String := show_name_path np
+}
+
+/// A qualified name renders as `mod::sub::Name.path`; the rendering is
+/// disjoint from every other name shape (`:` cannot occur in an
+/// identifier), so it is also the equality/order/hash key below.
+pub instance Show QualifiedName {
+    def show (qn : QualifiedName) : String := show_qualified_name qn
 }
 
 /// Identifiers can't contain ".", so the dotted-string-join used by
@@ -355,6 +378,44 @@ pub instance Hashable ModulePath {
 
 pub instance Hashable NamePath {
     def hash (np : NamePath) : U64 := String.hash (show_name_path np)
+}
+
+/// The three structural name types' equality/order/hash instances. The
+/// rendered forms are disjoint (`:` cannot occur in an identifier, and
+/// the module half is `::`-joined while the name half is dot-joined), so
+/// delegating to the renderers is collision-free; `Similar` stays
+/// structural where it exists (see `name_path_similar`).
+pub instance BEq ModulePath {
+    def beq (a : ModulePath) (b : ModulePath) : Bool :=
+        String.beq (show_module_path a) (show_module_path b)
+}
+
+pub instance BEq NamePath {
+    def beq (a : NamePath) (b : NamePath) : Bool :=
+        String.beq (show_name_path a) (show_name_path b)
+}
+
+pub instance BEq QualifiedName {
+    def beq (a : QualifiedName) (b : QualifiedName) : Bool :=
+        String.beq (show_qualified_name a) (show_qualified_name b)
+}
+
+pub instance BOrd NamePath {
+    def lt (a : NamePath) (b : NamePath) : Bool := BOrd.lt (show_name_path a) (show_name_path b)
+    def gt (a : NamePath) (b : NamePath) : Bool := BOrd.gt (show_name_path a) (show_name_path b)
+    def lte (a : NamePath) (b : NamePath) : Bool := Bool.not (BOrd.gt (show_name_path a) (show_name_path b))
+    def gte (a : NamePath) (b : NamePath) : Bool := Bool.not (BOrd.lt (show_name_path a) (show_name_path b))
+}
+
+pub instance BOrd QualifiedName {
+    def lt (a : QualifiedName) (b : QualifiedName) : Bool := BOrd.lt (show_qualified_name a) (show_qualified_name b)
+    def gt (a : QualifiedName) (b : QualifiedName) : Bool := BOrd.gt (show_qualified_name a) (show_qualified_name b)
+    def lte (a : QualifiedName) (b : QualifiedName) : Bool := Bool.not (BOrd.gt (show_qualified_name a) (show_qualified_name b))
+    def gte (a : QualifiedName) (b : QualifiedName) : Bool := Bool.not (BOrd.lt (show_qualified_name a) (show_qualified_name b))
+}
+
+pub instance Hashable QualifiedName {
+    def hash (qn : QualifiedName) : U64 := String.hash (show_qualified_name qn)
 }
 
 pub type NameRef {
@@ -2200,6 +2261,14 @@ pub instance Similar ModulePath {
 pub instance Similar NamePath {
     def similar (a : NamePath) (b : NamePath) : Bool :=
         name_path_similar a b
+}
+
+/// Structural comparison of the two halves; the module half already has
+/// a `Similar` instance and the name half delegates to the segment-wise
+/// rule above.
+pub instance Similar QualifiedName {
+    def similar (a : QualifiedName) (b : QualifiedName) : Bool :=
+        Similar.similar a.qmod b.qmod && name_path_similar a.qname b.qname
 }
 
 pub instance Similar NameRef {
