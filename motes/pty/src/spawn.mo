@@ -27,7 +27,7 @@ use std::bytebuf {
 use lib::ansi {Ansi.strip, Ansi.tight}
 use lib::grid {Grid}
 use std::io {IO.get_env, IO.current_time_nano}
-use std::list {List.length}
+use std::list {}
 use std::ref {Ref}
 use std::stream {Stream, FdStream, FdStream.of_raw_fd, FdStream.poll, FdStream.poll_read}
 

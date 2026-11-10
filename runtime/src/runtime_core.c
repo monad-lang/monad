@@ -488,6 +488,15 @@ static rt_word monad_array_get_impl(rt_word a, int64_t i) {
     return some;
 }
 
+/* The allocation-free read: out-of-range answers the caller's fallback, and
+   an in-range read returns the element itself. No `Option` box is built,
+   which is what `Array.get_or` uses on the hot path. */
+static rt_word monad_array_get_or_impl(rt_word a, int64_t i, rt_word fallback) {
+    int64_t len = monad_array_len_impl(a);
+    if (i < 0 || i >= len) return fallback;
+    return monad_get_field_impl(a, i);
+}
+
 /* The persistent `set`: allocate a fresh Constructor, copy, then write.
    The input is untouched -- that is the whole contract, and the reason
    this is O(n) while `set_in_place` is O(1). An out-of-range index
@@ -1622,6 +1631,9 @@ rt_void monad_set_field(rt_word ptr, int64_t idx, rt_word value) {
 rt_word monad_array_new(int64_t n, rt_word fill) { return monad_array_new_impl(n, fill); }
 int64_t monad_array_len(rt_word a) { return monad_array_len_impl(a); }
 rt_word monad_array_get(rt_word a, int64_t i) { return monad_array_get_impl(a, i); }
+rt_word monad_array_get_or(rt_word a, int64_t i, rt_word fallback) {
+    return monad_array_get_or_impl(a, i, fallback);
+}
 rt_word monad_array_with(rt_word a, int64_t i, rt_word v) { return monad_array_with_impl(a, i, v); }
 rt_word monad_array_set_in_place(rt_word a, int64_t i, rt_word v) { return monad_array_set_in_place_impl(a, i, v); }
 rt_word monad_array_freeze(rt_word b) { return monad_array_freeze_impl(b); }

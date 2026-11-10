@@ -20,7 +20,7 @@ use std::map {
     Bucket16, HashMap.empty_buckets, HashMap.get_bucket, HashMap.set_bucket,
 }
 use std::bench {Bench.now, Bench.report, Bench.since}
-use std::list {List.length}
+use std::list {}
 
 #[terminating]
 def set_loop (i : I64) (n : I64) (idx : U64) (b : Bucket16 (Bucket16 (List (Pair I64 I64)))) : Bucket16 (Bucket16 (List (Pair I64 I64))) :=

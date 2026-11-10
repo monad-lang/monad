@@ -1,6 +1,6 @@
 /// Goldens and behaviour for fields and controls.
 
-use std::list {List.length}
+use std::list {}
 use web_event::event {WebEvent, FileInfo}
 use oak::typed {Oak.Node}
 use oak::elements {Html.text, Html.placeholder, Html.action, Html.method_}

@@ -9,7 +9,7 @@
 /// that survives the compiled backend (a closure stored in an action-typed
 /// field cannot be executed when returned from a constructor).
 
-use std::list {List.length}
+use std::list {}
 use http::types {Body, Transport, Transport.write_bytes}
 use http::wire {Wire.chunk_frame, Wire.terminal_chunk}
 use lib::body {Body.to_bytes_pure}

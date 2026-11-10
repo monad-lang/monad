@@ -12,7 +12,7 @@
 /// names nothing, and a wrapper supplying it would quietly return an
 /// empty closure.
 use llvm::strmap {str_map_empty, str_map_insert, str_map_lookup}
-use std::list {List.filter_map, List.length}
+use std::list {List.filter_map}
 use lang::types {
     Attribute, Decl, DebugName, Def, Identifier, Inductive, Multiplicity, NamePath, Struct,
     StructField, Term, Visibility, concrete, has_attr, id_eq, sentinel,

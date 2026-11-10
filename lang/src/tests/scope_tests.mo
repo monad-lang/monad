@@ -17,7 +17,7 @@ use lang::scope {
 }
 use lang::typecheck::copy_class {copy_verdict, copy_verdict_grants_omega}
 use llvm::strmap {str_map_empty, str_map_insert}
-use std::list {List.length}
+use std::list {}
 
 /// The declaring module for the hand-built instances below. The scopes
 /// these tests resolve against have an empty module path -- no consumer --

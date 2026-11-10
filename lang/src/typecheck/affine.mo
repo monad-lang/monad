@@ -335,8 +335,14 @@ def check_def_with (kinds : TypeKinds) (scope : Scope) (ctors : HashMap String B
     // attributes, so the checker cannot ask whether the type former a def
     // returns is itself `#[proof]`. Deriving it would mean adding attrs to
     // `ScopeDef`; recorded in plans/type-system/univalence.md.
-    else if has_attr (Identifier.id "proof")
-        (match d { Def.mk { attrs, .. } => attrs }) then List.empty
+    //
+    // `#[allow_non_affine "<reason>"]` is the migration escape hatch: a
+    // body that is correct but not yet `Copy`-clean can opt out locally
+    // instead of burying the file in warnings. It is deliberately NOT
+    // structural like `#[proof]` -- the author's reason is part of the
+    // declaration.
+    else if has_attr (Identifier.id "proof") d.attrs
+        || has_attr (Identifier.id "allow_non_affine") d.attrs then List.empty
     else
         // `Def.params` carries the source's `!`/`?`/`%`; the parameter-aware
         // walker aligns it with the leading lambda chain (skipping generated

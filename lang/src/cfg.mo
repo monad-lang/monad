@@ -8,7 +8,7 @@
 /// declaration only when its predicate is false with and without `test`.
 
 use lang::types {AttrArg, Attribute, Identifier}
-use std::list {List.length}
+use std::list {}
 use lib::features {Features.split_slash}
 
 pub type CfgPred {

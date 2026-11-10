@@ -26,7 +26,7 @@
 /// resource server must fail closed); deploy an ingress rate limit where
 /// that matters.
 
-use std::list {List.any, List.filter, List.length}
+use std::list {List.any, List.filter}
 use std::map {BTreeMap}
 use std::ref {Ref, Ref.new, Ref.update}
 use std::sha256 {Sha256.hash}

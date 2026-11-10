@@ -560,6 +560,49 @@ def kind_wants_loc (k : ParseTermKind) : Bool := match k {
     ParseTermKind.hole => false,
 }
 
+/// The field names of a projection's right-hand side: `(f x).a` gives
+/// `[a]`, and the right-assoc parse of `(f x).a.b` gives a dotted NamePath
+/// whose segments are `[a, b]`.
+#[partial]
+def projection_fields (pt : ParseTerm) : Option (List Identifier) :=
+    match pt.kind {
+        ParseTermKind.var nref =>
+            match nref {
+                NameRef.nid id => Option.some (List.cons id List.empty),
+                NameRef.nnp np => match np { NamePath.mk ids => Option.some ids },
+                _ => Option.none,
+            },
+        _ => Option.none,
+    }
+
+/// Recognise `app (app (var ".") lhs) rhs)` and lower it as
+/// `field_access_chain lhs fields` (a struct projection), so
+/// `(mk 1).a` works like `x.a` does. Anything else is an ordinary
+/// application.
+#[partial]
+def dot_projection (ctx : ParseLowerCtx) (f : ParseTerm) (a : ParseTerm) : Option Term :=
+    match f.kind {
+        ParseTermKind.app op lhs =>
+            match op.kind {
+                ParseTermKind.var nref =>
+                    match name_ref_to_string nref {
+                        Option.some s =>
+                            if String.beq s "."
+                            then
+                                match projection_fields a {
+                                    Option.some fields =>
+                                        Option.some
+                                            (field_access_chain (lower_parse_term ctx lhs) fields),
+                                    Option.none => Option.none,
+                                }
+                            else Option.none,
+                        Option.none => Option.none,
+                    },
+                _ => Option.none,
+            },
+        _ => Option.none,
+    }
+
 /// Lower a term in VALUE position, recording its position when there is
 /// one to record.
 #[partial]
@@ -680,8 +723,17 @@ def lower_parse_kind (ctx : ParseLowerCtx) (k : ParseTermKind) : Term :=
         // R3: the callee is bare so a spine's inner `app`s stay visible to
         // `flatten_call_spine`; only the outermost `app` (located by
         // `lower_parse_term` on the way in) and each argument carry one.
+        //
+        // `(f x).field`: `.` is a registered infix with no declaration, so
+        // the parser builds `app (app (var ".") lhs) rhs)`. When the lhs is
+        // not a dotted name (a dotted name is parsed as a NamePath and never
+        // reaches here), lower the pair as a field projection instead of an
+        // application of the operator.
         ParseTermKind.app f a =>
-            Term.app (lower_parse_term_bare ctx f) (lower_parse_term ctx a),
+            match dot_projection ctx f a {
+                Option.some projected => projected,
+                Option.none => Term.app (lower_parse_term_bare ctx f) (lower_parse_term ctx a),
+            },
         ParseTermKind.lit l => Term.lit (lower_parse_literal ctx l),
         ParseTermKind.ntv n => Term.ntv (lower_parse_native ctx n),
         ParseTermKind.con c => Term.con (lower_parse_con ctx c),

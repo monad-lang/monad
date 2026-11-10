@@ -2530,6 +2530,25 @@ fn declared_names_of(module: &Module) -> Vec<String> {
   for inst in module.instances.iter() {
     names.push(inst.value().name().to_string());
   }
+  // A PUBLIC `use` re-exports the explicitly named items, so a consumer may
+  // name them through THIS module (`use oak {Html.to_string}` where oak's
+  // `pub use xml_html::html {Html.to_string}`). Globs and sub-lists cannot
+  // be enumerated here; the self-hosted `use_item_declared_names`
+  // (lang/src/module.mo) follows the same rule.
+  for u in module.uses.iter() {
+    let use_ = u.value();
+    if use_.public {
+      if let UseFilter::Items(items) = &use_.filter {
+        for item in items {
+          match item {
+            UseItem::Name(n) => names.push(n.to_string()),
+            UseItem::Rename(n, _) => names.push(n.to_string()),
+            _ => {}
+          }
+        }
+      }
+    }
+  }
   names
 }
 
@@ -2727,6 +2746,54 @@ fn use_selection_map(uses: Vec<&Use>, test_mode: bool) -> Map<ModulePath, Select
     }
   }
   filter_map
+}
+
+/// `use oak {Html.to_string}` names a declaration OWNED by
+/// `xml_html::html` through oak's `pub use`. The reference judge keys on the
+/// owner, so a selection through the re-exporter must also select the name
+/// under the owner path. Mirrors `sel_map_of_reexports`
+/// (`lang/src/use_completeness.mo`).
+fn reexport_selection(
+  uses: Vec<&Use>,
+  loaded: &LoadedModules,
+  mut selection: Map<ModulePath, Selection>,
+) -> Map<ModulePath, Selection> {
+  let only_name = |name: &Identifier| {
+    let mut names: Set<Identifier> = Set::default();
+    names.insert(name.clone());
+    Selection {
+      bare: AllowedNames::Only(names.clone()),
+      qual: AllowedNames::Only(names),
+    }
+  };
+  for use_decl in &uses {
+    let UseFilter::Items(items) = &use_decl.filter else {
+      continue;
+    };
+    let Some(module) = loaded.get_module(&use_decl.module_path) else {
+      continue;
+    };
+    for item in items {
+      let name = match item {
+        UseItem::Name(n) | UseItem::Rename(n, _) => n,
+        _ => continue,
+      };
+      for public in module.get_pub_uses() {
+        let UseFilter::Items(owner_items) = &public.filter else {
+          continue;
+        };
+        let has = owner_items.iter().any(|owner_item| match owner_item {
+          UseItem::Name(n) | UseItem::Rename(n, _) => n.as_str() == name.as_str(),
+          _ => false,
+        });
+        if has {
+          merge_selection(&mut selection, public.module_path.clone(), only_name(name));
+          break;
+        }
+      }
+    }
+  }
+  selection
 }
 
 /// Every module every file sees WHOLE, without a `use`: the ambient trio
@@ -3069,7 +3136,7 @@ pub fn unimported_names_from(
       _ => None,
     })
     .collect();
-  let selection = use_selection_map(uses, test_mode);
+  let selection = reexport_selection(uses.clone(), loaded, use_selection_map(uses, test_mode));
   let ambient = ambient_seen_modules(loaded);
   let index = declaration_index(loaded);
   let own = names_of_decls(decls);

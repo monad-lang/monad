@@ -12,7 +12,7 @@ use openai::types {ChatRequest, ChatResponse, ChatMessage, Choice, ApiUsage}
 use openai::tool {ToolCall}
 use json::json {Json.to_string, Json.parse}
 use http::sse {Sse.init}
-use std::list {List.length}
+use std::list {}
 use std::process {process_id}
 
 /// The accumulator every fold starts from -- the same zero state

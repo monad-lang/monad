@@ -19,7 +19,7 @@ use weaver::text {Text.cut, Text.first_line}
 use json::json {Json.parse, Json.to_string}
 use std::path {Path, Path.to_string}
 use weaver::place {SessionPlace}
-use std::list {List.length}
+use std::list {}
 
 #[partial]
 def plain_go (i : I64) (n : I64) : List TLine :=

@@ -4,7 +4,7 @@
 
 use lib::component {Cmd.map, Subs, Subs.map, Subs.active, Subs.on_tick}
 use lib::tui {Cmd}
-use std::list {List.length}
+use std::list {}
 
 type Kid { ping, pong (n : I64) }
 type Host { child (c : Kid), many (ms : List Host) }

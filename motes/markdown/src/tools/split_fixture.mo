@@ -19,7 +19,7 @@
 // tail`, so it recurses once per byte. Sizes are carried along instead.
 
 use std::io {IO.println, IO.read_file_bytes, IO.write_file_bytes}
-use std::list {List.length}
+use std::list {}
 use std::path {Path}
 use std::stream {StreamError}
 

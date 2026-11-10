@@ -126,7 +126,7 @@ first fiber in the list always wins there.
 ```monad
 use std::concurrent::fiber {Fiber, forkIO}
 use std::concurrent::combine {all}
-use std::list {List.length}
+use std::list {}
 
 def answer (_ : Unit) : IO I64 := IO.pure 42
 

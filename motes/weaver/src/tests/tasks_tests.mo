@@ -12,7 +12,7 @@ use weaver::tui_app {
 }
 use weaver::inbox {Inbox.with_notes}
 use tui::widgets::dialog {DialogStep, DialogModel}
-use std::list {List.length, List.intercalate}
+use std::list {List.intercalate}
 
 def proc_task (id : String) (running : Bool) (status : String) (started : I64) : TaskEntry :=
     let t : TaskEntry := { kind := TaskKind.task_proc, id := id, label := String.concat "cmd " id, status := status,

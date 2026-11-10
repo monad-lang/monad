@@ -335,6 +335,95 @@ def use_sub_path (path : ModulePath) (n : Identifier) : ModulePath :=
         ModulePath.mk ids => ModulePath.mk (List.append ids (List.cons n List.empty)),
     }
 
+// ─── Public re-exports select the OWNER's declaration ───────────────
+//
+// `use oak {Html.to_string}` is valid because `oak/src/lib.mo` says
+// `pub use xml_html::html {Html.to_string}`. The reference itself is owned
+// by `xml_html::html`, so selecting the name through `oak` must also select
+// it under the owner path; otherwise completeness reports "must be imported
+// from xml_html::html" for a name the consumer did import.
+
+#[terminating]
+def use_items_has (name : String) (items : List UseItem) : Bool :=
+    match items {
+        List.empty => false,
+        List.cons item rest =>
+            match item {
+                UseItem.use_name n =>
+                    if String.beq name (show_identifier n) then true else use_items_has name rest,
+                UseItem.use_rename n _alias =>
+                    if String.beq name (show_identifier n) then true else use_items_has name rest,
+                _ => use_items_has name rest,
+            },
+    }
+
+def use_filter_has (name : String) (filter : UseFilter) : Bool :=
+    match filter {
+        UseFilter.use_bare => false,
+        UseFilter.use_items items => use_items_has name items,
+    }
+
+/// The module whose PUBLIC `use` re-exports `name` from `decls`.
+#[terminating]
+def reexport_owner_of (name : String) (decls : List Decl) : Option ModulePath :=
+    match decls {
+        List.empty => Option.none,
+        List.cons d rest =>
+            match d {
+                Decl.use_d path filter public =>
+                    if public && use_filter_has name filter
+                    then Option.some path
+                    else reexport_owner_of name rest,
+                _ => reexport_owner_of name rest,
+            },
+    }
+
+def select_reexport (world : List (Pair ModulePath (List Decl))) (path : ModulePath)
+    (name : String) (m : HashMap String Selection) : HashMap String Selection :=
+    match world_decls_of world path {
+        Option.none => m,
+        Option.some decls =>
+            match reexport_owner_of name decls {
+                Option.none => m,
+                Option.some owner => sel_map_add_allowed owner name m,
+            },
+    }
+
+#[terminating]
+def select_reexport_items (world : List (Pair ModulePath (List Decl))) (path : ModulePath)
+    (items : List UseItem) (m : HashMap String Selection) : HashMap String Selection :=
+    match items {
+        List.empty => m,
+        List.cons item rest =>
+            match item {
+                UseItem.use_name n =>
+                    select_reexport_items world path rest
+                        (select_reexport world path (show_identifier n) m),
+                UseItem.use_rename n _alias =>
+                    select_reexport_items world path rest
+                        (select_reexport world path (show_identifier n) m),
+                _ => select_reexport_items world path rest m,
+            },
+    }
+
+#[terminating]
+def sel_map_of_reexports (world : List (Pair ModulePath (List Decl)))
+    (decls : List Decl) (m : HashMap String Selection) : HashMap String Selection :=
+    match decls {
+        List.empty => m,
+        List.cons d rest =>
+            match d {
+                Decl.use_d path filter _public =>
+                    match filter {
+                        UseFilter.use_bare => sel_map_of_reexports world rest m,
+                        UseFilter.use_items items =>
+                            sel_map_of_reexports world rest
+                                (select_reexport_items world path items m),
+                    },
+                _ => sel_map_of_reexports world rest m,
+            },
+    }
+
 #[partial]
 def sel_map_of_items (path : ModulePath) (items : List UseItem) (m : HashMap String Selection) : HashMap String Selection :=
     match items {
@@ -1490,7 +1579,8 @@ def judge_opens (j : Judge) (decls : List Decl) (seen : HashMap String Bool) (ac
 def judge_all (file_path : String) (consumer : ModulePath) (consumer_mote : Option String) (pre_decls : List Decl)
     (expanded_decls : List Decl) (world : List (Pair ModulePath (List Decl)))
     (opens : Opens) : List String :=
-    let selection : HashMap String Selection := sel_map_of_decls pre_decls str_map_empty in
+    let selection : HashMap String Selection :=
+        sel_map_of_reexports world pre_decls (sel_map_of_decls pre_decls str_map_empty) in
     let ambient : HashMap String Bool := ambient_seen world in
     let index : HashMap String (List DeclRow) := declaration_index world str_map_empty in
     let own : HashMap String Bool := own_keys_go (List.append pre_decls expanded_decls) str_map_empty in

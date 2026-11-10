@@ -16,7 +16,7 @@
 /// what this backend does not honor (`unresolved global: BEq.beq`).
 
 use std::bytebuf {ByteBuf.alloc, ByteBuf.copy_into, ByteBuf.free, ByteBuf.length, ByteBuf.of_list, ByteBuf.of_string, ByteBuf.to_list, ByteBuf.to_string, ByteBuf.truncate}
-use std::list {List.length}
+use std::list {}
 
 def empty_bytes : List U8 := List.empty
 

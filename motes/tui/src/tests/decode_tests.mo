@@ -12,7 +12,7 @@ use lib::input {
     Input.decode, Input.pending_escape, Input.step, Input.pasting, Input.paste_cap,
     InputReader, PasteState, input_reader,
 }
-use std::list {List.length}
+use std::list {}
 
 def decoded_events (s : String) : List Event :=
     match Input.decode s {

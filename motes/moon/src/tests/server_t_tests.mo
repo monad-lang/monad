@@ -3,7 +3,7 @@
 
 use std::concurrent::combine {sleepIO}
 use std::concurrent::fiber {FiberError}
-use std::list {List.length}
+use std::list {}
 use std::stream {Stream, FdStream}
 use std::test {}
 use http::body {Body.to_bytes_pure}

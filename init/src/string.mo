@@ -253,6 +253,74 @@ def contains_from (s : String) (sub : String) : Bool :=
 pub def String.contains (s : String) (sub : String) : Bool :=
     contains_from s sub
 
+/// `contains_from` with a character counter: the CODEPOINT index of the
+/// first occurrence. Same character-at-a-time walk, so the answer never
+/// lands inside a multi-byte character.
+#[terminating]
+def index_of_codepoints (s : String) (sub : String) (at : I64) : Option I64 :=
+    if String.starts_with sub s then Option.some at
+    else match String.get s 0 {
+        Option.some b => index_of_codepoints (String.drop (utf8_lead_width b) s) sub (I64.add at 1i64),
+        Option.none => Option.none,
+    }
+
+/// The CODEPOINT index of the first occurrence of `sub`, or `none`. An
+/// empty `sub` matches at 0. A `String` is addressed by byte at the
+/// `slice`/`drop` level; this is the human-facing index, so `"éllo"` finds
+/// `"llo"` at 1, not at 2.
+pub def String.index_of (s : String) (sub : String) : Option I64 :=
+    if String.is_empty sub then Option.some 0i64 else index_of_codepoints s sub 0i64
+
+// ── Byte index / count / split ──
+//
+// These are byte-offset based at the API (like `slice`/`drop`), and the
+// scan steps by UTF-8 character so a needle is never matched from inside a
+// multi-byte character.
+
+#[terminating]
+def byte_index_of_from (s : String) (sub : String) (offset : I64) : Option I64 :=
+    if String.starts_with sub s then Option.some offset
+    else match String.get s 0 {
+        Option.some b =>
+            let width : I64 := utf8_lead_width b in
+            byte_index_of_from (String.drop width s) sub (I64.add offset width),
+        Option.none => Option.none,
+    }
+
+/// The BYTE index of the first occurrence of `sub`, or `none`. An empty
+/// `sub` matches at 0. This is the offset `slice`/`drop` expect; for the
+/// character index use `String.index_of`.
+pub def String.byte_index_of (s : String) (sub : String) : Option I64 :=
+    if String.is_empty sub then Option.some 0i64 else byte_index_of_from s sub 0i64
+
+#[terminating]
+def count_from (s : String) (sub : String) (n : I64) : I64 :=
+    match String.byte_index_of s sub {
+        Option.none => n,
+        Option.some i =>
+            count_from (String.drop (I64.add i (String.length sub)) s) sub (I64.add n 1),
+    }
+
+/// Non-overlapping occurrences of `sub` (`count "aaa" "aa"` is 1). An empty
+/// `sub` counts 0, matching the usual split convention.
+pub def String.count (s : String) (sub : String) : I64 :=
+    if String.is_empty sub then 0i64 else count_from s sub 0i64
+
+#[terminating]
+def split_from (s : String) (sep : String) (acc : List String) : List String :=
+    match String.byte_index_of s sep {
+        Option.none => List.reverse (List.cons s acc),
+        Option.some i =>
+            let piece : String := String.slice s 0i64 i in
+            let cut : I64 := I64.add (String.length piece) (String.length sep) in
+            split_from (String.drop cut s) sep (List.cons piece acc),
+    }
+
+/// Split on a non-empty separator. Leading/trailing separators produce
+/// empty pieces (`"a,"` is `["a", ""]`); an empty separator returns `[s]`.
+pub def String.split (s : String) (sep : String) : List String :=
+    if String.is_empty sep then List.cons s List.empty else split_from s sep List.empty
+
 // ── Trim ──
 
 def is_whitespace_byte (b : U8) : Bool :=

@@ -6,7 +6,7 @@
 // actual HTML.
 use init::string {}
 use parsec::core {is_empty}
-use std::list {List.length}
+use std::list {}
 use std::map {BTreeMap}
 use std::path {Path}
 use std::io {IO.read_file}

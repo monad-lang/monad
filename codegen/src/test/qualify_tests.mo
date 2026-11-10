@@ -18,7 +18,7 @@ use lang::name_text {unqualify_def_name}
 use lib::util {join_semicolon_msgs}
 use lib::test::support {list_contains_str, qtest_def}
 use std::map {HashMap}
-use std::list {List.intercalate, List.length}
+use std::list {List.intercalate}
 use lib::errors {CodegenDiagnostic}
 use lib::qualify {ambiguous_owner_msg, decl_def_name, identifier_names, qualify_modules, qualify_one_decl_name}
 use lib::test::support {qtest_def}

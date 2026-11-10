@@ -1,7 +1,7 @@
 use serde::derive {derive_serialize_meta, derive_deserialize_meta}
 use init::meta {TypeInfo, MetaDecl, Expr}
 use serde::tests::toy_format {Toy}
-use std::list {List.length}
+use std::list {}
 
 // A top-level `def`/`defmacro` with a bare `{ field := val }` struct
 // literal in its body fails to type-check -- "cannot infer the type of

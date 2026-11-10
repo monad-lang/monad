@@ -1,7 +1,7 @@
 /// Pure tests for the packed-payload helpers: no natives, so these run on
 /// both backends without a nightly that carries the floor's wiring.
 
-use std::list {List.length}
+use std::list {}
 use sys::text {Text.parse_i64, Text.split_byte, Text.words}
 
 def n_ok (r : Result String I64) : I64 :=

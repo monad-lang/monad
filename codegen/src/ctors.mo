@@ -29,7 +29,7 @@
 /// allocations wrongly; the builtin tiers are checked for a matching
 /// arity for the same reason.
 use llvm::strmap {str_map_empty, str_map_insert, str_map_lookup}
-use std::list {List.length}
+use std::list {}
 use lang::types {InductConstructor, Inductive, Struct}
 use lib::ctx {CodegenCtx, ctx_lookup_ctor_arity, ctx_lookup_ctor_tag}
 use lib::symbols {extract_base_name, name_path_to_str, symbol_identifier}

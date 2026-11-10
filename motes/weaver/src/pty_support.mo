@@ -252,6 +252,35 @@ def wait_file_go (path : String) (needle : String) (deadline : I64) : IO Bool :=
     }
 }
 
+/// `wait_file_contains` that also drains the pty and can type `resend` again.
+///
+/// Polling only the log can deadlock against a redrawing TUI: once the pty
+/// buffer fills, the app blocks in `write(2)` and never reads the keystroke
+/// the check is waiting on. Pumping between polls lets it progress. The
+/// re-send covers a keystroke lost while the app was still switching
+/// terminal modes; `send_text` ignores EPIPE, so typing after exit is safe.
+#[partial]
+def wait_file_live_go (m : Pty) (path : String) (needle : String) (resend : String) (resend_ms : I64) (next_send : I64) (deadline : I64) : IO Bool := do {
+    let _ <- Pty.pump m 100;
+    let text <- read_text path;
+    if String.contains text needle then IO.pure true
+    else do {
+        let now <- IO.current_time;
+        if I64.gt now deadline then IO.pure false
+        else do {
+            let send_now : Bool := Bool.and (Bool.not (String.is_empty resend)) (I64.gt now next_send);
+            let _ <- if send_now then Pty.send_text m resend else IO.pure unit;
+            let next : I64 := if send_now then I64.add now resend_ms else next_send;
+            wait_file_live_go m path needle resend resend_ms next deadline
+        }
+    }
+}
+
+pub def wait_file_contains_live (m : Pty) (path : String) (needle : String) (resend : String) (resend_ms : I64) (deadline_ms : I64) : IO Bool := do {
+    let start <- IO.current_time;
+    wait_file_live_go m path needle resend resend_ms (I64.add start resend_ms) (I64.add start deadline_ms)
+}
+
 /// `VmRSS` in kB from `/proc/<pid>/status`; -1 when it cannot be read.
 ///
 /// The final `return` is load-bearing. The self-hosted compile gate

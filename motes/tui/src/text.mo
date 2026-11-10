@@ -14,7 +14,7 @@
 // bytes render as a one-cell space so model output cannot inject ANSI or
 // desynchronize the cell grid.
 
-use std::list {List.length, List.any}
+use std::list {List.any}
 
 use lib::types {TextStyle, TextSegment}
 use lib::core {style_default, mk_text_segment}

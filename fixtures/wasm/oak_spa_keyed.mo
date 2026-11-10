@@ -15,7 +15,7 @@
 // `motes/monadup`'s own `Command` and `motes/oak`'s `Msg` type parameter.
 #![mote { name := "oak_spa_keyed", deps := [oak, oak_wasm, web_wasm, xml_html] }]
 
-use std::list {List.length}
+use std::list {}
 use oak::typed {Oak.Node}
 use oak::elements {Html.attr, Html.button, Html.div, Html.key, Html.li, Html.text, Html.ul}
 use oak::events {Html.on_click}

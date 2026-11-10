@@ -188,6 +188,31 @@ pub def I64.mul (a b : I64) : I64
 #[native i64_div]
 pub def I64.div (a b : I64) : I64
 
+/// Signed remainder. A zero divisor yields 0, matching `I64.div`.
+#[native i64_rem]
+pub def I64.rem (a b : I64) : I64
+
+/// The `mod` spelling of `I64.rem` (truncated division, like Rust's `%`).
+pub def I64.mod (a b : I64) : I64 := I64.rem a b
+
+#[native i64_and]
+pub def I64.and (a b : I64) : I64
+
+#[native i64_or]
+pub def I64.or (a b : I64) : I64
+
+#[native i64_xor]
+pub def I64.xor (a b : I64) : I64
+
+#[native i64_shl]
+pub def I64.shl (a b : I64) : I64
+
+/// Arithmetic (sign-propagating) shift, like Rust's `>>` on `i64`.
+#[native i64_shr]
+pub def I64.shr (a b : I64) : I64
+
+pub def I64.not (a : I64) : I64 := I64.xor a (0 - 1)
+
 #[native i64_lt]
 pub def I64.lt (a b : I64) : Bool
 
@@ -400,6 +425,12 @@ pub def U32.mul (a b : U32) : U32
 #[native u32_div]
 pub def U32.div (a b : U32) : U32
 
+/// Remainder in `[0, b)`; a zero divisor yields 0, matching `U32.div`.
+#[native u32_rem]
+pub def U32.rem (a b : U32) : U32
+
+pub def U32.mod (a b : U32) : U32 := U32.rem a b
+
 #[native u32_eq]
 pub def U32.beq (a b : U32) : Bool
 
@@ -478,7 +509,7 @@ pub def U64.add (a b : U64) : U64
 pub def U64.sub (a b : U64) : U64
 
 #[native u64_mul]
-def U64.mul (a b : U64) : U64
+pub def U64.mul (a b : U64) : U64
 
 #[native u64_div]
 pub def U64.div (a b : U64) : U64
@@ -489,11 +520,26 @@ pub def U64.mod (a b : U64) : U64
 #[native u64_xor]
 pub def U64.xor (a b : U64) : U64
 
+#[native u64_and]
+pub def U64.and (a b : U64) : U64
+
+#[native u64_or]
+pub def U64.or (a b : U64) : U64
+
+#[native u64_shl]
+pub def U64.shl (a b : U64) : U64
+
+/// Logical (zero-filling) shift, the unsigned counterpart of `I64.shr`.
+#[native u64_shr]
+pub def U64.shr (a b : U64) : U64
+
+pub def U64.not (a : U64) : U64 := U64.xor a 0xFFFFFFFFFFFFFFFFu64
+
 #[native u64_eq]
 pub def U64.beq (a b : U64) : Bool
 
 #[native u64_lt]
-def U64.lt (a b : U64) : Bool
+pub def U64.lt (a b : U64) : Bool
 
 #[native u64_gt]
 pub def U64.gt (a b : U64) : Bool

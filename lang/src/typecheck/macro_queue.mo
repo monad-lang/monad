@@ -31,7 +31,7 @@
 /// `reflect_type_info!` call and nothing nests inside it. Flagged
 /// here, not silently assumed sufficient forever — genuine fixpoint
 /// requeuing is a follow-up if a real template ever needs it.
-use std::list {List.any, List.length}
+use std::list {List.any}
 use lang::types {
     AttrArg, Attribute, Class, ClassDef, Decl, Def, Identifier, InductConstructor,
     Inductive, Instance, ModulePath, NamePath, Param, Struct, StructField, Term,

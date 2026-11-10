@@ -1,6 +1,6 @@
 use lib::core_ir {CoreIr, IrLit}
 use lang::types {Identifier, ModulePath, i64}
-use std::list {List.length}
+use std::list {}
 
 /// `Value`/`Env` — the runtime representation the closure-based evaluator
 /// (`lang/core_eval.mo`) reduces `CoreIr` to, mirroring

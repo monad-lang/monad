@@ -1,7 +1,7 @@
 /// Form-data tests: urlencoded decoding, media-type/boundary dispatch,
 /// multipart-from-headers, part accessors, and the Request helpers.
 
-use std::list {List.length}
+use std::list {}
 use http::types {
     Headers, Headers.empty, Headers.set, Method, Request, Uri, bytes, text,
 }

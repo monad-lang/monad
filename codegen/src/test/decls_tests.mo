@@ -1,6 +1,6 @@
 /// Tests moved out of `codegen::decls` so the production module stays readable.
 
-use std::list {List.length}
+use std::list {}
 use lang::types {
     Attribute, Decl, DebugName, Def, Identifier, Inductive, Multiplicity, NamePath, Struct,
     StructField, Term, Visibility, concrete, id_eq, sentinel,

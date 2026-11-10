@@ -23,7 +23,7 @@ use json::json {
 }
 use lib::scan {Markdown.utf8_of_codepoint}
 use std::io {IO.println, IO.read_file}
-use std::list {List.filter_map, List.length, List.sort_by}
+use std::list {List.filter_map, List.sort_by}
 use std::map {BTreeMap, BTreeMap.to_list}
 use std::path {Path}
 use std::stream {StreamError}

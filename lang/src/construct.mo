@@ -16,7 +16,7 @@ use lang::types {
     show_name_path, term_peel,
 }
 use lib::pretty {escape_string, show_term}
-use std::list {List.length}
+use std::list {}
 
 // --- Terms ---
 

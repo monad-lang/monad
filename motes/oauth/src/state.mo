@@ -14,7 +14,7 @@
 /// Timestamps are epoch milliseconds (`IO.current_time`'s unit), so
 /// `ttl_seconds` is scaled by 1000.
 
-use std::list {List.filter, List.length}
+use std::list {List.filter}
 use std::ref {Ref, Ref.new, Ref.update}
 use crypto::ct {Ct.eq}
 use std::random {Random.token, RandomError}

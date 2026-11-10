@@ -18,7 +18,7 @@ use lang::types {
 }
 use lib::typecheck::subst {beta_reduce}
 use lib::typecheck::name_subst {name_subst_decls}
-use std::list {List.length}
+use std::list {}
 
 // ─── Term-macro application (`defmacro name params := <term>`) ───────
 

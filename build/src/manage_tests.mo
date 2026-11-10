@@ -24,7 +24,7 @@
 /// Fixtures are pid-and-tag-scoped because the corpus sweep runs sharded
 /// and a fixed `/tmp` name would collide across concurrent shards.
 
-use std::list {List.filter, List.intercalate, List.length}
+use std::list {List.filter, List.intercalate}
 use std::process {process_id}
 use lang::module {extract_directory}
 use build::check {

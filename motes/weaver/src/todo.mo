@@ -14,7 +14,7 @@ use std::io {IO.read_file, IO.write_file}
 use std::path {Path, Path.to_string}
 use std::process {process_id}
 use std::map {Map, BTreeMap}
-use std::list {List.filter, List.intercalate, List.length}
+use std::list {List.filter, List.intercalate}
 use init::transformers {ResultT}
 use weaver::store {StoreState, Store.child}
 

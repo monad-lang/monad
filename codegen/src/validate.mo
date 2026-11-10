@@ -24,7 +24,7 @@ use lang::types {
 }
 use lang::scope {collect_classes, find_unresolved_class_calls_decls}
 use lib::ctors {CtorClaim, collect_ctor_claims_inds}
-use std::list {List.contains_by, List.length}
+use std::list {List.contains_by}
 use lib::errors {CodegenDiagnostic, CodegenError}
 open IO {get_env, println}
 use llvm::ir {
@@ -833,11 +833,13 @@ def call_targets_in_value (v : LLVMValue) : List String := match v {
     LLVMValue.sdiv a b => call_targets_in_pair a b,
     LLVMValue.udiv a b => call_targets_in_pair a b,
     LLVMValue.urem a b => call_targets_in_pair a b,
+    LLVMValue.srem a b => call_targets_in_pair a b,
     LLVMValue.and_ a b => call_targets_in_pair a b,
     LLVMValue.or_ a b => call_targets_in_pair a b,
     LLVMValue.xor_ a b => call_targets_in_pair a b,
     LLVMValue.shl_ a b => call_targets_in_pair a b,
     LLVMValue.lshr_ a b => call_targets_in_pair a b,
+    LLVMValue.ashr a b => call_targets_in_pair a b,
     LLVMValue.icmp_eq a b => call_targets_in_pair a b,
     LLVMValue.icmp_ne a b => call_targets_in_pair a b,
     LLVMValue.icmp_slt a b => call_targets_in_pair a b,

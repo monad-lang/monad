@@ -9,7 +9,7 @@
 /// `#[test]` inside a module that `lang/src/lib.mo` re-exports is never
 /// attributed to a target module, and the sweep skips it silently.
 
-use std::list {List.length}
+use std::list {}
 use lang::mote {
     Mote.fill_dep_dirs, Mote.git_checkout_dir, Mote.parse_manifest, MoteManifest,
 }

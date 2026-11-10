@@ -35,7 +35,7 @@ use std::map {
     HashMap.bucket_of, HashMap.empty_buckets, HashMap.get_bucket,
     HashMap.set_bucket, HashMap.to_list, map,
 }
-use std::list {List.filter, List.filter_map, List.length}
+use std::list {List.filter, List.filter_map}
 use llvm::strmap {str_map_empty, str_map_insert, str_map_lookup}
 
 // --- NamePath-keyed HashMap ops, bypassing `Map`'s typeclass dispatch ---

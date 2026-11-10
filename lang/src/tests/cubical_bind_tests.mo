@@ -24,7 +24,7 @@ use lib::types {
 use lib::module {parse_all_decls}
 use parsec::core {fail, success}
 use lib::scope {build_scope_from_decls, scope_find_cubical_prim}
-use std::list {List.length}
+use std::list {}
 
 def synthetic_path : ModulePath := ModulePath.mk (List.cons (Identifier.id "synthetic") List.empty)
 

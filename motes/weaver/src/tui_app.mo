@@ -112,7 +112,7 @@ use weaver::ui::live {LiveMsg, Live.idle, Live.start, Live.update, Live.request_
 use init::transformers {ResultT}
 use std::path {Path, Path.file_name}
 use json::json {Json, Json.to_string}
-use std::list {List.intercalate, List.length}
+use std::list {List.intercalate}
 
 // ── Tui.run: the tty probe and the App wiring ───────────────────────────
 

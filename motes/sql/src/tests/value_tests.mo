@@ -2,7 +2,7 @@
 // these run under both the Rust host and the self-hosted compiler.
 
 use std::test {}
-use std::list {List.length}
+use std::list {}
 use lib::value {*}
 
 def row_of (cells : List (Pair String Value)) : Row :=

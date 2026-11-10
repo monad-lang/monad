@@ -1,4 +1,4 @@
-use std::list {List.length}
+use std::list {}
 open IO {
     println, read_file, file_exists,
     write_file, read_stdin_exact, write_stdout, flush_stdout, write_stderr,
@@ -28,6 +28,7 @@ use codegen::decls {collect_all_decls_from_modules, export_names}
 use lang::module {BatchCheckResult, CheckDiagnostics, ElaboratedAndCache, collect_link_libs, collect_link_pkgs, get_loaded_all, ElaboratedModules, FileCheckAndCache, FileCheckResult, LoadedModules, ModuleInfo, ModuleInfoCache, bench_step, check_file_cached, check_files_cached, check_module_with_scope_path, elaborate_loaded_modules, elaborate_loaded_modules_cached, elaborate_module_decls_best_effort, expand_check_paths, extract_directory, load_file_modules, load_module_with_info, module_name_from_path, module_info_cache_empty, ownership_refusal_of_loaded, resolve_runtime_src, try_parse_decls, try_parse_decls_strict}
 use lang::mote {
     Mote.discover, Mote.discover_config_target_dir, Mote.target_roots,
+    Mote.native_test_roots, Mote.web_only_bin_file,
     Mote.discover, Mote.workspace_members, Mote.manifest_at,
     Mote.scripts_at_path, MoteManifest, BinTarget, ScriptTarget,
     ScriptTarget.script_name, ScriptTarget.script_path, ScriptTarget.script_mote,
@@ -46,7 +47,9 @@ use build::check {
 use build::manage {
     Build.clean_run, Build.gc_run, Build.store_ls, Build.store_verify,
 }
-use build::fetch {Build.fetch_run, Build.verify_manifest, FetchMode}
+use build::fetch {
+    Build.fetch_run, Build.verify_manifest, Build.toolchain_skew_of_manifest, FetchMode,
+}
 use build::test_cache {
     Build.test_cached_ready, Build.test_entry_bin, Build.test_entry_dir,
     Build.test_entry_count_read, Build.test_entry_count_write, Build.test_entry_prepare,
@@ -627,7 +630,7 @@ def resolve_build_input (path : String) (bin : String) (out_name : String) : IO 
 /// The build verb: verify the lock for this target first, then compile.
 #[partial]
 def build_target (path : String) (out_name : String) (bin : String) (verbose : Bool) (debug : Bool) (no_cache : Bool) (locked : Bool) (target_dir_flag : String) (spec : TargetSpec) : IO I64 := do {
-    let locks <- check_locks [path] locked;
+    let locks <- check_locks [path] locked build_commit;
     match locks {
         Option.some e => do { println ("error: " ++ e); return 1 },
         Option.none => build_target_body path out_name bin verbose debug no_cache target_dir_flag spec
@@ -1900,7 +1903,7 @@ def run_check_result (cache : ModuleInfoCache) (result : FileCheckResult) (rest 
 /// variable" -- and the note that this def used to print saying so is
 /// gone with the cause.
 #[partial]
-def resolve_target_paths (verb : String) (subcommand : String) (files : List String) (workspace : Bool) : IO (Option (List String)) := do {
+def resolve_target_paths (verb : String) (subcommand : String) (native_only : Bool) (files : List String) (workspace : Bool) : IO (Option (List String)) := do {
     // `List.empty`/`List.cons` are deliberately NOT used as match
     // patterns here: this file's test driver loads the whole compiler
     // closure, where `BTreeMap` and `Vec` also declare `empty`/`cons`
@@ -1930,7 +1933,8 @@ def resolve_target_paths (verb : String) (subcommand : String) (files : List Str
                 // and located, so the two cases differ in the path
                 // only.
                 let dir := if String.beq manifest.dir "" then "." else manifest.dir;
-                let roots : List String := Mote.target_roots manifest dir;
+                let roots : List String :=
+                    if native_only then Mote.native_test_roots manifest dir else Mote.target_roots manifest dir;
                 // An empty verb is the machine-readable callers' way of
                 // asking for no banner (`monad fmt --check`/`--diff`).
                 if Bool.not (String.is_empty verb) then
@@ -1994,7 +1998,7 @@ def run_fmt
     } else do {
         // Machine-readable modes must not be prefixed by the mote banner.
         let verb : String := if check then "" else if diff then "" else "Formatting";
-        let targets <- resolve_target_paths verb "fmt" files workspace;
+        let targets <- resolve_target_paths verb "fmt" false files workspace;
         match targets {
             Option.none => no_target_diagnostic "fmt",
             Option.some ts =>
@@ -2272,21 +2276,27 @@ def announce_check_cache (plan : CachePlan) : IO I64 := do {
 /// `Option.none` is success. The first failure wins, because one stale
 /// lock is not made clearer by the second.
 #[partial]
-def verify_locks (targets : List String) (locked : Bool) (seen : List String) : IO (Option String) :=
+def verify_locks (targets : List String) (locked : Bool) (compiler_commit : String) (seen : List String) : IO (Option String) :=
     match targets {
         List.empty => return Option.none,
         List.cons t rest => do {
             let root <- target_manifest_root t;
             match root {
-                Option.none => verify_locks rest locked seen,
+                Option.none => verify_locks rest locked compiler_commit seen,
                 Option.some m =>
                     if List.contains_by String.beq m.dir seen
-                    then verify_locks rest locked seen
+                    then verify_locks rest locked compiler_commit seen
                     else do {
-                        let r <- Build.verify_manifest m locked;
-                        match r {
-                            Result.err e => return (Option.some e),
-                            Result.ok _ => verify_locks rest locked (List.cons m.dir seen)
+                        let skew <- Build.toolchain_skew_of_manifest m compiler_commit;
+                        match skew {
+                            Option.some e => return (Option.some e),
+                            Option.none => do {
+                                let r <- Build.verify_manifest m locked;
+                                match r {
+                                    Result.err e => return (Option.some e),
+                                    Result.ok _ => verify_locks rest locked compiler_commit (List.cons m.dir seen)
+                                }
+                            },
                         }
                     }
             }
@@ -2304,15 +2314,15 @@ def target_manifest_root (t : String) : IO (Option MoteManifest) := do {
 /// `verify_locks` over the CLI's own targets; an empty list means "the
 /// mote containing the working directory", the same default `check` has.
 #[partial]
-def check_locks (targets : List String) (locked : Bool) : IO (Option String) := do {
+def check_locks (targets : List String) (locked : Bool) (compiler_commit : String) : IO (Option String) := do {
     let roots : List String := if List.is_empty targets then ["."] else targets;
-    verify_locks roots locked List.empty
+    verify_locks roots locked compiler_commit List.empty
 }
 
 /// The check verb: verify the lock for every target first, then check.
 #[partial]
 def run_check (files : List String) (opts : CheckOptions) : IO I64 := do {
-    let locks <- check_locks files opts.locked;
+    let locks <- check_locks files opts.locked build_commit;
     match locks {
         Option.some e => do { println ("error: " ++ e); return 1 },
         Option.none => run_check_body files opts
@@ -2321,7 +2331,7 @@ def run_check (files : List String) (opts : CheckOptions) : IO I64 := do {
 
 #[partial]
 def run_check_body (files : List String) (opts : CheckOptions) : IO I64 := do {
-    let targets <- resolve_target_paths "Checking" "check" files opts.workspace;
+    let targets <- resolve_target_paths "Checking" "check" false files opts.workspace;
     match targets {
         // Empty only from `--workspace` with no workspace manifest --
         // see `resolve_target_paths`, which has already printed why.
@@ -2406,7 +2416,7 @@ def run_clean (all : Bool) (target_dir_flag : String) : IO I64 := do {
 /// delete live entries.
 #[partial]
 def run_gc (files : List String) (workspace : Bool) (apply : Bool) (target_dir_flag : String) : IO I64 := do {
-    let targets <- resolve_target_paths "Collecting garbage from" "gc" files workspace;
+    let targets <- resolve_target_paths "Collecting garbage from" "gc" false files workspace;
     match targets {
         // Empty only from `--workspace` with no workspace manifest, which
         // `resolve_target_paths` has already explained. Failing rather than
@@ -2496,7 +2506,7 @@ def run_store (sub : String) (target_dir_flag : String) : IO I64 := do {
 /// runner; the default (4) comes from the `test` dispatch in `main`.
 #[partial]
 def run_test_paths (files : List String) (workspace : Bool) (out_dir : String) (verbose : Bool) (jobs : I64) (target_dir_flag : String) (no_cache : Bool) : IO I64 := do {
-    let targets <- resolve_target_paths "Testing" "test" files workspace;
+    let targets <- resolve_target_paths "Testing" "test" true files workspace;
     match targets {
         // Empty only from `--workspace` with no workspace manifest --
         // see `resolve_target_paths`, which has already printed why.
@@ -2504,7 +2514,8 @@ def run_test_paths (files : List String) (workspace : Bool) (out_dir : String) (
         // "No tests found": same exit code, without a second line
         // saying the same thing.
         Option.some ts => if List.is_empty ts then return 1
-        else run_test ts out_dir verbose jobs target_dir_flag no_cache,
+        else run_test ts out_dir verbose jobs target_dir_flag no_cache
+            (List.is_empty files || workspace),
         // Nothing named, inside no mote: say why, and fail -- see
         // `no_target_diagnostic`.
         Option.none => no_target_diagnostic "test"
@@ -2529,9 +2540,62 @@ def find_workspace_members (dir : String) (depth : I64) : IO (List String) := do
     }
 }
 
+/// A manifest lookup cache for `drop_web_only_bins`: `Pair dir manifest`.
+def web_bin_cache_find (dir : String) (cache : List (Pair String (Option MoteManifest)))
+    : Option (Option MoteManifest) :=
+    match cache {
+        List.empty => Option.none,
+        List.cons entry rest =>
+            match entry {
+                Pair.pair key m =>
+                    if String.beq dir key then Option.some m else web_bin_cache_find dir rest,
+            },
+    }
+
+/// Drop files a mote declares as a `[[bin]]` target while its
+/// `[mote] targets` exclude the native profile. Cached per directory.
 #[partial]
-def run_test (files : List String) (out_dir : String) (verbose : Bool) (jobs : I64) (target_dir_flag : String) (no_cache : Bool) : IO I64 := do {
-    let expanded : List String <- expand_check_paths files;
+def drop_web_only_bins (files : List String)
+    (cache : List (Pair String (Option MoteManifest))) : IO (List String) :=
+    match files {
+        List.empty => IO.pure List.empty,
+        List.cons f rest => do {
+            let dir := extract_directory f;
+            let found : Pair (Option MoteManifest) (List (Pair String (Option MoteManifest))) <-
+                match web_bin_cache_find dir cache {
+                    Option.some m => IO.pure (Pair.pair m cache),
+                    Option.none => do {
+                        let m <- Mote.discover dir;
+                        IO.pure (Pair.pair m (List.cons (Pair.pair dir m) cache))
+                    },
+                };
+            match found {
+                Pair.pair m next_cache => drop_bin_tail f rest m next_cache,
+            }
+        }
+    }
+
+/// `drop_web_only_bins`'s per-file tail, split out so the `match` arm above
+/// is a single expression: multi-statement `let`/`let <-` bodies inside a
+/// match arm inside a do block are the shape the parser does not accept.
+#[partial]
+def drop_bin_tail (f : String) (rest : List String) (m : Option MoteManifest)
+    (next_cache : List (Pair String (Option MoteManifest))) : IO (List String) := do {
+    let keep : Bool :=
+        match m {
+            Option.none => true,
+            Option.some man => Bool.not (Mote.web_only_bin_file man f),
+        };
+    let kept <- drop_web_only_bins rest next_cache;
+    if keep then IO.pure (List.cons f kept) else IO.pure kept
+}
+
+#[partial]
+def run_test (files : List String) (out_dir : String) (verbose : Bool) (jobs : I64) (target_dir_flag : String) (no_cache : Bool) (target_aware : Bool) : IO I64 := do {
+    let expanded_all : List String <- expand_check_paths files;
+    let expanded : List String <- if target_aware
+        then drop_web_only_bins expanded_all List.empty
+        else IO.pure expanded_all;
     let total_files : I64 := List.length expanded;
     // The driver cache (Phase 2c). `--verbose` disables it for the same
     // reason it disables the check cache: the trace is a record of what
@@ -3190,7 +3254,7 @@ def Command.dispatch (cmd : Command) : IO I64 :=
                 Option.none => 4,
                 Option.some n => if I64.lt n 1 then 1 else n,
             };
-            let locks <- check_locks files locked;
+            let locks <- check_locks files locked build_commit;
             match locks {
                 Option.some e => do { println ("error: " ++ e); return 1 },
                 Option.none => run_test_paths files workspace (Path.to_string default_output_dir) verbose jobs_n

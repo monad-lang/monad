@@ -23,7 +23,7 @@ use mcp_client::protocol {
     mcp_decode_tools_list, mcp_initialize_request, mcp_initialized_notification,
     mcp_tools_list_request,
 }
-use std::list {List.length}
+use std::list {}
 
 // --- Helpers ---
 

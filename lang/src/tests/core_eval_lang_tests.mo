@@ -1,4 +1,4 @@
-use std::list {List.length}
+use std::list {}
 use lib::core_eval {basic_native_table, eval}
 use lib::core_ir {CoreIr, IrLit}
 use lang::core_value {

@@ -12,7 +12,7 @@ use lib::tui {App, App.draw_plan, App.stale_screen, Cmd, PendingTurn, poll_turns
 use std::concurrent::combine {sleepIO}
 use std::concurrent::fiber {Fiber, FiberError, await_fiber, cancel_fiber, forkIO}
 use std::ref {Ref, Ref.get, Ref.new, Ref.set}
-use std::list {List.length}
+use std::list {}
 
 def cmds_be {M : Type} (a : Cmd M) (b : Cmd M) : Bool :=
     match a {

@@ -19,7 +19,7 @@ use json::json {Json.to_string}
 use std::map {Map, BTreeMap}
 use std::ref {Ref, Ref.get, Ref.modify}
 use std::path {Path, Path.to_string}
-use std::list {List.intercalate, List.length}
+use std::list {List.intercalate}
 use std::bench {Bench.now}
 use log::logger {Logger}
 use weaver::assess {Assessment, Reach}

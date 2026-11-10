@@ -7,7 +7,7 @@
 /// allocation and prove the short-circuit.
 
 use std::io {IO.get_env}
-use std::list {List.any, List.length}
+use std::list {List.any}
 use std::base64 {B64Url.decode}
 use std::random {Random, Random.token, RandomError}
 use crypto::ct {Ct.eq}

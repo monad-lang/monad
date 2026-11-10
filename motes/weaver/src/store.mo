@@ -18,7 +18,7 @@ use std::bench {Bench.now}
 use std::bytebuf {ByteBuf, ByteBuf.of_string, ByteBuf.free}
 use std::stream {FdStream, FdStream.open_file, FdStream.append_mode, Stream, StreamError}
 use std::map {BTreeMap}
-use std::list {List.length, List.filter}
+use std::list {List.filter}
 use shuttle::session {Session, Session.messages_to_json, Session.messages_of_json}
 use shuttle::message {Message}
 use shuttle::message_types {Role, Content}

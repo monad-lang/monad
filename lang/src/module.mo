@@ -91,7 +91,7 @@ use lib::use_completeness {use_completeness_errors}
 // for why the helpers gate themselves and why `bench_step` below prints
 // through `timing_line`).
 use std::log {module_line, timing_line}
-use std::list {List.any, List.contains_by, List.filter, List.intercalate, List.length, Show}
+use std::list {List.any, List.contains_by, List.filter, List.intercalate, Show}
 use std::show {Show}
 // `ScopeData.def_refs` is a `std.map` `HashMap ModulePath ScopeDef` (see
 // `lang/scope.mo`'s own `use std.map {}` doc comment for why the import
@@ -455,19 +455,49 @@ def declared_names_of (decl_list : List Decl) (acc : List String) : List String 
             declared_names_of rest (List.append acc (decl_carried_names d))
     }
 
-/// `decl_local_name` plus the constructor names an `inductive_d` carries.
+/// The names a PUBLIC `use` re-exports with an explicit item. A brace item
+/// is a name path matched against the declaration's own spelling, so a
+/// re-exported `Html.to_string` (`pub use xml_html::html {Html.to_string}`)
+/// is a name the re-exporting module "declares" for this check. Globs and
+/// sub-lists are not enumerated here: the former needs the target module,
+/// and the latter's names are declared by the sub-module itself.
+#[terminating]
+def use_item_declared_names (items : List UseItem) : List String :=
+    match items {
+        List.empty => List.empty,
+        List.cons item rest =>
+            match item {
+                UseItem.use_name n => List.cons (show_identifier n) (use_item_declared_names rest),
+                UseItem.use_rename n _alias =>
+                    List.cons (show_identifier n) (use_item_declared_names rest),
+                _ => use_item_declared_names rest,
+            },
+    }
+
+def use_filter_declared_names (filter : UseFilter) : List String :=
+    match filter {
+        UseFilter.use_bare => List.empty,
+        UseFilter.use_items items => use_item_declared_names items,
+    }
+
+/// `decl_local_name` plus the constructor names an `inductive_d` carries,
+/// plus the names a `pub use` re-exports.
 /// Split out so `declared_names_of` stays one flat walk over the decl list.
 def decl_carried_names (d : Decl) : List String :=
-    match decl_local_name d {
-        Option.none => List.empty,
-        Option.some nm =>
-            match d {
-                Decl.inductive_d ind => match ind {
-                    Inductive.mk _ _ _ constructors _ _ =>
-                        List.cons nm (constructor_names nm constructors)
-                },
-                _ => List.cons nm List.empty
-            }
+    match d {
+        Decl.use_d _path filter public =>
+            if public then use_filter_declared_names filter else List.empty,
+        _ => match decl_local_name d {
+            Option.none => List.empty,
+            Option.some nm =>
+                match d {
+                    Decl.inductive_d ind => match ind {
+                        Inductive.mk _ _ _ constructors _ _ =>
+                            List.cons nm (constructor_names nm constructors)
+                    },
+                    _ => List.cons nm List.empty
+                }
+        },
     }
 
 /// Constructor names, as DECLARED: BOTH the type-qualified spelling
@@ -1295,11 +1325,26 @@ def load_module_decls_of_text (file_path : String) (mp : ModulePath) (content : 
             if String.is_empty rem
             then do { return Option.some decl_list }
             else do {
-                println (String.concat "parse error: " (String.concat (module_path_to_string mp) " did not fully parse (stopped before end of file) -- remaining text starts:"));
-                println (String.slice rem 0 (if I64.gt (String.length rem) 300 then 300 else String.length rem));
+                // Re-parse STRICTLY to recover a located diagnostic. The
+                // lenient walk reports success with a non-empty remainder,
+                // so without this the only message was prose plus a dump of
+                // the remaining text (no file:line:col).
+                let msg : String :=
+                    match decls_parser_strict content {
+                        ParseResult.fail e =>
+                            render_parse_error content (Option.some file_path) e,
+                        ParseResult.success _ _ =>
+                            String.concat "parse error: "
+                                (String.concat (module_path_to_string mp)
+                                    " did not fully parse (stopped before end of file)"),
+                    };
+                println msg;
                 return Option.none
             },
-        ParseResult.fail _ => do { return Option.none }
+        ParseResult.fail e => do {
+            println (render_parse_error content (Option.some file_path) e);
+            return Option.none
+        }
     }
 }
 
@@ -3575,13 +3620,18 @@ def collect_mo_files_entries (entries : List Path) : IO (List String) :=
         List.cons entry rest => do {
             let path : String := Path.to_string entry;
             let is_directory : Bool <- is_dir entry;
-            let here : List String <- if is_directory then
-                collect_mo_files path
-                else if String.ends_with path ".mo" then do {
-                    return [path]
-                } else do {
-                    return List.empty
-                };
+            // Skip HIDDEN directories (`.devenv`, `.git`, ...): an explicit
+            // `monad check .` used to walk `.devenv`'s gettext `.mo`
+            // catalogs, which share the extension and produced hundreds of
+            // parse errors. An explicitly named hidden path is still walked
+            // by `collect_mo_files` itself, which only filters ENTRIES.
+            let hidden : Bool := String.starts_with "." (Path.file_name entry);
+            let here : List String <-
+                if Bool.not is_directory
+                then if String.ends_with path ".mo" then do { return [path] } else do { return List.empty }
+                else if hidden
+                then do { return List.empty }
+                else collect_mo_files path;
             let there : List String <- collect_mo_files_entries rest;
             return (list_append here there)
         }
@@ -4866,19 +4916,11 @@ def dotted_spelling_of (names : List String) (n : String) : Option String :=
     }
 
 /// Everything after the LAST `.`, or `""` when there is none.
-/// `init::string` exports no `split`/`index_of`, so this scans with
-/// `String.slice`; identifiers and def names are short, and this only runs
-/// on the error path.
-#[partial]
-def tail_after_last_dot_go (s : String) (len : I64) (i : I64) (last : I64) : I64 :=
-    if I64.lt len i
-    then last
-    else tail_after_last_dot_go s len (I64.add i 1)
-        (if String.beq (String.slice s i 1) "." then i else last)
-
+/// `String.find_last` reports a BYTE index (the unit `String.drop` wants);
+/// identifiers and def names are short, and this only runs on the error
+/// path, so no separate character index is needed.
 def tail_after_last_dot (s : String) : String :=
-    let len : I64 := String.length s in
-    let last : I64 := tail_after_last_dot_go s len 0 (-1) in
+    let last : I64 := String.find_last s "." in
     if I64.lt last 0 then "" else String.drop (I64.add last 1) s
 
 def unknown_use_name_error (info : ModuleInfo) (path : ModulePath) (n : String) (dotted : Option String) : String :=

@@ -1,6 +1,6 @@
 /// The explorer's pure parts: stories, inspection and the update.
 
-use std::list {List.length, List.intercalate}
+use std::list {List.intercalate}
 use xml_html::html {Html.Node, Html.Attr, Html.to_string}
 use oak::typed {Oak.Node, Oak.to_html}
 use oak::elements {Html.div, Html.button, Html.input, Html.label, Html.img, Html.text, Html.id_, Html.for_, Html.aria, Html.attr}

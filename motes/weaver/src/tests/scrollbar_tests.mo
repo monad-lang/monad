@@ -10,7 +10,7 @@ use shuttle::session {Session}
 use weaver::commands {WeaverState}
 use weaver::policy {Mode}
 use std::map {BTreeMap}
-use std::list {List.length}
+use std::list {}
 use weaver::ui::banner {Banner.shown, Banner.hidden}
 use weaver::model {
     TuiModel, init_tui_model, Model.append_block, Model.body_height,

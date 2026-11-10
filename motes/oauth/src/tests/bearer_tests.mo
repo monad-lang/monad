@@ -3,7 +3,7 @@
 /// `Bearer.require_at` fixes the clock so expiry and the cache TTL are
 /// deterministic. Both hosts run these.
 
-use std::list {List.any, List.length}
+use std::list {List.any}
 use std::ref {Ref, Ref.new, Ref.update}
 use std::base64 {B64Url.encode}
 use std::io {IO.current_time}

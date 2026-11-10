@@ -7,7 +7,7 @@ use weaver::diff {Diff.lines, Diff.render, Diff.for_input}
 use json::json {Json, Json.make_str, Json.make_object}
 use std::map {Map, BTreeMap}
 use std::process {process_id}
-use std::list {List.length}
+use std::list {}
 
 def line_eq (a : List String) (b : List String) : Bool :=
     if Bool.not (List.length a == List.length b)

@@ -5,7 +5,7 @@ use weaver::todo {
     Todo.same, Todo.write, Todo.read,
 }
 use json::json {Json, Json.parse}
-use std::list {List.length, List.intercalate}
+use std::list {List.intercalate}
 
 def parse_todos (text : String) : Result String (List TodoItem) :=
     match Json.parse text {

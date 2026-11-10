@@ -2,7 +2,7 @@
 /// spans' texts concatenate to the fence's text exactly. Run from the repo
 /// root (the book is read from `docs/src`).
 use std::io {IO.read_file, IO.list_dir}
-use std::list {List.filter, List.length}
+use std::list {List.filter}
 use std::path {Path, Path.of, Path.to_string}
 use markdown::types {Markdown.Block, Markdown.Document}
 use markdown::options {Markdown.site_options}

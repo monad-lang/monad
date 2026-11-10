@@ -28,7 +28,7 @@ use eval::file {Eval.run_file_limited}
 use lang::mote {MoteManifest, Mote.discover}
 use std::ref {Ref, Ref.get, Ref.set}
 use std::map {Map, BTreeMap}
-use std::list {List.intercalate, List.length}
+use std::list {List.intercalate}
 use std::io {IO.write_file}
 use std::path {Path}
 use std::process {process_id, exec_cmd}

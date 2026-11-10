@@ -7,7 +7,7 @@
 // `A -> B` in the tree one index short and made delta-unfolding such a def
 // produce a dangling parameter (univalence.md, 2026-10-30).
 
-use lang::types {Decl, Term}
+use lang::types {Decl, Literal, Term}
 use lib::module {parse_all_decls}
 
 open ParseResult {fail, success}
@@ -134,4 +134,37 @@ def test_named_arrow_codomain_counts_its_binder : Bool :=
     match parse_all_decls "def Named (A B : Type) : Type := (x : A) -> B" {
         success _ decls => cod_is (arrow_body decls) 1,
         fail _ => false,
+    }
+
+/// `(p).a` — a projection on a parenthesised atom — must lower to a
+/// field-pattern match, not to an application of the `.` operator (which
+/// used to report `field` as an unknown variable).
+#[partial]
+def peel_lam_ctx (t : Term) : Term :=
+    match t {
+        Term.ctx _ inner => peel_lam_ctx inner,
+        Term.lam _ _ body => peel_lam_ctx body,
+        _ => t,
+    }
+
+def is_field_match (t : Term) : Bool :=
+    match peel_lam_ctx t {
+        Term.lit l =>
+            match l {
+                Literal.match_ _ _ => true,
+                _ => false,
+            },
+        _ => false,
+    }
+
+#[test]
+def test_parenthesized_projection_lowers_to_a_field_match : Bool :=
+    let src : String := "def via (p : I64) : I64 := (p).a\n" in
+    match parse_all_decls src {
+        ParseResult.success _ decls =>
+            match def_term_of decls {
+                Option.some t => is_field_match t,
+                Option.none => false,
+            },
+        ParseResult.fail _ => false,
     }

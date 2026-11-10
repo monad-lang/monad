@@ -7,8 +7,6 @@
 ///
 /// The format is fixed width: `Sun, 06 Nov 1994 08:49:37 GMT`.
 
-use std::list {List.length}
-
 def Http.Date.month_names : List String :=
     ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
         "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]

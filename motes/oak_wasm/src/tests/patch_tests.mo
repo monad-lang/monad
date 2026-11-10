@@ -1,6 +1,6 @@
 /// Pure diff tests for `Patch.diff`. The apply half is DOM-bound and is
 /// covered end to end by `wasm/web/spa_smoke.mjs`.
-use std::list {List.length}
+use std::list {}
 use xml_html::html {Html.Attr, Html.Node}
 use lib::patch {Patch}
 

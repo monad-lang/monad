@@ -17,7 +17,7 @@ use http::strings {
 }
 use lib::types {Body, Framing, Headers, HttpVersion, Method, Request, Response, Uri}
 use http::uri {Uri.format, Uri.format_query, Uri.parse}
-use std::list {List.length}
+use std::list {}
 
 // ── byte list builders ──────────────────────────────────────────────────
 

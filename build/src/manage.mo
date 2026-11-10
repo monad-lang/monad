@@ -32,7 +32,7 @@
 /// to DELETE -- so the same failure has to stop it instead. That asymmetry
 /// is the whole of `Build.reach_of` below.
 
-use std::list {List.contains_by, List.filter, List.intercalate, List.length}
+use std::list {List.contains_by, List.filter, List.intercalate}
 use std::process {exec_cmd}
 use parsec::number {parse_i64}
 use build::hash {Build.file_digest_with, Build.probe_digest_tool, DigestTool}

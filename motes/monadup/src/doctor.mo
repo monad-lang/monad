@@ -5,7 +5,7 @@
 /// environment. Checks 4/8/9 mirror exactly what the compiler's
 /// `Mote.toolchain_root` / `toolchain_missing_hint` require, so doctor and
 /// compiler diagnostics never disagree.
-use std::list {List.length}
+use std::list {}
 use std::process {Proc.capture}
 use std::io {IO.get_env}
 use json::json {

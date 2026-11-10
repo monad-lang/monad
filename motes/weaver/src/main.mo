@@ -74,7 +74,7 @@ use json::json {Json}
 use std::io {IO.write_stdout, IO.flush_stdout, IO.read_line, IO.write_stderr, IO.get_env, IO.is_dir}
 use std::stream {StreamError}
 use std::path {Path, Path.of, Path.to_string}
-use std::list {List.intercalate, List.length}
+use std::list {List.intercalate}
 use std::map {Map}
 
 /// The registry Weaver ships: all six built-ins (a coding agent's whole

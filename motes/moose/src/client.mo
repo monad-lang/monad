@@ -64,7 +64,7 @@ use http::wire {
 }
 use http::body {}
 use http::uri {Uri.format, Uri.parse, Uri.resolve, Uri.same_origin}
-use std::list {List.length}
+use std::list {}
 
 // ── Connection handle ───────────────────────────────────────────────────
 

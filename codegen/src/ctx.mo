@@ -12,7 +12,7 @@
 /// CONSTRUCTOR space, which is a different namespace -- see
 /// `constructor_tag` in `emit` for the three key shapes it uses.
 use llvm::strmap {str_map_empty, str_map_insert, str_map_lookup}
-use std::list {List.length}
+use std::list {}
 use lib::ownership {DropBinding, DropPlan, OwnershipTables}
 use lang::types {
     DebugName, Def, Identifier, Inductive, Location, ModulePath, Param, Struct, Term,

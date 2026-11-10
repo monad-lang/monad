@@ -2,7 +2,7 @@
 /// multi-character tokens stay whole, numbers and suffixes stay one token, and
 /// comments/strings/raw strings are opaque.
 
-use std::list {List.length}
+use std::list {}
 use lib::lexer {Lex.lex, Lex.lines, Token}
 
 #[partial]

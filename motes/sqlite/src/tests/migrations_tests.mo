@@ -4,7 +4,7 @@
 // Compiled-backend only, like sqlite_tests.mo.
 
 use std::test {}
-use std::list {List.length}
+use std::list {}
 use std::process {exec_cmd, process_id}
 use std::path {Path}
 use std::io {IO.write_file}

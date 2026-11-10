@@ -27,7 +27,7 @@ pub use lib::help {*}
 pub use lib::parse {*}
 pub use lib::attr {*}
 
-use std::list {List.length}
+use std::list {}
 // `String.concat_all` lives in `init/string.mo` (moved there by
 // c431ba0, which deleted this file's own `cli_concat_all` copy). An
 // explicit import is required, not optional: this module's defs are

@@ -1,4 +1,4 @@
-use std::list {List.length}
+use std::list {}
 /// `monadup env`: the resolved environment, in the spirit of `rustup show`.
 use lib::doctor {*}
 use lib::layout {*}

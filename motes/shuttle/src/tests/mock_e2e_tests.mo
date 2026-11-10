@@ -24,7 +24,7 @@ use shuttle::agent {Agent.exec, RunState}
 use shuttle::session {Session}
 use json::json {Json, Json.make_array, Json.make_str, Json.to_string}
 use std::process {process_id}
-use std::list {List.any, List.length}
+use std::list {List.any}
 
 def sentinel : String := "SHUTTLE_MOCK_SENTINEL_7"
 

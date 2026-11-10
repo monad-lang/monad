@@ -93,3 +93,33 @@ def test_u64_to_string : Bool := U64.to_string 42u64 == "42"
 def test_u64_ring_step : Bool :=
     U64.mod (U64.add 255u64 1u64) 256u64 == 0u64
     && U64.mod (U64.add 256u64 1u64) 256u64 == 1u64
+
+#[test]
+def test_i64_rem : Bool :=
+    I64.rem 17i64 5i64 == 2i64
+        && I64.rem (0i64 - 17i64) 5i64 == (0i64 - 2i64)
+        && I64.rem 5i64 0i64 == 0i64
+        && I64.mod 17i64 5i64 == 2i64
+
+#[test]
+def test_i64_bitwise : Bool :=
+    I64.and 12i64 10i64 == 8i64
+        && I64.or 12i64 10i64 == 14i64
+        && I64.xor 12i64 10i64 == 6i64
+        && I64.not 0i64 == (0i64 - 1i64)
+
+#[test]
+def test_i64_shifts : Bool :=
+    I64.shl 1i64 4i64 == 16i64 && I64.shr (0i64 - 16i64) 2i64 == (0i64 - 4i64)
+
+#[test]
+def test_u64_bitwise_and_shifts : Bool :=
+    U64.and 12u64 10u64 == 8u64
+        && U64.or 12u64 10u64 == 14u64
+        && U64.shl 1u64 4u64 == 16u64
+        && U64.shr 0xFFFFFFFFFFFFFFFFu64 1u64 == 0x7FFFFFFFFFFFFFFFu64
+        && U64.not 0u64 == 0xFFFFFFFFFFFFFFFFu64
+
+#[test]
+def test_u32_rem : Bool :=
+    U32.rem 17u32 5u32 == 2u32 && U32.rem 5u32 0u32 == 0u32

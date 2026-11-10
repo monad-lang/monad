@@ -44,9 +44,9 @@ use std::list {}
 
 open LLVMType {i1_, i32_, i8_, i64_, ptr}
 open LLVMValue {
-    add, alloc_constructor, and_, call, icmp_eq, icmp_ne, icmp_sgt, icmp_slt,
+    add, alloc_constructor, and_, ashr, call, icmp_eq, icmp_ne, icmp_sgt, icmp_slt,
     icmp_ult, icmp_ugt,
-    int_, inttoptr, load, lshr_, mul, or_, parm_, phi, sdiv, sext, shl_, sub,
+    int_, inttoptr, load, lshr_, mul, or_, parm_, phi, sdiv, sext, shl_, srem, sub,
     trunc, udiv, urem, var_, xor_, zext,
 }
 open LLVMInstruction {assign, branch, jump, ret}
@@ -101,7 +101,9 @@ def numeric_runtime_functions : List LLVMFunction :=
         emit_i8_eq, emit_i8_lt, emit_i8_gt,
         emit_i32_eq, emit_i32_lt, emit_i32_gt,
         emit_i32_to_i64, emit_i64_to_i32,
-        emit_i64_add, emit_i64_sub, emit_i64_mul, emit_i64_div,
+        emit_i64_add, emit_i64_sub, emit_i64_mul, emit_i64_div, emit_i64_rem,
+        emit_i64_and, emit_i64_or, emit_i64_xor, emit_i64_shl, emit_i64_shr,
+        emit_u64_and, emit_u64_or, emit_u64_shl, emit_u64_shr, emit_u32_rem,
         emit_i64_eq, emit_i64_lt, emit_i64_gt]
 
 // ─── Shared emitter helpers ─────────────────────────────────────────
@@ -360,6 +362,15 @@ def emit_u64_xor : LLVMFunction :=
         blocks := [entry],
         dbg_loc := Option.none }
 
+def emit_u64_and : LLVMFunction := emit_plain_binop "monad_u64_and" (and_ (parm_ 0) (parm_ 1))
+
+def emit_u64_or : LLVMFunction := emit_plain_binop "monad_u64_or" (or_ (parm_ 0) (parm_ 1))
+
+def emit_u64_shl : LLVMFunction := emit_plain_binop "monad_u64_shl" (shl_ (parm_ 0) (parm_ 1))
+
+/// Logical shift (`lshr`), the unsigned `U64` shift.
+def emit_u64_shr : LLVMFunction := emit_plain_binop "monad_u64_shr" (lshr_ (parm_ 0) (parm_ 1))
+
 #[partial]
 def emit_icmp_native (name : String) (cmp : LLVMValue) : LLVMFunction :=
     let entry :=
@@ -474,6 +485,17 @@ def emit_masked_binop (name : String) (mask : Shared LLVMValue) (op : LLVMValue)
         blocks := [entry],
         dbg_loc := Option.none }
 
+/// A two-argument operation emitted verbatim (`assign "r" op`), no
+/// masking: the `I64`/`U64` families whose values already fill the word.
+def emit_plain_binop (name : String) (op : LLVMValue) : LLVMFunction :=
+    let entry :=
+        LLVMBasicBlock.mk "entry" [assign "r" op, ret (var_ "r")] in
+    { name := name,
+        params := (i64_params 2),
+        ret_ty := i64_,
+        blocks := [entry],
+        dbg_loc := Option.none }
+
 /// A two-argument division that masks both operands to `mask`, yields 0
 /// for a zero divisor, and masks the quotient -- the `int_div_width`
 /// mirror (`if b == 0 { 0 } else { mask(a.wrapping_div(b)) }`). Masked
@@ -490,6 +512,27 @@ def emit_masked_div_native (name : String) (mask : Shared LLVMValue) : LLVMFunct
     let calc :=
         LLVMBasicBlock.mk "calc"
             [assign "r" (sdiv (var_ "a") (var_ "b")),
+                assign "m" (and_ (var_ "r") (Shared.get mask)),
+                ret (var_ "m")] in
+    { name := name,
+        params := (i64_params 2),
+        ret_ty := i64_,
+        blocks := [entry, zero, calc],
+        dbg_loc := Option.none }
+
+/// The remainder counterpart of `emit_masked_div_native`: masked operands,
+/// 0 for a zero divisor, masked result.
+def emit_masked_rem_native (name : String) (mask : Shared LLVMValue) : LLVMFunction :=
+    let entry :=
+        LLVMBasicBlock.mk "entry"
+            [assign "a" (and_ (parm_ 0) (Shared.get mask)),
+                assign "b" (and_ (parm_ 1) (Shared.get mask)),
+                assign "zero_b" (icmp_eq (var_ "b") (int_ 0)),
+                branch (var_ "zero_b") "zero" "calc"] in
+    let zero := LLVMBasicBlock.mk "zero" [ret (int_ 0)] in
+    let calc :=
+        LLVMBasicBlock.mk "calc"
+            [assign "r" (srem (var_ "a") (var_ "b")),
                 assign "m" (and_ (var_ "r") (Shared.get mask)),
                 ret (var_ "m")] in
     { name := name,
@@ -554,6 +597,8 @@ def emit_u32_shr : LLVMFunction :=
 /// (`lang/core_eval.mo`) implements `u32_div` by calling `U32.div`; the
 /// `Div U32` instance alone never made it reachable before.
 def emit_u32_div : LLVMFunction := emit_masked_div_native "monad_u32_div" (Shared.of u32_mask)
+
+def emit_u32_rem : LLVMFunction := emit_masked_rem_native "monad_u32_rem" (Shared.of u32_mask)
 
 /// `monad_u32_to_string`: mask, then reuse `monad_i64_to_string` (a
 /// u32's canonical range is non-negative, so the signed printer is
@@ -825,6 +870,19 @@ def emit_i64_mul : LLVMFunction :=
         dbg_loc := Option.none }
 
 def emit_i64_div : LLVMFunction := emit_guarded_native "monad_i64_div" (sdiv (parm_ 0) (parm_ 1))
+
+def emit_i64_rem : LLVMFunction := emit_guarded_native "monad_i64_rem" (srem (parm_ 0) (parm_ 1))
+
+def emit_i64_and : LLVMFunction := emit_plain_binop "monad_i64_and" (and_ (parm_ 0) (parm_ 1))
+
+def emit_i64_or : LLVMFunction := emit_plain_binop "monad_i64_or" (or_ (parm_ 0) (parm_ 1))
+
+def emit_i64_xor : LLVMFunction := emit_plain_binop "monad_i64_xor" (xor_ (parm_ 0) (parm_ 1))
+
+def emit_i64_shl : LLVMFunction := emit_plain_binop "monad_i64_shl" (shl_ (parm_ 0) (parm_ 1))
+
+/// Arithmetic shift (`ashr`), matching Rust's `>>` on `i64`.
+def emit_i64_shr : LLVMFunction := emit_plain_binop "monad_i64_shr" (ashr (parm_ 0) (parm_ 1))
 
 def emit_i64_eq : LLVMFunction := emit_icmp_native "monad_i64_eq" (icmp_eq (parm_ 0) (parm_ 1))
 def emit_i64_lt : LLVMFunction := emit_icmp_native "monad_i64_lt" (icmp_slt (parm_ 0) (parm_ 1))

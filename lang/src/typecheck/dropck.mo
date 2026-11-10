@@ -88,7 +88,7 @@ use lib::types {Binder, Con, DebugName, FieldPattern, Identifier, Literal, Match
 use lib::typecheck::usage {UsePos, owning_at}
 use llvm::strmap {str_map_empty}
 use std::map {HashMap}
-use std::list {List.length}
+use std::list {}
 
 // ─── Per-leaf drop decision ────────────────────────────────────────
 

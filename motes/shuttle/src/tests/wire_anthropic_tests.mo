@@ -11,7 +11,7 @@ use shuttle::message {Message, Turn, Usage}
 use shuttle::tool {ToolSpec}
 use anthropic::types {AnthropicMessage, Block, MessagesRequest, MessagesResponse}
 use json::json {Json, Json.parse, Json.to_string}
-use std::list {List.length}
+use std::list {}
 use std::map {Map, BTreeMap}
 
 /// A recorded text-turn body, exactly as Anthropic sends it: content

@@ -1,4 +1,4 @@
-use std::list {List.intercalate, List.length}
+use std::list {List.intercalate}
 // The leaf string-map module, NOT `lang.codegen.util` -- that file imports
 // this one, so the dependency cannot run both ways. See `strmap.mo`'s head.
 use lib::strmap {str_map_empty, str_map_insert, str_map_lookup}
@@ -84,15 +84,16 @@ pub type LLVMValue {
     sdiv (lhs : LLVMValue) (rhs : LLVMValue),
     udiv (lhs : LLVMValue) (rhs : LLVMValue),
     urem (lhs : LLVMValue) (rhs : LLVMValue),
-    // Bitwise and shifts. `lshr` (not `ashr`) because every fixed-width
-    // integer native that uses these is UNSIGNED -- the u32/u8 family in
-    // runtime/src/natives.mo, which masks to width either side of the
-    // operation the way `mask_to_suffix` (rust/core/src/core_native.rs) does.
+    srem (lhs : LLVMValue) (rhs : LLVMValue),
+    // Bitwise and shifts. `lshr` is the unsigned shift; `ashr` is the
+    // signed one (`I64.shr`). Both exist because the numeric families
+    // differ in signedness.
     and_ (lhs : LLVMValue) (rhs : LLVMValue),
     or_ (lhs : LLVMValue) (rhs : LLVMValue),
     xor_ (lhs : LLVMValue) (rhs : LLVMValue),
     shl_ (lhs : LLVMValue) (rhs : LLVMValue),
     lshr_ (lhs : LLVMValue) (rhs : LLVMValue),
+    ashr (lhs : LLVMValue) (rhs : LLVMValue),
     icmp_eq (lhs : LLVMValue) (rhs : LLVMValue),
     icmp_ne (lhs : LLVMValue) (rhs : LLVMValue),
     icmp_slt (lhs : LLVMValue) (rhs : LLVMValue),
@@ -274,8 +275,9 @@ open LLVMType {fn_, f32_, f64_, i1_, i32_, i64_, i8_, ptr, struct_, void, word}
 open LLVMValue {
     add, alloc_closure, alloc_constructor, and_, bitcast, bool_, call, fn_ref,
     gep, global_, icmp_eq, icmp_ne, icmp_sgt, icmp_slt, icmp_ult, icmp_ugt, int32_,
-    int_, inttoptr, load, lshr_, mul, native_op, or_, parm_, phi, ptrtoint, sdiv,
-    sext, shl_, sub, trunc, udiv, urem, var_, void_val, xor_, zext,
+    int_, inttoptr, load, lshr_, mul, native_op, or_, parm_, phi, ptrtoint,
+    sdiv, sext, shl_, srem, sub, trunc, udiv, urem, var_, void_val, xor_, zext,
+    ashr,
 }
 open LLVMInstruction {assign, branch, call_void, comment, jump, ret, store}
 open ParamPair {mk}
@@ -472,11 +474,13 @@ def show_llvm_value (bits : I64) (val : LLVMValue) : String := match val {
     sdiv lhs rhs => show_arith bits "sdiv" lhs rhs,
     udiv lhs rhs => show_arith bits "udiv" lhs rhs,
     urem lhs rhs => show_arith bits "urem" lhs rhs,
+    srem lhs rhs => show_arith bits "srem" lhs rhs,
     and_ lhs rhs => show_arith bits "and" lhs rhs,
     or_ lhs rhs => show_arith bits "or" lhs rhs,
     xor_ lhs rhs => show_arith bits "xor" lhs rhs,
     shl_ lhs rhs => show_arith bits "shl" lhs rhs,
     lshr_ lhs rhs => show_arith bits "lshr" lhs rhs,
+    ashr lhs rhs => show_arith bits "ashr" lhs rhs,
     icmp_eq lhs rhs => show_arith bits "icmp eq" lhs rhs,
     icmp_ne lhs rhs => show_arith bits "icmp ne" lhs rhs,
     icmp_slt lhs rhs => show_arith bits "icmp slt" lhs rhs,
@@ -543,11 +547,13 @@ pub def llvm_value_type (val : LLVMValue) : LLVMType := match val {
     sdiv x y => i64_,
     udiv x y => i64_,
     urem x y => i64_,
+    srem x y => i64_,
     and_ x y => i64_,
     or_ x y => i64_,
     xor_ x y => i64_,
     shl_ x y => i64_,
     lshr_ x y => i64_,
+    ashr x y => i64_,
     icmp_eq x y => i1_,
     icmp_ne x y => i1_,
     icmp_slt x y => i1_,

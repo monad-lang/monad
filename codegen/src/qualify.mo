@@ -32,7 +32,7 @@ use lib::util {
     join_semicolon_msgs
 }
 use std::map {HashMap}
-use std::list {List.intercalate, List.length}
+use std::list {List.intercalate}
 
 /// A decl's own declared name, for every top-level decl kind item 5.1
 /// qualifies: `def_d`, `inductive_d`, `struct_d`, `class_d`. (`instance_d`

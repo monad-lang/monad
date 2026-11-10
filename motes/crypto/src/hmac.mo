@@ -5,7 +5,7 @@
 /// size and XORed with the inner and outer pads. This module only computes;
 /// comparing two MACs is `Ct.eq` (motes/crypto/src/ct.mo).
 
-use std::list {List.length}
+use std::list {}
 use std::sha256 {Sha256.hash_bytes}
 
 def Hmac.block_bytes : I64 := 64i64

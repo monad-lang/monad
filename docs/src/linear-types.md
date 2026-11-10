@@ -16,7 +16,7 @@ Theory (QTT).
 > and no off switch. A mote that has not finished migrating can opt into
 > warnings with `[affine] mode = "warn"` in its `mote.toml`; the default is
 > `error`. `init`, `runtime`, `proofs` and `web_event` are at zero and enforced.
-> A single def can opt out with `#[allow_affine "<reason>"]`, and a
+> A single def can opt out with `#[allow_non_affine "<reason>"]`, and a
 > `#[proof]` def is exempt structurally.
 >
 > Three gaps remain: the explicit `!`/`?`/`%` annotations below parse but are

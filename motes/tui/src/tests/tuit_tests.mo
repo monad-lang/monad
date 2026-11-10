@@ -21,7 +21,7 @@ use lib::terminal {Terminal.cursor_show_code, Terminal.leave_alt_screen_code, Te
 use lib::tuit {Closed, Cooked, Raw, Term, TuiT, screen_repaint}
 use lib::types {Screen}
 use lib::widget {label}
-use std::list {List.length}
+use std::list {}
 
 // ==================== the mock base monad ====================
 

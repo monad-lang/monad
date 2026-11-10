@@ -72,6 +72,16 @@ echo "== web: hello (freestanding build + Node loader) =="
     -o "$tmp/hello.wasm" --no-cache
 node wasm/web/smoke.mjs "$tmp/hello.wasm"
 
+echo "== web: freestanding build needs no WASI_SDK_PATH =="
+# The web plan has no sysroot and links with -nostdlib. It does not REQUIRE
+# WASI_SDK_PATH: MONAD_WEB_CC (here pointed at the same clang, because a
+# nix-WRAPPED host clang injects flags the wasm target rejects) or a plain
+# host clang is enough.
+env -u WASI_SDK_PATH MONAD_WEB_CC="$WASI_SDK_PATH/bin/clang" \
+    "$MONAD" build --target wasm32-unknown-unknown \
+    fixtures/wasm/hello.mo -o "$tmp/hello-nowasi.wasm" --no-cache
+node wasm/web/smoke.mjs "$tmp/hello-nowasi.wasm"
+
 echo "== web: Json.to_string (float formatting through the JS host) =="
 # The serializer's float arm reaches `F64.to_string` even for an
 # integer/string document. The web profile had no libc formatter and gated

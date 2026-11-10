@@ -37,7 +37,7 @@ use std::concurrent::fiber {
     pollFiber,
 }
 use std::concurrent::combine {sleepIO}
-use std::list {List.length}
+use std::list {}
 use std::ref {Ref, Ref.get, Ref.new, Ref.set, Ref.update}
 use std::stream {Stream, FdStream, FdStream.set_timeout}
 use http::types {

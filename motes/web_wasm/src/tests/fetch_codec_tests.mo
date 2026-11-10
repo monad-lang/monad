@@ -2,7 +2,7 @@
 /// are what let a value contain `:`; cover that explicitly.
 
 use lib::fetch {encode_headers, decode_headers}
-use std::list {List.length}
+use std::list {}
 
 def pair_is (k : String) (v : String) (p : Pair String String) : Bool :=
     match p { Pair.pair ak av => String.beq k ak && String.beq v av }

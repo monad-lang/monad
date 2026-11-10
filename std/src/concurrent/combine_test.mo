@@ -11,7 +11,7 @@ use lib::concurrent::combine {
     Combine.Duration, FiberScope, Timeout, all, race, scope_fork, scoped, sleepIO, timeout,
 }
 use lib::io {}
-use lib::list {List.length}
+use lib::list {}
 open IO {current_time_nano}
 
 // Helper thunks

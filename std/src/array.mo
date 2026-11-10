@@ -33,13 +33,13 @@
 /// write (`Arc::make_mut`) where `monad_set_field` writes the real
 /// object. Both are CORRECT; only the cost differs. Under the
 /// interpreter, prefer `Array.from_list`/`set` folds.
-use std::list {List.length}
+use std::list {}
 
 /// The backing constructor. `mk` takes no declared fields: its arity is
 /// whatever `array_new`/`array_freeze` allocated it with, which is the
 /// array's length. Do not construct one directly -- `Array.new` is the
 /// entry point, and a hand-built `Array.mk` has length 0.
-type Array A {
+pub type Array A {
     mk,
 }
 
@@ -64,12 +64,12 @@ pub instance {A : Type} Copy (Array A) {
 /// representation as `Array` -- a distinct type only so the type
 /// checker keeps the mutable and immutable halves apart, which is what
 /// makes `freeze` meaningful.
-type ArrayBuilder A {
+pub type ArrayBuilder A {
     mk,
 }
 
 #[native array_new]
-def Array.new (n : I64) (fill : A) : Array A
+pub def Array.new (n : I64) (fill : A) : Array A
 
 #[native array_len]
 pub def Array.length (a : Array A) : I64
@@ -78,20 +78,20 @@ pub def Array.length (a : Array A) : I64
 /// behaviour in the compiled backend, and `String.get`
 /// (`init/string.mo`) already returns `Option U8` for the same reason.
 #[native array_get]
-def Array.get (a : Array A) (i : I64) : Option A
+pub def Array.get (a : Array A) (i : I64) : Option A
 
 /// The persistent set: copy-then-write, O(n), input untouched. An
 /// out-of-range index returns the array unchanged -- the total
 /// counterpart of `get`'s `Option.none`.
 #[native array_with]
-def Array.set (a : Array A) (i : I64) (v : A) : Array A
+pub def Array.set (a : Array A) (i : I64) (v : A) : Array A
 
 #[native array_set_in_place]
 priv def array_set_in_place_raw (b : ArrayBuilder A) (i : I64) (v : A) : RawIO Unit
 
 /// Builder fill. O(1) compiled, O(n) interpreted -- see this module's
 /// own doc comment.
-def Array.set_in_place (b : ArrayBuilder A) (i : I64) (v : A) : IO Unit :=
+pub def Array.set_in_place (b : ArrayBuilder A) (i : I64) (v : A) : IO Unit :=
     IO.mk (array_set_in_place_raw b i v)
 
 #[native array_freeze]
@@ -101,7 +101,7 @@ priv def array_freeze_raw (b : ArrayBuilder A) : RawIO (Array A)
 /// a value pure code believes is frozen, and a later `set_in_place`
 /// would mutate it -- the one way this design can produce a wrong
 /// answer rather than a slow one.
-def Array.freeze (b : ArrayBuilder A) : IO (Array A) :=
+pub def Array.freeze (b : ArrayBuilder A) : IO (Array A) :=
     IO.mk (array_freeze_raw b)
 
 /// A fresh `ArrayBuilder` of `n` slots, every one holding `fill`.
@@ -110,23 +110,22 @@ def Array.freeze (b : ArrayBuilder A) : IO (Array A) :=
 /// the mutable and immutable halves apart (see this module's doc
 /// comment).
 #[native array_new]
-def Array.builder (n : I64) (fill : A) : ArrayBuilder A
+pub def Array.builder (n : I64) (fill : A) : ArrayBuilder A
 
-def Array.is_empty (a : Array A) : Bool := I64.beq (Array.length a) 0
+pub def Array.is_empty (a : Array A) : Bool := I64.beq (Array.length a) 0
 
 /// `get` with a caller-supplied answer for an out-of-range index, for
-/// the common case where the bound is already known good.
-def Array.get_or (a : Array A) (i : I64) (fallback : A) : A :=
-    match Array.get a i {
-        Option.some v => v,
-        Option.none => fallback,
-    }
+/// the common case where the bound is already known good. A native: the
+/// `Option` that `Array.get` would allocate is never materialized, which is
+/// what makes a read allocation-free in the compiled backend.
+#[native array_get_or]
+pub def Array.get_or (a : Array A) (i : I64) (fallback : A) : A
 
 /// The empty list case cannot call `Array.new 0 fill` -- there is no
 /// element of `A` to hand it, and `Array.new` needs one even at length
 /// 0. `array_new` reads its fill only when the length is positive, so
 /// the head element is available in exactly the case it is needed.
-def Array.from_list (xs : List A) : Array A :=
+pub def Array.from_list (xs : List A) : Array A :=
     match xs {
         List.empty => Array.empty,
         List.cons x rest =>
@@ -138,7 +137,7 @@ def Array.from_list (xs : List A) : Array A :=
 /// The length-0 array. Nullary, so it needs no element of `A` at all --
 /// `Array.mk` with zero fields IS the empty array, which is why the
 /// constructor is declared with none.
-def Array.empty : Array A := Array.mk
+pub def Array.empty : Array A := Array.mk
 
 /// `from_list`'s worker: walk the tail writing each element at the next
 /// index. Persistent `set` rather than the builder, so this behaves
@@ -150,7 +149,7 @@ def Array.fill_from (acc : Array A) (i : I64) (rest : List A) : Array A :=
         List.cons x more => Array.fill_from (Array.set acc i x) (i + 1) more,
     }
 
-def Array.to_list (a : Array A) : List A := Array.to_list_from a 0
+pub def Array.to_list (a : Array A) : List A := Array.to_list_from a 0
 
 #[partial]
 def Array.to_list_from (a : Array A) (i : I64) : List A :=
@@ -161,14 +160,14 @@ def Array.to_list_from (a : Array A) (i : I64) : List A :=
     }
     else List.empty
 
-def Array.map (f : A -> B) (a : Array A) : Array B :=
+pub def Array.map (f : A -> B) (a : Array A) : Array B :=
     Array.from_list (List.map f (Array.to_list a))
 
 /// Its own recursion rather than `Foldable.foldl` over `to_list`: the
 /// class method needs its instance in scope at the call site, and
 /// indexing directly is both simpler and avoids building the
 /// intermediate list.
-def Array.foldl (f : B -> A -> B) (init : B) (a : Array A) : B :=
+pub def Array.foldl (f : B -> A -> B) (init : B) (a : Array A) : B :=
     Array.foldl_from f init a 0
 
 #[partial]
@@ -183,7 +182,7 @@ def Array.foldl_from (f : B -> A -> B) (acc : B) (a : Array A) (i : I64) : B :=
 /// One element longer, with `v` at the end. O(n) -- an array is not a
 /// growable buffer; build with `from_list` where the whole contents are
 /// known.
-def Array.push (a : Array A) (v : A) : Array A :=
+pub def Array.push (a : Array A) (v : A) : Array A :=
     Array.from_list (List.append (Array.to_list a) (List.cons v List.empty))
 
 // --- Tests ----------------------------------------------------------

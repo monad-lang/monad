@@ -6,7 +6,7 @@
 use std::io {IO.read_file, IO.write_file, IO.list_dir, IO.current_time_nano}
 use std::path {Path, Path.to_string, Path.file_name}
 use std::process {exec_cmd, process_id}
-use std::list {List.filter, List.length, List.any}
+use std::list {List.filter, List.any}
 use json::json {
     Json, Json.parse, Json.to_string, Json.make_object_pairs, Json.make_str, Json.make_num_int,
     Json.get_object, Json.get_str, Json.get_num, Json.get_num_i64, Json.object_get,

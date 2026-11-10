@@ -17,7 +17,7 @@
 /// `/<name> [args]` runs a turn with them directly.
 use init::string {}
 use init::transformers {ResultT}
-use std::list {List.filter, List.any, List.intercalate, List.length}
+use std::list {List.filter, List.any, List.intercalate}
 use std::io {IO.read_file, IO.is_dir, IO.list_dir, IO.get_env}
 use std::path {Path, Path.to_string, Path.join, Path.file_name}
 use std::process {Proc.capture}

@@ -3,7 +3,7 @@ use log::macros {trace, debug, info, warn, error}
 use log::level {LogLevel}
 use log::logger {Logger, Logger.with_sink}
 use std::ref {Ref, Ref.new, Ref.get, Ref.set}
-use std::list {List.any, List.length}
+use std::list {List.any}
 
 /// A logger whose lines collect in `r`, newest first.
 def capture (r : Ref (List String)) (min : LogLevel) : Logger :=

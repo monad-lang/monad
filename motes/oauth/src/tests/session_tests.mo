@@ -2,7 +2,7 @@
 /// and the 401 path. No RNG and no network: `new_with_secret` and
 /// `create_with_id` are the deterministic seams, so both hosts run these.
 
-use std::list {List.all, List.length}
+use std::list {List.all}
 use std::map {BTreeMap}
 use http::types {
     Headers.empty, Headers.get, Headers.get_all, Headers.set, Request, Request.get, Response, Response.text,

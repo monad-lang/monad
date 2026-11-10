@@ -15,7 +15,7 @@ use std::path {Path, Path.to_string, Path.with_suffix}
 use std::process {process_id, exec_cmd}
 use weaver::store {Store.sessions_root}
 use weaver::theme {theme_split_lines}
-use std::list {List.intercalate, List.length, List.sort_by}
+use std::list {List.intercalate, List.sort_by}
 
 pub struct LogSetup {
     log : Option Logger,

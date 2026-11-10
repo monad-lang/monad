@@ -11,7 +11,7 @@ use lib::types {Key, LayoutSize, TextStyle}
 use lib::core {style_default}
 use lib::widget {Widget, SizedWidget, label, sized, with_style}
 use lib::widgets::list {ListState, handle_list_key}
-use std::list {List.length}
+use std::list {}
 
 pub struct PickerModel {
     list : ListState,

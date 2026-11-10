@@ -1,4 +1,4 @@
-use std::list {List.length}
+use std::list {}
 use lib::types {
     Binder, Con, Cubical, CubicalPrim, DebugName, Elim, Identifier, InductConstructor,
     Literal, LocalScope, LocalVar, MatchCase, NamePath, NameRef, Scope, Similar, Term,

@@ -10,7 +10,7 @@
 /// caller should prefer `Redact.headers`/`Redact.query` over printing raw
 /// values.
 
-use std::list {List.any, List.length}
+use std::list {List.any}
 use http::types {Headers}
 use http::strings {Strings.split_at_byte}
 use http::uri {Uri.format_query, Uri.parse_query}

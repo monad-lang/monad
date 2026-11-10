@@ -67,7 +67,7 @@ use lib::scope {
 }
 use llvm::strmap {str_map_empty, str_map_insert, str_map_lookup}
 use std::map {HashMap}
-use std::list {List.length}
+use std::list {}
 
 // ─── Use counting ──────────────────────────────────────────────────
 

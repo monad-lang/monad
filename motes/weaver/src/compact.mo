@@ -13,7 +13,7 @@ use shuttle::message_types {Role, Content, StopReason}
 use shuttle::session {Session}
 use shuttle::provider {ProviderConfig, Provider.send, Provider.silent_emit, Provider.never_stop}
 use shuttle::context {history_tokens, message_tokens, usage_add}
-use std::list {List.length, List.intercalate}
+use std::list {List.intercalate}
 use init::transformers {ResultT, ResultT.run}
 
 /// The estimated-token threshold; 0 (a zero window) disables autocompact.

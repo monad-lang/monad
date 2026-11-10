@@ -16,7 +16,7 @@
 /// ([[lang/typecheck/name_subst.mo]], [[lang/typecheck/subst.mo]]) a
 /// home to build on rather than re-deriving the same ~10 helpers each.
 use lib::types {Con, Cubical, Elim, Literal, MatchCase, Native, StructLitField, Term}
-use std::list {List.length}
+use std::list {}
 
 // ─── Generic structural recursion ──────────────────────────────────
 //

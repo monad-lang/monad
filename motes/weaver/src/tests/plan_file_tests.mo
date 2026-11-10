@@ -3,7 +3,7 @@
 /// project key, the repo resolution, the changelog, and -- against a
 /// scratch directory -- capture, revision, status changes and listing.
 use init::string {}
-use std::list {List.intercalate, List.length}
+use std::list {List.intercalate}
 use std::path {Path}
 use std::process {process_id, exec_cmd, Proc.capture}
 use std::io {IO.read_file, IO.file_exists, IO.write_file}

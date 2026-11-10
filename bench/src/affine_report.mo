@@ -70,7 +70,7 @@ use lang::typecheck::affine {check_def_strict, copy_vars_of_def, type_var_is_cop
 use lang::typecheck::type_kinds {TypeKinds, type_kinds}
 use lang::typecheck::diagnostic {type_error_message}
 use std::map {HashMap}
-use std::list {List.length}
+use std::list {}
 
 // ─── Run-by-hand gating ─────────────────────────────────────────────
 //

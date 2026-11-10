@@ -6,7 +6,7 @@
 // would make a failure depend on scheduling.
 
 use std::test {}
-use std::list {List.length}
+use std::list {}
 use std::process {exec_cmd}
 use std::path {Path}
 use std::io {IO.write_file}

@@ -12,7 +12,7 @@ use lang::lock {
     Lock.parse, Lock.pin_of, Lock.pin_to_string, Lock.read, Lock.render, Lock.source_of, Lock.write,
 }
 use std::io {}
-use std::list {List.all, List.length}
+use std::list {List.all}
 use std::process {exec_cmd, process_id}
 
 def commit_a : String := "0123456789abcdef0123456789abcdef01234567"

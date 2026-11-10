@@ -6,7 +6,7 @@
 /// when something did serves a stale answer, which is the failure a build
 /// cache must not have.
 
-use std::list {List.contains_by, List.intercalate, List.length}
+use std::list {List.contains_by, List.intercalate}
 use std::sha256 {Sha256.hash}
 use lang::mote {
     Mote.discover, Mote.toolchain_root, Mote.workspace_members, MoteManifest,

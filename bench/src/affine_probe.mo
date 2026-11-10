@@ -28,7 +28,7 @@ use lang::module {
 use lang::scope {scope_globals, scope_instance_candidates}
 use lang::typecheck::copy_class {copy_verdict, CopyVerdict}
 use lang::types {DebugName, Identifier, NamePath, ScopeData, Term}
-use std::list {List.length}
+use std::list {}
 
 #[partial]
 def print_all (diags : List String) : IO I64 :=

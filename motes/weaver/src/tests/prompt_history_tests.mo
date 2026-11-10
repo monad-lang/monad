@@ -7,7 +7,7 @@ use shuttle::message {Message}
 use shuttle::message_types {Role, Content}
 use std::path {Path}
 use std::process {exec_cmd, process_id}
-use std::list {List.length, List.intercalate}
+use std::list {List.intercalate}
 
 /// Lists compare as one string (generic list equality is unreliable).
 def joined (xs : List String) : String := List.intercalate "|" xs

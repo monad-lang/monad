@@ -26,7 +26,7 @@ use web_wasm::keep {Keep.save, Keep.load}
 use web_wasm::types {CryptoOp}
 use std::bytebuf {ByteBuf, ByteBuf.of_string, ByteBuf.free}
 use std::ref {Ref, Ref.new, Ref.get}
-use std::list {List.length}
+use std::list {}
 
 def report (label : String) (ok : Bool) : String :=
     if ok then String.concat label "=ok " else String.concat label "=FAIL "

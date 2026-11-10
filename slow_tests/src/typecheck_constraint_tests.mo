@@ -10,7 +10,7 @@
 /// compile and run with the dictionary left out, so it needs a fixture that
 /// goes through `elaborate_loaded_modules` exactly as `monad check` does.
 use lib::typecheck_harness {check_source_diags_plain, diags_contain}
-use std::list {List.length}
+use std::list {}
 
 /// `use_foo` referenced BARE with no `Foo Pt` in scope: a partial
 /// application whose dictionary is decided and absent.

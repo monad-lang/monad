@@ -14,7 +14,7 @@
 /// `ByteBuf.ptr` has no Rust-host implementation. Tests that force it are
 /// gated by `MONAD_CRYPTO_FFI_TESTS=1`.
 
-use std::list {List.length}
+use std::list {}
 use std::bytebuf {ByteBuf, ByteBuf.of_list, ByteBuf.ptr, ByteBuf.length, ByteBuf.free}
 use lib::types {CryptoSigAlg, CryptoPublicKey}
 use lib::der {Der.ecdsa_raw_to_der, Der.strip_leading_zeros}

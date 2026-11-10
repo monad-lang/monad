@@ -1,6 +1,6 @@
 // Stories: buttons and forms.
 
-use std::list {List.length}
+use std::list {}
 use oak::typed {Oak.Node, Oak.Attr}
 use oak::elements {Html.text, Html.placeholder}
 use oak::events {Html.on_click}

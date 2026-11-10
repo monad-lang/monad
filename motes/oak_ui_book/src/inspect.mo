@@ -4,7 +4,7 @@
 // All three walk the plain `Html.Node` tree a story lowers to, so they
 // check exactly what the browser receives.
 
-use std::list {List.length, List.intercalate}
+use std::list {List.intercalate}
 use xml_html::html {Html.Node, Html.Attr, Html.to_string}
 use oak::typed {Handler.prefix}
 

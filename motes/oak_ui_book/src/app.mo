@@ -10,7 +10,7 @@
 // through the `Book.Effect` host (browser storage, in `main.mo`); the app
 // asks for them once, on the first animation frame.
 
-use std::list {List.length, List.intercalate}
+use std::list {List.intercalate}
 use web_event::event {WebEvent}
 use xml_html::html {Html.Node}
 use oak::typed {Oak.Node, Oak.Attr, Oak.Lowered, Oak.lower, Oak.to_html}

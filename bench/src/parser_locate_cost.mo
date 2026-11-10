@@ -27,7 +27,7 @@
 /// Run: `cargo run --release -- test bench/parser_locate_cost.mo`
 use lang::parser::whitespace {skip_spaces}
 use llvm::strmap {str_map_empty, str_map_lookup}
-use std::list {List.length}
+use std::list {}
 open IO {println}
 use std::bench {Bench.now, Bench.report_since}
 use lang::types {Decl, Location, ParseDecl}

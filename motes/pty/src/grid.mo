@@ -16,7 +16,7 @@
 // caller retries when the next chunk lands, so a split glyph is never mangled.
 
 use lib::ansi {is_csi_final}
-use std::list {List.length, List.intercalate}
+use std::list {List.intercalate}
 use tui::text {Text.width, Text.col_of_byte}
 
 pub struct Grid {

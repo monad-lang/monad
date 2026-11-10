@@ -11,7 +11,7 @@
 /// pattern: own types, own glue over `Toml.parse`, no shared
 /// serialize/deserialize class machinery.
 
-use std::list {List.filter, List.filter_map, List.intercalate, List.length}
+use std::list {List.contains_by, List.filter, List.filter_map, List.intercalate}
 use lib::features {DepPolicy}
 use toml::toml {
     Toml.Value, Toml.parse, Toml.table_get, Toml.array_at, array, integer, string, table,
@@ -455,6 +455,51 @@ pub def Mote.target_roots (m : MoteManifest) (fallback : String) : List String :
     } in
     let roots : List String := Mote.push_unique_roots (Mote.bin_target_roots m.bins) from_lib in
     if List.is_empty roots then List.cons fallback List.empty else roots
+
+/// The subset of `target_roots` a NATIVE driver may compile. The `[lib]`
+/// root is always included (a web mote's pure test files still run
+/// natively); a `[[bin]]` root is included only when the mote's
+/// `[mote] targets` admit the native profile (absent, or containing
+/// "native"). A `targets = ["web"]` bin is not native-testable -- that is
+/// the anidoku gap where `monad test` compiled a web-only bin for the
+/// native driver.
+pub def Mote.native_test_roots (m : MoteManifest) (fallback : String) : List String :=
+    let from_lib : List String := match m.lib_path {
+        Option.some p => List.cons (Mote.target_root_of p) List.empty,
+        Option.none => List.empty,
+    } in
+    let native_capable : Bool :=
+        List.is_empty m.targets || List.contains_by String.beq "native" m.targets in
+    let bins : List String :=
+        if native_capable then Mote.bin_target_roots m.bins else List.empty in
+    let roots : List String := Mote.push_unique_roots bins from_lib in
+    if List.is_empty roots then List.cons fallback List.empty else roots
+
+/// Whether `file` is a declared `[[bin]]` target of a mote whose
+/// `[mote] targets` exclude the native profile. The native test driver
+/// must not compile such a file (a web-only bin reaches `web_*` externs);
+/// the root-level filter in `native_test_roots` cannot exclude it when the
+/// bin and the tests share `src/`, so the walk filters the FILE too.
+pub def Mote.web_only_bin_file (m : MoteManifest) (file : String) : Bool :=
+    let web_only : Bool :=
+        Bool.not (List.is_empty m.targets)
+            && Bool.not (List.contains_by String.beq "native" m.targets) in
+    if Bool.not web_only
+    then false
+    else Mote.bin_matches_file m.bins file
+
+/// A `BinTarget.path` is already joined onto the mote directory
+/// (`bin_target_of`/`default_bin_target` store `raw_path_join dir path`),
+/// so the comparison is against the stored path as-is.
+#[terminating]
+def Mote.bin_matches_file (bs : List BinTarget) (file : String) : Bool :=
+    match bs {
+        List.empty => false,
+        List.cons b rest =>
+            if String.beq file (BinTarget.target_path b)
+            then true
+            else Mote.bin_matches_file rest file,
+    }
 
 /// A target FILE's directory, with the mote root spelled the way a path
 /// expander wants it: `src/lib.mo` -> `src`, but a target at the mote root
@@ -2379,6 +2424,9 @@ def mote_manifest_fixture : String :=
 // `String.beq` per element reads worse than one comparison of the rendered
 // list, and the rendering is what a reader can check against a manifest.
 
+def web_only_manifest_fixture : String :=
+    "[mote]\nname = \"webapp\"\nversion = \"0.1.0\"\ntargets = [\"web\"]\n\n[lib]\npath = \"src/lib.mo\"\n\n[[bin]]\nname = \"app\"\npath = \"src/main.mo\"\n"
+
 def roots_joined (roots : List String) : String :=
     match roots {
         List.empty => "",
@@ -2453,6 +2501,19 @@ def test_target_roots_falls_back_for_an_inline_mote : Bool :=
     match Mote.manifest_of_attr "examples" attr_mote_self_hosted {
         Option.none => false,
         Option.some m => String.beq (roots_joined (Mote.target_roots m "examples")) "examples",
+    }
+
+/// A `targets = ["web"]` mote: the lib root is still native-testable
+/// (its pure tests run), but its `[[bin]]` is not, and `web_only_bin_file`
+/// names the exact file the driver must drop.
+#[test]
+def test_native_test_roots_skip_a_web_bin : Bool :=
+    match Mote.parse_manifest "webapp" web_only_manifest_fixture {
+        Option.none => false,
+        Option.some m =>
+            String.beq (roots_joined (Mote.native_test_roots m "webapp")) "webapp/src"
+                && Mote.web_only_bin_file m "webapp/src/main.mo"
+                && Bool.not (Mote.web_only_bin_file m "webapp/src/lib.mo"),
     }
 
 #[test]

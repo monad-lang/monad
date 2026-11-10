@@ -18,7 +18,7 @@ use weaver::pty_fixtures {
 use weaver::store {TLine}
 use std::io {IO.println}
 use std::path {Path, Path.to_string}
-use std::list {List.any, List.length}
+use std::list {List.any}
 
 def tight_has (o : Output) (needle : String) : Bool :=
     String.contains (Output.tight o) needle

@@ -1,4 +1,4 @@
-use std::list {List.length}
+use std::list {}
 use lang::types {
     Attribute, Binder, BinderInfo, DebugName, Decl, Def, Elim, FieldPattern, FieldPatternEntry,
     Identifier, CubicalPrim, InductConstructor, Inductive, MatchCase, ModulePath,

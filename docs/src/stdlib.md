@@ -68,14 +68,16 @@ bitwise operations (`and`, `or`, `xor`, `shl`, `shr`), and width conversions.
 
 `String.beq`, `concat`, `concat_all`, `concat_list`, `length`, `is_empty`,
 `slice`, `drop`, `get`, `get_char`, `to_lowercase`, `starts_with`, `ends_with`,
-`contains`, `repeat`, `reverse`, `trim`, `find_last`, `to_list`/`from_list`,
+`contains`, `index_of` (codepoint index), `byte_index_of` (the offset
+`slice`/`drop` expect), `count`, `split`, `repeat`, `reverse`, `trim`,
+`find_last`, `to_list`/`from_list`,
 `to_chars`/`from_chars` (**declared but not implemented** — these fail at run
 time with `unknown native`), `hash`, plus `List.reverse` and `List.singleton`.
 Instances: `BEq`, `BOrd`, `ToString`, `Add`, `Append`, `Hashable`.
 
 ### `init.list`
 
-`List.get`. Most list operations are in the prelude or `std.list`.
+`List.get`, `List.length`. Most list operations are in the prelude or `std.list`.
 
 ### `init.id`
 
@@ -140,9 +142,9 @@ take `String`.
 
 ### `std.list` — **not ambient**
 
-`List.length`, `filter`, `any`, `all`, `sum`, `find_by`, `filter_map`,
+`filter`, `any`, `all`, `sum`, `find_by`, `filter_map`,
 `contains_by`, `intercalate`, `dedup_by`; instances `BEq (List A)` and
-`Append (List A)`.
+`Append (List A)`. (`List.length` itself is ambient from `init.list`.)
 
 ### `std.map` — **not ambient**
 

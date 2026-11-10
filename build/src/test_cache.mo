@@ -20,7 +20,7 @@
 // under an emulator. There is no profile: the driver is built the same way
 // every run.
 
-use std::list {List.intercalate, List.length}
+use std::list {List.intercalate}
 use std::sha256 {Sha256.hash}
 use build::hash {Build.file_digest_with, Build.probe_digest_tool, DigestTool}
 use build::identity {Build.compiler_key_with}

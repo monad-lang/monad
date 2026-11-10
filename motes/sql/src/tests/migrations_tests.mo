@@ -2,7 +2,7 @@
 // applied-history prefix rule, checksums, and status. Both hosts.
 
 use std::test {}
-use std::list {List.length}
+use std::list {}
 use std::sha256 {Sha256.hash}
 use lib::migrations {*}
 

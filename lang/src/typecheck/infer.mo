@@ -50,7 +50,7 @@ use lib::typecheck::cubical {
 use lib::typecheck::unify {unify, unify_structural}
 use lib::typecheck::whnf {normalize_path_endpoints, whnf}
 use lang::parser::numeric_literal {int_value_fits}
-use std::list {List.length}
+use std::list {}
 
 /// A type-checked term paired with its type.
 pub struct TypedTerm {

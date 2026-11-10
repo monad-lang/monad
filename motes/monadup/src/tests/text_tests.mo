@@ -1,4 +1,4 @@
-use std::list {List.length}
+use std::list {}
 use lib::text {*}
 
 #[partial]

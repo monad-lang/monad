@@ -12,7 +12,7 @@
 
 use lib::types {Key}
 use lib::core {clamp}
-use std::list {List.length}
+use std::list {}
 
 /// A single-choice list's state: the full item list, the selected index,
 /// and `offset` -- the index of the first visible row. `offset` is

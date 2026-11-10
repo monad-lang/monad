@@ -16,7 +16,7 @@
 /// coordinates of the wrong length are rejected here and again by
 /// `Pubkey.verify` before any OpenSSL handle is allocated.
 
-use std::list {List.any, List.length}
+use std::list {List.any}
 use std::map {BTreeMap}
 use std::base64 {B64Url.decode}
 use json::json {Json, Json.get_array, Json.get_object, Json.get_str, Json.object_get}

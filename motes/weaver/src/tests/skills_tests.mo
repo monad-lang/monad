@@ -3,7 +3,7 @@
 /// `skill` tool's output (instructions, bundled files, arguments).
 use init::string {}
 use init::transformers {ResultT}
-use std::list {List.length, List.intercalate}
+use std::list {List.intercalate}
 use std::path {Path}
 use std::process {process_id, exec_cmd}
 use std::io {IO.write_file}

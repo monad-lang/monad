@@ -4,7 +4,7 @@ use weaver::shell_tool {ShellEnv, WeaverShell.run, WeaverShell.never_stop, Weave
 use weaver::procs {ProcEntry, ProcStatus, Procs.scan_at, Procs.kill}
 use shuttle::message_types {Content}
 use json::json {Json, Json.parse, Json.make_str}
-use std::list {List.length, List.all}
+use std::list {List.all}
 use std::path {Path}
 use std::process {process_id, exec_cmd, Proc.kill_group}
 use std::io {IO.list_dir, IO.read_file, IO.write_file, IO.current_time_nano}

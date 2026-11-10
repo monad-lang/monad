@@ -277,3 +277,16 @@ def test_the_same_duplication_without_the_proof_marker_is_rejected : IO Bool :=
     rejected_with "dup_plain" "is moved 2 times"
         ("type NoCopyP { mk }\n"
             ++ "def dup_plain (x : NoCopyP) : Pair NoCopyP NoCopyP := Pair.pair x x\n")
+
+// --- The `#[allow_non_affine]` opt-out -----------------------------------
+//
+// The migration escape hatch, on the same body shape as the `#[proof]` pins:
+// the attribute on the DEF exempts it, and the unmarked twin above
+// (`dup_plain`) is still rejected, so this cannot pass as a blanket switch.
+
+#[test]
+def test_allow_non_affine_exempts_a_def : IO Bool :=
+    accepted
+        ("type NoCopyA { mk }\n"
+            ++ "#[allow_non_affine \"test: the opt-out must compile\"]\n"
+            ++ "def dup_allowed (x : NoCopyA) : Pair NoCopyA NoCopyA := Pair.pair x x\n")

@@ -4,7 +4,7 @@
 use pty::spawn {Pty, Output}
 use pty::check {Check.report}
 use weaver::pty_support {
-    run_gated, with_root, fixture_path, spawn_args, wait_file_contains, read_text
+    run_gated, with_root, fixture_path, spawn_args, wait_file_contains, wait_file_contains_live, read_text, report_screen
 }
 use std::io {IO.println}
 
@@ -42,9 +42,12 @@ def crash_go (bin : String) (root : String) (turns : String) : IO Bool := do {
                     let c <- Check.report "the restart warns about the previous crash" warned;
                     let logged <- wait_file_contains run2 "ev=crash_detected" 6000;
                     let d <- Check.report "the restart logs crash_detected" logged;
-                    Pty.send_text m2 "/quit\r";
-                    let exited <- wait_file_contains run2 "ev=process_exit" 6000;
-                    let e <- Check.report "a clean exit writes process_exit" exited;
+                    // Pump the pty while waiting: a log-only poll can
+                    // deadlock against a redrawing TUI (it blocks on a full
+                    // terminal buffer and never reads the quit). The re-send
+                    // and the longer deadline cover a loaded CI runner.
+                    let exited <- wait_file_contains_live m2 run2 "ev=process_exit" "/quit\r" 1500 12000;
+                    let e <- report_screen m2 "a clean exit writes process_exit" exited;
                     Pty.finish m2;
                     return (Bool.and a (Bool.and b (Bool.and c (Bool.and d e))))
                 }

@@ -1,7 +1,7 @@
 /// The turn's inbox: posted notes come back once, in order, and an empty
 /// or missing inbox takes nothing.
 use weaver::inbox {Inbox.post, Inbox.take}
-use std::list {List.length, List.intercalate}
+use std::list {List.intercalate}
 
 #[test]
 def test_inbox_round_trip : IO Bool := do {

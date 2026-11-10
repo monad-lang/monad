@@ -18,7 +18,7 @@ use shuttle::gate {Capability, Pick, Approval, Gate}
 use shuttle::loop {Loop.run}
 use json::json {Json, Json.make_str, Json.make_array, Json.to_string}
 use std::process {process_id}
-use std::list {List.length}
+use std::list {}
 
 def script_path : String :=
     String.concat "/tmp/shuttle_mock_turns_" (String.concat (I64.to_string process_id) ".json")

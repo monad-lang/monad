@@ -6,7 +6,7 @@ use std::bench {Bench.now, Bench.report_since}
 // naming `std.map`'s exports — see `lang/scope.mo`'s comment on the same
 // line, and std/map_tests.mo's note for why the suspicion is gone.
 use std::map {HashMap}
-use std::list {List.any, List.dedup_by, List.intercalate, List.length}
+use std::list {List.any, List.dedup_by, List.intercalate}
 use lang::mote {Mote.toolchain_root}
 use lang::types {
     AttrArg, Attribute, Binder, Con, DebugName, Decl, Def, Identifier, InductConstructor,
@@ -4289,11 +4289,13 @@ def extract_lit_from_val (val : LLVMValue) : Option I64 := match val {
     LLVMValue.sdiv lhs rhs => Option.none,
     LLVMValue.udiv lhs rhs => Option.none,
     LLVMValue.urem lhs rhs => Option.none,
+    LLVMValue.srem lhs rhs => Option.none,
     LLVMValue.and_ lhs rhs => Option.none,
     LLVMValue.or_ lhs rhs => Option.none,
     LLVMValue.xor_ lhs rhs => Option.none,
     LLVMValue.shl_ lhs rhs => Option.none,
     LLVMValue.lshr_ lhs rhs => Option.none,
+    LLVMValue.ashr lhs rhs => Option.none,
     LLVMValue.icmp_eq lhs rhs => Option.none,
     LLVMValue.icmp_ne lhs rhs => Option.none,
     LLVMValue.icmp_slt lhs rhs => Option.none,

@@ -15,7 +15,7 @@ use std::map {Map, BTreeMap}
 use std::ref {Ref.new, Ref.get}
 use weaver::place {SessionPlace}
 use std::path {Path, Path.to_string}
-use std::list {List.length, List.intercalate, List.all}
+use std::list {List.intercalate, List.all}
 use std::process {process_id, exec_cmd}
 use std::io {IO.write_file}
 

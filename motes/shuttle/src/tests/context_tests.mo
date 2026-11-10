@@ -5,7 +5,7 @@ use shuttle::message {Message, Usage}
 use shuttle::message_types {Role, Content}
 use shuttle::tool {ToolSpec}
 use json::json {Json}
-use std::list {List.length}
+use std::list {}
 
 #[test]
 def test_usage_zero_is_all_zero : Bool :=

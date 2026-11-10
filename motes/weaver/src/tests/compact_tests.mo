@@ -9,7 +9,7 @@ use shuttle::message {Message, Usage}
 use shuttle::message_types {Role, Content}
 use shuttle::session {Session}
 use shuttle::provider {ProviderConfig, Wire}
-use std::list {List.length}
+use std::list {}
 
 def test_cfg : ProviderConfig :=
     { base_url := "mock", model := "mock", api_key_env := "K", max_tokens := 8, wire := Wire.mock, thinking := false }

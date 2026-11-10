@@ -12,7 +12,7 @@ use std::show {Show}
 // out of caution about naming `std.map`'s exports — see
 // std/map_tests.mo's note for why that caution is gone.
 use std::map {HashMap, HashMap.empty_buckets, map}
-use std::list {List.intercalate, List.length}
+use std::list {List.intercalate}
 use init::copy {Copy}
 
 pub type Identifier {

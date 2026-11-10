@@ -1,7 +1,7 @@
 /// Lowering tests: a typed view becomes the plain markup tree plus the
 /// handler table, and SSR lowering drops the handlers.
 
-use std::list {List.length}
+use std::list {}
 use web_event::event {WebEvent, HandlerResult, ListenerFlags}
 use lib::typed {
     Oak.Node, Oak.Lowered, Oak.lower, Oak.to_html, Handler.spec, Handler.id,

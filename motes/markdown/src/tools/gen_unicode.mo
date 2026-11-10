@@ -21,7 +21,7 @@ use lang::types {Term}
 use lib::scan {Markdown.split_lines, Markdown.utf8_of_codepoint}
 use parsec::number {char_to_hex_digit}
 use std::io {IO.println, IO.read_file}
-use std::list {List.length}
+use std::list {}
 use std::path {Path}
 use std::stream {StreamError}
 

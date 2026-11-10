@@ -6,7 +6,7 @@
 // The two regression tests below would pass on a stateless implementation
 // and fail on a broken stateful one.
 
-use std::list {List.length}
+use std::list {}
 use lib::elements {Html.document, Html.text, Html.title}
 use lib::html_t {
     Page, Page.empty, Emitted, HtmlT, HtmlT.and_then, HtmlT.body_node,

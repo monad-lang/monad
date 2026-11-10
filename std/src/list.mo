@@ -5,7 +5,7 @@
 ///   - Show (List A) instance — element-wise, uses runtime type dispatch
 ///   - Append (List A) instance
 ///   - BEq (List A) instance — full element-wise equality
-///   - List.length, List.filter, List.sum
+///   - List.filter, List.sum
 ///   - list_show helper (explicit show function, for concrete call sites)
 
 use lib::show {Show}
@@ -60,13 +60,6 @@ pub instance [BEq A] BEq (List A) {
 pub instance {A : Type} Append (List A) {
     def append (a b : List A) : List A := List.append a b
 }
-
-pub def List.length {A : Type} (xs : List A) : I64 :=
-    match xs {
-        empty => 0,
-        cons _ tail => 1 + List.length tail,
-        _ => 0
-    }
 
 pub def List.filter {A : Type} (pred : A -> Bool) (xs : List A) : List A :=
     match xs {

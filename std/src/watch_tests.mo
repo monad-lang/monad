@@ -6,7 +6,7 @@
 /// rows use real ones, and `slow_tests/src/watch_e2e_tests.mo` adds a compiled
 /// end-to-end program through the real pipeline.
 use std::io {IO.write_file}
-use std::list {List.length}
+use std::list {}
 use std::path {Path}
 use std::process {exec_cmd, process_id}
 use std::stream {StreamError}

@@ -12,7 +12,7 @@ use lang::construct {
     Vis, app, apps, attr, def_text, global, if_, param, u32, var,
 }
 use lang::types {Term}
-use std::list {List.length}
+use std::list {}
 
 /// One leaf: the key the tree routes on and the body its function
 /// returns. Both are terms, so a caller decides what "matches" means

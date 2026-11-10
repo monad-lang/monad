@@ -4,7 +4,7 @@
 /// bit clear and its `s` has it set, so the encoded form needs exactly one
 /// sign byte. Pure (`Bool`), so both hosts run it.
 
-use std::list {List.length}
+use std::list {}
 use crypto::der {Der.ecdsa_raw_to_der, Der.integer}
 
 /// The RFC 7515 §A.3 P-256 signature, as its 64 raw `R || S` bytes.

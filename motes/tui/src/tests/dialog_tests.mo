@@ -13,7 +13,7 @@ use lib::input {InputReader, input_reader}
 use lib::types {Key, Event, MouseEvent, MouseButton}
 use lib::widget {SizedWidget}
 use lib::core {empty_screen}
-use std::list {List.length}
+use std::list {}
 
 def opt_y : DialogOption := { label := "Approve once", hint := "y", key := "y" }
 def opt_a : DialogOption := { label := "Always", hint := "a", key := "a" }

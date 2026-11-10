@@ -20,7 +20,7 @@ use lang::module {
     rewrite_lib_aliases_of, show_parse_error, try_parse_decls_strict_diag,
 }
 use lang::mote {Mote.affine_mode_of_path}
-use std::list {List.any, List.length}
+use std::list {List.any}
 use lib::run {
     EvalFailure, EvalOptions, EvalStage, EvalTarget,
     Eval.check_elaborated, Eval.run_elaborated, Eval.type_of,

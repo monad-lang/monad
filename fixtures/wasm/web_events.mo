@@ -7,7 +7,7 @@
 // for them. `wasm/web/event_smoke.mjs` drives it over a stub DOM.
 #![mote { name := "web_events", deps := [web_event, web_wasm] }]
 
-use std::list {List.intercalate, List.length}
+use std::list {List.intercalate}
 use std::ref {Ref, Ref.get}
 use web_event::event {WebEvent}
 use web_wasm::dom {Dom.append, Dom.create, Dom.on_with, Dom.query, Dom.root, Dom.set_attr, Dom.set_text}

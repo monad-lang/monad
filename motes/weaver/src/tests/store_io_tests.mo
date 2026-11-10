@@ -17,7 +17,7 @@ use shuttle::message {Message, Usage}
 use shuttle::message_types {text, user, assistant}
 use std::path {Path, Path.of, Path.to_string}
 use std::process {process_id, exec_cmd}
-use std::list {List.length}
+use std::list {}
 use std::io {IO.write_file, IO.write_stderr}
 use std::concurrent::combine {sleepIO}
 use json::json {Json, Json.get_object, Json.make_object}

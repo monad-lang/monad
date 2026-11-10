@@ -8,7 +8,7 @@ use weaver::permissions {
     Permissions.revoke_cap, Permissions.clear,
 }
 use std::ref {Ref}
-use std::list {List.length}
+use std::list {}
 
 #[test]
 def test_normalize_collapses_dot_segments : Bool :=

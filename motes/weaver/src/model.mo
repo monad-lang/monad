@@ -12,7 +12,7 @@
 /// single-selection menu's highlight, not a scrolling transcript).
 use shuttle::agent {RunState}
 use shuttle::message {Message}
-use std::list {List.length}
+use std::list {}
 use weaver::commands {WeaverState, Effect}
 use weaver::overlay {OverlayState}
 use log::logger {Logger}

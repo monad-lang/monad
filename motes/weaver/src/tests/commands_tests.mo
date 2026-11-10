@@ -36,7 +36,7 @@ use weaver::store {
 }
 use std::path {Path, Path.of, Path.to_string}
 use std::process {exec_cmd}
-use std::list {List.length, List.intercalate, List.all, List.any}
+use std::list {List.intercalate, List.all, List.any}
 use weaver::place {SessionPlace}
 use json::json {Json}
 use std::map {Map, BTreeMap, BTreeMap.to_list}

@@ -26,7 +26,7 @@ use std::io {IO.println}
 open IO {get_env, println}
 use std::map {HashMap}
 use std::bench {Bench.now}
-use std::list {List.length}
+use std::list {}
 
 def def_term (d : Def) : Term := d.term
 

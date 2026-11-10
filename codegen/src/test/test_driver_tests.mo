@@ -30,7 +30,7 @@ use lang::scope {
     collect_classes, strip_all_leading_binders,
     validate_no_unresolved_class_calls,
 }
-use std::list {List.intercalate, List.length}
+use std::list {List.intercalate}
 use std::log {fail_line}
 use std::stream {StreamError, StreamError.is_not_found}
 use lib::test_driver {

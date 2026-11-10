@@ -20,7 +20,7 @@ use lib::types {
     NamePath, Scope, Term, binder_name, list_reverse, show_name_path, term_peel,
 }
 use lib::scope {npath_eq, scope_find_inductive}
-use std::list {List.length}
+use std::list {}
 
 /// The `Literal` form of `e`, or a message naming the malformed minor.
 /// `Bool`-shaped elims become `Literal.if_` (so the existing `if` codegen

@@ -12,7 +12,7 @@ use weaver::cli_spec {
     WeaverCli.resume_text, WeaverCli.resume_asked, WeaverCli.cont_of, WeaverCli.no_color_of,
     WeaverCli.mcps,
 }
-use std::list {List.length}
+use std::list {}
 
 #[test]
 def test_cli_defaults_are_unset : Bool :=

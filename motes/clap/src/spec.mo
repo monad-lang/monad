@@ -6,7 +6,7 @@
 /// result types untouched so `cli/src/main.mo`, `motes/shuttle` and
 /// `motes/weaver` keep their exact behavior; new code uses these types and
 /// `parse.mo`'s parser instead.
-use std::list {List.any, List.length}
+use std::list {List.any}
 
 /// What an argument is.
 pub type Cli.ArgKind {

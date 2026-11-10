@@ -5,7 +5,7 @@ use gen::tree {Gen.emit, Leaf, Spec, leaf, spec}
 use lang::construct {apps, con, con_app, global, if_, str, var}
 use lang::parser {decls_parser}
 use parsec::core {ParseResult}
-use std::list {List.length}
+use std::list {}
 
 /// A leaf that answers `Option.some "<key>"` for exactly `key`.
 def entry_leaf (name : String) : Leaf :=

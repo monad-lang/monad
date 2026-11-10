@@ -3,7 +3,7 @@
 /// every result compiled, so each successful call was logged as an error.
 use shuttle::loop {tool_error_events}
 use shuttle::message_types {Content}
-use std::list {List.length}
+use std::list {}
 
 #[test]
 def test_a_successful_result_emits_no_error_event : Bool :=

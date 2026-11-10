@@ -11,7 +11,7 @@
 /// file: 40 of its 41 defs are private to the rewrite, and the whole
 /// pass has exactly ONE entry point, `apply_self_tco`.
 use llvm::strmap {str_map_empty, str_map_insert, str_map_lookup}
-use std::list {List.length}
+use std::list {}
 use lang::types {Identifier}
 use llvm::ir {
     LLVMBasicBlock, LLVMInstruction, LLVMType, LLVMValue, PhiPair,
@@ -346,11 +346,13 @@ def rewrite_parm_to_loopvar (v : LLVMValue) (loop_names : List String) : LLVMVal
         LLVMValue.sdiv a b => LLVMValue.sdiv (rewrite_parm_to_loopvar a loop_names) (rewrite_parm_to_loopvar b loop_names),
         LLVMValue.udiv a b => LLVMValue.udiv (rewrite_parm_to_loopvar a loop_names) (rewrite_parm_to_loopvar b loop_names),
         LLVMValue.urem a b => LLVMValue.urem (rewrite_parm_to_loopvar a loop_names) (rewrite_parm_to_loopvar b loop_names),
+        LLVMValue.srem a b => LLVMValue.srem (rewrite_parm_to_loopvar a loop_names) (rewrite_parm_to_loopvar b loop_names),
         LLVMValue.and_ a b => LLVMValue.and_ (rewrite_parm_to_loopvar a loop_names) (rewrite_parm_to_loopvar b loop_names),
         LLVMValue.or_ a b => LLVMValue.or_ (rewrite_parm_to_loopvar a loop_names) (rewrite_parm_to_loopvar b loop_names),
         LLVMValue.xor_ a b => LLVMValue.xor_ (rewrite_parm_to_loopvar a loop_names) (rewrite_parm_to_loopvar b loop_names),
         LLVMValue.shl_ a b => LLVMValue.shl_ (rewrite_parm_to_loopvar a loop_names) (rewrite_parm_to_loopvar b loop_names),
         LLVMValue.lshr_ a b => LLVMValue.lshr_ (rewrite_parm_to_loopvar a loop_names) (rewrite_parm_to_loopvar b loop_names),
+        LLVMValue.ashr a b => LLVMValue.ashr (rewrite_parm_to_loopvar a loop_names) (rewrite_parm_to_loopvar b loop_names),
         LLVMValue.icmp_eq a b => LLVMValue.icmp_eq (rewrite_parm_to_loopvar a loop_names) (rewrite_parm_to_loopvar b loop_names),
         LLVMValue.icmp_ne a b => LLVMValue.icmp_ne (rewrite_parm_to_loopvar a loop_names) (rewrite_parm_to_loopvar b loop_names),
         LLVMValue.icmp_slt a b => LLVMValue.icmp_slt (rewrite_parm_to_loopvar a loop_names) (rewrite_parm_to_loopvar b loop_names),

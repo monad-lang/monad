@@ -14,7 +14,7 @@
 /// tail-call rewrite turns it into a loop.
 use lang::types {Location, SourceRange}
 use lang::module {DeclRange, decl_range_kind, decl_range_name, decl_range_span, decl_ranges_of_source}
-use std::list {List.length}
+use std::list {}
 
 /// One declaration of a file's outline. `range` is the declaration as
 /// written, from its first token to its last; `name_range` is the name's

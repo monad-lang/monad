@@ -5,7 +5,7 @@
 // `monad test motes/sqlite` inside the devshell (which supplies sqlite3).
 
 use std::test {}
-use std::list {List.length}
+use std::list {}
 use std::process {exec_cmd, process_id}
 use std::path {Path}
 use sql::value {Row, Row.get, Row.get_i64, Row.get_text, Row.get_bool,

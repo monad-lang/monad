@@ -19,7 +19,7 @@
 /// attribute registers (or REPLACES) the listener, removing it unregisters,
 /// and the listener calls the exported `oak_dispatch_event(id)`. Keeping the
 /// rule in one place is what stops a re-render from stacking listeners.
-use std::list {List.length}
+use std::list {}
 use xml_html::html {Html.Attr, Html.Node, Html.beq}
 use oak::elements {Html.key_attr}
 use web_wasm::types {Node}

@@ -777,14 +777,19 @@ fi
 ok "config 9: bare test covers only the mote's declared target roots"
 
 # The other half of the rule, pinned so it is not "fixed" by accident: an
-# EXPLICIT path is literal. `monad test .` means that directory, so the
-# vendor tree is walked and its catalog reported -- skipping dot-directories
-# inside the walk is a deliberate non-goal, not an oversight.
+# EXPLICIT path is literal. `monad test .` means that directory -- but a
+# HIDDEN directory inside it (`.devenv`, `.git`) is skipped by the walk
+# itself, so the gettext catalog is never treated as Monad source. The
+# real test in `src/` still runs.
 literal_log="$work/test9-literal.log"
 MONAD_ROOT="$toolchain" "$monad" test . > "$literal_log" 2>&1 || true
-grep -q '\.devenv' "$literal_log" \
-  || { cat "$literal_log" >&2; die "config 9: an explicit path stopped being literal"; }
-ok "config 9: an explicit path is still literal (the vendor tree is walked)"
+if grep -q '\.devenv' "$literal_log"; then
+  cat "$literal_log" >&2
+  die "config 9: an explicit path walked a hidden vendor directory"
+fi
+grep -q "1/1 total tests passed" "$literal_log" \
+  || { cat "$literal_log" >&2; die "config 9: an explicit path missed the real test"; }
+ok "config 9: an explicit path is literal but skips hidden directories"
 
 # ---------------------------------------------------------------------------
 # 10. A two-member workspace: inherited path AND git dependencies

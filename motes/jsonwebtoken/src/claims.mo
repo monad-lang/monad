@@ -9,7 +9,7 @@
 /// `now` is epoch SECONDS (JWT NumericDate), while `IO.current_time` is
 /// milliseconds: the caller divides by 1000.
 
-use std::list {List.any, List.filter, List.length}
+use std::list {List.any, List.filter}
 use std::map {BTreeMap}
 use json::json {
     Json, Json.get_array, Json.get_num, Json.get_num_i64, Json.get_str, Json.object_get,

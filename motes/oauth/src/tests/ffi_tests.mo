@@ -6,7 +6,7 @@
 /// unset so the suite stays green on the Rust host.
 
 use std::io {IO.get_env}
-use std::list {List.length}
+use std::list {}
 use std::base64 {B64Url.decode}
 use std::random {RandomError}
 use oauth::pkce {Pkce.valid_verifier, Pkce.verifier}

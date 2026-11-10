@@ -3,7 +3,7 @@
 /// Field reads go through typed accessor defs, never inline: a `#[test]`
 /// def that touches a struct field is the recorded self-hosted codegen
 /// hazard.
-use std::list {List.length}
+use std::list {}
 use lang::types {Location, SourceRange}
 use toolkit::decl_text {
     DeclText, decl_text_name, decl_text_name_span, decl_text_span, decl_texts_of_source,

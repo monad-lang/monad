@@ -9,7 +9,7 @@
 // than about any one event type.
 
 use lib::frp {EventStream, Signal}
-use std::list {List.length}
+use std::list {}
 
 def ints_be (a : List I64) (b : List I64) : Bool :=
     match a {

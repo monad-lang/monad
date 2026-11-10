@@ -95,7 +95,7 @@ use lib::terminal {
 }
 use std::concurrent::fiber {Fiber, FiberError, forkIO, pollFiber}
 use std::io {IO.flush_stdout, IO.write_stdout}
-use std::list {List.length}
+use std::list {}
 
 /// Commands `update` returns instead of performing. `none` is the
 /// ordinary case, `quit` stops the loop (the terminal is restored),

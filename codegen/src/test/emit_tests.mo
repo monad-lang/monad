@@ -3,7 +3,7 @@
 use llvm::strmap {str_map_empty, str_map_insert, str_map_lookup}
 use std::bench {Bench.now, Bench.report_since}
 use std::map {HashMap}
-use std::list {List.any, List.intercalate, List.length}
+use std::list {List.any, List.intercalate}
 use lang::mote {Mote.toolchain_root}
 use lang::types {
     AttrArg, Attribute, Binder, Con, DebugName, Decl, Def, Identifier, InductConstructor,

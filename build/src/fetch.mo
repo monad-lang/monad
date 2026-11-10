@@ -31,7 +31,7 @@ use lang::lock {
 }
 use lang::mote {Dependency, Mote.any_git_dep, Mote.discover, Mote.manifest_at, Mote.workspace_member_dirs, MoteManifest}
 use std::io {IO.println}
-use std::list {List.contains_by, List.filter, List.length}
+use std::list {List.contains_by, List.filter}
 
 /// `fetch` fills in what is missing; `update` re-resolves every pin.
 pub type FetchMode {
@@ -767,3 +767,66 @@ def Build.missing_entry_error (locked : Bool) (key : String) (url : String) : St
     if locked
     then "`--locked`: mote.lock has no entry for git dependency `" ++ key ++ "` (`" ++ url ++ "`); run `monad fetch` to update it"
     else "git dependency `" ++ key ++ "` is not in mote.lock (`" ++ url ++ "`); run `monad fetch`"
+
+// ─── Toolchain/mote revision skew ───────────────────────────────────
+//
+// A lock that pins `std`/`runtime`/`init`/`sys` at a different revision than
+// the compiler that is running is a runtime misbehaviour waiting to happen
+// (the linked-in runtime and the compiled-in modules come from one binary).
+// Diagnose it at build/check/test time instead of leaving it to a
+// `check-toolchain.sh` in every consumer.
+
+/// The lock entries for the modules compiled INTO the binary. `llvm` is
+/// deliberately absent: it is a dependency of a compiler build, not of
+/// every program the compiler produces, so pinning it to an older revision
+/// is not a runtime hazard for a consumer.
+def Build.toolchain_entry (name : String) : Bool :=
+    String.beq name "std" || String.beq name "runtime"
+        || String.beq name "init" || String.beq name "sys"
+
+def Build.toolchain_skew_message (e : LockedMote) (g : LockedGit) (commit : String) : String :=
+    "`" ++ e.name ++ "` is pinned at " ++ g.commit
+        ++ " but this compiler was built from " ++ commit
+        ++ "; run `monadup use " ++ g.commit ++ "` (or update mote.lock to the compiler's revision)"
+
+#[terminating]
+def Build.toolchain_skew_go (commit : String) (entries : List LockedMote) : Option String :=
+    match entries {
+        List.empty => Option.none,
+        List.cons e rest =>
+            if Bool.not (Build.toolchain_entry e.name)
+            then Build.toolchain_skew_go commit rest
+            else
+                match e.git {
+                    Option.none => Build.toolchain_skew_go commit rest,
+                    Option.some g =>
+                        if String.beq (String.trim g.commit) commit
+                        then Build.toolchain_skew_go commit rest
+                        else Option.some (Build.toolchain_skew_message e g commit),
+                },
+    }
+
+/// The first skew, or `none`. An empty/`unknown` compiler commit (a binary
+/// not built from git) and path-only entries are ignored.
+pub def Build.toolchain_skew (compiler_commit : String) (entries : List LockedMote) : Option String :=
+    let commit : String := String.trim compiler_commit in
+    if String.is_empty commit || String.beq commit "unknown"
+    then Option.none
+    else Build.toolchain_skew_go commit entries
+
+/// Read `m.dir/mote.lock` and check it against the running compiler.
+pub def Build.toolchain_skew_of_manifest (m : MoteManifest) (compiler_commit : String) : IO (Option String) := do {
+    let read <- Lock.read (Path.path (raw_path_join m.dir "mote.lock"));
+    match read {
+        Result.err _ => return Option.none,
+        Result.ok found =>
+            match found {
+                Option.none => return Option.none,
+                Option.some r =>
+                    match r {
+                        LockRead.loaded l => return (Build.toolchain_skew compiler_commit l.motes),
+                        LockRead.unsupported _ => return Option.none,
+                    },
+            },
+    }
+}

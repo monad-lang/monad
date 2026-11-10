@@ -19,7 +19,7 @@ use lang::types {
     struct_update, term_loc, u32, u64, var, zero,
     forall,
 }
-use std::list {List.intercalate, List.length}
+use std::list {List.intercalate}
 // For `HashMap` (the located parser's position table) and the monomorphic
 // helpers over it -- never `Map.insert`/`Map.lookup`, whose generic
 // dispatch can resolve to the wrong instance.
@@ -7260,7 +7260,13 @@ def match_case_name (r : ParseResult (List String)) : ParseResult ParseMatchCase
 def match_case_try_named_field_pattern (r : ParseResult FieldPattern) (orig : String) (name : Identifier) : ParseResult ParseMatchCase :=
     match r {
         success rem fp => match_case_field_pattern_arrow (tag "=>" (skip_docstrings (skip_spaces rem))) name fp,
-        fail _ => match_case_args (match_case_arg_names orig) name
+        fail _ =>
+            // A guard's `if` sits exactly here, before the positional
+            // binder list would try to parse it as an identifier. Report
+            // it at the guard, not as a later `=>` failure.
+            if is_guard_start (skip_spaces orig)
+            then fail (ParseError.custom "match guards are not supported (write an `if` before the match, or a helper def)" (skip_spaces orig))
+            else match_case_args (match_case_arg_names orig) name
     }
 
 /// Last element of a non-empty `List String`, or `default` if empty.
@@ -7294,13 +7300,30 @@ def match_case_arg_names_loop (input : String) (acc : List String) : ParseResult
         fail _ => success input (list_reverse acc)
     }
 
+/// Whether the text starts with the `if` KEYWORD (a guard position).
+/// `iffy` is an identifier, not a guard.
+#[partial]
+def is_guard_start (input : String) : Bool :=
+    match tag "if" input {
+        success rem _ =>
+            match String.get rem 0 {
+                Option.some b =>
+                    U8.beq b 32u8 || U8.beq b 9u8 || U8.beq b 10u8 || U8.beq b 13u8,
+                Option.none => false,
+            },
+        fail _ => false,
+    }
+
 #[partial]
 def match_case_args (r : ParseResult (List String)) (name : Identifier) : ParseResult ParseMatchCase :=
     match r {
         // `skip_docstrings (skip_spaces rem)` -- a comment can sit right
         // before `=>` too (documenting a case's binder args), not only
         // right after it (`match_case_arrow`'s own fix, above).
-        success rem names => match_case_arrow (tag "=>" (skip_docstrings (skip_spaces rem))) name (id_list_of names),
+        success rem names =>
+            if is_guard_start rem
+            then fail (ParseError.custom "match guards are not supported (write an `if` before the match, or a helper def)" rem)
+            else match_case_arrow (tag "=>" (skip_docstrings (skip_spaces rem))) name (id_list_of names),
         fail e => fail e
     }
 

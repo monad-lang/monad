@@ -20,7 +20,7 @@
 /// call at compile time.
 use lib::bytebuf {ByteBuf}
 use lib::io {IO.is_dir, IO.list_dir}
-use lib::list {List.length}
+use lib::list {}
 use lib::path {Path}
 use lib::ref {Ref}
 use lib::stream {FdStream, Stream, StreamError, stream_result}

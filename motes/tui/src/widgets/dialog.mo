@@ -19,7 +19,7 @@ use lib::terminal {Terminal.clear_screen, Terminal.cursor_move, Terminal.poll, T
 use lib::input {Input.step, InputReader, input_reader}
 use lib::text {Text.wrap}
 use std::io {IO.read_stdin_exact, IO.write_stdout, IO.flush_stdout}
-use std::list {List.length}
+use std::list {}
 
 pub struct DialogOption {
     label : String,

@@ -9,7 +9,7 @@
 ///
 /// It is independent of formatting: any two texts can be diffed.
 
-use std::list {List.intercalate, List.length}
+use std::list {List.intercalate}
 use lib::lexer {Lex.lines}
 
 #[partial]

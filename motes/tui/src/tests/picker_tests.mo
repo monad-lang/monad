@@ -2,7 +2,7 @@
 
 use lib::widgets::picker {PickerModel, PickerStep, Picker.make, Picker.update, Picker.selected, Picker.count, Picker.window_offset, Picker.visible}
 use lib::types {Key}
-use std::list {List.length}
+use std::list {}
 
 def names : List String := ["alpha", "beta", "gamma"]
 

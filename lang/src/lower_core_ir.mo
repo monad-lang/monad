@@ -1,4 +1,4 @@
-use std::list {List.length}
+use std::list {}
 use std::map {HashMap.to_list}
 use lib::core_eval {basic_native_table, native_id_for_name}
 use lib::core_ir {CoreIr, IrLit, MatchArm}

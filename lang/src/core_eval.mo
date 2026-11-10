@@ -8,7 +8,7 @@ use lib::core_value {
     global_table_len, native_table_arity, native_table_name,
 }
 use lang::types {Identifier, ModulePath, NumSuffix, i64}
-use std::list {List.length}
+use std::list {}
 
 /// The evaluator core loop, mirroring `rust/core/src/core_eval.rs` (Rust).
 ///

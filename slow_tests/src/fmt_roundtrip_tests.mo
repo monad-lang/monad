@@ -16,7 +16,7 @@
 /// Any lexical construct the tokenizer mishandles shows up here, which is the
 /// intended drift alarm between this mirror and the compiler's grammar.
 
-use std::list {List.length}
+use std::list {}
 open IO {println, read_file}
 use lang::module {expand_check_paths, try_parse_decls_strict}
 use lang::pretty {show_decls}

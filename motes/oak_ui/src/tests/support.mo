@@ -1,6 +1,6 @@
 // Shared helpers for the oak_ui test files (no #[test] defs here).
 
-use std::list {List.length}
+use std::list {}
 use web_event::event {WebEvent, HandlerResult}
 use oak::typed {Oak.Node, Oak.Lowered, Oak.lower, Oak.to_html}
 use xml_html::html {Html.to_string}

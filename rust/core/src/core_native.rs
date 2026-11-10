@@ -69,6 +69,17 @@ const PURE_NATIVES: &[&str] = &[
   "u64_div",
   "u64_mod",
   "u64_xor",
+  "u64_and",
+  "u64_or",
+  "u64_shl",
+  "u64_shr",
+  "i64_rem",
+  "i64_and",
+  "i64_or",
+  "i64_xor",
+  "i64_shl",
+  "i64_shr",
+  "u32_rem",
   "i8_eq",
   "i16_eq",
   "i32_eq",
@@ -162,6 +173,7 @@ const PURE_NATIVES: &[&str] = &[
   "array_new",
   "array_len",
   "array_get",
+  "array_get_or",
   "array_with",
   // `Ptr.null` (init/prelude.mo): the NULL word, a constant.
   "ptr_null",
@@ -255,6 +267,24 @@ pub fn exec_native(
     // is tagged `U64` like every other `U64` native (it used to come
     // back tagged `I64`, against `U64.xor`'s own declared type).
     "u64_xor" => int_binop_width(args, NumSuffix::U64, |a, b| a ^ b),
+    "u64_and" => int_binop_width(args, NumSuffix::U64, |a, b| a & b),
+    "u64_or" => int_binop_width(args, NumSuffix::U64, |a, b| a | b),
+    "u64_shl" => int_binop_width(args, NumSuffix::U64, |a, b| a.wrapping_shl(b as u32)),
+    // Logical: `wrapping_shr` on the i64 payload would sign-propagate.
+    "u64_shr" => int_binop_width(args, NumSuffix::U64, |a, b| {
+      ((a as u64) >> (b as u32)) as i64
+    }),
+    "i64_rem" => int_binop_width(args, NumSuffix::I64, |a, b| {
+      if b == 0 { 0 } else { a.wrapping_rem(b) }
+    }),
+    "i64_and" => int_binop_width(args, NumSuffix::I64, |a, b| a & b),
+    "i64_or" => int_binop_width(args, NumSuffix::I64, |a, b| a | b),
+    "i64_xor" => int_binop_width(args, NumSuffix::I64, |a, b| a ^ b),
+    "i64_shl" => int_binop_width(args, NumSuffix::I64, |a, b| a.wrapping_shl(b as u32)),
+    "i64_shr" => int_binop_width(args, NumSuffix::I64, |a, b| a.wrapping_shr(b as u32)),
+    "u32_rem" => int_binop_width(args, NumSuffix::U32, |a, b| {
+      if b == 0 { 0 } else { a.wrapping_rem(b) }
+    }),
     "i8_eq" | "i16_eq" | "i32_eq" | "i64_eq" | "u8_eq" | "u16_eq" | "u32_eq" | "u64_eq" => {
       int_cmp_width(args, natives, native_int_suffix(name), |a, b| a == b)
     }
@@ -334,6 +364,7 @@ pub fn exec_native(
     "array_new" => array_new(args, natives),
     "array_len" => array_len(args),
     "array_get" => array_get(args, natives),
+    "array_get_or" => array_get_or(args),
     "array_with" => array_with(args, natives),
     "array_set_in_place" => array_set_in_place(args, natives),
     "array_freeze" => array_freeze(args, natives),
@@ -1195,6 +1226,25 @@ fn array_get(args: &[Value], natives: &NativeTable) -> Result<Value, CoreEvalErr
     return make_option(natives, None);
   }
   make_option(natives, Some(elems[idx as usize].clone()))
+}
+
+/// `array_get_or (a : Array A) (i : I64) (fallback : A) : A` -- the
+/// allocation-free read. Out of range answers the fallback; in range
+/// answers the element itself. No `Option` is built on the host either,
+/// so both backends agree on the absence of a box.
+fn array_get_or(args: &[Value]) -> Result<Value, CoreEvalError> {
+  if args.len() < 3 {
+    return Err(CoreEvalError::NativeArgError(
+      "array_get_or needs 3 args".into(),
+    ));
+  }
+  let elems = array_elems(&args[0])?;
+  let idx = extract_int(&args[1])?;
+  if idx < 0 || idx as usize >= elems.len() {
+    Ok(args[2].clone())
+  } else {
+    Ok(elems[idx as usize].clone())
+  }
 }
 
 /// `array_with (a : Array A) (i : I64) (v : A) : Array A` -- the

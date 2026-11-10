@@ -31,7 +31,7 @@
 // peel. `lang/src/tests/cubical_bind_tests.mo`'s term-shaped pins reach
 // for the same reason.
 
-use std::list {List.length}
+use std::list {}
 use lang::types {
     Identifier, Location, ModulePath, Scope, ScopeData, Similar, Term, binder_anon, named,
     sentinel,

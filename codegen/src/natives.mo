@@ -212,6 +212,7 @@ def native_runtime_fn_name (attrs : List Attribute) : Option NativeWrapKind :=
             else if String.beq target "array_new" then Option.some (NativeWrapKind.passthrough "monad_array_new")
             else if String.beq target "array_len" then Option.some (NativeWrapKind.passthrough "monad_array_len")
             else if String.beq target "array_get" then Option.some (NativeWrapKind.passthrough "monad_array_get")
+            else if String.beq target "array_get_or" then Option.some (NativeWrapKind.passthrough "monad_array_get_or")
             else if String.beq target "array_with" then Option.some (NativeWrapKind.passthrough "monad_array_with")
             // The two mutating array ops: `raw_io_passthrough` wraps the
             // raw result ONCE as `RawIO.io`; their `.mo` wrappers add
@@ -369,6 +370,10 @@ def native_runtime_fn_name (attrs : List Attribute) : Option NativeWrapKind :=
             else if String.beq target "u64_sub" then Option.some (NativeWrapKind.passthrough "monad_u64_sub")
             else if String.beq target "u64_mul" then Option.some (NativeWrapKind.passthrough "monad_u64_mul")
             else if String.beq target "u64_xor" then Option.some (NativeWrapKind.passthrough "monad_u64_xor")
+            else if String.beq target "u64_and" then Option.some (NativeWrapKind.passthrough "monad_u64_and")
+            else if String.beq target "u64_or" then Option.some (NativeWrapKind.passthrough "monad_u64_or")
+            else if String.beq target "u64_shl" then Option.some (NativeWrapKind.passthrough "monad_u64_shl")
+            else if String.beq target "u64_shr" then Option.some (NativeWrapKind.passthrough "monad_u64_shr")
             // `u64_lt`/`u64_gt` are UNSIGNED compares: the reference routes
             // them through `uint_cmp` (`core_native.rs`) and the runtime
             // emits `icmp_ult`/`icmp_ugt` -- `bool_result`, like `u64_eq`.
@@ -400,6 +405,7 @@ def native_runtime_fn_name (attrs : List Attribute) : Option NativeWrapKind :=
             // `U32.to_string` to implement the u32 natives), so the
             // compiled backend needs them too.
             else if String.beq target "u32_div" then Option.some (NativeWrapKind.passthrough "monad_u32_div")
+            else if String.beq target "u32_rem" then Option.some (NativeWrapKind.passthrough "monad_u32_rem")
             else if String.beq target "u32_to_string" then Option.some (NativeWrapKind.passthrough "monad_u32_to_string")
             // `U64` widening (`I64.to_u64`, `std/src/number.mo`) is the
             // IDENTITY: the reference's `int_to_int(args, U64)` masks to
@@ -494,6 +500,12 @@ def native_runtime_fn_name (attrs : List Attribute) : Option NativeWrapKind :=
             else if String.beq target "i64_sub" then Option.some (NativeWrapKind.passthrough "monad_i64_sub")
             else if String.beq target "i64_mul" then Option.some (NativeWrapKind.passthrough "monad_i64_mul")
             else if String.beq target "i64_div" then Option.some (NativeWrapKind.passthrough "monad_i64_div")
+            else if String.beq target "i64_rem" then Option.some (NativeWrapKind.passthrough "monad_i64_rem")
+            else if String.beq target "i64_and" then Option.some (NativeWrapKind.passthrough "monad_i64_and")
+            else if String.beq target "i64_or" then Option.some (NativeWrapKind.passthrough "monad_i64_or")
+            else if String.beq target "i64_xor" then Option.some (NativeWrapKind.passthrough "monad_i64_xor")
+            else if String.beq target "i64_shl" then Option.some (NativeWrapKind.passthrough "monad_i64_shl")
+            else if String.beq target "i64_shr" then Option.some (NativeWrapKind.passthrough "monad_i64_shr")
             else if String.beq target "i64_eq" then Option.some (NativeWrapKind.bool_result "monad_i64_eq")
             else if String.beq target "i64_lt" then Option.some (NativeWrapKind.bool_result "monad_i64_lt")
             else if String.beq target "i64_gt" then Option.some (NativeWrapKind.bool_result "monad_i64_gt")
@@ -906,6 +918,7 @@ pub def runtime_declarations_for_with_ownership (kind : TargetKind) (ownership_o
     let d41 := mk_decl "monad_array_new" (List.cons "i64" (List.cons "i64" List.empty)) "i64" in
     let d42 := mk_decl "monad_array_len" (List.cons "i64" List.empty) "i64" in
     let d43 := mk_decl "monad_array_get" (List.cons "i64" (List.cons "i64" List.empty)) "i64" in
+    let d43b := mk_decl "monad_array_get_or" (List.cons "i64" (List.cons "i64" (List.cons "i64" List.empty))) "i64" in
     let d44 := mk_decl "monad_array_with" (List.cons "i64" (List.cons "i64" (List.cons "i64" List.empty))) "i64" in
     let d45 := mk_decl "monad_array_set_in_place" (List.cons "i64" (List.cons "i64" (List.cons "i64" List.empty))) "i64" in
     let d46 := mk_decl "monad_array_freeze" (List.cons "i64" List.empty) "i64" in
@@ -1144,7 +1157,7 @@ pub def runtime_declarations_for_with_ownership (kind : TargetKind) (ownership_o
     let d167 := mk_decl "monad_owned_free" ["i64"] void_ret in
     [d1, d2, d3, d7, d7b, d7b1, d7c, d7d, d7e, d7f, d8, d9, d10, d11, d12, d13,
         d14, d15, d16, d17, d18, d19, d20, d21, d22, d23, d23a, d23b, d24, d24b, d25, d26, d27, d28, d29, d30, d31,
-        d32, d33, d34, d35, d35b, d36, d37, d38, d38b, d39, dSysInt, dSysStr, dSysStat, dSysDirOpen, dSysDirNext, dSysDirClose, d40, d41, d42, d43, d44,
+        d32, d33, d34, d35, d35b, d36, d37, d38, d38b, d39, dSysInt, dSysStr, dSysStat, dSysDirOpen, dSysDirNext, dSysDirClose, d40, d41, d42, d43, d43b, d44,
         d45, d46, d47,
         d48, d49, d50, d51, d52, d53, d54, d55, d56,
         d57, d58, d59, d60, d61, d62, d63, d64,

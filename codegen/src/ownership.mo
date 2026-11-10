@@ -46,7 +46,7 @@
 use llvm::ir {LLVMBasicBlock, LLVMInstruction, LLVMType, LLVMValue}
 use llvm::strmap {str_map_empty, str_map_insert, str_map_lookup}
 use std::map {HashMap}
-use std::list {List.contains_by, List.length}
+use std::list {List.contains_by}
 use lang::types {
     Attribute, Con, DebugName, Decl, Identifier, Inductive, InductConstructor,
     Multiplicity, NamePath, Param, Scope, Struct, StructField, Term, id_eq,

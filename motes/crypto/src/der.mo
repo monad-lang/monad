@@ -5,8 +5,6 @@
 /// in DER, so this is the one conversion `motes/crypto` needs. It is pure,
 /// so its cases run on both hosts; only `Pubkey.verify` is compiled-only.
 
-use std::list {List.length}
-
 /// The fixed half-width of a P-256 ECDSA component, in bytes.
 def Der.component_bytes : I64 := 32i64
 

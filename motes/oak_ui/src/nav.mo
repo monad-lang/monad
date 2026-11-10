@@ -5,7 +5,7 @@
 // page navigates without the browser runtime; with it, an optional
 // `on_select` turns clicks into messages (default prevented).
 
-use std::list {List.length}
+use std::list {}
 use web_event::event {WebEvent, HandlerResult, ListenerFlags}
 use oak::typed {Oak.Attr, Oak.Node}
 use oak::elements {

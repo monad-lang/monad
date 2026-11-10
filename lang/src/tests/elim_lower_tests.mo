@@ -12,7 +12,7 @@
 // `match` used as a match-ARM body is followed by another arm with no comma;
 // hence the small accessors below, each with single-constructor patterns.
 
-use std::list {List.length}
+use std::list {}
 use lang::types {
     DebugName, Elim, Identifier, Inductive, Literal, MatchCase, ModulePath, NamePath, Scope,
     ScopeData, Similar, Term, binder_anon, binder_named, sentinel,

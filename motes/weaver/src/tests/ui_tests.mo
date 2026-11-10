@@ -16,7 +16,7 @@ use shuttle::session {Session}
 use weaver::commands {WeaverState}
 use weaver::policy {Mode}
 use std::map {BTreeMap}
-use std::list {List.length, List.intercalate}
+use std::list {List.intercalate}
 use tui::text {Text.width}
 use weaver::ui::live {LiveModel, LiveView, Live.start, Live.request_stop, Live.status_text, Live.thinking_height, Live.text_height,
     Live.separator_height, Live.rows}

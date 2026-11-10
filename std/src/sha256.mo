@@ -10,8 +10,6 @@
 /// any message under 2^32 bits (~512 MiB), which is far beyond what this
 /// tree-walking-successor interpreter can hash in reasonable time anyway.
 
-use std::list {List.length}
-
 // ── State ──
 
 struct Sha256State {

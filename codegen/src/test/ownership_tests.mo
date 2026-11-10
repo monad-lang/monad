@@ -6,7 +6,7 @@
 /// `init/src/ownership_tests.mo`.
 use llvm::ir {LLVMBasicBlock, LLVMInstruction, LLVMValue}
 use llvm::strmap {str_map_empty, str_map_insert}
-use std::list {List.length}
+use std::list {}
 use lang::types {
     Attribute, DebugName, Decl, Def, Identifier, InductConstructor, Inductive,
     Instance, Literal, ModulePath, Multiplicity, NamePath, Param, Scope, Term,

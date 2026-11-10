@@ -41,7 +41,7 @@ use tui::text {Text.width}
 use std::concurrent::fiber {never_started}
 use tui::types {Event, Key}
 use tui::tui {Cmd}
-use std::list {List.length, List.filter, List.intercalate}
+use std::list {List.filter, List.intercalate}
 
 // ── The offline state (commands_tests.mo's shape) ───────────────────────
 

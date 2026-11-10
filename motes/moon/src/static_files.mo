@@ -11,7 +11,7 @@
 /// tree (documented limitation).
 
 use std::io {IO.is_dir, IO.read_file_bytes}
-use std::list {List.length}
+use std::list {}
 use std::path {Path, Path.is_absolute, Path.join, Path.of, Path.to_string}
 use std::sha256 {Sha256.hash_bytes}
 use std::stream {StreamError.is_not_found}

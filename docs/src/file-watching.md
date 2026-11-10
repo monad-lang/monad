@@ -25,7 +25,7 @@ writes; the fence goes back to being checked the day the watch API can
 express it.
 
 ```monad,ignore
-use std::list {List.length}
+use std::list {}
 use std::path {Path}
 use std::stream {StreamError}
 use std::watch {

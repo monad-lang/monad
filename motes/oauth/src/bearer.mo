@@ -19,7 +19,7 @@
 /// unavailable. Bodies are generic JSON and carry no token or claim detail;
 /// every authentication response is `Cache-Control: no-store`.
 
-use std::list {List.any, List.filter, List.intercalate, List.length}
+use std::list {List.any, List.filter, List.intercalate}
 use std::ref {Ref, Ref.get, Ref.new, Ref.update}
 use json::json {Json, Json.get_array, Json.get_object, Json.object_get, Json.parse}
 use http::types {

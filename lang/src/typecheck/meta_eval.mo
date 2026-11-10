@@ -22,7 +22,7 @@
 /// `resolve_class_calls_decls` (the same "prepare for real execution"
 /// pipeline `codegen/test_driver.mo` already runs before compiling
 /// a test driver) before ever calling `meta_eval_invoke`.
-use std::list {List.length}
+use std::list {}
 use lib::core_eval {CoreEvalError, apply, basic_native_table, eval}
 use lib::core_ir {CoreIr, IrLit}
 use lang::core_value {

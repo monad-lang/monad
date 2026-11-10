@@ -8,15 +8,15 @@
 /// sharded) and their commits are DETERMINISTIC: fixed author, committer
 /// and dates, so a commit id is the same on every machine.
 
-use std::list {List.all, List.length}
+use std::list {List.all}
 use std::process {process_id}
 use std::stream {StreamError}
 use build::fetch {
     Build.fetch_run_with, Build.fetch_run_with_opts, Build.pin_of_dep,
-    Build.safe_subdir, Build.verify_manifest_at, FetchMode,
+    Build.safe_subdir, Build.toolchain_skew, Build.verify_manifest_at, FetchMode,
 }
 use build::hash {Build.canonical_tree_checksum}
-use lang::lock {GitPin, Lock.pin_to_string, Lock.read, LockRead, LockedMote}
+use lang::lock {GitPin, Lock.pin_to_string, Lock.read, LockRead, LockedGit, LockedMote}
 use lang::mote {Mote.manifest_at, Mote.with_locked_dirs_at, MoteManifest}
 
 def Build.fetch_fixture_root (tag : String) : String :=
@@ -111,6 +111,71 @@ def is_err (r : Result String (Option String)) : Bool :=
 
 def is_ok_option (r : Result String (Option String)) : Bool :=
     match r { Result.ok _ => true, Result.err _ => false }
+
+def Build.toolchain_test_entry (name : String) (commit : Option String) : LockedMote :=
+    let g : Option LockedGit :=
+        match commit {
+            Option.none => Option.none,
+            Option.some c =>
+                let pinned : LockedGit :=
+                    { url := "u", pin := GitPin.rev "abc", commit := c, subdir := Option.none } in
+                Option.some pinned,
+        } in
+    { name := name, version := "0.1.0", checksum := "", git := g }
+
+#[test]
+def test_toolchain_skew_matching_commit_is_clean : Bool :=
+    match Build.toolchain_skew "aaaa" [Build.toolchain_test_entry "std" (Option.some "aaaa")] {
+        Option.some _ => false,
+        Option.none => true,
+    }
+
+#[test]
+def test_toolchain_skew_mismatching_std_is_reported : Bool :=
+    match Build.toolchain_skew "aaaa" [Build.toolchain_test_entry "std" (Option.some "bbbb")] {
+        Option.some msg => String.contains msg "monadup use bbbb",
+        Option.none => false,
+    }
+
+#[test]
+def test_toolchain_skew_mismatching_sys_is_reported : Bool :=
+    match Build.toolchain_skew "aaaa" [Build.toolchain_test_entry "sys" (Option.some "bbbb")] {
+        Option.some msg => String.contains msg "monadup use bbbb",
+        Option.none => false,
+    }
+
+/// `llvm` is a compiler-build dependency, not compiled into every program.
+#[test]
+def test_toolchain_skew_ignores_llvm : Bool :=
+    match Build.toolchain_skew "aaaa" [Build.toolchain_test_entry "llvm" (Option.some "bbbb")] {
+        Option.some _ => false,
+        Option.none => true,
+    }
+
+/// A path-only entry carries no revision to compare.
+#[test]
+def test_toolchain_skew_ignores_path_only_sys : Bool :=
+    match Build.toolchain_skew "aaaa" [Build.toolchain_test_entry "sys" Option.none] {
+        Option.some _ => false,
+        Option.none => true,
+    }
+
+#[test]
+def test_toolchain_skew_ignores_path_entries_and_other_motes : Bool :=
+    match Build.toolchain_skew "aaaa" [
+        Build.toolchain_test_entry "std" Option.none,
+        Build.toolchain_test_entry "json" (Option.some "cccc"),
+    ] {
+        Option.some _ => false,
+        Option.none => true,
+    }
+
+#[test]
+def test_toolchain_skew_unknown_compiler_commit_is_ignored : Bool :=
+    match Build.toolchain_skew "unknown" [Build.toolchain_test_entry "runtime" (Option.some "bbbb")] {
+        Option.some _ => false,
+        Option.none => true,
+    }
 
 // ─── End to end ───
 

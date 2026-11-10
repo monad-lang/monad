@@ -37,7 +37,7 @@
 ///
 /// Run: `cargo run --release -- test bench/parser_located.mo`
 use lang::parser::whitespace {skip_spaces}
-use std::list {List.length}
+use std::list {}
 open IO {println}
 use std::bench {Bench.now, Bench.report_since}
 use lang::types {Decl, ParseDecl}

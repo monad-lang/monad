@@ -4,7 +4,7 @@
 // flattens the directory's test modules into one program scope, so the
 // `RenderM` helpers in html_t_tests.mo must not collide with these.
 
-use std::list {List.length}
+use std::list {}
 use lib::app {Program, Program.run_batch, Program.step, Program.view, Command, Host}
 use lib::elements {Html.li, Html.text, Html.ul}
 use lib::typed {Oak.Node, Oak.to_html}

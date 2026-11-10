@@ -6,7 +6,7 @@
 /// RSA key so key selection succeeds; the fake verifier decides the
 /// signature.
 
-use std::list {List.any, List.length}
+use std::list {List.any}
 use std::map {BTreeMap}
 use std::ref {Ref, Ref.new, Ref.update}
 use std::base64 {B64Url.encode}

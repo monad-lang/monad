@@ -67,7 +67,7 @@ use log::logger {Logger, Logger.debug, Logger.error, Logger.info, Logger.with_si
 use lsp::navigation {lsp_definition, lsp_document_symbol, lsp_hover, lsp_workspace_symbol}
 use lsp::params {lsp_param_str}
 use std::bench {Bench.now, Bench.since}
-use std::list {List.length}
+use std::list {}
 use toolkit::docstore {DocStore, docstore_empty, docstore_text, docstore_version}
 use toolkit::framing {
     FramingMode, bad_header, frame, framing_needed, framing_read, need_more,

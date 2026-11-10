@@ -3,7 +3,7 @@
 /// Deliberately separate from `args.mo`'s legacy `take_*` helpers: those
 /// keep their exact historical behavior (including missing-value fallback),
 /// while this parser is the strict, typed one new CLIs use.
-use std::list {List.length}
+use std::list {}
 use std::io {IO.write_stderr}
 use lib::spec {
     Cli.ArgKind, Cli.ArgSpec, Cli.ArgValue, Cli.ArgValueType, Cli.CommandSpec,

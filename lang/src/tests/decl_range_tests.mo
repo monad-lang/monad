@@ -28,7 +28,7 @@ use lib::module {
 }
 use lib::parser {LocatedDecls, decls_parser_located_with_ranges}
 use parsec::core {fail, success}
-use std::list {List.length}
+use std::list {}
 open IO {println}
 use std::process {exec_cmd, process_id}
 

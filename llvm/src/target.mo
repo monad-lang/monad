@@ -171,14 +171,51 @@ pub def TargetPlan.for_wasm (kind : TargetKind) (triple : String) (clang : Strin
         TargetKind.native => TargetPlan.native_plan triple,
     }
 
-/// The plan for `spec`. Native resolves without touching the environment;
-/// wasm requires `WASI_SDK_PATH` and a working `bin/clang`.
+/// The C compiler the web profile uses. `MONAD_WEB_CC` wins; otherwise
+/// `WASI_SDK_PATH/bin/clang` when the SDK is set (a dedicated,
+/// non-nix-wrapped cross toolchain); otherwise the bare host `clang`.
+///
+/// The host fallback is the newcomer path (no wasi-sdk needed). A
+/// nixpkgs WRAPPED clang injects `-fzero-call-used-regs=used-gpr`, which
+/// the wasm target rejects, so a nix user points `MONAD_WEB_CC` at
+/// `clang-unwrapped` (the dev shell does when the SDK is absent).
+def TargetPlan.web_cc (override : Option String) (sdk_root : Option String) : String :=
+    match override {
+        Option.some raw =>
+            let cc : String := String.trim raw in
+            if String.is_empty cc then TargetPlan.web_cc_sdk sdk_root else cc,
+        Option.none => TargetPlan.web_cc_sdk sdk_root,
+    }
+
+/// The `WASI_SDK_PATH` half of `web_cc`, split out so the override's
+/// empty case is a plain call rather than a self-recursion the termination
+/// checker rejects.
+def TargetPlan.web_cc_sdk (sdk_root : Option String) : String :=
+    match sdk_root {
+        Option.some raw =>
+            let root : String := String.trim raw in
+            if String.is_empty root then "clang"
+            else String.concat root "/bin/clang",
+        Option.none => "clang",
+    }
+
+/// The plan for `spec`. Native and web resolve without requiring
+/// `WASI_SDK_PATH`; the WASI profile requires it.
 #[partial]
 pub def TargetPlan.resolve (spec : TargetSpec) : IO (Result String TargetPlan) := do {
     let kind := TargetKind.of_triple spec.triple;
     match kind {
         TargetKind.native => return (Result.ok (TargetPlan.native_plan spec.triple)),
-        _ => do {
+        TargetKind.web =>
+            if Bool.not (TargetPlan.is_supported_wasm_triple spec.triple)
+            then return (Result.err (TargetPlan.unsupported_wasm_message spec.triple))
+            else do {
+                let sdk <- IO.get_env "WASI_SDK_PATH";
+                let override <- IO.get_env "MONAD_WEB_CC";
+                let cc : String := TargetPlan.web_cc override sdk;
+                return (Result.ok (TargetPlan.for_wasm TargetKind.web spec.triple cc ""))
+            },
+        TargetKind.wasi => do {
             if Bool.not (TargetPlan.is_supported_wasm_triple spec.triple) then
                 return (Result.err (TargetPlan.unsupported_wasm_message spec.triple))
             else do {
@@ -220,7 +257,7 @@ def TargetPlan.unsupported_wasm_message (triple : String) : String :=
 
 #[partial]
 def TargetPlan.missing_sdk_message (triple : String) (kind : TargetKind) : String :=
-    "error: target `" ++ triple ++ "` (" ++ TargetKind.name kind ++ ") needs the wasi-sdk toolchain, but `WASI_SDK_PATH` is not set. Set it to the wasi-sdk root (the directory containing bin/clang and share/wasi-sysroot), or enter the project dev shell (devenv pins one)."
+    "error: target `" ++ triple ++ "` (" ++ TargetKind.name kind ++ ") needs the wasi-sdk toolchain, but `WASI_SDK_PATH` is not set. Install wasi-sdk 34 (https://github.com/WebAssembly/wasi-sdk/releases) and set `WASI_SDK_PATH` to its root (the directory containing bin/clang and share/wasi-sysroot), or enter the project dev shell (`devenv` pins one). The web profile (`wasm32-unknown-unknown`) needs only a host clang with the wasm32 backend."
 
 #[partial]
 def TargetPlan.bad_sdk_message (root : String) (clang : String) : String :=
@@ -678,6 +715,21 @@ def test_wasm64_is_classified_wasm_but_rejected : Bool :=
     String.beq (TargetKind.name (TargetKind.of_triple "wasm64-unknown-unknown")) "web"
         && Bool.not (TargetPlan.is_supported_wasm_triple "wasm64-unknown-unknown")
         && TargetPlan.is_supported_wasm_triple "wasm32-unknown-wasip1"
+
+#[test]
+def test_web_plan_uses_the_host_clang : Bool :=
+    match TargetPlan.for_wasm TargetKind.web "wasm32-unknown-unknown" "clang" "" {
+        { clang, triple, .. } =>
+            String.beq clang "clang" && String.beq triple "wasm32-unknown-unknown",
+    }
+
+/// `MONAD_WEB_CC` wins, then the SDK's clang, then the host clang.
+#[test]
+def test_web_cc_precedence : Bool :=
+    String.beq (TargetPlan.web_cc (Option.some "/x/clang") (Option.some "/sdk")) "/x/clang"
+        && String.beq (TargetPlan.web_cc (Option.some "  ") (Option.some "/sdk")) "/sdk/bin/clang"
+        && String.beq (TargetPlan.web_cc Option.none (Option.some "/sdk")) "/sdk/bin/clang"
+        && String.beq (TargetPlan.web_cc Option.none Option.none) "clang"
 
 #[test]
 def test_output_ext_is_shared_by_both_wasm_profiles : Bool :=

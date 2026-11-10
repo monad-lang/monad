@@ -3,7 +3,7 @@
 /// Anything with an argument, and anything that opens a picker or changes
 /// state, keeps the ordinary path (run when idle, queued during a turn).
 use std::map {Map, BTreeMap}
-use std::list {List.any, List.length}
+use std::list {List.any}
 
 def side_map (names : List String) : BTreeMap String Bool :=
     match names {

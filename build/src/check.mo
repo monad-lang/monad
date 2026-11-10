@@ -32,7 +32,7 @@
 ///     rendered output verbatim, so a replay is byte-exact -- see
 ///     `Build.check_block`.
 
-use std::list {List.contains_by, List.intercalate, List.length}
+use std::list {List.contains_by, List.intercalate}
 use std::sha256 {Sha256.hash}
 use lang::mote {Mote.discover}
 use lang::module {extract_directory}

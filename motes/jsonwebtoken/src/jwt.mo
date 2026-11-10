@@ -13,7 +13,7 @@
 /// ignored. The signing input is the first two segments verbatim, so it is
 /// exactly what the issuer signed.
 
-use std::list {List.length}
+use std::list {}
 use std::map {BTreeMap}
 use std::base64 {B64Url.decode}
 use json::json {
