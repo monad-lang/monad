@@ -52,8 +52,8 @@ path = "../../llvm"
 [dependencies.runtime]
 path = "../../runtime"
 
-# Affine-by-default migration exception (measured 2026-10-22).
-# Delete this table when the mote reaches zero violations; the default
-# (no table) is `mode = "error"`. See plans/type-system/quantitative-types.md.
-[affine]
-mode = "warn"
+# No `[affine]` table: the mote has been affine-clean (zero warnings,
+# then zero errors -- the default mode) since the Phase 3 highlighter and
+# view landed. `ddc246df` refuses a warn-mode mote under `MONAD_OWNERSHIP`
+# builds, so the migration exception is gone rather than dormant.
+# See plans/type-system/quantitative-types.md.
