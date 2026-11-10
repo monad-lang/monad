@@ -28,10 +28,25 @@ pub instance Copy Path {
 /// output path silently doubling up when one half was already
 /// absolute), without taking on open-ended "what is a valid path"
 /// scope nothing in this corpus actually needs yet.
-pub def Path.of (s : String) : Result String Path :=
+/// Why `Path.of` rejected a string. Structured rather than a message so a
+/// caller can branch on it or render it; `to_string` keeps the old text.
+pub type PathError {
+    empty,
+}
+
+pub def PathError.to_string (e : PathError) : String :=
+    match e { PathError.empty => "empty path" }
+
+pub def Path.of (s : String) : Result PathError Path :=
     if String.is_empty s
-    then err "empty path"
+    then err PathError.empty
     else ok (Path.path s)
+
+/// The boundary constructor for a string the caller has ALREADY
+/// established is a path: a manifest-provided path, a compile-time
+/// literal, or a value that passed `Path.of`. It skips only the non-empty
+/// check; it is not a second validating constructor.
+pub def Path.unsafe (s : String) : Path := Path.path s
 
 pub def Path.to_string (p : Path) : String :=
     match p { Path.path s => s }
@@ -142,11 +157,119 @@ pub def Path.file_name (p : Path) : String :=
     then s
     else String.drop (last_slash + 1) s
 
+/// Collapse `.`/`..` segments and repeated separators: `a/../b` -> `b`,
+/// `./x` -> `x`, `a//b` -> `a/b`. Moved here from `lang/module.mo` so the
+/// loader, the CLI and build share one implementation; pure string work,
+/// so it never changes which file resolves, only how the winner is spelled.
+/// An empty result becomes `"."` (the current directory).
+pub def Path.normalize (p : Path) : Path :=
+    let raw : String := Path.to_string p in
+    let joined : String :=
+        join_path_segments (normalize_segments_go (path_segments_go raw 0 0 List.empty) List.empty) "" in
+    let normalized : String :=
+        if String.starts_with "/" raw
+        then String.concat "/" joined
+        else (if String.is_empty joined then "." else joined) in
+    Path.path normalized
+
+/// The extension after the last `.` in the file name, without the dot.
+/// `none` when there is no dot or it is the file name's first byte (a
+/// dotfile such as `.gitignore` has no extension).
+pub def Path.extension (p : Path) : Option String :=
+    let name : String := Path.file_name p in
+    let dot : I64 := find_last_dot name (String.length name) in
+    if I64.lt dot 1
+    then Option.none
+    else Option.some (String.drop (dot + 1) name)
+
+/// The file name without its extension (`/a/b.mo` -> `b`); the whole
+/// file name when it has no extension.
+pub def Path.file_stem (p : Path) : String :=
+    let name : String := Path.file_name p in
+    let dot : I64 := find_last_dot name (String.length name) in
+    if I64.lt dot 1 then name else String.slice name 0 dot
+
+/// Join a relative segment onto a path, with `Path.join`'s absolute-
+/// segment rule but without requiring the segment to be a `Path`
+/// (segments are literals, never validated targets).
+pub def Path.child (p : Path) (segment : String) : Path :=
+    Path.path (raw_path_join (Path.to_string p) segment)
+
+/// Byte scan for `.` (46) from the end; -1 when absent.
+#[partial]
+def find_last_dot (s : String) (i : I64) : I64 :=
+    if I64.lt i 1
+    then -1
+    else match (String.get s (i - 1) : Option U8) {
+        Option.some b => if U8.beq b 46u8 then i - 1 else find_last_dot s (i - 1),
+        Option.none => -1,
+    }
+
+/// `s` split on `/`, with empty segments dropped so a leading `/` and any
+/// `//` contribute nothing. `Path.normalize` restores the leading slash
+/// from the original string, which is the only thing it can carry.
+#[partial]
+pub def path_segments_go (s : String) (i : I64) (start : I64) (acc : List String) : List String :=
+    if I64.lt i (String.length s)
+    then (if String.beq (String.slice s i 1) "/"
+        then path_segments_go s (I64.add i 1) (I64.add i 1)
+            (path_push_segment (String.slice s start (I64.sub i start)) acc)
+        else path_segments_go s (I64.add i 1) start acc)
+    else List.reverse (path_push_segment (String.slice s start (I64.sub (String.length s) start)) acc)
+
+/// Accumulate one segment, skipping an empty one.
+pub def path_push_segment (seg : String) (acc : List String) : List String :=
+    if String.is_empty seg then acc else List.cons seg acc
+
+/// `path_segments_go`'s output with `.` dropped and each `..` cancelling
+/// the segment before it. A `..` with nothing to cancel is KEPT, and two
+/// leading `..`s keep both -- otherwise `../init/src` would normalize to
+/// `init/src` and stop naming the file it found.
+#[partial]
+pub def normalize_segments_go (segs : List String) (acc : List String) : List String :=
+    match segs {
+        List.empty => List.reverse acc,
+        List.cons s rest =>
+            if String.beq s "." then normalize_segments_go rest acc
+            else (if String.beq s ".."
+                then (match acc {
+                    List.empty => normalize_segments_go rest (List.cons s List.empty),
+                    List.cons hd tl =>
+                        if String.beq hd ".."
+                        then normalize_segments_go rest (List.cons s (List.cons hd tl))
+                        else normalize_segments_go rest tl
+                })
+                else normalize_segments_go rest (List.cons s acc))
+    }
+
+/// Re-join segments with a single `/` between them and none at either end.
+pub def join_path_segments (segs : List String) (acc : String) : String :=
+    match segs {
+        List.empty => acc,
+        List.cons s rest =>
+            if String.is_empty acc
+            then join_path_segments rest s
+            else join_path_segments rest (String.concat acc (String.concat "/" s))
+    }
+
 pub def Path.beq (a b : Path) : Bool :=
     String.beq (Path.to_string a) (Path.to_string b)
 
 pub instance BEq Path {
     def beq (a b : Path) : Bool := Path.beq a b
+}
+
+/// Canonical-string hash/order, so a `Path` can key a map (the loader's
+/// file table) without every caller rendering it first.
+pub instance Hashable Path {
+    def hash (p : Path) : U64 := String.hash (Path.to_string p)
+}
+
+pub instance BOrd Path {
+    def lt (a b : Path) : Bool := BOrd.lt (Path.to_string a) (Path.to_string b)
+    def gt (a b : Path) : Bool := BOrd.gt (Path.to_string a) (Path.to_string b)
+    def lte (a b : Path) : Bool := Bool.not (BOrd.gt (Path.to_string a) (Path.to_string b))
+    def gte (a b : Path) : Bool := Bool.not (BOrd.lt (Path.to_string a) (Path.to_string b))
 }
 
 // No `Show Path` instance: it would need `use std.show {Show}`, and a

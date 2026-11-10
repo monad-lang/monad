@@ -145,3 +145,60 @@ def test_path_join_strips_trailing_slash : Bool :=
 def test_path_join_nested_stays_single : Bool :=
     let a : Path := Path.join (Path.path "lang/") (Path.path "src") in
     String.beq (Path.to_string (Path.join a (Path.path "codegen"))) "lang/src/codegen"
+
+// `Path.normalize` -- one file has one spelling. The `..` rules are the
+// load-bearing part: a mote-relative join legitimately carries `..`, and
+// codegen's per-file dedup compares the recorded spelling.
+
+#[test]
+def test_path_normalize_cancels_parent_segments : Bool :=
+    String.beq (Path.to_string (Path.normalize (Path.path "a/../b"))) "b"
+
+#[test]
+def test_path_normalize_drops_current_and_repeated_separators : Bool :=
+    String.beq (Path.to_string (Path.normalize (Path.path "./a//b"))) "a/b"
+
+#[test]
+def test_path_normalize_keeps_absolute_root : Bool :=
+    String.beq (Path.to_string (Path.normalize (Path.path "/a/../b"))) "/b"
+
+#[test]
+def test_path_normalize_keeps_leading_parent : Bool :=
+    String.beq (Path.to_string (Path.normalize (Path.path "../init/src"))) "../init/src"
+
+#[test]
+def test_path_normalize_empty_is_current_dir : Bool :=
+    String.beq (Path.to_string (Path.normalize (Path.unsafe ""))) "."
+
+// `Path.extension` / `Path.file_stem` / `Path.child`.
+
+#[test]
+def test_path_extension : Bool :=
+    match Path.extension (Path.path "/a/b.mo") {
+        Option.some e => String.beq e "mo",
+        Option.none => false,
+    }
+
+#[test]
+def test_path_extension_of_dotfile_is_none : Bool :=
+    match Path.extension (Path.path "/a/.gitignore") {
+        Option.some _ => false,
+        Option.none => true,
+    }
+
+#[test]
+def test_path_file_stem : Bool :=
+    String.beq (Path.file_stem (Path.path "/a/b.mo")) "b"
+        && String.beq (Path.file_stem (Path.path "/a/.gitignore")) ".gitignore"
+
+#[test]
+def test_path_child : Bool :=
+    String.beq (Path.to_string (Path.child (Path.path "/tmp") "a")) "/tmp/a"
+        && String.beq (Path.to_string (Path.child (Path.path "/tmp") "/abs")) "/abs"
+
+#[test]
+def test_path_of_reports_structured_error : Bool :=
+    match Path.of "" {
+        err e => match e { PathError.empty => true },
+        ok _ => false,
+    }

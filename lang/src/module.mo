@@ -91,7 +91,8 @@ use lib::use_completeness {use_completeness_errors}
 // for why the helpers gate themselves and why `bench_step` below prints
 // through `timing_line`).
 use std::log {module_line, timing_line}
-use std::list {List.any, List.contains_by, List.filter, List.intercalate, Show}
+use std::list {List.any, List.contains_by, List.filter, List.intercalate, List.length, Show}
+use std::path {Path, join_path_segments, path_segments_go}
 use std::show {Show}
 // `ScopeData.def_refs` is a `std.map` `HashMap ModulePath ScopeDef` (see
 // `lang/scope.mo`'s own `use std.map {}` doc comment for why the import
@@ -651,57 +652,7 @@ def path_join (a : String) (b : String) : String :=
 /// mote-relative resolution, so this function stays.
 #[partial]
 def normalize_path (p : String) : String :=
-    let joined : String := join_path_segments (normalize_segments_go (path_segments_go p 0 0 List.empty) List.empty) "" in
-    if String.starts_with "/" p
-    then String.concat "/" joined
-    else (if String.is_empty joined then "." else joined)
-
-/// `s` split on `/`, with empty segments dropped so a leading `/` and any
-/// `//` contribute nothing. `normalize_path` restores the leading slash
-/// from the original string, which is the only thing it can carry.
-#[partial]
-def path_segments_go (s : String) (i : I64) (start : I64) (acc : List String) : List String :=
-    if I64.lt i (String.length s)
-    then (if String.beq (String.slice s i 1) "/"
-        then path_segments_go s (I64.add i 1) (I64.add i 1)
-            (path_push_segment (String.slice s start (I64.sub i start)) acc)
-        else path_segments_go s (I64.add i 1) start acc)
-    else List.reverse (path_push_segment (String.slice s start (I64.sub (String.length s) start)) acc)
-
-/// Accumulate one segment, skipping an empty one.
-def path_push_segment (seg : String) (acc : List String) : List String :=
-    if String.is_empty seg then acc else List.cons seg acc
-
-/// `path_segments_go`'s output with `.` dropped and each `..` cancelling
-/// the segment before it. A `..` with nothing to cancel is KEPT, and two
-/// leading `..`s keep both -- otherwise `../init/src` would normalize to
-/// `init/src` and stop naming the file it found.
-#[partial]
-def normalize_segments_go (segs : List String) (acc : List String) : List String :=
-    match segs {
-        List.empty => List.reverse acc,
-        List.cons s rest =>
-            if String.beq s "." then normalize_segments_go rest acc
-            else (if String.beq s ".."
-                then (match acc {
-                    List.empty => normalize_segments_go rest (List.cons s acc),
-                    List.cons hd tl =>
-                        if String.beq hd ".."
-                        then normalize_segments_go rest (List.cons s acc)
-                        else normalize_segments_go rest tl
-                })
-                else normalize_segments_go rest (List.cons s acc))
-    }
-
-/// Re-join segments with a single `/` between them and none at either end.
-def join_path_segments (segs : List String) (acc : String) : String :=
-    match segs {
-        List.empty => acc,
-        List.cons s rest =>
-            if String.is_empty acc
-            then join_path_segments rest s
-            else join_path_segments rest (String.concat acc (String.concat "/" s))
-    }
+    Path.to_string (Path.normalize (Path.unsafe p))
 
 /// Return the first path in `candidates` that exists on disk (checked in
 /// order via `file_exists`), or `Option.none` if none do. Factored out of
