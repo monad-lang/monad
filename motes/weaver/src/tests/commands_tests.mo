@@ -20,8 +20,9 @@ use weaver::commands {
     WeaverState, Effect, Commands.dispatch, Commands.context_used, Commands.context_percent,
     Commands.set_plan, Commands.plan_after_turn, SessionPage, Commands.session_page,
     Commands.turns_label, Commands.turn_context, Commands.sessions_for, Commands.place_suffix,
-    Commands.memory_text, Commands.store_plan, Commands.linked_plan,
+    Commands.memory_text, Commands.store_plan, Commands.linked_plan, Commands.with_skills, Commands.skill_turn, Commands.builtin_names, command_table, SlashCommand,
 }
+use weaver::skills {Skill}
 use weaver::plan_file {PlanRepo, PlanDoc, PlanFile.read}
 use weaver::catalog {Catalog.lookup}
 use weaver::error {WeaverError}
@@ -35,11 +36,12 @@ use weaver::store {
 }
 use std::path {Path, Path.of, Path.to_string}
 use std::process {exec_cmd}
-use std::list {List.length, List.intercalate}
+use std::list {List.length, List.intercalate, List.all, List.any}
 use weaver::place {SessionPlace}
 use json::json {Json}
-use std::map {Map, BTreeMap}
+use std::map {Map, BTreeMap, BTreeMap.to_list}
 use std::process {process_id}
+use std::io {IO.write_file}
 
 // ── The offline state (main.mo's shape, per-command parameterized) ──────
 
@@ -1285,3 +1287,50 @@ def test_plans_all_lists_paths_that_load : IO Bool := do {
     let r <- Commands.dispatch "/plans show everywhere" other;
     IO.pure (String.contains (plans_output_of l) "/plans/app/" && String.contains (plans_output_of r) "# Everywhere")
 }
+
+// ── Agent Skills (/skills, /<name>) ──────────────────────────────────
+
+def skills_base : String := String.concat "/tmp/weaver_cmdskills_" (I64.to_string process_id)
+
+def with_skill (st : WeaverState) : IO WeaverState := do {
+    let dir : String := String.concat skills_base "/greet";
+    let _ <- exec_cmd "rm" ["-rf", skills_base];
+    let _ <- exec_cmd "mkdir" ["-p", dir];
+    let _ <- IO.write_file (Path.path (String.concat dir "/SKILL.md")) "---\nname: greet\ndescription: Greet someone warmly.\n---\n\nSay hello to the person named in the arguments.\n";
+    let sk : Skill := { name := "greet", description := "Greet someone warmly.", source := "user", path := String.concat dir "/SKILL.md", dir := dir };
+    let clash : Skill := { sk with name := "plan" };
+    IO.pure (Commands.with_skills st [sk, clash])
+}
+
+def turn_text (o : Option (Result String String)) : String :=
+    match o {
+        Option.none => "",
+        Option.some r => match r { Result.ok t => t, Result.err e => String.concat "ERR " e },
+    }
+
+#[test]
+def test_skills_lists_and_a_skill_line_expands : IO Bool := do {
+    let st <- with_skill (state_of Mode.manual []);
+    let l <- Commands.dispatch "/skills" st;
+    let t <- Commands.skill_turn st "/greet Ada";
+    let builtin <- Commands.skill_turn st "/plan";
+    let unknown <- Commands.skill_turn st "/nosuch";
+    IO.pure (String.contains (plans_output_of l) "/greet  (user)  Greet someone warmly."
+        && String.contains (plans_output_of l) "shadowed by a built-in command (use the skill tool, or rename): plan"
+        && String.contains (turn_text t) "Say hello to the person"
+        && String.contains (turn_text t) "Arguments: Ada"
+        && String.is_empty (turn_text builtin)
+        && String.is_empty (turn_text unknown))
+}
+
+#[test]
+def test_skills_join_the_system_prompt : IO Bool := do {
+    let st <- with_skill (state_of Mode.manual []);
+    IO.pure (String.contains st.run.session.system_prompt "- greet: Greet someone warmly.")
+}
+
+#[test]
+def test_builtin_names_match_the_table : Bool :=
+    let keys : List String := List.map (fn (kv : Pair String SlashCommand) => match kv { Pair.pair k _ => k }) (BTreeMap.to_list command_table) in
+    List.length keys == List.length Commands.builtin_names
+        && List.all (fn (n : String) => List.any (fn (k : String) => k == n) keys) Commands.builtin_names

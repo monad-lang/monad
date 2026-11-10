@@ -48,7 +48,7 @@ use weaver::store {
 use std::path {Path, Path.of, Path.parent, Path.to_string, Path.beq, Path.file_name}
 use std::io {IO.is_dir, IO.current_time_nano}
 use std::map {Map, BTreeMap}
-use std::list {List.intercalate, List.any}
+use std::list {List.intercalate, List.any, List.filter}
 use std::ref {Ref}
 use parsec::number {parse_i64}
 use weaver::permissions {
@@ -59,6 +59,7 @@ use weaver::settings {SettingsUpdate, Settings.save}
 use weaver::procs {ProcEntry, Procs.list, Procs.kill}
 use weaver::logs {Logs.latest_path, Logs.tail, Logs.detect_crash}
 use weaver::trust {Trust.items, Trust.record_path, Trust.remember}
+use weaver::skills {Skill, SkillScan, Skills.discover, Skills.user_root, Skills.find, Skills.expand, Skills.listing, Skills.with_index}
 use weaver::plan_file {
     PlanRepo, PlanDoc, PlanEntry, PlanEntry.line, PlanFile.read, PlanFile.linked, PlanFile.link,
     PlanRepo.capture, PlanRepo.list, PlanRepo.list_all, PlanRepo.set_status, PlanRepo.add_session, Stored,
@@ -133,6 +134,9 @@ pub struct WeaverState {
     /// Where captured plans are stored (`plan_file.mo`); none when nothing
     /// names a place (no HOME, no setting).
     plan_repo : Option PlanRepo := Option.none,
+    /// The discovered Agent Skills (`skills.mo`): indexed in the system
+    /// prompt, loaded by the `skill` tool or `/<name>`.
+    skills : List Skill := List.empty,
 }
 
 /// What a command did to the transcript: ordinary output appends,
@@ -194,6 +198,7 @@ pub def command_table : BTreeMap String SlashCommand :=
             Pair.pair "/describe" (SlashCommand.mk cmd_describe),
             Pair.pair "/permissions" (SlashCommand.mk cmd_permissions),
             Pair.pair "/settings" (SlashCommand.mk cmd_settings),
+            Pair.pair "/skills" (SlashCommand.mk cmd_skills),
             Pair.pair "/plan" (SlashCommand.mk cmd_plan),
             Pair.pair "/plans" (SlashCommand.mk cmd_plans),
             Pair.pair "/provider" (SlashCommand.mk cmd_provider),
@@ -1123,7 +1128,7 @@ def resume_effect (st : WeaverState) (s : Session) (store : Option StoreState) (
 /// The resumed session also takes this run's instruction files: the
 /// prompt cache is cold after a resume anyway.
 def rekey_session (st : WeaverState) (s : Session) : Session :=
-    let s2 : Session := { s with config := rekey_config st s.config, system_prompt := Prompt.system st.instructions } in
+    let s2 : Session := { s with config := rekey_config st s.config, system_prompt := Commands.system_prompt st st.instructions } in
     s2
 
 /// The store for a directory opened in place: keep the CURRENT root so
@@ -1163,7 +1168,7 @@ def cmd_clear (arg : String) (st : WeaverState) : IO (Result WeaverError Effect)
     // The new session's prompt carries the files as they are now, which
     // folds in any change the turns only saw as notes.
     let fs <- Instructions.current st.instr_seen st.instructions;
-    let fresh : Session := clear_session base (Prompt.system fs);
+    let fresh : Session := clear_session base (Commands.system_prompt st fs);
     // A new session has no plan: the old one belongs to the session that
     // produced it (and its store directory, when persistence is on).
     let st2 : WeaverState := Commands.set_plan (set_session { st with instructions := fs } fresh st.budget) Option.none;
@@ -1571,7 +1576,10 @@ def trust_place (st : WeaverState) (p : SessionPlace) : IO (Result WeaverError E
     let user <- Instructions.user_path;
     let fs <- Instructions.discover user st.place true;
     let _ <- Instructions.reset st.instr_seen fs;
-    let st2 : WeaverState := with_instructions { st with trusted := true } fs;
+    let root <- Skills.user_root;
+    let scan <- Skills.discover root st.place true;
+    let st1 : WeaverState := { st with trusted := true, skills := scan.skills };
+    let st2 : WeaverState := with_instructions st1 fs;
     respond st2 (String.concat_list ["trusted ", Path.to_string p.repo,
         if saved then "" else " for this session (HOME is unset, so it is not recorded)",
         "; .weaver/config.toml applies from the next start",
@@ -1587,7 +1595,7 @@ def trust_loaded_text (fs : List InstrFile) : String :=
 /// `fs` as the session's instruction files, and its system prompt rebuilt.
 pub def with_instructions (st : WeaverState) (fs : List InstrFile) : WeaverState :=
     let run : RunState := st.run in
-    let sess : Session := { (run.session) with system_prompt := Prompt.system fs } in
+    let sess : Session := { (run.session) with system_prompt := Commands.system_prompt st fs } in
     let run2 : RunState := { run with session := sess } in
     { st with instructions := fs, run := run2 }
 
@@ -1642,6 +1650,8 @@ def help_text : String :=
         "/tools                               list tools with their capability tags",
         "/trust                               trust this project's AGENTS.md and .weaver/config.toml",
         "/memory [reload]                     the loaded AGENTS.md files; reload re-reads them into the prompt",
+        "/skills [reload]                     the installed skills; reload rescans their folders",
+        "/<skill> [args]                      run a turn with a skill's instructions",
         "/tasks [kill <id>]                    background processes and subagent runs (TUI monitor;",
         "                                     Ctrl+B sends the shell command a turn waits on there)",
         "/todos                               the task's todo list (Ctrl+T folds it in the TUI)",
@@ -1984,5 +1994,63 @@ def link_and_record (r : PlanRepo) (path : String) (st : WeaverState) : IO Unit 
             let _ <- PlanFile.link s path;
             let _ <- PlanRepo.add_session r path s.id;
             IO.pure unit
+        },
+    }
+
+// ── Agent Skills (`skills.mo`) ──────────────────────────────────────────
+
+/// The session's system prompt: weaver's own, the instruction files, and
+/// the skill index.
+pub def Commands.system_prompt (st : WeaverState) (fs : List InstrFile) : String :=
+    Skills.with_index (Prompt.system fs) st.skills
+
+/// The table's command words. Kept apart from the table so `/skills`
+/// (one of its handlers) can check a clash without a cycle through it;
+/// `test_builtin_names_match_the_table` keeps the two in step.
+pub def Commands.builtin_names : List String :=
+    ["/btw", "/budget", "/clear", "/compact", "/h", "/help", "/mcp", "/mode", "/model", "/name", "/describe", "/permissions", "/settings", "/skills", "/plan", "/plans", "/provider", "/q", "/quit", "/resume", "/save", "/log", "/processes", "/tasks", "/procs", "/thinking", "/todos", "/tools", "/trust", "/memory"]
+
+def is_command_name (name : String) : Bool :=
+    List.any (fn (n : String) => n == String.concat "/" name) Commands.builtin_names
+
+/// Skills whose `/<name>` a built-in command shadows.
+pub def Commands.skill_clashes (ss : List Skill) : List String :=
+    List.map (fn (sk : Skill) => sk.name) (List.filter (fn (sk : Skill) => is_command_name sk.name) ss)
+
+/// `/skills` lists them; `/skills reload` rescans the folders and rebuilds
+/// the system prompt.
+def cmd_skills (arg : String) (st : WeaverState) : IO (Result WeaverError Effect) :=
+    if arg == "reload" then skills_reload st
+    else if String.is_empty arg then respond st (Skills.listing st.skills List.empty (Commands.skill_clashes st.skills))
+    else IO.pure (Result.err (WeaverError.usage "/skills [reload]"))
+
+def skills_reload (st : WeaverState) : IO (Result WeaverError Effect) := do {
+    let root <- Skills.user_root;
+    let scan <- Skills.discover root st.place st.trusted;
+    let st2 : WeaverState := Commands.with_skills st scan.skills;
+    respond st2 (String.concat (Skills.listing scan.skills scan.skipped (Commands.skill_clashes scan.skills))
+        "\nreloaded into the system prompt (the prompt cache starts cold)")
+}
+
+/// `ss` as the session's skills, and its system prompt rebuilt.
+pub def Commands.with_skills (st : WeaverState) (ss : List Skill) : WeaverState :=
+    let st1 : WeaverState := { st with skills := ss } in
+    with_instructions st1 st1.instructions
+
+/// `/<name> [args]` for a skill (and not a built-in command): the turn's
+/// text, or why the skill could not be loaded. None for anything else.
+pub def Commands.skill_turn (st : WeaverState) (line : String) : IO (Option (Result String String)) :=
+    match split_command line {
+        Pair.pair cmd arg =>
+            if is_command_name (String.drop 1 cmd) then IO.pure Option.none
+            else skill_named st (String.drop 1 cmd) arg,
+    }
+
+def skill_named (st : WeaverState) (name : String) (arg : String) : IO (Option (Result String String)) :=
+    match Skills.find st.skills name {
+        Option.none => IO.pure Option.none,
+        Option.some sk => do {
+            let r <- Skills.expand sk arg;
+            IO.pure (Option.some r)
         },
     }

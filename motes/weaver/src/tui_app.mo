@@ -33,7 +33,7 @@ use weaver::commands {
     Commands.autocompact, Commands.last_assistant_text, Commands.current_plan,
     Commands.plan_after_turn, Commands.setting_rows, Commands.cycle_setting, Commands.apply_setting, SettingRow, SettingKind,
     SessionPage, Commands.session_page, Commands.sessions_for, Commands.turns_label, Commands.turn_context,
-    Commands.store_turn_plan, Commands.join_notes, Commands.note_into_state, Commands.persist_note,
+    Commands.store_turn_plan, Commands.join_notes, Commands.note_into_state, Commands.persist_note, Commands.skill_turn,
 }
 use log::logger {Logger}
 use weaver::policy {Mode, Mode.show, Mode.cycle, Policy.decide, Policy.unguarded, Decision}
@@ -61,6 +61,7 @@ use weaver::subagent {Subagent.task_tool, Subagent.drain}
 use weaver::instructions {Instructions.take_notes, Instructions.attaching}
 use weaver::todo {TodoItem, TodoTool.impl, Todo.read, Todo.same}
 use weaver::plan_tool {PlanTool.impl}
+use weaver::skills {SkillTool.impl}
 use weaver::plan_file {PlanEntry, PlanDoc, PlanRepo.list, PlanFile.day_of}
 use weaver::procs {Procs.tail, Procs.kill, Procs.log_kill, Procs.log_exit, Procs.root, Procs.enforce_cap, Procs.max_log_bytes}
 use weaver::format {format_elapsed}
@@ -1454,8 +1455,21 @@ def dispatch_submitted (log : Option Logger) (gen : I64) (st : WeaverState) (tex
     else if plan_dialog_wanted st text
     then plan_dialog_step st text
     else if String.starts_with "/" text
-    then command_step_tui st text
+    then slash_step_tui log gen st text
     else model_step_tui log gen st text
+
+/// A `/` line: a skill's `/<name>` runs a turn with its instructions;
+/// anything else is a command.
+def slash_step_tui (log : Option Logger) (gen : I64) (st : WeaverState) (text : String) : IO WeaverMsg := do {
+    let sk <- Commands.skill_turn st text;
+    match sk {
+        Option.none => command_step_tui st text,
+        Option.some r => match r {
+            Result.ok prompt => model_step_tui log gen st prompt,
+            Result.err e => IO.pure (WeaverMsg.command_result (Effect.ok st (String.concat "skill: " e))),
+        },
+    }
+}
 
 def mode_is_plan (m : Mode) : Bool :=
     match m { Mode.plan => true, _ => false }
@@ -1565,10 +1579,10 @@ def error_line (e : WeaverError) : TLine :=
 def drive_tui (log : Option Logger) (gen : I64) (st : WeaverState) (text : String) (on_usage : Usage -> IO Unit) (spend : Ref Usage) : ResultT WeaverError IO RunState := do {
     let stop : Unit -> IO Bool := Stop.predicate st.store gen;
     let with_task : RunState := { (st.run) with reg := Instructions.attaching st.instr_seen st.place st.trusted
-        (ToolRegistry.register (PlanTool.impl st.store st.plan_repo) (ToolRegistry.register (TodoTool.impl st.store)
+        (ToolRegistry.register (SkillTool.impl st.skills) (ToolRegistry.register (PlanTool.impl st.store st.plan_repo) (ToolRegistry.register (TodoTool.impl st.store)
             (ToolRegistry.register (WeaverShell.impl log stop (WeaverShell.fg_path st.store))
                 (ToolRegistry.register (ReadProcessTool.impl_with stop)
-                    (ToolRegistry.register (Subagent.task_tool st.run.session.config st.instructions log st.store stop spend) st.run.reg))))) };
+                    (ToolRegistry.register (Subagent.task_tool st.run.session.config st.instructions log st.store stop spend) st.run.reg)))))) };
     let gated : RunState := { with_task with gate := Gate.weaver_tui log st.mode st.colors st.store st.grants (Place.cwd_of st.place) (auto_ctx log st text),
         emit := progress_live log st.store, on_usage := on_usage,
         should_stop := stop, inbox := Inbox.seam st.store, side_spend := Subagent.drain spend, stopped := false };

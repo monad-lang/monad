@@ -13,7 +13,7 @@ def side_map (names : List String) : BTreeMap String Bool :=
 
 /// The exact lines that read and show, never change.
 def side_names : BTreeMap String Bool :=
-    side_map ["/help", "/h", "/todos", "/tools", "/log", "/mcp", "/memory", "/budget", "/mode", "/btw"]
+    side_map ["/help", "/h", "/todos", "/tools", "/log", "/mcp", "/memory", "/skills", "/budget", "/mode", "/btw"]
 
 /// Whether `text` is a side command. Bare `/plan` is the read-only plan
 /// view outside plan mode; in plan mode it is the approval dialog, which

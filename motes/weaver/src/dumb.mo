@@ -20,7 +20,7 @@ use shuttle::message_types {Role, Content}
 use shuttle::session {Session}
 use weaver::commands {
     WeaverState, Effect, set_fatal, Commands.dispatch, Commands.autocompact,
-    Commands.plan_after_turn, Commands.set_plan, Commands.turn_context, Commands.store_turn_plan,
+    Commands.plan_after_turn, Commands.set_plan, Commands.turn_context, Commands.store_turn_plan, Commands.skill_turn,
     Commands.context_used, Commands.context_percent,
 }
 use weaver::gate {Gate.weaver}
@@ -37,6 +37,7 @@ use weaver::inbox {Inbox.with_notes}
 use weaver::procs {Procs.root, Procs.enforce_cap, Procs.max_log_bytes}
 use weaver::todo {TodoTool.impl}
 use weaver::plan_tool {PlanTool.impl}
+use weaver::skills {SkillTool.impl}
 use weaver::usage {UsageTracker.start, UsageTracker.silent, UsageTracker.last}
 use weaver::format {format_tokens}
 use init::transformers {ResultT}
@@ -111,8 +112,24 @@ def step_of (read : Unit -> IO (Option String)) (write : String -> IO Unit) (st 
 /// else is one model turn.
 def route (read : Unit -> IO (Option String)) (write : String -> IO Unit) (st : WeaverState) (s : String) : IO Step :=
     if String.is_empty s then IO.pure (mk_step st true)
-    else if String.starts_with "/" s then command_turn write st s
+    else if String.starts_with "/" s then slash_turn read write st s
     else model_turn read write st s
+
+/// A skill's `/<name>` runs a turn with its instructions; any other `/`
+/// line is a command.
+def slash_turn (read : Unit -> IO (Option String)) (write : String -> IO Unit) (st : WeaverState) (s : String) : IO Step := do {
+    let sk <- Commands.skill_turn st s;
+    match sk {
+        Option.none => command_turn write st s,
+        Option.some r => match r {
+            Result.ok prompt => model_turn read write st prompt,
+            Result.err e => do {
+                let _ <- write (String.concat_list ["skill: ", e, "\n"]);
+                IO.pure (mk_step st true)
+            },
+        },
+    }
+}
 
 // ── The command half ───────────────────────────────────────────────────
 
@@ -316,8 +333,8 @@ def drive_ready (read : Unit -> IO (Option String)) (write : String -> IO Unit) 
 def drive_spending (read : Unit -> IO (Option String)) (write : String -> IO Unit) (st : WeaverState) (text : String) (spend : Ref Usage) : ResultT WeaverError IO RunState := do {
     let base : RunState := st.run;
     let with_task : RunState := { base with reg := Instructions.attaching st.instr_seen st.place st.trusted
-        (ToolRegistry.register (PlanTool.impl st.store st.plan_repo) (ToolRegistry.register (TodoTool.impl st.store)
-            (ToolRegistry.register (Subagent.task_tool base.session.config st.instructions Option.none Option.none silent_stop spend) base.reg))),
+        (ToolRegistry.register (SkillTool.impl st.skills) (ToolRegistry.register (PlanTool.impl st.store st.plan_repo) (ToolRegistry.register (TodoTool.impl st.store)
+            (ToolRegistry.register (Subagent.task_tool base.session.config st.instructions Option.none Option.none silent_stop spend) base.reg)))),
         side_spend := Subagent.drain spend };
     let gated : RunState := gate_for st text read (theme_write write st.colors) with_task;
     let ready : RunState := append_user gated text;

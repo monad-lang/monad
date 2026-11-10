@@ -7,6 +7,7 @@
 /// per repo root in `~/.weaver/trusted.json` together with the text the
 /// user trusted: when any of those files is new or edited since (a
 /// `git pull`), weaver asks again and can show what changed.
+use weaver::skills {Skills.project_files}
 use std::io {IO.read_file, IO.write_file, IO.get_env}
 use std::path {Path, Path.to_string, Path.join, Path.beq}
 use std::process {exec_cmd}
@@ -51,7 +52,9 @@ pub def Trust.items (place : SessionPlace) : IO (List TrustItem) := do {
     let chain <- Instructions.project place;
     let nested_paths <- Instructions.nested place.repo;
     let nested <- Instructions.read_all (List.filter (fn (p : Path) => Bool.not (in_files chain p)) nested_paths);
-    let fs : List InstrFile := List.append chain nested;
+    let skill_paths <- Skills.project_files place.repo;
+    let skill_files <- Instructions.read_all skill_paths;
+    let fs : List InstrFile := List.append (List.append chain nested) skill_files;
     let cfg <- Instructions.read_one (Path.join place.cwd (Path.path Trust.config_name)) "config";
     let docs : List TrustItem := List.map (item_of place) fs;
     IO.pure (match cfg {
