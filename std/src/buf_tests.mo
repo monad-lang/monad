@@ -24,11 +24,10 @@
 /// two of them disagreeing shows up here.
 
 use std::buf {
-    Buf, Buf.copy_into, Buf.elem_kind, Buf.from_list_f32, Buf.get_f32, Buf.get_i64,
+    Buf.copy_into, Buf.elem_kind, Buf.from_list_f32, Buf.get_f32, Buf.get_i64,
     Buf.get_u8, Buf.length, Buf.new_f32, Buf.new_i64, Buf.new_u8, Buf.set_f32,
     Buf.set_i64, Buf.set_u8, Buf.to_list_f32,
 }
-use std::list {List.length}
 
 /// The `MONAD_ELEM_*` codes the runtime assigns, asserted against
 /// `Buf.elem_kind`. Kept as named defs so a renumbering in

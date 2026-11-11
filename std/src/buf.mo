@@ -51,12 +51,11 @@
 ///
 /// Values are opaque like `ByteBuf` and `FdStream`: never pattern-match,
 /// compare or print one.
-use std::array {Array}
-use std::list {List.length}
 
 /// A flat buffer of `len` elements, each of the kind its constructor
-/// chose. Inhabited by its witness and built only by this module's
-/// `new_*` natives -- there is no way to forge one.
+/// chose. Built only by this module's `new_*` natives: the witness is
+/// unreferenceable (`#[opaque]`), so there is no way to forge one.
+#[opaque]
 pub type Buf E {
     buf_witness
 }
