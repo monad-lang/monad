@@ -858,6 +858,40 @@ def test_scope_qualified_wrong_module_does_not_resolve : Bool :=
         err _ => true
     }
 
+/// A FLAT module-qualified spelling whose module half is wrong must not
+/// fall back to the bare-alias table. That table maps a bare name to its
+/// one owner across the whole program; consulting it for a qualified
+/// spelling would bind a same-named declaration from a DIFFERENT module
+/// instead of failing, which is a silent wrong-target resolution. The
+/// fixture registers a flat `std.process::process_id` so the table has an
+/// owner for `process_id`; the reference names `nosuch` instead.
+#[test]
+def test_a_flat_qualified_spelling_with_the_wrong_module_does_not_fall_back : Bool :=
+    let mod_path : ModulePath := ModulePath.mk
+        (List.cons (Identifier.id "std") (List.cons (Identifier.id "process") List.empty)) in
+    let def_name : NamePath := NamePath.mk
+        (List.cons (Identifier.id "std.process::process_id") List.empty) in
+    let def_entry : ScopeDef := {
+        name := def_name,
+        module := mod_path,
+        sig := Term.hole,
+        body := Term.hole,
+        vis := Visibility.package_private,
+    } in
+    let sd : ScopeData := scope_data_add_def scope_data_empty def_entry in
+    let s : Scope := {
+        module_id := ModulePath.mk (List.cons (Identifier.id "Main") List.empty),
+        scope := sd,
+        parent := Option.none,
+        incomplete_match_ok := false,
+    } in
+    let empty_parent : Option LocalScope := Option.none in
+    let locals : LocalScope := { vars := List.empty, parent := empty_parent } in
+    match scope_resolve_name (NameRef.nid (Identifier.id "nosuch::process_id")) s locals {
+        ok _ => false,
+        err _ => true
+    }
+
 // --- A placeholder is a WEAK carrier, never a dropped one ---
 //
 // `infer_carrier_type`'s `Term.var` arm reads a local's declared type out of

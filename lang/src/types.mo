@@ -382,18 +382,22 @@ pub def name_map_lookup {V : Type} (key : NamePath) (m : NameMap V) : Option V :
             },
     }
 
+/// Accumulator + reverse: a non-tail `List.cons v (recurse rest)` holds a
+/// native frame per entry, and these tables are whole-program sized
+/// (`def_refs`, `inductives`). The deleted `inductive_pairs_values_go`
+/// used the same shape for the same reason.
 #[partial]
-def map_values {V : Type} (ps : List (Pair String V)) : List V :=
+def map_values_go {V : Type} (ps : List (Pair String V)) (acc : List V) : List V :=
     match ps {
-        List.empty => List.empty,
-        List.cons p rest => match p { Pair.pair _ v => List.cons v (map_values rest) },
+        List.empty => acc,
+        List.cons p rest => match p { Pair.pair _ v => map_values_go rest (List.cons v acc) },
     }
 
 /// Every value, in no particular order. Consumers look an entry up by
 /// name and then scan the values for a match on the entry's OWN recorded
 /// name, so the rendered key is not part of the read surface.
 pub def name_map_values {V : Type} (m : NameMap V) : List V :=
-    match m { NameMap.name_map buckets => map_values (HashMap.to_list buckets) }
+    match m { NameMap.name_map buckets => List.reverse (map_values_go (HashMap.to_list buckets) List.empty) }
 
 /// Bucket-wise union. `a`'s entries come first, so `a` wins a duplicate
 /// key -- the same "first argument wins" precedence `merge_scope_data`
@@ -568,6 +572,10 @@ pub def module_map_insert {V : Type} (key : ModulePath) (val : V) (m : ModuleMap
                     ModuleMap.module_map (HashMap.map (HashMap.set_bucket buckets idx new_bucket)),
             },
     }
+
+/// Every value, in no particular order (see `name_map_values`).
+pub def module_map_values {V : Type} (m : ModuleMap V) : List V :=
+    match m { ModuleMap.module_map buckets => List.reverse (map_values_go (HashMap.to_list buckets) List.empty) }
 
 pub def module_map_lookup {V : Type} (key : ModulePath) (m : ModuleMap V) : Option V :=
     match m {

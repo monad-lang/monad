@@ -58,7 +58,7 @@ def report_error (msg : String) : IO I64 := do {
 
 def run_build (args : BuildArgs) : IO I64 :=
     match Path.of args.config {
-        Result.err e => report_error e,
+        Result.err e => report_error (PathError.to_string e),
         Result.ok p => read_config p args.out,
     }
 

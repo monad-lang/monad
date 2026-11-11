@@ -174,7 +174,7 @@ pub def read_run (id : String) (j : Json) : ResultT String IO Content :=
         Result.ok args =>
             ResultT.mk (do {
                 match Path.of args.path {
-                    Result.err e => return (Result.ok (tool_err id e)),
+                    Result.err e => return (Result.ok (tool_err id (PathError.to_string e))),
                     Result.ok p => do {
                         let max : I64 := read_max_bytes;
                         let r <- read_up_to p max;
@@ -190,7 +190,7 @@ pub def write_run (id : String) (j : Json) : ResultT String IO Content :=
         Result.ok args =>
             ResultT.mk (do {
                 match Path.of args.path {
-                    Result.err e => return (Result.ok (tool_err id e)),
+                    Result.err e => return (Result.ok (tool_err id (PathError.to_string e))),
                     Result.ok p => do {
                         // A new file in a new directory: create the parents
                         // first (the write alone failed with ENOENT).
@@ -237,7 +237,7 @@ pub def edit_run (id : String) (j : Json) : ResultT String IO Content :=
         Result.err e => ResultT.mk (return (Result.ok (tool_err id e))),
         Result.ok args =>
             ResultT.mk (match Path.of args.path {
-                Result.err e => return (Result.ok (tool_err id e)),
+                Result.err e => return (Result.ok (tool_err id (PathError.to_string e))),
                 Result.ok p => edit_with_check id p args.expected_content args.new_content,
             })
     }

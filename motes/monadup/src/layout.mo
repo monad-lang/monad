@@ -43,7 +43,10 @@ pub def Layout.downloads (h : Layout.Home) : Path :=
 pub def Layout.tag_path (tag : String) : Result String Path :=
     if Bool.not (Layout.valid_tag tag)
     then Result.err ("invalid nightly tag: " ++ tag)
-    else Path.of tag
+    else match Path.of tag {
+        Result.ok p => Result.ok p,
+        Result.err e => Result.err (PathError.to_string e),
+    }
 
 pub def Layout.version_dir (h : Layout.Home) (tag : Path) : Path :=
     Path.join (Layout.downloads h) tag

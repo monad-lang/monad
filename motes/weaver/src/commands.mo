@@ -814,7 +814,7 @@ def cmd_resume (arg : String) (st : WeaverState) : IO (Result WeaverError Effect
     if String.is_empty arg then list_sessions_effect st false
     else if String.beq arg "--all" then list_sessions_effect st true
     else match Path.of arg {
-        Result.err e => IO.pure (Result.err (WeaverError.io e)),
+        Result.err e => IO.pure (Result.err (WeaverError.io (PathError.to_string e))),
         Result.ok p => resume_path st p arg,
     }
 

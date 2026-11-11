@@ -334,15 +334,13 @@ def nav_class_file (cls : Class) (cache : ModuleInfoCache) : Option String :=
     nav_class_file_in (nav_class_name cls) (module_info_cache_entries cache)
 
 #[partial]
-def nav_class_file_in (name : String) (entries : List (Pair String ModuleInfo)) : Option String :=
+def nav_class_file_in (name : String) (entries : List ModuleInfo) : Option String :=
     match entries {
         List.empty => Option.none,
-        List.cons e rest => match e {
-            Pair.pair _ info =>
-                if nav_declares_class name (nav_info_decls info)
-                then Option.some (nav_info_file_path info)
-                else nav_class_file_in name rest,
-        },
+        List.cons info rest =>
+            if nav_declares_class name (nav_info_decls info)
+            then Option.some (nav_info_file_path info)
+            else nav_class_file_in name rest,
     }
 
 #[partial]

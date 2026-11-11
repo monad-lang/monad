@@ -117,7 +117,7 @@ def mkdir_p (dir : String) : IO (Result String Unit) := do {
 
 def read_text (file : String) : IO (Result String String) :=
     match Path.of file {
-        Result.err e => return (Result.err e),
+        Result.err e => return (Result.err (PathError.to_string e)),
         Result.ok p => read_path p,
     }
 
@@ -131,7 +131,7 @@ def read_path (p : Path) : IO (Result String String) := do {
 
 def write_page (target : String) (html : String) : IO (Result String Unit) :=
     match Path.of target {
-        Result.err e => return (Result.err e),
+        Result.err e => return (Result.err (PathError.to_string e)),
         Result.ok p => write_to p html,
     }
 
@@ -402,7 +402,7 @@ def count_then (n : I64) (rest : IO (Result String I64)) : IO (Result String I64
 /// subdirectories whole); `skip_md` leaves out markdown sources.
 def copy_entries (src : String) (out : String) (skip_md : Bool) : IO (Result String I64) :=
     match Path.of src {
-        Result.err e => return (Result.err e),
+        Result.err e => return (Result.err (PathError.to_string e)),
         Result.ok dir => list_then_copy dir out skip_md,
     }
 

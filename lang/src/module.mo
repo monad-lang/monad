@@ -16,8 +16,10 @@ use lang::types {
     list_reverse, many, module_path_to_string_colon, package_private, priv_, sentinel,
     show_identifier, show_module_path, show_name_path, sort_level_of, term_peel, union_ids,
     name_map_merge, bare_name_map_merge, name_set_union,
+    module_map_empty, module_map_insert, module_map_lookup, module_map_values,
+    name_path_set_empty, name_path_set_insert, name_path_set_member,
     use_bare, use_glob, use_items, use_name, use_rename, use_sub, use_sub_rename,
-    visibility_beq,
+    visibility_beq, ModuleMap, NamePathSet,
 }
 use lib::typecheck::subst {term_subst}
 use lib::name_text {unqualify_def_name}
@@ -57,7 +59,7 @@ use lib::scope {
     collect_def_names, collect_infixes, collect_open_aliases, constraint_vars,
     dict_param_name,
     filter_valid_open_aliases,
-    modpath_eq, npath_map_empty, npath_map_insert, npath_map_lookup, npath_of,
+    modpath_eq,
     param_names, promote_instance_decl_groups, promote_instance_defs, refine_scope_instances,
     alias_map_empty, build_alias_map,
     resolve_infix_decl_groups, resolve_infix_decls, resolve_open_alias_decls,
@@ -2731,8 +2733,8 @@ def elaborate_def_with_scope ({ name, typ, term := body, constraints, attrs, vis
         // un-elaborated for codegen (the `SIGSEGV with no diagnostic`
         // shape `scope_for_elab_body`'s comment documents), and where a
         // generic def's body routinely infers an INSTANTIATED type
-        // (`lang.scope::npath_map_empty`: `expected ((HashMap String) V),
-        // found ((HashMap K) V)`) rather than the declared one. The
+        // (`expected ((HashMap String) V), found ((HashMap K) V)`)
+        // rather than the declared one. The
         // signature check belongs on `check`'s path, which reports it;
         // every def that reaches here has already been through
         // `check_def_with_scope`.
@@ -3900,29 +3902,29 @@ pub struct ModuleInfo {
 // `ScopeData`. An earlier `ModuleScopeCache` cached `ScopeData` instead
 // and has been removed.
 pub struct ModuleInfoCache {
-    entries : HashMap String ModuleInfo,
+    entries : ModuleMap ModuleInfo,
     hits : I64,
     misses : I64,
 }
 
 pub def module_info_cache_empty : ModuleInfoCache := {
-    entries := npath_map_empty,
+    entries := module_map_empty,
     hits := 0,
     misses := 0,
 }
 
 pub def module_info_cache_lookup (key : ModulePath) (cache : ModuleInfoCache) : Option ModuleInfo :=
-    npath_map_lookup (npath_of key) cache.entries
+    module_map_lookup key cache.entries
 
 /// Every cached module, in no particular order.
-pub def module_info_cache_entries (cache : ModuleInfoCache) : List (Pair String ModuleInfo) :=
-    HashMap.to_list cache.entries
+pub def module_info_cache_entries (cache : ModuleInfoCache) : List ModuleInfo :=
+    module_map_values cache.entries
 
 def module_info_cache_hit (cache : ModuleInfoCache) : ModuleInfoCache :=
     { cache with hits := cache.hits + 1 }
 
 pub def module_info_cache_insert (key : ModulePath) (info : ModuleInfo) (cache : ModuleInfoCache) : ModuleInfoCache :=
-    { cache with entries := npath_map_insert (npath_of key) info cache.entries, misses := cache.misses + 1 }
+    { cache with entries := module_map_insert key info cache.entries, misses := cache.misses + 1 }
 
 /// A `load_module_with_info` that consults (and extends) the cache.
 pub struct InfoAndCache {
@@ -6914,16 +6916,15 @@ def decls_declare_macros (decls : List Decl) : Bool :=
         || Bool.not (List.is_empty (build_term_macro_registry decls))
 
 #[partial]
-def insert_names (names : List Identifier) (seen : HashMap String Bool)
-    : Option (HashMap String Bool) :=
+def insert_names (names : List Identifier) (seen : NamePathSet)
+    : Option NamePathSet :=
     match names {
         List.empty => Option.some seen,
         List.cons n rest =>
             let key : NamePath := NamePath.mk (List.cons n List.empty) in
-            match npath_map_lookup key seen {
-                Option.some _ => Option.none,
-                Option.none => insert_names rest (npath_map_insert key true seen),
-            },
+            if name_path_set_member key seen
+            then Option.none
+            else insert_names rest (name_path_set_insert key seen),
     }
 
 #[partial]
@@ -6970,8 +6971,8 @@ def decl_all_names (d : Decl) : List Identifier :=
     }
 
 #[partial]
-def insert_decl_names (decls : List Decl) (seen : HashMap String Bool)
-    : Option (HashMap String Bool) :=
+def insert_decl_names (decls : List Decl) (seen : NamePathSet)
+    : Option NamePathSet :=
     match decls {
         List.empty => Option.some seen,
         List.cons d rest =>
@@ -6982,8 +6983,8 @@ def insert_decl_names (decls : List Decl) (seen : HashMap String Bool)
     }
 
 #[partial]
-def collect_module_names (mods : List ModuleInfo) (seen : HashMap String Bool)
-    : Option (HashMap String Bool) :=
+def collect_module_names (mods : List ModuleInfo) (seen : NamePathSet)
+    : Option NamePathSet :=
     match mods {
         List.empty => Option.some seen,
         List.cons m rest =>
@@ -7000,7 +7001,7 @@ def collect_module_names (mods : List ModuleInfo) (seen : HashMap String Bool)
 /// diagnostics, no collision ever resolved by load order.
 #[partial]
 def group_has_name_collisions (mods : List ModuleInfo) : Bool :=
-    match collect_module_names mods (npath_map_empty) {
+    match collect_module_names mods name_path_set_empty {
         Option.some _ => false,
         Option.none => true,
     }

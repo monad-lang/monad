@@ -77,13 +77,13 @@ pub def Static.relative_after_slash (decoded : String) : Result String String :=
 
 def Static.join_under (root : String) (relative : String) : Result String String :=
     match Path.of root {
-        Result.err e => Result.err e,
+        Result.err e => Result.err (PathError.to_string e),
         Result.ok base =>
             if String.is_empty relative
             then Result.ok (Path.to_string base)
             else
                 match Path.of relative {
-                    Result.err e => Result.err e,
+                    Result.err e => Result.err (PathError.to_string e),
                     Result.ok rel =>
                         if Path.is_absolute rel
                         then Result.err "absolute path"

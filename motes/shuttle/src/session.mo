@@ -184,7 +184,7 @@ def save_failed (e : String) : IO (Result String Unit) := do {
 /// is the LATEST state of a run, not an append-only log.
 pub def Session.save (s : Session) (file : String) : IO (Result String Unit) :=
     match Path.of file {
-        Result.err e => save_failed e,
+        Result.err e => save_failed (PathError.to_string e),
         Result.ok p => save_at s p,
     }
 
@@ -219,7 +219,7 @@ def load_at (p : Path) : IO (Result String Session) := do {
 /// signal to re-mount what the transcript references.
 pub def Session.load (file : String) : IO (Result String Session) :=
     match Path.of file {
-        Result.err e => load_failed e,
+        Result.err e => load_failed (PathError.to_string e),
         Result.ok p => load_at p,
     }
 

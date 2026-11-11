@@ -16,7 +16,7 @@ use lib::gallery {Book.stylesheet, Book.gallery_page, Book.story_page}
 def write_or_report (dir : String) (name : String) (content : String) : IO Bool :=
     match Path.of (String.concat_list [dir, "/", name]) {
         Result.err e => do {
-            IO.println (String.concat_list ["book_static: bad path ", name, ": ", e]);
+            IO.println (String.concat_list ["book_static: bad path ", name, ": ", PathError.to_string e]);
             IO.pure false
         },
         Result.ok p => write_checked p name content,

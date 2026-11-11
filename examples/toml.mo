@@ -25,7 +25,7 @@ def print_parsed (r : Result Toml.ParseError (BTreeMap String Toml.Value)) : IO 
 
 def run_file (path : String) : IO Unit {
     match Path.of path {
-        err e => IO.println (String.concat "invalid path: " e),
+        err e => IO.println (String.concat "invalid path: " (PathError.to_string e)),
         ok p => do {
             let r <- IO.read_file p;
             print_read path r

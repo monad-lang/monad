@@ -121,7 +121,7 @@ def mock_load_at (p : Path) : IO (Result String String) := do {
 
 def mock_load (file : String) : IO (Result String String) :=
     match Path.of file {
-        Result.err e => mock_load_err e,
+        Result.err e => mock_load_err (PathError.to_string e),
         Result.ok p => mock_load_at p,
     }
 

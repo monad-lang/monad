@@ -549,10 +549,10 @@ def ambient_go (world : List (Pair ModulePath (List Decl))) (frontier : List Mod
     match frontier {
         List.empty => seen,
         List.cons mp rest =>
-            let seen_now : ModuleSet := module_set_insert mp seen in
             if module_set_member mp seen
-            then ambient_go world rest seen_now
+            then ambient_go world rest seen
             else
+                let seen_now : ModuleSet := module_set_insert mp seen in
                 match world_decls_of world mp {
                     Option.some ds => ambient_go world (List.append (pub_use_targets ds List.empty) rest) seen_now,
                     Option.none => ambient_go world rest seen_now,
@@ -830,25 +830,23 @@ def refs_empty : Refs :=
         qualified := List.empty, qual_seen := qualified_name_set_empty }
 
 def refs_add_bare (name : NamePath) (refs : Refs) : Refs :=
-    let seen_now : Refs :=
-        { refs with bare := List.append refs.bare (List.cons name List.empty),
-            bare_seen := name_path_set_insert name refs.bare_seen } in
     if name_path_set_member name refs.bare_seen
     then refs
-    else seen_now
+    else
+        { refs with bare := List.append refs.bare (List.cons name List.empty),
+            bare_seen := name_path_set_insert name refs.bare_seen }
 
 /// A qualified reference names its module outright, so no local binder
 /// can shadow it; the walk only ever sees it as a free variable.
 def refs_add_qualified (qn : QualifiedName) (refs : Refs) : Refs :=
-    let seen_now : Refs :=
+    if qualified_name_set_member qn refs.qual_seen
+    then refs
+    else
         {
             refs with
             qualified := List.append refs.qualified (List.cons qn List.empty),
             qual_seen := qualified_name_set_insert qn refs.qual_seen,
-        } in
-    if qualified_name_set_member qn refs.qual_seen
-    then refs
-    else seen_now
+        }
 
 /// One free variable's written spelling, on the axis it was written on.
 /// The `DebugName` still carries the flattened spelling; splitting it at

@@ -47,9 +47,13 @@ pub def Scaffold.target_dir (base : Option String) (name : String) : Result Stri
         Option.some b =>
             match Path.of b {
                 Result.ok dir => Result.ok (Path.join dir (Path.path name)),
-                Result.err e => Result.err e,
+                Result.err e => Result.err (PathError.to_string e),
             },
-        Option.none => Path.of name,
+        Option.none =>
+            match Path.of name {
+                Result.ok p => Result.ok p,
+                Result.err e => Result.err (PathError.to_string e),
+            },
     }
 
 /// `IO.write_file`'s native returns silently when `fopen` fails, so a

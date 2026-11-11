@@ -88,51 +88,10 @@ def modpath_gt (a : ModulePath) (b : ModulePath) : Bool :=
 def modpath_hash (mp : ModulePath) : U64 :=
     String.hash (show_module_path mp)
 
-// The stored key is the RENDERED path (`Foo.bar`), not the `ModulePath`
-// itself, while the caller-facing argument stays a `ModulePath`. That
-// one change is the whole point, and it is worth being explicit about
-// why.
-//
-// A `ModulePath` has no cheap hash or equality: `modpath_hash` is
-// `String.hash (show_module_path mp)` and `modpath_str_eq` is
-// `String.beq` of two `show_module_path`s, and `show_module_path`
-// (`lang/types.mo`) is `List.intercalate "." (List.map show_identifier
-// ids)` -- an interpreted `List.map` plus a `String.concat` chain, built
-// fresh every time. `bucket_insert_eq`/`bucket_lookup_eq` call the
-// equality once PER CHAIN STEP, so with ~4,200 def names over 256
-// buckets (~16 deep) a single insert rendered both sides ~16 times:
-// roughly 32 full path renders per map operation, 31 of them rebuilding
-// a string the table already had.
-//
-// AGENTS.md item 26 already halved this once -- `!lt && !gt` (four
-// renders per step) to a single `eq` (two) -- for a measured -41.5% on
-// `elaborate_class`. It did not remove the renders, because as long as
-// the STORED key is a `ModulePath` every comparison has to re-derive it.
-// Rendering once at the boundary and storing the result removes the
-// remainder, and lets these maps reuse `bucket_insert_str`/
-// `bucket_lookup_str` (plain native `String.beq`, no comparator value
-// passed at all) exactly as `alias_map_*` below already does.
-def npath_map_empty {V : Type} : HashMap String V :=
-    HashMap.map HashMap.empty_buckets
-
-def npath_map_insert {V : Type} (key : NamePath) (val : V) (m : HashMap String V) : HashMap String V :=
-    match m {
-        HashMap.map buckets =>
-            let rendered : String := show_name_path key in
-            let idx := HashMap.bucket_of (String.hash rendered) in
-            let bucket := HashMap.get_bucket buckets idx in
-            let new_bucket := HashMap.bucket_insert_str rendered val bucket in
-            HashMap.map (HashMap.set_bucket buckets idx new_bucket)
-    }
-
-def npath_map_lookup {V : Type} (key : NamePath) (m : HashMap String V) : Option V :=
-    match m {
-        HashMap.map buckets =>
-            let rendered : String := show_name_path key in
-            let idx := HashMap.bucket_of (String.hash rendered) in
-            let bucket := HashMap.get_bucket buckets idx in
-            HashMap.bucket_lookup_str rendered bucket
-    }
+// The rendered-key map machinery that used to live here (`npath_map_*`)
+// is `NameMap` in `lang/types.mo`; its own comment there records the
+// measured reason the key is a rendering rather than the structured
+// name.
 
 /// String-keyed map for the bare-name -> qualified-name rewrite tables
 /// `resolve_open_alias_decls` drives. Mirrors `modpath_map_*` just
@@ -236,12 +195,15 @@ def modpath_str_eq (a : ModulePath) (b : ModulePath) : Bool :=
 def scope_data_note_bare (sd : ScopeData) (key : NamePath) : ScopeData :=
     { sd with bare_aliases := bare_name_map_note key sd.bare_aliases }
 
-/// The `bare_aliases` key for `name`: its bare spelling (the part after
-/// the last `::`), which is how a registration key is noted. A name that
-/// is already bare is reachable by the exact lookup the caller ran
-/// first, so a caller reaching the fallback always wants this form.
+/// The `bare_aliases` key for `name`: the name's own spelling, verbatim.
+/// The table's keys are bare spellings, so a bare reference (one flat
+/// identifier) matches one; a module-qualified reference does NOT, and
+/// that is deliberate -- the exact lookup is authoritative for a
+/// qualified name, and rescuing its miss through the bare table would
+/// bind a same-named declaration from a different module instead of
+/// falling through to `resolve_qualified_in_scope`.
 def bare_alias_key (name : NamePath) : Identifier :=
-    Identifier.id (unqualify_def_name (show_name_path name))
+    Identifier.id (show_name_path name)
 
 def scope_data_add_def (sd : ScopeData) (d : ScopeDef) : ScopeData :=
     match d {

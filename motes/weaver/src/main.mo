@@ -836,7 +836,7 @@ def no_session_note (place : Option SessionPlace) : String :=
 
 def resume_token (root : Path) (place : Option SessionPlace) (p : Plan) (s : Settings) : IO (Result WeaverError OpenedSession) :=
     match Path.of p.resume {
-        Result.err e => IO.pure (Result.err (WeaverError.config e)),
+        Result.err e => IO.pure (Result.err (WeaverError.config (PathError.to_string e))),
         Result.ok path => resume_token_path root place path p s,
     }
 
