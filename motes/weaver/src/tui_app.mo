@@ -70,7 +70,7 @@ use weaver::plan_file {PlanEntry, PlanDoc, PlanRepo.list, PlanFile.day_of}
 use weaver::procs {Procs.tail, Procs.kill, Procs.log_kill, Procs.log_exit, Procs.root, Procs.enforce_cap, Procs.max_log_bytes}
 use weaver::format {format_elapsed}
 use std::io {IO.current_time_nano}
-use weaver::tasks {TaskEntry, TaskKind, Tasks.list, Tasks.line, Tasks.running_count, Tasks.running_ids, Tasks.exit_notes, Tasks.exited}
+use weaver::tasks {TaskEntry, TaskKind, Tasks.list, Tasks.visible, Tasks.line, Tasks.running_count, Tasks.running_ids, Tasks.exit_notes, Tasks.exited}
 use weaver::store {
     Transcript, TranscriptPage, StoreState,
     Transcript.empty, Transcript.with_page, Transcript.next_block, Transcript.append, Transcript.drop_page,
@@ -2600,7 +2600,7 @@ def open_monitor (m : TuiModel) : Pair TuiModel (Cmd WeaverMsg) :=
 def monitor_run (log : Option Logger) (st : WeaverState) (gen : I64) (pending : Bool) : IO WeaverMsg := do {
     persist_prompt st.store "/tasks";
     Overlay.monitor_open st.store;
-    let notes <- monitor_loop log st gen pending (MonitorView.mon_list 0) List.empty;
+    let notes <- monitor_loop log st gen pending (MonitorView.mon_list 0) false List.empty;
     Overlay.monitor_close st.store;
     clear_terminal;
     IO.pure (WeaverMsg.monitor_closed notes)
@@ -2615,80 +2615,130 @@ pub type MonitorView {
 }
 
 /// One view per call, one self-call: a monitor left open polls nothing
-/// and nests nothing.
+/// and nests nothing. `hide` is the list's "hide finished" toggle.
 #[partial]
-def monitor_loop (log : Option Logger) (st : WeaverState) (gen : I64) (pending : Bool) (view : MonitorView) (notes : List String) : IO (List String) :=
+def monitor_loop (log : Option Logger) (st : WeaverState) (gen : I64) (pending : Bool) (view : MonitorView) (hide : Bool) (notes : List String) : IO (List String) :=
     match view {
         MonitorView.mon_closed => IO.pure notes,
         _ => do {
-            let step <- monitor_step log st gen pending view;
+            let step <- monitor_step log st gen pending view hide;
             match step {
-                Pair.pair next more => monitor_loop log st gen pending next (List.append notes more),
+                Pair.pair next rest => match rest {
+                    Pair.pair hide2 more => monitor_loop log st gen pending next hide2 (List.append notes more),
+                },
             }
         },
     }
 
-def monitor_step (log : Option Logger) (st : WeaverState) (gen : I64) (pending : Bool) (view : MonitorView) : IO (Pair MonitorView (List String)) :=
+def monitor_step (log : Option Logger) (st : WeaverState) (gen : I64) (pending : Bool) (view : MonitorView) (hide : Bool) : IO (Pair MonitorView (Pair Bool (List String))) :=
     match view {
-        MonitorView.mon_list selected => monitor_list st selected,
-        MonitorView.mon_detail id => monitor_detail log st gen pending id,
-        MonitorView.mon_closed => IO.pure (Pair.pair MonitorView.mon_closed List.empty),
+        MonitorView.mon_list selected => monitor_list st selected hide,
+        MonitorView.mon_detail id => do {
+            let r <- monitor_detail log st gen pending id;
+            match r {
+                Pair.pair v more => IO.pure (Pair.pair v (Pair.pair hide more)),
+            }
+        },
+        MonitorView.mon_closed => IO.pure (Pair.pair MonitorView.mon_closed (Pair.pair hide List.empty)),
     }
 
-/// The list: one row per task, newest first, then Refresh and Close.
-def monitor_list (st : WeaverState) (selected : I64) : IO (Pair MonitorView (List String)) := do {
+/// The list: one row per visible task, newest first, then the finished
+/// toggle, Refresh and Close.
+def monitor_list (st : WeaverState) (selected : I64) (hide : Bool) : IO (Pair MonitorView (Pair Bool (List String))) := do {
     let ts <- Tasks.list st.store;
+    let shown : List TaskEntry := Tasks.visible hide ts;
     let now <- IO.current_time_nano;
     let size <- Terminal.size;
     let width : I64 := match size { Pair.pair _ cols => cols - 12 };
-    let d : DialogModel := TuiApp.monitor_dialog now width ts;
+    let d : DialogModel := TuiApp.monitor_dialog now width hide ts;
     // The rows on screen are the latest refresh's: a choice maps to them.
-    let latest <- Ref.new ts;
-    let pr <- Dialog.modal_refresh 10 (list_refresh st.store width latest) (paint_dialog st.colors) (Dialog.with_default d selected);
+    let latest <- Ref.new shown;
+    let pr <- Dialog.modal_refresh 10 (list_refresh st.store width hide latest) (paint_dialog st.colors) (Dialog.with_default d selected);
     let step : DialogStep := match pr { Pair.pair _ s => s };
-    let shown <- Ref.get latest;
-    IO.pure (Pair.pair (TuiApp.monitor_list_next shown step) List.empty)
+    let shown2 <- Ref.get latest;
+    match TuiApp.monitor_list_next shown2 step hide {
+        Pair.pair view hide2 => IO.pure (Pair.pair view (Pair.pair hide2 List.empty)),
+    }
 }
 
-/// Once a second: re-read the tasks (statuses and elapsed times move).
-def list_refresh (store : Option StoreState) (width : I64) (latest : Ref (List TaskEntry)) (d : DialogModel) : IO (Option DialogModel) := do {
+/// Once a second: re-read the tasks (statuses and elapsed times move). The
+/// selection follows the same TASK when it survives the refresh (and the
+/// filter), so a finished row above it cannot shift the highlight.
+def list_refresh (store : Option StoreState) (width : I64) (hide : Bool) (latest : Ref (List TaskEntry)) (d : DialogModel) : IO (Option DialogModel) := do {
     let ts <- Tasks.list store;
+    let shown : List TaskEntry := Tasks.visible hide ts;
     let now <- IO.current_time_nano;
     let old <- Ref.get latest;
-    let _ <- Ref.set latest ts;
-    IO.pure (Option.some (TuiApp.monitor_refreshed d (TuiApp.monitor_dialog now width ts) (List.length ts - List.length old)))
+    let _ <- Ref.set latest shown;
+    IO.pure (Option.some (TuiApp.monitor_refreshed d (TuiApp.monitor_dialog now width hide ts) old shown))
 }
 
-/// The refreshed list keeps the selected row: new tasks are prepended
-/// (newest first), so the selection moves down by as many.
-pub def TuiApp.monitor_refreshed (old : DialogModel) (fresh : DialogModel) (added : I64) : DialogModel :=
-    let last : I64 := Dialog.option_count fresh - 1 in
-    let want : I64 := old.selected + added in
-    let sel : I64 := if want < 0 then 0 else if last < want then last else want in
+/// The refreshed list keeps the selected row: by task id while it exists,
+/// else by its old position (a task that vanished keeps the clamp).
+pub def TuiApp.monitor_refreshed (old : DialogModel) (fresh : DialogModel) (old_ts : List TaskEntry) (new_ts : List TaskEntry) : DialogModel :=
+    let sel : I64 := preserved_selected old old_ts new_ts in
     { fresh with selected := sel, scroll := old.scroll }
 
-pub def TuiApp.monitor_dialog (now : I64) (width : I64) (ts : List TaskEntry) : DialogModel :=
+#[partial]
+def index_of_id (id : String) (ts : List TaskEntry) (i : I64) : Option I64 :=
+    match ts {
+        List.empty => Option.none,
+        List.cons t rest => if String.beq t.id id then Option.some i else index_of_id id rest (i + 1),
+    }
+
+def preserved_selected (old : DialogModel) (old_ts : List TaskEntry) (new_ts : List TaskEntry) : I64 :=
+    let old_n : I64 := List.length old_ts in
+    let new_n : I64 := List.length new_ts in
+    if I64.lt old.selected old_n
+    then match task_at old.selected old_ts {
+        Option.none => clamp_selected old.selected (new_n - 1),
+        Option.some t => match index_of_id t.id new_ts 0 {
+            Option.some i => i,
+            Option.none => clamp_selected old.selected (new_n - 1),
+        },
+    }
+    else clamp_selected (old.selected - old_n + new_n) (new_n + 2)
+
+/// A selection clamped to `[0, n]`.
+def clamp_selected (i : I64) (n : I64) : I64 :=
+    if i < 0 then 0
+    else if n < 1 then 0
+    else if i > n then n
+    else i
+
+pub def TuiApp.monitor_dialog (now : I64) (width : I64) (hide : Bool) (ts : List TaskEntry) : DialogModel :=
+    let shown : List TaskEntry := Tasks.visible hide ts in
     let rows : List DialogOption := List.map (fn (t : TaskEntry) =>
-        let o : DialogOption := { label := Text.take_width (Tasks.line now t) (if width < 20 then 20 else width), hint := "", key := "" } in o) ts in
+        let o : DialogOption := { label := Text.take_width (Tasks.line now t) (if width < 20 then 20 else width), hint := "", key := "" } in o) shown in
+    let toggle : DialogOption := {
+        label := if hide then "Show finished tasks" else "Hide finished tasks",
+        hint := "f",
+        key := "f",
+    } in
     let refresh : DialogOption := { label := "Refresh", hint := "r", key := "r" } in
     let close : DialogOption := { label := "Close", hint := "Esc", key := "" } in
     let running : I64 := Tasks.running_count ts in
-    let subtitle : String := if List.is_empty ts then "no background tasks or subagent runs yet"
-        else String.concat (I64.to_string running) " running · Enter opens a task" in
-    Dialog.make "Tasks" subtitle List.empty (List.append rows [refresh, close])
+    let total : I64 := List.length ts in
+    let subtitle : String := if I64.lt total 1 then "no background tasks or subagent runs yet"
+        else String.concat (I64.to_string running) (String.concat " running · "
+            (String.concat (I64.to_string (List.length shown))
+                (String.concat " shown of " (String.concat (I64.to_string total) " · Enter opens a task")))) in
+    Dialog.make "Tasks" subtitle List.empty (List.append rows [toggle, refresh, close])
 
-/// A list choice: a task row opens it, Refresh re-reads, Close and Esc end.
-pub def TuiApp.monitor_list_next (ts : List TaskEntry) (step : DialogStep) : MonitorView :=
+/// A list choice: a task row opens it, the toggle flips the filter, Refresh
+/// re-reads, Close and Esc end. `hide` is the CURRENT filter state.
+pub def TuiApp.monitor_list_next (ts : List TaskEntry) (step : DialogStep) (hide : Bool) : Pair MonitorView Bool :=
     let n : I64 := List.length ts in
     match step {
         DialogStep.choose i =>
             if i < n then match task_at i ts {
-                Option.some t => MonitorView.mon_detail t.id,
-                Option.none => MonitorView.mon_list 0,
+                Option.some t => Pair.pair (MonitorView.mon_detail t.id) hide,
+                Option.none => Pair.pair (MonitorView.mon_list 0) hide,
             }
-            else if i == n then MonitorView.mon_list n
-            else MonitorView.mon_closed,
-        _ => MonitorView.mon_closed,
+            else if i == n then Pair.pair (MonitorView.mon_list 0) (Bool.not hide)
+            else if i == n + 1 then Pair.pair (MonitorView.mon_list n) hide
+            else Pair.pair MonitorView.mon_closed hide,
+        _ => Pair.pair MonitorView.mon_closed hide,
     }
 
 #[partial]

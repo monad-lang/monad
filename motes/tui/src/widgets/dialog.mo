@@ -152,6 +152,26 @@ pub def Dialog.step (d : DialogModel) (k : Key) : Pair DialogModel DialogStep :=
         Option.none => select_step d k,
     }
 
+/// A selection clamped to `[0, n)` (0 when there are no options).
+def clamp_selected (i : I64) (n : I64) : I64 :=
+    if i < 0 then 0
+    else if n < 1 then 0
+    else if i > n - 1 then n - 1
+    else i
+
+def move_selected (d : DialogModel) (delta : I64) : DialogModel :=
+    let d2 : DialogModel := { d with selected := clamp_selected (d.selected + delta) (Dialog.option_count d) } in
+    d2
+
+/// PgUp/PgDn: a page of the body when there is one, otherwise a page of the
+/// option list (the tasks monitor's long list).
+def page_step (d : DialogModel) (up : Bool) : DialogModel :=
+    if Bool.and (List.is_empty d.body) (I64.gt (Dialog.option_count d) 0)
+    then move_selected d (if up then -10 else 10)
+    else if up
+    then { d with scroll := (if d.scroll < 5 then 0 else d.scroll - 5) }
+    else { d with scroll := d.scroll + 5 }
+
 def select_step (d : DialogModel) (k : Key) : Pair DialogModel DialogStep :=
     if d.editing
     then match k {
@@ -169,8 +189,8 @@ def select_step (d : DialogModel) (k : Key) : Pair DialogModel DialogStep :=
             Key.down => Pair.pair { d with selected := (if d.selected + 1 < n then d.selected + 1 else (if n < 1 then 0 else n - 1)) } DialogStep.continue,
             Key.home => Pair.pair { d with selected := 0, scroll := 0 } DialogStep.continue,
             Key.end => Pair.pair { d with selected := (if n < 1 then 0 else n - 1) } DialogStep.continue,
-            Key.page_up => Pair.pair { d with scroll := (if d.scroll < 5 then 0 else d.scroll - 5) } DialogStep.continue,
-            Key.page_down => Pair.pair { d with scroll := d.scroll + 5 } DialogStep.continue,
+            Key.page_up => Pair.pair (page_step d true) DialogStep.continue,
+            Key.page_down => Pair.pair (page_step d false) DialogStep.continue,
             Key.char c =>
                 if Bool.and d.notes (c == "e") then Pair.pair { d with editing := true } DialogStep.continue
                 else if c == "k" then Pair.pair { d with selected := (if d.selected < 1 then 0 else d.selected - 1) } DialogStep.continue
@@ -190,11 +210,17 @@ pub def Dialog.paste (d : DialogModel) (text : String) : DialogModel :=
         Option.none => if d.editing then { d with note := insert_text text d.note } else d,
     }
 
-/// Wheel notches scroll the body; other mouse events do nothing.
+/// Wheel notches scroll the body; on a body-less list (the tasks monitor)
+/// they move the selection, so the option window follows.
 def mouse_step (d : DialogModel) (m : MouseEvent) : DialogModel :=
+    let list_mode : Bool := Bool.and (List.is_empty d.body) (I64.gt (Dialog.option_count d) 0) in
     match m {
-        MouseEvent.scroll_up _ _ => { d with scroll := (if d.scroll < 3 then 0 else d.scroll - 3) },
-        MouseEvent.scroll_down _ _ => { d with scroll := d.scroll + 3 },
+        MouseEvent.scroll_up _ _ =>
+            if list_mode then move_selected d (-3)
+            else { d with scroll := (if d.scroll < 3 then 0 else d.scroll - 3) },
+        MouseEvent.scroll_down _ _ =>
+            if list_mode then move_selected d 3
+            else { d with scroll := d.scroll + 3 },
         _ => d,
     }
 
@@ -267,19 +293,33 @@ pub def Dialog.text_rows (style : TextStyle) (width : I64) (text : String) : Lis
 pub def Dialog.body_rows (width : I64) (d : DialogModel) : List SizedWidget :=
     List.flatten (List.map (Dialog.text_rows style_default width) d.body)
 
+/// The first option row of a `window`-row window that keeps `selected`
+/// visible; 0 when everything fits.
+pub def Dialog.window_start (selected : I64) (window : I64) (count : I64) : I64 :=
+    if Bool.not (window < count) then 0
+    else if selected < window then 0
+    else if selected > count - 1 then count - window
+    else selected - window + 1
+
+def option_row (d : DialogModel) (i : I64) (o : DialogOption) (width : I64) : List SizedWidget :=
+    let here : Bool := i == d.selected in
+    let marker : String := if here then "> " else "  " in
+    let suffix : String := if String.is_empty o.hint then "" else String.concat "  (" (String.concat o.hint ")") in
+    let style : TextStyle := if here then { style_default with reverse := true } else style_default in
+    let text : String := String.concat o.label (option_value d i o.value) in
+    Dialog.text_rows style width (String.concat marker (String.concat text suffix))
+
+#[partial]
+def option_rows_window (d : DialogModel) (i : I64) (stop : I64) (width : I64) : List SizedWidget :=
+    if i > stop - 1 then List.empty
+    else match Dialog.option_at d i {
+        Option.none => List.empty,
+        Option.some o => List.append (option_row d i o width) (option_rows_window d (i + 1) stop width),
+    }
+
 #[partial]
 def option_rows (d : DialogModel) (i : I64) (width : I64) : List SizedWidget :=
-    match Dialog.option_at d i {
-        Option.none => List.empty,
-        Option.some o =>
-            let here : Bool := i == d.selected in
-            let marker : String := if here then "> " else "  " in
-            let suffix : String := if String.is_empty o.hint then "" else String.concat "  (" (String.concat o.hint ")") in
-            let style : TextStyle := if here then { style_default with reverse := true } else style_default in
-            let text : String := String.concat o.label (option_value d i o.value) in
-            List.append (Dialog.text_rows style width (String.concat marker (String.concat text suffix)))
-                (option_rows d (i + 1) width),
-    }
+    option_rows_window d i (Dialog.option_count d) width
 
 /// An editable option's `: value`, with the caret while its field is open.
 def option_value (d : DialogModel) (i : I64) (value : Option String) : String :=
@@ -307,16 +347,24 @@ pub def Dialog.rows (width : I64) (height : I64) (d : DialogModel) (body : List 
     let dim : TextStyle := { style_default with dim := true } in
     let bold : TextStyle := { style_default with bold := true } in
     let blank : List SizedWidget := [sized (LayoutSize.fixed 1) (label "")] in
+    // Options get a window: title, subtitle, three blanks, notes and the
+    // footer are fixed; the rest of the budget is the visible option rows.
+    let fixed : I64 := 6 + (if d.notes then 1 else 0) in
+    let room : I64 := if budget - fixed < 1 then 1 else budget - fixed in
+    let n : I64 := Dialog.option_count d in
+    let window : I64 := if n < 1 then 0 else if n < room then n else room in
+    let start : I64 := Dialog.window_start d.selected window n in
     let parts : List (List SizedWidget) := [
         Dialog.text_rows bold width d.title,
         Dialog.text_rows dim width d.subtitle,
         blank,
         take body_budget (drop d.scroll body),
         blank,
-        option_rows d 0 width,
+        option_rows_window d start (start + window) width,
         blank,
         if d.notes then Dialog.text_rows dim width (note_text d) else List.empty,
-        Dialog.text_rows dim width (Dialog.footer_line d (I64.lt body_budget (List.length body))),
+        Dialog.text_rows dim width (Dialog.footer_line d
+            (Bool.or (I64.lt body_budget (List.length body)) (I64.lt window n))),
     ] in
     take budget (List.flatten parts)
 

@@ -292,7 +292,8 @@ and last 40 output lines; with `wait_seconds` (at most 60) it first
 waits for the exit, so the model does not poll with a request per look,
 and Esc ends that wait. `list_processes` lists the tasks and
 `kill_process {id}` sends TERM, then KILL, to the group. `/tasks` opens
-the same list as a monitor (Enter shows a task's output, `x` kills it).
+the same list as a monitor: Up/Down (or the wheel/PgUp/PgDn) scrolls it,
+`f` hides or shows finished tasks, Enter shows a task's output, `x` kills it.
 A log past 64 MiB gets its task killed, with a note at the end of the
 log saying so; weaver checks once a second in the TUI and before each
 turn otherwise. Tasks are killed when weaver exits (`WEAVER_PROC_KEEP`

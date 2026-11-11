@@ -3,7 +3,7 @@
 /// choice maps to the next view or action.
 use weaver::tasks {
     TaskEntry, TaskKind, Tasks.agent_of_json, Tasks.sort, Tasks.running_count, Tasks.running_ids,
-    Tasks.exit_notes, Tasks.line,
+    Tasks.exit_notes, Tasks.line, Tasks.visible,
 }
 use weaver::tui_app {
     TuiApp.monitor_list_next, TuiApp.detail_action, TuiApp.detail_options,
@@ -11,7 +11,7 @@ use weaver::tui_app {
     MonitorView, DetailAction,
 }
 use weaver::inbox {Inbox.with_notes}
-use tui::widgets::dialog {DialogStep, DialogModel}
+use tui::widgets::dialog {DialogStep, DialogModel, Dialog.option_at, Dialog.option_count}
 use std::list {List.intercalate}
 
 def proc_task (id : String) (running : Bool) (status : String) (started : I64) : TaskEntry :=
@@ -56,14 +56,45 @@ def test_line_marks_running : Bool :=
     String.starts_with "● running" (Tasks.line 5 (proc_task "p-1" true "running" 5))
         && String.contains (Tasks.line 5 (agent_task "a-1" false)) "agent: find the bug"
 
-/// List view: a row opens its task, Refresh keeps the list, Close and Esc end.
+/// The filter drops finished rows.
+#[test]
+def test_visible_filters_finished : Bool :=
+    let ts : List TaskEntry := [proc_task "p-1" true "running" 1, proc_task "p-2" false "exited (0)" 2] in
+    List.length (Tasks.visible true ts) == 1 && List.length (Tasks.visible false ts) == 2
+
+/// List view: a row opens its task, the toggle flips the filter, Refresh
+/// keeps the list, Close and Esc end.
 #[test]
 def test_list_choices : Bool :=
     let ts : List TaskEntry := [proc_task "p-1" true "running" 1, proc_task "p-2" false "killed" 2] in
-    (match TuiApp.monitor_list_next ts (DialogStep.choose 1) { MonitorView.mon_detail id => String.beq id "p-2", _ => false })
-        && (match TuiApp.monitor_list_next ts (DialogStep.choose 2) { MonitorView.mon_list _ => true, _ => false })
-        && (match TuiApp.monitor_list_next ts (DialogStep.choose 3) { MonitorView.mon_closed => true, _ => false })
-        && (match TuiApp.monitor_list_next ts DialogStep.cancel { MonitorView.mon_closed => true, _ => false })
+    (match TuiApp.monitor_list_next ts (DialogStep.choose 1) false {
+        Pair.pair v _ => match v { MonitorView.mon_detail id => String.beq id "p-2", _ => false },
+    })
+        && (match TuiApp.monitor_list_next ts (DialogStep.choose 2) false {
+            Pair.pair v hide => match v { MonitorView.mon_list _ => hide, _ => false },
+        })
+        && (match TuiApp.monitor_list_next ts (DialogStep.choose 3) false {
+            Pair.pair v _ => match v { MonitorView.mon_list _ => true, _ => false },
+        })
+        && (match TuiApp.monitor_list_next ts (DialogStep.choose 4) false {
+            Pair.pair v _ => match v { MonitorView.mon_closed => true, _ => false },
+        })
+        && (match TuiApp.monitor_list_next ts DialogStep.cancel false {
+            Pair.pair v _ => match v { MonitorView.mon_closed => true, _ => false },
+        })
+
+/// Hiding finished rows removes them from the options and says how to bring
+/// them back; all rows still count in the subtitle.
+#[test]
+def test_dialog_hides_finished_rows : Bool :=
+    let ts : List TaskEntry := [proc_task "p-1" true "running" 1, proc_task "p-2" false "exited (0)" 2] in
+    let shown : DialogModel := TuiApp.monitor_dialog 5 60 true ts in
+    let all : DialogModel := TuiApp.monitor_dialog 5 60 false ts in
+    Dialog.option_count shown == 4
+        && Dialog.option_count all == 5
+        && (match Dialog.option_at shown 0 { Option.some o => String.contains o.label "p-1", Option.none => false })
+        && (match Dialog.option_at shown 1 { Option.some o => String.beq o.label "Show finished tasks", Option.none => false })
+        && (match Dialog.option_at all 2 { Option.some o => String.beq o.label "Hide finished tasks", Option.none => false })
 
 /// Detail view: Kill only while running, then Refresh and Back.
 #[test]
@@ -82,13 +113,14 @@ def test_notes_ride_the_next_message : Bool :=
     String.beq (Inbox.with_notes List.empty "go") "go"
         && String.beq (Inbox.with_notes ["[background task p-1 exited (0): make]"] "go") "go\n\n[background task p-1 exited (0): make]"
 
-/// A refresh that finds a new task keeps the selected task selected: it
-/// moved down one row. The selection never runs past the last option.
+/// A refresh that finds a new task keeps the selected TASK selected (by id),
+/// and a selected control row moves with the task rows.
 #[test]
 def test_monitor_refresh_keeps_the_selected_task : Bool :=
     let before : List TaskEntry := [proc_task "p-1" true "running" 1, proc_task "p-0" true "running" 0] in
     let after : List TaskEntry := List.cons (proc_task "p-2" true "running" 2) before in
-    let old : DialogModel := { (TuiApp.monitor_dialog 5 60 before) with selected := 1 } in
-    let moved : DialogModel := TuiApp.monitor_refreshed old (TuiApp.monitor_dialog 5 60 after) 1 in
-    let far : DialogModel := TuiApp.monitor_refreshed { old with selected := 9 } (TuiApp.monitor_dialog 5 60 before) 0 in
-    moved.selected == 2 && far.selected == 3
+    let old : DialogModel := { (TuiApp.monitor_dialog 5 60 false before) with selected := 1 } in
+    let moved : DialogModel := TuiApp.monitor_refreshed old (TuiApp.monitor_dialog 5 60 false after) before after in
+    let control_old : DialogModel := { (TuiApp.monitor_dialog 5 60 false before) with selected := 2 } in
+    let control : DialogModel := TuiApp.monitor_refreshed control_old (TuiApp.monitor_dialog 5 60 false after) before after in
+    moved.selected == 2 && control.selected == 3

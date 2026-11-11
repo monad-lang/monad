@@ -7,7 +7,7 @@ use lib::widgets::dialog {
     Dialog.note_text, Dialog.with_default, Dialog.apply, Dialog.rows, Dialog.body_rows,
     Dialog.total_rows, Dialog.frame_width, Dialog.frame_height, Dialog.content_width,
     Dialog.frame_width_for, Dialog.frame_height_for,
-    Dialog.with_notes, Dialog.clamp_scroll, Dialog.footer_line, ModalState, ModalNext, Modal.fold, Modal.idle, modal_quiet, Dialog.refresh_due,
+    Dialog.with_notes, Dialog.clamp_scroll, Dialog.footer_line, Dialog.window_start, ModalState, ModalNext, Modal.fold, Modal.idle, modal_quiet, Dialog.refresh_due,
 }
 use lib::input {InputReader, input_reader}
 use lib::types {Key, Event, MouseEvent, MouseButton}
@@ -145,6 +145,37 @@ def test_rows_keep_the_fixed_rows_on_a_short_frame : Bool :=
     let d : DialogModel := Dialog.make "T" "s" ["1", "2", "3", "4", "5", "6", "7", "8"] opts in
     let body : List SizedWidget := Dialog.body_rows 40 d in
     List.length (Dialog.rows 40 14 d body) == 10
+
+// ── a long option list windows and pages ───────────────────────────────
+
+#[partial]
+def many_opts (n : I64) (i : I64) : List DialogOption :=
+    if i > n - 1 then List.empty
+    else
+        let o : DialogOption := { label := String.concat "opt " (I64.to_string i), hint := "", key := "" } in
+        List.cons o (many_opts n (i + 1))
+
+/// The window follows the selection and never runs past the list.
+#[test]
+def test_window_start_keeps_the_selection_visible : Bool :=
+    Dialog.window_start 20 10 30 == 11
+        && Dialog.window_start 2 10 30 == 0
+        && Dialog.window_start 29 10 30 == 20
+        && Dialog.window_start 0 30 30 == 0
+
+/// PgUp/PgDn page an option list when there is no body to scroll.
+#[test]
+def test_page_keys_move_a_body_less_list : Bool :=
+    let d : DialogModel := Dialog.make "T" "" List.empty (many_opts 30 0) in
+    (match Dialog.step d Key.page_down { Pair.pair d2 _ => d2.selected == 10 })
+        && (match Dialog.step { d with selected := 15 } Key.page_up { Pair.pair d2 _ => d2.selected == 5 })
+
+/// The wheel moves the selection on a body-less list (the tasks monitor).
+#[test]
+def test_wheel_moves_a_body_less_list : Bool :=
+    let d : DialogModel := Dialog.make "T" "" List.empty (many_opts 30 0) in
+    let d2 : DialogModel := dlg_of_apply (Dialog.apply d (Event.mouse (MouseEvent.scroll_down 1 1))) in
+    d2.selected == 3 && d2.scroll == 0
 
 #[test]
 def test_body_rows_wrap : Bool :=

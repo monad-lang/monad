@@ -156,8 +156,13 @@ def insert_newest (x : TaskEntry) (xs : List TaskEntry) : List TaskEntry :=
         List.cons y ys => if I64.lt y.started_ns x.started_ns then List.cons x xs else List.cons y (insert_newest x ys),
     }
 
+/// `Tasks.running_count` counts the live rows.
 pub def Tasks.running_count (ts : List TaskEntry) : I64 :=
     List.length (List.filter (fn (t : TaskEntry) => t.running) ts)
+
+/// The rows the monitor shows: all, or only the ones still running.
+pub def Tasks.visible (hide_done : Bool) (ts : List TaskEntry) : List TaskEntry :=
+    if hide_done then List.filter (fn (t : TaskEntry) => t.running) ts else ts
 
 /// `● running  3.4s  echo hi` (`○` once it ended).
 pub def Tasks.line (now_ns : I64) (t : TaskEntry) : String :=
