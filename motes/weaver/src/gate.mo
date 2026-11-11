@@ -22,7 +22,7 @@ use shuttle::gate {Capability, Pick, Approval, Gate}
 use weaver::policy {Mode, Decision, Policy.decide, Policy.unguarded, Policy.classified}
 use weaver::classify {AutoCtx, Classify.decide}
 use weaver::diff {Diff.for_input, Diff.render}
-use weaver::diff_hunks {DiffHunks.hunks, DiffHunks.render_text}
+use weaver::diff_hunks {DiffHunks.hunks, DiffHunks.render_text, DiffHunks.cut_utf8, DiffHunks.max_display_input}
 use weaver::permissions {
     PermGrant, PermScope, Permissions.matches, Permissions.get,
     Permissions.add,
@@ -366,14 +366,16 @@ def write_diff (write : String -> IO Unit) (r : Option (Pair String String)) : I
 /// huge write must not bury the terminal in a diff.
 def capped_diff (old : String) (new : String) : String :=
     let d : String :=
-        match DiffHunks.hunks old new {
+        if I64.gt (String.length old + String.length new) DiffHunks.max_display_input
+        then Diff.render old new
+        else match DiffHunks.hunks old new {
             Option.some hs => DiffHunks.render_text hs,
             Option.none => Diff.render old new,
         } in
     if String.is_empty d
     then "(no changes)"
     else if String.length d > 1200
-    then String.concat (String.slice d 0 1200) "\n... (diff truncated)"
+    then String.concat (DiffHunks.cut_utf8 d 1200) "\n... (diff truncated)"
     else d
 
 /// The first 200 bytes of the input's JSON -- byte-slicing is safe

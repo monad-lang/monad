@@ -88,7 +88,7 @@ def test_auto_refuses_a_flagged_pick : Bool :=
     let flagged : Assessment := { scope := Reach.inside, danger := Option.some "git push --force rewrites remote history", outside_write := Option.none } in
     let writes_out : Assessment := { scope := Reach.outside [Path.path "/etc/motd"], danger := Option.none, outside_write := Option.some "writes outside the workspace: /etc/motd" } in
     cell_at Capability.exec Mode.auto flagged (Decision.refuse "auto mode: refused a dangerous command: git push --force rewrites remote history")
-        && cell_at Capability.write Mode.auto writes_out (Decision.refuse "auto mode: refused a write outside the workspace: writes outside the workspace: /etc/motd")
+        && cell_at Capability.write Mode.auto writes_out (Decision.refuse "auto mode: refused: writes outside the workspace: /etc/motd")
         && cell_at Capability.write Mode.auto flagged (Decision.refuse "auto mode: refused a dangerous command: git push --force rewrites remote history")
         && cell_at Capability.exec Mode.manual flagged Decision.ask
         && cell_at Capability.exec Mode.plan flagged (Decision.refuse plan_refusal)
@@ -191,7 +191,7 @@ def auto_cell (cap : Capability) (a : Assessment) (v : Option Verdict) (d : Auto
 def test_decide_auto_every_cell : Bool :=
     let r : String := "auto mode: the classifier blocked this: pushes" in
     let sd : String := "auto mode: refused a dangerous command: deletes files" in
-    let so : String := "auto mode: refused a write outside the workspace: writes outside the workspace: /etc/x" in
+    let so : String := "auto mode: refused: writes outside the workspace: /etc/x" in
     auto_cell Capability.exec plain (Option.some Verdict.safe) AutoDanger.refuse_it Decision.allow
         && auto_cell Capability.exec flagged (Option.some Verdict.safe) AutoDanger.refuse_it Decision.allow
         && auto_cell Capability.exec plain (Option.some (Verdict.dangerous "pushes")) AutoDanger.refuse_it (Decision.refuse r)

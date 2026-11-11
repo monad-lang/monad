@@ -1,7 +1,7 @@
 /// `DiffHunks` -- weaver.md Phase 16's Myers hunks: headers, gutters,
 /// insert/delete/replace, and the `+N -M` statistic.
 use weaver::diff_hunks {DiffHunks.hunks, DiffHunks.render_text, DiffHunks.stat}
-use std::list {List.length, List.intercalate}
+use std::list {List.intercalate}
 
 def one_hunk (old : String) (new : String) : Bool :=
     match DiffHunks.hunks old new {
@@ -69,5 +69,32 @@ def test_close_changes_merge : Bool :=
     let t : String := text_of "a\nb\nc\nd" "a\nB\nC\nd" in
     match DiffHunks.hunks "a\nb\nc\nd" "a\nB\nC\nd" {
         Option.some hs => List.length hs == 1 && String.contains t "@@ -1,4 +1,4 @@",
+        Option.none => false,
+    }
+
+/// An empty old side is a NEW file: every line is an addition. (The forward
+/// pass's endpoint test must not read a missing diagonal as success at d=0.)
+#[test]
+def test_a_new_file_is_all_additions : Bool :=
+    let t : String := text_of "" "a\nb" in
+    one_hunk "" "a\nb"
+        && String.contains t "@@ -0,0 +1,2 @@"
+        && String.contains t "| a"
+        && String.contains t "| b"
+        && Bool.not (String.contains t "| - ")
+
+#[test]
+def test_deleting_everything_is_all_removals : Bool :=
+    let t : String := text_of "a\nb" "" in
+    one_hunk "a\nb" ""
+        && String.contains t "@@ -1,2 +0,0 @@"
+        && String.contains t "| a"
+        && String.contains t "| b"
+        && Bool.not (String.contains t "| + ")
+
+#[test]
+def test_empty_to_empty_has_no_hunks : Bool :=
+    match DiffHunks.hunks "" "" {
+        Option.some hs => List.length hs == 0,
         Option.none => false,
     }

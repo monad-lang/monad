@@ -6,7 +6,7 @@ use loom::strand {
 }
 use loom::disposer {Disposer}
 use std::ref {Ref, Ref.new, Ref.get, Ref.modify}
-use std::list {List.length, List.intercalate}
+use std::list {List.intercalate}
 
 def note (r : Ref (List String)) (s : String) : IO Unit :=
     Ref.modify r (fn (xs : List String) => List.append xs [s])

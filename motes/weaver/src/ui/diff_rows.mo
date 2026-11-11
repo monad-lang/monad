@@ -3,11 +3,13 @@
 /// a changed pair's differing middle marked again. The text renderer
 /// (`DiffHunks.render_text`) serves the transcript and dumb mode; this one
 /// is only for the transient dialog.
+///
+/// `colors` follows the rest of the palette: `NO_COLOR`/`--no-color` yields
+/// plain spans (the marker's `+`/`-` still distinguishes rows).
 use weaver::diff_hunks {Hunk, HunkLine, HunkKind}
 use weaver::theme {LineClass, class_style}
 use tui::types {TextStyle, TextSegment}
 use tui::core {mk_text_segment, style_default}
-use std::ansi {Color}
 
 def seg (text : String) (style : TextStyle) : TextSegment :=
     mk_text_segment text style
@@ -19,26 +21,29 @@ def pad (n : I64) : String :=
     else if l < 3 then String.concat " " s
     else s
 
-def gutter_style : TextStyle :=
-    { style_default with dim := true }
+def gutter_style (colors : Bool) : TextStyle :=
+    if colors then { style_default with dim := true } else style_default
 
-def add_style : TextStyle :=
-    let base : TextStyle := class_style LineClass.diff_plus in
-    { base with reverse := true }
-
-def remove_style : TextStyle :=
-    let base : TextStyle := class_style LineClass.diff_minus in
-    { base with reverse := true }
-
-def context_style : TextStyle :=
-    style_default
-
-def marker_style (k : HunkKind) : TextStyle :=
-    match k {
+def base_style (colors : Bool) (k : HunkKind) : TextStyle :=
+    if Bool.not colors
+    then style_default
+    else match k {
         HunkKind.hunk_add => class_style LineClass.diff_plus,
         HunkKind.hunk_remove => class_style LineClass.diff_minus,
         HunkKind.hunk_context => style_default,
     }
+
+def row_style (colors : Bool) (k : HunkKind) : TextStyle :=
+    let base : TextStyle := base_style colors k in
+    if Bool.and colors (Bool.not (kind_is_context k))
+    then { base with reverse := true }
+    else base
+
+def kind_is_context (k : HunkKind) : Bool :=
+    match k { HunkKind.hunk_context => true, _ => false }
+
+def marker_style (colors : Bool) (k : HunkKind) : TextStyle :=
+    base_style colors k
 
 def marker (k : HunkKind) : String :=
     match k {
@@ -47,14 +52,17 @@ def marker (k : HunkKind) : String :=
         HunkKind.hunk_context => "  ",
     }
 
-def row_style (k : HunkKind) : TextStyle :=
-    match k {
-        HunkKind.hunk_add => add_style,
-        HunkKind.hunk_remove => remove_style,
-        HunkKind.hunk_context => context_style,
+// ── word-level highlight inside a changed pair ──────────────────────────
+
+#[partial]
+def ascii_bytes (bs : List U8) : Bool :=
+    match bs {
+        List.empty => true,
+        List.cons b rest => if I64.lt (U8.to_i64 b) 128 then ascii_bytes rest else false,
     }
 
-// ── word-level highlight inside a changed pair ──────────────────────────
+def is_ascii (s : String) : Bool :=
+    ascii_bytes (String.to_list s)
 
 #[partial]
 def prefix_at (a b : String) (i n : I64) : I64 :=
@@ -80,30 +88,36 @@ def common_suffix (a b : String) (budget : I64) : I64 :=
     let limit2 : I64 := if I64.lt budget limit then budget else limit in
     if I64.lt limit2 1 then 0 else suffix_at a b 1 limit2 - 1
 
-/// `text` as prefix / changed middle / suffix; the middle is reversed.
-def highlighted (text : String) (other : String) (base : TextStyle) : List TextSegment :=
-    let n : I64 := String.length text in
-    let p : I64 := common_prefix text other in
-    let s : I64 := common_suffix text other (n - p) in
-    let mid_len : I64 := n - p - s in
-    let mid_style : TextStyle := { base with reverse := Bool.not base.reverse } in
-    let head : List TextSegment := if p < 1 then List.empty else [seg (String.slice text 0 p) base] in
-    let mid : List TextSegment := if mid_len < 1 then List.empty else [seg (String.slice text p mid_len) mid_style] in
-    let tail : List TextSegment := if s < 1 then List.empty else [seg (String.slice text (p + mid_len) s) base] in
-    List.append head (List.append mid tail)
+/// `text` as prefix / changed middle / suffix; the middle is reversed when
+/// colors are on. Non-ASCII text is left whole: the byte probes above and
+/// the byte slices below would otherwise split a character and render an
+/// empty body.
+def highlighted (colors : Bool) (text : String) (other : String) (base : TextStyle) : List TextSegment :=
+    if Bool.not (Bool.and (is_ascii text) (is_ascii other))
+    then [seg text base]
+    else
+        let n : I64 := String.length text in
+        let p : I64 := common_prefix text other in
+        let s : I64 := common_suffix text other (n - p) in
+        let mid_len : I64 := n - p - s in
+        let mid_style : TextStyle := if colors then { base with reverse := Bool.not base.reverse } else base in
+        let head : List TextSegment := if p < 1 then List.empty else [seg (String.slice text 0 p) base] in
+        let mid : List TextSegment := if mid_len < 1 then List.empty else [seg (String.slice text p mid_len) mid_style] in
+        let tail : List TextSegment := if s < 1 then List.empty else [seg (String.slice text (p + mid_len) s) base] in
+        List.append head (List.append mid tail)
 
 // ── one line, and one hunk ──────────────────────────────────────────────
 
-def body_spans (l : HunkLine) (other : Option String) (base : TextStyle) : List TextSegment :=
+def body_spans (colors : Bool) (l : HunkLine) (other : Option String) (base : TextStyle) : List TextSegment :=
     match other {
         Option.none => [seg l.text base],
-        Option.some o => highlighted l.text o base,
+        Option.some o => highlighted colors l.text o base,
     }
 
-def line_row (l : HunkLine) (other : Option String) : List TextSegment :=
-    let gutter : TextSegment := seg (String.concat_list [pad l.old_no, " ", pad l.new_no, " | "]) gutter_style in
-    let mark : TextSegment := seg (marker l.kind) (marker_style l.kind) in
-    let body : List TextSegment := body_spans l other (row_style l.kind) in
+def line_row (colors : Bool) (l : HunkLine) (other : Option String) : List TextSegment :=
+    let gutter : TextSegment := seg (String.concat_list [pad l.old_no, " ", pad l.new_no, " | "]) (gutter_style colors) in
+    let mark : TextSegment := seg (marker l.kind) (marker_style colors l.kind) in
+    let body : List TextSegment := body_spans colors l other (row_style colors l.kind) in
     List.append (List.cons gutter (List.cons mark List.empty)) body
 
 def pair_kind (a b : HunkKind) : Bool :=
@@ -114,33 +128,33 @@ def pair_kind (a b : HunkKind) : Bool :=
     }
 
 #[partial]
-def lines_rows (ls : List HunkLine) : List (List TextSegment) :=
+def lines_rows (colors : Bool) (ls : List HunkLine) : List (List TextSegment) :=
     match ls {
         List.empty => List.empty,
         List.cons l rest => match rest {
-            List.empty => [line_row l Option.none],
+            List.empty => [line_row colors l Option.none],
             List.cons r rrest =>
                 if pair_kind l.kind r.kind
-                then List.cons (line_row l (Option.some r.text))
-                    (List.cons (line_row r (Option.some l.text)) (lines_rows rrest))
-                else List.cons (line_row l Option.none) (lines_rows rest),
+                then List.cons (line_row colors l (Option.some r.text))
+                    (List.cons (line_row colors r (Option.some l.text)) (lines_rows colors rrest))
+                else List.cons (line_row colors l Option.none) (lines_rows colors rest),
         },
     }
 
-def header_row (h : Hunk) : List TextSegment :=
+def header_row (colors : Bool) (h : Hunk) : List TextSegment :=
     let header : String := String.concat_list ["@@ -", I64.to_string h.old_start, ",", I64.to_string h.old_count,
         " +", I64.to_string h.new_start, ",", I64.to_string h.new_count, " @@"] in
-    [seg header (class_style LineClass.diff_hunk)]
+    [seg header (if colors then class_style LineClass.diff_hunk else style_default)]
 
 #[partial]
-def hunk_rows (hs : List Hunk) (acc : List (List TextSegment)) : List (List TextSegment) :=
+def hunk_rows (colors : Bool) (hs : List Hunk) (acc : List (List TextSegment)) : List (List TextSegment) :=
     match hs {
         List.empty => List.reverse acc,
         List.cons h rest =>
-            let rows : List (List TextSegment) := List.append [header_row h] (lines_rows h.lines) in
-            hunk_rows rest (List.append (List.reverse rows) acc),
+            let rows : List (List TextSegment) := List.append [header_row colors h] (lines_rows colors h.lines) in
+            hunk_rows colors rest (List.append (List.reverse rows) acc),
     }
 
 /// The dialog body's span rows, one list per rendered line.
-pub def DiffRows.of_hunks (hs : List Hunk) : List (List TextSegment) :=
-    hunk_rows hs List.empty
+pub def DiffRows.of_hunks (colors : Bool) (hs : List Hunk) : List (List TextSegment) :=
+    hunk_rows colors hs List.empty

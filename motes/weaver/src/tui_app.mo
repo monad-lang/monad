@@ -38,11 +38,12 @@ use weaver::commands {
 }
 use log::logger {Logger}
 use weaver::policy {Mode, Mode.show, Mode.cycle, Policy.decide, Policy.unguarded, Decision}
-use weaver::gate {pick_header, pick_target, cap_name, PickAnswer, record_answer, answer_approval, Gate.assessment_lines, Gate.granted, Gate.auto_for, Gate.auto_precheck, Gate.decision}
+use weaver::gate {pick_header, pick_target, cap_name, capped_diff, PickAnswer, record_answer, answer_approval, Gate.assessment_lines, Gate.granted, Gate.auto_for, Gate.auto_precheck, Gate.decision}
 use weaver::permissions {PermGrant, Permissions.get, Permissions.render}
 use weaver::assess {Assessment, Reach.is_inside, Assess.pick}
 use weaver::diff {Diff.for_input, Diff.lines}
-use weaver::diff_hunks {DiffHunks.hunks}
+use weaver::diff_hunks {DiffHunks.hunks, DiffHunks.max_display_input}
+use weaver::diff_tool {DiffTool.split}
 use weaver::ui::diff_rows {DiffRows.of_hunks}
 use weaver::dumb {append_user, drive_loop}
 use weaver::model {
@@ -1751,10 +1752,7 @@ def tool_result_lines (output : String) (is_error : Bool) : List TLine :=
 
 /// The first `\n@@ ` starts the appended hunk diff.
 def diff_split (output : String) : Option (Pair String String) :=
-    let i : I64 := String.find_last output "\n@@ " in
-    if I64.lt i 0
-    then Option.none
-    else Option.some (Pair.pair (String.slice output 0 i) (String.drop (i + 1) output))
+    DiffTool.split output
 
 #[partial]
 def drop_strings (n : I64) (xs : List String) : List String :=
@@ -1923,18 +1921,30 @@ def log_danger (log : Option Logger) (p : Pick) (a : Assessment) : IO Unit :=
             (String.concat " reason=" (Logs.sanitize reason)))),
     }
 
-def diff_span_of (old : String) (new : String) : Option (List (List TextSegment)) :=
-    match DiffHunks.hunks old new {
-        Option.some hs => Option.some (DiffRows.of_hunks hs),
+def diff_span_of (colors : Bool) (old : String) (new : String) : Option (List (List TextSegment)) :=
+    if I64.gt (String.length old + String.length new) DiffHunks.max_display_input
+    then Option.none
+    else match DiffHunks.hunks old new {
+        Option.some hs => Option.some (DiffRows.of_hunks colors hs),
         Option.none => Option.none,
     }
 
 /// The approval dialog's styled diff rows, when the pick is a file mutation.
-def diff_span_rows (diff_pair : Option (Pair String String)) : Option (List (List TextSegment)) :=
+def diff_span_rows (colors : Bool) (diff_pair : Option (Pair String String)) : Option (List (List TextSegment)) :=
     match diff_pair {
         Option.none => Option.none,
         Option.some pr => match pr {
-            Pair.pair old new => diff_span_of old new,
+            Pair.pair old new => diff_span_of colors old new,
+        },
+    }
+
+/// The text diff when the styled rows are unavailable (over the input or
+/// edit-distance bound): the human must still see what changes.
+def diff_fallback_lines (diff_pair : Option (Pair String String)) : List String :=
+    match diff_pair {
+        Option.none => List.empty,
+        Option.some pr => match pr {
+            Pair.pair old new => Diff.lines (capped_diff old new),
         },
     }
 
@@ -1947,8 +1957,12 @@ def prompt_overlay (colors : Bool) (store : Option StoreState) (grants : Option 
         Option.some path => List.cons (String.concat "file: " path) List.empty,
     };
     let place : List String := theme_split_lines (Gate.assessment_lines root a);
-    let body : List String := List.append (List.append (theme_split_lines (pick_header p)) place) target;
-    let spans : Option (List (List TextSegment)) := diff_span_rows diff_pair;
+    let spans : Option (List (List TextSegment)) := diff_span_rows colors diff_pair;
+    let fallback : List String := match spans {
+        Option.some _ => List.empty,
+        Option.none => diff_fallback_lines diff_pair,
+    };
+    let body : List String := List.append (List.append (List.append (theme_split_lines (pick_header p)) place) target) fallback;
     let repo_ok : Bool := Reach.is_inside a.scope;
     let opts : List DialogOption := perm_options p.cap repo_ok;
     let subtitle : String := String.concat (cap_name p.cap) (String.concat " " p.name);

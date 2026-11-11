@@ -63,7 +63,7 @@ pub def Policy.decide (cap : Capability) (mode : Mode) (a : Assessment) : Decisi
             match a.danger {
                 Option.some reason => Decision.refuse (String.concat "auto mode: refused a dangerous command: " reason),
                 Option.none => match a.outside_write {
-                    Option.some reason => Decision.refuse (String.concat "auto mode: refused a write outside the workspace: " reason),
+                    Option.some reason => Decision.refuse (String.concat "auto mode: refused: " reason),
                     Option.none => Decision.allow,
                 },
             },

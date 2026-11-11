@@ -3,14 +3,13 @@
 use weaver::diff_hunks {DiffHunks.hunks}
 use weaver::ui::diff_rows {DiffRows.of_hunks}
 use tui::types {TextSegment}
-use std::list {List.length}
 
 def row_text (row : List TextSegment) : String :=
     String.concat_all (List.map (fn (s : TextSegment) => s.text) row)
 
 def rows_of (old : String) (new : String) : List (List TextSegment) :=
     match DiffHunks.hunks old new {
-        Option.some hs => DiffRows.of_hunks hs,
+        Option.some hs => DiffRows.of_hunks true hs,
         Option.none => List.empty,
     }
 
@@ -31,6 +30,38 @@ def test_a_changed_pair_highlights_the_differing_middle : Bool :=
     String.contains (row_text (nth rows 1)) "line two"
         && String.contains (row_text (nth rows 2)) "line two changed"
         && I64.gt (List.length (nth rows 2)) 2
+
+def row_plain (row : List TextSegment) : Bool :=
+    plain_segments row
+
+#[partial]
+def plain_segments (row : List TextSegment) : Bool :=
+    match row {
+        List.empty => true,
+        List.cons s rest =>
+            let no_color : Bool := match s.style.fg { Option.none => true, Option.some _ => false } in
+            Bool.and (Bool.and no_color (Bool.not s.style.reverse)) (plain_segments rest),
+    }
+
+/// `NO_COLOR`/`--no-color` must reach the span rows too.
+#[test]
+def test_colors_off_is_plain : Bool :=
+    match DiffHunks.hunks "a\nb\nc" "a\nX\nc" {
+        Option.some hs =>
+            let rows : List (List TextSegment) := DiffRows.of_hunks false hs in
+            plain_segments (nth rows 1)
+                && plain_segments (nth rows 2)
+                && plain_segments (nth rows 3),
+        Option.none => false,
+    }
+
+/// A non-ASCII changed pair keeps its text (the byte probes would otherwise
+/// slice mid-character and render an empty body).
+#[test]
+def test_non_ascii_pair_keeps_its_text : Bool :=
+    let rows : List (List TextSegment) := rows_of "€5\n" "é5\n" in
+    String.contains (row_text (nth rows 1)) "€5"
+        && String.contains (row_text (nth rows 2)) "é5"
 
 def head (xs : List (List TextSegment)) : List TextSegment :=
     match xs { List.cons x _ => x, List.empty => List.empty }

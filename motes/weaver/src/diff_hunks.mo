@@ -9,7 +9,7 @@
 /// is bounded; past the bound the caller falls back to `Diff.render`.
 use weaver::diff {Diff.lines}
 use std::map {Map, BTreeMap}
-use std::list {List.length, List.intercalate}
+use std::list {List.intercalate}
 
 pub type HunkKind {
     hunk_context,
@@ -93,6 +93,16 @@ def step_ks (a b : BTreeMap I64 String) (n m d k : I64) (v : BTreeMap I64 I64) :
         let xy : Pair I64 I64 := snake a b n m x0 (x0 - k) in
         step_ks a b n m d (k + 2) (vset v k (pair_fst xy))
 
+/// Is the endpoint diagonal `n - m` reached? A diagonal is in `V` only
+/// after the `d` that computes it, so a missing entry is not success. (The
+/// old test read a missing `V[k]` as 0 > -1, so an empty old side -- a new
+/// file -- produced no hunks.)
+def endpoint_reached (n m : I64) (v : BTreeMap I64 I64) : Bool :=
+    match Map.lookup (n - m) v {
+        Option.none => false,
+        Option.some x => x > n - 1,
+    }
+
 /// Forward pass. `trace` holds the V *before* each d, newest first.
 #[partial]
 def forward (a b : BTreeMap I64 String) (n m d : I64) (v : BTreeMap I64 I64) (trace : List (BTreeMap I64 I64)) (max_d : I64) : Option (Pair (BTreeMap I64 I64) (List (BTreeMap I64 I64))) :=
@@ -101,7 +111,7 @@ def forward (a b : BTreeMap I64 String) (n m d : I64) (v : BTreeMap I64 I64) (tr
     else
         let trace2 : List (BTreeMap I64 I64) := List.cons v trace in
         let v2 : BTreeMap I64 I64 := step_ks a b n m d (0 - d) v in
-        if vget v2 (n - m) > n - 1
+        if endpoint_reached n m v2
         then Option.some (Pair.pair v2 trace2)
         else forward a b n m (d + 1) v2 trace2 max_d
 
@@ -332,3 +342,35 @@ def stat_hunks (hs : List Hunk) (adds removes : I64) : Pair I64 I64 :=
 
 pub def DiffHunks.stat (hs : List Hunk) : Pair I64 I64 :=
     stat_hunks hs 0 0
+
+/// The largest input the display paths run Myers on; past it the trim
+/// render is used (a full-file rewrite must not spend seconds in a dialog).
+pub def DiffHunks.max_display_input : I64 := 65536
+
+/// `s` truncated to at most `n` bytes ON a UTF-8 character boundary.
+/// `String.slice` answers "" for a cut on either side of a multi-byte
+/// character, so a raw byte cut can silently drop the whole string. The
+/// boundary is found over the byte list: a one-byte slice probe cannot
+/// distinguish "inside a character" from "this character starts here".
+def is_continuation (b : U8) : Bool :=
+    Bool.and (I64.lt 127 (U8.to_i64 b)) (I64.lt (U8.to_i64 b) 192)
+
+#[partial]
+def byte_at (bs : List U8) (i : I64) : Option U8 :=
+    match bs {
+        List.empty => Option.none,
+        List.cons b rest => if i < 1 then Option.some b else byte_at rest (i - 1),
+    }
+
+#[partial]
+def boundary_go (bs : List U8) (i : I64) : I64 :=
+    match byte_at bs i {
+        Option.none => i,
+        Option.some b => if is_continuation b then boundary_go bs (i - 1) else i,
+    }
+
+pub def DiffHunks.cut_utf8 (s : String) (n : I64) : String :=
+    let len : I64 := String.length s in
+    if I64.lt len (n + 1)
+    then s
+    else String.slice s 0 (boundary_go (String.to_list s) n)

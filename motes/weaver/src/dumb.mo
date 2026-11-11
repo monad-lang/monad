@@ -38,6 +38,7 @@ use weaver::inbox {Inbox.with_notes}
 use weaver::procs {Procs.root, Procs.enforce_cap, Procs.max_log_bytes}
 use weaver::todo {TodoTool.impl}
 use weaver::plan_tool {PlanTool.impl}
+use weaver::diff_tool {DiffTool.split}
 use weaver::skills {SkillTool.impl}
 use weaver::usage {UsageTracker.start, UsageTracker.silent, UsageTracker.last}
 use weaver::format {format_tokens}
@@ -285,8 +286,10 @@ def turn_ok (write : String -> IO Unit) (st : WeaverState) (before : I64) (run2 
 
 /// The hunk diff a write/edit tool result carries, when it has one.
 def diff_part (out : String) : Option String :=
-    let i : I64 := String.find_last out "\n@@ " in
-    if I64.lt i 0 then Option.none else Option.some (String.drop (i + 1) out)
+    match DiffTool.split out {
+        Option.none => Option.none,
+        Option.some pr => match pr { Pair.pair _ d => Option.some d },
+    }
 
 def print_one_diff (write : String -> IO Unit) (c : Content) : IO Unit :=
     match c {

@@ -26,6 +26,7 @@ use weaver::model {
 }
 use weaver::overlay {OverlayState}
 use weaver::store {StoreState, TLine, TLine.plain, TranscriptPage, SessionInfo}
+use weaver::diff_tool {DiffTool.sep}
 use std::path {Path, Path.of}
 use std::map {Map, BTreeMap}
 use weaver::tui_app {
@@ -1313,3 +1314,36 @@ def test_the_plans_picker_lists_titles_then_cancel : Bool :=
         },
         List.empty => false,
     }
+
+// ── tool-result diff detection ─────────────────────────────────────────
+
+def tool_result_msg (out : String) : Message :=
+    { role := Role.tool, content := [Content.tool_result "c" out false] }
+
+def tline_head (ls : List TLine) : TLine :=
+    match ls { List.cons x _ => x, List.empty => TLine.plain "" }
+
+def tline_text (l : TLine) : String := l.text
+
+def tlines_text (ls : List TLine) : String :=
+    String.concat_all (List.map (fn (l : TLine) => l.text) ls)
+
+/// A multi-hunk appended diff renders BOTH hunks (the sentinel splits at
+/// the head, not at the last `@@`).
+#[test]
+def test_a_multi_hunk_tool_result_keeps_every_hunk : Bool :=
+    let out : String := String.concat "wrote x"
+        (String.concat DiffTool.sep "@@ -1,2 +1,2 @@\n a\n@@ -10,2 +10,2 @@\n b") in
+    let lines : List TLine := TuiApp.render_message (tool_result_msg out) in
+    let text : String := tlines_text lines in
+    String.contains (tline_text (tline_head lines)) "wrote x"
+        && String.contains text "@@ -1,2 +1,2 @@"
+        && String.contains text "@@ -10,2 +10,2 @@"
+
+/// Tool output that merely contains `@@ ` (a read patch) is not a diff.
+#[test]
+def test_plain_output_with_headers_is_not_a_diff : Bool :=
+    let out : String := "@@ -1 +1 @@\n-old\n+new\nmore text" in
+    let lines : List TLine := TuiApp.render_message (tool_result_msg out) in
+    let head : String := tline_text (tline_head lines) in
+    String.contains head "lines · ctrl+o" && Bool.not (String.contains head "(+")
