@@ -640,6 +640,35 @@ pub def extract_directory (file_path : String) : String :=
 pub def path_directory (p : Path) : String :=
     extract_directory (Path.to_string p)
 
+/// A typed path's containing DIRECTORY as a `Path`. A path with no
+/// directory component ("main.mo") lives in the current directory, which
+/// this spells `.` -- the same spelling `Path.normalize` gives an empty
+/// parent -- so a loader directory is a total `Path` and never the empty
+/// sentinel `Path.of` refuses.
+pub def directory_of_path (p : Path) : Path :=
+    match Path.parent p {
+        Option.some d => d,
+        Option.none => Path.unsafe ".",
+    }
+
+/// A directory given as text (a CLI argument, an `extract_directory`
+/// result) as a `Path`; empty means the current directory.
+pub def base_dir_path (s : String) : Path :=
+    if String.is_empty s then Path.unsafe "." else Path.unsafe s
+
+#[partial]
+def paths_of (ss : List String) : List Path :=
+    match ss {
+        List.empty => List.empty,
+        List.cons s rest => List.cons (Path.unsafe s) (paths_of rest),
+    }
+
+def path_opt_of_string (o : Option String) : Option Path :=
+    match o {
+        Option.some s => Option.some (Path.unsafe s),
+        Option.none => Option.none,
+    }
+
 /// Derive a module name from a file path — e.g. "examples/foo.mo" -> "foo".
 /// Factored out of `load_file_modules` (below) so `check_file` can reuse
 /// the exact same convention without a caller-supplied `mod_name`.
@@ -655,13 +684,6 @@ pub def module_name_from_path (file_path : String) : String :=
         String.slice file_name_only 0 (String.length file_name_only - 3)
     else
         file_name_only
-
-/// Join two path components with a separator
-/// Delegates to `std/path.mo`'s `raw_path_join` -- the single shared
-/// implementation of this empty-component/trailing-slash/absolute-second-
-/// argument logic (was duplicated here before `Path` existed).
-def path_join (a : String) (b : String) : String :=
-    raw_path_join a b
 
 /// Collapse `.`/`..` segments and repeated separators: `a/../b` -> `b`,
 /// `./x` -> `x`, `a//b` -> `a/b`. Pure string work with no filesystem
@@ -701,18 +723,13 @@ def normalize_path (p : String) : String :=
 /// it at this choke point is what makes a file's spelling independent of
 /// whichever candidate happened to find it. See `normalize_path`.
 #[partial]
-def first_existing (candidates : List String) : IO (Option String) := do {
+def first_existing (candidates : List Path) : IO (Option Path) := do {
     match candidates {
         List.empty => do { return Option.none },
         List.cons path rest => do {
-            // `path` here is one of `first_existing`'s own candidate
-            // strings -- always non-empty by construction (built from
-            // non-empty literal fragments, see call sites below), so
-            // the raw `Path.path` constructor (not the validating
-            // `Path.of`) is safe here.
-            let exists : Bool <- file_exists (Path.path path);
+            let exists : Bool <- file_exists path;
             if exists
-            then do { return Option.some (normalize_path path) }
+            then do { return Option.some (Path.normalize path) }
             else first_existing rest
         }
     }
@@ -775,11 +792,14 @@ def mote_relative_file (mp : ModulePath) : String :=
 /// toolchain. It is also where the `prelude` alias lives -- `prelude`
 /// belongs to `init`, and no module path can say so.
 #[partial]
-def resolve_ambient_file (base_dir : String) (mp : ModulePath) (segs : List String) : IO (Option String) := do {
-    let r <- first_existing [join_path_segments segs ""];
+def resolve_ambient_file (base_dir : Path) (mp : ModulePath) (segs : List String) : IO (Option Path) := do {
+    let r <- first_existing [Path.unsafe (join_path_segments segs "")];
     match r {
         Option.some p => return (Option.some p),
-        Option.none => resolve_installed_or_manifest base_dir mp segs
+        Option.none => do {
+            let fallback <- resolve_installed_or_manifest base_dir mp segs;
+            return (path_opt_of_string fallback)
+        }
     }
 }
 
@@ -796,7 +816,7 @@ def resolve_ambient_file (base_dir : String) (mp : ModulePath) (segs : List Stri
 /// has no checkout to resolve `init`/`std` out of: the manifest covers it
 /// when it declared `path` dependencies, the toolchain root covers it when
 /// it declared none and a nightly is installed.
-def resolve_installed_or_manifest (base_dir : String) (mp : ModulePath) (segs : List String) : IO (Option String) := do {
+def resolve_installed_or_manifest (base_dir : Path) (mp : ModulePath) (segs : List String) : IO (Option String) := do {
     let via_manifest <- resolve_via_manifest base_dir mp;
     match via_manifest {
         Option.some p => return (Option.some p),
@@ -814,7 +834,10 @@ def resolve_installed_or_manifest (base_dir : String) (mp : ModulePath) (segs : 
 def toolchain_first_existing (root : Option String) (segs : List String) : IO (Option String) := do {
     match root {
         Option.none => return Option.none,
-        Option.some r => first_existing (Mote.toolchain_candidates r segs)
+        Option.some r => do {
+            let found <- first_existing (paths_of (Mote.toolchain_candidates r segs));
+            return (match found { Option.some p => Option.some (Path.to_string p), Option.none => Option.none })
+        }
     }
 }
 
@@ -975,16 +998,16 @@ def runtime_c_in (dep_dir : String) : List String :=
 /// There is no `examples/` fallback: an example is a mote like any other
 /// now (`#![mote { ... }]`), so nothing resolves it by directory name.
 #[partial]
-def resolve_module_file (base_dir : String) (mp : ModulePath) : IO (Option String) {
+def resolve_module_file (base_dir : Path) (mp : ModulePath) : IO (Option Path) {
     let mp_str := module_path_to_file mp;
     let with_extension := String.concat mp_str ".mo";
     let prelude_segs := ["init", "src", "prelude.mo"];
-    let relative_path := path_join base_dir with_extension;
-    let direct_path := with_extension;
-    let mote_path := mote_relative_file mp;
-    let init_path := String.concat "init/src/" with_extension;
-    let std_path := String.concat "std/src/" with_extension;
-    let lang_path := String.concat "lang/src/" with_extension;
+    let relative_path := Path.join base_dir (Path.unsafe with_extension);
+    let direct_path := Path.unsafe with_extension;
+    let mote_path := Path.unsafe (mote_relative_file mp);
+    let init_path := Path.unsafe (String.concat "init/src/" with_extension);
+    let std_path := Path.unsafe (String.concat "std/src/" with_extension);
+    let lang_path := Path.unsafe (String.concat "lang/src/" with_extension);
 
     if String.beq mp_str "prelude"
     then resolve_ambient_file base_dir mp prelude_segs
@@ -1051,10 +1074,13 @@ def resolve_module_file (base_dir : String) (mp : ModulePath) : IO (Option Strin
                 // go first would only add a failing stat to every bare-name
                 // lookup.
                 let in_motes_qualified := String.concat "motes/" (mote_relative_file mp);
-                let in_motes <- first_existing (List.append in_motes_cands (List.cons in_motes_qualified List.empty));
+                let in_motes <- first_existing (List.append (paths_of in_motes_cands) (List.cons (Path.unsafe in_motes_qualified) List.empty));
                 match in_motes {
                     Option.some p => return (Option.some p),
-                    Option.none => resolve_installed_or_manifest base_dir mp (mote_segments mp)
+                    Option.none => do {
+                        let fallback <- resolve_installed_or_manifest base_dir mp (mote_segments mp);
+                        return (path_opt_of_string fallback)
+                    }
                 }
             }
         }
@@ -1124,13 +1150,14 @@ def motes_src_paths_go (entries : List Path) (file_stem : String) : IO (List Str
 /// only hold when the CWD is the checkout root. Reached only on a cascade
 /// MISS, so the manifest read costs nothing on the path everything takes.
 #[partial]
-def resolve_via_manifest (base_dir : String) (mp : ModulePath) : IO (Option String) := do {
-    let mote <- Mote.discover base_dir;
+def resolve_via_manifest (base_dir : Path) (mp : ModulePath) : IO (Option String) := do {
+    let mote <- Mote.discover (Path.to_string base_dir);
     match mote {
         Option.none => return Option.none,
         Option.some m => do {
             let cands <- manifest_candidates m mp;
-            first_existing cands
+            let found <- first_existing (paths_of cands);
+            return (match found { Option.some p => Option.some (Path.to_string p), Option.none => Option.none })
         }
     }
 }
@@ -1270,7 +1297,7 @@ def mote_path_within (m : MoteManifest) (mp : ModulePath) : Option String :=
 /// function's own note for the `prelude`-inside-a-mote defect that
 /// resolving twice caused.
 #[partial]
-def load_module_decls (base_dir : String) (mp : ModulePath) : IO (Option (List Decl)) {
+def load_module_decls (base_dir : Path) (mp : ModulePath) : IO (Option (List Decl)) {
     let resolved <- resolve_module_file base_dir mp;
     match resolved {
         Option.some file_path => load_module_decls_at file_path mp,
@@ -1303,8 +1330,8 @@ def load_module_decls (base_dir : String) (mp : ModulePath) : IO (Option (List D
 /// a genuinely fully-parsed file always leaves it empty; non-empty means
 /// real, un-parsed source content remains.
 #[partial]
-def load_module_decls_of_text (file_path : String) (mp : ModulePath) (content : String) : IO (Option (List Decl)) := do {
-    let env <- cfg_env_for_file file_path content;
+def load_module_decls_of_text (file_path : Path) (mp : ModulePath) (content : String) : IO (Option (List Decl)) := do {
+    let env <- cfg_env_for_file (Path.to_string file_path) content;
     let result : ParseResult (List Decl) := parse_all_decls_cfg env content;
     match result {
         ParseResult.success rem decl_list =>
@@ -1318,7 +1345,7 @@ def load_module_decls_of_text (file_path : String) (mp : ModulePath) (content : 
                 let msg : String :=
                     match decls_parser_strict content {
                         ParseResult.fail e =>
-                            render_parse_error content (Option.some file_path) e,
+                            render_parse_error content (Option.some (Path.to_string file_path)) e,
                         ParseResult.success _ _ =>
                             String.concat "parse error: "
                                 (String.concat (module_path_to_string mp)
@@ -1328,7 +1355,7 @@ def load_module_decls_of_text (file_path : String) (mp : ModulePath) (content : 
                 return Option.none
             },
         ParseResult.fail e => do {
-            println (render_parse_error content (Option.some file_path) e);
+            println (render_parse_error content (Option.some (Path.to_string file_path)) e);
             return Option.none
         }
     }
@@ -1356,8 +1383,8 @@ def load_module_decls_of_text (file_path : String) (mp : ModulePath) (content : 
 /// shape could also silently load a DIFFERENT file than the one
 /// `file_path` named.
 #[partial]
-def load_module_decls_at (file_path : String) (mp : ModulePath) : IO (Option (List Decl)) {
-    let read : Result StreamError String <- IO.read_file (Path.path file_path);
+def load_module_decls_at (file_path : Path) (mp : ModulePath) : IO (Option (List Decl)) {
+    let read : Result StreamError String <- IO.read_file file_path;
     load_module_decls_read file_path mp read
 }
 
@@ -1365,14 +1392,14 @@ def load_module_decls_at (file_path : String) (mp : ModulePath) : IO (Option (Li
 /// unresolved module -- but any other read failure is printed first,
 /// the same channel `load_module_decls_of_text` reports a parse failure
 /// on, so it never passes for a module that is simply absent.
-def load_module_decls_read (file_path : String) (mp : ModulePath) (read : Result StreamError String) : IO (Option (List Decl)) :=
+def load_module_decls_read (file_path : Path) (mp : ModulePath) (read : Result StreamError String) : IO (Option (List Decl)) :=
     match read {
         Result.ok content => load_module_decls_of_text file_path mp content,
         Result.err e =>
             if StreamError.is_not_found e
             then IO.pure Option.none
             else do {
-                println ("error: reading " ++ file_path ++ ": " ++ e.message);
+                println ("error: reading " ++ Path.to_string file_path ++ ": " ++ e.message);
                 return Option.none
             }
     }
@@ -1398,7 +1425,7 @@ def load_module_decls_read (file_path : String) (mp : ModulePath) (read : Result
 /// Build a Scope from a ModulePath by loading and parsing the file
 /// base_dir is the directory to resolve relative imports from
 #[partial]
-def load_module_scope (base_dir : String) (mp : ModulePath) : IO (Option ScopeData) {
+def load_module_scope (base_dir : Path) (mp : ModulePath) : IO (Option ScopeData) {
     let opt_decls <- load_module_decls base_dir mp;
     match opt_decls {
         Option.some decl_list => do {
@@ -1414,14 +1441,14 @@ def load_module_scope (base_dir : String) (mp : ModulePath) : IO (Option ScopeDa
 /// Build a Scope from a ModulePath with default base directory
 #[partial]
 def load_module_scope_default (mp : ModulePath) : IO (Option ScopeData) :=
-    load_module_scope "" mp
+    load_module_scope (Path.unsafe ".") mp
 
 /// Extract all transitive dependencies with cycle detection
 /// visiting: modules currently being visited (for cycle detection)
 /// visited: modules already fully processed
 #[partial]
 def extract_all_dependencies_go
-    (base_dir : String)
+    (base_dir : Path)
     (to_visit : List ModulePath)
     (visiting : List ModulePath)
     (visited : List ModulePath) :
@@ -1445,9 +1472,9 @@ def extract_all_dependencies_go
                     Option.some dep_decls => do {
                         // First, find the actual file path for this module
                         let resolved_path_opt <- resolve_module_file base_dir head;
-                        let new_base_dir : String :=
+                        let new_base_dir : Path :=
                             match resolved_path_opt {
-                                Option.some fp => extract_directory fp,
+                                Option.some fp => directory_of_path fp,
                                 Option.none => base_dir
                             };
                         let dep_deps : List ModulePath := extract_use_decls dep_decls;
@@ -1563,11 +1590,11 @@ pub struct InfosAndCache {
 /// "unknown variable" in the importing file.
 pub struct PendingModule {
     path : ModulePath,
-    base_dir : String,
+    base_dir : Path,
 }
 
 /// Queue every one of `paths` against the same importer directory.
-def pending_from (base_dir : String) (paths : List ModulePath) : List PendingModule :=
+def pending_from (base_dir : Path) (paths : List ModulePath) : List PendingModule :=
     match paths {
         List.empty => List.empty,
         List.cons p rest =>
@@ -1622,7 +1649,7 @@ def collect_dep_module_infos (to_visit : List PendingModule) (visiting : List Mo
                         // `init/src/string.mo`) lives here, now carried
                         // per queued entry instead of in one rolling
                         // variable.
-                        let dep_base_dir : String := path_directory info.file_path;
+                        let dep_base_dir : Path := directory_of_path info.file_path;
                         let dep_decls : List Decl := info.decl_list;
                         let dep_deps : List ModulePath := extract_use_decls dep_decls;
                         let new_to_visit : List PendingModule :=
@@ -1642,7 +1669,7 @@ def collect_dep_module_infos (to_visit : List PendingModule) (visiting : List Mo
                         // line above prints BEFORE the load that then
                         // failed. Named here so the next one is one line
                         // instead of a bisection.
-                        println (String.concat "unresolved module: " (String.concat (module_path_to_string_colon head) (String.concat " (from " (String.concat pending.base_dir ") -- its declarations are missing from this run"))));
+                        println (String.concat "unresolved module: " (String.concat (module_path_to_string_colon head) (String.concat " (from " (String.concat (Path.to_string pending.base_dir) ") -- its declarations are missing from this run"))));
                         collect_dep_module_infos tail new_visiting visited loaded.cache verbose
                     }
                 }
@@ -1694,7 +1721,7 @@ def load_dependency_entries {A : Type} (loader : ModulePath -> IO (Option A)) (n
 /// first, then fall back to an unrestricted global search), extracted so
 /// it can be partially applied (`load_scope_entry base_dir`) into
 /// `load_dependency_entries`'s `loader` parameter.
-def load_scope_entry (base_dir : String) (mp : ModulePath) : IO (Option ScopeData) := do {
+def load_scope_entry (base_dir : Path) (mp : ModulePath) : IO (Option ScopeData) := do {
     let sd_opt <- load_module_scope base_dir mp;
     match sd_opt {
         Option.some sd => do { return (Option.some sd) },
@@ -3961,14 +3988,14 @@ pub struct InfoAndCache {
 }
 
 #[partial]
-def load_module_with_info_cached (base_dir : String) (mp : ModulePath) (cache : ModuleInfoCache) : IO InfoAndCache := do {
+def load_module_with_info_cached (base_dir : Path) (mp : ModulePath) (cache : ModuleInfoCache) : IO InfoAndCache := do {
     match module_info_cache_lookup mp cache {
         Option.some hit => do {
             let out : InfoAndCache := { info := Option.some hit, cache := module_info_cache_hit cache };
             return out
         },
         Option.none => do {
-            let loaded <- load_module_with_info base_dir mp;
+            let loaded <- load_module_with_info_at base_dir mp;
             match loaded {
                 Option.some info => do {
                     let out : InfoAndCache := { info := Option.some info, cache := module_info_cache_insert mp info cache };
@@ -4268,7 +4295,8 @@ def resolve_open_aliases_in_modules_go (known_names : List String) (root_aliases
 /// Reads no manifest unless a `lib` use is actually present, so files
 /// without one cost nothing.
 #[partial]
-def resolve_lib_alias_decls (base_dir : String) (decls : List Decl) : IO (List Decl) := do {
+def resolve_lib_alias_decls (base_dir : Path) (decls : List Decl) : IO (List Decl) := do {
+    let dir : String := Path.to_string base_dir;
     if has_lib_use decls
     then do {
         // The inline `#![mote { ... }]` first, exactly as `mote_of_module`
@@ -4278,10 +4306,10 @@ def resolve_lib_alias_decls (base_dir : String) (decls : List Decl) : IO (List D
         // the load, so a MISPLACED annotation is read here too -- it is
         // then reported by `validate_mote_attr` on the same load, which is
         // why reading it early cannot hide the error.)
-        match inline_mote_of_decls base_dir decls {
+        match inline_mote_of_decls dir decls {
             Option.some m => return (rewrite_lib_uses m.name decls),
             Option.none => do {
-                let mote <- Mote.discover base_dir;
+                let mote <- Mote.discover dir;
                 match mote {
                     Option.some m => return (rewrite_lib_uses m.name decls),
                     // Outside any mote (script mode): `lib` names nothing,
@@ -4300,7 +4328,7 @@ def resolve_lib_alias_decls (base_dir : String) (decls : List Decl) : IO (List D
 /// internally for its target module; a caller whose main module never
 /// touches the disk loader (the REPL's session) needs it directly.
 pub def rewrite_lib_aliases_of (file_path : String) (decls : List Decl) : IO (List Decl) :=
-    resolve_lib_alias_decls (extract_directory file_path) decls
+    resolve_lib_alias_decls (directory_of_path (Path.unsafe file_path)) decls
 
 def has_lib_use (decls : List Decl) : Bool :=
     match decls {
@@ -4351,7 +4379,7 @@ def lib_alias_path (mote : String) (mp : ModulePath) : ModulePath :=
     }
 
 #[partial]
-def resolve_lib_alias_decls_opt (base_dir : String) (decls : Option (List Decl)) : IO (Option (List Decl)) := do {
+def resolve_lib_alias_decls_opt (base_dir : Path) (decls : Option (List Decl)) : IO (Option (List Decl)) := do {
     match decls {
         Option.none => return Option.none,
         Option.some dl => do {
@@ -4361,8 +4389,14 @@ def resolve_lib_alias_decls_opt (base_dir : String) (decls : Option (List Decl))
     }
 }
 
+/// The String-shaped public entry: a CLI/LSP caller names a directory as
+/// text; the loader below threads it as a `Path`.
 #[partial]
-pub def load_module_with_info (base_dir : String) (mp : ModulePath) : IO (Option ModuleInfo) {
+pub def load_module_with_info (base_dir : String) (mp : ModulePath) : IO (Option ModuleInfo) :=
+    load_module_with_info_at (base_dir_path base_dir) mp
+
+#[partial]
+def load_module_with_info_at (base_dir : Path) (mp : ModulePath) : IO (Option ModuleInfo) {
     let resolved_path_opt <- resolve_module_file base_dir mp;
     match resolved_path_opt {
         Option.none => do { return Option.none },
@@ -4372,7 +4406,7 @@ pub def load_module_with_info (base_dir : String) (mp : ModulePath) : IO (Option
             // resolving a second time from this file's own directory and
             // free to disagree with the first answer. See that function's
             // own note for the `prelude`-inside-a-mote defect this caused.
-            let actual_base_dir : String := extract_directory file_path;
+            let actual_base_dir : Path := directory_of_path file_path;
             let raw_decls : Option (List Decl) <- load_module_decls_at file_path mp;
             let decl_list <- resolve_lib_alias_decls_opt actual_base_dir raw_decls;
             match decl_list {
@@ -4391,7 +4425,7 @@ pub def load_module_with_info (base_dir : String) (mp : ModulePath) : IO (Option
                     // `char*` -- a SIGSEGV in `__strlen_avx2` on the very first
                     // module load, which is every `check`/`compile` this
                     // compiler runs on itself.
-                    let info : ModuleInfo := { path := mp, file_path := Path.unsafe file_path, decl_list := decl_list };
+                    let info : ModuleInfo := { path := mp, file_path := file_path, decl_list := decl_list };
                     return (Option.some info)
                 },
                 Option.none => do { return Option.none }
@@ -4416,17 +4450,17 @@ pub def load_module_with_info (base_dir : String) (mp : ModulePath) : IO (Option
 /// the buffer resolve. Dropping either surfaces much later as a wall of
 /// `unknown variable`, never as the real cause.
 #[partial]
-def load_module_with_info_from_source (base_dir : String) (mp : ModulePath) (source : String) : IO (Option ModuleInfo) {
+def load_module_with_info_from_source (base_dir : Path) (mp : ModulePath) (source : String) : IO (Option ModuleInfo) {
     let resolved_path_opt <- resolve_module_file base_dir mp;
     match resolved_path_opt {
         Option.none => do { return Option.none },
         Option.some file_path => do {
-            let actual_base_dir : String := extract_directory file_path;
+            let actual_base_dir : Path := directory_of_path file_path;
             let raw_decls : Option (List Decl) <- load_module_decls_of_text file_path mp source;
             let decl_list <- resolve_lib_alias_decls_opt actual_base_dir raw_decls;
             match decl_list {
                 Option.some decl_list => do {
-                    let info : ModuleInfo := { path := mp, file_path := Path.unsafe file_path, decl_list := decl_list };
+                    let info : ModuleInfo := { path := mp, file_path := file_path, decl_list := decl_list };
                     return (Option.some info)
                 },
                 Option.none => do { return Option.none }
@@ -4439,9 +4473,9 @@ def load_module_with_info_from_source (base_dir : String) (mp : ModulePath) (sou
 /// when the caller supplied source. The branch lives here, in one place,
 /// so the dependency walk and both `_go` bodies below stay untouched.
 #[partial]
-def load_target_module (base_dir : String) (mp : ModulePath) (source : Option String) : IO (Option ModuleInfo) :=
+def load_target_module (base_dir : Path) (mp : ModulePath) (source : Option String) : IO (Option ModuleInfo) :=
     match source {
-        Option.none => load_module_with_info base_dir mp,
+        Option.none => load_module_with_info_at base_dir mp,
         Option.some src => load_module_with_info_from_source base_dir mp src,
     }
 
@@ -5742,7 +5776,7 @@ def gate_use_completeness (source : Option String) (r : Result String LoadedModu
                     // mote path (`<mote>::x`), which is what the world's
                     // owner paths are keyed by.
                     let rewritten : List Decl <-
-                        resolve_lib_alias_decls (path_directory main.file_path) pre;
+                        resolve_lib_alias_decls (directory_of_path main.file_path) pre;
                     // The consumer's mote, from its manifest: the entry
                     // module is named by its file stem (`copy_tests`), not
                     // mote-qualified, so it cannot be read off `main.path`.
@@ -5855,7 +5889,7 @@ def link_lib_seen (needle : String) (xs : List String) : Bool :=
 /// other module is not has a named culprit already (`unresolved module:
 /// <that one>`, plus whatever the manifest gate says about it), and is not
 /// the case this is for.
-def report_missing_toolchain (base_dir : String) : IO Unit := do {
+def report_missing_toolchain (base_dir : Path) : IO Unit := do {
     let found <- resolve_module_file base_dir prelude_module_path;
     match found {
         Option.some _ => return unit,
@@ -5889,7 +5923,7 @@ def report_missing_toolchain (base_dir : String) : IO Unit := do {
 /// one.
 #[partial]
 def load_file_modules_cached_go (file_path : String) (source : Option String) (cache : ModuleInfoCache) (verbose : Bool) : IO LoadedAndCache {
-    let base_dir : String := extract_directory file_path;
+    let base_dir : Path := directory_of_path (Path.unsafe file_path);
     let module_name : String := module_name_from_path file_path;
     let mp : ModulePath := ModulePath.mk [Identifier.id module_name];
     module_line verbose module_name;
@@ -5922,7 +5956,7 @@ def load_file_modules_cached_go (file_path : String) (source : Option String) (c
 pub def load_modules_from_main (main : ModuleInfo) (cache : ModuleInfoCache) (verbose : Bool) : IO LoadedAndCache :=
     match main {
         ModuleInfo.mk mp_path file_path decl_list => do {
-            let main_base_dir : String := path_directory file_path;
+            let main_base_dir : Path := directory_of_path file_path;
             let direct_deps : List ModulePath := extract_use_decls decl_list;
             // `List.append`, not `++`: `Append.append` needs an
             // `Append (List A)` instance that is absent from some
@@ -9271,11 +9305,11 @@ def test_elaborate_loaded_modules_resolves_file_with_no_use_decls : IO Bool := d
     // resolver keeps the point -- a file with no `use` declarations of its
     // own still needs the modules its SIBLINGS provide -- and holds wherever
     // the working directory is.
-    let resolved <- resolve_module_file "" std_test_module_path;
+    let resolved <- resolve_module_file (Path.unsafe ".") std_test_module_path;
     match resolved {
         Option.none => return false,
         Option.some test_file => do {
-            let result <- elaborate_loaded_modules test_file false false;
+            let result <- elaborate_loaded_modules (Path.to_string test_file) false false;
             match result {
                 Result.err _ => return false,
                 Result.ok em => do {
@@ -9459,12 +9493,12 @@ def test_mote_dep_files_is_empty_for_an_undeclared_mote : IO Bool := do {
 /// own tests below rather than by pinning a CWD's spelling here.
 #[test]
 def test_resolve_ambient_file_falls_through_to_the_manifest : IO Bool := do {
-    let r <- resolve_ambient_file "lang/src" prelude_module_path ["init", "src", "__no_such_module__.mo"];
+    let r <- resolve_ambient_file (Path.unsafe "lang/src") prelude_module_path ["init", "src", "__no_such_module__.mo"];
     match r {
         Option.none => return false,
         Option.some p => do {
-            let exists <- file_exists (Path.path p);
-            if exists then return (String.ends_with p "init/src/prelude.mo") else return false
+            let exists <- file_exists p;
+            if exists then return (String.ends_with (Path.to_string p) "init/src/prelude.mo") else return false
         }
     }
 }
@@ -9482,7 +9516,7 @@ def test_resolve_ambient_file_falls_through_to_the_manifest : IO Bool := do {
 /// stops, from any working directory.
 #[test]
 def test_resolve_ambient_file_miss_outside_any_mote_stays_a_miss : IO Bool := do {
-    let r <- resolve_ambient_file "/__no_such_mote_dir__" prelude_module_path ["init", "src", "__no_such_module__.mo"];
+    let r <- resolve_ambient_file (Path.unsafe "/__no_such_mote_dir__") prelude_module_path ["init", "src", "__no_such_module__.mo"];
     match r {
         Option.none => return true,
         Option.some _ => return false
@@ -9782,7 +9816,7 @@ def test_load_module_decls_at_reads_the_path_it_is_given : IO Bool := do {
     // `init/src/prelude.mo` is the CWD-relative spelling and so names a
     // file only from the checkout root. Resolving it first keeps the point
     // -- the LOADER is path-driven -- and holds from inside a mote too.
-    let resolved <- resolve_module_file "" prelude_module_path;
+    let resolved <- resolve_module_file (Path.unsafe ".") prelude_module_path;
     match resolved {
         Option.none => return false,
         Option.some p => do {
@@ -9800,7 +9834,7 @@ def test_load_module_decls_at_reads_the_path_it_is_given : IO Bool := do {
 /// change the path everything already takes.
 #[test]
 def test_load_module_decls_still_resolves_then_reads : IO Bool := do {
-    let decls <- load_module_decls "" prelude_module_path;
+    let decls <- load_module_decls (Path.unsafe ".") prelude_module_path;
     match decls {
         Option.none => return false,
         Option.some ds => return (I64.gt (List.length ds) 0)
