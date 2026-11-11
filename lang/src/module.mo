@@ -91,7 +91,7 @@ use lib::use_completeness {use_completeness_errors}
 // for why the helpers gate themselves and why `bench_step` below prints
 // through `timing_line`).
 use std::log {module_line, timing_line}
-use std::list {List.any, List.contains_by, List.filter, List.intercalate, List.length, Show}
+use std::list {List.any, List.contains_by, List.filter, List.intercalate, Show}
 use std::path {Path, join_path_segments, path_segments_go}
 use std::show {Show}
 // `ScopeData.def_refs` is a `std.map` `HashMap ModulePath ScopeDef` (see

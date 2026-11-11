@@ -18,7 +18,7 @@ use std::map {
     HashMap.bucket_of, HashMap.empty_buckets, HashMap.get_bucket,
     HashMap.merge_buckets, HashMap.set_bucket, HashMap.to_list, map,
 }
-use std::list {List.intercalate, List.length}
+use std::list {List.intercalate}
 use init::copy {Copy}
 use lib::name_text {unqualify_def_name}
 

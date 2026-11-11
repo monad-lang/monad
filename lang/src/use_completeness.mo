@@ -59,7 +59,6 @@ use lib::typecheck::macro_queue {
     DeriveHandlerReg, derive_handler_regs_of_decls, derive_targets_of_args,
 }
 use std::map {HashMap}
-use std::list {List.length}
 
 // ─── String helpers: `::` and `.` are the name grammar's only separators ──
 //

@@ -24,7 +24,7 @@ def watch_dir : String :=
 def test_watch_native_end_to_end : IO Bool :=
     let dir := watch_dir in
     let lit := "\"" ++ dir ++ "\"" in
-    let source := r#"use std::list {List.length}
+    let source := r#"use std::list {}
 use std::path {Path}
 use std::process {exec_cmd}
 use std::stream {FdStream, Stream}

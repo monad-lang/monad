@@ -1,5 +1,5 @@
 use std::path {Path}
-use std::list {List.length}
+use std::list {}
 open IO {
     println, read_file, file_exists,
     write_file, read_stdin_exact, write_stdout, flush_stdout, write_stderr,
