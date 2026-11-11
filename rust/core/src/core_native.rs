@@ -1880,10 +1880,22 @@ impl BufElem {
     }
   }
 
+  /// Bytes per element. Must agree with `buf_elem_size` in
+  /// `runtime/src/runtime_core.c` BYTE FOR BYTE -- that agreement is the
+  /// entire point of having both backends, and a stride disagreement is
+  /// exactly the class of divergence a differential oracle is for.
+  ///
+  /// Every kind is named and the fallback is the SMALLEST stride, matching
+  /// the C. `U8` used to fall into a `_ => 8` arm here AND a
+  /// `default: return 8` there, so both backends sized a u8 element at
+  /// eight bytes while every accessor addressed one -- a bug that was
+  /// identical on both sides, which is why a differential test could not
+  /// have caught it and a `copy_into` at a nonzero offset did.
   fn bytes(self) -> usize {
     match self {
+      BufElem::I64 | BufElem::F64 => 8,
       BufElem::F32 | BufElem::I32 => 4,
-      _ => 8,
+      BufElem::U8 => 1,
     }
   }
 }
