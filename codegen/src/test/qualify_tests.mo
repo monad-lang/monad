@@ -1,5 +1,6 @@
 /// Tests moved out of `codegen::qualify` so the production module stays readable.
 
+use std::path {Path}
 use llvm::strmap {str_map_empty, str_map_insert, str_map_lookup}
 use std::bench {Bench.now}
 use lang::types {
@@ -124,8 +125,8 @@ def test_qualify_rewrites_struct_field_defaults : IO Bool := do {
 #[test]
 def test_qualify_same_file_under_two_paths_is_not_ambiguous : IO Bool := do {
     let decls := List.cons (qtest_def "shared" "x") List.empty;
-    let short_ := ModuleInfo.mk (bare_modpath "string") "init/src/string.mo" decls;
-    let long_ := ModuleInfo.mk (bare_modpath "init.string") "init/src/string.mo" decls;
+    let short_ := ModuleInfo.mk (bare_modpath "string") (Path.unsafe "init/src/string.mo") decls;
+    let long_ := ModuleInfo.mk (bare_modpath "init.string") (Path.unsafe "init/src/string.mo") decls;
     let caller := qtest_module "user" (List.cons (qtest_def "caller" "shared") List.empty);
     let r <- qualify_modules false (List.cons short_ (List.cons long_ (List.cons caller List.empty)));
     match r {
@@ -340,7 +341,7 @@ def test_ambiguous_owner_msg_spells_module_paths_with_colons : Bool :=
 
 #[partial]
 def qtest_module (name : String) (decls : List Decl) : ModuleInfo :=
-    ModuleInfo.mk (bare_modpath name) "" decls
+    ModuleInfo.mk (bare_modpath name) (Path.unsafe "") decls
 
 /// `def <name> := <body_ref>` -- a def whose whole body is one bare
 /// reference, which is all these tests need to watch a reference move.

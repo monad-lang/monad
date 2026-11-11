@@ -10,6 +10,7 @@
 /// Status codes (the worker maps them to names):
 ///   0 ok, 1 parse, 2 type/load, 3 lower, 4 eval, 5 fuel, 6 internal, 7 size.
 
+use std::path {Path}
 use lang::core_eval {CoreEvalError}
 use lang::module {
     ModuleInfo, ModuleSource, init_module_path, make_module_info,
@@ -106,7 +107,7 @@ pub def run_source (sources : List SourceModule) (source : String) : IO Outcome 
     }
 
 def run_parsed (sources : List SourceModule) (decls : List Decl) : IO Outcome := do {
-    let main : ModuleInfo := make_module_info scratch_module_path "scratchpad.mo" decls;
+    let main : ModuleInfo := make_module_info scratch_module_path (Path.unsafe "scratchpad.mo") decls;
     let module_sources : List ModuleSource := to_sources sources List.empty;
     let options : EvalOptions :=
         { fuel := eval_fuel, depth_limit := eval_depth, affine := AffineMode.affine_warn,

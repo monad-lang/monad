@@ -74,6 +74,7 @@
 /// is the caller's job (`decl_texts_of_source` is public for exactly that
 /// reason). It keeps `nav_at` usable from a pure test and keeps the
 /// filesystem out of a module whose whole subject is name resolution.
+use std::path {Path}
 use lang::module {
     ModuleInfo, ModuleInfoCache, RangedFileCheck, class_decl_name, struct_decl_name,
     inductive_decl_name, located_decl_list, located_decl_spans, module_info_cache_entries,
@@ -158,7 +159,7 @@ def nav_def_name (sd : ScopeDef) : NamePath := sd.name
 
 def nav_def_module (sd : ScopeDef) : ModulePath := sd.module
 
-def nav_info_file_path (info : ModuleInfo) : String := info.file_path
+def nav_info_file_path (info : ModuleInfo) : String := Path.to_string info.file_path
 
 /// An inductive's declared name, rendered the way `DeclText.name` renders
 /// it for the same declaration.

@@ -41,6 +41,7 @@
 /// `scope_*` family) are wired now, so
 /// `std/src/concurrent/{fiber,combine,poll}_test.mo` run through this
 /// driver; the gate remains the guard for any future unwired native.
+use std::path {Path}
 use lib::decls {filter_reachable_decls}
 open IO {get_env}
 use lib::qualify {qualified_def_name_str, qualify_modules}
@@ -605,7 +606,7 @@ pub def compile_loaded_modules_to_test_ir (loaded : LoadedModules) (result_path 
     } else do {
         let prefix_ : String := display_prefix_of target_mi.path;
         let specs : List TestSpec := classify_test_defs prefix_ test_defs;
-        let driver_source := synthesize_test_driver_source specs target_mi.file_path result_path;
+        let driver_source := synthesize_test_driver_source specs (Path.to_string target_mi.file_path) result_path;
         match try_parse_decls driver_source {
             Option.some driver_decls =>
                 compile_test_driver_with loaded driver_decls (List.length specs) triple,
@@ -640,7 +641,7 @@ def compile_test_driver_with (loaded : LoadedModules) (driver_decls : List Decl)
     // its body calls real library defs (`I64.to_string`,
     // `++`) by bare name.
     let driver_mp : ModulePath := ModulePath.mk (List.cons (Identifier.id "__test_driver") List.empty);
-    let driver_mod : ModuleInfo := ModuleInfo.mk driver_mp "" driver_decls;
+    let driver_mod : ModuleInfo := ModuleInfo.mk driver_mp (Path.unsafe "") driver_decls;
     let aliased_mods := resolve_open_aliases_in_modules (List.append (get_loaded_all loaded) (List.cons driver_mod List.empty));
     // A target file may define its own `main` alongside its
     // tests; rename it out of the way -- see `rename_user_main`

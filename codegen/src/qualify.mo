@@ -12,6 +12,7 @@
 /// `inductive_bare_name`, `-> String` in one module and `-> Identifier`
 /// in another -- put a raw `char*` into a `DebugName.named` slot and
 /// crashed the self-compiled compiler. See AGENTS.md items 18/19.
+use std::path {Path}
 use llvm::strmap {str_map_empty, str_map_insert, str_map_lookup}
 use std::bench {Bench.now}
 use lang::types {
@@ -674,15 +675,16 @@ def best_path_per_file (modules : List ModuleInfo) (acc : HashMap String String)
         List.cons m rest =>
             match m {
                 ModuleInfo.mk path file_path _decls =>
-                    if String.beq file_path ""
+                    let file := Path.to_string file_path in
+                    if String.beq file ""
                     then best_path_per_file rest acc
                     else
                         let candidate := show_module_path path in
-                        let next := match str_map_lookup file_path acc {
-                            Option.none => str_map_insert file_path candidate acc,
+                        let next := match str_map_lookup file acc {
+                            Option.none => str_map_insert file candidate acc,
                             Option.some current =>
                                 if I64.gt (String.length candidate) (String.length current)
-                                then str_map_insert file_path candidate acc
+                                then str_map_insert file candidate acc
                                 else acc,
                         } in
                         best_path_per_file rest next,
@@ -696,19 +698,20 @@ def keep_canonical_modules (modules : List ModuleInfo) (best : HashMap String St
         List.cons m rest =>
             match m {
                 ModuleInfo.mk path file_path _decls =>
-                    if String.beq file_path ""
+                    let file := Path.to_string file_path in
+                    if String.beq file ""
                     then List.cons m (keep_canonical_modules rest best seen)
                     else
-                        let is_best := match str_map_lookup file_path best {
+                        let is_best := match str_map_lookup file best {
                             Option.some b => String.beq b (show_module_path path),
                             Option.none => true,
                         } in
-                        let already := match str_map_lookup file_path seen {
+                        let already := match str_map_lookup file seen {
                             Option.some _ => true,
                             Option.none => false,
                         } in
                         if is_best && Bool.not already
-                        then List.cons m (keep_canonical_modules rest best (str_map_insert file_path true seen))
+                        then List.cons m (keep_canonical_modules rest best (str_map_insert file true seen))
                         else keep_canonical_modules rest best seen,
             },
     }

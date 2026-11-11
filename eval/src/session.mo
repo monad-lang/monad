@@ -12,6 +12,7 @@
 // ordinary declaration, so it joins the session source and the next step's
 // filesystem walk resolves it exactly as `monad check` would.
 
+use std::path {Path}
 use lang::types {AffineMode, Decl, Identifier, ModulePath}
 use lang::module {
     ModuleInfo, ModuleInfoCache, elaborate_loaded_modules_from_main,
@@ -215,7 +216,7 @@ def step_decls (s : EvalSession) (candidate : String) (decls : List Decl)
                 let rewritten <- rewrite_lib_aliases_of file_path decls;
                 let main : ModuleInfo :=
                     make_module_info (ModulePath.mk [Identifier.id module_name])
-                        file_path rewritten;
+                        (Path.unsafe file_path) rewritten;
                 let ec <- elaborate_loaded_modules_from_main main (Option.some candidate)
                     false cache false;
                 match ec.elaborated {
@@ -256,7 +257,7 @@ def step_expr (s : EvalSession) (candidate : String) (decls : List Decl)
                 let rewritten <- rewrite_lib_aliases_of file_path decls;
                 let main : ModuleInfo :=
                     make_module_info (ModulePath.mk [Identifier.id module_name])
-                        file_path rewritten;
+                        (Path.unsafe file_path) rewritten;
                 let lc <- load_modules_from_main main cache false;
                 match lc.loaded {
                     Result.err e => do {
@@ -310,7 +311,7 @@ def step_type (s : EvalSession) (candidate : String) (decls : List Decl)
                 let rewritten <- rewrite_lib_aliases_of file_path decls;
                 let main : ModuleInfo :=
                     make_module_info (ModulePath.mk [Identifier.id module_name])
-                        file_path rewritten;
+                        (Path.unsafe file_path) rewritten;
                 let lc <- load_modules_from_main main cache false;
                 match lc.loaded {
                     Result.err e => do {

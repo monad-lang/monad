@@ -605,6 +605,11 @@ def string_find_last_slash_go (s : String) (idx : I64) : I64 :=
 pub def extract_directory (file_path : String) : String :=
     raw_parent_dir file_path
 
+/// `extract_directory`'s `Path` twin: a typed path's directory as the
+/// `String` the mote/TOML APIs still take.
+pub def path_directory (p : Path) : String :=
+    extract_directory (Path.to_string p)
+
 /// Derive a module name from a file path — e.g. "examples/foo.mo" -> "foo".
 /// Factored out of `load_file_modules` (below) so `check_file` can reuse
 /// the exact same convention without a caller-supplied `mod_name`.
@@ -1587,7 +1592,7 @@ def collect_dep_module_infos (to_visit : List PendingModule) (visiting : List Mo
                         // `init/src/string.mo`) lives here, now carried
                         // per queued entry instead of in one rolling
                         // variable.
-                        let dep_base_dir : String := extract_directory info.file_path;
+                        let dep_base_dir : String := path_directory info.file_path;
                         let dep_decls : List Decl := info.decl_list;
                         let dep_deps : List ModulePath := extract_use_decls dep_decls;
                         let new_to_visit : List PendingModule :=
@@ -3868,7 +3873,7 @@ def test_try_parse_decls_strict_err_includes_path : Bool :=
 
 pub struct ModuleInfo {
     path : ModulePath,
-    file_path : String,
+    file_path : Path,
     decl_list : List Decl,
 }
 
@@ -3952,7 +3957,7 @@ def show_module_info (m : ModuleInfo) : String :=
     match m {
         mk path file decl_list =>
             "module: " ++ Show.show path ++
-            "\n\tpath: " ++ file ++
+            "\n\tpath: " ++ Path.to_string file ++
             "\n\tdecls: " ++ Show.show (List.map Decl.to_name decl_list : List NamePath)
     }
 
@@ -3975,7 +3980,7 @@ pub struct LoadedModules {
 /// caller (the browser REPL's engine) parses its own sources and hands the
 /// result to `elaborate_loaded_modules_pure`; this keeps the constructor
 /// spelling in one place and makes the loader's field order explicit.
-pub def make_module_info (path : ModulePath) (file_path : String) (decls : List Decl) : ModuleInfo :=
+pub def make_module_info (path : ModulePath) (file_path : Path) (decls : List Decl) : ModuleInfo :=
     ModuleInfo.mk path file_path decls
 
 /// The `LoadedModules` a loader would have produced, from a main module and
@@ -4039,7 +4044,7 @@ pub def module_info_of_source (ms : ModuleSource) : Result String ModuleInfo :=
                 Result.err e =>
                     Result.err (String.concat file_path (String.concat ": " e)),
                 Result.ok decls =>
-                    Result.ok (make_module_info path file_path (rewrite_lib_uses mote decls)),
+                    Result.ok (make_module_info path (Path.unsafe file_path) (rewrite_lib_uses mote decls)),
             },
     }
 
@@ -4356,7 +4361,7 @@ pub def load_module_with_info (base_dir : String) (mp : ModulePath) : IO (Option
                     // `char*` -- a SIGSEGV in `__strlen_avx2` on the very first
                     // module load, which is every `check`/`compile` this
                     // compiler runs on itself.
-                    let info : ModuleInfo := { path := mp, file_path := file_path, decl_list := decl_list };
+                    let info : ModuleInfo := { path := mp, file_path := Path.unsafe file_path, decl_list := decl_list };
                     return (Option.some info)
                 },
                 Option.none => do { return Option.none }
@@ -4391,7 +4396,7 @@ def load_module_with_info_from_source (base_dir : String) (mp : ModulePath) (sou
             let decl_list <- resolve_lib_alias_decls_opt actual_base_dir raw_decls;
             match decl_list {
                 Option.some decl_list => do {
-                    let info : ModuleInfo := { path := mp, file_path := file_path, decl_list := decl_list };
+                    let info : ModuleInfo := { path := mp, file_path := Path.unsafe file_path, decl_list := decl_list };
                     return (Option.some info)
                 },
                 Option.none => do { return Option.none }
@@ -4563,9 +4568,9 @@ def inline_mote_of_decls (dir : String) (decl_list : List Decl) : Option MoteMan
 /// The mote a module belongs to: an inline `#![mote { ... }]` attribute
 /// wins when present, otherwise the enclosing `mote.toml`.
 def mote_of_module (info : ModuleInfo) : IO (Option MoteManifest) := do {
-    match inline_mote_of_decls (extract_directory info.file_path) info.decl_list {
+    match inline_mote_of_decls (path_directory info.file_path) info.decl_list {
         Option.some m => return (Option.some m),
-        Option.none => Mote.discover (extract_directory info.file_path)
+        Option.none => Mote.discover (path_directory info.file_path)
     }
 }
 
@@ -4600,12 +4605,12 @@ def ownership_refusal_go (mods : List ModuleInfo) (seen : List String) : IO (Opt
     match mods {
         List.empty => return Option.none,
         List.cons info rest => do {
-            let dir : String := extract_directory info.file_path;
+            let dir : String := path_directory info.file_path;
             if List.contains_by (fn a b => String.beq a b) dir seen then do {
                 let r <- ownership_refusal_go rest seen;
                 return r
             } else do {
-                let mode <- Mote.affine_mode_of_path info.file_path;
+                let mode <- Mote.affine_mode_of_path (Path.to_string info.file_path);
                 match mode {
                     AffineMode.affine_warn =>
                         return (Option.some (String.concat "error: " (String.concat dir " is [affine] mode = \"warn\"; an ownership build requires error mode"))),
@@ -4638,7 +4643,7 @@ def validate_mote_attr_position (info : ModuleInfo) : List String :=
         List.cons first rest =>
             if is_mote_attr_decl first
             then List.empty
-            else misplaced_mote_attr info.file_path rest
+            else misplaced_mote_attr (Path.to_string info.file_path) rest
     }
 
 def misplaced_mote_attr (file : String) (decl_list : List Decl) : List String :=
@@ -4877,7 +4882,7 @@ def unknown_use_name_error (info : ModuleInfo) (path : ModulePath) (n : String) 
     let p : String := module_path_to_string path in
     String.concat_all [
         "error: `", p, "` declares no `", n, "`\n",
-        "  `use ", p, " {", n, "}` in ", info.file_path, "\n",
+        "  `use ", p, " {", n, "}` in ", Path.to_string info.file_path, "\n",
         use_name_hint p n dotted
     ]
 
@@ -4996,7 +5001,7 @@ def check_one_use_spelling (m : Option MoteManifest) (info : ModuleInfo) (u : Mo
                         let known <- head_names_mote m head;
                         if known then return List.empty
                         else do {
-                            let owner <- bare_use_owner info.file_path head;
+                            let owner <- bare_use_owner (Path.to_string info.file_path) head;
                             return [bare_use_error info u owner]
                         }
                     }
@@ -5051,7 +5056,7 @@ def owning_mote_name (file : String) : IO (Option String) := do {
 def bare_use_error (info : ModuleInfo) (u : ModulePath) (owner : Option String) : String :=
     String.concat_all [
         "error: `use ", module_path_to_string u, "` does not name a mote\n",
-        "  `use ", module_path_to_string u, "` in ", info.file_path,
+        "  `use ", module_path_to_string u, "` in ", Path.to_string info.file_path,
         " is a module path relative to the importing file, so which module it names depends on where that file sits\n",
         "  hint: ", bare_use_hint (module_path_to_string u) owner,
     ]
@@ -5083,8 +5088,8 @@ def bare_use_hint (head : String) (owner : Option String) : String :=
 /// spellings and nothing else.
 def probe_module_info (source : String) : ModuleInfo :=
     match try_parse_decls source {
-        Option.some decls => ModuleInfo.mk (ModulePath.mk [Identifier.id "probe"]) "probe.mo" decls,
-        Option.none => ModuleInfo.mk (ModulePath.mk [Identifier.id "probe"]) "probe.mo" List.empty
+        Option.some decls => ModuleInfo.mk (ModulePath.mk [Identifier.id "probe"]) (Path.unsafe "probe.mo") decls,
+        Option.none => ModuleInfo.mk (ModulePath.mk [Identifier.id "probe"]) (Path.unsafe "probe.mo") List.empty
     }
 
 #[test]
@@ -5169,7 +5174,7 @@ def probe_targets (targets : List (Pair ModulePath String)) (acc : List ModuleIn
             match t {
                 Pair.pair path src =>
                     match try_parse_decls src {
-                        Option.some decls => probe_targets rest (List.cons (ModuleInfo.mk path "target.mo" decls) acc),
+                        Option.some decls => probe_targets rest (List.cons (ModuleInfo.mk path (Path.unsafe "target.mo") decls) acc),
                         Option.none => Option.none
                     }
             }
@@ -5284,7 +5289,7 @@ def test_a_use_of_an_unloaded_module_is_left_alone : Bool :=
 def prelude_import_error (info : ModuleInfo) (u : ModulePath) : String :=
     String.concat_all [
         "error: `use ", module_path_to_string u, "` names the prelude, which is ambient\n",
-        "  every file already sees `prelude` -- the loader seeds it into each module's closure, ", info.file_path, " included\n",
+        "  every file already sees `prelude` -- the loader seeds it into each module's closure, ", Path.to_string info.file_path, " included\n",
         "  hint: delete the `use ", module_path_to_string u, "` line",
     ]
 
@@ -5369,7 +5374,7 @@ def undeclared_mote_error (m : MoteManifest) (info : ModuleInfo) (u : ModulePath
     (head : String) (found_dir : String) : String :=
     String.concat_all [
         "error: mote `", head, "` is not a declared dependency of `", m.name, "`\n",
-        "  `use ", module_path_to_string u, "` in ", info.file_path,
+        "  `use ", module_path_to_string u, "` in ", Path.to_string info.file_path,
         " requires mote `", head, "`, which is at `", found_dir, "`\n",
         "  hint: add [dependencies.", head, "] ", undeclared_mote_path_clause m.dir found_dir,
         " to ", raw_path_join m.dir "mote.toml",
@@ -5512,7 +5517,7 @@ def motes_of_infos (infos : List ModuleInfo) (acc : List MoteManifest) : IO (Lis
     match infos {
         List.empty => return acc,
         List.cons info rest => do {
-            let found <- Mote.discover (extract_directory info.file_path);
+            let found <- Mote.discover (path_directory info.file_path);
             let next : List MoteManifest := push_maybe found acc;
             motes_of_infos rest next
         }
@@ -5676,7 +5681,7 @@ def world_of_loaded (loaded : LoadedModules) : List (Pair ModulePath (List Decl)
 /// The pure half of the gate: the walk's findings turned into the
 /// load's own result, first-error-wins.
 def apply_completeness_errors (loaded : LoadedModules) (main : ModuleInfo) (here : Option String) (pre : List Decl) : Result String LoadedModules :=
-    match use_completeness_errors main.file_path main.path here pre main.decl_list (world_of_loaded loaded) {
+    match use_completeness_errors (Path.to_string main.file_path) main.path here pre main.decl_list (world_of_loaded loaded) {
         List.empty => Result.ok loaded,
         List.cons e _ => Result.err e,
     }
@@ -5697,7 +5702,7 @@ def gate_use_completeness (source : Option String) (r : Result String LoadedModu
         Result.err e => return (Result.err e),
         Result.ok loaded => do {
             let main : ModuleInfo := get_loaded_main loaded;
-            let pre_opt : Option (List Decl) <- pre_expansion_decls source main.file_path;
+            let pre_opt : Option (List Decl) <- pre_expansion_decls source (Path.to_string main.file_path);
             match pre_opt {
                 Option.none => return (Result.ok loaded),
                 Option.some pre => do {
@@ -5707,11 +5712,11 @@ def gate_use_completeness (source : Option String) (r : Result String LoadedModu
                     // mote path (`<mote>::x`), which is what the world's
                     // owner paths are keyed by.
                     let rewritten : List Decl <-
-                        resolve_lib_alias_decls (extract_directory main.file_path) pre;
+                        resolve_lib_alias_decls (path_directory main.file_path) pre;
                     // The consumer's mote, from its manifest: the entry
                     // module is named by its file stem (`copy_tests`), not
                     // mote-qualified, so it cannot be read off `main.path`.
-                    let here <- owning_mote_name main.file_path;
+                    let here <- owning_mote_name (Path.to_string main.file_path);
                     return (apply_completeness_errors loaded main here rewritten)
                 },
             }
@@ -5887,7 +5892,7 @@ def load_file_modules_cached_go (file_path : String) (source : Option String) (c
 pub def load_modules_from_main (main : ModuleInfo) (cache : ModuleInfoCache) (verbose : Bool) : IO LoadedAndCache :=
     match main {
         ModuleInfo.mk mp_path file_path decl_list => do {
-            let main_base_dir : String := extract_directory file_path;
+            let main_base_dir : String := path_directory file_path;
             let direct_deps : List ModulePath := extract_use_decls decl_list;
             // `List.append`, not `++`: `Append.append` needs an
             // `Append (List A)` instance that is absent from some
@@ -6128,7 +6133,7 @@ def priv_module_info : ModuleInfo :=
     let shown : Def := Def.mk (NamePath.mk [Identifier.id "shown"]) Term.hole Term.hole
         ([] : List TypeConstraint) ([] : List Attribute) Visibility.package_private List.empty in
     { path := owner,
-        file_path := "Owner.mo",
+        file_path := Path.unsafe "Owner.mo",
         decl_list := [Decl.def_d hidden, Decl.def_d shown] }
 
 def priv_flatten_names (target : ModulePath) : List String :=
@@ -7270,7 +7275,7 @@ def dummy_loaded_target (name : String) (group_key : String) : LoadedTarget :=
     let mp : ModulePath :=
         ModulePath.mk (List.cons (Identifier.id name) List.empty) in
     let file_name : String := String.concat name ".mo" in
-    let mi : ModuleInfo := ModuleInfo.mk mp file_name List.empty in
+    let mi : ModuleInfo := ModuleInfo.mk mp (Path.unsafe file_name) List.empty in
     let lm : LoadedModules := LoadedModules.mk mi (List.cons mi List.empty) in
     let t : LoadedTarget := { file := file_name, loaded := lm, group := group_key } in
     t
@@ -9659,7 +9664,7 @@ def test_undeclared_mote_error_names_working_directory_paths : Bool :=
         Option.none => false,
         Option.some m =>
             let info : ModuleInfo :=
-                ModuleInfo.mk (ModulePath.mk [Identifier.id "lib"]) "src/lib.mo" List.empty in
+                ModuleInfo.mk (ModulePath.mk [Identifier.id "lib"]) (Path.unsafe "src/lib.mo") List.empty in
             let u : ModulePath := ModulePath.mk [Identifier.id "foo", Identifier.id "lib"] in
             let msg : String := undeclared_mote_error m info u "foo" "foo" in
             if String.contains msg "to mote.toml"
@@ -9679,7 +9684,7 @@ def test_undeclared_mote_error_names_a_nested_manifest : Bool :=
         Option.none => false,
         Option.some m =>
             let info : ModuleInfo :=
-                ModuleInfo.mk (ModulePath.mk [Identifier.id "lib"]) "greet/src/lib.mo" List.empty in
+                ModuleInfo.mk (ModulePath.mk [Identifier.id "lib"]) (Path.unsafe "greet/src/lib.mo") List.empty in
             let u : ModulePath := ModulePath.mk [Identifier.id "foo", Identifier.id "lib"] in
             let msg : String := undeclared_mote_error m info u "foo" "foo" in
             if String.contains msg "to greet/mote.toml"

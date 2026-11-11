@@ -1,3 +1,4 @@
+use std::path {Path}
 use llvm::strmap {str_map_empty, str_map_insert, str_map_lookup}
 use std::bench {Bench.now, Bench.report_since}
 // `str_map_*` below is a `std.map` `HashMap String V`, so this module
@@ -6181,7 +6182,7 @@ pub def compile_loaded_modules_to_ir (loaded : LoadedModules) (verbose : Bool) :
 #[partial]
 def module_file_pairs (root : Option String) (mods : List ModuleInfo) (acc : List (Pair String String)) : List (Pair String String) := match mods {
     List.empty => acc,
-    List.cons m rest => module_file_pairs root rest (List.append acc (List.cons (Pair.pair (show_module_path m.path) (drop_root_prefix root m.file_path)) List.empty)),
+    List.cons m rest => module_file_pairs root rest (List.append acc (List.cons (Pair.pair (show_module_path m.path) (drop_root_prefix root (Path.to_string m.file_path))) List.empty)),
 }
 
 /// `p` with the toolchain root's prefix removed, and unchanged when it is

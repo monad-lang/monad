@@ -35,6 +35,7 @@
 /// Field reads go through typed accessor defs (`nt_*`), never inline, per
 /// this repository's recorded `#[test]` plus struct-field codegen hazard.
 /// The `nt_` prefix keeps whole-program scope clean.
+use std::path {Path}
 use std::test {Test.write_fixture}
 use parsec::core {fail, success}
 use lang::module {
@@ -337,7 +338,7 @@ def test_a_def_in_another_module_answers_its_file : IO Bool := do {
             let no_parent : Option Scope := Option.none;
             let scope : Scope := { module_id := nt_here_module, scope := sd, parent := no_parent, incomplete_match_ok := false };
             let no_ranges : List DeclText := List.empty;
-            let info : ModuleInfo := ModuleInfo.mk nt_other_module nt_other_file decls;
+            let info : ModuleInfo := ModuleInfo.mk nt_other_module (Path.unsafe nt_other_file) decls;
             let cache : ModuleInfoCache := module_info_cache_insert nt_other_module info module_info_cache_empty;
             let no_decls : List Decl := List.empty;
             match nav_at scope no_ranges no_decls cache "far" {
@@ -526,7 +527,7 @@ def test_a_struct_in_another_module_renders_and_answers_its_file : IO Bool := do
             let scope : Scope := { module_id := nt_here_module, scope := sd, parent := no_parent, incomplete_match_ok := false };
             let no_ranges : List DeclText := List.empty;
             let no_decls : List Decl := List.empty;
-            let info : ModuleInfo := ModuleInfo.mk nt_other_module nt_other_file decls;
+            let info : ModuleInfo := ModuleInfo.mk nt_other_module (Path.unsafe nt_other_file) decls;
             let cache : ModuleInfoCache := module_info_cache_insert nt_other_module info module_info_cache_empty;
             match nav_at scope no_ranges no_decls cache "ZzFar" {
                 Option.none => do { println "NO TARGET for a struct in another module"; return false },
@@ -553,7 +554,7 @@ def test_types_and_classes_in_another_module_answer_its_file : IO Bool := do {
             let sd : ScopeData := build_scope_from_decls nt_other_module decls;
             let no_parent : Option Scope := Option.none;
             let scope : Scope := { module_id := nt_here_module, scope := sd, parent := no_parent, incomplete_match_ok := false };
-            let info : ModuleInfo := ModuleInfo.mk nt_other_module nt_other_file decls;
+            let info : ModuleInfo := ModuleInfo.mk nt_other_module (Path.unsafe nt_other_file) decls;
             let cache : ModuleInfoCache := module_info_cache_insert nt_other_module info module_info_cache_empty;
             let ty <- nt_far_answers scope cache "ZzFarColor" "type" "ZzFarColor";
             let ctor <- nt_far_answers scope cache "zz_far_red" "constructor" "ZzFarColor";
