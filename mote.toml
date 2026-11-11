@@ -82,12 +82,16 @@ members = [
   "motes/markdown",
   "motes/gen",
   "motes/acorn",
+  "motes/docgen",
   "motes/ply",
 ]
 
 # Shared dependency sources, inherited by members with `workspace = true`.
 # An inherited `path` is ROOT-relative (the one difference from a member's own
 # entry). See plans/packaging/workspace-dependencies.md.
+
+[workspace.dependencies.acorn]
+path = "motes/acorn"
 
 [workspace.dependencies.build]
 path = "build"

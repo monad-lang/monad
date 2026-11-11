@@ -1,0 +1,56 @@
+# Docgen: API reference pages for the motes, generated from their sources.
+#
+# The extraction half of `monad doc` (acorn is the rendering half): read a
+# mote's `src/*.mo`, take every declaration's own text and `///` doc comment,
+# and build the page model. Rendering goes through acorn's `Site.write_pages`
+# -- the same broken-link and duplicate-path gate the book's own pages pass --
+# so a doc page cannot drift from the site's link discipline.
+#
+# The plan is plans/implementations/2026-11-05-acorn-docs-site.md (Phase 5/8).
+#
+# No `[affine]` table: new code is written affine-clean.
+
+[mote]
+name = "docgen"
+version = "0.1.0"
+edition = "2026"
+
+[dependencies.init]
+workspace = true
+
+[dependencies.std]
+workspace = true
+
+# Declaration ranges and spans, the compiler's own outline of a file.
+[dependencies.lang]
+workspace = true
+
+# `decl_texts_of_source` -- the trimmed declaration text and the name's own
+# range -- plus `line_index_of_source` for the doc-comment scan. Tooling that
+# the compiler does not need lives here, not in `lang`.
+[dependencies.toolkit]
+workspace = true
+
+# The gate and writer for the rendered pages.
+[dependencies.acorn]
+workspace = true
+
+# The HTML node model the renderer builds its page bodies from.
+[dependencies.xml_html]
+workspace = true
+
+# `llvm` and `runtime` are declared because `lang::module` -- where `Diagnostic`
+# lives -- is not self-contained the way `lang::json` is: the compiler's own
+# modules reach into codegen, codegen reaches into `llvm`, and the IR type
+# names come from `llvm::strmap`. Without these the module graph fails to
+# resolve with `module not found: llvm.strmap`, which names the symptom and
+# not the cause. `motes/toolkit` declares the same pair for the same reason.
+[dependencies.llvm]
+workspace = true
+
+[dependencies.runtime]
+workspace = true
+
+# The command-line surface of the `docgen` binary (`docgen build <mote>...`).
+[dependencies.clap]
+workspace = true
