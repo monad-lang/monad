@@ -16,7 +16,23 @@
 #      `convert-func-to-llvm{use-bare-ptr-memref-call-conv=1}` each becomes
 #      a bare pointer, so the result is a plain C function that
 #      `fixtures/mlir/saxpy_caller/` reaches through `#[extern "c"]`
-#      with a `Ptr` and no new host codegen.
+#      with a `Ptr` and no new host codegen. Measured with real MLIR
+#      21.1.8, this is exactly
+#
+#          define void @saxpy(ptr noalias %0, i32 %1)
+#
+#      Two things about that, both established by running the real tool
+#      rather than by reading the docs:
+#        * The `llvm.func` SIGNATURE is what carries the convention; the
+#          lowering still rebuilds a memref descriptor LOCALLY in the body
+#          and extracts from it. That struct never crosses a call boundary,
+#          so its presence in the body is not a failure -- the signature is
+#          what gets asserted.
+#        * Dropping the flag does NOT pass a descriptor struct. It
+#          EXPLODES the descriptor into its five scalar members, giving
+#          saxpy SIX parameters. `LLVMType` could spell that, so a loose
+#          check would let the wrong ABI through silently; the assertion
+#          is an exact parameter count.
 #   3. DIAGNOSTICS BLINDNESS. `exec_cmd` returns only an exit status and a
 #      failing `mlir-opt` pipeline reports its entire signal on stderr. The
 #      last section drives a deliberately malformed pipeline and asserts
@@ -42,7 +58,11 @@ while [ $# -gt 0 ]; do
     case "$1" in
         --inventory) inventory_only=true; shift ;;
         --require) require=true; shift ;;
-        -h|--help) sed -n '2,32p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        # The header comment block, from line 2 to the last consecutive
+        # `#` line -- NOT a hard-coded range, which silently truncates the
+        # instant the header grows (it did, adding the measured ABI note).
+        -h|--help) awk 'NR>1 && /^#/ { print; next } NR>1 { exit }' "${BASH_SOURCE[0]}" \
+                       | sed 's/^# \{0,1\}//'; exit 0 ;;
         -*) echo "error: unknown flag $1" >&2; exit 2 ;;
         *) monad="$1"; shift ;;
     esac
@@ -177,27 +197,78 @@ mlir-opt "$tmp/saxpy.llvm.mlir" -o "$tmp/saxpy.llvm.rt.mlir"
 cmp -s "$tmp/saxpy.llvm.mlir" "$tmp/saxpy.llvm.rt.mlir" \
     || fail "the lowered module does not round-trip byte-identically through mlir-opt"
 
-# The ABI, asserted on the TEXT before any toolchain downstream of it can
-# confuse the diagnosis. A `llvm.func` taking three bare pointers (plus the
-# i32 scalar) is the whole of Decision 3; a descriptor struct would show up
-# here as `!llvm.struct`.
-grep -q 'llvm.func @saxpy' "$tmp/saxpy.llvm.mlir" \
-    || fail "@saxpy did not lower to an llvm.func: $(head -20 "$tmp/saxpy.llvm.mlir")"
-if grep -q '!llvm.struct' "$tmp/saxpy.llvm.mlir"; then
-    fail "the lowering emitted a memref DESCRIPTOR struct -- use-bare-ptr-memref-call-conv did not apply"
-fi
-grep -q 'llvm.noalias' "$tmp/saxpy.llvm.mlir" \
-    || fail "llvm.noalias was dropped by the lowering (Decision 5's aliasing carrier)"
+# The ABI, asserted where it actually lands. Two corrections are baked in
+# here, both of them found by running real mlir-opt (2026-11-09):
+#
+#   * The `llvm.func` SIGNATURE is what carries the calling convention, and
+#     `use-bare-ptr-memref-call-conv=1` makes each memref argument a bare
+#     `!llvm.ptr`. That is Decision 3.
+#   * `!llvm.struct<...>` DOES still appear inside the body -- MLIR
+#     reconstitutes a local memref descriptor from the incoming bare pointer
+#     and `llvm.extractvalue`s out of it. That is an internal detail with no
+#     ABI consequence (it never crosses a call boundary), so asserting its
+#     absence would be wrong, not strict. The signature is the test.
+sig=$(sed -n '/llvm.func @saxpy/p' "$tmp/saxpy.llvm.mlir")
+[ -n "$sig" ] || fail "@saxpy did not lower to an llvm.func: $(head -20 "$tmp/saxpy.llvm.mlir")"
+case "$sig" in
+    *'!llvm.struct'*)
+        fail "saxpy's SIGNATURE takes a memref descriptor struct -- use-bare-ptr-memref-call-conv did not apply:$sig" ;;
+esac
+case "$sig" in
+    *'!llvm.ptr'*) ;;
+    *) fail "saxpy's signature has no bare pointer argument:$sig" ;;
+esac
+# THE decisive check, and the measured shape of the alternative. Without
+# `use-bare-ptr-memref-call-conv=1`, MLIR does NOT pass a descriptor struct
+# by value -- it EXPLODES the descriptor into its five scalar members
+# (`ptr allocated, ptr aligned, i64 offset, i64 size, i64 stride`), giving
+# saxpy six parameters instead of two. That is a different C ABI, and
+# `LLVMType` could technically spell it, which is exactly why it would slip
+# through a looser check and break `host.mo` silently. The parameter count
+# is the assertion that cannot be fooled.
+params=$(printf '%s' "$sig" | sed -E 's/.*\(//; s/\) \{$//')
+nparams=$(printf '%s' "$params" | awk -F', ' '{print NF}')
+[ "$nparams" = 2 ] \
+    || fail "saxpy takes $nparams parameters, expected 2 (one bare pointer + the i32 scalar).
+A memref descriptor that did not collapse to a bare pointer explodes into
+5 scalars, giving 6 here -- that is the ABI Decision 3 exists to avoid.
+  signature: $sig"
+# `llvm.noalias` must survive the lowering: it is Decision 5's carrier for
+# the aliasing facts linearity would supply. It is checked on the same line,
+# because that is where it has to be to reach LLVM IR.
+case "$sig" in
+    *'llvm.noalias'*) ;;
+    *) fail "llvm.noalias was dropped from saxpy's signature (Decision 5's aliasing carrier):$sig" ;;
+esac
 
 echo "== mlir-translate --mlir-to-llvmir =="
 mlir-translate --mlir-to-llvmir "$tmp/saxpy.llvm.mlir" -o "$tmp/saxpy.ll"
 [ -s "$tmp/saxpy.ll" ] || fail "mlir-translate produced no output"
-grep -q 'define.*@saxpy' "$tmp/saxpy.ll" \
-    || fail "@saxpy is not a defined function in the translated LLVM IR"
-grep -q 'define.*@total' "$tmp/saxpy.ll" \
-    || fail "@total is not a defined function in the translated LLVM IR"
-grep -q 'define.*@checksum' "$tmp/saxpy.ll" \
-    || fail "@checksum is not a defined function in the translated LLVM IR"
+# THE ACCEPTANCE, stated as the ABI it has to be. `define void @saxpy(ptr
+# noalias %0, i32 %1)` is a plain C function taking one bare pointer and one
+# integer -- which is exactly what `LLVMType` can declare and
+# `emit_extern_param_cast` already marshals. Anything else here (a by-value
+# struct, a pointer-to-struct, a hidden trailing parameter) is a different
+# ABI and Phase 2's `host.mo` would not be the ~0-codegen item the plan
+# claims.
+grep -qE '^define void @saxpy\(ptr noalias %[0-9]+, i32 %[0-9]+\)' "$tmp/saxpy.ll" \
+    || fail "saxpy is not the expected C function 'void saxpy(ptr noalias, i32)':
+$(grep -n '@saxpy' "$tmp/saxpy.ll" || echo '(no @saxpy at all)')"
+grep -qE '^define double @total\(ptr noalias %[0-9]+\)' "$tmp/saxpy.ll" \
+    || fail "total is not the expected C function 'double total(ptr noalias)':
+$(grep -n '@total' "$tmp/saxpy.ll" || echo '(no @total at all)')"
+grep -qE '^define double @checksum\(i64 %[0-9]+\)' "$tmp/saxpy.ll" \
+    || fail "checksum is not the expected C function 'double checksum(i64)'"
+grep -qE '^define i32 @answer\(\)' "$tmp/saxpy.ll" \
+    || fail "answer is not the expected C function 'i32 answer()'"
+# The descriptor really did NOT escape: no struct is passed or returned
+# across the function boundary. Asserted on `define` lines only, because the
+# body legitimately rebuilds one locally (see the note at the top of this
+# section).
+if grep -E '^define ' "$tmp/saxpy.ll" | grep -q '%struct'; then
+    fail "a memref descriptor struct crossed a function boundary:
+$(grep -E '^define ' "$tmp/saxpy.ll" | grep '%struct')"
+fi
 
 echo "== llc =="
 llc -filetype=obj "$tmp/saxpy.ll" -o "$tmp/saxpy.o"
@@ -308,5 +379,13 @@ set -e
 [ "$broken_rc" -ne 0 ] || fail "mlir-opt accepted an ill-typed module"
 grep -qi 'error' "$tmp/broken.log" \
     || fail "mlir-opt's error text was lost: $(cat "$tmp/broken.log")"
+# And the LOCATION survived, which is the point of the `loc(...)` design in
+# "Diagnostics: the pipeline's only feedback channel": real mlir-opt reports
+# `file:line:col: error:` plus the offending source line. If a diagnostic
+# ever arrives without a location, a Monad kernel author cannot be pointed
+# at their own source, and Phase 2's whole error story degrades to a
+# message with no place.
+grep -qE "broken\.mlir:[0-9]+:[0-9]+: error" "$tmp/broken.log" \
+    || fail "mlir-opt's diagnostic carried no file:line:col location: $(cat "$tmp/broken.log")"
 
 echo "ok: MLIR toolchain checks passed ($mlir_v)"

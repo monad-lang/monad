@@ -181,6 +181,18 @@ const PURE_NATIVES: &[&str] = &[
   "ptr_minus_one",
   // `ByteBuf.length` (std/bytebuf.mo): a registry lookup, no effect.
   "bytebuf_len",
+  // `std/buf.mo`'s pure `Buf E` readers. The mutating members
+  // (`buf_new_*`, `buf_set_*`, `buf_copy_into`) are `RawIO`-typed and so
+  // are never candidates here; `buf_data_ptr` is deliberately absent for
+  // the same reason `bytebuf_ptr` is -- this evaluator has no raw address
+  // to hand out.
+  "buf_len",
+  "buf_elem_kind",
+  "buf_get_i64",
+  "buf_get_f64",
+  "buf_get_f32",
+  "buf_get_i32",
+  "buf_get_u8",
   // `std_fd` (std/stream.mo): names one of the preassigned stdio slots.
   "std_fd",
 ];
@@ -481,6 +493,29 @@ pub fn exec_native(
     "inotify_rm_watch" => inotify_rm_watch(args, natives),
     "inotify_read" => inotify_read(args, natives),
     "bytebuf_len" => bytebuf_len(args),
+    // `std/buf.mo`'s `Buf E`. Same registry convention as bytebuf above,
+    // but the entry carries the element kind as well as the bytes: a
+    // `Buf F32` needs to know how to reinterpret its payload, and the
+    // kind is what `buf_elem_kind` reports and what every accessor
+    // checks before touching memory.
+    "buf_new_i64" => buf_new(args, natives, BufElem::I64),
+    "buf_new_f64" => buf_new(args, natives, BufElem::F64),
+    "buf_new_f32" => buf_new(args, natives, BufElem::F32),
+    "buf_new_i32" => buf_new(args, natives, BufElem::I32),
+    "buf_new_u8" => buf_new(args, natives, BufElem::U8),
+    "buf_len" => buf_len(args),
+    "buf_elem_kind" => buf_elem_kind(args),
+    "buf_get_i64" => buf_get(args, BufElem::I64),
+    "buf_set_i64" => buf_set(args, natives, BufElem::I64),
+    "buf_get_f64" => buf_get(args, BufElem::F64),
+    "buf_set_f64" => buf_set(args, natives, BufElem::F64),
+    "buf_get_f32" => buf_get(args, BufElem::F32),
+    "buf_set_f32" => buf_set(args, natives, BufElem::F32),
+    "buf_get_i32" => buf_get(args, BufElem::I32),
+    "buf_set_i32" => buf_set(args, natives, BufElem::I32),
+    "buf_get_u8" => buf_get(args, BufElem::U8),
+    "buf_set_u8" => buf_set(args, natives, BufElem::U8),
+    "buf_copy_into" => buf_copy_into(args, natives),
     // `CoreEvalError::UnknownNative` is keyed by id everywhere else (the
     // evaluator, which has the id on hand when the id itself is out of
     // `NativeTable`'s range); this is the one call site that only has the
@@ -1817,6 +1852,237 @@ fn bytebuf_len(args: &[Value]) -> Result<Value, CoreEvalError> {
     CoreEvalError::NativeArgError(format!("bytebuf_len: no buffer for handle {id}"))
   })?;
   Ok(Value::Lit(IrLit::Num(len as i64, NumSuffix::I64)))
+}
+
+/// `std/buf.mo`'s element kinds, matching `runtime/src/runtime_core.c`'s
+/// `MONAD_ELEM_*` constants exactly. The correspondence is the contract
+/// that makes a differential test meaningful: a `Buf F32` under this
+/// evaluator holds f32-exact `f64` payload words, exactly as the compiled
+/// `BufObj` holds `float` bytes that widen to the same numbers.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum BufElem {
+  I64,
+  F64,
+  F32,
+  I32,
+  U8,
+}
+
+impl BufElem {
+  /// The wire code `buf_elem_kind` reports; must equal `MONAD_ELEM_*`.
+  fn code(self) -> i64 {
+    match self {
+      BufElem::I64 => 0,
+      BufElem::F64 => 1,
+      BufElem::F32 => 2,
+      BufElem::I32 => 3,
+      BufElem::U8 => 4,
+    }
+  }
+
+  fn bytes(self) -> usize {
+    match self {
+      BufElem::F32 | BufElem::I32 => 4,
+      _ => 8,
+    }
+  }
+}
+
+/// One interpreted `Buf`: the element kind plus the raw payload bytes.
+/// Byte-oriented rather than `Vec<i64>` ON PURPOSE -- an `F32` element is
+/// four bytes, and storing it in an eight-byte slot would make this side's
+/// layout differ from the compiled `BufObj`'s, which is exactly the
+/// divergence a differential oracle is supposed to catch.
+struct InterpretedBuf {
+  kind: BufElem,
+  bytes: Vec<u8>,
+}
+
+impl InterpretedBuf {
+  fn element_count(&self) -> i64 {
+    (self.bytes.len() / self.kind.bytes()) as i64
+  }
+
+  /// Is `idx` inside this buffer, and does it hold `want`? The single
+  /// place the checks live, mirroring `buf_elem_ok` in the C.
+  fn ok(&self, idx: i64, want: BufElem) -> bool {
+    self.kind == want && idx >= 0 && idx < self.element_count()
+  }
+}
+
+fn buf_lookup(id: u64) -> Result<InterpretedBuf, CoreEvalError> {
+  crate::runtime::global::with::<InterpretedBuf, _>(id, |b| InterpretedBuf {
+    kind: b.kind,
+    bytes: b.bytes.clone(),
+  })
+  .ok_or_else(|| CoreEvalError::NativeArgError(format!("no buffer for handle {id}")))
+}
+
+/// `buf_new_* : I64 -> RawIO (Buf E)` -- `n` zeroed elements. A negative
+/// or absurd count clamps to empty, exactly as `buf_new` in the C does.
+fn buf_new(args: &[Value], natives: &NativeTable, kind: BufElem) -> Result<Value, CoreEvalError> {
+  let n = match args.first() {
+    Some(v) => extract_int(v)?,
+    None => {
+      return Err(CoreEvalError::NativeArgError("buf_new needs 1 arg".into()));
+    }
+  };
+  let count = if n < 0 { 0usize } else { n as usize };
+  let len = count.saturating_mul(kind.bytes());
+  let id = crate::runtime::global::register(InterpretedBuf {
+    kind,
+    bytes: vec![0u8; len],
+  });
+  raw_io_wrap(natives, handle_value(id))
+}
+
+/// `buf_len : Buf E -> I64` -- the ELEMENT count (not bytes).
+fn buf_len(args: &[Value]) -> Result<Value, CoreEvalError> {
+  let id = match args.first() {
+    Some(v) => extract_handle_id(v)?,
+    None => {
+      return Err(CoreEvalError::NativeArgError("buf_len needs 1 arg".into()));
+    }
+  };
+  let b = buf_lookup(id)?;
+  Ok(Value::Lit(IrLit::Num(b.element_count(), NumSuffix::I64)))
+}
+
+/// `buf_elem_kind : Buf E -> I64` -- the `MONAD_ELEM_*` code.
+fn buf_elem_kind(args: &[Value]) -> Result<Value, CoreEvalError> {
+  let id = match args.first() {
+    Some(v) => extract_handle_id(v)?,
+    None => {
+      return Err(CoreEvalError::NativeArgError(
+        "buf_elem_kind needs 1 arg".into(),
+      ));
+    }
+  };
+  let b = buf_lookup(id)?;
+  Ok(Value::Lit(IrLit::Num(b.kind.code(), NumSuffix::I64)))
+}
+
+/// Read element `idx` as the integer / bit-pattern word the native ABI
+/// uses. Out of range or wrong kind reads zero, matching
+/// `monad_buf_get_*`'s total behaviour so the two backends agree even on
+/// an index the caller should not have passed.
+fn buf_get(args: &[Value], want: BufElem) -> Result<Value, CoreEvalError> {
+  if args.len() < 2 {
+    return Err(CoreEvalError::NativeArgError("buf_get needs 2 args".into()));
+  }
+  let id = extract_handle_id(&args[0])?;
+  let idx = extract_int(&args[1])?;
+  let b = buf_lookup(id)?;
+  let word = if !b.ok(idx, want) {
+    0
+  } else {
+    let off = idx as usize * want.bytes();
+    match want {
+      BufElem::I64 => {
+        let mut a = [0u8; 8];
+        a.copy_from_slice(&b.bytes[off..off + 8]);
+        i64::from_le_bytes(a)
+      }
+      BufElem::F64 => {
+        let mut a = [0u8; 8];
+        a.copy_from_slice(&b.bytes[off..off + 8]);
+        // The payload IS the double's bit pattern, which is what `F64`
+        // means under this ABI (and what a memref<f64> kernel reads).
+        i64::from_le_bytes(a)
+      }
+      BufElem::F32 => {
+        let mut a = [0u8; 4];
+        a.copy_from_slice(&b.bytes[off..off + 4]);
+        // Widen the single-precision value into the double that carries
+        // an `F32` on this runtime -- the same rounding `monad_f32_bits`
+        // performs, so `set` then `get` is identity for any f32-exact
+        // value and rounds a wider one identically on both backends.
+        let f = f32::from_le_bytes(a) as f64;
+        f.to_bits() as i64
+      }
+      BufElem::I32 => {
+        let mut a = [0u8; 4];
+        a.copy_from_slice(&b.bytes[off..off + 4]);
+        i32::from_le_bytes(a) as i64
+      }
+      BufElem::U8 => b.bytes[off] as i64,
+    }
+  };
+  let suffix = match want {
+    BufElem::F32 => NumSuffix::F32,
+    BufElem::F64 => NumSuffix::F64,
+    BufElem::I32 => NumSuffix::I32,
+    BufElem::U8 => NumSuffix::U8,
+    BufElem::I64 => NumSuffix::I64,
+  };
+  Ok(Value::Lit(IrLit::Num(word, suffix)))
+}
+
+/// `buf_set_* : Buf E -> I64 -> word -> RawIO Unit`. Out of range or
+/// wrong kind writes nothing.
+fn buf_set(args: &[Value], natives: &NativeTable, want: BufElem) -> Result<Value, CoreEvalError> {
+  if args.len() < 3 {
+    return Err(CoreEvalError::NativeArgError("buf_set needs 3 args".into()));
+  }
+  let id = extract_handle_id(&args[0])?;
+  let idx = extract_int(&args[1])?;
+  let word = extract_int(&args[2])?;
+  crate::runtime::global::with_mut::<InterpretedBuf, _>(id, |b| {
+    if !b.ok(idx, want) {
+      return;
+    }
+    let off = idx as usize * want.bytes();
+    match want {
+      BufElem::I64 => b.bytes[off..off + 8].copy_from_slice(&word.to_le_bytes()),
+      BufElem::F64 => b.bytes[off..off + 8].copy_from_slice(&word.to_le_bytes()),
+      BufElem::F32 => {
+        // Narrow before storing, so the payload holds the single-precision
+        // value a kernel reads -- `monad_buf_set_f32`'s `(float)d`.
+        let f = f64::from_bits(word as u64) as f32;
+        b.bytes[off..off + 4].copy_from_slice(&f.to_le_bytes());
+      }
+      BufElem::I32 => b.bytes[off..off + 4].copy_from_slice(&(word as i32).to_le_bytes()),
+      BufElem::U8 => b.bytes[off] = (word & 0xFF) as u8,
+    }
+  })
+  .ok_or_else(|| CoreEvalError::NativeArgError(format!("buf_set: no buffer for handle {id}")))?;
+  raw_io_wrap(natives, unit_value())
+}
+
+/// `buf_copy_into : Buf E -> I64 -> Buf E -> RawIO (Buf E)` -- copy
+/// every element of `src` into `dst` at `off`, clamped to `dst`'s
+/// remaining element count. Same element kind only. `src` is cloned out
+/// first, so `dst == src` cannot double-borrow the registry (the same
+/// reason `bytebuf_copy_into` does).
+fn buf_copy_into(args: &[Value], natives: &NativeTable) -> Result<Value, CoreEvalError> {
+  if args.len() < 3 {
+    return Err(CoreEvalError::NativeArgError(
+      "buf_copy_into needs 3 args".into(),
+    ));
+  }
+  let dst_id = extract_handle_id(&args[0])?;
+  let off = extract_int(&args[1])?;
+  let src_id = extract_handle_id(&args[2])?;
+  let src = buf_lookup(src_id)?;
+  crate::runtime::global::with_mut::<InterpretedBuf, _>(dst_id, |dst| {
+    if dst.kind != src.kind || off < 0 || off > dst.element_count() {
+      return;
+    }
+    let room = dst.element_count() - off;
+    let n = src.element_count().min(room) as usize;
+    let stride = dst.kind.bytes();
+    let from = 0..n * stride;
+    let to = off as usize * stride;
+    // `copy_from_slice` panics on overlap; the two ranges are disjoint
+    // slices of ONE vector only when `dst == src`, and the compiled
+    // `memmove` allows that, so splice through a temporary to match.
+    let chunk: Vec<u8> = src.bytes[from].to_vec();
+    dst.bytes[to..to + chunk.len()].copy_from_slice(&chunk);
+  })
+  .ok_or_else(|| {
+    CoreEvalError::NativeArgError(format!("buf_copy_into: no buffer for handle {dst_id}"))
+  })?;
+  raw_io_wrap(natives, handle_value(dst_id))
 }
 
 /// `bytebuf_to_string : ByteBuf -> I64 -> RawIO String` -- the first

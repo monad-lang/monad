@@ -728,6 +728,33 @@ def native_runtime_fn_name (attrs : List Attribute) : Option NativeWrapKind :=
             else if String.beq target "bytebuf_ptr" then Option.some (NativeWrapKind.passthrough "monad_bytebuf_ptr")
             else if String.beq target "bytebuf_take_ptr" then Option.some (NativeWrapKind.passthrough "monad_bytebuf_take_ptr")
             else if String.beq target "bytebuf_len" then Option.some (NativeWrapKind.passthrough "monad_bytebuf_len")
+            // `std/buf.mo`: the typed `Buf E`, which is the `ByteBuf` heap
+            // kind generalised by `elem_kind`. SAME wrap-kind vocabulary as
+            // bytebuf -- every one of these is an i64 word either way (a
+            // buffer is a word, an index is a word, and a float is its bit
+            // pattern), so the only distinction needed is whether the def
+            // mutates. The `new_*`/`set_*`/`copy_into` families return
+            // `RawIO`, hence `raw_io_passthrough`; `len`/`elem_kind`/
+            // `get_*`/`data_ptr` are pure reads, hence `passthrough`.
+            else if String.beq target "buf_new_i64" then Option.some (NativeWrapKind.raw_io_passthrough "monad_buf_new_i64")
+            else if String.beq target "buf_new_f64" then Option.some (NativeWrapKind.raw_io_passthrough "monad_buf_new_f64")
+            else if String.beq target "buf_new_f32" then Option.some (NativeWrapKind.raw_io_passthrough "monad_buf_new_f32")
+            else if String.beq target "buf_new_i32" then Option.some (NativeWrapKind.raw_io_passthrough "monad_buf_new_i32")
+            else if String.beq target "buf_new_u8" then Option.some (NativeWrapKind.raw_io_passthrough "monad_buf_new_u8")
+            else if String.beq target "buf_len" then Option.some (NativeWrapKind.passthrough "monad_buf_len")
+            else if String.beq target "buf_elem_kind" then Option.some (NativeWrapKind.passthrough "monad_buf_elem_kind")
+            else if String.beq target "buf_get_i64" then Option.some (NativeWrapKind.passthrough "monad_buf_get_i64")
+            else if String.beq target "buf_set_i64" then Option.some (NativeWrapKind.raw_io_passthrough "monad_buf_set_i64")
+            else if String.beq target "buf_get_f64" then Option.some (NativeWrapKind.passthrough "monad_buf_get_f64")
+            else if String.beq target "buf_set_f64" then Option.some (NativeWrapKind.raw_io_passthrough "monad_buf_set_f64")
+            else if String.beq target "buf_get_f32" then Option.some (NativeWrapKind.passthrough "monad_buf_get_f32")
+            else if String.beq target "buf_set_f32" then Option.some (NativeWrapKind.raw_io_passthrough "monad_buf_set_f32")
+            else if String.beq target "buf_get_i32" then Option.some (NativeWrapKind.passthrough "monad_buf_get_i32")
+            else if String.beq target "buf_set_i32" then Option.some (NativeWrapKind.raw_io_passthrough "monad_buf_set_i32")
+            else if String.beq target "buf_get_u8" then Option.some (NativeWrapKind.passthrough "monad_buf_get_u8")
+            else if String.beq target "buf_set_u8" then Option.some (NativeWrapKind.raw_io_passthrough "monad_buf_set_u8")
+            else if String.beq target "buf_data_ptr" then Option.some (NativeWrapKind.passthrough "monad_buf_data_ptr")
+            else if String.beq target "buf_copy_into" then Option.some (NativeWrapKind.raw_io_passthrough "monad_buf_copy_into")
             // The text bridge (`ByteBuf.to_string`/`of_string`): `RawIO`
             // natives behind `.mo` wrappers, so `raw_io_passthrough` --
             // the C side hands back a bare string / `BufObj` pointer.
@@ -1017,6 +1044,33 @@ pub def runtime_declarations_for_with_ownership (kind : TargetKind) (ownership_o
     // function: the `BufObj` word in, the pointer-sized word at the start
     // of its payload out (0 if the buffer is shorter than a pointer).
     let d105 := mk_decl "monad_bytebuf_take_ptr" (List.cons "i64" List.empty) "i64" in
+    // `std/buf.mo`'s `Buf E` family (runtime_core.c, beside the bytebuf
+    // block). Every argument and result is one i64 word, exactly as the
+    // bytebuf declarations above are: a buffer handle, an index, an
+    // element count and a float's bit pattern are all just i64 here.
+    // `buf_new_*` (n) -> buf.
+    let d168 := mk_decl "monad_buf_new_i64" ["i64"] "i64" in
+    let d169 := mk_decl "monad_buf_new_f64" ["i64"] "i64" in
+    let d170 := mk_decl "monad_buf_new_f32" ["i64"] "i64" in
+    let d171 := mk_decl "monad_buf_new_i32" ["i64"] "i64" in
+    let d172 := mk_decl "monad_buf_new_u8" ["i64"] "i64" in
+    // `buf_len`, `buf_elem_kind`, `buf_data_ptr` (buf) -> i64.
+    let d173 := mk_decl "monad_buf_len" ["i64"] "i64" in
+    let d174 := mk_decl "monad_buf_elem_kind" ["i64"] "i64" in
+    let d175 := mk_decl "monad_buf_data_ptr" ["i64"] "i64" in
+    // `buf_get_*` (buf, idx) -> word, and `buf_set_*` (buf, idx, word) -> Unit.
+    let d176 := mk_decl "monad_buf_get_i64" ["i64", "i64"] "i64" in
+    let d177 := mk_decl "monad_buf_set_i64" ["i64", "i64", "i64"] "i64" in
+    let d178 := mk_decl "monad_buf_get_f64" ["i64", "i64"] "i64" in
+    let d179 := mk_decl "monad_buf_set_f64" ["i64", "i64", "i64"] "i64" in
+    let d180 := mk_decl "monad_buf_get_f32" ["i64", "i64"] "i64" in
+    let d181 := mk_decl "monad_buf_set_f32" ["i64", "i64", "i64"] "i64" in
+    let d182 := mk_decl "monad_buf_get_i32" ["i64", "i64"] "i64" in
+    let d183 := mk_decl "monad_buf_set_i32" ["i64", "i64", "i64"] "i64" in
+    let d184 := mk_decl "monad_buf_get_u8" ["i64", "i64"] "i64" in
+    let d185 := mk_decl "monad_buf_set_u8" ["i64", "i64", "i64"] "i64" in
+    // `buf_copy_into` (dst, offset, src) -> dst.
+    let d186 := mk_decl "monad_buf_copy_into" ["i64", "i64", "i64"] "i64" in
     // `std/src/ref.mo` (runtime_core.c): a Ref handle, value, function and
     // delta are each one i64 word under the uniform boxed convention;
     // `cell_update`'s function is a closure pointer.
@@ -1169,7 +1223,10 @@ pub def runtime_declarations_for_with_ownership (kind : TargetKind) (ownership_o
         d160, d161, d162, d163, d164, d165,
         d125, d126, d127, d128, d129, d130, d131, d132, d133,
         d134, d135, d136, d137, d138, d139, d140, d141,
-        d142, d143, d144, d145, d146, d147, d148, d149] ++ (if ownership_on then [d166, d167] else List.empty)
+        d142, d143, d144, d145, d146, d147, d148, d149,
+        d168, d169, d170, d171, d172, d173, d174, d175,
+        d176, d177, d178, d179, d180, d181, d182, d183,
+        d184, d185, d186] ++ (if ownership_on then [d166, d167] else List.empty)
 
 /// The native target's declaration list -- the historical name, kept for
 /// every existing caller and test.

@@ -1422,21 +1422,74 @@ typedef struct {
    less, hence the manual round-up rather than an aligned allocator. */
 #define MONAD_BUF_ALIGN 64
 
-static BufObj* bytebuf_new(int64_t n) {
+/* Element kinds, indexed by `BufObj.elem_kind`. The values are the
+   contract between this file, `std/src/buf.mo` and (eventually) the MLIR
+   kernel ABI -- a `Buf F32` IS `memref<Nxf32>` because the payload is
+   packed `float`s at this stride. Adding one means adding a `Buf.new_*`
+   and its `get`/`set`, both here and in `codegen/src/natives.mo`. */
+#define MONAD_ELEM_I64 0
+#define MONAD_ELEM_F64 1
+#define MONAD_ELEM_F32 2
+#define MONAD_ELEM_I32 3
+#define MONAD_ELEM_U8  4
+
+/* Bytes per element. The payload size is `len * stride`, which is what
+   makes the buffer a real `memref`: an `F32` element occupies four bytes,
+   where an `Array`'s boxed field would occupy eight. */
+static size_t buf_elem_size(int64_t kind) {
+    switch (kind) {
+        case MONAD_ELEM_I32:
+        case MONAD_ELEM_F32: return 4;
+        default:             return 8;
+    }
+}
+
+/* Every flat buffer in the runtime, `ByteBuf` included: ONE `BufObj`
+   shape, `len` elements of `elem_kind` in a 64-byte-aligned atomic
+   payload inside the same allocation. `ByteBuf` is the u8 case
+   (`elem_kind` 4) and is now just a caller of this -- there is no second
+   representation to keep in step.
+
+   Atomic because the payload holds no pointers (the same reasoning as
+   every string buffer here), which is also what keeps the collector from
+   scanning float bit patterns as candidate addresses. 64-byte alignment
+   makes "the allocated address is the aligned address" true by
+   construction, which is the precondition the MLIR bare-pointer memref
+   ABI needs (mlir-codegen Decision 3); Boehm guarantees far less, hence
+   the manual round-up rather than an aligned allocator.
+
+   A negative or huge `n` clamps rather than allocating: `n` is a Monad
+   `I64` and negative literals are spellable, so `Buf.new_f32 -1` must be
+   an empty buffer, not a wrap-around size. */
+static BufObj* buf_new(int64_t n, int64_t elem_kind) {
+    size_t stride = buf_elem_size(elem_kind);
     size_t len = n > 0 ? (size_t)n : 0;
-    size_t size = sizeof(BufObj) + MONAD_BUF_ALIGN - 1 + len;
+    /* Overflow guard: `len * stride` must fit. A buffer larger than the
+       address space is not a request this can honour, and silently
+       wrapping would allocate something smaller than `len` claims --
+       which every `get`/`set` bounds check would then be trusting. */
+    if (len > (size_t)-1 / stride) len = 0;
+    size_t bytes = len * stride;
+    size_t size = sizeof(BufObj) + MONAD_BUF_ALIGN - 1 + bytes;
+    if (size < bytes) return NULL;      /* sizeof + align overflowed */
     MONAD_STAT(MONAD_STAT_BYTEBUF, size);
     BufObj* obj = (BufObj*)RT_PTR(monad_region_alloc_atomic((rt_size)size));
     if (!obj) return NULL;
     obj->header.refcount = 1;
     obj->header.tag = MONAD_BUF_TAG;
     obj->header.flags = 0;
-    obj->elem_kind = 4;                 /* u8 */
+    obj->elem_kind = elem_kind;
     obj->len = (int64_t)len;
     obj->payload = (unsigned char*)(((uintptr_t)obj + sizeof(BufObj) + MONAD_BUF_ALIGN - 1)
                                     & ~(uintptr_t)(MONAD_BUF_ALIGN - 1));
-    if (len) memset(obj->payload, 0, len);
+    if (bytes) memset(obj->payload, 0, bytes);
     return obj;
+}
+
+/* The u8 case, kept as a name because fourteen existing call sites read
+   better with it than with `buf_new(n, MONAD_ELEM_U8)`. */
+static BufObj* bytebuf_new(int64_t n) {
+    return buf_new(n, MONAD_ELEM_U8);
 }
 
 /* `IO.ByteBuf.alloc (n : I64) : IO ByteBuf` -- n zeroed bytes. A
@@ -1674,6 +1727,230 @@ int64_t monad_string_hash(rt_str s) { return monad_string_hash_impl(RT_STR(s)); 
 rt_str monad_string_concat_list(rt_word parts) { return RT_STR_WORD(monad_string_concat_list_impl(parts)); }
 rt_str monad_string_to_lowercase(rt_str s) { return RT_STR_WORD(monad_string_to_lowercase_impl(RT_STR(s))); }
 rt_str monad_string_from_list(rt_word list) { return RT_STR_WORD(monad_string_from_list_impl(list)); }
+
+/* ─── `Buf E` (`std/buf.mo`) ──────────────────────────────────────────
+   The typed generalisation of `ByteBuf`: same `BufObj` heap kind, same
+   64-byte-aligned atomic payload, but `elem_kind` says what the bytes ARE
+   and `len` counts elements rather than bytes. A `Buf F32` is therefore
+   literally `memref<Nxf32>` -- packed four-byte floats -- which is what
+   lets a kernel take its `data_ptr` as a bare pointer with no conversion
+   (plans/bootstrapping/mlir-codegen.md Decision 3).
+
+   The boundary convention for element values follows the rest of the
+   runtime's numeric natives: every argument and result is an `int64_t`
+   WORD. For `I64`/`I32`/`U8` that word is the integer; for `F64` it is
+   the double's bit pattern (`memcpy`, not a cast); for `F32` it is the
+   f32-ROUNDED value held in a double, exactly the invariant
+   `monad_f32_add` and its family already keep. So `Buf.get_f32` reads a
+   `float` and widens it through `(double)`, and `Buf.set_f32` narrows to
+   `float` before storing: the stored bytes are the single-precision
+   value, and the word that comes back equals what went in.
+
+   Every accessor BOUNDS-CHECKS and returns a zero element outside
+   `[0, len)`. Two reasons: a Monad-side index is an `I64` and can be
+   negative or past the end, and this is the one place a wrong index would
+   otherwise read or write memory the buffer does not own. The interpreter
+   clamps identically (core_native.rs), so a differential test on an
+   out-of-range index agrees rather than diverging -- which is the whole
+   value of having two backends. */
+
+/* `Buf.length (b : Buf E) : I64` -- the element count, not the byte
+   count. Wrong-kind or NULL gives 0. */
+static int64_t monad_buf_len_impl(int64_t b) {
+    BufObj* obj = (BufObj*)RT_PTR(b);
+    if (!obj || obj->header.tag != MONAD_BUF_TAG) return 0;
+    return obj->len;
+}
+
+/* `Buf.elem_kind (b : Buf E) : I64` -- which of the MONAD_ELEM_* kinds
+   this buffer holds. Exposed because a kernel's derived `memref` element
+   type is a function of it, and because a test wants to assert that
+   `Buf.new_f32` really allocated an f32 buffer rather than a u8 one. */
+static int64_t monad_buf_elem_kind_impl(int64_t b) {
+    BufObj* obj = (BufObj*)RT_PTR(b);
+    if (!obj || obj->header.tag != MONAD_BUF_TAG) return -1;
+    return obj->elem_kind;
+}
+
+/* Shape shared by every `Buf.new_*`: allocate `n` zeroed elements of
+   `elem_kind`. */
+static rt_word buf_alloc_of(int64_t n, int64_t elem_kind) {
+    return RT_WORD(buf_new(n, elem_kind));
+}
+
+static rt_word monad_buf_new_i64_impl(int64_t n) { return buf_alloc_of(n, MONAD_ELEM_I64); }
+static rt_word monad_buf_new_f64_impl(int64_t n) { return buf_alloc_of(n, MONAD_ELEM_F64); }
+static rt_word monad_buf_new_f32_impl(int64_t n) { return buf_alloc_of(n, MONAD_ELEM_F32); }
+static rt_word monad_buf_new_i32_impl(int64_t n) { return buf_alloc_of(n, MONAD_ELEM_I32); }
+static rt_word monad_buf_new_u8_impl(int64_t n)  { return buf_alloc_of(n, MONAD_ELEM_U8); }
+
+/* Does `buf` hold `idx` as an element of `want_kind`? The single place
+   the three checks live, so no accessor can forget one. A buffer of the
+   WRONG element kind is rejected rather than reinterpreted: reading an
+   `f32` buffer as `i64` would silently return two packed floats, and the
+   Monad surface never needs it (`Buf.get_f32` takes a `Buf F32`). */
+static int buf_elem_ok(BufObj* obj, int64_t idx, int64_t want_kind) {
+    return obj && obj->header.tag == MONAD_BUF_TAG
+        && obj->elem_kind == want_kind
+        && idx >= 0 && idx < obj->len;
+}
+
+/* `Buf.get_i64` -- the I64 case, a straight word copy. */
+static int64_t monad_buf_get_i64_impl(int64_t b, int64_t idx) {
+    BufObj* obj = (BufObj*)RT_PTR(b);
+    if (!buf_elem_ok(obj, idx, MONAD_ELEM_I64)) return 0;
+    int64_t v;
+    memcpy(&v, obj->payload + (size_t)idx * 8, sizeof v);
+    return v;
+}
+
+/* `Buf.set_i64` -- clamps like every accessor; returns Unit. */
+static rt_word monad_buf_set_i64_impl(int64_t b, int64_t idx, int64_t v) {
+    BufObj* obj = (BufObj*)RT_PTR(b);
+    if (buf_elem_ok(obj, idx, MONAD_ELEM_I64)) {
+        memcpy(obj->payload + (size_t)idx * 8, &v, sizeof v);
+    }
+    return alloc_constructor_impl(0, 0);
+}
+
+/* `Buf.get_f64` -- the payload word IS the double's bit pattern, which is
+   both what `F64` means under this ABI and what a `memref<Nxf64>` kernel
+   reads. No conversion, hence the straight memcpy. */
+static int64_t monad_buf_get_f64_impl(int64_t b, int64_t idx) {
+    BufObj* obj = (BufObj*)RT_PTR(b);
+    if (!buf_elem_ok(obj, idx, MONAD_ELEM_F64)) return 0;
+    int64_t bits;
+    memcpy(&bits, obj->payload + (size_t)idx * 8, sizeof bits);
+    return bits;
+}
+
+static rt_word monad_buf_set_f64_impl(int64_t b, int64_t idx, int64_t bits) {
+    BufObj* obj = (BufObj*)RT_PTR(b);
+    if (buf_elem_ok(obj, idx, MONAD_ELEM_F64)) {
+        memcpy(obj->payload + (size_t)idx * 8, &bits, sizeof bits);
+    }
+    return alloc_constructor_impl(0, 0);
+}
+
+/* `Buf.get_f32` / `Buf.set_f32`. The three representations must line up
+   or the "round-trips identically under both runtimes" acceptance fails:
+     * the WORD in/out is the f32-rounded value held in a double (this
+       runtime's `F32` convention, see `monad_f32_unbits`);
+     * the BYTES stored are the single-precision `float`, so a kernel
+       reading `memref<Nxf32>` sees exactly the value Monad holds.
+   `get` widens `float` back to double; `set` narrows before storing. So
+   `set` then `get` returns the same word for anything already f32-exact,
+   and for a wider double returns the f32 rounding -- which is what `F32`
+   means here and what the interpreter does too. */
+static int64_t monad_buf_get_f32_impl(int64_t b, int64_t idx) {
+    BufObj* obj = (BufObj*)RT_PTR(b);
+    if (!buf_elem_ok(obj, idx, MONAD_ELEM_F32)) return 0;
+    float f;
+    memcpy(&f, obj->payload + (size_t)idx * 4, sizeof f);
+    double d = (double)f;
+    int64_t bits;
+    memcpy(&bits, &d, sizeof bits);
+    return bits;
+}
+
+static rt_word monad_buf_set_f32_impl(int64_t b, int64_t idx, int64_t bits) {
+    BufObj* obj = (BufObj*)RT_PTR(b);
+    if (buf_elem_ok(obj, idx, MONAD_ELEM_F32)) {
+        double d;
+        memcpy(&d, &bits, sizeof d);
+        float f = (float)d;
+        memcpy(obj->payload + (size_t)idx * 4, &f, sizeof f);
+    }
+    return alloc_constructor_impl(0, 0);
+}
+
+/* `Buf.get_i32` -- four bytes, SIGN-EXTENDED to the word, which is the
+   same direction `emit_extern_param_cast` takes an `i32` return. */
+static int64_t monad_buf_get_i32_impl(int64_t b, int64_t idx) {
+    BufObj* obj = (BufObj*)RT_PTR(b);
+    if (!buf_elem_ok(obj, idx, MONAD_ELEM_I32)) return 0;
+    int32_t v;
+    memcpy(&v, obj->payload + (size_t)idx * 4, sizeof v);
+    return (int64_t)v;
+}
+
+static rt_word monad_buf_set_i32_impl(int64_t b, int64_t idx, int64_t v) {
+    BufObj* obj = (BufObj*)RT_PTR(b);
+    if (buf_elem_ok(obj, idx, MONAD_ELEM_I32)) {
+        int32_t n = (int32_t)v;
+        memcpy(obj->payload + (size_t)idx * 4, &n, sizeof n);
+    }
+    return alloc_constructor_impl(0, 0);
+}
+
+/* `Buf.get_u8` -- one byte, zero-extended. */
+static int64_t monad_buf_get_u8_impl(int64_t b, int64_t idx) {
+    BufObj* obj = (BufObj*)RT_PTR(b);
+    if (!buf_elem_ok(obj, idx, MONAD_ELEM_U8)) return 0;
+    return (int64_t)obj->payload[idx];
+}
+
+static rt_word monad_buf_set_u8_impl(int64_t b, int64_t idx, int64_t v) {
+    BufObj* obj = (BufObj*)RT_PTR(b);
+    if (buf_elem_ok(obj, idx, MONAD_ELEM_U8)) {
+        obj->payload[idx] = (unsigned char)(v & 0xFF);
+    }
+    return alloc_constructor_impl(0, 0);
+}
+
+/* `Buf.data_ptr (b : Buf E) : Ptr` -- the payload address a kernel takes
+   as a bare pointer. Package-private in `std/buf.mo` behind `with_ptr`,
+   because a raw-memory escape hatch left open is a permanent hole; this
+   is the only unsafe primitive the type needs.
+
+   Wrong-kind gives 0 (NULL) rather than a pointer into a buffer whose
+   element type the caller guessed wrong. */
+static int64_t monad_buf_data_ptr_impl(int64_t b) {
+    BufObj* obj = (BufObj*)RT_PTR(b);
+    if (!obj || obj->header.tag != MONAD_BUF_TAG) return 0;
+    return (int64_t)(intptr_t)obj->payload;
+}
+
+/* `buf_copy_into : Buf E -> I64 -> Buf E -> RawIO (Buf E)` -- `ByteBuf`'s
+   gather, typed: copy every element of `src` into `dst` at `off`,
+   clamped to `dst`'s remaining length (never grows it). Same element kind
+   only; `memmove` because the two may be the same buffer.
+
+   Byte counts come from `elem_kind`, so this cannot copy half an element,
+   and it returns `dst` so a linear caller can thread it. */
+static rt_word monad_buf_copy_into_impl(int64_t dstw, int64_t off, int64_t srcw) {
+    BufObj* dst = (BufObj*)RT_PTR(dstw);
+    BufObj* src = (BufObj*)RT_PTR(srcw);
+    if (dst && src && dst->header.tag == MONAD_BUF_TAG && src->header.tag == MONAD_BUF_TAG
+        && dst->elem_kind == src->elem_kind && off >= 0 && off <= dst->len) {
+        int64_t n = src->len < dst->len - off ? src->len : dst->len - off;
+        if (n > 0) {
+            size_t stride = buf_elem_size(dst->elem_kind);
+            memmove(dst->payload + (size_t)off * stride, src->payload, (size_t)n * stride);
+        }
+    }
+    return RT_WORD(dstw);
+}
+
+rt_word monad_buf_new_i64(int64_t n) { return monad_buf_new_i64_impl(n); }
+rt_word monad_buf_new_f64(int64_t n) { return monad_buf_new_f64_impl(n); }
+rt_word monad_buf_new_f32(int64_t n) { return monad_buf_new_f32_impl(n); }
+rt_word monad_buf_new_i32(int64_t n) { return monad_buf_new_i32_impl(n); }
+rt_word monad_buf_new_u8(int64_t n)  { return monad_buf_new_u8_impl(n); }
+int64_t monad_buf_len(int64_t b) { return monad_buf_len_impl(b); }
+int64_t monad_buf_elem_kind(int64_t b) { return monad_buf_elem_kind_impl(b); }
+int64_t monad_buf_get_i64(int64_t b, int64_t i) { return monad_buf_get_i64_impl(b, i); }
+rt_word monad_buf_set_i64(int64_t b, int64_t i, int64_t v) { return monad_buf_set_i64_impl(b, i, v); }
+int64_t monad_buf_get_f64(int64_t b, int64_t i) { return monad_buf_get_f64_impl(b, i); }
+rt_word monad_buf_set_f64(int64_t b, int64_t i, int64_t v) { return monad_buf_set_f64_impl(b, i, v); }
+int64_t monad_buf_get_f32(int64_t b, int64_t i) { return monad_buf_get_f32_impl(b, i); }
+rt_word monad_buf_set_f32(int64_t b, int64_t i, int64_t v) { return monad_buf_set_f32_impl(b, i, v); }
+int64_t monad_buf_get_i32(int64_t b, int64_t i) { return monad_buf_get_i32_impl(b, i); }
+rt_word monad_buf_set_i32(int64_t b, int64_t i, int64_t v) { return monad_buf_set_i32_impl(b, i, v); }
+int64_t monad_buf_get_u8(int64_t b, int64_t i) { return monad_buf_get_u8_impl(b, i); }
+rt_word monad_buf_set_u8(int64_t b, int64_t i, int64_t v) { return monad_buf_set_u8_impl(b, i, v); }
+int64_t monad_buf_data_ptr(int64_t b) { return monad_buf_data_ptr_impl(b); }
+rt_word monad_buf_copy_into(int64_t dst, int64_t off, int64_t src) { return monad_buf_copy_into_impl(dst, off, src); }
 
 rt_word monad_bytebuf_alloc(int64_t n) { return monad_bytebuf_alloc_impl(n); }
 rt_word monad_bytebuf_of_list(rt_word list) { return monad_bytebuf_of_list_impl(list); }
