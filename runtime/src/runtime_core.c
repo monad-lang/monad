@@ -1435,12 +1435,37 @@ typedef struct {
 
 /* Bytes per element. The payload size is `len * stride`, which is what
    makes the buffer a real `memref`: an `F32` element occupies four bytes,
-   where an `Array`'s boxed field would occupy eight. */
+   where an `Array`'s boxed field would occupy eight.
+
+   EVERY kind is listed explicitly, `U8` included, and the `default` is the
+   SMALLEST stride rather than the largest. `U8` falling through to a
+   `default: return 8` was a real bug, found in review by RUNNING a u8
+   `copy_into` rather than by reading this switch: the accessors
+   (`get_u8`/`set_u8`) address ONE byte each, so the buffer disagreed with
+   itself about its own element size. Both consequences were measured:
+
+     * `Buf.copy_into dst off src` on u8 buffers mis-addressed -- a
+       `memmove` to `dst->payload + off * 8`, into a payload whose elements
+       sit at `off * 1`, so `Buf.copy_into dst 1 src` wrote to the wrong
+       place and read back all zeros;
+     * every u8 allocation was EIGHT TIMES its request, `ByteBuf`'s
+       included, since `ByteBuf` is the u8 case and goes through the same
+       `buf_new`.
+
+   It was invisible here because the old `default` happened to be a
+   *loadable* size: 8 is a valid stride for the other four kinds, so
+   nothing failed loudly at this layer. That is why every kind is now
+   named and the fallback is the SMALLEST stride -- an unknown kind can no
+   longer silently over-allocate, and a new element kind has to be added
+   here rather than inherited. */
 static size_t buf_elem_size(int64_t kind) {
     switch (kind) {
+        case MONAD_ELEM_I64:
+        case MONAD_ELEM_F64: return 8;
         case MONAD_ELEM_I32:
         case MONAD_ELEM_F32: return 4;
-        default:             return 8;
+        case MONAD_ELEM_U8:  return 1;
+        default:             return 1;
     }
 }
 

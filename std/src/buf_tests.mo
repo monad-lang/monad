@@ -229,6 +229,36 @@ def test_copy_into_bad_offset_is_noop : IO Bool := do {
     return (f32_eq xs f32_zeros)
 }
 
+/// `copy_into` at a NONZERO offset, on a kind whose stride is not 8. This
+/// is the regression test for the review bug in `buf_elem_size`: `U8`
+/// fell through to a `default: return 8`, so `buf_new` sized the payload
+/// at 8 bytes per element while `get_u8`/`set_u8` addressed one byte each.
+/// With the two disagreeing, this test's `off = 1` copied to
+/// `payload + 1 * 8` -- past the two bytes the source actually wrote --
+/// and read back all zeros. Every other copy test used `f32` (stride 4)
+/// or `off = 0`, neither of which can see an 8-vs-1 disagreement, which is
+/// exactly why the bug survived the first round: the gap was in the TEST
+/// SHAPES, not in the C.
+#[test]
+def test_copy_into_u8_at_offset : IO Bool := do {
+    let src0 <- Buf.new_u8 2;
+    let src := Shared.of src0;
+    let _ <- Buf.set_u8 (Shared.get src) 0 1u8;
+    let _ <- Buf.set_u8 (Shared.get src) 1 2u8;
+    let dst0 <- Buf.new_u8 4;
+    // Both buffers through `Shared` handles: each is written and then read
+    // by the copy, so each is mentioned more than once (the same shape
+    // `test_u8_round_trips` uses for its single buffer).
+    let dst := Shared.of dst0;
+    let _ <- Buf.set_u8 (Shared.get dst) 3 9u8;
+    let d2 <- Buf.copy_into (Shared.get dst) 1 (Shared.get src);
+    let s := Shared.of d2;
+    return (U8.beq (Buf.get_u8 s 0) 0u8
+        && U8.beq (Buf.get_u8 s 1) 1u8
+        && U8.beq (Buf.get_u8 s 2) 2u8
+        && U8.beq (Buf.get_u8 s 3) 9u8)
+}
+
 // ─── helpers ─────────────────────────────────────────────────────────
 //
 // Hand-rolled walks, per this file's header: `==` on a list would resolve
