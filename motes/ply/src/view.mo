@@ -483,17 +483,10 @@ def ply_path (doc : Document) : String :=
             }
     }
 
-/// The dirty flag: the current revision is not the saved one. The
-/// history is matched into its fields once (it holds a `BTreeMap`, so
-/// it is deliberately not `Copy` -- the same read-once discipline
-/// `history.mo` states for its own defs).
-def ply_doc_dirty (doc : Document) : Bool :=
-    match doc {
-        { history, .. } =>
-            match history {
-                { current, saved, .. } => Bool.not (I64.beq current saved)
-            }
-    }
+/// The dirty flag: the current revision is not the saved one. The rule
+/// lives in `model.mo`'s `Document.dirty` -- one definition, so the
+/// status line's `[+]` and the `Space q` refusal cannot disagree.
+def ply_doc_dirty (doc : Document) : Bool := Document.dirty doc
 
 /// The pending chord's display: the keys typed so far, or "" when
 /// none. One character per key; a non-character key contributes its

@@ -15,7 +15,7 @@
 use init::shared {Shared}
 use init::copy {Copy}
 use lib::types {Rope, Selections, History, Mode}
-use lib::rope {Rope.of_string}
+use lib::rope {Rope.of_string, Rope.to_string}
 use lib::history {History.empty, History.commit, History.mark_saved}
 use lib::selection {Selections.cursor}
 use lib::keymap {Binding, Keymap.default_bindings}
@@ -87,6 +87,93 @@ pub def Document.of_text (text : String) : Document :=
 pub def Document.with_language (doc : Document) (lang : String) : Document :=
     { doc with language := lang }
 
+/// The document with its file path set: Phase 4's open, and nothing else
+/// (a scratch buffer keeps `Option.none`, and `Space w` refuses it --
+/// there is no file to write).
+///
+/// A PATH IS DATA, NOT A HANDLE: the file was read before this builder
+/// ran, and `cmd_write`'s action writes it after, so no descriptor rides
+/// in the document.
+pub def Document.with_path (doc : Document) (p : String) : Document :=
+    { doc with path := Option.some p }
+
+/// The document with its history replaced -- the builder a save uses to
+/// move `saved` onto the current revision. The history travels as an
+/// ARGUMENT rather than being read from the document here: a `Document`
+/// is not `Copy` (its history holds a `BTreeMap`), so a def that both
+/// reads a field and updates the record would trip the affine rule at
+/// its own binder. `commands.mo`'s `doc_history` is the read.
+pub def Document.with_history (doc : Document) (h : History) : Document :=
+    { doc with history := h }
+
+/// The document's whole text, for the writer. O(n) over the leaves --
+/// the right price at save time and the wrong one per keystroke, so
+/// nothing in the editing loop calls it.
+pub def Document.text_of (doc : Document) : String :=
+    match doc { { rope, .. } => Rope.to_string rope }
+
+/// The document's path, or `none` for a scratch buffer.
+pub def Document.path_of (doc : Document) : Option String :=
+    match doc { { path, .. } => path }
+
+/// The document's history, read once (see `with_history` on why the
+/// save's two halves are separate defs).
+pub def Document.history_of (doc : Document) : History :=
+    match doc { { history, .. } => history }
+
+/// Whether the buffer has unsaved changes: the current revision is not
+/// the saved one. The one place the rule is spelled, so the status
+/// line's `[+]` and the `Space q` refusal cannot disagree (`view.mo`
+/// delegates here).
+pub def Document.dirty (doc : Document) : Bool :=
+    match doc { { history, .. } => ply_history_dirty history }
+
+/// The history's own dirty bit: `current != saved`.
+def ply_history_dirty (h : History) : Bool :=
+    match h {
+        { current, saved, .. } => Bool.not (I64.beq current saved)
+    }
+
+/// The document with the current revision marked saved: what a
+/// successful write does, so `Document.dirty` turns off. A SAVE DOES NOT
+/// COMMIT A REVISION -- the text did not change, only which revision is
+/// on disk -- so `saved` moves and nothing else does.
+///
+/// The two reads go through a `Shared` handle: a `Document` is not
+/// `Copy` (its history holds a `BTreeMap`), so a def that reads a field
+/// AND updates the record would use its binder twice.
+pub def Document.mark_saved (doc : Document) : Document :=
+    let shared : Shared Document := Shared.of doc in
+    Document.with_history (Shared.get shared)
+        (History.mark_saved (Document.history_of (Shared.get shared)))
+
+/// Everything a write needs -- the path (`none` for a scratch buffer) and
+/// the whole text -- read in ONE match. Two accessors would read the
+/// `Document` binder twice, which the affine rule refuses for a
+/// non-`Copy` record; one match is one read.
+pub def Document.save_target (doc : Document) : Pair (Option String) String :=
+    match doc {
+        { path, rope, .. } => Pair.pair path (Rope.to_string rope)
+    }
+
+// ── The status-line lines the file commands print ────────────────────────
+//
+// Three fixed strings, each named once so the message a user sees and the
+// message a test asserts cannot drift apart. They hang off `EditorState`
+// because that is the record whose `status` field carries them.
+
+/// The status while a write is in flight. It is replaced in the same
+/// frame by the `save_result` fold, so it is only ever visible on a
+/// pathologically slow disk -- but it is the honest thing to say.
+pub def EditorState.writing_status : String := "writing..."
+
+/// A write with no path: a scratch buffer has no file to open.
+pub def EditorState.no_path_status : String := "no path to write"
+
+/// The `Space q` refusal. It NAMES THE WAY OUT: a bare "no" would leave
+/// the user with an unsaved buffer and no idea which key discards it.
+pub def EditorState.dirty_quit_status : String := "unsaved changes; Space Q quits without saving"
+
 // ── The editor model (the plan's §3 remainder) ──────────────────────────
 //
 // `EditorState` is the Elm model `update` folds. Modes are RUNTIME DATA,
@@ -110,7 +197,14 @@ pub type EditorMsg {
     key (k : Key),
     resize (rows : I64) (cols : I64),
     tick,
-    lsp_frame (body : String)
+    lsp_frame (body : String),
+    /// A write finished: `ok` says the file was written, `msg` is the
+    /// status line's report (the path on success, the OS message on
+    /// failure). THE IO CANNOT TOUCH THE STATE -- `Cmd.perform`'s action
+    /// sees only `Unit` -- so the result comes back as a message and the
+    /// pure `update` folds it in. Phase 6's `lsp_frame` is the same shape
+    /// for the same reason.
+    save_result (ok : Bool) (msg : String)
 }
 
 /// `tui::App`'s `on_event : Event -> EditorMsg` (the plan's §3): keys and

@@ -28,7 +28,7 @@ use init::shared {Shared}
 use lib::types {Rope, Selection, Selections, Change, History, Mode}
 use lib::types {Rope}
 use lib::rope {Rope.line_start, Rope.line_of, Rope.line_content_end,
-    Rope.byte_at, Rope.end_offset, Rope.slice}
+    Rope.byte_at, Rope.end_offset, Rope.slice, Rope.to_string}
 use lib::selection {Selection.start, Selection.stop,
     Selections.cursor, Selections.collapse, Selections.primary_sel}
 use lib::history {History.undo, History.redo, History.current_rope, History.current_selections}
@@ -36,7 +36,11 @@ use lib::model {Document, EditorState, EditorMsg, Command,
     EditorState.active_doc, EditorState.with_active_doc, EditorState.with_mode,
     EditorState.with_status, EditorState.mode_of, EditorState.pending_of,
     EditorState.with_pending, EditorState.bindings_of, EditorState.registers_of,
-    EditorState.with_registers}
+    EditorState.with_registers, EditorState.writing_status,
+    EditorState.no_path_status, EditorState.dirty_quit_status,
+    Document.mark_saved, Document.dirty}
+use std::path {Path}
+use std::stream {StreamError}
 use lib::keymap {KeyResult.as_pair, Keymap.resolve, Keymap.mode_table}
 use lib::transaction {Transaction.apply, Rejection}
 use tui::types {Key}
@@ -59,9 +63,10 @@ pub def Registry.lookup (cmds : List Command) (name : String) : Option Command :
     }
 
 /// The whole registry: the plan's §4, one `Command` per row, in the
-/// table's order. Phase 6's LSP-backed commands are stubs that report;
-/// Phase 4's `write` and Phase 5's `file_picker` likewise -- the NAME
-/// and the BINDING are stable from today, the body catches up.
+/// table's order. Phase 6's LSP-backed commands are stubs that report,
+/// and so is Phase 5's `file_picker` -- the NAME and the BINDING are
+/// stable from today, the body catches up. `write` and `quit` are real
+/// as of Phase 4 (see the bodies at the file's end).
 pub def Registry.default : List Command :=
     [cmd_of "move_char_left" "collapse to the head, one byte left" cmd_move_char_left,
         cmd_of "move_char_down" "collapse to the head, one line down" cmd_move_char_down,
@@ -93,8 +98,9 @@ pub def Registry.default : List Command :=
         cmd_of "goto_references" "list the references (needs LSP, Phase 6)" cmd_goto_references,
         cmd_of "hover" "show the type at the head (needs LSP, Phase 6)" cmd_hover,
         cmd_of "file_picker" "pick a file (Phase 5)" cmd_file_picker,
-        cmd_of "write" "write the buffer (Phase 4 wires the IO)" cmd_write,
-        cmd_of "quit" "exit the editor" cmd_quit,
+        cmd_of "write" "write the buffer to its file" cmd_write,
+        cmd_of "quit" "exit the editor (refused while unsaved changes exist)" cmd_quit,
+        cmd_of "quit!" "exit the editor, discarding unsaved changes" cmd_quit_forced,
         cmd_of "command_mode" "enter command mode" cmd_command_mode,
         cmd_of "search_mode" "enter search mode" cmd_search_mode,
         cmd_of "normal_mode" "return to normal mode" cmd_normal_mode,
@@ -124,6 +130,7 @@ pub def update (st : EditorState) (msg : EditorMsg) : Pair EditorState (Cmd Edit
         EditorMsg.key k => update_key st k,
         EditorMsg.resize r c => Pair.pair (update_resize st r c) Cmd.none,
         EditorMsg.tick => Pair.pair st Cmd.none,
+        EditorMsg.save_result ok msg => Pair.pair (fold_save_result st ok msg) Cmd.none,
         EditorMsg.lsp_frame _ =>
             Pair.pair (EditorState.with_status st "lsp frame (client lands in Phase 6)") Cmd.none
     }
@@ -857,12 +864,110 @@ def cmd_hover (st : EditorState) : Pair EditorState (Cmd EditorMsg) :=
 def cmd_file_picker (st : EditorState) : Pair EditorState (Cmd EditorMsg) :=
     Pair.pair (EditorState.with_status st "file_picker lands with config (Phase 5)") Cmd.none
 
-/// `write` is a Phase 4 body; the command exists so `Space w` resolves.
-def cmd_write (st : EditorState) : Pair EditorState (Cmd EditorMsg) :=
-    Pair.pair (EditorState.with_status st "write lands with the binary (Phase 4)") Cmd.none
+// ── writing and quitting (Phase 4) ─────────────────────────────────────────
+//
+// THE UPDATE STAYS PURE. `Cmd.perform`'s action is `Unit -> IO EditorMsg`:
+// it cannot see the state and cannot change it, so the write's OUTCOME
+// travels back as an `EditorMsg.save_result` message and the fold above
+// applies it. That is the same split Phase 6's `lsp_frame` uses, and it is
+// why a save is two defs (one to issue, one to fold) rather than one.
+//
+// THE WHOLE-BUFFER STRING IS BUILT INSIDE THE ACTION, never at keystroke
+// time: `Rope.to_string` is O(n) over the leaves, which is the right price
+// once per save and the wrong one per keypress on a 10k-line file. The
+// closure therefore captures the ROPE (a pointer to persistent structure),
+// not the text.
 
+/// `Space w`: write the active buffer to its file.
+///
+/// A SCRATCH BUFFER REFUSES IN THE PURE HALF -- there is no path, so
+/// there is nothing to open and no reason to pay for an action; the
+/// status line says why. A path means the write is issued as
+/// `Cmd.perform`, so the terminal is restored correctly even when the
+/// write is the last thing that happens (the loop's EOF path folds a
+/// final `perform`, `motes/tui/src/tui.mo`'s `final_frame`).
+def cmd_write (st : EditorState) : Pair EditorState (Cmd EditorMsg) :=
+    match EditorState.active_doc st {
+        Option.some doc => split_write st doc,
+        Option.none => Pair.pair (EditorState.with_status st ply_no_doc_status) Cmd.none
+    }
+
+/// The document split into the two things a write needs, in ONE match: a
+/// `Document` is not `Copy` (its history holds a `BTreeMap`), so two
+/// accessor calls would spend the affine budget twice on one binder.
+def split_write (st : EditorState) (doc : Document) : Pair EditorState (Cmd EditorMsg) :=
+    match doc {
+        { path, rope, .. } => begin_write st path rope
+    }
+
+/// The pure half's two answers: no path refuses, a path issues the write.
+def begin_write (st : EditorState) (path : Option String) (rope : Rope) : Pair EditorState (Cmd EditorMsg) :=
+    match path {
+        Option.none => Pair.pair (EditorState.with_status st EditorState.no_path_status) Cmd.none,
+        Option.some p =>
+            Pair.pair (EditorState.with_status st EditorState.writing_status)
+                (Cmd.perform (fn (_ : Unit) => ply_write_rope p rope))
+    }
+
+/// The write itself, run inside the frame (or the loop's final frame).
+/// The text is materialized HERE, once.
+def ply_write_rope (p : String) (rope : Rope) : IO EditorMsg := do {
+    let r <- IO.write_file (Path.path p) (Rope.to_string rope);
+    return (save_outcome p r)
+}
+
+/// The write's result as the message the pure half folds in: the path it
+/// wrote to, or the OS message that refused. `StreamError.message` always
+/// carries the OS text (`std/src/stream.mo`).
+def save_outcome (p : String) (r : Result StreamError Unit) : EditorMsg :=
+    match r {
+        Result.ok _ => EditorMsg.save_result true (String.concat "wrote " p),
+        Result.err e =>
+            EditorMsg.save_result false (String.concat "write failed: " e.message)
+    }
+
+/// The one-line report for a state with no buffer at all. The editor
+/// always holds one (`EditorState.init`), so this is the accessor's
+/// totality showing, not a reachable editing state.
+def ply_no_doc_status : String := "no buffer to write"
+
+/// Fold a finished write: report it either way, and on success mark the
+/// current revision as the saved one, so the view's `[+]` turns off and
+/// `Space q` stops refusing.
+def fold_save_result (st : EditorState) (ok : Bool) (msg : String) : EditorState :=
+    let noted : EditorState := EditorState.with_status st msg in
+    if ok then mark_active_saved noted else noted
+
+/// The active document's current revision marked saved.
+def mark_active_saved (st : EditorState) : EditorState :=
+    match EditorState.active_doc st {
+        Option.some doc => EditorState.with_active_doc st (Document.mark_saved doc),
+        Option.none => st
+    }
+
+/// `Space q`: quit, unless the buffer has unsaved changes. The refusal
+/// names the way out (`quit!`), because a status line that only says "no"
+/// leaves the user stuck with no idea which key says otherwise.
+///
+/// WHY `quit!` AND NOT `:q!`: `:` enters command mode, but no key
+/// currently appends to the command line (that is Phase 5's command
+/// line), so a `:q!` spelling would be unreachable from a keystroke. The
+/// rule is the plan's; the key is one that already exists.
 def cmd_quit (st : EditorState) : Pair EditorState (Cmd EditorMsg) :=
+    if active_dirty st
+    then Pair.pair (EditorState.with_status st EditorState.dirty_quit_status) Cmd.none
+    else Pair.pair st Cmd.quit
+
+/// `Space Q`: quit regardless of unsaved changes -- the discard.
+def cmd_quit_forced (st : EditorState) : Pair EditorState (Cmd EditorMsg) :=
     Pair.pair st Cmd.quit
+
+/// Whether the active buffer has unsaved changes.
+def active_dirty (st : EditorState) : Bool :=
+    match EditorState.active_doc st {
+        Option.some doc => Document.dirty doc,
+        Option.none => false
+    }
 
 /// The resize half: geometry in step.
 def update_resize (st : EditorState) (r : I64) (c : I64) : EditorState :=

@@ -142,8 +142,8 @@ pub def Keymap.mode_table (m : Mode) : Option String :=
 //
 // Data, not dispatch: this list IS the Phase 2 deliverable's key half.
 // Commands that need a later phase (`gd`/`gr`/`K` need the LSP client,
-// Phase 6; `write`/`quit` need the binary, Phase 4) are bound NOW and
-// stubbed in the registry, so the bindings are stable data from day one.
+// Phase 6) are bound NOW and stubbed in the registry, so the bindings are
+// stable data from day one. `write`/`quit`/`quit!` became real in Phase 4.
 
 /// The mode table's name each builder below takes -- spelled out here so
 /// a typo in a row is a visible constant, not a string in a list.
@@ -207,6 +207,11 @@ def km_normal_bindings : List Binding :=
         km_bind2 "normal" (Key.char " ") (Key.char "f") "file_picker",
         km_bind2 "normal" (Key.char " ") (Key.char "w") "write",
         km_bind2 "normal" (Key.char " ") (Key.char "q") "quit",
+        // The discard: `q` refuses while changes are unsaved, `Q` quits
+        // anyway. `:q!` is the plan's spelling, and it lands with Phase 5's
+        // command line -- `:` today enters command mode with no key that
+        // appends to it, so a `:`-form would be unreachable from a pipe.
+        km_bind2 "normal" (Key.char " ") (Key.char "Q") "quit!",
         km_bind "normal" (Key.char ":") "command_mode",
         km_bind "normal" (Key.char "/") "search_mode"]
 

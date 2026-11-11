@@ -189,12 +189,14 @@ def test_unbound_clears_pending : Bool :=
     let after : EditorState := cx_type (cx_state "x") [cx_key "g", cx_key "z"] in
     I64.beq (cx_pending_len after) 0
 
-/// `Space w` resolves through the whole update: a prefix, then a match
-/// (write's Phase 4 stub reports, which is what the status line says).
+/// `Space w` resolves through the whole update: a prefix, then a match.
+/// A SCRATCH state has no path, so Phase 4's write refuses in the pure
+/// half and says why -- this pins the CHORD, and `save_tests.mo` pins the
+/// write itself.
 #[test]
 def test_space_w_resolves : Bool :=
     let after : EditorState := cx_type (cx_state "x") [cx_key " ", cx_key "w"] in
-    I64.beq (cx_pending_len after) 0 && String.beq (cx_status after) "write lands with the binary (Phase 4)"
+    I64.beq (cx_pending_len after) 0 && String.beq (cx_status after) "no path to write"
 
 def cx_status (st : EditorState) : String :=
     match st { { status, .. } => status }

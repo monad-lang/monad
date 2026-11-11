@@ -12,11 +12,13 @@
 // No `{*}` globs -- the `motes/json/src/lib.mo` doctrine.
 
 pub use lib::types {Rope, Selection, Selections, Change, Revision, History, Mode}
-pub use lib::rope {Rope.of_string}
+pub use lib::rope {Rope.of_string, Rope.to_string}
 pub use lib::selection {Selections.cursor}
-pub use lib::model {Document, Document.of_text, EditorState, EditorMsg, Command, on_event}
+pub use lib::model {Document, Document.of_text, Document.with_language,
+    Document.with_path, Document.text_of, Document.path_of, Document.dirty,
+    Document.mark_saved, EditorState, EditorState.init, EditorMsg, Command, on_event}
 pub use lib::keymap {KeyResult, Binding, Keymap.resolve, Keymap.default_bindings}
-pub use lib::commands {update, Registry.default}
+pub use lib::commands {update, Registry.default, Registry.lookup}
 pub use lib::highlight {LanguageConfig, Token, TokenKind, Highlight.lex,
     Highlight.style, Highlight.segments, Highlight.config_for}
 pub use lib::view {RowView, View.view, View.rows, View.row_segments,
