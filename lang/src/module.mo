@@ -3186,7 +3186,7 @@ def check_constructor_with_scope (c : InductConstructor) (scope : Scope) (locals
 /// and stores, so a cache HIT replays them verbatim; only the error count
 /// decides the exit code.
 pub struct FileCheckResult {
-    path : String,
+    path : Path,
     diagnostics : List String,
     warnings : List String,
 }
@@ -3243,20 +3243,20 @@ def check_file_cached_mode (mode : AffineMode) (cache : ModuleInfoCache) (file_p
                 // own note. `out_cache`, not `cache`: the walk extended
                 // it, and the caller needs the extended one.
                 let ok_result : FileCheckResult :=
-                    { path := file_path,
+                    { path := Path.unsafe file_path,
                         diagnostics := CheckDiagnostics.errors checked,
                         warnings := CheckDiagnostics.warnings checked };
                 let ok_bundle : FileCheckAndCache := { result := ok_result, cache := out_cache };
                 return ok_bundle
             },
             Result.err e => do {
-                let err_result : FileCheckResult := { path := file_path, diagnostics := [e], warnings := List.empty };
+                let err_result : FileCheckResult := { path := Path.unsafe file_path, diagnostics := [e], warnings := List.empty };
                 let err_bundle : FileCheckAndCache := { result := err_result, cache := out_cache };
                 return err_bundle
             },
         }
     } else do {
-        let missing_result : FileCheckResult := { path := file_path, diagnostics := ["error: file not found: " ++ file_path], warnings := List.empty };
+        let missing_result : FileCheckResult := { path := Path.unsafe file_path, diagnostics := ["error: file not found: " ++ file_path], warnings := List.empty };
         let missing_bundle : FileCheckAndCache := { result := missing_result, cache := cache };
         return missing_bundle
     }
@@ -3283,14 +3283,14 @@ pub def check_file_cached_from_source (cache : ModuleInfoCache) (file_path : Str
             let mode <- Mote.affine_mode_of_path file_path;
             let checked <- check_module_with_scope_classified mode em.scope em.target_decls empty_locs (Option.some file_path) verbose;
             let ok_result : FileCheckResult :=
-                { path := file_path,
+                { path := Path.unsafe file_path,
                     diagnostics := CheckDiagnostics.errors checked,
                     warnings := CheckDiagnostics.warnings checked };
             let ok_bundle : FileCheckAndCache := { result := ok_result, cache := out_cache };
             return ok_bundle
         },
         Result.err e => do {
-            let err_result : FileCheckResult := { path := file_path, diagnostics := [e], warnings := List.empty };
+            let err_result : FileCheckResult := { path := Path.unsafe file_path, diagnostics := [e], warnings := List.empty };
             let err_bundle : FileCheckAndCache := { result := err_result, cache := out_cache };
             return err_bundle
         },
@@ -3328,7 +3328,7 @@ pub def check_file_cached_from_source (cache : ModuleInfoCache) (file_path : Str
 /// cache, so this is the only place they survive the check. Empty exactly
 /// when `ranges` is.
 pub struct RangedFileCheck {
-    path : String,
+    path : Path,
     diagnostics : List Diagnostic,
     cache : ModuleInfoCache,
     ranges : List DeclRange,
@@ -3336,7 +3336,7 @@ pub struct RangedFileCheck {
     located : LocatedDecls,
 }
 
-pub def ranged_file_path (f : RangedFileCheck) : String := f.path
+pub def ranged_file_path (f : RangedFileCheck) : String := Path.to_string f.path
 
 pub def ranged_file_diagnostics (f : RangedFileCheck) : List Diagnostic := f.diagnostics
 
@@ -3369,7 +3369,7 @@ def ranged_parse_failure (cache : ModuleInfoCache) (file_path : String) (source 
     let one_diag : Diagnostic := Diagnostic.mk msg (Option.some span) in
     let no_scope : Option Scope := Option.none in
     let one : RangedFileCheck := {
-        path := file_path,
+        path := Path.unsafe file_path,
         diagnostics := [one_diag],
         cache := cache,
         ranges := ranges,
@@ -3426,7 +3426,7 @@ def ranged_truncation (cache : ModuleInfoCache) (file_path : String) (source : S
             let none_range : Option SourceRange := Option.none in
             let no_scope : Option Scope := Option.none in
             let one : RangedFileCheck := {
-                path := file_path,
+                path := Path.unsafe file_path,
                 diagnostics := [Diagnostic.mk msg none_range],
                 cache := cache,
                 ranges := ranges,
@@ -3478,7 +3478,7 @@ def check_buffer_ranged (cache : ModuleInfoCache) (file_path : String) (source :
                 list_append diags (list_append affine (list_append view opaque));
             let warm : Option Scope := Option.some em.scope;
             let ok : RangedFileCheck := {
-                path := file_path,
+                path := Path.unsafe file_path,
                 diagnostics := all_diags,
                 cache := out_cache,
                 ranges := decl_ranges,
@@ -3496,7 +3496,7 @@ def check_buffer_ranged (cache : ModuleInfoCache) (file_path : String) (source :
             let err_diag : Diagnostic := Diagnostic.mk e none_range;
             let no_scope : Option Scope := Option.none;
             let err : RangedFileCheck := {
-                path := file_path,
+                path := Path.unsafe file_path,
                 diagnostics := [err_diag],
                 cache := out_cache,
                 ranges := decl_ranges,
@@ -7078,7 +7078,7 @@ def check_one_batch_target (file : String) (mp : ModulePath) (all : List ModuleI
     match find_module_info all mp {
         Option.none =>
             let diags : List String := ["error: batch check: target module not found: " ++ file] in
-            let r : FileCheckResult := { path := file, diagnostics := diags, warnings := List.empty } in
+            let r : FileCheckResult := { path := Path.unsafe file, diagnostics := diags, warnings := List.empty } in
             IO.pure r,
         Option.some info => do {
             let raw : List Decl := info.decl_list;
@@ -7092,7 +7092,7 @@ def check_one_batch_target (file : String) (mp : ModulePath) (all : List ModuleI
             let mode <- Mote.affine_mode_of_path file;
             let checked <- check_module_with_scope_classified mode scope decls empty_locs (Option.some file) verbose;
             let r : FileCheckResult :=
-                { path := file,
+                { path := Path.unsafe file,
                     diagnostics := CheckDiagnostics.errors checked,
                     warnings := CheckDiagnostics.warnings checked };
             IO.pure r

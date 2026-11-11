@@ -19,6 +19,7 @@
 /// early-returns unless MONAD_AFFINE_REPORT is set (the `std/ansi.mo`
 /// NO_COLOR pattern) — `scripts/check-monad-tests.sh` sweeps this mote,
 /// and the probe is meant to run by hand, not every commit.
+use std::path {Path}
 use std::io {IO.println}
 open IO {get_env, println}
 use lang::module {
@@ -79,7 +80,7 @@ def report_affine_diagnostics_of_file : IO Bool := do {
                     // motes Phase A4 is migrating. Printing only
                     // `diagnostics` reported `0 total` for all of them.
                     FileCheckResult.mk path diags warns => do {
-                        println ("affine diagnostics for " ++ path ++ ":");
+                        println ("affine diagnostics for " ++ Path.to_string path ++ ":");
                         let n <- print_all diags;
                         let w <- print_all warns;
                         println ("(" ++ I64.to_string (n + w) ++ " total: "

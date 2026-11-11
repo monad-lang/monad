@@ -1,4 +1,5 @@
-use std::list {}
+use std::path {Path}
+use std::list {List.length}
 open IO {
     println, read_file, file_exists,
     write_file, read_stdin_exact, write_stdout, flush_stdout, write_stderr,
@@ -1818,7 +1819,7 @@ def run_check_file (cache : ModuleInfoCache) (f : String) (rest : List String) (
 def run_check_result (cache : ModuleInfoCache) (result : FileCheckResult) (rest : List String) (checked : I64) (errors : I64) (warns : I64) (opts : CheckOptions) (plan : CachePlan) (key : Option String) (batch : List (Pair String FileCheckResult)) : IO I64 :=
     match result {
         FileCheckResult.mk path diags warnings => do {
-            let block : String := Build.check_block path diags warnings;
+            let block : String := Build.check_block (Path.to_string path) diags warnings;
             // `counted` is ERRORS ONLY -- warnings neither fail
             // the file nor feed the error total, so a replayed
             // hit and a fresh miss count the same file the same
