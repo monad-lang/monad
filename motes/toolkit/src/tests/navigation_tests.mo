@@ -39,7 +39,7 @@ use std::path {Path}
 use std::test {Test.write_fixture}
 use parsec::core {fail, success}
 use lang::module {
-    DeclRange, ModuleInfo, ModuleInfoCache, RangedFileCheck,
+    DeclRange, ModuleInfo, ModuleInfoCache, RangedFileCheck, decl_range_name,
     check_file_cached_from_source_ranged, module_info_cache_empty, module_info_cache_insert,
     parse_all_decls, ranged_file_ranges, ranged_file_scope,
 }
@@ -52,6 +52,7 @@ use lang::pretty {show_term}
 use lang::scope {build_scope_from_decls}
 use lang::types {
     Decl, Identifier, Location, ModulePath, Scope, ScopeData, SourceRange, Term,
+    show_name_path,
 }
 open IO {println}
 use std::process {exec_cmd, process_id}
@@ -133,7 +134,7 @@ def nt_names_go (rs : List DeclRange) (acc : String) : String :=
     match rs {
         List.empty => acc,
         List.cons dr rest =>
-            let name : String := dr.name in
+            let name : String := show_name_path (decl_range_name dr) in
             if String.beq acc ""
             then nt_names_go rest name
             else nt_names_go rest (acc ++ "," ++ name),

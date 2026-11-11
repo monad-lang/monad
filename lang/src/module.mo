@@ -19,7 +19,7 @@ use lang::types {
     module_map_empty, module_map_insert, module_map_lookup, module_map_values,
     name_path_set_empty, name_path_set_insert, name_path_set_member,
     use_bare, use_glob, use_items, use_name, use_rename, use_sub, use_sub_rename,
-    visibility_beq, ModuleMap, NamePathSet,
+    visibility_beq, ModuleMap, NamePathSet, module_path_as_npath, name_path_similar,
 }
 use lib::typecheck::subst {term_subst}
 use lib::name_text {unqualify_def_name}
@@ -264,9 +264,37 @@ pub def show_parse_error (input : String) (path : Option String) (e : ParseError
 /// The range's own `path` is `Option.none`: the parser is handed text, not
 /// a filename. A consumer that knows the file -- a language server has the
 /// URI -- fills it in.
+/// A declaration's kind for an outline. An enum, not a spelling: the
+/// wire vocabulary lives in `decl_kind_text`, so a consumer that wants
+/// the text renders it once instead of matching strings.
+pub type DeclKind {
+    dk_def,
+    dk_type,
+    dk_struct,
+    dk_class,
+    dk_instance,
+    dk_infix,
+    dk_use,
+    dk_open,
+    dk_defmacro,
+    dk_macro,
+    dk_mote,
+}
+
+/// The Rust reference's own kind vocabulary ("def", "type", "struct",
+/// "class", "instance"), so the wire output reads like the tool being
+/// replaced rather than like this compiler's internals.
+pub def decl_kind_text (k : DeclKind) : String :=
+    match k {
+        dk_def => "def", dk_type => "type", dk_struct => "struct",
+        dk_class => "class", dk_instance => "instance", dk_infix => "infix",
+        dk_use => "use", dk_open => "open", dk_defmacro => "defmacro",
+        dk_macro => "macro", dk_mote => "mote",
+    }
+
 pub struct DeclRange {
-    name : String,
-    kind : String,
+    name : NamePath,
+    kind : DeclKind,
     range : SourceRange,
 }
 
@@ -277,9 +305,9 @@ pub struct DeclRange {
 // decl_range_tests.mo` reads exactly these. Same remedy the five LSP probes
 // in `lang/src/tests/unify_tests.mo` use.
 
-pub def decl_range_name (dr : DeclRange) : String := dr.name
+pub def decl_range_name (dr : DeclRange) : NamePath := dr.name
 
-pub def decl_range_kind (dr : DeclRange) : String := dr.kind
+pub def decl_range_kind (dr : DeclRange) : DeclKind := dr.kind
 
 pub def decl_range_span (dr : DeclRange) : SourceRange := dr.range
 
@@ -314,20 +342,20 @@ def instance_decl_name (i : Instance) : Identifier := i.name
 /// named after what they name; both macro spellings report "defmacro"
 /// because they are one concept to a reader.
 #[partial]
-def decl_name_and_kind (d : Decl) : Pair String String := match d {
-    Decl.def_d df => Pair.pair (show_name_path (Def.name df)) "def",
-    Decl.inductive_d i => Pair.pair (show_name_path (inductive_decl_name i)) "type",
-    Decl.struct_d s => Pair.pair (show_identifier (struct_decl_name s)) "struct",
-    Decl.class_d c => Pair.pair (show_identifier (class_decl_name c)) "class",
-    Decl.instance_d i => Pair.pair (show_identifier (instance_decl_name i)) "instance",
-    Decl.infix_d _op path _vis => Pair.pair (show_name_path path) "infix",
-    Decl.use_d path _filter _public => Pair.pair (show_module_path path) "use",
-    Decl.open_d path _filter => Pair.pair (show_name_path path) "open",
-    Decl.scoped_open_d path _filter _decl => Pair.pair (show_name_path path) "open",
-    Decl.def_macro_d df => Pair.pair (show_name_path (Def.name df)) "defmacro",
-    Decl.decl_gen_d name _params _decl_list _attrs => Pair.pair (show_name_path name) "defmacro",
-    Decl.macro_call_d name _args => Pair.pair (show_identifier name) "macro",
-    Decl.mote_d _attr => Pair.pair "" "mote",
+def decl_name_and_kind (d : Decl) : Pair NamePath DeclKind := match d {
+    Decl.def_d df => Pair.pair (Def.name df) DeclKind.dk_def,
+    Decl.inductive_d i => Pair.pair (inductive_decl_name i) DeclKind.dk_type,
+    Decl.struct_d s => Pair.pair (NamePath.mk [struct_decl_name s]) DeclKind.dk_struct,
+    Decl.class_d c => Pair.pair (NamePath.mk [class_decl_name c]) DeclKind.dk_class,
+    Decl.instance_d i => Pair.pair (NamePath.mk [instance_decl_name i]) DeclKind.dk_instance,
+    Decl.infix_d _op path _vis => Pair.pair path DeclKind.dk_infix,
+    Decl.use_d path _filter _public => Pair.pair (module_path_as_npath path) DeclKind.dk_use,
+    Decl.open_d path _filter => Pair.pair path DeclKind.dk_open,
+    Decl.scoped_open_d path _filter _decl => Pair.pair path DeclKind.dk_open,
+    Decl.def_macro_d df => Pair.pair (Def.name df) DeclKind.dk_defmacro,
+    Decl.decl_gen_d name _params _decl_list _attrs => Pair.pair name DeclKind.dk_defmacro,
+    Decl.macro_call_d name _args => Pair.pair (NamePath.mk [name]) DeclKind.dk_macro,
+    Decl.mote_d _attr => Pair.pair (NamePath.mk List.empty) DeclKind.dk_mote,
 }
 
 /// Every top-level declaration in `src`, with its name, kind and range.
@@ -2244,11 +2272,11 @@ def range_for_decl (decl_ranges : List DeclRange) (d : Decl) : Option SourceRang
     }
 
 #[partial]
-def find_decl_range (decl_ranges : List DeclRange) (n : String) : Option SourceRange :=
+def find_decl_range (decl_ranges : List DeclRange) (n : NamePath) : Option SourceRange :=
     match decl_ranges {
         List.empty => Option.none,
         List.cons dr rest =>
-            if String.beq (decl_range_name dr) n then Option.some (decl_range_span dr)
+            if name_path_similar (decl_range_name dr) n then Option.some (decl_range_span dr)
             else find_decl_range rest n,
     }
 
@@ -4029,12 +4057,12 @@ pub def get_loaded_all (loaded : LoadedModules) : List ModuleInfo :=
 pub struct ModuleSource {
     path : ModulePath,
     mote : String,
-    file_path : String,
+    file_path : Path,
     source : String,
 }
 
 pub def make_module_source (path : ModulePath) (mote : String)
-    (file_path : String) (source : String) : ModuleSource :=
+    (file_path : Path) (source : String) : ModuleSource :=
     { path := path, mote := mote, file_path := file_path, source := source }
 
 /// Parse one supplied module exactly as the disk loader parses a file:
@@ -4042,11 +4070,11 @@ pub def make_module_source (path : ModulePath) (mote : String)
 pub def module_info_of_source (ms : ModuleSource) : Result String ModuleInfo :=
     match ms {
         { path, mote, file_path, source } =>
-            match try_parse_decls_strict source (Option.some file_path) {
+            match try_parse_decls_strict source (Option.some (Path.to_string file_path)) {
                 Result.err e =>
-                    Result.err (String.concat file_path (String.concat ": " e)),
+                    Result.err (String.concat (Path.to_string file_path) (String.concat ": " e)),
                 Result.ok decls =>
-                    Result.ok (make_module_info path (Path.unsafe file_path) (rewrite_lib_uses mote decls)),
+                    Result.ok (make_module_info path file_path (rewrite_lib_uses mote decls)),
             },
     }
 

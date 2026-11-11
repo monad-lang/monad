@@ -19,10 +19,10 @@
 /// accessors), while `LocatedDecls` itself is `lib::parser`'s -- the struct
 /// stays package-private to the parser, only the accessors cross.
 use std::test {Test.write_fixture}
-use lib::types {Location, SourceRange}
+use lib::types {Location, SourceRange, show_name_path}
 use lib::module {
     DeclRange, Diagnostic, check_file_cached_from_source_ranged,
-    decl_range_kind, decl_range_name, decl_range_span, decl_ranges_of_source,
+    decl_kind_text, decl_range_kind, decl_range_name, decl_range_span, decl_ranges_of_source,
     diagnostic_message, diagnostic_range, located_decl_list, located_decl_spans,
     module_info_cache_empty, ranged_file_diagnostics,
 }
@@ -163,7 +163,9 @@ def kind_of (rs : List DeclRange) (n : String) : String :=
     match rs {
         List.empty => "<missing>",
         List.cons dr rest =>
-            if String.beq (decl_range_name dr) n then decl_range_kind dr else kind_of rest n,
+            if String.beq (show_name_path (decl_range_name dr)) n
+            then decl_kind_text (decl_range_kind dr)
+            else kind_of rest n,
     }
 
 /// The four cases where `collect_decl_rems` alone yields nothing -- a def's

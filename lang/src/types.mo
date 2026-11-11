@@ -306,6 +306,12 @@ pub def show_qualified_name (qn : QualifiedName) : String :=
     String.concat (module_path_to_string_colon qn.qmod)
         (String.concat "::" (show_name_path qn.qname))
 
+/// A module path in `NamePath` form: the same segments, used where a
+/// table is keyed by a spelling and a `use`/`open` path is one of the
+/// keys (the use-completeness gate's `own` set, an outline's decl name).
+pub def module_path_as_npath (mp : ModulePath) : NamePath :=
+    match mp { ModulePath.mk ids => NamePath.mk ids }
+
 /// Build a qualified name from its two halves. Mirrors the struct
 /// constructor, so call sites that already have a `ModulePath` and a
 /// `NamePath` do not have to spell `QualifiedName.mk`.

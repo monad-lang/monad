@@ -45,7 +45,7 @@ use lang::types {
     Term, TypeConstraint, UseFilter, UseItem, OpenFilter, StructLitField, Visibility,
     id_eq, module_mote_of, module_path_is_empty, module_path_to_string_colon, open_all, open_only,
     sentinel, show_identifier, show_module_path, show_name_path, name_path_similar, npath_last, qn_of,
-    module_map_empty, module_map_insert, module_map_lookup,
+    module_map_empty, module_map_insert, module_map_lookup, module_path_as_npath,
     module_set_empty, module_set_insert, module_set_member, module_set_union,
     name_map_empty, name_map_insert, name_map_lookup,
     name_path_set_empty, name_path_set_insert, name_path_set_member, npath_extend,
@@ -536,12 +536,6 @@ def pub_use_targets (decls : List Decl) (acc : List ModulePath) : List ModulePat
                 _ => pub_use_targets rest acc,
             },
     }
-
-/// A module path in `NamePath` form. The gate's own/ambient tables key
-/// on names; a `use` path is stored as its own spelled form, exactly as
-/// the host's `own` set does.
-def module_path_as_npath (mp : ModulePath) : NamePath :=
-    match mp { ModulePath.mk ids => NamePath.mk ids }
 
 /// The `pub use` closure of the ambient trio among the loaded world.
 #[partial]

@@ -131,7 +131,7 @@ def to_sources (mods : List SourceModule) (acc : List ModuleSource) : List Modul
         List.empty => List.reverse acc,
         List.cons m rest =>
             let source : ModuleSource :=
-                make_module_source (path_of m.segments) m.mote m.file_path m.source
+                make_module_source (path_of m.segments) m.mote (Path.unsafe m.file_path) m.source
             in
             to_sources rest (List.cons source acc),
     }

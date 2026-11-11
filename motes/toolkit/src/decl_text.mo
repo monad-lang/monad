@@ -12,8 +12,8 @@
 ///
 /// Every scan below makes ONE self-call, so the compiled backend's
 /// tail-call rewrite turns it into a loop.
-use lang::types {Location, SourceRange}
-use lang::module {DeclRange, decl_range_kind, decl_range_name, decl_range_span, decl_ranges_of_source}
+use lang::types {Location, SourceRange, show_name_path}
+use lang::module {DeclRange, decl_kind_text, decl_range_kind, decl_range_name, decl_range_span, decl_ranges_of_source}
 use std::list {}
 
 /// One declaration of a file's outline. `range` is the declaration as
@@ -62,12 +62,12 @@ def decl_texts_go (bytes : List U8) (pos : I64) (ranges : List DeclRange) (acc :
 
 #[partial]
 def decl_text_of (dr : DeclRange) (sp : SourceRange) (bytes : List U8) : DeclText :=
-    let name : String := decl_range_name dr in
+    let name : String := show_name_path (decl_range_name dr) in
     match decl_text_ranges bytes sp.start (sp.end.offset - sp.start.offset) name {
         Pair.pair trimmed named =>
             let d : DeclText := {
                 name := name,
-                kind := decl_range_kind dr,
+                kind := decl_kind_text (decl_range_kind dr),
                 range := { trimmed with path := sp.path },
                 name_range := { named with path := sp.path },
             } in
