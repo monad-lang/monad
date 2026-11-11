@@ -547,6 +547,157 @@ pub def name_set_union (a : NameSet) (b : NameSet) : NameSet :=
         },
     }
 
+/// A `ModulePath`-keyed map, keyed by the `.`-joined rendering for the
+/// same reason `NameMap` is (`lang/scope.mo`'s measured note).
+pub type ModuleMap V {
+    module_map (HashMap String V)
+}
+
+pub def module_map_empty {V : Type} : ModuleMap V :=
+    ModuleMap.module_map (HashMap.map HashMap.empty_buckets)
+
+pub def module_map_insert {V : Type} (key : ModulePath) (val : V) (m : ModuleMap V) : ModuleMap V :=
+    match m {
+        ModuleMap.module_map hm =>
+            match hm {
+                HashMap.map buckets =>
+                    let rendered : String := show_module_path key in
+                    let idx := HashMap.bucket_of (String.hash rendered) in
+                    let bucket := HashMap.get_bucket buckets idx in
+                    let new_bucket := HashMap.bucket_insert_str rendered val bucket in
+                    ModuleMap.module_map (HashMap.map (HashMap.set_bucket buckets idx new_bucket)),
+            },
+    }
+
+pub def module_map_lookup {V : Type} (key : ModulePath) (m : ModuleMap V) : Option V :=
+    match m {
+        ModuleMap.module_map hm =>
+            match hm {
+                HashMap.map buckets =>
+                    let rendered : String := show_module_path key in
+                    let idx := HashMap.bucket_of (String.hash rendered) in
+                    let bucket := HashMap.get_bucket buckets idx in
+                    HashMap.bucket_lookup_str rendered bucket,
+            },
+    }
+
+/// A `ModulePath`-keyed set, presence only (the ambient-module table).
+pub type ModuleSet {
+    module_set (HashMap String Bool)
+}
+
+pub def module_set_empty : ModuleSet :=
+    ModuleSet.module_set (HashMap.map HashMap.empty_buckets)
+
+pub def module_set_insert (key : ModulePath) (s : ModuleSet) : ModuleSet :=
+    match s {
+        ModuleSet.module_set hm =>
+            match hm {
+                HashMap.map buckets =>
+                    let rendered : String := show_module_path key in
+                    let idx := HashMap.bucket_of (String.hash rendered) in
+                    let bucket := HashMap.get_bucket buckets idx in
+                    let new_bucket := HashMap.bucket_insert_str rendered true bucket in
+                    ModuleSet.module_set (HashMap.map (HashMap.set_bucket buckets idx new_bucket)),
+            },
+    }
+
+pub def module_set_member (key : ModulePath) (s : ModuleSet) : Bool :=
+    match s {
+        ModuleSet.module_set hm =>
+            match hm {
+                HashMap.map buckets =>
+                    let rendered : String := show_module_path key in
+                    let idx := HashMap.bucket_of (String.hash rendered) in
+                    let bucket := HashMap.get_bucket buckets idx in
+                    match HashMap.bucket_lookup_str rendered bucket {
+                        Option.some present => present,
+                        Option.none => false,
+                    },
+            },
+    }
+
+pub def module_set_union (a : ModuleSet) (b : ModuleSet) : ModuleSet :=
+    match a {
+        ModuleSet.module_set ma => match b {
+            ModuleSet.module_set mb => ModuleSet.module_set (HashMap.merge_buckets ma mb),
+        },
+    }
+
+/// A `NamePath`-keyed set, presence only: the `use` gate's `own`,
+/// `open`, and per-name "already reported" tables.
+pub type NamePathSet {
+    name_path_set (HashMap String Bool)
+}
+
+pub def name_path_set_empty : NamePathSet :=
+    NamePathSet.name_path_set (HashMap.map HashMap.empty_buckets)
+
+pub def name_path_set_insert (key : NamePath) (s : NamePathSet) : NamePathSet :=
+    match s {
+        NamePathSet.name_path_set hm =>
+            match hm {
+                HashMap.map buckets =>
+                    let rendered : String := show_name_path key in
+                    let idx := HashMap.bucket_of (String.hash rendered) in
+                    let bucket := HashMap.get_bucket buckets idx in
+                    let new_bucket := HashMap.bucket_insert_str rendered true bucket in
+                    NamePathSet.name_path_set (HashMap.map (HashMap.set_bucket buckets idx new_bucket)),
+            },
+    }
+
+pub def name_path_set_member (key : NamePath) (s : NamePathSet) : Bool :=
+    match s {
+        NamePathSet.name_path_set hm =>
+            match hm {
+                HashMap.map buckets =>
+                    let rendered : String := show_name_path key in
+                    let idx := HashMap.bucket_of (String.hash rendered) in
+                    let bucket := HashMap.get_bucket buckets idx in
+                    match HashMap.bucket_lookup_str rendered bucket {
+                        Option.some present => present,
+                        Option.none => false,
+                    },
+            },
+    }
+
+/// A `QualifiedName`-keyed set, presence only: the qualified-reference
+/// de-duplication table.
+pub type QualifiedNameSet {
+    qualified_name_set (HashMap String Bool)
+}
+
+pub def qualified_name_set_empty : QualifiedNameSet :=
+    QualifiedNameSet.qualified_name_set (HashMap.map HashMap.empty_buckets)
+
+pub def qualified_name_set_insert (key : QualifiedName) (s : QualifiedNameSet) : QualifiedNameSet :=
+    match s {
+        QualifiedNameSet.qualified_name_set hm =>
+            match hm {
+                HashMap.map buckets =>
+                    let rendered : String := show_qualified_name key in
+                    let idx := HashMap.bucket_of (String.hash rendered) in
+                    let bucket := HashMap.get_bucket buckets idx in
+                    let new_bucket := HashMap.bucket_insert_str rendered true bucket in
+                    QualifiedNameSet.qualified_name_set (HashMap.map (HashMap.set_bucket buckets idx new_bucket)),
+            },
+    }
+
+pub def qualified_name_set_member (key : QualifiedName) (s : QualifiedNameSet) : Bool :=
+    match s {
+        QualifiedNameSet.qualified_name_set hm =>
+            match hm {
+                HashMap.map buckets =>
+                    let rendered : String := show_qualified_name key in
+                    let idx := HashMap.bucket_of (String.hash rendered) in
+                    let bucket := HashMap.get_bucket buckets idx in
+                    match HashMap.bucket_lookup_str rendered bucket {
+                        Option.some present => present,
+                        Option.none => false,
+                    },
+            },
+    }
+
 pub instance Show ModulePath {
     def show (mp : ModulePath) : String := show_module_path mp
 }

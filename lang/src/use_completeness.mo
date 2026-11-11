@@ -40,10 +40,16 @@
 
 use lang::types {
     Attribute, Class, ClassDef, DebugName, Decl, Def, Identifier, InductConstructor,
-    Inductive, Instance, Literal, MatchCase, ModulePath, NamePath, Param, Struct, StructField,
+    Inductive, Instance, Literal, MatchCase, ModuleMap, ModulePath, ModuleSet, NamePath,
+    NameMap, NamePathSet, Param, QualifiedName, QualifiedNameSet, Struct, StructField,
     Term, TypeConstraint, UseFilter, UseItem, OpenFilter, StructLitField, Visibility,
     id_eq, module_mote_of, module_path_is_empty, module_path_to_string_colon, open_all, open_only,
-    sentinel, show_identifier, show_module_path, show_name_path,
+    sentinel, show_identifier, show_module_path, show_name_path, name_path_similar, npath_last, qn_of,
+    module_map_empty, module_map_insert, module_map_lookup,
+    module_set_empty, module_set_insert, module_set_member, module_set_union,
+    name_map_empty, name_map_insert, name_map_lookup,
+    name_path_set_empty, name_path_set_insert, name_path_set_member, npath_extend,
+    qualified_name_set_empty, qualified_name_set_insert, qualified_name_set_member,
     use_bare, use_glob, use_items, use_name, use_rename, use_sub, use_sub_rename,
 }
 use lib::parser {decls_parser_located}
@@ -52,8 +58,8 @@ use lib::scope {modpath_eq}
 use lib::typecheck::macro_queue {
     DeriveHandlerReg, derive_handler_regs_of_decls, derive_targets_of_args,
 }
-use llvm::strmap {str_map_empty, str_map_insert, str_map_lookup}
 use std::map {HashMap}
+use std::list {List.length}
 
 // ─── String helpers: `::` and `.` are the name grammar's only separators ──
 //
@@ -97,38 +103,59 @@ def split_dots_step (s : String) (len : I64) (from : I64) (i : I64) (acc : List 
 def split_dots (s : String) : List String :=
     split_dots_go s (String.length s) 0 0 List.empty
 
-/// The index of the last `.` in `s`, or `-1` when there is none.
-#[partial]
-def last_dot_index_go (s : String) (len : I64) (i : I64) (last : I64) : I64 :=
-    if I64.lt i len
-    then
-        last_dot_index_go s len (I64.add i 1)
-            (match String.beq (String.slice s i 1) "." {
-                true => i,
-                false => last,
-            })
-    else last
+/// A source spelling as a `NamePath`: `List.length` ->
+/// `[List, length]`. This is the ONE boundary that parses the flattened
+/// spelling lowering records in a `DebugName` (the typed `DebugName.np`/
+/// `qn` variants are the durable fix; see the typed-names plan).
+def name_path_of_spelling (s : String) : NamePath :=
+    NamePath.mk (List.map Identifier.id (split_dots s))
 
-/// Everything after the last `.`, or the whole string when there is none
-/// (`after_last_dot "cons"` is `"cons"`, unlike `lang/module.mo`'s
-/// `tail_after_last_dot`, which returns `""` there -- the two callers
-/// need the two different answers).
-def after_last_dot (s : String) : String :=
-    let last : I64 := last_dot_index_go s (String.length s) 0 (-1) in
-    if I64.lt last 0 then s else String.drop (I64.add last 1) s
+/// A declaration's name in SEGMENTED form. The parser keeps a dotted
+/// declared name (`def List.length`) as one flat identifier, so the
+/// dotted-prefix rule must see `[List, length]`, not `["List.length"]`.
+/// Rendering is unchanged, so every rendered key still agrees.
+def npath_segments (np : NamePath) : NamePath :=
+    name_path_of_spelling (show_name_path np)
+
+/// A `NamePath`'s last segment; the empty identifier for an empty path.
+def npath_tail (np : NamePath) : Identifier :=
+    match npath_last np {
+        Option.some id => id,
+        Option.none => Identifier.id "",
+    }
+
+#[partial]
+def npath_prefix_go (ns : List Identifier) (fs : List Identifier) : Bool :=
+    match ns {
+        List.empty => true,
+        List.cons n nrest =>
+            match fs {
+                List.empty => false,
+                List.cons f frest =>
+                    if id_eq n f then npath_prefix_go nrest frest else false,
+            },
+    }
+
+/// Strict dotted prefix: `{List}` selects `List.length`, `{length}` does
+/// not. An equal path is the exact rule's business.
+def npath_dotted_prefix (full : NamePath) (n : NamePath) : Bool :=
+    match n {
+        NamePath.mk ns => match full {
+            NamePath.mk fs =>
+                Bool.and (I64.lt (List.length ns) (List.length fs)) (npath_prefix_go ns fs),
+        },
+    }
 
 /// One `A.b::C.d` written reference, split the way lowering recorded it:
 /// a `::` makes it module-qualified (dotted module half, `::`, dotted
-/// name half -- `qualified_ref_symbol`'s convention, which is exactly
-/// what `lower_name_global` stores in the `DebugName`), anything else
-/// is bare. `none` means bare.
-def qualified_half (s : String) : Option (Pair ModulePath String) :=
+/// name half), anything else is bare. `none` means bare.
+def qualified_half (s : String) : Option QualifiedName :=
     match index_of_colon_colon s {
         Option.some i =>
             let mod_half : String := String.slice s 0 i in
             let name_half : String := String.drop (I64.add i 2) s in
-            let mp : ModulePath := ModulePath.mk (List.map Identifier.id (split_dots mod_half)) in
-            Option.some (Pair.pair mp name_half),
+            Option.some (qn_of (ModulePath.mk (List.map Identifier.id (split_dots mod_half)))
+                (name_path_of_spelling name_half)),
         Option.none => Option.none,
     }
 
@@ -185,11 +212,11 @@ pub def visibility_visible_from (consumer : ModulePath) (consumer_mote : Option 
         }
 
 /// Which names of a module a brace list selects, along ONE axis.
-/// `an_only` holds brace-item spellings, compared against a
-/// declaration's own spelled name.
+/// `an_only` holds brace-item names, compared against a declaration's
+/// own name.
 type AllowedNames {
     an_all,
-    an_only (names : List String),
+    an_only (names : List NamePath),
 }
 
 /// What one consumer's `use` lines select from ONE module.
@@ -222,35 +249,26 @@ def merge_allowed (a : AllowedNames) (b : AllowedNames) : AllowedNames :=
 def selection_merge (a : Selection) (b : Selection) : Selection :=
     { bare := merge_allowed a.bare b.bare, qual := merge_allowed a.qual b.qual }
 
-/// Whether a listed spelling is a dotted prefix of `full` -- how
-/// `{List}` drags in `List.cons` and `List.length` without naming
-/// either. The boundary is a `.`, so `{length}` selects nothing of
-/// `List.length`.
-def dotted_prefix (full : String) (n : String) : Bool :=
-    Bool.and (I64.gt (String.length full) (String.length n))
-        (Bool.and (String.starts_with n full)
-            (String.beq (String.slice full (String.length n) 1) "."))
-
-/// Whether a brace-list spelling selects a declaration: exact spelling, a
+/// Whether a brace-list name selects a declaration: exact name, a
 /// constructor's own bare name, or a dotted prefix. During the rollout
 /// window BOTH constructor spellings select (`{List.cons}` and the legacy
 /// `{cons}`); the bare rule is what keeps the last published nightly able
 /// to read the compiler-source surface, and step 2 of the rollout removes
 /// it. `open T {cons}` is separate and keeps binding the bare name.
 #[partial]
-def spelling_selected (names : List String) (spelling : String) (tail : String) (is_ctor : Bool) : Bool :=
+def name_selected (names : List NamePath) (spelling : NamePath) (tail : Identifier) (is_ctor : Bool) : Bool :=
     match names {
         List.empty => false,
         List.cons n rest =>
-            if String.beq spelling n
+            if name_path_similar spelling n
             then true
             else
-                if Bool.and is_ctor (String.beq tail n)
+                if Bool.and is_ctor (name_path_similar (NamePath.mk [tail]) n)
                 then true
                 else
-                    if dotted_prefix spelling n
+                    if npath_dotted_prefix spelling n
                     then true
-                    else spelling_selected rest spelling tail is_ctor,
+                    else name_selected rest spelling tail is_ctor,
     }
 
 /// One declaration a loaded module provides, as the judgment needs it:
@@ -261,8 +279,10 @@ def spelling_selected (names : List String) (spelling : String) (tail : String) 
 /// select it).
 pub struct DeclRow {
     owner : ModulePath,
-    spelling : String,
-    bare_tail : String,
+    /// The declaration's own spelled name (`List.length`, `Type.ctor`).
+    name : NamePath,
+    /// Its last segment, which is what a bare reference writes.
+    bare_tail : Identifier,
     is_ctor : Bool,
     /// The declaration's own visibility. Constructors and class methods
     /// inherit the visibility of the block that declares them, exactly
@@ -277,29 +297,27 @@ pub struct DeclRow {
 /// The spelling a brace item should use to select `row`'s declaration: the
 /// whole spelled name, constructors included (`Type.ctor`) -- the target
 /// spelling `validate_use_names`'s `declared_names_of` (lang/module.mo)
-/// lists. The legacy bare tail still selects too (`spelling_selected`).
-def item_spelling (row : DeclRow) : String :=
-    row.spelling
+/// lists. The legacy bare tail still selects too (`name_selected`).
+def item_spelling (row : DeclRow) : NamePath :=
+    row.name
 
 /// Whether a declaration may be written BARE (`List.length`) in a
 /// consumer holding `sel` for its owner.
 def selects_bare (sel : Selection) (row : DeclRow) : Bool :=
     match sel.bare {
         an_all => true,
-        an_only ns => spelling_selected ns row.spelling row.bare_tail row.is_ctor,
+        an_only ns => name_selected ns row.name row.bare_tail row.is_ctor,
     }
 
 /// Whether it may be written QUALIFIED (`std::list::List.length`).
 def selects_qual (sel : Selection) (row : DeclRow) : Bool :=
     match sel.qual {
         an_all => true,
-        an_only ns =>
-            let item : String := item_spelling row in
-            spelling_selected ns item row.bare_tail row.is_ctor,
+        an_only ns => name_selected ns (item_spelling row) row.bare_tail row.is_ctor,
     }
 
 /// `sel` with one more allowed name on both axes.
-def with_allowed (sel : Selection) (name : String) : Selection :=
+def with_allowed (sel : Selection) (name : NamePath) : Selection :=
     {
         bare := match sel.bare {
             an_all => AllowedNames.an_all,
@@ -314,19 +332,17 @@ def with_allowed (sel : Selection) (name : String) : Selection :=
 // ─── The `use` selection map ────────────────────────────────────────
 
 /// Merge one selection into the map under `path`.
-def sel_map_merge (path : ModulePath) (sel : Selection) (m : HashMap String Selection) : HashMap String Selection :=
-    let key : String := show_module_path path in
-    match str_map_lookup key m {
-        Option.some existing => str_map_insert key (selection_merge existing sel) m,
-        Option.none => str_map_insert key sel m,
+def sel_map_merge (path : ModulePath) (sel : Selection) (m : ModuleMap Selection) : ModuleMap Selection :=
+    match module_map_lookup path m {
+        Option.some existing => module_map_insert path (selection_merge existing sel) m,
+        Option.none => module_map_insert path sel m,
     }
 
 /// `use M {n}` and `use M {n as _}`: `n` is selected on both axes.
-def sel_map_add_allowed (path : ModulePath) (name : String) (m : HashMap String Selection) : HashMap String Selection :=
-    let key : String := show_module_path path in
-    match str_map_lookup key m {
-        Option.some sel => str_map_insert key (with_allowed sel name) m,
-        Option.none => str_map_insert key (with_allowed selection_qualified_only name) m,
+def sel_map_add_allowed (path : ModulePath) (name : NamePath) (m : ModuleMap Selection) : ModuleMap Selection :=
+    match module_map_lookup path m {
+        Option.some sel => module_map_insert path (with_allowed sel name) m,
+        Option.none => module_map_insert path (with_allowed selection_qualified_only name) m,
     }
 
 /// The sub-module of a `use M {Sub {...}}` item: `M` plus one segment.
@@ -344,20 +360,24 @@ def use_sub_path (path : ModulePath) (n : Identifier) : ModulePath :=
 // from xml_html::html" for a name the consumer did import.
 
 #[terminating]
-def use_items_has (name : String) (items : List UseItem) : Bool :=
+def use_items_has (name : NamePath) (items : List UseItem) : Bool :=
     match items {
         List.empty => false,
         List.cons item rest =>
             match item {
                 UseItem.use_name n =>
-                    if String.beq name (show_identifier n) then true else use_items_has name rest,
+                    if name_path_similar name (name_path_of_spelling (show_identifier n))
+                    then true
+                    else use_items_has name rest,
                 UseItem.use_rename n _alias =>
-                    if String.beq name (show_identifier n) then true else use_items_has name rest,
+                    if name_path_similar name (name_path_of_spelling (show_identifier n))
+                    then true
+                    else use_items_has name rest,
                 _ => use_items_has name rest,
             },
     }
 
-def use_filter_has (name : String) (filter : UseFilter) : Bool :=
+def use_filter_has (name : NamePath) (filter : UseFilter) : Bool :=
     match filter {
         UseFilter.use_bare => false,
         UseFilter.use_items items => use_items_has name items,
@@ -365,7 +385,7 @@ def use_filter_has (name : String) (filter : UseFilter) : Bool :=
 
 /// The module whose PUBLIC `use` re-exports `name` from `decls`.
 #[terminating]
-def reexport_owner_of (name : String) (decls : List Decl) : Option ModulePath :=
+def reexport_owner_of (name : NamePath) (decls : List Decl) : Option ModulePath :=
     match decls {
         List.empty => Option.none,
         List.cons d rest =>
@@ -379,7 +399,7 @@ def reexport_owner_of (name : String) (decls : List Decl) : Option ModulePath :=
     }
 
 def select_reexport (world : List (Pair ModulePath (List Decl))) (path : ModulePath)
-    (name : String) (m : HashMap String Selection) : HashMap String Selection :=
+    (name : NamePath) (m : ModuleMap Selection) : ModuleMap Selection :=
     match world_decls_of world path {
         Option.none => m,
         Option.some decls =>
@@ -391,24 +411,24 @@ def select_reexport (world : List (Pair ModulePath (List Decl))) (path : ModuleP
 
 #[terminating]
 def select_reexport_items (world : List (Pair ModulePath (List Decl))) (path : ModulePath)
-    (items : List UseItem) (m : HashMap String Selection) : HashMap String Selection :=
+    (items : List UseItem) (m : ModuleMap Selection) : ModuleMap Selection :=
     match items {
         List.empty => m,
         List.cons item rest =>
             match item {
                 UseItem.use_name n =>
                     select_reexport_items world path rest
-                        (select_reexport world path (show_identifier n) m),
+                        (select_reexport world path (name_path_of_spelling (show_identifier n)) m),
                 UseItem.use_rename n _alias =>
                     select_reexport_items world path rest
-                        (select_reexport world path (show_identifier n) m),
+                        (select_reexport world path (name_path_of_spelling (show_identifier n)) m),
                 _ => select_reexport_items world path rest m,
             },
     }
 
 #[terminating]
 def sel_map_of_reexports (world : List (Pair ModulePath (List Decl)))
-    (decls : List Decl) (m : HashMap String Selection) : HashMap String Selection :=
+    (decls : List Decl) (m : ModuleMap Selection) : ModuleMap Selection :=
     match decls {
         List.empty => m,
         List.cons d rest =>
@@ -425,16 +445,16 @@ def sel_map_of_reexports (world : List (Pair ModulePath (List Decl)))
     }
 
 #[partial]
-def sel_map_of_items (path : ModulePath) (items : List UseItem) (m : HashMap String Selection) : HashMap String Selection :=
+def sel_map_of_items (path : ModulePath) (items : List UseItem) (m : ModuleMap Selection) : ModuleMap Selection :=
     match items {
         List.empty => m,
         List.cons item rest =>
             match item {
-                UseItem.use_name n => sel_map_of_items path rest (sel_map_add_allowed path (show_identifier n) m),
+                UseItem.use_name n => sel_map_of_items path rest (sel_map_add_allowed path (name_path_of_spelling (show_identifier n)) m),
                 // The name half is what has to exist; the alias is the
                 // importer's own spelling and resolves to no declaration,
                 // so it is never this check's business.
-                UseItem.use_rename n _alias => sel_map_of_items path rest (sel_map_add_allowed path (show_identifier n) m),
+                UseItem.use_rename n _alias => sel_map_of_items path rest (sel_map_add_allowed path (name_path_of_spelling (show_identifier n)) m),
                 UseItem.use_glob => sel_map_of_items path rest (sel_map_merge path selection_unfiltered m),
                 UseItem.use_sub n sub =>
                     sel_map_of_items path rest (sel_map_of_items (use_sub_path path n) sub (sel_map_merge (use_sub_path path n) selection_qualified_only m)),
@@ -444,7 +464,7 @@ def sel_map_of_items (path : ModulePath) (items : List UseItem) (m : HashMap Str
     }
 
 /// One `use` decl's contribution to the map.
-def sel_map_of_use (path : ModulePath) (filter : UseFilter) (m : HashMap String Selection) : HashMap String Selection :=
+def sel_map_of_use (path : ModulePath) (filter : UseFilter) (m : ModuleMap Selection) : ModuleMap Selection :=
     match filter {
         // Bare `use M` and `use M {}` mean the same thing: every name
         // reachable QUALIFIED only.
@@ -459,7 +479,7 @@ def sel_map_of_use (path : ModulePath) (filter : UseFilter) (m : HashMap String 
 /// module it names. A module absent from the map is not imported by
 /// name at all: the consumer itself, or one of the ambient modules.
 #[partial]
-def sel_map_of_decls (decls : List Decl) (m : HashMap String Selection) : HashMap String Selection :=
+def sel_map_of_decls (decls : List Decl) (m : ModuleMap Selection) : ModuleMap Selection :=
     match decls {
         List.empty => m,
         List.cons d rest =>
@@ -518,36 +538,40 @@ def pub_use_targets (decls : List Decl) (acc : List ModulePath) : List ModulePat
             },
     }
 
+/// A module path in `NamePath` form. The gate's own/ambient tables key
+/// on names; a `use` path is stored as its own spelled form, exactly as
+/// the host's `own` set does.
+def module_path_as_npath (mp : ModulePath) : NamePath :=
+    match mp { ModulePath.mk ids => NamePath.mk ids }
+
 /// The `pub use` closure of the ambient trio among the loaded world.
 #[partial]
-def ambient_go (world : List (Pair ModulePath (List Decl))) (frontier : List ModulePath) (seen : HashMap String Bool) : HashMap String Bool :=
+def ambient_go (world : List (Pair ModulePath (List Decl))) (frontier : List ModulePath) (seen : ModuleSet) : ModuleSet :=
     match frontier {
         List.empty => seen,
         List.cons mp rest =>
-            let key : String := show_module_path mp in
-            match str_map_lookup key seen {
-                Option.some _ => ambient_go world rest seen,
-                Option.none =>
-                    let seen_now : HashMap String Bool := str_map_insert key true seen in
-                    match world_decls_of world mp {
-                        Option.some ds => ambient_go world (List.append (pub_use_targets ds List.empty) rest) seen_now,
-                        Option.none => ambient_go world rest seen_now,
-                    },
-            },
+            let seen_now : ModuleSet := module_set_insert mp seen in
+            if module_set_member mp seen
+            then ambient_go world rest seen_now
+            else
+                match world_decls_of world mp {
+                    Option.some ds => ambient_go world (List.append (pub_use_targets ds List.empty) rest) seen_now,
+                    Option.none => ambient_go world rest seen_now,
+                },
     }
 
-def ambient_seen (world : List (Pair ModulePath (List Decl))) : HashMap String Bool :=
-    ambient_go world [prelude_module_path, init_module_path, std_module_path] str_map_empty
+def ambient_seen (world : List (Pair ModulePath (List Decl))) : ModuleSet :=
+    ambient_go world [prelude_module_path, init_module_path, std_module_path] module_set_empty
 
 // ─── The declaration index ──────────────────────────────────────────
 
 /// Index one row under `key`. The key is the spelling a REFERENCE
 /// writes; the row carries the declaration's own spelled name, which
 /// is what a brace item has to say.
-def index_add_row (key : String) (row : DeclRow) (m : HashMap String (List DeclRow)) : HashMap String (List DeclRow) :=
-    match str_map_lookup key m {
-        Option.some rows => str_map_insert key (List.append rows (List.cons row List.empty)) m,
-        Option.none => str_map_insert key (List.cons row List.empty) m,
+def index_add_row (key : NamePath) (row : DeclRow) (m : NameMap (List DeclRow)) : NameMap (List DeclRow) :=
+    match name_map_lookup key m {
+        Option.some rows => name_map_insert key (List.append rows (List.cons row List.empty)) m,
+        Option.none => name_map_insert key (List.cons row List.empty) m,
     }
 
 /// One constructor, indexed twice: under its bare tail and under its
@@ -561,11 +585,13 @@ def index_add_row (key : String) (row : DeclRow) (m : HashMap String (List DeclR
 /// agree on the SET or CI's dual-compiler corpus check rejects a file
 /// one accepts. The bare tail stays the ctor's own single segment,
 /// which is the only spelling a brace item can select it by.
-def index_ctor (owner : ModulePath) (ind : String) (vis : Visibility) (name : NamePath) (m : HashMap String (List DeclRow)) : HashMap String (List DeclRow) :=
-    let spelling : String :=
-        String.concat ind (String.concat "." (show_name_path name)) in
-    let row : DeclRow := { owner := owner, spelling := spelling, bare_tail := after_last_dot spelling, is_ctor := true, vis := vis } in
-    index_add_row row.bare_tail row (index_add_row spelling row m)
+def index_ctor (owner : ModulePath) (ind : NamePath) (vis : Visibility) (name : NamePath) (m : NameMap (List DeclRow)) : NameMap (List DeclRow) :=
+    let spelling : NamePath :=
+        match npath_segments ind {
+            NamePath.mk inds => match npath_segments name { NamePath.mk ns => NamePath.mk (List.append inds ns) },
+        } in
+    let row : DeclRow := { owner := owner, name := spelling, bare_tail := npath_tail spelling, is_ctor := true, vis := vis } in
+    index_add_row (NamePath.mk [row.bare_tail]) row (index_add_row spelling row m)
 
 /// A class's methods, indexed under their QUALIFIED spelling only
 /// (`Map.empty`), not under the bare tail. A method is reached through
@@ -574,29 +600,35 @@ def index_ctor (owner : ModulePath) (ind : String) (vis : Visibility) (name : Na
 /// visibility one. Constructors are the opposite case (`index_ctor`
 /// indexes both) because source writes them bare.
 #[partial]
-def index_class_methods (owner : ModulePath) (cls : String) (vis : Visibility) (methods : List ClassDef) (m : HashMap String (List DeclRow)) : HashMap String (List DeclRow) :=
+def index_class_methods (owner : ModulePath) (cls : Identifier) (vis : Visibility) (methods : List ClassDef) (m : NameMap (List DeclRow)) : NameMap (List DeclRow) :=
     match methods {
         List.empty => m,
         List.cons md rest =>
             match md {
                 ClassDef.mk name _typ _default =>
-                    let spelling : String :=
-                        String.concat cls (String.concat "." (show_identifier name)) in
+                    let spelling : NamePath :=
+                        match npath_segments (NamePath.mk [cls]) {
+                            NamePath.mk cids =>
+                                match npath_segments (NamePath.mk [name]) {
+                                    NamePath.mk mids => NamePath.mk (List.append cids mids),
+                                },
+                        } in
                     index_class_methods owner cls vis rest
                         (index_add_row spelling
-                            { owner := owner, spelling := spelling, bare_tail := show_identifier name, is_ctor := false, vis := vis }
+                            { owner := owner, name := spelling, bare_tail := name, is_ctor := false, vis := vis }
                             m),
             },
     }
 
 #[partial]
-def index_decl (owner : ModulePath) (d : Decl) (m : HashMap String (List DeclRow)) : HashMap String (List DeclRow) :=
+def index_decl (owner : ModulePath) (d : Decl) (m : NameMap (List DeclRow)) : NameMap (List DeclRow) :=
     match d {
         Decl.def_d def_ =>
             match def_ {
                 Def.mk { name, vis, .. } =>
-                    index_add_row (show_name_path name)
-                        { owner := owner, spelling := show_name_path name, bare_tail := after_last_dot (show_name_path name), is_ctor := false, vis := vis }
+                    let np : NamePath := npath_segments name in
+                    index_add_row np
+                        { owner := owner, name := np, bare_tail := npath_tail np, is_ctor := false, vis := vis }
                         m,
             },
         // Macro declarations are EXEMPT from the boundary: the decl-gen
@@ -609,35 +641,40 @@ def index_decl (owner : ModulePath) (d : Decl) (m : HashMap String (List DeclRow
         Decl.def_macro_d def_ =>
             match def_ {
                 Def.mk { name, .. } =>
-                    index_add_row (show_name_path name)
-                        { owner := owner, spelling := show_name_path name, bare_tail := after_last_dot (show_name_path name), is_ctor := false, vis := Visibility.pub_ }
+                    let np : NamePath := npath_segments name in
+                    index_add_row np
+                        { owner := owner, name := np, bare_tail := npath_tail np, is_ctor := false, vis := Visibility.pub_ }
                         m,
             },
         Decl.decl_gen_d name _params _decls _attrs =>
-            index_add_row (show_name_path name)
-                { owner := owner, spelling := show_name_path name, bare_tail := after_last_dot (show_name_path name), is_ctor := false, vis := Visibility.pub_ }
+            let np : NamePath := npath_segments name in
+            index_add_row np
+                { owner := owner, name := np, bare_tail := npath_tail np, is_ctor := false, vis := Visibility.pub_ }
                 m,
         Decl.inductive_d ind =>
             match ind {
                 Inductive.mk name _params _typ constructors _attrs vis =>
-                    index_ctors owner (show_name_path name) vis constructors
-                        (index_add_row (show_name_path name)
-                            { owner := owner, spelling := show_name_path name, bare_tail := after_last_dot (show_name_path name), is_ctor := false, vis := vis }
+                    let np : NamePath := npath_segments name in
+                    index_ctors owner np vis constructors
+                        (index_add_row np
+                            { owner := owner, name := np, bare_tail := npath_tail np, is_ctor := false, vis := vis }
                             m),
             },
         Decl.struct_d st =>
             match st {
                 Struct.mk name _fields _attrs vis =>
-                    index_add_row (show_identifier name)
-                        { owner := owner, spelling := show_identifier name, bare_tail := show_identifier name, is_ctor := false, vis := vis }
+                    let np : NamePath := npath_segments (NamePath.mk [name]) in
+                    index_add_row np
+                        { owner := owner, name := np, bare_tail := name, is_ctor := false, vis := vis }
                         m,
             },
         Decl.class_d cls =>
             match cls {
                 Class.mk name _params _constraints methods vis _ =>
-                    index_class_methods owner (show_identifier name) vis methods
-                        (index_add_row (show_identifier name)
-                            { owner := owner, spelling := show_identifier name, bare_tail := show_identifier name, is_ctor := false, vis := vis }
+                    let np : NamePath := npath_segments (NamePath.mk [name]) in
+                    index_class_methods owner name vis methods
+                        (index_add_row np
+                            { owner := owner, name := np, bare_tail := name, is_ctor := false, vis := vis }
                             m),
             },
         // Instances are deliberately not indexed, mirroring the host's
@@ -649,7 +686,7 @@ def index_decl (owner : ModulePath) (d : Decl) (m : HashMap String (List DeclRow
     }
 
 #[partial]
-def index_ctors (owner : ModulePath) (ind : String) (vis : Visibility) (cns : List InductConstructor) (m : HashMap String (List DeclRow)) : HashMap String (List DeclRow) :=
+def index_ctors (owner : ModulePath) (ind : NamePath) (vis : Visibility) (cns : List InductConstructor) (m : NameMap (List DeclRow)) : NameMap (List DeclRow) :=
     match cns {
         List.empty => m,
         List.cons cn rest =>
@@ -659,7 +696,7 @@ def index_ctors (owner : ModulePath) (ind : String) (vis : Visibility) (cns : Li
     }
 
 #[partial]
-def index_decls (owner : ModulePath) (decls : List Decl) (m : HashMap String (List DeclRow)) : HashMap String (List DeclRow) :=
+def index_decls (owner : ModulePath) (decls : List Decl) (m : NameMap (List DeclRow)) : NameMap (List DeclRow) :=
     match decls {
         List.empty => m,
         List.cons d rest => index_decls owner rest (index_decl owner d m),
@@ -671,7 +708,7 @@ def index_decls (owner : ModulePath) (decls : List Decl) (m : HashMap String (Li
 /// invisible here (and equally invisible as references, so the silence
 /// is two-sided).
 #[partial]
-def declaration_index (world : List (Pair ModulePath (List Decl))) (m : HashMap String (List DeclRow)) : HashMap String (List DeclRow) :=
+def declaration_index (world : List (Pair ModulePath (List Decl))) (m : NameMap (List DeclRow)) : NameMap (List DeclRow) :=
     match world {
         List.empty => m,
         List.cons entry rest =>
@@ -692,35 +729,35 @@ def declaration_index (world : List (Pair ModulePath (List Decl))) (m : HashMap 
 /// this module's own, exactly as the host folds the elaborated
 /// module's names in.
 #[partial]
-def own_keys_go (decls : List Decl) (m : HashMap String Bool) : HashMap String Bool :=
+def own_keys_go (decls : List Decl) (m : NamePathSet) : NamePathSet :=
     match decls {
         List.empty => m,
         List.cons d rest =>
             match d {
                 Decl.def_d def_ =>
                     match def_ {
-                        Def.mk { name, .. } => own_keys_go rest (str_map_insert (show_name_path name) true m),
+                        Def.mk { name, .. } => own_keys_go rest (name_path_set_insert name m),
                     },
                 Decl.def_macro_d def_ =>
                     match def_ {
-                        Def.mk { name, .. } => own_keys_go rest (str_map_insert (show_name_path name) true m),
+                        Def.mk { name, .. } => own_keys_go rest (name_path_set_insert name m),
                     },
                 Decl.decl_gen_d name _params _decls _attrs =>
-                    own_keys_go rest (str_map_insert (show_name_path name) true m),
+                    own_keys_go rest (name_path_set_insert name m),
                 Decl.inductive_d ind =>
                     match ind {
                         Inductive.mk name _params _typ constructors _attrs _vis =>
-                            own_ctors_go (show_name_path name) constructors (own_keys_go rest (str_map_insert (show_name_path name) true m)),
+                            own_ctors_go name constructors (own_keys_go rest (name_path_set_insert name m)),
                     },
                 Decl.struct_d st =>
                     match st {
                         Struct.mk name _fields _attrs _vis =>
-                            own_keys_go rest (str_map_insert (show_identifier name) true (str_map_insert "mk" true m)),
+                            own_keys_go rest (name_path_set_insert (NamePath.mk [name]) (name_path_set_insert (NamePath.mk [Identifier.id "mk"]) m)),
                     },
                 Decl.class_d cls =>
                     match cls {
                         Class.mk name _params _constraints _methods _vis _ =>
-                            own_keys_go rest (str_map_insert (show_identifier name) true (str_map_insert "mk" true m)),
+                            own_keys_go rest (name_path_set_insert (NamePath.mk [name]) (name_path_set_insert (NamePath.mk [Identifier.id "mk"]) m)),
                     },
                 // The host's `own` set is `names_of_decls`, which is every
                 // decl's `to_ref` (rust/core/src/term.rs): the open's PATH is
@@ -732,23 +769,23 @@ def own_keys_go (decls : List Decl) (m : HashMap String Bool) : HashMap String B
                 // covered by its `open Param {mk}`) where a walk without
                 // the open path would report it.
                 Decl.use_d path _filter _public =>
-                    own_keys_go rest (str_map_insert (show_module_path path) true m),
+                    own_keys_go rest (name_path_set_insert (module_path_as_npath path) m),
                 Decl.open_d path _filter =>
-                    own_keys_go rest (str_map_insert (show_name_path path) true m),
+                    own_keys_go rest (name_path_set_insert path m),
                 Decl.infix_d _op path _vis =>
-                    own_keys_go rest (str_map_insert (show_name_path path) true m),
+                    own_keys_go rest (name_path_set_insert path m),
                 Decl.instance_d ins =>
                     match ins {
                         Instance.mk { name, .. } =>
-                            own_keys_go rest (str_map_insert (show_identifier name) true m),
+                            own_keys_go rest (name_path_set_insert (NamePath.mk [name]) m),
                     },
                 // `to_ref`'s placeholders, kept for faithfulness; neither
                 // spelling can be written at a reference site, so both are
                 // inert here.
                 Decl.macro_call_d _name _args =>
-                    own_keys_go rest (str_map_insert "__macro_call__" true m),
+                    own_keys_go rest (name_path_set_insert (NamePath.mk [Identifier.id "__macro_call__"]) m),
                 Decl.mote_d _attr =>
-                    own_keys_go rest (str_map_insert "__mote_attr__" true m),
+                    own_keys_go rest (name_path_set_insert (NamePath.mk [Identifier.id "__mote_attr__"]) m),
                 // The host's `module()` unwraps scoped opens before its
                 // walks, so the wrapped declaration's names and
                 // references both count.
@@ -762,15 +799,16 @@ def own_keys_go (decls : List Decl) (m : HashMap String Bool) : HashMap String B
 /// tail is what a bare reference writes, the full spelling what a
 /// qualified one does, and both are this module's own names.
 #[partial]
-def own_ctors_go (ind : String) (cns : List InductConstructor) (m : HashMap String Bool) : HashMap String Bool :=
+def own_ctors_go (ind : NamePath) (cns : List InductConstructor) (m : NamePathSet) : NamePathSet :=
     match cns {
         List.empty => m,
         List.cons cn rest =>
             match cn {
                 InductConstructor.mk name _params _typ =>
+                    let full : NamePath :=
+                        match ind { NamePath.mk inds => match name { NamePath.mk ns => NamePath.mk (List.append inds ns) } } in
                     own_ctors_go ind rest
-                        (str_map_insert (String.concat ind (String.concat "." (show_name_path name))) true
-                            (str_map_insert (show_name_path name) true m)),
+                        (name_path_set_insert full (name_path_set_insert name m)),
             },
     }
 
@@ -782,50 +820,52 @@ def own_ctors_go (ind : String) (cns : List InductConstructor) (m : HashMap Stri
 /// `use std::base {}` plus a qualified `std::base::Ordering.lt` look
 /// unimported.
 pub struct Refs {
-    bare : List String,
-    bare_seen : HashMap String Bool,
-    qualified : List (Pair ModulePath String),
-    qual_seen : HashMap String Bool,
+    bare : List NamePath,
+    bare_seen : NamePathSet,
+    qualified : List QualifiedName,
+    qual_seen : QualifiedNameSet,
 }
 
-def refs_empty : Refs := { bare := List.empty, bare_seen := str_map_empty, qualified := List.empty, qual_seen := str_map_empty }
+def refs_empty : Refs :=
+    { bare := List.empty, bare_seen := name_path_set_empty,
+        qualified := List.empty, qual_seen := qualified_name_set_empty }
 
-def refs_add_bare (name : String) (refs : Refs) : Refs :=
-    match str_map_lookup name refs.bare_seen {
-        Option.some _ => refs,
-        Option.none =>
-            { refs with bare := List.append refs.bare (List.cons name List.empty), bare_seen := str_map_insert name true refs.bare_seen },
-    }
+def refs_add_bare (name : NamePath) (refs : Refs) : Refs :=
+    let seen_now : Refs :=
+        { refs with bare := List.append refs.bare (List.cons name List.empty),
+            bare_seen := name_path_set_insert name refs.bare_seen } in
+    if name_path_set_member name refs.bare_seen
+    then refs
+    else seen_now
 
 /// A qualified reference names its module outright, so no local binder
 /// can shadow it; the walk only ever sees it as a free variable.
-def refs_add_qualified (mp : ModulePath) (name : String) (refs : Refs) : Refs :=
-    let key : String := String.concat (show_module_path mp) (String.concat "::" name) in
-    match str_map_lookup key refs.qual_seen {
-        Option.some _ => refs,
-        Option.none =>
-            {
-                refs with
-                qualified := List.append refs.qualified (List.cons (Pair.pair mp name) List.empty),
-                qual_seen := str_map_insert key true refs.qual_seen,
-            },
-    }
+def refs_add_qualified (qn : QualifiedName) (refs : Refs) : Refs :=
+    let seen_now : Refs :=
+        {
+            refs with
+            qualified := List.append refs.qualified (List.cons qn List.empty),
+            qual_seen := qualified_name_set_insert qn refs.qual_seen,
+        } in
+    if qualified_name_set_member qn refs.qual_seen
+    then refs
+    else seen_now
 
 /// One free variable's written spelling, on the axis it was written on.
-def refs_add_free (s : String) (refs : Refs) : Refs :=
-    match qualified_half s {
-        Option.some halves =>
-            match halves {
-                Pair.pair mp name => refs_add_qualified mp name refs,
-            },
-        Option.none => refs_add_bare s refs,
+/// The `DebugName` still carries the flattened spelling; splitting it at
+/// `::` is this module's one parsing boundary.
+def refs_add_free (id : Identifier) (refs : Refs) : Refs :=
+    let spelling : String := show_identifier id in
+    match qualified_half spelling {
+        Option.some qn => refs_add_qualified qn refs,
+        Option.none => refs_add_bare (name_path_of_spelling spelling) refs,
     }
 
 /// A `DebugName` of a free variable, classified. `unnamed` carries no
 /// spelling at all.
 def refs_add_debug (dbg : DebugName) (refs : Refs) : Refs :=
     match dbg {
-        DebugName.named id => refs_add_free (show_identifier id) refs,
+        DebugName.named id => refs_add_free id refs,
         DebugName.unnamed => refs,
     }
 
@@ -854,7 +894,7 @@ def collect_term (t : Term) (refs : Refs) : Refs :=
             },
         Term.con c =>
             match c {
-                Con.mk { typ_name, args, .. } => collect_opt_terms args (refs_add_bare (show_name_path typ_name) refs),
+                Con.mk { typ_name, args, .. } => collect_opt_terms args (refs_add_bare typ_name refs),
             },
         Term.hole => refs,
         Term.quote_ inner => collect_term inner refs,
@@ -916,7 +956,7 @@ def collect_cases (cases : List MatchCase) (refs : Refs) : Refs :=
         List.cons case rest =>
             match case {
                 MatchCase.mk { name, body, .. } =>
-                    collect_cases rest (collect_term body (refs_add_bare (show_identifier name) refs)),
+                    collect_cases rest (collect_term body (refs_add_bare (NamePath.mk [name]) refs)),
             },
     }
 
@@ -956,7 +996,7 @@ def collect_constraints (constraints : List TypeConstraint) (refs : Refs) : Refs
         List.empty => refs,
         List.cons tc rest =>
             match tc {
-                TypeConstraint.mk { cls, .. } => collect_constraints rest (refs_add_bare (show_name_path cls) refs),
+                TypeConstraint.mk { cls, .. } => collect_constraints rest (refs_add_bare cls refs),
             },
     }
 
@@ -1025,7 +1065,7 @@ def collect_decl (d : Decl) (refs : Refs) : Refs :=
         Decl.instance_d ins =>
             match ins {
                 Instance.mk { cls, constraints, args, defs, .. } =>
-                    collect_defs defs (collect_constraints constraints (collect_terms args (refs_add_bare (show_name_path cls) refs))),
+                    collect_defs defs (collect_constraints constraints (collect_terms args (refs_add_bare cls refs))),
             },
         // `open ... in <decl>`: the wrapped declaration is one of the
         // module's own, and the host's `module()` unwraps it before
@@ -1035,7 +1075,7 @@ def collect_decl (d : Decl) (refs : Refs) : Refs :=
             // The macro NAME is the reference (the host's
             // `collect_macro_call_names`); the arguments are
             // deliberately not walked there, and not here either.
-            refs_add_bare (show_identifier name) refs,
+            refs_add_bare (NamePath.mk [name]) refs,
         _ => refs,
     }
 
@@ -1102,13 +1142,13 @@ def derive_macro_of_target (regs : List DeriveHandlerReg) (target : Identifier) 
 /// registered handler. Both are names the consumer reaches from the
 /// macro's defining module, so both are the `use` line's business.
 #[partial]
-def macro_call_names_go (decls : List Decl) (regs : List DeriveHandlerReg) (acc : List String) : List String :=
+def macro_call_names_go (decls : List Decl) (regs : List DeriveHandlerReg) (acc : List NamePath) : List NamePath :=
     match decls {
         List.empty => acc,
         List.cons d rest =>
             match d {
                 Decl.macro_call_d name _args =>
-                    macro_call_names_go rest regs (List.append acc (List.cons (show_identifier name) List.empty)),
+                    macro_call_names_go rest regs (List.append acc (List.cons (NamePath.mk [name]) List.empty)),
                 Decl.inductive_d ind =>
                     match ind {
                         Inductive.mk _name _params _typ _ctors attrs _vis =>
@@ -1119,13 +1159,13 @@ def macro_call_names_go (decls : List Decl) (regs : List DeriveHandlerReg) (acc 
     }
 
 #[partial]
-def append_derive_names (targets : List Identifier) (regs : List DeriveHandlerReg) (acc : List String) : List String :=
+def append_derive_names (targets : List Identifier) (regs : List DeriveHandlerReg) (acc : List NamePath) : List NamePath :=
     match targets {
         List.empty => acc,
         List.cons target rest =>
             match derive_macro_of_target regs target {
                 Option.some macro_name =>
-                    append_derive_names rest regs (List.append acc (List.cons (show_identifier macro_name) List.empty)),
+                    append_derive_names rest regs (List.append acc (List.cons (NamePath.mk [macro_name]) List.empty)),
                 // "Unresolved is not an error" here as everywhere in the
                 // derive machinery: a target no registered handler
                 // declares is the macro system's own report to make.
@@ -1152,7 +1192,7 @@ def derive_registry (world : List (Pair ModulePath (List Decl))) (acc : List Der
 /// whole file there, and silence is a false negative, never a false
 /// positive.
 pub struct Opens {
-    names : HashMap String Bool,
+    names : NamePathSet,
 }
 
 #[partial]
@@ -1160,10 +1200,10 @@ def opens_add_names (names : List Identifier) (opens : Opens) : Opens :=
     match names {
         List.empty => opens,
         List.cons n rest =>
-            let spelling : String := show_identifier n in
+            let np : NamePath := name_path_of_spelling (show_identifier n) in
             let with_full : Opens :=
-                { opens with names := str_map_insert spelling true opens.names } in
-            opens_add_names rest { with_full with names := str_map_insert (after_last_dot spelling) true with_full.names },
+                { opens with names := name_path_set_insert np opens.names } in
+            opens_add_names rest { with_full with names := name_path_set_insert (NamePath.mk [npath_tail np]) with_full.names },
     }
 
 #[partial]
@@ -1197,11 +1237,11 @@ struct Judge {
     /// The consumer FILE's mote, from its manifest (`None` outside any
     /// mote). See `visibility_visible_from`.
     consumer_mote : Option String,
-    opens : HashMap String Bool,
-    selection : HashMap String Selection,
-    ambient : HashMap String Bool,
-    index : HashMap String (List DeclRow),
-    own : HashMap String Bool,
+    opens : NamePathSet,
+    selection : ModuleMap Selection,
+    ambient : ModuleSet,
+    index : NameMap (List DeclRow),
+    own : NamePathSet,
     file_path : String,
 }
 
@@ -1215,9 +1255,11 @@ type FindingKind {
 }
 
 struct Finding {
-    name : String,
+    /// The reference's name, as written.
+    name : NamePath,
     owner : ModulePath,
-    spelling : String,
+    /// The declaration's own name (what a brace item has to say).
+    spelling : NamePath,
     kind : FindingKind,
     vis : Visibility,
 }
@@ -1227,20 +1269,23 @@ def render_finding (file_path : String) (f : Finding) : String :=
     match f.kind {
         fk_unimported =>
             let module_str : String := module_path_to_string_colon f.owner in
+            let name : String := show_name_path f.name in
+            let spelling : String := show_name_path f.spelling in
             String.concat_all [
-                "error: `", f.name, "` is not imported\n",
-                "  `", f.spelling, "` is declared in `", module_str, "`\n",
-                "  hint: add it to a `use ", module_str, " {...}` line -- `use ", module_str, " {", f.spelling, "}` names it\n",
+                "error: `", name, "` is not imported\n",
+                "  `", spelling, "` is declared in `", module_str, "`\n",
+                "  hint: add it to a `use ", module_str, " {...}` line -- `use ", module_str, " {", spelling, "}` names it\n",
                 "  in ", file_path,
             ],
         fk_hidden =>
             let module_str : String := module_path_to_string_colon f.owner in
+            let spelling : String := show_name_path f.spelling in
             let declaration : String :=
                 match f.vis {
                     Visibility.priv_ =>
-                        String.concat_all ["`", f.spelling, "` is declared `priv` in `", module_str, "`"],
+                        String.concat_all ["`", spelling, "` is declared `priv` in `", module_str, "`"],
                     _ =>
-                        String.concat_all ["`", f.spelling, "` is declared in `", module_str, "` and is not marked `pub`"],
+                        String.concat_all ["`", spelling, "` is declared in `", module_str, "` and is not marked `pub`"],
                 } in
             let mote_hint : String :=
                 match module_mote_of f.owner {
@@ -1248,25 +1293,19 @@ def render_finding (file_path : String) (f : Finding) : String :=
                     Option.none => "",
                 } in
             String.concat_all [
-                "error: `", f.name, "` is not visible here\n",
+                "error: `", show_name_path f.name, "` is not visible here\n",
                 "  ", declaration, "\n",
-                "  hint: mark `", f.spelling, "` `pub`", mote_hint, ", or reword the reference\n",
+                "  hint: mark `", spelling, "` `pub`", mote_hint, ", or reword the reference\n",
                 "  in ", file_path,
             ],
     }
 
-def set_member (key : String) (m : HashMap String Bool) : Bool :=
-    match str_map_lookup key m {
-        Option.some _ => true,
-        Option.none => false,
-    }
-
 def ambient_member (j : Judge) (mp : ModulePath) : Bool :=
-    set_member (show_module_path mp) j.ambient
+    module_set_member mp j.ambient
 
 /// The selection a consumer holds for `mp`, if it holds one.
 def selection_of (j : Judge) (mp : ModulePath) : Option Selection :=
-    str_map_lookup (show_module_path mp) j.selection
+    module_map_lookup mp j.selection
 
 /// The row naming `mp`'s declaration called `name`, if the index has
 /// one: a qualified reference names its module outright, so there is
@@ -1306,10 +1345,10 @@ def qualified_selected (j : Judge) (mp : ModulePath) (row : DeclRow) : Bool :=
         }
 
 /// Whether a module-qualified reference is accounted for.
-def qualified_visible (j : Judge) (mp : ModulePath) (name : String) (row : DeclRow) : Bool :=
+def qualified_visible (j : Judge) (mp : ModulePath) (name : NamePath) (row : DeclRow) : Bool :=
     modpath_eq mp j.consumer
-        || set_member name j.own
-        || set_member name j.opens
+        || name_path_set_member name j.own
+        || name_path_set_member name j.opens
         || (qualified_selected j mp row && row_visible j row)
 
 /// Whether `row` is accounted for by the IMPORT rules alone, ignoring
@@ -1365,75 +1404,84 @@ def pick_row (j : Judge) (rows : List DeclRow) (fallback : DeclRow) : DeclRow :=
 
 struct JudgeOut {
     findings : List Finding,
-    seen : HashMap String Bool,
+    seen : NamePathSet,
 }
 
 /// The module-qualified half: every `M::name` the consumer wrote.
 #[partial]
-def judge_qualified (j : Judge) (items : List (Pair ModulePath String)) (seen : HashMap String Bool) (acc : List Finding) : JudgeOut :=
+def judge_qualified (j : Judge) (items : List QualifiedName) (seen : NamePathSet) (acc : List Finding) : JudgeOut :=
     match items {
         List.empty => { findings := acc, seen := seen },
-        List.cons item rest =>
-            match item {
-                Pair.pair mp name =>
-                    match row_of_owner (str_map_lookup name j.index) mp {
-                        // Not a top-level declaration of the named module
-                        // at all: no brace item could name it, so there is
-                        // nothing to suggest. Whether the name exists
-                        // anywhere is resolution's business.
-                        Option.none => judge_qualified j rest seen acc,
-                        Option.some row =>
-                            if qualified_visible j mp name row
-                            then judge_qualified j rest seen acc
-                            else
-                                if set_member name seen
-                                then judge_qualified j rest seen acc
-                                else
-                                    let kind : FindingKind :=
-                                        if Bool.and (qualified_selected j mp row) (Bool.not (row_visible j row))
-                                        then FindingKind.fk_hidden
-                                        else FindingKind.fk_unimported in
-                                    let finding : Finding :=
-                                        { name := name, owner := mp, spelling := item_spelling row,
-                                            kind := kind, vis := row.vis } in
-                                    judge_qualified j rest (str_map_insert name true seen) (List.append acc (List.cons finding List.empty)),
-                    },
+        List.cons item rest => judge_qualified_one j item rest seen acc,
+    }
+
+/// One qualified reference. A separate def, not a nested `match` arm:
+/// the checker loses the arm's expected `JudgeOut` when a match on a
+/// `List` arm is itself a match on a struct.
+#[partial]
+def judge_qualified_one (j : Judge) (item : QualifiedName) (rest : List QualifiedName)
+    (seen : NamePathSet) (acc : List Finding) : JudgeOut :=
+    match item {
+        QualifiedName.mk qmod qname =>
+            match row_of_owner (name_map_lookup qname j.index) qmod {
+                // Not a top-level declaration of the named module at
+                // all: no brace item could name it, so there is nothing
+                // to suggest. Whether the name exists anywhere is
+                // resolution's business.
+                Option.none => judge_qualified j rest seen acc,
+                Option.some row =>
+                    if qualified_visible j qmod qname row
+                    then judge_qualified j rest seen acc
+                    else
+                        if name_path_set_member qname seen
+                        then judge_qualified j rest seen acc
+                        else
+                            let kind : FindingKind :=
+                                if Bool.and (qualified_selected j qmod row) (Bool.not (row_visible j row))
+                                then FindingKind.fk_hidden
+                                else FindingKind.fk_unimported in
+                            let finding : Finding :=
+                                { name := qname, owner := qmod, spelling := item_spelling row,
+                                    kind := kind, vis := row.vis } in
+                            judge_qualified j rest (name_path_set_insert qname seen)
+                                (List.append acc (List.cons finding List.empty)),
             },
     }
 
 /// The bare half: every name the consumer wrote without a module.
 #[partial]
-def judge_bare (j : Judge) (names : List String) (seen : HashMap String Bool) (acc : List Finding) : JudgeOut :=
+def judge_bare (j : Judge) (names : List NamePath) (seen : NamePathSet) (acc : List Finding) : JudgeOut :=
     match names {
         List.empty => { findings := acc, seen := seen },
         List.cons name rest =>
-            if set_member name j.own || set_member name j.opens || set_member name seen
+            if name_path_set_member name j.own || name_path_set_member name j.opens || name_path_set_member name seen
             then judge_bare j rest seen acc
             else
-                match str_map_lookup name j.index {
+                match name_map_lookup name j.index {
                     // Declared in no loaded module at all: either a local
                     // binding or a genuinely unknown name, which resolution
                     // reports on its own terms.
-                    Option.none => judge_bare j rest (str_map_insert name true seen) acc,
+                    Option.none => judge_bare j rest (name_path_set_insert name seen) acc,
                     Option.some rows =>
                         if bare_reachable j rows
-                        then judge_bare j rest (str_map_insert name true seen) acc
+                        then judge_bare j rest (name_path_set_insert name seen) acc
                         else
                             let finding : Finding := bare_finding j name rows in
-                            judge_bare j rest (str_map_insert name true seen) (List.append acc (List.cons finding List.empty)),
+                            judge_bare j rest (name_path_set_insert name seen) (List.append acc (List.cons finding List.empty)),
                 },
     }
 
 def first_row (rows : List DeclRow) : DeclRow :=
     match rows {
         List.cons row _rest => row,
-        List.empty => { owner := init_module_path, spelling := "", bare_tail := "", is_ctor := false, vis := Visibility.package_private },
+        List.empty => { owner := init_module_path, name := NamePath.mk List.empty,
+            bare_tail := Identifier.id "", is_ctor := false, vis := Visibility.package_private },
     }
 
 /// Why a bare name with no reachable candidate is unusable. A candidate
 /// the import rules account for but visibility does not is a `pub`
 /// problem on the declaration; anything else is a missing import.
-def bare_finding (j : Judge) (name : String) (rows : List DeclRow) : Finding :=
+def bare_finding (j : Judge) (name : NamePath) (rows : List DeclRow) : Finding :=
     match bare_hidden_row j rows {
         Option.some hidden =>
             let f : Finding :=
@@ -1456,7 +1504,7 @@ def insert_finding (fs : List Finding) (f : Finding) : List Finding :=
     match fs {
         List.empty => List.cons f List.empty,
         List.cons hd rest =>
-            if String.lt f.name hd.name
+            if BOrd.lt f.name hd.name
             then List.cons f fs
             else List.cons hd (insert_finding rest f),
     }
@@ -1522,18 +1570,17 @@ def open_row_hidden (j : Judge) (rows : List DeclRow) : Option DeclRow :=
 
 #[partial]
 def judge_open_names (j : Judge) (path : NamePath) (names : List Identifier)
-    (rest : List Decl) (seen : HashMap String Bool) (acc : List Finding) : JudgeOut :=
+    (rest : List Decl) (seen : NamePathSet) (acc : List Finding) : JudgeOut :=
     match names {
         List.empty => judge_opens j rest seen acc,
         List.cons n names_rest =>
-            let name : String := show_identifier n in
-            let dotted : String :=
-                String.concat (show_name_path path) (String.concat "." name) in
+            let name : NamePath := NamePath.mk [n] in
+            let dotted : NamePath := npath_extend path n in
             let hidden : Option DeclRow :=
-                match str_map_lookup dotted j.index {
+                match name_map_lookup dotted j.index {
                     Option.some rows => open_row_hidden j rows,
                     Option.none =>
-                        match str_map_lookup name j.index {
+                        match name_map_lookup name j.index {
                             Option.some rows => open_row_hidden j rows,
                             Option.none => Option.none,
                         },
@@ -1541,28 +1588,28 @@ def judge_open_names (j : Judge) (path : NamePath) (names : List Identifier)
             match hidden {
                 Option.none => judge_open_names j path names_rest rest seen acc,
                 Option.some row =>
-                    if set_member name seen
+                    if name_path_set_member name seen
                     then judge_open_names j path names_rest rest seen acc
                     else
                         let finding : Finding :=
                             { name := name, owner := row.owner, spelling := name,
                                 kind := FindingKind.fk_hidden, vis := row.vis } in
                         judge_open_names j path names_rest rest
-                            (str_map_insert name true seen)
+                            (name_path_set_insert name seen)
                             (List.append acc (List.cons finding List.empty)),
             },
     }
 
 #[partial]
 def judge_open_one (j : Judge) (path : NamePath) (filter : OpenFilter)
-    (rest : List Decl) (seen : HashMap String Bool) (acc : List Finding) : JudgeOut :=
+    (rest : List Decl) (seen : NamePathSet) (acc : List Finding) : JudgeOut :=
     match filter {
         open_all => judge_opens j rest seen acc,
         open_only names => judge_open_names j path names rest seen acc,
     }
 
 #[partial]
-def judge_opens (j : Judge) (decls : List Decl) (seen : HashMap String Bool) (acc : List Finding) : JudgeOut :=
+def judge_opens (j : Judge) (decls : List Decl) (seen : NamePathSet) (acc : List Finding) : JudgeOut :=
     match decls {
         List.empty => { findings := acc, seen := seen },
         List.cons d rest =>
@@ -1579,13 +1626,13 @@ def judge_opens (j : Judge) (decls : List Decl) (seen : HashMap String Bool) (ac
 def judge_all (file_path : String) (consumer : ModulePath) (consumer_mote : Option String) (pre_decls : List Decl)
     (expanded_decls : List Decl) (world : List (Pair ModulePath (List Decl)))
     (opens : Opens) : List String :=
-    let selection : HashMap String Selection :=
-        sel_map_of_reexports world pre_decls (sel_map_of_decls pre_decls str_map_empty) in
-    let ambient : HashMap String Bool := ambient_seen world in
-    let index : HashMap String (List DeclRow) := declaration_index world str_map_empty in
-    let own : HashMap String Bool := own_keys_go (List.append pre_decls expanded_decls) str_map_empty in
+    let selection : ModuleMap Selection :=
+        sel_map_of_reexports world pre_decls (sel_map_of_decls pre_decls module_map_empty) in
+    let ambient : ModuleSet := ambient_seen world in
+    let index : NameMap (List DeclRow) := declaration_index world name_map_empty in
+    let own : NamePathSet := own_keys_go (List.append pre_decls expanded_decls) name_path_set_empty in
     let regs : List DeriveHandlerReg := derive_registry world List.empty in
-    let macro_names : List String := macro_call_names_go pre_decls regs List.empty in
+    let macro_names : List NamePath := macro_call_names_go pre_decls regs List.empty in
     let refs_start : Refs := refs_add_bares macro_names refs_empty in
     let refs : Refs := collect_decls pre_decls refs_start in
     let j : Judge :=
@@ -1595,17 +1642,17 @@ def judge_all (file_path : String) (consumer : ModulePath) (consumer_mote : Opti
     // `open`s first: an opened name is skipped by the two reference
     // judges (`set_member name j.opens`), so a hidden declaration reached
     // that way has to be caught at the `open` site itself.
-    let open_out : JudgeOut := judge_opens j pre_decls str_map_empty List.empty in
+    let open_out : JudgeOut := judge_opens j pre_decls name_path_set_empty List.empty in
     let qualified_out : JudgeOut := judge_qualified j refs.qualified open_out.seen open_out.findings in
     let bare_out : JudgeOut := judge_bare j refs.bare qualified_out.seen qualified_out.findings in
     let all : List Finding := List.append qualified_out.findings bare_out.findings in
     List.map (render_finding file_path) (sort_findings all List.empty)
 
-def struct_opens_empty : Opens := { names := str_map_empty }
+def struct_opens_empty : Opens := { names := name_path_set_empty }
 
 /// Fold a list of bare names into `refs`.
 #[partial]
-def refs_add_bares (names : List String) (refs : Refs) : Refs :=
+def refs_add_bares (names : List NamePath) (refs : Refs) : Refs :=
     match names {
         List.empty => refs,
         List.cons n rest => refs_add_bares rest (refs_add_bare n refs),
