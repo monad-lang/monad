@@ -150,6 +150,9 @@ path = "motes/oak_ui"
 [workspace.dependencies.parsec]
 path = "motes/parsec"
 
+[workspace.dependencies.regex]
+path = "motes/regex"
+
 [workspace.dependencies.runtime]
 path = "runtime"
 

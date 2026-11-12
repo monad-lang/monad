@@ -34,8 +34,8 @@ struct RxP {
 
 /// A parse step: a value and the cursor after it, or an error.
 type RxStep A {
-    ok (value : A) (p : RxP),
-    fail (e : RegexError),
+    step_ok (value : A) (p : RxP),
+    step_fail (e : RegexError),
 }
 
 /// What `parse` returns: the tree, the number of capture groups and the
@@ -57,8 +57,8 @@ pub def parse (pattern : String) (ignore_ws : Bool) (nest_limit : I64) : Result 
         limit := nest_limit,
     } in
     match parse_alt p0 {
-        RxStep.fail e => Result.err e,
-        RxStep.ok ast p1 => finish_top ast p1,
+        RxStep.step_fail e => Result.err e,
+        RxStep.step_ok ast p1 => finish_top ast p1,
     }
 
 def finish_top (ast : RxAst) (p : RxP) : Result RegexError RxParsed :=
@@ -112,10 +112,10 @@ def syntax_at (msg : String) (start : I64) (stop : I64) : RegexError :=
     RegexError.syntax msg (RegexSpan.at start stop)
 
 def fail_at (msg : String) (start : I64) (stop : I64) : RxStep A :=
-    RxStep.fail (syntax_at msg start stop)
+    RxStep.step_fail (syntax_at msg start stop)
 
 def unsupported_at (feature : String) (start : I64) (stop : I64) (hint : String) : RxStep A :=
-    RxStep.fail (RegexError.unsupported feature (RegexSpan.at start stop) hint)
+    RxStep.step_fail (RegexError.unsupported feature (RegexSpan.at start stop) hint)
 
 def linear_hint : String :=
     "this engine guarantees linear-time matching, which rules it out"
@@ -188,27 +188,27 @@ def decode4 (h : I64) (c1 : I64) (c2 : I64) (c3 : I64) : RxDecoded :=
 def parse_literal_cp (p : RxP) : RxStep I64 :=
     let d : RxDecoded := decode p.rest in
     if I64.beq d.width 0 then fail_at "invalid UTF-8 in pattern" p.pos (p.pos + 1)
-    else RxStep.ok d.cp (bump p d.width)
+    else RxStep.step_ok d.cp (bump p d.width)
 
 // ─── Alternation and concatenation ───
 
 #[terminating]
 def parse_alt (p : RxP) : RxStep RxAst :=
     match parse_concat p {
-        RxStep.fail e => RxStep.fail e,
-        RxStep.ok first p2 => alt_more p.pos (List.cons first List.empty) p2,
+        RxStep.step_fail e => RxStep.step_fail e,
+        RxStep.step_ok first p2 => alt_more p.pos (List.cons first List.empty) p2,
     }
 
 #[terminating]
 def alt_more (start : I64) (acc : List RxAst) (p : RxP) : RxStep RxAst :=
     if is_at p "|" then alt_branch start acc (bump p 1)
-    else RxStep.ok (finish_list start p.pos acc true) p
+    else RxStep.step_ok (finish_list start p.pos acc true) p
 
 #[terminating]
 def alt_branch (start : I64) (acc : List RxAst) (p : RxP) : RxStep RxAst :=
     match parse_concat p {
-        RxStep.fail e => RxStep.fail e,
-        RxStep.ok b p2 => alt_more start (List.cons b acc) p2,
+        RxStep.step_fail e => RxStep.step_fail e,
+        RxStep.step_ok b p2 => alt_more start (List.cons b acc) p2,
     }
 
 /// `acc` is newest-first. One item is itself; none is `empty`.
@@ -231,21 +231,21 @@ def concat_loop (start : I64) (acc : List RxAst) (p : RxP) : RxStep RxAst :=
     let p1 : RxP := skip_ws p in
     let c : I64 := peek p1 in
     if I64.lt c 0 || I64.beq c (ch "|") || I64.beq c (ch ")") then
-        RxStep.ok (finish_list start p1.pos acc false) p1
+        RxStep.step_ok (finish_list start p1.pos acc false) p1
     else concat_atom start acc p1
 
 #[terminating]
 def concat_atom (start : I64) (acc : List RxAst) (p : RxP) : RxStep RxAst :=
     match parse_atom p {
-        RxStep.fail e => RxStep.fail e,
-        RxStep.ok atom p2 => concat_postfix start acc atom p2,
+        RxStep.step_fail e => RxStep.step_fail e,
+        RxStep.step_ok atom p2 => concat_postfix start acc atom p2,
     }
 
 #[terminating]
 def concat_postfix (start : I64) (acc : List RxAst) (atom : RxAst) (p : RxP) : RxStep RxAst :=
     match parse_postfix atom p {
-        RxStep.fail e => RxStep.fail e,
-        RxStep.ok a p2 => concat_loop start (List.cons a acc) p2,
+        RxStep.step_fail e => RxStep.step_fail e,
+        RxStep.step_ok a p2 => concat_loop start (List.cons a acc) p2,
     }
 
 // ─── Repetition ───
@@ -258,7 +258,7 @@ def parse_postfix (atom : RxAst) (p : RxP) : RxStep RxAst :=
     else if I64.beq c (ch "+") then rep_check atom 1 Option.none p1
     else if I64.beq c (ch "?") then rep_check atom 0 (Option.some 1) p1
     else if I64.beq c (ch "{") then parse_counted atom p1
-    else RxStep.ok atom p1
+    else RxStep.step_ok atom p1
 
 /// A repetition needs an expression: a standalone `(?flags)` is not one.
 #[terminating]
@@ -296,7 +296,7 @@ def read_decimal (acc : RxNum) (p : RxP) : RxStep RxNum :=
     if is_digit c then
         if I64.lt 100000 acc.value then fail_at "repetition count is too large" p.pos (p.pos + 1)
         else read_decimal (num (acc.value * 10 + (c - 48)) (acc.digits + 1)) (bump p 1)
-    else RxStep.ok acc p
+    else RxStep.step_ok acc p
 
 /// At `{`: `{n}`, `{n,}`, `{n,m}` or `{,m}`.
 #[terminating]
@@ -309,8 +309,8 @@ def parse_counted (atom : RxAst) (p : RxP) : RxStep RxAst :=
 #[terminating]
 def counted_min (atom : RxAst) (lpos : I64) (p : RxP) : RxStep RxAst :=
     match read_decimal (num 0 0) (skip_class_ws p) {
-        RxStep.fail e => RxStep.fail e,
-        RxStep.ok lo p2 => counted_after_min atom lpos lo (skip_class_ws p2),
+        RxStep.step_fail e => RxStep.step_fail e,
+        RxStep.step_ok lo p2 => counted_after_min atom lpos lo (skip_class_ws p2),
     }
 
 #[terminating]
@@ -324,8 +324,8 @@ def counted_after_min (atom : RxAst) (lpos : I64) (lo : RxNum) (p : RxP) : RxSte
 #[terminating]
 def counted_max (atom : RxAst) (lpos : I64) (lo : RxNum) (p : RxP) : RxStep RxAst :=
     match read_decimal (num 0 0) p {
-        RxStep.fail e => RxStep.fail e,
-        RxStep.ok hi p2 => counted_close atom lpos lo hi (skip_class_ws p2),
+        RxStep.step_fail e => RxStep.step_fail e,
+        RxStep.step_ok hi p2 => counted_close atom lpos lo hi (skip_class_ws p2),
     }
 
 #[terminating]
@@ -345,11 +345,11 @@ def parse_atom (p : RxP) : RxStep RxAst :=
     let c : I64 := peek p in
     if I64.beq c (ch "(") then parse_group p
     else if I64.beq c (ch "[") then parse_bracket_atom p
-    else if I64.beq c (ch ".") then RxStep.ok (RxAst.dot (RegexSpan.at p.pos (p.pos + 1))) (bump p 1)
+    else if I64.beq c (ch ".") then RxStep.step_ok (RxAst.dot (RegexSpan.at p.pos (p.pos + 1))) (bump p 1)
     else if I64.beq c (ch "^") then
-        RxStep.ok (RxAst.assertion (RegexSpan.at p.pos (p.pos + 1)) RxAssert.start_line) (bump p 1)
+        RxStep.step_ok (RxAst.assertion (RegexSpan.at p.pos (p.pos + 1)) RxAssert.start_line) (bump p 1)
     else if I64.beq c (ch "$") then
-        RxStep.ok (RxAst.assertion (RegexSpan.at p.pos (p.pos + 1)) RxAssert.end_line) (bump p 1)
+        RxStep.step_ok (RxAst.assertion (RegexSpan.at p.pos (p.pos + 1)) RxAssert.end_line) (bump p 1)
     else if I64.beq c (ch "\\") then parse_escape_atom p
     else if I64.beq c (ch "*") || I64.beq c (ch "+") || I64.beq c (ch "?") || I64.beq c (ch "{") then
         fail_at "repetition operator missing expression" p.pos (p.pos + 1)
@@ -358,8 +358,8 @@ def parse_atom (p : RxP) : RxStep RxAst :=
 #[terminating]
 def literal_atom (p : RxP) : RxStep RxAst :=
     match parse_literal_cp p {
-        RxStep.fail e => RxStep.fail e,
-        RxStep.ok cp p2 => RxStep.ok (RxAst.literal (RegexSpan.at p.pos p2.pos) cp) p2,
+        RxStep.step_fail e => RxStep.step_fail e,
+        RxStep.step_ok cp p2 => RxStep.step_ok (RxAst.literal (RegexSpan.at p.pos p2.pos) cp) p2,
     }
 
 // ─── Escapes ───
@@ -375,8 +375,8 @@ type RxEsc {
 
 def parse_escape_atom (p : RxP) : RxStep RxAst :=
     match parse_escape p {
-        RxStep.fail e => RxStep.fail e,
-        RxStep.ok esc p2 => RxStep.ok (esc_to_ast (RegexSpan.at p.pos p2.pos) esc) p2,
+        RxStep.step_fail e => RxStep.step_fail e,
+        RxStep.step_ok esc p2 => RxStep.step_ok (esc_to_ast (RegexSpan.at p.pos p2.pos) esc) p2,
     }
 
 def esc_to_ast (sp : RegexSpan) (esc : RxEsc) : RxAst :=
@@ -387,7 +387,7 @@ def esc_to_ast (sp : RegexSpan) (esc : RxEsc) : RxAst :=
         RxEsc.assertion kind => RxAst.assertion sp kind,
     }
 
-def esc_ok (esc : RxEsc) (p : RxP) : RxStep RxEsc := RxStep.ok esc (bump p 1)
+def esc_ok (esc : RxEsc) (p : RxP) : RxStep RxEsc := RxStep.step_ok esc (bump p 1)
 
 /// At `\`.
 def parse_escape (p : RxP) : RxStep RxEsc :=
@@ -465,14 +465,14 @@ def hex_braced (start : I64) (acc : RxNum) (p : RxP) : RxStep RxEsc :=
 def scalar_esc (start : I64) (v : I64) (p : RxP) : RxStep RxEsc :=
     if I64.lt 1114111 v || (I64.lt 55295 v && I64.lt v 57344) then
         fail_at "escape is not a Unicode scalar value" start p.pos
-    else RxStep.ok (RxEsc.lit v) p
+    else RxStep.step_ok (RxEsc.lit v) p
 
 /// After `\p`/`\RxP`: one letter, or `{name}` with an optional leading `^`.
 def parse_prop (start : I64) (negated : Bool) (p : RxP) : RxStep RxEsc :=
     let c : I64 := peek p in
     if I64.beq c (ch "{") then prop_braced start negated List.empty (bump p 1)
     else if is_lower c || is_upper c then
-        RxStep.ok (RxEsc.prop (String.from_list (first_byte p.rest)) negated) (bump p 1)
+        RxStep.step_ok (RxEsc.prop (String.from_list (first_byte p.rest)) negated) (bump p 1)
     else fail_at "expected a Unicode class name after \\p" start (p.pos + 1)
 
 #[terminating]
@@ -496,7 +496,7 @@ def prop_close (start : I64) (negated : Bool) (name : List U8) (p : RxP) : RxSte
 def prop_named (start : I64) (negated : Bool) (name : List U8) (p : RxP) : RxStep RxEsc :=
     match name {
         List.empty => fail_at "empty Unicode class name" start p.pos,
-        _ => RxStep.ok (RxEsc.prop (String.from_list name) negated) p,
+        _ => RxStep.step_ok (RxEsc.prop (String.from_list name) negated) p,
     }
 
 // ─── Groups ───
@@ -504,7 +504,7 @@ def prop_named (start : I64) (negated : Bool) (name : List U8) (p : RxP) : RxSte
 /// At `(`.
 #[terminating]
 def parse_group (p : RxP) : RxStep RxAst :=
-    if I64.lt p.limit (p.depth + 1) then RxStep.fail (RegexError.nest_limit p.limit)
+    if I64.lt p.limit (p.depth + 1) then RxStep.step_fail (RegexError.nest_limit p.limit)
     else
         let q : RxP := bump p 1 in
         if is_at q "?" then parse_group_ext p.pos (bump q 1)
@@ -518,15 +518,15 @@ def parse_group (p : RxP) : RxStep RxAst :=
 #[terminating]
 def group_body (lpos : I64) (kind : RxGroupKind) (inner_ws : Bool) (p : RxP) : RxStep RxAst :=
     match parse_alt { p with ignore_ws := inner_ws, depth := p.depth + 1 } {
-        RxStep.fail e => RxStep.fail e,
-        RxStep.ok sub p2 => close_group lpos kind p.ignore_ws sub p2,
+        RxStep.step_fail e => RxStep.step_fail e,
+        RxStep.step_ok sub p2 => close_group lpos kind p.ignore_ws sub p2,
     }
 
 #[terminating]
 def close_group (lpos : I64) (kind : RxGroupKind) (outer_ws : Bool) (sub : RxAst) (p : RxP) : RxStep RxAst :=
     if is_at p ")" then
         let q : RxP := bump p 1 in
-        RxStep.ok (RxAst.group (RegexSpan.at lpos q.pos) kind sub) { q with ignore_ws := outer_ws, depth := q.depth - 1 }
+        RxStep.step_ok (RxAst.group (RegexSpan.at lpos q.pos) kind sub) { q with ignore_ws := outer_ws, depth := q.depth - 1 }
     else fail_at "unclosed group" lpos (lpos + 1)
 
 /// After `(?`.
@@ -652,7 +652,7 @@ def flags_close (lpos : I64) (items : List RxFlagItem) (negating : Bool) (p : Rx
         if List.is_empty items then fail_at "empty flag group" lpos (p.pos + 1)
         else
             let q : RxP := bump p 1 in
-            RxStep.ok (RxAst.set_flags (RegexSpan.at lpos q.pos) (List.reverse items))
+            RxStep.step_ok (RxAst.set_flags (RegexSpan.at lpos q.pos) (List.reverse items))
                 { q with ignore_ws := ws_after q.ignore_ws items }
     else group_body lpos (RxGroupKind.non_capture (List.reverse items)) (ws_after p.ignore_ws items) (bump p 1)
 
@@ -674,14 +674,14 @@ struct RxBracket {
 #[terminating]
 def parse_bracket_atom (p : RxP) : RxStep RxAst :=
     match parse_bracket p {
-        RxStep.fail e => RxStep.fail e,
-        RxStep.ok b p2 => RxStep.ok (RxAst.bracket b.span b.negated b.set) p2,
+        RxStep.step_fail e => RxStep.step_fail e,
+        RxStep.step_ok b p2 => RxStep.step_ok (RxAst.bracket b.span b.negated b.set) p2,
     }
 
 /// At `[`. A `]` straight after `[` or `[^` is a literal.
 #[terminating]
 def parse_bracket (p : RxP) : RxStep RxBracket :=
-    if I64.lt p.limit (p.depth + 1) then RxStep.fail (RegexError.nest_limit p.limit)
+    if I64.lt p.limit (p.depth + 1) then RxStep.step_fail (RegexError.nest_limit p.limit)
     else
         let q : RxP := bump p 1 in
         let negated : Bool := is_at q "^" in
@@ -694,8 +694,8 @@ def parse_bracket (p : RxP) : RxStep RxBracket :=
 #[terminating]
 def bracket_union (lpos : I64) (negated : Bool) (acc : List RxClassItem) (p : RxP) : RxStep RxBracket :=
     match union_loop lpos acc p {
-        RxStep.fail e => RxStep.fail e,
-        RxStep.ok items p2 => set_rest lpos negated (RxClassSet.items items) p2,
+        RxStep.step_fail e => RxStep.step_fail e,
+        RxStep.step_ok items p2 => set_rest lpos negated (RxClassSet.items items) p2,
     }
 
 /// Which set operator starts at the cursor, if any.
@@ -713,7 +713,7 @@ def set_rest (lpos : I64) (negated : Bool) (lhs : RxClassSet) (p : RxP) : RxStep
     if is_at p1 "]" then
         let q : RxP := bump p1 1 in
         let b : RxBracket := { negated := negated, set := lhs, span := RegexSpan.at lpos q.pos } in
-        RxStep.ok b { q with depth := q.depth - 1 }
+        RxStep.step_ok b { q with depth := q.depth - 1 }
     else match set_op_at p1 {
         Option.none => fail_at "unclosed character class" lpos (lpos + 1),
         Option.some op => set_rhs lpos negated lhs op (bump p1 2),
@@ -722,8 +722,8 @@ def set_rest (lpos : I64) (negated : Bool) (lhs : RxClassSet) (p : RxP) : RxStep
 #[terminating]
 def set_rhs (lpos : I64) (negated : Bool) (lhs : RxClassSet) (op : RxSetOp) (p : RxP) : RxStep RxBracket :=
     match union_loop lpos List.empty p {
-        RxStep.fail e => RxStep.fail e,
-        RxStep.ok items p2 => set_rest lpos negated (RxClassSet.op op lhs (RxClassSet.items items)) p2,
+        RxStep.step_fail e => RxStep.step_fail e,
+        RxStep.step_ok items p2 => set_rest lpos negated (RxClassSet.op op lhs (RxClassSet.items items)) p2,
     }
 
 /// Items up to `]` or a set operator; `acc` is newest-first.
@@ -732,17 +732,17 @@ def union_loop (lpos : I64) (acc : List RxClassItem) (p : RxP) : RxStep (List Rx
     let p1 : RxP := skip_class_ws p in
     let c : I64 := peek p1 in
     if I64.lt c 0 then fail_at "unclosed character class" lpos (lpos + 1)
-    else if I64.beq c (ch "]") then RxStep.ok (List.reverse acc) p1
+    else if I64.beq c (ch "]") then RxStep.step_ok (List.reverse acc) p1
     else match set_op_at p1 {
-        Option.some _ => RxStep.ok (List.reverse acc) p1,
+        Option.some _ => RxStep.step_ok (List.reverse acc) p1,
         Option.none => union_item lpos acc p1,
     }
 
 #[terminating]
 def union_item (lpos : I64) (acc : List RxClassItem) (p : RxP) : RxStep (List RxClassItem) :=
     match parse_class_item p {
-        RxStep.fail e => RxStep.fail e,
-        RxStep.ok item p2 => union_range lpos acc item p2,
+        RxStep.step_fail e => RxStep.step_fail e,
+        RxStep.step_ok item p2 => union_range lpos acc item p2,
     }
 
 /// After an item: `-` then another literal makes a range, unless the `-`
@@ -761,8 +761,8 @@ def union_range (lpos : I64) (acc : List RxClassItem) (item : RxClassItem) (p : 
 #[terminating]
 def range_hi (lpos : I64) (acc : List RxClassItem) (lo : I64) (dash : I64) (p : RxP) : RxStep (List RxClassItem) :=
     match parse_class_item p {
-        RxStep.fail e => RxStep.fail e,
-        RxStep.ok item p2 => range_close lpos acc lo dash item p2,
+        RxStep.step_fail e => RxStep.step_fail e,
+        RxStep.step_ok item p2 => range_close lpos acc lo dash item p2,
     }
 
 #[terminating]
@@ -782,28 +782,28 @@ def parse_class_item (p : RxP) : RxStep RxClassItem :=
         else nested_item p
     else if I64.beq c (ch "\\") then class_escape p
     else match parse_literal_cp p {
-        RxStep.fail e => RxStep.fail e,
-        RxStep.ok cp p2 => RxStep.ok (RxClassItem.lit cp) p2,
+        RxStep.step_fail e => RxStep.step_fail e,
+        RxStep.step_ok cp p2 => RxStep.step_ok (RxClassItem.lit cp) p2,
     }
 
 #[terminating]
 def nested_item (p : RxP) : RxStep RxClassItem :=
     match parse_bracket p {
-        RxStep.fail e => RxStep.fail e,
-        RxStep.ok b p2 => RxStep.ok (RxClassItem.bracket b.negated b.set) p2,
+        RxStep.step_fail e => RxStep.step_fail e,
+        RxStep.step_ok b p2 => RxStep.step_ok (RxClassItem.bracket b.negated b.set) p2,
     }
 
 def class_escape (p : RxP) : RxStep RxClassItem :=
     match parse_escape p {
-        RxStep.fail e => RxStep.fail e,
-        RxStep.ok esc p2 => class_escape_item p.pos esc p2,
+        RxStep.step_fail e => RxStep.step_fail e,
+        RxStep.step_ok esc p2 => class_escape_item p.pos esc p2,
     }
 
 def class_escape_item (start : I64) (esc : RxEsc) (p : RxP) : RxStep RxClassItem :=
     match esc {
-        RxEsc.lit cp => RxStep.ok (RxClassItem.lit cp) p,
-        RxEsc.perl kind negated => RxStep.ok (RxClassItem.perl kind negated) p,
-        RxEsc.prop name negated => RxStep.ok (RxClassItem.unicode name negated) p,
+        RxEsc.lit cp => RxStep.step_ok (RxClassItem.lit cp) p,
+        RxEsc.perl kind negated => RxStep.step_ok (RxClassItem.perl kind negated) p,
+        RxEsc.prop name negated => RxStep.step_ok (RxClassItem.unicode name negated) p,
         RxEsc.assertion _ => fail_at "assertions are not allowed in a character class" start p.pos,
     }
 
@@ -836,7 +836,7 @@ def ascii_or_nested (p : RxP) : RxStep RxClassItem :=
         Option.none => nested_item p,
         Option.some shape =>
             if name_known shape.name ascii_names then
-                RxStep.ok (RxClassItem.ascii shape.name shape.negated) (bump p (shape.len + 2))
+                RxStep.step_ok (RxClassItem.ascii shape.name shape.negated) (bump p (shape.len + 2))
             else fail_at "invalid ASCII class name" p.pos (p.pos + shape.len + 2),
     }
 
