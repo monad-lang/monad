@@ -28,7 +28,9 @@ use lib::model {Document, Document.of_text, Document.with_language,
     Document.with_selections, EditorState, EditorMsg,
     EditorState.init, EditorState.active_doc, EditorState.with_status,
     EditorState.with_scroll, EditorState.rows_of, EditorState.cols_of}
-use lib::selection {Selections.span}
+use lib::selection {Selections.span, Selections.cursor}
+use lib::types {Rope}
+use lib::rope {Rope.bytes}
 use lib::view {View.view, View.rows, View.row_segments, View.first_visible,
     View.left_col,
     View.text_height, View.gutter_label, View.selection_style,
@@ -38,7 +40,9 @@ use lib::commands {update}
 use tui::types {Screen, Cell, TextStyle, TextSegment, Key}
 use tui::core {mk_screen, mk_rect, screen_get_cell, style_default}
 use tui::render {render}
+use tui::widget {Widget}
 use std::ansi {Color}
+use std::io {IO.current_time}
 // `List.length` lives in `init/src/list.mo` (ambient and pure) as of the
 // upstream move, so this import pulls the module's INSTANCES into scope
 // and names nothing -- the empty brace list is the documented form.
@@ -223,6 +227,29 @@ def vw_lines_go (i : I64) (n : I64) (acc : String) : String :=
     then acc
     else vw_lines_go (i + 1) n
         (String.concat acc (String.concat "l" (String.concat (I64.to_string i) "\n")))
+
+/// `n` lines of about 25 bytes each, "l5 = foo bar baz qux", one per line
+/// with its terminator. THE LINE LENGTH IS THE POINT: the chunker targets
+/// 1 KiB, so ~25-byte lines put about forty lines in the FIRST leaf and the
+/// rest past it -- which is the arrangement a real source file has, and the
+/// only one in which "a row past the first chunk" is a case that can be
+/// reached at all. A 4-byte-line fixture would keep a hundred lines inside
+/// leaf 0 and quietly assert nothing.
+#[terminating]
+def vw_lines_x (n : I64) : String :=
+    vw_lines_x_go 0 n ""
+
+/// The recursive half of the chunked fixture builder: "l" ++ the number ++
+/// the fixed tail, so every line is at least 22 bytes.
+#[terminating]
+def vw_lines_x_go (i : I64) (n : I64) (acc : String) : String :=
+    if Bool.not (i < n)
+    then acc
+    else vw_lines_x_go (i + 1) n
+        (String.concat acc
+            (String.concat "l"
+                (String.concat (I64.to_string i)
+                    (String.concat " = foo bar baz qux" "\n"))))
 
 /// `n` `j` keys, for driving the head down.
 #[terminating]
@@ -579,6 +606,191 @@ def test_left_col_is_zero_when_the_line_fits : Bool :=
 def test_left_col_puts_a_caret_at_the_right_edge_last : Bool :=
     let st : EditorState := vw_type (vw_state (String.repeat "C" 60)) (vw_ls 35) in
     I64.beq (View.left_col st) 1
+
+// ── A document past the first chunk ──────────────────────────────────────
+//
+// THE BUG THIS SECTION EXISTS FOR: `Rope.line_start` answered LEAF-RELATIVE
+// offsets for every line past the first 1 KiB chunk, so the view's rows past
+// that point showed the wrong text -- and one of them was handed the REST OF
+// THE DOCUMENT as its "line" (measured: 636 781 bytes of a 638 KB file),
+// which the view then styled on every frame at 2.4 s per frame.
+//
+// The fixture is 500 lines of ~25 bytes (`vw_lines_x`), so the first 1 KiB
+// leaf holds only about forty of them and the window below -- which starts
+// at line 92 -- is entirely past the first chunk. Every assertion is a
+// rendered CELL, so a wrong span shows up as a wrong glyph rather than an
+// offset a reader has to check by hand.
+//
+// The gutter is five cells: four right-aligned digits then a space, so the
+// text always starts at column 5. Line 100's label is " 101 " (columns 0-3
+// carry "101", column 4 the space) and every line's text is
+// "l<number> = foo bar baz qux".
+
+/// LINE 100 PAINTS AS ITSELF in a chunked document. The caret is on line 100
+/// (100 `j` presses), the 9-row text area clamps the window to start at line
+/// 92, so line 100 is row 8: gutter " 101" and text "l100 = foo bar...".
+#[test]
+def test_row_past_the_first_chunk_paints_its_own_line : Bool :=
+    let st : EditorState := vw_type (vw_state (vw_lines_x 500)) (vw_js 100) in
+    let sh : Shared Screen := vw_screen st in
+    I64.beq (View.first_visible st) 92
+        && vw_is sh 8 1 "1" && vw_is sh 8 2 "0" && vw_is sh 8 3 "1"
+        && vw_is sh 8 5 "l" && vw_is sh 8 6 "1" && vw_is sh 8 7 "0" && vw_is sh 8 8 "0"
+        && vw_is sh 8 9 " " && vw_is sh 8 10 "="
+        && vw_reverse sh 8 5
+
+/// THE FIRST ROW OF A SCROLLED WINDOW IS THE LINE THE WINDOW NAMES, too: row
+/// 0 shows line 92 -- gutter "  93" (the label is 1-based) and text "l92" --
+/// rather than the start of the document.
+#[test]
+def test_scrolled_window_first_row_is_the_window_line : Bool :=
+    let st : EditorState := vw_type (vw_state (vw_lines_x 500)) (vw_js 100) in
+    let sh : Shared Screen := vw_screen st in
+    vw_is sh 0 2 "9" && vw_is sh 0 3 "3"
+        && vw_is sh 0 5 "l" && vw_is sh 0 6 "9" && vw_is sh 0 7 "2"
+        && vw_is sh 0 8 " " && vw_is sh 0 9 "="
+
+/// THE LAST WINDOW ROW SHOWS THE NEXT LINE, not the last one: row 8 is line
+/// 100 and row 7 is line 99 ("l99"), so the rows are distinct lines in
+/// order. Under the leaf-relative index every row past the first chunk
+/// carried a slice of the wrong bytes, which made neighbouring rows repeat
+/// each other's text.
+#[test]
+def test_neighbouring_rows_show_neighbouring_lines : Bool :=
+    let st : EditorState := vw_type (vw_state (vw_lines_x 500)) (vw_js 100) in
+    let sh : Shared Screen := vw_screen st in
+    vw_is sh 7 5 "l" && vw_is sh 7 6 "9" && vw_is sh 7 7 "9"
+        && vw_is sh 7 8 " "
+
+/// A ROW'S TEXT IS ITS OWN LINE'S BYTES: the trailing line of a chunked
+/// document (line 500, after the final `\n`) is empty, with an empty span.
+/// Under the old line index the rows past the first chunk carried the rest
+/// of the buffer, so `stop - start` was the file size rather than zero.
+#[test]
+def test_rows_in_a_chunked_document_are_their_lines : Bool :=
+    let doc : Document := vw_doc (vw_state (vw_lines_x 500)) in
+    let rows : Shared (List RowView) := Shared.of (View.rows doc 500 3) in
+    I64.beq (List.length (Shared.get rows)) 1
+        && vw_row_is_trailing_line (Shared.get rows)
+
+/// The chunked fixture's trailing row: line 500, text "", span empty.
+def vw_row_is_trailing_line (rows : List RowView) : Bool :=
+    match rows {
+        List.cons one _ =>
+            I64.beq (RowView.line_of one) 500
+                && String.beq (RowView.text_of one) ""
+                && I64.beq (RowView.stop_of one) (RowView.start_of one),
+        List.empty => false
+    }
+
+// ── The frame is viewport-bounded, not document-bounded ──────────────────
+//
+// THE 2.4 s FRAME. `View.view` on a 20 000-line document used to take 2.4 s
+// against 5 ms on a 1 000-line one -- it was not the viewport that was slow,
+// it was that `Rope.line_start` handed one row the REST OF THE DOCUMENT to
+// style (see the section above). With that fixed the frame is ~6 ms on both,
+// and these tests hold it there.
+//
+// A RATIO, not a wall-clock bound: an absolute millisecond threshold is
+// flaky on a loaded machine, while "forty times the document must not cost
+// forty times the frame" is exactly the property that broke. The bound is 8
+// with the two sizes 40x apart, so a genuinely viewport-bounded frame (~1x)
+// passes with room to spare and a document-proportional one (~40x) fails.
+
+/// The frame cost is INDEPENDENT of the document's size: building the view
+/// of a 20 000-line document must cost about what a 500-line one costs.
+#[test]
+def test_view_is_viewport_bounded : IO Bool := do {
+    let small : EditorState := vw_state (vw_lines_x 500);
+    let large : EditorState := vw_state (vw_lines_x 20000);
+    let _ <- vw_warm small;
+    let t1 <- IO.current_time;
+    let _ <- vw_frame small;
+    let t2 <- IO.current_time;
+    let _ <- vw_frame large;
+    let t3 <- IO.current_time;
+    let bounded : Bool := vw_ratio_enough (vw_elapsed t1 t2) (vw_elapsed t2 t3);
+    return bounded
+}
+
+/// A SECOND DIMENSION: the frame cost with the caret at the END of a large
+/// document must not exceed the cost with it at the top.
+///
+/// This is the dimension the leaf-relative line index broke hardest: every
+/// line past the first 1 KiB chunk was mis-indexed, so the DEEPER the caret
+/// sat the more of the document a row swallowed. The caret is placed by byte
+/// offset (`Selections.cursor` at the buffer's end) rather than by pressing
+/// `j` 19 990 times, so the fixture costs one rope build instead of twenty
+/// thousand update steps.
+#[test]
+def test_view_cost_does_not_grow_with_the_caret_depth : IO Bool := do {
+    let top : EditorState := vw_state (vw_lines_x 20000);
+    let deep : EditorState := vw_state_at_end (vw_lines_x 20000);
+    let _ <- vw_warm top;
+    let t1 <- IO.current_time;
+    let _ <- vw_frame top;
+    let t2 <- IO.current_time;
+    let _ <- vw_frame deep;
+    let t3 <- IO.current_time;
+    let bounded : Bool := vw_ratio_enough (vw_elapsed t1 t2) (vw_elapsed t2 t3);
+    return bounded
+}
+
+/// A state over `text` with the cursor at the buffer's END -- the fixture
+/// the depth test needs, built without a keystroke per line.
+def vw_state_at_end (text : String) : EditorState :=
+    // The document is read twice (the rope, then the selection swap) and is
+    // not `Copy` (its history holds a `BTreeMap`), so one handle serves both
+    // -- the affine rule's own remedy.
+    let base : Shared Document :=
+        Shared.of (Document.with_language (Document.of_text text) "monad") in
+    let rope : Rope := ply_rope_of (Shared.get base) in
+    let doc : Document :=
+        Document.with_selections (Shared.get base) (Selections.cursor (Rope.bytes rope)) in
+    EditorState.init doc 10 40
+
+/// The document's rope, read once (the accessor `view.mo` also has, private
+/// there -- a test needs its own).
+def ply_rope_of (doc : Document) : Rope :=
+    match doc { { rope, .. } => rope }
+
+/// One warm-up frame, so neither timed run pays for whatever the first call
+/// allocates lazily.
+def vw_warm (st : EditorState) : IO Unit := do {
+    let _w : Widget := View.view st;
+    return unit
+}
+
+/// Build the view and render it -- one whole frame, which is what the cost
+/// under test actually is.
+def vw_frame (st : EditorState) : IO Unit := do {
+    let sh : Shared Screen := vw_screen st;
+    let _n : I64 := vw_char_count sh 0 0 0;
+    return unit
+}
+
+/// A cheap read of the rendered screen, so the frame's result is not
+/// discarded before it is used (a dead binding could be optimised away).
+#[terminating]
+def vw_char_count (sh : Shared Screen) (row : I64) (col : I64) (acc : I64) : I64 :=
+    if Bool.not (row < 10)
+    then acc
+    else if Bool.not (col < 40)
+    then vw_char_count sh (row + 1) 0 acc
+    else vw_char_count sh row (col + 1) (acc + String.length (vw_char sh row col))
+
+/// The elapsed milliseconds between two readings, floored at 1 so the ratio
+/// stays meaningful for a sub-millisecond measurement (a floor can only make
+/// the assertion stricter).
+def vw_elapsed (a : I64) (b : I64) : I64 :=
+    let d : I64 := b - a in
+    if d < 1 then 1 else d
+
+/// Is `big` under 8x `small`? The two documents are 40x apart, so a
+/// viewport-bounded frame (~1x) passes and a document-proportional one
+/// (~40x) fails, with room for noise either way.
+def vw_ratio_enough (small_ms : I64) (big_ms : I64) : Bool :=
+    big_ms < small_ms * 8
 
 // ── The empty document ─────────────────────────────────────────────────────
 

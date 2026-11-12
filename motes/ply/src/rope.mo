@@ -479,18 +479,19 @@ pub def Rope.leaf_texts (r : Rope) : List String :=
 /// THE CLAMP IS TO THE LAST LINE'S INDEX, and the last line's index IS the
 /// newline count (a rope with N newlines has lines `0..N`). A NO-NEWLINE
 /// rope clamps every past-the-end ask to line 0, whose start is 0 -- and
-/// the scan must not run for it: `line_scan` with `line = 0` walks the
-/// whole leaf looking for a 0th `\n` that does not exist and answers the
-/// leaf's END, not its start. The first compiled run of the view tests
-/// caught this: every single-line row rendered one byte short (its last
-/// byte sliced off by `line_content_end`'s `next - 1`), and a multi-byte
-/// last glyph sliced mid-character rendered as nothing at all.
+/// the descent must not run for it: a leaf scan asked for its 0th `\n`
+/// looks for a newline that does not exist and answers the leaf's END, not
+/// its start. The first compiled run of the view tests caught this: every
+/// single-line row rendered one byte short (its last byte sliced off by
+/// `line_content_end`'s `next - 1`), and a multi-byte last glyph sliced
+/// mid-character rendered as nothing at all. `line_start`'s `line <= 0`
+/// arm is what keeps the descent out of that case.
 pub def Rope.line_start (r : Rope) (line : I64) : I64 :=
     if Bool.not (0 < line)
     then 0
-    else if Bool.not (line < Rope.newlines r + 1)
+    else if Rope.newlines r < line
     then ply_last_line_start r
-    else Rope.line_start_go r line 0
+    else rope_start_go r line 0
 
 /// The last line's start: the byte after the final `\n`, or 0 for a
 /// no-newline rope (whose single line starts at 0). Split out so the
@@ -499,41 +500,62 @@ pub def Rope.line_start (r : Rope) (line : I64) : I64 :=
 def ply_last_line_start (r : Rope) : I64 :=
     if Bool.not (0 < Rope.newlines r)
     then 0
-    else Rope.line_start_go r (Rope.newlines r) 0
+    else rope_start_go r (Rope.newlines r) 0
 
-def Rope.line_start_go (r : Rope) (line : I64) (before : I64) : I64 :=
+/// THE LINE DESCENT. Walk to the leaf holding the `line`th newline,
+/// carrying the absolute byte offset `before` of that leaf and the local
+/// line index, then add the two.
+///
+/// THE ROUTING IS `line <= newlines(left)` -- STAY LEFT when the wanted
+/// newline is the left subtree's LAST one. A plain `line < newlines(left)`
+/// sends `line == newlines(left)` into the right subtree with a local index
+/// of 0, which reads the right side's first newline instead of the left
+/// side's last, so line 1 of "ab\ncd\nef" answered 0 rather than 3.
+///
+/// ADDING `before` IS NOT OPTIONAL: the first version of this def threaded
+/// `before` and then answered a bare leaf-relative offset, which is correct
+/// only for the FIRST leaf. Every line beyond the first chunk of a file
+/// therefore came back as a small offset into its own leaf, so
+/// `line_content_end`'s "the next line starts after me" test failed, its
+/// clamp branch answered the whole buffer, and the view handed one row a
+/// "line" of 636 781 bytes -- the rest of the document -- to style every
+/// frame. `test_line_start_past_the_first_chunk` is the pin.
+def rope_start_go (r : Rope) (line : I64) (before : I64) : I64 :=
     match r {
-        Rope.leaf t => Rope.line_scan t 0 (String.length t) line,
+        Rope.leaf t => before + rope_leaf_line_start t line,
         Rope.node l rt _ _ _ =>
-            let ln := Rope.newlines l in
-            if line < ln
-            then Rope.line_start_go l line before
-            else Rope.line_start_go rt (line - ln) (before + Rope.bytes l)
+            let nl := Rope.newlines l in
+            if Bool.not (nl < line)
+            then rope_start_go l line before
+            else rope_start_go rt (line - nl) (before + Rope.bytes l)
     }
 
-/// Scan a leaf for the `line`th `\n` and return the byte after it. The leaf
-/// is at most a few KiB, so a byte loop here is the cheap case; the tree
-/// above it already did the logarithmic work.
+/// The byte offset one past the `n`th newline of a LEAF's text, for an `n`
+/// the descent has already shown to exist (1 <= `n` <= the leaf's own
+/// newline count).
+///
+/// BINARY SEARCH OVER `String.count_newlines`, which scans the bytes in
+/// place and allocates nothing: ten probes on a 1 KiB leaf, so ~10 KiB of
+/// byte reads and no garbage. The two obvious alternatives are both much
+/// worse, and the view makes ~150 of these calls per frame: a per-byte
+/// `String.get` loop costs `strlen` per probe (the note in rope.mo's byte
+/// scan section), and a `String.to_list` walk allocates a cons cell per
+/// byte -- 16 KiB of churn per row.
 #[terminating]
-def Rope.line_scan (t : String) (i : I64) (stop : I64) (line : I64) : I64 :=
-    if Bool.not (i < stop)
-    then stop
-    else
-        match String.get t i {
-            Option.none => stop,
-            Option.some b => Rope.line_step t i stop line b
-        }
+def rope_leaf_line_start (t : String) (n : I64) : I64 :=
+    rope_leaf_start_go t n 0 (String.length t)
 
-/// One byte of the line scan: a `\n` with no line left to cross is the
-/// answer; a `\n` that still has lines to cross steps past it; anything
-/// else just moves on.
+/// The binary search for the smallest `i` with `count_newlines t i >= n`,
+/// which is exactly one past the `n`th newline.
 #[terminating]
-def Rope.line_step (t : String) (i : I64) (stop : I64) (line : I64) (b : U8) : I64 :=
-    if Bool.not (U8.beq b 10u8)
-    then Rope.line_scan t (i + 1) stop line
-    else if I64.beq line 1
-    then i + 1
-    else Rope.line_scan t (i + 1) stop (line - 1)
+def rope_leaf_start_go (t : String) (n : I64) (lo : I64) (hi : I64) : I64 :=
+    if Bool.not (lo < hi)
+    then lo
+    else
+        let mid : I64 := (lo + hi) / 2 in
+        if n < String.count_newlines t mid + 1
+        then rope_leaf_start_go t n lo mid
+        else rope_leaf_start_go t n (mid + 1) hi
 
 // ── Line membership and content ends ────────────────────────────────────────
 //
@@ -545,33 +567,55 @@ def Rope.line_step (t : String) (i : I64) (stop : I64) (line : I64) (b : U8) : I
 // on the rope and not in a caller. `commands.mo` and `view.mo` share
 // them; a private def in either would be a duplicate of the other's.
 
-/// The line an offset is on: the count of line starts strictly below it.
-/// An offset past the end answers the last line, the same total-input
-/// rule `Rope.line_start` itself states.
+/// The line an offset is on: the count of newlines before it. An offset
+/// past the end answers the last line, the same total-input rule
+/// `Rope.line_start` itself states.
 ///
-/// `Rope.line_start` clamps at the last line, so the walk below
-/// terminates even for an offset past the end -- `next == current` is
-/// the "there is no later line" test. THE CLAMP IS CHECKED FIRST: without
-/// it a recursion past the last line would see `next == current` forever.
+/// THE SAME DESCENT AS `line_start`, down the BYTE index instead of the line
+/// index: walk to the leaf that holds the offset, accumulate the newlines
+/// to its left from the cached counts, and count the ones inside it. This
+/// used to walk from line 0 asking `line_start` for each line in turn -- one
+/// full descent per line, so the line of an offset near the end of a
+/// 20 000-line file cost 20 000 descents.
 pub def Rope.line_of (r : Rope) (off : I64) : I64 :=
-    Rope.line_of_go r off 0
+    rope_line_of_go r off 0
 
+/// The byte descent: `off` is relative to THIS subtree and `crossed` the
+/// newlines to its left, both adjusted on the way down -- a right turn
+/// subtracts the left subtree's bytes and adds its newlines, a left turn
+/// changes neither. At the leaf `off` is therefore already leaf-relative,
+/// and the answer is `crossed` plus the leaf's own newlines in its first
+/// `off` bytes, read in place by `String.count_newlines` with no slice.
 #[terminating]
-def Rope.line_of_go (r : Rope) (off : I64) (line : I64) : I64 :=
-    let next : I64 := Rope.line_start r (line + 1) in
-    let cur : I64 := Rope.line_start r line in
-    if next < cur + 1
-    then line
-    else if next < off + 1
-    then Rope.line_of_go r off (line + 1)
-    else line
+def rope_line_of_go (r : Rope) (off : I64) (crossed : I64) : I64 :=
+    match r {
+        Rope.leaf t => crossed + rope_leaf_newlines_before t off,
+        Rope.node l rt _ _ _ =>
+            let lb := Rope.bytes l in
+            if off < lb
+            then rope_line_of_go l off crossed
+            else rope_line_of_go rt (off - lb) (crossed + Rope.newlines l)
+    }
+
+/// The newlines in a leaf's first `len` bytes. `String.count_newlines`
+/// scans in place up to `len` (stopping at a NUL, which a leaf never holds),
+/// so this allocates nothing; a non-positive `len` is no bytes at all.
+def rope_leaf_newlines_before (t : String) (len : I64) : I64 :=
+    if Bool.not (0 < len) then 0 else String.count_newlines t len
 
 /// The last byte (exclusive) of line `line`'s CONTENT: the byte before
 /// the NEXT line's terminator. Stated plainly, `line_start (line + 1)`
 /// is the first byte AFTER this line's `\n`, so one back from it is the
-/// `\n` itself and two back is the content's end. The CLAMP case (the
-/// last line, where `line_start (line+1) == line_start line`) answers
-/// the buffer's end.
+/// `\n` itself and two back is the content's end.
+///
+/// THE CLAMP CASE is the LAST line, where `line_start` answers the same
+/// offset for `line` and `line + 1` because both clamp to the last line:
+/// there is no terminator after it, so the content runs to the buffer's
+/// end. That branch used to be reached by EVERY line past the first chunk
+/// as well -- `line_start` was answering leaf-relative offsets, so "the
+/// next line starts after me" was false for all of them and one row was
+/// handed the rest of the document as its text. `Rope.line_start`'s descent
+/// is the fix, and `test_line_content_past_the_first_chunk` is the pin.
 ///
 /// A half-open line span excludes its own `\n`, so the delete operator
 /// leaves the terminator behind -- deleting a line joins the next one up

@@ -16,7 +16,8 @@ use std::io {IO.current_time}
 use init::shared {Shared}
 use lib::types {Rope}
 use lib::rope {Rope.bytes, Rope.of_string, Rope.to_string, Rope.slice, Rope.split_at,
-    Rope.replace, Rope.line_start, Rope.newlines, Rope.leaf_count,
+    Rope.replace, Rope.line_start, Rope.line_content_end, Rope.line_of,
+    Rope.newlines, Rope.leaf_count,
     Rope.needs_balance, Rope.balance, Rope.concat, Rope.char_start}
 
 // --- Accessors: one read, one binding, each used once ---
@@ -363,6 +364,152 @@ def test_line_start_clamps : Bool :=
 #[test]
 def test_line_start_empty_first_line : Bool :=
     I64.beq (Rope.line_start (Rope.of_string "\nabc") 1) 1
+
+// ── The line index past the FIRST chunk ──────────────────────────────────
+//
+// THE ROW THAT ATE THE DOCUMENT. `View.rows` builds each row from
+// `Rope.line_start` and `Rope.line_content_end`, and both were wrong for
+// every line living in a leaf past the first one: the descent threaded an
+// absolute `before` offset and never added it in the leaf case, so the
+// answer was LEAF-RELATIVE. A 20 000-line file (638 KB, 624 leaves) then
+// handed the view a "line" of 636 781 bytes -- the rest of the document --
+// and the view paid `Text.width` and `Highlight.lex` on all of it every
+// frame. Measured on the built binary: 2.4 s per frame, and every row past
+// the first chunk painted the wrong line's text.
+//
+// The single-leaf fixtures above could never see it (a one-leaf rope has
+// `before == 0` at its only leaf), which is why this section exists: every
+// fixture here asserts `rp_leaves > 1` FIRST, so a rope that stopped
+// chunking would not silently make these vacuous.
+//
+// The oracle is the flat byte scan `rp_scan_line` below, never the rope's
+// own arithmetic.
+
+/// Line `n`'s start by flat scan: offset 0 for line 0 (the definition), and
+/// the byte after the `n`th `\n` otherwise. `rp_scan_line` walks to the
+/// `(n-1)`th newline, so it has no line-0 case of its own.
+def rp_start_oracle (s : String) (n : I64) : I64 :=
+    if Bool.not (0 < n) then 0 else rp_scan_line s n
+
+/// Every line's start, `line` up to `count`, agrees with the oracle.
+#[terminating]
+def rp_starts_match (r : Rope) (s : String) (line : I64) (count : I64) : Bool :=
+    if Bool.not (line < count)
+    then true
+    else
+        let got : I64 := Rope.line_start r line in
+        let want : I64 := rp_start_oracle s line in
+        Bool.and (I64.beq got want) (rp_starts_match r s (line + 1) count)
+
+/// THE PIN: in a chunked rope every line's start is its ABSOLUTE offset.
+///
+/// Fixture: 500 three-byte lines "xy\n" (1500 bytes), which the chunker does
+/// split. Without the `rp_leaves` half this could pass on a rope that never
+/// chunked; with it, the absolute-offset rule is the thing under test.
+#[test]
+def test_line_start_past_the_first_chunk : Bool :=
+    let big : String := rp_repeat "xy\n" 500 in
+    let r : Rope := Rope.of_string big in
+    Bool.not (I64.beq (rp_leaves r) 1)
+        && rp_starts_match r big 0 501
+
+/// THE RUNAWAY ROW ITSELF: every one of a chunked rope's 500 lines is
+/// exactly two bytes, and the trailing line after the final `\n` is empty.
+///
+/// The old bug showed up here as `content_end - start == 636 781` on a 20
+/// 000-line file: `line_content_end` asks `line_start` twice, and both
+/// answers were leaf-relative, so the second was smaller than the first and
+/// the clamp branch answered the whole buffer.
+#[test]
+def test_line_content_past_the_first_chunk : Bool :=
+    let big : String := rp_repeat "xy\n" 500 in
+    let r : Rope := Rope.of_string big in
+    Bool.not (I64.beq (rp_leaves r) 1)
+        && rp_content_two r 0 500
+        && I64.beq (Rope.line_content_end r 500 - Rope.line_start r 500) 0
+
+/// Lines `line`..`count` are the two-byte "xy".
+#[terminating]
+def rp_content_two (r : Rope) (line : I64) (count : I64) : Bool :=
+    if Bool.not (line < count)
+    then true
+    else
+        let start : I64 := Rope.line_start r line in
+        let stop : I64 := Rope.line_content_end r line in
+        Bool.and (I64.beq (stop - start) 2) (rp_content_two r (line + 1) count)
+
+/// AN EMPTY LINE IN THE MIDDLE: "a\n\nb" is three lines -- "a", "", "b" --
+/// so the middle one's span is empty. (A single-leaf rope, so this pins the
+/// newline arithmetic rather than the offset threading.)
+#[test]
+def test_line_content_end_of_an_empty_line : Bool :=
+    let r : Rope := Rope.of_string "a\n\nb" in
+    I64.beq (Rope.line_content_end r 0 - Rope.line_start r 0) 1
+        && I64.beq (Rope.line_content_end r 1 - Rope.line_start r 1) 0
+        && I64.beq (Rope.line_content_end r 2 - Rope.line_start r 2) 1
+
+/// A LINE LONGER THAN A CHUNK: the chunker has nowhere to cut a 9000-byte
+/// line, so it lands in several leaves and line 1 starts past all of them.
+/// Its start is the oracle's and its content is the whole second line --
+/// the cross-leaf case the cached newline counts must survive.
+#[test]
+def test_line_start_after_a_line_spanning_chunks : Bool :=
+    let s : String := String.concat (rp_block 9000) "\nsecond" in
+    let r : Rope := Rope.of_string s in
+    Bool.not (I64.beq (rp_leaves r) 1)
+        && I64.beq (Rope.line_start r 1) 9001
+        && String.beq (Rope.slice r 9001 6) "second"
+
+/// THE LAST-NEWLINE EDGE: a line index equal to `newlines(left)` must stay
+/// in the LEFT subtree (that newline is the left side's last one), not cross
+/// into the right side's first. Fixture: "ab\ncd\nef" -- line 1 starts at 3,
+/// which a wrong `line < ln` (rather than `line <= ln`) routes to the wrong
+/// leaf and answers 0.
+#[test]
+def test_line_start_at_a_leafs_last_newline : Bool :=
+    let r : Rope := Rope.of_string "ab\ncd\nef" in
+    I64.beq (Rope.line_start r 1) 3
+        && I64.beq (Rope.line_start r 2) 6
+        && I64.beq (Rope.line_content_end r 1) 5
+
+/// `Rope.line_of` IS THE INVERSE of `line_start`: asking for the line of a
+/// line's own start answers that line, for every line of a chunked rope.
+///
+/// It used to walk from line 0, one `line_start` descent per line, so this
+/// also pins that the answer does not depend on how far down it lands.
+#[test]
+def test_line_of_is_the_inverse_of_line_start : Bool :=
+    let big : String := rp_repeat "xy\n" 500 in
+    let r : Rope := Rope.of_string big in
+    Bool.not (I64.beq (rp_leaves r) 1)
+        && rp_roundtrip_lines r 0 501
+
+/// Lines `line`..`count`: `line_of` at each line's start is that line.
+#[terminating]
+def rp_roundtrip_lines (r : Rope) (line : I64) (count : I64) : Bool :=
+    if Bool.not (line < count)
+    then true
+    else
+        let start : I64 := Rope.line_start r line in
+        let got : I64 := Rope.line_of r start in
+        Bool.and (I64.beq got line) (rp_roundtrip_lines r (line + 1) count)
+
+/// `line_of` answers the number of newlines BEFORE the offset, so an offset
+/// ON a terminator still belongs to the line that terminator ends. Fixture
+/// "ab\ncd\nef": bytes 0-1 are line 0, byte 2 is line 0's `\n`, bytes 3-4
+/// are line 1, byte 5 is line 1's `\n`, bytes 6-7 are line 2, byte 8 is the
+/// end.
+#[test]
+def test_line_of_inside_a_line : Bool :=
+    let r : Rope := Rope.of_string "ab\ncd\nef" in
+    I64.beq (Rope.line_of r 0) 0
+        && I64.beq (Rope.line_of r 1) 0
+        && I64.beq (Rope.line_of r 2) 0
+        && I64.beq (Rope.line_of r 3) 1
+        && I64.beq (Rope.line_of r 4) 1
+        && I64.beq (Rope.line_of r 5) 1
+        && I64.beq (Rope.line_of r 6) 2
+        && I64.beq (Rope.line_of r 8) 2
 
 // ── char boundaries ───────────────────────────────────────────────────────
 
