@@ -270,7 +270,8 @@ def Server.with_connection_header (closing : Bool) (res : Response) : Response :
 // the same reader the transformer server uses (`read_request_t`: an
 // O(n) head read, a body read that accumulates chunks in reverse and
 // flattens once, the strict parse, and the caps), and the same writer
-// (`write_response_for_t`, which streams a `Body.stream` chunked).
+// (`write_response_for_t`, which streams a `Body.stream` chunked). The two
+// paths share the error response too (`serve_parse_error_t`).
 // `read_message`/`read_request` stay: they are the CLIENT-side readers
 // tests use to frame a peer's messages, not this server path.
 
@@ -298,7 +299,7 @@ pub def Server.serve_connection (handler : Request -> IO Response) (sock : FdStr
     let t : Transport := Transport.plain sock;
     let msg <- Server.read_request_t Server.legacy_config t carry;
     match msg {
-        Result.err e => Server.serve_sock_error t e,
+        Result.err e => Server.serve_parse_error_t t e,
         Result.ok opt =>
             match opt {
                 Option.none => Transport.close t,
@@ -330,15 +331,6 @@ def Server.serve_sock_framed (handler : Request -> IO Response) (sock : FdStream
     else Transport.close t
 }
 
-/// A read failure on the old-API path: the status-mapped error response the
-/// transformer server sends, then the connection ends. The caller closes.
-def Server.serve_sock_error (t : Transport) (e : String) : IO Unit := do {
-    let status := Server.error_status e;
-    let res : Response := Response.text status (Server.reason_of status);
-    let _ <- Transport.write_bytes t (Server.canned_bytes res);
-    Transport.close t
-}
-
 /// Read exactly one request, dispatch it, write the response, and close.
 /// This is the testable entry point -- tests interleave client writes and
 /// reads around it in the same thread, which terminates only because it stops
@@ -353,7 +345,7 @@ pub def Server.handle_connection (handler : Request -> IO Response) (sock : FdSt
     let t : Transport := Transport.plain sock;
     let msg <- Server.read_request_t Server.legacy_config t List.empty;
     match msg {
-        Result.err e => Server.serve_sock_error t e,
+        Result.err e => Server.serve_parse_error_t t e,
         Result.ok opt =>
             match opt {
                 Option.none => Transport.close t,
