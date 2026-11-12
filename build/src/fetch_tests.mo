@@ -380,7 +380,7 @@ def Build.resolved_dir (root : String) : IO String := do {
             let filled <- Mote.with_locked_dirs_at (Build.fetch_home root) m;
             match MoteManifest.dep_dir_of filled "dep" {
                 Option.none => return "",
-                Option.some d => return d
+                Option.some d => return (Path.to_string d)
             }
         }
     }

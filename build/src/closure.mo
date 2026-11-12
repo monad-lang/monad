@@ -20,10 +20,9 @@ use build::identity {Build.compiler_key_with}
 /// The declared dependency directories of the mote at `dir`, paired with
 /// its own name, or `none` when `dir` is not inside a mote.
 ///
-/// Entries whose `path` was absent are skipped: `MoteManifest.dep_dirs`
-/// stores `""` for a dependency that is DECLARED but not LOCATED
-/// (lang/src/mote.mo says why that is legal), and there is nothing to
-/// digest at an empty path.
+/// A dependency that is DECLARED but not LOCATED has no entry at all
+/// (`MoteManifest.dep_dirs` stores only located directories), so there is
+/// nothing to digest for it.
 #[partial]
 def Build.mote_facts (dir : String) : IO (Option (Pair String (List String))) := do {
     let m <- Mote.discover dir;
@@ -35,14 +34,14 @@ def Build.mote_facts (dir : String) : IO (Option (Pair String (List String))) :=
 }
 
 #[partial]
-def Build.located_dirs (entries : List (Pair String String)) : List String :=
+def Build.located_dirs (entries : List (Pair String Path)) : List String :=
     match entries {
         List.empty => List.empty,
         List.cons e rest => List.append (Build.located_dir e) (Build.located_dirs rest)
     }
 
-def Build.located_dir (e : Pair String String) : List String :=
-    match e { Pair.pair _name d => if String.is_empty d then List.empty else [d] }
+def Build.located_dir (e : Pair String Path) : List String :=
+    match e { Pair.pair _name d => [Path.to_string d] }
 
 /// One line per mote: its NAME and its tree digest.
 ///

@@ -196,6 +196,26 @@ def test_path_child : Bool :=
     String.beq (Path.to_string (Path.child (Path.path "/tmp") "a")) "/tmp/a"
         && String.beq (Path.to_string (Path.child (Path.path "/tmp") "/abs")) "/abs"
 
+/// A directory root spelled `.` contributes no prefix, which is what keeps
+/// a working-directory mote's joins (`src/main.mo`, `mote.toml`) spelled the
+/// way they were before the root became a `Path`. Any other root joins
+/// normally and an absolute segment still replaces the root.
+#[test]
+def test_path_child_under_treats_the_cwd_root_as_empty : Bool :=
+    String.beq (Path.to_string (Path.child_under (Path.unsafe_dir "") "src")) "src"
+        && String.beq (Path.to_string (Path.child_under (Path.path ".") "src/main.mo")) "src/main.mo"
+        && String.beq (Path.to_string (Path.child_under (Path.path "lang") "src/lib.mo")) "lang/src/lib.mo"
+        && String.beq (Path.to_string (Path.child_under (Path.path "lang/../std") "src")) "lang/../std/src"
+        && String.beq (Path.to_string (Path.child_under (Path.path "lang") "/abs")) "/abs"
+
+/// `Path.unsafe_dir` is the boundary for a directory spelling: the empty
+/// string (the CWD) becomes `.`, and nothing else is touched.
+#[test]
+def test_path_unsafe_dir_spells_the_cwd_as_dot : Bool :=
+    String.beq (Path.to_string (Path.unsafe_dir "")) "."
+        && String.beq (Path.to_string (Path.unsafe_dir "motes/x")) "motes/x"
+        && String.beq (Path.to_string (Path.unsafe_dir ".")) "."
+
 #[test]
 def test_path_of_reports_structured_error : Bool :=
     match Path.of "" {

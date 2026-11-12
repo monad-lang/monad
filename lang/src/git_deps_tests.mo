@@ -110,18 +110,17 @@ def test_only_the_matching_entry_locates : Bool :=
         Option.some m =>
             let filled : MoteManifest :=
                 Mote.fill_dep_dirs m (lock_of [git_entry "other" "file:///repo" Option.none]) "/h" in
-            let count_before : I64 := List.length m.dep_dirs in
-            String.is_empty (dep_dir filled "dep") && I64.beq count_before 1
+            String.is_empty (dep_dir filled "dep") && MoteManifest.declares filled "dep"
     }
 
 /// The dependency's directory as the loader would read it, or `""`.
 def dep_dir (m : MoteManifest) (name : String) : String :=
     match find_dep m.dep_dirs name {
-        Option.some d => d,
+        Option.some d => Path.to_string d,
         Option.none => "",
     }
 
-def find_dep (entries : List (Pair String String)) (name : String) : Option String :=
+def find_dep (entries : List (Pair String Path)) (name : String) : Option Path :=
     match entries {
         List.empty => Option.none,
         List.cons e rest => match e {

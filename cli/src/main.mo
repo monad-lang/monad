@@ -922,7 +922,7 @@ def script_count (name : String) (scripts : List ScriptTarget) : I64 :=
     }
 
 #[terminating]
-def script_dep_dir (name : String) (deps : List (Pair String String)) : Option String :=
+def script_dep_dir (name : String) (deps : List (Pair String Path)) : Option Path :=
     match deps {
         List.empty => Option.none,
         List.cons p rest =>
@@ -971,7 +971,7 @@ def script_owner_dir (base_dir : String) (mote_name : String) : IO (Option Strin
             if String.beq m.name mote_name
             then IO.pure (Option.some m.dir)
             else match script_dep_dir mote_name m.dep_dirs {
-                Option.some d => IO.pure (Option.some d),
+                Option.some d => IO.pure (Option.some (Path.to_string d)),
                 Option.none => do {
                     let root <- script_member_root base_dir 32i64;
                     match root {

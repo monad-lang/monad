@@ -654,7 +654,7 @@ pub def directory_of_path (p : Path) : Path :=
 /// A directory given as text (a CLI argument, an `extract_directory`
 /// result) as a `Path`; empty means the current directory.
 pub def base_dir_path (s : String) : Path :=
-    if String.is_empty s then Path.unsafe "." else Path.unsafe s
+    Path.unsafe_dir s
 
 #[partial]
 def paths_of (ss : List String) : List Path :=
@@ -957,7 +957,7 @@ pub def resolve_runtime_src (base_dir : String) : IO String := do {
         Option.none => List.empty,
         Option.some m => match MoteManifest.dep_dir_of m "runtime" {
             Option.none => List.empty,
-            Option.some dep_dir => runtime_c_in dep_dir
+            Option.some dep_dir => List.map (fn (p : Path) => Path.to_string p) (runtime_c_in dep_dir)
         }
     };
     let ws <- find_workspace_root "" 32;
@@ -978,11 +978,12 @@ pub def resolve_runtime_src (base_dir : String) : IO String := do {
 }
 
 /// `<dep dir>/src/runtime.c` -- the one file a `[dependencies.runtime]`
-/// `path` contributes. `raw_path_join` rather than `++`, so an absolute
+/// `path` contributes. `Path.child_under` rather than `++`, so an absolute
 /// `path` (which is what an external mote writes) stays absolute instead of
-/// being appended to the mote's own directory as `./<abs>`.
-def runtime_c_in (dep_dir : String) : List String :=
-    [raw_path_join (raw_path_join dep_dir "src") "runtime.c"]
+/// being appended to the mote's own directory as `./<abs>`, and a
+/// working-directory root contributes no prefix.
+def runtime_c_in (dep_dir : Path) : List Path :=
+    [Path.child_under (Path.child_under dep_dir "src") "runtime.c"]
 
 /// Resolve a module path to a file path, trying different directories
 /// First tries relative to base_dir, then the mote layout, then falls back to
@@ -1156,7 +1157,7 @@ def resolve_via_manifest (base_dir : Path) (mp : ModulePath) : IO (Option String
         Option.none => return Option.none,
         Option.some m => do {
             let cands <- manifest_candidates m mp;
-            let found <- first_existing (paths_of cands);
+            let found <- first_existing cands;
             return (match found { Option.some p => Option.some (Path.to_string p), Option.none => Option.none })
         }
     }
@@ -1166,7 +1167,7 @@ def resolve_via_manifest (base_dir : Path) (mp : ModulePath) : IO (Option String
 /// refer to itself, so when the first segment IS this mote's name that is
 /// the answer, and the dependency list is tried only when it is not.
 #[partial]
-def manifest_candidates (m : MoteManifest) (mp : ModulePath) : IO (List String) := do {
+def manifest_candidates (m : MoteManifest) (mp : ModulePath) : IO (List Path) := do {
     let deps <- mote_dep_files m mp;
     match mote_path_within m mp {
         Option.none => return deps,
@@ -1183,7 +1184,7 @@ def manifest_candidates (m : MoteManifest) (mp : ModulePath) : IO (List String) 
 /// IO for one arm: a BARE dependency name is that dependency's library root,
 /// and only the dependency's own manifest knows where it declared that.
 #[partial]
-def mote_dep_files (m : MoteManifest) (mp : ModulePath) : IO (List String) := do {
+def mote_dep_files (m : MoteManifest) (mp : ModulePath) : IO (List Path) := do {
     match mp {
         ModulePath.mk ids =>
             match ids {
@@ -1216,18 +1217,13 @@ def mote_dep_files (m : MoteManifest) (mp : ModulePath) : IO (List String) := do
 /// `List.empty` when `dep` is undeclared or declared without a `path` --
 /// resolution then has nothing better to try, and the cascade's own answer
 /// stands.
-def mote_dep_file_of (m : MoteManifest) (dep : String) (stem : String) : List String :=
+def mote_dep_file_of (m : MoteManifest) (dep : String) (stem : String) : List Path :=
     match MoteManifest.dep_dir_of m dep {
         Option.none => List.empty,
         Option.some dep_dir =>
-            List.cons (String.concat (mote_dep_src_root dep_dir) (String.concat stem ".mo")) List.empty
+            List.cons (Path.child_under (Path.child_under dep_dir "src")
+                (String.concat stem ".mo")) List.empty
     }
-
-/// `<dep dir>/src/`, kept trailing-slashed so `mote_dep_file_of` can append
-/// a stem. `raw_path_join` for the same reason `MoteManifest.src_root` uses
-/// it: a `dir` of `""` must not turn into a leading `/`.
-def mote_dep_src_root (dep_dir : String) : String :=
-    String.concat (raw_path_join dep_dir "src") "/"
 
 /// The one candidate a declared dependency's BARE name resolves to: that
 /// dependency's own library root. `dep_man` is its manifest when the caller
@@ -1238,22 +1234,22 @@ def mote_dep_src_root (dep_dir : String) : String :=
 ///
 /// Pure, so all three cases are testable without a filesystem; the IO half
 /// that finds `dep_man` is `mote_dep_lib_file_of` below.
-def mote_dep_lib_files (m : MoteManifest) (dep : String) (dep_man : Option MoteManifest) : List String :=
+def mote_dep_lib_files (m : MoteManifest) (dep : String) (dep_man : Option MoteManifest) : List Path :=
     match MoteManifest.dep_dir_of m dep {
         Option.none => List.empty,
         Option.some dep_dir =>
             match dep_man {
-                Option.some d => List.cons (Path.to_string (mote_lib_file_of d)) List.empty,
-                Option.none => List.cons (String.concat (mote_dep_src_root dep_dir) "lib.mo") List.empty
+                Option.some d => List.cons (mote_lib_file_of d) List.empty,
+                Option.none => List.cons (Path.child_under (Path.child_under dep_dir "src") "lib.mo") List.empty
             }
     }
 
 #[partial]
-def mote_dep_lib_file_of (m : MoteManifest) (dep : String) : IO (List String) := do {
+def mote_dep_lib_file_of (m : MoteManifest) (dep : String) : IO (List Path) := do {
     match MoteManifest.dep_dir_of m dep {
         Option.none => return List.empty,
         Option.some dep_dir => do {
-            let dep_man <- Mote.manifest_at dep_dir;
+            let dep_man <- Mote.manifest_at (Path.to_string dep_dir);
             return (mote_dep_lib_files m dep dep_man)
         }
     }
@@ -1265,12 +1261,12 @@ def mote_dep_lib_file_of (m : MoteManifest) (dep : String) : IO (List String) :=
 def mote_lib_file_of (m : MoteManifest) : Path :=
     match m.lib_path {
         Option.some p => p,
-        Option.none => Path.unsafe (String.concat (String.concat (MoteManifest.src_root m) "/") "lib.mo")
+        Option.none => Path.child_under (MoteManifest.src_root m) "lib.mo"
     }
 
 /// `<mote>.a.b` -> `<mote dir>/src/a/b.mo`, and a bare `<mote>` -> the
 /// mote's library root. `Option.none` when the path does not name this mote.
-def mote_path_within (m : MoteManifest) (mp : ModulePath) : Option String :=
+def mote_path_within (m : MoteManifest) (mp : ModulePath) : Option Path :=
     match mp {
         ModulePath.mk ids =>
             match ids {
@@ -1278,11 +1274,10 @@ def mote_path_within (m : MoteManifest) (mp : ModulePath) : Option String :=
                 List.cons hd rest =>
                     if String.beq (identifier_to_string hd) m.name
                     then
-                        let root := String.concat (MoteManifest.src_root m) "/" in
                         match rest {
-                            List.empty => Option.some (Path.to_string (mote_lib_file_of m)),
+                            List.empty => Option.some (mote_lib_file_of m),
                             List.cons _ _ =>
-                                Option.some (String.concat root
+                                Option.some (Path.child_under (MoteManifest.src_root m)
                                     (String.concat (module_path_to_file (ModulePath.mk rest)) ".mo"))
                         }
                     else Option.none
@@ -9348,11 +9343,11 @@ def declared_lib_fixture : String :=
 
 /// One candidate, checked as a single-element list -- every
 /// `mote_dep_files` case below yields exactly one.
-def sole_candidate_is (xs : List String) (expected : String) : Bool :=
+def sole_candidate_is (xs : List Path) (expected : String) : Bool :=
     match xs {
         List.cons x rest =>
             match rest {
-                List.empty => String.beq x expected,
+                List.empty => String.beq (Path.to_string x) expected,
                 List.cons _ _ => false,
             },
         List.empty => false,
@@ -9369,7 +9364,7 @@ def sole_candidate_is (xs : List String) (expected : String) : Bool :=
 def test_src_root_of_a_mote_at_the_working_directory : Bool :=
     match Mote.parse_manifest "" lang_manifest_fixture {
         Option.none => false,
-        Option.some m => String.beq (MoteManifest.src_root m) "src"
+        Option.some m => String.beq (Path.to_string (MoteManifest.src_root m)) "src"
     }
 
 /// The named-directory case, which must not regress while fixing the above.
@@ -9377,7 +9372,7 @@ def test_src_root_of_a_mote_at_the_working_directory : Bool :=
 def test_src_root_of_a_named_mote_dir : Bool :=
     match Mote.parse_manifest "lang" lang_manifest_fixture {
         Option.none => false,
-        Option.some m => String.beq (MoteManifest.src_root m) "lang/src"
+        Option.some m => String.beq (Path.to_string (MoteManifest.src_root m)) "lang/src"
     }
 
 /// `prelude` is the one module whose NAME is not its FILE name, and it

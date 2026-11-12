@@ -60,14 +60,16 @@ pub struct MoteManifest {
     /// checkout is resolved, a registry one until a registry exists --
     /// which resolution reads as "declared, but not located": the name
     /// still satisfies `declares` (so a `use` on it is legal), it just has
-    /// no directory to resolve into.
+    /// no directory to resolve into. An unlocated dependency is therefore
+    /// ABSENT from this list rather than present with a sentinel directory:
+    /// an empty `Path` is never constructed.
     ///
     /// Without this, a dependency resolved purely by the NAME convention
     /// (`mote_relative_file`: the mote's directory is its name, at the
     /// working directory), which is only true from a checkout root. This
     /// is what `resolve_module_file` consults on its miss path, and it is
     /// what makes resolution key off the mote root rather than the CWD.
-    dep_dirs : List (Pair String String),
+    dep_dirs : List (Pair String Path),
     /// `[features]` entries, in manifest order.
     features : List (Pair String (List String)),
     /// Optional/feature policy for each `[dependencies]`, `[dev-dependencies]`
@@ -203,7 +205,7 @@ pub def ScriptTarget.script_features (t : ScriptTarget) : List String := t.featu
 /// resolves one yet. `workspace = true` is never a constructor here:
 /// inheritance is resolved before a `Dependency` exists.
 pub type Dependency {
-    path (dir : String),
+    path (dir : Path),
     git (url : String) (tag : Option String) (branch : Option String) (rev : Option String) (subdir : Option String),
     registry (req : String),
 }
@@ -213,7 +215,7 @@ pub type Dependency {
 /// For display and diagnostics only; nothing parses it back.
 pub def Dependency.to_source (d : Dependency) : String :=
     match d {
-        Dependency.path dir => String.concat "path+" dir,
+        Dependency.path dir => String.concat "path+" (Path.to_string dir),
         Dependency.git url tag branch rev subdir =>
             String.concat (String.concat "git+" url) (dep_query [
                 dep_param "tag" tag, dep_param "branch" branch,
@@ -222,12 +224,17 @@ pub def Dependency.to_source (d : Dependency) : String :=
         Dependency.registry req => String.concat "registry+" req,
     }
 
-/// The directory a dependency's source puts it in, or `""` when that is
+/// The directory a dependency's source puts it in, or `none` when that is
 /// not known from the manifest alone (see `MoteManifest.dep_dirs`).
-def Dependency.located_dir (d : Dependency) : String :=
+///
+/// A declared `path = ""` in the working-directory mote joins to the empty
+/// spelling, which is not a directory: that dependency stays DECLARED but
+/// not LOCATED, exactly as it did when the sentinel was a string.
+def Dependency.located_dir (d : Dependency) : Option Path :=
     match d {
-        Dependency.path dir => dir,
-        _ => "",
+        Dependency.path dir =>
+            if String.is_empty (Path.to_string dir) then Option.none else Option.some dir,
+        _ => Option.none,
     }
 
 def dep_param (key : String) (value : Option String) : List String :=
@@ -272,16 +279,16 @@ def dep_errors_in (entries : List (Pair String String)) (name : String) : List S
 
 /// The mote's source root -- `<dir>/src`, always.
 ///
-/// `raw_path_join`, not `++`, and the difference is load-bearing exactly
-/// when the mote's `dir` is `""` -- the mote whose `mote.toml` sits in the
-/// WORKING DIRECTORY, which is every mote found by walking up from a
-/// relative path (`Mote.discover`'s own `dir = ""` case). Concatenating
-/// gives `/src`, an ABSOLUTE path, so `mote_path_within` would answer
-/// `use <mote>::x` with `/src/x.mo` and miss every time. Same empty-
-/// component rule the dependency paths already follow
+/// `Path.child_under`, not `++`, and the difference is load-bearing exactly
+/// when the mote's `dir` is the working directory -- the mote whose
+/// `mote.toml` sits there, which is every mote found by walking up from a
+/// relative path (`Mote.discover`'s own CWD case). Concatenating gives
+/// `/src`, an ABSOLUTE path, so `mote_path_within` would answer
+/// `use <mote>::x` with `/src/x.mo` and miss every time. Same
+/// empty-component rule the dependency paths already follow
 /// (`test_manifest_reads_dependency_paths`).
-def MoteManifest.src_root (m : MoteManifest) : String :=
-    raw_path_join m.dir "src"
+def MoteManifest.src_root (m : MoteManifest) : Path :=
+    Path.child_under (MoteManifest.root m) "src"
 
 /// The directory a declared dependency lives in, or `none` when the mote
 /// does not declare `name` or its entry carries no `path`. A dependency
@@ -298,15 +305,22 @@ def MoteManifest.src_root (m : MoteManifest) : String :=
 /// itself, which is why `monad check src/list.mo` from `init/` reported
 /// `unknown variable '==' in List.get`.
 ///
-/// `Option.some ""` is a REAL answer here, unlike `dep_dir_in`'s: `dir` is
-/// `""` for the mote whose `mote.toml` sits in the working directory, and
-/// that is precisely the case this arm exists for.
-pub def MoteManifest.dep_dir_of (m : MoteManifest) (name : String) : Option String :=
+/// The mote's own directory as a `Path`, with the working directory spelled
+/// `.`. `dir` stays a string because it is a SPELLING (`""` is load-bearing
+/// in `raw_path_join` and in every walk-up), not an empty path; this is the
+/// one conversion, so a directory handed to the loader is never empty.
+pub def MoteManifest.root (m : MoteManifest) : Path :=
+    Path.unsafe_dir m.dir
+
+/// The self arm answers even for the mote whose `mote.toml` sits in the
+/// working directory: that is precisely the case it exists for, and
+/// `MoteManifest.root` spells that directory `.`.
+pub def MoteManifest.dep_dir_of (m : MoteManifest) (name : String) : Option Path :=
     if String.beq m.name name
-    then Option.some m.dir
+    then Option.some (MoteManifest.root m)
     else dep_dir_in m.dep_dirs name
 
-def dep_dir_in (entries : List (Pair String String)) (name : String) : Option String :=
+def dep_dir_in (entries : List (Pair String Path)) (name : String) : Option Path :=
     match entries {
         List.empty => Option.none,
         List.cons e rest =>
@@ -315,9 +329,7 @@ def dep_dir_in (entries : List (Pair String String)) (name : String) : Option St
             // would not resolve.
             match e {
                 Pair.pair k v =>
-                    if String.beq k name
-                    then (if String.is_empty v then Option.none else Option.some v)
-                    else dep_dir_in rest name
+                    if String.beq k name then Option.some v else dep_dir_in rest name
             }
     }
 
@@ -1368,7 +1380,8 @@ def Mote.non_git_dep_entry (mote_dir : String) (k : DepKeys) : ManifestDepEntry 
     if count_present [k.tag, k.branch, k.rev, k.subdir] > 0
     then ManifestDepEntry.invalid "`tag`, `branch`, `rev` and `subdir` only apply to a `git` dependency"
     else match k.path {
-        Option.some p => ManifestDepEntry.found (Dependency.path (raw_path_join mote_dir p)),
+        Option.some p => ManifestDepEntry.found
+            (Dependency.path (Path.child_under (Path.unsafe_dir mote_dir) p)),
         Option.none => match k.version {
             Option.some req => ManifestDepEntry.found (Dependency.registry req),
             Option.none => ManifestDepEntry.sourceless,
@@ -1413,11 +1426,14 @@ def Mote.dep_error_message (manifest : String) (dep : String) (reason : String) 
         "error: invalid dependency `" dep) "` in ") manifest)
         (String.concat ": " reason)
 
-def Mote.dep_dirs_of (deps : List (Pair String Dependency)) : List (Pair String String) :=
+def Mote.dep_dirs_of (deps : List (Pair String Dependency)) : List (Pair String Path) :=
     match deps {
         List.empty => List.empty,
         List.cons e rest => match e {
-            Pair.pair k d => List.cons (Pair.pair k (Dependency.located_dir d)) (Mote.dep_dirs_of rest)
+            Pair.pair k d => match Dependency.located_dir d {
+                Option.some dir => List.cons (Pair.pair k dir) (Mote.dep_dirs_of rest),
+                Option.none => Mote.dep_dirs_of rest,
+            }
         }
     }
 
@@ -1522,41 +1538,41 @@ def Mote.fill_dep_dirs (m : MoteManifest) (lock : Lockfile) (home : String) : Mo
 
 /// `dep_dirs` rebuilt with git sources located: a `path` keeps the
 /// manifest's own answer, a git source reads the lock, and a registry
-/// source stays `""` until a registry exists.
+/// source is absent until a registry exists.
 #[partial]
-def Mote.locked_dirs (deps : List (Pair String Dependency)) (lock : Lockfile) (home : String) : List (Pair String String) :=
+def Mote.locked_dirs (deps : List (Pair String Dependency)) (lock : Lockfile) (home : String) : List (Pair String Path) :=
     match deps {
         List.empty => List.empty,
         List.cons e rest => match e {
-            Pair.pair k d =>
-                List.cons (Pair.pair k (Mote.locked_dir_of lock home k d))
-                    (Mote.locked_dirs rest lock home)
+            Pair.pair k d => match Mote.locked_dir_of lock home k d {
+                Option.some dir => List.cons (Pair.pair k dir) (Mote.locked_dirs rest lock home),
+                Option.none => Mote.locked_dirs rest lock home,
+            }
         }
     }
 
-def Mote.locked_dir_of (lock : Lockfile) (home : String) (key : String) (d : Dependency) : String :=
+def Mote.locked_dir_of (lock : Lockfile) (home : String) (key : String) (d : Dependency) : Option Path :=
     match d {
-        Dependency.path dir => dir,
+        Dependency.path _ => Dependency.located_dir d,
         Dependency.git url _tag _branch _rev subdir =>
-            match Mote.locked_checkout lock home key url subdir {
-                Option.some p => p,
-                Option.none => "",
-            },
-        Dependency.registry _req => "",
+            Mote.locked_checkout lock home key url subdir,
+        Dependency.registry _req => Option.none,
     }
 
 /// The checkout directory of the lock entry named `key`, when that entry
 /// is a git entry for THIS url. A mismatched url is not located at all:
 /// resolving the wrong repository silently is the failure a lock exists to
 /// prevent.
-def Mote.locked_checkout (lock : Lockfile) (home : String) (key : String) (url : String) (subdir : Option String) : Option String :=
+def Mote.locked_checkout (lock : Lockfile) (home : String) (key : String) (url : String) (subdir : Option String) : Option Path :=
     match Mote.locked_entry lock key {
         Option.none => Option.none,
         Option.some e => match e.git {
             Option.none => Option.none,
             Option.some g =>
                 if String.beq g.url url
-                then Option.some (raw_path_join (Mote.git_checkout_dir home g.url g.commit) (Mote.subdir_or g.subdir subdir))
+                then Option.some (Path.child_under
+                    (Path.unsafe (Mote.git_checkout_dir home g.url g.commit))
+                    (Mote.subdir_or g.subdir subdir))
                 else Option.none
         }
     }
@@ -2542,7 +2558,7 @@ def test_parse_manifest_reads_name_and_deps : Bool :=
         Option.none => false,
         Option.some m =>
             if String.beq m.name "lang"
-            then if String.beq (MoteManifest.src_root m) "lang/src"
+            then if String.beq (Path.to_string (MoteManifest.src_root m)) "lang/src"
                 then if MoteManifest.declares m "init"
                     then MoteManifest.declares m "std"
                     else false
@@ -2645,7 +2661,7 @@ def test_manifest_reads_dependency_paths : Bool :=
         Option.some m =>
             match MoteManifest.dep_dir_of m "init" {
                 Option.none => false,
-                Option.some p => String.beq p "../init"
+                Option.some p => String.beq (Path.to_string p) "../init"
             }
     }
 
@@ -2659,7 +2675,7 @@ def test_dependency_path_is_joined_onto_the_mote_dir : Bool :=
         Option.some m =>
             match MoteManifest.dep_dir_of m "std" {
                 Option.none => false,
-                Option.some p => String.beq p "lang/../std"
+                Option.some p => String.beq (Path.to_string p) "lang/../std"
             }
     }
 
@@ -2716,7 +2732,7 @@ def dep_dir_absent (m : MoteManifest) (name : String) : Bool :=
 def dep_dir_is (m : MoteManifest) (name : String) (want : String) : Bool :=
     match MoteManifest.dep_dir_of m name {
         Option.none => false,
-        Option.some d => String.beq d want
+        Option.some d => String.beq (Path.to_string d) want
     }
 
 /// Exactly one error is recorded against `name`, and it opens with the
@@ -3644,7 +3660,7 @@ def test_inherited_path_resolves_against_the_root : Bool :=
         (inherited_member_fixture "[dependencies.std]\nworkspace = true\n") {
         Option.none => false,
         Option.some m => match MoteManifest.dep_dir_of m "std" {
-            Option.some d => String.beq d "std" && match m.workspace_root {
+            Option.some d => String.beq (Path.to_string d) "std" && match m.workspace_root {
                 Option.some r => String.beq r "",
                 Option.none => false,
             },
@@ -3678,7 +3694,7 @@ def test_inherited_dev_dependency : Bool :=
     match Mote.parse_manifest_with_lookup "lang" (inherited_root_fixture inherited_root_text) member {
         Option.none => false,
         Option.some m => match MoteManifest.dep_dir_of m "std" {
-            Option.some d => String.beq d "std",
+            Option.some d => String.beq (Path.to_string d) "std",
             Option.none => false,
         },
     }
@@ -3736,7 +3752,7 @@ def test_package_root_inherits_from_its_own_table : Bool :=
         (inherited_root_fixture text) text {
         Option.none => false,
         Option.some m => match MoteManifest.dep_dir_of m "std" {
-            Option.some d => String.beq d "std",
+            Option.some d => String.beq (Path.to_string d) "std",
             Option.none => false,
         },
     }
@@ -3747,7 +3763,7 @@ def test_plain_path_dependency_is_unchanged : Bool :=
     match Mote.parse_manifest "lang" (inherited_member_fixture "[dependencies.std]\npath = \"../std\"\n") {
         Option.none => false,
         Option.some m => match MoteManifest.dep_dir_of m "std" {
-            Option.some d => String.beq d "lang/../std",
+            Option.some d => String.beq (Path.to_string d) "lang/../std",
             Option.none => false,
         },
     }

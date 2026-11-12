@@ -379,7 +379,7 @@ def Build.fetch_dep (st : FetchState) (d : Pair String Dependency) (rest : List 
 def Build.dep_source (st : FetchState) (key : String) (dep : Dependency) (rest : List (Pair String Dependency)) : IO (Result String FetchState) :=
     match dep {
         Dependency.path dir => do {
-            let walked <- Build.visit_dir st dir;
+            let walked <- Build.visit_dir st (Path.to_string dir);
             match walked {
                 Result.err e => return (Result.err e),
                 Result.ok st2 => Build.fetch_deps st2 rest

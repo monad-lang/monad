@@ -195,6 +195,27 @@ pub def Path.file_stem (p : Path) : String :=
 pub def Path.child (p : Path) (segment : String) : Path :=
     Path.path (raw_path_join (Path.to_string p) segment)
 
+/// A directory spelling from text, where the empty string means the
+/// working directory and is spelled `.`: an empty `Path` is never
+/// constructed, and `.` is how every consumer spells "here".
+pub def Path.unsafe_dir (s : String) : Path :=
+    if String.is_empty s then Path.path "." else Path.path s
+
+/// Join a segment under a DIRECTORY root, where `.` is the working
+/// directory's spelling: `Path.child_under (Path.unsafe_dir "") "src"`
+/// is `src`, not `./src`. That is the empty-first-component rule
+/// `raw_path_join` already applies, kept here so a root carried as a
+/// `Path` renders the same spellings it did as a string. Any other root
+/// joins normally, and an absolute segment still replaces it.
+///
+/// An empty SEGMENT under a `.` root yields the empty spelling, exactly as
+/// `raw_path_join "" ""` does -- a caller for which that is "not a path"
+/// filters it (`lang::mote`'s `Dependency.located_dir`).
+pub def Path.child_under (root : Path) (segment : String) : Path :=
+    Path.path (raw_path_join
+        (if String.beq (Path.to_string root) "." then "" else Path.to_string root)
+        segment)
+
 /// Byte scan for `.` (46) from the end; -1 when absent.
 #[partial]
 def find_last_dot (s : String) (i : I64) : I64 :=
