@@ -14,6 +14,10 @@ workspace = true
 [dependencies.std]
 workspace = true
 
+# Range tables for \p{..}, \d \w \s and case folding.
+[dependencies.unicode]
+workspace = true
+
 # Affine-by-default migration exception. Delete this table when the mote
 # reaches zero violations; the default (no table) is `mode = "error"`. See
 # plans/type-system/quantitative-types.md.
