@@ -3,8 +3,10 @@ use std::path {Path}
 use weaver::gate {PickAnswer, answer_line, gate_answer_feedback, gate_answer_prompt}
 use shuttle::gate {Pick, Approval, Gate}
 use weaver::gate {Gate.weaver}
-use weaver::policy {Mode}
+use weaver::policy {Mode, AutoDanger}
 use weaver::permissions {PermGrant, PermScope, Permissions.add}
+use weaver::classify {AutoCtx}
+use weaver::providers {Weaver.mock_config}
 use std::ref {Ref}
 use json::json {Json, Json.make_object, Json.make_str}
 use std::map {Map, BTreeMap}
@@ -120,7 +122,7 @@ def no_read (_ : Unit) : IO (Option String) := IO.pure Option.none
 def no_write (_ : String) : IO Unit := IO.pure unit
 
 def precheck_of (mode : Mode) (grants : Option (Ref (List PermGrant))) (root : Option Path) (p : Pick) : IO (Option Approval) := do {
-    let g : Gate := Gate.weaver mode grants root Option.none no_read no_write;
+    let g : Gate := Gate.weaver mode grants root Option.none Option.none no_read no_write;
     let check : Pick -> IO (Option Approval) := g.precheck;
     let r <- check p;
     return r
@@ -239,7 +241,7 @@ def test_grants_never_cover_a_flagged_command : IO Bool := do {
 def test_auto_mode_refuses_a_flagged_command : IO Bool := do {
     let empty_grants : List PermGrant := List.empty;
     let r <- Ref.new empty_grants;
-    let g : Gate := Gate.weaver Mode.auto (Option.some r) (Option.some (Path.path "/repo")) Option.none no_read no_write;
+    let g : Gate := Gate.weaver Mode.auto (Option.some r) (Option.some (Path.path "/repo")) Option.none Option.none no_read no_write;
     let ask : Pick -> IO Approval := g.ask;
     let plain <- ask (shell_pick "ls src");
     let flagged <- ask (shell_pick "rm -rf /");
@@ -258,4 +260,56 @@ def test_todo_write_is_unguarded : IO Bool := do {
         Option.some ap => match ap { Approval.once => true, _ => false },
         Option.none => false,
     })
+}
+
+// ── auto mode's safety net and in-repo access ──────────────────────────
+
+def auto_ctx_of (safety : Bool) : AutoCtx :=
+    let c : AutoCtx := { cfg := Weaver.mock_config "mock", intent := "", cache := Option.none,
+        log := Option.none, on_danger := AutoDanger.refuse_it, safety := safety } in
+    c
+
+def auto_gate (auto : Option AutoCtx) : IO Gate := do {
+    let empty : List PermGrant := List.empty;
+    let r <- Ref.new empty;
+    IO.pure (Gate.weaver Mode.auto (Option.some r) (Option.some (Path.path "/repo")) Option.none auto no_read no_write)
+}
+
+/// With the net ON, an in-repo command is NOT classified: the precheck
+/// allows it (none) instead of asking; a flagged one is still refused.
+def no_approval (o : Option Approval) : Bool :=
+    match o {
+        Option.none => true,
+        _ => false,
+    }
+
+def denied (o : Option Approval) : Bool :=
+    match o {
+        Option.some a => match a { Approval.deny _ => true, _ => false },
+        Option.none => false,
+    }
+
+def approved_once (o : Option Approval) : Bool :=
+    match o {
+        Option.some a => match a { Approval.once => true, _ => false },
+        Option.none => false,
+    }
+
+#[test]
+def test_auto_safety_on_lets_in_repo_code_through : IO Bool := do {
+    let g <- auto_gate (Option.some (auto_ctx_of true));
+    let check : Pick -> IO (Option Approval) := g.precheck;
+    let plain <- check (shell_pick "cargo test -p core");
+    let flagged <- check (shell_pick "rm -rf *");
+    IO.pure (Bool.and (no_approval plain) (denied flagged))
+}
+
+/// With the net OFF, every pick runs: no classifier, no refusal.
+#[test]
+def test_auto_safety_off_allows_everything : IO Bool := do {
+    let g <- auto_gate (Option.some (auto_ctx_of false));
+    let check : Pick -> IO (Option Approval) := g.precheck;
+    let flagged <- check (shell_pick "rm -rf /");
+    let outside <- check (shell_pick "cat /etc/hosts");
+    IO.pure (Bool.and (approved_once flagged) (approved_once outside))
 }

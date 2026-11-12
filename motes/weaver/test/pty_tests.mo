@@ -29,6 +29,8 @@ use weaver::pty::input {run_input_caret_click_drag}
 use weaver::pty::models {run_model_picker_select_and_cancel}
 use weaver::pty::processes {run_background_shell_list_and_kill, run_exit_note_mid_turn, run_monitor_refreshes_itself}
 use weaver::pty::approvals {run_auto_mode_refuses_destructive_commands}
+use weaver::pty::scratch {run_scratch_dir_and_env}
+use weaver::pty::ask {run_ask_dialog_and_answer, run_ask_auto_answers_recommended}
 use weaver::pty::rss {run_a_100_tool_turn_stays_bounded}
 use weaver::pty::todos {run_todo_panel_shows_and_folds}
 use weaver::pty::trust {run_trust_asks_records_and_reasks}
@@ -193,3 +195,12 @@ def test_shell_wait_ctrl_b_moves_it_to_the_background : IO Bool := run_shell_wai
 
 #[test]
 def test_side_commands_beside_a_turn : IO Bool := run_side_commands_beside_a_turn
+
+#[test]
+def test_scratch_dir_and_env : IO Bool := run_scratch_dir_and_env
+
+#[test]
+def test_ask_dialog_and_answer : IO Bool := run_ask_dialog_and_answer
+
+#[test]
+def test_ask_auto_answers_recommended : IO Bool := run_ask_auto_answers_recommended

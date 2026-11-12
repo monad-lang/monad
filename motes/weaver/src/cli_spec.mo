@@ -24,7 +24,7 @@ pub def WeaverCli.version : String := "0.1.0"
 
 pub def WeaverCli.provider_text (c : WeaverCli) : String :=
     match c {
-        WeaverCli.weaver provider _model _turns _resume _cont _no_color _trust _plan _mcp =>
+        WeaverCli.weaver provider _model _turns _resume _cont _no_color _trust _plan _mode _mcp =>
             match provider {
                 Option.none => "",
                 Option.some p => p,
@@ -33,7 +33,7 @@ pub def WeaverCli.provider_text (c : WeaverCli) : String :=
 
 pub def WeaverCli.model_text (c : WeaverCli) : String :=
     match c {
-        WeaverCli.weaver _provider model _turns _resume _cont _no_color _trust _plan _mcp =>
+        WeaverCli.weaver _provider model _turns _resume _cont _no_color _trust _plan _mode _mcp =>
             match model {
                 Option.none => "",
                 Option.some m => m,
@@ -42,14 +42,14 @@ pub def WeaverCli.model_text (c : WeaverCli) : String :=
 
 pub def WeaverCli.max_turns_of (c : WeaverCli) : Option I64 :=
     match c {
-        WeaverCli.weaver _provider _model max_turns _resume _cont _no_color _trust _plan _mcp => max_turns,
+        WeaverCli.weaver _provider _model max_turns _resume _cont _no_color _trust _plan _mode _mcp => max_turns,
     }
 
 /// `--resume`'s value with absent spelled as "" (the Plan layer's own
 /// convention, unchanged by the typed parse).
 pub def WeaverCli.resume_text (c : WeaverCli) : String :=
     match c {
-        WeaverCli.weaver _provider _model _turns resume _cont _no_color _trust _plan _mcp =>
+        WeaverCli.weaver _provider _model _turns resume _cont _no_color _trust _plan _mode _mcp =>
             match resume {
                 Option.none => "",
                 Option.some r => r,
@@ -59,7 +59,7 @@ pub def WeaverCli.resume_text (c : WeaverCli) : String :=
 /// `--resume` was given at all, empty value included.
 pub def WeaverCli.resume_asked (c : WeaverCli) : Bool :=
     match c {
-        WeaverCli.weaver _provider _model _turns resume _cont _no_color _trust _plan _mcp =>
+        WeaverCli.weaver _provider _model _turns resume _cont _no_color _trust _plan _mode _mcp =>
             match resume {
                 Option.none => false,
                 Option.some _ => true,
@@ -68,25 +68,32 @@ pub def WeaverCli.resume_asked (c : WeaverCli) : Bool :=
 
 pub def WeaverCli.cont_of (c : WeaverCli) : Bool :=
     match c {
-        WeaverCli.weaver _provider _model _turns _resume cont _no_color _trust _plan _mcp => cont,
+        WeaverCli.weaver _provider _model _turns _resume cont _no_color _trust _plan _mode _mcp => cont,
     }
 
 pub def WeaverCli.no_color_of (c : WeaverCli) : Bool :=
     match c {
-        WeaverCli.weaver _provider _model _turns _resume _cont no_color _trust _plan _mcp => no_color,
+        WeaverCli.weaver _provider _model _turns _resume _cont no_color _trust _plan _mode _mcp => no_color,
     }
 
 pub def WeaverCli.mcps (c : WeaverCli) : List String :=
     match c {
-        WeaverCli.weaver _provider _model _turns _resume _cont _no_color _trust _plan mcp => mcp,
+        WeaverCli.weaver _provider _model _turns _resume _cont _no_color _trust _plan _mode mcp => mcp,
     }
 
 pub def WeaverCli.trust_of (c : WeaverCli) : Bool :=
     match c {
-        WeaverCli.weaver _provider _model _turns _resume _cont _no_color trust _plan _mcp => trust,
+        WeaverCli.weaver _provider _model _turns _resume _cont _no_color trust _plan _mode _mcp => trust,
     }
 
 pub def WeaverCli.plan_of (c : WeaverCli) : Option String :=
     match c {
-        WeaverCli.weaver _provider _model _turns _resume _cont _no_color _trust plan _mcp => plan,
+        WeaverCli.weaver _provider _model _turns _resume _cont _no_color _trust plan _mode _mcp => plan,
+    }
+
+/// The `--mode` flag as given (validated by `Mode.resolve`, not by the
+/// derive: the mode is a language sum, not a clap scalar).
+pub def WeaverCli.mode_of (c : WeaverCli) : Option String :=
+    match c {
+        WeaverCli.weaver _provider _model _turns _resume _cont _no_color _trust _plan mode _mcp => mode,
     }

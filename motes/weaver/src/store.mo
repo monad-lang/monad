@@ -873,6 +873,24 @@ def transcript_dir (dir : Path) : Path := Store.child dir "transcript"
 
 def history_dir (dir : Path) : Path := Store.child dir "history"
 
+/// The session's disposable workspace (`weaver.md` scratch): the agent may
+/// create, run and delete anything there. Lexical, not a sandbox.
+def scratch_dir (dir : Path) : Path := Store.child dir "scratch"
+
+/// The scratch path when persistence is on; none in a degraded run.
+pub def Store.scratch_of (s : Option StoreState) : Option Path :=
+    match s {
+        Option.none => Option.none,
+        Option.some st => Option.some (scratch_dir st.dir),
+    }
+
+/// Create the scratch dir if it is missing (a session saved before it
+/// existed, or one whose `mkdir` failed). Idempotent.
+pub def Store.ensure_scratch (dir : Path) : IO Bool := do {
+    mkdir_p (scratch_dir dir);
+    IO.is_dir (scratch_dir dir)
+}
+
 def index_path (dir : Path) : Path := Store.child (transcript_dir dir) "index.json"
 
 def meta_path (dir : Path) : Path := Store.child dir "meta.json"
@@ -1100,13 +1118,14 @@ pub def Store.write_plan (dir : Path) (p : String) : IO (Result String Unit) := 
     }
 }
 
-/// A session's two child directories must exist before anything is
-/// written: `mkdir` failures are otherwise silent, leaving a directory
-/// that fails every later read.
+/// A session's child directories must exist before anything is written:
+/// `mkdir` failures are otherwise silent, leaving a directory that fails
+/// every later read.
 def dirs_ready (dir : Path) : IO Bool := do {
     let t <- IO.is_dir (transcript_dir dir);
     let h <- IO.is_dir (history_dir dir);
-    return (Bool.and t h)
+    let s <- IO.is_dir (scratch_dir dir);
+    return (Bool.and t (Bool.and h s))
 }
 
 def init_session_at (root : Path) (dir : Path) (id : String) (place : Option SessionPlace) (s : Session) : IO (Result String StoreState) := do {
@@ -1128,6 +1147,7 @@ pub def Store.new_session (root : Path) (place : Option SessionPlace) (s : Sessi
         let dir : Path := Store.session_dir root id;
         mkdir_p (transcript_dir dir);
         mkdir_p (history_dir dir);
+        mkdir_p (scratch_dir dir);
         let _ <- exec_cmd "chmod" ["700", Path.to_string dir];
         let ready <- dirs_ready dir;
         if Bool.not ready

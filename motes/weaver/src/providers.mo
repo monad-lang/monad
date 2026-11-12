@@ -122,3 +122,43 @@ def provider_list_empty (models : List String) : Bool :=
 def with_key (keys : BTreeMap String String) (provider : String) (cfg : ProviderConfig) : ProviderConfig :=
     let keyed : ProviderConfig := { cfg with api_key := Map.lookup provider keys } in
     keyed
+
+// ── the output budget's provider ceiling ────────────────────────────────
+
+/// The `max_tokens` ceiling a provider accepts. These are conservative
+/// provider FLOORS, not per-model maxima: hosted vendors 400 on a request
+/// above the model's limit (and the loop does not retry a 4xx), so a value
+/// every current model accepts is safer than a bigger one that fails.
+/// `none` means no separate cap (Ollama's window is the limit; the mock
+/// fixtures set tiny budgets and must never be raised).
+pub def Weaver.output_cap (provider : String) (model : String) (window : I64) : Option I64 :=
+    if provider == "anthropic" then Option.some 8192
+    else if provider == "openrouter" then Option.some 8192
+    else if provider == "mistral" then Option.some 8192
+    else Option.none
+
+def clamp_with_note (provider : String) (cfg : ProviderConfig) (cap : I64) : Pair ProviderConfig (Option String) :=
+    let capped : ProviderConfig := { cfg with max_tokens := cap } in
+    let note : String := String.concat_list ["max_tokens ", I64.to_string cfg.max_tokens,
+        " clamped to ", I64.to_string cap, " (", provider, ")"] in
+    Pair.pair capped (Option.some note)
+
+/// `cfg` with `max_tokens` clamped to the provider's ceiling (never up),
+/// and the note to show when it changed.
+pub def Weaver.clamp_cfg (provider : String) (cfg : ProviderConfig) (window : I64) : Pair ProviderConfig (Option String) :=
+    match Weaver.output_cap provider cfg.model window {
+        Option.none => Pair.pair cfg Option.none,
+        Option.some cap =>
+            if Bool.not (I64.gt cfg.max_tokens cap)
+            then Pair.pair cfg Option.none
+            else clamp_with_note provider cfg cap,
+    }
+
+/// The default output budget for a provider: weaver's 16384, lowered to
+/// the provider's ceiling so an untouched default never trips the clamp
+/// note (the note is for a value the user actually chose).
+pub def Weaver.default_tokens_for (provider : String) (model : String) : I64 :=
+    match Weaver.output_cap provider model 0 {
+        Option.none => Weaver.default_max_tokens,
+        Option.some cap => if I64.lt cap Weaver.default_max_tokens then cap else Weaver.default_max_tokens,
+    }

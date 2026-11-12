@@ -6,7 +6,7 @@
 use init::transformers {ResultT}
 use shuttle::message_types {Content}
 use shuttle::tools::file_args {ReadArgs, WriteArgs, EditArgs}
-use json::json {Json}
+use json::json {Json, Json.get_object, Json.object_get, Json.get_num, Json.get_num_i64}
 use std::io {IO.read_file, IO.write_file, IO.is_dir}
 use std::process {exec_cmd}
 use std::stream {FdStream, Stream, StreamError}
@@ -30,12 +30,102 @@ def number_lines_from (n : I64) (lines : List String) : List String :=
 /// Numbered lines, one allocation: the old `List.intercalate` is right-nested
 /// under `String.concat` (neither tail nor linear), so numbering a 256 KB file
 /// with short lines copied gigabytes per read.
-def numbered_text (text : String) : String :=
-    let joined : String := String.concat_list (number_lines_go 1 (Strings.split_on "\n" text) List.empty) in
+def numbered_text_from (start : I64) (lines : List String) : String :=
+    let joined : String := String.concat_list (number_lines_go start lines List.empty) in
     let n : I64 := String.length joined in
     // `number_lines_go` terminates every line, so drop the final newline the
     // old `intercalate` never added.
     if n < 1 then joined else String.slice joined 0 (n - 1)
+
+// ── the line window ─────────────────────────────────────────────────────
+
+/// `offset` (0-based first line) and `limit` (lines). Paging keeps a big
+/// read out of the model's history, which re-sends every byte.
+pub struct ReadWindow {
+    offset : I64,
+    limit : I64,
+}
+
+def read_window_default_limit : I64 := 2000
+
+def int_of_key (key : String) (j : Json) : Option I64 :=
+    match Json.get_object j {
+        Result.err _ => Option.none,
+        Result.ok o => match Json.object_get key o {
+            Option.none => Option.none,
+            Option.some v => match Json.get_num_i64 (Json.get_num v) {
+                Result.ok n => Option.some n,
+                Result.err _ => Option.none,
+            },
+        },
+    }
+
+/// `offset` is the model's 1-based first line; absent means 1.
+def read_window_of_json (j : Json) : ReadWindow :=
+    let offset : I64 := match int_of_key "offset" j {
+        Option.none => 0,
+        Option.some n => if I64.lt n 1 then 0 else n - 1,
+    } in
+    let limit : I64 := match int_of_key "limit" j {
+        Option.none => read_window_default_limit,
+        Option.some n => if I64.lt n 1 then read_window_default_limit else n,
+    } in
+    let w : ReadWindow := { offset := offset, limit := limit } in
+    w
+
+#[partial]
+def drop_lines (n : I64) (ls : List String) : List String :=
+    if Bool.not (I64.lt 0 n) then ls
+    else match ls {
+        List.empty => List.empty,
+        List.cons _ rest => drop_lines (n - 1) rest,
+    }
+
+#[partial]
+def take_lines (n : I64) (ls : List String) : List String :=
+    if Bool.not (I64.lt 0 n) then List.empty
+    else match ls {
+        List.empty => List.empty,
+        List.cons x rest => List.cons x (take_lines (n - 1) rest),
+    }
+
+/// Whole lines up to `cap` bytes (the returned window's own budget).
+#[partial]
+def take_bytes_go (cap : I64) (used : I64) (ls : List String) (acc : List String) : List String :=
+    match ls {
+        List.empty => List.reverse acc,
+        List.cons l rest =>
+            let n : I64 := String.length l + 1 in
+            if I64.gt (used + n) cap then List.reverse acc
+            else take_bytes_go cap (used + n) rest (List.cons l acc),
+    }
+
+def take_bytes (cap : I64) (ls : List String) : List String :=
+    take_bytes_go cap 0 ls List.empty
+
+def window_range (w : ReadWindow) (shown : I64) : String :=
+    if I64.lt shown 1
+    then "[no lines in this range]"
+    else String.concat_list ["[lines ", I64.to_string (w.offset + 1), "-", I64.to_string (w.offset + shown), " shown"]
+
+/// The note under a windowed read. `scan` is how many bytes were read to
+/// reach the offset (larger than the returned `max` when paging), and
+/// `unreached` says the offset lies past that scan.
+def window_marker (w : ReadWindow) (max : I64) (scan : I64) (byte_more : Bool) (unreached : Bool) (cut_bytes : Bool) (shown : I64) : String :=
+    if unreached
+    then String.concat "\n[offset is beyond the first " (String.concat (I64.to_string scan) " bytes; use search, or read from the start]")
+    else if cut_bytes
+    then String.concat "\n" (String.concat (window_range w shown) (String.concat "; truncated at " (String.concat (I64.to_string max) " bytes -- raise limit or page]")))
+    else if byte_more
+    then
+        let cut : String :=
+            if I64.lt 0 w.offset
+            then String.concat "; the file continues past " (String.concat (I64.to_string scan) " bytes")
+            else String.concat "; truncated at " (String.concat (I64.to_string max) " bytes -- page with offset/limit") in
+        String.concat "\n" (String.concat (window_range w shown) (String.concat cut "]"))
+    else if I64.lt 0 w.offset
+    then String.concat "\n" (String.concat (window_range w shown) "]")
+    else ""
 
 #[terminating]
 def number_lines_go (n : I64) (lines : List String) (acc : List String) : List String :=
@@ -144,17 +234,24 @@ def read_chunks (s : FdStream) (max : I64) (acc : List String) (total : I64) : I
 
 /// A read's tool result from `read_up_to`: numbered lines, plus the cap's
 /// marker when the probe found more.
-def read_content_bounded (id : String) (max : I64) (r : Result StreamError (Pair String Bool)) : Content :=
+def read_content_bounded (id : String) (max : I64) (scan : I64) (w : ReadWindow) (r : Result StreamError (Pair String Bool)) : Content :=
     match r {
         Result.err e => tool_err id e.message,
         Result.ok pr => match pr {
-            Pair.pair text more =>
-                let body : String := numbered_text text in
-                if more
-                then tool_ok id (body ++ "\n[truncated at " ++ I64.to_string max ++ " bytes]")
-                else tool_ok id body,
+            Pair.pair text more => read_window_content id max scan w text more,
         },
     }
+
+def read_window_content (id : String) (max : I64) (scan : I64) (w : ReadWindow) (text : String) (more : Bool) : Content :=
+    let all : List String := Strings.split_on "\n" text in
+    let selected : List String := take_lines w.limit (drop_lines w.offset all) in
+    let window : List String := take_bytes max selected in
+    let body : String := numbered_text_from (w.offset + 1) window in
+    let cut_bytes : Bool := Bool.not (List.length window == List.length selected) in
+    let unreached : Bool := Bool.and more (Bool.not (I64.lt w.offset (List.length all))) in
+    let marker : String := window_marker w max scan more unreached cut_bytes (List.length window) in
+    if String.is_empty body then tool_ok id marker
+    else tool_ok id (body ++ marker)
 
 /// A write's tool result: `done` on success, the failure as a tool error.
 def written_content (id : String) (done : String) (w : Result StreamError Unit) : Content :=
@@ -166,7 +263,14 @@ def written_content (id : String) (done : String) (w : Result StreamError Unit) 
 /// The most bytes one read returns. A compiled binary or a giant log
 /// otherwise enters the history whole (measured live: a 4 MB read made
 /// the next request ~1M tokens and the provider rejected it with 400).
-def read_max_bytes : I64 := 262144
+/// Every byte here is re-sent on each later request of the turn, so the
+/// cap is a token budget, not a display limit; `offset`/`limit` page.
+def read_max_bytes : I64 := 131072
+
+/// How far a paged read scans to reach its offset. Bounded so a huge log
+/// cannot make `read {offset: …}` read forever; a marker says when the
+/// offset was past it.
+def read_scan_bytes : I64 := 2097152
 
 pub def read_run (id : String) (j : Json) : ResultT String IO Content :=
     match ReadArgs.deserialize_json j {
@@ -177,8 +281,10 @@ pub def read_run (id : String) (j : Json) : ResultT String IO Content :=
                     Result.err e => return (Result.ok (tool_err id (PathError.to_string e))),
                     Result.ok p => do {
                         let max : I64 := read_max_bytes;
-                        let r <- read_up_to p max;
-                        return (Result.ok (read_content_bounded id max r))
+                        let w : ReadWindow := read_window_of_json j;
+                        let scan : I64 := if I64.lt 0 w.offset then read_scan_bytes else max;
+                        let r <- read_up_to p scan;
+                        return (Result.ok (read_content_bounded id max scan w r))
                     }
                 }
             })

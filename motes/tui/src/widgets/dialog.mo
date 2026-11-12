@@ -58,11 +58,18 @@ pub struct DialogModel {
     /// richer renderer (weaver's hunk diff) sets these instead of flattening
     /// its styles into text.
     body_spans : Option (List (List TextSegment)) := Option.none,
+    /// Multi-select: Space/letter toggles an option, and Enter answers
+    /// `choose_many` with the toggled set.
+    multi : Bool := false,
+    /// The options toggled so far, in toggle order (multi mode).
+    chosen : List I64 := List.empty,
 }
 
 pub type DialogStep {
     continue,
     choose (index : I64),
+    /// A multi-select dialog's confirmed set (indices, toggle order).
+    choose_many (indices : List I64),
     cancel,
     /// An editable option's field was confirmed with this text.
     submit (index : I64) (text : String),
@@ -85,12 +92,19 @@ pub def Dialog.make (title : String) (subtitle : String) (body : List String) (o
         field_input := input_state "" "",
         fullscreen := false,
         body_spans := Option.none,
+        multi := false,
+        chosen := List.empty,
     } in
     d
 
 /// Offer a note: `e` edits it and the dialog shows its row.
 pub def Dialog.with_notes (d : DialogModel) : DialogModel :=
     { d with notes := true, footer := "↑/↓ select · Enter confirm · e note · Esc cancel" }
+
+/// Multi-select: Space (or an option's letter) toggles it; Enter confirms
+/// the toggled set (the highlighted option when none was toggled).
+pub def Dialog.with_multi (d : DialogModel) : DialogModel :=
+    { d with multi := true, footer := "Space toggle · Enter confirm · e note · Esc cancel" }
 
 pub def Dialog.option_count (d : DialogModel) : I64 := List.length d.options
 
@@ -134,14 +148,47 @@ def field_step (d : DialogModel) (i : I64) (k : Key) : Pair DialogModel DialogSt
     }
 
 /// Enter on the selection: open its field when it has a value, else
-/// choose it.
+/// choose it (the toggled set in multi mode).
 def enter_step (d : DialogModel) : Pair DialogModel DialogStep :=
     match Dialog.option_at d d.selected {
         Option.some o => match o.value {
             Option.some v => Pair.pair { d with field := Option.some d.selected, field_input := input_state v "" } DialogStep.continue,
-            Option.none => Pair.pair d (DialogStep.choose d.selected),
+            Option.none => Pair.pair d (enter_choice d),
         },
-        Option.none => Pair.pair d (DialogStep.choose d.selected),
+        Option.none => Pair.pair d (enter_choice d),
+    }
+
+def enter_choice (d : DialogModel) : DialogStep :=
+    if d.multi
+    then DialogStep.choose_many (if List.is_empty d.chosen then List.cons d.selected List.empty else d.chosen)
+    else DialogStep.choose d.selected
+
+#[partial]
+def has_index (i : I64) (xs : List I64) : Bool :=
+    match xs {
+        List.empty => false,
+        List.cons x rest => if x == i then true else has_index i rest,
+    }
+
+#[partial]
+def without_index (i : I64) (xs : List I64) : List I64 :=
+    match xs {
+        List.empty => List.empty,
+        List.cons x rest =>
+            if x == i then without_index i rest else List.cons x (without_index i rest),
+    }
+
+def toggle_chosen (d : DialogModel) (i : I64) : DialogModel :=
+    let next : List I64 := if has_index i d.chosen then without_index i d.chosen else List.append d.chosen (List.cons i List.empty) in
+    { d with chosen := next }
+
+/// A letter in multi mode: Space toggles the selection, an option's own
+/// key toggles it, anything else is inert.
+def toggle_step (d : DialogModel) (c : String) : Pair DialogModel DialogStep :=
+    if c == " " then Pair.pair (toggle_chosen d d.selected) DialogStep.continue
+    else match option_key_at 0 c d.options {
+        Option.some i => Pair.pair (toggle_chosen d i) DialogStep.continue,
+        Option.none => Pair.pair d DialogStep.continue,
     }
 
 /// One key's transition. An open field or note takes every key (Enter/Esc
@@ -195,6 +242,7 @@ def select_step (d : DialogModel) (k : Key) : Pair DialogModel DialogStep :=
                 if Bool.and d.notes (c == "e") then Pair.pair { d with editing := true } DialogStep.continue
                 else if c == "k" then Pair.pair { d with selected := (if d.selected < 1 then 0 else d.selected - 1) } DialogStep.continue
                 else if c == "j" then Pair.pair { d with selected := (if d.selected + 1 < n then d.selected + 1 else (if n < 1 then 0 else n - 1)) } DialogStep.continue
+                else if d.multi then toggle_step d c
                 else match option_key_at 0 c d.options {
                     Option.some i => Pair.pair d (DialogStep.choose i),
                     Option.none => Pair.pair d DialogStep.continue,
@@ -307,7 +355,8 @@ def option_row (d : DialogModel) (i : I64) (o : DialogOption) (width : I64) : Li
     let suffix : String := if String.is_empty o.hint then "" else String.concat "  (" (String.concat o.hint ")") in
     let style : TextStyle := if here then { style_default with reverse := true } else style_default in
     let text : String := String.concat o.label (option_value d i o.value) in
-    Dialog.text_rows style width (String.concat marker (String.concat text suffix))
+    let checked : String := if d.multi then (if has_index i d.chosen then "[x] " else "[ ] ") else "" in
+    Dialog.text_rows style width (String.concat checked (String.concat marker (String.concat text suffix)))
 
 #[partial]
 def option_rows_window (d : DialogModel) (i : I64) (stop : I64) (width : I64) : List SizedWidget :=

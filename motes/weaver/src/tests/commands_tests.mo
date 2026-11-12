@@ -20,7 +20,7 @@ use weaver::commands {
     WeaverState, Effect, Commands.dispatch, Commands.context_used, Commands.context_percent,
     Commands.set_plan, Commands.plan_after_turn, SessionPage, Commands.session_page,
     Commands.turns_label, Commands.turn_context, Commands.sessions_for, Commands.place_suffix,
-    Commands.memory_text, Commands.store_plan, Commands.linked_plan, Commands.with_skills, Commands.skill_turn, Commands.builtin_names, command_table, SlashCommand,
+    Commands.memory_text, Commands.store_plan, Commands.linked_plan, Commands.with_skills, Commands.skill_turn, Commands.builtin_names, Commands.apply_setting, Commands.cycle_setting, command_table, SlashCommand,
 }
 use weaver::skills {Skill}
 use weaver::plan_file {PlanRepo, PlanDoc, PlanFile.read}
@@ -76,6 +76,8 @@ def state_of (mode : Mode) (mcps : List String) : WeaverState := {
     colors := true,
     name := Option.none, trusted := false, instructions := List.empty, instr_seen := Option.none,
     store := Option.none,
+    auto_start := false,
+    auto_failures := Option.none,
 }
 
 def run_of : RunState := {
@@ -1334,3 +1336,20 @@ def test_builtin_names_match_the_table : Bool :=
     let keys : List String := List.map (fn (kv : Pair String SlashCommand) => match kv { Pair.pair k _ => k }) (BTreeMap.to_list command_table) in
     List.length keys == List.length Commands.builtin_names
         && List.all (fn (n : String) => List.any (fn (k : String) => k == n) keys) Commands.builtin_names
+
+// ── the auto safety setting ────────────────────────────────────────────
+
+#[test]
+def test_setting_auto_safety_toggles : Bool :=
+    let st : WeaverState := state_of Mode.auto [] in
+    match Commands.apply_setting st "auto_safety" "off" {
+        Result.err _ => false,
+        Result.ok pr => match pr {
+            Pair.pair st2 line =>
+                Bool.and (Bool.not st2.auto_safety)
+                    (Bool.and (String.contains line "off") (match Commands.cycle_setting st2 "auto_safety" {
+                        Result.ok pr2 => match pr2 { Pair.pair st3 _ => st3.auto_safety },
+                        Result.err _ => false,
+                    })),
+        },
+    }

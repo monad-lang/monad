@@ -4,7 +4,7 @@
 /// I/O -- the point of the decision table being a function.
 use weaver::policy {
     Mode, Decision, Policy.decide, Policy.decide_auto, Policy.classified, Verdict, AutoDanger,
-    Mode.parse, Mode.approve_plan, Mode.warns_auto, Mode.show, Mode.cycle,
+    Mode.parse, Mode.approve_plan, Mode.resolve, Mode.is_auto, Mode.show, Mode.cycle,
 }
 use shuttle::gate {Capability}
 use weaver::assess {Assessment, Reach}
@@ -40,28 +40,38 @@ def cell_at (cap : Capability) (mode : Mode) (a : Assessment) (expected : Decisi
 def plan_refusal : String :=
     "plan mode: only read tools run; produce a plan, then switch with /mode"
 
-/// All 16 cells, exhaustively. A new capability or mode that leaves
-/// this test green is impossible: the table is total and the test is
-/// the table.
+/// The decision table, all 16 cells (Capability x Mode), one test per
+/// mode. Deliberately four short chains instead of one 16-term `&&`: the
+/// self-hosted checker's cost grows sharply with chain length (a 16-term
+/// chain of `cell` calls took minutes; four 4-term chains take seconds).
 #[test]
-def test_decision_table_every_cell : Bool :=
+def test_decision_table_manual : Bool :=
     // manual asks for everything
     cell Capability.read Mode.manual Decision.ask
         && cell Capability.write Mode.manual Decision.ask
         && cell Capability.exec Mode.manual Decision.ask
         && cell Capability.net Mode.manual Decision.ask
-        // plan allows reads, refuses the rest
-        && cell Capability.read Mode.plan Decision.allow
+
+#[test]
+def test_decision_table_plan : Bool :=
+    // plan allows reads, refuses the rest
+    cell Capability.read Mode.plan Decision.allow
         && cell Capability.write Mode.plan (Decision.refuse plan_refusal)
         && cell Capability.exec Mode.plan (Decision.refuse plan_refusal)
         && cell Capability.net Mode.plan (Decision.refuse plan_refusal)
-        // allow_edit passes read and write, asks for exec and net
-        && cell Capability.read Mode.allow_edit Decision.allow
+
+#[test]
+def test_decision_table_allow_edit : Bool :=
+    // allow_edit passes read and write, asks for exec and net
+    cell Capability.read Mode.allow_edit Decision.allow
         && cell Capability.write Mode.allow_edit Decision.allow
         && cell Capability.exec Mode.allow_edit Decision.ask
         && cell Capability.net Mode.allow_edit Decision.ask
-        // auto allows everything
-        && cell Capability.read Mode.auto Decision.allow
+
+#[test]
+def test_decision_table_auto : Bool :=
+    // auto allows everything
+    cell Capability.read Mode.auto Decision.allow
         && cell Capability.write Mode.auto Decision.allow
         && cell Capability.exec Mode.auto Decision.allow
         && cell Capability.net Mode.auto Decision.allow
@@ -142,15 +152,35 @@ def test_mode_cycle_order : Bool :=
 def test_mode_cycle_is_a_full_loop : Bool :=
     mode_eq (Mode.cycle (Mode.cycle (Mode.cycle (Mode.cycle Mode.manual)))) Mode.manual
 
-// ── The auto warning flag ───────────────────────────────────────────────
+// ── Startup mode resolution ─────────────────────────────────────────────
 
-/// The warning indicator is on for `auto` and only `auto`.
 #[test]
-def test_auto_warning_flag : Bool :=
-    Bool.not (Mode.warns_auto Mode.manual)
-        && Bool.not (Mode.warns_auto Mode.plan)
-        && Bool.not (Mode.warns_auto Mode.allow_edit)
-        && Mode.warns_auto Mode.auto
+def test_mode_resolve_flag_beats_settings : Bool :=
+    match Mode.resolve (Option.some "auto") (Option.some Mode.plan) {
+        Result.ok m => Mode.is_auto m,
+        Result.err _ => false,
+    }
+
+#[test]
+def test_mode_resolve_settings_when_no_flag : Bool :=
+    match Mode.resolve Option.none (Option.some Mode.allow_edit) {
+        Result.ok m => mode_eq m Mode.allow_edit,
+        Result.err _ => false,
+    }
+
+#[test]
+def test_mode_resolve_defaults_to_manual : Bool :=
+    match Mode.resolve Option.none Option.none {
+        Result.ok m => mode_eq m Mode.manual,
+        Result.err _ => false,
+    }
+
+#[test]
+def test_mode_resolve_rejects_an_unknown_flag : Bool :=
+    match Mode.resolve (Option.some "fast") Option.none {
+        Result.ok _ => false,
+        Result.err _ => true,
+    }
 
 // ── helpers ─────────────────────────────────────────────────────────────
 
@@ -200,9 +230,19 @@ def test_decide_auto_every_cell : Bool :=
         && auto_cell Capability.exec flagged Option.none AutoDanger.refuse_it (Decision.refuse sd)
         && auto_cell Capability.write outside_write Option.none AutoDanger.refuse_it (Decision.refuse so)
 
-/// What the classifier judges: code, the network, and an outside write.
+/// What the classifier judges: code that reaches outside, the network, and
+/// an outside write. In-repo code is NOT classified (auto runs it).
 #[test]
 def test_classified_picks : Bool :=
-    Policy.classified Capability.exec plain && Policy.classified Capability.net plain
+    Bool.not (Policy.classified Capability.exec plain)
+        && Bool.not (Policy.classified Capability.exec (reaching Reach.scratch))
+        && Bool.not (Policy.classified Capability.write plain)
+        && Bool.not (Policy.classified Capability.read plain)
+
+#[test]
+def test_outside_code_and_the_net_are_classified : Bool :=
+    let out : Assessment := reaching (Reach.outside [Path.path "/etc/hosts"]) in
+    Policy.classified Capability.exec out
+        && Policy.classified Capability.exec (reaching Reach.unknown)
+        && Policy.classified Capability.net plain
         && Policy.classified Capability.write outside_write
-        && Bool.not (Policy.classified Capability.write plain) && Bool.not (Policy.classified Capability.read plain)

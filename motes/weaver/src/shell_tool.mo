@@ -32,7 +32,7 @@ use weaver::procs {
     Procs.discard, Procs.kill, Procs.status_of, Procs.log_start, Procs.log_detach, Procs.max_log_bytes,
 }
 use weaver::process_tools {str_param, int_param, object_schema, int_arg}
-use weaver::store {StoreState, Store.child}
+use weaver::store {StoreState, Store.child, Store.scratch_of}
 
 def tool_err (id : String) (msg : String) : Content := Content.tool_result id msg true
 def tool_ok (id : String) (msg : String) : Content := Content.tool_result id msg false
@@ -42,8 +42,8 @@ pub def WeaverShell.default_wait : I64 := 30
 pub def WeaverShell.max_wait : I64 := 300
 
 /// What the tool shows of the output: the last lines within both caps.
-def shown_lines : I64 := 200
-def shown_bytes : I64 := 65536
+def shown_lines : I64 := 160
+def shown_bytes : I64 := 32768
 
 /// The longest sleep between ticks; the first is 10 ms and each doubles.
 def max_tick_ms : I64 := 200
@@ -68,6 +68,9 @@ pub struct ShellEnv {
     stop : Unit -> IO Bool,
     log : Option Logger,
     budget_ms : I64,
+    /// The session scratch dir, exported to the task as TMPDIR and
+    /// WEAVER_SCRATCH; none in a degraded run.
+    scratch : Option Path := Option.none,
 }
 
 /// Ctrl+B: ask the waiting `shell` call to stop waiting, by putting the
@@ -102,14 +105,16 @@ pub def WeaverShell.spec : ToolSpec :=
         description := "Run a shell command as a task and return its output. Long commands are not killed: past the wait they continue in the background (see wait_seconds). Use read_process / kill_process / list_processes for background tasks.",
         schema := object_schema shell_params ["command"] }
 
-/// The tool against the real task store.
-pub def WeaverShell.impl (log : Option Logger) (stop : Unit -> IO Bool) (fg : Path) : ToolImpl :=
-    { spec := WeaverShell.spec, cap := Capability.exec, run := shell_run log stop fg }
+/// The tool against the real task store. The fg marker and the scratch
+/// dir both follow the session, so a `/clear` or `/resume` gets the right
+/// ones when the registry is rebuilt.
+pub def WeaverShell.impl (log : Option Logger) (stop : Unit -> IO Bool) (store : Option StoreState) : ToolImpl :=
+    { spec := WeaverShell.spec, cap := Capability.exec, run := shell_run log stop (WeaverShell.fg_path store) (Store.scratch_of store) }
 
-def shell_run (log : Option Logger) (stop : Unit -> IO Bool) (fg : Path) (id : String) (j : Json) : ResultT String IO Content :=
+def shell_run (log : Option Logger) (stop : Unit -> IO Bool) (fg : Path) (scratch : Option Path) (id : String) (j : Json) : ResultT String IO Content :=
     ResultT.mk (do {
         let root <- Procs.root;
-        let env : ShellEnv := { root := root, fg := fg, stop := stop, log := log, budget_ms := 0 };
+        let env : ShellEnv := { root := root, fg := fg, stop := stop, log := log, budget_ms := 0, scratch := scratch };
         let c <- WeaverShell.run env id j;
         IO.pure (Result.ok c)
     })
@@ -139,7 +144,7 @@ pub def WeaverShell.run (env : ShellEnv) (id : String) (j : Json) : IO Content :
 // ── starting ────────────────────────────────────────────────────────────
 
 def start_detached (env : ShellEnv) (id : String) (command : String) : IO Content := do {
-    let r <- Procs.start_at env.root command "" false;
+    let r <- Procs.start_at env.root command "" false env.scratch;
     match r {
         Result.err e => IO.pure (tool_err id (String.concat "shell: " e)),
         Result.ok e => started env id e,
@@ -157,7 +162,7 @@ def task_ref (e : ProcEntry) : String :=
         "\nYou get a note when it exits; read_process shows its output, kill_process stops it."]
 
 def start_waiting (env : ShellEnv) (id : String) (command : String) (ms : I64) : IO Content := do {
-    let r <- Procs.start_foreground env.root command "";
+    let r <- Procs.start_foreground env.root command "" env.scratch;
     match r {
         Result.err e => IO.pure (tool_err id (String.concat "shell: " e)),
         Result.ok e => waiting env id e ms,

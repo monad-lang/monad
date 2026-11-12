@@ -3,7 +3,8 @@
 use weaver::shell_tool {ShellEnv, WeaverShell.run, WeaverShell.never_stop, WeaverShell.trim_output, WeaverShell.request_background}
 use weaver::procs {ProcEntry, ProcStatus, Procs.scan_at, Procs.kill}
 use shuttle::message_types {Content}
-use json::json {Json, Json.parse, Json.make_str}
+use json::json {Json, Json.parse, Json.make_str, Json.make_object}
+use std::map {Map, BTreeMap}
 use std::list {List.all}
 use std::path {Path}
 use std::process {process_id, exec_cmd, Proc.kill_group}
@@ -22,7 +23,7 @@ def cleanup (root : String) : IO Unit := do {
 
 def env_at (root : String) (stop : Unit -> IO Bool) (budget_ms : I64) : ShellEnv :=
     let e : ShellEnv := { root := Path.path root, fg := Path.path (String.concat root ".fg"),
-        stop := stop, log := Option.none, budget_ms := budget_ms } in
+        stop := stop, log := Option.none, budget_ms := budget_ms, scratch := Option.none } in
     e
 
 def args (text : String) : Json :=
@@ -79,7 +80,7 @@ def test_long_output_keeps_the_tail : IO Bool := do {
     let root : String := temp_root "long";
     let r <- run_in root (env_at root WeaverShell.never_stop 0) "{\"command\":\"seq 1 500\"}";
     match r { Pair.pair c _ =>
-        IO.pure (String.starts_with "[300 earlier lines omitted]\n301\n" (text_of c)
+        IO.pure (String.starts_with "[340 earlier lines omitted]\n341\n" (text_of c)
             && String.ends_with (text_of c) "\n500\n") }
 }
 
@@ -175,4 +176,24 @@ def test_wait_zero_starts_in_the_background : IO Bool := do {
 def test_a_background_request_without_a_wait_is_a_no_op : IO Bool := do {
     let asked <- WeaverShell.request_background (Path.path (temp_root "no-fg-file"));
     IO.pure (Bool.not asked)
+}
+
+/// The session scratch dir reaches the task as WEAVER_SCRATCH and
+/// TMPDIR (the gate's scratch exemption and the shell agree on it).
+#[test]
+def test_the_scratch_env_reaches_the_task : IO Bool := do {
+    let root : String := temp_root "scratch";
+    let scratch : String := String.concat root "_scr";
+    let _ <- exec_cmd "mkdir" ["-p", scratch];
+    let env : ShellEnv := { root := Path.path root, fg := Path.path (String.concat root ".fg"),
+        stop := WeaverShell.never_stop, log := Option.none, budget_ms := 5000,
+        scratch := Option.some (Path.path scratch) };
+    let _ <- cleanup root;
+    let cmd : String := "printf '%s\\n%s' \"$WEAVER_SCRATCH\" \"$TMPDIR\"";
+    let input : Json := Json.make_object (Map.insert "command" (Json.make_str cmd) BTreeMap.empty);
+    let c <- WeaverShell.run env "t1" input;
+    let out : String := text_of c;
+    let _ <- cleanup root;
+    let _ <- cleanup scratch;
+    IO.pure (Bool.and (String.contains out scratch) (Bool.and (Bool.not (is_err c)) (String.contains out "/tmp")))
 }

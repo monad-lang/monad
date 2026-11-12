@@ -2,7 +2,7 @@
 use weaver::instructions {
     InstrFile, Instructions.chain, Instructions.user_path_of, Instructions.discover, Instructions.cut_at,
     Instructions.capped, Instructions.cap_total, Instructions.render, Instructions.label,
-    Instructions.note, Prompt.base, Prompt.system, Prompt.with_files,
+    Instructions.note, Prompt.base, Prompt.system, Prompt.with_files, Prompt.system_at, Prompt.scratch_block,
     Instructions.read_one, Instructions.refresh, Instructions.take_notes,
     Instructions.attaching, Instructions.inside,
 }
@@ -220,3 +220,16 @@ def test_a_read_attaches_a_nested_file_once : IO Bool := do {
         && Bool.not (String.contains untrusted "[Instructions for ")
         && List.length now == 2)
 }
+
+/// The scratch paragraph is appended only when a store exists, and it
+/// names the path and the two env variables the shell setup exports.
+#[test]
+def test_system_prompt_names_the_scratch_dir : Bool :=
+    let scratch : Option Path := Option.some (Path.path "/home/u/.weaver/sessions/s-1/scratch") in
+    let p : String := Prompt.system_at List.empty scratch in
+    let none_case : String := Prompt.system_at List.empty Option.none in
+    String.contains p "/home/u/.weaver/sessions/s-1/scratch"
+        && String.contains p "$WEAVER_SCRATCH"
+        && String.contains p "$TMPDIR"
+        && String.beq none_case Prompt.base
+        && String.beq (Prompt.scratch_block Option.none) ""

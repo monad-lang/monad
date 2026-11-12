@@ -324,6 +324,7 @@ def sample_update : SettingsUpdate := {
     max_tokens := Option.some 4096,
     context_window := Option.none,
     compact_at := Option.none,
+    auto_safety := Option.some false,
 }
 
 /// An absent file renders a fresh document with only the named keys.
@@ -335,7 +336,8 @@ def test_render_update_from_scratch : Bool :=
             String.contains out "mode = \"plan\""
                 && String.contains out "max_tokens = 4096"
                 && String.contains out "max_turns = 100"
-                && String.contains out "thinking = true",
+                && String.contains out "thinking = true"
+                && String.contains out "auto_safety = false",
     }
 
 /// Re-rendering preserves unknown keys and other tables -- the save
@@ -401,3 +403,21 @@ def test_a_project_plans_key_overrides_the_global_one : Bool :=
     let m : Settings := Settings.merge g p in
     (match m.plans.repo { Option.some r => r == "plans", Option.none => false })
         && (match m.plans.commit { Option.some c => Bool.not c, Option.none => false })
+
+// ── the auto safety net ────────────────────────────────────────────────
+
+#[test]
+def test_auto_safety_parses : Bool :=
+    let s : Settings := parse_settings "auto_safety = false\n" in
+    let unset : Settings := parse_settings "mode = \"auto\"\n" in
+    opt_bool_eq s.auto_safety (Option.some false)
+        && opt_bool_eq unset.auto_safety Option.none
+
+#[test]
+def test_auto_safety_project_wins : Bool :=
+    let base : Settings := parse_settings "auto_safety = true\n" in
+    let over : Settings := parse_settings "auto_safety = false\n" in
+    let merged : Settings := Settings.merge base over in
+    let kept : Settings := Settings.merge base Settings.empty in
+    opt_bool_eq merged.auto_safety (Option.some false)
+        && opt_bool_eq kept.auto_safety (Option.some true)

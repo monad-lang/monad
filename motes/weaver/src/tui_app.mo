@@ -23,8 +23,9 @@ use shuttle::message {Message, Usage}
 use shuttle::provider {ProviderConfig}
 use weaver::side {Side.wanted, Side.btw_question, Side.fullscreen}
 use weaver::btw {Btw.ask}
-use weaver::classify {AutoCtx, Classify.intent}
-use weaver::auto_continue {AutoContinue.next}
+use weaver::classify {AutoCtx, Classify.intent, Classify.with_plan}
+use weaver::ask {AskSpec, AskOption, AskReply, AskSeam, AskTool.impl, AskTool.cancelled_reply}
+use weaver::auto_continue {AutoContinue.next, AutoContinue.record_failure, AutoContinue.clear_failures, AutoContinue.max_failures, AutoContinue.budget_note, AutoContinue.plan_context}
 use shuttle::message_types {Role, Content}
 use weaver::usage {UsageTracker.start, UsageTracker.silent, UsageTracker.last}
 use std::ref {Ref, Ref.new, Ref.get, Ref.set}
@@ -37,8 +38,8 @@ use weaver::commands {
     Commands.store_turn_plan, Commands.join_notes, Commands.note_into_state, Commands.persist_note, Commands.skill_turn,
 }
 use log::logger {Logger}
-use weaver::policy {Mode, Mode.show, Mode.cycle, Policy.decide, Policy.unguarded, Decision}
-use weaver::gate {pick_header, pick_target, cap_name, capped_diff, PickAnswer, record_answer, answer_approval, Gate.assessment_lines, Gate.granted, Gate.auto_for, Gate.auto_precheck, Gate.decision}
+use weaver::policy {Mode, Mode.show, Mode.cycle, Mode.is_auto, Policy.decide, Policy.unguarded, Decision}
+use weaver::gate {pick_header, pick_target, cap_name, capped_diff, PickAnswer, record_answer, answer_approval, Gate.assessment_lines, Gate.granted, Gate.auto_for, Gate.auto_precheck, Gate.auto_open, Gate.decision}
 use weaver::permissions {PermGrant, Permissions.get, Permissions.render}
 use weaver::assess {Assessment, Reach.is_inside, Assess.pick}
 use weaver::diff {Diff.for_input, Diff.lines}
@@ -79,7 +80,7 @@ use weaver::store {
     Store.append_history_note, Store.append_named, Store.write_named, Store.write_plan,
     Store.discard_named,
     SessionInfo, Store.list_sessions, Store.read_meta, Store.write_title, Store.derive_name,
-    Store.derive_description, TitleField, StoreMeta,
+    Store.derive_description, Store.scratch_of, TitleField, StoreMeta,
 }
 use weaver::shell_tool {WeaverShell.impl, WeaverShell.fg_path, WeaverShell.request_background}
 use weaver::process_tools {ReadProcessTool.impl_with}
@@ -101,7 +102,7 @@ use tui::text {Text.take_width, Text.width, Text.wrap_spans}
 use tui::core {style_default}
 use tui::clipboard {Clipboard.copy}
 use tui::widgets::dialog {
-    DialogModel, DialogOption, DialogStep, Dialog.make, Dialog.with_default, Dialog.with_notes, Dialog.note_text,
+    DialogModel, DialogOption, DialogStep, Dialog.make, Dialog.with_default, Dialog.with_notes, Dialog.with_multi, Dialog.note_text,
     Dialog.paint, Dialog.modal, Dialog.modal_healing, Dialog.modal_refresh, Dialog.option_count,
     Dialog.frame_width_for, Dialog.content_width,
 }
@@ -154,8 +155,9 @@ def run_tui_with_size (log : Option Logger) (st : WeaverState) (tr : Transcript)
             // stays untouched.
             // A resumed session's prompts seed Up's history.
             let older <- load_prompts st;
+            let first <- if st.auto_start then AutoContinue.next st st.run else IO.pure Option.none;
             let m0 : TuiModel := init_tui_model_with log st rows cols tr;
-            let start : TuiModel := { m0 with prompt := Prompt.with_history m0.prompt older };
+            let start : TuiModel := { m0 with prompt := Prompt.with_history m0.prompt older, auto_start := first };
             let app : App TuiModel WeaverMsg :=
                 App.app_ticked start on_event TuiApp.update Model.view 100
                     tick_redraw reads_input owns_screen;
@@ -801,16 +803,27 @@ def update_event (m : TuiModel) (e : Event) : Pair TuiModel (Cmd WeaverMsg) :=
         _ => Pair.pair (with_streak_reset (fn (mm : TuiModel) => mm) m) Cmd.none,
     }
 
+/// The auto-start line fires on the first idle tick; a title that is due
+/// forks here instead (once), AFTER persistence and the plan dialog.
+def start_pending (m : TuiModel) (poll : Cmd WeaverMsg) : Pair TuiModel (Cmd WeaverMsg) :=
+    match m.auto_start {
+        Option.some text =>
+            if Bool.or m.turn_pending (Bool.or m.overlay_open (Bool.or m.modal (queued_waiting m)))
+            then Pair.pair { m with auto_start := Option.none } poll
+            else submit_line { m with auto_start := Option.none } text,
+        Option.none =>
+            if m.title_due
+            then Pair.pair { m with title_due := false } (title_cmd m)
+            else Pair.pair m poll,
+    }
+
 /// A tick: fold the subscriptions' pure messages (the spinner frame) now,
 /// then run their polls -- unless a session title is due, which forks
 /// here instead (once), AFTER persistence and the plan dialog.
 def tick_step (m : TuiModel) (due : Pair (List WeaverMsg) (Cmd WeaverMsg)) : Pair TuiModel (Cmd WeaverMsg) :=
     match due {
         Pair.pair msgs poll => match batch_step m msgs {
-            Pair.pair m2 _ =>
-                if m2.title_due
-                then Pair.pair { m2 with title_due := false } (title_cmd m2)
-                else Pair.pair m2 poll,
+            Pair.pair m2 _ => start_pending m2 poll,
         },
     }
 
@@ -1205,7 +1218,7 @@ def btw_show (st : WeaverState) (q : String) (answer : String) (start : I64) (bl
 def queue_line (m : TuiModel) (text : String) : Pair TuiModel (Cmd WeaverMsg) :=
     let queued : List String := List.append m.queued (List.cons text List.empty) in
     let line : TLine := TLine.plain (String.concat "queued: " text) in
-    let m1 : TuiModel := { (with_streak_reset (fn (mm : TuiModel) => { mm with prompt := Prompt.clear mm.prompt }) m) with queued := queued } in
+    let m1 : TuiModel := { (with_streak_reset (fn (mm : TuiModel) => { mm with prompt := Prompt.clear mm.prompt }) m) with queued := queued, auto_start := Option.none } in
     note_block Cmd.none m1 [line]
 
 /// Are instructions waiting behind the running turn?
@@ -1232,7 +1245,7 @@ def submit_line (m : TuiModel) (text : String) : Pair TuiModel (Cmd WeaverMsg) :
     let store : Option StoreState := m.state.store in
     let gen : I64 := m.turn_gen + 1 in
     let m1 : TuiModel := with_streak_reset
-        (fn (mm : TuiModel) => Model.append_block { mm with prompt := Prompt.submitted mm.prompt text } echo) m in
+        (fn (mm : TuiModel) => Model.append_block { mm with prompt := Prompt.submitted mm.prompt text, auto_start := Option.none } echo) m in
     let p1 : PaneModel := m1.pane in
     let m2 : TuiModel :=
         { m1 with turn_pending := true, banner := Banner.hidden,
@@ -1481,9 +1494,6 @@ def slash_step_tui (log : Option Logger) (gen : I64) (st : WeaverState) (text : 
 def mode_is_plan (m : Mode) : Bool :=
     match m { Mode.plan => true, _ => false }
 
-def mode_is_auto (m : Mode) : Bool :=
-    match m { Mode.auto => true, _ => false }
-
 /// The auto-continue prompt: queue it silently behind the turn's store write.
 /// `turn_result_step` already issued the persist command, and
 /// `batch_step`'s "first non-none command wins" rule keeps it, so this
@@ -1491,7 +1501,7 @@ def mode_is_auto (m : Mode) : Bool :=
 /// have switched mode or queued a line during the turn, and then the human
 /// has taken control.
 def auto_continue_step (m : TuiModel) (text : String) : Pair TuiModel (Cmd WeaverMsg) :=
-    if Bool.not (mode_is_auto m.state.mode) || queued_waiting m
+    if Bool.not (Mode.is_auto m.state.mode) || queued_waiting m
     then Pair.pair m Cmd.none
     else Pair.pair { m with queued := List.append m.queued (List.cons text List.empty), queued_ready := true } Cmd.none
 
@@ -1499,15 +1509,51 @@ def auto_continue_step (m : TuiModel) (text : String) : Pair TuiModel (Cmd Weave
 /// first (persisting the turn) and then the continuation into the queue.
 def with_auto_continue (st : WeaverState) (msg : WeaverMsg) : IO WeaverMsg :=
     match msg {
-        WeaverMsg.turn_result run _ _ _ _ => do {
+        WeaverMsg.turn_result run lines delta last_context plan => do {
+            let _ <- AutoContinue.clear_failures st;
             let cont <- AutoContinue.next st run;
             match cont {
-                Option.none => IO.pure msg,
                 Option.some text => IO.pure (WeaverMsg.batch [msg, WeaverMsg.auto_continue text]),
+                Option.none => with_budget_note st msg run lines delta last_context plan,
             }
         },
+        WeaverMsg.turn_failed run e => with_failure_retry st msg run e,
         _ => IO.pure msg,
     }
+
+/// The turn chain ended: append the budget note to the turn's own block
+/// (one persistence command; a second would be dropped by batch_step).
+def with_budget_note (st : WeaverState) (msg : WeaverMsg) (run : RunState) (lines : List TLine) (delta : List Message) (last_context : I64) (plan : Option String) : IO WeaverMsg := do {
+    let note <- AutoContinue.budget_note st run;
+    match note {
+        Option.none => IO.pure msg,
+        Option.some line => IO.pure (WeaverMsg.turn_result run (List.append lines (List.cons (TLine.plain line) List.empty)) delta last_context plan),
+    }
+}
+
+/// A recoverable failed turn in auto-with-plan retries the plan's next
+/// step a bounded number of times; fatal classes pass unchanged.
+def with_failure_retry (st : WeaverState) (msg : WeaverMsg) (run : RunState) (e : WeaverError) : IO WeaverMsg :=
+    if Bool.not (WeaverError.recoverable e)
+    then IO.pure msg
+    else do {
+        let cont <- AutoContinue.next st run;
+        match cont {
+            Option.none => IO.pure msg,
+            Option.some text => retry_queued st msg text,
+        }
+    }
+
+def retry_queued (st : WeaverState) (msg : WeaverMsg) (text : String) : IO WeaverMsg := do {
+    let n <- AutoContinue.record_failure st;
+    match n {
+        Option.some k =>
+            if I64.gt k AutoContinue.max_failures
+            then IO.pure msg
+            else IO.pure (WeaverMsg.batch [msg, WeaverMsg.auto_continue text]),
+        Option.none => IO.pure msg,
+    }
+}
 
 /// `/plan` opens the review dialog in plan mode and a read-only view
 /// outside it. `/plan approve …` stays a plain command (a deliberate
@@ -1605,25 +1651,84 @@ def turn_result_of (st : WeaverState) (before : I64) (note : Option String) (r :
 def error_line (e : WeaverError) : TLine :=
     TLine.plain (String.concat "error: " (WeaverError.show e))
 
+// ── the `ask` tool's dialog seam ────────────────────────────────────────
+
+#[partial]
+def ask_option_rows_go (os : List AskOption) (acc : List DialogOption) : List DialogOption :=
+    match os {
+        List.empty => List.reverse acc,
+        List.cons o rest =>
+            let d : DialogOption := { label := o.label, hint := o.description, key := "", value := Option.none } in
+            ask_option_rows_go rest (List.cons d acc),
+    }
+
+def ask_other_option : DialogOption :=
+    let d : DialogOption := { label := "Other (type an answer)", hint := "", key := "", value := Option.some "" } in
+    d
+
+def ask_dialog_options (spec : AskSpec) : List DialogOption :=
+    let base : List DialogOption := ask_option_rows_go spec.options List.empty in
+    if Bool.and spec.allow_other (Bool.not spec.multi)
+    then List.append base (List.cons ask_other_option List.empty)
+    else base
+
+def ask_reply_picked (picked : List I64) (note : String) : AskReply :=
+    let r : AskReply := { picked := picked, other := note, cancelled := false, auto := false } in
+    r
+
+def ask_reply_other (text : String) : AskReply :=
+    let r : AskReply := { picked := List.empty, other := text, cancelled := false, auto := false } in
+    r
+
+def ask_reply_of (final : DialogModel) (step : DialogStep) : AskReply :=
+    let note : String := Dialog.note_text final in
+    match step {
+        DialogStep.choose i => ask_reply_picked (List.cons i List.empty) note,
+        DialogStep.choose_many is => ask_reply_picked is note,
+        DialogStep.submit _ text => ask_reply_other text,
+        _ => AskTool.cancelled_reply,
+    }
+
+/// The dialog: the question as the body, the options as rows (plus an
+/// editable "Other" in single mode; in multi mode the note field is the
+/// free-text answer).
+def ask_dialog (colors : Bool) (store : Option StoreState) (spec : AskSpec) : IO AskReply := do {
+    let body : List String := List.cons spec.question (List.cons "" List.empty);
+    let subtitle : String := if spec.multi then "choose one or more -- Space toggles" else "choose one";
+    let d0 : DialogModel := Dialog.make "Question" subtitle body (ask_dialog_options spec);
+    let d1 : DialogModel := Dialog.with_notes d0;
+    let d : DialogModel := if spec.multi then Dialog.with_multi d1 else d1;
+    let pr <- dialog_run colors store d;
+    match pr {
+        Pair.pair final step => IO.pure (ask_reply_of final step),
+    }
+}
+
+def ask_seam (colors : Bool) (store : Option StoreState) : AskSeam :=
+    let s : AskSeam := { ask := fn (spec : AskSpec) => ask_dialog colors store spec } in
+    s
+
 /// Rebuild the turn's `Gate` from `Gate.weaver_tui` (instead of
 /// `Gate.weaver`) and swap the emit seam to `TuiApp.progress` (NOT
 /// dumb's `stdout_write`: a perform-time raw write lands on the alt
 /// screen mid-frame -- the recorded UI-repair finding). Drive the loop
 /// -- `append_user`/`drive_loop` are `dumb.mo`'s own halves, reused
 /// as-is (Phase 9: `drive_loop` is already `ResultT WeaverError IO`).
-def drive_tui (log : Option Logger) (gen : I64) (st : WeaverState) (text : String) (on_usage : Usage -> IO Unit) (spend : Ref Usage) : ResultT WeaverError IO RunState := do {
-    let stop : Unit -> IO Bool := Stop.predicate st.store gen;
-    let with_task : RunState := { (st.run) with reg := Instructions.attaching st.instr_seen st.place st.trusted
-        (ToolRegistry.register (SkillTool.impl st.skills) (ToolRegistry.register (PlanTool.impl st.store st.plan_repo) (ToolRegistry.register (TodoTool.impl st.store)
-            (ToolRegistry.register (WeaverShell.impl log stop (WeaverShell.fg_path st.store))
-                (ToolRegistry.register (ReadProcessTool.impl_with stop)
-                    (ToolRegistry.register (Subagent.task_tool st.run.session.config st.instructions log st.store stop spend) st.run.reg)))))) };
-    let gated : RunState := { with_task with gate := Gate.weaver_tui log st.mode st.colors st.store st.grants (Place.cwd_of st.place) (auto_ctx log st text),
-        emit := progress_live log st.store, on_usage := on_usage,
-        should_stop := stop, inbox := Inbox.seam st.store, side_spend := Subagent.drain spend, stopped := false };
-    let ready : RunState := append_user gated text;
-    drive_loop ready
-}
+def drive_tui (log : Option Logger) (gen : I64) (st : WeaverState) (text : String) (on_usage : Usage -> IO Unit) (spend : Ref Usage) : ResultT WeaverError IO RunState :=
+    ResultT.mk (do {
+        let stop : Unit -> IO Bool := Stop.predicate st.store gen;
+        let with_task : RunState := { (st.run) with reg := Instructions.attaching st.instr_seen st.place st.trusted
+            (ToolRegistry.register (SkillTool.impl st.skills) (ToolRegistry.register (AskTool.impl st.mode (Option.some (ask_seam st.colors st.store))) (ToolRegistry.register (PlanTool.impl st.store st.plan_repo) (ToolRegistry.register (TodoTool.impl st.store)
+                (ToolRegistry.register (WeaverShell.impl log stop st.store)
+                    (ToolRegistry.register (ReadProcessTool.impl_with stop)
+                        (ToolRegistry.register (Subagent.task_tool st.run.session.config st.instructions log st.store stop spend) st.run.reg))))))) };
+        let ctx <- auto_ctx log st text;
+        let gated : RunState := { with_task with gate := Gate.weaver_tui log st.mode st.colors st.store st.grants (Place.cwd_of st.place) ctx,
+            emit := progress_live log st.store, on_usage := on_usage,
+            should_stop := stop, inbox := Inbox.seam st.store, side_spend := Subagent.drain spend, stopped := false };
+        let ready : RunState := append_user gated text;
+        ResultT.run (drive_loop ready)
+    })
 
 /// Persist every streamed fragment (live.txt). The terminal no longer
 /// gets a raw preview: the live thinking row under the prompt is the
@@ -1865,13 +1970,14 @@ def list_msg_length (xs : List Message) : I64 :=
 /// does not (it owns its own screen and its own stdin read).
 pub def Gate.weaver_tui (log : Option Logger) (mode : Mode) (colors : Bool) (store : Option StoreState) (grants : Option (Ref (List PermGrant))) (root : Option Path) (auto : Option AutoCtx) : Gate :=
     {
-        ask := weaver_tui_ask log mode colors store grants root auto,
-        precheck := weaver_tui_precheck mode grants root auto,
+        ask := weaver_tui_ask log mode colors store grants root (Store.scratch_of store) auto,
+        precheck := weaver_tui_precheck mode grants root (Store.scratch_of store) auto,
     }
 
-def weaver_tui_precheck (mode : Mode) (grants : Option (Ref (List PermGrant))) (root : Option Path) (auto : Option AutoCtx) (p : Pick) : IO (Option Approval) :=
-    let a : Assessment := Assess.pick root p in
+def weaver_tui_precheck (mode : Mode) (grants : Option (Ref (List PermGrant))) (root : Option Path) (scratch : Option Path) (auto : Option AutoCtx) (p : Pick) : IO (Option Approval) :=
+    let a : Assessment := Assess.pick root scratch p in
     if Policy.unguarded p.name then IO.pure (Option.some Approval.once)
+    else if Gate.auto_open mode auto then IO.pure (Option.some Approval.once)
     else match Gate.auto_for mode auto p.cap a {
         Option.some ctx => Gate.auto_precheck ctx root a p,
         Option.none => tui_static_precheck mode grants a p,
@@ -1889,8 +1995,11 @@ def tui_static_precheck (mode : Mode) (grants : Option (Ref (List PermGrant))) (
         Decision.allow => IO.pure Option.none,
     }
 
-def weaver_tui_ask (log : Option Logger) (mode : Mode) (colors : Bool) (store : Option StoreState) (grants : Option (Ref (List PermGrant))) (root : Option Path) (auto : Option AutoCtx) (p : Pick) : IO Approval := do {
-    let a : Assessment := Assess.pick root p;
+def weaver_tui_ask (log : Option Logger) (mode : Mode) (colors : Bool) (store : Option StoreState) (grants : Option (Ref (List PermGrant))) (root : Option Path) (scratch : Option Path) (auto : Option AutoCtx) (p : Pick) : IO Approval :=
+    if Gate.auto_open mode auto then IO.pure Approval.once else weaver_tui_ask_supervised log mode colors store grants root scratch auto p
+
+def weaver_tui_ask_supervised (log : Option Logger) (mode : Mode) (colors : Bool) (store : Option StoreState) (grants : Option (Ref (List PermGrant))) (root : Option Path) (scratch : Option Path) (auto : Option AutoCtx) (p : Pick) : IO Approval := do {
+    let a : Assessment := Assess.pick root scratch p;
     let d <- Gate.decision mode auto root a p;
     match d {
         Decision.allow => IO.pure Approval.once,
@@ -1904,15 +2013,18 @@ def weaver_tui_ask (log : Option Logger) (mode : Mode) (colors : Bool) (store : 
 
 /// The classifier's context for a turn: the session's provider, the
 /// user's words with this turn's line, and the session's verdict cache.
-pub def auto_ctx (log : Option Logger) (st : WeaverState) (line : String) : Option AutoCtx :=
+pub def auto_ctx (log : Option Logger) (st : WeaverState) (line : String) : IO (Option AutoCtx) := do {
+    let plan <- AutoContinue.plan_context st.store;
     let ctx : AutoCtx := {
         cfg := st.run.session.config,
-        intent := Classify.intent st.run.session.history line,
+        intent := Classify.with_plan (Classify.intent st.run.session.history line) plan,
         cache := st.verdicts,
         log := log,
         on_danger := st.auto_on_danger,
-    } in
-    Option.some ctx
+        safety := st.auto_safety,
+    };
+    IO.pure (Option.some ctx)
+}
 
 def log_danger (log : Option Logger) (p : Pick) (a : Assessment) : IO Unit :=
     match a.danger {

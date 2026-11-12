@@ -8,7 +8,7 @@ use weaver::store {
     Store.append_chunk, Store.read_live, Store.discard_live, Store.read_live_from,
     Store.append_history_note, Store.update_meta,
     Store.append_note, Store.record_compacted, Store.encode_meta, Store.decode_meta,
-    Store.read_plan, Store.write_plan,
+    Store.read_plan, Store.write_plan, Store.scratch_of, Store.ensure_scratch,
     SessionInfo, TitleField, Store.list_sessions, Store.read_meta, Store.write_title,
 }
 use shuttle::session {Session, Session.messages_to_json}
@@ -18,7 +18,7 @@ use shuttle::message_types {text, user, assistant}
 use std::path {Path, Path.of, Path.to_string}
 use std::process {process_id, exec_cmd}
 use std::list {}
-use std::io {IO.write_file, IO.write_stderr}
+use std::io {IO.write_file, IO.write_stderr, IO.is_dir}
 use std::concurrent::combine {sleepIO}
 use json::json {Json, Json.get_object, Json.make_object}
 use std::map {Map}
@@ -785,6 +785,48 @@ def test_latest_session_stays_in_its_repo : IO Bool := do {
         Result.ok a => match rb {
             Result.err _ => IO.pure false,
             Result.ok b => latest_in_places root a b,
+        },
+    }
+}
+
+// ── the session scratch dir ────────────────────────────────────────────
+
+#[test]
+def test_new_session_creates_a_scratch_dir : IO Bool := do {
+    let root : Path := root_for "scratch_new";
+    clean root;
+    let r <- Store.new_session root Option.none test_session;
+    match r {
+        Result.err _ => IO.pure false,
+        Result.ok st => do {
+            let dir : Path := Store.child st.dir "scratch";
+            let there <- IO.is_dir dir;
+            let mapped : Bool := match Store.scratch_of (Option.some st) {
+                Option.some p => Path.to_string p == Path.to_string dir,
+                Option.none => false,
+            };
+            let none_is_none : Bool := match Store.scratch_of Option.none {
+                Option.none => true,
+                Option.some _ => false,
+            };
+            IO.pure (Bool.and there (Bool.and mapped none_is_none))
+        },
+    }
+}
+
+#[test]
+def test_ensure_scratch_repairs_an_older_session : IO Bool := do {
+    let root : Path := root_for "scratch_repair";
+    clean root;
+    let r <- Store.new_session root Option.none test_session;
+    match r {
+        Result.err _ => IO.pure false,
+        Result.ok st => do {
+            let dir : Path := Store.child st.dir "scratch";
+            let _ <- exec_cmd "rm" ["-rf", Path.to_string dir];
+            let ok <- Store.ensure_scratch st.dir;
+            let there <- IO.is_dir dir;
+            IO.pure (Bool.and ok there)
         },
     }
 }

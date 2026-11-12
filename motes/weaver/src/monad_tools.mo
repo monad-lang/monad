@@ -32,6 +32,7 @@ use std::list {List.intercalate}
 use std::io {IO.write_file}
 use std::path {Path}
 use std::process {process_id, exec_cmd}
+use weaver::diff_hunks {DiffHunks.cut_utf8}
 
 // ── input helpers ──────────────────────────────────────────────────────
 
@@ -112,8 +113,28 @@ def has_errors (r : FileCheckResult) : Bool :=
 def warnings_text (ws : List String) : String :=
     match ws {
         List.empty => "",
-        List.cons _ _ => String.concat "\nwarnings:\n" (List.intercalate "\n" ws),
+        List.cons _ _ => String.concat "\nwarnings:\n" (capped_lines ws),
     }
+
+/// Diagnostics are re-sent in the history on every later request, so a
+/// file with hundreds of errors must not enter it whole.
+def diagnostic_cap : I64 := 40
+
+#[partial]
+def take_lines (n : I64) (xs : List String) : List String :=
+    if Bool.not (I64.lt 0 n) then List.empty
+    else match xs {
+        List.empty => List.empty,
+        List.cons x rest => List.cons x (take_lines (n - 1) rest),
+    }
+
+def capped_lines (xs : List String) : String :=
+    let total : I64 := List.length xs in
+    let shown : List String := take_lines diagnostic_cap xs in
+    let more : String := if I64.gt total diagnostic_cap
+        then String.concat "\n... " (String.concat (I64.to_string (total - diagnostic_cap)) " more")
+        else "" in
+    String.concat (List.intercalate "\n" shown) more
 
 def check_text (path : String) (r : FileCheckResult) : String :=
     let errs : List String := r.diagnostics in
@@ -121,7 +142,7 @@ def check_text (path : String) (r : FileCheckResult) : String :=
     match errs {
         List.empty => String.concat "monad_check: " (String.concat path (String.concat " OK" (warnings_text warns))),
         List.cons _ _ => String.concat "monad_check: " (String.concat path (String.concat " ERRORS:\n"
-            (String.concat (List.intercalate "\n" errs) (warnings_text warns)))),
+            (String.concat (capped_lines errs) (warnings_text warns)))),
     }
 
 /// The checker resolves a `use` against the buffer's PATH, and the
@@ -190,6 +211,15 @@ pub def MonadEval.fuel : I64 := 2000000
 /// 500 user calls stays far below this backend's 128 MB, and a deeper
 /// program reports "recursion too deep" rather than overrunning it.
 pub def MonadEval.max_depth : I64 := 500
+
+/// The most expression output returned to the model: a printed list can
+/// be arbitrarily large, and every byte is re-sent later.
+pub def MonadEval.result_cap : I64 := 16384
+
+def cap_result (text : String) : String :=
+    if I64.gt (String.length text) MonadEval.result_cap
+    then String.concat (DiffHunks.cut_utf8 text MonadEval.result_cap) "\n[output truncated at 16384 bytes]"
+    else text
 
 // ── monad_eval ─────────────────────────────────────────────────────────
 
@@ -296,8 +326,8 @@ def eval_expression (cache : Ref ModuleInfoCache) (buf : Ref (List String)) (roo
         (String.concat ty (String.concat " := " (String.concat src "\n"))));
     let text_r <- run_temp root content;
     return (match text_r {
-        Result.ok text => Content.tool_result id text false,
-        Result.err text => Content.tool_result id text true,
+        Result.ok text => Content.tool_result id (cap_result text) false,
+        Result.err text => Content.tool_result id (cap_result text) true,
     })
 }
 
@@ -325,8 +355,8 @@ def eval_source (cache : Ref ModuleInfoCache) (buf : Ref (List String)) (root : 
 def run_whole (root : Option String) (id : String) (s : String) : IO Content := do {
     let text_r <- run_temp root s;
     return (match text_r {
-        Result.ok text => Content.tool_result id text false,
-        Result.err text => Content.tool_result id text true,
+        Result.ok text => Content.tool_result id (cap_result text) false,
+        Result.err text => Content.tool_result id (cap_result text) true,
     })
 }
 

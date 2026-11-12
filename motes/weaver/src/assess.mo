@@ -13,11 +13,13 @@ use weaver::shell_words {ShellWord, ShellRedir, ShellCmd, ShellScript, ShellWord
 use weaver::permissions {Permissions.within, Permissions.normalize}
 
 /// `inside`: every path the pick names is under the working directory (a
-/// command naming none is inside too); `outside` lists the ones that are
-/// not; `unknown` when a path depends on something only known when the
-/// command runs.
+/// command naming none is inside too); `scratch`: every path it names is
+/// under the session's scratch directory (or none is named and the command
+/// runs there); `outside` lists the ones that are not; `unknown` when a
+/// path depends on something only known when the command runs.
 pub type Reach {
     inside,
+    scratch,
     outside (paths : List Path),
     unknown,
 }
@@ -39,17 +41,17 @@ def scan_max_bytes : I64 := 16384
 /// Nested `$(..)`, `sh -c '..'` and `eval` text is scanned this deep.
 def nest_max : I64 := 3
 
-pub def Assess.pick (root : Option Path) (p : Pick) : Assessment :=
+pub def Assess.pick (root : Option Path) (scratch : Option Path) (p : Pick) : Assessment :=
     if String.beq p.name "shell"
-    then command_pick root p
+    then command_pick root scratch p
     else match input_str "path" p.input {
         Option.none => Assess.unknown,
-        Option.some path => file_pick root p.cap path,
+        Option.some path => file_pick root scratch p.cap path,
     }
 
 /// A file tool's target, and whether it writes outside the workspace.
-def file_pick (root : Option Path) (cap : Capability) (path : String) : Assessment :=
-    let a : Assessment := Assess.path root path in
+def file_pick (root : Option Path) (scratch : Option Path) (cap : Capability) (path : String) : Assessment :=
+    let a : Assessment := Assess.path root scratch path in
     match cap {
         Capability.write => match a.scope {
             Reach.outside ps => match ps {
@@ -68,19 +70,19 @@ pub def Assess.unknown : Assessment :=
     a
 
 /// A file tool's target.
-pub def Assess.path (root : Option Path) (path : String) : Assessment :=
-    let w : Walk := note_word (walk_start root root) (plain_word path) in
+pub def Assess.path (root : Option Path) (scratch : Option Path) (path : String) : Assessment :=
+    let w : Walk := note_word (walk_start root scratch root) (plain_word path) in
     walk_result w
 
-def command_pick (root : Option Path) (p : Pick) : Assessment :=
+def command_pick (root : Option Path) (scratch : Option Path) (p : Pick) : Assessment :=
     match input_str "command" p.input {
         Option.none => Assess.unknown,
-        Option.some cmd => Assess.command root cmd,
+        Option.some cmd => Assess.command root scratch cmd,
     }
 
 /// `command` run from the root.
-pub def Assess.command (root : Option Path) (cmd : String) : Assessment :=
-    walk_result (walk_text 0 cmd (walk_start root root))
+pub def Assess.command (root : Option Path) (scratch : Option Path) (cmd : String) : Assessment :=
+    walk_result (walk_text 0 cmd (walk_start root scratch root))
 
 def input_str (key : String) (input : Json) : Option String :=
     match Json.get_object input {
@@ -104,29 +106,47 @@ def plain_word (text : String) : ShellWord :=
 /// once a `cd` went somewhere unknowable.
 struct Walk {
     root : Option Path,
+    /// The session's disposable scratch dir, when persistence is on.
+    scratch : Option Path,
     base : Option Path,
     outside : List Path,
     unknown : Bool,
     danger : Option String,
     outside_write : Option String,
+    /// Whether any word resolved as a path, and whether one was in the
+    /// workspace / the scratch dir.
+    saw_path : Bool,
+    saw_workspace : Bool,
+    saw_scratch : Bool,
+    /// Whether `$WEAVER_SCRATCH`/`$TMPDIR` may be expanded as the scratch
+    /// path. False once the script assigns either name: the shell could
+    /// point it anywhere, so the spelling must stay dynamic.
+    expand_scratch : Bool,
     /// The previous simple command's name, for `curl .. | sh`.
     prev : String,
 }
 
-def walk_start (root : Option Path) (base : Option Path) : Walk :=
-    let w : Walk := { root := root, base := base, outside := List.empty, unknown := false, danger := Option.none, outside_write := Option.none, prev := "" } in
+def walk_start (root : Option Path) (scratch : Option Path) (base : Option Path) : Walk :=
+    let w : Walk := { root := root, scratch := scratch, base := base, outside := List.empty, unknown := false, danger := Option.none, outside_write := Option.none, saw_path := false, saw_workspace := false, saw_scratch := false, expand_scratch := true, prev := "" } in
     w
 
 def walk_result (w : Walk) : Assessment :=
-    let scope : Reach := match w.root {
-        Option.none => Reach.unknown,
-        Option.some _ =>
-            if w.unknown then Reach.unknown
-            else if List.is_empty w.outside then Reach.inside
-            else Reach.outside (List.reverse w.outside),
-    } in
+    let known : Bool := Bool.or (match w.root { Option.some _ => true, Option.none => false })
+        (match w.scratch { Option.some _ => true, Option.none => false }) in
+    let scope : Reach := if Bool.not known then Reach.unknown
+        else if w.unknown then Reach.unknown
+        else if Bool.not (List.is_empty w.outside) then Reach.outside (List.reverse w.outside)
+        else if only_scratch w then Reach.scratch
+        else Reach.inside in
     let a : Assessment := { scope := scope, danger := w.danger, outside_write := w.outside_write } in
     a
+
+/// Every path the pick names is in the scratch dir, or none is named and
+/// the command runs there.
+def only_scratch (w : Walk) : Bool :=
+    if w.saw_path
+    then Bool.and w.saw_scratch (Bool.not w.saw_workspace)
+    else match w.base { Option.some b => Assess.inside_scratch w.scratch b, Option.none => false }
 
 def lost (w : Walk) : Walk :=
     let w2 : Walk := { w with unknown := true } in
@@ -161,9 +181,33 @@ def walk_text (depth : I64) (text : String) (w : Walk) : Walk :=
     else if I64.lt scan_max_bytes (String.length text) then lost w
     else walk_script depth (ShellWords.parse text) w
 
+/// A word that names or assigns one of the two scratch variables (a
+/// `NAME=` assignment or a bare name, as `export`/`unset` take). A
+/// script containing one loses the expansion: the shell may point the
+/// variable somewhere else entirely.
+def assigns_var (x : ShellWord) : Bool :=
+    Bool.or (String.starts_with "WEAVER_SCRATCH=" x.text)
+        (Bool.or (String.starts_with "TMPDIR=" x.text)
+            (Bool.or (String.beq x.text "WEAVER_SCRATCH") (String.beq x.text "TMPDIR")))
+
+#[partial]
+def words_assign_var (ws : List ShellWord) : Bool :=
+    match ws {
+        List.empty => false,
+        List.cons x rest => if assigns_var x then true else words_assign_var rest,
+    }
+
+#[partial]
+def cmds_assign_var (cs : List ShellCmd) : Bool :=
+    match cs {
+        List.empty => false,
+        List.cons c rest => if words_assign_var c.words then true else cmds_assign_var rest,
+    }
+
 #[terminating]
 def walk_script (depth : I64) (sc : ShellScript) (w0 : Walk) : Walk :=
-    let w1 : Walk := if sc.unknown then lost w0 else w0 in
+    let w0b : Walk := if cmds_assign_var sc.cmds then { w0 with expand_scratch := false } else w0 in
+    let w1 : Walk := if sc.unknown then lost w0b else w0b in
     let w2 : Walk := walk_cmds depth sc.cmds w1 in
     walk_nested depth sc.nested w2
 
@@ -235,7 +279,8 @@ def walk_redirs (rs : List ShellRedir) (w : Walk) : Walk :=
 def walk_cd (args : List ShellWord) (w : Walk) : Walk :=
     match args {
         List.empty => cd_lost (add_outside (Path.path "~") w),
-        List.cons d _ =>
+        List.cons d0 _ =>
+            let d : ShellWord := if w.expand_scratch then Assess.expand_word w.scratch d0 else d0 in
             if String.beq d.text "-" then cd_lost (lost w)
             else if Bool.or d.dynamic (String.starts_with "~" d.text)
             then cd_lost (note_word w d)
@@ -254,11 +299,13 @@ def cd_lost (w : Walk) : Walk :=
 type Spot {
     spot_none,
     spot_inside (p : Path),
+    spot_scratch (p : Path),
     spot_outside (p : Path),
     spot_lost,
 }
 
-def spot_of (w : Walk) (operand : Bool) (x : ShellWord) : Spot :=
+def spot_of (w : Walk) (operand : Bool) (x0 : ShellWord) : Spot :=
+    let x : ShellWord := if w.expand_scratch then Assess.expand_word w.scratch x0 else x0 in
     let text : String := if operand then x.text else Assess.path_part x.text in
     if String.is_empty text then Spot.spot_none
     else if Bool.not (Bool.or operand (Assess.path_like text)) then Spot.spot_none
@@ -267,6 +314,7 @@ def spot_of (w : Walk) (operand : Bool) (x : ShellWord) : Spot :=
         Option.none => Spot.spot_lost,
         Option.some p =>
             if Assess.harmless p then Spot.spot_none
+            else if Assess.inside_scratch w.scratch p then Spot.spot_scratch p
             else if Assess.inside w.root p then Spot.spot_inside p
             else Spot.spot_outside p,
     }
@@ -275,8 +323,9 @@ def spot_of (w : Walk) (operand : Bool) (x : ShellWord) : Spot :=
 def note_word (w : Walk) (x : ShellWord) : Walk :=
     match spot_of w false x {
         Spot.spot_none => w,
-        Spot.spot_inside _ => w,
-        Spot.spot_outside p => add_outside p w,
+        Spot.spot_inside _ => { w with saw_path := true, saw_workspace := true },
+        Spot.spot_scratch _ => { w with saw_path := true, saw_scratch := true },
+        Spot.spot_outside p => add_outside p { w with saw_path := true },
         Spot.spot_lost => lost w,
     }
 
@@ -341,6 +390,10 @@ def rm_danger (n : String) (forced : Bool) (ops : List ShellWord) (w : Walk) : W
 
 def rm_reason (n : String) (forced : Bool) (x : ShellWord) (w : Walk) : Option String :=
     match spot_of w true x {
+        Spot.spot_scratch p =>
+            if is_scratch_root w.scratch p
+            then Option.some (String.concat n " deletes the session scratch dir itself")
+            else Option.none,
         Spot.spot_outside p => Option.some (String.concat n (String.concat " deletes outside the workspace: " (Path.to_string p))),
         Spot.spot_lost => if forced then Option.some (String.concat n " -r on a path only known at run time") else Option.none,
         Spot.spot_inside p =>
@@ -348,6 +401,13 @@ def rm_reason (n : String) (forced : Bool) (x : ShellWord) (w : Walk) : Option S
             then Option.some (String.concat n (String.concat " -r deletes " x.text))
             else Option.none,
         Spot.spot_none => Option.none,
+    }
+
+/// `p` is the scratch dir itself (not something inside it).
+def is_scratch_root (scratch : Option Path) (p : Path) : Bool :=
+    match scratch {
+        Option.none => false,
+        Option.some s => String.beq (Permissions.normalize (Path.to_string s)) (Path.to_string p),
     }
 
 def is_root (root : Option Path) (p : Path) : Bool :=
@@ -513,12 +573,70 @@ pub def Assess.inside (root : Option Path) (p : Path) : Bool :=
         Option.some r => Bool.and (Bool.not (String.starts_with "~" (Path.to_string p))) (Permissions.within r p),
     }
 
+/// `p` is the session's scratch dir or below it (lexical, like `inside`).
+pub def Assess.inside_scratch (scratch : Option Path) (p : Path) : Bool :=
+    match scratch {
+        Option.none => false,
+        Option.some s => Bool.and (Bool.not (String.starts_with "~" (Path.to_string p))) (Permissions.within s p),
+    }
+
 /// Device files every command may name.
 pub def Assess.harmless (p : Path) : Bool :=
     let t : String := Path.to_string p in
     List.any (fn (k : String) => String.beq k t)
         ["/dev/null", "/dev/stdin", "/dev/stdout", "/dev/stderr", "/dev/tty", "/dev/zero", "/dev/random", "/dev/urandom"]
         || String.starts_with "/dev/fd/" t
+
+// ── the scratch env spelling ────────────────────────────────────────────
+
+/// Expand the one expansion the gate can resolve: `$WEAVER_SCRATCH` or
+/// `$TMPDIR`, braced or not, is the session scratch path. Every other
+/// `$`/backtick stays dynamic. The tokenizer loses quote context, so a
+/// single-quoted literal spelling expands too -- permissive by design, and
+/// only for the two names the shell setup sets.
+pub def Assess.expand_word (scratch : Option Path) (x : ShellWord) : ShellWord :=
+    match scratch {
+        Option.none => x,
+        Option.some p => expand_named (Path.to_string p) x,
+    }
+
+#[partial]
+def expand_named (scr : String) (x : ShellWord) : ShellWord :=
+    if Bool.not (String.contains x.text "$") then x
+    else
+        let t1 : String := replace_var x.text "${WEAVER_SCRATCH}" scr in
+        let t2 : String := replace_var t1 "$WEAVER_SCRATCH" scr in
+        let t3 : String := replace_var t2 "${TMPDIR}" scr in
+        let t4 : String := replace_var t3 "$TMPDIR" scr in
+        if String.beq t4 x.text
+        then x
+        else
+            let out : ShellWord := { text := t4, dynamic := Bool.or (String.contains t4 "$") (String.contains t4 "`") } in
+            out
+
+/// Replace `needle` (a variable spelling) only where the name ends: a
+/// following letter, digit or `_` means it is a longer name.
+#[partial]
+def replace_var_go (s : String) (needle : String) (repl : String) (i : I64) (acc : String) : String :=
+    if String.length s - String.length needle < i then String.concat acc (String.drop i s)
+    else if String.starts_with needle (String.drop i s) then
+        if var_boundary s (i + String.length needle)
+        then replace_var_go s needle repl (i + String.length needle) (String.concat acc repl)
+        else replace_var_go s needle repl (i + 1) (String.concat acc (String.slice s i 1))
+    else replace_var_go s needle repl (i + 1) (String.concat acc (String.slice s i 1))
+
+def replace_var (s : String) (needle : String) (repl : String) : String :=
+    replace_var_go s needle repl 0 ""
+
+def var_boundary (s : String) (i : I64) : Bool :=
+    match String.get s i {
+        Option.none => true,
+        Option.some b =>
+            let c : I64 := U8.to_i64 b in
+            Bool.not (Bool.or (Bool.and (47 < c) (c < 58))
+                (Bool.or (Bool.and (64 < c) (c < 91))
+                    (Bool.or (Bool.and (96 < c) (c < 123)) (c == 95)))),
+    }
 
 // ── display ─────────────────────────────────────────────────────────────
 
@@ -529,6 +647,7 @@ pub def Assess.scope_line (root : Option Path) (s : Reach) : String :=
             Option.none => "inside the workspace",
             Option.some r => String.concat "inside " (Path.to_string r),
         },
+        Reach.scratch => "inside the scratch directory",
         Reach.outside ps => String.concat "outside the workspace: " (List.intercalate ", " (List.map Path.to_string ps)),
         Reach.unknown => "can't tell where this runs",
     }
@@ -536,5 +655,12 @@ pub def Assess.scope_line (root : Option Path) (s : Reach) : String :=
 pub def Reach.is_inside (s : Reach) : Bool :=
     match s {
         Reach.inside => true,
+        Reach.scratch => true,
+        _ => false,
+    }
+
+pub def Reach.is_scratch (s : Reach) : Bool :=
+    match s {
+        Reach.scratch => true,
         _ => false,
     }

@@ -24,7 +24,7 @@ use shuttle::tool {ToolSpec, ToolImpl}
 use shuttle::tools::file_tools {ReadTool.impl, WriteTool.impl, EditTool.impl}
 use weaver::diff_tool {DiffTool.wrap}
 use shuttle::tools::search_tools {GrepTool.impl, GlobTool.impl}
-use weaver::shell_tool {WeaverShell.impl, WeaverShell.never_stop, WeaverShell.fg_path}
+use weaver::shell_tool {WeaverShell.impl, WeaverShell.never_stop}
 use clap::parse {Cli.run}
 // Wildcards: the derive's defs (decode_weavercli) are macro-generated,
 // and a named import of one does not resolve in the self-hosted loader.
@@ -32,11 +32,11 @@ use weaver::cli {*}
 use weaver::cli_spec {
     weaver_cli_spec, WeaverCli.provider_text, WeaverCli.model_text, WeaverCli.max_turns_of,
     WeaverCli.resume_text, WeaverCli.resume_asked, WeaverCli.cont_of, WeaverCli.no_color_of,
-    WeaverCli.mcps, WeaverCli.version, WeaverCli.trust_of, WeaverCli.plan_of,
+    WeaverCli.mcps, WeaverCli.version, WeaverCli.trust_of, WeaverCli.plan_of, WeaverCli.mode_of,
 }
 use weaver::plan_file {PlanRepo, PlanRepo.resolve}
 use weaver::skills {Skill, SkillScan, Skills.discover, Skills.user_root, Skills.with_index, Skills.note}
-use weaver::commands {WeaverState, Commands.set_plan, Commands.session_name, Commands.find_plan, Commands.load_plan, Commands.join_notes}
+use weaver::commands {WeaverState, Commands.set_plan, Commands.session_name, Commands.find_plan, Commands.load_plan, Commands.join_notes, with_instructions}
 use weaver::monad_tools {MonadCheck.tool, MonadEval.tool}
 use lang::module {ModuleInfoCache, module_info_cache_empty}
 use weaver::store {
@@ -44,14 +44,14 @@ use weaver::store {
     Store.sessions_root, Store.ensure_root, Store.new_session, Store.load_session,
     Store.import_session, Store.session_dir, Store.latest_session, Store.startup_transcript,
     Store.base_name, Store.append_transcript, Store.append_note, Store.read_live, Store.discard_live,
-    Store.read_plan, Store.read_meta,
+    Store.read_plan, Store.read_meta, Store.ensure_scratch,
     Transcript.empty, Transcript.append, Transcript.next_block,
 }
 use weaver::theme {theme_split_lines}
 use weaver::dumb {Dumb.run, Dumb.poll_sleep}
-use weaver::policy {Mode, AutoDanger, AutoDanger.parse, Verdict}
+use weaver::policy {Mode, Mode.resolve, Mode.is_auto, AutoDanger, AutoDanger.parse, Verdict}
 use weaver::providers {
-    Weaver.preset, Weaver.provider_of, Weaver.default_max_tokens,
+    Weaver.preset, Weaver.provider_of, Weaver.default_max_tokens, Weaver.default_tokens_for, Weaver.clamp_cfg,
     Weaver.default_max_turns, Weaver.default_window,
 }
 use std::map {BTreeMap}
@@ -90,7 +90,7 @@ def weaver_registry (log : Option Logger) (check_cache : Ref ModuleInfoCache) (e
             (ToolRegistry.register ReadProcessTool.impl
                 (ToolRegistry.register (KillProcessTool.impl log)
                     (ToolRegistry.register ListProcessesTool.impl
-                        (ToolRegistry.register (WeaverShell.impl log WeaverShell.never_stop (WeaverShell.fg_path Option.none))
+                        (ToolRegistry.register (WeaverShell.impl log WeaverShell.never_stop Option.none)
                             (ToolRegistry.register (DiffTool.wrap EditTool.impl)
                                 (ToolRegistry.register (DiffTool.wrap WriteTool.impl)
                                     (ToolRegistry.register GlobTool.impl
@@ -149,6 +149,10 @@ struct Plan {
     instructions : List InstrFile := List.empty,
     /// `--plan`: a stored plan to load at startup (`plan_file.mo`).
     plan_key : Option String := Option.none,
+    /// The startup approval mode (`--mode`, else the settings').
+    mode : Mode := Mode.manual,
+    /// `--mode auto --plan <key>`: start the plan's first turn itself.
+    auto_start : Bool := false,
     /// The discovered Agent Skills (`skills.mo`).
     skills : List Skill := List.empty,
 }
@@ -168,19 +172,24 @@ def plan_of (s : Settings) (ws : List WeaverError) (c : WeaverCli) : Result Weav
 def plan_validated (s : Settings) (ws : List WeaverError) (c : WeaverCli) : Result WeaverError Plan :=
     if Bool.and (WeaverCli.cont_of c) (WeaverCli.resume_asked c)
     then Result.err (WeaverError.config "--resume and --continue are mutually exclusive")
-    else
-        let provider : String := resolve_provider s (WeaverCli.provider_text c) in
-        let model : String := resolve_model s (WeaverCli.model_text c) in
-        // Settings warnings (unknown keys, parse failures) ride the same
-        // startup note, so the TUI shows them in its first block instead
-        // of losing them behind the alternate screen.
-        let base : Option String := warnings_note ws in
-        // The configured model is used as-is: whether the provider serves
-        // it is the provider's answer (/models asks), never a name table's.
-        match Weaver.preset provider model s.api_keys {
-            Result.err e => Result.err (WeaverError.config e),
-            Result.ok cfg => plan_turns s c provider (effective_cfg s cfg) base,
-        }
+    else match Mode.resolve (WeaverCli.mode_of c) s.mode {
+        Result.err e => Result.err (WeaverError.config e),
+        Result.ok mode => plan_resolved s ws c mode,
+    }
+
+def plan_resolved (s : Settings) (ws : List WeaverError) (c : WeaverCli) (mode : Mode) : Result WeaverError Plan :=
+    let provider : String := resolve_provider s (WeaverCli.provider_text c) in
+    let model : String := resolve_model s (WeaverCli.model_text c) in
+    // Settings warnings (unknown keys, parse failures) ride the same
+    // startup note, so the TUI shows them in its first block instead
+    // of losing them behind the alternate screen.
+    let base : Option String := warnings_note ws in
+    // The configured model is used as-is: whether the provider serves
+    // it is the provider's answer (/models asks), never a name table's.
+    match Weaver.preset provider model s.api_keys {
+        Result.err e => Result.err (WeaverError.config e),
+        Result.ok cfg => plan_turns s c mode provider (effective_cfg s cfg) base,
+    }
 
 /// Settings warnings as note lines, in order; `none` when there are
 /// none.
@@ -208,7 +217,8 @@ def effective_cfg (s : Settings) (cfg : ProviderConfig) : ProviderConfig :=
         Option.some b => { cfg with thinking := b },
     } in
     match s.max_tokens {
-        Option.none => { cfg1 with max_tokens := Weaver.default_max_tokens },
+        // The DEFAULT is provider-aware, so it never trips the clamp note.
+        Option.none => { cfg1 with max_tokens := Weaver.default_tokens_for (Weaver.provider_of "" cfg1) cfg1.model },
         Option.some n => { cfg1 with max_tokens := n },
     }
 
@@ -224,10 +234,15 @@ def resolve_model (s : Settings) (flag : String) : String :=
     then match s.model { Option.some m => m, Option.none => "" }
     else flag
 
-def plan_turns (s : Settings) (c : WeaverCli) (provider : String) (cfg : ProviderConfig) (note : Option String) : Result WeaverError Plan :=
-    match resolve_max_turns s (WeaverCli.max_turns_of c) {
-        Result.err e => Result.err (WeaverError.config e),
-        Result.ok n => plan_done provider cfg n c note (resolve_window s provider) (resolve_compact_at s),
+def plan_turns (s : Settings) (c : WeaverCli) (mode : Mode) (provider : String) (cfg : ProviderConfig) (note : Option String) : Result WeaverError Plan :=
+    let window : I64 := resolve_window s provider in
+    match Weaver.clamp_cfg provider cfg window {
+        Pair.pair cfg2 clamp_note =>
+            let note2 : Option String := Commands.join_notes note clamp_note in
+            match resolve_max_turns s (WeaverCli.max_turns_of c) {
+                Result.err e => Result.err (WeaverError.config e),
+                Result.ok n => plan_done provider cfg2 n c mode note2 window (resolve_compact_at s),
+            },
     }
 
 /// The context window the autocompact estimate is a fraction of. No
@@ -254,8 +269,17 @@ def resolve_max_turns (s : Settings) (flag : Option I64) : Result String I64 :=
 def turn_cap (n : I64) : Result String I64 :=
     if n < 1 then Result.err "--max-turns must be at least 1" else Result.ok n
 
-def plan_done (provider : String) (cfg : ProviderConfig) (n : I64) (c : WeaverCli) (note : Option String) (window : I64) (compact_at : I64) : Result WeaverError Plan :=
-    let p : Plan := { provider := provider, cfg := cfg, max_turns := n, mcps := WeaverCli.mcps c, resume := WeaverCli.resume_text c, cont := WeaverCli.cont_of c, context_window := window, compact_at := compact_at, model_note := note, plan_key := WeaverCli.plan_of c } in
+/// Auto-start only when the run was named a plan at startup: resuming a
+/// session with auto in its settings must never start working by itself.
+def auto_start_of (mode : Mode) (key : Option String) : Bool :=
+    match key {
+        Option.none => false,
+        Option.some _ => Mode.is_auto mode,
+    }
+
+def plan_done (provider : String) (cfg : ProviderConfig) (n : I64) (c : WeaverCli) (mode : Mode) (note : Option String) (window : I64) (compact_at : I64) : Result WeaverError Plan :=
+    let key : Option String := WeaverCli.plan_of c in
+    let p : Plan := { provider := provider, cfg := cfg, max_turns := n, mcps := WeaverCli.mcps c, resume := WeaverCli.resume_text c, cont := WeaverCli.cont_of c, context_window := window, compact_at := compact_at, model_note := note, plan_key := key, mode := mode, auto_start := auto_start_of mode key } in
     Result.ok p
 
 // ── MCP mounting (shuttle main.mo's machinery, ported) ─────────────────
@@ -400,7 +424,8 @@ def fresh_session (p : Plan) (reg : ToolRegistry) : Session :=
 def rekey_loaded (p : Plan) (s : Settings) (sess : Session) : Pair Session (Option String) :=
     let cfg0 : ProviderConfig := sess.config in
     let prov : String := Weaver.provider_of p.provider cfg0 in
-    let cfg2 : ProviderConfig := { cfg0 with api_key := Map.lookup prov s.api_keys } in
+    let cfg1 : ProviderConfig := { cfg0 with api_key := Map.lookup prov s.api_keys } in
+    let cfg2 : ProviderConfig := match Weaver.clamp_cfg prov cfg1 p.context_window { Pair.pair c _ => c } in
     let sess2 : Session := { sess with config := cfg2, system_prompt := Skills.with_index (Prompt.system p.instructions) p.skills } in
     Pair.pair sess2 Option.none
 
@@ -412,14 +437,8 @@ def initial_state (p : Plan) (reg : ToolRegistry) (s : Settings) (colors : Bool)
     let left : I64 := if p.max_turns - session.turns < 0 then 0 else p.max_turns - session.turns in
     let run : RunState := { session := session, reg := reg, turns_left := left, emit := stdout_write, gate := Gate.auto, always := List.empty, retries := 3, sleep_ms := Dumb.poll_sleep, on_usage := silent_usage, should_stop := silent_stop, inbox := silent_inbox, side_spend := silent_side_spend, stopped := false } in
     let prov : String := Weaver.provider_of p.provider session.config in
-    let st : WeaverState := { run := run, mode := initial_mode s, provider := prov, budget := p.max_turns, context_window := p.context_window, compact_at := p.compact_at, plan := Option.none, last_context := 0, grants := grants, place := place, mcps := p.mcps, keys := s.api_keys, catalog := BTreeMap.empty, quit := false, colors := colors, fatal := Option.none, name := Option.none, trusted := p.trusted, instructions := p.instructions, instr_seen := Option.none, store := store, auto_on_danger := auto_on_danger_of s, verdicts := Option.none, plan_repo := Option.none, skills := p.skills } in
+    let st : WeaverState := { run := run, mode := p.mode, provider := prov, budget := p.max_turns, context_window := p.context_window, compact_at := p.compact_at, plan := Option.none, last_context := 0, grants := grants, place := place, mcps := p.mcps, keys := s.api_keys, catalog := BTreeMap.empty, quit := false, colors := colors, fatal := Option.none, name := Option.none, trusted := p.trusted, instructions := p.instructions, instr_seen := Option.none, store := store, auto_on_danger := auto_on_danger_of s, verdicts := Option.none, plan_repo := Option.none, skills := p.skills, auto_start := p.auto_start, auto_failures := Option.none, auto_safety := auto_safety_of s } in
     st
-
-/// The mode the session starts in: the settings' `mode` key when it parses,
-/// `manual` otherwise -- a settings file must never land the session in
-/// an unsafe mode by accident of a typo.
-def initial_mode (s : Settings) : Mode :=
-    match s.mode { Option.some m => m, Option.none => Mode.manual }
 
 /// The dumb UI's palette switch: `NO_COLOR` set anywhere is off --
 /// the informal standard; there is no tty probe (a piped consumer sets
@@ -623,6 +642,13 @@ def auto_on_danger_of (s : Settings) : AutoDanger :=
         },
     }
 
+/// The configured auto safety net; on when the settings do not say.
+def auto_safety_of (s : Settings) : Bool :=
+    match s.auto_safety {
+        Option.none => true,
+        Option.some b => b,
+    }
+
 def run_opened (setup : LogSetup) (colors : Bool) (p : Plan) (s : Settings) (place : Option SessionPlace) (reg : ToolRegistry) (servers : List McpServer) (o : OpenedSession) : IO I64 := do {
     let o2 : OpenedSession := with_crash_note setup.crash o;
     let empty_grants : List PermGrant := List.empty;
@@ -630,12 +656,17 @@ def run_opened (setup : LogSetup) (colors : Bool) (p : Plan) (s : Settings) (pla
     let no_verdicts : BTreeMap String Verdict := BTreeMap.empty;
     let verdicts <- Ref.new no_verdicts;
     let instr_seen <- Ref.new p.instructions;
+    let zero_failures : I64 := 0;
+    let failures <- Ref.new zero_failures;
     let plan <- stored_plan o.store;
     let st0 : WeaverState := initial_state p reg s colors o.store o.session (Option.some grants) place;
     let st1 : WeaverState := Commands.set_plan st0 plan;
     let name <- Commands.session_name st1;
     let repo <- plan_repo_of s place;
-    let st_r : WeaverState := { st1 with name := name, instr_seen := Option.some instr_seen, verdicts := Option.some verdicts, plan_repo := repo };
+    let st_r0 : WeaverState := { st1 with name := name, instr_seen := Option.some instr_seen, verdicts := Option.some verdicts, plan_repo := repo, auto_failures := Option.some failures };
+    // The prompt is rebuilt now that the store (and so the scratch path)
+    // is known: the session object was built before it existed.
+    let st_r : WeaverState := with_instructions st_r0 st_r0.instructions;
     let loaded <- plan_at_start st_r p.plan_key;
     let st : WeaverState := loaded.state;
     let o3 : OpenedSession := { o2 with note := Commands.join_notes o2.note loaded.note };
@@ -854,6 +885,8 @@ def resume_token_candidate (root : Path) (place : Option SessionPlace) (p : Plan
 }
 
 def resume_dir (root : Path) (place : Option SessionPlace) (dir : Path) (p : Plan) (s : Settings) : IO (Result WeaverError OpenedSession) := do {
+    // A session saved before the scratch dir existed gets one now.
+    let _ <- Store.ensure_scratch dir;
     let r <- Store.load_session dir;
     let meta <- Store.read_meta dir;
     let moved : Option String := match meta {

@@ -24,11 +24,13 @@ use weaver::commands {
     Commands.context_used, Commands.context_percent,
 }
 use weaver::gate {Gate.weaver}
-use weaver::classify {AutoCtx, Classify.intent}
-use weaver::auto_continue {AutoContinue.next}
-use weaver::policy {Mode, Mode.show, Mode.warns_auto}
+use weaver::classify {AutoCtx, Classify.intent, Classify.with_plan}
+use weaver::ask {AskSpec, AskReply, AskSeam, AskTool.impl, AskTool.cancelled_reply, AskTool.line_prompt, AskTool.parse_line}
+use weaver::auto_continue {AutoContinue.next, AutoContinue.record_failure, AutoContinue.clear_failures, AutoContinue.max_failures, AutoContinue.budget_note, AutoContinue.plan_context}
+use weaver::policy {Mode, Mode.show}
 use weaver::error {WeaverError, WeaverError.show, WeaverError.recoverable, WeaverError.of_shuttle}
-use weaver::store {StoreState, Store.record_history, Store.write_plan}
+use weaver::store {StoreState, Store.record_history, Store.write_plan, Store.scratch_of}
+use weaver::shell_tool {WeaverShell.impl, WeaverShell.never_stop}
 use weaver::theme {Theme.tint, theme_status_code, class_code, LineClass}
 use log::logger {Logger}
 use shuttle::registry {ToolRegistry}
@@ -83,7 +85,8 @@ struct Step {
 #[terminating]
 pub def Dumb.run (log : Option Logger) (read : Unit -> IO (Option String)) (write : String -> IO Unit) (st : WeaverState) : IO WeaverState := do {
     let _ <- write (dumb_banner st);
-    dumb_loop log read write st Option.none
+    let first <- if st.auto_start then AutoContinue.next st st.run else IO.pure Option.none;
+    dumb_loop log read write st first
 }
 
 /// The session loop. `pending` is an auto-continue line: it skips the read
@@ -255,9 +258,41 @@ def write_note (write : String -> IO Unit) (note : Option String) : IO Unit :=
 
 def turn_result (write : String -> IO Unit) (st : WeaverState) (before : I64) (r : Result WeaverError RunState) : IO Step :=
     match r {
-        Result.err e => failed_step write st e,
+        Result.err e => failed_turn write st e,
         Result.ok run2 => turn_ok write st before run2,
     }
+
+/// A failed TURN (not a failed command): recoverable failures keep the
+/// session and, in auto-with-plan, retry the plan's next step a bounded
+/// number of times; a fatal class ends the run.
+def failed_turn (write : String -> IO Unit) (st : WeaverState) (e : WeaverError) : IO Step := do {
+    let _ <- write (String.concat "error: " (String.concat (WeaverError.show e) "\n"));
+    if Bool.not (WeaverError.recoverable e)
+    then IO.pure (mk_step (set_fatal st e) false)
+    else retry_failed_turn write st
+}
+
+def retry_failed_turn (write : String -> IO Unit) (st : WeaverState) : IO Step := do {
+    let cont <- AutoContinue.next st st.run;
+    match cont {
+        Option.none => IO.pure (mk_step st true),
+        Option.some text => do {
+            let n <- AutoContinue.record_failure st;
+            match n {
+                Option.some k =>
+                    if I64.gt k AutoContinue.max_failures
+                    then IO.pure (mk_step st true)
+                    else do {
+                        let _ <- write (String.concat "[auto] retrying after a transient failure ("
+                            (String.concat (I64.to_string k) (String.concat "/"
+                                (String.concat (I64.to_string AutoContinue.max_failures) ")\n"))));
+                        IO.pure (mk_continue st text)
+                    },
+                Option.none => IO.pure (mk_step st true),
+            }
+        },
+    }
+}
 
 /// One failure, classified through the one classification point: a
 /// recoverable error prints `error: <show>` and the loop continues
@@ -278,6 +313,7 @@ def failed_step (write : String -> IO Unit) (st : WeaverState) (e : WeaverError)
 /// (The struct update lives in `advance_run`, not here: `{ x with
 /// .. }` parses only in a plain body, not inside a do-block.)
 def turn_ok (write : String -> IO Unit) (st : WeaverState) (before : I64) (run2 : RunState) : IO Step := do {
+    let _ <- AutoContinue.clear_failures st;
     let _ <- write "\n\n";
     let _ <- print_diffs write before run2;
     let warn <- persist_turn st before run2;
@@ -335,16 +371,25 @@ def print_diffs (write : String -> IO Unit) (before : I64) (run2 : RunState) : I
 /// turn should start on its own.
 def finish_turn (write : String -> IO Unit) (st : WeaverState) (run2 : RunState) (warn : Option String) : IO Step :=
     match warn {
-        Option.none => do {
-            let st4 : WeaverState := advance_run st run2;
-            let cont <- AutoContinue.next st4 run2;
-            match cont {
-                Option.none => IO.pure (mk_step st4 true),
-                Option.some text => IO.pure (mk_continue st4 text),
-            }
-        },
+        Option.none => finish_clean write st run2,
         Option.some e => warn_turn write st run2 e,
     }
+
+def finish_clean (write : String -> IO Unit) (st : WeaverState) (run2 : RunState) : IO Step := do {
+    let st4 : WeaverState := advance_run st run2;
+    let cont <- AutoContinue.next st4 run2;
+    match cont {
+        Option.none => stop_with_note write st4 run2,
+        Option.some text => IO.pure (mk_continue st4 text),
+    }
+}
+
+/// The turn chain ended: say so when the only reason was the turn budget.
+def stop_with_note (write : String -> IO Unit) (st : WeaverState) (run2 : RunState) : IO Step := do {
+    let note <- AutoContinue.budget_note st run2;
+    let _ <- write_note write note;
+    IO.pure (mk_step st true)
+}
 
 def mk_continue (st : WeaverState) (text : String) : Step :=
     let s : Step := { state := st, again := true, next := Option.some text } in
@@ -408,16 +453,38 @@ def drive_ready (read : Unit -> IO (Option String)) (write : String -> IO Unit) 
         ResultT.run (drive_spending read write st text spend)
     })
 
-def drive_spending (read : Unit -> IO (Option String)) (write : String -> IO Unit) (st : WeaverState) (text : String) (spend : Ref Usage) : ResultT WeaverError IO RunState := do {
-    let base : RunState := st.run;
-    let with_task : RunState := { base with reg := Instructions.attaching st.instr_seen st.place st.trusted
-        (ToolRegistry.register (SkillTool.impl st.skills) (ToolRegistry.register (PlanTool.impl st.store st.plan_repo) (ToolRegistry.register (TodoTool.impl st.store)
-            (ToolRegistry.register (Subagent.task_tool base.session.config st.instructions Option.none Option.none silent_stop spend) base.reg)))),
-        side_spend := Subagent.drain spend };
-    let gated : RunState := gate_for st text read (theme_write write st.colors) with_task;
-    let ready : RunState := append_user gated text;
-    drive_loop ready
+// ── the `ask` tool's line seam ──────────────────────────────────────────
+
+def ask_line (read : Unit -> IO (Option String)) (write : String -> IO Unit) (spec : AskSpec) : IO AskReply := do {
+    let _ <- write (String.concat (AskTool.line_prompt spec) "");
+    let line <- read unit;
+    match line {
+        Option.none => IO.pure AskTool.cancelled_reply,
+        Option.some text => IO.pure (AskTool.parse_line spec text),
+    }
 }
+
+def ask_seam_line (read : Unit -> IO (Option String)) (write : String -> IO Unit) : AskSeam :=
+    let s : AskSeam := { ask := fn (spec : AskSpec) => ask_line read write spec } in
+    s
+
+// The IO work (`gate_for`) and the `ResultT` work (`drive_loop`) never
+// share a do-block: `ResultT.mk (do { ... ResultT.run ... })` is the one
+// shape both checkers and the compiled backend accept (see `drive_ready`).
+def drive_spending (read : Unit -> IO (Option String)) (write : String -> IO Unit) (st : WeaverState) (text : String) (spend : Ref Usage) : ResultT WeaverError IO RunState :=
+    ResultT.mk (do {
+        let base : RunState := st.run;
+        // The shell is re-registered per turn so its task dir and scratch env
+        // follow the current session (`/clear`, `/resume`).
+        let with_task : RunState := { base with reg := Instructions.attaching st.instr_seen st.place st.trusted
+            (ToolRegistry.register (SkillTool.impl st.skills) (ToolRegistry.register (AskTool.impl st.mode (Option.some (ask_seam_line read write))) (ToolRegistry.register (PlanTool.impl st.store st.plan_repo) (ToolRegistry.register (TodoTool.impl st.store)
+                (ToolRegistry.register (WeaverShell.impl Option.none WeaverShell.never_stop st.store)
+                    (ToolRegistry.register (Subagent.task_tool base.session.config st.instructions Option.none Option.none silent_stop spend) base.reg)))))),
+            side_spend := Subagent.drain spend };
+        let gated <- gate_for st text read (theme_write write st.colors) with_task;
+        let ready : RunState := append_user gated text;
+        ResultT.run (drive_loop ready)
+    })
 
 /// `Loop.run_state`'s shape minus the projection: `Agent.exec` gives
 /// back the WHOLE `RunState`, and Weaver needs it -- the always-cache
@@ -443,16 +510,18 @@ def shuttle_result (r : Result String (Pair RunState Unit)) : Result WeaverError
 def run_of_pair (p : Pair RunState Unit) : RunState :=
     match p { Pair.pair r _ => r }
 
-def gate_for (st : WeaverState) (line : String) (read : Unit -> IO (Option String)) (write : String -> IO Unit) (run : RunState) : RunState :=
+def gate_for (st : WeaverState) (line : String) (read : Unit -> IO (Option String)) (write : String -> IO Unit) (base : RunState) : IO RunState := do {
+    let plan <- AutoContinue.plan_context st.store;
     let ctx : AutoCtx := {
         cfg := st.run.session.config,
-        intent := Classify.intent st.run.session.history line,
+        intent := Classify.with_plan (Classify.intent st.run.session.history line) plan,
         cache := st.verdicts,
         log := Option.none,
         on_danger := st.auto_on_danger,
-    } in
-    let r2 : RunState := { run with gate := Gate.weaver st.mode st.grants (Place.cwd_of st.place) (Option.some ctx) read write } in
-    r2
+    };
+    let r2 : RunState := { base with gate := Gate.weaver st.mode st.grants (Place.cwd_of st.place) (Store.scratch_of st.store) (Option.some ctx) read write };
+    IO.pure r2
+}
 
 def append_user (run : RunState) (text : String) : RunState :=
     let m : Message := { role := Role.user, content := [Content.text text] } in
@@ -463,8 +532,8 @@ def append_user (run : RunState) (text : String) : RunState :=
 
 // ── The status/prompt line ─────────────────────────────────────────────
 
-/// The one line before every read: the `auto` warning (the trust
-/// setting must never pass unremarked), the mode, the provider/model,
+/// The one line before every read: the mode (the `[auto]` chip is the
+/// trust cue; there is no warning prefix), the provider/model,
 /// the turn budget, and the token spend from the session's own
 /// accounting, followed by dumb mode's own `"> "` prompt. `tui_app.mo`'s
 /// status bar reuses `Dumb.status_fields` for everything up to that
@@ -487,8 +556,7 @@ pub def Dumb.status_fields (st : WeaverState) : String :=
     let in_text : String := format_tokens spent.input_tokens in
     let out_text : String := format_tokens spent.output_tokens in
     let cached_text : String := format_tokens spent.cached_tokens in
-    let head : String := auto_warning st.mode
-        ++ "["
+    let head : String := "["
         ++ Mode.show st.mode
         ++ "] "
         ++ st.provider
@@ -514,11 +582,6 @@ def ctx_text (st : WeaverState) : String :=
         String.concat (format_tokens used) (String.concat "/"
             (String.concat (format_tokens window)
                 (String.concat " (" (String.concat (I64.to_string pct) "%)"))))
-
-/// `auto` mode is a trust setting, not a sandbox -- say so while it
-/// is on.
-def auto_warning (mode : Mode) : String :=
-    if Mode.warns_auto mode then "WARNING: auto mode -- tools run unasked. " else ""
 
 // ── helpers ─────────────────────────────────────────────────────────────
 

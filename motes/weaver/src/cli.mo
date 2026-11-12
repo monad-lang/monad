@@ -26,5 +26,6 @@ pub type WeaverCli {
         (#[arg {short := "", help := "no ANSI colors in the line UI"}] no_color : Bool)
         (#[arg {short := "", help := "trust this project's AGENTS.md and .weaver/config.toml for this run without asking"}] trust : Bool)
         (#[opt {short := "", help := "load a stored plan into the session: its number in /plans, a slug, or a path"}] plan : Option String)
+        (#[opt {short := "", help := "start in this approval mode: manual | plan | allow_edit | auto"}] mode : Option String)
         (#[opt {short := "", help := "mount an MCP server executable (repeatable)"}] mcp : List String),
 }

@@ -7,7 +7,7 @@ use lib::widgets::dialog {
     Dialog.note_text, Dialog.with_default, Dialog.apply, Dialog.rows, Dialog.body_rows,
     Dialog.total_rows, Dialog.frame_width, Dialog.frame_height, Dialog.content_width,
     Dialog.frame_width_for, Dialog.frame_height_for,
-    Dialog.with_notes, Dialog.clamp_scroll, Dialog.footer_line, Dialog.window_start, ModalState, ModalNext, Modal.fold, Modal.idle, modal_quiet, Dialog.refresh_due,
+    Dialog.with_notes, Dialog.with_multi, Dialog.clamp_scroll, Dialog.footer_line, Dialog.window_start, ModalState, ModalNext, Modal.fold, Modal.idle, modal_quiet, Dialog.refresh_due,
 }
 use lib::input {InputReader, input_reader}
 use lib::types {Key, Event, MouseEvent, MouseButton}
@@ -384,3 +384,56 @@ def test_quiet_polls_run_the_refresh : IO Bool := do {
 def test_footer_names_scroll_keys_on_overflow : Bool :=
     String.contains (Dialog.footer_line dialog true) "PgUp/PgDn"
         && Bool.not (String.contains (Dialog.footer_line dialog false) "PgUp/PgDn")
+
+// ── multi-select ────────────────────────────────────────────────────────
+
+def multi : DialogModel := Dialog.with_multi noted
+
+#[partial]
+def includes (i : I64) (is : List I64) : Bool :=
+    match is {
+        List.empty => false,
+        List.cons x rest => if x == i then true else includes i rest,
+    }
+
+/// Space toggles the highlighted option and Enter confirms the set.
+#[test]
+def test_multi_space_toggles_and_enter_confirms : Bool :=
+    match Dialog.step multi (Key.char " ") {
+        Pair.pair d1 step1 => match step1 {
+            DialogStep.continue => match Dialog.step d1 Key.enter {
+                Pair.pair _ step2 => match step2 {
+                    DialogStep.choose_many is => Bool.and (includes 0 is) (List.length is == 1),
+                    _ => false,
+                },
+            },
+            _ => false,
+        },
+    }
+
+/// Enter with nothing toggled answers the highlighted option.
+#[test]
+def test_multi_enter_without_a_toggle_picks_the_highlighted : Bool :=
+    match Dialog.step (dlg_of (Dialog.step multi Key.down)) Key.enter {
+        Pair.pair _ step => match step {
+            DialogStep.choose_many is => Bool.and (includes 1 is) (List.length is == 1),
+            _ => false,
+        },
+    }
+
+/// A letter toggles in multi mode instead of choosing immediately.
+#[test]
+def test_multi_a_letter_toggles : Bool :=
+    match Dialog.step multi (Key.char "a") {
+        Pair.pair d step => match step {
+            DialogStep.continue => includes 1 d.chosen,
+            _ => false,
+        },
+    }
+
+/// Toggling the same option twice clears it again.
+#[test]
+def test_multi_toggling_twice_clears : Bool :=
+    let d1 : DialogModel := dlg_of (Dialog.step multi (Key.char " ")) in
+    let d2 : DialogModel := dlg_of (Dialog.step d1 (Key.char " ")) in
+    List.is_empty d2.chosen

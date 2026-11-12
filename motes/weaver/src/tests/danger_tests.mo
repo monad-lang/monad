@@ -11,18 +11,18 @@ def root : Option Path := Option.some (Path.path "/repo")
 
 /// Auto mode asks: a destructive command or a write outside the workspace.
 def flagged (s : String) : Bool :=
-    let a : Assessment := Assess.command root s in
+    let a : Assessment := Assess.command root Option.none s in
     match a.danger {
         Option.some _ => true,
         Option.none => match a.outside_write { Option.some _ => true, Option.none => false },
     }
 
 def outside_write_of (s : String) : String :=
-    let a : Assessment := Assess.command root s in
+    let a : Assessment := Assess.command root Option.none s in
     match a.outside_write { Option.some r => r, Option.none => "" }
 
 def destructive (s : String) : Bool :=
-    let a : Assessment := Assess.command root s in
+    let a : Assessment := Assess.command root Option.none s in
     match a.danger { Option.some _ => true, Option.none => false }
 
 #[test]
@@ -129,8 +129,40 @@ def write_pick (path : String) : Pick :=
 /// A file write outside the workspace is flagged; a read is not.
 #[test]
 def test_file_writes_outside_are_flagged : Bool :=
-    let out : Assessment := Assess.pick root (write_pick "/etc/motd") in
-    let inside : Assessment := Assess.pick root (write_pick "src/a.mo") in
+    let out : Assessment := Assess.pick root Option.none (write_pick "/etc/motd") in
+    let inside : Assessment := Assess.pick root Option.none (write_pick "src/a.mo") in
     (match out.outside_write { Option.some _ => true, Option.none => false })
         && (match out.danger { Option.none => true, Option.some _ => false })
         && (match inside.outside_write { Option.none => true, Option.some _ => false })
+
+// ── scratch: path-based danger is off, name-based stays on ──────────────
+
+def scratch : Option Path := Option.some (Path.path "/home/u/scratch")
+
+def destructive_in (s : String) : Bool :=
+    let a : Assessment := Assess.command root scratch s in
+    match a.danger { Option.some _ => true, Option.none => false }
+
+#[test]
+def test_rm_inside_scratch_is_not_danger : Bool :=
+    Bool.not (destructive_in "cd /home/u/scratch && rm -rf *")
+        && Bool.not (destructive_in "rm -rf /home/u/scratch/build")
+        && Bool.not (destructive_in "rm -rf $WEAVER_SCRATCH/build")
+
+#[test]
+def test_a_workspace_wildcard_is_still_danger : Bool :=
+    destructive "rm -rf *" && destructive "rm -rf /home/u/scratch"
+
+#[test]
+def test_name_rules_still_apply_in_scratch : Bool :=
+    destructive_in "cd /home/u/scratch && sudo make install"
+        && destructive_in "cd /home/u/scratch && git push --force"
+
+/// The scratch ROOT itself is protected (deleting it breaks the promise
+/// the system prompt makes); its contents are not.
+#[test]
+def test_the_scratch_root_itself_is_protected : Bool :=
+    destructive_in "rm -rf /home/u/scratch"
+        && destructive_in "rmdir /home/u/scratch"
+        && Bool.not (destructive_in "rm -rf /home/u/scratch/build")
+        && Bool.not (destructive_in "rm -rf /home/u/scratch/*")

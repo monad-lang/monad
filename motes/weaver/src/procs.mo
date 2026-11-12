@@ -311,18 +311,26 @@ pub def Procs.list : IO (List ProcEntry) := do {
 /// own syntax. Paths are single-quoted; `< /dev/null` detaches stdin so the
 /// child cannot read the terminal. `set -m` puts the background job in its
 /// own process group, whose id is the recorded pid.
-pub def Procs.detached_script (dir : Path) (cwd : String) (command : String) : String :=
+pub def Procs.detached_script (dir : Path) (cwd : String) (command : String) (scratch : Option Path) : String :=
     let log : String := Proc.shell_quote (Path.to_string (Store.child dir "log")) in
     let pidp : String := Proc.shell_quote (Path.to_string (Store.child dir "pid")) in
     let exitp : String := Proc.shell_quote (Path.to_string (Store.child dir "exit")) in
     let script : String := Proc.shell_quote (Path.to_string (Store.child dir "cmd.sh")) in
+    // The session scratch dir as TMPDIR and WEAVER_SCRATCH: a tool that
+    // honours TMPDIR writes there, and the model can name it by variable.
+    let env : String := match scratch {
+        Option.none => "",
+        Option.some p =>
+            let q : String := Proc.shell_quote (Path.to_string p) in
+            String.concat_list ["TMPDIR=", q, "; export TMPDIR; WEAVER_SCRATCH=", q, "; export WEAVER_SCRATCH; "],
+    } in
     let cd : String := if String.is_empty cwd then "" else String.concat "cd " (String.concat (Proc.shell_quote cwd) " && ") in
-    String.concat_list ["set -m; ", cd, "{ sh ", script, " > ", log,
+    String.concat_list ["set -m; ", env, cd, "{ sh ", script, " > ", log,
         " 2>&1 < /dev/null; echo $? > ", exitp, "; } & echo $! > ", pidp]
 
 /// `foreground` writes the marker before the job starts, so no scan ever
 /// sees the task unmarked.
-pub def Procs.start_at (root : Path) (command : String) (cwd : String) (foreground : Bool) : IO (Result String ProcEntry) := do {
+pub def Procs.start_at (root : Path) (command : String) (cwd : String) (foreground : Bool) (scratch : Option Path) : IO (Result String ProcEntry) := do {
     let ok <- Procs.ensure root;
     if Bool.not ok
     then IO.pure (Result.err (String.concat "could not create " (Path.to_string root)))
@@ -334,7 +342,7 @@ pub def Procs.start_at (root : Path) (command : String) (cwd : String) (foregrou
         let _ <- write_text (Store.child dir "meta.json") (meta_json command cwd now);
         let _ <- write_text (Store.child dir "cmd.sh") (String.concat command "\n");
         let _ <- if foreground then write_text (Store.child dir "foreground") "1" else IO.pure unit;
-        let script : String := Procs.detached_script dir cwd command;
+        let script : String := Procs.detached_script dir cwd command scratch;
         let _ <- exec_cmd "sh" ["-c", script];
         let pid <- pid_of dir;
         if pid < 1
@@ -348,14 +356,14 @@ pub def Procs.start_at (root : Path) (command : String) (cwd : String) (foregrou
     }
 }
 
-pub def Procs.start (command : String) (cwd : String) : IO (Result String ProcEntry) := do {
+pub def Procs.start (command : String) (cwd : String) (scratch : Option Path) : IO (Result String ProcEntry) := do {
     let root <- Procs.root;
-    Procs.start_at root command cwd false
+    Procs.start_at root command cwd false scratch
 }
 
 /// A task the caller waits on: hidden until `release`d.
-pub def Procs.start_foreground (root : Path) (command : String) (cwd : String) : IO (Result String ProcEntry) :=
-    Procs.start_at root command cwd true
+pub def Procs.start_foreground (root : Path) (command : String) (cwd : String) (scratch : Option Path) : IO (Result String ProcEntry) :=
+    Procs.start_at root command cwd true scratch
 
 /// Make a foreground task an ordinary background one.
 pub def Procs.release (e : ProcEntry) : IO Unit := do {

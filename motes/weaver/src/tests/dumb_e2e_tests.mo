@@ -27,7 +27,7 @@ use shuttle::tools::shell_tools {ShellTool.impl}
 use weaver::commands {WeaverState}
 use weaver::store {StoreState, Store.new_session}
 use weaver::plan_file {PlanRepo, PlanEntry, PlanRepo.list, PlanRepo.capture}
-use weaver::dumb {Dumb.run}
+use weaver::dumb {Dumb.run, Dumb.status_fields}
 use weaver::policy {Mode}
 use json::json {Json, Json.parse, Json.get_array, Json.get_str, Json.make_str, Json.make_array, Json.make_object, Json.make_null, Json.make_num_int, Json.to_string}
 use parsec::number {parse_i64}
@@ -231,6 +231,8 @@ def state_of (reg : ToolRegistry) : WeaverState := {
     colors := true,
     name := Option.none, trusted := false, instructions := List.empty, instr_seen := Option.none,
     store := Option.none,
+    auto_start := false,
+    auto_failures := Option.none,
 }
 
 def run_of (reg : ToolRegistry) : RunState := {
@@ -635,4 +637,33 @@ def test_dumb_e2e_auto_continues_until_the_plan_is_done : IO Bool := do {
     return (cursor == 1
         && stored_status es == "done"
         && String.contains tap "all done")
+}
+
+// ── the status bar and auto-start ──────────────────────────────────────
+
+/// Auto mode's chip is the trust cue; there is no warning prefix.
+#[test]
+def test_auto_status_has_no_warning : Bool :=
+    let st : WeaverState := { (state_of stamp_registry) with mode := Mode.auto } in
+    let line : String := Dumb.status_fields st in
+    Bool.and (String.contains line "[auto]") (Bool.not (String.contains line "WARNING"))
+
+/// `--mode auto --plan` starts the plan's first turn with no input line
+/// at all (the scripted read has nothing to give).
+#[test]
+def test_auto_start_runs_the_plan_without_input : IO Bool := do {
+    let _ <- write_auto_script;
+    let _ <- write_text inputs_path "[]";
+    let _ <- write_text cursor_path "0";
+    let _ <- write_text tap_path "";
+    let st2 <- with_store_and_repo (in_tmp (state_of plan_exec_registry));
+    let st1 : WeaverState := { st2 with mode := Mode.auto, auto_start := true };
+    let _ <- link_auto_plan st1;
+    let _ <- Dumb.run Option.none scripted_read tap_write st1;
+    let cursor <- read_cursor;
+    let tap <- read_tap;
+    let es <- PlanRepo.list stored_repo;
+    return (cursor == 0
+        && String.contains tap "all done"
+        && stored_status es == "done")
 }

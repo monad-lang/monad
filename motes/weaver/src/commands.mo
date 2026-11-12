@@ -34,7 +34,7 @@ use shuttle::tool {ToolSpec}
 use shuttle::gate {Capability}
 use weaver::policy {Mode, Mode.show, Mode.parse, Mode.approve_plan, AutoDanger, AutoDanger.parse, AutoDanger.show, Verdict}
 use weaver::gate {cap_name}
-use weaver::providers {Weaver.preset, Weaver.config_for, Weaver.preferred_model, Weaver.model_for, Weaver.provider_of}
+use weaver::providers {Weaver.preset, Weaver.config_for, Weaver.preferred_model, Weaver.model_for, Weaver.provider_of, Weaver.clamp_cfg}
 use weaver::catalog {Catalog.fetch, Catalog.lookup, Catalog.remember, Catalog.render, Catalog.note}
 use weaver::compact {Compact.threshold, Compact.should_compact, Compact.estimate, Compact.compact, Compact.Outcome}
 use weaver::error {WeaverError, WeaverError.of_shuttle}
@@ -43,7 +43,7 @@ use weaver::store {
     Store.import_session, Store.session_dir, Store.base_name, Store.record_compacted,
     Store.read_plan, Store.write_plan, Store.append_history_note,
     SessionInfo, TitleField, StoreMeta, Store.list_sessions, Store.read_meta, Store.write_title,
-    Store.derive_name, Store.derive_description,
+    Store.derive_name, Store.derive_description, Store.scratch_of, Store.ensure_scratch,
 }
 use std::path {Path, Path.of, Path.parent, Path.to_string, Path.beq, Path.file_name}
 use std::io {IO.is_dir, IO.current_time_nano}
@@ -64,7 +64,7 @@ use weaver::plan_file {
     PlanRepo, PlanDoc, PlanEntry, PlanEntry.line, PlanFile.read, PlanFile.linked, PlanFile.link,
     PlanRepo.capture, PlanRepo.list, PlanRepo.list_all, PlanRepo.set_status, PlanRepo.add_session, Stored,
 }
-use weaver::instructions {InstrFile, Instructions.user_path, Instructions.discover, Instructions.note, Instructions.current, Instructions.reset, Instructions.label, Prompt.system}
+use weaver::instructions {InstrFile, Instructions.user_path, Instructions.discover, Instructions.note, Instructions.current, Instructions.reset, Instructions.label, Prompt.system_at}
 
 /// Everything the interactive session carries between inputs.
 /// `run` is shuttle's own state (session, registry, turn budget, gate,
@@ -134,6 +134,15 @@ pub struct WeaverState {
     /// Where captured plans are stored (`plan_file.mo`); none when nothing
     /// names a place (no HOME, no setting).
     plan_repo : Option PlanRepo := Option.none,
+    /// `--mode auto --plan <key>`: fire the linked plan's first turn at
+    /// startup instead of waiting for a user line.
+    auto_start : Bool := false,
+    /// Consecutive failed turns in auto-with-plan mode (bounded retry,
+    /// `auto_continue.mo`); none disables the retry.
+    auto_failures : Option (Ref I64) := Option.none,
+    /// Auto mode's safety net (the danger scan and the classifier). Off
+    /// (the `auto_safety = false` setting) runs every tool unasked.
+    auto_safety : Bool := true,
     /// The discovered Agent Skills (`skills.mo`): indexed in the system
     /// prompt, loaded by the `skill` tool or `/<name>`.
     skills : List Skill := List.empty,
@@ -1057,6 +1066,8 @@ def resume_by_id_store (st : WeaverState) (s : StoreState) (label : String) : IO
 }
 
 def resume_dir (st : WeaverState) (p : Path) (label : String) : IO (Result WeaverError Effect) := do {
+    // A session saved before the scratch dir existed gets one now.
+    let _ <- Store.ensure_scratch p;
     let r <- Store.load_session p;
     match r {
         Result.err e => IO.pure (Result.err (WeaverError.io e)),
@@ -1110,19 +1121,21 @@ def resume_import_into (st : WeaverState) (s : Session) (old : StoreState) (labe
 
 /// The budget spans halves and the resumed config re-resolves the
 /// CURRENT provider's direct key (a checkpoint never carries one).
+/// The store is installed BEFORE the prompt is rebuilt: the scratch path
+/// in the system prompt must be the resumed session's own.
 def resume_effect (st : WeaverState) (s : Session) (store : Option StoreState) (label : String) : Effect :=
-    let keyed : Session := rekey_session st s in
+    let with_store : WeaverState := set_store st store in
+    let keyed : Session := rekey_session with_store s in
     // The resumed session talks to ITS provider: the label and the
     // catalogue follow the saved config, not the flag this run started
     // with.
     let prov : String := Weaver.provider_of st.provider s.config in
-    let st2 : WeaverState := set_session st keyed st.budget in
+    let st2 : WeaverState := set_session with_store keyed st.budget in
     let st3 : WeaverState := { st2 with provider := prov } in
-    let st4 : WeaverState := set_store st3 store in
     let out : String := String.concat "resumed " label in
     if st.budget - s.turns < 1
-    then Effect.reset st4 (String.concat out " -- the whole turn budget is already spent")
-    else Effect.reset st4 out
+    then Effect.reset st3 (String.concat out " -- the whole turn budget is already spent")
+    else Effect.reset st3 out
 
 /// The resumed session also takes this run's instruction files: the
 /// prompt cache is cold after a resume anyway.
@@ -1156,7 +1169,8 @@ def store_at_parent (p : Path) : Option StoreState :=
 /// everywhere else.
 def rekey_config (st : WeaverState) (cfg : ProviderConfig) : ProviderConfig :=
     let prov : String := Weaver.provider_of st.provider cfg in
-    { cfg with api_key := Map.lookup prov st.keys }
+    let keyed : ProviderConfig := { cfg with api_key := Map.lookup prov st.keys } in
+    clamp_for prov st.context_window keyed
 
 /// `/clear`: drop the transcript and the accounting, keep the config
 /// and the tools. The turn budget resets to the full amount. With a
@@ -1190,8 +1204,17 @@ def clear_with_store (st : WeaverState) (s : StoreState) (fresh : Session) : IO 
     let r <- Store.new_session s.root st.place fresh;
     match r {
         Result.err e => IO.pure (Result.ok (Effect.reset (set_store st Option.none) (String.concat "cleared (persistence disabled: " (String.concat e ")")))),
-        Result.ok ns => IO.pure (Result.ok (Effect.reset (set_store st (Option.some ns)) "cleared")),
+        Result.ok ns => clear_rebuilt st ns fresh,
     }
+}
+
+/// The new session's prompt must name ITS scratch dir, so rebuild it
+/// after the store is installed (the `fresh` prompt was built with the
+/// old one).
+def clear_rebuilt (st : WeaverState) (ns : StoreState) (fresh : Session) : IO (Result WeaverError Effect) := do {
+    let st_ns : WeaverState := set_store st (Option.some ns);
+    let fresh2 : Session := { fresh with system_prompt := Commands.system_prompt st_ns st.instructions };
+    IO.pure (Result.ok (Effect.reset (set_session st_ns fresh2 st.budget) "cleared"))
 }
 
 /// `/quit`: the loop's exit flag. Disposal (MCP servers) is the
@@ -1326,7 +1349,17 @@ pub def Commands.setting_rows (st : WeaverState) : List SettingRow :=
     let r4 : SettingRow := { key := "context_window", label := "Context window", value := I64.to_string st.context_window, kind := SettingKind.setting_number } in
     let r5 : SettingRow := { key := "compact_at", label := "Autocompact at (%)", value := I64.to_string st.compact_at, kind := SettingKind.setting_number } in
     let r6 : SettingRow := { key := "auto_on_danger", label := "Auto mode on a dangerous verdict", value := AutoDanger.show st.auto_on_danger, kind := SettingKind.setting_cycle } in
-    [r0, r1, r2, r3, r4, r5, r6]
+    let safe_text : String := if st.auto_safety then "on" else "off" in
+    let r7 : SettingRow := { key := "auto_safety", label := "Auto mode safety net", value := safe_text, kind := SettingKind.setting_toggle } in
+    [r0, r1, r2, r3, r4, r5, r6, r7]
+
+/// The `/settings max_tokens` reply names the EFFECTIVE value: a
+/// provider's ceiling may have clamped what was asked for.
+def max_tokens_reply (st : WeaverState) (n : I64) : Result String (Pair WeaverState String) :=
+    let st2 : WeaverState := set_max_tokens st n in
+    let eff : I64 := st2.run.session.config.max_tokens in
+    let note : String := if eff == n then "" else String.concat " (the provider's limit is " (String.concat (I64.to_string eff) ")") in
+    Result.ok (Pair.pair st2 (String.concat "max_tokens: " (String.concat (I64.to_string eff) note)))
 
 /// Apply one setting by name. A value the knob rejects is an ordinary
 /// command-output error (the session stays as it was).
@@ -1347,7 +1380,7 @@ pub def Commands.apply_setting (st : WeaverState) (key : String) (value : String
         Option.none => Result.err "max_tokens must be a number",
         Option.some n =>
             if I64.lt n 16 then Result.err "max_tokens must be at least 16"
-            else Result.ok (Pair.pair (set_max_tokens st n) (String.concat "max_tokens: " (I64.to_string n))),
+            else max_tokens_reply st n,
     }
     else if key == "max_turns"
     then match parse_i64 value {
@@ -1378,8 +1411,14 @@ pub def Commands.apply_setting (st : WeaverState) (key : String) (value : String
             let st2 : WeaverState := { st with auto_on_danger := d } in
             Result.ok (Pair.pair st2 (String.concat "auto_on_danger: " (AutoDanger.show d))),
     }
+    else if key == "auto_safety"
+    then if Bool.or (value == "on") (value == "true")
+        then Result.ok (Pair.pair (set_auto_safety st true) "auto_safety: on (danger scan and classifier)")
+        else if Bool.or (value == "off") (value == "false")
+        then Result.ok (Pair.pair (set_auto_safety st false) "auto_safety: off (auto runs every tool unasked)")
+        else Result.err "auto_safety: on | off"
     else Result.err (String.concat "unknown setting: "
-        (String.concat key " (mode | thinking | max_tokens | max_turns | context_window | compact_at | auto_on_danger)"))
+        (String.concat key " (mode | thinking | max_tokens | max_turns | context_window | compact_at | auto_on_danger | auto_safety)"))
 
 /// Step a cycling setting (mode, thinking) to its next value: the
 /// dialog's Enter on those rows. Number settings are typed instead.
@@ -1390,6 +1429,8 @@ pub def Commands.cycle_setting (st : WeaverState) (key : String) : Result String
     then Commands.apply_setting st key (if st.run.session.config.thinking then "off" else "on")
     else if key == "auto_on_danger"
     then Commands.apply_setting st key (match st.auto_on_danger { AutoDanger.refuse_it => "ask", AutoDanger.ask_human => "deny" })
+    else if key == "auto_safety"
+    then Commands.apply_setting st key (if st.auto_safety then "off" else "on")
     else Result.err (String.concat "not a cycling setting: " key)
 
 def settings_update (st : WeaverState) : SettingsUpdate :=
@@ -1404,6 +1445,7 @@ def settings_update (st : WeaverState) : SettingsUpdate :=
         context_window := Option.some st.context_window,
         compact_at := Option.some st.compact_at,
         auto_on_danger := Option.some (AutoDanger.show st.auto_on_danger),
+        auto_safety := Option.some st.auto_safety,
     } in
     u
 
@@ -1527,12 +1569,16 @@ pub def permissions_text (st : WeaverState) (gs : List PermGrant) : String :=
 
 def set_max_tokens (st : WeaverState) (n : I64) : WeaverState :=
     let cfg : ProviderConfig := st.run.session.config in
-    let cfg2 : ProviderConfig := { cfg with max_tokens := n } in
+    let cfg2 : ProviderConfig := clamp_for st.provider st.context_window { cfg with max_tokens := n } in
     let cur : Session := st.run.session in
     let sess : Session := { cur with config := cfg2 } in
     let base : RunState := st.run in
     let run2 : RunState := { base with session := sess } in
     let st2 : WeaverState := { st with run := run2 } in
+    st2
+
+def set_auto_safety (st : WeaverState) (b : Bool) : WeaverState :=
+    let st2 : WeaverState := { st with auto_safety := b } in
     st2
 
 def set_window (st : WeaverState) (n : I64) : WeaverState :=
@@ -1700,14 +1746,22 @@ def set_fatal (st : WeaverState) (e : WeaverError) : WeaverState :=
     st2
 
 pub def Commands.set_model (st : WeaverState) (model : String) : WeaverState :=
-    let cfg2 : ProviderConfig := { (st.run.session.config) with model := model } in
+    let raw : ProviderConfig := { (st.run.session.config) with model := model } in
+    let cfg2 : ProviderConfig := clamp_for st.provider st.context_window raw in
     let s2 : Session := { (st.run.session) with config := cfg2 } in
     let run2 : RunState := { (st.run) with session := s2 } in
     let st2 : WeaverState := { st with run := run2 } in
     st2
 
+/// A config's output budget clamped to what `provider` accepts.
+def clamp_for (provider : String) (window : I64) (cfg : ProviderConfig) : ProviderConfig :=
+    match Weaver.clamp_cfg provider cfg window {
+        Pair.pair c _ => c,
+    }
+
 def set_config (st : WeaverState) (cfg : ProviderConfig) (provider : String) : WeaverState :=
-    let s2 : Session := { (st.run.session) with config := cfg } in
+    let cfg2 : ProviderConfig := clamp_for provider st.context_window cfg in
+    let s2 : Session := { (st.run.session) with config := cfg2 } in
     let run2 : RunState := { (st.run) with session := s2 } in
     let st2 : WeaverState := { st with run := run2, provider := provider } in
     st2
@@ -2002,7 +2056,7 @@ def link_and_record (r : PlanRepo) (path : String) (st : WeaverState) : IO Unit 
 /// The session's system prompt: weaver's own, the instruction files, and
 /// the skill index.
 pub def Commands.system_prompt (st : WeaverState) (fs : List InstrFile) : String :=
-    Skills.with_index (Prompt.system fs) st.skills
+    Skills.with_index (Prompt.system_at fs (Store.scratch_of st.store)) st.skills
 
 /// The table's command words. Kept apart from the table so `/skills`
 /// (one of its handlers) can check a clash without a cycle through it;

@@ -224,7 +224,7 @@ def theme_wrap (line : String) : String :=
 /// The status bar's code, by mode (the same color the TUI chip
 /// carries): dim terminal-default foreground in manual (chrome, not
 /// content), dim yellow in `allow_edit`, plan GREEN (read-only is the
-/// one mode that is always safe), and the `auto` trust warning red.
+/// one mode that is always safe), and `auto` red (the trust cue).
 pub def theme_status_code (mode : Mode) : String :=
     match mode {
         Mode.auto => "\u{1b}[31;2;1m",
@@ -236,8 +236,7 @@ pub def theme_status_code (mode : Mode) : String :=
 /// The TUI status bar's style per mode: dim default foreground for
 /// manual (the statusbar's own voice, readable on light and dark
 /// themes), dim yellow for `allow_edit` (its edit-enabled warning tint),
-/// plan green, and the `auto` warning red -- the WARNING: prefix the
-/// status text already carries is what turns red.
+/// plan green, and `auto` red -- the mode chip alone carries the trust cue.
 pub def theme_status_style (mode : Mode) : TextStyle :=
     match mode {
         Mode.auto => { style_default with dim := true, fg := some Color.red, bold := true },

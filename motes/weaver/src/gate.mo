@@ -62,10 +62,10 @@ pub def cap_name (c : Capability) : String :=
 /// point it is passed (the compiled backend's `RawIO.io` is a strict
 /// box), so every approval would read the SAME line. The function form
 /// re-reads per ask.
-pub def Gate.weaver (mode : Mode) (grants : Option (Ref (List PermGrant))) (root : Option Path) (auto : Option AutoCtx) (read : Unit -> IO (Option String)) (write : String -> IO Unit) : Gate :=
+pub def Gate.weaver (mode : Mode) (grants : Option (Ref (List PermGrant))) (root : Option Path) (scratch : Option Path) (auto : Option AutoCtx) (read : Unit -> IO (Option String)) (write : String -> IO Unit) : Gate :=
     let g : Gate := {
-        ask := weaver_ask mode grants root auto read write,
-        precheck := weaver_precheck mode grants root auto write,
+        ask := weaver_ask mode grants root scratch auto read write,
+        precheck := weaver_precheck mode grants root scratch auto write,
     } in
     g
 
@@ -73,6 +73,17 @@ pub def Gate.weaver (mode : Mode) (grants : Option (Ref (List PermGrant))) (root
 
 /// The classifier context when this pick takes the classifier path: auto
 /// mode, a context, and a pick the classifier judges (`Policy.classified`).
+/// Auto mode with its safety net turned off (`auto_safety = false`): every
+/// pick runs, with no classifier call and no refusal.
+pub def Gate.auto_open (mode : Mode) (auto : Option AutoCtx) : Bool :=
+    match mode {
+        Mode.auto => match auto {
+            Option.some ctx => Bool.not ctx.safety,
+            Option.none => false,
+        },
+        _ => false,
+    }
+
 pub def Gate.auto_for (mode : Mode) (auto : Option AutoCtx) (cap : Capability) (a : Assessment) : Option AutoCtx :=
     match mode {
         Mode.auto => if Policy.classified cap a then auto else Option.none,
@@ -98,9 +109,10 @@ pub def Gate.auto_precheck (ctx : AutoCtx) (root : Option Path) (a : Assessment)
 /// repo-scoped grant must not cover a pick outside the root. A refusal
 /// is also visible to the human (the line-based UI would otherwise stay
 /// silent about why nothing ran).
-def weaver_precheck (mode : Mode) (grants : Option (Ref (List PermGrant))) (root : Option Path) (auto : Option AutoCtx) (write : String -> IO Unit) (p : Pick) : IO (Option Approval) :=
-    let a : Assessment := Assess.pick root p in
+def weaver_precheck (mode : Mode) (grants : Option (Ref (List PermGrant))) (root : Option Path) (scratch : Option Path) (auto : Option AutoCtx) (write : String -> IO Unit) (p : Pick) : IO (Option Approval) :=
+    let a : Assessment := Assess.pick root scratch p in
     if Policy.unguarded p.name then IO.pure (Option.some Approval.once)
+    else if Gate.auto_open mode auto then IO.pure (Option.some Approval.once)
     else match Gate.auto_for mode auto p.cap a {
         Option.some ctx => auto_precheck_told ctx root write a p,
         Option.none => static_precheck mode grants root write a p,
@@ -137,8 +149,11 @@ def static_precheck (mode : Mode) (grants : Option (Ref (List PermGrant))) (root
         Decision.allow => IO.pure Option.none,
     }
 
-def weaver_ask (mode : Mode) (grants : Option (Ref (List PermGrant))) (root : Option Path) (auto : Option AutoCtx) (read : Unit -> IO (Option String)) (write : String -> IO Unit) (p : Pick) : IO Approval := do {
-    let a : Assessment := Assess.pick root p;
+def weaver_ask (mode : Mode) (grants : Option (Ref (List PermGrant))) (root : Option Path) (scratch : Option Path) (auto : Option AutoCtx) (read : Unit -> IO (Option String)) (write : String -> IO Unit) (p : Pick) : IO Approval :=
+    if Gate.auto_open mode auto then IO.pure Approval.once else weaver_ask_supervised mode grants root scratch auto read write p
+
+def weaver_ask_supervised (mode : Mode) (grants : Option (Ref (List PermGrant))) (root : Option Path) (scratch : Option Path) (auto : Option AutoCtx) (read : Unit -> IO (Option String)) (write : String -> IO Unit) (p : Pick) : IO Approval := do {
+    let a : Assessment := Assess.pick root scratch p;
     let d <- Gate.decision mode auto root a p;
     match d {
         Decision.allow => IO.pure Approval.once,

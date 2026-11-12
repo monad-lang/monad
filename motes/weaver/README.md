@@ -21,6 +21,9 @@ usage: weaver [OPTIONS]
                            /model lists what the API actually serves
       --max-turns <VALUE>  total model-call budget (default 500, across a
                            save/resume); a non-number is a usage error
+      --plan <VALUE>       load a stored plan (its /plans number, slug, or path)
+      --mode <VALUE>       start in manual | plan | allow_edit | auto
+                           (default: the settings' mode, else manual)
   -r, --resume <VALUE>     open a session id, a session directory, or a
                            /save checkpoint
       --continue           resume the newest session under the session root
@@ -196,12 +199,40 @@ offline.
 `plan` mode is read-only: the model inspects and proposes, then `/plan`
 opens the review dialog (or, in the line-based UI, `/plan approve
 manual|allow_edit|auto` leaves it). `auto` is a trust setting, not a
-sandbox -- the gate is advisory; it also flips the warning flag shuttle's
-loop prints. In auto mode a destructive pick or a write outside the
-workspace is refused, not held for a human; only `auto_on_danger = ask`
-keeps a prompt on the classifier's dangerous verdict. With a linked plan,
-auto-continue then runs turn after turn until the plan reports `done` or
-`abandoned`.
+sandbox -- the gate is advisory, and the red `[auto]` chip is the whole
+cue (there is no warning prefix in the status bar).
+
+In auto mode, reading, writing and running commands **inside the current
+repo always work without a prompt or a classifier call** -- that is the
+point of the mode. The classifier is only asked about code that reaches
+outside the workspace (or somewhere it cannot resolve), network picks, and
+writes outside the workspace. The static danger scan (forced pushes,
+`reset --hard`, `clean -f`, `sudo`, shutdowns, publishes, deleting outside
+the workspace or the scratch root) is the safety net; `auto_on_danger =
+ask` makes a dangerous verdict a question instead of a refusal, and
+`auto_safety = false` in a settings file turns the whole net off (every
+tool runs unasked). Set it per project in `.weaver/config.toml` or
+globally in `~/.weaver/config.toml`; `/settings auto_safety off` toggles it
+for the running session.
+
+Every session gets a disposable scratch directory,
+`<session dir>/scratch`: any pick whose paths are all inside it is not
+classified and not refused for being outside the workspace, `rm -rf` and
+wildcards there are not "dangerous", and shell tasks see it as
+`$WEAVER_SCRATCH` and `$TMPDIR`. Deleting the scratch root itself is
+refused, and a script that ASSIGNS `$WEAVER_SCRATCH`/`$TMPDIR` loses the
+exemption (the shell could point it anywhere). Name-based rules still apply
+inside it (`sudo`, `shutdown`, forced pushes, package publishes are
+refused). It is a convenience, not a security boundary.
+
+With a linked plan, auto-continue runs turn after turn until the plan
+reports `done` or `abandoned`; a transient failed turn is retried twice
+before the human is left to it, the classifier is told the plan's title
+and next action, and running out of turn budget prints a line saying so.
+`--mode auto --plan <key>` (or `mode = "auto"` in settings) starts the
+first plan turn with no input line; a resumed session never starts on its
+own. The `ask` tool answers with its recommended option in auto mode and
+says so, so an unattended plan never blocks on a question.
 
 ## Commands
 
@@ -241,9 +272,27 @@ runs under a step budget and a nesting cap (the browser REPL's), so a
 runaway one comes back as an `out of fuel` / `recursion too deep` tool
 error instead of pinning the turn (Esc cannot interrupt the evaluator).
 
-`read` streams to a 256 KiB cap and says so, instead of loading a
-multi-GB file (or `/dev/zero`) whole and cutting afterwards. `shell` runs its command as a task (below) and
-waits for it on a budget, not a deadline.
+`read` streams to a 128 KiB cap and says so, instead of loading a
+multi-GB file (or `/dev/zero`) whole and cutting afterwards; `offset`
+(1-based first line) and `limit` (lines, default 2000) page a big file
+instead of putting it all in the history. `shell` runs its command as a
+task (below) and waits for it on a budget, not a deadline.
+
+The third interaction tool is `ask`: the model poses one question with
+2-4 concrete options (single or multi select, plus a free-text answer),
+the TUI opens it as a dialog and the line UI as a numbered prompt. It is
+`read`-tagged and unguarded, so asking never needs approval; in auto mode
+it does not ask at all -- it answers with the recommended (else first)
+option, starts the result with `[auto] no one is attending; assuming …`,
+and the model records that assumption in the plan.
+
+Token budgets are deliberately tight because every tool result is re-sent
+on each later request of the turn: `shell` shows 160 lines and `search` 200 lines,
+both 32 KiB; `read` 128 KiB, `monad_check` the first 40 diagnostics and
+warnings, and `monad_eval` 16 KiB of output. `max_tokens` is clamped to
+the provider's accepted ceiling (8192 for anthropic/openrouter/mistral;
+never raised, and Ollama/mock are uncapped), and `/settings max_tokens`
+reports the effective value.
 
 The provider decides which models exist: `/model` with no argument
 fetches its `/v1/models` list (the mock wire answers `mock` offline),
@@ -275,9 +324,10 @@ its own process group, with merged stdout/stderr going to a log under
 call waits up to `wait_seconds` (default 30, at most 300) for it to
 exit. That is a budget, not a deadline:
 
-- A command that exits in time returns its output (the log's last 200
-  lines within 64 KiB, with a note on how many were left out) and its
-  task is discarded.
+- A command that exits in time returns its output (the log's last 160
+  lines within 32 KiB, with a note on how many were left out) and its
+  task is discarded. The task also runs with `TMPDIR` and
+  `WEAVER_SCRATCH` pointing at the session's scratch directory.
 - One still running when the budget is spent is not killed. It becomes
   a background task, the model gets the output so far and its id, and
   its exit later arrives as a note on the next turn or tool boundary.
@@ -465,8 +515,10 @@ attempt, byte-identical to the pre-retry loop.
 A run that can open the store writes to `~/.weaver/sessions/<id>/`
 (`id` is `s-<pid>`, with `-2`, `-3`, ... when that directory exists):
 `meta.json` (session config, turn/spend totals), `transcript/` (rendered
-lines in append-only blocks, with a small `index.json` cache), and
-`history/` (each turn's model messages). `WEAVER_SESSION_ROOT` overrides
+lines in append-only blocks, with a small `index.json` cache),
+`history/` (each turn's model messages), and `scratch/` (the session's
+disposable scratch directory; created for new and resumed sessions and
+never read back by weaver). `WEAVER_SESSION_ROOT` overrides
 the root; when HOME is unset or the root is not writable the run
 degrades to the pre-store in-memory behavior with one warning line. The
 line-based (piped) UI persists the per-turn history only -- it has no

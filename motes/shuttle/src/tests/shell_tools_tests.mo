@@ -82,7 +82,7 @@ def test_shell_newline_free_flood_fails_read_and_kills : IO Bool := do {
     })
 }
 
-/// The byte cap: 351-byte lines cross the 65536-byte budget at line ~187,
+/// The byte cap: 351-byte lines cross the 32768-byte budget at line ~93,
 /// well under the 200-line cap, so the BYTE marker is the one that fires
 /// -- the test pins that the two caps are independently reachable.
 #[test]

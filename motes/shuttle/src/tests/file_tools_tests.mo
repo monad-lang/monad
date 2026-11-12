@@ -3,7 +3,8 @@ use shuttle::tools::file_tools {ReadTool.spec, WriteTool.spec, EditTool.spec}
 use shuttle::tool {ToolSpec}
 use shuttle::tools::file_args {ReadArgs, WriteArgs, EditArgs}
 use shuttle::message_types {Content}
-use json::json {Json}
+use json::json {Json, Json.make_object, Json.make_str, Json.make_num_int}
+use std::map {Map, BTreeMap}
 use json::serde_backend {}
 use init::transformers {ResultT}
 use std::io {IO.get_env, IO.write_file, IO.read_file}
@@ -129,7 +130,7 @@ def repeat_chunks (s : String) (n : I64) (acc : List String) : List String :=
 
 #[test]
 def test_read_caps_a_huge_file : IO Bool := do {
-    // "x" then 2-byte chars: the 262144-byte cut lands on a lead byte with
+    // "x" then 2-byte chars: the 131072-byte cut lands on a lead byte with
     // no continuation, so the cut has to back off to a character boundary.
     let big : String := String.concat "x" (String.concat_list (repeat_chunks "é" 131073i64 List.empty));
     let args : WriteArgs := { path := scratch_path "big.txt", content := big };
@@ -202,3 +203,74 @@ def test_write_creates_missing_parent_directories : IO Bool := do {
     let read : Bool := match back { Result.ok t => t == "nested", Result.err _ => false };
     return (wrote && read)
 }
+
+/// `offset`/`limit` page by line: the numbering starts at `offset`, and a
+/// window in the middle of the file does not return the whole file.
+#[test]
+def test_read_pages_with_offset_and_limit : IO Bool := do {
+    let path : String := scratch_path "pages.txt";
+    let w <- IO.write_file (Path.path path) "l1\nl2\nl3\nl4\nl5\n";
+    match w {
+        Result.err _ => IO.pure false,
+        Result.ok _ => page_check path,
+    }
+}
+
+def page_check (path : String) : IO Bool := do {
+    let input : Json := Json.make_object
+        (Map.insert "path" (Json.make_str path)
+            (Map.insert "offset" (Json.make_num_int 2i64)
+                (Map.insert "limit" (Json.make_num_int 2i64) BTreeMap.empty)));
+    let rr <- ResultT.run (read_run "r3" input);
+    match rr {
+        Result.err _ => IO.pure false,
+        Result.ok c => IO.pure (page_verdict c),
+    }
+}
+
+def page_verdict (c : Content) : Bool :=
+    match c {
+        Content.tool_result _ text is_error =>
+            Bool.not is_error
+                && String.contains text "2: l2"
+                && String.contains text "3: l3"
+                && Bool.not (String.contains text "4: l4")
+                && String.contains text "lines 2-3",
+        _ => false,
+    }
+
+/// A paged read scans past the 128 KiB return cap to reach its offset: a
+/// line 2500 deep in a ~190 KB file is readable (offset counts lines).
+#[test]
+def test_read_pages_past_the_return_cap : IO Bool := do {
+    let line : String := "012345678901234567890123456789012345678901234567890123456789012\n";
+    let big : String := String.concat_list (repeat_chunks line 3000i64 List.empty);
+    let path : String := scratch_path "deep.txt";
+    let w <- IO.write_file (Path.path path) big;
+    match w {
+        Result.err _ => IO.pure false,
+        Result.ok _ => deep_page_check path,
+    }
+}
+
+def deep_page_check (path : String) : IO Bool := do {
+    let input : Json := Json.make_object
+        (Map.insert "path" (Json.make_str path)
+            (Map.insert "offset" (Json.make_num_int 2500i64)
+                (Map.insert "limit" (Json.make_num_int 2i64) BTreeMap.empty)));
+    let rr <- ResultT.run (read_run "r4" input);
+    match rr {
+        Result.err _ => IO.pure false,
+        Result.ok c => IO.pure (deep_page_verdict c),
+    }
+}
+
+def deep_page_verdict (c : Content) : Bool :=
+    match c {
+        Content.tool_result _ text is_error =>
+            Bool.not is_error
+                && String.contains text "2500: 0123"
+                && String.contains text "2501: 0123"
+                && Bool.not (String.contains text "beyond"),
+        _ => false,
+    }

@@ -11,7 +11,7 @@
 
 pub use lib::policy {
     Mode, Decision, Policy.decide,
-    Mode.parse, Mode.show, Mode.approve_plan, Mode.warns_auto,
+    Mode.parse, Mode.show, Mode.approve_plan, Mode.resolve, Mode.is_auto,
 }
 pub use lib::gate {cap_name, Gate.weaver, gate_answer_prompt, gate_answer_feedback}
 pub use lib::theme {LineClass, line_class, class_style, class_code, theme_line_style, theme_status_style, Theme.tint, theme_status_code}

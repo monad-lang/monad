@@ -36,8 +36,19 @@ def params_to_map (params : List (Pair String Json)) (acc : BTreeMap String Json
 
 def pair_fst (p : Pair String Json) : Json := Json.make_str (match p { Pair.pair k _ => k })
 
+def int_prop (name : String) (desc : String) : Pair String Json :=
+    Pair.pair name (Json.make_object (Map.insert "type" (Json.make_str "integer") (Map.insert "description" (Json.make_str desc) BTreeMap.empty)))
+
 def read_params : List (Pair String Json) :=
-    [str_param "path" "Absolute path of the file to read"]
+    [str_param "path" "Absolute path of the file to read",
+        int_prop "offset" "First line to show, 1-based (default 1).",
+        int_prop "limit" "How many lines to show (default 2000). Page a large file instead of reading it whole."]
+
+/// `path` is the only required field; `offset`/`limit` are optional.
+def read_schema : Json :=
+    Json.make_object (Map.insert "type" (Json.make_str "object")
+        (Map.insert "properties" (Json.make_object (params_to_map read_params BTreeMap.empty))
+            (Map.insert "required" (Json.make_array (List.cons (Json.make_str "path") List.empty)) BTreeMap.empty)))
 
 def write_params : List (Pair String Json) :=
     [str_param "path" "Absolute path of the file to write", str_param "content" "Full contents to write"]
@@ -50,7 +61,7 @@ def edit_params : List (Pair String Json) :=
     ]
 
 pub def ReadTool.spec : ToolSpec :=
-    { name := "read", description := "Read a file's contents with line numbers.", schema := params_schema read_params }
+    { name := "read", description := "Read a file's contents with line numbers. Page a large file with offset (1-based first line) and limit (lines, default 2000).", schema := read_schema }
 
 pub def ReadTool.impl : ToolImpl :=
     { spec := ReadTool.spec, cap := Capability.read, run := read_run }

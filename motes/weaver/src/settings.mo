@@ -40,6 +40,10 @@ pub struct Settings {
     compact_at : Option I64,
     /// Auto mode's answer to a dangerous verdict: "deny" or "ask".
     auto_on_danger : Option String := Option.none,
+    /// Auto mode's safety net (the danger scan and the classifier). False
+    /// trusts the model with every tool: no approval and no refusal. Local
+    /// `.weaver/config.toml` can loosen it per project.
+    auto_safety : Option Bool := Option.none,
     /// The `[plans]` table: where captured plans are stored (`plan_file.mo`).
     plans : PlanSettings := PlanSettings.empty,
     caps : BTreeMap String Capability,
@@ -56,6 +60,7 @@ pub def Settings.empty : Settings := {
     context_window := Option.none,
     compact_at := Option.none,
     auto_on_danger := Option.none,
+    auto_safety := Option.none,
     plans := PlanSettings.empty,
     caps := BTreeMap.empty,
     api_keys := BTreeMap.empty,
@@ -106,6 +111,7 @@ pub def Settings.merge (base : Settings) (over : Settings) : Settings := {
     context_window := merge_opt base.context_window over.context_window,
     compact_at := merge_opt base.compact_at over.compact_at,
     auto_on_danger := merge_opt base.auto_on_danger over.auto_on_danger,
+    auto_safety := merge_opt base.auto_safety over.auto_safety,
     plans := merge_plans base.plans over.plans,
     caps := merge_table base.caps (BTreeMap.to_list over.caps),
     api_keys := merge_table base.api_keys (BTreeMap.to_list over.api_keys),
@@ -265,7 +271,7 @@ def parse_loaded (path : String) (root : BTreeMap String Toml.Value) : Loaded :=
 /// (`mcp_caps`, `api_keys`) hold user-named entries, so only the table
 /// names are checked -- their contents are free-form.
 pub def Settings.known_keys : List String :=
-    ["api_keys", "auto_on_danger", "compact_at", "context_window", "max_tokens", "max_turns", "mcp_caps", "mode", "model", "plans", "provider", "thinking"]
+    ["api_keys", "auto_on_danger", "auto_safety", "compact_at", "context_window", "max_tokens", "max_turns", "mcp_caps", "mode", "model", "plans", "provider", "thinking"]
 
 #[partial]
 def known_key (k : String) (ks : List String) : Bool :=
@@ -362,6 +368,7 @@ def settings_of (root : BTreeMap String Toml.Value) : Settings := {
     context_window := int_at "context_window" root,
     compact_at := int_at "compact_at" root,
     auto_on_danger := str_at "auto_on_danger" root,
+    auto_safety := bool_at "auto_safety" root,
     plans := plans_of (table_at "plans" root),
     caps := table_of (table_at "mcp_caps" root) parse_cap,
     api_keys := table_of (table_at "api_keys" root) key_value,
@@ -494,6 +501,7 @@ pub struct SettingsUpdate {
     context_window : Option I64,
     compact_at : Option I64,
     auto_on_danger : Option String := Option.none,
+    auto_safety : Option Bool := Option.none,
 }
 
 pub def Settings.project_file : String := ".weaver/config.toml"
@@ -582,7 +590,8 @@ def apply_update (u : SettingsUpdate) (root : BTreeMap String Toml.Value) : BTre
     let r6 : BTreeMap String Toml.Value := put_integer "max_tokens" u.max_tokens r5 in
     let r7 : BTreeMap String Toml.Value := put_integer "context_window" u.context_window r6 in
     let r8 : BTreeMap String Toml.Value := put_integer "compact_at" u.compact_at r7 in
-    put_string "auto_on_danger" u.auto_on_danger r8
+    let r9 : BTreeMap String Toml.Value := put_string "auto_on_danger" u.auto_on_danger r8 in
+    put_boolean "auto_safety" u.auto_safety r9
 
 def write_update (path : String) (target : String) (out : String) : IO (Result String String) := do {
     let r <- IO.write_file (Path.path path) out;

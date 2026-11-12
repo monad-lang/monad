@@ -23,7 +23,7 @@ def tool_err (id : String) (msg : String) : Content := Content.tool_result id ms
 def tool_ok (id : String) (msg : String) : Content := Content.tool_result id msg false
 
 pub def search_max_lines : I64 := 200
-pub def search_max_bytes : I64 := 65536
+pub def search_max_bytes : I64 := 32768
 def search_timeout_s : I64 := 30
 def search_kill_after_s : I64 := 5
 

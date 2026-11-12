@@ -57,7 +57,7 @@ def is_some (o : Option ProcEntry) : Bool :=
 
 #[test]
 def test_detached_script_quotes_and_detaches : Bool :=
-    let script : String := Procs.detached_script (Path.path "/tmp/r/p-1") "" "echo hi" in
+    let script : String := Procs.detached_script (Path.path "/tmp/r/p-1") "" "echo hi" Option.none in
     String.contains script "'/tmp/r/p-1/log'"
         && String.contains script "'/tmp/r/p-1/pid'"
         && String.contains script "'/tmp/r/p-1/exit'"
@@ -70,7 +70,7 @@ def test_detached_script_quotes_and_detaches : Bool :=
 /// A cwd with a `'` in it stays one quoted word.
 #[test]
 def test_detached_script_escapes_a_quote_in_the_cwd : Bool :=
-    let script : String := Procs.detached_script (Path.path "/tmp/r/p-1") "/tmp/it's here" "true" in
+    let script : String := Procs.detached_script (Path.path "/tmp/r/p-1") "/tmp/it's here" "true" Option.none in
     String.contains script "cd '/tmp/it'\\''s here' && "
 
 /// Commands the old one-line splice could not start (the log review's F3):
@@ -79,7 +79,7 @@ def test_detached_script_escapes_a_quote_in_the_cwd : Bool :=
 def runs_and_logs (suffix : String) (command : String) (expect : String) : IO Bool := do {
     let root : String := temp_root suffix;
     let _ <- cleanup root;
-    let r <- Procs.start_at (Path.path root) command "" false;
+    let r <- Procs.start_at (Path.path root) command "" false Option.none;
     match r {
         Result.err _ => do { let _ <- cleanup root; IO.pure false },
         Result.ok e => do {
@@ -118,7 +118,7 @@ def exit_case (root : String) (e : ProcEntry) : IO Bool := do {
 def test_started_process_exits_and_keeps_its_log : IO Bool := do {
     let root : String := temp_root "exit";
     let _ <- cleanup root;
-    let r <- Procs.start_at (Path.path root) "echo one; echo two" "" false;
+    let r <- Procs.start_at (Path.path root) "echo one; echo two" "" false Option.none;
     match r {
         Result.err _ => do { let _ <- cleanup root; IO.pure false },
         Result.ok e => exit_case root e,
@@ -147,7 +147,7 @@ def sleep_case (root : String) (e : ProcEntry) : IO Bool := do {
 def test_a_sleep_is_running_then_killed : IO Bool := do {
     let root : String := temp_root "sleep";
     let _ <- cleanup root;
-    let r <- Procs.start_at (Path.path root) "sleep 30" "" false;
+    let r <- Procs.start_at (Path.path root) "sleep 30" "" false Option.none;
     match r {
         Result.err _ => do { let _ <- cleanup root; IO.pure false },
         Result.ok e => sleep_case root e,
@@ -173,7 +173,7 @@ def test_kill_takes_the_task_s_children : IO Bool := do {
     let root : String := temp_root "group";
     let _ <- cleanup root;
     let _ <- exec_cmd "mkdir" ["-p", root];
-    let r <- Procs.start_at (Path.path root) (String.concat "sleep 31 & echo $! > " (String.concat root "/child; wait")) "" false;
+    let r <- Procs.start_at (Path.path root) (String.concat "sleep 31 & echo $! > " (String.concat root "/child; wait")) "" false Option.none;
     match r {
         Result.err _ => do { let _ <- cleanup root; IO.pure false },
         Result.ok e => group_case root e,
@@ -206,7 +206,7 @@ def wait_started (root : String) (r : Result String ProcEntry) : IO Bool :=
 #[test]
 def test_read_process_waits_for_the_exit : IO Bool := do {
     let root : String := temp_root "wait";
-    let started <- Procs.start_at (Path.path root) "sleep 1; echo done" "" false;
+    let started <- Procs.start_at (Path.path root) "sleep 1; echo done" "" false Option.none;
     wait_started root started
 }
 
@@ -274,7 +274,7 @@ def foreground_case (root : String) (e : ProcEntry) : IO Bool := do {
 def test_a_foreground_task_is_hidden_until_released : IO Bool := do {
     let root : String := temp_root "fg";
     let _ <- cleanup root;
-    let r <- Procs.start_foreground (Path.path root) "sleep 30" "";
+    let r <- Procs.start_foreground (Path.path root) "sleep 30" "" Option.none;
     match r {
         Result.err _ => do { let _ <- cleanup root; IO.pure false },
         Result.ok e => foreground_case root e,
@@ -294,7 +294,7 @@ def shutdown_case (root : String) (e : ProcEntry) : IO Bool := do {
 def test_shutdown_kills_a_foreground_task : IO Bool := do {
     let root : String := temp_root "fgdown";
     let _ <- cleanup root;
-    let r <- Procs.start_foreground (Path.path root) "sleep 30" "";
+    let r <- Procs.start_foreground (Path.path root) "sleep 30" "" Option.none;
     match r {
         Result.err _ => do { let _ <- cleanup root; IO.pure false },
         Result.ok e => shutdown_case root e,
@@ -322,7 +322,7 @@ def stopped_started (root : String) (r : Result String ProcEntry) : IO Bool :=
 #[test]
 def test_read_process_wait_ends_on_stop : IO Bool := do {
     let root : String := temp_root "wait-stop";
-    let started <- Procs.start_at (Path.path root) "sleep 30" "" false;
+    let started <- Procs.start_at (Path.path root) "sleep 30" "" false Option.none;
     stopped_started root started
 }
 
@@ -367,7 +367,15 @@ def cap_started (root : String) (big : Result String ProcEntry) (small : Result 
 #[test]
 def test_enforce_cap_kills_a_flooding_task : IO Bool := do {
     let root : String := temp_root "cap";
-    let big <- Procs.start_at (Path.path root) "yes flood" "" false;
-    let small <- Procs.start_at (Path.path root) "echo quiet; sleep 30" "" false;
+    let big <- Procs.start_at (Path.path root) "yes flood" "" false Option.none;
+    let small <- Procs.start_at (Path.path root) "echo quiet; sleep 30" "" false Option.none;
     cap_started root big small
 }
+
+/// The detached script exports the session scratch dir under both names
+/// before it starts the command.
+#[test]
+def test_detached_script_exports_the_scratch : Bool :=
+    let s : String := Procs.detached_script (Path.path "/tmp/r/p-1") "" "echo hi" (Option.some (Path.path "/tmp/scr")) in
+    String.contains s "TMPDIR='/tmp/scr'; export TMPDIR; WEAVER_SCRATCH='/tmp/scr'; export WEAVER_SCRATCH; "
+        && String.contains (Procs.detached_script (Path.path "/tmp/r/p-1") "" "echo hi" Option.none) "set -m; { sh "

@@ -212,7 +212,7 @@ pub def Instructions.note (fs : List InstrFile) : Option String :=
 
 /// Weaver's own system prompt, before any instructions file.
 pub def Prompt.base : String :=
-    "You are Weaver, an interactive coding assistant. Inspect the workspace with read, grep and glob before changing anything; prefer edit over write for existing files; explain what you are about to do before doing it. For Monad code, use monad_check to type-check a file or snippet and monad_eval to try expressions in the self-hosted interpreter (pure programs only). For a task of three or more steps, keep a todo list with todo_write and update it as each step starts and finishes. When you make a git commit, end the commit message with a blank line and this trailer: Assisted by Weaver agent weaver@monad-lang.org"
+    "You are Weaver, an interactive coding assistant. Inspect the workspace with read, grep and glob before changing anything; prefer edit over write for existing files; explain what you are about to do before doing it. For Monad code, use monad_check to type-check a file or snippet and monad_eval to try expressions in the self-hosted interpreter (pure programs only). For a task of three or more steps, keep a todo list with todo_write and update it as each step starts and finishes. When the request is ambiguous or a trade-off is the user's to make, ask with the ask tool (concrete options) instead of guessing; in auto mode it answers with the recommended option, so record that assumption in the plan. When you make a git commit, end the commit message with a blank line and this trailer: Assisted by Weaver agent weaver@monad-lang.org"
 
 /// `base` followed by the rendered instruction files, when there are any.
 /// Built once per session: it is the cached prefix of every request.
@@ -223,6 +223,26 @@ pub def Prompt.with_files (base : String) (fs : List InstrFile) : String :=
 /// The main session's system prompt.
 pub def Prompt.system (fs : List InstrFile) : String :=
     Prompt.with_files Prompt.base fs
+
+/// The session's disposable scratch directory, when persistence is on.
+/// Nothing there is user data; it is a convenience, not a sandbox.
+pub def Prompt.scratch_block (scratch : Option Path) : String :=
+    match scratch {
+        Option.none => "",
+        Option.some p => String.concat_list [
+            "A scratch directory is yours: ", Path.to_string p,
+            ". Create, run and delete temporary files and programs there freely; it is not user data, and deleting its contents is safe. Shell commands see it as $WEAVER_SCRATCH and $TMPDIR. Keep the repository itself clean."
+        ],
+    }
+
+/// `base` followed by the scratch paragraph, when there is one.
+pub def Prompt.with_scratch (base : String) (scratch : Option Path) : String :=
+    let block : String := Prompt.scratch_block scratch in
+    if String.is_empty block then base else String.concat_list [base, "\n\n", block]
+
+/// The main session's system prompt with the scratch path.
+pub def Prompt.system_at (fs : List InstrFile) (scratch : Option Path) : String :=
+    Prompt.with_files (Prompt.with_scratch Prompt.base scratch) fs
 
 // ── mid-session changes ───────────────────────────────────────────────
 // The system prompt is the cached prefix, so it is never swapped mid-

@@ -169,6 +169,9 @@ pub struct TuiModel {
     /// queued behind it: `store_result` starts the head when the write
     /// lands (one `Cmd` per fold, so the two cannot share a fold).
     queued_ready : Bool := false,
+    /// `--mode auto --plan`: the first plan continuation, submitted once
+    /// by the first idle tick (a user submit before it wins).
+    auto_start : Option String := Option.none,
     /// The run's debug logger (none when WEAVER_LOG=off).
     log : Option Logger := Option.none,
     /// The model's todo list (`todo_write`), shown above the status row.
@@ -200,7 +203,7 @@ pub def init_tui_model (log : Option Logger) (st : WeaverState) (rows : I64) (co
 
 /// The startup tail loaded from the session store.
 pub def init_tui_model_with (log : Option Logger) (st : WeaverState) (rows : I64) (cols : I64) (tr : Transcript) : TuiModel :=
-    let m : TuiModel := { state := st, prompt := Prompt.empty, pane := Pane.make tr, rows := rows, cols := cols, ctrl_c_streak := 0, ctrl_d_streak := 0, turn_pending := false, frame := 0, banner := Banner.shown, live := Live.idle, modal := false, plan_ready := false, title_due := false, turn_gen := 0, overlay_open := false, dialog_seq := 0, picker := Option.none, queued := List.empty, queued_ready := false, log := log, todos := List.empty, todos_open := true, tasks_running := 0, tasks_seen := List.empty, repaint_due := false, btw_ready := List.empty } in
+    let m : TuiModel := { state := st, prompt := Prompt.empty, pane := Pane.make tr, rows := rows, cols := cols, ctrl_c_streak := 0, ctrl_d_streak := 0, turn_pending := false, frame := 0, banner := Banner.shown, live := Live.idle, modal := false, plan_ready := false, title_due := false, turn_gen := 0, overlay_open := false, dialog_seq := 0, picker := Option.none, queued := List.empty, queued_ready := false, auto_start := Option.none, log := log, todos := List.empty, todos_open := true, tasks_running := 0, tasks_seen := List.empty, repaint_due := false, btw_ready := List.empty } in
     Model.refresh_rows m
 
 pub def Model.banner_view (m : TuiModel) : BannerView :=

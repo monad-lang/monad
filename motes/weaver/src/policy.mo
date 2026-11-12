@@ -7,10 +7,10 @@
 /// The modes mirror Claude Code's: `manual` asks for everything;
 /// `plan` refuses everything but reads (the agent produces a plan
 /// document, the user approves, the mode drops); `allow_edit` lets
-/// file edits through and still asks for code and network; `auto` is
-/// the trust setting the status bar never stops warning about.
+/// file edits through and still asks for code and network; `auto` runs
+/// unattended (dangers are refused, not held; the `[auto]` chip is red).
 use shuttle::gate {Capability}
-use weaver::assess {Assessment, Reach.is_inside}
+use weaver::assess {Assessment, Reach.is_inside, Reach.is_scratch}
 
 /// The approval mode -- what the user controls, one `/mode` away.
 pub type Mode {
@@ -29,10 +29,11 @@ pub type Decision {
     refuse (reason : String),
 }
 
-/// Tools that only change weaver's own session state (the todo list) run
-/// in every mode without a prompt: there is nothing to approve.
+/// Tools that only change weaver's own session state (the todo list) or
+/// ask the human a question run in every mode without a prompt: there is
+/// nothing to approve.
 pub def Policy.unguarded (tool : String) : Bool :=
-    String.beq tool "todo_write"
+    Bool.or (String.beq tool "todo_write") (String.beq tool "ask")
 
 /// The decision table, the whole policy in one function. Every cell
 /// of `Capability x Mode`, and each cell the assessment splits, is pinned
@@ -99,11 +100,17 @@ pub def AutoDanger.show (d : AutoDanger) : String :=
         AutoDanger.ask_human => "ask",
     }
 
-/// The picks auto mode classifies: running code, the network, and a write
-/// outside the workspace. Reads and in-workspace writes need no verdict.
+/// The picks auto mode classifies: code that reaches OUTSIDE the workspace
+/// (or somewhere it cannot resolve), the network, and a write outside the
+/// workspace. Reads, in-workspace writes, in-workspace commands and picks
+/// that stay in the session scratch dir need no verdict -- build/test work
+/// in the repo is exactly what auto mode is for, and a classifier call per
+/// command made it slow and unreliable. The static danger scan (the safety
+/// net) still refuses flagged commands; `auto_safety = false` turns that
+/// net off too.
 pub def Policy.classified (cap : Capability) (a : Assessment) : Bool :=
     match cap {
-        Capability.exec => true,
+        Capability.exec => Bool.not (Reach.is_inside a.scope),
         Capability.net => true,
         Capability.write => match a.outside_write { Option.some _ => true, Option.none => false },
         Capability.read => false,
@@ -139,6 +146,24 @@ pub def Mode.parse (s : String) : Option Mode :=
     else if s == "auto" then Option.some Mode.auto
     else Option.none
 
+/// The startup mode: the `--mode` flag when given (a bad value is a
+/// config error, never a silent fallback), else the settings' mode, else
+/// manual.
+pub def Mode.resolve (flag : Option String) (from_settings : Option Mode) : Result String Mode :=
+    match flag {
+        Option.some s => match Mode.parse s {
+            Option.some m => Result.ok m,
+            Option.none => Result.err "mode must be manual, plan, allow_edit or auto",
+        },
+        Option.none => Result.ok (match from_settings { Option.some m => m, Option.none => Mode.manual }),
+    }
+
+pub def Mode.is_auto (m : Mode) : Bool :=
+    match m {
+        Mode.auto => true,
+        _ => false,
+    }
+
 /// The `/plan approve` drop -- the one CONSTRAINED transition: plan
 /// mode ends at the mode the approving user names (`manual` for "go",
 /// `allow_edit` for "go and let it edit"), and any other mode has no
@@ -148,15 +173,6 @@ pub def Mode.approve_plan (target : Mode) (m : Mode) : Mode :=
     match m {
         Mode.plan => target,
         _ => m,
-    }
-
-/// The status bar's warning state: on exactly when the mode is `auto`.
-/// `auto` is a trust setting, not a sandbox -- the UI must never let
-/// it pass unremarked.
-pub def Mode.warns_auto (m : Mode) : Bool :=
-    match m {
-        Mode.auto => true,
-        _ => false,
     }
 
 /// The TUI's Tab key: the unconstrained `/mode`-equivalent edge,

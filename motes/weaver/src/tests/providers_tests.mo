@@ -3,7 +3,7 @@
 /// the PREFERENCES used when no list is available.
 use weaver::providers {
     Weaver.preferred_model, Weaver.config_for, Weaver.model_for, Weaver.provider_of,
-    Weaver.default_max_tokens, Weaver.default_max_turns, Weaver.default_window,
+    Weaver.default_max_tokens, Weaver.default_max_turns, Weaver.default_window, Weaver.output_cap, Weaver.clamp_cfg,
 }
 use weaver::catalog {Catalog.contains, Catalog.note, Catalog.render, Catalog.max_shown}
 use shuttle::provider {ProviderConfig, Wire}
@@ -154,3 +154,44 @@ def test_default_window_is_provider_aware : Bool :=
         && Weaver.default_window "openrouter" == 128000i64
         && Weaver.default_window "mock" == 128000i64
         && Weaver.default_window "unknown" == 128000i64
+
+// ── the provider's output-budget ceiling ────────────────────────────────
+
+#[test]
+def test_output_caps_are_per_provider : Bool :=
+    (match Weaver.output_cap "anthropic" "claude-opus-5" 200000 { Option.some n => n == 8192i64, Option.none => false })
+        && (match Weaver.output_cap "openrouter" "x/y" 128000 { Option.some n => n == 8192i64, Option.none => false })
+        && (match Weaver.output_cap "mistral" "m" 128000 { Option.some n => n == 8192i64, Option.none => false })
+        && (match Weaver.output_cap "ollama" "m" 32768 { Option.none => true, Option.some _ => false })
+        && (match Weaver.output_cap "mock" "m" 128000 { Option.none => true, Option.some _ => false })
+
+#[test]
+def test_clamp_lowers_but_never_raises : Bool :=
+    match Weaver.config_for "anthropic" "claude-opus-5" BTreeMap.empty {
+        Result.err _ => false,
+        Result.ok cfg0 =>
+            let high : ProviderConfig := { cfg0 with max_tokens := 65536i64 } in
+            let low : ProviderConfig := { cfg0 with max_tokens := 1024i64 } in
+            let a : Pair ProviderConfig (Option String) := Weaver.clamp_cfg "anthropic" high 200000 in
+            let b : Pair ProviderConfig (Option String) := Weaver.clamp_cfg "anthropic" low 200000 in
+            match a {
+                Pair.pair ca na => match b {
+                    Pair.pair cb nb =>
+                        Bool.and (ca.max_tokens == 8192i64)
+                            (Bool.and (cb.max_tokens == 1024i64)
+                                (Bool.and (match na { Option.some s => String.contains s "clamped", Option.none => false })
+                                    (match nb { Option.none => true, Option.some _ => false }))),
+                },
+            },
+    }
+
+#[test]
+def test_a_tiny_mock_budget_is_never_raised : Bool :=
+    match Weaver.config_for "mock" "mock" BTreeMap.empty {
+        Result.err _ => false,
+        Result.ok cfg0 =>
+            let tiny : ProviderConfig := { cfg0 with max_tokens := 8i64 } in
+            match Weaver.clamp_cfg "mock" tiny 128000 {
+                Pair.pair c n => Bool.and (c.max_tokens == 8i64) (match n { Option.none => true, Option.some _ => false }),
+            },
+    }
