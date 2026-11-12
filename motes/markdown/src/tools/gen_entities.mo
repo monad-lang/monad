@@ -21,7 +21,7 @@ use json::json {
     Json, Json.ParseError, Json.get_array, Json.get_num, Json.get_num_i64,
     Json.get_object, Json.object_get, Json.parse,
 }
-use lib::scan {Markdown.utf8_of_codepoint}
+use unicode::utf8 {Unicode.utf8_of_codepoint}
 use std::io {IO.println, IO.read_file}
 use std::list {List.filter_map, List.sort_by}
 use std::map {BTreeMap, BTreeMap.to_list}
@@ -155,7 +155,7 @@ def codepoint_text (j : Json) : String :=
 
 def codepoint_of (n : Result String I64) : String :=
     match n {
-        Result.ok cp => Markdown.utf8_of_codepoint cp,
+        Result.ok cp => Unicode.utf8_of_codepoint cp,
         Result.err _ => "",
     }
 

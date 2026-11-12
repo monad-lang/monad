@@ -55,11 +55,11 @@ HTML. The report prints the first failures and a per-section table.
 | `gfm_table.mo`, `gfm_autolink.mo` | the GFM extensions that need their own scanners |
 | `href.mo` | cmark-compatible URL percent-encoding |
 | `html.mo` | AST to `Html.Node`, matching cmark's block formatting |
-| `entities.mo`, `unicode.mo` | generated tables (`src/tools/`) |
+| `entities.mo` | generated table (`src/tools/`); Unicode data comes from `motes/unicode` |
 
 ## Generating the tables
 
-The three generators are Monad programs under `src/tools/`, built on
+The generators are Monad programs under `src/tools/`, built on
 `motes/gen` (balanced trees, surface-form declarations) and
 `lang::construct` (the compiler's own term builders and printer):
 
@@ -68,12 +68,9 @@ The three generators are Monad programs under `src/tools/`, built on
 # plans/implementations/compiled-read-file-second-chunk.md lands.
 cargo run --release -- run motes/markdown/src/tools/gen_entities.mo -- \
     --entities entities.json --out motes/markdown/src/entities.mo
-cargo run --release -- run motes/markdown/src/tools/gen_unicode.mo -- \
-    --unicode-data UnicodeData.txt --case-folding CaseFolding.txt \
-    --out motes/markdown/src/unicode.mo
 ```
 
-`--check` on either tool verifies the committed file is current instead of
+`--check` on `gen_entities` verifies the committed file is current instead of
 writing it. The inputs are fetched from the URLs recorded in each file's
 header; the generated files are committed.
 

@@ -31,6 +31,9 @@ workspace = true
 [dependencies.xml_html]
 workspace = true
 
+[dependencies.unicode]
+workspace = true
+
 [dev-dependencies.json]
 workspace = true
 

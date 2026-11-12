@@ -7,7 +7,7 @@
 use init::string {}
 use parsec::core {is_empty}
 use lib::scan {Markdown.Cursor, Markdown.char_width}
-use lib::unicode {Markdown.case_fold}
+use unicode::casefold {Unicode.case_fold}
 
 /// ASCII punctuation, the set a backslash escapes.
 pub def Markdown.is_ascii_punct (b : U8) : Bool :=
@@ -72,7 +72,7 @@ def Markdown.normalize_label_go (s : String) (acc : List String) (space : Bool) 
                 else
                     let w : I64 := Markdown.char_width s in
                     Markdown.normalize_label_go (String.drop w s)
-                        (List.cons (Markdown.case_fold (String.slice s 0 w)) acc) false,
+                        (List.cons (Unicode.case_fold (String.slice s 0 w)) acc) false,
             Option.none => String.concat_list (List.reverse acc)
         }
 

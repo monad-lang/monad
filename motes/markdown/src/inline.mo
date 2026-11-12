@@ -7,12 +7,12 @@
 use init::string {}
 use parsec::core {is_empty}
 use lib::scan {
-    Markdown.Cursor, Markdown.char_width, Markdown.codepoint_at, Markdown.list_drop,
-    Markdown.list_take, Markdown.utf8_of_codepoint,
+    Markdown.Cursor, Markdown.char_width, Markdown.list_drop, Markdown.list_take,
 }
 use lib::entities {Markdown.entity_lookup}
 use lib::gfm_autolink {Markdown.Bare, Markdown.scan_bare}
-use lib::unicode {Markdown.is_unicode_punctuation, Markdown.is_unicode_whitespace}
+use unicode::classify {Unicode.is_punctuation_or_symbol, Unicode.is_space_separator}
+use unicode::utf8 {Unicode.codepoint_at, Unicode.utf8_of_codepoint}
 use lib::link_syntax {
     Markdown.is_ascii_punct,
     Markdown.LinkTail, Markdown.normalize_label, Markdown.parse_link_tail,
@@ -233,7 +233,7 @@ def Markdown.numeric_tail (v : I64) (rest : String) : Option (Pair String String
     match String.get rest 0 {
         Option.some semi =>
             if U8.beq semi 59u8
-            then Option.some (Pair.pair (Markdown.utf8_of_codepoint v) (String.drop 1i64 rest))
+            then Option.some (Pair.pair (Unicode.utf8_of_codepoint v) (String.drop 1i64 rest))
             else Option.none,
         Option.none => Option.none
     }
@@ -391,7 +391,7 @@ def Markdown.inline_loop (b : Markdown.InlineBuild) (s : String) : Markdown.Inli
                 else
                     let w : I64 := Markdown.char_width s in
                     let piece : String := String.slice s 0 w in
-                    let b2 : Markdown.InlineBuild := { b with prev := Markdown.codepoint_at piece } in
+                    let b2 : Markdown.InlineBuild := { b with prev := Unicode.codepoint_at piece } in
                     Markdown.inline_loop (Markdown.push_piece piece b2) (String.drop w s),
             Option.none => b
         }
@@ -509,7 +509,7 @@ def Markdown.scan_autolink (b : Markdown.InlineBuild) (s : String) : Markdown.In
         Option.none =>
             let w : I64 := Markdown.char_width s in
             let piece : String := String.slice s 0 w in
-            let b2 : Markdown.InlineBuild := { b with prev := Markdown.codepoint_at piece } in
+            let b2 : Markdown.InlineBuild := { b with prev := Unicode.codepoint_at piece } in
             Markdown.inline_loop (Markdown.push_piece piece b2) (String.drop w s)
     }
 
@@ -827,7 +827,7 @@ def Markdown.last_cp (s : String) (acc : Option U32) : Option U32 :=
     if is_empty s
     then acc
     else
-        match Markdown.codepoint_at s {
+        match Unicode.codepoint_at s {
             Option.some cp => Markdown.last_cp (String.drop (Markdown.char_width s) s) (Option.some cp),
             Option.none => acc
         }
@@ -856,10 +856,15 @@ def Markdown.is_space_cp (cp : Option U32) : Bool :=
         Option.some c => Markdown.is_unicode_whitespace c
     }
 
+/// CommonMark's "Unicode whitespace character": `Zs`, or tab, LF, FF, CR.
+def Markdown.is_unicode_whitespace (c : U32) : Bool :=
+    U32.beq c 9u32 || U32.beq c 10u32 || U32.beq c 12u32 || U32.beq c 13u32
+        || Unicode.is_space_separator c
+
 def Markdown.is_punct_cp (cp : Option U32) : Bool :=
     match cp {
         Option.none => false,
-        Option.some c => Markdown.is_unicode_punctuation c
+        Option.some c => Unicode.is_punctuation_or_symbol c
     }
 
 /// (left-flanking, right-flanking).
@@ -1026,7 +1031,7 @@ def Markdown.scan_strike (b : Markdown.InlineBuild) (s : String) : Markdown.Inli
 def Markdown.scan_delim (b : Markdown.InlineBuild) (s : String) (ch : U8) : Markdown.InlineBuild :=
     match Markdown.count_same ch s 0i64 {
         Pair.pair n rest =>
-            let next : Option U32 := Markdown.codepoint_at rest in
+            let next : Option U32 := Unicode.codepoint_at rest in
             let flank : Pair Bool Bool := Markdown.flanking b.prev next in
             match flank {
                 Pair.pair left right =>

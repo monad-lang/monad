@@ -1,9 +1,7 @@
-// Asset tests for the two generated tables. A regenerated table that loses a
-// chunk or shifts a codepoint shows up here long before the corpus notices.
+// Asset tests for the generated entity table. A regenerated table that loses
+// a chunk or shifts a codepoint shows up here long before the corpus notices.
+// (The Unicode tables moved to motes/unicode, with their own tests.)
 use lib::entities {Markdown.entity_count, Markdown.entity_lookup}
-use lib::unicode {
-    Markdown.case_fold, Markdown.is_unicode_punctuation, Markdown.is_unicode_whitespace,
-}
 
 def some_is (got : Option String) (want : String) : Bool :=
     match got {
@@ -55,34 +53,3 @@ def test_entity_lookup_unknown : Bool :=
         Option.some _ => false,
         Option.none => true
     }
-
-// ─── Unicode ───
-
-#[test]
-def test_unicode_whitespace : Bool :=
-    Bool.and (Markdown.is_unicode_whitespace 160u32)
-        (Bool.and (Markdown.is_unicode_whitespace 32u32)
-            (Bool.and (Markdown.is_unicode_whitespace 9u32)
-                (Bool.not (Markdown.is_unicode_whitespace 65u32))))
-
-#[test]
-def test_unicode_punctuation : Bool :=
-    Bool.and (Markdown.is_unicode_punctuation 8212u32)
-        (Bool.and (Markdown.is_unicode_punctuation 36u32)
-            (Bool.and (Markdown.is_unicode_punctuation 163u32)
-                (Bool.not (Markdown.is_unicode_punctuation 65u32))))
-
-#[test]
-def test_case_fold_ascii : Bool :=
-    String.beq (Markdown.case_fold "Hello") "hello"
-
-#[test]
-def test_case_fold_greek : Bool :=
-    String.beq (Markdown.case_fold "ΑΓΩ") "αγω"
-
-/// `ẞ` folds to two characters, which is why labels need the table and not
-/// `String.to_lowercase`.
-#[test]
-def test_case_fold_sharp_s : Bool :=
-    Bool.and (String.beq (Markdown.case_fold "ẞ") "ss")
-        (String.beq (Markdown.case_fold "Straße") "strasse")

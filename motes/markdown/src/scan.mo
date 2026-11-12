@@ -6,9 +6,8 @@
 /// walks to the cut. So every scan here works on a SUFFIX and peeks at index
 /// 0; the only length-taking reads are on a slice of at most four bytes.
 ///
-/// Codepoints are `U32`, not `I64`: `init` exposes no `U8.to_i64` or
-/// `U32.to_i64`, so decoding stays in `U32` arithmetic and the Unicode tables
-/// are generated over `U32`.
+/// Codepoint decoding and encoding live in the `unicode` mote
+/// (`Unicode.codepoint_at`, `Unicode.utf8_of_codepoint`).
 use init::string {}
 use parsec::core {is_empty}
 use parsec::combinators {utf8_char_width}
@@ -20,73 +19,6 @@ use parsec::combinators {utf8_char_width}
 pub def Markdown.char_width (s : String) : I64 :=
     let w : I64 := utf8_char_width s in
     if I64.lt w 1i64 then 1i64 else w
-
-/// A continuation byte's six payload bits, or 0 when the byte is not one.
-def Markdown.cont_bits (head : String) (i : I64) : U32 :=
-    match String.get head i {
-        Option.some b =>
-            if U8.lt b 128u8 then 0u32
-            else if U8.lt b 192u8 then U32.sub (U8.to_u32 b) 128u32
-            else 0u32,
-        Option.none => 0u32
-    }
-
-/// Decode the codepoint at the head of `s`. Malformed input yields a
-/// best-effort value rather than an error: CommonMark has no invalid input,
-/// and every consumer only classifies.
-pub def Markdown.codepoint_at (s : String) : Option U32 :=
-    match String.get s 0 {
-        Option.none => Option.none,
-        Option.some b0 =>
-            if U8.lt b0 128u8
-            then Option.some (U8.to_u32 b0)
-            else
-                let w : I64 := Markdown.char_width s in
-                let head : String := String.slice s 0 w in
-                let b : U32 := U8.to_u32 b0 in
-                let c1 : U32 := Markdown.cont_bits head 1i64 in
-                if I64.beq w 1i64
-                then Option.some b
-                else if I64.beq w 2i64
-                then Option.some (U32.or (U32.shl (U32.and b 31u32) 6u32) c1)
-                else if I64.beq w 3i64
-                then Option.some
-                    (U32.or (U32.or (U32.shl (U32.and b 15u32) 12u32) (U32.shl c1 6u32))
-                        (Markdown.cont_bits head 2i64))
-                else Option.some
-                    (U32.or
-                        (U32.or (U32.shl (U32.and b 7u32) 18u32)
-                            (U32.or (U32.shl c1 12u32) (U32.shl (Markdown.cont_bits head 2i64) 6u32)))
-                        (Markdown.cont_bits head 3i64))
-    }
-
-/// The UTF-8 bytes of a codepoint. Surrogate halves, values past U+10FFFF
-/// and negatives become U+FFFD, which is CommonMark's rule for numeric
-/// character references and also the safe choice for a decoder.
-pub def Markdown.utf8_of_codepoint (cp : I64) : String :=
-    let too_high : Bool := I64.gt cp 1114111i64 in
-    let surrogate : Bool := Bool.and (Bool.not (I64.lt cp 55296i64)) (Bool.not (I64.gt cp 57343i64)) in
-    let c : U32 :=
-        if Bool.or (Bool.or (I64.lt cp 1i64) too_high) surrogate
-        then 65533u32
-        else I64.to_u32 cp in
-    let c1 : U32 := U32.or 128u32 (U32.and c 63u32) in
-    let c2 : U32 := U32.or 128u32 (U32.and (U32.shr c 6u32) 63u32) in
-    let c3 : U32 := U32.or 128u32 (U32.and (U32.shr c 12u32) 63u32) in
-    if U32.lt c 128u32
-    then String.from_list [U32.to_u8 c]
-    else if U32.lt c 2048u32
-    then String.from_list [U32.to_u8 (U32.or 192u32 (U32.shr c 6u32)), U32.to_u8 c1]
-    else if U32.lt c 65536u32
-    then String.from_list
-        [U32.to_u8 (U32.or 224u32 (U32.shr c 12u32)),
-            U32.to_u8 c2,
-            U32.to_u8 c1]
-    else String.from_list
-        [U32.to_u8 (U32.or 240u32 (U32.shr c 18u32)),
-            U32.to_u8 c3,
-            U32.to_u8 c2,
-            U32.to_u8 c1]
 
 // ─── Lines ───
 
