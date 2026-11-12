@@ -18,8 +18,10 @@ use lib::model {Document, Document.of_text, EditorState, EditorMsg, EditorState.
     EditorState.hscroll_of}
 use lib::rope {Rope.to_string}
 use lib::selection {Selections.primary_sel, Selection.start, Selection.stop}
-use lib::commands {update}
+use lib::commands {update, parse_command}
+use lib::model {Document.with_path, EditorState.status_of}
 use tui::types {Key}
+use tui::tui {Cmd}
 // `List.length` lives in `init/src/list.mo` (ambient and pure) as of the
 // upstream move, so this import pulls the module's INSTANCES into scope
 // and names nothing -- the empty brace list is the documented form.
@@ -188,6 +190,264 @@ def test_enter_backspace : Bool :=
     let after : EditorState :=
         cx_type (cx_state "ab") [cx_key "i", Key.enter, Key.backspace, Key.escape] in
     String.beq (cx_text after) "ab"
+
+// ── The command line (Phase 5) ───────────────────────────────────────────
+//
+// `:` ENTERS COMMAND MODE AND THE KEYS TYPE INTO ITS LINE. Until Phase 5 the
+// mode was entered and nothing else: no key appended to the line, so `:w` was
+// unreachable from a keyboard and `:q!` was a spelling nobody could type. The
+// line lives in `Mode.command`'s payload, so these pins read it back through
+// `EditorState.cmd_line_of` after a scripted keystroke list.
+//
+// THE TWO HALVES ARE PINNED SEPARATELY, on purpose: typing is one thing (a
+// `:` and then characters make a line), and RUNNING the line is another (the
+// parsed name reaches the SAME registry row a key would). A test that only
+// asserted `:w` wrote a file would pass on a `:`-only reimplementation of the
+// save, which is exactly what the plan forbids.
+
+/// The state's command line, `""` off a command line.
+def cx_line (st : EditorState) : String := EditorState.cmd_line_of st
+
+/// `:` then the characters of `text`, folded through `update`.
+#[terminating]
+def cx_colon (st : EditorState) (text : String) : EditorState :=
+    cx_type (cx_press st (cx_key ":")) (cx_chars text)
+
+/// The characters of `text` as character keys.
+#[terminating]
+def cx_chars (s : String) : List Key :=
+    cx_chars_go (String.to_list s)
+
+#[terminating]
+def cx_chars_go (bs : List U8) : List Key :=
+    match bs {
+        List.empty => List.empty,
+        List.cons b rest =>
+            List.cons (cx_key (String.from_list (List.cons b List.empty))) (cx_chars_go rest)
+    }
+
+/// TYPING BUILDS THE LINE: `:` then `w` `q` leaves `wq` in the command line.
+/// This is the assertion the whole phase was blocked on -- before it, the
+/// line was permanently `""` and every `:` command was unreachable.
+#[test]
+def test_typing_builds_the_command_line : Bool :=
+    let after : EditorState := cx_colon (cx_state "x") "wq" in
+    String.beq (cx_line after) "wq"
+
+/// BACKSPACE REMOVES THE LAST CHARACTER, and pressing it on an empty line
+/// stays empty rather than going negative or eating the `:`.
+#[test]
+def test_backspace_edits_the_command_line : Bool :=
+    let typed : EditorState := cx_colon (cx_state "x") "wq" in
+    let cut : EditorState := cx_type typed [Key.backspace] in
+    let cut2 : EditorState := cx_type cut [Key.backspace] in
+    let cut3 : EditorState := cx_type cut2 [Key.backspace] in
+    String.beq (cx_line cut) "w" && String.beq (cx_line cut2) ""
+        && String.beq (cx_line cut3) ""
+
+/// A TYPED CHARACTER IS NOT INSERTED INTO THE BUFFER: command mode is the
+/// line, not the text. (The same fixture would read "xwq" if the key path
+/// fell through to insert mode's rule.)
+#[test]
+def test_command_typing_does_not_touch_the_buffer : Bool :=
+    let after : EditorState := cx_colon (cx_state "x") "wq" in
+    String.beq (cx_text after) "x"
+
+/// ENTER RUNS THE LINE AND LEAVES THE MODE: `:q` on a clean buffer answers
+/// `Cmd.quit` and the mode is normal again -- the command is the SAME
+/// `quit` row `Space q` runs, so a clean buffer quits here too.
+#[test]
+def test_colon_q_quits : Bool :=
+    let pair : Pair EditorState (Cmd EditorMsg) :=
+        cx_type_pair (cx_state "x") [cx_key ":", cx_key "q", Key.enter] in
+    // THE PAIR IS READ ONCE, into its two halves: an affine value may be used
+    // once, and a `Pair` is not `Copy` (so two accessor calls on the same
+    // binder would be rejected rather than duplicated).
+    match pair {
+        Pair.pair after cmd => cx_is_quit_cmd cmd && Bool.not (cx_is_command (cx_mode after))
+    }
+
+/// The script's folded pair -- the state AND the command, for the tests that
+/// need the command (a quit, a write). The script's answer is its LAST key's
+/// command: every earlier key in a command line answers `Cmd.none` (the `:` is
+/// a mode switch and each character edits the line), so only `Enter` can
+/// issue one.
+#[terminating]
+def cx_type_pair_go (st : EditorState) (keys : List Key) (last : Cmd EditorMsg)
+    : Pair EditorState (Cmd EditorMsg) :=
+    match keys {
+        List.empty => Pair.pair st last,
+        List.cons k rest => cx_type_pair_step st k rest last
+    }
+
+#[terminating]
+def cx_type_pair_step (st : EditorState) (k : Key) (rest : List Key) (last : Cmd EditorMsg)
+    : Pair EditorState (Cmd EditorMsg) :=
+    match update st (cx_msg k) {
+        Pair.pair after cmd => cx_type_pair_go after rest cmd
+    }
+
+def cx_type_pair (st : EditorState) (keys : List Key)
+    : Pair EditorState (Cmd EditorMsg) :=
+    cx_type_pair_go st keys Cmd.none
+
+/// The message constructor, spelled in one place.
+def cx_msg (k : Key) : EditorMsg := EditorMsg.key k
+
+def cx_pair_state (pair : Pair EditorState (Cmd EditorMsg)) : EditorState :=
+    match pair {
+        Pair.pair st _ => st
+    }
+
+def cx_pair_cmd (pair : Pair EditorState (Cmd EditorMsg)) : Cmd EditorMsg :=
+    match pair {
+        Pair.pair _ cmd => cmd
+    }
+
+def cx_is_quit_cmd (cmd : Cmd EditorMsg) : Bool :=
+    match cmd {
+        Cmd.quit => true,
+        _ => false
+    }
+
+/// `:q` ON A DIRTY BUFFER REFUSES, exactly as `Space q` does: `:` is the same
+/// command, so it must be the same rule -- the status names the way out and no
+/// quit is issued.
+#[test]
+def test_colon_q_refuses_when_dirty : Bool :=
+    let dirty : EditorState := cx_type (cx_state "x") [cx_key "i", cx_key "y", Key.escape] in
+    let pair : Pair EditorState (Cmd EditorMsg) :=
+        cx_type_pair dirty [cx_key ":", cx_key "q", Key.enter] in
+    match pair {
+        Pair.pair after cmd =>
+            Bool.not (cx_is_quit_cmd cmd)
+                && String.beq (EditorState.status_of after)
+                    "unsaved changes; Space Q quits without saving"
+    }
+
+/// `:q!` QUITS A DIRTY BUFFER -- the spelling the plan named and the keymap
+/// could not reach before the line existed.
+#[test]
+def test_colon_q_bang_quits_when_dirty : Bool :=
+    let dirty : EditorState := cx_type (cx_state "x") [cx_key "i", cx_key "y", Key.escape] in
+    let pair : Pair EditorState (Cmd EditorMsg) :=
+        cx_type_pair dirty [cx_key ":", cx_key "q", cx_key "!", Key.enter] in
+    match pair {
+        Pair.pair _ cmd => cx_is_quit_cmd cmd
+    }
+
+/// `:w` ON A SCRATCH BUFFER REFUSES IN THE PURE HALF, the same answer
+/// `Space w` gives: no path, no write, and the status says why.
+#[test]
+def test_colon_w_refuses_without_a_path : Bool :=
+    let pair : Pair EditorState (Cmd EditorMsg) :=
+        cx_type_pair (cx_state "x") [cx_key ":", cx_key "w", Key.enter] in
+    match pair {
+        Pair.pair after cmd =>
+            Bool.not (cx_is_perform_cmd cmd)
+                && String.beq (EditorState.status_of after) "no path to write"
+    }
+
+def cx_is_perform_cmd (cmd : Cmd EditorMsg) : Bool :=
+    match cmd {
+        Cmd.perform _ => true,
+        _ => false
+    }
+
+/// `:w` ON A BUFFER WITH A PATH ISSUES THE WRITE, and the state it leaves is
+/// the one `Space w` leaves: "writing..." in the status, a `Cmd.perform`
+/// carrying the action. The file itself is `save_tests.mo`'s gate; this pins
+/// that the LINE reaches the same command.
+#[test]
+def test_colon_w_issues_the_write : Bool :=
+    let with_path : EditorState :=
+        EditorState.init (Document.with_path (Document.of_text "x") "/tmp/ply_cmdline_probe") 24 80 in
+    let pair : Pair EditorState (Cmd EditorMsg) :=
+        cx_type_pair with_path [cx_key ":", cx_key "w", Key.enter] in
+    match pair {
+        Pair.pair after cmd =>
+            cx_is_perform_cmd cmd && String.beq (EditorState.status_of after) "writing..."
+    }
+
+/// AN UNKNOWN LINE IS REPORTED, NOT IGNORED, and the mode is left: a silent
+/// no-op would read as "the command ran".
+#[test]
+def test_unknown_command_is_reported : Bool :=
+    let pair : Pair EditorState (Cmd EditorMsg) :=
+        cx_type_pair (cx_state "x") [cx_key ":", cx_key "q", cx_key "w", Key.enter] in
+    match pair {
+        Pair.pair after cmd =>
+            // The state is read three times (status, mode), so one `Shared`
+            // handle serves them -- `after` has no `Copy` instance either.
+            let shared : Shared EditorState := Shared.of after in
+            Bool.not (cx_is_quit_cmd cmd)
+                && String.beq (EditorState.status_of (Shared.get shared)) "no such command: qw"
+                && Bool.not (cx_is_command (cx_mode (Shared.get shared)))
+    }
+
+/// AN EMPTY LINE IS THE WAY OUT: `:` then Enter is Escape -- normal mode, no
+/// command, no report.
+#[test]
+def test_empty_command_line_cancels : Bool :=
+    let pair : Pair EditorState (Cmd EditorMsg) :=
+        cx_type_pair (cx_state "x") [cx_key ":", Key.enter] in
+    match pair {
+        Pair.pair after cmd => Bool.not (cx_is_command (cx_mode after)) && cx_is_no_cmd cmd
+    }
+
+def cx_is_no_cmd (cmd : Cmd EditorMsg) : Bool :=
+    match cmd {
+        Cmd.none => true,
+        _ => false
+    }
+
+/// ESCAPE LEAVES THE LINE WITHOUT RUNNING IT: the buffer is untouched, the
+/// status is quiet, and the mode is normal.
+#[test]
+def test_escape_cancels_the_command_line : Bool :=
+    let typed : EditorState := cx_colon (cx_state "x") "q!" in
+    let out : EditorState := cx_type typed [Key.escape] in
+    Bool.not (cx_is_command (cx_mode out))
+        && String.beq (cx_text out) "x" && String.beq (cx_line out) ""
+
+/// THE PARSER'S TABLE, pinned directly: each spelling names the registry row
+/// the key bindings already use, so `ply.toml` and the `:` line agree.
+/// `:x` is `:wq` (the vim alias every editor keeps).
+#[test]
+def test_parse_command_table : Bool :=
+    cx_parses "w" "write" && cx_parses "write" "write"
+        && cx_parses "q" "quit" && cx_parses "quit" "quit"
+        && cx_parses "q!" "quit!" && cx_parses "quit!" "quit!"
+        && cx_parses "wq" "write_quit" && cx_parses "x" "write_quit"
+
+/// Nothing else parses -- a typo, an empty line, a command from a later phase.
+#[test]
+def test_parse_command_rejects_unknown : Bool :=
+    cx_parses_nothing "" && cx_parses_nothing "qw" && cx_parses_nothing "nohlsearch"
+        && cx_parses_nothing "bn"
+
+def cx_parses (line : String) (name : String) : Bool :=
+    match parse_command line {
+        Option.some got => String.beq got name,
+        Option.none => false
+    }
+
+def cx_parses_nothing (line : String) : Bool :=
+    match parse_command line {
+        Option.some _ => false,
+        Option.none => true
+    }
+
+/// LEADING AND TRAILING SPACE IS IGNORED when the line runs: `: w ` is `:w`.
+/// Typing a space before a command is what a user does after a miss, and
+/// refusing it would be the editor's mistake, not theirs.
+#[test]
+def test_command_line_ignores_surrounding_space : Bool :=
+    let pair : Pair EditorState (Cmd EditorMsg) :=
+        cx_type_pair (cx_state "x") [cx_key ":", cx_key " ", cx_key "q", cx_key " ", Key.enter] in
+    match pair {
+        Pair.pair _ cmd => cx_is_quit_cmd cmd
+    }
 
 // ── The three answers, through the update ───────────────────────────────
 

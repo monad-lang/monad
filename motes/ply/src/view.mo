@@ -41,7 +41,7 @@ use lib::selection {Selection.start, Selection.stop, Selections.primary_sel}
 use lib::model {Document, EditorState,
     EditorState.active_doc, EditorState.scroll_of, EditorState.rows_of,
     EditorState.cols_of, EditorState.status_of, EditorState.mode_of,
-    EditorState.pending_of}
+    EditorState.pending_of, EditorState.hscroll_of}
 use lib::keymap {Keymap.mode_table}
 use lib::highlight {Highlight.config_for, Highlight.lex, Highlight.segments}
 use tui::types {LayoutSize, TextStyle, TextSegment, Key}
@@ -489,15 +489,42 @@ pub def View.gutter_style : TextStyle :=
 /// the pending chord -- each its own segment so the styles compose
 /// (the mode is bold, the rest plain).
 ///
-/// THE STATUS MESSAGE WINS: when a command printed one (`:` commands,
-/// rejections), it is the whole status line -- a report and the
-/// position would fight for one row, and the report is what the user
-/// just asked for.
+/// THE COMMAND LINE WINS OVER EVERYTHING: while the editor is on a `:`
+/// line, that row IS the line -- `:` plus what has been typed plus the
+/// caret, the way every modal editor shows it. Without this the typed text
+/// lives only in `Mode.command`'s payload and the user types blind, which is
+/// indistinguishable from a dead key.
+///
+/// THE CARET IS AN APPENDED BLOCK, not a hardware cursor: the row is built
+/// as segments, so a reversed space at the end is the caret -- the same
+/// "reverse video is the caret" rule the text area's own rows follow (there
+/// is no cell to reverse on an empty line, so a space is added).
+///
+/// THE STATUS MESSAGE IS SECOND -- when a command printed one (`:`
+/// commands, rejections, a save's path), it is the whole status line: a
+/// report and the position would fight for one row, and the report is what
+/// the user just asked for.
 pub def View.status_segments (st : EditorState) : List TextSegment :=
+    match EditorState.mode_of st {
+        Mode.command line => ply_command_line line,
+        _ => ply_status_or_message st
+    }
+
+/// The status row when the editor is not on a command line: the message if
+/// one was printed, the position otherwise.
+def ply_status_or_message (st : EditorState) : List TextSegment :=
     let msg : String := EditorState.status_of st in
     if Bool.not (String.is_empty msg)
     then List.cons (mk_text_segment msg style_default) List.empty
     else ply_status_full st
+
+/// The `:` line as two segments: ":" plus the text typed so far, then the
+/// caret's reversed space. Both styles are the default; the line is not a
+/// report, so nothing about it is emphasised.
+def ply_command_line (line : String) : List TextSegment :=
+    let typed : TextSegment := mk_text_segment (String.concat ":" line) style_default in
+    let caret : TextSegment := mk_text_segment " " View.caret_style in
+    List.cons typed (List.cons caret List.empty)
 
 /// The full status line, for the quiet case.
 def ply_status_full (st : EditorState) : List TextSegment :=

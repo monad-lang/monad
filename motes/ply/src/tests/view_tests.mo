@@ -331,13 +331,17 @@ def test_pending_chord_shows : Bool :=
     let sh : Shared Screen := vw_screen (vw_type (vw_state "ab") [vw_key "g"]) in
     String.contains (vw_status_text sh) " g"
 
-/// THE MODE NAME: command mode shows "command", not "normal" -- the
-/// status line reads the mode table, not a hard-coded word.
+/// COMMAND MODE'S ROW IS THE LINE, NOT THE MODE NAME. This used to assert
+/// "command" at the row's start -- what the status line prints when it reads
+/// the mode table. Phase 5 replaced it: while the editor is on a `:` line,
+/// the row shows the line being typed (the section below), because a user
+/// typing a command needs to see the command, and the row has no space for
+/// both. Reaching command mode is still a distinct state, so the pin stays:
+/// the row is no longer "normal" either.
 #[test]
 def test_command_mode_status_name : Bool :=
     let sh : Shared Screen := vw_screen (vw_type (vw_state "ab") [vw_key ":"]) in
-    vw_is sh 9 0 "c" && vw_is sh 9 1 "o" && vw_is sh 9 2 "m" && vw_is sh 9 3 "m"
-        && vw_is sh 9 4 "a" && vw_is sh 9 5 "n" && vw_is sh 9 6 "d"
+    vw_is sh 9 0 ":" && Bool.not (vw_is sh 9 0 "n")
 
 // ── Highlighting: the palette on the screen ──────────────────────────────
 
@@ -606,6 +610,53 @@ def test_left_col_is_zero_when_the_line_fits : Bool :=
 def test_left_col_puts_a_caret_at_the_right_edge_last : Bool :=
     let st : EditorState := vw_type (vw_state (String.repeat "C" 60)) (vw_ls 35) in
     I64.beq (View.left_col st) 1
+
+// ── The command line ─────────────────────────────────────────────────────
+//
+// A `:` LINE IS PAINTED, not just stored: the mode's payload holds the typed
+// text, and without this the user types blind -- which is indistinguishable
+// from a dead keyboard. The row is `:` plus the text plus a reversed caret,
+// and it TAKES PRECEDENCE over the status message (the position, a report)
+// because the user is in the middle of typing one.
+
+/// `:` PAINTS AS A LINE WITH A CARET: after `:` the status row starts with
+/// the colon and has a reversed cell right after it -- the empty line's
+/// caret. The mode name ("command") must NOT be there, which is what
+/// separates "a line is being edited" from "the status line names the mode".
+#[test]
+def test_command_line_paints_a_colon_and_caret : Bool :=
+    let st : EditorState := vw_type (vw_state "ab") [vw_key ":"] in
+    let sh : Shared Screen := vw_screen st in
+    vw_is sh 9 0 ":" && vw_reverse sh 9 1 && Bool.not (vw_is sh 9 2 "c")
+
+/// THE TYPED TEXT IS SHOWN: `:w` paints ":w" at columns 0-1 with the caret
+/// on column 2. This is the assertion that makes `:` usable -- the line the
+/// user typed is the line the screen shows.
+#[test]
+def test_command_line_paints_the_typed_text : Bool :=
+    let st : EditorState := vw_type (vw_state "ab") [vw_key ":", vw_key "w", vw_key "q"] in
+    let sh : Shared Screen := vw_screen st in
+    vw_is sh 9 0 ":" && vw_is sh 9 1 "w" && vw_is sh 9 2 "q"
+        && vw_reverse sh 9 3
+
+/// A MESSAGE DOES NOT DISPLACE THE LINE: the status report from an earlier
+/// command is still in the state, but while the editor is on a `:` line the
+/// row is the line. (The other order would hide what the user is typing.)
+#[test]
+def test_command_line_wins_over_a_status_message : Bool :=
+    let typed : EditorState := EditorState.with_status (vw_state "ab") "wrote /tmp/x" in
+    let st : EditorState := vw_type typed [vw_key ":", vw_key "w"] in
+    let sh : Shared Screen := vw_screen st in
+    vw_is sh 9 0 ":" && vw_is sh 9 1 "w" && Bool.not (vw_is sh 9 0 "w")
+
+/// ESCAPE PUTS THE STATUS LINE BACK: after cancelling, the row is the mode
+/// and position again -- `normal`, not a stranded `:`.
+#[test]
+def test_cancelling_the_command_line_restores_the_status : Bool :=
+    let st : EditorState :=
+        vw_type (vw_state "ab") [vw_key ":", vw_key "w", Key.escape] in
+    let sh : Shared Screen := vw_screen st in
+    vw_is sh 9 0 "n" && vw_is sh 9 1 "o" && vw_is sh 9 2 "r" && vw_is sh 9 3 "m"
 
 // ── A document past the first chunk ──────────────────────────────────────
 //

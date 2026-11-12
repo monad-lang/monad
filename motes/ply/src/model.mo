@@ -208,7 +208,14 @@ pub type EditorMsg {
     /// sees only `Unit` -- so the result comes back as a message and the
     /// pure `update` folds it in. Phase 6's `lsp_frame` is the same shape
     /// for the same reason.
-    save_result (ok : Bool) (msg : String)
+    save_result (ok : Bool) (msg : String),
+    /// Stop the editor. A MESSAGE RATHER THAN A COMMAND, so a decision made
+    /// on the IO side can still end the program: `Cmd.perform`'s action
+    /// returns a message, and nothing it returns can BE a `Cmd`. `:wq` needs
+    /// exactly that -- write, and only quit if the write succeeded -- so the
+    /// successful action answers with this and `update` turns it into
+    /// `Cmd.quit`.
+    quit
 }
 
 /// `tui::App`'s `on_event : Event -> EditorMsg` (the plan's §3): keys and
@@ -348,6 +355,21 @@ pub def EditorState.with_status (st : EditorState) (msg : String) : EditorState 
 /// The mode field, read once.
 pub def EditorState.mode_of (st : EditorState) : Mode :=
     match st { { mode, .. } => mode }
+
+/// The command line `Mode.command` carries: the text between the `:` and the
+/// cursor. `""` in every other mode, so a caller need not match the mode to
+/// ask the question -- the same totality `EditorState.scroll_of` has.
+///
+/// THE LINE LIVES IN THE MODE, not in a field of its own. `Mode.command` was
+/// declared with a `line` payload in Phase 1 for exactly this: a second field
+/// would be a second truth about whether the editor is on a command line, and
+/// `Mode`'s payload already answers that. `EditorState.with_mode` clears the
+/// pending chord, which command mode has none of anyway.
+pub def EditorState.cmd_line_of (st : EditorState) : String :=
+    match EditorState.mode_of st {
+        Mode.command line => line,
+        _ => ""
+    }
 
 /// The pending key prefix, read once.
 pub def EditorState.pending_of (st : EditorState) : List Key :=

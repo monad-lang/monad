@@ -17,9 +17,9 @@ pub use lib::selection {Selections.cursor}
 pub use lib::model {Document, Document.of_text, Document.with_language,
     Document.with_path, Document.text_of, Document.path_of, Document.dirty,
     Document.mark_saved, EditorState, EditorState.init, EditorState.hscroll_of,
-    EditorState.with_hscroll, EditorMsg, Command, on_event}
+    EditorState.with_hscroll, EditorState.cmd_line_of, EditorMsg, Command, on_event}
 pub use lib::keymap {KeyResult, Binding, Keymap.resolve, Keymap.default_bindings}
-pub use lib::commands {update, Registry.default, Registry.lookup}
+pub use lib::commands {update, parse_command, Registry.default, Registry.lookup}
 pub use lib::highlight {LanguageConfig, Token, TokenKind, Highlight.lex,
     Highlight.style, Highlight.segments, Highlight.config_for}
 pub use lib::view {RowView, View.view, View.rows, View.row_segments, View.left_col,

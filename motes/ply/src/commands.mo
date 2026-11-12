@@ -39,6 +39,7 @@ use lib::model {Document, EditorState, EditorMsg, Command,
     EditorState.with_registers, EditorState.writing_status,
     EditorState.no_path_status, EditorState.dirty_quit_status,
     EditorState.hscroll_of, EditorState.with_hscroll, EditorState.cols_of,
+    EditorState.cmd_line_of,
     Document.mark_saved, Document.dirty}
 use std::path {Path}
 use std::stream {StreamError}
@@ -103,6 +104,7 @@ pub def Registry.default : List Command :=
         cmd_of "hover" "show the type at the head (needs LSP, Phase 6)" cmd_hover,
         cmd_of "file_picker" "pick a file (Phase 5)" cmd_file_picker,
         cmd_of "write" "write the buffer to its file" cmd_write,
+        cmd_of "write_quit" "write the buffer, then quit if the write succeeded" cmd_write_quit,
         cmd_of "quit" "exit the editor (refused while unsaved changes exist)" cmd_quit,
         cmd_of "quit!" "exit the editor, discarding unsaved changes" cmd_quit_forced,
         cmd_of "command_mode" "enter command mode" cmd_command_mode,
@@ -135,14 +137,26 @@ pub def update (st : EditorState) (msg : EditorMsg) : Pair EditorState (Cmd Edit
         EditorMsg.resize r c => Pair.pair (update_resize st r c) Cmd.none,
         EditorMsg.tick => Pair.pair st Cmd.none,
         EditorMsg.save_result ok msg => Pair.pair (fold_save_result st ok msg) Cmd.none,
+        // THE QUIT MESSAGE: the one path an IO-side decision has to stop the
+        // editor, because a `Cmd.perform`'s action can only answer a message.
+        // `:wq` uses it to quit after a successful write and stay open on a
+        // failed one. The status line is not read again -- the terminal is
+        // already restored by the time the loop sees `Cmd.quit`.
+        EditorMsg.quit => Pair.pair st Cmd.quit,
         EditorMsg.lsp_frame _ =>
             Pair.pair (EditorState.with_status st "lsp frame (client lands in Phase 6)") Cmd.none
     }
 
 /// The key half, split out so `st` is read once per def.
+///
+/// THE TWO TEXT MODES HANDLE THEIR OWN KEYS FIRST: insert mode types into the
+/// buffer and command mode types into the command LINE, and in both cases the
+/// typed character is part of the command's meaning, so it cannot travel
+/// through the registry by name. Everything else -- Escape above all, which is
+/// the only binding either mode's table carries -- falls through to the table.
 def update_key (st : EditorState) (k : Key) : Pair EditorState (Cmd EditorMsg) :=
     let shared : Shared Key := Shared.of k in
-    match insert_default st (Shared.get shared) {
+    match typed_default st (Shared.get shared) {
         Option.some step => step,
         Option.none => update_resolve st (Shared.get shared)
     }
@@ -157,7 +171,7 @@ def update_key (st : EditorState) (k : Key) : Pair EditorState (Cmd EditorMsg) :
 /// by name. The registry row for `insert_char` exists for documentation
 /// and for a config that binds it explicitly; the update's fast path is
 /// here.
-def insert_default (st : EditorState) (k : Key) : Option (Pair EditorState (Cmd EditorMsg)) :=
+def typed_default (st : EditorState) (k : Key) : Option (Pair EditorState (Cmd EditorMsg)) :=
     let shared : Shared Key := Shared.of k in
     // The mode is bound with its type spelled out: a match pattern alone
     // is not a "use" the Rust host's unused-import analysis can see, and
@@ -172,6 +186,8 @@ def insert_default (st : EditorState) (k : Key) : Option (Pair EditorState (Cmd 
                 Key.backspace => Option.some (cmd_insert_backspace st (Shared.get shared)),
                 _ => Option.none
             },
+        Mode.command line =>
+            command_default st line (Shared.get shared),
         _ => Option.none
     }
 
@@ -709,6 +725,168 @@ def cmd_insert_newline_row (st : EditorState) : Pair EditorState (Cmd EditorMsg)
 def cmd_insert_backspace_row (st : EditorState) : Pair EditorState (Cmd EditorMsg) :=
     Pair.pair (EditorState.with_status st "insert_backspace runs from the Backspace key") Cmd.none
 
+// ── the command line (`:` commands) ────────────────────────────────────────
+//
+// A `:` COMMAND AND A KEY BINDING ARE THE SAME STEP (the plan's own rule):
+// `:w` is not a second implementation of the save, it is the save. So a typed
+// line is parsed into a command NAME and handed to `run_command`, the very def
+// a matched key already goes through -- there is no registry of `:` forms
+// beside the registry of commands.
+//
+// THE LINE LIVES IN `Mode.command`'s PAYLOAD (see `EditorState.cmd_line_of`),
+// so entering the mode and typing the line are one value's history, and
+// leaving the mode throws the line away with no cleanup pass.
+//
+// UNKNOWN NAMES ARE REPORTED, NOT SWALLOWED: a mistyped `:qw` says so in the
+// status line and leaves the mode. Silence would read as "the command ran".
+
+/// The keys command mode types with: a character appends to the line, Enter
+/// runs it, Backspace deletes the last character. Anything else -- Escape
+/// first among them -- answers `none` here and resolves through the mode's
+/// table, which is where `normal_mode` lives.
+def command_default (st : EditorState) (line : String) (k : Key)
+    : Option (Pair EditorState (Cmd EditorMsg)) :=
+    match k {
+        Key.char c => Option.some (Pair.pair (cmd_line_append st line c) Cmd.none),
+        Key.enter => Option.some (cmd_line_run st line),
+        Key.backspace => Option.some (Pair.pair (cmd_line_backspace st line) Cmd.none),
+        _ => Option.none
+    }
+
+/// The line with one character appended -- what typing does on a command
+/// line. The character is already the text to show (there is no cursor
+/// movement inside the line yet), so the append is the whole edit.
+def cmd_line_append (st : EditorState) (line : String) (c : String) : EditorState :=
+    EditorState.with_mode st (Mode.command (String.concat line c))
+
+/// The line with its last CHARACTER removed. BYTES, NOT CELLS: the payload is
+/// a byte string, and a multi-byte character's trailing continuation bytes
+/// must come off with it or the line stops being valid UTF-8 -- so the drop
+/// point walks back over the continuation bytes (`0x80..=0xbf`) first.
+def cmd_line_backspace (st : EditorState) (line : String) : EditorState :=
+    let kept : I64 := line_drop_point line (String.length line - 1) in
+    EditorState.with_mode st (Mode.command (String.slice line 0 kept))
+
+/// The largest character boundary at or below `at`, for a byte string whose
+/// `at` may land inside a multi-byte character. `String.get` is O(1) here (the
+/// line is a few bytes), and an out-of-range index answers 0 like a line that
+/// is already empty.
+#[terminating]
+def line_drop_point (line : String) (at : I64) : I64 :=
+    if Bool.not (0 < at)
+    then 0
+    else match String.get line at {
+        Option.none => 0,
+        Option.some b => if is_continuation_byte b then line_drop_point line (at - 1) else at
+    }
+
+/// A UTF-8 continuation byte: `0x80..=0xbf`.
+def is_continuation_byte (b : U8) : Bool :=
+    U8.gt b 127u8 && Bool.not (U8.gt b 191u8)
+
+/// Enter on the command line: parse the text and RUN it, leaving the mode
+/// first. An empty (or blank) line is the plain way out -- `:` then Enter is
+/// Escape -- and a name outside the whitelist is reported rather than run.
+def cmd_line_run (st : EditorState) (line : String) : Pair EditorState (Cmd EditorMsg) :=
+    let trimmed : String := String.trim line in
+    let left : EditorState := EditorState.with_mode st Mode.normal in
+    if String.is_empty trimmed
+    then Pair.pair left Cmd.none
+    else run_parsed left trimmed
+
+/// Run a parsed command name, or report why there was none to run.
+def run_parsed (st : EditorState) (name : String) : Pair EditorState (Cmd EditorMsg) :=
+    match parse_command name {
+        Option.some cmd => run_command st cmd,
+        Option.none =>
+            Pair.pair (EditorState.with_status st (String.concat "no such command: " name)) Cmd.none
+    }
+
+/// THE `:`-COMMAND PARSER: the line as the name of a command in the registry.
+///
+/// A WHITELIST, not a pass-through, for two reasons: a typo becomes a report
+/// instead of a registry miss, and the accepted spellings are readable in one
+/// place. Every answer is a name `Registry.default` already carries -- `:q!`
+/// is the `quit!` row, the same one `Space Q` runs, and `:w` is the same
+/// `write` the `Space w` chord runs.
+///
+/// ARGUMENTS ARE NOT PARSED YET: `:e <path>`, `:bn`/`:bp` and `/`search` are
+/// Phase 5's remainder (a buffer list, an open message). They are absent
+/// rather than silently ignored, so typing one reports itself.
+pub def parse_command (line : String) : Option String :=
+    if String.beq line "w" then Option.some "write"
+    else if String.beq line "write" then Option.some "write"
+    else if String.beq line "q" then Option.some "quit"
+    else if String.beq line "q!" then Option.some "quit!"
+    else if String.beq line "quit" then Option.some "quit"
+    else if String.beq line "quit!" then Option.some "quit!"
+    else if String.beq line "wq" then Option.some "write_quit"
+    else if String.beq line "x" then Option.some "write_quit"
+    else Option.none
+
+/// `:wq` (and `:x`): save, and quit only when the save SUCCEEDED.
+///
+/// A failed write must not close the editor -- the user would lose exactly the
+/// text the save was meant to keep -- so the two halves run in order through
+/// the IO side: the save's action answers, and a successful answer is replaced
+/// by `EditorMsg.quit`, which `update` turns into `Cmd.quit`. That indirection
+/// exists because `Cmd.perform`'s action returns a MESSAGE, so an action can
+/// never itself hand back a `Cmd`.
+///
+/// THE SCRATCH BUFFER CASE FALLS THROUGH: `cmd_write` refuses in the pure half
+/// with no command at all, and `quit_on_save` leaves a non-`perform` command
+/// alone, so `:wq` on a buffer with no path reports and stays open.
+def cmd_write_quit (st : EditorState) : Pair EditorState (Cmd EditorMsg) :=
+    match cmd_write st {
+        Pair.pair after cmd => Pair.pair after (quit_on_save cmd)
+    }
+
+/// A command that quits after a successful save. Only a `perform` can be
+/// wrapped (that is the shape a write issues); anything else -- `Cmd.none` for
+/// the no-path refusal -- passes through untouched.
+def quit_on_save (cmd : Cmd EditorMsg) : Cmd EditorMsg :=
+    // The command is read twice (the arm's test, then the untouched answer),
+    // so it goes through one `Shared` handle -- the affine rule's own remedy
+    // for a value with no `Copy` instance.
+    let shared : Shared (Cmd EditorMsg) := Shared.of cmd in
+    match Shared.get shared {
+        Cmd.perform action => Cmd.perform (fn (_ : Unit) => write_then_quit action),
+        Cmd.none => Shared.get shared,
+        Cmd.quit => Shared.get shared,
+        Cmd.dispatch _ => Shared.get shared,
+        Cmd.inspect _ => Shared.get shared,
+        Cmd.perform_async _ _ => Shared.get shared
+    }
+
+/// Run the save and decide: success answers `EditorMsg.quit` (carrying the
+/// write's report nowhere -- the terminal is restored before the message is
+/// folded, so the status line is not read again), failure answers the write's
+/// own report so the status line explains itself.
+def write_then_quit (action : Unit -> IO EditorMsg) : IO EditorMsg := do {
+    let msg <- action unit;
+    return (quit_msg_or msg)
+}
+
+/// The save's answer as the message to fold: the quit on success, the report
+/// on failure.
+def quit_msg_or (msg : EditorMsg) : EditorMsg :=
+    // The message is read twice in the failure arm (the test, then the
+    // answer), so one `Shared` handle serves both.
+    let shared : Shared EditorMsg := Shared.of msg in
+    match Shared.get shared {
+        EditorMsg.save_result ok _ =>
+            if ok then ply_quit_msg else Shared.get shared,
+        EditorMsg.key _ => Shared.get shared,
+        EditorMsg.resize _ _ => Shared.get shared,
+        EditorMsg.tick => Shared.get shared,
+        EditorMsg.quit => Shared.get shared,
+        EditorMsg.lsp_frame _ => Shared.get shared
+    }
+
+/// The quit message, built in its own def so the constructor is never
+/// spelled inline in a match arm (the constructor-shadowing risk).
+def ply_quit_msg : EditorMsg := EditorMsg.quit
+
 // ── mode switches ──────────────────────────────────────────────────────────
 
 def cmd_insert_before (st : EditorState) : Pair EditorState (Cmd EditorMsg) :=
@@ -769,7 +947,9 @@ def cmd_open_above (st : EditorState) : Pair EditorState (Cmd EditorMsg) :=
         Option.none => Pair.pair (EditorState.with_mode st Mode.insert) Cmd.none
     }
 
-/// Esc: back to normal mode, selections kept (the §4 rule).
+/// Esc: back to normal mode, selections kept (the §4 rule). It is also the
+/// way OFF the command line, and it is bound in every mode's table, so the
+/// command line needs no cancel command of its own.
 def cmd_normal_mode (st : EditorState) : Pair EditorState (Cmd EditorMsg) :=
     Pair.pair (EditorState.with_mode st Mode.normal) Cmd.none
 
