@@ -484,7 +484,9 @@ compiles itself again, and the output is identical.
 ## Memory
 
 Compiled binaries use the **Boehm conservative garbage collector**, and this is
-explicitly a stopgap.
+explicitly a stopgap. [Memory Model](./memory-model.md) describes the intended
+Owned/Region/Static model, what `Copy` and `Shared` mean for lifetimes, and
+which parts are implemented today.
 
 Every heap object carries a header with a refcount, and `monad_retain` /
 `monad_release` exist — but codegen never emits calls to them, so before the GC

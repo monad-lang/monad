@@ -23,8 +23,9 @@ Theory (QTT).
 > dropped before checking in some positions, so only the affine row is
 > enforced; a `Shared.get` view is rejected when it is stored or returned but
 > not yet when it is passed to an *owning* call parameter (that needs the
-> callee's signature); and memory reclamation is not implemented (codegen
-> emits no `monad_release` yet, so the collector remains).
+> callee's signature); and memory reclamation is experimental — the default
+> build still uses the collector, while `MONAD_OWNERSHIP=1` frees only a narrow
+> class of constructors. See [Memory Model](./memory-model.md).
 
 ## Overview
 

@@ -20,6 +20,7 @@
 - [Macros and Derive](./macros.md)
 - [Termination Checking](./termination.md)
 - [Linear Types](./linear-types.md)
+- [Memory Model](./memory-model.md)
 - [Concurrency](./concurrency.md)
 
 # Toolchain
