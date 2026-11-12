@@ -56,6 +56,7 @@ members = [
   "motes/pty",
   "motes/parsec",
   "motes/regex",
+  "motes/unicode",
   "motes/toml",
   "motes/toolkit",
   "motes/tui",
@@ -175,6 +176,9 @@ path = "motes/toolkit"
 
 [workspace.dependencies.tui]
 path = "motes/tui"
+
+[workspace.dependencies.unicode]
+path = "motes/unicode"
 
 [workspace.dependencies.web_event]
 path = "motes/web_event"

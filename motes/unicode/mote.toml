@@ -1,0 +1,31 @@
+# Unicode character data shared across motes: classifiers, range tables
+# (General_Category, Script, White_Space, the UTS#18 word and digit sets)
+# and case folding, generated from the UCD by src/tools/gen_tables.mo.
+#
+# Extracted from motes/markdown (its CommonMark tables) so motes/regex can
+# use the same data. `init` and `std` are ambient; declared anyway.
+#
+# `gen` and `lang` are dev-only: the generator builds the classifier trees
+# with them, and no library module imports either, so consumers do not pay
+# the compiler's load time.
+[mote]
+name = "unicode"
+version = "0.1.0"
+edition = "2026"
+
+[dependencies.init]
+workspace = true
+
+[dependencies.std]
+workspace = true
+
+[dev-dependencies.gen]
+path = "../gen"
+
+[dev-dependencies.lang]
+workspace = true
+
+# Affine-by-default migration exception. Delete this table when the mote
+# reaches zero violations; the default (no table) is `mode = "error"`.
+[affine]
+mode = "warn"
