@@ -3,11 +3,7 @@
 use std::ref {Ref, Ref.get, Ref.new, Ref.set}
 use std::stream {FdStream, Stream}
 use http::sse {Sse.response, SseEvent}
-use http::types {
-    Request, Request.get, Response, Transport, Transport.read_bytes,
-    Transport.write_bytes, Uri,
-}
-use http::wire {Wire.format_request}
+use http::types {Request, Response, Transport, Transport.read_bytes, Transport.write_bytes}
 use moon::server {Server.handle_connection}
 
 /// A source that emits one event, then ends.
@@ -30,13 +26,10 @@ def stream_handler (_ : Request) : IO Response := do {
     return (Sse.response source)
 }
 
-def get_req_bytes : List U8 :=
-    let req : Request :=
-        Request.get (Uri.uri "" Option.none "" Option.none "/stream" Option.none Option.none) in
-    match Wire.format_request req {
-        Result.ok bytes => bytes,
-        Result.err _ => String.to_list "GET /stream HTTP/1.1\r\n\r\n"
-    }
+/// The request bytes, with the `Host` header a real HTTP/1.1 peer always
+/// sends: the server's parse is the strict one, and an HTTP/1.1 request
+/// without a Host is a 400, not a served request.
+def get_req_bytes : List U8 := String.to_list "GET /stream HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n"
 
 def tcp_read (sock : FdStream) (max : I64) : IO (Result String (List U8)) :=
     let t : Transport := Transport.plain sock in

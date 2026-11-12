@@ -71,6 +71,16 @@ pub def CorsConfig.default : CorsConfig :=
 pub def CorsConfig.allow_origin (origin : String) (cfg : CorsConfig) : CorsConfig :=
     let c : CorsConfig := { cfg with origins := List.cons origin cfg.origins } in c
 
+/// The checked constructor: refuse a policy the CORS spec forbids.
+/// `any_origin` with `allow_credentials` is the credentialed wildcard -- it
+/// would hand every origin the user's cookies -- so `validate` names the
+/// refusal for callers building a policy dynamically. `cors_with` also
+/// fails closed on the combination; this is the API that says why.
+pub def CorsConfig.validate (cfg : CorsConfig) : Result String CorsConfig :=
+    if Bool.and cfg.any_origin cfg.allow_credentials
+    then Result.err "any_origin cannot be combined with allow_credentials"
+    else Result.ok cfg
+
 def MiddlewareT.origin_allowed (cfg : CorsConfig) (origin : String) : Bool :=
     if cfg.any_origin
     then true
@@ -130,13 +140,22 @@ def MiddlewareT.cors_origin_at (cfg : CorsConfig) (origin : String)
 
 def MiddlewareT.cors_at (cfg : CorsConfig) (next : HandlerT IO Response)
     (ctx : Ctx) : IO (Result HttpError Response) := do {
-    match Ctx.header "Origin" ctx {
+    // Fail closed on the credentialed wildcard: an invalid policy grants
+    // nothing, so the request runs without any CORS headers.
+    if Bool.and cfg.any_origin cfg.allow_credentials
+    then HandlerT.run next ctx
+    else match Ctx.header "Origin" ctx {
         Option.none => HandlerT.run next ctx,
         Option.some origin => MiddlewareT.cors_origin_at cfg origin next ctx
     }
 }
 
 /// CORS with an explicit policy. Compose like any other middleware.
+///
+/// A policy of `any_origin` with `allow_credentials` is the credentialed
+/// wildcard the CORS spec forbids; `cors_with` fails closed on it (the
+/// request runs, but no CORS headers are granted). `CorsConfig.validate`
+/// is the checked form that reports the refusal.
 pub def MiddlewareT.cors_with (cfg : CorsConfig)
     (next : HandlerT IO Response) : HandlerT IO Response :=
     HandlerT.mk (MiddlewareT.cors_at cfg next)

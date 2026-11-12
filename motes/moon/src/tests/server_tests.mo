@@ -12,7 +12,8 @@ use std::concurrent::fiber {Fiber, pollFiber}
 use moon::server {
     Server.handle_connection, Server.header_has_token, Server.keep_alive,
     Server.read_message, Server.read_request, Server.run, Server.serve_connection,
-    Server.shutdown, Server.start, Server.static, Server.with_connection_header,
+    Server.serve_loop, Server.shutdown, Server.start, Server.static,
+    Server.with_connection_header,
     ServerConfig, ServerConfig.on,
 }
 use std::stream {Stream, FdStream}
@@ -28,6 +29,7 @@ use http::wire {
     Wire.take_bytes,
 }
 use http::body {Body.from_text, Body.to_bytes_pure}
+use http::body_io {Body.to_bytes}
 use http::uri {Uri.parse}
 
 // ── socket bytes ────────────────────────────────────────────────────────
@@ -56,17 +58,23 @@ def uri_of (url : String) : Uri :=
         Result.ok u => u
     }
 
+/// The `Host` header a loopback request carries: the server's strict parse
+/// (the server edge every real peer crosses) requires exactly one valid
+/// `Host` on HTTP/1.1.
+def host_header (port : U16) : Headers :=
+    Headers.set "Host" (String.concat "127.0.0.1:" (U16.to_string port)) Headers.empty
+
 /// Make a GET request for a loopback URL.
 def get_req (port : U16) : Request :=
-    Request.get (uri_of (url_for port))
+    { method := Method.GET, uri := uri_of (url_for port), headers := host_header port, version := HttpVersion.http1_1, body := Body.empty }
 
 /// Make a POST request with a text body for a loopback URL.
 def post_req (port : U16) (body : String) : Request :=
-    { method := Method.POST, uri := uri_of (url_for port), headers := Headers.empty, version := HttpVersion.http1_1, body := Body.from_text body }
+    { method := Method.POST, uri := uri_of (url_for port), headers := host_header port, version := HttpVersion.http1_1, body := Body.from_text body }
 
 /// Make a HEAD request for a loopback URL.
 def head_req (port : U16) : Request :=
-    { method := Method.HEAD, uri := uri_of (url_for port), headers := Headers.empty, version := HttpVersion.http1_1, body := Body.empty }
+    { method := Method.HEAD, uri := uri_of (url_for port), headers := host_header port, version := HttpVersion.http1_1, body := Body.empty }
 
 /// Check a response: status matches and body text matches.
 def resp_ok (resp : Result String Response) (want_status : U16) (want_body : String) : Bool :=
@@ -337,18 +345,25 @@ def test_static_file : IO Bool := do {
     let wrote <- IO.write_file (Path.path path) "static content";
     let res_ok : Response <- Server.static "/tmp" (static_req (String.concat "/" name));
     let res_404 : Response <- Server.static "/tmp" (static_req (String.concat "/" (String.concat name "_missing")));
-    return (Result.is_ok wrote && Bool.and
-        (Bool.and (U16.beq res_ok.status Status.ok) (String.beq (String.from_list (Body.to_bytes_pure res_ok.body)) "static content"))
-        (U16.beq res_404.status Status.not_found))
+    // The static body is a stream now (never materialized whole): drain it.
+    let drained <- Body.to_bytes res_ok.body;
+    match drained {
+        Result.err _ => return false,
+        Result.ok got =>
+            return (Result.is_ok wrote && Bool.and
+                (Bool.and (U16.beq res_ok.status Status.ok) (String.beq (String.from_list got) "static content"))
+                (U16.beq res_404.status Status.not_found))
+    }
 }
 
 // ── keep-alive ─────────────────────────────────────────────────────────
 
 /// A GET request that asks the server to close after this response.
 def close_get_req (port : U16) : Request :=
-    { method := Method.GET, uri := uri_of (url_for port), headers := Headers.set "Connection" "close" Headers.empty, version := HttpVersion.http1_1, body := Body.empty }
+    { method := Method.GET, uri := uri_of (url_for port), headers := Headers.set "Connection" "close" (host_header port), version := HttpVersion.http1_1, body := Body.empty }
 
 /// A GET request in HTTP/1.0, with `Connection` set to `token` if given.
+/// HTTP/1.0 may omit `Host`, and this builder omits it on purpose.
 def http10_req (token : Option String) : Request :=
     let hdrs : Headers :=
         match token {
@@ -700,6 +715,91 @@ def test_listen_on_localhost : IO Bool := do {
                         }
                     }
                 }
+            }
+        }
+    }
+}
+
+/// The LEGACY path parses with the server edge too: an HTTP/1.1 request
+/// with no `Host` is a 400 (request smuggling's favourite ambiguity),
+/// where the shared parser used to accept it.
+#[test]
+def test_legacy_path_rejects_missing_host : IO Bool := do {
+    let listen_res <- IO.tcp_listen 0u16;
+    match listen_res {
+        Result.err _ => return false,
+        Result.ok listener => do {
+            let port <- IO.tcp_local_port listener;
+            let conn_res <- IO.tcp_connect "127.0.0.1" port;
+            match conn_res {
+                Result.err _ => do { Stream.close listener; return false },
+                Result.ok client_sock => do {
+                    let accept_res <- IO.tcp_accept listener;
+                    Stream.close listener;
+                    match accept_res {
+                        Result.err _ => do { Stream.close client_sock; return false },
+                        Result.ok server_sock => do {
+                            let _ <- tcp_write_bytes client_sock (String.to_list "GET / HTTP/1.1\r\n\r\n");
+                            Server.handle_connection hello_handler server_sock;
+                            let resp <- client_read client_sock;
+                            Stream.close client_sock;
+                            return (resp_ok resp Status.bad_request "Bad Request")
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// An absolute-form target whose authority disagrees with `Host` is a 400:
+/// two hops must not disagree about which origin the request names.
+#[test]
+def test_legacy_path_rejects_host_mismatch : IO Bool := do {
+    let listen_res <- IO.tcp_listen 0u16;
+    match listen_res {
+        Result.err _ => return false,
+        Result.ok listener => do {
+            let port <- IO.tcp_local_port listener;
+            let conn_res <- IO.tcp_connect "127.0.0.1" port;
+            match conn_res {
+                Result.err _ => do { Stream.close listener; return false },
+                Result.ok client_sock => do {
+                    let accept_res <- IO.tcp_accept listener;
+                    Stream.close listener;
+                    match accept_res {
+                        Result.err _ => do { Stream.close client_sock; return false },
+                        Result.ok server_sock => do {
+                            let _ <- tcp_write_bytes client_sock
+                                (String.to_list "GET http://evil.example/ HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n");
+                            Server.handle_connection hello_handler server_sock;
+                            let resp <- client_read client_sock;
+                            Stream.close client_sock;
+                            return (resp_ok resp Status.bad_request "Bad Request")
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// The accept loop reports an ACCEPT failure: a listener that has been
+/// shut down fails `accept` immediately, and the loop's caller sees the
+/// reason instead of a silent success. (`Server.run` on a healthy
+/// listener blocks in accept by design, so this drives the loop's own
+/// entry point rather than `run`.)
+#[test]
+def test_serve_loop_reports_accept_failure : IO Bool := do {
+    let listen_res <- IO.tcp_listen 0u16;
+    match listen_res {
+        Result.err _ => return false,
+        Result.ok listener => do {
+            Stream.close listener;
+            let r <- Server.serve_loop hello_handler listener;
+            match r {
+                Result.err _ => return true,
+                Result.ok _ => return false
             }
         }
     }

@@ -409,22 +409,28 @@ def Wire.contains_byte (target : U8) (bytes : List U8) : Bool :=
     }
 
 def Wire.parse_header_lines (lines : List (List U8)) : Result String Headers :=
-    Wire.parse_header_lines_go lines Headers.empty 0i64
+    Wire.parse_header_lines_capped Wire.max_header_count lines
 
-def Wire.parse_header_lines_go (lines : List (List U8)) (acc : Headers) (count : I64) : Result String Headers :=
+/// `parse_header_lines` with an explicit field-count cap -- the knob a
+/// server's config turns (`ServerConfig.max_header_count`). The historical
+/// name above keeps the fixed `Wire.max_header_count`.
+pub def Wire.parse_header_lines_capped (max_count : I64) (lines : List (List U8)) : Result String Headers :=
+    Wire.parse_header_lines_go lines Headers.empty 0i64 max_count
+
+def Wire.parse_header_lines_go (lines : List (List U8)) (acc : Headers) (count : I64) (max_count : I64) : Result String Headers :=
     match lines {
         List.empty => Result.ok acc,
         List.cons line rest =>
             if List.is_empty line
             then Result.ok acc
-            else if Bool.not (I64.lt count Wire.max_header_count)
+            else if Bool.not (I64.lt count max_count)
             then Result.err "too many header fields"
             else if I64.gt (List.length line) Wire.max_header_line_bytes
             then Result.err "header line too long"
             else
                 match Wire.parse_one_header line {
                     Result.err e => Result.err e,
-                    Result.ok kv => Wire.parse_header_lines_go rest (Headers.add kv.first kv.second acc) (I64.add count 1)
+                    Result.ok kv => Wire.parse_header_lines_go rest (Headers.add kv.first kv.second acc) (I64.add count 1) max_count
                 }
     }
 
@@ -1150,6 +1156,10 @@ pub def Wire.parse_request_strict (bytes : List U8) : Result String Request :=
 /// answer `Expect: 100-continue`, and read exactly the body it was promised
 /// without re-parsing the whole accumulation on every read.
 pub def Wire.parse_request_head (head : List U8) : Result String Request :=
+    Wire.parse_request_head_capped Wire.max_header_count head
+
+/// `parse_request_head` with an explicit header field-count cap.
+pub def Wire.parse_request_head_capped (max_count : I64) (head : List U8) : Result String Request :=
     match Wire.split_lines head {
         List.empty => Result.err "empty request",
         List.cons first rest =>
@@ -1160,7 +1170,7 @@ pub def Wire.parse_request_head (head : List U8) : Result String Request :=
                         Pair.pair m t =>
                             match m {
                                 Pair.pair method target =>
-                                    match Wire.parse_header_lines rest {
+                                    match Wire.parse_header_lines_capped max_count rest {
                                         Result.err e => Result.err e,
                                         Result.ok headers =>
                                             let req : Request :=
@@ -1176,10 +1186,15 @@ pub def Wire.parse_request_head (head : List U8) : Result String Request :=
 /// The SERVER head parse: request-line controls, target form and Host, all
 /// before any body bytes are read.
 pub def Wire.parse_request_head_strict (head : List U8) : Result String Request :=
+    Wire.parse_request_head_strict_capped Wire.max_header_count head
+
+/// The SERVER head parse with an explicit header field-count cap -- the
+/// form a server with a configurable `max_header_count` reads with.
+pub def Wire.parse_request_head_strict_capped (max_count : I64) (head : List U8) : Result String Request :=
     if Bool.not (Wire.request_line_valid head)
     then Result.err "invalid request line"
     else
-        match Wire.parse_request_head head {
+        match Wire.parse_request_head_capped max_count head {
             Result.err e => Result.err e,
             Result.ok req =>
                 match Wire.validate_target_string req.method (Wire.request_target req.uri) {

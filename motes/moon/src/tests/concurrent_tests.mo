@@ -12,7 +12,10 @@ use moon::server {
     Server.drain_fibers, Server.handle_connection_fiber, Server.read_message,
 }
 use std::stream {Stream, FdStream}
-use http::types {Transport, Transport.read_bytes, Transport.write_bytes, GET, Request, Response, Status.ok, Uri, uri}
+use http::types {
+    Headers, Headers.set, Transport, Transport.read_bytes, Transport.write_bytes,
+    GET, HttpVersion, Method, Body, Request, Response, Status.ok, Uri, uri,
+}
 use http::wire {Wire.format_request, Wire.frame_response, Wire.parse_response}
 use http::body {Body.to_bytes_pure}
 use http::uri {Uri.parse}
@@ -43,9 +46,12 @@ def uri_of (url : String) : Uri :=
         Result.ok u => u
     }
 
-/// Make a GET request for a loopback URL.
+/// Make a GET request for a loopback URL, with the Host the server's
+/// strict parse requires.
 def get_req (port : U16) : Request :=
-    Request.get (uri_of (url_for port))
+    { method := Method.GET, uri := uri_of (url_for port),
+        headers := Headers.set "Host" (String.concat "127.0.0.1:" (U16.to_string port)) Headers.empty,
+        version := HttpVersion.http1_1, body := Body.empty }
 
 /// Check a response: status matches and body text matches.
 def resp_ok (resp : Result String Response) (want_status : U16) (want_body : String) : Bool :=

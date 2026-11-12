@@ -227,14 +227,23 @@ def Session.find_live (id : String) (now : I64) (sessions : List Session) : Opti
             else Session.find_live id now rest
     }
 
-/// Store the session (upsert), sweep expired entries, and return the
-/// `Set-Cookie` pairs. Duplicate ids cannot exist: `upsert` removes the old
-/// entry first.
+/// Store the session (upsert), sliding its expiry forward to `now + ttl`
+/// (matching the fresh `Max-Age` the emitted cookie carries), sweep expired
+/// entries, and return the `Set-Cookie` pairs. Duplicate ids cannot exist:
+/// `upsert` removes the old entry first.
+///
+/// The slide is the fix for a session that died mid-use: the cookie said
+/// `Max-Age: ttl` on every response, so the browser kept sending it, while
+/// the store's `expires_at` stayed where the LOGIN put it -- an active user
+/// was logged out exactly one ttl after signing in, no matter how much they
+/// used the site. Extending on every commit keeps the two clocks the same
+/// distance apart.
 pub def SessionStore.commit (st : SessionStore) (s : Session) : IO (List (Pair String String)) := do {
     let now <- IO.current_time_nano;
+    let refreshed : Session := { s with expires_at := I64.add now (I64.mul st.ttl_seconds 1000000000i64) };
     let _ <- Ref.update st.sessions
-        (fn (sessions : List Session) => Session.upsert s now st.max_sessions sessions);
-    return (List.cons (Cookie.set_cookie st.cookie_name s.id (SessionStore.attrs st)) List.empty)
+        (fn (sessions : List Session) => Session.upsert refreshed now st.max_sessions sessions);
+    return (List.cons (Cookie.set_cookie st.cookie_name refreshed.id (SessionStore.attrs st)) List.empty)
 }
 
 def SessionStore.attrs (st : SessionStore) : CookieAttrs :=

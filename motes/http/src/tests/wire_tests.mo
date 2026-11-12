@@ -14,7 +14,8 @@ use http::wire {
     Wire.continue_response, Wire.format_request, Wire.format_response,
     Wire.format_response_head, Wire.frame_request, Wire.frame_response,
     Wire.parse_chunk_size, Wire.parse_content_length, Wire.parse_method,
-    Wire.parse_request, Wire.parse_request_strict, Wire.parse_response,
+    Wire.parse_request, Wire.parse_request_strict, Wire.parse_request_head_strict_capped,
+    Wire.parse_response,
     Wire.parse_response_with_method, Wire.parse_u16, Wire.parse_version,
     Wire.request_host, Wire.request_target, Wire.request_framing,
     Wire.response_has_body, Wire.split_lines, Wire.take_bytes, Wire.valid_host,
@@ -1044,6 +1045,20 @@ def test_header_line_too_long_rejected : Bool :=
         Result.ok _ => false,
         Result.err _ => true
     }
+
+/// A caller's own field-count cap is honoured, both directions: a request
+/// over it is refused and one under it parses.
+#[test]
+def test_capped_header_count_rejects : Bool :=
+    Bool.and
+        (match Wire.parse_request_head_strict_capped 2i64 (request_with_many_headers 3i64) {
+            Result.ok _ => false,
+            Result.err _ => true
+        })
+        (match Wire.parse_request_head_strict_capped 4i64 (request_with_many_headers 3i64) {
+            Result.ok _ => true,
+            Result.err _ => false
+        })
 
 #[test]
 def test_205_has_no_body : Bool :=

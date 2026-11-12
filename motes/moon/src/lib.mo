@@ -67,8 +67,9 @@ pub use lib::middleware {
 }
 
 pub use lib::static_files {
-    StaticConfig, StaticConfig.default,
-    Static.handler, Static.safe_path, Static.relative_after_slash,
+    EtagCache, StaticConfig, StaticConfig.default,
+    Static.handler, Static.handler_with, Static.new_cache, Static.cache_count,
+    Static.safe_path, Static.relative_after_slash,
     Static.mime_of, Static.etag, Static.etag_matches, Static.range,
     Static.respond, Static.url_path_of,
 }

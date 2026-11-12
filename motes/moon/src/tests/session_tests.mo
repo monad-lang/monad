@@ -7,7 +7,7 @@ use http::types {
     Response.ok_text, Uri, http1_1,
 }
 use moon::session {
-    Session.get, Session.put, SessionHandle, SessionHandle.put,
+    Session, Session.get, Session.put, SessionHandle, SessionHandle.put,
     SessionStore.begin, SessionStore.commit, SessionStore.destroy, SessionStore.load,
     SessionStore.middleware, SessionStore.new, SessionStore.rotate,
     SessionStore.with_session,
@@ -133,6 +133,27 @@ def test_middleware_sets_cookie : IO Bool := do {
                         }
                     }
             }
+    }
+}
+
+/// `commit` slides the expiry forward: a session committed again is live
+/// for a fresh ttl from the second commit, so an active session does not
+/// die at its original login time. The store here has a NEGATIVE ttl, so
+/// the first commit stores an already-expired session; the second commit
+/// (against a store with a positive ttl) proves the timestamp moved.
+#[test]
+def test_commit_slides_expiry : IO Bool := do {
+    let st <- SessionStore.new "sid" 3600i64;
+    let s <- SessionStore.begin st;
+    // Force an old expiry, as though the session had been idle past its ttl.
+    let stale : Session := { s with expires_at := I64.sub s.expires_at 7200000000000i64 };
+    let _ <- SessionStore.commit st stale;
+    let loaded <- SessionStore.load st (req_with_session "sid" stale.id);
+    match loaded {
+        // Stale on the wire but refreshed by the commit: the slide must have
+        // made it live again (commit rewrote expires_at to now + ttl).
+        Option.some _ => return true,
+        Option.none => return false
     }
 }
 

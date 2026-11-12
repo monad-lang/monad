@@ -5,16 +5,33 @@
 /// module is the replacement: `IO.read_file_bytes` (no decoding), a MIME
 /// table, an `ETag`, `If-None-Match` → 304, and a single `Range` → 206.
 ///
+/// The body is STREAMED (`Body.stream`, 64 KiB pulls): the file is never
+/// materialized whole to be served. The ETag is the one remaining
+/// whole-file read, and an `EtagCache` pays it once per file version
+/// (keyed by path and size) instead of on every request — a 304 re-reads
+/// nothing. A same-size rewrite is indistinguishable without an mtime
+/// native; the size changing (the common edit) re-keys. The full fix —
+/// hashing without materializing — needs an incremental SHA-256 in std.
+///
+/// A consumer that abandons a streamed body mid-transfer leaks the
+/// descriptor: `Body.stream` has no close hook (the same reason SSE has no
+/// disconnect notification). EOF and read errors close eagerly.
+///
 /// The path guard decodes first, then rejects `..` segments, control bytes,
 /// backslashes and a leading slash before joining under the root. Symlink
 /// escape is out of reach without a `realpath` native; serve a symlink-free
 /// tree (documented limitation).
 
-use std::io {IO.is_dir, IO.read_file_bytes}
+use std::bytebuf {ByteBuf, ByteBuf.free, ByteBuf.length, ByteBuf.to_list}
+use std::io {IO.file_size, IO.is_dir, IO.read_file_bytes}
 use std::list {}
 use std::path {Path, Path.is_absolute, Path.join, Path.of, Path.to_string}
+use std::ref {Ref, Ref.get, Ref.new, Ref.set}
 use std::sha256 {Sha256.hash_bytes}
-use std::stream {StreamError.is_not_found}
+use std::stream {
+    FdStream, FdStream.open_file, FdStream.read_mode, FdStream.seek,
+    FdStream.seek_start, Stream,
+}
 use http::types {
     Body, Headers, Headers.empty, Headers.get, Headers.set, Method, Request,
     Response, Status.internal_server_error, Status.method_not_allowed,
@@ -214,6 +231,71 @@ def Static.hex_digits (bytes : List U8) : List U8 :=
 def Static.hex_char (n : U8) : U8 :=
     if U8.lt n 10u8 then U8.add n 48u8 else U8.add n 87u8
 
+// ── the ETag cache ──────────────────────────────────────────────────────
+//
+// Keyed by path AND size: the first request for a version of a file pays
+// the one whole-file read the hash needs, and every later request — a
+// repeat, and above all a 304 — reuses it without touching the file. The
+// cache is one entry per served file version, so it grows with the asset
+// tree, not with traffic.
+
+/// A store of `path:size` → ETag, created once per server
+/// (`Static.new_cache`) and passed to `Static.handler_with`.
+pub struct EtagCache {
+    entries : Ref (List (Pair String String))
+}
+
+/// The empty store. One per server, not per request: the whole point is
+/// that a second request for the same file version finds its ETag here.
+pub def Static.new_cache : IO EtagCache := do {
+    let entries : Ref (List (Pair String String)) <- Ref.new List.empty;
+    let c : EtagCache := { entries := entries };
+    return c
+}
+
+/// How many versions the store holds (test surface: a 304 must not add one).
+pub def Static.cache_count (cache : EtagCache) : IO I64 := do {
+    let entries <- Ref.get cache.entries;
+    return (List.length entries)
+}
+
+#[terminating]
+def Static.cache_lookup (key : String) (entries : List (Pair String String)) : Option String :=
+    match entries {
+        List.empty => Option.none,
+        List.cons e rest =>
+            match e {
+                Pair.pair k v =>
+                    if String.beq k key then Option.some v else Static.cache_lookup key rest
+            }
+    }
+
+/// The ETag for the file at `p` (served as `path`), `size` bytes, hashed
+/// once per version: a cache miss reads the file and stores the result;
+/// a hit — the second request, and every 304 — answers without reading.
+/// A read failure answers a constant and caches nothing (the GET below
+/// reports it as a 500 anyway).
+pub def Static.etag_of (cache : EtagCache) (path : String) (p : Path) (size : I64) : IO String := do {
+    let key := String.concat path (String.concat ":" (I64.to_string size));
+    let entries <- Ref.get cache.entries;
+    match Static.cache_lookup key entries {
+        Option.some etag => return etag,
+        Option.none => do {
+            let read <- IO.read_file_bytes p;
+            match read {
+                Result.err _ => return Static.unreadable_etag,
+                Result.ok bytes => do {
+                    let etag := Static.etag bytes;
+                    let _ <- Ref.set cache.entries (List.cons (Pair.pair key etag) entries);
+                    return etag
+                }
+            }
+        }
+    }
+}
+
+def Static.unreadable_etag : String := "\"unreadable\""
+
 /// Parse a single `Range: bytes=...` header. `Ok none` means "no usable
 /// range" (serve the whole file); `Err` means the range is unsatisfiable.
 pub def Static.range (header : Option String) (len : I64) : Result String (Option (Pair I64 I64)) :=
@@ -388,45 +470,241 @@ def Static.partial_response (headers : Headers) (start : I64) (end : I64) (len :
     { status := Status.partial_content, headers := Headers.set "Content-Range" cr headers, version := HttpVersion.http1_1, body := Body.from_bytes part }
 
 /// The handler. A missing file (or an unsafe path) is 404; an existing file
-/// with a directory path falls back to `cfg.index`.
-pub def Static.handler (cfg : StaticConfig) (req : Request) : IO (Result String Response) :=
+/// with a directory path falls back to `cfg.index`. The body is streamed
+/// (`Body.stream`, `Static.chunk_bytes` per pull), and the ETag comes from
+/// `cache`, hashed once per file version.
+pub def Static.handler (cfg : StaticConfig) (req : Request) : IO (Result String Response) := do {
+    let cache <- Static.new_cache;
+    Static.handler_with cfg cache req
+}
+
+/// `Static.handler` with a caller-owned ETag store: create one with
+/// `Static.new_cache` per server and share it across requests, so a file
+/// is hashed once per version rather than once per request.
+pub def Static.handler_with (cfg : StaticConfig) (cache : EtagCache) (req : Request) : IO (Result String Response) :=
     if Bool.not (Bool.or (BEq.beq req.method Method.GET) (BEq.beq req.method Method.HEAD))
     then IO.pure (Result.ok Static.method_not_allowed)
-    else Static.handler_get cfg req
+    else Static.handler_get cfg cache req
 
-def Static.handler_get (cfg : StaticConfig) (req : Request) : IO (Result String Response) :=
+def Static.handler_get (cfg : StaticConfig) (cache : EtagCache) (req : Request) : IO (Result String Response) :=
     match Static.safe_path cfg.root req.uri.path {
         Result.err _ => IO.pure (Result.ok Static.not_found),
         Result.ok full =>
             match Path.of full {
                 Result.err _ => IO.pure (Result.ok Static.not_found),
-                Result.ok p => Static.handler_path cfg req full p
+                Result.ok p => Static.handler_path cfg cache req full p
             }
     }
 
-def Static.handler_path (cfg : StaticConfig) (req : Request) (full : String) (p : Path) : IO (Result String Response) := do {
+def Static.handler_path (cfg : StaticConfig) (cache : EtagCache) (req : Request) (full : String) (p : Path) : IO (Result String Response) := do {
     let is_dir <- IO.is_dir p;
     let target := if is_dir then String.concat (String.concat full "/") cfg.index else full;
-    let read <- Static.read_target target;
-    match read {
-        Result.err _ => return (Result.ok Static.internal_error),
-        Result.ok found =>
+    match Path.of target {
+        Result.err _ => return (Result.ok Static.not_found),
+        Result.ok tp => do {
+            let found <- Static.stat_target tp;
             match found {
                 Option.none => return (Result.ok Static.not_found),
-                Option.some bytes => return (Result.ok (Static.respond cfg target req bytes))
-            }
-    }
-}
-
-/// Read a target path, distinguishing "not found" from a real error.
-def Static.read_target (target : String) : IO (Result String (Option (List U8))) :=
-    match Path.of target {
-        Result.err _ => IO.pure (Result.ok Option.none),
-        Result.ok p => do {
-            let r <- IO.read_file_bytes p;
-            match r {
-                Result.ok bytes => IO.pure (Result.ok (Option.some bytes)),
-                Result.err e => if StreamError.is_not_found e then IO.pure (Result.ok Option.none) else IO.pure (Result.err e.message)
+                Option.some size =>
+                    match Static.range_of req size {
+                        Result.err _ => return (Result.ok (Static.range_not_satisfiable_response (Static.response_headers_of cfg target "") size)),
+                        Result.ok ro => Static.handler_stat cfg cache req target tp size ro
+                    }
             }
         }
     }
+}
+
+/// The range the request asks of a `size`-byte file: `Ok none` serves the
+/// whole file.
+def Static.range_of (req : Request) (size : I64) : Result String (Option (Pair I64 I64)) :=
+    Static.range (Headers.get "range" req.headers) size
+
+def Static.handler_stat (cfg : StaticConfig) (cache : EtagCache) (req : Request)
+    (target : String) (tp : Path) (size : I64) (ro : Option (Pair I64 I64)) : IO (Result String Response) := do {
+    let etag <- Static.etag_of cache target tp size;
+    let headers := Static.response_headers cfg target etag;
+    match Headers.get "if-none-match" req.headers {
+        Option.some inm =>
+            if Static.etag_matches inm etag
+            then IO.pure (Result.ok (Static.not_modified_response etag))
+            else Static.handler_body cfg req target tp size ro headers,
+        Option.none => Static.handler_body cfg req target tp size ro headers
+    }
+}
+
+/// Open the file for a GET (a HEAD answers the head without opening
+/// anything: nothing pulls its body, so an eager open would leak the
+/// descriptor), then build the streamed response.
+def Static.handler_body (cfg : StaticConfig) (req : Request) (target : String) (tp : Path)
+    (size : I64) (ro : Option (Pair I64 I64)) (headers : Headers) : IO (Result String Response) := do {
+    if BEq.beq req.method Method.HEAD
+    then IO.pure (Result.ok (Static.head_response headers size ro))
+    else do {
+        let opened <- FdStream.open_file tp FdStream.read_mode;
+        match opened {
+            Result.err _ => return (Result.ok Static.internal_error),
+            Result.ok file => do {
+                let res <- Static.stream_response headers file size ro;
+                return (Result.ok res)
+            }
+        }
+    }
+}
+
+/// The response head for a HEAD: the representation's `Content-Length`
+/// (the range's, when a range is served), and no body to stream.
+def Static.head_response (headers : Headers) (size : I64) (ro : Option (Pair I64 I64)) : Response :=
+    match ro {
+        Option.none => Static.head_full headers size,
+        Option.some pr =>
+            match pr {
+                Pair.pair start end =>
+                    let len := I64.add (I64.sub end start) 1 in
+                    let cr := Static.content_range start end size in
+                    // A 206's `Content-Length` is the range's length: the
+                    // head writer takes it from here because a HEAD has no
+                    // body to measure.
+                    let h2 := Headers.set "Content-Range" cr headers in
+                    { status := Status.partial_content,
+                        headers := Headers.set "Content-Length" (I64.to_string len) h2,
+                        version := HttpVersion.http1_1, body := Body.empty }
+            }
+    }
+
+def Static.head_full (headers : Headers) (size : I64) : Response :=
+    { status := Status.ok,
+        headers := Headers.set "Content-Length" (I64.to_string size) headers,
+        version := HttpVersion.http1_1, body := Body.empty }
+
+/// The streamed GET response: `Body.stream` pulls `Static.chunk_bytes` at
+/// a time, seeking to the range start when one is served. The body owns
+/// the descriptor: EOF, a read error and (on a range) the last byte close
+/// it, and a consumer that abandons the transfer leaks it — `Body.stream`
+/// has no close hook.
+///
+/// A range's seek happens HERE, before the response exists, so its failure
+/// is reported once instead of hiding in the body (where it would look like
+/// an empty 206).
+def Static.stream_response (headers : Headers) (file : FdStream) (size : I64) (ro : Option (Pair I64 I64)) : IO Response :=
+    match ro {
+        Option.none => IO.pure (Static.stream_full headers file),
+        Option.some pr =>
+            match pr {
+                Pair.pair start end => do {
+                    let pulls <- Static.range_pulls file start end;
+                    IO.pure (Static.stream_range headers pulls start end size)
+                }
+            }
+    }
+
+def Static.stream_full (headers : Headers) (file : FdStream) : Response :=
+    { status := Status.ok, headers := headers, version := HttpVersion.http1_1,
+        body := Body.stream (Static.file_pulls file Option.none) }
+
+/// The ranged 206: the `Content-Range`, and a body pulling through `end`
+/// from the already-seeked descriptor.
+def Static.stream_range (headers : Headers) (pulls : Unit -> IO (Option (List U8)))
+    (start : I64) (end : I64) (size : I64) : Response :=
+    let cr := Static.content_range start end size in
+    { status := Status.partial_content, headers := Headers.set "Content-Range" cr headers,
+        version := HttpVersion.http1_1, body := Body.stream pulls }
+
+/// Pulls from `file` until the transfer is done, closing it at EOF, on a
+/// read error, or on `bound`'s last byte.
+///
+/// `bound` is the absolute last byte index to send, inclusive, or
+/// `Option.none` for "to EOF". It is an option rather than a numeric
+/// sentinel because BYTE 0 IS A LEGAL RANGE END: `Range: bytes=0-0` asks
+/// for exactly one byte, and a `bound < 1` "unbounded" test would send none.
+///
+/// The descriptor's own offset is the cursor (a read advances it, so a seek
+/// of 0 from here reports where the chunk ended), which is why a ranged
+/// stream seeks ONCE, in `Static.range_pulls`: re-seeking per pull would
+/// re-read the same chunk forever. Closing on the last byte is part of the
+/// same invariant -- a transfer that ended without closing leaves the offset
+/// where it was, and the next pull repeats the bytes.
+def Static.file_pulls (file : FdStream) (bound : Option I64) : Unit -> IO (Option (List U8)) :=
+    fn (_ : Unit) => do {
+        let read <- Stream.read file Static.chunk_bytes;
+        match read {
+            Result.err _ => do {
+                let _ <- Stream.close file;
+                return Option.none
+            },
+            Result.ok buf => do {
+                let n := ByteBuf.length buf;
+                if I64.beq n 0
+                then do {
+                    let _ <- ByteBuf.free buf;
+                    let _ <- Stream.close file;
+                    return Option.none
+                }
+                else do {
+                    let bytes <- ByteBuf.to_list buf n;
+                    let _ <- ByteBuf.free buf;
+                    match bound {
+                        Option.none => return (Option.some bytes),
+                        Option.some last => do {
+                            let sought <- FdStream.seek file 0i64 FdStream.seek_current;
+                            match sought {
+                                Result.err _ => do {
+                                    let _ <- Stream.close file;
+                                    return Option.none
+                                },
+                                Result.ok pos =>
+                                    if I64.gt pos last
+                                    then do {
+                                        // The read crossed (or exactly
+                                        // reached) the bound: keep the bytes
+                                        // through `last` -- the chunk covers
+                                        // pos-n .. pos-1, so the count is
+                                        // last - pos + n + 1 -- and close.
+                                        let _ <- Stream.close file;
+                                        let want := I64.add (I64.add (I64.sub last pos) n) 1i64;
+                                        return (Option.some (Wire.take_bytes want bytes))
+                                    }
+                                    else return (Option.some bytes)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+/// Seek to the range start ONCE, then pull through `end`.
+///
+/// The seek is outside the closure deliberately: the file only stays at the
+/// offset its last read left, so a seek per pull resets it to `start` and a
+/// range longer than one `Static.chunk_bytes` chunk (`bytes=0-1048575` on a
+/// 1 MiB asset) re-reads its first chunk until the consumer gives up. The
+/// seek already happened by the time the response is built, so the handler
+/// waits for it once instead of leaving a failed seek inside the body.
+pub def Static.range_pulls (file : FdStream) (start : I64) (end : I64) : IO (Unit -> IO (Option (List U8))) := do {
+    let sought <- FdStream.seek file start FdStream.seek_start;
+    match sought {
+        Result.err _ => do {
+            let _ <- Stream.close file;
+            IO.pure (fn (_ : Unit) => IO.pure Option.none)
+        },
+        Result.ok _ => IO.pure (Static.file_pulls file (Option.some end))
+    }
+}
+
+/// One pull's read size: 64 KiB, the page-friendly middle between an fd
+/// round trip per byte and another whole file in memory.
+pub def Static.chunk_bytes : I64 := 65536
+
+def Static.content_range (start : I64) (end : I64) (size : I64) : String :=
+    String.concat "bytes " (String.concat (I64.to_string start) (String.concat "-" (String.concat (I64.to_string end) (String.concat "/" (I64.to_string size)))))
+
+/// The response headers with `Content-Type`, `ETag`, `Accept-Ranges` and
+/// the cache policy, for callers that already have an ETag.
+pub def Static.response_headers_of (cfg : StaticConfig) (path : String) (etag : String) : Headers :=
+    Static.response_headers cfg path etag
+
+/// The size of the file at `p`, or `none` when it does not exist (the
+/// directory case is resolved before this is called).
+def Static.stat_target (p : Path) : IO (Option I64) :=
+    IO.file_size p

@@ -371,31 +371,42 @@ def Live.watch_tree_poll_loop (root : Path) (ignored : List String)
     }
 }
 
+/// How deep `collect_files` descends before it stops. The walk follows
+/// symlinks, so a directory loop (`a -> .`) would otherwise never end; a
+/// real source tree is nowhere near this deep.
+pub def Live.max_walk_depth : I64 := 32
+
 def Live.tree_signature (root : Path) (ignored : List String) : IO String := do {
     let entries <- IO.list_dir root;
-    let files <- Live.collect_files entries ignored List.empty;
+    let files <- Live.collect_files entries ignored 0 List.empty;
     Live.signature_of_files files
 }
 
+/// Collect the watched files under `entries`, refusing to descend past
+/// `Live.max_walk_depth`: the walk follows symlinks, and a loop (`a -> .`)
+/// would hang the polling watcher forever. Deeper directories are skipped,
+/// not an error -- the watcher still reloads on everything it did see.
 #[terminating]
 def Live.collect_files (entries : List Path) (ignored : List String)
-    (acc : List Path) : IO (List Path) :=
+    (depth : I64) (acc : List Path) : IO (List Path) :=
     match entries {
         List.empty => IO.pure (List.reverse acc),
         List.cons p rest => do {
             let is_dir <- IO.is_dir p;
-            if is_dir
+            if Bool.not is_dir
             then
-                if Live.ignored_name (Path.file_name p) ignored
-                then Live.collect_files rest ignored acc
-                else do {
-                    let children <- IO.list_dir p;
-                    let acc2 <- Live.collect_files children ignored acc;
-                    Live.collect_files rest ignored acc2
-                }
-            else if Live.watched_file (Path.file_name p)
-            then Live.collect_files rest ignored (List.cons p acc)
-            else Live.collect_files rest ignored acc
+                if Live.watched_file (Path.file_name p)
+                then Live.collect_files rest ignored depth (List.cons p acc)
+                else Live.collect_files rest ignored depth acc
+            else if Live.ignored_name (Path.file_name p) ignored
+            then Live.collect_files rest ignored depth acc
+            else if I64.lt depth Live.max_walk_depth
+            then do {
+                let children <- IO.list_dir p;
+                let acc2 <- Live.collect_files children ignored (I64.add depth 1i64) acc;
+                Live.collect_files rest ignored depth acc2
+            }
+            else Live.collect_files rest ignored depth acc
         }
     }
 

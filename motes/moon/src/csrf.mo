@@ -6,6 +6,7 @@
 /// unforgeable. `check` reads the `csrf_token` form field produced by
 /// `hidden_field`.
 
+use std::io {IO.write_stderr}
 use std::sha256 {Sha256.hash}
 use http::request {Request.param}
 use http::strings {Strings.ct_eq}
@@ -45,11 +46,18 @@ pub def Csrf.secret_from_env_checked : IO (Result String String) := do {
 
 /// The historical fallback. It keeps existing programs working; a
 /// deployment that uses it shares a public constant with every other such
-/// deployment. Prefer `secret_from_env_checked`.
+/// deployment -- so the fallback says so on stderr, every time it is
+/// taken, rather than failing silently in production. Prefer
+/// `secret_from_env_checked`.
 pub def Csrf.secret_from_env : IO String := do {
     let checked <- Csrf.secret_from_env_checked;
     match checked {
         Result.ok s => IO.pure s,
-        Result.err _ => IO.pure Csrf.development_secret
+        Result.err why => do {
+            let _ <- IO.write_stderr (String.concat "moon: CSRF_SECRET unset ("
+                (String.concat why
+                    "); falling back to the PUBLIC development secret -- set CSRF_SECRET in production\n"));
+            IO.pure Csrf.development_secret
+        }
     }
 }

@@ -40,6 +40,7 @@ use std::concurrent::combine {sleepIO}
 use std::list {}
 use std::ref {Ref, Ref.get, Ref.new, Ref.set, Ref.update}
 use std::stream {Stream, FdStream, FdStream.set_timeout}
+use std::io {IO.write_stderr}
 use http::types {
     Transport, Transport.close, Transport.read_bytes, Transport.wait_read,
     Transport.write_bytes, Body, Body.is_stream, Framing, Headers, Headers.get,
@@ -51,15 +52,16 @@ use http::types {
 use http::strings {Strings.drop_bytes, Strings.parse_i64, Strings.split_on}
 use http::wire {
     Wire.chunk_step, Wire.concat_chunks, Wire.continue_response, Wire.find_body_start,
+    Wire.max_header_count,
     Wire.format_response, Wire.format_response_head, Wire.frame_request,
-    Wire.head_headers, Wire.parse_request, Wire.parse_request_head_strict,
+    Wire.head_headers, Wire.parse_request, Wire.parse_request_head_strict_capped,
     Wire.request_framing, Wire.response_has_body, Wire.response_head_chunked,
     Wire.take_bytes,
 }
 use lib::handler {Handler.try}
 use lib::handler_t {HandlerT, HandlerT.run_io, HttpError, HttpError.to_response}
 use http::body_io {Body.write_chunked}
-use lib::static_files {Static.handler, StaticConfig, StaticConfig.default}
+use lib::static_files {Static.handler_with, Static.new_cache, StaticConfig, StaticConfig.default}
 
 // ── socket bytes ────────────────────────────────────────────────────────
 
@@ -70,14 +72,7 @@ def Server.read_bytes (sock : FdStream) (max : I64) : IO (Result String (List U8
     Transport.read_bytes t max
 
 /// Write all of `bytes` (`Transport.write_bytes` over a bare socket).
-def Server.write_bytes (sock : FdStream) (bytes : List U8) : IO (Result String U64) :=
-    let t : Transport := Transport.plain sock in
-    Transport.write_bytes t bytes
-
 // ── error responses ─────────────────────────────────────────────────────
-
-def Server.bad_request_response : Response :=
-    { status := Status.bad_request, headers := Headers.empty, version := HttpVersion.http1_1, body := Body.text "Bad Request" }
 
 def Server.not_found_response : Response :=
     { status := Status.not_found, headers := Headers.empty, version := HttpVersion.http1_1, body := Body.text "Not Found" }
@@ -267,100 +262,29 @@ def Server.with_connection_header (closing : Bool) (res : Response) : Response :
 
 // ── connection handling ─────────────────────────────────────────────────
 
-/// Parse and serve one framed request, reporting whether the connection should
-/// stay open. A request that does not parse gets a 400 and reports `false`:
-/// the framing of whatever follows a malformed message cannot be trusted, so
-/// the connection ends there rather than being read as more requests.
-def Server.serve_one (handler : Request -> IO Response) (sock : FdStream) (bytes : List U8) (served : I64) : IO Bool :=
-    match Wire.parse_request bytes {
-        Result.err _ => do {
-            Server.send_error sock;
-            return false
-        },
-        Result.ok req => do {
-            let closing := Bool.not (Server.keep_alive req served);
-            let res <- handler req;
-            Server.write_response_for sock req.method closing res
-        }
-    }
+// ── serving one connection: the old-API path over the T machinery ──────
+//
+// `serve_connection`/`handle_connection` used to read with the legacy
+// `read_message` loop, whose buffer grew by `List.append carry chunk` on
+// every 4096-byte read -- O(n^2) in the request size. They now go through
+// the same reader the transformer server uses (`read_request_t`: an
+// O(n) head read, a body read that accumulates chunks in reverse and
+// flattens once, the strict parse, and the caps), and the same writer
+// (`write_response_for_t`, which streams a `Body.stream` chunked).
+// `read_message`/`read_request` stay: they are the CLIENT-side readers
+// tests use to frame a peer's messages, not this server path.
 
-/// Write a response and report whether the connection stays open.
-///
-/// A response that cannot be serialised -- a `Body.stream`, which has no pure
-/// byte form -- becomes a 500 and ends the connection. Ending it is the point:
-/// the peer was promised a body and there is none, so a response it could read
-/// as complete would be a claim about bytes that do not exist.
-def Server.write_response (sock : FdStream) (closing : Bool) (res : Response) : IO Bool :=
-    if Body.is_stream res.body
-    then Server.write_stream_response sock closing res
-    else
-        match Wire.format_response (Server.with_connection_header closing res) {
-            Result.err _ => do {
-                Server.write_bytes sock (Server.canned_bytes Server.internal_error_response);
-                return false
-            },
-            Result.ok bytes => do {
-                Server.write_bytes sock bytes;
-                return (Bool.not closing)
-            }
-        }
-
-/// A streamed response: a chunked head, then the body's chunks and terminal
-/// chunk. A write failure ends the connection (the peer is gone or the body
-/// could not be produced).
-def Server.write_stream_response (sock : FdStream) (closing : Bool) (res : Response) : IO Bool := do {
-    match Wire.response_head_chunked (Server.with_connection_header closing res) {
-        Result.err _ => return false,
-        Result.ok head => do {
-            let head_res <- Server.write_bytes sock head;
-            match head_res {
-                Result.err _ => return false,
-                Result.ok _ => do {
-                    let t : Transport := Transport.plain sock;
-                    let body_res <- Body.write_chunked t res.body;
-                    match body_res {
-                        Result.err _ => return false,
-                        Result.ok _ => return (Bool.not closing)
-                    }
-                }
-            }
-        }
-    }
-}
-
-/// Write a response for `method`: `HEAD`, 204 and 304 send the head (with
-/// the representation's `Content-Length`) but no body, so a HEAD fallback to
-/// a GET route is correct on the wire. Everything else uses the ordinary
-/// framed writer.
-pub def Server.write_response_for (sock : FdStream) (method : Method) (closing : Bool) (res : Response) : IO Bool :=
-    if Bool.not (Wire.response_has_body method res.status)
-    then Server.write_response_head sock closing res
-    else Server.write_response sock closing res
-
-/// The head-only writer used by `write_response_for`. A streamed
-/// representation gets the chunked head (no body); everything else gets the
-/// representation's `Content-Length`.
-def Server.write_response_head (sock : FdStream) (closing : Bool) (res : Response) : IO Bool :=
-    if Body.is_stream res.body
-    then
-        match Wire.response_head_chunked (Server.with_connection_header closing res) {
-            Result.err _ => IO.pure false,
-            Result.ok head => do {
-                let _ <- Server.write_bytes sock head;
-                return (Bool.not closing)
-            }
-        }
-    else
-        match Wire.format_response_head (Server.with_connection_header closing res) {
-            Result.err _ => do {
-                Server.write_bytes sock (Server.canned_bytes Server.internal_error_response);
-                return false
-            },
-            Result.ok bytes => do {
-                Server.write_bytes sock bytes;
-                return (Bool.not closing)
-            }
-        }
+/// The configuration the old-API connection path serves with: the module
+/// constants the legacy reader enforced (`max_header_bytes`,
+/// `max_body_bytes`, `max_keep_alive_requests`) expressed as the
+/// `ServerConfig` the T machinery reads, with the same timeouts the
+/// static preview server gives a socket.
+pub def Server.legacy_config : ServerConfig :=
+    { ServerConfig.default with
+        max_header_bytes := Server.max_header_bytes,
+        max_header_count := Wire.max_header_count,
+        max_body_bytes := Server.max_body_bytes,
+        max_keep_alive := Server.max_keep_alive_requests }
 
 /// Serve one socket until it must end, starting from `carry` -- whatever the
 /// previous read left over -- with `served` counting the request about to be
@@ -371,26 +295,48 @@ def Server.write_response_head (sock : FdStream) (closing : Bool) (res : Respons
 /// and discarding them would silently drop it.
 #[terminating]
 pub def Server.serve_connection (handler : Request -> IO Response) (sock : FdStream) (carry : List U8) (served : I64) : IO Unit := do {
-    let msg_res <- Server.read_request sock carry;
-    match msg_res {
-        Result.err _ => do {
-            Server.send_error sock;
-            Stream.close sock
-        },
-        Result.ok msg =>
-            match msg {
-                Option.none => Stream.close sock,
+    let t : Transport := Transport.plain sock;
+    let msg <- Server.read_request_t Server.legacy_config t carry;
+    match msg {
+        Result.err e => Server.serve_sock_error t e,
+        Result.ok opt =>
+            match opt {
+                Option.none => Transport.close t,
                 Option.some pr =>
                     match pr {
-                        Pair.pair bytes rest => do {
-                            let keep : Bool <- Server.serve_one handler sock bytes served;
-                            if keep
-                            then Server.serve_connection handler sock rest (I64.add served 1)
-                            else Stream.close sock
-                        }
+                        Pair.pair req rest =>
+                            Server.serve_sock_framed handler sock t req rest served
                     }
             }
     }
+}
+
+/// Dispatch one parsed request on the old-API path and recurse: the same
+/// shape as `serve_framed_t`, with the plain handler dispatched directly
+/// (the old API's `Request -> IO Response` needs no `Ctx`). The socket is
+/// threaded alongside the transport so the loop can recurse without
+/// recovering it from the transport (the transport is always `plain`
+/// here, but matching it to fetch the fd back would be a promise the type
+/// does not make).
+#[terminating]
+def Server.serve_sock_framed (handler : Request -> IO Response) (sock : FdStream)
+    (t : Transport) (req : Request) (rest : List U8) (served : I64) : IO Unit := do {
+    let keep := Server.keep_alive req served;
+    let closing := Bool.not keep;
+    let res <- handler req;
+    let stay <- Server.write_response_for_t t req.method closing res;
+    if stay
+    then Server.serve_connection handler sock rest (I64.add served 1)
+    else Transport.close t
+}
+
+/// A read failure on the old-API path: the status-mapped error response the
+/// transformer server sends, then the connection ends. The caller closes.
+def Server.serve_sock_error (t : Transport) (e : String) : IO Unit := do {
+    let status := Server.error_status e;
+    let res : Response := Response.text status (Server.reason_of status);
+    let _ <- Transport.write_bytes t (Server.canned_bytes res);
+    Transport.close t
 }
 
 /// Read exactly one request, dispatch it, write the response, and close.
@@ -398,43 +344,49 @@ pub def Server.serve_connection (handler : Request -> IO Response) (sock : FdStr
 /// reads around it in the same thread, which terminates only because it stops
 /// after the one request. Anything pipelined after it is dropped with the
 /// socket; `Server.serve_connection` is the loop that keeps it.
+///
+/// The response keeps the request's own keep-alive framing (a HEAD on
+/// HTTP/1.1 answers without a `Connection: close` header, exactly as the
+/// loop would): the close that follows is this entry point's one-request
+/// contract, not a claim about the representation.
 pub def Server.handle_connection (handler : Request -> IO Response) (sock : FdStream) : IO Unit := do {
-    let msg_res <- Server.read_request sock List.empty;
-    match msg_res {
-        Result.err _ => do {
-            Server.send_error sock;
-            Stream.close sock
-        },
-        Result.ok msg =>
-            match msg {
-                Option.none => Stream.close sock,
+    let t : Transport := Transport.plain sock;
+    let msg <- Server.read_request_t Server.legacy_config t List.empty;
+    match msg {
+        Result.err e => Server.serve_sock_error t e,
+        Result.ok opt =>
+            match opt {
+                Option.none => Transport.close t,
                 Option.some pr =>
                     match pr {
-                        Pair.pair bytes _rest => do {
-                            let _keep <- Server.serve_one handler sock bytes 1;
-                            Stream.close sock
+                        Pair.pair req _rest => do {
+                            let closing := Bool.not (Server.keep_alive req 1);
+                            let res <- handler req;
+                            let _ <- Server.write_response_for_t t req.method closing res;
+                            Transport.close t
                         }
                     }
             }
     }
 }
 
-/// Write a 400 Bad Request. The caller closes: a malformed request ends the
-/// connection, so this always says so.
-def Server.send_error (sock : FdStream) : IO Unit := do {
-    Server.write_bytes sock (Server.canned_bytes Server.bad_request_response);
-    return unit
-}
-
 // ── serve loop ──────────────────────────────────────────────────────────
 
 /// Listen on `port` and serve connections forever. One connection at a
 /// time, kept alive across requests. Never returns.
+///
+/// A bind failure is reported on stderr before returning: a server that
+/// cannot listen has nothing to serve and no caller to tell, but a silent
+/// exit looks exactly like a clean one.
 #[terminating]
 pub def Server.serve (handler : Request -> IO Response) (port : U16) : IO Unit := do {
     let listen_res <- IO.tcp_listen port;
     match listen_res {
-        Result.err _ => return unit,
+        Result.err e => do {
+            let _ <- IO.write_stderr (String.concat "moon: cannot listen on port "
+                (String.concat (U16.to_string port) (String.concat ": " (String.concat e.message "\n"))));
+            return unit
+        },
         Result.ok listener => do {
             Server.serve_loop handler listener;
             Stream.close listener
@@ -529,9 +481,9 @@ pub def Server.run (cfg : ServerConfig) (handler : Request -> IO Response) : IO 
     match listen_res {
         Result.err e => return (Result.err e.message),
         Result.ok listener => do {
-            Server.serve_loop handler listener;
+            let served <- Server.serve_loop handler listener;
             Stream.close listener;
-            return (Result.ok unit)
+            return (served)
         }
     }
 }
@@ -548,11 +500,19 @@ pub def Server.start (cfg : ServerConfig) (handler : Request -> IO Response) : I
     match listen_res {
         Result.err e => return (Result.err e.message),
         Result.ok listener => do {
-            let fiber <- forkIO (fn (_ : Unit) => Server.serve_loop handler listener);
+            let fiber <- forkIO (fn (_ : Unit) => Server.serve_loop_result handler listener);
             let h : ServerHandle := { listener := listener, fiber := fiber };
             return (Result.ok h)
         }
     }
+}
+
+/// The start-fiber's body: the accept loop's result, discarded into `unit`
+/// so the fiber keeps its `Fiber Unit` shape (the failure is the loop's to
+/// report through `run`; a fiber that was shut down is not an error).
+def Server.serve_loop_result (handler : Request -> IO Response) (listener : FdStream) : IO Unit := do {
+    let _ <- Server.serve_loop handler listener;
+    return unit
 }
 
 /// Wait for the server's accept loop to stop. An `err` means the loop's
@@ -561,15 +521,19 @@ pub def Server.wait (h : ServerHandle) : IO (Result FiberError Unit) := await_fi
 
 pub def Server.shutdown (h : ServerHandle) : IO Unit := Stream.close h.listener
 
-/// Accept one connection, serve it to completion, then recurse. On an
-/// accept error the loop ends without closing the listener: `shutdown`
-/// (which closed or shut it down) owns that fd, and closing it here would be
-/// a second close of a number that may already have been reused.
+/// Accept one connection, serve it to completion, then recurse. An accept
+/// failure ENDS the loop and is reported to the caller (`run` returns it):
+/// EMFILE/ENFILE means no connection can be served until descriptors are
+/// released, and spinning on a failing accept would burn a core and bury the
+/// reason. The listener is not closed here: `shutdown` (which closed or shut
+/// it down) owns that fd, and closing it here would be a second close of a
+/// number that may already have been reused.
 #[terminating]
-def Server.serve_loop (handler : Request -> IO Response) (listener : FdStream) : IO Unit := do {
+def Server.serve_loop (handler : Request -> IO Response) (listener : FdStream) :
+    IO (Result String Unit) := do {
     let accept_res <- IO.tcp_accept listener;
     match accept_res {
-        Result.err _ => return unit,
+        Result.err e => return (Result.err e.message),
         Result.ok sock => do {
             Server.serve_connection handler sock List.empty 1;
             Server.serve_loop handler listener
@@ -584,8 +548,15 @@ def Server.serve_loop (handler : Request -> IO Response) (listener : FdStream) :
 /// (`static_files.mo`). Prefer constructing a `Static.handler` with a
 /// `StaticConfig` when you need an index file, cache policy or an exact
 /// root.
+///
+/// This per-request form creates a fresh ETag store on every call, so the
+/// ETag is hashed per request; a long-lived server should create one
+/// `Static.new_cache` and serve with `Static.handler_with` instead (the
+/// store is the difference between hashing a file once per version and
+/// once per request).
 pub def Server.static (root : String) (req : Request) : IO Response := do {
-    let r <- Static.handler (StaticConfig.default root) req;
+    let cache <- Static.new_cache;
+    let r <- Static.handler_with (StaticConfig.default root) cache req;
     match r {
         Result.ok res => return res,
         Result.err _ => return Server.internal_error_response
@@ -606,7 +577,8 @@ def Server.serve_static_loop (handler : Request -> IO Response) (listener : FdSt
     match accept_res {
         Result.err e => return (Result.err e.message),
         Result.ok sock => do {
-            let _ <- forkIO (fn (_ : Unit) => Server.serve_static_socket handler sock);
+            let f <- forkIO (fn (_ : Unit) => Server.serve_static_socket handler sock);
+            Server.reap_never_started "connection not served" sock f;
             Server.serve_static_loop handler listener
         }
     }
@@ -626,7 +598,10 @@ pub def Server.serve_static (cfg : StaticConfig) (host : String) (port : U16) : 
         Result.err e => return (Result.err e.message),
         Result.ok listener => do {
             IO.println (String.concat "moon static: serving " (String.concat cfg.root (String.concat " on http://" (String.concat host (String.concat ":" (String.concat (U16.to_string port) "/  (Ctrl-C to stop)"))))));
-            Server.serve_static_loop (Handler.try Server.internal_error_response (Static.handler cfg)) listener
+            // One ETag store for the whole server: a file is hashed once per
+            // version, not once per request.
+            let cache <- Static.new_cache;
+            Server.serve_static_loop (Handler.try Server.internal_error_response (Static.handler_with cfg cache)) listener
         }
     }
 }
@@ -643,6 +618,38 @@ pub def Server.serve_static (cfg : StaticConfig) (host : String) (port : U16) : 
 /// close. This is the entry point the connection-level tests use.
 def Server.handle_connection_fiber (handler : Request -> IO Response) (sock : FdStream) : IO (Fiber Unit) :=
     forkIO (fn _ => Server.handle_connection handler sock)
+
+// ── never-started fibers ────────────────────────────────────────────────
+//
+// `forkIO` can fail to create the thread (a thread-count or address-space
+// limit). The runtime publishes that as a fiber whose poll answers
+// `err never_started` IMMEDIATELY, so one poll right after the fork
+// distinguishes "never started" from "running": the socket the accept
+// handed over is reachable only from the fiber body, so a fiber that never
+// runs leaks it for the life of the process. A live fiber must NOT be
+// closed here -- its body owns the socket and closes it when it finishes.
+
+/// One poll after a fork: close `sock` when the fiber never started, and
+/// report the failure on stderr (the accept loop has no caller to return it
+/// to). A running or finished fiber is left alone.
+def Server.reap_never_started (what : String) (sock : FdStream) (f : Fiber Unit) : IO Unit := do {
+    let p <- pollFiber f;
+    match p {
+        Option.none => return unit,
+        Option.some r =>
+            match r {
+                Result.ok _ => return unit,
+                Result.err e =>
+                    match e {
+                        FiberError.never_started => do {
+                            let _ <- IO.write_stderr (String.concat "moon: " (String.concat what (String.concat ": " (String.concat (FiberError.message e) "\n"))));
+                            Stream.close sock
+                        },
+                        FiberError.cancelled => return unit
+                    }
+            }
+    }
+}
 
 /// Fork a fiber that serves a connection to completion, keeping it alive
 /// across requests. `serve_concurrent` uses this, not the one-request
@@ -680,7 +687,11 @@ def Server.report_fiber_error (r : Result FiberError Unit) : IO Unit :=
 pub def Server.serve_concurrent (handler : Request -> IO Response) (port : U16) (max_in_flight : I64) : IO Unit := do {
     let listen_res <- IO.tcp_listen port;
     match listen_res {
-        Result.err _ => return unit,
+        Result.err e => do {
+            let _ <- IO.write_stderr (String.concat "moon: cannot listen on port "
+                (String.concat (U16.to_string port) (String.concat ": " (String.concat e.message "\n"))));
+            return unit
+        },
         Result.ok listener => Server.serve_concurrent_loop handler listener max_in_flight 0 List.empty
     }
 }
@@ -1000,7 +1011,7 @@ def Server.read_request_t (cfg : ServerConfig) (t : Transport) (carry : List U8)
                 Option.some pr =>
                     match pr {
                         Pair.pair head rest =>
-                            match Wire.parse_request_head_strict head {
+                            match Wire.parse_request_head_strict_capped cfg.max_header_count head {
                                 Result.err e => IO.pure (Result.err e),
                                 Result.ok req =>
                                     match Wire.request_framing req.headers {
@@ -1270,8 +1281,31 @@ def Server.accept_fork (cfg : ServerConfig) (listener : FdStream)
     (handler : HandlerT IO Response) (t : Transport) : IO Unit := do {
     let fiber <- forkIO (fn (_ : Unit) =>
         Server.serve_connection_t cfg handler t List.empty 1i64);
+    Server.reap_never_started_transport t fiber;
     let _ <- Ref.update live (fn (xs : List (Fiber Unit)) => List.cons fiber xs);
     Server.accept_loop_with cfg listener stop live mk_transport handler
+}
+
+/// `reap_never_started` for a transport-backed connection: the never-started
+/// fiber's transport is closed (for the plain arm that is the socket's fd).
+def Server.reap_never_started_transport (t : Transport) (f : Fiber Unit) : IO Unit := do {
+    let p <- pollFiber f;
+    match p {
+        Option.none => return unit,
+        Option.some r =>
+            match r {
+                Result.ok _ => return unit,
+                Result.err e =>
+                    match e {
+                        FiberError.never_started => do {
+                            let _ <- IO.write_stderr (String.concat "moon: connection not served: "
+                                (String.concat (FiberError.message e) "\n"));
+                            Transport.close t
+                        },
+                        FiberError.cancelled => return unit
+                    }
+            }
+    }
 }
 
 #[terminating]

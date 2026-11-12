@@ -2,6 +2,7 @@
 /// snippet.
 
 use std::concurrent::combine {sleepIO}
+use std::list {List.any}
 use std::io {IO.write_file}
 use std::path {Path}
 use std::concurrent::fiber {cancel_fiber}
@@ -16,7 +17,8 @@ use http::types {
 }
 use moon::handler_t {HandlerT, HandlerT.pure_io, HandlerT.run_io, HttpError}
 use moon::live {
-    Live.dev_middleware_t, Live.names_batch_matters, Live.reload, Live.script, Live.watch,
+    Live.collect_files, Live.dev_middleware_t, Live.max_walk_depth,
+    Live.names_batch_matters, Live.reload, Live.script, Live.watch,
     Live.watch_files, Live.watch_tree,
 }
 
@@ -299,8 +301,57 @@ def live_pull_after_bump (body : Body) (version : Ref I64) : IO Bool := do {
     IO.pure (Bool.and first_ok second_ok)
 }
 
-/// An overflow on the fd-level queue (the single-file and explicit-set
-/// watchers) must bump too: events were lost, so anything could have changed.
+/// The walk has a depth cap: a tree deeper than `Live.max_walk_depth` has
+/// its tail skipped instead of recursing forever. The cap is what stops a
+/// symlink loop (`a -> .`) from hanging the polling watcher -- the loop
+/// makes the walk revisit the same directory at every level of the walk,
+/// so without a cap it never returns.
+///
+/// A 40-deep REAL tree pins the same behaviour without a loop (which would
+/// hang the test itself if the cap broke). Every level writes a file with a
+/// DIFFERENT name, so the "too deep" file is absent from the result for the
+/// cap's reason and not because two levels collided on one name.
+#[test]
+def test_collect_files_stops_at_depth_cap : IO Bool := do {
+    let dir := live_tmp "depth";
+    let _ <- exec_cmd "rm" ["-rf", dir];
+    let _ <- exec_cmd "mkdir" ["-p", dir];
+    let deep := String.concat dir "/deep";
+    let _ <- exec_cmd "mkdir" ["-p", deep];
+    // Level 0 under the walk root, then 39 deeper levels (d0/d1/...).
+    let _ <- IO.write_file (Path.path (String.concat deep "/level0.mo")) "x";
+    let _ <- build_depth deep 0i64 39i64;
+    let entries <- IO.list_dir (Path.path deep);
+    let files <- Live.collect_files entries List.empty 0 List.empty;
+    let _ <- exec_cmd "rm" ["-rf", dir];
+    // The cap is 32, so levels 0..30 are reachable (level k is k+1 dirs
+    // deep) and 38/39 are not.
+    IO.pure (Bool.and (paths_contain "/level0.mo" files)
+        (Bool.and (paths_contain "/level30.mo" files)
+            (Bool.not (paths_contain "/level39.mo" files))))
+}
+
+/// Whether any collected path names `suffix` (a path tail: `/level39.mo`).
+/// The walk returns full paths, so a tail is what identifies a level -- a
+/// file at level `k` sits `k+1` directories below the walk's root.
+def paths_contain (suffix : String) (files : List Path) : Bool :=
+    List.any (fn (p : Path) => String.ends_with (Path.to_string p) suffix) files
+
+/// Build `n` nested `dK`-numbered directories under `dir`, each holding a
+/// uniquely named watched file (`levelK.mo`), so level `k`'s file sits `k+1`
+/// directories below the walk's root.
+#[terminating]
+def build_depth (dir : String) (k : I64) (n : I64) : IO Unit :=
+    if I64.lt n 1i64
+    then IO.pure Unit.unit
+    else do {
+        let child := String.concat dir (String.concat "/d" (I64.to_string k));
+        let _ <- exec_cmd "mkdir" ["-p", child];
+        let name := String.concat "/level" (String.concat (I64.to_string (I64.add k 1i64)) ".mo");
+        let _ <- IO.write_file (Path.path (String.concat child name)) "x";
+        build_depth child (I64.add k 1i64) (I64.sub n 1i64)
+    }
+
 #[test]
 def test_names_batch_matters_on_overflow : Bool :=
     let e : WatchEvent := { watch := 0 - 1, mask := 0x4000, cookie := 0, name := "" } in

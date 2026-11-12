@@ -13,7 +13,7 @@ use moon::handler_t {
     HttpError, HttpError.make,
 }
 use moon::middleware_t {
-    CorsConfig, CorsConfig.allow_origin, CorsConfig.default,
+    CorsConfig, CorsConfig.allow_origin, CorsConfig.default, CorsConfig.validate,
     MiddlewareT.auth_basic_ct, MiddlewareT.auth_bearer_ct, MiddlewareT.content_type,
     MiddlewareT.cors, MiddlewareT.cors_with, MiddlewareT.map_response,
     MiddlewareT.recover,
@@ -203,6 +203,50 @@ def test_mt_cors_with_preflight : IO Bool := do {
                 (match Headers.get "Access-Control-Allow-Methods" res.headers {
                     Option.some v => String.contains v "POST",
                     Option.none => false
+                })),
+        Result.err _ => IO.pure false
+    }
+}
+
+/// The credentialed wildcard (`any_origin` + `allow_credentials`) is the
+/// one policy the spec forbids: `validate` refuses it by name, and a sound
+/// policy passes through unchanged.
+#[test]
+def test_mt_cors_validate_rejects_credentialed_wildcard : IO Bool := do {
+    let bad : CorsConfig := { CorsConfig.default with
+        any_origin := true, allow_credentials := true };
+    let good : CorsConfig :=
+        CorsConfig.allow_origin "https://app.example" CorsConfig.default;
+    match CorsConfig.validate bad {
+        Result.err _ =>
+            match CorsConfig.validate good {
+                Result.ok _ => IO.pure true,
+                Result.err _ => IO.pure false
+            },
+        Result.ok _ => IO.pure false
+    }
+}
+
+/// `cors_with` fails closed on the credentialed wildcard: its type has no
+/// error channel, so the invalid policy grants nothing -- the request
+/// still runs, but no CORS headers are sent.
+#[test]
+def test_mt_cors_with_wildcard_credentials_fail_closed : IO Bool := do {
+    let cfg : CorsConfig := { CorsConfig.default with
+        any_origin := true, allow_credentials := true };
+    let h := MiddlewareT.cors_with cfg ok_handler;
+    let req := with_header "Origin" "https://evil.example" (get_req "/");
+    let r <- HandlerT.run_io h req;
+    match r {
+        Result.ok res =>
+            IO.pure (Bool.and
+                (match Headers.get "Access-Control-Allow-Origin" res.headers {
+                    Option.some _ => false,
+                    Option.none => true
+                })
+                (match Headers.get "Access-Control-Allow-Credentials" res.headers {
+                    Option.some _ => false,
+                    Option.none => true
                 })),
         Result.err _ => IO.pure false
     }
