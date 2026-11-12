@@ -34,6 +34,26 @@ pub def table_get {A : Type} (t : RxTable A) (i : I64) (fallback : A) : A :=
         RxTable.mk chunks _ => Array.get_or (Array.get_or chunks (I64.shr i 6) Array.empty) (I64.and i 63) fallback,
     }
 
+/// `t` with element `i` replaced: one chunk and the outer array are
+/// copied. Out of range, `t` is returned unchanged.
+pub def table_set {A : Type} (t : RxTable A) (i : I64) (v : A) : RxTable A :=
+    match t {
+        RxTable.mk chunks len =>
+            if I64.lt i 0 || I64.lt (len - 1) i then RxTable.mk chunks len
+            else
+                let ci : I64 := I64.shr i 6 in
+                RxTable.mk (Array.set chunks ci (Array.set (Array.get_or chunks ci Array.empty) (I64.and i 63) v)) len,
+    }
+
+/// `t` with `v` appended.
+pub def table_push {A : Type} (t : RxTable A) (v : A) : RxTable A :=
+    match t {
+        RxTable.mk chunks len =>
+            let ci : I64 := I64.shr len 6 in
+            if I64.beq (I64.and len 63) 0 then RxTable.mk (Array.push chunks (Array.new 1 v)) (len + 1)
+            else RxTable.mk (Array.set chunks ci (Array.push (Array.get_or chunks ci Array.empty) v)) (len + 1),
+    }
+
 pub def table_len {A : Type} (t : RxTable A) : I64 :=
     match t {
         RxTable.mk _ len => len,

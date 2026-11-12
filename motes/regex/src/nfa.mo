@@ -12,7 +12,8 @@
 use lib::hir {RxHir, RxLook}
 use lib::utf8 {class_utf8_sequences}
 use lib::table {RxTable, table_of_list}
-use std::list {List.sort_by}
+use std::array {Array}
+use std::list {}
 
 /// One byte-range transition.
 pub struct RxTrans {
@@ -42,6 +43,10 @@ pub struct RxProg {
     slots : I64,
     /// Whether any state is a Unicode word-boundary look.
     needs_word : Bool,
+    /// Byte equivalence classes: byte -> class id. Bytes no transition
+    /// tells apart share a class; the lazy DFA indexes transitions by it.
+    classes : Array I64,
+    nclasses : I64,
 }
 
 struct RxB {
@@ -89,6 +94,50 @@ def cap (n : I64) (limit : I64) : I64 := if I64.lt limit n then limit + 1 else n
 def mul_cap (a : I64) (b : I64) (limit : I64) : I64 :=
     if I64.lt 0 a && I64.lt (I64.div (limit + 1) a) b then limit + 1 else a * b
 
+// ─── Byte equivalence classes ───
+
+/// A 257-bit set (5 words): bit `b` marks that a class starts at byte `b`.
+def mark (words : Array I64) (b : I64) : Array I64 :=
+    let wi : I64 := I64.shr b 6 in
+    Array.set words wi (I64.or (Array.get_or words wi 0) (I64.shl 1 (I64.and b 63)))
+
+def marked (words : Array I64) (b : I64) : Bool :=
+    Bool.not (I64.beq (I64.and (Array.get_or words (I64.shr b 6) 0) (I64.shl 1 (I64.and b 63))) 0)
+
+/// Every range starts a class at `lo` and ends one after `hi`.
+#[terminating]
+def mark_states (states : List RxState) (words : Array I64) : Array I64 :=
+    match states {
+        List.empty => words,
+        List.cons st rest =>
+            match st {
+                RxState.byte_range lo hi _ => mark_states rest (mark (mark words lo) (hi + 1)),
+                RxState.sparse ts => mark_states rest (mark_trans ts words),
+                _ => mark_states rest words,
+            },
+    }
+
+#[terminating]
+def mark_trans (ts : List RxTrans) (words : Array I64) : Array I64 :=
+    match ts {
+        List.empty => words,
+        List.cons t rest => mark_trans rest (mark (mark words t.lo) (t.hi + 1)),
+    }
+
+/// The class id of every byte, newest (byte 255) first.
+#[terminating]
+def class_ids (words : Array I64) (b : I64) (id : I64) (acc : List I64) : List I64 :=
+    if I64.lt b 256 then
+        let nid : I64 := if I64.lt 0 b && marked words b then id + 1 else id in
+        class_ids words (b + 1) nid (List.cons nid acc)
+    else acc
+
+def last_or_zero (xs : List I64) : I64 :=
+    match xs {
+        List.cons x _ => x,
+        List.empty => 0,
+    }
+
 // ─── Compilation ───
 
 /// The whole program: capture slot 0, the pattern, slot 1, accept.
@@ -108,16 +157,57 @@ pub def compile_prog (h : RxHir) (captures : I64) : RxProg :=
     }
 
 def freeze (b : RxB) (start : I64) (captures : I64) : RxProg :=
-    let sorted : List (Pair I64 RxState) := List.sort_by def_lt b.defs in
+    let sorted : List (Pair I64 RxState) := sort_defs b.defs in
+    let states : List RxState := List.map (fn (d : Pair I64 RxState) => d.second) sorted in
+    let classes : List I64 := class_ids (mark_states states (Array.new 5 0)) 0 0 List.empty in
     {
-        states := table_of_list (List.map (fn (d : Pair I64 RxState) => d.second) sorted),
+        states := table_of_list states,
         start := start,
         len := b.next_id,
         slots := 2 * (captures + 1),
         needs_word := b.needs_word,
+        classes := Array.from_list (List.reverse classes),
+        nclasses := last_or_zero classes + 1,
     }
 
-def def_lt (a : Pair I64 RxState) (b : Pair I64 RxState) : Bool := I64.lt a.first b.first
+// ─── Sorting definitions ───
+
+/// A bottom-up merge sort by id: `List.sort_by` is an insertion sort, and
+/// the newest-first definitions are its quadratic worst case.
+def sort_defs (defs : List (Pair I64 RxState)) : List (Pair I64 RxState) :=
+    merge_rounds (List.map (fn (d : Pair I64 RxState) => [d]) defs)
+
+/// Each round halves the number of runs.
+#[terminating]
+def merge_rounds (runs : List (List (Pair I64 RxState))) : List (Pair I64 RxState) :=
+    match runs {
+        List.empty => List.empty,
+        List.cons r rest => if List.is_empty rest then r else merge_rounds (merge_pairs runs List.empty),
+    }
+
+#[terminating]
+def merge_pairs (runs : List (List (Pair I64 RxState))) (acc : List (List (Pair I64 RxState))) : List (List (Pair I64 RxState)) :=
+    match runs {
+        List.empty => List.reverse acc,
+        List.cons a rest =>
+            match rest {
+                List.cons b more => merge_pairs more (List.cons (List.reverse (merge a b List.empty)) acc),
+                List.empty => List.reverse (List.cons a acc),
+            },
+    }
+
+/// Newest first; the measure is the two lists' total length.
+#[terminating]
+def merge (a : List (Pair I64 RxState)) (b : List (Pair I64 RxState)) (acc : List (Pair I64 RxState)) : List (Pair I64 RxState) :=
+    match a {
+        List.empty => List.append (List.reverse b) acc,
+        List.cons x xs =>
+            match b {
+                List.empty => List.append (List.reverse a) acc,
+                List.cons y ys =>
+                    if I64.lt y.first x.first then merge a ys (List.cons y acc) else merge xs b (List.cons x acc),
+            },
+    }
 
 #[terminating]
 def compile (h : RxHir) (next : I64) (b : RxB) : Pair I64 RxB :=
