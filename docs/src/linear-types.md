@@ -199,7 +199,7 @@ Two caveats matter. **Freeing is opt-in and narrow.** Codegen still emits no
 so the GC described in
 [Compiling and Running](./compiling.md#memory) remains the default and is not
 going anywhere yet. A build with `MONAD_OWNERSHIP=1` instead allocates
-monomorphic, non-`Copy` constructors with `malloc` and frees them with
+monomorphic, non-`Copy` constructors with `calloc` and frees them with
 generated `drop_<T>` glue at a definition's exits — but only for binders that
 are completely unused, which is what makes the drop sound before a full move
 analysis exists. Closures, generic data (`List A`) and anything reachable from

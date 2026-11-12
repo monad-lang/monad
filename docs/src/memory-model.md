@@ -9,8 +9,9 @@ That is the destination. This chapter describes the model as it is designed,
 says plainly what is implemented today, and points at the limitations.
 
 > [!IMPORTANT]
-> **The default build still uses a garbage collector.** Compiled binaries link
-> the Boehm conservative collector. A `MONAD_OWNERSHIP=1` build is the first
+> **The default build still uses a garbage collector.** Native binaries link
+> the Boehm conservative collector (the WASI and web profiles use allocators
+> with no collector). A `MONAD_OWNERSHIP=1` build is the first
 > real step away from it: it frees a narrow class of constructors with
 > generated drop glue. The region allocator is designed but not yet
 > implemented. See [Linear Types](./linear-types.md) and
@@ -22,14 +23,16 @@ Every run-time value belongs to one class.
 
 | Class | What it is | Who frees it | Examples |
 |---|---|---|---|
-| **Owned** | An affine value with no aliases | Type-directed drop glue at its last use | A monomorphic inductive such as `Box` or `Pair I64 I64` |
+| **Owned** | An affine value with no aliases | Type-directed drop glue at the end of its definition (v1: unused binders only) | A monomorphic user inductive with no nullary constructor (e.g. the `OwnedBox` fixture type) |
 | **Region** | A value that may be shared, copied, cyclic, or stored in a container | The region, all at once, at region exit | `String`, `ByteBuf`, `Ref`, `Array`, `Shared`, `List`, `Option`, `Result`, `IO`, and anything containing one |
 | **Static** | A value that lives for the process | Never | String literals, nullary constructors, `argv` |
 
 The class is decided from the **type**, not from an allocation site. It is a
-whole-program property: if a Region value can contain a type, that type is
-Region too, because the Region value is never freed individually and must not
-point at something that was.
+whole-program property in both directions: a type that a Region value can
+contain is Region, because the Region value is never freed individually and
+must not point at something that was; and a type that can contain a Region
+value is Region too, because an Owned cell is not scanned by the collector and
+would hide the pointer.
 
 ## What a value looks like
 
@@ -51,8 +54,9 @@ Two consequences matter for safety:
 
 Binders are affine by default: an unannotated binder may be used **at most
 once**, unless its type has a `Copy` instance. `Copy` is the only route to
-unrestricted use. `Clone` is the explicit deep-copy operation and is never
-inserted by the compiler.
+unrestricted use. `Clone` is the explicit copy operation and is never inserted
+by the compiler; each instance decides what a copy means (`Clone String`
+shares its bytes).
 
 ```monad
 def sum_twice (x : I64) : I64 := x + x      // ok: I64 is Copy
@@ -70,8 +74,8 @@ Full rules, annotations and diagnostics are in [Linear Types](./linear-types.md)
 
 `Shared A` is a `Copy` handle that names a value without owning it.
 `Shared.get` yields a **view** of the payload. A view may be read, matched,
-called, or passed to another `Shared` parameter; it may not be stored, returned,
-or passed where an owner is expected.
+called, or passed to another `Shared` parameter; it may not be stored or
+returned. Passing it where an owner is expected is not rejected yet (gap #12).
 
 A `Shared` handle answers "how do many readers reach one value?" It does not
 answer "how long does the value live?" Today the collector keeps the payload
@@ -89,9 +93,10 @@ or refcount traffic. The v1 handles are:
   `take` moves the value out and returns an empty slot, `fill` moves one in, and
   a full slot must be taken before it can be freed.
 
-Neither handle has a `Copy` or `Clone` instance. Every operation consumes and
-returns the handle, so a use-after-free or double-free would require
-duplicating a handle — which the affine rule rejects.
+Neither handle has a `Copy` or `Clone` instance. Every mutating operation
+consumes the handle, and `get`/`set`/`take`/`fill` return the new one, so a
+use-after-free or double-free would require duplicating a handle — which the
+affine rule rejects.
 
 ```monad
 use init::view {Cell}
@@ -120,11 +125,13 @@ designed but waits on value-dependent type constructors (`Vec n A`).
 ## Freeing today
 
 A `MONAD_OWNERSHIP=1` build routes a narrow class of constructors through
-`calloc`/`free` and emits a `drop_<T>` function for each: it switches on the
-constructor tag, drops owned fields, skips `Copy` and region values, and frees
-the cell. Drops are planned for unused binders only, and only for a `let`
-whose value is a freshly allocated constructor. This is deliberately
-fail-closed: an unprovable definition emits no drop and leaks.
+`calloc`/`free` and emits a `drop_<T>` function for each Owned type: it
+switches on the constructor tag, drops owned fields, skips `Copy` and region
+values, and frees the cell. Drops are planned for unused binders only: a
+parameter whose declared type resolves to an Owned type, or a `let` whose
+initializer is a freshly allocated Owned constructor. A `let` bound to a call
+or a variable is not dropped. This is deliberately fail-closed: an unprovable
+definition emits no drop and leaks.
 
 Everything else stays with the collector. A `MONAD_OWNERSHIP=poison` build
 fills freed cells with `0xDE` instead of returning them, so a use-after-free
@@ -146,8 +153,10 @@ over pages, freed all at once when a region ends. Three regions are planned:
 Copying out needs a compiler-generated `Transfer` dictionary, because the
 runtime cannot deep-copy an untyped value. `Transfer String` copies the bytes
 (unlike `Clone String`, which shares the pointer). A type with no `Transfer`
-instance cannot escape a region — that compile-time rejection is the escape
-gate.
+instance cannot be returned from `Region.with` — that compile-time rejection
+is the escape gate. A write through a `Ref`, `Array` or `Channel` takes the
+conservative route instead: the current region is adopted into its parent and
+never freed, so the write cannot dangle.
 
 ```monad,ignore
 // Planned surface (not implemented).
