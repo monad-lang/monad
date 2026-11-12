@@ -22,7 +22,10 @@ use lib::highlight {Highlight.lex, Highlight.style, Highlight.segments,
 use tui::types {TextStyle, TextSegment}
 use tui::core {style_default}
 use std::ansi {Color}
-use std::list {List.length}
+// `List.length` lives in `init/src/list.mo` (ambient and pure) as of the
+// upstream move, so this import pulls the module's INSTANCES into scope
+// and names nothing -- the empty brace list is the documented form.
+use std::list {}
 use init::shared {Shared}
 
 // --- Accessors: one read per binding, each used once ---

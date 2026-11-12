@@ -15,7 +15,10 @@ use lib::selection {Selection.span, Selection.start, Selection.stop, Selection.i
     Selection.map_through, Selection.map_through_changes, Selections.map_through_changes,
     Selections.cursor, Selections.primary_sel, Selections.collapse}
 use init::shared {Shared}
-use std::list {List.length}
+// `List.length` lives in `init/src/list.mo` (ambient and pure) as of the
+// upstream move, so this import pulls the module's INSTANCES into scope
+// and names nothing -- the empty brace list is the documented form.
+use std::list {}
 use lib::instances {}
 
 // --- Accessors: one read per binding, each used once ---

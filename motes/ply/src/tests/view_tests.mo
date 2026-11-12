@@ -38,7 +38,10 @@ use tui::types {Screen, Cell, TextStyle, TextSegment, Key}
 use tui::core {mk_screen, mk_rect, screen_get_cell, style_default}
 use tui::render {render}
 use std::ansi {Color}
-use std::list {List.length}
+// `List.length` lives in `init/src/list.mo` (ambient and pure) as of the
+// upstream move, so this import pulls the module's INSTANCES into scope
+// and names nothing -- the empty brace list is the documented form.
+use std::list {}
 use init::shared {Shared}
 
 // --- Builders ---

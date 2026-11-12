@@ -25,7 +25,10 @@ use lib::model {Document, Document.of_text, Document.with_path, Document.dirty,
 use lib::commands {update}
 use tui::types {Key}
 use tui::tui {Cmd}
-use std::list {List.length}
+// `List.length` lives in `init/src/list.mo` (ambient and pure) as of the
+// upstream move, so this import pulls the module's INSTANCES into scope
+// and names nothing -- the empty brace list is the documented form.
+use std::list {}
 use std::process {exec_cmd, process_id}
 use std::stream {StreamError}
 use lib::instances {}

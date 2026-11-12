@@ -19,7 +19,10 @@ use lib::rope {Rope.to_string}
 use lib::selection {Selections.primary_sel, Selection.start, Selection.stop}
 use lib::commands {update}
 use tui::types {Key}
-use std::list {List.length}
+// `List.length` lives in `init/src/list.mo` (ambient and pure) as of the
+// upstream move, so this import pulls the module's INSTANCES into scope
+// and names nothing -- the empty brace list is the documented form.
+use std::list {}
 use init::shared {Shared}
 use lib::instances {}
 
