@@ -269,7 +269,7 @@ def lex_string (cfg : LanguageConfig) (bytes : List U8) : List Token :=
     let shared : Shared (List U8) := Shared.of bytes in
     let r : Pair String (List U8) :=
         string_body cfg.string_quotes (byte_tail (Shared.get shared))
-            (String.from_list [List.head_or (Shared.get shared) 0x20u8]) false in
+            (List.cons (List.head_or (Shared.get shared) 0x20u8) List.empty) false in
     match r {
         Pair.pair text rest =>
             // The tail is the line AFTER the closing quote, and it still
@@ -287,19 +287,21 @@ def lex_string (cfg : LanguageConfig) (bytes : List U8) : List Token :=
 /// config is affine and a nested def would capture it, so the scanner
 /// threads the one field it needs.
 #[partial]
-def string_body (quotes : List String) (bytes : List U8) (acc : String) (escaped : Bool)
+def string_body (quotes : List String) (bytes : List U8) (acc : List U8) (escaped : Bool)
     : Pair String (List U8) :=
     let shared : Shared (List String) := Shared.of quotes in
     match bytes {
-        List.empty => Pair.pair acc List.empty,
+        List.empty => Pair.pair (bytes_to_string (List.reverse acc)) List.empty,
         List.cons b rest =>
             if escaped
-            then string_body (Shared.get shared) rest (acc ++ String.from_list [b]) false
+            then string_body (Shared.get shared) rest (List.cons b acc) false
+            // A backslash is pushed as itself: the accumulator is bytes, and
+            // 0x5c is the byte the escaped branch above will re-read.
             else if U8.beq b 92u8
-            then string_body (Shared.get shared) rest (acc ++ "\\") true
+            then string_body (Shared.get shared) rest (List.cons b acc) true
             else if quote_list_has (Shared.get shared) b
-            then Pair.pair (acc ++ String.from_list [b]) rest
-            else string_body (Shared.get shared) rest (acc ++ String.from_list [b]) false
+            then Pair.pair (bytes_to_string (List.reverse (List.cons b acc))) rest
+            else string_body (Shared.get shared) rest (List.cons b acc) false
     }
 
 /// The number token: digits (and `.` inside the run) through the last
@@ -307,7 +309,7 @@ def string_body (quotes : List String) (bytes : List U8) (acc : String) (escaped
 /// mislex.
 #[partial]
 def lex_number (cfg : LanguageConfig) (bytes : List U8) : List Token :=
-    let r : Pair String (List U8) := number_body bytes "" in
+    let r : Pair String (List U8) := number_body bytes List.empty in
     match r {
         Pair.pair text rest =>
             List.cons (Token.mk text TokenKind.number) (lex_go cfg rest)
@@ -317,20 +319,20 @@ def lex_number (cfg : LanguageConfig) (bytes : List U8) : List Token :=
 /// (`b` is `Copy`, `rest` is unread) instead of re-reading `bytes`,
 /// which keeps the byte list single-use.
 #[partial]
-def number_body (bytes : List U8) (acc : String) : Pair String (List U8) :=
+def number_body (bytes : List U8) (acc : List U8) : Pair String (List U8) :=
     match bytes {
-        List.empty => Pair.pair acc List.empty,
+        List.empty => Pair.pair (bytes_to_string (List.reverse acc)) List.empty,
         List.cons b rest =>
             if Bool.or (digit b) (U8.beq b 46u8)
-            then number_body rest (acc ++ String.from_list [b])
-            else Pair.pair acc (List.cons b rest)
+            then number_body rest (List.cons b acc)
+            else Pair.pair (bytes_to_string (List.reverse acc)) (List.cons b rest)
     }
 
 /// The word token: word bytes through the last one, then classified
 /// (a `keywords` whole-word lookup).
 #[partial]
 def lex_word (cfg : LanguageConfig) (bytes : List U8) : List Token :=
-    let r : Pair String (List U8) := word_body bytes "" in
+    let r : Pair String (List U8) := word_body bytes List.empty in
     match r {
         Pair.pair text rest =>
             List.cons (word_token cfg text) (lex_go cfg rest)
@@ -348,20 +350,20 @@ def word_token (cfg : LanguageConfig) (text : String) : Token :=
 /// Word bytes: letters, digits, underscore and everything above 0x7f
 /// (a UTF-8 lead or continuation byte -- never split).
 #[partial]
-def word_body (bytes : List U8) (acc : String) : Pair String (List U8) :=
+def word_body (bytes : List U8) (acc : List U8) : Pair String (List U8) :=
     match bytes {
-        List.empty => Pair.pair acc List.empty,
+        List.empty => Pair.pair (bytes_to_string (List.reverse acc)) List.empty,
         List.cons b rest =>
             if word_byte b
-            then word_body rest (acc ++ String.from_list [b])
-            else Pair.pair acc (List.cons b rest)
+            then word_body rest (List.cons b acc)
+            else Pair.pair (bytes_to_string (List.reverse acc)) (List.cons b rest)
     }
 
 /// The plain run: bytes that are not the start of any other class,
 /// through the last consecutive such byte (spaces, punctuation).
 #[partial]
 def lex_plain (cfg : LanguageConfig) (bytes : List U8) : List Token :=
-    let r : Pair String (List U8) := plain_body cfg bytes "" in
+    let r : Pair String (List U8) := plain_body cfg bytes List.empty in
     match r {
         Pair.pair text rest =>
             List.cons (Token.mk text TokenKind.plain) (lex_go cfg rest)
@@ -377,15 +379,15 @@ def lex_plain (cfg : LanguageConfig) (bytes : List U8) : List Token :=
 /// but ": " is two. `plain_kind` names the byte's kind, and the run
 /// continues only while the next byte's kind equals the head's.
 #[partial]
-def plain_body (cfg : LanguageConfig) (bytes : List U8) (acc : String) : Pair String (List U8) :=
+def plain_body (cfg : LanguageConfig) (bytes : List U8) (acc : List U8) : Pair String (List U8) :=
     let shared : Shared (List U8) := Shared.of bytes in
     match bytes {
-        List.empty => Pair.pair acc List.empty,
+        List.empty => Pair.pair (bytes_to_string (List.reverse acc)) List.empty,
         List.cons b rest =>
             if Bool.or
                 (Bool.or (prefix_at cfg.line_comment (Shared.get shared)) (quote_at cfg b))
                 (Bool.or (Bool.and cfg.numbers (digit b)) (word_byte b))
-            then Pair.pair acc (List.cons b rest)
+            then Pair.pair (bytes_to_string (List.reverse acc)) (List.cons b rest)
             else plain_run_on cfg (Shared.get shared) b rest acc
     }
 
@@ -394,16 +396,17 @@ def plain_body (cfg : LanguageConfig) (bytes : List U8) (acc : String) : Pair St
 /// punctuation character -- and stop at any other byte.
 #[partial]
 def plain_run_on (cfg : LanguageConfig) (bytes : List U8) (head : U8) (tail : List U8)
-    (acc : String) : Pair String (List U8) :=
+    (acc : List U8) : Pair String (List U8) :=
     // The tail is read twice (the stop's return, the run's recursion),
     // so it shares one handle -- a `List` is deliberately not `Copy`.
     let shared : Shared (List U8) := Shared.of tail in
+    let grown : List U8 := List.cons head acc in
     match (Shared.get shared) {
-        List.empty => Pair.pair (acc ++ String.from_list [head]) List.empty,
+        List.empty => Pair.pair (bytes_to_string (List.reverse grown)) List.empty,
         List.cons b rest =>
             if Bool.not (plain_same_kind head b)
-            then Pair.pair (acc ++ String.from_list [head]) (Shared.get shared)
-            else plain_body cfg (Shared.get shared) (acc ++ String.from_list [head])
+            then Pair.pair (bytes_to_string (List.reverse grown)) (Shared.get shared)
+            else plain_body cfg (Shared.get shared) grown
     }
 
 /// Two plain bytes are the same kind: both spaces, or the same byte.

@@ -12,6 +12,7 @@
 // struct-field codegen hazard. The `rp_` prefix is collision-avoiding:
 // whole-program scope is shared with every other mote's tests.
 
+use std::io {IO.current_time}
 use init::shared {Shared}
 use lib::types {Rope}
 use lib::rope {Rope.bytes, Rope.of_string, Rope.to_string, Rope.slice, Rope.split_at,
@@ -78,6 +79,66 @@ def test_roundtrip_one_mib : Bool :=
     I64.beq (rp_bytes r) 1048576 && String.beq (Rope.to_string r) big
 
 // ── Chunking: the UTF-8-splits-never rule ────────────────────────────────
+
+/// CHUNKING IS LINEAR IN THE TEXT, not quadratic.
+///
+/// `Rope.of_string`'s chunker scans each chunk for a newline to cut on, and
+/// it used to probe every byte with `String.get`, whose compiled general
+/// path calls `monad_string_length` -- a full `strlen` -- per call. One
+/// chunk therefore cost O(chunk x strlen(whole tail)), so the whole
+/// conversion was O(n^2): measured on the built binary, a 638 KB file spent
+/// 14.5 s inside `Rope.of_string`, which was the ENTIRE cost of opening it.
+///
+/// The assertion is a RATIO, not a wall-clock bound -- a millisecond
+/// threshold would be flaky on a loaded machine. Two sizes 8x apart should
+/// cost about 8x if linear and about 64x if quadratic; the bound is 32, so
+/// only a real complexity change trips it.
+#[test]
+def test_of_string_is_linear_not_quadratic : IO Bool := do {
+    let _ <- rp_warm;
+    let small : String := rp_block 8000;
+    let large : String := rp_block 64000;
+    let t1 <- IO.current_time;
+    let one : Rope := Rope.of_string small;
+    let t2 <- IO.current_time;
+    let big : Rope := Rope.of_string large;
+    let t3 <- IO.current_time;
+    let correct : Bool :=
+        Bool.and (I64.beq (rp_bytes one) 8000) (I64.beq (rp_bytes big) 64000);
+    let grew : Bool := rp_linear_enough (rp_elapsed t1 t2) (rp_elapsed t2 t3);
+    return (Bool.and correct grew)
+}
+
+/// The elapsed milliseconds between two `IO.current_time` readings, floored
+/// at 1 so the ratio below stays meaningful for a sub-millisecond
+/// measurement -- a floor can only make the assertion STRICTER.
+///
+/// A separate def, not an inline `let ... := if ... in` in the test body: a
+/// pure `let ... in` inside a do-block is a recorded self-hosted load
+/// failure when the block also has `let ... <-` binds.
+def rp_elapsed (a : I64) (b : I64) : I64 :=
+    let d : I64 := b - a in
+    if d < 1 then 1 else d
+
+/// Is `big` under 32x `small`? Two sizes 8x apart cost ~8x when linear and
+/// ~64x when quadratic, so 32 separates them with room for noise either way.
+def rp_linear_enough (small_ms : I64) (big_ms : I64) : Bool :=
+    big_ms < small_ms * 32
+
+/// One warm-up conversion, so the first timed call does not pay for
+/// anything allocated lazily on the way.
+def rp_warm : IO Unit := do {
+    let _r : Rope := Rope.of_string (rp_block 500);
+    return unit
+}
+
+/// `n` bytes of newline-free ASCII. No newline means the chunker takes its
+/// plain-boundary path every time, which is the shape that scanned
+/// furthest. Built right-nested so the fixture itself is not the quadratic
+/// part of the measurement.
+#[terminating]
+def rp_block (n : I64) : String :=
+    if Bool.not (0 < n) then "" else String.concat "x" (rp_block (n - 1))
 
 /// A string over the chunk target is more than one leaf; under it, one.
 /// This is the precondition the multi-byte round-trips below only mean

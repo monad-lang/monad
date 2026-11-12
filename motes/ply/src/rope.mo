@@ -138,48 +138,104 @@ def rope_chunks_go (s : String) (from : I64) (n : I64) : List String :=
 def rope_chunk_emit (s : String) (from : I64) (n : I64) (cut : I64) : List String :=
     List.cons (String.slice s from (cut - from)) (rope_chunks_go s cut (n - (cut - from)))
 
+// ── Byte scans: ONE decode per bounded window ────────────────────────────
+//
+// `String.get`'s compiled path asks `monad_string_length` for its bounds
+// check, and that is a `strlen` over the WHOLE string -- so probing byte `i`
+// costs O(tail), not O(1), and a loop that probes every byte of every chunk
+// is O(n^2) over the file. Measured, this chunker spent 14.5 s inside
+// `Rope.of_string` on a 638 KB file, which was the entire cost of opening
+// it. `String.drop`/`String.slice` are no better as a loop primitive: each
+// one re-walks to its offset, so dropping an ever-larger prefix is
+// quadratic again.
+//
+// So each scan does ONE `String.to_list` over a window bounded to two
+// chunks, and then walks the LIST -- one strlen and one pass, whatever the
+// window's contents. `Rope.chunk_bytes` is 1 KiB, so the window is at most
+// 2 KiB and the whole conversion is linear in the file.
+
+/// A window of `s` starting at `from`, at most `want` bytes -- the bounded
+/// input every scan below works on. Sliced ONCE per scan.
+def rope_window (s : String) (from : I64) (want : I64) : String :=
+    String.slice s from (min_i64 want Rope.chunk_bytes)
+
+/// `rope_window` stated over an absolute stop, for the newline scan.
+def rope_window_abs (s : String) (from : I64) (stop : I64) : String :=
+    rope_window s from (stop - from)
+
 /// The first character boundary at or after `target`, if any byte exists
 /// there. `target - from` bytes of lookahead is bounded by the tail length.
-#[terminating]
 def rope_boundary_from (s : String) (from : I64) (target : I64) (n : I64) : Option I64 :=
-    rope_boundary_go s (max_i64 from target) (from + n)
-
-#[terminating]
-def rope_boundary_go (s : String) (i : I64) (stop : I64) : Option I64 :=
-    if Bool.not (i < stop)
+    let start : I64 := max_i64 from target in
+    let stop : I64 := from + n in
+    if Bool.not (start < stop)
     then Option.none
-    else if rope_char_boundary s i then Option.some i else rope_boundary_go s (i + 1) stop
+    else
+        let window : String := rope_window s start (stop - start) in
+        match rope_boundary_go (String.to_list window) 0 (String.length window) {
+            Option.some i => Option.some (start + i),
+            Option.none => Option.none
+        }
 
-/// The LAST `\n` byte in `[from, from+n)` whose successor is a character
+/// Walk the window's BYTES (decoded once) for the first non-continuation
+/// byte -- a character start.
+#[terminating]
+def rope_boundary_go (bs : List U8) (i : I64) (stop : I64) : Option I64 :=
+    match bs {
+        List.empty => Option.none,
+        List.cons b rest =>
+            if Bool.not (i < stop)
+            then Option.none
+            else if rope_is_boundary_byte b
+            then Option.some i
+            else rope_boundary_go rest (i + 1) stop
+    }
+
+/// The LAST `\n` in `[from, from+n)` whose successor is a character
 /// boundary, as a cut point at the newline's successor -- so a leaf ends
 /// WITH its line terminator and the next starts a fresh line.
 ///
 /// Takes the last one rather than the first so a chunk spans as much of the
 /// target as possible; both ends are character boundaries either way.
-#[terminating]
+///
+/// ONE PASS over the window's bytes, keeping the last qualifying cut: the
+/// answer is the tail of the scan, so no per-newline jump back into the
+/// string is needed (see the section header for why that was quadratic).
 def rope_newline_from (s : String) (from : I64) (target : I64) (n : I64) : Option I64 :=
-    rope_newline_go s (min_i64 (from + n) (target + Rope.chunk_bytes)) from Option.none
-
-#[terminating]
-def rope_newline_go (s : String) (stop : I64) (i : I64) (best : Option I64) : Option I64 :=
-    if Bool.not (i < stop)
-    then best
+    let stop : I64 := min_i64 (from + n) (target + Rope.chunk_bytes) in
+    if Bool.not (from < stop)
+    then Option.none
     else
-        match String.get s i {
-            Option.none => best,
-            Option.some b => rope_newline_step s stop i best b
+        let window : String := rope_window_abs s from stop in
+        let bytes : List U8 := String.to_list window in
+        match rope_newline_scan bytes 0 Option.none {
+            Option.some cut => Option.some (from + cut),
+            Option.none => Option.none
         }
 
-def min_i64 (a : I64) (b : I64) : I64 := if a < b then a else b
-
-/// One byte of the newline scan: a `\n` whose successor is a character
-/// boundary updates the best cut; anything else leaves the best cut alone.
-/// Split out so the byte is bound once and the cut arithmetic once.
+/// The newline walk: `at` is the index of `bs`'s head inside the window,
+/// `best` the last qualifying cut seen (a byte AFTER the newline). A
+/// newline qualifies when the byte after it starts a character, which is
+/// the lookahead `rope_after_is_boundary` performs.
 #[terminating]
-def rope_newline_step (s : String) (stop : I64) (i : I64) (best : Option I64) (b : U8) : Option I64 :=
-    if U8.beq b 10u8 && rope_char_boundary s (i + 1)
-    then rope_newline_go s stop (i + 1) (Option.some (i + 1))
-    else rope_newline_go s stop (i + 1) best
+def rope_newline_scan (bs : List U8) (at : I64) (best : Option I64) : Option I64 :=
+    match bs {
+        List.empty => best,
+        List.cons b rest =>
+            if U8.beq b 10u8 && rope_after_is_boundary rest
+            then rope_newline_scan rest (at + 1) (Option.some (at + 1))
+            else rope_newline_scan rest (at + 1) best
+    }
+
+/// Does a character start right after this newline? The next byte exists
+/// and is not a continuation byte.
+def rope_after_is_boundary (rest : List U8) : Bool :=
+    match rest {
+        List.empty => true,
+        List.cons b _ => rope_is_boundary_byte b
+    }
+
+def min_i64 (a : I64) (b : I64) : I64 := if a < b then a else b
 
 /// Choose between the two cut candidates. A newline boundary only wins if
 /// it is at least half the target size away, so a lone early newline cannot

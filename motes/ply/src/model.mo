@@ -69,6 +69,10 @@ pub struct Document {
 /// field list lives in exactly one place).
 pub def Document.of_text (text : String) : Document :=
     let rope : Rope := Rope.of_string text in
+    // THE ROPE IS BUILT ONCE, and the seeded revision 0 shares the tree the
+    // document holds (`History.commit` takes the rope, not the text) -- so
+    // opening a file pays `Rope.of_string` once, and undo's baseline is the
+    // very same persistent structure rather than an equal copy.
     match History.commit History.empty rope (Selections.cursor 0) List.empty 0 {
         Pair.pair seeded _ =>
             { path := Option.none,

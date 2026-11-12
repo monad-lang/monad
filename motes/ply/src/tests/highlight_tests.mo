@@ -25,6 +25,7 @@ use std::ansi {Color}
 // `List.length` lives in `init/src/list.mo` (ambient and pure) as of the
 // upstream move, so this import pulls the module's INSTANCES into scope
 // and names nothing -- the empty brace list is the documented form.
+use std::io {IO.current_time}
 use std::list {}
 use init::shared {Shared}
 
@@ -325,3 +326,65 @@ def hl_seg_texts_join (segs : List TextSegment) : String :=
         List.empty => "",
         List.cons one rest => one.text ++ hl_seg_texts_join rest
     }
+
+// ── The lexer is linear in the line's length ─────────────────────────────
+
+/// LEXING IS LINEAR, not quadratic. Each run used to accumulate its text by
+/// `acc ++ String.from_list [b]` once per byte; `++` is a fresh
+/// strlen+malloc+memcpy, so one long run cost O(len^2). Measured on the
+/// built binary, a single 60 KB line (no newlines, so one enormous plain
+/// run) took 3025 ms to open -- while 20 000 short lines totalling the same
+/// bytes took 31 ms.
+///
+/// A RATIO, not a wall-clock bound: two lines 8x apart cost ~8x when linear
+/// and ~64x when quadratic, so 32 separates them with noise either way.
+#[test]
+def test_lex_is_linear_in_the_line_length : IO Bool := do {
+    let small : String := hl_ascii 8000;
+    let large : String := hl_ascii 64000;
+    let cfg : LanguageConfig := LanguageConfig.monad;
+    let warmed : List Token := Highlight.lex cfg (hl_ascii 500);
+    let t1 <- IO.current_time;
+    let toks : List Token := Highlight.lex cfg small;
+    let t2 <- IO.current_time;
+    let big : List Token := Highlight.lex cfg large;
+    let t3 <- IO.current_time;
+    let ok : Bool :=
+        Bool.and (hl_covers small toks) (hl_covers large big);
+    let linear : Bool := hl_linear_enough (hl_elapsed t1 t2) (hl_elapsed t2 t3);
+    let warm_ok : Bool := Bool.not (List.is_empty warmed);
+    return (Bool.and (Bool.and ok linear) warm_ok)
+}
+
+/// The elapsed milliseconds between two readings, floored at 1 so the ratio
+/// stays meaningful for a sub-millisecond measurement.
+///
+/// A separate def, not an inline `let ... := if ... in` inside the do-block:
+/// that shape is a recorded self-hosted load failure when the same block has
+/// `let ... <-` binds.
+def hl_elapsed (a : I64) (b : I64) : I64 :=
+    let d : I64 := b - a in
+    if d < 1 then 1 else d
+
+/// Is `big` under 32x `small`? (~8x when linear, ~64x when quadratic.)
+def hl_linear_enough (small_ms : I64) (big_ms : I64) : Bool :=
+    big_ms < small_ms * 32
+
+/// Do the tokens tile the line exactly? The round-trip witness: no byte
+/// lost, no byte duplicated by the accumulator.
+#[partial]
+def hl_covers (line : String) (toks : List Token) : Bool :=
+    String.beq (hl_join toks) line
+
+#[partial]
+def hl_join (toks : List Token) : String :=
+    match toks {
+        List.empty => "",
+        List.cons one rest => String.concat one.text (hl_join rest)
+    }
+
+/// `n` bytes of newline-free lowercase ASCII: one word run and one space
+/// run, the two shapes that accumulate byte by byte.
+#[terminating]
+def hl_ascii (n : I64) : String :=
+    if Bool.not (0 < n) then "" else String.concat "a" (hl_ascii (n - 1))
