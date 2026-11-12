@@ -17,6 +17,10 @@ use lib::pikevm {
     RxCursor, RxWords, RxResult, cursor_start, cursor_advance, cursor_skip, decode_head, search,
 }
 use lib::table {table_of_list}
+use lib::meta {
+    RxStrategy, RxEngine, Cache, RxFound, RxFoundSlots, cache_new, choose_strategy, meta_find,
+    meta_is_match, meta_slots,
+}
 use unicode::lookup {Unicode.word_ranges}
 use std::array {Array}
 use std::list {}
@@ -33,7 +37,9 @@ pub struct RegexBuilder {
     /// An approximate bound on the compiled program, in bytes (16 per
     /// state).
     size_limit : I64 := 10485760,
-    /// Reserved for the lazy DFA (Phase 5).
+    /// The lazy DFA cache's budget in bytes. One cache serves every
+    /// search of an iteration (and of `find_with` calls sharing it); a
+    /// search that keeps outgrowing it falls back to the Pike VM.
     dfa_cache_limit : I64 := 2097152,
     nest_limit : I64 := 250,
 }
@@ -45,6 +51,10 @@ pub struct Regex {
     words : RxWords,
     captures : I64,
     names : List (Pair String I64),
+    strategy : RxStrategy,
+    engine : RxEngine,
+    /// An empty cache, built once: the plain API starts every call from it.
+    fresh : Cache,
 }
 
 /// One match: `haystack[start, end)`.
@@ -104,6 +114,9 @@ def build_hir (b : RegexBuilder) (parsed : RxParsed) (hir : RxHir) : Result Rege
             words := words,
             captures := parsed.captures,
             names := parsed.names,
+            strategy := choose_strategy hir prog parsed.captures limit b.dfa_cache_limit,
+            engine := RxEngine.eng_auto,
+            fresh := cache_new,
         } in
         Result.ok r
 
@@ -117,8 +130,14 @@ pub def Regex.captures_len (r : Regex) : I64 := r.captures + 1
 def cursor_at (r : Regex) (s : String) (start : I64) : RxCursor :=
     cursor_skip r.prog.needs_word r.words (cursor_start (String.to_list s)) start
 
+def run_with (r : Regex) (cache : Cache) (c : RxCursor) (nslots : I64) : RxFoundSlots :=
+    meta_slots r.strategy r.engine r.prog r.words cache c nslots
+
 def run_at (r : Regex) (c : RxCursor) (nslots : I64) : Option (Array I64) :=
-    let res : RxResult := search r.prog r.words c nslots false in res.slots
+    let f : RxFoundSlots := run_with r r.fresh c nslots in f.slots
+
+/// `r` with every search pinned to one engine (the differential tests).
+def Regex.with_engine (r : Regex) (eng : RxEngine) : Regex := { r with engine := eng }
 
 def slot (slots : Array I64) (i : I64) : I64 := Array.get_or slots i (0 - 1)
 
@@ -128,11 +147,8 @@ def match_of (s : String) (slots : Array I64) : Match :=
 /// Stops at the first accepting thread: whether there is a match does
 /// not need the leftmost-first span settled.
 pub def Regex.is_match (r : Regex) (s : String) : Bool :=
-    let res : RxResult := search r.prog r.words (cursor_at r s 0) 2 true in
-    match res.slots {
-        Option.some _ => true,
-        Option.none => false,
-    }
+    let res : Pair Bool Cache := meta_is_match r.strategy r.engine r.prog r.words r.fresh (cursor_at r s 0) in
+    res.first
 
 pub def Regex.find (r : Regex) (s : String) : Option Match := Regex.find_at r s 0
 
@@ -148,6 +164,20 @@ pub def Regex.captures (r : Regex) (s : String) : Option Captures :=
     match run_at r (cursor_at r s 0) (2 * (r.captures + 1)) {
         Option.some slots => Option.some (captures_of r s slots),
         Option.none => Option.none,
+    }
+
+/// An empty cache for `find_with`.
+pub def Regex.new_cache (r : Regex) : Cache := r.fresh
+
+/// `find` with a caller-held cache, returned warm for the next search:
+/// lazy DFA states built by one search serve the next.
+pub def Regex.find_with (r : Regex) (cache : Cache) (s : String) : Pair (Option Match) Cache :=
+    let f : RxFound := meta_find r.strategy r.engine r.prog r.words cache (cursor_at r s 0) in
+    match f.span {
+        Option.some sp =>
+            let m : Match := { haystack := s, start := sp.first, end := sp.second } in
+            Pair.pair (Option.some m) f.cache,
+        Option.none => Pair.pair Option.none f.cache,
     }
 
 def captures_of (r : Regex) (s : String) (slots : Array I64) : Captures :=
@@ -196,28 +226,30 @@ def group_text (c : Captures) (i : I64) : String :=
 /// a match ending at the same place is skipped by searching again one
 /// scalar further on, so iteration never yields two empty matches at one
 /// position and never splits a scalar.
+/// One cache serves the whole iteration.
 def all_slots (r : Regex) (s : String) (nslots : I64) : List (Array I64) :=
-    List.reverse (iter_go r nslots (cursor_start (String.to_list s)) (0 - 1) List.empty)
+    List.reverse (iter_go r nslots r.fresh (cursor_start (String.to_list s)) (0 - 1) List.empty)
 
 #[terminating]
-def iter_go (r : Regex) (nslots : I64) (c : RxCursor) (last_end : I64) (acc : List (Array I64)) : List (Array I64) :=
-    match run_at r c nslots {
+def iter_go (r : Regex) (nslots : I64) (cache : Cache) (c : RxCursor) (last_end : I64) (acc : List (Array I64)) : List (Array I64) :=
+    let f : RxFoundSlots := run_with r cache c nslots in
+    match f.slots {
         Option.none => acc,
         Option.some slots =>
             let st : I64 := slot slots 0 in
             let en : I64 := slot slots 1 in
-            if I64.beq st en && I64.beq en last_end then iter_retry r nslots c last_end acc
-            else iter_go r nslots (cursor_skip r.prog.needs_word r.words c (en - c.pos)) en (List.cons slots acc),
+            if I64.beq st en && I64.beq en last_end then iter_retry r nslots f.cache c last_end acc
+            else iter_go r nslots f.cache (cursor_skip r.prog.needs_word r.words c (en - c.pos)) en (List.cons slots acc),
     }
 
 /// Searching from `c` found an empty match where the last match ended:
 /// step one scalar (or stop at the end) and search again.
 #[terminating]
-def iter_retry (r : Regex) (nslots : I64) (c : RxCursor) (last_end : I64) (acc : List (Array I64)) : List (Array I64) :=
+def iter_retry (r : Regex) (nslots : I64) (cache : Cache) (c : RxCursor) (last_end : I64) (acc : List (Array I64)) : List (Array I64) :=
     if List.is_empty c.rest then acc
     else
         let next : RxCursor := cursor_skip r.prog.needs_word r.words c (scalar_width c.rest) in
-        iter_go r nslots next last_end acc
+        iter_go r nslots cache next last_end acc
 
 def scalar_width (xs : List U8) : I64 :=
     match xs {

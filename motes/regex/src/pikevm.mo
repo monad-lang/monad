@@ -200,25 +200,34 @@ def thread (pc : I64) (slots : Array I64) : RxThread :=
 /// first accept, which settles WHETHER there is a match but not its span.
 pub def search (prog : RxProg) (w : RxWords) (c : RxCursor) (nslots : I64) (earliest : Bool) : RxResult :=
     let acc0 : RxClosure := { seen := fresh_set prog, out := List.empty, steps := 0 } in
-    run prog w nslots earliest c acc0 Option.none
+    run prog w nslots earliest false true c acc0 Option.none
 
-/// One position: seed a thread (while nothing has matched), then step
+/// The highest-priority match starting exactly at `c`: what resolves the
+/// captures of a span another engine found.
+pub def search_anchored (prog : RxProg) (w : RxWords) (c : RxCursor) (nslots : I64) : RxResult :=
+    let acc0 : RxClosure := { seen := fresh_set prog, out := List.empty, steps := 0 } in
+    run prog w nslots false true true c acc0 Option.none
+
+/// One position: seed a thread (while nothing has matched, and only at
+/// the first position when `anchored`), then step
 /// every thread over the byte at `c`. `acc` holds the threads already
 /// waiting at `c` (newest first) and their visited set.
 #[terminating]
-def run (prog : RxProg) (w : RxWords) (nslots : I64) (earliest : Bool) (c : RxCursor) (acc : RxClosure) (matched : Option (Array I64)) : RxResult :=
+def run (prog : RxProg) (w : RxWords) (nslots : I64) (earliest : Bool) (anchored : Bool) (seed : Bool) (c : RxCursor) (acc : RxClosure) (matched : Option (Array I64)) : RxResult :=
     let seeded : RxClosure :=
         match matched {
-            Option.none => closure prog w c nslots [thread prog.start (Array.new nslots (0 - 1))] acc,
+            Option.none =>
+                if seed then closure prog w c nslots [thread prog.start (Array.new nslots (0 - 1))] acc else acc,
             Option.some _ => acc,
         } in
     let clist : List RxThread := List.reverse seeded.out in
     let next_c : RxCursor := cursor_advance prog.needs_word w c in
     let fresh : RxClosure := { seen := fresh_set prog, out := List.empty, steps := seeded.steps } in
     let stepped : RxStepped := step prog w nslots (head_byte c.rest) next_c clist fresh matched in
-    if List.is_empty c.rest || (is_some stepped.matched && (earliest || List.is_empty stepped.next.out)) then
+    let stop : Bool := is_some stepped.matched && (earliest || List.is_empty stepped.next.out) in
+    if List.is_empty c.rest || stop || (anchored && List.is_empty stepped.next.out) then
         let r : RxResult := { slots := stepped.matched, steps := stepped.next.steps } in r
-    else run prog w nslots earliest next_c stepped.next stepped.matched
+    else run prog w nslots earliest anchored (Bool.not anchored) next_c stepped.next stepped.matched
 
 def is_some (o : Option (Array I64)) : Bool :=
     match o {

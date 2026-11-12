@@ -38,4 +38,7 @@ pub use lib::regex {
     Captures.get,
     Captures.name,
     Captures.expand,
+    Regex.new_cache,
+    Regex.find_with,
 }
+pub use lib::meta {Cache}
