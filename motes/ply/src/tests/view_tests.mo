@@ -30,6 +30,7 @@ use lib::model {Document, Document.of_text, Document.with_language,
     EditorState.with_scroll, EditorState.rows_of, EditorState.cols_of}
 use lib::selection {Selections.span}
 use lib::view {View.view, View.rows, View.row_segments, View.first_visible,
+    View.left_col,
     View.text_height, View.gutter_label, View.selection_style,
     RowView, RowView.line_of, RowView.text_of, RowView.start_of, RowView.stop_of}
 use lib::highlight {TokenKind, Highlight.style}
@@ -199,6 +200,16 @@ def vw_no_reverse_in_row (sh : Shared Screen) (row : I64) (col : I64) : Bool :=
     then true
     else Bool.not (vw_reverse sh row col) && vw_no_reverse_in_row sh row (col + 1)
 
+/// SOME cell in row `row` is reverse video -- the existential the caret
+/// tests assert: "the caret is painted somewhere on this row". A caret
+/// past the text area's right margin paints NO cell at all, and only a
+/// positive probe can tell that apart from "painted at the wrong place".
+#[terminating]
+def vw_any_reverse (sh : Shared Screen) (row : I64) (col : I64) : Bool :=
+    if Bool.not (col < 40)
+    then false
+    else Bool.or (vw_reverse sh row col) (vw_any_reverse sh row (col + 1))
+
 /// `n` fixture lines "l0".."l(n-1)", one per line, trailing newline
 /// included -- the scroll tests' document.
 #[terminating]
@@ -219,6 +230,14 @@ def vw_js (n : I64) : List Key :=
     if Bool.not (0 < n)
     then List.empty
     else List.cons (vw_key "j") (vw_js (n - 1))
+
+/// `n` `l` keys, for driving the head right -- the horizontal-scroll
+/// tests' dial.
+#[terminating]
+def vw_ls (n : I64) : List Key :=
+    if Bool.not (0 < n)
+    then List.empty
+    else List.cons (vw_key "l") (vw_ls (n - 1))
 
 // ── The gutter and the text area's split ──────────────────────────────────
 
@@ -428,23 +447,43 @@ def test_clip_leaves_a_wide_glyph_whole : Bool :=
         && vw_is sh 0 37 "日" && vw_is sh 0 38 ""
         && vw_is sh 0 39 " "
 
-/// A SELECTION PAST THE CLIP PAINTS NOTHING: 50 "a"s with the
-/// selection [45,50) -- entirely past the 35-cell text area -- paint
-/// no bg anywhere in the row, and the caret (head 50, a cell past the
-/// clip) paints no reverse anywhere either.
+/// A SELECTION PAST THE RIGHT MARGIN PULLS THE WINDOW: 50 "a"s with the
+/// selection [45,50) -- entirely past the 35-cell text area -- is shown
+/// by SCROLLING to it, not by painting nothing.
+///
+/// This replaces a test that pinned the old truncation ("a selection past
+/// the clip paints nothing"). Truncation made a real, selected range
+/// invisible, which is indistinguishable from "the selection was lost" --
+/// the same class of defect as the caret that painted no cell. The window
+/// now follows the caret (head 50 -> columns 15..50), so the covered cells
+/// paint inside it and the caret on the last one is reverse video.
 #[test]
-def test_selection_past_the_clip_paints_nothing : Bool :=
-    let sh : Shared Screen := vw_screen (vw_sel_state (String.repeat "a" 50) 45 50) in
-    vw_no_selection_bg sh 0 0 && vw_no_reverse_in_row sh 0 0
+def test_selection_past_the_margin_scrolls_into_view : Bool :=
+    let st : EditorState := vw_sel_state (String.repeat "a" 50) 45 50 in
+    let sh : Shared Screen := vw_screen st in
+    // head col 50, text width 35 -> left = 50 - 35 + 1 = 16.
+    // head col 50, text width 35 -> left = 50 - 35 + 1 = 16, so the
+    // window shows document columns 16..50 at screen columns 5..39.
+    // The selection [45,50) therefore lands at screen 34..38, and the
+    // caret (head 50, appended past the text) sits on screen 39.
+    I64.beq (View.left_col st) 16
+        && vw_bg_is_selection sh 0 34 && vw_bg_is_selection sh 0 38
+        && Bool.not (vw_bg_is_selection sh 0 5)
+        && vw_reverse sh 0 39
 
-/// A selection REACHING past the clip paints every visible cell it
-/// covers: [0,50) over the 50 "a"s paints columns 5-39, and the caret
-/// (head 50, past the clip) still paints nothing.
+/// A selection STARTING before the window still paints its visible part:
+/// [0,50) over the 50 "a"s, window at 0, paints columns 5-39 -- and the
+/// caret (head 50) pulls the window only far enough to show itself.
 #[test]
-def test_selection_reaching_past_the_clip_paints_the_window : Bool :=
-    let sh : Shared Screen := vw_screen (vw_sel_state (String.repeat "a" 50) 0 50) in
-    vw_bg_is_selection sh 0 5 && vw_bg_is_selection sh 0 39
-        && vw_no_reverse_in_row sh 0 0
+def test_selection_reaching_past_the_margin_paints_the_window : Bool :=
+    let st : EditorState := vw_sel_state (String.repeat "a" 50) 0 50 in
+    let sh : Shared Screen := vw_screen st in
+    // The same window (head 50 -> left 16), but the selection covers the
+    // whole line, so screen columns 5..38 are all covered and the caret
+    // is on 39.
+    I64.beq (View.left_col st) 16
+        && vw_bg_is_selection sh 0 5 && vw_bg_is_selection sh 0 38
+        && vw_reverse sh 0 39
 
 // ── Scrolling: the window keeps the caret visible ────────────────────────
 
@@ -489,6 +528,57 @@ def test_tiny_terminal_paints_the_status_line_only : Bool :=
     I64.beq (View.text_height 1) 0
         && vw_is sh 0 0 "n" && vw_is sh 0 1 "o"
         && vw_is sh 0 16 " " && vw_is sh 0 17 "1" && vw_is sh 0 18 ":" && vw_is sh 0 19 "1"
+
+// ── Horizontal scrolling: the caret is never painted past the margin ─────
+
+/// THE BUG THIS SECTION EXISTS FOR: the text area is 35 cells (40 minus
+/// the 5-cell gutter), so a caret whose column is 35 or more lands in no
+/// painted cell and the terminal shows no caret at all -- the head is
+/// real (`l` moved it, the status line counts it) but invisible.
+///
+/// Fixture: 60 "C"s, head at column 50 (50 `l` presses). The caret must
+/// paint SOMEWHERE on row 0, and the status line must agree it is at
+/// 1:51 -- so this cannot pass by the head failing to move.
+#[test]
+def test_caret_visible_past_the_margin : Bool :=
+    let sh : Shared Screen := vw_screen (vw_type (vw_state (String.repeat "C" 60)) (vw_ls 50)) in
+    vw_any_reverse sh 0 0
+        && String.contains (vw_status_text sh) "1:51"
+
+/// LEFT_COL CLAMPS LEFT: a caret left of the stored window pulls it left,
+/// to the caret's own column. Fixture: a 60-char line, head at column 20
+/// (20 `l`), stored hscroll 40 -> the window starts at the caret's column
+/// rather than leaving the caret off the left edge.
+#[test]
+def test_left_col_clamps_left_to_the_caret : Bool :=
+    let st : EditorState := vw_type (vw_state (String.repeat "C" 60)) (vw_ls 20) in
+    let shifted : EditorState := EditorState.with_hscroll st 40 in
+    I64.beq (View.left_col shifted) 20
+
+/// LEFT_COL HOLDS when the caret is inside the window: a stored window of
+/// 10 with the head at column 30 (30 - 10 = 20, inside 35 cells) keeps 10.
+#[test]
+def test_left_col_holds_a_caret_inside_the_window : Bool :=
+    let st : EditorState := vw_type (vw_state (String.repeat "C" 60)) (vw_ls 30) in
+    let shifted : EditorState := EditorState.with_hscroll st 10 in
+    I64.beq (View.left_col shifted) 10
+
+/// A SHORT LINE NEVER SCROLLS: with the head at column 0 on a line that
+/// fits, the window is 0 -- and a stored hscroll left over from a longer
+/// line is pulled back to 0 by the caret's own clamp.
+#[test]
+def test_left_col_is_zero_when_the_line_fits : Bool :=
+    let st : EditorState := vw_state "short" in
+    let shifted : EditorState := EditorState.with_hscroll st 40 in
+    I64.beq (View.left_col st) 0 && I64.beq (View.left_col shifted) 0
+
+/// THE CARET IS ON THE LEFT EDGE when it is exactly one text-area past
+/// the window's right edge: caret col 35 in a 35-cell area -> the window
+/// moves to 1, so the caret sits on the last cell rather than one past it.
+#[test]
+def test_left_col_puts_a_caret_at_the_right_edge_last : Bool :=
+    let st : EditorState := vw_type (vw_state (String.repeat "C" 60)) (vw_ls 35) in
+    I64.beq (View.left_col st) 1
 
 // ── The empty document ─────────────────────────────────────────────────────
 

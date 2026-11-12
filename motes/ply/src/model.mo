@@ -249,6 +249,12 @@ pub struct EditorState {
     status : String,
     /// The first visible row (the view scrolls it).
     scroll : I64,
+    /// The first visible COLUMN of the text area -- horizontal scroll. The
+    /// view clamps it around the primary head's column exactly as `scroll`
+    /// is clamped around its line, so a caret past the text area's right
+    /// margin is shown by moving the window rather than by painting the
+    /// caret nowhere.
+    hscroll : I64,
     /// Terminal geometry, kept in step by `EditorMsg.resize`.
     rows : I64,
     cols : I64,
@@ -270,6 +276,7 @@ pub def EditorState.init (doc : Document) (rows : I64) (cols : I64) : EditorStat
         bindings := Keymap.default_bindings,
         status := "",
         scroll := 0,
+        hscroll := 0,
         rows := rows,
         cols := cols,
         registers := List.empty }
@@ -379,6 +386,18 @@ pub def EditorState.with_scroll (st : EditorState) (line : I64) : EditorState :=
 pub def EditorState.scroll_of (st : EditorState) : I64 :=
     match st { { scroll, .. } => scroll }
 
+/// The state with the horizontal scroll set. Like `with_scroll`, the view
+/// CLAMPS it around the primary head's column (`View.left_col`), so the
+/// stored value is a baseline and the clamp is the guarantee -- a horizontal
+/// scroll command can hand it anything, and the caret stays on screen.
+pub def EditorState.with_hscroll (st : EditorState) (col : I64) : EditorState :=
+    { st with hscroll := col }
+
+/// The horizontal scroll field, read once. A negative stored value is
+/// clamped to 0 by the reader: there is no text left of column 0.
+pub def EditorState.hscroll_of (st : EditorState) : I64 :=
+    match st { { hscroll, .. } => hscroll }
+
 /// The rows field, read once.
 pub def EditorState.rows_of (st : EditorState) : I64 :=
     match st { { rows, .. } => rows }
@@ -406,16 +425,16 @@ pub def EditorState.status_of (st : EditorState) : String :=
 pub instance Copy EditorState {
     def copy (st : EditorState) : Pair EditorState EditorState :=
         match st {
-            { docs, active, mode, pending, bindings, status, scroll, rows, cols, registers } =>
+            { docs, active, mode, pending, bindings, status, scroll, hscroll, rows, cols, registers } =>
                 let one : EditorState :=
                     { docs := copy_list docs, active := active, mode := mode,
                         pending := copy_list pending, bindings := copy_list bindings,
-                        status := status, scroll := scroll, rows := rows, cols := cols,
+                        status := status, scroll := scroll, hscroll := hscroll, rows := rows, cols := cols,
                         registers := copy_list registers } in
                 let two : EditorState :=
                     { docs := copy_list docs, active := active, mode := mode,
                         pending := copy_list pending, bindings := copy_list bindings,
-                        status := status, scroll := scroll, rows := rows, cols := cols,
+                        status := status, scroll := scroll, hscroll := hscroll, rows := rows, cols := cols,
                         registers := copy_list registers } in
                 Pair.pair one two
         }

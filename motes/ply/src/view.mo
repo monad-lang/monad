@@ -47,7 +47,8 @@ use lib::highlight {Highlight.config_for, Highlight.lex, Highlight.segments}
 use tui::types {LayoutSize, TextStyle, TextSegment, Key}
 use tui::core {style_default, style_merge, mk_text_segment, clamp}
 use tui::widget {Widget, SizedWidget, label, spans, sized, with_style}
-use tui::text {Text.width, Text.col_of_byte, Text.slice_spans, Text.width_spans}
+use tui::text {Text.width, Text.col_of_byte, Text.slice_spans, Text.width_spans,
+    Text.snap_span}
 use std::ansi {Color}
 
 // ── Geometry ───────────────────────────────────────────────────────────────
@@ -101,6 +102,81 @@ def ply_first_visible (st : EditorState) (doc : Document) : I64 :=
         else if stored + height < head_line + 1
         then head_line - height + 1
         else stored
+
+/// The first visible COLUMN of the text area -- the horizontal half of
+/// `View.first_visible`, and the same shape: `hscroll` is the baseline and
+/// the clamp is the guarantee that the caret is never painted past the
+/// right margin.
+///
+/// THIS IS THE WHOLE OF HORIZONTAL SCROLLING. A line is not wrapped (that
+/// is a later change, and it reflows rows besides), so a line longer than
+/// the text area is CLIPPED at the margin. Without a window the caret
+/// simply stops being painted once its column passes `text_width` -- the
+/// head is real and the status line counts it, but the terminal shows no
+/// caret at all. Moving the window instead is the fix.
+///
+/// The two clamps mirror the vertical pair exactly (a head left of the
+/// window pulls it left, one right of it pulls it right, otherwise the
+/// stored value holds), so the behaviour a reader already knows from
+/// scrolling lines applies unchanged to columns.
+///
+/// A text area of width 0 has no cell to show, so the answer is the stored
+/// value clamped at 0 -- never a negative column.
+pub def View.left_col (st : EditorState) : I64 :=
+    match EditorState.active_doc st {
+        Option.some doc => ply_left_col st doc,
+        Option.none => ply_non_negative (EditorState.hscroll_of st)
+    }
+
+/// The clamped first column for a known document.
+def ply_left_col (st : EditorState) (doc : Document) : I64 :=
+    let width : I64 := View.text_width (EditorState.cols_of st) in
+    let stored : I64 := ply_non_negative (EditorState.hscroll_of st) in
+    if width < 1
+    then stored
+    else
+        let shared : Shared Document := Shared.of doc in
+        let caret : I64 := ply_caret_col (Shared.get shared) in
+        if caret < stored
+        then caret
+        else if Bool.not (caret < stored + width)
+        then caret - width + 1
+        else stored
+
+/// The primary head's display COLUMN on its own line -- the coordinate the
+/// horizontal clamp is stated in. Bytes become cells here, the same
+/// `Text.col_of_byte` bridge every other geometry in this file uses.
+def ply_caret_col (doc : Document) : I64 :=
+    let shared : Shared Document := Shared.of doc in
+    let rope : Rope := ply_doc_rope (Shared.get shared) in
+    let head : I64 := ply_primary_head (Shared.get shared) in
+    let line : I64 := Rope.line_of rope head in
+    let ls : I64 := Rope.line_start rope line in
+    let text : String := Rope.slice rope ls (Rope.line_content_end rope line - ls) in
+    Text.col_of_byte text (head - ls)
+
+/// A column never goes below 0: a stored `hscroll` of -5 and a head at 0
+/// both mean "the window starts at the first cell".
+def ply_non_negative (n : I64) : I64 := if n < 0 then 0 else n
+
+/// The horizontal window for a row's segments: `(lo, hi)` in cells. `lo` is
+/// floored to a character boundary so a wide glyph straddling the left edge
+/// is shown whole rather than cut in half (the rule `Text.drop_cols`
+/// states); `hi` is one text area past it.
+def ply_window (text : String) (left : I64) (width : I64) : Pair I64 I64 :=
+    let lo : I64 := ply_snap_left text left in
+    let hi : I64 := left + width in
+    Pair.pair lo (if lo < hi then hi else lo)
+
+/// The left edge floored to the glyph start it lands in: `Text.snap_span`
+/// floors a column to a glyph start, which is exactly the question here.
+def ply_snap_left (text : String) (left : I64) : I64 :=
+    if left < 1
+    then 0
+    else
+        match Text.snap_span text left left {
+            Pair.pair lo _ => ply_non_negative lo
+        }
 
 /// The document's rope, read once.
 def ply_doc_rope (doc : Document) : Rope :=
@@ -543,10 +619,13 @@ def ply_view_children (st : EditorState) : List SizedWidget :=
             // serves all three.
             let shared : Shared Document := Shared.of doc in
             let height : I64 := View.text_height (EditorState.rows_of st) in
+            let width : I64 := View.text_width (EditorState.cols_of st) in
             let first : I64 := ply_first_visible st (Shared.get shared) in
+            let left : I64 := ply_left_col st (Shared.get shared) in
             let rows : List RowView := View.rows (Shared.get shared) first height in
             let text_area : SizedWidget :=
-                sized (LayoutSize.fill 1) (Widget.column (ply_row_widgets (Shared.get shared) rows)) in
+                sized (LayoutSize.fill 1)
+                    (Widget.column (ply_row_widgets (Shared.get shared) rows left width)) in
             List.cons text_area (List.cons (ply_status_row st) List.empty)
     }
 
@@ -560,22 +639,43 @@ def ply_status_row (st : EditorState) : SizedWidget :=
 /// gutter, and `render_spans` clips whatever runs past it -- a line
 /// wider than the viewport is the renderer's case, not the view's.
 #[partial]
-def ply_row_widgets (doc : Document) (rows : List RowView) : List SizedWidget :=
-    ply_row_widgets_go (Shared.of doc) rows
+def ply_row_widgets (doc : Document) (rows : List RowView) (left : I64) (width : I64)
+    : List SizedWidget :=
+    ply_row_widgets_go (Shared.of doc) rows left width
 
-def ply_row_widgets_go (doc : Shared Document) (rows : List RowView) : List SizedWidget :=
+def ply_row_widgets_go (doc : Shared Document) (rows : List RowView) (left : I64) (width : I64)
+    : List SizedWidget :=
     match rows {
         List.empty => List.empty,
         List.cons one rest =>
-            List.cons (ply_row_widget (Shared.get doc) one)
-                (ply_row_widgets_go doc rest)
+            List.cons (ply_row_widget (Shared.get doc) one left width)
+                (ply_row_widgets_go doc rest left width)
     }
 
 /// One row's widget: the gutter label and the styled text side by side.
-def ply_row_widget (doc : Document) (row : RowView) : SizedWidget :=
+///
+/// THE TEXT IS PAINTED THROUGH THE HORIZONTAL WINDOW (`left` .. `left +
+/// width`): the segments are built at their ABSOLUTE columns -- highlight,
+/// selection backgrounds and the caret's reversed cell all land where the
+/// byte offsets say -- and then cut to the visible slice. Cutting after
+/// styling is what keeps the caret correct for free: no hardware cursor
+/// has to be moved, because the caret is a reversed cell inside this grid.
+def ply_row_widget (doc : Document) (row : RowView) (left : I64) (width : I64) : SizedWidget :=
     let gutter : SizedWidget :=
         sized (LayoutSize.fixed View.gutter_width)
             (with_style View.gutter_style (label (View.gutter_label row.line))) in
     let text : SizedWidget :=
-        sized (LayoutSize.fill 1) (spans (View.row_segments doc row)) in
+        sized (LayoutSize.fill 1) (spans (ply_windowed_segments doc row left width)) in
     sized (LayoutSize.fixed 1) (Widget.row (List.cons gutter (List.cons text List.empty)))
+
+/// The row's segments cut to the horizontal window. A `left` of 0 with a
+/// line that fits is the identity: `Text.slice_spans` answers the same
+/// segments, so the common case pays one walk and nothing else.
+def ply_windowed_segments (doc : Document) (row : RowView) (left : I64) (width : I64)
+    : List TextSegment :=
+    let segs : List TextSegment := View.row_segments doc row in
+    if left < 1
+    then Text.slice_spans segs 0 width
+    else match ply_window row.text left width {
+        Pair.pair lo hi => Text.slice_spans segs lo hi
+    }
