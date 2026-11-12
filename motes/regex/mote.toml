@@ -1,0 +1,21 @@
+# Linear-time regular expressions in pure Monad: automata only (RE2 / Rust
+# `regex` architecture), never a backtracking search over the pattern.
+# See plans/library-ideas/regex.md.
+#
+# `init` and `std` are ambient; declared anyway, as every manifest here does.
+[mote]
+name = "regex"
+version = "0.1.0"
+edition = "2026"
+
+[dependencies.init]
+workspace = true
+
+[dependencies.std]
+workspace = true
+
+# Affine-by-default migration exception. Delete this table when the mote
+# reaches zero violations; the default (no table) is `mode = "error"`. See
+# plans/type-system/quantitative-types.md.
+[affine]
+mode = "warn"

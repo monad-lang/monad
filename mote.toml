@@ -55,6 +55,7 @@ members = [
   "motes/moose",
   "motes/pty",
   "motes/parsec",
+  "motes/regex",
   "motes/toml",
   "motes/toolkit",
   "motes/tui",
