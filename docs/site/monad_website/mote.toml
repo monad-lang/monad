@@ -34,3 +34,6 @@ path = "../../../motes/clap"
 
 [dependencies.acorn]
 path = "../../../motes/acorn"
+
+[dependencies.docgen]
+path = "../../../motes/docgen"

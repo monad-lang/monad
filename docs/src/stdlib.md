@@ -13,6 +13,12 @@ touches the operating system.
 Roughly 440 public definitions, 35 classes, and 132 instances across the two,
 not counting their test modules.
 
+> [!TIP]
+> The [API reference](../api/index.html) is generated from the sources
+> themselves: every `pub` declaration with its signature and doc comment, one
+> page per module. It is the authoritative list; this chapter is the guide.
+> The paths below are relative to the built site.
+
 ## What Is Available Without Importing
 
 Twelve modules load ambiently: the prelude, `id`, `io`, `number`, `math`,
