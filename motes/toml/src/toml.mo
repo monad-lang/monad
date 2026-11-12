@@ -928,11 +928,15 @@ def Toml.digits_pos (digit_of : String -> Option I64) (base : I64) (cs : List St
             }
     }
 
-/// A signed integer: `+`/`-` then decimal digits with `_` grouping, or an
-/// unsigned `0x`/`0o`/`0b` literal (a sign on a radix literal is an
-/// error — the spec gives radix integers no sign production). Leading
-/// zeros are rejected for decimal (`0` itself is fine). Overflow is an
-/// error.
+/// An integer: an optional `+`/`-` then decimal digits with `_` grouping,
+/// or an unsigned `0x`/`0o`/`0b` literal. Leading zeros are rejected for
+/// decimal (`0` itself is fine). Overflow is an error.
+///
+/// A sign on a radix literal is an error for EITHER sign — the spec gives
+/// radix integers no sign production at all — so `signed` (did the
+/// spelling carry a sign?) is tracked separately from `neg` (was it `-`?).
+/// Keying the radix guard on `neg` alone let `+0x1` through, which
+/// `tomllib` rejects.
 /// NOTE: this does NOT use parsec's `number` — that parser folds `_` as
 /// the digit 9, so `1_0` read as 190. TOML says `1_0` is 10, and a strict
 /// local scanner is the fix (see `test_parse_underscored_integer`, whose
@@ -943,18 +947,20 @@ def Toml.parse_integer (input : String) : ParseResult I64 :=
 
 #[partial]
 def toml_int_sign (b : I64) (input : String) : ParseResult I64 :=
-    if I64.beq b 43 then toml_int_body (String.drop 1 input) false
-    else if I64.beq b 45 then toml_int_body (String.drop 1 input) true
-    else toml_int_body input false
+    if I64.beq b 43 then toml_int_body (String.drop 1 input) false true
+    else if I64.beq b 45 then toml_int_body (String.drop 1 input) true true
+    else toml_int_body input false false
 
+/// `neg` is the value's sign (decimal only); `signed` is whether the
+/// spelling carried a sign at all — which a radix literal may not.
 #[partial]
-def toml_int_body (input : String) (neg : Bool) : ParseResult I64 :=
+def toml_int_body (input : String) (neg : Bool) (signed : Bool) : ParseResult I64 :=
     if String.starts_with "0x" input
-    then toml_int_radix (String.drop 2 input) neg 16 Toml.is_hex_digit_byte Toml.hex_digit_value
+    then toml_int_radix (String.drop 2 input) signed 16 Toml.is_hex_digit_byte Toml.hex_digit_value
     else if String.starts_with "0o" input
-    then toml_int_radix (String.drop 2 input) neg 8 Toml.is_octal_digit_byte Toml.hex_digit_value
+    then toml_int_radix (String.drop 2 input) signed 8 Toml.is_octal_digit_byte Toml.hex_digit_value
     else if String.starts_with "0b" input
-    then toml_int_radix (String.drop 2 input) neg 2 Toml.is_binary_digit_byte Toml.hex_digit_value
+    then toml_int_radix (String.drop 2 input) signed 2 Toml.is_binary_digit_byte Toml.hex_digit_value
     else toml_int_decimal input neg
 
 /// A radix-prefixed integer's digits. Leading zeros and `_` grouping are
@@ -962,8 +968,8 @@ def toml_int_body (input : String) (neg : Bool) : ParseResult I64 :=
 /// the digits are folded as hex digits, which is a superset of every
 /// radix's digit set once the byte predicate has done its own check.
 #[partial]
-def toml_int_radix (digits : String) (neg : Bool) (base : I64) (pred : I64 -> Bool) (digit_of : String -> Option I64) : ParseResult I64 :=
-    if neg
+def toml_int_radix (digits : String) (signed : Bool) (base : I64) (pred : I64 -> Bool) (digit_of : String -> Option I64) : ParseResult I64 :=
+    if signed
     then fail (ParseError.custom "a sign is not allowed on a radix integer" digits)
     else
         match Toml.scan_bytes pred digits {
@@ -2865,9 +2871,24 @@ def test_parse_leading_zero_is_error : Bool :=
         err _ => true
     }
 
+/// A sign on a radix integer is an error for EITHER sign: the spec gives
+/// `0x`/`0o`/`0b` no sign production at all. The `+` rows regressed --
+/// the radix guard keyed off `neg`, which a `+` leaves false.
 #[test]
 def test_parse_signed_radix_is_error : Bool :=
     match Toml.parse "n = -0x1" {
+        ok _ => false,
+        err _ => true
+    } &&
+    match Toml.parse "n = +0x1" {
+        ok _ => false,
+        err _ => true
+    } &&
+    match Toml.parse "n = +0o1" {
+        ok _ => false,
+        err _ => true
+    } &&
+    match Toml.parse "n = +0b1" {
         ok _ => false,
         err _ => true
     }
