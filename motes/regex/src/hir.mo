@@ -13,6 +13,7 @@ use unicode::lookup {
     Unicode.gc_ranges, Unicode.script_ranges, Unicode.white_space_ranges, Unicode.word_ranges,
     Unicode.digit_ranges, Unicode.simple_fold_entries, Unicode.normalize_name,
 }
+use lib::utf8 {class_utf8_sequences}
 use std::list {List.any, List.filter}
 
 /// A zero-width assertion, resolved.
@@ -365,4 +366,68 @@ def item_ranges (it : RxClassItem) (f : RxFlags) (sp : RegexSpan) : Result Regex
                 Result.err e => Result.err e,
                 Result.ok rs => Result.ok (if negated then class_negate rs (universe f) else rs),
             },
+    }
+
+// ─── Reversal ───
+
+/// The HIR matching the reverse of every byte string `h` matches, for the
+/// reverse DFA that finds where a match starts. Concatenations reverse,
+/// start and end assertions swap, and a scalar class becomes its UTF-8
+/// sequences reversed (single-byte ones merged into one byte class), since
+/// reversed sequences may overlap and no longer share a prefix trie.
+#[terminating]
+pub def hir_reverse (h : RxHir) : RxHir :=
+    match h {
+        RxHir.empty => RxHir.empty,
+        RxHir.cset ranges bytes => if bytes then RxHir.cset ranges true else reverse_scalars ranges,
+        RxHir.look kind => RxHir.look (reverse_look kind),
+        RxHir.repetition min max greedy sub => RxHir.repetition min max greedy (hir_reverse sub),
+        RxHir.capture idx sub => RxHir.capture idx (hir_reverse sub),
+        RxHir.concat items => RxHir.concat (reverse_all items List.empty),
+        RxHir.alternation items => RxHir.alternation (List.reverse (reverse_all items List.empty)),
+    }
+
+/// Each item reversed, in reverse order.
+#[terminating]
+def reverse_all (items : List RxHir) (acc : List RxHir) : List RxHir :=
+    match items {
+        List.empty => acc,
+        List.cons h rest => reverse_all rest (List.cons (hir_reverse h) acc),
+    }
+
+def reverse_look (kind : RxLook) : RxLook :=
+    match kind {
+        RxLook.start_text => RxLook.end_text,
+        RxLook.end_text => RxLook.start_text,
+        RxLook.start_line => RxLook.end_line,
+        RxLook.end_line => RxLook.start_line,
+        _ => kind,
+    }
+
+def reverse_scalars (ranges : List (Pair I64 I64)) : RxHir :=
+    split_seqs (class_utf8_sequences ranges) List.empty List.empty
+
+/// `singles` gathers the one-byte sequences, `chains` the reversed others.
+#[terminating]
+def split_seqs (seqs : List (List (Pair I64 I64))) (singles : List (Pair I64 I64)) (chains : List RxHir) : RxHir :=
+    match seqs {
+        List.empty =>
+            if List.is_empty chains then RxHir.cset (List.reverse singles) true
+            else if List.is_empty singles then RxHir.alternation (List.reverse chains)
+            else RxHir.alternation (List.cons (RxHir.cset (List.reverse singles) true) (List.reverse chains)),
+        List.cons seq rest =>
+            match seq {
+                List.cons r more =>
+                    if List.is_empty more then split_seqs rest (List.cons r singles) chains
+                    else split_seqs rest singles (List.cons (RxHir.concat (byte_chain seq List.empty)) chains),
+                List.empty => split_seqs rest singles chains,
+            },
+    }
+
+/// A sequence's byte classes, reversed.
+#[terminating]
+def byte_chain (seq : List (Pair I64 I64)) (acc : List RxHir) : List RxHir :=
+    match seq {
+        List.empty => acc,
+        List.cons r rest => byte_chain rest (List.cons (RxHir.cset [r] true) acc),
     }
