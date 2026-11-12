@@ -110,6 +110,25 @@ env:
 # run is still linted, rustfmt'd, clippy'd and doc-checked, so no required check
 # is left pending. The whole-corpus sweeps run in `compiler-checks`
 # (self-hosted) and `pre-commit-checks` (the Rust reference host).
+#
+# `compiler-checks` ENDS at the formatting gate. The suites that used to run
+# after it, one by one in the same job -- clap/monadup, SQL, the web stack, the
+# docs site, the REPL, the WASM proof, the TSAN stress -- are seven jobs that
+# `need` it and run side by side once it is green. Unlike `weaver-checks`, they
+# keep the gate in front: the self-compile, `check cli` and the formatting
+# verdict still decide whether any of them runs. What changes is that the tail
+# is no longer serial. They do not self-compile again: `compiler-checks` builds
+# `.#monad` (this tree's compiler, hosted by the pinned nightly -- nix/monad.nix)
+# and pushes it, and each consumer realizes the same path through
+# `.github/actions/tree-compiler`, which exports MONAD_CI_BIN. Two limits:
+#
+#   * The runners are untrusted Nix users, so they do not READ the flake's
+#     cachix substituter (the push serves the Tangled microVMs and trusted
+#     machines). A consumer on the runner that built the path gets a store
+#     hit; one on the other runner builds `.#monad` itself, ~2 min native.
+#   * `.#monad` is hosted by the PINNED nightly (nix/nightly.nix), not the
+#     latest one `ci-self-compile.sh` installs, so a stale pin fails these
+#     jobs as well as the release -- AGENTS.md's "keep the pin fresh".
 jobs:
   # Decides whether the job below has anything to do. Answers over outputs
   # because the gates below read them. `fetch-depth: 0` because the classifier
@@ -375,6 +394,31 @@ jobs:
             --profile "$HOME/.monad-ci-devshell" \
             -c scripts/check-fmt.sh "$PWD/target-monad/ci-self-compile/monad"
 
+      # The consumers below (`clap-monadup-tests` through `wasm-target`) run
+      # this tree's compiler as `.#monad` rather than self-compiling it again:
+      # one store path per run, built here once the gates above have passed.
+      # `.#monad` is a pure function of this checkout (nix/monad.nix: the
+      # pinned nightly's rung 1 plus a commit-stamping link), so each consumer
+      # evaluates the same derivation and finds this build in the store or in
+      # the cache. `.#monadNightlyRung1` is named because a build input is not
+      # in the output closure a `cachix push` walks (nightly.yml does the same).
+      - name: Build and push the tree's compiler from the flake
+        env:
+          CACHIX_AUTH_TOKEN: ${{ secrets.CACHIX_AUTH_TOKEN }}
+        run: |
+          paths="$(nix build --no-link --print-out-paths --accept-flake-config \
+            .#monadNightlyRung1 .#monad)"
+          nix develop --no-pure-eval --accept-flake-config -c scripts/push-to-cache.sh $paths
+
+  clap-monadup-tests:
+    runs-on: [self-hosted, linux]
+    needs: [changes, compiler-checks]
+    if: needs.changes.outputs.compiler == 'true'
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v5
+      - uses: ./.github/actions/tree-compiler
+
       # The clap spec parser/derive and the monadup mote, on the SELF-HOSTED
       # binary. These are the files that exercise the meta evaluator's new
       # String natives; passing under the Rust host is not enough.
@@ -382,7 +426,16 @@ jobs:
         run: |
           nix develop --no-pure-eval --accept-flake-config \
             --profile "$HOME/.monad-ci-devshell" \
-            -c "$PWD/target-monad/ci-self-compile/monad" test motes/clap motes/monadup
+            -c "$MONAD_CI_BIN" test motes/clap motes/monadup
+
+  sql-tests:
+    runs-on: [self-hosted, linux]
+    needs: [changes, compiler-checks]
+    if: needs.changes.outputs.compiler == 'true'
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v5
+      - uses: ./.github/actions/tree-compiler
 
       # monad-sql + monad-sqlite. The common mote's tests are pure and run
       # under either host; the driver's are compiled-only (`#[extern "c"]`,
@@ -392,7 +445,16 @@ jobs:
         run: |
           nix develop --no-pure-eval --accept-flake-config \
             --profile "$HOME/.monad-ci-devshell" \
-            -c "$PWD/target-monad/ci-self-compile/monad" test motes/sql motes/sqlite
+            -c "$MONAD_CI_BIN" test motes/sql motes/sqlite
+
+  web-stack-tests:
+    runs-on: [self-hosted, linux]
+    needs: [changes, compiler-checks]
+    if: needs.changes.outputs.compiler == 'true'
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v5
+      - uses: ./.github/actions/tree-compiler
 
       # The web stack's own suites: http/moon (the server and wire), jsgen,
       # web_wasm, xml_html, oak, and std's Ref primitive. They are not in
@@ -407,11 +469,20 @@ jobs:
         run: |
           nix develop --no-pure-eval --accept-flake-config \
             --profile "$HOME/.monad-ci-devshell" \
-            -c "$PWD/target-monad/ci-self-compile/monad" test \
+            -c "$MONAD_CI_BIN" test \
                  motes/http motes/moon motes/jsgen motes/web_wasm motes/xml_html \
                  motes/oak_wasm motes/oak motes/web_event motes/oak_ui motes/oak_ui_book \
                  motes/acorn docs/site/monad_website \
                  std/src/ref_tests.mo std/src/watch_tests.mo
+
+  docs-site:
+    runs-on: [self-hosted, linux]
+    needs: [changes, compiler-checks]
+    if: needs.changes.outputs.compiler == 'true'
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v5
+      - uses: ./.github/actions/tree-compiler
 
       # `docs/site/monad_website` (on acorn) publishes monad-lang.org
       # (`site.yml`). Building the site here is the only check of the book's
@@ -426,8 +497,17 @@ jobs:
         run: |
           nix develop --no-pure-eval --accept-flake-config \
             --profile "$HOME/.monad-ci-devshell" \
-            -c env MONAD="$PWD/target-monad/ci-self-compile/monad" \
+            -c env MONAD="$MONAD_CI_BIN" \
                  scripts/build-docs.sh --skip-try --with-moon
+
+  repl-session:
+    runs-on: [self-hosted, linux]
+    needs: [changes, compiler-checks]
+    if: needs.changes.outputs.compiler == 'true'
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v5
+      - uses: ./.github/actions/tree-compiler
 
       # `monad repl` end to end through the self-hosted binary: a scripted
       # session covering expressions, a definition then a call, `use`,
@@ -437,19 +517,36 @@ jobs:
         run: |
           nix develop --no-pure-eval --accept-flake-config \
             --profile "$HOME/.monad-ci-devshell" \
-            -c env MONAD_BIN="$PWD/target-monad/ci-self-compile/monad" \
+            -c env MONAD_BIN="$MONAD_CI_BIN" \
                  scripts/check-repl.sh
+
+  wasm-target:
+    runs-on: [self-hosted, linux]
+    needs: [changes, compiler-checks]
+    if: needs.changes.outputs.compiler == 'true'
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v5
+      - uses: ./.github/actions/tree-compiler
 
       # Phase 0-2 of plans/bootstrapping/wasm-target.md: the wasi fib
       # differential, the web loader smoke test, and clean target-gating
-      # errors. Reuses the binary the step above just self-compiled, so it
-      # pays no second compiler build; the script runs no cargo.
+      # errors. Runs the tree's `.#monad` (the tree-compiler action); the
+      # script runs no cargo.
       - name: WASM target proof (wasi + web + gating)
         run: |
           nix develop --no-pure-eval --accept-flake-config \
             --profile "$HOME/.monad-ci-devshell" \
             -c scripts/check-wasm-target.sh \
-              "$PWD/target-monad/ci-self-compile/monad"
+              "$MONAD_CI_BIN"
+
+  runtime-tsan:
+    runs-on: [self-hosted, linux]
+    needs: [changes, compiler-checks]
+    if: needs.changes.outputs.compiler == 'true'
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v5
 
       # plans/implementations/async-runtime-thread-safety.md: the runtime's
       # shared state (fd carry table, child registry, nullary cache) under

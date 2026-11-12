@@ -1,0 +1,17 @@
+name: Tree compiler from the flake
+description: >
+  Realize `.#monad` -- this checkout's compiler, built by the pinned nightly
+  (nix/monad.nix) -- and export its binary as MONAD_CI_BIN. `compiler-checks`
+  builds and pushes the same path before any consumer starts, so this is a
+  store hit or a substitution when that path is reachable, and a native
+  ~2 minute build when it is not (see the note in ci.yml's header). Run it
+  after `actions/checkout`: the flake is the checkout.
+runs:
+  using: composite
+  steps:
+    - name: Realize .#monad
+      shell: bash
+      run: |
+        out="$(nix build --no-link --print-out-paths --accept-flake-config .#monad)"
+        echo "MONAD_CI_BIN=$out/bin/monad" >> "$GITHUB_ENV"
+        echo "tree compiler: $out/bin/monad"
