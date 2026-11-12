@@ -5,9 +5,8 @@
 # and the shared `derive_yaml_*` macros. No compiler input, so no
 # `nix/monad.nix` entry.
 #
-# Sub-table headers rather than inline tables, which the self-hosted reader
-# does not support -- an unparseable manifest makes `Mote.discover` return
-# none and SILENTLY disables the declared-dependency check.
+# `motes/toml` reads the whole of TOML 1.0.0 now, so a manifest written in
+# any valid TOML spelling parses.
 [mote]
 name = "yaml"
 version = "0.1.0"

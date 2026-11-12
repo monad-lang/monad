@@ -7,10 +7,12 @@
 # parsed with `lang::parser::*` that was a cycle. It now depends on the
 # substrate instead, and the edge runs one way: lang -> toml -> parsec.
 #
-# Sub-table headers rather than inline tables, which the self-hosted reader
-# in THIS mote does not support -- an unparseable manifest makes
-# `Mote.discover` return none and SILENTLY disables the declared-dependency
-# check. A manifest this mote cannot read is the one bug it must not ship.
+# The reader covers the whole of TOML 1.0.0 (all four string kinds, floats,
+# date-times, dotted and quoted keys, nested arrays, inline tables), so a
+# manifest written in any valid spelling parses. An unparseable manifest
+# makes `Mote.discover` return none and SILENTLY disables the
+# declared-dependency check, which is why full coverage is the one bug
+# this mote must not ship.
 #
 # `init` and `std` are ambient; declared anyway, as every manifest here
 # does. No `lang`, no `llvm`, no `runtime`: not needing them is the point.
