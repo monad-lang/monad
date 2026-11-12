@@ -53,17 +53,18 @@ def test_docs_skip_the_attribute : Bool :=
                 }),
     }
 
+/// A one-line def keeps its parameters and return type and loses the
+/// expression after the `:=`: the page shows a signature, not a body.
 #[test]
 def test_signature_cuts_the_body : Bool :=
     let m : DocModule := DocExtract.extract_source "init/src/sample.mo" sample in
     match first_item m {
         { signature, .. } =>
-            Bool.and (String.contains signature ": I64 := x + 1")
-                (Bool.not (String.contains signature "\n")),
+            String.beq signature "pub def foo (x : I64) : I64",
     }
 
 /// A bodyless native's signature is its whole declaration: there is no
-/// body to cut, and the trailing `:` line ends the header.
+/// body to cut.
 #[test]
 def test_bodyless_native_signature_is_whole : Bool :=
     let m : DocModule := DocExtract.extract_source "init/src/sample.mo" sample in
@@ -77,6 +78,37 @@ def has_native_signature (items : List DocItem) (found : Bool) : Bool :=
             if String.beq i.name "bar"
             then has_native_signature rest (String.contains i.signature ": String")
             else has_native_signature rest found,
+    }
+
+/// A struct's signature is its whole declaration: a field default's `:=`
+/// is part of the shape, not a body to cut.
+#[test]
+def test_struct_with_defaults_is_whole : Bool :=
+    let src : String := "pub struct S {\n    a : I64 := 0,\n    b : I64,\n}\n" in
+    match first_item (DocExtract.extract_source "x.mo" src) {
+        { signature, .. } =>
+            String.contains signature "a : I64 := 0"
+                && String.contains signature "b : I64"
+                && String.ends_with signature "}",
+    }
+
+/// A class keeps its default methods: the first `:=` is not its end.
+#[test]
+def test_class_with_default_method_is_whole : Bool :=
+    let src : String := "pub class C A {\n    def f (a : A) : I64 := 1\n    def g (a : A) : I64\n}\n" in
+    match first_item (DocExtract.extract_source "x.mo" src) {
+        { signature, .. } => String.contains signature "def g (a : A) : I64",
+    }
+
+/// A def whose header spans lines and has a `}`-ending line (an implicit
+/// binder) is cut at its `:=`, not at the brace.
+#[test]
+def test_multi_line_def_cuts_at_the_body : Bool :=
+    let src : String := "pub def f {A : Type}\n    (x : A) : A :=\n    x\n" in
+    match first_item (DocExtract.extract_source "x.mo" src) {
+        { signature, .. } =>
+            String.starts_with "pub def f {A : Type}\n" signature
+                && String.ends_with signature "(x : A) : A",
     }
 
 #[test]
@@ -186,4 +218,27 @@ def test_line_numbers_are_one_based : Bool :=
                 List.empty => false,
                 List.cons i rest => I64.beq i.line 3,
             },
+    }
+
+/// A module's identity is the mote, then one segment per directory under
+/// `src/`, `::`-joined: `std/src/concurrent/channel.mo` is
+/// `std::concurrent::channel`, not the flat `channel` a basename would give.
+#[test]
+def test_nested_module_keeps_its_segment : Bool :=
+    match DocExtract.extract_source "std/src/concurrent/channel.mo" "pub def x : I64 := 1\n" {
+        { module, .. } => String.beq module "std::concurrent::channel",
+    }
+
+/// A flat module is `mote::name`.
+#[test]
+def test_flat_module_identity : Bool :=
+    match DocExtract.extract_source "init/src/list.mo" "pub def x : I64 := 1\n" {
+        { module, .. } => String.beq module "init::list",
+    }
+
+/// A synthetic path with no `src` segment still yields a usable name.
+#[test]
+def test_bare_path_identity : Bool :=
+    match DocExtract.extract_source "x.mo" "pub def x : I64 := 1\n" {
+        { module, .. } => String.beq module "x",
     }

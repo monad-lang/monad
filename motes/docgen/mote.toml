@@ -15,6 +15,15 @@ name = "docgen"
 version = "0.1.0"
 edition = "2026"
 
+# Both a library (the extraction and rendering halves, which `monad doc`
+# will call) and a binary (the standalone `docgen build`).
+[lib]
+path = "src/lib.mo"
+
+[[bin]]
+name = "docgen"
+path = "src/main.mo"
+
 [dependencies.init]
 workspace = true
 
@@ -37,6 +46,10 @@ workspace = true
 
 # The HTML node model the renderer builds its page bodies from.
 [dependencies.xml_html]
+workspace = true
+
+# Doc comments are markdown, rendered with the book's own options.
+[dependencies.markdown]
 workspace = true
 
 # `llvm` and `runtime` are declared because `lang::module` -- where `Diagnostic`

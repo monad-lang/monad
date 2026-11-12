@@ -15,19 +15,19 @@
 /// docs and the declaration is a deliberate separation, and reading past it
 /// would attach the previous item's docs to this one.
 ///
-/// THE SIGNATURE is the declaration's own text from its first attributed
-/// token, cut at its header. A `def`'s page shows its parameters and return
-/// type, not its body; a `type`'s or `class`'s page shows the whole
-/// declaration, because its shape is its contract. The cut is the first line
-/// that ends the header: a `:=` for a def with a body, a lone `:` for a
-/// bodyless native, and the closing `}` for a type/class/instance. Files
+/// THE SIGNATURE is the declaration's own text after its attributes. A
+/// `def`'s page shows its parameters and return type, not its body, so a def
+/// is cut at its first `:=` (a bodyless native has none and stays whole). A
+/// `type`, `struct`, `class` or `instance` shows the whole declaration,
+/// because its shape is its contract -- and it is never cut at a `:=`, which
+/// in a struct is a field default and in a class a default method. Files
 /// here type-checked before docgen ever saw them, so the cut is a display
 /// choice, not a parse.
 
-use lang::module {module_name_from_path}
 use lang::types {SourceRange}
 use std::io {IO.list_dir, IO.read_file}
-use std::path {Path, Path.of}
+use std::path {Path, PathError, Path.of, Path.normalize, PathError.to_string}
+use lang::mote {Mote.manifest_at}
 use toolkit::decl_text {
     DeclText, decl_text_kind, decl_text_name, decl_text_span, decl_texts_of_source,
 }
@@ -40,21 +40,18 @@ use lib::model {DocItem, DocModule, DocMote}
 /// too -- they are the mote's own verification, not its API.
 pub def DocExtract.extract_mote (mote_dir : String) : IO (Result String DocMote) :=
     match Path.of mote_dir {
-        Result.err e => return (Result.err e),
+        Result.err e => return (Result.err (PathError.to_string e)),
         Result.ok p => DocExtract.extract_mote_at p,
     }
 
-/// `extract_mote` with the mote directory already validated. The mote's
-/// name is its directory's last segment -- the name a `use` path's first
-/// segment must spell.
+/// `extract_mote` with the mote directory already validated.
 pub def DocExtract.extract_mote_at (mote_dir : Path) : IO (Result String DocMote) := do {
-    let name : String := Path.file_name mote_dir;
+    let name <- mote_name mote_dir;
     let src_dir : String := String.concat (Path.to_string mote_dir) "/src";
     match Path.of src_dir {
-        Result.err e => return (Result.err e),
+        Result.err e => return (Result.err (PathError.to_string e)),
         Result.ok p => do {
-            let listed <- IO.list_dir p;
-            let files : List String := keep_source_files listed List.empty;
+            let files <- source_files p List.empty;
             let walked <- extract_files name src_dir files List.empty;
             match walked {
                 Result.err e => return (Result.err e),
@@ -64,16 +61,85 @@ pub def DocExtract.extract_mote_at (mote_dir : Path) : IO (Result String DocMote
     }
 }
 
-/// `DocExtract.extract_mote` over one source file -- the shape the tests
+/// The mote's name: its manifest's `[mote] name` -- the name a `use`
+/// path's first segment must spell -- else its directory's last segment.
+/// Not the directory alone: `monad doc` with no argument documents `.`,
+/// whose last segment is `.` itself.
+def mote_name (mote_dir : Path) : IO String := do {
+    let manifest <- Mote.manifest_at (Path.to_string mote_dir);
+    match manifest {
+        Option.some m => return m.name,
+        Option.none => return (Path.file_name (Path.normalize mote_dir)),
+    }
+}
+
+/// A file found under `src_dir` as its module path within mote `name`:
+/// `<src_dir>/concurrent/channel.mo` is `std::concurrent::channel` whatever
+/// the directory was spelled as (`.`, `../std`, an absolute path). A file
+/// outside `src_dir` falls back to `module_of_file`.
+def module_in_mote (name : String) (src_dir : String) (file : String) : String :=
+    let prefix : String := String.concat src_dir "/" in
+    if String.starts_with prefix file
+    then module_of_file (String.concat name (String.concat "/src/" (String.drop (String.length prefix) file)))
+    else module_of_file file
+
+/// `DocExtract.extract_source` over one source file -- the shape the tests
 /// drive, and what a caller holding a single file wants. `file` is the
 /// module's identity (`init/src/string.mo`); the module path is derived
 /// from it, so the function works on any file the caller names.
 pub def DocExtract.extract_source (file : String) (src : String) : DocModule :=
-    let module : String := module_name_from_path file in
+    DocExtract.extract_source_as (module_of_file file) file src
+
+/// `extract_source` with the module path given rather than derived from
+/// `file` -- what a mote walk uses, since it knows the mote's real name.
+pub def DocExtract.extract_source_as (module : String) (file : String) (src : String) : DocModule :=
     let lines : Shared (List String) := Shared.of (split_lines src) in
     let ds : List DeclText := decl_texts_of_source src in
     let items : List DocItem := doc_items file src lines ds List.empty in
     DocModule.mk module file (module_doc_of lines) (List.reverse items)
+
+/// A file path to its module's dotted identity: the mote segment, then one
+/// segment per directory under `src/`, `::`-joined. `init/src/list.mo` is
+/// `init::list`; `std/src/concurrent/channel.mo` is `std::concurrent::channel`.
+/// A bare `x.mo` (a synthetic test path) falls back to its own stem.
+pub def module_of_file (file : String) : String :=
+    let segments : List String := split_segments (String.to_list file) List.empty List.empty in
+    dotted_of_segments (drop_src segments) ""
+
+/// The path's `/`-separated segments, in order, with the `.mo` suffix gone.
+#[partial]
+def split_segments (cs : List U8) (cur : List U8) (acc : List String) : List String :=
+    match cs {
+        List.empty => List.reverse (List.cons (String.from_list (List.reverse cur)) acc),
+        List.cons c rest =>
+            if U8.beq c (47u8)
+            then split_segments rest List.empty (List.cons (String.from_list (List.reverse cur)) acc)
+            else split_segments rest (List.cons c cur) acc,
+    }
+
+/// The segments after the first `src`: the mote's name precedes it and its
+/// modules follow it. A path with no `src` segment is kept whole.
+#[partial]
+def drop_src (segments : List String) : List String :=
+    match segments {
+        List.empty => List.empty,
+        List.cons s rest =>
+            if String.beq s "src" then rest else List.cons s (drop_src rest),
+    }
+
+/// Join segments with `::`, dropping the `.mo` suffix of the last one.
+#[partial]
+def dotted_of_segments (segments : List String) (acc : String) : String :=
+    match segments {
+        List.empty => acc,
+        List.cons s rest =>
+            let piece : String := strip_mo s in
+            let next : String := if String.is_empty acc then piece else String.concat acc (String.concat "::" piece) in
+            dotted_of_segments rest next,
+    }
+
+def strip_mo (s : String) : String :=
+    if String.ends_with s ".mo" then String.slice s 0 (String.length s - 3) else s
 
 /// One `DocItem` per declaration, accumulated in reverse. The span's
 /// `start.line` is the line the range begins on -- the first `#[...]`
@@ -118,7 +184,7 @@ def item_of (file : String) (src : String) (lines : Shared (List String)) (name 
 def item_at (file : String) (src : String) (lines : Shared (List String)) (name : String)
     (kind : String) (off : I64) (line : I64) (eoff : I64) : DocItem :=
     let raw : String := String.slice src off (I64.sub eoff off) in
-    let signature : String := signature_of raw in
+    let signature : String := signature_of kind raw in
     let doc : Option String := DocExtract.doc_comment_of lines line in
     let decl_line : I64 := I64.add line (count_attribute_lines raw) in
     DocItem.mk name kind (is_pub signature) doc signature file decl_line
@@ -262,15 +328,23 @@ def join_lines (lines : List String) (acc : String) : String :=
         List.cons l rest => join_lines rest (String.concat acc (String.concat l "\n")),
     }
 
-/// The declaration's header: its text from its first post-attribute token,
-/// cut at the header's last line. The leading `#[...]` attributes are
-/// dropped -- a page shows the signature, not the attribute that produced it
-/// (a `#[test]` def is not part of an API, and `#[opaque]` is an
-/// implementation note).
-def signature_of (text : String) : String :=
-    let lines : List String := split_lines text in
-    let body : String := after_attributes lines in
-    cut_header_lines (split_lines body) List.empty
+/// The declaration's signature: its text from its first post-attribute
+/// token, a def-like declaration cut at its body (`shows_whole`). The leading
+/// `#[...]` attributes are dropped -- a page shows the signature, not the
+/// attribute that produced it (a `#[test]` def is not part of an API, and
+/// `#[opaque]` is an implementation note).
+def signature_of (kind : String) (text : String) : String :=
+    let body : String := after_attributes (split_lines text) in
+    if shows_whole kind
+    then String.trim body
+    else cut_header_lines (split_lines body) List.empty
+
+/// The kinds whose whole declaration is their contract.
+def shows_whole (kind : String) : Bool :=
+    String.beq kind "type"
+        || String.beq kind "struct"
+        || String.beq kind "class"
+        || String.beq kind "instance"
 
 /// The text's lines, in order. Split on `\n`; a `\r` before it is kept by
 /// the trim each line gets later, so CRLF sources work.
@@ -290,9 +364,10 @@ def split_lines_go (bytes : List U8) (cur : List U8) (acc : List String) : List 
             else split_lines_go rest (List.cons b cur) acc,
     }
 
-/// Walk the lines, keeping the header's own lines. The first line that
-/// ends a header (`:=`, a lone `:`, a closing `}`) is the last kept line;
-/// everything after it is the body, which the signature does not show. The
+/// Walk a def's lines, keeping the header's own lines. The first line with a
+/// `:=` is the last kept line, cut before it; everything after is the body,
+/// which the signature does not show. A def with no `:=` (a bodyless
+/// native) is kept whole: its span ends where its declaration does. The
 /// kept lines are joined with `\n` (not `String.concat_list`, which joins
 /// with nothing and would run a multi-line header together), then trimmed.
 #[partial]
@@ -300,39 +375,18 @@ def cut_header_lines (lines : List String) (kept : List String) : String :=
     match lines {
         List.empty => String.trim (join_lines (List.reverse kept) ""),
         List.cons l rest =>
-            if header_ends_here l
-            then String.trim (join_lines (List.reverse (List.cons l kept)) "")
+            if String.contains l ":="
+            then String.trim (join_lines (List.reverse (List.cons (cut_body l) kept)) "")
             else cut_header_lines rest (List.cons l kept),
     }
 
-/// Does this line end the header? A `:=` ends a def's header (the body
-/// follows); a line whose trimmed form ends in `}` closes a shape; a line
-/// ending in `:` alone is a bodyless native's whole signature.
-def header_ends_here (line : String) : Bool :=
-    let t : String := String.trim line in
-    String.contains t ":="
-    || String.ends_with t "}"
-    || String.ends_with t ":"
-
-/// Keep the `.mo` files that are not test files: `*_tests.mo` by name, and
-/// anything whose path has a `tests` segment. `IO.list_dir` hands back the
-/// full paths under `src/`, so the segment test sees them.
-#[partial]
-def keep_source_files (files : List Path) (acc : List String) : List String :=
-    match files {
-        List.empty => List.reverse acc,
-        List.cons p rest =>
-            let name : String := Path.to_string p in
-            let kept : Bool := String.ends_with name ".mo" && Bool.not (is_test_file name) in
-            keep_source_files rest (if kept then List.cons name acc else acc),
+/// The header line with any `:= ...` body cut off: a one-line def keeps its
+/// parameters and return type and loses the expression after the `:=`.
+def cut_body (line : String) : String :=
+    match String.index_of line ":=" {
+        Option.none => line,
+        Option.some idx => String.trim (String.slice line 0 idx),
     }
-
-/// A test file: `*_tests.mo` by name, or any path containing a `tests`
-/// segment. `IO.list_dir` is one level but joins the parent, so
-/// `src/tests/site_tests.mo` carries the segment; the name test catches
-/// the `std/src/list_tests1.mo` layout.
-def is_test_file (path : String) : Bool :=
-    String.ends_with path "_tests.mo" || String.contains path "/tests/"
 
 /// Read each file and extend the module list, stopping at the first
 /// error. The list is accumulated by cons and reversed once at the end, so
@@ -347,13 +401,16 @@ def extract_files (name : String) (src_dir : String) (files : List String) (acc 
         List.cons f rest => extract_one_file name src_dir f rest acc,
     }
 
+/// One file, given as the path `source_files` produced. The module's own
+/// identity is that path with the mote directory's `src/` prefix replaced by
+/// the mote's name, so a nested file keeps its segment:
+/// `<mote>/src/concurrent/channel.mo` is `std::concurrent::channel`.
 #[partial]
 #[terminating]
 def extract_one_file (name : String) (src_dir : String) (file : String) (rest : List String)
     (acc : List DocModule) : IO (Result String (List DocModule)) := do {
-    let full : String := String.concat src_dir (String.concat "/" (file_base file));
-    match Path.of full {
-        Result.err e => return (Result.err e),
+    match Path.of file {
+        Result.err e => return (Result.err (PathError.to_string e)),
         Result.ok p => read_source name src_dir file rest acc p,
     }
 }
@@ -364,7 +421,7 @@ def read_source (name : String) (src_dir : String) (file : String) (rest : List 
     (acc : List DocModule) (p : Path) : IO (Result String (List DocModule)) := do {
     let read <- IO.read_file p;
     match read {
-        Result.err e => return (Result.err (String.concat "read " (String.concat (Path.to_string p) (String.concat ": " e.message)))),
+        Result.err e => return (Result.err (String.concat "read " (String.concat file (String.concat ": " e.message)))),
         Result.ok src => read_and_extend name src_dir file rest acc src,
     }
 }
@@ -376,15 +433,68 @@ def read_source (name : String) (src_dir : String) (file : String) (rest : List 
 #[terminating]
 def read_and_extend (name : String) (src_dir : String) (file : String) (rest : List String)
     (acc : List DocModule) (src : String) : IO (Result String (List DocModule)) := do {
-    let base : String := file_base file;
-    let rel : String := String.concat name (String.concat "/src/" base);
-    let mod : DocModule := DocExtract.extract_source rel src;
+    let mod : DocModule := DocExtract.extract_source_as (module_in_mote name src_dir file) file src;
     extract_files name src_dir rest (List.cons mod acc)
 }
 
-/// The file name's last segment: `src/string.mo` -> `string.mo`. The path
+/// Every `.mo` file under `dir`, recursively, minus the test files. A mote's
+/// modules may sit in a subdirectory (`std/src/concurrent/channel.mo`), and
+/// `IO.list_dir` is one level, so a directory is walked rather than skipped.
+/// Paths come back in the directory's own listing order, which `IO.list_dir`
+/// sorts, so a page tree is stable across runs.
+#[terminating]
+def source_files (dir : Path) (acc : List String) : IO (List String) := do {
+    let listed <- IO.list_dir dir;
+    walk_entries listed acc
+}
+
+#[terminating]
+def walk_entries (entries : List Path) (acc : List String) : IO (List String) :=
+    match entries {
+        List.empty => return (List.reverse acc),
+        List.cons p rest => walk_one p rest acc,
+    }
+
+/// One entry: a directory is walked (its files come before the rest of this
+/// level, because a subdirectory's modules are named with their segment); a
+/// kept `.mo` file is appended; anything else is skipped.
+#[terminating]
+def walk_one (p : Path) (rest : List Path) (acc : List String) : IO (List String) := do {
+    let dir <- IO.is_dir p;
+    if dir
+    then walk_dir p rest acc
+    else walk_file p rest acc
+}
+
+#[terminating]
+def walk_dir (p : Path) (rest : List Path) (acc : List String) : IO (List String) := do {
+    let inner <- source_files p acc;
+    walk_entries rest inner
+}
+
+#[terminating]
+def walk_file (p : Path) (rest : List Path) (acc : List String) : IO (List String) :=
+    let name : String := Path.to_string p in
+    let kept : Bool := String.ends_with name ".mo" && Bool.not (is_test_file name) in
+    walk_entries rest (if kept then List.cons name acc else acc)
+
+/// A source file that is not the mote's own verification: the corpus's
+/// convention (`scripts/build-try.sh`) is a name containing `_tests`, a file
+/// named `test*`, or a path with a `tests` segment. The `_test.mo`,
+/// `_bench.mo` and `_profile.mo` suffixes are the singletons the corpus uses
+/// beside that convention (`std/src/concurrent/poll_test.mo`,
+/// `std/src/sha256_bench.mo`, `init/src/string_profile.mo`).
+def is_test_file (path : String) : Bool :=
+    String.contains path "_tests"
+        || String.contains path "_test.mo"
+        || String.contains path "_bench.mo"
+        || String.contains path "_profile.mo"
+        || String.starts_with "test" (file_name path)
+        || String.contains path "/tests/"
+
+/// The path's last segment: `src/string.mo` -> `string.mo`. Every path here
 /// came from `IO.list_dir`, which joins the parent, so one `find_last`
 /// suffices.
-def file_base (path : String) : String :=
+def file_name (path : String) : String :=
     let idx : I64 := String.find_last path "/" in
     if I64.beq idx -1 then path else String.slice path (idx + 1) (String.length path - idx - 1)
