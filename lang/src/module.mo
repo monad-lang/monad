@@ -1243,7 +1243,7 @@ def mote_dep_lib_files (m : MoteManifest) (dep : String) (dep_man : Option MoteM
         Option.none => List.empty,
         Option.some dep_dir =>
             match dep_man {
-                Option.some d => List.cons (mote_lib_file_of d) List.empty,
+                Option.some d => List.cons (Path.to_string (mote_lib_file_of d)) List.empty,
                 Option.none => List.cons (String.concat (mote_dep_src_root dep_dir) "lib.mo") List.empty
             }
     }
@@ -1262,10 +1262,10 @@ def mote_dep_lib_file_of (m : MoteManifest) (dep : String) : IO (List String) :=
 /// A mote's own library root: its declared `[lib] path`, which
 /// `Mote.lib_target_path` already spells as `<mote dir>/<declared or
 /// src/lib.mo>`. The fallback covers a `MoteManifest` built without one.
-def mote_lib_file_of (m : MoteManifest) : String :=
+def mote_lib_file_of (m : MoteManifest) : Path :=
     match m.lib_path {
         Option.some p => p,
-        Option.none => String.concat (String.concat (MoteManifest.src_root m) "/") "lib.mo"
+        Option.none => Path.unsafe (String.concat (String.concat (MoteManifest.src_root m) "/") "lib.mo")
     }
 
 /// `<mote>.a.b` -> `<mote dir>/src/a/b.mo`, and a bare `<mote>` -> the
@@ -1280,7 +1280,7 @@ def mote_path_within (m : MoteManifest) (mp : ModulePath) : Option String :=
                     then
                         let root := String.concat (MoteManifest.src_root m) "/" in
                         match rest {
-                            List.empty => Option.some (mote_lib_file_of m),
+                            List.empty => Option.some (Path.to_string (mote_lib_file_of m)),
                             List.cons _ _ =>
                                 Option.some (String.concat root
                                     (String.concat (module_path_to_file (ModulePath.mk rest)) ".mo"))
@@ -5478,7 +5478,7 @@ def gate_declared_deps (r : Result String LoadedModules) : IO (Result String Loa
 def mote_has_a_target (m : MoteManifest) : IO Bool := do {
     let lib_ok <- match m.lib_path {
         Option.none => IO.pure false,
-        Option.some p => file_exists (Path.path p),
+        Option.some p => file_exists p,
     };
     if lib_ok
     then IO.pure true
@@ -5494,7 +5494,7 @@ def first_bin_on_disk (bs : List BinTarget) : IO Bool := do {
     match bs {
         List.empty => return false,
         List.cons b rest => do {
-            let there <- file_exists (Path.path (BinTarget.target_path b));
+            let there <- file_exists (BinTarget.target_path b);
             if there then return true else first_bin_on_disk rest
         }
     }
@@ -5507,29 +5507,29 @@ def first_script_on_disk (ss : List ScriptTarget) : IO Bool := do {
     match ss {
         List.empty => return false,
         List.cons s rest => do {
-            let there <- file_exists (Path.path (ScriptTarget.script_path s));
+            let there <- file_exists (ScriptTarget.script_path s);
             if there then return true else first_script_on_disk rest
         }
     }
 }
 
-def option_target_paths (p : Option String) : List String :=
+def option_target_paths (p : Option Path) : List Path :=
     match p { Option.none => List.empty, Option.some s => List.cons s List.empty }
 
-def bin_target_paths (bs : List BinTarget) : List String :=
+def bin_target_paths (bs : List BinTarget) : List Path :=
     match bs {
         List.empty => List.empty,
         List.cons b rest => List.cons (BinTarget.target_path b) (bin_target_paths rest)
     }
 
-def script_target_paths (ss : List ScriptTarget) : List String :=
+def script_target_paths (ss : List ScriptTarget) : List Path :=
     match ss {
         List.empty => List.empty,
         List.cons s rest => List.cons (ScriptTarget.script_path s) (script_target_paths rest)
     }
 
 /// Every path the gate tried for this mote, in the order it tried them.
-def mote_target_paths (m : MoteManifest) : List String :=
+def mote_target_paths (m : MoteManifest) : List Path :=
     List.append (option_target_paths m.lib_path)
         (List.append (bin_target_paths m.bins) (script_target_paths m.scripts))
 
@@ -5539,13 +5539,13 @@ def mote_target_paths (m : MoteManifest) : List String :=
 def targetless_mote_error (m : MoteManifest) : String :=
     let named : String :=
         List.intercalate " and "
-            (List.map (fn (p : String) => String.concat "`" (String.concat p "`"))
+            (List.map (fn (p : Path) => String.concat "`" (String.concat (Path.to_string p) "`"))
                 (mote_target_paths m)) in
     String.concat_all [
         "error: mote `", m.name, "` has no target that exists\n",
         "  ", raw_path_join m.dir "mote.toml", " names ", named,
         " as its targets, and none of those is a file\n",
-        "  hint: create `", mote_lib_file_of m,
+        "  hint: create `", Path.to_string (mote_lib_file_of m),
         "` for a library mote, add a [[bin]] table naming a file a binary mote builds, ",
         "or add a [[script]] naming an existing file",
     ]

@@ -93,7 +93,7 @@ pub struct MoteManifest {
     /// A PATH, not a promise that the file is there: `manifest_of_table` is
     /// pure and cannot probe the filesystem. Whether it exists is
     /// `gate_mote_targets`' question (lang/module.mo).
-    lib_path : Option String,
+    lib_path : Option Path,
     /// This mote's runnable scripts, from `[[script]]`. A script is a
     /// single source file built with this mote's dependency closure and run
     /// by name (`monad script <name>` / `monad s <name>`). A virtual
@@ -150,7 +150,7 @@ type MoteRootLookup {
 pub struct BinTarget {
     /// `[[bin]] path`, or `src/main.mo` when the entry names none, joined
     /// onto the mote's own `dir` the same way `dep_dirs` entries are.
-    path : String,
+    path : Path,
     /// `[[bin]] name`, or the mote's own name when the entry names none. Not
     /// optional: it is what `monad build <mote>` names the output after, so
     /// the fallback to a source file's own stem is the FILE compile's rule
@@ -166,7 +166,7 @@ pub struct BinTarget {
 /// (the def can be emitted with the FIELD's LLVM type as its return type).
 /// A one-line accessor whose return type IS the field's type costs nothing
 /// and sidesteps it.
-pub def BinTarget.target_path (b : BinTarget) : String := b.path
+pub def BinTarget.target_path (b : BinTarget) : Path := b.path
 
 pub def BinTarget.target_name (b : BinTarget) : String := b.name
 
@@ -178,7 +178,7 @@ pub def BinTarget.target_features (b : BinTarget) : List String := b.features
 /// the script uses (recommended at a virtual workspace root).
 pub struct ScriptTarget {
     name : String,
-    path : String,
+    path : Path,
     mote : Option String,
     /// `[[script]] features = [...]`: this script's extra features.
     features : List String
@@ -186,7 +186,7 @@ pub struct ScriptTarget {
 
 pub def ScriptTarget.script_name (t : ScriptTarget) : String := t.name
 
-pub def ScriptTarget.script_path (t : ScriptTarget) : String := t.path
+pub def ScriptTarget.script_path (t : ScriptTarget) : Path := t.path
 
 pub def ScriptTarget.script_mote (t : ScriptTarget) : Option String := t.mote
 
@@ -490,13 +490,14 @@ pub def Mote.web_only_bin_file (m : MoteManifest) (file : String) : Bool :=
 
 /// A `BinTarget.path` is already joined onto the mote directory
 /// (`bin_target_of`/`default_bin_target` store `raw_path_join dir path`),
-/// so the comparison is against the stored path as-is.
+/// so the walked file's spelling is compared against it as stored, rendered
+/// once.
 #[terminating]
 def Mote.bin_matches_file (bs : List BinTarget) (file : String) : Bool :=
     match bs {
         List.empty => false,
         List.cons b rest =>
-            if String.beq file (BinTarget.target_path b)
+            if String.beq file (Path.to_string (BinTarget.target_path b))
             then true
             else Mote.bin_matches_file rest file,
     }
@@ -504,9 +505,11 @@ def Mote.bin_matches_file (bs : List BinTarget) (file : String) : Bool :=
 /// A target FILE's directory, with the mote root spelled the way a path
 /// expander wants it: `src/lib.mo` -> `src`, but a target at the mote root
 /// (`main.mo`) -> `.`, not `""`.
-def Mote.target_root_of (path : String) : String :=
-    let d : String := raw_parent_dir path in
-    if String.beq d "" then "." else d
+def Mote.target_root_of (path : Path) : String :=
+    match Path.parent path {
+        Option.some d => Path.to_string d,
+        Option.none => ".",
+    }
 
 def Mote.bin_target_roots (bs : List BinTarget) : List String :=
     match bs {
@@ -1606,10 +1609,10 @@ pub def Mote.any_git_dep (deps : List (Pair String Dependency)) : Bool :=
 /// `[[bin]]` is deliberately NOT the same shape: a bin table can name
 /// several targets, so those default per ENTRY (see `Mote.bin_targets`),
 /// and an absent table defaults to one target rather than to a filename.
-def Mote.lib_target_path (dir : String) (root : BTreeMap String Toml.Value) : Option String :=
-    match Mote.joined_table_string dir (Toml.table_get "lib" root) "path" {
+def Mote.lib_target_path (dir : String) (root : BTreeMap String Toml.Value) : Option Path :=
+    match Mote.joined_table_path dir (Toml.table_get "lib" root) "path" {
         Option.some p => Option.some p,
-        Option.none => Option.some (raw_path_join dir "src/lib.mo"),
+        Option.none => Option.some (Mote.default_path dir "src/lib.mo"),
     }
 
 /// The mote's binary targets, in declaration order.
@@ -1660,7 +1663,7 @@ def Mote.bin_targets_of_values (dir : String) (mote_name : String) (entries : Li
 /// without declaring one.
 def Mote.default_bin_target (dir : String) (mote_name : String) : BinTarget :=
     let t : BinTarget := {
-        path := raw_path_join dir "src/main.mo",
+        path := Mote.default_path dir "src/main.mo",
         name := mote_name,
         features := List.empty,
     } in
@@ -1669,10 +1672,10 @@ def Mote.default_bin_target (dir : String) (mote_name : String) : BinTarget :=
 /// One `[[bin]]` entry: its own `path` and `name`, each falling back to the
 /// conventional value when the entry names none.
 def Mote.bin_target_of (dir : String) (mote_name : String) (sub : BTreeMap String Toml.Value) : BinTarget :=
-    let declared := Mote.joined_table_string dir (Option.some (Toml.Value.table sub)) "path" in
-    let path : String := match declared {
+    let declared := Mote.joined_table_path dir (Option.some (Toml.Value.table sub)) "path" in
+    let path : Path := match declared {
         Option.some p => p,
-        Option.none => raw_path_join dir "src/main.mo",
+        Option.none => Mote.default_path dir "src/main.mo",
     } in
     let named := Mote.string_value (Toml.table_get "name" sub) in
     let name : String := match named {
@@ -1808,10 +1811,10 @@ def Mote.script_target_of (dir : String) (sub : BTreeMap String Toml.Value) : Op
     match Mote.string_value (Toml.table_get "name" sub) {
         Option.none => Option.none,
         Option.some name =>
-            let declared := Mote.joined_table_string dir (Option.some (Toml.Value.table sub)) "path" in
-            let path : String := match declared {
+            let declared := Mote.joined_table_path dir (Option.some (Toml.Value.table sub)) "path" in
+            let path : Path := match declared {
                 Option.some p => p,
-                Option.none => raw_path_join dir (String.concat "scripts/" (String.concat name ".mo")),
+                Option.none => Mote.default_path dir (String.concat "scripts/" (String.concat name ".mo")),
             } in
             let t : ScriptTarget := {
                 name := name,
@@ -1889,6 +1892,23 @@ def Mote.joined_table_string (dir : String) (table : Option Toml.Value) (key : S
         Option.none => Option.none,
         Option.some p => Option.some (raw_path_join dir p)
     }
+
+/// `[lib] path` / `[[bin]] path` / `[[script]] path`: the one place a
+/// manifest-declared FILE path crosses into `Path`. The joined spelling is
+/// preserved verbatim -- a declared `lib/../lib/main.mo` stays exactly that,
+/// because resolution compares this spelling and only the loader's final
+/// winner is normalized. (A declared `path = ""` still joins to the mote's
+/// own directory, including the empty spelling when the mote IS the working
+/// directory; that is the existing meaning, not a new sentinel.)
+def Mote.joined_table_path (dir : String) (table : Option Toml.Value) (key : String) : Option Path :=
+    match Mote.joined_table_string dir table key {
+        Option.none => Option.none,
+        Option.some p => Option.some (Path.unsafe p)
+    }
+
+/// A compiler-known default under the mote's directory, as a `Path`.
+def Mote.default_path (dir : String) (rel : String) : Path :=
+    Path.unsafe (raw_path_join dir rel)
 
 /// A string-array field of a sub-table (`[link] libs = ["m", "pthread"]`),
 /// empty when the table, the key, or the array is absent. Non-string
@@ -2491,7 +2511,7 @@ def test_target_roots_of_the_conventional_defaults : Bool :=
 /// path a walk can be given -- `.` is.
 #[test]
 def test_target_roots_of_a_root_level_target : Bool :=
-    String.beq (Mote.target_root_of "main.mo") "."
+    String.beq (Mote.target_root_of (Path.unsafe "main.mo")) "."
 
 /// An inline mote declares no targets at all, so the fallback (the mote's
 /// own directory) is the answer rather than an empty list -- an empty one
@@ -2829,7 +2849,7 @@ def test_manifest_reads_the_bin_target : Bool :=
                 List.empty => false,
                 List.cons b rest =>
                     if Bool.not (List.is_empty rest) then false
-                    else if String.beq (BinTarget.target_path b) "src/main.mo"
+                    else if String.beq (Path.to_string (BinTarget.target_path b)) "src/main.mo"
                         then String.beq (BinTarget.target_name b) "monad"
                         else false
             }
@@ -2848,7 +2868,7 @@ def test_manifest_reads_several_bin_targets : Bool :=
                     if Bool.not (String.beq (BinTarget.target_name second) "tool") then false
                     else match bin_target_at m.bins 2 {
                         Option.some _ => false,
-                        Option.none => String.beq (BinTarget.target_path second) "src/bin/tool.mo"
+                        Option.none => String.beq (Path.to_string (BinTarget.target_path second)) "src/bin/tool.mo"
                     }
             }
     }
@@ -2870,7 +2890,7 @@ def second_script_ok (scripts : List ScriptTarget) : Bool :=
         Option.none => false,
         Option.some seed =>
             if Bool.not (String.beq (ScriptTarget.script_name seed) "seed") then false
-            else if Bool.not (String.beq (ScriptTarget.script_path seed) "scripts/seed.mo") then false
+            else if Bool.not (String.beq (Path.to_string (ScriptTarget.script_path seed)) "scripts/seed.mo") then false
             else match ScriptTarget.script_mote seed {
                 Option.none => match script_at scripts 2 {
                     Option.none => true,
@@ -2889,7 +2909,7 @@ def test_manifest_reads_scripts : Bool :=
                 Option.none => false,
                 Option.some dev =>
                     if Bool.not (String.beq (ScriptTarget.script_name dev) "dev") then false
-                    else if Bool.not (String.beq (ScriptTarget.script_path dev) "scripts/dev.mo") then false
+                    else if Bool.not (String.beq (Path.to_string (ScriptTarget.script_path dev)) "scripts/dev.mo") then false
                     else match ScriptTarget.script_mote dev {
                         Option.some n =>
                             if String.beq n "app" then second_script_ok m.scripts else false,
@@ -2934,7 +2954,7 @@ def test_manifest_without_a_bin_table_has_the_default_bin_target : Bool :=
                 List.empty => false,
                 List.cons b rest =>
                     if Bool.not (List.is_empty rest) then false
-                    else if String.beq (BinTarget.target_path b) "lang/src/main.mo"
+                    else if String.beq (Path.to_string (BinTarget.target_path b)) "lang/src/main.mo"
                         then String.beq (BinTarget.target_name b) "lang"
                         else false
             }
@@ -2952,7 +2972,7 @@ def test_bin_entry_without_a_path_defaults_to_main : Bool :=
                 Option.none => false,
                 Option.some b =>
                     if String.beq (BinTarget.target_name b) "tool"
-                    then String.beq (BinTarget.target_path b) "cli/src/main.mo"
+                    then String.beq (Path.to_string (BinTarget.target_path b)) "cli/src/main.mo"
                     else false
             }
     }
@@ -2966,7 +2986,7 @@ def test_lib_path_defaults_to_src_lib : Bool :=
         Option.none => false,
         Option.some m => match m.lib_path {
             Option.none => false,
-            Option.some p => String.beq p "lang/src/lib.mo"
+            Option.some p => String.beq (Path.to_string p) "lang/src/lib.mo"
         }
     }
 
@@ -2988,7 +3008,7 @@ def test_lib_path_reads_the_declaration : Bool :=
         Option.none => false,
         Option.some m => match m.lib_path {
             Option.none => false,
-            Option.some p => String.beq p "lang/lib/main.mo"
+            Option.some p => String.beq (Path.to_string p) "lang/lib/main.mo"
         }
     }
 
@@ -3001,8 +3021,22 @@ def test_bin_target_path_is_joined_onto_the_mote_dir : Bool :=
         Option.some m =>
             match m.bins {
                 List.empty => false,
-                List.cons b _ => String.beq (BinTarget.target_path b) "cli/src/main.mo"
+                List.cons b _ => String.beq (Path.to_string (BinTarget.target_path b)) "cli/src/main.mo"
             }
+    }
+
+/// The join is verbatim: `..` stays part of the spelling the resolver
+/// compares. Normalizing here would retarget a declared path silently --
+/// the mutation this pin exists for (`Path.normalize` in
+/// `joined_table_path` must make it fail).
+#[test]
+def test_a_declared_target_path_keeps_its_dot_dot_spelling : Bool :=
+    match Mote.parse_manifest "m" "[mote]\nname = \"m\"\n\n[lib]\npath = \"lib/../lib/main.mo\"\n" {
+        Option.none => false,
+        Option.some man => match man.lib_path {
+            Option.none => false,
+            Option.some p => String.beq (Path.to_string p) "m/lib/../lib/main.mo"
+        }
     }
 
 /// The legacy singular `[bin]` spelling still means one target -- the
@@ -3017,7 +3051,7 @@ def test_singular_bin_table_is_read_as_one_target : Bool :=
                 Option.none => false,
                 Option.some b =>
                     if String.beq (BinTarget.target_name b) "monad"
-                    then String.beq (BinTarget.target_path b) "cli/src/main.mo"
+                    then String.beq (Path.to_string (BinTarget.target_path b)) "cli/src/main.mo"
                     else false
             }
     }

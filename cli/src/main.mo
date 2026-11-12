@@ -487,7 +487,7 @@ def existing_bin_targets (bs : List BinTarget) (acc : List BinTarget) : IO (List
     match bs {
         List.empty => do { return acc },
         List.cons b rest => do {
-            let there <- IO.file_exists (Path.path (BinTarget.target_path b));
+            let there <- IO.file_exists (BinTarget.target_path b);
             if there
             then existing_bin_targets rest (List.append acc (List.cons b List.empty))
             else existing_bin_targets rest acc
@@ -530,12 +530,12 @@ def choose_bin_target (manifest : MoteManifest) (path : String) (wanted : String
                 ]))
             },
             Option.some b => do {
-                let there <- IO.file_exists (Path.path (BinTarget.target_path b));
+                let there <- IO.file_exists (BinTarget.target_path b);
                 if there then do { return (Result.ok b) }
                 else do {
                     return (Result.err (String.concat_all [
                         "error: mote `", manifest.name, "`'s [[bin]] target `", wanted, "` names a file that is not there",
-                        "\n  ", BinTarget.target_path b,
+                        "\n  ", Path.to_string (BinTarget.target_path b),
                         "\nhint: create it, or fix `path` in ", path, "/mote.toml",
                     ]))
                 }
@@ -614,7 +614,7 @@ def resolve_build_input (path : String) (bin : String) (out_name : String) : IO 
                 match chosen {
                     Result.err msg => return (Result.err msg),
                     Result.ok target => do {
-                        let src := BinTarget.target_path target;
+                        let src := Path.to_string (BinTarget.target_path target);
                         let name : String := compile_out_name out_name target;
                         let label : String := String.concat_all [
                             "building mote `", manifest.name, "`'s [[bin]] target `",
@@ -1028,7 +1028,7 @@ def script_print_lines (dir : String) (scripts : List ScriptTarget) : IO Unit :=
         List.cons t rest => do {
             println (String.concat (script_display_dir dir)
                 (String.concat "/" (String.concat (ScriptTarget.script_name t)
-                    (String.concat " -> " (ScriptTarget.script_path t)))));
+                    (String.concat " -> " (Path.to_string (ScriptTarget.script_path t))))));
             script_print_lines dir rest
         },
     }
@@ -1072,7 +1072,7 @@ def script_build_and_run_once (owner : String) (t : ScriptTarget) (target_dir_fl
     (verbose : Bool) (debug : Bool) (no_cache : Bool) (program_args : List String)
     : IO I64 := do {
     let spec <- TargetSpec.native;
-    let src := ScriptTarget.script_path t;
+    let src := Path.to_string (ScriptTarget.script_path t);
     let out_name : Path := Path.path (ScriptTarget.script_name t);
     let rc <- build_cached_at src owner out_name target_dir_flag verbose debug no_cache spec;
     if Bool.not (I64.beq rc 0i64)
@@ -1235,7 +1235,7 @@ def script_watch_rerun (w : Watch) (owner : String) (src : String) (out_name : P
 def script_watch_opened (w : Watch) (owner : String) (t : ScriptTarget)
     (target_dir_flag : String) (verbose : Bool) (debug : Bool) (no_cache : Bool)
     (program_args : List String) : IO I64 := do {
-    let src := ScriptTarget.script_path t;
+    let src := Path.to_string (ScriptTarget.script_path t);
     let out_name : Path := Path.path (ScriptTarget.script_name t);
     let spec <- TargetSpec.native;
     let child <- script_build_and_start owner src out_name target_dir_flag verbose debug no_cache
