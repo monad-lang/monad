@@ -195,6 +195,13 @@ def km_normal_bindings : List Binding :=
         km_bind "normal" (Key.char "a") "insert_after",
         km_bind "normal" (Key.char "o") "open_below",
         km_bind "normal" (Key.char "O") "open_above",
+        // Horizontal scrolling is on the Alt layer: bare `h`/`l` are the
+        // char motions, and a wrapped line does not exist yet, so looking
+        // left/right past the caret needs keys of its own. `Key.alt` is
+        // decoded from ESC + char (`input.mo`'s `escape_next`), which is
+        // why the e2e fixtures never carry a bare ESC.
+        km_bind "normal" (Key.alt "h") "scroll_left",
+        km_bind "normal" (Key.alt "l") "scroll_right",
         km_bind "normal" (Key.char "u") "undo",
         km_bind "normal" (Key.char "U") "redo",
         km_bind3 "normal" (Key.char "m") (Key.char "i") (Key.char "(") "match_inside",

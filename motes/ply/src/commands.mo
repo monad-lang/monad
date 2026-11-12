@@ -38,12 +38,14 @@ use lib::model {Document, EditorState, EditorMsg, Command,
     EditorState.with_pending, EditorState.bindings_of, EditorState.registers_of,
     EditorState.with_registers, EditorState.writing_status,
     EditorState.no_path_status, EditorState.dirty_quit_status,
+    EditorState.hscroll_of, EditorState.with_hscroll, EditorState.cols_of,
     Document.mark_saved, Document.dirty}
 use std::path {Path}
 use std::stream {StreamError}
 use lib::keymap {KeyResult.as_pair, Keymap.resolve, Keymap.mode_table}
 use lib::transaction {Transaction.apply, Rejection}
 use tui::types {Key}
+use tui::text {Text.col_of_byte, Text.byte_at_col}
 use tui::tui {Cmd}
 
 // ── The registry ──────────────────────────────────────────────────────────
@@ -88,6 +90,8 @@ pub def Registry.default : List Command :=
         cmd_of "insert_after" "enter insert mode after each head" cmd_insert_after,
         cmd_of "open_below" "open a line below and enter insert mode" cmd_open_below,
         cmd_of "open_above" "open a line above and enter insert mode" cmd_open_above,
+        cmd_of "scroll_left" "move the view left, without moving the caret" cmd_scroll_left,
+        cmd_of "scroll_right" "move the view right, without moving the caret" cmd_scroll_right,
         cmd_of "undo" "move back one revision" cmd_undo,
         cmd_of "redo" "move forward one revision" cmd_redo,
         cmd_of "match_inside" "select inside the surrounding parens" cmd_match_inside,
@@ -968,6 +972,81 @@ def active_dirty (st : EditorState) : Bool :=
         Option.some doc => Document.dirty doc,
         Option.none => false
     }
+
+// ── horizontal scrolling ───────────────────────────────────────────────────
+//
+// The view already follows the caret horizontally (`View.left_col` clamps
+// the window around the head's column), so a caret past the right margin
+// is always visible without these two commands. What they add is the
+// ability to LOOK AROUND -- to read text the caret is not on -- which
+// automatic follow by itself never gives you.
+//
+// They move only the stored `hscroll`; the view's clamp still wins when
+// the caret would otherwise leave the window, so scrolling away from the
+// caret and then moving it snaps back rather than leaving a blind caret.
+
+/// How far one scroll press moves the window: half a text area, the
+/// half-page convention `Ctrl-d`-style scrolling uses everywhere.
+def scroll_step (st : EditorState) : I64 :=
+    let width : I64 := text_width_of st in
+    let half : I64 := width / 2 in
+    if half < 1 then 1 else half
+
+/// The text area's width for this state -- the same arithmetic
+/// `View.text_width` states, kept here so `commands.mo` does not import
+/// the view (the update stays independent of how the editor is drawn).
+def text_width_of (st : EditorState) : I64 :=
+    let cols : I64 := EditorState.cols_of st in
+    if cols < 6 then 0 else cols - 5
+
+/// `scroll_left`: move the window left by half a page, stopping at column 0.
+def cmd_scroll_left (st : EditorState) : Pair EditorState (Cmd EditorMsg) :=
+    let target : I64 := EditorState.hscroll_of st - scroll_step st in
+    scroll_to st (if target < 0 then 0 else target)
+
+/// `scroll_right`: move the window right by half a page. There is no upper
+/// bound worth computing -- the caret's own drag (below) and the view's
+/// clamp between them keep the window on the text.
+def cmd_scroll_right (st : EditorState) : Pair EditorState (Cmd EditorMsg) :=
+    scroll_to st (EditorState.hscroll_of st + scroll_step st)
+
+/// Move the window to `left`, DRAGGING THE CARET along when the new window
+/// would leave it off-screen.
+///
+/// THE DRAG IS NOT A CONVENIENCE, IT IS WHAT MAKES THE COMMAND EXIST.
+/// `View.left_col` clamps the window so the caret is always visible, so a
+/// window set while the caret is outside it would be undone on the very
+/// next frame -- `Alt-l` would move nothing at all. Dragging the caret to
+/// the near edge keeps both guarantees at once: the caret is visible, and
+/// the window really moved. A caret already inside the new window is left
+/// exactly where it was, which is the "look around without editing" case.
+def scroll_to (st : EditorState) (left : I64) : Pair EditorState (Cmd EditorMsg) :=
+    let moved : EditorState := EditorState.with_hscroll st left in
+    Pair.pair (drag_caret_into_window moved left) Cmd.none
+
+/// The caret pulled to the nearest edge of the window `[left, left + width)`.
+/// A caret inside the window, or a state with no buffer, is unchanged.
+def drag_caret_into_window (st : EditorState) (left : I64) : EditorState :=
+    let width : I64 := text_width_of st in
+    match EditorState.active_doc st {
+        Option.none => st,
+        Option.some doc => drag_in_doc st doc left width
+    }
+
+def drag_in_doc (st : EditorState) (doc : Document) (left : I64) (width : I64) : EditorState :=
+    let shared : Shared Document := Shared.of doc in
+    let rope : Rope := doc_rope (Shared.get shared) in
+    let head : I64 := primary_head st in
+    let line : I64 := Rope.line_of rope head in
+    let ls : I64 := Rope.line_start rope line in
+    let text : String := Rope.slice rope ls (Rope.line_content_end rope line - ls) in
+    let col : I64 := Text.col_of_byte text (head - ls) in
+    let right : I64 := left + width in
+    if col < left
+    then move_head st (ls + Text.byte_at_col text left)
+    else if Bool.not (col < right)
+    then move_head st (ls + Text.byte_at_col text (if width < 1 then left else right - 1))
+    else st
 
 /// The resize half: geometry in step.
 def update_resize (st : EditorState) (r : I64) (c : I64) : EditorState :=

@@ -14,7 +14,8 @@
 
 use lib::types {Rope, Mode, Selection, Selections}
 use lib::model {Document, Document.of_text, EditorState, EditorMsg, EditorState.init,
-    EditorState.mode_of, EditorState.pending_of, EditorState.active_doc}
+    EditorState.mode_of, EditorState.pending_of, EditorState.active_doc,
+    EditorState.hscroll_of}
 use lib::rope {Rope.to_string}
 use lib::selection {Selections.primary_sel, Selection.start, Selection.stop}
 use lib::commands {update}
@@ -27,6 +28,22 @@ use init::shared {Shared}
 use lib::instances {}
 
 // --- Builders ---
+
+/// The state's stored horizontal window, read once -- what a scroll
+/// command moved (the VIEW's clamp is `View.left_col`'s job and is pinned
+/// in `view_tests.mo`; these tests pin the command's own arithmetic).
+def cx_hscroll (st : EditorState) : I64 := EditorState.hscroll_of st
+
+/// An `Alt`-modified character key, built in its own def so the `Key.alt`
+/// constructor is never spelled inside a test body.
+def cx_alt (c : String) : Key := Key.alt c
+
+/// `n` `l` keys, for placing the head at a chosen column.
+#[terminating]
+def cx_ls (n : I64) : List Key :=
+    if Bool.not (0 < n)
+    then List.empty
+    else List.cons (cx_key "l") (cx_ls (n - 1))
 
 /// A character key.
 def cx_key (c : String) : Key := Key.char c
@@ -245,3 +262,55 @@ def test_gg_goto_start : Bool :=
 def test_ge_goto_end : Bool :=
     let after : EditorState := cx_type (cx_state "abc") [cx_key "g", cx_key "e"] in
     String.beq (cx_span after) "3..3"
+
+// ── horizontal scrolling ──────────────────────────────────────────────────
+//
+// The COMMANDS move the stored window by half a text area (75 cells at 80
+// columns -> 37). What the view does with it -- following the caret -- is
+// `View.left_col`'s clamp, pinned in view_tests.mo. These two pin that the
+// keys reach the commands at all, which the clamp alone would hide: a
+// broken binding would leave `hscroll` at 0 and every clamp test would
+// still pass.
+
+/// `Alt-l` scrolls right by half the text area. `cx_state` is 24x80, so
+/// the text area is 75 cells (80 minus the 5-cell gutter) and half of it
+/// is 37 -- the half-page step, derived by hand from that arithmetic.
+#[test]
+def test_alt_l_scrolls_right : Bool :=
+    let after : EditorState := cx_type (cx_state "abc") [cx_alt "l"] in
+    I64.beq (cx_hscroll after) 37
+
+/// `Alt-h` scrolls left, and STOPS AT ZERO: two presses from a fresh state
+/// stay at 0 rather than going negative.
+#[test]
+def test_alt_h_scrolls_left_and_stops_at_zero : Bool :=
+    let right : EditorState := cx_type (cx_state "abc") [cx_alt "l"] in
+    let back : EditorState := cx_type right [cx_alt "h"] in
+    let past : EditorState := cx_type back [cx_alt "h", cx_alt "h"] in
+    I64.beq (cx_hscroll back) 0 && I64.beq (cx_hscroll past) 0
+
+/// A scroll DRAGS A CARET that falls outside the new window, and leaves
+/// one that is inside it alone.
+///
+/// The drag is not cosmetic: `View.left_col` clamps the window so the
+/// caret is always visible, so a window set while the caret sits outside
+/// it would be undone on the next frame and the command would move
+/// nothing. Fixture "abcdef": `l l` puts the head at 2, `Alt-l` moves the
+/// window to 37, which leaves the head outside -- so it is pulled to the
+/// window's left edge, column 37.
+#[test]
+def test_scrolling_drags_a_caret_outside_the_window : Bool :=
+    let before : EditorState := cx_type (cx_state (String.repeat "x" 80)) [cx_key "l", cx_key "l"] in
+    let after : EditorState := cx_type before [cx_alt "l"] in
+    I64.beq (cx_hscroll after) 37 && String.beq (cx_span after) "37..37"
+
+/// A CARET INSIDE THE NEW WINDOW IS LEFT ALONE: scrolling LEFT from a
+/// window of 74 with the head at column 100 lands on window 37, which
+/// still contains the head -- so the head does not move. Looking around
+/// never disturbs a caret you can already see.
+#[test]
+def test_scrolling_leaves_a_visible_caret_alone : Bool :=
+    let at : EditorState := cx_type (cx_state (String.repeat "x" 200)) (cx_ls 100) in
+    let right : EditorState := EditorState.with_hscroll at 74 in
+    let after : EditorState := cx_type right [cx_alt "h"] in
+    I64.beq (cx_hscroll after) 37 && String.beq (cx_span after) "100..100"
