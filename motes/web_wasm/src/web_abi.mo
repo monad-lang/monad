@@ -321,6 +321,78 @@ def WebImport.event_prevent_default : WebImport :=
 def WebImport.event_stop_propagation : WebImport :=
     { module := "monad", name := "event_stop_propagation", params := List.empty, result := "void" }
 
+/// Canvas + WebGL (`canvas.mo`, `gl.mo`). A context is acquired from a
+/// `<canvas>` node (WebGL2 first, then WebGL1); GL objects are ids into the
+/// host's table; integer state calls share one `gl_state` selector.
+def WebImport.canvas_get_context : WebImport :=
+    { module := "monad", name := "canvas_get_context", params := ["i64", "i64"], result := "i64" }
+
+def WebImport.canvas_fit : WebImport :=
+    { module := "monad", name := "canvas_fit", params := ["i64"], result := "i64" }
+
+def WebImport.dom_metric : WebImport :=
+    { module := "monad", name := "dom_metric", params := ["i64", "i64"], result := "f64" }
+
+def WebImport.gl_info : WebImport :=
+    { module := "monad", name := "gl_info", params := ["i64", "i64"], result := "i64" }
+
+def WebImport.gl_create : WebImport :=
+    { module := "monad", name := "gl_create", params := ["i64", "i64"], result := "i64" }
+
+def WebImport.gl_delete : WebImport :=
+    { module := "monad", name := "gl_delete", params := ["i64", "i64", "i64"], result := "void" }
+
+def WebImport.gl_bind : WebImport :=
+    { module := "monad", name := "gl_bind",
+        params := ["i64", "i64", "i64", "i64"], result := "void" }
+
+def WebImport.gl_shader : WebImport :=
+    { module := "monad", name := "gl_shader",
+        params := ["i64", "i64", "i64", "i64"], result := "i64" }
+
+def WebImport.gl_link : WebImport :=
+    { module := "monad", name := "gl_link",
+        params := ["i64", "i64", "i64", "i64"], result := "i64" }
+
+def WebImport.gl_log : WebImport :=
+    { module := "monad", name := "gl_log", params := ["i64", "i64"], result := "i64" }
+
+def WebImport.gl_location : WebImport :=
+    { module := "monad", name := "gl_location",
+        params := ["i64", "i64", "i64", "i64", "i64"], result := "i64" }
+
+def WebImport.gl_vertex_attrib : WebImport :=
+    { module := "monad", name := "gl_vertex_attrib",
+        params := ["i64", "i64", "i64", "i64", "i64", "i64", "i64"], result := "void" }
+
+def WebImport.gl_uniform_f : WebImport :=
+    { module := "monad", name := "gl_uniform_f",
+        params := ["i64", "i64", "i64", "f64", "f64", "f64", "f64"], result := "void" }
+
+def WebImport.gl_clear_color : WebImport :=
+    { module := "monad", name := "gl_clear_color",
+        params := ["i64", "f64", "f64", "f64", "f64"], result := "void" }
+
+def WebImport.gl_state : WebImport :=
+    { module := "monad", name := "gl_state",
+        params := ["i64", "i64", "i64", "i64", "i64", "i64"], result := "void" }
+
+def WebImport.gl_draw : WebImport :=
+    { module := "monad", name := "gl_draw",
+        params := ["i64", "i64", "i64", "i64", "i64"], result := "void" }
+
+def WebImport.gl_tex_image_from_image : WebImport :=
+    { module := "monad", name := "gl_tex_image_from_image",
+        params := ["i64", "i64", "i64"], result := "i64" }
+
+/// Image loading for textures is two-phase like fetch: the promise only
+/// updates the host table and `image_info` polls it.
+def WebImport.image_load_begin : WebImport :=
+    { module := "monad", name := "image_load_begin", params := ["i64", "i64"], result := "i64" }
+
+def WebImport.image_info : WebImport :=
+    { module := "monad", name := "image_info", params := ["i64", "i64"], result := "i64" }
+
 def WebExport.oak_mount : WebExport := { name := "oak_mount" }
 def WebExport.oak_dispatch_event : WebExport := { name := "oak_dispatch_event" }
 def WebExport.oak_tick : WebExport := { name := "oak_tick" }
@@ -364,7 +436,14 @@ pub def WebAbi.default : WebAbi :=
             WebImport.event_data, WebImport.event_types,
             WebImport.event_files_count, WebImport.event_file_i64,
             WebImport.event_file_str, WebImport.event_prevent_default,
-            WebImport.event_stop_propagation
+            WebImport.event_stop_propagation,
+            WebImport.canvas_get_context, WebImport.canvas_fit, WebImport.dom_metric,
+            WebImport.gl_info, WebImport.gl_create, WebImport.gl_delete,
+            WebImport.gl_bind, WebImport.gl_shader, WebImport.gl_link, WebImport.gl_log,
+            WebImport.gl_location, WebImport.gl_vertex_attrib, WebImport.gl_uniform_f,
+            WebImport.gl_clear_color, WebImport.gl_state, WebImport.gl_draw,
+            WebImport.gl_tex_image_from_image, WebImport.image_load_begin,
+            WebImport.image_info
         ],
             exports := [
                 WebExport.oak_mount, WebExport.oak_dispatch_event, WebExport.oak_tick

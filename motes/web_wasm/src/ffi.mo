@@ -273,3 +273,68 @@ def worker_notes_raw : RawIO String
 
 #[extern "c" {link_name := "web_worker_cancel"}]
 def worker_cancel_raw : RawIO Unit
+
+// ── Canvas and WebGL (`canvas.mo`, `gl.mo`) ──────────────────────────
+//
+// Objects are I64 ids into the JS host's GL table; integer state calls go
+// through one `gl_state` selector (`gl.mo` owns the numbering) and every GL
+// enum value is mapped in `gl.mo`, never here.
+
+#[extern "c" {link_name := "web_canvas_get_context"}]
+def canvas_get_context_raw (canvas : Node) (flags : I64) : RawIO I64
+
+#[extern "c" {link_name := "web_canvas_fit"}]
+def canvas_fit_raw (canvas : Node) : RawIO I64
+
+#[extern "c" {link_name := "web_dom_metric"}]
+def dom_metric_raw (n : Node) (which : I64) : RawIO F64
+
+#[extern "c" {link_name := "web_gl_info"}]
+def gl_info_raw (ctx : I64) (which : I64) : RawIO I64
+
+#[extern "c" {link_name := "web_gl_create"}]
+def gl_create_raw (ctx : I64) (kind : I64) : RawIO I64
+
+#[extern "c" {link_name := "web_gl_delete"}]
+def gl_delete_raw (ctx : I64) (kind : I64) (id : I64) : RawIO Unit
+
+#[extern "c" {link_name := "web_gl_bind"}]
+def gl_bind_raw (ctx : I64) (kind : I64) (target : I64) (id : I64) : RawIO Unit
+
+#[extern "c" {link_name := "web_gl_shader"}]
+def gl_shader_raw (ctx : I64) (stage : I64) (source : String) : RawIO I64
+
+#[extern "c" {link_name := "web_gl_link"}]
+def gl_link_raw (ctx : I64) (program : I64) (vs : I64) (fs : I64) : RawIO I64
+
+#[extern "c" {link_name := "web_gl_log"}]
+def gl_log_raw : RawIO String
+
+#[extern "c" {link_name := "web_gl_location"}]
+def gl_location_raw (ctx : I64) (program : I64) (kind : I64) (name : String) : RawIO I64
+
+#[extern "c" {link_name := "web_gl_vertex_attrib"}]
+def gl_vertex_attrib_raw (ctx : I64) (index : I64) (size : I64) (typ : I64)
+    (normalized : I64) (stride : I64) (offset : I64) : RawIO Unit
+
+#[extern "c" {link_name := "web_gl_uniform_f"}]
+def gl_uniform_f_raw (ctx : I64) (loc : I64) (n : I64) (x : F64) (y : F64) (z : F64)
+    (w : F64) : RawIO Unit
+
+#[extern "c" {link_name := "web_gl_clear_color"}]
+def gl_clear_color_raw (ctx : I64) (r : F64) (g : F64) (b : F64) (a : F64) : RawIO Unit
+
+#[extern "c" {link_name := "web_gl_state"}]
+def gl_state_raw (ctx : I64) (which : I64) (a : I64) (b : I64) (c : I64) (d : I64) : RawIO Unit
+
+#[extern "c" {link_name := "web_gl_draw"}]
+def gl_draw_raw (ctx : I64) (indexed : I64) (mode : I64) (a : I64) (b : I64) : RawIO Unit
+
+#[extern "c" {link_name := "web_gl_tex_image_from_image"}]
+def gl_tex_image_from_image_raw (ctx : I64) (target : I64) (image : I64) : RawIO I64
+
+#[extern "c" {link_name := "web_image_load_begin"}]
+def image_load_begin_raw (url : String) : RawIO I64
+
+#[extern "c" {link_name := "web_image_info"}]
+def image_info_raw (image : I64) (which : I64) : RawIO I64

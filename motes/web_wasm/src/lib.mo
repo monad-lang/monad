@@ -55,3 +55,23 @@ pub use lib::console {Console.log}
 pub use lib::try_bridge {TryBridge.push_result}
 pub use lib::worker {Worker.run, Worker.poll, Worker.status, Worker.value, Worker.typ, Worker.error, Worker.notes, Worker.cancel}
 pub use lib::keep {Keep.save, Keep.load}
+pub use lib::canvas {Canvas.client_size, Canvas.buffer_size, Canvas.fit, Canvas.pixel_ratio}
+pub use lib::gl {
+    GlContext, GlShader, GlProgram, GlBuffer, GlTexture, GlVertexArray, GlUniform, GlImage,
+    GlOptions, GlOptions.default, GlOptions.flags, GlShaderStage, GlBufferTarget,
+    GlTextureTarget, GlUsage, GlPrimitive, GlCap, GlBlendFactor, GlCompare, GlFace,
+    GlWinding, GlAttribType, GlFilter, GlWrap, GlClear,
+    Gl.context, Gl.version, Gl.is_lost, Gl.drawing_buffer_size, Gl.error,
+    Gl.has_vertex_arrays, Gl.compile_shader, Gl.link_program, Gl.program,
+    Gl.use_program, Gl.delete_program, Gl.delete_shader, Gl.attrib_location,
+    Gl.uniform_location, Gl.uniform1f, Gl.uniform2f, Gl.uniform3f, Gl.uniform4f,
+    Gl.uniform1i, Gl.create_buffer, Gl.bind_buffer, Gl.unbind_buffer, Gl.delete_buffer,
+    Gl.create_vertex_array, Gl.bind_vertex_array, Gl.unbind_vertex_array,
+    Gl.delete_vertex_array, Gl.vertex_attrib_pointer, Gl.enable_vertex_attrib,
+    Gl.disable_vertex_attrib, Gl.viewport, Gl.clear_color, Gl.clear, Gl.enable,
+    Gl.disable, Gl.blend_func, Gl.depth_func, Gl.depth_mask, Gl.cull_face,
+    Gl.front_face, Gl.draw_arrays, Gl.draw_elements, Gl.create_texture,
+    Gl.bind_texture, Gl.delete_texture, Gl.active_texture, Gl.tex_filter, Gl.tex_wrap,
+    Gl.generate_mipmap, Gl.flip_y, Gl.tex_image_from_image, GlImage.load,
+    GlImage.poll, GlImage.size,
+}

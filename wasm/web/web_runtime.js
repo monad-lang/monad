@@ -51,6 +51,15 @@ const fetches = []; // id -> { state, status, bytes, offset, headers }
 const clips = []; // id -> { state, text, error }
 const cryptos = []; // id -> { state, hex, error }
 const mediaTables = new Map(); // query -> { mql, wrapper }
+// WebGL (`motes/web_wasm/src/gl.mo`). A context id names { gl, version,
+// vao }: `vao` is the WebGL1 `OES_vertex_array_object` extension (null on
+// WebGL2, which has VAOs in core). Objects of every kind share one table;
+// id 0 is the null handle. `glLog` holds the last compile/link info log.
+const glContexts = [null]; // id -> { gl, version, vao, canvas }
+const glContextIds = new WeakMap(); // GL context -> id, so a re-get keeps its id
+const glObjects = [null]; // id -> { ctx, kind, obj }
+let glLog = '';
+const images = [null]; // id -> { state, img }
 let timerSeq = 0n;
 // Handler ids are masked to 31 bits (`Handler.id`), so the top bit is a
 // disjoint space for timer callbacks.
@@ -506,6 +515,69 @@ function beginFetch(url, method, bodyText, headers) {
       record.bytes = new Uint8Array(0);
     });
   return id;
+}
+
+
+// ── WebGL helpers ────────────────────────────────────────────────────
+
+const GL_KIND_BUFFER = 0;
+const GL_KIND_TEXTURE = 1;
+const GL_KIND_VERTEX_ARRAY = 2;
+const GL_KIND_PROGRAM = 3;
+const GL_KIND_SHADER = 4;
+const GL_KIND_UNIFORM = 5;
+
+function glCtx(id) {
+  return glContexts[Number(id)] || null;
+}
+
+function glObj(id) {
+  const rec = glObjects[Number(id)];
+  return rec ? rec.obj : null;
+}
+
+function addGlObject(ctx, kind, obj) {
+  if (obj === null || obj === undefined) return 0n;
+  glObjects.push({ ctx: Number(ctx), kind, obj });
+  return BigInt(glObjects.length - 1);
+}
+
+// The `canvas_get_context` flag bits (`GlOptions.flags` in gl.mo).
+function contextAttributes(flags) {
+  const f = Number(flags);
+  return {
+    alpha: (f & 1) !== 0,
+    antialias: (f & 2) !== 0,
+    depth: (f & 4) !== 0,
+    stencil: (f & 8) !== 0,
+    premultipliedAlpha: (f & 16) !== 0,
+    preserveDrawingBuffer: (f & 32) !== 0,
+  };
+}
+
+function createVertexArray(c) {
+  if (c.version === 2) return c.gl.createVertexArray();
+  return c.vao ? c.vao.createVertexArrayOES() : null;
+}
+
+function bindVertexArray(c, obj) {
+  if (c.version === 2) c.gl.bindVertexArray(obj);
+  else if (c.vao) c.vao.bindVertexArrayOES(obj);
+}
+
+function deleteGlObject(c, kind, obj) {
+  const gl = c.gl;
+  switch (kind) {
+    case GL_KIND_BUFFER: gl.deleteBuffer(obj); break;
+    case GL_KIND_TEXTURE: gl.deleteTexture(obj); break;
+    case GL_KIND_VERTEX_ARRAY:
+      if (c.version === 2) gl.deleteVertexArray(obj);
+      else if (c.vao) c.vao.deleteVertexArrayOES(obj);
+      break;
+    case GL_KIND_PROGRAM: gl.deleteProgram(obj); break;
+    case GL_KIND_SHADER: gl.deleteShader(obj); break;
+    default: break;
+  }
 }
 
 export const host = {
@@ -1236,6 +1308,292 @@ export const host = {
 
   keep_get() {
     return kept;
+  },
+
+  // ── Canvas + WebGL ─────────────────────────────────────────────────
+  //
+  // `gl.mo` owns every selector and GL enum value; these only dispatch.
+
+  canvas_get_context(node, flags) {
+    const canvas = nodeById(node);
+    if (!canvas || typeof canvas.getContext !== 'function') return 0n;
+    const attrs = contextAttributes(flags);
+    const webgl1Only = (Number(flags) & 64) !== 0;
+    let gl = null;
+    let version = 1;
+    try {
+      if (!webgl1Only) gl = canvas.getContext('webgl2', attrs);
+      if (gl) version = 2;
+      else gl = canvas.getContext('webgl', attrs);
+    } catch {
+      gl = null;
+    }
+    if (!gl) return 0n;
+    const known = glContextIds.get(gl);
+    if (known !== undefined) return BigInt(known);
+    const rec = { gl, version, vao: null, canvas };
+    if (version === 1) {
+      rec.vao = gl.getExtension('OES_vertex_array_object');
+      gl.getExtension('OES_element_index_uint');
+    }
+    // Without preventDefault a lost context is never restored.
+    if (typeof canvas.addEventListener === 'function') {
+      canvas.addEventListener('webglcontextlost', (ev) => ev.preventDefault());
+    }
+    glContexts.push(rec);
+    const id = glContexts.length - 1;
+    glContextIds.set(gl, id);
+    return BigInt(id);
+  },
+
+  canvas_fit(node) {
+    const canvas = nodeById(node);
+    if (!canvas) return 0n;
+    const dpr = Number(globalThis.devicePixelRatio) || 1;
+    const w = Math.max(1, Math.round((Number(canvas.clientWidth) || 0) * dpr));
+    const h = Math.max(1, Math.round((Number(canvas.clientHeight) || 0) * dpr));
+    if (canvas.width === w && canvas.height === h) return 0n;
+    canvas.width = w;
+    canvas.height = h;
+    return 1n;
+  },
+
+  dom_metric(node, which) {
+    const w = Number(which);
+    if (w === 2) return Number(globalThis.devicePixelRatio) || 1;
+    const n = nodeById(node);
+    if (!n) return 0;
+    switch (w) {
+      case 0: return Number(n.clientWidth) || 0;
+      case 1: return Number(n.clientHeight) || 0;
+      case 3: return Number(n.width) || 0;
+      case 4: return Number(n.height) || 0;
+      default: return 0;
+    }
+  },
+
+  gl_info(ctx, which) {
+    const c = glCtx(ctx);
+    if (!c) return 0n;
+    switch (Number(which)) {
+      case 0: return BigInt(c.version);
+      case 1: return c.gl.isContextLost() ? 1n : 0n;
+      case 2: return BigInt(c.gl.drawingBufferWidth | 0);
+      case 3: return BigInt(c.gl.drawingBufferHeight | 0);
+      case 4: return BigInt(c.gl.getError() | 0);
+      case 5: return (c.version === 2 || c.vao) ? 1n : 0n;
+      default: return 0n;
+    }
+  },
+
+  gl_create(ctx, kind) {
+    const c = glCtx(ctx);
+    if (!c) return 0n;
+    const k = Number(kind);
+    switch (k) {
+      case GL_KIND_BUFFER: return addGlObject(ctx, k, c.gl.createBuffer());
+      case GL_KIND_TEXTURE: return addGlObject(ctx, k, c.gl.createTexture());
+      case GL_KIND_VERTEX_ARRAY: return addGlObject(ctx, k, createVertexArray(c));
+      case GL_KIND_PROGRAM: return addGlObject(ctx, k, c.gl.createProgram());
+      default: return 0n;
+    }
+  },
+
+  gl_delete(ctx, kind, id) {
+    const c = glCtx(ctx);
+    const rec = glObjects[Number(id)];
+    if (c && rec && rec.kind === Number(kind)) {
+      deleteGlObject(c, rec.kind, rec.obj);
+      glObjects[Number(id)] = null;
+    }
+    return 0n;
+  },
+
+  gl_bind(ctx, kind, target, id) {
+    const c = glCtx(ctx);
+    if (!c) return 0n;
+    const obj = glObj(id);
+    switch (Number(kind)) {
+      case GL_KIND_BUFFER: c.gl.bindBuffer(Number(target), obj); break;
+      case GL_KIND_TEXTURE: c.gl.bindTexture(Number(target), obj); break;
+      case GL_KIND_VERTEX_ARRAY: bindVertexArray(c, obj); break;
+      case GL_KIND_PROGRAM: c.gl.useProgram(obj); break;
+      default: break;
+    }
+    return 0n;
+  },
+
+  gl_shader(ctx, stage, ptr, len) {
+    const c = glCtx(ctx);
+    if (!c) {
+      glLog = 'no WebGL context';
+      return 0n;
+    }
+    const gl = c.gl;
+    const sh = gl.createShader(Number(stage));
+    if (!sh) {
+      glLog = 'createShader failed';
+      return 0n;
+    }
+    gl.shaderSource(sh, str(ptr, len));
+    gl.compileShader(sh);
+    if (!gl.getShaderParameter(sh, gl.COMPILE_STATUS)) {
+      glLog = gl.getShaderInfoLog(sh) || 'shader compile failed';
+      gl.deleteShader(sh);
+      return 0n;
+    }
+    glLog = '';
+    return addGlObject(ctx, GL_KIND_SHADER, sh);
+  },
+
+  gl_link(ctx, program, vs, fs) {
+    const c = glCtx(ctx);
+    const p = glObj(program);
+    const v = glObj(vs);
+    const f = glObj(fs);
+    if (!c || !p || !v || !f) {
+      glLog = 'link: missing context, program or shader';
+      return 0n;
+    }
+    const gl = c.gl;
+    gl.attachShader(p, v);
+    gl.attachShader(p, f);
+    gl.linkProgram(p);
+    if (!gl.getProgramParameter(p, gl.LINK_STATUS)) {
+      glLog = gl.getProgramInfoLog(p) || 'program link failed';
+      // The caller gets an error, not the handle: free it here.
+      gl.deleteProgram(p);
+      glObjects[Number(program)] = null;
+      return 0n;
+    }
+    glLog = '';
+    return 1n;
+  },
+
+  gl_log(ptr, max) {
+    return writeBytes(ptr, encoder.encode(glLog), max);
+  },
+
+  gl_location(ctx, program, kind, ptr, len) {
+    const c = glCtx(ctx);
+    const p = glObj(program);
+    if (!c || !p) return Number(kind) === 0 ? -1n : 0n;
+    const name = str(ptr, len);
+    if (Number(kind) === 0) return BigInt(c.gl.getAttribLocation(p, name));
+    return addGlObject(ctx, GL_KIND_UNIFORM, c.gl.getUniformLocation(p, name));
+  },
+
+  gl_vertex_attrib(ctx, index, size, type, normalized, stride, offset) {
+    const c = glCtx(ctx);
+    if (c) {
+      c.gl.vertexAttribPointer(Number(index), Number(size), Number(type),
+        Number(normalized) !== 0, Number(stride), Number(offset));
+    }
+    return 0n;
+  },
+
+  gl_uniform_f(ctx, loc, n, x, y, z, w) {
+    const c = glCtx(ctx);
+    const l = glObj(loc);
+    if (!c || !l) return 0n;
+    switch (Number(n)) {
+      case 1: c.gl.uniform1f(l, x); break;
+      case 2: c.gl.uniform2f(l, x, y); break;
+      case 3: c.gl.uniform3f(l, x, y, z); break;
+      case 4: c.gl.uniform4f(l, x, y, z, w); break;
+      default: break;
+    }
+    return 0n;
+  },
+
+  gl_clear_color(ctx, r, g, b, a) {
+    const c = glCtx(ctx);
+    if (c) c.gl.clearColor(r, g, b, a);
+    return 0n;
+  },
+
+  // The integer state selector; `GlState.code` in gl.mo is its other half.
+  gl_state(ctx, which, a, b, cc, d) {
+    const c = glCtx(ctx);
+    if (!c) return 0n;
+    const gl = c.gl;
+    const A = Number(a);
+    const B = Number(b);
+    switch (Number(which)) {
+      case 0: gl.viewport(A, B, Number(cc), Number(d)); break;
+      case 1: gl.clear(A); break;
+      case 2: if (B !== 0) gl.enable(A); else gl.disable(A); break;
+      case 3: gl.blendFunc(A, B); break;
+      case 4: gl.depthFunc(A); break;
+      case 5: gl.cullFace(A); break;
+      case 6: gl.frontFace(A); break;
+      case 7: gl.depthMask(A !== 0); break;
+      case 8: gl.activeTexture(gl.TEXTURE0 + A); break;
+      case 9: gl.generateMipmap(A); break;
+      case 10: gl.texParameteri(A, B, Number(cc)); break;
+      case 11: gl.pixelStorei(A, B); break;
+      case 12:
+        if (B !== 0) gl.enableVertexAttribArray(A);
+        else gl.disableVertexAttribArray(A);
+        break;
+      case 13: {
+        const l = glObj(a);
+        if (l) gl.uniform1i(l, B);
+        break;
+      }
+      default: break;
+    }
+    return 0n;
+  },
+
+  gl_draw(ctx, indexed, mode, a, b) {
+    const c = glCtx(ctx);
+    if (!c) return 0n;
+    if (Number(indexed) !== 0) {
+      c.gl.drawElements(Number(mode), Number(a), c.gl.UNSIGNED_INT, Number(b));
+    } else {
+      c.gl.drawArrays(Number(mode), Number(a), Number(b));
+    }
+    return 0n;
+  },
+
+  gl_tex_image_from_image(ctx, target, image) {
+    const c = glCtx(ctx);
+    const rec = images[Number(image)];
+    if (!c || !rec || rec.state !== 1) return 0n;
+    const gl = c.gl;
+    gl.texImage2D(Number(target), 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, rec.img);
+    return 1n;
+  },
+
+  // A promise-free two-phase load: the handlers only update the record.
+  image_load_begin(ptr, len) {
+    const rec = { state: 0, img: null };
+    images.push(rec);
+    const id = BigInt(images.length - 1);
+    const Img = globalThis.Image;
+    if (typeof Img !== 'function') {
+      rec.state = 2;
+      return id;
+    }
+    const img = new Img();
+    img.crossOrigin = 'anonymous';
+    img.onload = () => { rec.state = 1; };
+    img.onerror = () => { rec.state = 2; };
+    rec.img = img;
+    img.src = str(ptr, len);
+    return id;
+  },
+
+  image_info(image, which) {
+    const rec = images[Number(image)];
+    if (!rec) return Number(which) === 0 ? 2n : 0n;
+    switch (Number(which)) {
+      case 0: return BigInt(rec.state);
+      case 1: return rec.img ? BigInt(rec.img.naturalWidth || rec.img.width || 0) : 0n;
+      case 2: return rec.img ? BigInt(rec.img.naturalHeight || rec.img.height || 0) : 0n;
+      default: return 0n;
+    }
   },
 
   write_stdout(ptr, len) {

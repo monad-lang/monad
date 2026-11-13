@@ -1046,6 +1046,154 @@ rt_str monad_f32_to_string(int64_t v) {
     return monad_f64_to_string(v);
 }
 
+/* ── canvas + WebGL (`motes/web_wasm/src/{canvas,gl}.mo`) ───────────────
+   Contexts and GL objects are ids into the JS host's tables. Every GL enum
+   value is chosen by `gl.mo`; these wrappers only forward words, strings as
+   (ptr, len), and doubles. The info log comes back through the scratch
+   buffer like `dom_tag_name`. */
+
+__attribute__((import_module("monad"), import_name("canvas_get_context")))
+extern int64_t monad_js_canvas_get_context(int64_t node, int64_t flags);
+
+__attribute__((import_module("monad"), import_name("canvas_fit")))
+extern int64_t monad_js_canvas_fit(int64_t node);
+
+__attribute__((import_module("monad"), import_name("dom_metric")))
+extern double monad_js_dom_metric(int64_t node, int64_t which);
+
+__attribute__((import_module("monad"), import_name("gl_info")))
+extern int64_t monad_js_gl_info(int64_t ctx, int64_t which);
+
+__attribute__((import_module("monad"), import_name("gl_create")))
+extern int64_t monad_js_gl_create(int64_t ctx, int64_t kind);
+
+__attribute__((import_module("monad"), import_name("gl_delete")))
+extern int64_t monad_js_gl_delete(int64_t ctx, int64_t kind, int64_t id);
+
+__attribute__((import_module("monad"), import_name("gl_bind")))
+extern int64_t monad_js_gl_bind(int64_t ctx, int64_t kind, int64_t target, int64_t id);
+
+__attribute__((import_module("monad"), import_name("gl_shader")))
+extern int64_t monad_js_gl_shader(int64_t ctx, int64_t stage, int64_t ptr, int64_t len);
+
+__attribute__((import_module("monad"), import_name("gl_link")))
+extern int64_t monad_js_gl_link(int64_t ctx, int64_t program, int64_t vs, int64_t fs);
+
+__attribute__((import_module("monad"), import_name("gl_log")))
+extern int64_t monad_js_gl_log(int64_t ptr, int64_t max);
+
+__attribute__((import_module("monad"), import_name("gl_location")))
+extern int64_t monad_js_gl_location(int64_t ctx, int64_t program, int64_t kind,
+                                    int64_t ptr, int64_t len);
+
+__attribute__((import_module("monad"), import_name("gl_vertex_attrib")))
+extern int64_t monad_js_gl_vertex_attrib(int64_t ctx, int64_t index, int64_t size,
+                                         int64_t type, int64_t normalized,
+                                         int64_t stride, int64_t offset);
+
+__attribute__((import_module("monad"), import_name("gl_uniform_f")))
+extern int64_t monad_js_gl_uniform_f(int64_t ctx, int64_t loc, int64_t n,
+                                     double x, double y, double z, double w);
+
+__attribute__((import_module("monad"), import_name("gl_clear_color")))
+extern int64_t monad_js_gl_clear_color(int64_t ctx, double r, double g, double b, double a);
+
+__attribute__((import_module("monad"), import_name("gl_state")))
+extern int64_t monad_js_gl_state(int64_t ctx, int64_t which, int64_t a, int64_t b,
+                                 int64_t c, int64_t d);
+
+__attribute__((import_module("monad"), import_name("gl_draw")))
+extern int64_t monad_js_gl_draw(int64_t ctx, int64_t indexed, int64_t mode,
+                                int64_t a, int64_t b);
+
+__attribute__((import_module("monad"), import_name("gl_tex_image_from_image")))
+extern int64_t monad_js_gl_tex_image_from_image(int64_t ctx, int64_t target, int64_t image);
+
+__attribute__((import_module("monad"), import_name("image_load_begin")))
+extern int64_t monad_js_image_load_begin(int64_t ptr, int64_t len);
+
+__attribute__((import_module("monad"), import_name("image_info")))
+extern int64_t monad_js_image_info(int64_t image, int64_t which);
+
+int64_t web_canvas_get_context(int64_t node, int64_t flags) {
+    return monad_js_canvas_get_context(node, flags);
+}
+
+int64_t web_canvas_fit(int64_t node) {
+    return monad_js_canvas_fit(node);
+}
+
+double web_dom_metric(int64_t node, int64_t which) {
+    return monad_js_dom_metric(node, which);
+}
+
+int64_t web_gl_info(int64_t ctx, int64_t which) {
+    return monad_js_gl_info(ctx, which);
+}
+
+int64_t web_gl_create(int64_t ctx, int64_t kind) {
+    return monad_js_gl_create(ctx, kind);
+}
+
+int64_t web_gl_delete(int64_t ctx, int64_t kind, int64_t id) {
+    return monad_js_gl_delete(ctx, kind, id);
+}
+
+int64_t web_gl_bind(int64_t ctx, int64_t kind, int64_t target, int64_t id) {
+    return monad_js_gl_bind(ctx, kind, target, id);
+}
+
+int64_t web_gl_shader(int64_t ctx, int64_t stage, const char* source) {
+    return monad_js_gl_shader(ctx, stage, web_str_ptr(source), web_str_len(source));
+}
+
+int64_t web_gl_link(int64_t ctx, int64_t program, int64_t vs, int64_t fs) {
+    return monad_js_gl_link(ctx, program, vs, fs);
+}
+
+char* web_gl_log(void) {
+    int64_t n = monad_js_gl_log((int64_t)(intptr_t)web_scratch, WEB_SCRATCH_BYTES - 1);
+    return web_take_str(web_scratch, n);
+}
+
+int64_t web_gl_location(int64_t ctx, int64_t program, int64_t kind, const char* name) {
+    return monad_js_gl_location(ctx, program, kind, web_str_ptr(name), web_str_len(name));
+}
+
+int64_t web_gl_vertex_attrib(int64_t ctx, int64_t index, int64_t size, int64_t type,
+                             int64_t normalized, int64_t stride, int64_t offset) {
+    return monad_js_gl_vertex_attrib(ctx, index, size, type, normalized, stride, offset);
+}
+
+int64_t web_gl_uniform_f(int64_t ctx, int64_t loc, int64_t n,
+                         double x, double y, double z, double w) {
+    return monad_js_gl_uniform_f(ctx, loc, n, x, y, z, w);
+}
+
+int64_t web_gl_clear_color(int64_t ctx, double r, double g, double b, double a) {
+    return monad_js_gl_clear_color(ctx, r, g, b, a);
+}
+
+int64_t web_gl_state(int64_t ctx, int64_t which, int64_t a, int64_t b, int64_t c, int64_t d) {
+    return monad_js_gl_state(ctx, which, a, b, c, d);
+}
+
+int64_t web_gl_draw(int64_t ctx, int64_t indexed, int64_t mode, int64_t a, int64_t b) {
+    return monad_js_gl_draw(ctx, indexed, mode, a, b);
+}
+
+int64_t web_gl_tex_image_from_image(int64_t ctx, int64_t target, int64_t image) {
+    return monad_js_gl_tex_image_from_image(ctx, target, image);
+}
+
+int64_t web_image_load_begin(const char* url) {
+    return monad_js_image_load_begin(web_str_ptr(url), web_str_len(url));
+}
+
+int64_t web_image_info(int64_t image, int64_t which) {
+    return monad_js_image_info(image, which);
+}
+
 /* ── entry point ────────────────────────────────────────────────────── */
 
 __attribute__((export_name("monad_main")))
