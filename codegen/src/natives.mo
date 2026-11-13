@@ -551,6 +551,8 @@ def native_runtime_fn_name (attrs : List Attribute) : Option NativeWrapKind :=
             else if String.beq target "f32_lt" then Option.some (NativeWrapKind.bool_result "monad_f32_lt")
             else if String.beq target "f32_gt" then Option.some (NativeWrapKind.bool_result "monad_f32_gt")
             else if String.beq target "f32_to_string" then Option.some (NativeWrapKind.passthrough "monad_f32_to_string")
+            else if String.beq target "f64_to_f32" then Option.some (NativeWrapKind.passthrough "monad_f64_to_f32")
+            else if String.beq target "f32_to_f64" then Option.some (NativeWrapKind.passthrough "monad_f32_to_f64")
             // `bench_report` is a documented stub (0 / true). `Bench` is
             // a measurement API, never load-bearing for correctness, and
             // a typed zero keeps `--verbose` compiles from crashing on a
@@ -1176,6 +1178,8 @@ pub def runtime_declarations_for_with_ownership (kind : TargetKind) (ownership_o
     let d130 := mk_decl "monad_f32_lt" ["i64", "i64"] "i64" in
     let d131 := mk_decl "monad_f32_gt" ["i64", "i64"] "i64" in
     let d132 := mk_decl "monad_f32_to_string" ["i64"] "i64" in
+    let d132a := mk_decl "monad_f64_to_f32" ["i64"] "i64" in
+    let d132b := mk_decl "monad_f32_to_f64" ["i64"] "i64" in
     let d133 := mk_decl "monad_i8_add" ["i64", "i64"] "i64" in
     let d134 := mk_decl "monad_i8_sub" ["i64", "i64"] "i64" in
     let d135 := mk_decl "monad_i8_mul" ["i64", "i64"] "i64" in
@@ -1221,7 +1225,7 @@ pub def runtime_declarations_for_with_ownership (kind : TargetKind) (ownership_o
         d104, d105, d106, d107, d108, d109, d110, d111, d112, d113, d114, d115, d116,
         d117, d118, d119, d120, d121, d122, d123, d124, d150,
         d160, d161, d162, d163, d164, d165,
-        d125, d126, d127, d128, d129, d130, d131, d132, d133,
+        d125, d126, d127, d128, d129, d130, d131, d132, d132a, d132b, d133,
         d134, d135, d136, d137, d138, d139, d140, d141,
         d142, d143, d144, d145, d146, d147, d148, d149,
         d168, d169, d170, d171, d172, d173, d174, d175,

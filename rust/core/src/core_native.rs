@@ -144,6 +144,8 @@ const PURE_NATIVES: &[&str] = &[
   "u64_to_string",
   "f32_to_string",
   "f64_to_string",
+  "f64_to_f32",
+  "f32_to_f64",
   // The decimal -> bit-pattern conversion the compiler uses to lower a
   // float literal (`codegen/emit.mo`). Pure: a function of its own
   // argument text, no IO and no clock, so it is foldable like the rest.
@@ -350,6 +352,9 @@ pub fn exec_native(
     // like the C runtime's formatter) — the old path printed the raw f64
     // payload for both widths.
     "f32_to_string" => float_to_string(args, NumSuffix::F32),
+    // F64 <-> F32 (`init/src/number.mo`); see `float_convert`.
+    "f64_to_f32" => float_convert(args, NumSuffix::F32),
+    "f32_to_f64" => float_convert(args, NumSuffix::F64),
     "f64_to_string" => float_to_string(args, NumSuffix::F64),
     // `f64_of_string` is the one F64 native with no F32 twin and no
     // `F64`-typed result: it is the decimal -> bit-pattern conversion the
@@ -789,6 +794,18 @@ fn float_binop(
   } else {
     v
   };
+  Ok(Value::Lit(IrLit::Float(crate::term::F64Wrap(v), suffix)))
+}
+
+fn float_convert(args: &[Value], suffix: NumSuffix) -> Result<Value, CoreEvalError> {
+  let Some(arg) = args.first() else {
+    return Err(CoreEvalError::NativeArgError(
+      "float conversion needs 1 arg".into(),
+    ));
+  };
+  // Both directions round: narrowing must, and widening re-rounds an F32
+  // payload that a literal left unrounded (runtime_core.c does the same).
+  let v = extract_float(arg)? as f32 as f64;
   Ok(Value::Lit(IrLit::Float(crate::term::F64Wrap(v), suffix)))
 }
 
@@ -4804,6 +4821,23 @@ mod tests {
 
   fn string(s: &str) -> Value {
     Value::Lit(IrLit::Str(s.into()))
+  }
+
+  fn float(v: f64, suffix: NumSuffix) -> Value {
+    Value::Lit(IrLit::Float(crate::term::F64Wrap(v), suffix))
+  }
+
+  #[test]
+  fn test_f64_f32_conversions_round_to_single_precision() {
+    let narrowed = float_convert(&[float(0.1, NumSuffix::F64)], NumSuffix::F32).unwrap();
+    assert!(
+      matches!(narrowed, Value::Lit(IrLit::Float(f, NumSuffix::F32)) if f.0 == 0.1f32 as f64)
+    );
+    // An unrounded F32 payload (as a literal may carry) widens rounded.
+    let widened = float_convert(&[float(0.1, NumSuffix::F32)], NumSuffix::F64).unwrap();
+    assert!(matches!(widened, Value::Lit(IrLit::Float(f, NumSuffix::F64)) if f.0 == 0.1f32 as f64));
+    let exact = float_convert(&[float(0.5, NumSuffix::F32)], NumSuffix::F64).unwrap();
+    assert!(matches!(exact, Value::Lit(IrLit::Float(f, NumSuffix::F64)) if f.0 == 0.5));
   }
 
   /// Stdin reads must not read ahead: after one line or one byte, the

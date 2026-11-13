@@ -1305,6 +1305,11 @@ int64_t monad_f32_div(int64_t a, int64_t b) { return monad_f32_bits(monad_f32_un
 int64_t monad_f32_eq(int64_t a, int64_t b) { return monad_f32_unbits(a) == monad_f32_unbits(b) ? 1 : 0; }
 int64_t monad_f32_lt(int64_t a, int64_t b) { return monad_f32_unbits(a) < monad_f32_unbits(b) ? 1 : 0; }
 int64_t monad_f32_gt(int64_t a, int64_t b) { return monad_f32_unbits(a) > monad_f32_unbits(b) ? 1 : 0; }
+/* F64 <-> F32. Narrowing rounds the double to float. Widening rounds too:
+   a compiled `0.1f32` literal's payload is the unrounded double, so the
+   identity would leak precision the F32 never had. */
+int64_t monad_f64_to_f32(int64_t a) { return monad_f32_bits(monad_f32_unbits(a)); }
+int64_t monad_f32_to_f64(int64_t a) { return monad_f32_bits(monad_f32_unbits(a)); }
 
 /* Signed-width integer arithmetic: the C spelling of the reference's
    `mask_to_suffix(op(mask_to_suffix(a), mask_to_suffix(b)))` -- C's

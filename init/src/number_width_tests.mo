@@ -113,6 +113,21 @@ def test_f32_mul_exact : Bool := F32.mul 0.5f32 0.5f32 == 0.25f32
 def test_f32_to_string_prints_f32 : Bool := F32.to_string 0.1f32 == "0.1"
 
 #[test]
+def test_f64_to_f32_rounds : Bool := F64.to_f32 0.1 == 0.1f32
+
+#[test]
+def test_f64_to_f32_rounds_away_f64_precision : Bool :=
+    F64.to_f32 (F64.add 0.1 0.2) == 0.3f32
+
+#[test]
+def test_f32_to_f64_widens_exactly : Bool :=
+    F32.to_f64 0.5f32 == 0.5 && Bool.not (F32.to_f64 0.1f32 == 0.1)
+
+#[test]
+def test_f32_f64_round_trip : Bool :=
+    F64.to_f32 (F32.to_f64 0.1f32) == 0.1f32
+
+#[test]
 def test_f64_sum_is_not_f32_rounded : Bool :=
     Bool.not (F64.add 0.1 0.2 == 0.3)
 

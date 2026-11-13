@@ -626,6 +626,15 @@ pub def F32.gt (a b : F32) : Bool
 #[native f32_to_string]
 pub def F32.to_string (a : F32) : String
 
+/// Round to the nearest single-precision value (IEEE round-to-nearest;
+/// out-of-range magnitudes become infinities).
+#[native f64_to_f32]
+pub def F64.to_f32 (a : F64) : F32
+
+/// Widen exactly: every `F32` is representable as an `F64`.
+#[native f32_to_f64]
+pub def F32.to_f64 (a : F32) : F64
+
 pub instance Add F32 {
     def add (a b : F32) : F32 := F32.add a b
 }
