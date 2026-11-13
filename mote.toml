@@ -93,6 +93,9 @@ members = [
 [workspace.dependencies.acorn]
 path = "motes/acorn"
 
+[workspace.dependencies.docgen]
+path = "motes/docgen"
+
 [workspace.dependencies.build]
 path = "build"
 

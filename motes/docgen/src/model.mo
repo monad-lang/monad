@@ -67,6 +67,41 @@ pub struct DocMote {
     modules : List DocModule,
 }
 
+/// This mote with only its `pub` declarations -- what a reader of the
+/// reference sees unless `--include-private` asked for the rest. A module
+/// left with no items keeps its page (the module doc is still worth
+/// showing) but contributes nothing to the index.
+pub def DocMote.public_only (m : DocMote) : DocMote :=
+    match m {
+        { mote, modules, .. } => { mote := mote, modules := DocModule.public_modules modules },
+    }
+
+#[partial]
+def DocModule.public_modules (ms : List DocModule) : List DocModule :=
+    match ms {
+        List.empty => List.empty,
+        List.cons m rest =>
+            match m {
+                { module, file, doc, items } =>
+                    // Bound to an annotated local, not passed bare: a struct
+                    // literal in argument position is the Rust host's gotcha
+                    // (it reads it as `List.cons`'s own fields).
+                    let kept : DocModule :=
+                        { module := module, file := file, doc := doc, items := public_items items } in
+                    List.cons kept (DocModule.public_modules rest),
+            },
+    }
+
+#[partial]
+def public_items (items : List DocItem) : List DocItem :=
+    match items {
+        List.empty => List.empty,
+        List.cons i rest =>
+            if i.pub_item
+            then List.cons i (public_items rest)
+            else public_items rest,
+    }
+
 /// The number of items across every module -- the ratchet's number.
 pub def DocMote.item_count (m : DocMote) : I64 :=
     DocModule.list_item_count m.modules 0

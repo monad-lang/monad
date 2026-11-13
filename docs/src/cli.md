@@ -37,6 +37,7 @@ The parser is the `clap` mote's `#[derive Cli]`, so:
 | [`store`](#store) | List the store, or check its entries |
 | [`fetch`](#fetch) | Resolve git dependencies into the cache and write `mote.lock` |
 | [`update`](#update) | Re-resolve every git pin, then write `mote.lock` |
+| [`doc`](#doc) | Generate an API reference for the named motes from their sources |
 | [`print-targets`](#print-targets) | List the triples `--target` accepts and what this llc can build for |
 | [`lsp`](#lsp) | Speak the Language Server Protocol on stdin/stdout |
 | [`version`](#version) | Print the git commit this binary was built from |
@@ -313,6 +314,32 @@ Like `fetch`, but re-resolve every tag/branch/HEAD pin. Writes
 | Option | Meaning |
 |---|---|
 | `--offline` | use only what is already cached; a missing mirror is an error naming the URL |
+
+## doc
+
+```text
+monad doc [<mote>...] [options]
+```
+
+Generate an API reference from the motes' own sources: one page per module
+under `api/<mote>/<module>.html`, plus an `api/index.html` hub. Each `pub`
+declaration gets its signature and its `///` doc comment, rendered as
+markdown. The pages are written through the site generator's link gate, so a
+reference that links to a module with no page fails the build instead of
+shipping a 404. A declaration's anchor is its source spelling:
+`<kind>.<name>` (`def.List.map`, `struct.Point`).
+
+With no mote named, the enclosing mote (`.`) is documented, the same default
+`check` and `test` take.
+
+| Option | Meaning |
+|---|---|
+| `-o, --output <DIR>` | the output root the `api/` tree is written under (default `target/docs`) |
+| `--include-private` | include package-private and `priv` declarations, not just `pub` |
+
+`monad doc` is the compiler's spelling of the same generator the standalone
+`docgen` binary runs (`motes/docgen`); the site build uses it too, and
+[The Standard Library](./stdlib.md) links to its output.
 
 ## print-targets
 

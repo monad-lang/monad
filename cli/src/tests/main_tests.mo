@@ -386,6 +386,34 @@ def test_print_targets : Bool :=
         _ => false,
     }
 
+/// `monad doc <mote>... --output DIR` decodes to the doc command with its
+/// motes, output and private flag; `--include-private` is the flag spelling.
+#[test]
+def test_doc : Bool :=
+    match Command.from_args ["doc", "motes/acorn", "init", "--output", "/tmp/x", "--include-private"] {
+        Command.doc motes output include_private =>
+            I64.beq (List.length motes) 2
+                && match output {
+                    Option.some d => String.beq d "/tmp/x",
+                    Option.none => false,
+                }
+                && include_private,
+        _ => false,
+    }
+
+/// A bare `monad doc` names no mote, so the runner defaults to `.`.
+#[test]
+def test_doc_defaults : Bool :=
+    match Command.from_args ["doc"] {
+        Command.doc motes output include_private =>
+            List.is_empty motes
+                && match output {
+                    Option.none => Bool.not include_private,
+                    Option.some _ => false,
+                },
+        _ => false,
+    }
+
 #[test]
 def test_lsp_and_version : Bool :=
     match Command.from_args ["lsp"] {

@@ -64,6 +64,13 @@ workspace = true
 [dependencies.lsp]
 workspace = true
 
+# `monad doc`: the API reference generator. A dependency of THIS mote and not
+# of `lang`, because a reference is a tool over source ranges, not a compiler
+# stage -- `DocGen.build` reads the same `toolkit::decl_text` outline the
+# language server does.
+[dependencies.docgen]
+workspace = true
+
 # Affine-by-default migration exception (measured 2026-10-22).
 # Delete this table when the mote reaches zero violations; the default
 # (no table) is `mode = "error"`. See plans/type-system/quantitative-types.md.

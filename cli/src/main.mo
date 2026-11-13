@@ -87,6 +87,7 @@ use std::io {IO.read_line, IO.write_stderr, IO.flush_stdout}
 // stream and a compiler's diagnostic stream are the same two file
 // descriptors, and `lsp_serve` returning means the session is over.
 use lsp::server {lsp_serve}
+use docgen::gen {DocGen.build}
 
 #[native "build_commit"]
 def build_commit : String
@@ -3277,6 +3278,9 @@ def Command.dispatch (cmd : Command) : IO I64 :=
         Command.update dir offline => do {
             Build.fetch_run (Option.get_or_default "." dir) FetchMode.update offline
         },
+        Command.doc motes output include_private => do {
+            run_doc motes (Option.get_or_default "target/docs" output) include_private
+        },
         Command.print_targets => run_print_targets,
         Command.lsp => lsp_serve,
         Command.version => do {
@@ -3288,6 +3292,29 @@ def Command.dispatch (cmd : Command) : IO I64 :=
             return 0
         }
     }
+
+/// `monad doc`: an API reference for the named mote directories, written
+/// under `--output`. The work is docgen's (`DocGen.build`), so the CLI and
+/// the standalone `docgen` binary cannot diverge on what a page shows.
+///
+/// With no motes named, the enclosing mote's directory is documented -- the
+/// same default `check` and `test` take, so `monad doc` inside a mote does
+/// the obvious thing.
+def run_doc (motes : List String) (out : String) (include_private : Bool) : IO I64 := do {
+    let dirs : List String := if List.is_empty motes then ["."] else motes;
+    let wrote <- DocGen.build dirs out include_private;
+    match wrote {
+        Result.err e => do {
+            IO.write_stderr (String.concat "monad doc: " (String.concat e "\n"));
+            return 1
+        },
+        Result.ok n => do {
+            println (String.concat "monad doc: wrote "
+                (String.concat (I64.to_string n) (String.concat " files under " out)));
+            return 0
+        },
+    }
+}
 
 /// `monad print-targets`. The tabulated targets, each marked when this llc
 /// cannot build for it; then this machine's own target (what no `--target`

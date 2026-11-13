@@ -14,7 +14,7 @@ use acorn::config {SiteConfig}
 use acorn::layout {Shell}
 use acorn::site {Built, Site.build_with}
 use docgen::extract {DocExtract.extract_mote}
-use docgen::model {DocMote}
+use docgen::model {DocMote, DocMote.public_only}
 use docgen::render {DocRender.hub_page, DocRender.mote_pages}
 use lib::landing {Landing.page}
 
@@ -54,7 +54,9 @@ pub def Website.pages (cfg : SiteConfig) : IO (List Built) := do {
 /// docgen's: which packages a reader is pointed at is an editorial choice.
 def documented_motes : List String := ["init", "std", "lang", "cli", "eval"]
 
-/// Every documented mote's pages, then the hub. A mote that fails to read is
+/// Every documented mote's pages, then the hub. The published reference
+/// shows `pub` declarations only -- package-private internals are the mote's
+/// own business, and the site is for readers. A mote that fails to read is
 /// skipped rather than failing the site: a missing reference page is better
 /// than no site at all, and the build reports the count either way.
 def Website.api_pages (cfg : SiteConfig) : IO (List Built) := do {
@@ -76,7 +78,7 @@ def extract_one (dir : String) (rest : List String) (acc : List DocMote) : IO (L
     let got <- DocExtract.extract_mote dir;
     match got {
         Result.err _ => extract_motes rest acc,
-        Result.ok m => extract_motes rest (List.cons m acc),
+        Result.ok m => extract_motes rest (List.cons (DocMote.public_only m) acc),
     }
 }
 

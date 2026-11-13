@@ -98,15 +98,21 @@ pub def DocExtract.extract_source_as (module : String) (file : String) (src : St
     let items : List DocItem := doc_items file src lines ds List.empty in
     DocModule.mk module file (module_doc_of lines) (List.reverse items)
 
-/// A file path to its module's dotted identity: the mote segment, then one
-/// segment per directory under `src/`, `::`-joined. `init/src/list.mo` is
-/// `init::list`; `std/src/concurrent/channel.mo` is `std::concurrent::channel`.
-/// A bare `x.mo` (a synthetic test path) falls back to its own stem.
+/// A file path to its module's dotted identity: the mote's name (the segment
+/// just before `src`), then one segment per directory under `src/`,
+/// `::`-joined. `init/src/list.mo` is `init::list`,
+/// `motes/docgen/src/extract.mo` is `docgen::extract`, and
+/// `std/src/concurrent/channel.mo` is `std::concurrent::channel`.
+///
+/// Everything before the mote segment is dropped -- a workspace path carries
+/// `motes/` or a checkout prefix the module name must not include. A path
+/// with no `src` segment is treated as already relative: its first segment is
+/// the mote, so a bare `x.mo` is just `x`.
 pub def module_of_file (file : String) : String :=
     let segments : List String := split_segments (String.to_list file) List.empty List.empty in
-    dotted_of_segments (drop_src segments) ""
+    dotted_of_segments (from_mote_segment segments List.empty) ""
 
-/// The path's `/`-separated segments, in order, with the `.mo` suffix gone.
+/// The path's `/`-separated segments, in order.
 #[partial]
 def split_segments (cs : List U8) (cur : List U8) (acc : List String) : List String :=
     match cs {
@@ -117,14 +123,26 @@ def split_segments (cs : List U8) (cur : List U8) (acc : List String) : List Str
             else split_segments rest (List.cons c cur) acc,
     }
 
-/// The segments after the first `src`: the mote's name precedes it and its
-/// modules follow it. A path with no `src` segment is kept whole.
+/// The module's own segments: the mote's name, then everything after `src`.
+/// `before_src` is the path walked so far, most-recent first, so its head is
+/// the segment just before `src` -- the mote. A path that begins with `src`
+/// (or has no `src` at all) keeps its segments as they are.
 #[partial]
-def drop_src (segments : List String) : List String :=
+def from_mote_segment (segments : List String) (before_src : List String) : List String :=
     match segments {
-        List.empty => List.empty,
+        List.empty => List.reverse before_src,
         List.cons s rest =>
-            if String.beq s "src" then rest else List.cons s (drop_src rest),
+            if String.beq s "src"
+            then from_after_src before_src rest
+            else from_mote_segment rest (List.cons s before_src),
+    }
+
+/// `src` found: the mote (the head of the walked stack) followed by the rest.
+#[partial]
+def from_after_src (before_src : List String) (rest : List String) : List String :=
+    match before_src {
+        List.empty => rest,
+        List.cons mote _ => List.cons mote rest,
     }
 
 /// Join segments with `::`, dropping the `.mo` suffix of the last one.

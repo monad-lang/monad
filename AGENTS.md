@@ -210,8 +210,11 @@ newest nightly predates `bootstrap/nightly-floor.txt`; falling back past that
 window is how an incompatible tree used to pass.
 
 The **compiler-source surface** is exactly what `scripts/build-self-hosted.sh`
-scans: `init std lang cli llvm runtime build`, the motes in its input list
-(`clap json lsp parsec toml toolkit`), their `mote.toml`s and `runtime/src`.
+scans: `init std sys lang codegen cli llvm runtime build eval`, the motes in
+its input list (`clap fmt json serde log lsp parsec toml toolkit`, plus
+`docgen` -- which backs `monad doc` -- and its closure `acorn markdown unicode
+xml_html oak http web_event`),
+their `mote.toml`s and `runtime/src`.
 `MONAD_STDLIB` points the host at the checkout's `init/src`, so a prelude
 change is in this surface too.
 

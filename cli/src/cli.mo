@@ -114,6 +114,11 @@ pub type Command {
     update
         (#[pos {help := "the mote directory (default: .)"}] dir : Option String)
         (#[arg {short := "", help := "use only what is already cached"}] offline : Bool),
+    /// Generate an API reference for the named motes from their sources.
+    doc
+        (#[pos {help := "mote directories to document (default: the enclosing mote)"}] motes : List String)
+        (#[opt {short := "o", value_name := "DIR", help := "the output root (default: target/docs)"}] output : Option String)
+        (#[arg {short := "", help := "include package-private declarations too"}] include_private : Bool),
     /// List the triples `--target` accepts and what this llc can build for.
     print_targets,
     /// Speak the Language Server Protocol on stdin/stdout.

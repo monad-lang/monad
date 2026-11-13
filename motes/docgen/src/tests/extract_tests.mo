@@ -236,6 +236,14 @@ def test_flat_module_identity : Bool :=
         { module, .. } => String.beq module "init::list",
     }
 
+/// A workspace path carries directories before the mote (`motes/`); they are
+/// not part of the module's name.
+#[test]
+def test_workspace_path_drops_the_leading_dirs : Bool :=
+    match DocExtract.extract_source "motes/docgen/src/extract.mo" "pub def x : I64 := 1\n" {
+        { module, .. } => String.beq module "docgen::extract",
+    }
+
 /// A synthetic path with no `src` segment still yields a usable name.
 #[test]
 def test_bare_path_identity : Bool :=

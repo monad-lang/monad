@@ -59,8 +59,11 @@
 # build, eval, and the motes it imports -- motes/clap, which cli/src/main.mo parses
 # its own argv with, motes/fmt, which backs `monad fmt`, motes/lsp,
 # motes/toolkit, motes/json and motes/log, which reach the binary through
-# cli/mote.toml's [dependencies.lsp], and motes/parsec and motes/toml through
-# lang), their .mo/.c/.h sources, and each
+# cli/mote.toml's [dependencies.lsp], motes/serde through motes/json,
+# motes/parsec and motes/toml through lang, and motes/docgen -- which backs
+# `monad doc` -- plus its own closure: motes/acorn, motes/markdown,
+# motes/unicode, motes/xml_html, motes/oak, motes/http, motes/web_event), their
+# .mo/.c/.h sources, and each
 # one's mote.toml -- a manifest that carries `[link] libs`, so it decides how
 # the mote is compiled.
 #
@@ -120,6 +123,8 @@ if [ ! -x "$out/monad" ]; then
 else
   newer="$(find init std sys lang codegen cli llvm runtime build eval \
     motes/clap motes/fmt motes/json motes/log motes/lsp motes/parsec motes/toml motes/toolkit \
+    motes/serde \
+    motes/docgen motes/acorn motes/markdown motes/unicode motes/xml_html motes/oak motes/http motes/web_event \
     \( -name '*.mo' -o -name '*.c' -o -name '*.h' -o -name mote.toml \) \
     -newer "$out/monad" -print -quit)" || {
     echo "build-self-hosted.sh: cannot scan the ladder's inputs from $PWD" >&2

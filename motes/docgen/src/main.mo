@@ -11,11 +11,7 @@ use clap::spec {
     Cli.positional_multi, Cli.with_args, Cli.with_subcommands, Cli.with_version,
 }
 use clap::parse {Cli.run}
-use acorn::config {SiteConfig}
-use acorn::site {Built, Site.write_pages}
-use lib::extract {DocExtract.extract_mote}
-use lib::model {DocMote}
-use lib::render {DocRender.hub_page, DocRender.mote_pages}
+use lib::gen {DocGen.build}
 
 def build_spec : Cli.CommandSpec :=
     Cli.with_args
@@ -66,63 +62,17 @@ def option_or (opts : List Cli.ArgValue) (name : String) (fallback : String) : S
         List.cons o rest => if String.beq o.name name then o.value else option_or rest name fallback,
     }
 
-def run_build (args : BuildArgs) : IO I64 :=
-    extract_all args.motes List.empty args
-
-/// Extract every named mote, accumulating in order, then build and write.
-/// A mote that does not extract stops the whole run: a partial reference
-/// that silently drops one mote is worse than a failed build.
-def extract_all (motes : List String) (acc : List DocMote) (args : BuildArgs) : IO I64 :=
-    match motes {
-        List.empty => write_pages_for args.out (List.reverse acc),
-        List.cons m rest => extract_one m rest acc args,
-    }
-
-/// One mote, read from the directory the caller named. A mote that does not
-/// extract (a missing directory, an unparsable file) stops the run with its
-/// name in the message.
-#[terminating]
-def extract_one (mote : String) (rest : List String) (acc : List DocMote) (args : BuildArgs)
-    : IO I64 := do {
-    let got <- DocExtract.extract_mote mote;
-    match got {
-        Result.err e => report_error (String.concat mote (String.concat ": " e)),
-        Result.ok m => extract_all rest (List.cons m acc) args,
-    }
-}
-
-/// Every mote extracted: render the module pages and the hub, then write
-/// them all through acorn's gate.
-def write_pages_for (out : String) (motes : List DocMote) : IO I64 := do {
-    let cfg : SiteConfig := site_config out;
-    let pages := all_pages cfg motes;
-    let wrote <- Site.write_pages out pages;
+def run_build (args : BuildArgs) : IO I64 := do {
+    let wrote <- DocGen.build args.motes args.out false;
     match wrote {
         Result.err e => report_error e,
         Result.ok n => do {
             IO.println (String.concat "docgen: wrote "
-                (String.concat (I64.to_string n) (String.concat " files under " out)));
+                (String.concat (I64.to_string n) (String.concat " files under " args.out)));
             return 0
         },
     }
 }
-
-/// The acorn configuration the pages render with. Only the fields the
-/// document shell reads matter here; the book paths are unused by an API page.
-def site_config (out : String) : SiteConfig :=
-    { title := "Monad API reference", base_url := "/", book_src := "docs/src",
-        book_dir := "docs", out_dir := out }
-
-/// Every page: each mote's module pages, then the hub.
-def all_pages (cfg : SiteConfig) (motes : List DocMote) : List Built :=
-    let shared : Shared (List DocMote) := Shared.of motes in
-    List.append (mote_page_lists cfg (Shared.get shared)) [DocRender.hub_page cfg (Shared.get shared)]
-
-def mote_page_lists (cfg : SiteConfig) (motes : List DocMote) : List Built :=
-    match motes {
-        List.empty => List.empty,
-        List.cons m rest => List.append (DocRender.mote_pages cfg m) (mote_page_lists cfg rest),
-    }
 
 def report_error (msg : String) : IO I64 := do {
     IO.write_stderr (String.concat "docgen: " (String.concat msg "\n"));

@@ -292,11 +292,30 @@
                 # `fmt` backs `monad fmt` and arrives through `cli`, like `clap`.
                 "motes/fmt"
                 "motes/json"
+                # `json`'s own dependency (its encoders are `serde` instances).
+                "motes/serde"
                 "motes/log"
                 "motes/lsp"
                 "motes/parsec"
                 "motes/toml"
                 "motes/toolkit"
+                # `docgen` backs `monad doc` and arrives through `cli`, like
+                # `fmt`; it brings `acorn`, `markdown`, `xml_html` and `oak`
+                # along (acorn's rendering, markdown's doc-comment parsing, the
+                # HTML node model, and oak's serializer that acorn lowers to),
+                # and THEIR dependencies: `unicode` (markdown's case folding)
+                # and `http`/`web_event` (oak's). This is the manifests'
+                # transitive closure, not a guess: a mote missing here is
+                # absent from the source the pinned nightly compiles, and the
+                # build fails with an `unknown variable` in its dependent.
+                "motes/docgen"
+                "motes/acorn"
+                "motes/markdown"
+                "motes/unicode"
+                "motes/xml_html"
+                "motes/oak"
+                "motes/http"
+                "motes/web_event"
               ]
         );
       };
