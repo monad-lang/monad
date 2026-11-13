@@ -199,8 +199,7 @@ def toml_comma (input : String) : ParseResult String :=
 def toml_eq (input : String) : ParseResult String :=
     delimited_by toml_ws (tag "=") toml_ws input
 
-/// Bare TOML key character: alphanumeric, underscore, or hyphen. Quoted keys are
-/// not supported (MVP).
+/// Bare TOML key character: alphanumeric, underscore, or hyphen.
 def Toml.is_key_char (c : String) : Bool :=
     if is_ident_char c then true else String.beq "-" c
 
@@ -213,6 +212,57 @@ def toml_bare_key_result (r : ParseResult String) : ParseResult String :=
 /// Parse a single bare key (one path segment — no dots).
 def Toml.bare_key (input : String) : ParseResult String :=
     toml_bare_key_result (take_while Toml.is_key_char input)
+
+/// A DOUBLE-QUOTED key (`"A-j" = "join_selections"`), returning its contents.
+///
+/// Full TOML allows any character inside a quoted key, and a config file
+/// needs that: a key binding is spelled `"A-j"`, `"space-w"` or `"g-g"`, none
+/// of which is a bare key (they contain `-`, and `A-j` would be read as the
+/// bare key `A-j` rather than as the three-byte spec it is). The escape set is
+/// the string parser's, so `"C-\""` is spellable.
+///
+/// Only the DOUBLE quote is a quoted key here. TOML's `'literal'` form is not
+/// part of this mote's grammar anywhere else (its strings are double-quoted
+/// only), and adding it here alone would make a literal key parse while a
+/// literal string value did not.
+def Toml.quoted_key (input : String) : ParseResult String :=
+    toml_quoted_key_content (tag "\"" input)
+
+#[partial]
+def toml_quoted_key_content (r : ParseResult String) : ParseResult String :=
+    match r {
+        success rem _ => toml_quoted_key_body (Toml.parse_string_content rem),
+        fail e => fail e
+    }
+
+/// The key's characters, joined until the closing quote.
+///
+/// NO `List.reverse`: `Toml.parse_string_content` returns the characters in
+/// the order it read them (`many0` accumulates head-first and reverses once at
+/// the end), so reversing here too would hand back the key spelled backwards
+/// -- which still PARSES, and still looks like a key, so only a test that
+/// reads the stored name catches it (`test_parse_quoted_key`).
+#[partial]
+def toml_quoted_key_body (r : ParseResult (List String))
+    : ParseResult String :=
+    match r {
+        success rem chars =>
+            toml_quoted_key_close (tag "\"" rem) (String.concat_all chars),
+        fail e => fail e
+    }
+
+#[partial]
+def toml_quoted_key_close (r : ParseResult String) (key : String) : ParseResult String :=
+    match r {
+        success rem _ => success rem key,
+        fail e => fail e
+    }
+
+/// A key in a `key = value` row: quoted or bare. QUOTED FIRST -- a quoted key
+/// starts with `"`, which `Toml.bare_key` would reject anyway, but trying the
+/// quoted form first keeps the error a caller sees about the quoted form.
+def Toml.key (input : String) : ParseResult String :=
+    alt Toml.quoted_key Toml.bare_key input
 
 /// Parse a dotted key path (`a.b.c`), used for table headers. A plain `[a]`
 /// header parses as a one-element path.
@@ -597,7 +647,7 @@ def toml_kv_key (r : ParseResult String) : ParseResult (Pair String Toml.Value) 
 /// every combinator in `lang/src/parser/` carries the attribute.
 #[partial]
 def Toml.parse_kv (input : String) : ParseResult (Pair String Toml.Value) :=
-    toml_kv_key (Toml.bare_key input)
+    toml_kv_key (Toml.key input)
 
 def toml_line_of_kv (p : Pair String Toml.Value) : Toml.Line :=
     match p { Pair.pair k v => kv k v }
@@ -1346,6 +1396,60 @@ def test_parse_empty_table_header : Bool :=
                 some v => match v { table sub => List.is_empty (BTreeMap.to_list sub), _ => false },
                 none => false
             },
+        err _ => false
+    }
+
+// ─── Tests: parser — quoted keys ───
+//
+// A keymap is spelled with QUOTED keys (`"A-j" = "join_selections"`), because
+// a binding's name contains characters a bare key cannot hold: `A-j` is a
+// three-byte spec, not an identifier, and `space-w`/`g-g` are chords. A
+// reader that rejected them could not read the config a picker or editor
+// ships, so the grammar carries them (see `Toml.quoted_key`).
+
+/// A quoted key's row lands under its OWN name, not under a truncated one:
+/// the hyphen survives, which is exactly what a bare key could not hold.
+#[test]
+def test_parse_quoted_key : Bool :=
+    match Toml.parse "[keys.normal]\n\"A-j\" = \"move_char_down\"\n" {
+        ok t =>
+            match Toml.table_get "keys" t {
+                some v =>
+                    match v {
+                        table sub =>
+                            match Toml.table_get "normal" sub {
+                                some inner =>
+                                    match inner {
+                                        table rows =>
+                                            toml_table_lookup_eq "A-j" rows (string "move_char_down"),
+                                        _ => false
+                                    },
+                                none => false
+                            },
+                        _ => false
+                    },
+                none => false
+            },
+        err _ => false
+    }
+
+/// Quoted and bare keys co-exist in one table -- a config may spell either
+/// form, and a file that mixed them must not lose the rows it did not quote.
+#[test]
+def test_parse_quoted_and_bare_keys : Bool :=
+    match Toml.parse "plain = \"a\"\n\"C-x\" = \"b\"\n" {
+        ok t =>
+            toml_table_lookup_eq "plain" t (string "a")
+                && toml_table_lookup_eq "C-x" t (string "b"),
+        err _ => false
+    }
+
+/// A quoted key keeps a `#` and a `=` that a bare key could not: the quoted
+/// form is the escape hatch, and the value parser is not confused by them.
+#[test]
+def test_parse_quoted_key_with_punctuation : Bool :=
+    match Toml.parse "\"m-i-(\" = \"match_inside\"\n" {
+        ok t => toml_table_lookup_eq "m-i-(" t (string "match_inside"),
         err _ => false
     }
 
