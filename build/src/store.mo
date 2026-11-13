@@ -69,16 +69,16 @@ pub def Build.entry_root_named (target_dir : String) (kind : String) : String :=
 /// Pure, and takes the env and config values as arguments rather than
 /// reading them, so every tier is testable without a process environment
 /// or a config file on disk.
-pub def Build.resolve_target_dir (flag : String) (env : Option String) (config : Option String) (root : String) : String :=
+pub def Build.resolve_target_dir (flag : String) (env : Option String) (config : Option Path) (root : String) : String :=
     if Bool.not (String.is_empty flag) then flag
     else match env {
         Option.some e => if String.is_empty e then Build.target_dir_from_config config root else e,
         Option.none => Build.target_dir_from_config config root
     }
 
-def Build.target_dir_from_config (config : Option String) (root : String) : String :=
+def Build.target_dir_from_config (config : Option Path) (root : String) : String :=
     match config {
-        Option.some m => if String.is_empty m then Build.default_target_dir root else m,
+        Option.some m => Path.to_string m,
         Option.none => Build.default_target_dir root
     }
 
@@ -96,7 +96,7 @@ def Build.default_target_dir (root : String) : String :=
 /// The env tier, read once by a caller and passed into
 /// `Build.resolve_target_dir`.
 #[partial]
-pub def Build.target_dir_of (flag : String) (config : Option String) (root : String) : IO String := do {
+pub def Build.target_dir_of (flag : String) (config : Option Path) (root : String) : IO String := do {
     let e <- IO.get_env "MONAD_TARGET_DIR";
     return (Build.resolve_target_dir flag e config root)
 }

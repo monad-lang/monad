@@ -363,11 +363,11 @@ def list_contains_string (needle : String) (xs : List String) : Bool :=
 /// `.monad/config.toml` inherits from the one above it -- the same rule a
 /// manifest used to follow for its workspace.
 #[partial]
-pub def Mote.discover_config_target_dir (dir : String) : IO (Option String) :=
+pub def Mote.discover_config_target_dir (dir : String) : IO (Option Path) :=
     Mote.discover_config_target_dir_go dir 32
 
 #[partial]
-def Mote.discover_config_target_dir_go (dir : String) (depth : I64) : IO (Option String) := do {
+def Mote.discover_config_target_dir_go (dir : String) (depth : I64) : IO (Option Path) := do {
     if I64.lt depth 1
     then return Option.none
     else do {
@@ -380,14 +380,14 @@ def Mote.discover_config_target_dir_go (dir : String) (depth : I64) : IO (Option
 }
 
 /// `config_target_dir_of_text` of a config file that may not exist.
-def Mote.config_target_dir_of_found (dir : String) (text : Option String) : Option String :=
+def Mote.config_target_dir_of_found (dir : String) (text : Option String) : Option Path :=
     match text {
         Option.none => Option.none,
         Option.some t => Mote.config_target_dir_of_text dir t
     }
 
 #[partial]
-def Mote.discover_config_target_dir_above (dir : String) (depth : I64) : IO (Option String) :=
+def Mote.discover_config_target_dir_above (dir : String) (depth : I64) : IO (Option Path) :=
     if String.beq dir "/"
     then return Option.none
     else Mote.discover_config_target_dir_go (config_dir_above dir) depth
@@ -424,10 +424,18 @@ def config_dir_above (dir : String) : String :=
     then String.concat dir "/.."
     else parent_of dir
 
-def Mote.config_target_dir_of_text (dir : String) (text : String) : Option String :=
+/// A `[build] target-dir` value, already joined onto the config's own
+/// directory. A declared EMPTY value joins to that directory; under a
+/// working-directory config that join is itself empty, which has no `Path`
+/// spelling and which the tool has always read as "not set", so that one
+/// case is `none`.
+def Mote.config_target_dir_of_text (dir : String) (text : String) : Option Path :=
     match Toml.parse text {
         err _ => Option.none,
-        ok root => Mote.joined_table_string dir (Toml.table_get "build" root) "target-dir"
+        ok root => match Mote.joined_table_string dir (Toml.table_get "build" root) "target-dir" {
+            Option.none => Option.none,
+            Option.some s => if String.is_empty s then Option.none else Option.some (Path.unsafe s)
+        }
     }
 
 /// The `mote.toml` inside `dir`, with `""` meaning the working directory
@@ -460,12 +468,12 @@ def tool_config_in (dir : String) : String :=
 /// `fallback` (the mote's own directory) is the answer for an inline mote,
 /// which declares no targets at all. An explicit path argument never
 /// reaches here -- `monad test .` still means that directory, literally.
-pub def Mote.target_roots (m : MoteManifest) (fallback : String) : List String :=
-    let from_lib : List String := match m.lib_path {
+pub def Mote.target_roots (m : MoteManifest) (fallback : Path) : List Path :=
+    let from_lib : List Path := match m.lib_path {
         Option.some p => List.cons (Mote.target_root_of p) List.empty,
         Option.none => List.empty,
     } in
-    let roots : List String := Mote.push_unique_roots (Mote.bin_target_roots m.bins) from_lib in
+    let roots : List Path := Mote.push_unique_roots (Mote.bin_target_roots m.bins) from_lib in
     if List.is_empty roots then List.cons fallback List.empty else roots
 
 /// The subset of `target_roots` a NATIVE driver may compile. The `[lib]`
@@ -475,16 +483,16 @@ pub def Mote.target_roots (m : MoteManifest) (fallback : String) : List String :
 /// "native"). A `targets = ["web"]` bin is not native-testable -- that is
 /// the anidoku gap where `monad test` compiled a web-only bin for the
 /// native driver.
-pub def Mote.native_test_roots (m : MoteManifest) (fallback : String) : List String :=
-    let from_lib : List String := match m.lib_path {
+pub def Mote.native_test_roots (m : MoteManifest) (fallback : Path) : List Path :=
+    let from_lib : List Path := match m.lib_path {
         Option.some p => List.cons (Mote.target_root_of p) List.empty,
         Option.none => List.empty,
     } in
     let native_capable : Bool :=
         List.is_empty m.targets || List.contains_by String.beq "native" m.targets in
-    let bins : List String :=
+    let bins : List Path :=
         if native_capable then Mote.bin_target_roots m.bins else List.empty in
-    let roots : List String := Mote.push_unique_roots bins from_lib in
+    let roots : List Path := Mote.push_unique_roots bins from_lib in
     if List.is_empty roots then List.cons fallback List.empty else roots
 
 /// Whether `file` is a declared `[[bin]]` target of a mote whose
@@ -517,13 +525,13 @@ def Mote.bin_matches_file (bs : List BinTarget) (file : String) : Bool :=
 /// A target FILE's directory, with the mote root spelled the way a path
 /// expander wants it: `src/lib.mo` -> `src`, but a target at the mote root
 /// (`main.mo`) -> `.`, not `""`.
-def Mote.target_root_of (path : Path) : String :=
+def Mote.target_root_of (path : Path) : Path :=
     match Path.parent path {
-        Option.some d => Path.to_string d,
-        Option.none => ".",
+        Option.some d => d,
+        Option.none => Path.unsafe ".",
     }
 
-def Mote.bin_target_roots (bs : List BinTarget) : List String :=
+def Mote.bin_target_roots (bs : List BinTarget) : List Path :=
     match bs {
         List.empty => List.empty,
         List.cons b rest => List.cons (Mote.target_root_of (BinTarget.target_path b)) (Mote.bin_target_roots rest),
@@ -532,19 +540,19 @@ def Mote.bin_target_roots (bs : List BinTarget) : List String :=
 /// Append each of `more` to `acc` unless it is already there -- declaration
 /// order preserved, so the `[lib]` root stays first. Hand-rolled rather
 /// than a generic fold: `acc` is the small list and the comparison is
-/// `String.beq`.
-def Mote.push_unique_roots (more : List String) (acc : List String) : List String :=
+/// `Path.beq`.
+def Mote.push_unique_roots (more : List Path) (acc : List Path) : List Path :=
     match more {
         List.empty => acc,
         List.cons r rest =>
-            let next : List String := if Mote.roots_contain acc r then acc else List.append acc (List.cons r List.empty) in
+            let next : List Path := if Mote.roots_contain acc r then acc else List.append acc (List.cons r List.empty) in
             Mote.push_unique_roots rest next,
     }
 
-def Mote.roots_contain (roots : List String) (wanted : String) : Bool :=
+def Mote.roots_contain (roots : List Path) (wanted : Path) : Bool :=
     match roots {
         List.empty => false,
-        List.cons r rest => if String.beq r wanted then true else Mote.roots_contain rest wanted,
+        List.cons r rest => if Path.beq r wanted then true else Mote.roots_contain rest wanted,
     }
 
 /// The parent of `dir`, keeping an absolute path absolute.
@@ -2470,6 +2478,15 @@ def roots_joined (roots : List String) : String :=
             if List.is_empty rest then r else String.concat r (String.concat "," (roots_joined rest)),
     }
 
+def path_roots_joined (roots : List Path) : String :=
+    match roots {
+        List.empty => "",
+        List.cons r rest =>
+            if List.is_empty rest
+            then Path.to_string r
+            else String.concat (Path.to_string r) (String.concat "," (path_roots_joined rest)),
+    }
+
 /// A manifest that declares no targets at all, so the conventional
 /// defaults are what `Mote.target_roots` has to work from.
 def no_target_manifest_fixture : String :=
@@ -2490,7 +2507,7 @@ def test_parse_manifest_targets : Bool :=
 def test_target_roots_of_a_lib_manifest : Bool :=
     match Mote.parse_manifest "lang" mote_manifest_fixture {
         Option.none => false,
-        Option.some m => String.beq (roots_joined (Mote.target_roots m "lang")) "lang/src",
+        Option.some m => String.beq (path_roots_joined (Mote.target_roots m (Path.unsafe "lang"))) "lang/src",
     }
 
 /// A `[[bin]]` outside `src/` is covered where it actually lives -- the
@@ -2501,7 +2518,7 @@ def test_target_roots_of_a_lib_manifest : Bool :=
 def test_target_roots_of_a_bin_outside_src : Bool :=
     match Mote.parse_manifest "cli" two_bin_manifest_fixture {
         Option.none => false,
-        Option.some m => String.beq (roots_joined (Mote.target_roots m "cli")) "cli/src,cli/src/bin",
+        Option.some m => String.beq (path_roots_joined (Mote.target_roots m (Path.unsafe "cli"))) "cli/src,cli/src/bin",
     }
 
 /// A `[lib]` and a `[[bin]]` in the same directory (this repository's own
@@ -2511,7 +2528,7 @@ def test_target_roots_of_a_bin_outside_src : Bool :=
 def test_target_roots_dedup_a_shared_directory : Bool :=
     match Mote.parse_manifest "cli" bin_manifest_fixture {
         Option.none => false,
-        Option.some m => String.beq (roots_joined (Mote.target_roots m "cli")) "cli/src",
+        Option.some m => String.beq (path_roots_joined (Mote.target_roots m (Path.unsafe "cli"))) "cli/src",
     }
 
 /// A manifest that declares no targets still gets the conventional ones
@@ -2520,14 +2537,14 @@ def test_target_roots_dedup_a_shared_directory : Bool :=
 def test_target_roots_of_the_conventional_defaults : Bool :=
     match Mote.parse_manifest "plain" no_target_manifest_fixture {
         Option.none => false,
-        Option.some m => String.beq (roots_joined (Mote.target_roots m "plain")) "plain/src",
+        Option.some m => String.beq (path_roots_joined (Mote.target_roots m (Path.unsafe "plain"))) "plain/src",
     }
 
 /// A target at the mote root has no directory component, and `""` is not a
 /// path a walk can be given -- `.` is.
 #[test]
 def test_target_roots_of_a_root_level_target : Bool :=
-    String.beq (Mote.target_root_of (Path.unsafe "main.mo")) "."
+    String.beq (Path.to_string (Mote.target_root_of (Path.unsafe "main.mo"))) "."
 
 /// An inline mote declares no targets at all, so the fallback (the mote's
 /// own directory) is the answer rather than an empty list -- an empty one
@@ -2536,7 +2553,7 @@ def test_target_roots_of_a_root_level_target : Bool :=
 def test_target_roots_falls_back_for_an_inline_mote : Bool :=
     match Mote.manifest_of_attr "examples" attr_mote_self_hosted {
         Option.none => false,
-        Option.some m => String.beq (roots_joined (Mote.target_roots m "examples")) "examples",
+        Option.some m => String.beq (path_roots_joined (Mote.target_roots m (Path.unsafe "examples"))) "examples",
     }
 
 /// A `targets = ["web"]` mote: the lib root is still native-testable
@@ -2547,7 +2564,7 @@ def test_native_test_roots_skip_a_web_bin : Bool :=
     match Mote.parse_manifest "webapp" web_only_manifest_fixture {
         Option.none => false,
         Option.some m =>
-            String.beq (roots_joined (Mote.native_test_roots m "webapp")) "webapp/src"
+            String.beq (path_roots_joined (Mote.native_test_roots m (Path.unsafe "webapp"))) "webapp/src"
                 && Mote.web_only_bin_file m "webapp/src/main.mo"
                 && Bool.not (Mote.web_only_bin_file m "webapp/src/lib.mo"),
     }
@@ -3166,7 +3183,7 @@ def test_discover_config_target_dir_walks_up_a_real_tree : IO Bool := do {
     let found <- Mote.discover_config_target_dir (root ++ "/sub/deeper");
     return (Result.is_ok w && (match found {
         Option.none => false,
-        Option.some d => String.beq d (root ++ "/out")
+        Option.some d => String.beq (Path.to_string d) (root ++ "/out")
     }))
 }
 
@@ -3187,7 +3204,7 @@ def test_tool_config_in_names_the_root_and_the_cwd : Bool :=
 def test_config_target_dir_is_joined_onto_the_configs_directory : Bool :=
     match Mote.config_target_dir_of_text "lang" "[build]\ntarget-dir = \"target-monad\"\n" {
         Option.none => false,
-        Option.some d => String.beq d "lang/target-monad"
+        Option.some d => String.beq (Path.to_string d) "lang/target-monad"
     }
 
 /// The empty-directory case: the config found in the working directory
@@ -3197,7 +3214,7 @@ def test_config_target_dir_is_joined_onto_the_configs_directory : Bool :=
 def test_config_target_dir_of_the_working_directory_is_relative : Bool :=
     match Mote.config_target_dir_of_text "" "[build]\ntarget-dir = \"target-monad\"\n" {
         Option.none => false,
-        Option.some d => String.beq d "target-monad"
+        Option.some d => String.beq (Path.to_string d) "target-monad"
     }
 
 /// A config that names no directory answers `none`, which is what lets the
@@ -3207,6 +3224,26 @@ def test_config_without_a_build_table_names_nothing : Bool :=
     match Mote.config_target_dir_of_text "" "# nothing but a comment\n" {
         Option.none => true,
         Option.some _ => false
+    }
+
+/// An empty value under a working-directory config joins to the empty
+/// spelling, which is "not set" -- the only case with no `Path` answer.
+/// Dropping the empty filter in `config_target_dir_of_text` is the mutation
+/// this pins: it would answer `some ""`.
+#[test]
+def test_config_with_an_empty_target_dir_names_nothing : Bool :=
+    match Mote.config_target_dir_of_text "" "[build]\ntarget-dir = \"\"\n" {
+        Option.none => true,
+        Option.some _ => false
+    }
+
+/// The same empty value under a NAMED config directory keeps its old
+/// meaning: the join is that directory, which is a real target dir.
+#[test]
+def test_config_with_an_empty_target_dir_under_a_named_dir_is_that_dir : Bool :=
+    match Mote.config_target_dir_of_text "lang" "[build]\ntarget-dir = \"\"\n" {
+        Option.none => false,
+        Option.some d => String.beq (Path.to_string d) "lang"
     }
 
 /// A virtual workspace root has `[workspace]` and no `[mote]` -- it is not

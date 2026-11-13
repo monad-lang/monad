@@ -19,32 +19,33 @@ use build::identity {Build.compiler_digest, Build.compiler_exe_path}
 #[test]
 def test_target_dir_flag_wins_over_everything : Bool :=
     String.beq
-        (Build.resolve_target_dir "flagdir" (Option.some "envdir") (Option.some "configdir") "root")
+        (Build.resolve_target_dir "flagdir" (Option.some "envdir") (Option.some (Path.unsafe "configdir")) "root")
         "flagdir"
 
 #[test]
 def test_target_dir_env_beats_config : Bool :=
     String.beq
-        (Build.resolve_target_dir "" (Option.some "envdir") (Option.some "configdir") "root")
+        (Build.resolve_target_dir "" (Option.some "envdir") (Option.some (Path.unsafe "configdir")) "root")
         "envdir"
 
 #[test]
 def test_target_dir_config_beats_the_default : Bool :=
     String.beq
-        (Build.resolve_target_dir "" Option.none (Option.some "target-monad") "root")
+        (Build.resolve_target_dir "" Option.none (Option.some (Path.unsafe "target-monad")) "root")
         "target-monad"
 
 #[test]
 def test_target_dir_falls_back_to_root_target : Bool :=
     String.beq (Build.resolve_target_dir "" Option.none Option.none "root") "root/target"
 
-/// An empty flag, an empty env value and an empty config value all mean
-/// "not set" rather than "set to the empty string" -- otherwise a
-/// `MONAD_TARGET_DIR=` in the environment would silently redirect every
-/// artifact to the filesystem root.
+/// An empty flag and an empty env value mean "not set" rather than "set to
+/// the empty string" -- otherwise a `MONAD_TARGET_DIR=` in the environment
+/// would silently redirect every artifact to the filesystem root. The config
+/// tier cannot carry an empty value at all: a declared `target-dir = ""`
+/// is `none` where it is parsed (`Mote.config_target_dir_of_text`).
 #[test]
 def test_target_dir_treats_empty_values_as_unset : Bool :=
-    String.beq (Build.resolve_target_dir "" (Option.some "") (Option.some "") "root") "root/target"
+    String.beq (Build.resolve_target_dir "" (Option.some "") Option.none "root") "root/target"
 
 /// The case that produces an ABSOLUTE path if written naively: an empty
 /// root must give `target`, never `/target`.

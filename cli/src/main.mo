@@ -1928,18 +1928,18 @@ def resolve_target_paths (verb : String) (subcommand : String) (native_only : Bo
             Option.none => return Option.none,
             Option.some manifest => do {
                 // `manifest.dir` is where the manifest was found,
-                // RELATIVE to the working directory -- `""` when the
-                // CWD is the mote root itself, which a path expander
-                // wants spelled `"."`. Either way the mote is named
-                // and located, so the two cases differ in the path
-                // only.
-                let dir := if String.beq manifest.dir "" then "." else manifest.dir;
-                let roots : List String :=
-                    if native_only then Mote.native_test_roots manifest dir else Mote.target_roots manifest dir;
+                // RELATIVE to the working directory -- the CWD when the
+                // mote root is the working directory, which
+                // `Path.unsafe_dir` spells `"."`. The roots come back as
+                // `Path`s and are rendered for the directory sweep, which
+                // is still string-keyed.
+                let dir : Path := Path.unsafe_dir manifest.dir;
+                let roots : List String := List.map (fn (p : Path) => Path.to_string p)
+                    (if native_only then Mote.native_test_roots manifest dir else Mote.target_roots manifest dir);
                 // An empty verb is the machine-readable callers' way of
                 // asking for no banner (`monad fmt --check`/`--diff`).
                 if Bool.not (String.is_empty verb) then
-                    println (verb ++ " mote " ++ manifest.name ++ " (" ++ dir ++ ")")
+                    println (verb ++ " mote " ++ manifest.name ++ " (" ++ Path.to_string dir ++ ")")
                 else do { return unit };
                 return (Option.some roots)
             }
