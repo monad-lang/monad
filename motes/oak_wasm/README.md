@@ -77,7 +77,7 @@ re-render. Use it for a `keydown` that only cares about one key.
 
 ## Commands
 
-`Command` has `none`, `quit`, `dispatch`, `perform`, and three runtime
+`Command` has `none`, `quit`, `dispatch`, `perform`, and four runtime
 commands:
 
 - `Command.after ms msg` schedules one `setTimeout`; the message is parked
@@ -87,10 +87,47 @@ commands:
 - `Command.focus selector` runs **after** the patch that inserted the node,
   so a dialog inserted this frame can take focus (`autofocus` only works on
   page load).
+- `Command.after_render effect` runs the host effect **after** the patch,
+  once focus is applied. Its optional message goes to the next frame. This
+  is how a program draws (see Canvas and WebGL below).
 - `Command.batch cmds` runs commands left-to-right: `perform` effects run
   immediately in order, `dispatch` messages queue for the next batch, and
-  `quit` stops later commands. The pure `oak::app` fold treats `after` and
-  `focus` as inert (it has no scheduler or DOM).
+  `quit` stops later commands. The pure `oak::app` fold treats `after`,
+  `focus` and `after_render` as inert (it has no scheduler or DOM).
+
+## Canvas and WebGL
+
+The view renders the canvas (`Html.canvas [Html.id_ "board"] []`) and the
+update stays pure. Drawing is an effect:
+
+1. `Subscription.animation_frame` turns each frame into a message.
+2. `update` returns `Command.after_render (Fx.draw scene t)`.
+3. The host's `run_effect` does the GL calls (`web_wasm::gl`). It runs after
+   the patch, so a canvas mounted this frame already exists.
+
+On the first frame, ask for a `setup` effect. It finds the node
+(`Dom.query`), calls `Canvas.fit` (buffer = CSS size × `devicePixelRatio`),
+acquires the context with `Gl.context` (WebGL2, else WebGL1) and builds
+programs with `Gl.program`. It returns the handles in a message, and the
+model keeps them; GL handles are `Copy` ids.
+
+- **Keep the canvas node.** A replaced `<canvas>` loses its context. Give it
+  a stable position or an `Html.key`.
+- **Size it in one place.** Either call `Canvas.fit` from an effect or set
+  `width`/`height` in the view, not both: the next patch would undo `fit`.
+  Subscribe to `window "resize"` and fit again.
+- **Context loss.** The runtime calls `preventDefault` on
+  `webglcontextlost`, so the browser may restore the context. Listen for
+  `webglcontextrestored` with `Html.on`, then rebuild every GL object.
+  `Gl.is_lost` reports the state.
+- **Textures** load in two phases: `GlImage.load url`, then `GlImage.poll`
+  each frame until it returns 1. Then call `Gl.tex_image_from_image`.
+
+Buffer, matrix and pixel uploads take `std::buf`'s `Buf F32`/`Buf I32`/
+`Buf U8` and land with that module (plans/implementations/web-webgl.md,
+Part B). `fixtures/wasm/oak_webgl.mo` is the worked example, and
+`wasm/web/webgl_smoke.mjs` checks its GL call stream over
+`wasm/web/stub_gl.mjs`.
 
 ## Memory
 
@@ -158,5 +195,7 @@ which drive real web-profile modules over a stub DOM:
 `spa_smoke.mjs`, `nested_spa_smoke.mjs`, `keyed_spa_smoke.mjs`,
 `hydrate_smoke.mjs`, `oak_event_smoke.mjs` (typed handlers, drag/drop,
 clipboard), `event_smoke.mjs` (the raw snapshot), `clipboard_smoke.mjs`
-(async clipboard) and `subs_smoke.mjs` (window/document/frame).
+(async clipboard), `subs_smoke.mjs` (window/document/frame), and
+`webgl_smoke.mjs`/`webgl_texture_smoke.mjs` (`after_render` drawing and
+textures over the recording `stub_gl.mjs`).
 `scripts/check-wasm-target.sh` builds and runs them (all of it runs in CI).

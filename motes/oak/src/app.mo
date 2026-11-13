@@ -30,6 +30,12 @@ pub type Command (E : Type) (Msg : Type) {
     /// Move focus after the next patch. The pure fold has no DOM and treats
     /// it as inert.
     focus (selector : String),
+    /// Run a host effect after the next patch, when the DOM shows this
+    /// batch's view (a `<canvas>` rendered this frame exists). Its optional
+    /// message goes to the NEXT batch. This is how a program draws: the
+    /// update stays pure and returns the drawing as an effect. The pure fold
+    /// has no DOM and treats it as inert.
+    after_render (effect : E),
     /// Several commands, run left-to-right (see `step_cmds`).
     batch (cmds : List (Command E Msg))
 }
@@ -149,9 +155,11 @@ def step_cmd [Monad N] {S : Type} {Msg : Type} {E : Type}
         Command.perform effect =>
             Monad.bind (Host.run_effect h effect) (perform_step a h model rest),
         // The pure fold has no scheduler and no DOM: `after`/`focus` are
-        // runtime commands (oak_wasm's fold implements them), inert here.
+        // runtime commands (oak_wasm's fold implements them), inert here; so is
+        // `after_render`.
         Command.after _ms _msg => step_batch a h model rest,
         Command.focus _selector => step_batch a h model rest,
+        Command.after_render _effect => step_batch a h model rest,
         Command.batch cmds => step_cmds a h model rest cmds
     }
 
@@ -215,6 +223,7 @@ def collect_cmds [Monad N] {E : Type} {Msg : Type} (h : Host N E Msg)
                             }),
                 Command.after _ms _msg => collect_cmds h more perf disp quit,
                 Command.focus _selector => collect_cmds h more perf disp quit,
+                Command.after_render _effect => collect_cmds h more perf disp quit,
                 Command.batch inner => collect_cmds h (List.append inner more) perf disp quit,
             },
     }

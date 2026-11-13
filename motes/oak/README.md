@@ -13,7 +13,7 @@ The pure builder is the primary API. Nothing here performs I/O except
 |---|---|---|
 | Builders | `src/elements.mo` | `Html.div [attrs] [children]`, `Html.text`, curated attributes, `Html.attr`/`Html.bool_attr` for the rest, `Html.document`/`document_with`/`document_utf8`. |
 | Page assembly | `src/html_t.mo` | `HtmlT M I J A`, an index-tracking transformer (`Open`/`Sealed`/`Emitted`) that accumulates `<head>`/`<body>` nodes; `PageM` is the production stack (`ResultT String IO`). |
-| App model | `src/app.mo` | `Program` (init/update/view), `Command` (`none`/`quit`/`dispatch`/`perform`/`after`/`focus`/`batch`), `Host` (effect interpreter), `Program.run_batch` (a batch fold that drains deferred dispatches). |
+| App model | `src/app.mo` | `Program` (init/update/view), `Command` (`none`/`quit`/`dispatch`/`perform`/`after`/`focus`/`after_render`/`batch`; `after_render` is how a canvas app draws, see `motes/oak_wasm/README.md`), `Host` (effect interpreter), `Program.run_batch` (a batch fold that drains deferred dispatches). |
 | SSR | `src/ssr.mo` | `Ssr.render_page`/`render_body`/`to_response`/`to_response_node`/`fragment_response`/`render_io`: an Oak page or fragment to an `http.Response`. |
 | Markup types | re-exported from `xml_html` | `Html.Node`, `Html.Attr`, `Html.to_string`, `Html.beq`. |
 

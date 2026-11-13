@@ -195,6 +195,10 @@ pub type RuntimeState (S : Type) (Msg : Type) {
         (timers : List (Pair I64 Msg))
         /// Selectors a `Command.focus` asked for this batch.
         (focus : List String)
+        /// `Command.after_render` effects for this batch, run after the
+        /// patch. A thunk, not a stored `IO`: an action held in a
+        /// constructor field can run at construction when compiled.
+        (paint : List (Unit -> IO (Option Msg)))
 }
 
 /// Mount a `Program` under the root the loader selected, and hand the state
@@ -219,7 +223,7 @@ pub def Runtime.mount {S : Type} {Msg : Type} {E : Type}
             let table := List.append handlers (Runtime.collect_sub_handlers subs);
             let state : Ref (RuntimeState S Msg) <-
                 Ref.new (RuntimeState.st root tree model List.empty false table subs
-                    List.empty List.empty);
+                    List.empty List.empty List.empty);
             let _ <- Keep.save state;
             return unit
         },
@@ -235,7 +239,7 @@ pub def Runtime.dispatch {S : Type} {Msg : Type} (handler : I64) : IO Unit := do
     let state <- Runtime.load_state;
     let snapshot <- Ref.get state;
     match snapshot {
-        RuntimeState.st _root _last _model _queue stopped handlers _subs timers _focus =>
+        RuntimeState.st _root _last _model _queue stopped handlers _subs timers _focus _paint =>
             if stopped
             then IO.pure unit
             else if Timer.is_id (I64.to_u32 handler)
@@ -318,32 +322,56 @@ def Runtime.lookup_handler {Msg : Type} (id : U32)
 /// landed in one frame.
 def Runtime.enqueue {S : Type} {Msg : Type} (msg : Msg) (state : RuntimeState S Msg) : RuntimeState S Msg :=
     match state {
-        RuntimeState.st root last model queue stopped handlers subs timers focus =>
+        RuntimeState.st root last model queue stopped handlers subs timers focus paint =>
             RuntimeState.st root last model (List.append queue (List.cons msg List.empty))
-                stopped handlers subs timers focus,
+                stopped handlers subs timers focus paint,
     }
 
 def Runtime.set_timers {S : Type} {Msg : Type} (timers : List (Pair I64 Msg))
     (state : RuntimeState S Msg) : RuntimeState S Msg :=
     match state {
-        RuntimeState.st root last model queue stopped handlers subs _old focus =>
-            RuntimeState.st root last model queue stopped handlers subs timers focus,
+        RuntimeState.st root last model queue stopped handlers subs _old focus paint =>
+            RuntimeState.st root last model queue stopped handlers subs timers focus paint,
     }
 
 def Runtime.add_timer {S : Type} {Msg : Type} (id : I64) (msg : Msg)
     (state : RuntimeState S Msg) : RuntimeState S Msg :=
     match state {
-        RuntimeState.st root last model queue stopped handlers subs timers focus =>
+        RuntimeState.st root last model queue stopped handlers subs timers focus paint =>
             RuntimeState.st root last model queue stopped handlers subs
-                (List.append timers (List.cons (Pair.pair id msg) List.empty)) focus,
+                (List.append timers (List.cons (Pair.pair id msg) List.empty)) focus paint,
     }
 
 def Runtime.add_focus {S : Type} {Msg : Type} (selector : String)
     (state : RuntimeState S Msg) : RuntimeState S Msg :=
     match state {
-        RuntimeState.st root last model queue stopped handlers subs timers focus =>
+        RuntimeState.st root last model queue stopped handlers subs timers focus paint =>
             RuntimeState.st root last model queue stopped handlers subs timers
-                (List.append focus (List.cons selector List.empty)),
+                (List.append focus (List.cons selector List.empty)) paint,
+    }
+
+def Runtime.add_paint {S : Type} {Msg : Type} (effect : Unit -> IO (Option Msg))
+    (state : RuntimeState S Msg) : RuntimeState S Msg :=
+    match state {
+        RuntimeState.st root last model queue stopped handlers subs timers focus paint =>
+            RuntimeState.st root last model queue stopped handlers subs timers focus
+                (List.append paint (List.cons effect List.empty)),
+    }
+
+/// Run a batch's `after_render` effects in order, after the patch, and
+/// return the messages they produced (for the next frame).
+#[terminating]
+def Runtime.run_paint {Msg : Type} (effects : List (Unit -> IO (Option Msg))) : IO (List Msg) :=
+    match effects {
+        List.empty => IO.pure List.empty,
+        List.cons effect rest => do {
+            let produced <- effect unit;
+            let more <- Runtime.run_paint rest;
+            match produced {
+                Option.some m => return (List.cons m more),
+                Option.none => return more,
+            }
+        },
     }
 
 /// Run a batch's focus requests, in order, after the patch has placed the
@@ -366,7 +394,7 @@ pub def Runtime.tick {S : Type} {Msg : Type} {E : Type}
     let state <- Runtime.load_state;
     let snapshot <- Ref.get state;
     match snapshot {
-        RuntimeState.st root last model queue stopped handlers subs timers focus =>
+        RuntimeState.st root last model queue stopped handlers subs timers _focus _paint =>
             if stopped
             then IO.pure unit
             else if List.is_empty queue
@@ -384,7 +412,8 @@ def Runtime.drain {S : Type} {Msg : Type} {E : Type}
     // in the NEXT frame. The final write below reads the queue back so it is
     // not overwritten.
     let drained : RuntimeState S Msg :=
-        RuntimeState.st root last model List.empty false handlers subs timers List.empty;
+        RuntimeState.st root last model List.empty false handlers subs timers List.empty
+            List.empty;
     let _ <- Ref.set state drained;
     let folded <- Runtime.run_batch prog host model queue;
     match folded {
@@ -399,25 +428,31 @@ def Runtime.drain {S : Type} {Msg : Type} {E : Type}
                     let after_batch <- Ref.get state;
                     let batch_timers := Runtime.timers_of after_batch;
                     let batch_focus := Runtime.focus_of after_batch;
+                    let batch_paint := Runtime.paint_of after_batch;
                     // Make the new handlers reachable BEFORE the DOM changes:
                     // a patch can fire an event synchronously (e.g. an
                     // autofocused input), and that event must resolve to the
                     // handler just lowered, not the previous frame's table.
                     let staged : RuntimeState S Msg :=
                         RuntimeState.st root last model List.empty false table next_subs
-                            batch_timers batch_focus;
+                            batch_timers batch_focus batch_paint;
                     let _ <- Ref.set state staged;
                     let patches := Patch.diff last tree;
                     let _ <- Patch.apply root patches;
                     let _ <- Runtime.apply_subs subs next_subs;
                     let current <- Ref.get state;
-                    let pending := Runtime.pending_of current;
                     // Focus runs after the patch, so a dialog inserted this
                     // frame is already in the DOM and can take focus.
                     let _ <- Runtime.apply_focus (Runtime.focus_of current);
+                    // `after_render` effects see the patched DOM (a canvas
+                    // mounted this frame exists); their messages, and any
+                    // the effects dispatched, go to the next frame.
+                    let painted <- Runtime.run_paint (Runtime.paint_of current);
+                    let after_paint <- Ref.get state;
+                    let pending := List.append (Runtime.pending_of after_paint) painted;
                     let next : RuntimeState S Msg :=
                         RuntimeState.st root tree next_model pending quit table next_subs
-                            (Runtime.timers_of current) List.empty;
+                            (Runtime.timers_of after_paint) List.empty List.empty;
                     let _ <- Ref.set state next;
                     return unit
                 },
@@ -429,17 +464,22 @@ def Runtime.drain {S : Type} {Msg : Type} {E : Type}
 /// The messages dispatched while the batch ran.
 def Runtime.pending_of {S : Type} {Msg : Type} (state : RuntimeState S Msg) : List Msg :=
     match state {
-        RuntimeState.st _root _last _model queue _stopped _handlers _subs _timers _focus => queue,
+        RuntimeState.st _root _last _model queue _stopped _handlers _subs _timers _focus _paint => queue,
     }
 
 def Runtime.timers_of {S : Type} {Msg : Type} (state : RuntimeState S Msg) : List (Pair I64 Msg) :=
     match state {
-        RuntimeState.st _root _last _model _queue _stopped _handlers _subs timers _focus => timers,
+        RuntimeState.st _root _last _model _queue _stopped _handlers _subs timers _focus _paint => timers,
     }
 
 def Runtime.focus_of {S : Type} {Msg : Type} (state : RuntimeState S Msg) : List String :=
     match state {
-        RuntimeState.st _root _last _model _queue _stopped _handlers _subs _timers focus => focus,
+        RuntimeState.st _root _last _model _queue _stopped _handlers _subs _timers focus _paint => focus,
+    }
+
+def Runtime.paint_of {S : Type} {Msg : Type} (state : RuntimeState S Msg) : List (Unit -> IO (Option Msg)) :=
+    match state {
+        RuntimeState.st _root _last _model _queue _stopped _handlers _subs _timers _focus paint => paint,
     }
 
 /// The state slot, typed for the caller. `Keep.load` is generic because the
@@ -529,12 +569,21 @@ def Runtime.step_cmd {S : Type} {Msg : Type} {E : Type}
             let _ <- Ref.update state (Runtime.add_focus selector);
             Runtime.step_batch prog host model rest
         },
+        Command.after_render effect => do {
+            let state <- Runtime.load_state;
+            let _ <- Ref.update state (Runtime.add_paint (Runtime.paint_thunk host effect));
+            Runtime.step_batch prog host model rest
+        },
         Command.batch cmds => Runtime.step_cmds prog host model rest cmds,
     }
 
+def Runtime.paint_thunk {E : Type} {Msg : Type} (host : Host IO E Msg) (effect : E)
+    : Unit -> IO (Option Msg) :=
+    fn (_u : Unit) => Host.run_effect host effect
+
 /// The IO mirror of `oak::app`'s `step_cmds`/`collect_cmds`: effects run in
 /// order, dispatches queue for the next batch, `quit` stops later commands,
-/// and `after`/`focus` are performed as they are met.
+/// and `after`/`focus`/`after_render` are performed as they are met.
 #[terminating]
 def Runtime.step_cmds {S : Type} {Msg : Type} {E : Type}
     (prog : Program S Msg E) (host : Host IO E Msg) (model : S) (rest : List Msg)
@@ -591,6 +640,11 @@ def Runtime.collect_cmds {E : Type} {Msg : Type} (host : Host IO E Msg)
                 Command.focus selector => do {
                     let state <- Runtime.load_state;
                     let _ <- Ref.update state (Runtime.add_focus selector);
+                    Runtime.collect_cmds host more perf disp quit
+                },
+                Command.after_render effect => do {
+                    let state <- Runtime.load_state;
+                    let _ <- Ref.update state (Runtime.add_paint (Runtime.paint_thunk host effect));
                     Runtime.collect_cmds host more perf disp quit
                 },
                 Command.batch inner =>

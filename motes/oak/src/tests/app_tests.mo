@@ -65,7 +65,10 @@ def app_update (log : List String) (m : String) : Pair (List String) (Command St
         (Command.batch [Command.perform "effect", Command.quit, Command.perform "late"])
     else if String.beq m "batch-inert"
     then Pair.pair (log_add log "batch-inert")
-        (Command.batch [Command.after 10i64 "x", Command.focus "#dialog", Command.none])
+        (Command.batch [
+            Command.after 10i64 "x", Command.focus "#dialog", Command.after_render "effect",
+            Command.none
+        ])
     else Pair.pair (log_add log m) Command.none
 
 def log_item (s : String) : Oak.Node String :=
