@@ -17,10 +17,10 @@
 //     duplicate is a copy of each field. Built by hand below, like
 //     `tui`'s, because `#[derive Copy]` is not one of the derive macros
 //     this repo has (`std/src/derive.mo` derives BEq/Lens/Show shapes).
-//   * `Mode`: an enum whose payloads are a `String` (itself `Copy`); the
-//     nullary form is a register move (`motes/http`'s `Method` instance
-//     is the same reasoning), and the payload form duplicates a pointer
-//     to immutable bytes.
+//   * `Mode`: an enum whose payloads are `String`s (themselves `Copy`) and
+//     `I64`s (scalars); the nullary form is a register move
+//     (`motes/http`'s `Method` instance is the same reasoning), and a
+//     payload form duplicates a pointer to immutable bytes.
 
 use lib::types {Selection, Change, Mode}
 
@@ -45,6 +45,7 @@ pub instance Copy Mode {
             Mode.insert => Pair.pair Mode.insert Mode.insert,
             Mode.select => Pair.pair Mode.select Mode.select,
             Mode.command line => Pair.pair (Mode.command line) (Mode.command line),
-            Mode.search q => Pair.pair (Mode.search q) (Mode.search q)
+            Mode.search q => Pair.pair (Mode.search q) (Mode.search q),
+            Mode.picker q sel => Pair.pair (Mode.picker q sel) (Mode.picker q sel)
         }
 }

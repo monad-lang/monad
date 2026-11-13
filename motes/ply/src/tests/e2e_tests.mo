@@ -192,3 +192,93 @@ def e2e_colon_after (bin : String) (target : String) : IO Bool := do {
         "ply e2e: `:w` through the built binary");
     return ok
 }
+
+/// THE `:` WITH AN ARGUMENT GATE: `:e <path>` really opens the named file
+/// through the built binary.
+///
+/// The script is `: e <space> <path> Enter`, and the assertion is that the
+/// SECOND file's text is on disk after a `Space w` -- i.e. the buffer the
+/// command opened is the one the save wrote. A `:e` that parsed but did not
+/// open leaves the FIRST file's text, which is a different string.
+///
+/// THE PATH HAS NO SPACES IN IT because the fixture is a byte script: a
+/// space would be indistinguishable from the argument separator it is.
+#[test]
+def test_colon_open_e2e : IO Bool := do {
+    let bin <- e2e_bin;
+    if String.is_empty bin
+    then do {
+        IO.println "SKIP ply e2e (colon open): set PLY_E2E_BIN to run it";
+        return true
+    }
+    else e2e_open_check bin
+}
+
+/// The file `:e` opens: its own path, so it cannot collide with the other
+/// fixtures'.
+def e2e_open_second_path : String := "target-monad/ply-e2e/opened.txt"
+
+/// The text the second file holds, and therefore the text the save must
+/// write into it.
+def e2e_open_before : String := "opened by :e\n"
+
+/// A third scratch path, where the piped session STARTS -- so a `:e` that
+/// never ran would save this text instead.
+def e2e_open_start_path : String := "target-monad/ply-e2e/start.txt"
+
+/// The text the starting file holds -- the wrong answer, kept distinct from
+/// `e2e_open_before` on purpose.
+def e2e_open_start : String := "started here\n"
+
+/// The keystroke fixture for `:e`: `: e space <path> Enter`, then `Space w`.
+/// Written by `e2e_open_prepare` rather than committed, because the path is
+/// this test's own (`target-monad`-relative) and a committed fixture would
+/// have to hard-code it.
+def e2e_open_keys : String := ":e target-monad/ply-e2e/opened.txt\r w"
+
+def e2e_open_check (bin : String) : IO Bool := do {
+    let prep <- e2e_open_prepare;
+    match prep {
+        Result.err why => e2e_prepare_failed why,
+        Result.ok keys => e2e_open_after bin keys
+    }
+}
+
+/// Lay down the two files and the keystroke script.
+def e2e_open_prepare : IO (Result String String) := do {
+    let _ <- exec_cmd "mkdir" ["-p", "target-monad/ply-e2e"];
+    let start <- IO.write_file (Path.path e2e_open_start_path) e2e_open_start;
+    let second <- IO.write_file (Path.path e2e_open_second_path) e2e_open_before;
+    let keys <- IO.write_file (Path.path e2e_open_keys_path) e2e_open_keys;
+    match file_result start {
+        Result.err why => return (Result.err why),
+        Result.ok _ => match file_result second {
+            Result.err why => return (Result.err why),
+            Result.ok _ => match file_result keys {
+                Result.err why => return (Result.err why),
+                Result.ok _ => return (Result.ok e2e_open_keys_path)
+            }
+        }
+    }
+}
+
+/// A write's result as the fixture's `Result String String` -- the path it
+/// wrote, or why it could not.
+def file_result (r : Result StreamError Unit) : Result String String :=
+    match r {
+        Result.ok _ => Result.ok "ok",
+        Result.err e => Result.err (String.concat "could not write the fixture: " e.message)
+    }
+
+/// Where the `:e` session's keystroke script lives.
+def e2e_open_keys_path : String := "target-monad/ply-e2e/open.keys"
+
+def e2e_open_after (bin : String) (keys : String) : IO Bool := do {
+    let rc <- e2e_run_keys bin e2e_open_start_path keys;
+    let back <- IO.read_file (Path.path e2e_open_second_path);
+    let text_ok <- text_is back e2e_open_before;
+    let ok := I64.beq rc 0 && text_ok;
+    IO.println (String.concat (if ok then "PASS " else "FAIL ")
+        "ply e2e: `:e <path>` opens, and the save writes the opened buffer");
+    return ok
+}

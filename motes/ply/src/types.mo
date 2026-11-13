@@ -68,6 +68,22 @@ pub type Mode {
     normal,
     insert,
     select,
+    /// `:` command line. The payload is the text typed so far -- and it is
+    /// the WHOLE truth about the line, so leaving the mode throws it away
+    /// with no cleanup pass (`EditorState.cmd_line_of` reads it).
     command (line : String),
-    search (query : String)
+    /// `/` search. The payload is the QUERY typed so far, by exactly the
+    /// rule `command` follows. The COMMITTED query (what `n`/`N` repeat) is
+    /// NOT here: it lives on the state, because it outlives the mode -- you
+    /// leave search mode and `n` still repeats the last search.
+    search (query : String),
+    /// The `Space f` file picker. The payload is the FILTER typed so far
+    /// plus the highlighted row. The candidate LIST is deliberately NOT
+    /// here: it arrives from `IO.list_dir` as a message
+    /// (`EditorMsg.picker_files`) and lives on the state, because a mode is
+    /// a value the update rebuilds per keystroke and a few thousand path
+    /// strings do not belong in one. The scroll OFFSET is not here either --
+    /// the view derives it from `selected` and the window height, the way
+    /// `View.first_visible` derives the text area's.
+    picker (query : String) (selected : I64)
 }

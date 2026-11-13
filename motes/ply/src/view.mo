@@ -41,7 +41,10 @@ use lib::selection {Selection.start, Selection.stop, Selections.primary_sel}
 use lib::model {Document, EditorState,
     EditorState.active_doc, EditorState.scroll_of, EditorState.rows_of,
     EditorState.cols_of, EditorState.status_of, EditorState.mode_of,
-    EditorState.pending_of, EditorState.hscroll_of}
+    EditorState.pending_of, EditorState.hscroll_of, EditorState.picker_files_of,
+    EditorState.picker_query_of, EditorState.picker_selected_of}
+use lib::picker {Picker.rank, Picker.window_offset, Picker.clamp_selected,
+    Picker.take_from}
 use lib::keymap {Keymap.mode_table}
 use lib::highlight {Highlight.config_for, Highlight.lex, Highlight.segments}
 use tui::types {LayoutSize, TextStyle, TextSegment, Key}
@@ -506,7 +509,9 @@ pub def View.gutter_style : TextStyle :=
 /// the user just asked for.
 pub def View.status_segments (st : EditorState) : List TextSegment :=
     match EditorState.mode_of st {
-        Mode.command line => ply_command_line line,
+        Mode.command line => ply_command_line ":" line,
+        Mode.search query => ply_command_line "/" query,
+        Mode.picker query _ => ply_picker_line st query,
         _ => ply_status_or_message st
     }
 
@@ -518,11 +523,30 @@ def ply_status_or_message (st : EditorState) : List TextSegment :=
     then List.cons (mk_text_segment msg style_default) List.empty
     else ply_status_full st
 
-/// The `:` line as two segments: ":" plus the text typed so far, then the
-/// caret's reversed space. Both styles are the default; the line is not a
-/// report, so nothing about it is emphasised.
-def ply_command_line (line : String) : List TextSegment :=
-    let typed : TextSegment := mk_text_segment (String.concat ":" line) style_default in
+/// A typing line as two segments: its `prompt` (`:` or `/`) plus the text
+/// typed so far, then the caret's reversed space. Both styles are the
+/// default; the line is not a report, so nothing about it is emphasised.
+///
+/// THE PROMPT IS A PARAMETER, not a `:`. The `/` line is the same row with a
+/// different sigil, and a second def would be a second place for the caret
+/// rule to drift -- a user typing blind on one of them is the bug the whole
+/// row exists to prevent.
+def ply_command_line (prompt : String) (line : String) : List TextSegment :=
+    let typed : TextSegment := mk_text_segment (String.concat prompt line) style_default in
+    let caret : TextSegment := mk_text_segment " " View.caret_style in
+    List.cons typed (List.cons caret List.empty)
+
+/// The picker's filter row: the prompt, the filter and the count of what it
+/// matched (`3/17`), so a filter that hides everything says so on the row the
+/// user is typing on rather than by an empty list they have to interpret.
+def ply_picker_line (st : EditorState) (query : String) : List TextSegment :=
+    let matched : I64 := List.length (Picker.rank (EditorState.picker_files_of st) query) in
+    let total : I64 := List.length (EditorState.picker_files_of st) in
+    let count : String :=
+        String.concat (I64.to_string matched) (String.concat "/" (I64.to_string total)) in
+    let typed : TextSegment :=
+        mk_text_segment (String.concat "> " (String.concat query (String.concat "   " count)))
+            style_default in
     let caret : TextSegment := mk_text_segment " " View.caret_style in
     List.cons typed (List.cons caret List.empty)
 
@@ -637,6 +661,18 @@ pub def View.view (st : EditorState) : Widget :=
 /// row. Built as a def so the list literal is never in an argument
 /// position (the two-host inference gotcha).
 def ply_view_children (st : EditorState) : List SizedWidget :=
+    // THE PICKER TAKES THE AREA: while it is open the body is its list, not
+    // the buffer. A modal overlay would be the richer design, but `tui` has
+    // no overlay leaf and a picker you can see the buffer around does not
+    // open any file the list did not name.
+    match EditorState.mode_of st {
+        Mode.picker _ _ =>
+            List.cons (ply_picker_area st) (List.cons (ply_status_row st) List.empty),
+        _ => ply_buffer_children st
+    }
+
+/// The buffer's area and the status line -- the ordinary frame.
+def ply_buffer_children (st : EditorState) : List SizedWidget :=
     match EditorState.active_doc st {
         Option.none =>
             List.cons (ply_status_row st) List.empty,
@@ -655,6 +691,64 @@ def ply_view_children (st : EditorState) : List SizedWidget :=
                     (Widget.column (ply_row_widgets (Shared.get shared) rows left width)) in
             List.cons text_area (List.cons (ply_status_row st) List.empty)
     }
+
+/// The picker's body: a header row naming the directory, then the ranked
+/// candidates with the highlighted one reversed, filling the text area.
+///
+/// THE WINDOW IS DERIVED, NOT STORED: `Picker.window_offset` computes the
+/// first visible row from the highlight and the height, so a resize or a
+/// filter that shrank the list cannot strand the highlight off-screen (the
+/// same rule `View.first_visible` applies to the caret's line).
+def ply_picker_area (st : EditorState) : SizedWidget :=
+    let height : I64 := View.text_height (EditorState.rows_of st) in
+    // The list gets the height less its one header row, and never less than
+    // one row: a one-row terminal still shows a candidate.
+    let list_height : I64 := if height < 2 then 1 else height - 1 in
+    // The ranked list is read three times (its length, the window, the
+    // rows), and a `List` is deliberately not `Copy`, so one `Shared` handle
+    // serves all three.
+    let ranked : Shared (List String) :=
+        Shared.of (Picker.rank (EditorState.picker_files_of st) (EditorState.picker_query_of st)) in
+    let count : I64 := List.length (Shared.get ranked) in
+    let selected : I64 := Picker.clamp_selected (EditorState.picker_selected_of st) count in
+    let first : I64 := Picker.window_offset selected list_height count in
+    let rows : List String := Picker.take_from first list_height (Shared.get ranked) in
+    let header : SizedWidget :=
+        sized (LayoutSize.fixed 1) (with_style View.gutter_style (label (ply_picker_header st count))) in
+    sized (LayoutSize.fill 1)
+        (Widget.column (List.cons header (ply_picker_rows rows first selected List.empty)))
+
+/// The picker's header row: its title and the row counter, so a long listing
+/// says where in it the user is.
+def ply_picker_header (st : EditorState) (count : I64) : String :=
+    let dir : String := EditorState.picker_dir_of st in
+    let where_ : String := if String.is_empty dir then "." else dir in
+    String.concat "pick a file in " (String.concat where_
+        (String.concat "   " (String.concat (I64.to_string count) " matches")))
+
+/// The candidate rows, one `Widget.row` each with the highlighted one
+/// reversed.
+///
+/// `at` CARRIES THE ABSOLUTE ROW INDEX, because the window starts at `first`
+/// and the highlight names a position in the WHOLE ranked list -- comparing
+/// the window-relative index would reverse the wrong row whenever the window
+/// has scrolled. Each step consumes one row, so `at` advances with it.
+#[partial]
+def ply_picker_rows (rows : List String) (at : I64) (selected : I64)
+    (acc : List SizedWidget) : List SizedWidget :=
+    match rows {
+        List.empty => List.reverse acc,
+        List.cons one rest =>
+            ply_picker_rows rest (at + 1) selected
+                (List.cons (ply_picker_row one at selected) acc)
+    }
+
+/// One candidate row: a marker for the highlighted one, then the path.
+def ply_picker_row (path : String) (index : I64) (selected : I64) : SizedWidget :=
+    let here : Bool := I64.beq index selected in
+    let marker : String := if here then "> " else "  " in
+    let style : TextStyle := if here then View.caret_style else style_default in
+    sized (LayoutSize.fixed 1) (with_style style (label (String.concat marker path)))
 
 /// The status line's row widget: one row, the whole width, the status
 /// segments.

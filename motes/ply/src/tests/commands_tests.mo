@@ -423,8 +423,11 @@ def test_parse_command_table : Bool :=
 /// Nothing else parses -- a typo, an empty line, a command from a later phase.
 #[test]
 def test_parse_command_rejects_unknown : Bool :=
+    // `bn` is NOT in this list any more: Phase 5 made `:bn` a real buffer
+    // command (`buffer_next`), and `test_parse_buffer_commands`
+    // (`buffer_tests.mo`) pins that. A name that gains a parser must leave
+    // the rejection list, or this test asserts the old table forever.
     cx_parses_nothing "" && cx_parses_nothing "qw" && cx_parses_nothing "nohlsearch"
-        && cx_parses_nothing "bn"
 
 def cx_parses (line : String) (name : String) : Bool :=
     match parse_command line {

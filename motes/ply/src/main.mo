@@ -22,10 +22,15 @@
 // nonexistent path as a scratch buffer would silently turn `ply typo.mo`
 // into an empty buffer whose save then creates the file.
 
-use lib::model {Document, Document.of_text, Document.with_language,
-    Document.with_path, EditorState, EditorState.init, EditorMsg, on_event}
+use lib::model {Document, Document.of_text, Document.of_file,
+    Document.language_for_path, EditorState, EditorState.init, EditorState.with_bindings,
+    EditorState.with_status, EditorMsg, on_event}
 use lib::commands {update}
 use lib::view {View.view}
+use lib::config {Config, Config.empty, Config.parse, Config.merge, Config.bindings_of_all,
+    Config.problems_of_all}
+use std::path {Path}
+use lib::keymap {Binding, Keymap.default_bindings}
 use tui::tui {App, run_app}
 use tui::terminal {Terminal.size}
 use std::stream {StreamError}
@@ -87,47 +92,166 @@ def read_failed (path : String) (e : StreamError) : IO I64 := do {
     return 1
 }
 
-/// The document an opened file becomes: its text, its path, and the
-/// language its extension names.
-///
-/// Built through THREE annotated locals rather than one expression: a
-/// struct-update expression in argument position is the two-host
-/// inference hazard, and `Document.of_text` is the one constructor for a
-/// `Document`'s field list (the plan's Phase 1 note).
+/// The document an opened file becomes. DELEGATES to `model.mo`'s
+/// `Document.of_file`, because `:e <path>` (Phase 5) opens files too and the
+/// two paths must build the same document for one file -- the argv path
+/// exiting on a read failure and the `:e` path reporting it is the only
+/// difference between them.
 pub def opened_doc (path : String) (text : String) : Document :=
-    let base : Document := Document.of_text text in
-    let named : Document := Document.with_path base path in
-    Document.with_language named (language_for_path path)
+    Document.of_file path text
 
-/// The language name `Document.language` carries, from the file's
-/// extension: `monad` for `.mo`, `text` (the no-highlight default) for
-/// everything else. Phase 3's `Highlight.config_for` takes the same
-/// names, and "text" is its fallback too -- an editor must open any file,
-/// not only the ones it can color.
-///
-/// Matched case-sensitively: `.MO` is not `.mo` anywhere else in this
-/// corpus, and guessing would only make the highlighter's table wrong in
-/// a way nothing reports.
-///
-/// ARGUMENT ORDER: `String.ends_with` takes the STRING first and the
-/// suffix second (`std`'s other user, `acorn::passes`, reads
-/// `ends_with path ".md"`). That is the opposite of `String.starts_with`,
-/// which takes the prefix first -- the pair is an easy one to write
-/// backwards, and backwards here is silently always-false.
+/// The language name — `model.mo` owns it, so the binary and the command
+/// line cannot disagree about how a file highlights.
 pub def language_for_path (path : String) : String :=
-    if String.ends_with path ".mo" then "monad" else "text"
+    Document.language_for_path path
 
 // ── The run ──────────────────────────────────────────────────────────────
 
 /// Size the editor from the terminal and run it. The size is DESTRUCTURED
 /// once: `Pair` is not `Copy`, so reading it twice through two accessors
 /// would spend the affine budget twice.
+///
+/// THE CONFIG IS READ HERE, after the size, so a `ply.toml` that cannot be
+/// read reports on a status line the user can see (`run_editor` paints one
+/// in the first frame) rather than on a terminal that has not started.
 def run_sized (doc : Document) : IO I64 := do {
     let size <- Terminal.size;
     match size {
-        Pair.pair rows cols => run_editor (EditorState.init doc rows cols)
+        Pair.pair rows cols => do {
+            let base : EditorState := EditorState.init doc rows cols;
+            let configured <- apply_config base;
+            run_editor configured
+        }
     }
 }
+
+// ── ply.toml (Phase 5) ────────────────────────────────────────────────────
+//
+// TWO LAYERS, GLOBAL THEN PROJECT, and the merge is the keymap's LAST-match
+// rule over appended rows (`Config.merge`, which says so). The DEFAULTS are
+// the first layer, so a `ply.toml` rebinds a key without having to restate
+// the whole table.
+//
+// A MISSING FILE IS NOT AN ERROR and not a problem line: most users have no
+// `ply.toml`, and reporting "no such file" on every start would train them to
+// ignore the status line. A file that EXISTS but cannot be parsed or names a
+// key this editor does not have IS reported -- those are mistakes, and the
+// message names the row.
+
+/// The global config's path: `$XDG_CONFIG_HOME/ply/ply.toml`, falling back to
+/// `$HOME/.config/ply/ply.toml`. `none` when neither variable is set, which
+/// is a headless environment, not an error.
+def global_config_path : IO (Option String) := do {
+    let xdg <- IO.get_env "XDG_CONFIG_HOME";
+    let home <- IO.get_env "HOME";
+    return (global_config_from xdg home)
+}
+
+/// The global path from the two environment readings.
+def global_config_from (xdg : Option String) (home : Option String) : Option String :=
+    match xdg {
+        Option.some dir => ply_nonempty_dir dir "XDG_CONFIG_HOME",
+        Option.none =>
+            match home {
+                Option.some dir => ply_nonempty_dir dir "HOME",
+                Option.none => Option.none
+            }
+    }
+
+/// `<dir>/.config/ply/ply.toml` for `HOME`, `<dir>/ply/ply.toml` for an XDG
+/// root -- i.e. the XDG rule applied once. An empty variable is treated as
+/// unset: `HOME=` is a real (if broken) environment, and joining onto it would
+/// give a path rooted at the cwd.
+def ply_nonempty_dir (dir : String) (var : String) : Option String :=
+    if String.is_empty dir
+    then Option.none
+    else if String.beq var "XDG_CONFIG_HOME"
+    then Option.some (String.concat dir "/ply/ply.toml")
+    else Option.some (String.concat dir "/.config/ply/ply.toml")
+
+/// The project config's path: `ply.toml` in the process's cwd. One fixed
+/// name, not a search up the tree -- a project config that a parent directory
+/// supplies is a surprise, and the plan asks for "global, then project".
+def project_config_path : String := "ply.toml"
+
+/// Read and apply the config layers to `st`: the global file, then the
+/// project file, then report every problem line the two produced.
+///
+/// THE BINDING TABLE IS COMPOSED ONCE, here: defaults first, then each
+/// layer's rows (`Config.bindings_of_all`), because the keymap keeps the LAST
+/// match and the layers are appended in precedence order.
+def apply_config (st : EditorState) : IO EditorState := do {
+    let global_path <- global_config_path;
+    let global <- read_config_at global_path "ply.toml";
+    let project <- read_config_at (Option.some project_config_path) project_config_path;
+    // The layer list is read twice (its rows, its problems), so one
+    // `Shared` handle serves both -- the affine rule's own remedy.
+    let layers : Shared (List Config) :=
+        Shared.of (List.cons global (List.cons project List.empty));
+    let bindings : List Binding :=
+        List.append Keymap.default_bindings (Config.bindings_of_all (Shared.get layers));
+    let table : EditorState := EditorState.with_bindings st bindings;
+    return (report_config table (Config.problems_of_all (Shared.get layers)))
+}
+
+/// Read one config file. A path of `none` (no global config location) or a
+/// MISSING file answers the empty config; a file that will not read answers
+/// one problem line, because the user wrote it and expects it to work.
+def read_config_at (path : Option String) (label : String) : IO Config :=
+    match path {
+        Option.none => read_config_nothing,
+        Option.some p => read_config_file p label
+    }
+
+/// The `none` path's answer: no global config location, so no config.
+///
+/// A NAMED DEF rather than `return Config.empty` inline: a `return` as a bare
+/// `match` arm inside a `do` body is the shape the self-hosted loader refuses.
+def read_config_nothing : IO Config := do {
+    return Config.empty
+}
+
+/// One config file: the empty config when it does not exist (most users have
+/// no `ply.toml`), the parsed config when it does, one problem line when it
+/// exists but will not read.
+def read_config_file (p : String) (label : String) : IO Config := do {
+    let exists <- IO.file_exists (Path.path p);
+    if exists
+    then read_config_existing p label
+    else read_config_nothing
+}
+
+/// The existing-file case.
+def read_config_existing (p : String) (label : String) : IO Config := do {
+    let r <- IO.read_file (Path.path p);
+    match r {
+        Result.ok text => return Config.parse text label,
+        Result.err e => return config_read_problem p e
+    }
+}
+
+/// The config for a file that exists but will not read: one problem line.
+///
+/// Built as a parsed empty config plus a problem line, so `Config`'s field
+/// list stays in one module -- a struct literal here would be the two-host
+/// literal hazard.
+def config_read_problem (path : String) (e : StreamError) : Config :=
+    Config.parse (String.concat "# " (String.concat path (String.concat ": " e.message))) label_problem
+
+/// The label `config_read_problem` reports under.
+def label_problem : String := "ply.toml"
+
+/// Put the first config problem on the status line, or leave the state alone
+/// when there were none.
+///
+/// ONE LINE, NOT A LIST: the status line is one row, and a config with three
+/// bad rows would otherwise scroll the terminal. The first problem is the one
+/// to fix; the rest are the same fix repeated.
+def report_config (st : EditorState) (problems : List String) : EditorState :=
+    match problems {
+        List.empty => st,
+        List.cons first _ => EditorState.with_status st ("config: " ++ first)
+    }
 
 /// Hand the state to the loop. `tick_ms` is NEGATIVE: the editor is
 /// input-driven, so the loop blocks until a key (or EOF) instead of

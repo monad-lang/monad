@@ -39,8 +39,17 @@ use lib::model {Document, EditorState, EditorMsg, Command,
     EditorState.with_registers, EditorState.writing_status,
     EditorState.no_path_status, EditorState.dirty_quit_status,
     EditorState.hscroll_of, EditorState.with_hscroll, EditorState.cols_of,
-    EditorState.cmd_line_of,
-    Document.mark_saved, Document.dirty}
+    EditorState.cmd_line_of, EditorState.search_line_of, EditorState.picker_query_of,
+    EditorState.picker_selected_of, EditorState.picker_files_of,
+    EditorState.picker_dir_of, EditorState.with_picker_files,
+    EditorState.search_query_of, EditorState.search_forward_of, EditorState.with_search,
+    EditorState.doc_count, EditorState.with_active, EditorState.with_doc_added,
+    EditorState.index_of_path, EditorState.rows_of,
+    Document.mark_saved, Document.dirty, Document.of_file, Document.text_of,
+    Document.path_of}
+use lib::search {Search.find_from, Search.last_before, Search.next_match,
+    Search.selection_at, Search.line_number_of, Search.text_of}
+use lib::picker {Picker.rank, Picker.clamp_selected, Picker.nth, Picker.resolve}
 use std::path {Path}
 use std::stream {StreamError}
 use lib::keymap {KeyResult.as_pair, Keymap.resolve, Keymap.mode_table}
@@ -102,7 +111,17 @@ pub def Registry.default : List Command :=
         cmd_of "goto_definition" "jump to the definition (needs LSP, Phase 6)" cmd_goto_definition,
         cmd_of "goto_references" "list the references (needs LSP, Phase 6)" cmd_goto_references,
         cmd_of "hover" "show the type at the head (needs LSP, Phase 6)" cmd_hover,
-        cmd_of "file_picker" "pick a file (Phase 5)" cmd_file_picker,
+        cmd_of "search_next" "repeat the last search" cmd_search_next,
+        cmd_of "search_prev" "repeat the last search, backwards" cmd_search_prev,
+        cmd_of "file_picker" "pick a file from the current directory" cmd_file_picker,
+        cmd_of "picker_next" "highlight the next candidate" cmd_picker_next,
+        cmd_of "picker_prev" "highlight the previous candidate" cmd_picker_prev,
+        cmd_of "picker_page_down" "highlight a page of candidates on" cmd_picker_page_down,
+        cmd_of "picker_page_up" "highlight a page of candidates back" cmd_picker_page_up,
+        cmd_of "picker_accept" "open the highlighted candidate" cmd_picker_accept,
+        cmd_of "buffer_next" "focus the next buffer, wrapping" cmd_buffer_next,
+        cmd_of "buffer_prev" "focus the previous buffer, wrapping" cmd_buffer_prev,
+        cmd_of "clear_status" "clear the status line" cmd_clear_status,
         cmd_of "write" "write the buffer to its file" cmd_write,
         cmd_of "write_quit" "write the buffer, then quit if the write succeeded" cmd_write_quit,
         cmd_of "quit" "exit the editor (refused while unsaved changes exist)" cmd_quit,
@@ -143,6 +162,11 @@ pub def update (st : EditorState) (msg : EditorMsg) : Pair EditorState (Cmd Edit
         // failed one. The status line is not read again -- the terminal is
         // already restored by the time the loop sees `Cmd.quit`.
         EditorMsg.quit => Pair.pair st Cmd.quit,
+        // THE LISTING'S FOLD: the IO half could not touch the state, so the
+        // candidates arrive as a message (the same split as `save_result`).
+        EditorMsg.picker_files dir files => Pair.pair (fold_picker_files st dir files) Cmd.none,
+        // The open's fold, likewise.
+        EditorMsg.file_opened path text => Pair.pair (fold_file_opened st path text) Cmd.none,
         EditorMsg.lsp_frame _ =>
             Pair.pair (EditorState.with_status st "lsp frame (client lands in Phase 6)") Cmd.none
     }
@@ -186,8 +210,18 @@ def typed_default (st : EditorState) (k : Key) : Option (Pair EditorState (Cmd E
                 Key.backspace => Option.some (cmd_insert_backspace st (Shared.get shared)),
                 _ => Option.none
             },
+        // The command line and the `/` line are the SAME EDIT with different
+        // destinations -- `typed_default` is the shared body, and which mode
+        // reads it decides where a typed character lands.
         Mode.command line =>
-            command_default st line (Shared.get shared),
+            line_edit_default st line (Shared.get shared),
+        Mode.search query =>
+            line_edit_default st query (Shared.get shared),
+        // The picker types its FILTER, and its keys (arrows, Enter, Escape)
+        // are real bindings in its own table -- so only a character is a
+        // default case here. Escape and Enter fall through to `resolve`.
+        Mode.picker query sel =>
+            picker_default st query sel (Shared.get shared),
         _ => Option.none
     }
 
@@ -740,11 +774,17 @@ def cmd_insert_backspace_row (st : EditorState) : Pair EditorState (Cmd EditorMs
 // UNKNOWN NAMES ARE REPORTED, NOT SWALLOWED: a mistyped `:qw` says so in the
 // status line and leaves the mode. Silence would read as "the command ran".
 
-/// The keys command mode types with: a character appends to the line, Enter
-/// runs it, Backspace deletes the last character. Anything else -- Escape
+/// The keys a LINE-TYPING mode types with: a character appends, Enter runs
+/// the line, Backspace deletes the last character. Anything else -- Escape
 /// first among them -- answers `none` here and resolves through the mode's
 /// table, which is where `normal_mode` lives.
-def command_default (st : EditorState) (line : String) (k : Key)
+///
+/// THE COMMAND LINE AND THE `/` LINE SHARE THIS BODY, because they are the
+/// same edit with different destinations: which mode is in the state decides
+/// where the line goes back. Two copies would be two chances for the
+/// backspace rule to drift (and the command line's UTF-8 rule is exactly the
+/// kind of thing that drifts).
+def line_edit_default (st : EditorState) (line : String) (k : Key)
     : Option (Pair EditorState (Cmd EditorMsg)) :=
     match k {
         Key.char c => Option.some (Pair.pair (cmd_line_append st line c) Cmd.none),
@@ -753,11 +793,16 @@ def command_default (st : EditorState) (line : String) (k : Key)
         _ => Option.none
     }
 
-/// The line with one character appended -- what typing does on a command
-/// line. The character is already the text to show (there is no cursor
-/// movement inside the line yet), so the append is the whole edit.
+/// The line with one character appended -- what typing does on a command or
+/// search line. The character is already the text to show (there is no
+/// cursor movement inside the line yet), so the append is the whole edit.
+///
+/// THE DESTINATION IS THE CURRENT MODE, read from the state rather than
+/// passed in: a `Mode.command` state gets a `Mode.command` back and a
+/// `Mode.search` state a `Mode.search`, so the one body serves both and
+/// cannot write a line into the wrong payload.
 def cmd_line_append (st : EditorState) (line : String) (c : String) : EditorState :=
-    EditorState.with_mode st (Mode.command (String.concat line c))
+    line_replacing st (String.concat line c)
 
 /// The line with its last CHARACTER removed. BYTES, NOT CELLS: the payload is
 /// a byte string, and a multi-byte character's trailing continuation bytes
@@ -765,7 +810,16 @@ def cmd_line_append (st : EditorState) (line : String) (c : String) : EditorStat
 /// point walks back over the continuation bytes (`0x80..=0xbf`) first.
 def cmd_line_backspace (st : EditorState) (line : String) : EditorState :=
     let kept : I64 := line_drop_point line (String.length line - 1) in
-    EditorState.with_mode st (Mode.command (String.slice line 0 kept))
+    line_replacing st (String.slice line 0 kept)
+
+/// `text` as the current typing mode's line. A mode that is not a line mode
+/// (nothing reaches this) is left alone rather than guessed at.
+def line_replacing (st : EditorState) (text : String) : EditorState :=
+    match EditorState.mode_of st {
+        Mode.command _ => EditorState.with_mode st (Mode.command text),
+        Mode.search _ => EditorState.with_mode st (Mode.search text),
+        _ => st
+    }
 
 /// The largest character boundary at or below `at`, for a byte string whose
 /// `at` may land inside a multi-byte character. `String.get` is O(1) here (the
@@ -784,22 +838,384 @@ def line_drop_point (line : String) (at : I64) : I64 :=
 def is_continuation_byte (b : U8) : Bool :=
     U8.gt b 127u8 && Bool.not (U8.gt b 191u8)
 
+/// Enter on a typing line, dispatched by WHICH line it is: the command line
+/// runs its text as a command, the `/` line runs it as a search. The mode is
+/// left BEFORE the command runs, so a command that sets a mode of its own
+/// (`:e` opens a file, `:` leaves) is not overwritten afterwards.
+def cmd_line_run (st : EditorState) (line : String) : Pair EditorState (Cmd EditorMsg) :=
+    match EditorState.mode_of st {
+        Mode.search _ => run_search_line st line,
+        _ => run_command_line st line
+    }
+
 /// Enter on the command line: parse the text and RUN it, leaving the mode
 /// first. An empty (or blank) line is the plain way out -- `:` then Enter is
 /// Escape -- and a name outside the whitelist is reported rather than run.
-def cmd_line_run (st : EditorState) (line : String) : Pair EditorState (Cmd EditorMsg) :=
+def run_command_line (st : EditorState) (line : String) : Pair EditorState (Cmd EditorMsg) :=
     let trimmed : String := String.trim line in
     let left : EditorState := EditorState.with_mode st Mode.normal in
     if String.is_empty trimmed
     then Pair.pair left Cmd.none
     else run_parsed left trimmed
 
-/// Run a parsed command name, or report why there was none to run.
-def run_parsed (st : EditorState) (name : String) : Pair EditorState (Cmd EditorMsg) :=
-    match parse_command name {
+// ── `/` search ────────────────────────────────────────────────────────────
+//
+// THE `/` LINE IS THE COMMAND LINE'S TWIN. It types into `Mode.search`'s
+// payload, Enter runs it, Escape leaves -- the same three keys, dispatched by
+// the state's mode (`cmd_line_run`). What it does with the line is the whole
+// of this section.
+//
+// AN EMPTY SEARCH LINE REPEATS THE LAST SEARCH. `/` then Enter is how every
+// modal editor says "again", and it is why `search_query` lives on the state
+// and not in the mode: the query has to outlive the line that typed it.
+//
+// A QUERY WITH NO MATCH IS REPORTED AND DOES NOT MOVE THE CARET. Moving it
+// somewhere arbitrary (to 0, say) would be the editor inventing an answer;
+// saying "no match" leaves the selection exactly where the user left it.
+
+/// Enter on the `/` line: run `line` as a search, or repeat the last one when
+/// the line is blank. The mode always returns to normal -- a search is a
+/// motion, and a motion does not leave you in a typing mode.
+def run_search_line (st : EditorState) (line : String) : Pair EditorState (Cmd EditorMsg) :=
+    let trimmed : String := String.trim line in
+    let left : EditorState := EditorState.with_mode st Mode.normal in
+    if String.is_empty trimmed
+    then Pair.pair (search_repeat left true) Cmd.none
+    else Pair.pair (search_from_origin left trimmed true) Cmd.none
+
+/// Run `query` as a fresh search from the primary head's offset, going
+/// `forward` -- and remember it, so `n`/`N` can repeat it.
+def search_from_origin (st : EditorState) (query : String) (forward : Bool) : EditorState :=
+    let remembered : EditorState := EditorState.with_search st query forward in
+    search_at remembered query (primary_head st) forward
+
+/// Repeat the committed search: `forward` says whether this is `n` (same
+/// direction as last time) or `N` (the opposite).
+def search_repeat (st : EditorState) (forward : Bool) : EditorState :=
+    let query : String := EditorState.search_query_of st in
+    if String.is_empty query
+    then EditorState.with_status st "no previous search"
+    else
+        let dir : Bool := if forward then EditorState.search_forward_of st else go_back (EditorState.search_forward_of st) in
+        search_next_from st query dir
+
+/// Run the committed search again, from the current match -- the `n`/`N` path.
+///
+/// THE ORIGIN IS THE SELECTION'S START GOING BACKWARD AND ITS END GOING
+/// FORWARD, which is what makes `n` find the NEXT match rather than the same
+/// one: the caret sits on a match, and a search starting at the caret would
+/// find that match again. Forward from the end and backward from the start
+/// step off the span in the direction of travel.
+def search_next_from (st : EditorState) (query : String) (forward : Bool) : EditorState :=
+    let origin : I64 := search_origin st forward in
+    search_at st query origin forward
+
+/// Where the next search starts: the primary selection's end going forward,
+/// its start going backward.
+def search_origin (st : EditorState) (forward : Bool) : I64 :=
+    match EditorState.active_doc st {
+        Option.none => 0,
+        Option.some doc =>
+            match Selections.primary_sel (doc_selections doc) {
+                Option.none => 0,
+                Option.some one =>
+                    if forward then Selection.stop one else Selection.start one
+            }
+    }
+
+/// Flip a direction.
+def go_back (forward : Bool) : Bool := Bool.not forward
+
+/// Run `query` from `origin` in direction `forward`, select the match, and
+/// report the line it landed on. A miss reports and leaves the buffer alone.
+///
+/// THE WHOLE BUFFER IS MATERIALIZED ONCE, HERE. `String` scans need a string,
+/// and the rope is the editing structure -- so a search pays one O(n) pass,
+/// not one per candidate. That is the same trade `cmd_write` makes, and it is
+/// the right one for a motion a human triggers by hand.
+def search_at (st : EditorState) (query : String) (origin : I64) (forward : Bool)
+    : EditorState :=
+    match EditorState.active_doc st {
+        Option.none => st,
+        Option.some doc =>
+            let shared : Shared Document := Shared.of doc in
+            let rope : Rope := doc_rope (Shared.get shared) in
+            let text : String := Search.text_of (Shared.of rope) in
+            match Search.next_match text query origin forward {
+                Option.none => search_miss st query,
+                Option.some at =>
+                    // `at` is read twice (the selection and the report), and
+                    // `I64` is `Copy`, so a named local is the duplicate the
+                    // rule wants -- the share is the value, not the binder.
+                    let hit : I64 := at in
+                    let selected : EditorState :=
+                        EditorState.with_active_doc st
+                            (Document.with_selections (Shared.get shared)
+                                (Search.selection_at hit (String.length query))) in
+                    EditorState.with_status selected
+                        ("/" ++ query ++ " at line " ++ I64.to_string (Search.line_number_of rope hit))
+            }
+    }
+
+/// The no-match report. It names the query, because the row a user reads is
+/// one line in a status bar and "no match" alone does not say for what.
+def search_miss (st : EditorState) (query : String) : EditorState :=
+    EditorState.with_status st ("no match: " ++ query)
+
+/// `n`: repeat the last search the way it ran.
+def cmd_search_next (st : EditorState) : Pair EditorState (Cmd EditorMsg) :=
+    Pair.pair (search_repeat st true) Cmd.none
+
+/// `N`: repeat the last search the other way.
+def cmd_search_prev (st : EditorState) : Pair EditorState (Cmd EditorMsg) :=
+    Pair.pair (search_repeat st false) Cmd.none
+
+// ── the file picker ───────────────────────────────────────────────────────
+//
+// `Space f` IS TWO HALVES: a `Cmd.perform` that lists the directory (the IO
+// side, which cannot touch the state) and a fold of `EditorMsg.picker_files`
+// onto it (the pure side). Opening the picker needs BOTH -- the mode so the
+// user can type, and the listing so there is something to type at -- so the
+// command issues the listing as a command and switches the mode right away.
+// The frame after shows the picker empty and then filled, which is
+// indistinguishable from fast on any real directory.
+
+/// The status while a listing is in flight -- only visible on a slow disk.
+pub def ply_listing_status : String := "listing files..."
+
+/// `Space f`: enter the picker and ask for a listing of the current
+/// directory.
+///
+/// THE MODE IS SET BEFORE THE LISTING ARRIVES, so a keystroke typed while the
+/// listing runs lands in the filter rather than in the buffer. `picker_dir`
+/// stays `""` -- the process's own cwd -- which is also what `Picker.resolve`
+/// answers for a candidate unchanged.
+def cmd_file_picker (st : EditorState) : Pair EditorState (Cmd EditorMsg) :=
+    let entered : EditorState :=
+        EditorState.with_mode (EditorState.with_status st ply_listing_status)
+            (Mode.picker "" 0) in
+    Pair.pair entered (Cmd.perform (fn (_ : Unit) => ply_list_dir ""))
+
+/// The listing, run inside the frame: one level of `dir`, its entries as the
+/// relative paths the filter ranks. `dir` of `""` is the process's cwd.
+///
+/// A DIRECTORY'S OWN ENTRIES ARE ALL CANDIDATES, files and directories alike:
+/// the picker has no notion of a file type, and hiding directories would hide
+/// the `..` a user needs to walk out. `IO.list_dir` already sorts.
+def ply_list_dir (dir : String) : IO EditorMsg := do {
+    let path : Path := if String.is_empty dir then Path.path "." else Path.path dir;
+    let entries <- IO.list_dir path;
+    return (picker_files_msg dir (paths_of_entries dir entries))
+}
+
+/// The entries as display paths: the bare name when `dir` is the cwd (so the
+/// listing reads like `ls`), the `dir`-joined spelling otherwise. A
+/// `Path.file_name` round-trip keeps the `dir` out of the filter's view for
+/// the common case, which is what makes typing `ma` find `main.mo`.
+#[terminating]
+def paths_of_entries (dir : String) (entries : List Path) : List String :=
+    match entries {
+        List.empty => List.empty,
+        List.cons one rest =>
+            List.cons (entry_name dir one) (paths_of_entries dir rest)
+    }
+
+/// One entry's display path.
+def entry_name (dir : String) (p : Path) : String :=
+    if String.is_empty dir then Path.file_name p else Path.to_string p
+
+/// The `picker_files` message, built in its own def so the constructor is
+/// never spelled inline in an `IO` body (the constructor-shadowing risk).
+def picker_files_msg (dir : String) (files : List String) : EditorMsg :=
+    EditorMsg.picker_files dir files
+
+/// Fold a finished listing onto the state: the candidates, and the directory
+/// they are relative to. The mode is untouched -- a listing that arrives
+/// after the user pressed Escape must not re-open the picker.
+def fold_picker_files (st : EditorState) (dir : String) (files : List String) : EditorState :=
+    EditorState.with_picker_files st dir files
+
+/// A character typed in the picker: it filters. The selection RESETS to the
+/// top, because the list under it just changed -- keeping row 7 selected
+/// while the list shrinks would highlight a different file than the one the
+/// user was looking at.
+def picker_default (st : EditorState) (query : String) (sel : I64) (k : Key)
+    : Option (Pair EditorState (Cmd EditorMsg)) :=
+    match k {
+        Key.char c =>
+            Option.some (Pair.pair
+                (EditorState.with_mode st (Mode.picker (String.concat query c) 0)) Cmd.none),
+        Key.backspace =>
+            Option.some (Pair.pair
+                (EditorState.with_mode st
+                    (Mode.picker (String.slice query 0 (line_drop_point query (String.length query - 1))) 0))
+                Cmd.none),
+        _ => Option.none
+    }
+
+/// The ranked candidates for the state's filter -- what the view lists and
+/// what `picker_accept` opens, so the two cannot disagree.
+pub def picker_ranked (st : EditorState) : List String :=
+    Picker.rank (EditorState.picker_files_of st) (EditorState.picker_query_of st)
+
+/// The row `move` past the current one, in the RANKED list. The bounds come
+/// from the list itself, so a filter that shrank the list cannot leave the
+/// selection out of range.
+def picker_move (st : EditorState) (delta : I64) : EditorState :=
+    let count : I64 := List.length (picker_ranked st) in
+    let from : I64 := EditorState.picker_selected_of st in
+    let target : I64 := Picker.clamp_selected (from + delta) count in
+    editor_with_picker_selection st target
+
+/// The state with the picker's highlighted row set, leaving the filter as it
+/// is. The mode's payload carries both halves, so both are rebuilt here.
+def editor_with_picker_selection (st : EditorState) (sel : I64) : EditorState :=
+    EditorState.with_mode st (Mode.picker (EditorState.picker_query_of st) sel)
+
+/// `picker_next` / `picker_prev` / the page keys: move the highlight.
+def cmd_picker_next (st : EditorState) : Pair EditorState (Cmd EditorMsg) :=
+    Pair.pair (picker_move st 1) Cmd.none
+
+def cmd_picker_prev (st : EditorState) : Pair EditorState (Cmd EditorMsg) :=
+    Pair.pair (picker_move st (-1)) Cmd.none
+
+/// A page is the text area's height, less the picker's own header row -- the
+/// same arithmetic the view lays out with.
+def picker_page (st : EditorState) : I64 :=
+    let rows : I64 := EditorState.rows_of st in
+    if rows < 3 then 1 else rows - 2
+
+def cmd_picker_page_down (st : EditorState) : Pair EditorState (Cmd EditorMsg) :=
+    Pair.pair (picker_move st (picker_page st)) Cmd.none
+
+def cmd_picker_page_up (st : EditorState) : Pair EditorState (Cmd EditorMsg) :=
+    Pair.pair (picker_move st (0 - picker_page st)) Cmd.none
+
+/// `picker_accept` (Enter): open the highlighted candidate and leave the
+/// picker. On an empty list it reports and stays -- Escape is the way out of
+/// a filter that matched nothing, and reporting beats closing on a keystroke
+/// the user meant as "open what I found".
+def cmd_picker_accept (st : EditorState) : Pair EditorState (Cmd EditorMsg) :=
+    // The ranked list is read twice (its length, then the nth row), and a
+    // `List` is deliberately not `Copy`, so one `Shared` handle serves both
+    // -- the affine rule's own remedy.
+    let ranked : Shared (List String) := Shared.of (picker_ranked st) in
+    let sel : I64 :=
+        Picker.clamp_selected (EditorState.picker_selected_of st)
+            (List.length (Shared.get ranked)) in
+    match Picker.nth sel (Shared.get ranked) {
+        Option.none =>
+            Pair.pair (EditorState.with_status st "no file to open") Cmd.none,
+        Option.some rel =>
+            let path : String := Picker.resolve (EditorState.picker_dir_of st) rel in
+            open_path_in_picker st path
+    }
+
+/// Accepting a candidate opens it: the mode returns to normal, then the open
+/// proceeds exactly as `:e <path>` does -- one open path, so the picker and
+/// the command line cannot build different documents for one file.
+def open_path_in_picker (st : EditorState) (path : String) : Pair EditorState (Cmd EditorMsg) :=
+    let left : EditorState := EditorState.with_mode st Mode.normal in
+    open_in_editor left path
+
+/// `:e <path>` and the picker's accept: read `path` and either FOCUS an open
+/// buffer that already holds it or ADD a new one focused. The read is a
+/// `Cmd.perform`, so the terminal is restored correctly even when the open is
+/// the last thing that happens.
+///
+/// A PATH ALREADY OPEN IS NOT RE-READ: two buffers over one file would save
+/// over each other, and the second save would silently discard the first
+/// buffer's edits. `index_of_path` is the one test for that.
+def open_in_editor (st : EditorState) (path : String) : Pair EditorState (Cmd EditorMsg) :=
+    match EditorState.index_of_path st path {
+        Option.some i => Pair.pair (focus_buffer st i path) Cmd.none,
+        Option.none =>
+            Pair.pair (EditorState.with_status st ("opening " ++ path))
+                (Cmd.perform (fn (_ : Unit) => ply_read_file path))
+    }
+
+/// Focus the buffer at index `i`, reporting which one it is.
+def focus_buffer (st : EditorState) (i : I64) (path : String) : EditorState :=
+    EditorState.with_status (EditorState.with_active st i) ("focused " ++ path)
+
+/// The read behind an open, run inside the frame. A failure answers a status
+/// line rather than exiting: the editor is already running, so an unreadable
+/// path is a report and not the end of the program (`main.mo`'s argv path is
+/// the one that exits, before any loop exists).
+def ply_read_file (path : String) : IO EditorMsg := do {
+    let r <- IO.read_file (Path.path path);
+    return (open_outcome path r)
+}
+
+/// The read's result as the message the pure half folds in.
+def open_outcome (path : String) (r : Result StreamError String) : EditorMsg :=
+    match r {
+        Result.ok text => EditorMsg.file_opened path text,
+        Result.err e => EditorMsg.save_result false ("open failed: " ++ path ++ ": " ++ e.message)
+    }
+
+/// Fold a finished open: add the buffer, focus it, and report it.
+def fold_file_opened (st : EditorState) (path : String) (text : String) : EditorState :=
+    let doc : Document := Document.of_file path text in
+    let grown : EditorState := EditorState.with_doc_added st doc in
+    EditorState.with_status (EditorState.with_active grown (EditorState.doc_count grown - 1))
+        ("opened " ++ path)
+
+// ── the buffer list (`:bn` / `:bp`) ───────────────────────────────────────
+
+/// `:bn` -- focus the next buffer, wrapping. One buffer is a no-op that says
+/// so, which is honest: the key was pressed and nothing changed.
+def cmd_buffer_next (st : EditorState) : Pair EditorState (Cmd EditorMsg) :=
+    Pair.pair (buffer_step st 1) Cmd.none
+
+/// `:bp` -- focus the previous buffer, wrapping.
+def cmd_buffer_prev (st : EditorState) : Pair EditorState (Cmd EditorMsg) :=
+    Pair.pair (buffer_step st (-1)) Cmd.none
+
+/// Move the focus `delta` buffers, WRAPPING: past the last buffer is the
+/// first, which is the `:bn` every editor keeps (a "next" that stopped at the
+/// end would make the key look broken on the buffer it refused to leave).
+def buffer_step (st : EditorState) (delta : I64) : EditorState :=
+    let count : I64 := EditorState.doc_count st in
+    if count < 2
+    then EditorState.with_status st ("only one buffer: " ++ buffer_name st)
+    else
+        let raw : I64 := EditorState.active_of st + delta in
+        EditorState.with_status (EditorState.with_active st (buffer_wrap raw count))
+            ("buffer " ++ I64.to_string (EditorState.active_of (EditorState.with_active st (buffer_wrap raw count)) + 1))
+
+/// `i` wrapped into `[0, count)`.
+def buffer_wrap (i : I64) (count : I64) : I64 :=
+    if count < 1 then 0 else if i < 0 then count - 1 else if Bool.not (i < count) then 0 else i
+
+/// The active buffer's display name: its path, or `[scratch]`.
+def buffer_name (st : EditorState) : String :=
+    match EditorState.active_doc st {
+        Option.none => "[none]",
+        Option.some doc =>
+            match Document.path_of doc {
+                Option.some p => p,
+                Option.none => "[scratch]"
+            }
+    }
+
+/// Run a parsed command line: an `:e <path>` first (its argument is a value,
+/// not a registry name), then the no-argument names, then the unknown report.
+///
+/// THE ORDER IS THE PRECEDENCE, and `:e` has to come first because `parse_open`
+/// is the only parser that looks at more than the whole line.
+def run_parsed (st : EditorState) (line : String) : Pair EditorState (Cmd EditorMsg) :=
+    match parse_open line {
+        Option.some path => open_in_editor st path,
+        Option.none => run_parsed_name st line
+    }
+
+/// The no-argument half of `run_parsed`.
+def run_parsed_name (st : EditorState) (line : String) : Pair EditorState (Cmd EditorMsg) :=
+    match parse_command line {
         Option.some cmd => run_command st cmd,
         Option.none =>
-            Pair.pair (EditorState.with_status st (String.concat "no such command: " name)) Cmd.none
+            Pair.pair (EditorState.with_status st (String.concat "no such command: " line)) Cmd.none
     }
 
 /// THE `:`-COMMAND PARSER: the line as the name of a command in the registry.
@@ -810,9 +1226,15 @@ def run_parsed (st : EditorState) (name : String) : Pair EditorState (Cmd Editor
 /// is the `quit!` row, the same one `Space Q` runs, and `:w` is the same
 /// `write` the `Space w` chord runs.
 ///
-/// ARGUMENTS ARE NOT PARSED YET: `:e <path>`, `:bn`/`:bp` and `/`search` are
-/// Phase 5's remainder (a buffer list, an open message). They are absent
-/// rather than silently ignored, so typing one reports itself.
+/// THE LINE IS `name` OR `name argument`, AND ONLY `:e` TAKES ONE. A command
+/// that took an argument and ignored it would look like it worked, which is
+/// the one failure mode a command line must not have -- so `:w extra` is
+/// reported as unknown rather than run as `:w`.
+///
+/// `parse_command` answers the registry NAME for the no-argument forms, which
+/// is what `run_parsed` hands to `run_command`. The one form with an argument
+/// (`:e <path>`, and `:edit`) is answered by `parse_open`, because its
+/// argument is a VALUE and not a name -- see `run_parsed`.
 pub def parse_command (line : String) : Option String :=
     if String.beq line "w" then Option.some "write"
     else if String.beq line "write" then Option.some "write"
@@ -822,7 +1244,64 @@ pub def parse_command (line : String) : Option String :=
     else if String.beq line "quit!" then Option.some "quit!"
     else if String.beq line "wq" then Option.some "write_quit"
     else if String.beq line "x" then Option.some "write_quit"
+    else if String.beq line "bn" then Option.some "buffer_next"
+    else if String.beq line "bnext" then Option.some "buffer_next"
+    else if String.beq line "bp" then Option.some "buffer_prev"
+    else if String.beq line "bprevious" then Option.some "buffer_prev"
+    else if String.beq line "noh" then Option.some "clear_status"
     else Option.none
+
+/// The path `:e <path>` / `:edit <path>` names, or `none` when the line is
+/// not that form. A bare `:e` (no path) is `none` too: "edit what?" has no
+/// answer, and reporting it beats re-reading the buffer that is already open.
+///
+/// THE FIRST WORD IS THE COMMAND, THE REST IS THE PATH, so a path with a
+/// space in it works -- which is exactly why this splits at the first space
+/// rather than on every space.
+pub def parse_open (line : String) : Option String :=
+    match first_word line {
+        Option.none => Option.none,
+        Option.some word =>
+            // The first word is compared twice and then dropped from the
+            // line, so it is shared: `String` is `Copy`, but a `Shared` here
+            // states the multi-read in one place and costs a pointer.
+            let shared : Shared String := Shared.of word in
+            if Bool.not (String.beq (Shared.get shared) "e")
+                && Bool.not (String.beq (Shared.get shared) "edit")
+            then Option.none
+            else ply_open_arg line (Shared.get shared)
+    }
+
+/// The argument after the command word, trimmed. An empty remainder is
+/// `none` (a bare `:e`), which is the case `parse_open`'s doc states.
+def ply_open_arg (line : String) (word : String) : Option String :=
+    let rest : String := String.trim (String.drop (String.length word) line) in
+    if String.is_empty rest then Option.none else Option.some rest
+
+/// The first whitespace-delimited word of a line, or `none` when the line
+/// starts with space (which the caller has already trimmed) or is empty.
+#[terminating]
+def first_word_go (line : String) (at : I64) : Option String :=
+    match String.get line at {
+        Option.none => Option.some line,
+        Option.some b =>
+            if is_space_byte b
+            then Option.some (String.slice line 0 at)
+            else first_word_go line (at + 1)
+    }
+
+/// The line's first word, or `none` when there is none.
+def first_word (line : String) : Option String :=
+    if String.is_empty line then Option.none else first_word_go line 0
+
+/// A space or a tab -- the two bytes that separate a command from its
+/// argument.
+def is_space_byte (b : U8) : Bool := U8.beq b 32u8 || U8.beq b 9u8
+
+/// `:noh` clears the status line, which is the one thing a stale report
+/// needs: the row is otherwise the last command's answer forever.
+def cmd_clear_status (st : EditorState) : Pair EditorState (Cmd EditorMsg) :=
+    Pair.pair (EditorState.with_status st "") Cmd.none
 
 /// `:wq` (and `:x`): save, and quit only when the save SUCCEEDED.
 ///
@@ -880,7 +1359,9 @@ def quit_msg_or (msg : EditorMsg) : EditorMsg :=
         EditorMsg.resize _ _ => Shared.get shared,
         EditorMsg.tick => Shared.get shared,
         EditorMsg.quit => Shared.get shared,
-        EditorMsg.lsp_frame _ => Shared.get shared
+        EditorMsg.lsp_frame _ => Shared.get shared,
+        EditorMsg.picker_files _ _ => Shared.get shared,
+        EditorMsg.file_opened _ _ => Shared.get shared
     }
 
 /// The quit message, built in its own def so the constructor is never
@@ -1044,9 +1525,6 @@ def cmd_goto_references (st : EditorState) : Pair EditorState (Cmd EditorMsg) :=
 
 def cmd_hover (st : EditorState) : Pair EditorState (Cmd EditorMsg) :=
     Pair.pair (EditorState.with_status st "hover needs the LSP client (Phase 6)") Cmd.none
-
-def cmd_file_picker (st : EditorState) : Pair EditorState (Cmd EditorMsg) :=
-    Pair.pair (EditorState.with_status st "file_picker lands with config (Phase 5)") Cmd.none
 
 // ── writing and quitting (Phase 4) ─────────────────────────────────────────
 //

@@ -38,6 +38,12 @@ path = "../tui"
 [dependencies.toolkit]
 path = "../toolkit"
 
+# `ply.toml` is TOML (the plan's §3: "parsed by the `toml` mote"). The
+# self-hosted reader supports headers and not inline tables, which is why
+# `[keys.normal]` is a sub-table and a row is a plain `"spec" = "command"`.
+[dependencies.toml]
+path = "../toml"
+
 # `llvm` and `runtime` are declared because `toolkit` depends on `lang`,
 # and `lang::module` -- where the checker's `Diagnostic` lives -- is not
 # self-contained the way `lang::json` is: the compiler's own modules reach

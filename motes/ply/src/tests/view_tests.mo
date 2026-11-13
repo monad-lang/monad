@@ -27,9 +27,10 @@
 use lib::model {Document, Document.of_text, Document.with_language,
     Document.with_selections, EditorState, EditorMsg,
     EditorState.init, EditorState.active_doc, EditorState.with_status,
-    EditorState.with_scroll, EditorState.rows_of, EditorState.cols_of}
+    EditorState.with_scroll, EditorState.with_mode,
+    EditorState.with_picker_files, EditorState.rows_of, EditorState.cols_of}
 use lib::selection {Selections.span, Selections.cursor}
-use lib::types {Rope}
+use lib::types {Mode, Rope}
 use lib::rope {Rope.bytes}
 use lib::view {View.view, View.rows, View.row_segments, View.first_visible,
     View.left_col,
@@ -957,3 +958,91 @@ def vw_fg_is_keyword (fg : Option Color) : Bool :=
         Option.some want => fg == Option.some want,
         Option.none => false
     }
+
+// ── The `/` search line ──────────────────────────────────────────────────
+//
+// THE `/` LINE IS THE `:` LINE WITH ANOTHER SIGIL, and it is pinned the same
+// way: the prompt, the typed query, and the caret's reversed cell. What it
+// is NOT allowed to be is the status row -- a query you cannot see is a
+// query you cannot correct.
+
+/// The `/` line shows its own prompt and the query typed so far, and the
+/// status message underneath is not what paints the row.
+#[test]
+def test_search_line_renders_prompt_and_query : Bool :=
+    String.contains (vw_status_text (vw_screen (vw_search_st "foo"))) "/foo"
+
+/// An EMPTY search line still shows the prompt -- the row is the line, not a
+/// message, so `/` then nothing is a visible `/` and a caret to type at.
+#[test]
+def test_empty_search_line_shows_the_prompt : Bool :=
+    String.contains (vw_status_text (vw_screen (vw_search_st ""))) "/"
+
+/// The search line paints a caret -- the reversed cell after the query, in
+/// the same column rule the `:` line follows (`prompt ++ query`, then the
+/// caret), so typing blind is not possible on either.
+#[test]
+def test_search_line_paints_a_caret : Bool :=
+    let sh : Shared Screen := vw_screen (vw_search_st "ab") in
+    vw_reverse sh 9 3 && Bool.not (vw_reverse sh 9 2)
+
+/// A state on the `/` line with `query` typed. The mode is set through the
+/// state's own builder, so the fixture does not depend on keystroke
+/// decoding.
+def vw_search_st (query : String) : EditorState :=
+    vw_set_search (vw_state "abc") query
+
+/// `Mode.search` as a value, in its own def -- a `Mode` constructor spelled
+/// directly in a test body is the shadowing hazard this file's header
+/// records (a local named `search` would meet the constructor's name).
+def vw_set_search (st : EditorState) (query : String) : EditorState :=
+    EditorState.with_mode st (Mode.search query)
+
+// ── The picker's frame ───────────────────────────────────────────────────
+
+/// The picker's body is its list: the header names the directory, and the
+/// candidates paint below it -- the buffer's text is GONE while the picker is
+/// open, which is what makes it a picker rather than a status message.
+#[test]
+def test_picker_takes_the_body : Bool :=
+    let st : EditorState := vw_picker_state ["a.mo", "b.mo"] "" 0 in
+    String.contains (vw_row_joined (vw_screen st) 0) "pick a file"
+        && String.contains (vw_row_joined (vw_screen st) 1) "a.mo"
+        && String.contains (vw_row_joined (vw_screen st) 2) "b.mo"
+
+/// The highlighted candidate's row is REVERSED, and its neighbors' are not --
+/// an unhighlighted list would make Enter's choice invisible.
+#[test]
+def test_picker_highlights_one_row : Bool :=
+    let sh : Shared Screen := vw_screen (vw_picker_state ["a.mo", "b.mo"] "" 1) in
+    vw_reverse sh 2 0 && Bool.not (vw_reverse sh 1 0)
+
+/// The picker's filter row is the status line, with the match count: a
+/// filter that hides everything says so rather than leaving an empty list to
+/// interpret.
+#[test]
+def test_picker_filter_row_counts_matches : Bool :=
+    let st : EditorState := vw_picker_state ["a.mo", "b.mo"] "a" 0 in
+    String.contains (vw_status_text (vw_screen st)) "1/2"
+
+/// A state in the picker over `files`, filtered by `query`, highlighting
+/// `sel`. The listing arrives through the state's own builder, because the
+/// real one arrives as `EditorMsg.picker_files` from `IO.list_dir`.
+def vw_picker_state (files : List String) (query : String) (sel : I64) : EditorState :=
+    let base : EditorState := EditorState.with_picker_files (vw_state "abc") "" files in
+    vw_set_picker base query sel
+
+/// `Mode.picker` as a value.
+def vw_set_picker (st : EditorState) (query : String) (sel : I64) : EditorState :=
+    EditorState.with_mode st (Mode.picker query sel)
+
+/// Row `row`'s chars, folded into a string (the 40-column fixture width).
+#[terminating]
+def vw_row_joined (sh : Shared Screen) (row : I64) : String :=
+    vw_row_text_at sh row 0 ""
+
+#[terminating]
+def vw_row_text_at (sh : Shared Screen) (row : I64) (col : I64) (acc : String) : String :=
+    if Bool.not (col < 40)
+    then acc
+    else vw_row_text_at sh row (col + 1) (String.concat acc (vw_char sh row col))

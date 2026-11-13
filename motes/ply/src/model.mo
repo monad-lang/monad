@@ -116,6 +116,49 @@ pub def Document.with_history (doc : Document) (h : History) : Document :=
 pub def Document.text_of (doc : Document) : String :=
     match doc { { rope, .. } => Rope.to_string rope }
 
+/// The language name a path's extension names: `monad` for `.mo`, `text` (the
+/// no-highlight default) for everything else. Phase 3's `Highlight.config_for`
+/// takes the same names, and "text" is its fallback too -- an editor must open
+/// any file, not only the ones it can color.
+///
+/// IT LIVES HERE, not in `main.mo`, because `:e <path>` (`commands.mo`) opens
+/// files too: the binary and the command line must derive the same language
+/// or the same file would highlight differently depending on how it was
+/// opened. `main.mo`'s own tests point at this def.
+///
+/// Matched case-sensitively: `.MO` is not `.mo` anywhere else in this corpus,
+/// and guessing would only make the highlighter's table wrong in a way nothing
+/// reports.
+///
+/// ARGUMENT ORDER: `String.ends_with` takes the STRING first and the suffix
+/// second (`std`'s other user, `acorn::passes`, reads `ends_with path ".md"`).
+/// That is the opposite of `String.starts_with`, which takes the prefix first
+/// -- the pair is an easy one to write backwards, and backwards here is
+/// silently always-false.
+pub def Document.language_for_path (path : String) : String :=
+    if String.ends_with path ".mo" then "monad" else "text"
+
+/// A document opened from a file: its text, its path, and the language its
+/// extension names. The ONE open constructor, so `main.mo`'s argv path and
+/// Phase 5's `:e <path>` cannot build different documents for one file.
+///
+/// Built through THREE annotated locals rather than one expression: a
+/// struct-update expression in argument position is the two-host inference
+/// hazard, and `Document.of_text` is the one constructor for a `Document`'s
+/// field list.
+pub def Document.of_file (path : String) (text : String) : Document :=
+    let base : Document := Document.of_text text in
+    let named : Document := Document.with_path base path in
+    Document.with_language named (Document.language_for_path path)
+
+/// Whether this document came from `path` -- how `:e` decides between
+/// focusing an open buffer and adding a second one.
+pub def Document.has_path (doc : Document) (path : String) : Bool :=
+    match Document.path_of doc {
+        Option.some p => String.beq p path,
+        Option.none => false
+    }
+
 /// The document's path, or `none` for a scratch buffer.
 pub def Document.path_of (doc : Document) : Option String :=
     match doc { { path, .. } => path }
@@ -215,7 +258,21 @@ pub type EditorMsg {
     /// exactly that -- write, and only quit if the write succeeded -- so the
     /// successful action answers with this and `update` turns it into
     /// `Cmd.quit`.
-    quit
+    quit,
+    /// The file picker's candidates arrived. THE SAME SPLIT AS
+    /// `save_result`, FOR THE SAME REASON: `Cmd.perform`'s action cannot see
+    /// or touch the state, so `IO.list_dir`'s answer travels back as a
+    /// message and the pure `update` folds it in.
+    ///
+    /// `dir` rides along, and the paths are RELATIVE to it. Re-deriving the
+    /// directory at fold time would read the process's cwd a second time,
+    /// and the two readings are not the same question -- a listing taken in
+    /// `..` is not a listing of `.`.
+    picker_files (dir : String) (files : List String),
+    /// A file finished reading for `:e <path>` / `picker_accept`. Same split,
+    /// same reason: the read is a `Cmd.perform` action, so its answer comes
+    /// back as a message and the pure `update` adds the buffer.
+    file_opened (path : String) (text : String)
 }
 
 /// `tui::App`'s `on_event : Event -> EditorMsg` (the plan's §3): keys and
@@ -271,7 +328,27 @@ pub struct EditorState {
     cols : I64,
     /// The yank/paste registers (the internal-register Known Limitation).
     /// The head is the most recent yank; `p` pastes it.
-    registers : List String
+    registers : List String,
+    /// The file picker's candidates, RELATIVE to `picker_dir`: what the last
+    /// `IO.list_dir` answered, and what `Space f` filters. It lives on the
+    /// state rather than in `Mode.picker` because it outlives the mode (a
+    /// picker re-opened in the same directory starts from the same listing)
+    /// and because the mode is rebuilt per keystroke.
+    ///
+    /// AN ABSOLUTE PATH IS NOT A REJECTION: `Path.is_absolute` decides, and
+    /// a listing of `/` really is `/a`, `/b`.
+    picker_files : List String,
+    /// The directory `picker_files` names paths in. `""` means the process's
+    /// own cwd, which is what the editor starts in.
+    picker_dir : String,
+    /// The last COMMITTED search -- the query `n`/`N` repeat. On the state
+    /// rather than in `Mode.search` because it outlives the mode: `/foo`,
+    /// Enter, Escape, and `n` still means "the next foo".
+    search_query : String,
+    /// Which way the last search ran, so `n` repeats it and `N` reverses it.
+    /// `true` is forward (towards the buffer's end), the default a fresh `/`
+    /// sets -- the same `n`/`N` rule every modal editor keeps.
+    search_forward : Bool
 }
 
 /// The one `EditorState` constructor (the plan's two-host struct-literal
@@ -290,7 +367,11 @@ pub def EditorState.init (doc : Document) (rows : I64) (cols : I64) : EditorStat
         hscroll := 0,
         rows := rows,
         cols := cols,
-        registers := List.empty }
+        registers := List.empty,
+        picker_files := List.empty,
+        picker_dir := "",
+        search_query := "",
+        search_forward := true }
 
 /// The active document, or none when the state holds no buffer (the
 /// editor always has one; the `Option` keeps the accessor total).
@@ -343,6 +424,58 @@ def ply_replace_doc (docs : List Document) (i : I64) (doc : Document) : List Doc
             else List.cons one (ply_replace_doc rest (i - 1) doc)
     }
 
+/// How many buffers are open. The buffer list's arithmetic
+/// (`:bn`/`:bp`) wraps with this.
+#[terminating]
+pub def EditorState.doc_count (st : EditorState) : I64 :=
+    ply_doc_count_go (EditorState.docs_of st)
+
+#[terminating]
+def ply_doc_count_go (docs : List Document) : I64 :=
+    match docs {
+        List.empty => 0,
+        List.cons _ rest => 1 + ply_doc_count_go rest
+    }
+
+/// The state focused on buffer `i`, clamped into `[0, doc_count)`. The one
+/// place `active` moves, so `:bn`/`:bp`/`:e` cannot disagree about which
+/// buffer is focused.
+pub def EditorState.with_active (st : EditorState) (i : I64) : EditorState :=
+    let count : I64 := EditorState.doc_count st in
+    let bounded : I64 := if i < 0 then 0 else if Bool.not (i < count) then count - 1 else i in
+    { st with active := bounded }
+
+/// The index of the buffer whose path is `path`, or `none` when no open
+/// buffer came from there. `:e` uses it to FOCUS rather than re-read: opening
+/// the same file twice would give two buffers whose saves overwrite each
+/// other, which is the one thing a multi-buffer editor must not do.
+#[terminating]
+pub def EditorState.index_of_path (st : EditorState) (path : String) : Option I64 :=
+    ply_index_of_path (EditorState.docs_of st) path 0
+
+#[terminating]
+def ply_index_of_path (docs : List Document) (path : String) (i : I64) : Option I64 :=
+    match docs {
+        List.empty => Option.none,
+        List.cons one rest =>
+            if Document.has_path one path
+            then Option.some i
+            else ply_index_of_path rest path (i + 1)
+    }
+
+/// The state with a buffer appended at the end. The new buffer is NOT
+/// focused -- the caller decides, because `:e` focuses and a future split
+/// view would not.
+pub def EditorState.with_doc_added (st : EditorState) (doc : Document) : EditorState :=
+    let shared : Shared EditorState := Shared.of st in
+    ply_state_with_docs (Shared.get shared)
+        (List.append (EditorState.docs_of (Shared.get shared)) (List.cons doc List.empty))
+
+/// The state with its whole buffer list replaced -- the one swap, for a
+/// consumer that builds the list itself (a session restore).
+pub def EditorState.with_docs (st : EditorState) (docs : List Document) : EditorState :=
+    { st with docs := docs }
+
 /// The state with the mode set and the pending prefix cleared -- the
 /// common end of every mode-switching command.
 pub def EditorState.with_mode (st : EditorState) (m : Mode) : EditorState :=
@@ -371,6 +504,60 @@ pub def EditorState.cmd_line_of (st : EditorState) : String :=
         _ => ""
     }
 
+/// The search line `Mode.search` carries: the query as typed. `""` in every
+/// other mode -- the total reading `cmd_line_of` states. NOTE the difference
+/// from `search_query_of`: this is the line being typed, that is the query
+/// `n`/`N` repeat.
+pub def EditorState.search_line_of (st : EditorState) : String :=
+    match EditorState.mode_of st {
+        Mode.search query => query,
+        _ => ""
+    }
+
+/// The picker's filter as typed -- `""` in every other mode.
+pub def EditorState.picker_query_of (st : EditorState) : String :=
+    match EditorState.mode_of st {
+        Mode.picker query _ => query,
+        _ => ""
+    }
+
+/// The picker's highlighted row -- `0` in every other mode.
+pub def EditorState.picker_selected_of (st : EditorState) : I64 :=
+    match EditorState.mode_of st {
+        Mode.picker _ sel => sel,
+        _ => 0
+    }
+
+/// The picker's candidates, relative to `picker_dir`.
+pub def EditorState.picker_files_of (st : EditorState) : List String :=
+    match st { { picker_files, .. } => picker_files }
+
+/// The directory the picker's candidates are relative to (`""` is the cwd).
+pub def EditorState.picker_dir_of (st : EditorState) : String :=
+    match st { { picker_dir, .. } => picker_dir }
+
+/// The state with the picker's listing set: the fold of
+/// `EditorMsg.picker_files`. Both halves move in one def so a listing and the
+/// directory it names cannot come from different reads.
+pub def EditorState.with_picker_files (st : EditorState) (dir : String) (files : List String)
+    : EditorState :=
+    { st with picker_files := files, picker_dir := dir }
+
+/// The last committed search, read once.
+pub def EditorState.search_query_of (st : EditorState) : String :=
+    match st { { search_query, .. } => search_query }
+
+/// The last search's direction: `true` forward.
+pub def EditorState.search_forward_of (st : EditorState) : Bool :=
+    match st { { search_forward, .. } => search_forward }
+
+/// The state with the committed search -- what Enter on the `/` line does.
+/// The query and its direction move together: a search that ran one way and
+/// remembered another would make `n` repeat the wrong search.
+pub def EditorState.with_search (st : EditorState) (query : String) (forward : Bool)
+    : EditorState :=
+    { st with search_query := query, search_forward := forward }
+
 /// The pending key prefix, read once.
 pub def EditorState.pending_of (st : EditorState) : List Key :=
     match st { { pending, .. } => pending }
@@ -382,6 +569,17 @@ pub def EditorState.with_pending (st : EditorState) (keys : List Key) : EditorSt
 /// The binding tables, read once.
 pub def EditorState.bindings_of (st : EditorState) : List Binding :=
     match st { { bindings, .. } => bindings }
+
+/// The state with a binding table -- what a `ply.toml` layer produces, and the
+/// one place a table swap happens, so `bindings` is rebuilt here and nowhere
+/// else (the same rule `with_active_doc` states for `docs`).
+///
+/// THE TABLE IS THE WHOLE TABLE, not a delta: the caller composes the layers
+/// (`Config.bindings_of_all` with the defaults first), because the keymap's
+/// LAST-match rule is what makes a later row win and this module has no
+/// business re-deciding it.
+pub def EditorState.with_bindings (st : EditorState) (bs : List Binding) : EditorState :=
+    { st with bindings := bs }
 
 /// The yank registers, read once.
 pub def EditorState.registers_of (st : EditorState) : List String :=
@@ -451,17 +649,22 @@ pub def EditorState.status_of (st : EditorState) : String :=
 pub instance Copy EditorState {
     def copy (st : EditorState) : Pair EditorState EditorState :=
         match st {
-            { docs, active, mode, pending, bindings, status, scroll, hscroll, rows, cols, registers } =>
+            { docs, active, mode, pending, bindings, status, scroll, hscroll, rows, cols, registers,
+                picker_files, picker_dir, search_query, search_forward } =>
                 let one : EditorState :=
                     { docs := copy_list docs, active := active, mode := mode,
                         pending := copy_list pending, bindings := copy_list bindings,
                         status := status, scroll := scroll, hscroll := hscroll, rows := rows, cols := cols,
-                        registers := copy_list registers } in
+                        registers := copy_list registers, picker_files := copy_list picker_files,
+                        picker_dir := picker_dir, search_query := search_query,
+                        search_forward := search_forward } in
                 let two : EditorState :=
                     { docs := copy_list docs, active := active, mode := mode,
                         pending := copy_list pending, bindings := copy_list bindings,
                         status := status, scroll := scroll, hscroll := hscroll, rows := rows, cols := cols,
-                        registers := copy_list registers } in
+                        registers := copy_list registers, picker_files := copy_list picker_files,
+                        picker_dir := picker_dir, search_query := search_query,
+                        search_forward := search_forward } in
                 Pair.pair one two
         }
 }

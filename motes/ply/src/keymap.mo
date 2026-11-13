@@ -79,7 +79,7 @@ pub def Keymap.has_prefix (xs : List Key) (prefix : List Key) : Bool :=
 /// The answer rules, in order:
 ///   1. a binding whose keys EQUAL the sequence, in this mode ->
 ///      `matched` (the LAST such binding wins, so a later row overrides
-///      an earlier one -- the merge order `ply.toml` will rely on);
+///      an earlier one -- the merge order `ply.toml` relies on);
 ///   2. no equality, but some binding's keys START WITH the sequence ->
 ///      `prefix`;
 ///   3. otherwise -> `unbound`.
@@ -127,15 +127,23 @@ def Keymap.resolve_rows (bindings : List Binding) (mode : String) (keys : Shared
     }
 
 /// The mode TABLE's name for a `Mode` value -- the one place the mapping
-/// lives, so a new mode is one def's edit. `command`/`search` carry their
-/// in-progress text, which the table name ignores.
+/// lives, so a new mode is one def's edit. `command`/`search`/`picker`
+/// carry their in-progress text, which the table name ignores.
+///
+/// THE PATTERNS' ARITY IS THE TYPE'S: `search` carries the query alone and
+/// `picker` carries the query plus the highlighted row (`types.mo`). Getting
+/// the two the wrong way round still TYPE-CHECKS -- `search`'s payload and
+/// `picker`'s first payload are both a `String` -- and only fails at CODEGEN,
+/// where the arm is an `elim` that never desugared to a match. So this def is
+/// where a stray arity is visible, rather than in a silently wrong table name.
 pub def Keymap.mode_table (m : Mode) : Option String :=
     match m {
         Mode.normal => Option.some "normal",
         Mode.insert => Option.some "insert",
         Mode.select => Option.some "select",
         Mode.command _ => Option.some "command",
-        Mode.search _ => Option.some "search"
+        Mode.search _ => Option.some "search",
+        Mode.picker _ _ => Option.some "picker"
     }
 
 // ── The default table (the plan's §4) ─────────────────────────────────────
@@ -143,10 +151,8 @@ pub def Keymap.mode_table (m : Mode) : Option String :=
 // Data, not dispatch: this list IS the Phase 2 deliverable's key half.
 // Commands that need a later phase (`gd`/`gr`/`K` need the LSP client,
 // Phase 6) are bound NOW and stubbed in the registry, so the bindings are
-// stable data from day one. `write`/`quit`/`quit!` became real in Phase 4.
-
-/// The mode table's name each builder below takes -- spelled out here so
-/// a typo in a row is a visible constant, not a string in a list.
+// stable data from day one. `write`/`quit`/`quit!` became real in Phase 4;
+// `file_picker` and the `/` search followed in Phase 5.
 
 /// One binding, built from a one-key sequence.
 def km_bind (mode : String) (k : Key) (command : String) : Binding :=
@@ -211,13 +217,17 @@ def km_normal_bindings : List Binding :=
         km_bind2 "normal" (Key.char "g") (Key.char "d") "goto_definition",
         km_bind2 "normal" (Key.char "g") (Key.char "r") "goto_references",
         km_bind "normal" (Key.char "K") "hover",
+        // `/` search: `/` types a query and Enter runs it; `n` repeats the
+        // direction it ran in and `N` goes the other way (the §4 pair).
+        km_bind "normal" (Key.char "n") "search_next",
+        km_bind "normal" (Key.char "N") "search_prev",
         km_bind2 "normal" (Key.char " ") (Key.char "f") "file_picker",
         km_bind2 "normal" (Key.char " ") (Key.char "w") "write",
         km_bind2 "normal" (Key.char " ") (Key.char "q") "quit",
         // The discard: `q` refuses while changes are unsaved, `Q` quits
-        // anyway. `:q!` is the plan's spelling, and it lands with Phase 5's
-        // command line -- `:` today enters command mode with no key that
-        // appends to it, so a `:`-form would be unreachable from a pipe.
+        // anyway. `:q!` is the plan's spelling and it now works too (Phase
+        // 5's command line); this chord predates it and stays, because a
+        // key that has always worked must keep working.
         km_bind2 "normal" (Key.char " ") (Key.char "Q") "quit!",
         km_bind "normal" (Key.char ":") "command_mode",
         km_bind "normal" (Key.char "/") "search_mode"]
@@ -226,12 +236,25 @@ def km_normal_bindings : List Binding :=
 /// them (the §4 table's last row). Insert mode's printable keys never
 /// reach the table -- `update` treats a character key in insert mode as
 /// `insert_char` before consulting `resolve`, so typing is the default
-/// case rather than a row per character (see `commands.mo`).
+/// case rather than a row per character (see `commands.mo`). The command
+/// line, the search line and the picker's filter follow the same rule: a
+/// typed character is part of the command's meaning, so it never travels
+/// through the registry by name.
 def km_other_mode_bindings : List Binding :=
     [km_bind "insert" Key.escape "normal_mode",
         km_bind "select" Key.escape "normal_mode",
         km_bind "command" Key.escape "normal_mode",
-        km_bind "search" Key.escape "normal_mode"]
+        km_bind "search" Key.escape "normal_mode",
+        km_bind "picker" Key.escape "normal_mode",
+        // The picker's own keys are real bindings, not a fast path in the
+        // update: they mean the same thing whether they arrive from a
+        // keystroke or from a config row, and `ply.toml` can rebind them.
+        km_bind "picker" Key.up "picker_prev",
+        km_bind "picker" Key.down "picker_next",
+        km_bind "picker" Key.page_up "picker_page_up",
+        km_bind "picker" Key.page_down "picker_page_down",
+        km_bind "picker" Key.tab "picker_next",
+        km_bind "picker" Key.enter "picker_accept"]
 
 /// The answer as `(command, is_prefix)`: `some name` with `false` for a
 /// match, `none` with `true` for a waiting chord, `none`/`false` for
