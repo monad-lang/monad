@@ -548,34 +548,81 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
-      # Phase 0 of plans/bootstrapping/mlir-codegen.md: the toolchain and
-      # ABI spike. Pins llvmPackages_21 (mlir included) in nix/packages.nix
-      # and drives ONE hand-written saxpy.mlir through
-      # mlir-opt --verify-each -> mlir-translate -> llc -> clang, linked
-      # into a .mo fixture that calls it via #[extern "c"]. No emitter.
-      #
-      # --require, not a bare run: this step exists to prove MLIR works, so
-      # a missing mlir-opt must be a RED job rather than the script's
-      # default clean SKIP. A dev shell built before nix/packages.nix
-      # gained the pin is the expected cause, and the message says so.
-      # Reuses the rung-1 binary the step above self-compiled, so it pays
-      # no second compiler build.
-      - name: MLIR toolchain proof (bare-pointer memref ABI, no emitter)
-        run: |
-          nix develop --no-pure-eval --accept-flake-config \
-            --profile "$HOME/.monad-ci-devshell" \
-            -c scripts/check-mlir-toolchain.sh --require \
-              "$PWD/target-monad/ci-self-compile/monad"
-
       # plans/implementations/async-runtime-thread-safety.md: the runtime's
       # shared state (fd carry table, child registry, nullary cache) under
       # concurrent threads, plain and under ThreadSanitizer. Builds the C
       # runtime directly; no compiler involved.
+      #
+      # The MLIR toolchain proof used to live in this job and did not
+      # belong here. It was added when the spike had no home, and it named
+      # `$PWD/target-monad/ci-self-compile/monad` -- a path NOTHING in this
+      # job builds, because the job has no tree-compiler action. It worked
+      # only while the two jobs shared a runner whose checkout happened to
+      # hold that binary from an earlier step, which is not a thing to rely
+      # on. It is now `mlir-toolchain` below, with its own compiler and its
+      # own job.
       - name: Runtime thread-safety stress (TSAN)
         run: |
           nix develop --no-pure-eval --accept-flake-config \
             --profile "$HOME/.monad-ci-devshell" \
             -c scripts/check-runtime-threads.sh
+
+  # Phase 0 and Phase 1 of plans/bootstrapping/mlir-codegen.md, in ONE job
+  # and on its own runner.
+  #
+  # Its own job for three reasons:
+  #
+  #   * It is the only job that needs the MLIR toolchain, and until now that
+  #     meant `runtime-tsan` carried a step for it. TSAN and MLIR have
+  #     nothing to do with each other, so a failure in either masked the
+  #     other's wall clock and both sat in one 60-minute budget.
+  #   * It needs a compiler built from THIS checkout, which is what the
+  #     tree-compiler action realizes (.#monad via the pinned nightly). The
+  #     old step named `target-monad/ci-self-compile/monad`, which no step
+  #     in its job produced.
+  #   * Golden regeneration (`--write`) should never race a job that is
+  #     also compiling the world.
+  mlir-toolchain:
+    runs-on: [self-hosted, linux]
+    needs: [changes, compiler-checks]
+    if: needs.changes.outputs.compiler == 'true'
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v5
+      - uses: ./.github/actions/tree-compiler
+
+      # Phase 0: the toolchain and bare-pointer-ABI spike. Drives ONE
+      # hand-written saxpy.mlir through mlir-opt --verify-each ->
+      # mlir-translate -> llc -> clang, links it into a .mo fixture that
+      # calls it via #[extern "c"], and asserts the ABI is exactly two
+      # parameters (one bare pointer, one i32). No emitter.
+      #
+      # `--require`, not a bare run: this step exists to prove MLIR works,
+      # so a missing mlir-opt must be a RED job rather than the script's
+      # default clean SKIP. A dev shell built before nix/packages.nix gained
+      # the pin is the expected cause, and the message says so.
+      - name: MLIR toolchain proof (bare-pointer memref ABI, no emitter)
+        run: |
+          nix develop --no-pure-eval --accept-flake-config \
+            --profile "$HOME/.monad-ci-devshell" \
+            -c scripts/check-mlir-toolchain.sh --require "$MONAD_CI_BIN"
+
+      # Phase 1: the golden suite. Each golden is (a) byte-compared against
+      # `fixtures/mlir/goldens/`, (b) accepted by `mlir-opt --verify-each`,
+      # and (c) round-trip stable -- `mlir-opt` re-reads its own output
+      # byte-identically. That triple is what makes a textual-MLIR backend
+      # defensible at all (Decision 2: textual MLIR is not a versioned
+      # interface, so the round trip IS the version test).
+      #
+      # `--require`, for the reason above: a golden job that skipped its
+      # two toolchain checks would report green having tested only its own
+      # printer, which is exactly the self-consistent-wrong shape the
+      # goldens were added to catch.
+      - name: MLIR golden suite (emit, verify, round-trip)
+        run: |
+          nix develop --no-pure-eval --accept-flake-config \
+            --profile "$HOME/.monad-ci-devshell" \
+            -c scripts/check-mlir-goldens.sh --require "$MONAD_CI_BIN"
 
   # Weaver's terminal suite, beside compiler-checks rather than inside it: it
   # was 28 of that job's 68 minutes (run 41624196650) and needs nothing from it

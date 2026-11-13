@@ -536,7 +536,13 @@ fi
 # `find` lists agree exactly" was a comment that a later edit could
 # falsify silently; a list built once cannot drift from itself. Biggest
 # first, which is the order `shard_files` wants.
-corpus_dirs=(init std sys examples lang codegen cli llvm runtime build eval motes slow_tests bench proofs)
+# `mlir` is in the corpus for the reason `llvm` is: it is a backend mote with
+# real `#[test]`s (the printer's dialect modules, the pipeline strings, the
+# golden byte comparisons), and a backend whose tests are never swept is a
+# backend that rots. It was ABSENT from this list while `fixtures/mlir` was
+# already in `check-fmt.sh`'s -- a gap that would have hidden every failure in
+# `mlir/src/tests/golden_tests.mo`.
+corpus_dirs=(init std sys examples lang codegen cli llvm mlir runtime build eval motes slow_tests bench proofs)
 corpus_sizes() {
   find "${corpus_dirs[@]}" -name '*.mo' -printf '%s\t%p\n' | sort -rn
 }

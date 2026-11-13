@@ -52,6 +52,7 @@ paths=(
   codegen
   cli
   llvm
+  mlir
   runtime
   build
   eval

@@ -31,6 +31,7 @@ members = [
   "codegen",
   "cli",
   "llvm",
+  "mlir",
   "runtime",
   "build",
   "eval",
@@ -121,6 +122,14 @@ path = "lang"
 [workspace.dependencies.llvm]
 path = "llvm"
 
+# `mlir` is a member for the same reason `llvm` is: it is a backend mote a
+# Phase 2+ `codegen` build depends on, not a consumer of the compiler. It
+# carries NO dependency edge from anything yet -- nothing imports `mlir`
+# until the kernel emitter lands -- so adding it here costs the sweeps one
+# more tree to check and nothing else.
+[workspace.dependencies.mlir]
+path = "mlir"
+
 [workspace.dependencies.log]
 path = "motes/log"
 
@@ -200,6 +209,20 @@ name = "bootstrap-next"
 path = "scripts/bootstrap_next.mo"
 
 [script-dependencies.bootstrap-next.clap]
+workspace = true
+
+# `mlir-goldens`: renders the `mlir` mote's golden modules to text, for
+# `scripts/check-mlir-goldens.sh` to diff against `fixtures/mlir/goldens/`.
+# It depends on NOTHING but `std` -- not even `clap` -- because its job is to
+# prove the emitter runs on a machine with no toolchain and no front end.
+[[script]]
+name = "mlir-goldens"
+path = "scripts/mlir_goldens.mo"
+
+# The one dependency: the mote whose modules it renders. A script's closure
+# is otherwise `std` plus whatever it names, and the mote is not a workspace
+# member of its own accord.
+[script-dependencies.mlir-goldens.mlir]
 workspace = true
 
 # Affine-by-default migration fallback (measured 2026-10-22). This is a

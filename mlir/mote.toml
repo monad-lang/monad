@@ -1,0 +1,38 @@
+# The MLIR backend's data model, its .mlir text rendering, and the
+# mlir-opt/mlir-translate/mlir-runner glue. Compiler-agnostic: nothing here
+# knows what a Monad term is.
+#
+# The one-way edge this mote sits on, and it is enforced rather than
+# intended: `mlir` must not depend on `codegen` OR `lang`. `codegen`
+# imports `mlir` (Phase 2 on), never the reverse -- the same shape
+# `llvm`/`codegen` already has, and `scripts/check-lang-no-codegen.sh`
+# guards the sibling edge. A `mlir` that could read a `Term` would make the
+# kernel emitter untestable without the front end, which is exactly what
+# Phase 1's acceptance ("the mote knows nothing about Monad terms") exists
+# to prevent.
+#
+# `std` for the external-tool glue (`Proc.capture`) and `init` for the
+# prelude, exactly like `llvm`. Nothing else: a dependency here is a
+# dependency of every Phase 2+ build.
+[mote]
+name = "mlir"
+version = "0.1.0"
+edition = "2026"
+
+[lib]
+path = "src/lib.mo"
+
+[dependencies.init]
+workspace = true
+
+[dependencies.std]
+workspace = true
+
+# NO `[affine] mode = "warn"` exception, deliberately, and it is the
+# strongest self-review this mote has: `monad check mlir` is clean at the
+# default `error` mode (verified 2026-11-13, 13 files, 0 errors, 0
+# warnings). The workspace root carries a warn exception for paths with no
+# manifest of their own; a mote that ADDED one here would be opting a new
+# codebase out of the rule it is cheapest to satisfy. Everything here is a
+# handful of pure renderers, where "each binder used at most once" costs a
+# destructuring pattern rather than a rewrite.
