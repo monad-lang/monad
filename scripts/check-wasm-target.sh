@@ -228,6 +228,20 @@ echo "== web: Command.batch / Command.after / Command.focus =="
     -o "$tmp/oak_timer.wasm" --no-cache
 node wasm/web/timer_smoke.mjs "$tmp/oak_timer.wasm"
 
+echo "== web: WebGL from Oak (Command.after_render, canvas fit, stub GL) =="
+# The view mounts a <canvas>; frames ask for setup/draw as after_render
+# effects. The stub records the GL stream; run once per context path.
+"$MONAD" build --target wasm32-unknown-unknown fixtures/wasm/oak_webgl.mo \
+    -o "$tmp/oak_webgl.wasm" --no-cache
+for mode in webgl2 webgl1 none; do
+    node wasm/web/webgl_smoke.mjs "$tmp/oak_webgl.wasm" "$mode"
+done
+
+echo "== web: WebGL textures (image begin/poll, texture state) =="
+"$MONAD" build --target wasm32-unknown-unknown fixtures/wasm/webgl_texture.mo \
+    -o "$tmp/webgl_texture.wasm" --no-cache
+node wasm/web/webgl_texture_smoke.mjs "$tmp/webgl_texture.wasm"
+
 echo "== web: render allocation guard (256 buttons, two handlers each) =="
 "$MONAD" build --target wasm32-unknown-unknown fixtures/wasm/oak_spa_alloc.mo \
     -o "$tmp/oak_spa_alloc.wasm" --no-cache
