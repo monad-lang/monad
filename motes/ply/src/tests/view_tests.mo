@@ -157,9 +157,18 @@ def vw_bg_is_selection (sh : Shared Screen) (row : I64) (col : I64) : Bool :=
     st.bg == sel.bg
 
 /// The cell carries no bg (a neighbor outside every selection).
+///
+/// THE DEFAULT STYLE IS BOUND TO A LOCAL FIRST, exactly as `vw_bg_is_selection`
+/// above binds `View.selection_style`: a projection straight off a cross-module
+/// def reference (`style_default.bg`) is the recorded `(f x).field` hazard, and
+/// the Rust host reads it as the qualified name `style_default.bg` and reports
+/// `unbound variable`. The self-hosted host lowers it, which is why only the
+/// Rust corpus check catches this shape -- the bound local is the remedy both
+/// hosts accept.
 def vw_bg_is_none (sh : Shared Screen) (row : I64) (col : I64) : Bool :=
     let st : TextStyle := vw_style sh row col in
-    st.bg == style_default.bg
+    let base : TextStyle := style_default in
+    st.bg == base.bg
 
 /// The cell is reverse video (the caret's block).
 def vw_reverse (sh : Shared Screen) (row : I64) (col : I64) : Bool :=
