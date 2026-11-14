@@ -31,11 +31,12 @@ def search_timeout_marker : String := "\n[search timed out after 30 s; command k
 def search_line_marker : String := "\n[output truncated at "
 def search_byte_marker : String := "\n[output truncated at "
 
-/// Spawn `timeout -k 5 30 sh -c SCRIPT sh A1 A2` (A1/A2 are `$1`/`$2`).
-def search_spawn (id : String) (script : String) (a1 : String) (a2 : String) : IO Content := do {
+/// Spawn `timeout -k 5 30 sh -c SCRIPT sh A1 A2 A3` (A1/A2/A3 are
+/// `$1`/`$2`/`$3`; grep leaves A3 empty).
+def search_spawn (id : String) (script : String) (a1 : String) (a2 : String) (a3 : String) : IO Content := do {
     let kill_after : String := (I64.to_string search_kill_after_s) ++ "s";
     let limit : String := (I64.to_string search_timeout_s) ++ "s";
-    let spawned <- Proc.spawn "timeout" ["-k", kill_after, limit, "sh", "-c", script, "sh", a1, a2];
+    let spawned <- Proc.spawn "timeout" ["-k", kill_after, limit, "sh", "-c", script, "sh", a1, a2, a3];
     match spawned {
         Result.err e => IO.pure (tool_err id (String.concat "search: could not spawn timeout: " e.message)),
         Result.ok child => search_read id child 0 "",
@@ -121,12 +122,34 @@ pub def grep_script : String :=
 /// Inside a git work tree, the tracked and untracked (not ignored) files
 /// whose base name matches `$1`; elsewhere `find` with the build
 /// directories pruned.
+///
+/// SYMLINKS. `$3` = 1 turns on `find -L` (the `follow_links` argument,
+/// default true); `$3` = 0 keeps the old `-P` walk. Following is bounded
+/// three ways because a link can point at its own ancestor: `-maxdepth`
+/// (`WEAVER_GLOB_MAXDEPTH`, default 24) caps the walk, GNU find detects a
+/// loop and skips it, and the 30 s `timeout` plus the line/byte caps stop
+/// a pathological tree. Inside a work tree `git ls-files` lists a
+/// symlinked directory as one entry and never descends, so a directory
+/// entry is walked explicitly with the same bounded `find -L`; the whole
+/// stream is deduped because a link's target may also be listed by path.
+///
+/// The walker is shell, not Monad code: `std` cannot tell a link from its
+/// target (`IO.is_dir` uses `stat`) and has no realpath, and `find -L`
+/// already implements the bound.
 pub def glob_script : String :=
     String.concat_list [
         "exec 2>&1; ",
+        "follow=''; if [ \"$3\" = 1 ]; then follow=-L; fi; ",
+        "depth=\"${WEAVER_GLOB_MAXDEPTH:-24}\"; ",
+        "walk() { find $follow \"$1\" -maxdepth \"$depth\" \\( -name .git -o -name 'target*' -o -name node_modules -o -name build \\) -prune -o -type f -name \"$2\" -print; }; ",
         "if [ \"$(git rev-parse --is-inside-work-tree 2>/dev/null)\" = true ] && files=$(git ls-files -co --exclude-standard -- \"$2\" 2>/dev/null); then ",
-        "printf '%s\\n' \"$files\" | while IFS= read -r f; do case \"${f##*/}\" in $1) [ -n \"$f\" ] && printf '%s\\n' \"$f\";; esac; done; exit 0; fi; ",
-        "exec find \"$2\" \\( -name .git -o -name 'target*' -o -name node_modules -o -name build \\) -prune -o -type f -name \"$1\" -print"
+        "top=$(git rev-parse --show-toplevel 2>/dev/null); [ -n \"$top\" ] && cd \"$top\"; ",
+        "printf '%s\\n' \"$files\" | while IFS= read -r f; do ",
+        "[ -z \"$f\" ] && continue; ",
+        "case \"${f##*/}\" in $1) printf '%s\\n' \"$f\";; esac; ",
+        "[ -n \"$follow\" ] && [ -d \"$f\" ] && walk \"$f\" \"$1\"; ",
+        "done | awk '!seen[$0]++'; exit 0; fi; ",
+        "walk \"$2\" \"$1\" | awk '!seen[$0]++'"
     ]
 
 pub def grep_run (id : String) (j : Json) : ResultT String IO Content :=
@@ -134,9 +157,24 @@ pub def grep_run (id : String) (j : Json) : ResultT String IO Content :=
         Result.err e => ResultT.mk (return (Result.ok (tool_err id e))),
         Result.ok args =>
             ResultT.mk (do {
-                let c <- search_spawn id grep_script args.pattern args.path;
+                let c <- search_spawn id grep_script args.pattern args.path "";
                 return (Result.ok c)
             }),
+    }
+
+/// An optional boolean key, read off the raw JSON: `follow_links` is not
+/// part of the all-required `GlobArgs` derive, the same shape as `read`'s
+/// `offset`/`limit`.
+def bool_of_key (key : String) (j : Json) : Option Bool :=
+    match Json.get_object j {
+        Result.err _ => Option.none,
+        Result.ok o => match Json.object_get key o {
+            Option.none => Option.none,
+            Option.some v => match Json.get_bool v {
+                Result.ok b => Option.some b,
+                Result.err _ => Option.none,
+            },
+        },
     }
 
 pub def glob_run (id : String) (j : Json) : ResultT String IO Content :=
@@ -144,7 +182,11 @@ pub def glob_run (id : String) (j : Json) : ResultT String IO Content :=
         Result.err e => ResultT.mk (return (Result.ok (tool_err id e))),
         Result.ok args =>
             ResultT.mk (do {
-                let c <- search_spawn id glob_script args.pattern args.path;
+                let follow : String := match bool_of_key "follow_links" j {
+                    Option.none => "1",
+                    Option.some b => if b then "1" else "0",
+                };
+                let c <- search_spawn id glob_script args.pattern args.path follow;
                 return (Result.ok c)
             }),
     }

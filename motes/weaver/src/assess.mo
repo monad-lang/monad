@@ -3,7 +3,10 @@
 /// tokenized (`shell_words.mo`) and every
 /// path-like word, `cd` target and redirect target is resolved against the
 /// working directory. Lexical, like `Permissions.within`: no symlinks are
-/// followed and nothing runs.
+/// followed and nothing runs. The one exception is inside a tool's own
+/// walk: `glob` follows symlinks (bounded), so its RESULTS may name paths
+/// outside the workspace while the pick itself is still judged by its
+/// lexical `path`.
 use shuttle::gate {Pick, Capability}
 use json::json {Json, Json.get_object, Json.object_get, Json.get_str}
 use std::path {Path, Path.of, Path.to_string, Path.beq}

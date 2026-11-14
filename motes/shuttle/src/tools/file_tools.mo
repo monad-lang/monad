@@ -39,6 +39,11 @@ def pair_fst (p : Pair String Json) : Json := Json.make_str (match p { Pair.pair
 def int_prop (name : String) (desc : String) : Pair String Json :=
     Pair.pair name (Json.make_object (Map.insert "type" (Json.make_str "integer") (Map.insert "description" (Json.make_str desc) BTreeMap.empty)))
 
+/// One boolean parameter, for a tool that reads it from the raw JSON
+/// (an optional argument does not ride the all-required derive).
+pub def bool_param (name : String) (desc : String) : Pair String Json :=
+    Pair.pair name (Json.make_object (Map.insert "type" (Json.make_str "boolean") (Map.insert "description" (Json.make_str desc) BTreeMap.empty)))
+
 def read_params : List (Pair String Json) :=
     [str_param "path" "Absolute path of the file to read",
         int_prop "offset" "First line to show, 1-based (default 1).",

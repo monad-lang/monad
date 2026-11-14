@@ -4,7 +4,7 @@
 use shuttle::tool {ToolSpec, ToolImpl}
 use shuttle::gate {Capability}
 use shuttle::tools::search {grep_run, glob_run}
-use shuttle::tools::file_tools {params_schema, str_param}
+use shuttle::tools::file_tools {params_schema, str_param, bool_param}
 use json::json {Json}
 
 /// Both tools declare their `{pattern, path}` arguments for real:
@@ -25,10 +25,12 @@ pub def GrepTool.impl : ToolImpl :=
     { spec := GrepTool.spec, cap := Capability.read, run := grep_run }
 
 def glob_params : List (Pair String Json) :=
-    [str_param "pattern" "Glob pattern for file names", str_param "path" "Absolute path of the directory to search"]
+    [str_param "pattern" "Glob pattern for file names",
+        str_param "path" "Absolute path of the directory to search",
+        bool_param "follow_links" "Follow symlinks (default true). The walk is depth-bounded and loop-safe; pass false to see only real files and directories."]
 
 pub def GlobTool.spec : ToolSpec :=
-    { name := "glob", description := "Find files by name pattern.", schema := params_schema glob_params }
+    { name := "glob", description := "Find files by name pattern. Follows symlinks by default, within a bounded depth and with loops detected; pass follow_links=false to stay on real paths.", schema := params_schema glob_params }
 
 pub def GlobTool.impl : ToolImpl :=
     { spec := GlobTool.spec, cap := Capability.read, run := glob_run }

@@ -13,7 +13,9 @@
 /// The repo scope is LEXICAL, not a sandbox: `..` is normalized before
 /// the prefix test, but symlinks are not resolved and the tools still
 /// receive the model's path verbatim. It scopes the approval prompt, not
-/// the file system.
+/// the file system. In particular `glob` now FOLLOWS symlinks (bounded by
+/// depth and loop detection), so a link inside the repo can make it list
+/// paths outside it; the pick is still classified by its lexical `path`.
 use shuttle::gate {Capability, Capability.eq}
 use std::ref {Ref}
 use std::path {Path, Path.to_string}
