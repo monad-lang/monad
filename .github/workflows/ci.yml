@@ -113,14 +113,27 @@ env:
 #
 # `compiler-checks` ENDS at the formatting gate. The suites that used to run
 # after it, one by one in the same job -- clap/monadup, SQL, the web stack, the
-# docs site, the REPL, the WASM proof, the TSAN stress -- are seven jobs that
-# `need` it and run side by side once it is green. Unlike `weaver-checks`, they
-# keep the gate in front: the self-compile, `check cli` and the formatting
-# verdict still decide whether any of them runs. What changes is that the tail
-# is no longer serial. They do not self-compile again: `compiler-checks` builds
-# `.#monad` (this tree's compiler, hosted by the pinned nightly -- nix/monad.nix)
-# and pushes it, and each consumer realizes the same path through
-# `.github/actions/tree-compiler`, which exports MONAD_CI_BIN. Two limits:
+# docs site, the REPL, the WASM proof, the TSAN stress, and weaver's terminal
+# suite -- are jobs that `need` it and run side by side once it is green, each
+# keeping the gate in front: the self-compile, `check cli` and the formatting
+# verdict still decide whether any of them runs. What changed is that the tail
+# is no longer serial. None of them self-compiles again: `compiler-checks`
+# builds `.#monad` (this tree's compiler, hosted by the pinned nightly --
+# nix/monad.nix) and pushes it, and each consumer realizes the same path
+# through `.github/actions/tree-compiler`, which exports MONAD_CI_BIN.
+#
+# `weaver-checks` was the last exception: it self-compiled with the latest
+# nightly so it could run beside `compiler-checks`. That bought parallelism and
+# cost a second full compiler build of the same tree, hosted by a nightly that
+# can lag this branch -- the same stale-input failure the old caveat below
+# named. Run 43438794724 spent 51m25s of its 60-minute guard that way (12m12s
+# self-compile + 29m38s release build, versus 2m40s + 7m10s uncontended).
+# It now waits for the tree compiler like the rest; one build, one pinned host.
+# The job keeps a 75-minute guard (the contended build plus a quiet suite fits
+# with headroom) and scripts/ci-weaver-pty.sh carries a per-phase watchdog so
+# a stall names its phase instead of consuming that guard.
+#
+# Two limits of the shared tree compiler:
 #
 #   * The runners are untrusted Nix users, so they do not READ the flake's
 #     cachix substituter (the push serves the Tangled microVMs and trusted
@@ -134,6 +147,7 @@ env:
 #   * `.#monad` is hosted by the PINNED nightly (nix/nightly.nix), not the
 #     latest one `ci-self-compile.sh` installs, so a stale pin fails these
 #     jobs as well as the release -- AGENTS.md's "keep the pin fresh".
+
 jobs:
   # Decides whether the job below has anything to do. Answers over outputs
   # because the gates below read them. `fetch-depth: 0` because the classifier
@@ -629,38 +643,37 @@ jobs:
             --profile "$HOME/.monad-ci-devshell" \
             -c scripts/check-mlir-goldens.sh --require "$MONAD_CI_BIN"
 
-  # Weaver's terminal suite, beside compiler-checks rather than inside it: it
-  # was 28 of that job's 68 minutes (run 41624196650) and needs nothing from it
-  # but a compiler built from this tree, which this job builds itself with the
-  # nightly. The build skips the built binary's `check cli` (compiler-checks
-  # owns that verdict). The suite is ONE test file, motes/weaver/test/pty_tests.mo,
-  # over the drivers in weaver::pty::*: a file per driver paid a ~60 s compile
-  # each for a few seconds of terminal time.
+  # Weaver's terminal suite, its own job because it was 28 of compiler-checks'
+  # 68 minutes (run 41624196650). It realizes the same `.#monad` every other
+  # post-format job does through `.github/actions/tree-compiler`; building a
+  # second compiler from the latest nightly here is what this job used to do,
+  # and what run 43438794724's 51m25s was spent on (see the header). The pty
+  # script's own phase watchdog (build 35 min, suite 30 min) sits under the
+  # step timeout, so a stall names its phase instead of the job guard. The
+  # suite is ONE test file, motes/weaver/test/pty_tests.mo, over the drivers in
+  # weaver::pty::*: a file per driver paid a ~60 s compile each for a few
+  # seconds of terminal time.
   weaver-checks:
     runs-on: [self-hosted, linux, monad-heavy]
-    needs: changes
+    needs: [changes, compiler-checks]
     if: needs.changes.outputs.compiler == 'true'
     timeout-minutes: 90
     steps:
-      # Full history for ci-self-compile.sh's nightly-floor check, as in
-      # compiler-checks.
       - uses: actions/checkout@v5
-        with:
-          fetch-depth: 0
 
-      - name: Self-compile with the latest nightly
-        run: |
-          nix develop --no-pure-eval --accept-flake-config \
-            --profile "$HOME/.monad-ci-devshell" \
-            -c env CI_SELF_COMPILE_BUILD_ONLY=1 scripts/ci-self-compile.sh
+      - uses: ./.github/actions/tree-compiler
+        timeout-minutes: 15
 
       # The release weaver built by this commit's compiler, then the pty
-      # drivers against it (compiled-only `#[extern "c"]` pty FFI).
+      # drivers against it (compiled-only `#[extern "c"]` pty FFI). The 55
+      # covers a contended build (29m38s in run 43438794724) plus a quiet
+      # suite; each phase has its own watchdog inside the script.
       - name: Weaver terminal tests
+        timeout-minutes: 55
         run: |
           nix develop --no-pure-eval --accept-flake-config \
             --profile "$HOME/.monad-ci-devshell" \
-            -c env MONAD_BIN="$PWD/target-monad/ci-self-compile/monad" \
+            -c env MONAD_BIN="$MONAD_CI_BIN" \
                  scripts/ci-weaver-pty.sh
 
   # The portable monadup binary and the distribution harness: the bootstrap
