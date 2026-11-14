@@ -48,18 +48,18 @@ pub struct RxResult {
 // ─── Cursor ───
 
 pub def cursor_start (bytes : List U8) : RxCursor :=
-    let c : RxCursor := { rest := bytes, pos := 0, prev := 0 - 1, prev_word := false } in c
+    let c : RxCursor := { rest := bytes, pos := 0, prev := -1, prev_word := false } in c
 
 def head_byte (xs : List U8) : I64 :=
     match xs {
         List.cons b _ => U8.to_i64 b,
-        List.empty => 0 - 1,
+        List.empty => -1,
     }
 
 #[terminating]
 def byte_at (xs : List U8) (n : I64) : I64 :=
     match xs {
-        List.empty => 0 - 1,
+        List.empty => -1,
         List.cons b rest => if I64.beq n 0 then U8.to_i64 b else byte_at rest (n - 1),
     }
 
@@ -68,26 +68,26 @@ def is_cont (b : I64) : Bool := I64.lt 127 b && I64.lt b 192
 /// The scalar starting at the head of `xs`, or -1 if it is not valid UTF-8.
 pub def decode_head (xs : List U8) : I64 :=
     let b0 : I64 := head_byte xs in
-    if I64.lt b0 0 then 0 - 1
+    if I64.lt b0 0 then -1
     else if I64.lt b0 128 then b0
-    else if I64.lt b0 194 then 0 - 1
+    else if I64.lt b0 194 then -1
     else if I64.lt b0 224 then dec2 (I64.and b0 31) (byte_at xs 1)
     else if I64.lt b0 240 then dec3 (I64.and b0 15) (byte_at xs 1) (byte_at xs 2)
     else if I64.lt b0 245 then dec4 (I64.and b0 7) (byte_at xs 1) (byte_at xs 2) (byte_at xs 3)
-    else 0 - 1
+    else -1
 
 def dec2 (h : I64) (c1 : I64) : I64 :=
-    if is_cont c1 then I64.or (I64.shl h 6) (I64.and c1 63) else 0 - 1
+    if is_cont c1 then I64.or (I64.shl h 6) (I64.and c1 63) else -1
 
 def dec3 (h : I64) (c1 : I64) (c2 : I64) : I64 :=
     if is_cont c1 && is_cont c2 then
         I64.or (I64.shl h 12) (I64.or (I64.shl (I64.and c1 63) 6) (I64.and c2 63))
-    else 0 - 1
+    else -1
 
 def dec4 (h : I64) (c1 : I64) (c2 : I64) (c3 : I64) : I64 :=
     if is_cont c1 && is_cont c2 && is_cont c3 then
         I64.or (I64.shl h 18) (I64.or (I64.shl (I64.and c1 63) 12) (I64.or (I64.shl (I64.and c2 63) 6) (I64.and c3 63)))
-    else 0 - 1
+    else -1
 
 /// Binary search over the word ranges.
 pub def is_word_scalar (w : RxWords) (c : I64) : Bool :=
@@ -98,7 +98,7 @@ def word_search (t : RxTable (Pair I64 I64)) (c : I64) (lo : I64) (hi : I64) : B
     if I64.lt hi lo then false
     else
         let mid : I64 := I64.div (lo + hi) 2 in
-        let r : Pair I64 I64 := table_get t mid (Pair.pair 0 (0 - 1)) in
+        let r : Pair I64 I64 := table_get t mid (Pair.pair 0 (-1)) in
         if I64.lt c r.first then word_search t c lo (mid - 1)
         else if I64.lt r.second c then word_search t c (mid + 1) hi
         else true
@@ -113,12 +113,29 @@ pub def cursor_advance (needs_word : Bool) (w : RxWords) (c : RxCursor) : RxCurs
             let word : Bool :=
                 if needs_word && Bool.not (is_cont byte) then is_word_scalar w (decode_head c.rest)
                 else c.prev_word in
-            let n : RxCursor := { rest := more, pos := c.pos + 1, prev := byte, prev_word := word } in n,
+            let n : RxCursor := { rest := more, pos := I64.add c.pos 1, prev := byte, prev_word := word } in n,
     }
 
 #[terminating]
 pub def cursor_skip (needs_word : Bool) (w : RxWords) (c : RxCursor) (n : I64) : RxCursor :=
-    if I64.lt 0 n && Bool.not (List.is_empty c.rest) then cursor_skip needs_word w (cursor_advance needs_word w c) (n - 1)
+    if needs_word then skip_words w c n else skip_bytes c.rest c.pos c.prev n
+
+/// Without `\b` only the previous byte is tracked, so one cursor is built
+/// at the end rather than one per byte.
+#[terminating]
+def skip_bytes (rest : List U8) (pos : I64) (prev : I64) (n : I64) : RxCursor :=
+    match rest {
+        List.cons b more =>
+            if I64.lt 0 n then skip_bytes more (I64.add pos 1) (U8.to_i64 b) (I64.sub n 1)
+            else
+                let c : RxCursor := { rest := List.cons b more, pos := pos, prev := prev, prev_word := false } in c,
+        List.empty =>
+            let c : RxCursor := { rest := List.empty, pos := pos, prev := prev, prev_word := false } in c,
+    }
+
+#[terminating]
+def skip_words (w : RxWords) (c : RxCursor) (n : I64) : RxCursor :=
+    if I64.lt 0 n && Bool.not (List.is_empty c.rest) then skip_words w (cursor_advance true w c) (I64.sub n 1)
     else c
 
 // ─── Assertions ───
@@ -217,7 +234,7 @@ def run (prog : RxProg) (w : RxWords) (nslots : I64) (earliest : Bool) (anchored
     let seeded : RxClosure :=
         match matched {
             Option.none =>
-                if seed then closure prog w c nslots [thread prog.start (Array.new nslots (0 - 1))] acc else acc,
+                if seed then closure prog w c nslots [thread prog.start (Array.new nslots (-1))] acc else acc,
             Option.some _ => acc,
         } in
     let clist : List RxThread := List.reverse seeded.out in

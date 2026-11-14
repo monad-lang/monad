@@ -15,7 +15,7 @@ use lib::hir {RxHir, hir_reverse}
 use lib::nfa {RxProg, compile_prog, estimate}
 use lib::literal {hir_literals, literals_mask, hir_first_bytes, mask_full, hir_max_len, hir_dfa_ok}
 use lib::prefilter {scan_literals}
-use lib::dfa::lazy {RxDfa, RxDfaCache, RxDfaRun, dfa_cache_new, dfa_forward, dfa_reverse, dfa_cache_gave_up, dfa_cache_clears}
+use lib::dfa::lazy {RxDfa, dfa_new, RxDfaCache, RxDfaRun, dfa_cache_new, dfa_forward, dfa_reverse, dfa_cache_gave_up, dfa_cache_clears}
 use lib::pikevm {RxCursor, RxWords, RxResult, search, search_anchored, cursor_skip}
 use std::array {Array}
 use std::list {}
@@ -72,8 +72,8 @@ def dfa_strategy (h : RxHir) (prog : RxProg) (limit : I64) (cache_limit : I64) :
     let rh : RxHir := hir_reverse h in
     if I64.lt limit (estimate rh limit) then RxStrategy.strat_pike
     else
-        let fwd : RxDfa := { prog := prog, cut := true, limit := cache_limit } in
-        let rev : RxDfa := { prog := compile_prog rh 0, cut := false, limit := cache_limit } in
+        let fwd : RxDfa := dfa_new prog true cache_limit in
+        let rev : RxDfa := dfa_new (compile_prog rh 0) false cache_limit in
         let mask : Option (Array I64) :=
             match hir_first_bytes h {
                 Option.some m => if mask_full m then Option.none else Option.some m,
@@ -142,7 +142,7 @@ def dfa_start (rev : RxDfa) (max_len : Option I64) (prog : RxProg) (w : RxWords)
 def drop_bytes (xs : List U8) (n : I64) : List U8 :=
     if I64.lt 0 n then
         match xs {
-            List.cons _ rest => drop_bytes rest (n - 1),
+            List.cons _ rest => drop_bytes rest (I64.sub n 1),
             List.empty => xs,
         }
     else xs
@@ -152,7 +152,7 @@ def drop_bytes (xs : List U8) (n : I64) : List U8 :=
 def rev_take (xs : List U8) (n : I64) (acc : List U8) : List U8 :=
     if I64.lt 0 n then
         match xs {
-            List.cons b rest => rev_take rest (n - 1) (List.cons b acc),
+            List.cons b rest => rev_take rest (I64.sub n 1) (List.cons b acc),
             List.empty => acc,
         }
     else acc
@@ -189,7 +189,7 @@ def dfa_is_match (fwd : RxDfa) (mask : Option (Array I64)) (prog : RxProg) (w : 
     let f : RxDfaRun := dfa_forward fwd cache.fwd c.rest c.pos mask true in
     let cache2 : Cache := { cache with fwd := f.cache } in
     if f.quit then Pair.pair (pike_is_match prog w c) cache2
-    else Pair.pair (I64.lt (0 - 1) f.found) cache2
+    else Pair.pair (I64.lt (-1) f.found) cache2
 
 /// A search's capture slots and the cache to reuse.
 pub struct RxFoundSlots {

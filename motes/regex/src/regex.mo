@@ -139,7 +139,7 @@ def run_at (r : Regex) (c : RxCursor) (nslots : I64) : Option (Array I64) :=
 /// `r` with every search pinned to one engine (the differential tests).
 def Regex.with_engine (r : Regex) (eng : RxEngine) : Regex := { r with engine := eng }
 
-def slot (slots : Array I64) (i : I64) : I64 := Array.get_or slots i (0 - 1)
+def slot (slots : Array I64) (i : I64) : I64 := Array.get_or slots i (-1)
 
 def match_of (s : String) (slots : Array I64) : Match :=
     let m : Match := { haystack := s, start := slot slots 0, end := slot slots 1 } in m
@@ -228,7 +228,7 @@ def group_text (c : Captures) (i : I64) : String :=
 /// position and never splits a scalar.
 /// One cache serves the whole iteration.
 def all_slots (r : Regex) (s : String) (nslots : I64) : List (Array I64) :=
-    List.reverse (iter_go r nslots r.fresh (cursor_start (String.to_list s)) (0 - 1) List.empty)
+    List.reverse (iter_go r nslots r.fresh (cursor_start (String.to_list s)) (-1) List.empty)
 
 #[terminating]
 def iter_go (r : Regex) (nslots : I64) (cache : Cache) (c : RxCursor) (last_end : I64) (acc : List (Array I64)) : List (Array I64) :=
@@ -290,7 +290,7 @@ def expand_go (c : Captures) (xs : List U8) (lit : List U8) (acc : List String) 
 /// After a `$` (already pushed onto `lit` in case it is literal).
 #[terminating]
 def expand_dollar (c : Captures) (xs : List U8) (lit : List U8) (acc : List String) : List String :=
-    let b : I64 := match xs { List.cons x _ => U8.to_i64 x, List.empty => 0 - 1 } in
+    let b : I64 := match xs { List.cons x _ => U8.to_i64 x, List.empty => -1 } in
     if I64.beq b 36 then expand_go c (drop1 xs) lit acc
     else if I64.beq b 123 then
         match take_braced (drop1 xs) List.empty {
@@ -386,7 +386,7 @@ def splice_go (s : String) (cs : List Captures) (f : Captures -> String) (last :
 
 /// The text between matches, including empty pieces and a trailing one.
 pub def Regex.split (r : Regex) (s : String) : List String :=
-    pieces s (Regex.find_all r s) (0 - 1)
+    pieces s (Regex.find_all r s) (-1)
 
 /// At most `limit` pieces; the last is the rest of the text.
 pub def Regex.splitn (r : Regex) (s : String) (limit : I64) : List String :=

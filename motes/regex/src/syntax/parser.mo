@@ -73,13 +73,13 @@ def finish_top (ast : RxAst) (p : RxP) : Result RegexError RxParsed :=
 def ch (s : String) : I64 :=
     match String.get s 0 {
         Option.some b => U8.to_i64 b,
-        Option.none => 0 - 1,
+        Option.none => -1,
     }
 
 #[terminating]
 def byte_at (xs : List U8) (n : I64) : I64 :=
     match xs {
-        List.empty => 0 - 1,
+        List.empty => -1,
         List.cons b rest => if I64.beq n 0 then U8.to_i64 b else byte_at rest (n - 1),
     }
 
@@ -163,7 +163,7 @@ def decoded (cp : I64) (width : I64) : RxDecoded :=
 
 def cont (xs : List U8) (n : I64) : I64 :=
     let b : I64 := byte_at xs n in
-    if I64.lt 127 b && I64.lt b 192 then I64.and b 63 else 0 - 1
+    if I64.lt 127 b && I64.lt b 192 then I64.and b 63 else -1
 
 def decode (xs : List U8) : RxDecoded :=
     let b0 : I64 := byte_at xs 0 in
@@ -437,7 +437,7 @@ def hex_digit (c : I64) : I64 :=
     if is_digit c then c - 48
     else if I64.lt 96 c && I64.lt c 103 then c - 87
     else if I64.lt 64 c && I64.lt c 71 then c - 55
-    else 0 - 1
+    else -1
 
 /// After `\x`/`\u`/`\U`: exactly `width` hex digits, or `{1-8 digits}`.
 def parse_hex (start : I64) (width : I64) (p : RxP) : RxStep RxEsc :=

@@ -21,7 +21,7 @@ pub def skip_to_mask (mask : Array I64) (rest : List U8) (pos : I64) : RxSkip :=
         List.cons b more =>
             if mask_has mask (U8.to_i64 b) then
                 let s : RxSkip := { rest := List.cons b more, pos := pos } in s
-            else skip_to_mask mask more (pos + 1),
+            else skip_to_mask mask more (I64.add pos 1),
     }
 
 /// The leftmost-first literal match from `pos` on: at each position the
@@ -34,7 +34,7 @@ pub def scan_literals (lits : List (List I64)) (mask : Array I64) (rest : List U
         List.cons _ more =>
             match first_at lits s.rest {
                 Option.some n => Option.some (Pair.pair s.pos (s.pos + n)),
-                Option.none => scan_literals lits mask more (s.pos + 1),
+                Option.none => scan_literals lits mask more (I64.add s.pos 1),
             },
     }
 

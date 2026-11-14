@@ -46,7 +46,12 @@ pub struct RxDfa {
     cut : Bool,
     /// The cache's byte budget.
     limit : I64,
+    /// `table_get`'s fallback, built once rather than per search.
+    dead : RxDState,
 }
+
+pub def dfa_new (prog : RxProg) (cut : Bool) (limit : I64) : RxDfa :=
+    let d : RxDfa := { prog := prog, cut := cut, limit := limit, dead := dead_state } in d
 
 pub struct RxDState {
     pcs : List I64,
@@ -84,7 +89,7 @@ pub def dfa_cache_new (clears : I64) : RxDfaCache :=
     let c : RxDfaCache := {
         states := table_of_list [dead_state],
         buckets := table_of_list (empty_buckets nbuckets List.empty),
-        starts := Array.new 4 (0 - 1),
+        starts := Array.new 4 (-1),
         bytes := 0,
         clears := clears,
         gave_up := false,
@@ -197,7 +202,7 @@ def pcs_eq (a : List I64) (b : List I64) : Bool :=
 #[terminating]
 def bucket_find (bucket : List RxDKey) (pcs : List I64) : I64 :=
     match bucket {
-        List.empty => 0 - 1,
+        List.empty => -1,
         List.cons k rest => if pcs_eq k.pcs pcs then k.id else bucket_find rest pcs,
     }
 
@@ -230,7 +235,7 @@ def intern (d : RxDfa) (cache : RxDfaCache) (dc : RxDc) : RxIntern :=
 
 def insert (d : RxDfa) (cache : RxDfaCache) (pcs : List I64) (is_match : Bool) (bi : I64) (cost : I64) : Pair I64 RxDfaCache :=
     let id : I64 := table_len cache.states in
-    let st : RxDState := { pcs := pcs, is_match := is_match, trans := Array.new d.prog.nclasses (0 - 1) } in
+    let st : RxDState := { pcs := pcs, is_match := is_match, trans := Array.new d.prog.nclasses (-1) } in
     let key : RxDKey := { pcs := pcs, id := id } in
     let c2 : RxDfaCache := {
         cache with
@@ -244,7 +249,7 @@ def insert (d : RxDfa) (cache : RxDfaCache) (pcs : List I64) (is_match : Bool) (
 /// says whether `\A` holds where the search begins.
 def start_state (d : RxDfa) (cache : RxDfaCache) (anchored : Bool) (at_start : Bool) : RxIntern :=
     let slot : I64 := (if anchored then 2 else 0) + (if at_start then 1 else 0) in
-    let known : I64 := Array.get_or cache.starts slot (0 - 1) in
+    let known : I64 := Array.get_or cache.starts slot (-1) in
     if I64.lt known 0 then
         let stack : List I64 := if anchored then [d.prog.start] else [d.prog.start, restart_pc] in
         match intern d cache (dclosure d at_start false stack (fresh_dc d)) {
@@ -294,7 +299,7 @@ def finish (found : I64) (at_eoi : Bool) (cache : RxDfaCache) : RxDfaRun :=
     let r : RxDfaRun := { found := found, quit := false, at_eoi := at_eoi, cache := cache } in r
 
 def quit_run (cache : RxDfaCache) : RxDfaRun :=
-    let r : RxDfaRun := { found := 0 - 1, quit := true, at_eoi := false, cache := cache } in r
+    let r : RxDfaRun := { found := -1, quit := true, at_eoi := false, cache := cache } in r
 
 def skippable (x : RxScan) (b : I64) : Bool :=
     match x.mask {
@@ -315,7 +320,7 @@ def eoi_match (x : RxScan) (st : RxDState) (pos : I64) : Bool :=
 def scan_go (x : RxScan) (cache : RxDfaCache) (sid : I64) (start_id : I64) (rest : List U8) (pos : I64) (last : I64) : RxDfaRun :=
     if I64.beq sid 0 then finish last false cache
     else
-        let st : RxDState := table_get cache.states sid dead_state in
+        let st : RxDState := table_get cache.states sid x.dfa.dead in
         let last2 : I64 := if st.is_match then pos else last in
         if st.is_match && x.earliest then finish pos false cache
         else
@@ -328,20 +333,20 @@ def scan_go (x : RxScan) (cache : RxDfaCache) (sid : I64) (start_id : I64) (rest
                     if I64.beq sid start_id && skippable x byte then
                         match x.mask {
                             Option.some m =>
-                                let s : RxSkip := skip_to_mask m more (pos + 1) in
+                                let s : RxSkip := skip_to_mask m more (I64.add pos 1) in
                                 scan_go x cache sid start_id s.rest s.pos last2,
-                            Option.none => scan_go x cache sid start_id more (pos + 1) last2,
+                            Option.none => scan_go x cache sid start_id more (I64.add pos 1) last2,
                         }
                     else
                         let cls : I64 := Array.get_or x.dfa.prog.classes byte 0 in
-                        let t : I64 := Array.get_or st.trans cls (0 - 1) in
+                        let t : I64 := Array.get_or st.trans cls (-1) in
                         if I64.lt t 0 then
                             match fill x.dfa cache sid st byte cls {
                                 RxIntern.interned id c2 cleared =>
-                                    scan_go x c2 id (if cleared then 0 - 1 else start_id) more (pos + x.dir) last2,
+                                    scan_go x c2 id (if cleared then -1 else start_id) more (I64.add pos x.dir) last2,
                                 RxIntern.intern_quit c2 => quit_run c2,
                             }
-                        else scan_go x cache t start_id more (pos + x.dir) last2,
+                        else scan_go x cache t start_id more (I64.add pos x.dir) last2,
             }
 
 /// The end of the leftmost-first match from `pos` on, unanchored.
@@ -358,7 +363,7 @@ pub def dfa_forward (d : RxDfa) (cache : RxDfaCache) (rest : List U8) (pos : I64
             RxIntern.interned sid c1 _ =>
                 match mask {
                     Option.some _ => forward_with_filter x c1 sid rest pos,
-                    Option.none => scan_go x c1 sid (0 - 1) rest pos (0 - 1),
+                    Option.none => scan_go x c1 sid (-1) rest pos (-1),
                 },
             RxIntern.intern_quit c1 => quit_run c1,
         }
@@ -370,10 +375,10 @@ def forward_with_filter (x : RxScan) (cache : RxDfaCache) (sid : I64) (rest : Li
         RxIntern.interned start_id c2 cleared =>
             if cleared then
                 match start_state x.dfa c2 false x.start_ok {
-                    RxIntern.interned sid2 c3 _ => scan_go x c3 sid2 (0 - 1) rest pos (0 - 1),
+                    RxIntern.interned sid2 c3 _ => scan_go x c3 sid2 (-1) rest pos (-1),
                     RxIntern.intern_quit c3 => quit_run c3,
                 }
-            else scan_go x c2 sid start_id rest pos (0 - 1),
+            else scan_go x c2 sid start_id rest pos (-1),
         RxIntern.intern_quit c2 => quit_run c2,
     }
 
@@ -385,10 +390,10 @@ pub def dfa_reverse (d : RxDfa) (cache : RxDfaCache) (rev : List U8) (end_pos : 
     if cache.gave_up then quit_run cache
     else
         let x : RxScan := {
-            dfa := d, dir := 0 - 1, earliest := false, mask := Option.none, eoi_ok := eoi_ok,
+            dfa := d, dir := -1, earliest := false, mask := Option.none, eoi_ok := eoi_ok,
             start_ok := start_ok, start_pos := end_pos,
         } in
         match start_state d cache true start_ok {
-            RxIntern.interned sid c1 _ => scan_go x c1 sid (0 - 1) rev end_pos (0 - 1),
+            RxIntern.interned sid c1 _ => scan_go x c1 sid (-1) rev end_pos (-1),
             RxIntern.intern_quit c1 => quit_run c1,
         }

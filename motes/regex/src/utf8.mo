@@ -8,7 +8,7 @@
 /// decode.
 use std::list {}
 
-def not_mask (m : I64) : I64 := I64.xor m (0 - 1)
+def not_mask (m : I64) : I64 := I64.xor m (-1)
 
 /// The UTF-8 bytes of a scalar value, as `I64`s.
 pub def encode_scalar (c : I64) : List I64 :=

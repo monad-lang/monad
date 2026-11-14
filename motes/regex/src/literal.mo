@@ -90,8 +90,8 @@ pub def mask_add_range (m : Array I64) (lo : I64) (hi : I64) : Array I64 :=
 
 /// Whether every byte is in the set, which makes it useless as a filter.
 pub def mask_full (m : Array I64) : Bool :=
-    I64.beq (Array.get_or m 0 0) (0 - 1) && I64.beq (Array.get_or m 1 0) (0 - 1)
-        && I64.beq (Array.get_or m 2 0) (0 - 1) && I64.beq (Array.get_or m 3 0) (0 - 1)
+    I64.beq (Array.get_or m 0 0) (-1) && I64.beq (Array.get_or m 1 0) (-1)
+        && I64.beq (Array.get_or m 2 0) (-1) && I64.beq (Array.get_or m 3 0) (-1)
 
 /// The first bytes of a literal set.
 pub def literals_mask (lits : List (List I64)) : Array I64 := lits_mask lits mask_empty
