@@ -27,7 +27,7 @@ lines_over_120	3951
 raw_string_lines	5913
 std_duplicate_defs	11
 partial_attrs	14197
-partial_attr_no_self_call	12297
+partial_attr_no_self_call	12299
 list_cons_sites	6489
 list_cons_terminated_lines	1453
 list_cons_chain_depth2plus	298

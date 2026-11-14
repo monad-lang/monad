@@ -1,5 +1,6 @@
 use lib::core_ir {CoreIr, IrLit}
 use lang::types {Identifier, ModulePath, i64}
+use std::array {Array, Array.get, Array.length, Array.new, Array.set}
 use std::list {}
 
 /// `Value`/`Env` — the runtime representation the closure-based evaluator
@@ -42,6 +43,11 @@ use std::list {}
 pub type Env {
     env_nil,
     env_cons (v : Value) (rest : Env),
+    /// A match arm's constructor fields, in declaration order, sharing the
+    /// scrutinee's own `args` list. `count` is its length; `local 0` is the
+    /// LAST declared field, matching the old one-`env_cons`-per-field push
+    /// order. One node replaces `count` cons cells.
+    env_frame (count : I64) (vals : List Value) (rest : Env),
 }
 
 /// A runtime value. Distinct from `CoreIr` (the compiled syntax it's
@@ -73,6 +79,10 @@ def env_get (env : Env) (idx : I64) : Option Value :=
             if I64.beq idx 0
             then Option.some v
             else env_get rest (idx - 1),
+        Env.env_frame count vals rest =>
+            if I64.lt idx count
+            then List.get (I64.sub (I64.sub count 1) idx) vals
+            else env_get rest (I64.sub idx count),
     }
 
 // ─── Global table: a read-only view over a whole-program's global slots ─
@@ -159,6 +169,11 @@ def slot_is_in_progress (slot : CacheSlot) : Bool :=
 /// in place: every "mutating" operation below returns a new `GlobalCache`
 /// value (see this module's doc comment).
 ///
+/// `slots` is an `Array`, not a `List`: every `CoreIr.global` node reads it
+/// first, so a list walk made each global reference O(cache index). Reads
+/// are now O(1). `Array.set` copies the whole array, but a store happens at
+/// most once per forced global, while reads happen per reference.
+///
 /// `fuel` is the evaluator's step budget. It rides the cache because the
 /// cache is the one value every `eval` recursion already threads and
 /// returns; `lang/core_eval.mo` burns it once per IR node. `-1` is
@@ -174,7 +189,7 @@ def slot_is_in_progress (slot : CacheSlot) : Bool :=
 /// (compiling shuttle's derives tripped a 200 cap), and a native stack is
 /// not the constraint there.
 type GlobalCache {
-    global_cache (slots : List CacheSlot) (fuel : I64) (depth : I64) (depth_limit : I64),
+    global_cache (slots : Array CacheSlot) (fuel : I64) (depth : I64) (depth_limit : I64),
 }
 
 /// A global slot was still `slot_in_progress` when it was referenced
@@ -183,20 +198,14 @@ type CoreEvalCycle {
     core_eval_cycle (idx : I64),
 }
 
-#[partial]
-def list_replicate (n : I64) (v : CacheSlot) : List CacheSlot :=
-    if I64.beq n 0
-    then List.empty
-    else List.cons v (list_replicate (n - 1) v)
-
 pub def global_cache_new (len : I64) : GlobalCache :=
-    GlobalCache.global_cache (list_replicate len CacheSlot.slot_empty) (-1) 0 (-1)
+    GlobalCache.global_cache (Array.new len CacheSlot.slot_empty) (-1) 0 (-1)
 
 /// The same cache with a finite step budget and a nesting limit (see
 /// `GlobalCache`'s own notes on `fuel` and `depth_limit`).
 /// `lang/core_eval.mo`'s `eval_fueled` is the entry point.
 pub def global_cache_new_fueled (len : I64) (fuel : I64) (depth_limit : I64) : GlobalCache :=
-    GlobalCache.global_cache (list_replicate len CacheSlot.slot_empty) fuel 0 depth_limit
+    GlobalCache.global_cache (Array.new len CacheSlot.slot_empty) fuel 0 depth_limit
 
 pub def global_cache_fuel (cache : GlobalCache) : I64 :=
     match cache {
@@ -230,24 +239,18 @@ pub def global_cache_with_depth (cache : GlobalCache) (depth : I64) : GlobalCach
             GlobalCache.global_cache slots fuel depth limit,
     }
 
-/// Already-forced value for `idx`, if any -- never a re-evaluation.
-def global_cache_get (cache : GlobalCache) (idx : I64) : Option Value :=
+/// The raw slot at `idx`. O(1) (`Array.get`); the read every global
+/// reference pays before it can know whether the value is already forced.
+def global_cache_slot (cache : GlobalCache) (idx : I64) : Option CacheSlot :=
     match cache {
-        GlobalCache.global_cache slots _fuel _depth _limit =>
-            match List.get idx slots {
-                Option.some slot => slot_done_value slot,
-                Option.none => Option.none,
-            },
+        GlobalCache.global_cache slots _fuel _depth _limit => Array.get slots idx,
     }
 
-#[partial]
-def list_set_nth (idx : I64) (v : CacheSlot) (l : List CacheSlot) : List CacheSlot :=
-    match l {
-        List.empty => List.empty,
-        List.cons hd rest =>
-            if I64.beq idx 0
-            then List.cons v rest
-            else List.cons hd (list_set_nth (idx - 1) v rest),
+/// Already-forced value for `idx`, if any -- never a re-evaluation.
+def global_cache_get (cache : GlobalCache) (idx : I64) : Option Value :=
+    match global_cache_slot cache idx {
+        Option.some slot => slot_done_value slot,
+        Option.none => Option.none,
     }
 
 /// Mark `idx` as currently being forced -- `err` if it already was (a
@@ -258,20 +261,20 @@ def list_set_nth (idx : I64) (v : CacheSlot) (l : List CacheSlot) : List CacheSl
 def global_cache_begin (cache : GlobalCache) (idx : I64) : Result CoreEvalCycle GlobalCache :=
     match cache {
         GlobalCache.global_cache slots fuel depth limit =>
-            match List.get idx slots {
+            match Array.get slots idx {
                 Option.some slot =>
                     if slot_is_in_progress slot
                     then Result.err (CoreEvalCycle.core_eval_cycle idx)
-                    else Result.ok (GlobalCache.global_cache (list_set_nth idx CacheSlot.slot_in_progress slots) fuel depth limit),
+                    else Result.ok (GlobalCache.global_cache (Array.set slots idx CacheSlot.slot_in_progress) fuel depth limit),
                 Option.none =>
-                    Result.ok (GlobalCache.global_cache (list_set_nth idx CacheSlot.slot_in_progress slots) fuel depth limit),
+                    Result.ok (GlobalCache.global_cache (Array.set slots idx CacheSlot.slot_in_progress) fuel depth limit),
             },
     }
 
 def global_cache_store (cache : GlobalCache) (idx : I64) (value : Value) : GlobalCache :=
     match cache {
         GlobalCache.global_cache slots fuel depth limit =>
-            GlobalCache.global_cache (list_set_nth idx (CacheSlot.slot_done value) slots) fuel depth limit,
+            GlobalCache.global_cache (Array.set slots idx (CacheSlot.slot_done value)) fuel depth limit,
     }
 
 /// Release `idx`'s in-progress marker back to empty after its evaluation
@@ -283,7 +286,7 @@ def global_cache_store (cache : GlobalCache) (idx : I64) (value : Value) : Globa
 def global_cache_fail (cache : GlobalCache) (idx : I64) : GlobalCache :=
     match cache {
         GlobalCache.global_cache slots fuel depth limit =>
-            GlobalCache.global_cache (list_set_nth idx CacheSlot.slot_empty slots) fuel depth limit,
+            GlobalCache.global_cache (Array.set slots idx CacheSlot.slot_empty) fuel depth limit,
     }
 
 // ─── Tests (mirror core_value.rs's #[cfg(test)] module) ────────────────
@@ -349,6 +352,25 @@ def test_env_extend_does_not_disturb_shared_tail : Bool :=
     opt_value_num_is (env_get branch_a 0) 1
     && opt_value_num_is (env_get branch_b 0) 2
     && opt_value_num_is (env_get base 0) 0
+
+#[test]
+def test_env_frame_indexes_from_the_last_field : Bool :=
+    // `local 0` is the last declared field, matching the old push order.
+    let env : Env :=
+        Env.env_frame 3 [test_lit 10, test_lit 20, test_lit 30] Env.env_nil
+    in
+    opt_value_num_is (env_get env 0) 30
+        && opt_value_num_is (env_get env 1) 20
+        && opt_value_num_is (env_get env 2) 10
+        && opt_is_none (env_get env 3)
+
+#[test]
+def test_env_frame_keeps_the_outer_environment_reachable : Bool :=
+    let base : Env := env_extend Env.env_nil (test_lit 7) in
+    let env : Env := Env.env_frame 2 [test_lit 10, test_lit 20] base in
+    opt_value_num_is (env_get env 0) 20
+        && opt_value_num_is (env_get env 1) 10
+        && opt_value_num_is (env_get env 2) 7
 
 #[test]
 def test_global_cache_starts_empty : Bool :=

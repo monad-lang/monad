@@ -26,18 +26,17 @@ use std::list {}
 ///
 /// **Cache threading, not mutation.** Rust threads `cache: &mut
 /// GlobalCache` through `eval`/`apply`/`force_global`. Monad has no
-/// interior mutability, so every function here instead returns `Pair
-/// (Result CoreEvalError Value) GlobalCache` -- the *possibly-updated*
-/// cache is always returned alongside the result, success or failure,
+/// interior mutability, so the internal workers return `EvalOutcome`
+/// (`eo_ok`/`eo_err`, either carrying the possibly-updated cache) --
 /// mirroring `&mut`'s "the cache reflects everything done so far,
-/// regardless of outcome" behavior with an explicit return value instead.
-/// `eval_then` is the bind/chain combinator that threads this through a
-/// sequence of sub-evaluations.
+/// regardless of outcome" behavior. The public `eval`/`apply`/
+/// `force_global` keep the historical `Pair (Result …) GlobalCache` shape
+/// for existing callers, built once per top-level call.
 ///
 /// **Natives are not a ported `core_native.rs`.** Since this evaluator
 /// itself runs *inside* the real Monad interpreter, executing a native op
 /// just calls straight through to Monad's own stdlib function of the same
-/// meaning (`I64.add`, `I64.lt`, ...) -- see `exec_native` below. Only a
+/// meaning (`I64.add`, `I64.lt`, ...) -- see `native_specs` below. Only a
 /// small, fixed set is implemented (enough to run real recursive
 /// programs in tests), not full parity with `core_native.rs`'s ~60 ops.
 
@@ -84,62 +83,92 @@ pub type CoreEvalError {
     ce_non_exhaustive_match (inductive : ModulePath) (ctor : Identifier),
 }
 
-// ─── The Result-plus-threaded-cache "monad" this module runs in ────────
+// ─── One result type, not Result-inside-Pair ───────────────────────────
 
-def eval_ok (v : Value) (cache : GlobalCache) : Pair (Result CoreEvalError Value) GlobalCache :=
-    Pair.pair (Result.ok v) cache
+/// One evaluation result: the value or the error, plus the cache threaded to
+/// it. `Pair (Result …) GlobalCache` allocated a `Result` *and* a `Pair` on
+/// every IR node; one constructor halves that on the hottest path.
+type EvalOutcome {
+    eo_ok (v : Value) (cache : GlobalCache),
+    eo_err (e : CoreEvalError) (cache : GlobalCache),
+}
 
-def eval_err (e : CoreEvalError) (cache : GlobalCache) : Pair (Result CoreEvalError Value) GlobalCache :=
-    Pair.pair (Result.err e) cache
+/// `eval_args`'s counterpart: the evaluated argument list, or the error.
+type ArgsOutcome {
+    ao_ok (values : List Value) (cache : GlobalCache),
+    ao_err (e : CoreEvalError) (cache : GlobalCache),
+}
 
-def lift_result (r : Result CoreEvalError Value) (cache : GlobalCache) : Pair (Result CoreEvalError Value) GlobalCache :=
-    Pair.pair r cache
+def eval_ok (v : Value) (cache : GlobalCache) : EvalOutcome :=
+    EvalOutcome.eo_ok v cache
 
-/// Chain a sub-evaluation into a continuation that receives its `Value`
-/// and its (possibly-updated) `GlobalCache`. On error, the cache as of
-/// the failure is still threaded through (never dropped) -- `f` is
-/// simply not called.
-def eval_then
-    (outcome : Pair (Result CoreEvalError Value) GlobalCache)
-    (f : Value -> GlobalCache -> Pair (Result CoreEvalError Value) GlobalCache)
+def eval_err (e : CoreEvalError) (cache : GlobalCache) : EvalOutcome :=
+    EvalOutcome.eo_err e cache
+
+/// The public `Pair (Result …) GlobalCache` view of an outcome. Built once
+/// per top-level `eval`/`apply`/`force_global` call, never per IR node, so
+/// every existing caller and test keeps its shape.
+def outcome_to_public (outcome : EvalOutcome)
     : Pair (Result CoreEvalError Value) GlobalCache :=
     match outcome {
-        Pair.pair r cache =>
-            match r {
-                Result.ok v => f v cache,
-                Result.err e => Pair.pair (Result.err e) cache,
-            },
+        EvalOutcome.eo_ok v cache => Pair.pair (Result.ok v) cache,
+        EvalOutcome.eo_err e cache => Pair.pair (Result.err e) cache,
     }
 
-/// Evaluate a list of `CoreIr` args left-to-right, threading the cache
-/// through each, then hand the fully-evaluated `List Value` (in the same
-/// order) plus the final cache to `k`.
+/// Evaluate a list of `CoreIr` args left-to-right. Direct recursion (depth
+/// is the constructor/native arity), one `List.cons` per argument, and no
+/// continuation closure per argument.
 #[partial]
 def eval_args
     (args : List CoreIr) (env : Env) (globals : GlobalTable) (natives : NativeTable)
     (cache : GlobalCache)
-    (k : List Value -> GlobalCache -> Pair (Result CoreEvalError Value) GlobalCache)
-    : Pair (Result CoreEvalError Value) GlobalCache :=
+    : ArgsOutcome :=
     match args {
-        List.empty => k List.empty cache,
+        List.empty => ArgsOutcome.ao_ok List.empty cache,
         List.cons hd rest =>
-            eval_then (eval hd env globals natives cache) (fn v => fn cache1 =>
-                eval_args rest env globals natives cache1 (fn vs => fn cache2 =>
-                    k (List.cons v vs) cache2)),
+            match eval_outcome hd env globals natives cache {
+                EvalOutcome.eo_err e cache1 => ArgsOutcome.ao_err e cache1,
+                EvalOutcome.eo_ok v cache1 =>
+                    match eval_args rest env globals natives cache1 {
+                        ArgsOutcome.ao_err e cache2 => ArgsOutcome.ao_err e cache2,
+                        ArgsOutcome.ao_ok vs cache2 =>
+                            ArgsOutcome.ao_ok (List.cons v vs) cache2,
+                    },
+            },
     }
 
 /// Evaluate `ir` to a `Value` in environment `env`, against whole-program
 /// `globals`/`natives`, memoizing any global references forced along the
 /// way into the returned cache.
+///
+/// Recursion is the same shape as before the outcome-type refactor: an
+/// `app`'s operands, a `match_` scrutinee and a `con`/`ntv` argument list are
+/// bounded by static term shape, while a self-recursive closure application
+/// goes through `apply_outcome` and grows the native stack per call (the
+/// self-hosted codegen has no mutual-tail-call pass; the browser engine's
+/// depth cap is what turns that into a clean error).
 #[partial]
+def eval_outcome
+    (ir : CoreIr) (env : Env) (globals : GlobalTable) (natives : NativeTable)
+    (cache : GlobalCache)
+    : EvalOutcome :=
+    // Inlined `burn_fuel`: `fuel < 0` (every ordinary caller) must cost one
+    // compare and no allocation, not a `Result` box plus a rebuilt cache.
+    let fuel : I64 := global_cache_fuel cache
+    in
+    if I64.lt fuel 0
+    then eval_go ir env globals natives cache
+    else if I64.beq fuel 0
+    then eval_err CoreEvalError.ce_out_of_fuel cache
+    else eval_go ir env globals natives (global_cache_with_fuel cache (I64.sub fuel 1))
+
+/// The public entry point: same behavior as before the outcome-type
+/// refactor, with the `Pair`/`Result` built once at the top.
 pub def eval
     (ir : CoreIr) (env : Env) (globals : GlobalTable) (natives : NativeTable)
     (cache : GlobalCache)
     : Pair (Result CoreEvalError Value) GlobalCache :=
-    match burn_fuel cache {
-        Result.err e => Pair.pair (Result.err e) cache,
-        Result.ok cache1 => eval_go ir env globals natives cache1,
-    }
+    outcome_to_public (eval_outcome ir env globals natives cache)
 
 /// Evaluate with an explicit step budget. `fuel < 0` is unlimited; any
 /// other value burns one step per IR node and fails with
@@ -153,52 +182,60 @@ pub def eval
 pub def eval_fueled
     (fuel : I64) (ir : CoreIr) (globals : GlobalTable) (natives : NativeTable)
     : Pair (Result CoreEvalError Value) GlobalCache :=
-    eval ir Env.env_nil globals natives
-        (global_cache_new_fueled (global_table_len globals) fuel max_call_depth)
+    outcome_to_public
+        (eval_outcome ir Env.env_nil globals natives
+            (global_cache_new_fueled (global_table_len globals) fuel max_call_depth))
 
-/// One node of the budget. `-1` (every ordinary caller) is one compare and
-/// no write; a finite budget decrements in the returned cache, which the
-/// recursion already threads everywhere.
-def burn_fuel (cache : GlobalCache) : Result CoreEvalError GlobalCache :=
-    let fuel : I64 := global_cache_fuel cache
-    in
-    if I64.lt fuel 0 then Result.ok cache
-    else if I64.beq fuel 0 then Result.err CoreEvalError.ce_out_of_fuel
-    else Result.ok (global_cache_with_fuel cache (fuel - 1))
-
+/// `eval_outcome` burns one step per IR node inline. A finite budget
+/// decrements in the cache the recursion already threads everywhere; `-1`
+/// is unlimited.
 #[partial]
 def eval_go
     (ir : CoreIr) (env : Env) (globals : GlobalTable) (natives : NativeTable)
     (cache : GlobalCache)
-    : Pair (Result CoreEvalError Value) GlobalCache :=
+    : EvalOutcome :=
     match ir {
         CoreIr.local idx =>
             match env_get env idx {
                 Option.some v => eval_ok v cache,
                 Option.none => eval_err (CoreEvalError.ce_unbound_local idx) cache,
             },
-        CoreIr.global idx => force_global idx globals natives cache,
+        CoreIr.global idx => force_global_outcome idx globals natives cache,
         CoreIr.lam body => eval_ok (Value.v_closure body env) cache,
         CoreIr.app fun_ arg =>
             // Strict call-by-value: both sides are fully reduced to a Value
-            // before `apply` ever runs -- no unevaluated thunk is ever carried
-            // forward, unlike the old `EvalTerm` evaluator's naive threaded-env
-            // scheme.
-            eval_then (eval fun_ env globals natives cache) (fn f => fn cache1 =>
-                eval_then (eval arg env globals natives cache1) (fn a => fn cache2 =>
-                    apply f a globals natives cache2)),
+            // before `apply_outcome` ever runs -- no unevaluated thunk is ever
+            // carried forward, unlike the old `EvalTerm` evaluator's
+            // naive threaded-env scheme.
+            match eval_outcome fun_ env globals natives cache {
+                EvalOutcome.eo_err e cache1 => eval_err e cache1,
+                EvalOutcome.eo_ok f cache1 =>
+                    match eval_outcome arg env globals natives cache1 {
+                        EvalOutcome.eo_err e cache2 => eval_err e cache2,
+                        EvalOutcome.eo_ok a cache2 =>
+                            apply_outcome f a globals natives cache2,
+                    },
+            },
         CoreIr.lit l => eval_ok (Value.v_lit l) cache,
         CoreIr.match_ scrutinee arms =>
-            eval_then (eval scrutinee env globals natives cache) (fn v => fn cache1 =>
-                dispatch v arms env globals natives cache1),
+            match eval_outcome scrutinee env globals natives cache {
+                EvalOutcome.eo_err e cache1 => eval_err e cache1,
+                EvalOutcome.eo_ok v cache1 =>
+                    dispatch v arms env globals natives cache1,
+            },
         CoreIr.match_fail inductive ctor =>
             eval_err (CoreEvalError.ce_non_exhaustive_match inductive ctor) cache,
         CoreIr.con tag arity args =>
-            eval_args args env globals natives cache (fn vs => fn cache_n =>
-                eval_ok (Value.v_con tag vs) cache_n),
+            match eval_args args env globals natives cache {
+                ArgsOutcome.ao_err e cache1 => eval_err e cache1,
+                ArgsOutcome.ao_ok vs cache1 => eval_ok (Value.v_con tag vs) cache1,
+            },
         CoreIr.ntv native_id args =>
-            eval_args args env globals natives cache (fn vs => fn cache_n =>
-                fire_or_accumulate native_id vs natives cache_n),
+            match eval_args args env globals natives cache {
+                ArgsOutcome.ao_err e cache1 => eval_err e cache1,
+                ArgsOutcome.ao_ok vs cache1 =>
+                    fire_or_accumulate native_id vs natives cache1,
+            },
     }
 
 /// Apply `f` to `a`. The `v_closure` case is the direct fix for the old
@@ -207,19 +244,27 @@ def eval_go
 /// rather than extending whatever environment happened to be live at the
 /// call site.
 #[partial]
-def apply
+def apply_outcome
     (f : Value) (a : Value) (globals : GlobalTable) (natives : NativeTable)
     (cache : GlobalCache)
-    : Pair (Result CoreEvalError Value) GlobalCache :=
+    : EvalOutcome :=
     match f {
         Value.v_closure body closure_env =>
-            match enter_depth cache {
-                Result.err e => eval_err e cache,
-                Result.ok cache1 =>
-                    match eval body (env_extend closure_env a) globals natives cache1 {
-                        Pair.pair r cache2 => Pair.pair r (leave_depth cache2),
-                    },
-            },
+            // Depth is observed only against a limit, and the limit is fixed
+            // for a cache: with it off (every caller but the browser REPL),
+            // skip the two cache rebuilds `enter_depth`/`leave_depth` would do.
+            if I64.lt (global_cache_depth_limit cache) 0
+            then eval_outcome body (env_extend closure_env a) globals natives cache
+            else
+                match enter_depth cache {
+                    Result.err e => eval_err e cache,
+                    Result.ok cache1 =>
+                        match eval_outcome body (env_extend closure_env a) globals
+                            natives cache1 {
+                            EvalOutcome.eo_ok v cache2 => eval_ok v (leave_depth cache2),
+                            EvalOutcome.eo_err e cache2 => eval_err e (leave_depth cache2),
+                        },
+                },
         Value.v_con tag args =>
             eval_ok (Value.v_con tag (List.append args [a])) cache,
         Value.v_partial_ntv native_id args =>
@@ -227,6 +272,13 @@ def apply
         Value.v_lit l =>
             eval_err (CoreEvalError.ce_not_a_function (Value.v_lit l) a) cache,
     }
+
+/// Public `Pair`-shaped wrapper (the meta-evaluator and the tests use it).
+def apply
+    (f : Value) (a : Value) (globals : GlobalTable) (natives : NativeTable)
+    (cache : GlobalCache)
+    : Pair (Result CoreEvalError Value) GlobalCache :=
+    outcome_to_public (apply_outcome f a globals natives cache)
 
 /// Constructor-tag dispatch: index straight into `arms` by the
 /// scrutinee's tag (no scan), then extend the *enclosing* environment
@@ -240,41 +292,63 @@ def apply
 def dispatch
     (scrutinee : Value) (arms : List MatchArm) (env : Env) (globals : GlobalTable)
     (natives : NativeTable) (cache : GlobalCache)
-    : Pair (Result CoreEvalError Value) GlobalCache :=
+    : EvalOutcome :=
     match scrutinee {
         Value.v_con tag args => dispatch_con tag args arms env globals natives cache,
         Value.v_lit _ => eval_err (CoreEvalError.ce_not_a_constructor scrutinee) cache,
         Value.v_closure _ _ => eval_err (CoreEvalError.ce_not_a_constructor scrutinee) cache,
-        Value.v_partial_ntv _ _ => eval_err (CoreEvalError.ce_not_a_constructor scrutinee) cache,
+        Value.v_partial_ntv _ _ =>
+            eval_err (CoreEvalError.ce_not_a_constructor scrutinee) cache,
     }
 
 #[partial]
 def dispatch_con
     (tag : I64) (args : List Value) (arms : List MatchArm) (env : Env)
     (globals : GlobalTable) (natives : NativeTable) (cache : GlobalCache)
-    : Pair (Result CoreEvalError Value) GlobalCache :=
-    match List.get tag arms {
-        Option.some matched_arm => dispatch_arm matched_arm args env globals natives cache,
-        Option.none => eval_err (CoreEvalError.ce_case_index_out_of_bounds tag) cache,
-    }
+    : EvalOutcome :=
+    dispatch_con_at tag tag args arms env globals natives cache
+
+/// Walk `remaining` arms, remembering `original` for the out-of-range error
+/// (`List.get tag arms` used to allocate an `Option` on every match).
+#[partial]
+def dispatch_con_at
+    (original : I64) (remaining : I64) (args : List Value) (arms : List MatchArm)
+    (env : Env) (globals : GlobalTable) (natives : NativeTable) (cache : GlobalCache)
+    : EvalOutcome :=
+    if I64.beq remaining 0
+    then
+        match arms {
+            List.cons matched_arm _rest =>
+                dispatch_arm matched_arm args env globals natives cache,
+            List.empty =>
+                eval_err (CoreEvalError.ce_case_index_out_of_bounds original) cache,
+        }
+    else
+        match arms {
+            List.cons _head rest =>
+                dispatch_con_at original (I64.sub remaining 1) args rest env globals
+                    natives cache,
+            List.empty =>
+                eval_err (CoreEvalError.ce_case_index_out_of_bounds original) cache,
+        }
 
 #[partial]
 def dispatch_arm
     (matched_arm : MatchArm) (args : List Value) (env : Env) (globals : GlobalTable)
     (natives : NativeTable) (cache : GlobalCache)
-    : Pair (Result CoreEvalError Value) GlobalCache :=
+    : EvalOutcome :=
     match matched_arm {
         MatchArm.arm bind_count body =>
             if I64.beq (List.length args) bind_count
-            then eval body (extend_env_with_fields env args) globals natives cache
+            then
+                // One frame node replaces a cons per field; a nullary arm
+                // (`if`, `List.empty`, `Option.none`) binds nothing, so it
+                // must not allocate one.
+                if I64.beq bind_count 0
+                then eval_outcome body env globals natives cache
+                else eval_outcome body (Env.env_frame bind_count args env) globals
+                    natives cache
             else eval_err (CoreEvalError.ce_arity_mismatch bind_count (List.length args)) cache,
-    }
-
-#[partial]
-def extend_env_with_fields (env : Env) (args : List Value) : Env :=
-    match args {
-        List.empty => env,
-        List.cons hd rest => extend_env_with_fields (env_extend env hd) rest,
     }
 
 /// The most nested user calls `eval_fueled` allows. Measured on the web
@@ -304,9 +378,9 @@ def leave_depth (cache : GlobalCache) : GlobalCache :=
 /// once per cache lineage, ever, regardless of how many call sites
 /// reference it.
 #[partial]
-def force_global
+def force_global_outcome
     (idx : I64) (globals : GlobalTable) (natives : NativeTable) (cache : GlobalCache)
-    : Pair (Result CoreEvalError Value) GlobalCache :=
+    : EvalOutcome :=
     match global_cache_get cache idx {
         Option.some v => eval_ok v cache,
         Option.none =>
@@ -315,6 +389,12 @@ def force_global
                 Option.none => eval_err (CoreEvalError.ce_unknown_global idx) cache,
             },
     }
+
+/// Public `Pair`-shaped wrapper (the tests use it).
+def force_global
+    (idx : I64) (globals : GlobalTable) (natives : NativeTable) (cache : GlobalCache)
+    : Pair (Result CoreEvalError Value) GlobalCache :=
+    outcome_to_public (force_global_outcome idx globals natives cache)
 
 /// NOTE: every `gd_def` here is memoized unconditionally, with none of
 /// the effect carve-out the Rust evaluator's own `force_global` has
@@ -332,14 +412,16 @@ def force_global
 def force_global_def
     (idx : I64) (gd : GlobalDef) (globals : GlobalTable) (natives : NativeTable)
     (cache : GlobalCache)
-    : Pair (Result CoreEvalError Value) GlobalCache :=
+    : EvalOutcome :=
     match gd {
         GlobalDef.gd_constructor tag arity => eval_ok (Value.v_con tag List.empty) cache,
         // A 0-arity native (Ptr.null, Ptr.minus_one) is a VALUE, not a partial
         // application: forcing it must fire it. Every table native is pure, so
         // firing on each force is safe (the memoized path only covers `gd_def`).
-        GlobalDef.gd_native native_id _arity => fire_or_accumulate native_id List.empty natives cache,
-        GlobalDef.gd_unresolved path => eval_err (CoreEvalError.ce_unresolved_global path) cache,
+        GlobalDef.gd_native native_id _arity =>
+            fire_or_accumulate native_id List.empty natives cache,
+        GlobalDef.gd_unresolved path =>
+            eval_err (CoreEvalError.ce_unresolved_global path) cache,
         GlobalDef.gd_def body =>
             match global_cache_begin cache idx {
                 Result.err cycle => force_global_cycle_error cycle cache,
@@ -347,7 +429,7 @@ def force_global_def
             },
     }
 
-def force_global_cycle_error (cycle : CoreEvalCycle) (cache : GlobalCache) : Pair (Result CoreEvalError Value) GlobalCache :=
+def force_global_cycle_error (cycle : CoreEvalCycle) (cache : GlobalCache) : EvalOutcome :=
     match cycle {
         CoreEvalCycle.core_eval_cycle idx => eval_err (CoreEvalError.ce_cycle idx) cache,
     }
@@ -356,17 +438,14 @@ def force_global_cycle_error (cycle : CoreEvalCycle) (cache : GlobalCache) : Pai
 def force_global_body
     (idx : I64) (body : CoreIr) (globals : GlobalTable) (natives : NativeTable)
     (cache1 : GlobalCache)
-    : Pair (Result CoreEvalError Value) GlobalCache :=
-    match eval body Env.env_nil globals natives cache1 {
-        Pair.pair r cache2 =>
-            match r {
-                Result.ok v => eval_ok v (global_cache_store cache2 idx v),
-                // On failure, release the in-progress marker (rather than leave
-                // it stuck forever) so a later, unrelated force of the same slot
-                // doesn't see a spurious cycle -- see `global_cache_fail`'s doc
-                // comment in `lang/core_value.mo`.
-                Result.err e => eval_err e (global_cache_fail cache2 idx),
-            },
+    : EvalOutcome :=
+    match eval_outcome body Env.env_nil globals natives cache1 {
+        EvalOutcome.eo_ok v cache2 => eval_ok v (global_cache_store cache2 idx v),
+        // On failure, release the in-progress marker (rather than leave it
+        // stuck forever) so a later, unrelated force of the same slot doesn't
+        // see a spurious cycle -- see `global_cache_fail`'s doc comment in
+        // `lang/core_value.mo`.
+        EvalOutcome.eo_err e cache2 => eval_err e (global_cache_fail cache2 idx),
     }
 
 /// Fire a native call once `args`'s length reaches its declared arity;
@@ -374,13 +453,17 @@ def force_global_body
 /// `v_con`.
 def fire_or_accumulate
     (native_id : I64) (args : List Value) (natives : NativeTable) (cache : GlobalCache)
-    : Pair (Result CoreEvalError Value) GlobalCache :=
+    : EvalOutcome :=
     let arity : I64 := native_table_arity natives native_id in
     if I64.lt (List.length args) arity
     then eval_ok (Value.v_partial_ntv native_id args) cache
     else
         match native_table_name natives native_id {
-            Option.some name => lift_result (exec_native name args) cache,
+            Option.some name =>
+                match exec_native name args {
+                    Result.ok v => eval_ok v cache,
+                    Result.err e => eval_err e cache,
+                },
             Option.none => eval_err (CoreEvalError.ce_unknown_native native_id) cache,
         }
 
@@ -1781,3 +1864,38 @@ def test_depth_limit_is_enforced_for_fueled_caches : Bool :=
                 _ => false,
             },
     }
+
+def is_out_of_fuel (outcome : Pair (Result CoreEvalError Value) GlobalCache) : Bool :=
+    match outcome {
+        Pair.pair r _cache =>
+            match r {
+                Result.ok _v => false,
+                Result.err e =>
+                    match e {
+                        CoreEvalError.ce_out_of_fuel => true,
+                        _ => false,
+                    },
+            },
+    }
+
+#[test]
+def test_fuel_budget_burns_exactly_one_step_per_node : Bool :=
+    // A one-step budget still permits one node (the `lit`); a two-node term
+    // fails on the sub-evaluation, which is the behavior the inlined check
+    // in `eval` must preserve.
+    let start : GlobalCache := global_cache_new_fueled 0 1 (-1)
+    in
+    let one : Pair (Result CoreEvalError Value) GlobalCache :=
+        eval (num_lit 1) Env.env_nil empty_globals basic_native_table start
+    in
+    let two : Pair (Result CoreEvalError Value) GlobalCache :=
+        eval (CoreIr.app (num_lit 1) (num_lit 2)) Env.env_nil empty_globals
+            basic_native_table start
+    in
+    (match one {
+        Pair.pair r _cache =>
+            match r {
+                Result.ok _v => true,
+                Result.err _e => false,
+            },
+    }) && is_out_of_fuel two
