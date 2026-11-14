@@ -19,9 +19,21 @@ use std::list {}
 /// rust/core/src/parser/locate.rs) — `ParseError` is the only type that
 /// needed to change, not `ParseResult` itself. See
 /// `location_of_remaining`'s own doc comment for the full rationale.
+///
+/// The identity `Copy` instance is manual rather than `#[derive Copy]`: this
+/// mote sits in the Rust bootstrap host's meta-evaluation closure, and the
+/// host's capture re-checks a re-read module's declarations, expanding a
+/// `#[derive]` a second time outside whole-program qualification (the
+/// generated instance's constructor references then come back unbound). The
+/// self-hosted compiler handles the derive; the host must keep accepting the
+/// compiler-source surface.
 pub type ParseError {
     tag (expected : String) (remaining : String),
     custom (msg : String) (remaining : String),
+}
+
+pub instance Copy ParseError {
+    def copy (e : ParseError) : Pair ParseError ParseError := Pair.pair e e
 }
 
 /// Pull `remaining` back out of an already-failed `ParseError` — for the

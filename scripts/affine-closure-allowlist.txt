@@ -31,6 +31,5 @@ motes/fmt 34
 motes/json 11
 motes/log 10
 motes/lsp 97
-motes/parsec 5
 motes/toml 40
 motes/toolkit 176

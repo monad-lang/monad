@@ -171,9 +171,13 @@ def many0_go (p : String -> ParseResult A) (input : String) (acc : List A) : Par
 pub def many1 (p : String -> ParseResult A) (input : String) : ParseResult (List A) :=
     match many0 p input {
         success rem out =>
-            if List.is_empty out
-            then fail (ParseError.custom "expected at least one" input)
-            else success rem out,
+            // Rebuild from the pattern binders: the success payload is typed
+            // by the constructor's `A`, so mentioning the binder twice is an
+            // affine use.
+            match out {
+                List.empty => fail (ParseError.custom "expected at least one" input),
+                List.cons hd tl => success rem (List.cons hd tl),
+            },
         fail e => fail e
     }
 

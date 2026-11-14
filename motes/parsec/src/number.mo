@@ -28,12 +28,18 @@ pub def number (input : String) : ParseResult I64 :=
 #[partial]
 def number_body (r : ParseResult String) : ParseResult I64 :=
     match r {
-        success rem out =>
-            if is_empty out
-            then fail (ParseError.custom "expected number" rem)
-            else number_parse out rem,
+        success rem out => number_body_out out rem,
         fail e => fail e
     }
+
+/// The success payload's check-and-parse. A separate def because the
+/// `success` binder is typed by the constructor's `A` (so the affine walk
+/// cannot name it as `String` and a second mention is an affine use); a
+/// `String` parameter is `Copy`.
+def number_body_out (out : String) (rem : String) : ParseResult I64 :=
+    if is_empty out
+    then fail (ParseError.custom "expected number" rem)
+    else number_parse out rem
 
 #[partial]
 def number_parse (s : String) (rem : String) : ParseResult I64 :=
@@ -109,12 +115,15 @@ pub def hex_number (input : String) : ParseResult I64 :=
 #[partial]
 def hex_number_body (r : ParseResult String) : ParseResult I64 :=
     match r {
-        success rem out =>
-            if is_empty out
-            then fail (ParseError.custom "expected hex digits" rem)
-            else success rem (parse_hex_digits out),
+        success rem out => hex_number_body_out out rem,
         fail e => fail e
     }
+
+/// See `number_body_out` for why the payload is checked in its own def.
+def hex_number_body_out (out : String) (rem : String) : ParseResult I64 :=
+    if is_empty out
+    then fail (ParseError.custom "expected hex digits" rem)
+    else success rem (parse_hex_digits out)
 
 // --- Hex number parsing helpers ---
 
