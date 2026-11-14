@@ -215,6 +215,62 @@ def WebImport.window_reload : WebImport :=
 def WebImport.window_navigate : WebImport :=
     { module := "monad", name := "window_navigate", params := ["i64", "i64"], result := "void" }
 
+def WebImport.window_replace : WebImport :=
+    { module := "monad", name := "window_replace", params := ["i64", "i64"], result := "void" }
+
+/// `location` reads. A browser OAuth redirect delivers its result in the URL,
+/// so a wasm SPA must be able to read it: `origin` is the `redirect_uri` base,
+/// and `search_param` is the percent-decoding accessor for `code`/`state`/`iss`.
+def WebImport.location_origin : WebImport :=
+    { module := "monad", name := "location_origin", params := ["i64", "i64"], result := "i64" }
+
+def WebImport.location_href : WebImport :=
+    { module := "monad", name := "location_href", params := ["i64", "i64"], result := "i64" }
+
+def WebImport.location_pathname : WebImport :=
+    { module := "monad", name := "location_pathname", params := ["i64", "i64"], result := "i64" }
+
+def WebImport.location_search : WebImport :=
+    { module := "monad", name := "location_search", params := ["i64", "i64"], result := "i64" }
+
+def WebImport.location_search_param : WebImport :=
+    { module := "monad", name := "location_search_param", params := ["i64", "i64", "i64", "i64"], result := "i64" }
+
+/// The error name of a failed WebCrypto operation, and the ECDSA keypair a
+/// `generate`/`get` produced (an opaque host-side id -- the private key never
+/// enters wasm memory).
+def WebImport.crypto_error : WebImport :=
+    { module := "monad", name := "crypto_error", params := ["i64", "i64", "i64"], result := "i64" }
+
+def WebImport.crypto_op_key : WebImport :=
+    { module := "monad", name := "crypto_op_key", params := ["i64"], result := "i64" }
+
+/// ECDSA P-256, two-phase like the digest. Signing is `subtle.sign` over
+/// SHA-256, whose output is already IEEE P1363 `r‖s` (the JWS form).
+def WebImport.ecdsa_generate_begin : WebImport :=
+    { module := "monad", name := "ecdsa_generate_begin", params := List.empty, result := "i64" }
+
+def WebImport.ecdsa_export_jwk_begin : WebImport :=
+    { module := "monad", name := "ecdsa_export_jwk_begin", params := ["i64"], result := "i64" }
+
+def WebImport.ecdsa_export_raw_begin : WebImport :=
+    { module := "monad", name := "ecdsa_export_raw_begin", params := ["i64"], result := "i64" }
+
+def WebImport.ecdsa_sign_begin : WebImport :=
+    { module := "monad", name := "ecdsa_sign_begin", params := ["i64", "i64", "i64"], result := "i64" }
+
+/// IndexedDB over a non-extractable `CryptoKey`, so a DPoP key survives the
+/// OAuth redirect. `keystore_get_begin` finishes with state 3 when the slot is
+/// empty, which is a miss rather than an error.
+def WebImport.keystore_put_begin : WebImport :=
+    { module := "monad", name := "keystore_put_begin", params := ["i64", "i64", "i64"], result := "i64" }
+
+def WebImport.keystore_get_begin : WebImport :=
+    { module := "monad", name := "keystore_get_begin", params := ["i64", "i64"], result := "i64" }
+
+def WebImport.keystore_delete_begin : WebImport :=
+    { module := "monad", name := "keystore_delete_begin", params := ["i64", "i64"], result := "i64" }
+
 /// The allocator's last word before it traps: `console.error` with the
 /// requested and committed sizes.
 def WebImport.oom : WebImport :=
@@ -439,7 +495,15 @@ pub def WebAbi.default : WebAbi :=
             WebImport.fetch_begin_headers, WebImport.fetch_headers,
             WebImport.crypto_random_fill, WebImport.crypto_sha256_begin,
             WebImport.crypto_poll, WebImport.crypto_result_hex,
-            WebImport.window_reload, WebImport.window_navigate, WebImport.oom,
+            WebImport.window_reload, WebImport.window_navigate, WebImport.window_replace,
+            WebImport.location_origin, WebImport.location_href, WebImport.location_pathname,
+            WebImport.location_search, WebImport.location_search_param,
+            WebImport.crypto_error, WebImport.crypto_op_key,
+            WebImport.ecdsa_generate_begin, WebImport.ecdsa_export_jwk_begin,
+            WebImport.ecdsa_export_raw_begin, WebImport.ecdsa_sign_begin,
+            WebImport.keystore_put_begin, WebImport.keystore_get_begin,
+            WebImport.keystore_delete_begin,
+            WebImport.oom,
             WebImport.worker_run, WebImport.worker_poll, WebImport.worker_status,
             WebImport.worker_value, WebImport.worker_type, WebImport.worker_error,
             WebImport.worker_notes, WebImport.worker_cancel,

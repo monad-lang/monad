@@ -4,7 +4,7 @@
 // generated loader, and the thin IO wrappers over the RawIO externs.
 // Nothing outside this mote declares a web extern.
 
-pub use lib::types {Node, RequestId, ClipboardOp, CryptoOp}
+pub use lib::types {Node, RequestId, ClipboardOp, CryptoOp, WebKey}
 pub use web_event::event {WebEvent, FileInfo}
 
 pub use lib::web_abi {
@@ -43,8 +43,18 @@ pub use lib::storage {
 pub use lib::media {Media.matches, Media.watch, Media.unwatch}
 pub use lib::crypto {
     Crypto.random_bytes, Crypto.sha256_begin, Crypto.poll, Crypto.result_hex,
+    Crypto.error, Crypto.op_key, Crypto.await_op,
+    WebCrypto.generate_key_begin, WebCrypto.export_public_jwk_begin,
+    WebCrypto.export_public_raw_begin, WebCrypto.sign_begin,
 }
-pub use lib::window {Window.reload, Window.navigate}
+pub use lib::keystore {
+    KeyStore.empty_state, KeyStore.put_begin, KeyStore.get_begin,
+    KeyStore.delete_begin, KeyStore.get,
+}
+pub use lib::window {
+    Window.origin, Window.href, Window.pathname, Window.search,
+    Window.search_param, Window.reload, Window.navigate, Window.replace,
+}
 pub use lib::memory {Memory.heap_bytes, Memory.heap_used}
 pub use lib::timer {Timer.base, Timer.is_id, Timer.after}
 pub use lib::random {WebRandom, WebRandom.new, SplitMix64.seed_from_clock}

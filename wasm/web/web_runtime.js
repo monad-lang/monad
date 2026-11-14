@@ -49,7 +49,11 @@ const globalTables = new Map(); // "target:event" -> { flags, wrapper }
 let frameHandler = null; // the animation-frame subscription's handler id
 const fetches = []; // id -> { state, status, bytes, offset, headers }
 const clips = []; // id -> { state, text, error }
-const cryptos = []; // id -> { state, hex, error }
+const cryptos = []; // id -> { state, hex, error, key }
+// ECDSA P-256 keypairs (id -> CryptoKey or CryptoKeyPair). The PRIVATE half
+// lives only here, in the host: it is non-extractable, so neither wasm nor
+// this file can read it back out -- only sign with it.
+const webKeys = [null]; // id -> CryptoKey | CryptoKeyPair; 0 is the null handle
 const mediaTables = new Map(); // query -> { mql, wrapper }
 // WebGL (`motes/web_wasm/src/gl.mo`). A context id names { gl, version,
 // vao }: `vao` is the WebGL1 `OES_vertex_array_object` extension (null on
@@ -422,6 +426,65 @@ function writeBytes(ptr, bytes, max) {
   const n = Math.min(bytes.length, Number(max));
   new Uint8Array(memory.buffer, u32(ptr), n).set(bytes.subarray(0, n));
   return BigInt(n);
+}
+
+// Open the `monad_keys` database and run one request through `keys`.
+//
+// Every keystore call funnels through here so the schema (one store, one key
+// column) is written once. A rejected promise is the caller's error state;
+// `onupgradeneeded` creates the store on first use.
+//
+// The connection is CLOSED on both the success and the failure path. A page
+// that signs in once and then makes a request per API call opens one
+// connection per op otherwise, and an IndexedDB connection lives until the
+// page unloads: they accumulate, and an open one also blocks a future
+// `onupgradeneeded`, so the store could no longer be migrated in place.
+function withStore(mode, request) {
+  return new Promise((resolve, reject) => {
+    const factory = globalThis.indexedDB;
+    if (!factory || typeof factory.open !== 'function') {
+      reject(new Error('NotSupportedError'));
+      return;
+    }
+    const open = factory.open('monad_keys', 1);
+    // One settle per connection: close it, then answer, so no path can
+    // resolve twice or leave the connection open.
+    const settle = (fn, value) => {
+      try {
+        if (open.result) open.result.close();
+      } catch {
+        // closing an already-closed connection is not an error here
+      }
+      fn(value);
+    };
+    open.onupgradeneeded = () => {
+      const db = open.result;
+      if (!db.objectStoreNames.contains('keys')) db.createObjectStore('keys');
+    };
+    open.onerror = () => reject(open.error || new Error('IndexedDBError'));
+    open.onsuccess = () => {
+      let tx;
+      try {
+        tx = open.result.transaction('keys', mode);
+      } catch (err) {
+        settle(reject, err);
+        return;
+      }
+      tx.oncomplete = () => settle(resolve, undefined);
+      tx.onerror = () => settle(reject, tx.error || new Error('IndexedDBError'));
+      tx.onabort = () => settle(reject, tx.error || new Error('IndexedDBAbort'));
+      let req;
+      try {
+        req = request(tx.objectStore('keys'));
+      } catch (err) {
+        settle(reject, err);
+        return;
+      }
+      if (req && mode === 'readonly') {
+        req.onsuccess = () => settle(resolve, req.result);
+      }
+    };
+  });
 }
 
 function hexBytes(bytes) {
@@ -1153,6 +1216,225 @@ export const host = {
   crypto_result_hex(op, ptr, max) {
     const rec = cryptos[Number(op)];
     return writeBytes(ptr, encoder.encode(rec ? rec.hex : ''), max);
+  },
+
+  crypto_error(op, ptr, max) {
+    const rec = cryptos[Number(op)];
+    return writeBytes(ptr, encoder.encode(rec ? rec.error : ''), max);
+  },
+
+  // The keypair a generate/get produced. `0` (the null handle) when there is
+  // none, which is what an empty keystore slot answers.
+  crypto_op_key(op) {
+    const rec = cryptos[Number(op)];
+    return rec && rec.key !== undefined ? rec.key : 0n;
+  },
+
+  // ── ECDSA P-256 (two-phase; the private key never leaves the host) ──
+  //
+  // generateKey is NON-EXTRACTABLE and sign-only: `subtle.exportKey` on the
+  // private half would reject, so a page bug cannot exfiltrate it. Only the
+  // PUBLIC half is ever exported (as a JWK, and as the raw SEC1 point).
+  ecdsa_generate_begin() {
+    const rec = { state: 0, hex: '', error: '', key: 0n };
+    cryptos.push(rec);
+    const id = BigInt(cryptos.length - 1);
+    const subtle = globalThis.crypto && globalThis.crypto.subtle;
+    if (!subtle || typeof subtle.generateKey !== 'function') {
+      rec.state = 2;
+      rec.error = 'NotSupportedError';
+      return id;
+    }
+    subtle
+      .generateKey({ name: 'ECDSA', namedCurve: 'P-256' }, false, ['sign', 'verify'])
+      .then((pair) => {
+        webKeys.push(pair);
+        rec.key = BigInt(webKeys.length - 1);
+        rec.state = 1;
+      })
+      .catch((err) => { rec.error = (err && err.name) || 'Error'; rec.state = 2; });
+    return id;
+  },
+
+  // The public half as a JWK, JSON-encoded into `hex`. The field is named
+  // `hex` because that is the one string channel every op result uses; a JWK
+  // is JSON text, not hex bytes.
+  ecdsa_export_jwk_begin(key) {
+    const rec = { state: 0, hex: '', error: '', key: 0n };
+    cryptos.push(rec);
+    const id = BigInt(cryptos.length - 1);
+    const pair = webKeys[Number(key)];
+    const subtle = globalThis.crypto && globalThis.crypto.subtle;
+    if (!pair || !subtle || typeof subtle.exportKey !== 'function') {
+      rec.state = 2;
+      rec.error = 'InvalidAccessError';
+      return id;
+    }
+    subtle
+      .exportKey('jwk', pair.publicKey)
+      .then((jwk) => { rec.hex = JSON.stringify(jwk); rec.state = 1; })
+      .catch((err) => { rec.error = (err && err.name) || 'Error'; rec.state = 2; });
+    return id;
+  },
+
+  // The public half as the raw 65-byte SEC1 point (0x04 || X || Y), hex.
+  // This is the encoding a did:key / multikey uses.
+  ecdsa_export_raw_begin(key) {
+    const rec = { state: 0, hex: '', error: '', key: 0n };
+    cryptos.push(rec);
+    const id = BigInt(cryptos.length - 1);
+    const pair = webKeys[Number(key)];
+    const subtle = globalThis.crypto && globalThis.crypto.subtle;
+    if (!pair || !subtle || typeof subtle.exportKey !== 'function') {
+      rec.state = 2;
+      rec.error = 'InvalidAccessError';
+      return id;
+    }
+    subtle
+      .exportKey('raw', pair.publicKey)
+      .then((buf) => { rec.hex = hexBytes(new Uint8Array(buf)); rec.state = 1; })
+      .catch((err) => { rec.error = (err && err.name) || 'Error'; rec.state = 2; });
+    return id;
+  },
+
+  // ES256: ECDSA over SHA-256. WebCrypto's output is already IEEE P1363
+  // r||s, which IS the JWS form, so no DER conversion happens here. It does
+  // not guarantee low-S; JWS ES256 does not require it and DPoP servers
+  // accept either form.
+  ecdsa_sign_begin(key, ptr, len) {
+    const rec = { state: 0, hex: '', error: '', key: 0n };
+    cryptos.push(rec);
+    const id = BigInt(cryptos.length - 1);
+    const pair = webKeys[Number(key)];
+    const subtle = globalThis.crypto && globalThis.crypto.subtle;
+    if (!pair || !subtle || typeof subtle.sign !== 'function') {
+      rec.state = 2;
+      rec.error = 'InvalidAccessError';
+      return id;
+    }
+    // Copy before the promise: memory.grow detaches the old buffer.
+    const data = new Uint8Array(memory.buffer, u32(ptr), Number(len)).slice();
+    subtle
+      .sign({ name: 'ECDSA', hash: 'SHA-256' }, pair.privateKey, data)
+      .then((buf) => { rec.hex = hexBytes(new Uint8Array(buf)); rec.state = 1; })
+      .catch((err) => { rec.error = (err && err.name) || 'Error'; rec.state = 2; });
+    return id;
+  },
+
+  // ── IndexedDB over a non-extractable CryptoKey ─────────────────────
+  //
+  // The page UNLOADS between PAR and the callback, so the DPoP key has to
+  // survive. A CryptoKey is not serialisable by wasm, but IndexedDB stores it
+  // by structured clone: the browser keeps the material opaque and hands back
+  // a live handle next page. `get` answers state 3 when the slot is EMPTY,
+  // which is a miss rather than an error.
+  keystore_put_begin(sptr, slen, key) {
+    const rec = { state: 0, key: 0n, error: '' };
+    cryptos.push(rec);
+    const id = BigInt(cryptos.length - 1);
+    const slot = str(sptr, slen);
+    const pair = webKeys[Number(key)];
+    if (!pair) {
+      rec.state = 2;
+      rec.error = 'InvalidAccessError';
+      return id;
+    }
+    withStore('readwrite', (store) => store.put(pair, slot))
+      .then(() => { rec.state = 1; })
+      .catch((err) => { rec.error = (err && err.name) || 'Error'; rec.state = 2; });
+    return id;
+  },
+
+  keystore_get_begin(sptr, slen) {
+    const rec = { state: 0, key: 0n, error: '' };
+    cryptos.push(rec);
+    const id = BigInt(cryptos.length - 1);
+    const slot = str(sptr, slen);
+    withStore('readonly', (store) => store.get(slot))
+      .then((found) => {
+        if (found === undefined || found === null) {
+          rec.state = 3; // done, and the slot holds nothing
+          return;
+        }
+        webKeys.push(found);
+        rec.key = BigInt(webKeys.length - 1);
+        rec.state = 1;
+      })
+      .catch((err) => { rec.error = (err && err.name) || 'Error'; rec.state = 2; });
+    return id;
+  },
+
+  keystore_delete_begin(sptr, slen) {
+    const rec = { state: 0, key: 0n, error: '' };
+    cryptos.push(rec);
+    const id = BigInt(cryptos.length - 1);
+    const slot = str(sptr, slen);
+    // Succeeds when the slot was already empty, so a logout need not check.
+    withStore('readwrite', (store) => store.delete(slot))
+      .then(() => { rec.state = 1; })
+      .catch((err) => { rec.error = (err && err.name) || 'Error'; rec.state = 2; });
+    return id;
+  },
+
+  window_replace(ptr, len) {
+    const loc = globalThis.location;
+    if (loc && typeof loc.replace === 'function') {
+      try {
+        loc.replace(str(ptr, len));
+      } catch {
+        // see window_reload
+      }
+    }
+    return 0n;
+  },
+
+  // ── location reads ─────────────────────────────────────────────────
+  //
+  // An OAuth redirect delivers its result in the URL: atproto returns
+  // code/state/iss (and on failure error/error_description) as query
+  // parameters of the page the provider sends the user back to.
+  location_origin(ptr, max) {
+    const loc = globalThis.location;
+    const value = loc && loc.origin ? String(loc.origin) : '';
+    return writeBytes(ptr, encoder.encode(value), max);
+  },
+
+  location_href(ptr, max) {
+    const loc = globalThis.location;
+    const value = loc && loc.href ? String(loc.href) : '';
+    return writeBytes(ptr, encoder.encode(value), max);
+  },
+
+  location_pathname(ptr, max) {
+    const loc = globalThis.location;
+    const value = loc && loc.pathname ? String(loc.pathname) : '';
+    return writeBytes(ptr, encoder.encode(value), max);
+  },
+
+  location_search(ptr, max) {
+    const loc = globalThis.location;
+    const value = loc && loc.search ? String(loc.search) : '';
+    return writeBytes(ptr, encoder.encode(value), max);
+  },
+
+  // URLSearchParams does the percent-decoding (and turns `+` into a space),
+  // which is what keeps a base64url `code` or a `state` carrying `=`
+  // intact. An absent parameter answers a zero-length string, which the Monad
+  // side reads as `none`.
+  location_search_param(nptr, nlen, ptr, max) {
+    const loc = globalThis.location;
+    const raw = loc && loc.search ? String(loc.search) : '';
+    let value = '';
+    if (raw) {
+      try {
+        const params = new URLSearchParams(raw);
+        const found = params.get(str(nptr, nlen));
+        value = found === null ? '' : String(found);
+      } catch {
+        value = '';
+      }
+    }
+    return writeBytes(ptr, encoder.encode(value), max);
   },
 
   // ── window / navigation ────────────────────────────────────────────
