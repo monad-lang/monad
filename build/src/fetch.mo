@@ -784,10 +784,96 @@ def Build.toolchain_entry (name : String) : Bool :=
     String.beq name "std" || String.beq name "runtime"
         || String.beq name "init" || String.beq name "sys"
 
+/// The shortest compiler revision that names a revision rather than a word.
+///
+/// Seven hex digits is git's own abbreviation floor, so it is also the
+/// shortest thing `build_commit` ordinarily holds: `self.shortRev`
+/// (flake.nix) and `git rev-parse --short HEAD` (scripts/build-self-hosted.sh)
+/// both produce seven. At or above the floor a lock id is matched by PREFIX;
+/// below it the match is exact equality, which is what keeps a non-revision
+/// string (a test's `"aaaa"`, a hand-set `MONAD_BUILD_COMMIT`) from matching
+/// every id that happens to begin the same way.
+def Build.commit_prefix_min : I64 := 7
+
+/// The suffix `flake.nix` appends to a revision built from a modified tree
+/// (`self.dirtyShortRev` is `"<shortRev>-dirty"`).
+def Build.dirty_suffix : String := "-dirty"
+
+/// The revision a compiler NAMES, with the `-dirty` marker `flake.nix`
+/// appends for a build of a modified tree taken off.
+///
+/// `monad version` keeps the marker -- it is the honest answer about the
+/// binary as built -- but a dirty build of revision R is still R's tree, and
+/// failing the pre-flight for it would rebuild the "no pin can pass" dead end
+/// for every local compiler with uncommitted changes.
+def Build.rev_without_dirty (commit : String) : String :=
+    let c : String := String.trim commit in
+    if String.ends_with c Build.dirty_suffix
+    then String.slice c 0 (I64.sub (String.length c) (String.length Build.dirty_suffix))
+    else c
+
+/// Does the lock's full commit id name the revision this compiler was built
+/// from?
+///
+/// The two are never the same spelling, which is what made this check
+/// unusable: `mote.lock` requires a FULL id (`Lock.is_commit`: 40 or 64
+/// lowercase hex digits, lang/src/lock.mo), while a compiler names itself
+/// with the SHORT one. Comparing them with `String.beq` reported skew for
+/// every correct pin -- and since no consumer can write a short `git_commit`,
+/// there was no pin that passed. A prefix match is the comparison the two
+/// forms were always meant to have: at 7+ digits a collision means two
+/// revisions agreeing on 28 bits, acceptable for a diagnostic whose worst
+/// outcome is one wrong sentence. Below the floor the answer stays exact.
+///
+/// The floor tests the COMPILER side only, and never the lock id's length.
+/// That is deliberate: `Lock.is_commit` has already refused to load a lock
+/// whose `git_commit` is not 40 or 64 hex digits, so by the time this runs the
+/// lock id is always the long form. The compiler revision is the only side
+/// that can be short, or not a revision at all.
+pub def Build.commit_matches (compiler_commit : String) (lock_commit : String) : Bool :=
+    let c : String := Build.rev_without_dirty compiler_commit in
+    if I64.lt (String.length c) Build.commit_prefix_min
+    then String.beq c (String.trim lock_commit)
+    else String.starts_with c (String.trim lock_commit)
+
+/// `pinned at 38e2790, this compiler at 38e2790`: both revisions printed at
+/// ONE width, so the two columns can be compared position by position instead
+/// of being two differently-shaped strings.
+///
+/// The width is the SHORTER of the two, because that is all the two forms
+/// share. Printing 40 lock digits beside 7 compiler digits would put the
+/// difference somewhere the reader cannot compare, which is how a real
+/// disagreement gets read as a match.
+///
+/// One width does NOT by itself make a difference visible: when the two agree
+/// on their whole common prefix, the pair prints as two identical strings.
+/// That is reachable only below `commit_prefix_min` (where the comparison is
+/// exact equality, so a reported pair is genuinely different at a position the
+/// short form does not have) and never for the ordinary full-lock-id vs
+/// seven-char `shortRev` shape -- a 40-digit id and a 7-digit revision that
+/// agree on all 7 digits match, so they are never reported.
+def Build.rev_pair_text (lock_commit : String) (compiler_commit : String) : String :=
+    let l : String := String.trim lock_commit in
+    let c : String := Build.rev_without_dirty compiler_commit in
+    let lw : I64 := String.length l in
+    let cw : I64 := String.length c in
+    let w : I64 := if I64.lt lw cw then lw else cw in
+    "pinned at " ++ String.slice l 0 w ++ ", this compiler at " ++ String.slice c 0 w
+
+/// The skew, named so a consumer can act on it.
+///
+/// The advice is `monad update`, not `monadup use <rev>`: `monadup` only
+/// installs releases, and a commit id is not a tag it lists, so the old
+/// message pointed at a command that would reject its own argument.
+/// `monad update` re-resolves the lock from the pin the manifest declares,
+/// which is the remedy for a consumer whose pin has drifted; the other
+/// direction -- switching compilers -- needs the revision named, so the full
+/// lock id is printed for it.
 def Build.toolchain_skew_message (e : LockedMote) (g : LockedGit) (commit : String) : String :=
-    "`" ++ e.name ++ "` is pinned at " ++ g.commit
-        ++ " but this compiler was built from " ++ commit
-        ++ "; run `monadup use " ++ g.commit ++ "` (or update mote.lock to the compiler's revision)"
+    "`" ++ e.name ++ "` is " ++ Build.rev_pair_text g.commit commit
+        ++ "; the toolchain motes are compiled INTO the compiler, so the two must name the same revision."
+        ++ " Run `monad update` to re-resolve mote.lock from the manifest's pin, or switch to a nightly built from "
+        ++ String.trim g.commit
 
 #[terminating]
 def Build.toolchain_skew_go (commit : String) (entries : List LockedMote) : Option String :=
@@ -800,7 +886,7 @@ def Build.toolchain_skew_go (commit : String) (entries : List LockedMote) : Opti
                 match e.git {
                     Option.none => Build.toolchain_skew_go commit rest,
                     Option.some g =>
-                        if String.beq (String.trim g.commit) commit
+                        if Build.commit_matches commit g.commit
                         then Build.toolchain_skew_go commit rest
                         else Option.some (Build.toolchain_skew_message e g commit),
                 },
