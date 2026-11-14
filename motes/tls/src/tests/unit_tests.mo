@@ -11,7 +11,7 @@ use lib::ffi {
     Ssl.error_syscall, Ssl.error_want_read, Ssl.error_want_write,
     Ssl.error_zero_return, Ssl.verify_peer, Ssl.x509_v_ok,
 }
-use lib::stream {Tls.ssl_error_message}
+use lib::stream {Tls.ssl_error_message, Tls.handshake_should_retry}
 
 /// The SNI command code is 55 -- `SSL_CTRL_SET_TLSEXT_HOSTNAME`. A wrong
 /// constant here is silently "no SNI", which many servers tolerate, so
@@ -57,3 +57,14 @@ def test_ssl_error_message_names_known_codes : Bool :=
 #[test]
 def test_ssl_error_message_names_unknown_codes : Bool :=
     String.beq (Tls.ssl_error_message (I64.to_i32 42)) "SSL_ERROR_42"
+
+/// F6: a `SSL_connect` that returns WANT_READ/WANT_WRITE retries while the
+/// budget lasts; every other code (and an exhausted budget) is terminal.
+#[test]
+def test_handshake_retries_only_on_want : Bool :=
+    Tls.handshake_should_retry Ssl.error_want_read 16
+        && Tls.handshake_should_retry Ssl.error_want_write 16
+        && Bool.not (Tls.handshake_should_retry Ssl.error_ssl 16)
+        && Bool.not (Tls.handshake_should_retry Ssl.error_syscall 16)
+        && Bool.not (Tls.handshake_should_retry Ssl.error_zero_return 16)
+        && Bool.not (Tls.handshake_should_retry Ssl.error_want_read 0)

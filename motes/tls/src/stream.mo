@@ -107,31 +107,55 @@ def Tls.handshake (ssl : Ptr) (ctx : Ptr) (sock : FdStream) (host : String) (tim
     }
 }
 
-def Tls.handshake_ssl (ssl : Ptr) (ctx : Ptr) (sock : FdStream) (timeout_ms : I64) : IO (Result String Tls.Stream) := do {
-    let started <- IO.current_time_nano;
+/// A `WANT_READ`/`WANT_WRITE` from `SSL_connect` is not a failure: the
+/// handshake wants more bytes (the log review's F6 -- a handshake across
+/// a fixture host that sometimes just stalls). Retry while the budget
+/// lasts; the socket's SO_RCVTIMEO and `Tls.timed_out` stay the hard
+/// bounds, exactly as in `read_attempt`/`write_attempt`.
+pub def Tls.handshake_should_retry (code : I32) (attempts : I64) : Bool :=
+    Bool.and (I64.gt attempts 0)
+        (Bool.or (I32.beq code Ssl.error_want_read) (I32.beq code Ssl.error_want_write))
+
+/// The verify half, split out so the attempt loop has one success exit.
+def Tls.handshake_verified (ssl : Ptr) (ctx : Ptr) (sock : FdStream) (timeout_ms : I64) : IO (Result String Tls.Stream) := do {
+    let verify : I64 := SSL_get_verify_result ssl;
+    if Bool.not (I64.beq verify Ssl.x509_v_ok)
+    then Tls.abort ssl ctx sock
+        (String.concat "tls: certificate verify failed: "
+            (String.concat (I64.to_string verify) " (X509_V_OK is 0)"))
+    else return (Result.ok ({ ssl := ssl, ctx := ctx, sock := sock, timeout_ms := timeout_ms } : Tls.Stream))
+}
+
+/// The terminal failure: the SSL error, plus the verify result -- without
+/// it every certificate failure reports the same SSL_ERROR_SSL, and the
+/// caller cannot tell expired (10) from hostname-mismatch (62) from
+/// self-signed.
+def Tls.handshake_failed (ssl : Ptr) (ctx : Ptr) (sock : FdStream) (code : I32) : IO (Result String Tls.Stream) :=
+    Tls.abort ssl ctx sock
+        (String.concat "tls: SSL_connect failed: "
+            (String.concat (Tls.ssl_error_message code)
+                (String.concat " (verify result "
+                    (String.concat (I64.to_string (SSL_get_verify_result ssl)) ")"))))
+
+#[terminating]
+def Tls.handshake_attempt (ssl : Ptr) (ctx : Ptr) (sock : FdStream) (timeout_ms : I64) (started : I64) (attempts : I64) : IO (Result String Tls.Stream) := do {
     let handshake <- IO.mk (SSL_connect ssl);
-    if Bool.not (I32.beq handshake (I64.to_i32 1))
-    then do {
+    if I32.beq handshake (I64.to_i32 1)
+    then Tls.handshake_verified ssl ctx sock timeout_ms
+    else do {
+        let code : I32 := SSL_get_error ssl handshake;
         let timed <- Tls.timed_out started timeout_ms;
         if timed
         then Tls.abort ssl ctx sock (Tls.timeout_message "tls: SSL_connect" timeout_ms)
-        // The verify result rides along: without it every certificate
-        // failure reports the same SSL_ERROR_SSL, and the caller cannot
-        // tell expired (10) from hostname-mismatch (62) from self-signed.
-        else Tls.abort ssl ctx sock
-            (String.concat "tls: SSL_connect failed: "
-                (String.concat (Tls.ssl_error_message (SSL_get_error ssl handshake))
-                    (String.concat " (verify result "
-                        (String.concat (I64.to_string (SSL_get_verify_result ssl)) ")"))))
+        else if Tls.handshake_should_retry code attempts
+        then Tls.handshake_attempt ssl ctx sock timeout_ms started (attempts - 1)
+        else Tls.handshake_failed ssl ctx sock code
     }
-    else do {
-        let verify : I64 := SSL_get_verify_result ssl;
-        if Bool.not (I64.beq verify Ssl.x509_v_ok)
-        then Tls.abort ssl ctx sock
-            (String.concat "tls: certificate verify failed: "
-                (String.concat (I64.to_string verify) " (X509_V_OK is 0)"))
-        else return (Result.ok ({ ssl := ssl, ctx := ctx, sock := sock, timeout_ms := timeout_ms } : Tls.Stream))
-    }
+}
+
+def Tls.handshake_ssl (ssl : Ptr) (ctx : Ptr) (sock : FdStream) (timeout_ms : I64) : IO (Result String Tls.Stream) := do {
+    let started <- IO.current_time_nano;
+    Tls.handshake_attempt ssl ctx sock timeout_ms started 16
 }
 
 pub def Tls.timeout_message (what : String) (timeout_ms : I64) : String :=
