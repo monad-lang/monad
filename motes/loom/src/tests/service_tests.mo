@@ -1,7 +1,7 @@
 use loom::warp {Warp, ServiceName}
 use loom::service {
-    Multiplicity, Service, Provides,
-    Multiplicity.check,
+    ServiceOwnership, Service, Provides,
+    ServiceOwnership.check,
     Service.acquire, Service.config, Service.inject, Service.linear, Service.many, Service.name,
     Provides.add, Provides.empty, Provides.has, Provides.of_service,
     Warp.isolate_services, Warp.serves,
@@ -51,28 +51,28 @@ def test_empty_provides_has_nothing : Bool :=
     Bool.not (Provides.has (ServiceName.name "grep") p)
 
 #[test]
-def test_linear_multiplicity_admits_the_first_owner : Bool :=
-    match Multiplicity.check Multiplicity.multiplicity_linear 0 {
+def test_single_owner_admits_the_first_owner : Bool :=
+    match ServiceOwnership.check ServiceOwnership.single_owner 0 {
         Result.ok _ => true,
         Result.err _ => false,
     }
 
 #[test]
-def test_linear_multiplicity_rejects_a_second_owner : Bool :=
-    match Multiplicity.check Multiplicity.multiplicity_linear 1 {
+def test_single_owner_rejects_a_second_owner : Bool :=
+    match ServiceOwnership.check ServiceOwnership.single_owner 1 {
         Result.ok _ => false,
         Result.err e => String.contains e "already has an owner",
     }
 
 #[test]
-def test_many_multiplicity_admits_shared_owners : Bool :=
-    match Multiplicity.check Multiplicity.multiplicity_many 9 {
+def test_any_owner_admits_shared_owners : Bool :=
+    match ServiceOwnership.check ServiceOwnership.any_owner 9 {
         Result.ok _ => true,
         Result.err _ => false,
     }
 
 #[test]
-def test_acquire_checks_provision_and_multiplicity : Bool :=
+def test_acquire_checks_provision_and_ownership : Bool :=
     let w : Warp Provides I64 := Warp.warp (Provides.of_service grep_service) 0 in
     match Service.acquire grep_service w 0 {
         Result.ok _ => match Service.acquire grep_service w 1 {

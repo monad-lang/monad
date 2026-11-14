@@ -13,7 +13,7 @@
 ///     supplied by the caller and `Service.inject` re-checks the name at
 ///     run time -- exactly the roadmap's accepted shape ("a missing
 ///     provider is a runtime `Result.err` until Gamma can be dependent").
-///   * `Multiplicity` is a runtime policy check, not an affine
+///   * `ServiceOwnership` is a runtime policy check, not an affine
 ///     guarantee: `quantitative-types` still drops multiplicity in
 ///     lowering, the same standing as `Disposer`'s `!`.
 ///   * Isolation is as typed as the closed proof allows: a
@@ -23,37 +23,44 @@
 use loom::warp {ServiceName, Warp}
 use std::list {List.any}
 
-/// How many owners a service admits at one position. Linear is a
-/// singleton (`Multiplicity.check` refuses a second owner); Many is
-/// shared and admits any number.
-pub type Multiplicity {
-    multiplicity_linear,
-    multiplicity_many,
+/// How many owners a service admits at one position. `single_owner` is a
+/// singleton (`ServiceOwnership.check` refuses a second owner); `any_owner`
+/// is shared and admits any number.
+///
+/// Named `ServiceOwnership`, not `Multiplicity`: whole-program elaboration
+/// keys constructors and type annotations by BARE NAME across every loaded
+/// mote, so a second `Multiplicity` makes `lang.types::Multiplicity`'s
+/// matches un-elaboratable in `lang/src/typecheck/affine.mo` -- which is
+/// loaded by every weaver build. See
+/// `plans/implementations/2026-11-14-whole-program-type-name-collision.md`.
+pub type ServiceOwnership {
+    single_owner,
+    any_owner,
 }
 
-/// The runtime half of the multiplicity policy. `outstanding` is the
+/// The runtime half of the ownership policy. `outstanding` is the
 /// caller's current owner count; the first mount passes 0.
-pub def Multiplicity.check (m : Multiplicity) (outstanding : I64) : Result String Unit :=
+pub def ServiceOwnership.check (m : ServiceOwnership) (outstanding : I64) : Result String Unit :=
     match m {
-        Multiplicity.multiplicity_linear =>
+        ServiceOwnership.single_owner =>
             if I64.beq outstanding 0
             then Result.ok unit
             else Result.err "linear service already has an owner (singleton)",
-        Multiplicity.multiplicity_many => Result.ok unit,
+        ServiceOwnership.any_owner => Result.ok unit,
     }
 
-/// One service: its name, its multiplicity policy, and one config value.
+/// One service: its name, its ownership policy, and one config value.
 /// Built through `Service.linear`/`Service.many`, never a bare literal:
 /// generic literal inference is the recorded hazard that shaped
 /// `StrandRun`.
 pub type Service (Config : Type) {
-    service (name : ServiceName) (multiplicity : Multiplicity) (cfg : Config)
+    service (name : ServiceName) (multiplicity : ServiceOwnership) (cfg : Config)
 }
 
 pub def Service.name (s : Service Config) : ServiceName :=
     match s { service n _ _ => n }
 
-pub def Service.multiplicity (s : Service Config) : Multiplicity :=
+pub def Service.multiplicity (s : Service Config) : ServiceOwnership :=
     match s { service _ m _ => m }
 
 pub def Service.config (s : Service Config) : Config :=
@@ -61,11 +68,11 @@ pub def Service.config (s : Service Config) : Config :=
 
 /// A singleton service: one owner per position.
 pub def Service.linear {Config : Type} (name : ServiceName) (cfg : Config) : Service Config :=
-    Service.service name Multiplicity.multiplicity_linear cfg
+    Service.service name ServiceOwnership.single_owner cfg
 
 /// A shared service: any number of owners.
 pub def Service.many {Config : Type} (name : ServiceName) (cfg : Config) : Service Config :=
-    Service.service name Multiplicity.multiplicity_many cfg
+    Service.service name ServiceOwnership.any_owner cfg
 
 /// The closed availability proof a subtree's `Warp` carries. Names only;
 /// see the module doc for why config values cannot travel with them yet.
@@ -127,10 +134,10 @@ def inject_parts {Config : Type} (n : ServiceName) (cfg : Config) (w : Warp Prov
 pub def Service.inject {Config : Type} (s : Service Config) (w : Warp Provides A) : Result String Config :=
     match s { service n _ cfg => inject_parts n cfg w }
 
-/// Inject AND apply the multiplicity policy.
+/// Inject AND apply the ownership policy.
 pub def Service.acquire {Config : Type} (s : Service Config) (w : Warp Provides A) (outstanding : I64) : Result String Config :=
     match s { service n m cfg =>
-        match Multiplicity.check m outstanding {
+        match ServiceOwnership.check m outstanding {
             Result.err e => Result.err e,
             Result.ok _ => inject_parts n cfg w,
         }
