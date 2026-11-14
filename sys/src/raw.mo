@@ -1,6 +1,6 @@
-/// The native floor: three flag-multiplexed syscalls. Everything above them
-/// is pure Monad (`lang/src/cfg.mo`-style modules here), so the C stays
-/// syscall-shaped and the parsing is testable.
+/// The native floor: four flag-multiplexed syscall families (`sys_int`,
+/// `sys_str`, `sys_stat` and the `sys_dir_*` trio). Everything above them
+/// is pure Monad, so the C stays syscall-shaped and the parsing is testable.
 ///
 /// Payloads are `String`/`I64` only, by design: `ByteBuf` lives in `std`,
 /// and `sys` may depend on `init` alone. A call that would naturally fill an
@@ -11,12 +11,15 @@
 /// `String` shapes; `SysError.of_errno` (`errno.mo`) maps it.
 ///
 /// Package-private rather than `priv` on purpose: `priv` is module-only, and
-/// the user-facing wrappers are the next step, in `sys/src/sys.mo`.
+/// the wrappers in `sys/src/sys.mo` are a different module. `lib.mo` does
+/// NOT glob this file, so nothing here is reachable from outside `sys`.
 ///
-/// NOT WIRED YET: these declarations are inert until the four wiring points
-/// (core_native.rs, codegen/src/natives.mo, runtime/src/platform_posix.c,
-/// and the `wasm_os_only_natives` gate) land, which waits on the
-/// `runtime/memory` branch rewriting those same files.
+/// WIRED in both backends: `rust/core/src/core_native.rs` (the interpreter's
+/// `exec_native` arms), `runtime/src/platform_posix.c` (the C), and
+/// `codegen/src/natives.mo` (`native_runtime_fn_name` plus the
+/// `runtime_declarations` entry, which is an EXPLICIT list -- a `mk_decl`
+/// binding that is not named there is dead). `wasm_os_only_natives` gates
+/// all six on wasm.
 
 /// Integer syscalls. `op` selects the call; unused arguments are 0.
 ///   0 getpid    1 getppid   2 getuid    3 geteuid
@@ -26,7 +29,8 @@
 #[native "sys_int"]
 def sys_int (op : I64) (a : I64) (b : I64) : RawIO I64
 
-/// String-shaped syscalls. `arg` is a path or a uname field name.
+/// String-shaped syscalls. `arg` is a path, a uname field name or a
+/// variable name.
 ///   0 readlink(path)           -- the target, not resolved
 ///   1 uname(field)             -- "sysname" | "release" | "machine" | "nodename"
 ///   2 getenv(name)
