@@ -1,10 +1,11 @@
 /// Weaver's slash-command table -- weaver.md Phase 3 (completed in
 /// Phase 6): input starting with `/` routes here before it ever
-/// reaches the model. Each command is a value in a `BTreeMap` keyed by
-/// its name -- the same shape as shuttle's `ToolRegistry`, the
-/// deliberate pre-Loom-`Strand` fallback (plugin-framework Phase 2
-/// rewiring will be a diff, not a rewrite: same handler signature, one
-/// mount site).
+/// reaches the model. The builtin commands are a `BTreeMap` keyed by
+/// their name, and Phase 7 mounts extra ones as Loom `Strand`s: a mount
+/// appends a `MountedCommand` to the session's `mounted` ref and its
+/// disposer removes it, so a plugin/MCP line can add `/name` and take it
+/// away again without touching the table. The handler signature is
+/// unchanged by mounting (`SlashCommand.run`).
 ///
 /// The interactive state lives here (not in `dumb.mo`) because the
 /// commands are its only other writer: the dumb loop threads it,
@@ -49,7 +50,8 @@ use std::path {Path, Path.of, Path.parent, Path.to_string, Path.beq, Path.file_n
 use std::io {IO.is_dir, IO.current_time_nano}
 use std::map {Map, BTreeMap}
 use std::list {List.intercalate, List.any, List.filter}
-use std::ref {Ref}
+use std::ref {Ref, Ref.get, Ref.modify}
+use loom::strand {Active, Strand, Strand.bracket}
 use parsec::number {parse_i64}
 use weaver::permissions {
     PermGrant, PermScope, Permissions.get, Permissions.add, Permissions.revoke,
@@ -146,6 +148,12 @@ pub struct WeaverState {
     /// The discovered Agent Skills (`skills.mo`): indexed in the system
     /// prompt, loaded by the `skill` tool or `/<name>`.
     skills : List Skill := List.empty,
+    /// Commands mounted as Loom `Strand`s (Phase 7): plugin/MCP lines
+    /// prepend here and their disposer removes them; `command_table` is
+    /// the builtin floor. None in tests that never mount one. Spell it at
+    /// every full `WeaverState` literal (an omitted field has filled
+    /// garbage at run time).
+    mounted : Option (Ref (List MountedCommand)) := Option.none,
 }
 
 /// What a command did to the transcript: ordinary output appends,
@@ -168,10 +176,74 @@ pub struct Effect {
     picker : Option (List String) := Option.none,
 }
 
-/// One table entry -- a uniform signature, the Phase 7 rewiring point.
+/// One table entry -- a uniform signature. Mounting (Phase 7) changes
+/// WHERE a command is looked up, never how it runs.
 pub struct SlashCommand {
     run : String -> WeaverState -> IO (Result WeaverError Effect),
 }
+
+/// A command added after startup by a Phase 7 mount. A one-constructor
+/// `type` rather than a struct: it is built inside `Commands.mount`'s
+/// thunk, where an annotated struct literal would need its own def.
+pub type MountedCommand {
+    mounted_command (name : String) (command : SlashCommand)
+}
+
+pub def MountedCommand.name (m : MountedCommand) : String :=
+    match m { mounted_command n _ => n }
+
+pub def MountedCommand.command (m : MountedCommand) : SlashCommand :=
+    match m { mounted_command _ c => c }
+
+#[partial]
+def mounted_lookup (cmd : String) (ms : List MountedCommand) : Option SlashCommand :=
+    match ms {
+        List.empty => Option.none,
+        List.cons m rest =>
+            if String.beq (MountedCommand.name m) cmd
+            then Option.some (MountedCommand.command m)
+            else mounted_lookup cmd rest,
+    }
+
+#[partial]
+def mounted_remove (cmd : String) (ms : List MountedCommand) : List MountedCommand :=
+    match ms {
+        List.empty => List.empty,
+        List.cons m rest =>
+            if String.beq (MountedCommand.name m) cmd
+            then mounted_remove cmd rest
+            else List.cons m (mounted_remove cmd rest),
+    }
+
+/// Mount one command as a `Strand`. Running the returned strand registers
+/// it; running its disposer -- directly, or through `Strand.sealed` over
+/// the stack a mount site kept -- unmounts it. The builtin table is
+/// never touched, so unmounting a plugin line cannot shadow a builtin.
+pub def Commands.mount (mounts : Ref (List MountedCommand)) (name : String) (c : SlashCommand) : Strand Active Active Unit :=
+    Strand.bracket
+        (fn (_ : Unit) => do {
+            let _ <- Ref.modify mounts (fn (ms : List MountedCommand) =>
+                List.cons (MountedCommand.mounted_command name c) ms);
+            IO.pure unit
+        })
+        (fn (_ : Unit) => do {
+            let _ <- Ref.modify mounts (fn (ms : List MountedCommand) => mounted_remove name ms);
+            IO.pure (Result.ok unit)
+        })
+
+/// Mounted first, builtin second: a plugin cannot replace `/quit`, but it
+/// may add `/deploy`.
+def find_command (cmd : String) (st : WeaverState) : IO (Option SlashCommand) :=
+    match st.mounted {
+        Option.none => IO.pure (Map.lookup cmd command_table),
+        Option.some r => do {
+            let ms <- Ref.get r;
+            match mounted_lookup cmd ms {
+                Option.some c => IO.pure (Option.some c),
+                Option.none => IO.pure (Map.lookup cmd command_table),
+            }
+        },
+    }
 
 pub def Effect.ok (st : WeaverState) (output : String) : Effect :=
     let e : Effect := { state := st, output := output, transcript := TranscriptChange.keep, picker := Option.none } in
@@ -231,15 +303,18 @@ def command_map (cs : List (Pair String SlashCommand)) : BTreeMap String SlashCo
         List.cons p rest => match p { Pair.pair name c => Map.insert name c (command_map rest) },
     }
 
-/// Route one `/`-line: split at the first space, look the command up,
-/// run it. Unknown names get `/help`'s hint, not silence.
+/// Route one `/`-line: split at the first space, look the command up
+/// (mounted first, then builtin), run it. Unknown names get `/help`'s
+/// hint, not silence.
 pub def Commands.dispatch (line : String) (st : WeaverState) : IO (Result WeaverError Effect) :=
     match split_command line {
-        Pair.pair cmd arg =>
-            match Map.lookup cmd command_table {
+        Pair.pair cmd arg => do {
+            let found <- find_command cmd st;
+            match found {
                 Option.some c => dispatch_command c arg st,
                 Option.none => unknown_effect cmd st,
-            },
+            }
+        },
     }
 
 /// Apply a table entry. The handler is bound out of the struct first:

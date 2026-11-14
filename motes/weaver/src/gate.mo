@@ -31,6 +31,8 @@ use std::ref {Ref}
 use std::path {Path}
 use weaver::assess {Assessment, Reach.is_inside, Assess.pick, Assess.scope_line}
 use json::json {Json, Json.to_string}
+use loom::service {Service, Service.config, Service.linear}
+use loom::warp {ServiceName}
 
 /// What one user answer to a prompt means. `here` records a repo-scoped
 /// grant (only offered when the pick's target is inside the workspace
@@ -417,3 +419,35 @@ def answer_word_note (repo_ok : Bool) (word : String) (note : String) : Option (
         Option.none => Option.none,
         Option.some a => Option.some (Pair.pair a note),
     }
+
+// ── Phase 7: the approver service ───────────────────────────────────────
+
+/// The `approver` service's config: the `Gate` a mount site built. Thin on
+/// purpose -- the policy and prompting below stay the logic; Phase 7 moves
+/// only the mount site, so a plugin could shadow the approver later.
+pub type ApproverConfig {
+    approver_config (gate : Gate)
+}
+
+/// The mounted approver. Linear: one approver per position in the tree.
+pub def Approver.linear (g : Gate) : Service ApproverConfig :=
+    Service.linear (ServiceName.name "approver") (ApproverConfig.approver_config g)
+
+/// Read the `Gate` back out of the mounted service.
+pub def Approver.gate (svc : Service ApproverConfig) : Gate :=
+    let c : ApproverConfig := Service.config svc in
+    match c { approver_config g => g }
+
+def never_read (_ : Unit) : IO (Option String) := IO.pure Option.none
+
+/// The non-interactive approver: the policy still decides (`precheck`
+/// refuses plan mode and auto's danger verdicts), but a pick that would
+/// have prompted is answered `once`. This is what a non-tty mount site
+/// selects; the line UI keeps its prompting seam (its e2e pins it).
+pub def Approver.headless (mode : Mode) (grants : Option (Ref (List PermGrant))) (root : Option Path) (scratch : Option Path) (auto : Option AutoCtx) (write : String -> IO Unit) : Service ApproverConfig :=
+    let policy_gate : Gate := Gate.weaver mode grants root scratch auto never_read write in
+    let g : Gate := {
+        ask := fn (_ : Pick) => IO.pure Approval.once,
+        precheck := policy_gate.precheck,
+    } in
+    Approver.linear g

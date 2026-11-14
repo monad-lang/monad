@@ -140,6 +140,9 @@ path = "mlir"
 [workspace.dependencies.log]
 path = "motes/log"
 
+[workspace.dependencies.loom]
+path = "motes/loom"
+
 [workspace.dependencies.lsp]
 path = "motes/lsp"
 

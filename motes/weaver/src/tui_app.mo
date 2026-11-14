@@ -18,6 +18,7 @@
 use weaver::place {Place.cwd_of}
 use shuttle::agent {RunState}
 use shuttle::registry {ToolRegistry}
+use loom::service {Service}
 use shuttle::gate {Pick, Approval, Gate, Capability}
 use shuttle::message {Message, Usage}
 use shuttle::provider {ProviderConfig}
@@ -39,7 +40,7 @@ use weaver::commands {
 }
 use log::logger {Logger}
 use weaver::policy {Mode, Mode.show, Mode.cycle, Mode.is_auto, Policy.decide, Policy.unguarded, Decision}
-use weaver::gate {pick_header, pick_target, cap_name, capped_diff, PickAnswer, record_answer, answer_approval, Gate.assessment_lines, Gate.granted, Gate.auto_for, Gate.auto_precheck, Gate.auto_open, Gate.decision}
+use weaver::gate {pick_header, pick_target, cap_name, capped_diff, PickAnswer, record_answer, answer_approval, Gate.assessment_lines, Gate.granted, Gate.auto_for, Gate.auto_precheck, Gate.auto_open, Gate.decision, ApproverConfig, Approver.linear, Approver.gate}
 use weaver::permissions {PermGrant, Permissions.get, Permissions.render}
 use weaver::assess {Assessment, Reach.is_inside, Assess.pick}
 use weaver::diff {Diff.for_input, Diff.lines}
@@ -1723,7 +1724,11 @@ def drive_tui (log : Option Logger) (gen : I64) (st : WeaverState) (text : Strin
                     (ToolRegistry.register (ReadProcessTool.impl_with stop)
                         (ToolRegistry.register (Subagent.task_tool st.run.session.config st.instructions log st.store stop spend) st.run.reg))))))) };
         let ctx <- auto_ctx log st text;
-        let gated : RunState := { with_task with gate := Gate.weaver_tui log st.mode st.colors st.store st.grants (Place.cwd_of st.place) ctx,
+        // Phase 7: the Gate is built by the UI seam and read back out of the
+        // mounted `approver` service -- the mount site a plugin will shadow.
+        let policy_gate : Gate := Gate.weaver_tui log st.mode st.colors st.store st.grants (Place.cwd_of st.place) ctx;
+        let approver : Service ApproverConfig := Approver.linear policy_gate;
+        let gated : RunState := { with_task with gate := Approver.gate approver,
             emit := progress_live log st.store, on_usage := on_usage,
             should_stop := stop, inbox := Inbox.seam st.store, side_spend := Subagent.drain spend, stopped := false };
         let ready : RunState := append_user gated text;

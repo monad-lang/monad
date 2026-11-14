@@ -233,6 +233,7 @@ def state_of (reg : ToolRegistry) : WeaverState := {
     store := Option.none,
     auto_start := false,
     auto_failures := Option.none,
+    mounted := Option.none,
 }
 
 def run_of (reg : ToolRegistry) : RunState := {

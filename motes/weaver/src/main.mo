@@ -36,7 +36,7 @@ use weaver::cli_spec {
 }
 use weaver::plan_file {PlanRepo, PlanRepo.resolve}
 use weaver::skills {Skill, SkillScan, Skills.discover, Skills.user_root, Skills.with_index, Skills.note}
-use weaver::commands {WeaverState, Commands.set_plan, Commands.session_name, Commands.find_plan, Commands.load_plan, Commands.join_notes, with_instructions}
+use weaver::commands {WeaverState, MountedCommand, Commands.set_plan, Commands.session_name, Commands.find_plan, Commands.load_plan, Commands.join_notes, with_instructions}
 use weaver::monad_tools {MonadCheck.tool, MonadEval.tool}
 use lang::module {ModuleInfoCache, module_info_cache_empty}
 use weaver::store {
@@ -58,7 +58,7 @@ use std::map {BTreeMap}
 use std::ref {Ref, Ref.new}
 use weaver::permissions {PermGrant}
 use weaver::place {SessionPlace, Place.probe, Place.cwd_of, Place.moved_note}
-use weaver::settings {Settings, Settings.load_global, Settings.load_project, Settings.combine, Settings.cap_of, Settings.validate, Loaded, Loaded.empty}
+use weaver::settings {Settings, Settings.load_global, Settings.load_project, Settings.combine, Settings.cap_of, Settings.validate, Loaded, Loaded.empty, Settings.service, Settings.service_settings}
 use weaver::trust {TrustOutcome, Trust.decide, Trust.record_path, Trust.forced_by}
 use weaver::instructions {InstrFile, Instructions.user_path, Instructions.discover, Instructions.note, Prompt.system}
 use tui::terminal {Terminal.enter_raw_mode, Terminal.leave_raw_mode}
@@ -437,7 +437,7 @@ def initial_state (p : Plan) (reg : ToolRegistry) (s : Settings) (colors : Bool)
     let left : I64 := if p.max_turns - session.turns < 0 then 0 else p.max_turns - session.turns in
     let run : RunState := { session := session, reg := reg, turns_left := left, emit := stdout_write, gate := Gate.auto, always := List.empty, retries := 3, sleep_ms := Dumb.poll_sleep, on_usage := silent_usage, should_stop := silent_stop, inbox := silent_inbox, side_spend := silent_side_spend, stopped := false } in
     let prov : String := Weaver.provider_of p.provider session.config in
-    let st : WeaverState := { run := run, mode := p.mode, provider := prov, budget := p.max_turns, context_window := p.context_window, compact_at := p.compact_at, plan := Option.none, last_context := 0, grants := grants, place := place, mcps := p.mcps, keys := s.api_keys, catalog := BTreeMap.empty, quit := false, colors := colors, fatal := Option.none, name := Option.none, trusted := p.trusted, instructions := p.instructions, instr_seen := Option.none, store := store, auto_on_danger := auto_on_danger_of s, verdicts := Option.none, plan_repo := Option.none, skills := p.skills, auto_start := p.auto_start, auto_failures := Option.none, auto_safety := auto_safety_of s } in
+    let st : WeaverState := { run := run, mode := p.mode, provider := prov, budget := p.max_turns, context_window := p.context_window, compact_at := p.compact_at, plan := Option.none, last_context := 0, grants := grants, place := place, mcps := p.mcps, keys := s.api_keys, catalog := BTreeMap.empty, quit := false, colors := colors, fatal := Option.none, name := Option.none, trusted := p.trusted, instructions := p.instructions, instr_seen := Option.none, store := store, auto_on_danger := auto_on_danger_of s, verdicts := Option.none, plan_repo := Option.none, skills := p.skills, auto_start := p.auto_start, auto_failures := Option.none, auto_safety := auto_safety_of s, mounted := Option.none } in
     st
 
 /// The dumb UI's palette switch: `NO_COLOR` set anywhere is off --
@@ -658,12 +658,19 @@ def run_opened (setup : LogSetup) (colors : Bool) (p : Plan) (s : Settings) (pla
     let instr_seen <- Ref.new p.instructions;
     let zero_failures : I64 := 0;
     let failures <- Ref.new zero_failures;
+    // Phase 7's one mount site: every session starts with an empty mounted
+    // command list, and a plugin/MCP mount appends to this same ref.
+    let empty_mounts : List MountedCommand := List.empty;
+    let mounts <- Ref.new empty_mounts;
     let plan <- stored_plan o.store;
-    let st0 : WeaverState := initial_state p reg s colors o.store o.session (Option.some grants) place;
+    // Phase 7's settings mount point: the knobs reach the session through
+    // the service, so a plugin reads the same resolved record later.
+    let resolved : Settings := Settings.service_settings (Settings.service s);
+    let st0 : WeaverState := initial_state p reg resolved colors o.store o.session (Option.some grants) place;
     let st1 : WeaverState := Commands.set_plan st0 plan;
     let name <- Commands.session_name st1;
     let repo <- plan_repo_of s place;
-    let st_r0 : WeaverState := { st1 with name := name, instr_seen := Option.some instr_seen, verdicts := Option.some verdicts, plan_repo := repo, auto_failures := Option.some failures };
+    let st_r0 : WeaverState := { st1 with name := name, instr_seen := Option.some instr_seen, verdicts := Option.some verdicts, plan_repo := repo, auto_failures := Option.some failures, mounted := Option.some mounts };
     // The prompt is rebuilt now that the store (and so the scratch path)
     // is known: the session object was built before it existed.
     let st_r : WeaverState := with_instructions st_r0 st_r0.instructions;

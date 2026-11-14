@@ -2,7 +2,8 @@ use shuttle::gate {Capability}
 use std::path {Path}
 use weaver::gate {PickAnswer, answer_line, gate_answer_feedback, gate_answer_prompt}
 use shuttle::gate {Pick, Approval, Gate}
-use weaver::gate {Gate.weaver}
+use weaver::gate {Gate.weaver, ApproverConfig, Approver.linear, Approver.gate, Approver.headless}
+use loom::service {Service}
 use weaver::policy {Mode, AutoDanger}
 use weaver::permissions {PermGrant, PermScope, Permissions.add}
 use weaver::classify {AutoCtx}
@@ -312,4 +313,38 @@ def test_auto_safety_off_allows_everything : IO Bool := do {
     let flagged <- check (shell_pick "rm -rf /");
     let outside <- check (shell_pick "cat /etc/hosts");
     IO.pure (Bool.and (approved_once flagged) (approved_once outside))
+}
+
+// ── Phase 7: the approver service ───────────────────────────────────────
+
+/// The mounted service carries the Gate the policy built: plan mode's
+/// refusal survives the wrap.
+#[test]
+def test_the_approver_service_carries_the_policy_gate : IO Bool := do {
+    let policy_gate : Gate := Gate.weaver Mode.plan Option.none Option.none Option.none Option.none no_read no_write;
+    let svc : Service ApproverConfig := Approver.linear policy_gate;
+    let g : Gate := Approver.gate svc;
+    let check : Pick -> IO (Option Approval) := g.precheck;
+    let r <- check (write_pick "src/a.mo");
+    return (denied r)
+}
+
+/// The headless approver never prompts: a pick that reaches `ask` runs.
+#[test]
+def test_the_headless_approver_answers_once : IO Bool := do {
+    let svc : Service ApproverConfig := Approver.headless Mode.manual Option.none Option.none Option.none Option.none no_write;
+    let g : Gate := Approver.gate svc;
+    let ask : Pick -> IO Approval := g.ask;
+    let a <- ask (write_pick "src/a.mo");
+    return (match a { Approval.once => true, _ => false })
+}
+
+/// ...but its precheck is still the real policy: plan mode refuses.
+#[test]
+def test_the_headless_approver_still_enforces_plan_mode : IO Bool := do {
+    let svc : Service ApproverConfig := Approver.headless Mode.plan Option.none Option.none Option.none Option.none no_write;
+    let g : Gate := Approver.gate svc;
+    let check : Pick -> IO (Option Approval) := g.precheck;
+    let r <- check (write_pick "src/a.mo");
+    return (denied r)
 }

@@ -26,6 +26,8 @@ use std::stream {StreamError, StreamError.is_not_found}
 use std::path {Path, Path.of}
 use std::map {Map, BTreeMap, BTreeMap.to_list}
 use std::list {List.intercalate}
+use loom::service {Service, Service.config, Service.many}
+use loom::warp {ServiceName}
 
 /// One settings file's worth of knobs -- every field optional, an
 /// absent file is simply all-absent.
@@ -49,6 +51,21 @@ pub struct Settings {
     caps : BTreeMap String Capability,
     api_keys : BTreeMap String String,
 }
+
+// ── Phase 7: the settings service ───────────────────────────────────────
+
+/// The settings service's config: the resolved record. Settings are read
+/// by many consumers, so the service is Many (shared).
+pub type SettingsConfig {
+    settings_config (settings : Settings)
+}
+
+pub def Settings.service (s : Settings) : Service SettingsConfig :=
+    Service.many (ServiceName.name "settings") (SettingsConfig.settings_config s)
+
+pub def Settings.service_settings (svc : Service SettingsConfig) : Settings :=
+    let c : SettingsConfig := Service.config svc in
+    match c { settings_config s => s }
 
 pub def Settings.empty : Settings := {
     mode := Option.none,

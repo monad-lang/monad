@@ -20,8 +20,9 @@ use weaver::commands {
     WeaverState, Effect, Commands.dispatch, Commands.context_used, Commands.context_percent,
     Commands.set_plan, Commands.plan_after_turn, SessionPage, Commands.session_page,
     Commands.turns_label, Commands.turn_context, Commands.sessions_for, Commands.place_suffix,
-    Commands.memory_text, Commands.store_plan, Commands.linked_plan, Commands.with_skills, Commands.skill_turn, Commands.builtin_names, Commands.apply_setting, Commands.cycle_setting, command_table, SlashCommand,
+    Commands.memory_text, Commands.store_plan, Commands.linked_plan, Commands.with_skills, Commands.skill_turn, Commands.builtin_names, Commands.apply_setting, Commands.cycle_setting, command_table, SlashCommand, MountedCommand, Commands.mount, Effect.ok,
 }
+use loom::strand {Active, Disposed, Strand, StrandRun, Strand.run, Strand.sealed}
 use weaver::skills {Skill}
 use weaver::plan_file {PlanRepo, PlanDoc, PlanFile.read}
 use weaver::catalog {Catalog.lookup}
@@ -78,6 +79,7 @@ def state_of (mode : Mode) (mcps : List String) : WeaverState := {
     store := Option.none,
     auto_start := false,
     auto_failures := Option.none,
+    mounted := Option.none,
 }
 
 def run_of : RunState := {
@@ -1353,3 +1355,34 @@ def test_setting_auto_safety_toggles : Bool :=
                     })),
         },
     }
+
+// ── Phase 7: mounted commands ──────────────────────────────────────────
+
+def quiet_sink (_ : String) : IO Unit := IO.pure unit
+
+/// The struct update lives here, not in the test's do-block: `{ x with .. }`
+/// parses only in a plain body.
+def with_mounts (st : WeaverState) (mounts : Ref (List MountedCommand)) : WeaverState :=
+    let st2 : WeaverState := { st with mounted := Option.some mounts } in
+    st2
+
+def output_of (r : Result WeaverError Effect) : String :=
+    match r { Result.ok e => e.output, Result.err _ => "ERR" }
+
+/// A command added after startup is dispatched by its mounted name, and
+/// running the mount's disposer takes it away again.
+#[test]
+def test_a_mounted_then_unmounted_command_is_gone : IO Bool := do {
+    let empty_mounts : List MountedCommand := List.empty;
+    let mounts <- Ref.new empty_mounts;
+    let st : WeaverState := with_mounts (state_of Mode.manual []) mounts;
+    let hello : SlashCommand := SlashCommand.mk
+        (fn (_ : String) (s : WeaverState) => IO.pure (Result.ok (Effect.ok s "hello from the mount")));
+    let pr <- Strand.run (Commands.mount mounts "/hello" hello);
+    let before <- Commands.dispatch "/hello" st;
+    let d : Strand Active Disposed Unit := Strand.sealed quiet_sink (StrandRun.disposers pr);
+    let _ <- Strand.run d;
+    let after <- Commands.dispatch "/hello" st;
+    return (output_of before == "hello from the mount"
+        && String.contains (output_of after) "unknown command: /hello")
+}

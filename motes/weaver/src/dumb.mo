@@ -23,7 +23,7 @@ use weaver::commands {
     Commands.plan_after_turn, Commands.set_plan, Commands.turn_context, Commands.store_turn_plan, Commands.skill_turn,
     Commands.context_used, Commands.context_percent,
 }
-use weaver::gate {Gate.weaver}
+use weaver::gate {Gate.weaver, ApproverConfig, Approver.linear, Approver.gate}
 use weaver::classify {AutoCtx, Classify.intent, Classify.with_plan}
 use weaver::ask {AskSpec, AskReply, AskSeam, AskTool.impl, AskTool.cancelled_reply, AskTool.line_prompt, AskTool.parse_line}
 use weaver::auto_continue {AutoContinue.next, AutoContinue.record_failure, AutoContinue.clear_failures, AutoContinue.max_failures, AutoContinue.budget_note, AutoContinue.plan_context}
@@ -31,8 +31,10 @@ use weaver::policy {Mode, Mode.show}
 use weaver::error {WeaverError, WeaverError.show, WeaverError.recoverable, WeaverError.of_shuttle}
 use weaver::store {StoreState, Store.record_history, Store.write_plan, Store.scratch_of}
 use weaver::shell_tool {WeaverShell.impl, WeaverShell.never_stop}
+use loom::service {Service}
 use weaver::theme {Theme.tint, theme_status_code, class_code, LineClass}
 use log::logger {Logger}
+use shuttle::gate {Gate}
 use shuttle::registry {ToolRegistry}
 use weaver::subagent {Subagent.task_tool, Subagent.drain}
 use weaver::instructions {Instructions.take_notes, Instructions.attaching}
@@ -519,7 +521,11 @@ def gate_for (st : WeaverState) (line : String) (read : Unit -> IO (Option Strin
         log := Option.none,
         on_danger := st.auto_on_danger,
     };
-    let r2 : RunState := { base with gate := Gate.weaver st.mode st.grants (Place.cwd_of st.place) (Store.scratch_of st.store) (Option.some ctx) read write };
+    // Phase 7: the Gate is built by the policy and read back out of the
+    // mounted `approver` service -- the mount site a plugin will shadow.
+    let policy_gate : Gate := Gate.weaver st.mode st.grants (Place.cwd_of st.place) (Store.scratch_of st.store) (Option.some ctx) read write;
+    let approver : Service ApproverConfig := Approver.linear policy_gate;
+    let r2 : RunState := { base with gate := Approver.gate approver };
     IO.pure r2
 }
 

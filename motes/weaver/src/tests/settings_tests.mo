@@ -11,6 +11,7 @@ use weaver::settings {
     Settings, Settings.empty, Settings.merge, Settings.load_of_path,
     Settings.cap_of, Settings.key_of, Loaded, parse_settings, parse_warned, parse_cap,
     SettingsUpdate, Settings.render_update, Settings.validate,
+    Settings.service, Settings.service_settings,
 }
 use weaver::error {WeaverError, WeaverError.show}
 use weaver::policy {Mode}
@@ -421,3 +422,14 @@ def test_auto_safety_project_wins : Bool :=
     let kept : Settings := Settings.merge base Settings.empty in
     opt_bool_eq merged.auto_safety (Option.some false)
         && opt_bool_eq kept.auto_safety (Option.some true)
+
+// ── Phase 7: the settings service ───────────────────────────────────────
+
+/// The settings service round-trips the resolved record.
+#[test]
+def test_the_settings_service_round_trips : Bool :=
+    let s : Settings := Settings.empty in
+    let back : Settings := Settings.service_settings (Settings.service s) in
+    opt_i64_eq back.max_turns Option.none
+        && opt_str_eq back.provider Option.none
+        && opt_bool_eq back.thinking Option.none

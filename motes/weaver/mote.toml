@@ -1,9 +1,9 @@
 # Weaver -- the interactive coding agent on shuttle: the approval
 # policy, the dumb-mode and TUI UIs, the slash commands and the
 # settings, over shuttle's headless harness
-# (plans/implementations/weaver.md). No `loom` dep yet: Phase 7 (Loom
-# mounts) is gated on plugin-framework, and a manifest dep that nothing
-# imports is a lie.
+# (plans/implementations/weaver.md). `loom` is declared from Phase 7 on:
+# the slash-command table mounts commands as Loom `Strand`s and the
+# approval gate and settings are mounted as Loom `Service`s.
 [mote]
 name = "weaver"
 version = "0.1.0"
@@ -19,6 +19,9 @@ workspace = true
 workspace = true
 
 [dependencies.log]
+workspace = true
+
+[dependencies.loom]
 workspace = true
 
 [dependencies.json]
