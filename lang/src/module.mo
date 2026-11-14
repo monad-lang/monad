@@ -2204,6 +2204,15 @@ def check_module_decls_with_scope (scope : Scope) (decl_list : List Decl) (local
 /// The termination pass is a decl-list walk, not a per-decl one, because it
 /// needs the whole module to build its call graph; appending its result here
 /// keeps the two gates in the one place the host has them.
+///
+/// SCOPE: ordinary typing + termination ONLY. The opaque/view safety rules
+/// are added by `check_module_with_scope_classified` (and so by
+/// `check_module_with_scope_path`, the compile/run/test/eval path; the LSP's
+/// ranged path adds them too). This def is the ordinary half those call --
+/// do NOT use it as a whole-module check on source that may carry
+/// `#[opaque]`, `#[proof]` or a view annotation: it passes an empty or
+/// multi-constructor opaque type clean. Its only direct callers are the
+/// `Bool` wrapper above and this module's own tests.
 pub def check_module_with_scope (scope : Scope) (decl_list : List Decl) (locals : LocalScope) (path : Option String) (verbose : Bool) : IO (List String) := do {
     let diags <- check_module_decls_with_scope scope decl_list locals path verbose;
     return (list_append diags (check_termination_all decl_list))

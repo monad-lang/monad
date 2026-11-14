@@ -3498,6 +3498,68 @@ mod test {
     assert_eq!(report.passed(), 2, "report: {report:?}");
   }
 
+  /// Type-check one probe source through the PRODUCTION entry. The
+  /// harness above (`check_module_source`) never calls
+  /// `check_opaque_and_native_returns`, so an opaque-rule probe written
+  /// against it would pass on broken code.
+  fn check_opaque_source(source: &str) -> Result<usize, TypeError> {
+    let env = ModuleCheckEnv::new();
+    let parsed = parse_file(source).expect("probe source parses");
+    let path = ModulePath::top("'opaque_rules_probe");
+    let checked = type_check_module_decls_new(&path, parsed.decls, &env.loaded)?;
+    Ok(checked.len())
+  }
+
+  // ── `#[opaque]` declarations: exactly one nullary witness ──
+  //
+  // An opaque type is native-backed, so a native can produce a value of
+  // it; with zero constructors that value would inhabit what would
+  // otherwise be the empty type (`False`). The rule is therefore
+  // "exactly one NULLARY witness", not "at least one".
+
+  #[test]
+  fn test_opaque_type_with_no_constructors_is_rejected() {
+    let err = check_opaque_source("#[opaque] type T { }\n")
+      .expect_err("an #[opaque] type with zero constructors must be rejected");
+    let msg = err.to_string();
+    assert!(msg.contains("opaque type `T`"), "got: {msg}");
+    assert!(
+      msg.contains("must declare exactly one nullary witness constructor"),
+      "got: {msg}"
+    );
+  }
+
+  #[test]
+  fn test_opaque_witness_must_be_nullary() {
+    let err = check_opaque_source("#[opaque] type T { w (x : I64) }\n")
+      .expect_err("a non-nullary #[opaque] witness must be rejected");
+    let msg = err.to_string();
+    assert!(msg.contains("opaque type `T`"), "got: {msg}");
+    assert!(
+      msg.contains("must declare exactly one nullary witness constructor"),
+      "got: {msg}"
+    );
+  }
+
+  #[test]
+  fn test_opaque_type_with_two_constructors_is_rejected() {
+    let err = check_opaque_source("#[opaque] type T { a, b }\n")
+      .expect_err("an #[opaque] type with two constructors must be rejected");
+    assert!(
+      err
+        .to_string()
+        .contains("must declare exactly one nullary witness constructor"),
+      "got: {err}"
+    );
+  }
+
+  #[test]
+  fn test_opaque_single_nullary_witness_is_accepted() {
+    let count = check_opaque_source("#[opaque] type T { w }\ndef id_t (x : T) : T := x\n")
+      .expect("one nullary witness is the legal shape");
+    assert_eq!(count, 2, "type + def");
+  }
+
   // ── Module-qualified references (`NameRef::Qn`) ──
   //
   // `plans/implementations/qualified-names.md` makes `::` qualification
