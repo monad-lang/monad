@@ -237,6 +237,20 @@
       files = "^scripts/.*\\.sh$|^scripts/monadup$";
       pass_filenames = true;
     };
+    # CI's Formatting gate (`scripts/check-fmt.sh` over the whole corpus) in
+    # the commit path, on only the `.mo` files the commit touches -- the same
+    # script in its `-- file...` mode, so the corpus paths and the binary
+    # choice (a tree-built compiler under target-monad/ first, then `monad`
+    # on PATH) cannot drift from the gate's. A formatting slip then fails the
+    # commit in seconds instead of a CI run twenty minutes later.
+    monad-fmt = {
+      enable = true;
+      name = "monad-fmt";
+      entry = "${config.devenv.root}/scripts/check-fmt.sh --";
+      pass_filenames = true;
+      files = "\\.mo$";
+    };
+
     # A site build only RENDERS the book -- it never compiles the Monad
     # inside it, which is how docs/src drifted far enough from the compiler
     # that most of its samples had stopped parsing. This extracts every
