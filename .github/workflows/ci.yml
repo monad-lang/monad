@@ -684,7 +684,8 @@ jobs:
   # features touch, with the same tree compiler. `--jobs 2` overlaps the
   # files' compile-link-run tails; each file reloads the module closure, so a
   # whole-directory sweep is the expensive shape and a named list is the
-  # trade. Trim the list before raising the guard.
+  # trade. Trim the list before raising the guard. Loom's three suites ride
+  # here: Loom is weaver's dependency and nothing else in CI runs them.
   weaver-unit-checks:
     runs-on: [self-hosted, linux]
     needs: [changes, compiler-checks]
@@ -711,7 +712,10 @@ jobs:
                  motes/weaver/src/tests/gate_tests.mo \
                  motes/weaver/src/tests/ask_tests.mo \
                  motes/weaver/src/tests/classify_tests.mo \
-                 motes/weaver/src/tests/auto_continue_tests.mo
+                 motes/weaver/src/tests/auto_continue_tests.mo \
+                 motes/loom/src/tests/warp_tests.mo \
+                 motes/loom/src/tests/strand_tests.mo \
+                 motes/loom/src/tests/service_tests.mo
 
   # The portable monadup binary and the distribution harness: the bootstrap
   # stub, the fixture-driven install path, doctor/env/new, and a monadup
