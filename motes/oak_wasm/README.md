@@ -123,11 +123,24 @@ model keeps them; GL handles are `Copy` ids.
 - **Textures** load in two phases: `GlImage.load url`, then `GlImage.poll`
   each frame until it returns 1. Then call `Gl.tex_image_from_image`.
 
-Buffer, matrix and pixel uploads take `std::buf`'s `Buf F32`/`Buf I32`/
-`Buf U8` and land with that module (plans/implementations/web-webgl.md,
-Part B). `fixtures/wasm/oak_webgl.mo` is the worked example, and
-`wasm/web/webgl_smoke.mjs` checks its GL call stream over
-`wasm/web/stub_gl.mjs`.
+- **Uploads** take a `std::buf` buffer as a `Shared` handle:
+  `Gl.buffer_data_f32`/`buffer_sub_data_f32` (vertices), `buffer_data_i32`
+  (indices for `draw_elements`, which on WebGL1 needs
+  `Gl.has_uint_indices`), `uniform_matrix4` (`Buf F32`, column-major) and
+  `tex_image_rgba` (`Buf U8`). `Gl.f32_buf`/`i32_buf`/`u8_buf` pack a list;
+  `f32_buf` rounds each `F64` with `F64.to_f32`. A buffer of the wrong kind
+  or too short is refused (the call returns false) before the host sees it.
+- **Look uniform locations up once**, at setup: each `Gl.uniform_location`
+  call takes a new host table slot.
+- **A frame loop is opt-in.** An `after_render` whose message makes `update`
+  return another `after_render` runs once per batch; with the animation-frame
+  subscription that is every frame. A static scene should draw once, on a
+  message that changes it.
+
+`examples/oak_webgl.mo` is a spinning textured quad built this way.
+`fixtures/wasm/oak_webgl.mo` and `fixtures/wasm/webgl_triangle.mo` are the
+checked fixtures: `wasm/web/webgl_smoke.mjs` and `webgl_triangle_smoke.mjs`
+compare their GL call streams over `wasm/web/stub_gl.mjs`.
 
 ## Memory
 
@@ -196,6 +209,7 @@ which drive real web-profile modules over a stub DOM:
 `hydrate_smoke.mjs`, `oak_event_smoke.mjs` (typed handlers, drag/drop,
 clipboard), `event_smoke.mjs` (the raw snapshot), `clipboard_smoke.mjs`
 (async clipboard), `subs_smoke.mjs` (window/document/frame), and
-`webgl_smoke.mjs`/`webgl_texture_smoke.mjs` (`after_render` drawing and
-textures over the recording `stub_gl.mjs`).
+`webgl_smoke.mjs`/`webgl_texture_smoke.mjs`/`webgl_triangle_smoke.mjs`
+(`after_render` drawing, textures and `Buf` uploads over the recording
+`stub_gl.mjs`).
 `scripts/check-wasm-target.sh` builds and runs them (all of it runs in CI).
