@@ -4,7 +4,7 @@
 /// back as a SUCCESSFUL empty completion: "(no assistant reply)", exit
 /// 0, nothing legible anywhere. Measured live against Mistral (2026-10-
 /// 18). `openai_http_error` is the fix's pure half -- these pin it.
-use openai::client {openai_http_error, OpenAI.request_json, OpenAI.parse_models}
+use openai::client {openai_http_error, OpenAI.request_json, OpenAI.parse_models, OpenAI.parse_chat}
 use openai::types {ChatRequest, ChatMessage}
 use openai::tool {ToolCall}
 use json::json {Json.to_string}
@@ -116,4 +116,15 @@ def test_parse_models_names_a_malformed_entry : Bool :=
     match OpenAI.parse_models "{\"data\":[{\"id\":\"a\"},{\"object\":\"model\"}]}" {
         Result.err e => String.contains e "entry 1" && String.contains e "has no id",
         Result.ok _ => false,
+    }
+
+/// F7: a truncated provider body names its size and its tail -- "expected:
+/// }" alone cannot tell a 40-byte reply from a 400 KB one.
+#[test]
+def test_a_truncated_chat_body_names_its_size_and_tail : Bool :=
+    match OpenAI.parse_chat "{\"id\":\"c1\",\"choices\":[" {
+        Result.ok _ => false,
+        Result.err e =>
+            let msg : String := e in
+            String.contains msg "bytes; tail:" && String.contains msg "\"choices\":[",
     }

@@ -58,12 +58,26 @@ def openai_http_error (r : Response) : Option String :=
             (String.concat (U16.to_string r.status)
                 (String.concat ": " (String.from_list (Body.to_bytes_pure r.body)))))
 
-def decode_chat_response (r : Response) : Result String ChatResponse :=
-    let text := String.from_list (Body.to_bytes_pure r.body) in
+/// A parse failure that NAMES the body: a truncated response is the
+/// usual cause, and "expected: }" alone cannot tell a 40-byte reply from
+/// a 400 KB one. The tail is bounded to the last 512 bytes.
+def body_parse_error (e : Json.ParseError) (text : String) : String :=
+    let n : I64 := String.length text in
+    let start : I64 := if I64.lt n 512 then 0 else n - 512 in
+    String.concat (Json.ParseError.to_string e)
+        (String.concat " (body " (String.concat (I64.to_string n)
+            (String.concat " bytes; tail: " (String.concat (String.slice text start 512) ")"))))
+
+/// The pure decode half (testable without a `Response`).
+pub def OpenAI.parse_chat (text : String) : Result String ChatResponse :=
     match Json.parse text {
-        Result.err e => Result.err (Json.ParseError.to_string e),
+        Result.err e => Result.err (body_parse_error e text),
         Result.ok j => ChatResponse.deserialize_json j,
     }
+
+def decode_chat_response (r : Response) : Result String ChatResponse :=
+    let text := String.from_list (Body.to_bytes_pure r.body) in
+    OpenAI.parse_chat text
 
 def openai_complete_io (u : Uri) (headers : Headers) (body_str : String) : IO (Result String ChatResponse) := do {
     let resp <- Client.post_timeout u headers (Body.from_text body_str) Client.default_timeout_ms;

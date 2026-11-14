@@ -35,13 +35,26 @@ def anthropic_headers (api_key : String) : Headers :=
         (Headers.set "anthropic-version" "2023-06-01"
             (Headers.set "Content-Type" "application/json" Headers.empty))
 
+/// A parse failure that NAMES the body: a truncated response is the
+/// usual cause, and "expected: }" alone cannot tell a 40-byte reply from
+/// a 400 KB one. The tail is bounded to the last 512 bytes.
+def body_parse_error (e : Json.ParseError) (text : String) : String :=
+    let n : I64 := String.length text in
+    let start : I64 := if I64.lt n 512 then 0 else n - 512 in
+    String.concat (Json.ParseError.to_string e)
+        (String.concat " (body " (String.concat (I64.to_string n)
+            (String.concat " bytes; tail: " (String.concat (String.slice text start 512) ")"))))
+
+/// The pure decode half (testable without a `Response`).
+pub def Anthropic.parse_messages (text : String) : Result String MessagesResponse :=
+    match Json.parse text {
+        Result.err e => Result.err (body_parse_error e text),
+        Result.ok j => MessagesResponse.deserialize_json j,
+    }
+
 def decode_messages_response (r : Response) : Result String MessagesResponse :=
     let text := String.from_list (Body.to_bytes_pure r.body) in
-    if U16.beq r.status Status.ok then
-        match Json.parse text {
-            Result.err e => Result.err (Json.ParseError.to_string e),
-            Result.ok j => MessagesResponse.deserialize_json j,
-        }
+    if U16.beq r.status Status.ok then Anthropic.parse_messages text
     else
         Result.err (String.concat "anthropic: HTTP "
             (String.concat (U16.to_string r.status)
