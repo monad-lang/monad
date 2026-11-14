@@ -139,8 +139,8 @@ model keeps them; GL handles are `Copy` ids.
 
 `examples/oak_webgl.mo` is a spinning textured quad built this way.
 `fixtures/wasm/oak_webgl.mo` and `fixtures/wasm/webgl_triangle.mo` are the
-checked fixtures: `wasm/web/webgl_smoke.mjs` and `webgl_triangle_smoke.mjs`
-compare their GL call streams over `wasm/web/stub_gl.mjs`.
+checked fixtures: `wasm/web/smoke/webgl_smoke.mjs` and `webgl_triangle_smoke.mjs`
+compare their GL call streams over `wasm/web/smoke/stub_gl.mjs`.
 
 ## Memory
 
@@ -203,7 +203,7 @@ The contract, and its limits:
 monad test motes/oak_wasm      # pure diff/hydration-predicate tests
 ```
 
-The DOM half is covered end to end by the Node harnesses in `wasm/web/`,
+The DOM half is covered end to end by the Node harnesses in `wasm/web/smoke/`,
 which drive real web-profile modules over a stub DOM:
 `spa_smoke.mjs`, `nested_spa_smoke.mjs`, `keyed_spa_smoke.mjs`,
 `hydrate_smoke.mjs`, `oak_event_smoke.mjs` (typed handlers, drag/drop,

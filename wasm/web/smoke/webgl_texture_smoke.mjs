@@ -1,21 +1,21 @@
 #!/usr/bin/env node
 // Texture state and two-phase image loading over the stub GL.
 // Usage:
-//   node wasm/web/webgl_texture_smoke.mjs <webgl_texture.wasm>
+//   node wasm/web/smoke/webgl_texture_smoke.mjs <webgl_texture.wasm>
 //
 // Built from fixtures/wasm/webgl_texture.mo: `main` starts two loads, the
 // harness finishes them (one fails), and the `probe` export polls and
 // uploads. Checks the poll states, the upload gate and the GL stream.
 
 import { readFile } from 'node:fs/promises';
-import { imports } from './web.js';
-import { host } from './web_runtime.js';
+import { imports } from '../web.js';
+import { host } from '../web_runtime.js';
 import { installDocument, body, fail } from './stub_dom.mjs';
 import { installGl, glStub, finishImages } from './stub_gl.mjs';
 
 const path = process.argv[2];
 if (!path) {
-  console.error('usage: node wasm/web/webgl_texture_smoke.mjs <webgl_texture.wasm>');
+  console.error('usage: node wasm/web/smoke/webgl_texture_smoke.mjs <webgl_texture.wasm>');
   process.exit(2);
 }
 

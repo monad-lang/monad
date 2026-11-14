@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Node smoke test for a nested dynamic list: the regression for
 // `Patch.drop_last`. Usage:
-//   node wasm/web/nested_spa_smoke.mjs <oak_spa_nested.wasm>
+//   node wasm/web/smoke/nested_spa_smoke.mjs <oak_spa_nested.wasm>
 //
 // Built from fixtures/wasm/oak_spa_nested.mo. The view is
 // `div.app > [div > [p, ul#items], footer]`, so the list sits at patch path
@@ -15,13 +15,13 @@
 // `wasm/web/web.js` over the shared stub DOM.
 
 import { readFile } from 'node:fs/promises';
-import { imports } from './web.js';
-import { host } from './web_runtime.js';
+import { imports } from '../web.js';
+import { host } from '../web_runtime.js';
 import { body, installDocument, fail } from './stub_dom.mjs';
 
 const path = process.argv[2];
 if (!path) {
-  console.error('usage: node wasm/web/nested_spa_smoke.mjs <oak_spa_nested.wasm>');
+  console.error('usage: node wasm/web/smoke/nested_spa_smoke.mjs <oak_spa_nested.wasm>');
   process.exit(2);
 }
 

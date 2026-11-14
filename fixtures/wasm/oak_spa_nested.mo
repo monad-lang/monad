@@ -3,7 +3,7 @@
 // Regression fixture for `Patch.drop_last`: the task list sits at patch path
 // [0, 0, 1] (container -> root div -> wrapper div -> ul), so replacing it
 // exercises a path longer than the depth-2 shapes the older smoke test
-// produced. `wasm/web/nested_spa_smoke.mjs` drives it over a stub DOM.
+// produced. `wasm/web/smoke/nested_spa_smoke.mjs` drives it over a stub DOM.
 //
 // The wrapper exists on purpose: with the buggy drop_last, a replace at
 // [0, 0, 1] resolves to the root div and replaces its child 1 -- the footer

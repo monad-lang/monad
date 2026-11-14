@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // Node smoke test for the oak_ui component explorer. Usage:
-//   node wasm/web/oak_ui_book_smoke.mjs <oak_ui_book.wasm>
+//   node wasm/web/smoke/oak_ui_book_smoke.mjs <oak_ui_book.wasm>
 //
 // Built from `motes/oak_ui_book` (`--bin book`). Drives the REAL
 // `web_runtime.js` and generated `web.js` over `stub_dom.mjs`, with a
@@ -13,13 +13,13 @@
 //     with Escape (the controlled overlay round trip).
 
 import { readFile } from 'node:fs/promises';
-import { imports } from './web.js';
-import { host } from './web_runtime.js';
+import { imports } from '../web.js';
+import { host } from '../web_runtime.js';
 import { body, installDocument, fail } from './stub_dom.mjs';
 
 const path = process.argv[2];
 if (!path) {
-  console.error('usage: node wasm/web/oak_ui_book_smoke.mjs <oak_ui_book.wasm>');
+  console.error('usage: node wasm/web/smoke/oak_ui_book_smoke.mjs <oak_ui_book.wasm>');
   process.exit(2);
 }
 

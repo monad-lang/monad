@@ -1,7 +1,7 @@
 // Subscription fixture: window resize, document visibility and the
 // animation-frame hook, all declared purely by `Program.with_subs`.
 //
-// `wasm/web/subs_smoke.mjs` drives it over the stub DOM: it checks the
+// `wasm/web/smoke/subs_smoke.mjs` drives it over the stub DOM: it checks the
 // listeners were registered from the model, that each fires into update, and
 // that the loader's animation-frame loop dispatches the frame message.
 #![mote { name := "oak_subs", deps := [oak, oak_wasm, web_wasm, web_event] }]

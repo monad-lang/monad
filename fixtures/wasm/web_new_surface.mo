@@ -4,7 +4,7 @@
 // harness finishes from a second export.
 //
 // `scripts/check-wasm-target.sh` builds this for the web profile and
-// `wasm/web/new_surface_smoke.mjs` drives the real `web_runtime.js` over a
+// `wasm/web/smoke/new_surface_smoke.mjs` drives the real `web_runtime.js` over a
 // stub DOM/globals.
 
 #![mote { name := "web_new_surface", deps := [web_wasm] }]

@@ -2,16 +2,16 @@
 // Oak-level events: lowered handler attributes, drag-and-drop payloads,
 // drag/drop effects, and the sync clipboard path.
 // Usage:
-//   node wasm/web/oak_event_smoke.mjs <oak_events.wasm>
+//   node wasm/web/smoke/oak_event_smoke.mjs <oak_events.wasm>
 
 import { readFile } from 'node:fs/promises';
-import { imports } from './web.js';
-import { host } from './web_runtime.js';
+import { imports } from '../web.js';
+import { host } from '../web_runtime.js';
 import { FakeDataTransfer, installDocument, body, fail } from './stub_dom.mjs';
 
 const path = process.argv[2];
 if (!path) {
-  console.error('usage: node wasm/web/oak_event_smoke.mjs <oak_events.wasm>');
+  console.error('usage: node wasm/web/smoke/oak_event_smoke.mjs <oak_events.wasm>');
   process.exit(2);
 }
 

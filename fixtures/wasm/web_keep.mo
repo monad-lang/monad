@@ -3,7 +3,7 @@
 // the value. This is the mechanism a SPA's mount/dispatch/tick exports use,
 // since the export ABI carries only i64 words.
 //
-// `wasm/web/export_smoke.mjs <wasm> keep` drives it.
+// `wasm/web/smoke/export_smoke.mjs <wasm> keep` drives it.
 
 #![mote { name := "web_keep", deps := [web_wasm] }]
 

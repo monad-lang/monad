@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // Node smoke test for the Oak SPA loop. Usage:
-//   node wasm/web/spa_smoke.mjs <oak_spa.wasm>
+//   node wasm/web/smoke/spa_smoke.mjs <oak_spa.wasm>
 //
 // Built from fixtures/wasm/oak_spa.mo: a two-message counter. The test drives the
 // REAL `wasm/web/web_runtime.js` and the generated `wasm/web/web.js` import
@@ -14,13 +14,13 @@
 // and two messages also prove the batch fold and the queue drain.
 
 import { readFile } from 'node:fs/promises';
-import { imports } from './web.js';
-import { host } from './web_runtime.js';
+import { imports } from '../web.js';
+import { host } from '../web_runtime.js';
 import { FakeNode, body, installDocument, fail, stub } from './stub_dom.mjs';
 
 const path = process.argv[2];
 if (!path) {
-  console.error('usage: node wasm/web/spa_smoke.mjs <oak_spa.wasm>');
+  console.error('usage: node wasm/web/smoke/spa_smoke.mjs <oak_spa.wasm>');
   process.exit(2);
 }
 

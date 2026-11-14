@@ -1,16 +1,16 @@
 #!/usr/bin/env node
 // Subscriptions: window/document listeners and the animation-frame hook.
 // Usage:
-//   node wasm/web/subs_smoke.mjs <oak_subs.wasm>
+//   node wasm/web/smoke/subs_smoke.mjs <oak_subs.wasm>
 
 import { readFile } from 'node:fs/promises';
-import { imports } from './web.js';
-import { host } from './web_runtime.js';
+import { imports } from '../web.js';
+import { host } from '../web_runtime.js';
 import { installDocument, body, fail } from './stub_dom.mjs';
 
 const path = process.argv[2];
 if (!path) {
-  console.error('usage: node wasm/web/subs_smoke.mjs <oak_subs.wasm>');
+  console.error('usage: node wasm/web/smoke/subs_smoke.mjs <oak_subs.wasm>');
   process.exit(2);
 }
 

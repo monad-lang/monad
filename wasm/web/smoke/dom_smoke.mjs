@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // Node smoke test for the `web_wasm` DOM surface. Usage:
-//   node wasm/web/dom_smoke.mjs <web_dom.wasm>
+//   node wasm/web/smoke/dom_smoke.mjs <web_dom.wasm>
 //
 // Built from fixtures/wasm/web_dom.mo: it appends a div#probe containing a
 // text node under the mount root. This test drives the REAL
@@ -10,13 +10,13 @@
 // each side.
 
 import { readFile } from 'node:fs/promises';
-import { imports } from './web.js';
-import { host } from './web_runtime.js';
+import { imports } from '../web.js';
+import { host } from '../web_runtime.js';
 import { body, installDocument, fail } from './stub_dom.mjs';
 
 const path = process.argv[2];
 if (!path) {
-  console.error('usage: node wasm/web/dom_smoke.mjs <web_dom.wasm>');
+  console.error('usage: node wasm/web/smoke/dom_smoke.mjs <web_dom.wasm>');
   process.exit(2);
 }
 

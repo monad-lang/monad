@@ -2,7 +2,7 @@
 /// record format (`parse_sources`) and the module identity a served path
 /// names (`identity_of_path`). The real `.mo` files are covered by
 /// `pipeline_tests.mo`; the JS encoder that has to agree with this parser
-/// is covered by `wasm/web/try_worker_smoke.mjs` against the served
+/// is covered by `wasm/web/smoke/try_worker_smoke.mjs` against the served
 /// directory.
 
 use lib::sources {SourceModule, identity_of_path, parse_sources}

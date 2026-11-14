@@ -1,6 +1,6 @@
 // A keyed-list Oak SPA: reorder, insert, and delete keep DOM node identity.
 //
-// `wasm/web/keyed_spa_smoke.mjs` drives it over a stub DOM and asserts the
+// `wasm/web/smoke/keyed_spa_smoke.mjs` drives it over a stub DOM and asserts the
 // SAME `li` objects survive a reorder (not freshly mounted copies), that a
 // moved item keeps its click listener, that an insert mounts exactly one new
 // element, and that a deleted item is detached.

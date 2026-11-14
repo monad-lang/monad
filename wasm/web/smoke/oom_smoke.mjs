@@ -1,18 +1,18 @@
 #!/usr/bin/env node
 // Heap exhaustion is a diagnostic trap, not a silent 0 or a negative-offset
-// RangeError. Usage: node wasm/web/oom_smoke.mjs <any web .wasm>
+// RangeError. Usage: node wasm/web/smoke/oom_smoke.mjs <any web .wasm>
 //
 // `try_alloc` is the C-only staging export present in every web module; a
 // request no `memory.grow` can satisfy calls `oom` and then `unreachable`.
 
 import { readFile } from 'node:fs/promises';
-import { imports } from './web.js';
-import { host } from './web_runtime.js';
+import { imports } from '../web.js';
+import { host } from '../web_runtime.js';
 import { installDocument, fail } from './stub_dom.mjs';
 
 const path = process.argv[2];
 if (!path) {
-  console.error('usage: node wasm/web/oom_smoke.mjs <module.wasm>');
+  console.error('usage: node wasm/web/smoke/oom_smoke.mjs <module.wasm>');
   process.exit(2);
 }
 

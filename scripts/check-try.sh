@@ -29,18 +29,18 @@ MONAD="$MONAD" "$repo_root/scripts/gen-web-js.sh"
 echo "== /try staging ABI =="
 "$MONAD" build --target wasm32-unknown-unknown fixtures/wasm/try_abi.mo \
     -o "$tmp/try_abi.wasm" --no-cache
-node wasm/web/try_abi_smoke.mjs "$tmp/try_abi.wasm"
+node wasm/web/smoke/try_abi_smoke.mjs "$tmp/try_abi.wasm"
 
 echo "== /try build (scripts/build-try.sh) =="
 MONAD="$MONAD" "$repo_root/scripts/build-try.sh" "$tmp"
 
 echo "== /try worker protocol =="
-node wasm/web/try_worker_smoke.mjs "$tmp"
+node wasm/web/smoke/try_worker_smoke.mjs "$tmp"
 
 echo "== /try engine =="
-node wasm/web/try_engine_smoke.mjs "$tmp"
+node wasm/web/smoke/try_engine_smoke.mjs "$tmp"
 
 echo "== /try UI =="
-node wasm/web/try_ui_smoke.mjs "$tmp/try_ui.wasm"
+node wasm/web/smoke/try_ui_smoke.mjs "$tmp/try_ui.wasm"
 
 echo "ok: /try checks passed"

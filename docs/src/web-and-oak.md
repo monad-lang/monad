@@ -154,6 +154,6 @@ guard). For live reload, `moon::Live` provides SSE plus a tree watcher, and
 - `Console.log` writes to the browser console.
 - `fmt!`/`IO.println` write through the `write_stdout` import (the host's
   `console.log` outside Node).
-- The Node harnesses in `wasm/web/*_smoke.mjs` drive the real runtime over a
+- The Node harnesses in `wasm/web/smoke/*_smoke.mjs` drive the real runtime over a
   stub DOM; `scripts/check-wasm-target.sh` builds every fixture and runs
   them, so a broken extern/C/JS agreement fails before a browser is opened.

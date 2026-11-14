@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // Node smoke test for the Phase-1 web surface. Usage:
-//   node wasm/web/new_surface_smoke.mjs <web_new_surface.wasm>
+//   node wasm/web/smoke/new_surface_smoke.mjs <web_new_surface.wasm>
 //
 // Drives the REAL `wasm/web/web_runtime.js` and generated `web.js` over the
 // stub DOM/globals: storage presence/removal, monotonic clock, media query,
@@ -8,13 +8,13 @@
 // and a two-phase SHA-256 completed through a second export.
 
 import { readFile } from 'node:fs/promises';
-import { imports } from './web.js';
-import { host } from './web_runtime.js';
+import { imports } from '../web.js';
+import { host } from '../web_runtime.js';
 import { FakeNode, body, installDocument, fail, stub } from './stub_dom.mjs';
 
 const path = process.argv[2];
 if (!path) {
-  console.error('usage: node wasm/web/new_surface_smoke.mjs <web_new_surface.wasm>');
+  console.error('usage: node wasm/web/smoke/new_surface_smoke.mjs <web_new_surface.wasm>');
   process.exit(2);
 }
 

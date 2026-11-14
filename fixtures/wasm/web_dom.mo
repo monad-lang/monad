@@ -3,7 +3,7 @@
 // tagName, form value, selector lookup, and the null handle).
 //
 // `scripts/check-wasm-target.sh` builds this for the web profile and
-// `wasm/web/dom_smoke.mjs` instantiates it against the real
+// `wasm/web/smoke/dom_smoke.mjs` instantiates it against the real
 // `wasm/web/web_runtime.js` over a stub DOM, which is what proves the
 // externs, the C wrappers and the JS host agree. The readings are written
 // into the page as `span#report` so the harness asserts them from the DOM

@@ -1,5 +1,5 @@
 // A 256-button view with two handlers per cell: the allocation benchmark for
-// the render path. `wasm/web/oak_alloc_smoke.mjs` mounts it, fires one
+// the render path. `wasm/web/smoke/oak_alloc_smoke.mjs` mounts it, fires one
 // click, ticks once, and asserts the committed-memory delta stays below a
 // generous ceiling (the pre-fix path measured ~3 MB per render).
 #![mote { name := "oak_spa_alloc", deps := [oak, oak_wasm, web_wasm, web_event] }]

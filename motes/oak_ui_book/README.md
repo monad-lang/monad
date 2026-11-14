@@ -70,7 +70,7 @@ and logs, and `Book.setter key` / `Book.bool_setter key` adapt a component's
 
 ```bash
 monad test motes/oak_ui_book                                 # pure: stories, lint, update
-node wasm/web/oak_ui_book_smoke.mjs <oak_ui_book.wasm>       # the live explorer over a stub DOM
+node wasm/web/smoke/oak_ui_book_smoke.mjs <oak_ui_book.wasm>       # the live explorer over a stub DOM
 ```
 
 `test_every_story_lints_clean` requires every story, at its default knobs, to

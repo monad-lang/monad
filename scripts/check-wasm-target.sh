@@ -65,12 +65,12 @@ grep -qx '5000000123' "$tmp/wide.wasm.out" \
 
 "$MONAD" build --target wasm32-unknown-unknown fixtures/wasm/wide_values.mo \
     -o "$tmp/wide-web.wasm" --no-cache
-node wasm/web/smoke.mjs "$tmp/wide-web.wasm" 5000000123
+node wasm/web/smoke/smoke.mjs "$tmp/wide-web.wasm" 5000000123
 
 echo "== web: hello (freestanding build + Node loader) =="
 "$MONAD" build --target wasm32-unknown-unknown fixtures/wasm/hello.mo \
     -o "$tmp/hello.wasm" --no-cache
-node wasm/web/smoke.mjs "$tmp/hello.wasm"
+node wasm/web/smoke/smoke.mjs "$tmp/hello.wasm"
 
 echo "== web: freestanding build needs no WASI_SDK_PATH =="
 # The web plan has no sysroot and links with -nostdlib. It does not REQUIRE
@@ -80,7 +80,7 @@ echo "== web: freestanding build needs no WASI_SDK_PATH =="
 env -u WASI_SDK_PATH MONAD_WEB_CC="$WASI_SDK_PATH/bin/clang" \
     "$MONAD" build --target wasm32-unknown-unknown \
     fixtures/wasm/hello.mo -o "$tmp/hello-nowasi.wasm" --no-cache
-node wasm/web/smoke.mjs "$tmp/hello-nowasi.wasm"
+node wasm/web/smoke/smoke.mjs "$tmp/hello-nowasi.wasm"
 
 echo "== web: Json.to_string (float formatting through the JS host) =="
 # The serializer's float arm reaches `F64.to_string` even for an
@@ -89,7 +89,7 @@ echo "== web: Json.to_string (float formatting through the JS host) =="
 # this program builds and native/wasi/web agree byte for byte.
 "$MONAD" build --target wasm32-unknown-unknown fixtures/wasm/json_to_string.mo \
     -o "$tmp/json-web.wasm" --no-cache
-node wasm/web/smoke.mjs "$tmp/json-web.wasm" '[1,"a",0.5,0.3333333333333333]'
+node wasm/web/smoke/smoke.mjs "$tmp/json-web.wasm" '[1,"a",0.5,0.3333333333333333]'
 
 "$MONAD" build --target wasm32-unknown-wasip1 fixtures/wasm/json_to_string.mo \
     -o "$tmp/json-wasi.wasm" --no-cache
@@ -107,7 +107,7 @@ echo "== web: log mote (Json.to_string through the log path) =="
 # web-gated f64 native. The sink checks the line shape and prints "ok".
 "$MONAD" build --target wasm32-unknown-unknown fixtures/wasm/log_web.mo \
     -o "$tmp/log-web.wasm" --no-cache
-node wasm/web/smoke.mjs "$tmp/log-web.wasm" ok
+node wasm/web/smoke/smoke.mjs "$tmp/log-web.wasm" ok
 
 echo "== web: time mote (ISO-8601 parse/show + browser clock) =="
 # The time mote is pure except `Instant.now` (available on every profile).
@@ -118,7 +118,7 @@ echo "== web: time mote (ISO-8601 parse/show + browser clock) =="
 expected_time='2024-01-15T10:30:00.123+02:00 true true'
 "$MONAD" build --target wasm32-unknown-unknown fixtures/wasm/time_iso.mo \
     -o "$tmp/time-web.wasm" --no-cache
-node wasm/web/smoke.mjs "$tmp/time-web.wasm" "$expected_time"
+node wasm/web/smoke/smoke.mjs "$tmp/time-web.wasm" "$expected_time"
 
 "$MONAD" build --target wasm32-unknown-wasip1 fixtures/wasm/time_iso.mo \
     -o "$tmp/time-wasi.wasm" --no-cache
@@ -139,7 +139,7 @@ echo "== web: dictionary-capturing closure in a constructor =="
 # `apply_closure_raw1`.
 "$MONAD" build --target wasm32-unknown-unknown fixtures/wasm/dict_closure_probe.mo \
     -o "$tmp/dict_closure.wasm" --no-cache
-node wasm/web/smoke.mjs "$tmp/dict_closure.wasm" 42
+node wasm/web/smoke/smoke.mjs "$tmp/dict_closure.wasm" 42
 "$MONAD" build fixtures/wasm/dict_closure_probe.mo -o "$tmp/dict_closure_native" --no-cache
 "$tmp/dict_closure_native" >"$tmp/dict_closure_native.out" \
     || fail "native dict_closure_probe crashed"
@@ -149,11 +149,11 @@ grep -qx '42' "$tmp/dict_closure_native.out" \
 echo "== web: #[export \"c\"] (exports + eager IO) =="
 "$MONAD" build --target wasm32-unknown-unknown fixtures/wasm/export_probe.mo \
     -o "$tmp/exports.wasm" --no-cache
-node wasm/web/export_smoke.mjs "$tmp/exports.wasm"
+node wasm/web/smoke/export_smoke.mjs "$tmp/exports.wasm"
 # Exports-only: no `def main`, so the runtime's weak `main_monad` is 0.
 "$MONAD" build --target wasm32-unknown-unknown fixtures/wasm/export_only.mo \
     -o "$tmp/exports-only.wasm" --no-cache
-node wasm/web/export_smoke.mjs "$tmp/exports-only.wasm" exports-only
+node wasm/web/smoke/export_smoke.mjs "$tmp/exports-only.wasm" exports-only
 # The same program must still build natively: exports are a web-only ABI,
 # and a library that declares them has to stay testable.
 "$MONAD" build fixtures/wasm/export_probe.mo -o "$tmp/exports-native" --no-cache \
@@ -163,7 +163,7 @@ node wasm/web/export_smoke.mjs "$tmp/exports-only.wasm" exports-only
 echo "== web: web_wasm DOM surface (C wrappers + JS host) =="
 "$MONAD" build --target wasm32-unknown-unknown fixtures/wasm/web_dom.mo \
     -o "$tmp/web_dom.wasm" --no-cache
-node wasm/web/dom_smoke.mjs "$tmp/web_dom.wasm"
+node wasm/web/smoke/dom_smoke.mjs "$tmp/web_dom.wasm"
 
 echo "== web: phase-1 surface (storage, clock, media, hit test, crypto, headers) =="
 # Presence-aware storage, monotonic clock, matchMedia, elementFromPoint +
@@ -171,20 +171,20 @@ echo "== web: phase-1 surface (storage, clock, media, hit test, crypto, headers)
 # two-phase SHA-256 completed through a second export.
 "$MONAD" build --target wasm32-unknown-unknown fixtures/wasm/web_new_surface.mo \
     -o "$tmp/web_new_surface.wasm" --no-cache
-node wasm/web/new_surface_smoke.mjs "$tmp/web_new_surface.wasm"
+node wasm/web/smoke/new_surface_smoke.mjs "$tmp/web_new_surface.wasm"
 
 echo "== web: heap exhaustion (diagnostic trap, not a RangeError) =="
-node wasm/web/oom_smoke.mjs "$tmp/web_new_surface.wasm"
+node wasm/web/smoke/oom_smoke.mjs "$tmp/web_new_surface.wasm"
 
 echo "== web: export state slot (Keep) =="
 "$MONAD" build --target wasm32-unknown-unknown fixtures/wasm/web_keep.mo \
     -o "$tmp/web_keep.wasm" --no-cache
-node wasm/web/export_smoke.mjs "$tmp/web_keep.wasm" keep
+node wasm/web/smoke/export_smoke.mjs "$tmp/web_keep.wasm" keep
 
 echo "== web: Oak SPA (mount, dispatch, tick, patch) =="
 "$MONAD" build --target wasm32-unknown-unknown fixtures/wasm/oak_spa.mo \
     -o "$tmp/oak_spa.wasm" --no-cache
-node wasm/web/spa_smoke.mjs "$tmp/oak_spa.wasm"
+node wasm/web/smoke/spa_smoke.mjs "$tmp/oak_spa.wasm"
 
 echo "== web: nested dynamic list (Patch.drop_last regression) =="
 # The list sits at patch path [0, 0, 1]: a wholesale replace one wrapper
@@ -192,41 +192,41 @@ echo "== web: nested dynamic list (Patch.drop_last regression) =="
 # the footer instead, so the list never updated and the footer disappeared.
 "$MONAD" build --target wasm32-unknown-unknown fixtures/wasm/oak_spa_nested.mo \
     -o "$tmp/oak_spa_nested.wasm" --no-cache
-node wasm/web/nested_spa_smoke.mjs "$tmp/oak_spa_nested.wasm"
+node wasm/web/smoke/nested_spa_smoke.mjs "$tmp/oak_spa_nested.wasm"
 
 echo "== web: SSR hydration (adopt a matching server-rendered tree) =="
 # Reuses the nested fixture: the harness seeds its exact initial markup and
 # asserts the same nodes survive mount (no creates), stale attributes are
 # corrected, surplus SSR nodes are trimmed, and ticking still patches.
-node wasm/web/hydrate_smoke.mjs "$tmp/oak_spa_nested.wasm"
+node wasm/web/smoke/hydrate_smoke.mjs "$tmp/oak_spa_nested.wasm"
 
 echo "== web: keyed lists (reorder/insert/remove keep node identity) =="
 "$MONAD" build --target wasm32-unknown-unknown fixtures/wasm/oak_spa_keyed.mo \
     -o "$tmp/oak_spa_keyed.wasm" --no-cache
-node wasm/web/keyed_spa_smoke.mjs "$tmp/oak_spa_keyed.wasm"
+node wasm/web/smoke/keyed_spa_smoke.mjs "$tmp/oak_spa_keyed.wasm"
 
 echo "== web: event payload transport (snapshot, flags, drag/clipboard text) =="
 "$MONAD" build --target wasm32-unknown-unknown fixtures/wasm/web_events.mo \
     -o "$tmp/web_events.wasm" --no-cache
-node wasm/web/event_smoke.mjs "$tmp/web_events.wasm"
-node wasm/web/clipboard_smoke.mjs "$tmp/web_events.wasm"
+node wasm/web/smoke/event_smoke.mjs "$tmp/web_events.wasm"
+node wasm/web/smoke/clipboard_smoke.mjs "$tmp/web_events.wasm"
 
 echo "== web: Oak events (typed handlers, drag and drop, sync clipboard) =="
 "$MONAD" build --target wasm32-unknown-unknown fixtures/wasm/oak_events.mo \
     -o "$tmp/oak_events.wasm" --no-cache
-node wasm/web/oak_event_smoke.mjs "$tmp/oak_events.wasm"
+node wasm/web/smoke/oak_event_smoke.mjs "$tmp/oak_events.wasm"
 
 echo "== web: subscriptions (window/document listeners, animation frame) =="
 "$MONAD" build --target wasm32-unknown-unknown fixtures/wasm/oak_subs.mo \
     -o "$tmp/oak_subs.wasm" --no-cache
-node wasm/web/subs_smoke.mjs "$tmp/oak_subs.wasm"
+node wasm/web/smoke/subs_smoke.mjs "$tmp/oak_subs.wasm"
 
 echo "== web: Command.batch / Command.after / Command.focus =="
 # One click batches an immediate dispatch, a 10 ms timer and a focus; the
 # timer fires through oak_dispatch_event with no animation-frame loop.
 "$MONAD" build --target wasm32-unknown-unknown fixtures/wasm/oak_timer.mo \
     -o "$tmp/oak_timer.wasm" --no-cache
-node wasm/web/timer_smoke.mjs "$tmp/oak_timer.wasm"
+node wasm/web/smoke/timer_smoke.mjs "$tmp/oak_timer.wasm"
 
 echo "== web: WebGL from Oak (Command.after_render, canvas fit, stub GL) =="
 # The view mounts a <canvas>; frames ask for setup/draw as after_render
@@ -234,25 +234,25 @@ echo "== web: WebGL from Oak (Command.after_render, canvas fit, stub GL) =="
 "$MONAD" build --target wasm32-unknown-unknown fixtures/wasm/oak_webgl.mo \
     -o "$tmp/oak_webgl.wasm" --no-cache
 for mode in webgl2 webgl1 none; do
-    node wasm/web/webgl_smoke.mjs "$tmp/oak_webgl.wasm" "$mode"
+    node wasm/web/smoke/webgl_smoke.mjs "$tmp/oak_webgl.wasm" "$mode"
 done
 
 echo "== web: WebGL textures (image begin/poll, texture state) =="
 "$MONAD" build --target wasm32-unknown-unknown fixtures/wasm/webgl_texture.mo \
     -o "$tmp/webgl_texture.wasm" --no-cache
-node wasm/web/webgl_texture_smoke.mjs "$tmp/webgl_texture.wasm"
+node wasm/web/smoke/webgl_texture_smoke.mjs "$tmp/webgl_texture.wasm"
 
 echo "== web: WebGL Buf uploads (vertices, indices, mat4, RGBA texels) =="
 "$MONAD" build --target wasm32-unknown-unknown fixtures/wasm/webgl_triangle.mo \
     -o "$tmp/webgl_triangle.wasm" --no-cache
 for mode in webgl2 webgl1-nouint; do
-    node wasm/web/webgl_triangle_smoke.mjs "$tmp/webgl_triangle.wasm" "$mode"
+    node wasm/web/smoke/webgl_triangle_smoke.mjs "$tmp/webgl_triangle.wasm" "$mode"
 done
 
 echo "== web: render allocation guard (256 buttons, two handlers each) =="
 "$MONAD" build --target wasm32-unknown-unknown fixtures/wasm/oak_spa_alloc.mo \
     -o "$tmp/oak_spa_alloc.wasm" --no-cache
-node wasm/web/oak_alloc_smoke.mjs "$tmp/oak_spa_alloc.wasm"
+node wasm/web/smoke/oak_alloc_smoke.mjs "$tmp/oak_spa_alloc.wasm"
 
 echo "== web: oak_ui explorer (stories, knobs, themes, persisted prefs, modal) =="
 # The component explorer end to end: restores the stored story/theme on the
@@ -260,7 +260,7 @@ echo "== web: oak_ui explorer (stories, knobs, themes, persisted prefs, modal) =
 # navigates from the sidebar and closes a modal with Escape.
 "$MONAD" build --target wasm32-unknown-unknown motes/oak_ui_book --bin book \
     -o "$tmp/oak_ui_book.wasm" --no-cache
-node wasm/web/oak_ui_book_smoke.mjs "$tmp/oak_ui_book.wasm"
+node wasm/web/smoke/oak_ui_book_smoke.mjs "$tmp/oak_ui_book.wasm"
 
 echo "== output suffix (build without -o) =="
 # The same rule must name the cache destination and the linked artifact.
@@ -268,7 +268,7 @@ echo "== output suffix (build without -o) =="
     "$tmp/noext" --no-cache
 [ -f "$tmp/noext.wasm" ] || fail "missing $tmp/noext.wasm"
 [ ! -e "$tmp/noext.wasm.wasm" ] || fail "the .wasm suffix was applied twice"
-node wasm/web/smoke.mjs "$tmp/noext.wasm"
+node wasm/web/smoke/smoke.mjs "$tmp/noext.wasm"
 
 echo "== gating: OS-only natives fail with a target diagnostic =="
 if "$MONAD" build --target wasm32-unknown-unknown fixtures/wasm/web_file_io.mo \

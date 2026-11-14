@@ -8,8 +8,8 @@
 // frames ask for `draw`. A deliberately broken shader checks that a compile
 // error carries the driver's info log.
 //
-// `wasm/web/webgl_smoke.mjs` runs it over the stub DOM plus
-// `wasm/web/stub_gl.mjs` and compares the recorded GL call stream.
+// `wasm/web/smoke/webgl_smoke.mjs` runs it over the stub DOM plus
+// `wasm/web/smoke/stub_gl.mjs` and compares the recorded GL call stream.
 #![mote { name := "oak_webgl", deps := [oak, oak_wasm, web_wasm, web_event] }]
 
 use oak::typed {Oak.Node}

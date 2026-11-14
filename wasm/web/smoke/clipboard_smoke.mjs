@@ -1,16 +1,16 @@
 #!/usr/bin/env node
 // Async clipboard: pending, resolved, rejected, and write.
 // Usage:
-//   node wasm/web/clipboard_smoke.mjs <web_events.wasm>
+//   node wasm/web/smoke/clipboard_smoke.mjs <web_events.wasm>
 
 import { readFile } from 'node:fs/promises';
-import { imports } from './web.js';
-import { host } from './web_runtime.js';
+import { imports } from '../web.js';
+import { host } from '../web_runtime.js';
 import { installDocument, body, fail, stub } from './stub_dom.mjs';
 
 const path = process.argv[2];
 if (!path) {
-  console.error('usage: node wasm/web/clipboard_smoke.mjs <web_events.wasm>');
+  console.error('usage: node wasm/web/smoke/clipboard_smoke.mjs <web_events.wasm>');
   process.exit(2);
 }
 

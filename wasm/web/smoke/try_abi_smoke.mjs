@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // Node smoke test for the /try engine's staging ABI.
-//   node wasm/web/try_abi_smoke.mjs <try_abi.wasm>
+//   node wasm/web/smoke/try_abi_smoke.mjs <try_abi.wasm>
 //
 // Asserts the two properties Phase 0 exists to retire:
 //   1. the C-only `try_alloc` export hands JS a writable Number pointer into
@@ -14,11 +14,11 @@
 // cannot serve.
 
 import { readFile } from 'node:fs/promises';
-import { imports } from './web.js';
+import { imports } from '../web.js';
 
 const path = process.argv[2];
 if (!path) {
-  console.error('usage: node wasm/web/try_abi_smoke.mjs <try_abi.wasm>');
+  console.error('usage: node wasm/web/smoke/try_abi_smoke.mjs <try_abi.wasm>');
   process.exit(2);
 }
 

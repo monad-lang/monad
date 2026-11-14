@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // WebGL from an Oak program, over the stub DOM and the recording stub GL.
 // Usage:
-//   node wasm/web/webgl_smoke.mjs <oak_webgl.wasm> [webgl2|webgl1|none]
+//   node wasm/web/smoke/webgl_smoke.mjs <oak_webgl.wasm> [webgl2|webgl1|none]
 //
 // Built from fixtures/wasm/oak_webgl.mo. Drives the real
 // `wasm/web/web_runtime.js` and the generated `web.js`, so the gl.mo
@@ -12,15 +12,15 @@
 // call stream of one setup and one drawn frame.
 
 import { readFile } from 'node:fs/promises';
-import { imports } from './web.js';
-import { host } from './web_runtime.js';
+import { imports } from '../web.js';
+import { host } from '../web_runtime.js';
 import { installDocument, body, fail } from './stub_dom.mjs';
 import { installGl, glStub } from './stub_gl.mjs';
 
 const path = process.argv[2];
 const mode = process.argv[3] || 'webgl2';
 if (!path) {
-  console.error('usage: node wasm/web/webgl_smoke.mjs <oak_webgl.wasm> [webgl2|webgl1|none]');
+  console.error('usage: node wasm/web/smoke/webgl_smoke.mjs <oak_webgl.wasm> [webgl2|webgl1|none]');
   process.exit(2);
 }
 

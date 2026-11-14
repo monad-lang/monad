@@ -5,7 +5,7 @@
 // It also checks the refusals: a matrix buffer shorter than 16 floats and a
 // pixel buffer shorter than w*h*4 bytes are rejected by the runtime before
 // the host sees them, so neither reaches the GL stream.
-// `wasm/web/webgl_triangle_smoke.mjs` compares the stream to a golden.
+// `wasm/web/smoke/webgl_triangle_smoke.mjs` compares the stream to a golden.
 #![mote { name := "webgl_triangle", deps := [web_wasm] }]
 
 use web_wasm::dom {Dom.append, Dom.create, Dom.root, Dom.set_attr, Dom.text_node}

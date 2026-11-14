@@ -1,6 +1,6 @@
 // The payload the /try worker hands to the engine, and the only
 // implementation of its format on the JS side -- `worker.js` and
-// `wasm/web/try_engine_smoke.mjs` both import this, so the served files and
+// `wasm/web/smoke/try_engine_smoke.mjs` both import this, so the served files and
 // the engine's parser cannot drift apart.
 //
 // One record per module, records concatenated with no separator:

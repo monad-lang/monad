@@ -8,7 +8,7 @@
 // view (`Html.on_click Msg.increment`), with no decoder.
 //
 // `scripts/check-wasm-target.sh` builds this for the web profile and
-// `wasm/web/spa_smoke.mjs` drives it over a stub DOM.
+// `wasm/web/smoke/spa_smoke.mjs` drives it over a stub DOM.
 //
 // A FIXTURE, not an `examples/` program: the Rust host's multi-target
 // `check` resolves bare top-level names across every target in one scope,

@@ -2,20 +2,20 @@
 // Low-level event transport: the synchronous slot, the selector getters, the
 // spec flags, and the declarative drag/clipboard effects.
 // Usage:
-//   node wasm/web/event_smoke.mjs <web_events.wasm>
+//   node wasm/web/smoke/event_smoke.mjs <web_events.wasm>
 //
 // `fixtures/wasm/web_events.mo` mounts a probe with one listener per event
 // family and writes the snapshot into `#report` as
 //   kind|clientX|clientY|modifiers|key|code|value|data|types|files|repeat|effectAllowed|dropEffect|handler
 
 import { readFile } from 'node:fs/promises';
-import { imports } from './web.js';
-import { host } from './web_runtime.js';
+import { imports } from '../web.js';
+import { host } from '../web_runtime.js';
 import { FakeDataTransfer, installDocument, body, fail, stub } from './stub_dom.mjs';
 
 const path = process.argv[2];
 if (!path) {
-  console.error('usage: node wasm/web/event_smoke.mjs <web_events.wasm>');
+  console.error('usage: node wasm/web/smoke/event_smoke.mjs <web_events.wasm>');
   process.exit(2);
 }
 

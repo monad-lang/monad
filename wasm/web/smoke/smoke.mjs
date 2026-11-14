@@ -1,18 +1,18 @@
 #!/usr/bin/env node
 // Node smoke test for the web profile. Usage:
-//   node wasm/web/smoke.mjs <module.wasm> [expected-stdout]
+//   node wasm/web/smoke/smoke.mjs <module.wasm> [expected-stdout]
 //
 // Asserts the module instantiates with the `monad` imports it declares,
 // exports monad_main/memory, runs `monad_main(0n)`, returns 0, and prints
 // the expected text (default "hello") followed by a newline.
 
 import { readFile } from 'node:fs/promises';
-import { f64ToRustString } from './float_format.js';
+import { f64ToRustString } from '../float_format.js';
 
 const path = process.argv[2];
 const expected = process.argv[3] ?? 'hello';
 if (!path) {
-  console.error('usage: node wasm/web/smoke.mjs <module.wasm> [expected-stdout]');
+  console.error('usage: node wasm/web/smoke/smoke.mjs <module.wasm> [expected-stdout]');
   process.exit(2);
 }
 

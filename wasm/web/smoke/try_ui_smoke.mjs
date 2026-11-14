@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // Node smoke test for the /try Oak UI. Usage:
-//   node wasm/web/try_ui_smoke.mjs <try_ui.wasm>
+//   node wasm/web/smoke/try_ui_smoke.mjs <try_ui.wasm>
 //
 // Drives the real Oak runtime over `stub_dom.mjs` with a FAKE Worker: the
 // UI's worker channel is a JS host contract, so the test asserts what the
@@ -9,13 +9,13 @@
 // `try_engine_smoke.mjs`.
 
 import { readFile } from 'node:fs/promises';
-import { imports } from './web.js';
-import { host } from './web_runtime.js';
+import { imports } from '../web.js';
+import { host } from '../web_runtime.js';
 import { FakeNode, body, installDocument, fail } from './stub_dom.mjs';
 
 const path = process.argv[2];
 if (!path) {
-  console.error('usage: node wasm/web/try_ui_smoke.mjs <try_ui.wasm>');
+  console.error('usage: node wasm/web/smoke/try_ui_smoke.mjs <try_ui.wasm>');
   process.exit(2);
 }
 

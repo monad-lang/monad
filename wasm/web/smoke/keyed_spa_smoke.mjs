@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // Node smoke test for keyed list reconciliation. Usage:
-//   node wasm/web/keyed_spa_smoke.mjs <oak_spa_keyed.wasm>
+//   node wasm/web/smoke/keyed_spa_smoke.mjs <oak_spa_keyed.wasm>
 //
 // Built from fixtures/wasm/oak_spa_keyed.mo, whose initial list is
 // `a, b, c` of keyed, clickable `<li>`s. The assertions are about NODE
@@ -14,13 +14,13 @@
 // `wasm/web/web.js` over the shared stub DOM.
 
 import { readFile } from 'node:fs/promises';
-import { imports } from './web.js';
-import { host } from './web_runtime.js';
+import { imports } from '../web.js';
+import { host } from '../web_runtime.js';
 import { body, installDocument, fail, stub } from './stub_dom.mjs';
 
 const path = process.argv[2];
 if (!path) {
-  console.error('usage: node wasm/web/keyed_spa_smoke.mjs <oak_spa_keyed.wasm>');
+  console.error('usage: node wasm/web/smoke/keyed_spa_smoke.mjs <oak_spa_keyed.wasm>');
   process.exit(2);
 }
 

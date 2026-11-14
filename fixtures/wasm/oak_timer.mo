@@ -1,7 +1,7 @@
 // `Command.batch`, `Command.after` (one-shot timer) and `Command.focus`.
 //
 // The click returns a batch: schedule `later` in 10 ms, dispatch `now` into
-// this batch, and focus an input after the patch. `wasm/web/timer_smoke.mjs`
+// this batch, and focus an input after the patch. `wasm/web/smoke/timer_smoke.mjs`
 // asserts the immediate message, the post-patch focus, and the delayed
 // message after the host timer fires -- with no animation-frame loop.
 #![mote { name := "oak_timer", deps := [oak, oak_wasm, web_wasm, web_event] }]

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // Node smoke test for the REAL `worker.js` protocol. Usage:
-//   node wasm/web/try_worker_smoke.mjs <dir>
+//   node wasm/web/smoke/try_worker_smoke.mjs <dir>
 //
 // `<dir>` is a built /try directory (the output of `scripts/build-try.sh`):
 // it must contain worker.js, sources.js, web.js, web_runtime.js,
@@ -23,7 +23,7 @@ import { pathToFileURL } from 'node:url';
 
 const dir = process.argv[2];
 if (!dir) {
-  console.error('usage: node wasm/web/try_worker_smoke.mjs <dir>');
+  console.error('usage: node wasm/web/smoke/try_worker_smoke.mjs <dir>');
   process.exit(2);
 }
 

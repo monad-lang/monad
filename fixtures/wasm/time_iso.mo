@@ -2,7 +2,7 @@
 // a sanity read of the browser clock.
 //
 // `scripts/check-wasm-target.sh` builds this for wasm32-unknown-unknown,
-// instantiates it through wasm/web/smoke.mjs, and also diffs the native and
+// instantiates it through wasm/web/smoke/smoke.mjs, and also diffs the native and
 // wasi builds against the same expected line. The fixture is affine-clean
 // (inline motes default to `affine = error`) and prints exactly one line:
 //

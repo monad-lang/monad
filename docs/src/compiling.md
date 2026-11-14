@@ -161,7 +161,7 @@ monad build --target wasm32-unknown-wasip1 fixtures/wasm/fib.mo -o fib.wasm
 wasmtime fib.wasm
 
 monad build --target wasm32-unknown-unknown fixtures/wasm/hello.mo -o hello.wasm
-node wasm/web/smoke.mjs hello.wasm
+node wasm/web/smoke/smoke.mjs hello.wasm
 ```
 
 The **web** profile is freestanding: it links `-nostdlib`, has no sysroot and

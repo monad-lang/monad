@@ -9,7 +9,7 @@
 //
 // `try_echo` uses `write_stdout` as the observation channel: if the bytes
 // arrive unchanged, the export parameter and the (ptr,len) boundary both
-// agree. The harness is `wasm/web/try_abi_smoke.mjs`.
+// agree. The harness is `wasm/web/smoke/try_abi_smoke.mjs`.
 
 use std::io {IO.write_stdout}
 

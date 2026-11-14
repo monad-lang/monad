@@ -4,7 +4,7 @@
 // and starts loading two images (one that will fail). The loads finish only
 // when the harness says so, so `probe` -- an export the harness calls after
 // that -- polls both, uploads the ready one and reports in `span#report`.
-// `wasm/web/webgl_texture_smoke.mjs` drives it over `stub_gl.mjs`.
+// `wasm/web/smoke/webgl_texture_smoke.mjs` drives it over `stub_gl.mjs`.
 #![mote { name := "webgl_texture", deps := [web_wasm] }]
 
 use web_wasm::dom {Dom.append, Dom.create, Dom.query, Dom.root, Dom.set_attr, Dom.text_node}

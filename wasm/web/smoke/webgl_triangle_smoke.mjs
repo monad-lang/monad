@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Buffered drawing through `std::buf` over the stub GL.
 // Usage:
-//   node wasm/web/webgl_triangle_smoke.mjs <webgl_triangle.wasm> [webgl2|webgl1-nouint]
+//   node wasm/web/smoke/webgl_triangle_smoke.mjs <webgl_triangle.wasm> [webgl2|webgl1-nouint]
 //
 // Built from fixtures/wasm/webgl_triangle.mo. Checks that `Buf F32`/`I32`/
 // `U8` uploads reach the host as their decoded values (F32 rounding
@@ -10,15 +10,15 @@
 // without OES_element_index_uint: `Gl.has_uint_indices` must say no.
 
 import { readFile } from 'node:fs/promises';
-import { imports } from './web.js';
-import { host } from './web_runtime.js';
+import { imports } from '../web.js';
+import { host } from '../web_runtime.js';
 import { installDocument, body, fail } from './stub_dom.mjs';
 import { installGl, glStub } from './stub_gl.mjs';
 
 const path = process.argv[2];
 const mode = process.argv[3] || 'webgl2';
 if (!path) {
-  console.error('usage: node wasm/web/webgl_triangle_smoke.mjs <webgl_triangle.wasm> [webgl2|webgl1-nouint]');
+  console.error('usage: node wasm/web/smoke/webgl_triangle_smoke.mjs <webgl_triangle.wasm> [webgl2|webgl1-nouint]');
   process.exit(2);
 }
 

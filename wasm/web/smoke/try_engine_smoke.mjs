@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // Node smoke test for the /try engine module. Usage:
-//   node wasm/web/try_engine_smoke.mjs <built-try-dir>
+//   node wasm/web/smoke/try_engine_smoke.mjs <built-try-dir>
 //
 // `<dir>` is a built /try directory (the output of `scripts/build-try.sh`):
 // it holds `try_engine.wasm`, `sources.json` and the `sources/` tree the
@@ -21,13 +21,13 @@
 
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { encodeSources } from '../../docs/site/static/try/sources.js';
-import { imports } from './web.js';
-import { host } from './web_runtime.js';
+import { encodeSources } from '../../../docs/site/static/try/sources.js';
+import { imports } from '../web.js';
+import { host } from '../web_runtime.js';
 
 const dir = process.argv[2];
 if (!dir) {
-  console.error('usage: node wasm/web/try_engine_smoke.mjs <built-try-dir>');
+  console.error('usage: node wasm/web/smoke/try_engine_smoke.mjs <built-try-dir>');
   process.exit(2);
 }
 

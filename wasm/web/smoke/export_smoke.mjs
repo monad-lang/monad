@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // Node smoke test for `#[export "c"]`. Usage:
-//   node wasm/web/export_smoke.mjs <module.wasm> [exports-only|keep]
+//   node wasm/web/smoke/export_smoke.mjs <module.wasm> [exports-only|keep]
 //
 // The default mode runs fixtures/wasm/export_probe.mo and asserts the three
 // properties the export ABI promises:
@@ -23,13 +23,13 @@
 // the state channel every SPA export call relies on.
 
 import { readFile } from 'node:fs/promises';
-import { imports } from './web.js';
-import { host } from './web_runtime.js';
+import { imports } from '../web.js';
+import { host } from '../web_runtime.js';
 
 const path = process.argv[2];
 const mode = process.argv[3] ?? 'probe';
 if (!path) {
-  console.error('usage: node wasm/web/export_smoke.mjs <module.wasm> [exports-only|keep]');
+  console.error('usage: node wasm/web/smoke/export_smoke.mjs <module.wasm> [exports-only|keep]');
   process.exit(2);
 }
 const exportsOnly = mode === 'exports-only';

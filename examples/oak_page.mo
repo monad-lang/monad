@@ -8,7 +8,7 @@
 // plans/implementations/dict-capturing-closure-segfault.md), so a compiled
 // page program stays on the pure API until that is fixed.
 //
-// The trailing newline is deliberate: wasm/web/smoke.mjs asserts stdout is
+// The trailing newline is deliberate: wasm/web/smoke/smoke.mjs asserts stdout is
 // the expected document plus exactly one newline.
 #![mote { name := "oak_page", deps := [oak, xml_html] }]
 

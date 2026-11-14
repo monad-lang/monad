@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Render allocation guard: a 256-button view with two handlers per cell.
 // Usage:
-//   node wasm/web/oak_alloc_smoke.mjs <oak_spa_alloc.wasm> [max-delta-bytes]
+//   node wasm/web/smoke/oak_alloc_smoke.mjs <oak_spa_alloc.wasm> [max-delta-bytes]
 //
 // Mounts, then fires one click and ticks, and asserts committed linear
 // memory grew by less than the ceiling (default 2 MiB). The pre-fix path
@@ -9,14 +9,14 @@
 // visible even below the threshold.
 
 import { readFile } from 'node:fs/promises';
-import { imports } from './web.js';
-import { host } from './web_runtime.js';
+import { imports } from '../web.js';
+import { host } from '../web_runtime.js';
 import { installDocument, body, fail } from './stub_dom.mjs';
 
 const path = process.argv[2];
 const ceiling = Number(process.argv[3] ?? 2097152);
 if (!path) {
-  console.error('usage: node wasm/web/oak_alloc_smoke.mjs <oak_spa_alloc.wasm> [max-delta-bytes]');
+  console.error('usage: node wasm/web/smoke/oak_alloc_smoke.mjs <oak_spa_alloc.wasm> [max-delta-bytes]');
   process.exit(2);
 }
 

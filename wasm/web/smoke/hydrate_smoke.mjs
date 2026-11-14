@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // SSR hydration: `Runtime.mount` adopts a matching server-rendered tree.
 // Usage:
-//   node wasm/web/hydrate_smoke.mjs <oak_spa_nested.wasm>
+//   node wasm/web/smoke/hydrate_smoke.mjs <oak_spa_nested.wasm>
 //
 // The fixture's initial view is
 //   div.app > [div > [p "nested", ul#items], footer > [button add, button clear]]
@@ -16,13 +16,13 @@
 //   * a later dispatch + tick still patches through the adopted nodes.
 
 import { readFile } from 'node:fs/promises';
-import { imports } from './web.js';
-import { host } from './web_runtime.js';
+import { imports } from '../web.js';
+import { host } from '../web_runtime.js';
 import { FakeNode, body, installDocument, fail, stub } from './stub_dom.mjs';
 
 const path = process.argv[2];
 if (!path) {
-  console.error('usage: node wasm/web/hydrate_smoke.mjs <oak_spa_nested.wasm>');
+  console.error('usage: node wasm/web/smoke/hydrate_smoke.mjs <oak_spa_nested.wasm>');
   process.exit(2);
 }
 

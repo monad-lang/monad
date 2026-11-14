@@ -1,7 +1,7 @@
 // Oak-level event fixture: typed handlers, drag-and-drop and clipboard,
 // all declarative in the view and pure in update.
 //
-// `wasm/web/oak_event_smoke.mjs` drives it over a stub DOM: it checks the
+// `wasm/web/smoke/oak_event_smoke.mjs` drives it over a stub DOM: it checks the
 // lowered `data-oak-on-*` attributes, the drag payload/effect and drop
 // effect, the drop/paste payloads reaching update, and the sync copy path.
 #![mote { name := "oak_events", deps := [oak, oak_wasm, web_event, web_wasm] }]

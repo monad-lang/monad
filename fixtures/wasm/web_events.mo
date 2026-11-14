@@ -4,7 +4,7 @@
 // hex handler id. `ev_report` is what the listeners call: it snapshots the
 // live event into `web_event::WebEvent`, writes the interesting fields into
 // `#report`, and applies preventDefault/stopPropagation for the ids that ask
-// for them. `wasm/web/event_smoke.mjs` drives it over a stub DOM.
+// for them. `wasm/web/smoke/event_smoke.mjs` drives it over a stub DOM.
 #![mote { name := "web_events", deps := [web_event, web_wasm] }]
 
 use std::list {List.intercalate}

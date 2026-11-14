@@ -1,19 +1,19 @@
 #!/usr/bin/env node
 // `Command.batch` + `Command.after` + `Command.focus`. Usage:
-//   node wasm/web/timer_smoke.mjs <oak_timer.wasm>
+//   node wasm/web/smoke/timer_smoke.mjs <oak_timer.wasm>
 //
 // One click must: fold `now` in this batch (count 0 -> 1), focus #target
 // after the patch, and, once the host timer fires, fold `later` on the next
 // tick (1 -> 11). No animation-frame subscription is involved.
 
 import { readFile } from 'node:fs/promises';
-import { imports } from './web.js';
-import { host } from './web_runtime.js';
+import { imports } from '../web.js';
+import { host } from '../web_runtime.js';
 import { installDocument, body, fail } from './stub_dom.mjs';
 
 const path = process.argv[2];
 if (!path) {
-  console.error('usage: node wasm/web/timer_smoke.mjs <oak_timer.wasm>');
+  console.error('usage: node wasm/web/smoke/timer_smoke.mjs <oak_timer.wasm>');
   process.exit(2);
 }
 

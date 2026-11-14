@@ -1,5 +1,5 @@
 /// Pure diff tests for `Patch.diff`. The apply half is DOM-bound and is
-/// covered end to end by `wasm/web/spa_smoke.mjs`.
+/// covered end to end by `wasm/web/smoke/spa_smoke.mjs`.
 use std::list {}
 use xml_html::html {Html.Attr, Html.Node}
 use lib::patch {Patch}
@@ -308,7 +308,7 @@ def test_unkeyed_list_stays_positional : Bool :=
 // ─── Hydration match predicate ──────────────────────────────
 //
 // The IO half of hydration (`Patch.hydrate`) is DOM-bound and covered end
-// to end by `wasm/web/hydrate_smoke.mjs`; the decision it makes is pure and
+// to end by `wasm/web/smoke/hydrate_smoke.mjs`; the decision it makes is pure and
 // pinned here.
 
 def node_comment (content : String) : Html.Node := Html.Node.node_comment content

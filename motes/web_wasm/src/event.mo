@@ -8,7 +8,7 @@
 /// The getters are selector-based (a `which` word) to keep the import table
 /// small. The numbers are shared with `wasm/web/web_runtime.js` and kept in
 /// step by hand: the ABI drift test only checks that every import has a host
-/// function, so `wasm/web/event_smoke.mjs` exercises each selector group.
+/// function, so `wasm/web/smoke/event_smoke.mjs` exercises each selector group.
 ///
 /// The snapshot is EAGER: every dispatch reads all scalar selectors (~27
 /// imports), gating only the string reads by event kind. A handler cannot
