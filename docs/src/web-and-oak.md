@@ -126,13 +126,54 @@ elements that can change.
 | `storage` | `has`/`get_raw`/`get`/`set`/`remove`/`clear` (`get_raw` distinguishes absent from empty) |
 | `clock` | `now_ms` (wall clock) and `monotonic_ms` (`performance.now`) |
 | `media` | `matches query`, `watch`/`unwatch` for `matchMedia` changes |
-| `crypto` | `random_bytes` (`getRandomValues`) and a two-phase SHA-256 |
-| `window` / `memory` | `reload`/`navigate`, committed/used heap |
+| `crypto` | `random_bytes` (`getRandomValues`), a two-phase SHA-256, and ECDSA P-256 (`WebCrypto.generate_key_begin`/`sign_begin`/`export_public_jwk_begin`/`export_public_raw_begin`) |
+| `keystore` | IndexedDB `put`/`get`/`delete` of a **non-extractable** ECDSA key, so it survives a page reload |
+| `window` / `memory` | `origin`/`href`/`pathname`/`search`/`search_param` reads, `reload`/`navigate`/`replace`, committed/used heap |
 | `timer` | the `Command.after` bridge |
 
 `Fetch.begin_with` and `Fetch.response_headers` carry headers as
 length-prefixed blobs; that is what an authenticated API (bearer tokens,
 `Content-Type`, DPoP nonces) needs.
+
+### WebCrypto, and signing in from the browser
+
+The two-phase shape is not incidental: a JS promise callback **must not
+re-enter wasm** while a Monad frame is on the stack, so every promise-based
+operation is a `*_begin` that returns an op handle plus a `Crypto.poll` the
+page drives from its own frame loop. `0` = pending, `1` = done, `2` = failed
+(`Crypto.error` gives the DOMException name).
+
+The ECDSA keypair is **non-extractable and signing-only**, and it is an id
+into the host's table: the private scalar never enters wasm memory, so there
+is nothing in the module's heap to leak. Only the public half is ever
+exported -- as a JSON Web Key (`kty:EC`, `crv:P-256`, for an RFC 7638 `jkt`
+thumbprint and the OAuth client-metadata document) and as the raw 65-byte
+SEC1 point (`0x04‖X‖Y`, for a multikey). `WebCrypto.sign_begin` answers
+ES256 as the 64-byte IEEE P1363 `r‖s`, which is already the JWS form.
+
+**Why the keystore exists.** A browser OAuth login redirects away and back,
+which unloads the page; the DPoP key that signs the token exchange has to
+survive that. `KeyStore.put_begin`/`get_begin` store the `CryptoKey` in
+IndexedDB, which keeps it by structured clone -- the browser holds the
+material opaque and hands back a live handle on the next page. That is
+strictly safer than stashing an exported JWK in `localStorage`, where any XSS
+could read it.
+
+`KeyStore.get` finishes with state `3` when the slot is **empty**, which is a
+miss rather than a failure: "this browser has no key for this account" is the
+ordinary answer on a first visit.
+
+```monad,ignore
+// The redirect carries its result in the URL, so read it from `location`.
+let code <- Window.search_param "code";
+let state <- Window.search_param "state";
+let iss <- Window.search_param "iss";
+```
+
+`Window.search_param` percent-decodes (and turns `+` into a space), so a
+base64url `code` or a `state` carrying `=` arrives intact. After exchanging
+the code, `Window.replace` rewrites the URL without pushing a history entry --
+otherwise a Back button would re-submit a code that has already been spent.
 
 ## Serving and reload
 

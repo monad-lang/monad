@@ -15,7 +15,7 @@
 /// rebase supplies `std::cstring`/`Ptr` for length-carrying calls; switch
 /// the multi-byte-string externs to `(ptr, len)` when that lands.
 
-use lib::types {Node, RequestId, ClipboardOp, CryptoOp}
+use lib::types {Node, RequestId, ClipboardOp, CryptoOp, WebKey}
 use std::bytebuf {ByteBuf}
 use std::ref {Ref}
 
@@ -181,6 +181,65 @@ def window_reload_raw : RawIO Unit
 
 #[extern "c" {link_name := "web_window_navigate"}]
 def window_navigate_raw (url : String) : RawIO Unit
+
+#[extern "c" {link_name := "web_window_replace"}]
+def window_replace_raw (url : String) : RawIO Unit
+
+/// `location` READS. These are the query-parameter half of an OAuth redirect:
+/// the provider sends the user back with `code`/`state`/`iss` in the URL, so
+/// a wasm SPA has to be able to read them. `search_param` percent-decodes
+/// (and turns `+` into a space), which is what makes a base64url `code`
+/// survive the trip.
+#[extern "c" {link_name := "web_location_origin"}]
+def location_origin_raw : RawIO String
+
+#[extern "c" {link_name := "web_location_href"}]
+def location_href_raw : RawIO String
+
+#[extern "c" {link_name := "web_location_pathname"}]
+def location_pathname_raw : RawIO String
+
+#[extern "c" {link_name := "web_location_search"}]
+def location_search_raw : RawIO String
+
+#[extern "c" {link_name := "web_location_search_param"}]
+def location_search_param_raw (name : String) : RawIO String
+
+/// The error name of a failed WebCrypto operation (`NotSupportedError`,
+/// `InvalidAccessError`, ...), or `""` when it has not failed.
+#[extern "c" {link_name := "web_crypto_error"}]
+def crypto_error_raw (op : CryptoOp) : RawIO String
+
+/// The ECDSA keypair a `generate_key_begin`/`keystore_get_begin` produced.
+/// Opaque host-side id: the private key never enters wasm memory.
+#[extern "c" {link_name := "web_crypto_op_key"}]
+def crypto_op_key_raw (op : CryptoOp) : RawIO WebKey
+
+/// ECDSA P-256, two-phase like SHA-256. `generate` is non-extractable and
+/// sign-only; the exports cover the public half only (a JWK, and the raw
+/// 65-byte SEC1 point a multikey needs).
+#[extern "c" {link_name := "web_ecdsa_generate_begin"}]
+def ecdsa_generate_begin_raw : RawIO CryptoOp
+
+#[extern "c" {link_name := "web_ecdsa_export_jwk_begin"}]
+def ecdsa_export_jwk_begin_raw (k : WebKey) : RawIO CryptoOp
+
+#[extern "c" {link_name := "web_ecdsa_export_raw_begin"}]
+def ecdsa_export_raw_begin_raw (k : WebKey) : RawIO CryptoOp
+
+#[extern "c" {link_name := "web_ecdsa_sign_begin"}]
+def ecdsa_sign_begin_raw (k : WebKey) (data : ByteBuf) : RawIO CryptoOp
+
+/// IndexedDB, so a non-extractable `CryptoKey` survives the OAuth redirect.
+/// `get` finishes with state 3 when the slot is empty (not an error).
+#[extern "c" {link_name := "web_keystore_put_begin"}]
+def keystore_put_begin_raw (slot : String) (k : WebKey) : RawIO CryptoOp
+
+#[extern "c" {link_name := "web_keystore_get_begin"}]
+def keystore_get_begin_raw (slot : String) : RawIO CryptoOp
+
+#[extern "c" {link_name := "web_keystore_delete_begin"}]
+def keystore_delete_begin_raw (slot : String) : RawIO CryptoOp
 
 /// C-only heap probes (`runtime/src/platform_web.c`): committed linear
 /// memory and the bump pointer's used bytes. No JS host function.
