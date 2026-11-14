@@ -118,4 +118,32 @@ cancel.fire('click');
 instance.exports.oak_tick();
 if (!second.terminated) fail('Cancel did not terminate the worker');
 
+// Examples: one labelled, grouped button per program in `eval::examples`.
+// Loading one remounts the uncontrolled editor with the example's source.
+const panels = findAll(body, (n) => (n.attrs && n.attrs.class || '').split(/\s+/).includes('try-examples'));
+if (panels.length !== 1) fail(`expected one .try-examples panel, got ${panels.length}`);
+if (!panels[0].textContent.includes('Examples')) {
+  fail(`the example panel has no label: ${JSON.stringify(panels[0].textContent)}`);
+}
+const exampleButtons = findAll(body, (n) => (n.attrs && n.attrs.class || '').split(/\s+/).includes('try-example'));
+if (exampleButtons.length < 10) fail(`expected at least 10 examples, got ${exampleButtons.length}`);
+for (const button of exampleButtons) {
+  button.fire('click');
+  instance.exports.oak_tick();
+  const editor = byTag('TEXTAREA')[0];
+  if (!editor) fail(`no editor after loading ${JSON.stringify(button.textContent)}`);
+  if (!editor.textContent.includes('def main')) {
+    fail(`example ${JSON.stringify(button.textContent)} did not load its source: ${JSON.stringify(editor.textContent)}`);
+  }
+}
+
+// Clear empties the scratchpad (and remounts the editor).
+const clear = findAll(body, (n) => n.tagName === 'BUTTON' && n.textContent === 'Clear')[0];
+if (!clear) fail('no Clear button');
+clear.fire('click');
+instance.exports.oak_tick();
+const cleared = byTag('TEXTAREA')[0];
+if (!cleared) fail('no editor after Clear');
+if (cleared.textContent !== '') fail(`Clear left ${JSON.stringify(cleared.textContent)}`);
+
 console.log(`ok: ${path} -> /try UI runs, polls, renders and cancels`);

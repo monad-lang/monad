@@ -1,6 +1,9 @@
 /// Pure tests for the /try page: its state machine and its view.
 
-use lib::app {TryEffect, TryModel, TryMsg, try_init, try_subscriptions, try_update, try_view}
+use lib::app {
+    TryEffect, TryExample, TryModel, TryMsg, try_examples, try_init, try_subscriptions,
+    try_update, try_view,
+}
 use oak::app {Command}
 use oak::typed {Oak.to_html}
 use xml_html::html {Html.to_string}
@@ -109,3 +112,89 @@ def test_view_marks_the_evaluator_experimental : Bool :=
     let html : String := view_html try_init
     in
     String.contains html "Experimental and unoptimised"
+
+// ─── Examples and Clear ───────────────────────────────────────────────
+
+#[partial]
+def well_formed_examples (exs : List TryExample) : Bool :=
+    match exs {
+        List.empty => true,
+        List.cons e rest =>
+            Bool.not (String.is_empty e.name)
+                && Bool.not (String.is_empty e.source)
+                && String.contains e.source "def main"
+                && Bool.not (String.contains e.source "use std")
+                && Bool.not (String.contains e.source "use lib::")
+                && well_formed_examples rest,
+    }
+
+#[partial]
+def example_name_member (name : String) (exs : List TryExample) : Bool :=
+    match exs {
+        List.empty => false,
+        List.cons e rest => String.beq e.name name || example_name_member name rest,
+    }
+
+#[partial]
+def unique_example_names (exs : List TryExample) : Bool :=
+    match exs {
+        List.empty => true,
+        List.cons e rest =>
+            Bool.not (example_name_member e.name rest) && unique_example_names rest,
+    }
+
+/// Every button is a complete, page-legal module: a name, a source, a
+/// zero-arg `main`, and no `std`/`lib::` import (the engine rejects those).
+#[test]
+def test_examples_are_complete_modules : Bool :=
+    Bool.not (I64.lt (List.length try_examples) 10)
+        && well_formed_examples try_examples
+        && unique_example_names try_examples
+
+#[partial]
+def every_example_loads (index : I64) (exs : List TryExample) : Bool :=
+    match exs {
+        List.empty => true,
+        List.cons e rest =>
+            match try_update try_init (TryMsg.load_example index) {
+                Pair.pair m _cmd =>
+                    String.beq m.source e.source
+                        && String.beq m.editor_text e.source
+                        && every_example_loads (I64.add index 1) rest,
+            },
+    }
+
+#[test]
+def test_every_example_loads_its_source : Bool :=
+    every_example_loads 0 try_examples
+
+#[test]
+def test_clear_empties_the_scratchpad : Bool :=
+    let m0 : TryModel :=
+        { try_init with source := "def main : I64 := 1\n",
+            editor_text := "def main : I64 := 1\n", value := "1", typ := "I64" }
+    in
+    match try_update m0 TryMsg.clear {
+        Pair.pair m _cmd =>
+            String.is_empty m.source
+                && String.is_empty m.editor_text
+                && String.is_empty m.value
+                && String.is_empty m.typ
+                && Bool.not (String.beq m.editor_key m0.editor_key),
+    }
+
+#[test]
+def test_clear_while_running_cancels_the_worker : Bool :=
+    match try_update { try_init with running := true } TryMsg.clear {
+        Pair.pair m cmd => Bool.not m.running && cancel_requested cmd,
+    }
+
+#[test]
+def test_view_groups_the_examples : Bool :=
+    let html : String := view_html try_init
+    in
+    String.contains html "try-examples"
+        && String.contains html "try-examples-label"
+        && String.contains html ">Clear<"
+        && String.contains html ">Hello<"
+        && String.contains html ">Classes<"

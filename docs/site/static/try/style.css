@@ -133,6 +133,13 @@ a:hover { color: var(--accent-bright); }
 .try-btn-danger { color: var(--red); border-color: #6e2b2b; }
 
 .try-examples { display: flex; gap: 8px; flex-wrap: wrap; margin-left: auto; }
+.try-examples-label {
+  align-self: center;
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
 .try-example {
   font-size: 12px;
   padding: 4px 10px;

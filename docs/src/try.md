@@ -17,7 +17,7 @@ page shows, together with its type — the same convention as `monad repl`
 (`eval::run`, the shared evaluator, renders both):
 
 ```monad
-def square (n : I64) : I64 := I64.mul n n
+def square (n : I64) : I64 := n * n
 
 def main : I64 := square 12
 ```
@@ -58,8 +58,8 @@ type Shape {
 
 def area (s : Shape) : I64 :=
     match s {
-        circle r => I64.mul 3 (I64.mul r r),
-        square x => I64.mul x x,
+        circle r => 3 * r * r,
+        square x => x * x,
     }
 
 def main : I64 := area (Shape.circle 2)
@@ -67,6 +67,12 @@ def main : I64 := area (Shape.circle 2)
 
 There is no filesystem, no network and no `use` of other motes. `use init::…`
 resolves; `use std::…` is rejected with a message.
+
+The **Examples** row under the scratchpad loads a complete program in one
+click. They use ordinary operators (`+ * / == |> ++`) and the prelude's own
+helpers (`List.map`, `Option.get_or_default`, `Foldable.foldl`,
+`String.to_lowercase`), and cover records, recursion, ad-hoc types and a class
+instance.
 
 ## What is not available (yet)
 

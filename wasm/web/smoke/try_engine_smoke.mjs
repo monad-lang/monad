@@ -104,6 +104,21 @@ await expect('def describe (o : Option I64) : String :=\n    match o { some x =>
 // all of init/src, so the page can reach beyond the prelude closure.
 await expect('use init::foldable {}\n\ndef main : I64 := 7\n', 0, '7', 'I64');
 
+// The page's example programs (`eval/src/examples.mo`). Keep these in sync
+// with that list: this is the wasm path, and `pipeline_tests.mo` covers the
+// native one from the same sources.
+await expect('def main : String :=\n    "Hello, " ++ "Monad!"\n', 0, '"Hello, Monad!"', 'String');
+await expect('def main : I64 := 6 * 7 + 8 / 2\n', 0, '46', 'I64');
+await expect('def twice (x : I64) : I64 := x * 2\n\ndef main : List I64 :=\n    List.map twice [1, 2, 3, 4]\n', 0, '[2, 4, 6, 8]', '(List I64)');
+await expect('def describe (o : Option I64) : String :=\n    match o {\n        some x => "got " ++ I64.to_string x,\n        none => "nothing",\n    }\n\ndef main : String := describe (Option.some 42)\n', 0, '"got 42"', 'String');
+await expect('type Shape {\n    circle (r : I64),\n    square (s : I64),\n}\n\ndef area (s : Shape) : I64 :=\n    match s {\n        circle r => 3 * r * r,\n        square x => x * x,\n    }\n\ndef main : I64 := area (Shape.circle 2)\n', 0, '12', 'I64');
+await expect('def double (x : I64) : I64 := x * 2\n\ndef inc (x : I64) : I64 := x + 1\n\ndef main : I64 := 5 |> double |> inc\n', 0, '11', 'I64');
+await expect('struct Point {\n    x : I64,\n    y : I64,\n}\n\ndef bump (p : Point) : Point := { p with x := p.x + 1 }\n\ndef main : I64 :=\n    let p : Point := { x := 1, y := 2 } in\n    let q : Point := bump p in\n    q.x\n', 0, '2', 'I64');
+await expect('use init::foldable {Foldable}\n\ndef main : I64 :=\n    Foldable.foldl (fn (acc : I64) => fn (x : I64) => acc + x) 0 [1, 2, 3, 4]\n', 0, '10', 'I64');
+await expect('#[decreasing n]\ndef fact (n : I64) : I64 :=\n    if n == 0\n    then 1\n    else n * fact (n - 1)\n\ndef main : I64 := fact 6\n', 0, '720', 'I64');
+await expect('def main : String :=\n    String.to_lowercase ("MONAD " ++ I64.to_string 42)\n', 0, '"monad 42"', 'String');
+await expect('class Twice A {\n    def twice (a : A) : A\n}\n\ninstance Twice I64 {\n    def twice (a : I64) : I64 := a * 2\n}\n\ndef main : I64 := Twice.twice 21\n', 0, '42', 'I64');
+
 // Native fixes from review: explicit-length string primitives, a
 // zero-arity native as a value, and MIN / -1.
 await expect('def main : I64 := String.count_newlines "a\\nb\\nc" 2\n', 0, '1', 'I64');

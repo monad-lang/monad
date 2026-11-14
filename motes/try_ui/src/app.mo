@@ -16,22 +16,9 @@ use oak::events {Html.on, Html.on_click, Html.on_input, Subscription}
 use oak::typed {Oak.Attr, Oak.Node}
 use web_event::event {HandlerResult, ListenerFlags, WebEvent}
 use web_wasm::worker {Worker.cancel, Worker.error, Worker.notes, Worker.poll, Worker.run, Worker.status, Worker.typ, Worker.value}
-
-pub struct TryExample {
-    name : String,
-    source : String
-}
-
-def example (name : String) (source : String) : TryExample :=
-    { name := name, source := source }
-
-pub def try_examples : List TryExample := [
-    example "Hello" "def main : String :=\n    String.concat \"Hello, \" \"Monad!\"\n",
-    example "Arithmetic" "def main : I64 :=\n    I64.add (I64.mul 6 7) (I64.div 8 2)\n",
-    example "Lists" "def twice (x : I64) : I64 := I64.mul x 2\n\ndef main : List I64 :=\n    List.map twice [1, 2, 3, 4]\n",
-    example "Option" "def describe (o : Option I64) : String :=\n    match o {\n        some x => String.concat \"got \" (I64.to_string x),\n        none => \"nothing\",\n    }\n\ndef main : String := describe (Option.some 42)\n",
-    example "Types" "type Shape {\n    circle (r : I64),\n    square (s : I64),\n}\n\ndef area (s : Shape) : I64 :=\n    match s {\n        circle r => I64.mul 3 (I64.mul r r),\n        square x => I64.mul x x,\n    }\n\ndef main : I64 := area (Shape.circle 2)\n"
-]
+// The example programs live in `eval::examples` so the engine's own tests can
+// evaluate exactly the sources the page offers (`pipeline_tests.mo`).
+pub use eval::examples {TryExample, try_examples}
 
 pub struct TryModel {
     source : String,
@@ -51,6 +38,7 @@ pub struct TryModel {
 pub type TryMsg {
     source_changed (text : String),
     load_example (index : I64),
+    clear,
     run,
     cancel,
     polled,
@@ -77,6 +65,7 @@ pub def try_update (m : TryModel) (msg : TryMsg) : Pair TryModel (Command TryEff
     match msg {
         TryMsg.source_changed text => Pair.pair { m with source := text } Command.none,
         TryMsg.load_example index => load_example_pair m index,
+        TryMsg.clear => clear_pair m,
         TryMsg.run =>
             if m.running
             then Pair.pair m Command.none
@@ -122,6 +111,21 @@ def example_at (index : I64) (exs : List TryExample) : Option TryExample :=
         List.cons e rest =>
             if I64.beq index 0 then Option.some e else example_at (I64.sub index 1) rest,
     }
+
+/// Empty the scratchpad. A fresh `editor_key` remounts the uncontrolled
+/// textarea; a run in flight is cancelled so its result cannot land in the
+/// cleared pane.
+def clear_pair (m : TryModel) : Pair TryModel (Command TryEffect TryMsg) :=
+    let next_seq : I64 := I64.add m.editor_seq 1
+    in
+    let cmd : Command TryEffect TryMsg :=
+        if m.running then Command.perform TryEffect.cancel else Command.none
+    in
+    Pair.pair
+        { m with source := "", editor_text := "",
+            editor_key := I64.to_string next_seq, editor_seq := next_seq,
+            running := false, status := "", value := "", typ := "", error := "", notes := "" }
+        cmd
 
 pub def try_subscriptions (m : TryModel) : List (Subscription TryMsg) :=
     if m.running then [Subscription.animation_frame_msg TryMsg.polled] else List.empty
@@ -198,10 +202,18 @@ def editor_pane (m : TryModel) : Oak.Node TryMsg :=
     in
     let actions : Oak.Node TryMsg :=
         Html.div [Html.key "actions", Html.class_ ["try-actions"]]
-            (List.append (action_buttons m) (example_buttons 0 try_examples))
+            (List.append (action_buttons m) [examples_panel])
     in
     Html.div [Html.class_ ["try-pane"]]
         [head, field, actions]
+
+/// The example buttons, in the flex container the stylesheet already
+/// defines (`.try-examples`), under their own label.
+def examples_panel : Oak.Node TryMsg :=
+    Html.div [Html.class_ ["try-examples"]]
+        (List.cons
+            (Html.span [Html.class_ ["try-examples-label"]] [Html.text "Examples"])
+            (example_buttons 0 try_examples))
 
 def action_buttons (m : TryModel) : List (Oak.Node TryMsg) :=
     let run_attrs : List (Oak.Attr TryMsg) :=
@@ -213,9 +225,12 @@ def action_buttons (m : TryModel) : List (Oak.Node TryMsg) :=
         Html.button (List.append run_attrs [Html.on_click TryMsg.run])
             [Html.text (if m.running then "Running…" else "Run")]
     in
+    let clear_button : Oak.Node TryMsg :=
+        Html.button [Html.class_ ["try-btn"], Html.on_click TryMsg.clear] [Html.text "Clear"]
+    in
     if m.running
-    then [run_button, Html.button [Html.class_ ["try-btn", "try-btn-danger"], Html.on_click TryMsg.cancel] [Html.text "Cancel"]]
-    else [run_button]
+    then [run_button, Html.button [Html.class_ ["try-btn", "try-btn-danger"], Html.on_click TryMsg.cancel] [Html.text "Cancel"], clear_button]
+    else [run_button, clear_button]
 
 def example_buttons (index : I64) (exs : List TryExample) : List (Oak.Node TryMsg) :=
     match exs {

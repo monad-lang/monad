@@ -31,6 +31,12 @@ path = "../web_event"
 [dependencies.xml_html]
 path = "../xml_html"
 
+# The example programs, shared with the engine's end-to-end tests. Only
+# `eval::examples` (a pure data module) is reachable from this wasm; the UI
+# still never evaluates Monad itself.
+[dependencies.eval]
+path = "../../eval"
+
 # Affine-by-default migration exception (measured 2026-10-26). Delete this
 # table when the mote reaches zero violations; the default (no table) is
 # `mode = "error"`. See plans/type-system/quantitative-types.md.

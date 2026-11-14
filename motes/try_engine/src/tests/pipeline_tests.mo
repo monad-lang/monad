@@ -5,7 +5,8 @@
 
 use lib::pipeline {run_source}
 use lib::sources {SourceModule, identity_of_path}
-use std::io {IO.list_dir, IO.read_file}
+use eval::examples {TryExample, try_examples}
+use std::io {IO.list_dir, IO.println, IO.read_file}
 use std::path {Path, Path.to_string}
 
 def init_dir : String := "init/src"
@@ -149,3 +150,29 @@ def test_ok_has_no_error_text : IO Bool := do {
     let o <- run_source sources "def main : I64 := 1\n";
     return (String.is_empty o.error)
 }
+
+// ─── The page's own examples ───────────────────────────────────────────
+
+/// Run EVERY snippet the /try page offers. The list is `eval::examples`, so
+/// the page and this test cannot drift; a snippet that stops evaluating
+/// fails here, not in a browser.
+#[test]
+def test_page_examples_evaluate : IO Bool := do {
+    let sources <- load_sources;
+    examples_ok sources try_examples
+}
+
+#[partial]
+def examples_ok (sources : List SourceModule) (exs : List TryExample) : IO Bool :=
+    match exs {
+        List.empty => IO.pure true,
+        List.cons e rest => do {
+            let o <- run_source sources e.source;
+            if I64.beq o.status 0
+            then examples_ok sources rest
+            else do {
+                IO.println (String.concat "example did not evaluate: " e.name);
+                IO.pure false
+            }
+        },
+    }
