@@ -18,18 +18,20 @@
 #
 # Keep the list sorted; the script does not care, but diffs read better.
 # Ceilings are seeded from the Phase 0 measurement (2026-11-14, tree-built
-# compiler 8b6a30d8): the enforced warning count per mote, which is what a
-# tree-built `monad check` reports under the fail-open enforcement path.
-# The strict report (`bench/src/affine_report.mo`) is higher.
+# compiler 8b6a30d8), then re-seeded once against a tree-built compiler on
+# main 31b567a5 (`motes/toml` rose to 64 with main's toml work; `lang`,
+# `codegen` and `cli` fell and were lowered at the same time). The count is
+# what a tree-built `monad check` reports under the fail-open enforcement
+# path; the strict report (`bench/src/affine_report.mo`) is higher.
 build 107
-cli 92
-codegen 370
+cli 85
+codegen 345
 eval 41
-lang 2372
+lang 2368
 motes/clap 86
 motes/fmt 34
 motes/json 11
 motes/log 10
 motes/lsp 97
-motes/toml 40
+motes/toml 64
 motes/toolkit 176
