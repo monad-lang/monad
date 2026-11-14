@@ -126,6 +126,11 @@ env:
 #     cachix substituter (the push serves the Tangled microVMs and trusted
 #     machines). A consumer on the runner that built the path gets a store
 #     hit; one on the other runner builds `.#monad` itself, ~2 min native.
+#   * The heavy jobs (the two sweeps, web stack, docs site, WASM, weaver)
+#     run only on runners carrying the `monad-heavy` label. A slower runner
+#     timed them out at 60 min (andy-github-runner, PR #253: 13 min building
+#     `.#monad` uncached plus a sweep 2.7x slower than nixos76); it keeps the
+#     light jobs. Their timeouts are 90 min so one slow host is not a red run.
 #   * `.#monad` is hosted by the PINNED nightly (nix/nightly.nix), not the
 #     latest one `ci-self-compile.sh` installs, so a stale pin fails these
 #     jobs as well as the release -- AGENTS.md's "keep the pin fresh".
@@ -160,7 +165,7 @@ jobs:
 
   pre-commit-checks:
     needs: changes
-    runs-on: [self-hosted, linux]
+    runs-on: [self-hosted, linux, monad-heavy]
     steps:
       - uses: actions/checkout@v5
 
@@ -250,7 +255,7 @@ jobs:
             cargo test --manifest-path rust/Cargo.toml --release -j 2
 
   compiler-checks:
-    runs-on: [self-hosted, linux]
+    runs-on: [self-hosted, linux, monad-heavy]
     # Gated on the classifier: a change that touches no compiler input has
     # nothing for this job to build. A skipped job still reports
     # (as `skipped`, which required checks treat as passing, unlike a
@@ -448,10 +453,10 @@ jobs:
             -c "$MONAD_CI_BIN" test motes/sql motes/sqlite
 
   web-stack-tests:
-    runs-on: [self-hosted, linux]
+    runs-on: [self-hosted, linux, monad-heavy]
     needs: [changes, compiler-checks]
     if: needs.changes.outputs.compiler == 'true'
-    timeout-minutes: 60
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v5
       - uses: ./.github/actions/tree-compiler
@@ -476,10 +481,10 @@ jobs:
                  std/src/ref_tests.mo std/src/watch_tests.mo
 
   docs-site:
-    runs-on: [self-hosted, linux]
+    runs-on: [self-hosted, linux, monad-heavy]
     needs: [changes, compiler-checks]
     if: needs.changes.outputs.compiler == 'true'
-    timeout-minutes: 60
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v5
       - uses: ./.github/actions/tree-compiler
@@ -521,10 +526,10 @@ jobs:
                  scripts/check-repl.sh
 
   wasm-target:
-    runs-on: [self-hosted, linux]
+    runs-on: [self-hosted, linux, monad-heavy]
     needs: [changes, compiler-checks]
     if: needs.changes.outputs.compiler == 'true'
-    timeout-minutes: 60
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v5
       - uses: ./.github/actions/tree-compiler
@@ -632,10 +637,10 @@ jobs:
   # over the drivers in weaver::pty::*: a file per driver paid a ~60 s compile
   # each for a few seconds of terminal time.
   weaver-checks:
-    runs-on: [self-hosted, linux]
+    runs-on: [self-hosted, linux, monad-heavy]
     needs: changes
     if: needs.changes.outputs.compiler == 'true'
-    timeout-minutes: 60
+    timeout-minutes: 90
     steps:
       # Full history for ci-self-compile.sh's nightly-floor check, as in
       # compiler-checks.
