@@ -16,6 +16,11 @@ workspace = true
 workspace = true
 [dependencies.parsec]
 workspace = true
+# The shared evaluator: `core_eval_bench.mo` lowers a workload through
+# `eval::file` (the same recipe `monad eval` and /try run) and then times
+# `lang::core_eval.eval` alone.
+[dependencies.eval]
+workspace = true
 
 [dependencies.regex]
 workspace = true

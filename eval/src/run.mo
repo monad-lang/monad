@@ -81,6 +81,16 @@ pub struct EvalSuccess {
     warnings : List String
 }
 
+/// A lowered root plus the global table it references -- the
+/// pre-evaluation half of `Eval.run_elaborated`. Exposed so a benchmark can
+/// time `lang::core_eval.eval` alone, with parse/elaborate/lower amortized
+/// out (`bench/src/core_eval_bench.mo`). Never called from
+/// `Eval.run_sources`, so the wasm engine does not carry it.
+pub struct EvalBenchProgram {
+    ir : CoreIr,
+    globals : GlobalTable
+}
+
 // --- Failure constructors ---------------------------------------------
 
 def stage_error (stage : EvalStage) (message : String) (warnings : List String) : EvalFailure :=
@@ -172,47 +182,63 @@ def require_root (em : ElaboratedModules) (fuel : I64) (depth_limit : I64)
 /// The elaborate-and-dispatch step every backend runs before lowering: the
 /// raw elaborated graph still carries syntactic class-method calls, so it
 /// is re-elaborated in reporting mode and the reachable closure from the
-/// root is validated. Same recipe as the compile pipeline.
+/// root is validated. Same recipe as the compile pipeline. `Err` names the
+/// stage that failed, so `dispatch` can report it and the benchmark hook
+/// can render just the message.
+def elaborate_and_lower (em : ElaboratedModules) (root : String)
+    (context_path : ModulePath) : Result (Pair EvalStage String) EvalBenchProgram :=
+    let empty_locs : LocalScope := empty_locals in
+    let report := elaborate_module_decls_reporting em.scope em.elaborated_decls empty_locs in
+    let dispatched : List Decl := best_effort_decls report in
+    let reachable : List Decl := filter_reachable_decls [root] dispatched in
+    let root_np : NamePath := NamePath.mk [Identifier.id root] in
+    let ctx := lower_ctx_from_decls context_path dispatched in
+    match validate_reachable_elaborated report reachable {
+        Result.err e =>
+            Result.err (Pair.pair EvalStage.eval_stage_elaborate (CodegenError.render e)),
+        Result.ok _ =>
+            match lower_root ctx root_np {
+                Result.err e =>
+                    Result.err (Pair.pair EvalStage.eval_stage_lower (show_lower_error e)),
+                Result.ok pr =>
+                    match pr {
+                        Pair.pair ir globals =>
+                            Result.ok (EvalBenchProgram.mk ir globals),
+                    },
+            },
+    }
+
+/// The same pre-evaluation half, for a benchmark that times evaluation
+/// alone; failures are reduced to their rendered message.
+pub def Eval.lower_elaborated_for_bench (em : ElaboratedModules) (root : String)
+    (context_path : ModulePath) : Result String EvalBenchProgram :=
+    match elaborate_and_lower em root context_path {
+        Result.err staged =>
+            match staged {
+                Pair.pair _stage message => Result.err message,
+            },
+        Result.ok program => Result.ok program,
+    }
+
 #[partial]
 def dispatch (em : ElaboratedModules) (fuel : I64) (depth_limit : I64)
     (want_type : Bool) (root : String) (context_path : ModulePath) (typ : Term)
-    (warnings : List String) : IO (Result EvalFailure EvalSuccess) := do {
-    let empty_locs : LocalScope := empty_locals;
-    let report := elaborate_module_decls_reporting em.scope em.elaborated_decls empty_locs;
-    let dispatched : List Decl := best_effort_decls report;
-    let reachable : List Decl := filter_reachable_decls [root] dispatched;
-    match validate_reachable_elaborated report reachable {
-        Result.err e =>
-            IO.pure (Result.err
-                (stage_error EvalStage.eval_stage_elaborate (CodegenError.render e) warnings)),
-        Result.ok _ =>
-            lower em.scope dispatched fuel depth_limit want_type root context_path typ warnings,
-    }
-}
-
-#[partial]
-def lower (scope : Scope) (dispatched : List Decl) (fuel : I64) (depth_limit : I64)
-    (want_type : Bool) (root : String) (context_path : ModulePath) (typ : Term)
     (warnings : List String) : IO (Result EvalFailure EvalSuccess) :=
-    let root_np : NamePath := NamePath.mk [Identifier.id root]
-    in
-    let ctx := lower_ctx_from_decls context_path dispatched
-    in
-    match lower_root ctx root_np {
-        Result.err e =>
-            IO.pure (Result.err
-                (stage_error EvalStage.eval_stage_lower (show_lower_error e) warnings)),
-        Result.ok pr => evaluate scope fuel depth_limit want_type typ warnings pr,
+    match elaborate_and_lower em root context_path {
+        Result.err staged =>
+            match staged {
+                Pair.pair stage message =>
+                    IO.pure (Result.err (stage_error stage message warnings)),
+            },
+        Result.ok program =>
+            evaluate em.scope fuel depth_limit want_type typ warnings program,
     }
 
 #[partial]
 def evaluate (scope : Scope) (fuel : I64) (depth_limit : I64) (want_type : Bool)
-    (typ : Term) (warnings : List String) (pr : Pair CoreIr GlobalTable)
+    (typ : Term) (warnings : List String) (program : EvalBenchProgram)
     : IO (Result EvalFailure EvalSuccess) :=
-    match pr {
-        Pair.pair ir globals =>
-            eval_ir scope ir globals fuel depth_limit want_type typ warnings,
-    }
+    eval_ir scope program.ir program.globals fuel depth_limit want_type typ warnings
 
 #[partial]
 def eval_ir (scope : Scope) (ir : CoreIr) (globals : GlobalTable) (fuel : I64)

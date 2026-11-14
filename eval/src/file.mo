@@ -7,7 +7,10 @@ use lang::mote {Mote.affine_mode_of_path}
 use lang::module {elaborate_loaded_modules}
 use lang::types {Identifier, ModulePath}
 use std::list {List.intercalate}
-use lib::run {EvalFailure, EvalOptions, EvalStage, EvalTarget, Eval.run_elaborated}
+use lib::run {
+    EvalBenchProgram, EvalFailure, EvalOptions, EvalStage, EvalTarget,
+    Eval.lower_elaborated_for_bench, Eval.run_elaborated,
+}
 
 /// Evaluate a source file's root `main`; `Ok` is the text to print
 /// (warnings included), `Err` is the staged failure with its diagnostics.
@@ -45,6 +48,23 @@ pub def Eval.run_file_limited (fuel : I64) (depth_limit : I64) (file_path : Stri
                     IO.pure (Result.err (with_warnings e.warnings (legacy_failure e))),
             }
         },
+    }
+}
+
+/// Load `file_path` and lower `root` without evaluating it, so a benchmark
+/// can time `lang::core_eval.eval` with the load/typecheck/elaborate/lower
+/// setup amortized out. Native only: this module is the filesystem entry
+/// and is never reachable from the wasm engine.
+pub def Eval.lower_file_for_bench (file_path : String) (root : String) (verbose : Bool)
+    : IO (Result String EvalBenchProgram) := do {
+    let em_r <- elaborate_loaded_modules file_path false verbose;
+    match em_r {
+        Result.err e =>
+            IO.pure (Result.err
+                (String.concat "could not load " (String.concat file_path (String.concat ": " e)))),
+        Result.ok em =>
+            IO.pure (Eval.lower_elaborated_for_bench em root
+                (ModulePath.mk [Identifier.id "main"])),
     }
 }
 

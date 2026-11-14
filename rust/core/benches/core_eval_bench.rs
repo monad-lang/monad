@@ -25,10 +25,11 @@ use monad_core::core_check_module::check_all_modules_capturing_core;
 use monad_core::core_eval::force_global;
 use monad_core::core_value::{GlobalCache, GlobalTable, NativeTable};
 use monad_core::lower_core_ir::{LoweredProgram, lower_program};
+use monad_core::parser::ModuleContext;
 use monad_core::term::module::{
   default_modules, init_package_sources, load_decls_from_text_with_path,
 };
-use monad_core::term::{ModulePath, mpt};
+use monad_core::term::{GlobalRef, ModulePath, NamePath};
 
 fn bench_core_eval(c: &mut Criterion, name: &str, source: &str) {
   let path = ModulePath::top("'bench");
@@ -40,8 +41,9 @@ fn bench_core_eval(c: &mut Criterion, name: &str, source: &str) {
         let mut modules: Vec<_> = init_package_sources()
           .expect("init_package_sources")
           .into_iter()
-          .map(|(p, text)| {
-            let d = load_decls_from_text_with_path(&text, &Default::default())
+          .map(|(p, file, text)| {
+            let ctx = ModuleContext::new(p.clone(), Some(file));
+            let d = load_decls_from_text_with_path(&text, &ctx)
               .unwrap_or_else(|e| panic!("parse {p}: {e}"));
             (p, d)
           })
@@ -51,7 +53,9 @@ fn bench_core_eval(c: &mut Criterion, name: &str, source: &str) {
         let program = check_all_modules_capturing_core(&modules, &loaded)
           .expect("check_all_modules_capturing_core");
         let lowered = lower_program(&program).expect("lower_program");
-        let main_idx = lowered.index_of(&mpt("main")).expect("main not found");
+        let main_idx = lowered
+          .index_of(&GlobalRef::Local(NamePath::top("main")))
+          .expect("main not found");
         (main_idx, lowered)
       },
       |(main_idx, lowered)| {
