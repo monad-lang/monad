@@ -47,6 +47,11 @@ pub instance Copy DocItem {
 }
 
 /// One module page: the items of one source file, in source order.
+///
+/// `DocItem` has a `Copy` instance (every field is a pointer or a small
+/// value); a module aggregates those, so it gets the same one. A renderer
+/// reads a module's path and then renders it, which is two uses of one
+/// value -- the affine rule's `Copy` escape hatch is exactly that.
 pub struct DocModule {
     /// The module's dotted path (`init::string`), the page's identity.
     module : String,
@@ -57,6 +62,11 @@ pub struct DocModule {
     doc : Option String,
     /// The file's documented declarations, in source order.
     items : List DocItem,
+}
+
+/// A module shares its (immutable) parts, like a single declaration does.
+pub instance Copy DocModule {
+    def copy (m : DocModule) : Pair DocModule DocModule := Pair.pair m m
 }
 
 /// One mote's API pages: its modules, in path order.

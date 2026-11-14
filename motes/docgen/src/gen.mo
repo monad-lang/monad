@@ -10,7 +10,7 @@ use acorn::config {SiteConfig}
 use acorn::site {Built, Site.write_pages}
 use lib::extract {DocExtract.extract_mote}
 use lib::model {DocMote}
-use lib::render {DocRender.hub_page, DocRender.mote_pages}
+use lib::render {DocRender.css_page, DocRender.hub_page, DocRender.mote_pages}
 
 /// The pages for a list of mote directories, written under `out`. Returns
 /// the number of files written.
@@ -53,11 +53,14 @@ def extract_one (mote : String) (rest : List String) (acc : List DocMote)
     }
 }
 
+/// Every page, then the hub, then the stylesheet: the stylesheet goes
+/// through the same writer and gate as the pages, so `monad doc` in any
+/// directory produces a reference that is styled, not just structured.
 def write_all_ms (out : String) (motes : List DocMote) : IO (Result String I64) := do {
     let cfg : SiteConfig := site_config out;
     let shared : Shared (List DocMote) := Shared.of motes;
     let pages : List Built := List.append (all_mote_pages cfg (Shared.get shared))
-        [DocRender.hub_page cfg (Shared.get shared)];
+        [DocRender.hub_page cfg (Shared.get shared), DocRender.css_page];
     Site.write_pages out pages
 }
 

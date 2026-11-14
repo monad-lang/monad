@@ -15,7 +15,7 @@ use acorn::layout {Shell}
 use acorn::site {Built, Site.build_with}
 use docgen::extract {DocExtract.extract_mote}
 use docgen::model {DocMote, DocMote.public_only}
-use docgen::render {DocRender.hub_page, DocRender.mote_pages}
+use docgen::render {DocRender.css_page, DocRender.hub_page, DocRender.mote_pages}
 use lib::landing {Landing.page}
 
 /// `<head>` additions for a book page, in order: the favicon, then the book
@@ -44,7 +44,8 @@ pub def Website.shell (cfg : SiteConfig) : Shell :=
 /// root, then the API reference under `api/`. The API pages come from
 /// docgen, which reads the motes' own sources -- so a declaration's page is
 /// its doc comment, and the site and the reference cannot disagree about a
-/// signature.
+/// signature. The reference's stylesheet is emitted beside them, so an API
+/// page is styled by the same build that wrote it.
 pub def Website.pages (cfg : SiteConfig) : IO (List Built) := do {
     let api <- Website.api_pages cfg;
     return (List.append [Built.page "index.html" (Oak.to_html (Landing.page cfg))] api)
@@ -54,16 +55,17 @@ pub def Website.pages (cfg : SiteConfig) : IO (List Built) := do {
 /// docgen's: which packages a reader is pointed at is an editorial choice.
 def documented_motes : List String := ["init", "std", "lang", "cli", "eval"]
 
-/// Every documented mote's pages, then the hub. The published reference
-/// shows `pub` declarations only -- package-private internals are the mote's
-/// own business, and the site is for readers. A mote that fails to read is
-/// skipped rather than failing the site: a missing reference page is better
-/// than no site at all, and the build reports the count either way.
+/// Every documented mote's pages, then the hub and the stylesheet. The
+/// published reference shows `pub` declarations only -- package-private
+/// internals are the mote's own business, and the site is for readers. A
+/// mote that fails to read is skipped rather than failing the site: a
+/// missing reference page is better than no site at all, and the build
+/// reports the count either way.
 def Website.api_pages (cfg : SiteConfig) : IO (List Built) := do {
     let motes <- extract_motes documented_motes List.empty;
     let shared : Shared (List DocMote) := Shared.of motes;
     return (List.append (all_mote_pages cfg (Shared.get shared))
-        [DocRender.hub_page cfg (Shared.get shared)])
+        [DocRender.hub_page cfg (Shared.get shared), DocRender.css_page])
 }
 
 #[terminating]
