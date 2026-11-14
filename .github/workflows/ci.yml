@@ -676,6 +676,43 @@ jobs:
             -c env MONAD_BIN="$MONAD_CI_BIN" \
                  scripts/ci-weaver-pty.sh
 
+  # The weaver mote's UNIT suites, beside the pty job rather than inside it.
+  # weaver-checks runs only the terminal drivers, which is how a stale
+  # settings-row assertion in `tui_app_tests` shipped green (2026-11-14): the
+  # settings dialog had gained the `auto_safety` row and the test still
+  # expected seven. This runs the suites that cover the seams weaver's
+  # features touch, with the same tree compiler. `--jobs 2` overlaps the
+  # files' compile-link-run tails; each file reloads the module closure, so a
+  # whole-directory sweep is the expensive shape and a named list is the
+  # trade. Trim the list before raising the guard.
+  weaver-unit-checks:
+    runs-on: [self-hosted, linux]
+    needs: [changes, compiler-checks]
+    if: needs.changes.outputs.compiler == 'true'
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: ./.github/actions/tree-compiler
+        timeout-minutes: 15
+
+      - name: Weaver unit suites
+        timeout-minutes: 75
+        run: |
+          nix develop --no-pure-eval --accept-flake-config \
+            --profile "$HOME/.monad-ci-devshell" \
+            -c "$MONAD_CI_BIN" test --jobs 2 \
+                 motes/weaver/src/tests/tui_app_tests.mo \
+                 motes/weaver/src/tests/commands_tests.mo \
+                 motes/weaver/src/tests/dumb_e2e_tests.mo \
+                 motes/weaver/src/tests/weaver_gate_tests.mo \
+                 motes/weaver/src/tests/settings_tests.mo \
+                 motes/weaver/src/tests/policy_tests.mo \
+                 motes/weaver/src/tests/gate_tests.mo \
+                 motes/weaver/src/tests/ask_tests.mo \
+                 motes/weaver/src/tests/classify_tests.mo \
+                 motes/weaver/src/tests/auto_continue_tests.mo
+
   # The portable monadup binary and the distribution harness: the bootstrap
   # stub, the fixture-driven install path, doctor/env/new, and a monadup
   # built from this checkout actually driven through all of it.
