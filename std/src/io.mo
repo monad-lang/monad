@@ -130,8 +130,15 @@ def IO.tail_of (s : Shared FdStream) (n : I64) : IO (Result StreamError String) 
 def IO.tail_sized (s : Shared FdStream) (n : I64) (size : Result StreamError I64) : IO (Result StreamError String) :=
     match size {
         Result.err e => IO.tail_failed s e,
-        Result.ok z => IO.tail_from s (if z > n then z - n else 0)
+        Result.ok z => IO.tail_from s (IO.tail_offset z n)
     }
+
+/// The offset to start a tail at. A separate def because a `Result.ok`
+/// binder is typed by the constructor's `A`, which the affine walk cannot
+/// name as `I64`; mentioning `z` twice in `tail_sized` is then an affine
+/// violation, while an `I64` parameter may be read twice.
+def IO.tail_offset (z : I64) (n : I64) : I64 :=
+    if z > n then z - n else 0
 
 def IO.tail_failed (s : Shared FdStream) (e : StreamError) : IO (Result StreamError String) := do {
     let _ <- Stream.close (Shared.get s);
@@ -159,11 +166,14 @@ pub def IO.tail_text (from : I64) (bytes : List U8) : String :=
 #[partial]
 def IO.drop_continuations (budget : I64) (bytes : List U8) : List U8 :=
     match bytes {
-        List.empty => bytes,
+        List.empty => List.empty,
         List.cons b rest =>
             if Bool.and (budget > 0) (Bool.and (U8.to_i64 b > 127) (U8.to_i64 b < 192))
             then IO.drop_continuations (budget - 1) rest
-            else bytes
+            // Rebuild rather than return the scrutinee: the match already
+            // spends the parameter's affine budget, and a second mention
+            // (returning `bytes`) is a `copy_required`.
+            else List.cons b rest
     }
 
 def IO.read_bytes_opened (opened : Result StreamError FdStream) : IO (Result StreamError (List U8)) :=

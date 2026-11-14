@@ -5,6 +5,10 @@
 
 use std::sha256 {Sha256.hash, Sha256.hex_bytes_of_byte}
 
+// `BEq (List A)` lives in `std::list`, not the ambient prelude; the empty
+// brace list pulls the module (and its instances) into scope.
+use std::list {}
+
 // ── Primitive unit tests ──
 // Isolates a failure to "native op" vs. "algorithm composition" first.
 
