@@ -8,6 +8,18 @@
 /// `parse.mo`'s parser instead.
 use std::list {List.any}
 
+// Note on `Copy` and `#[derive Copy]`: these four types are immutable and a
+// duplicate aliases the same value, which is exactly the structural derive's
+// shape. The instances are written out by hand anyway because this mote is
+// read by the Rust bootstrap host's meta-evaluation capture (as the closure
+// of `#[derive Cli]`), and that capture re-checks a re-read module's
+// declarations: a `#[derive]` there is expanded a second time outside the
+// whole-program qualification pass, so the generated instance's own
+// constructor references come back unbound (`ArgValue.mk`,
+// `ArgKind.arg_flag`). The self-hosted compiler handles it; the host must
+// keep accepting the compiler-source surface, so these stay manual until the
+// host's capture qualifies generated decls.
+
 /// What an argument is.
 pub type Cli.ArgKind {
     arg_flag,
@@ -15,11 +27,19 @@ pub type Cli.ArgKind {
     arg_positional,
 }
 
+pub instance Copy Cli.ArgKind {
+    def copy (k : Cli.ArgKind) : Pair Cli.ArgKind Cli.ArgKind := Pair.pair k k
+}
+
 /// The type a value is decoded as. `Cli.parse` validates `arg_i64` at parse
 /// time; `arg_string` is passed through.
 pub type Cli.ArgValueType {
     arg_string,
     arg_i64,
+}
+
+pub instance Copy Cli.ArgValueType {
+    def copy (t : Cli.ArgValueType) : Pair Cli.ArgValueType Cli.ArgValueType := Pair.pair t t
 }
 
 /// One declared argument.
@@ -42,6 +62,10 @@ pub struct Cli.ArgSpec {
     value_name : String,
 }
 
+pub instance Copy Cli.ArgSpec {
+    def copy (a : Cli.ArgSpec) : Pair Cli.ArgSpec Cli.ArgSpec := Pair.pair a a
+}
+
 /// One command (or subcommand) definition.
 pub struct Cli.CommandSpec {
     name : String,
@@ -51,10 +75,21 @@ pub struct Cli.CommandSpec {
     subcommands : List Cli.CommandSpec,
 }
 
+/// An immutable command tree; a duplicate aliases it (the parser only ever
+/// reads a spec). It contains lists, so it is Region-classified and never
+/// freed individually.
+pub instance Copy Cli.CommandSpec {
+    def copy (s : Cli.CommandSpec) : Pair Cli.CommandSpec Cli.CommandSpec := Pair.pair s s
+}
+
 /// One parsed option or positional value. Repeats are distinct entries.
 pub struct Cli.ArgValue {
     name : String,
     value : String,
+}
+
+pub instance Copy Cli.ArgValue {
+    def copy (v : Cli.ArgValue) : Pair Cli.ArgValue Cli.ArgValue := Pair.pair v v
 }
 
 /// A successfully parsed command line. `name` is the selected command
@@ -65,6 +100,11 @@ pub struct Cli.Parsed {
     flags : List String,
     options : List Cli.ArgValue,
     positionals : List Cli.ArgValue,
+}
+
+/// An immutable parse result; a duplicate aliases the same lists.
+pub instance Copy Cli.Parsed {
+    def copy (p : Cli.Parsed) : Pair Cli.Parsed Cli.Parsed := Pair.pair p p
 }
 
 /// The parser's total result: success, help, version, or a usage error.
@@ -298,7 +338,7 @@ pub def Cli.positionals_from_loop (i : I64) (xs : List Cli.ArgValue) : List Cli.
     match xs {
         List.empty => List.empty,
         List.cons x rest =>
-            if I64.lt i 1 then xs else Cli.positionals_from_loop (I64.sub i 1) rest,
+            if I64.lt i 1 then List.cons x rest else Cli.positionals_from_loop (I64.sub i 1) rest,
     }
 
 #[partial]
@@ -338,9 +378,10 @@ pub def Cli.parse_i64_unsigned (s : String) (acc : I64) : Option I64 :=
         let c : String := String.slice s 0 1 in
         match Cli.digit_of c {
             Option.some d =>
-                if acc > (9223372036854775807 - d) / 10
+                let digit : I64 := d in
+                if acc > (9223372036854775807 - digit) / 10
                 then Option.none
-                else Cli.parse_i64_unsigned (String.drop 1 s) (I64.add (I64.mul acc 10) d),
+                else Cli.parse_i64_unsigned (String.drop 1 s) (I64.add (I64.mul acc 10) digit),
             Option.none => Option.none,
         }
 

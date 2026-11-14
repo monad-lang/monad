@@ -156,6 +156,11 @@ pub def cli_field_default (f : FieldInfo) : Option Expr :=
 /// The field shapes `#[derive Cli]` understands. Anything else is a
 /// `Decl.d_error` naming the field, rather than generated code that fails
 /// with a confusing type error.
+///
+/// The `Copy` instance is manual for the reason `spec.mo`'s header gives:
+/// this file is captured by the Rust host's meta evaluation when a consumer
+/// expands `#[derive Cli]`, and a `#[derive]` in a re-read module is
+/// expanded a second time there without qualification.
 pub type Cli.TypeClass {
     tc_bool,
     tc_string,
@@ -163,6 +168,10 @@ pub type Cli.TypeClass {
     tc_option_string,
     tc_option_i64,
     tc_list_string,
+}
+
+pub instance Copy Cli.TypeClass {
+    def copy (c : Cli.TypeClass) : Pair Cli.TypeClass Cli.TypeClass := Pair.pair c c
 }
 
 pub def cli_class_of_name (name : String) : Option Cli.TypeClass :=
@@ -240,7 +249,7 @@ pub def cli_is_positional (k : Cli.ArgKind) : Bool :=
 ///   `Bool` -> flag and everything else -> positional;
 /// - otherwise positional (the historical unannotated form).
 pub def cli_field_kind (struct_form : Bool) (f : FieldInfo) : Cli.ArgKind :=
-    let attrs : List String := cli_field_attrs f in
+    let attrs : List String := Shared.get (Shared.of (cli_field_attrs f)) in
     if Cli.attr_has "arg" attrs then Cli.ArgKind.arg_flag
     else if Cli.attr_has "opt" attrs then Cli.ArgKind.arg_option
     else if Cli.attr_has "pos" attrs then Cli.ArgKind.arg_positional
@@ -315,7 +324,9 @@ pub def cli_required (k : Cli.ArgKind) (f : FieldInfo) : Bool :=
             if cli_has_default f then false
             else match cli_type_class (cli_field_typ f) {
                 Option.none => true,
-                Option.some c => if cli_class_is_option c || cli_class_is_list c then false else true,
+                Option.some c =>
+                    let cls : Cli.TypeClass := c in
+                    if cli_class_is_option cls || cli_class_is_list cls then false else true,
             },
     }
 
@@ -531,11 +542,13 @@ pub def cli_bad_short (k : Cli.ArgKind) (ctor_display : String) (f : FieldInfo) 
     else match cli_attr_value k "short" f {
         Option.none => Option.none,
         Option.some s =>
-            if String.is_empty s then Option.none
-            else if I64.lt 1 (String.length s)
+            let short : String := s in
+            if String.is_empty short then Option.none
+            else if I64.lt 1 (String.length short)
                 then Option.some (String.concat_all ["#[derive Cli]: `", ctor_display, "`'s field `", cli_field_name f, "` has a `short` longer than one character"])
-                else if String.beq s "-" || String.beq s "="
-                    then Option.some (String.concat_all ["#[derive Cli]: `", ctor_display, "`'s field `", cli_field_name f, "` has an invalid `short` (", s, ")"])
+                else if String.beq short "-" || String.beq short "="
+                    then Option.some (String.concat_all ["#[derive Cli]: `", ctor_display, "`'s field `",
+                        cli_field_name f, "` has an invalid `short` (", short, ")"])
                     else Option.none,
     }
 
@@ -549,7 +562,10 @@ pub def cli_bad_field (struct_form : Bool) (ctor_display : String) (f : FieldInf
                 Cli.ArgKind.arg_flag =>
                     match cli_type_class (cli_field_typ f) {
                         Option.some c =>
-                            if Bool.not (cli_class_is_bool c) then Option.some (String.concat_all ["#[derive Cli]: `", ctor_display, "`'s field `", name, "` is a flag but is not `Bool`"])
+                            let cls : Cli.TypeClass := c in
+                            if Bool.not (cli_class_is_bool cls)
+                            then Option.some (String.concat_all ["#[derive Cli]: `", ctor_display, "`'s field `", name,
+                                "` is a flag but is not `Bool`"])
                             else if cli_has_default f then Option.some (String.concat_all ["#[derive Cli]: `", ctor_display, "`'s Bool flag `", name, "` cannot have a default -- remove `:= ...`"])
                             else Option.none,
                         Option.none =>
@@ -560,9 +576,11 @@ pub def cli_bad_field (struct_form : Bool) (ctor_display : String) (f : FieldInf
                         Option.none =>
                             Option.some (String.concat_all ["#[derive Cli]: `", ctor_display, "`'s field `", name, "` has an unsupported type (expected String, I64, Option String/I64, or List String)"]),
                         Option.some c =>
-                            if cli_class_is_bool c
+                            let cls : Cli.TypeClass := c in
+                            if cli_class_is_bool cls
                             then Option.some (String.concat_all ["#[derive Cli]: `", ctor_display, "`'s Bool field `", name, "` must be annotated `#[arg]`"])
-                            else if Bool.not (cli_required k f) && Bool.not (cli_has_default f) && Bool.not (cli_class_is_option c) && Bool.not (cli_class_is_list c)
+                            else if Bool.not (cli_required k f) && Bool.not (cli_has_default f)
+                                && Bool.not (cli_class_is_option cls) && Bool.not (cli_class_is_list cls)
                                 then Option.some (String.concat_all ["#[derive Cli]: `", ctor_display, "`'s field `", name, "` is optional but has no default; use Option, List, or a `:=` default"])
                                 else Option.none,
                     },
@@ -741,7 +759,11 @@ pub def cli_parse_expr (type_name : String) : Expr :=
 pub def derive_cli_meta (info : TypeInfo) : List MetaDecl :=
     match TypeInfo.shape info {
         TypeShape.type_shape type_name _params ctors =>
-            match ctors {
+            // One read handle for the constructor list: validation, spec and
+            // decoder construction all read the same list, and a `List` is
+            // not `Copy`.
+            let cs : List CtorInfo := Shared.get (Shared.of ctors) in
+            match cs {
                 List.empty =>
                     [d_error (String.concat_all ["#[derive Cli]: `", type_name, "` has no constructors"])],
                 List.cons first rest =>
@@ -752,20 +774,22 @@ pub def derive_cli_meta (info : TypeInfo) : List MetaDecl :=
                     let struct_form : Bool := is_mk && List.is_empty rest in
                     let single_command : Bool := List.is_empty rest in
                     let lower : String := String.to_lowercase type_name in
-                    match cli_bad_ctors struct_form ctors {
+                    match cli_bad_ctors struct_form cs {
                         Option.some msg => [d_error msg],
                         Option.none =>
-                            match cli_check_all_positionals struct_form ctors {
+                            match cli_check_all_positionals struct_form cs {
                                 Option.some msg => [d_error msg],
                                 Option.none =>
-                                    match cli_short_conflicts_all struct_form ctors {
+                                    match cli_short_conflicts_all struct_form cs {
                                         Option.some msg => [d_error msg],
                                         Option.none =>
-                                            match cli_long_conflicts_all struct_form ctors {
+                                            match cli_long_conflicts_all struct_form cs {
                                                 Option.some msg => [d_error msg],
                                                 Option.none =>
-                                                    let spec_expr : Expr := cli_spec_expr type_name ctors struct_form single_command in
-                                                    let decode_expr : Expr := cli_decode_expr type_name ctors struct_form single_command in
+                                                    let spec_expr : Expr :=
+                                                        cli_spec_expr type_name cs struct_form single_command in
+                                                    let decode_expr : Expr :=
+                                                        cli_decode_expr type_name cs struct_form single_command in
                                                     let parse_expr : Expr := cli_parse_expr type_name in
                                                     [
                                                         d_def (String.concat "spec_" lower) List.empty (e_var "Cli.CommandSpec") spec_expr,
@@ -818,31 +842,35 @@ pub def Cli.nth (n : I64) (l : List String) : String :=
 pub def test_take_flag_found : Bool :=
     match Cli.take_flag "verbose" "" ["--verbose", "file.mo"] {
         Cli.FlagResult.flag_result found rest =>
-            found == true && List.length rest == 1 && Cli.nth 0 rest == "file.mo",
+            let rs : List String := Shared.get (Shared.of rest) in
+            found == true && List.length rs == 1 && Cli.nth 0 rs == "file.mo",
     }
 
 #[test]
 pub def test_take_flag_not_found : Bool :=
     match Cli.take_flag "verbose" "" ["file.mo"] {
         Cli.FlagResult.flag_result found rest =>
-            found == false && List.length rest == 1 && Cli.nth 0 rest == "file.mo",
+            let rs : List String := Shared.get (Shared.of rest) in
+            found == false && List.length rs == 1 && Cli.nth 0 rs == "file.mo",
     }
 
 #[test]
 pub def test_take_flag_short_form : Bool :=
     match Cli.take_flag "verbose" "v" ["-v", "file.mo"] {
         Cli.FlagResult.flag_result found rest =>
-            found == true && List.length rest == 1 && Cli.nth 0 rest == "file.mo",
+            let rs : List String := Shared.get (Shared.of rest) in
+            found == true && List.length rs == 1 && Cli.nth 0 rs == "file.mo",
     }
 
 #[test]
 pub def test_take_flag_position_independent : Bool :=
     match Cli.take_flag "v" "" ["a", "--v", "b"] {
         Cli.FlagResult.flag_result found rest =>
+            let rs : List String := Shared.get (Shared.of rest) in
             found == true
-                && List.length rest == 2
-                && Cli.nth 0 rest == "a"
-                && Cli.nth 1 rest == "b",
+                && List.length rs == 2
+                && Cli.nth 0 rs == "a"
+                && Cli.nth 1 rs == "b",
     }
 
 #[test]
@@ -856,8 +884,9 @@ pub def test_take_flag_empty_args : Bool :=
 pub def test_take_positional_some : Bool :=
     match Cli.take_positional ["a", "b"] {
         Cli.PosResult.pos_result value rest =>
+            let rs : List String := Shared.get (Shared.of rest) in
             match value {
-                Option.some v => v == "a" && List.length rest == 1 && Cli.nth 0 rest == "b",
+                Option.some v => v == "a" && List.length rs == 1 && Cli.nth 0 rs == "b",
                 Option.none => false,
             },
     }
@@ -876,21 +905,24 @@ pub def test_take_positional_none : Bool :=
 pub def test_take_opt_found : Bool :=
     match Cli.take_opt "output" "" "source" ["--output", "out", "a.mo"] {
         Cli.OptResult.opt_result value rest =>
-            value == "out" && List.length rest == 1 && Cli.nth 0 rest == "a.mo",
+            let rs : List String := Shared.get (Shared.of rest) in
+            value == "out" && List.length rs == 1 && Cli.nth 0 rs == "a.mo",
     }
 
 #[test]
 pub def test_take_opt_short_form : Bool :=
     match Cli.take_opt "output" "o" "source" ["-o", "out", "a.mo"] {
         Cli.OptResult.opt_result value rest =>
-            value == "out" && List.length rest == 1 && Cli.nth 0 rest == "a.mo",
+            let rs : List String := Shared.get (Shared.of rest) in
+            value == "out" && List.length rs == 1 && Cli.nth 0 rs == "a.mo",
     }
 
 #[test]
 pub def test_take_opt_default_when_absent : Bool :=
     match Cli.take_opt "output" "" "source" ["a.mo"] {
         Cli.OptResult.opt_result value rest =>
-            value == "source" && List.length rest == 1 && Cli.nth 0 rest == "a.mo",
+            let rs : List String := Shared.get (Shared.of rest) in
+            value == "source" && List.length rs == 1 && Cli.nth 0 rs == "a.mo",
     }
 
 #[test]

@@ -160,10 +160,11 @@ pub def Cli.lines_with_newlines (lines : List String) : List String :=
 
 #[partial]
 pub def Cli.section (title : String) (lines : List String) : String :=
-    if List.is_empty lines
+    let ls : List String := Shared.get (Shared.of lines) in
+    if List.is_empty ls
     then ""
     else String.concat "\n" (String.concat (String.concat title "\n")
-        (String.concat_list (Cli.lines_with_newlines lines)))
+        (String.concat_list (Cli.lines_with_newlines ls)))
 
 pub def Cli.help_text (s : Cli.CommandSpec) : String :=
     let positionals : List Cli.ArgSpec := Cli.filter_args Cli.ArgKind.arg_positional s.args in
@@ -175,14 +176,16 @@ pub def Cli.help_text (s : Cli.CommandSpec) : String :=
     let options : List Cli.ArgSpec :=
         List.append (List.append builtins (Cli.filter_args Cli.ArgKind.arg_option s.args))
             (Cli.filter_args Cli.ArgKind.arg_flag s.args) in
-    let arg_width : I64 := Cli.string_len_max (Cli.arg_labels (List.append positionals options)) 0 in
+    let opts : List Cli.ArgSpec := Shared.get (Shared.of options) in
+    let poss : List Cli.ArgSpec := Shared.get (Shared.of positionals) in
+    let arg_width : I64 := Cli.string_len_max (Cli.arg_labels (List.append poss opts)) 0 in
     let sub_width : I64 := Cli.string_len_max (Cli.sub_labels s.subcommands) 0 in
     let about : String :=
         if String.is_empty s.about then "" else String.concat "\n" (String.concat s.about "\n") in
     String.concat (Cli.usage s)
         (String.concat about
             (String.concat
-                (Cli.section "Arguments:" (Cli.render_arg_lines arg_width positionals))
+                (Cli.section "Arguments:" (Cli.render_arg_lines arg_width poss))
                 (String.concat
-                    (Cli.section "Options:" (Cli.render_arg_lines arg_width options))
+                    (Cli.section "Options:" (Cli.render_arg_lines arg_width opts))
                     (Cli.section "Commands:" (Cli.render_sub_lines sub_width s.subcommands)))))

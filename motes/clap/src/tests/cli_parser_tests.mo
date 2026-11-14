@@ -4,7 +4,7 @@ use lib::help {Cli.help_text, Cli.usage}
 use lib::parse {Cli.parse}
 use lib::spec {
     Cli.ArgValueType, Cli.CommandSpec, Cli.ParseResult, Cli.Parsed,
-    Cli.command, Cli.flag, Cli.flag_count, Cli.flag_set,
+    Cli.command, Cli.command_name, Cli.flag, Cli.flag_count, Cli.flag_set,
     Cli.option, Cli.option_i64_optional, Cli.option_optional,
     Cli.option_value, Cli.option_value_i64, Cli.parse_i64,
     Cli.positional, Cli.positional_optional, Cli.positional_spec, Cli.required_positional,
@@ -73,7 +73,9 @@ pub def opt_i64_is (o : Option I64) (v : I64) : Bool :=
 #[test]
 pub def test_parse_long_flag : Bool :=
     match ok_parsed (Cli.parse demo_spec ["--verbose", "a.mo"]) {
-        Option.some p => Cli.flag_set "verbose" p && Cli.required_positional 0 p == "a.mo",
+        Option.some p =>
+            let pp : Cli.Parsed := p in
+            Cli.flag_set "verbose" pp && Cli.required_positional 0 pp == "a.mo",
         Option.none => false,
     }
 
@@ -115,7 +117,9 @@ pub def test_parse_short_option_equals : Bool :=
 #[test]
 pub def test_parse_short_cluster : Bool :=
     match ok_parsed (Cli.parse demo_spec ["-vq", "a.mo"]) {
-        Option.some p => Cli.flag_set "verbose" p && Cli.flag_set "quiet" p,
+        Option.some p =>
+            let pp : Cli.Parsed := p in
+            Cli.flag_set "verbose" pp && Cli.flag_set "quiet" pp,
         Option.none => false,
     }
 
@@ -130,7 +134,8 @@ pub def test_parse_repeated_flag_counts : Bool :=
 pub def test_parse_double_dash_fences : Bool :=
     match ok_parsed (Cli.parse demo_spec ["--", "--verbose"]) {
         Option.some p =>
-            Bool.not (Cli.flag_set "verbose" p) && Cli.required_positional 0 p == "--verbose",
+            let pp : Cli.Parsed := p in
+            Bool.not (Cli.flag_set "verbose" pp) && Cli.required_positional 0 pp == "--verbose",
         Option.none => false,
     }
 
@@ -190,7 +195,9 @@ pub def sub_spec : Cli.CommandSpec :=
 #[test]
 pub def test_parse_subcommand : Bool :=
     match ok_parsed (Cli.parse sub_spec ["build", "a.mo"]) {
-        Option.some p => p.name == "build" && Cli.required_positional 0 p == "a.mo",
+        Option.some p =>
+            let pp : Cli.Parsed := p in
+            String.beq (Cli.command_name pp) "build" && Cli.required_positional 0 pp == "a.mo",
         Option.none => false,
     }
 

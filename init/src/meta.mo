@@ -41,9 +41,23 @@ pub type FieldInfo {
     field_info (name : String) (typ : Expr) (attrs : List String) (default : Option Expr)
 }
 
+/// An immutable reflection record: duplicating it aliases the same `Expr`
+/// and `List`, and the type is Region-classified, so the alias is never
+/// freed individually. `#[derive Copy]` cannot be used because its body
+/// needs `Copy` on `Expr`, `List String` and `Option Expr`.
+pub instance Copy FieldInfo {
+    def copy (f : FieldInfo) : Pair FieldInfo FieldInfo := Pair.pair f f
+}
+
 /// One constructor: its declared name, and its fields in declared order.
 pub type CtorInfo {
     ctor_info (name : String) (fields : List FieldInfo)
+}
+
+/// As `FieldInfo`: immutable, and `#[derive Copy]` cannot copy the
+/// `List FieldInfo` field.
+pub instance Copy CtorInfo {
+    def copy (c : CtorInfo) : Pair CtorInfo CtorInfo := Pair.pair c c
 }
 
 /// A type's full structure: its own name, its declared type parameters (in
@@ -115,6 +129,15 @@ pub type Expr {
     /// splicing nonsense into the program. `init/format.mo` uses it so a
     /// malformed format template reports the reason at the call site.
     e_error (message : String),
+}
+
+/// The meta-AST is immutable: every `meta!`/derive only reads the `Expr` it
+/// is handed. A duplicate is the same pointer, and the type is
+/// Region-classified (it contains `String`s and `List`s), so the alias is
+/// never freed individually. `#[derive Copy]` cannot be used because its
+/// body needs `Copy` on the recursive and list fields.
+pub instance Copy Expr {
+    def copy (e : Expr) : Pair Expr Expr := Pair.pair e e
 }
 
 /// One arm of an `e_match` — the constructor it matches, its bound field

@@ -16,7 +16,8 @@ Theory (QTT).
 > and no off switch. A mote that has not finished migrating can opt into
 > warnings with `[affine] mode = "warn"` in its `mote.toml`; the default is
 > `error`. `init`, `std`, `sys`, `runtime`, `proofs` and `web_event` are at
-> zero and enforced; the rest of the compiler closure is still migrating
+> zero and enforced, as are the compiler-closure motes `llvm`, `parsec` and
+> `clap`; the rest of the closure is still migrating
 > (the exact set is `scripts/affine-closure-allowlist.txt`, and the gate is
 > `scripts/check-affine-closure.sh`).
 > A single def can opt out with `#[allow_non_affine "<reason>"]`, and a

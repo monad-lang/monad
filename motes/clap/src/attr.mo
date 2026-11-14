@@ -118,9 +118,10 @@ pub def Cli.parse_kv (piece : String) : Option (Pair String String) :=
     match Cli.find_sub ":=" piece 0 {
         Option.none => Option.none,
         Option.some idx =>
+            let at : I64 := idx in
             Option.some (Pair.pair
-                (String.slice piece 0 idx)
-                (Cli.decode_attr_value (String.drop (I64.add idx 2) piece))),
+                (String.slice piece 0 at)
+                (Cli.decode_attr_value (String.drop (I64.add at 2) piece))),
     }
 
 /// Split at commas outside double quotes; escapes are copied through for
