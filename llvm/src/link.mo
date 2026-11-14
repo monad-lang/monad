@@ -153,8 +153,9 @@ def capture_line (cmd : String) (args : List String) : IO (Option String) := do 
     let r <- Proc.capture cmd args;
     match r {
         Pair.pair code out =>
-            if code == 0 && Bool.not (String.is_empty (String.trim out))
-            then return (Option.some (String.trim out))
+            let text := String.trim out in
+            if code == 0 && Bool.not (String.is_empty text)
+            then return (Option.some text)
             else return Option.none
     }
 }
@@ -199,13 +200,18 @@ pub def map_export_flags (syms : List String) : List String := match syms {
 pub def pkg_config_link_flags (pkgs : List String) : IO (List String) := match pkgs {
     List.empty => do { return List.empty },
     List.cons _ _ => do {
-        let r <- Proc.capture "pkg-config" (List.cons "--libs-only-L" pkgs);
+        // The error path names the packages while the success path passes
+        // them to `pkg-config`; the handle makes the second mention a borrow
+        // instead of a second move.
+        let names : Shared (List String) := Shared.of pkgs;
+        let r <- Proc.capture "pkg-config" (List.cons "--libs-only-L" (Shared.get names));
         match r {
             Pair.pair code out =>
                 if code == 0
                 then return (split_ws_bytes (String.to_list out) List.empty)
                 else do {
-                    fail_line ("pkg-config could not resolve [link] pkg-config = " ++ ws_join pkgs ++ "; linking with the toolchain's default search path");
+                    fail_line ("pkg-config could not resolve [link] pkg-config = " ++ ws_join (Shared.get names)
+                        ++ "; linking with the toolchain's default search path");
                     return List.empty
                 }
         }
@@ -234,7 +240,9 @@ def ws_join (xs : List String) : String := match xs {
 
 def ws_word (rev : List U8) : List String := match rev {
     List.empty => List.empty,
-    List.cons _ _ => [String.from_list (List.reverse rev)],
+    // Rebuild the reversed word from the pattern binders: mentioning `rev`
+    // again would spend the match's affine budget twice.
+    List.cons hd tl => [String.from_list (List.reverse (List.cons hd tl))],
 }
 
 #[test]
@@ -291,9 +299,10 @@ def env_commit_hash (from_env : Option String) : String := match from_env {
 /// falls back to its own default): the string it stamps is then the one the
 /// docs already described.
 pub def build_commit_define (from_env : Option String) (compiler_commit : String) : String :=
-    if String.is_empty (env_commit_hash from_env) then
+    let env_hash := env_commit_hash from_env in
+    if String.is_empty env_hash then
         (if String.is_empty (String.trim compiler_commit) then "unknown" else String.trim compiler_commit)
-    else env_commit_hash from_env
+    else env_hash
 
 /// The runtime-object defines for `$MONAD_OWNERSHIP` (ownership phase 1).
 ///
@@ -434,80 +443,88 @@ def link_ir_plan (runtime_c : String) (ir_text : String) (ir_path : Path) (outpu
         Bench.report_since "link_ir: write .ll" t_write;
         return unit
     } else return unit;
-    if Bool.not (Result.is_ok wrote) then do {
-        fail_line ("Writing ir " ++ ir_path_s ++ " failed: " ++ write_failure wrote);
-        return 1
-    } else do {
-
-        // Stage trace (`std.log`): each line prints BEFORE its `Bench.now`
-        // start, so a user watching a long stage sees life before it ends.
-        stage verbose "link: llc";
-        let t_llc : I64 <- Bench.now;
-        let result <- compile_ir_to_obj_with spec ir_path obj_path;
-        if verbose then do {
-            Bench.report_since "link_ir: llc" t_llc;
-            return unit
-        } else return unit;
-        if not (result == 0) then do {
-            fail_line ("Compiling ir " ++ ir_path_s ++ " with llc failed");
+    match write_failure_of wrote {
+        Option.some msg => do {
+            fail_line ("Writing ir " ++ ir_path_s ++ " failed: " ++ msg);
             return 1
-        } else do {
-            stage verbose "link: clang runtime.c";
-            let t_rtc : I64 <- Bench.now;
-            let from_env <- IO.get_env "MONAD_BUILD_COMMIT";
-            let build_hash : String := build_commit_define from_env compiler_commit;
-            let commit_flag := "-DMONAD_BUILD_COMMIT=\"" ++ build_hash ++ "\"";
-            // Ownership mode is a compile-time define on the runtime object,
-            // not a run-time flag: the compiler emits `alloc_constructor_owned`
-            // and `monad_owned_free` calls, and the C must agree about which
-            // of those are real. Read here so both halves come from one value.
-            // The mode is native-only (the wasm profiles have no allocator to
-            // free to); a wasm build gets a define that turns into a clear
-            // `#error` in `runtime_abi.h` instead of invalid IR at `llc`.
-            let own_env <- IO.get_env "MONAD_OWNERSHIP";
-            let ownership_flags : List String := ownership_runtime_flags own_env;
-            let runtime_flags : List String :=
-                if Bool.not (List.is_empty ownership_flags) && TargetKind.is_wasm plan.kind
-                then ["-DMONAD_OWNERSHIP_UNSUPPORTED_TARGET"]
-                else List.append ownership_flags (List.append [commit_flag] (verbose_argv verbose));
-            let result <- compile_runtime_obj_for plan runtime_c_path runtime_flags runtime_obj;
+        },
+        Option.none => do {
+
+            // Stage trace (`std.log`): each line prints BEFORE its `Bench.now`
+            // start, so a user watching a long stage sees life before it ends.
+            stage verbose "link: llc";
+            let t_llc : I64 <- Bench.now;
+            let result <- compile_ir_to_obj_with spec ir_path obj_path;
             if verbose then do {
-                Bench.report_since "link_ir: clang runtime.c" t_rtc;
+                Bench.report_since "link_ir: llc" t_llc;
                 return unit
             } else return unit;
             if not (result == 0) then do {
-                fail_line "compiling runtime failed";
+                fail_line ("Compiling ir " ++ ir_path_s ++ " with llc failed");
                 return 1
             } else do {
-                stage verbose "link: clang link";
-                let t_link : I64 <- Bench.now;
-                // `-l<lib>` for every library the program's motes declared,
-                // ahead of the verbose flag. An empty `link_libs` leaves the
-                // argv exactly as it was.
-                let dash_l : List String := map_dash_l link_libs;
-                // `-L` before the `-l`s it serves; `link_objects` puts both
-                // after the objects.
-                let pkg_flags : List String <- pkg_config_link_flags link_pkgs;
-                // `#[export "c"]` symbols: `wasm-ld` exports a symbol under
-                // its own name, so each one becomes `-Wl,--export=<name>`.
-                // Only the web profile has an export ABI; a native link
-                // would reject the flag outright.
-                let export_flags : List String :=
-                    if String.beq (TargetKind.name plan.kind) "web"
-                    then map_export_flags export_syms
-                    else List.empty;
-                let link_flags : List String := List.append export_flags (List.append pkg_flags (List.append dash_l (verbose_argv verbose)));
-                let result <- link_objects_for plan [obj_path, runtime_obj] target link_flags;
+                stage verbose "link: clang runtime.c";
+                let t_rtc : I64 <- Bench.now;
+                let from_env <- IO.get_env "MONAD_BUILD_COMMIT";
+                let build_hash : String := build_commit_define from_env compiler_commit;
+                let commit_flag := "-DMONAD_BUILD_COMMIT=\"" ++ build_hash ++ "\"";
+                // Ownership mode is a compile-time define on the runtime object,
+                // not a run-time flag: the compiler emits `alloc_constructor_owned`
+                // and `monad_owned_free` calls, and the C must agree about which
+                // of those are real. Read here so both halves come from one value.
+                // The mode is native-only (the wasm profiles have no allocator to
+                // free to); a wasm build gets a define that turns into a clear
+                // `#error` in `runtime_abi.h` instead of invalid IR at `llc`.
+                let own_env <- IO.get_env "MONAD_OWNERSHIP";
+                let ownership_flags : List String := ownership_runtime_flags own_env;
+                let runtime_flags : List String :=
+                    match ownership_flags {
+                        List.empty => List.append [commit_flag] (verbose_argv verbose),
+                        List.cons hd tl =>
+                            if TargetKind.is_wasm plan.kind
+                            then ["-DMONAD_OWNERSHIP_UNSUPPORTED_TARGET"]
+                            else List.append (List.cons hd tl) (List.append [commit_flag] (verbose_argv verbose)),
+                    };
+                let result <- compile_runtime_obj_for plan runtime_c_path runtime_flags runtime_obj;
                 if verbose then do {
-                    Bench.report_since "link_ir: clang link" t_link;
+                    Bench.report_since "link_ir: clang runtime.c" t_rtc;
                     return unit
                 } else return unit;
                 if not (result == 0) then do {
-                    fail_line "linking failed";
+                    fail_line "compiling runtime failed";
                     return 1
                 } else do {
-                    ok_line "Compilation finished";
-                    return 0
+                    stage verbose "link: clang link";
+                    let t_link : I64 <- Bench.now;
+                    // `-l<lib>` for every library the program's motes declared,
+                    // ahead of the verbose flag. An empty `link_libs` leaves the
+                    // argv exactly as it was.
+                    let dash_l : List String := map_dash_l link_libs;
+                    // `-L` before the `-l`s it serves; `link_objects` puts both
+                    // after the objects.
+                    let pkg_flags : List String <- pkg_config_link_flags link_pkgs;
+                    // `#[export "c"]` symbols: `wasm-ld` exports a symbol under
+                    // its own name, so each one becomes `-Wl,--export=<name>`.
+                    // Only the web profile has an export ABI; a native link
+                    // would reject the flag outright.
+                    let export_flags : List String :=
+                        if String.beq (TargetKind.name plan.kind) "web"
+                        then map_export_flags export_syms
+                        else List.empty;
+                    let link_flags : List String :=
+                        List.append export_flags (List.append pkg_flags (List.append dash_l (verbose_argv verbose)));
+                    let result <- link_objects_for plan [obj_path, runtime_obj] target link_flags;
+                    if verbose then do {
+                        Bench.report_since "link_ir: clang link" t_link;
+                        return unit
+                    } else return unit;
+                    if not (result == 0) then do {
+                        fail_line "linking failed";
+                        return 1
+                    } else do {
+                        ok_line "Compilation finished";
+                        return 0
+                    }
                 }
             }
         }
@@ -530,11 +547,13 @@ def write_ir_beside (w : Result StreamError Unit) (ir_path_s : String) (beside :
             else IO.write_file beside ir_text
     }
 
-/// The reason a write failed, for the link error.
-def write_failure (w : Result StreamError Unit) : String :=
+/// The reason a write failed, for the link error; `none` on success. One
+/// match rather than `is_ok` and then a second look: `wrote` is a
+/// non-`Copy` `Result`, and the affine rule allows the caller one use.
+def write_failure_of (w : Result StreamError Unit) : Option String :=
     match w {
-        Result.ok _ => "",
-        Result.err e => e.message
+        Result.ok _ => Option.none,
+        Result.err e => Option.some e.message
     }
 
 // `build_commit_define`'s three answers, pinned. Its whole job is to pick

@@ -29,6 +29,13 @@ pub type LLVMType {
     word,
 }
 
+/// `LLVMType` is an immutable IR value: a duplicate is the same pointer,
+/// and the type is Region-classified (it contains `String`/`List`), so the
+/// alias is never individually freed. The `Copy String` rationale.
+pub instance Copy LLVMType {
+    def copy (t : LLVMType) : Pair LLVMType LLVMType := Pair.pair t t
+}
+
 pub type ParamPair {
     mk (param_name : String) (param_ty : LLVMType),
 }
@@ -159,6 +166,11 @@ pub type LLVMValue {
     native_op (op : NativeOp) (args : List LLVMValue),
 }
 
+/// Immutable IR node: duplication aliases the same tree.
+pub instance Copy LLVMValue {
+    def copy (v : LLVMValue) : Pair LLVMValue LLVMValue := Pair.pair v v
+}
+
 pub type LLVMInstruction {
     assign (target : String) (value : LLVMValue),
     branch (cond : LLVMValue) (then_label : String) (else_label : String),
@@ -216,6 +228,11 @@ pub type LLVMInstruction {
     loc_marker (loc : DbgLoc),
 }
 
+/// Immutable IR node: duplication aliases the same instruction.
+pub instance Copy LLVMInstruction {
+    def copy (i : LLVMInstruction) : Pair LLVMInstruction LLVMInstruction := Pair.pair i i
+}
+
 pub type LLVMBasicBlock {
     mk (label : String) (instructions : List LLVMInstruction),
 }
@@ -226,9 +243,21 @@ pub type LLVMBasicBlock {
 /// just line/column, not a full `lang.types.SourceRange`/`Location`
 /// (this file has no dependency on `lang.types` today; keeping it that
 /// way avoids introducing one just for two integers).
+///
+/// The identity `Copy` instance is manual rather than `#[derive Copy]`:
+/// this mote sits in the Rust bootstrap host's meta-evaluation closure, and
+/// the host's capture re-checks a re-read module's declarations, expanding a
+/// `#[derive]` a second time outside whole-program qualification (the
+/// generated instance's constructor references then come back unbound). The
+/// self-hosted compiler handles the derive; the host must keep accepting the
+/// compiler-source surface.
 pub struct DbgLoc {
     line : I64,
     column : I64,
+}
+
+pub instance Copy DbgLoc {
+    def copy (l : DbgLoc) : Pair DbgLoc DbgLoc := Pair.pair l l
 }
 
 /// Every `define` is emitted with LLVM's default `ccc`. A per-function
@@ -241,6 +270,11 @@ pub struct LLVMFunction {
     ret_ty : LLVMType,
     blocks : List LLVMBasicBlock,
     dbg_loc : Option DbgLoc,
+}
+
+/// An immutable function definition; the blocks are shared, not copied.
+pub instance Copy LLVMFunction {
+    def copy (f : LLVMFunction) : Pair LLVMFunction LLVMFunction := Pair.pair f f
 }
 
 pub type LLVMGlobal {
@@ -492,8 +526,8 @@ def show_llvm_value (bits : I64) (val : LLVMValue) : String := match val {
     trunc v from_ty to_ty => show_ext bits "trunc" v from_ty to_ty,
     ptrtoint v from_ty to_ty => show_ext bits "ptrtoint" v from_ty to_ty,
     inttoptr v from_ty to_ty => show_ext bits "inttoptr" v from_ty to_ty,
-    phi pairs => show_phi bits pairs,
-    gep base indices => show_gep bits base indices,
+    phi pairs => show_phi bits (Shared.of pairs),
+    gep base indices => show_gep bits base (Shared.of indices),
     load ty ptr_ty ptr_ =>
         String.concat "load " (String.concat (show_llvm_type_bits bits ty)
             (String.concat ", " (String.concat (show_llvm_type_bits bits ptr_ty)
@@ -622,9 +656,10 @@ def show_ext (bits : I64) (op : String) (v : LLVMValue) (from_ty : LLVMType) (to
 // `llvm_value_type`'s own `phi` arm doc comment for why (pointer-typed
 // merges, e.g. `if b then "a" else "b"`, need `phi ptr` not `phi i64`).
 #[partial]
-def show_phi (bits : I64) (pairs : List PhiPair) : String :=
-    let inner := join_phi_pairs bits pairs in
-    String.concat "phi " (String.concat (show_llvm_type_bits bits (phi_pairs_type pairs)) (String.concat " " inner))
+def show_phi (bits : I64) (pairs : Shared (List PhiPair)) : String :=
+    let ps : List PhiPair := Shared.get pairs in
+    let inner := join_phi_pairs bits ps in
+    String.concat "phi " (String.concat (show_llvm_type_bits bits (phi_pairs_type ps)) (String.concat " " inner))
 
 #[partial]
 def join_phi_pairs (bits : I64) (pairs : List PhiPair) : String :=
@@ -638,10 +673,11 @@ def show_one_phi (bits : I64) (p : PhiPair) : String := match p {
 }
 
 #[partial]
-def show_gep (bits : I64) (base : LLVMValue) (indices : List I64) : String :=
+def show_gep (bits : I64) (base : LLVMValue) (indices : Shared (List I64)) : String :=
+    let is : List I64 := Shared.get indices in
     let pre := String.concat "getelementptr " (String.concat (show_llvm_value_typed bits base)
-        (String.concat ", " (I64.to_string (list_i64_len indices)))) in
-    join_gep_indices pre indices
+        (String.concat ", " (I64.to_string (list_i64_len is)))) in
+    join_gep_indices pre is
 
 #[partial]
 def join_gep_indices (pre : String) (indices : List I64) : String := match indices {
@@ -796,6 +832,12 @@ pub struct DbgFuncRefs {
     loc_suffixes : HashMap String String,
 }
 
+/// An immutable per-function debug table (its HashMap is persistent), so a
+/// duplicate aliases it safely.
+pub instance Copy DbgFuncRefs {
+    def copy (r : DbgFuncRefs) : Pair DbgFuncRefs DbgFuncRefs := Pair.pair r r
+}
+
 /// A location's key in `loc_suffixes`. Line and column together, because
 /// two constructs on one line are two positions.
 #[partial]
@@ -943,18 +985,23 @@ def llvm_escape_byte (b : U8) : String :=
 /// `String.concat` per byte -- only bytes that actually need escaping
 /// cost an extra concat.
 #[partial]
+def llvm_escape_or_none (b : U8) : Option String :=
+    if llvm_byte_needs_escape b then Option.some (llvm_escape_byte b) else Option.none
+
+#[partial]
 def llvm_escape_string_go (s : String) (idx : I64) (run_start : I64) (len : I64) (acc : String) : String :=
     if I64.beq idx len then
         String.concat acc (String.slice s run_start (len - run_start))
     else
         match (String.get s idx : Option U8) {
             Option.some b =>
-                if llvm_byte_needs_escape b
-                then
-                    let with_run := String.concat acc (String.slice s run_start (idx - run_start)) in
-                    let with_escape := String.concat with_run (llvm_escape_byte b) in
-                    llvm_escape_string_go s (idx + 1) (idx + 1) len with_escape
-                else llvm_escape_string_go s (idx + 1) run_start len acc,
+                match llvm_escape_or_none b {
+                    Option.some esc =>
+                        let with_run := String.concat acc (String.slice s run_start (idx - run_start)) in
+                        let with_escape := String.concat with_run esc in
+                        llvm_escape_string_go s (idx + 1) (idx + 1) len with_escape,
+                    Option.none => llvm_escape_string_go s (idx + 1) run_start len acc,
+                },
             Option.none => acc,
         }
 
@@ -995,12 +1042,15 @@ def join_strs (xs : List String) : String :=
 
 #[partial]
 def emit_functions (bits : I64) (fs : List LLVMFunction) (dbg_refs : List (Pair String DbgFuncRefs)) : String :=
-    String.concat_list (List.reverse (emit_functions_go bits fs dbg_refs List.empty))
+    String.concat_list (List.reverse (emit_functions_go bits fs (Shared.of dbg_refs) List.empty))
 
 #[partial]
-def emit_functions_go (bits : I64) (fs : List LLVMFunction) (dbg_refs : List (Pair String DbgFuncRefs)) (acc : List String) : List String := match fs {
+def emit_functions_go (bits : I64) (fs : List LLVMFunction)
+    (dbg_refs : Shared (List (Pair String DbgFuncRefs))) (acc : List String) : List String := match fs {
     List.empty => acc,
-    List.cons f rest => emit_functions_go bits rest dbg_refs (List.cons (String.concat (emit_function bits f dbg_refs) "\n") acc),
+    List.cons f rest =>
+        let text := String.concat (emit_function bits f (Shared.get dbg_refs)) "\n" in
+        emit_functions_go bits rest dbg_refs (List.cons text acc),
 }
 
 // --- DWARF debug info (v1: one location per top-level def) ---
@@ -1107,10 +1157,10 @@ def module_prefix_of (fn_name : String) : Option String :=
 /// back to the target file (`!3`), which is what v1 attributed every
 /// function to.
 #[partial]
-def module_file_ref (file_refs : HashMap String I64) (fn_name : String) : I64 :=
+def module_file_ref (file_refs : Shared (HashMap String I64)) (fn_name : String) : I64 :=
     match module_prefix_of fn_name {
         Option.some prefix =>
-            match str_map_lookup prefix file_refs {
+            match str_map_lookup prefix (Shared.get file_refs) {
                 Option.some id => id,
                 Option.none => 3,
             },
@@ -1141,17 +1191,20 @@ def intern_module_files_go (files : List (Pair String String)) (source_path : St
     List.cons pair rest =>
         match pair {
             Pair.pair mod file_path =>
-                if String.beq file_path source_path
-                then intern_module_files_go rest source_path next_id (str_map_insert mod 3 refs) text
-                else
-                    match llvm_split_path file_path {
-                        Pair.pair directory filename =>
-                            let head := String.concat "!" (String.concat (I64.to_string next_id) " = !DIFile(filename: \"") in
-                            let mid := String.concat head (String.concat filename "\", directory: \"") in
-                            let line := String.concat (String.concat mid (String.concat directory "\")")) "\n" in
-                            intern_module_files_go rest source_path (next_id + 1)
-                                (str_map_insert mod next_id refs) (String.concat text line),
-                    },
+                match module_file_parts file_path source_path {
+                    Pair.pair is_source parts =>
+                        if is_source
+                        then intern_module_files_go rest source_path next_id (str_map_insert mod 3 refs) text
+                        else match parts {
+                            Pair.pair directory filename =>
+                                let head :=
+                                    String.concat "!" (String.concat (I64.to_string next_id) " = !DIFile(filename: \"") in
+                                let mid := String.concat head (String.concat filename "\", directory: \"") in
+                                let line := String.concat (String.concat mid (String.concat directory "\")")) "\n" in
+                                intern_module_files_go rest source_path (next_id + 1)
+                                    (str_map_insert mod next_id refs) (String.concat text line),
+                        },
+                },
         },
 }
 
@@ -1163,6 +1216,15 @@ def intern_module_files_go (files : List (Pair String String)) (source_path : St
 // per function, and the dedup that matters is within one: a function body
 // typically marks a handful of distinct positions and then emits many
 // instructions against each.
+
+/// The two uses of a module file's path in one call: the source check and
+/// the split. `file_path` is a `Pair` field binder typed by the
+/// constructor's own `B`, so the affine walk cannot name it as `String`
+/// and mentioning it twice is an affine violation; a `String` parameter
+/// may be read twice.
+#[partial]
+def module_file_parts (file_path : String) (source_path : String) : Pair Bool (Pair String String) :=
+    Pair.pair (String.beq file_path source_path) (llvm_split_path file_path)
 
 /// Distinct `loc_marker` locations in one function's blocks, in encounter
 /// order. Order is what makes ID assignment reproducible run to run.
@@ -1186,15 +1248,15 @@ def collect_marker_locs_instrs (instrs : List LLVMInstruction) (acc : List DbgLo
 #[partial]
 def collect_marker_loc (i : LLVMInstruction) (acc : List DbgLoc) : List DbgLoc := match i {
     LLVMInstruction.loc_marker loc =>
-        if dbg_loc_list_has acc loc then acc else List.append acc (List.cons loc List.empty),
+        if dbg_loc_list_has (Shared.of acc) loc then acc else List.append acc (List.cons loc List.empty),
     _ => acc,
 }
 
 #[partial]
-def dbg_loc_list_has (locs : List DbgLoc) (loc : DbgLoc) : Bool := match locs {
+def dbg_loc_list_has (locs : Shared (List DbgLoc)) (loc : DbgLoc) : Bool := match Shared.get locs {
     List.empty => false,
     List.cons l rest =>
-        if String.beq (dbg_loc_key l) (dbg_loc_key loc) then true else dbg_loc_list_has rest loc,
+        if String.beq (dbg_loc_key l) (dbg_loc_key loc) then true else dbg_loc_list_has (Shared.of rest) loc,
 }
 
 /// Assign one `!DILocation` ID per distinct location, all scoped to this
@@ -1223,7 +1285,8 @@ def build_loc_nodes (locs : List DbgLoc) (next_id : I64) (scope_ref : I64) (acc 
 /// rendered `!N = ...` text for every node just assigned, built
 /// together in one pass so the two can never drift apart.
 #[partial]
-def build_dbg_refs (functions : List LLVMFunction) (next_id : I64) (file_refs : HashMap String I64) : Pair (List (Pair String DbgFuncRefs)) String := match functions {
+def build_dbg_refs (functions : List LLVMFunction) (next_id : I64) (file_refs : Shared (HashMap String I64))
+    : Pair (List (Pair String DbgFuncRefs)) String := match functions {
     List.empty => Pair.pair List.empty "",
     List.cons f rest =>
         match f.dbg_loc {
@@ -1233,7 +1296,8 @@ def build_dbg_refs (functions : List LLVMFunction) (next_id : I64) (file_refs : 
 }
 
 #[partial]
-def build_dbg_refs_one (f : LLVMFunction) (loc : DbgLoc) (rest : List LLVMFunction) (next_id : I64) (file_refs : HashMap String I64) : Pair (List (Pair String DbgFuncRefs)) String :=
+def build_dbg_refs_one (f : LLVMFunction) (loc : DbgLoc) (rest : List LLVMFunction) (next_id : I64)
+    (file_refs : Shared (HashMap String I64)) : Pair (List (Pair String DbgFuncRefs)) String :=
     let sp_ref := next_id in
     let loc_ref := next_id + 1 in
     let marks := collect_marker_locs f.blocks List.empty in
@@ -1264,7 +1328,7 @@ def emit_debug_metadata (source_path : String) (files : List (Pair String String
             let preamble := show_debug_preamble filename directory in
             match intern_module_files files source_path {
                 { refs := file_refs, text := file_text, next_id := files_next } =>
-                    match build_dbg_refs functions files_next file_refs {
+                    match build_dbg_refs functions files_next (Shared.of file_refs) {
                         Pair.pair refs body => Pair.pair refs (String.concat (String.concat preamble file_text) body),
                     },
             },
@@ -1501,9 +1565,13 @@ def test_build_loc_nodes_dedups_and_numbers : Bool :=
     let marks : List DbgLoc := [DbgLoc.mk 5 9, DbgLoc.mk 6 5] in
     match build_loc_nodes marks 8 6 str_map_empty {
         Pair.pair m text =>
-            match str_map_lookup "5:9" m {
+            // Two lookups in one map: the handle makes the second mention a
+            // borrow; the pair binder's type is the constructor's `A`, so the
+            // affine walk cannot name it as `HashMap String String`.
+            let refs : Shared (HashMap String String) := Shared.of m in
+            match str_map_lookup "5:9" (Shared.get refs) {
                 Option.some s1 =>
-                    match str_map_lookup "6:5" m {
+                    match str_map_lookup "6:5" (Shared.get refs) {
                         Option.some s2 =>
                             // Exact text, not a substring check: `check_contains`
                             // lives in `emit.mo`, which imports this file, and

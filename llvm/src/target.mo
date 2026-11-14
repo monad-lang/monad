@@ -43,6 +43,13 @@ pub struct TargetSpec {
     pointer_bits : I64,
 }
 
+/// An immutable config record: duplicating it aliases the same `llc_flags`
+/// list, which no caller mutates. It contains a `List`, so it is
+/// Region-classified and never freed individually.
+pub instance Copy TargetSpec {
+    def copy (s : TargetSpec) : Pair TargetSpec TargetSpec := Pair.pair s s
+}
+
 /// The targets this compiler has a measured spelling for. A name that is not
 /// here is still accepted -- see `TargetSpec.resolve` -- and gets the same
 /// string for both tools and no flags, which is right for everything but
@@ -84,11 +91,16 @@ def pointer_bits_in (targets : List TargetSpec) (triple : String) : I64 :=
     }
 
 /// The two wasm profiles behind the wasm triples. Everything else is the
-/// host's native target.
+/// host's native target. The `Copy` instance is manual for the
+/// Rust-host-capture reason `llvm/src/ir.mo`'s `DbgLoc` gives.
 pub type TargetKind {
     native,
     wasi,
     web,
+}
+
+pub instance Copy TargetKind {
+    def copy (k : TargetKind) : Pair TargetKind TargetKind := Pair.pair k k
 }
 
 /// `kind`'s name in diagnostics (`native`, `wasi`, `web`).
@@ -132,6 +144,11 @@ pub struct TargetPlan {
     link_flags : List String,
     runtime_defines : List String,
     output_ext : String,
+}
+
+/// An immutable config record; sharing it aliases the same flag lists.
+pub instance Copy TargetPlan {
+    def copy (p : TargetPlan) : Pair TargetPlan TargetPlan := Pair.pair p p
 }
 
 /// The plan for a native target: same bare `clang`, no flags, no suffix.
@@ -341,13 +358,17 @@ def TargetSpec.resolve_unrecognised (name : String) : IO (Result String TargetSp
 #[partial]
 def TargetSpec.unvalidated (want : String) : IO (Result String TargetSpec) := do {
     let archs <- TargetSpec.registered_archs;
-    if List.is_empty archs then do {
-        println (String.concat "note: `llc --version` listed no registered targets; accepting " want);
-        return (Result.ok (TargetSpec.mk want "" List.empty (pointer_bits_of want)))
-    } else if TargetSpec.arch_registered archs want then
-        return (Result.ok (TargetSpec.mk want "" List.empty (pointer_bits_of want)))
-    else
-        return (Result.err (TargetSpec.unknown_message want))
+    match archs {
+        List.empty => do {
+            println (String.concat "note: `llc --version` listed no registered targets; accepting " want);
+            return (Result.ok (TargetSpec.mk want "" List.empty (pointer_bits_of want)))
+        },
+        List.cons hd tl =>
+            if TargetSpec.arch_registered (List.cons hd tl) want then
+                return (Result.ok (TargetSpec.mk want "" List.empty (pointer_bits_of want)))
+            else
+                return (Result.err (TargetSpec.unknown_message want))
+    }
 }
 
 /// The spelling the toolchain canonicalises `name` to.
@@ -512,9 +533,12 @@ pub def TargetSpec.describe_all (archs : List String) (specs : List TargetSpec) 
     match specs {
         List.empty => "",
         List.cons hd tl =>
-            let rest := TargetSpec.describe_all archs tl in
-            let line := TargetSpec.marked archs hd in
-            if String.is_empty rest then line else String.concat line (String.concat "\n" rest),
+            // The list is read by the recursion and by `marked`; a Shared
+            // handle (Copy) lets both use it without a second move.
+            let a : Shared (List String) := Shared.of archs in
+            let rest := TargetSpec.describe_all (Shared.get a) tl in
+            let line := TargetSpec.marked (Shared.get a) hd in
+            if String.is_empty rest then line else String.concat line (String.concat "\n" rest)
     }
 
 /// `t`'s line, marked when this llc cannot build for it.
@@ -537,9 +561,10 @@ pub def TargetSpec.joined (sep : String) (xs : List String) : String :=
 /// The `--print-targets` architecture list, or the note that there is none --
 /// an llc that could not answer must not print as an empty list of targets.
 pub def TargetSpec.arch_line (archs : List String) : String :=
-    if List.is_empty archs
-    then "(llc --version listed none; `--target` accepts any name unvalidated)"
-    else TargetSpec.joined ", " archs
+    match archs {
+        List.empty => "(llc --version listed none; `--target` accepts any name unvalidated)",
+        List.cons hd tl => TargetSpec.joined ", " (List.cons hd tl)
+    }
 
 /// `triple` -> what `--target` fails with.
 #[partial]

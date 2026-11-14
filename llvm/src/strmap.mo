@@ -42,10 +42,13 @@ pub def str_map_empty {V : Type} : HashMap String V := HashMap.map HashMap.empty
 pub def str_map_insert {V : Type} (key : String) (val : V) (m : HashMap String V) : HashMap String V :=
     match m {
         HashMap.map buckets =>
+            // Read and set both need the bucket array; the handle makes the
+            // second mention a borrow rather than a second move.
+            let bs := Shared.of buckets in
             let idx := HashMap.bucket_of (String.hash key) in
-            let bucket := HashMap.get_bucket buckets idx in
+            let bucket := HashMap.get_bucket (Shared.get bs) idx in
             let new_bucket := HashMap.bucket_insert_str key val bucket in
-            HashMap.map (HashMap.set_bucket buckets idx new_bucket)
+            HashMap.map (HashMap.set_bucket (Shared.get bs) idx new_bucket)
     }
 
 #[partial]

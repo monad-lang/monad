@@ -26,7 +26,6 @@ cli 92
 codegen 370
 eval 41
 lang 2372
-llvm 44
 motes/clap 86
 motes/fmt 34
 motes/json 11
