@@ -15,9 +15,9 @@ use lib::gen {DocGen.build}
 
 def build_spec : Cli.CommandSpec :=
     Cli.with_args
-        [Cli.option_default "out" "o" "DIR" "target/docs" "the output root the api/ tree is written under",
+        [Cli.option_default "out" "o" "DIR" "target/docs" "the docs base the mote sites are written under",
             Cli.positional_multi "motes" "the mote directories to document"]
-        (Cli.command "build" "Render the named motes' API reference into api/<mote>/")
+        (Cli.command "build" "Render each named mote's docs site into <mote>/")
 
 def spec : Cli.CommandSpec :=
     Cli.with_subcommands [build_spec]

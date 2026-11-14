@@ -14,7 +14,7 @@ Roughly 440 public definitions, 35 classes, and 132 instances across the two,
 not counting their test modules.
 
 > [!TIP]
-> The [API reference](../api/index.html) is generated from the sources
+> The [API reference](../motes/docs/index.html) is generated from the sources
 > themselves: every `pub` declaration with its signature and doc comment, one
 > page per module. It is the authoritative list; this chapter is the guide.
 > The paths below are relative to the built site.

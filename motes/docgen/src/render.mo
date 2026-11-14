@@ -1,10 +1,25 @@
 /// Rendering: the page model to acorn `Built` pages.
 ///
-/// One page per module under `api/<mote>/<module>.html`, plus a hub at
-/// `api/index.html` listing every mote's modules. The pages are built here
-/// and handed to `Site.write_pages`, so they pass the same broken-link and
-/// duplicate-path gate the book's own pages do: a doc page that links to a
-/// module with no page is a build error, not a 404.
+/// Each mote is its own small site under a docs BASE (`motes/docs/` on
+/// monad-lang.org, the output root for `monad doc`):
+///
+/// | Path under the base          | Page                                    |
+/// |------------------------------|-----------------------------------------|
+/// | `index.html`                 | the hub: one card per mote              |
+/// | `docgen.css`                 | the stylesheet every page links         |
+/// | `<mote>/index.html`          | the mote's home: its doc and modules    |
+/// | `<mote>/<module/path>.html`  | one module's declarations               |
+///
+/// Every path and every href docgen produces is relative to the base; the
+/// base itself is prepended only where a `Built` is made (`at_base`). A
+/// page's `root` is the climb from its own base-relative path back to the
+/// base (`root_for`), so the stylesheet, the hub and every sibling page are
+/// reached through one coordinate system and cannot disagree about where
+/// the base is.
+///
+/// The pages are handed to `Site.write_pages`, so they pass the same
+/// broken-link and duplicate-path gate the book's own pages do: a doc page
+/// that links to a module with no page is a build error, not a 404.
 ///
 /// ANCHORS are `<kind>.<name>` -- `def.List.map`, `struct.Point` -- the
 /// source's own spelling, so a link is predictable and reads like the `use`
@@ -29,9 +44,13 @@ use xml_html::html {Html.Attr, Html.Node}
 use lib::model {DocItem, DocModule, DocMote}
 use lib::style {Style.api_css}
 
-/// The stylesheet's path, relative to the output root. A page links it
-/// through its own `root`; `DocGen.build` writes it here.
-pub def DocRender.css_path : String := "api.css"
+/// The stylesheet's path, relative to the docs base. A page links it
+/// through its own `root`; `css_page` writes it here.
+pub def DocRender.css_path : String := "docgen.css"
+
+/// A base-relative path as the path a `Built` is written to.
+def at_base (base : String) (rel : String) : String :=
+    String.concat base rel
 
 /// How a doc comment's markdown is rendered: the book's site options, with
 /// heading ids on so a `## Sections` comment gets anchors. Raw HTML stays
@@ -43,15 +62,18 @@ def doc_html_options : Markdown.HtmlOptions :=
 pub def DocRender.anchor_of (i : DocItem) : String :=
     String.concat i.kind (String.concat "." i.name)
 
-/// The page path one module writes to: `api/<mote>/<module>.html`. The
-/// module path's own mote prefix is dropped -- the directory already names
-/// the mote -- and its `::` becomes `/`, so `init::string` is
-/// `api/init/string.html` and `lang::typecheck::affine` is
-/// `api/lang/typecheck/affine.html`: the shape a reader's `use` line has.
+/// The base-relative page path one module writes to:
+/// `<mote>/<module>.html`. The module path's own mote prefix is dropped --
+/// the directory already names the mote -- and its `::` becomes `/`, so
+/// `init::string` is `init/string.html` and `lang::typecheck::affine` is
+/// `lang/typecheck/affine.html`: the shape a reader's `use` line has.
 pub def DocRender.page_path (mote : String) (module : String) : String :=
-    String.concat "api/"
-        (String.concat mote
-            (String.concat "/" (String.concat (slash_module (drop_mote_prefix mote module)) ".html")))
+    String.concat mote
+        (String.concat "/" (String.concat (slash_module (drop_mote_prefix mote module)) ".html"))
+
+/// The base-relative path of a mote's home page: `<mote>/index.html`.
+pub def DocRender.mote_home_path (mote : String) : String :=
+    String.concat mote "/index.html"
 
 /// `init::string` with the `init::` mote prefix removed -> `string`. A module
 /// that does not start with the mote's name (the tests' synthetic ones) comes
@@ -90,7 +112,7 @@ def drop_colon (cs : List U8) : List U8 :=
 // --- A mote's module list, as the sidebar needs it ------------------------
 
 /// One module page's nav entry: the module's own path, and the href to its
-/// page relative to `api/` (a page below `api/` prefixes its own `root`).
+/// page relative to the docs base (a page prefixes its own `root`).
 pub struct NavModule {
     module : String,
     href : String,
@@ -109,15 +131,11 @@ pub def DocRender.nav_modules (mods : List DocModule) : List NavModule :=
     match mods {
         List.empty => List.empty,
         List.cons md rest =>
+            let module : String := md.module in
             let one : NavModule :=
-                { module := md.module, href := module_page_href_under_api md.module } in
+                { module := module, href := DocRender.page_path (DocRender.mote_of_module module) module } in
             List.cons one (DocRender.nav_modules rest),
     }
-
-/// One module's page path minus its leading `api/`: what a page below `api/`
-/// links to once its own `root` prefixes it.
-def module_page_href_under_api (module : String) : String :=
-    String.drop 4 (DocRender.page_path (DocRender.mote_of_module module) module)
 
 /// The mote a module's path names: its first `::` segment, which is also the
 /// directory `page_path` puts it in. A path with no `::` names itself.
@@ -129,32 +147,39 @@ pub def DocRender.mote_of_module (module : String) : String :=
 
 // --- Pages ---------------------------------------------------------------
 
-/// The whole mote's pages, in module order, each ready to write. The nav is
-/// built once here rather than per page: every page of a mote carries the
-/// same module list.
-pub def DocRender.mote_pages (cfg : SiteConfig) (m : DocMote) : List Built :=
+/// The whole mote's module pages, in module order, each ready to write.
+pub def DocRender.mote_pages (cfg : SiteConfig) (base : String) (m : DocMote) : List Built :=
     match m {
         { mote, modules, .. } =>
             let shared : Shared (List DocModule) := Shared.of modules in
-            List.map (fn (md : DocModule) => DocRender.module_page cfg shared mote md.module) (Shared.get shared),
+            List.map (fn (md : DocModule) => DocRender.module_page cfg base shared mote md.module) (Shared.get shared),
     }
 
 /// One module's page, given the mote's whole module list so its sidebar can
-/// link every sibling. The page's `root` is computed from its own path's
-/// depth: `api/std/list.html` climbs one level to `api/`, and
-/// `api/std/concurrent/channel.html` climbs two, so the shell's `index.html`
-/// brand -- and the sidebar's links -- reach the hub from either.
-pub def DocRender.module_page (cfg : SiteConfig) (mods : Shared (List DocModule)) (mote : String) (module : String) : Built :=
+/// link every sibling. Its `root` climbs from its base-relative path:
+/// `std/list.html` climbs one level, `std/concurrent/channel.html` two.
+pub def DocRender.module_page (cfg : SiteConfig) (base : String) (mods : Shared (List DocModule)) (mote : String) (module : String) : Built :=
+    let rel : String := DocRender.page_path mote module in
+    let root : String := root_for rel in
     match find_module (Shared.get mods) module {
-        Option.none => Built.page (DocRender.page_path mote module) (empty_page cfg module),
+        Option.none => Built.page (at_base base rel) (empty_page cfg mote root module),
         Option.some md =>
             match md {
                 { file, doc, items, .. } =>
-                    let path : String := DocRender.page_path mote module in
-                    let root : String := root_for path in
                     let nav : Shared (List NavModule) := Shared.of (DocRender.nav_modules (Shared.get mods)) in
-                    Built.page path (Layout.document_with cfg (Shared.of doc_shell) (with_sidebar nav mote module root (module_spec root module file doc items))),
+                    Built.page (at_base base rel)
+                        (Layout.document_with cfg (Shared.of (doc_shell (Option.some mote)))
+                            (with_sidebar nav mote module root (module_spec root module file doc items))),
             },
+    }
+
+/// A mote's whole site: its module pages, then its home page.
+pub def DocRender.mote_site (cfg : SiteConfig) (base : String) (m : DocMote) : List Built :=
+    match m {
+        { mote, modules } =>
+            let shared : Shared (List DocModule) := Shared.of modules in
+            List.append (DocRender.mote_pages cfg base { mote := mote, modules := Shared.get shared })
+                [DocRender.mote_home_page cfg base { mote := mote, modules := Shared.get shared }],
     }
 
 /// The module a path names, from a mote's own list.
@@ -170,9 +195,9 @@ def find_module (mods : List DocModule) (module : String) : Option DocModule :=
 /// `mote_pages` (which walks the list itself), but `module_page` is public
 /// and a caller may name a module from elsewhere; an empty page keeps the
 /// file it asked for rather than crashing or silently writing nothing.
-def empty_page (cfg : SiteConfig) (module : String) : Html.Node :=
-    Layout.document_with cfg (Shared.of doc_shell)
-        { title := module, root := "", book := Option.none,
+def empty_page (cfg : SiteConfig) (mote : String) (root : String) (module : String) : Html.Node :=
+    Layout.document_with cfg (Shared.of (doc_shell (Option.some mote)))
+        { title := module, root := root, book := Option.none,
             body := [element "h1" List.empty [text module]] }
 
 /// A page's `PageSpec` with the mote's module sidebar wrapped around its
@@ -186,69 +211,109 @@ def with_sidebar (nav : Shared (List NavModule)) (mote : String) (module : Strin
     }
 
 /// The module sidebar beside the page body: the mote's name (linking the
-/// hub) over one link per module, with this page's own module marked
-/// `current`.
+/// mote's home) over one link per module, with this page's own module
+/// marked `current`.
 def sidebar (nav : Shared (List NavModule)) (mote : String) (module : String) (root : String) (body : List Html.Node) : Html.Node :=
     element "div" [attr "class" "api"]
         [element "nav" [attr "class" "api-sidebar"]
             [element "p" [attr "class" "mote-name"]
-                [element "a" [attr "href" (String.concat root "index.html")] [text mote]],
+                [element "a" [attr "href" (String.concat root (DocRender.mote_home_path mote))] [text mote]],
                 element "p" [attr "class" "nav-label"] [text "Modules"],
-                element "ol" List.empty (sidebar_items (Shared.get nav) module root)],
+                element "ol" List.empty (sidebar_items (Shared.get nav) mote module root)],
             element "div" [attr "class" "api-main"] body]
 
-/// A module's path without its mote prefix -- what a page and its sidebar
-/// show: `lang::typecheck::affine` on the `lang` mote is `typecheck::affine`.
+/// A module's path without its mote prefix -- what a mote's own pages show:
+/// `lang::typecheck::affine` on the `lang` mote is `typecheck::affine`.
 pub def module_short (mote : String) (module : String) : String :=
     drop_mote_prefix mote module
 
 #[partial]
-def sidebar_items (entries : List NavModule) (module : String) (root : String) : List Html.Node :=
+def sidebar_items (entries : List NavModule) (mote : String) (module : String) (root : String) : List Html.Node :=
     match entries {
         List.empty => List.empty,
         List.cons e rest =>
-            List.cons (sidebar_item e module root) (sidebar_items rest module root),
+            List.cons (sidebar_item e mote module root) (sidebar_items rest mote module root),
     }
 
-/// One sidebar link: the entry's `api/`-relative href under the page's own
-/// `root`, with the page's own module marked `current` -- the book sidebar's
+/// One sidebar link: the entry's base-relative href under the page's own
+/// `root`, labelled without the mote prefix (the site already names the
+/// mote), with the page's own module marked `current` -- the book sidebar's
 /// `active` chapter. An unmarked entry carries no class at all rather than
 /// one no stylesheet matches.
-def sidebar_item (e : NavModule) (module : String) (root : String) : Html.Node :=
+def sidebar_item (e : NavModule) (mote : String) (module : String) (root : String) : Html.Node :=
     let attrs : List Html.Attr :=
         if String.beq e.module module then [attr "class" "current"] else List.empty in
     element "li" attrs
-        [element "a" [attr "href" (String.concat root e.href)] [text e.module]]
+        [element "a" [attr "href" (String.concat root e.href)] [text (module_short mote e.module)]]
 
-/// The `api/index.html` hub: every mote with a link to each of its modules.
-pub def DocRender.hub_page (cfg : SiteConfig) (motes : List DocMote) : Built :=
-    let spec : PageSpec := { title := "API reference", root := "", body := hub_body motes, book := Option.none } in
-    Built.page "api/index.html" (Layout.document_with cfg (Shared.of doc_shell) spec)
+/// A mote's home page, `<mote>/index.html`: the mote's name, its `lib`
+/// module's doc comment when it has one (that is the mote's own overview),
+/// and a link to every module. This is what makes each mote its own site:
+/// the module pages' brand and sidebar title both lead here.
+pub def DocRender.mote_home_page (cfg : SiteConfig) (base : String) (m : DocMote) : Built :=
+    match m {
+        { mote, modules, .. } =>
+            let rel : String := DocRender.mote_home_path mote in
+            let root : String := root_for rel in
+            let shared : Shared (List DocModule) := Shared.of modules in
+            let spec : PageSpec :=
+                { title := mote, root := root, book := Option.none,
+                    body := [element "div" [attr "class" "hub"]
+                        (List.append
+                            [element "h1" List.empty [text mote],
+                                element "p" [attr "class" "mote-meta"] [text (module_count_text (Shared.get shared))]]
+                            (List.append
+                                (module_doc_nodes (lib_doc mote (Shared.get shared)))
+                                [module_links root mote (Shared.get shared)]))] } in
+            Built.page (at_base base rel) (Layout.document_with cfg (Shared.of (doc_shell (Option.some mote))) spec),
+    }
+
+/// The doc comment of a mote's `lib` module, its overview by convention.
+def lib_doc (mote : String) (mods : List DocModule) : Option String :=
+    match find_module mods (String.concat mote "::lib") {
+        Option.none => Option.none,
+        Option.some md => md.doc,
+    }
+
+/// The `index.html` hub at the docs base: every mote, each card titled with
+/// a link to the mote's own site.
+pub def DocRender.hub_page (cfg : SiteConfig) (base : String) (motes : List DocMote) : Built :=
+    let spec : PageSpec := { title := "Mote docs", root := "", body := hub_body motes, book := Option.none } in
+    Built.page (at_base base "index.html") (Layout.document_with cfg (Shared.of (doc_shell Option.none)) spec)
 
 /// The stylesheet as a file to write. `Site.write_pages` writes `Built`
 /// pages only, and a stylesheet is not one, so it is a `Built` at the
-/// `api.css` path whose document is one raw node: the serializer emits the
-/// literal verbatim, and the link gate ignores a raw node. `DocGen.build`
-/// puts it beside the pages it renders, which is what makes `monad doc`
-/// self-sufficient.
-pub def DocRender.css_page : Built :=
-    Built.page DocRender.css_path (Html.Node.node_raw_html Style.api_css)
+/// `css_path` path whose document is one raw node: the serializer emits the
+/// literal verbatim, and the link gate ignores a raw node. Written beside
+/// the pages it styles, which is what makes `monad doc` self-sufficient.
+pub def DocRender.css_page (base : String) : Built :=
+    Built.page (at_base base DocRender.css_path) (Html.Node.node_raw_html Style.api_css)
 
-/// The chrome an API page wears. Every href is root-relative, so one shell
-/// works at every depth: `Passes.prefix_root` prefixes them, and the
-/// stylesheet is always written (`css_page`).
+/// The chrome a docs page wears. Every href is base-relative, so one shell
+/// works at every depth: `Passes.prefix_root` prefixes them with the page's
+/// `root`, and the stylesheet is always written (`css_page`).
 ///
-/// The book's `Shell.default` points its brand at `docs/index.html`, which
-/// an API-only build does not write; the link gate refuses that, correctly,
-/// so the chrome is docgen's own -- shaped like the site's (`Website.header`),
-/// with the reference's own title.
-def doc_shell : Shell :=
+/// On a mote's own pages (`Option.some mote`) the brand is the mote, leading
+/// to its home, with a way back to every mote; the hub's brand is the hub.
+/// The book's `Shell.default` points its brand at `docs/index.html`, which a
+/// docs-only build does not write; the link gate refuses that, correctly, so
+/// the chrome is docgen's own -- shaped like the site's (`Website.header`).
+def doc_shell (mote : Option String) : Shell :=
     { head := [Html.Node.node_void "link" [attr "rel" "stylesheet", attr "href" DocRender.css_path]],
-        header := [element "header" [attr "class" "site-header"]
-            [element "a" [attr "class" "brand", attr "href" "index.html"]
-                [text "Monad API reference"]]],
+        header := [element "header" [attr "class" "site-header"] (header_links mote)],
         footer := [element "footer" [attr "class" "site-footer"]
             [text "Generated by docgen."]] }
+
+def header_links (mote : Option String) : List Html.Node :=
+    match mote {
+        Option.none =>
+            [element "a" [attr "class" "brand", attr "href" "index.html"] [text "Monad mote docs"]],
+        Option.some m =>
+            let name : String := m in
+            [element "a" [attr "class" "brand", attr "href" (DocRender.mote_home_path name)] [text name],
+                element "nav" [attr "class" "site-nav"]
+                    [element "a" [attr "href" "index.html"] [text "All motes"]]],
+    }
 
 // --- Page bodies ---------------------------------------------------------
 
@@ -268,11 +333,11 @@ def module_head (module : String) (file : String) : List Html.Node :=
         [element "h1" List.empty [text module],
             element "p" [attr "class" "module-source"] [text file]]]
 
-/// The path from a page at `api/<...>/<name>.html` back to `api/`. The file
-/// name is not a directory, so the count is the number of `/` the path has
-/// minus one -- `api/std/list.html` is one, `api/std/concurrent/x.html` two.
-pub def root_for (path : String) : String :=
-    root_prefix (I64.sub (count_slashes path) 1) ""
+/// The climb from a page's base-relative path back to the docs base: one
+/// `../` per directory in it -- `index.html` is none, `std/list.html` one,
+/// `std/concurrent/channel.html` two.
+pub def root_for (rel : String) : String :=
+    root_prefix (count_slashes rel) ""
 
 #[partial]
 def count_slashes (path : String) : I64 :=
@@ -389,7 +454,7 @@ def hub_body (motes : List DocMote) : List Html.Node :=
 
 /// The hub's heading, so the page names itself before the list of motes.
 def hub_heading : Html.Node :=
-    element "h1" List.empty [text "API reference"]
+    element "h1" List.empty [text "Mote docs"]
 
 /// One card per mote. The empty case is handled by `hub_body`, which is
 /// where the "no motes" message belongs; reaching here means at least one.
@@ -400,16 +465,18 @@ def hub_sections (motes : List DocMote) : List Html.Node :=
         List.cons m rest => List.cons (hub_section m) (hub_sections rest),
     }
 
-/// One mote's card: its name, how many modules it documents, and the module
-/// links as a compact grid -- a flat list is unreadable for a mote the size
-/// of `lang`.
+/// One mote's card: its name (linking the mote's own site), how many
+/// modules it documents, and the module links as a compact grid -- a flat
+/// list is unreadable for a mote the size of `lang`.
 def hub_section (m : DocMote) : Html.Node :=
     match m {
         { mote, modules, .. } =>
+            let shared : Shared (List DocModule) := Shared.of modules in
             element "section" [attr "class" "api-mote"]
-                [element "h2" List.empty [text mote],
-                    element "p" [attr "class" "mote-meta"] [text (module_count_text modules)],
-                    module_links modules],
+                [element "h2" List.empty
+                    [element "a" [attr "href" (DocRender.mote_home_path mote)] [text mote]],
+                    element "p" [attr "class" "mote-meta"] [text (module_count_text (Shared.get shared))],
+                    module_links "" mote (Shared.get shared)],
     }
 
 /// "17 modules", singular when there is one.
@@ -417,30 +484,20 @@ def module_count_text (mods : List DocModule) : String :=
     let n : I64 := List.length mods in
     if I64.beq n 1 then "1 module" else String.concat (I64.to_string n) " modules"
 
-#[partial]
-def module_links (mods : List DocModule) : Html.Node :=
-    element "ul" [attr "class" "api-modules"] (module_link_items mods)
+/// A mote's modules as a link grid, from a page whose climb to the base is
+/// `root`. The labels drop the mote prefix: the card or page already names
+/// the mote.
+def module_links (root : String) (mote : String) (mods : List DocModule) : Html.Node :=
+    element "ul" [attr "class" "api-modules"]
+        (List.map (fn (md : DocModule) => module_link_item root mote md) mods)
 
-#[partial]
-def module_link_items (mods : List DocModule) : List Html.Node :=
-    match mods {
-        List.empty => List.empty,
-        List.cons md rest =>
-            List.cons (module_link_item md) (module_link_items rest),
-    }
-
-def module_link_item (md : DocModule) : Html.Node :=
+def module_link_item (root : String) (mote : String) (md : DocModule) : Html.Node :=
     match md {
         { module, .. } =>
             element "li" List.empty
-                [element "a" [attr "href" (module_page_href_under_api module)] [text module]],
+                [element "a" [attr "href" (String.concat root (DocRender.page_path mote module))]
+                    [text (module_short mote module)]],
     }
-
-/// The hub's link to one module page, given the mote explicitly: the page
-/// path minus its leading `api/`. A caller that knows the mote does not need
-/// `mote_of_module` to re-derive it.
-pub def hub_module_href (mote : String) (module : String) : String :=
-    String.drop 4 (DocRender.page_path mote module)
 
 // --- Small HTML constructors --------------------------------------------
 

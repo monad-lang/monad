@@ -1,11 +1,10 @@
 /// The API reference's stylesheet, as a Monad string.
 ///
 /// It lives here rather than in an assets tree because `monad doc` must be
-/// self-sufficient: run in any directory, it writes `api.css` beside the
-/// pages it generates, so the reference it produces is styled without the
-/// site's copy step. The site build writes the same file at the same path
-/// (docgen's pages go through acorn's `Site.write_pages`), so the book's
-/// `api/` links resolve too.
+/// self-sufficient: run in any directory, it writes `docgen.css` at the
+/// docs base beside the pages it generates, so the reference it produces is
+/// styled without the site's copy step. The site build writes the same file
+/// under its own base (`motes/docs/docgen.css`).
 ///
 /// The palette and type scale are the book's (`motes/acorn/assets/acorn.css`
 /// and `docs/site/static/landing.css` share it), so a reader crossing from a
@@ -294,7 +293,10 @@ pre code { font-size: 13.5px; }
   border: 1px solid var(--border);
   border-radius: var(--radius);
 }
-.api-mote h2 {
+/* Scoped under `.hub` so they outrank the prose rules (`main.content h2`,
+   `main.content li + li`), which otherwise push the title down under a rule
+   and stagger the grid's first row. A mote's home is a `.hub` too. */
+.hub .api-mote h2 {
   margin: 0 0 4px;
   padding: 0;
   border: 0;
@@ -302,12 +304,12 @@ pre code { font-size: 13.5px; }
   font-family: var(--mono);
   color: var(--text);
 }
-.api-mote .mote-meta {
+.hub .mote-meta {
   margin: 0 0 14px;
   color: var(--text-muted);
   font-size: 13px;
 }
-.api-mote .api-modules {
+.hub .api-modules {
   list-style: none;
   margin: 0;
   padding: 0;
@@ -315,7 +317,8 @@ pre code { font-size: 13.5px; }
   grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
   gap: 2px 16px;
 }
-.api-mote .api-modules a {
+.hub .api-modules li + li { margin-top: 0; }
+.hub .api-modules a {
   display: block;
   padding: 3px 8px;
   border-radius: 5px;
@@ -323,7 +326,7 @@ pre code { font-size: 13.5px; }
   font-size: 13px;
   overflow-wrap: anywhere;
 }
-.api-mote .api-modules a:hover { background: var(--bg-hover); text-decoration: none; }
+.hub .api-modules a:hover { background: var(--bg-hover); text-decoration: none; }
 
 /* ---- Footer ---- */
 .site-footer {
@@ -344,7 +347,7 @@ pre code { font-size: 13.5px; }
     border-bottom: 1px solid var(--border);
   }
   .api-main, .hub { padding: 24px 16px 48px; }
-  .api-mote .api-modules { grid-template-columns: 1fr; }
+  .hub .api-modules { grid-template-columns: 1fr; }
 }
 
 /* ---- Print: the declarations alone ---- */

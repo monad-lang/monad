@@ -503,7 +503,7 @@ def gate_then_write (out : String) (pages : List Built) : IO (Result String I64)
 /// paths inside each `Built` are relative to it. Unlike the book build, whose
 /// output directories all exist before any page is written, this creates each
 /// page's parent directory first: a caller's paths may name subdirectories
-/// (`api/<mote>/<mod>.html`) that nothing else made.
+/// (`motes/docs/<mote>/<mod>.html`) that nothing else made.
 pub def Site.write_pages (out : String) (pages : List Built) : IO (Result String I64) :=
     let all : Shared (List Built) := Shared.of pages in
     match first_duplicate_path (Shared.get all) List.empty {

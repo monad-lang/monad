@@ -321,8 +321,12 @@ Like `fetch`, but re-resolve every tag/branch/HEAD pin. Writes
 monad doc [<mote>...] [options]
 ```
 
-Generate an API reference from the motes' own sources: one page per module
-under `api/<mote>/<module>.html`, plus an `api/index.html` hub. Each `pub`
+Generate an API reference from the motes' own sources. Each mote is its own
+small site under the output directory: `<mote>/index.html` (the mote's `lib`
+doc and its module list) and one page per module at `<mote>/<module>.html`,
+plus an `index.html` hub linking every mote and the `docgen.css` stylesheet
+every page links. monad-lang.org publishes the same layout under
+`/motes/docs/` (`/motes/docs/init/` for `init`). Each `pub`
 declaration gets its signature and its `///` doc comment, rendered as
 markdown. The pages are written through the site generator's link gate, so a
 reference that links to a module with no page fails the build instead of

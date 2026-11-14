@@ -15,7 +15,7 @@ use acorn::layout {Shell}
 use acorn::site {Built, Site.build_with}
 use docgen::extract {DocExtract.extract_mote}
 use docgen::model {DocMote, DocMote.public_only}
-use docgen::render {DocRender.css_page, DocRender.hub_page, DocRender.mote_pages}
+use docgen::render {DocRender.css_page, DocRender.hub_page, DocRender.mote_site}
 use lib::landing {Landing.page}
 
 /// `<head>` additions for a book page, in order: the favicon, then the book
@@ -31,7 +31,7 @@ pub def Website.header (cfg : SiteConfig) : List Html.Node :=
             [Html.a [Html.class_ ["brand"], Html.href "index.html"] [Html.text cfg.title],
                 Html.nav [Html.class_ ["site-nav"]]
                     [Html.a [Html.href (String.concat cfg.book_dir "/introduction.html")] [Html.text "Docs"],
-                        Html.a [Html.href "api/index.html"] [Html.text "API"],
+                        Html.a [Html.href "motes/docs/index.html"] [Html.text "API"],
                         Html.a [Html.href "try/"] [Html.text "Try"]]])]
 
 pub def Website.footer : List Html.Node :=
@@ -41,7 +41,7 @@ pub def Website.shell (cfg : SiteConfig) : Shell :=
     { head := Website.head, header := Website.header cfg, footer := Website.footer }
 
 /// The pages that are not part of the book: the landing page at the output
-/// root, then the API reference under `api/`. The API pages come from
+/// root, then each mote's docs site under `motes/docs/<mote>/`. The pages come from
 /// docgen, which reads the motes' own sources -- so a declaration's page is
 /// its doc comment, and the site and the reference cannot disagree about a
 /// signature. The reference's stylesheet is emitted beside them, so an API
@@ -55,7 +55,10 @@ pub def Website.pages (cfg : SiteConfig) : IO (List Built) := do {
 /// docgen's: which packages a reader is pointed at is an editorial choice.
 def documented_motes : List String := ["init", "std", "lang", "cli", "eval"]
 
-/// Every documented mote's pages, then the hub and the stylesheet. The
+/// Where the mote docs live on the site: `/motes/docs/<mote>/`.
+def docs_base : String := "motes/docs/"
+
+/// Every documented mote's site, then the hub and the stylesheet. The
 /// published reference shows `pub` declarations only -- package-private
 /// internals are the mote's own business, and the site is for readers. A
 /// mote that fails to read is skipped rather than failing the site: a
@@ -65,7 +68,7 @@ def Website.api_pages (cfg : SiteConfig) : IO (List Built) := do {
     let motes <- extract_motes documented_motes List.empty;
     let shared : Shared (List DocMote) := Shared.of motes;
     return (List.append (all_mote_pages cfg (Shared.get shared))
-        [DocRender.hub_page cfg (Shared.get shared), DocRender.css_page])
+        [DocRender.hub_page cfg docs_base (Shared.get shared), DocRender.css_page docs_base])
 }
 
 #[terminating]
@@ -87,7 +90,7 @@ def extract_one (dir : String) (rest : List String) (acc : List DocMote) : IO (L
 def all_mote_pages (cfg : SiteConfig) (motes : List DocMote) : List Built :=
     match motes {
         List.empty => List.empty,
-        List.cons m rest => List.append (DocRender.mote_pages cfg m) (all_mote_pages cfg rest),
+        List.cons m rest => List.append (DocRender.mote_site cfg docs_base m) (all_mote_pages cfg rest),
     }
 
 /// Render monad-lang.org.
