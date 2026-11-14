@@ -55,7 +55,7 @@ const mediaTables = new Map(); // query -> { mql, wrapper }
 // vao }: `vao` is the WebGL1 `OES_vertex_array_object` extension (null on
 // WebGL2, which has VAOs in core). Objects of every kind share one table;
 // id 0 is the null handle. `glLog` holds the last compile/link info log.
-const glContexts = [null]; // id -> { gl, version, vao, canvas }
+const glContexts = [null]; // id -> { gl, version, vao, uint, canvas }
 const glContextIds = new WeakMap(); // GL context -> id, so a re-get keeps its id
 const glObjects = [null]; // id -> { ctx, kind, obj }
 let glLog = '';
@@ -577,6 +577,17 @@ function deleteGlObject(c, kind, obj) {
     case GL_KIND_PROGRAM: gl.deleteProgram(obj); break;
     case GL_KIND_SHADER: gl.deleteShader(obj); break;
     default: break;
+  }
+}
+
+// A typed view of a `Buf` payload (`MONAD_ELEM_*` kinds the uploads take).
+function elemView(kind, ptr, count) {
+  const n = Number(count);
+  switch (Number(kind)) {
+    case 2: return new Float32Array(memory.buffer, u32(ptr), n);
+    case 3: return new Uint32Array(memory.buffer, u32(ptr), n);
+    case 4: return new Uint8Array(memory.buffer, u32(ptr), n);
+    default: return null;
   }
 }
 
@@ -1331,10 +1342,10 @@ export const host = {
     if (!gl) return 0n;
     const known = glContextIds.get(gl);
     if (known !== undefined) return BigInt(known);
-    const rec = { gl, version, vao: null, canvas };
+    const rec = { gl, version, vao: null, uint: version === 2, canvas };
     if (version === 1) {
       rec.vao = gl.getExtension('OES_vertex_array_object');
-      gl.getExtension('OES_element_index_uint');
+      rec.uint = gl.getExtension('OES_element_index_uint') !== null;
     }
     // Without preventDefault a lost context is never restored.
     if (typeof canvas.addEventListener === 'function') {
@@ -1382,6 +1393,7 @@ export const host = {
       case 3: return BigInt(c.gl.drawingBufferHeight | 0);
       case 4: return BigInt(c.gl.getError() | 0);
       case 5: return (c.version === 2 || c.vao) ? 1n : 0n;
+      case 6: return c.uint ? 1n : 0n;
       default: return 0n;
     }
   },
@@ -1563,6 +1575,43 @@ export const host = {
     if (!c || !rec || rec.state !== 1) return 0n;
     const gl = c.gl;
     gl.texImage2D(Number(target), 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, rec.img);
+    return 1n;
+  },
+
+  // Bulk uploads. The C wrapper checked the `Buf`'s kind and length; `kind`
+  // is its MONAD_ELEM_* code (2 f32, 3 i32, 4 u8) and `count` its element
+  // count, so the view below covers exactly the buffer's payload. 1n once
+  // the GL call ran, 0n for an unknown context or uniform.
+  gl_buffer_data(ctx, target, sub, a, kind, ptr, count) {
+    const c = glCtx(ctx);
+    if (!c) return 0n;
+    const view = elemView(kind, ptr, count);
+    if (!view) return 0n;
+    if (Number(sub) !== 0) c.gl.bufferSubData(Number(target), Number(a), view);
+    else c.gl.bufferData(Number(target), view, Number(a));
+    return 1n;
+  },
+
+  gl_uniform_matrix(ctx, loc, n, ptr) {
+    const c = glCtx(ctx);
+    const l = glObj(loc);
+    if (!c || !l) return 0n;
+    const k = Number(n);
+    const m = new Float32Array(memory.buffer, u32(ptr), k * k);
+    if (k === 2) c.gl.uniformMatrix2fv(l, false, m);
+    else if (k === 3) c.gl.uniformMatrix3fv(l, false, m);
+    else if (k === 4) c.gl.uniformMatrix4fv(l, false, m);
+    return 1n;
+  },
+
+  gl_tex_image_pixels(ctx, target, w, h, ptr) {
+    const c = glCtx(ctx);
+    if (!c) return 0n;
+    const gl = c.gl;
+    const W = Number(w);
+    const H = Number(h);
+    const px = new Uint8Array(memory.buffer, u32(ptr), W * H * 4);
+    gl.texImage2D(Number(target), 0, gl.RGBA, W, H, 0, gl.RGBA, gl.UNSIGNED_BYTE, px);
     return 1n;
   },
 

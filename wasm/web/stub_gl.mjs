@@ -5,8 +5,8 @@
 // calls `wasm/web/web_runtime.js` makes and records each one as
 // `[name, ...args]` in `gl.calls`, with GL objects replaced by stable labels
 // (`buffer#1`, `program#1`, ...) so a harness can compare a call stream to a
-// golden. Typed-array uploads (Part B of plans/implementations/web-webgl.md)
-// will record their decoded values.
+// golden. Typed-array uploads record their decoded values (a plain array),
+// copied at call time as a driver would.
 //
 // Modes (`glStub.mode`): 'webgl2' (default), 'webgl1' (no `webgl2` context;
 // VAOs come from `OES_vertex_array_object`), or 'none' (no WebGL at all).
@@ -19,6 +19,7 @@ export const glStub = {
   mode: 'webgl2',
   contexts: [], // every FakeGL handed out, in order
   lost: false,
+  noUintIndices: false, // WebGL1 without OES_element_index_uint
 };
 
 const CONSTANTS = {
@@ -73,7 +74,7 @@ export class FakeGL {
         deleteVertexArrayOES: (v) => this._rec('deleteVertexArrayOES', v),
       };
     }
-    if (name === 'OES_element_index_uint') return {};
+    if (name === 'OES_element_index_uint') return glStub.noUintIndices ? null : {};
     return null;
   }
 
@@ -169,9 +170,23 @@ export class FakeGL {
   drawArrays(m, f, c) { this._rec('drawArrays', m, f, c); }
   drawElements(m, c, t, o) { this._rec('drawElements', m, c, t, o); }
 
-  texImage2D(target, level, internal, format, type, source) {
-    const what = source && source.src !== undefined ? `image:${source.src}` : 'pixels';
-    this._rec('texImage2D', target, level, internal, format, type, what);
+  bufferData(t, data, usage) { this._rec('bufferData', t, Array.from(data), usage); }
+  bufferSubData(t, offset, data) { this._rec('bufferSubData', t, offset, Array.from(data)); }
+  uniformMatrix2fv(l, tr, m) { this._rec('uniformMatrix2fv', l, tr, Array.from(m)); }
+  uniformMatrix3fv(l, tr, m) { this._rec('uniformMatrix3fv', l, tr, Array.from(m)); }
+  uniformMatrix4fv(l, tr, m) { this._rec('uniformMatrix4fv', l, tr, Array.from(m)); }
+
+  // The image form (6 args) records the image's src; the pixel form (9
+  // args) records the size and the decoded texels.
+  texImage2D(target, level, internal, ...rest) {
+    if (rest.length === 3) {
+      const [format, type, source] = rest;
+      const what = source && source.src !== undefined ? `image:${source.src}` : 'pixels';
+      this._rec('texImage2D', target, level, internal, format, type, what);
+      return;
+    }
+    const [w, h, border, format, type, pixels] = rest;
+    this._rec('texImage2D', target, level, internal, w, h, border, format, type, Array.from(pixels));
   }
 }
 

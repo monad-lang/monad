@@ -12,18 +12,22 @@
 /// `gl_state` import whose selector numbers are `GlState.code`, mirrored by
 /// `host.gl_state` in `wasm/web/web_runtime.js`.
 ///
-/// Bulk uploads (`bufferData`, `uniformMatrix4fv`, RGBA `texImage2D`) wait
-/// for `std::buf`'s typed `Buf F32`/`Buf I32`/`Buf U8` to reach main
-/// (`plans/implementations/web-webgl.md`, Part B). Textures can already be
-/// filled from a loaded image (`GlImage`).
+/// Bulk uploads (`bufferData`, `uniformMatrix4fv`, RGBA `texImage2D`) take a
+/// `std::buf` buffer of the matching element type (`Buf F32` vertices and
+/// matrices, `Buf I32` indices, `Buf U8` texels) as a `Shared` read handle.
+/// The runtime checks the buffer's kind and length before the host sees its
+/// payload; `Gl.f32_buf`/`i32_buf`/`u8_buf` pack a list into one. Textures
+/// can also be filled from a loaded image (`GlImage`).
 
 use lib::types {Node}
 use lib::ffi {
     canvas_get_context_raw, gl_info_raw, gl_create_raw, gl_delete_raw, gl_bind_raw,
     gl_shader_raw, gl_link_raw, gl_log_raw, gl_location_raw, gl_vertex_attrib_raw,
     gl_uniform_f_raw, gl_clear_color_raw, gl_state_raw, gl_draw_raw,
-    gl_tex_image_from_image_raw, image_load_begin_raw, image_info_raw,
+    gl_tex_image_from_image_raw, image_load_begin_raw, image_info_raw, gl_buffer_data_raw,
+    gl_uniform_matrix_raw, gl_tex_image_pixels_raw,
 }
+use std::buf {Buf, Buf.new_f32, Buf.new_i32, Buf.new_u8, Buf.set_f32, Buf.set_i32, Buf.set_u8}
 
 // ─── Handles ─────────────────────────────────────────────────────────
 
@@ -360,6 +364,13 @@ pub def Gl.has_vertex_arrays (ctx : GlContext) : IO Bool := do {
     IO.pure (I64.beq has 1)
 }
 
+/// Whether 32-bit element indices work (WebGL2, or WebGL1 with
+/// `OES_element_index_uint`): `Gl.draw_elements` needs it.
+pub def Gl.has_uint_indices (ctx : GlContext) : IO Bool := do {
+    let has <- info ctx 6;
+    IO.pure (I64.beq has 1)
+}
+
 // ─── Shaders and programs ────────────────────────────────────────────
 
 def last_log : IO String := IO.mk gl_log_raw
@@ -553,7 +564,8 @@ pub def Gl.draw_arrays (ctx : GlContext) (p : GlPrimitive) (first : I64) (count 
     IO.mk (gl_draw_raw ctx.id 0 (GlPrimitive.code p) first count)
 
 /// `drawElements` over the bound element buffer, whose indices are 32-bit
-/// unsigned (`Buf I32`); `offset` is in bytes.
+/// unsigned (`Buf I32`, uploaded with `buffer_data_i32`); `offset` is in
+/// bytes. On WebGL1 this needs `Gl.has_uint_indices`.
 pub def Gl.draw_elements (ctx : GlContext) (p : GlPrimitive) (count : I64) (offset : I64) : IO Unit :=
     IO.mk (gl_draw_raw ctx.id 1 (GlPrimitive.code p) count offset)
 
@@ -621,3 +633,107 @@ pub def GlImage.size (img : GlImage) : IO (Pair I64 I64) := do {
     let h <- IO.mk (image_info_raw img.id 2);
     IO.pure (Pair.pair w h)
 }
+
+// ─── Bulk uploads (`std::buf`) ───────────────────────────────────────
+//
+// Each takes the buffer as a `Shared` read handle and unwraps it with
+// `Shared.get` before the extern: an extern handed a `Shared` would get the
+// box, not the buffer. The result is false when the runtime refused the
+// buffer (wrong element kind, or shorter than the call needs) or the host
+// did not know the context or uniform.
+
+def accepted (r : I64) : IO Bool := IO.pure (I64.beq r 1)
+
+/// `bufferData` of a `Buf F32` into the buffer bound at `target`.
+pub def Gl.buffer_data_f32 (ctx : GlContext) (target : GlBufferTarget) (data : Shared (Buf F32))
+    (usage : GlUsage) : IO Bool := do {
+    let r <- IO.mk (gl_buffer_data_raw ctx.id (GlBufferTarget.code target) 0 (GlUsage.code usage)
+        (Shared.get data));
+    accepted r
+}
+
+/// `bufferData` of a `Buf I32`: element indices for `draw_elements`.
+pub def Gl.buffer_data_i32 (ctx : GlContext) (target : GlBufferTarget) (data : Shared (Buf I32))
+    (usage : GlUsage) : IO Bool := do {
+    let r <- IO.mk (gl_buffer_data_raw ctx.id (GlBufferTarget.code target) 0 (GlUsage.code usage)
+        (Shared.get data));
+    accepted r
+}
+
+/// `bufferSubData`: overwrite the bound buffer from byte `offset` on.
+pub def Gl.buffer_sub_data_f32 (ctx : GlContext) (target : GlBufferTarget) (offset : I64)
+    (data : Shared (Buf F32)) : IO Bool := do {
+    let r <- IO.mk (gl_buffer_data_raw ctx.id (GlBufferTarget.code target) 1 offset (Shared.get data));
+    accepted r
+}
+
+/// `uniformMatrix4fv` from the first 16 elements of `m`, column-major (the
+/// GL convention; WebGL has no transpose). False when `m` has fewer.
+pub def Gl.uniform_matrix4 (ctx : GlContext) (u : GlUniform) (m : Shared (Buf F32)) : IO Bool := do {
+    let r <- IO.mk (gl_uniform_matrix_raw ctx.id u.id 4 (Shared.get m));
+    accepted r
+}
+
+/// Upload `w`×`h` RGBA8 pixels (row-major, 4 bytes each) into the bound
+/// texture. False when `pixels` holds fewer than `w * h * 4` bytes.
+pub def Gl.tex_image_rgba (ctx : GlContext) (target : GlTextureTarget) (w : I64) (h : I64)
+    (pixels : Shared (Buf U8)) : IO Bool := do {
+    let r <- IO.mk (gl_tex_image_pixels_raw ctx.id (GlTextureTarget.code target) w h
+        (Shared.get pixels));
+    accepted r
+}
+
+// ─── Packing lists into buffers ──────────────────────────────────────
+//
+// The buffer is written under `IO` through a `Shared` handle and returned
+// at the end, the shape `std::buf`'s own `from_list_f32` uses: naming a
+// bare `Buf` twice is the double use the affine rule refuses.
+
+/// `List F64` -> `Buf F32`, each value rounded by `F64.to_f32`: vertex or
+/// matrix data computed in F64, packed for the GPU.
+pub def Gl.f32_buf (xs : List F64) : IO (Buf F32) := do {
+    let n := List.length (Shared.get (Shared.of xs));
+    let b <- Buf.new_f32 n;
+    fill_f32 (Shared.of b) 0 xs
+}
+
+def fill_f32 (bs : Shared (Buf F32)) (i : I64) (rest : List F64) : IO (Buf F32) :=
+    match rest {
+        List.empty => IO.pure (Shared.get bs),
+        List.cons x more => do {
+            let _w <- Buf.set_f32 (Shared.get bs) i (F64.to_f32 x);
+            fill_f32 bs (i + 1) more
+        },
+    }
+
+/// `List I64` -> `Buf I32` (each value truncated to 32 bits): indices.
+pub def Gl.i32_buf (xs : List I64) : IO (Buf I32) := do {
+    let n := List.length (Shared.get (Shared.of xs));
+    let b <- Buf.new_i32 n;
+    fill_i32 (Shared.of b) 0 xs
+}
+
+def fill_i32 (bs : Shared (Buf I32)) (i : I64) (rest : List I64) : IO (Buf I32) :=
+    match rest {
+        List.empty => IO.pure (Shared.get bs),
+        List.cons x more => do {
+            let _w <- Buf.set_i32 (Shared.get bs) i (I64.to_i32 x);
+            fill_i32 bs (i + 1) more
+        },
+    }
+
+/// `List I64` -> `Buf U8` (each value masked to a byte): RGBA texels.
+pub def Gl.u8_buf (xs : List I64) : IO (Buf U8) := do {
+    let n := List.length (Shared.get (Shared.of xs));
+    let b <- Buf.new_u8 n;
+    fill_u8 (Shared.of b) 0 xs
+}
+
+def fill_u8 (bs : Shared (Buf U8)) (i : I64) (rest : List I64) : IO (Buf U8) :=
+    match rest {
+        List.empty => IO.pure (Shared.get bs),
+        List.cons x more => do {
+            let _w <- Buf.set_u8 (Shared.get bs) i (U32.to_u8 (I64.to_u32 x));
+            fill_u8 bs (i + 1) more
+        },
+    }

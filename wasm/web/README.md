@@ -24,6 +24,10 @@ The `wasm32-unknown-unknown` ("web") profile produces a freestanding
 | `clipboard_smoke.mjs` | Node test for the two-phase `navigator.clipboard` wrapper: pending, resolved, rejected (`Err` with the DOMException name), and write. |
 | `oak_event_smoke.mjs` | Node test driving `fixtures/wasm/oak_events.mo`: lowered handler ids, drag-and-drop payloads reaching `update`, dragover/drop `preventDefault`, and the sync copy/paste path. |
 | `subs_smoke.mjs` | Node test driving `fixtures/wasm/oak_subs.mo`: window/document subscriptions and the animation-frame hook. |
+| `stub_gl.mjs` | A recording fake of WebGL2/WebGL1/no WebGL for the GL harnesses: every call becomes `[name, ...args]` with objects as stable labels and typed-array uploads as decoded values. |
+| `webgl_smoke.mjs` | Node test driving `fixtures/wasm/oak_webgl.mo`: `Command.after_render` setup and drawing, canvas fit, the WebGL2 → WebGL1 fallback, a compile-error log and the golden GL stream. |
+| `webgl_texture_smoke.mjs` | Node test driving `fixtures/wasm/webgl_texture.mo`: two-phase image loading and texture state. |
+| `webgl_triangle_smoke.mjs` | Node test driving `fixtures/wasm/webgl_triangle.mo`: `Buf F32`/`I32`/`U8` uploads, the short-buffer refusals and a missing `OES_element_index_uint`. |
 | `try_abi_smoke.mjs` | Node test for the /try staging ABI: the C-only `try_alloc` export and a `#[export "c"]` def taking a `String` parameter. |
 | `try_engine_smoke.mjs` | Node test for `motes/try_engine`: takes a built /try directory, frames the served `sources/` files the way `worker.js` does, evaluates programs through `try_run(sources, source)` and asserts the rendered `value : Type`, including parse/type/lower errors and the no-sources / malformed-payload paths. |
 | `try_ui_smoke.mjs` | Node test for `motes/try_ui`: the Oak page's run/poll/render/cancel loop over the stub DOM and a fake Worker. |

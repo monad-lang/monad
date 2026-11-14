@@ -17,6 +17,7 @@
 
 use lib::types {Node, RequestId, ClipboardOp, CryptoOp}
 use std::bytebuf {ByteBuf}
+use std::buf {Buf}
 use std::ref {Ref}
 
 #[extern "c" {link_name := "web_dom_create"}]
@@ -332,6 +333,26 @@ def gl_draw_raw (ctx : I64) (indexed : I64) (mode : I64) (a : I64) (b : I64) : R
 
 #[extern "c" {link_name := "web_gl_tex_image_from_image"}]
 def gl_tex_image_from_image_raw (ctx : I64) (target : I64) (image : I64) : RawIO I64
+
+// Bulk uploads take a `std::buf` buffer. The C side reads the `BufObj`'s
+// element kind and count, so a byte length never crosses Monad code; the
+// public wrappers in `gl.mo` pin the element type. 1 = uploaded, 0 = the
+// buffer was the wrong kind or too short, or the context is unknown.
+
+/// `bufferData` (`sub` = 0, `a` = usage) or `bufferSubData` (`sub` = 1,
+/// `a` = byte offset).
+#[extern "c" {link_name := "web_gl_buffer_data"}]
+def gl_buffer_data_raw {E : Type} (ctx : I64) (target : I64) (sub : I64) (a : I64) (data : Buf E)
+    : RawIO I64
+
+/// `uniformMatrix{n}fv` from the first n*n elements of a `Buf F32`.
+#[extern "c" {link_name := "web_gl_uniform_matrix"}]
+def gl_uniform_matrix_raw (ctx : I64) (loc : I64) (n : I64) (m : Buf F32) : RawIO I64
+
+/// RGBA8 `texImage2D` of w*h pixels from a `Buf U8` of at least w*h*4.
+#[extern "c" {link_name := "web_gl_tex_image_pixels"}]
+def gl_tex_image_pixels_raw (ctx : I64) (target : I64) (w : I64) (h : I64) (pixels : Buf U8)
+    : RawIO I64
 
 #[extern "c" {link_name := "web_image_load_begin"}]
 def image_load_begin_raw (url : String) : RawIO I64

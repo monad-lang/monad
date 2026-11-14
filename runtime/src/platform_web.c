@@ -1194,6 +1194,58 @@ int64_t web_image_info(int64_t image, int64_t which) {
     return monad_js_image_info(image, which);
 }
 
+__attribute__((import_module("monad"), import_name("gl_buffer_data")))
+extern int64_t monad_js_gl_buffer_data(int64_t ctx, int64_t target, int64_t sub, int64_t a,
+                                       int64_t kind, int64_t ptr, int64_t count);
+
+__attribute__((import_module("monad"), import_name("gl_uniform_matrix")))
+extern int64_t monad_js_gl_uniform_matrix(int64_t ctx, int64_t loc, int64_t n, int64_t ptr);
+
+__attribute__((import_module("monad"), import_name("gl_tex_image_pixels")))
+extern int64_t monad_js_gl_tex_image_pixels(int64_t ctx, int64_t target, int64_t w, int64_t h,
+                                            int64_t ptr);
+
+/* The `Buf` behind an upload, or NULL when the word is not a buffer of
+   `kind` holding at least `min_len` elements. The JS side views exactly
+   `len` (or the requested prefix) elements at the payload, so the byte
+   range always comes from the buffer's own recorded count and kind. */
+static BufObj* web_gl_buf_obj(int64_t word) {
+    BufObj* obj = (BufObj*)RT_PTR(word);
+    return (obj && obj->header.tag == MONAD_BUF_TAG) ? obj : NULL;
+}
+
+static BufObj* web_gl_buf(int64_t word, int64_t kind, int64_t min_len) {
+    BufObj* obj = web_gl_buf_obj(word);
+    if (!obj || obj->elem_kind != kind || obj->len < min_len) return NULL;
+    return obj;
+}
+
+int64_t web_gl_buffer_data(int64_t ctx, int64_t target, int64_t sub, int64_t a, int64_t data) {
+    BufObj* obj = web_gl_buf_obj(data);
+    if (!obj) return 0;
+    int64_t kind = obj->elem_kind;
+    if (kind != MONAD_ELEM_F32 && kind != MONAD_ELEM_I32 && kind != MONAD_ELEM_U8) return 0;
+    return monad_js_gl_buffer_data(ctx, target, sub, a, kind, (int64_t)(intptr_t)obj->payload,
+                                   obj->len);
+}
+
+int64_t web_gl_uniform_matrix(int64_t ctx, int64_t loc, int64_t n, int64_t m) {
+    if (n < 2 || n > 4) return 0;
+    BufObj* obj = web_gl_buf(m, MONAD_ELEM_F32, n * n);
+    if (!obj) return 0;
+    return monad_js_gl_uniform_matrix(ctx, loc, n, (int64_t)(intptr_t)obj->payload);
+}
+
+int64_t web_gl_tex_image_pixels(int64_t ctx, int64_t target, int64_t w, int64_t h,
+                                int64_t pixels) {
+    /* 16384 is above every WebGL MAX_TEXTURE_SIZE; it keeps w*h*4 far from
+       overflowing an int64. */
+    if (w <= 0 || h <= 0 || w > 16384 || h > 16384) return 0;
+    BufObj* obj = web_gl_buf(pixels, MONAD_ELEM_U8, w * h * 4);
+    if (!obj) return 0;
+    return monad_js_gl_tex_image_pixels(ctx, target, w, h, (int64_t)(intptr_t)obj->payload);
+}
+
 /* ── entry point ────────────────────────────────────────────────────── */
 
 __attribute__((export_name("monad_main")))

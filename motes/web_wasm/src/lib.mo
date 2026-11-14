@@ -73,5 +73,7 @@ pub use lib::gl {
     Gl.front_face, Gl.draw_arrays, Gl.draw_elements, Gl.create_texture,
     Gl.bind_texture, Gl.delete_texture, Gl.active_texture, Gl.tex_filter, Gl.tex_wrap,
     Gl.generate_mipmap, Gl.flip_y, Gl.tex_image_from_image, GlImage.load,
-    GlImage.poll, GlImage.size,
+    GlImage.poll, GlImage.size, Gl.has_uint_indices, Gl.buffer_data_f32, Gl.buffer_data_i32,
+    Gl.buffer_sub_data_f32, Gl.uniform_matrix4, Gl.tex_image_rgba, Gl.f32_buf, Gl.i32_buf,
+    Gl.u8_buf,
 }

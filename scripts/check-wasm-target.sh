@@ -242,6 +242,13 @@ echo "== web: WebGL textures (image begin/poll, texture state) =="
     -o "$tmp/webgl_texture.wasm" --no-cache
 node wasm/web/webgl_texture_smoke.mjs "$tmp/webgl_texture.wasm"
 
+echo "== web: WebGL Buf uploads (vertices, indices, mat4, RGBA texels) =="
+"$MONAD" build --target wasm32-unknown-unknown fixtures/wasm/webgl_triangle.mo \
+    -o "$tmp/webgl_triangle.wasm" --no-cache
+for mode in webgl2 webgl1-nouint; do
+    node wasm/web/webgl_triangle_smoke.mjs "$tmp/webgl_triangle.wasm" "$mode"
+done
+
 echo "== web: render allocation guard (256 buttons, two handlers each) =="
 "$MONAD" build --target wasm32-unknown-unknown fixtures/wasm/oak_spa_alloc.mo \
     -o "$tmp/oak_spa_alloc.wasm" --no-cache

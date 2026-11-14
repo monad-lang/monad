@@ -385,6 +385,20 @@ def WebImport.gl_tex_image_from_image : WebImport :=
     { module := "monad", name := "gl_tex_image_from_image",
         params := ["i64", "i64", "i64"], result := "i64" }
 
+/// Bulk uploads: the C wrapper turns a `Buf` into (elem kind, payload
+/// address, element count) after checking its kind and length.
+def WebImport.gl_buffer_data : WebImport :=
+    { module := "monad", name := "gl_buffer_data",
+        params := ["i64", "i64", "i64", "i64", "i64", "i64", "i64"], result := "void" }
+
+def WebImport.gl_uniform_matrix : WebImport :=
+    { module := "monad", name := "gl_uniform_matrix",
+        params := ["i64", "i64", "i64", "i64"], result := "void" }
+
+def WebImport.gl_tex_image_pixels : WebImport :=
+    { module := "monad", name := "gl_tex_image_pixels",
+        params := ["i64", "i64", "i64", "i64", "i64"], result := "void" }
+
 /// Image loading for textures is two-phase like fetch: the promise only
 /// updates the host table and `image_info` polls it.
 def WebImport.image_load_begin : WebImport :=
@@ -442,8 +456,9 @@ pub def WebAbi.default : WebAbi :=
             WebImport.gl_bind, WebImport.gl_shader, WebImport.gl_link, WebImport.gl_log,
             WebImport.gl_location, WebImport.gl_vertex_attrib, WebImport.gl_uniform_f,
             WebImport.gl_clear_color, WebImport.gl_state, WebImport.gl_draw,
-            WebImport.gl_tex_image_from_image, WebImport.image_load_begin,
-            WebImport.image_info
+            WebImport.gl_tex_image_from_image, WebImport.gl_buffer_data,
+            WebImport.gl_uniform_matrix, WebImport.gl_tex_image_pixels,
+            WebImport.image_load_begin, WebImport.image_info
         ],
             exports := [
                 WebExport.oak_mount, WebExport.oak_dispatch_event, WebExport.oak_tick
