@@ -25,6 +25,7 @@ use shuttle::session {Session}
 use shuttle::registry {ToolRegistry}
 use shuttle::gate {Capability, Gate}
 use shuttle::message {Usage}
+use shuttle::message_types {StopReason}
 
 // The protocol's phantom phase markers.
 type AgentIdle {}
@@ -70,6 +71,11 @@ pub struct RunState {
     /// Set when the loop ended because `should_stop` fired. The session
     /// is a normal partial result, never an error.
     stopped : Bool,
+    /// How the last ACCEPTED model call ended. `max_tokens` means the reply
+    /// was cut off (the turn is a normal finish, but the UI must say so);
+    /// `none` before any call. Not serialized: it is the run's outcome,
+    /// and a resumed run's next turn carries its own.
+    last_stop : Option StopReason := Option.none,
 }
 
 /// The usage hook's default: do nothing.

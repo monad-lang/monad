@@ -93,7 +93,7 @@ def run_of : RunState := {
     sleep_ms := silent_sleep,
     on_usage := silent_usage,
     should_stop := silent_stop,
-    inbox := silent_inbox, side_spend := silent_side_spend, stopped := false,
+    inbox := silent_inbox, side_spend := silent_side_spend, stopped := false, last_stop := Option.none,
 }
 
 def session_of : Session := {

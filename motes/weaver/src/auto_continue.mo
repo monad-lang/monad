@@ -12,7 +12,9 @@ use weaver::commands {WeaverState}
 use weaver::policy {Mode, Mode.is_auto}
 use weaver::plan_file {PlanDoc, PlanFile.linked, PlanFile.read}
 use weaver::store {StoreState}
-use std::ref {Ref, Ref.add_i64, Ref.set}
+use std::ref {Ref, Ref.add_i64, Ref.get, Ref.set}
+use shuttle::message {Message}
+use shuttle::message_types {Content, StopReason}
 
 /// Statuses that end a plan: there is nothing left to continue.
 pub def AutoContinue.terminal (status : String) : Bool :=
@@ -35,6 +37,8 @@ def prompt_of (doc : Option PlanDoc) : Option String :=
         Option.none => Option.none,
         Option.some d =>
             if AutoContinue.terminal d.meta.status
+            then Option.none
+            else if String.is_empty d.meta.next_action
             then Option.none
             else Option.some (AutoContinue.prompt d),
     }
@@ -106,26 +110,160 @@ def active_at (path : String) : IO Bool := do {
     }
 }
 
-/// A line for the human when auto-continue stopped only because the turn
-/// budget is spent with a plan still unfinished; none for every other stop.
+/// A line for the human when a turn ended only because the turn budget is
+/// spent -- in EVERY mode: a manual-mode run that hits the cap otherwise
+/// stops after a tool result with no reason. The linked-plan sentence is
+/// added only when a plan is still unfinished.
 pub def AutoContinue.budget_note (st : WeaverState) (run : RunState) : IO (Option String) :=
-    if Bool.not (Mode.is_auto st.mode)
-    then IO.pure Option.none
-    else if run.stopped
+    if run.stopped
     then IO.pure Option.none
     else if I64.gt run.turns_left 0
     then IO.pure Option.none
     else match st.store {
-        Option.none => IO.pure Option.none,
+        Option.none => IO.pure (Option.some budget_line),
         Option.some s => budget_note_for run s,
     }
+
+def budget_line : String :=
+    "[turn budget spent] raise it with /budget <n>, or /clear to start over"
 
 def budget_note_for (run : RunState) (s : StoreState) : IO (Option String) := do {
     let active <- plan_active s;
     if active
-    then IO.pure (Option.some (String.concat_list ["[auto] turn budget spent (turns ",
-        I64.to_string run.session.turns, ") -- the plan is not done; raise it with /budget <n>"]))
-    else IO.pure Option.none
+    then IO.pure (Option.some (String.concat_list [budget_line,
+        " (the linked plan is not done)"]))
+    else IO.pure (Option.some budget_line)
+}
+
+// ── the two other stop lines ────────────────────────────────────────────
+
+/// The reply was cut off by the output-token limit (or refused): a normal
+/// finish, but never a silent one.
+pub def AutoContinue.finish_note (run : RunState) : Option String :=
+    match run.last_stop {
+        Option.none => Option.none,
+        Option.some s =>
+            if StopReason.is_truncated s
+            then Option.some "[reply cut off at the output limit] raise it with /settings max_tokens (a reasoning model spends the budget before it writes)"
+            else if StopReason.is_refusal s
+            then Option.some "[the model refused this turn]"
+            else Option.none,
+    }
+
+/// A linked, unfinished plan whose `next_action` is empty cannot drive a
+/// continuation; say so instead of silently ending the chain.
+pub def AutoContinue.stall_note (st : WeaverState) : IO (Option String) :=
+    match st.store {
+        Option.none => IO.pure Option.none,
+        Option.some s => stall_linked s,
+    }
+
+def stall_linked (s : StoreState) : IO (Option String) := do {
+    let linked <- PlanFile.linked s;
+    match linked {
+        Option.none => IO.pure Option.none,
+        Option.some path => stall_at path,
+    }
+}
+
+def stall_at (path : String) : IO (Option String) := do {
+    let doc <- PlanFile.read path;
+    match doc {
+        Option.none => IO.pure Option.none,
+        Option.some d =>
+            if Bool.or (AutoContinue.terminal d.meta.status) (Bool.not (String.is_empty d.meta.next_action))
+            then IO.pure Option.none
+            else IO.pure (Option.some (String.concat_list ["[auto] the linked plan has no next action (status ",
+                d.meta.status, ", ", I64.to_string d.meta.completion,
+                "%) -- not continuing; revise it with /plan or take over"]))
+    }
+}
+
+// ── the no-progress guard ───────────────────────────────────────────────
+
+/// Consecutive auto turns with no tool call and an unchanged plan before
+/// the chain stops. A truncated reasoning turn is exactly this shape.
+pub def AutoContinue.max_no_progress : I64 := 3
+
+#[partial]
+def has_tool_in (cs : List Content) : Bool :=
+    match cs {
+        List.empty => false,
+        List.cons c rest => match c { Content.tool_use _ _ _ => true, _ => has_tool_in rest },
+    }
+
+#[partial]
+pub def AutoContinue.delta_has_tool (ms : List Message) : Bool :=
+    match ms {
+        List.empty => false,
+        List.cons m rest =>
+            if has_tool_in m.content then true else AutoContinue.delta_has_tool rest,
+    }
+
+def fingerprint_of (d : PlanDoc) : String :=
+    String.concat_list [d.meta.status, "|", I64.to_string d.meta.completion, "|", d.meta.next_action]
+
+def linked_fingerprint (s : StoreState) : IO (Option String) := do {
+    let linked <- PlanFile.linked s;
+    match linked {
+        Option.none => IO.pure Option.none,
+        Option.some path => do {
+            let doc <- PlanFile.read path;
+            match doc {
+                Option.none => IO.pure Option.none,
+                Option.some d => IO.pure (Option.some (fingerprint_of d)),
+            }
+        },
+    }
+}
+
+pub def AutoContinue.reset_progress (st : WeaverState) : IO Unit :=
+    match st.auto_progress {
+        Option.none => IO.pure unit,
+        Option.some r => Ref.set r (Pair.pair 0 ""),
+    }
+
+/// One successful turn's progress bookkeeping. A turn made progress when
+/// it called a tool OR the linked plan's (status, completion, next_action)
+/// changed; `max_no_progress` unchanged turns stop the chain.
+pub def AutoContinue.note_turn (st : WeaverState) (run : RunState) (delta : List Message) : IO (Option String) :=
+    match st.auto_progress {
+        Option.none => IO.pure Option.none,
+        Option.some r => note_turn_at r run delta st,
+    }
+
+def note_turn_at (r : Ref (Pair I64 String)) (run : RunState) (delta : List Message) (st : WeaverState) : IO (Option String) := do {
+    if Bool.not (Mode.is_auto st.mode)
+    then do { let _ <- Ref.set r (Pair.pair 0 ""); IO.pure Option.none }
+    else if run.stopped
+    then IO.pure Option.none
+    else if I64.lt run.turns_left 1
+    then IO.pure Option.none
+    else match st.store {
+        Option.none => do { let _ <- Ref.set r (Pair.pair 0 ""); IO.pure Option.none },
+        Option.some s => do {
+            let fp <- linked_fingerprint s;
+            match fp {
+                Option.none => do { let _ <- Ref.set r (Pair.pair 0 ""); IO.pure Option.none },
+                Option.some text => do {
+                    let prev <- Ref.get r;
+                    let had : Bool := AutoContinue.delta_has_tool delta;
+                    let same : Bool := String.beq prev.second text;
+                    if Bool.or had (Bool.not same)
+                    then do { let _ <- Ref.set r (Pair.pair 0 text); IO.pure Option.none }
+                    else do {
+                        let k : I64 := prev.first + 1;
+                        let _ <- Ref.set r (Pair.pair k text);
+                        if I64.lt (AutoContinue.max_no_progress - 1) k
+                        then IO.pure (Option.some (String.concat_list ["[auto] stopped after ",
+                            I64.to_string AutoContinue.max_no_progress,
+                            " turns with no tool call and no plan change -- take over, or revise the plan with /plan"]))
+                        else IO.pure Option.none
+                    }
+                },
+            }
+        },
+    }
 }
 
 // ── the linked plan, as classifier context ──────────────────────────────

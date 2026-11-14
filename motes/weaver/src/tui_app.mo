@@ -262,6 +262,7 @@ def update_msg (m : TuiModel) (msg : WeaverMsg) : Pair TuiModel (Cmd WeaverMsg) 
         WeaverMsg.auto_continue text => auto_continue_step m text,
         WeaverMsg.turn_failed run e => failure_step m run e,
         WeaverMsg.command_result effect => command_result_step m effect,
+        WeaverMsg.quit => Pair.pair m Cmd.quit,
         WeaverMsg.command_failed e => failure_step m m.state.run e,
         WeaverMsg.page_loaded page => page_loaded_step m page,
         WeaverMsg.page_failed e => page_failed_step m e,
@@ -448,9 +449,20 @@ def named (name : Option String) (run : RunState) : Option String :=
         Option.none => Store.derive_name run.session,
     }
 
+/// A fatal error: record it where `main` can read it after the app closes
+/// (the model's state is gone by then) and quit. `Cmd.quit` cannot ride
+/// with `Cmd.perform`, so the write posts `WeaverMsg.quit` when it lands.
+def fatal_quit (m : TuiModel) (e : WeaverError) : Cmd WeaverMsg :=
+    match m.state.fatal_out {
+        Option.none => Cmd.quit,
+        Option.some r => Cmd.perform (fn (_ : Unit) => do {
+            let _ <- Ref.set r (Option.some e);
+            IO.pure WeaverMsg.quit
+        }),
+    }
+
 /// A failed turn or command: the error line lands, then the failure's one
-/// classification decides. A fatal error quits without persisting the
-/// final line (`Cmd.quit` cannot ride with a `Cmd.perform`).
+/// classification decides. A fatal error records itself and quits.
 def failure_step (m : TuiModel) (run : RunState) (e : WeaverError) : Pair TuiModel (Cmd WeaverMsg) :=
     let with_run : TuiModel := set_run m run in
     let pair := append_block_at with_run [error_line e] in
@@ -471,7 +483,7 @@ def failure_step (m : TuiModel) (run : RunState) (e : WeaverError) : Pair TuiMod
                     let m3 : TuiModel := with_turn_end (fn (mm : TuiModel) => mm) m2 in
                     let st2 : WeaverState := set_fatal m3.state e in
                     let m4 : TuiModel := set_state m3 st2 in
-                    Pair.pair m4 Cmd.quit,
+                    Pair.pair m4 (fatal_quit m4 e),
         },
     }
 
@@ -1508,14 +1520,29 @@ def auto_continue_step (m : TuiModel) (text : String) : Pair TuiModel (Cmd Weave
 
 /// A turn result plus the auto-continue decision: the batch folds the result
 /// first (persisting the turn) and then the continuation into the queue.
+def line_opt (o : Option String) : List TLine :=
+    match o { Option.none => List.empty, Option.some s => List.cons (TLine.plain s) List.empty }
+
 def with_auto_continue (st : WeaverState) (msg : WeaverMsg) : IO WeaverMsg :=
     match msg {
         WeaverMsg.turn_result run lines delta last_context plan => do {
             let _ <- AutoContinue.clear_failures st;
-            let cont <- AutoContinue.next st run;
-            match cont {
-                Option.some text => IO.pure (WeaverMsg.batch [msg, WeaverMsg.auto_continue text]),
-                Option.none => with_budget_note st msg run lines delta last_context plan,
+            // A truncated/refused reply says so on its own block.
+            let base : List TLine := List.append lines (line_opt (AutoContinue.finish_note run));
+            let guarded <- AutoContinue.note_turn st run delta;
+            match guarded {
+                Option.some note =>
+                    IO.pure (WeaverMsg.turn_result run (List.append base (line_opt (Option.some note))) delta last_context plan),
+                Option.none => do {
+                    let cont <- AutoContinue.next st run;
+                    match cont {
+                        Option.some text =>
+                            IO.pure (WeaverMsg.batch [
+                                WeaverMsg.turn_result run (List.append base (line_opt (Option.some "[auto] continuing the plan"))) delta last_context plan,
+                                WeaverMsg.auto_continue text]),
+                        Option.none => with_budget_note st (WeaverMsg.turn_result run base delta last_context plan) run base delta last_context plan,
+                    }
+                },
             }
         },
         WeaverMsg.turn_failed run e => with_failure_retry st msg run e,
@@ -1526,10 +1553,11 @@ def with_auto_continue (st : WeaverState) (msg : WeaverMsg) : IO WeaverMsg :=
 /// (one persistence command; a second would be dropped by batch_step).
 def with_budget_note (st : WeaverState) (msg : WeaverMsg) (run : RunState) (lines : List TLine) (delta : List Message) (last_context : I64) (plan : Option String) : IO WeaverMsg := do {
     let note <- AutoContinue.budget_note st run;
-    match note {
-        Option.none => IO.pure msg,
-        Option.some line => IO.pure (WeaverMsg.turn_result run (List.append lines (List.cons (TLine.plain line) List.empty)) delta last_context plan),
-    }
+    let stall <- AutoContinue.stall_note st;
+    let extra : List TLine := List.append (line_opt note) (line_opt stall);
+    if List.is_empty extra
+    then IO.pure msg
+    else IO.pure (WeaverMsg.turn_result run (List.append lines extra) delta last_context plan)
 }
 
 /// A recoverable failed turn in auto-with-plan retries the plan's next

@@ -7,7 +7,9 @@ use shuttle::message {Usage}
 use shuttle::provider {ProviderConfig, Wire}
 use shuttle::registry {ToolRegistry}
 use shuttle::session {Session}
-use weaver::auto_continue {AutoContinue.terminal, AutoContinue.prompt, AutoContinue.next}
+use weaver::auto_continue {AutoContinue.terminal, AutoContinue.prompt, AutoContinue.next, AutoContinue.budget_note, AutoContinue.finish_note, AutoContinue.delta_has_tool}
+use shuttle::message_types {StopReason, Content, Role}
+use shuttle::message {Message}
 use weaver::commands {WeaverState}
 use weaver::policy {Mode}
 use weaver::store {StoreState}
@@ -15,6 +17,7 @@ use weaver::plan_file {PlanDoc, PlanMeta, PlanMeta.empty, PlanFile.render, PlanF
 use std::test {Test.write_fixture}
 use std::path {Path}
 use std::map {BTreeMap}
+use json::json {Json}
 use std::process {process_id, exec_cmd}
 
 def mock_config : ProviderConfig :=
@@ -24,7 +27,7 @@ def session_of : Session :=
     { config := mock_config, system_prompt := "test", tools := List.empty, history := List.empty, turns := 0, spent := usage_zero }
 
 def run_of : RunState :=
-    { session := session_of, reg := ToolRegistry.empty, turns_left := 10, emit := fn (_ : String) => IO.pure unit, gate := Gate.auto, always := List.empty, retries := 1, sleep_ms := silent_sleep, on_usage := silent_usage, should_stop := silent_stop, inbox := silent_inbox, side_spend := silent_side_spend, stopped := false }
+    { session := session_of, reg := ToolRegistry.empty, turns_left := 10, emit := fn (_ : String) => IO.pure unit, gate := Gate.auto, always := List.empty, retries := 1, sleep_ms := silent_sleep, on_usage := silent_usage, should_stop := silent_stop, inbox := silent_inbox, side_spend := silent_side_spend, stopped := false, last_stop := Option.none }
 
 def store_at (dir : String) : StoreState :=
     let s : StoreState := { root := Path.path dir, dir := Path.path dir, id := "s-1" } in
@@ -119,3 +122,54 @@ def test_next_stops_for_a_done_plan : IO Bool := do {
     let _ <- exec_cmd "rm" ["-rf", temp_root];
     return (match r { Option.none => true, _ => false })
 }
+
+// ── the stop lines ─────────────────────────────────────────────────────
+
+/// The budget line is for EVERY mode: a manual-mode run that hits the cap
+/// used to stop after a tool result with no reason.
+/// A run whose budget is spent (a plain body: `{ x with .. }` is a
+/// plain-body form).
+def spent_run : RunState :=
+    let r : RunState := { run_of with turns_left := 0 } in
+    r
+
+#[test]
+def test_budget_note_fires_in_manual_mode : IO Bool := do {
+    let note <- AutoContinue.budget_note (state_of Mode.manual Option.none) spent_run;
+    return (match note {
+        Option.some s => String.contains s "turn budget spent",
+        Option.none => false,
+    })
+}
+
+#[test]
+def test_budget_note_is_quiet_with_budget_left : IO Bool := do {
+    let note <- AutoContinue.budget_note (state_of Mode.manual Option.none) run_of;
+    return (match note { Option.none => true, Option.some _ => false })
+}
+
+/// A truncated reply is a normal finish, but never a silent one.
+def cut_run : RunState :=
+    let r : RunState := { run_of with last_stop := Option.some StopReason.max_tokens } in
+    r
+
+def refused_run : RunState :=
+    let r : RunState := { run_of with last_stop := Option.some StopReason.refusal } in
+    r
+
+#[test]
+def test_finish_note_names_truncation_and_refusal : Bool :=
+    let cut : RunState := cut_run in
+    let refused : RunState := refused_run in
+    (match AutoContinue.finish_note cut { Option.some s => String.contains s "cut off", Option.none => false })
+        && (match AutoContinue.finish_note refused { Option.some s => String.contains s "refused", Option.none => false })
+        && (match AutoContinue.finish_note run_of { Option.none => true, Option.some _ => false })
+
+/// "Progress" is a tool call anywhere in the turn's delta.
+#[test]
+def test_delta_has_tool : Bool :=
+    let call : Content := Content.tool_use "c1" "read" (Json.make_object BTreeMap.empty) in
+    let text : Content := Content.text "hi" in
+    let with_tool : Message := { role := Role.assistant, content := [text, call] } in
+    let without : Message := { role := Role.assistant, content := [text] } in
+    Bool.and (AutoContinue.delta_has_tool [with_tool]) (Bool.not (AutoContinue.delta_has_tool [without]))

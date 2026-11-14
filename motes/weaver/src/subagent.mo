@@ -164,7 +164,7 @@ def run_task (cfg : ProviderConfig) (files : List InstrFile) (log : Option Logge
                 let st : RunState := { session := sess, reg := Subagent.read_registry, turns_left := n,
                     emit := child_emit log, gate := Gate.read_only, always := List.empty,
                     retries := 1, sleep_ms := silent_sleep, on_usage := child_usage log,
-                    should_stop := stop, inbox := silent_inbox, side_spend := silent_side_spend, stopped := false };
+                    should_stop := stop, inbox := silent_inbox, side_spend := silent_side_spend, stopped := false, last_stop := Option.none };
                 let _ <- Logs.info log (String.concat "ev=subagent_start turns=" (I64.to_string n));
                 let run_id <- Tasks.agent_id;
                 let started <- IO.current_time_nano;

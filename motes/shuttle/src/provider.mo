@@ -42,6 +42,11 @@ pub struct ProviderConfig {
     /// Ask the provider to expose its reasoning channel (Anthropic
     /// extended thinking). Off by default: it costs tokens and latency.
     thinking : Bool := false,
+    /// True when WEAVER chose `max_tokens` (its default or a clamp), false
+    /// when the user (`/settings`) or a provider's own limit did. A saved
+    /// session with a legacy weaver cap is raised on resume only when this
+    /// is true, so a deliberate small budget survives.
+    max_tokens_auto : Bool := true,
 }
 
 def wire_tag (w : Wire) : String :=
@@ -79,7 +84,8 @@ pub def ProviderConfig.serialize_json (c : ProviderConfig) : Json :=
             Pair.pair "api_key_env" (Json.make_str c.api_key_env),
             Pair.pair "max_tokens" (Json.make_num_int c.max_tokens),
             Pair.pair "wire" (Wire.serialize_json c.wire),
-            Pair.pair "thinking" (Json.make_bool c.thinking)]
+            Pair.pair "thinking" (Json.make_bool c.thinking),
+            Pair.pair "max_tokens_auto" (Json.make_bool c.max_tokens_auto)]
 
 def config_field (obj : BTreeMap String Json) (name : String) : Result String Json :=
     match Json.object_get name obj {
@@ -116,15 +122,27 @@ def config_wire_step (obj : BTreeMap String Json) (base_url : String) (model : S
 /// safe default for a cost-increasing flag).
 def config_thinking_step (obj : BTreeMap String Json) (base_url : String) (model : String) (api_key_env : String) (max_tokens : I64) (wire : Wire) : Result String ProviderConfig :=
     match Json.object_get "thinking" obj {
-        Option.none => config_mk base_url model api_key_env max_tokens wire false,
+        Option.none => config_auto_step obj base_url model api_key_env max_tokens wire false,
         Option.some tj => match Json.get_bool tj {
-            Result.err _ => config_mk base_url model api_key_env max_tokens wire false,
-            Result.ok b => config_mk base_url model api_key_env max_tokens wire b,
+            Result.err _ => config_auto_step obj base_url model api_key_env max_tokens wire false,
+            Result.ok b => config_auto_step obj base_url model api_key_env max_tokens wire b,
         },
     }
 
-def config_mk (base_url : String) (model : String) (api_key_env : String) (max_tokens : I64) (wire : Wire) (thinking : Bool) : Result String ProviderConfig :=
-    let c : ProviderConfig := { base_url := base_url, model := model, api_key_env := api_key_env, api_key := Option.none, max_tokens := max_tokens, wire := wire, thinking := thinking } in
+/// `max_tokens_auto` is OPTIONAL: a session saved before the field existed
+/// decodes as `true`, which is what lets the 2026-11-14 migration raise a
+/// legacy weaver cap. A junk value falls back the same way.
+def config_auto_step (obj : BTreeMap String Json) (base_url : String) (model : String) (api_key_env : String) (max_tokens : I64) (wire : Wire) (thinking : Bool) : Result String ProviderConfig :=
+    match Json.object_get "max_tokens_auto" obj {
+        Option.none => config_mk base_url model api_key_env max_tokens wire thinking true,
+        Option.some aj => match Json.get_bool aj {
+            Result.err _ => config_mk base_url model api_key_env max_tokens wire thinking true,
+            Result.ok b => config_mk base_url model api_key_env max_tokens wire thinking b,
+        },
+    }
+
+def config_mk (base_url : String) (model : String) (api_key_env : String) (max_tokens : I64) (wire : Wire) (thinking : Bool) (max_tokens_auto : Bool) : Result String ProviderConfig :=
+    let c : ProviderConfig := { base_url := base_url, model := model, api_key_env := api_key_env, api_key := Option.none, max_tokens := max_tokens, wire := wire, thinking := thinking, max_tokens_auto := max_tokens_auto } in
     Result.ok c
 
 def config_max_step (obj : BTreeMap String Json) (base_url : String) (model : String) (api_key_env : String) : Result String ProviderConfig :=

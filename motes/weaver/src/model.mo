@@ -58,6 +58,9 @@ pub type WeaverMsg {
     auto_continue (text : String),
     turn_failed (run : RunState) (e : WeaverError),
     command_result (effect : Effect),
+    /// Quit after a finished effect (the fatal path writes the exit
+    /// marker first, then posts this).
+    quit,
     command_failed (e : WeaverError),
     /// A page of older transcript lines came back from disk.
     page_loaded (page : TranscriptPage),

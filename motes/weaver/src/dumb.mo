@@ -21,8 +21,9 @@ use shuttle::session {Session}
 use weaver::commands {
     WeaverState, Effect, set_fatal, Commands.dispatch, Commands.autocompact,
     Commands.plan_after_turn, Commands.set_plan, Commands.turn_context, Commands.store_turn_plan, Commands.skill_turn,
-    Commands.context_used, Commands.context_percent,
+    Commands.context_used, Commands.context_percent, set_max_tokens,
 }
+use weaver::providers {Weaver.max_tokens_reclamp}
 use weaver::gate {Gate.weaver, ApproverConfig, Approver.linear, Approver.gate}
 use weaver::classify {AutoCtx, Classify.intent, Classify.with_plan}
 use weaver::ask {AskSpec, AskReply, AskSeam, AskTool.impl, AskTool.cancelled_reply, AskTool.line_prompt, AskTool.parse_line}
@@ -103,6 +104,9 @@ def dumb_loop (log : Option Logger) (read : Unit -> IO (Option String)) (write :
             IO.pure (Option.some text)
         },
         Option.none => do {
+            // A typed line is a human taking over: the no-progress streak
+            // is about AUTO turns.
+            let _ <- AutoContinue.reset_progress st;
             let _ <- write (prompt_line st);
             read unit
         },
@@ -277,20 +281,20 @@ def failed_turn (write : String -> IO Unit) (st : WeaverState) (e : WeaverError)
 def retry_failed_turn (write : String -> IO Unit) (st : WeaverState) : IO Step := do {
     let cont <- AutoContinue.next st st.run;
     match cont {
-        Option.none => IO.pure (mk_step st true),
+        Option.none => stop_with_note write st st.run,
         Option.some text => do {
             let n <- AutoContinue.record_failure st;
             match n {
                 Option.some k =>
                     if I64.gt k AutoContinue.max_failures
-                    then IO.pure (mk_step st true)
+                    then stop_with_note write st st.run
                     else do {
                         let _ <- write (String.concat "[auto] retrying after a transient failure ("
                             (String.concat (I64.to_string k) (String.concat "/"
                                 (String.concat (I64.to_string AutoContinue.max_failures) ")\n"))));
                         IO.pure (mk_continue st text)
                     },
-                Option.none => IO.pure (mk_step st true),
+                Option.none => stop_with_note write st st.run,
             }
         },
     }
@@ -319,7 +323,7 @@ def turn_ok (write : String -> IO Unit) (st : WeaverState) (before : I64) (run2 
     let _ <- write "\n\n";
     let _ <- print_diffs write before run2;
     let warn <- persist_turn st before run2;
-    finish_turn write st run2 warn
+    finish_turn write st before run2 warn
 }
 
 /// The hunk diff a write/edit tool result carries, when it has one.
@@ -371,25 +375,41 @@ def print_diffs (write : String -> IO Unit) (before : I64) (run2 : RunState) : I
 /// says so ONCE, instead of silently rewriting the same history block
 /// on every later turn. A clean turn asks `AutoContinue` whether the next
 /// turn should start on its own.
-def finish_turn (write : String -> IO Unit) (st : WeaverState) (run2 : RunState) (warn : Option String) : IO Step :=
+def finish_turn (write : String -> IO Unit) (st : WeaverState) (before : I64) (run2 : RunState) (warn : Option String) : IO Step :=
     match warn {
-        Option.none => finish_clean write st run2,
+        Option.none => finish_clean write st before run2,
         Option.some e => warn_turn write st run2 e,
     }
 
-def finish_clean (write : String -> IO Unit) (st : WeaverState) (run2 : RunState) : IO Step := do {
+def finish_clean (write : String -> IO Unit) (st : WeaverState) (before : I64) (run2 : RunState) : IO Step := do {
     let st4 : WeaverState := advance_run st run2;
-    let cont <- AutoContinue.next st4 run2;
-    match cont {
-        Option.none => stop_with_note write st4 run2,
-        Option.some text => IO.pure (mk_continue st4 text),
+    let delta : List Message := drop_msgs before run2.session.history;
+    // A truncated (or refused) reply is a normal finish, but never a
+    // silent one.
+    let _ <- write_note write (AutoContinue.finish_note run2);
+    let stalled <- AutoContinue.note_turn st4 run2 delta;
+    match stalled {
+        Option.some line => do {
+            let _ <- write (String.concat line "\n");
+            IO.pure (mk_step st4 true)
+        },
+        Option.none => do {
+            let cont <- AutoContinue.next st4 run2;
+            match cont {
+                Option.none => stop_with_note write st4 run2,
+                Option.some text => IO.pure (mk_continue st4 text),
+            }
+        },
     }
 }
 
-/// The turn chain ended: say so when the only reason was the turn budget.
+/// The turn chain ended: say why -- the turn budget (every mode) and a
+/// linked plan with no next action, the two silent stops this closes.
 def stop_with_note (write : String -> IO Unit) (st : WeaverState) (run2 : RunState) : IO Step := do {
-    let note <- AutoContinue.budget_note st run2;
-    let _ <- write_note write note;
+    let budget <- AutoContinue.budget_note st run2;
+    let _ <- write_note write budget;
+    let stall <- AutoContinue.stall_note st;
+    let _ <- write_note write stall;
     IO.pure (mk_step st true)
 }
 
@@ -452,8 +472,30 @@ def drive (read : Unit -> IO (Option String)) (write : String -> IO Unit) (st : 
 def drive_ready (read : Unit -> IO (Option String)) (write : String -> IO Unit) (st : WeaverState) (text : String) : ResultT WeaverError IO RunState :=
     ResultT.mk (do {
         let spend <- Ref.new usage_zero;
-        ResultT.run (drive_spending read write st text spend)
+        let first <- ResultT.run (drive_spending read write st text spend);
+        match first {
+            Result.ok run2 => IO.pure (Result.ok run2),
+            Result.err e => retry_clamped read write st text spend e,
+        }
     })
+
+/// A provider 400 that names the model's max_tokens limit lowers the
+/// session's budget and retries the turn ONCE. The failed attempt's state
+/// is gone (`Agent.exec` returns the error alone), so the retry starts
+/// from the pre-turn state; the user message was never persisted.
+def retry_clamped (read : Unit -> IO (Option String)) (write : String -> IO Unit) (st : WeaverState) (text : String) (spend : Ref Usage) (e : WeaverError) : IO (Result WeaverError RunState) := do {
+    let msg : String := WeaverError.show e;
+    match Weaver.max_tokens_reclamp st.provider st.run.session.config msg {
+        Option.none => IO.pure (Result.err e),
+        Option.some pr => match pr {
+            Pair.pair n note => do {
+                let _ <- write (String.concat note "\n");
+                let st2 : WeaverState := set_max_tokens st n;
+                ResultT.run (drive_spending read write st2 text spend)
+            },
+        },
+    }
+}
 
 // ── the `ask` tool's line seam ──────────────────────────────────────────
 

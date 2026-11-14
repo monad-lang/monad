@@ -35,7 +35,7 @@ use shuttle::tool {ToolSpec}
 use shuttle::gate {Capability}
 use weaver::policy {Mode, Mode.show, Mode.parse, Mode.approve_plan, AutoDanger, AutoDanger.parse, AutoDanger.show, Verdict}
 use weaver::gate {cap_name}
-use weaver::providers {Weaver.preset, Weaver.config_for, Weaver.preferred_model, Weaver.model_for, Weaver.provider_of, Weaver.clamp_cfg}
+use weaver::providers {Weaver.preset, Weaver.config_for, Weaver.preferred_model, Weaver.model_for, Weaver.provider_of, Weaver.clamp_cfg, Weaver.migrate_max_tokens, Weaver.max_tokens_reclamp}
 use weaver::catalog {Catalog.fetch, Catalog.lookup, Catalog.remember, Catalog.render, Catalog.note}
 use weaver::compact {Compact.threshold, Compact.should_compact, Compact.estimate, Compact.compact, Compact.Outcome}
 use weaver::error {WeaverError, WeaverError.of_shuttle}
@@ -154,6 +154,13 @@ pub struct WeaverState {
     /// every full `WeaverState` literal (an omitted field has filled
     /// garbage at run time).
     mounted : Option (Ref (List MountedCommand)) := Option.none,
+    /// Auto mode's no-progress streak: (consecutive turns with no tool
+    /// call and no plan change, the plan fingerprint at the last turn).
+    /// `auto_continue.mo` stops the chain at `max_no_progress`.
+    auto_progress : Option (Ref (Pair I64 String)) := Option.none,
+    /// Where the TUI writes a fatal error so `main` can exit 1 after the
+    /// app closes (the app's own state is gone by then).
+    fatal_out : Option (Ref (Option WeaverError)) := Option.none,
 }
 
 /// What a command did to the transcript: ordinary output appends,
@@ -1245,7 +1252,10 @@ def store_at_parent (p : Path) : Option StoreState :=
 def rekey_config (st : WeaverState) (cfg : ProviderConfig) : ProviderConfig :=
     let prov : String := Weaver.provider_of st.provider cfg in
     let keyed : ProviderConfig := { cfg with api_key := Map.lookup prov st.keys } in
-    clamp_for prov st.context_window keyed
+    let clamped : ProviderConfig := clamp_for prov st.context_window keyed in
+    match Weaver.migrate_max_tokens prov clamped {
+        Pair.pair migrated _ => migrated,
+    }
 
 /// `/clear`: drop the transcript and the accounting, keep the config
 /// and the tools. The turn budget resets to the full amount. With a
@@ -1642,9 +1652,13 @@ def permissions_revoke (arg : String) (st : WeaverState) : IO (Result WeaverErro
 pub def permissions_text (st : WeaverState) (gs : List PermGrant) : String :=
     Permissions.render (Place.cwd_of st.place) (Mode.show st.mode) gs
 
-def set_max_tokens (st : WeaverState) (n : I64) : WeaverState :=
+/// `/settings max_tokens`: the user chose this value, so it is no longer
+/// weaver's own default (`max_tokens_auto := false`) and the resume
+/// migration must not raise it.
+pub def set_max_tokens (st : WeaverState) (n : I64) : WeaverState :=
     let cfg : ProviderConfig := st.run.session.config in
-    let cfg2 : ProviderConfig := clamp_for st.provider st.context_window { cfg with max_tokens := n } in
+    let chosen : ProviderConfig := { cfg with max_tokens := n, max_tokens_auto := false } in
+    let cfg2 : ProviderConfig := clamp_for st.provider st.context_window chosen in
     let cur : Session := st.run.session in
     let sess : Session := { cur with config := cfg2 } in
     let base : RunState := st.run in
@@ -1669,7 +1683,7 @@ def set_compact_at (st : WeaverState) (n : I64) : WeaverState :=
 /// chose.
 def inherit_thinking (st : WeaverState) (cfg : ProviderConfig) : ProviderConfig :=
     let cur : ProviderConfig := st.run.session.config in
-    let cfg2 : ProviderConfig := { cfg with thinking := cur.thinking, max_tokens := cur.max_tokens } in
+    let cfg2 : ProviderConfig := { cfg with thinking := cur.thinking, max_tokens := cur.max_tokens, max_tokens_auto := cur.max_tokens_auto } in
     cfg2
 
 def cmd_quit (arg : String) (st : WeaverState) : IO (Result WeaverError Effect) :=

@@ -162,14 +162,27 @@ pub type StopReason {
     other (s : String),
 }
 
-pub def StopReason.serialize_json (r : StopReason) : Json :=
+/// The wire tag: what `serialize_json` writes and `stop_reason_of_tag`
+/// reads. Kept as one function so the outcome log and the wire agree.
+pub def StopReason.tag (r : StopReason) : String :=
     match r {
-        StopReason.end_turn => Json.make_str "end_turn",
-        StopReason.tool_use_stop => Json.make_str "tool_use_stop",
-        StopReason.max_tokens => Json.make_str "max_tokens",
-        StopReason.refusal => Json.make_str "refusal",
-        StopReason.other s => Json.make_str s,
+        StopReason.end_turn => "end_turn",
+        StopReason.tool_use_stop => "tool_use_stop",
+        StopReason.max_tokens => "max_tokens",
+        StopReason.refusal => "refusal",
+        StopReason.other s => s,
     }
+
+pub def StopReason.serialize_json (r : StopReason) : Json :=
+    Json.make_str (StopReason.tag r)
+
+/// "The reply was cut off at the output token limit" -- the run's outcome
+/// carries this so the UI can say so instead of ending silently.
+pub def StopReason.is_truncated (r : StopReason) : Bool :=
+    match r { StopReason.max_tokens => true, _ => false }
+
+pub def StopReason.is_refusal (r : StopReason) : Bool :=
+    match r { StopReason.refusal => true, _ => false }
 
 def stop_reason_of_tag (s : String) : StopReason :=
     if s == "end_turn" then StopReason.end_turn

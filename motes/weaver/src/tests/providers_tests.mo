@@ -4,6 +4,7 @@
 use weaver::providers {
     Weaver.preferred_model, Weaver.config_for, Weaver.model_for, Weaver.provider_of,
     Weaver.default_max_tokens, Weaver.default_max_turns, Weaver.default_window, Weaver.output_cap, Weaver.clamp_cfg,
+    Weaver.max_tokens_limit_of, Weaver.max_tokens_reclamp, Weaver.migrate_max_tokens, Weaver.mock_config,
 }
 use weaver::catalog {Catalog.contains, Catalog.note, Catalog.render, Catalog.max_shown}
 use shuttle::provider {ProviderConfig, Wire}
@@ -159,9 +160,9 @@ def test_default_window_is_provider_aware : Bool :=
 
 #[test]
 def test_output_caps_are_per_provider : Bool :=
-    (match Weaver.output_cap "anthropic" "claude-opus-5" 200000 { Option.some n => n == 8192i64, Option.none => false })
-        && (match Weaver.output_cap "openrouter" "x/y" 128000 { Option.some n => n == 8192i64, Option.none => false })
-        && (match Weaver.output_cap "mistral" "m" 128000 { Option.some n => n == 8192i64, Option.none => false })
+    (match Weaver.output_cap "anthropic" "claude-opus-5" 200000 { Option.some n => n == 16384i64, Option.none => false })
+        && (match Weaver.output_cap "openrouter" "x/y" 128000 { Option.some n => n == 16384i64, Option.none => false })
+        && (match Weaver.output_cap "mistral" "m" 128000 { Option.some n => n == 16384i64, Option.none => false })
         && (match Weaver.output_cap "ollama" "m" 32768 { Option.none => true, Option.some _ => false })
         && (match Weaver.output_cap "mock" "m" 128000 { Option.none => true, Option.some _ => false })
 
@@ -177,7 +178,7 @@ def test_clamp_lowers_but_never_raises : Bool :=
             match a {
                 Pair.pair ca na => match b {
                     Pair.pair cb nb =>
-                        Bool.and (ca.max_tokens == 8192i64)
+                        Bool.and (ca.max_tokens == 16384i64)
                             (Bool.and (cb.max_tokens == 1024i64)
                                 (Bool.and (match na { Option.some s => String.contains s "clamped", Option.none => false })
                                     (match nb { Option.none => true, Option.some _ => false }))),
@@ -195,3 +196,50 @@ def test_a_tiny_mock_budget_is_never_raised : Bool :=
                 Pair.pair c n => Bool.and (c.max_tokens == 8i64) (match n { Option.none => true, Option.some _ => false }),
             },
     }
+
+// ── the provider's named output limit ───────────────────────────────────
+
+/// Both live 400 shapes name the limit; an unrelated 400 does not.
+#[test]
+def test_max_tokens_limit_names_the_provider_ceiling : Bool :=
+    (match Weaver.max_tokens_limit_of "anthropic: HTTP 400: max_tokens: 8192 > 4096, which is the maximum allowed number of output tokens for claude-x" {
+        Option.some n => n == 4096,
+        Option.none => false,
+    })
+        && (match Weaver.max_tokens_limit_of "openai: HTTP 400: max_tokens (409600) exceeds model's maximum" {
+            Option.some n => n == 8192,
+            Option.none => false,
+        })
+        && (match Weaver.max_tokens_limit_of "openai: HTTP 400: bad request" {
+            Option.none => true,
+            Option.some _ => false,
+        })
+
+/// A re-clamp only ever LOWERS the budget, and only when the body names a
+/// limit below it.
+#[test]
+def test_reclamp_lowers_only : Bool :=
+    let cfg : ProviderConfig := Weaver.mock_config "m" in
+    let big : ProviderConfig := { cfg with max_tokens := 16384 } in
+    let small : ProviderConfig := { cfg with max_tokens := 4096 } in
+    (match Weaver.max_tokens_reclamp "openrouter" big "max_tokens (409600) exceeds model's maximum" {
+        Option.some pr => match pr { Pair.pair n _ => n == 8192 },
+        Option.none => false,
+    })
+        && (match Weaver.max_tokens_reclamp "openrouter" small "max_tokens (409600) exceeds model's maximum" {
+            Option.none => true,
+            Option.some _ => false,
+        })
+        && (match Weaver.max_tokens_reclamp "openrouter" big "openai: HTTP 400: bad request" {
+            Option.none => true,
+            Option.some _ => false,
+        })
+
+/// A resumed session's weaver-chosen legacy cap is raised; a user's is not.
+#[test]
+def test_migrate_raises_only_weavers_legacy_cap : Bool :=
+    let base : ProviderConfig := Weaver.mock_config "m" in
+    let auto : ProviderConfig := { base with max_tokens := 8192, max_tokens_auto := true } in
+    let chosen : ProviderConfig := { base with max_tokens := 8192, max_tokens_auto := false } in
+    (match Weaver.migrate_max_tokens "openrouter" auto { Pair.pair c _ => I64.gt c.max_tokens 8192 })
+        && (match Weaver.migrate_max_tokens "openrouter" chosen { Pair.pair c _ => I64.beq c.max_tokens 8192 })

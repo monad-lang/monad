@@ -52,13 +52,24 @@ pub def Anthropic.parse_messages (text : String) : Result String MessagesRespons
         Result.ok j => MessagesResponse.deserialize_json j,
     }
 
+/// A non-200 response as the error text. The one-shot decoder checked the
+/// status from the start; the STREAMING path discarded it (`Pair.pair acc _`),
+/// so a 400/401/413/429 became an empty 200-style turn with no error --
+/// the silent-stop failure measured 2026-11-14.
+pub def anthropic_http_error (r : Response) : Option String :=
+    if U16.beq r.status Status.ok
+    then Option.none
+    else
+        Option.some (String.concat "anthropic: HTTP "
+            (String.concat (U16.to_string r.status)
+                (String.concat ": " (String.from_list (Body.to_bytes_pure r.body)))))
+
 def decode_messages_response (r : Response) : Result String MessagesResponse :=
     let text := String.from_list (Body.to_bytes_pure r.body) in
-    if U16.beq r.status Status.ok then Anthropic.parse_messages text
-    else
-        Result.err (String.concat "anthropic: HTTP "
-            (String.concat (U16.to_string r.status)
-                (String.concat ": " text)))
+    match anthropic_http_error r {
+        Option.some e => Result.err e,
+        Option.none => Anthropic.parse_messages text,
+    }
 
 def anthropic_complete_io (u : Uri) (headers : Headers) (body_str : String) : IO (Result String MessagesResponse) := do {
     let resp <- Client.post_timeout u headers (Body.from_text body_str) Client.default_timeout_ms;
@@ -652,10 +663,14 @@ def anthropic_stream_io (u : Uri) (headers : Headers) (body_str : String) (halt_
         Result.err e => Result.err e,
         Result.ok pr =>
             match pr {
-                Pair.pair acc _ =>
-                    match anthropic_bad_input acc.blocks {
+                Pair.pair acc resp =>
+                    match anthropic_http_error resp {
                         Option.some e => Result.err e,
-                        Option.none => Result.ok (anthropic_assemble acc)
+                        Option.none =>
+                            match anthropic_bad_input acc.blocks {
+                                Option.some e => Result.err e,
+                                Option.none => Result.ok (anthropic_assemble acc)
+                            }
                     }
             }
     })

@@ -281,18 +281,59 @@ def agent_send_run (s : RunState) : ResultT String IO (Pair RunState Turn) := do
         1
         2000
         s.emit;
-    let base : Session := s.session;
-    let spent2 : Usage := usage_add s.session.spent turn.usage;
-    let session2 : Session := { base with turns := s.session.turns + 1, spent := spent2 };
-    let s2 : RunState := { s with session := session2, turns_left := s.turns_left - 1 };
-    // The usage hook is IO, so it runs inside the ResultT wrapper's own
-    // do block (an `IO` bind in the ResultT do would not typecheck, and
-    // `ResultT.lift` in a do block is the recorded compiled-backend trap).
-    ResultT.mk (do {
-        let _ <- s.on_usage spent2;
-        return (Result.ok (Pair.pair s2 turn))
-    })
+    // A reply with nothing in it is not a normal finish: it is the shape
+    // a proxy's HTML error page, a 200 with an empty stream, or a mangled
+    // tool-use stop takes. Reject it BEFORE the turn is counted or written,
+    // so the caller reports it and (in auto mode) the failure retry can
+    // act; `max_tokens`/`refusal` are exempt -- they carry their own line.
+    if Loop.turn_reply_bad turn
+    then ResultT.mk (return (Result.err (Loop.turn_reply_error turn)))
+    else do {
+        let base : Session := s.session;
+        let spent2 : Usage := usage_add s.session.spent turn.usage;
+        let session2 : Session := { base with turns := s.session.turns + 1, spent := spent2 };
+        let s2 : RunState := { s with session := session2, turns_left := s.turns_left - 1, last_stop := Option.some turn.stop };
+        // The usage hook is IO, so it runs inside the ResultT wrapper's own
+        // do block (an `IO` bind in the ResultT do would not typecheck, and
+        // `ResultT.lift` in a do block is the recorded compiled-backend trap).
+        ResultT.mk (do {
+            let _ <- s.on_usage spent2;
+            return (Result.ok (Pair.pair s2 turn))
+        })
+    }
 }
+
+/// Does any content block ask for a tool?
+#[partial]
+def content_has_tool_use (cs : List Content) : Bool :=
+    match cs {
+        List.empty => false,
+        List.cons c rest => match c {
+            Content.tool_use _ _ _ => true,
+            _ => content_has_tool_use rest,
+        },
+    }
+
+/// A reply that cannot be a real end of turn. `max_tokens` and `refusal`
+/// are exempt: they are real outcomes the UI reports in their own words,
+/// even when the content list is empty.
+pub def Loop.turn_reply_bad (turn : Turn) : Bool :=
+    if Bool.or (StopReason.is_truncated turn.stop) (StopReason.is_refusal turn.stop)
+    then false
+    else if List.is_empty turn.message.content
+    then true
+    else match turn.stop {
+        StopReason.tool_use_stop => Bool.not (content_has_tool_use turn.message.content),
+        _ => false,
+    }
+
+/// The error text for `turn_reply_bad`, tagged with the stop reason so the
+/// log says what the wire claimed.
+pub def Loop.turn_reply_error (turn : Turn) : String :=
+    if List.is_empty turn.message.content
+    then String.concat "empty assistant reply (stop: " (String.concat (StopReason.tag turn.stop) ")")
+    else String.concat "the reply stopped for tool use with no tool_use block (stop: "
+        (String.concat (StopReason.tag turn.stop) ")")
 
 /// Idle -> Idle: the send, or `none` when the stop seam interrupted it
 /// mid-stream (the run is then marked stopped). The loop's own path:
@@ -722,7 +763,7 @@ pub def Loop.iterate : Agent AgentIdle AgentDone Unit :=
 /// that wants no gate -- shuttle's own CLI and tests).
 pub def Loop.initial_state (cfg : ProviderConfig) (reg : ToolRegistry) (system : String) (history : List Message) (turns_left : I64) (emit : String -> IO Unit) (gate : Gate) : RunState :=
     let session : Session := { config := cfg, system_prompt := system, tools := ToolRegistry.specs reg, history := history, turns := 0, spent := usage_zero } in
-    let st : RunState := { session := session, reg := reg, turns_left := turns_left, emit := emit, gate := gate, always := List.empty, retries := 1, sleep_ms := silent_sleep, on_usage := silent_usage, should_stop := silent_stop, inbox := silent_inbox, side_spend := silent_side_spend, stopped := false } in
+    let st : RunState := { session := session, reg := reg, turns_left := turns_left, emit := emit, gate := gate, always := List.empty, retries := 1, sleep_ms := silent_sleep, on_usage := silent_usage, should_stop := silent_stop, inbox := silent_inbox, side_spend := silent_side_spend, stopped := false, last_stop := Option.none } in
     st
 
 def runstate_of_pair (p : Pair RunState Unit) : RunState :=

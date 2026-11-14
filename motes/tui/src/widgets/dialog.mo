@@ -370,15 +370,77 @@ def edit_row (style : TextStyle) (prefix : String) (st : InputState) : SizedWidg
         sized (LayoutSize.fill 1) (with_style style (text_input st)),
     ])
 
+/// The non-editable part of an option row: multi box, selection marker,
+/// the option's NUMBER (a numbered list, matching the line UI's numbered
+/// prompt), label, `: value` and hint.
+def option_text (d : DialogModel) (i : I64) (o : DialogOption) (suffix : String) : String :=
+    let marker : String := if i == d.selected then "> " else "  " in
+    let checked : String := if d.multi then (if has_index i d.chosen then "[x] " else "[ ] ") else "" in
+    let number : String := String.concat (I64.to_string (i + 1)) ". " in
+    String.concat checked (String.concat marker (String.concat number
+        (String.concat (String.concat o.label (option_value_of o.value)) suffix)))
+
+def option_suffix (o : DialogOption) : String :=
+    if String.is_empty o.hint then "" else String.concat "  (" (String.concat o.hint ")")
+
+/// The editable row's prefix: multi box, marker, number, label, `": "`.
+def edit_prefix (d : DialogModel) (i : I64) (o : DialogOption) : String :=
+    let marker : String := if i == d.selected then "> " else "  " in
+    let checked : String := if d.multi then (if has_index i d.chosen then "[x] " else "[ ] ") else "" in
+    let number : String := String.concat (I64.to_string (i + 1)) ". " in
+    String.concat checked (String.concat marker (String.concat number (String.concat o.label ": ")))
+
 def option_row (d : DialogModel) (i : I64) (o : DialogOption) (width : I64) : List SizedWidget :=
     let here : Bool := i == d.selected in
-    let marker : String := if here then "> " else "  " in
-    let suffix : String := if String.is_empty o.hint then "" else String.concat "  (" (String.concat o.hint ")") in
     let style : TextStyle := if here then { style_default with reverse := true } else style_default in
-    let checked : String := if d.multi then (if has_index i d.chosen then "[x] " else "[ ] ") else "" in
     if Bool.and (field_open d i) (has_value o.value)
-    then [edit_row style (String.concat checked (String.concat marker (String.concat o.label ": "))) d.field_input]
-    else Dialog.text_rows style width (String.concat checked (String.concat marker (String.concat (String.concat o.label (option_value_of o.value)) suffix)))
+    then [edit_row style (edit_prefix d i o) d.field_input]
+    else Dialog.text_rows style width (option_text d i o (option_suffix o))
+
+/// How many wrapped rows one option occupies at `width`.
+pub def Dialog.option_row_count (d : DialogModel) (width : I64) (i : I64) : I64 :=
+    match Dialog.option_at d i {
+        Option.none => 0,
+        Option.some o =>
+            if Bool.and (field_open d i) (has_value o.value)
+            then 1
+            else List.length (Text.wrap width (option_text d i o (option_suffix o))),
+    }
+
+#[partial]
+def rows_between (d : DialogModel) (width : I64) (i : I64) (stop : I64) (acc : I64) : I64 :=
+    if Bool.not (I64.lt i stop) then acc
+    else rows_between d width (i + 1) stop (acc + Dialog.option_row_count d width i)
+
+/// The first option row that keeps `selected` visible in a `room`-row
+/// window: walk back from the selection while whole options still fit.
+/// The option area scrolls in ROWS, not options, so a wrapped option does
+/// not push the footer off the frame.
+#[partial]
+def window_back (d : DialogModel) (width : I64) (room : I64) (i : I64) (acc : I64) : I64 :=
+    if i < 1 then 0
+    else
+        let prev_rows : I64 := Dialog.option_row_count d width (i - 1) in
+        if I64.lt room (acc + prev_rows) then i
+        else window_back d width room (i - 1) (acc + prev_rows)
+
+pub def Dialog.window_start_rows (d : DialogModel) (width : I64) (room : I64) : I64 :=
+    let own : I64 := Dialog.option_row_count d width d.selected in
+    window_back d width room d.selected own
+
+/// Every row the dialog needs, counted with WRAPPING: title, subtitle,
+/// body, each option's wrapped rows, the blanks, the note and the footer.
+/// `frame_height` grows to this so all options show when the screen has
+/// room (the old count assumed one row per option and cut the tail).
+pub def Dialog.total_rows_rendered (d : DialogModel) (width : I64) (body_count : I64) : I64 :=
+    let title_rows : I64 := List.length (Text.wrap width d.title) in
+    let sub_rows : I64 := List.length (Text.wrap width d.subtitle) in
+    let option_rows : I64 := rows_between d width 0 (Dialog.option_count d) 0 in
+    let note_part : I64 :=
+        if d.notes
+        then if d.editing then 1 else List.length (Text.wrap width (note_text d))
+        else 0 in
+    title_rows + sub_rows + body_count + option_rows + 4 + note_part
 
 #[partial]
 def option_rows_window (d : DialogModel) (i : I64) (stop : I64) (width : I64) : List SizedWidget :=
@@ -421,14 +483,15 @@ pub def Dialog.rows (width : I64) (height : I64) (d : DialogModel) (body : List 
     let room : I64 := if budget - fixed < 1 then 1 else budget - fixed in
     let n : I64 := Dialog.option_count d in
     let window : I64 := if n < 1 then 0 else if n < room then n else room in
-    let start : I64 := Dialog.window_start d.selected window n in
+    let start : I64 :=
+        if window < n then Dialog.window_start_rows d width room else 0 in
     let parts : List (List SizedWidget) := [
         Dialog.text_rows bold width d.title,
         Dialog.text_rows dim width d.subtitle,
         blank,
         take body_budget (drop d.scroll body),
         blank,
-        option_rows_window d start (start + window) width,
+        take room (option_rows_window d start n width),
         blank,
         if d.notes then note_rows d width else List.empty,
         Dialog.text_rows dim width (Dialog.footer_line d
@@ -478,7 +541,7 @@ pub def Dialog.paint (border : TextStyle) (body : I64 -> DialogModel -> List Siz
             let frame_w : I64 := Dialog.frame_width_for d cols;
             let width : I64 := Dialog.content_width frame_w;
             let body_all : List SizedWidget := body width d;
-            let height : I64 := Dialog.frame_height_for d rows (Dialog.total_rows d (List.length body_all));
+            let height : I64 := Dialog.frame_height_for d rows (Dialog.total_rows_rendered d width (List.length body_all));
             let d2 : DialogModel := Dialog.clamp_scroll height (List.length body_all) d;
             let rect : Rect := center_rect_in (mk_rect 0 0 cols rows) frame_w height;
             let base : Option Screen := same_screen prev rows cols;

@@ -14,6 +14,7 @@ use shuttle::presets {
 }
 use std::map {Map, BTreeMap}
 use weaver::catalog {Catalog.contains}
+use parsec::number {parse_i64}
 
 /// The scripted wire (`shuttle::wire::mock`) as a preset: offline runs
 /// and the e2e tests. `base_url` is decorative -- the mock wire reads
@@ -129,9 +130,23 @@ def with_key (keys : BTreeMap String String) (provider : String) (cfg : Provider
 /// provider FLOORS, not per-model maxima: hosted vendors 400 on a request
 /// above the model's limit (and the loop does not retry a 4xx), so a value
 /// every current model accepts is safer than a bigger one that fails.
+/// 16384, not 8192: a reasoning model spends output tokens before it
+/// writes anything, and 8192 cut a plan-writing turn off at the preamble
+/// (measured 2026-11-14 -- seven turns, each exactly 8192 output tokens,
+/// no tool call). `max_tokens_reclamp` handles a model with a lower limit.
 /// `none` means no separate cap (Ollama's window is the limit; the mock
 /// fixtures set tiny budgets and must never be raised).
 pub def Weaver.output_cap (provider : String) (model : String) (window : I64) : Option I64 :=
+    if provider == "anthropic" then Option.some 16384
+    else if provider == "openrouter" then Option.some 16384
+    else if provider == "mistral" then Option.some 16384
+    else Option.none
+
+/// The caps weaver clamped to before 2026-11-14. A saved session that
+/// carries one of these was almost certainly weaver's own default (the
+/// config records `max_tokens_auto` for certainty), so it is raised on
+/// resume instead of pinning the old ceiling.
+def Weaver.legacy_output_cap (provider : String) : Option I64 :=
     if provider == "anthropic" then Option.some 8192
     else if provider == "openrouter" then Option.some 8192
     else if provider == "mistral" then Option.some 8192
@@ -161,4 +176,95 @@ pub def Weaver.default_tokens_for (provider : String) (model : String) : I64 :=
     match Weaver.output_cap provider model 0 {
         Option.none => Weaver.default_max_tokens,
         Option.some cap => if I64.lt cap Weaver.default_max_tokens then cap else Weaver.default_max_tokens,
+    }
+
+// ── the output limit a provider names in a 400 ─────────────────────────
+
+#[partial]
+def digit_at (s : String) (i : I64) : Bool :=
+    let c : String := String.slice s i 1 in
+    Bool.and (Bool.not (String.is_empty c)) (String.contains "0123456789" c)
+
+#[partial]
+def take_digits (s : String) (i : I64) (acc : String) : Pair I64 String :=
+    if digit_at s i
+    then take_digits s (i + 1) (String.concat acc (String.slice s i 1))
+    else Pair.pair i acc
+
+/// The first integer at or after byte `from`.
+#[partial]
+def int_from (s : String) (from : I64) : Option I64 :=
+    if I64.lt (String.length s) (from + 1) then Option.none
+    else if digit_at s from
+    then match take_digits s from "" {
+        Pair.pair _ digits => parse_i64 digits,
+    }
+    else int_from s (from + 1)
+
+def int_after (marker : String) (s : String) : Option I64 :=
+    match String.index_of s marker {
+        Option.none => Option.none,
+        Option.some i => int_from s (i + String.length marker),
+    }
+
+def bound_limit (n : I64) : Option I64 :=
+    if Bool.and (I64.gt n 15) (I64.lt n 1000001) then Option.some n else Option.none
+
+/// The output-token limit named by a provider's 400 body, when it names
+/// one. Two live shapes (2026-11-11/14):
+///   `max_tokens: 8192 > 4096, which is the maximum allowed number of ...`
+///   `max_tokens (409600) exceeds model's maximum`
+/// The second carried no number; 8192 (the old floor) is the conservative
+/// answer there. Anything else is `none` -- this only ever LOWERS a budget.
+pub def Weaver.max_tokens_limit_of (message : String) : Option I64 :=
+    if Bool.not (String.contains message "max_tokens") then Option.none
+    else match int_after "> " message {
+        Option.some n => bound_limit n,
+        Option.none => match int_after "maximum (" message {
+            Option.some n => bound_limit n,
+            Option.none => match int_after "at most " message {
+                Option.some n => bound_limit n,
+                Option.none => match int_after "maximum is " message {
+                    Option.some n => bound_limit n,
+                    Option.none =>
+                        if String.contains message "maximum" then Option.some 8192 else Option.none,
+                },
+            },
+        },
+    }
+
+/// A one-shot re-clamp: when a provider error names a limit below the
+/// session's budget, the new budget and the note to print. Never raises.
+pub def Weaver.max_tokens_reclamp (provider : String) (cfg : ProviderConfig) (msg : String) : Option (Pair I64 String) :=
+    match Weaver.max_tokens_limit_of msg {
+        Option.none => Option.none,
+        Option.some n =>
+            if Bool.and (I64.lt n cfg.max_tokens) (I64.gt n 15)
+            then
+                let note : String := String.concat_list ["output budget lowered to ",
+                    I64.to_string n, " (the provider's limit); retrying the turn once"] in
+                Option.some (Pair.pair n note)
+            else Option.none,
+    }
+
+/// A resumed session's saved budget: raise weaver's own LEGACY cap to
+/// today's default; leave anything a user or a provider limit chose
+/// (`max_tokens_auto = false`).
+pub def Weaver.migrate_max_tokens (provider : String) (cfg : ProviderConfig) : Pair ProviderConfig (Option String) :=
+    match Weaver.legacy_output_cap provider {
+        Option.none => Pair.pair cfg Option.none,
+        Option.some legacy =>
+            if Bool.and cfg.max_tokens_auto (I64.beq cfg.max_tokens legacy)
+            then
+                let next : I64 := Weaver.default_tokens_for provider cfg.model in
+                if I64.gt next legacy
+                then
+                    let updated : ProviderConfig := { cfg with max_tokens := next } in
+                    let note : String := String.concat "max_tokens "
+                        (String.concat (I64.to_string legacy)
+                            (String.concat " raised to "
+                                (String.concat (I64.to_string next) " (weaver's newer default)"))) in
+                    Pair.pair updated (Option.some note)
+                else Pair.pair cfg Option.none
+            else Pair.pair cfg Option.none,
     }

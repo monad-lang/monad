@@ -51,7 +51,7 @@ use weaver::theme {theme_split_lines}
 use weaver::dumb {Dumb.run, Dumb.poll_sleep}
 use weaver::policy {Mode, Mode.resolve, Mode.is_auto, AutoDanger, AutoDanger.parse, Verdict}
 use weaver::providers {
-    Weaver.preset, Weaver.provider_of, Weaver.default_max_tokens, Weaver.default_tokens_for, Weaver.clamp_cfg,
+    Weaver.preset, Weaver.provider_of, Weaver.default_max_tokens, Weaver.default_tokens_for, Weaver.clamp_cfg, Weaver.migrate_max_tokens,
     Weaver.default_max_turns, Weaver.default_window,
 }
 use std::map {BTreeMap}
@@ -218,8 +218,10 @@ def effective_cfg (s : Settings) (cfg : ProviderConfig) : ProviderConfig :=
     } in
     match s.max_tokens {
         // The DEFAULT is provider-aware, so it never trips the clamp note.
-        Option.none => { cfg1 with max_tokens := Weaver.default_tokens_for (Weaver.provider_of "" cfg1) cfg1.model },
-        Option.some n => { cfg1 with max_tokens := n },
+        // It is weaver's choice (`max_tokens_auto := true`), so a later
+        // default raise migrates it; a settings value is the user's.
+        Option.none => { cfg1 with max_tokens := Weaver.default_tokens_for (Weaver.provider_of "" cfg1) cfg1.model, max_tokens_auto := true },
+        Option.some n => { cfg1 with max_tokens := n, max_tokens_auto := false },
     }
 
 def resolve_provider (s : Settings) (flag : String) : String :=
@@ -425,9 +427,14 @@ def rekey_loaded (p : Plan) (s : Settings) (sess : Session) : Pair Session (Opti
     let cfg0 : ProviderConfig := sess.config in
     let prov : String := Weaver.provider_of p.provider cfg0 in
     let cfg1 : ProviderConfig := { cfg0 with api_key := Map.lookup prov s.api_keys } in
-    let cfg2 : ProviderConfig := match Weaver.clamp_cfg prov cfg1 p.context_window { Pair.pair c _ => c } in
+    let clamped : ProviderConfig := match Weaver.clamp_cfg prov cfg1 p.context_window { Pair.pair c _ => c } in
+    // A resumed session's saved budget: raise weaver's own old cap (8192)
+    // to today's default; leave a value the user or a provider chose.
+    let migrated : Pair ProviderConfig (Option String) := Weaver.migrate_max_tokens prov clamped in
+    let cfg2 : ProviderConfig := match migrated { Pair.pair c _ => c } in
+    let note : Option String := match migrated { Pair.pair _ n => n } in
     let sess2 : Session := { sess with config := cfg2, system_prompt := Skills.with_index (Prompt.system p.instructions) p.skills } in
-    Pair.pair sess2 Option.none
+    Pair.pair sess2 note
 
 /// The initial interactive state: the opened session, the remaining
 /// budget, the settings' mode (manual is the safe default; `/mode`
@@ -435,9 +442,9 @@ def rekey_loaded (p : Plan) (s : Settings) (sess : Session) : Pair Session (Opti
 /// `Gate.auto` here is never consulted.
 def initial_state (p : Plan) (reg : ToolRegistry) (s : Settings) (colors : Bool) (store : Option StoreState) (session : Session) (grants : Option (Ref (List PermGrant))) (place : Option SessionPlace) : WeaverState :=
     let left : I64 := if p.max_turns - session.turns < 0 then 0 else p.max_turns - session.turns in
-    let run : RunState := { session := session, reg := reg, turns_left := left, emit := stdout_write, gate := Gate.auto, always := List.empty, retries := 3, sleep_ms := Dumb.poll_sleep, on_usage := silent_usage, should_stop := silent_stop, inbox := silent_inbox, side_spend := silent_side_spend, stopped := false } in
+    let run : RunState := { session := session, reg := reg, turns_left := left, emit := stdout_write, gate := Gate.auto, always := List.empty, retries := 3, sleep_ms := Dumb.poll_sleep, on_usage := silent_usage, should_stop := silent_stop, inbox := silent_inbox, side_spend := silent_side_spend, stopped := false, last_stop := Option.none } in
     let prov : String := Weaver.provider_of p.provider session.config in
-    let st : WeaverState := { run := run, mode := p.mode, provider := prov, budget := p.max_turns, context_window := p.context_window, compact_at := p.compact_at, plan := Option.none, last_context := 0, grants := grants, place := place, mcps := p.mcps, keys := s.api_keys, catalog := BTreeMap.empty, quit := false, colors := colors, fatal := Option.none, name := Option.none, trusted := p.trusted, instructions := p.instructions, instr_seen := Option.none, store := store, auto_on_danger := auto_on_danger_of s, verdicts := Option.none, plan_repo := Option.none, skills := p.skills, auto_start := p.auto_start, auto_failures := Option.none, auto_safety := auto_safety_of s, mounted := Option.none } in
+    let st : WeaverState := { run := run, mode := p.mode, provider := prov, budget := p.max_turns, context_window := p.context_window, compact_at := p.compact_at, plan := Option.none, last_context := 0, grants := grants, place := place, mcps := p.mcps, keys := s.api_keys, catalog := BTreeMap.empty, quit := false, colors := colors, fatal := Option.none, name := Option.none, trusted := p.trusted, instructions := p.instructions, instr_seen := Option.none, store := store, auto_on_danger := auto_on_danger_of s, verdicts := Option.none, plan_repo := Option.none, skills := p.skills, auto_start := p.auto_start, auto_failures := Option.none, auto_safety := auto_safety_of s, mounted := Option.none, auto_progress := Option.none, fatal_out := Option.none } in
     st
 
 /// The dumb UI's palette switch: `NO_COLOR` set anywhere is off --
@@ -662,6 +669,11 @@ def run_opened (setup : LogSetup) (colors : Bool) (p : Plan) (s : Settings) (pla
     // command list, and a plugin/MCP mount appends to this same ref.
     let empty_mounts : List MountedCommand := List.empty;
     let mounts <- Ref.new empty_mounts;
+    // Auto mode's no-progress streak and the TUI's fatal out-parameter.
+    let zero_progress : Pair I64 String := Pair.pair 0 "";
+    let progress <- Ref.new zero_progress;
+    let no_fatal : Option WeaverError := Option.none;
+    let fatal_slot <- Ref.new no_fatal;
     let plan <- stored_plan o.store;
     // Phase 7's settings mount point: the knobs reach the session through
     // the service, so a plugin reads the same resolved record later.
@@ -670,7 +682,7 @@ def run_opened (setup : LogSetup) (colors : Bool) (p : Plan) (s : Settings) (pla
     let st1 : WeaverState := Commands.set_plan st0 plan;
     let name <- Commands.session_name st1;
     let repo <- plan_repo_of s place;
-    let st_r0 : WeaverState := { st1 with name := name, instr_seen := Option.some instr_seen, verdicts := Option.some verdicts, plan_repo := repo, auto_failures := Option.some failures, mounted := Option.some mounts };
+    let st_r0 : WeaverState := { st1 with name := name, instr_seen := Option.some instr_seen, verdicts := Option.some verdicts, plan_repo := repo, auto_failures := Option.some failures, mounted := Option.some mounts, auto_progress := Option.some progress, fatal_out := Option.some fatal_slot };
     // The prompt is rebuilt now that the store (and so the scratch path)
     // is known: the session object was built before it existed.
     let st_r : WeaverState := with_instructions st_r0 st_r0.instructions;
@@ -680,11 +692,17 @@ def run_opened (setup : LogSetup) (colors : Bool) (p : Plan) (s : Settings) (pla
     let _ <- Logs.info setup.log (String.concat "ev=session_open session=" (session_label o));
     let tr0 <- startup_transcript o3;
     let ran_tui <- Tui.run_resumed setup.log st tr0;
+    // The TUI's own model is gone once the app closes; a fatal error it
+    // recorded decides the exit code (a TUI fatal used to exit 0).
+    let fatal_after <- match st.fatal_out {
+        Option.none => IO.pure Option.none,
+        Option.some r => Ref.get r,
+    };
     let _ <- if Bool.not ran_tui then announce_note o3 else IO.pure unit;
     let final <- run_fallback ran_tui st;
     let _ <- Procs.shutdown;
     let _ <- dispose_all servers;
-    exit_of final
+    exit_of_fatal final fatal_after
 }
 
 /// The plan repo: `WEAVER_PLAN_REPO`, else the `[plans]` settings, else
@@ -950,6 +968,14 @@ def with_crash_note (crash : Option String) (o : OpenedSession) : OpenedSession 
                 Option.some old => Option.some (String.concat c (String.concat "\n" old)),
             } in
             { o with note := combined },
+    }
+
+/// The process exit code: a fatal error recorded by the TUI wins over the
+/// folded state (the TUI's `set_fatal` never reaches `st`).
+def exit_of_fatal (final : WeaverState) (fatal : Option WeaverError) : IO I64 :=
+    match fatal {
+        Option.some _ => IO.pure 1,
+        Option.none => exit_of final,
     }
 
 def exit_of (st : WeaverState) : IO I64 :=
