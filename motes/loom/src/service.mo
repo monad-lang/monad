@@ -85,8 +85,14 @@ def name_eq (a : ServiceName) (b : ServiceName) : Bool :=
 def name_text (n : ServiceName) : String :=
     match n { name s => s }
 
+/// Membership by the name's TEXT, so a caller that also needs the text
+/// (to build an error) uses the affine `ServiceName` once. `String` is
+/// Copy; `ServiceName` is not.
+pub def Provides.has_text (text : String) (p : Provides) : Bool :=
+    List.any (fn (n : ServiceName) => match n { name t => String.beq t text }) (Provides.names p)
+
 pub def Provides.has (n : ServiceName) (p : Provides) : Bool :=
-    List.any (name_eq n) (Provides.names p)
+    match n { name text => Provides.has_text text p }
 
 pub def Provides.add (n : ServiceName) (p : Provides) : Provides :=
     Provides.provides (List.cons n (Provides.names p))
@@ -106,17 +112,26 @@ pub def Warp.serves (n : ServiceName) (w : Warp Provides A) : Bool :=
 pub def Warp.isolate_services (p : Provides) (w : Warp Provides A) : Warp Provides A :=
     match w { warp _ a => Warp.warp p a }
 
+/// The inject body, split out so the `Service` (affine) is destructured
+/// once per entry point and only `String`/`Config` are shared.
+def inject_parts {Config : Type} (n : ServiceName) (cfg : Config) (w : Warp Provides A) : Result String Config :=
+    match n { name text =>
+        if Provides.has_text text (Warp.registry w)
+        then Result.ok cfg
+        else Result.err (String.concat "missing provider: " text)
+    }
+
 /// Inject a service at this position: the config, once the position's
 /// proof carries its name. A missing provider is a value (`Result.err`),
 /// never a panic.
 pub def Service.inject {Config : Type} (s : Service Config) (w : Warp Provides A) : Result String Config :=
-    if Provides.has (Service.name s) (Warp.registry w)
-    then Result.ok (Service.config s)
-    else Result.err (String.concat "missing provider: " (name_text (Service.name s)))
+    match s { service n _ cfg => inject_parts n cfg w }
 
 /// Inject AND apply the multiplicity policy.
 pub def Service.acquire {Config : Type} (s : Service Config) (w : Warp Provides A) (outstanding : I64) : Result String Config :=
-    match Multiplicity.check (Service.multiplicity s) outstanding {
-        Result.err e => Result.err e,
-        Result.ok _ => Service.inject s w,
+    match s { service n m cfg =>
+        match Multiplicity.check m outstanding {
+            Result.err e => Result.err e,
+            Result.ok _ => inject_parts n cfg w,
+        }
     }
