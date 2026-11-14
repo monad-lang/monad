@@ -14,6 +14,7 @@ use weaver::settings {
     Settings.service, Settings.service_settings,
 }
 use weaver::error {WeaverError, WeaverError.show}
+use weaver::plan_file {PlanSettings, PlanSettings.empty}
 use weaver::policy {Mode}
 use shuttle::gate {Capability}
 use std::map {Map, BTreeMap}
@@ -425,11 +426,38 @@ def test_auto_safety_project_wins : Bool :=
 
 // ── Phase 7: the settings service ───────────────────────────────────────
 
-/// The settings service round-trips the resolved record.
+/// The settings service round-trips the resolved record. Deliberately a
+/// NON-empty record: a service that returned `Settings.empty` would pass
+/// a test that only checked `Option.none` fields.
 #[test]
 def test_the_settings_service_round_trips : Bool :=
-    let s : Settings := Settings.empty in
+    let caps : BTreeMap String Capability := Map.insert "exec" Capability.exec BTreeMap.empty in
+    let keys : BTreeMap String String := Map.insert "anthropic" "k-1" BTreeMap.empty in
+    let s : Settings := {
+        mode := Option.some Mode.plan,
+        provider := Option.some "mock",
+        model := Option.some "mock-large",
+        max_turns := Option.some 7,
+        thinking := Option.some true,
+        max_tokens := Option.some 2048,
+        context_window := Option.some 100000,
+        compact_at := Option.some 75,
+        auto_on_danger := Option.some "deny",
+        auto_safety := Option.some false,
+        plans := PlanSettings.empty,
+        caps := caps,
+        api_keys := keys,
+    } in
     let back : Settings := Settings.service_settings (Settings.service s) in
-    opt_i64_eq back.max_turns Option.none
-        && opt_str_eq back.provider Option.none
-        && opt_bool_eq back.thinking Option.none
+    opt_mode_eq back.mode (Option.some Mode.plan)
+        && opt_str_eq back.provider (Option.some "mock")
+        && opt_str_eq back.model (Option.some "mock-large")
+        && opt_i64_eq back.max_turns (Option.some 7)
+        && opt_bool_eq back.thinking (Option.some true)
+        && opt_i64_eq back.max_tokens (Option.some 2048)
+        && opt_i64_eq back.context_window (Option.some 100000)
+        && opt_i64_eq back.compact_at (Option.some 75)
+        && opt_str_eq back.auto_on_danger (Option.some "deny")
+        && opt_bool_eq back.auto_safety (Option.some false)
+        && opt_cap_eq (Map.lookup "exec" back.caps) (Option.some Capability.exec)
+        && opt_str_eq (Map.lookup "anthropic" back.api_keys) (Option.some "k-1")
