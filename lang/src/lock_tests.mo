@@ -24,7 +24,7 @@ def http_git : LockedGit :=
         url := "https://example.org/http",
         pin := GitPin.tag "v0.1.0",
         commit := commit_a,
-        subdir := Option.some "motes/http",
+        subdir := Option.some (Path.unsafe "motes/http"),
     } in
     g
 

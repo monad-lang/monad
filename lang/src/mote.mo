@@ -1575,9 +1575,9 @@ def Mote.locked_checkout (lock : Lockfile) (home : String) (key : String) (url :
 
 /// The lock's `subdir` wins; a manifest that declares one the lock omits
 /// still gets it (the lock is stale, and `--locked` is what says so).
-def Mote.subdir_or (locked : Option String) (declared : Option String) : String :=
+def Mote.subdir_or (locked : Option Path) (declared : Option String) : String :=
     match locked {
-        Option.some s => s,
+        Option.some s => Path.to_string s,
         Option.none => match declared {
             Option.some d => d,
             Option.none => "",

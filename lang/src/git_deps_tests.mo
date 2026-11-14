@@ -13,7 +13,7 @@ use std::list {}
 use lang::mote {
     Mote.fill_dep_dirs, Mote.git_checkout_dir, Mote.parse_manifest, MoteManifest,
 }
-use lang::lock {GitPin, Lockfile, LockedGit, LockedMote}
+use lang::lock {GitPin, Lock.subdir_path, Lockfile, LockedGit, LockedMote}
 
 def commit_x : String := "0123456789abcdef0123456789abcdef01234567"
 def sum_x : String := "sha256:00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff"
@@ -25,7 +25,7 @@ def git_app : Option MoteManifest :=
     Mote.parse_manifest "app" (app_text "git = \"file:///repo\"\ntag = \"v1\"\n")
 
 def git_entry (name : String) (url : String) (subdir : Option String) : LockedMote :=
-    let g : LockedGit := { url := url, pin := GitPin.tag "v1", commit := commit_x, subdir := subdir } in
+    let g : LockedGit := { url := url, pin := GitPin.tag "v1", commit := commit_x, subdir := Lock.subdir_path subdir } in
     let m : LockedMote := { name := name, version := "0.1.0", checksum := sum_x, git := Option.some g } in
     m
 

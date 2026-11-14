@@ -26,8 +26,8 @@ use build::hash {
 }
 use build::store {Build.monad_home}
 use lang::lock {
-    GitPin, Lock.pin_to_string, Lock.read, Lock.write, LockRead, LockedGit,
-    LockedMote, Lockfile,
+    GitPin, Lock.pin_to_string, Lock.read, Lock.subdir_path, Lock.write,
+    LockRead, LockedGit, LockedMote, Lockfile,
 }
 use lang::mote {Dependency, Mote.any_git_dep, Mote.discover, Mote.manifest_at, Mote.workspace_member_dirs, MoteManifest}
 use std::io {IO.println}
@@ -574,7 +574,7 @@ def Build.fetch_record (st : FetchState) (key : String) (url : String) (pin : Gi
 #[partial]
 #[terminating]
 def Build.record_new (st : FetchState) (name : String) (url : String) (pin : GitPin) (subdir : Option String) (commit : String) (manifest : MoteManifest) (checksum : String) (rest : List (Pair String Dependency)) : IO (Result String FetchState) := do {
-    let git : LockedGit := { url := url, pin := pin, commit := commit, subdir := subdir };
+    let git : LockedGit := { url := url, pin := pin, commit := commit, subdir := Lock.subdir_path subdir };
     let entry : LockedMote := { name := name, version := manifest.version, checksum := checksum, git := Option.some git };
     IO.println ("fetched " ++ name ++ " " ++ commit);
     // The entry is recorded BEFORE the visit, but `seen` is deliberately
@@ -718,15 +718,15 @@ def Build.verify_git (home : String) (tool : DigestTool) (entries : List LockedM
 /// authority -- which is the behaviour that makes a locked build stable.
 def Build.pin_matches (g : LockedGit) (pin : GitPin) (subdir : Option String) : Bool :=
     String.beq (Lock.pin_to_string g.pin) (Lock.pin_to_string pin)
-        && String.beq (Build.subdir_name g.subdir) (Build.subdir_name subdir)
+        && String.beq (Build.subdir_name_path g.subdir) (Build.subdir_name subdir)
 
 def Build.stale_pin_error (key : String) (declared : GitPin) (g : LockedGit) : String :=
     "`--locked`: mote.lock pins `" ++ key ++ "` at `" ++ Lock.pin_to_string g.pin
         ++ "`, but the manifest asks for `" ++ Lock.pin_to_string declared ++ "`; run `monad fetch` to update it"
 
 #[partial]
-def Build.verify_checkout (home : String) (tool : DigestTool) (entries : List LockedMote) (locked : Bool) (key : String) (url : String) (commit : String) (subdir : Option String) (checksum : String) (rest : List (Pair String Dependency)) : IO (Result String Unit) := do {
-    let dir : String := raw_path_join (Git.checkout_dir home url commit) (Build.subdir_name subdir);
+def Build.verify_checkout (home : String) (tool : DigestTool) (entries : List LockedMote) (locked : Bool) (key : String) (url : String) (commit : String) (subdir : Option Path) (checksum : String) (rest : List (Pair String Dependency)) : IO (Result String Unit) := do {
+    let dir : String := raw_path_join (Git.checkout_dir home url commit) (Build.subdir_name_path subdir);
     let there <- IO.is_dir (Path.path dir);
     if Bool.not there
     then return (Result.err ("the checkout of `" ++ key ++ "` is missing (`" ++ dir ++ "`); run `monad fetch`"))
@@ -762,6 +762,10 @@ def Build.entry_for (entries : List LockedMote) (key : String) (url : String) : 
 
 def Build.subdir_name (subdir : Option String) : String :=
     match subdir { Option.some s => s, Option.none => "" }
+
+/// `subdir_name` for the LOCK side, which carries a `Path`.
+def Build.subdir_name_path (subdir : Option Path) : String :=
+    match subdir { Option.some s => Path.to_string s, Option.none => "" }
 
 def Build.missing_entry_error (locked : Bool) (key : String) (url : String) : String :=
     if locked

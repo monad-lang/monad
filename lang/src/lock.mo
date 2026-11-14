@@ -47,7 +47,9 @@ pub struct LockedGit {
     url : String,
     pin : GitPin,
     commit : String,
-    subdir : Option String,
+    /// The mote's directory inside the checkout. TOML text in the lock
+    /// file; a `Path` once read, because that is what resolution joins.
+    subdir : Option Path,
 }
 
 /// One `[[mote]]` entry. `checksum` is `sha256:<hex>` over the canonical
@@ -252,8 +254,19 @@ with Lock {
         match Lock.pin_of (Option.get_or_default "" f.git_ref) {
             Option.none => err (Lock.entry_error name "`git_ref` must be `tag:<name>`, `branch:<name>`, `rev:<id>` or `head`"),
             Option.some pin =>
-                let g : LockedGit := { url := url, pin := pin, commit := commit, subdir := f.git_subdir } in
+                let g : LockedGit := { url := url, pin := pin, commit := commit, subdir := Lock.subdir_path f.git_subdir } in
                 ok (Option.some g),
+        }
+
+    /// A lock file's `git_subdir` is TOML text; this is the one conversion
+    /// into a `Path`. `Path.unsafe` and not `Path.of`: an empty `git_subdir`
+    /// parses today and must keep parsing (the renderer round-trips it), and
+    /// a lockfile's subdir is validated where it is USED
+    /// (`Build.safe_subdir`), not where it is read.
+    pub def subdir_path (o : Option String) : Option Path :=
+        match o {
+            Option.none => Option.none,
+            Option.some s => Option.some (Path.unsafe s),
         }
 
     def no_git_keys (f : LockFields) : Bool :=
@@ -344,10 +357,10 @@ with Lock {
         }
 
     #[partial]
-    def render_subdir (subdir : Option String) : String :=
+    def render_subdir (subdir : Option Path) : String :=
         match subdir {
             Option.none => "",
-            Option.some d => Lock.kv "git_subdir" d,
+            Option.some d => Lock.kv "git_subdir" (Path.to_string d),
         }
 
     #[partial]
@@ -367,15 +380,15 @@ with Lock {
             GitPin.head => Option.none,
         }
 
-    def source_query (pin : Option String) (subdir : Option String) : String :=
+    def source_query (pin : Option String) (subdir : Option Path) : String :=
         match pin {
             Option.none => match subdir {
                 Option.none => "",
-                Option.some d => String.concat "?subdir=" d,
+                Option.some d => String.concat "?subdir=" (Path.to_string d),
             },
             Option.some p => match subdir {
                 Option.none => String.concat "?" p,
-                Option.some d => String.concat (String.concat (String.concat "?" p) "&subdir=") d,
+                Option.some d => String.concat (String.concat (String.concat "?" p) "&subdir=") (Path.to_string d),
             }
         }
 
