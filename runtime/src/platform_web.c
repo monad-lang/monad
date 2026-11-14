@@ -411,6 +411,59 @@ extern int64_t monad_js_window_reload(void);
 __attribute__((import_module("monad"), import_name("window_navigate")))
 extern int64_t monad_js_window_navigate(int64_t ptr, int64_t len);
 
+__attribute__((import_module("monad"), import_name("window_replace")))
+extern int64_t monad_js_window_replace(int64_t ptr, int64_t len);
+
+/* `location` reads: each writes into the scratch buffer and returns the byte
+   count, the `storage_get_raw` convention, so no address crosses Monad code.
+   `search_param` is the percent-decoding accessor an OAuth callback needs. */
+__attribute__((import_module("monad"), import_name("location_origin")))
+extern int64_t monad_js_location_origin(int64_t ptr, int64_t max);
+
+__attribute__((import_module("monad"), import_name("location_href")))
+extern int64_t monad_js_location_href(int64_t ptr, int64_t max);
+
+__attribute__((import_module("monad"), import_name("location_pathname")))
+extern int64_t monad_js_location_pathname(int64_t ptr, int64_t max);
+
+__attribute__((import_module("monad"), import_name("location_search")))
+extern int64_t monad_js_location_search(int64_t ptr, int64_t max);
+
+__attribute__((import_module("monad"), import_name("location_search_param")))
+extern int64_t monad_js_location_search_param(int64_t nptr, int64_t nlen,
+                                              int64_t ptr, int64_t max);
+
+/* The error name of a failed WebCrypto op, and the ECDSA keypair handle a
+   generate/get produced. The key is a host-side id: the private key never
+   enters wasm memory, so there is nothing here for Monad code to leak. */
+__attribute__((import_module("monad"), import_name("crypto_error")))
+extern int64_t monad_js_crypto_error(int64_t op, int64_t ptr, int64_t max);
+
+__attribute__((import_module("monad"), import_name("crypto_op_key")))
+extern int64_t monad_js_crypto_op_key(int64_t op);
+
+__attribute__((import_module("monad"), import_name("ecdsa_generate_begin")))
+extern int64_t monad_js_ecdsa_generate_begin(void);
+
+__attribute__((import_module("monad"), import_name("ecdsa_export_jwk_begin")))
+extern int64_t monad_js_ecdsa_export_jwk_begin(int64_t key);
+
+__attribute__((import_module("monad"), import_name("ecdsa_export_raw_begin")))
+extern int64_t monad_js_ecdsa_export_raw_begin(int64_t key);
+
+__attribute__((import_module("monad"), import_name("ecdsa_sign_begin")))
+extern int64_t monad_js_ecdsa_sign_begin(int64_t key, int64_t ptr, int64_t len);
+
+/* IndexedDB over a non-extractable CryptoKey. */
+__attribute__((import_module("monad"), import_name("keystore_put_begin")))
+extern int64_t monad_js_keystore_put_begin(int64_t sptr, int64_t slen, int64_t key);
+
+__attribute__((import_module("monad"), import_name("keystore_get_begin")))
+extern int64_t monad_js_keystore_get_begin(int64_t sptr, int64_t slen);
+
+__attribute__((import_module("monad"), import_name("keystore_delete_begin")))
+extern int64_t monad_js_keystore_delete_begin(int64_t sptr, int64_t slen);
+
 __attribute__((import_module("monad"), import_name("console_log")))
 extern int64_t monad_js_console_log(int64_t ptr, int64_t len);
 
@@ -707,6 +760,92 @@ int64_t web_window_reload(void) {
 
 int64_t web_window_navigate(const char* url) {
     return monad_js_window_navigate(web_str_ptr(url), web_str_len(url));
+}
+
+int64_t web_window_replace(const char* url) {
+    return monad_js_window_replace(web_str_ptr(url), web_str_len(url));
+}
+
+/* The four whole-string `location` reads share one shape: the host writes the
+   UTF-8 into `web_scratch` and answers the byte count, which `web_take_str`
+   turns into a Monad string. */
+char* web_location_origin(void) {
+    int64_t n = monad_js_location_origin((int64_t)(intptr_t)web_scratch,
+                                         WEB_SCRATCH_BYTES - 1);
+    return web_take_str(web_scratch, n);
+}
+
+char* web_location_href(void) {
+    int64_t n = monad_js_location_href((int64_t)(intptr_t)web_scratch,
+                                       WEB_SCRATCH_BYTES - 1);
+    return web_take_str(web_scratch, n);
+}
+
+char* web_location_pathname(void) {
+    int64_t n = monad_js_location_pathname((int64_t)(intptr_t)web_scratch,
+                                           WEB_SCRATCH_BYTES - 1);
+    return web_take_str(web_scratch, n);
+}
+
+char* web_location_search(void) {
+    int64_t n = monad_js_location_search((int64_t)(intptr_t)web_scratch,
+                                         WEB_SCRATCH_BYTES - 1);
+    return web_take_str(web_scratch, n);
+}
+
+/* `""` (a zero-length answer) is how the Monad side reads "absent", so a
+   parameter that is present but empty is indistinguishable from one that is
+   not there. OAuth parameters are never legitimately empty, and `location_search`
+   is available to a caller that must tell them apart. */
+char* web_location_search_param(const char* name) {
+    int64_t n = monad_js_location_search_param(web_str_ptr(name), web_str_len(name),
+                                               (int64_t)(intptr_t)web_scratch,
+                                               WEB_SCRATCH_BYTES - 1);
+    return web_take_str(web_scratch, n);
+}
+
+char* web_crypto_error(int64_t op) {
+    int64_t n = monad_js_crypto_error(op, (int64_t)(intptr_t)web_scratch,
+                                      WEB_SCRATCH_BYTES - 1);
+    return web_take_str(web_scratch, n);
+}
+
+int64_t web_crypto_op_key(int64_t op) {
+    return monad_js_crypto_op_key(op);
+}
+
+int64_t web_ecdsa_generate_begin(void) {
+    return monad_js_ecdsa_generate_begin();
+}
+
+int64_t web_ecdsa_export_jwk_begin(int64_t key) {
+    return monad_js_ecdsa_export_jwk_begin(key);
+}
+
+int64_t web_ecdsa_export_raw_begin(int64_t key) {
+    return monad_js_ecdsa_export_raw_begin(key);
+}
+
+/* The signing input crosses as a caller-owned `ByteBuf`, the same typed
+   boundary `crypto_sha256_begin` uses: the buffer is the only channel, so no
+   address-producing primitive appears on the Monad side. */
+int64_t web_ecdsa_sign_begin(int64_t key, int64_t buf) {
+    BufObj* obj = (BufObj*)RT_PTR(buf);
+    int64_t len = obj ? obj->len : 0;
+    const char* data = obj ? (const char*)obj->payload : "";
+    return monad_js_ecdsa_sign_begin(key, (int64_t)(intptr_t)data, len);
+}
+
+int64_t web_keystore_put_begin(const char* slot, int64_t key) {
+    return monad_js_keystore_put_begin(web_str_ptr(slot), web_str_len(slot), key);
+}
+
+int64_t web_keystore_get_begin(const char* slot) {
+    return monad_js_keystore_get_begin(web_str_ptr(slot), web_str_len(slot));
+}
+
+int64_t web_keystore_delete_begin(const char* slot) {
+    return monad_js_keystore_delete_begin(web_str_ptr(slot), web_str_len(slot));
 }
 
 int64_t web_console_log(const char* s) {
