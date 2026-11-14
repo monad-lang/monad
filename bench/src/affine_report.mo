@@ -638,12 +638,24 @@ def report_affine_usage_compiler : IO Bool := report_on "bench/src/affine_target
 // cached` per file threads the cache to the next, so each module is
 // parsed once per sweep rather than once per importer.
 
-/// The sweep set — `scripts/check-monad-tests.sh`'s `corpus_dirs`
-/// (line 504), the same twelve directories CI grades (`build` joined
-/// with the new build system).
+/// The sweep set — `scripts/check-monad-tests.sh`'s `corpus_dirs`, the
+/// directories CI grades (the list has grown past the twelve this comment
+/// used to name: `sys`, `codegen` and `eval` joined it, and the backend
+/// moved out of `lang`).
 def corpus_dirs : List String :=
-    ["init", "std", "examples", "lang", "cli", "llvm", "runtime", "build",
-        "motes", "slow_tests", "bench", "proofs"]
+    ["init", "std", "sys", "examples", "lang", "codegen", "cli", "llvm",
+        "mlir", "runtime", "build", "eval", "motes", "slow_tests", "bench",
+        "proofs"]
+
+/// A4's sweep set: scripts/lib/compiler-closure.txt, the motes compiled
+/// into the `monad` binary. This is the strict count a promotion is
+/// measured against (the enforced count is lower: enforcement fails open
+/// on unattributable binders).
+def closure_dirs : List String :=
+    ["init", "std", "sys", "lang", "codegen", "cli", "llvm", "runtime",
+        "build", "eval", "motes/clap", "motes/fmt", "motes/json",
+        "motes/log", "motes/lsp", "motes/parsec", "motes/toml",
+        "motes/toolkit"]
 
 /// One corpus directory's measured totals, accumulated across the
 /// files expand_check_paths found under it.
@@ -805,6 +817,31 @@ def report_affine_usage_corpus : IO Bool := do {
         println "affine corpus sweep (per-file target_decls, de-duped by construction):";
         let _shown : Unit <- print_mote_lines (List.reverse (Sweep.motes st));
         let _grand : Bool <- print_totals "corpus (all corpus_dirs)" (Sweep.grand st);
+        match Sweep.failed st {
+            List.empty => do { return true },
+            List.cons f rest => do {
+                println ("  SWEEP FAILED to elaborate: " ++ f);
+                let _rest : List String := rest;
+                return false
+            },
+        }
+    }
+}
+
+/// A4's strict measurement: the compiler-closure motes, same per-file
+/// `target_decls` method, one line per mote. A promoted mote must show
+/// zero here (and the enforced `check` must also be zero); an allowlisted
+/// mote's count is the migration ceiling.
+#[test]
+def report_affine_usage_closure : IO Bool := do {
+    let on <- report_enabled;
+    if Bool.not on then return true
+    else do {
+        let st : Sweep <- sweep_dirs closure_dirs sweep_empty;
+        println "";
+        println "affine closure sweep (per-file target_decls, de-duped by construction):";
+        let _shown : Unit <- print_mote_lines (List.reverse (Sweep.motes st));
+        let _grand : Bool <- print_totals "closure (all closure_dirs)" (Sweep.grand st);
         match Sweep.failed st {
             List.empty => do { return true },
             List.cons f rest => do {

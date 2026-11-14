@@ -1,0 +1,37 @@
+# Affine-migration allowlist: compiler-closure motes still in warn mode.
+#
+# A ratchet, not a permission slip. A mote listed here is allowed to keep
+# `[affine] mode = "warn"` only until it reaches zero diagnostics; the
+# promotion PR deletes its mote.toml table and this line together.
+#
+# Format: `mote  ceiling`, where ceiling is the number of enforced
+# diagnostics a tree-built `monad check` may report for that mote (a
+# warning count; A4 is a reported-diagnostics gate). A count above the
+# ceiling fails; a count below it prints "lower the ceiling" without
+# failing, so an unrelated shared-dependency fix does not break the gate.
+# Lower the number as work lands; the final state is an empty file with
+# this header, and scripts/check-affine-closure.sh then fails any new
+# `[affine]` table outright.
+#
+# `scripts/check-affine-closure.sh --static` also fails on a line whose
+# mote is no longer warn: a stale entry must not linger.
+#
+# Keep the list sorted; the script does not care, but diffs read better.
+# Ceilings are seeded from the Phase 0 measurement (2026-11-14, tree-built
+# compiler 8b6a30d8): the enforced warning count per mote, which is what a
+# tree-built `monad check` reports under the fail-open enforcement path.
+# The strict report (`bench/src/affine_report.mo`) is higher.
+build 107
+cli 92
+codegen 370
+eval 41
+lang 2372
+llvm 44
+motes/clap 86
+motes/fmt 34
+motes/json 11
+motes/log 10
+motes/lsp 97
+motes/parsec 5
+motes/toml 40
+motes/toolkit 176

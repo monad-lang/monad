@@ -1,0 +1,31 @@
+# The compiler-source closure.
+#
+# One path per line, relative to the repository root: every mote that is
+# compiled into the `monad` binary. Consumed by
+# scripts/check-affine-closure.sh, which drift-asserts this list against
+# the `find` input list in scripts/build-self-hosted.sh (the other copy is
+# `compilerSrc` in nix/monad.nix).
+#
+# A mote here is held to `[affine] mode = "error"`: no `[affine]` table in
+# its mote.toml, and zero affine diagnostics from a tree-built compiler.
+# Everything else (bench, slow_tests, examples, proofs, mlir, motes/serde
+# and the other library motes) is outside the closure and may stay in warn
+# mode.
+init
+std
+sys
+lang
+codegen
+cli
+llvm
+runtime
+build
+eval
+motes/clap
+motes/fmt
+motes/json
+motes/log
+motes/lsp
+motes/parsec
+motes/toml
+motes/toolkit

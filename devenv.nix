@@ -334,6 +334,22 @@
       files = "\\.mo$";
       stages = [ "pre-push" ];
     };
+    # The cheap half of A4's gate (see scripts/check-affine-closure.sh): a
+    # new `[affine] mode = "warn"` in a compiler-closure mote, a stale
+    # allowlist entry, or an escape hatch outside the one negative test
+    # fails here. The dynamic half -- a tree-built `check` over the whole
+    # closure -- needs a compiled compiler and runs in CI.
+    affine-closure = {
+      enable = true;
+      name = "affine-closure";
+      description = "No compiler-closure mote may return to [affine] mode = \"warn\".";
+      entry = "${config.devenv.root}/scripts/check-affine-closure.sh --static";
+      # The check is repo-wide, not per-file: it reads every closure manifest
+      # and the allowlist. Handing it the changed filenames makes it treat
+      # them as arguments, so the hook runs once with none.
+      pass_filenames = false;
+      files = "(^|/)mote\\.toml$|^scripts/(lib/compiler-closure|affine-closure-allowlist)\\.txt$|^scripts/build-self-hosted\\.sh$";
+    };
   };
 
   # See full reference at https://devenv.sh/reference/options/

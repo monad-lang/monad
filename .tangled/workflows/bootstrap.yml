@@ -71,3 +71,14 @@ steps:
       MONAD_HOST_BIN="$(nix build --no-link --print-out-paths --accept-flake-config .#monadHost)/bin/monad-rs" \
         nix develop --no-pure-eval --accept-flake-config -c \
           scripts/debug-oracle.sh
+
+  # A4's gate (plans/bootstrapping/ownership-regions-memory.md): the closure
+  # has no `[affine] mode = "warn"` table, and the rung-1 compiler built
+  # above reports zero over it.
+  - name: Affine closure gate
+    command: |
+      nix develop --no-pure-eval --accept-flake-config -c \
+        scripts/check-affine-closure.sh --static
+      nix develop --no-pure-eval --accept-flake-config -c \
+        scripts/check-affine-closure.sh --dynamic "$PWD/target-monad/bootstrap-ci/monad" \
+          --promoted-only

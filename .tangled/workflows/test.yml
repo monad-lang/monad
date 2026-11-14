@@ -51,3 +51,17 @@ steps:
       MONAD_BIN="$(nix build --no-link --print-out-paths --accept-flake-config .#monad)/bin/monad" \
         nix develop --no-pure-eval --accept-flake-config -c \
           scripts/check-monad-tests.sh
+
+  # A4's gate (plans/bootstrapping/ownership-regions-memory.md): the closure
+  # has no `[affine] mode = "warn"` table, and the tree's own compiler reports
+  # zero over it. The static half needs no compiler; the dynamic half reuses
+  # the `.#monad` build from the step above (a cache hit). Both run in the
+  # dev shell so the script's `awk`/`grep` are the packaged ones.
+  - name: Affine closure gate
+    command: |
+      nix develop --no-pure-eval --accept-flake-config -c \
+        scripts/check-affine-closure.sh --static
+      nix develop --no-pure-eval --accept-flake-config -c \
+        scripts/check-affine-closure.sh --dynamic \
+          "$(nix build --no-link --print-out-paths --accept-flake-config .#monad)/bin/monad" \
+          --promoted-only

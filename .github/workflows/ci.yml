@@ -381,11 +381,53 @@ jobs:
           nix develop --no-pure-eval --accept-flake-config \
             -c scripts/check-nightly-pin.sh
 
+      # A4's cheap half (plans/bootstrapping/ownership-regions-memory.md):
+      # no compiler-closure mote may regain `[affine] mode = "warn"`. It needs
+      # no compiler, so it fails fast before the self-compile -- but it does
+      # need the dev shell's `awk`/`grep`, not the runner's minimal PATH.
+      - name: Affine closure gate (static)
+        run: |
+          nix develop --no-pure-eval --accept-flake-config \
+            --profile "$HOME/.monad-ci-devshell" \
+            -c scripts/check-affine-closure.sh --static
+
       - name: Self-compile with the latest nightly (required)
         run: |
           nix develop --no-pure-eval --accept-flake-config \
             --profile "$HOME/.monad-ci-devshell" \
             -c scripts/ci-self-compile.sh
+
+      # A4's acceptance half: the compiler this tree just built must report
+      # zero affine diagnostics over the closure whose manifests are at error
+      # mode. The tree-built checker grades the PROMOTED motes only: they must
+      # stay at zero. The full-closure run (which also re-measures the
+      # migrating motes' ceilings) is the local/periodic acceptance step --
+      # it checks ~145k lines in one process and was killed at 76 minutes
+      # (exit 137, OOM) on a runner, with nothing flushed. The static gate
+      # above still forbids a new warn mote.
+      - name: Affine closure gate (tree-built checker)
+        run: |
+          nix develop --no-pure-eval --accept-flake-config \
+            --profile "$HOME/.monad-ci-devshell" \
+            -c scripts/check-affine-closure.sh --dynamic \
+                 "$PWD/target-monad/ci-self-compile/monad" \
+                 --promoted-only
+
+      # The latest nightly must also accept the promoted motes under the
+      # affine rule, or the next self-compile fails. Allowlisted motes are
+      # ignored here: they are still migrating and their diagnostics may
+      # legitimately differ between the two checkers while their table keeps
+      # them warnings. `--affine-only`: the nightly lags main, so a construct
+      # main gained after it was published (index-aware Vec coverage in
+      # init/src/tests.mo was the first) is a non-affine error there; whether
+      # the nightly builds the tree is ci-self-compile.sh's question.
+      - name: Affine closure gate (latest nightly's view)
+        run: |
+          nix develop --no-pure-eval --accept-flake-config \
+            --profile "$HOME/.monad-ci-devshell" \
+            -c scripts/check-affine-closure.sh --dynamic \
+                 "${MONAD_HOME:-$HOME/.monad}/bin/monad" \
+                 --promoted-only --no-commit-check --affine-only
 
       # The two-rung bootstrap for a feature-gated native (M1 of
       # plans/library-ideas/system.md). Rung 1 is the latest nightly compiling

@@ -74,6 +74,11 @@ cd "$root"
 # mote and `lang` must stay its dependency, never the other way round.
 scripts/check-lang-no-codegen.sh
 
+# A4's cheap half (plans/bootstrapping/ownership-regions-memory.md): no
+# compiler-closure mote may regain `[affine] mode = "warn"`. It needs no
+# compiler, so it fails before the ladder starts.
+scripts/check-affine-closure.sh --static
+
 # shellcheck disable=SC2034  # read by the sourced helper, not here
 MONAD_REPO_ROOT="$root"
 # shellcheck source=scripts/lib/bootstrap-dir.sh
@@ -128,10 +133,18 @@ MONAD_BIN="$MONAD_BOOTSTRAP_BIN" MONAD_TARGET_DIR="$sweep_target" \
 fmt_rc=0
 scripts/check-fmt.sh "$MONAD_BOOTSTRAP_BIN" || fmt_rc=$?
 
+# A4's acceptance half: the rung-1 compiler must report zero over the
+# promoted motes now that their manifests are at error mode. The full closure
+# is the local/periodic measurement -- it needs a large machine (CI killed it
+# at 76 minutes, exit 137).
+affine_rc=0
+scripts/check-affine-closure.sh --dynamic "$MONAD_BOOTSTRAP_BIN" --promoted-only || affine_rc=$?
+
 ladder_rc=0
 wait "$ladder" || ladder_rc=$?
-if [ "$sweep_rc" -ne 0 ] || [ "$ladder_rc" -ne 0 ] || [ "$fmt_rc" -ne 0 ]; then
-  echo "ci-compiler-checks: the sweep exited ${sweep_rc}, the ladder ${ladder_rc}, the fmt gate ${fmt_rc}" >&2
+if [ "$sweep_rc" -ne 0 ] || [ "$ladder_rc" -ne 0 ] || [ "$fmt_rc" -ne 0 ] \
+    || [ "$affine_rc" -ne 0 ]; then
+  echo "ci-compiler-checks: the sweep exited ${sweep_rc}, the ladder ${ladder_rc}, the fmt gate ${fmt_rc}, the affine gate ${affine_rc}" >&2
   exit 1
 fi
-echo "ci-compiler-checks: the sweep, the ladder, and the fmt gate all passed"
+echo "ci-compiler-checks: the sweep, the ladder, the fmt gate, and the affine gate all passed"
