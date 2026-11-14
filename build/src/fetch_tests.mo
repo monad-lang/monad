@@ -12,8 +12,10 @@ use std::list {List.all}
 use std::process {process_id}
 use std::stream {StreamError}
 use build::fetch {
-    Build.fetch_run_with, Build.fetch_run_with_opts, Build.pin_of_dep,
-    Build.safe_subdir, Build.toolchain_skew, Build.verify_manifest_at, FetchMode,
+    Build.commit_matches, Build.dirty_suffix, Build.fetch_run_with,
+    Build.fetch_run_with_opts, Build.pin_of_dep, Build.rev_pair_text,
+    Build.rev_without_dirty, Build.safe_subdir, Build.toolchain_skew,
+    Build.verify_manifest_at, FetchMode,
 }
 use build::hash {Build.canonical_tree_checksum}
 use lang::lock {GitPin, Lock.pin_to_string, Lock.read, LockRead, LockedGit, LockedMote}
@@ -130,17 +132,26 @@ def test_toolchain_skew_matching_commit_is_clean : Bool :=
         Option.none => true,
     }
 
+/// The advice is `monad update` -- `monadup` installs RELEASES, so a commit
+/// id was never a tag it could `use`. The message still names the full lock id
+/// for the "switch compilers instead" direction.
 #[test]
 def test_toolchain_skew_mismatching_std_is_reported : Bool :=
     match Build.toolchain_skew "aaaa" [Build.toolchain_test_entry "std" (Option.some "bbbb")] {
-        Option.some msg => String.contains msg "monadup use bbbb",
+        Option.some msg =>
+            String.contains msg "monad update"
+                && Bool.not (String.contains msg "monadup use")
+                && String.contains msg "bbbb",
         Option.none => false,
     }
 
 #[test]
 def test_toolchain_skew_mismatching_sys_is_reported : Bool :=
     match Build.toolchain_skew "aaaa" [Build.toolchain_test_entry "sys" (Option.some "bbbb")] {
-        Option.some msg => String.contains msg "monadup use bbbb",
+        Option.some msg =>
+            String.contains msg "monad update"
+                && Bool.not (String.contains msg "monadup use")
+                && String.contains msg "bbbb",
         Option.none => false,
     }
 
@@ -176,6 +187,105 @@ def test_toolchain_skew_unknown_compiler_commit_is_ignored : Bool :=
         Option.some _ => false,
         Option.none => true,
     }
+
+// ─── The full-lock-SHA vs short-compiler-revision rule ───
+//
+// `mote.lock` requires a FULL commit id (`Lock.is_commit`: 40 or 64 hex
+// digits), while a compiler names itself with the SHORT one (`self.shortRev`
+// is 7). Comparing them with `String.beq` reported skew for EVERY correct
+// pin, and since no consumer can write a short `git_commit`, no pin could
+// pass -- see plans/implementations/2026-11-11-toolchain-skew-short-commit.md.
+
+/// The exact shape a consumer writes: the full SHA, against the 7-char
+/// revision the nightly was built from. This is the row that would have
+/// caught the bug.
+#[test]
+def test_toolchain_skew_full_lock_sha_against_its_short_prefix_is_clean : Bool :=
+    match Build.toolchain_skew "38e2790"
+        [Build.toolchain_test_entry "init" (Option.some "38e27906a3bda6d5d6f79b348936ed7765e16613")] {
+        Option.some _ => false,
+        Option.none => true,
+    }
+
+/// ... and it applies to every toolchain mote, not just the one in the report.
+#[test]
+def test_toolchain_skew_full_lock_sha_matches_for_every_toolchain_mote : Bool :=
+    let full : String := "38e27906a3bda6d5d6f79b348936ed7765e16613" in
+    match Build.toolchain_skew "38e2790" [
+        Build.toolchain_test_entry "init" (Option.some full),
+        Build.toolchain_test_entry "std" (Option.some full),
+        Build.toolchain_test_entry "runtime" (Option.some full),
+        Build.toolchain_test_entry "sys" (Option.some full),
+    ] {
+        Option.some _ => false,
+        Option.none => true,
+    }
+
+/// A prefix match must not become a prefix BLANKET: a full SHA whose short
+/// prefix differs is still skew, and the message shows both at one width.
+#[test]
+def test_toolchain_skew_full_lock_sha_against_a_different_short_prefix_is_reported : Bool :=
+    match Build.toolchain_skew "deadbee"
+        [Build.toolchain_test_entry "std" (Option.some "38e27906a3bda6d5d6f79b348936ed7765e16613")] {
+        Option.some msg =>
+            String.contains msg "monad update"
+                && String.contains msg "pinned at 38e2790, this compiler at deadbee",
+        Option.none => false,
+    }
+
+/// The `-dirty` marker `flake.nix` appends describes the BINARY, not a
+/// different revision: a dirty build of R is still R's tree.
+#[test]
+def test_toolchain_skew_dirty_compiler_matches_its_clean_revision : Bool :=
+    Build.commit_matches "38e2790-dirty" "38e27906a3bda6d5d6f79b348936ed7765e16613"
+
+/// `Build.commit_matches`, directly. Below the 7-digit floor the answer stays
+/// exact equality, which is what keeps a four-character test string from
+/// matching every id that starts the same way.
+#[test]
+def test_commit_matches_rule : Bool :=
+    Build.commit_matches "38e2790" "38e27906a3bda6d5d6f79b348936ed7765e16613"
+        && Build.commit_matches "38e2790" "38e2790"
+        && Bool.not (Build.commit_matches "deadbee" "38e27906a3bda6d5d6f79b348936ed7765e16613")
+        && Bool.not (Build.commit_matches "38e2790" (String.concat "deadbee" "0000"))
+        && Build.commit_matches "aaaa" "aaaa"
+        && Bool.not (Build.commit_matches "aaaa" "aaaab")
+        && Bool.not (Build.commit_matches "abc" "abcdef")
+
+/// Both revisions are printed at ONE width, so a prefix-only difference is
+/// readable rather than two differently-shaped strings.
+#[test]
+def test_rev_pair_text_prints_one_width : Bool :=
+    String.beq (Build.rev_pair_text "38e27906a3bd" "38e2790")
+        "pinned at 38e2790, this compiler at 38e2790"
+
+/// A `-dirty` compiler is shown without the marker in the pair, so the two
+/// columns stay the same length.
+#[test]
+def test_rev_pair_text_drops_the_dirty_marker : Bool :=
+    String.beq (Build.rev_pair_text "38e27906a3bd" "38e2790-dirty")
+        "pinned at 38e2790, this compiler at 38e2790"
+
+/// The `-dirty` marker is stripped by LENGTH, not by a literal 6, so the two
+/// functions agree about what the suffix is. Pinned because the constant is the
+/// only place the spelling lives.
+#[test]
+def test_dirty_suffix_is_the_flake_marker : Bool :=
+    String.beq Build.dirty_suffix "-dirty"
+        && String.beq (Build.rev_without_dirty "abc1234-dirty") "abc1234"
+        && String.beq (Build.rev_without_dirty "abc1234") "abc1234"
+        && String.beq (Build.rev_without_dirty "  abc1234-dirty  ") "abc1234"
+
+/// Below the floor the pair CAN print as two identical short strings -- the
+/// comparison there is exact equality, so a reported pair differs only in a
+/// position the shorter form does not print. Recorded so the message's comment
+/// and its behaviour stay in agreement; the ordinary full-vs-short shape never
+/// reaches it, because a match is not reported at all.
+#[test]
+def test_rev_pair_text_below_the_floor_can_repeat_a_short_prefix : Bool :=
+    String.beq (Build.rev_pair_text "abcabcdef" "abc")
+        "pinned at abc, this compiler at abc"
+        && Bool.not (Build.commit_matches "abc" "abcabcdef")
 
 // ─── End to end ───
 
