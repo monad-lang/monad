@@ -66,7 +66,7 @@ pub def DocExtract.extract_mote_at (mote_dir : Path) : IO (Result String DocMote
 /// Not the directory alone: `monad doc` with no argument documents `.`,
 /// whose last segment is `.` itself.
 def mote_name (mote_dir : Path) : IO String := do {
-    let manifest <- Mote.manifest_at (Path.to_string mote_dir);
+    let manifest <- Mote.manifest_at mote_dir;
     match manifest {
         Option.some m => return m.name,
         Option.none => return (Path.file_name (Path.normalize mote_dir)),
