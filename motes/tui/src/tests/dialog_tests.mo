@@ -7,12 +7,13 @@ use lib::widgets::dialog {
     Dialog.note_text, Dialog.with_default, Dialog.apply, Dialog.rows, Dialog.body_rows,
     Dialog.total_rows, Dialog.frame_width, Dialog.frame_height, Dialog.content_width,
     Dialog.frame_width_for, Dialog.frame_height_for,
-    Dialog.with_notes, Dialog.with_multi, Dialog.clamp_scroll, Dialog.footer_line, Dialog.window_start, ModalState, ModalNext, Modal.fold, Modal.idle, modal_quiet, Dialog.refresh_due,
+    Dialog.with_notes, Dialog.with_multi, Dialog.clamp_scroll, Dialog.footer_line, Dialog.window_start, ModalState, ModalNext, Modal.fold, Modal.idle, modal_quiet, Dialog.refresh_due, Dialog.view,
 }
 use lib::input {InputReader, input_reader}
-use lib::types {Key, Event, MouseEvent, MouseButton}
-use lib::widget {SizedWidget}
-use lib::core {empty_screen}
+use lib::types {Key, Event, MouseEvent, MouseButton, Screen}
+use lib::widget {SizedWidget, BorderStyle}
+use lib::core {empty_screen, style_default, mk_rect, mk_screen, screen_get_cell}
+use lib::render {render}
 use std::list {}
 
 def opt_y : DialogOption := { label := "Approve once", hint := "y", key := "y" }
@@ -437,3 +438,80 @@ def test_multi_toggling_twice_clears : Bool :=
     let d1 : DialogModel := dlg_of (Dialog.step multi (Key.char " ")) in
     let d2 : DialogModel := dlg_of (Dialog.step d1 (Key.char " ")) in
     List.is_empty d2.chosen
+
+// ── the caret inside an open field ─────────────────────────────────────
+//
+// The caret used to be a literal `_` appended after the value, so it
+// always sat at the end no matter where `InputState.cursor` was. An open
+// field is now a `text_input` leaf, whose caret is a reverse/underline
+// CELL at the cursor's display column. These render the dialog and look
+// for that cell.
+
+def caret_screen_rows : I64 := 16
+def caret_screen_cols : I64 := 48
+
+def caret_dialog (value : String) : DialogModel :=
+    let o : DialogOption := { label := "Turn budget", hint := "", key := "", value := Option.some value } in
+    Dialog.make "Settings" "" [] [o]
+
+def open_field (d : DialogModel) : DialogModel :=
+    match Dialog.step d Key.enter { Pair.pair d2 _ => d2 }
+
+def press (d : DialogModel) (k : Key) : DialogModel :=
+    match Dialog.step d k { Pair.pair d2 _ => d2 }
+
+def render_dialog (d : DialogModel) : Screen :=
+    render (Dialog.view style_default caret_screen_cols caret_screen_rows d (Dialog.body_rows caret_screen_cols d))
+        (mk_rect 0 0 caret_screen_cols caret_screen_rows)
+        (mk_screen caret_screen_rows caret_screen_cols)
+
+/// The one underlined cell's character, scanning the whole screen.
+#[partial]
+def caret_in_row (s : Screen) (row : I64) (col : I64) : Option String :=
+    if I64.lt (caret_screen_cols - 1) col then Option.none
+    else match screen_get_cell s row col {
+        Option.some c => if c.style.underline then Option.some c.char else caret_in_row s row (col + 1),
+        Option.none => Option.none,
+    }
+
+#[partial]
+def caret_char (s : Screen) (row : I64) : Option String :=
+    if I64.lt (caret_screen_rows - 1) row then Option.none
+    else match caret_in_row s row 0 {
+        Option.some ch => Option.some ch,
+        Option.none => caret_char s (row + 1),
+    }
+
+def caret_is (d : DialogModel) (ch : String) : Bool :=
+    match caret_char (render_dialog d) 0 {
+        Option.some c => c == ch,
+        Option.none => false,
+    }
+
+#[partial]
+def dashes (n : I64) (acc : String) : String :=
+    if I64.lt n 1 then acc else dashes (n - 1) (String.concat acc "x")
+
+/// A prefilled field opens with the cursor at the end: the caret sits on
+/// the blank cell after the value, not on the value's last character.
+#[test]
+def test_a_prefilled_field_opens_with_the_caret_at_the_end : Bool :=
+    caret_is (open_field (caret_dialog "10")) " "
+
+/// Left moves the caret onto the previous character -- the bug this pins
+/// showed `510_` after "Left Left, type 5".
+#[test]
+def test_left_moves_the_caret_onto_the_previous_character : Bool :=
+    caret_is (press (press (open_field (caret_dialog "10")) Key.left) Key.left) "1"
+
+/// The caret's column is a DISPLAY column: one Left from the end of a
+/// two-glyph value lands on the second glyph.
+#[test]
+def test_the_caret_is_a_display_column_after_a_multibyte_character : Bool :=
+    caret_is (press (open_field (caret_dialog "æø")) Key.left) "ø"
+
+/// A value wider than the field scrolls, and the caret stays inside the
+/// frame instead of being pushed past its edge.
+#[test]
+def test_a_long_value_scrolls_and_keeps_the_caret_inside : Bool :=
+    caret_is (open_field (caret_dialog (dashes 100 ""))) " "

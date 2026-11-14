@@ -11,13 +11,13 @@
 
 use lib::types {Key, Event, MouseEvent, LayoutSize, TextStyle, TextSegment, Rect, Screen}
 use lib::core {style_default, empty_screen, mk_rect}
-use lib::widget {Widget, SizedWidget, BorderStyle, border_with, padding, sized, label, with_style}
+use lib::widget {Widget, SizedWidget, BorderStyle, border_with, padding, sized, label, with_style, text_input}
 use lib::widgets::input {InputState, input_state, handle_input_key, insert_text}
 use lib::layout {center_rect_in}
 use lib::render {render, diff, apply_deltas}
 use lib::terminal {Terminal.clear_screen, Terminal.cursor_move, Terminal.poll, Terminal.size}
 use lib::input {Input.step, InputReader, input_reader}
-use lib::text {Text.wrap}
+use lib::text {Text.wrap, Text.width}
 use std::io {IO.read_stdin_exact, IO.write_stdout, IO.flush_stdout}
 use std::list {}
 
@@ -349,14 +349,36 @@ pub def Dialog.window_start (selected : I64) (window : I64) (count : I64) : I64 
     else if selected > count - 1 then count - window
     else selected - window + 1
 
+/// Is option `i`'s value field open?
+def field_open (d : DialogModel) (i : I64) : Bool :=
+    match d.field { Option.some j => i == j, Option.none => false }
+
+def has_value (v : Option String) : Bool :=
+    match v { Option.some _ => true, Option.none => false }
+
+/// The `": value"` a NON-open option row shows.
+def option_value_of (v : Option String) : String :=
+    match v { Option.some x => String.concat ": " x, Option.none => "" }
+
+/// One row of `prefix` + an editable field. The caret is the `text_input`
+/// leaf's own -- a reverse/underline cell at `InputState.cursor`, mapped
+/// through `Text.col_of_byte` and scrolled into view -- never a printable
+/// glyph, which cannot sit at a cursor and is invisible in a reversed row.
+def edit_row (style : TextStyle) (prefix : String) (st : InputState) : SizedWidget :=
+    sized (LayoutSize.fixed 1) (Widget.row [
+        sized (LayoutSize.fixed (Text.width prefix)) (with_style style (label prefix)),
+        sized (LayoutSize.fill 1) (with_style style (text_input st)),
+    ])
+
 def option_row (d : DialogModel) (i : I64) (o : DialogOption) (width : I64) : List SizedWidget :=
     let here : Bool := i == d.selected in
     let marker : String := if here then "> " else "  " in
     let suffix : String := if String.is_empty o.hint then "" else String.concat "  (" (String.concat o.hint ")") in
     let style : TextStyle := if here then { style_default with reverse := true } else style_default in
-    let text : String := String.concat o.label (option_value d i o.value) in
     let checked : String := if d.multi then (if has_index i d.chosen then "[x] " else "[ ] ") else "" in
-    Dialog.text_rows style width (String.concat checked (String.concat marker (String.concat text suffix)))
+    if Bool.and (field_open d i) (has_value o.value)
+    then [edit_row style (String.concat checked (String.concat marker (String.concat o.label ": "))) d.field_input]
+    else Dialog.text_rows style width (String.concat checked (String.concat marker (String.concat (String.concat o.label (option_value_of o.value)) suffix)))
 
 #[partial]
 def option_rows_window (d : DialogModel) (i : I64) (stop : I64) (width : I64) : List SizedWidget :=
@@ -370,20 +392,17 @@ def option_rows_window (d : DialogModel) (i : I64) (stop : I64) (width : I64) : 
 def option_rows (d : DialogModel) (i : I64) (width : I64) : List SizedWidget :=
     option_rows_window d i (Dialog.option_count d) width
 
-/// An editable option's `: value`, with the caret while its field is open.
-def option_value (d : DialogModel) (i : I64) (value : Option String) : String :=
-    match value {
-        Option.none => "",
-        Option.some v => match d.field {
-            Option.some j => if i == j then String.concat ": " (String.concat d.field_input.value "_") else String.concat ": " v,
-            Option.none => String.concat ": " v,
-        },
-    }
+/// The note row: an open note is an editable field (with the real caret);
+/// a closed one is plain text. One row either way -- `text_input` scrolls
+/// instead of wrapping -- so the frame's row accounting is unchanged.
+def note_rows (d : DialogModel) (width : I64) : List SizedWidget :=
+    let dim : TextStyle := { style_default with dim := true } in
+    if d.editing
+    then [edit_row dim "note: " d.note]
+    else Dialog.text_rows dim width (note_text d)
 
 def note_text (d : DialogModel) : String :=
-    if d.editing
-    then String.concat "note: " (String.concat d.note.value "_")
-    else if String.is_empty d.note.value
+    if String.is_empty d.note.value
     then "note: (press e to add one)"
     else String.concat "note: " d.note.value
 
@@ -411,7 +430,7 @@ pub def Dialog.rows (width : I64) (height : I64) (d : DialogModel) (body : List 
         blank,
         option_rows_window d start (start + window) width,
         blank,
-        if d.notes then Dialog.text_rows dim width (note_text d) else List.empty,
+        if d.notes then note_rows d width else List.empty,
         Dialog.text_rows dim width (Dialog.footer_line d
             (Bool.or (I64.lt body_budget (List.length body)) (I64.lt window n))),
     ] in
