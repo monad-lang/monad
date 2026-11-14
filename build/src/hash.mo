@@ -78,15 +78,12 @@ pub def Build.probe_digest_tool : IO (Result String DigestTool) := do {
 ///
 /// An empty root means the working directory -- the convention
 /// `Build.default_target_dir` and `MoteManifest.src_root` both spell out --
-/// and it arrives here for the most ordinary layout there is: a mote whose
-/// `mote.toml` sits in the working directory, built as
-/// `cd mymote && monad build src/main.mo`. `Mote.discover` reports that
-/// manifest's directory as `""` (the same tree spelled `./src/main.mo`
-/// gives `"."`), and the shell cannot take the empty one: `cd ''` fails
-/// with "no such file or directory", so `tree_digest_with` is an error, so
-/// `Build.input_hash` is an error, so `build_cached` falls back to
-/// `compile_file` with the cache OFF -- silently, apart from one line
-/// under `--verbose`. Measured, one file and one directory, two spellings:
+/// and `extract_directory` hands one here for a bare filename. The shell
+/// cannot take the empty spelling: `cd ''` fails with "no such file or
+/// directory", so `tree_digest_with` must map it to `.` itself rather than
+/// letting `Build.input_hash` become an error and `build_cached` fall back
+/// to compiling with the cache OFF -- silently, apart from one line under
+/// `--verbose`. Measured, one file and one directory, two spellings:
 /// `src/main.mo` wrote no store entry at all, `./src/main.mo` wrote one.
 ///
 /// So the one consumer that forgot the convention spells it out. `.` is the

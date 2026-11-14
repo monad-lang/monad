@@ -44,12 +44,11 @@ use build::store {Build.ensure_dir, Build.entry_root_dir, Build.read_leaf, Build
 
 /// The working directory under ONE name.
 ///
-/// `""` and `"."` both name it -- `Mote.discover` reports the manifest's
-/// directory relative to where the walk started, so `src/a.mo` gives `""`
-/// while the same tree spelled `./src/a.mo` gives `"."` -- and a root is a
-/// directory, so the two must not be distinguishable downstream. `""` is
-/// also what `extract_directory` returns for a bare filename, which is the
-/// same reading: the working directory.
+/// `Mote.discover` reports the manifest's directory as `.` however the walk
+/// got there (`src/a.mo` and `./src/a.mo` both bottom out at the working
+/// directory), while `extract_directory` still answers `""` for a bare
+/// filename -- the same reading, a different spelling. A root is a
+/// directory, so the two must not be distinguishable downstream.
 def Build.root_or_cwd (d : String) : String :=
     if String.is_empty d then "." else d
 
@@ -84,9 +83,9 @@ def Build.root_or_cwd (d : String) : String :=
 /// separately) and strictly better than declining to cache.
 #[partial]
 pub def Build.mote_root_of (src : String) : IO String := do {
-    let m <- Mote.discover (extract_directory src);
+    let m <- Mote.discover (Path.unsafe_dir (extract_directory src));
     match m {
-        Option.some manifest => return (Build.root_or_cwd manifest.dir),
+        Option.some manifest => return (Path.to_string manifest.dir),
         Option.none => return (Build.root_or_cwd (extract_directory src))
     }
 }
@@ -250,14 +249,13 @@ pub def Build.check_plan_all (files : List String) (target_dir : String) : IO Ca
 /// what was going to happen anyway.
 ///
 /// **A root that names the working directory is digested, not skipped.**
-/// There used to be an `String.is_empty root` branch here that read `""` as
+/// There used to be a `String.is_empty root` branch here that read `""` as
 /// "a file outside any mote", and it was wrong for the commonest layout
 /// there is -- a mote whose manifest sits in the working directory, which
-/// `Mote.discover` reports as `""`. It silently declined to key one
-/// spelling of one build and keyed the other. `Build.mote_root_of` now
-/// normalizes that to `"."` at the single producer, so this walk sees one
-/// name for one root and needs no special case; declining is left to a real
-/// digest failure, which is what the paragraph above is about.
+/// `mote_root_of` now reports as `.`. That normalization happens at the
+/// single producer, so this walk sees one name for one root and needs no
+/// special case; declining is left to a real digest failure, which is what
+/// the paragraph above is about.
 ///
 /// Order is visit order, i.e. first appearance in the file list, and the
 /// list is a lookup table rather than a key ingredient -- nothing hashes

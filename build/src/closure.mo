@@ -25,7 +25,7 @@ use build::identity {Build.compiler_key_with}
 /// nothing to digest for it.
 #[partial]
 def Build.mote_facts (dir : String) : IO (Option (Pair String (List String))) := do {
-    let m <- Mote.discover dir;
+    let m <- Mote.discover (Path.unsafe_dir dir);
     match m {
         Option.none => return Option.none,
         Option.some manifest =>
@@ -98,7 +98,7 @@ pub def Build.closure_digest_with (tool : DigestTool) (dir : String) : IO (Resul
 pub def Build.closure_seed (dir : String) : IO (List String) := do {
     let cwd <- Build.cwd_ambient_dirs ["init", "std"];
     let tc <- Build.toolchain_seed cwd;
-    let m <- Mote.discover dir;
+    let m <- Mote.discover (Path.unsafe_dir dir);
     let members <- Build.workspace_seed m;
     return (List.append (List.append (List.append cwd tc) members) [dir])
 }
@@ -163,7 +163,10 @@ def Build.toolchain_seed (cwd : List String) : IO (List String) := do {
 /// the precise answer.
 def Build.workspace_seed (m : Option MoteManifest) : IO (List String) :=
     match m {
-        Option.none => Mote.workspace_members "",
+        Option.none => do {
+            let dirs <- Mote.workspace_members (Path.unsafe_dir "");
+            return (List.map (fn (p : Path) => Path.to_string p) dirs)
+        },
         Option.some _ => do { return List.empty }
     }
 

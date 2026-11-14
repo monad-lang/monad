@@ -113,7 +113,7 @@ pub def Build.target_dir_of (flag : String) (config : Option Path) (root : Strin
 /// collision the setting exists to prevent.
 #[partial]
 pub def Build.target_dir_at (dir : String) : IO String := do {
-    let d <- Mote.discover_config_target_dir dir;
+    let d <- Mote.discover_config_target_dir (Path.unsafe_dir dir);
     Build.target_dir_of "" d ""
 }
 

@@ -37,7 +37,11 @@ pub struct MoteManifest {
     /// §2b), and the lock is written from the DEPENDENCY's own manifest,
     /// so this has to be readable rather than assumed.
     version : String,
-    dir : String,
+    /// The mote's directory as a `Path`. The working directory is spelled
+    /// `.` -- an empty `Path` is never constructed -- and every join from it
+    /// goes through `Path.child_under`, which keeps the spellings this walk
+    /// has always produced (`src/lib.mo`, never `./src/lib.mo`).
+    dir : Path,
     deps : List String,
     /// Where each declared dependency COMES FROM: the parsed source of
     /// every `[dependencies]`/`[dev-dependencies]` entry that names one
@@ -56,13 +60,12 @@ pub struct MoteManifest {
     /// Where each declared dependency LIVES: `(name, dir)` pairs, computed
     /// from `deps_full`. A `path` dependency's `dir` is its `path` joined
     /// onto this mote's own `dir`, so it is usable as a path exactly as
-    /// stored. Any other source gets `""` -- a git dependency until its
-    /// checkout is resolved, a registry one until a registry exists --
-    /// which resolution reads as "declared, but not located": the name
-    /// still satisfies `declares` (so a `use` on it is legal), it just has
-    /// no directory to resolve into. An unlocated dependency is therefore
-    /// ABSENT from this list rather than present with a sentinel directory:
-    /// an empty `Path` is never constructed.
+    /// stored. Any other source is ABSENT from this list -- a git
+    /// dependency until its checkout is resolved, a registry one until a
+    /// registry exists -- which resolution reads as "declared, but not
+    /// located": the name still satisfies `declares` (so a `use` on it is
+    /// legal), it just has no directory to resolve into. There is no
+    /// sentinel directory, because an empty `Path` is never constructed.
     ///
     /// Without this, a dependency resolved purely by the NAME convention
     /// (`mote_relative_file`: the mote's directory is its name, at the
@@ -126,13 +129,13 @@ pub struct MoteManifest {
     /// The workspace root whose `[workspace.dependencies]` resolved
     /// `inherited`, when one was used. `with_locked_dirs` reads that root's
     /// `mote.lock` rather than this mote's own.
-    workspace_root : Option String,
+    workspace_root : Option Path,
 }
 
 /// A workspace root found above a member: its directory (as spelled on the
 /// walk) and its parsed `mote.toml`.
 struct MoteWorkspaceRoot {
-    dir : String,
+    dir : Path,
     table : BTreeMap String Toml.Value,
 }
 
@@ -141,7 +144,7 @@ struct MoteWorkspaceRoot {
 type MoteRootLookup {
     root_found (root : MoteWorkspaceRoot),
     root_none,
-    root_rejected (dir : String),
+    root_rejected (dir : Path),
 }
 
 /// One binary target: what `monad build` selects between.
@@ -280,15 +283,15 @@ def dep_errors_in (entries : List (Pair String String)) (name : String) : List S
 /// The mote's source root -- `<dir>/src`, always.
 ///
 /// `Path.child_under`, not `++`, and the difference is load-bearing exactly
-/// when the mote's `dir` is the working directory -- the mote whose
-/// `mote.toml` sits there, which is every mote found by walking up from a
-/// relative path (`Mote.discover`'s own CWD case). Concatenating gives
+/// when the mote's `dir` is the working directory (`.`), which is every mote
+/// found by walking up from a relative path (`Mote.discover`'s own CWD
+/// case). Concatenating gives
 /// `/src`, an ABSOLUTE path, so `mote_path_within` would answer
 /// `use <mote>::x` with `/src/x.mo` and miss every time. Same
 /// empty-component rule the dependency paths already follow
 /// (`test_manifest_reads_dependency_paths`).
 def MoteManifest.src_root (m : MoteManifest) : Path :=
-    Path.child_under (MoteManifest.root m) "src"
+    Path.child_under m.dir "src"
 
 /// The directory a declared dependency lives in, or `none` when the mote
 /// does not declare `name` or its entry carries no `path`. A dependency
@@ -305,19 +308,12 @@ def MoteManifest.src_root (m : MoteManifest) : Path :=
 /// itself, which is why `monad check src/list.mo` from `init/` reported
 /// `unknown variable '==' in List.get`.
 ///
-/// The mote's own directory as a `Path`, with the working directory spelled
-/// `.`. `dir` stays a string because it is a SPELLING (`""` is load-bearing
-/// in `raw_path_join` and in every walk-up), not an empty path; this is the
-/// one conversion, so a directory handed to the loader is never empty.
-pub def MoteManifest.root (m : MoteManifest) : Path :=
-    Path.unsafe_dir m.dir
-
 /// The self arm answers even for the mote whose `mote.toml` sits in the
-/// working directory: that is precisely the case it exists for, and
-/// `MoteManifest.root` spells that directory `.`.
+/// working directory: that is precisely the case it exists for, and the
+/// manifest's `dir` spells that directory `.`.
 pub def MoteManifest.dep_dir_of (m : MoteManifest) (name : String) : Option Path :=
     if String.beq m.name name
-    then Option.some (MoteManifest.root m)
+    then Option.some m.dir
     else dep_dir_in m.dep_dirs name
 
 def dep_dir_in (entries : List (Pair String Path)) (name : String) : Option Path :=
@@ -363,15 +359,15 @@ def list_contains_string (needle : String) (xs : List String) : Bool :=
 /// `.monad/config.toml` inherits from the one above it -- the same rule a
 /// manifest used to follow for its workspace.
 #[partial]
-pub def Mote.discover_config_target_dir (dir : String) : IO (Option Path) :=
+pub def Mote.discover_config_target_dir (dir : Path) : IO (Option Path) :=
     Mote.discover_config_target_dir_go dir 32
 
 #[partial]
-def Mote.discover_config_target_dir_go (dir : String) (depth : I64) : IO (Option Path) := do {
+def Mote.discover_config_target_dir_go (dir : Path) (depth : I64) : IO (Option Path) := do {
     if I64.lt depth 1
     then return Option.none
     else do {
-        let text <- read_file_or_none (Path.path (tool_config_in dir));
+        let text <- read_file_or_none (tool_config_in dir);
         match Mote.config_target_dir_of_found dir text {
             Option.some d => return (Option.some d),
             Option.none => Mote.discover_config_target_dir_above dir (depth - 1)
@@ -380,56 +376,20 @@ def Mote.discover_config_target_dir_go (dir : String) (depth : I64) : IO (Option
 }
 
 /// `config_target_dir_of_text` of a config file that may not exist.
-def Mote.config_target_dir_of_found (dir : String) (text : Option String) : Option Path :=
+def Mote.config_target_dir_of_found (dir : Path) (text : Option String) : Option Path :=
     match text {
         Option.none => Option.none,
         Option.some t => Mote.config_target_dir_of_text dir t
     }
 
 #[partial]
-def Mote.discover_config_target_dir_above (dir : String) (depth : I64) : IO (Option Path) :=
-    if String.beq dir "/"
-    then return Option.none
-    else Mote.discover_config_target_dir_go (config_dir_above dir) depth
+def Mote.discover_config_target_dir_above (dir : Path) (depth : I64) : IO (Option Path) :=
+    match Mote.dir_above dir {
+        Option.none => return Option.none,
+        Option.some p => Mote.discover_config_target_dir_go p depth,
+    }
 
-/// One step up from a directory this walk is standing in.
-///
-/// Not `parent_of`, because `""` is BOTH "the working directory" (see
-/// `tool_config_in`) and "no directory component" -- so `parent_of ""` is
-/// `""`, and a walk that stopped there never left the working directory.
-/// Same tree, two answers:
-///
-///   `monad build examples/hello.mo` (cwd = root) probes `examples/`, then
-///   `""` -- the cwd -- and finds the root config. `cd examples && monad
-///   build hello.mo` starts AT `""`, so `parent_of ""` is `""` and the walk
-///   stops after one probe: it silently falls back to `target/`.
-///
-/// A bare filename has genuinely no directory component (`raw_parent_dir
-/// "hello.mo"` is `""`), so the empty result cannot be reinterpreted at the
-/// call site -- `""` is a legitimate argument meaning CWD. An empty ascent
-/// therefore continues by `..`, the one spelling a path string has for
-/// "the directory above the working directory", and a path already made of
-/// `..` segments keeps going rather than bouncing (`raw_parent_dir ".."`
-/// is `.`, which would otherwise re-probe the cwd forever, bounded only by
-/// `depth`). Absolute paths still bottom out at `/`.
-///
-/// `Mote.discover`'s walk has the same shape and the same wart; it is left
-/// alone deliberately. Its consequence is a script module -- a documented,
-/// legitimate mode -- while this one quietly writes the binary somewhere
-/// other than where the tree says.
-def config_dir_above (dir : String) : String :=
-    if String.beq dir "" || String.beq dir "."
-    then ".."
-    else if String.starts_with ".." dir
-    then String.concat dir "/.."
-    else parent_of dir
-
-/// A `[build] target-dir` value, already joined onto the config's own
-/// directory. A declared EMPTY value joins to that directory; under a
-/// working-directory config that join is itself empty, which has no `Path`
-/// spelling and which the tool has always read as "not set", so that one
-/// case is `none`.
-def Mote.config_target_dir_of_text (dir : String) (text : String) : Option Path :=
+def Mote.config_target_dir_of_text (dir : Path) (text : String) : Option Path :=
     match Toml.parse text {
         err _ => Option.none,
         ok root => match Mote.joined_table_string dir (Toml.table_get "build" root) "target-dir" {
@@ -438,19 +398,14 @@ def Mote.config_target_dir_of_text (dir : String) (text : String) : Option Path 
         }
     }
 
-/// The `mote.toml` inside `dir`, with `""` meaning the working directory
-/// and `"/"` the filesystem root.
-def mote_toml_in (dir : String) : String :=
-    if String.beq dir "" then "mote.toml"
-    else if String.beq dir "/" then "/mote.toml"
-    else String.concat dir "/mote.toml"
+/// The `mote.toml` inside `dir`; `Path.child_under` keeps the working
+/// directory spelled `mote.toml` and the root spelled `/mote.toml`.
+def mote_toml_in (dir : Path) : Path :=
+    Path.child_under dir "mote.toml"
 
-/// The monad tool's config inside `dir` -- `.monad/config.toml`, with `""`
-/// meaning the working directory and `"/"` the filesystem root.
-def tool_config_in (dir : String) : String :=
-    if String.beq dir "" then ".monad/config.toml"
-    else if String.beq dir "/" then "/.monad/config.toml"
-    else String.concat dir "/.monad/config.toml"
+/// The monad tool's config inside `dir` -- `.monad/config.toml`.
+def tool_config_in (dir : Path) : Path :=
+    Path.child_under dir ".monad/config.toml"
 
 /// The directories a mote's own declared targets live in: the `[lib]`
 /// root's, then each `[[bin]]`'s, deduplicated in that order.
@@ -555,18 +510,36 @@ def Mote.roots_contain (roots : List Path) (wanted : Path) : Bool :=
         List.cons r rest => if Path.beq r wanted then true else Mote.roots_contain rest wanted,
     }
 
-/// The parent of `dir`, keeping an absolute path absolute.
+/// The parent of a directory SPELLING, keeping an absolute path absolute.
 ///
 /// `raw_parent_dir "/home"` is `""` -- a root child's parent is the ROOT,
-/// and `""` here means the WORKING DIRECTORY. Without this distinction the
-/// walk-up of an absolute path outside any mote would end by probing
-/// `mote.toml` relative to the CWD and adopt whatever mote happens to live
-/// there, rewriting that file's `use lib::x` to an unrelated mote's name.
-def parent_of (dir : String) : String :=
-    let parent := raw_parent_dir dir in
-    if String.beq parent "" && String.starts_with "/" dir
-    then "/"
-    else parent
+/// and an empty parent generally means the WORKING DIRECTORY (a bare name's
+/// directory). Without this distinction the walk-up of an absolute path
+/// outside any mote would end by probing `mote.toml` relative to the CWD and
+/// adopt whatever mote happens to live there, rewriting that file's
+/// `use lib::x` to an unrelated mote's name.
+def parent_dir (s : String) : Path :=
+    let parent := raw_parent_dir s in
+    if String.is_empty parent
+    then (if String.starts_with "/" s then Path.unsafe "/" else Path.unsafe ".")
+    else Path.unsafe parent
+
+/// The directory one step up in `Mote.discover`'s walk: `none` at the
+/// working directory (`.`) and at the filesystem root, where the walk ends.
+def Mote.discover_parent (dir : Path) : Option Path :=
+    let s := Path.to_string dir in
+    if String.beq s "." || String.beq s "/" then Option.none else Option.some (parent_dir s)
+
+/// The directory one step up in the policy/config walks, which keep going
+/// ABOVE the working directory: `.` ascends to `..` and a `..`-relative
+/// directory keeps appending (`raw_parent_dir ".."` is `.`, which would
+/// otherwise re-probe the cwd forever). `none` at the filesystem root.
+pub def Mote.dir_above (dir : Path) : Option Path :=
+    let s := Path.to_string dir in
+    if String.beq s "/" then Option.none
+    else if String.beq s "." then Option.some (Path.unsafe "..")
+    else if String.starts_with ".." s then Option.some (Path.unsafe (String.concat s "/.."))
+    else Option.some (parent_dir s)
 
 #[partial]
 /// `pub`: this is the reader's entry point and it already crosses a mote
@@ -580,18 +553,19 @@ def parent_of (dir : String) : String :=
 /// Walks up from `dir` for the first `mote.toml` and parses it; `Option.none`
 /// for a file outside any mote (script mode -- `examples/`, a one-off file)
 /// or under a virtual workspace root, which declares `[workspace]` and no
-/// `[mote]`. Bounded by `depth` as well as by the root, because the walk is
-/// string surgery on a path: a relative path bottoms out at `""`, an
-/// absolute one at `"/"`, and `depth` is the argument that holds for both.
-pub def Mote.discover (dir : String) : IO (Option MoteManifest) :=
+/// `[mote]`. Bounded by `depth` as well as by the root, because the walk
+/// is string surgery on a path: a relative path bottoms out at `.` (the
+/// working directory), an absolute one at `"/"`, and `depth` is the
+/// argument that holds for both.
+pub def Mote.discover (dir : Path) : IO (Option MoteManifest) :=
     Mote.discover_go dir 32
 
 #[partial]
-def Mote.discover_go (dir : String) (depth : I64) : IO (Option MoteManifest) := do {
+def Mote.discover_go (dir : Path) (depth : I64) : IO (Option MoteManifest) := do {
     if I64.lt depth 1
     then return Option.none
     else do {
-        let found <- read_file_or_none (Path.path (mote_toml_in dir));
+        let found <- read_file_or_none (mote_toml_in dir);
         match found {
             // A `mote.toml` with no `[mote]` is a virtual workspace
             // root: stop there rather than walking past it, since
@@ -606,10 +580,11 @@ def Mote.discover_go (dir : String) (depth : I64) : IO (Option MoteManifest) := 
 }
 
 #[partial]
-def Mote.discover_above (dir : String) (depth : I64) : IO (Option MoteManifest) :=
-    if String.beq dir "" || String.beq dir "/"
-    then return Option.none
-    else Mote.discover_go (parent_of dir) (depth - 1)
+def Mote.discover_above (dir : Path) (depth : I64) : IO (Option MoteManifest) :=
+    match Mote.discover_parent dir {
+        Option.none => return Option.none,
+        Option.some p => Mote.discover_go p (depth - 1),
+    }
 
 /// `discover_go`'s tail: a parsed manifest with its git dependencies
 /// located from `mote.lock`. Split out so the walk-up path keeps its own
@@ -628,8 +603,8 @@ def Mote.discover_parsed (parsed : Option MoteManifest) : IO (Option MoteManifes
 /// walk is right for a file's own mote and wrong for a DECLARED dependency:
 /// `[dependencies.x] path` names `x`'s directory, so a manifest further up
 /// is somebody else's. Resolution needs the dependency's own `[lib] path`.
-pub def Mote.manifest_at (dir : String) : IO (Option MoteManifest) := do {
-    let text <- read_file_or_none (Path.path (mote_toml_in dir));
+pub def Mote.manifest_at (dir : Path) : IO (Option MoteManifest) := do {
+    let text <- read_file_or_none (mote_toml_in dir);
     match text {
         Option.none => return Option.none,
         Option.some t => Mote.load_manifest dir t,
@@ -658,8 +633,8 @@ pub def Mote.manifest_at (dir : String) : IO (Option MoteManifest) := do {
 /// from being tested. The caller sees a shorter list, and the manifest
 /// is checked by the Rust host in CI anyway.
 #[partial]
-pub def Mote.workspace_members (dir : String) : IO (List String) := do {
-    let found <- read_file_or_none (Path.path (mote_toml_in dir));
+pub def Mote.workspace_members (dir : Path) : IO (List Path) := do {
+    let found <- read_file_or_none (mote_toml_in dir);
     match found {
         Option.none => return List.empty,
         Option.some text => Mote.workspace_members_of_text dir text
@@ -667,7 +642,7 @@ pub def Mote.workspace_members (dir : String) : IO (List String) := do {
 }
 
 #[partial]
-def Mote.workspace_members_of_text (dir : String) (text : String) : IO (List String) :=
+def Mote.workspace_members_of_text (dir : Path) (text : String) : IO (List Path) :=
     match Toml.parse text {
         err _ => IO.pure List.empty,
         ok root =>
@@ -707,7 +682,7 @@ def Mote.strings_of_values (xs : List Toml.Value) : List String :=
     }
 
 #[partial]
-def Mote.expand_members (root_dir : String) (patterns : List String) : IO (List String) :=
+def Mote.expand_members (root_dir : Path) (patterns : List String) : IO (List Path) :=
     match patterns {
         List.empty => do { return List.empty },
         List.cons pat rest => do {
@@ -720,45 +695,49 @@ def Mote.expand_members (root_dir : String) (patterns : List String) : IO (List 
 /// One member pattern: a `/*` suffix expands one level, anything else
 /// is a single directory, kept only if it really is a mote.
 #[partial]
-def Mote.expand_one_member (root_dir : String) (pat : String) : IO (List String) :=
+def Mote.expand_one_member (root_dir : Path) (pat : String) : IO (List Path) :=
     if String.ends_with pat "/*"
     then do {
         // `String.slice` takes a LENGTH, not an end index.
         let prefix := String.slice pat 0 (String.length pat - 2);
         let parent := Mote.member_path root_dir prefix;
-        let is_there <- IO.is_dir (Path.path parent);
+        let is_there <- IO.is_dir parent;
         if Bool.not is_there then do { return List.empty }
         else do {
-            let entries <- IO.list_dir (Path.path parent);
+            let entries <- IO.list_dir parent;
             Mote.keep_mote_dirs entries
         }
     }
     else do {
         let d := Mote.member_path root_dir pat;
-        let ok <- IO.file_exists (Path.path (mote_toml_in d));
+        let ok <- IO.file_exists (mote_toml_in d);
         if ok then do { return (List.cons d List.empty) } else do { return List.empty }
     }
 
-/// A member directory, relative to the workspace root -- `""` (the
-/// working directory) leaves the member path as written, so a
-/// workspace root discovered as `""` yields `init`, not `/init`.
-def Mote.member_path (root_dir : String) (name : String) : String :=
-    if String.beq root_dir "" then name else raw_path_join root_dir name
+/// A member directory, relative to the workspace root -- a root of `.`
+/// (the working directory) leaves the member path as written, so a
+/// workspace root discovered as `.` yields `init`, not `/init`.
+def Mote.member_path (root_dir : Path) (name : String) : Path :=
+    Path.child_under root_dir name
 
 #[partial]
-def Mote.keep_mote_dirs (entries : List Path) : IO (List String) :=
+def Mote.keep_mote_dirs (entries : List Path) : IO (List Path) :=
     match entries {
         List.empty => do { return List.empty },
         List.cons entry rest => do {
-            let path := Path.to_string entry;
-            let is_mote <- IO.file_exists (Path.path (mote_toml_in path));
+            let is_mote <- IO.file_exists (mote_toml_in entry);
             let tail <- Mote.keep_mote_dirs rest;
-            return (if is_mote then List.cons path tail else tail)
+            return (if is_mote then List.cons entry tail else tail)
         }
     }
 
 /// Parse a manifest's text into the resolution-relevant fields.
 def Mote.parse_manifest (dir : String) (text : String) : Option MoteManifest :=
+    Mote.parse_manifest_at (Path.unsafe_dir dir) text
+
+/// `parse_manifest` with the directory already a `Path` -- the form the
+/// walks use, so the working directory keeps its `.` spelling.
+def Mote.parse_manifest_at (dir : Path) (text : String) : Option MoteManifest :=
     match Toml.parse text {
         err _ => Option.none,
         ok root => Mote.manifest_of_table dir root
@@ -780,45 +759,59 @@ def Mote.parse_manifest (dir : String) (text : String) : Option MoteManifest :=
 /// `examples/`, for one. The policy walk stops at the nearest
 /// `mote.toml` whether or not it declares a `[mote]`, so a workspace
 /// root can carry the fallback and a member can override it.
-pub def Mote.affine_mode_of_path (file : String) : IO AffineMode :=
-    Mote.affine_mode_of_dir (raw_parent_dir file) 32
+pub def Mote.affine_mode_of_path (file : Path) : IO AffineMode :=
+    Mote.affine_mode_of_dir (Path.directory file) 32
 
 #[partial]
-def Mote.affine_mode_of_dir (dir : String) (depth : I64) : IO AffineMode := do {
+def Mote.affine_mode_of_dir (dir : Path) (depth : I64) : IO AffineMode := do {
     if I64.lt depth 1 then return AffineMode.affine_error
     else do {
-        let found <- read_file_or_none (Path.path (mote_toml_in dir));
+        let found <- read_file_or_none (mote_toml_in dir);
         match found {
             Option.some text => return (Mote.affine_mode_of_text text),
-            // `config_dir_above`, not `parent_of`: when the walk starts at
-            // `""` (the working directory) `parent_of` answers `""` again,
+            // `dir_above`, not `discover_parent`: when the walk starts at
+            // `.` (the working directory) `discover_parent` answers `none`,
             // so a member's own file checked from inside the member would
-            // never reach `../mote.toml`. `config_dir_above` steps to `..`
-            // in that case, the same walk `Mote.discover_config_target_dir_go`
-            // already uses.
-            Option.none => Mote.affine_mode_of_dir (config_dir_above dir) (depth - 1),
+            // never reach `../mote.toml`. `dir_above` steps to `..` in that
+            // case, the same walk `Mote.discover_config_target_dir_go` and
+            // `Mote.workspace_root_above` already use.
+            Option.none => Mote.affine_mode_above dir (depth - 1),
         }
     }
 }
+
+#[partial]
+def Mote.affine_mode_above (dir : Path) (depth : I64) : IO AffineMode :=
+    match Mote.dir_above dir {
+        Option.none => return AffineMode.affine_error,
+        Option.some p => Mote.affine_mode_of_dir p depth,
+    }
 
 /// The nearest manifest and its `[[script]]` entries, whether or not that
 /// manifest declares `[mote]` (a virtual workspace root may own scripts).
 /// `Mote.discover` cannot answer this: it returns `none` at a virtual root.
-pub def Mote.scripts_at_path (file : String) : IO (Option (Pair String (List ScriptTarget))) :=
-    Mote.scripts_at_dir (raw_parent_dir file) 32
+pub def Mote.scripts_at_path (file : Path) : IO (Option (Pair String (List ScriptTarget))) :=
+    Mote.scripts_at_dir (Path.directory file) 32
 
 #[partial]
-def Mote.scripts_at_dir (dir : String) (depth : I64) : IO (Option (Pair String (List ScriptTarget))) := do {
+def Mote.scripts_at_dir (dir : Path) (depth : I64) : IO (Option (Pair String (List ScriptTarget))) := do {
     if I64.lt depth 1 then return Option.none
     else do {
-        let found <- read_file_or_none (Path.path (mote_toml_in dir));
+        let found <- read_file_or_none (mote_toml_in dir);
         match found {
             Option.some text =>
-                return (Option.some (Pair.pair dir (Mote.script_targets_of_text dir text))),
-            Option.none => Mote.scripts_at_dir (config_dir_above dir) (depth - 1),
+                return (Option.some (Pair.pair (Path.to_string dir) (Mote.script_targets_of_text dir text))),
+            Option.none => Mote.scripts_above dir (depth - 1),
         }
     }
 }
+
+#[partial]
+def Mote.scripts_above (dir : Path) (depth : I64) : IO (Option (Pair String (List ScriptTarget))) :=
+    match Mote.dir_above dir {
+        Option.none => return Option.none,
+        Option.some p => Mote.scripts_at_dir p depth,
+    }
 
 /// `[affine] mode` in a manifest's text. See `Mote.affine_mode_of_path`
 /// for why every non-`"warn"` answer is the strict default.
@@ -903,23 +896,23 @@ def Mote.inherit_missing_root_message (name : String) : String :=
     String.concat "sets `workspace = true`, but no workspace root above this manifest declares [workspace.dependencies."
         (String.concat name "]")
 
-def Mote.inherit_not_member_message (root_dir : String) : String :=
+def Mote.inherit_not_member_message (root_dir : Path) : String :=
     String.concat "is not a member of the workspace at "
-        (String.concat root_dir "; add it to [workspace] members or declare the dependency directly")
+        (String.concat (Path.to_string root_dir) "; add it to [workspace] members or declare the dependency directly")
 
 def Mote.inherit_missing_name_message (w : MoteWorkspaceRoot) (name : String) : String :=
     String.concat "sets `workspace = true`, but the workspace root "
-        (String.concat w.dir (String.concat " does not declare [workspace.dependencies."
+        (String.concat (Path.to_string w.dir) (String.concat " does not declare [workspace.dependencies."
             (String.concat name "]")))
 
 def Mote.inherit_root_invalid_message (w : MoteWorkspaceRoot) (name : String) (reason : String) : String :=
     String.concat "[workspace.dependencies."
         (String.concat name (String.concat "] in "
-            (String.concat w.dir (String.concat ": " reason))))
+            (String.concat (Path.to_string w.dir) (String.concat ": " reason))))
 
 def Mote.inherit_root_sourceless_message (w : MoteWorkspaceRoot) (name : String) : String :=
     String.concat "[workspace.dependencies."
-        (String.concat name (String.concat "] in " (String.concat w.dir " names no source")))
+        (String.concat name (String.concat "] in " (String.concat (Path.to_string w.dir) " names no source")))
 
 def Mote.inherit_chained_message (name : String) : String :=
     String.concat "[workspace.dependencies."
@@ -953,7 +946,7 @@ def Mote.resolve_inherited
         MoteRootLookup.root_found w => Mote.resolve_from_root w name root_entries,
     }
 
-def Mote.manifest_of_table (dir : String) (root : BTreeMap String Toml.Value) : Option MoteManifest :=
+def Mote.manifest_of_table (dir : Path) (root : BTreeMap String Toml.Value) : Option MoteManifest :=
     Mote.manifest_of_table_root dir MoteRootLookup.root_none root
 
 /// `manifest_of_table` with a workspace root in hand: `workspace = true`
@@ -961,13 +954,13 @@ def Mote.manifest_of_table (dir : String) (root : BTreeMap String Toml.Value) : 
 /// as a separate entry point so callers with no workspace context keep the
 /// pure signature.
 pub def Mote.manifest_of_table_in_workspace
-    (dir : String) (root_dir : String) (root_table : BTreeMap String Toml.Value)
+    (dir : Path) (root_dir : Path) (root_table : BTreeMap String Toml.Value)
     (table : BTreeMap String Toml.Value) : Option MoteManifest :=
     let w : MoteWorkspaceRoot := { dir := root_dir, table := root_table } in
     Mote.manifest_of_table_root dir (MoteRootLookup.root_found w) table
 
 def Mote.manifest_of_table_root
-    (dir : String) (lookup : MoteRootLookup) (root : BTreeMap String Toml.Value)
+    (dir : Path) (lookup : MoteRootLookup) (root : BTreeMap String Toml.Value)
     : Option MoteManifest :=
     match Mote.table_string (Toml.table_get "mote" root) "name" {
         Option.none => Option.none,
@@ -1001,7 +994,7 @@ def Mote.manifest_of_table_root
                 dir := dir,
                 deps := deps,
                 deps_full := deps_full,
-                dep_errors := Mote.dep_entry_errors (mote_toml_in dir) entries,
+                dep_errors := Mote.dep_entry_errors (Path.to_string (mote_toml_in dir)) entries,
                 dep_dirs := Mote.dep_dirs_of deps_full,
                 features := Mote.feature_entries root,
                 dep_policies := List.append
@@ -1029,33 +1022,26 @@ def Mote.manifest_of_table_root
 /// A directory spelling with the redundant `./` and trailing `/` removed.
 /// Used only to compare two spellings of the same member; it does not try to
 /// be a general path normalizer.
-def Mote.norm_dir (d : String) : String :=
-    let a := if String.starts_with "./" d then String.drop 2 d else d in
+def Mote.norm_dir (d : Path) : String :=
+    let s := Path.to_string d in
+    let a := if String.starts_with "./" s then String.drop 2 s else s in
     let b := if String.ends_with "/" a then String.slice a 0 (String.length a - 1) else a in
     if String.is_empty b then "." else b
 
-/// One step up, handling the `""`/`.` spellings the same way
-/// `config_dir_above` does: `""` and `.` mean the working directory, whose
-/// parent has to be written `..` because `raw_parent_dir ""` is `""`.
-def Mote.dir_above (d : String) : String :=
-    if String.beq d "" || String.beq d "." then ".."
-    else if String.starts_with ".." d then String.concat d "/.."
-    else parent_of d
-
 /// The `[mote] name` of the manifest at `dir`, if there is one.
 #[partial]
-def Mote.member_manifest_name (dir : String) : IO (Option String) := do {
-    let text <- read_file_or_none (Path.path (mote_toml_in dir));
+def Mote.member_manifest_name (dir : Path) : IO (Option String) := do {
+    let text <- read_file_or_none (mote_toml_in dir);
     match text {
         Option.none => return Option.none,
-        Option.some t => match Mote.parse_manifest dir t {
+        Option.some t => match Mote.parse_manifest_at dir t {
             Option.none => return Option.none,
             Option.some m => return (Option.some m.name),
         },
     }
 }
 
-def Mote.dirs_contain (dirs : List String) (want : String) : Bool :=
+def Mote.dirs_contain (dirs : List Path) (want : Path) : Bool :=
     match dirs {
         List.empty => false,
         List.cons d rest =>
@@ -1072,10 +1058,10 @@ def Mote.names_contain (names : List String) (want : String) : Bool :=
 /// The `[mote] name` of every directory in `dirs`, dropping the ones that
 /// are not manifests. Membership is decided by NAME rather than by spelling
 /// the member's directory relative to the root: a user may be standing
-/// inside the member (`""`), name it `./cli`, or reach it through an
+/// inside the member (`.`), name it `./cli`, or reach it through an
 /// absolute git checkout, and all of those are the same member.
 #[partial]
-def Mote.member_names_of (dirs : List String) : IO (List String) :=
+def Mote.member_names_of (dirs : List Path) : IO (List String) :=
     match dirs {
         List.empty => return List.empty,
         List.cons d rest => do {
@@ -1089,7 +1075,7 @@ def Mote.member_names_of (dirs : List String) : IO (List String) :=
     }
 
 #[partial]
-pub def Mote.workspace_member_names (root_dir : String) : IO (List String) := do {
+pub def Mote.workspace_member_names (root_dir : Path) : IO (List String) := do {
     let dirs <- Mote.workspace_members root_dir;
     Mote.member_names_of dirs
 }
@@ -1100,14 +1086,14 @@ pub def Mote.workspace_member_names (root_dir : String) : IO (List String) := do
 /// root that exists but does not list this package; `root_none` means there
 /// is no root above.
 #[partial]
-pub def Mote.workspace_root_of (dir : String) (name : String) : IO MoteRootLookup :=
+pub def Mote.workspace_root_of (dir : Path) (name : String) : IO MoteRootLookup :=
     Mote.workspace_root_go dir name 32
 
 #[partial]
-def Mote.workspace_root_go (dir : String) (name : String) (depth : I64) : IO MoteRootLookup := do {
-    if I64.lt depth 1 || String.beq dir "/" then return MoteRootLookup.root_none
+def Mote.workspace_root_go (dir : Path) (name : String) (depth : I64) : IO MoteRootLookup := do {
+    if I64.lt depth 1 then return MoteRootLookup.root_none
     else do {
-        let text <- read_file_or_none (Path.path (mote_toml_in dir));
+        let text <- read_file_or_none (mote_toml_in dir);
         match text {
             Option.none => Mote.workspace_root_above dir name depth,
             Option.some t => match Toml.parse t {
@@ -1125,15 +1111,18 @@ def Mote.workspace_root_go (dir : String) (name : String) (depth : I64) : IO Mot
 }
 
 #[partial]
-def Mote.workspace_root_above (dir : String) (name : String) (depth : I64) : IO MoteRootLookup :=
-    Mote.workspace_root_go (Mote.dir_above dir) name (depth - 1)
+def Mote.workspace_root_above (dir : Path) (name : String) (depth : I64) : IO MoteRootLookup :=
+    match Mote.dir_above dir {
+        Option.none => return MoteRootLookup.root_none,
+        Option.some p => Mote.workspace_root_go p name (depth - 1),
+    }
 
 /// A `[workspace]` manifest was found at `dir`. A root that also declares
 /// its own `[mote]` name may inherit from its own table; otherwise the
 /// member must be listed (by name) in `[workspace] members`.
 #[partial]
 def Mote.workspace_root_found
-    (dir : String) (name : String) (root : BTreeMap String Toml.Value) : IO MoteRootLookup := do {
+    (dir : Path) (name : String) (root : BTreeMap String Toml.Value) : IO MoteRootLookup := do {
     let own := Mote.table_string (Toml.table_get "mote" root) "name";
     let is_self := match own {
         Option.some n => String.beq n name,
@@ -1145,8 +1134,8 @@ def Mote.workspace_root_found
         let dirs <- Mote.workspace_members dir;
         // Compare the member's directory spelling first: every ordinary load
         // takes this path and reads no manifests. The name fallback covers
-        // `""`/`.` (the user inside the member) and an absolute checkout,
-        // where the same member has two spellings.
+        // `.` (the user inside the member) and an absolute checkout, where
+        // the same member has two spellings.
         if Mote.dirs_contain dirs dir then return (MoteRootLookup.root_found w)
         else do {
             let names <- Mote.member_names_of dirs;
@@ -1159,7 +1148,7 @@ def Mote.workspace_root_found
 
 /// `parse_manifest` with a root lookup already decided.
 def Mote.parse_manifest_with_lookup
-    (dir : String) (lookup : MoteRootLookup) (text : String) : Option MoteManifest :=
+    (dir : Path) (lookup : MoteRootLookup) (text : String) : Option MoteManifest :=
     match Toml.parse text {
         err _ => Option.none,
         ok root => Mote.manifest_of_table_root dir lookup root,
@@ -1169,8 +1158,8 @@ def Mote.parse_manifest_with_lookup
 /// workspace root above it. The pure `parse_manifest` stays available for
 /// callers with no filesystem; this is the loader's entry point.
 #[partial]
-pub def Mote.load_manifest (dir : String) (text : String) : IO (Option MoteManifest) := do {
-    match Mote.parse_manifest dir text {
+pub def Mote.load_manifest (dir : Path) (text : String) : IO (Option MoteManifest) := do {
+    match Mote.parse_manifest_at dir text {
         Option.none => return Option.none,
         Option.some m =>
             if List.is_empty m.inherited
@@ -1193,8 +1182,8 @@ pub def Mote.load_manifest (dir : String) (text : String) : IO (Option MoteManif
 /// `dir` has no `[workspace]` table. Used by `monad fetch`, which is handed a
 /// virtual root and must resolve every member's dependencies.
 #[partial]
-pub def Mote.workspace_member_dirs (dir : String) : IO (Option (List String)) := do {
-    let text <- read_file_or_none (Path.path (mote_toml_in dir));
+pub def Mote.workspace_member_dirs (dir : Path) : IO (Option (List Path)) := do {
+    let text <- read_file_or_none (mote_toml_in dir);
     match text {
         Option.none => return Option.none,
         Option.some t => match Toml.parse t {
@@ -1217,11 +1206,11 @@ pub def Mote.workspace_member_dirs (dir : String) : IO (Option (List String)) :=
 /// finished diagnostic. `none` means either there is no such problem or the
 /// manifest uses no `workspace = true`.
 #[partial]
-pub def Mote.manifest_problem (dir : String) : IO (Option String) := do {
-    let text <- read_file_or_none (Path.path (mote_toml_in dir));
+pub def Mote.manifest_problem (dir : Path) : IO (Option String) := do {
+    let text <- read_file_or_none (mote_toml_in dir);
     match text {
         Option.none => return Option.none,
-        Option.some t => match Mote.parse_manifest dir t {
+        Option.some t => match Mote.parse_manifest_at dir t {
             Option.none => return Option.none,
             Option.some m =>
                 if List.is_empty m.inherited then return Option.none
@@ -1231,7 +1220,7 @@ pub def Mote.manifest_problem (dir : String) : IO (Option String) := do {
                         MoteRootLookup.root_found w => Mote.root_dep_entries w,
                         _ => List.empty,
                     };
-                    return (Mote.inherited_problem (mote_toml_in dir) lookup root_entries m.inherited)
+                    return (Mote.inherited_problem (Path.to_string (mote_toml_in dir)) lookup root_entries m.inherited)
                 }
         }
     }
@@ -1280,7 +1269,7 @@ struct DepKeys {
 /// Both TOML spellings arrive here as the same table:
 /// `[dependencies.std] path = "../std"` and `std = { path = "../std" }`.
 /// A bare string (`json = ">=0.2.0"`) is a registry requirement.
-def Mote.table_dep_entries (mote_dir : String) (found : Option Toml.Value) : List (Pair String ManifestDepEntry) :=
+def Mote.table_dep_entries (mote_dir : Path) (found : Option Toml.Value) : List (Pair String ManifestDepEntry) :=
     match found {
         Option.none => List.empty,
         Option.some v => match v {
@@ -1289,7 +1278,7 @@ def Mote.table_dep_entries (mote_dir : String) (found : Option Toml.Value) : Lis
         }
     }
 
-def Mote.dep_entries_go (mote_dir : String) (entries : List (Pair String Toml.Value)) : List (Pair String ManifestDepEntry) :=
+def Mote.dep_entries_go (mote_dir : Path) (entries : List (Pair String Toml.Value)) : List (Pair String ManifestDepEntry) :=
     match entries {
         List.empty => List.empty,
         List.cons e rest => match e {
@@ -1297,7 +1286,7 @@ def Mote.dep_entries_go (mote_dir : String) (entries : List (Pair String Toml.Va
         }
     }
 
-def Mote.dep_entry (mote_dir : String) (v : Toml.Value) : ManifestDepEntry :=
+def Mote.dep_entry (mote_dir : Path) (v : Toml.Value) : ManifestDepEntry :=
     match v {
         Toml.Value.string req => ManifestDepEntry.found (Dependency.registry req),
         Toml.Value.table sub => Mote.dep_entry_of_table mote_dir sub,
@@ -1307,7 +1296,7 @@ def Mote.dep_entry (mote_dir : String) (v : Toml.Value) : ManifestDepEntry :=
 /// A key that is present with a non-string value is an error, not an
 /// absent key: `tag = 1` quietly meaning "no tag" would follow the
 /// remote's `HEAD` instead of the pin the author wrote.
-def Mote.dep_entry_of_table (mote_dir : String) (sub : BTreeMap String Toml.Value) : ManifestDepEntry :=
+def Mote.dep_entry_of_table (mote_dir : Path) (sub : BTreeMap String Toml.Value) : ManifestDepEntry :=
     match Toml.table_get "workspace" sub {
         Option.some v => Mote.inherit_entry sub v,
         Option.none => Mote.dep_entry_of_plain_table mote_dir sub,
@@ -1327,7 +1316,7 @@ def Mote.inherit_entry (sub : BTreeMap String Toml.Value) (v : Toml.Value) : Man
         _ => ManifestDepEntry.invalid "`workspace` must be the boolean `true`",
     }
 
-def Mote.dep_entry_of_plain_table (mote_dir : String) (sub : BTreeMap String Toml.Value) : ManifestDepEntry :=
+def Mote.dep_entry_of_plain_table (mote_dir : Path) (sub : BTreeMap String Toml.Value) : ManifestDepEntry :=
     match List.filter (fn (key : String) => Mote.dep_key_not_string sub key) dep_string_keys {
         List.cons key _ => ManifestDepEntry.invalid (String.concat (String.concat "`" key) "` must be a string"),
         List.empty => Mote.dep_entry_of_keys mote_dir (Mote.dep_keys sub),
@@ -1356,7 +1345,7 @@ def Mote.dep_keys (sub : BTreeMap String Toml.Value) : DepKeys :=
     } in
     k
 
-def Mote.dep_entry_of_keys (mote_dir : String) (k : DepKeys) : ManifestDepEntry :=
+def Mote.dep_entry_of_keys (mote_dir : Path) (k : DepKeys) : ManifestDepEntry :=
     match k.git {
         Option.some url => Mote.git_dep_entry url k,
         Option.none => Mote.non_git_dep_entry mote_dir k,
@@ -1384,12 +1373,11 @@ def Mote.git_dep_entry (url : String) (k : DepKeys) : ManifestDepEntry :=
 /// so one with no `path` got `raw_path_join mote_dir ""` -- the declaring
 /// mote's OWN directory whenever that was non-empty -- and resolution
 /// then looked for the dependency inside the mote that declared it.
-def Mote.non_git_dep_entry (mote_dir : String) (k : DepKeys) : ManifestDepEntry :=
+def Mote.non_git_dep_entry (mote_dir : Path) (k : DepKeys) : ManifestDepEntry :=
     if count_present [k.tag, k.branch, k.rev, k.subdir] > 0
     then ManifestDepEntry.invalid "`tag`, `branch`, `rev` and `subdir` only apply to a `git` dependency"
     else match k.path {
-        Option.some p => ManifestDepEntry.found
-            (Dependency.path (Path.child_under (Path.unsafe_dir mote_dir) p)),
+        Option.some p => ManifestDepEntry.found (Dependency.path (Path.child_under mote_dir p)),
         Option.none => match k.version {
             Option.some req => ManifestDepEntry.found (Dependency.registry req),
             Option.none => ManifestDepEntry.sourceless,
@@ -1515,7 +1503,7 @@ def Mote.read_lock_for (m : MoteManifest) : IO (Option LockRead) :=
             match root_read {
                 Option.some r => return (Option.some r),
                 Option.none =>
-                    if String.beq root m.dir
+                    if Path.beq root m.dir
                     then return Option.none
                     else Mote.read_lock_at m.dir,
             }
@@ -1523,8 +1511,8 @@ def Mote.read_lock_for (m : MoteManifest) : IO (Option LockRead) :=
     }
 
 #[partial]
-def Mote.read_lock_at (dir : String) : IO (Option LockRead) := do {
-    let read <- Lock.read (Path.path (raw_path_join dir "mote.lock"));
+def Mote.read_lock_at (dir : Path) : IO (Option LockRead) := do {
+    let read <- Lock.read (Path.child_under dir "mote.lock");
     match read {
         Result.err _ => return Option.none,
         Result.ok found => return found,
@@ -1633,7 +1621,7 @@ pub def Mote.any_git_dep (deps : List (Pair String Dependency)) : Bool :=
 /// `[[bin]]` is deliberately NOT the same shape: a bin table can name
 /// several targets, so those default per ENTRY (see `Mote.bin_targets`),
 /// and an absent table defaults to one target rather than to a filename.
-def Mote.lib_target_path (dir : String) (root : BTreeMap String Toml.Value) : Option Path :=
+def Mote.lib_target_path (dir : Path) (root : BTreeMap String Toml.Value) : Option Path :=
     match Mote.joined_table_path dir (Toml.table_get "lib" root) "path" {
         Option.some p => Option.some p,
         Option.none => Option.some (Mote.default_path dir "src/lib.mo"),
@@ -1651,7 +1639,7 @@ def Mote.lib_target_path (dir : String) (root : BTreeMap String Toml.Value) : Op
 /// `Toml.array_at` is what separates the first two: an array of tables
 /// parses to `Toml.Value.array`, so it answers with the elements, while the
 /// singular table answers with nothing and falls through.
-def Mote.bin_targets (dir : String) (mote_name : String) (root : BTreeMap String Toml.Value) : List BinTarget :=
+def Mote.bin_targets (dir : Path) (mote_name : String) (root : BTreeMap String Toml.Value) : List BinTarget :=
     match Toml.array_at "bin" root {
         List.empty => match Toml.table_get "bin" root {
             Option.some v => match v {
@@ -1663,7 +1651,7 @@ def Mote.bin_targets (dir : String) (mote_name : String) (root : BTreeMap String
         List.cons _ _ => Mote.bin_targets_of_values dir mote_name (Toml.array_at "bin" root)
     }
 
-def Mote.bin_targets_of_values (dir : String) (mote_name : String) (entries : List Toml.Value) : List BinTarget :=
+def Mote.bin_targets_of_values (dir : Path) (mote_name : String) (entries : List Toml.Value) : List BinTarget :=
     match entries {
         List.empty => List.empty,
         List.cons v rest =>
@@ -1685,7 +1673,7 @@ def Mote.bin_targets_of_values (dir : String) (mote_name : String) (entries : Li
 /// (`error: mote \`lang\` has no [bin] target to build`), which is how a
 /// library mote keeps needing no `[[bin]]` while a binary mote keeps building
 /// without declaring one.
-def Mote.default_bin_target (dir : String) (mote_name : String) : BinTarget :=
+def Mote.default_bin_target (dir : Path) (mote_name : String) : BinTarget :=
     let t : BinTarget := {
         path := Mote.default_path dir "src/main.mo",
         name := mote_name,
@@ -1695,7 +1683,7 @@ def Mote.default_bin_target (dir : String) (mote_name : String) : BinTarget :=
 
 /// One `[[bin]]` entry: its own `path` and `name`, each falling back to the
 /// conventional value when the entry names none.
-def Mote.bin_target_of (dir : String) (mote_name : String) (sub : BTreeMap String Toml.Value) : BinTarget :=
+def Mote.bin_target_of (dir : Path) (mote_name : String) (sub : BTreeMap String Toml.Value) : BinTarget :=
     let declared := Mote.joined_table_path dir (Option.some (Toml.Value.table sub)) "path" in
     let path : Path := match declared {
         Option.some p => p,
@@ -1812,10 +1800,10 @@ def Mote.script_dep_policies (root : BTreeMap String Toml.Value) :
 
 // ─── Scripts ───────────────────────────────────────────────────────────
 
-def Mote.script_targets (dir : String) (root : BTreeMap String Toml.Value) : List ScriptTarget :=
+def Mote.script_targets (dir : Path) (root : BTreeMap String Toml.Value) : List ScriptTarget :=
     Mote.script_targets_of_values dir (Toml.array_at "script" root)
 
-def Mote.script_targets_of_values (dir : String) (entries : List Toml.Value) : List ScriptTarget :=
+def Mote.script_targets_of_values (dir : Path) (entries : List Toml.Value) : List ScriptTarget :=
     match entries {
         List.empty => List.empty,
         List.cons v rest =>
@@ -1831,7 +1819,7 @@ def Mote.script_targets_of_values (dir : String) (entries : List Toml.Value) : L
 
 /// One `[[script]]`: `name` required, `path` defaulting to
 /// `scripts/<name>.mo`, `mote` optional.
-def Mote.script_target_of (dir : String) (sub : BTreeMap String Toml.Value) : Option ScriptTarget :=
+def Mote.script_target_of (dir : Path) (sub : BTreeMap String Toml.Value) : Option ScriptTarget :=
     match Mote.string_value (Toml.table_get "name" sub) {
         Option.none => Option.none,
         Option.some name =>
@@ -1851,7 +1839,7 @@ def Mote.script_target_of (dir : String) (sub : BTreeMap String Toml.Value) : Op
 
 /// Parse a manifest's text for `[[script]]` entries. Used at a virtual
 /// workspace root, where `Mote.discover` returns `none`.
-pub def Mote.script_targets_of_text (dir : String) (text : String) : List ScriptTarget :=
+pub def Mote.script_targets_of_text (dir : Path) (text : String) : List ScriptTarget :=
     match Toml.parse text {
         err _ => List.empty,
         ok root => Mote.script_targets dir root
@@ -1893,7 +1881,7 @@ pub def Mote.script_dep_names (root : BTreeMap String Toml.Value) : List String 
     Mote.script_dep_names_go (Mote.script_dep_tables root)
 
 #[terminating]
-def Mote.script_dep_entries_go (dir : String) (tables : List (BTreeMap String Toml.Value)) :
+def Mote.script_dep_entries_go (dir : Path) (tables : List (BTreeMap String Toml.Value)) :
     List (Pair String ManifestDepEntry) :=
     match tables {
         List.empty => List.empty,
@@ -1902,7 +1890,7 @@ def Mote.script_dep_entries_go (dir : String) (tables : List (BTreeMap String To
                 (Mote.script_dep_entries_go dir rest)
     }
 
-pub def Mote.script_dep_entries (dir : String) (root : BTreeMap String Toml.Value) :
+pub def Mote.script_dep_entries (dir : Path) (root : BTreeMap String Toml.Value) :
     List (Pair String ManifestDepEntry) :=
     Mote.script_dep_entries_go dir (Mote.script_dep_tables root)
 
@@ -1911,10 +1899,10 @@ pub def Mote.script_dep_entries (dir : String) (root : BTreeMap String Toml.Valu
 /// for an empty `dir` and an absolute value included. Shared by the
 /// manifest's `[lib] path` and `[[bin]] path` and the tool config's
 /// `[build] target-dir`, which want it identically.
-def Mote.joined_table_string (dir : String) (table : Option Toml.Value) (key : String) : Option String :=
+def Mote.joined_table_string (dir : Path) (table : Option Toml.Value) (key : String) : Option String :=
     match Mote.table_string table key {
         Option.none => Option.none,
-        Option.some p => Option.some (raw_path_join dir p)
+        Option.some p => Option.some (Path.to_string (Path.child_under dir p))
     }
 
 /// `[lib] path` / `[[bin]] path` / `[[script]] path`: the one place a
@@ -1924,15 +1912,15 @@ def Mote.joined_table_string (dir : String) (table : Option Toml.Value) (key : S
 /// winner is normalized. (A declared `path = ""` still joins to the mote's
 /// own directory, including the empty spelling when the mote IS the working
 /// directory; that is the existing meaning, not a new sentinel.)
-def Mote.joined_table_path (dir : String) (table : Option Toml.Value) (key : String) : Option Path :=
+def Mote.joined_table_path (dir : Path) (table : Option Toml.Value) (key : String) : Option Path :=
     match Mote.joined_table_string dir table key {
         Option.none => Option.none,
         Option.some p => Option.some (Path.unsafe p)
     }
 
 /// A compiler-known default under the mote's directory, as a `Path`.
-def Mote.default_path (dir : String) (rel : String) : Path :=
-    Path.unsafe (raw_path_join dir rel)
+def Mote.default_path (dir : Path) (rel : String) : Path :=
+    Path.child_under dir rel
 
 /// A string-array field of a sub-table (`[link] libs = ["m", "pthread"]`),
 /// empty when the table, the key, or the array is absent. Non-string
@@ -2411,7 +2399,7 @@ def join_with_commas (xs : List String) : String :=
 /// siblings resolve relative to the file itself, which is why
 /// `resolve_module_file` (lang/module.mo) must not route an inline mote
 /// through the manifest's `src_root`.
-def Mote.manifest_of_attr (dir : String) (attr : Attribute) : Option MoteManifest :=
+def Mote.manifest_of_attr (dir : Path) (attr : Attribute) : Option MoteManifest :=
     match Mote.mote_attr_string attr "name" {
         Option.none => Option.none,
         Option.some name =>
@@ -2551,7 +2539,7 @@ def test_target_roots_of_a_root_level_target : Bool :=
 /// would make a bare command cover nothing and report success.
 #[test]
 def test_target_roots_falls_back_for_an_inline_mote : Bool :=
-    match Mote.manifest_of_attr "examples" attr_mote_self_hosted {
+    match Mote.manifest_of_attr (Path.unsafe "examples") attr_mote_self_hosted {
         Option.none => false,
         Option.some m => String.beq (path_roots_joined (Mote.target_roots m (Path.unsafe "examples"))) "examples",
     }
@@ -2963,7 +2951,7 @@ def virtual_script_fixture : String :=
 
 #[test]
 def test_script_targets_of_text_at_virtual_root : Bool :=
-    match Mote.script_targets_of_text "" virtual_script_fixture {
+    match Mote.script_targets_of_text (Path.unsafe_dir "") virtual_script_fixture {
         List.cons s rest =>
             Bool.and (List.is_empty rest)
                 (String.beq (ScriptTarget.script_name s) "serve"),
@@ -3089,35 +3077,38 @@ def test_singular_bin_table_is_read_as_one_target : Bool :=
             }
     }
 
-/// The walk-up must keep an absolute path absolute. `raw_parent_dir` of a
+/// The ascent must keep an absolute path absolute. `raw_parent_dir` of a
 /// root child is `""`, which means the WORKING DIRECTORY -- so without
-/// `parent_of` a file outside any mote would end up adopting whatever mote
-/// happens to sit in the CWD.
+/// `parent_dir`'s absolute rule a file outside any mote would end up
+/// adopting whatever mote happens to sit in the CWD.
 #[test]
-def test_parent_of_root_child_is_the_root : Bool :=
-    String.beq (parent_of "/home") "/"
+def test_parent_dir_of_a_root_child_is_the_root : Bool :=
+    String.beq (Path.to_string (parent_dir "/home")) "/"
+
+/// A bare name's directory is the working directory, spelled `.` -- the
+/// spelling change from `""` that makes the ascent total.
+#[test]
+def test_parent_dir_of_a_relative_name_is_the_cwd : Bool :=
+    String.beq (Path.to_string (parent_dir "init")) "."
 
 #[test]
-def test_parent_of_relative_bottoms_out_at_the_cwd : Bool :=
-    String.beq (parent_of "init") ""
-
-#[test]
-def test_parent_of_keeps_walking_an_absolute_path : Bool :=
-    String.beq (parent_of "/home/u/proj") "/home/u"
+def test_parent_dir_keeps_walking_an_absolute_path : Bool :=
+    String.beq (Path.to_string (parent_dir "/home/u/proj")) "/home/u"
 
 #[test]
 def test_mote_toml_in_names_the_root_and_the_cwd : Bool :=
-    if String.beq (mote_toml_in "") "mote.toml"
-    then if String.beq (mote_toml_in "/") "/mote.toml"
-        then String.beq (mote_toml_in "lang") "lang/mote.toml"
+    if String.beq (Path.to_string (mote_toml_in (Path.unsafe_dir ""))) "mote.toml"
+    then if String.beq (Path.to_string (mote_toml_in (Path.unsafe "/"))) "/mote.toml"
+        then String.beq (Path.to_string (mote_toml_in (Path.unsafe "lang"))) "lang/mote.toml"
         else false
     else false
 
 /// The walk had no test of its own, and this is the step the bug was in:
-/// `""` is both "the working directory" and "no directory component", so a
-/// walk that ascended with `parent_of` stopped where it started. Same tree,
-/// two answers -- a bare filename in a subdirectory found no config above
-/// it, while the same file spelled `<sub>/file.mo` did.
+/// a bare name's directory used to be spelled `""`, the same spelling as
+/// "no directory component", so a walk that ascended with the plain parent
+/// rule stopped where it started. Same tree, two answers -- a bare filename
+/// in a subdirectory found no config above it, while the same file spelled
+/// `<sub>/file.mo` did.
 ///
 /// The empty branch is pinned HERE, on the pure helper, rather than in the
 /// IO row below, because reaching it needs the process's working directory
@@ -3126,36 +3117,40 @@ def test_mote_toml_in_names_the_root_and_the_cwd : Bool :=
 /// `chdir` native to arrange otherwise, and a row that started anywhere
 /// else would pass on the old code too.
 #[test]
-def test_config_dir_above_leaves_the_working_directory : Bool :=
-    if String.beq (config_dir_above "") ".."
-    then String.beq (config_dir_above ".") ".."
-    else false
+def test_dir_above_leaves_the_working_directory : Bool :=
+    dir_above_is "." ".."
 
 /// ...and keeps going once it is out, rather than bouncing back to the
 /// working directory: `raw_parent_dir ".."` is `"."`, which would re-probe
 /// the cwd forever, bounded only by the depth argument.
 #[test]
-def test_config_dir_above_keeps_going_above_the_working_directory : Bool :=
-    if String.beq (config_dir_above "..") "../.."
-    then String.beq (config_dir_above "../..") "../../.."
-    else false
+def test_dir_above_keeps_going_above_the_working_directory : Bool :=
+    dir_above_is ".." "../.." && dir_above_is "../.." "../../.."
 
 /// The ordinary case is undisturbed: a named directory still ascends by
 /// `parent_of`, absolute paths included.
 #[test]
-def test_config_dir_above_still_steps_one_directory : Bool :=
-    if String.beq (config_dir_above "examples") ""
-    then if String.beq (config_dir_above "lang/src") "lang"
-        then String.beq (config_dir_above "/home") "/"
-        else false
-    else false
+def test_dir_above_still_steps_one_directory : Bool :=
+    dir_above_is "examples" "." && dir_above_is "lang/src" "lang"
+        && dir_above_is "/home" "/"
+        && (match Mote.dir_above (Path.unsafe "/") { Option.none => true, Option.some _ => false })
+
+/// `Mote.dir_above` of a directory spelling, compared as text.
+def dir_above_is (d : String) (want : String) : Bool :=
+    match Mote.dir_above (Path.unsafe_dir d) {
+        Option.some p => String.beq (Path.to_string p) want,
+        Option.none => false,
+    }
 
 /// What the ascent is FOR, read through the probe it feeds: the second
 /// thing the walk looks at when it starts in the working directory is the
 /// working directory's parent -- not the working directory again.
 #[test]
 def test_the_walk_probes_above_the_working_directory : Bool :=
-    String.beq (tool_config_in (config_dir_above "")) "../.monad/config.toml"
+    match Mote.dir_above (Path.unsafe_dir "") {
+        Option.some p => String.beq (Path.to_string (tool_config_in p)) "../.monad/config.toml",
+        Option.none => false,
+    }
 
 /// The walk itself, over a tree this row writes: a file in a subdirectory
 /// finds the config in the tree's root, and the answer is joined onto the
@@ -3180,7 +3175,7 @@ def test_discover_config_target_dir_walks_up_a_real_tree : IO Bool := do {
     exec_cmd "rm" ["-rf", root];
     exec_cmd "mkdir" ["-p", root ++ "/sub/deeper", root ++ "/.monad"];
     let w <- IO.write_file (Path.path (root ++ "/.monad/config.toml")) "[build]\ntarget-dir = \"out\"\n";
-    let found <- Mote.discover_config_target_dir (root ++ "/sub/deeper");
+    let found <- Mote.discover_config_target_dir (Path.unsafe (root ++ "/sub/deeper"));
     return (Result.is_ok w && (match found {
         Option.none => false,
         Option.some d => String.beq (Path.to_string d) (root ++ "/out")
@@ -3189,9 +3184,9 @@ def test_discover_config_target_dir_walks_up_a_real_tree : IO Bool := do {
 
 #[test]
 def test_tool_config_in_names_the_root_and_the_cwd : Bool :=
-    if String.beq (tool_config_in "") ".monad/config.toml"
-    then if String.beq (tool_config_in "/") "/.monad/config.toml"
-        then String.beq (tool_config_in "lang") "lang/.monad/config.toml"
+    if String.beq (Path.to_string (tool_config_in (Path.unsafe_dir ""))) ".monad/config.toml"
+    then if String.beq (Path.to_string (tool_config_in (Path.unsafe "/"))) "/.monad/config.toml"
+        then String.beq (Path.to_string (tool_config_in (Path.unsafe "lang"))) "lang/.monad/config.toml"
         else false
     else false
 
@@ -3202,7 +3197,7 @@ def test_tool_config_in_names_the_root_and_the_cwd : Bool :=
 /// absolute invocation of a file inside the tree give an absolute directory.
 #[test]
 def test_config_target_dir_is_joined_onto_the_configs_directory : Bool :=
-    match Mote.config_target_dir_of_text "lang" "[build]\ntarget-dir = \"target-monad\"\n" {
+    match Mote.config_target_dir_of_text (Path.unsafe "lang") "[build]\ntarget-dir = \"target-monad\"\n" {
         Option.none => false,
         Option.some d => String.beq (Path.to_string d) "lang/target-monad"
     }
@@ -3212,7 +3207,7 @@ def test_config_target_dir_is_joined_onto_the_configs_directory : Bool :=
 /// the ABSOLUTE `/target-monad`.
 #[test]
 def test_config_target_dir_of_the_working_directory_is_relative : Bool :=
-    match Mote.config_target_dir_of_text "" "[build]\ntarget-dir = \"target-monad\"\n" {
+    match Mote.config_target_dir_of_text (Path.unsafe_dir "") "[build]\ntarget-dir = \"target-monad\"\n" {
         Option.none => false,
         Option.some d => String.beq (Path.to_string d) "target-monad"
     }
@@ -3221,7 +3216,7 @@ def test_config_target_dir_of_the_working_directory_is_relative : Bool :=
 /// walk continue to the config above it rather than stopping at this one.
 #[test]
 def test_config_without_a_build_table_names_nothing : Bool :=
-    match Mote.config_target_dir_of_text "" "# nothing but a comment\n" {
+    match Mote.config_target_dir_of_text (Path.unsafe_dir "") "# nothing but a comment\n" {
         Option.none => true,
         Option.some _ => false
     }
@@ -3232,7 +3227,7 @@ def test_config_without_a_build_table_names_nothing : Bool :=
 /// this pins: it would answer `some ""`.
 #[test]
 def test_config_with_an_empty_target_dir_names_nothing : Bool :=
-    match Mote.config_target_dir_of_text "" "[build]\ntarget-dir = \"\"\n" {
+    match Mote.config_target_dir_of_text (Path.unsafe_dir "") "[build]\ntarget-dir = \"\"\n" {
         Option.none => true,
         Option.some _ => false
     }
@@ -3241,7 +3236,7 @@ def test_config_with_an_empty_target_dir_names_nothing : Bool :=
 /// meaning: the join is that directory, which is a real target dir.
 #[test]
 def test_config_with_an_empty_target_dir_under_a_named_dir_is_that_dir : Bool :=
-    match Mote.config_target_dir_of_text "lang" "[build]\ntarget-dir = \"\"\n" {
+    match Mote.config_target_dir_of_text (Path.unsafe "lang") "[build]\ntarget-dir = \"\"\n" {
         Option.none => false,
         Option.some d => String.beq (Path.to_string d) "lang"
     }
@@ -3304,8 +3299,8 @@ def test_workspace_member_patterns_empty_without_workspace_table : Bool :=
 
 #[test]
 def test_member_path_leaves_root_relative_names_alone : Bool :=
-    String.beq (Mote.member_path "" "init") "init"
-    && String.beq (Mote.member_path "/repo" "init") "/repo/init"
+    String.beq (Path.to_string (Mote.member_path (Path.unsafe_dir "") "init")) "init"
+    && String.beq (Path.to_string (Mote.member_path (Path.unsafe "/repo") "init")) "/repo/init"
 
 #[test]
 def test_strings_of_values_drops_non_strings : Bool :=
@@ -3345,10 +3340,10 @@ def attr_mote_rust : Attribute :=
 
 #[test]
 def test_manifest_of_attr_reads_both_parser_shapes : Bool :=
-    match Mote.manifest_of_attr "examples" attr_mote_self_hosted {
+    match Mote.manifest_of_attr (Path.unsafe "examples") attr_mote_self_hosted {
         Option.none => false,
         Option.some ma =>
-            match Mote.manifest_of_attr "examples" attr_mote_rust {
+            match Mote.manifest_of_attr (Path.unsafe "examples") attr_mote_rust {
                 Option.none => false,
                 Option.some mb =>
                     String.beq ma.name "structs" &&
@@ -3377,10 +3372,10 @@ def attr_one_dep_rust : Attribute :=
 
 #[test]
 def test_manifest_of_attr_reads_one_element_deps_both_shapes : Bool :=
-    match Mote.manifest_of_attr "examples" attr_one_dep_self_hosted {
+    match Mote.manifest_of_attr (Path.unsafe "examples") attr_one_dep_self_hosted {
         Option.none => false,
         Option.some a =>
-            match Mote.manifest_of_attr "examples" attr_one_dep_rust {
+            match Mote.manifest_of_attr (Path.unsafe "examples") attr_one_dep_rust {
                 Option.none => false,
                 Option.some b =>
                     MoteManifest.declares a "init" &&
@@ -3396,7 +3391,7 @@ def test_mote_attr_quoted_names_are_accepted : Bool :=
     let a := Attribute.mk (Identifier.id "mote")
         [attr_named "name" (AttrArg.str "solo"),
             attr_named "deps" (AttrArg.str "init")] in
-    match Mote.manifest_of_attr "examples" a {
+    match Mote.manifest_of_attr (Path.unsafe "examples") a {
         Option.none => false,
         Option.some m => MoteManifest.declares m "init"
     }
@@ -3405,7 +3400,7 @@ def test_mote_attr_quoted_names_are_accepted : Bool :=
 def test_mote_attr_without_a_name_is_not_a_manifest : Bool :=
     let a := Attribute.mk (Identifier.id "mote")
         [attr_named "deps" (AttrArg.group [AttrArg.ident (Identifier.id "init")])] in
-    match Mote.manifest_of_attr "examples" a {
+    match Mote.manifest_of_attr (Path.unsafe "examples") a {
         Option.none => true,
         Option.some _ => false
     }
@@ -3677,7 +3672,7 @@ def inherited_root_fixture (text : String) : MoteRootLookup :=
     match Toml.parse text {
         err _ => MoteRootLookup.root_none,
         ok root =>
-            let w : MoteWorkspaceRoot := { dir := "", table := root } in
+            let w : MoteWorkspaceRoot := { dir := Path.unsafe_dir "", table := root } in
             MoteRootLookup.root_found w,
     }
 
@@ -3692,13 +3687,13 @@ def inherited_root_text : String :=
 /// `lang/std`.
 #[test]
 def test_inherited_path_resolves_against_the_root : Bool :=
-    match Mote.parse_manifest_with_lookup "lang"
+    match Mote.parse_manifest_with_lookup (Path.unsafe "lang")
         (inherited_root_fixture inherited_root_text)
         (inherited_member_fixture "[dependencies.std]\nworkspace = true\n") {
         Option.none => false,
         Option.some m => match MoteManifest.dep_dir_of m "std" {
             Option.some d => String.beq (Path.to_string d) "std" && match m.workspace_root {
-                Option.some r => String.beq r "",
+                Option.some r => String.beq (Path.to_string r) ".",
                 Option.none => false,
             },
             Option.none => false,
@@ -3710,7 +3705,7 @@ def test_inherited_path_resolves_against_the_root : Bool :=
 #[test]
 def test_inherited_git_source_keeps_its_pin : Bool :=
     let root_text : String := "[workspace]\nmembers = [\"lang\"]\n\n[workspace.dependencies.json]\ngit = \"https://example.invalid/json\"\ntag = \"v1\"\n" in
-    match Mote.parse_manifest_with_lookup "lang"
+    match Mote.parse_manifest_with_lookup (Path.unsafe "lang")
         (inherited_root_fixture root_text)
         (inherited_member_fixture "[dependencies.json]\nworkspace = true\n") {
         Option.none => false,
@@ -3728,7 +3723,7 @@ def test_inherited_git_source_keeps_its_pin : Bool :=
 #[test]
 def test_inherited_dev_dependency : Bool :=
     let member : String := inherited_member_fixture "[dev-dependencies.std]\nworkspace = true\n" in
-    match Mote.parse_manifest_with_lookup "lang" (inherited_root_fixture inherited_root_text) member {
+    match Mote.parse_manifest_with_lookup (Path.unsafe "lang") (inherited_root_fixture inherited_root_text) member {
         Option.none => false,
         Option.some m => match MoteManifest.dep_dir_of m "std" {
             Option.some d => String.beq (Path.to_string d) "std",
@@ -3739,7 +3734,7 @@ def test_inherited_dev_dependency : Bool :=
 #[test]
 def test_inherited_name_missing_from_the_root_is_an_error : Bool :=
     let root_text : String := "[workspace]\nmembers = [\"lang\"]\n" in
-    match Mote.parse_manifest_with_lookup "lang"
+    match Mote.parse_manifest_with_lookup (Path.unsafe "lang")
         (inherited_root_fixture root_text)
         (inherited_member_fixture "[dependencies.std]\nworkspace = true\n") {
         Option.none => false,
@@ -3765,7 +3760,7 @@ def test_workspace_marker_must_be_true : Bool :=
 #[test]
 def test_chained_workspace_marker_is_an_error : Bool :=
     let root_text : String := "[workspace]\nmembers = [\"lang\"]\n\n[workspace.dependencies.std]\nworkspace = true\n" in
-    match Mote.parse_manifest_with_lookup "lang"
+    match Mote.parse_manifest_with_lookup (Path.unsafe "lang")
         (inherited_root_fixture root_text)
         (inherited_member_fixture "[dependencies.std]\nworkspace = true\n") {
         Option.none => false,
@@ -3785,7 +3780,7 @@ def test_marker_with_no_workspace_root_is_an_error : Bool :=
 #[test]
 def test_package_root_inherits_from_its_own_table : Bool :=
     let text : String := "[mote]\nname = \"root\"\n\n[workspace]\nmembers = [\"root\"]\n\n[workspace.dependencies.std]\npath = \"std\"\n\n[dependencies.std]\nworkspace = true\n" in
-    match Mote.parse_manifest_with_lookup "root"
+    match Mote.parse_manifest_with_lookup (Path.unsafe "root")
         (inherited_root_fixture text) text {
         Option.none => false,
         Option.some m => match MoteManifest.dep_dir_of m "std" {
@@ -3884,5 +3879,5 @@ def test_script_target_reads_features : Bool :=
 
 #[test]
 def test_default_bin_target_has_no_features : Bool :=
-    let b : BinTarget := Mote.default_bin_target "m" "m" in
+    let b : BinTarget := Mote.default_bin_target (Path.unsafe "m") "m" in
     List.is_empty (BinTarget.target_features b)

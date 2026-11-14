@@ -70,9 +70,9 @@ def buffer_dir (root : Option String) : IO String := do {
         Option.none => ".",
         Option.some r => r,
     };
-    let m <- Mote.discover start;
+    let m <- Mote.discover (Path.unsafe_dir start);
     match m {
-        Option.some man => IO.pure man.dir,
+        Option.some man => IO.pure (Path.to_string man.dir),
         Option.none => IO.pure start,
     }
 }

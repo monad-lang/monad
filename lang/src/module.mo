@@ -31,8 +31,8 @@ use lib::parser {
 use parsec::core {ParseError, ParseResult, parse_error_remaining}
 use lib::parser::diagnostic {parse_error_location, render_parse_error}
 use lang::mote {
-    BinTarget, Mote.affine_mode_of_path, Mote.discover, Mote.manifest_at, Mote.manifest_of_attr,
-    Mote.manifest_problem,
+    BinTarget, Mote.affine_mode_of_path, Mote.dir_above, Mote.discover, Mote.manifest_at,
+    Mote.manifest_of_attr, Mote.manifest_problem,
     Mote.mote_attr_unknown_keys, Mote.parse_manifest, Mote.toolchain_candidates,
     Mote.toolchain_missing_hint, Mote.toolchain_root, Mote.workspace_members, MoteManifest,
     MoteManifest.dep_errors_for, ScriptTarget, ScriptTarget.script_path,
@@ -181,7 +181,7 @@ pub def cfg_env_for_file (file_path : String) (content : String) : IO CfgEnv :=
     else IO.pure CfgEnv.empty
 
 def cfg_env_discover (file_path : String) : IO CfgEnv := do {
-    let manifest <- Mote.discover (extract_directory file_path);
+    let manifest <- Mote.discover (base_dir_path (extract_directory file_path));
     let spec <- IO.get_env "MONAD_FEATURES";
     return (cfg_env_of_manifest manifest spec)
 }
@@ -646,10 +646,7 @@ pub def path_directory (p : Path) : String :=
 /// parent -- so a loader directory is a total `Path` and never the empty
 /// sentinel `Path.of` refuses.
 pub def directory_of_path (p : Path) : Path :=
-    match Path.parent p {
-        Option.some d => d,
-        Option.none => Path.unsafe ".",
-    }
+    Path.directory p
 
 /// A directory given as text (a CLI argument, an `extract_directory`
 /// result) as a `Path`; empty means the current directory.
@@ -873,18 +870,19 @@ def toolchain_has_ambient_sources (root : Option String) : IO Bool := do {
 /// same resolver, and they are modules of THIS mote -- so the resolver
 /// cannot live in `cli/`, which is above them.
 ///
-/// `Option.some ""` means the working directory is the root -- the same case
-/// `find_workspace_members ""` already handles, where `dir` is `""` and
-/// every path the caller builds from it stays CWD-relative.
+/// A root of `.` means the working directory is the one -- the same case
+/// `find_workspace_members ""` already handles, where the caller spells it
+/// `""` and every path built from it stays CWD-relative.
 #[partial]
-def find_workspace_root (dir : String) (depth : I64) : IO (Option String) := do {
+def find_workspace_root (dir : Path) (depth : I64) : IO (Option Path) := do {
     if I64.lt depth 1 then do { return Option.none }
     else do {
-        let here : List String <- Mote.workspace_members dir;
+        let here : List Path <- Mote.workspace_members dir;
         if Bool.not (List.is_empty here) then do { return (Option.some dir) }
-        else if String.beq dir "" then find_workspace_root ".." (depth - 1)
-        else if String.beq dir "/" then do { return Option.none }
-        else find_workspace_root (raw_path_join dir "..") (depth - 1)
+        else match Mote.dir_above dir {
+            Option.none => do { return Option.none },
+            Option.some p => find_workspace_root p (depth - 1),
+        }
     }
 }
 
@@ -952,7 +950,7 @@ def first_on_disk (candidates : List String) : IO (Option String) := do {
 /// codegen harnesses below needed the same resolver, and a def that crosses a
 /// mote boundary has to say so.
 pub def resolve_runtime_src (base_dir : String) : IO String := do {
-    let manifest <- Mote.discover base_dir;
+    let manifest <- Mote.discover (base_dir_path base_dir);
     let declared := match manifest {
         Option.none => List.empty,
         Option.some m => match MoteManifest.dep_dir_of m "runtime" {
@@ -960,10 +958,10 @@ pub def resolve_runtime_src (base_dir : String) : IO String := do {
             Option.some dep_dir => List.map (fn (p : Path) => Path.to_string p) (runtime_c_in dep_dir)
         }
     };
-    let ws <- find_workspace_root "" 32;
+    let ws <- find_workspace_root (Path.unsafe_dir "") 32;
     let walked := match ws {
         Option.none => List.empty,
-        Option.some r => [raw_path_join r "runtime/src/runtime.c"]
+        Option.some r => [Path.to_string (Path.child_under r "runtime/src/runtime.c")]
     };
     let root <- Mote.toolchain_root;
     let installed := match root {
@@ -1152,7 +1150,7 @@ def motes_src_paths_go (entries : List Path) (file_stem : String) : IO (List Str
 /// MISS, so the manifest read costs nothing on the path everything takes.
 #[partial]
 def resolve_via_manifest (base_dir : Path) (mp : ModulePath) : IO (Option String) := do {
-    let mote <- Mote.discover (Path.to_string base_dir);
+    let mote <- Mote.discover base_dir;
     match mote {
         Option.none => return Option.none,
         Option.some m => do {
@@ -1249,7 +1247,7 @@ def mote_dep_lib_file_of (m : MoteManifest) (dep : String) : IO (List Path) := d
     match MoteManifest.dep_dir_of m dep {
         Option.none => return List.empty,
         Option.some dep_dir => do {
-            let dep_man <- Mote.manifest_at (Path.to_string dep_dir);
+            let dep_man <- Mote.manifest_at dep_dir;
             return (mote_dep_lib_files m dep dep_man)
         }
     }
@@ -2393,7 +2391,7 @@ pub def check_module_with_scope_classified (mode : AffineMode) (scope : Scope) (
 /// already hold a path and must not thread a policy through every
 /// intermediate signature.
 pub def check_module_with_scope_path (scope : Scope) (decl_list : List Decl) (locals : LocalScope) (file_path : String) (verbose : Bool) : IO CheckDiagnostics := do {
-    let mode <- Mote.affine_mode_of_path file_path;
+    let mode <- Mote.affine_mode_of_path (Path.unsafe file_path);
     check_module_with_scope_classified mode scope decl_list locals (Option.some file_path) verbose
 }
 
@@ -3332,7 +3330,7 @@ pub def check_file_cached_from_source (cache : ModuleInfoCache) (file_path : Str
     match ec.elaborated {
         Result.ok em => do {
             let empty_locs : LocalScope := { vars := List.empty, parent := Option.none };
-            let mode <- Mote.affine_mode_of_path file_path;
+            let mode <- Mote.affine_mode_of_path (Path.unsafe file_path);
             let checked <- check_module_with_scope_classified mode em.scope em.target_decls empty_locs (Option.some file_path) verbose;
             let ok_result : FileCheckResult :=
                 { path := Path.unsafe file_path,
@@ -3509,7 +3507,7 @@ def check_buffer_ranged (cache : ModuleInfoCache) (file_path : String) (source :
             // yet (see its own doc), so a `warn` mote would turn every
             // migration advisory into an editor error; leaving those out
             // keeps the server honest until the channel exists.
-            let mode <- Mote.affine_mode_of_path file_path;
+            let mode <- Mote.affine_mode_of_path (Path.unsafe file_path);
             let no_range : Option SourceRange := Option.none;
             let affine : List Diagnostic := match mode {
                 AffineMode.affine_error =>
@@ -3597,7 +3595,7 @@ pub def check_file_cached_from_source_ranged (cache : ModuleInfoCache) (file_pat
 /// path exactly the way the termination pass does -- there is no flag
 /// and no opt-in.
 pub def check_file_cached (cache : ModuleInfoCache) (file_path : String) (verbose : Bool) : IO FileCheckAndCache := do {
-    let mode <- Mote.affine_mode_of_path file_path;
+    let mode <- Mote.affine_mode_of_path (Path.unsafe file_path);
     check_file_cached_mode mode cache file_path verbose
 }
 
@@ -4291,7 +4289,6 @@ def resolve_open_aliases_in_modules_go (known_names : List String) (root_aliases
 /// without one cost nothing.
 #[partial]
 def resolve_lib_alias_decls (base_dir : Path) (decls : List Decl) : IO (List Decl) := do {
-    let dir : String := Path.to_string base_dir;
     if has_lib_use decls
     then do {
         // The inline `#![mote { ... }]` first, exactly as `mote_of_module`
@@ -4301,10 +4298,10 @@ def resolve_lib_alias_decls (base_dir : Path) (decls : List Decl) : IO (List Dec
         // the load, so a MISPLACED annotation is read here too -- it is
         // then reported by `validate_mote_attr` on the same load, which is
         // why reading it early cannot hide the error.)
-        match inline_mote_of_decls dir decls {
+        match inline_mote_of_decls base_dir decls {
             Option.some m => return (rewrite_lib_uses m.name decls),
             Option.none => do {
-                let mote <- Mote.discover dir;
+                let mote <- Mote.discover base_dir;
                 match mote {
                     Option.some m => return (rewrite_lib_uses m.name decls),
                     // Outside any mote (script mode): `lib` names nothing,
@@ -4614,7 +4611,7 @@ def is_mote_attr_decl (d : Decl) : Bool :=
 /// present but misplaced, which `validate_mote_attr_position` reports
 /// separately rather than letting a misplaced attribute half-work (deps
 /// enforced, position not).
-def inline_mote_of_decls (dir : String) (decl_list : List Decl) : Option MoteManifest :=
+def inline_mote_of_decls (dir : Path) (decl_list : List Decl) : Option MoteManifest :=
     match decl_list {
         List.empty => Option.none,
         List.cons first _rest =>
@@ -4627,9 +4624,9 @@ def inline_mote_of_decls (dir : String) (decl_list : List Decl) : Option MoteMan
 /// The mote a module belongs to: an inline `#![mote { ... }]` attribute
 /// wins when present, otherwise the enclosing `mote.toml`.
 def mote_of_module (info : ModuleInfo) : IO (Option MoteManifest) := do {
-    match inline_mote_of_decls (path_directory info.file_path) info.decl_list {
+    match inline_mote_of_decls (Path.directory info.file_path) info.decl_list {
         Option.some m => return (Option.some m),
-        Option.none => Mote.discover (path_directory info.file_path)
+        Option.none => Mote.discover (Path.directory info.file_path)
     }
 }
 
@@ -4669,7 +4666,7 @@ def ownership_refusal_go (mods : List ModuleInfo) (seen : List String) : IO (Opt
                 let r <- ownership_refusal_go rest seen;
                 return r
             } else do {
-                let mode <- Mote.affine_mode_of_path (Path.to_string info.file_path);
+                let mode <- Mote.affine_mode_of_path info.file_path;
                 match mode {
                     AffineMode.affine_warn =>
                         return (Option.some (String.concat "error: " (String.concat dir " is [affine] mode = \"warn\"; an ownership build requires error mode"))),
@@ -5103,7 +5100,7 @@ def bare_use_owner_cwd (head : String) : IO (Option String) := do {
 
 #[partial]
 def owning_mote_name (file : String) : IO (Option String) := do {
-    let m <- Mote.discover (extract_directory file);
+    let m <- Mote.discover (base_dir_path (extract_directory file));
     match m {
         Option.none => return Option.none,
         Option.some man => return (Option.some man.name)
@@ -5435,8 +5432,8 @@ def undeclared_mote_error (m : MoteManifest) (info : ModuleInfo) (u : ModulePath
         "error: mote `", head, "` is not a declared dependency of `", m.name, "`\n",
         "  `use ", module_path_to_string u, "` in ", Path.to_string info.file_path,
         " requires mote `", head, "`, which is at `", found_dir, "`\n",
-        "  hint: add [dependencies.", head, "] ", undeclared_mote_path_clause m.dir found_dir,
-        " to ", raw_path_join m.dir "mote.toml",
+        "  hint: add [dependencies.", head, "] ", undeclared_mote_path_clause (Path.to_string m.dir) found_dir,
+        " to ", Path.to_string (Path.child_under m.dir "mote.toml"),
     ]
 
 /// Turn the first undeclared-mote error -- or invalid-dependency error, for
@@ -5538,7 +5535,7 @@ def targetless_mote_error (m : MoteManifest) : String :=
                 (mote_target_paths m)) in
     String.concat_all [
         "error: mote `", m.name, "` has no target that exists\n",
-        "  ", raw_path_join m.dir "mote.toml", " names ", named,
+        "  ", Path.to_string (Path.child_under m.dir "mote.toml"), " names ", named,
         " as its targets, and none of those is a file\n",
         "  hint: create `", Path.to_string (mote_lib_file_of m),
         "` for a library mote, add a [[bin]] table naming a file a binary mote builds, ",
@@ -5550,7 +5547,7 @@ def targetless_mote_error (m : MoteManifest) : String :=
 /// is spelled from, and two spellings of one directory (`""` and `"."`) name
 /// the same tree.
 def push_mote (m : MoteManifest) (acc : List MoteManifest) : List MoteManifest :=
-    if List.any (fn (x : MoteManifest) => String.beq x.dir m.dir) acc
+    if List.any (fn (x : MoteManifest) => Path.beq x.dir m.dir) acc
     then acc
     else List.cons m acc
 
@@ -5559,7 +5556,7 @@ def push_maybe (found : Option MoteManifest) (acc : List MoteManifest) : List Mo
 
 /// Every mote named by `dirs`, consed onto `acc`.
 #[partial]
-def motes_of_dirs (dirs : List String) (acc : List MoteManifest) : IO (List MoteManifest) := do {
+def motes_of_dirs (dirs : List Path) (acc : List MoteManifest) : IO (List MoteManifest) := do {
     match dirs {
         List.empty => return acc,
         List.cons d rest => do {
@@ -5576,7 +5573,7 @@ def motes_of_infos (infos : List ModuleInfo) (acc : List MoteManifest) : IO (Lis
     match infos {
         List.empty => return acc,
         List.cons info rest => do {
-            let found <- Mote.discover (path_directory info.file_path);
+            let found <- Mote.discover (Path.directory info.file_path);
             let next : List MoteManifest := push_maybe found acc;
             motes_of_infos rest next
         }
@@ -5610,8 +5607,8 @@ def motes_of_infos (infos : List ModuleInfo) (acc : List MoteManifest) : IO (Lis
 /// `none` for its directory.
 #[partial]
 def mote_target_candidates (infos : List ModuleInfo) : IO (List MoteManifest) := do {
-    let root <- find_workspace_root "" 32;
-    let member_dirs : List String <- match root {
+    let root <- find_workspace_root (Path.unsafe_dir "") 32;
+    let member_dirs : List Path <- match root {
         Option.none => return List.empty,
         Option.some d => Mote.workspace_members d
     };
@@ -6919,11 +6916,12 @@ def load_targets_go (files : List String) (cache : ModuleInfoCache) (verbose : B
             match lc.loaded {
                 Result.err e => IO.pure (Result.err e),
                 Result.ok lm => do {
-                    let man <- Mote.discover (extract_directory f);
+                    let base_dir : Path := base_dir_path (extract_directory f);
+                    let man <- Mote.discover base_dir;
                     let key : String :=
                         match man {
-                            Option.some m => m.dir,
-                            Option.none => extract_directory f,
+                            Option.some m => Path.to_string m.dir,
+                            Option.none => Path.to_string base_dir,
                         };
                     let target : LoadedTarget := { file := f, loaded := lm, group := key };
                     load_targets_go rest lc.cache verbose (List.append acc [target])
@@ -7147,7 +7145,7 @@ def check_one_batch_target (file : String) (mp : ModulePath) (all : List ModuleI
                     known;
             let scope : Scope :=
                 { module_id := mp, scope := scope_data, parent := Option.none, incomplete_match_ok := false };
-            let mode <- Mote.affine_mode_of_path file;
+            let mode <- Mote.affine_mode_of_path (Path.unsafe file);
             let checked <- check_module_with_scope_classified mode scope decls empty_locs (Option.some file) verbose;
             let r : FileCheckResult :=
                 { path := Path.unsafe file,

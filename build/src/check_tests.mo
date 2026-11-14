@@ -488,10 +488,10 @@ def test_key_ignores_a_mote_the_target_does_not_declare : IO Bool := do {
 /// The working directory comes back under ONE name, because two names was
 /// two behaviors for one build.
 ///
-/// `Mote.discover` reports a manifest's directory relative to where the
-/// walk started, so a mote rooted at the working directory gives `""` for
-/// `src/a.mo` and `"."` for the same tree spelled `./src/a.mo`. The empty
-/// one used to be skipped by `Build.plan_roots` as "outside any mote", so
+/// `Mote.discover` normalizes a manifest's directory to `.` when the walk
+/// bottoms out at the working directory, so `src/a.mo` and `./src/a.mo`
+/// agree. The empty spelling (a bare filename's `extract_directory`) used
+/// to be skipped by `Build.plan_roots` as "outside any mote", so
 /// `monad check src/a.mo src/b.mo` wrote **no** check entries while
 /// `monad check ./src/a.mo ./src/b.mo` wrote two -- measured, a fresh store
 /// per spelling, in a mote whose `mote.toml` sits in the working directory.

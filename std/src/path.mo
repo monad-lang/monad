@@ -195,6 +195,15 @@ pub def Path.file_stem (p : Path) : String :=
 pub def Path.child (p : Path) (segment : String) : Path :=
     Path.path (raw_path_join (Path.to_string p) segment)
 
+/// The directory that contains `p`, or `.` when it has none (`main.mo`,
+/// `/monad`): an empty `Path` is never constructed, and `.` is how every
+/// consumer spells "here".
+pub def Path.directory (p : Path) : Path :=
+    match Path.parent p {
+        Option.some d => d,
+        Option.none => Path.path ".",
+    }
+
 /// A directory spelling from text, where the empty string means the
 /// working directory and is spelled `.`: an empty `Path` is never
 /// constructed, and `.` is how every consumer spells "here".

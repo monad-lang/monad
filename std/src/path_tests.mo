@@ -208,6 +208,15 @@ def test_path_child_under_treats_the_cwd_root_as_empty : Bool :=
         && String.beq (Path.to_string (Path.child_under (Path.path "lang/../std") "src")) "lang/../std/src"
         && String.beq (Path.to_string (Path.child_under (Path.path "lang") "/abs")) "/abs"
 
+/// `Path.directory` is `Path.parent` with the working directory spelled
+/// `.` for a path that has no directory component -- the one conversion
+/// `Mote.affine_mode_of_path`/`scripts_at_path` and the module loader share.
+#[test]
+def test_path_directory_of_a_bare_name_is_the_cwd : Bool :=
+    String.beq (Path.to_string (Path.directory (Path.unsafe "main.mo"))) "."
+        && String.beq (Path.to_string (Path.directory (Path.unsafe "src/lib.mo"))) "src"
+        && String.beq (Path.to_string (Path.directory (Path.unsafe "/monad"))) "."
+
 /// `Path.unsafe_dir` is the boundary for a directory spelling: the empty
 /// string (the CWD) becomes `.`, and nothing else is touched.
 #[test]

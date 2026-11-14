@@ -30,7 +30,7 @@ pub def Eval.run_file_limited (fuel : I64) (depth_limit : I64) (file_path : Stri
                 (String.concat "FAILED at stage: load (could not load dependencies: "
                     (String.concat e ")"))),
         Result.ok em => do {
-            let mode <- Mote.affine_mode_of_path file_path;
+            let mode <- Mote.affine_mode_of_path (Path.unsafe file_path);
             let options : EvalOptions :=
                 { fuel := fuel, depth_limit := depth_limit, affine := mode, label := file_path,
                     verbose := verbose, want_type := false, require_entry := false };

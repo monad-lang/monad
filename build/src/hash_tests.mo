@@ -193,12 +193,12 @@ def test_tree_digest_of_an_empty_tree_succeeds : IO Bool := do {
 }
 
 /// The empty root names the working directory, and the digest has to take
-/// it. `Mote.discover` reports `""` for a manifest sitting in the working
-/// directory -- `cd mymote && monad build src/main.mo`, the most ordinary
-/// layout there is -- and `cd ''` is not a directory the shell can enter,
-/// so the key became an error and the cache quietly declined to serve.
-/// `.` is the same directory; that the two agree is what makes the two
-/// spellings of one build share an entry instead of each compiling.
+/// it. `extract_directory` answers `""` for a bare filename -- `cd mymote &&
+/// monad build src/main.mo`, the most ordinary layout there is -- and
+/// `cd ''` is not a directory the shell can enter, so the key became an
+/// error and the cache quietly declined to serve. `.` is the same
+/// directory; that the two agree is what makes the two spellings of one
+/// build share an entry instead of each compiling.
 ///
 /// The `is_empty` guard is the other half: both sides being `""` (from two
 /// errors) would satisfy equality and prove nothing.

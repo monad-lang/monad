@@ -58,7 +58,7 @@ pub type EvalResponse {
 }
 
 pub def Eval.new_session (file_path : String) : IO EvalSession := do {
-    let mode <- Mote.affine_mode_of_path file_path;
+    let mode <- Mote.affine_mode_of_path (Path.unsafe file_path);
     let warn : Bool :=
         match mode {
             AffineMode.affine_warn => true,

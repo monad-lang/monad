@@ -163,11 +163,11 @@ pub def Build.fetch_run_with (home : String) (dir : String) (mode : FetchMode) :
 
 #[partial]
 pub def Build.fetch_run_with_opts (home : String) (dir : String) (mode : FetchMode) (offline : Bool) : IO I64 := do {
-    let members <- Mote.workspace_member_dirs dir;
+    let members <- Mote.workspace_member_dirs (Path.unsafe_dir dir);
     match members {
-        Option.some ms => Build.fetch_workspace home dir ms mode offline,
+        Option.some ms => Build.fetch_workspace home (Path.unsafe_dir dir) ms mode offline,
         Option.none => do {
-            let found <- Mote.discover dir;
+            let found <- Mote.discover (Path.unsafe_dir dir);
             match found {
                 Option.none => do {
                     IO.println ("error: no `mote.toml` at or above `" ++ dir ++ "`: `monad fetch` resolves a mote's dependencies, so it needs one");
@@ -198,7 +198,7 @@ def Build.fetch_with (home : String) (root : MoteManifest) (mode : FetchMode) (o
 /// dependencies (inherited edges included) and write ONE root `mote.lock`.
 #[partial]
 def Build.fetch_workspace
-    (home : String) (dir : String) (members : List String)
+    (home : String) (dir : Path) (members : List Path)
     (mode : FetchMode) (offline : Bool) : IO I64 := do {
     let ok <- Git.available;
     if Bool.not ok then do {
@@ -215,10 +215,10 @@ def Build.fetch_workspace
 
 #[partial]
 def Build.fetch_workspace_locked
-    (home : String) (dir : String) (members : List String)
+    (home : String) (dir : Path) (members : List Path)
     (mode : FetchMode) (offline : Bool) (tool : DigestTool) : IO I64 := do {
-    let lock_path : String := raw_path_join dir "mote.lock";
-    let read <- Lock.read (Path.path lock_path);
+    let lock_path : Path := Path.child_under dir "mote.lock";
+    let read <- Lock.read lock_path;
     match read {
         Result.err m => do { IO.println ("error: " ++ m); return 1 },
         Result.ok found => do {
@@ -246,7 +246,7 @@ def Build.fetch_workspace_locked
 /// member's. `manifest_at` resolves `workspace = true`, so an inherited git
 /// edge reaches the walk in `deps_full`.
 #[partial]
-def Build.workspace_manifests (dir : String) (members : List String) : IO (List MoteManifest) := do {
+def Build.workspace_manifests (dir : Path) (members : List Path) : IO (List MoteManifest) := do {
     let root <- Mote.manifest_at dir;
     let rest <- Build.member_manifests members;
     match root {
@@ -256,7 +256,7 @@ def Build.workspace_manifests (dir : String) (members : List String) : IO (List 
 }
 
 #[partial]
-def Build.member_manifests (members : List String) : IO (List MoteManifest) :=
+def Build.member_manifests (members : List Path) : IO (List MoteManifest) :=
     match members {
         List.empty => return List.empty,
         List.cons d rest => do {
@@ -285,12 +285,12 @@ def Build.visit_manifests (st : FetchState) (manifests : List MoteManifest) : IO
 #[partial]
 def Build.fetch_locked (home : String) (root : MoteManifest) (mode : FetchMode) (offline : Bool) (tool : DigestTool) : IO I64 := do {
     // One lock per workspace: a member's inherited edges live in the root's.
-    let lock_dir : String := match root.workspace_root {
+    let lock_dir : Path := match root.workspace_root {
         Option.some r => r,
         Option.none => root.dir,
     };
-    let lock_path : String := raw_path_join lock_dir "mote.lock";
-    let read <- Lock.read (Path.path lock_path);
+    let lock_path : Path := Path.child_under lock_dir "mote.lock";
+    let read <- Lock.read lock_path;
     match read {
         Result.err m => do { IO.println ("error: " ++ m); return 1 },
         Result.ok found => Build.fetch_start home root mode offline tool lock_path found
@@ -298,7 +298,7 @@ def Build.fetch_locked (home : String) (root : MoteManifest) (mode : FetchMode) 
 }
 
 #[partial]
-def Build.fetch_start (home : String) (root : MoteManifest) (mode : FetchMode) (offline : Bool) (tool : DigestTool) (lock_path : String) (found : Option LockRead) : IO I64 := do {
+def Build.fetch_start (home : String) (root : MoteManifest) (mode : FetchMode) (offline : Bool) (tool : DigestTool) (lock_path : Path) (found : Option LockRead) : IO I64 := do {
     let existing <- Build.existing_entries found;
     let st : FetchState := {
         home := home,
@@ -352,7 +352,7 @@ def Build.visit_manifest (st : FetchState) (m : MoteManifest) : IO (Result Strin
 #[partial]
 #[terminating]
 def Build.visit_dir (st : FetchState) (dir : String) : IO (Result String FetchState) := do {
-    let found <- Mote.discover dir;
+    let found <- Mote.discover (Path.unsafe_dir dir);
     match found {
         Option.none => return (Result.ok st),
         Option.some manifest => Build.visit_manifest st manifest
@@ -534,7 +534,7 @@ def Build.drop_checkout (db : String) (co : String) : IO (Result String Unit) :=
 #[terminating]
 def Build.fetch_dep_manifest (st : FetchState) (key : String) (url : String) (pin : GitPin) (subdir : Option String) (co : String) (commit : String) (rest : List (Pair String Dependency)) : IO (Result String FetchState) := do {
     let mote_dir : String := Build.mote_dir_of co subdir;
-    let found <- Mote.discover mote_dir;
+    let found <- Mote.discover (Path.unsafe_dir mote_dir);
     match found {
         Option.none => return (Result.err ("no `mote.toml` in the checkout of " ++ url ++ " at `" ++ mote_dir ++ "`")),
         Option.some manifest => Build.fetch_sum st key url pin subdir commit mote_dir manifest rest
@@ -595,14 +595,14 @@ def Build.record_new (st : FetchState) (name : String) (url : String) (pin : Git
 /// does not claim -- a registry entry written by a future resolver must
 /// not be erased by a `fetch` that only knows about git.
 #[partial]
-def Build.write_fetch_lock (lock_path : String) (st : FetchState) : IO I64 := do {
+def Build.write_fetch_lock (lock_path : Path) (st : FetchState) : IO I64 := do {
     let kept : List LockedMote := List.filter (Build.keep_existing st.entries) st.existing;
     let lock : Lockfile := { motes := List.append kept st.entries };
-    let wrote <- Lock.write (Path.path lock_path) lock;
+    let wrote <- Lock.write lock_path lock;
     match wrote {
         Result.err e => do { IO.println ("error: " ++ e); return 1 },
         Result.ok _ => do {
-            IO.println ("wrote " ++ lock_path ++ " (" ++ I64.to_string (List.length st.entries) ++ " entries)");
+            IO.println ("wrote " ++ Path.to_string lock_path ++ " (" ++ I64.to_string (List.length st.entries) ++ " entries)");
             return 0
         }
     }
@@ -659,7 +659,7 @@ def Build.verify_home (home : String) (m : MoteManifest) (locked : Bool) : IO (R
     if Bool.not (Mote.any_git_dep m.deps_full)
     then return (Result.ok Unit.unit)
     else do {
-        let read <- Lock.read (Path.path (raw_path_join m.dir "mote.lock"));
+        let read <- Lock.read (Path.child_under m.dir "mote.lock");
         match read {
             Result.err e => return (Result.err e),
             Result.ok found => Build.verify_entries home locked found m.deps_full
@@ -816,7 +816,7 @@ pub def Build.toolchain_skew (compiler_commit : String) (entries : List LockedMo
 
 /// Read `m.dir/mote.lock` and check it against the running compiler.
 pub def Build.toolchain_skew_of_manifest (m : MoteManifest) (compiler_commit : String) : IO (Option String) := do {
-    let read <- Lock.read (Path.path (raw_path_join m.dir "mote.lock"));
+    let read <- Lock.read (Path.child_under m.dir "mote.lock");
     match read {
         Result.err _ => return Option.none,
         Result.ok found =>

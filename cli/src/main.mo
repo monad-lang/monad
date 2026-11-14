@@ -26,11 +26,11 @@ use llvm::target {TargetSpec, TargetPlan}
 use runtime {}
 use codegen::emit {compile_db_module_with_debug, compile_loaded_modules_to_ir_with_debug}
 use codegen::decls {collect_all_decls_from_modules, export_names}
-use lang::module {BatchCheckResult, CheckDiagnostics, ElaboratedAndCache, collect_link_libs, collect_link_pkgs, get_loaded_all, ElaboratedModules, FileCheckAndCache, FileCheckResult, LoadedModules, ModuleInfo, ModuleInfoCache, bench_step, check_file_cached, check_files_cached, check_module_with_scope_path, elaborate_loaded_modules, elaborate_loaded_modules_cached, elaborate_module_decls_best_effort, expand_check_paths, extract_directory, load_file_modules, load_module_with_info, module_name_from_path, module_info_cache_empty, ownership_refusal_of_loaded, resolve_runtime_src, try_parse_decls, try_parse_decls_strict}
+use lang::module {BatchCheckResult, CheckDiagnostics, ElaboratedAndCache, collect_link_libs, collect_link_pkgs, get_loaded_all, ElaboratedModules, FileCheckAndCache, FileCheckResult, LoadedModules, ModuleInfo, ModuleInfoCache, base_dir_path, bench_step, check_file_cached, check_files_cached, check_module_with_scope_path, elaborate_loaded_modules, elaborate_loaded_modules_cached, elaborate_module_decls_best_effort, expand_check_paths, extract_directory, load_file_modules, load_module_with_info, module_name_from_path, module_info_cache_empty, ownership_refusal_of_loaded, resolve_runtime_src, try_parse_decls, try_parse_decls_strict}
 use lang::mote {
-    Mote.discover, Mote.discover_config_target_dir, Mote.target_roots,
+    Mote.dir_above, Mote.discover, Mote.discover_config_target_dir, Mote.target_roots,
     Mote.native_test_roots, Mote.web_only_bin_file,
-    Mote.discover, Mote.workspace_members, Mote.manifest_at,
+    Mote.workspace_members, Mote.manifest_at,
     Mote.scripts_at_path, MoteManifest, BinTarget, ScriptTarget,
     ScriptTarget.script_name, ScriptTarget.script_path, ScriptTarget.script_mote,
 }
@@ -602,7 +602,7 @@ def resolve_build_input (path : String) (bin : String) (out_name : String) : IO 
     if Bool.not is_a_dir
     then return (Result.ok { src := path, name := out_name, label := "" })
     else do {
-        let m <- Mote.discover path;
+        let m <- Mote.discover (Path.unsafe_dir path);
         match m {
             Option.none => do {
                 return (Result.err (String.concat_all [
@@ -934,26 +934,25 @@ def script_dep_dir (name : String) (deps : List (Pair String Path)) : Option Pat
     }
 
 #[partial]
-def script_member_root (dir : String) (depth : I64) : IO (Option String) := do {
+def script_member_root (dir : Path) (depth : I64) : IO (Option Path) := do {
     if I64.lt depth 1i64 then IO.pure Option.none
     else do {
         let members <- Mote.workspace_members dir;
         if Bool.not (List.is_empty members)
         then IO.pure (Option.some dir)
-        else if String.beq dir "/"
-        then IO.pure Option.none
-        else script_member_root
-            (Path.to_string (Path.join (Path.path dir) (Path.path "..")))
-            (I64.sub depth 1i64)
+        else match Mote.dir_above dir {
+            Option.none => IO.pure Option.none,
+            Option.some p => script_member_root p (I64.sub depth 1i64),
+        }
     }
 }
 
 #[partial]
-def script_member_named (root : String) (members : List String) (name : String) : IO (Option String) :=
+def script_member_named (root : Path) (members : List Path) (name : String) : IO (Option Path) :=
     match members {
         List.empty => IO.pure Option.none,
         List.cons m rest => do {
-            let dir := Path.to_string (Path.join (Path.path root) (Path.path m));
+            let dir := Path.child_under root (Path.to_string m);
             let man <- Mote.manifest_at dir;
             match man {
                 Option.some x =>
@@ -966,31 +965,34 @@ def script_member_named (root : String) (members : List String) (name : String) 
     }
 
 def script_owner_dir (base_dir : String) (mote_name : String) : IO (Option String) := do {
-    let own <- Mote.manifest_at base_dir;
+    let here : Path := Path.unsafe_dir base_dir;
+    let own <- Mote.manifest_at here;
     match own {
         Option.some m =>
             if String.beq m.name mote_name
-            then IO.pure (Option.some m.dir)
+            then IO.pure (Option.some (Path.to_string m.dir))
             else match script_dep_dir mote_name m.dep_dirs {
                 Option.some d => IO.pure (Option.some (Path.to_string d)),
                 Option.none => do {
-                    let root <- script_member_root base_dir 32i64;
+                    let root <- script_member_root here 32i64;
                     match root {
                         Option.none => IO.pure Option.none,
                         Option.some r => do {
                             let members <- Mote.workspace_members r;
-                            script_member_named r members mote_name
+                            let found <- script_member_named r members mote_name;
+                            IO.pure (match found { Option.some p => Option.some (Path.to_string p), Option.none => Option.none })
                         }
                     }
                 },
             },
         Option.none => do {
-            let root <- script_member_root base_dir 32i64;
+            let root <- script_member_root here 32i64;
             match root {
                 Option.none => IO.pure Option.none,
                 Option.some r => do {
                     let members <- Mote.workspace_members r;
-                    script_member_named r members mote_name
+                    let found <- script_member_named r members mote_name;
+                    IO.pure (match found { Option.some p => Option.some (Path.to_string p), Option.none => Option.none })
                 }
             }
         },
@@ -998,13 +1000,13 @@ def script_owner_dir (base_dir : String) (mote_name : String) : IO (Option Strin
 }
 
 #[partial]
-def script_find_in_members (root : String) (members : List String) (name : String) :
+def script_find_in_members (root : Path) (members : List Path) (name : String) :
     IO (Option (Pair String ScriptTarget)) :=
     match members {
         List.empty => IO.pure Option.none,
         List.cons m rest => do {
-            let dir := Path.to_string (Path.join (Path.path root) (Path.path m));
-            let found <- Mote.scripts_at_path (String.concat dir "/mote.toml");
+            let dir := Path.child_under root (Path.to_string m);
+            let found <- Mote.scripts_at_path (Path.child_under dir "mote.toml");
             match found {
                 Option.some pr =>
                     match pr {
@@ -1253,8 +1255,9 @@ def script_watch_opened (w : Watch) (owner : String) (t : ScriptTarget)
 def script_watch (manifest_dir : String) (owner : String) (t : ScriptTarget)
     (target_dir_flag : String) (verbose : Bool) (debug : Bool) (no_cache : Bool)
     (program_args : List String) : IO I64 := do {
-    // The nearest-manifest walk reports "."'s manifest as `""`, which is a fine
-    // closure root (the build fills it in) but not a path to open.
+    // The nearest-manifest walk reports the working directory as `.`, which
+    // is a fine closure root but not normalized for opening; a caller may
+    // still hand `""` (a bare filename's directory), so keep the guard.
     let root : String := if String.is_empty manifest_dir then "." else manifest_dir;
     let opened <- Watch.recursive (Path.path root) Watch.default_ignored;
     match opened {
@@ -1275,7 +1278,7 @@ def script_watch (manifest_dir : String) (owner : String) (t : ScriptTarget)
 def script_run_in_workspace (base_dir : String) (name : String) (verbose : Bool)
     (debug : Bool) (no_cache : Bool) (target_dir_flag : String) (mote_name : String)
     (watch : Bool) (program_args : List String) : IO I64 := do {
-    let root <- script_member_root base_dir 32i64;
+    let root <- script_member_root (Path.unsafe_dir base_dir) 32i64;
     match root {
         Option.none => do {
             println (String.concat "error: no script `" (String.concat name "`"));
@@ -1341,7 +1344,7 @@ def script_run_named (dir : String) (scripts : List ScriptTarget) (name : String
 def run_script (name : String) (verbose : Bool) (debug : Bool) (no_cache : Bool)
     (target_dir_flag : String) (list_mode : Bool) (workspace : Bool) (watch : Bool)
     (mote_name : String) (program_args : List String) : IO I64 := do {
-    let found <- Mote.scripts_at_path ".";
+    let found <- Mote.scripts_at_path (Path.unsafe ".");
     match found {
         Option.none => do {
             println "error: no mote.toml above this directory";
@@ -1918,13 +1921,13 @@ def resolve_target_paths (verb : String) (subcommand : String) (native_only : Bo
         // looking for the members list directly, walking up from here.
         // The walk hands back members already joined onto the root it
         // found, which is why `--workspace` works from a subdirectory.
-        let members <- find_workspace_members "" 32;
+        let members <- find_workspace_members (Path.unsafe_dir "") 32;
         if List.is_empty members then do {
             println ("monad " ++ subcommand ++ " --workspace: no workspace manifest found (no [workspace] members above this directory)");
             return (Option.some List.empty)
-        } else return (Option.some members)
+        } else return (Option.some (List.map (fn (p : Path) => Path.to_string p) members))
     } else do {
-        let m <- Mote.discover "";
+        let m <- Mote.discover (Path.unsafe_dir "");
         match m {
             Option.none => return Option.none,
             Option.some manifest => do {
@@ -1934,7 +1937,7 @@ def resolve_target_paths (verb : String) (subcommand : String) (native_only : Bo
                 // `Path.unsafe_dir` spells `"."`. The roots come back as
                 // `Path`s and are rendered for the directory sweep, which
                 // is still string-keyed.
-                let dir : Path := Path.unsafe_dir manifest.dir;
+                let dir : Path := manifest.dir;
                 let roots : List String := List.map (fn (p : Path) => Path.to_string p)
                     (if native_only then Mote.native_test_roots manifest dir else Mote.target_roots manifest dir);
                 // An empty verb is the machine-readable callers' way of
@@ -2286,7 +2289,7 @@ def verify_locks (targets : List String) (locked : Bool) (compiler_commit : Stri
             match root {
                 Option.none => verify_locks rest locked compiler_commit seen,
                 Option.some m =>
-                    if List.contains_by String.beq m.dir seen
+                    if List.contains_by String.beq (Path.to_string m.dir) seen
                     then verify_locks rest locked compiler_commit seen
                     else do {
                         let skew <- Build.toolchain_skew_of_manifest m compiler_commit;
@@ -2296,7 +2299,7 @@ def verify_locks (targets : List String) (locked : Bool) (compiler_commit : Stri
                                 let r <- Build.verify_manifest m locked;
                                 match r {
                                     Result.err e => return (Option.some e),
-                                    Result.ok _ => verify_locks rest locked compiler_commit (List.cons m.dir seen)
+                                    Result.ok _ => verify_locks rest locked compiler_commit (List.cons (Path.to_string m.dir) seen)
                                 }
                             },
                         }
@@ -2310,7 +2313,9 @@ def verify_locks (targets : List String) (locked : Bool) (compiler_commit : Stri
 #[partial]
 def target_manifest_root (t : String) : IO (Option MoteManifest) := do {
     let is_dir <- IO.is_dir (Path.path t);
-    if is_dir then Mote.discover t else Mote.discover (extract_directory t)
+    if is_dir
+    then Mote.discover (Path.unsafe_dir t)
+    else Mote.discover (base_dir_path (extract_directory t))
 }
 
 /// `verify_locks` over the CLI's own targets; an empty list means "the
@@ -2392,7 +2397,7 @@ def run_check_body (files : List String) (opts : CheckOptions) : IO I64 := do {
 /// `Build.target_dir_at` makes the same choice for the same reason.
 #[partial]
 def target_dir_flagged (flag : String) : IO String := do {
-    let d <- Mote.discover_config_target_dir "";
+    let d <- Mote.discover_config_target_dir (Path.unsafe_dir "");
     Build.target_dir_of flag d ""
 }
 
@@ -2528,16 +2533,17 @@ def run_test_paths (files : List String) (workspace : Bool) (out_dir : String) (
 /// its expanded member directories. Bounded the same way `Mote.discover`
 /// is, and for the same reason: the walk is string surgery on a path.
 #[partial]
-def find_workspace_members (dir : String) (depth : I64) : IO (List String) := do {
+def find_workspace_members (dir : Path) (depth : I64) : IO (List Path) := do {
     if I64.lt depth 1 then do { return List.empty }
     else do {
-        let here : List String <- Mote.workspace_members dir;
+        let here : List Path <- Mote.workspace_members dir;
         // Same bare-pattern ambiguity as `run_test_paths` -- `List.is_empty`
         // instead of matching on the constructors.
         if List.is_empty here then
-            if String.beq dir "" then find_workspace_members ".." (depth - 1)
-            else if String.beq dir "/" then do { return List.empty }
-            else find_workspace_members (raw_path_join dir "..") (depth - 1)
+            match Mote.dir_above dir {
+                Option.none => do { return List.empty },
+                Option.some p => find_workspace_members p (depth - 1),
+            }
         else do { return here }
     }
 }
@@ -2567,7 +2573,7 @@ def drop_web_only_bins (files : List String)
                 match web_bin_cache_find dir cache {
                     Option.some m => IO.pure (Pair.pair m cache),
                     Option.none => do {
-                        let m <- Mote.discover dir;
+                        let m <- Mote.discover (Path.unsafe_dir dir);
                         IO.pure (Pair.pair m (List.cons (Pair.pair dir m) cache))
                     },
                 };

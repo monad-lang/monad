@@ -373,7 +373,7 @@ def test_a_fetched_dependency_resolves_to_its_checkout : IO Bool := do {
 
 #[partial]
 def Build.resolved_dir (root : String) : IO String := do {
-    let man <- Mote.manifest_at (Build.fetch_app root);
+    let man <- Mote.manifest_at (Path.unsafe_dir (Build.fetch_app root));
     match man {
         Option.none => return "",
         Option.some m => do {
@@ -463,7 +463,7 @@ def test_offline_after_a_fetch_succeeds : IO Bool := do {
 
 #[partial]
 def Build.verify_fixture (root : String) (locked : Bool) : IO (Result String Unit) := do {
-    let man <- Mote.manifest_at (Build.fetch_app root);
+    let man <- Mote.manifest_at (Path.unsafe_dir (Build.fetch_app root));
     match man {
         Option.none => return (Result.err "no manifest"),
         Option.some m => Build.verify_manifest_at (Build.fetch_home root) m locked
