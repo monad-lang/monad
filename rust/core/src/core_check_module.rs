@@ -3667,6 +3667,109 @@ mod test {
     assert!(report.defs[0].result.is_err());
   }
 
+  // -------------------------------------------------------------------
+  // `Path` is a declared newtype over `String` (`std/src/path.mo`), not a
+  // `String`. `++` is `Append.append`, a class method applied through the
+  // ordinary application path, so the host rejects a `Path` operand. These
+  // are the parity pins for `plans/implementations/
+  // 2026-11-14-infix-concat-accepts-a-path.md`: the self-hosted checker
+  // shipped this hole and compiled the docs-site binary into a segfault.
+  // -------------------------------------------------------------------
+
+  #[test]
+  fn test_rejects_a_path_operand_of_string_concat() {
+    let env = ModuleCheckEnv::new();
+    let report = check_module_source(
+      &env,
+      "use std::path {Path, Path.to_string}\n\
+       def show_path (p : Path) : String := \"at \" ++ p\n",
+    );
+    assert_eq!(report.defs.len(), 1, "report: {report:?}");
+    assert!(
+      report.defs[0].result.is_err(),
+      "expected the host to reject a Path operand, got {:?}",
+      report.defs[0].result
+    );
+  }
+
+  #[test]
+  fn test_accepts_a_rendered_path_operand_of_string_concat() {
+    let env = ModuleCheckEnv::new();
+    let report = check_module_source(
+      &env,
+      "use std::path {Path, Path.to_string}\n\
+       def show_path (p : Path) : String := \"at \" ++ Path.to_string p\n",
+    );
+    assert_eq!(report.passed(), 1, "report: {report:?}");
+  }
+
+  #[test]
+  fn test_rejects_a_string_argument_to_a_path_parameter() {
+    let env = ModuleCheckEnv::new();
+    let report = check_module_source(
+      &env,
+      "use std::path {Path, Path.to_string}\n\
+       def take_path (dir : Path) : String := \"x\"\n\
+       def probe_arg (p : Path) : String := take_path (Path.to_string p)\n",
+    );
+    assert_eq!(report.defs.len(), 2, "report: {report:?}");
+    assert!(
+      report.defs[1].result.is_err(),
+      "expected the host to reject a String argument for a Path parameter, got {:?}",
+      report.defs[1].result
+    );
+  }
+
+  /// The same rule ACROSS a module boundary: `Path.normalize` takes a
+  /// `Path`, so the rendered form cannot be passed back in. `motes/docgen`'s
+  /// original incident was this shape through `Mote.manifest_at`; that
+  /// module's closure drags in the workspace's `toml` mote, which the
+  /// `check_module_source` harness cannot load, so `std::path` stands in for
+  /// the cross-module callee.
+  #[test]
+  fn test_rejects_a_rendered_path_argument_to_a_cross_module_path_parameter() {
+    let env = ModuleCheckEnv::new();
+    let report = check_module_source(
+      &env,
+      "use std::path {Path, Path.to_string, Path.normalize}\n\
+       def probe_manifest (dir : Path) : Path := Path.normalize (Path.to_string dir)\n",
+    );
+    assert_eq!(report.defs.len(), 1, "report: {report:?}");
+    assert!(
+      report.defs[0].result.is_err(),
+      "expected the host to reject a String argument to a Path parameter, got {:?}",
+      report.defs[0].result
+    );
+  }
+
+  /// The class-method argument rule must not fire where the declared
+  /// parameter is still a class variable (`Monad.bind`'s `A -> M B`,
+  /// `HAdd`'s two-parameter `+`), which every do-block relies on.
+  #[test]
+  fn test_accepts_class_method_arguments_at_a_class_variable() {
+    let env = ModuleCheckEnv::new();
+    let report = check_module_source(
+      &env,
+      "def append_ok (s : String) : String := Append.append \"a\" s\n\
+       def bind_ok {A B : Type} (m : IO A) (f : A -> IO B) : IO B := Monad.bind m f\n\
+       def do_ok : IO I64 := do { let x <- IO.pure 1; return x }\n\
+       def add_ok (a b : I64) : I64 := a + b\n",
+    );
+    assert_eq!(report.passed(), 4, "report: {report:?}");
+  }
+
+  #[test]
+  fn test_accepts_a_path_argument_to_a_path_parameter() {
+    let env = ModuleCheckEnv::new();
+    let report = check_module_source(
+      &env,
+      "use std::path {Path}\n\
+       def take_path (dir : Path) : String := \"x\"\n\
+       def probe_arg (p : Path) : String := take_path p\n",
+    );
+    assert_eq!(report.passed(), 2, "report: {report:?}");
+  }
+
   #[test]
   fn test_harness_skips_non_def_decls() {
     let env = ModuleCheckEnv::new();

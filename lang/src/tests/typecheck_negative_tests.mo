@@ -175,6 +175,122 @@ def test_correct_arguments_and_guarded_shapes_are_accepted : IO Bool :=
         ++ "def use_box (f : I64 -> Box) : Box := f 1i64\n"
         ++ "def box_ok : Box := use_box Box.box\n")
 
+// --- Distinct String newtypes: `Path` is not a `String` --------------------
+//
+// `plans/implementations/2026-11-14-infix-concat-accepts-a-path.md`. `++` is
+// `Append.append` (init/src/prelude.mo), a class method, so the operand check
+// has to read the CLASS's declared parameter solved by the arguments already
+// applied; before that, `"at " ++ p` checked cleanly and compiled a `Path`
+// into the `String` slot. The argument shapes below are the same rule through
+// a def call and were the docgen call that segfaulted the site build.
+
+def concat_path_operand_source : String :=
+    "def show_path (p : Path) : String := \"at \" ++ p\n"
+
+def concat_path_operand_left_source : String :=
+    "def show_path_left (p : Path) : String := p ++ \"at \"\n"
+
+def append_path_operand_source : String :=
+    "def append_path (p : Path) : String := Append.append \"at \" p\n"
+
+def concat_path_operand_ok_source : String :=
+    "def show_path_ok (p : Path) : String := \"at \" ++ Path.to_string p\n"
+    ++ "def show_path_right_ok (p : Path) : String := Path.to_string p ++ \"at \"\n"
+
+#[test]
+def test_a_path_operand_of_concat_is_rejected : IO Bool :=
+    rejected_with "show_path" mismatch concat_path_operand_source
+
+#[test]
+def test_a_path_first_operand_rejects_a_string_second : IO Bool :=
+    rejected_with "show_path_left" mismatch concat_path_operand_left_source
+
+#[test]
+def test_a_path_operand_of_append_is_rejected : IO Bool :=
+    rejected_with "append_path" mismatch append_path_operand_source
+
+#[test]
+def test_rendering_the_path_before_concatenating_is_accepted : IO Bool :=
+    accepted concat_path_operand_ok_source
+
+/// The class-method argument rule must not fire where the declared parameter
+/// is still a class variable: `Monad.bind`'s `A -> M B`, a user generic
+/// helper, `Append.append` at its own type and `HAdd`'s two-parameter `+`
+/// are all accepted -- the shapes every do-block in the corpus and
+/// `motes/oak/src/tests/html_t_tests.mo` depend on.
+def class_method_guards_ok_source : String :=
+    "def append_ok (s : String) : String := Append.append \"a\" s\n"
+    ++ "def bind_ok {A B : Type} (m : IO A) (f : A -> IO B) : IO B := Monad.bind m f\n"
+    ++ "def do_ok : IO I64 := do { let x <- IO.pure 1; return x }\n"
+    ++ "def add_ok (a b : I64) : I64 := a + b\n"
+
+#[test]
+def test_class_method_arguments_at_a_class_variable_are_accepted : IO Bool :=
+    accepted class_method_guards_ok_source
+
+def path_argument_source : String :=
+    "def take_path (dir : Path) : String := \"x\"\n"
+    ++ "def path_argument (p : Path) : String := take_path (Path.to_string p)\n"
+
+def path_argument_ok_source : String :=
+    "def take_path_ok (dir : Path) : String := \"x\"\n"
+    ++ "def path_argument_ok (p : Path) : String := take_path_ok p\n"
+
+#[test]
+def test_a_string_argument_to_a_path_parameter_is_rejected : IO Bool :=
+    rejected_with "path_argument" mismatch path_argument_source
+
+#[test]
+def test_a_path_argument_to_a_path_parameter_is_accepted : IO Bool :=
+    accepted path_argument_ok_source
+
+def string_beq_path_source : String :=
+    "def beq_path (p : Path) (s : String) : Bool := String.beq p s\n"
+
+def string_length_path_source : String :=
+    "def len_path (p : Path) : I64 := String.length p\n"
+
+def string_native_path_ok_source : String :=
+    "def beq_path_ok (p : Path) (s : String) : Bool := String.beq (Path.to_string p) s\n"
+    ++ "def len_path_ok (p : Path) : I64 := String.length (Path.to_string p)\n"
+
+#[test]
+def test_a_path_argument_to_string_beq_is_rejected : IO Bool :=
+    rejected_with "beq_path" mismatch string_beq_path_source
+
+#[test]
+def test_a_path_argument_to_string_length_is_rejected : IO Bool :=
+    rejected_with "len_path" mismatch string_length_path_source
+
+#[test]
+def test_the_rendered_string_native_twins_are_accepted : IO Bool :=
+    accepted string_native_path_ok_source
+
+/// The exact docgen shape, across a module boundary: `manifest_at` takes a
+/// `Path`, and the argument is `Path.to_string mote_dir`. This compiled and
+/// then miscompiled the site binary (exit 139) before the caller was fixed.
+def manifest_at_path_source : String :=
+    "use lang::mote {Mote.manifest_at}\n"
+    ++ "def probe_manifest (mote_dir : Path) : IO String := do {\n"
+    ++ "    let _manifest <- Mote.manifest_at (Path.to_string mote_dir);\n"
+    ++ "    return \"x\"\n"
+    ++ "}\n"
+
+def manifest_at_path_ok_source : String :=
+    "use lang::mote {Mote.manifest_at}\n"
+    ++ "def probe_manifest_ok (mote_dir : Path) : IO String := do {\n"
+    ++ "    let _manifest <- Mote.manifest_at mote_dir;\n"
+    ++ "    return \"x\"\n"
+    ++ "}\n"
+
+#[test]
+def test_a_string_argument_to_manifest_at_is_rejected : IO Bool :=
+    rejected_with "probe_manifest" mismatch manifest_at_path_source
+
+#[test]
+def test_a_path_argument_to_manifest_at_is_accepted : IO Bool :=
+    accepted manifest_at_path_ok_source
+
 // --- `if` / `else` arms ----------------------------------------------------
 
 /// The then-arm is `IO I64` and the else-arm `IO String`; the declaration

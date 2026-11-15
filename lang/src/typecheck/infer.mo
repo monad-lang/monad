@@ -7349,7 +7349,7 @@ def type_check_app_ordinary (a_tt : TypedTerm) (f : Term) (expected_type : Term)
         ok f_tt =>
             let f_term : Term := f_tt.term in
             let f_typ : Term := f_tt.typ in
-            match callee_domain_error f a_term a_typ f_typ scope locals {
+            match callee_domain_error f a_term a_typ f_typ scope local_types locals {
                 Option.some e => err e,
                 Option.none =>
                 extract_pi_ret f_term a_term f_typ a_typ expected_type scope local_types locals,
@@ -7357,7 +7357,7 @@ def type_check_app_ordinary (a_tt : TypedTerm) (f : Term) (expected_type : Term)
         err e => err e,
     }
 
-/// The ordinary path's argument check: the callee's own Pi domain against
+/// The ordinary path's argument check: the callee's declared domain against
 /// the argument's inferred type.
 ///
 /// Only this path sees a LOCAL function value (`def danger (pick : String ->
@@ -7366,33 +7366,41 @@ def type_check_app_ordinary (a_tt : TypedTerm) (f : Term) (expected_type : Term)
 /// reaches here. `pi_domain_of` declines a hole domain and a folded
 /// `forall`; `call_arg_type_error` owns the rest of the guards.
 ///
-/// A CLASS-METHOD callee is skipped outright. Its carrier is derived FROM
-/// the argument's own inferred type (`carrier_from_expected_type`), so the
-/// Pi this path inspects is synthesized out of the very type it would be
-/// compared with -- and for a do-block over a monad transformer the
-/// derivation can apply the carrier once more than the source did: MEASURED
-/// on `motes/oak/src/tests/html_t_tests.mo`'s `prog_do_open`, where the
+/// A CLASS-METHOD callee takes its domain from the CLASS DECLARATION, solved
+/// by the arguments ALREADY applied (`class_method_next_param`), not from
+/// `f_typ`. That is what makes `"at " ++ p` reject a `Path` operand: the
+/// first operand solves `A := String`, so the second parameter is `String`,
+/// while `f_typ`'s carrier is derived FROM the argument under test
+/// (`carrier_from_expected_type`) and can never disagree with it. The
+/// expected-result seed is deliberately not passed (`Term.hole`), because it
+/// can apply the carrier once more than the source did -- MEASURED on
+/// `motes/oak/src/tests/html_t_tests.mo`'s `prog_do_open`, where the
 /// argument typed `HtmlT (HtmlT RenderM Open Open) Open Open Unit` and the
-/// derived domain `HtmlT RenderM Open Open Unit`. The Rust host accepts it.
+/// derived domain `HtmlT RenderM Open Open Unit`; the Rust host accepts it.
+/// Only a CLOSED domain is compared (`closed_class_method_domain`); an
+/// unsolved class variable still declines.
 def callee_domain_error (f : Term) (a_term : Term) (a_typ : Term) (f_typ : Term)
-    (scope : Scope) (locals : LocalScope) : Option TypeError :=
+    (scope : Scope) (local_types : List Term) (locals : LocalScope) : Option TypeError :=
     if scope.incomplete_match_ok
     then Option.none
-    else if callee_is_class_method f scope
-    then Option.none
-    else match pi_domain_of f_typ {
-        Option.none => Option.none,
-        Option.some dom => call_arg_type_error a_term a_typ dom List.empty List.empty scope locals,
-    }
-
-/// Does `f`'s call spine name a CLASS METHOD (a method declared by a class,
-/// whose carrier the checker resolves per call)?
-def callee_is_class_method (f : Term) (scope : Scope) : Bool :=
-    match flatten_call_spine f {
+    else match flatten_call_spine f {
         CallSpine.mk head _args =>
             match class_method_declared_sig head scope {
-                Option.some _ => true,
-                Option.none => false,
+                Option.some _ =>
+                    match class_method_next_param f Term.hole scope local_types locals {
+                        Option.none => Option.none,
+                        Option.some cd =>
+                            match closed_class_method_domain cd scope {
+                                Option.none => Option.none,
+                                Option.some dom =>
+                                    call_arg_type_error a_term a_typ dom List.empty List.empty scope locals,
+                            },
+                    },
+                Option.none =>
+                    match pi_domain_of f_typ {
+                        Option.none => Option.none,
+                        Option.some dom => call_arg_type_error a_term a_typ dom List.empty List.empty scope locals,
+                    },
             },
     }
 
@@ -7872,13 +7880,28 @@ def class_method_result_domain (f : Term) (expected : Term) (scope : Scope) (loc
 def class_method_chain_domain (f : Term) (expected : Term) (scope : Scope) (local_types : List Term) (locals : LocalScope) : Option Term :=
     match class_method_next_param f expected scope local_types locals {
         Option.none => Option.none,
-        Option.some cd =>
-            if has_informative_head cd.dom
-                && Bool.not (mentions_unresolved_name cd.dom scope)
-                && Bool.not (type_mentions_any cd.vars cd.dom)
-            then Option.some cd.dom
-            else Option.none,
+        Option.some cd => closed_class_method_domain cd scope,
     }
+
+/// A class method's domain, compared against an argument only when it is a
+/// real, CLOSED type. The three guards are measured, not defensive:
+///   - `has_informative_head` rejects a hole / `_ _`;
+///   - `mentions_unresolved_name` rejects a signature variable nothing
+///     solved;
+///   - `type_mentions_any cd.vars` rejects a name the class itself binds --
+///     at a call site a class parameter is a variable however the scope
+///     reads it, and a caller type of the same spelling must not be
+///     mistaken for it.
+/// Shared by `class_method_chain_domain` (the lambda-binder hint) and
+/// `callee_domain_error` (the argument check), so the two cannot disagree
+/// about which domains are safe to hand out.
+#[partial]
+def closed_class_method_domain (cd : CalleeDomain) (scope : Scope) : Option Term :=
+    if has_informative_head cd.dom
+        && Bool.not (mentions_unresolved_name cd.dom scope)
+        && Bool.not (type_mentions_any cd.vars cd.dom)
+    then Option.some cd.dom
+    else Option.none
 
 /// The expected type of an unannotated continuation's BODY: the domain's
 /// codomain with the result-derived carrier filled in and the rest left open
