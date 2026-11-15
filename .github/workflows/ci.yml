@@ -413,6 +413,20 @@ jobs:
             --profile "$HOME/.monad-ci-devshell" \
             -c scripts/check-fmt.sh "$PWD/target-monad/ci-self-compile/monad"
 
+      # The style/name-path ratchet: no counter may rise above
+      # scripts/style-baseline.txt. The counters are the linter's rule ids
+      # (plans/implementations/linter.md), and the four typed-name/path ones
+      # (`scope_hashmap_string_fields`, `path_ctor_outside_std`,
+      # `flat_name_renderers`, `debug_name_flattened`) come from the typed
+      # names/paths sweep. Regenerate the baseline with
+      # `scripts/style-metrics.sh --write-baseline scripts/style-baseline.txt`.
+      - name: Style metrics ratchet
+        run: |
+          nix develop --no-pure-eval --accept-flake-config \
+            --profile "$HOME/.monad-ci-devshell" \
+            -c python3 scripts/style_metrics.py --root "$PWD" \
+                 --baseline "$PWD/scripts/style-baseline.txt" --quiet
+
       # The consumers below (`clap-monadup-tests` through `wasm-target`) run
       # this tree's compiler as `.#monad` rather than self-compiling it again:
       # one store path per run, built here once the gates above have passed.

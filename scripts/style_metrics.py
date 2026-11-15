@@ -49,6 +49,38 @@ NAMED_STD_DUPLICATES = [
     "str_join", "join_semicolon_msgs", "strs_append",
 ]
 
+# Name renderers that must live only in lang/src/types.mo (see the
+# typed-names plan's Phase 1e). A def of one of these anywhere else is the
+# `flat_name_renderers` finding.
+FLAT_RENDERER_NAMES = {
+    "module_path_to_string", "show_name_path_dotted", "qualified_ref_symbol",
+    "show_identifier_", "show_module_path_", "name_path_to_str_scope",
+    "show_source_spelling",
+}
+
+
+def is_test_path(rel: str) -> bool:
+    return ("_tests.mo" in rel or "_test.mo" in rel or "/tests/" in rel
+            or "/test/" in rel or rel.startswith("slow_tests/"))
+
+
+def scope_hashmap_fields(root: Path) -> int:
+    """`ScopeData` fields still keyed by `HashMap String` (0 once re-keyed)."""
+    p = root / "lang/src/types.mo"
+    if not p.exists():
+        return 0
+    n, inside = 0, False
+    for line in p.read_text(encoding="utf-8", errors="replace").split("\n"):
+        if not inside and "struct ScopeData" in line:
+            inside = True
+            continue
+        if inside:
+            if line.startswith("}"):
+                inside = False
+            elif "HashMap String" in line:
+                n += 1
+    return n
+
 TYPE_DECL_RE = re.compile(r"^\s*(?:pub\s+|priv\s+)?type\s+([A-Za-z_][\w.]*)[^{]*\{\s*$")
 STRUCT_DECL_RE = re.compile(r"^\s*(?:pub\s+|priv\s+)?struct\s+([A-Za-z_][\w.]*)[^{]*\{")
 DEF_RE = re.compile(r"^\s*(?:pub\s+|priv\s+)?def\s+([A-Za-z_][\w.']*)")
@@ -276,9 +308,23 @@ def analyse(root: Path) -> tuple[dict[str, int], dict[str, Counter]]:
                     if depth >= 3:
                         m["list_cons_chain_depth3plus"] += 1
 
+            # The typed-names counters: `Path` construction sites and the
+            # flattened-name helpers outside their documented homes.
+            rel = str(path.relative_to(root))
+            if rel != "std/src/path.mo" and not is_test_path(rel):
+                m["path_ctor_outside_std"] += (
+                    line.count("Path.path ") + line.count("Path.unsafe ")
+                    + line.count("Path.unsafe_dir "))
+                m["debug_name_flattened"] += (
+                    line.count("split_qualified_identifier ")
+                    + line.count("show_source_spelling "))
+
             dm = DEF_RE.match(line)
             if dm:
                 m["total_defs"] += 1
+                if (dm.group(1).split(".")[-1] in FLAT_RENDERER_NAMES
+                        and rel != "lang/src/types.mo" and not is_test_path(rel)):
+                    m["flat_name_renderers"] += 1
                 if dm.group(1).split(".")[-1] in NAMED_STD_DUPLICATES:
                     m["std_duplicate_defs"] += 1
                     detail["std_duplicate_defs"][
@@ -290,6 +336,7 @@ def analyse(root: Path) -> tuple[dict[str, int], dict[str, Counter]]:
             if has_space_indent:
                 m["files_mixing_tabs_and_spaces"] += 1
 
+    m["scope_hashmap_string_fields"] = scope_hashmap_fields(root)
     m["mo_files"] = len(per_file_lines)
     m["production_lines"] = (
         m["total_lines"] - m["comment_lines"] - m["blank_lines"] - m["test_body_lines"]
@@ -320,6 +367,8 @@ KEY_ORDER = [
     "std_duplicate_defs", "partial_attrs", "partial_attr_no_self_call",
     "list_cons_sites", "list_cons_terminated_lines",
     "list_cons_chain_depth2plus", "list_cons_chain_depth3plus",
+    "scope_hashmap_string_fields", "path_ctor_outside_std",
+    "flat_name_renderers", "debug_name_flattened",
 ]
 
 # Counters that must never rise. Anything not listed is informational.
@@ -328,6 +377,8 @@ RATCHETED = {
     "wide_positional_pattern_2plus_wildcards", "tab_indent_lines",
     "files_with_tab_indent", "files_mixing_tabs_and_spaces", "odd_indent_lines",
     "lines_over_120", "std_duplicate_defs", "partial_attr_no_self_call",
+    "scope_hashmap_string_fields", "path_ctor_outside_std",
+    "flat_name_renderers", "debug_name_flattened",
 }
 
 
