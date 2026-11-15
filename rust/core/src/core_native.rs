@@ -3667,8 +3667,8 @@ fn proc_spawn(args: &[Value], natives: &NativeTable) -> Result<Value, CoreEvalEr
   }
   let cmd = extract_string(&args[0])?;
   let cmd_args = extract_string_list(&args[1], natives)?;
-  // `flags` merges the two spawn shapes (0 = pipe all three, 1 = inherit
-  // all three), mirroring `monad_proc_spawn` in platform_posix.c.
+  // `flags` merges the two spawn shapes (0 = pipe all three, 1 = the
+  // `exec_cmd` shape), mirroring `monad_proc_spawn` in platform_posix.c.
   let flags = match args.get(2) {
     Some(v) => extract_int(v)?,
     None => 0,
@@ -3687,18 +3687,51 @@ fn proc_spawn(args: &[Value], natives: &NativeTable) -> Result<Value, CoreEvalEr
       )?,
     );
   };
+  // `flags == 1` is `exec_cmd`'s shape, and it has to reproduce what the
+  // old `exec_cmd` native did -- NOT a plain
+  // `.stdin(inherit()).stdout(inherit()).stderr(inherit())`. When
+  // `Process.quiet_terminal` has pointed this process's fd 2 at a file, a
+  // child's stdout and stderr go to THAT FILE and its stdin is /dev/null
+  // -- never the keyboard, which is the whole promise `quiet_terminal`
+  // makes. The C arm does the same through `exec_child_out_fd`; inheriting
+  // unconditionally here would silently drop the redirect on this backend
+  // alone (`test_quiet_terminal_takes_stdout_and_stderr` is the guard).
+  let quiet = if flags == 1 {
+    EXEC_CHILD_OUTPUT
+      .lock()
+      .ok()
+      .and_then(|g| g.as_ref().and_then(|f| f.try_clone().ok()))
+  } else {
+    None
+  };
   // Flushing keeps our own pending output ahead of anything the child
   // writes to a shared terminal, and costs nothing.
   {
     use std::io::Write;
     let _ = std::io::stdout().flush();
   }
-  let spawned = std::process::Command::new(cmd)
-    .args(&cmd_args)
-    .stdin(stdio())
-    .stdout(stdio())
-    .stderr(stdio())
-    .spawn();
+  let mut command = std::process::Command::new(cmd);
+  command.args(&cmd_args);
+  match &quiet {
+    // Each stream gets its own descriptor: a `File` consumed by
+    // `Stdio::from` cannot be handed to a second stream. A failed clone
+    // falls back to inheriting rather than refusing to spawn.
+    Some(f) => match (f.try_clone(), f.try_clone()) {
+      (Ok(out), Ok(err)) => {
+        command
+          .stdout(std::process::Stdio::from(out))
+          .stderr(std::process::Stdio::from(err))
+          .stdin(std::process::Stdio::null());
+      }
+      _ => {
+        command.stdin(stdio()).stdout(stdio()).stderr(stdio());
+      }
+    },
+    None => {
+      command.stdin(stdio()).stdout(stdio()).stderr(stdio());
+    }
+  }
+  let spawned = command.spawn();
   let mut child = match spawned {
     Ok(c) => c,
     Err(e) => {
