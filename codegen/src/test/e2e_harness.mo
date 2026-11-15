@@ -56,16 +56,16 @@ pub def build_source_binary (source : String) (basename : String) : IO (Result S
                     let ir_text := emit_module mod_;
                     let _w <- Test.write_fixture (Path.path ir_path) ir_text;
 
-                    let llc_result <- compile_ir_to_obj ir_path obj_path;
+                    let llc_result <- compile_ir_to_obj (Path.unsafe ir_path) (Path.unsafe obj_path);
                     if not (llc_result == 0) then do {
                         return (Result.err "llc failed")
                     } else do {
                         let runtime_src <- resolve_runtime_src (extract_directory src_path);
-                        let rt_result <- compile_runtime_obj runtime_src [] runtime_obj;
+                        let rt_result <- compile_runtime_obj (Path.unsafe runtime_src) [] (Path.unsafe runtime_obj);
                         if not (rt_result == 0) then do {
                             return (Result.err "compiling runtime failed")
                         } else do {
-                            let link_result <- link_objects [obj_path, runtime_obj] output_path [];
+                            let link_result <- link_objects [Path.unsafe obj_path, Path.unsafe runtime_obj] (Path.unsafe output_path) [];
                             exec_cmd "rm" ["-f", src_path, ir_path, obj_path, runtime_obj];
                             if not (link_result == 0) then do {
                                 return (Result.err "clang linker failed")

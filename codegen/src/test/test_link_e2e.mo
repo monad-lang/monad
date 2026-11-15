@@ -54,7 +54,7 @@ def main : IO I64 {
     // `ir_path` is always non-empty by construction -- `Path.path` directly.
     let _w <- Test.write_fixture (Path.path ir_path) ir_text;
 
-    let _llc <- compile_ir_to_obj ir_path obj_path;
+    let _llc <- compile_ir_to_obj (Path.unsafe ir_path) (Path.unsafe obj_path);
     // The C runtime comes from the shared resolver, like every other
     // consumer now: `Runtime.c_path` on its own is checkout-root-relative,
     // so it names nothing when the working directory is not that root. This
@@ -62,8 +62,8 @@ def main : IO I64 {
     // file, so the working directory is the only anchor it has -- which is
     // what the resolver's workspace tier already uses.
     let runtime_src <- resolve_runtime_src "";
-    let _rt <- compile_runtime_obj runtime_src [] runtime_obj;
-    let _link <- link_objects [obj_path, runtime_obj] output_path [];
+    let _rt <- compile_runtime_obj (Path.unsafe runtime_src) [] (Path.unsafe runtime_obj);
+    let _link <- link_objects [Path.unsafe obj_path, Path.unsafe runtime_obj] (Path.unsafe output_path) [];
 
     let bin_args := List.empty;
     let exit_code <- exec_cmd output_path bin_args;

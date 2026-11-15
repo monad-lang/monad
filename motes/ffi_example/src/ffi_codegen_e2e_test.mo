@@ -170,12 +170,12 @@ def compile_ffi_fixture_exit_code : IO I64 := do {
 
                     // Stage 1: `llc`. This is the assertion that the
                     // wrapper's ABI casts are legal LLVM at all.
-                    let llc_result <- compile_ir_to_obj ir_path obj_path;
+                    let llc_result <- compile_ir_to_obj (Path.unsafe ir_path) (Path.unsafe obj_path);
                     if not (llc_result == 0) then do {
                         println "ffi_codegen_e2e: llc rejected the module (invalid extern wrapper IR)";
                         return (0 - 3)
                     } else do {
-                        let rt_result <- compile_runtime_obj Runtime.c_path List.empty runtime_obj;
+                        let rt_result <- compile_runtime_obj (Path.unsafe Runtime.c_path) List.empty (Path.unsafe runtime_obj);
                         if not (rt_result == 0) then do {
                             println "ffi_codegen_e2e: compiling runtime.c failed";
                             return (0 - 4)
@@ -186,7 +186,7 @@ def compile_ffi_fixture_exit_code : IO I64 := do {
                             // step (`llvm::link`, the module written to end
                             // the drifted copy this test used to hold), so
                             // `-lgc` and the argv shape come from one place.
-                            let link_result <- link_objects [obj_path, runtime_obj] output_path (map_dash_l link_libs);
+                            let link_result <- link_objects [Path.unsafe obj_path, Path.unsafe runtime_obj] (Path.unsafe output_path) (map_dash_l link_libs);
                             if not (link_result == 0) then do {
                                 println "ffi_codegen_e2e: clang link failed (missing -l flag for an extern's lib?)";
                                 return (0 - 5)

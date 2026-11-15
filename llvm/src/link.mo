@@ -27,7 +27,7 @@ use lib::target {TargetSpec, TargetPlan, TargetKind}
 /// of them has. A native spec is flag-free, so this buys argv stability, not
 /// portability: the module header is still `emit.mo`'s x86_64 literal.
 #[partial]
-pub def compile_ir_to_obj (ir_path : String) (obj_path : String) : IO I64 := do {
+pub def compile_ir_to_obj (ir_path : Path) (obj_path : Path) : IO I64 := do {
     let native <- TargetSpec.native;
     compile_ir_to_obj_with native ir_path obj_path
 }
@@ -39,8 +39,9 @@ pub def compile_ir_to_obj (ir_path : String) (obj_path : String) : IO I64 := do 
 /// byte-for-byte what it was before targets existed and only a cross build's
 /// changes.
 #[partial]
-pub def compile_ir_to_obj_with (target : TargetSpec) (ir_path : String) (obj_path : String) : IO I64 := do {
-    exec_cmd "llc" (List.append ["-filetype=obj"] (List.append (TargetSpec.llc_argv target) [ir_path, "-o", obj_path]))
+pub def compile_ir_to_obj_with (target : TargetSpec) (ir_path : Path) (obj_path : Path) : IO I64 := do {
+    exec_cmd "llc" (List.append ["-filetype=obj"] (List.append (TargetSpec.llc_argv target)
+        [Path.to_string ir_path, "-o", Path.to_string obj_path]))
 }
 
 /// `clang -c` on the runtime. `extra_flags` carries anything the caller
@@ -53,19 +54,21 @@ pub def compile_ir_to_obj_with (target : TargetSpec) (ir_path : String) (obj_pat
 /// 2.34+ system the symbols live in libc and the link would happen to
 /// succeed without it, which is exactly why it is spelled out.
 #[partial]
-pub def compile_runtime_obj (runtime_c : String) (extra_flags : List String) (obj_path : String) : IO I64 := do {
+pub def compile_runtime_obj (runtime_c : Path) (extra_flags : List String) (obj_path : Path) : IO I64 := do {
     let inc <- darwin_gc_flag "-I" "includedir";
-    exec_cmd "clang" (List.append ["-pthread", "-c", runtime_c] (List.append inc (List.append extra_flags ["-o", obj_path])))
+    exec_cmd "clang" (List.append ["-pthread", "-c", Path.to_string runtime_c]
+        (List.append inc (List.append extra_flags ["-o", Path.to_string obj_path])))
 }
 
 /// `compile_runtime_obj` for `plan`: the native arm is byte-identical to it,
 /// the wasm arms use wasi-sdk's clang and the plan's target/sysroot and
 /// platform define, with no `-pthread` and no Boehm include.
 #[partial]
-pub def compile_runtime_obj_for (plan : TargetPlan) (runtime_c : String) (extra_flags : List String) (obj_path : String) : IO I64 := do {
+pub def compile_runtime_obj_for (plan : TargetPlan) (runtime_c : Path) (extra_flags : List String) (obj_path : Path) : IO I64 := do {
     match plan.kind {
         TargetKind.native => compile_runtime_obj runtime_c extra_flags obj_path,
-        _ => exec_cmd plan.clang (List.append ["-c", runtime_c] (List.append plan.compile_flags (List.append plan.runtime_defines (List.append extra_flags ["-o", obj_path])))),
+        _ => exec_cmd plan.clang (List.append ["-c", Path.to_string runtime_c]
+            (List.append plan.compile_flags (List.append plan.runtime_defines (List.append extra_flags ["-o", Path.to_string obj_path])))),
     }
 }
 
@@ -82,7 +85,7 @@ pub def compile_runtime_obj_for (plan : TargetPlan) (runtime_c : String) (extra_
 ///
 /// `-pthread` here for the same reason as `compile_runtime_obj` above.
 #[partial]
-pub def link_objects (objs : List String) (output : String) (extra_flags : List String) : IO I64 := do {
+pub def link_objects (objs : List Path) (output : Path) (extra_flags : List String) : IO I64 := do {
     let darwin <- os_is_darwin;
     let gc_args <- if darwin then do {
         let dir <- capture_line "pkg-config" ["--variable=libdir", "bdw-gc"];
@@ -91,17 +94,20 @@ pub def link_objects (objs : List String) (output : String) (extra_flags : List 
             Option.none => ["-lgc"]
         })
     } else return ["-Wl,-Bstatic", "-lgc", "-Wl,-Bdynamic"];
-    exec_cmd "clang" (List.append ["-pthread"] (List.append objs (List.append gc_args (List.append extra_flags ["-o", output]))))
+    let objs_s : List String := List.map (fn (p : Path) => Path.to_string p) objs;
+    exec_cmd "clang" (List.append ["-pthread"] (List.append objs_s (List.append gc_args (List.append extra_flags ["-o", Path.to_string output]))))
 }
 
 /// `link_objects` for `plan`: the native arm is byte-identical to it, the
 /// wasm arms use wasi-sdk's clang with the plan's link flags and never add
 /// `-pthread` or `-lgc`.
 #[partial]
-pub def link_objects_for (plan : TargetPlan) (objs : List String) (output : String) (extra_flags : List String) : IO I64 := do {
+pub def link_objects_for (plan : TargetPlan) (objs : List Path) (output : Path) (extra_flags : List String) : IO I64 := do {
     match plan.kind {
         TargetKind.native => link_objects objs output extra_flags,
-        _ => exec_cmd plan.clang (List.append plan.link_flags (List.append objs (List.append extra_flags ["-o", output]))),
+        _ => exec_cmd plan.clang (List.append plan.link_flags
+            (List.append (List.map (fn (p : Path) => Path.to_string p) objs)
+                (List.append extra_flags ["-o", Path.to_string output]))),
     }
 }
 
@@ -396,9 +402,7 @@ def link_ir_plan (runtime_c : String) (ir_text : String) (ir_path : Path) (outpu
     // below.
     let runtime_obj := Path.with_suffix target "_runtime.o";
     let ir_path_s := Path.to_string ir_path;
-    let obj_path_s := Path.to_string obj_path;
-    let runtime_obj_s := Path.to_string runtime_obj;
-    let output_path_s := Path.to_string target;
+    let runtime_c_path : Path := Path.unsafe runtime_c;
 
     // Nothing creates the directory these artifacts are written into.
     // The CLI's default output dir is `/tmp/monad_out_<pid>` -- a fresh
@@ -424,7 +428,7 @@ def link_ir_plan (runtime_c : String) (ir_text : String) (ir_path : Path) (outpu
     // The convenience copy, for a reader that already knows this path
     // because `-o` implies it. Skipped when it IS the IR (the callers with
     // no key to name one by), so the common case still writes one file.
-    let beside : String := Path.to_string (Path.with_suffix target ".ll");
+    let beside : Path := Path.with_suffix target ".ll";
     let wrote <- write_ir_files ir_path ir_path_s beside ir_text;
     if verbose then do {
         Bench.report_since "link_ir: write .ll" t_write;
@@ -439,7 +443,7 @@ def link_ir_plan (runtime_c : String) (ir_text : String) (ir_path : Path) (outpu
         // start, so a user watching a long stage sees life before it ends.
         stage verbose "link: llc";
         let t_llc : I64 <- Bench.now;
-        let result <- compile_ir_to_obj_with spec ir_path_s obj_path_s;
+        let result <- compile_ir_to_obj_with spec ir_path obj_path;
         if verbose then do {
             Bench.report_since "link_ir: llc" t_llc;
             return unit
@@ -466,7 +470,7 @@ def link_ir_plan (runtime_c : String) (ir_text : String) (ir_path : Path) (outpu
                 if Bool.not (List.is_empty ownership_flags) && TargetKind.is_wasm plan.kind
                 then ["-DMONAD_OWNERSHIP_UNSUPPORTED_TARGET"]
                 else List.append ownership_flags (List.append [commit_flag] (verbose_argv verbose));
-            let result <- compile_runtime_obj_for plan runtime_c runtime_flags runtime_obj_s;
+            let result <- compile_runtime_obj_for plan runtime_c_path runtime_flags runtime_obj;
             if verbose then do {
                 Bench.report_since "link_ir: clang runtime.c" t_rtc;
                 return unit
@@ -493,7 +497,7 @@ def link_ir_plan (runtime_c : String) (ir_text : String) (ir_path : Path) (outpu
                     then map_export_flags export_syms
                     else List.empty;
                 let link_flags : List String := List.append export_flags (List.append pkg_flags (List.append dash_l (verbose_argv verbose)));
-                let result <- link_objects_for plan [obj_path_s, runtime_obj_s] output_path_s link_flags;
+                let result <- link_objects_for plan [obj_path, runtime_obj] target link_flags;
                 if verbose then do {
                     Bench.report_since "link_ir: clang link" t_link;
                     return unit
@@ -512,18 +516,18 @@ def link_ir_plan (runtime_c : String) (ir_text : String) (ir_path : Path) (outpu
 
 /// Write the IR, then its convenience copy `beside` unless that IS the
 /// IR's own path; the first failure stops both.
-def write_ir_files (ir_path : Path) (ir_path_s : String) (beside : String) (ir_text : String) : IO (Result StreamError Unit) := do {
+def write_ir_files (ir_path : Path) (ir_path_s : String) (beside : Path) (ir_text : String) : IO (Result StreamError Unit) := do {
     let w <- IO.write_file ir_path ir_text;
     write_ir_beside w ir_path_s beside ir_text
 }
 
-def write_ir_beside (w : Result StreamError Unit) (ir_path_s : String) (beside : String) (ir_text : String) : IO (Result StreamError Unit) :=
+def write_ir_beside (w : Result StreamError Unit) (ir_path_s : String) (beside : Path) (ir_text : String) : IO (Result StreamError Unit) :=
     match w {
         Result.err e => IO.pure (Result.err e),
         Result.ok _ =>
-            if String.beq beside ir_path_s
+            if String.beq (Path.to_string beside) ir_path_s
             then IO.pure (Result.ok Unit.unit)
-            else IO.write_file (Path.path beside) ir_text
+            else IO.write_file beside ir_text
     }
 
 /// The reason a write failed, for the link error.

@@ -62,7 +62,7 @@ def link_run_module_expect (mod_ : LLVMModule) (basename : String) (expected : I
     // `ir_path` is always non-empty by construction -- `Path.path` directly.
     let _w <- Test.write_fixture (Path.path ir_path) ir_text;
 
-    let llc_result <- compile_ir_to_obj ir_path obj_path;
+    let llc_result <- compile_ir_to_obj (Path.unsafe ir_path) (Path.unsafe obj_path);
     if not (llc_result == 0) then do {
         println <| basename ++ ": llc failed";
         return false
@@ -74,12 +74,12 @@ def link_run_module_expect (mod_ : LLVMModule) (basename : String) (expected : I
         // source file, so the working directory is the only anchor they
         // have -- which is what the resolver's workspace tier already uses.
         let runtime_src <- resolve_runtime_src "";
-        let rt_result <- compile_runtime_obj runtime_src [] runtime_obj;
+        let rt_result <- compile_runtime_obj (Path.unsafe runtime_src) [] (Path.unsafe runtime_obj);
         if not (rt_result == 0) then do {
             println <| basename ++ ": compiling runtime failed";
             return false
         } else do {
-            let link_result <- link_objects [obj_path, runtime_obj] output_path [];
+            let link_result <- link_objects [Path.unsafe obj_path, Path.unsafe runtime_obj] (Path.unsafe output_path) [];
             if not (link_result == 0) then do {
                 println <| basename ++ ": clang linker failed";
                 return false
