@@ -35,12 +35,12 @@ asset="$dist/monad-src-x86_64-linux.tar.gz"
 [ -f "$asset" ] || die "stage-mote-sources.sh wrote no $asset"
 
 listing="$(tar -tzf "$asset")"
-for want in init/mote.toml std/mote.toml llvm/mote.toml runtime/mote.toml \
-            init/src/lib.mo std/src/lib.mo llvm/src/ir.mo runtime/src/runtime.c \
+for want in init/mote.toml std/mote.toml sys/mote.toml llvm/mote.toml runtime/mote.toml \
+            init/src/lib.mo std/src/lib.mo sys/src/lib.mo llvm/src/ir.mo runtime/src/runtime.c \
             mote.toml; do
   grep -qxF "$want" <<<"$listing" || die "sources asset is missing '$want'"
 done
-ok "sources asset carries the four motes' manifests, sources and runtime.c"
+ok "sources asset carries the five motes' manifests, sources and runtime.c"
 
 root_manifest="$(tar -xzOf "$asset" mote.toml)"
 grep -qF 'members = ["init", "std", "sys", "llvm", "runtime"]' <<<"$root_manifest" \
@@ -278,7 +278,7 @@ for platform in x86_64-linux aarch64-linux riscv64-linux aarch64-darwin; do
     die "the sources tarball was left in the ${platform} version directory"
   fi
 done
-ok "the binary installs the compiler, commit.txt and the four motes, for all four platforms"
+ok "the binary installs the compiler, commit.txt and the five motes, for all four platforms"
 
 # 4b. `list`, `use`, `uninstall` (active refusal).
 home="$work/home-x86_64-linux"

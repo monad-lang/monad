@@ -273,11 +273,11 @@ pin-only), which is the two-step-rollout case.
 nightly predates the commit named there, the script says so and uses the Rust
 host. Once a nightly at or after the floor exists the check is strict; do not
 raise the floor to make a later change pass. A nightly exactly AT the floor is
-strict (it carries the requirement). The floor now names the first nightly that
-builds the tree, `632d1825dd65f8250c56a2228285c99fa3ff7b13`; the `pending`
-sentinel remains for a future window (a new loader feature and the manifests
-using it), and is replaced with the first nightly's commit once that nightly
-exists. `MONAD_ALLOW_RUST_FALLBACK=1` exists for a local checkout with no
+strict (it carries the requirement). The floor now names `f4028217`, where
+`std` began building on the `sys` floor (its `file_exists`/`is_dir`/
+`file_size`/`list_dir`/`get_env` are Monad over `Sys.*`), so a nightly older
+than it cannot build the tree; the `pending` sentinel remains for a future
+window. `MONAD_ALLOW_RUST_FALLBACK=1` exists for a local checkout with no
 network and is never set in CI.
 
 ## Inhabitation and opaque types

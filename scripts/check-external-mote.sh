@@ -181,13 +181,15 @@ nodeps="$work/nested/nodeps"
 write_manifest "$withdeps" yes
 write_manifest "$nodeps" no
 
-# The installed toolchain, laid out exactly as `monadup` leaves it: the four
+# The installed toolchain, laid out exactly as `monadup` leaves it: the five
 # motes the sources tarball ships plus the generated workspace manifest
 # (`scripts/stage-mote-sources.sh`). `llvm` is not optional here for the same
 # reason it is in that list -- `runtime`'s natives are LLVM IR, so a root
 # without `llvm/` is a root where `compile` cannot resolve `llvm::ir`. Copying
 # the four by hand rather than running the stager keeps this fixture
 # independent of the tarball's own packaging, which `check-monadup.sh` covers.
+# `sys` is not optional in that set: `std` is built on the OS floor, so a root
+# without `sys/` is a root where `std/io.mo` cannot resolve `sys::sys`.
 toolchain="$work/nested/toolchain"
 mkdir -p "$toolchain"
 for m in init std sys llvm runtime; do
@@ -195,7 +197,7 @@ for m in init std sys llvm runtime; do
 done
 cat > "$toolchain/mote.toml" <<'TOML'
 [workspace]
-members = ["init", "std", "llvm", "runtime"]
+members = ["init", "std", "sys", "llvm", "runtime"]
 TOML
 
 # ---------------------------------------------------------------------------

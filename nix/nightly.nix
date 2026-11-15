@@ -116,16 +116,16 @@
       # version` says which nightly a release was hosted by.
       pins = {
         x86_64-linux = {
-          tag = "nightly-2026-11-07-da55c060";
-          url = "https://github.com/monad-lang/monad/releases/download/nightly-2026-11-07-da55c060/monad-nightly-x86_64-linux";
-          # curl -fsSL "<url>.sha256" -> a0c11c1f647fd4bc929480792eb7dcfcb1a193c30ecb27867c57f9478c4e4d1c
-          sha256 = "sha256-oMEcH2R/1LySlIB5Lrfc/LGhk8MOyyeGfFf5R4xOTRw=";
+          tag = "nightly-2026-11-14-4eca3d73";
+          url = "https://github.com/monad-lang/monad/releases/download/nightly-2026-11-14-4eca3d73/monad-nightly-x86_64-linux";
+          # curl -fsSL "<url>.sha256" -> 8b295ff850ccf5c3241e6bd56296fe1fa07190a00e43194e5220a85a7911276f
+          sha256 = "sha256-iylf+FDM9cMkHmvVYpb+H6BxkKAOQxlOUiCoWnkRJ28=";
         };
         aarch64-darwin = {
-          tag = "nightly-2026-11-07-da55c060";
-          url = "https://github.com/monad-lang/monad/releases/download/nightly-2026-11-07-da55c060/monad-nightly-aarch64-darwin";
-          # curl -fsSL "<url>.sha256" -> b916bd7be480e386b52ecf1d188f6e0d2d7cea741e512a3f2ca120b3eb22a288
-          sha256 = "sha256-uRa9e+SA44a1Ls8dGI9uDS186nQeUSo/LKEgs+sioog=";
+          tag = "nightly-2026-11-14-4eca3d73";
+          url = "https://github.com/monad-lang/monad/releases/download/nightly-2026-11-14-4eca3d73/monad-nightly-aarch64-darwin";
+          # curl -fsSL "<url>.sha256" -> 62792ad754570ae0f470a3d8f143828188e0920c5426ff9caa1302ceccbe7bd2
+          sha256 = "sha256-Ynkq11RXCuD0cKPY8UOCgYjgkgxUJv+cqhMCzsy+e9I=";
         };
       };
 
