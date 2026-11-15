@@ -1188,20 +1188,19 @@ static int spawn_child(pid_t* pid, const char* cmd, char** argv, int in_fd, int 
     return rc;
 }
 
-/* `#[native "exec_cmd"]` (std/process.mo, `exec_cmd : String -> List
-   String -> IO I64`). THE load-bearing native for the bootstrap ladder:
-   lang/codegen/link.mo shells out to `llc` and `clang` through this, so
-   without it a self-compiled compiler can never run its own `compile`
-   command at all.
+/* `exec_cmd` IS NO LONGER A NATIVE. `std/src/process.mo` builds it on
+   `monad_proc_spawn`'s inherit flag plus `monad_proc_wait`; what remains
+   here is the bootstrap shim `monad_exec_cmd` below and the redirect that
+   `monad_proc_spawn`'s `flags == 1` arm reads (`exec_child_out_fd`).
 
-   Walks the `List String` cons chain into a NULL-terminated argv (with
-   the command itself as argv[0], as execvp requires), then
-   `spawn_child` + waitpid. Returns the child's exit code, 127 when the
-   command could not be executed (the shell's code, which a forked child
-   used to exit with), or -1 if no child could be created or it died on a
-   signal -- matching the reference's `status.code().unwrap_or(-1)`. The wrapper
-   (native_runtime_fn_name's raw_io_passthrough kind) does the RawIO.io
-   boxing; the `.mo` wrapper adds IO.mk. */
+   It is THE load-bearing operation for the bootstrap ladder either way:
+   lang/codegen/link.mo shells out to `llc` and `clang` through `exec_cmd`,
+   so without a working spawn a self-compiled compiler can never run its
+   own `compile` command at all. `monad_proc_spawn` reproduces everything
+   this comment used to promise -- the child's exit code, 127 when the
+   command could not be executed, -1 when no child could be created or it
+   died on a signal (the reference's `status.code().unwrap_or(-1)`) -- and
+   `Proc.spawn` + `Proc.wait` surface it. */
 /* `#[native "exec_child_output"]` (std/process.mo, `Process.quiet_terminal`).
    Unset (-1), this process writes its own diagnostics to the terminal and
    an `exec_cmd` child inherits stdin/stdout/stderr -- what the compiler's
@@ -1232,6 +1231,18 @@ int64_t monad_exec_child_output(char* path) {
     return 0;
 }
 
+/* BOOTSTRAP SHIM, not a native: nothing in this tree declares or calls it.
+   `exec_cmd` (std/src/process.mo) is ordinary Monad over `proc_spawn` +
+   `proc_wait` now, but a host compiler built before that change (the
+   published nightly, an older rung) still emits calls to this symbol for
+   `exec_cmd` and links the CHECKOUT's runtime -- so without it such a host
+   cannot build this tree. Same rule as `monad_print_str` above. Delete it
+   once a nightly that predates the rebuild is the oldest host anyone
+   builds with.
+
+   Kept byte-compatible with the old behaviour on purpose: this is what the
+   `inherit` flag of `monad_proc_spawn` reproduces, including the
+   `/dev/null` stdin and the `exec_child_out_fd` redirect. */
 int64_t monad_exec_cmd(char* cmd, void* args) {
     char** argv = monad_build_argv(cmd, args);
     if (!argv) return -1;
@@ -1345,9 +1356,59 @@ static void stream_carry_clear(int fd);
  * reports the errno of a spawn that never happened, the same
  * `Result.err` the Rust host's `Command::spawn` already reports, which
  * is the contract `std/src/process.mo` declares. */
-void* monad_proc_spawn(char* cmd, void* args) {
+void* monad_proc_spawn(char* cmd, void* args, int64_t flags) {
     char** argv = monad_build_argv(cmd, args);
     if (!argv) return stream_err(9, "proc_spawn", "out of memory", 0);
+
+    /* `flags` merges the two spawn shapes behind one native rather than
+       duplicating it (AGENTS.md's merge-twins rule):
+         0 = pipe all three streams (the protocol shape `Proc.spawn` wants)
+         1 = the `exec_cmd` shape: stdout/stderr go where this process's
+             OWN `monad_exec_child_output` redirect points (or the real
+             stdout/stderr when none is set), and stdin is /dev/null.
+       That is deliberately NOT `spawn_child(..., -1, -1, -1)` ("leave the
+       fds alone"). `Process.quiet_terminal` redirects THIS PROCESS's fd 1
+       and 2 and remembers them in `exec_child_out_fd`; a plain inherit
+       would therefore hand the child the redirect too, which looks like
+       it works -- but it also leaves the child reading the keyboard,
+       the one thing `quiet_terminal` promises it will not do. Reusing
+       `exec_child_out_fd` here is what keeps `exec_cmd` byte-for-byte
+       the behaviour its own native had (see `monad_exec_cmd`, which this
+       replaces).
+       The registry entry still exists either way, so `Proc.wait`/
+       `Proc.kill` work on an inherited child exactly as on a piped one;
+       only `proc_stream_fd` answers -1 (dead view), which is correct --
+       there is no parent-side pipe to read. */
+    if (flags == 1) {
+        fflush(NULL);
+        int hout = exec_child_out_fd;
+        int hin = hout >= 0 ? open("/dev/null", O_RDONLY | O_CLOEXEC) : -1;
+        pid_t hpid;
+        int hrc = spawn_child(&hpid, cmd, argv, hin, hout, hout);
+        if (hin >= 0) close(hin);
+        free(argv);
+        if (hrc != 0) return stream_os_err("proc_spawn", hrc);
+        int hslot = -1;
+        pthread_mutex_lock(&proc_registry_lock);
+        for (int k = 0; k < MONAD_PROC_MAX; k++) {
+            if (!proc_registry[k].live) { hslot = k; break; }
+        }
+        if (hslot >= 0) {
+            proc_registry[hslot].pid = hpid;
+            proc_registry[hslot].in_fd = -1;
+            proc_registry[hslot].out_fd = -1;
+            proc_registry[hslot].err_fd = -1;
+            proc_registry[hslot].live = 1;
+        }
+        pthread_mutex_unlock(&proc_registry_lock);
+        if (hslot < 0) {
+            kill(hpid, SIGKILL);
+            waitpid(hpid, NULL, 0);
+            return stream_err(9, "proc_spawn", "child registry full", 0);
+        }
+        return tcp_ok((void*)(int64_t)(hslot + 1));
+    }
+    if (flags != 0) return stream_err(22, "proc_spawn", "unknown stdio flag", 0);
 
     int in_pipe[2], out_pipe[2], err_pipe[2];
     if (cloexec_pipe(in_pipe) < 0) {

@@ -419,7 +419,6 @@ pub fn exec_native(
     // argument to check, so no `NativeArgError` for one.
     "read_stdin_exact" => read_stdin_exact(args, natives),
     "flush_stdout" => flush_stdout(natives),
-    "exec_cmd" => exec_cmd(args, natives),
     "exec_child_output" => exec_child_output(args, natives),
     // The piped-subprocess family (`std/src/process.mo`, agent-skills.md
     // Phase 4) -- IO-returning, so none of them belongs in PURE_NATIVES.
@@ -3539,49 +3538,6 @@ fn extract_string_list(v: &Value, natives: &NativeTable) -> Result<Vec<String>, 
   Ok(result)
 }
 
-/// `Process.exec_cmd (cmd : String) (args : List String) : IO I64` —
-/// ports `eval::native::exec_cmd`'s logic (`core/src/eval/native.rs`,
-/// the tree-walker's own native table) near-verbatim, retargeted from
-/// `Term` to `Value`/`IrLit`; see `file_exists`'s own doc comment on why
-/// the `IO.io` wrapping is required.
-fn exec_cmd(args: &[Value], natives: &NativeTable) -> Result<Value, CoreEvalError> {
-  if args.len() < 2 {
-    return Err(CoreEvalError::NativeArgError(
-      "exec_cmd needs 2 args".into(),
-    ));
-  }
-  let cmd = extract_string(&args[0])?;
-  let cmd_args = extract_string_list(&args[1], natives)?;
-  // The child inherits our stdout; flush first so our own pending
-  // output does not land after the child's. Same reason
-  // `monad_exec_cmd` (runtime/src/runtime.c) calls `fflush(NULL)`.
-  {
-    use std::io::Write;
-    let _ = std::io::stdout().flush();
-  }
-  let mut command = std::process::Command::new(cmd);
-  command.args(&cmd_args);
-  // `exec_child_output`: a set file takes the child's stdout and stderr,
-  // and its stdin is /dev/null (see `monad_exec_child_output`).
-  if let Some(file) = EXEC_CHILD_OUTPUT
-    .lock()
-    .ok()
-    .and_then(|g| g.as_ref().and_then(|f| f.try_clone().ok()))
-  {
-    if let Ok(err) = file.try_clone() {
-      command
-        .stdout(file)
-        .stderr(err)
-        .stdin(std::process::Stdio::null());
-    }
-  }
-  let status = command
-    .status()
-    .map_err(|e| CoreEvalError::NativeArgError(format!("exec_cmd \"{cmd}\" failed: {e}")))?;
-  let exit_code = status.code().unwrap_or(-1) as i64;
-  raw_io_wrap(natives, Value::Lit(IrLit::Num(exit_code, NumSuffix::I64)))
-}
-
 /// Where `exec_cmd` children write while one is set (`exec_child_output`).
 static EXEC_CHILD_OUTPUT: std::sync::Mutex<Option<std::fs::File>> = std::sync::Mutex::new(None);
 /// This process's stderr from before `exec_child_output` pointed fd 2 at
@@ -3706,24 +3662,42 @@ fn proc_registry() -> Result<std::sync::MutexGuard<'static, Vec<Option<ProcChild
 fn proc_spawn(args: &[Value], natives: &NativeTable) -> Result<Value, CoreEvalError> {
   if args.len() < 2 {
     return Err(CoreEvalError::NativeArgError(
-      "proc_spawn needs 2 args".into(),
+      "proc_spawn needs 2 or 3 args".into(),
     ));
   }
   let cmd = extract_string(&args[0])?;
   let cmd_args = extract_string_list(&args[1], natives)?;
-  // The child inherits nothing (all three streams are pipes), so the
-  // stdout-flush `exec_cmd` needs does not apply -- but flushing keeps
-  // our own pending output ahead of anything the child writes to a
-  // shared terminal in a non-piped context, and costs nothing.
+  // `flags` merges the two spawn shapes (0 = pipe all three, 1 = inherit
+  // all three), mirroring `monad_proc_spawn` in platform_posix.c.
+  let flags = match args.get(2) {
+    Some(v) => extract_int(v)?,
+    None => 0,
+  };
+  let stdio = if flags == 1 {
+    || std::process::Stdio::inherit()
+  } else if flags == 0 {
+    || std::process::Stdio::piped()
+  } else {
+    return raw_io_wrap(
+      natives,
+      make_stream_err(
+        natives,
+        "proc_spawn",
+        &std::io::Error::from_raw_os_error(libc::EINVAL),
+      )?,
+    );
+  };
+  // Flushing keeps our own pending output ahead of anything the child
+  // writes to a shared terminal, and costs nothing.
   {
     use std::io::Write;
     let _ = std::io::stdout().flush();
   }
   let spawned = std::process::Command::new(cmd)
     .args(&cmd_args)
-    .stdin(std::process::Stdio::piped())
-    .stdout(std::process::Stdio::piped())
-    .stderr(std::process::Stdio::piped())
+    .stdin(stdio())
+    .stdout(stdio())
+    .stderr(stdio())
     .spawn();
   let mut child = match spawned {
     Ok(c) => c,

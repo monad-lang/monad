@@ -604,11 +604,12 @@ def native_runtime_fn_name (attrs : List Attribute) : Option NativeWrapKind :=
             // u64 gate reuses its own digit fold); the String argument and I64 result are both one word under
             // the native ABI, so `passthrough` is the wrap.
             else if String.beq target "string_to_u64_bits" then Option.some (NativeWrapKind.passthrough "monad_string_to_u64_bits")
-            // `exec_cmd` is THE load-bearing one for the ladder:
-            // `llvm/src/link.mo` shells out to `llc`/`clang` through
-            // it, so without it a self-compiled compiler can never run
-            // its own `compile` command at all.
-            else if String.beq target "exec_cmd" then Option.some (NativeWrapKind.raw_io_passthrough "monad_exec_cmd")
+            // (`exec_cmd` used to have an entry here. It is ordinary
+            // Monad over `proc_spawn` + `proc_wait` now, so there is no
+            // `monad_exec_cmd` call to name -- and never was one in
+            // `native_op_table`, which is why nothing inlined past it.
+            // The operation is still the ladder's load-bearing one:
+            // `llvm/src/link.mo` shells out to `llc`/`clang` through it.)
             else if String.beq target "exec_child_output" then Option.some (NativeWrapKind.raw_io_passthrough "monad_exec_child_output")
             // The piped-subprocess family (std/process.mo,
             // agent-skills.md Phase 4) -- `proc_spawn`, `proc_wait`, and
@@ -924,7 +925,6 @@ pub def runtime_declarations_for_with_ownership (kind : TargetKind) (ownership_o
     // Same i64-not-`char*` convention as `monad_i64_to_string` (d22) --
     // the CONVENTION comment at the head of this list.
     let d34 := mk_decl "monad_i32_to_string" (List.cons "i64" List.empty) "i64" in
-    let d35 := mk_decl "monad_exec_cmd" (List.cons "i64" (List.cons "i64" List.empty)) "i64" in
     let d35b := mk_decl "monad_exec_child_output" ["i64"] "i64" in
     let d37 := mk_decl "monad_u8_to_string" (List.cons "i64" List.empty) "i64" in
     let d38 := mk_decl "monad_u64_to_string" (List.cons "i64" List.empty) "i64" in
@@ -1120,7 +1120,7 @@ pub def runtime_declarations_for_with_ownership (kind : TargetKind) (ownership_o
     // carry. `monad_proc_stream_fd`'s and `monad_proc_wait`'s second i64
     // are the stream/kill flags. Reads and writes themselves are the
     // `monad_stream_*` declarations below.
-    let d88 := mk_decl "monad_proc_spawn" (List.cons "i64" (List.cons "i64" List.empty)) "i64" in
+    let d88 := mk_decl "monad_proc_spawn" (List.cons "i64" (List.cons "i64" (List.cons "i64" List.empty))) "i64" in
     let d91 := mk_decl "monad_proc_wait" (List.cons "i64" (List.cons "i64" List.empty)) "i64" in
     let d91a := mk_decl "monad_proc_kill_group" (List.cons "i64" (List.cons "i64" List.empty)) "i64" in
     // `monad_term_ctl` (runtime.c) -- `term_ctl : I64 -> I64 ->
@@ -1227,7 +1227,7 @@ pub def runtime_declarations_for_with_ownership (kind : TargetKind) (ownership_o
     let d188 := mk_decl "monad_export_leave" ["i64"] "i64" in
     [d1, d2, d3, d7c, d7d, d7e, d7f, d8, d9, d10, d11, d12, d13,
         d14, d15, d16, d17, d18, d19, d20, d21, d22, d23, d23a, d23b, d24, d24b, d25, d26, d27, d28, d29, d30, d31,
-        d32, d33, d34, d35, d35b, d37, d38, d38b, d39, dSysInt, dSysStr, dSysStat, dSysDirOpen, dSysDirNext, dSysDirClose, d40, d41, d42, d43, d43b, d44,
+        d32, d33, d34, d35b, d37, d38, d38b, d39, dSysInt, dSysStr, dSysStat, dSysDirOpen, dSysDirNext, dSysDirClose, d40, d41, d42, d43, d43b, d44,
         d45, d46,
         d48, d49, d50, d51, d52, d53, d54, d55, d56,
         d57w, d57c, d57, d58, d59, d60, d61, d62, d63, d64,
@@ -1260,7 +1260,7 @@ pub type NativeAvailability {
 def wasm_os_only_natives : List String := [
     "fork_io", "fiber_wait_any", "await_fiber", "poll_fiber", "cancel_fiber", "scope_new", "scope_fork",
     "scope_drop", "sleep_io", "channel_new", "channel_put", "channel_take", "channel_take_any",
-    "channel_try_take", "exec_cmd", "exec_child_output", "process_id", "sys_int",
+    "channel_try_take", "exec_child_output", "process_id", "sys_int",
     "sys_str", "sys_stat", "sys_dir_open", "sys_dir_next", "sys_dir_close",
     "proc_spawn",
     "proc_stream_fd", "proc_wait", "proc_kill_group", "tcp_connect_timeout", "tcp_listen",

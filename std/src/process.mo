@@ -8,11 +8,22 @@ use lib::stream {
 use lib::bytebuf {ByteBuf.free, ByteBuf.of_string}
 open IO {current_time_nano, read_file}
 
-#[native "exec_cmd"]
-priv def exec_cmd_raw (cmd : String) (args : List String) : RawIO I64
-
-pub def exec_cmd (cmd : String) (args : List String) : IO I64 :=
-    IO.mk (exec_cmd_raw cmd args)
+/// Run `cmd args` with all three standard streams INHERITED -- what a
+/// shell does without a redirect -- and return the exit status, or -1 when
+/// the child died on a signal (`Proc.wait`'s convention).
+///
+/// Built on `proc_spawn` (inherit flag) + `proc_wait` instead of its own
+/// native: fork/exec/wait was implemented twice, once in C and once in the
+/// interpreter, for what is now two calls. A spawn that never happened is
+/// `Proc.spawn`'s `Result.err`; this returns a plain status, so a failure
+/// to spawn is reported as -1, which is also what a signal death answers.
+pub def exec_cmd (cmd : String) (args : List String) : IO I64 := do {
+    let spawned <- IO.mk (proc_spawn cmd args Proc.inherit_flag);
+    match spawned {
+        Result.err _ => IO.pure (0 - 1),
+        Result.ok c => IO.mk (proc_wait c Proc.reap_flag),
+    }
+}
 
 #[native "exec_child_output"]
 priv def exec_child_output_raw (path : String) : RawIO I64
@@ -93,6 +104,16 @@ priv def Proc.stderr_flag : I64 := 2
 /// grow it without limit.
 priv def Proc.max_line : I64 := 1048576
 
+/// `proc_spawn`'s stdio flag: 0 = pipe all three streams (the protocol
+/// shape `Proc.spawn` needs).
+priv def Proc.pipe_flag : I64 := 0
+
+/// `proc_spawn`'s stdio flag: 1 = inherit all three streams, so the child
+/// writes to our stdout/stderr and reads our stdin. The `exec_cmd` shape:
+/// a tool whose output should appear on the terminal exactly where it
+/// would have if this process had exec'd it.
+priv def Proc.inherit_flag : I64 := 1
+
 /// `proc_wait`'s kill flag: 0 = plain reap.
 priv def Proc.reap_flag : I64 := 0
 
@@ -111,7 +132,7 @@ priv def proc_kill_group (pgid : I64) (sig : I64) : RawIO I64
 /// than a native failure when the child could not be spawned;
 /// `Proc.spawn` decodes it to `StreamError`.
 #[native "proc_spawn"]
-priv def proc_spawn (cmd : String) (args : List String) : RawIO (Result (Pair I64 String) Child)
+priv def proc_spawn (cmd : String) (args : List String) (flags : I64) : RawIO (Result (Pair I64 String) Child)
 
 /// An `FdStream` view of one of the child's pipes.
 ///
@@ -136,7 +157,7 @@ priv def proc_wait (c : Child) (kill : I64) : RawIO I64
 /// `Result.err` when the child could not be spawned -- a missing
 /// command is `not_found`, like every other absent thing.
 pub def Proc.spawn (cmd : String) (args : List String) : IO (Result StreamError Child) := do {
-    let r <- IO.mk (proc_spawn cmd args);
+    let r <- IO.mk (proc_spawn cmd args Proc.pipe_flag);
     return (stream_result r)
 }
 
