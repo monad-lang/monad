@@ -4,7 +4,7 @@
 // Ported from pty_repro_resume.py (retired).
 use pty::spawn {Pty, Output}
 use pty::check {Check.report}
-use weaver::pty_support {run_gated, with_root, spawn_args, report_screen, found_at_row}
+use weaver::pty_support {run_gated, with_root, spawn_args, report_screen, found_at_row, pos_row}
 use weaver::pty_fixtures {LineSpec, write_generated_session, pad2}
 use std::io {IO.println}
 
@@ -12,6 +12,16 @@ def grid_has (o : Output) (needle : String) : Bool :=
     match Output.find o needle {
         Option.some _ => true,
         Option.none => false
+    }
+
+/// A SELECTED option row: the `> ` marker sits on the row the label is
+/// drawn on (`> 2. Alpha work`). Dialogs number their options and the
+/// number moves with the page, so match the marker and the label, never
+/// the whole rendered row.
+def selected_row_has (o : Output) (needle : String) : Bool :=
+    match Output.find o needle {
+        Option.none => false,
+        Option.some p => row_has o (pos_row p) "> ",
     }
 
 def grid_lacks (o : Output) (needle : String) : Bool :=
@@ -89,7 +99,7 @@ def choose_checks (m : Pty) : IO Bool := do {
     let opened <- open_picker m;
     let a <- Check.report "the picker dialog opens" opened;
     Pty.send_text m "\u{1b}[B";
-    let moved <- Pty.wait_until m (fn (o : Output) => grid_has o "> Alpha work") 3000;
+    let moved <- Pty.wait_until m (fn (o : Output) => selected_row_has o "Alpha work") 3000;
     let b <- Check.report "ArrowDown selects the other session" moved;
     Pty.send_text m "\r";
     let loaded <- Pty.wait_until m (fn (o : Output) => grid_has o "ALPHA-TRANSCRIPT") 6000;
@@ -111,7 +121,7 @@ def pager_checks (m : Pty) : IO Bool := do {
         (Bool.and (grid_lacks o1 "session 00") (grid_lacks o1 "session 01"));
     let d <- Check.report "the first page offers an older page" (grid_has o1 "Older sessions");
     Pty.send_text m (String.repeat "\u{1b}[B" 8);
-    let on_older <- Pty.wait_until m (fn (o : Output) => grid_has o "> Older sessions") 4000;
+    let on_older <- Pty.wait_until m (fn (o : Output) => selected_row_has o "Older sessions") 4000;
     let e <- Check.report "the selection reaches Older sessions" on_older;
     Pty.send_text m "\r";
     let p2 <- Pty.wait_until m (fn (o : Output) =>

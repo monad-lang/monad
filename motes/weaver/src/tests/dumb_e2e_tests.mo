@@ -26,7 +26,7 @@ use shuttle::tools::file_tools {EditTool.impl, WriteTool.impl}
 use shuttle::tools::shell_tools {ShellTool.impl}
 use weaver::commands {WeaverState}
 use weaver::store {StoreState, Store.new_session}
-use weaver::plan_file {PlanRepo, PlanEntry, PlanRepo.list, PlanRepo.capture}
+use weaver::plan_file {PlanRepo, PlanEntry, PlanRepo.list, PlanRepo.capture, PlanDoc, PlanMeta, PlanFile.read, PlanFile.render, PlanFile.linked}
 use weaver::dumb {Dumb.run, Dumb.status_fields}
 use weaver::policy {Mode}
 use json::json {Json, Json.parse, Json.get_array, Json.get_str, Json.make_str, Json.make_array, Json.make_object, Json.make_null, Json.make_num_int, Json.to_string}
@@ -622,6 +622,41 @@ def link_auto_plan (st : WeaverState) : IO Unit :=
         },
     }
 
+/// A captured plan carries an EMPTY `next_action` (that is what the plan
+/// tool fills in on its first turn), and `AutoContinue.next` refuses one:
+/// auto-continue has no instruction to send, so it does not invent a turn
+/// (the 2026-11-14 silent-stop fix). A fixture that wants the chain to
+/// start says what the first step is.
+def plan_with_next (d : PlanDoc) (next : String) : PlanDoc :=
+    let m : PlanMeta := { d.meta with next_action := next } in
+    let out : PlanDoc := { meta := m, body := d.body } in
+    out
+
+def give_plan_a_next_action (path : String) (next : String) : IO Unit := do {
+    let doc <- PlanFile.read path;
+    match doc {
+        Option.none => IO.pure unit,
+        Option.some d => do {
+            let d2 : PlanDoc := plan_with_next d next;
+            let _ <- Test.write_fixture (Path.path path) (PlanFile.render d2);
+            IO.pure unit
+        },
+    }
+}
+
+def link_auto_plan_with (st : WeaverState) (next : String) : IO Unit :=
+    match st.store {
+        Option.none => IO.pure unit,
+        Option.some s => do {
+            let _ <- link_auto_plan st;
+            let linked <- PlanFile.linked s;
+            match linked {
+                Option.none => IO.pure unit,
+                Option.some path => give_plan_a_next_action path next,
+            }
+        },
+    }
+
 #[test]
 def test_dumb_e2e_auto_continues_until_the_plan_is_done : IO Bool := do {
     let _ <- write_auto_script;
@@ -659,7 +694,7 @@ def test_auto_start_runs_the_plan_without_input : IO Bool := do {
     let _ <- write_text tap_path "";
     let st2 <- with_store_and_repo (in_tmp (state_of plan_exec_registry));
     let st1 : WeaverState := { st2 with mode := Mode.auto, auto_start := true };
-    let _ <- link_auto_plan st1;
+    let _ <- link_auto_plan_with st1 "step one";
     let _ <- Dumb.run Option.none scripted_read tap_write st1;
     let cursor <- read_cursor;
     let tap <- read_tap;
@@ -667,4 +702,27 @@ def test_auto_start_runs_the_plan_without_input : IO Bool := do {
     return (cursor == 0
         && String.contains tap "all done"
         && stored_status es == "done")
+}
+
+/// The other half of the same rule: a linked plan with NO `next_action`
+/// starts nothing. Auto-start must not send an empty instruction, and it
+/// must not invent input -- zero turns, the plan untouched.
+#[test]
+def test_auto_start_refuses_a_plan_without_a_next_action : IO Bool := do {
+    let _ <- write_auto_script;
+    let _ <- write_text inputs_path "[]";
+    let _ <- write_text cursor_path "0";
+    let _ <- write_text tap_path "";
+    let st2 <- with_store_and_repo (in_tmp (state_of plan_exec_registry));
+    let st1 : WeaverState := { st2 with mode := Mode.auto, auto_start := true };
+    let _ <- link_auto_plan st1;
+    let st3 <- Dumb.run Option.none scripted_read tap_write st1;
+    let cursor <- read_cursor;
+    let tap <- read_tap;
+    let es <- PlanRepo.list stored_repo;
+    return (cursor == 0
+        && st3.run.session.turns == 0
+        && Bool.not (String.contains tap "all done")
+        && Bool.not (stored_status es == "done")
+    )
 }
