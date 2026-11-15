@@ -273,6 +273,14 @@
                 "codegen"
                 "cli"
                 "llvm"
+                # `mlir` is a compiler input from Phase 2 on: `codegen`'s
+                # kernel emitter imports it (`codegen/mote.toml`'s
+                # `[dependencies.mlir]`), so `mlir/**` is compiled INTO the
+                # compiler. Omitting it here means rung 1's store copy simply
+                # has no `mlir/src/`, and the build fails with an unknown
+                # module. Kept in step with `scripts/build-self-hosted.sh`'s
+                # staleness scan, which this fileset cites as authoritative.
+                "mlir"
                 "runtime"
                 "build"
                 # The shared evaluator: `cli` links it for `monad eval` and

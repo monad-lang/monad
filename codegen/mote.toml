@@ -26,6 +26,20 @@ workspace = true
 [dependencies.llvm]
 workspace = true
 
+# The kernel emitter (`src/kernel/shape.mo` on, Phase 2) lowers a kernel's
+# signature and body into `MlirType`/`MlirOp` values and hands them to
+# `mlir::print` and `mlir::tool`. `mlir` imports NEITHER `codegen` nor `lang`
+# (its own manifest says so), so this stays a one-way edge -- the same shape
+# `llvm` has, and `scripts/check-lang-no-codegen.sh` guards the sibling.
+#
+# Adding this edge is what makes `mlir/` part of the compiler-source surface:
+# from here on it is compiled INTO the compiler, so `"mlir"` joins
+# `scripts/build-self-hosted.sh`'s staleness scan and `nix/monad.nix`'s
+# `compilerSrc` fileset. Those two edits and this one belong to the SAME
+# commit as the first `use mlir::` line.
+[dependencies.mlir]
+workspace = true
+
 [dependencies.runtime]
 workspace = true
 

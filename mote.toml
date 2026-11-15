@@ -132,11 +132,13 @@ path = "lang"
 [workspace.dependencies.llvm]
 path = "llvm"
 
-# `mlir` is a member for the same reason `llvm` is: it is a backend mote a
-# Phase 2+ `codegen` build depends on, not a consumer of the compiler. It
-# carries NO dependency edge from anything yet -- nothing imports `mlir`
-# until the kernel emitter lands -- so adding it here costs the sweeps one
-# more tree to check and nothing else.
+# `mlir` is a member for the same reason `llvm` is: it is a backend mote the
+# compiler depends on, not a consumer of it. Since 2026-11-15 the kernel
+# emitter (`codegen/src/kernel/shape.mo`) imports it, so `mlir` is a real
+# dependency edge now (`codegen/mote.toml`'s `[dependencies.mlir]`) and is
+# compiled INTO the compiler -- which is why `"mlir"` is also in
+# `scripts/build-self-hosted.sh`'s staleness scan and `nix/monad.nix`'s
+# `compilerSrc` fileset.
 [workspace.dependencies.mlir]
 path = "mlir"
 
