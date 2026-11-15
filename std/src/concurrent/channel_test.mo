@@ -20,12 +20,6 @@ def some_is (o : Option I64) (want : I64) : Bool :=
         Option.none => false
     }
 
-def is_none (o : Option I64) : Bool :=
-    match o {
-        Option.none => true,
-        Option.some _ => false
-    }
-
 #[test]
 def test_channel_roundtrip : IO Bool := do {
     let c <- new_i64;
@@ -39,7 +33,7 @@ def test_channel_roundtrip : IO Bool := do {
 def test_try_take_empty : IO Bool := do {
     let c <- new_i64;
     let o <- Channel.tryTake c;
-    return (is_none o)
+    return (Option.is_none o)
 }
 
 #[test]
@@ -49,7 +43,7 @@ def test_try_take_after_put : IO Bool := do {
     Channel.put (Shared.get sc) 7;
     let o <- Channel.tryTake (Shared.get sc);
     let drained <- Channel.tryTake (Shared.get sc);
-    return (some_is o 7 && is_none drained)
+    return (some_is o 7 && Option.is_none drained)
 }
 
 /// Both backends: awaiting the producer runs its put on the host before the

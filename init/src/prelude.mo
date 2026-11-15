@@ -473,6 +473,14 @@ pub def Option.get_or_default (default : A) (self : Option A) : A :=
         none => default
     }
 
+/// Absent? The question every `match o { none => true, _ => false }` asks;
+/// generic over the payload so it works on any `Option A`.
+pub def Option.is_none (self : Option A) : Bool :=
+    match self {
+        none => true,
+        some _ => false
+    }
+
 pub type Nat {
     zero,
     succ (n : Nat)
