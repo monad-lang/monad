@@ -86,8 +86,29 @@ use std::io {IO.read_line, IO.write_stderr, IO.flush_stdout}
 // nothing outside `main`'s `lsp` arm may reach it -- an editor's protocol
 // stream and a compiler's diagnostic stream are the same two file
 // descriptors, and `lsp_serve` returning means the session is over.
+// `#[cfg {feature := "lsp"}]`: with the feature off this `use` is dropped
+// before lowering, so `lsp` never enters the load closure and never reaches
+// the linker. The `Command.lsp` arm below is gated the same way. See
+// `cli/mote.toml`'s `[features]` for what the switch is worth -- load time
+// and link surface, not a smaller dependency graph.
+#[cfg {feature := "lsp"}]
 use lsp::server {lsp_serve}
+// `monad doc`'s generator, gated the same way and for the same reason. This
+// is the gate that actually shrinks the build: `acorn`, `markdown` and
+// `xml_html` ride in with docgen.
+#[cfg {feature := "doc"}]
 use docgen::gen {DocGen.build}
+// `monad lint`'s engine, gated the same way. `motes/linter` is the library
+// `monad-lint` also wraps, so the subcommand and the standalone binary cannot
+// disagree about what a rule finds.
+#[cfg {feature := "linter"}]
+use linter {
+    LintConfig, LintDiagnostic, LintLevel, LintResult, exit_code_of, lint_result_diagnostics,
+    lint_result_parse_error, lint_source, rule_names,
+}
+use linter::config {effective_level}
+use linter::diagnostic {render_lint, lint_diagnostic_rule}
+use linter::driver {Rule, all_rules, rule_default_level, rule_name}
 
 #[native "build_commit"]
 def build_commit : String
@@ -3295,11 +3316,19 @@ def Command.dispatch (cmd : Command) : IO I64 :=
         Command.update dir offline => do {
             Build.fetch_run (Option.get_or_default "." dir) FetchMode.update offline
         },
+        // The two feature-gated subcommands. Both ARMS stay (the spec is one
+        // declaration and the help text must not depend on the build), but
+        // the body each reaches for is only there when its feature is, so
+        // the arm has to say which build it is in rather than fail to
+        // compile. `unavailable_subcommand` is that message; nothing else in
+        // the dispatch changes.
         Command.doc motes output include_private => do {
             run_doc motes (Option.get_or_default "target/docs" output) include_private
         },
+        Command.lint files workspace quiet deny allow list_rules verbose =>
+            run_lint files workspace quiet deny allow list_rules verbose,
         Command.print_targets => run_print_targets,
-        Command.lsp => lsp_serve,
+        Command.lsp => run_lsp,
         Command.version => do {
             println build_commit;
             return 0
@@ -3310,6 +3339,29 @@ def Command.dispatch (cmd : Command) : IO I64 :=
         }
     }
 
+/// The message a subcommand prints when the binary was built without the
+/// feature that implements it. One def so the two gated arms cannot word it
+/// differently, and so the text lives beside the gates rather than inside a
+/// `match`.
+def unavailable_subcommand (name : String) (feature : String) : IO I64 := do {
+    IO.write_stderr (String.concat_all [
+        "monad: this binary was built without the `", feature, "` feature, so `monad ",
+        name, "` is unavailable\n",
+        "hint: rebuild without `MONAD_FEATURES=\"not cli/", feature, "\"` (or with `cli/default`), which is what\n",
+        "      supplies it -- see cli/mote.toml's [features]",
+    ]);
+    return 2
+}
+
+/// `monad lsp`, gated on the `lsp` feature. Without it `lsp::server` is not
+/// loaded at all, so the honest answer is "this build has no editor server"
+/// rather than a link error.
+#[cfg {feature := "lsp"}]
+def run_lsp : IO I64 := lsp_serve
+
+#[cfg [not {feature := "lsp"}]]
+def run_lsp : IO I64 := unavailable_subcommand "lsp" "lsp"
+
 /// `monad doc`: an API reference for the named mote directories, written
 /// under `--output`. The work is docgen's (`DocGen.build`), so the CLI and
 /// the standalone `docgen` binary cannot diverge on what a page shows.
@@ -3317,9 +3369,205 @@ def Command.dispatch (cmd : Command) : IO I64 :=
 /// With no motes named, the enclosing mote's directory is documented -- the
 /// same default `check` and `test` take, so `monad doc` inside a mote does
 /// the obvious thing.
+/// `monad lint`: run the linter over the named files (or the enclosing
+/// mote), re-level findings from `--deny`/`--allow`, and answer an exit code.
+///
+/// THE FILE SET is whatever `resolve_target_paths` + `expand_check_paths`
+/// returns -- the same pair `check`, `test` and `fmt` use -- so `--workspace`
+/// and the "no mote.toml above this directory" diagnostic behave identically
+/// here and there.
+///
+/// The linter's own work is `linter::lint_source`, which parses with the
+/// compiler's front end; this arm owns the argument plumbing, the printing
+/// and the exit code, and nothing else.
+#[cfg {feature := "linter"}]
+def run_lint
+    (files : List String) (workspace : Bool) (quiet : Bool)
+    (deny : Option String) (allow : Option String) (list_rules : Bool) (verbose : Bool) : IO I64 := do {
+    if list_rules then do {
+        print_lint_rules;
+        return 0
+    } else do {
+        let targets <- resolve_target_paths "Linting" "lint" false files workspace;
+        match targets {
+            Option.none => no_target_diagnostic "lint",
+            Option.some ts =>
+                if List.is_empty ts then return 1
+                else do {
+                    let expanded : List String <- expand_check_paths ts;
+                    let config : LintConfig := lint_config_of deny allow;
+                    let results <- lint_paths expanded config verbose List.empty;
+                    if quiet then do { return (lint_exit config results) }
+                    else do {
+                        let _u <- lint_report config results;
+                        return (lint_exit config results)
+                    }
+                },
+        }
+    }
+}
+
+/// The rule registry, for `--list-rules`. A registry a user cannot enumerate
+/// is one they cannot `--deny`.
+def print_lint_rules : IO Unit := do {
+    let _u <- lint_print_rules_libs rule_names;
+    return unit
+}
+
+#[partial]
+def lint_print_rules_libs (rs : List String) : IO Unit := do {
+    match rs {
+        List.empty => do { return unit },
+        List.cons r rest => do {
+            let _p : Unit <- println r;
+            lint_print_rules_libs rest
+        },
+    }
+}
+
+/// `--deny`/`--allow`, comma- or space-separated, so a caller can name
+/// several without repeating the flag.
+def lint_config_of (deny : Option String) (allow : Option String) : LintConfig :=
+    LintConfig.with_denied (split_names deny) (LintConfig.with_allowed (split_names allow) LintConfig.empty)
+
+def split_names (o : Option String) : List String :=
+    match o {
+        Option.none => List.empty,
+        Option.some s => lint_split s 0 0 (String.length s) List.empty,
+    }
+
+#[terminating]
+def lint_split (s : String) (i : I64) (from : I64) (n : I64) (acc : List String) : List String :=
+    if I64.lt i n
+    then
+        if lint_is_sep (String.get s i)
+        then lint_split s (I64.add i 1) (I64.add i 1) n (lint_push s from i acc)
+        else lint_split s (I64.add i 1) from n acc
+    else List.reverse (lint_push s from n acc)
+
+def lint_is_sep (b : Option U8) : Bool :=
+    match b {
+        Option.some c =>
+            let x : I64 := U8.to_i64 c in
+            I64.beq x 44 || I64.beq x 32 || I64.beq x 10 || I64.beq x 9,
+        Option.none => false,
+    }
+
+def lint_push (s : String) (from : I64) (stop : I64) (acc : List String) : List String :=
+    if I64.lt from stop then List.cons (String.slice s from (I64.sub stop from)) acc else acc
+
+#[partial]
+def lint_paths (paths : List String) (config : LintConfig) (verbose : Bool) (acc : List LintResult)
+    : IO (List LintResult) := do {
+    match paths {
+        List.empty => do { return List.reverse acc },
+        List.cons p rest => do {
+            if verbose then do { let _u <- println ("linting " ++ p); return unit } else do { return unit };
+            let read <- IO.read_file (Path.path p);
+            match read {
+                Result.err e => do {
+                    IO.write_stderr (String.concat_all ["monad lint: ", p, ": ", e.message, "\n"]);
+                    lint_paths rest config verbose acc
+                },
+                Result.ok src => do {
+                    let r : LintResult := lint_source p src config;
+                    lint_paths rest config verbose (List.cons r acc)
+                },
+            }
+        },
+    }
+}
+
+#[partial]
+def lint_report (config : LintConfig) (results : List LintResult) : IO Unit := do {
+    match results {
+        List.empty => do { return unit },
+        List.cons r rest => do {
+            let _u <- lint_report_one config r;
+            lint_report config rest
+        },
+    }
+}
+
+def lint_report_one (config : LintConfig) (r : LintResult) : IO Unit := do {
+    match lint_result_parse_error r {
+        Option.some msg => do {
+            IO.write_stderr (String.concat_all ["error: ", msg, "\n"]);
+            return unit
+        },
+        Option.none => do {
+            let _u <- lint_print_diags config (lint_result_diagnostics r);
+            return unit
+        },
+    }
+}
+
+#[partial]
+def lint_print_diags (config : LintConfig) (ds : List LintDiagnostic) : IO Unit := do {
+    match ds {
+        List.empty => do { return unit },
+        List.cons d rest => do {
+            let _p : Unit <- println (render_lint (lint_level config d) d);
+            lint_print_diags config rest
+        },
+    }
+}
+
+def lint_level (config : LintConfig) (d : LintDiagnostic) : LintLevel :=
+    effective_level (rule_default_level_of_lint (lint_diagnostic_rule d)) config (lint_diagnostic_rule d)
+
+def rule_default_level_of_lint (rule : String) : LintLevel :=
+    rule_default_level_in all_rules rule
+
+#[partial]
+def rule_default_level_in (rs : List Rule) (name : String) : LintLevel :=
+    match rs {
+        List.empty => LintLevel.warn,
+        List.cons r rest =>
+            if String.beq (rule_name r) name then rule_default_level r
+            else rule_default_level_in rest name,
+    }
+
+def lint_exit (config : LintConfig) (results : List LintResult) : I64 :=
+    exit_code_of config results
+
+/// Without the feature the subcommand still PARSES (the spec is one
+/// declaration and the help text must not depend on the build), so the arm
+/// says which build this is.
+///
+/// The parameters go UNUSED, which is fine for a function: the affine rule
+/// counts uses of a VALUE in a body, and a binder that is never mentioned is
+/// not a use. (An earlier version of this arm threaded all seven into a
+/// `lint_args_ignored` conjunction to satisfy a suspected unused-parameter
+/// warning; there is no such warning, and the conjunction produced a `Bool`
+/// that nothing read.)
+#[cfg [not {feature := "linter"}]]
+def run_lint
+    (files : List String) (workspace : Bool) (quiet : Bool)
+    (deny : Option String) (allow : Option String) (list_rules : Bool) (verbose : Bool) : IO I64 :=
+    unavailable_subcommand "lint" "linter"
+
+/// docgen's entry point, gated on the `doc` feature. `Result` rather than
+/// the `IO (Result ...)` shape `DocGen.build` has, so the two arms below
+/// agree and the caller's `match` reads the same whether the generator is
+/// in this build or not.
+#[cfg {feature := "doc"}]
+def doc_build (dirs : List String) (out : String) (include_private : Bool)
+    : IO (Result String I64) := DocGen.build dirs out include_private
+
+/// Without the feature there is no generator, so the answer is an error the
+/// caller already knows how to render -- the same path a generator failure
+/// takes, which keeps `run_doc` one function.
+#[cfg [not {feature := "doc"}]]
+def doc_build (dirs : List String) (out : String) (include_private : Bool)
+    : IO (Result String I64) := do {
+    let _ignored : Pair (List String) (Pair String Bool) := Pair.pair dirs (Pair.pair out include_private);
+    return (Result.err "this binary was built without the `doc` feature (see cli/mote.toml's [features])")
+}
+
 def run_doc (motes : List String) (out : String) (include_private : Bool) : IO I64 := do {
     let dirs : List String := if List.is_empty motes then ["."] else motes;
-    let wrote <- DocGen.build dirs out include_private;
+    let wrote <- doc_build dirs out include_private;
     match wrote {
         Result.err e => do {
             IO.write_stderr (String.concat "monad doc: " (String.concat e "\n"));

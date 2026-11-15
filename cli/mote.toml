@@ -61,6 +61,17 @@ workspace = true
 # other dependency here -- the self-hosted TOML reader has no inline tables,
 # and a manifest it cannot parse disables the declared-deps check silently
 # instead of failing.
+#
+# Gated by the `lsp` feature (see `[features]` below): `cli/src/main.mo`'s
+# `use lsp::server` and its `Command.lsp` arm carry
+# `#[cfg {feature := "lsp"}]`, so building without the feature drops the
+# module from the load closure and `lsp` from the link.
+#
+# What that buys is LOAD TIME AND LINK SURFACE, not a smaller dependency
+# graph: `motes/lsp` declares `lang`, `toolkit`, `json`, `fmt`, `log`,
+# `llvm` and `runtime`, and `cli` pulls every one of those in anyway. If a
+# genuinely smaller compiler binary is the goal, `motes/lsp`'s own closure
+# is the thing to look at, not this gate.
 [dependencies.lsp]
 workspace = true
 
@@ -68,8 +79,47 @@ workspace = true
 # of `lang`, because a reference is a tool over source ranges, not a compiler
 # stage -- `DocGen.build` reads the same `toolkit::decl_text` outline the
 # language server does.
+#
+# Gated by the `doc` feature: `cli/src/main.mo`'s `use docgen::gen` and its
+# `Command.doc` arm carry `#[cfg {feature := "doc"}]`. This is the gate that
+# actually SHRINKS the build -- `acorn`, `markdown` and `xml_html` ride in
+# with docgen and nothing else in `cli` needs them.
 [dependencies.docgen]
 workspace = true
+
+# `monad lint`: the style/hygiene linter, which is `motes/linter`'s library.
+# An edge from THIS mote and not from `lang`, because a linter is a tool over
+# a parse, not a compiler stage -- and NOT the reverse direction either: the
+# linter must not depend on `cli`, which would be circular now that `cli`
+# dispatches to it.
+#
+# Gated by the `linter` feature, like `doc` and `lsp`. `motes/linter` declares
+# `[features] default = []`, so it costs nothing to depend on.
+[dependencies.linter]
+workspace = true
+
+# Optional parts of the binary, off-switchable from the outside:
+#
+#     monad build cli                                 # everything (default)
+#     MONAD_FEATURES="not cli/default" monad build cli # a bare compiler
+#     MONAD_FEATURES="not cli/lsp" monad build cli     # no editor server
+#     MONAD_FEATURES="not cli/linter" monad build cli   # no `monad lint`
+#
+# A feature here gates a `use` plus the subcommand's dispatch arm, so an
+# unbuilt subcommand does not merely fail at runtime -- its module is never
+# loaded. `Command.lsp`/`Command.doc` still PARSE without the feature (the
+# spec is one declaration, and the help text must not depend on the build);
+# their arms report that the binary was built without the feature.
+#
+# `default` is what every existing caller gets, so `monad build cli` and the
+# bootstrap ladder are unchanged. `not` subtracts -- see `CfgEnv.for_mote`
+# (`lang/src/cfg.mo`) and `CfgSet::with_manifest_features`
+# (`rust/core/src/cfg.rs`), which must agree.
+[features]
+default = ["doc", "lsp", "linter"]
+doc = []
+lsp = []
+linter = []
 
 # Affine-by-default migration exception (measured 2026-10-22).
 # Delete this table when the mote reaches zero violations; the default

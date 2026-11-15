@@ -73,6 +73,16 @@ pub type Command {
         (#[arg {short := "", help := "read stdin, write stdout"}] stdin : Bool)
         (#[arg {short := "w", help := "format every mote in the enclosing workspace"}] workspace : Bool)
         (#[arg {short := "v", help := "print each changed file"}] verbose : Bool),
+    /// Report style and hygiene findings in source files.
+    /// Gated by the `linter` feature: without it the arm says so.
+    lint
+        (#[pos {help := "files or directories; omitted means the current mote"}] files : List String)
+        (#[arg {short := "w", help := "lint every mote in the enclosing workspace"}] workspace : Bool)
+        (#[arg {short := "q", help := "report nothing; the exit code is the answer"}] quiet : Bool)
+        (#[opt {short := "", value_name := "RULE", help := "promote a rule to an error (repeatable, comma-separated)"}] deny : Option String)
+        (#[opt {short := "", value_name := "RULE", help := "silence a rule (repeatable, comma-separated)"}] allow : Option String)
+        (#[arg {short := "", help := "print the rule registry and exit"}] list_rules : Bool)
+        (#[arg {short := "v", help := "print each file as it is linted"}] verbose : Bool),
     /// Parse and typecheck source files, with no execution.
     check
         (#[pos {help := "files or directories; omitted means the current mote"}] files : List String)
