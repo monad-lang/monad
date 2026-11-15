@@ -305,9 +305,6 @@ def native_runtime_fn_name (attrs : List Attribute) : Option NativeWrapKind :=
             // `RawIO` values (not `IO`), so `passthrough` is correct.
             else if String.beq target "io_pure" then Option.some (NativeWrapKind.passthrough "monad_io_pure")
             else if String.beq target "io_bind" then Option.some (NativeWrapKind.passthrough "monad_io_bind")
-            else if String.beq target "file_exists" then Option.some (NativeWrapKind.raw_io_truthy_ptr_bool_result "monad_file_exists")
-            else if String.beq target "is_dir" then Option.some (NativeWrapKind.raw_io_truthy_ptr_bool_result "monad_is_dir")
-            else if String.beq target "file_size" then Option.some (NativeWrapKind.raw_io_passthrough "monad_file_size")
             // `std/io.mo`'s two remaining raw-stdio natives -- the
             // byte-level half of stdio the stream primitives cannot
             // express (`read_stdin_exact`'s fill-to-n read and a real
@@ -644,7 +641,6 @@ def native_runtime_fn_name (attrs : List Attribute) : Option NativeWrapKind :=
             // deliberately no `native_op_table` key, for the same
             // hijack reason as the proc family.
             else if String.beq target "term_ctl" then Option.some (NativeWrapKind.raw_io_passthrough "monad_term_ctl")
-            else if String.beq target "list_dir" then Option.some (NativeWrapKind.raw_io_passthrough "monad_list_dir")
             // `IO.get_env` (std/io.mo) -- `IO (Option String)`: the raw
             // result is a real `Option` Constructor built in runtime.c
             // (some=4/none=3, the same fixed tags `monad_array_get` and
@@ -654,7 +650,6 @@ def native_runtime_fn_name (attrs : List Attribute) : Option NativeWrapKind :=
             // NO_COLOR/FORCE_COLOR/TERM through it, and the compiler's
             // own `--verbose` stage trace (std/src/log.mo) colorizes through
             // that.
-            else if String.beq target "get_env" then Option.some (NativeWrapKind.raw_io_passthrough "monad_get_env")
             // The async runtime (`std/concurrent/{fiber,combine}.mo`).
             // All eight are `RawIO` natives behind `.mo` wrappers: the
             // runtime call's raw result is wrapped ONCE as `RawIO.io`,
@@ -831,9 +826,6 @@ pub def runtime_declarations_for_with_ownership (kind : TargetKind) (ownership_o
     let d1 := mk_decl "monad_alloc" (List.cons "i64" List.empty) "i64" in
     let d2 := mk_decl "monad_retain" (List.cons "i64" List.empty) "void" in
     let d3 := mk_decl "monad_release" (List.cons "i64" List.empty) "void" in
-    let d7 := mk_decl "monad_file_exists" (List.cons "i64" List.empty) "i64" in
-    let d7b := mk_decl "monad_is_dir" (List.cons "i64" List.empty) "i64" in
-    let d7b1 := mk_decl "monad_file_size" (List.cons "i64" List.empty) "i64" in
     let d7c := mk_decl "monad_string_hash" (List.cons "i64" List.empty) "i64" in
     let d7d := mk_decl "monad_current_time" List.empty "i64" in
     let d7e := mk_decl "monad_current_time_nano" List.empty "i64" in
@@ -934,7 +926,6 @@ pub def runtime_declarations_for_with_ownership (kind : TargetKind) (ownership_o
     let d34 := mk_decl "monad_i32_to_string" (List.cons "i64" List.empty) "i64" in
     let d35 := mk_decl "monad_exec_cmd" (List.cons "i64" (List.cons "i64" List.empty)) "i64" in
     let d35b := mk_decl "monad_exec_child_output" ["i64"] "i64" in
-    let d36 := mk_decl "monad_list_dir" (List.cons "i64" List.empty) "i64" in
     let d37 := mk_decl "monad_u8_to_string" (List.cons "i64" List.empty) "i64" in
     let d38 := mk_decl "monad_u64_to_string" (List.cons "i64" List.empty) "i64" in
     // `monad_string_to_u64_bits` is the parse half of the u64 text/bits
@@ -962,7 +953,6 @@ pub def runtime_declarations_for_with_ownership (kind : TargetKind) (ownership_o
     let d46 := mk_decl "monad_array_freeze" (List.cons "i64" List.empty) "i64" in
     // `IO.get_env` (runtime.c) -- same "no implicit declare" requirement
     // as every native above; see its `native_runtime_fn_name` entry.
-    let d47 := mk_decl "monad_get_env" (List.cons "i64" List.empty) "i64" in
     // `init/number.mo`'s F64 family (runtime.c). Same "no implicit
     // declare" requirement as every native above; `monad_f64_to_string`
     // and `monad_f64_of_string` are the binary<->text pair, both i64->i64
@@ -1235,10 +1225,10 @@ pub def runtime_declarations_for_with_ownership (kind : TargetKind) (ownership_o
     // runtime collects in `leave` when the depth returns to 0.
     let d187 := mk_decl "monad_export_enter" List.empty "i64" in
     let d188 := mk_decl "monad_export_leave" ["i64"] "i64" in
-    [d1, d2, d3, d7, d7b, d7b1, d7c, d7d, d7e, d7f, d8, d9, d10, d11, d12, d13,
+    [d1, d2, d3, d7c, d7d, d7e, d7f, d8, d9, d10, d11, d12, d13,
         d14, d15, d16, d17, d18, d19, d20, d21, d22, d23, d23a, d23b, d24, d24b, d25, d26, d27, d28, d29, d30, d31,
-        d32, d33, d34, d35, d35b, d36, d37, d38, d38b, d39, dSysInt, dSysStr, dSysStat, dSysDirOpen, dSysDirNext, dSysDirClose, d40, d41, d42, d43, d43b, d44,
-        d45, d46, d47,
+        d32, d33, d34, d35, d35b, d37, d38, d38b, d39, dSysInt, dSysStr, dSysStat, dSysDirOpen, dSysDirNext, dSysDirClose, d40, d41, d42, d43, d43b, d44,
+        d45, d46,
         d48, d49, d50, d51, d52, d53, d54, d55, d56,
         d57w, d57c, d57, d58, d59, d60, d61, d62, d63, d64,
         d65, d66, d66a, d67, d72,
@@ -1274,8 +1264,8 @@ def wasm_os_only_natives : List String := [
     "sys_str", "sys_stat", "sys_dir_open", "sys_dir_next", "sys_dir_close",
     "proc_spawn",
     "proc_stream_fd", "proc_wait", "proc_kill_group", "tcp_connect_timeout", "tcp_listen",
-    "tcp_listen_on", "tcp_accept", "tcp_local_port", "file_exists", "is_dir", "file_size", "list_dir",
-    "get_env", "stream_open", "stream_poll", "stream_seek", "stream_set_timeout", "term_ctl",
+    "tcp_listen_on", "tcp_accept", "tcp_local_port",
+    "stream_open", "stream_poll", "stream_seek", "stream_set_timeout", "term_ctl",
     "inotify_init", "inotify_add_watch", "inotify_rm_watch", "inotify_read",
 ]
 

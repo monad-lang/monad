@@ -283,8 +283,9 @@ if "$MONAD" build --target wasm32-unknown-unknown fixtures/wasm/web_file_io.mo \
     -o "$tmp/gate-web.wasm" --no-cache >"$tmp/gate-web.log" 2>&1; then
     fail "web build accepted get_env"
 fi
-grep -q 'get_env' "$tmp/gate-web.log" \
-    || fail "web gate did not name get_env: $(cat "$tmp/gate-web.log")"
+# `get_env` is Monad over the `sys` floor, so the rejected native is `sys_str`.
+grep -q 'sys_str' "$tmp/gate-web.log" \
+    || fail "web gate did not name sys_str: $(cat "$tmp/gate-web.log")"
 grep -q 'not available on target' "$tmp/gate-web.log" \
     || fail "web gate did not explain the target: $(cat "$tmp/gate-web.log")"
 

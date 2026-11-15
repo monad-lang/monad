@@ -11,3 +11,6 @@ path = "src/lib.mo"
 
 [dependencies.init]
 workspace = true
+
+[dependencies.sys]
+workspace = true

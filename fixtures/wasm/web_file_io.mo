@@ -1,6 +1,7 @@
 #![mote { name := "wasm_web_file_io" }]
 
-/// Native compiles and runs; the web profile must reject `get_env` with the
-/// target-availability diagnostic rather than link a missing symbol.
+/// Native compiles and runs; the web profile must reject `get_env` (via the
+/// `sys_str` floor native it is built on) with the target-availability
+/// diagnostic rather than link a missing symbol.
 def main (args : List String) : IO I64 :=
     IO.bind (IO.get_env "HOME") (fn _ => IO.pure 0)

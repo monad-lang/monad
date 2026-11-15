@@ -489,9 +489,8 @@ The `tcp_*` natives are wired here and nowhere else. The Rust bootstrap host has
 no TCP implementation, so a socket test cannot run under `cargo run -- test`;
 `motes/moon` and `motes/moose` are exercised by the self-hosted runner.
 
-Three natives are declared but unimplemented in both implementations —
-`eq_rec`, `string_to_chars`, `string_from_chars` — and fail at run time with
-`unknown native`.
+One native is declared but unimplemented in both implementations -- `eq_rec`
+-- and fails at run time with `unknown native`.
 
 A few natives are not written in C at all: `runtime/src/natives.mo` emits
 LLVM IR directly for thirteen simple operations.

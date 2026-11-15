@@ -1071,14 +1071,6 @@ char* monad_is_dir(char* path) {
     return S_ISDIR(st.st_mode) ? (char*)"1" : NULL;
 }
 
-/* `file_size : String -> RawIO I64` -- the `stat` size, or -1. */
-int64_t monad_file_size(char* path) {
-    if (!path) return -1;
-    struct stat st;
-    if (stat(path, &st) != 0) return -1;
-    return (int64_t)st.st_size;
-}
-
 
 /* A NULL-terminated argv for `execvp(cmd, argv)`: argv[0] = cmd, then one
  * entry per `List String` cons cell (tag 6: head field 0, tail field 1),
@@ -1987,70 +1979,7 @@ void* monad_sys_stat(int64_t op, char* path) {
    unreadable path (the reference errors, but this runtime has no
    error channel -- an empty listing is the same shape a caller can
    already get from an empty directory). */
-static int monad_cmp_strs(const void* a, const void* b) {
-    return strcmp(*(const char* const*)a, *(const char* const*)b);
-}
 
-void* monad_list_dir(char* path) {
-    DIR* d = path ? opendir(path) : NULL;
-    if (!d) return (void*)alloc_constructor_impl(5, 0);   /* List.empty */
-
-    size_t cap = 16, n = 0;
-    char** names = (char**)GC_malloc(sizeof(char*) * cap);
-    if (!names) { closedir(d); return (void*)alloc_constructor_impl(5, 0); }
-
-    struct dirent* e;
-    while ((e = readdir(d)) != NULL) {
-        if (strcmp(e->d_name, ".") == 0 || strcmp(e->d_name, "..") == 0) continue;
-        if (n == cap) {
-            cap *= 2;
-            char** grown = (char**)GC_realloc(names, sizeof(char*) * cap);
-            if (!grown) break;
-            names = grown;
-        }
-        size_t len = strlen(e->d_name);
-        char* copy = (char*)monad_alloc_atomic(len + 1);
-        if (!copy) break;
-        memcpy(copy, e->d_name, len + 1);
-        names[n++] = copy;
-    }
-    closedir(d);
-
-    qsort(names, n, sizeof(char*), monad_cmp_strs);
-
-    /* Build in reverse (cons prepends) so the list comes out sorted. */
-    void* list = (void*)alloc_constructor_impl(5, 0);
-    for (size_t i = n; i > 0; i--) {
-        Constructor* cons = (Constructor*)alloc_constructor_impl(6, 2);
-        cons->fields[0] = names[i - 1];
-        cons->fields[1] = list;
-        list = cons;
-    }
-    return list;
-}
-
-/* `#[native "get_env"]` (std/io.mo's IO.get_env): `IO (Option String)`.
-   Returns a real `Option` Constructor -- `some` tag 4 with the value as
-   its one field, `none` tag 3 -- the same fixed prelude-constructor tags
-   runtime.mo's `rt_tag_some`/`rt_tag_none` mirror (see `monad_list_dir`
-   above for the List equivalents of the same convention). Wired as
-   `raw_io_passthrough` in natives.mo: the raw result is already a valid
-   backend value, so the emitted wrapper only adds one `RawIO.io` (the
-   `.mo` wrapper adds `IO.mk`). The value
-   is COPIED (like list_dir copies entry names): getenv's storage is
-   owned by libc and can be invalidated by a later setenv/putenv, while
-   every other `String` here is an owned, GC-visible char*. */
-void* monad_get_env(char* name) {
-    const char* val = name ? getenv(name) : NULL;
-    if (!val) return (void*)alloc_constructor_impl(3, 0);   /* Option.none */
-    size_t len = strlen(val);
-    char* copy = (char*)monad_alloc_atomic(len + 1);
-    if (!copy) return (void*)alloc_constructor_impl(3, 0);  /* OOM -> none */
-    memcpy(copy, val, len + 1);
-    Constructor* some = (Constructor*)alloc_constructor_impl(4, 1);
-    some->fields[0] = copy;
-    return some;
-}
 
 /* ─── TCP ────────────────────────────────────────────────────────────
    `std/io.mo`'s four `#[native "tcp_*"]` defs, reached by

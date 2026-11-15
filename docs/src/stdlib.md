@@ -76,9 +76,8 @@ bitwise operations (`and`, `or`, `xor`, `shl`, `shr`), and width conversions.
 `slice`, `drop`, `get`, `get_char`, `to_lowercase`, `starts_with`, `ends_with`,
 `contains`, `index_of` (codepoint index), `byte_index_of` (the offset
 `slice`/`drop` expect), `count`, `split`, `repeat`, `reverse`, `trim`,
-`find_last`, `to_list`/`from_list`,
-`to_chars`/`from_chars` (**declared but not implemented** — these fail at run
-time with `unknown native`), `hash`, plus `List.reverse` and `List.singleton`.
+`find_last`, `to_list`/`from_list`, `hash`, plus `List.reverse` and
+`List.singleton`.
 Instances: `BEq`, `BOrd`, `ToString`, `Add`, `Append`, `Hashable`.
 
 ### `init.list`
@@ -304,8 +303,9 @@ cooperative, so the two backends disagree about what a `forkIO` means.
   implements it.
 - **Duplicate `Show`.** `std.list` declares a local `class Show A` alongside its
   import of `std.show`'s. Prefer `std.show`.
-- **Three declared-but-unimplemented natives**: `eq_rec` (so `Eq.rec` cannot be
-  called), `string_to_chars`, and `string_from_chars`.
+- **One declared-but-unimplemented native**: `eq_rec` (so `Eq.rec` cannot be
+  called). `string_to_chars`/`string_from_chars` were deleted -- they were
+  wired in no backend and nothing called them.
 - **TCP timeouts are caller-enforced.** `IO.tcp_connect_timeout` bounds the
   connect (one deadline across every address tried; the `getaddrinfo` lookup
   itself is unbounded), `FdStream.set_timeout` applies `SO_RCVTIMEO`/

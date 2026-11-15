@@ -3716,7 +3716,13 @@ pub fn init_package_sources() -> Result<Vec<(ModulePath, PathBuf, String)>, Load
   {
     let init_dir = stdlib_dir();
     let std_dir = std_dir();
-    let entries: [(ModulePath, std::path::PathBuf); 17] = [
+    let sys_dir = sys_dir();
+    // `sys` is seeded ahead of `std` because `std/io.mo` now uses it: the
+    // floor's `Sys.*` wrappers are what `file_exists`/`is_dir`/`file_size`/
+    // `get_env`/`list_dir` are built on. Order is dependency order, the
+    // same rule the rest of this list follows (`errno` and `signal` first:
+    // `sys.sys` uses both).
+    let entries: [(ModulePath, std::path::PathBuf); 23] = [
       (mpt("'prelude"), init_dir.join("prelude.mo")),
       (
         ModulePath::new(vec![id("init"), id("id")]),
@@ -3761,6 +3767,27 @@ pub fn init_package_sources() -> Result<Vec<(ModulePath, PathBuf, String)>, Load
         init_dir.join("clone.mo"),
       ),
       (mpt("init"), init_dir.join("lib.mo")),
+      (
+        ModulePath::new(vec![id("sys"), id("errno")]),
+        sys_dir.join("errno.mo"),
+      ),
+      (
+        ModulePath::new(vec![id("sys"), id("signal")]),
+        sys_dir.join("signal.mo"),
+      ),
+      (
+        ModulePath::new(vec![id("sys"), id("text")]),
+        sys_dir.join("text.mo"),
+      ),
+      (
+        ModulePath::new(vec![id("sys"), id("raw")]),
+        sys_dir.join("raw.mo"),
+      ),
+      (
+        ModulePath::new(vec![id("sys"), id("sys")]),
+        sys_dir.join("sys.mo"),
+      ),
+      (mpt("sys"), sys_dir.join("lib.mo")),
       (
         ModulePath::new(vec![id("std"), id("path")]),
         std_dir.join("path.mo"),

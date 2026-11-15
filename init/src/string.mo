@@ -70,20 +70,6 @@ pub def String.to_list (s : String) : List U8
 #[native string_from_list]
 pub def String.from_list (bytes : List U8) : String
 
-/// UNWIRED -- declared here but absent from `exec_native`'s dispatch
-/// table (`rust/core/src/core_native.rs`), so calling it fails at runtime.
-/// This is the hazard `validate_no_unwired_natives` (lang/codegen/emit.mo)
-/// exists to catch; it never fires here only because nothing reaches
-/// these. See AGENTS.md's `Char` item before relying on either.
-#[native string_to_chars]
-def String.to_chars (s : String) : List Char
-
-/// UNWIRED (as `to_chars` above), and its parameter type `Chars` is not
-/// a type that exists anywhere in the corpus -- presumably a typo for
-/// `List Char`.
-#[native string_from_chars]
-def String.from_chars (bytes : List Chars) : String
-
 // --- Self-hosted reference implementations, kept intentionally ---
 //
 // The four defs below (`String.hash_bytes_selfhosted`/

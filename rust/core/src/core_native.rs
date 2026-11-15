@@ -413,9 +413,6 @@ pub fn exec_native(
     "bench_report" => bench_report(args, natives),
     "file_exists" => file_exists(args, natives),
     "is_dir" => is_dir(args, natives),
-    "file_size" => file_size(args, natives),
-    "list_dir" => list_dir(args, natives),
-    "get_env" => get_env(args, natives),
     // `std/io.mo`'s two raw-stdio natives, `RawIO` behind `.mo`
     // wrappers (the rest of stdio is `std/stream.mo`'s streams). Like
     // `current_time` above, `flush_stdout` is nullary -- there is no
@@ -1436,20 +1433,6 @@ fn file_exists(args: &[Value], natives: &NativeTable) -> Result<Value, CoreEvalE
   raw_io_wrap(natives, exists)
 }
 
-/// `file_size (path : String) : RawIO I64` -- the `stat` size, or -1.
-fn file_size(args: &[Value], natives: &NativeTable) -> Result<Value, CoreEvalError> {
-  if args.is_empty() {
-    return Err(CoreEvalError::NativeArgError(
-      "file_size needs 1 arg".into(),
-    ));
-  }
-  let path = extract_string(&args[0])?;
-  let n = std::fs::metadata(path)
-    .map(|m| m.len() as i64)
-    .unwrap_or(-1);
-  raw_io_wrap(natives, Value::Lit(IrLit::Num(n, NumSuffix::I64)))
-}
-
 /// `IO.is_dir (path : String) : IO Bool` — see `file_exists`'s own doc
 /// comment; a nonexistent path is simply not-a-directory, not an error
 /// (matching `file_exists`'s own `.unwrap_or(false)`-shaped tolerance
@@ -1462,53 +1445,6 @@ fn is_dir(args: &[Value], natives: &NativeTable) -> Result<Value, CoreEvalError>
   let is_dir = std::fs::metadata(path).map(|m| m.is_dir()).unwrap_or(false);
   let result = make_bool(natives, is_dir)?;
   raw_io_wrap(natives, result)
-}
-
-/// `IO.list_dir (path : String) : IO (List String)` — bare entry names
-/// (not full paths), sorted for deterministic output, one level only.
-/// Same `List.cons`/`List.empty` construction idiom as `string_to_list`
-/// just below, built right-to-left over a byte string's worth of
-/// entries instead of a `String`'s bytes.
-fn list_dir(args: &[Value], natives: &NativeTable) -> Result<Value, CoreEvalError> {
-  if args.is_empty() {
-    return Err(CoreEvalError::NativeArgError("list_dir needs 1 arg".into()));
-  }
-  let path = extract_string(&args[0])?;
-  let mut entries: Vec<String> = std::fs::read_dir(path)
-    .map_err(|e| CoreEvalError::NativeArgError(format!("list_dir {path} failed: {e}")))?
-    .filter_map(|entry| entry.ok())
-    .map(|entry| entry.file_name().to_string_lossy().into_owned())
-    .collect();
-  entries.sort();
-  let cons = require_ctor(natives.well_known.list_cons, "List.cons")?;
-  let empty = require_ctor(natives.well_known.list_empty, "List.empty")?;
-  let mut result = Value::Con {
-    tag: empty.tag,
-    args: std::sync::Arc::new(Vec::new().into()),
-  };
-  for entry in entries.into_iter().rev() {
-    result = Value::Con {
-      tag: cons.tag,
-      args: std::sync::Arc::new(vec![Value::Lit(IrLit::Str(entry.into())), result].into()),
-    };
-  }
-  raw_io_wrap(natives, result)
-}
-
-/// `IO.get_env (s : String) : IO (Option String)` — see `file_exists`'s
-/// own doc comment on why the `RawIO.io` wrapping is required; the INNER
-/// `Option` needs the same real-`Con` treatment as `string_get`'s own
-/// `Option U8`, for the same reason.
-fn get_env(args: &[Value], natives: &NativeTable) -> Result<Value, CoreEvalError> {
-  if args.is_empty() {
-    return Err(CoreEvalError::NativeArgError("get_env needs 1 arg".into()));
-  }
-  let name = extract_string(&args[0])?;
-  let opt = match std::env::var(name) {
-    Ok(value) => make_option(natives, Some(Value::Lit(IrLit::Str(value.into()))))?,
-    Err(_) => make_option(natives, None)?,
-  };
-  raw_io_wrap(natives, opt)
 }
 
 // --- `std/io.mo`'s raw stdio family --------------------------------

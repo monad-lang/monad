@@ -11,6 +11,8 @@
 // fine self-hosted but fails "module not found: path" under `cargo
 // run`. Qualified works identically on both sides.
 use lib::path {Path}
+use sys::sys {Stat, Stat.is_dir, Stat.size, Sys.getenv, Sys.list_dir, Sys.stat}
+use sys::errno {SysError}
 use lib::bytebuf {
     ByteBuf, ByteBuf.alloc, ByteBuf.copy_into, ByteBuf.free, ByteBuf.length,
     ByteBuf.of_list, ByteBuf.of_string, ByteBuf.to_list, ByteBuf.to_string,
@@ -336,36 +338,91 @@ def IO.copy_chunk (dst : ByteBuf) (offset : I64) (b : ByteBuf) (rest : List Byte
     IO.copy_chunks dst2 (offset + n) rest
 }
 
-#[native "file_exists"]
-priv def file_exists_raw (path : String) : RawIO Bool
+// ── Built on the OS floor (`sys`) ───────────────────────────────────────
+// These four were natives with an implementation in C and another in the
+// interpreter. Each is now ordinary Monad over `Sys.stat`/`Sys.lstat`, so
+// there is ONE implementation and both backends run it: the "is this a
+// directory" test is `st_mode & S_IFMT`, evaluated in Monad, instead of a
+// second C copy of the same idea.
+//
+// The distinction `file_exists` keeps is the one its callers depend on:
+// a MISSING path is `false`, while a path that exists but cannot be
+// examined (EACCES on a parent directory) is also `false` -- both are "I
+// could not prove it exists". Following symlinks (`stat`, not `lstat`) is
+// deliberate and matches the C this replaces, which used `fopen`.
 
-def IO.file_exists_native (path : String) : IO Bool := IO.mk (file_exists_raw path)
+/// Does `path` exist, following symlinks?
+pub def IO.file_exists_native (path : String) : IO Bool := do {
+    let r <- Sys.stat path;
+    return (stat_found r)
+}
 
-#[native "is_dir"]
-priv def is_dir_raw (path : String) : RawIO Bool
+def stat_found (r : Result SysError Stat) : Bool :=
+    match r {
+        Result.ok _ => true,
+        Result.err _ => false,
+    }
 
-def IO.is_dir_native (path : String) : IO Bool := IO.mk (is_dir_raw path)
+/// Is `path` a directory, following symlinks?
+pub def IO.is_dir_native (path : String) : IO Bool := do {
+    let r <- Sys.stat path;
+    return (stat_is_dir r)
+}
 
-/// A file's size in bytes, or -1 when it cannot be `stat`ed.
-#[native "file_size"]
-priv def file_size_raw (path : String) : RawIO I64
+def stat_is_dir (r : Result SysError Stat) : Bool :=
+    match r {
+        Result.ok s => Stat.is_dir s,
+        Result.err _ => false,
+    }
 
-// Bare entry names (not full paths), sorted, one directory level.
-#[native "list_dir"]
-priv def list_dir_raw (path : String) : RawIO (List String)
+/// A file's size in bytes, or -1 when it cannot be `stat`ed -- the
+/// convention `IO.file_size` above decodes into `Option.none`.
+pub def IO.file_size_raw (path : String) : IO I64 := do {
+    let r <- Sys.stat path;
+    return (stat_size_or r)
+}
 
-def IO.list_dir_native (path : String) : IO (List String) :=
-    IO.mk (list_dir_raw path)
+def stat_size_or (r : Result SysError Stat) : I64 :=
+    match r {
+        Result.ok s => Stat.size s,
+        Result.err _ => 0 - 1,
+    }
+
+// Bare entry names (not full paths), sorted, one directory level. `Sys`
+// does the opening, the per-entry stepping and the sorting; an unreadable
+// directory is an empty listing, which is the shape the old native
+// answered (the runtime has no error channel for this call).
+pub def IO.list_dir_native (path : String) : IO (List String) := do {
+    let r <- Sys.list_dir path;
+    return (names_or_empty r)
+}
+
+def names_or_empty (r : Result SysError (List String)) : List String :=
+    match r {
+        Result.ok names => names,
+        Result.err _ => List.empty,
+    }
 
 // `pub`: three motes outside `std` read the environment through this --
 // `lang/src/mote.mo`'s toolchain-root discovery, `llvm/src/link.mo`'s
 // build-commit override, and `build/src/store.mo`'s MONAD_TARGET_DIR --
 // and the cross-mote warning was already pointing at it before the third
 // arrived.
-#[native "get_env"]
-priv def get_env_raw (s : String) : RawIO (Option String)
+// On `Sys.getenv`. `none` is BOTH "unset" and "could not be read", which
+// is what this returned before too: the native answered `none` for an
+// unset variable, and the two other `sys_str` failures (EINVAL for a name
+// containing NUL, EACCES) cannot be told apart by a caller that only asks
+// "is it there".
+pub def IO.get_env (s : String) : IO (Option String) := do {
+    let r <- Sys.getenv s;
+    return (env_or_none r)
+}
 
-pub def IO.get_env (s : String) : IO (Option String) := IO.mk (get_env_raw s)
+def env_or_none (r : Result SysError String) : Option String :=
+    match r {
+        Result.ok v => Option.some v,
+        Result.err _ => Option.none,
+    }
 
 // ── Raw stdio ───────────────────────────────────────────────────────────
 // The group below is the byte-level half of stdio, over `std/stream.mo`'s
@@ -510,7 +567,7 @@ pub def IO.is_dir (path : Path) : IO Bool :=
 /// The size of the file at `path` in bytes (following symlinks), or
 /// `none` when it does not exist or cannot be read.
 pub def IO.file_size (path : Path) : IO (Option I64) := do {
-    let n <- IO.mk (file_size_raw (Path.to_string path));
+    let n <- IO.file_size_raw (Path.to_string path);
     return (if n < 0 then Option.none else Option.some n)
 }
 
