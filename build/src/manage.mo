@@ -207,14 +207,14 @@ def Build.refuse (m : String) : IO Reach :=
 /// keys and delete the whole store -- worst of all when the user passed
 /// `--verbose` to watch it happen.
 #[partial]
-pub def Build.reach_of (files : List String) (target_dir : String) (triples : List String) : IO Reach :=
+pub def Build.reach_of (files : List String) (target_dir : Path) (triples : List String) : IO Reach :=
     match files {
         List.empty => Build.refuse "no files were named, so no key could be derived",
         List.cons _ _ => Build.reach_planned files target_dir triples
     }
 
 #[partial]
-def Build.reach_planned (files : List String) (target_dir : String) (triples : List String) : IO Reach := do {
+def Build.reach_planned (files : List String) (target_dir : Path) (triples : List String) : IO Reach := do {
     let plan <- Build.check_plan_all files target_dir;
     if Bool.not (Build.cache_plan_active plan)
     then Build.refuse (Build.inactive_reason plan)
@@ -228,7 +228,7 @@ def Build.reach_planned (files : List String) (target_dir : String) (triples : L
 }
 
 #[partial]
-def Build.reach_keyed (files : List String) (target_dir : String) (triples : List String) (checks : List String) : IO Reach := do {
+def Build.reach_keyed (files : List String) (target_dir : Path) (triples : List String) (checks : List String) : IO Reach := do {
     let t <- Build.probe_digest_tool;
     match t {
         err m => Build.refuse m,
@@ -237,7 +237,7 @@ def Build.reach_keyed (files : List String) (target_dir : String) (triples : Lis
 }
 
 #[partial]
-def Build.reach_digested (tool : DigestTool) (files : List String) (target_dir : String) (triples : List String) (checks : List String) : IO Reach := do {
+def Build.reach_digested (tool : DigestTool) (files : List String) (target_dir : Path) (triples : List String) (checks : List String) : IO Reach := do {
     let c <- Build.compiler_key_with tool;
     match c {
         err m => Build.refuse m,
@@ -298,12 +298,12 @@ def Build.collect_check_keys (plan : CachePlan) (files : List String) (acc : Lis
 /// entry, because a file whose root has no digest would get no key and
 /// then look like an orphan to the `unreachable` filter -- which deletes.
 #[partial]
-def Build.collect_root_digests (tool : DigestTool) (files : List String) (seen : List String) (acc : List (Pair String String)) : IO (Result String (List (Pair String String))) :=
+def Build.collect_root_digests (tool : DigestTool) (files : List String) (seen : List Path) (acc : List (Pair Path String)) : IO (Result String (List (Pair Path String))) :=
     match files {
         List.empty => return (ok acc),
         List.cons f rest => do {
             let r <- Build.mote_root_of f;
-            if List.contains_by String.beq r seen
+            if List.contains_by Path.beq r seen
             then Build.collect_root_digests tool rest seen acc
             else do {
                 let d <- Build.closure_digest_with tool r;
@@ -331,7 +331,7 @@ def Build.collect_root_digests (tool : DigestTool) (files : List String) (seen :
 /// likewise taken once per file, so widening `triples` costs only the cheap
 /// hash per extra triple.
 #[partial]
-def Build.collect_artifacts (tool : DigestTool) (compiler : String) (files : List String) (roots : List (Pair String String)) (triples : List String) (acc : List String) : IO (Result String (List String)) :=
+def Build.collect_artifacts (tool : DigestTool) (compiler : String) (files : List String) (roots : List (Pair Path String)) (triples : List String) (acc : List String) : IO (Result String (List String)) :=
     match files {
         List.empty => return (ok acc),
         List.cons f rest => do {
@@ -390,10 +390,10 @@ def Build.artifact_keys_for_one (file_digest : String) (closure : String) (compi
 /// never written is not an error for any of these verbs, so the absent
 /// case is `[]` rather than a failure.
 #[partial]
-def Build.dir_names (d : String) : IO (List String) := do {
-    let there <- IO.is_dir (Path.path d);
+def Build.dir_names (d : Path) : IO (List String) := do {
+    let there <- IO.is_dir d;
     if there then do {
-        let entries <- IO.list_dir (Path.path d);
+        let entries <- IO.list_dir d;
         return (List.map Path.file_name entries)
     }
     else return List.empty
@@ -401,12 +401,12 @@ def Build.dir_names (d : String) : IO (List String) := do {
 
 /// The paths that exist, in the order given.
 #[partial]
-def Build.present_paths (paths : List String) (acc : List String) : IO (List String) :=
+def Build.present_paths (paths : List Path) (acc : List String) : IO (List String) :=
     match paths {
         List.empty => return acc,
         List.cons p rest => do {
-            let there <- IO.file_exists (Path.path p);
-            if there then Build.present_paths rest (List.append acc [p])
+            let there <- IO.file_exists p;
+            if there then Build.present_paths rest (List.append acc [Path.to_string p])
             else Build.present_paths rest acc
         }
     }
@@ -436,7 +436,7 @@ def Build.quote_each (paths : List String) (acc : List String) : List String :=
 /// that rule reads as not-ok -- the direction that flags rather than waves
 /// through, which is the same rule a missing `wc` deserves.
 #[partial]
-def Build.present_size (paths : List String) : IO I64 := do {
+def Build.present_size (paths : List Path) : IO I64 := do {
     let present <- Build.present_paths paths List.empty;
     match present {
         List.empty => return 0,
@@ -467,19 +467,19 @@ def Build.size_of (out : String) : I64 :=
 /// would go missing is `test`, exactly the kind whose removal rules are
 /// not decided yet.
 #[partial]
-pub def Build.remove_entry (target_dir : String) (kind : String) (key : String) : IO I64 := do {
+pub def Build.remove_entry (target_dir : Path) (kind : String) (key : String) : IO I64 := do {
     if String.beq kind "store"
     then do {
-        let _a <- exec_cmd "rm" ["-f", Build.store_path target_dir artifact key ""];
-        exec_cmd "rm" ["-f", Build.artifact_ir_path target_dir key]
+        let _a <- exec_cmd "rm" ["-f", Path.to_string (Build.store_path target_dir artifact key "")];
+        exec_cmd "rm" ["-f", Path.to_string (Build.artifact_ir_path target_dir key)]
     }
-    else if String.beq kind "check" then exec_cmd "rm" ["-rf", Build.entry_root_named target_dir "check" ++ "/" ++ key]
-    else if String.beq kind "test" then exec_cmd "rm" ["-rf", Build.entry_root_named target_dir "test" ++ "/" ++ key]
+    else if String.beq kind "check" then exec_cmd "rm" ["-rf", Path.to_string (Build.entry_root_named target_dir "check") ++ "/" ++ key]
+    else if String.beq kind "test" then exec_cmd "rm" ["-rf", Path.to_string (Build.entry_root_named target_dir "test") ++ "/" ++ key]
     else return 0
 }
 
 #[partial]
-def Build.remove_entries (target_dir : String) (kind : String) (keys : List String) (n : I64) : IO I64 :=
+def Build.remove_entries (target_dir : Path) (kind : String) (keys : List String) (n : I64) : IO I64 :=
     match keys {
         List.empty => return n,
         List.cons k rest => do {
@@ -504,15 +504,15 @@ def Build.remove_entries (target_dir : String) (kind : String) (keys : List Stri
 /// included. With no global store yet that is the only honest meaning the
 /// flag can have: there is nothing to keep across it.
 #[partial]
-pub def Build.clean_run (target_dir : String) (all : Bool) : IO I64 := do {
-    let there <- IO.is_dir (Path.path target_dir);
+pub def Build.clean_run (target_dir : Path) (all : Bool) : IO I64 := do {
+    let there <- IO.is_dir target_dir;
     if Bool.not there then do {
-        IO.println ("clean: nothing to remove -- " ++ target_dir ++ " does not exist");
+        IO.println ("clean: nothing to remove -- " ++ Path.to_string target_dir ++ " does not exist");
         return 0
     }
     else if all then do {
-        IO.println ("clean --all: removing " ++ target_dir ++ " (the store included)");
-        let rc <- exec_cmd "rm" ["-rf", target_dir];
+        IO.println ("clean --all: removing " ++ Path.to_string target_dir ++ " (the store included)");
+        let rc <- exec_cmd "rm" ["-rf", Path.to_string target_dir];
         if rc == 0 then return 0
         else do {
             IO.println ("clean --all: rm failed with status " ++ I64.to_string rc);
@@ -524,24 +524,24 @@ pub def Build.clean_run (target_dir : String) (all : Bool) : IO I64 := do {
         let outputs : List String := List.filter Build.is_output_dir names;
         let gone <- Build.remove_each target_dir outputs 0;
         if gone == 0 then do {
-            IO.println ("clean: nothing to remove under " ++ target_dir ++ " (no output directories)");
+            IO.println ("clean: nothing to remove under " ++ Path.to_string target_dir ++ " (no output directories)");
             return 0
         }
         else do {
             IO.println ("clean: removed " ++ I64.to_string gone ++ " output director(ies): "
                 ++ List.intercalate " " outputs);
-            IO.println ("clean: the store is untouched (" ++ target_dir ++ "/{store,check,test})");
+            IO.println ("clean: the store is untouched (" ++ Path.to_string target_dir ++ "/{store,check,test})");
             return 0
         }
     }
 }
 
 #[partial]
-def Build.remove_each (target_dir : String) (names : List String) (n : I64) : IO I64 :=
+def Build.remove_each (target_dir : Path) (names : List String) (n : I64) : IO I64 :=
     match names {
         List.empty => return n,
         List.cons name rest => do {
-            let rc <- exec_cmd "rm" ["-rf", target_dir ++ "/" ++ name];
+            let rc <- exec_cmd "rm" ["-rf", Path.to_string target_dir ++ "/" ++ name];
             if rc == 0 then Build.remove_each target_dir rest (n + 1)
             else Build.remove_each target_dir rest n
         }
@@ -583,8 +583,8 @@ pub def Build.check_state (has_out : Bool) (has_errors : Bool) (errors_ok : Bool
 /// question rather than folded into `check_state` so the caller states the
 /// three facts about an entry the same way for both kinds.
 #[partial]
-def Build.errors_parse (path : String) : IO Bool := do {
-    let raw <- Build.read_leaf (Path.path path);
+def Build.errors_parse (path : Path) : IO Bool := do {
+    let raw <- Build.read_leaf path;
     return (match raw {
         Option.none => false,
         Option.some text => match parse_i64 (String.trim text) {
@@ -601,7 +601,7 @@ def Build.errors_parse (path : String) : IO Bool := do {
 /// describe, and the summary below says so rather than printing an empty
 /// column for them.
 #[partial]
-pub def Build.entry_views (target_dir : String) : IO (List EntryView) := do {
+pub def Build.entry_views (target_dir : Path) : IO (List EntryView) := do {
     let names_a <- Build.dir_names (Build.entry_root_named target_dir "store");
     let names_c <- Build.dir_names (Build.entry_root_named target_dir "check");
     let names_t <- Build.dir_names (Build.entry_root_named target_dir "test");
@@ -615,7 +615,7 @@ pub def Build.entry_views (target_dir : String) : IO (List EntryView) := do {
 /// from are both there -- the same structural rule `artifact_state`
 /// applies to an artifact, which is why it is reused rather than restated.
 #[partial]
-def Build.driver_views (root : String) (names : List String) (seen : List String) : IO (List EntryView) :=
+def Build.driver_views (root : Path) (names : List String) (seen : List String) : IO (List EntryView) :=
     match names {
         List.empty => return List.empty,
         List.cons name rest => do {
@@ -628,7 +628,7 @@ def Build.driver_views (root : String) (names : List String) (seen : List String
     }
 
 #[partial]
-def Build.driver_seen (root : String) (names : List String) (seen : List String) (key : String) : IO (List EntryView) := do {
+def Build.driver_seen (root : Path) (names : List String) (seen : List String) (key : String) : IO (List EntryView) := do {
     if List.contains_by String.beq key seen
     then Build.driver_views root names seen
     else do {
@@ -639,11 +639,11 @@ def Build.driver_seen (root : String) (names : List String) (seen : List String)
 }
 
 #[partial]
-def Build.driver_view (root : String) (key : String) : IO EntryView := do {
-    let bin : String := Build.test_entry_bin root key;
-    let ir : String := Build.test_entry_ir root key;
-    let has_bin <- IO.file_exists (Path.path bin);
-    let has_ir <- IO.file_exists (Path.path ir);
+def Build.driver_view (root : Path) (key : String) : IO EntryView := do {
+    let bin : Path := Build.test_entry_bin root key;
+    let ir : Path := Build.test_entry_ir root key;
+    let has_bin <- IO.file_exists bin;
+    let has_ir <- IO.file_exists ir;
     let size <- Build.present_size [bin, ir];
     match Build.artifact_state has_bin has_ir size {
         Pair.pair ok detail => return (EntryView.entry_view "test" key size ok detail)
@@ -651,7 +651,7 @@ def Build.driver_view (root : String) (key : String) : IO EntryView := do {
 }
 
 #[partial]
-def Build.artifact_views (target_dir : String) (names : List String) (seen : List String) (acc : List EntryView) : IO (List EntryView) :=
+def Build.artifact_views (target_dir : Path) (names : List String) (seen : List String) (acc : List EntryView) : IO (List EntryView) :=
     match names {
         List.empty => return acc,
         List.cons name rest => do {
@@ -664,7 +664,7 @@ def Build.artifact_views (target_dir : String) (names : List String) (seen : Lis
     }
 
 #[partial]
-def Build.artifact_seen (target_dir : String) (names : List String) (seen : List String) (acc : List EntryView) (key : String) : IO (List EntryView) := do {
+def Build.artifact_seen (target_dir : Path) (names : List String) (seen : List String) (acc : List EntryView) (key : String) : IO (List EntryView) := do {
     if List.contains_by String.beq key seen
     then Build.artifact_views target_dir names seen acc
     else do {
@@ -674,11 +674,11 @@ def Build.artifact_seen (target_dir : String) (names : List String) (seen : List
 }
 
 #[partial]
-def Build.artifact_view (target_dir : String) (key : String) : IO EntryView := do {
-    let bin : String := Build.store_path target_dir artifact key "";
-    let ir : String := Build.artifact_ir_path target_dir key;
-    let has_bin <- IO.file_exists (Path.path bin);
-    let has_ir <- IO.file_exists (Path.path ir);
+def Build.artifact_view (target_dir : Path) (key : String) : IO EntryView := do {
+    let bin : Path := Build.store_path target_dir artifact key "";
+    let ir : Path := Build.artifact_ir_path target_dir key;
+    let has_bin <- IO.file_exists bin;
+    let has_ir <- IO.file_exists ir;
     let size <- Build.present_size [bin, ir];
     match Build.artifact_state has_bin has_ir size {
         Pair.pair ok detail => return (EntryView.entry_view "artifact" key size ok detail)
@@ -686,7 +686,7 @@ def Build.artifact_view (target_dir : String) (key : String) : IO EntryView := d
 }
 
 #[partial]
-def Build.check_views (root : String) (names : List String) (seen : List String) : IO (List EntryView) :=
+def Build.check_views (root : Path) (names : List String) (seen : List String) : IO (List EntryView) :=
     match names {
         List.empty => return List.empty,
         List.cons name rest => do {
@@ -699,7 +699,7 @@ def Build.check_views (root : String) (names : List String) (seen : List String)
     }
 
 #[partial]
-def Build.check_seen (root : String) (names : List String) (seen : List String) (key : String) : IO (List EntryView) := do {
+def Build.check_seen (root : Path) (names : List String) (seen : List String) (key : String) : IO (List EntryView) := do {
     if List.contains_by String.beq key seen
     then Build.check_views root names seen
     else do {
@@ -710,11 +710,11 @@ def Build.check_seen (root : String) (names : List String) (seen : List String) 
 }
 
 #[partial]
-def Build.check_view (root : String) (key : String) : IO EntryView := do {
-    let out_path : String := Build.check_entry_leaf root key "out";
-    let errors_path : String := Build.check_entry_leaf root key "errors";
-    let has_out <- IO.file_exists (Path.path out_path);
-    let has_errors <- IO.file_exists (Path.path errors_path);
+def Build.check_view (root : Path) (key : String) : IO EntryView := do {
+    let out_path : Path := Build.check_entry_leaf root key "out";
+    let errors_path : Path := Build.check_entry_leaf root key "errors";
+    let has_out <- IO.file_exists out_path;
+    let has_errors <- IO.file_exists errors_path;
     let errors_ok <- Build.errors_parse errors_path;
     let size <- Build.present_size [out_path, errors_path];
     match Build.check_state has_out has_errors errors_ok {
@@ -816,8 +816,8 @@ def Build.print_if_bad (v : EntryView) : IO I64 := do {
 /// The sentence both listing verbs end with: what is here, and what is not
 /// here yet.
 #[partial]
-def Build.print_kind_note (target_dir : String) : IO I64 := do {
-    IO.println ("  (" ++ target_dir ++ "/db has no writer yet, so nothing in it is listed)");
+def Build.print_kind_note (target_dir : Path) : IO I64 := do {
+    IO.println ("  (" ++ Path.to_string target_dir ++ "/db has no writer yet, so nothing in it is listed)");
     return 0
 }
 
@@ -840,7 +840,7 @@ pub def Build.view_is_test (v : EntryView) : Bool :=
 
 /// `monad store ls`: one line per entry, then a summary.
 #[partial]
-pub def Build.store_ls (target_dir : String) : IO I64 := do {
+pub def Build.store_ls (target_dir : Path) : IO I64 := do {
     let views <- Build.entry_views target_dir;
     let _p <- Build.print_views views;
     let _n <- Build.print_kind_note target_dir;
@@ -869,7 +869,7 @@ pub def Build.store_ls (target_dir : String) : IO I64 := do {
 /// section promises for settling a suspected false hit, so any failed
 /// entry makes this exit 1.
 #[partial]
-pub def Build.store_verify (target_dir : String) : IO I64 := do {
+pub def Build.store_verify (target_dir : Path) : IO I64 := do {
     let views <- Build.entry_views target_dir;
     let _p <- Build.print_failures views;
     let _n <- Build.print_kind_note target_dir;
@@ -955,13 +955,13 @@ pub def Build.unreachable (keep : List String) (have : List String) : List Strin
 /// only the host's own triple classifies every cross-built artifact as
 /// garbage and removes it. `TargetSpec.keep_triples` is what the CLI supplies.
 #[partial]
-pub def Build.gc_run (files : List String) (target_dir : String) (triples : List String) (apply : Bool) : IO I64 := do {
+pub def Build.gc_run (files : List String) (target_dir : Path) (triples : List String) (apply : Bool) : IO I64 := do {
     let reach <- Build.reach_of files target_dir triples;
     match reach {
         Reach.refused m => do {
             IO.println ("gc: refusing to remove anything -- " ++ m);
             IO.println "gc: a gc removes only what the current tree cannot reach, so an incomplete reachable set would delete the store itself";
-            IO.println ("gc: nothing was removed, " ++ target_dir ++ " is untouched");
+            IO.println ("gc: nothing was removed, " ++ Path.to_string target_dir ++ " is untouched");
             return 1
         },
         Reach.known artifacts checks tests compiler => do {
@@ -994,7 +994,7 @@ pub def Build.gc_run (files : List String) (target_dir : String) (triples : List
                 let na <- Build.remove_entries target_dir "store" drop_a 0;
                 let nc <- Build.remove_entries target_dir "check" drop_c 0;
                 let nt <- Build.remove_entries target_dir "test" drop_t 0;
-                IO.println ("gc: removed " ++ I64.to_string (na + nc + nt) ++ " entry(ies) from " ++ target_dir);
+                IO.println ("gc: removed " ++ I64.to_string (na + nc + nt) ++ " entry(ies) from " ++ Path.to_string target_dir);
                 return 0
             }
         }
@@ -1010,7 +1010,7 @@ pub def Build.gc_run (files : List String) (target_dir : String) (triples : List
 /// REFUSAL for the reason `Build.collect_check_keys` gives: an incomplete
 /// reachable set is a store-wiping bug in the direction `gc` moves.
 #[partial]
-def Build.collect_test_keys (files : List String) (target_dir : String) (triples : List String) (acc : List String) : IO (Result String (List String)) :=
+def Build.collect_test_keys (files : List String) (target_dir : Path) (triples : List String) (acc : List String) : IO (Result String (List String)) :=
     match triples {
         List.empty => return (ok acc),
         List.cons t rest => do {

@@ -28,11 +28,11 @@ def Build.check_fixture_root (tag : String) : String :=
 
 /// An empty fixture root, removed first so a rerun starts clean.
 #[partial]
-def Build.check_fresh_fixture (tag : String) : IO String := do {
+def Build.check_fresh_fixture (tag : String) : IO Path := do {
     let d : String := Build.check_fixture_root tag;
     let _r <- Proc.capture "sh" ["-c", String.concat "rm -rf " (Proc.shell_quote d)];
-    let _m <- Build.ensure_dir (String.concat d "/src");
-    return d
+    let _m <- Build.ensure_dir (Path.unsafe (String.concat d "/src"));
+    return (Path.unsafe d)
 }
 
 #[partial]
@@ -42,8 +42,8 @@ def Build.check_seed_file (d : String) (rel : String) (content : String) : IO I6
 }
 
 #[partial]
-def Build.check_drop_fixture (d : String) : IO I64 := do {
-    let r <- Proc.capture "sh" ["-c", String.concat "rm -rf " (Proc.shell_quote d)];
+def Build.check_drop_fixture (d : Path) : IO I64 := do {
+    let r <- Proc.capture "sh" ["-c", String.concat "rm -rf " (Proc.shell_quote (Path.to_string d))];
     match r { Pair.pair code _out => return code }
 }
 
@@ -52,12 +52,12 @@ def Build.check_drop_fixture (d : String) : IO I64 := do {
 /// manifests to find. Both are ordinary motes -- a `[mote] name` and a
 /// declared dependency are all the walk reads.
 #[partial]
-def Build.check_fresh_dep_fixture (tag : String) : IO String := do {
+def Build.check_fresh_dep_fixture (tag : String) : IO Path := do {
     let d <- Build.check_fresh_fixture tag;
-    let app : String := String.concat d "/app";
-    let lib : String := String.concat d "/lib";
-    let _m1 <- Build.ensure_dir (String.concat app "/src");
-    let _m2 <- Build.ensure_dir (String.concat lib "/src");
+    let app : String := String.concat (Path.to_string d) "/app";
+    let lib : String := String.concat (Path.to_string d) "/lib";
+    let _m1 <- Build.ensure_dir (Path.unsafe (String.concat app "/src"));
+    let _m2 <- Build.ensure_dir (Path.unsafe (String.concat lib "/src"));
     let _t1 <- Build.check_seed_file app "mote.toml" "[mote]\nname = \"app\"\n\n[dependencies.lib]\npath = \"../lib\"\n";
     let _t2 <- Build.check_seed_file lib "mote.toml" "[mote]\nname = \"lib\"\n";
     let _a <- Build.check_seed_file app "src/a.mo" "def a : I64 := 1\n";
@@ -78,7 +78,7 @@ def Build.key_or_empty (p : CachePlan) (f : String) : String :=
 /// A hand-built active plan, so the key-comparison tests need no
 /// filesystem and no compiler binary.
 def Build.plan_over (keys : List (Pair String String)) : CachePlan :=
-    CachePlan.active "/somewhere/check" keys
+    CachePlan.active (Path.unsafe "/somewhere/check") keys
 
 // ─── check_block: what a hit replays, byte for byte ───
 
@@ -131,7 +131,10 @@ def test_worth_caching_is_true_for_two_files : Bool :=
 
 #[test]
 def test_inactive_plan_has_no_root : Bool :=
-    String.is_empty (Build.cache_plan_root (CachePlan.inactive ""))
+    (match Build.cache_plan_root (CachePlan.inactive "") {
+        Option.none => true,
+        Option.some _ => false,
+    })
 
 #[test]
 def test_inactive_plan_has_no_keys : Bool :=
@@ -168,7 +171,10 @@ def test_inactive_plan_is_not_active : Bool :=
 
 #[test]
 def test_active_plan_has_its_root : Bool :=
-    String.beq (Build.cache_plan_root (Build.plan_over List.empty)) "/somewhere/check"
+    String.beq (Path.to_string (match Build.cache_plan_root (Build.plan_over List.empty) {
+        Option.some root => root,
+        Option.none => Path.unsafe "",
+    })) "/somewhere/check"
 
 // ─── key lookup ───
 
@@ -228,7 +234,7 @@ def test_key_is_stable_for_the_same_inputs : Bool :=
 
 #[test]
 def test_entry_dir_is_root_slash_key : Bool :=
-    String.beq (Build.check_entry_dir "/t/check" "abc") "/t/check/abc"
+    String.beq (Path.to_string (Build.check_entry_dir (Path.unsafe "/t/check") "abc")) "/t/check/abc"
 
 // ─── the entry: write then read ───
 
@@ -285,10 +291,10 @@ def test_entry_round_trips_a_multiline_block : IO Bool := do {
 #[test]
 def test_entry_without_a_warnings_leaf_is_a_hit_with_zero_warnings : IO Bool := do {
     let d <- Build.check_fresh_fixture "oldfmt";
-    let dir : String := Build.check_entry_dir d "k";
+    let dir : Path := Build.check_entry_dir d "k";
     let _m <- Build.ensure_dir dir;
-    let _w1 <- Build.write_leaf (Path.path (String.concat dir "/errors")) "0";
-    let _w2 <- Build.write_leaf (Path.path (String.concat dir "/out")) "ok    a.mo";
+    let _w1 <- Build.write_leaf (Path.unsafe (String.concat (Path.to_string dir) "/errors")) "0";
+    let _w2 <- Build.write_leaf (Path.unsafe (String.concat (Path.to_string dir) "/out")) "ok    a.mo";
     let r <- Build.check_entry_read d "k";
     let _c <- Build.check_drop_fixture d;
     match r {
@@ -319,9 +325,9 @@ def test_entry_read_of_a_missing_key_is_none : IO Bool := do {
 #[test]
 def test_entry_read_without_the_output_is_none : IO Bool := do {
     let d <- Build.check_fresh_fixture "noout";
-    let dir : String := Build.check_entry_dir d "k";
+    let dir : Path := Build.check_entry_dir d "k";
     let _m <- Build.ensure_dir dir;
-    let _w <- Build.write_leaf (Path.path (String.concat dir "/errors")) "1";
+    let _w <- Build.write_leaf (Path.unsafe (String.concat (Path.to_string dir) "/errors")) "1";
     let r <- Build.check_entry_read d "k";
     let _c <- Build.check_drop_fixture d;
     match r { Option.none => return true, Option.some _p => return false }
@@ -334,9 +340,9 @@ def test_entry_read_without_the_output_is_none : IO Bool := do {
 #[test]
 def test_entry_read_without_the_count_is_none : IO Bool := do {
     let d <- Build.check_fresh_fixture "nocount";
-    let dir : String := Build.check_entry_dir d "k";
+    let dir : Path := Build.check_entry_dir d "k";
     let _m <- Build.ensure_dir dir;
-    let _w <- Build.write_leaf (Path.path (String.concat dir "/out")) "FAIL  a.mo (1 error(s))\nboom";
+    let _w <- Build.write_leaf (Path.unsafe (String.concat (Path.to_string dir) "/out")) "FAIL  a.mo (1 error(s))\nboom";
     let r <- Build.check_entry_read d "k";
     let _c <- Build.check_drop_fixture d;
     match r { Option.none => return true, Option.some _p => return false }
@@ -348,10 +354,10 @@ def test_entry_read_without_the_count_is_none : IO Bool := do {
 #[test]
 def test_entry_read_of_a_corrupt_count_is_none : IO Bool := do {
     let d <- Build.check_fresh_fixture "corrupt";
-    let dir : String := Build.check_entry_dir d "k";
+    let dir : Path := Build.check_entry_dir d "k";
     let _m <- Build.ensure_dir dir;
-    let _w1 <- Build.write_leaf (Path.path (String.concat dir "/errors")) "3x";
-    let _w2 <- Build.write_leaf (Path.path (String.concat dir "/out")) "ok    a.mo";
+    let _w1 <- Build.write_leaf (Path.unsafe (String.concat (Path.to_string dir) "/errors")) "3x";
+    let _w2 <- Build.write_leaf (Path.unsafe (String.concat (Path.to_string dir) "/out")) "ok    a.mo";
     let r <- Build.check_entry_read d "k";
     let _c <- Build.check_drop_fixture d;
     match r { Option.none => return true, Option.some _p => return false }
@@ -363,10 +369,10 @@ def test_entry_read_of_a_corrupt_count_is_none : IO Bool := do {
 #[test]
 def test_entry_read_of_an_empty_count_is_none : IO Bool := do {
     let d <- Build.check_fresh_fixture "emptycount";
-    let dir : String := Build.check_entry_dir d "k";
+    let dir : Path := Build.check_entry_dir d "k";
     let _m <- Build.ensure_dir dir;
-    let _w1 <- Build.write_leaf (Path.path (String.concat dir "/errors")) "";
-    let _w2 <- Build.write_leaf (Path.path (String.concat dir "/out")) "ok    a.mo";
+    let _w1 <- Build.write_leaf (Path.unsafe (String.concat (Path.to_string dir) "/errors")) "";
+    let _w2 <- Build.write_leaf (Path.unsafe (String.concat (Path.to_string dir) "/out")) "ok    a.mo";
     let r <- Build.check_entry_read d "k";
     let _c <- Build.check_drop_fixture d;
     match r { Option.none => return true, Option.some _p => return false }
@@ -392,13 +398,13 @@ def test_entry_read_does_not_prefix_match : IO Bool := do {
 /// only ones that touch the real binary.
 #[test]
 def test_check_plan_off_when_not_requested : IO Bool := do {
-    let p <- Build.check_plan ["a.mo", "b.mo"] "target" false;
+    let p <- Build.check_plan ["a.mo", "b.mo"] (Path.unsafe "target") false;
     return (Bool.not (Build.cache_plan_active p)) && String.is_empty (Build.cache_plan_reason p)
 }
 
 #[test]
 def test_check_plan_off_for_a_single_file : IO Bool := do {
-    let p <- Build.check_plan ["a.mo"] "target" true;
+    let p <- Build.check_plan ["a.mo"] (Path.unsafe "target") true;
     return (Bool.not (Build.cache_plan_active p)) && String.is_empty (Build.cache_plan_reason p)
 }
 
@@ -416,19 +422,22 @@ def test_check_plan_off_for_a_single_file : IO Bool := do {
 #[test]
 def test_check_plan_keys_every_file_and_is_stable : IO Bool := do {
     let d <- Build.check_fresh_fixture "plan";
-    let _w1 <- Build.check_seed_file d "src/a.mo" "def a : I64 := 1\n";
-    let _w2 <- Build.check_seed_file d "src/b.mo" "def b : I64 := 2\n";
-    let fa : String := String.concat d "/src/a.mo";
-    let fb : String := String.concat d "/src/b.mo";
-    let p1 <- Build.check_plan [fa, fb] (String.concat d "/target") true;
-    let p2 <- Build.check_plan [fa, fb] (String.concat d "/target") true;
+    let _w1 <- Build.check_seed_file (Path.to_string d) "src/a.mo" "def a : I64 := 1\n";
+    let _w2 <- Build.check_seed_file (Path.to_string d) "src/b.mo" "def b : I64 := 2\n";
+    let fa : String := String.concat (Path.to_string d) "/src/a.mo";
+    let fb : String := String.concat (Path.to_string d) "/src/b.mo";
+    let p1 <- Build.check_plan [fa, fb] (Path.unsafe (String.concat (Path.to_string d) "/target")) true;
+    let p2 <- Build.check_plan [fa, fb] (Path.unsafe (String.concat (Path.to_string d) "/target")) true;
     let ka1 : String := Build.key_or_empty p1 fa;
     let kb1 : String := Build.key_or_empty p1 fb;
     let ka2 : String := Build.key_or_empty p2 fa;
     let _c <- Build.check_drop_fixture d;
     return Build.cache_plan_active p1
         && Build.cache_plan_active p2
-        && String.beq (Build.cache_plan_root p1) (String.concat d "/target/check")
+        && (match Build.cache_plan_root p1 {
+            Option.some root => String.beq (Path.to_string root) (String.concat (Path.to_string d) "/target/check"),
+            Option.none => false,
+        })
         && Bool.not (String.is_empty ka1)
         && Bool.not (String.is_empty kb1)
         && Bool.not (String.beq ka1 kb1)
@@ -449,13 +458,13 @@ def test_check_plan_keys_every_file_and_is_stable : IO Bool := do {
 #[test]
 def test_key_moves_when_a_declared_dependency_changes : IO Bool := do {
     let d <- Build.check_fresh_dep_fixture "dep";
-    let fa : String := String.concat d "/app/src/a.mo";
-    let fb : String := String.concat d "/app/src/b.mo";
-    let target : String := String.concat d "/target";
-    let p1 <- Build.check_plan [fa, fb] target true;
+    let fa : String := String.concat (Path.to_string d) "/app/src/a.mo";
+    let fb : String := String.concat (Path.to_string d) "/app/src/b.mo";
+    let target : String := String.concat (Path.to_string d) "/target";
+    let p1 <- Build.check_plan [fa, fb] (Path.unsafe target) true;
     let k1 : String := Build.key_or_empty p1 fa;
-    let _w <- Build.check_seed_file d "lib/src/l.mo" "def l : I64 := 2\n";
-    let p2 <- Build.check_plan [fa, fb] target true;
+    let _w <- Build.check_seed_file (Path.to_string d) "lib/src/l.mo" "def l : I64 := 2\n";
+    let p2 <- Build.check_plan [fa, fb] (Path.unsafe target) true;
     let k2 : String := Build.key_or_empty p2 fa;
     let _c <- Build.check_drop_fixture d;
     return Bool.not (String.is_empty k1)
@@ -470,16 +479,16 @@ def test_key_moves_when_a_declared_dependency_changes : IO Bool := do {
 #[test]
 def test_key_ignores_a_mote_the_target_does_not_declare : IO Bool := do {
     let d <- Build.check_fresh_dep_fixture "undeclared";
-    let fa : String := String.concat d "/app/src/a.mo";
-    let fb : String := String.concat d "/app/src/b.mo";
-    let target : String := String.concat d "/target";
-    let p1 <- Build.check_plan [fa, fb] target true;
+    let fa : String := String.concat (Path.to_string d) "/app/src/a.mo";
+    let fb : String := String.concat (Path.to_string d) "/app/src/b.mo";
+    let target : String := String.concat (Path.to_string d) "/target";
+    let p1 <- Build.check_plan [fa, fb] (Path.unsafe target) true;
     let k1 : String := Build.key_or_empty p1 fa;
-    let other : String := String.concat d "/other";
-    let _m <- Build.ensure_dir (String.concat other "/src");
+    let other : String := String.concat (Path.to_string d) "/other";
+    let _m <- Build.ensure_dir (Path.unsafe (String.concat other "/src"));
     let _t <- Build.check_seed_file other "mote.toml" "[mote]\nname = \"other\"\n";
     let _o <- Build.check_seed_file other "src/o.mo" "def o : I64 := 9\n";
-    let p2 <- Build.check_plan [fa, fb] target true;
+    let p2 <- Build.check_plan [fa, fb] (Path.unsafe target) true;
     let k2 : String := Build.key_or_empty p2 fa;
     let _c <- Build.check_drop_fixture d;
     return Bool.not (String.is_empty k1) && String.beq k1 k2
@@ -506,5 +515,5 @@ def test_key_ignores_a_mote_the_target_does_not_declare : IO Bool := do {
 def test_mote_root_normalizes_the_working_directory : IO Bool := do {
     let a <- Build.mote_root_of "main.mo";
     let b <- Build.mote_root_of "./main.mo";
-    return String.beq "." a && String.beq a b
+    return String.beq "." (Path.to_string a) && Path.beq a b
 }

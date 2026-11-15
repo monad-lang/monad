@@ -19,24 +19,24 @@ use build::identity {Build.compiler_digest, Build.compiler_exe_path}
 #[test]
 def test_target_dir_flag_wins_over_everything : Bool :=
     String.beq
-        (Build.resolve_target_dir "flagdir" (Option.some "envdir") (Option.some (Path.unsafe "configdir")) "root")
+        (Path.to_string (Build.resolve_target_dir "flagdir" (Option.some "envdir") (Option.some (Path.unsafe "configdir")) "root"))
         "flagdir"
 
 #[test]
 def test_target_dir_env_beats_config : Bool :=
     String.beq
-        (Build.resolve_target_dir "" (Option.some "envdir") (Option.some (Path.unsafe "configdir")) "root")
+        (Path.to_string (Build.resolve_target_dir "" (Option.some "envdir") (Option.some (Path.unsafe "configdir")) "root"))
         "envdir"
 
 #[test]
 def test_target_dir_config_beats_the_default : Bool :=
     String.beq
-        (Build.resolve_target_dir "" Option.none (Option.some (Path.unsafe "target-monad")) "root")
+        (Path.to_string (Build.resolve_target_dir "" Option.none (Option.some (Path.unsafe "target-monad")) "root"))
         "target-monad"
 
 #[test]
 def test_target_dir_falls_back_to_root_target : Bool :=
-    String.beq (Build.resolve_target_dir "" Option.none Option.none "root") "root/target"
+    String.beq (Path.to_string (Build.resolve_target_dir "" Option.none Option.none "root")) "root/target"
 
 /// An empty flag and an empty env value mean "not set" rather than "set to
 /// the empty string" -- otherwise a `MONAD_TARGET_DIR=` in the environment
@@ -45,24 +45,24 @@ def test_target_dir_falls_back_to_root_target : Bool :=
 /// is `none` where it is parsed (`Mote.config_target_dir_of_text`).
 #[test]
 def test_target_dir_treats_empty_values_as_unset : Bool :=
-    String.beq (Build.resolve_target_dir "" (Option.some "") Option.none "root") "root/target"
+    String.beq (Path.to_string (Build.resolve_target_dir "" (Option.some "") Option.none "root")) "root/target"
 
 /// The case that produces an ABSOLUTE path if written naively: an empty
 /// root must give `target`, never `/target`.
 #[test]
 def test_target_dir_of_an_empty_root_is_relative : Bool :=
-    String.beq (Build.resolve_target_dir "" Option.none Option.none "") "target"
+    String.beq (Path.to_string (Build.resolve_target_dir "" Option.none Option.none "")) "target"
 
 #[test]
 def test_target_dir_of_dot_root_is_relative : Bool :=
-    String.beq (Build.resolve_target_dir "" Option.none Option.none ".") "target"
+    String.beq (Path.to_string (Build.resolve_target_dir "" Option.none Option.none ".")) "target"
 
 // ─── store paths ───
 
 #[test]
 def test_store_path_separates_the_two_entry_kinds : Bool :=
-    String.beq (Build.store_path "t" Entry.artifact "abc" "cli-0.1.0") "t/store/abc-cli-0.1.0" &&
-    String.beq (Build.store_path "t" Entry.check "abc" "") "t/check/abc"
+    String.beq (Path.to_string (Build.store_path (Path.unsafe "t") Entry.artifact "abc" "cli-0.1.0")) "t/store/abc-cli-0.1.0" &&
+    String.beq (Path.to_string (Build.store_path (Path.unsafe "t") Entry.check "abc" "")) "t/check/abc"
 
 /// The `test` kind is a NAME, not an `Entry` constructor -- adding a third
 /// constructor changed the nullary tags enough that `Entry.check` started
@@ -70,13 +70,13 @@ def test_store_path_separates_the_two_entry_kinds : Bool :=
 /// named root is the whole surface that kind needs.
 #[test]
 def test_entry_root_named_spells_the_test_kind : Bool :=
-    String.beq (Build.entry_root_named "t" "test") "t/test"
+    String.beq (Path.to_string (Build.entry_root_named (Path.unsafe "t") "test")) "t/test"
 
 /// The hash leads, so the directory sorts by key; the slug is a human
 /// convenience and is allowed to be absent.
 #[test]
 def test_store_path_omits_an_empty_slug_cleanly : Bool :=
-    String.beq (Build.store_path "t" Entry.artifact "abc" "") "t/store/abc"
+    String.beq (Path.to_string (Build.store_path (Path.unsafe "t") Entry.artifact "abc" "")) "t/store/abc"
 
 /// The IR lives in the artifact root, named by the key: no slug, no
 /// profile, no output name -- the key and the target dir, and nothing a
@@ -89,15 +89,15 @@ def test_store_path_omits_an_empty_slug_cleanly : Bool :=
 /// artifact. Two names, two artifacts, one source.
 #[test]
 def test_artifact_ir_path_is_keyed_inside_the_artifact_root : Bool :=
-    String.beq (Build.artifact_ir_path "t" "abc") "t/store/abc.ll" &&
-    String.beq (Build.artifact_ir_path "t/monad" "abc") "t/monad/store/abc.ll"
+    String.beq (Path.to_string (Build.artifact_ir_path (Path.unsafe "t") "abc")) "t/store/abc.ll" &&
+    String.beq (Path.to_string (Build.artifact_ir_path (Path.unsafe "t/monad") "abc")) "t/monad/store/abc.ll"
 
 /// Two keys are two files. If this ever collapsed, a rebuild after an edit
 /// would compile the OLD IR under the new key -- the worst failure a cache
 /// can produce, and a name collision is enough to cause it.
 #[test]
 def test_artifact_ir_path_moves_with_the_key : Bool :=
-    Bool.not (String.beq (Build.artifact_ir_path "t" "abc") (Build.artifact_ir_path "t" "abd"))
+    Bool.not (String.beq (Path.to_string (Build.artifact_ir_path (Path.unsafe "t") "abc")) (Path.to_string (Build.artifact_ir_path (Path.unsafe "t") "abd")))
 
 // ─── compiler identity ───
 

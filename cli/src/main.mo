@@ -41,7 +41,7 @@ use build::store {
     Build.target_dir_of, artifact,
 }
 use build::check {
-    Build.check_block, Build.check_entry_read, Build.check_maybe_write,
+    Build.check_block, Build.check_entry_read, Build.check_entry_read_opt, Build.check_maybe_write,
     Build.check_plan, Build.cache_plan_active, Build.cache_plan_key,
     Build.cache_plan_reason, Build.cache_plan_root, Build.mote_root_of, CachePlan,
 }
@@ -275,7 +275,7 @@ def profile_name (debug : Bool) : String := if debug then "debug" else "release"
 /// workspace's store, which `monad build` has always done and a flag must
 /// not quietly change.
 #[partial]
-def build_target_dir (target_dir_flag : String) (src : String) : IO String := do {
+def build_target_dir (target_dir_flag : String) (src : String) : IO Path := do {
     if String.is_empty target_dir_flag then Build.target_dir_for src else target_dir_flagged target_dir_flag
 }
 
@@ -288,11 +288,11 @@ def build_cached (src : String) (dest_name : Path) (target_dir_flag : String) (v
 /// virtual workspace root lives outside the member it names in `mote = ...`;
 /// deriving the root from the source path would key the cache on the wrong
 /// closure (a false hit when the member changes).
-def build_cached_at (src : String) (root : String) (dest_name : Path) (target_dir_flag : String) (verbose : Bool) (debug : Bool) (no_cache : Bool) (target : TargetSpec) : IO I64 := do {
+def build_cached_at (src : String) (root : Path) (dest_name : Path) (target_dir_flag : String) (verbose : Bool) (debug : Bool) (no_cache : Bool) (target : TargetSpec) : IO I64 := do {
     // Resolved either way: it is where the binary lands, not a cache
     // decision.
     let target_dir <- build_target_dir target_dir_flag src;
-    let dest_dir : String := build_dest_dir target_dir debug;
+    let dest_dir : Path := build_dest_dir target_dir debug;
     // The target is in the key, so a native aarch64 or darwin build cannot be
     // served an x86_64 artifact. `target.triple` is a `clang -dumpmachine`
     // probe, not the constant it replaced, so the key moves with PATH.
@@ -303,21 +303,21 @@ def build_cached_at (src : String) (root : String) (dest_name : Path) (target_di
     // artifact, and it is the case the cache has already declined to serve
     // -- so nothing stored can ever disagree with it.
     let ir : Option Path := match key {
-        Result.ok h => Option.some (Path.path (Build.artifact_ir_path target_dir h)),
+        Result.ok h => Option.some (Build.artifact_ir_path target_dir h),
         Result.err _ => Option.none,
     };
     let enabled <- cache_enabled no_cache;
     if Bool.not enabled
     then do {
         stage verbose "cache off: MONAD_NO_CACHE (or --no-cache) is set";
-        compile_file { file_path := src, output_dir := (Path.path dest_dir),
+        compile_file { file_path := src, output_dir := dest_dir,
             output_name := dest_name, ir := ir, verbose := verbose,
             debug := debug, target := target }
     }
     else match key {
         Result.err m => do {
             stage verbose ("cache off: " ++ m);
-            compile_file { file_path := src, output_dir := (Path.path dest_dir),
+            compile_file { file_path := src, output_dir := dest_dir,
                 output_name := dest_name, ir := ir, verbose := verbose,
                 debug := debug, target := target }
         },
@@ -358,8 +358,8 @@ def resolve_ir_path (ir : Option Path) (output_dir : Path) (output_name : Path) 
 /// script relies on (`self-compile-turn.sh`, `build-self-hosted.sh` and
 /// `check-external-mote.sh` all pass absolute `-o` paths), so none of
 /// them change behaviour.
-def build_dest_dir (target_dir : String) (debug : Bool) : String :=
-    String.concat target_dir (String.concat "/" (profile_name debug))
+def build_dest_dir (target_dir : Path) (debug : Bool) : Path :=
+    Path.unsafe (String.concat (Path.to_string target_dir) (String.concat "/" (profile_name debug)))
 
 /// A HIT leaves the destination exactly as a MISS would -- binary AND IR.
 ///
@@ -412,9 +412,10 @@ def replay_ir_beside (ir : Option Path) (dest : String) : IO Unit :=
     }
 
 #[partial]
-def build_cached_keyed (src : String) (target_dir : String) (h : String) (ir : Option Path) (dest_name : Path) (verbose : Bool) (debug : Bool) (target : TargetSpec) : IO I64 := do {
-    let dest_dir : String := build_dest_dir target_dir debug;
-    let dest : String := Path.to_string (Path.join (Path.path dest_dir) dest_name);
+def build_cached_keyed (src : String) (target_dir : Path) (h : String) (ir : Option Path) (dest_name : Path) (verbose : Bool) (debug : Bool) (target : TargetSpec) : IO I64 := do {
+    let dest_dir : Path := build_dest_dir target_dir debug;
+    let dest : Path := Path.join dest_dir dest_name;
+    let dest_s : String := Path.to_string dest;
     // No slug. It used to be the output's bare name, which made the name an
     // INPUT: a build under `-o a` could not share with the same build under
     // `-o b`, so one unchanged source compiled twice. The name reached the
@@ -424,23 +425,23 @@ def build_cached_keyed (src : String) (target_dir : String) (h : String) (ir : O
     // alone and the entry can be named by the key alone. The human-readable
     // half belongs in `db/<hash>.json`, the metadata kind the plan's layout
     // reserves for it.
-    let entry : String := Build.store_path target_dir Entry.artifact h "";
-    let hit <- IO.file_exists (Path.path entry);
+    let entry : Path := Build.store_path target_dir Entry.artifact h "";
+    let hit <- IO.file_exists entry;
     if hit
     then do {
         // `dest`'s own parent, not `dest_dir`: `-o sub/hello` nests, and the
         // MISS path gets that directory from `link_ir`'s own mkdir while a
         // hit has to make it here. Without it `cp` fails and the run still
         // prints `cached:` -- a success line over a failing exit code.
-        let _mk <- mkdir_parent (Path.path dest);
-        let rc <- exec_cmd "cp" ["-f", entry, dest];
-        let _ir <- replay_ir_beside ir dest;
-        ok_line ("cached: " ++ dest ++ " (" ++ h ++ ")");
+        let _mk <- mkdir_parent dest;
+        let rc <- exec_cmd "cp" ["-f", Path.to_string entry, dest_s];
+        let _ir <- replay_ir_beside ir dest_s;
+        ok_line ("cached: " ++ dest_s ++ " (" ++ h ++ ")");
         return rc
     }
     else do {
         let rc <- compile_file { file_path := src,
-            output_dir := (Path.path dest_dir), output_name := dest_name,
+            output_dir := dest_dir, output_name := dest_name,
             ir := ir, verbose := verbose, debug := debug, target := target };
         if rc == 0
         then do {
@@ -452,11 +453,11 @@ def build_cached_keyed (src : String) (target_dir : String) (h : String) (ir : O
             // binary that is not the one this key names. `mv` inside the
             // store directory is the atomic step that lets an entry appear
             // complete or not at all.
-            let tmp : String := entry ++ ".tmp";
-            let wrc <- exec_cmd "cp" ["-f", dest, tmp];
+            let tmp : String := Path.to_string entry ++ ".tmp";
+            let wrc <- exec_cmd "cp" ["-f", dest_s, tmp];
             if wrc == 0
             then do {
-                let _m <- exec_cmd "mv" ["-f", tmp, entry];
+                let _m <- exec_cmd "mv" ["-f", tmp, Path.to_string entry];
                 return rc
             }
             else do {
@@ -735,8 +736,8 @@ def install_resolved (home : String) (path : String) (out_name : String) (bin : 
 /// would do.
 def install_binary (home : String) (src : String) (name : String) : IO I64 := do {
     let target_dir <- Build.target_dir_for src;
-    let dest_dir : String := build_dest_dir target_dir false;
-    let built : String := Path.to_string (Path.join (Path.path dest_dir) (Path.path name));
+    let dest_dir : Path := build_dest_dir target_dir false;
+    let built : String := Path.to_string (Path.join dest_dir (Path.path name));
     let bin_dir : String := raw_path_join home "bin";
         let dest : String := raw_path_join bin_dir name;
         let tmp : String := dest ++ ".tmp";
@@ -891,8 +892,8 @@ def run_file (path : String) (verbose : Bool) (debug : Bool) (program_args : Lis
                 // destination, retraced here to exec it: which mote owns
                 // the source, then `<target-dir>/<profile>`.
                 let target_dir <- Build.target_dir_for input.src;
-                let dest_dir : String := build_dest_dir target_dir debug;
-                let bin_path : String := Path.to_string (Path.join (Path.path dest_dir) (Path.path input.name));
+                let dest_dir : Path := build_dest_dir target_dir debug;
+                let bin_path : String := Path.to_string (Path.join dest_dir (Path.path input.name));
                 let exit_code <- exec_cmd bin_path program_args;
                 return exit_code
             }
@@ -1077,7 +1078,7 @@ def script_build_and_run_once (owner : String) (t : ScriptTarget) (target_dir_fl
     let spec <- TargetSpec.native;
     let src := Path.to_string (ScriptTarget.script_path t);
     let out_name : Path := Path.path (ScriptTarget.script_name t);
-    let rc <- build_cached_at src owner out_name target_dir_flag verbose debug no_cache spec;
+    let rc <- build_cached_at src (Path.unsafe_dir owner) out_name target_dir_flag verbose debug no_cache spec;
     if Bool.not (I64.beq rc 0i64)
     then do {
         println "script: compilation failed";
@@ -1093,8 +1094,8 @@ def script_build_and_run_once (owner : String) (t : ScriptTarget) (target_dir_fl
 def script_binary_path (target_dir_flag : String) (src : String) (out_name : Path)
     (debug : Bool) : IO String := do {
     let target_dir <- build_target_dir target_dir_flag src;
-    let dest_dir : String := build_dest_dir target_dir debug;
-    IO.pure (Path.to_string (Path.join (Path.path dest_dir) out_name))
+    let dest_dir : Path := build_dest_dir target_dir debug;
+    IO.pure (Path.to_string (Path.join dest_dir out_name))
 }
 
 // ── `monad script --watch` ───────────────────────────────────────────────
@@ -1115,7 +1116,7 @@ def script_binary_path (target_dir_flag : String) (src : String) (out_name : Pat
 def script_build_and_start (owner : String) (src : String) (out_name : Path)
     (target_dir_flag : String) (verbose : Bool) (debug : Bool) (no_cache : Bool)
     (spec : TargetSpec) (program_args : List String) : IO (Option Child) := do {
-    let rc <- build_cached_at src owner out_name target_dir_flag verbose debug no_cache spec;
+    let rc <- build_cached_at src (Path.unsafe_dir owner) out_name target_dir_flag verbose debug no_cache spec;
     if Bool.not (I64.beq rc 0i64)
     then do {
         println "script --watch: compilation failed; waiting for the next change";
@@ -1689,7 +1690,7 @@ def planned_misses (plan : CachePlan) (files : List String) : IO (List String) :
             match Build.cache_plan_key plan f {
                 Option.none => IO.pure (List.cons f rest_misses),
                 Option.some key => do {
-                    let stored <- Build.check_entry_read (Build.cache_plan_root plan) key;
+                    let stored <- Build.check_entry_read_opt (Build.cache_plan_root plan) key;
                     match stored {
                         Option.some _ => IO.pure rest_misses,
                         Option.none => IO.pure (List.cons f rest_misses),
@@ -1769,7 +1770,7 @@ def run_check_loop (cache : ModuleInfoCache) (files : List String) (checked : I6
                 // digest failed): check it, and record nothing.
                 Option.none => run_check_file cache f rest checked errors warns opts plan Option.none batch,
                 Option.some key => do {
-                    let stored <- Build.check_entry_read (Build.cache_plan_root plan) key;
+                    let stored <- Build.check_entry_read_opt (Build.cache_plan_root plan) key;
                     match stored {
                         // A hit: replay what was recorded, verbatim, and
                         // count it exactly as the original run counted
@@ -2246,10 +2247,20 @@ def cache_enabled (no_cache : Bool) : IO Bool := do {
 
 /// Make the store directory, if there is one to make.
 #[partial]
+/// The plan's store root, or `.` when the plan is inactive. Every caller
+/// consults `cache_plan_key`/`cache_plan_active` first, and an inactive
+/// plan has no keys, so the `.` is never joined into a real entry.
+def plan_root_or_cwd (plan : CachePlan) : Path :=
+    match Build.cache_plan_root plan {
+        Option.some root => root,
+        Option.none => Path.unsafe ".",
+    }
+
 def check_store_ready (plan : CachePlan) : IO I64 := do {
-    if Build.cache_plan_active plan
-    then Build.ensure_dir (Build.cache_plan_root plan)
-    else return 0
+    match Build.cache_plan_root plan {
+        Option.some root => Build.ensure_dir root,
+        Option.none => return 0,
+    }
 }
 
 /// Say why the cache is off, when the reason is one a user can act on, and
@@ -2396,7 +2407,7 @@ def run_check_body (files : List String) (opts : CheckOptions) : IO I64 := do {
 /// by a virtual workspace root would otherwise be invisible from inside it.
 /// `Build.target_dir_at` makes the same choice for the same reason.
 #[partial]
-def target_dir_flagged (flag : String) : IO String := do {
+def target_dir_flagged (flag : String) : IO Path := do {
     let d <- Mote.discover_config_target_dir (Path.unsafe_dir "");
     Build.target_dir_of flag d ""
 }
@@ -2794,7 +2805,7 @@ def await_pending (pending : List PendingTestFile) (acc : TestFold) : IO TestFol
 #[partial]
 def run_test_file_tail (f : String) (loaded : LoadedModules) (out_dir : String) (bin_idx : I64) (verbose : Bool) (plan : CachePlan) : IO TestFileOutcome := do {
     let key : Option String := Build.cache_plan_key plan f;
-    let root : String := Build.cache_plan_root plan;
+    let root : Path := plan_root_or_cwd plan;
     let cached <- Build.test_cached_ready root key;
     if cached
     then Build.test_tail_cached root key
@@ -2808,7 +2819,7 @@ def run_test_file_tail (f : String) (loaded : LoadedModules) (out_dir : String) 
 /// report path is compiled in and key-derived
 /// (`Build.test_entry_report`), so it writes where this run reads.
 #[partial]
-def Build.test_tail_cached (root : String) (key : Option String) : IO TestFileOutcome :=
+def Build.test_tail_cached (root : Path) (key : Option String) : IO TestFileOutcome :=
     match key {
         Option.none => return (TestFileOutcome.fail_outcome "test cache: no key"),
         Option.some k => do {
@@ -2819,9 +2830,9 @@ def Build.test_tail_cached (root : String) (key : Option String) : IO TestFileOu
                 // miss, not a wrong denominator.
                 Option.none => return (TestFileOutcome.fail_outcome "test cache: no count"),
                 Option.some n => do {
-                    let bin_path : String := Build.test_entry_bin root k;
-                    let exit_code <- exec_cmd bin_path [];
-                    let report : Result StreamError String <- read_file (Path.path (Build.test_entry_report root k));
+                    let bin_path : Path := Build.test_entry_bin root k;
+                    let exit_code <- exec_cmd (Path.to_string bin_path) [];
+                    let report : Result StreamError String <- read_file (Build.test_entry_report root k);
                     Build.test_tail_report n exit_code report
                 }
             }
@@ -2838,7 +2849,7 @@ def Build.test_tail_cached (root : String) (key : Option String) : IO TestFileOu
 def Build.test_tail_build (f : String) (loaded : LoadedModules) (out_dir : String) (bin_idx : I64) (verbose : Bool) (plan : CachePlan) : IO TestFileOutcome := do {
     let native <- TargetSpec.native;
     let key : Option String := Build.cache_plan_key plan f;
-    let root : String := Build.cache_plan_root plan;
+    let root : Path := plan_root_or_cwd plan;
     let dir : String := Build.test_tail_dir out_dir root key;
     let name : String := Build.test_tail_bin_name bin_idx key;
     let result_path : String := Build.test_tail_report_path out_dir root bin_idx key;
@@ -2908,10 +2919,10 @@ def Build.test_tail_build (f : String) (loaded : LoadedModules) (out_dir : Strin
 
 /// Where a driver is linked: the entry directory when the file has a key,
 /// the caller's scratch directory when it does not.
-def Build.test_tail_dir (out_dir : String) (root : String) (key : Option String) : String :=
+def Build.test_tail_dir (out_dir : String) (root : Path) (key : Option String) : String :=
     match key {
         Option.none => out_dir,
-        Option.some k => Build.test_entry_dir root k
+        Option.some k => Path.to_string (Build.test_entry_dir root k)
     }
 
 /// The driver's file name. Keyed entries use one fixed name because the
@@ -2923,10 +2934,10 @@ def Build.test_tail_bin_name (bin_idx : I64) (key : Option String) : String :=
         Option.some _ => "bin"
     }
 
-def Build.test_tail_report_path (out_dir : String) (root : String) (bin_idx : I64) (key : Option String) : String :=
+def Build.test_tail_report_path (out_dir : String) (root : Path) (bin_idx : I64) (key : Option String) : String :=
     match key {
         Option.none => out_dir ++ "/monad_test_result_" ++ I64.to_string bin_idx ++ ".txt",
-        Option.some k => Build.test_entry_report root k
+        Option.some k => Path.to_string (Build.test_entry_report root k)
     }
 
 /// Remove the link's object files from the entry directory.
@@ -2937,14 +2948,14 @@ def Build.test_tail_drop_objects (dir : String) (name : String) : IO I64 :=
 /// Record the file's test count in its entry, so a later hit knows the
 /// denominator its driver's report cannot supply.
 #[partial]
-def Build.test_tail_record_count (root : String) (key : Option String) (total : I64) : IO I64 :=
+def Build.test_tail_record_count (root : Path) (key : Option String) (total : I64) : IO I64 :=
     match key {
         Option.none => IO.pure 0,
         Option.some k => Build.test_entry_count_write root k total
     }
 
 #[partial]
-def Build.test_tail_prepare (root : String) (key : Option String) : IO I64 :=
+def Build.test_tail_prepare (root : Path) (key : Option String) : IO I64 :=
     match key {
         Option.none => IO.pure 0,
         Option.some k => Build.test_entry_prepare root k

@@ -54,7 +54,7 @@ def Build.text (r : Result String String) : String :=
     match r { ok h => h, err _ => "" }
 
 #[partial]
-def Build.closure_of (dir : String) : IO (Result String String) := do {
+def Build.closure_of (dir : Path) : IO (Result String String) := do {
     let t <- Build.probe_digest_tool;
     match t { err m => return (err m), ok tool => Build.closure_digest_with tool dir }
 }
@@ -68,9 +68,9 @@ def Build.closure_of (dir : String) : IO (Result String String) := do {
 #[test]
 def test_closure_follows_a_declared_dependency : IO Bool := do {
     let d <- Build.two_mote_fixture "dep";
-    let r1 <- Build.closure_of (String.concat d "/a");
+    let r1 <- Build.closure_of (Path.unsafe (String.concat d "/a"));
     let _e <- Build.put d "b/src/lib.mo" "def b : I64 := 999\n";
-    let r2 <- Build.closure_of (String.concat d "/a");
+    let r2 <- Build.closure_of (Path.unsafe (String.concat d "/a"));
     let _c <- Build.rm d;
     return (Bool.not (String.beq (Build.text r1) (Build.text r2)))
 }
@@ -78,9 +78,9 @@ def test_closure_follows_a_declared_dependency : IO Bool := do {
 #[test]
 def test_closure_changes_when_the_root_changes : IO Bool := do {
     let d <- Build.two_mote_fixture "root";
-    let r1 <- Build.closure_of (String.concat d "/a");
+    let r1 <- Build.closure_of (Path.unsafe (String.concat d "/a"));
     let _e <- Build.put d "a/src/lib.mo" "def a : I64 := 42\n";
-    let r2 <- Build.closure_of (String.concat d "/a");
+    let r2 <- Build.closure_of (Path.unsafe (String.concat d "/a"));
     let _c <- Build.rm d;
     return (Bool.not (String.beq (Build.text r1) (Build.text r2)))
 }
@@ -91,9 +91,9 @@ def test_closure_changes_when_the_root_changes : IO Bool := do {
 #[test]
 def test_closure_covers_a_manifest_edit : IO Bool := do {
     let d <- Build.two_mote_fixture "manifest";
-    let r1 <- Build.closure_of (String.concat d "/a");
+    let r1 <- Build.closure_of (Path.unsafe (String.concat d "/a"));
     let _e <- Build.put d "b/mote.toml" "[mote]\nname = \"b\"\nversion = \"9.9.9\"\n";
-    let r2 <- Build.closure_of (String.concat d "/a");
+    let r2 <- Build.closure_of (Path.unsafe (String.concat d "/a"));
     let _c <- Build.rm d;
     return (Bool.not (String.beq (Build.text r1) (Build.text r2)))
 }
@@ -101,8 +101,8 @@ def test_closure_covers_a_manifest_edit : IO Bool := do {
 #[test]
 def test_closure_is_stable_across_two_runs : IO Bool := do {
     let d <- Build.two_mote_fixture "stable";
-    let r1 <- Build.closure_of (String.concat d "/a");
-    let r2 <- Build.closure_of (String.concat d "/a");
+    let r1 <- Build.closure_of (Path.unsafe (String.concat d "/a"));
+    let r2 <- Build.closure_of (Path.unsafe (String.concat d "/a"));
     let _c <- Build.rm d;
     return (String.beq (Build.text r1) (Build.text r2))
 }
@@ -111,9 +111,9 @@ def test_closure_is_stable_across_two_runs : IO Bool := do {
 #[test]
 def test_closure_ignores_a_touch : IO Bool := do {
     let d <- Build.two_mote_fixture "touch";
-    let r1 <- Build.closure_of (String.concat d "/a");
+    let r1 <- Build.closure_of (Path.unsafe (String.concat d "/a"));
     let _t <- Proc.capture "sh" ["-c", String.concat "touch " (Proc.shell_quote (String.concat d "/b/src/lib.mo"))];
-    let r2 <- Build.closure_of (String.concat d "/a");
+    let r2 <- Build.closure_of (Path.unsafe (String.concat d "/a"));
     let _c <- Build.rm d;
     return (String.beq (Build.text r1) (Build.text r2))
 }
@@ -124,8 +124,8 @@ def test_closure_ignores_a_touch : IO Bool := do {
 def test_closure_is_independent_of_the_path : IO Bool := do {
     let d1 <- Build.two_mote_fixture "pathA";
     let d2 <- Build.two_mote_fixture "pathB";
-    let r1 <- Build.closure_of (String.concat d1 "/a");
-    let r2 <- Build.closure_of (String.concat d2 "/a");
+    let r1 <- Build.closure_of (Path.unsafe (String.concat d1 "/a"));
+    let r2 <- Build.closure_of (Path.unsafe (String.concat d2 "/a"));
     let _c1 <- Build.rm d1;
     let _c2 <- Build.rm d2;
     return (String.beq (Build.text r1) (Build.text r2))
@@ -144,7 +144,7 @@ def test_closure_terminates_on_a_cycle : IO Bool := do {
     let _m2 <- Build.put d "b/mote.toml" "[mote]\nname = \"b\"\n\n[dependencies.a]\npath = \"../a\"\n";
     let _s1 <- Build.put d "a/src/lib.mo" "def a : I64 := 1\n";
     let _s2 <- Build.put d "b/src/lib.mo" "def b : I64 := 2\n";
-    let r <- Build.closure_of (String.concat d "/a");
+    let r <- Build.closure_of (Path.unsafe (String.concat d "/a"));
     let _c <- Build.rm d;
     match r { ok h => return (Bool.not (String.is_empty h)), err _ => return false }
 }
@@ -164,7 +164,7 @@ def test_closure_terminates_on_a_cycle : IO Bool := do {
 #[test]
 def test_closure_seed_covers_the_working_directory_ambient_pair : IO Bool := do {
     let d <- Build.two_mote_fixture "ambient";
-    let seed <- Build.closure_seed (String.concat d "/a");
+    let seed <- Build.closure_seed (Path.unsafe (String.concat d "/a"));
     let init_here <- IO.file_exists (Path.path "init/src/lib.mo");
     let std_here <- IO.file_exists (Path.path "std/src/lib.mo");
     let _c <- Build.rm d;
@@ -214,7 +214,7 @@ def Build.script_pair_fixture (tag : String) : IO String := do {
 #[test]
 def test_input_hash_succeeds : IO Bool := do {
     let d <- Build.two_mote_fixture "ih";
-    let r <- Build.input_hash (Build.fixture_src d) (Build.fixture_root d) "debug" "x86_64-unknown-linux-gnu";
+    let r <- Build.input_hash (Build.fixture_src d) (Path.unsafe (Build.fixture_root d)) "debug" "x86_64-unknown-linux-gnu";
     let _c <- Build.rm d;
     return (Bool.not (String.is_empty (Build.text r)))
 }
@@ -224,8 +224,8 @@ def test_input_hash_succeeds : IO Bool := do {
 #[test]
 def test_input_hash_separates_profiles : IO Bool := do {
     let d <- Build.two_mote_fixture "prof";
-    let a <- Build.input_hash (Build.fixture_src d) (Build.fixture_root d) "debug" "x86_64-unknown-linux-gnu";
-    let b <- Build.input_hash (Build.fixture_src d) (Build.fixture_root d) "release" "x86_64-unknown-linux-gnu";
+    let a <- Build.input_hash (Build.fixture_src d) (Path.unsafe (Build.fixture_root d)) "debug" "x86_64-unknown-linux-gnu";
+    let b <- Build.input_hash (Build.fixture_src d) (Path.unsafe (Build.fixture_root d)) "release" "x86_64-unknown-linux-gnu";
     let _c <- Build.rm d;
     return (Bool.not (String.beq (Build.text a) (Build.text b)))
 }
@@ -236,8 +236,8 @@ def test_input_hash_separates_profiles : IO Bool := do {
 #[test]
 def test_input_hash_separates_targets : IO Bool := do {
     let d <- Build.two_mote_fixture "tgt";
-    let a <- Build.input_hash (Build.fixture_src d) (Build.fixture_root d) "debug" "x86_64-unknown-linux-gnu";
-    let b <- Build.input_hash (Build.fixture_src d) (Build.fixture_root d) "debug" "aarch64-unknown-linux-gnu";
+    let a <- Build.input_hash (Build.fixture_src d) (Path.unsafe (Build.fixture_root d)) "debug" "x86_64-unknown-linux-gnu";
+    let b <- Build.input_hash (Build.fixture_src d) (Path.unsafe (Build.fixture_root d)) "debug" "aarch64-unknown-linux-gnu";
     let _c <- Build.rm d;
     return (Bool.not (String.beq (Build.text a) (Build.text b)))
 }
@@ -254,8 +254,8 @@ def test_input_hash_separates_targets : IO Bool := do {
 #[test]
 def test_input_hash_separates_sibling_scripts : IO Bool := do {
     let d <- Build.script_pair_fixture "sib";
-    let a <- Build.input_hash (String.concat d "/one.mo") d "debug" "x86_64-unknown-linux-gnu";
-    let b <- Build.input_hash (String.concat d "/two.mo") d "debug" "x86_64-unknown-linux-gnu";
+    let a <- Build.input_hash (String.concat d "/one.mo") (Path.unsafe d) "debug" "x86_64-unknown-linux-gnu";
+    let b <- Build.input_hash (String.concat d "/two.mo") (Path.unsafe d) "debug" "x86_64-unknown-linux-gnu";
     let _c <- Build.rm d;
     return (Bool.not (String.is_empty (Build.text a))
         && Bool.not (String.is_empty (Build.text b))

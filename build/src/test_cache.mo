@@ -48,7 +48,7 @@ pub def Build.test_key_of (triple : String) (file_digest : String) (closure : St
 /// -- its doc's reasoning is about the cost of the KEY, which is the same
 /// digest-and-walk here, so one gate serves both caches.
 #[partial]
-pub def Build.test_plan (files : List String) (target_dir : String) (triple : String) (requested : Bool) : IO CachePlan :=
+pub def Build.test_plan (files : List String) (target_dir : Path) (triple : String) (requested : Bool) : IO CachePlan :=
     if Bool.not requested
     then return (CachePlan.inactive "")
     else if Bool.not (Build.check_worth_caching (List.length files))
@@ -60,7 +60,7 @@ pub def Build.test_plan (files : List String) (target_dir : String) (triple : St
 /// that protect the cache's economics buy it nothing, and a one-file `gc`
 /// is the precise invocation rather than a degenerate one.
 #[partial]
-pub def Build.test_plan_all (files : List String) (target_dir : String) (triple : String) : IO CachePlan := do {
+pub def Build.test_plan_all (files : List String) (target_dir : Path) (triple : String) : IO CachePlan := do {
     let t <- Build.probe_digest_tool;
     match t {
         err m => return (CachePlan.inactive m),
@@ -86,37 +86,37 @@ pub def Build.test_plan_all (files : List String) (target_dir : String) (triple 
 // miscompile can be read without a rebuild), and `monad_test_result.txt`
 // the report path compiled into the binary.
 
-pub def Build.test_entry_dir (root : String) (key : String) : String :=
-    String.concat root (String.concat "/" key)
+pub def Build.test_entry_dir (root : Path) (key : String) : Path :=
+    Path.unsafe (String.concat (Path.to_string root) (String.concat "/" key))
 
 /// One leaf of a test entry: `<root>/<key>/<leaf>`. Public for the same
 /// reason `Build.check_entry_leaf` is: `store verify` spells it too.
-pub def Build.test_entry_leaf (root : String) (key : String) (leaf : String) : String :=
-    String.concat (Build.test_entry_dir root key) (String.concat "/" leaf)
+pub def Build.test_entry_leaf (root : Path) (key : String) (leaf : String) : Path :=
+    Path.unsafe (String.concat (Path.to_string (Build.test_entry_dir root key)) (String.concat "/" leaf))
 
-pub def Build.test_entry_bin (root : String) (key : String) : String :=
+pub def Build.test_entry_bin (root : Path) (key : String) : Path :=
     Build.test_entry_leaf root key "bin"
 
-pub def Build.test_entry_ir (root : String) (key : String) : String :=
+pub def Build.test_entry_ir (root : Path) (key : String) : Path :=
     Build.test_entry_leaf root key "bin.ll"
 
 /// The report path compiled into the driver. Derived from the key, so a
 /// cached binary still writes somewhere the next run reads.
-pub def Build.test_entry_report (root : String) (key : String) : String :=
+pub def Build.test_entry_report (root : Path) (key : String) : Path :=
     Build.test_entry_leaf root key "monad_test_result.txt"
 
 /// The file's own test count, recorded beside the driver: the driver's
 /// report carries only the FAILED count, and the total came from the IR,
 /// which a hit never re-reads. Without this leaf a hit could report how
 /// many failed but not out of how many.
-pub def Build.test_entry_count (root : String) (key : String) : String :=
+pub def Build.test_entry_count (root : Path) (key : String) : Path :=
     Build.test_entry_leaf root key "count"
 
 /// Whether the entry holds a driver to run AND the count a replay needs.
 /// `bin` is written last by `link_ir` and `count` before the run, so an
 /// entry interrupted at any point reads as not ready and is rebuilt.
-pub def Build.test_entry_ready (root : String) (key : String) : IO Bool := do {
-    let there <- IO.file_exists (Path.path (Build.test_entry_bin root key));
+pub def Build.test_entry_ready (root : Path) (key : String) : IO Bool := do {
+    let there <- IO.file_exists (Build.test_entry_bin root key);
     if Bool.not there then return false
     else do {
         let n <- Build.test_entry_count_read root key;
@@ -129,29 +129,29 @@ pub def Build.test_entry_ready (root : String) (key : String) : IO Bool := do {
 
 /// Record the file's test count. Best-effort, like every other leaf write:
 /// a store that cannot be written turns the next run into a miss.
-pub def Build.test_entry_count_write (root : String) (key : String) (n : I64) : IO I64 := do {
-    let _w <- Build.write_leaf (Path.path (Build.test_entry_count root key)) (I64.to_string n);
+pub def Build.test_entry_count_write (root : Path) (key : String) (n : I64) : IO I64 := do {
+    let _w <- Build.write_leaf (Build.test_entry_count root key) (I64.to_string n);
     return 0
 }
 
 /// The stored count, or `none` when it is absent or not a number -- a
 /// miss, exactly as a damaged `check` entry is.
 #[partial]
-pub def Build.test_entry_count_read (root : String) (key : String) : IO (Option I64) := do {
-    let raw <- Build.read_leaf (Path.path (Build.test_entry_count root key));
+pub def Build.test_entry_count_read (root : Path) (key : String) : IO (Option I64) := do {
+    let raw <- Build.read_leaf (Build.test_entry_count root key);
     return (Build.test_count_of raw)
 }
 
 /// Whether a HIT is available: the plan gave the file a key, and the entry
 /// under it holds a driver.
-pub def Build.test_cached_ready (root : String) (key : Option String) : IO Bool :=
+pub def Build.test_cached_ready (root : Path) (key : Option String) : IO Bool :=
     match key {
         Option.none => IO.pure false,
         Option.some k => Build.test_entry_ready root k
     }
 
 /// Make an entry directory, for the miss path's link step.
-pub def Build.test_entry_prepare (root : String) (key : String) : IO I64 :=
+pub def Build.test_entry_prepare (root : Path) (key : String) : IO I64 :=
     Build.ensure_dir (Build.test_entry_dir root key)
 
 def Build.test_count_of (raw : Option String) : Option I64 :=

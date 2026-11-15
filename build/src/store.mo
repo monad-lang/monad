@@ -43,8 +43,8 @@ def Build.entry_dir (e : Entry) : String :=
 /// binary itself: `dir_check=test dir_test=test dir_artifact=store`), which
 /// silently moved every check entry into `test/`. A kind that is only ever
 /// a directory name does not need a constructor to carry it.
-pub def Build.entry_root_named (target_dir : String) (kind : String) : String :=
-    String.concat target_dir (String.concat "/" kind)
+pub def Build.entry_root_named (target_dir : Path) (kind : String) : Path :=
+    Path.unsafe (String.concat (Path.to_string target_dir) (String.concat "/" kind))
 
 /// Where artifacts go. Highest precedence first:
 ///
@@ -69,16 +69,16 @@ pub def Build.entry_root_named (target_dir : String) (kind : String) : String :=
 /// Pure, and takes the env and config values as arguments rather than
 /// reading them, so every tier is testable without a process environment
 /// or a config file on disk.
-pub def Build.resolve_target_dir (flag : String) (env : Option String) (config : Option Path) (root : String) : String :=
-    if Bool.not (String.is_empty flag) then flag
+pub def Build.resolve_target_dir (flag : String) (env : Option String) (config : Option Path) (root : String) : Path :=
+    if Bool.not (String.is_empty flag) then Path.unsafe flag
     else match env {
-        Option.some e => if String.is_empty e then Build.target_dir_from_config config root else e,
+        Option.some e => if String.is_empty e then Build.target_dir_from_config config root else Path.unsafe e,
         Option.none => Build.target_dir_from_config config root
     }
 
-def Build.target_dir_from_config (config : Option Path) (root : String) : String :=
+def Build.target_dir_from_config (config : Option Path) (root : String) : Path :=
     match config {
-        Option.some m => Path.to_string m,
+        Option.some m => m,
         Option.none => Build.default_target_dir root
     }
 
@@ -88,15 +88,15 @@ def Build.target_dir_from_config (config : Option Path) (root : String) : String
 /// an empty root -- the same bug `MoteManifest.src_root`
 /// (lang/src/mote.mo) documents for the mote whose manifest sits in the
 /// working directory.
-def Build.default_target_dir (root : String) : String :=
-    if String.is_empty root then "target"
-    else if String.beq root "." then "target"
-    else String.concat root "/target"
+def Build.default_target_dir (root : String) : Path :=
+    if String.is_empty root then Path.unsafe "target"
+    else if String.beq root "." then Path.unsafe "target"
+    else Path.unsafe (String.concat root "/target")
 
 /// The env tier, read once by a caller and passed into
 /// `Build.resolve_target_dir`.
 #[partial]
-pub def Build.target_dir_of (flag : String) (config : Option Path) (root : String) : IO String := do {
+pub def Build.target_dir_of (flag : String) (config : Option Path) (root : String) : IO Path := do {
     let e <- IO.get_env "MONAD_TARGET_DIR";
     return (Build.resolve_target_dir flag e config root)
 }
@@ -112,21 +112,21 @@ pub def Build.target_dir_of (flag : String) (config : Option Path) (root : Strin
 /// to plain `target/` instead of the directory it named. That is the exact
 /// collision the setting exists to prevent.
 #[partial]
-pub def Build.target_dir_at (dir : String) : IO String := do {
+pub def Build.target_dir_at (dir : String) : IO Path := do {
     let d <- Mote.discover_config_target_dir (Path.unsafe_dir dir);
     Build.target_dir_of "" d ""
 }
 
 /// The target directory for a SOURCE FILE, resolved from its directory.
 #[partial]
-pub def Build.target_dir_for (src : String) : IO String :=
+pub def Build.target_dir_for (src : String) : IO Path :=
     Build.target_dir_at (extract_directory src)
 
 /// `<target-dir>/<kind>` -- the directory every entry of one kind lives
 /// in, before the hash is appended. Shared by `ensure_entry_dir` and by
 /// callers that make a directory PER ENTRY rather than per kind (the
 /// `check` and `test` caches, whose entries are two files each).
-pub def Build.entry_root_dir (target_dir : String) (e : Entry) : String :=
+pub def Build.entry_root_dir (target_dir : Path) (e : Entry) : Path :=
     Build.entry_root_named target_dir (Build.entry_dir e)
 
 /// The name of one store entry: `<kind>/<hash>-<slug>`.
@@ -145,11 +145,11 @@ pub def Build.entry_root_dir (target_dir : String) (e : Entry) : String :=
 /// keyed, the artifact is a function of the key again and the entry name
 /// can say so. The human-readable half belongs in `db/<hash>.json`, the
 /// metadata kind the plan's layout reserves for exactly this.
-pub def Build.store_path (target_dir : String) (e : Entry) (hash : String) (slug : String) : String :=
-    String.concat target_dir
+pub def Build.store_path (target_dir : Path) (e : Entry) (hash : String) (slug : String) : Path :=
+    Path.unsafe (String.concat (Path.to_string target_dir)
         (String.concat "/"
             (String.concat (Build.entry_dir e)
-                (String.concat "/" (String.concat hash (Build.slug_suffix slug)))))
+                (String.concat "/" (String.concat hash (Build.slug_suffix slug))))))
 
 def Build.slug_suffix (slug : String) : String :=
     if String.is_empty slug then "" else String.concat "-" slug
@@ -178,16 +178,16 @@ def Build.slug_suffix (slug : String) : String :=
 /// The `.ll` the caller's `-o` implies is still written beside the binary
 /// (`link_ir`), as a convenience copy for exactly those readers. That copy
 /// is an OUTPUT; it is never what `llc` compiles, or the leak returns.
-pub def Build.artifact_ir_path (target_dir : String) (hash : String) : String :=
-    String.concat (Build.entry_root_dir target_dir Entry.artifact)
-        (String.concat "/" (String.concat hash ".ll"))
+pub def Build.artifact_ir_path (target_dir : Path) (hash : String) : Path :=
+    Path.unsafe (String.concat (Path.to_string (Build.entry_root_dir target_dir Entry.artifact))
+        (String.concat "/" (String.concat hash ".ll")))
 
 /// `mkdir -p` a directory. Shelled out because there is no mkdir native,
 /// which is already how `llvm/src/link.mo` creates its own output
 /// directory.
 #[partial]
-pub def Build.ensure_dir (d : String) : IO I64 := do {
-    let r <- Proc.capture "sh" ["-c", String.concat "mkdir -p " (Proc.shell_quote d)];
+pub def Build.ensure_dir (d : Path) : IO I64 := do {
+    let r <- Proc.capture "sh" ["-c", String.concat "mkdir -p " (Proc.shell_quote (Path.to_string d))];
     match r { Pair.pair code _out => return code }
 }
 
@@ -230,7 +230,7 @@ def Build.leaf_written (path : Path) (r : Result StreamError Unit) : IO Bool :=
 
 /// `mkdir -p` the directory one KIND of entry lives in.
 #[partial]
-pub def Build.ensure_entry_dir (target_dir : String) (e : Entry) : IO I64 :=
+pub def Build.ensure_entry_dir (target_dir : Path) (e : Entry) : IO I64 :=
     Build.ensure_dir (Build.entry_root_dir target_dir e)
 
 def Build.non_blank (v : Option String) : Option String :=

@@ -66,7 +66,7 @@ def Build.closure_line (name : String) (digest : String) : String :=
 /// `BTreeMap.to_list` and is therefore sorted by mote name. Same root and
 /// same manifests give the same order, which is all a key needs.
 #[partial]
-pub def Build.closure_digest_with (tool : DigestTool) (dir : String) : IO (Result String String) := do {
+pub def Build.closure_digest_with (tool : DigestTool) (dir : Path) : IO (Result String String) := do {
     let seed <- Build.closure_seed dir;
     let r <- Build.closure_walk tool seed List.empty List.empty;
     match r {
@@ -95,12 +95,12 @@ pub def Build.closure_digest_with (tool : DigestTool) (dir : String) : IO (Resul
 /// annotation is a property of the FILE while this walk starts from a
 /// directory.
 #[partial]
-pub def Build.closure_seed (dir : String) : IO (List String) := do {
+pub def Build.closure_seed (dir : Path) : IO (List String) := do {
     let cwd <- Build.cwd_ambient_dirs ["init", "std"];
     let tc <- Build.toolchain_seed cwd;
-    let m <- Mote.discover (Path.unsafe_dir dir);
+    let m <- Mote.discover dir;
     let members <- Build.workspace_seed m;
-    return (List.append (List.append (List.append cwd tc) members) [dir])
+    return (List.append (List.append (List.append cwd tc) members) [Path.to_string dir])
 }
 
 /// The ambient motes the WORKING DIRECTORY offers, by the same probe
@@ -257,7 +257,7 @@ def Build.closure_visit (tool : DigestTool) (d : String) (rest : List String) (s
 /// An `err` from any digest propagates, and the caller's contract is to
 /// DISABLE the cache on it rather than substitute a weaker key.
 #[partial]
-pub def Build.input_hash (src : String) (root : String) (profile : String) (triple : String) : IO (Result String String) := do {
+pub def Build.input_hash (src : String) (root : Path) (profile : String) (triple : String) : IO (Result String String) := do {
     let t <- Build.probe_digest_tool;
     match t {
         err m => return (err m),
@@ -282,7 +282,7 @@ pub def Build.artifact_key (file_digest : String) (closure : String) (compiler :
     Sha256.hash (List.intercalate "\n" [file_digest, closure, compiler, profile, triple])
 
 #[partial]
-pub def Build.input_hash_with (tool : DigestTool) (src : String) (root : String) (profile : String) (triple : String) : IO (Result String String) := do {
+pub def Build.input_hash_with (tool : DigestTool) (src : String) (root : Path) (profile : String) (triple : String) : IO (Result String String) := do {
     let fd <- Build.file_digest_with tool src;
     match fd {
         err m => return (err m),

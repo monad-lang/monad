@@ -18,8 +18,8 @@ use build::check {Build.cache_plan_active}
 def commit_x : String := "0123456789abcdef0123456789abcdef01234567"
 def sum_x : String := "sha256:00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff"
 
-def Build.tcf_root (tag : String) : String :=
-    "/tmp/monad_test_cache_" ++ I64.to_string process_id ++ "_" ++ tag
+def Build.tcf_root (tag : String) : Path :=
+    Path.unsafe ("/tmp/monad_test_cache_" ++ I64.to_string process_id ++ "_" ++ tag)
 
 #[test]
 def test_key_covers_every_component : Bool :=
@@ -34,25 +34,25 @@ def test_key_covers_every_component : Bool :=
 /// Every path a driver's compiled-in report relies on.
 #[test]
 def test_entry_paths_live_under_the_key : Bool :=
-    String.beq (Build.test_entry_dir "/t" "abc") "/t/abc"
-        && String.beq (Build.test_entry_bin "/t" "abc") "/t/abc/bin"
-        && String.beq (Build.test_entry_ir "/t" "abc") "/t/abc/bin.ll"
-        && String.beq (Build.test_entry_report "/t" "abc") "/t/abc/monad_test_result.txt"
-        && String.beq (Build.test_entry_count "/t" "abc") "/t/abc/count"
+    String.beq (Path.to_string (Build.test_entry_dir (Path.unsafe "/t") "abc")) "/t/abc"
+        && String.beq (Path.to_string (Build.test_entry_bin (Path.unsafe "/t") "abc")) "/t/abc/bin"
+        && String.beq (Path.to_string (Build.test_entry_ir (Path.unsafe "/t") "abc")) "/t/abc/bin.ll"
+        && String.beq (Path.to_string (Build.test_entry_report (Path.unsafe "/t") "abc")) "/t/abc/monad_test_result.txt"
+        && String.beq (Path.to_string (Build.test_entry_count (Path.unsafe "/t") "abc")) "/t/abc/count"
 
 /// One file is not worth a key -- the same gate the check cache applies,
 /// for the same reason (the key costs a compiler digest and a closure
 /// walk).
 #[test]
 def test_one_file_is_not_cached : IO Bool := do {
-    let p <- Build.test_plan ["a.mo"] "/t" "x86_64-unknown-linux-gnu" true;
+    let p <- Build.test_plan ["a.mo"] (Path.unsafe "/t") "x86_64-unknown-linux-gnu" true;
     return (Bool.not (Build.cache_plan_active p))
 }
 
 /// Neither is a run that did not ask for the cache.
 #[test]
 def test_a_run_that_did_not_ask_is_inactive : IO Bool := do {
-    let p <- Build.test_plan ["a.mo", "b.mo"] "/t" "x86_64-unknown-linux-gnu" false;
+    let p <- Build.test_plan ["a.mo", "b.mo"] (Path.unsafe "/t") "x86_64-unknown-linux-gnu" false;
     return (Bool.not (Build.cache_plan_active p))
 }
 
@@ -61,24 +61,24 @@ def test_a_run_that_did_not_ask_is_inactive : IO Bool := do {
 /// would report a passing file as having no tests.
 #[test]
 def test_readiness_needs_both_the_driver_and_the_count : IO Bool := do {
-    let root : String := Build.tcf_root "ready";
+    let root : Path := Build.tcf_root "ready";
     let key : String := "k1";
     let _mk <- Build.test_entry_prepare root key;
     let empty <- Build.test_entry_ready root key;
     let _w <- Build.test_entry_count_write root key 3;
     let count_only <- Build.test_entry_ready root key;
-    let bin : String := Build.test_entry_bin root key;
+    let bin : Path := Build.test_entry_bin root key;
     let _b <- Build.write_fake_bin bin;
     let both <- Build.test_entry_ready root key;
     let n <- Build.test_entry_count_read root key;
-    let _rm <- exec_cmd "rm" ["-rf", root];
+    let _rm <- exec_cmd "rm" ["-rf", Path.to_string root];
     return (Bool.not empty && Bool.not count_only && both && same_count n 3)
 }
 
 /// Write a stand-in for a driver: readiness is a file-existence question,
 /// and linking a real one needs llc and clang.
-def Build.write_fake_bin (path : String) : IO Bool := do {
-    let r <- IO.write_file (Path.path path) "#!/bin/sh\nexit 0\n";
+def Build.write_fake_bin (path : Path) : IO Bool := do {
+    let r <- IO.write_file path "#!/bin/sh\nexit 0\n";
     match r {
         Result.ok _ => return true,
         Result.err _ => return false
@@ -95,13 +95,13 @@ def same_count (n : Option I64) (want : I64) : Bool :=
 /// zero would read as "this file has no tests".
 #[test]
 def test_a_missing_or_garbage_count_is_none : IO Bool := do {
-    let root : String := Build.tcf_root "garbage";
+    let root : Path := Build.tcf_root "garbage";
     let key : String := "k2";
     let _mk <- Build.test_entry_prepare root key;
     let absent <- Build.test_entry_count_read root key;
-    let _w <- IO.write_file (Path.path (Build.test_entry_count root key)) "not a number";
+    let _w <- IO.write_file (Build.test_entry_count root key) "not a number";
     let garbage <- Build.test_entry_count_read root key;
-    let _rm <- exec_cmd "rm" ["-rf", root];
+    let _rm <- exec_cmd "rm" ["-rf", Path.to_string root];
     return (is_none absent && is_none garbage)
 }
 

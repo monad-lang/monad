@@ -49,8 +49,8 @@ use build::store {Build.ensure_dir, Build.entry_root_dir, Build.read_leaf, Build
 /// directory), while `extract_directory` still answers `""` for a bare
 /// filename -- the same reading, a different spelling. A root is a
 /// directory, so the two must not be distinguishable downstream.
-def Build.root_or_cwd (d : String) : String :=
-    if String.is_empty d then "." else d
+def Build.root_or_cwd (d : String) : Path :=
+    Path.unsafe_dir d
 
 /// `mote_root_of src`: the directory of the mote containing `src`.
 ///
@@ -82,10 +82,10 @@ def Build.root_or_cwd (d : String) : String :=
 /// of the working directory. Sound (the file's own bytes are in the key
 /// separately) and strictly better than declining to cache.
 #[partial]
-pub def Build.mote_root_of (src : String) : IO String := do {
+pub def Build.mote_root_of (src : String) : IO Path := do {
     let m <- Mote.discover (Path.unsafe_dir (extract_directory src));
     match m {
-        Option.some manifest => return (Path.to_string manifest.dir),
+        Option.some manifest => return manifest.dir,
         Option.none => return (Build.root_or_cwd (extract_directory src))
     }
 }
@@ -114,7 +114,7 @@ pub def Build.check_worth_caching (count : I64) : Bool :=
 /// one set of accessors.
 pub type CachePlan {
     /// On: the store may be both consulted and written.
-    active (entry_root : String) (keys : List (Pair String String)),
+    active (entry_root : Path) (keys : List (Pair String String)),
     /// Off. `reason` is `""` when the cache was simply not asked for --
     /// `--no-cache`, `MONAD_NO_CACHE`, `--verbose`, or a single-file run
     /// -- and those say nothing, because the user who asked for them
@@ -124,11 +124,11 @@ pub type CachePlan {
     inactive (reason : String),
 }
 
-/// The store root for `check` entries, or `""` when the plan is inactive.
-pub def Build.cache_plan_root (p : CachePlan) : String :=
+/// The store root for `check` entries; `none` when the plan is inactive.
+pub def Build.cache_plan_root (p : CachePlan) : Option Path :=
     match p {
-        CachePlan.active root _keys => root,
-        CachePlan.inactive _reason => "",
+        CachePlan.active root _keys => Option.some root,
+        CachePlan.inactive _reason => Option.none,
     }
 
 pub def Build.cache_plan_active (p : CachePlan) : Bool :=
@@ -174,7 +174,7 @@ pub def Build.key_lookup (file : String) (keys : List (Pair String String)) : Op
 /// a key that would serve stale answers the first time the compiler
 /// changed.
 #[partial]
-pub def Build.check_plan (files : List String) (target_dir : String) (requested : Bool) : IO CachePlan :=
+pub def Build.check_plan (files : List String) (target_dir : Path) (requested : Bool) : IO CachePlan :=
     if Bool.not requested
     then return (CachePlan.inactive "")
     else if Bool.not (Build.check_worth_caching (List.length files))
@@ -200,7 +200,7 @@ pub def Build.check_plan (files : List String) (target_dir : String) (requested 
 /// reclaim from a run that named two or more files. `Build.gc_run` calls
 /// this directly.
 #[partial]
-pub def Build.check_plan_all (files : List String) (target_dir : String) : IO CachePlan := do {
+pub def Build.check_plan_all (files : List String) (target_dir : Path) : IO CachePlan := do {
     let t <- Build.probe_digest_tool;
     match t {
         err m => return (CachePlan.inactive m),
@@ -261,12 +261,12 @@ pub def Build.check_plan_all (files : List String) (target_dir : String) : IO Ca
 /// list is a lookup table rather than a key ingredient -- nothing hashes
 /// it, so its order does not matter.
 #[partial]
-pub def Build.plan_roots (tool : DigestTool) (files : List String) (seen : List String) (acc : List (Pair String String)) : IO (List (Pair String String)) :=
+pub def Build.plan_roots (tool : DigestTool) (files : List String) (seen : List Path) (acc : List (Pair Path String)) : IO (List (Pair Path String)) :=
     match files {
         List.empty => return acc,
         List.cons f rest => do {
             let root <- Build.mote_root_of f;
-            if List.contains_by String.beq root seen
+            if List.contains_by Path.beq root seen
             then Build.plan_roots tool rest seen acc
             else do {
                 let d <- Build.closure_digest_with tool root;
@@ -288,7 +288,7 @@ pub def Build.plan_roots (tool : DigestTool) (files : List String) (seen : List 
 /// the key's coverage readable off the key itself rather than off an
 /// argument about a directory walk.
 #[partial]
-def Build.plan_keys (key_of : String -> String -> String -> String) (tool : DigestTool) (compiler : String) (files : List String) (roots : List (Pair String String)) (acc : List (Pair String String)) : IO (List (Pair String String)) :=
+def Build.plan_keys (key_of : String -> String -> String -> String) (tool : DigestTool) (compiler : String) (files : List String) (roots : List (Pair Path String)) (acc : List (Pair String String)) : IO (List (Pair String String)) :=
     match files {
         List.empty => return acc,
         List.cons f rest => do {
@@ -326,12 +326,12 @@ def Build.check_key (file_digest : String) (closure : String) (compiler : String
 /// Shared with `gc`, which needs the same lookup over its own memo
 /// (`Build.collect_root_digests`, `build/src/manage.mo`); the two memos
 /// are built by different walks but have this shape.
-pub def Build.root_find (root : String) (roots : List (Pair String String)) : Option String :=
+pub def Build.root_find (root : Path) (roots : List (Pair Path String)) : Option String :=
     match roots {
         List.empty => Option.none,
         List.cons e rest =>
             match e {
-                Pair.pair r h => if String.beq r root then Option.some h else Build.root_find root rest,
+                Pair.pair r h => if Path.beq r root then Option.some h else Build.root_find root rest,
             }
     }
 
@@ -351,8 +351,8 @@ pub def Build.root_find (root : String) (roots : List (Pair String String)) : Op
 // parsing in it at all.
 
 /// The entry directory for one key: `<target-dir>/check/<key>`.
-pub def Build.check_entry_dir (root : String) (key : String) : String :=
-    String.concat root (String.concat "/" key)
+pub def Build.check_entry_dir (root : Path) (key : String) : Path :=
+    Path.unsafe (String.concat (Path.to_string root) (String.concat "/" key))
 
 /// One leaf of a check entry: `<root>/<key>/<leaf>`.
 ///
@@ -360,8 +360,8 @@ pub def Build.check_entry_dir (root : String) (key : String) : String :=
 /// the two leaves a readable entry is made of, and it must spell them the
 /// same way the reader and the writer do. A second copy of this path rule
 /// is a second thing to forget when the format changes.
-pub def Build.check_entry_leaf (root : String) (key : String) (leaf : String) : String :=
-    String.concat (Build.check_entry_dir root key) (String.concat "/" leaf)
+pub def Build.check_entry_leaf (root : Path) (key : String) (leaf : String) : Path :=
+    Path.unsafe (String.concat (Path.to_string (Build.check_entry_dir root key)) (String.concat "/" leaf))
 
 /// What `check` prints for one file -- and, because this exact string is
 /// what gets stored, exactly what a hit replays.
@@ -408,13 +408,21 @@ def Build.fail_header (path : String) (n : I64) : String :=
 /// That is also what makes a damaged entry harmless rather than
 /// poisonous, which is the property a cache most needs.
 #[partial]
-pub def Build.check_entry_read (root : String) (key : String) : IO (Option (Pair Build.CheckTally String)) := do {
-    let raw <- Build.read_leaf (Path.path (Build.check_entry_leaf root key "errors"));
+pub def Build.check_entry_read (root : Path) (key : String) : IO (Option (Pair Build.CheckTally String)) := do {
+    let raw <- Build.read_leaf (Build.check_entry_leaf root key "errors");
     match Build.parsed_count raw {
         Option.none => return Option.none,
         Option.some n => Build.check_entry_read_out root key n
     }
 }
+
+/// `check_entry_read` for a plan's OPTIONAL root: an inactive plan has no
+/// root and therefore no entry, which is the same answer as a miss.
+pub def Build.check_entry_read_opt (root : Option Path) (key : String) : IO (Option (Pair Build.CheckTally String)) :=
+    match root {
+        Option.none => IO.pure Option.none,
+        Option.some r => Build.check_entry_read r key,
+    }
 
 /// A leaf's text as a count; `none` when it is absent or not a number.
 def Build.parsed_count (raw : Option String) : Option I64 :=
@@ -426,8 +434,8 @@ def Build.parsed_count (raw : Option String) : Option I64 :=
 /// The rest of a hit once the error count parsed: the `out` block is
 /// required (absent is a miss), the warning count is not.
 #[partial]
-def Build.check_entry_read_out (root : String) (key : String) (n : I64) : IO (Option (Pair Build.CheckTally String)) := do {
-    let block <- Build.read_leaf (Path.path (Build.check_entry_leaf root key "out"));
+def Build.check_entry_read_out (root : Path) (key : String) (n : I64) : IO (Option (Pair Build.CheckTally String)) := do {
+    let block <- Build.read_leaf (Build.check_entry_leaf root key "out");
     let warns <- Build.check_entry_warn_count root key;
     return (match block {
         Option.none => Option.none,
@@ -441,8 +449,8 @@ def Build.check_entry_read_out (root : String) (key : String) (n : I64) : IO (Op
 /// could not produce warning text, so a zero count is the honest
 /// replay of what it recorded.
 #[partial]
-def Build.check_entry_warn_count (root : String) (key : String) : IO I64 := do {
-    let raw <- Build.read_leaf (Path.path (Build.check_entry_leaf root key "warnings"));
+def Build.check_entry_warn_count (root : Path) (key : String) : IO I64 := do {
+    let raw <- Build.read_leaf (Build.check_entry_leaf root key "warnings");
     return (match Build.parsed_count raw {
         Option.none => 0,
         Option.some n => n,
@@ -454,12 +462,12 @@ def Build.check_entry_warn_count (root : String) (key : String) : IO I64 := do {
 /// having tried -- so a failed write is reported on stderr
 /// (`Build.write_leaf`) and the check carries on.
 #[partial]
-pub def Build.check_entry_write (root : String) (key : String) (errors : I64) (warnings : I64) (block : String) : IO I64 := do {
-    let d : String := Build.check_entry_dir root key;
+pub def Build.check_entry_write (root : Path) (key : String) (errors : I64) (warnings : I64) (block : String) : IO I64 := do {
+    let d : Path := Build.check_entry_dir root key;
     let _mk <- Build.ensure_dir d;
-    let _c <- Build.write_leaf (Path.path (Build.check_entry_leaf root key "errors")) (I64.to_string errors);
-    let _w <- Build.write_leaf (Path.path (Build.check_entry_leaf root key "warnings")) (I64.to_string warnings);
-    let _o <- Build.write_leaf (Path.path (Build.check_entry_leaf root key "out")) block;
+    let _c <- Build.write_leaf (Build.check_entry_leaf root key "errors") (I64.to_string errors);
+    let _w <- Build.write_leaf (Build.check_entry_leaf root key "warnings") (I64.to_string warnings);
+    let _o <- Build.write_leaf (Build.check_entry_leaf root key "out") block;
     return 0
 }
 
@@ -469,5 +477,8 @@ pub def Build.check_entry_write (root : String) (key : String) (errors : I64) (w
 pub def Build.check_maybe_write (p : CachePlan) (key : Option String) (errors : I64) (warnings : I64) (block : String) : IO I64 :=
     match key {
         Option.none => return 0,
-        Option.some k => Build.check_entry_write (Build.cache_plan_root p) k errors warnings block
+        Option.some k => match Build.cache_plan_root p {
+            Option.none => return 0,
+            Option.some root => Build.check_entry_write root k errors warnings block,
+        }
     }

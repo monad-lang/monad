@@ -67,7 +67,7 @@ def Build.manage_fresh_fixture (tag : String) : IO String := do {
     let d : String := String.concat "/tmp/monad_manage_fix_"
         (String.concat (I64.to_string process_id) (String.concat "_" tag));
     let _r <- Proc.capture "sh" ["-c", String.concat "rm -rf " (Proc.shell_quote d)];
-    let _m <- Build.ensure_dir (String.concat d "/src");
+    let _m <- Build.ensure_dir (Path.unsafe (String.concat d "/src"));
     return d
 }
 
@@ -86,7 +86,7 @@ def Build.manage_mote_fixture (tag : String) : IO String := do {
 /// Write one file, making the directories above it.
 #[partial]
 def Build.manage_seed (path : String) (content : String) : IO I64 := do {
-    let _m <- Build.ensure_dir (extract_directory path);
+    let _m <- Build.ensure_dir (Path.unsafe_dir (extract_directory path));
     let ok <- Build.write_leaf (Path.path path) content;
     return (if ok then 0 else 1)
 }
@@ -109,13 +109,13 @@ def Build.manage_is_dir (path : String) : IO Bool :=
 /// hand-spelled `store/...` -- a test that hard-codes the layout would keep
 /// passing after the layout moved.
 def Build.manage_bin (target : String) (key : String) : String :=
-    Build.store_path target Entry.artifact key ""
+    Path.to_string (Build.store_path (Path.unsafe target) Entry.artifact key "")
 
 def Build.manage_ir (target : String) (key : String) : String :=
-    Build.artifact_ir_path target key
+    Path.to_string (Build.artifact_ir_path (Path.unsafe target) key)
 
 def Build.manage_check_dir (target : String) (key : String) : String :=
-    String.concat (Build.entry_root_dir target Entry.check) (String.concat "/" key)
+    String.concat (Path.to_string (Build.entry_root_dir (Path.unsafe target) Entry.check)) (String.concat "/" key)
 
 /// The key an `input_hash` gave, as a String, or `""` when it declined.
 /// The `is_key` assertions below are what turn a decline into a failure
@@ -370,7 +370,7 @@ def test_entry_views_reads_an_artifact_pair_as_one_entry : IO Bool := do {
     let target : String := String.concat d "/target";
     let _b <- Build.manage_seed (Build.manage_bin target Build.manage_key_a) "bin";
     let _i <- Build.manage_seed (Build.manage_ir target Build.manage_key_a) "ir";
-    let views <- Build.entry_views target;
+    let views <- Build.entry_views (Path.unsafe target);
     let arts : List EntryView := List.filter Build.view_is_artifact views;
     let _x <- Build.manage_drop_fixture d;
     match arts {
@@ -391,7 +391,7 @@ def test_entry_views_flags_an_artifact_without_its_ir : IO Bool := do {
     let d <- Build.manage_fresh_fixture "noir";
     let target : String := String.concat d "/target";
     let _b <- Build.manage_seed (Build.manage_bin target Build.manage_key_a) "bin";
-    let views <- Build.entry_views target;
+    let views <- Build.entry_views (Path.unsafe target);
     let _x <- Build.manage_drop_fixture d;
     match views {
         List.cons v _ => return Build.view_not_ok v,
@@ -406,7 +406,7 @@ def test_entry_views_reads_a_check_entry : IO Bool := do {
     let dir : String := Build.manage_check_dir target Build.manage_key_a;
     let _o <- Build.manage_seed (String.concat dir "/out") "ok    a.mo";
     let _e <- Build.manage_seed (String.concat dir "/errors") "0";
-    let views <- Build.entry_views target;
+    let views <- Build.entry_views (Path.unsafe target);
     let _x <- Build.manage_drop_fixture d;
     match views {
         List.cons v rest =>
@@ -427,7 +427,7 @@ def test_entry_views_flags_a_check_entry_with_a_corrupt_count : IO Bool := do {
     let dir : String := Build.manage_check_dir target Build.manage_key_a;
     let _o <- Build.manage_seed (String.concat dir "/out") "ok    a.mo";
     let _e <- Build.manage_seed (String.concat dir "/errors") "not-a-number";
-    let views <- Build.entry_views target;
+    let views <- Build.entry_views (Path.unsafe target);
     let _x <- Build.manage_drop_fixture d;
     match views {
         List.cons v _ =>
@@ -444,7 +444,7 @@ def test_entry_views_ignores_a_legacy_slug : IO Bool := do {
     let d <- Build.manage_fresh_fixture "slug";
     let target : String := String.concat d "/target";
     let _s <- Build.manage_seed (Build.manage_bin target (String.concat Build.manage_key_a "-monad")) "bin";
-    let views <- Build.entry_views target;
+    let views <- Build.entry_views (Path.unsafe target);
     let _x <- Build.manage_drop_fixture d;
     return (List.is_empty views)
 }
@@ -457,12 +457,12 @@ def test_entry_views_ignores_a_legacy_slug : IO Bool := do {
 def test_clean_keeps_the_store : IO Bool := do {
     let d <- Build.manage_fresh_fixture "clean_keep";
     let target : String := String.concat d "/target";
-    let _a <- Build.ensure_dir (String.concat target "/debug");
-    let _b <- Build.ensure_dir (String.concat target "/release");
-    let _c <- Build.ensure_dir (String.concat target "/store");
-    let _e <- Build.ensure_dir (String.concat target "/check");
+    let _a <- Build.ensure_dir (Path.unsafe (String.concat target "/debug"));
+    let _b <- Build.ensure_dir (Path.unsafe (String.concat target "/release"));
+    let _c <- Build.ensure_dir (Path.unsafe (String.concat target "/store"));
+    let _e <- Build.ensure_dir (Path.unsafe (String.concat target "/check"));
     let _f <- Build.manage_seed (Build.manage_bin target Build.manage_key_a) "bin";
-    let rc <- Build.clean_run target false;
+    let rc <- Build.clean_run (Path.unsafe target) false;
     let debug_gone <- Build.manage_is_dir (String.concat target "/debug");
     let release_gone <- Build.manage_is_dir (String.concat target "/release");
     let bin_kept <- Build.manage_present (Build.manage_bin target Build.manage_key_a);
@@ -481,8 +481,8 @@ def test_clean_keeps_the_store : IO Bool := do {
 def test_clean_removes_an_output_directory : IO Bool := do {
     let d <- Build.manage_fresh_fixture "clean_rm";
     let target : String := String.concat d "/target";
-    let _a <- Build.ensure_dir (String.concat target "/debug");
-    let rc <- Build.clean_run target false;
+    let _a <- Build.ensure_dir (Path.unsafe (String.concat target "/debug"));
+    let rc <- Build.clean_run (Path.unsafe target) false;
     let gone <- Build.manage_is_dir (String.concat target "/debug");
     let _x <- Build.manage_drop_fixture d;
     return I64.beq rc 0 && Bool.not gone
@@ -494,8 +494,8 @@ def test_clean_removes_an_output_directory : IO Bool := do {
 def test_clean_of_a_missing_root_succeeds : IO Bool := do {
     let d <- Build.manage_fresh_fixture "clean_none";
     let target : String := String.concat d "/no-such-target";
-    let rc <- Build.clean_run target false;
-    let all_rc <- Build.clean_run target true;
+    let rc <- Build.clean_run (Path.unsafe target) false;
+    let all_rc <- Build.clean_run (Path.unsafe target) true;
     let _x <- Build.manage_drop_fixture d;
     return I64.beq rc 0 && I64.beq all_rc 0
 }
@@ -507,7 +507,7 @@ def test_clean_all_removes_the_store : IO Bool := do {
     let d <- Build.manage_fresh_fixture "clean_all";
     let target : String := String.concat d "/target";
     let _b <- Build.manage_seed (Build.manage_bin target Build.manage_key_a) "bin";
-    let rc <- Build.clean_run target true;
+    let rc <- Build.clean_run (Path.unsafe target) true;
     let gone <- Build.manage_is_dir target;
     let bin_gone <- Build.manage_present (Build.manage_bin target Build.manage_key_a);
     let _x <- Build.manage_drop_fixture d;
@@ -525,7 +525,7 @@ def test_gc_refuses_when_no_files_were_named : IO Bool := do {
     let d <- Build.manage_fresh_fixture "gc_none";
     let target : String := String.concat d "/target";
     let _b <- Build.manage_seed (Build.manage_bin target Build.manage_key_a) "bin";
-    let rc <- Build.gc_run List.empty target [Build.manage_triple] true;
+    let rc <- Build.gc_run List.empty (Path.unsafe target) [Build.manage_triple] true;
     let kept <- Build.manage_present (Build.manage_bin target Build.manage_key_a);
     let _x <- Build.manage_drop_fixture d;
     return I64.beq rc 1 && kept
@@ -541,7 +541,7 @@ def test_gc_dry_run_removes_nothing : IO Bool := do {
     let files : List String := [String.concat d "/src/a.mo", String.concat d "/src/b.mo"];
     let _b <- Build.manage_seed (Build.manage_bin target Build.manage_key_a) "bin";
     let _i <- Build.manage_seed (Build.manage_ir target Build.manage_key_a) "ir";
-    let rc <- Build.gc_run files target [Build.manage_triple] false;
+    let rc <- Build.gc_run files (Path.unsafe target) [Build.manage_triple] false;
     let bin_kept <- Build.manage_present (Build.manage_bin target Build.manage_key_a);
     let ir_kept <- Build.manage_present (Build.manage_ir target Build.manage_key_a);
     let _x <- Build.manage_drop_fixture d;
@@ -560,12 +560,12 @@ def test_gc_spares_a_reachable_check_entry : IO Bool := do {
     let fa : String := String.concat d "/src/a.mo";
     let fb : String := String.concat d "/src/b.mo";
     let files : List String := [fa, fb];
-    let plan <- Build.check_plan files target true;
+    let plan <- Build.check_plan files (Path.unsafe target) true;
     let live : String := Build.manage_key_or_empty plan fa;
     let dir : String := Build.manage_check_dir target live;
     let _o <- Build.manage_seed (String.concat dir "/out") "ok    a.mo";
     let _e <- Build.manage_seed (String.concat dir "/errors") "0";
-    let rc <- Build.gc_run files target [Build.manage_triple] true;
+    let rc <- Build.gc_run files (Path.unsafe target) [Build.manage_triple] true;
     let kept <- Build.manage_is_dir dir;
     let _x <- Build.manage_drop_fixture d;
     return I64.beq rc 0 && Build.is_key live && kept
@@ -595,7 +595,7 @@ def test_gc_spares_every_artifact_of_one_mote : IO Bool := do {
     let kb : String := Build.manage_hash rb;
     let _sa <- Build.manage_seed (Build.manage_bin target ka) "a";
     let _sb <- Build.manage_seed (Build.manage_bin target kb) "b";
-    let rc <- Build.gc_run files target [Build.manage_triple] true;
+    let rc <- Build.gc_run files (Path.unsafe target) [Build.manage_triple] true;
     let kept_a <- Build.manage_present (Build.manage_bin target ka);
     let kept_b <- Build.manage_present (Build.manage_bin target kb);
     let _x <- Build.manage_drop_fixture d;
@@ -620,12 +620,12 @@ def test_gc_plans_a_single_named_file : IO Bool := do {
     let d <- Build.manage_mote_fixture "gc_one";
     let target : String := String.concat d "/target";
     let files : List String := [String.concat d "/src/a.mo"];
-    let plan <- Build.check_plan_all files target;
+    let plan <- Build.check_plan_all files (Path.unsafe target);
     let live : String := Build.manage_key_or_empty plan (String.concat d "/src/a.mo");
     let dir : String := Build.manage_check_dir target live;
     let _o <- Build.manage_seed (String.concat dir "/out") "ok    a.mo";
     let _e <- Build.manage_seed (String.concat dir "/errors") "0";
-    let rc <- Build.gc_run files target [Build.manage_triple] true;
+    let rc <- Build.gc_run files (Path.unsafe target) [Build.manage_triple] true;
     let kept <- Build.manage_is_dir dir;
     let _x <- Build.manage_drop_fixture d;
     return (Build.cache_plan_active plan)
@@ -644,7 +644,7 @@ def test_gc_removes_an_unreachable_check_entry : IO Bool := do {
     let dir : String := Build.manage_check_dir target Build.manage_key_a;
     let _o <- Build.manage_seed (String.concat dir "/out") "ok    a.mo";
     let _e <- Build.manage_seed (String.concat dir "/errors") "0";
-    let rc <- Build.gc_run files target [Build.manage_triple] true;
+    let rc <- Build.gc_run files (Path.unsafe target) [Build.manage_triple] true;
     let gone <- Build.manage_present (String.concat dir "/out");
     let _x <- Build.manage_drop_fixture d;
     return I64.beq rc 0 && Bool.not gone
@@ -662,7 +662,7 @@ def test_gc_removes_a_legacy_slug_entry : IO Bool := do {
     let slug : String := String.concat Build.manage_key_a "-monad";
     let _b <- Build.manage_seed (Build.manage_bin target slug) "bin";
     let _i <- Build.manage_seed (Build.manage_ir target slug) "ir";
-    let rc <- Build.gc_run files target [Build.manage_triple] true;
+    let rc <- Build.gc_run files (Path.unsafe target) [Build.manage_triple] true;
     let bin_gone <- Build.manage_present (Build.manage_bin target slug);
     let ir_gone <- Build.manage_present (Build.manage_ir target slug);
     let _x <- Build.manage_drop_fixture d;
@@ -678,7 +678,7 @@ def test_gc_removes_an_orphaned_ir : IO Bool := do {
     let target : String := String.concat d "/target";
     let files : List String := [String.concat d "/src/a.mo", String.concat d "/src/b.mo"];
     let _i <- Build.manage_seed (Build.manage_ir target Build.manage_key_a) "ir";
-    let rc <- Build.gc_run files target [Build.manage_triple] true;
+    let rc <- Build.gc_run files (Path.unsafe target) [Build.manage_triple] true;
     let ir_gone <- Build.manage_present (Build.manage_ir target Build.manage_key_a);
     let _x <- Build.manage_drop_fixture d;
     return I64.beq rc 0 && Bool.not ir_gone
@@ -701,7 +701,7 @@ def test_gc_spares_another_targets_artifact : IO Bool := do {
     let rh <- Build.input_hash fa root "debug" cross;
     let kh : String := Build.manage_hash rh;
     let _sh <- Build.manage_seed (Build.manage_bin target kh) "arm";
-    let rc <- Build.gc_run files target [cross] true;
+    let rc <- Build.gc_run files (Path.unsafe target) [cross] true;
     let kept <- Build.manage_present (Build.manage_bin target kh);
     let _x <- Build.manage_drop_fixture d;
     return Build.is_key kh && I64.beq rc 0 && kept
@@ -721,7 +721,7 @@ def test_gc_collects_a_triple_absent_from_the_set : IO Bool := do {
     let rh <- Build.input_hash fa root "debug" cross;
     let kh : String := Build.manage_hash rh;
     let _sh <- Build.manage_seed (Build.manage_bin target kh) "arm";
-    let rc <- Build.gc_run files target ["x86_64-unknown-linux-gnu"] true;
+    let rc <- Build.gc_run files (Path.unsafe target) ["x86_64-unknown-linux-gnu"] true;
     let gone <- Build.manage_present (Build.manage_bin target kh);
     let _x <- Build.manage_drop_fixture d;
     return Build.is_key kh && I64.beq rc 0 && Bool.not gone
