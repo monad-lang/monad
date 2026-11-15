@@ -63,7 +63,7 @@ use lang::types {
     Decl, Def, Elim, Identifier, Literal, MatchCase, NamePath, StructLitField,
     Term, binder_is_explicit, term_peel,
 }
-use lib::decls {def_attrs, def_body_term, def_name_str, extract_defs}
+use lib::decls {def_attrs, def_body_term, def_name_str, def_param_chain_body, extract_defs}
 use lib::attrs {find_attr_args}
 use lib::free_names {collect_referenced_names}
 use lib::symbols {def_symbol_name}
@@ -139,10 +139,20 @@ def check_kernels_go (kernels : List Def) : List KernelDiagnostic := match kerne
 /// polymorphic, recursive, alloc -- so a golden test over a def that breaks
 /// three rules is stable, and so a reader sees the most structural problem
 /// first.
+///
+/// The body read here is `def_param_chain_body`, NOT `def_body_term`, and the
+/// difference is a bug this rule set shipped with: a parsed def's term is a
+/// parameter LAMBDA CHAIN (`lam_parsed_params` wraps the written body in one
+/// `Term.lam` per explicit parameter), so counting lambdas over
+/// `def_body_term` counts the kernel's OWN PARAMETERS and reports one
+/// `closure` diagnostic per parameter on a kernel containing no lambda at all.
+/// `def_param_chain_body` peels exactly the parameter chain -- bounded by
+/// `Def.params`, so a lambda that really is the body survives, which is what
+/// `test_rule_closure_fires_on_a_lambda` exists to keep.
 #[partial]
 pub def check_kernel (d : Def) : List KernelDiagnostic :=
     let name : String := def_name_str d in
-    let body : Term := def_body_term d in
+    let body : Term := def_param_chain_body d in
     List.append (io_diags name body)
         (List.append (closure_diags name body)
             (List.append (polymorphic_diags name d)
@@ -241,10 +251,17 @@ def recursion_diags (kernel : String) (d : Def) : List KernelDiagnostic :=
 /// `collect_referenced_names` on the body side, are the same name space --
 /// exactly the pairing `codegen/src/decls.mo`'s reachability walk uses, and
 /// for the same reason.
+///
+/// The body is `def_param_chain_body` for `check_kernel`'s reason: a
+/// `collect_referenced_names` walk is binder-blind, so a lambda's ANNOTATION
+/// (`fn (x : Thing) => ...`) contributes names too, and a kernel's own
+/// parameter annotations are part of its signature, not its body. Reading the
+/// unstripped term here would let a parameter's TYPE name the def itself and
+/// report phantom recursion.
 #[partial]
 def self_referencing (d : Def) : Bool :=
     let own : String := def_name_str d in
-    name_present own (collect_referenced_names (def_body_term d) List.empty)
+    name_present own (collect_referenced_names (def_param_chain_body d) List.empty)
 
 #[partial]
 def name_present (name : String) (names : List String) : Bool := match names {
@@ -317,14 +334,59 @@ def lit_allocates (l : Literal) : Bool := match l {
     _ => false,
 }
 
-/// How many `Term.lam` nodes the term contains -- the closure rule's count,
-/// kept a count rather than a Bool because the message names it.
+/// How many CLOSURE lambdas the term contains -- the closure rule's count, kept
+/// a count rather than a Bool because the message names it.
+///
+/// A lambda at the HEAD of an application spine is not a closure and is not
+/// counted: it is the desugared form of `let x := v in rest`, which Monad
+/// lowers to the beta-redex `(fn x => rest) v`. That lambda is applied
+/// immediately and the reducer (`mono.mo`'s beta step) substitutes it away, so
+/// no closure value ever exists -- while a lambda in ARGUMENT position
+/// (`map f (fn x => ...)`) is exactly the first-class function value the rule
+/// is about, and `detect.mo` cannot know whether the callee is inlinable, so it
+/// must refuse it.
+///
+/// The distinction is POSITION, not reducibility, and that matters: measured
+/// against the real front end on 2026-11-15, `def k (n : I64) : I64 := let i
+/// := 0 in n` and `def k (a : I64) : I64 := map_i64 (fn (y : I64) => y) a`
+/// BOTH reduce to zero lambdas once `extract_kernel` has inlined and
+/// beta-reduced them -- so a test on the reduced body cannot tell the local
+/// binding from the closure. Only the position can, and it is the honest one:
+/// a head lambda never becomes a value by construction, an argument lambda
+/// becomes one whenever the callee is not inlined.
 #[partial]
 def lambda_count (t : Term) (acc : I64) : I64 :=
     match term_peel t {
+        Term.app _f _a => lambda_count_app t acc,
         Term.lam _b _typ _body => count_all (value_children t) (acc + 1),
         _ => count_all (value_children t) acc,
     }
+
+/// An application whose HEAD is a lambda is a beta-redex: the lambda is not
+/// counted, but its BODY is walked -- the continuation can contain a real
+/// closure -- and so is every argument of the spine.
+#[partial]
+def lambda_count_app (t : Term) (acc : I64) : I64 :=
+    match term_peel (spine_head t) {
+        Term.lam _b _typ body => count_all (List.cons body (spine_args t List.empty)) acc,
+        _ => count_all (value_children t) acc,
+    }
+
+/// The head of an application spine: the function part with every argument
+/// stripped, so `((f a) b)` yields `f`.
+#[partial]
+def spine_head (t : Term) : Term := match term_peel t {
+    Term.app f _a => spine_head f,
+    _ => t,
+}
+
+/// Every argument of an application spine, in any order (the count does not
+/// care).
+#[partial]
+def spine_args (t : Term) (acc : List Term) : List Term := match term_peel t {
+    Term.app f a => spine_args f (List.cons a acc),
+    _ => acc,
+}
 
 #[partial]
 def count_all (children : List Term) (acc : I64) : I64 := match children {

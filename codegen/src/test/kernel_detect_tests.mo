@@ -23,8 +23,8 @@
 
 use lang::types {
     Attribute, Con, Decl, DebugName, Def, Identifier, Literal, Location,
-    NamePath, SortLevel, Term, TypeConstraint, Visibility, binder_binder,
-    binder_named, sentinel,
+    NamePath, NumSuffix, Param, SortLevel, Term, TypeConstraint, Visibility,
+    binder_binder, binder_named, param_many, sentinel,
 }
 use lib::kernel::detect {
     KernelDiagnostic, KernelVerdict, check_kernel, check_kernels, extract_kernels,
@@ -53,6 +53,27 @@ def mk (name : String) (typ : Term) (body : Term) (attrs : List Attribute) : Def
 /// A `#[kernel]` def.
 def kw (name : String) (typ : Term) (body : Term) : Def := mk name typ body kernel_attr
 
+/// A `#[kernel]` def WITH a parameter list -- the shape every PARSED def has
+/// and no `kw` fixture does.
+///
+/// This matters because `Def.params` is what bounds the peel
+/// `def_param_chain_body` applies before the rules run: `kw` carries no
+/// params, so its `term` is read as-is, while a parsed def's `term` is the
+/// written body wrapped in one `Term.lam` per explicit parameter
+/// (`lam_parsed_params`, `lang/parser.mo`). A fixture that wants to say
+/// anything about the parsed shape therefore has to supply both halves --
+/// the params AND the lambda chain -- which is what this constructor is for.
+def kwp (name : String) (typ : Term) (params : List Param) (term : Term) : Def :=
+    Def.mk (bare_npath name) typ term ([] : List TypeConstraint) kernel_attr
+        Visibility.package_private params
+
+/// One `(x : I64)` parameter, named `x`.
+def p_i64 (x : String) : Param := param_many (Identifier.id x) i64_ty
+
+/// `fn (a : I64) => fn (b : I64) => body` -- the parameter chain a parsed
+/// TWO-parameter def's term is.
+def param_chain2 (body : Term) : Term := lam "a" (lam "b" body)
+
 /// The declared type of a plain kernel: one EXPLICIT argument, so the
 /// polymorphism rule's control differs only in the binder's kind.
 def i64_to_i64 : Term :=
@@ -65,6 +86,13 @@ def ref (name : String) : Term :=
 
 /// `f a`.
 def app (f : Term) (a : Term) : Term := Term.app f a
+
+/// A BOUND variable at de Bruijn index `i` -- what a parameter reference
+/// inside a parsed def's lambda chain looks like.
+def bound (i : I64) : Term := Term.var i DebugName.unnamed
+
+/// An `I64` literal.
+def int_lit (v : I64) : Term := Term.lit (Literal.num v NumSuffix.i64)
 
 /// A one-argument lambda over `x`.
 def lam (arg : String) (body : Term) : Term :=
@@ -155,6 +183,68 @@ def test_rule_io_fires_on_a_cmd_reference : Bool :=
 def test_rule_closure_fires_on_a_lambda : Bool :=
     reports_exactly "closure" (check_kernel (kw "k" i64_to_i64 (lam "y" (ref "y"))))
 
+/// A PARSED def's term is a parameter lambda chain, and the closure rule must
+/// NOT count it -- the bug this test exists for.
+///
+/// `def k (a : I64) (b : I64) : I64 := a` reaches the checker with `params`
+/// holding two entries and `term` equal to `fn a => fn b => a`. Counting
+/// lambdas over that term reports two closures on a kernel that contains
+/// none, one per parameter. The fix is `def_param_chain_body`'s BOUNDED peel,
+/// and the bound is the whole point: `test_rule_closure_fires_on_a_lambda`
+/// above is the control that keeps an UNBOUNDED strip from being the answer.
+#[test]
+def test_rule_closure_is_silent_for_a_parsed_def_parameter_chain : Bool :=
+    let typ : Term :=
+        Term.pi (binder_named (Identifier.id "a")) i64_ty
+            (Term.pi (binder_named (Identifier.id "b")) i64_ty i64_ty)
+    in
+    let body : Term := param_chain2 (bound 1)
+    in
+    let d : Def := kwp "k" typ [p_i64 "a", p_i64 "b"] body
+    in
+    List.is_empty (check_kernel d)
+
+/// The same chain, with a REAL lambda underneath it: the peel removes exactly
+/// the two parameter lambdas and leaves the body lambda for the rule to find.
+/// A fixture with no params (like `kw`) cannot express this difference, which
+/// is why `kwp` exists.
+#[test]
+def test_rule_closure_still_fires_below_a_parameter_chain : Bool :=
+    let typ : Term :=
+        Term.pi (binder_named (Identifier.id "a")) i64_ty
+            (Term.pi (binder_named (Identifier.id "b")) i64_ty i64_ty)
+    in
+    let body : Term := param_chain2 (lam "y" (ref "y"))
+    in
+    let d : Def := kwp "k" typ [p_i64 "a", p_i64 "b"] body
+    in
+    reports_exactly "closure" (check_kernel d)
+
+/// The other three body-walking rules read the same peeled term, so the
+/// parameter chain must not hide a real violation either. `IO.mk` under the
+/// chain is still IO.
+#[test]
+def test_rule_io_sees_through_a_parsed_def_parameter_chain : Bool :=
+    let typ : Term := Term.pi (binder_named (Identifier.id "a")) i64_ty i64_ty
+    in
+    let body : Term := lam "a" (app (ref "IO.mk") (ref "x"))
+    in
+    let d : Def := kwp "k" typ [p_i64 "a"] body
+    in
+    reports_exactly "io" (check_kernel d)
+
+/// And a self-reference under the chain is still recursion -- `self_referencing`
+/// reads the peeled body too, so a kernel's own name may not hide in it.
+#[test]
+def test_rule_recursive_sees_through_a_parsed_def_parameter_chain : Bool :=
+    let typ : Term := Term.pi (binder_named (Identifier.id "a")) i64_ty i64_ty
+    in
+    let body : Term := lam "a" (app (ref "k") (ref "a"))
+    in
+    let d : Def := kwp "k" typ [p_i64 "a"] body
+    in
+    reports_exactly "recursive" (check_kernel d)
+
 #[test]
 def test_rule_closure_is_silent_without_a_lambda : Bool :=
     List.is_empty (check_kernel (kw "k" i64_to_i64 (ref "y")))
@@ -164,6 +254,36 @@ def test_rule_closure_is_silent_without_a_lambda : Bool :=
 #[test]
 def test_rule_closure_sees_a_nested_lambda : Bool :=
     let body : Term := app (ref "List.map") (lam "y" (ref "y"))
+    in
+    reports_exactly "closure" (check_kernel (kw "k" i64_to_i64 body))
+
+/// A lambda at the HEAD of an application is a `let`, not a closure.
+///
+/// `let x := v in rest` desugars to the beta-redex `(fn x => rest) v`, which
+/// the reducer substitutes away, so no closure value ever exists. Measured
+/// against the real front end on 2026-11-15: a kernel whose body is only
+/// `let i := 0 in n` was reported as a closure while containing none.
+#[test]
+def test_rule_closure_is_silent_for_a_let_shaped_head_lambda : Bool :=
+    let body : Term := app (lam "i" (ref "n")) (int_lit 0)
+    in
+    List.is_empty (check_kernel (kw "k" i64_to_i64 body))
+
+/// The control for the test above, and the reason the discriminator is
+/// POSITION rather than reducibility: the SAME lambda moved into argument
+/// position is a first-class function value, and must be refused. Both shapes
+/// reduce to zero lambdas, so only the position separates them.
+#[test]
+def test_rule_closure_fires_when_the_same_lambda_is_an_argument : Bool :=
+    let body : Term := app (ref "map_i64") (lam "i" (ref "n"))
+    in
+    reports_exactly "closure" (check_kernel (kw "k" i64_to_i64 body))
+
+/// A lambda under a head lambda's BODY is still found: the head itself is not
+/// counted, but the continuation is walked.
+#[test]
+def test_rule_closure_sees_a_lambda_inside_a_let_body : Bool :=
+    let body : Term := app (lam "i" (lam "y" (ref "y"))) (int_lit 0)
     in
     reports_exactly "closure" (check_kernel (kw "k" i64_to_i64 body))
 

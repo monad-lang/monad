@@ -34,8 +34,8 @@
 /// real front end is `motes/kernel_example/`'s, in Phase 2's last item.
 use lang::types {
     AttrArg, Attribute, Con, DebugName, Decl, Def, Identifier, Literal, MatchCase,
-    NamePath, Native, NumSuffix, Term, TypeConstraint, Visibility, binder_named,
-    sentinel, term_peel,
+    NamePath, Native, NumSuffix, Param, Term, TypeConstraint, Visibility, binder_named,
+    param_many, sentinel, term_peel,
 }
 use lib::kernel::detect {KernelDiagnostic, extract_kernels}
 use lib::kernel::mono {
@@ -91,6 +91,17 @@ def mk_def (name : String) (body : Term) : Def :=
 def mk_kernel (name : String) (typ : Term) (body : Term) : Def :=
     Def.mk (bare_npath name) typ body ([] : List TypeConstraint) kernel_attr
         Visibility.package_private List.empty
+
+/// A `#[kernel]` def with an explicit PARAMETER LIST -- the shape every
+/// PARSED def has. `Def.params` is what bounds the peel `extract_kernel`
+/// applies, so a fixture that wants to prove the parameter chain is gone has
+/// to supply both halves.
+def mk_kernel_p (name : String) (typ : Term) (params : List Param) (term : Term) : Def :=
+    Def.mk (bare_npath name) typ term ([] : List TypeConstraint) kernel_attr
+        Visibility.package_private params
+
+/// One `(x : I64)` parameter.
+def p_i64 (x : String) : Param := param_many (Identifier.id x) i64_ty
 
 /// `fn (a : I64) => fn (b : I64) => body` -- the arity every native binary op
 /// reaches the reducer with.
@@ -521,6 +532,41 @@ def test_extract_kernel_inlines_and_reports_nothing : Bool :=
             Option.some v => I64.beq v 3,
             Option.none => false,
         }
+
+/// The extracted body is the written BODY, not the parameter lambda chain.
+///
+/// A parsed def's term is `fn a => <body>`; if `extract_kernel` handed that
+/// chain to `scalar.mo`, it would lower a nested function instead of the
+/// kernel's own entry block. The peel is bounded by `Def.params`, so the
+/// chain is gone while the body survives -- which is what the literal check
+/// below distinguishes.
+#[test]
+def test_extract_kernel_peels_the_parameter_chain : Bool :=
+    let typ : Term := Term.pi (binder_named (Identifier.id "n")) i64_ty i64_ty
+    in
+    let kernel : Decl := Decl.def_d (mk_kernel_p "k" typ [p_i64 "n"] (lam "n" (int_lit 7)))
+    in
+    let k : KernelExtract := extract_kernel (the_kernel [kernel]) [kernel] List.empty []
+    in
+    KernelExtract.ready k
+        && List.length k.params == 1
+        && match int_literal_of k.body {
+            Option.some v => I64.beq v 7,
+            Option.none => false,
+        }
+
+/// The control: a def whose BODY is a lambda (no parameters to peel) keeps it.
+/// Without this, an unbounded strip would look correct on the test above.
+#[test]
+def test_extract_kernel_keeps_a_body_that_is_a_lambda : Bool :=
+    let kernel : Decl := Decl.def_d (mk_kernel "k" i64_ty (lam "y" (ref "y")))
+    in
+    let k : KernelExtract := extract_kernel (the_kernel [kernel]) [kernel] List.empty []
+    in
+    match term_peel k.body {
+        Term.lam _b _typ _body => true,
+        _ => false,
+    }
 
 /// A kernel whose helper cannot be fully unfolded reports an `inline` finding
 /// rather than emitting a body with a live reference to a top-level def.

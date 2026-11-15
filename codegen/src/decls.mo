@@ -15,7 +15,8 @@ use llvm::strmap {str_map_empty, str_map_insert, str_map_lookup}
 use std::list {List.filter_map}
 use lang::types {
     Attribute, Decl, DebugName, Def, Identifier, Inductive, Multiplicity, NamePath, Struct,
-    StructField, Term, Visibility, concrete, has_attr, id_eq, sentinel, show_name_path,
+    StructField, Term, Visibility, binder_is_explicit, concrete, has_attr, id_eq, sentinel,
+    show_name_path, term_peel,
 }
 use lang::module {ModuleInfo}
 use lang::scope {struct_synthetic_inductive}
@@ -189,6 +190,51 @@ def def_name_str (d : Def) : String := match d {
 def def_body_term (d : Def) : Term := match d {
     Def.mk {name := _name, typ := _typ, term := term_, constraints := _constraints, attrs := _attrs, vis := _vis, ..} => term_,
 }
+
+/// The def's BODY, with the leading parameter lambda chain removed.
+///
+/// `def_body_term` returns the def's `term` verbatim, and a PARSED def's term
+/// is not its body: `lam_parsed_params` (`lang/parser.mo`) wraps the written
+/// body in one `Term.lam` per explicit parameter, and elaboration preserves
+/// that chain (`close_named_vars` rebuilds lams). So
+/// `def add (a : I64) (b : I64) : I64 := a + b` carries the term
+/// `fn a => fn b => a + b`, and a walk that counts lambdas -- or reports a
+/// free reference -- is reading the SIGNATURE, not the body.
+///
+/// The peel is bounded, not "strip every lam", and the bound is `Def.params`
+/// -- the def's own explicit parameter list, which is the ground truth
+/// `lam_parsed_params` was given (`def_decl_with_params` wraps exactly
+/// `explicit_params_of params`). A bound is load-bearing rather than tidy: a
+/// def whose body really IS a lambda (`def f : I64 -> I64 := fn x => x`) must
+/// keep it, or the kernel closure rule loses the exact construct it exists to
+/// find. A hand-built fixture carries no `params`, so it owes nothing and is
+/// returned unchanged -- which keeps every pre-existing fixture's meaning
+/// intact.
+///
+/// A `Term.lam` whose binder is a QUANTIFIER is not peeled either: an
+/// implicit parameter is a `pi` binder, never a body lambda, so a leading
+/// quantifier lam would be a body-level `fn` and peeling it would be exactly
+/// the over-strip this function exists to avoid. `binder_is_explicit` is read
+/// off the lam's own binder rather than compared by name, because
+/// `Def.params`' names are the source spelling while the lam's are what the
+/// parser bound, and a name comparison would be a second, weaker copy of the
+/// same question.
+#[partial]
+def def_param_chain_body (d : Def) : Term := match d {
+    Def.mk {params, term, ..} => peel_param_lams (List.length params) term,
+}
+
+#[partial]
+def peel_param_lams (owed : I64) (t : Term) : Term :=
+    if I64.lt owed 1
+    then t
+    else match term_peel t {
+        Term.lam b _typ body =>
+            if binder_is_explicit b
+            then peel_param_lams (owed - 1) body
+            else t,
+        _ => t,
+    }
 
 /// The qualified symbol of every `#[export "c"]` def, in decl order.
 /// These are extra reachability roots: `main` never references an export,

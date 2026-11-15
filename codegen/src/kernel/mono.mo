@@ -90,7 +90,7 @@ use lang::types {
     Native, NumSuffix, StructLitField, Term, binder_is_explicit, binder_name, term_peel,
 }
 use lang::typecheck::subst {beta_reduce, term_subst, term_shift}
-use lib::decls {def_body_term, def_name_str, extract_defs}
+use lib::decls {def_body_term, def_name_str, def_param_chain_body, extract_defs}
 use lib::kernel::detect {KernelDiagnostic, value_children}
 use llvm::strmap {str_map_empty, str_map_insert, str_map_lookup}
 use std::map {HashMap}
@@ -864,7 +864,14 @@ def term_children_of (t : Term) : List Term := value_children t
 #[partial]
 pub def extract_kernel (kernel : Def) (decl_list : List Decl) (call_sites : List KernelCallSite) (dim_positions : List I64) : KernelExtract :=
     let defs : HashMap String Term := build_def_table decl_list in
-    let body : Term := def_body_term kernel in
+    // `def_param_chain_body`, not `def_body_term`: a parsed def's term is a
+    // parameter lambda chain, so the unstripped read hands `scalar.mo` a body
+    // wrapped in one `Term.lam` per kernel parameter -- which it would lower as
+    // a nested function rather than the function's own entry block, and which
+    // `detect.mo`'s closure rule would (correctly) refuse one layer up. The
+    // extractor is the last place the chain can be dropped, so it is dropped
+    // here.
+    let body : Term := def_param_chain_body kernel in
     let inlined : Term := inline_term defs inline_budget body in
     let reduced : Term := reduce_with defs inlined in
     let name : String := def_name_str kernel in
