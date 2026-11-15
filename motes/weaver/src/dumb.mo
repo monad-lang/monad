@@ -27,7 +27,7 @@ use weaver::providers {Weaver.max_tokens_reclamp}
 use weaver::gate {Gate.weaver, ApproverConfig, Approver.linear, Approver.gate}
 use weaver::classify {AutoCtx, Classify.intent, Classify.with_plan}
 use weaver::ask {AskSpec, AskReply, AskSeam, AskTool.impl, AskTool.cancelled_reply, AskTool.line_prompt, AskTool.parse_line}
-use weaver::auto_continue {AutoContinue.next, AutoContinue.record_failure, AutoContinue.clear_failures, AutoContinue.max_failures, AutoContinue.budget_note, AutoContinue.plan_context}
+use weaver::auto_continue {AutoContinue.next, AutoContinue.record_failure, AutoContinue.clear_failures, AutoContinue.max_failures, AutoContinue.budget_note, AutoContinue.plan_context, AutoContinue.finish_note, AutoContinue.stall_note, AutoContinue.note_turn, AutoContinue.reset_progress}
 use weaver::policy {Mode, Mode.show}
 use weaver::error {WeaverError, WeaverError.show, WeaverError.recoverable, WeaverError.of_shuttle}
 use weaver::store {StoreState, Store.record_history, Store.write_plan, Store.scratch_of}

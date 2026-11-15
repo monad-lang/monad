@@ -26,7 +26,7 @@ use weaver::side {Side.wanted, Side.btw_question, Side.fullscreen}
 use weaver::btw {Btw.ask}
 use weaver::classify {AutoCtx, Classify.intent, Classify.with_plan}
 use weaver::ask {AskSpec, AskOption, AskReply, AskSeam, AskTool.impl, AskTool.cancelled_reply}
-use weaver::auto_continue {AutoContinue.next, AutoContinue.record_failure, AutoContinue.clear_failures, AutoContinue.max_failures, AutoContinue.budget_note, AutoContinue.plan_context}
+use weaver::auto_continue {AutoContinue.next, AutoContinue.record_failure, AutoContinue.clear_failures, AutoContinue.max_failures, AutoContinue.budget_note, AutoContinue.plan_context, AutoContinue.finish_note, AutoContinue.stall_note, AutoContinue.note_turn, AutoContinue.reset_progress}
 use shuttle::message_types {Role, Content}
 use weaver::usage {UsageTracker.start, UsageTracker.silent, UsageTracker.last}
 use std::ref {Ref, Ref.new, Ref.get, Ref.set}
