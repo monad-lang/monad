@@ -81,6 +81,7 @@ members = [
   "motes/time",
   "motes/markdown",
   "motes/gen",
+  "motes/linter",
   "motes/acorn",
   "motes/docgen",
   "motes/ply",
@@ -136,6 +137,9 @@ path = "llvm"
 # more tree to check and nothing else.
 [workspace.dependencies.mlir]
 path = "mlir"
+
+[workspace.dependencies.linter]
+path = "motes/linter"
 
 [workspace.dependencies.log]
 path = "motes/log"

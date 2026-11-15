@@ -1,0 +1,81 @@
+# The linter: a style/hygiene pass over Monad source, driven by the
+# compiler's own front end (`lang::parser`, `lang::module`), never a fork of
+# it. See plans/implementations/linter.md.
+#
+# It is a LIBRARY with a thin `[[bin]]` rather than the other way round: the
+# `monad lint` subcommand in the `cli` mote calls the library directly, so
+# the two entry points cannot drift on what a lint rule finds. That is also
+# why this mote must not depend on `cli` -- the edge would be circular the
+# day `cli` grows its `lint` arm.
+#
+# `[features] default = []` is declared from the start so `cli` can gate its
+# dependency on this mote the way it gates `doc` and `lsp`. A library mote
+# with no default features costs nothing to build, and declaring the table
+# now means `cli/mote.toml` will not need a third edit the day the gate
+# lands.
+#
+# Affine-by-default migration exception (measured 2026-11-14). Every mote in
+# this workspace that predates the affine rule carries this table, and this
+# one does too: the lint driver's walks thread a `Rule` (which holds a
+# function), a `LintFile` and a config through recursion, and the
+# use-count rule rejects that shape. The `Copy` instances this mote DOES
+# declare (`LintLevel`, `LintConfig`, `LintDiagnostic`, `Located`, `Args`)
+# are the ones that were free to write; the rest is a real migration, and
+# inventing a `Copy` for a function-holding record would be a lie about its
+# cost. Delete this table when the mote reaches zero violations.
+# See plans/type-system/quantitative-types.md.
+[affine]
+mode = "warn"
+
+[mote]
+name = "linter"
+version = "0.1.0"
+edition = "2026"
+
+[lib]
+path = "src/lib.mo"
+
+[[bin]]
+name = "monad-lint"
+path = "src/main.mo"
+
+[dependencies.init]
+workspace = true
+
+[dependencies.std]
+workspace = true
+
+# The engine, not a helper: the located parse, the declaration ranges and the
+# AST the rules read all come from here. Nothing in this mote parses source
+# by hand.
+[dependencies.lang]
+workspace = true
+
+# `ParseResult` -- the shape `decls_skip` answers with. The linter matches on
+# it rather than treating a parse failure as "no declarations", which is the
+# distinction that keeps a file that does not compile from being linted
+# silently.
+[dependencies.parsec]
+workspace = true
+
+# The command surface of the `monad-lint` binary. The library does not need
+# it -- `cli` supplies its own argv parsing for `monad lint`.
+[dependencies.clap]
+workspace = true
+
+# `llvm` and `runtime` are declared because `lang::module` -- where the
+# declaration ranges and the parse entry points live -- is not
+# self-contained: the compiler's own modules reach into codegen, codegen
+# reaches into `llvm`, and the IR type names come from `llvm::strmap`.
+# Without these the module graph fails to resolve with
+# `module not found: llvm.strmap`, which names the symptom and not the
+# cause. `motes/toolkit` and `motes/docgen` declare the same pair for the
+# same reason.
+[dependencies.llvm]
+workspace = true
+
+[dependencies.runtime]
+workspace = true
+
+[features]
+default = []
