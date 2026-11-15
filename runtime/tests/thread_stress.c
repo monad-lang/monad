@@ -25,7 +25,12 @@
  *   * cooperative cancellation -- a fiber cancelled while it sleeps must
  *     not run the continuation bound after the sleep;
  *   * channels -- a take parks until a put arrives, a put parks while the
- *     channel is full, and try_take probes without blocking.
+ *     channel is full, and try_take probes without blocking;
+ *   * wait-any -- `monad_fiber_wait_any` parks until one of several fibers
+ *     stops and answers its index, and a fiber parked there is woken by
+ *     `monad_cancel_fiber` rather than by a timeout, so a cancelled racer
+ *     leaves its park promptly. `monad_channel_take_any` parks on a SET of
+ *     channels and must wake when a value arrives on any of them.
  *
  * It checks every line it reads, so a lost or corrupted carry is a
  * failure even without a sanitizer, and `scripts/check-runtime-threads.sh`
@@ -68,6 +73,9 @@ void* monad_channel_new(void);
 void* monad_channel_put(void* handle, int64_t value);
 int64_t monad_channel_take(void* handle);
 void* monad_channel_try_take(void* handle);
+int64_t monad_fiber_wait_any(void* fibers);
+void* monad_channel_take_any(void* chans);
+void* alloc_constructor(int64_t tag, int64_t field_count);
 
 /* The runtime references codegen's entry point; nothing calls it here. */
 void* main_monad(void* args) {
@@ -517,6 +525,140 @@ static void check_channels(void) {
     }
 }
 
+/* Build a `List` cell: tag 6, head = field 0, tail = field 1 -- the exact
+   walk `monad_fiber_wait_any`/`monad_channel_take_any` do. A NULL tail is
+   the empty list. */
+static void* cons_cell(void* head, void* tail) {
+    Con* cell = (Con*)alloc_constructor(6, 2);
+    cell->fields[0] = head;
+    cell->fields[1] = tail;
+    return cell;
+}
+
+/* A fiber body that PARKS in `monad_fiber_wait_any` on a set of sleepers it
+   creates for the occasion. The cancel below then has to wake it through
+   the pushed broadcast; without that push it would sit in
+   `pthread_cond_wait` forever, since there is no timeout any more. */
+static int64_t wait_any_park_body(int64_t closure, int64_t unit) {
+    (void)closure;
+    (void)unit;
+    void* s1 = monad_fork_io(alloc_closure((void*)nap_100_body, 1, 0));
+    void* s2 = monad_fork_io(alloc_closure((void*)nap_100_body, 1, 0));
+    Con* tail = (Con*)alloc_constructor(6, 2);
+    tail->fields[0] = s2;
+    tail->fields[1] = NULL;
+    Con* head = (Con*)alloc_constructor(6, 2);
+    head->fields[0] = s1;
+    head->fields[1] = tail;
+    int64_t idx = monad_fiber_wait_any(head);
+    (void)idx;
+    return (int64_t)(intptr_t)monad_io_pure(0);
+}
+
+/* wait-any: parks until ONE member of a set stops, then answers its index.
+   The index is a plain int64_t, not a Con, so it is compared directly.
+   -1 means "no winner" (empty list, or the waiter was cancelled). */
+static void check_wait_any(void) {
+    /* Two long sleepers: neither finishes, so this must park. A third
+       fiber that stops at once is the winner, and it is NOT the head, so
+       a wait that only ever looked at field 0 would fail. */
+    void* slow1 = monad_fork_io(alloc_closure((void*)nap_100_body, 1, 0));
+    void* slow2 = monad_fork_io(alloc_closure((void*)nap_100_body, 1, 0));
+    void* fast = monad_fork_io(alloc_closure((void*)nap_100_body, 1, 0));
+    /* Index 1 is `fast`: cons slow1 (cons fast (cons slow2 nil)). Nil is a
+       NULL tail, which the runtime walk treats as end-of-list. */
+    void* fibers = cons_cell(slow1, cons_cell(fast, cons_cell(slow2, NULL)));
+    int64_t idx = monad_fiber_wait_any(fibers);
+    /* All three are 100 ms sleepers, so WHICH one the scan sees first is a
+       race -- but it must be the first DONE one in list order, so any
+       index in range proves the walk and the wake work. A -1 here means
+       the wait missed every completion, which is the defect. */
+    if (idx < 0 || idx > 2) {
+        fprintf(stderr, "thread_stress: wait_any answered %lld, expected 0..2\n",
+                (long long)idx);
+        fail();
+    }
+    monad_cancel_fiber(slow1);
+    monad_cancel_fiber(slow2);
+    /* `fast` was reaped by the caller, so only the two sleepers need it. */
+    monad_await_fiber(slow1);
+    monad_await_fiber(slow2);
+    monad_await_fiber(fast);
+
+    /* An empty list (a NULL tail, i.e. no cons at all) answers -1 at once
+       rather than parking forever. */
+    if (monad_fiber_wait_any(NULL) != -1) {
+        fprintf(stderr, "thread_stress: wait_any of an empty list was not -1\n");
+        fail();
+    }
+
+    /* THE CANCEL PUSH. A fiber parked in wait_any can only be released by
+       `monad_cancel_fiber` broadcasting that condvar; if the push were
+       missing this would hang until the harness timed out (or forever),
+       which is exactly the 20 ms tick this replaced. `wait_any` is called
+       from a FIBER here, because the cancel flag it checks is the fibre-
+       local one -- cancelling from the main thread would test nothing. */
+    void* parked = monad_fork_io(alloc_closure((void*)wait_any_park_body, 1, 0));
+    struct timespec settle = {0, 20 * 1000000};
+    nanosleep(&settle, NULL);
+    struct timespec before, after;
+    clock_gettime(CLOCK_MONOTONIC, &before);
+    monad_cancel_fiber(parked);
+    monad_await_fiber(parked);
+    clock_gettime(CLOCK_MONOTONIC, &after);
+    long long waited_ms = (long long)(after.tv_sec - before.tv_sec) * 1000 +
+                          (after.tv_nsec - before.tv_nsec) / 1000000;
+    /* Generous: the point is "not the 20 ms tick forever", and a slow or
+       loaded machine may take a few ms to switch threads. */
+    if (waited_ms > 1000) {
+        fprintf(stderr, "thread_stress: a cancelled wait_any waiter took %lld ms\n",
+                waited_ms);
+        fail();
+    }
+}
+
+/* channel_take_any: parks on a SET of channels, waking when any of them
+   gets a value -- including one that is NOT the parking spot. */
+static void check_channel_take_any(void) {
+    void* a = monad_channel_new();
+    void* b = monad_channel_new();
+    void* chans = cons_cell(a, cons_cell(b, NULL));
+
+    /* A value already present on the SECOND channel must be found without
+       blocking at all. */
+    monad_channel_put(b, 42);
+    Con* got = (Con*)monad_channel_take_any(chans);
+    if (!got || got->tag != TAG_SOME || (int64_t)(intptr_t)got->fields[0] != 42) {
+        fprintf(stderr, "thread_stress: take_any did not find the value on channel 2\n");
+        fail();
+    }
+
+    /* An empty set answers none rather than parking forever. */
+    Con* empty = (Con*)monad_channel_take_any(NULL);
+    if (!empty || empty->tag != TAG_NONE) {
+        fprintf(stderr, "thread_stress: take_any of an empty set was not none\n");
+        fail();
+    }
+
+    /* A value arriving LATER on the second channel wakes a parked wait.
+       `park` is channel a, so the wake has to come from b's put -- the
+       cross-channel wake a per-channel condvar could not do. */
+    channel_arg late = {b, 99};
+    pthread_t t;
+    if (pthread_create(&t, NULL, channel_put_later, &late) != 0) {
+        fprintf(stderr, "thread_stress: could not start the second putter\n");
+        fail();
+        return;
+    }
+    Con* parked = (Con*)monad_channel_take_any(chans);
+    pthread_join(t, NULL);
+    if (!parked || parked->tag != TAG_SOME ||
+        (int64_t)(intptr_t)parked->fields[0] != 99) {
+        fprintf(stderr, "thread_stress: a parked take_any missed the second channel's value\n");
+        fail();
+    }
+}
+
 static void run(void* (*worker)(void*), int threads) {
     pthread_t t[PIPE_THREADS];
     for (int i = 0; i < threads; i++)
@@ -549,6 +691,8 @@ int main(void) {
     check_fiber_answers();
     check_cooperative_cancel();
     check_channels();
+    check_wait_any();
+    check_channel_take_any();
     printf("thread_stress: %d failure(s)\n", failures);
     return failures != 0;
 }

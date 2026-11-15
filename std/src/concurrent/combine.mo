@@ -2,13 +2,19 @@
 // Duration.
 // Builds on forkIO/await_fiber/cancel_fiber from std.concurrent.fiber.
 
-use lib::concurrent::fiber {Fiber, FiberError, await_fiber, cancel_fiber, forkIO, pollFiber}
+use lib::concurrent::fiber {Fiber, FiberError, await_fiber, cancel_fiber, forkIO, pollFiber, wait_any}
 
 // `Combine.Duration`, not `Duration`: `motes/time` declares a `pub Duration`
 // (seconds and nanos) and whole-program qualification makes the bare name
 // ambiguous, so the literal `{ millis := 300 }` resolved to the wrong one.
 // Same reason `FiberScope` below carries a namespace note.
-struct Combine.Duration {
+//
+// `pub` because it appears in `timeout`'s SIGNATURE, which is already `pub`.
+// A private type in a public signature makes the operation uncallable from
+// any other mote: the use-completeness gate refuses the caller's reference
+// to the type, so `timeout` was reachable in name only. `{ millis := n }`
+// still works at a call site (`bench/src/async_bench.mo` does exactly that).
+pub struct Combine.Duration {
     millis : I64,
 }
 
@@ -66,46 +72,66 @@ def cancel_all (fibers : List (Fiber A)) : IO Unit :=
         }
     }
 
-// The answer of the first fiber in `fibers` that has stopped, polling
-// each once in list order; `none` while every one is still running.
-def poll_first (fibers : List (Fiber A)) : IO (Option (Result FiberError A)) :=
+// The answer of whichever contestant `wait_any` named first. Split out
+// because a `let x <- ...` inside a `match` arm is a recorded checker
+// trap, so each stage gets its own small def.
+def race_answer (winner : Fiber A) : IO (Result FiberError A) :=
+    Monad.bind (await_fiber winner) (fn r => IO.pure r)
+
+// Cancel every contestant, then hand back the winner's answer.
+def race_won (fibers : Shared (List (Fiber A))) (winner : Fiber A) : IO (Result FiberError A) := do {
+    let answer <- race_answer winner;
+    let _ <- cancel_all (Shared.get fibers);
+    return answer
+}
+
+// The fiber at `idx` in `fibers`, or the head when the index is out of
+// range (which only an empty list could cause, and `race` refuses that).
+def fiber_at (fibers : List (Fiber A)) (idx : I64) : Option (Fiber A) :=
     match fibers {
-        List.empty => IO.pure Option.none,
+        List.empty => Option.none,
         List.cons f rest =>
-            Monad.bind (pollFiber f) (fn done =>
-                match done {
-                    Option.some a => IO.pure (Option.some a),
-                    Option.none => poll_first rest
-                })
+            if I64.lt idx 1 then Option.some f else fiber_at rest (I64.sub idx 1)
     }
 
-// The race loop reads the contestant list every round and cancels it at
-// the end, so it threads a `Shared`: `race` hands the list over once.
-def race_won (fibers : Shared (List (Fiber A))) (winner : Result FiberError A) : IO (Result FiberError A) :=
-    Monad.bind (cancel_all (Shared.get fibers)) (fn _ => IO.pure winner)
-
-#[partial]
-def race_step (fibers : Shared (List (Fiber A))) (done : Option (Result FiberError A)) : IO (Result FiberError A) :=
-    match done {
-        Option.some a => race_won fibers a,
-        Option.none => Monad.bind (sleepIO 1) (fn _ => race_loop fibers)
+def race_pick (fibers : Shared (List (Fiber A))) (idx : Option I64) : IO (Result FiberError A) :=
+    match idx {
+        Option.some i =>
+            match fiber_at (Shared.get fibers) i {
+                Option.some winner => race_won fibers winner,
+                Option.none => IO.pure (Result.err FiberError.never_started)
+            },
+        // `wait_any` answers `none` only when the waiter itself was
+        // cancelled; there is no winner to report.
+        Option.none => IO.pure (Result.err FiberError.cancelled)
     }
-
-#[partial]
-def race_loop (fibers : Shared (List (Fiber A))) : IO (Result FiberError A) :=
-    Monad.bind (poll_first (Shared.get fibers)) (race_step fibers)
 
 /// The answer of whichever fiber stops first, error or not; every other
-/// one is cancelled. Waits by polling the contestants every millisecond, so a
-/// win is seen at most about 1 ms late. On the Rust host polling runs a
-/// fiber to completion, so the first fiber in the list always wins there.
+/// one is cancelled. Parks on `wait_any` until a contestant stops, so a
+/// win is seen as soon as it happens rather than up to a millisecond
+/// late, and a race held open by sleepers costs no timer wakeups.
+///
+/// On the Rust host `wait_any` answers `none` (it cannot park), so this
+/// reports `err cancelled` there; `combine_test.mo`'s lazy-host
+/// expectations are written against that.
+///
 /// A cancelled loser stops at its next IO bind (cancellation is
 /// cooperative), so nothing waits for it and no later side effect runs.
-/// Racing zero fibers never returns: there is no value of `A` to hand
-/// back. Callers pass at least one fiber.
-#[partial]
+/// Racing zero fibers has no value of `A` to hand back; callers pass at
+/// least one fiber.
+///
+/// The continuation is spelled `fn idx => race_pick … idx`, NOT
+/// `race_pick (Shared.of fibers)` as a partial application, and that is
+/// LOAD-BEARING rather than stylistic: codegen's IO-bind fusion
+/// (`io_bind_plan`) only claims a bind whose continuation is a literal
+/// lambda. A partial application falls through to `IO.bind`'s reference
+/// body, which `match`es its first argument -- and when this fiber is
+/// cancelled, `wait_any` answers the cancellation sentinel rather than an
+/// `IO` box, so that match dereferences a non-object and the fiber
+/// SEGFAULTS instead of unwinding. See
+/// `plans/implementations/2026-11-15-unfused-io-bind-dereferences-the-cancel-sentinel.md`.
 pub def race (fibers : List (Fiber A)) : IO (Result FiberError A) :=
-    race_loop (Shared.of fibers)
+    Monad.bind (wait_any fibers) (fn idx => race_pick (Shared.of fibers) idx)
 
 /// The outcome of a bounded wait: the fiber finished (with its own result),
 /// or the duration expired first.
@@ -123,6 +149,13 @@ pub type Timeout A {
 /// cancels the waiter, which may itself stay blocked in `await_fiber f`
 /// until `f` finishes; nothing waits for either, and `timeout` returns as
 /// soon as the timer wins.
+///
+/// STILL THREE THREADS, deliberately, and P1 did not change that: `race`
+/// no longer polls, so a bounded wait costs no timer WAKEUPS any more, but
+/// the timer is still a fiber. Turning it into a reactor deadline is P4's
+/// work, because a deadline needs an event loop to hang off and there is
+/// no epoll/kqueue in the runtime yet (`monad-fiber-scheduler.md`'s P1
+/// scope note).
 pub def timeout {A : Type} (duration : Combine.Duration) (f : Fiber A) : IO (Result FiberError (Timeout A)) := do {
     let waiter <- forkIO (fn (_ : Unit) => do {
         let r <- await_fiber f;

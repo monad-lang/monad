@@ -11,6 +11,8 @@ use std::concurrent::channel {
     Channel, Channel.new, Channel.put, Channel.take, Channel.tryTake, select,
 }
 use std::concurrent::fiber {await_fiber, forkIO}
+use std::concurrent::combine {sleepIO}
+open IO {current_time_nano}
 
 def new_i64 : IO (Channel I64) := Channel.new
 
@@ -58,8 +60,8 @@ def test_producer_then_take : IO Bool := do {
     return (v == 9)
 }
 
-/// `select` probes in list order, so a value already waiting in the second
-/// channel is found without touching the empty first one.
+/// A value already waiting in the second channel is found without the
+/// first one ever being touched.
 #[test]
 def test_select_skips_empty : IO Bool := do {
     let a <- new_i64;
@@ -68,9 +70,11 @@ def test_select_skips_empty : IO Bool := do {
     let sb := Shared.of b;
     Channel.put (Shared.get sb) 5;
     let v <- select [Shared.get sa, Shared.get sb];
-    return (v == 5)
+    return (match v { Option.some x => x == 5, Option.none => false })
 }
 
+/// With both channels holding a value, the FIRST in list order wins:
+/// `select` scans in order, so this is deterministic.
 #[test]
 def test_select_first_ready : IO Bool := do {
     let a <- new_i64;
@@ -80,5 +84,61 @@ def test_select_first_ready : IO Bool := do {
     Channel.put (Shared.get sa) 3;
     Channel.put (Shared.get sb) 4;
     let v <- select [Shared.get sa, Shared.get sb];
-    return (v == 3)
+    return (match v { Option.some x => x == 3, Option.none => false })
+}
+
+/// `select` on an empty list has no value and must not block.
+#[test]
+def test_select_empty_is_none : IO Bool := do {
+    let chs : List (Channel I64) := List.empty;
+    let v <- select chs;
+    return (match v { Option.some _ => false, Option.none => true })
+}
+
+/// THE blocking case: the value arrives from a fiber AFTER the select has
+/// already parked. This is the one shape the old polling loop could not
+/// distinguish from a fast probe, and the reason `select` now parks on
+/// the channels themselves.
+#[test]
+def test_select_waits_for_a_later_put : IO Bool := do {
+    let a <- new_i64;
+    let b <- new_i64;
+    let sa := Shared.of a;
+    let sb := Shared.of b;
+    let sc := Shared.of b;
+    let f <- forkIO (fn (_ : Unit) => do {
+        sleepIO 50;
+        Channel.put (Shared.get sc) 11
+    });
+    let v <- select [Shared.get sa, Shared.get sb];
+    let _ <- await_fiber f;
+    return (match v { Option.some x => x == 11, Option.none => false })
+}
+
+/// A select whose value arrives on a channel OTHER than the first, and
+/// only after the select has parked. This is the case the cross-channel
+/// wake exists for: the waiter sleeps on the FIRST channel's condvar, so
+/// a put on the second has to reach that condvar through the registry.
+///
+/// It is a HANG case, not a slow one: before every watched channel was
+/// registered, this blocked in `pthread_cond_wait` forever. The elapsed
+/// bound below is what turns "blocked forever" into a failing test rather
+/// than a stuck run. Compiled only -- the host answers `none` at once.
+#[test]
+def test_select_wakes_on_a_non_first_channel : IO Bool := do {
+    let a <- new_i64;
+    let b <- new_i64;
+    let sa := Shared.of a;
+    let sb := Shared.of b;
+    let sc := Shared.of b;
+    let f <- forkIO (fn (_ : Unit) => do {
+        sleepIO 30;
+        Channel.put (Shared.get sc) 42
+    });
+    let t0 <- current_time_nano;
+    let v <- select [Shared.get sa, Shared.get sb];
+    let t1 <- current_time_nano;
+    let _ <- await_fiber f;
+    let elapsed_ms := I64.div (I64.sub t1 t0) 1000000;
+    return (some_is v 42 && elapsed_ms < 2000)
 }

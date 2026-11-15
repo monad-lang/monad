@@ -668,6 +668,10 @@ def native_runtime_fn_name (attrs : List Attribute) : Option NativeWrapKind :=
             // `Fiber`'s own module says so ("Fiber handles are opaque
             // runtime objects; do not pattern match on them").
             else if String.beq target "fork_io" then Option.some (NativeWrapKind.raw_io_passthrough "monad_fork_io")
+            // `fiber_wait_any`: the one primitive `race`/`select`/`timeout`
+            // park on instead of polling. A raw i64 index, so the same
+            // one-`RawIO.io` wrap as its siblings.
+            else if String.beq target "fiber_wait_any" then Option.some (NativeWrapKind.raw_io_passthrough "monad_fiber_wait_any")
             else if String.beq target "await_fiber" then Option.some (NativeWrapKind.raw_io_passthrough "monad_await_fiber")
             else if String.beq target "cancel_fiber" then Option.some (NativeWrapKind.raw_io_passthrough "monad_cancel_fiber")
             // `pollFiber`'s raw native, await's non-blocking sibling:
@@ -687,6 +691,11 @@ def native_runtime_fn_name (attrs : List Attribute) : Option NativeWrapKind :=
             else if String.beq target "channel_put" then Option.some (NativeWrapKind.raw_io_passthrough "monad_channel_put")
             else if String.beq target "channel_take" then Option.some (NativeWrapKind.raw_io_passthrough "monad_channel_take")
             else if String.beq target "channel_try_take" then Option.some (NativeWrapKind.raw_io_passthrough "monad_channel_try_take")
+            // `Channel.take_any`/`select`: block until any listed channel
+            // holds a value. The raw payload is the value word, or NULL
+            // for "cancelled / empty list", which the `.mo` wrapper turns
+            // into an `Option`.
+            else if String.beq target "channel_take_any" then Option.some (NativeWrapKind.raw_io_passthrough "monad_channel_take_any")
             // The TCP family (`std/io.mo`'s `#[native "tcp_*"]` defs,
             // reached by `motes/moon`'s server and `motes/moose`'s
             // client). They are `RawIO` natives behind `.mo` wrappers, so
@@ -977,6 +986,14 @@ pub def runtime_declarations_for_with_ownership (kind : TargetKind) (ownership_o
     // `monad_scope_new` genuinely takes no arguments
     // (`def scope_new : IO Scope`), so its parameter list is empty and
     // the emitted `call` has no operands to type.
+    // `fiber_wait_any` (plans/implementations/monad-fiber-scheduler.md P1):
+    // a `List (Fiber A)` in, the first stopped index out (-1 for none).
+    // Both are i64 words under the CONVENTION above, the list being a
+    // cons-cell pointer.
+    let d57w := mk_decl "monad_fiber_wait_any" (List.cons "i64" List.empty) "i64" in
+    // `channel_take_any` (channel `select`): a `List (Channel A)` in, the
+    // taken value word out (NULL when cancelled).
+    let d57c := mk_decl "monad_channel_take_any" (List.cons "i64" List.empty) "i64" in
     let d57 := mk_decl "monad_fork_io" (List.cons "i64" List.empty) "i64" in
     let d58 := mk_decl "monad_await_fiber" (List.cons "i64" List.empty) "i64" in
     let d59 := mk_decl "monad_cancel_fiber" (List.cons "i64" List.empty) "i64" in
@@ -1223,7 +1240,7 @@ pub def runtime_declarations_for_with_ownership (kind : TargetKind) (ownership_o
         d32, d33, d34, d35, d35b, d36, d37, d38, d38b, d39, dSysInt, dSysStr, dSysStat, dSysDirOpen, dSysDirNext, dSysDirClose, d40, d41, d42, d43, d43b, d44,
         d45, d46, d47,
         d48, d49, d50, d51, d52, d53, d54, d55, d56,
-        d57, d58, d59, d60, d61, d62, d63, d64,
+        d57w, d57c, d57, d58, d59, d60, d61, d62, d63, d64,
         d65, d66, d66a, d67, d72,
         d74, d76, d78, d79, d79c, d80, d81, d82, d83, d84, d85, d87,
         d88, d91, d91a, d92, d93, d94, d95, d96, d97, d98, d99, d99a, d99a1, d99b, d100, d101, d102, d103,
@@ -1251,8 +1268,8 @@ pub type NativeAvailability {
 /// Both wasm profiles omit them; the target gate turns a reachable use into
 /// a compile error naming the native and the target.
 def wasm_os_only_natives : List String := [
-    "fork_io", "await_fiber", "poll_fiber", "cancel_fiber", "scope_new", "scope_fork",
-    "scope_drop", "sleep_io", "channel_new", "channel_put", "channel_take",
+    "fork_io", "fiber_wait_any", "await_fiber", "poll_fiber", "cancel_fiber", "scope_new", "scope_fork",
+    "scope_drop", "sleep_io", "channel_new", "channel_put", "channel_take", "channel_take_any",
     "channel_try_take", "exec_cmd", "exec_child_output", "process_id", "sys_int",
     "sys_str", "sys_stat", "sys_dir_open", "sys_dir_next", "sys_dir_close",
     "proc_spawn",

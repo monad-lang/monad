@@ -221,8 +221,30 @@ void monad_alloc_stats_install(void) {
    ucontext stack would overflow on the first recursive helper. The
    reservation is ADDRESS space, committed on demand, so a thread that
    does not recurse deeply never pays for it in RSS -- and the stack is
-   unmapped again when the (detached) thread exits. */
-#define MONAD_DEEP_STACK_BYTES ((size_t)128 * 1024 * 1024)
+   unmapped again when the (detached) thread exits.
+
+   WAS 128 MB, which was the value `raise_stack_limit` and devenv.nix both
+   name. It is 32 MB because that is where the measurement in
+   plans/implementations/monad-fiber-scheduler.md P3 put the actual
+   requirement, and because the reservation is the ONLY per-fiber cost that
+   scales with fiber count (RSS per fiber is ~10 KB regardless):
+
+     * The compiler SELF-COMPILES inside an 8 MB stack
+       (`MONAD_STACK_BYTES=8388608 monad build cli/src/main.mo`), and the
+       binary it produces then checks the tree cleanly -- so 8 MB is proven
+       end to end, not just "the tests pass". `lang/src/parser.mo` alone
+       checks at 4 MB.
+     * 32 MB is therefore a 4x margin over a measured worst case. A stack
+       that is too small is a SEGFAULT rather than a slowdown, so the knob
+       stays 4x above the deepest recursion anything has actually reached
+       rather than being set to the measured floor.
+     * 200 fibers now reserve 6.4 GB of address space instead of 26 GB,
+       which is the difference between "a few hundred fibers per process"
+       and "a few thousand" on a 64-bit host.
+   `MONAD_STACK_BYTES` is unchanged as the per-run escape hatch, and
+   `raise_stack_limit` still raises the main thread's SOFT limit for the
+   case where this reservation is refused. */
+#define MONAD_DEEP_STACK_BYTES ((size_t)32 * 1024 * 1024)
 /* The smallest reservation `MONAD_STACK_BYTES` may ask for. A test wants a
    small stack to make an overrun fail in seconds instead of after tens of
    thousands of frames; a typo must not make every program crash, so the
@@ -261,6 +283,17 @@ typedef struct {
                           released unconditionally by monad_scope_drop. */
     pthread_mutex_t lock;
     pthread_cond_t finished;
+    /* Set to 1 by `fiber_main` as its LAST store, with release ordering,
+       so a `fiber_wait_any` waiter can read it without taking `lock`.
+       That is what lets the wait span a SET of handles: `state` is
+       guarded by each fiber's own `lock`, so scanning N of them would
+       mean N lock/unlock pairs per pass, while `done` is one atomic read
+       per member and never blocks. Every existing reader of `state`
+       (await/poll/cancel) is left on the lock exactly as before; `done`
+       is purely additive. Plain `int64_t` with `__atomic_*` builtins,
+       matching how `cancelled` above is spelled: the builtins do not
+       accept a `_Atomic`-qualified operand. */
+    int64_t done;
 } Fiber;
 
 typedef struct ScopeNode {
@@ -283,6 +316,22 @@ typedef struct {
    one than a bare atomic store. The genuinely atomic thing here is the
    Header's refcount, which monad_retain/monad_release already maintain
    with atomic_fetch_add/sub. */
+/* Defined with the channel code below; `monad_cancel_fiber` needs it to
+   push a wake into any channel the cancelled fiber is parked on. */
+static void channel_wake_cancelled(void);
+
+/* ── fiber_wait_any's shared completion condvar ──────────────────────
+   Declared here, before `fiber_main`, because the worker broadcasts on
+   completion. Every fiber publishes to it; `monad_fiber_wait_any` below
+   parks on it. See that function for why one shared condvar and not N. */
+static pthread_mutex_t fiber_any_lock = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t fiber_any_cond = PTHREAD_COND_INITIALIZER;
+
+/* Broadcast this condvar (completion, or a cancel). Defined beside
+   `monad_fiber_wait_any`; declared here because `fiber_main` and
+   `monad_cancel_fiber` both use it and both come first. */
+static void fiber_any_wake(void);
+
 static void fiber_mark_cancelled(Fiber* f) {
     pthread_mutex_lock(&f->lock);
     /* Only a fiber that has NOT finished. The host's `Fiber::cancel`
@@ -318,8 +367,16 @@ static void* fiber_main(void* arg) {
     f->action = NULL;
     f->io_box = box;
     f->state = 1;
+    /* Release-store BEFORE the broadcast: a wait-any waiter reads `done`
+       without the lock, so the state/io_box stores above must be visible
+       to it the moment `done` flips. */
+    __atomic_store_n(&f->done, 1, __ATOMIC_RELEASE);
     pthread_cond_broadcast(&f->finished);
     pthread_mutex_unlock(&f->lock);
+    /* Wake every `fiber_wait_any` waiter. Taken AFTER `f->lock` is
+       released, so the two locks are never held at once and there is no
+       ordering between them to get wrong. */
+    fiber_any_wake();
     return NULL;
 }
 
@@ -332,6 +389,7 @@ void* monad_fork_io(void* closure) {
     __atomic_store_n(&f->cancelled, 0, __ATOMIC_RELAXED);
     f->io_box = 0;
     f->released = 0;
+    __atomic_store_n(&f->done, 0, __ATOMIC_RELAXED);
     pthread_mutex_init(&f->lock, NULL);
     pthread_cond_init(&f->finished, NULL);
     /* The worker's own reference, released by whoever consumes the
@@ -366,6 +424,7 @@ void* monad_fork_io(void* closure) {
         f->action = NULL;
         f->state = 1;
         f->io_box = 0;
+        __atomic_store_n(&f->done, 1, __ATOMIC_RELEASE);
     }
     return f;
 }
@@ -440,10 +499,106 @@ void* monad_poll_fiber(void* handle) {
     return some;
 }
 
+/* ── fiber_wait_any: park until one of N fibers stops ─────────────────
+
+   `#[native "fiber_wait_any"]` -- `List (Fiber A) -> RawIO I64`: block
+   until ANY fiber in the list has stopped, then answer the INDEX of the
+   first stopped one in list order (-1 for an empty list, or when the
+   caller is cancelled).
+
+   WHY ONE SHARED CONDVAR AND NOT N. Waiting on a member's own condvar
+   would serialise the scan and, with a tick, could report a win LATER
+   than the 1 ms poll loop this replaces. Instead every completion
+   broadcasts one process-wide condvar, and the waiter re-scans the list
+   on each wake. The scan is N atomic loads of `done` with no locks
+   taken, so it is cheap enough to repeat, and it cannot deadlock: no
+   fiber lock is ever held while waiting.
+
+   The list is walked with `monad_get_tag_impl(cur) == 6` (List.cons,
+   head field 0, tail field 1), the same idiom `monad_build_argv` uses.
+
+   The INDEX returns rather than the answer, so the winner is still
+   consumed through the existing `await_fiber`/`pollFiber` reaping path
+   and that protocol keeps exactly one implementation.
+
+   CANCELLATION IS PUSHED, NOT POLLED. A waiter parked here can only give
+   up through `monad_cancel_fiber` broadcasting this condvar; without that
+   push it would have to re-check `monad_fiber_cancelled` on a timer,
+   which is the 20 ms tick this used to carry. Every cancel therefore
+   wakes the shared condvar (`fiber_any_wake`), the same push-a-wake shape
+   P2 gave the channel waits. A broadcast carries no identity, so waking a
+   waiter whose fiber was NOT the cancelled one costs one spurious re-scan
+   of N atomic loads and nothing else. */
+
+static int fiber_is_done(Fiber* f) {
+    if (!f) return 1; /* a NULL handle is a fiber that never started */
+    return __atomic_load_n(&f->done, __ATOMIC_ACQUIRE) != 0;
+}
+
+/* The index of the first stopped fiber in `fibers`, or -1 if none is. */
+static int64_t first_done_index(void* fibers) {
+    int64_t i = 0;
+    for (void* cur = fibers; cur && monad_get_tag_impl(cur) == 6; ) {
+        if (fiber_is_done((Fiber*)monad_get_field_impl(cur, 0))) return i;
+        i++;
+        cur = monad_get_field_impl(cur, 1);
+    }
+    return -1;
+}
+
+int64_t monad_fiber_wait_any(void* fibers) {
+    /* An empty list has no value to return and would never wake; answer
+       immediately rather than parking forever. */
+    if (!fibers || monad_get_tag_impl(fibers) != 6) return -1;
+    pthread_mutex_lock(&fiber_any_lock);
+    for (;;) {
+        /* Scanned under the lock: a completion broadcasts while holding
+           it, so a fiber that stops after this scan but before the wait
+           cannot be missed. */
+        int64_t idx = first_done_index(fibers);
+        if (idx >= 0) {
+            pthread_mutex_unlock(&fiber_any_lock);
+            return idx;
+        }
+        /* Checked under `fiber_any_lock`, the same lock `fiber_any_wake`
+           takes to broadcast, so a cancel landing between this check and
+           the wait below cannot be missed -- the classic lost-wakeup race,
+           closed by doing both under one lock rather than by a timeout. */
+        if (monad_fiber_cancelled()) {
+            pthread_mutex_unlock(&fiber_any_lock);
+            return -1;
+        }
+        pthread_cond_wait(&fiber_any_cond, &fiber_any_lock);
+    }
+}
+
+/* Wake every `fiber_wait_any` waiter so one whose own fiber was just
+   cancelled re-checks `monad_fiber_cancelled` and leaves its park. Called
+   from `monad_cancel_fiber`; taken with no other lock held, exactly like
+   the completion broadcast in `fiber_main`, so there is no lock order to
+   get wrong. Shared by both callers rather than open-coded twice. */
+static void fiber_any_wake(void) {
+    pthread_mutex_lock(&fiber_any_lock);
+    pthread_cond_broadcast(&fiber_any_cond);
+    pthread_mutex_unlock(&fiber_any_lock);
+}
+
 void* monad_cancel_fiber(void* handle) {
     Fiber* f = (Fiber*)handle;
     if (f) {
         fiber_mark_cancelled(f);
+        /* The flag alone would only be observed at the target's next bind
+           (`monad_io_bind`), and a fiber parked in a channel `put`/`take`
+           is not at a bind -- it is inside the native. Wake every blocked
+           channel waiter so the one on the target thread re-checks the
+           flag and gives its wait up promptly, instead of on the 50 ms
+           tick this replaced. */
+        channel_wake_cancelled();
+        /* The same push for a fiber parked in `fiber_wait_any` (i.e.
+           inside `race`/`select`): that wait is an untimed condvar, so
+           without this broadcast a cancelled racer would only be noticed
+           on the 20 ms tick it used to re-check the flag on. */
+        fiber_any_wake();
         /* Consuming the handle releases the worker's reference -- but only
            once. A handle that was awaited before it was cancelled has
            already released it, and `monad_scope_drop`'s release is the
@@ -534,8 +689,6 @@ void* monad_scope_drop(void* handle) {
    that follows short-circuits on the same flag. The value word lives in a
    GC-scanned block, so the collector traces whatever is in flight. */
 
-#define CHANNEL_WAIT_MS 50
-
 typedef struct {
     Header header;
     pthread_mutex_t lock;
@@ -544,21 +697,71 @@ typedef struct {
     int64_t value;
 } ChannelObj;
 
-static void channel_deadline(struct timespec* ts) {
-    ts->tv_sec = 0;
-    ts->tv_nsec = 0;
-    clock_gettime(CLOCK_REALTIME, ts);
-    ts->tv_nsec += CHANNEL_WAIT_MS * 1000000L;
-    if (ts->tv_nsec >= 1000000000L) {
-        ts->tv_sec += 1;
-        ts->tv_nsec -= 1000000000L;
+/* Every channel with a blocked waiter, so `monad_cancel_fiber` can wake it.
+
+   WHY a registry. The wait used to be a bounded `pthread_cond_timedwait`
+   re-checking `monad_fiber_cancelled` every `CHANNEL_WAIT_MS` (50 ms), so
+   a cancelled fiber noticed on the next tick -- measured at ~31 ms
+   (`bench/src/async_bench.mo`'s `channel_cancel_observe_us`) -- and every
+   blocked fiber woke 20 times a second for the whole life of its wait.
+
+   The cancel now pushes a wake instead of the waiter polling for it, so
+   the wait is indefinite and costs nothing while nothing happens. A node
+   is added before parking and removed after waking, under `chan_reg_lock`,
+   which is only ever held for the list walk and never across a wait, so
+   the two locks cannot deadlock against each other. A channel with no
+   waiter holds no node, so a cancel touches only channels it needs to. */
+typedef struct ChanReg {
+    struct ChanReg* next;
+    ChannelObj* chan; /* the channel this node makes the waiter reachable on */
+    ChannelObj* park; /* the condvar the waiter actually sleeps on (a
+                         `take_any` parks on its FIRST channel's condvar but
+                         must be registered on every channel it watches) */
+    int waiting;      /* >=1 while >=1 fiber is parked on `chan`'s `changed` */
+} ChanReg;
+
+static pthread_mutex_t chan_reg_lock = PTHREAD_MUTEX_INITIALIZER;
+static ChanReg* chan_reg_head = NULL;
+
+/* Wake every blocked channel waiter whose fiber has been cancelled. */
+static void channel_wake_cancelled(void) {
+    pthread_mutex_lock(&chan_reg_lock);
+    for (ChanReg* n = chan_reg_head; n; n = n->next) {
+        if (!n->waiting) continue;
+        /* Lock order: registry, then the channel. `channel_put`/`take`
+           take only the channel's own lock and never the registry while
+           holding it, so this order is the only one that exists. */
+        pthread_mutex_lock(&n->chan->lock);
+        pthread_cond_broadcast(&n->chan->changed);
+        pthread_mutex_unlock(&n->chan->lock);
     }
+    pthread_mutex_unlock(&chan_reg_lock);
 }
 
+/* Park on `c->changed` with `c->lock` held, cancelling-aware. Returns
+   with `c->lock` held. Indefinite: a cancel pushes a wake (above), so
+   there is nothing to poll for. */
 static void channel_wait(ChannelObj* c) {
-    struct timespec ts;
-    channel_deadline(&ts);
-    pthread_cond_timedwait(&c->changed, &c->lock, &ts);
+    ChanReg node;
+    node.chan = c;
+    node.park = c; /* a plain take parks on the very channel it registers */
+    node.waiting = 1;
+    pthread_mutex_lock(&chan_reg_lock);
+    node.next = chan_reg_head;
+    chan_reg_head = &node;
+    pthread_mutex_unlock(&chan_reg_lock);
+
+    /* Re-checked under the channel lock before parking, so a cancel that
+       lands between the caller's check and this call cannot be missed. */
+    if (!monad_fiber_cancelled()) {
+        pthread_cond_wait(&c->changed, &c->lock);
+    }
+
+    pthread_mutex_lock(&chan_reg_lock);
+    ChanReg** pp = &chan_reg_head;
+    while (*pp && *pp != &node) pp = &(*pp)->next;
+    if (*pp) *pp = node.next;
+    pthread_mutex_unlock(&chan_reg_lock);
 }
 
 void* monad_channel_new(void) {
@@ -581,6 +784,33 @@ void* monad_channel_put(void* handle, int64_t value) {
             c->value = value;
             c->full = 1;
             pthread_cond_broadcast(&c->changed);
+            /* A `select`/`channel_take_any` waiter parks on the condvar of
+               the FIRST channel in its list, which may not be this one --
+               so it is asleep on a condvar this broadcast does not reach.
+               Broadcast the parking spot of every registered waiter that
+               includes THIS channel. Without this a value arriving on a
+               non-first channel never wakes the select, which then blocks
+               forever (`check_channel_take_any` in thread_stress.c).
+
+               Lock order: this thread holds `c->lock` and takes
+               `chan_reg_lock`, then takes `spot->lock`. That is the same
+               order `fiber_wait_any`'s cancel path and `channel_wake_cancelled`
+               use (registry-then-channel), and no path takes a channel lock
+               and THEN the registry, so there is no cycle. The `spot->lock`
+               acquisition happens only when `spot != c`, so a plain
+               take/put on one channel never nests two channel locks. */
+            pthread_mutex_lock(&chan_reg_lock);
+            for (ChanReg* n = chan_reg_head; n; n = n->next) {
+                if (n->chan == c && n->waiting) {
+                    ChannelObj* spot = n->park;
+                    if (spot && spot != c) {
+                        pthread_mutex_lock(&spot->lock);
+                        pthread_cond_broadcast(&spot->changed);
+                        pthread_mutex_unlock(&spot->lock);
+                    }
+                }
+            }
+            pthread_mutex_unlock(&chan_reg_lock);
         }
         pthread_mutex_unlock(&c->lock);
     }
@@ -602,6 +832,126 @@ int64_t monad_channel_take(void* handle) {
     }
     pthread_mutex_unlock(&c->lock);
     return value;
+}
+
+/* `#[native "channel_take_any"]` -- `List (Channel A) -> RawIO
+   (Option A)`: block until any channel in the list holds a value, then
+   take it; `Option.none` when the waiting fiber was cancelled or the
+   list is empty. An `Option` and not a bare payload because `A` is
+   generic: there is no value of `A` to mean "nothing".
+
+   WHAT SELECT NEEDED. It used to poll every channel with `tryTake` once a
+   millisecond; this parks once instead.
+
+   EVERY channel in the list gets its OWN registry node, so a put on ANY
+   of them broadcasts a condvar this waiter is parked on. Registering only
+   the first channel (the original shape) DOES NOT WORK: the waiter parks
+   on channel 0's condvar, and `monad_channel_put` broadcasts only the
+   channel it wrote to -- so a value arriving on channel 1 never woke the
+   waiter, which then blocked forever inside `pthread_cond_wait`. That is
+   a hang, not a slow path, and `runtime/tests/thread_stress.c`'s
+   `check_channel_take_any` reproduces it. A broadcast has no payload, so
+   a wake on a channel the scan then finds EMPTY costs one re-scan and
+   nothing else.
+
+   The nodes are one small ATOMIC allocation (not GC-scanned: they hold
+   channel pointers, not Monad words the collector traces), and every one
+   is unlinked before returning, so nothing outside this call can reach
+   them. */
+void* monad_channel_take_any(void* chans) {
+    if (!chans || monad_get_tag_impl(chans) != 6) {
+        return (void*)alloc_constructor_impl(3, 0); /* Option.none */
+    }
+    int64_t value = 0;
+    int64_t got = 0;
+    /* One node per channel, plus a count so teardown knows how many. A
+       fixed-size array would cap the API at that size, so the array is
+       allocated to fit the list. */
+    int64_t n = 0;
+    for (void* cur = chans; cur && monad_get_tag_impl(cur) == 6;
+         cur = monad_get_field_impl(cur, 1)) {
+        if (monad_get_field_impl(cur, 0)) n++;
+    }
+    if (n == 0) return (void*)alloc_constructor_impl(3, 0); /* Option.none */
+    /* ATOMIC (unscanned): the array holds channel POINTERS, not Monad
+       words the collector must trace, and reading it as a scanned block
+       would make Boehm treat the nodes as live objects. It is stack-lifetime
+       data that merely has to outlive the registry entries pointing at it,
+       which the teardown below guarantees. */
+    ChanReg* nodes = (ChanReg*)monad_alloc_atomic((rt_size)(n * (int64_t)sizeof(ChanReg)));
+    if (!nodes) return (void*)alloc_constructor_impl(3, 0);
+
+    ChannelObj* park = (ChannelObj*)monad_get_field_impl(chans, 0);
+    pthread_mutex_lock(&chan_reg_lock);
+    int64_t at = 0;
+    for (void* cur = chans; cur && monad_get_tag_impl(cur) == 6;
+         cur = monad_get_field_impl(cur, 1)) {
+        ChannelObj* c = (ChannelObj*)monad_get_field_impl(cur, 0);
+        if (!c) continue;
+        nodes[at].chan = c;
+        /* EVERY node parks on the first channel's condvar: that is where
+           this call actually sleeps, so any wake must be delivered there. */
+        nodes[at].park = park;
+        nodes[at].waiting = 1;
+        nodes[at].next = chan_reg_head;
+        chan_reg_head = &nodes[at];
+        at++;
+    }
+    pthread_mutex_unlock(&chan_reg_lock);
+
+    for (;;) {
+        for (void* cur = chans; cur && monad_get_tag_impl(cur) == 6; ) {
+            ChannelObj* c = (ChannelObj*)monad_get_field_impl(cur, 0);
+            if (c) {
+                pthread_mutex_lock(&c->lock);
+                if (c->full) {
+                    value = c->value;
+                    c->full = 0;
+                    got = 1;
+                    /* Wake the channel's own put-waiters. */
+                    pthread_mutex_lock(&chan_reg_lock);
+                    for (ChanReg* r = chan_reg_head; r; r = r->next) {
+                        if (r->chan == c && r->waiting) {
+                            pthread_cond_broadcast(&c->changed);
+                            break;
+                        }
+                    }
+                    pthread_mutex_unlock(&chan_reg_lock);
+                }
+                pthread_mutex_unlock(&c->lock);
+                if (got) break;
+            }
+            cur = monad_get_field_impl(cur, 1);
+        }
+        if (got) break;
+        if (monad_fiber_cancelled()) break;
+        /* Park on the FIRST channel's condvar; every node registered above
+           names this spot in its `park` field, so a put on any of them can
+           wake this wait through it. `pthread_cond_wait` needs the
+           channel's lock held. */
+        pthread_mutex_lock(&park->lock);
+        if (!monad_fiber_cancelled()) {
+            pthread_cond_wait(&park->changed, &park->lock);
+        }
+        pthread_mutex_unlock(&park->lock);
+    }
+
+    pthread_mutex_lock(&chan_reg_lock);
+    for (int64_t i = 0; i < at; i++) {
+        ChanReg** pp = &chan_reg_head;
+        while (*pp && *pp != &nodes[i]) pp = &(*pp)->next;
+        if (*pp) *pp = nodes[i].next;
+    }
+    pthread_mutex_unlock(&chan_reg_lock);
+
+    /* The nodes are no longer registered, so nothing can reach them; the
+       block is left to the collector rather than freed, since the runtime
+       has no `free` for a GC block and the wait's per-call cost is one
+       small allocation on a path that just blocked. */
+    if (!got) return (void*)alloc_constructor_impl(3, 0); /* Option.none */
+    Constructor* some = (Constructor*)alloc_constructor_impl(4, 1);
+    some->fields[0] = (void*)(intptr_t)value;
+    return some;
 }
 
 void* monad_channel_try_take(void* handle) {

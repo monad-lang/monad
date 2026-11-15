@@ -62,6 +62,32 @@ priv def cancel_fiber_raw (f : Fiber A) : RawIO Unit
 
 pub def cancel_fiber (f : Fiber A) : IO Unit := IO.mk (cancel_fiber_raw f)
 
+#[native fiber_wait_any]
+priv def fiber_wait_any_raw (fibers : List (Fiber A)) : RawIO I64
+
+/// Park until ANY fiber in `fibers` has stopped, then that fiber's INDEX
+/// in list order; `none` for an empty list or when the waiting fiber is
+/// itself cancelled. The index comes back rather than the answer so the
+/// winner is taken through the ordinary `await_fiber` reaping path -- one
+/// implementation of that protocol, not two.
+///
+/// This exists so `race` and `select` stop polling. Both used to
+/// re-derive "wait for one of N" as "probe all N, sleep 1 ms, repeat",
+/// which cost a timer wakeup per millisecond and delayed a win by up to a
+/// millisecond. A fiber that has not started yet (`forkIO` could not get
+/// a thread) counts as stopped, so it is picked up immediately rather
+/// than waited on forever.
+///
+/// Compiled-only: the Rust host cannot park (its fibers are deferred
+/// thunks), so it answers `-1` and its combinators keep the documented
+/// lazy degradation.
+pub def wait_any {A : Type} (fibers : List (Fiber A)) : IO (Option I64) :=
+    Monad.bind (IO.mk (fiber_wait_any_raw fibers)) (fn i => IO.pure (index_or_none i))
+
+/// The native's `-1` sentinel as `none`; every other value is a real index.
+def index_or_none (i : I64) : Option I64 :=
+    if I64.lt i 0 then Option.none else Option.some i
+
 #[native poll_fiber]
 priv def poll_fiber_raw (f : Fiber A) : RawIO (Option (Result I64 A))
 

@@ -122,6 +122,44 @@ def slow_10_action (_ : Unit) : IO I64 := do {
     return 10
 }
 
+/// A fiber parked INSIDE `race` -- i.e. inside `fiber_wait_any` -- is
+/// cancelled, and must answer `err cancelled` rather than crash.
+///
+/// This is the cancel path of P1's own primitive. Two separate defects
+/// lived here:
+///
+///   1. `monad_cancel_fiber` pushed a wake into the channel registry (P2)
+///      but not into `wait_any`'s condvar, so the racer only noticed on a
+///      20 ms tick. The wake is now pushed.
+///   2. With the continuation spelled `race_pick (Shared.of fibers)` (a
+///      partial application) codegen declined to fuse the bind, so
+///      `IO.bind`'s reference body matched the cancellation SENTINEL and
+///      SEGFAULTED. `race` now eta-expands it -- see that line's comment.
+///
+/// Both only show up when the FIBER ITSELF is cancelled; cancelling a
+/// contestant instead (the test above) goes down a different path, which
+/// is why this was not already covered.
+///
+/// Compiled only: the host cannot park, so its `wait_any` answers `none`
+/// at once and this never reaches the blocking wait.
+#[test]
+def test_race_waiter_cancelled : IO Bool := do {
+    let c1 <- forkIO slow_10_action;
+    let c2 <- forkIO slow_10_action;
+    let contestants := Shared.of (List.cons c1 (List.cons c2 List.empty));
+    let racer <- forkIO (fn (_ : Unit) => do {
+        let _ <- race (Shared.get contestants);
+        return 1i64
+    });
+    let sracer := Shared.of racer;
+    // Let the racer reach the park before cancelling it, or the cancel
+    // lands on a thread that has not got there yet.
+    sleepIO 20;
+    cancel_fiber (Shared.get sracer);
+    let r <- await_fiber (Shared.get sracer);
+    return (err_is_cancelled r)
+}
+
 /// The first fiber to FINISH wins, not the first in the list: the head
 /// sleeps 400 ms, so the instant one must win, and well before the head
 /// would have finished. Compiled only, like the timing test below: the

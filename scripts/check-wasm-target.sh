@@ -297,6 +297,22 @@ grep -q 'fork_io' "$tmp/gate-wasi.log" \
 grep -q 'not available on target' "$tmp/gate-wasi.log" \
     || fail "wasi gate did not explain the target: $(cat "$tmp/gate-wasi.log")"
 
+# `monad-fiber-scheduler.md` P1's two replacement natives. `fork_io` above
+# would hide them (it fails first), so this fixture reaches them without
+# forking first: `wait_any` and `select` are the primitives that replaced
+# the 1 ms poll loops, and a stub for either on a profile with no threads
+# is exactly the silent-wrong-answer the gate exists to stop.
+if "$MONAD" build --target wasm32-unknown-wasip1 fixtures/wasm/wasi_async.mo \
+    -o "$tmp/gate-wasi-async.wasm" --no-cache >"$tmp/gate-wasi-async.log" 2>&1; then
+    fail "wasi build accepted fiber_wait_any / channel_take_any"
+fi
+for native in fiber_wait_any channel_take_any; do
+    grep -q "$native" "$tmp/gate-wasi-async.log" \
+        || fail "wasi gate did not name $native: $(cat "$tmp/gate-wasi-async.log")"
+done
+grep -q 'not available on target' "$tmp/gate-wasi-async.log" \
+    || fail "wasi async gate did not explain the target: $(cat "$tmp/gate-wasi-async.log")"
+
 # `std/watch.mo`'s inotify family is Linux-only: a reachable `Watch.new` is
 # the same clean target error on either wasm profile, not a link failure.
 for profile in wasm32-unknown-unknown wasm32-unknown-wasip1; do

@@ -1,18 +1,21 @@
 // Channels and select.
 //
 // An MVar-style channel: at most one value in flight. `Channel.put` parks
-// while it is full, `Channel.take` while it is empty, and
-// `Channel.tryTake` is the non-blocking probe `select` is built from.
+// while it is full, `Channel.take` while it is empty, and `select` parks
+// until ANY of its channels holds a value.
 //
 // Native targets only: both wasm profiles have no threads and no fibers,
 // so the target gate rejects a reachable channel native there, exactly as
 // it does `forkIO`.
 //
-// A cancelled fiber blocked in put/take gives the wait up (the runtime
-// re-checks the cancel flag on every wake-up) and unwinds at the next
-// bind, the same cooperative rule as every other native.
-
-use lib::concurrent::combine {sleepIO}
+// A cancelled fiber blocked in put/take/select gives the wait up and
+// unwinds at the next bind, the same cooperative rule as every other
+// native. The wake is PUSHED by `monad_cancel_fiber` rather than polled
+// for: the wait used to be a bounded 50 ms `pthread_cond_timedwait` that
+// re-checked the cancel flag, so a cancel was noticed up to a tick late
+// and every blocked fiber woke 20 times a second for the life of its
+// wait. `platform_posix.c`'s channel section has the registry that
+// replaced it.
 
 /// Channel handles are opaque runtime objects; do not construct or pattern
 /// match on them (the `channel` constructor is never built at run time).
@@ -31,6 +34,12 @@ priv def channel_take (c : Channel A) : RawIO A
 
 #[native "channel_try_take"]
 priv def channel_try_take (c : Channel A) : RawIO (Option A)
+
+/// Block until any of `chs` holds a value, then take it. `none` when the
+/// waiting fiber was cancelled first. Compiled-only, the same gate as
+/// every other channel native.
+#[native "channel_take_any"]
+priv def channel_take_any (chs : List (Channel A)) : RawIO (Option A)
 
 /// A fresh, empty channel.
 pub def Channel.new : IO (Channel A) :=
@@ -52,30 +61,23 @@ pub def Channel.take (c : Channel A) : IO A :=
 pub def Channel.tryTake (c : Channel A) : IO (Option A) :=
     IO.mk (channel_try_take c)
 
-// The first channel in `chs` that has a value, probing in list order.
-def try_first {A : Type} (chs : List (Channel A)) : IO (Option A) :=
-    match chs {
-        List.empty => IO.pure Option.none,
-        List.cons c rest =>
-            Monad.bind (Channel.tryTake c) (fn v =>
-                match v {
-                    Option.some a => IO.pure (Option.some a),
-                    Option.none => try_first rest
-                })
-    }
-
-#[partial]
-def select_loop {A : Type} (chs : Shared (List (Channel A))) : IO A :=
-    Monad.bind (try_first (Shared.get chs)) (fn v =>
-        match v {
-            Option.some a => IO.pure a,
-            Option.none => Monad.bind (sleepIO 1) (fn _ => select_loop chs)
-        })
-
 /// Take from whichever of `chs` has a value first, blocking until one
-/// does. Probes every millisecond, the same shape `race` uses -- a wake-up
-/// primitive belongs to S3's reactor. Racing zero channels never returns:
-/// there is no value of `A` to hand back.
-#[partial]
-pub def select {A : Type} (chs : List (Channel A)) : IO A :=
-    select_loop (Shared.of chs)
+/// does; `none` when the waiting fiber is cancelled first.
+///
+/// This used to probe every channel with `tryTake` and `sleepIO 1`
+/// between passes, which cost a timer wakeup per millisecond and delayed
+/// a value by up to a millisecond. It now parks once on the channels
+/// themselves (`channel_take_any`), so a value is seen as soon as it
+/// arrives and an idle select costs nothing.
+///
+/// The result is an `Option` rather than a bare `A` because cancellation
+/// is a real outcome: a cancelled waiter has no value to hand back, and
+/// inventing one would be exactly the silent-IO-failure the project
+/// forbids. Callers that know their select cannot be cancelled unwrap
+/// it.
+///
+/// On the Rust host there is no parking (its fibers are deferred
+/// thunks), so the host answers `none` immediately -- the same lazy
+/// degradation `race` has, for the same reason.
+pub def select {A : Type} (chs : List (Channel A)) : IO (Option A) :=
+    IO.mk (channel_take_any chs)
