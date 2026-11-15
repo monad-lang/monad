@@ -152,10 +152,16 @@ pub type Timeout A {
 ///
 /// STILL THREE THREADS, deliberately, and P1 did not change that: `race`
 /// no longer polls, so a bounded wait costs no timer WAKEUPS any more, but
-/// the timer is still a fiber. Turning it into a reactor deadline is P4's
-/// work, because a deadline needs an event loop to hang off and there is
-/// no epoll/kqueue in the runtime yet (`monad-fiber-scheduler.md`'s P1
-/// scope note).
+/// the timer is still a fiber. Retiring it needs NO event loop: `wait_any`
+/// already parks on a condvar, so a `pthread_cond_timedwait` deadline on
+/// that same park expires the timer inline. What actually stops it is that
+/// `wait_any` answers an INDEX, so an expired deadline has no value that
+/// cannot be confused with a contestant; the fix is a second timeout-aware
+/// primitive (or a distinct sentinel) plus deciding what `race` does with
+/// `-1`. Not attempted here because nothing in the tree uses `timeout` for
+/// real work -- `motes/moon` uses `SO_RCVTIMEO`, `motes/moose` its own
+/// connect deadline -- so it would be speculative churn on a path with no
+/// caller (`monad-fiber-scheduler.md`'s P4 scope note).
 pub def timeout {A : Type} (duration : Combine.Duration) (f : Fiber A) : IO (Result FiberError (Timeout A)) := do {
     let waiter <- forkIO (fn (_ : Unit) => do {
         let r <- await_fiber f;
