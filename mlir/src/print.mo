@@ -163,6 +163,17 @@ def print_param (p : MlirParam) : String := match p {
 /// label being EMPTY (`print_block_header`), not by a caller-passed flag:
 /// `MlirBlock.entry` builds a function body's entry block with `""` and
 /// every nested block names itself, so the shape follows from the model.
+/// A single block's text, at the given nesting depth -- the public entry
+/// point for a caller that has a `KernelBody`'s block and no `MlirFunction`
+/// around it (the kernel emitter's own tests, and `monad kernels`'s
+/// `--emit` path).
+///
+/// The depth is a PARAMETER rather than fixed at 1 because a kernel block is
+/// at depth 1 inside a `func.func` and at depth 0 when printed alone, and the
+/// two differ by indentation only -- which is exactly the kind of difference
+/// a golden test would otherwise silently encode.
+pub def print_block_at (block : MlirBlock) (depth : I64) : String := print_block block depth
+
 #[partial]
 def print_block (block : MlirBlock) (depth : I64) : String := match block {
     { label, args, ops, .. } =>
