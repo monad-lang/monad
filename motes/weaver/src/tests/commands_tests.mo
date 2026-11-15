@@ -27,7 +27,7 @@ use weaver::skills {Skill}
 use weaver::plan_file {PlanRepo, PlanDoc, PlanFile.read}
 use weaver::catalog {Catalog.lookup}
 use weaver::error {WeaverError}
-use weaver::policy {Mode}
+use weaver::policy {Mode, AutoDanger}
 use weaver::instructions {InstrFile, Instructions.capped}
 use weaver::permissions {PermGrant}
 use std::ref {Ref, Ref.new}
@@ -79,8 +79,7 @@ def state_of (mode : Mode) (mcps : List String) : WeaverState := {
     store := Option.none,
     auto_start := false,
     auto_failures := Option.none,
-    mounted := Option.none,
-}
+    mounted := Option.none, auto_on_danger := AutoDanger.refuse_it, verdicts := Option.none, plan_repo := Option.none, skills := List.empty, auto_safety := true, auto_progress := Option.none, fatal_out := Option.none, }
 
 def run_of : RunState := {
     session := session_of,

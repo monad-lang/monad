@@ -485,7 +485,7 @@ def drive_ready (read : Unit -> IO (Option String)) (write : String -> IO Unit) 
 /// from the pre-turn state; the user message was never persisted.
 def retry_clamped (read : Unit -> IO (Option String)) (write : String -> IO Unit) (st : WeaverState) (text : String) (spend : Ref Usage) (e : WeaverError) : IO (Result WeaverError RunState) := do {
     let msg : String := WeaverError.show e;
-    match Weaver.max_tokens_reclamp st.provider st.run.session.config msg {
+    match Weaver.max_tokens_reclamp st.run.session.config msg {
         Option.none => IO.pure (Result.err e),
         Option.some pr => match pr {
             Pair.pair n note => do {

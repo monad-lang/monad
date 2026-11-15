@@ -7,7 +7,7 @@ use shuttle::provider {ProviderConfig, Wire}
 use shuttle::registry {ToolRegistry}
 use shuttle::session {Session}
 use weaver::commands {WeaverState}
-use weaver::policy {Mode}
+use weaver::policy {Mode, AutoDanger}
 use std::map {BTreeMap}
 use weaver::ui::rows {DisplayRow, Rows.of_line, Rows.wrap, Rows.cap_bytes}
 use weaver::ui::banner {Banner.shown, Banner.hidden}
@@ -29,7 +29,7 @@ def run_of : RunState :=
     { session := session_of, reg := ToolRegistry.empty, turns_left := 10, emit := fn (_ : String) => IO.pure unit, gate := Gate.auto, always := List.empty, retries := 1, sleep_ms := silent_sleep, on_usage := silent_usage, should_stop := silent_stop, inbox := silent_inbox, side_spend := silent_side_spend, stopped := false, last_stop := Option.none }
 
 def state_of : WeaverState :=
-    { run := run_of, mode := Mode.manual, provider := "mock", budget := 10, context_window := 128000, compact_at := 80, plan := Option.none, last_context := 0, grants := Option.none, place := Option.none, mcps := List.empty, keys := BTreeMap.empty, catalog := BTreeMap.empty, quit := false, colors := false, fatal := Option.none, name := Option.none, store := Option.none }
+    { run := run_of, mode := Mode.manual, provider := "mock", budget := 10, context_window := 128000, compact_at := 80, plan := Option.none, last_context := 0, grants := Option.none, place := Option.none, mcps := List.empty, keys := BTreeMap.empty, catalog := BTreeMap.empty, quit := false, colors := false, fatal := Option.none, name := Option.none, store := Option.none, auto_on_danger := AutoDanger.refuse_it, verdicts := Option.none, plan_repo := Option.none, skills := List.empty, auto_start := false, auto_failures := Option.none, auto_safety := true, trusted := false, instructions := List.empty, instr_seen := Option.none, mounted := Option.none, auto_progress := Option.none, fatal_out := Option.none }
 
 def model_of : TuiModel :=
     let m : TuiModel := init_tui_model Option.none state_of 24 80 in

@@ -14,7 +14,7 @@ use shuttle::registry {ToolRegistry}
 use shuttle::session {Session}
 use weaver::commands {WeaverState, Effect, Effect.ok, TranscriptChange, set_fatal, Commands.setting_rows}
 use weaver::error {WeaverError}
-use weaver::policy {Mode}
+use weaver::policy {Mode, AutoDanger}
 use weaver::ui::live {LiveModel, LiveMsg, LiveDelta, LiveView, Live.start, Live.status_text, Live.last_line, Live.height, Live.rows, Live.thinking_height}
 use tui::component {Subs.pure_on}
 use tui::widgets::picker {Picker.count, Picker.selected}
@@ -56,7 +56,7 @@ def run_of : RunState :=
     { session := session_of, reg := ToolRegistry.empty, turns_left := 10, emit := fn (_ : String) => IO.pure unit, gate := Gate.auto, always := List.empty, retries := 1, sleep_ms := silent_sleep, on_usage := silent_usage, should_stop := silent_stop, inbox := silent_inbox, side_spend := silent_side_spend, stopped := false, last_stop := Option.none }
 
 def state_of (mode : Mode) : WeaverState :=
-    { run := run_of, mode := mode, provider := "mock", budget := 10, context_window := 128000, compact_at := 80, plan := Option.none, last_context := 0, grants := Option.none, place := Option.none, mcps := List.empty, keys := BTreeMap.empty, catalog := BTreeMap.empty, quit := false, colors := false, fatal := Option.none, name := Option.none, store := Option.none }
+    { run := run_of, mode := mode, provider := "mock", budget := 10, context_window := 128000, compact_at := 80, plan := Option.none, last_context := 0, grants := Option.none, place := Option.none, mcps := List.empty, keys := BTreeMap.empty, catalog := BTreeMap.empty, quit := false, colors := false, fatal := Option.none, name := Option.none, store := Option.none, auto_on_danger := AutoDanger.refuse_it, verdicts := Option.none, plan_repo := Option.none, skills := List.empty, auto_start := false, auto_failures := Option.none, auto_safety := true, trusted := false, instructions := List.empty, instr_seen := Option.none, mounted := Option.none, auto_progress := Option.none, fatal_out := Option.none }
 
 def model_of (mode : Mode) : TuiModel :=
     let m : TuiModel := init_tui_model Option.none (state_of mode) 24 80 in

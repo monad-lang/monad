@@ -31,12 +31,13 @@ use shuttle::message_types {Role, Content}
 use weaver::usage {UsageTracker.start, UsageTracker.silent, UsageTracker.last}
 use std::ref {Ref, Ref.new, Ref.get, Ref.set}
 use shuttle::context {usage_zero}
+use weaver::providers {Weaver.max_tokens_reclamp}
 use weaver::commands {
     WeaverState, Effect, Effect.ok, set_fatal, Commands.dispatch, Commands.set_model, Commands.with_name,
     Commands.autocompact, Commands.last_assistant_text, Commands.current_plan,
     Commands.plan_after_turn, Commands.setting_rows, Commands.cycle_setting, Commands.apply_setting, SettingRow, SettingKind,
     SessionPage, Commands.session_page, Commands.sessions_for, Commands.turns_label, Commands.turn_context,
-    Commands.store_turn_plan, Commands.join_notes, Commands.note_into_state, Commands.persist_note, Commands.skill_turn,
+    Commands.store_turn_plan, Commands.join_notes, Commands.note_into_state, Commands.persist_note, Commands.skill_turn, set_max_tokens,
 }
 use log::logger {Logger}
 use weaver::policy {Mode, Mode.show, Mode.cycle, Mode.is_auto, Policy.decide, Policy.unguarded, Decision}
@@ -1644,7 +1645,14 @@ def drive_turn_tui (log : Option Logger) (gen : I64) (st : WeaverState) (text : 
             let notes <- Inbox.take st2.store;
             let instr <- Instructions.take_notes st2.instr_seen;
             let spend <- Ref.new usage_zero;
-            let r <- ResultT.run (drive_tui log gen st2 (Inbox.with_notes (List.append instr notes) text) on_u spend);
+            let line_text : String := Inbox.with_notes (List.append instr notes) text;
+            let first <- ResultT.run (drive_tui log gen st2 line_text on_u spend);
+            // A provider 400 that names a lower output limit re-clamps and
+            // retries ONCE, exactly as dumb mode does; the note rides the
+            // transcript with the turn.
+            let retried <- retry_clamped_tui log gen st2 line_text on_u spend first;
+            let r : Result WeaverError RunState := match retried { Pair.pair res _ => res };
+            let clamp_note : Option String := match retried { Pair.pair _ n => n };
             let last <- UsageTracker.last tracker;
             let last_context : I64 := match r {
                 Result.err _ => st2.last_context,
@@ -1656,10 +1664,31 @@ def drive_turn_tui (log : Option Logger) (gen : I64) (st : WeaverState) (text : 
             // reject an under-applied constructor/def in value position).
             let plan : Option String := Commands.plan_after_turn st2 before r;
             let stored <- Commands.store_turn_plan st2 plan;
-            return (turn_result_of st2 before (Commands.join_notes note stored) r last_context plan)
+            return (turn_result_of st2 before (Commands.join_notes (Commands.join_notes note stored) clamp_note) r last_context plan)
         }
     }
 }
+
+/// dumb mode's one-shot re-clamp, for the TUI's driver: a provider 400
+/// that names a max_tokens limit lowers the session's budget and retries
+/// the turn once, from the PRE-turn state (the failed attempt's state is
+/// gone, and the user message was never persisted). The note travels back
+/// with the result so the transcript says what happened.
+def retry_clamped_tui (log : Option Logger) (gen : I64) (st : WeaverState) (text : String) (on_u : Usage -> IO Unit) (spend : Ref Usage) (r : Result WeaverError RunState) : IO (Pair (Result WeaverError RunState) (Option String)) :=
+    match r {
+        Result.ok _ => IO.pure (Pair.pair r Option.none),
+        Result.err e =>
+            match Weaver.max_tokens_reclamp st.run.session.config (WeaverError.show e) {
+                Option.none => IO.pure (Pair.pair r Option.none),
+                Option.some pr => match pr {
+                    Pair.pair n note => do {
+                        let st2 : WeaverState := set_max_tokens st n;
+                        let r2 <- ResultT.run (drive_tui log gen st2 text on_u spend);
+                        IO.pure (Pair.pair r2 (Option.some note))
+                    },
+                },
+            },
+    }
 
 def turn_result_of (st : WeaverState) (before : I64) (note : Option String) (r : Result WeaverError RunState) (last_context : I64) (plan : Option String) : WeaverMsg :=
     match r {

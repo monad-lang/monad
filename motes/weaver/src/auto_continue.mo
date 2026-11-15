@@ -248,8 +248,16 @@ def note_turn_at (r : Ref (Pair I64 String)) (run : RunState) (delta : List Mess
                 Option.some text => do {
                     let prev <- Ref.get r;
                     let had : Bool := AutoContinue.delta_has_tool delta;
-                    let same : Bool := String.beq prev.second text;
-                    if Bool.or had (Bool.not same)
+                    // No baseline yet (`fresh`): record the fingerprint, but
+                    // the turn still counts when it made no tool call, so the
+                    // line's "after N turns" is the number actually spent.
+                    // Only a plan CHANGE is progress. The empty sentinel is
+                    // never COMPARED: `String.beq` on it dereferences a null
+                    // payload and crashes the driver.
+                    let fresh : Bool := String.is_empty prev.second;
+                    let same : Bool := if fresh then false else String.beq prev.second text;
+                    let moved : Bool := Bool.and (Bool.not fresh) (Bool.not same);
+                    if Bool.or had moved
                     then do { let _ <- Ref.set r (Pair.pair 0 text); IO.pure Option.none }
                     else do {
                         let k : I64 := prev.first + 1;

@@ -28,7 +28,7 @@ use weaver::commands {WeaverState}
 use weaver::store {StoreState, Store.new_session}
 use weaver::plan_file {PlanRepo, PlanEntry, PlanRepo.list, PlanRepo.capture, PlanDoc, PlanMeta, PlanFile.read, PlanFile.render, PlanFile.linked}
 use weaver::dumb {Dumb.run, Dumb.status_fields}
-use weaver::policy {Mode}
+use weaver::policy {Mode, AutoDanger}
 use json::json {Json, Json.parse, Json.get_array, Json.get_str, Json.make_str, Json.make_array, Json.make_object, Json.make_null, Json.make_num_int, Json.to_string}
 use parsec::number {parse_i64}
 use std::map {Map, BTreeMap}
@@ -233,8 +233,7 @@ def state_of (reg : ToolRegistry) : WeaverState := {
     store := Option.none,
     auto_start := false,
     auto_failures := Option.none,
-    mounted := Option.none,
-}
+    mounted := Option.none, auto_on_danger := AutoDanger.refuse_it, verdicts := Option.none, plan_repo := Option.none, skills := List.empty, auto_safety := true, auto_progress := Option.none, fatal_out := Option.none, }
 
 def run_of (reg : ToolRegistry) : RunState := {
     session := session_of reg,

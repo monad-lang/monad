@@ -235,7 +235,7 @@ pub def Weaver.max_tokens_limit_of (message : String) : Option I64 :=
 
 /// A one-shot re-clamp: when a provider error names a limit below the
 /// session's budget, the new budget and the note to print. Never raises.
-pub def Weaver.max_tokens_reclamp (provider : String) (cfg : ProviderConfig) (msg : String) : Option (Pair I64 String) :=
+pub def Weaver.max_tokens_reclamp (cfg : ProviderConfig) (msg : String) : Option (Pair I64 String) :=
     match Weaver.max_tokens_limit_of msg {
         Option.none => Option.none,
         Option.some n =>

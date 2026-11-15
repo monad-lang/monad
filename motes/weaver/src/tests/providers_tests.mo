@@ -222,15 +222,15 @@ def test_reclamp_lowers_only : Bool :=
     let cfg : ProviderConfig := Weaver.mock_config "m" in
     let big : ProviderConfig := { cfg with max_tokens := 16384 } in
     let small : ProviderConfig := { cfg with max_tokens := 4096 } in
-    (match Weaver.max_tokens_reclamp "openrouter" big "max_tokens (409600) exceeds model's maximum" {
+    (match Weaver.max_tokens_reclamp big "max_tokens (409600) exceeds model's maximum" {
         Option.some pr => match pr { Pair.pair n _ => n == 8192 },
         Option.none => false,
     })
-        && (match Weaver.max_tokens_reclamp "openrouter" small "max_tokens (409600) exceeds model's maximum" {
+        && (match Weaver.max_tokens_reclamp small "max_tokens (409600) exceeds model's maximum" {
             Option.none => true,
             Option.some _ => false,
         })
-        && (match Weaver.max_tokens_reclamp "openrouter" big "openai: HTTP 400: bad request" {
+        && (match Weaver.max_tokens_reclamp big "openai: HTTP 400: bad request" {
             Option.none => true,
             Option.some _ => false,
         })
