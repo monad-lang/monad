@@ -438,6 +438,17 @@ pub fn exec_native(
     // `proc_wait` sets. IO-returning, so not in PURE_NATIVES.
     "term_ctl" => term_ctl(args, natives),
     "fork_io" => fork_io(args, natives),
+    // `fiber_wait_any` (plans/implementations/monad-fiber-scheduler.md P1).
+    // The compiled runtime parks until one fiber of the set stops; this
+    // host CANNOT park (its fibers are deferred thunks and it runs them at
+    // the await), so there is nothing to wake it and nothing to wait for.
+    // Answering -1 ("none stopped") is the honest degradation: the Monad
+    // combinators above it then fall back to their documented sequential
+    // behaviour instead of hanging.
+    "fiber_wait_any" => Ok(raw_io_wrap(
+      natives,
+      Value::Lit(IrLit::Num(-1, NumSuffix::I64)),
+    )?),
     // `await_fiber` is NOT dispatched here — it needs `globals`/`cache`
     // (not just `natives`) to actually run the fiber's deferred action;
     // `core_eval::fire_or_accumulate` intercepts it before ever calling
@@ -451,6 +462,7 @@ pub fn exec_native(
     "channel_put" => channel_put(args, natives),
     "channel_take" => channel_take(args, natives),
     "channel_try_take" => channel_try_take(args, natives),
+    "channel_take_any" => channel_take_any(args, natives),
     "process_id" => process_id(),
     "sys_int" => sys_int(args, natives),
     "sys_str" => sys_str(args, natives),
@@ -4774,6 +4786,54 @@ fn channel_try_take(args: &[Value], natives: &NativeTable) -> Result<Value, Core
     crate::runtime::global::with_mut::<HostChannel, _>(id, |c| c.slot.lock().unwrap().take())
       .ok_or_else(|| CoreEvalError::NativeArgError(format!("channel handle {id} not found")))?;
   raw_io_wrap(natives, make_option(natives, taken)?)
+}
+
+/// `channel_take_any (chs : List (Channel A)) : RawIO (Option A)` -- the
+/// `select` primitive (`std/src/concurrent/channel.mo`). The compiled
+/// runtime parks until a value arrives; this host cannot park, so it
+/// does one non-blocking scan of the list and answers `none` when every
+/// channel is empty -- the host's documented lazy degradation, and the
+/// reason no test asserts a BLOCKING select there. A value that is
+/// already waiting is still found, which is every case the host corpus
+/// exercises.
+fn channel_take_any(args: &[Value], natives: &NativeTable) -> Result<Value, CoreEvalError> {
+  let list = args
+    .first()
+    .ok_or_else(|| CoreEvalError::NativeArgError("channel_take_any needs 1 arg".into()))?;
+  let mut cur = list.clone();
+  loop {
+    // `List.cons`/`List.empty` are read through `well_known` like every
+    // other tag in this file, never a hardcoded number.
+    let cons = require_ctor(natives.well_known.list_cons, "List.cons")?;
+    let empty = require_ctor(natives.well_known.list_empty, "List.empty")?;
+    match cur {
+      Value::Con { tag, args } if tag == cons.tag => {
+        if args.is_empty() {
+          break;
+        }
+        let id = extract_handle_id(&args[0])?;
+        let taken =
+          crate::runtime::global::with_mut::<HostChannel, _>(id, |c| c.slot.lock().unwrap().take())
+            .ok_or_else(|| {
+              CoreEvalError::NativeArgError(format!("channel handle {id} not found"))
+            })?;
+        if let Some(value) = taken {
+          return Ok(raw_io_wrap(natives, make_option(natives, Some(value))?)?);
+        }
+        let tail = args.get(1).cloned().ok_or_else(|| {
+          CoreEvalError::NativeArgError("channel_take_any: malformed cons".into())
+        })?;
+        cur = tail;
+      }
+      Value::Con { tag, .. } if tag == empty.tag => break,
+      other => {
+        return Err(CoreEvalError::NativeArgError(format!(
+          "channel_take_any: expected a List, got {other:?}"
+        )));
+      }
+    }
+  }
+  Ok(raw_io_wrap(natives, make_option(natives, None)?)?)
 }
 
 #[cfg(test)]
