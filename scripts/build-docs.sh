@@ -68,6 +68,16 @@ else
     "$root/scripts/build-try.sh"
 fi
 
+# `monad build` type-checks only the TARGET file's own decls
+# (`check_deps = false`, `lang/src/module.mo`): a dependency's body is loaded
+# and elaborated but never checked. The site build compiles acorn and
+# monad_website, whose dependency docgen is never a build target -- a type
+# error there (a `String` passed for a `Path`, 2026-11-15) compiled cleanly
+# and then miscompiled monad_website into a segfault. Check each dependency
+# mote as its own target first, so this script cannot build past an error the
+# corpus check would report.
+"$monad" check "$root/motes/acorn" "$root/motes/docgen" "$root/docs/site/monad_website"
+
 # `-o` is the output BINARY (its `.ll` and `.o` land beside it).
 # acorn is built too: `monad test motes/acorn` never compiles its `main.mo`,
 # so this is the only build of the generic CLI.
