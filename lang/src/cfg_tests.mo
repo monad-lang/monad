@@ -93,3 +93,85 @@ def test_cfg_for_mote_spec : Bool :=
 #[test]
 def test_cfg_for_mote_no_table : Bool :=
     String.beq (features_of (CfgEnv.for_mote "m" List.empty (Option.some "m/a,"))) "a"
+
+// ─── The `not` off-switch ──────────────────────────────────────────────
+//
+// `MONAD_FEATURES` subtracts with a `not` token, so a manifest's `default`
+// can be turned off from outside. These pin both directions and the two
+// shapes that would otherwise be silently wrong: a `not` naming ANOTHER
+// mote (inert, not a claim about this one) and a `not` for an ordinary
+// feature the `default` set pulls in transitively.
+
+/// The whole `default` set goes off, and `default` itself is not in the
+/// answer either.
+#[test]
+def test_cfg_not_default_turns_it_off : Bool :=
+    String.beq (features_of (CfgEnv.for_mote "m" table (Option.some "not m/default"))) ""
+
+/// A `not` naming another mote suppresses nothing here -- it is not this
+/// call's to act on, exactly as a positive item for another mote is not.
+#[test]
+def test_cfg_not_other_mote_is_inert : Bool :=
+    String.beq (features_of (CfgEnv.for_mote "m" table (Option.some "not other/q"))) "default,y,x"
+
+/// An ordinary feature can be subtracted even though `default` pulls it in
+/// transitively (`default` -> `y` -> `x`), which is the case a
+/// `default`-only check would miss.
+#[test]
+def test_cfg_not_ordinary_feature_wins_over_default : Bool :=
+    String.beq (features_of (CfgEnv.for_mote "m" table (Option.some "not m/x"))) "default,y"
+
+/// Adding and subtracting in one spec: `w` comes on, `default` goes off.
+#[test]
+def test_cfg_not_mixes_with_additive : Bool :=
+    String.beq (features_of (CfgEnv.for_mote "m" table (Option.some "not m/default, m/w"))) "w"
+
+/// A trailing `not` with nothing after it suppresses nothing rather than
+/// silently swallowing an unrelated item.
+#[test]
+def test_cfg_dangling_not_is_ignored : Bool :=
+    String.beq (features_of (CfgEnv.for_mote "m" table (Option.some "not"))) "default,y,x"
+
+/// Comma-separated spelling works the same as whitespace-separated: both
+/// splitters treat `,` as a separator, so `not` is its own token either way.
+#[test]
+def test_cfg_not_comma_separated : Bool :=
+    String.beq (features_of (CfgEnv.for_mote "m" table (Option.some "not,m/default"))) ""
+
+/// Two `not`s in a row: the second replaces the first's modifier rather
+/// than suppressing `not` itself as a feature name.
+#[test]
+def test_cfg_double_not_is_not_a_feature : Bool :=
+    String.beq (features_of (CfgEnv.for_mote "m" table (Option.some "not not m/default"))) ""
+
+/// The off-switch reaches a `#[cfg]` predicate: `default` off means the
+/// declarations gated on it drop, which is the point of the switch.
+#[test]
+def test_cfg_not_default_filters_decls : Bool :=
+    let src : String := "#[cfg {feature := \"x\"}]\ndef on : I64 := 1\n#[cfg [not {feature := \"x\"}]]\ndef off : I64 := 2\n" in
+    let e : CfgEnv := CfgEnv.for_mote "m" table (Option.some "not m/default") in
+    String.beq (labels (decls_parser_located_cfg e src)) "off"
+
+// ─── The off-switch against a REAL `MONAD_FEATURES` ────────────────────
+//
+// `CfgEnv.for_mote` takes the spec as an argument, so the positive tests
+// above can pass it directly. What they cannot cover is the ENVIRONMENT
+// channel: whether `cfg_env_for_file` actually reads `MONAD_FEATURES` and
+// hands it here. That needs a subprocess with a different environment, which
+// is what `scripts/check-cfg-features.sh` does -- and what
+// `lang/src/cfg_fixture_tests.mo` exercises for the `default` half.
+//
+// These two pin the ORDER the two channels combine in: a spec-supplied
+// FEATURE must still be subtracted by a spec-supplied `not`, and the two
+// halves must be read from one and the same string rather than one from the
+// environment and one from the manifest.
+
+#[test]
+def test_cfg_not_wins_over_a_requested_feature : Bool :=
+    String.beq
+        (features_of (CfgEnv.for_mote "m" table (Option.some "m/w, not m/w"))) "default,y,x"
+
+#[test]
+def test_cfg_not_default_with_a_requested_feature : Bool :=
+    String.beq
+        (features_of (CfgEnv.for_mote "m" table (Option.some "m/w not m/default"))) "w"

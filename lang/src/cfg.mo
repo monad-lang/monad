@@ -161,12 +161,90 @@ def cfg_keep_pred (env : CfgEnv) (p : Option CfgPred) : Bool :=
 /// `table` (`[features]`) declares it, closed over the plain features
 /// each enabled one lists. `dep:x` and `x/f` items name dependencies and
 /// are not followed. Mirrors `CfgSet::with_manifest_features`.
+///
+/// A `not` token before an item SUBTRACTS it, so a manifest's `default`
+/// can be turned off from the outside:
+///
+///     MONAD_FEATURES="not cli/default"        // the whole default set off
+///     MONAD_FEATURES="not cli/lsp, cli/doc"   // lsp off, doc on
+///
+/// `not` is Monad's own negation vocabulary -- the same word
+/// `#[cfg [not {feature := "on"}]]` uses and `CfgPred.negate` implements --
+/// rather than a punctuation prefix, and it is a separate
+/// whitespace-delimited TOKEN so both splitters already carry it through
+/// untouched. It is lowercase-only, matching `cfg_group_head`'s own
+/// comparison.
+///
+/// The subtraction is applied to `mote` only: an item naming another mote
+/// is neither requested nor suppressed here, exactly as it is not
+/// requested. That is what makes `not std/foo` inert while checking `cli`
+/// rather than a claim about a mote this call knows nothing about.
+///
+/// `default` is the one item whose subtraction changes what is ENABLED
+/// without appearing in `requested`: it is added by this function, so
+/// removing it here is the only way to reach it.
+///
+/// THE SUPPRESSION IS APPLIED TWICE, and both halves are load-bearing --
+/// dropping from `start` alone is a bug `test_cfg_not_ordinary_feature_wins_over_default`
+/// caught:
+///
+///   * BEFORE expansion, so `not cli/default` stops `default` from being
+///     expanded at all. Filtering only the output would delete the name
+///     `default` while leaving `y` and `x` -- everything it pulled in --
+///     in place, which is the opposite of turning it off.
+///   * AFTER expansion, so `not cli/x` still wins when `x` is reachable
+///     transitively (`default` -> `y` -> `x`). Dropping it from `start`
+///     cannot help there: `x` is not IN `start`, it is derived from it,
+///     and `cfg_expand` would put it straight back.
+///
+/// So the rule a caller can rely on is simply "a subtracted name is not in
+/// the answer", whichever route it would have taken in.
 pub def CfgEnv.for_mote (mote : String) (table : List (Pair String (List String))) (spec : Option String) : CfgEnv :=
-    let requested : List String := cfg_requested mote (cfg_split_spec spec) in
+    let items : List String := cfg_split_spec spec in
+    let requested : List String := cfg_requested mote items in
+    let suppressed : List String := cfg_suppressed mote items in
     let start : List String :=
-        if cfg_table_has "default" table then List.cons "default" requested else requested in
-    let e : CfgEnv := { features := cfg_expand table start List.empty } in
+        if Bool.and (cfg_table_has "default" table) (Bool.not (cfg_mem "default" suppressed))
+        then List.cons "default" requested
+        else requested in
+    let expanded : List String := cfg_expand table (cfg_drop_all suppressed start) List.empty in
+    let e : CfgEnv := { features := cfg_drop_all suppressed expanded } in
     e
+
+/// The features `mote`'s `spec` subtracts. `not` is a MODIFIER: it consumes
+/// the next token and marks that one suppressed. A trailing `not` with
+/// nothing after it is dropped rather than treated as an item, so a stray
+/// token cannot silently suppress the wrong thing.
+def cfg_suppressed (mote : String) (items : List String) : List String :=
+    cfg_suppressed_go mote items false List.empty
+
+#[terminating]
+def cfg_suppressed_go (mote : String) (items : List String) (negating : Bool) (acc : List String) : List String :=
+    match items {
+        List.empty => acc,
+        List.cons item rest =>
+            if String.beq item "not"
+            then cfg_suppressed_go mote rest true acc
+            else cfg_suppressed_go mote rest false
+                (if negating then cfg_suppressed_one mote (Features.split_slash item) acc else acc),
+    }
+
+def cfg_suppressed_one (mote : String) (p : Option (Pair String String)) (acc : List String) : List String :=
+    match p {
+        Option.some pr => match pr {
+            Pair.pair m f => if String.beq m mote then List.cons f acc else acc,
+        },
+        Option.none => acc,
+    }
+
+/// `xs` with every name in `drop` removed.
+#[terminating]
+def cfg_drop_all (drop : List String) (xs : List String) : List String :=
+    match xs {
+        List.empty => List.empty,
+        List.cons x rest =>
+            if cfg_mem x drop then cfg_drop_all drop rest else List.cons x (cfg_drop_all drop rest),
+    }
 
 def cfg_split_spec (spec : Option String) : List String :=
     match spec {

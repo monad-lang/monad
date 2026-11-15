@@ -23,24 +23,59 @@ pub enum CfgPred {
   Any(Vec<CfgPred>),
 }
 
-/// Enabled features, as `(mote, feature)` pairs.
+/// Enabled features, as `(mote, feature)` pairs, plus the ones a `not`
+/// token SUBTRACTED. `suppressed` is kept rather than applied eagerly so
+/// `with_manifest_features` can consult it: `default` is added there, after
+/// `parse_features` has run, and subtracting it is the whole reason the
+/// token exists.
+///
+/// Mirrors `CfgEnv.for_mote` (`lang/src/cfg.mo`); the two must agree, and
+/// the same test names pin both.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct CfgSet {
   features: BTreeSet<(String, String)>,
+  suppressed: BTreeSet<(String, String)>,
 }
 
 impl CfgSet {
   /// Parse a `MONAD_FEATURES`/`--features` list: comma- or
   /// whitespace-separated `mote/feature` items.
+  ///
+  /// A `not` TOKEN before an item subtracts it instead of adding it:
+  ///
+  /// ```text
+  /// MONAD_FEATURES="not cli/default"        // the whole default set off
+  /// MONAD_FEATURES="not cli/lsp, cli/doc"   // lsp off, doc on
+  /// ```
+  ///
+  /// `not` is Monad's own negation vocabulary -- the same word
+  /// `#[cfg [not {feature := "on"}]]` uses and `CfgPred::Not` implements --
+  /// and it is a separate whitespace/comma-delimited token, so the split
+  /// below carries it through with no lexer change. It is lowercase-only,
+  /// matching the predicate grammar's own comparison. A trailing `not`
+  /// with nothing after it is dropped rather than treated as an item, so a
+  /// stray token cannot silently suppress the wrong thing.
   pub fn parse_features(spec: &str) -> Result<CfgSet, String> {
     let mut features = BTreeSet::new();
+    let mut suppressed = BTreeSet::new();
+    let mut negating = false;
     for item in spec.split(|c: char| c == ',' || c.is_whitespace()) {
       if item.is_empty() {
         continue;
       }
+      if item == "not" {
+        negating = true;
+        continue;
+      }
+      let target = if negating {
+        &mut suppressed
+      } else {
+        &mut features
+      };
+      negating = false;
       match item.split_once('/') {
         Some((mote, feat)) if !mote.is_empty() && !feat.is_empty() && !feat.contains('/') => {
-          features.insert((mote.to_owned(), feat.to_owned()));
+          target.insert((mote.to_owned(), feat.to_owned()));
         }
         _ => {
           return Err(format!(
@@ -49,17 +84,42 @@ impl CfgSet {
         }
       }
     }
-    Ok(CfgSet { features })
+    Ok(CfgSet {
+      features,
+      suppressed,
+    })
   }
 
   pub fn enable(&mut self, mote: &str, feature: &str) {
     self.features.insert((mote.to_owned(), feature.to_owned()));
   }
 
+  /// Whether `feature` of `mote` was subtracted by a `not` token. A
+  /// subtracted name is never in the answer, whichever route it would have
+  /// taken in.
+  fn is_suppressed(&self, mote: &str, feature: &str) -> bool {
+    self
+      .suppressed
+      .contains(&(mote.to_owned(), feature.to_owned()))
+  }
+
   /// This set plus `mote`'s manifest features: its `default` (when
   /// declared), and every plain feature an enabled one lists in `table`
   /// (`[features]`), transitively. `dep:x` and `x/f` items name
   /// dependencies, not this mote's features, and are not followed here.
+  ///
+  /// THE SUPPRESSION IS APPLIED TWICE, and both halves are load-bearing --
+  /// dropping from `work` alone is a bug `cfg_not_ordinary_feature_wins`
+  /// caught:
+  ///
+  ///   * BEFORE expansion, so `not cli/default` stops `default` from being
+  ///     expanded at all. Filtering only the output would delete the name
+  ///     `default` while leaving everything it pulled in -- the opposite
+  ///     of turning it off.
+  ///   * AFTER expansion, so `not cli/x` still wins when `x` is reachable
+  ///     transitively (`default` -> `y` -> `x`). Dropping it from `work`
+  ///     cannot help there: `x` is not IN `work`, it is derived from it,
+  ///     and the loop below would put it straight back.
   pub fn with_manifest_features(
     &self,
     mote: &str,
@@ -71,17 +131,33 @@ impl CfgSet {
       .iter()
       .filter(|(m, _)| m == mote)
       .map(|(_, f)| f.clone())
+      .filter(|f| !self.is_suppressed(mote, f))
       .collect();
-    if table.contains_key("default") {
+    if table.contains_key("default") && !self.is_suppressed(mote, "default") {
       work.push("default".to_owned());
     }
     while let Some(f) = work.pop() {
       for item in table.get(&f).into_iter().flatten() {
-        if !item.contains(':') && !item.contains('/') && !out.has_feature(mote, item) {
+        if !item.contains(':')
+          && !item.contains('/')
+          && !out.has_feature(mote, item)
+          && !self.is_suppressed(mote, item)
+        {
           work.push(item.clone());
         }
       }
       out.enable(mote, &f);
+    }
+    // Second application: a feature already in `features` because a caller
+    // put it there, rather than because `work` derived it, is filtered here.
+    let dropped: Vec<(String, String)> = out
+      .suppressed
+      .iter()
+      .filter(|(m, _)| m == mote)
+      .cloned()
+      .collect();
+    for pair in dropped {
+      out.features.remove(&pair);
     }
     out
   }
@@ -316,5 +392,77 @@ use std::io {}
       &CfgSet::default(),
       None
     ));
+  }
+
+  // ─── The `not` off-switch ────────────────────────────────────────────
+  //
+  // The same cases `lang/src/cfg_tests.mo` pins, on the same table, so the
+  // two readers cannot drift. `not` SUBTRACTS, and a subtracted name is
+  // never in the answer whichever route it would have taken in.
+
+  fn table() -> BTreeMap<String, Vec<String>> {
+    [
+      ("default".to_owned(), vec!["y".to_owned()]),
+      ("y".to_owned(), vec!["x".to_owned(), "dep:z".to_owned()]),
+      ("x".to_owned(), vec![]),
+      ("w".to_owned(), vec![]),
+    ]
+    .into_iter()
+    .collect()
+  }
+
+  fn features(spec: &str) -> Vec<String> {
+    CfgSet::parse_features(spec)
+      .unwrap()
+      .with_manifest_features("m", &table())
+      .features
+      .iter()
+      .filter(|(m, _)| m == "m")
+      .map(|(_, f)| f.clone())
+      .collect()
+  }
+
+  #[test]
+  fn cfg_not_default_turns_it_off() {
+    assert!(features("not m/default").is_empty());
+  }
+
+  #[test]
+  fn cfg_not_other_mote_is_inert() {
+    assert_eq!(features("not other/q"), vec!["default", "x", "y"]);
+  }
+
+  #[test]
+  fn cfg_not_ordinary_feature_wins_over_default() {
+    assert_eq!(features("not m/x"), vec!["default", "y"]);
+  }
+
+  #[test]
+  fn cfg_not_mixes_with_additive() {
+    assert_eq!(features("not m/default, m/w"), vec!["w"]);
+  }
+
+  #[test]
+  fn cfg_not_dangling_is_ignored() {
+    assert_eq!(features("not"), vec!["default", "x", "y"]);
+  }
+
+  #[test]
+  fn cfg_not_comma_separated() {
+    assert!(features("not,m/default").is_empty());
+  }
+
+  #[test]
+  fn cfg_not_double_is_not_a_feature() {
+    assert!(features("not not m/default").is_empty());
+  }
+
+  /// The off-switch reaches a `#[cfg]` predicate, which is the point.
+  #[test]
+  fn cfg_not_default_filters_decls() {
+    let set = CfgSet::parse_features("not m/default")
+      .unwrap()
+      .with_manifest_features("m", &table());
+    assert_eq!(decl_names(SRC, &set), vec!["b", "c"]);
   }
 }
