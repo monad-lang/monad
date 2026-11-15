@@ -14,8 +14,14 @@
 /// any more.
 use std::list {List.intercalate}
 use lang::types {
-    Identifier, ModulePath, NamePath, show_module_path, show_name_path,
+    Identifier, ModulePath, NamePath, qualified_symbol_name, show_module_path, show_name_path,
 }
+
+/// The def-side symbol spelling of a qualified reference, re-exported here
+/// so codegen has one name for it: the implementation lives in
+/// `lang/types.mo` because `lang` may not import `codegen` (the one-way
+/// gate), and the parser's lowering needs the identical bytes.
+pub use lang::types {qualified_symbol_name}
 use std::map {}
 use lang::name_text {unqualify_def_name}
 

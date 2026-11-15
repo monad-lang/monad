@@ -43,8 +43,8 @@ use lib::scope {struct_fields_to_params}
 use lang::types {
     AttrArg, Attribute, Decl, Def, Identifier, InductConstructor, Inductive, MatchCase,
     NamePath, Param, Struct, Term, TypeConstraint, binder_anon, binder_named, i64, if_,
-    many, match_, named, no_attrs, num, package_private, pub_, sentinel, show_name_path, str,
-    unnamed,
+    many, match_, named, no_attrs, num, package_private, pub_, sentinel, show_identifier,
+    show_name_path, str, unnamed,
 }
 
 // ─── Value-construction helpers (host -> Value, the INPUT side) ────────
@@ -146,13 +146,11 @@ def term_free_var_name (t : Term) : Option String :=
     match strip_term_ctx t {
         Term.var _idx dbg =>
             match dbg {
-                DebugName.named id => Option.some (show_identifier_ id),
+                DebugName.named id => Option.some (show_identifier id),
                 DebugName.unnamed => Option.none,
             },
         _ => Option.none,
     }
-
-def show_identifier_ (id : Identifier) : String := match id { Identifier.id s => s }
 
 // ─── Input side: Inductive -> TypeInfo Value ────────────────────────────
 
@@ -207,10 +205,10 @@ def escape_attr_str_at (s : String) (bs : List U8) (i : I64) (acc : String) : St
 #[partial]
 def attr_arg_string (a : AttrArg) : String :=
     match a {
-        AttrArg.ident id => show_identifier_ id,
+        AttrArg.ident id => show_identifier id,
         AttrArg.str value => String.concat "\"" (String.concat (escape_attr_str value) "\""),
         AttrArg.num value => I64.to_string value,
-        AttrArg.named name value => String.concat (show_identifier_ name) (String.concat ":=" (attr_arg_string value)),
+        AttrArg.named name value => String.concat (show_identifier name) (String.concat ":=" (attr_arg_string value)),
         AttrArg.group items => String.concat "[" (String.concat (attr_args_string items) "]"),
     }
 
@@ -234,9 +232,9 @@ def attribute_string (a : Attribute) : String :=
     match a {
         Attribute.mk name args =>
             match args {
-                List.empty => show_identifier_ name,
+                List.empty => show_identifier name,
                 List.cons _ _ =>
-                    String.concat (show_identifier_ name) (String.concat "(" (String.concat (attr_args_string args) ")")),
+                    String.concat (show_identifier name) (String.concat "(" (String.concat (attr_args_string args) ")")),
             },
     }
 
@@ -273,7 +271,7 @@ def field_info_value (p : Param) : Result String Value :=
                     match default_expr_value pdefault {
                         Result.err e => Result.err e,
                         Result.ok default_val =>
-                            Result.ok (field_info_val (str_val (show_identifier_ pname)) typ_val (attr_names_val pattrs) default_val),
+                            Result.ok (field_info_val (str_val (show_identifier pname)) typ_val (attr_names_val pattrs) default_val),
                     },
             },
     }
@@ -341,7 +339,7 @@ def build_type_info_value (ind : Inductive) : Result String Value :=
 /// instance cannot carry the constraints a generic one needs).
 #[partial]
 def param_name_val (p : Param) : Value :=
-    match p { Param.mk name _typ _mult _default _attrs => str_val (show_identifier_ name) }
+    match p { Param.mk name _typ _mult _default _attrs => str_val (show_identifier name) }
 
 /// Strip a `Term.ctx` location wrapper before matching -- a struct
 /// field's own declared default (`StructField.mk`'s `fdefault`, threaded
@@ -368,7 +366,7 @@ def term_to_expr_value (t_raw : Term) : Result String Value :=
     match t {
         Term.var _idx dbg =>
             match dbg {
-                DebugName.named id => Result.ok (e_var_val (show_identifier_ id)),
+                DebugName.named id => Result.ok (e_var_val (show_identifier id)),
                 DebugName.unnamed => Result.err "term_to_expr_value: unnamed free variable",
             },
         Term.app f a =>

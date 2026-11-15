@@ -11,8 +11,8 @@ use lib::scope {
 use lang::types {
     AttrArg, Attribute, Con, DebugName, Decl, Def, Identifier, InductConstructor,
     Inductive, Literal, MatchCase, ModulePath, NamePath, Native, Scope, ScopeData,
-    ScopeDef, Term, i64, id_eq, name_map_values, nid, sentinel, show_module_path,
-    show_name_path,
+    ScopeDef, Term, i64, id_eq, name_map_values, nid, sentinel, show_identifier,
+    show_module_path, show_name_path,
 }
 use lib::typecheck::infer {empty_locals, last_dotted_segment}
 use lib::elim_lower {elim_to_literal}
@@ -883,13 +883,6 @@ def is_dict_projection_scrutinee (value : Term) : Bool :=
                 DebugName.unnamed => false,
             },
         _ => false,
-    }
-
-/// Rendered diagnostics for `LowerError`. Moved here from the CLI so the
-/// browser REPL's engine shares the same wording.
-pub def show_identifier (id : Identifier) : String :=
-    match id {
-        Identifier.id s => s,
     }
 
 pub def show_lower_error (e : LowerError) : String :=

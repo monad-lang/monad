@@ -18,7 +18,8 @@ use std::bench {Bench.now}
 use lang::types {
     Attribute, Decl, Def, Identifier, LocalScope, ModulePath, NamePath, Scope, StructField,
     TypeConstraint, binder_named, hole, lam, many, named, package_private, sentinel,
-    module_path_to_string_colon, show_identifier, show_module_path, show_name_path, use_items, use_name, var,
+    module_path_to_string_colon, qn_of, qualified_symbol_name, show_identifier, show_module_path,
+    show_name_path, use_items, use_name, var,
 }
 use lang::module {ModuleInfo, bench_step, best_effort_failed, elaborate_module_decls_reporting}
 use lang::scope {
@@ -145,7 +146,7 @@ def qualified_def_name (modpath : ModulePath) (n : NamePath) : NamePath :=
 /// `show_module_path`; only the name half is a `NamePath`.
 #[partial]
 def qualified_def_name_str (modpath : ModulePath) (n : NamePath) : String :=
-    String.concat (show_module_path modpath) (String.concat "::" (show_name_path n))
+    qualified_symbol_name (qn_of modpath n)
 
 /// The module paths a module imports, in any form (`use x {..}`,
 /// `use x {}`, `open X {..}`, and the inner decl of a `scoped_open_d`).

@@ -47,7 +47,9 @@ use lang::types {
     binder_named,
     dict_hint_marker_prefix, list_reverse,
     sentinel,
+    qualified_symbol_name,
     show_identifier,
+    show_name_path,
 }
 // Name resolution lives HERE now, moved out of `lang/parser.mo` for real
 // (an earlier revision copied it while claiming to have moved it, arming
@@ -279,18 +281,10 @@ def find_index (id : Identifier) (ctx : List Identifier) (depth : I64) : Option 
         List.empty => Option.none
     }
 
-#[partial]
-def show_name_path_dotted (np : NamePath) : String := show_name_path np
-
 /// A qualified reference rendered the way codegen spells a DEFINITION:
 /// dotted module half, `::`, dotted name half (`std.process::process_id`).
 /// Mirrors `qualified_def_name_str` (`codegen/qualify.mo`) -- the two
 /// must stay in step, which `emit.mo`'s `gate_result` check assumes.
-#[partial]
-def qualified_ref_symbol (qn : QualifiedName) : String :=
-    String.concat (show_module_path qn.qmod)
-        (String.concat "::" (show_name_path qn.qname))
-
 /// Faithful to `lang/parser.mo`'s original, INCLUDING the `nop` arm: an
 /// operator keeps its spelling, because `resolve_infix_decls`
 /// (`lang/scope.mo`) rewrites placeholder operator vars into their real
@@ -299,7 +293,7 @@ def qualified_ref_symbol (qn : QualifiedName) : String :=
 #[partial]
 def name_ref_to_string (nref : NameRef) : Option String := match nref {
     NameRef.nid id => Option.some (show_identifier id),
-    NameRef.nnp np => Option.some (show_name_path_dotted np),
+    NameRef.nnp np => Option.some (show_name_path np),
     // The DEF-side symbol convention (`show_module_path` dotted, then
     // `::`, then the dotted name half) -- NOT `show_qualified_name`,
     // which renders the module half `::`-joined to match the Rust host's
@@ -308,7 +302,7 @@ def name_ref_to_string (nref : NameRef) : Option String := match nref {
     // codegen emits for the DEFINITION (`qualified_def_name_str`,
     // `codegen/qualify.mo`), or the call is emitted under a symbol
     // nothing defines and `llc` fails with "use of undefined value".
-    NameRef.nqn qn => Option.some (qualified_ref_symbol qn),
+    NameRef.nqn qn => Option.some (qualified_symbol_name qn),
     NameRef.nop op => Option.some (show_operator op),
 }
 

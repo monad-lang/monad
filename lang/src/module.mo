@@ -26,7 +26,7 @@ use lib::name_text {unqualify_def_name}
 use lib::cfg {CfgEnv, CfgEnv.empty, CfgEnv.for_mote}
 use lib::parser {
     LocatedDecls, decls_parser, decls_parser_located, decls_parser_located_cfg, decls_parser_located_with_ranges,
-    decls_parser_strict, module_path_to_string,
+    decls_parser_strict,
 }
 use parsec::core {ParseError, ParseResult, parse_error_remaining}
 use lib::parser::diagnostic {parse_error_location, render_parse_error}
@@ -1341,7 +1341,7 @@ def load_module_decls_of_text (file_path : Path) (mp : ModulePath) (content : St
                             render_parse_error content (Option.some (Path.to_string file_path)) e,
                         ParseResult.success _ _ =>
                             String.concat "parse error: "
-                                (String.concat (module_path_to_string mp)
+                                (String.concat (module_path_to_string_colon mp)
                                     " did not fully parse (stopped before end of file)"),
                     };
                 println msg;
@@ -1725,7 +1725,7 @@ def load_scope_entry (base_dir : Path) (mp : ModulePath) : IO (Option ScopeData)
 /// Shared "couldn't resolve this dependency at all" message for
 /// `load_dependency_entries`'s `not_found` parameter.
 def dependency_not_found_msg (mp : ModulePath) : String :=
-    "Failed to load module: " ++ module_path_to_string mp
+    "Failed to load module: " ++ module_path_to_string_colon mp
 
 /// Merge two ScopeData structures. `def_refs` merges via
 /// `HashMap.merge_buckets` (`std/map.mo`) — a direct bucket-to-bucket
@@ -4944,7 +4944,7 @@ def tail_after_last_dot (s : String) : String :=
     if I64.lt last 0 then "" else String.drop (I64.add last 1) s
 
 def unknown_use_name_error (info : ModuleInfo) (path : ModulePath) (n : String) (dotted : Option String) : String :=
-    let p : String := module_path_to_string path in
+    let p : String := module_path_to_string_colon path in
     String.concat_all [
         "error: `", p, "` declares no `", n, "`\n",
         "  `use ", p, " {", n, "}` in ", Path.to_string info.file_path, "\n",
@@ -5120,10 +5120,10 @@ def owning_mote_name (file : String) : IO (Option String) := do {
 /// mote.
 def bare_use_error (info : ModuleInfo) (u : ModulePath) (owner : Option String) : String :=
     String.concat_all [
-        "error: `use ", module_path_to_string u, "` does not name a mote\n",
-        "  `use ", module_path_to_string u, "` in ", Path.to_string info.file_path,
+        "error: `use ", module_path_to_string_colon u, "` does not name a mote\n",
+        "  `use ", module_path_to_string_colon u, "` in ", Path.to_string info.file_path,
         " is a module path relative to the importing file, so which module it names depends on where that file sits\n",
-        "  hint: ", bare_use_hint (module_path_to_string u) owner,
+        "  hint: ", bare_use_hint (module_path_to_string_colon u) owner,
     ]
 
 def bare_use_hint (head : String) (owner : Option String) : String :=
@@ -5353,9 +5353,9 @@ def test_a_use_of_an_unloaded_module_is_left_alone : Bool :=
 /// `init/` at all.
 def prelude_import_error (info : ModuleInfo) (u : ModulePath) : String :=
     String.concat_all [
-        "error: `use ", module_path_to_string u, "` names the prelude, which is ambient\n",
+        "error: `use ", module_path_to_string_colon u, "` names the prelude, which is ambient\n",
         "  every file already sees `prelude` -- the loader seeds it into each module's closure, ", Path.to_string info.file_path, " included\n",
-        "  hint: delete the `use ", module_path_to_string u, "` line",
+        "  hint: delete the `use ", module_path_to_string_colon u, "` line",
     ]
 
 /// The `[dependencies.<head>] path` value to suggest, written relative to
@@ -5439,7 +5439,7 @@ def undeclared_mote_error (m : MoteManifest) (info : ModuleInfo) (u : ModulePath
     (head : String) (found_dir : String) : String :=
     String.concat_all [
         "error: mote `", head, "` is not a declared dependency of `", m.name, "`\n",
-        "  `use ", module_path_to_string u, "` in ", Path.to_string info.file_path,
+        "  `use ", module_path_to_string_colon u, "` in ", Path.to_string info.file_path,
         " requires mote `", head, "`, which is at `", found_dir, "`\n",
         "  hint: add [dependencies.", head, "] ", undeclared_mote_path_clause (Path.to_string m.dir) found_dir,
         " to ", Path.to_string (Path.child_under m.dir "mote.toml"),

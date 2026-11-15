@@ -15,7 +15,7 @@ use lang::types {
     dict_hint, do_,
     pd_scoped_open_d, pd_struct_d, pd_use_d, pd_with_d, pi, plain, priv_, pt_, pt_app, pt_at, pt_dict_hint, pt_do,
     pt_from, pt_hole, pt_lam, pt_lit, pt_pi, pt_quote_, pt_sort, pt_var,
-    pt_var_macro, pub_, sentinel, show_identifier, show_name_path, str, struct_lit,
+    module_path_to_string_colon, pt_var_macro, pub_, sentinel, show_identifier, show_name_path, str, struct_lit,
     struct_update, term_loc, u32, u64, var, zero,
     forall,
 }
@@ -118,11 +118,6 @@ def join_dotted_identifiers (ids : List String) : String :=
 /// above), so local copies were a name collision -- the same shape
 /// AGENTS.md item 18 describes, harmless in this one instance only
 /// because the two definitions happened to agree byte-for-byte.
-#[partial]
-def module_path_to_string (mp : ModulePath) : String := match mp {
-    ModulePath.mk ids => List.intercalate "::" (List.map show_identifier ids),
-}
-
 #[partial]
 def name_path_variable (input : String) : ParseResult NameRef :=
     match dotted_identifier input {
@@ -11057,7 +11052,7 @@ def test_use_parser_accepts_colon_colon : Bool :=
             match out.kind {
                 use_d path _filter _pub =>
                     (String.beq rem "") &&
-                    String.beq (module_path_to_string path) "codegen::emit",
+                    String.beq (module_path_to_string_colon path) "codegen::emit",
                 _ => false
             },
         fail _ => false
@@ -11081,7 +11076,7 @@ def test_use_parser_rejects_dotted : Bool :=
         success _ colon_out =>
             match colon_out.kind {
                 use_d colon_path _fc _pc =>
-                    String.beq (module_path_to_string colon_path) "std::list",
+                    String.beq (module_path_to_string_colon colon_path) "std::list",
                 _ => false
             }
             && (match use_parser "use std.list {intercalate}" {
@@ -11090,7 +11085,7 @@ def test_use_parser_rejects_dotted : Bool :=
                         use_d dot_path _fd _pd =>
                             // Never two segments, and the tail is
                             // left behind rather than swallowed.
-                            String.beq (module_path_to_string dot_path) "std"
+                            String.beq (module_path_to_string_colon dot_path) "std"
                             && String.contains rem "list",
                         _ => false
                     },

@@ -7204,7 +7204,7 @@ pub def find_unresolved_class_calls_decls (classes : List Class) (decl_list : Li
                     match def_ {
                         Def.mk {name, typ := _typ, term := term_, constraints := _constraints, attrs := _attrs, vis := _vis, ..} =>
                             let found := find_unresolved_class_calls_term classes term_ List.empty in
-                            List.append (format_unresolved_class_calls (name_path_to_str_scope name) found) (find_unresolved_class_calls_decls classes rest),
+                            List.append (format_unresolved_class_calls (show_name_path name) found) (find_unresolved_class_calls_decls classes rest),
                     },
                 _ => find_unresolved_class_calls_decls classes rest,
             },
@@ -7934,7 +7934,7 @@ def decl_list_has_def_named (decl_list : List Decl) (name : String) : Bool :=
                 Decl.def_d def_ =>
                     match def_ {
                         Def.mk {name := dname, ..} =>
-                            if String.beq (name_path_to_str_scope dname) name
+                            if String.beq (show_name_path dname) name
                             then true
                             else decl_list_has_def_named rest name,
                     },
@@ -7958,14 +7958,6 @@ def decl_list_has_instance_named (decl_list : List Decl) (cls_str : String) : Bo
                 _ => decl_list_has_instance_named rest cls_str,
             },
     }
-
-/// A bare `module_path_to_str`-equivalent local to scope.mo (that
-/// function lives in codegen/emit.mo, not imported here) --
-/// single-segment only, matching every name `mangle_instance_*_name`
-/// ever produces.
-#[partial]
-def name_path_to_str_scope (np : NamePath) : String :=
-    show_name_path np
 
 // --- Phase 3 (dictionary-passing plan) tests ---
 

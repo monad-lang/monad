@@ -29,6 +29,7 @@ use lang::core_eval {CoreEvalError, basic_native_table, eval}
 use lang::core_ir {CoreIr}
 use lang::core_value {Env, GlobalTable, Value, global_cache_new_fueled, global_table_len}
 use lang::lower_core_ir {lower_ctx_from_decls, lower_root, show_lower_error}
+use lang::types {show_identifier}
 use lang::repl::value_format {format_type, format_value}
 use lang::typecheck::infer {empty_locals, type_check}
 use lang::typecheck::meta_eval {show_core_eval_error_debug, show_value_debug}

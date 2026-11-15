@@ -32,23 +32,23 @@ use lib::lower_core_ir {LowerCtx, LowerError, lower_ctx_from_decls, lower_root}
 use lang::types {
     DebugName, Decl, Identifier, ModulePath, NamePath, Term, app, binder_explicit, hole,
     i64, lam,
-    lit, named, ntv, num, package_private, show_name_path, var,
+    lit, named, ntv, num, package_private, show_identifier, show_module_path, show_name_path, var,
 }
 
 def show_lower_error_debug (e : LowerError) : String :=
     match e {
-        LowerError.le_unresolved_name id_ => String.concat "le_unresolved_name " (id_str id_),
-        LowerError.le_unresolved_module_path mp => String.concat "le_unresolved_module_path " (show_module_path_ mp),
-        LowerError.le_unknown_inductive mp => String.concat "le_unknown_inductive " (show_module_path_ mp),
-        LowerError.le_unknown_constructor mp => String.concat "le_unknown_constructor " (show_module_path_ mp),
-        LowerError.le_unknown_native id_ => String.concat "le_unknown_native " (id_str id_),
+        LowerError.le_unresolved_name id_ => String.concat "le_unresolved_name " (show_identifier id_),
+        LowerError.le_unresolved_module_path mp => String.concat "le_unresolved_module_path " (show_module_path mp),
+        LowerError.le_unknown_inductive mp => String.concat "le_unknown_inductive " (show_module_path mp),
+        LowerError.le_unknown_constructor mp => String.concat "le_unknown_constructor " (show_module_path mp),
+        LowerError.le_unknown_native id_ => String.concat "le_unknown_native " (show_identifier id_),
         LowerError.le_type_level_term => "le_type_level_term",
         LowerError.le_con_hole_before_filled_arg => "le_con_hole_before_filled_arg",
         LowerError.le_struct_lit_survived => "le_struct_lit_survived",
         LowerError.le_float_literal_unsupported => "le_float_literal_unsupported",
         LowerError.le_unresolved_macro_artifact => "le_unresolved_macro_artifact",
         LowerError.le_elim_ill_formed reason => String.concat "le_elim_ill_formed " reason,
-        LowerError.le_in_def path inner => String.concat "in " (String.concat (show_module_path_ path) (String.concat ": " (show_lower_error_debug inner))),
+        LowerError.le_in_def path inner => String.concat "in " (String.concat (show_module_path path) (String.concat ": " (show_lower_error_debug inner))),
     }
 
 /// Evaluate `meta_def_name` (a top-level `def` in `dispatched_decls`
@@ -76,22 +76,6 @@ def meta_eval_invoke (dispatched_decls : List Decl) (meta_def_name : NamePath) (
 /// full path, see `lang/scope.mo`'s `scope_resolve_name`), never
 /// resolved against directly.
 def meta_eval_root : ModulePath := ModulePath.mk (List.cons (Identifier.id "__meta_eval__") List.empty)
-
-def show_module_path_ (mp : ModulePath) : String :=
-    match mp { ModulePath.mk ids => join_ids ids }
-
-#[partial]
-def join_ids (ids : List Identifier) : String :=
-    match ids {
-        List.empty => "",
-        List.cons hd rest =>
-            match rest {
-                List.empty => id_str hd,
-                List.cons _ _ => String.concat (id_str hd) (String.concat "." (join_ids rest)),
-            },
-    }
-
-def id_str (id : Identifier) : String := match id { Identifier.id s => s }
 
 def run_to_value (ir : CoreIr) (globals : GlobalTable) : Result String Value :=
     match force_global_ir ir globals {
@@ -139,7 +123,7 @@ pub def show_core_eval_error_debug (e : CoreEvalError) : String :=
     match e {
         CoreEvalError.ce_unbound_local idx => String.concat "ce_unbound_local " (I64.to_string idx),
         CoreEvalError.ce_unknown_global idx => String.concat "ce_unknown_global " (I64.to_string idx),
-        CoreEvalError.ce_unresolved_global path => String.concat "ce_unresolved_global " (show_module_path_ path),
+        CoreEvalError.ce_unresolved_global path => String.concat "ce_unresolved_global " (show_module_path path),
         CoreEvalError.ce_not_a_function v arg => String.concat "ce_not_a_function " (String.concat (show_value_debug v) (String.concat " applied to arg " (show_value_debug arg))),
         CoreEvalError.ce_not_a_constructor v => String.concat "ce_not_a_constructor " (show_value_debug v),
         CoreEvalError.ce_case_index_out_of_bounds tag => String.concat "ce_case_index_out_of_bounds " (I64.to_string tag),
@@ -149,7 +133,7 @@ pub def show_core_eval_error_debug (e : CoreEvalError) : String :=
         CoreEvalError.ce_out_of_fuel => "ce_out_of_fuel",
         CoreEvalError.ce_recursion_too_deep => "ce_recursion_too_deep",
         CoreEvalError.ce_native_arg_error msg => String.concat "ce_native_arg_error " msg,
-        CoreEvalError.ce_non_exhaustive_match inductive ctor => String.concat "ce_non_exhaustive_match " (String.concat (show_module_path_ inductive) (String.concat "." (id_str ctor))),
+        CoreEvalError.ce_non_exhaustive_match inductive ctor => String.concat "ce_non_exhaustive_match " (String.concat (show_module_path inductive) (String.concat "." (show_identifier ctor))),
     }
 
 // ─── Tests ───────────────────────────────────────────────────────────

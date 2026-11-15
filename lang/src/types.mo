@@ -306,6 +306,16 @@ pub def show_qualified_name (qn : QualifiedName) : String :=
     String.concat (module_path_to_string_colon qn.qmod)
         (String.concat "::" (show_name_path qn.qname))
 
+/// The def-side SYMBOL spelling of a qualified name: the module half
+/// dotted, then `::`, then the name half dotted (`std.process::process_id`).
+/// This is not the source spelling (`show_qualified_name`, whose module
+/// half is `::`-joined): it is the convention codegen emits and the
+/// parser lowers a qualified reference to, and the two must agree byte for
+/// byte or a reference cannot find its definition.
+pub def qualified_symbol_name (qn : QualifiedName) : String :=
+    String.concat (show_module_path qn.qmod)
+        (String.concat "::" (show_name_path qn.qname))
+
 /// A module path in `NamePath` form: the same segments, used where a
 /// table is keyed by a spelling and a `use`/`open` path is one of the
 /// keys (the use-completeness gate's `own` set, an outline's decl name).
