@@ -686,8 +686,15 @@ jobs:
   # whole-directory sweep is the expensive shape and a named list is the
   # trade. Trim the list before raising the guard. Loom's three suites ride
   # here: Loom is weaver's dependency and nothing else in CI runs them.
+  #
+  # Ordered most-expensive-first, and `-j 4` on the heavy pool: measured on
+  # run 43664450859 (14 files, `-j 2`, generic runner, 45m26s), one file's
+  # cold compile owns the job -- tui_app_tests 18m40s, commands_tests 11m34s,
+  # dumb_e2e_tests 11m26s, settings_tests 6m34s, auto_continue_tests 5m23s,
+  # while policy/gate/ask/cli and Loom's three cost 15-90s each. Their
+  # closure includes the compiler (weaver embeds it), so only overlap helps.
   weaver-unit-checks:
-    runs-on: [self-hosted, linux]
+    runs-on: [self-hosted, linux, monad-heavy]
     needs: [changes, compiler-checks]
     if: needs.changes.outputs.compiler == 'true'
     timeout-minutes: 90
@@ -702,17 +709,17 @@ jobs:
         run: |
           nix develop --no-pure-eval --accept-flake-config \
             --profile "$HOME/.monad-ci-devshell" \
-            -c "$MONAD_CI_BIN" test --jobs 2 \
+            -c "$MONAD_CI_BIN" test --jobs 4 \
                  motes/weaver/src/tests/tui_app_tests.mo \
                  motes/weaver/src/tests/commands_tests.mo \
                  motes/weaver/src/tests/dumb_e2e_tests.mo \
-                 motes/weaver/src/tests/weaver_gate_tests.mo \
                  motes/weaver/src/tests/settings_tests.mo \
+                 motes/weaver/src/tests/auto_continue_tests.mo \
+                 motes/weaver/src/tests/weaver_gate_tests.mo \
                  motes/weaver/src/tests/policy_tests.mo \
                  motes/weaver/src/tests/gate_tests.mo \
                  motes/weaver/src/tests/ask_tests.mo \
                  motes/weaver/src/tests/classify_tests.mo \
-                 motes/weaver/src/tests/auto_continue_tests.mo \
                  motes/weaver/src/tests/cli_tests.mo \
                  motes/loom/src/tests/warp_tests.mo \
                  motes/loom/src/tests/strand_tests.mo \
