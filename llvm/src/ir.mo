@@ -984,7 +984,6 @@ def llvm_escape_byte (b : U8) : String :=
 /// `AGENTS.md` item 12 Track 4) rather than paying for one
 /// `String.concat` per byte -- only bytes that actually need escaping
 /// cost an extra concat.
-#[partial]
 def llvm_escape_or_none (b : U8) : Option String :=
     if llvm_byte_needs_escape b then Option.some (llvm_escape_byte b) else Option.none
 
@@ -1222,7 +1221,6 @@ def intern_module_files_go (files : List (Pair String String)) (source_path : St
 /// constructor's own `B`, so the affine walk cannot name it as `String`
 /// and mentioning it twice is an affine violation; a `String` parameter
 /// may be read twice.
-#[partial]
 def module_file_parts (file_path : String) (source_path : String) : Pair Bool (Pair String String) :=
     Pair.pair (String.beq file_path source_path) (llvm_split_path file_path)
 
