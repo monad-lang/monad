@@ -713,6 +713,7 @@ jobs:
                  motes/weaver/src/tests/ask_tests.mo \
                  motes/weaver/src/tests/classify_tests.mo \
                  motes/weaver/src/tests/auto_continue_tests.mo \
+                 motes/weaver/src/tests/cli_tests.mo \
                  motes/loom/src/tests/warp_tests.mo \
                  motes/loom/src/tests/strand_tests.mo \
                  motes/loom/src/tests/service_tests.mo
