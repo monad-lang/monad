@@ -261,7 +261,8 @@ pub def Build.check_plan_all (files : List String) (target_dir : Path) : IO Cach
 /// list is a lookup table rather than a key ingredient -- nothing hashes
 /// it, so its order does not matter.
 #[partial]
-pub def Build.plan_roots (tool : DigestTool) (files : List String) (seen : List Path) (acc : List (Pair Path String)) : IO (List (Pair Path String)) :=
+pub def Build.plan_roots (tool : DigestTool) (files : List String) (seen : List Path)
+    (acc : List (Pair Path String)) : IO (List (Pair Path String)) :=
     match files {
         List.empty => return acc,
         List.cons f rest => do {
@@ -288,7 +289,9 @@ pub def Build.plan_roots (tool : DigestTool) (files : List String) (seen : List 
 /// the key's coverage readable off the key itself rather than off an
 /// argument about a directory walk.
 #[partial]
-def Build.plan_keys (key_of : String -> String -> String -> String) (tool : DigestTool) (compiler : String) (files : List String) (roots : List (Pair Path String)) (acc : List (Pair String String)) : IO (List (Pair String String)) :=
+def Build.plan_keys (key_of : String -> String -> String -> String) (tool : DigestTool) (compiler : String)
+    (files : List String) (roots : List (Pair Path String)) (acc : List (Pair String String))
+    : IO (List (Pair String String)) :=
     match files {
         List.empty => return acc,
         List.cons f rest => do {
@@ -434,7 +437,8 @@ def Build.parsed_count (raw : Option String) : Option I64 :=
 /// The rest of a hit once the error count parsed: the `out` block is
 /// required (absent is a miss), the warning count is not.
 #[partial]
-def Build.check_entry_read_out (root : Path) (key : String) (n : I64) : IO (Option (Pair Build.CheckTally String)) := do {
+def Build.check_entry_read_out (root : Path) (key : String) (n : I64)
+    : IO (Option (Pair Build.CheckTally String)) := do {
     let block <- Build.read_leaf (Build.check_entry_leaf root key "out");
     let warns <- Build.check_entry_warn_count root key;
     return (match block {
@@ -462,7 +466,8 @@ def Build.check_entry_warn_count (root : Path) (key : String) : IO I64 := do {
 /// having tried -- so a failed write is reported on stderr
 /// (`Build.write_leaf`) and the check carries on.
 #[partial]
-pub def Build.check_entry_write (root : Path) (key : String) (errors : I64) (warnings : I64) (block : String) : IO I64 := do {
+pub def Build.check_entry_write (root : Path) (key : String) (errors : I64) (warnings : I64)
+    (block : String) : IO I64 := do {
     let d : Path := Build.check_entry_dir root key;
     let _mk <- Build.ensure_dir d;
     let _c <- Build.write_leaf (Build.check_entry_leaf root key "errors") (I64.to_string errors);

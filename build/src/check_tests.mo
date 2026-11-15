@@ -342,7 +342,8 @@ def test_entry_read_without_the_count_is_none : IO Bool := do {
     let d <- Build.check_fresh_fixture "nocount";
     let dir : Path := Build.check_entry_dir d "k";
     let _m <- Build.ensure_dir dir;
-    let _w <- Build.write_leaf (Path.unsafe (String.concat (Path.to_string dir) "/out")) "FAIL  a.mo (1 error(s))\nboom";
+    let _w <- Build.write_leaf (Path.unsafe (String.concat (Path.to_string dir) "/out"))
+        "FAIL  a.mo (1 error(s))\nboom";
     let r <- Build.check_entry_read d "k";
     let _c <- Build.check_drop_fixture d;
     match r { Option.none => return true, Option.some _p => return false }

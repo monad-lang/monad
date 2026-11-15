@@ -257,7 +257,8 @@ def Build.closure_visit (tool : DigestTool) (d : String) (rest : List String) (s
 /// An `err` from any digest propagates, and the caller's contract is to
 /// DISABLE the cache on it rather than substitute a weaker key.
 #[partial]
-pub def Build.input_hash (src : String) (root : Path) (profile : String) (triple : String) : IO (Result String String) := do {
+pub def Build.input_hash (src : String) (root : Path) (profile : String) (triple : String)
+    : IO (Result String String) := do {
     let t <- Build.probe_digest_tool;
     match t {
         err m => return (err m),
@@ -282,7 +283,8 @@ pub def Build.artifact_key (file_digest : String) (closure : String) (compiler :
     Sha256.hash (List.intercalate "\n" [file_digest, closure, compiler, profile, triple])
 
 #[partial]
-pub def Build.input_hash_with (tool : DigestTool) (src : String) (root : Path) (profile : String) (triple : String) : IO (Result String String) := do {
+pub def Build.input_hash_with (tool : DigestTool) (src : String) (root : Path) (profile : String)
+    (triple : String) : IO (Result String String) := do {
     let fd <- Build.file_digest_with tool src;
     match fd {
         err m => return (err m),

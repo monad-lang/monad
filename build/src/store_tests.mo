@@ -19,13 +19,15 @@ use build::identity {Build.compiler_digest, Build.compiler_exe_path}
 #[test]
 def test_target_dir_flag_wins_over_everything : Bool :=
     String.beq
-        (Path.to_string (Build.resolve_target_dir "flagdir" (Option.some "envdir") (Option.some (Path.unsafe "configdir")) "root"))
+        (Path.to_string
+            (Build.resolve_target_dir "flagdir" (Option.some "envdir") (Option.some (Path.unsafe "configdir")) "root"))
         "flagdir"
 
 #[test]
 def test_target_dir_env_beats_config : Bool :=
     String.beq
-        (Path.to_string (Build.resolve_target_dir "" (Option.some "envdir") (Option.some (Path.unsafe "configdir")) "root"))
+        (Path.to_string
+            (Build.resolve_target_dir "" (Option.some "envdir") (Option.some (Path.unsafe "configdir")) "root"))
         "envdir"
 
 #[test]
@@ -61,7 +63,8 @@ def test_target_dir_of_dot_root_is_relative : Bool :=
 
 #[test]
 def test_store_path_separates_the_two_entry_kinds : Bool :=
-    String.beq (Path.to_string (Build.store_path (Path.unsafe "t") Entry.artifact "abc" "cli-0.1.0")) "t/store/abc-cli-0.1.0" &&
+    String.beq (Path.to_string (Build.store_path (Path.unsafe "t") Entry.artifact "abc" "cli-0.1.0"))
+        "t/store/abc-cli-0.1.0" &&
     String.beq (Path.to_string (Build.store_path (Path.unsafe "t") Entry.check "abc" "")) "t/check/abc"
 
 /// The `test` kind is a NAME, not an `Entry` constructor -- adding a third
@@ -97,7 +100,9 @@ def test_artifact_ir_path_is_keyed_inside_the_artifact_root : Bool :=
 /// can produce, and a name collision is enough to cause it.
 #[test]
 def test_artifact_ir_path_moves_with_the_key : Bool :=
-    Bool.not (String.beq (Path.to_string (Build.artifact_ir_path (Path.unsafe "t") "abc")) (Path.to_string (Build.artifact_ir_path (Path.unsafe "t") "abd")))
+    Bool.not
+        (String.beq (Path.to_string (Build.artifact_ir_path (Path.unsafe "t") "abc"))
+            (Path.to_string (Build.artifact_ir_path (Path.unsafe "t") "abd")))
 
 // ─── compiler identity ───
 
