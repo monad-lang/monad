@@ -644,6 +644,27 @@ pub def I64.to_f64 (a : I64) : F64
 #[native f64_to_i64]
 pub def F64.to_i64 (a : F64) : I64
 
+/// The f32 IEEE-754 bit pattern of the value, as a `U32`.
+///
+/// **Not a view of the payload's low four bytes.** An `F32` value here is the
+/// f32-ROUNDED value held in a double (the uniform-storage invariant,
+/// `plans/implementations/true-numeric-types.md` 3.1), so the pattern has to
+/// come from the `float` the value narrows to. `1.0f32`'s payload double is
+/// `1.0` (`0x3FF0000000000000`), whose low four bytes are `00000000` -- not
+/// the `0x3F800000` this returns. `U32` rather than `I64` because a 4-byte
+/// little-endian encoder wants the complete `and`/`or`/`xor`/`shl`/`shr`/`not`
+/// surface, and it makes the width explicit.
+#[native f32_to_bits]
+pub def F32.to_bits (a : F32) : U32
+
+/// The `F32` with f32 bit pattern `bits`.
+///
+/// The inverse of `F32.to_bits` on canonical patterns: `of_bits (to_bits x)`
+/// restores `x` exactly. A signaling NaN may be quieted by the hardware
+/// conversion, which the tests document rather than assert bit for bit.
+#[native f32_of_bits]
+pub def F32.of_bits (bits : U32) : F32
+
 pub instance Add F32 {
     def add (a b : F32) : F32 := F32.add a b
 }
@@ -720,6 +741,23 @@ pub def F64.to_string (a : F64) : String
 /// constant instead of a compiler crash.
 #[native f64_of_string]
 pub def F64.bits_of_string (text : String) : I64
+
+/// The value's IEEE-754 bit pattern, as the `I64` the payload already is.
+///
+/// `to_bits`/`of_bits` are total and mutually inverse on EVERY 64-bit
+/// pattern -- `of_bits (to_bits x)` is `x` bit for bit, NaN payloads
+/// included, because the payload IS the pattern and neither direction
+/// computes anything.
+///
+/// `I64` rather than `U64`, matching `F64.bits_of_string` above and the
+/// canonical one-word payload; a caller that wants shifts or masks splits it
+/// with `I64.to_u64`.
+#[native f64_to_bits]
+pub def F64.to_bits (x : F64) : I64
+
+/// The `F64` whose IEEE-754 bit pattern is `bits`.
+#[native f64_of_bits]
+pub def F64.of_bits (bits : I64) : F64
 
 pub instance Add F64 {
     def add (a b : F64) : F64 := F64.add a b

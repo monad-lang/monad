@@ -552,6 +552,18 @@ def native_runtime_fn_name (attrs : List Attribute) : Option NativeWrapKind :=
             else if String.beq target "f32_to_f64" then Option.some (NativeWrapKind.passthrough "monad_f32_to_f64")
             else if String.beq target "i64_to_f64" then Option.some (NativeWrapKind.passthrough "monad_i64_to_f64")
             else if String.beq target "f64_to_i64" then Option.some (NativeWrapKind.passthrough "monad_f64_to_i64")
+            // The bit-pattern pair (`init/src/number.mo`): `F64.to_bits`/
+            // `of_bits` and `F32.to_bits`/`of_bits`
+            // (`implementations/float-bit-conversions.md`, mlir-codegen
+            // Phase 2's F32-scalar prerequisite). All four are pure
+            // i64-word-in/i64-word-out, so `passthrough` is right: no
+            // boxing, no allocation. `F32.to_bits`'s declared `U32` result
+            // is a .mo-side type only -- the runtime hands back the
+            // zero-extended 32-bit pattern in the uniform word.
+            else if String.beq target "f64_to_bits" then Option.some (NativeWrapKind.passthrough "monad_f64_to_bits")
+            else if String.beq target "f64_of_bits" then Option.some (NativeWrapKind.passthrough "monad_f64_of_bits")
+            else if String.beq target "f32_to_bits" then Option.some (NativeWrapKind.passthrough "monad_f32_to_bits")
+            else if String.beq target "f32_of_bits" then Option.some (NativeWrapKind.passthrough "monad_f32_of_bits")
             // `bench_report` is a documented stub (0 / true). `Bench` is
             // a measurement API, never load-bearing for correctness, and
             // a typed zero keeps `--verbose` compiles from crashing on a
@@ -1194,6 +1206,14 @@ pub def runtime_declarations_for_with_ownership (kind : TargetKind) (ownership_o
     let d132b := mk_decl "monad_f32_to_f64" ["i64"] "i64" in
     let d132c := mk_decl "monad_i64_to_f64" ["i64"] "i64" in
     let d132d := mk_decl "monad_f64_to_i64" ["i64"] "i64" in
+    // The bit-pattern pair (runtime_core.c, beside the F64/F32 families).
+    // `d132e`/`d132f` continue the `d132x` series the F32 conversions opened
+    // rather than renumbering from `d133`, which would have to touch every
+    // declaration below.
+    let d132e := mk_decl "monad_f64_to_bits" ["i64"] "i64" in
+    let d132f := mk_decl "monad_f64_of_bits" ["i64"] "i64" in
+    let d132g := mk_decl "monad_f32_to_bits" ["i64"] "i64" in
+    let d132h := mk_decl "monad_f32_of_bits" ["i64"] "i64" in
     let d133 := mk_decl "monad_i8_add" ["i64", "i64"] "i64" in
     let d134 := mk_decl "monad_i8_sub" ["i64", "i64"] "i64" in
     let d135 := mk_decl "monad_i8_mul" ["i64", "i64"] "i64" in
@@ -1244,7 +1264,8 @@ pub def runtime_declarations_for_with_ownership (kind : TargetKind) (ownership_o
         d104, d105, d106, d107, d108, d109, d110, d111, d112, d113, d114, d115, d116,
         d117, d118, d119, d120, d121, d122, d123, d124, d150,
         d160, d161, d162, d163, d164, d165,
-        d125, d126, d127, d128, d129, d130, d131, d132, d132a, d132b, d132c, d132d, d133,
+        d125, d126, d127, d128, d129, d130, d131, d132, d132a, d132b, d132c,
+        d132d, d132e, d132f, d132g, d132h, d133,
         d134, d135, d136, d137, d138, d139, d140, d141,
         d142, d143, d144, d145, d146, d147, d148, d149,
         d168, d169, d170, d171, d172, d173, d174, d175,

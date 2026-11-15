@@ -13,12 +13,29 @@
 #      byte comparison sees it.
 #
 #   2. `mlir-opt --verify-each` ACCEPTS it. A printer can be
-#      self-consistently wrong -- the first version of `print.mo` emitted
-#      `func.return` where MLIR prints `return`, put an op's `loc(...)`
-#      where it is a parse error, and used `%argN` for an `scf.for`
-#      induction variable that has no block argument. Every one of those
-#      byte-compared clean against a golden this same printer wrote. Real
-#      `mlir-opt` caught all four.
+#      self-consistently wrong, and the first version of `print.mo` was:
+#      every golden byte-matched a file that same printer had just written.
+#      Real `mlir-opt` found FIVE defects, which the plan lists in full:
+#
+#        a. `func.return` printed as `func.return`, where MLIR's pretty
+#           printer emits the bare `return`.
+#        b. An op's `loc(...)` was put where it is a parse error --
+#           `func.func`'s belongs in `attributes {loc = ...}`, not after the
+#           header like a served op's.
+#        c. A region-carrying op's `loc(...)` must come AFTER its closing
+#           brace (`scf.for ... { ... } loc(...)`); before it, MLIR reports
+#           `expected '{' to begin a region`.
+#        d. An `scf.if`'s second arm is introduced by the `else` KEYWORD, not
+#           a `^bb1:` header -- which is why `MlirBlock` carries a
+#           `separator` field rather than the printer inferring introducers
+#           from position.
+#        e. An `scf.for`'s induction variable and its `iter_args` entries are
+#           NAMED SSA values, not block arguments: the body region has no
+#           block header at all, so `%arg0` there is
+#           `use of undeclared SSA value name`.
+#
+#      All five byte-compared clean under check 1. That is the whole reason
+#      this script runs a real MLIR and does not trust its own output.
 #
 #   3. THE MODULE ROUND-TRIPS. `mlir-opt X.mlir -o Y.mlir` twice, and the
 #      two outputs must be byte-identical. That is Decision 2's defence

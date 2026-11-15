@@ -148,6 +148,10 @@ const PURE_NATIVES: &[&str] = &[
   "f32_to_f64",
   "i64_to_f64",
   "f64_to_i64",
+  "f64_to_bits",
+  "f64_of_bits",
+  "f32_to_bits",
+  "f32_of_bits",
   // The decimal -> bit-pattern conversion the compiler uses to lower a
   // float literal (`codegen/emit.mo`). Pure: a function of its own
   // argument text, no IO and no clock, so it is foldable like the rest.
@@ -360,6 +364,19 @@ pub fn exec_native(
     // I64 <-> F64 (`init/src/number.mo`); see `int_to_float`/`float_to_int`.
     "i64_to_f64" => int_to_float(args),
     "f64_to_i64" => float_to_int(args),
+    // The bit-pattern pair (`init/src/number.mo`'s `F64.to_bits`/`of_bits`
+    // and `F32.to_bits`/`of_bits`, implementations/float-bit-conversions.md).
+    // `F64`'s payload IS its IEEE-754 pattern, so both directions are the
+    // identity on the raw word. `F32`'s payload is the f32-ROUNDED value in
+    // a double, so `to_bits` narrows through `f32` first and reads the f32
+    // pattern, and `of_bits` re-widens — the same shape as `float_convert`
+    // above and, deliberately, the same shape as `monad_f32_to_bits`/
+    // `monad_f32_of_bits` (runtime_core.c), because the two backends are
+    // the differential oracle for this type.
+    "f64_to_bits" => float_to_bits(args, NumSuffix::F64),
+    "f64_of_bits" => bits_to_float(args, NumSuffix::F64),
+    "f32_to_bits" => float_to_bits(args, NumSuffix::F32),
+    "f32_of_bits" => bits_to_float(args, NumSuffix::F32),
     "f64_to_string" => float_to_string(args, NumSuffix::F64),
     // `f64_of_string` is the one F64 native with no F32 twin and no
     // `F64`-typed result: it is the decimal -> bit-pattern conversion the
@@ -845,6 +862,51 @@ fn float_to_int(args: &[Value]) -> Result<Value, CoreEvalError> {
   };
   let v = extract_float(arg)? as i64;
   Ok(Value::Lit(IrLit::Num(v, NumSuffix::I64)))
+}
+
+/// `F64.to_bits`/`F32.to_bits`: the value's IEEE-754 pattern as an integer.
+///
+/// `F64` forwards the payload (it already IS the pattern, tagged `I64`).
+/// `F32` narrows to `f32` and reads THAT pattern, tagged `U32` to match the
+/// declaration — a raw word read of the payload would return the low half of
+/// a double: `1.0f32`'s payload double `1.0` is `0x3FF0000000000000`, whose
+/// low four bytes are `0`, not `0x3F800000`.
+fn float_to_bits(args: &[Value], suffix: NumSuffix) -> Result<Value, CoreEvalError> {
+  let Some(arg) = args.first() else {
+    return Err(CoreEvalError::NativeArgError(
+      "float to_bits needs 1 arg".into(),
+    ));
+  };
+  let v = extract_float(arg)?;
+  Ok(match suffix {
+    NumSuffix::F32 => Value::Lit(IrLit::Num((v as f32).to_bits() as i64, NumSuffix::U32)),
+    _ => Value::Lit(IrLit::Num(v.to_bits() as i64, NumSuffix::I64)),
+  })
+}
+
+/// `F64.of_bits`/`F32.of_bits`: the `F32`/`F64` with that bit pattern.
+///
+/// The inverse of `float_to_bits` on every canonical pattern. `F32`
+/// re-widens the narrowed value so the payload keeps the
+/// uniform-storage invariant the compiled runtime applies
+/// (`runtime_core.c`'s `monad_f32_bits`).
+fn bits_to_float(args: &[Value], suffix: NumSuffix) -> Result<Value, CoreEvalError> {
+  let Some(arg) = args.first() else {
+    return Err(CoreEvalError::NativeArgError(
+      "float of_bits needs 1 arg".into(),
+    ));
+  };
+  let bits = extract_int(arg)? as u64;
+  Ok(match suffix {
+    NumSuffix::F32 => Value::Lit(IrLit::Float(
+      crate::term::F64Wrap(f32::from_bits(bits as u32) as f64),
+      NumSuffix::F32,
+    )),
+    _ => Value::Lit(IrLit::Float(
+      crate::term::F64Wrap(f64::from_bits(bits)),
+      NumSuffix::F64,
+    )),
+  })
 }
 
 fn float_cmp(

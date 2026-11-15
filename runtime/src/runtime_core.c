@@ -1337,6 +1337,54 @@ int64_t monad_f64_to_i64(int64_t a) {
     return (int64_t)d;
 }
 
+/* F64/F32 bit patterns (`init/src/number.mo`'s `F64.to_bits`/`of_bits` and
+   `F32.to_bits`/`of_bits`, `implementations/float-bit-conversions.md`).
+   These EXPORT the two static helpers above rather than duplicating them: an
+   `F64`'s payload IS its IEEE-754 pattern, so `to_bits` is the identity and
+   `of_bits` is too. The pair is total and mutually inverse on every 64-bit
+   pattern, NaN payloads included.
+
+   The F32 pair is where the trap is, and it is the reason these are not a
+   byte copy. An `F32` payload is NOT the 4-byte f32 pattern: it is the
+   f32-ROUNDED VALUE held in a double (the uniform-storage invariant above,
+   `true-numeric-types` 3.1). So `to_bits` must narrow through `float` first
+   and read THAT pattern, and `of_bits` widens the f32 value back into the
+   payload double.
+
+   Note what `to_bits` therefore does NOT do: it does not reuse
+   `monad_f32_bits`, which looks like the same operation and is not. That
+   helper takes a `float` and returns the PAYLOAD double's bits (it re-widens
+   through `double` first, which is exactly what every F32 arithmetic native
+   needs). Feeding its result back would return the payload unchanged -- a
+   round trip through the value, not a bit extraction. So
+   `monad_f32_pattern`/`monad_f32_of_pattern` below work on the 4-byte
+   `float` itself. Reading the payload's low four bytes is wrong for the same
+   reason in the other direction: `1.0f32`'s payload double `1.0` is
+   0x3FF0000000000000, whose low four bytes are 0x00000000, not the
+   0x3F800000 the plan's vector table expects. Both mistakes are silent, and
+   both are caught by the vector table plus the round trip
+   (`init/src/f64_tests.mo`).
+
+   Both declarations are `i64`-in/`i64`-out at the ABI (the uniform native
+   convention, like every numeric native here). `F32.to_bits`'s declared
+   `U32` result is a .mo-side type: `monad_f32_to_bits` zero-extends the
+   32-bit pattern into the word, and the `.mo` signature is what keeps the
+   upper bits out of a caller's hands. */
+int64_t monad_f64_to_bits(int64_t a) { return a; }
+int64_t monad_f64_of_bits(int64_t a) { return a; }
+static uint32_t monad_f32_pattern(float f) {
+    uint32_t bits;
+    memcpy(&bits, &f, sizeof bits);
+    return bits;
+}
+static float monad_f32_of_pattern(uint32_t bits) {
+    float f;
+    memcpy(&f, &bits, sizeof f);
+    return f;
+}
+int64_t monad_f32_to_bits(int64_t a) { return (int64_t)monad_f32_pattern(monad_f32_unbits(a)); }
+int64_t monad_f32_of_bits(int64_t a) { return monad_f32_bits(monad_f32_of_pattern((uint32_t)a)); }
+
 /* Signed-width integer arithmetic: the C spelling of the reference's
    `mask_to_suffix(op(mask_to_suffix(a), mask_to_suffix(b)))` -- C's
    `(int8_t)`/`(int16_t)`/`(int32_t)` casts ARE the reference's `v as iN`
