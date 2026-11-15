@@ -46,6 +46,17 @@ def test_cli_every_flag : Bool :=
                 && List.length (WeaverCli.mcps c) == 2,
     }
 
+/// The three short spellings the long forms also have: `-p`, `-m`, `-c`.
+#[test]
+def test_cli_short_flags : Bool :=
+    match parse_weavercli ["-p", "anthropic", "-m", "claude-opus-5", "-c"] {
+        Result.err _ => false,
+        Result.ok c =>
+            String.beq (WeaverCli.provider_text c) "anthropic"
+                && String.beq (WeaverCli.model_text c) "claude-opus-5"
+                && WeaverCli.cont_of c,
+    }
+
 /// `--max-turns` is typed: the parse names the flag rather than letting a
 /// bad value fall through as "absent".
 #[test]
@@ -88,6 +99,7 @@ def test_cli_help_text : Bool :=
                 && String.contains text "--provider"
                 && String.contains text "--max-turns"
                 && String.contains text "--continue"
+                && String.contains text "-c, --continue"
                 && String.contains text "--mcp"
                 // the label/help separator survives the widest label
                 && String.contains text "--max-turns <VALUE> ",
