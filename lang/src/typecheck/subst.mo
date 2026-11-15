@@ -41,7 +41,7 @@ use lib::typecheck::traverse {term_map_children_at_depth}
 // pattern-bound field names). Bound variables (idx < depth) are left
 // untouched.
 
-def term_shift (d : I64) (t : Term) : Term := term_shift_go d 0 t
+pub def term_shift (d : I64) (t : Term) : Term := term_shift_go d 0 t
 
 /// `term_shift` restricted to variables at or above `cutoff`: the OUTER
 /// references of a term being placed under new binders, leaving that term's
@@ -151,7 +151,7 @@ def permute_lookup (local : I64) (old_depths : List I64) (new_depths : List I64)
 // (peel one `Term.lam` per macro-call argument, substitute at index 0
 // each time).
 
-def term_subst (j : I64) (s : Term) (t : Term) : Term := term_subst_go j s 0 t
+pub def term_subst (j : I64) (s : Term) (t : Term) : Term := term_subst_go j s 0 t
 
 #[partial]
 def term_subst_go (j : I64) (s : Term) (depth : I64) (t : Term) : Term :=
@@ -227,7 +227,7 @@ def term_abstract_var_go (j : I64) (depth : I64) (t : Term) : Term :=
 /// Lam per supplied arg" loop, mirrored from the Rust reference) — no
 /// separate outer shift needed, `term_subst`'s own fused formula
 /// already closes the gap left by the consumed binder.
-def beta_reduce (body : Term) (arg : Term) : Term := term_subst 0 arg body
+pub def beta_reduce (body : Term) (arg : Term) : Term := term_subst 0 arg body
 
 // ─── Tests ───────────────────────────────────────────────────────────
 //

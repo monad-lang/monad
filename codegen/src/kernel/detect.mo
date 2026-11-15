@@ -33,7 +33,7 @@
 /// | No `Forall` binders, empty constraints | the def alone | **here** |
 /// | No recursion | the def alone | **here** |
 /// | No GC allocation (`List`, boxed ADT construction) | the def alone | **here** |
-/// | Dimensions literal at the call site | the CALL SITE | `mono.mo`/`shape.mo` -- NOT here |
+/// | Dimensions literal at the call site | the CALL SITE | `mono.mo` (`dim` tag) -- NOT here |
 ///
 /// The last row is the honest one: a kernel's trip count is a property of how
 /// it was *called*, so no walk over its own body can decide it. The extractor
@@ -80,7 +80,8 @@ pub struct KernelDiagnostic {
     /// The kernel's own name, as written.
     kernel : String,
     /// A stable rule tag: `io` | `closure` | `polymorphic` | `recursive` |
-    /// `alloc`.
+    /// `alloc` | `dim` (the last is reported by `mono.mo`, a CALL-SITE
+    /// property -- see the module header's rule table).
     rule : String,
     /// The offending construct, or `""` when the rule is about the def as a
     /// whole (polymorphism, recursion).
@@ -104,6 +105,7 @@ def rule_message (rule : String) : String :=
     else if String.beq rule "polymorphic" then "is polymorphic; kernels must be monomorphic"
     else if String.beq rule "recursive" then "is recursive; use a bounded loop"
     else if String.beq rule "alloc" then "allocates; kernels must be allocation-free"
+    else if String.beq rule "dim" then "is called with a non-literal dimension; kernels need static shapes"
     else String.concat rule " is not allowed in a kernel"
 
 /// Is this def marked `#[kernel]`?
@@ -351,7 +353,7 @@ def count_all (children : List Term) (acc : I64) : I64 := match children {
 /// cannot see that a peeled term is never a `ctx`, so a peel-then-match is
 /// non-exhaustive and fails to compile.
 #[partial]
-def value_children (t : Term) : List Term := match t {
+pub def value_children (t : Term) : List Term := match t {
     Term.ctx _loc inner => value_children inner,
     Term.var _i _d => List.empty,
     Term.var_macro _i _d => List.empty,
