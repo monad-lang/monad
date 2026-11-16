@@ -406,3 +406,49 @@ def test_allow_non_affine_exempts_a_def : IO Bool :=
         ("type NoCopyA { mk }\n"
             ++ "#[allow_non_affine \"test: the opt-out must compile\"]\n"
             ++ "def dup_allowed (x : NoCopyA) : Pair NoCopyA NoCopyA := Pair.pair x x\n")
+
+// --- ISSUE-8: dependent types across a binder ------------------------------
+//
+// `expected (B a0), found (B a0)`: two producers placed a type written in the
+// caller's context under a binder without shifting it. The redex
+// `(fn (x : B a0) => x) b0` (and every annotated `let`, which desugars to it)
+// went through `type_check_app_ordinary`'s synthesized Pi; a call to a def
+// whose return mentions its own parameters went through `instantiate_ret`.
+// Each acceptance pin has a rejection twin that differs only in the index, so
+// "accept everything" cannot pass.
+
+def dep_id_source : String :=
+    "def idb {A : Type} (B : A -> Type) (a0 : A) (y : B a0) : B a0 := y\n"
+
+#[test]
+def test_an_annotated_let_of_a_dependent_type_is_accepted : IO Bool :=
+    accepted
+        "def d_let {A : Type} (B : A -> Type) (a0 : A) (b0 : B a0) : B a0 :=\n    let x : B a0 := b0 in x\n"
+
+#[test]
+def test_a_dependent_beta_redex_is_accepted : IO Bool :=
+    accepted
+        "def d_redex {A : Type} (B : A -> Type) (a0 : A) (b0 : B a0) : B a0 :=\n    (fn (x : B a0) => x) b0\n"
+
+#[test]
+def test_a_let_at_the_wrong_index_is_rejected : IO Bool :=
+    rejected_with "d_let_wrong" mismatch
+        "def d_let_wrong {A : Type} (B : A -> Type) (a0 : A) (a1 : A) (b0 : B a0) : B a1 :=\n    let x : B a0 := b0 in x\n"
+
+#[test]
+def test_a_call_with_a_dependent_return_is_accepted : IO Bool :=
+    accepted
+        (dep_id_source
+            ++ "def d_call {A : Type} (B : A -> Type) (a0 : A) (b0 : B a0) : B a0 := idb B a0 b0\n")
+
+#[test]
+def test_a_call_inside_a_let_with_a_dependent_return_is_accepted : IO Bool :=
+    accepted
+        (dep_id_source
+            ++ "def d_let_call {A : Type} (B : A -> Type) (a0 : A) (b0 : B a0) : B a0 :=\n    let x : B a0 := b0 in idb B a0 x\n")
+
+#[test]
+def test_a_call_at_the_wrong_index_is_rejected : IO Bool :=
+    rejected_with "d_call_wrong" mismatch
+        (dep_id_source
+            ++ "def d_call_wrong {A : Type} (B : A -> Type) (a0 : A) (a1 : A) (b0 : B a0) : B a1 := idb B a0 b0\n")

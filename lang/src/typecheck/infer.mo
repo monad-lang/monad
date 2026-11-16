@@ -5901,16 +5901,19 @@ def drop_params (n : I64) (params : List Term) : List Term :=
 /// `rebuild_pi_chain`, and their declared types still refer to the applied
 /// prefix this would remove.
 def instantiate_ret (ret : Term) (params : List Term) (args : List Term) : Term :=
-    if I64.beq (List.length args) (List.length params) then instantiate_ret_go ret args else ret
+    if I64.beq (List.length args) (List.length params) then instantiate_ret_go ret args 0 else ret
 
 /// `ret` is written under the signature's own binders, so index 0 is the LAST
 /// parameter: recursing on the tail first substitutes the innermost binder,
-/// and each `beta_reduce` closes exactly one.
+/// and each `beta_reduce` closes exactly one. The arguments live in the
+/// CALLER's context, so the `k`-th one is shifted past the `k` parameter
+/// binders still enclosing its binder when it is substituted (ISSUE-8:
+/// without it `idb B a0 b0` reported `B a0` with `a0` pointing at `B`).
 #[terminating]
-def instantiate_ret_go (ret : Term) (args : List Term) : Term :=
+def instantiate_ret_go (ret : Term) (args : List Term) (k : I64) : Term :=
     match args {
         List.empty => ret,
-        List.cons a rest => beta_reduce (instantiate_ret_go ret rest) a,
+        List.cons a rest => beta_reduce (instantiate_ret_go ret rest (k + 1)) (term_shift k a),
     }
 
 /// The type a signature-driven call reports: the residual Pi chain, NOT
@@ -7344,7 +7347,10 @@ def infer_position_hole (f : Term) (a : Term) : Option TypeError :=
 def type_check_app_ordinary (a_tt : TypedTerm) (f : Term) (expected_type : Term) (scope : Scope) (local_types : List Term) (locals : LocalScope) : Result TypeError TypedTerm :=
     let a_term : Term := a_tt.term in
     let a_typ : Term := a_tt.typ in
-    let f_expected : Term := Term.pi binder_anon a_typ expected_type in
+    // The codomain sits under the Pi's binder, so the expected type (written
+    // in the CURRENT context) is shifted by one (ISSUE-8: `(fn (x : B a0) =>
+    // x) b0` read `a0` one binder too shallow and failed `B a0` vs `B a0`).
+    let f_expected : Term := Term.pi binder_anon a_typ (term_shift 1 expected_type) in
     match type_check f f_expected scope local_types locals {
         ok f_tt =>
             let f_term : Term := f_tt.term in
