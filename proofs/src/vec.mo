@@ -1,15 +1,15 @@
 // Basic `Vec` facts.
 //
 // `Vec` is INDEXED (`nil : Vec Nat.zero A`, `cons : … -> Vec (Nat.succ len) A`).
-// The self-hosted checker now checks the index argument of a `Vec` type
-// application (`Vec 3 I64`, negative indices) and normalizes small literals
-// to unary, but it does NOT yet refine a match's expected type (or a
-// constructor's declared return) from the constructor's index. `vhead` can
-// omit the impossible `nil` arm behind `#[allow_incomplete_match]` because
-// its result does not mention the index; `vtail` (`Vec n A`) and the
-// `vappend`/`vmap` length equations are blocked on that refinement. Indexed induction over an abstract `n`
-// (the `vappend`/`vmap` length equations) remains out of scope; these facts
-// exercise constructor typing and definitional (iota/delta) reduction.
+// The self-hosted checker solves a constructor's declared index against the
+// scrutinee's (`lang/src/typecheck/ctor_refine.mo`): in `vtail`'s `cons` arm
+// the tail is `Vec n A`, `vhead` needs no `nil` arm (it can never match), and
+// in `vappend` each arm's expected length is refined (`Nat.add Nat.zero n` in
+// the `nil` arm). Constructor INTRODUCTION is not yet checked against an
+// indexed expected type (`Vec.nil : Vec 1 I64` is accepted), so these
+// functions' `cons` arms are typed by their fields, not their length; that is
+// Stage 3c. These facts exercise constructor typing and definitional
+// (iota/delta) reduction.
 
 use proofs::equiv {Path}
 use proofs::paths {refl}
@@ -53,10 +53,8 @@ pub def vlength_cons {n : Nat} {A : Type} (a : A) (v : Vec n A) :
     Path Nat (vlength (Vec.cons a v)) (Nat.succ (vlength v)) :=
     refl (Nat.succ (vlength v))
 
-/// Head of a non-empty vector. The `nil` arm is impossible for
-/// `Vec (Nat.succ n) A`; the checker cannot prove that yet, so the omission
-/// is explicit. A wrong-length value cannot reach this function.
-#[allow_incomplete_match "Vec (Nat.succ n) A is never Vec.nil"]
+/// Head of a non-empty vector. `Vec.nil` cannot have type
+/// `Vec (Nat.succ n) A`, so the match is exhaustive without that arm.
 pub def vhead {n : Nat} {A : Type} (v : Vec (Nat.succ n) A) : A :=
     match v {
         Vec.cons a _ => a,
@@ -70,3 +68,45 @@ def test_vhead_cons : Bool :=
 pub def vhead_cons {n : Nat} {A : Type} (a : A) (v : Vec n A) :
     Path A (vhead (Vec.cons a v)) a :=
     refl a
+
+/// Tail of a non-empty vector, one shorter.
+pub def vtail {n : Nat} {A : Type} (v : Vec (Nat.succ n) A) : Vec n A :=
+    match v {
+        Vec.cons _ t => t,
+    }
+
+/// Map over every element; the length is unchanged.
+pub def vmap {n : Nat} {A : Type} {B : Type} (f : A -> B) (v : Vec n A) : Vec n B :=
+    match v {
+        Vec.nil => Vec.nil,
+        Vec.cons h t => Vec.cons (f h) (vmap f t),
+    }
+
+/// Concatenation; the lengths add.
+pub def vappend {m : Nat} {n : Nat} {A : Type} (v : Vec m A) (w : Vec n A) : Vec (Nat.add m n) A :=
+    match v {
+        Vec.nil => w,
+        Vec.cons h t => Vec.cons h (vappend t w),
+    }
+
+def vec12 : Vec (Nat.succ (Nat.succ Nat.zero)) I64 := Vec.cons 1 (Vec.cons 2 (vec_nil I64))
+
+#[test]
+def test_vtail_drops_the_head : Bool :=
+    I64.beq (vhead (vtail vec12)) 2
+
+#[test]
+def test_vmap_maps_each_element : Bool :=
+    I64.beq (vhead (vmap (fn (x : I64) => x * 10) vec12)) 10
+
+#[test]
+def test_vappend_keeps_the_order : Bool :=
+    let both : Vec (Nat.add (Nat.succ (Nat.succ Nat.zero)) (Nat.succ (Nat.succ Nat.zero))) I64 := vappend vec12 vec12 in
+    I64.beq (vlength_i64 both) 4
+
+/// The length as an `I64`, for the executed tests.
+def vlength_i64 {n : Nat} {A : Type} (v : Vec n A) : I64 :=
+    match v {
+        Vec.nil => 0,
+        Vec.cons _ t => 1 + vlength_i64 t,
+    }
