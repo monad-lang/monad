@@ -452,3 +452,21 @@ def test_a_call_at_the_wrong_index_is_rejected : IO Bool :=
     rejected_with "d_call_wrong" mismatch
         (dep_id_source
             ++ "def d_call_wrong {A : Type} (B : A -> Type) (a0 : A) (a1 : A) (b0 : B a0) : B a1 := idb B a0 b0\n")
+
+// --- Path boundaries through a constructor application --------------------
+//
+// `path_pair`'s remaining failure (after ISSUE-8) is not a binder-depth bug:
+// even a CONSTANT path `fn i => Pair.pair a0 b0` failed its i0 boundary,
+// because the boundary `unify` saw the checked body's constructor spelling
+// against the endpoint's. The twin swaps the endpoint's components, so a
+// boundary rule that accepts everything cannot pass.
+
+#[test]
+def test_a_constant_constructor_path_meets_its_boundary : IO Bool :=
+    accepted
+        "def pc_const {A : Type} {B : Type} (a0 : A) (b0 : B) :\n    Cubical.PathP (fn (i : Cubical.I) => Pair A B) (Pair.pair a0 b0) (Pair.pair a0 b0) :=\n    fn (i : Cubical.I) => Pair.pair a0 b0\n"
+
+#[test]
+def test_a_constructor_path_with_the_wrong_endpoint_is_rejected : IO Bool :=
+    rejected_with "pc_wrong" "i0 boundary"
+        "def pc_wrong {A : Type} (a0 : A) (a1 : A) :\n    Cubical.PathP (fn (i : Cubical.I) => Pair A A) (Pair.pair a1 a0) (Pair.pair a0 a1) :=\n    fn (i : Cubical.I) => Pair.pair a0 a1\n"

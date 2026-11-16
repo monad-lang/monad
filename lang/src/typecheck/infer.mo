@@ -5134,17 +5134,22 @@ def check_path_lam (bnd : Binder) (t : Term) (body : Term) (expected_type : Term
 /// mitigation `extract_pi_ret` applies on the type side; recorded limit:
 /// it covers a stuck head applied at a SUBSTITUTED endpoint, which is
 /// every Stage 2/3 shape, and not Stage 5's eta-expanded paths.
+///
+/// Both sides go through `canonicalize_ctor_refs`, as the elim-minor
+/// comparison does: the checked body spells a constructor application as a
+/// `Term.con`, while the endpoint (read off the TYPE) keeps the free-var spine
+/// `Pair.pair a0 b0`, so even a constant `fn i => Pair.pair a0 b0` failed.
 def check_path_boundary (checked_body : Term) (parts : PathParts) (scope : Scope)
     (local_types : List Term) (locals : LocalScope) : Result TypeError Term :=
     let at_i0 : Term :=
         normalize_path_boundary (term_subst 0 cub_i0 checked_body) scope local_types locals in
-    match unify at_i0 parts.left scope locals {
+    match unify (canonicalize_ctor_refs scope at_i0) (canonicalize_ctor_refs scope parts.left) scope locals {
         err _ => err (TypeError.custom
             "the path body's i0 boundary does not match the type's left endpoint"),
         ok _ =>
             let at_i1 : Term :=
                 normalize_path_boundary (term_subst 0 cub_i1 checked_body) scope local_types locals in
-            match unify at_i1 parts.right scope locals {
+            match unify (canonicalize_ctor_refs scope at_i1) (canonicalize_ctor_refs scope parts.right) scope locals {
                 err _ => err (TypeError.custom
                     "the path body's i1 boundary does not match the type's right endpoint"),
                 ok _ => ok at_i0,
