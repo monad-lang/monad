@@ -101,14 +101,22 @@ use docgen::gen {DocGen.build}
 // `monad lint`'s engine, gated the same way. `motes/linter` is the library
 // `monad-lint` also wraps, so the subcommand and the standalone binary cannot
 // disagree about what a rule finds.
+//
+// EVERY linter import carries the gate, and that is load-bearing rather than
+// tidy. Gating only the root `use linter` is a BUILD failure with the feature
+// off: the three submodule `use linter::...` lines still name paths through a
+// mote the gate dropped, and the self-hosted compiler reports it as
+// `unknown variable 'spec_command'` inside `cli_spec.mo`'s derive expansion
+// -- a diagnostic a long way from the actual cause. Measured:
+// `MONAD_FEATURES="not cli/linter" monad check cli` passes while
+// `monad build cli` fails, which is exactly the pair that hides this.
 #[cfg {feature := "linter"}]
 use linter {
     LintConfig, LintDiagnostic, LintLevel, LintResult, exit_code_of, lint_result_diagnostics,
-    lint_result_parse_error, lint_source, rule_level, rule_lines, rule_names,
+    lint_result_parse_error, lint_source, rule_level, rule_lines,
 }
-use linter::config {effective_level}
-use linter::diagnostic {render_lint, lint_diagnostic_rule}
-use linter::driver {Rule, all_rules, rule_default_level, rule_name}
+#[cfg {feature := "linter"}]
+use linter::diagnostic {render_lint}
 
 #[native "build_commit"]
 def build_commit : String
@@ -3416,12 +3424,14 @@ def run_lint
 /// printed `name<TAB>level` and this printed the bare name, from the same
 /// registry. Keeping one definition is the whole reason the work lives in a
 /// library the two entry points share.
+#[cfg {feature := "linter"}]
 def print_lint_rules : IO Unit := do {
     let _u <- lint_print_rule_lines rule_lines;
     return unit
 }
 
 #[partial]
+#[cfg {feature := "linter"}]
 def lint_print_rule_lines (ls : List String) : IO Unit := do {
     match ls {
         List.empty => do { return unit },
@@ -3434,9 +3444,11 @@ def lint_print_rule_lines (ls : List String) : IO Unit := do {
 
 /// `--deny`/`--allow`, comma- or space-separated, so a caller can name
 /// several without repeating the flag.
+#[cfg {feature := "linter"}]
 def lint_config_of (deny : Option String) (allow : Option String) : LintConfig :=
     LintConfig.with_denied (split_names deny) (LintConfig.with_allowed (split_names allow) LintConfig.empty)
 
+#[cfg {feature := "linter"}]
 def split_names (o : Option String) : List String :=
     match o {
         Option.none => List.empty,
@@ -3444,6 +3456,7 @@ def split_names (o : Option String) : List String :=
     }
 
 #[terminating]
+#[cfg {feature := "linter"}]
 def lint_split (s : String) (i : I64) (from : I64) (n : I64) (acc : List String) : List String :=
     if I64.lt i n
     then
@@ -3452,6 +3465,7 @@ def lint_split (s : String) (i : I64) (from : I64) (n : I64) (acc : List String)
         else lint_split s (I64.add i 1) from n acc
     else List.reverse (lint_push s from n acc)
 
+#[cfg {feature := "linter"}]
 def lint_is_sep (b : Option U8) : Bool :=
     match b {
         Option.some c =>
@@ -3460,10 +3474,12 @@ def lint_is_sep (b : Option U8) : Bool :=
         Option.none => false,
     }
 
+#[cfg {feature := "linter"}]
 def lint_push (s : String) (from : I64) (stop : I64) (acc : List String) : List String :=
     if I64.lt from stop then List.cons (String.slice s from (I64.sub stop from)) acc else acc
 
 #[partial]
+#[cfg {feature := "linter"}]
 def lint_paths (paths : List String) (config : LintConfig) (verbose : Bool) (acc : List LintResult)
     : IO (List LintResult) := do {
     match paths {
@@ -3486,6 +3502,7 @@ def lint_paths (paths : List String) (config : LintConfig) (verbose : Bool) (acc
 }
 
 #[partial]
+#[cfg {feature := "linter"}]
 def lint_report (config : LintConfig) (results : List LintResult) : IO Unit := do {
     match results {
         List.empty => do { return unit },
@@ -3496,6 +3513,7 @@ def lint_report (config : LintConfig) (results : List LintResult) : IO Unit := d
     }
 }
 
+#[cfg {feature := "linter"}]
 def lint_report_one (config : LintConfig) (r : LintResult) : IO Unit := do {
     match lint_result_parse_error r {
         Option.some msg => do {
@@ -3510,6 +3528,7 @@ def lint_report_one (config : LintConfig) (r : LintResult) : IO Unit := do {
 }
 
 #[partial]
+#[cfg {feature := "linter"}]
 def lint_print_diags (config : LintConfig) (ds : List LintDiagnostic) : IO Unit := do {
     match ds {
         List.empty => do { return unit },
@@ -3524,9 +3543,11 @@ def lint_print_diags (config : LintConfig) (ds : List LintDiagnostic) : IO Unit 
 /// `monad-lint` each used to carry their own copy of this lookup -- the same
 /// duplication that let their `--list-rules` output drift -- so the re-leveling
 /// rule now lives in exactly one place (`linter::rule_level`).
+#[cfg {feature := "linter"}]
 def lint_level (config : LintConfig) (d : LintDiagnostic) : LintLevel :=
     rule_level config d
 
+#[cfg {feature := "linter"}]
 def lint_exit (config : LintConfig) (results : List LintResult) : I64 :=
     exit_code_of config results
 
