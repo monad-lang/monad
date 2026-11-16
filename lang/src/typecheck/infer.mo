@@ -42,6 +42,10 @@ use lang::scope {
     type_mentions_any, validate_dict_hints,
 }
 use lib::typecheck::name_subst {name_subst_term}
+use lib::typecheck::ctor_refine {
+    IndexMatch, IndexSolution, MatchEnv, has_refinement, index_locals, index_positions,
+    refine_expected, refine_field_types, solve_ctor,
+}
 use lib::typecheck::subst {beta_reduce, term_abstract_var, term_permute, term_subst, term_shift, term_shift_above}
 use lib::typecheck::levels {solve_levels, subst_levels_term}
 use lib::typecheck::traverse {term_children, term_map_children, term_map_children_at_depth}
@@ -51,7 +55,7 @@ use lib::typecheck::cubical {
 use lib::typecheck::unify {unify, unify_structural}
 use lib::typecheck::whnf {normalize_path_endpoints, whnf}
 use lang::parser::numeric_literal {int_value_fits}
-use std::list {}
+use std::list {List.filter}
 
 /// A type-checked term paired with its type.
 pub struct TypedTerm {
@@ -3267,8 +3271,9 @@ def uncovered_constructors (cases : List MatchCase) (ind : Inductive) : List Nam
 /// stays exempt by design -- only `check` (via `check_def_with_scope`)
 /// enforces this rule now. `match_coverage_warning` below is the reporting
 /// half and renders the same message this now returns.
-def validate_match_coverage (cases : List MatchCase) (maybe_ind : Option Inductive) (scope : Scope) : Result TypeError Bool :=
-    match match_coverage_gap cases maybe_ind scope {
+def validate_match_coverage (cases : List MatchCase) (maybe_ind : Option Inductive) (sc_typ : Term) (scope : Scope)
+    : Result TypeError Bool :=
+    match match_coverage_gap_at cases maybe_ind sc_typ scope {
         Option.some p => match p {
             Pair.pair ind missing => err (TypeError.custom (non_exhaustive_match_message ind missing)),
         },
@@ -3282,14 +3287,41 @@ def validate_match_coverage (cases : List MatchCase) (maybe_ind : Option Inducti
 /// computes its `use`-completeness findings in one function
 /// (`unimported_names`, `rust/core/src/term/module.rs`).
 pub def match_coverage_gap (cases : List MatchCase) (maybe_ind : Option Inductive) (scope : Scope) : Option (Pair Inductive (List NamePath)) :=
+    match_coverage_gap_at cases maybe_ind Term.hole scope
+
+/// `match_coverage_gap` for a scrutinee of type `sc_typ`: a constructor whose
+/// declared indices clash with the scrutinee's (`nil` against `Vec (succ n)
+/// A`) can never match, so it is not missing. An unknown type prunes nothing.
+pub def match_coverage_gap_at (cases : List MatchCase) (maybe_ind : Option Inductive) (sc_typ : Term) (scope : Scope)
+    : Option (Pair Inductive (List NamePath)) :=
     if scope.incomplete_match_ok then Option.none
     else match maybe_ind {
         Option.none => Option.none,
         Option.some ind =>
-            let missing : List NamePath := uncovered_constructors cases ind in
+            let possible : NamePath -> Bool := fn (c : NamePath) => Bool.not (ctor_impossible ind c sc_typ scope) in
+            let missing : List NamePath := List.filter possible (uncovered_constructors cases ind) in
             match missing {
                 List.empty => Option.none,
                 List.cons _ _ => Option.some (Pair.pair ind missing),
+            },
+    }
+
+/// Constructor `c` of `ind` provably cannot build a value of type `sc_typ`.
+def ctor_impossible (ind : Inductive) (c : NamePath) (sc_typ : Term) (scope : Scope) : Bool :=
+    let positions : List I64 := index_positions ind in
+    if List.is_empty positions then false
+    else match find_constructor_in_inductive ind c {
+        Option.none => false,
+        Option.some ctor =>
+            let env : MatchEnv := {
+                locals := index_locals ind positions,
+                binders := List.empty,
+                scope := scope,
+                skolem_suffix := "0",
+            } in
+            match solve_ctor env ind ctor sc_typ {
+                IndexMatch.impossible => true,
+                _ => false,
             },
     }
 
@@ -3338,7 +3370,7 @@ def type_check_cases_accum (cases : List MatchCase) (scrutinee_term : Term) (scr
             // `type_check_field_pattern_case` rewires a field-pattern arm
             // into `MatchCase.mk resolved_name ... Option.none`. That is also
             // what makes a field pattern cover its constructor for free.
-            match validate_match_coverage reversed maybe_ind scope {
+            match validate_match_coverage reversed maybe_ind scrutinee_typ scope {
                 err e => err e,
                 ok _ =>
                     // Annotated local first -- a bare struct literal in `ok`'s
@@ -3357,6 +3389,7 @@ def type_check_cases_accum (cases : List MatchCase) (scrutinee_term : Term) (scr
 /// (which constructor, which declared field order) still needs
 /// resolving here; nothing about it can be trusted as already correct
 /// the way a written positional case's `args` order is.
+#[terminating]
 def type_check_match_case (case_ : MatchCase) (scrutinee_term : Term) (scrutinee_typ : Term) (maybe_ind : Option Inductive) (expected_type : Term) (scope : Scope) (local_types : List Term) (locals : LocalScope) : Result TypeError CheckedCase :=
     match case_ {
         MatchCase.mk name args body fp _typ_name =>
@@ -3364,38 +3397,190 @@ def type_check_match_case (case_ : MatchCase) (scrutinee_term : Term) (scrutinee
                 Option.some field_pattern =>
                     type_check_field_pattern_case name args body field_pattern scrutinee_typ maybe_ind expected_type scope local_types locals,
                 Option.none =>
-                    let wildcard_id : Identifier := Identifier.id "_" in
-                    if Similar.similar name wildcard_id then
-                        match args {
-                            List.empty =>
-                                type_check_case_body_checked name args body expected_type scope local_types locals maybe_ind,
-                            _ =>
-                                err (TypeError.custom "wildcard pattern cannot bind arguments"),
-                        }
-                    else
-                        match args {
-                            List.empty =>
-                                type_check_case_body_checked name args body expected_type scope local_types locals maybe_ind,
-                            _ =>
-                                let raw_arg_types : List Term := arg_types_for_case name maybe_ind scrutinee_typ in
-                                // Reduce a BETA REDEX at the head of each field
-                                // type before binding it. A field declared in
-                                // terms of an earlier one (`Sigma`'s `snd : B
-                                // fst`) becomes `(fn a => ...) fst` once the
-                                // inductive's params are substituted, and the
-                                // unreduced redex in a binder type is what made
-                                // an arm's body infer `Sigma.dpair a0 b0` /
-                                // `Sigma.dpair fst (...)` instead of the
-                                // pattern's own variables (measured 2026-11-04).
-                                // Deliberately only the head lambda application:
-                                // a general `whnf` here recursed and crashed the
-                                // compiler on `check proofs`.
-                                let arg_types : List Term := List.map apply_head_redex raw_arg_types in
-                                let extended_types : List Term := prepend_typed args arg_types local_types in
-                                let extended_locals : LocalScope := prepend_typed_local_vars args arg_types locals in
-                                type_check_case_body_checked name args body expected_type scope extended_types extended_locals maybe_ind,
-                        },
+                    match indexed_arm name maybe_ind scrutinee_typ scope locals (List.length local_types) {
+                        Option.some arm =>
+                            type_check_indexed_case arm name args body scrutinee_typ expected_type
+                                scope local_types locals maybe_ind,
+                        Option.none =>
+                            type_check_positional_case name args body scrutinee_typ maybe_ind expected_type
+                                scope local_types locals,
+                    },
             },
+    }
+
+/// A positional (or wildcard) arm of a uniform family, or of an indexed one
+/// whose indices did not solve: fields typed by substituting the scrutinee's
+/// arguments for the header binders.
+// `#[terminating]`: `body` is the arm's own subterm, passed at a different
+// position than this def's first parameter (as `type_check_field_pattern_case`).
+#[terminating]
+def type_check_positional_case (name : Identifier) (args : List Identifier) (body : Term) (scrutinee_typ : Term)
+    (maybe_ind : Option Inductive) (expected_type : Term) (scope : Scope) (local_types : List Term) (locals : LocalScope)
+    : Result TypeError CheckedCase :=
+    let wildcard_id : Identifier := Identifier.id "_" in
+    if Similar.similar name wildcard_id then
+        match args {
+            List.empty =>
+                type_check_case_body_checked name args body expected_type scope local_types locals maybe_ind,
+            _ =>
+                err (TypeError.custom "wildcard pattern cannot bind arguments"),
+        }
+    else
+        match args {
+            List.empty =>
+                type_check_case_body_checked name args body expected_type scope local_types locals maybe_ind,
+            _ =>
+                let raw_arg_types : List Term := arg_types_for_case name maybe_ind scrutinee_typ in
+                // Reduce a BETA REDEX at the head of each field
+                // type before binding it. A field declared in
+                // terms of an earlier one (`Sigma`'s `snd : B
+                // fst`) becomes `(fn a => ...) fst` once the
+                // inductive's params are substituted, and the
+                // unreduced redex in a binder type is what made
+                // an arm's body infer `Sigma.dpair a0 b0` /
+                // `Sigma.dpair fst (...)` instead of the
+                // pattern's own variables (measured 2026-11-04).
+                // Deliberately only the head lambda application:
+                // a general `whnf` here recursed and crashed the
+                // compiler on `check proofs`.
+                let arg_types : List Term := List.map apply_head_redex raw_arg_types in
+                let extended_types : List Term := prepend_typed args arg_types local_types in
+                let extended_locals : LocalScope := prepend_typed_local_vars args arg_types locals in
+                type_check_case_body_checked name args body expected_type scope extended_types extended_locals maybe_ind,
+        }
+
+/// A positional arm of an INDEXED family whose constructor indices solved
+/// against the scrutinee (`ctor_refine.mo`).
+pub struct IndexedArm {
+    ind : Inductive,
+    ctor : InductConstructor,
+    solution : IndexSolution,
+}
+
+/// The arm's index solution, or none when the family is not indexed, the
+/// constructor is not found, or the indices are `unknown`/`impossible` -- every
+/// such arm keeps the uniform path unchanged. `depth` names this arm's skolems.
+def indexed_arm (name : Identifier) (maybe_ind : Option Inductive) (scrutinee_typ : Term) (scope : Scope)
+    (locals : LocalScope) (depth : I64) : Option IndexedArm :=
+    match maybe_ind {
+        Option.none => Option.none,
+        Option.some ind =>
+            let positions : List I64 := index_positions ind in
+            if List.is_empty positions then Option.none
+            else match find_constructor_in_inductive ind (NamePath.mk (List.cons name List.empty)) {
+                Option.none => Option.none,
+                Option.some ctor =>
+                    let env : MatchEnv := {
+                        locals := index_locals ind positions,
+                        binders := local_scope_names locals,
+                        scope := scope,
+                        skolem_suffix := I64.to_string depth,
+                    } in
+                    match solve_ctor env ind ctor scrutinee_typ {
+                        IndexMatch.solved s =>
+                            let arm : IndexedArm := { ind := ind, ctor := ctor, solution := s } in
+                            Option.some arm,
+                        _ => Option.none,
+                    },
+            },
+    }
+
+/// Check an indexed arm. Its field types come from the solved indices (`cons`
+/// against `Vec (succ n) A` binds `tail : Vec n A`), each shifted past the
+/// fields bound before it, and the expected type is placed under the arm's
+/// binders. The body is checked against the unrefined expected type first (so
+/// nothing accepted before is lost), then against the type with each refined
+/// bound index replaced by the constructor's own (`Vec m A` is `Vec zero A` in
+/// the `nil` arm). Either derivation is sound. The arm reports the UNREFINED
+/// expected type, so arms refined differently still agree with each other.
+// `#[terminating]`: `body` is the arm's own subterm, passed at a different
+// position than this def's first parameter (as `type_check_field_pattern_case`).
+#[terminating]
+def type_check_indexed_case (arm : IndexedArm) (name : Identifier) (args : List Identifier) (body : Term)
+    (scrutinee_typ : Term) (expected_type : Term) (scope : Scope) (local_types : List Term) (locals : LocalScope)
+    (maybe_ind : Option Inductive) : Result TypeError CheckedCase :=
+    let raw : List Term := refine_field_types arm.ind scrutinee_typ arm.solution (types_from_params arm.ctor.params) in
+    let arg_types : List Term := shift_by_position (List.map apply_head_redex raw) 0 in
+    let extended_types : List Term := prepend_typed args arg_types local_types in
+    let extended_locals : LocalScope := prepend_typed_local_vars args arg_types locals in
+    let k : I64 := List.length args in
+    if is_hole expected_type || term_has_hole expected_type
+    then type_check_case_body_checked name args body expected_type scope extended_types extended_locals maybe_ind
+    else
+        let plain : Term := term_shift k expected_type in
+        match indexed_arm_body name args body plain scope extended_types extended_locals maybe_ind {
+            ok cc => ok { cc with body_typ_ := expected_type },
+            err plain_err =>
+                if Bool.not (has_refinement arm.solution) then err plain_err
+                else
+                    let refined : Term := term_shift k (refine_expected arm.solution expected_type) in
+                    match indexed_arm_body name args body refined scope extended_types extended_locals maybe_ind {
+                        ok cc => ok { cc with body_typ_ := expected_type },
+                        err refined_err => err refined_err,
+                    },
+        }
+
+/// Check an arm body against `expected` AND compare its type with it: the
+/// arm reports the expected type, so nothing downstream compares them again
+/// (checking a variable against an expected type does not).
+#[terminating]
+def indexed_arm_body (name : Identifier) (args : List Identifier) (body : Term) (expected : Term)
+    (scope : Scope) (local_types : List Term) (locals : LocalScope) (maybe_ind : Option Inductive)
+    : Result TypeError CheckedCase :=
+    match type_check_case_body_checked name args body expected scope local_types locals maybe_ind {
+        err e => err e,
+        ok cc =>
+            match arm_type_error expected cc.body_typ_ scope locals {
+                Option.none => ok cc,
+                Option.some e => err e,
+            },
+    }
+
+/// The arm's type against its expected type, modulo constructor spelling;
+/// on a first mismatch, again with every spine argument in whnf, so a refined
+/// index (`Nat.add Nat.zero n`) meets its value (`n`).
+def arm_type_error (expected : Term) (found : Term) (scope : Scope) (locals : LocalScope) : Option TypeError :=
+    let e : Term := canonical_for_compare scope expected in
+    let f : Term := canonical_for_compare scope found in
+    match unify e f scope locals {
+        Result.ok _ => Option.none,
+        Result.err first =>
+            let ew : Term := canonical_for_compare scope (whnf_spine_args scope locals expected) in
+            let fw : Term := canonical_for_compare scope (whnf_spine_args scope locals found) in
+            match unify ew fw scope locals {
+                Result.ok _ => Option.none,
+                Result.err _ => Option.some first,
+            },
+    }
+
+def canonical_for_compare (scope : Scope) (t : Term) : Term :=
+    canonicalize_bound_var_names (canonicalize_ctor_refs scope t)
+
+/// `t`'s head applied to each argument in whnf. Reduced BEFORE
+/// canonicalizing: iota needs the constructor spelling `whnf` knows.
+def whnf_spine_args (scope : Scope) (locals : LocalScope) (t : Term) : Term :=
+    match flatten_call_spine t {
+        CallSpine.mk head args =>
+            rebuild_call head (List.map (fn (a : Term) => whnf scope locals a) args),
+    }
+
+/// Every name bound in `locals`, innermost scope first.
+#[terminating]
+def local_scope_names (locals : LocalScope) : List Identifier :=
+    let here : List Identifier := List.map (fn (v : LocalVar) => v.name) locals.vars in
+    match locals.parent {
+        Option.none => here,
+        Option.some p => List.append here (local_scope_names p),
+    }
+
+/// Field `j`'s type written in the scrutinee's context, moved under the `j`
+/// fields bound before it (`prepend_typed` stores each entry relative to the
+/// binders outside it).
+#[terminating]
+def shift_by_position (ts : List Term) (j : I64) : List Term :=
+    match ts {
+        List.empty => List.empty,
+        List.cons t rest => List.cons (term_shift j t) (shift_by_position rest (j + 1)),
     }
 
 // ─── Field-pattern match-case elaboration (`plans/implementations/

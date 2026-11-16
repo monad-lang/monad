@@ -470,3 +470,69 @@ def test_a_constant_constructor_path_meets_its_boundary : IO Bool :=
 def test_a_constructor_path_with_the_wrong_endpoint_is_rejected : IO Bool :=
     rejected_with "pc_wrong" "i0 boundary"
         "def pc_wrong {A : Type} (a0 : A) (a1 : A) :\n    Cubical.PathP (fn (i : Cubical.I) => Pair A A) (Pair.pair a1 a0) (Pair.pair a0 a1) :=\n    fn (i : Cubical.I) => Pair.pair a0 a1\n"
+
+// --- Indexed families: constructor index inversion (Stage 3b) -------------
+//
+// `ctor_refine.mo` solves a constructor's declared indices against the
+// scrutinee: `cons` against `Vec (succ n) A` binds `tail : Vec n A`, and `nil`
+// there can never match, so it is not a missing arm. Each acceptance has a
+// rejection twin: the same match with the index made abstract, or the body
+// returning a value at the wrong length.
+
+#[test]
+def test_vhead_needs_no_nil_arm : IO Bool :=
+    accepted
+        ("def vh {n : Nat} {A : Type} (v : Vec (Nat.succ n) A) : A :=\n"
+            ++ "    match v {\n"
+            ++ "        Vec.cons a _ => a,\n"
+            ++ "    }\n")
+
+#[test]
+def test_a_cons_only_match_on_an_abstract_length_is_not_exhaustive : IO Bool :=
+    rejected_with "only_cons" "non-exhaustive match"
+        ("def only_cons {n : Nat} {A : Type} (v : Vec n A) : Bool :=\n"
+            ++ "    match v {\n"
+            ++ "        Vec.cons _ _ => true,\n"
+            ++ "    }\n")
+
+#[test]
+def test_vtail_types_the_tail_at_the_predecessor_length : IO Bool :=
+    accepted
+        ("def vt {n : Nat} {A : Type} (v : Vec (Nat.succ n) A) : Vec n A :=\n"
+            ++ "    match v {\n"
+            ++ "        Vec.cons _ t => t,\n"
+            ++ "    }\n")
+
+#[test]
+def test_the_tail_is_not_the_whole_length : IO Bool :=
+    rejected_with "vt_long" mismatch
+        ("def vt_long {n : Nat} {A : Type} (v : Vec (Nat.succ n) A) : Vec (Nat.succ n) A :=\n"
+            ++ "    match v {\n"
+            ++ "        Vec.cons _ t => t,\n"
+            ++ "    }\n")
+
+#[test]
+def test_a_concrete_length_prunes_the_other_constructor : IO Bool :=
+    accepted
+        ("def two_head (v : Vec (Nat.succ (Nat.succ Nat.zero)) I64) : I64 :=\n"
+            ++ "    match v {\n"
+            ++ "        Vec.cons h _ => h,\n"
+            ++ "    }\n")
+
+#[test]
+def test_vappend_refines_the_length_in_each_arm : IO Bool :=
+    accepted
+        ("def va {m : Nat} {n : Nat} {A : Type} (v : Vec m A) (w : Vec n A) : Vec (Nat.add m n) A :=\n"
+            ++ "    match v {\n"
+            ++ "        Vec.nil => w,\n"
+            ++ "        Vec.cons h t => Vec.cons h (va t w),\n"
+            ++ "    }\n")
+
+#[test]
+def test_an_unrefinable_arm_is_still_rejected : IO Bool :=
+    rejected_with "va_wrong" mismatch
+        ("def va_wrong {m : Nat} {n : Nat} {A : Type} (v : Vec m A) (w : Vec n A) : Vec (Nat.add n m) A :=\n"
+            ++ "    match v {\n"
+            ++ "        Vec.nil => w,\n"
+            ++ "        Vec.cons h t => Vec.cons h (va_wrong t w),\n"
+            ++ "    }\n")
