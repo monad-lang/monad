@@ -14,7 +14,7 @@ use clap::spec {
 }
 use linter {
     LintConfig, LintDiagnostic, LintResult, exit_code_of, lint_result_diagnostics,
-    lint_result_parse_error, lint_source, rule_names,
+    lint_result_parse_error, lint_source, rule_level, rule_lines, rule_names,
 }
 use linter::config {LintLevel, effective_level}
 use linter::diagnostic {render_lint, lint_diagnostic_rule}
@@ -74,7 +74,7 @@ def decode (p : Cli.Parsed) : Result String Args :=
 def run (args : Args) : IO I64 := do {
     if args.list_rules
     then do {
-        let _u <- print_rules all_rules;
+        let _u <- print_rules rule_lines;
         return 0
     }
     else if List.is_empty args.files
@@ -106,28 +106,20 @@ def config_of (args : Args) : LintConfig :=
     let allowed : LintConfig := LintConfig.with_allowed args.allow base in
     LintConfig.with_denied args.deny allowed
 
+/// The registry, via the library's own rendering. Keeping the STRINGS in
+/// `linter` rather than here is deliberate: this binary and `monad lint` each
+/// used to render the list, and they had already drifted (one printed the
+/// name only). One definition, two callers -- see `linter::rule_line`.
 #[partial]
-def print_rules (rs : List Rule) : IO Unit := do {
-    match rs {
+def print_rules (lines : List String) : IO Unit := do {
+    match lines {
         List.empty => do { return unit },
-        List.cons r rest => do {
-            let _p : Unit <- IO.println (rule_line r);
+        List.cons line rest => do {
+            let _p : Unit <- IO.println line;
             print_rules rest
         },
     }
 }
-
-/// `name<TAB>default-level` -- a tab so `column -t` lines it up, which is what
-/// a reader deciding what to `--deny` wants.
-def rule_line (r : Rule) : String :=
-    String.concat_all [rule_name r, "\t", level_name_of (rule_default_level r)]
-
-def level_name_of (l : LintLevel) : String :=
-    match l {
-        LintLevel.allow => "allow",
-        LintLevel.warn => "warn",
-        LintLevel.deny => "deny",
-    }
 
 #[partial]
 def lint_files (files : List String) (config : LintConfig) (acc : List LintResult) : IO (List LintResult) := do {
@@ -178,26 +170,13 @@ def print_diags (config : LintConfig) (ds : List LintDiagnostic) : IO Unit := do
     match ds {
         List.empty => do { return unit },
         List.cons d rest => do {
-            let _p : Unit <- IO.println (render_lint (level_of config d) d);
+            let _p : Unit <- IO.println (render_lint (rule_level config d) d);
             print_diags config rest
         },
     }
 }
 
 /// A finding's level: the rule's default, re-levelled by `--allow`/`--deny`.
-def level_of (config : LintConfig) (d : LintDiagnostic) : LintLevel :=
-    effective_level (rule_default_level_of all_rules (lint_diagnostic_rule d)) config
-        (lint_diagnostic_rule d)
-
-#[partial]
-def rule_default_level_of (rs : List Rule) (name : String) : LintLevel :=
-    match rs {
-        List.empty => LintLevel.warn,
-        List.cons r rest =>
-            if String.beq (rule_name r) name then rule_default_level r
-            else rule_default_level_of rest name,
-    }
-
 /// The binary's entry point. `args` is argv AFTER the program name, which is
 /// the shape a `[[bin]]` `main` receives -- `motes/docgen/src/main.mo` takes
 /// the same parameter, and passing `List.empty` here is what made an early

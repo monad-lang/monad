@@ -104,7 +104,7 @@ use docgen::gen {DocGen.build}
 #[cfg {feature := "linter"}]
 use linter {
     LintConfig, LintDiagnostic, LintLevel, LintResult, exit_code_of, lint_result_diagnostics,
-    lint_result_parse_error, lint_source, rule_names,
+    lint_result_parse_error, lint_source, rule_level, rule_lines, rule_names,
 }
 use linter::config {effective_level}
 use linter::diagnostic {render_lint, lint_diagnostic_rule}
@@ -3409,18 +3409,25 @@ def run_lint
 
 /// The rule registry, for `--list-rules`. A registry a user cannot enumerate
 /// is one they cannot `--deny`.
+///
+/// The STRINGS come from the library (`linter::rule_lines`), not from a
+/// rendering here: this arm and the standalone `monad-lint` each used to
+/// format the list themselves, and they had already drifted -- the standalone
+/// printed `name<TAB>level` and this printed the bare name, from the same
+/// registry. Keeping one definition is the whole reason the work lives in a
+/// library the two entry points share.
 def print_lint_rules : IO Unit := do {
-    let _u <- lint_print_rules_libs rule_names;
+    let _u <- lint_print_rule_lines rule_lines;
     return unit
 }
 
 #[partial]
-def lint_print_rules_libs (rs : List String) : IO Unit := do {
-    match rs {
+def lint_print_rule_lines (ls : List String) : IO Unit := do {
+    match ls {
         List.empty => do { return unit },
-        List.cons r rest => do {
-            let _p : Unit <- println r;
-            lint_print_rules_libs rest
+        List.cons line rest => do {
+            let _p : Unit <- println line;
+            lint_print_rule_lines rest
         },
     }
 }
@@ -3513,20 +3520,12 @@ def lint_print_diags (config : LintConfig) (ds : List LintDiagnostic) : IO Unit 
     }
 }
 
+/// A finding's level, from the LIBRARY's one definition. This arm and
+/// `monad-lint` each used to carry their own copy of this lookup -- the same
+/// duplication that let their `--list-rules` output drift -- so the re-leveling
+/// rule now lives in exactly one place (`linter::rule_level`).
 def lint_level (config : LintConfig) (d : LintDiagnostic) : LintLevel :=
-    effective_level (rule_default_level_of_lint (lint_diagnostic_rule d)) config (lint_diagnostic_rule d)
-
-def rule_default_level_of_lint (rule : String) : LintLevel :=
-    rule_default_level_in all_rules rule
-
-#[partial]
-def rule_default_level_in (rs : List Rule) (name : String) : LintLevel :=
-    match rs {
-        List.empty => LintLevel.warn,
-        List.cons r rest =>
-            if String.beq (rule_name r) name then rule_default_level r
-            else rule_default_level_in rest name,
-    }
+    rule_level config d
 
 def lint_exit (config : LintConfig) (results : List LintResult) : I64 :=
     exit_code_of config results

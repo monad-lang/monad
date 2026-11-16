@@ -13,8 +13,8 @@ pub use lib::config {LintConfig, LintLevel}
 pub use lib::diagnostic {LintDiagnostic}
 pub use lib::driver {
     LintFile, LintParse, Located, Rule,
-    all_rules, decl_findings, lint_file_path, lint_parse, located_decls, rule_name,
-    rule_names,
+    all_rules, decl_findings, lint_file_path, lint_parse, located_decls, rule_line,
+    rule_lines, rule_name, rule_names,
 }
 pub use lib::config {effective_level, level_fails, level_reports}
 pub use lib::driver {rule_default_level}
@@ -101,7 +101,13 @@ def has_denied (config : LintConfig) (ds : List LintDiagnostic) : Bool :=
 /// carry the level (the renderer is handed it), so it is recomputed from the
 /// registry -- which also means `--deny` on the command line re-levels a
 /// finding that a rule emitted at `warn`.
-def rule_level (config : LintConfig) (d : LintDiagnostic) : LintLevel :=
+///
+/// PUBLIC because both entry points need it: `monad lint` and `monad-lint`
+/// each had their OWN copy of this lookup (complete with their own
+/// `rule_default_level_of` and a `find_rule` walk), and that is the same
+/// duplication that let their `--list-rules` output drift. One definition,
+/// so a re-leveling change cannot land in one entry point and not the other.
+pub def rule_level (config : LintConfig) (d : LintDiagnostic) : LintLevel :=
     effective_level (rule_default_level_of (lint_diagnostic_rule d)) config (lint_diagnostic_rule d)
 
 def rule_default_level_of (rule : String) : LintLevel :=

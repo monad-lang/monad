@@ -73,7 +73,7 @@ use lang::parser {decls_skip, skip_docstrings}
 use lang::parser::whitespace {skip_spaces}
 use lang::types {Location, ParseDecl, ParseDeclKind, SourceRange}
 use parsec::core {ParseResult}
-use lib::config {LintConfig, LintLevel, effective_level, level_reports}
+use lib::config {LintConfig, LintLevel, effective_level, level_name, level_reports}
 use lib::diagnostic {LintDiagnostic, mk_lint}
 use lib::rules {
     ctor_name_findings, def_name_findings, rule_name_ctor_name_case, rule_name_def_name_case,
@@ -125,6 +125,36 @@ pub def rule_names_of (rs : List Rule) : List String :=
     }
 
 pub def rule_names : List String := rule_names_of all_rules
+
+/// One rule as `--list-rules` prints it: `name<TAB>default-level`, a tab so
+/// `column -t` lines it up -- which is what a reader deciding what to
+/// `--deny` wants.
+///
+/// This lives in the LIBRARY rather than at either call site on purpose, and
+/// the reason is a real bug rather than tidiness: `monad lint` and the
+/// standalone `monad-lint` each had their own copy, and they had already
+/// drifted -- one printed `name` and the other `name<TAB>level`, from the
+/// same registry. That is exactly the disagreement the library-with-a-thin-
+/// bin split exists to make impossible, so the rendering is one definition
+/// two callers share.
+///
+/// The pattern match reads all three fields at once: `Rule` holds a function,
+/// so calling `rule_name r` and `rule_default_level r` in turn would be two
+/// uses of an affine binder.
+pub def rule_line (r : Rule) : String :=
+    match r {
+        Rule.mk name level _check => String.concat_all [name, "\t", level_name level],
+    }
+
+#[partial]
+pub def rule_lines_of (rs : List Rule) : List String :=
+    match rs {
+        List.empty => List.empty,
+        List.cons r rest => List.cons (rule_line r) (rule_lines_of rest),
+    }
+
+/// The whole registry as `--list-rules` prints it, in declaration order.
+pub def rule_lines : List String := rule_lines_of all_rules
 
 // ─── Parsing one file ──────────────────────────────────────────────────
 
