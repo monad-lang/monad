@@ -5,11 +5,13 @@
 // scrutinee's (`lang/src/typecheck/ctor_refine.mo`): in `vtail`'s `cons` arm
 // the tail is `Vec n A`, `vhead` needs no `nil` arm (it can never match), and
 // in `vappend` each arm's expected length is refined (`Nat.add Nat.zero n` in
-// the `nil` arm). Constructor INTRODUCTION is not yet checked against an
-// indexed expected type (`Vec.nil : Vec 1 I64` is accepted), so these
-// functions' `cons` arms are typed by their fields, not their length; that is
-// Stage 3c. These facts exercise constructor typing and definitional
-// (iota/delta) reduction.
+// the `nil` arm). A constructor application is checked against an indexed
+// expected type by the length it produces (`Vec.nil : Vec 1 I64` is rejected);
+// a variable length is not yet compared (`Vec.cons a t : Vec n A` with
+// `t : Vec n A` is accepted). These facts exercise constructor typing and
+// definitional (iota/delta) reduction; the inductive length laws
+// (`vlength (vappend v w) = add (vlength v) (vlength w)`) need a `Vec`
+// eliminator and are not here yet.
 
 use proofs::equiv {Path}
 use proofs::paths {refl}
@@ -88,6 +90,24 @@ pub def vappend {m : Nat} {n : Nat} {A : Type} (v : Vec m A) (w : Vec n A) : Vec
         Vec.nil => w,
         Vec.cons h t => Vec.cons h (vappend t w),
     }
+
+/// `vtail` undoes `cons`, definitionally. These lemmas are path lambdas, not
+/// `refl x`: a lambda's boundaries are checked against the type's endpoints,
+/// while `refl x` is not compared with them yet (ISSUE-11). The cons laws of
+/// `vmap`/`vappend` do not check as lambdas yet (a binder-depth error under
+/// the path binder; the endpoint does not reduce through the match) and are
+/// recorded in `dependent-elimination-refinement.md`.
+#[proof]
+pub def vtail_cons {n : Nat} {A : Type} (a : A) (v : Vec n A) :
+    Path (Vec n A) (vtail (Vec.cons a v)) v :=
+    fn (i : Cubical.I) => v
+
+/// Appending to the empty vector is the identity: the length `Nat.add Nat.zero
+/// n` reduces to `n` (`zero_add` is `refl` too).
+#[proof]
+pub def vappend_nil {n : Nat} {A : Type} (w : Vec n A) :
+    Path (Vec n A) (vappend (vec_nil A) w) w :=
+    fn (i : Cubical.I) => w
 
 def vec12 : Vec (Nat.succ (Nat.succ Nat.zero)) I64 := Vec.cons 1 (Vec.cons 2 (vec_nil I64))
 

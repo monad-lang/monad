@@ -135,6 +135,32 @@ def empty_vec : Vec Nat.zero I64 := Vec.nil
 def one_vec : Vec (Nat.succ Nat.zero) I64 := Vec.cons 1 Vec.nil
 ```
 
+The checker reads the length a constructor produces off its declared return
+type. `Vec.nil` checked against `Vec 1 I64`, or `Vec.cons 1 Vec.nil` against
+`Vec 2 I64`, is a type mismatch. A length the checker cannot compute (a
+variable, `Nat.add m n`) is not compared yet.
+
+A `match` on a `Vec` is typed per constructor. Against `Vec (Nat.succ n) A`,
+`nil` can never match, so it is not a missing arm; `cons`'s tail has type
+`Vec n A`; and an arm whose result length mentions the scrutinee's length sees
+it refined:
+
+```monad,ignore
+def vtail {n : Nat} {A : Type} (v : Vec (Nat.succ n) A) : Vec n A :=
+    match v {
+        Vec.cons _ t => t,
+    }
+
+def vappend {m : Nat} {n : Nat} {A : Type} (v : Vec m A) (w : Vec n A) : Vec (Nat.add m n) A :=
+    match v {
+        Vec.nil => w,                               // expected: Vec (Nat.add Nat.zero n) A
+        Vec.cons h t => Vec.cons h (vappend t w),
+    }
+```
+
+`proofs/src/vec.mo` has `vhead`, `vtail`, `vmap` and `vappend` with their
+definitional laws.
+
 ## What Is Not Implemented Yet
 
 Monad is deliberately not a proof assistant, and the dependently typed surface
@@ -152,8 +178,10 @@ is correspondingly small. Today there is:
   motive. An EXPLICIT type argument can be supplied and executed:
   `sigma_snd I64 (fn (a : I64) => I64) (Sigma.dpair 1 2)` compiles, links
   and returns `2`, because a type name in runtime value position compiles to
-  an inert sort value in both backends. What is still missing: indexed
-  families (`Eq`/`Vec` index refinement), arms written as field patterns,
+  an inert sort value in both backends. Indexed families are partial:
+  `Vec` matches are refined per constructor (above), but `Eq`'s index is
+  outside its header and is not refined, and arms written as field patterns
+  keep the unrefined field types. Also missing:
   IMPLICIT type arguments (higher-order inference is not implemented), and a
   type APPLICATION used as a value (`List I64`). `proofs/src/dependent.mo`
   verifies the theorems; `proofs/src/dependent_runtime.mo` calls them.

@@ -406,12 +406,8 @@ def test_nat_of_i64_roundtrip : Bool :=
 
 // `Vec`'s length index makes the OTHER constructor unconstructible at each of
 // these sites. The checker solves a constructor's declared index against the
-// scrutinee's type (`lang/src/typecheck/ctor_refine.mo`), so an annotated
-// scrutinee needs no other arm. A scrutinee that is itself a constructor
-// application (`match Vec.nil`) still infers a type without its index --
-// constructor introduction against an indexed type is Stage 3c of
-// `dependent-elimination-refinement.md` -- so those keep the exemption.
-#[allow_incomplete_match "a constructor-application scrutinee infers no index until Stage 3c"]
+// scrutinee's type (`lang/src/typecheck/ctor_refine.mo`); a scrutinee that is
+// itself a constructor application carries the index its arguments produce.
 #[test]
 def test_vec_nil_match : Bool :=
     match Vec.nil {
@@ -439,14 +435,12 @@ def test_vec_cons_pattern : Bool :=
         cons h t => h == 42
     }
 
-#[allow_incomplete_match "a constructor-application scrutinee infers no index until Stage 3c"]
 #[test]
 def test_vec_cons_head : Bool :=
     match Vec.cons 42 Vec.nil {
         cons h t => h == 42
     }
 
-#[allow_incomplete_match "a constructor-application scrutinee infers no index until Stage 3c"]
 #[test]
 def test_vec_cons_tail_nil : Bool :=
     match Vec.cons 42 Vec.nil {
