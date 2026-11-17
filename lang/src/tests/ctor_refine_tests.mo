@@ -13,8 +13,8 @@ use lang::types {
 use lib::module {try_parse_decls}
 use lib::scope {build_scope_from_decls, find_constructor_in_inductive, scope_find_inductive}
 use lib::typecheck::ctor_refine {
-    IndexMatch, IndexSolution, MatchEnv, empty_solution, index_positions, refine_expected,
-    refine_field_types, solve_ctor,
+    IndexMatch, IndexSolution, MatchEnv, empty_solution, index_positions, intro_clash, intro_ctor,
+    intro_indices, nat_literal_term, refine_expected, refine_field_types, solve_ctor,
 }
 
 def ctor_refine_test_path : ModulePath := ModulePath.mk (List.cons (Identifier.id "ctor_refine_tests") List.empty)
@@ -219,3 +219,69 @@ def test_cons_against_a_named_local_index_refines_it_by_name : Bool :=
                 && Similar.similar (refine_expected s (v_of (named "m"))) (v_of (succ_of (named "len@7"))),
         Option.none => false,
     }
+
+// --- Introduction (Stage 3c) -----------------------------------------------
+
+def vnil_ : Term := named "V.vnil"
+
+def vcons_ (x : Term) (tail : Term) : Term := app2 (named "V.vcons") x tail
+
+def no_types (t : Term) : Option Term := Option.none
+
+/// `t : V N.z T` for bound variable 0; nothing else is typed.
+def tail_typed (t : Term) : Option Term :=
+    match t {
+        Term.var k _dbg => if I64.beq k 0 then Option.some (v_of (named "N.z")) else Option.none,
+        _ => Option.none,
+    }
+
+def indices_of (t : Term) : Option (List Term) :=
+    match intro_ctor scope_ t {
+        Option.some ic => intro_indices scope_ no_types ic,
+        Option.none => Option.none,
+    }
+
+def clashes (arg_type : Term -> Option Term) (t : Term) (expected : Term) : Bool :=
+    match intro_ctor scope_ t {
+        Option.some ic =>
+            match intro_clash scope_ arg_type ic expected {
+                Option.some _ => true,
+                Option.none => false,
+            },
+        Option.none => false,
+    }
+
+#[test]
+def test_a_nested_constructor_application_computes_its_length : Bool :=
+    match indices_of (vcons_ (named "x") (vcons_ (named "y") vnil_)) {
+        Option.some idx => terms_similar idx [succ_of (succ_of (named "N.z"))],
+        Option.none => false,
+    }
+
+#[test]
+def test_an_untyped_tail_leaves_the_length_unknown : Bool :=
+    match indices_of (vcons_ (named "x") (named "t")) {
+        Option.some _ => false,
+        Option.none => true,
+    }
+
+#[test]
+def test_nil_clashes_with_a_successor_length : Bool :=
+    clashes no_types vnil_ (v_of (succ_of (named "N.z")))
+
+#[test]
+def test_cons_of_nil_fits_length_one : Bool :=
+    Bool.not (clashes no_types (vcons_ (named "x") vnil_) (v_of (succ_of (named "N.z"))))
+
+#[test]
+def test_a_typed_tail_supplies_the_length_that_clashes : Bool :=
+    clashes tail_typed (vcons_ (named "x") (Term.var 0 DebugName.unnamed)) (v_of (named "N.z"))
+
+#[test]
+def test_a_variable_expected_length_never_clashes : Bool :=
+    Bool.not (clashes no_types vnil_ (v_of (named "m")))
+
+#[test]
+def test_a_nat_literal_unfolds_to_a_constructor_chain : Bool :=
+    Similar.similar (nat_literal_term 2)
+        (Term.app (named "Nat.succ") (Term.app (named "Nat.succ") (named "Nat.zero")))

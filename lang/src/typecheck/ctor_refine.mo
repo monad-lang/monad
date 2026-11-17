@@ -17,10 +17,13 @@
 ///
 /// Pure: no `infer` import, so `infer` can use it without a cycle.
 use lang::types {
-    DebugName, Identifier, InductConstructor, Inductive, NamePath, Param, Scope,
+    DebugName, Identifier, InductConstructor, Inductive, Literal, NamePath, Param, Scope,
     Similar, Term, id_eq, sentinel, term_peel,
 }
-use lang::scope {CallSpine, flatten_call_spine, scope_find_all_inductives_by_constructor}
+use lang::scope {
+    CallSpine, find_constructor_in_inductive, flatten_call_spine, rebuild_call,
+    scope_find_all_inductives_by_constructor, scope_find_inductive,
+}
 use std::list {List.any, List.filter}
 use lib::typecheck::name_subst {name_subst_term}
 use lib::typecheck::subst {term_shift_above, term_subst}
@@ -228,7 +231,7 @@ pub def match_index (env : MatchEnv) (pattern : Term) (target : Term) (acc : Ind
 /// A constructor-headed pattern against a target: clash, recurse, or give up.
 def match_ctor_spines (env : MatchEnv) (pspine : Pair Identifier (List Term)) (target : Term) (acc : IndexSolution)
     : IndexMatch :=
-    match ctor_spine env target {
+    match ctor_spine env (nat_literal_unary target) {
         Option.none => IndexMatch.unknown,
         Option.some tspine =>
             match pspine {
@@ -470,4 +473,317 @@ def list_nth (xs : List A) (i : I64) : Option A :=
     match xs {
         List.empty => Option.none,
         List.cons x rest => if I64.beq i 0 then Option.some x else list_nth rest (i - 1),
+    }
+
+// --- Nat literals ---------------------------------------------------------------
+
+/// The largest `Nat` literal unfolded to a constructor chain; larger ones stay
+/// as written and match nothing (`unknown`).
+pub def nat_literal_bound : I64 := 64
+
+/// A small `Nat` literal as its canonical unary constructor chain. `Vec 3`
+/// must compare with `Vec (succ (succ (succ zero)))`; `Nat.of_i64 3` cannot
+/// reduce in the checker (its body tests a native `I64.lt`).
+#[partial]
+pub def nat_literal_term (n : I64) : Term :=
+    if I64.beq n 0 then
+        Term.var sentinel (DebugName.named (Identifier.id "Nat.zero"))
+    else
+        Term.app (Term.var sentinel (DebugName.named (Identifier.id "Nat.succ")))
+            (nat_literal_term (I64.sub n 1))
+
+/// `t` as a constructor chain when it is a small non-negative integer literal
+/// or `Nat.of_i64` of one; otherwise `t` unchanged.
+def nat_literal_unary (t : Term) : Term :=
+    match small_nat_literal t {
+        Option.some n => nat_literal_term n,
+        Option.none => t,
+    }
+
+/// `nat_literal_unary` through a constructor chain: `succ 0` is `succ zero`.
+#[terminating]
+def nat_literal_deep (t : Term) : Term :=
+    match small_nat_literal t {
+        Option.some n => nat_literal_term n,
+        Option.none =>
+            match term_peel t {
+                Term.app f a => Term.app f (nat_literal_deep a),
+                _ => t,
+            },
+    }
+
+#[terminating]
+def small_nat_literal (t : Term) : Option I64 :=
+    match term_peel t {
+        Term.lit l =>
+            match l {
+                Literal.num n _ => if I64.lt n 0 || I64.lt nat_literal_bound n then Option.none else Option.some n,
+                _ => Option.none,
+            },
+        _ =>
+            match flatten_call_spine t {
+                CallSpine.mk head args =>
+                    match args {
+                        List.cons only rest =>
+                            if List.is_empty rest && is_named_var (Identifier.id "Nat.of_i64") head
+                            then small_nat_literal only
+                            else Option.none,
+                        List.empty => Option.none,
+                    },
+            },
+    }
+
+// --- Introduction (Stage 3c) ------------------------------------------------------
+
+/// A constructor application of an indexed family, saturated: one argument
+/// per constructor field.
+pub struct IntroCtor {
+    ind : Inductive,
+    ctor : InductConstructor,
+    args : List Term,
+}
+
+/// `t` as a saturated constructor application of an indexed family, if it is
+/// one. A constructor two families share, or a partial application, is none.
+pub def intro_ctor (scope : Scope) (t : Term) : Option IntroCtor :=
+    match term_peel t {
+        Term.con c => intro_ctor_in scope (owner_named scope c.typ_name) c.name (present_args c.args),
+        _ =>
+            match flatten_call_spine t {
+                CallSpine.mk head args =>
+                    match term_peel head {
+                        Term.var k dbg =>
+                            if Bool.not (I64.beq k sentinel) then Option.none
+                            else match dbg {
+                                DebugName.named id => intro_ctor_named scope id args,
+                                DebugName.unnamed => Option.none,
+                            },
+                        _ => Option.none,
+                    },
+            },
+    }
+
+/// A constructor named by `id`: through its written qualifier (`Vec.cons`), or
+/// through the one family owning the bare name.
+def intro_ctor_named (scope : Scope) (id : Identifier) (args : List Term) : Option IntroCtor :=
+    match id {
+        Identifier.id s =>
+            let dot : I64 := String.find_last s "." in
+            if I64.lt dot 0
+            then
+                match scope_find_all_inductives_by_constructor (NamePath.mk [id]) scope {
+                    List.cons only more =>
+                        if List.is_empty more then intro_ctor_in scope (Option.some only) id args else Option.none,
+                    List.empty => Option.none,
+                }
+            else
+                intro_ctor_in scope (owner_named scope (NamePath.mk [Identifier.id (String.slice s 0 dot)]))
+                    (Identifier.id (dotted_tail s)) args,
+    }
+
+def owner_named (scope : Scope) (name : NamePath) : Option Inductive :=
+    match scope_find_inductive name scope {
+        Result.ok ind => Option.some ind,
+        Result.err _ => Option.none,
+    }
+
+def intro_ctor_in (scope : Scope) (owner : Option Inductive) (bare : Identifier) (args : List Term) : Option IntroCtor :=
+    match owner {
+        Option.none => Option.none,
+        Option.some ind =>
+            if List.is_empty (index_positions ind) then Option.none
+            else match find_constructor_in_inductive ind (NamePath.mk [bare]) {
+                Option.some c =>
+                    if I64.beq (List.length c.params) (List.length args)
+                    then
+                        let ic : IntroCtor := { ind := ind, ctor := c, args := args } in
+                        Option.some ic
+                    else Option.none,
+                Option.none => Option.none,
+            },
+    }
+
+/// The bindings for a constructor's index variables when it is checked against
+/// `expected`: the solved values (`cons : Vec 1 A` gives `len := zero`, so the
+/// tail is checked at `Vec zero A`), or none when the solution is not plain
+/// (unknown, impossible, or a refinement of a variable index).
+pub def intro_index_bindings (scope : Scope) (ind : Inductive) (c : InductConstructor) (expected : Term)
+    : Option (List (Pair Identifier Term)) :=
+    let positions : List I64 := index_positions ind in
+    if List.is_empty positions || Bool.not (is_family_type ind expected) then Option.none
+    else
+        let env : MatchEnv := {
+            locals := index_locals ind positions,
+            binders := List.empty,
+            scope := scope,
+            skolem_suffix := "intro",
+        } in
+        match solve_ctor env ind c expected {
+            IndexMatch.solved sol => if has_refinement sol then Option.none else Option.some sol.subst,
+            _ => Option.none,
+        }
+
+/// The indices a constructor application produces, one per index position:
+/// the constructor's declared index patterns with its index variables solved
+/// from the arguments. A field typed by the same family supplies its
+/// argument's indices -- a nested constructor application's own, or what
+/// `arg_type` reports for anything else (a typed local). None when an index
+/// variable stays unsolved.
+#[terminating]
+pub def intro_indices (scope : Scope) (arg_type : Term -> Option Term) (ic : IntroCtor) : Option (List Term) :=
+    let positions : List I64 := index_positions ic.ind in
+    let env : MatchEnv := {
+        locals := index_locals ic.ind positions,
+        binders := List.empty,
+        scope := scope,
+        skolem_suffix := "intro",
+    } in
+    let fields : List Term := List.map (fn (p : Param) => p.type_) ic.ctor.params in
+    match intro_fields env arg_type ic.ind positions fields ic.args (IndexMatch.solved empty_solution) {
+        IndexMatch.solved s =>
+            let idx : List Term := List.map (apply_subst s.subst) (ctor_index_patterns ic.ind ic.ctor positions) in
+            if List.any (fn (i : Term) => mentions_any env.locals i) idx then Option.none else Option.some idx,
+        _ => Option.none,
+    }
+
+#[terminating]
+def intro_fields (env : MatchEnv) (arg_type : Term -> Option Term) (ind : Inductive) (positions : List I64)
+    (fields : List Term) (args : List Term) (state : IndexMatch) : IndexMatch :=
+    match fields {
+        List.empty => state,
+        List.cons f frest =>
+            match args {
+                List.empty => state,
+                List.cons a arest =>
+                    let next : IndexMatch := match state {
+                        IndexMatch.solved acc =>
+                            match arg_indices env.scope arg_type ind a {
+                                Option.some found =>
+                                    match_all env (family_indices ind positions f) found (IndexMatch.solved acc),
+                                Option.none => state,
+                            },
+                        _ => state,
+                    } in
+                    intro_fields env arg_type ind positions frest arest next,
+            },
+    }
+
+/// The indices of `a` as a value of family `ind`: its own when it is a
+/// constructor application of `ind`, else read off `arg_type a`.
+#[terminating]
+def arg_indices (scope : Scope) (arg_type : Term -> Option Term) (ind : Inductive) (a : Term) : Option (List Term) :=
+    match intro_ctor scope a {
+        Option.some inner =>
+            if same_family ind inner.ind then intro_indices scope arg_type inner else Option.none,
+        Option.none =>
+            match arg_type a {
+                Option.some t =>
+                    if is_family_type ind t then Option.some (family_indices ind (index_positions ind) t) else Option.none,
+                Option.none => Option.none,
+            },
+    }
+
+/// The index arguments of a type `t` that is an application of `ind`, or the
+/// empty list for any other type (which then matches nothing).
+def family_indices (ind : Inductive) (positions : List I64) (t : Term) : List Term :=
+    if is_family_type ind t
+    then match flatten_call_spine t { CallSpine.mk _head args => args_at args positions }
+    else List.empty
+
+def is_family_type (ind : Inductive) (t : Term) : Bool :=
+    match flatten_call_spine t {
+        CallSpine.mk head args =>
+            I64.beq (List.length args) (List.length ind.params) && names_family ind head,
+    }
+
+def names_family (ind : Inductive) (head : Term) : Bool :=
+    match term_peel head {
+        Term.var k dbg =>
+            I64.beq k sentinel && (match dbg {
+                DebugName.named id =>
+                    match id {
+                        Identifier.id s =>
+                            match family_bare_name ind {
+                                Option.some b => String.beq (dotted_tail s) b,
+                                Option.none => false,
+                            },
+                    },
+                DebugName.unnamed => false,
+            }),
+        _ => false,
+    }
+
+def family_bare_name (ind : Inductive) : Option String :=
+    match ind.name {
+        NamePath.mk ids =>
+            match list_last ids {
+                Option.some id => match id { Identifier.id s => Option.some (dotted_tail s) },
+                Option.none => Option.none,
+            },
+    }
+
+def same_family (a : Inductive) (b : Inductive) : Bool :=
+    match family_bare_name a {
+        Option.some x =>
+            match family_bare_name b {
+                Option.some y => String.beq x y,
+                Option.none => false,
+            },
+        Option.none => false,
+    }
+
+/// Whether an indexed constructor application can have type `expected`:
+/// `some found` (the application's type, spelled with `expected`'s uniform
+/// arguments) when a computed index's constructor head clashes with
+/// `expected`'s; none when it fits or nothing safe can be concluded. A
+/// variable index on either side is never a clash: it may be refined by an
+/// enclosing match the checker does not track.
+pub def intro_clash (scope : Scope) (arg_type : Term -> Option Term) (ic : IntroCtor) (expected : Term) : Option Term :=
+    let positions : List I64 := index_positions ic.ind in
+    if Bool.not (is_family_type ic.ind expected) then Option.none
+    else match intro_indices scope arg_type ic {
+        Option.none => Option.none,
+        Option.some found =>
+            let env : MatchEnv := {
+                locals := List.empty,
+                binders := List.empty,
+                scope := scope,
+                skolem_suffix := "intro",
+            } in
+            let wanted : List Term := family_indices ic.ind positions expected in
+            let unary : List Term := List.map nat_literal_deep found in
+            match match_all env unary wanted (IndexMatch.solved empty_solution) {
+                IndexMatch.impossible => Option.some (with_indices expected positions unary),
+                _ => Option.none,
+            },
+    }
+
+/// `t`'s spine with the arguments at `positions` replaced, in order.
+pub def with_indices (t : Term) (positions : List I64) (idx : List Term) : Term :=
+    match flatten_call_spine t {
+        CallSpine.mk head args => rebuild_call head (replace_at args positions idx 0),
+    }
+
+#[terminating]
+def replace_at (args : List Term) (positions : List I64) (idx : List Term) (i : I64) : List Term :=
+    match args {
+        List.empty => List.empty,
+        List.cons a rest =>
+            match positions {
+                List.cons p prest =>
+                    if I64.beq p i
+                    then match idx {
+                        List.cons x xrest => List.cons x (replace_at rest prest xrest (i + 1)),
+                        List.empty => List.cons a (replace_at rest positions idx (i + 1)),
+                    }
+                    else List.cons a (replace_at rest positions idx (i + 1)),
+                List.empty => List.cons a (replace_at rest positions idx (i + 1)),
+            },
+    }
+
+#[terminating]
+def list_last (xs : List A) : Option A :=
+    match xs {
+        List.empty => Option.none,
+        List.cons x rest => if List.is_empty rest then Option.some x else list_last rest,
     }

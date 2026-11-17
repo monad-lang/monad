@@ -43,8 +43,9 @@ use lang::scope {
 }
 use lib::typecheck::name_subst {name_subst_term}
 use lib::typecheck::ctor_refine {
-    IndexMatch, IndexSolution, MatchEnv, has_refinement, index_locals, index_positions,
-    refine_expected, refine_field_types, solve_ctor,
+    IndexMatch, IndexSolution, IntroCtor, MatchEnv, has_refinement, index_locals, index_positions,
+    intro_clash, intro_ctor, intro_index_bindings, intro_indices, nat_literal_bound, nat_literal_term, refine_expected,
+    refine_field_types, solve_ctor, with_indices,
 }
 use lib::typecheck::subst {beta_reduce, term_abstract_var, term_permute, term_subst, term_shift, term_shift_above}
 use lib::typecheck::levels {solve_levels, subst_levels_term}
@@ -55,7 +56,7 @@ use lib::typecheck::cubical {
 use lib::typecheck::unify {unify, unify_structural}
 use lib::typecheck::whnf {normalize_path_endpoints, whnf}
 use lang::parser::numeric_literal {int_value_fits}
-use std::list {List.filter}
+use std::list {List.any, List.filter}
 
 /// A type-checked term paired with its type.
 pub struct TypedTerm {
@@ -123,9 +124,17 @@ def qualified_by_class (id : Identifier) (scope : Scope) : Bool :=
 pub def type_check (term : Term) (expected_type : Term) (scope : Scope) (local_types : List Term) (locals : LocalScope) : Result TypeError TypedTerm :=
     match term {
         Term.lit value => type_check_lit value expected_type scope local_types locals,
-        Term.var idx dbg => type_check_var idx dbg expected_type scope local_types locals,
+        Term.var idx dbg =>
+            match intro_index_error term expected_type scope local_types {
+                Option.some e => err e,
+                Option.none => type_check_var idx dbg expected_type scope local_types locals,
+            },
         Term.lam dbg t body => type_check_lam dbg t body expected_type scope local_types locals,
-        Term.app f a => type_check_app f a expected_type scope local_types locals,
+        Term.app f a =>
+            match intro_index_error term expected_type scope local_types {
+                Option.some e => err e,
+                Option.none => type_check_app f a expected_type scope local_types locals,
+            },
         // One arm for all three binder flavours. `b` is handed through
         // unchanged: it carries the NAME (`wrap_forall`/`wrap_level_forall`
         // put the variable's own name there) and the INFO that tells a
@@ -133,7 +142,11 @@ pub def type_check (term : Term) (expected_type : Term) (scope : Scope) (local_t
         // apart -- rebuilding it as `binder_anon`, which is what the old
         // `type_check_pi` did, would erase both.
         Term.pi b arg ret => type_check_pi b arg ret scope local_types locals,
-        Term.con c => type_check_con c expected_type scope local_types locals,
+        Term.con c =>
+            match intro_index_error term expected_type scope local_types {
+                Option.some e => err e,
+                Option.none => type_check_con c expected_type scope local_types locals,
+            },
         Term.ntv ntv => type_check_ntv ntv expected_type scope local_types locals,
         // The sole sort form -- `Prop`/`Type`/`Sort n` all lower to it. The
         // term is handed through as it is; `type_check_sort_full` computes the
@@ -169,6 +182,66 @@ def type_check_located (loc : Location) (inner : Term) (expected_type : Term) (s
     match type_check inner expected_type scope local_types locals {
         ok tt => ok (mk_typed (Term.ctx loc tt.term) tt.typ),
         err e => err e,
+    }
+
+/// Stage 3c: a constructor application of an indexed family checked against
+/// an expected application of that family must produce its indices. Only a
+/// constructor-head clash is an error (`Vec.nil : Vec 1 I64`); a variable or
+/// stuck index on either side keeps today's behaviour.
+def intro_index_error (term : Term) (expected : Term) (scope : Scope) (local_types : List Term) : Option TypeError :=
+    if Bool.not (may_name_indexed_family expected) then Option.none
+    else match intro_ctor scope term {
+        Option.none => Option.none,
+        Option.some ic =>
+            match intro_clash scope (local_arg_type local_types) ic expected {
+                Option.some found => Option.some (TypeError.mismatch expected found),
+                Option.none => Option.none,
+            },
+    }
+
+/// A cheap pre-filter run on every checked variable and application: only an
+/// applied, hole-free expected type can name an indexed family.
+def may_name_indexed_family (expected : Term) : Bool :=
+    match term_peel expected {
+        Term.app _ _ => Bool.not (term_has_hole expected),
+        _ => false,
+    }
+
+/// The type of a bound local, in the current context; none for anything else.
+def local_arg_type (local_types : List Term) (a : Term) : Option Term :=
+    match term_peel a {
+        Term.var k _dbg =>
+            if I64.beq k sentinel then Option.none
+            else match nth_type k local_types {
+                Option.some t => Option.some (term_shift (k + 1) t),
+                Option.none => Option.none,
+            },
+        _ => Option.none,
+    }
+
+/// The scrutinee type the arms see. A constructor application of an indexed
+/// family carries the indices its arguments produce (`Vec.cons 42 Vec.nil` is
+/// at length `succ zero`), so impossible arms are pruned and the fields are
+/// refined; anything else keeps its inferred type.
+def scrutinee_case_type (scope : Scope) (local_types : List Term) (scrutinee : Term) (inferred : Term) : Term :=
+    match intro_ctor scope scrutinee {
+        Option.none => inferred,
+        Option.some ic =>
+            match intro_indices scope (local_arg_type local_types) ic {
+                Option.none => inferred,
+                Option.some idx =>
+                    with_indices (family_shape ic inferred) (index_positions ic.ind) idx,
+            },
+    }
+
+/// `inferred` when it is already an application of the family (so its uniform
+/// arguments are kept), else the family applied to holes.
+def family_shape (ic : IntroCtor) (inferred : Term) : Term :=
+    match flatten_call_spine inferred {
+        CallSpine.mk _head args =>
+            if I64.beq (List.length args) (List.length ic.ind.params) && Bool.not (is_hole inferred)
+            then inferred
+            else apply_holes (Term.var sentinel (DebugName.named (inductive_bare_name ic.ind))) ic.ind.params,
     }
 
 /// Is `t` one of the sort terms (`Prop`/`Type`/`Sort n`)?
@@ -1560,22 +1633,6 @@ def nat_builder_owner_key (scope : Scope) (locals : LocalScope) : Option String 
 /// the literal's own type, the same fall-through the Rust reference
 /// keeps. `#[terminating]` for the same reason as
 /// `type_check_num_lit`.
-/// A small `Nat` literal as its canonical unary constructor chain. `Vec 3`
-/// must compare with `Vec (succ (succ (succ zero)))`; `Nat.of_i64 3` cannot
-/// reduce in the checker (its body tests a native `I64.lt`), so the index
-/// never becomes unary. Bounded: larger literals keep `Nat.of_i64` and stay
-/// stuck, which is recorded in `dependent-types-vec.md` rather than
-/// materializing an unbounded chain.
-#[partial]
-def nat_literal_term (n : I64) : Term :=
-    if I64.beq n 0 then
-        Term.var sentinel (DebugName.named (Identifier.id "Nat.zero"))
-    else
-        Term.app (Term.var sentinel (DebugName.named (Identifier.id "Nat.succ")))
-            (nat_literal_term (I64.sub n 1))
-
-def nat_literal_bound : I64 := 64
-
 #[terminating]
 def apply_nat_rewrite (n : I64) (scope : Scope) (local_types : List Term) (locals : LocalScope) : Result TypeError TypedTerm :=
     if I64.lt n 0
@@ -1781,7 +1838,8 @@ def type_check_match (value_ : Term) (cases : List MatchCase) (expected_type : T
                     match reject_opaque_match maybe_ind {
                         Option.some e => err e,
                         Option.none =>
-                        match type_check_cases_accum cases sc_term sc_typ maybe_ind expected_type scope local_types locals Term.hole List.empty {
+                        let case_typ : Term := scrutinee_case_type scope local_types value_ sc_typ in
+                        match type_check_cases_accum cases sc_term case_typ maybe_ind expected_type scope local_types locals Term.hole List.empty {
                             ok acc =>
                             match acc {
                                 mk body_typ checked_cases =>
@@ -5916,7 +5974,7 @@ def try_type_check_con_call (app_term : Term) (expected_type : Term) (scope : Sc
                                                     InductConstructor.mk con_name params _ =>
                                                         if not (I64.beq (List.length args) (List.length params)) then Option.none
                                                         else
-                                                            let bindings : List (Pair Identifier Term) := con_own_param_bindings ind expected_type in
+                                                            let bindings : List (Pair Identifier Term) := con_param_bindings ind ctor expected_type scope in
                                                             match con_call_check_args_solving ind args params bindings scope local_types locals {
                                                                 // Empty `bindings` is the pre-port DECLINE case
                                                                 // (`con_own_param_bindings` found nothing in the
@@ -9794,6 +9852,21 @@ def con_own_param_bindings (ind : Inductive) (expected_type : Term) : List (Pair
                 let names : List Identifier := param_names params in
                 bind_term_vars names (inductive_applied_to_own_params ind names) expected_type List.empty
         }
+
+/// `con_own_param_bindings`, except that an indexed family's index variables
+/// take the values solved from the constructor's declared return: the header
+/// binder `len` of `Vec` is `zero` inside `cons : Vec 1 A`, not `1`.
+def con_param_bindings (ind : Inductive) (ctor : InductConstructor) (expected_type : Term) (scope : Scope)
+    : List (Pair Identifier Term) :=
+    let own : List (Pair Identifier Term) := con_own_param_bindings ind expected_type in
+    match intro_index_bindings scope ind ctor expected_type {
+        Option.none => own,
+        Option.some solved =>
+            let index_names : List Identifier := index_locals ind (index_positions ind) in
+            let keep : Pair Identifier Term -> Bool := fn (b : Pair Identifier Term) =>
+                match b { Pair.pair x _ => Bool.not (List.any (fn (y : Identifier) => id_eq x y) index_names) } in
+            List.append solved (List.filter keep own),
+    }
 
 /// Substitute every `(name, type)` binding `con_own_param_bindings`
 /// recovered into one constructor param's declared type, one name at a

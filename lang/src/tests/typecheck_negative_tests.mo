@@ -536,3 +536,43 @@ def test_an_unrefinable_arm_is_still_rejected : IO Bool :=
             ++ "        Vec.nil => w,\n"
             ++ "        Vec.cons h t => Vec.cons h (va_wrong t w),\n"
             ++ "    }\n")
+
+// --- Indexed families: constructor introduction (Stage 3c) ------------------
+//
+// A constructor application checked against an indexed expected type must
+// produce its indices. Only a constructor-head clash is rejected; a variable
+// length on either side may be refined by a match the checker does not track.
+
+#[test]
+def test_nil_is_not_a_vector_of_length_one : IO Bool :=
+    rejected_with "nil_one" mismatch "def nil_one : Vec 1 I64 := Vec.nil\n"
+
+#[test]
+def test_a_unary_length_is_checked_like_a_literal : IO Bool :=
+    rejected_with "nil_succ" mismatch "def nil_succ : Vec (Nat.succ Nat.zero) I64 := Vec.nil\n"
+
+#[test]
+def test_a_nested_constructor_is_checked_at_its_own_length : IO Bool :=
+    rejected_with "one_for_two" mismatch "def one_for_two : Vec 2 I64 := Vec.cons 1 Vec.nil\n"
+
+#[test]
+def test_cons_is_not_a_vector_of_length_zero : IO Bool :=
+    rejected_with "cons_zero" mismatch "def cons_zero : Vec Nat.zero I64 := Vec.cons 1 Vec.nil\n"
+
+#[test]
+def test_a_typed_tail_supplies_its_length : IO Bool :=
+    rejected_with "tail_len" mismatch "def tail_len (t : Vec 0 I64) : Vec 0 I64 := Vec.cons 1 t\n"
+
+#[test]
+def test_constructors_at_their_own_length_are_accepted : IO Bool :=
+    accepted
+        ("def v0 : Vec 0 I64 := Vec.nil\n"
+            ++ "def v1 : Vec 1 I64 := Vec.cons 1 Vec.nil\n"
+            ++ "def v2 : Vec (Nat.succ (Nat.succ Nat.zero)) I64 := Vec.cons 1 (Vec.cons 2 Vec.nil)\n"
+            ++ "def vs {n : Nat} (t : Vec n I64) : Vec (Nat.succ n) I64 := Vec.cons 1 t\n")
+
+#[test]
+def test_a_constructor_scrutinee_prunes_by_its_own_length : IO Bool :=
+    accepted
+        ("def m0 : Bool := match Vec.nil { Vec.nil => true }\n"
+            ++ "def m1 : Bool := match Vec.cons 42 Vec.nil { Vec.cons h t => match t { Vec.nil => true } }\n")
