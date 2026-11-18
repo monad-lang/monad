@@ -276,6 +276,64 @@
       pass_filenames = true;
       files = "\\.(md|mo|rs)$";
     };
+
+    # The style/name-path ratchet (`scripts/style-baseline.txt`), which CI
+    # enforces as `compiler-checks`' "Style metrics ratchet" step. Nothing ran
+    # it outside CI, so a branch that added 15 wide positional patterns and 5
+    # unneeded `#[partial]` attributes was green on every local gate and red
+    # in the pipeline -- the failure this hook exists to move forward.
+    #
+    # WHOLE CORPUS, with `pass_filenames = false`: the counters are
+    # corpus-wide totals, so a per-file mode cannot answer the question the
+    # baseline asks. `files` still gates it, so a commit touching no `.mo`
+    # pays nothing.
+    #
+    # COST, measured 2026-11-16: ~15s warm for the whole corpus, which is why
+    # this one belongs in the commit path where the whole-corpus sweeps
+    # AGENTS.md keeps out of hooks (rust-tests, monad-check) do not.
+    style-ratchet = {
+      enable = true;
+      name = "style-ratchet";
+      description = ''
+        No counter in scripts/style-baseline.txt may rise. Regenerate the
+        baseline with `scripts/style-metrics.sh --write-baseline
+        scripts/style-baseline.txt` when a counter is meant to go up.
+      '';
+      entry = "${config.devenv.root}/scripts/check-style-ratchet.sh";
+      pass_filenames = false;
+      files = "\\.mo$";
+    };
+
+    # The whole-corpus `monad-rs check` -- CI's `Rust corpus check` step, the
+    # pipeline's only whole-corpus check and the one that catches a bootstrap
+    # host that no longer accepts the compiler-source surface. It is the gate
+    # the host errors this hook was added alongside (`unbound variable
+    # lint_ok`, the `(.)` lowering gap) were caught by, twenty minutes after
+    # the commit.
+    #
+    # PRE-PUSH, not pre-commit: ~3m40s for the corpus warm (~24s for one
+    # file), and AGENTS.md is explicit that this sweep is not paid per commit
+    # -- "run in CI, not hooks ... but run them before pushing anything that
+    # touches the compiler". `pre-push` is the point it names, so a fast
+    # commit stays fast and a push that would go red in CI fails here instead.
+    # `pass_filenames = false` because the script names the whole corpus
+    # itself; `files` gates it, so a push with no `.mo` change pays nothing.
+    #
+    # MONAD_HOST_BIN is deliberately NOT set here: the script defaults to
+    # `cargo run --manifest-path rust/Cargo.toml --release --`, exactly the
+    # host and the command CI's step uses, so the two cannot drift.
+    corpus-check = {
+      enable = true;
+      name = "corpus-check";
+      description = ''
+        `monad-rs check` over the whole corpus -- the bootstrap host must
+        still accept the compiler-source surface.
+      '';
+      entry = "${config.devenv.root}/scripts/check-corpus.sh";
+      pass_filenames = false;
+      files = "\\.mo$";
+      stages = [ "pre-push" ];
+    };
   };
 
   # See full reference at https://devenv.sh/reference/options/

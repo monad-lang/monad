@@ -238,10 +238,14 @@ jobs:
       # same check on every commit in every worktree -- was removed.
       - name: Rust corpus check
         run: |
+          # The corpus and the host live in scripts/check-corpus.sh, which the
+          # `corpus-check` pre-push hook (devenv.nix) runs too -- the same
+          # command in both, so a push cannot fail here on something the hook
+          # passed. The script defaults to this same `cargo run --release`
+          # host and caps the run's memory, the way AGENTS.md prescribes for
+          # a whole-corpus sweep.
           nix develop --no-pure-eval --accept-flake-config -c \
-            cargo run --manifest-path rust/Cargo.toml --release -- \
-              check init std sys examples lang codegen cli llvm runtime build eval motes \
-                    scripts/bootstrap_next.mo
+            scripts/check-corpus.sh
 
       # This step is why `nix/host.nix` may set `doCheck = false`: the flake's
       # host derivation skips the workspace's own `cargo test`, on the premise
@@ -422,10 +426,12 @@ jobs:
       # `scripts/style-metrics.sh --write-baseline scripts/style-baseline.txt`.
       - name: Style metrics ratchet
         run: |
+          # scripts/check-style-ratchet.sh is the same ratchet the
+          # `style-ratchet` pre-commit hook (devenv.nix) runs, so a commit
+          # cannot pass locally and fail here on counter drift.
           nix develop --no-pure-eval --accept-flake-config \
             --profile "$HOME/.monad-ci-devshell" \
-            -c python3 scripts/style_metrics.py --root "$PWD" \
-                 --baseline "$PWD/scripts/style-baseline.txt" --quiet
+            -c scripts/check-style-ratchet.sh
 
       # The consumers below (`clap-monadup-tests` through `wasm-target`) run
       # this tree's compiler as `.#monad` rather than self-compiling it again:
