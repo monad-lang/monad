@@ -108,7 +108,12 @@ pub def Command.debug_of (cmd : Command) : Bool :=
         Command.repl => false,
         Command.pretty _ => false,
         Command.fmt _ _ _ _ _ _ => false,
-        Command.lint _ _ _ _ _ _ _ _ => false,
+        // The linter's eight fields carry option and flag data, none of it a
+        // debug-info switch, so the variant is answered without reading them:
+        // a wildcard field pattern, not eight positional wildcards. `Command`
+        // is a sum whose every variant's parameters are NAMED, which is exactly
+        // the case `AGENTS.md` style rule 2 makes a violation.
+        Command.lint { .. } => false,
         Command.check _ _ _ _ _ _ _ => false,
         Command.test _ _ _ _ _ _ _ _ => false,
         Command.clean _ _ => false,

@@ -82,12 +82,12 @@ pub def type_name_findings (kind : ParseDeclKind) : List String :=
     match kind {
         ParseDeclKind.inductive_d pi =>
             match pi {
-                ParseInductive.mk n _ps _t _cs _attrs _vis => classify_type_name (show_name_path n),
+                ParseInductive.mk { name, .. } => classify_type_name (show_name_path name),
             },
         ParseDeclKind.struct_d ps =>
-            match ps { ParseStruct.mk n _fs _attrs _vis => classify_type_name (show_identifier n) },
+            match ps { ParseStruct.mk { name, .. } => classify_type_name (show_identifier name) },
         ParseDeclKind.class_d pc =>
-            match pc { ParseClass.mk n _ps _cs _ms _vis _sort => classify_type_name (show_identifier n) },
+            match pc { ParseClass.mk { name, .. } => classify_type_name (show_identifier name) },
         _ => List.empty,
     }
 
@@ -106,12 +106,12 @@ def classify_type_name (n : String) : List String :=
 pub def def_name_findings (kind : ParseDeclKind) : List String :=
     match kind {
         ParseDeclKind.def_d pd => match pd {
-            ParseDef.mk n _t _body _cs attrs _vis _ps =>
+            ParseDef.mk { name, attrs, .. } =>
                 if foreign_named attrs then List.empty
-                else classify_def_name (show_name_path n),
+                else classify_def_name (show_name_path name),
         },
         ParseDeclKind.def_macro_d pd => match pd {
-            ParseDef.mk n _t _body _cs _attrs _vis _ps => classify_def_name (show_name_path n),
+            ParseDef.mk { name, .. } => classify_def_name (show_name_path name),
         },
         _ => List.empty,
     }
@@ -156,8 +156,9 @@ pub def ctor_name_findings (kind : ParseDeclKind) : List String :=
     match kind {
         ParseDeclKind.inductive_d pi =>
             match pi {
-                ParseInductive.mk _n _ps _t cs attrs _vis =>
-                    if foreign_named attrs then List.empty else ctor_findings cs List.empty,
+                ParseInductive.mk { constructors, attrs, .. } =>
+                    if foreign_named attrs then List.empty
+                    else ctor_findings constructors List.empty,
             },
         _ => List.empty,
     }
@@ -184,14 +185,14 @@ def ctor_findings (cs : List ParseInductConstructor) (acc : List String) : List 
 pub def type_var_findings (kind : ParseDeclKind) : List String :=
     match kind {
         ParseDeclKind.inductive_d pi =>
-            match pi { ParseInductive.mk _n ps _t _cs attrs _vis =>
-                if foreign_named attrs then List.empty else param_findings ps List.empty },
+            match pi { ParseInductive.mk { params, attrs, .. } =>
+                if foreign_named attrs then List.empty else param_findings params List.empty },
         ParseDeclKind.class_d pc =>
-            match pc { ParseClass.mk _n ps _cs _ms _vis _sort => param_findings ps List.empty },
+            match pc { ParseClass.mk { params, .. } => param_findings params List.empty },
         ParseDeclKind.struct_d _ => List.empty,
         ParseDeclKind.def_d pd =>
-            match pd { ParseDef.mk _n _t _body _cs attrs _vis ps =>
-                if foreign_named attrs then List.empty else param_findings ps List.empty },
+            match pd { ParseDef.mk { params, attrs, .. } =>
+                if foreign_named attrs then List.empty else param_findings params List.empty },
         _ => List.empty,
     }
 
@@ -201,8 +202,8 @@ def param_findings (ps : List ParseParam) (acc : List String) : List String :=
         List.empty => acc,
         List.cons p rest =>
             match p {
-                ParseParam.mk n t _m _d attrs =>
-                    param_findings rest (param_one_finding n t attrs acc),
+                ParseParam.mk { name, type_, attrs, .. } =>
+                    param_findings rest (param_one_finding name type_ attrs acc),
             },
     }
 
@@ -212,7 +213,11 @@ def param_findings (ps : List ParseParam) (acc : List String) : List String :=
 /// convention reports every ordinary lowercase argument binder in the corpus
 /// -- which is the false positive that made this rule unusable on its first
 /// end-to-end run.
-#[partial]
+///
+/// Not recursive: it answers one parameter, and the walk over the list is
+/// `param_findings`'s. The `#[partial]` it used to carry was a copy of the
+/// neighbour's, and the metric counts it (`partial_attr_no_self_call`) --
+/// which is a real finding, not a false positive.
 def param_one_finding
     (n : Identifier) (t : ParseTerm) (attrs : List Attribute) (acc : List String)
     : List String :=
@@ -261,9 +266,9 @@ pub def single_ctor_type_findings (kind : ParseDeclKind) : List String :=
     match kind {
         ParseDeclKind.inductive_d pi =>
             match pi {
-                ParseInductive.mk n _ps _t cs _attrs _vis =>
-                    if I64.beq (List.length cs) 1
-                    then List.cons (show_name_path n) List.empty
+                ParseInductive.mk { name, constructors, .. } =>
+                    if I64.beq (List.length constructors) 1
+                    then List.cons (show_name_path name) List.empty
                     else List.empty,
             },
         _ => List.empty,

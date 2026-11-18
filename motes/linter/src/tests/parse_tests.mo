@@ -67,7 +67,7 @@ def parse_rejected (src : String) : Bool :=
 
 /// How many declarations a BARE `decls_skip` call reaches -- the call the bug
 /// was. Used only to keep the fixtures honest about what they exercise.
-#[partial]
+/// Not recursive, so no `#[partial]`.
 def bare_decl_count (src : String) : I64 :=
     match decls_skip src List.empty {
         ParseResult.fail _ => -1,

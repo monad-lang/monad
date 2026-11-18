@@ -200,9 +200,9 @@ pub def lint_parse (path : String) (src : String) : LintParse :=
     match decls_skip (skip_docstrings (skip_spaces src)) List.empty {
         ParseResult.success rem ds =>
             if String.is_empty (skip_docstrings (skip_spaces rem))
-            then lint_ok (mk_lint_file path src ds)
-            else lint_failed (parse_failure_message path),
-        ParseResult.fail _ => lint_failed (parse_failure_message path),
+            then LintParse.lint_ok (mk_lint_file path src ds)
+            else LintParse.lint_failed (parse_failure_message path),
+        ParseResult.fail _ => LintParse.lint_failed (parse_failure_message path),
     }
 
 def mk_lint_file (path : String) (src : String) (ds : List ParseDecl) : LintFile :=
@@ -242,23 +242,26 @@ pub def located_location (l : Located) : Option Location :=
 /// the whole tail rather than stopping: every declaration is still linted,
 /// and one without a range renders as `<file>:-:-`, which is the honest and
 /// visible answer.
-#[partial]
+///
+/// ONE self-recursive def rather than a `pair_decls`/`pair_one` pair. Those
+/// two called EACH OTHER, so neither called itself -- which is what the
+/// termination checker and `scripts/style_metrics.py`'s
+/// `partial_attr_no_self_call` both read, and it forced an unnecessary
+/// `#[partial]` on each. Folding the range test into the `List.cons` arm makes
+/// the recursion direct, so the attribute goes and the check is a real one
+/// again rather than an escape hatch.
 pub def pair_decls
     (ds : List ParseDecl) (rs : List DeclRange) (acc : List Located) : List Located :=
     match ds {
         List.empty => reverse_located acc List.empty,
         List.cons d rest =>
-            pair_one d rest rs acc,
-    }
-
-#[partial]
-def pair_one
-    (d : ParseDecl) (rest : List ParseDecl) (rs : List DeclRange) (acc : List Located)
-    : List Located :=
-    match rs {
-        List.empty => rest_without_ranges rest (List.cons (Located.mk d Option.none) acc),
-        List.cons r rrest =>
-            pair_decls rest rrest (List.cons (Located.mk d (Option.some (decl_range_span r))) acc),
+            match rs {
+                List.empty =>
+                    rest_without_ranges rest (List.cons (Located.mk d Option.none) acc),
+                List.cons r rrest =>
+                    pair_decls rest rrest
+                        (List.cons (Located.mk d (Option.some (decl_range_span r))) acc),
+            },
     }
 
 /// The tail after the ranges run out: every remaining declaration is still
@@ -329,7 +332,8 @@ def one_rule_at
     else names_to_diags path name l (check (decl_kind_of l)) List.empty
 
 /// A located declaration's kind, read once.
-def decl_kind_of (l : Located) : ParseDeclKind := (located_decl l).kind
+def decl_kind_of (l : Located) : ParseDeclKind :=
+    let d : ParseDecl := located_decl l in d.kind
 
 /// The names a rule rejected, as diagnostics. Each shares the declaration's
 /// location: a finding is about the declaration, and `Location`-level spans

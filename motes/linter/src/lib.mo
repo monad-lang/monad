@@ -50,8 +50,9 @@ pub def lint_source (path : String) (src : String) (config : LintConfig) : LintR
             LintResult.mk (lint_file_all config file) Option.none,
     }
 
-/// Every finding in one parsed file, in declaration order.
-#[partial]
+/// Every finding in one parsed file, in declaration order. Not recursive
+/// itself -- it hands the walk to `lint_file_go` -- so it needs no
+/// `#[partial]`, and the metric must not count one here.
 pub def lint_file_all (config : LintConfig) (file : LintFile) : List LintDiagnostic :=
     lint_file_go file config (located_decls file) List.empty
 

@@ -3333,7 +3333,13 @@ def Command.dispatch (cmd : Command) : IO I64 :=
         Command.doc motes output include_private => do {
             run_doc motes (Option.get_or_default "target/docs" output) include_private
         },
-        Command.lint files workspace quiet deny allow list_rules verbose =>
+        // A field pattern, not eight positional binders: `Command`'s variants
+        // have NAMED parameters, so a positional pattern four fields wide is
+        // the `AGENTS.md` style-rule-2 violation (`scripts/style_metrics.py`'s
+        // `wide_positional_pattern_violation`). The names are also the same
+        // ones `cli/src/cli.mo` declares, so the two lists can be read against
+        // each other.
+        Command.lint { files, workspace, quiet, deny, allow, list_rules, verbose } =>
             run_lint files workspace quiet deny allow list_rules verbose,
         Command.print_targets => run_print_targets,
         Command.lsp => run_lsp,
