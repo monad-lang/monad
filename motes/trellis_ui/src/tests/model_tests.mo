@@ -21,12 +21,15 @@ def d (m : Trellis.ModuleNode) (name : String) (kind : String) (attrs : List Str
         vis := "pub", line := 12, attrs := attrs, sort := sort, href := "lang/typecheck/infer.html#def.check",
         docs := if String.beq name "check" then check_docs else "", external := m.external }
 
+def edge_ci : Trellis.Edge := { from := "lang::typecheck::infer::check", to := "lang::typecheck::infer::infer",
+    axis := "b" }
+def edge_im : Trellis.Edge := { from := "lang::typecheck::infer::infer", to := "std::list::List.map", axis := "s" }
+
 def sample : Trellis.Graph :=
     { roots := ["lang"], modules := [m1, m2],
         decls := [d m1 "check" "def" ["partial", "terminating"] "", d m1 "infer" "def" List.empty "",
             d m2 "List.map" "def" List.empty "", d m1 "refl_ok" "def" ["proof"] "Prop"],
-        edges := [{ from := "lang::typecheck::infer::check", to := "lang::typecheck::infer::infer", axis := "b" },
-            { from := "lang::typecheck::infer::infer", to := "std::list::List.map", axis := "s" }],
+        edges := [edge_ci, edge_im],
         refs := 10, resolved := 8, unresolved := 2 }
 
 def round : Result String Trellis.Graph := Trellis.Graph.decode (Trellis.Graph.encode sample)

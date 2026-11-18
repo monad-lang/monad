@@ -424,7 +424,9 @@ def module_of (p : Parsed) : Trellis.ModuleNode :=
         docs := p.src.docs.module_docs }
 
 def parse_all (ss : List Trellis.Source) : List Parsed :=
-    List.map (fn (s : Trellis.Source) => { src := s, named := named_all s.decls }) ss
+    List.map (fn (s : Trellis.Source) =>
+        let p : Parsed := { src := s, named := named_all s.decls } in
+        p) ss
 
 /// The extraction result: the graph, plus every unresolved spelling (most
 /// recent first) for `--verbose`.

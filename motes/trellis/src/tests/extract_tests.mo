@@ -7,7 +7,7 @@ use std::map {HashMap}
 use lang::module {try_parse_decls_strict}
 use lang::types {Decl}
 use trellis_ui::smap {Smap.empty}
-use trellis_ui::model {Trellis.Graph, Trellis.DeclNode, Trellis.Edge}
+use trellis_ui::model {Trellis.Graph, Trellis.DeclNode, Trellis.Edge, Trellis.ModuleNode}
 use lib::extract {Trellis.Source, Trellis.Extracted, Trellis.extract, Trellis.doc_href}
 use lib::load {Trellis.module_of_file}
 use lib::docs {Trellis.docs_of_source}
@@ -40,13 +40,23 @@ pub def helper (x : I64) : I64 := x
 
 def extracted : Trellis.Extracted := Trellis.extract ["demo"] "" [util, main_m, other]
 
-def g : Trellis.Graph := extracted.graph
+// Field reads go through these: the bootstrap host does not resolve a field
+// of a top-level def (`(decls_of g)`), only of a binder.
+def graph_of (e : Trellis.Extracted) : Trellis.Graph := e.graph
+def misses_of (e : Trellis.Extracted) : List String := e.unresolved
+def decls_of (gr : Trellis.Graph) : List Trellis.DeclNode := gr.decls
+def edges_of (gr : Trellis.Graph) : List Trellis.Edge := gr.edges
+def modules_of (gr : Trellis.Graph) : List Trellis.ModuleNode := gr.modules
+def miss_count (gr : Trellis.Graph) : I64 := gr.unresolved
+
+def g : Trellis.Graph := graph_of extracted
 
 def has_decl (id : String) (kind : String) : Bool :=
-    List.any (fn (d : Trellis.DeclNode) => String.beq d.id id && String.beq d.kind kind) g.decls
+    List.any (fn (d : Trellis.DeclNode) => String.beq d.id id && String.beq d.kind kind) (decls_of g)
 
 def has_edge (from : String) (to : String) (axis : String) : Bool :=
-    List.any (fn (e : Trellis.Edge) => String.beq e.from from && String.beq e.to to && String.beq e.axis axis) g.edges
+    List.any (fn (e : Trellis.Edge) => String.beq e.from from && String.beq e.to to && String.beq e.axis axis)
+        (edges_of g)
 
 #[test]
 def test_one_node_per_declaration_kind : Bool :=
@@ -73,13 +83,14 @@ def test_class_method_edge_goes_to_the_class : Bool :=
 
 #[test]
 def test_unknown_names_are_counted_not_guessed : Bool :=
-    g.unresolved >= 1 && List.any (fn (n : String) => String.beq n "mystery") extracted.unresolved
+    (miss_count g) >= 1 && List.any (fn (n : String) => String.beq n "mystery") (misses_of extracted)
         && Bool.not (List.any (fn
-            (e : Trellis.Edge) => String.beq e.from "demo::main::local_only" && String.contains e.to "mystery") g.edges)
+            (e : Trellis.Edge) => String.beq e.from "demo::main::local_only" && String.contains e.to "mystery")
+            (edges_of g))
 
 #[test]
 def test_externals_are_marked : Bool :=
-    List.any (fn (d : Trellis.DeclNode) => String.beq d.id "other::util::helper" && d.external) g.decls
+    List.any (fn (d : Trellis.DeclNode) => String.beq d.id "other::util::helper" && d.external) (decls_of g)
 
 #[test]
 def test_module_of_file : Bool :=
@@ -105,18 +116,18 @@ def noisy_g : Trellis.Extracted := Trellis.extract ["demo"] "" [util, noisy]
 def test_struct_constructor_goes_to_the_struct : Bool :=
     List.any (fn
         (e : Trellis.Edge) => String.beq e.from "demo::noisy::make"
-            && String.beq e.to "demo::noisy::Pt") noisy_g.graph.edges
+            && String.beq e.to "demo::noisy::Pt") (edges_of (graph_of noisy_g))
 
 #[test]
 def test_two_constructors_are_one_edge : Bool :=
     List.length (List.filter (fn (e : Trellis.Edge) =>
         String.beq e.from "demo::noisy::twice" && String.beq e.to "demo::util::Shape"
-            && String.beq e.axis "b") noisy_g.graph.edges) == 1
+            && String.beq e.axis "b") (edges_of (graph_of noisy_g))) == 1
 
 #[test]
 def test_wildcards_and_type_variables_are_not_misses : Bool :=
     Bool.not (List.any (fn
-        (n : String) => String.beq n "_" || String.beq n "A" || String.is_empty n) noisy_g.unresolved)
+        (n : String) => String.beq n "_" || String.beq n "A" || String.is_empty n) (misses_of noisy_g))
 
 // ─── Doc comments ───
 
@@ -139,7 +150,7 @@ def doc_graph : Trellis.Graph :=
     e.graph
 
 def docs_of (name : String) : String :=
-    match List.filter (fn (d : Trellis.DeclNode) => String.beq d.name name) doc_graph.decls {
+    match List.filter (fn (d : Trellis.DeclNode) => String.beq d.name name) (decls_of doc_graph) {
         List.cons d _ => d.docs,
         List.empty => "<missing>",
     }
@@ -155,7 +166,7 @@ def test_struct_docs : Bool := String.beq (docs_of "Point") "A point."
 
 #[test]
 def test_module_docs : Bool :=
-    match doc_graph.modules {
+    match (modules_of doc_graph) {
         List.cons m _ => String.contains m.docs "The demo module." && String.contains m.docs "Second line.",
         List.empty => false,
     }

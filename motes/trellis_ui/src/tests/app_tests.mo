@@ -25,7 +25,8 @@ def html (m : Trellis.Model) : String := Html.to_string (Oak.to_html (Trellis.vi
 
 #[test]
 def test_load_projects_the_module_level : Bool :=
-    String.beq ready.status "ready" && shows "lang::typecheck::infer" ready && ready.shown == 4
+    let m : Trellis.Model := ready in
+    String.beq m.status "ready" && shows "lang::typecheck::infer" ready && m.shown == 4
 
 #[test]
 def test_bad_file_fails_with_reason : Bool :=
@@ -82,7 +83,8 @@ def over_cap : Trellis.Model :=
 
 #[test]
 def test_over_the_cap_shows_the_section_browser : Bool :=
-    over_cap.over == 8 && List.length over_cap.sections == 4 && over_cap.shown == 0
+    let m : Trellis.Model := over_cap in
+    m.over == 8 && List.length m.sections == 4 && m.shown == 0
         && String.contains (html over_cap) "too many to draw at once"
         && String.contains (html over_cap) "lang::typecheck::unify"
 
