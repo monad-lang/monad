@@ -1113,6 +1113,113 @@ def collect_decls (decls : List Decl) (refs : Refs) : Refs :=
         List.cons d rest => collect_decls rest (collect_decl d refs),
     }
 
+// ─── Per-declaration references (tooling) ───────────────────────────
+
+/// One declaration's references, split by WHERE they are written: its
+/// `signature` (types, parameters, constraints, constructor and field types,
+/// an instance's class and arguments) and its `body` (a def's term, field and
+/// method defaults, an instance's method bodies). Each half keeps the
+/// bare/qualified axis `Refs` already carries. Tooling (call and
+/// dependency graphs) reads it; the completeness check does not.
+pub struct DeclRefs {
+    signature : Refs,
+    body : Refs,
+}
+
+def def_signature_refs (d : Def) (refs : Refs) : Refs :=
+    match d {
+        Def.mk { typ, params, constraints, .. } =>
+            collect_constraints constraints (collect_term typ (collect_params params refs)),
+    }
+
+def def_body_refs (d : Def) (refs : Refs) : Refs :=
+    match d { Def.mk { term, .. } => collect_term term refs }
+
+#[partial]
+def defs_body_refs (defs : List Def) (refs : Refs) : Refs :=
+    match defs {
+        List.empty => refs,
+        List.cons d rest => defs_body_refs rest (def_body_refs d refs),
+    }
+
+#[partial]
+def field_types_refs (fields : List StructField) (refs : Refs) : Refs :=
+    match fields {
+        List.empty => refs,
+        List.cons field rest => match field { StructField.mk { typ, .. } => field_types_refs rest
+            (collect_term typ refs) },
+    }
+
+#[partial]
+def field_defaults_refs (fields : List StructField) (refs : Refs) : Refs :=
+    match fields {
+        List.empty => refs,
+        List.cons field rest =>
+            match field {
+                StructField.mk { default, .. } =>
+                    field_defaults_refs rest (match default { Option.some d => collect_term d refs,
+                        Option.none => refs }),
+            },
+    }
+
+#[partial]
+def method_types_refs (methods : List ClassDef) (refs : Refs) : Refs :=
+    match methods {
+        List.empty => refs,
+        List.cons method rest => match method { ClassDef.mk { typ, .. } => method_types_refs rest
+            (collect_term typ refs) },
+    }
+
+#[partial]
+def method_defaults_refs (methods : List ClassDef) (refs : Refs) : Refs :=
+    match methods {
+        List.empty => refs,
+        List.cons method rest =>
+            match method {
+                ClassDef.mk { default, .. } =>
+                    method_defaults_refs rest (match default { Option.some d => collect_term d refs,
+                        Option.none => refs }),
+            },
+    }
+
+def decl_refs_of (signature : Refs) (body : Refs) : DeclRefs := { signature := signature, body := body }
+
+/// `d`'s references, split into signature and body. A declaration that
+/// declares nothing (`use`, `open`, `infix`, a macro generator) has none.
+#[partial]
+pub def decl_refs (d : Decl) : DeclRefs :=
+    match d {
+        Decl.def_d def_ => decl_refs_of (def_signature_refs def_ refs_empty) (def_body_refs def_ refs_empty),
+        Decl.def_macro_d def_ => decl_refs_of refs_empty (def_body_refs def_ refs_empty),
+        Decl.inductive_d ind =>
+            match ind {
+                Inductive.mk { params, typ, constructors, .. } =>
+                    decl_refs_of (collect_ctors constructors (collect_term typ (collect_params params refs_empty)))
+                        refs_empty,
+            },
+        Decl.struct_d st =>
+            match st {
+                Struct.mk { fields, .. } =>
+                    decl_refs_of (field_types_refs fields refs_empty) (field_defaults_refs fields refs_empty),
+            },
+        Decl.class_d cls =>
+            match cls {
+                Class.mk { params, constraints, methods, .. } =>
+                    decl_refs_of
+                        (method_types_refs methods (collect_constraints constraints (collect_params params refs_empty)))
+                        (method_defaults_refs methods refs_empty),
+            },
+        Decl.instance_d ins =>
+            match ins {
+                Instance.mk { cls, constraints, args, defs, .. } =>
+                    decl_refs_of (collect_constraints constraints (collect_terms args (refs_add_bare cls refs_empty)))
+                        (defs_body_refs defs refs_empty),
+            },
+        Decl.scoped_open_d _path _filter inner => decl_refs inner,
+        Decl.macro_call_d name _args => decl_refs_of refs_empty (refs_add_bare (NamePath.mk [name]) refs_empty),
+        _ => decl_refs_of refs_empty refs_empty,
+    }
+
 // ─── Macro invocation names ─────────────────────────────────────────
 
 /// The `#[derive Target]` targets one attribute asks for.
