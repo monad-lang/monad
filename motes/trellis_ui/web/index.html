@@ -1,0 +1,21 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>trellis</title>
+  <meta name="description" content="Explore a Monad codebase's reference graph by mote, module and declaration.">
+  <!-- Served by `trellis serve`: theme variables, the oak_ui sheet and trellis's own rules. -->
+  <link rel="stylesheet" href="./trellis.css">
+</head>
+<body>
+  <div id="app"></div>
+  <noscript>trellis needs JavaScript and WebAssembly.</noscript>
+  <script type="module">
+    import { start } from './web.js';
+    start('./trellis_ui.wasm', '#app').catch((err) => {
+      document.getElementById('app').textContent = 'Could not load trellis: ' + err;
+    });
+  </script>
+</body>
+</html>

@@ -1,0 +1,56 @@
+# trellis_ui: the browser half of trellis, the call graph visualizer.
+#
+# Two layers:
+# - a pure library (`[lib]`): the graph model and its TSV wire codec, the
+#   level/grouping/focus projection to an `oak_ui` graph spec, and the fuzzy
+#   search. The native `trellis` tool reuses it to write the graph file, so
+#   writer and reader share one codec.
+# - a wasm app (`trellis_ui` bin): an Oak program that fetches the graph file
+#   and draws it with `Ui.graph`.
+#
+# The extractor needs `lang`, which cannot be compiled to wasm; that is why
+# the extractor lives in `motes/trellis` and this mote never depends on it.
+[mote]
+name = "trellis_ui"
+version = "0.1.0"
+edition = "2026"
+targets = ["web"]
+
+[lib]
+path = "src/lib.mo"
+
+[[bin]]
+name = "trellis_ui"
+path = "src/main.mo"
+
+[dependencies.init]
+workspace = true
+
+[dependencies.std]
+workspace = true
+
+[dependencies.xml_html]
+workspace = true
+
+[dependencies.web_event]
+workspace = true
+
+[dependencies.oak]
+workspace = true
+
+[dependencies.oak_ui]
+workspace = true
+
+[dependencies.oak_wasm]
+path = "../oak_wasm"
+
+[dependencies.web_wasm]
+path = "../web_wasm"
+
+# Affine-by-default exception, chosen up front (2026-11-18) for the reason
+# oak_ui gives: the app binds one message to more than one listener (a node
+# is selectable by click and by key), which with a generic `Msg` needs a
+# `[Copy Msg]` the Oak program shape does not carry. See
+# plans/type-system/quantitative-types.md.
+[affine]
+mode = "warn"

@@ -85,6 +85,7 @@ members = [
   "motes/acorn",
   "motes/docgen",
   "motes/ply",
+  "motes/trellis_ui",
 ]
 
 # Shared dependency sources, inherited by members with `workspace = true`.
@@ -200,6 +201,9 @@ path = "motes/time"
 
 [workspace.dependencies.toolkit]
 path = "motes/toolkit"
+
+[workspace.dependencies.trellis_ui]
+path = "motes/trellis_ui"
 
 [workspace.dependencies.tui]
 path = "motes/tui"
