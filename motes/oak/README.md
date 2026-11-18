@@ -15,6 +15,7 @@ The pure builder is the primary API. Nothing here performs I/O except
 | Page assembly | `src/html_t.mo` | `HtmlT M I J A`, an index-tracking transformer (`Open`/`Sealed`/`Emitted`) that accumulates `<head>`/`<body>` nodes; `PageM` is the production stack (`ResultT String IO`). |
 | App model | `src/app.mo` | `Program` (init/update/view), `Command` (`none`/`quit`/`dispatch`/`perform`/`after`/`focus`/`after_render`/`batch`; `after_render` is how a canvas app draws, see `motes/oak_wasm/README.md`), `Host` (effect interpreter), `Program.run_batch` (a batch fold that drains deferred dispatches). |
 | SSR | `src/ssr.mo` | `Ssr.render_page`/`render_body`/`to_response`/`to_response_node`/`fragment_response`/`render_io`: an Oak page or fragment to an `http.Response`. |
+| SVG | `src/svg.mo` | `Svg.svg [Svg.view_box 0 0 w h] [...]`, `Svg.g`/`path`/`rect`/`text_`/`marker`/..., integer geometry attributes and `Svg.attr` for the rest. The browser runtime creates everything at or below `svg` in the SVG namespace. |
 | Markup types | re-exported from `xml_html` | `Html.Node`, `Html.Attr`, `Html.to_string`, `Html.beq`. |
 
 ## Example
@@ -88,4 +89,4 @@ are executed by CI's self-hosted web-stack step.
 - Page assembly is for whole documents, not subtrees: `HtmlT` has no
   `element`/`collect` over `List (HtmlT ...)`, because a throwaway page
   would discard head writes.
-- No pretty-printing, SVG namespaces, typed URLs or streaming rendering.
+- No pretty-printing, typed URLs or streaming rendering.

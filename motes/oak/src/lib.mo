@@ -112,3 +112,12 @@ pub use lib::ssr {
     Ssr.render_page, Ssr.render_body, Ssr.to_response, Ssr.to_response_node,
     Ssr.fragment_response, Ssr.render_io
 }
+
+pub use lib::svg {
+    Svg.svg, Svg.g, Svg.path, Svg.line, Svg.rect, Svg.circle, Svg.polyline,
+    Svg.text_, Svg.title, Svg.defs, Svg.marker,
+    Svg.attr, Svg.view_box, Svg.d, Svg.x, Svg.y, Svg.x1, Svg.y1, Svg.x2, Svg.y2,
+    Svg.cx, Svg.cy, Svg.r, Svg.rx, Svg.width, Svg.height, Svg.points,
+    Svg.transform, Svg.translate, Svg.fill, Svg.stroke, Svg.stroke_width,
+    Svg.marker_end, Svg.text_anchor, Svg.dominant_baseline
+}
