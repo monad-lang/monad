@@ -250,6 +250,9 @@ extern int64_t main_monad(int64_t args);
 __attribute__((import_module("monad"), import_name("dom_create")))
 extern int64_t monad_js_dom_create(int64_t ptr, int64_t len);
 
+__attribute__((import_module("monad"), import_name("dom_create_svg")))
+extern int64_t monad_js_dom_create_svg(int64_t ptr, int64_t len);
+
 __attribute__((import_module("monad"), import_name("dom_create_text")))
 extern int64_t monad_js_dom_create_text(int64_t ptr, int64_t len);
 
@@ -390,6 +393,9 @@ extern int64_t monad_js_dom_child_count(int64_t node);
 
 __attribute__((import_module("monad"), import_name("dom_node_type")))
 extern int64_t monad_js_dom_node_type(int64_t node);
+
+__attribute__((import_module("monad"), import_name("dom_in_svg")))
+extern int64_t monad_js_dom_in_svg(int64_t node);
 
 __attribute__((import_module("monad"), import_name("dom_tag_name")))
 extern int64_t monad_js_dom_tag_name(int64_t node, int64_t ptr, int64_t max);
@@ -604,6 +610,10 @@ int64_t web_dom_create(const char* tag) {
     return monad_js_dom_create(web_str_ptr(tag), web_str_len(tag));
 }
 
+int64_t web_dom_create_svg(const char* tag) {
+    return monad_js_dom_create_svg(web_str_ptr(tag), web_str_len(tag));
+}
+
 int64_t web_dom_create_text(const char* text) {
     return monad_js_dom_create_text(web_str_ptr(text), web_str_len(text));
 }
@@ -669,6 +679,10 @@ int64_t web_dom_child_count(int64_t node) {
 
 int64_t web_dom_node_type(int64_t node) {
     return monad_js_dom_node_type(node);
+}
+
+int64_t web_dom_in_svg(int64_t node) {
+    return monad_js_dom_in_svg(node);
 }
 
 /* The host writes the tag/value UTF-8 into the shared scratch buffer and

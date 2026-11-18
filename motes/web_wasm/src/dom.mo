@@ -3,15 +3,19 @@
 
 use lib::types {Node}
 use lib::ffi {
-    dom_create_raw, dom_create_text_raw, dom_create_comment_raw, dom_root_raw, dom_append_raw,
+    dom_create_raw, dom_create_svg_raw, dom_create_text_raw, dom_create_comment_raw, dom_root_raw, dom_append_raw,
     dom_insert_before_raw, dom_remove_raw, dom_replace_raw, dom_set_attr_raw,
     dom_remove_attr_raw, dom_set_text_raw, dom_add_listener_raw, dom_child_raw,
-    dom_child_count_raw, dom_node_type_raw, dom_tag_name_raw, dom_value_raw, dom_query_raw,
+    dom_child_count_raw, dom_node_type_raw, dom_in_svg_raw, dom_tag_name_raw, dom_value_raw, dom_query_raw,
     dom_add_listener_global_raw, dom_remove_listener_global_raw,
     dom_element_at_raw, dom_attr_raw, dom_focus_raw,
 }
 
 pub def Dom.create (tag : String) : IO Node := IO.mk (dom_create_raw tag)
+
+/// An element in the SVG namespace. `Dom.create "rect"` would make an
+/// unknown HTML element that the browser never draws.
+pub def Dom.create_svg (tag : String) : IO Node := IO.mk (dom_create_svg_raw tag)
 
 pub def Dom.text_node (text : String) : IO Node := IO.mk (dom_create_text_raw text)
 
@@ -90,6 +94,13 @@ pub def Dom.child_count (n : Node) : IO I64 := IO.mk (dom_child_count_raw n)
 /// The DOM `nodeType`: 1 element, 3 text, 8 comment, 10 doctype fragment;
 /// 0 for the null handle.
 pub def Dom.node_type (n : Node) : IO I64 := IO.mk (dom_node_type_raw n)
+
+/// Whether a child mounted under `n` belongs in the SVG namespace: `n` is an
+/// SVG element and not a `foreignObject` (whose children are HTML again).
+pub def Dom.in_svg (n : Node) : IO Bool := do {
+    let flag <- IO.mk (dom_in_svg_raw n);
+    return (flag == 1)
+}
 
 /// The element's tag name, LOWERCASE (the host folds the case). Empty for
 /// non-element nodes and the null handle.

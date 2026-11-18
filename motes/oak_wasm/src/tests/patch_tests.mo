@@ -2,7 +2,7 @@
 /// covered end to end by `wasm/web/smoke/spa_smoke.mjs`.
 use std::list {}
 use xml_html::html {Html.Attr, Html.Node}
-use lib::patch {Patch}
+use lib::patch {Patch, Patch.element_in_svg, Patch.children_in_svg}
 
 def text (s : String) : Html.Node := Html.Node.node_text s
 
@@ -363,3 +363,21 @@ def test_kind_ok_adopts_a_doctype_as_a_comment : Bool :=
 def test_kind_ok_never_adopts_a_fragment : Bool :=
     Bool.not (Patch.kind_ok (node_fragment List.empty) 1i64 "div")
         && Bool.not (Patch.kind_ok (node_fragment List.empty) 0i64 "")
+
+// ─── SVG namespace rule (the mount half is DOM-bound) ───
+
+#[test]
+def test_svg_root_is_svg : Bool :=
+    Patch.element_in_svg false "svg" && Patch.children_in_svg false "svg"
+
+#[test]
+def test_html_element_is_not_svg : Bool :=
+    Bool.not (Patch.element_in_svg false "div") && Bool.not (Patch.children_in_svg false "div")
+
+#[test]
+def test_below_svg_stays_svg : Bool :=
+    Patch.element_in_svg true "rect" && Patch.children_in_svg true "g"
+
+#[test]
+def test_foreign_object_children_are_html : Bool :=
+    Patch.element_in_svg true "foreignObject" && Bool.not (Patch.children_in_svg true "foreignObject")

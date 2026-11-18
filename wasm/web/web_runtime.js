@@ -718,6 +718,10 @@ export const host = {
     return addNode(doc().createElement(str(ptr, len)));
   },
 
+  dom_create_svg(ptr, len) {
+    return addNode(doc().createElementNS('http://www.w3.org/2000/svg', str(ptr, len)));
+  },
+
   dom_create_text(ptr, len) {
     return addNode(doc().createTextNode(str(ptr, len)));
   },
@@ -833,6 +837,13 @@ export const host = {
   // ── read-only introspection (hydration, form reads) ──────────────────
   // `Node` is opaque in Monad, so these reads are the only way to ask what
   // a handle points at. A null handle reads nodeType 0 / an empty string.
+  dom_in_svg(node) {
+    const n = nodeById(node);
+    const inside = n && n.namespaceURI === 'http://www.w3.org/2000/svg'
+      && n.localName !== 'foreignObject';
+    return BigInt(inside ? 1 : 0);
+  },
+
   dom_node_type(node) {
     const n = nodeById(node);
     return BigInt(n ? n.nodeType : 0);

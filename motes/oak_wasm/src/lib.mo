@@ -6,7 +6,8 @@
 // `Runtime.tick`; see `fixtures/wasm/oak_spa.mo`.
 
 pub use lib::patch {
-    Patch, Patch.diff, Patch.apply, Patch.clear, Patch.mount_node,
+    Patch, Patch.diff, Patch.apply, Patch.clear, Patch.mount_node, Patch.mount_under,
+    Patch.element_in_svg, Patch.children_in_svg,
     Patch.resolve, Patch.set_attribute,
     Patch.hydrate, Patch.hydrate_root, Patch.insert_at,
 }

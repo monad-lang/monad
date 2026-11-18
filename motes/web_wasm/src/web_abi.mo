@@ -33,6 +33,11 @@ pub struct WebAbi {
 def WebImport.dom_create : WebImport :=
     { module := "monad", name := "dom_create", params := ["i64", "i64"], result := "i64" }
 
+/// An element in the SVG namespace (`createElementNS`): what the patch
+/// mounts for every tag at or below an `svg` root.
+def WebImport.dom_create_svg : WebImport :=
+    { module := "monad", name := "dom_create_svg", params := ["i64", "i64"], result := "i64" }
+
 def WebImport.dom_create_text : WebImport :=
     { module := "monad", name := "dom_create_text", params := ["i64", "i64"], result := "i64" }
 
@@ -85,6 +90,11 @@ def WebImport.dom_child_count : WebImport :=
 /// no Monad-side allocation is spent per node.
 def WebImport.dom_node_type : WebImport :=
     { module := "monad", name := "dom_node_type", params := ["i64"], result := "i64" }
+
+/// 1 when the node's children belong in the SVG namespace: an SVG element
+/// other than `foreignObject`. The patch asks before mounting into a parent.
+def WebImport.dom_in_svg : WebImport :=
+    { module := "monad", name := "dom_in_svg", params := ["i64"], result := "i64" }
 
 def WebImport.dom_tag_name : WebImport :=
     { module := "monad", name := "dom_tag_name", params := ["i64", "i64", "i64"], result := "i64" }
@@ -511,7 +521,8 @@ def WebExport.oak_tick : WebExport := { name := "oak_tick" }
 pub def WebAbi.default : WebAbi :=
     let abi : WebAbi :=
         { imports := [
-            WebImport.dom_create, WebImport.dom_create_text, WebImport.dom_create_comment,
+            WebImport.dom_create, WebImport.dom_create_svg, WebImport.dom_create_text,
+            WebImport.dom_create_comment,
             WebImport.dom_root,
             WebImport.dom_append, WebImport.dom_insert_before, WebImport.dom_remove,
             WebImport.dom_replace, WebImport.dom_set_attr, WebImport.dom_remove_attr,
@@ -519,7 +530,7 @@ pub def WebAbi.default : WebAbi :=
             WebImport.dom_add_listener_global, WebImport.dom_remove_listener_global,
             WebImport.dom_child,
             WebImport.dom_child_count,
-            WebImport.dom_node_type, WebImport.dom_tag_name, WebImport.dom_value,
+            WebImport.dom_node_type, WebImport.dom_in_svg, WebImport.dom_tag_name, WebImport.dom_value,
             WebImport.dom_query,
             WebImport.fetch_begin, WebImport.fetch_poll, WebImport.fetch_status,
             WebImport.fetch_read,

@@ -24,7 +24,8 @@ use xml_html::html {Html.Attr, Html.Node, Html.beq}
 use oak::elements {Html.key_attr}
 use web_wasm::types {Node}
 use web_wasm::dom {
-    Dom.append, Dom.child, Dom.child_count, Dom.comment, Dom.create, Dom.insert_before,
+    Dom.append, Dom.child, Dom.child_count, Dom.comment, Dom.create, Dom.create_svg,
+    Dom.in_svg, Dom.insert_before,
     Dom.node_type, Dom.remove, Dom.remove_attr, Dom.replace, Dom.set_attr, Dom.set_text,
     Dom.tag_name, Dom.text_node,
 }
@@ -442,7 +443,7 @@ def Patch.apply_one (root : Node) (p : Patch) : IO Unit :=
 
 def Patch.apply_insert (root : Node) (path : List I64) (node : Html.Node) : IO Unit := do {
     let parent <- Patch.resolve root (Patch.drop_last path);
-    let fresh <- Patch.mount_node node;
+    let fresh <- Patch.mount_under parent node;
     let anchor <- Dom.child parent (Patch.last_or_zero path);
     Dom.insert_before parent fresh anchor
 }
@@ -466,7 +467,7 @@ def Patch.apply_move (root : Node) (from : List I64) (to : List I64) : IO Unit :
 def Patch.apply_replace (root : Node) (path : List I64) (node : Html.Node) : IO Unit := do {
     let parent <- Patch.resolve root (Patch.drop_last path);
     let old <- Dom.child parent (Patch.last_or_zero path);
-    let fresh <- Patch.mount_node node;
+    let fresh <- Patch.mount_under parent node;
     let _ <- Dom.replace old fresh;
     return unit
 }
@@ -533,14 +534,35 @@ def Patch.clear_n (root : Node) (remaining : I64) : IO Unit :=
     }
     else IO.pure unit
 
-/// Build the DOM for one rendered node.
+/// Build the DOM for one rendered node, as a child of an HTML element.
+pub def Patch.mount_node (node : Html.Node) : IO Node := Patch.mount_in false node
+
+/// Build the DOM for one rendered node that will become a child of
+/// `parent`: an `svg` parent's subtree is created in the SVG namespace.
+pub def Patch.mount_under (parent : Node) (node : Html.Node) : IO Node := do {
+    let svg <- Dom.in_svg parent;
+    Patch.mount_in svg node
+}
+
+/// The namespace rule, in one place: an element is SVG when it is `svg`
+/// itself or sits below one; a `foreignObject`'s children are HTML again.
+pub def Patch.element_in_svg (svg : Bool) (tag : String) : Bool :=
+    svg || String.beq tag "svg"
+
+pub def Patch.children_in_svg (svg : Bool) (tag : String) : Bool :=
+    Patch.element_in_svg svg tag && Bool.not (String.beq tag "foreignObject")
+
+def Patch.create (svg : Bool) (tag : String) : IO Node :=
+    if Patch.element_in_svg svg tag then Dom.create_svg tag else Dom.create tag
+
+/// `svg` is whether the node's parent puts it in the SVG namespace.
 #[partial]
-pub def Patch.mount_node (node : Html.Node) : IO Node :=
+def Patch.mount_in (svg : Bool) (node : Html.Node) : IO Node :=
     match node {
-        Html.Node.node_element tag attrs children => Patch.mount_element tag attrs children,
-        Html.Node.node_void tag attrs => Patch.mount_void tag attrs,
+        Html.Node.node_element tag attrs children => Patch.mount_element svg tag attrs children,
+        Html.Node.node_void tag attrs => Patch.mount_void svg tag attrs,
         Html.Node.node_text content => Dom.text_node content,
-        Html.Node.node_raw_text tag attrs content => Patch.mount_raw tag attrs content,
+        Html.Node.node_raw_text tag attrs content => Patch.mount_raw svg tag attrs content,
         // `Dom` has no innerHTML primitive, so raw markup that reaches the
         // live DOM is shown as its literal text. SSR (`Html.to_string`) keeps
         // it verbatim; see `adopt_type`, which never adopts it.
@@ -549,26 +571,27 @@ pub def Patch.mount_node (node : Html.Node) : IO Node :=
         // A doctype has no place inside an element; a comment keeps the
         // path model intact and renders nothing.
         Html.Node.node_doctype declaration => Dom.comment (String.concat "DOCTYPE " declaration),
-        Html.Node.node_fragment children => Patch.mount_fragment children,
+        Html.Node.node_fragment children => Patch.mount_fragment svg children,
     }
 
 #[terminating]
 #[partial]
-def Patch.mount_element (tag : String) (attrs : List Html.Attr) (children : List Html.Node) : IO Node := do {
-    let element <- Dom.create tag;
+def Patch.mount_element (svg : Bool) (tag : String) (attrs : List Html.Attr)
+    (children : List Html.Node) : IO Node := do {
+    let element <- Patch.create svg tag;
     let _ <- Patch.apply_attrs element attrs;
-    let _ <- Patch.append_children element children;
+    let _ <- Patch.append_children (Patch.children_in_svg svg tag) element children;
     return element
 }
 
-def Patch.mount_void (tag : String) (attrs : List Html.Attr) : IO Node := do {
-    let element <- Dom.create tag;
+def Patch.mount_void (svg : Bool) (tag : String) (attrs : List Html.Attr) : IO Node := do {
+    let element <- Patch.create svg tag;
     let _ <- Patch.apply_attrs element attrs;
     return element
 }
 
-def Patch.mount_raw (tag : String) (attrs : List Html.Attr) (content : String) : IO Node := do {
-    let element <- Dom.create tag;
+def Patch.mount_raw (svg : Bool) (tag : String) (attrs : List Html.Attr) (content : String) : IO Node := do {
+    let element <- Patch.create svg tag;
     let _ <- Patch.apply_attrs element attrs;
     let _ <- Dom.set_text element content;
     return element
@@ -576,23 +599,24 @@ def Patch.mount_raw (tag : String) (attrs : List Html.Attr) (content : String) :
 
 /// A fragment has no element of its own; v1 wraps it in a plain container so
 /// every rendered tree maps onto exactly one DOM node and paths stay
-/// positional. Hydration that ADOPTS server nodes is the follow-up.
+/// positional. Hydration that ADOPTS server nodes is the follow-up. Inside
+/// SVG the container is a `g`, which groups without drawing anything.
 #[terminating]
 #[partial]
-def Patch.mount_fragment (children : List Html.Node) : IO Node := do {
-    let element <- Dom.create "div";
+def Patch.mount_fragment (svg : Bool) (children : List Html.Node) : IO Node := do {
+    let element <- if svg then Dom.create_svg "g" else Dom.create "div";
     let _ <- Dom.set_attr element "data-oak-fragment" "";
-    let _ <- Patch.append_children element children;
+    let _ <- Patch.append_children svg element children;
     return element
 }
 
 #[terminating]
-def Patch.append_children (parent : Node) (children : List Html.Node) : IO Unit := match children {
+def Patch.append_children (svg : Bool) (parent : Node) (children : List Html.Node) : IO Unit := match children {
     List.empty => IO.pure unit,
     List.cons child rest => do {
-        let node <- Patch.mount_node child;
+        let node <- Patch.mount_in svg child;
         let _ <- Dom.append parent node;
-        Patch.append_children parent rest
+        Patch.append_children svg parent rest
     },
 }
 
@@ -727,7 +751,7 @@ def Patch.hydrate_adopt (parent : Node) (node : Html.Node) (existing : Node) (in
 }
 
 def Patch.hydrate_fresh (parent : Node) (node : Html.Node) (index : I64) : IO Node := do {
-    let fresh <- Patch.mount_node node;
+    let fresh <- Patch.mount_under parent node;
     let _ <- Patch.insert_at parent index fresh;
     IO.pure fresh
 }

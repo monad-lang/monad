@@ -178,6 +178,13 @@ Apply order is the invariant the generator relies on: every patch is
 applied to the DOM left by the previous one, and each apply performs one
 DOM mutation after resolving its indices.
 
+**SVG.** An `svg` element and everything below it is created with
+`Dom.create_svg` (`createElementNS`), so `oak::svg` views draw live; a
+`foreignObject`'s children are HTML again (`Patch.element_in_svg`,
+`Patch.children_in_svg`). A node mounted by `insert`/`replace` asks its
+parent (`Dom.in_svg`), so a re-mount inside a drawing stays in the SVG
+namespace. A fragment inside SVG is wrapped in a `g`, not a `div`.
+
 ## Hydration
 
 `Runtime.mount` ADOPTS a matching server-rendered tree instead of clearing

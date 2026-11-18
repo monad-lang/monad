@@ -15,7 +15,7 @@ pub use lib::glue {Glue.loader}
 pub use lib::shell {ShellOptions, Shell.default_options, Shell.index_html}
 
 pub use lib::dom {
-    Dom.create, Dom.text_node, Dom.comment, Dom.root, Dom.append, Dom.insert_before,
+    Dom.create, Dom.create_svg, Dom.in_svg, Dom.text_node, Dom.comment, Dom.root, Dom.append, Dom.insert_before,
     Dom.remove, Dom.replace, Dom.set_attr, Dom.remove_attr, Dom.set_text,
     Dom.on, Dom.on_with, Dom.on_window, Dom.off_window, Dom.on_document,
     Dom.off_document, Dom.on_frame, Dom.off_frame, Dom.child, Dom.child_count,

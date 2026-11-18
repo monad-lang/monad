@@ -308,6 +308,13 @@ export function installDocument() {
       stub.createdCount += 1;
       return stub.lastCreated;
     },
+    createElementNS(ns, tag) {
+      stub.lastCreated = new FakeNode(1, tag);
+      stub.lastCreated.namespaceURI = ns;
+      stub.lastCreated.localName = tag;
+      stub.createdCount += 1;
+      return stub.lastCreated;
+    },
     createTextNode(text) {
       stub.lastCreated = new FakeNode(3, '#text');
       stub.lastCreated.nodeValue = text;

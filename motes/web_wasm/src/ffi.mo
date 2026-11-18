@@ -23,6 +23,9 @@ use std::ref {Ref}
 #[extern "c" {link_name := "web_dom_create"}]
 def dom_create_raw (tag : String) : RawIO Node
 
+#[extern "c" {link_name := "web_dom_create_svg"}]
+def dom_create_svg_raw (tag : String) : RawIO Node
+
 #[extern "c" {link_name := "web_dom_create_text"}]
 def dom_create_text_raw (text : String) : RawIO Node
 
@@ -73,6 +76,9 @@ def dom_child_count_raw (n : Node) : RawIO I64
 /// `dom_tag_name_raw` is lowercase -- the host folds the case.
 #[extern "c" {link_name := "web_dom_node_type"}]
 def dom_node_type_raw (n : Node) : RawIO I64
+
+#[extern "c" {link_name := "web_dom_in_svg"}]
+def dom_in_svg_raw (n : Node) : RawIO I64
 
 #[extern "c" {link_name := "web_dom_tag_name"}]
 def dom_tag_name_raw (n : Node) : RawIO String
