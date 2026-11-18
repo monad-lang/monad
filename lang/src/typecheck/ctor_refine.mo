@@ -639,7 +639,8 @@ def owner_named (scope : Scope) (name : NamePath) : Option Inductive :=
         Result.err _ => Option.none,
     }
 
-def intro_ctor_in (scope : Scope) (owner : Option Inductive) (bare : Identifier) (args : List Term) : Option IntroCtor :=
+def intro_ctor_in (scope : Scope) (owner : Option Inductive) (bare : Identifier) (args : List Term)
+    : Option IntroCtor :=
     match owner {
         Option.none => Option.none,
         Option.some ind =>
@@ -730,7 +731,9 @@ def arg_indices (scope : Scope) (arg_type : Term -> Option Term) (ind : Inductiv
         Option.none =>
             match arg_type a {
                 Option.some t =>
-                    if is_family_type ind t then Option.some (family_indices ind (index_positions ind) t) else Option.none,
+                    if is_family_type ind t
+                    then Option.some (family_indices ind (index_positions ind) t)
+                    else Option.none,
                 Option.none => Option.none,
             },
     }
