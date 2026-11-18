@@ -431,7 +431,7 @@ def dotted_tail (s : String) : String :=
     if I64.lt i 0 then s else String.slice s (i + 1) (String.length s - i - 1)
 
 #[terminating]
-def present_args (args : List (Option Term)) : List Term :=
+pub def present_args (args : List (Option Term)) : List Term :=
     match args {
         List.empty => List.empty,
         List.cons a rest =>

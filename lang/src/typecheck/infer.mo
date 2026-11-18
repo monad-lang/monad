@@ -43,9 +43,9 @@ use lang::scope {
 }
 use lib::typecheck::name_subst {name_subst_term}
 use lib::typecheck::ctor_refine {
-    IndexMatch, IndexSolution, IntroCtor, MatchEnv, has_refinement, index_locals, index_positions,
-    intro_clash, intro_ctor, intro_index_bindings, intro_indices, nat_literal_bound, nat_literal_term, refine_expected,
-    refine_field_types, solve_ctor, with_indices,
+    IndexMatch, IndexSolution, IntroCtor, MatchEnv, apply_subst, ctor_index_patterns, has_refinement, index_locals,
+    index_positions, intro_clash, intro_ctor, intro_index_bindings, intro_indices, nat_literal_bound,
+    nat_literal_term, refine_expected, refine_field_types, solve_ctor, with_indices,
 }
 use lib::typecheck::subst {beta_reduce, term_abstract_var, term_permute, term_subst, term_shift, term_shift_above}
 use lib::typecheck::levels {solve_levels, subst_levels_term}
@@ -6016,7 +6016,7 @@ def try_type_check_con_call (app_term : Term) (expected_type : Term) (scope : Sc
                                                                                     Option.some h => String.beq (identifier_tail h) (identifier_tail (inductive_bare_name ind)),
                                                                                     Option.none => false,
                                                                                 } in
-                                                                            match (if usable && Bool.not expected_names then con_applied_result_type ind final_bindings else Option.none) {
+                                                                            match (if usable && Bool.not expected_names then con_call_result_type ind ctor final_bindings else Option.none) {
                                                                                 Option.some result_typ =>
                                                                                     let c : Con := Con.mk (struct_lit_con_name con_name) (inductive_type_path ind) (List.length params) (wrap_all_some elab_args) in
                                                                                     Option.some (ok (mk_typed (Term.con c) result_typ)),
@@ -6088,6 +6088,22 @@ def con_call_check_args_solving (ind : Inductive) (args : List Term) (params : L
 #[partial]
 def inductive_param_names (ind : Inductive) : List Identifier :=
     match ind { Inductive.mk _ params _ _ _ _ => param_names params }
+
+/// A constructor call's applied result: the family over the bound params, with
+/// an indexed family's indices taken from the constructor's declared return.
+/// `Vec.cons a v` with `len := n` is at `Vec (Nat.succ n) A`, not the header's
+/// `Vec n A` (ISSUE-11).
+def con_call_result_type (ind : Inductive) (ctor : InductConstructor) (bindings : List (Pair Identifier Term))
+    : Option Term :=
+    let positions : List I64 := index_positions ind in
+    match con_applied_result_type ind bindings {
+        Option.none => Option.none,
+        Option.some header =>
+            if List.is_empty positions then Option.some header
+            else
+                let idx : List Term := List.map (apply_subst bindings) (ctor_index_patterns ind ctor positions) in
+                Option.some (with_indices header positions idx),
+    }
 
 /// `ind`'s head applied to every one of its own params, substituted with
 /// the bindings the call site solved (`Option I64` for `some 42`).

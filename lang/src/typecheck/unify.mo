@@ -1,7 +1,8 @@
 use lib::types {
-    LocalScope, Scope, Similar, SortLevel, Term, TypeError, binder_is_explicit,
-    binder_name, cubical_prim_eq, level_le, sentinel, sort_level_of, term_peel
+    Con, DebugName, Identifier, LocalScope, Scope, Similar, SortLevel, Term, TypeError, binder_is_explicit,
+    binder_name, cubical_prim_eq, level_le, npath_last, sentinel, sort_level_of, term_peel
 }
+use lib::typecheck::ctor_refine {present_args}
 use lib::typecheck::subst {term_shift}
 use lib::typecheck::whnf {whnf}
 
@@ -306,6 +307,7 @@ def unify_sort (a : Term) (l1 : SortLevel) (b : Term) (scope : Scope) (locals : 
 /// The mismatch is reported against the original terms too, for the
 /// same reason in reverse: an error naming a term the user never wrote
 /// is worse than one naming the term they did.
+#[terminating]
 def unify_stuck (a : Term) (b : Term) (scope : Scope) (locals : LocalScope) (reduce : Bool) : Result TypeError Term :=
     // The O(1) guard matters. This path is not rare: `try_type_check_
     // def_call` (`lang/typecheck/infer.mo`) unifies a call's return
@@ -313,7 +315,9 @@ def unify_stuck (a : Term) (b : Term) (scope : Scope) (locals : LocalScope) (red
     // control flow, so a failing `unify` is a routine event, not an
     // error about to be reported. Checking the two HEADS before
     // reducing keeps the cost of that path where it was.
-    if not reduce || not (reducible a || reducible b) then
+    if reduce && con_spine_equal a b scope locals then
+        ok a
+    else if not reduce || not (reducible a || reducible b) then
         err (TypeError.mismatch a b)
     else
         match unify_go (term_peel (whnf scope locals a)) (term_peel (whnf scope locals b)) scope locals false {
@@ -337,3 +341,62 @@ def reducible (t : Term) : Bool :=
         Term.var idx _ => I64.beq idx sentinel,
         _ => false,
     }
+
+/// One constructor application in its two spellings: the `Term.con`
+/// `try_type_check_con_call` elaborates `Option.some a` to, and the
+/// application spine of the constructor's name a declared type keeps.
+/// Compared argument by argument (ISSUE-11).
+#[terminating]
+def con_spine_equal (a : Term) (b : Term) (scope : Scope) (locals : LocalScope) : Bool :=
+    match term_peel a {
+        Term.con c => con_matches_spine c b scope locals,
+        _ =>
+            match term_peel b {
+                Term.con c => con_matches_spine c a scope locals,
+                _ => false,
+            },
+    }
+
+#[terminating]
+def con_matches_spine (c : Con) (t : Term) (scope : Scope) (locals : LocalScope) : Bool :=
+    match spine_of (term_peel t) List.empty {
+        Pair.pair head args =>
+            match term_peel head {
+                Term.var k dbg =>
+                    I64.beq k sentinel && head_names_con c dbg
+                        && unify_cubical_args (present_args c.args) args scope locals,
+                _ => false,
+            },
+    }
+
+/// `f x y` as `(f, [x, y])`.
+#[terminating]
+def spine_of (t : Term) (acc : List Term) : Pair Term (List Term) :=
+    match t {
+        Term.app f x => spine_of (term_peel f) (List.cons x acc),
+        _ => Pair.pair t acc,
+    }
+
+/// `Option.some` or a bare `some` names `c`; a written qualifier must be the
+/// constructor's own family.
+def head_names_con (c : Con) (dbg : DebugName) : Bool :=
+    match dbg {
+        DebugName.named i =>
+            let s : String := identifier_text i in
+            let dot : I64 := String.find_last s "." in
+            let tail : String := if I64.lt dot 0 then s else String.slice s (dot + 1) (String.length s - dot - 1) in
+            String.beq tail (identifier_text c.name)
+                && (I64.lt dot 0 || qualifier_is_family (String.slice s 0 dot) c),
+        _ => false,
+    }
+
+def qualifier_is_family (q : String) (c : Con) : Bool :=
+    let qdot : I64 := String.find_last q "." in
+    let qtail : String := if I64.lt qdot 0 then q else String.slice q (qdot + 1) (String.length q - qdot - 1) in
+    match npath_last c.typ_name {
+        Option.some last => String.beq qtail (identifier_text last),
+        Option.none => false,
+    }
+
+def identifier_text (i : Identifier) : String :=
+    match i { Identifier.id s => s }
