@@ -282,6 +282,14 @@ echo "== web: oak_ui explorer (stories, knobs, themes, persisted prefs, modal) =
     -o "$tmp/oak_ui_book.wasm" --no-cache
 node wasm/web/smoke/oak_ui_book_smoke.mjs "$tmp/oak_ui_book.wasm"
 
+echo "== web: trellis UI (graph fetch, SVG namespace, fuzzy pick) =="
+# trellis's browser half end to end: polls a stub `graph.tsv` in, draws the
+# module graph as SVG (every element below <svg> in the SVG namespace),
+# fuzzy-picks a declaration and redraws without leaving the namespace.
+"$MONAD" build --target wasm32-unknown-unknown motes/trellis_ui --bin trellis_ui \
+    -o "$tmp/trellis_ui.wasm" --no-cache
+node wasm/web/smoke/trellis_ui_smoke.mjs "$tmp/trellis_ui.wasm"
+
 echo "== output suffix (build without -o) =="
 # The same rule must name the cache destination and the linked artifact.
 "$MONAD" build --target wasm32-unknown-unknown fixtures/wasm/hello.mo \

@@ -1,0 +1,66 @@
+# trellis: a call graph visualizer for Monad code.
+#
+# `trellis extract <mote>...` parses every module of the named motes (and,
+# through the compiler's own loader, everything they import), resolves each
+# declaration's references, and writes the graph in trellis_ui's `trellis 1`
+# format. `trellis serve <mote>...` extracts once and serves the browser UI
+# (built by scripts/build-trellis-ui.sh) together with the graph.
+#
+# The plan is plans/library-ideas/trellis.md.
+
+[mote]
+name = "trellis"
+version = "0.1.0"
+edition = "2026"
+
+[lib]
+path = "src/lib.mo"
+
+[[bin]]
+name = "trellis"
+path = "src/main.mo"
+
+[dependencies.init]
+workspace = true
+
+[dependencies.std]
+workspace = true
+
+# The parser and module loader (`load_modules_from_main`), the AST, and
+# `use_completeness::decl_refs` -- each declaration's written references.
+[dependencies.lang]
+workspace = true
+
+# `llvm` and `runtime` for the reason docgen's manifest gives: `lang::module`
+# reaches into codegen, codegen into `llvm`, and the module graph does not
+# resolve without them.
+[dependencies.llvm]
+workspace = true
+
+[dependencies.runtime]
+workspace = true
+
+# The graph model and its wire codec, shared with the browser UI, and the
+# stylesheet `serve` hands out.
+[dependencies.trellis_ui]
+workspace = true
+
+[dependencies.oak_ui]
+workspace = true
+
+[dependencies.clap]
+workspace = true
+
+[dependencies.http]
+workspace = true
+
+[dependencies.moon]
+workspace = true
+
+# Affine-by-default exception (2026-11-18): the extractor walks lang's AST
+# (`Decl`, `Instance`, `Term`), none of which is `Copy`, reading a node's
+# fields and passing the node on. lang itself, toolkit and lsp -- the other
+# consumers of that AST -- carry the same table. Delete it when lang's AST
+# types gain `Copy`/`Shared` handling. See plans/type-system/quantitative-types.md.
+[affine]
+mode = "warn"

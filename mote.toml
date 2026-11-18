@@ -86,6 +86,7 @@ members = [
   "motes/docgen",
   "motes/ply",
   "motes/trellis_ui",
+  "motes/trellis",
 ]
 
 # Shared dependency sources, inherited by members with `workspace = true`.
