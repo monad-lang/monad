@@ -9,7 +9,7 @@
 /// re-renders that same history into its own summarization prompt, paying
 /// for it twice before anything shrinks.
 use weaver::fold {
-    Fold.tail_budget, Fold.fits, Fold.digest_body, Fold.digest_note,
+    Fold.tail_budget, Fold.resume_budget, Fold.fits, Fold.digest_body, Fold.digest_note,
     Fold.pointer_line, Fold.fold_session,
 }
 use weaver::compact {Compact.keep_budget, Compact.threshold}
@@ -235,3 +235,27 @@ def test_the_pointer_names_the_block_the_history_starts_at : Bool :=
 /// `JsonNull`: the tool_use input of a call whose arguments do not matter
 /// to the digest.
 def JsonNull : Json := Json.make_null
+
+/// The setting beats the window-derived default: an explicit `resume_fold`
+/// is the budget, whether it is smaller OR larger than the window's share.
+#[test]
+def test_resume_budget_prefers_the_setting : Bool :=
+    Fold.resume_budget (Option.some 77i64) 128000i64 80i64 == 77i64
+        && Fold.resume_budget (Option.none) 128000i64 80i64 == Fold.tail_budget 128000i64 80i64
+
+/// The setting's own off switch: `resume_fold = 0` disables folding even on
+/// a wide window, and a zero window keeps it off with no setting.
+#[test]
+def test_resume_budget_has_an_off_switch : Bool :=
+    Fold.resume_budget (Option.some 0i64) 128000i64 80i64 == 0i64
+        && Fold.resume_budget (Option.none) 0i64 80i64 == 0i64
+        && Fold.resume_budget (Option.none) 128000i64 0i64 == 0i64
+
+/// The zero-budget spellings actually disable folding end to end.
+#[test]
+def test_a_zero_resume_budget_does_not_fold : Bool :=
+    let s : Session := session_with [user_msg (big 4000i64), assistant_msg (big 4000i64)] in
+    match Fold.fold_session s history_dir 1i64 (Fold.resume_budget (Option.some 0i64) 128000i64 80i64) {
+        Option.none => true,
+        Option.some _ => false,
+    }

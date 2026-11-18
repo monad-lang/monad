@@ -37,7 +37,7 @@ use weaver::commands {
     Commands.autocompact, Commands.last_assistant_text, Commands.current_plan,
     Commands.plan_after_turn, Commands.setting_rows, Commands.cycle_setting, Commands.apply_setting, SettingRow, SettingKind,
     SessionPage, Commands.session_page, Commands.sessions_for, Commands.turns_label, Commands.turn_context,
-    Commands.store_turn_plan, Commands.join_notes, Commands.note_into_state, Commands.persist_note, Commands.skill_turn, set_max_tokens,
+    Commands.store_turn_plan, Commands.join_notes, Commands.note_into_state, Commands.persist_note, Commands.skill_turn, set_max_tokens, Commands.send_history_for,
 }
 use log::logger {Logger}
 use weaver::policy {Mode, Mode.show, Mode.cycle, Mode.is_auto, Policy.decide, Policy.unguarded, Decision}
@@ -1787,7 +1787,8 @@ def drive_tui (log : Option Logger) (gen : I64) (st : WeaverState) (text : Strin
         let approver : Service ApproverConfig := Approver.linear policy_gate;
         let gated : RunState := { with_task with gate := Approver.gate approver,
             emit := progress_live log st.store, on_usage := on_usage,
-            should_stop := stop, inbox := Inbox.seam st.store, side_spend := Subagent.drain spend, stopped := false };
+            should_stop := stop, inbox := Inbox.seam st.store, side_spend := Subagent.drain spend, stopped := false,
+            send_history := Commands.send_history_for st };
         let ready : RunState := append_user gated text;
         ResultT.run (drive_loop ready)
     })

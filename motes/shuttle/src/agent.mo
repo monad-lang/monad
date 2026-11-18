@@ -24,7 +24,7 @@ use init::transformers {ResultT}
 use shuttle::session {Session}
 use shuttle::registry {ToolRegistry}
 use shuttle::gate {Capability, Gate}
-use shuttle::message {Usage}
+use shuttle::message {Message, Usage}
 use shuttle::message_types {StopReason}
 
 // The protocol's phantom phase markers.
@@ -68,6 +68,12 @@ pub struct RunState {
     /// Spend made outside the model calls (a subagent's), drained after
     /// every tool dispatch into `session.spent`.
     side_spend : Unit -> IO Usage,
+    /// The per-REQUEST projection of the history handed to the wire: the
+    /// stored session stays append-only (turn deltas assume it), while a
+    /// caller may trim what one call actually sends. The default is the
+    /// IDENTITY, so a headless run sends byte-for-byte what it stored;
+    /// weaver installs `Context.trim` here.
+    send_history : List Message -> List Message := silent_send_history,
     /// Set when the loop ended because `should_stop` fired. The session
     /// is a normal partial result, never an error.
     stopped : Bool,
@@ -83,6 +89,9 @@ pub def silent_usage (u : Usage) : IO Unit := IO.pure unit
 
 /// The stop seam's default: never stop.
 pub def silent_stop (u : Unit) : IO Bool := IO.pure false
+
+/// The send-history seam's default: the stored history, unchanged.
+pub def silent_send_history (history : List Message) : List Message := history
 
 /// The inbox seam's default: nothing ever arrives.
 pub def silent_inbox (u : Unit) : IO (List String) := IO.pure List.empty

@@ -18,7 +18,7 @@ use json::json {Json}
 use std::concurrent::combine {sleepIO}
 use std::io {IO.current_time, IO.file_exists}
 use std::list {List.any, List.intercalate}
-use std::path {Path, Path.join, Path.to_string}
+use std::path {Path, Path.child, Path.to_string}
 use std::process {exec_cmd}
 use std::test {Test.write_fixture}
 use shuttle::message {Message, Usage}
@@ -154,17 +154,16 @@ def test_session (turns : I64) : Session :=
 pub def session_dir (sessions : String) (id : String) : Path :=
     Store.session_dir (Path.path sessions) id
 
-def transcript_dir (dir : Path) : Path := Path.join dir (Path.path "transcript")
+def transcript_dir (dir : Path) : Path := Path.child dir "transcript"
 
-def history_dir (dir : Path) : Path := Path.join dir (Path.path "history")
+def history_dir (dir : Path) : Path := Path.child dir "history"
 
 def block_path (dir : Path) (seq : I64) : Path :=
-    Path.join (transcript_dir dir)
-        (Path.path (String.concat (Store.pad12 seq) ".json"))
+    Path.child (transcript_dir dir) (String.concat (Store.pad12 seq) ".json")
 
 pub def history_block_exists (dir : Path) (seq : I64) : IO Bool :=
     IO.file_exists
-        (Path.join (history_dir dir) (Path.path (String.concat (Store.pad12 seq) ".json")))
+        (Path.child (history_dir dir) (String.concat (Store.pad12 seq) ".json"))
 
 /// How a synthesized session's lines are made: a constant text, or a prefix,
 /// zero-padded counter and suffix. A value (not a function) keeps the store
@@ -244,7 +243,7 @@ pub def write_generated_session (sessions : String) (id : String)
         blocks := List.reverse st.blocks
     };
     let ok1 <- Test.write_fixture
-        (Path.join tdir (Path.path "index.json"))
+        (Path.child tdir "index.json")
         (Json.to_string (Store.encode_index idx));
     let meta : StoreMeta := {
         session := test_session 0,
@@ -257,9 +256,76 @@ pub def write_generated_session (sessions : String) (id : String)
         description := description
     };
     let ok2 <- Test.write_fixture
-        (Path.join dir (Path.path "meta.json"))
+        (Path.child dir "meta.json")
         (Json.to_string (Store.encode_meta meta));
     return (Bool.and (Bool.and st.ok ok1) ok2)
+}
+
+// ── Synthetic MODEL HISTORY (what a resume folds) ────────────────────────
+// `write_generated_session` fills the visible TRANSCRIPT only; the model
+// history a resume re-uploads lives in `history/<seq>.json`. These write
+// that half with the real `Session.messages_to_json` codec, so a resume has
+// something to fold.
+
+#[partial]
+def hist_msgs_go (i : I64) (n : I64) (bytes : I64) (acc : List Message) : List Message :=
+    if Bool.not (I64.lt i n) then List.reverse acc
+    else
+        let body := String.concat (String.concat "HIST-" (I64.to_string i)) (String.repeat "x" bytes) in
+        let even := i - (i / 2) * 2 == 0 in
+        let m : Message := {
+            role := if even then Role.user else Role.assistant,
+            content := List.cons (Content.text body) List.empty
+        } in
+        hist_msgs_go (i + 1) n bytes (List.cons m acc)
+
+/// `n` alternating user/assistant messages, each `bytes`-long, oldest first.
+pub def hist_msgs (n : I64) (bytes : I64) : List Message := hist_msgs_go 0 n bytes List.empty
+
+/// One history block at `seq` (1-based), holding `ms`.
+pub def write_history_block (dir : Path) (seq : I64) (ms : List Message) : IO Bool :=
+    Test.write_fixture
+        (Path.child (history_dir dir) (String.concat (Store.pad12 seq) ".json"))
+        (Json.to_string (Session.messages_to_json ms))
+
+/// A session whose MODEL HISTORY is `blocks` blocks of `per_block`
+/// messages: the transcript is written too (so the TUI has a frame), and
+/// the meta's `history_next`/`history_base` span the blocks, which is what
+/// `Store.load_history_seq` walks.
+pub def write_history_session (sessions : String) (id : String)
+    (blocks : I64) (per_block : I64) (bytes : I64) : IO Bool := do {
+    let ok0 <- write_generated_session sessions id (Option.some "History session")
+        (Option.some "a long model history") 1000 3
+        (LineSpec.fixed "HISTORY-TRANSCRIPT");
+    if Bool.not ok0 then IO.pure false
+    else do {
+        let dir := session_dir sessions id;
+        let ms := hist_msgs per_block bytes;
+        let ok1 <- write_history_blocks dir blocks ms 1 true;
+        let meta : StoreMeta := {
+            session := test_session 0,
+            created := 1000,
+            updated := 1000,
+            history_next := blocks + 1,
+            history_base := 1,
+            plan := Option.none,
+            name := Option.some "History session",
+            description := Option.some "a long model history"
+        };
+        let ok2 <- Test.write_fixture
+            (Path.child dir "meta.json")
+            (Json.to_string (Store.encode_meta meta));
+        IO.pure (Bool.and ok1 ok2)
+    }
+}
+
+#[partial]
+def write_history_blocks (dir : Path) (blocks : I64) (ms : List Message) (seq : I64) (acc : Bool) : IO Bool := do {
+    if Bool.not (I64.lt seq (blocks + 1)) then IO.pure acc
+    else do {
+        let ok <- write_history_block dir seq ms;
+        write_history_blocks dir blocks ms (seq + 1) (Bool.and acc ok)
+    }
 }
 
 // ── Store readers used as assertions ─────────────────────────────────────
@@ -371,3 +437,34 @@ pub def newest_new (sessions : String) (before : List String) : IO (Option Strin
     let infos <- Store.list_sessions (Path.path sessions);
     return (first_new infos before)
 }
+
+/// The message count a resume would hand the model: `Store.load_session`
+/// replays every block from `history_base`, exactly the number the fold is
+/// there to bound. `0 - 1` when the session cannot be loaded.
+pub def history_len (dir : Path) : IO I64 := do {
+    let r <- Store.load_session dir;
+    match r {
+        Result.err _ => IO.pure (0 - 1),
+        Result.ok s => IO.pure (List.length s.history)
+    }
+}
+
+/// The first history message's text, or "" (the digest a fold wrote is a
+/// SYSTEM message, so this is where it shows).
+pub def history_first_text (dir : Path) : IO String := do {
+    let r <- Store.load_session dir;
+    match r {
+        Result.err _ => IO.pure "",
+        Result.ok s => match s.history {
+            List.empty => IO.pure "",
+            List.cons m _ => IO.pure (message_text m)
+        }
+    }
+}
+
+#[partial]
+def message_text (m : Message) : String :=
+    match m.content {
+        List.empty => "",
+        List.cons c _ => match c { Content.text s => s, _ => "" }
+    }

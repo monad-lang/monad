@@ -4,9 +4,15 @@
 // Ported from pty_repro_resume.py (retired).
 use pty::spawn {Pty, Output}
 use pty::check {Check.report}
-use weaver::pty_support {run_gated, with_root, spawn_args, report_screen, found_at_row, pos_row}
-use weaver::pty_fixtures {LineSpec, write_generated_session, pad2}
+use weaver::pty_support {
+    run_gated, with_root, spawn_args, report_screen, found_at_row, pos_row, quit_cleanly,
+}
+use weaver::pty_fixtures {
+    LineSpec, write_generated_session, pad2, write_history_session, history_len,
+    history_first_text, session_dir,
+}
 use std::io {IO.println}
+use std::path {Path}
 
 def grid_has (o : Output) (needle : String) : Bool :=
     match Output.find o needle {
@@ -222,3 +228,65 @@ def name_run (bin : String) (root : String) : IO Bool := do {
 pub def run_name_shows_in_the_frame : IO Bool :=
     run_gated "pty weaver session name" (fn (bin : String) =>
         with_root "name" (fn (root : String) => name_run bin root))
+
+// ── the resume-time fold (Phase 16b, A2) ───────────────────────────────
+//
+// A session whose MODEL HISTORY is large must land FOLDED: the first
+// resumed turn pays one system digest, not every block `history_base` ..
+// `history_next` (`Store.load_history_seq` concatenates them all). The
+// digest is committed through `Store.record_compacted`, so the loaded
+// history shrinks AND the base moves; the startup note names it.
+//
+// The transcript is 3 lines but the history is 60 messages of ~4 KB each
+// (~240 KB, ~60k estimated tokens), far past the default tail budget for a
+// 128k window (~20k), so the fold fires deterministically.
+
+def fold_env : List (Pair String (Option String)) :=
+    [Pair.pair "SHUTTLE_MOCK_TURNS" (Option.none)]
+
+def fold_session_count (root : String) : IO I64 :=
+    history_len (session_dir (String.concat root "/sessions") "s-long")
+
+def fold_first_text (root : String) : IO String :=
+    history_first_text (session_dir (String.concat root "/sessions") "s-long")
+
+def fold_go (m : Pty) (root : String) : IO Bool := do {
+    let ready <- Pty.wait_until m placeholder_seen 6000;
+    let a <- Check.report "the app is up on the resumed session" ready;
+    // The fold note names the digest and the history directory.
+    let noted <- Pty.wait_until m (fn (o : Output) => grid_has o "context folded") 6000;
+    let b <- report_screen m "the startup note names the folded digest" noted;
+    let dir_ok <- Pty.wait_until m (fn (o : Output) => grid_has o "/history") 6000;
+    let c <- Check.report "the note names the history directory" dir_ok;
+    // The loaded history is bounded: strictly fewer messages than the 60
+    // written, and the head is the SYSTEM digest the fold built.
+    let n <- fold_session_count root;
+    let bounded := Bool.and (I64.gt n 0) (I64.lt n 60);
+    let d <- Check.report "the resumed history is folded down" bounded;
+    let head <- fold_first_text root;
+    let e <- Check.report "the head of the folded history is the digest"
+        (String.contains head "folded at resume");
+    let _ <- quit_cleanly m 3000;
+    Pty.finish m;
+    return (Bool.and a (Bool.and b (Bool.and c (Bool.and d e))))
+}
+
+def fold_run (bin : String) (root : String) : IO Bool := do {
+    let ok <- write_history_session (String.concat root "/sessions") "s-long" 6 10 4000;
+    if Bool.not ok then do {
+        IO.println "FAIL pty resume: could not synthesize the long-history session";
+        return false
+    } else do {
+        let r <- spawn_resume bin root "s-long";
+        match r {
+            Result.err e => do { IO.println (String.concat "FAIL pty resume fold spawn: " e); return false },
+            Result.ok m => fold_go m root
+        }
+    }
+}
+
+pub def run_resume_folds_the_history : IO Bool :=
+    run_gated "pty weaver resume fold" test_resume_fold_body
+
+def test_resume_fold_body (bin : String) : IO Bool :=
+    with_root "resume_fold" (fn (root : String) => fold_run bin root)

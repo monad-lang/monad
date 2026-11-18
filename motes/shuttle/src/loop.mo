@@ -274,8 +274,12 @@ def agent_send_step (s : RunState) : ResultT String IO (Pair RunState Turn) :=
 /// without an `HTTP 4` marker is treated as transient.
 def agent_send_run (s : RunState) : ResultT String IO (Pair RunState Turn) := do {
     let specs : List ToolSpec := ToolRegistry.specs s.reg;
+    // The request's history goes through the projection seam: the stored
+    // session is untouched (append-only), only what THIS call sends is
+    // shaped. The default is the identity.
+    let sent : List Message := s.send_history s.session.history;
     let turn <- Loop.retry_send
-        (fn (_ : Unit) => Provider.send s.session.config s.session.system_prompt specs s.session.history s.should_stop s.emit)
+        (fn (_ : Unit) => Provider.send s.session.config s.session.system_prompt specs sent s.should_stop s.emit)
         s.sleep_ms
         (if s.retries < 1 then 1 else s.retries)
         1

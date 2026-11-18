@@ -30,3 +30,22 @@ def test_prompt_keeps_the_newest_messages : Bool :=
     let h : List Message := [old, say Role.assistant "NEWEST"] in
     let p : String := Btw.prompt h "q" in
     String.contains p "NEWEST" && Bool.not (String.contains p "OLDEST")
+
+/// A resume folds the older turns into one SYSTEM digest (`fold.mo`), and
+/// autocompact summarizes into another: the side question must still SEE
+/// them. Dropping system messages would hide the whole earlier conversation.
+#[test]
+def test_prompt_quotes_the_system_digest : Bool :=
+    let digest : Message := say Role.system_ "earlier conversation, folded at resume: 42 messages" in
+    let p : String := Btw.prompt [digest, say Role.user "new ask"] "what did we do?" in
+    String.contains p "folded at resume" && String.contains p "Note:"
+
+/// The folded digest is the FIRST thing the byte budget drops on a long
+/// session (the budget is spent newest-first), so the prompt must still be
+/// well-formed: the question comes last and a dropped digest is not a
+/// crash. This pins the ordering, not the digest's survival.
+#[test]
+def test_prompt_survives_a_starved_digest : Bool :=
+    let digest : Message := say Role.system_ (String.concat "folded at resume " (String.repeat "y" 30000)) in
+    let p : String := Btw.prompt [digest, say Role.user "the newest ask"] "q" in
+    Bool.and (String.contains p "the newest ask") (String.contains p "Side question: q")

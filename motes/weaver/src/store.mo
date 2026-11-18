@@ -1473,6 +1473,17 @@ def session_with_history (s : Session) (ms : List Message) : Session :=
     s2
 
 pub def Store.load_session (dir : Path) : IO (Result String Session) := do {
+    let r <- Store.load_session_base dir;
+    return (match r {
+        Result.err e => Result.err e,
+        Result.ok pr => match pr { Pair.pair s _ => Result.ok s },
+    })
+}
+
+/// The loaded session AND the block its history starts at. A resume-time
+/// fold has to name that block in its digest pointer (`Fold.fold_session`),
+/// and only the meta knows it: after a compaction `history_base > 1`.
+pub def Store.load_session_base (dir : Path) : IO (Result String (Pair Session I64)) := do {
     let meta_r <- Store.read_meta dir;
     match meta_r {
         Result.err e => IO.pure (Result.err e),
@@ -1480,17 +1491,17 @@ pub def Store.load_session (dir : Path) : IO (Result String Session) := do {
     }
 }
 
-def load_session_meta (dir : Path) (m : StoreMeta) : IO (Result String Session) := do {
+def load_session_meta (dir : Path) (m : StoreMeta) : IO (Result String (Pair Session I64)) := do {
     let hdir : Path := history_dir dir;
     let there <- IO.is_dir hdir;
     if Bool.not there
-    then IO.pure (Result.ok (session_with_history m.session List.empty))
+    then IO.pure (Result.ok (Pair.pair (session_with_history m.session List.empty) 1i64))
     else do {
         let start : I64 := if m.history_base < 1i64 then 1i64 else m.history_base;
         let hist_r <- load_history_seq hdir start m.history_next List.empty;
         match hist_r {
             Result.err e => IO.pure (Result.err e),
-            Result.ok ms => IO.pure (Result.ok (session_with_history m.session ms)),
+            Result.ok ms => IO.pure (Result.ok (Pair.pair (session_with_history m.session ms) start)),
         }
     }
 }

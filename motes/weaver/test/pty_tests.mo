@@ -40,7 +40,8 @@ use weaver::pty::resize {run_resize_clears_and_rewraps}
 use weaver::pty::resume {
     run_resume_picker_lists_current_and_esc,
     run_resume_choose_loads_transcript,
-    run_resume_pager
+    run_resume_pager,
+    run_resume_folds_the_history
     , run_name_shows_in_the_frame}
 use weaver::pty::round2 {run_round2_scroll_multiline_history}
 use weaver::pty::selection {run_selection_drag_and_osc52}
@@ -146,6 +147,9 @@ def test_resume_choose_loads_transcript : IO Bool := run_resume_choose_loads_tra
 
 #[test]
 def test_resume_pager : IO Bool := run_resume_pager
+
+#[test]
+def test_resume_folds_the_history : IO Bool := run_resume_folds_the_history
 
 #[test]
 def test_round2_scroll_multiline_history : IO Bool := run_round2_scroll_multiline_history

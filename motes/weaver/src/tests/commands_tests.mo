@@ -21,6 +21,7 @@ use weaver::commands {
     Commands.set_plan, Commands.plan_after_turn, SessionPage, Commands.session_page,
     Commands.turns_label, Commands.turn_context, Commands.sessions_for, Commands.place_suffix,
     Commands.memory_text, Commands.store_plan, Commands.linked_plan, Commands.with_skills, Commands.skill_turn, Commands.builtin_names, Commands.apply_setting, Commands.cycle_setting, command_table, SlashCommand, MountedCommand, Commands.mount, Effect.ok,
+    Commands.send_history_projector, Commands.send_history_for,
 }
 use loom::strand {Active, Disposed, Strand, StrandRun, Strand.run, Strand.sealed}
 use weaver::skills {Skill}
@@ -1385,3 +1386,58 @@ def test_a_mounted_then_unmounted_command_is_gone : IO Bool := do {
     return (output_of before == "hello from the mount"
         && String.contains (output_of after) "unknown command: /hello")
 }
+
+// ── the request projection (`send_history`) ────────────────────────────
+
+/// A tool result's output, for the projection tests (there is no `BEq` on
+/// `Message`).
+def proj_output (m : Message) : String :=
+    match m.content {
+        List.cons c _ => match c { Content.tool_result _ o _ => o, Content.text s => s, _ => "" },
+        List.empty => "",
+    }
+
+#[partial]
+def proj_nth (ms : List Message) (n : I64) : String :=
+    match ms {
+        List.empty => "",
+        List.cons m rest => if n < 1i64 then proj_output m else proj_nth rest (n - 1i64),
+    }
+
+def big_tool_result : Message :=
+    { role := Role.tool, content := [Content.tool_result "c1" (String.repeat "x" 40000i64) false] }
+
+/// A zero budget (autocompact off) leaves the projection the identity.
+#[test]
+def test_send_history_projection_is_identity_off : Bool :=
+    let hi : Message := { role := Role.user, content := [Content.text "hi"] } in
+    let h : List Message := [big_tool_result, hi] in
+    let projected : List Message := Commands.send_history_projector 0i64 h in
+    List.length projected == List.length h && proj_nth projected 0 == proj_output big_tool_result
+
+/// Past the budget, the OLDEST tool result is stubbed while the newest
+/// message stays legible -- the projection shapes ONE call only.
+#[test]
+def test_send_history_projection_trims_the_oldest : Bool :=
+    let newest : Message := { role := Role.tool, content := [Content.tool_result "c2" "keep me readable" false] } in
+    let ok : Message := { role := Role.assistant, content := [Content.text "ok"] } in
+    let h : List Message := [big_tool_result, ok, newest] in
+    let projected : List Message := Commands.send_history_projector 100i64 h in
+    List.length projected == List.length h
+        && String.contains (proj_nth projected 0) "trimmed"
+        && proj_nth projected 2 == "keep me readable"
+
+/// `send_history_for` reads the window and threshold off the state: a zero
+/// window is the identity, a threshold below the history trims. The window
+/// is deliberately small: the budget is `window * compact_at / 100`, and
+/// `big_tool_result` alone is ~10k estimated tokens, so a wide window would
+/// (correctly) leave the history alone.
+#[test]
+def test_send_history_for_reads_the_window : Bool :=
+    let off : WeaverState := { (state_of Mode.manual []) with context_window := 0 } in
+    let on : WeaverState := { (state_of Mode.manual []) with context_window := 1000i64, compact_at := 100i64 } in
+    let ok : Message := { role := Role.assistant, content := [Content.text "ok"] } in
+    let newest : Message := { role := Role.tool, content := [Content.tool_result "c2" "newest" false] } in
+    let h : List Message := [big_tool_result, ok, newest] in
+    List.length (Commands.send_history_for off h) == 3
+        && String.contains (proj_nth (Commands.send_history_for on h) 0) "trimmed"

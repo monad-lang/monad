@@ -51,6 +51,17 @@ pub def Fold.tail_budget (window : I64) (compact_at : I64) : I64 :=
     let t : I64 := Compact.threshold window compact_at in
     if t < 1i64 then 0i64 else Compact.keep_budget t
 
+/// The tail budget a resume actually uses: the explicit `resume_fold`
+/// setting when it spoke, else the window-derived default. `0` (either
+/// spelling) disables folding -- and a window of 0 or a `compact_at` of
+/// 0 keeps it off too, so a resume never re-enables a deliberately
+/// disabled context window.
+pub def Fold.resume_budget (setting : Option I64) (window : I64) (compact_at : I64) : I64 :=
+    match setting {
+        Option.some n => n,
+        Option.none => Fold.tail_budget window compact_at,
+    }
+
 /// Does this history already fit its tail budget? A fitting history is not
 /// folded at all.
 pub def Fold.fits (history : List Message) (budget : I64) : Bool :=

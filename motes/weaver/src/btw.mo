@@ -1,10 +1,10 @@
 /// `/btw <question>`: a side question answered beside the running turn.
 ///
 /// One model call with no tools and a one-call budget, like the session
-/// title (`title.mo`). The conversation reaches the model as TEXT (user and
-/// assistant prose only, the newest ~24 KB): a request whose history holds
-/// `tool_use`/`tool_result` blocks must declare tools, and this call has
-/// none. Nothing it does touches the session -- not the history, not the
+/// title (`title.mo`). The conversation reaches the model as TEXT (user,
+/// assistant and system prose, the newest ~24 KB): a request whose history
+/// holds `tool_use`/`tool_result` blocks must declare tools, and this call
+/// has none. Nothing it does touches the session -- not the history, not the
 /// spend.
 use shuttle::loop {Loop.run}
 use shuttle::registry {ToolRegistry}
@@ -36,10 +36,17 @@ def prose (cs : List Content) (acc : String) : String :=
         },
     }
 
+/// Who a message is credited to. A SYSTEM message is not a speaker in the
+/// quoted transcript, but it IS context: a resume folds the older turns
+/// into one system digest (`fold.mo`) and autocompact summarizes into
+/// another, so dropping system messages would hide the whole earlier
+/// conversation from the side question. `Note` keeps it distinct from a
+/// real turn.
 def speaker (r : Role) : String :=
     match r {
         Role.user => "User",
         Role.assistant => "Assistant",
+        Role.system_ => "Note",
         _ => "",
     }
 
@@ -63,7 +70,11 @@ def newest (ms : List Message) (budget : I64) (acc : List String) : List String 
     }
 
 /// The one user message the model sees: the quoted conversation, then
-/// the question.
+/// the question. The budget is spent from the NEWEST message backwards, so
+/// the side question always sees the latest turns; the system digest a
+/// resume wrote sits at the HEAD of the history and is the first thing the
+/// budget drops on a long session -- which is why the folded prefix is
+/// quoted as `Note` rather than skipped entirely.
 pub def Btw.prompt (history : List Message) (question : String) : String :=
     let turns : List String := newest (List.reverse history) Btw.context_bytes List.empty in
     let context : String :=

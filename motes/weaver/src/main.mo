@@ -36,12 +36,13 @@ use weaver::cli_spec {
 }
 use weaver::plan_file {PlanRepo, PlanRepo.resolve}
 use weaver::skills {Skill, SkillScan, Skills.discover, Skills.user_root, Skills.with_index, Skills.note}
-use weaver::commands {WeaverState, MountedCommand, Commands.set_plan, Commands.session_name, Commands.find_plan, Commands.load_plan, Commands.join_notes, with_instructions}
+use weaver::commands {WeaverState, MountedCommand, Commands.set_plan, Commands.session_name, Commands.find_plan, Commands.load_plan, Commands.join_notes, Commands.fold_startup, FoldedResume, with_instructions}
+use weaver::fold {Fold.resume_budget}
 use weaver::monad_tools {MonadCheck.tool, MonadEval.tool}
 use lang::module {ModuleInfoCache, module_info_cache_empty}
 use weaver::store {
     StoreState, TLine, TLine.plain, TLine.user_line, Transcript,
-    Store.sessions_root, Store.ensure_root, Store.new_session, Store.load_session,
+    Store.sessions_root, Store.ensure_root, Store.new_session, Store.load_session, Store.load_session_base,
     Store.import_session, Store.session_dir, Store.latest_session, Store.startup_transcript,
     Store.base_name, Store.append_transcript, Store.append_note, Store.read_live, Store.discard_live,
     Store.read_plan, Store.read_meta, Store.ensure_scratch,
@@ -139,6 +140,9 @@ struct Plan {
     /// `context_window * compact_at / 100`; a zero window disables it.
     context_window : I64,
     compact_at : I64,
+    /// The resume-time fold's tail budget (`fold.mo`). None = the
+    /// window-derived default; 0 disables folding.
+    resume_fold : Option I64 := Option.none,
     /// Startup warnings the run should show, one per line: settings
     /// problems (unknown keys, parse failures), a configured model that
     /// did not belong to the provider, and the crash note.
@@ -243,7 +247,7 @@ def plan_turns (s : Settings) (c : WeaverCli) (mode : Mode) (provider : String) 
             let note2 : Option String := Commands.join_notes note clamp_note in
             match resolve_max_turns s (WeaverCli.max_turns_of c) {
                 Result.err e => Result.err (WeaverError.config e),
-                Result.ok n => plan_done provider cfg2 n c mode note2 window (resolve_compact_at s),
+                Result.ok n => plan_done provider cfg2 n c mode note2 window (resolve_compact_at s) (resume_fold_of s),
             },
     }
 
@@ -279,9 +283,9 @@ def auto_start_of (mode : Mode) (key : Option String) : Bool :=
         Option.some _ => Mode.is_auto mode,
     }
 
-def plan_done (provider : String) (cfg : ProviderConfig) (n : I64) (c : WeaverCli) (mode : Mode) (note : Option String) (window : I64) (compact_at : I64) : Result WeaverError Plan :=
+def plan_done (provider : String) (cfg : ProviderConfig) (n : I64) (c : WeaverCli) (mode : Mode) (note : Option String) (window : I64) (compact_at : I64) (resume_fold : Option I64) : Result WeaverError Plan :=
     let key : Option String := WeaverCli.plan_of c in
-    let p : Plan := { provider := provider, cfg := cfg, max_turns := n, mcps := WeaverCli.mcps c, resume := WeaverCli.resume_text c, cont := WeaverCli.cont_of c, context_window := window, compact_at := compact_at, model_note := note, plan_key := key, mode := mode, auto_start := auto_start_of mode key } in
+    let p : Plan := { provider := provider, cfg := cfg, max_turns := n, mcps := WeaverCli.mcps c, resume := WeaverCli.resume_text c, cont := WeaverCli.cont_of c, context_window := window, compact_at := compact_at, resume_fold := resume_fold, model_note := note, plan_key := key, mode := mode, auto_start := auto_start_of mode key } in
     Result.ok p
 
 // ── MCP mounting (shuttle main.mo's machinery, ported) ─────────────────
@@ -649,6 +653,20 @@ def auto_on_danger_of (s : Settings) : AutoDanger :=
         },
     }
 
+/// The configured resume-fold budget; none means the window decides
+/// (`Fold.resume_budget`), so a `context_window`/`compact_at` change
+/// moves the fold with autocompact.
+def resume_fold_of (s : Settings) : Option I64 :=
+    s.resume_fold
+
+/// The startup resume's fold budget: the plan's own knobs, resolved the
+/// same way `/settings resume_fold` resolves them. A named helper (rather
+/// than the call inline) because the caller sits inside a nested
+/// match/do, where the checker cannot resolve the option match's struct
+/// update.
+def resume_budget_of (p : Plan) : I64 :=
+    Fold.resume_budget p.resume_fold p.context_window p.compact_at
+
 /// The configured auto safety net; on when the settings do not say.
 def auto_safety_of (s : Settings) : Bool :=
     match s.auto_safety {
@@ -912,7 +930,7 @@ def resume_token_candidate (root : Path) (place : Option SessionPlace) (p : Plan
 def resume_dir (root : Path) (place : Option SessionPlace) (dir : Path) (p : Plan) (s : Settings) : IO (Result WeaverError OpenedSession) := do {
     // A session saved before the scratch dir existed gets one now.
     let _ <- Store.ensure_scratch dir;
-    let r <- Store.load_session dir;
+    let r <- Store.load_session_base dir;
     let meta <- Store.read_meta dir;
     let moved : Option String := match meta {
         Result.err _ => Option.none,
@@ -920,8 +938,17 @@ def resume_dir (root : Path) (place : Option SessionPlace) (dir : Path) (p : Pla
     };
     match r {
         Result.err e => IO.pure (Result.err (WeaverError.io e)),
-        Result.ok sess => match rekey_loaded p s sess {
-            Pair.pair sess2 note => IO.pure (Result.ok (with_model_note moved (opened_note (Option.some (store_at root dir)) sess2 note))),
+        Result.ok pr => match pr {
+            Pair.pair sess base => do {
+                // Fold the older prefix before the session lands: the first
+                // resumed turn pays the digest, not the whole session. The
+                // write is best-effort -- a note, never a blocked resume.
+                let folded <- Commands.fold_startup (Option.some (store_at root dir)) sess dir base (resume_budget_of p);
+                let note : Option String := Commands.join_notes moved folded.note;
+                match rekey_loaded p s folded.session {
+                    Pair.pair sess2 rnote => IO.pure (Result.ok (opened_note (Option.some (store_at root dir)) sess2 (Commands.join_notes note rnote))),
+                }
+            },
         },
     }
 }

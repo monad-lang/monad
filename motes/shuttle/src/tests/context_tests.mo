@@ -1,6 +1,7 @@
 /// Tests for `motes/shuttle/src/context.mo` -- Phase 5's accounting,
 /// trimming and cached prefix. Pure value tests, no IO.
 use shuttle::context {usage_zero, usage_add, usage_total, estimate_tokens, trim, cached_prefix, stub_tool_results}
+use shuttle::agent {silent_send_history}
 use shuttle::message {Message, Usage}
 use shuttle::message_types {Role, Content}
 use shuttle::tool {ToolSpec}
@@ -115,3 +116,57 @@ def test_cached_prefix_is_byte_stable_and_names_its_tools : Bool :=
     let p1 : String := cached_prefix "you are a test" [spec] in
     let p2 : String := cached_prefix "you are a test" [spec] in
     p1 == p2 && String.contains p1 "grep" && String.contains p1 "you are a test"
+
+// ── the request projection's identity default ─────────────────────────
+// `RunState.send_history` (shuttle::agent) is the per-REQUEST projection
+// of the history handed to the wire. Its default must be the IDENTITY, so
+// a headless shuttle run sends byte-for-byte what it stored; weaver is the
+// only installer, and it installs `Context.trim`.
+
+/// The identity: same length, same messages (the second element keeps its
+/// text, so a reordering or a drop would show).
+#[test]
+def test_silent_send_history_is_the_identity : Bool :=
+    let h : List Message := [old_tool_message, plain_message, newest_tool_message] in
+    let sent : List Message := silent_send_history h in
+    List.length sent == List.length h
+        && nth_output sent 0 == big_output
+        && nth_output sent 1 == "short"
+        && nth_output sent 2 == "keep me readable"
+
+/// The `n`th message's first content block, rendered as text (a tool
+/// result's output, or a text block's text). No `BEq` on `Message`
+/// exists, so the projection tests compare through this.
+#[partial]
+def nth_output (ms : List Message) (n : I64) : String :=
+    match ms {
+        List.empty => "",
+        List.cons m rest => if n < 1i64 then first_block_text m else nth_output rest (n - 1i64),
+    }
+
+def first_block_text (m : Message) : String :=
+    match message_first_content m {
+        Option.some c => match c {
+            Content.text s => s,
+            Content.tool_result _ output _ => output,
+            _ => "",
+        },
+        Option.none => "",
+    }
+
+#[test]
+def test_silent_send_history_leaves_an_empty_history_empty : Bool :=
+    List.length (silent_send_history List.empty) == 0i64
+
+/// A non-identity projection changes only what ONE call sends; the stored
+/// history is never rewritten (the store's turn-delta accounting assumes
+/// it is append-only).
+#[test]
+def test_a_projection_does_not_touch_the_stored_history : Bool :=
+    let h : List Message := [old_tool_message, plain_message, newest_tool_message] in
+    let before : I64 := List.length h in
+    let projected : List Message := trim 5 h in
+    List.length h == before
+        && List.length projected == before
+        && nth_output projected 0 == "[trimmed by the shuttle context manager]"
+        && nth_output projected 2 == "keep me readable"

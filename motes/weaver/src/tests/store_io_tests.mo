@@ -10,6 +10,7 @@ use weaver::store {
     Store.append_note, Store.record_compacted, Store.encode_meta, Store.decode_meta,
     Store.read_plan, Store.write_plan, Store.scratch_of, Store.ensure_scratch,
     SessionInfo, TitleField, Store.list_sessions, Store.read_meta, Store.write_title,
+    Store.load_session_base,
 }
 use shuttle::session {Session, Session.messages_to_json}
 use shuttle::provider {ProviderConfig, mock}
@@ -22,6 +23,8 @@ use std::io {IO.write_file, IO.write_stderr, IO.is_dir}
 use std::concurrent::combine {sleepIO}
 use json::json {Json, Json.get_object, Json.make_object}
 use std::map {Map}
+use weaver::fold {Fold.fold_session}
+use weaver::compact {Compact.Outcome}
 use weaver::place {SessionPlace}
 
 #[partial]
@@ -827,6 +830,94 @@ def test_ensure_scratch_repairs_an_older_session : IO Bool := do {
             let ok <- Store.ensure_scratch st.dir;
             let there <- IO.is_dir dir;
             IO.pure (Bool.and ok there)
+        },
+    }
+}
+
+// ── resume-time folding (fold.mo's IO half) ───────────────────────────
+// `Fold.fold_session` is pure; what a resume adds is the WRITE that moves
+// the store's `history_base`, so a second restart replays only the fold.
+
+/// A session whose history is big enough to fold at a small budget.
+def foldable_session : Session :=
+    let big : String := String.repeat "x" 4000i64 in
+    let old : List Message := [user_msg big, assistant_msg big] in
+    let s : Session := { compact_session_lit with history := old } in
+    s
+
+def fold_run (root : Path) (st : StoreState) : IO Bool := do {
+    let s : Session := foldable_session;
+    let _ <- Store.record_history st s s.history;
+    // The loaded session, with the block its history starts at.
+    let r <- Store.load_session_base st.dir;
+    let ok <- fold_loaded st r;
+    clean root;
+    IO.pure ok
+}
+
+/// Fold, commit, and re-load: the second load replays ONLY the folded block.
+def fold_loaded (st : StoreState) (r : Result String (Pair Session I64)) : IO Bool :=
+    match r {
+        Result.err _ => IO.pure false,
+        Result.ok pr => match pr {
+            Pair.pair s base => do {
+                let folded : Option Compact.Outcome := Fold.fold_session s st.dir base 200i64;
+                match folded {
+                    Option.none => IO.pure false,
+                    Option.some out => do {
+                        let w <- Store.record_compacted st out.session;
+                        let again <- Store.load_session_base st.dir;
+                        IO.pure (fold_second_load_ok w base again)
+                    },
+                }
+            },
+        },
+    }
+
+/// The verdict: the commit succeeded, the digest came from block 1, and the
+/// reloaded history is the folded one (a digest plus the kept tail).
+def fold_second_load_ok (w : Result String Unit) (base : I64) (again : Result String (Pair Session I64)) : Bool :=
+    match w {
+        Result.err _ => false,
+        Result.ok _ => match again {
+            Result.err _ => false,
+            Result.ok pr => match pr {
+                Pair.pair s2 base2 =>
+                    Bool.and (base == 1i64)
+                        (Bool.and (base2 == 2i64) (Bool.and (List.length s2.history < 3i64) (Bool.not (List.is_empty s2.history)))),
+            },
+        },
+    }
+
+#[test]
+def test_a_folded_resume_moves_the_history_base : IO Bool := do {
+    let root : Path := root_for "fold_base";
+    clean root;
+    let _ <- Store.ensure_root root;
+    let r <- Store.new_session root Option.none compact_session_lit;
+    match r {
+        Result.err _ => IO.pure false,
+        Result.ok st => fold_run root st,
+    }
+}
+
+/// A folded session's digest names the block its history starts at; the
+/// second load therefore starts at `history_base` 2, not 1.
+#[test]
+def test_loading_without_history_reports_base_one : IO Bool := do {
+    let root : Path := root_for "fold_nobase";
+    clean root;
+    let _ <- Store.ensure_root root;
+    let r <- Store.new_session root Option.none test_session;
+    match r {
+        Result.err _ => IO.pure false,
+        Result.ok st => do {
+            let loaded <- Store.load_session_base st.dir;
+            clean root;
+            IO.pure (match loaded {
+                Result.err _ => false,
+                Result.ok pr => match pr { Pair.pair _ b => b == 1i64 },
+            })
         },
     }
 }

@@ -30,7 +30,7 @@ use shuttle::message {Message, Usage}
 use weaver::usage {Usage.delta}
 use shuttle::message_types {Role, Content}
 use shuttle::agent {RunState}
-use shuttle::context {usage_zero}
+use shuttle::context {usage_zero, trim}
 use shuttle::tool {ToolSpec}
 use shuttle::gate {Capability}
 use weaver::policy {Mode, Mode.show, Mode.parse, Mode.approve_plan, AutoDanger, AutoDanger.parse, AutoDanger.show, Verdict}
@@ -38,9 +38,10 @@ use weaver::gate {cap_name}
 use weaver::providers {Weaver.preset, Weaver.config_for, Weaver.preferred_model, Weaver.model_for, Weaver.provider_of, Weaver.clamp_cfg, Weaver.migrate_max_tokens, Weaver.max_tokens_reclamp}
 use weaver::catalog {Catalog.fetch, Catalog.lookup, Catalog.remember, Catalog.render, Catalog.note}
 use weaver::compact {Compact.threshold, Compact.should_compact, Compact.estimate, Compact.compact, Compact.Outcome}
+use weaver::fold {Fold.resume_budget, Fold.fold_session, Fold.digest_note}
 use weaver::error {WeaverError, WeaverError.of_shuttle}
 use weaver::store {
-    StoreState, Store.new_session, Store.load_session, Store.sessions_in,
+    StoreState, Store.new_session, Store.load_session, Store.load_session_base, Store.sessions_in,
     Store.import_session, Store.session_dir, Store.base_name, Store.record_compacted,
     Store.read_plan, Store.write_plan, Store.append_history_note,
     SessionInfo, TitleField, StoreMeta, Store.list_sessions, Store.read_meta, Store.write_title,
@@ -87,6 +88,12 @@ pub struct WeaverState {
     /// estimated tokens; a zero window disables it.
     context_window : I64,
     compact_at : I64,
+    /// The resume-time fold's tail budget (`fold.mo`): the most of a
+    /// resumed history that stays verbatim; the older prefix becomes one
+    /// digest. None means the window-derived default
+    /// (`Fold.resume_budget`); a value of 0 disables folding. Resolved
+    /// from the `resume_fold` setting at startup and by `/settings`.
+    resume_fold : Option I64 := Option.none,
     /// The last plan-mode assistant text (`/plan`'s display, persisted
     /// in the session store's meta).
     plan : Option String := Option.none,
@@ -1150,21 +1157,71 @@ def resume_by_id_store (st : WeaverState) (s : StoreState) (label : String) : IO
 def resume_dir (st : WeaverState) (p : Path) (label : String) : IO (Result WeaverError Effect) := do {
     // A session saved before the scratch dir existed gets one now.
     let _ <- Store.ensure_scratch p;
-    let r <- Store.load_session p;
+    let r <- Store.load_session_base p;
     match r {
         Result.err e => IO.pure (Result.err (WeaverError.io e)),
-        Result.ok s => do {
-            // A session switch starts with no grants; the captured plan
-            // travels with the session directory.
-            let _ <- Permissions.clear st.grants;
-            let plan <- Store.read_plan p;
-            let e0 : Effect := resume_effect st s (store_for_dir p st) label;
-            let st1 : WeaverState := Commands.set_plan e0.state plan;
-            let e1 : Effect := { e0 with state := st1 };
-            IO.pure (Result.ok e1)
+        Result.ok pr => match pr {
+            Pair.pair s base => do {
+                // A session switch starts with no grants; the captured plan
+                // travels with the session directory.
+                let _ <- Permissions.clear st.grants;
+                let plan <- Store.read_plan p;
+                // Fold the older prefix before the session lands, so the
+                // first resumed turn already pays the digest, not the whole
+                // session; a failure to persist only notes it.
+                let folded <- Commands.fold_resume st s p base;
+                let e0 : Effect := resume_effect st folded.session (store_for_dir p st) label;
+                let e1 : Effect := { e0 with output := note_before folded.note e0.output };
+                let st1 : WeaverState := Commands.set_plan e1.state plan;
+                let e2 : Effect := { e1 with state := st1 };
+                IO.pure (Result.ok e2)
+            },
         }
     }
 }
+
+/// One resume's fold: the (possibly unchanged) session plus the startup
+/// note naming the digest. `Fold.fold_session` is pure; the write is
+/// `Store.record_compacted`, so a second restart replays only the fold.
+/// A failed write is a note, never a blocked resume: the in-memory
+/// session is folded either way, and the next turn's own append still
+/// lands (the base did not move, so nothing is lost).
+pub struct FoldedResume {
+    session : Session,
+    note : Option String,
+}
+
+/// The fold with everything explicit: the store to commit through, the
+/// block the history starts at, and the byte budget. Both resume entries
+/// funnel here. The STARTUP path has a `Plan`, not a `WeaverState`, so it
+/// passes its knobs directly rather than going through
+/// `Commands.fold_resume`.
+pub def Commands.fold_startup (store : Option StoreState) (s : Session) (dir : Path) (base : I64) (budget : I64) : IO FoldedResume :=
+    match Fold.fold_session s dir base budget {
+        Option.none => IO.pure (mk_folded s Option.none),
+        Option.some out => do {
+            let err <- record_compact store out;
+            let d : String := Path.to_string dir;
+            // `before - after` counts the NET message reduction; the
+            // dropped messages are one more than that (the digest replaced
+            // them).
+            let dropped : I64 := out.before - out.after + 1i64;
+            let line : String := Fold.digest_note dropped d;
+            let full : Option String := Commands.join_notes (Option.some line) err;
+            IO.pure (mk_folded out.session full)
+        },
+    }
+
+/// The `/resume` command's fold: the store off the directory being opened,
+/// the budget off the live state's `resume_fold`/`context_window`/
+/// `compact_at`.
+pub def Commands.fold_resume (st : WeaverState) (s : Session) (dir : Path) (base : I64) : IO FoldedResume :=
+    Commands.fold_startup (store_for_dir dir st) s dir base
+        (Fold.resume_budget st.resume_fold st.context_window st.compact_at)
+
+def mk_folded (s : Session) (note : Option String) : FoldedResume :=
+    let f : FoldedResume := { session := s, note := note } in
+    f
 
 def resume_file (st : WeaverState) (label : String) : IO (Result WeaverError Effect) := do {
     let r <- Session.load label;
@@ -1224,6 +1281,14 @@ def resume_effect (st : WeaverState) (s : Session) (store : Option StoreState) (
 def rekey_session (st : WeaverState) (s : Session) : Session :=
     let s2 : Session := { s with config := rekey_config st s.config, system_prompt := Commands.system_prompt st st.instructions } in
     s2
+
+/// The startup note in front of a command's own output: the fold line,
+/// then the `resumed <id>` line (the two are one transcript block).
+def note_before (note : Option String) (output : String) : String :=
+    match note {
+        Option.none => output,
+        Option.some n => String.concat n (String.concat "\n" output),
+    }
 
 /// The store for a directory opened in place: keep the CURRENT root so
 /// `/clear` afterwards creates a sibling where `--resume` would, and
@@ -1433,10 +1498,19 @@ pub def Commands.setting_rows (st : WeaverState) : List SettingRow :=
     let r3 : SettingRow := { key := "max_turns", label := "Turn budget", value := I64.to_string st.budget, kind := SettingKind.setting_number } in
     let r4 : SettingRow := { key := "context_window", label := "Context window", value := I64.to_string st.context_window, kind := SettingKind.setting_number } in
     let r5 : SettingRow := { key := "compact_at", label := "Autocompact at (%)", value := I64.to_string st.compact_at, kind := SettingKind.setting_number } in
-    let r6 : SettingRow := { key := "auto_on_danger", label := "Auto mode on a dangerous verdict", value := AutoDanger.show st.auto_on_danger, kind := SettingKind.setting_cycle } in
+    let r6 : SettingRow := { key := "resume_fold", label := "Resume fold tail (tokens)", value := fold_value_text st, kind := SettingKind.setting_number } in
+    let r7 : SettingRow := { key := "auto_on_danger", label := "Auto mode on a dangerous verdict", value := AutoDanger.show st.auto_on_danger, kind := SettingKind.setting_cycle } in
     let safe_text : String := if st.auto_safety then "on" else "off" in
-    let r7 : SettingRow := { key := "auto_safety", label := "Auto mode safety net", value := safe_text, kind := SettingKind.setting_toggle } in
-    [r0, r1, r2, r3, r4, r5, r6, r7]
+    let r8 : SettingRow := { key := "auto_safety", label := "Auto mode safety net", value := safe_text, kind := SettingKind.setting_toggle } in
+    [r0, r1, r2, r3, r4, r5, r6, r7, r8]
+
+/// The fold row's value: the resolved budget, or "auto" when the setting
+/// is unset and the window decides (0 means folding is off).
+def fold_value_text (st : WeaverState) : String :=
+    match st.resume_fold {
+        Option.none => "auto",
+        Option.some n => I64.to_string n,
+    }
 
 /// The `/settings max_tokens` reply names the EFFECTIVE value: a
 /// provider's ceiling may have clamped what was asked for.
@@ -1489,6 +1563,13 @@ pub def Commands.apply_setting (st : WeaverState) (key : String) (value : String
             if Bool.or (I64.lt n 0) (I64.gt n 100) then Result.err "compact_at must be 0..100"
             else Result.ok (Pair.pair (set_compact_at st n) (String.concat "compact_at: " (String.concat (I64.to_string n) "%"))),
     }
+    else if key == "resume_fold"
+    then match parse_i64 value {
+        Option.none => Result.err "resume_fold must be a token budget (0 disables folding)",
+        Option.some n =>
+            if I64.lt n 0 then Result.err "resume_fold cannot be negative"
+            else Result.ok (Pair.pair (set_resume_fold st n) (String.concat "resume_fold: " (I64.to_string n))),
+    }
     else if key == "auto_on_danger"
     then match AutoDanger.parse (String.trim value) {
         Option.none => Result.err "auto_on_danger: deny | ask",
@@ -1503,7 +1584,7 @@ pub def Commands.apply_setting (st : WeaverState) (key : String) (value : String
         then Result.ok (Pair.pair (set_auto_safety st false) "auto_safety: off (auto runs every tool unasked)")
         else Result.err "auto_safety: on | off"
     else Result.err (String.concat "unknown setting: "
-        (String.concat key " (mode | thinking | max_tokens | max_turns | context_window | compact_at | auto_on_danger | auto_safety)"))
+        (String.concat key " (mode | thinking | max_tokens | max_turns | context_window | compact_at | resume_fold | auto_on_danger | auto_safety)"))
 
 /// Step a cycling setting (mode, thinking) to its next value: the
 /// dialog's Enter on those rows. Number settings are typed instead.
@@ -1529,6 +1610,7 @@ def settings_update (st : WeaverState) : SettingsUpdate :=
         max_tokens := Option.some cfg.max_tokens,
         context_window := Option.some st.context_window,
         compact_at := Option.some st.compact_at,
+        resume_fold := st.resume_fold,
         auto_on_danger := Option.some (AutoDanger.show st.auto_on_danger),
         auto_safety := Option.some st.auto_safety,
     } in
@@ -1563,6 +1645,25 @@ def settings_save (target : String) (st : WeaverState) : IO (Result WeaverError 
         Result.err e => respond st e,
     }
 }
+
+/// The request projection (`RunState.send_history`): what ONE model call
+/// sends. The stored history is untouched -- it stays append-only, which
+/// the store's turn-delta accounting depends on -- only the bytes on the
+/// wire are shaped. The budget is autocompact's own threshold, so the two
+/// agree: past it, the OLDEST tool results become the trim stub first
+/// (`shuttle::context.trim`), the newest turn always stays legible, and a window of
+/// 0 (autocompact off) leaves the projection the identity. This finally
+/// gives the shipped trimmer its caller.
+pub def Commands.send_history_projector (budget : I64) : List Message -> List Message :=
+    if I64.lt budget 1i64
+    then fn (h : List Message) => h
+    else fn (h : List Message) => trim budget h
+
+/// The projector for the CURRENT state: the budget is autocompact's
+/// own threshold, so a trimmed request fits exactly the room a compaction
+/// would leave.
+pub def Commands.send_history_for (st : WeaverState) : List Message -> List Message :=
+    Commands.send_history_projector (Compact.threshold st.context_window st.compact_at)
 
 // ── /permissions ───────────────────────────────────────────────────────
 
@@ -1676,6 +1777,12 @@ def set_window (st : WeaverState) (n : I64) : WeaverState :=
 
 def set_compact_at (st : WeaverState) (n : I64) : WeaverState :=
     let st2 : WeaverState := { st with compact_at := n } in
+    st2
+
+/// `/settings resume_fold`: the fold's own budget. 0 disables folding;
+/// any other value is the verbatim tail kept on a resume.
+def set_resume_fold (st : WeaverState) (n : I64) : WeaverState :=
+    let st2 : WeaverState := { st with resume_fold := Option.some n } in
     st2
 
 /// A provider switch keeps the session's reasoning preference and output
