@@ -576,3 +576,55 @@ def test_a_constructor_scrutinee_prunes_by_its_own_length : IO Bool :=
     accepted
         ("def m0 : Bool := match Vec.nil { Vec.nil => true }\n"
             ++ "def m1 : Bool := match Vec.cons 42 Vec.nil { Vec.cons h t => match t { Vec.nil => true } }\n")
+
+// --- Constructor endpoints at the def boundary (ISSUE-11) ------------------
+//
+// A constructor name in the declared or inferred type (`Nat.zero`) used to
+// read as an uninstantiated type variable and skip the def-boundary
+// comparison, so `refl x` proved any `Path` between constructor terms.
+
+def path_prelude : String :=
+    "def Path {u : Universe} (A : Sort u) (a : A) (b : A) : Sort u := Cubical.PathP (fn _ => A) a b\n"
+        ++ "def refl {A : Type} (a : A) : Path A a a := fn (i : Cubical.I) => a\n"
+        ++ "def vhead {n : Nat} {A : Type} (v : Vec (Nat.succ n) A) : A := match v { Vec.cons h _t => h }\n"
+
+#[test]
+def test_refl_does_not_prove_distinct_nat_endpoints : IO Bool :=
+    rejected_with "zero_one" mismatch
+        (path_prelude ++ "def zero_one : Path Nat Nat.zero (Nat.succ Nat.zero) := refl Nat.zero\n")
+
+#[test]
+def test_refl_does_not_prove_k_equals_its_successor : IO Bool :=
+    rejected_with "k_succ" mismatch (path_prelude ++ "def k_succ (k : Nat) : Path Nat k (Nat.succ k) := refl k\n")
+
+#[test]
+def test_a_path_parameter_keeps_its_endpoints : IO Bool :=
+    rejected_with "p_param" mismatch
+        (path_prelude
+            ++ "def p_param (p : Path Nat Nat.zero Nat.zero) : Path Nat Nat.zero (Nat.succ Nat.zero) := p\n")
+
+#[test]
+def test_refl_does_not_prove_distinct_option_arguments : IO Bool :=
+    rejected_with "some_ab" mismatch
+        (path_prelude
+            ++ "def some_ab (a : I64) (b : I64) : Path (Option I64) (Option.some a) (Option.some b) :=\n"
+            ++ "    refl (Option.some a)\n")
+
+#[test]
+def test_a_false_vhead_law_is_rejected : IO Bool :=
+    rejected_with "vhead_b" mismatch
+        (path_prelude
+            ++ "def vhead_b {n : Nat} {A : Type} (a : A) (b : A) (v : Vec n A) :\n"
+            ++ "    Path A (vhead (Vec.cons a v)) b := refl a\n")
+
+#[test]
+def test_true_constructor_paths_are_accepted : IO Bool :=
+    accepted
+        (path_prelude
+            ++ "def z : Path Nat Nat.zero Nat.zero := refl Nat.zero\n"
+            ++ "def sk (k : Nat) : Path Nat (Nat.succ k) (Nat.succ k) := refl (Nat.succ k)\n"
+            ++ "def sa (a : I64) : Path (Option I64) (Option.some a) (Option.some a) := refl (Option.some a)\n"
+            ++ "def ca {n : Nat} {A : Type} (a : A) (v : Vec n A) :\n"
+            ++ "    Path (Vec (Nat.succ n) A) (Vec.cons a v) (Vec.cons a v) :=\n"
+            ++ "    refl (Vec.cons a v)\n"
+            ++ "def hc {n : Nat} {A : Type} (a : A) (v : Vec n A) : Path A (vhead (Vec.cons a v)) a := refl a\n")

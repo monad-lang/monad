@@ -44,7 +44,7 @@ use lang::scope {
 use lib::typecheck::name_subst {name_subst_term}
 use lib::typecheck::ctor_refine {
     IndexMatch, IndexSolution, IntroCtor, MatchEnv, apply_subst, ctor_index_patterns, has_refinement, index_locals,
-    index_positions, intro_clash, intro_ctor, intro_index_bindings, intro_indices, nat_literal_bound,
+    index_positions, intro_clash, intro_ctor, intro_index_bindings, intro_indices, names_constructor, nat_literal_bound,
     nat_literal_term, refine_expected, refine_field_types, solve_ctor, with_indices,
 }
 use lib::typecheck::subst {beta_reduce, term_abstract_var, term_permute, term_subst, term_shift, term_shift_above}
@@ -323,8 +323,10 @@ def mentions_uninstantiated_typevar (t : Term) (scope : Scope) (locals : LocalSc
                                     // Nothing binds it: it is the callee's
                                     // own type variable, which
                                     // instantiating a cross-def reference
-                                    // did not substitute away.
-                                    Result.err _ => true,
+                                    // did not substitute away -- unless it
+                                    // is a constructor (`Nat.zero` in a
+                                    // `Path Nat` endpoint, ISSUE-11).
+                                    Result.err _ => Bool.not (names_constructor scope nm),
                                 },
                         },
                     _ => false,

@@ -581,6 +581,24 @@ def intro_ctor_named (scope : Scope) (id : Identifier) (args : List Term) : Opti
                     (Identifier.id (dotted_tail s)) args,
     }
 
+/// Does `id` name a constructor in scope: `Nat.zero` through its owner, or a
+/// bare `zero` owned by some family?
+pub def names_constructor (scope : Scope) (id : Identifier) : Bool :=
+    match id {
+        Identifier.id s =>
+            let dot : I64 := String.find_last s "." in
+            if I64.lt dot 0
+            then Bool.not (List.is_empty (scope_find_all_inductives_by_constructor (NamePath.mk [id]) scope))
+            else match owner_named scope (NamePath.mk [Identifier.id (String.slice s 0 dot)]) {
+                Option.some ind =>
+                    match find_constructor_in_inductive ind (NamePath.mk [Identifier.id (dotted_tail s)]) {
+                        Option.some _ => true,
+                        Option.none => false,
+                    },
+                Option.none => false,
+            },
+    }
+
 def owner_named (scope : Scope) (name : NamePath) : Option Inductive :=
     match scope_find_inductive name scope {
         Result.ok ind => Option.some ind,

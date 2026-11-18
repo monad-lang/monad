@@ -91,12 +91,10 @@ pub def vappend {m : Nat} {n : Nat} {A : Type} (v : Vec m A) (w : Vec n A) : Vec
         Vec.cons h t => Vec.cons h (vappend t w),
     }
 
-/// `vtail` undoes `cons`, definitionally. These lemmas are path lambdas, not
-/// `refl x`: a lambda's boundaries are checked against the type's endpoints,
-/// while `refl x` is not compared with them yet (ISSUE-11). The cons laws of
-/// `vmap`/`vappend` do not check as lambdas yet (a binder-depth error under
-/// the path binder; the endpoint does not reduce through the match) and are
-/// recorded in `dependent-elimination-refinement.md`.
+/// `vtail` undoes `cons`, definitionally. The cons laws of `vmap`/`vappend`
+/// do not check yet (a binder-depth error under the path binder; the endpoint
+/// does not reduce through the match) and are recorded in
+/// `dependent-elimination-refinement.md`.
 #[proof]
 pub def vtail_cons {n : Nat} {A : Type} (a : A) (v : Vec n A) :
     Path (Vec n A) (vtail (Vec.cons a v)) v :=
