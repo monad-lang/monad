@@ -63,12 +63,30 @@ monad_host="${MONAD_HOST_BIN:-cargo run --manifest-path $root/rust/Cargo.toml --
 
 # A cap, the way AGENTS.md prescribes for a whole-corpus sweep: a name
 # resolution regression has hard-restarted machines, and the cap turns that
-# into exit 137 rather than an OOM. `systemd-run` is used only when it is
-# available and we are not already inside a scope (a nested scope is harmless
-# but noisy), so a macOS or container dev still gets the plain run.
-if command -v systemd-run >/dev/null 2>&1 && [ -z "${MONAD_NO_MEMORY_CAP:-}" ]; then
-  # shellcheck disable=SC2086  # MONAD_HOST_BIN is deliberately word-split
-  exec systemd-run --user --scope -p MemoryMax=8G -p MemorySwapMax=0 --collect -- \
+# into exit 137 rather than an OOM.
+#
+# But only when a user scope CAN be created. `systemd-run --user` needs a
+# session bus (`$XDG_RUNTIME_DIR`/`$DBUS_SESSION_BUS_ADDRESS`), which a
+# GitHub Actions runner does not have: the first version of this script used
+# the cap unconditionally and the `Rust corpus check` step died with
+# "Failed to connect to user scope bus via local transport ... not defined"
+# -- the cap failing the step before the check ever ran. So the probe runs a
+# no-op through the scope and falls through to the plain run if it fails,
+# which is the only way to tell a usable user manager from an absent one.
+# `MONAD_NO_MEMORY_CAP=1` skips the probe for a caller that knows.
+run_capped() {
+  if [ -n "${MONAD_NO_MEMORY_CAP:-}" ]; then
+    return 1
+  fi
+  command -v systemd-run >/dev/null 2>&1 || return 1
+  # `--quiet` keeps the probe from printing its "Running as unit" line on
+  # every call; the exit status is the answer.
+  systemd-run --user --scope --quiet --collect -- true >/dev/null 2>&1
+}
+
+# shellcheck disable=SC2086  # MONAD_HOST_BIN is deliberately word-split
+if run_capped; then
+  exec systemd-run --user --scope --quiet -p MemoryMax=8G -p MemorySwapMax=0 --collect -- \
     $monad_host check "${corpus[@]}"
 fi
 
