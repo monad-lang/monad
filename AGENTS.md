@@ -673,14 +673,19 @@ before proceeding; ask for direction rather than silently picking a fix.
 - Message format: `scope: msg` or `scope/sub: msg`
   (`scripts/check-commit-msg.sh`). Never include a `Claude-Session:` trailer.
 - Always commit with hooks enabled — **never `git commit --no-verify`**.
-  Hooks: rustfmt, clippy, shellcheck, docs-check, commit-msg.
+  Pre-commit hooks: rustfmt, clippy, shellcheck, docs-check, monad-fmt,
+  style-ratchet. Pre-push hook: corpus-check. (`commit-msg-format` runs at
+  `commit-msg`.)
 - Run `cargo fmt --manifest-path rust/Cargo.toml` BEFORE committing: if the rustfmt hook modifies files,
   the commit was REJECTED, not made — retry with `git add` + commit, and
   verify with `git log -1`.
 - The two whole-corpus sweeps — `cargo test --manifest-path rust/Cargo.toml --release` and `monad check init
-  std examples lang cli llvm runtime build motes` — run in CI, not hooks
-  (`.github/workflows/ci.yml`); do not pay them per commit locally, but run
-  them before pushing anything that touches the compiler.
+  std examples lang cli llvm runtime build motes` — do not all run per commit:
+  `cargo test` stays in CI, and the corpus `check` is the **pre-push**
+  `corpus-check` hook (`scripts/check-corpus.sh`, ~3m40s), which is the point
+  this bullet always named. Both also run in CI (`.github/workflows/ci.yml`).
+  The cheap whole-corpus gate that DOES run per commit is the style ratchet
+  (`scripts/check-style-ratchet.sh`, ~15s).
 - When an agent: the user saying "don't run tests" includes not committing.
 
 ### Finishing a plan
