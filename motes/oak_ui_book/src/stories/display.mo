@@ -2,6 +2,7 @@
 
 use oak::typed {Oak.Node}
 use oak::elements {Html.text}
+use std::list {List.intercalate}
 use oak::events {Html.on_click}
 use oak_ui::vocab {
     Ui.Opt, Ui.Tone, Ui.primary, Ui.success, Ui.warning, Ui.danger, Ui.info, Ui.neutral, Ui.solid, Ui.outline,
@@ -18,10 +19,12 @@ use oak_ui::data {
     Ui.Column, Ui.SortState, Ui.column, Ui.Column.sortable, Ui.Column.numeric, Ui.striped, Ui.hoverable,
     Ui.card, Ui.description_list, Ui.list_group, Ui.avatar, Ui.stat, Ui.table,
 }
+use oak_ui::graph_layout {Ui.GraphSpec, Ui.GraphNode, Ui.GraphEdge, Ui.GraphGroup, Ui.graph_layout}
+use oak_ui::graph {Ui.GraphMsg, Ui.GraphView, Ui.GraphView.initial, Ui.GraphView.update, Ui.graph}
 use lib::story {
     Book.Story, Book.Ctx, Book.Msg, Book.story, Book.text, Book.flag, Book.int, Book.choice, Book.knob_text,
     Book.knob_bool, Book.knob_int, Book.tone_opt, Book.size_opt, Book.tone_knob, Book.size_knob, Book.action,
-    Book.set, Book.set_and_log, Book.state, Book.state_bool,
+    Book.set, Book.set_and_log, Book.state, Book.state_bool, Book.state_int, Book.parse_int,
 }
 
 def alert_story (ctx : Book.Ctx) : Oak.Node Book.Msg :=
@@ -153,6 +156,64 @@ def data_story (ctx : Book.Ctx) : Oak.Node Book.Msg :=
                         Ui.stat List.empty "Users" "1,204" ""]] List.empty,
             Ui.list_group List.empty [Html.text "Inbox", Html.text "Archive", Html.text "Spam"]]
 
+// ─── Graph ───
+
+def gnode (id : String) (group : String) : Ui.GraphNode :=
+    { id := id, label := id, group := group, cls := "", tip := String.concat_list [group, "::", id] }
+
+def gedge (a : String) (b : String) (w : I64) : Ui.GraphEdge := { from := a, to := b, weight := w, cls := "" }
+
+def ggroup (id : String) (parent : String) : Ui.GraphGroup := { id := id, label := id, parent := parent, cls := "" }
+
+/// A small checker-shaped call graph: two modules inside one mote, and a
+/// helper module outside it, with one recursive cycle.
+def graph_spec (grouped : Bool) : Ui.GraphSpec :=
+    let g : String -> String := fn (m : String) => if grouped then m else "" in
+    { nodes := [gnode "check_decl" (g "infer"), gnode "infer" (g "infer"), gnode "check" (g "infer"),
+        gnode "unify" (g "unify"), gnode "whnf" (g "unify"), gnode "occurs" (g "unify"),
+        gnode "subst" (g "subst"), gnode "shift" (g "subst")],
+        edges := [gedge "check_decl" "check" 3, gedge "check" "infer" 5, gedge "infer" "check" 2,
+            gedge "infer" "unify" 8, gedge "check" "unify" 1, gedge "unify" "whnf" 4, gedge "unify" "occurs" 1,
+            gedge "whnf" "subst" 2, gedge "subst" "shift" 6, gedge "infer" "whnf" 1],
+        groups := if grouped
+            then [ggroup "lang" "", ggroup "infer" "lang", ggroup "unify" "lang", ggroup "subst" ""]
+            else List.empty }
+
+/// The pan/zoom/drag half of the view, kept in one story-state key
+/// (`pan_x,pan_y,zoom,dragging,drag_x,drag_y`): a book message sets one key,
+/// and a drag changes several fields at once.
+#[terminating]
+def nth_int (parts : List String) (i : I64) (default : I64) : I64 :=
+    match parts {
+        List.empty => default,
+        List.cons p rest => if i <= 0 then Book.parse_int p else nth_int rest (i - 1) default,
+    }
+
+def graph_view_of (ctx : Book.Ctx) : Ui.GraphView :=
+    let parts : List String := String.split (Book.state ctx "view" "0,0,100,0,0,0") "," in
+    { Ui.GraphView.initial with
+        pan_x := nth_int parts 0 0, pan_y := nth_int parts 1 0, zoom := nth_int parts 2 100,
+        dragging := nth_int parts 3 0 == 1, drag_x := nth_int parts 4 0, drag_y := nth_int parts 5 0,
+        selected := Book.state ctx "selected" "" }
+
+def encode_view (v : Ui.GraphView) : String :=
+    List.intercalate "," (List.map I64.to_string
+        [v.pan_x, v.pan_y, v.zoom, if v.dragging then 1 else 0, v.drag_x, v.drag_y])
+
+def graph_msg (ctx : Book.Ctx) (m : Ui.GraphMsg) : Book.Msg :=
+    let v : Ui.GraphView := Ui.GraphView.update (graph_view_of ctx) m in
+    match m {
+        Ui.GraphMsg.graph_select _ => Book.set_and_log "selected" v.selected "select",
+        _ => Book.set "view" (encode_view v),
+    }
+
+def graph_story (ctx : Book.Ctx) : Oak.Node Book.Msg :=
+    let spec : Ui.GraphSpec := graph_spec (Book.knob_bool ctx "groups") in
+    let base : Ui.GraphView := graph_view_of ctx in
+    let marks : List String := if Book.knob_bool ctx "highlight unify" then ["unify"] else List.empty in
+    let v : Ui.GraphView := { base with highlighted := marks } in
+    Ui.graph List.empty "Type checker calls" (Ui.graph_layout spec) v (graph_msg ctx) List.empty
+
 pub def display_stories : List Book.Story :=
     [Book.story "alert" "Feedback" "Alert" "Danger and warning use role=alert; the rest role=status."
         [Book.text "title" "Heads up", Book.text "body" "Your trial ends in 3 days.", Book.tone_knob, Book.flag "dismissable" true]
@@ -167,4 +228,7 @@ pub def display_stories : List Book.Story :=
         Book.story "table" "Data" "Table" "Click a header to sort; the story owns the sort state."
             [Book.flag "striped" true, Book.flag "hover" true, Book.flag "dense" false] table_story,
         Book.story "data-display" "Data" "Cards, stats and lists" "Cards, avatars, description lists, stats and list groups."
-            [Book.text "name" "Ada Lovelace"] data_story]
+            [Book.text "name" "Ada Lovelace"] data_story,
+        Book.story "graph" "Data" "Graph"
+            "A layered call graph with nested groups. Click a node to select it; the wheel and toolbar zoom."
+            [Book.flag "groups" true, Book.flag "highlight unify" true] graph_story]

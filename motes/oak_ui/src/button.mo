@@ -44,8 +44,8 @@ def button_with_type {Msg : Type} (kind : String) (opts : List Ui.Opt) (attrs : 
             (List.cons (Html.type_ kind) (List.append (state_attrs s) attrs)))
         (with_spinner s children)
 
-/// Icon name -> glyph. Unicode, not SVG: the browser runtime creates
-/// elements without a namespace, so inline SVG would not render.
+/// Icon name -> glyph. Unicode text, so an icon inherits the font colour and
+/// size of the button it sits in with no extra styling.
 pub def Ui.icon_glyphs : List (Pair String String) :=
     [Pair.pair "close" "\u{00D7}", Pair.pair "check" "\u{2713}",
         Pair.pair "chevron-down" "\u{25BE}", Pair.pair "chevron-up" "\u{25B4}",

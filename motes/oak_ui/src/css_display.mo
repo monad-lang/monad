@@ -144,3 +144,53 @@ pub def Ui.css_data : String := r#"
 .oak-table--hover .oak-table__row:hover { background: var(--oak-primary-soft); }
 .oak-table--sticky .oak-table__th { position: sticky; top: 0; z-index: 1; }
 "#
+
+// ═══ Graph ═══
+
+/// `Ui.graph`. SVG presentation lives here too (fill/stroke are CSS
+/// properties), so a theme restyles a drawing like any other component.
+/// Node kinds an application adds (`cls`) can colour `rect` the same way.
+pub def Ui.css_graph : String := r#"
+.oak-graph {
+  position: relative; min-height: 20rem; height: 100%;
+  border: 1px solid var(--oak-border); border-radius: var(--oak-radius-md);
+  background: var(--oak-surface-alt); overflow: hidden;
+}
+.oak-graph__canvas { display: block; width: 100%; height: 100%; touch-action: none; user-select: none; }
+.oak-graph__surface { fill: transparent; cursor: grab; }
+.oak-graph--dragging .oak-graph__surface { cursor: grabbing; }
+.oak-graph__toolbar {
+  position: absolute; top: calc(var(--oak-space) * 2); right: calc(var(--oak-space) * 2);
+  display: flex; align-items: center; gap: var(--oak-space);
+  background: var(--oak-surface); border: 1px solid var(--oak-border);
+  border-radius: var(--oak-radius-sm); box-shadow: var(--oak-shadow-sm); padding: 2px;
+}
+.oak-graph__tool {
+  min-width: 1.75rem; height: 1.75rem; border: 0; border-radius: var(--oak-radius-sm);
+  background: transparent; color: var(--oak-text); font: inherit; cursor: pointer;
+}
+.oak-graph__tool:hover { background: var(--oak-neutral-soft); }
+.oak-graph__tool:focus-visible { outline: 2px solid var(--oak-focus); outline-offset: 1px; }
+.oak-graph__zoom { min-width: 3rem; text-align: center; font-size: 0.8125em; color: var(--oak-muted); }
+.oak-graph__group > rect { fill: var(--oak-surface); stroke: var(--oak-border-strong); stroke-width: 1; }
+.oak-graph__group--depth-1 > rect { fill: var(--oak-surface-alt); stroke: var(--oak-border); }
+.oak-graph__group--depth-2 > rect, .oak-graph__group--depth-3 > rect { fill: var(--oak-surface);
+  stroke: var(--oak-border); stroke-dasharray: 4 3; }
+.oak-graph__group--selected > rect { stroke: var(--oak-primary); stroke-width: 2; }
+.oak-graph__group-label {
+  fill: var(--oak-muted); font-size: 11px; font-weight: 600; font-family: var(--oak-font-mono); cursor: pointer;
+}
+.oak-graph__edge { fill: none; stroke: var(--oak-border-strong); opacity: 0.75; }
+.oak-graph__edge--active { stroke: var(--oak-primary); opacity: 1; }
+.oak-graph__edge--dim { opacity: 0.12; }
+.oak-graph__arrow { fill: var(--oak-border-strong); }
+.oak-graph__node { cursor: pointer; outline: none; }
+.oak-graph__node > rect { fill: var(--oak-surface); stroke: var(--oak-border-strong); stroke-width: 1; }
+.oak-graph__node > text { fill: var(--oak-text); font-size: 12px; font-family: var(--oak-font-mono);
+  pointer-events: none; }
+.oak-graph__node:hover > rect { stroke: var(--oak-primary); }
+.oak-graph__node:focus-visible > rect { stroke: var(--oak-focus); stroke-width: 3; }
+.oak-graph__node--match > rect { fill: var(--oak-warning-soft); stroke: var(--oak-warning); }
+.oak-graph__node--selected > rect { fill: var(--oak-primary-soft); stroke: var(--oak-primary); stroke-width: 2; }
+.oak-graph__node--dim { opacity: 0.3; }
+"#

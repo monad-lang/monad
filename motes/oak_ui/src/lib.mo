@@ -49,7 +49,18 @@ pub use lib::form {
     Ui.radio_group, Ui.range, Ui.file_input, Ui.input_group, Ui.form,
 }
 
-pub use lib::css_display {Ui.css_feedback, Ui.css_data}
+pub use lib::css_display {Ui.css_feedback, Ui.css_data, Ui.css_graph}
+
+pub use lib::graph_layout {
+    Ui.GraphSpec, Ui.GraphNode, Ui.GraphEdge, Ui.GraphGroup,
+    Ui.GraphLayout, Ui.PlacedNode, Ui.PlacedGroup, Ui.PlacedEdge,
+    Ui.graph_layout, Ui.graph_node_width, Ui.graph_edge_path,
+}
+
+pub use lib::graph {
+    Ui.GraphMsg, Ui.GraphView, Ui.GraphView.initial, Ui.GraphView.update,
+    Ui.graph_zoom_step, Ui.graph_whole_px, Ui.graph,
+}
 
 pub use lib::feedback {
     Ui.Toast, Ui.alert, Ui.badge, Ui.tag, Ui.spinner, Ui.progress, Ui.skeleton, Ui.empty_state,
