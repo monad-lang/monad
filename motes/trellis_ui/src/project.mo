@@ -11,8 +11,13 @@
 //    off separately.
 // 4. A focus (a set of keys) keeps only the keys within `depth` edges of it,
 //    following callees, callers or both.
-// 5. A view over `cap` nodes is refused (`too_many`) instead of drawn: a
-//    5,000-node hairball helps nobody, and searching or focusing narrows it.
+// 5. A view over `cap` nodes is split into SECTIONS instead of drawn whole
+//    (a 5,000-node hairball helps nobody): the nodes are partitioned by the
+//    next-coarser key -- a declaration by its module, a module by its mote --
+//    and a part bigger than `cap` is cut into pieces of at most `cap`, in
+//    source order. `section` picks one to draw; with none picked (or a stale
+//    id) the projection is the section list (`sectioned`). Searching or
+//    focusing narrows a view below the cap instead.
 //
 // Grouping draws boxes around nodes: by mote at the module level; by mote
 // or by module (nested in its mote) at the declaration level. A grouping no
@@ -50,12 +55,15 @@ pub struct Trellis.Settings {
     hidden_kinds : List String,
     lens : String,
     cap : I64,
+    /// The section drawn when the view is over `cap` (`""` for none).
+    section : String,
 }
 
 pub def Trellis.Settings.initial : Trellis.Settings :=
     { level := Trellis.Level.at_module, grouping := Trellis.Grouping.by_mote, focus := List.empty,
         depth := 1, direction := Trellis.Direction.both_ways, external := false, tests := false,
-        signature := true, body := true, hidden_kinds := List.empty, lens := "calls", cap := 250 }
+        signature := true, body := true, hidden_kinds := List.empty, lens := "calls", cap := 500,
+        section := "" }
 
 pub def Trellis.Level.slug (l : Trellis.Level) : String :=
     match l { Trellis.Level.at_mote => "mote", Trellis.Level.at_module => "module", Trellis.Level.at_decl => "decl" }
@@ -83,12 +91,31 @@ pub def Trellis.Direction.of_slug (s : String) : Trellis.Direction :=
     else if String.beq s "callers" then Trellis.Direction.callers
     else Trellis.Direction.both_ways
 
+/// One piece of a view too big to draw at once.
+pub struct Trellis.Section {
+    /// `<parent key>#<part>`: stable while the settings that shape the view are.
+    id : String,
+    label : String,
+    count : I64,
+}
+
+/// A drawable view: `shown` nodes out of `total` keys at this level. When the
+/// view was over the cap, `sections` lists every piece and `section` is the
+/// one drawn; under the cap both are empty.
+pub struct Trellis.Drawn {
+    spec : Ui.GraphSpec,
+    shown : I64,
+    total : I64,
+    sections : List Trellis.Section,
+    section : String,
+}
+
 /// What a projection produced.
 pub type Trellis.Projection {
-    /// A drawable spec; `shown` nodes out of `total` keys at this level.
-    projected (spec : Ui.GraphSpec) (shown : I64) (total : I64),
-    /// More than `cap` nodes would be drawn.
-    too_many (count : I64),
+    drawn (d : Trellis.Drawn),
+    /// `count` nodes is over the cap and no section is picked: the pieces to
+    /// browse.
+    sectioned (count : I64) (sections : List Trellis.Section),
     /// Nothing is visible (an empty graph, or filters that hide everything).
     nothing,
 }
@@ -330,32 +357,162 @@ def spec_groups (g : Trellis.Grouping) (ns : List Ui.GraphNode) (nodes : HashMap
             },
     }
 
-/// Project the graph.
-pub def Trellis.project (g : Trellis.Graph) (s : Trellis.Settings) : Trellis.Projection :=
+// ═══ Sections ═══
+
+/// What a node's section is cut from: the next-coarser key.
+def parent_key (level : Trellis.Level) (info : NodeInfo) : String :=
+    match level {
+        Trellis.Level.at_decl => info.module,
+        Trellis.Level.at_module => info.mote,
+        Trellis.Level.at_mote => "",
+    }
+
+/// Per parent: its node count, and the parents in first-appearance order.
+struct Parents {
+    counts : HashMap String I64,
+    order : List String,
+}
+
+def count_parent (level : Trellis.Level) (nodes : HashMap String NodeInfo) (ps : Parents)
+    (n : Ui.GraphNode) : Parents :=
+    match Smap.get n.id nodes {
+        Option.none => ps,
+        Option.some info =>
+            let p : String := parent_key level info in
+            let c : I64 := Smap.get_i64 p 0 ps.counts in
+            { counts := Smap.insert p (c + 1) ps.counts, order := if c == 0 then List.cons p ps.order else ps.order },
+    }
+
+def section_id (parent : String) (part : I64) : String := String.concat_list [parent, "#", I64.to_string part]
+
+def sec_min (a : I64) (b : I64) : I64 := if a < b then a else b
+
+/// The label of part `part` of `parts` of `parent`.
+def section_label (parent : String) (part : I64) (parts : I64) (cap : I64) (count : I64) : String :=
+    if String.is_empty parent
+    then String.concat_list ["Nodes ", I64.to_string (part * cap + 1), "\u{2013}",
+        I64.to_string (sec_min count ((part + 1) * cap))]
+    else if parts > 1 then String.concat_list [parent, " (", I64.to_string (part + 1), "/", I64.to_string parts, ")"]
+    else parent
+
+/// The sections of one parent, appended to `acc` (reversed).
+#[terminating]
+def parent_sections (parent : String) (count : I64) (cap : I64) (parts : I64) (part : I64)
+    (acc : List Trellis.Section) : List Trellis.Section :=
+    if part >= parts then acc
+    else
+        let sec : Trellis.Section := { id := section_id parent part,
+            label := section_label parent part parts cap count,
+            count := sec_min cap (count - part * cap) } in
+        parent_sections parent count cap parts (part + 1) (List.cons sec acc)
+
+def sections_of (cap : I64) (ps : Parents) : List Trellis.Section :=
+    Seq.reverse (Seq.fold (fn (acc : List Trellis.Section) (p : String) =>
+        let count : I64 := Smap.get_i64 p 0 ps.counts in
+        parent_sections p count cap ((count + cap - 1) / cap) 0 acc) List.empty (Seq.reverse ps.order))
+
+/// The nodes in section `id`: each node's part is its index within its
+/// parent, divided by `cap`.
+struct Picking {
+    seen : HashMap String I64,
+    kept : List Ui.GraphNode,
+}
+
+def pick_step (level : Trellis.Level) (nodes : HashMap String NodeInfo) (cap : I64) (id : String) (st : Picking)
+    (n : Ui.GraphNode) : Picking :=
+    match Smap.get n.id nodes {
+        Option.none => st,
+        Option.some info =>
+            let p : String := parent_key level info in
+            let i : I64 := Smap.get_i64 p 0 st.seen in
+            let mine : Bool := String.beq (section_id p (i / cap)) id in
+            { seen := Smap.insert p (i + 1) st.seen, kept := if mine then List.cons n st.kept else st.kept },
+    }
+
+def nodes_in_section (level : Trellis.Level) (nodes : HashMap String NodeInfo) (cap : I64) (id : String)
+    (ns : List Ui.GraphNode) : List Ui.GraphNode :=
+    let st0 : Picking := { seen := Smap.empty, kept := List.empty } in
+    let done : Picking := Seq.fold (pick_step level nodes cap id) st0 ns in
+    Seq.reverse done.kept
+
+def has_section (id : String) (secs : List Trellis.Section) : Bool :=
+    List.any (fn (sec : Trellis.Section) => String.beq sec.id id) secs
+
+// ═══ Projecting ═══
+
+def node_ids (ns : List Ui.GraphNode) : HashMap String Bool :=
+    Seq.fold (fn (acc : HashMap String Bool) (n : Ui.GraphNode) => Smap.insert n.id true acc) Smap.empty ns
+
+/// The spec for exactly `nodes`: their groups and the edges between them.
+def spec_for (grouping : Trellis.Grouping) (k : Keys) (agg : Agg) (nodes : List Ui.GraphNode) : Ui.GraphSpec :=
+    let groups : List Ui.GraphGroup :=
+        match grouping {
+            Trellis.Grouping.by_none => List.empty,
+            _ => spec_groups grouping nodes k.nodes Smap.empty List.empty,
+        } in
+    { nodes := nodes, edges := spec_edges agg.pairs agg.counts (node_ids nodes) true, groups := groups }
+
+def drawn_view (spec : Ui.GraphSpec) (total : I64) (sections : List Trellis.Section)
+    (section : String) : Trellis.Projection :=
+    let d : Trellis.Drawn := { spec := spec, shown := Seq.length spec.nodes, total := total, sections := sections,
+        section := section } in
+    Trellis.Projection.drawn d
+
+/// The expensive half of a projection: the visible keys, the aggregated
+/// edges and the nodes the focus keeps. It depends on every setting except
+/// `cap` and `section`, so the app keeps it and re-runs only `Trellis.cut`
+/// while the user pages through sections or changes the cap (aggregating
+/// the type checker's 64k edges is most of a projection's cost).
+pub struct Trellis.Prepared {
+    level : Trellis.Level,
+    grouping : Trellis.Grouping,
+    keys : Keys,
+    agg : Agg,
+    nodes : List Ui.GraphNode,
+    total : I64,
+}
+
+pub def Trellis.Prepared.empty : Trellis.Prepared :=
+    let k : Keys := { of_decl := Smap.empty, nodes := Smap.empty, order := List.empty } in
+    let a : Agg := { counts := Smap.empty, pairs := List.empty } in
+    { level := Trellis.Level.at_module, grouping := Trellis.Grouping.by_none, keys := k, agg := a,
+        nodes := List.empty, total := 0 }
+
+/// Everything but the cap and the section.
+pub def Trellis.prepare (g : Trellis.Graph) (s : Trellis.Settings) : Trellis.Prepared :=
     let empty_keys : Keys := { of_decl := Smap.empty, nodes := Smap.empty, order := List.empty } in
     let k : Keys := collect_keys s g.decls empty_keys in
-    let total : I64 := Seq.length k.order in
-    if total == 0 then Trellis.Projection.nothing
+    let agg0 : Agg := { counts := Smap.empty, pairs := List.empty } in
+    let agg : Agg := aggregate s k.of_decl g.edges agg0 in
+    let focus : List String := List.filter (fn (f : String) => Smap.has f k.nodes) s.focus in
+    let focused : Bool := Bool.not (List.is_empty focus) in
+    let keep : HashMap String Bool :=
+        if focused then reach s.direction agg.pairs focus (mark_all focus Smap.empty) s.depth else Smap.empty in
+    let grouping : Trellis.Grouping := Trellis.effective_grouping s.level s.grouping in
+    { level := s.level, grouping := grouping, keys := k, agg := agg,
+        nodes := spec_nodes s grouping k.order k.nodes keep focused, total := Seq.length k.order }
+
+/// The cheap half: draw the prepared view whole, or cut it into sections
+/// of at most `cap` nodes and draw `section` (or list them).
+pub def Trellis.cut (p : Trellis.Prepared) (cap0 : I64) (section : String) : Trellis.Projection :=
+    if p.total == 0 then Trellis.Projection.nothing
     else
-        let agg0 : Agg := { counts := Smap.empty, pairs := List.empty } in
-        let agg : Agg := aggregate s k.of_decl g.edges agg0 in
-        let focus : List String := List.filter (fn (f : String) => Smap.has f k.nodes) s.focus in
-        let focused : Bool := Bool.not (List.is_empty focus) in
-        let keep : HashMap String Bool :=
-            if focused then reach s.direction agg.pairs focus (mark_all focus Smap.empty) s.depth else Smap.empty in
-        let grouping : Trellis.Grouping := Trellis.effective_grouping s.level s.grouping in
-        let nodes : List Ui.GraphNode := spec_nodes s grouping k.order k.nodes keep focused in
-        let shown : I64 := Seq.length nodes in
-        if shown > s.cap then Trellis.Projection.too_many shown
+        let shown : I64 := Seq.length p.nodes in
+        let cap : I64 := if cap0 < 1 then 1 else cap0 in
+        if shown <= cap then drawn_view (spec_for p.grouping p.keys p.agg p.nodes) p.total List.empty ""
         else
-            let groups : List Ui.GraphGroup :=
-                match grouping {
-                    Trellis.Grouping.by_none => List.empty,
-                    _ => spec_groups grouping nodes k.nodes Smap.empty List.empty,
-                } in
-            let spec : Ui.GraphSpec := { nodes := nodes, edges := spec_edges agg.pairs agg.counts keep focused,
-                groups := groups } in
-            Trellis.Projection.projected spec shown total
+            let ps0 : Parents := { counts := Smap.empty, order := List.empty } in
+            let sections : List Trellis.Section :=
+                sections_of cap (Seq.fold (count_parent p.level p.keys.nodes) ps0 p.nodes) in
+            if has_section section sections
+            then
+                let picked : List Ui.GraphNode := nodes_in_section p.level p.keys.nodes cap section p.nodes in
+                drawn_view (spec_for p.grouping p.keys p.agg picked) p.total sections section
+            else Trellis.Projection.sectioned shown sections
+
+/// Project the graph: `Trellis.cut` of `Trellis.prepare`.
+pub def Trellis.project (g : Trellis.Graph) (s : Trellis.Settings) : Trellis.Projection :=
+    Trellis.cut (Trellis.prepare g s) s.cap s.section
 
 // ═══ Neighbours (the detail panel) ═══
 

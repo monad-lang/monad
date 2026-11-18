@@ -29,6 +29,7 @@ use lang::module {
 }
 use trellis_ui::smap {Smap.empty, Smap.insert, Smap.has}
 use lib::extract {Trellis.Source}
+use lib::docs {Trellis.SourceDocs, Trellis.SourceDocs.empty, Trellis.docs_of_source}
 
 /// A resolved mote argument: its manifest name and directory.
 pub struct Trellis.Target {
@@ -99,6 +100,8 @@ def lines_of (src : String) : HashMap String I64 := index_lines (decl_ranges_of_
 // ─── One target file ───
 
 struct Walk {
+    /// Read doc comments too (`--no-docs` turns it off).
+    docs : Bool,
     sources : List Trellis.Source,
     own : HashMap String Bool,
     cache : ModuleInfoCache,
@@ -126,7 +129,8 @@ def load_path (t : Trellis.Target) (file : String) (path : Path) (w : Walk) : IO
                     let loaded <- load_modules_from_main info w.cache false;
                     let s : Trellis.Source :=
                         { module := module, mote := t.name, file := file, external := false,
-                            decls := info.decl_list, lines := lines_of src };
+                            decls := info.decl_list, lines := lines_of src,
+                            docs := docs_if w.docs module file src };
                     return { w with sources := List.cons s w.sources, own := Smap.insert module true w.own,
                         cache := loaded.cache }
                 },
@@ -161,6 +165,12 @@ def load_targets (ts : List Trellis.Target) (tests : Bool) (w : Walk) : IO Walk 
 
 def no_lines : HashMap String I64 := Smap.empty
 
+def docs_if (on : Bool) (module : String) (file : String) (src : String) : Trellis.SourceDocs :=
+    if on then Trellis.docs_of_source module file src else Trellis.SourceDocs.empty
+
+def docs_of_read (on : Bool) (module : String) (file : String) (r : Result StreamError String) : Trellis.SourceDocs :=
+    match r { Result.ok src => docs_if on module file src, Result.err _ => Trellis.SourceDocs.empty }
+
 def lines_of_read (r : Result StreamError String) : HashMap String I64 :=
     match r { Result.ok src => lines_of src, Result.err _ => no_lines }
 
@@ -168,7 +178,7 @@ def mote_of_path (path : String) : String :=
     match String.split path "::" { List.cons h _ => h, List.empty => path }
 
 #[partial]
-def external_sources (infos : List ModuleInfo) (own : HashMap String Bool) (roots : List String)
+def external_sources (docs : Bool) (infos : List ModuleInfo) (own : HashMap String Bool) (roots : List String)
     (acc : List Trellis.Source) : IO (List Trellis.Source) :=
     match infos {
         List.empty => return (List.reverse acc),
@@ -178,14 +188,15 @@ def external_sources (infos : List ModuleInfo) (own : HashMap String Bool) (root
             // A root mote's own module is loaded from its file already; a
             // cache entry for it would double it.
             if Smap.has module own || List.any (fn (r : String) => String.beq r mote) roots
-            then external_sources rest own roots acc
+            then external_sources docs rest own roots acc
             else do {
                 let text <- IO.read_file info.file_path;
-                let lines : HashMap String I64 := lines_of_read text;
+                let file : String := Path.to_string info.file_path;
                 let s : Trellis.Source :=
-                    { module := module, mote := mote, file := Path.to_string info.file_path, external := true,
-                        decls := info.decl_list, lines := lines };
-                external_sources rest own roots (List.cons s acc)
+                    { module := module, mote := mote, file := file, external := true,
+                        decls := info.decl_list, lines := lines_of_read text,
+                        docs := docs_of_read docs module file text };
+                external_sources docs rest own roots (List.cons s acc)
             }
         },
     }
@@ -196,12 +207,13 @@ pub struct Trellis.Loaded {
     errors : List String,
 }
 
-/// Load `targets` and their import closure.
-pub def Trellis.load (targets : List Trellis.Target) (tests : Bool) : IO Trellis.Loaded := do {
-    let start : Walk := { sources := List.empty, own := Smap.empty, cache := module_info_cache_empty,
-        errors := List.empty };
+/// Load `targets` and their import closure; `docs` also reads every
+/// file's doc comments.
+pub def Trellis.load (targets : List Trellis.Target) (tests : Bool) (docs : Bool) : IO Trellis.Loaded := do {
+    let start : Walk := { docs := docs, sources := List.empty, own := Smap.empty,
+        cache := module_info_cache_empty, errors := List.empty };
     let w <- load_targets targets tests start;
     let roots : List String := List.map (fn (t : Trellis.Target) => t.name) targets;
-    let ext <- external_sources (module_info_cache_entries w.cache) w.own roots List.empty;
+    let ext <- external_sources docs (module_info_cache_entries w.cache) w.own roots List.empty;
     return { sources := List.append (List.reverse w.sources) ext, errors := List.reverse w.errors }
 }

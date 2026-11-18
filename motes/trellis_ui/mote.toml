@@ -35,6 +35,10 @@ workspace = true
 [dependencies.web_event]
 workspace = true
 
+# Doc comments are markdown; the detail panel renders them to `Html.Node`.
+[dependencies.markdown]
+workspace = true
+
 [dependencies.oak]
 workspace = true
 

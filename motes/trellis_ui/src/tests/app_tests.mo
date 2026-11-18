@@ -75,3 +75,48 @@ def test_clear_focus_restores_the_level : Bool :=
 def test_toggling_externals_adds_std : Bool :=
     let m : Trellis.Model := step ready (Trellis.Msg.toggle "external" true) in
     shows "std::list" m
+
+/// The fixture at the decl level with a cap of 3: four sections by module.
+def over_cap : Trellis.Model :=
+    step (step ready (Trellis.Msg.set_level "decl")) (Trellis.Msg.set_cap "3")
+
+#[test]
+def test_over_the_cap_shows_the_section_browser : Bool :=
+    over_cap.over == 8 && List.length over_cap.sections == 4 && over_cap.shown == 0
+        && String.contains (html over_cap) "too many to draw at once"
+        && String.contains (html over_cap) "lang::typecheck::unify"
+
+#[test]
+def test_opening_a_section_draws_it : Bool :=
+    let m : Trellis.Model := step over_cap (Trellis.Msg.open_section "lang::typecheck::unify#0") in
+    m.shown == 2 && shows "lang::typecheck::unify::whnf" m && String.contains (html m) "Section 2 of 4"
+
+#[test]
+def test_section_steps_clamp_at_the_ends : Bool :=
+    let first : Trellis.Model := step over_cap (Trellis.Msg.open_section "lang::typecheck::infer#0") in
+    let back : Trellis.Model := step first (Trellis.Msg.section_step (0 - 1)) in
+    let next : Trellis.Model := step first (Trellis.Msg.section_step 1) in
+    let last : Trellis.Model := step next (Trellis.Msg.section_step 9) in
+    String.beq back.settings.section "lang::typecheck::infer#0"
+        && String.beq next.settings.section "lang::typecheck::unify#0"
+        && String.beq last.settings.section "proofs::nat#0"
+
+#[test]
+def test_close_section_returns_to_the_list : Bool :=
+    let opened : Trellis.Model := step over_cap (Trellis.Msg.open_section "lang::module#0") in
+    let closed : Trellis.Model := step opened Trellis.Msg.close_section in
+    closed.shown == 0 && String.contains (html closed) "too many to draw at once"
+
+#[test]
+def test_level_switch_clears_the_section : Bool :=
+    let opened : Trellis.Model := step over_cap (Trellis.Msg.open_section "lang::module#0") in
+    let up : Trellis.Model := step opened (Trellis.Msg.set_level "module") in
+    // Still over the cap of 3 at the module level (4 modules): back to the
+    // list, now by mote (lang, proofs), with no section open.
+    String.is_empty up.settings.section && up.over == 4 && up.shown == 0 && List.length up.sections == 2
+
+#[test]
+def test_filter_narrows_the_section_list : Bool :=
+    let m : Trellis.Model := step over_cap (Trellis.Msg.filter_sections "nat") in
+    String.contains (html m) "proofs::nat" && Bool.not (String.contains (html m) "lang::module#0")
+        && Bool.not (String.contains (html m) ">lang::module<")

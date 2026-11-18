@@ -10,7 +10,7 @@
 use lib::model {Trellis.ModuleNode, Trellis.DeclNode, Trellis.Edge, Trellis.Graph, Trellis.decl_id}
 
 def m (path : String) (mote : String) (external : Bool) : Trellis.ModuleNode :=
-    { path := path, mote := mote, file := "", external := external }
+    { path := path, mote := mote, file := "", external := external, docs := "" }
 
 def infer_m : Trellis.ModuleNode := m "lang::typecheck::infer" "lang" false
 def unify_m : Trellis.ModuleNode := m "lang::typecheck::unify" "lang" false
@@ -21,7 +21,8 @@ def nat_m : Trellis.ModuleNode := m "proofs::nat" "proofs" false
 def decl (mo : Trellis.ModuleNode) (name : String) (kind : String) (attrs : List String)
     (sort : String) : Trellis.DeclNode :=
     { id := Trellis.decl_id mo.path name, name := name, module := mo.path, mote := mo.mote, kind := kind,
-        vis := "pub", line := 1, attrs := attrs, sort := sort, doc := "", external := mo.external }
+        vis := "pub", line := 1, attrs := attrs, sort := sort, href := "", docs := "",
+        external := mo.external }
 
 def edge (a : String) (b : String) (axis : String) : Trellis.Edge := { from := a, to := b, axis := axis }
 

@@ -9,10 +9,14 @@
 //   declaration's SIGNATURE (types, constraints, an instance head), `b` when
 //   it is in the BODY. For a theorem, signature edges read "the statement
 //   depends on" and body edges "the proof uses";
-// - each decl carries `doc`, an href in docgen's page/anchor scheme
-//   (`<mote>/<module>.html#<kind>.<name>`), empty until docs are published.
+// - each decl carries `href`, a link in docgen's page/anchor scheme
+//   (`<mote>/<module>.html#<kind>.<name>`), empty until docs are published;
+// - each decl and module carries `docs`: its `///` doc comment as markdown
+//   (docgen's scan, so trellis and the docs site agree on what a
+//   declaration's docs are), rendered in the browser by `Trellis.docs_view`.
+//   Empty when there is none.
 //
-// ## Wire format (`trellis 1`)
+// ## Wire format (`trellis 2`)
 //
 // One record per line, tab-separated. TSV rather than JSON on purpose: the
 // browser parses the whole graph on load, and splitting lines is about fifty
@@ -20,17 +24,20 @@
 // (measured 2026-11-18: 108 ms against 5.8 s for 47k records).
 //
 // ```text
-// trellis<TAB>1
+// trellis<TAB>2
 // R<TAB>root mote                     -- a mote the graph was extracted for
-// M<TAB>path<TAB>mote<TAB>file<TAB>external(0|1)
-// D<TAB>module#<TAB>name<TAB>kind<TAB>vis<TAB>line<TAB>attrs<TAB>sort<TAB>doc
+// M<TAB>path<TAB>mote<TAB>file<TAB>external(0|1)<TAB>docs
+// D<TAB>module#<TAB>name<TAB>kind<TAB>vis<TAB>line<TAB>attrs<TAB>sort<TAB>href<TAB>docs
 // E<TAB>from decl#<TAB>to decl#<TAB>axis(s|b)
 // S<TAB>refs<TAB>resolved<TAB>unresolved
 // ```
 //
 // `#` fields are 0-based indices into the preceding M or D records; `attrs`
 // is space-separated. A decl's id is `<module path>::<name>`. Fields never
-// contain a tab or newline (names, paths and hrefs cannot).
+// contain a tab or newline: names, paths and hrefs cannot, and `docs` is
+// escaped (`\\`, `\t`, `\n`; `Trellis.escape_field`). Only a non-empty docs
+// field is unescaped, so the decode of an undocumented graph is unchanged. A
+// `trellis 1` file (no `docs` fields) still decodes, with empty docs.
 
 use std::list {List.intercalate, List.filter, List.any}
 use std::map {HashMap}
@@ -42,6 +49,8 @@ pub struct Trellis.ModuleNode {
     mote : String,
     file : String,
     external : Bool,
+    /// The module's leading doc comment, markdown (`""` for none).
+    docs : String,
 }
 
 pub struct Trellis.DeclNode {
@@ -54,7 +63,10 @@ pub struct Trellis.DeclNode {
     line : I64,
     attrs : List String,
     sort : String,
-    doc : String,
+    /// The declaration's docs page (`""` without a docs base).
+    href : String,
+    /// The `///` doc comment, markdown (`""` for none).
+    docs : String,
     external : Bool,
 }
 
@@ -94,11 +106,28 @@ def tab_line (fields : List String) : String := List.intercalate "\t" fields
 
 def flag (b : Bool) : String := if b then "1" else "0"
 
+/// Free text as one field: `\` -> `\\`, tab -> `\t`, newline -> `\n`
+/// (a carriage return is dropped).
+pub def Trellis.escape_field (text : String) : String :=
+    let parts : List String := String.split (List.intercalate "" (String.split text "\r")) "\\" in
+    List.intercalate "\\\\" (List.map (fn (p : String) =>
+        List.intercalate "\\t" (String.split (List.intercalate "\\n" (String.split p "\n")) "\t")) parts)
+
+/// The inverse of `Trellis.escape_field`. Splitting on the escaped
+/// backslash first leaves every other backslash the start of `\t` or `\n`.
+pub def Trellis.unescape_field (field : String) : String :=
+    if Bool.not (String.contains field "\\") then field
+    else
+        let parts : List String := String.split field "\\\\" in
+        List.intercalate "\\" (List.map (fn (p : String) =>
+            List.intercalate "\t" (String.split (List.intercalate "\n" (String.split p "\\n")) "\\t")) parts)
+
 #[terminating]
 def module_lines (ms : List Trellis.ModuleNode) : List String :=
     match ms {
         List.empty => List.empty,
-        List.cons m rest => List.cons (tab_line ["M", m.path, m.mote, m.file, flag m.external]) (module_lines rest),
+        List.cons m rest => List.cons (tab_line ["M", m.path, m.mote, m.file, flag m.external,
+            Trellis.escape_field m.docs]) (module_lines rest),
     }
 
 #[terminating]
@@ -117,7 +146,7 @@ def decl_lines (ds : List Trellis.DeclNode) (mods : HashMap String I64) : List S
         List.empty => List.empty,
         List.cons d rest =>
             let line : String := tab_line ["D", I64.to_string (Smap.get_i64 d.module 0 mods), d.name, d.kind, d.vis,
-                I64.to_string d.line, List.intercalate " " d.attrs, d.sort, d.doc] in
+                I64.to_string d.line, List.intercalate " " d.attrs, d.sort, d.href, Trellis.escape_field d.docs] in
             List.cons line (decl_lines rest mods),
     }
 
@@ -144,12 +173,12 @@ def root_lines (rs : List String) : List String :=
         List.cons r rest => List.cons (tab_line ["R", r]) (root_lines rest),
     }
 
-/// The graph in the `trellis 1` wire format.
+/// The graph in the `trellis 2` wire format.
 pub def Trellis.Graph.encode (g : Trellis.Graph) : String :=
     let mods : HashMap String I64 := index_strings (List.map module_path g.modules) 0 Smap.empty in
     let decls : HashMap String I64 := index_strings (List.map decl_key g.decls) 0 Smap.empty in
     List.intercalate "\n" (List.flatten [
-        ["trellis\t1"],
+        ["trellis\t2"],
         root_lines g.roots,
         module_lines g.modules,
         decl_lines g.decls mods,
@@ -202,7 +231,7 @@ struct Decoding {
     unresolved : I64,
 }
 
-def no_module : Trellis.ModuleNode := { path := "", mote := "", file := "", external := false }
+def no_module : Trellis.ModuleNode := { path := "", mote := "", file := "", external := false, docs := "" }
 
 def module_at (mods : HashMap String Trellis.ModuleNode) (i : String) : Trellis.ModuleNode :=
     match Smap.get i mods { Option.some m => m, Option.none => no_module }
@@ -212,10 +241,12 @@ def decl_of (fs : List String) (mods : HashMap String Trellis.ModuleNode) : Trel
     let name : String := field fs 2 in
     { id := Trellis.decl_id m.path name, name := name, module := m.path, mote := m.mote,
         kind := field fs 3, vis := field fs 4, line := Trellis.parse_nat (field fs 5),
-        attrs := words (field fs 6), sort := field fs 7, doc := field fs 8, external := m.external }
+        attrs := words (field fs 6), sort := field fs 7, href := field fs 8,
+        docs := Trellis.unescape_field (field fs 9), external := m.external }
 
 def module_of (fs : List String) : Trellis.ModuleNode :=
-    { path := field fs 1, mote := field fs 2, file := field fs 3, external := String.beq (field fs 4) "1" }
+    { path := field fs 1, mote := field fs 2, file := field fs 3, external := String.beq (field fs 4) "1",
+        docs := Trellis.unescape_field (field fs 5) }
 
 def first_step (p : Decoding) (line : String) : Decoding :=
     let fs : List String := String.split line "\t" in
@@ -247,15 +278,15 @@ def edge_step (ids : HashMap String String) (acc : List Trellis.Edge) (line : St
         List.cons e acc
     else acc
 
-/// Parse a `trellis 1` file. `err` names what is wrong with a file that is
-/// not one.
+/// Parse a `trellis 2` (or `trellis 1`) file. `err` names what is wrong
+/// with a file that is not one.
 pub def Trellis.Graph.decode (text : String) : Result String Trellis.Graph :=
     let lines : List String := Seq.lines text in
     match lines {
         List.empty => Result.err "empty graph file",
         List.cons head _ =>
-            if Bool.not (String.beq head "trellis\t1")
-            then Result.err "not a trellis 1 graph file"
+            if Bool.not (String.beq head "trellis\t2" || String.beq head "trellis\t1")
+            then Result.err "not a trellis graph file"
             else
                 let start : Decoding :=
                     { roots := List.empty, modules := List.empty, mods := Smap.empty, module_count := 0,

@@ -11,7 +11,8 @@
 // with `loaded` directly.
 
 use std::list {List.filter, List.any, List.intercalate, List.filter_map}
-use oak::typed {Oak.Node, Oak.Attr}
+use oak::typed {Oak.Node, Oak.Attr, Oak.of_html}
+use xml_html::html {Html.Node}
 use oak::app {Program, Program.with_subs, Command}
 use oak::events {Html.on, Html.on_click, Subscription, Subscription.animation_frame_msg}
 use oak::elements {
@@ -34,15 +35,17 @@ use oak_ui::graph_layout {Ui.GraphLayout, Ui.GraphSpec, Ui.graph_layout}
 use oak_ui::graph {Ui.GraphMsg, Ui.GraphView, Ui.GraphView.initial, Ui.GraphView.update, Ui.graph}
 use lib::model {Trellis.Graph, Trellis.Graph.empty, Trellis.Graph.decode, Trellis.DeclNode, Trellis.ModuleNode,
     Trellis.DeclNode.is_proof}
-use lib::fuzzy {Fuzzy.Hit, Fuzzy.search}
-use lib::seq {Seq.map, Seq.filter, Seq.length}
+use lib::fuzzy {Fuzzy.Hit, Fuzzy.search, Fuzzy.score}
+use lib::seq {Seq.map, Seq.filter, Seq.length, Seq.fold}
 use lib::project {
     Trellis.Level, Trellis.Grouping, Trellis.Direction, Trellis.Settings, Trellis.Settings.initial,
     Trellis.Level.slug, Trellis.Level.of_slug, Trellis.Grouping.slug, Trellis.Grouping.of_slug,
-    Trellis.Direction.slug, Trellis.Direction.of_slug, Trellis.Projection, Trellis.project,
+    Trellis.Direction.slug, Trellis.Direction.of_slug, Trellis.Projection, Trellis.Section, Trellis.Drawn,
+    Trellis.Prepared, Trellis.Prepared.empty, Trellis.prepare, Trellis.cut,
     Trellis.neighbours, Trellis.find_decl, Trellis.find_module, Trellis.lift_key,
 }
 use lib::model {Trellis.parse_nat}
+use lib::docs {Trellis.render_docs}
 
 // ═══ Model, messages, effects ═══
 
@@ -57,16 +60,25 @@ pub struct Trellis.Model {
     hits : List Fuzzy.Hit,
     cursor : I64,
     view : Ui.GraphView,
+    /// The projection's expensive half, kept while only the cap or the
+    /// section changes (`Trellis.prepare`).
+    prepared : Trellis.Prepared,
     layout : Ui.GraphLayout,
     shown : I64,
     total : I64,
-    /// The node count of a refused view (`Trellis.Projection.too_many`), else 0.
+    /// The node count of a view over the cap (browsed by section), else 0.
     over : I64,
+    /// The view's sections when it is over the cap, else empty.
+    sections : List Trellis.Section,
+    /// Narrows the section browser's list.
+    section_query : String,
     /// The selected declaration with its uses and users, computed when the
     /// selection changes (not on every render: a drag re-renders per move).
     detail : Option Trellis.DeclNode,
     uses : List String,
     used_by : List String,
+    /// The selected declaration's or module's doc comment, rendered.
+    docs : List Html.Node,
 }
 
 pub type Trellis.Msg {
@@ -87,6 +99,11 @@ pub type Trellis.Msg {
     focus_selected,
     drill_selected,
     clear_focus,
+    set_cap (text : String),
+    open_section (id : String),
+    section_step (delta : I64),
+    close_section,
+    filter_sections (query : String),
 }
 
 pub type Trellis.Effect {
@@ -100,8 +117,10 @@ def empty_layout : Ui.GraphLayout :=
 /// The model before anything is loaded; `url` is where the graph file is.
 pub def Trellis.Model.initial (url : String) : Trellis.Model :=
     { status := "idle", error := "", url := url, graph := Trellis.Graph.empty, settings := Trellis.Settings.initial,
-        query := "", hits := List.empty, cursor := 0, view := Ui.GraphView.initial, layout := empty_layout,
-        shown := 0, total := 0, over := 0, detail := Option.none, uses := List.empty, used_by := List.empty }
+        query := "", hits := List.empty, cursor := 0, view := Ui.GraphView.initial, prepared := Trellis.Prepared.empty,
+        layout := empty_layout,
+        shown := 0, total := 0, over := 0, sections := List.empty, section_query := "",
+        detail := Option.none, uses := List.empty, used_by := List.empty, docs := List.empty }
 
 // ═══ Update ═══
 
@@ -112,15 +131,24 @@ def hit_keys (hits : List Fuzzy.Hit) : List String := List.map (fn (h : Fuzzy.Hi
 /// Re-project and re-lay out after a settings or graph change. Search hits
 /// that are nodes at this level are highlighted.
 pub def Trellis.refresh (m : Trellis.Model) : Trellis.Model :=
+    recut { m with prepared := Trellis.prepare m.graph m.settings }
+
+/// Re-cut the kept preparation after a cap or section change.
+def recut (m : Trellis.Model) : Trellis.Model :=
     let v : Ui.GraphView := m.view in
     let marked : Ui.GraphView := { v with highlighted := hit_keys m.hits } in
-    match Trellis.project m.graph m.settings {
-        Trellis.Projection.projected spec shown total =>
-            { m with layout := Ui.graph_layout spec, shown := shown, total := total, over := 0, view := marked },
-        Trellis.Projection.too_many n => { m with layout := empty_layout, shown := 0, over := n, view := marked },
+    match Trellis.cut m.prepared m.settings.cap m.settings.section {
+        Trellis.Projection.drawn d =>
+            { m with layout := Ui.graph_layout d.spec, shown := d.shown, total := d.total,
+                over := section_total d.sections, sections := d.sections, view := marked },
+        Trellis.Projection.sectioned n secs => { m with layout := empty_layout, shown := 0, over := n,
+            sections := secs, view := marked },
         Trellis.Projection.nothing => { m with layout := empty_layout, shown := 0, total := 0, over := 0,
-            view := marked },
+            sections := List.empty, view := marked },
     }
+
+def section_total (secs : List Trellis.Section) : I64 :=
+    Seq.fold (fn (n : I64) (sec : Trellis.Section) => n + sec.count) 0 secs
 
 def with_settings (m : Trellis.Model) (s : Trellis.Settings) : Trellis.Model := Trellis.refresh { m with settings := s }
 
@@ -139,7 +167,7 @@ pub def Trellis.pick (m : Trellis.Model) (level : String) (key : String) : Trell
     let lvl : Trellis.Level := Trellis.Level.of_slug level in
     let grouping : Trellis.Grouping :=
         match lvl { Trellis.Level.at_decl => Trellis.Grouping.by_module, _ => Trellis.Grouping.by_mote } in
-    let ns : Trellis.Settings := { s with level := lvl, grouping := grouping, focus := [key] } in
+    let ns : Trellis.Settings := { s with level := lvl, grouping := grouping, focus := [key], section := "" } in
     let v : Ui.GraphView := m.view in
     let nv : Ui.GraphView := { v with selected := key, pan_x := 0, pan_y := 0 } in
     with_settings { m with view := nv } ns
@@ -170,10 +198,10 @@ def drill (m : Trellis.Model) : Trellis.Model :=
         Pair.pair level key =>
             if String.beq level "mote"
             then with_settings m { s with level := Trellis.Level.at_module, grouping := Trellis.Grouping.by_mote,
-                focus := modules_of_mote m.graph key, depth := 0 }
+                focus := modules_of_mote m.graph key, depth := 0, section := "" }
             else if String.beq level "module"
             then with_settings m { s with level := Trellis.Level.at_decl, grouping := Trellis.Grouping.by_module,
-                focus := decls_of_module m.graph key, depth := 0 }
+                focus := decls_of_module m.graph key, depth := 0, section := "" }
             else m,
     }
 
@@ -191,7 +219,7 @@ def switch_level (m : Trellis.Model) (slug : String) : Trellis.Model :=
         List.filter_map (fn (k : String) => Trellis.lift_key m.graph s.level to k) s.focus in
     let v : Ui.GraphView := m.view in
     let nv : Ui.GraphView := { v with selected := "" } in
-    with_settings { m with view := nv } { s with level := to, focus := lifted }
+    with_settings { m with view := nv } { s with level := to, focus := lifted, section := "" }
 
 def toggle (m : Trellis.Model) (name : String) (on : Bool) : Trellis.Model :=
     let s : Trellis.Settings := m.settings in
@@ -223,14 +251,24 @@ def loaded (m : Trellis.Model) (text : String) : Trellis.Model :=
 
 def poll_delay : I64 := 30
 
+def decl_docs (d : Option Trellis.DeclNode) : String := match d { Option.some x => x.docs, Option.none => "" }
+
+def module_docs (g : Trellis.Graph) (path : String) : String :=
+    match Trellis.find_module g.modules path { Option.some mo => mo.docs, Option.none => "" }
+
 /// Recompute the detail cache for the current selection.
 def with_detail (m : Trellis.Model) : Trellis.Model :=
     match Trellis.selected_key m {
         Pair.pair level key =>
             if String.beq level "decl" && Bool.not (String.is_empty key)
-            then { m with detail := Trellis.find_decl m.graph.decls key,
-                uses := Trellis.neighbours m.graph key true, used_by := Trellis.neighbours m.graph key false }
-            else { m with detail := Option.none, uses := List.empty, used_by := List.empty },
+            then
+                let d : Option Trellis.DeclNode := Trellis.find_decl m.graph.decls key in
+                { m with detail := d, docs := Trellis.render_docs (decl_docs d),
+                    uses := Trellis.neighbours m.graph key true, used_by := Trellis.neighbours m.graph key false }
+            else if String.beq level "module" && Bool.not (String.is_empty key)
+            then { m with detail := Option.none, uses := List.empty, used_by := List.empty,
+                docs := Trellis.render_docs (module_docs m.graph key) }
+            else { m with detail := Option.none, uses := List.empty, used_by := List.empty, docs := List.empty },
     }
 
 def keep_detail (before : String) (step : Pair Trellis.Model
@@ -272,7 +310,47 @@ def update_step (m : Trellis.Model) (msg : Trellis.Msg) : Pair Trellis.Model (Co
         Trellis.Msg.drill_selected => stay (drill m),
         Trellis.Msg.clear_focus =>
             let s : Trellis.Settings := m.settings in
-            stay (with_settings m { s with focus := List.empty }),
+            stay (with_settings m { s with focus := List.empty, section := "" }),
+        Trellis.Msg.set_cap text =>
+            let s : Trellis.Settings := m.settings in
+            let ns : Trellis.Settings := { s with cap := Trellis.parse_nat text } in
+            stay (recut { m with settings := ns }),
+        Trellis.Msg.open_section id => stay (show_section m id),
+        Trellis.Msg.section_step delta => stay (step_section m delta),
+        Trellis.Msg.close_section => stay (show_section m ""),
+        Trellis.Msg.filter_sections q => stay { m with section_query := q },
+    }
+
+/// Draw section `id` (`""` for the section list), with the view reset.
+def show_section (m : Trellis.Model) (id : String) : Trellis.Model :=
+    let s : Trellis.Settings := m.settings in
+    let v : Ui.GraphView := m.view in
+    let nv : Ui.GraphView := { v with pan_x := 0, pan_y := 0, zoom := 100, fit := true, selected := "" } in
+    let ns : Trellis.Settings := { s with section := id } in
+    recut { m with view := nv, settings := ns }
+
+#[terminating]
+def section_index (id : String) (secs : List Trellis.Section) (i : I64) : I64 :=
+    match secs {
+        List.empty => 0 - 1,
+        List.cons sec rest => if String.beq sec.id id then i else section_index id rest (i + 1),
+    }
+
+#[terminating]
+def section_at (secs : List Trellis.Section) (i : I64) : Option Trellis.Section :=
+    match secs {
+        List.empty => Option.none,
+        List.cons sec rest => if i <= 0 then Option.some sec else section_at rest (i - 1),
+    }
+
+/// The section `delta` places from the open one, clamped to the list.
+def step_section (m : Trellis.Model) (delta : I64) : Trellis.Model :=
+    let n : I64 := List.length m.sections in
+    let i : I64 := section_index m.settings.section m.sections 0 + delta in
+    let j : I64 := if i < 0 then 0 else if i >= n then n - 1 else i in
+    match section_at m.sections j {
+        Option.none => m,
+        Option.some sec => if String.beq sec.id m.settings.section then m else show_section m sec.id,
     }
 
 /// Load on the first frame (the runtime has no init command).
@@ -362,6 +440,10 @@ def controls (m : Trellis.Model) : Oak.Node Trellis.Msg :=
                     (Trellis.Direction.slug s.direction) Trellis.Msg.set_direction),
             labelled "trellis-depth" (String.concat "Depth: " (I64.to_string s.depth))
                 (Ui.range [Ui.full] 0 6 1 s.depth Trellis.Msg.set_depth),
+            labelled "trellis-cap" "Max nodes per view"
+                (Ui.select [Ui.small, Ui.full]
+                    [Pair.pair "100" "100", Pair.pair "250" "250", Pair.pair "500" "500", Pair.pair "1000" "1,000"]
+                    (I64.to_string s.cap) Trellis.Msg.set_cap),
             focus_summary m,
             Ui.checkbox [Ui.small] "Signature references" s.signature (Trellis.Msg.toggle "signature") List.empty,
             Ui.checkbox [Ui.small] "Body references" s.body (Trellis.Msg.toggle "body") List.empty,
@@ -408,7 +490,12 @@ def actions (drillable : Bool) : Oak.Node Trellis.Msg :=
                 Ui.outline] [Html.on_click Trellis.Msg.drill_selected] [Html.text "Show contents"]]
                 else List.empty))
 
-def decl_detail (g : Trellis.Graph) (d : Trellis.DeclNode) (uses : List String)
+/// The rendered doc comment, or a note that there is none.
+def docs_block (docs : List Html.Node) (none : String) : Oak.Node Trellis.Msg :=
+    if List.is_empty docs then Ui.muted [Ui.small] List.empty [Html.text none]
+    else Html.div [Html.class_ ["trellis-doc"]] (List.map Oak.of_html docs)
+
+def decl_detail (g : Trellis.Graph) (d : Trellis.DeclNode) (docs : List Html.Node) (uses : List String)
     (used_by : List String) : Oak.Node Trellis.Msg :=
     let file : String := file_of g d.module in
     let where_ : String := if String.is_empty file then d.module else String.concat_list [file, ":",
@@ -422,20 +509,21 @@ def decl_detail (g : Trellis.Graph) (d : Trellis.DeclNode) (uses : List String)
             Ui.description_list [Ui.small]
                 [Pair.pair "Module" (Ui.code d.module), Pair.pair "Source" (Ui.code where_),
                     Pair.pair "Sort" (Html.text (if String.is_empty d.sort then "\u{2014}" else d.sort))],
-            if String.is_empty d.doc
-            then Ui.muted [Ui.small] List.empty [Html.text "No docs link (extract with --docs-base)."]
-            else Html.a [Html.href d.doc, Html.target "_blank", Html.rel "noopener"] [Html.text "Open documentation"],
+            docs_block docs "No doc comment.",
+            if String.is_empty d.href then Html.span List.empty List.empty
+            else Html.a [Html.href d.href, Html.target "_blank", Html.rel "noopener"] [Html.text "Open documentation"],
             actions false,
             ref_list "Uses" uses,
             ref_list "Used by" used_by]
 
-def module_detail (g : Trellis.Graph) (path : String) : Oak.Node Trellis.Msg :=
+def module_detail (g : Trellis.Graph) (path : String) (docs : List Html.Node) : Oak.Node Trellis.Msg :=
     Ui.stack [Ui.gap 3] List.empty
         [Html.h2 [Html.class_ ["trellis-detail__title"]] [Html.text path],
             Ui.cluster [Ui.gap 1] List.empty [Ui.badge [Ui.info] "module"],
             Ui.description_list [Ui.small]
                 [Pair.pair "File" (Ui.code (file_of g path)),
                     Pair.pair "Declarations" (Html.text (I64.to_string (List.length (decls_of_module g path))))],
+            docs_block docs "No module doc comment.",
             actions true]
 
 def mote_detail (g : Trellis.Graph) (mote : String) : Oak.Node Trellis.Msg :=
@@ -452,9 +540,9 @@ def detail (m : Trellis.Model) : Oak.Node Trellis.Msg :=
             if String.is_empty key
             then Ui.muted [Ui.small] List.empty [Html.text "Select a node to see what it uses and what uses it."]
             else if String.beq level "mote" then mote_detail m.graph key
-            else if String.beq level "module" then module_detail m.graph key
+            else if String.beq level "module" then module_detail m.graph key m.docs
             else match m.detail {
-                Option.some d => decl_detail m.graph d m.uses m.used_by,
+                Option.some d => decl_detail m.graph d m.docs m.uses m.used_by,
                 Option.none => Ui.muted [Ui.small] List.empty [Html.text key],
             },
     }
@@ -463,20 +551,81 @@ def detail (m : Trellis.Model) : Oak.Node Trellis.Msg :=
 
 def stats_line (m : Trellis.Model) : String :=
     String.concat_list [I64.to_string m.shown, " of ", I64.to_string m.total, " ", Trellis.Level.slug m.settings.level,
-        " nodes \u{00B7} ", I64.to_string (Seq.length m.graph.decls), " declarations \u{00B7} ",
+        " nodes", if m.over > 0 then String.concat_list [" (", I64.to_string m.over, " in view, by section)"] else "",
+        " \u{00B7} ", I64.to_string (Seq.length m.graph.decls), " declarations \u{00B7} ",
         I64.to_string (Seq.length m.graph.edges), " references (", I64.to_string m.graph.unresolved, " unresolved)"]
+
+// ─── Sections ───
+
+def section_matches (q : String) (sec : Trellis.Section) : Bool :=
+    let lq : String := String.to_lowercase (String.trim q) in
+    String.is_empty lq || (match Fuzzy.score lq sec.label sec.label { Option.some _ => true, Option.none => false })
+
+def max_count (secs : List Trellis.Section) : I64 :=
+    Seq.fold (fn (n : I64) (sec : Trellis.Section) => if sec.count > n then sec.count else n) 1 secs
+
+def section_card (most : I64) (sec : Trellis.Section) : Oak.Node Trellis.Msg :=
+    let pct : I64 := sec.count * 100 / most in
+    Html.li List.empty
+        [Html.button [Html.type_ "button", Html.class_ ["trellis-section"], Html.title_attr sec.label,
+            Html.on_click (Trellis.Msg.open_section sec.id)]
+            [Html.span [Html.class_ ["trellis-section__label"]] [Html.text sec.label],
+                Html.span [Html.class_ ["trellis-section__count"]] [Html.text (I64.to_string sec.count)],
+                Html.span [Html.class_ ["trellis-section__bar"], Html.attr "style"
+                    (String.concat_list ["width: ", I64.to_string (if pct < 2 then 2 else pct), "%"])] List.empty]]
+
+/// The view is over the cap and no section is open: every section, to pick from.
+def section_browser (m : Trellis.Model) : Oak.Node Trellis.Msg :=
+    let shown : List Trellis.Section := Seq.filter (section_matches m.section_query) m.sections in
+    Html.div [Html.class_ ["trellis-browser"]]
+        [Ui.stack [Ui.gap 2] List.empty
+            [Ui.heading 2 [Ui.small] List.empty
+                [Html.text (String.concat_list [I64.to_string m.over, " nodes \u{2014} too many to draw at once"])],
+                Ui.muted [Ui.small] List.empty
+                    [Html.text (String.concat_list ["Open one of ", I64.to_string (List.length m.sections),
+                        " sections, or search and focus to narrow the view."])],
+                Ui.input [Ui.small, Ui.full] "search" m.section_query Trellis.Msg.filter_sections
+                    [Html.placeholder "Filter sections\u{2026}", Html.aria "label" "Filter sections",
+                        Html.attr "autocomplete" "off"]],
+            if List.is_empty shown then Ui.muted [Ui.small] List.empty [Html.text "No section matches."]
+            else Html.ul [Html.class_ ["trellis-sections"], Html.aria "label" "Sections"]
+                (Seq.map (section_card (max_count m.sections)) shown)]
+
+def section_options (secs : List Trellis.Section) : List (Pair String String) :=
+    Seq.map (fn (sec : Trellis.Section) => Pair.pair sec.id
+        (String.concat_list [sec.label, " (", I64.to_string sec.count, ")"])) secs
+
+/// Above the graph while a section is open: step, jump, or go back to the list.
+def section_bar (m : Trellis.Model) : Oak.Node Trellis.Msg :=
+    let i : I64 := section_index m.settings.section m.sections 0 in
+    let n : I64 := List.length m.sections in
+    Html.div [Html.class_ ["trellis-sectionbar"], Html.role "toolbar", Html.aria "label" "Sections"]
+        [Ui.button [Ui.small, Ui.ghost] [Html.on_click Trellis.Msg.close_section] [Html.text "All sections"],
+            Ui.button [Ui.small, Ui.outline] [Html.aria "label" "Previous section",
+                Html.on_click (Trellis.Msg.section_step (0 - 1))] [Html.text "\u{2039}"],
+            Ui.select [Ui.small] (section_options m.sections) m.settings.section Trellis.Msg.open_section
+                [Html.aria "label" "Section", Html.class_ ["trellis-sectionbar__select"]],
+            Ui.button [Ui.small, Ui.outline] [Html.aria "label" "Next section",
+                Html.on_click (Trellis.Msg.section_step 1)] [Html.text "\u{203A}"],
+            Ui.muted [Ui.small] List.empty
+                [Html.text (String.concat_list ["Section ", I64.to_string (i + 1), " of ", I64.to_string n,
+                    " \u{00B7} ", I64.to_string m.shown, " of ", I64.to_string m.over, " nodes"])]]
 
 def main_area (m : Trellis.Model) : Oak.Node Trellis.Msg :=
     if String.beq m.status "failed"
     then Ui.alert [Ui.cls ["trellis-error"]] "Could not load the graph" Option.none List.empty [Html.text m.error]
     else if Bool.not (String.beq m.status "ready")
     then Ui.spinner List.empty "Loading the graph\u{2026}"
-    else if m.over > 0
-    then Ui.empty_state List.empty (String.concat_list [I64.to_string m.over, " nodes is too many to draw"])
-        "Search for a declaration, pick a module, or lower the depth to narrow the view." List.empty
+    else if m.over > 0 && m.shown == 0
+    then section_browser m
     else if m.shown == 0
     then Ui.empty_state List.empty "Nothing to show" "The filters hide every declaration." List.empty
-    else Ui.graph List.empty "Reference graph" m.layout m.view Trellis.Msg.graph [Html.class_ ["trellis-graph"]]
+    else if m.over > 0
+    then Html.div [Html.class_ ["trellis-stage"]] [section_bar m, the_graph m]
+    else the_graph m
+
+def the_graph (m : Trellis.Model) : Oak.Node Trellis.Msg :=
+    Ui.graph List.empty "Reference graph" m.layout m.view Trellis.Msg.graph [Html.class_ ["trellis-graph"]]
 
 pub def Trellis.view (m : Trellis.Model) : Oak.Node Trellis.Msg :=
     Ui.app_shell [Ui.cls ["trellis"]] false
@@ -495,11 +644,39 @@ pub def Trellis.program (url : String) : Program Trellis.Model Trellis.Msg Trell
 /// The app's own styles: layout of the main area and the search results,
 /// on top of `Ui.css_all`. Variables only, like oak_ui's sheet.
 pub def Trellis.css : String := r#"
-.trellis .oak-shell__main { padding: 0; }
+.trellis.oak-shell { height: 100vh; min-height: 0; }
+.trellis .oak-shell__main { padding: 0; min-height: 0; overflow: hidden; }
 .trellis-brand { font-weight: 700; letter-spacing: 0.02em; }
-.trellis-main { display: grid; grid-template-columns: minmax(0, 1fr) 22rem; height: calc(100vh - 7rem); }
-.trellis-canvas { position: relative; min-width: 0; padding: calc(var(--oak-space) * 2); }
-.trellis-graph { height: 100%; }
+.trellis-main { display: grid; grid-template-columns: minmax(0, 1fr) clamp(22rem, 28vw, 32rem);
+  height: 100%; min-height: 0; }
+.trellis-canvas { position: relative; min-width: 0; min-height: 0; padding: calc(var(--oak-space) * 2);
+  display: flex; flex-direction: column; }
+.trellis-canvas > * { flex: 1; min-height: 0; }
+.trellis-stage { display: flex; flex-direction: column; gap: calc(var(--oak-space) * 2); min-height: 0; }
+.trellis-graph { height: 100%; flex: 1; min-height: 0; }
+.trellis-sectionbar { display: flex; flex-wrap: wrap; align-items: center; gap: calc(var(--oak-space) * 2);
+  flex: 0 0 auto; }
+.trellis-sectionbar__select { max-width: 24rem; }
+.trellis-browser { overflow-y: auto; padding: calc(var(--oak-space) * 4); display: flex; flex-direction: column;
+  gap: calc(var(--oak-space) * 4); }
+.trellis-sections { list-style: none; margin: 0; padding: 0; display: grid; gap: calc(var(--oak-space) * 2);
+  grid-template-columns: repeat(auto-fill, minmax(14rem, 1fr)); }
+.trellis-section { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: var(--oak-space); width: 100%;
+  text-align: left; font: inherit; color: inherit; cursor: pointer; background: var(--oak-surface);
+  border: 1px solid var(--oak-border); border-radius: var(--oak-radius-sm);
+  padding: calc(var(--oak-space) * 2) calc(var(--oak-space) * 3); }
+.trellis-section:hover { border-color: var(--oak-primary); }
+.trellis-section:focus-visible { outline: 2px solid var(--oak-focus); outline-offset: 1px; }
+.trellis-section__label { font-family: var(--oak-font-mono); font-size: 0.8125em; overflow: hidden;
+  text-overflow: ellipsis; white-space: nowrap; }
+.trellis-section__count { font-size: 0.75em; color: var(--oak-muted); }
+.trellis-section__bar { grid-column: 1 / -1; height: 3px; border-radius: 2px; background: var(--oak-primary); }
+@media (max-width: 768px) {
+  .trellis.oak-shell { height: auto; min-height: 100vh; }
+  .trellis-main { grid-template-columns: minmax(0, 1fr); height: auto; }
+  .trellis-canvas { min-height: 60vh; }
+  .trellis-detail { border-left: 0; border-top: 1px solid var(--oak-border); }
+}
 .trellis-detail { border-left: 1px solid var(--oak-border); padding: calc(var(--oak-space) * 4); overflow-y: auto; }
 .trellis-detail__title { font-size: 1.05rem; margin: 0; word-break: break-all; font-family: var(--oak-font-mono); }
 .trellis-hits { list-style: none; margin: 0; padding: 0; border: 1px solid var(--oak-border);
@@ -512,6 +689,19 @@ pub def Trellis.css : String := r#"
 .trellis-hit__kind { font-size: 0.75em; color: var(--oak-muted); }
 .trellis-hit__detail { grid-column: 1 / -1; font-size: 0.75em; color: var(--oak-muted); overflow: hidden;
   text-overflow: ellipsis; white-space: nowrap; }
+.trellis-doc { font-size: 0.875rem; line-height: 1.5; overflow-wrap: anywhere; }
+.trellis-doc > :first-child { margin-top: 0; }
+.trellis-doc > :last-child { margin-bottom: 0; }
+.trellis-doc p, .trellis-doc ul, .trellis-doc ol { margin: 0 0 var(--oak-space); }
+.trellis-doc ul, .trellis-doc ol { padding-left: calc(var(--oak-space) * 5); }
+.trellis-doc h1, .trellis-doc h2, .trellis-doc h3, .trellis-doc h4 { font-size: 0.9375rem;
+  margin: calc(var(--oak-space) * 3) 0 var(--oak-space); }
+.trellis-doc code { font-family: var(--oak-font-mono); font-size: 0.9em; background: var(--oak-surface-alt);
+  border-radius: var(--oak-radius-sm); padding: 0 3px; }
+.trellis-doc pre { font-family: var(--oak-font-mono); font-size: 0.8125rem; overflow-x: auto;
+  background: var(--oak-surface-alt); border: 1px solid var(--oak-border); border-radius: var(--oak-radius-sm);
+  padding: calc(var(--oak-space) * 2); margin: 0 0 var(--oak-space); }
+.trellis-doc pre code { background: transparent; padding: 0; }
 .trellis-refs__title { font-size: 0.875rem; margin: 0 0 var(--oak-space); }
 .trellis-refs__list { list-style: none; margin: 0; padding: 0; }
 .trellis-ref { border: 0; background: transparent; color: var(--oak-primary); font-family: var(--oak-font-mono);

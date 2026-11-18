@@ -1,12 +1,13 @@
 /// Projection: levels aggregate edges, filters hide externals and tests,
-/// focus keeps a neighbourhood, groupings nest, and the cap refuses a
-/// hairball.
+/// focus keeps a neighbourhood, groupings nest, and a view over the cap is
+/// browsed by section.
 
-use std::list {List.any, List.filter}
+use std::list {List.any, List.filter, List.all, List.intercalate}
 use oak_ui::graph_layout {Ui.GraphSpec, Ui.GraphNode, Ui.GraphEdge, Ui.GraphGroup}
 use lib::project {
     Trellis.Level, Trellis.Grouping, Trellis.Direction, Trellis.Settings, Trellis.Settings.initial,
-    Trellis.Projection, Trellis.project, Trellis.neighbours, Trellis.lift_key, Trellis.effective_grouping,
+    Trellis.Projection, Trellis.Section, Trellis.Drawn, Trellis.project, Trellis.neighbours,
+    Trellis.lift_key, Trellis.effective_grouping,
 }
 use lib::tests::support {fixture}
 
@@ -14,7 +15,7 @@ def at (level : Trellis.Level) : Trellis.Settings := { Trellis.Settings.initial 
 
 def spec_of (p : Trellis.Projection) : Ui.GraphSpec :=
     match p {
-        Trellis.Projection.projected spec _ _ => spec,
+        Trellis.Projection.drawn d => d.spec,
         _ => { nodes := List.empty, edges := List.empty, groups := List.empty },
     }
 
@@ -101,12 +102,63 @@ def test_grouping_is_never_finer_than_the_level : Bool :=
         _ => false,
     }
 
+def section_ids (secs : List Trellis.Section) : String :=
+    List.intercalate "," (List.map (fn (sec : Trellis.Section) => sec.id) secs)
+
+def section_counts (secs : List Trellis.Section) : List I64 := List.map (fn (sec : Trellis.Section) => sec.count) secs
+
+def capped (level : Trellis.Level) (cap : I64) (section : String) : Trellis.Settings :=
+    let base : Trellis.Settings := at level in
+    { base with cap := cap, section := section }
+
 #[test]
-def test_cap_refuses_large_views : Bool :=
-    let base : Trellis.Settings := at Trellis.Level.at_decl in
-    let st : Trellis.Settings := { base with cap := 3 } in
-    match Trellis.project fixture st {
-        Trellis.Projection.too_many n => n > 3,
+def test_under_the_cap_draws_without_sections : Bool :=
+    match Trellis.project fixture (at Trellis.Level.at_decl) {
+        Trellis.Projection.drawn d => List.is_empty d.sections && String.is_empty d.section,
+        _ => false,
+    }
+
+#[test]
+def test_over_the_cap_sections_decls_by_module : Bool :=
+    // 8 visible decls: infer has check, infer, Ty (3); unify 2; module 1; nat 2.
+    match Trellis.project fixture (capped Trellis.Level.at_decl 3 "") {
+        Trellis.Projection.sectioned n secs =>
+            n == 8 && String.beq (section_ids secs)
+                "lang::typecheck::infer#0,lang::typecheck::unify#0,lang::module#0,proofs::nat#0",
+        _ => false,
+    }
+
+#[test]
+def test_a_group_over_the_cap_splits_into_parts : Bool :=
+    match Trellis.project fixture (capped Trellis.Level.at_decl 2 "") {
+        Trellis.Projection.sectioned _ secs =>
+            String.starts_with "lang::typecheck::infer#0,lang::typecheck::infer#1," (section_ids secs)
+                && List.all (fn (n : I64) => n <= 2) (section_counts secs),
+        _ => false,
+    }
+
+#[test]
+def test_picking_a_section_draws_only_its_nodes : Bool :=
+    match Trellis.project fixture (capped Trellis.Level.at_decl 3 "lang::typecheck::unify#0") {
+        Trellis.Projection.drawn d =>
+            List.length d.spec.nodes == 2 && has_node "lang::typecheck::unify::whnf" d.spec
+                && edge_weight "lang::typecheck::unify::unify" "lang::typecheck::unify::whnf" d.spec == 1
+                && List.length d.spec.edges == 2 && List.length d.sections == 4,
+        _ => false,
+    }
+
+#[test]
+def test_a_stale_section_falls_back_to_the_list : Bool :=
+    match Trellis.project fixture (capped Trellis.Level.at_decl 3 "lang::gone#0") {
+        Trellis.Projection.sectioned _ _ => true,
+        _ => false,
+    }
+
+#[test]
+def test_mote_level_sections_are_plain_chunks : Bool :=
+    let base : Trellis.Settings := capped Trellis.Level.at_mote 1 "" in
+    match Trellis.project fixture base {
+        Trellis.Projection.sectioned n secs => n == 2 && String.beq (section_ids secs) "#0,#1",
         _ => false,
     }
 

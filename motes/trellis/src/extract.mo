@@ -39,11 +39,13 @@ use lang::types {
     show_identifier, show_name_path, module_path_to_string_colon,
 }
 use lang::use_completeness {Refs, DeclRefs, decl_refs}
-use trellis_ui::smap {Smap.empty, Smap.insert, Smap.get, Smap.has}
+use trellis_ui::smap {Smap.empty, Smap.insert, Smap.get, Smap.has, Smap.get_str}
+use lib::docs {Trellis.SourceDocs}
 use trellis_ui::model {Trellis.ModuleNode, Trellis.DeclNode, Trellis.Edge, Trellis.Graph, Trellis.decl_id}
 
 /// One parsed module, as `load.mo` hands it over. `lines` maps a
-/// declaration's name to its 1-based line.
+/// declaration's name to its 1-based line; `docs` holds its doc comments
+/// (`Trellis.SourceDocs.empty` when docs are not extracted).
 pub struct Trellis.Source {
     module : String,
     mote : String,
@@ -51,6 +53,7 @@ pub struct Trellis.Source {
     external : Bool,
     decls : List Decl,
     lines : HashMap String I64,
+    docs : Trellis.SourceDocs,
 }
 
 // ═══ Declarations to nodes ═══
@@ -411,12 +414,14 @@ def line_of (s : Trellis.Source) (name : String) : I64 :=
 def node_of (docs : String) (s : Trellis.Source) (n : Named) : Trellis.DeclNode :=
     { id := Trellis.decl_id s.module n.name, name := n.name, module := s.module, mote := s.mote, kind := n.kind,
         vis := n.vis, line := line_of s n.name, attrs := n.attrs, sort := n.sort,
-        doc := Trellis.doc_href docs s.mote s.module n.kind n.name, external := s.external }
+        href := Trellis.doc_href docs s.mote s.module n.kind n.name, docs := Smap.get_str n.name "" s.docs.decl_docs,
+        external := s.external }
 
 def nodes_of (docs : String) (p : Parsed) : List Trellis.DeclNode := List.map (node_of docs p.src) p.named
 
 def module_of (p : Parsed) : Trellis.ModuleNode :=
-    { path := p.src.module, mote := p.src.mote, file := p.src.file, external := p.src.external }
+    { path := p.src.module, mote := p.src.mote, file := p.src.file, external := p.src.external,
+        docs := p.src.docs.module_docs }
 
 def parse_all (ss : List Trellis.Source) : List Parsed :=
     List.map (fn (s : Trellis.Source) => { src := s, named := named_all s.decls }) ss

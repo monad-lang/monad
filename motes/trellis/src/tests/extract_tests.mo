@@ -10,13 +10,15 @@ use trellis_ui::smap {Smap.empty}
 use trellis_ui::model {Trellis.Graph, Trellis.DeclNode, Trellis.Edge}
 use lib::extract {Trellis.Source, Trellis.Extracted, Trellis.extract, Trellis.doc_href}
 use lib::load {Trellis.module_of_file}
+use lib::docs {Trellis.docs_of_source}
 
 def no_lines : HashMap String I64 := Smap.empty
 
 def source (module : String) (mote : String) (external : Bool) (text : String) : Trellis.Source :=
     let decls : List Decl := match try_parse_decls_strict text Option.none { Result.ok ds => ds,
         Result.err _ => List.empty } in
-    { module := module, mote := mote, file := "", external := external, decls := decls, lines := no_lines }
+    { module := module, mote := mote, file := "", external := external, decls := decls, lines := no_lines,
+        docs := Trellis.docs_of_source module "" text }
 
 def util : Trellis.Source := source "demo::util" "demo" false r#"
 pub type Shape { circle (r : I64), square (s : I64) }
@@ -115,3 +117,45 @@ def test_two_constructors_are_one_edge : Bool :=
 def test_wildcards_and_type_variables_are_not_misses : Bool :=
     Bool.not (List.any (fn
         (n : String) => String.beq n "_" || String.beq n "A" || String.is_empty n) noisy_g.unresolved)
+
+// ─── Doc comments ───
+
+def documented : Trellis.Source := source "demo::doc" "demo" false r#"/// The demo module.
+/// Second line.
+
+/// Adds one to `x`.
+#[inline]
+pub def bump (x : I64) : I64 := x + 1
+
+// A plain comment separates.
+pub def bare (x : I64) : I64 := x
+
+/// A point.
+pub struct Point { x : I64 }
+"#
+
+def doc_graph : Trellis.Graph :=
+    let e : Trellis.Extracted := Trellis.extract ["demo"] "" [documented] in
+    e.graph
+
+def docs_of (name : String) : String :=
+    match List.filter (fn (d : Trellis.DeclNode) => String.beq d.name name) doc_graph.decls {
+        List.cons d _ => d.docs,
+        List.empty => "<missing>",
+    }
+
+#[test]
+def test_decl_docs_skip_attributes : Bool := String.beq (docs_of "bump") "Adds one to `x`."
+
+#[test]
+def test_undocumented_decl_has_no_docs : Bool := String.is_empty (docs_of "bare")
+
+#[test]
+def test_struct_docs : Bool := String.beq (docs_of "Point") "A point."
+
+#[test]
+def test_module_docs : Bool :=
+    match doc_graph.modules {
+        List.cons m _ => String.contains m.docs "The demo module." && String.contains m.docs "Second line.",
+        List.empty => false,
+    }

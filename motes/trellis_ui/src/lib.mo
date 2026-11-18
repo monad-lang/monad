@@ -10,7 +10,10 @@ pub use lib::model {
     Trellis.ModuleNode, Trellis.DeclNode, Trellis.Edge, Trellis.Graph,
     Trellis.Graph.empty, Trellis.Graph.encode, Trellis.Graph.decode,
     Trellis.decl_id, Trellis.parse_nat, Trellis.DeclNode.is_proof, Trellis.DeclNode.is_test,
+    Trellis.escape_field, Trellis.unescape_field,
 }
+
+pub use lib::docs {Trellis.render_docs}
 
 pub use lib::fuzzy {Fuzzy.Hit, Fuzzy.score, Fuzzy.search, Fuzzy.motes}
 
@@ -18,7 +21,8 @@ pub use lib::project {
     Trellis.Level, Trellis.Grouping, Trellis.Direction, Trellis.Settings, Trellis.Settings.initial,
     Trellis.Level.slug, Trellis.Level.of_slug, Trellis.Grouping.slug, Trellis.Grouping.of_slug,
     Trellis.Direction.slug, Trellis.Direction.of_slug,
-    Trellis.Projection, Trellis.key_at, Trellis.effective_grouping, Trellis.project,
+    Trellis.Projection, Trellis.Section, Trellis.Drawn, Trellis.Prepared, Trellis.Prepared.empty,
+    Trellis.prepare, Trellis.cut, Trellis.key_at, Trellis.effective_grouping, Trellis.project,
     Trellis.neighbours, Trellis.find_decl, Trellis.find_module, Trellis.lift_key,
 }
 

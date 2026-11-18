@@ -4,7 +4,7 @@
 //
 // Built from `motes/trellis_ui` (`--bin trellis_ui`). Drives the REAL
 // `web_runtime.js` and generated `web.js` over `stub_dom.mjs`, with a stub
-// `fetch` serving a small `trellis 1` graph, and checks end to end:
+// `fetch` serving a small `trellis 2` graph, and checks end to end:
 //   * the first frame starts the fetch, the poll timer delivers the body,
 //     and the module-level graph draws;
 //   * the drawing is SVG: `<svg>` and everything below it is created in the
@@ -13,7 +13,12 @@
 //   * typing in the search box ranks a declaration, Enter picks it, and the
 //     view switches to declarations with the pick selected;
 //   * a re-render that swaps nodes inside the drawing keeps them in the SVG
-//     namespace (`dom_in_svg` on the parent).
+//     namespace (`dom_in_svg` on the parent);
+//   * the picked declaration's doc comment (markdown in the graph file) is
+//     rendered as real elements in the detail panel;
+//   * the drawing is fitted (a nested `<svg viewBox>`);
+//   * a view over the node cap shows the section browser, and opening a
+//     section draws just that section.
 
 import { readFile } from 'node:fs/promises';
 import { imports } from '../web.js';
@@ -27,15 +32,20 @@ if (!path) {
 }
 
 const SVG = 'http://www.w3.org/2000/svg';
+// 130 declarations in demo::big: at the declaration level with a cap of
+// 100 the view (134 nodes) is split into sections.
+const big = Array.from({ length: 130 }, (_, i) => `D\t2\tbig_${i}\tdef\tpub\t${i + 1}\t\t\t\t`);
 const graph = [
-  'trellis\t1',
+  'trellis\t2',
   'R\tdemo',
-  'M\tdemo::infer\tdemo\tdemo/src/infer.mo\t0',
-  'M\tdemo::unify\tdemo\tdemo/src/unify.mo\t0',
-  'D\t0\tcheck\tdef\tpub\t3\t\t\t',
-  'D\t0\tinfer\tdef\tpub\t9\t\t\t',
-  'D\t1\tunify\tdef\tpub\t4\t\t\t',
-  'D\t1\twhnf\tdef\tpub\t20\t\t\t',
+  'M\tdemo::infer\tdemo\tdemo/src/infer.mo\t0\tThe checker.',
+  'M\tdemo::unify\tdemo\tdemo/src/unify.mo\t0\t',
+  'M\tdemo::big\tdemo\tdemo/src/big.mo\t0\t',
+  'D\t0\tcheck\tdef\tpub\t3\t\t\t\t',
+  'D\t0\tinfer\tdef\tpub\t9\t\t\t\t',
+  'D\t1\tunify\tdef\tpub\t4\t\t\t\t',
+  'D\t1\twhnf\tdef\tpub\t20\t\t\t\tWeak head normal form of `t`.\\n\\nNever *unfolds* a let.',
+  ...big,
   'E\t0\t1\tb',
   'E\t1\t2\tb',
   'E\t2\t3\tb',
@@ -102,7 +112,8 @@ tick();
 await settle();
 if (fetched !== 'graph.tsv') fail(`fetched ${JSON.stringify(fetched)}, expected graph.tsv`);
 const svg = one((n) => n.localName === 'svg' || n.tagName === 'svg', 'the graph <svg>');
-if (nodes().length !== 2) fail(`module level should draw 2 modules, drew ${nodes().length}`);
+if (nodes().length !== 3) fail(`module level should draw 3 modules, drew ${nodes().length}`);
+one((n) => hasClass(n, 'oak-graph__fit') && n.attrs.viewBox, 'the fitted drawing (nested <svg viewBox>)');
 
 // 2. Namespaces: the svg subtree is SVG, the page around it is not.
 if (svg.namespaceURI !== SVG) fail(`<svg> created in namespace ${svg.namespaceURI}`);
@@ -134,4 +145,33 @@ const after = findAll(one((n) => n.localName === 'svg' || n.tagName === 'svg', '
 const strays2 = after.filter((n) => n.namespaceURI !== SVG);
 if (strays2.length > 0) fail(`after re-render ${strays2.length} svg-subtree elements left the SVG namespace`);
 
-console.log(`ok: ${path} -> loads graph.tsv, draws SVG in its namespace, fuzzy-picks a declaration and redraws`);
+// 5. The pick's doc comment, rendered from markdown into elements.
+const doc = one((n) => hasClass(n, 'trellis-doc'), 'the rendered doc comment');
+const code = findAll(doc, (n) => n.tagName === 'CODE');
+const em = findAll(doc, (n) => n.tagName === 'EM');
+const paras = findAll(doc, (n) => n.tagName === 'P');
+if (code.length !== 1 || text(code[0]) !== 't' || em.length !== 1 || paras.length !== 2) {
+  fail(`doc comment rendered as ${JSON.stringify(text(doc))} (${paras.length} p, ${code.length} code, ${em.length} em)`);
+}
+
+// 6. Over the cap: declarations, no focus, cap 100 -> the section browser.
+const clear = all((n) => n.tagName === 'BUTTON' && text(n) === 'Clear focus')[0];
+if (!clear) fail('no Clear focus button after the pick');
+clear.fire('click');
+tick();
+const cap = one((n) => n.tagName === 'SELECT' && n.attrs.id === 'trellis-cap', 'the Max nodes select');
+cap.value = '100';
+cap.fire('change');
+tick();
+const cards = all((n) => hasClass(n, 'trellis-section'));
+const bigCards = cards.filter((n) => text(n).includes('demo::big'));
+if (cards.length !== 4 || bigCards.length !== 2 || nodes().length !== 0) {
+  fail(`section browser: ${cards.length} sections (${bigCards.length} for demo::big), ${nodes().length} nodes drawn`);
+}
+bigCards[1].fire('click');
+tick();
+if (nodes().length !== 30) fail(`opening demo::big (2/2) should draw 30 nodes, drew ${nodes().length}`);
+one((n) => hasClass(n, 'trellis-sectionbar'), 'the section bar');
+
+console.log(`ok: ${path} -> loads graph.tsv, draws fitted SVG in its namespace, fuzzy-picks a declaration, `
+  + 'renders its docs, and browses an oversized view by section');

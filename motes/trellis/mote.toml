@@ -2,7 +2,7 @@
 #
 # `trellis extract <mote>...` parses every module of the named motes (and,
 # through the compiler's own loader, everything they import), resolves each
-# declaration's references, and writes the graph in trellis_ui's `trellis 1`
+# declaration's references, and writes the graph in trellis_ui's `trellis 2`
 # format. `trellis serve <mote>...` extracts once and serves the browser UI
 # (built by scripts/build-trellis-ui.sh) together with the graph.
 #
@@ -46,6 +46,11 @@ workspace = true
 workspace = true
 
 [dependencies.oak_ui]
+workspace = true
+
+# Doc comments: docgen's `///` scan, so a declaration's docs here are the
+# ones its docs page shows. (The UI renders the markdown.)
+[dependencies.docgen]
 workspace = true
 
 [dependencies.clap]

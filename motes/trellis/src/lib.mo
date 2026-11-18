@@ -4,3 +4,4 @@
 pub use lib::extract {Trellis.Source, Trellis.Extracted, Trellis.extract, Trellis.doc_href}
 
 pub use lib::load {Trellis.Target, Trellis.Loaded, Trellis.find_target, Trellis.load, Trellis.module_of_file}
+pub use lib::docs {Trellis.SourceDocs, Trellis.SourceDocs.empty, Trellis.docs_of_source}

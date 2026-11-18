@@ -1,9 +1,9 @@
 // trellis's entry point.
 //
-//   trellis extract <mote>... [-o FILE] [--tests] [--docs-base URL] [--verbose]
-//   trellis serve <mote>... [--port N] [--host H] [--ui DIR] [--tests] [--docs-base URL]
+//   trellis extract <mote>... [-o FILE] [--tests] [--no-docs] [--docs-base URL] [--verbose]
+//   trellis serve <mote>... [--port N] [--host H] [--ui DIR] [--tests] [--no-docs] [--docs-base URL]
 //
-// `extract` writes the graph file (`trellis 1`, see trellis_ui's model.mo);
+// `extract` writes the graph file (`trellis 2`, see trellis_ui's model.mo);
 // `serve` extracts once and serves the browser UI with the graph. The UI is
 // built by scripts/build-trellis-ui.sh into target-monad/trellis-ui.
 
@@ -32,6 +32,7 @@ use lib::load {Trellis.Target, Trellis.Loaded, Trellis.find_target, Trellis.load
 
 def common_args : List Cli.ArgSpec :=
     [Cli.flag "tests" "t" "also extract *_tests.mo files and tests/ directories",
+        Cli.flag "no-docs" "n" "leave out doc comments (a smaller graph file)",
         Cli.option_default "docs-base" "d" "URL" "" "link each declaration to its docgen page under URL",
         Cli.positional_multi "motes"
             "the motes to extract (a directory with a mote.toml, or a workspace member's name)"]
@@ -64,6 +65,7 @@ struct Args {
     out : String,
     verbose : Bool,
     tests : Bool,
+    no_docs : Bool,
     docs : String,
     port : String,
     host : String,
@@ -85,6 +87,7 @@ def decode (p : Cli.Parsed) : Result String Args :=
         let a : Args :=
             { command := p.name, motes := motes, out := option_or p.options "out" "graph.tsv",
                 verbose := Cli.flag_set "verbose" p, tests := Cli.flag_set "tests" p,
+                no_docs := Cli.flag_set "no-docs" p,
                 docs := option_or p.options "docs-base" "", port := option_or p.options "port" "8040",
                 host := option_or p.options "host" "127.0.0.1",
                     ui := option_or p.options "ui" "target-monad/trellis-ui" } in
@@ -149,7 +152,7 @@ def build_graph (a : Args) : IO (Result String Trellis.Extracted) := do {
     match found {
         Result.err e => return (Result.err e),
         Result.ok targets => do {
-            let loaded <- Trellis.load targets a.tests;
+            let loaded <- Trellis.load targets a.tests (Bool.not a.no_docs);
             report_lines "trellis: skipped: " loaded.errors;
             let roots : List String := List.map (fn (t : Trellis.Target) => t.name) targets;
             return (Result.ok (Trellis.extract roots a.docs loaded.sources))

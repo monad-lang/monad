@@ -26,9 +26,10 @@ contents" to see its declarations.
 | `trellis extract <mote>... [-o FILE]` | write the graph file (`-` for stdout) |
 | `trellis serve <mote>... [--port N] [--ui DIR]` | extract once, then serve the UI and the graph |
 
-Both take `--tests` (include `*_tests.mo` and `tests/`), `--docs-base URL`
-(link every declaration to its docgen page) and `--verbose` (`extract`: list
-every unresolved reference). A mote is a directory with a `mote.toml`
+Both take `--tests` (include `*_tests.mo` and `tests/`), `--no-docs` (leave
+doc comments out of the graph file), `--docs-base URL` (link every
+declaration to its docgen page) and `--verbose` (`extract`: list every
+unresolved reference). A mote is a directory with a `mote.toml`
 (`lang`, `motes/oak_ui`) or a workspace member's name (`oak_ui`).
 
 ## How it works
@@ -37,7 +38,8 @@ every unresolved reference). A mote is a directory with a `mote.toml`
 |---|---|
 | Loading: each file with the compiler's strict parser, imports through the compiler's own loader (one shared cache) | `src/load.mo` |
 | Nodes, references (`lang::use_completeness::decl_refs`), import-aware resolution | `src/extract.mo` |
-| The graph model, `trellis 1` wire format, projection, fuzzy search, the Oak app | [`trellis_ui`](../trellis_ui/README.md) |
+| Doc comments, with docgen's own `///` scan (`DocExtract.extract_source_as`) | `src/docs.mo` |
+| The graph model, `trellis 2` wire format, projection, fuzzy search, the Oak app | [`trellis_ui`](../trellis_ui/README.md) |
 | The drawing: `Ui.graph` + `Ui.graph_layout` | [`oak_ui`](../oak_ui/README.md) |
 
 A declaration (`def`, `type`, `struct`, `class`, `instance`, `defmacro`) is a
@@ -56,7 +58,9 @@ guessed.
 - `x.f` method sugar and instance dispatch need the receiver's type, so
   they stay unresolved (the `S` line of the graph file counts them).
   Typed resolution through the elaborated scope is the follow-up.
-- Docs links follow docgen's page scheme (`<mote>/<module>.html#<kind>.<name>`)
+- Doc comments are read for every module, external ones included, and
+  shown in the UI's detail panel; only the links to published pages
+  follow docgen's page scheme (`<mote>/<module>.html#<kind>.<name>`)
   and need a published docs base (`--docs-base`).
 
 ## Future: proofs
