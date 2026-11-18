@@ -299,6 +299,14 @@
                 "motes/parsec"
                 "motes/toml"
                 "motes/toolkit"
+                # `linter` backs `monad lint` and arrives through `cli`, like
+                # `fmt` and `docgen`: `cli/src/main.mo` imports it (gated by
+                # the `linter` feature), so a mote missing here is absent from
+                # the source the pinned nightly compiles and the build fails
+                # with an `unknown variable` in that dependent. The feature
+                # switch only drops the import from a build that turns it off;
+                # it does not remove the mote from the source tree.
+                "motes/linter"
                 # `docgen` backs `monad doc` and arrives through `cli`, like
                 # `fmt`; it brings `acorn`, `markdown`, `xml_html` and `oak`
                 # along (acorn's rendering, markdown's doc-comment parsing, the

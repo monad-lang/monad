@@ -110,13 +110,29 @@ use docgen::gen {DocGen.build}
 // -- a diagnostic a long way from the actual cause. Measured:
 // `MONAD_FEATURES="not cli/linter" monad check cli` passes while
 // `monad build cli` fails, which is exactly the pair that hides this.
+// Names come from the module that DECLARES them, not from the mote root's
+// re-export of them. `use linter { LintConfig, ... }` reads better and the
+// self-hosted compiler resolves it, but the PINNED nightly -- the host of
+// rung 1 -- does not: it looks a name up in the mote's `lib.mo` alone and
+// answers `` `linter` declares no `LintConfig` `` for anything `lib.mo`
+// re-exported from a submodule. That is the shape the NIGHTLY COMPILES NEXT
+// gate exercises, so a mote-root import here fails the release's rung 1
+// while every local check is green.
+//
+// The split below is exactly that rule: the names `lib.mo` itself declares
+// (`LintResult`, `lint_source`, `rule_level`, ...) ride the mote root, and
+// everything `lib.mo` re-exports is named through its own module.
+#[cfg {feature := "linter"}]
+use linter::config {LintConfig, LintLevel}
+#[cfg {feature := "linter"}]
+use linter::diagnostic {LintDiagnostic, render_lint}
+#[cfg {feature := "linter"}]
+use linter::driver {rule_lines}
 #[cfg {feature := "linter"}]
 use linter {
-    LintConfig, LintDiagnostic, LintLevel, LintResult, exit_code_of, lint_result_diagnostics,
-    lint_result_parse_error, lint_source, rule_level, rule_lines,
+    LintResult, exit_code_of, lint_result_diagnostics, lint_result_parse_error, lint_source,
+    rule_level,
 }
-#[cfg {feature := "linter"}]
-use linter::diagnostic {render_lint}
 
 #[native "build_commit"]
 def build_commit : String

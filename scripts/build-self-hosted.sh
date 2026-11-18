@@ -123,7 +123,7 @@ if [ ! -x "$out/monad" ]; then
 else
   newer="$(find init std sys lang codegen cli llvm runtime build eval \
     motes/clap motes/fmt motes/json motes/log motes/lsp motes/parsec motes/toml motes/toolkit \
-    motes/serde \
+    motes/linter motes/serde \
     motes/docgen motes/acorn motes/markdown motes/unicode motes/xml_html motes/oak motes/http motes/web_event \
     \( -name '*.mo' -o -name '*.c' -o -name '*.h' -o -name mote.toml \) \
     -newer "$out/monad" -print -quit)" || {
