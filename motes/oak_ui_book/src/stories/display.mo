@@ -180,7 +180,7 @@ def graph_spec (grouped : Bool) : Ui.GraphSpec :=
             else List.empty }
 
 /// The pan/zoom/drag half of the view, kept in one story-state key
-/// (`pan_x,pan_y,zoom,dragging,drag_x,drag_y`): a book message sets one key,
+/// (`pan_x,pan_y,zoom,dragging,drag_x,drag_y,fit`): a book message sets one key,
 /// and a drag changes several fields at once.
 #[terminating]
 def nth_int (parts : List String) (i : I64) (default : I64) : I64 :=
@@ -190,15 +190,16 @@ def nth_int (parts : List String) (i : I64) (default : I64) : I64 :=
     }
 
 def graph_view_of (ctx : Book.Ctx) : Ui.GraphView :=
-    let parts : List String := String.split (Book.state ctx "view" "0,0,100,0,0,0") "," in
+    let parts : List String := String.split (Book.state ctx "view" "0,0,100,0,0,0,1") "," in
     { Ui.GraphView.initial with
         pan_x := nth_int parts 0 0, pan_y := nth_int parts 1 0, zoom := nth_int parts 2 100,
         dragging := nth_int parts 3 0 == 1, drag_x := nth_int parts 4 0, drag_y := nth_int parts 5 0,
+        fit := nth_int parts 6 1 == 1,
         selected := Book.state ctx "selected" "" }
 
 def encode_view (v : Ui.GraphView) : String :=
     List.intercalate "," (List.map I64.to_string
-        [v.pan_x, v.pan_y, v.zoom, if v.dragging then 1 else 0, v.drag_x, v.drag_y])
+        [v.pan_x, v.pan_y, v.zoom, if v.dragging then 1 else 0, v.drag_x, v.drag_y, if v.fit then 1 else 0])
 
 def graph_msg (ctx : Book.Ctx) (m : Ui.GraphMsg) : Book.Msg :=
     let v : Ui.GraphView := Ui.GraphView.update (graph_view_of ctx) m in

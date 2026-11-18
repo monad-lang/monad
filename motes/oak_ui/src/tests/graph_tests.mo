@@ -67,19 +67,19 @@ def test_transform_follows_pan_and_zoom : Bool :=
 
 #[test]
 def test_idle_surface_only_listens_for_the_wheel : Bool :=
-    // wheel + 3 tools + surface pointerdown + group label + 3 nodes x (click, keydown)
-    ui_handler_count plain == 12
+    // wheel + 4 tools + surface pointerdown + group label + 3 nodes x (click, keydown)
+    ui_handler_count plain == 13
 
 #[test]
 def test_dragging_adds_move_and_end_listeners : Bool :=
     let v : Ui.GraphView := { Ui.GraphView.initial with dragging := true } in
-    ui_handler_count (view_of v) == 16
+    ui_handler_count (view_of v) == 17
 
 #[test]
 def test_wheel_down_zooms_out : Bool :=
     let e : WebEvent := { kind := "wheel", valid := true, delta_y := 3.0 } in
-    // Handlers in document order: the three toolbar buttons, then the canvas's wheel.
-    match ui_nth_msg plain 3 e {
+    // Handlers in document order: the four toolbar buttons, then the canvas's wheel.
+    match ui_nth_msg plain 4 e {
         Option.some m => match m { GraphTestMsg.from_graph g => match g { Ui.GraphMsg.graph_zoom n => n == 0 - 1,
             _ => false } },
         Option.none => false,
@@ -110,3 +110,28 @@ def test_whole_px : Bool :=
 
 #[test]
 def test_stylesheet_includes_graph : Bool := String.contains Ui.css_all ".oak-graph__node"
+
+#[test]
+def test_fit_wraps_the_drawing_in_a_scaled_viewport : Bool :=
+    // A three-node layout is smaller than the minimum box, so the box is the minimum.
+    ui_has plain "<svg class=\"oak-graph__fit\" viewBox=\"-16 -16 720 420\" preserveAspectRatio=\"xMidYMin meet\""
+
+#[test]
+def test_actual_size_draws_one_to_one : Bool :=
+    let v : Ui.GraphView := { Ui.GraphView.initial with fit := false } in
+    Bool.not (ui_has (view_of v) "oak-graph__fit") && ui_has (view_of v) "aria-label=\"Fit to view\""
+
+#[test]
+def test_fit_toggle_reports_actual_size : Bool :=
+    let e : WebEvent := { kind := "click", valid := true } in
+    match ui_nth_msg plain 3 e {
+        Option.some m => match m { GraphTestMsg.from_graph g => match g { Ui.GraphMsg.graph_fit on => Bool.not on,
+            _ => false } },
+        Option.none => false,
+    }
+
+#[test]
+def test_reset_restores_fit : Bool :=
+    let v1 : Ui.GraphView := Ui.GraphView.update Ui.GraphView.initial (Ui.GraphMsg.graph_fit false) in
+    let v2 : Ui.GraphView := Ui.GraphView.update { v1 with zoom := 200 } Ui.GraphMsg.graph_reset in
+    Bool.not v1.fit && v2.fit && v2.zoom == 100

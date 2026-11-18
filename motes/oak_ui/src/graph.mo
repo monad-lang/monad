@@ -16,7 +16,16 @@
 //   clicking a group's label selects the group id;
 // - drag the background: `graph_drag_start`/`_move`/`_end` (pan);
 // - wheel over the drawing, or the toolbar's +/-: `graph_zoom`;
-// - the toolbar's reset: `graph_reset`.
+// - the toolbar's reset: `graph_reset`;
+// - the toolbar's fit toggle: `graph_fit on`.
+//
+// FIT. With `fit` on (the initial view), the drawing is wrapped in a nested
+// `<svg>` whose `viewBox` is the layout's box: the browser scales the whole
+// graph to the widget's size, so a large layout uses the full width and
+// height and a small one is not blown up past a minimum box
+// (`fit_min_w` x `fit_min_h`). Pan and zoom apply on top, in client pixels,
+// so dragging works the same in both modes. With `fit` off the drawing is
+// 1:1 from the top-left corner.
 //
 // With a selection, everything not adjacent to it is dimmed and the
 // selection's own edges are emphasised; highlighted ids (search matches)
@@ -49,13 +58,14 @@ pub type Ui.GraphMsg {
     graph_select (id : String),
     graph_zoom (steps : I64),
     graph_reset,
+    graph_fit (on : Bool),
     graph_drag_start (x : I64) (y : I64),
     graph_drag_move (x : I64) (y : I64),
     graph_drag_end,
 }
 
 /// The caller-owned view state. `zoom` is a percentage; `selected` is `""`
-/// for no selection.
+/// for no selection; `fit` scales the drawing to the widget (see FIT above).
 pub struct Ui.GraphView {
     pan_x : I64,
     pan_y : I64,
@@ -65,11 +75,12 @@ pub struct Ui.GraphView {
     dragging : Bool,
     drag_x : I64,
     drag_y : I64,
+    fit : Bool,
 }
 
 pub def Ui.GraphView.initial : Ui.GraphView :=
     { pan_x := 0, pan_y := 0, zoom := 100, selected := "", highlighted := List.empty,
-        dragging := false, drag_x := 0, drag_y := 0 }
+        dragging := false, drag_x := 0, drag_y := 0, fit := true }
 
 /// The zoom ladder, in percent; `graph_zoom n` moves `n` rungs.
 def zoom_levels : List I64 := [10, 20, 33, 50, 67, 80, 100, 125, 150, 200, 300]
@@ -94,13 +105,14 @@ pub def Ui.graph_zoom_step (z : I64) (steps : I64) : I64 :=
     level_at (if rung < 0 then 0 else rung) zoom_levels 300
 
 /// The usual update: pan on drag, zoom along the ladder, select (selecting
-/// the selected id again clears the selection), reset pan and zoom.
+/// the selected id again clears the selection), reset pan, zoom and fit.
 pub def Ui.GraphView.update (v : Ui.GraphView) (m : Ui.GraphMsg) : Ui.GraphView :=
     match m {
         Ui.GraphMsg.graph_select id =>
             { v with selected := if String.beq v.selected id then "" else id },
         Ui.GraphMsg.graph_zoom steps => { v with zoom := Ui.graph_zoom_step v.zoom steps },
-        Ui.GraphMsg.graph_reset => { v with pan_x := 0, pan_y := 0, zoom := 100 },
+        Ui.GraphMsg.graph_reset => { v with pan_x := 0, pan_y := 0, zoom := 100, fit := true },
+        Ui.GraphMsg.graph_fit on => { v with fit := on, pan_x := 0, pan_y := 0, zoom := 100 },
         Ui.GraphMsg.graph_drag_start x y => { v with dragging := true, drag_x := x, drag_y := y },
         Ui.GraphMsg.graph_drag_move x y =>
             if v.dragging
@@ -258,8 +270,29 @@ def toolbar {Msg : Type} (v : Ui.GraphView) (on_msg : Ui.GraphMsg -> Msg) : Oak.
         [tool "Zoom in" "+" (on_msg (Ui.GraphMsg.graph_zoom 1)),
             tool "Zoom out" "\u{2212}" (on_msg (Ui.GraphMsg.graph_zoom (0 - 1))),
             tool "Reset view" "\u{21BA}" (on_msg Ui.GraphMsg.graph_reset),
+            if v.fit then tool "Actual size" "1:1" (on_msg (Ui.GraphMsg.graph_fit false))
+            else tool "Fit to view" "\u{2922}" (on_msg (Ui.GraphMsg.graph_fit true)),
             Html.div [Html.class_ ["oak-graph__zoom"], Html.aria "live" "polite"]
                 [Html.text (String.concat (I64.to_string v.zoom) "%")]]
+
+/// The smallest box fit scales to: a small graph keeps roughly its natural
+/// size instead of filling the widget with giant nodes.
+def fit_min_w : I64 := 720
+def fit_min_h : I64 := 420
+def fit_pad : I64 := 16
+
+def at_least (n : I64) (floor : I64) : I64 := if n < floor then floor else n
+
+/// The drawing's layers, scaled to the widget under fit.
+def fitted {Msg : Type} (fit : Bool) (layout : Ui.GraphLayout) (layers : List (Oak.Node Msg)) : Oak.Node Msg :=
+    if fit
+    then Svg.svg [Svg.attr "class" "oak-graph__fit",
+        Svg.attr "viewBox" (List.intercalate " " (List.map I64.to_string
+            [0 - fit_pad, 0 - fit_pad, at_least (layout.width + 2 * fit_pad) fit_min_w,
+                at_least (layout.height + 2 * fit_pad) fit_min_h])),
+        Svg.attr "preserveAspectRatio" "xMidYMin meet", Svg.attr "width" "100%", Svg.attr "height" "100%",
+        Svg.attr "overflow" "visible"] layers
+    else Svg.g List.empty layers
 
 with Ui {
     /// A graph drawing. `label` is the accessible name of the drawing;
@@ -282,9 +315,11 @@ with Ui {
                             Svg.attr "height" "100%",
                             drag_start on_msg] List.empty,
                         Svg.g [Svg.transform content]
-                            [Svg.g [Svg.attr "class" "oak-graph__groups"] (List.map
-                                (draw_group view on_msg) layout.groups),
-                                Svg.g [Svg.attr "class" "oak-graph__edges"] (List.map (draw_edge view) layout.edges),
-                                Svg.g [Svg.attr "class" "oak-graph__nodes"] (List.map
-                                    (draw_node view near on_msg) layout.nodes)]]]
+                            [fitted view.fit layout
+                                [Svg.g [Svg.attr "class" "oak-graph__groups"] (List.map
+                                    (draw_group view on_msg) layout.groups),
+                                    Svg.g [Svg.attr "class" "oak-graph__edges"] (List.map (draw_edge view)
+                                        layout.edges),
+                                    Svg.g [Svg.attr "class" "oak-graph__nodes"] (List.map
+                                        (draw_node view near on_msg) layout.nodes)]]]]
 }

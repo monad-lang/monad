@@ -157,6 +157,7 @@ pub def Ui.css_graph : String := r#"
   background: var(--oak-surface-alt); overflow: hidden;
 }
 .oak-graph__canvas { display: block; width: 100%; height: 100%; touch-action: none; user-select: none; }
+.oak-graph__fit { overflow: visible; }
 .oak-graph__surface { fill: transparent; cursor: grab; }
 .oak-graph--dragging .oak-graph__surface { cursor: grabbing; }
 .oak-graph__toolbar {
