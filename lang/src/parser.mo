@@ -3361,21 +3361,37 @@ def class_method_try_ret_type (r : ParseResult String) (orig : String) (mname : 
 #[partial]
 def class_method_ret_type_val (r : ParseResult ParseTerm) (mname : Identifier) (name : Identifier) (methods : List ParseClassDef) (param_types : List ParseTerm) (param_names : List Identifier) (vis : Visibility) : ParseResult ParseDecl :=
     match r {
-        success rem ret_typ => class_method_default_or_done rem mname (build_pi_chain param_types ret_typ) param_names name methods vis,
+        success rem ret_typ => class_method_default_or_done rem mname (build_named_pi_chain param_types param_names ret_typ) param_names name methods vis,
         fail e => fail e
     }
 
 /// Fold accumulated param types (most-recent-first / reverse declaration
 /// order, same invariant `def`'s own `List Param` follows) with the
-/// return type into a non-dependent Pi chain. `Option.none` for the
-/// binder: a class method's parameter TYPES are accumulated here with no
-/// names attached, so this chain is genuinely non-dependent and stays
-/// lowered flat. `build_param_pi_chain` below is the one that has names.
+/// return type into a non-dependent Pi chain with anonymous binders.
+/// `build_named_pi_chain` below is the class-method form, which names them.
 #[partial]
 def build_pi_chain (param_types : List ParseTerm) (ret : ParseTerm) : ParseTerm := match param_types {
     List.empty => ret,
     List.cons t rest => build_pi_chain rest (pt_pi Option.none t ret),
 }
+
+/// `build_pi_chain` with each binder named after its parameter (`""` for an
+/// unnamed `(W A)` stays anonymous). Without the names, a dependent method
+/// signature (`(m : M A) -> Path (M A) m m`) left `m` a free name, which the
+/// signature check bound as a type variable at `Sort 0` (ISSUE-12). Both lists
+/// are most-recent-first and the same length (`push_ids`/`push_n_terms`).
+#[partial]
+def build_named_pi_chain (param_types : List ParseTerm) (param_names : List Identifier) (ret : ParseTerm) : ParseTerm :=
+    match param_types {
+        List.empty => ret,
+        List.cons t rest =>
+            match param_names {
+                List.empty => build_pi_chain param_types ret,
+                List.cons n names =>
+                    let binder : Option Identifier := if String.beq (match n { Identifier.id s => s }) "" then Option.none else Option.some n in
+                    build_named_pi_chain rest names (pt_pi binder t ret),
+            },
+    }
 
 #[partial]
 def class_method_next_param (r : ParseResult String) (orig : String) (mname : Identifier) (name : Identifier) (methods : List ParseClassDef) (param_types : List ParseTerm) (param_names : List Identifier) (vis : Visibility) : ParseResult ParseDecl :=
