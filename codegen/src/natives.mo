@@ -890,6 +890,9 @@ pub def runtime_declarations_for_with_ownership (kind : TargetKind) (ownership_o
     // (runtime.c) -- two args, same i64-not-`char*` convention as d23.
     let d23a := mk_decl "monad_string_count_newlines" (List.cons "i64" (List.cons "i64" List.empty)) "i64" in
     let d23b := mk_decl "monad_string_trailing_chars" (List.cons "i64" (List.cons "i64" List.empty)) "i64" in
+    // `monad_string_has_index` (runtime.c): the runtime IR's `String.get`
+    // bounds check; generated IR calls it, so it needs a declare too.
+    let d23c := mk_decl "monad_string_has_index" (List.cons "i64" (List.cons "i64" List.empty)) "i64" in
     // Same requirement as `monad_string_length` just above --
     // `compile_native_def_wrapper_ir`'s own `call` (the "native def
     // compiles to a real wrapper" fix) hits the identical "no implicit
@@ -1230,7 +1233,7 @@ pub def runtime_declarations_for_with_ownership (kind : TargetKind) (ownership_o
     let d187 := mk_decl "monad_export_enter" List.empty "i64" in
     let d188 := mk_decl "monad_export_leave" ["i64"] "i64" in
     [d1, d2, d3, d7c, d7d, d7e, d7f, d8, d9, d10, d11, d12, d13,
-        d14, d15, d16, d17, d18, d19, d20, d21, d22, d23, d23a, d23b, d24, d24b, d25, d26, d27, d28, d29, d30, d31,
+        d14, d15, d16, d17, d18, d19, d20, d21, d22, d23, d23a, d23b, d23c, d24, d24b, d25, d26, d27, d28, d29, d30, d31,
         d32, d33, d34, d35b, d37, d38, d38b, d39, dSysInt, dSysStr, dSysStat, dSysDirOpen, dSysDirNext, dSysDirClose, d40, d41, d42, d43, d43b, d44,
         d45, d46,
         d48, d49, d50, d51, d52, d53, d54, d55, d56,

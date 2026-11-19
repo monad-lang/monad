@@ -846,6 +846,14 @@ static int64_t monad_string_length_impl(char* s) {
     return s ? (int64_t)strlen(s) : 0;
 }
 
+/* `monad_string_get`'s bounds check: whether `s` has a byte at index `i`,
+   i.e. no NUL among `s[0..i]`. `memchr` bounded by `i + 1` is O(i) and
+   vectorized, where the `strlen` it replaces cost the whole buffer on
+   every access; it stops at the NUL, like `monad_string_slice_impl`'s. */
+static int64_t monad_string_has_index_impl(char* s, int64_t i) {
+    return s && i >= 0 && memchr(s, '\0', (size_t)i + 1) == NULL;
+}
+
 /* `#[native string_count_newlines]` / `#[native string_trailing_chars]`
    (init/string.mo) -- the two scans `lang/parser/position.mo`'s bulk
    offset resolver needs in order to walk one step per SPAN rather than
@@ -1763,6 +1771,7 @@ rt_word monad_slot_peek(rt_word handle) { return slot_peek_impl(handle); }
 rt_word monad_slot_free(rt_word handle) { return slot_free_impl(handle); }
 
 int64_t monad_string_length(rt_str s) { return monad_string_length_impl(RT_STR(s)); }
+int64_t monad_string_has_index(rt_str s, int64_t i) { return monad_string_has_index_impl(RT_STR(s), i); }
 int64_t monad_string_count_newlines(rt_str s, int64_t len) { return monad_string_count_newlines_impl(RT_STR(s), len); }
 int64_t monad_string_trailing_chars(rt_str s, int64_t len) { return monad_string_trailing_chars_impl(RT_STR(s), len); }
 rt_str monad_string_concat(rt_str a, rt_str b) { return RT_STR_WORD(monad_string_concat_impl(RT_STR(a), RT_STR(b))); }

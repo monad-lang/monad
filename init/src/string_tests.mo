@@ -133,3 +133,33 @@ def test_split_multibyte_pieces : Bool :=
             Option.some p => String.beq p "wörld",
             Option.none => false,
         })
+
+// `String.get`'s bounds check looks for the terminator in `s[0..i]`
+// (`monad_string_has_index`) rather than taking a `strlen`; these pin every
+// edge of that check on literal, concatenated and dropped (interior-pointer)
+// strings.
+def get_is (s : String) (i : I64) (b : U8) : Bool := match String.get s i {
+    Option.some x => U8.beq x b,
+    Option.none => false,
+}
+
+def get_none (s : String) (i : I64) : Bool := match String.get s i {
+    Option.some _ => false,
+    Option.none => true,
+}
+
+#[test]
+def test_get_in_range : Bool :=
+    get_is "abc" 0 97u8 && get_is "abc" 1 98u8 && get_is "abc" 2 99u8
+
+#[test]
+def test_get_out_of_range : Bool :=
+    get_none "abc" 3 && get_none "abc" 4 && get_none "abc" 100 && get_none "abc" (0 - 1)
+        && get_none "" 0 && get_none "" 1
+
+#[test]
+def test_get_on_built_strings : Bool :=
+    let joined := String.concat "ab" "cd" in
+    let tail := String.drop 2 "wxyz" in
+    get_is joined 3 100u8 && get_none joined 4
+        && get_is tail 1 122u8 && get_none tail 2

@@ -63,6 +63,14 @@ def test_runtime_string_get_option_tags : Bool :=
     check_contains t "%none_con = call i64 @alloc_constructor(i64 3, i64 0)"
         && check_contains t "%some_con = call i64 @alloc_constructor(i64 4, i64 1)"
 
+/// `string_get`'s bounds check is the O(i) `monad_string_has_index`, not
+/// a `strlen` of the whole buffer.
+#[test]
+def test_runtime_string_get_checks_the_index_not_the_length : Bool :=
+    let t := runtime_ir_text in
+    check_contains t "%has = call i64 @monad_string_has_index(i64 %p0, i64 %p1)"
+        && check_contains t "%in_range = icmp ne i64 %has, 0"
+
 /// Division-family ops and the zero-divisor guard both reference
 /// natives the compiler's own closure needs (`std/map.mo`'s bucket
 /// arithmetic). `u8_div` is `sdiv` (the reference's `wrapping_div` is
@@ -85,10 +93,8 @@ def test_runtime_no_nested_instructions : Bool :=
         && not (check_contains t "ret i64 sub")
         && not (check_contains t "ret i64 mul")
 
-/// `i >= 0` / `i >= len` are spelled with `sgt -1` and a swapped-target
-/// `slt`, since the IR ADT has no `icmp_sge` variant.
+/// `i >= 0` is spelled `sgt -1`, since the IR ADT has no `icmp_sge` variant.
 #[test]
 def test_runtime_no_sge_workarounds : Bool :=
     let t := runtime_ir_text in
     check_contains t "%cont = icmp sgt i64 %i, -1"
-        && check_contains t "%in_range = icmp slt i64 %p1, %len"
