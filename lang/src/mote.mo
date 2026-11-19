@@ -1087,22 +1087,22 @@ pub def Mote.workspace_member_names (root_dir : Path) : IO (List String) := do {
 /// is no root above.
 #[partial]
 pub def Mote.workspace_root_of (dir : Path) (name : String) : IO MoteRootLookup :=
-    Mote.workspace_root_go dir name 32
+    Mote.workspace_root_go dir dir name 32
 
 #[partial]
-def Mote.workspace_root_go (dir : Path) (name : String) (depth : I64) : IO MoteRootLookup := do {
+def Mote.workspace_root_go (member : Path) (dir : Path) (name : String) (depth : I64) : IO MoteRootLookup := do {
     if I64.lt depth 1 then return MoteRootLookup.root_none
     else do {
         let text <- read_file_or_none (mote_toml_in dir);
         match text {
-            Option.none => Mote.workspace_root_above dir name depth,
+            Option.none => Mote.workspace_root_above member dir name depth,
             Option.some t => match Toml.parse t {
-                err _ => Mote.workspace_root_above dir name depth,
+                err _ => Mote.workspace_root_above member dir name depth,
                 ok root => match Toml.table_get "workspace" root {
-                    Option.none => Mote.workspace_root_above dir name depth,
+                    Option.none => Mote.workspace_root_above member dir name depth,
                     Option.some v => match v {
-                        Toml.Value.table _ => Mote.workspace_root_found dir name root,
-                        _ => Mote.workspace_root_above dir name depth,
+                        Toml.Value.table _ => Mote.workspace_root_found member dir name root,
+                        _ => Mote.workspace_root_above member dir name depth,
                     }
                 }
             }
@@ -1111,10 +1111,10 @@ def Mote.workspace_root_go (dir : Path) (name : String) (depth : I64) : IO MoteR
 }
 
 #[partial]
-def Mote.workspace_root_above (dir : Path) (name : String) (depth : I64) : IO MoteRootLookup :=
+def Mote.workspace_root_above (member : Path) (dir : Path) (name : String) (depth : I64) : IO MoteRootLookup :=
     match Mote.dir_above dir {
         Option.none => return MoteRootLookup.root_none,
-        Option.some p => Mote.workspace_root_go p name (depth - 1),
+        Option.some p => Mote.workspace_root_go member p name (depth - 1),
     }
 
 /// A `[workspace]` manifest was found at `dir`. A root that also declares
@@ -1122,7 +1122,7 @@ def Mote.workspace_root_above (dir : Path) (name : String) (depth : I64) : IO Mo
 /// member must be listed (by name) in `[workspace] members`.
 #[partial]
 def Mote.workspace_root_found
-    (dir : Path) (name : String) (root : BTreeMap String Toml.Value) : IO MoteRootLookup := do {
+    (member : Path) (dir : Path) (name : String) (root : BTreeMap String Toml.Value) : IO MoteRootLookup := do {
     let own := Mote.table_string (Toml.table_get "mote" root) "name";
     let is_self := match own {
         Option.some n => String.beq n name,
@@ -1135,8 +1135,10 @@ def Mote.workspace_root_found
         // Compare the member's directory spelling first: every ordinary load
         // takes this path and reads no manifests. The name fallback covers
         // `.` (the user inside the member) and an absolute checkout, where
-        // the same member has two spellings.
-        if Mote.dirs_contain dirs dir then return (MoteRootLookup.root_found w)
+        // the same member has two spellings. `member` is the directory the
+        // walk started from; `dir` is the root it found, which no member
+        // list contains, so comparing that sent every load to the fallback.
+        if Mote.dirs_contain dirs member then return (MoteRootLookup.root_found w)
         else do {
             let names <- Mote.member_names_of dirs;
             if Mote.names_contain names name
