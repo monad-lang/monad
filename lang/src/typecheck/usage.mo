@@ -551,6 +551,35 @@ def last_dotted_segment_go (s : String) (idx : I64) : String :=
                 else last_dotted_segment_go s (idx - 1),
         }
 
+/// Is this spine head a list literal's `cons`? `[a, b]` desugars to
+/// `FromListLiteral.cons a (FromListLiteral.cons b FromListLiteral.empty)`
+/// (`parser.mo`'s `build_list_literal`), which inside-out resolution may
+/// rewrite to the promoted instance method `FromListLiteral_<Carrier>_cons`.
+/// It is a class-method call, not a constructor, but every instance's
+/// `cons` builds a collection that holds both arguments -- so they are
+/// owning stores. Classifying them as call arguments let `[v]` store a
+/// borrowed view unchecked, while `List.cons v List.empty` was rejected.
+///
+/// Matched on the final dotted segment's two distinctive spellings, not a
+/// bare `cons`: `List.cons` is already a constructor, and an unrelated
+/// `Foo.cons` def must stay a call.
+def head_is_list_literal_cons (t : Term) : Bool :=
+    match t {
+        Term.var _idx dbg =>
+            match dbg {
+                DebugName.named id => name_is_list_literal_cons (show_identifier id),
+                DebugName.unnamed => false,
+            },
+        Term.ctx _loc inner => head_is_list_literal_cons inner,
+        _ => false,
+    }
+
+def name_is_list_literal_cons (nm : String) : Bool :=
+    let seg : String := last_dotted_segment nm in
+    String.beq nm "FromListLiteral.cons"
+        || String.ends_with nm ".FromListLiteral.cons"
+        || (String.starts_with "FromListLiteral_" seg && String.ends_with seg "_cons")
+
 /// Is this spine head a constructor, so its arguments are owning stores
 /// rather than call arguments? Checks the rendered `DebugName` against
 /// `ctors` exactly — the set holds the bare, full, and type-qualified
@@ -895,7 +924,7 @@ def owning_at_mode (ctors : HashMap String Bool) (borrows : HashMap String Bool)
                 // shadow it and every borrow would count as an owning
                 // store -- the exact miscount B1 exists to prevent.
                 if head_is_shared_of borrows head then UsePos.up_shared_arg
-                else if head_is_ctor ctors head then UsePos.up_con_field
+                else if head_is_ctor ctors head || head_is_list_literal_cons head then UsePos.up_con_field
                 else UsePos.up_app_arg in
             owning_at_mode ctors borrows fn_mode UsePos.up_app_head target callee + owning_at_mode ctors borrows fn_mode arg_pos target arg,
         Term.lit value => owning_at_literal ctors borrows fn_mode ctx target value,
@@ -2665,6 +2694,17 @@ def test_a_let_bound_view_used_as_a_store_is_an_owning_use : Bool :=
         List.cons u _rest => BinderUse.view u && I64.gt (BinderUse.owning u) 0,
         List.empty => false,
     }
+
+#[test]
+def test_list_literal_cons_spellings : Bool :=
+    name_is_list_literal_cons "FromListLiteral.cons"
+        && name_is_list_literal_cons "FromListLiteral_List_cons"
+        && name_is_list_literal_cons "init.prelude.FromListLiteral_List_cons"
+        && Bool.not (name_is_list_literal_cons "List.cons")
+        && name_is_list_literal_cons "init.prelude.FromListLiteral.cons"
+        && Bool.not (name_is_list_literal_cons "Foo.cons")
+        && Bool.not (name_is_list_literal_cons "MyFromListLiteral.cons")
+        && Bool.not (name_is_list_literal_cons "FromListLiteral_List_empty")
 
 #[test]
 def test_a_binder_from_an_ordinary_initializer_is_not_a_view : Bool :=

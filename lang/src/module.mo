@@ -7612,6 +7612,34 @@ def test_affine_check_recognises_a_marked_shared_type : IO Bool := do {
         && I64.beq (List.length plain_diags) 1)
 }
 
+/// A list literal STORES its elements: `[v]` desugars to
+/// `FromListLiteral.cons v FromListLiteral.empty`, a class-method call, but
+/// every instance's `cons` builds a collection that holds `v`. So a borrowed
+/// view inside a list literal escapes exactly as it does through the
+/// constructor (`L.cons v L.nil`, the control), and a plain binder listed
+/// twice is two owning uses.
+#[test]
+def test_affine_check_treats_a_list_literal_element_as_a_store : IO Bool := do {
+    let prelude : String :=
+        "#[shared]\ntype Marked A { of (value : A) }\n"
+        ++ "def Marked.get (b : Marked A) : A := match b { of v => v }\n"
+        ++ "type L A { nil, cons (h : A) (t : L A) }\n"
+        ++ "class FromListLiteral (F : Type -> Type := L) {\n"
+        ++ "    def cons (a : A) : F A -> F A\n    def empty : F A\n}\n"
+        ++ "instance FromListLiteral L {\n"
+        ++ "    def cons (a : A) (t : L A) : L A := L.cons a t\n    def empty : L A := L.nil\n}\n"
+        ++ "type T { mk }\n";
+    let lit : String := prelude ++ "def f (b : Marked T) : L T := let v : T := Marked.get b in [v]";
+    let ctor : String := prelude ++ "def f (b : Marked T) : L T := let v : T := Marked.get b in L.cons v L.nil";
+    let twice : String := prelude ++ "def f (x : T) : L T := [x, x]";
+    let lit_diags : List String <- check_affine_diags_of_source lit "probe";
+    let ctor_diags : List String <- check_affine_diags_of_source ctor "probe";
+    let twice_diags : List String <- check_affine_diags_of_source twice "probe";
+    return (diags_contain "is a borrowed view" ctor_diags
+        && diags_contain "is a borrowed view" lit_diags
+        && diags_contain "is moved 2 times" twice_diags)
+}
+
 /// A declared class constraint is enforced at the CALL site: once its
 /// variable is solved to a concrete type, an instance must exist.
 #[test]
