@@ -7190,7 +7190,10 @@ def fallback_check_files_go (cache : ModuleInfoCache) (files : List String)
 def check_batch_loaded (batch : LoadedBatch) (files : List String)
     (verbose : Bool) : IO BatchCheckResult :=
     match elaborate_loaded_modules_pure_for_targets batch.loaded (batch_target_paths batch.targets) false {
-        Result.err _e => fallback_check_files batch.cache files verbose,
+        Result.err e => do {
+            batch_fallback_note verbose (String.concat "elaboration failed: " e);
+            fallback_check_files batch.cache files verbose
+        },
         Result.ok em => finish_batch em batch.targets batch.cache verbose,
     }
 
@@ -7251,10 +7254,16 @@ def check_batch_group (main_target : LoadedTarget) (group : List LoadedTarget)
     check_batch_loaded batch files verbose
 }
 
+/// Why a batch group fell back to the per-file path: each fallback
+/// re-elaborates the whole closure once per file, so it must be visible.
+def batch_fallback_note (verbose : Bool) (reason : String) : IO Unit :=
+    if verbose then println (String.concat "  check batch: per-file fallback: " reason) else IO.pure unit
+
 #[partial]
 def fallback_group (group : List LoadedTarget) (cache : ModuleInfoCache)
     (acc : List (Pair String FileCheckResult))
-    (pending_rest : List LoadedTarget) (verbose : Bool) : IO BatchCheckResult := do {
+    (pending_rest : List LoadedTarget) (verbose : Bool) (reason : String) : IO BatchCheckResult := do {
+    batch_fallback_note verbose (String.concat reason (String.concat ", files: " (I64.to_string (List.length group))));
     let result <- fallback_check_files cache (group_files group) verbose;
     check_groups_go pending_rest result.cache verbose (List.append acc result.results)
 }
@@ -7269,18 +7278,20 @@ def check_one_group (group : List LoadedTarget)
     match split {
         Pair.pair batchable macros =>
             match batchable {
-                List.empty => fallback_group group cache acc pending_rest verbose,
+                List.empty => fallback_group group cache acc pending_rest verbose "every target declares a macro",
                 List.cons main_target batchable_rest => do {
                     let batchable_group : List LoadedTarget := List.cons main_target batchable_rest;
                     let all : List ModuleInfo := group_modules_go batchable_group List.empty;
                     if group_has_name_collisions all
-                    then fallback_group group cache acc pending_rest verbose
+                    then fallback_group group cache acc pending_rest verbose "two modules declare the same bare name"
                     else do {
                         let gate_err <- gate_group_targets batchable_group;
                         match gate_err {
-                            Option.some _e => fallback_group group cache acc pending_rest verbose,
+                            Option.some e => fallback_group group cache acc pending_rest verbose (String.concat "gate failed: " e),
                             Option.none => do {
                                 let bres <- check_batch_group main_target batchable_group all cache verbose;
+                                let _note <- if List.is_empty macros then IO.pure unit
+                                    else batch_fallback_note verbose (String.concat "macro-declaring targets: " (I64.to_string (List.length macros)));
                                 let mres <- fallback_check_files bres.cache (group_files macros) verbose;
                                 check_groups_go pending_rest mres.cache verbose
                                     (List.append (List.append acc bres.results) mres.results)
@@ -7319,7 +7330,10 @@ pub def check_files_cached (cache : ModuleInfoCache) (files : List String)
     (verbose : Bool) : IO BatchCheckResult := do {
     let loaded <- load_targets_go files cache verbose List.empty;
     match loaded {
-        Result.err _e => fallback_check_files cache files verbose,
+        Result.err e => do {
+            batch_fallback_note verbose (String.concat "load failed: " e);
+            fallback_check_files cache files verbose
+        },
         Result.ok lt => check_groups_go lt.targets lt.cache verbose List.empty,
     }
 }
