@@ -8,7 +8,10 @@
 #   2. `MONAD_OWNERSHIP=poison` balances too (every drop point executes even
 #      though nothing is returned to the allocator);
 #   3. the default build reports no owned allocations or frees at all;
-#   4. the warn-mode gate refuses a build whose loaded closure includes a
+#   4. on the web profile, the same balance holds for drop glue returning
+#      cells to runtime/src/gc_wasm.c (skipped without node and a web C
+#      compiler);
+#   5. the warn-mode gate refuses a build whose loaded closure includes a
 #      `[affine] mode = "warn"` mote (`examples/` inherits the root
 #      manifest, which is warn).
 #
@@ -83,6 +86,37 @@ elif ! grep -q 'affine.*warn' "$gate"; then
     status=1
 else
     echo "ok    gate: warn-mode mote refused"
+fi
+
+# Web leg: drop glue returns cells to the web heap (runtime/src/gc_wasm.c).
+# Needs a web C compiler (MONAD_WEB_CC or WASI_SDK_PATH) and node; skipped
+# without them. wasm/web/web.js must be generated (scripts/gen-web-js.sh).
+check_web() {
+    mode=$1
+    want=$2
+    wasm="$out/ownership-web-$mode.wasm"
+    log="$out/ownership-web-$mode.log"
+    own=$mode
+    [ "$mode" = default ] && own=
+    if ! MONAD_OWNERSHIP="$own" "$bin" run cli/src/main.mo -- build --target wasm32-unknown-unknown \
+        fixtures/wasm/ownership_web.mo -o "$wasm" --no-cache > "$log" 2>&1; then
+        echo "FAIL web ownership=$mode: build failed (see $log)"
+        status=1
+    elif node wasm/web/smoke/ownership_smoke.mjs "$wasm" "$want" >> "$log" 2>&1; then
+        echo "ok    web ownership=$mode: $(tail -n 1 "$log" | sed 's/.*-> //')"
+    else
+        echo "FAIL web ownership=$mode: $(tail -n 1 "$log")"
+        status=1
+    fi
+}
+
+if command -v node >/dev/null 2>&1 && { [ -n "${MONAD_WEB_CC:-}" ] || [ -n "${WASI_SDK_PATH:-}" ]; } \
+    && [ -f wasm/web/web.js ]; then
+    check_web 1 owned
+    check_web poison owned
+    check_web default none
+else
+    echo "skip  web leg: needs node, MONAD_WEB_CC or WASI_SDK_PATH, and wasm/web/web.js"
 fi
 
 [ "$status" -eq 0 ] && echo "ownership checks passed" || echo "ownership checks FAILED"

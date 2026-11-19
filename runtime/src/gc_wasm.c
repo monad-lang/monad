@@ -59,6 +59,8 @@ static struct {
     uint64_t live_bytes;   /* after the last sweep */
     uint64_t since_gc;     /* bytes allocated since the last sweep */
     int64_t collections;
+    int64_t owned_allocs;  /* ownership mode: monad_owned_alloc calls */
+    int64_t owned_frees;   /* ownership mode: drop-glue frees */
     int overflow;
     uint32_t msp;
     uint32_t mark_stack[GC_MARK_STACK];
@@ -439,6 +441,7 @@ __attribute__((unused)) static void gc_free(uint64_t v) {
     uint32_t page, slot;
     uint8_t* obj = gc_resolve(v, &page, &slot);
     if (!obj || (uint64_t)(uintptr_t)obj != v) __builtin_trap();
+    gc.owned_frees++;
     if (slot == ~0u) {
         gc_release_pages(page, gc.pages[page].n);
         return;

@@ -23,13 +23,12 @@
 #define MONAD_TARGET_WASM 1
 #endif
 
-/* Ownership mode allocates with `calloc`/`free` and its drop glue emits
-   `call void @monad_owned_free`; the wasm profiles keep the IR-facing
-   declaration as i64 (`rt_void`) and have no allocator to return memory to.
-   `llvm/src/link.mo` therefore turns the combination into this define, so
-   the build fails with a message instead of emitting invalid IR. */
+/* Ownership mode's drop glue calls `monad_owned_free`. Native frees with
+   `free`, web returns the cell to gc_wasm.c; wasi's malloc heap has no
+   free path, so `llvm/src/link.mo` turns that combination into this
+   define and the build fails with a message instead of emitting IR. */
 #ifdef MONAD_OWNERSHIP_UNSUPPORTED_TARGET
-#error "MONAD_OWNERSHIP is native-only: the wasm profiles have no allocator to free to"
+#error "MONAD_OWNERSHIP is not supported on wasi: its heap has no free path"
 #endif
 
 #ifdef MONAD_TARGET_WASM
@@ -107,7 +106,7 @@ void monad_release(rt_word ptr);
  * mode is native-only: `llvm/src/link.mo` refuses it for wasm/web, and the
  * wasi/web blocks below forward so the runtime still compiles. */
 rt_word monad_owned_alloc(rt_size size);
-void monad_owned_free(rt_word ptr);
+rt_void monad_owned_free(rt_word ptr);
 rt_word monad_region_alloc(rt_size size);
 rt_word monad_region_alloc_atomic(rt_size size);
 

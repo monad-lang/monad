@@ -37,7 +37,7 @@ rt_word monad_alloc_atomic(rt_size size) {
 /* Ownership mode is native-only (`llvm/src/link.mo` refuses it for wasm),
    so these forward exactly as the default native build does. */
 rt_word monad_owned_alloc(rt_size size) { return monad_alloc(size); }
-void monad_owned_free(rt_word ptr) { (void)ptr; }
+rt_void monad_owned_free(rt_word ptr) { (void)ptr; RT_VOID_RETURN; }
 
 void monad_retain(rt_word ptr) {
     if (!ptr) return;

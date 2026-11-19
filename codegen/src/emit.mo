@@ -5633,7 +5633,7 @@ def compile_db_module_ownership (decl_list : List Decl) (tables : Option Ownersh
     } in
     let drop_funcs : List LLVMFunction := match tables {
         Option.none => List.empty,
-        Option.some t => compile_drop_functions base_ctx inds t,
+        Option.some t => compile_drop_functions base_ctx (TargetKind.is_wasm (TargetKind.of_triple triple)) inds t,
     } in
     match compile_db_def_list base_ctx defs {
         { ctx := _, funcs := compiled_funcs, globals := compiled_globals, externs := compiled_exts } =>
@@ -5755,24 +5755,27 @@ def compile_db_inductive_decls (ind_decls : List Inductive) (ctor_tags : HashMap
 /// its own defence -- jumps straight to `ret void`: those values are
 /// `g_nullary` singletons and must never reach `monad_owned_free`.
 #[partial]
-pub def compile_drop_functions (c : CodegenCtx) (inds : List Inductive) (tables : OwnershipTables) : List LLVMFunction := match inds {
+///
+/// `wasm` picks the free's IR return type: `monad_owned_free` is `rt_void`,
+/// which is `void` natively and the i64 word on the wasm profiles.
+pub def compile_drop_functions (c : CodegenCtx) (wasm : Bool) (inds : List Inductive) (tables : OwnershipTables) : List LLVMFunction := match inds {
     List.empty => List.empty,
     List.cons ind rest =>
-        let here := compile_drop_function c ind tables in
-        List.append here (compile_drop_functions c rest tables)
+        let here := compile_drop_function c wasm ind tables in
+        List.append here (compile_drop_functions c wasm rest tables)
 }
 
-def compile_drop_function (c : CodegenCtx) (ind : Inductive) (tables : OwnershipTables) : List LLVMFunction := match ind {
+def compile_drop_function (c : CodegenCtx) (wasm : Bool) (ind : Inductive) (tables : OwnershipTables) : List LLVMFunction := match ind {
     Inductive.mk name _params _typ ctors _attrs _vis =>
         let full : String := show_name_path name in
         match str_map_lookup full tables.owned {
             Option.none => List.empty,
-            Option.some drop_name => List.cons (build_drop_function c drop_name name ctors tables) List.empty,
+            Option.some drop_name => List.cons (build_drop_function c wasm drop_name name ctors tables) List.empty,
         },
 }
 
 #[partial]
-def build_drop_function (c : CodegenCtx) (drop_name : String) (ind_name : NamePath) (ctors : List InductConstructor) (tables : OwnershipTables) : LLVMFunction :=
+def build_drop_function (c : CodegenCtx) (wasm : Bool) (drop_name : String) (ind_name : NamePath) (ctors : List InductConstructor) (tables : OwnershipTables) : LLVMFunction :=
     if List.is_empty ctors then
         let empty_fn : LLVMBasicBlock := LLVMBasicBlock.mk "entry" [LLVMInstruction.ret LLVMValue.void_val] in
         LLVMFunction.mk drop_name [ParamPair.mk "p0" LLVMType.i64_] LLVMType.void [empty_fn] Option.none
@@ -5785,13 +5788,19 @@ def build_drop_function (c : CodegenCtx) (drop_name : String) (ind_name : NamePa
         let tails : List LLVMBasicBlock := [
             LLVMBasicBlock.mk "drop_default" [LLVMInstruction.jump "drop_cell"],
             LLVMBasicBlock.mk "drop_cell" [
-                LLVMInstruction.call_void (LLVMValue.call "monad_owned_free" LLVMType.void [LLVMValue.parm_ 0] false),
+                owned_free_call wasm,
                 LLVMInstruction.ret LLVMValue.void_val,
             ],
             LLVMBasicBlock.mk "drop_void" [LLVMInstruction.ret LLVMValue.void_val],
         ] in
         let blocks : List LLVMBasicBlock := List.append [entry] (List.append checks tails) in
         LLVMFunction.mk drop_name [ParamPair.mk "p0" LLVMType.i64_] LLVMType.void blocks Option.none
+
+/// The drop glue's `monad_owned_free(%p0)`, typed as the runtime declares it.
+def owned_free_call (wasm : Bool) : LLVMInstruction :=
+    if wasm
+    then LLVMInstruction.assign "freed" (LLVMValue.call "monad_owned_free" LLVMType.i64_ [LLVMValue.parm_ 0] false)
+    else LLVMInstruction.call_void (LLVMValue.call "monad_owned_free" LLVMType.void [LLVMValue.parm_ 0] false)
 
 #[partial]
 def build_drop_checks (c : CodegenCtx) (ind_name : NamePath) (ctors : List InductConstructor) (tables : OwnershipTables) (i : I64) (acc : List LLVMBasicBlock) : List LLVMBasicBlock :=

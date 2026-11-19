@@ -113,6 +113,18 @@ int64_t web_gc_live_bytes(void) {
     return (int64_t)gc.live_bytes;
 }
 
+/* Ownership-mode counters (`scripts/check-ownership.sh`'s web leg): every
+   owned allocation and every drop-glue free, poison mode included. */
+__attribute__((export_name("web_gc_owned_allocs")))
+int64_t web_gc_owned_allocs(void) {
+    return gc.owned_allocs;
+}
+
+__attribute__((export_name("web_gc_owned_frees")))
+int64_t web_gc_owned_frees(void) {
+    return gc.owned_frees;
+}
+
 rt_word monad_alloc(rt_size size) {
     /* Boehm returns cleared memory; match it so a codegen path that reads a
        field before writing it sees the same zero on every target. */
@@ -130,11 +142,29 @@ rt_word monad_alloc_atomic(rt_size size) {
     return web_alloc(size, 1);
 }
 
-/* Ownership mode is native-only (`llvm/src/link.mo` refuses it for wasm),
-   so these forward exactly as the default native build does; the
-   collector reclaims the cell. */
-rt_word monad_owned_alloc(rt_size size) { return monad_alloc(size); }
-void monad_owned_free(rt_word ptr) { (void)ptr; }
+/* Ownership mode: Owned cells come from the same scanned heap, and drop
+   glue returns them to it. Poison fills the cell and never frees, so a
+   use-after-free is deterministic during bring-up. Default builds keep the
+   no-op free: the collector reclaims the cell. */
+rt_word monad_owned_alloc(rt_size size) {
+    gc.owned_allocs++;
+    return monad_alloc(size);
+}
+#if defined(MONAD_OWNERSHIP_POISON)
+rt_void monad_owned_free(rt_word ptr) {
+    if (!ptr) return 0;
+    uint32_t page, slot;
+    uint8_t* obj = gc_resolve((uint64_t)ptr, &page, &slot);
+    if (!obj || (uint64_t)(uintptr_t)obj != (uint64_t)ptr) __builtin_trap();
+    memset(obj, 0xDE, (size_t)gc_obj_size(obj));
+    gc.owned_frees++;
+    return 0;
+}
+#elif defined(MONAD_OWNERSHIP)
+rt_void monad_owned_free(rt_word ptr) { if (ptr) gc_free((uint64_t)ptr); return 0; }
+#else
+rt_void monad_owned_free(rt_word ptr) { (void)ptr; return 0; }
+#endif
 
 /* The /try engine stages the source text JS wants evaluated here: JS calls
  * `try_alloc(len + 1)`, writes UTF-8 plus a NUL, then calls the module's

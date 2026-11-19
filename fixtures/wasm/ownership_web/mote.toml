@@ -1,0 +1,8 @@
+# Ownership drop glue on the web profile (scripts/check-ownership.sh).
+# Its own manifest so the affine rule is in error mode (no [affine] table):
+# the ownership gate refuses the root's warn mode.
+
+[mote]
+name = "ownership_web"
+version = "0.1.0"
+edition = "2026"

@@ -304,6 +304,13 @@ pub def build_commit_define (from_env : Option String) (compiler_commit : String
         (if String.is_empty (String.trim compiler_commit) then "unknown" else String.trim compiler_commit)
     else env_hash
 
+/// Whether ownership mode has no allocator to free to on `kind`: wasi's
+/// malloc heap is never freed into, so drop glue there is refused.
+priv def ownership_unsupported (kind : TargetKind) : Bool := match kind {
+    TargetKind.wasi => true,
+    _ => false,
+}
+
 /// The runtime-object defines for `$MONAD_OWNERSHIP` (ownership phase 1).
 ///
 /// `1` enables the owned allocator (real `calloc`/`free`); `poison` enables
@@ -472,16 +479,16 @@ def link_ir_plan (runtime_c : String) (ir_text : String) (ir_path : Path) (outpu
                 // not a run-time flag: the compiler emits `alloc_constructor_owned`
                 // and `monad_owned_free` calls, and the C must agree about which
                 // of those are real. Read here so both halves come from one value.
-                // The mode is native-only (the wasm profiles have no allocator to
-                // free to); a wasm build gets a define that turns into a clear
-                // `#error` in `runtime_abi.h` instead of invalid IR at `llc`.
+                // Native and web have an allocator to free to (web: gc_wasm.c);
+                // wasi does not, so a wasi build gets a define that turns into a
+                // clear `#error` in `runtime_abi.h` instead of invalid IR at `llc`.
                 let own_env <- IO.get_env "MONAD_OWNERSHIP";
                 let ownership_flags : List String := ownership_runtime_flags own_env;
                 let runtime_flags : List String :=
                     match ownership_flags {
                         List.empty => List.append [commit_flag] (verbose_argv verbose),
                         List.cons hd tl =>
-                            if TargetKind.is_wasm plan.kind
+                            if ownership_unsupported plan.kind
                             then ["-DMONAD_OWNERSHIP_UNSUPPORTED_TARGET"]
                             else List.append (List.cons hd tl) (List.append [commit_flag] (verbose_argv verbose)),
                     };
