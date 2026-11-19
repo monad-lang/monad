@@ -21,6 +21,11 @@ pub struct ShellOptions {
     css : String
 }
 
+/// Four `String`s, each `Copy`, so the options are read field by field.
+pub instance Copy ShellOptions {
+    def copy (o : ShellOptions) : Pair ShellOptions ShellOptions := Pair.pair o o
+}
+
 pub def Shell.default_options (wasm : String) : ShellOptions :=
     { wasm := wasm, selector := "#app", title := "Monad", css := "" }
 

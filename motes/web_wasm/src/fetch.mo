@@ -43,7 +43,9 @@ pub def Fetch.read (r : RequestId) (max : I64) : IO String := IO.mk (fetch_read_
 
 def encode_header (p : Pair String String) : String :=
     match p {
-        Pair.pair key value =>
+        Pair.pair k v =>
+            let key : String := k in
+            let value : String := v in
             let klen : String := I64.to_string (String.length key) in
             let vlen : String := I64.to_string (String.length value) in
             String.concat klen (String.concat ":" (String.concat key
@@ -76,7 +78,9 @@ def decode_headers_from (s : String) (i : I64) : List (Pair String String) :=
     then List.empty
     else
         match parse_uint_from s i 0 {
-            Pair.pair klen kcolon =>
+            Pair.pair kl kc =>
+                let klen : I64 := kl in
+                let kcolon : I64 := kc in
                 if I64.beq klen 0 && I64.beq kcolon i
                 then List.empty
                 else
@@ -84,7 +88,9 @@ def decode_headers_from (s : String) (i : I64) : List (Pair String String) :=
                     let key : String := String.slice s key_start klen in
                     let vstart : I64 := I64.add key_start klen in
                     match parse_uint_from s vstart 0 {
-                        Pair.pair vlen vcolon =>
+                        Pair.pair vl vc =>
+                            let vlen : I64 := vl in
+                            let vcolon : I64 := vc in
                             let value : String := String.slice s (I64.add vcolon 1) vlen in
                             List.cons (Pair.pair key value)
                                 (decode_headers_from s (I64.add (I64.add vcolon 1) vlen)),

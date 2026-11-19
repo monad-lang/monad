@@ -39,14 +39,15 @@ pub def Crypto.random_bytes (n : I64) : IO (Result String (List U8)) := do {
     then IO.pure (Result.ok List.empty)
     else do {
         let buf <- ByteBuf.alloc n;
-        let ok <- IO.mk (crypto_random_fill_raw buf);
+        let bs := Shared.of buf;
+        let ok <- IO.mk (crypto_random_fill_raw (Shared.get bs));
         if I64.beq ok 0
         then do {
             let _ <- ByteBuf.free buf;
             IO.pure (Result.err "crypto.getRandomValues is unavailable")
         }
         else do {
-            let xs <- ByteBuf.to_list buf n;
+            let xs <- ByteBuf.to_list (Shared.get bs) n;
             let _ <- ByteBuf.free buf;
             IO.pure (Result.ok xs)
         }

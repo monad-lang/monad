@@ -13,3 +13,18 @@ pub type RequestId { request_id }
 pub type ClipboardOp { clipboard_op }
 pub type CryptoOp { crypto_op }
 pub type WebKey { web_key }
+
+/// The handles are host ids, so sharing one is a bit-copy, not a move:
+/// sizing a canvas and asking for its context both read the same `Node`,
+/// and polling an operation reads it once per poll.
+pub instance Copy Node {
+    def copy (n : Node) : Pair Node Node := Pair.pair n n
+}
+
+pub instance Copy ClipboardOp {
+    def copy (op : ClipboardOp) : Pair ClipboardOp ClipboardOp := Pair.pair op op
+}
+
+pub instance Copy CryptoOp {
+    def copy (op : CryptoOp) : Pair CryptoOp CryptoOp := Pair.pair op op
+}

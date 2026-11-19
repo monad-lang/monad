@@ -17,9 +17,10 @@ def test_header_blob_round_trips : Bool :=
     let hs : List (Pair String String) :=
         [Pair.pair "Authorization" "Bearer t", Pair.pair "Content-Type" "application/json"] in
     let back : List (Pair String String) := decode_headers (encode_headers hs) in
-    match List.get 0 back {
+    let sb := Shared.of back in
+    match List.get 0 (Shared.get sb) {
         Option.some first =>
-            match List.get 1 back {
+            match List.get 1 (Shared.get sb) {
                 Option.some second =>
                     pair_is "Authorization" "Bearer t" first
                         && pair_is "Content-Type" "application/json" second,

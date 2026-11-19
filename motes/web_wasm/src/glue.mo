@@ -35,9 +35,11 @@ def Glue.module (abi : WebAbi) : Js.Module :=
     let imports : List Js.Stmt := [
         Js.Stmt.expr (Js.Expr.raw "import { host } from \"./web_runtime.js\"")
     ] in
+    let imps : List WebImport := abi.imports in
+    let si := Shared.of imps in
     let body : List Js.Stmt := [
         Js.Stmt.let_bind "imports"
-            (Js.Expr.object (Glue.module_fields (Glue.module_names abi.imports List.empty) abi.imports)),
+            (Js.Expr.object (Glue.module_fields (Glue.module_names (Shared.get si) List.empty) (Shared.get si))),
         Js.Stmt.expr (Js.Expr.raw "export { imports }"),
         Js.Stmt.let_bind "start" (Js.Expr.raw Glue.start_snippet),
         Js.Stmt.expr (Js.Expr.raw "export { start }")
@@ -51,9 +53,10 @@ def Glue.module_names (imports : List WebImport) (acc : List String) : List Stri
     match imports {
         List.empty => List.reverse acc,
         List.cons imp rest =>
-            if Glue.name_in imp.module acc
-            then Glue.module_names rest acc
-            else Glue.module_names rest (List.cons imp.module acc)
+            let sa := Shared.of acc in
+            if Glue.name_in imp.module (Shared.get sa)
+            then Glue.module_names rest (Shared.get sa)
+            else Glue.module_names rest (List.cons imp.module (Shared.get sa))
     }
 
 #[terminating]
@@ -71,8 +74,9 @@ def Glue.module_fields (names : List String) (imports : List WebImport) : List (
     match names {
         List.empty => List.empty,
         List.cons name rest =>
-            List.cons (Pair.pair name (Js.Expr.object (Glue.import_fields_for name imports)))
-                (Glue.module_fields rest imports)
+            let si := Shared.of imports in
+            List.cons (Pair.pair name (Js.Expr.object (Glue.import_fields_for name (Shared.get si))))
+                (Glue.module_fields rest (Shared.get si))
     }
 
 #[terminating]

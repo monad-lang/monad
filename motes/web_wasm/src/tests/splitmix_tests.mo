@@ -34,7 +34,7 @@ def test_splitmix_different_seeds_differ : Bool :=
 def test_splitmix_below_is_in_range : Bool :=
     let r : SplitMix64 := SplitMix64.seed 99u64 in
     match SplitMix64.below r 16 {
-        Pair.pair _ v => Bool.not (I64.lt v 0) && I64.lt v 16,
+        Pair.pair _ b => let v : I64 := b in Bool.not (I64.lt v 0) && I64.lt v 16,
     }
 
 #[test]
