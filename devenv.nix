@@ -304,36 +304,6 @@
       files = "\\.mo$";
     };
 
-    # The whole-corpus `monad-rs check` -- CI's `Rust corpus check` step, the
-    # pipeline's only whole-corpus check and the one that catches a bootstrap
-    # host that no longer accepts the compiler-source surface. It is the gate
-    # the host errors this hook was added alongside (`unbound variable
-    # lint_ok`, the `(.)` lowering gap) were caught by, twenty minutes after
-    # the commit.
-    #
-    # PRE-PUSH, not pre-commit: ~3m40s for the corpus warm (~24s for one
-    # file), and AGENTS.md is explicit that this sweep is not paid per commit
-    # -- "run in CI, not hooks ... but run them before pushing anything that
-    # touches the compiler". `pre-push` is the point it names, so a fast
-    # commit stays fast and a push that would go red in CI fails here instead.
-    # `pass_filenames = false` because the script names the whole corpus
-    # itself; `files` gates it, so a push with no `.mo` change pays nothing.
-    #
-    # MONAD_HOST_BIN is deliberately NOT set here: the script defaults to
-    # `cargo run --manifest-path rust/Cargo.toml --release --`, exactly the
-    # host and the command CI's step uses, so the two cannot drift.
-    corpus-check = {
-      enable = true;
-      name = "corpus-check";
-      description = ''
-        `monad-rs check` over the whole corpus -- the bootstrap host must
-        still accept the compiler-source surface.
-      '';
-      entry = "${config.devenv.root}/scripts/check-corpus.sh";
-      pass_filenames = false;
-      files = "\\.mo$";
-      stages = [ "pre-push" ];
-    };
     # The cheap half of A4's gate (see scripts/check-affine-closure.sh): a
     # new `[affine] mode = "warn"` in a compiler-closure mote, a stale
     # allowlist entry, or an escape hatch outside the one negative test
