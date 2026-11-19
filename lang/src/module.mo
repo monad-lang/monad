@@ -7,7 +7,7 @@ use std::process {exec_cmd, process_id}
 use std::stream {StreamError, StreamError.is_not_found}
 use lib::elaborate {free_vars, names_of_decls, elaborate_def}
 use lang::types {
-    AffineMode, Attribute, Binder, Class, ClassDef, DebugName, Decl, DeclGroup, Def, Identifier,
+    AffineMode, Attribute, Binder, Class, ClassDef, class_index_of, DebugName, Decl, DeclGroup, Def, Identifier,
     InductConstructor, Inductive, Infix, Instance, Literal, LocalScope, LocalVar, Location,
     MatchCase, ModulePath, Multiplicity, NamePath, NameRef, Param, Scope, ScopeData, ScopeInstance, SourceRange,
     SortLevel, Struct, StructField, Term, TypeConstraint, TypeError, UseFilter, UseItem,
@@ -1759,6 +1759,7 @@ def merge_scope_data (sd1 : ScopeData) (sd2 : ScopeData) : ScopeData :=
         instances := merge_instances sd1.instances sd2.instances,
         inductives := name_map_merge sd1.inductives sd2.inductives,
         classes := list_append sd1.classes sd2.classes,
+        class_index := class_index_of (list_append sd1.classes sd2.classes),
         infixes := list_append sd1.infixes sd2.infixes,
         conflicts := list_append sd1.conflicts sd2.conflicts,
         // Same bucket-to-bucket merge as `def_refs` just above -- see

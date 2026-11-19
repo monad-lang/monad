@@ -3975,6 +3975,55 @@ pub struct LocalVar {
     multiplicity : Multiplicity,
 }
 
+/// Classes by the BARE spelling of their rendered name -- the text after
+/// the last `::`, what `unqualify_def_name` keeps. Every match
+/// `class_name_eq` accepts has equal bare spellings on both sides, so a
+/// lookup only has to compare the classes in one bucket. Each bucket keeps
+/// the order of the `List Class` it mirrors, so the first match is the one
+/// a scan of the whole list would find.
+pub type ClassIndex {
+    class_index (HashMap String (List Class))
+}
+
+pub def class_index_empty : ClassIndex :=
+    ClassIndex.class_index (HashMap.map HashMap.empty_buckets)
+
+pub def class_index_bucket (bare : String) (idx : ClassIndex) : List Class :=
+    match idx {
+        ClassIndex.class_index hm =>
+            match hm {
+                HashMap.map buckets =>
+                    match HashMap.bucket_lookup_str bare (HashMap.get_bucket buckets (HashMap.bucket_of (String.hash bare))) {
+                        Option.some cs => cs,
+                        Option.none => List.empty,
+                    },
+            },
+    }
+
+/// Prepend `cls` to its bucket: the mirror of `List.cons cls classes`.
+pub def class_index_add (cls : Class) (idx : ClassIndex) : ClassIndex :=
+    let bare : String := unqualify_def_name (show_identifier cls.name) in
+    match idx {
+        ClassIndex.class_index hm =>
+            match hm {
+                HashMap.map buckets =>
+                    let b := HashMap.bucket_of (String.hash bare) in
+                    let cs : List Class := List.cons cls (class_index_bucket bare idx) in
+                    ClassIndex.class_index (HashMap.map (HashMap.set_bucket buckets b (HashMap.bucket_insert_str bare cs (HashMap.get_bucket buckets b)))),
+            },
+    }
+
+/// The index of `classes`, built back to front so every bucket keeps the
+/// list's order.
+pub def class_index_of (classes : List Class) : ClassIndex :=
+    class_index_add_all (List.reverse classes) class_index_empty
+
+def class_index_add_all (rev : List Class) (idx : ClassIndex) : ClassIndex :=
+    match rev {
+        List.empty => idx,
+        List.cons cls rest => class_index_add_all rest (class_index_add cls idx),
+    }
+
 // All resolved entries for a single scope level.
 //
 // `def_params`: a def's own DECLARED parameter list (`List Param`), in
@@ -4015,6 +4064,9 @@ pub struct ScopeData {
     // own declared params/methods. `scope_find_class`/`scope_data_classes`
     // (below) are the real by-name reader this field never had before.
     classes : List Class,
+    /// `classes` by bare spelling (`ClassIndex`); kept in step with it at
+    /// every site that changes `classes`.
+    class_index : ClassIndex := class_index_empty,
     infixes : List Infix,
     conflicts : List ScopeConflict,
     // `name_map_empty` (an ordinary def over `HashMap.map

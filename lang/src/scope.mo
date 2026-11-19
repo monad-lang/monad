@@ -16,6 +16,7 @@ use lang::types {
     priv_, pub_, sentinel, show_identifier, show_module_path, show_name_path, show_operator,
     name_map_empty, name_map_insert, name_map_lookup, name_map_values,
     bare_name_map_empty, bare_name_map_lookup, bare_name_map_note,
+    ClassIndex, class_index_add, class_index_bucket, class_index_empty, class_index_of,
     name_set_empty, name_set_insert, name_set_member,
     term_peel, u16, u32, u64, u8, union_ids, use_bare, use_glob, use_items,
     use_name, use_rename, use_sub, use_sub_rename,
@@ -156,6 +157,7 @@ pub def scope_data_empty : ScopeData := {
     instances := List.empty,
     inductives := name_map_empty,
     classes := List.empty,
+    class_index := class_index_empty,
     infixes := List.empty,
     conflicts := List.empty,
     bare_aliases := bare_name_map_empty,
@@ -954,6 +956,9 @@ pub def scope_find_inductive (name : NamePath) (s : Scope) : Result ScopeError I
 def scope_data_classes (sd : ScopeData) : List Class :=
     sd.classes
 
+pub def scope_data_class_index (sd : ScopeData) : ClassIndex :=
+    sd.class_index
+
 /// The whole-graph dictionary-class set (`collect_dict_classes`), read
 /// back by the checker's D4 resolution so `emitted_dict_constraints`
 /// answers with the same predicate Phase 3 used.
@@ -961,7 +966,7 @@ def scope_data_dict_classes (sd : ScopeData) : NameSet :=
     sd.dict_classes
 
 pub def scope_find_class (name : NamePath) (s : Scope) : Option Class :=
-    find_class_by_name (scope_data_classes (scope_globals s)) name
+    class_index_find (scope_data_class_index (scope_globals s)) name
 
 // --- scope_find_inductive_by_constructor ---
 
@@ -1562,7 +1567,7 @@ def scope_data_add_infix (sd : ScopeData) (op : Operator) (name : NamePath) : Sc
     { sd with infixes := List.cons inf sd.infixes }
 
 def scope_data_add_class (sd : ScopeData) (cls : Class) : ScopeData :=
-    { sd with classes := List.cons cls sd.classes }
+    { sd with classes := List.cons cls sd.classes, class_index := class_index_add cls sd.class_index }
 
 def scope_data_add_class_def (sd : ScopeData) (cd : ScopeClassDef) : ScopeData :=
     { sd with class_defs := List.cons cd sd.class_defs }
@@ -2648,6 +2653,11 @@ pub def class_name_eq (a : NamePath) (b : NamePath) : Bool :=
     then true
     else string_matches_bare rb ra
 
+/// `find_class_by_name` over the one bucket that can hold a match: the
+/// same predicate in the same order, without scanning every class.
+pub def class_index_find (idx : ClassIndex) (cls_name : NamePath) : Option Class :=
+    find_class_by_name (class_index_bucket (unqualify_def_name (show_name_path cls_name)) idx) cls_name
+
 /// Finds the `Class` an instance's own `cls : NamePath` field names,
 /// among a flat `List Class` (`collect_classes`'s output). Every single-
 /// segment class in the corpus (`BEq`, `Append`, ...) matches under
@@ -3067,18 +3077,18 @@ def options_of (ts : List Term) : List (Option Term) :=
 /// already is).
 #[partial]
 pub def promote_instance_defs (decl_list : List Decl) : List Decl :=
-    let classes := collect_classes decl_list in
+    let classes := class_index_of (collect_classes decl_list) in
     let instances := collect_instances decl_list in
     List.append decl_list (promote_all_instances classes instances)
 
 #[partial]
-def promote_all_instances (classes : List Class) (instances : List Instance) : List Decl :=
+def promote_all_instances (classes : ClassIndex) (instances : List Instance) : List Decl :=
     match instances {
         List.empty => List.empty,
         List.cons ins rest =>
             match ins {
                 Instance.mk _ cls_name _ _ _ _ _ =>
-                    match find_class_by_name classes cls_name {
+                    match class_index_find classes cls_name {
                         Option.some cls =>
                             match promote_instance cls ins {
                                 Option.some new_decls => List.append new_decls (promote_all_instances classes rest),
@@ -3108,13 +3118,13 @@ def promote_all_instances (classes : List Class) (instances : List Instance) : L
 #[partial]
 pub def promote_instance_decl_groups (groups : List DeclGroup) : List DeclGroup :=
     let all_decls : List Decl := decl_groups_flatten groups in
-    let classes : List Class := collect_classes all_decls in
+    let classes : ClassIndex := class_index_of (collect_classes all_decls) in
     List.append groups (promote_instance_decl_groups_tail groups classes)
 
 /// One appended group per input group, holding that group's own promoted
 /// decls (empty when none of its instances needed promoting).
 #[partial]
-def promote_instance_decl_groups_tail (groups : List DeclGroup) (classes : List Class) : List DeclGroup :=
+def promote_instance_decl_groups_tail (groups : List DeclGroup) (classes : ClassIndex) : List DeclGroup :=
     match groups {
         List.empty => List.empty,
         List.cons g rest =>
@@ -5994,12 +6004,12 @@ def all_args_are_wildcards (wildcard_names : List Identifier) (args : List Term)
 /// plausible blast radius: its qualifier is an INDUCTIVE, so
 /// `find_class_by_name` already misses and this arm is never reached.
 #[partial]
-def class_method_ref (classes : List Class) (id : Identifier) : Option ClassMethodRef :=
+def class_method_ref (classes : ClassIndex) (id : Identifier) : Option ClassMethodRef :=
     let text := show_identifier id in
     match class_prefix_of text {
         Option.none => Option.none,
         Option.some cls_str =>
-            match find_class_by_name classes (NamePath.mk (List.cons (Identifier.id cls_str) List.empty)) {
+            match class_index_find classes (NamePath.mk (List.cons (Identifier.id cls_str) List.empty)) {
                 Option.none => Option.none,
                 Option.some cls =>
                     match method_suffix_of text {
@@ -6020,7 +6030,7 @@ def class_method_ref (classes : List Class) (id : Identifier) : Option ClassMeth
 /// class ever matches.
 #[partial]
 pub def scope_find_class_def_for_ref (id : Identifier) (bare_id : Identifier) (s : Scope) : Result ScopeError ScopeClassDef :=
-    match class_method_ref (scope_data_classes (scope_globals s)) id {
+    match class_method_ref (scope_data_class_index (scope_globals s)) id {
         Option.none => scope_find_class_def_by_name bare_id s,
         Option.some ref =>
             match ref {
@@ -6187,7 +6197,7 @@ pub def scope_find_instance_by_name (s : Scope) (hint : String) : Option Instanc
 /// that class's own method (`Ord.compare` hints an `Ord` instance), or
 /// when the callee's own declared constraints mention the class
 /// (`sort [Ord A]`).
-def hint_class_usable (classes : List Class) (callee : Identifier) (resolved : Option NamePath) (ins_cls : NamePath) (s : Scope) : Bool :=
+def hint_class_usable (classes : ClassIndex) (callee : Identifier) (resolved : Option NamePath) (ins_cls : NamePath) (s : Scope) : Bool :=
     let method_class := match class_method_ref classes callee {
         Option.some ref =>
             match ref {
@@ -6234,7 +6244,7 @@ pub def validate_dict_hints (callee : Identifier) (resolved : Option NamePath) (
                 Option.some ins =>
                     match ins {
                         Instance.mk _ ins_cls _ _ _ _ _ =>
-                            if hint_class_usable (scope_data_classes (scope_globals s)) callee resolved ins_cls s
+                            if hint_class_usable (scope_data_class_index (scope_globals s)) callee resolved ins_cls s
                             then validate_dict_hints callee resolved rest s
                             else Option.some (TypeError.custom (String.concat "instance '" (String.concat h "' is not usable by this call"))),
                     },
@@ -7051,12 +7061,12 @@ def first_param_default (params : List Param) : Option Term :=
 /// unfiltered: the mangled name is a dangling global either way -- a
 /// loud link-time undefined symbol, not a silent miscompile.
 #[partial]
-def emitted_dict_constraints (dict_classes : NameSet) (classes : List Class) (ins : Instance) (method_name : Identifier) : List TypeConstraint :=
+def emitted_dict_constraints (dict_classes : NameSet) (classes : ClassIndex) (ins : Instance) (method_name : Identifier) : List TypeConstraint :=
     match ins {
         Instance.mk _ cname ins_constraints _ _ _ defs =>
             match find_instance_method defs method_name {
                 Option.none =>
-                    match find_class_by_name classes cname {
+                    match class_index_find classes cname {
                         Option.none => ins_constraints,
                         Option.some cls =>
                             match class_method_default cls method_name {
@@ -7194,8 +7204,11 @@ pub def validate_no_unresolved_class_calls (classes : List Class) (decl_list : L
 /// reference that still matches `class_method_ref classes` -- see
 /// `resolve_class_calls_decls`'s own doc comment for why any such
 /// survivor is unambiguously a real unresolved-instance failure.
-#[partial]
 pub def find_unresolved_class_calls_decls (classes : List Class) (decl_list : List Decl) : List String :=
+    find_unresolved_class_calls_decls_in (class_index_of classes) decl_list
+
+#[partial]
+def find_unresolved_class_calls_decls_in (classes : ClassIndex) (decl_list : List Decl) : List String :=
     match decl_list {
         List.empty => List.empty,
         List.cons d rest =>
@@ -7204,9 +7217,9 @@ pub def find_unresolved_class_calls_decls (classes : List Class) (decl_list : Li
                     match def_ {
                         Def.mk {name, typ := _typ, term := term_, constraints := _constraints, attrs := _attrs, vis := _vis, ..} =>
                             let found := find_unresolved_class_calls_term classes term_ List.empty in
-                            List.append (format_unresolved_class_calls (show_name_path name) found) (find_unresolved_class_calls_decls classes rest),
+                            List.append (format_unresolved_class_calls (show_name_path name) found) (find_unresolved_class_calls_decls_in classes rest),
                     },
-                _ => find_unresolved_class_calls_decls classes rest,
+                _ => find_unresolved_class_calls_decls_in classes rest,
             },
     }
 
@@ -7233,7 +7246,7 @@ def format_unresolved_class_call (def_name : String) (ref : ClassMethodRef) : St
     }
 
 #[partial]
-def find_unresolved_class_calls_term (classes : List Class) (t : Term) (acc : List ClassMethodRef) : List ClassMethodRef := match t {
+def find_unresolved_class_calls_term (classes : ClassIndex) (t : Term) (acc : List ClassMethodRef) : List ClassMethodRef := match t {
     Term.var _idx dbg =>
         match dbg {
             DebugName.named id =>
@@ -7282,14 +7295,14 @@ def find_unresolved_class_calls_term (classes : List Class) (t : Term) (acc : Li
 }
 
 #[partial]
-def find_unresolved_class_calls_terms (classes : List Class) (ts : List Term)
+def find_unresolved_class_calls_terms (classes : ClassIndex) (ts : List Term)
     (acc : List ClassMethodRef) : List ClassMethodRef := match ts {
     List.empty => acc,
     List.cons x rest => find_unresolved_class_calls_terms classes rest (find_unresolved_class_calls_term classes x acc),
 }
 
 #[partial]
-def find_unresolved_class_calls_lit (classes : List Class) (l : Literal) (acc : List ClassMethodRef) : List ClassMethodRef := match l {
+def find_unresolved_class_calls_lit (classes : ClassIndex) (l : Literal) (acc : List ClassMethodRef) : List ClassMethodRef := match l {
     Literal.num _n _suffix => acc,
     Literal.flt _text _suffix => acc,
     Literal.str _s => acc,
@@ -7301,7 +7314,7 @@ def find_unresolved_class_calls_lit (classes : List Class) (l : Literal) (acc : 
 }
 
 #[partial]
-def find_unresolved_class_calls_struct_fields (classes : List Class) (fields : List StructLitField) (acc : List ClassMethodRef) : List ClassMethodRef :=
+def find_unresolved_class_calls_struct_fields (classes : ClassIndex) (fields : List StructLitField) (acc : List ClassMethodRef) : List ClassMethodRef :=
     match fields {
         List.empty => acc,
         List.cons f rest =>
@@ -7311,7 +7324,7 @@ def find_unresolved_class_calls_struct_fields (classes : List Class) (fields : L
     }
 
 #[partial]
-def find_unresolved_class_calls_cases (classes : List Class) (cases : List MatchCase) (acc : List ClassMethodRef) : List ClassMethodRef := match cases {
+def find_unresolved_class_calls_cases (classes : ClassIndex) (cases : List MatchCase) (acc : List ClassMethodRef) : List ClassMethodRef := match cases {
     List.empty => acc,
     List.cons c rest =>
         match c {
@@ -7320,17 +7333,17 @@ def find_unresolved_class_calls_cases (classes : List Class) (cases : List Match
 }
 
 #[partial]
-def find_unresolved_class_calls_native (classes : List Class) (n : Native) (acc : List ClassMethodRef) : List ClassMethodRef := match n {
+def find_unresolved_class_calls_native (classes : ClassIndex) (n : Native) (acc : List ClassMethodRef) : List ClassMethodRef := match n {
     Native.mk _name _num_args args => find_unresolved_class_calls_opt_list classes args acc,
 }
 
 #[partial]
-def find_unresolved_class_calls_con (classes : List Class) (c : Con) (acc : List ClassMethodRef) : List ClassMethodRef := match c {
+def find_unresolved_class_calls_con (classes : ClassIndex) (c : Con) (acc : List ClassMethodRef) : List ClassMethodRef := match c {
     Con.mk _name _typ_name _num_args args => find_unresolved_class_calls_opt_list classes args acc,
 }
 
 #[partial]
-def find_unresolved_class_calls_opt_list (classes : List Class) (args : List (Option Term)) (acc : List ClassMethodRef) : List ClassMethodRef := match args {
+def find_unresolved_class_calls_opt_list (classes : ClassIndex) (args : List (Option Term)) (acc : List ClassMethodRef) : List ClassMethodRef := match args {
     List.empty => acc,
     List.cons opt_ rest =>
         match opt_ {

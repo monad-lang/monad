@@ -1,6 +1,6 @@
 use std::map {HashMap.to_list}
 use lang::types {
-    Binder, Class, Con, Cubical, CubicalPrim, DebugName, Def, Elim, FieldPattern,
+    Binder, Class, ClassIndex, Con, Cubical, CubicalPrim, DebugName, Def, Elim, FieldPattern,
     FieldPatternEntry, Identifier, InductConstructor, Inductive, Instance, Literal,
     LocalScope, LocalVar, Location, MatchCase, ModulePath, NamePath, NameRef,
     Native, NumSuffix, Param, Scope, ScopeClassDef, ScopeData, ScopeDef,
@@ -29,7 +29,7 @@ use lang::scope {
     instance_wildcard_names, instance_head_is_concrete, list_append, mangle_instance_dict_name,
     mangle_instance_method_name, mangled_to_identifier, param_names,
     rebuild_call,
-    resolve_dict_arg, resolve_dict_args, scope_data_add_def, scope_data_add_inductive, scope_data_classes, scope_data_dict_classes,
+    resolve_dict_arg, resolve_dict_args, scope_data_add_def, scope_data_add_inductive, scope_data_class_index, scope_data_classes, scope_data_dict_classes,
     scope_data_empty, scope_find_all_inductives_by_constructor, scope_find_class,
     scope_find_class_def_by_name, scope_find_class_def_for_ref, scope_find_def_constraints,
     scope_find_def_dict_constraints,
@@ -1358,7 +1358,7 @@ def resolve_class_method_carrier (class_name : NamePath) (method_name : Identifi
         Option.some ins =>
             let bindings : List (Pair Identifier Term) :=
                 carrier_bindings (instance_wildcard_names ins) ins.args carrier in
-            resolve_class_method_d4 ins.name ins.cls method_name (emitted_dict_constraints (scope_data_dict_classes (scope_globals scope)) (scope_data_classes (scope_globals scope)) ins method_name) ins.args carrier bindings expected_type scope locals,
+            resolve_class_method_d4 ins.name ins.cls method_name (emitted_dict_constraints (scope_data_dict_classes (scope_globals scope)) (scope_data_class_index (scope_globals scope)) ins method_name) ins.args carrier bindings expected_type scope locals,
     }
 
 /// The carrier a call INSIDE a dictionary-carrying scope must be resolved
@@ -4853,7 +4853,7 @@ def ref_names_class_method (id : Identifier) (scope : Scope) : Bool :=
                 // 'Map.get'` instead of silently matching `MonadState.get`'s
                 // bare name in some unrelated class.
                 Option.some _ =>
-                    match class_method_ref (scope_data_classes (scope_globals scope)) id {
+                    match class_method_ref (scope_data_class_index (scope_globals scope)) id {
                         Option.some _ => true,
                         Option.none => false,
                     },
@@ -7495,7 +7495,7 @@ def try_type_check_hinted_app (f : Term) (hint : String) (expected_type : Term) 
         Term.var idx dbg =>
             match dbg {
                 DebugName.named id =>
-                    let classes : List Class := scope_data_classes (scope_globals scope) in
+                    let classes : ClassIndex := scope_data_class_index (scope_globals scope) in
                     // The class whose method `id` is: the dotted spelling
                     // (`Ord.compare`) through `class_method_ref`, the bare
                     // one (`compare`) through the class-def registry the
@@ -7560,7 +7560,7 @@ def try_type_check_hinted_app (f : Term) (hint : String) (expected_type : Term) 
                                                     } in
                                                 let bindings : List (Pair Identifier Term) :=
                                                     carrier_bindings (instance_wildcard_names ins) ins_args hint_carrier in
-                                                resolve_class_method_d4 insname ins_cls method_name (emitted_dict_constraints (scope_data_dict_classes (scope_globals scope)) (scope_data_classes (scope_globals scope)) ins method_name) ins_args hint_carrier bindings expected_type scope locals,
+                                                resolve_class_method_d4 insname ins_cls method_name (emitted_dict_constraints (scope_data_dict_classes (scope_globals scope)) (scope_data_class_index (scope_globals scope)) ins method_name) ins_args hint_carrier bindings expected_type scope locals,
                                     },
                                 },
                             },
@@ -8514,7 +8514,7 @@ def class_method_declared_sig (head : Term) (scope : Scope) : Option ClassMethod
                 match dbg {
                     DebugName.named id =>
                         if ref_names_class_method id scope then
-                            match class_method_ref (scope_data_classes (scope_globals scope)) id {
+                            match class_method_ref (scope_data_class_index (scope_globals scope)) id {
                                 Option.some ref => class_method_decl_of ref,
                                 // No qualifier, so there is no class to honour and
                                 // the bare-name scan is the only rule there is. It
