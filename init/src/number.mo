@@ -775,3 +775,7 @@ def nat_of_i64_walk (n : I64) : Nat :=
     }
 
 pub def Nat.to_string (n : Nat) : String := I64.to_string (nat_to_i64 n)
+
+pub instance ToString Nat {
+    def to_string (n : Nat) : String := Nat.to_string n
+}

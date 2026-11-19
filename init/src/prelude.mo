@@ -481,6 +481,41 @@ pub def Option.is_none (self : Option A) : Bool :=
         some _ => false
     }
 
+pub def Option.map (f : A -> B) (self : Option A) : Option B :=
+    match self {
+        some a => some (f a),
+        none => none
+    }
+
+/// Sequence an optional computation: `none` short-circuits.
+pub def Option.bind (self : Option A) (f : A -> Option B) : Option B :=
+    match self {
+        some a => f a,
+        none => none
+    }
+
+/// `Option` is the failure monad: a `do` block over `Option A` stops at the
+/// first `none`.
+pub instance Functor Option {
+    def map (f : A -> B) (o : Option A) : Option B := Option.map f o
+}
+
+pub instance Applicative Option {
+    def pure (a : A) : Option A := some a
+
+    def apply (f : Option (A -> B)) (o : Option A) : Option B :=
+        match f {
+            some g => Option.map g o,
+            none => none
+        }
+}
+
+pub instance Monad Option {
+    def pure (a : A) : Option A := some a
+
+    def bind (o : Option A) (f : A -> Option B) : Option B := Option.bind o f
+}
+
 pub type Nat {
     zero,
     succ (n : Nat)
@@ -529,6 +564,30 @@ pub instance Add Nat {
 
 pub instance Sub Nat {
     def sub (a b : Nat) : Nat := Nat.sub a b
+}
+
+pub instance Mul Nat {
+    def mul (a b : Nat) : Nat := Nat.mul a b
+}
+
+/// `a <= b`, by structural descent on both.
+pub def Nat.le (a b : Nat) : Bool :=
+    match a {
+        zero => true,
+        succ n => match b {
+            zero => false,
+            succ m => Nat.le n m
+        }
+    }
+
+/// `a < b`: `succ a <= b`.
+pub def Nat.lt (a b : Nat) : Bool := Nat.le (Nat.succ a) b
+
+pub instance BOrd Nat {
+    def lt (a b : Nat) : Bool := Nat.lt a b
+    def gt (a b : Nat) : Bool := Nat.lt b a
+    def lte (a b : Nat) : Bool := Nat.le a b
+    def gte (a b : Nat) : Bool := Nat.le b a
 }
 
 pub def Lens [Functor F] {F : Type -> Type} (S : Type) (T : Type) (A : Type) (B : Type) : Type :=
@@ -616,6 +675,29 @@ pub instance Functor List {
             cons a tail => List.cons (f a) (List.map f tail),
             _ => List.empty
         }
+}
+
+/// Map each element to a list and concatenate the results.
+pub def List.flat_map (f : A -> List B) (self : List A) : List B :=
+    match self {
+        empty => List.empty,
+        cons a tail => List.append (f a) (List.flat_map f tail),
+        _ => List.empty
+    }
+
+/// `List` is the nondeterminism monad: `bind` runs the continuation on every
+/// element and concatenates, so `apply` is the cartesian product in order.
+pub instance Applicative List {
+    def pure (a : A) : List A := [a]
+
+    def apply (fs : List (A -> B)) (xs : List A) : List B :=
+        List.flat_map (fn g => List.map g xs) fs
+}
+
+pub instance Monad List {
+    def pure (a : A) : List A := [a]
+
+    def bind (xs : List A) (f : A -> List B) : List B := List.flat_map f xs
 }
 
 /// A length-indexed vector: Vec len A is a list of exactly len elements of type A
