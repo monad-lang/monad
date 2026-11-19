@@ -106,11 +106,14 @@ DOM nodes (and their listeners, focus and scroll) keep their identity.
 
 ## Subscriptions and the heap
 
-The web allocator is a bump allocator and never frees. Exhaustion calls the
-host's `oom` import (a `console.error` naming the sizes) and traps — not a
-silent `0` or a negative-offset `RangeError`. `Memory.heap_bytes` /
-`Memory.heap_used` expose committed/used bytes; a long session can persist
-and `Window.reload`.
+The web heap is garbage-collected. It collects only when an export
+(`oak_mount`, `oak_dispatch_event`, `oak_tick`) returns to JS, because a
+running frame's wasm locals cannot be scanned. An event-driven app therefore
+stays flat; only code that never returns to JS keeps its garbage. Linear
+memory never shrinks, so freed memory is reused rather than returned.
+Exhaustion calls the host's `oom` import (a `console.error` naming the
+sizes) and traps — not a silent `0` or a negative-offset `RangeError`.
+`Memory.heap_bytes` / `Memory.heap_used` expose committed/used bytes.
 
 Avoid idle `Subscription.animation_frame`: each frame re-renders and
 allocates. Prefer `Command.after` for a one-shot delay, and handlers only on

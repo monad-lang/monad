@@ -19,7 +19,7 @@
 // `monad_main` returns 0 while the exports work.
 //
 // The `keep` mode runs fixtures/wasm/web_keep.mo: one export saves a `Ref`
-// through the JS state slot, a later export reads it back and logs it --
+// through the runtime state slot, a later export reads it back and logs it --
 // the state channel every SPA export call relies on.
 
 import { readFile } from 'node:fs/promises';

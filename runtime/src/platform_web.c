@@ -1,9 +1,10 @@
 /* Web platform (wasm32-unknown-unknown).
  *
- * Freestanding: no libc, no WASI imports, no GC. The heap is a bump
- * allocator over the linker's `__heap_base`, grown with
- * `memory.grow`; codegen never emits monad_release, so leaking is the same
- * discipline the native build already has. Console I/O is four JS imports
+ * Freestanding: no libc, no WASI imports. The heap is gc_wasm.c's
+ * conservative mark-sweep over linear memory above `__heap_base`. It
+ * collects only when the export depth returns to 0
+ * (`monad_export_leave`), because a running frame's wasm locals are
+ * invisible to a scan. Console I/O is four JS imports
  * (module "monad"), plus `f64_to_string` for a program that formats a
  * float (`F64.to_string`), and `monad_main` is the exported entry a direct
  * `WebAssembly.instantiate` loader calls.
@@ -68,11 +69,7 @@ int strcmp(const char* a, const char* b) {
     return (int)(unsigned char)*a - (int)(unsigned char)*b;
 }
 
-/* ── bump allocator ─────────────────────────────────────────────────── */
-
-extern unsigned char __heap_base;
-static uint64_t web_heap = 0;
-static uint64_t web_heap_base = 0;
+/* ── heap: conservative mark-sweep (gc_wasm.c) ──────────────────────── */
 
 /* Heap exhaustion is a trap with a diagnostic, never a silent 0: a 0 word
    is not a valid constructor pointer, and returning one turns the failure
@@ -87,40 +84,39 @@ static void web_oom(uint64_t want, uint64_t have) {
     __builtin_trap();
 }
 
-static rt_word web_alloc(rt_size size, int zero) {
+#include "gc_wasm.c"
+
+static rt_word web_alloc(rt_size size, int noscan) {
     if (size < 0) web_oom(0, 0);
-    uint64_t base = web_heap ? web_heap : (uint64_t)(uintptr_t)&__heap_base;
-    if (!web_heap_base) web_heap_base = base;
-    uint64_t p = (base + 15u) & ~(uint64_t)15u;
-    uint64_t end = p + (uint64_t)size;
-    /* 64-bit accounting: `uintptr_t` is 32 bits on wasm32, and
-       `pages * 65536` overflows it at 4 GB. */
-    if (end < p) web_oom((uint64_t)size, 0);
-    uint64_t have = (uint64_t)__builtin_wasm_memory_size(0) * 65536u;
-    if (end > have) {
-        uint64_t pages = (end - have + 65535u) / 65536u;
-        if (__builtin_wasm_memory_grow(0, (size_t)pages) == (size_t)-1)
-            web_oom(end, have);
-    }
-    web_heap = end;
-    if (zero && size) memset((void*)p, 0, (size_t)size);
-    return (rt_word)(uintptr_t)p;
+    return (rt_word)(uintptr_t)gc_alloc((uint64_t)size, noscan);
 }
 
 /* Committed and used heap, for `web_wasm::memory`. C-only exports: no JS
-   import, so they do not appear in `WebAbi`. */
+   import, so they do not appear in `WebAbi`. `used` is the live bytes
+   after the last collection plus everything allocated since. */
 int64_t web_memory_heap_bytes(void) {
-    return (int64_t)((uint64_t)__builtin_wasm_memory_size(0) * 65536u);
+    return (int64_t)gc_heap_committed();
 }
 
 int64_t web_memory_heap_used(void) {
-    return (int64_t)(web_heap ? web_heap - web_heap_base : 0);
+    return (int64_t)gc_heap_used();
+}
+
+/* Collector counters for the smoke harnesses; C-only exports. */
+__attribute__((export_name("web_gc_collections")))
+int64_t web_gc_collections(void) {
+    return gc.collections;
+}
+
+__attribute__((export_name("web_gc_live_bytes")))
+int64_t web_gc_live_bytes(void) {
+    return (int64_t)gc.live_bytes;
 }
 
 rt_word monad_alloc(rt_size size) {
     /* Boehm returns cleared memory; match it so a codegen path that reads a
        field before writing it sees the same zero on every target. */
-    rt_word ptr = web_alloc(size, 1);
+    rt_word ptr = web_alloc(size, 0);
     if (ptr) {
         Header* h = (Header*)RT_PTR(ptr);
         h->refcount = 1;
@@ -135,8 +131,8 @@ rt_word monad_alloc_atomic(rt_size size) {
 }
 
 /* Ownership mode is native-only (`llvm/src/link.mo` refuses it for wasm),
-   so these forward exactly as the default native build does. The web
-   profile has no allocator to free to in any case. */
+   so these forward exactly as the default native build does; the
+   collector reclaims the cell. */
 rt_word monad_owned_alloc(rt_size size) { return monad_alloc(size); }
 void monad_owned_free(rt_word ptr) { (void)ptr; }
 
@@ -151,7 +147,12 @@ void monad_owned_free(rt_word ptr) { (void)ptr; }
  * must not read a header that is not there. Exhaustion traps (see
  * `web_oom`); it never returns 0. The i32 return is the /try staging ABI
  * (source text is small); a program whose heap crosses 2 GB must not use
- * this channel. */
+ * this channel.
+ *
+ * Lifetime: only JS holds the block, so it survives until the next export
+ * returns to depth 0 (the collector runs there). Pass it to the very next
+ * export call, as the /try worker does: two `try_alloc`s, then `try_run`
+ * consumes both. Allocating here never collects. */
 __attribute__((export_name("try_alloc")))
 int32_t try_alloc(int64_t size) {
     return (int32_t)(intptr_t)RT_PTR(monad_alloc_atomic((rt_size)size));
@@ -501,14 +502,6 @@ extern int64_t monad_js_worker_notes(int64_t ptr, int64_t max);
 
 __attribute__((import_module("monad"), import_name("worker_cancel")))
 extern int64_t monad_js_worker_cancel(void);
-
-/* The export-call state slot (`motes/web_wasm/src/keep.mo`): one opaque
-   word the JS host stores between export calls. */
-__attribute__((import_module("monad"), import_name("keep_set")))
-extern int64_t monad_js_keep_set(int64_t value);
-
-__attribute__((import_module("monad"), import_name("keep_get")))
-extern int64_t monad_js_keep_get(void);
 
 /* A result string can be at most this long; `storage_get_raw` has no
    length channel, and a longer value is truncated rather than overrunning
@@ -884,12 +877,18 @@ int64_t web_worker_cancel(void) {
     return monad_js_worker_cancel();
 }
 
+/* The export-call state slot (`motes/web_wasm/src/keep.mo`): one opaque
+   word kept between export calls. It lives in .bss, not in the JS host,
+   so the collector sees it as a root. */
+static int64_t web_keep_slot = 0;
+
 int64_t web_keep_set(int64_t value) {
-    return monad_js_keep_set(value);
+    web_keep_slot = value;
+    return 0;
 }
 
 int64_t web_keep_get(void) {
-    return monad_js_keep_get();
+    return web_keep_slot;
 }
 
 /* ── async clipboard (motes/web_wasm/src/clipboard.mo) ─────────────────── */
@@ -1392,6 +1391,7 @@ int64_t monad_web_entry(int64_t args) {
     /* Exports-only module: no `def main` was compiled, so the weak
        reference is 0 and there is nothing to run. */
     if (!main_monad) return 0;
+    monad_export_enter();
     rt_word list = args ? (rt_word)args : alloc_constructor(5, 0);
-    return (int64_t)(intptr_t)main_monad(list);
+    return monad_export_leave((int64_t)(intptr_t)main_monad(list));
 }

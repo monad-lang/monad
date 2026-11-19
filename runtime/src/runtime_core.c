@@ -25,6 +25,14 @@ typedef struct {
 rt_word monad_region_alloc(rt_size size) { return monad_alloc(size); }
 rt_word monad_region_alloc_atomic(rt_size size) { return monad_alloc_atomic(size); }
 
+/* The export boundary (`#[export "c"]` shims call these around the def).
+   The web profile collects when the depth returns to 0 (gc_wasm.c); the
+   other targets have nothing to do there. */
+#ifndef MONAD_TARGET_WEB
+int64_t monad_export_enter(void) { return 0; }
+int64_t monad_export_leave(int64_t result) { return result; }
+#endif
+
 /* Allocation-KIND values for `Header.tag` (offset 8) -- deliberately
    distinct from a Constructor's own tag, which is a separate int64 field
    at offset 16. 0 is a bare `monad_alloc` block, 1 Closure, 2 Constructor,

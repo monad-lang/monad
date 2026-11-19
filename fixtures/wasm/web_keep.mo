@@ -1,5 +1,5 @@
 // The export-call state slot (`web_wasm.Keep`): `probe_set` stashes a `Ref`
-// in the JS host, `probe_get` reads it back in a later export call and logs
+// in the runtime slot, `probe_get` reads it back in a later export call and logs
 // the value. This is the mechanism a SPA's mount/dispatch/tick exports use,
 // since the export ABI carries only i64 words.
 //

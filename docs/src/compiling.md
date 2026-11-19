@@ -175,12 +175,13 @@ The **wasi** profile needs `WASI_SDK_PATH` to name a wasi-sdk installation
 (the directory containing `bin/clang` and `share/wasi-sysroot`); `devenv.nix`
 pins one. The output name gets `.wasm` when it does not already end in it.
 
-The wasm runtime is a leaky allocator (`malloc` on wasi, a bump allocator
-over `__heap_base` on web): there is no Boehm GC on wasm32, and codegen
-never emits `monad_release`, so one-shot programs and reload-by-reinstantiating
-REPL sessions are the supported shape. On web, heap exhaustion calls the
-host's `oom` import (a diagnostic) and traps; `web_wasm::Memory` exposes the
-committed/used sizes so an app can persist and reload itself.
+There is no Boehm GC on wasm32. On wasi the runtime uses `malloc` and never
+frees, so one-shot programs are the supported shape. On web the runtime
+has its own conservative mark-sweep collector (`runtime/src/gc_wasm.c`).
+It collects when an `#[export "c"]` call returns to JS, so an event-driven
+app stays bounded; a `main` that never returns cannot be collected. On web,
+heap exhaustion calls the host's `oom` import (a diagnostic) and traps, and
+`web_wasm::Memory` exposes the committed/used sizes.
 
 A reachable native the target cannot serve is a compile error naming the
 native and the target, not a link failure or a trap. The wasm profiles omit

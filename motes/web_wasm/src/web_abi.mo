@@ -314,13 +314,6 @@ def WebImport.worker_notes : WebImport :=
 def WebImport.worker_cancel : WebImport :=
     { module := "monad", name := "worker_cancel", params := List.empty, result := "void" }
 
-/// The export-call state slot: one opaque word in, one out.
-def WebImport.keep_set : WebImport :=
-    { module := "monad", name := "keep_set", params := ["i64"], result := "void" }
-
-def WebImport.keep_get : WebImport :=
-    { module := "monad", name := "keep_get", params := List.empty, result := "i64" }
-
 /// The runtime's own console I/O. `platform_web.c` declares these next to
 /// the `web_*` wrappers (module "monad"), so every program that can print
 /// needs them in the import object even if it never calls a `web_*` one.
@@ -507,7 +500,6 @@ pub def WebAbi.default : WebAbi :=
             WebImport.worker_run, WebImport.worker_poll, WebImport.worker_status,
             WebImport.worker_value, WebImport.worker_type, WebImport.worker_error,
             WebImport.worker_notes, WebImport.worker_cancel,
-            WebImport.keep_set, WebImport.keep_get,
             WebImport.write_stdout, WebImport.write_stderr, WebImport.read_stdin,
             WebImport.f64_to_string,
             WebImport.event_i64, WebImport.event_f64, WebImport.event_str,

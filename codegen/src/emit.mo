@@ -6577,10 +6577,22 @@ def export_shim_funcs (pairs : List (Pair String String)) (funcs : List LLVMFunc
 def export_shim (plain : String) (qualified : String) (params : List ParamPair) (ret_ty : LLVMType) : LLVMFunction :=
     let args : List LLVMValue := export_shim_args params List.empty in
     let call_ : LLVMValue := LLVMValue.call qualified ret_ty args false in
+    // The depth hooks bracket every export: the web runtime collects when
+    // the depth returns to 0, rooting the result `monad_export_leave` gets.
+    let enter : LLVMInstruction := LLVMInstruction.assign "te" (LLVMValue.call "monad_export_enter" LLVMType.i64_ List.empty false) in
+    let ty : String := show_llvm_type ret_ty in
     let instrs : List LLVMInstruction :=
-        if String.beq (show_llvm_type ret_ty) "void"
-        then List.cons (LLVMInstruction.call_void call_) (List.cons (LLVMInstruction.ret (LLVMValue.int_ (0i64))) List.empty)
-        else List.cons (LLVMInstruction.assign "t0" call_) (List.cons (LLVMInstruction.ret (LLVMValue.var_ "t0")) List.empty) in
+        if String.beq ty "void"
+        then [enter, LLVMInstruction.call_void call_,
+            LLVMInstruction.assign "tl" (LLVMValue.call "monad_export_leave" LLVMType.i64_ [LLVMValue.int_ (0i64)] false),
+            LLVMInstruction.ret (LLVMValue.int_ (0i64))]
+        else if String.beq ty "i64"
+        then [enter, LLVMInstruction.assign "t0" call_,
+            LLVMInstruction.assign "t1" (LLVMValue.call "monad_export_leave" LLVMType.i64_ [LLVMValue.var_ "t0"] false),
+            LLVMInstruction.ret (LLVMValue.var_ "t1")]
+        else [enter, LLVMInstruction.assign "t0" call_,
+            LLVMInstruction.assign "tl" (LLVMValue.call "monad_export_leave" LLVMType.i64_ [LLVMValue.int_ (0i64)] false),
+            LLVMInstruction.ret (LLVMValue.var_ "t0")] in
     let block : LLVMBasicBlock := LLVMBasicBlock.mk "entry" instrs in
     LLVMFunction.mk plain params ret_ty (List.cons block List.empty) Option.none
 

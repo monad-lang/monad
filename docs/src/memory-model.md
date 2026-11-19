@@ -175,8 +175,8 @@ def render (model : Model) : IO String :=
 - A `Shared` handle that escapes its referent is not rejected yet; lifetime
   typing is open.
 - Closure captures are counted but a capturing closure is not made linear.
-- WASI uses `malloc` with no free; the web build uses a bump allocator that
-  never returns memory to the host.
+- WASI uses `malloc` with no free. The web build collects at export
+  boundaries (`runtime/src/gc_wasm.c`); its linear memory never shrinks.
 - The Rust bootstrap host accepts this code but does not enforce the affine or
   view rules; `monad check` is the authority.
 

@@ -1,10 +1,12 @@
 /// Heap introspection for the freestanding web profile.
 ///
-/// The allocator is a bump allocator: it never frees, and exhaustion now
-/// traps with a diagnostic (`oom`). `heap_bytes` is committed linear memory
-/// (`memory.buffer.byteLength`), `heap_used` is the bump pointer minus the
-/// heap base. An app that cannot shed allocations can persist its state and
-/// call `Window.reload` above a threshold.
+/// The heap is collected when an export returns to JS
+/// (`runtime/src/gc_wasm.c`), and exhaustion traps with a diagnostic
+/// (`oom`). `heap_bytes` is committed linear memory
+/// (`memory.buffer.byteLength`), which never shrinks. `heap_used` is the
+/// bytes live after the last collection plus everything allocated since. Only
+/// code that never returns to JS (a long `main`) cannot be collected; such an
+/// app can persist its state and call `Window.reload` above a threshold.
 
 use lib::ffi {memory_heap_bytes_raw, memory_heap_used_raw}
 

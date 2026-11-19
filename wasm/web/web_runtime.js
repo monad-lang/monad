@@ -24,11 +24,11 @@ import { f64ToRustString } from './float_format.js';
 let instance = null;
 let memory = null;
 let rootSelector = 'body';
-let kept = 0n; // the export-call state slot (`Keep.save`/`Keep.load`)
 let tryResult = null; // the last /try engine result (see `try_result`)
 // The /try worker channel (main thread only; the engine worker never
-// calls these). A fresh Worker per run bounds the engine's leaky bump
-// allocator, and terminating it is what Cancel does.
+// calls these). A fresh Worker per run bounds the engine's heap (nothing
+// is collected while `try_run` is running, and linear memory never
+// shrinks), and terminating it is what Cancel does.
 let tryWorker = null;
 let workerState = 0; // 0 idle, 1 running, 2 done, 3 timeout, 4 failed
 let workerResult = null;
@@ -1591,16 +1591,6 @@ export const host = {
   worker_cancel() {
     tryStopWorker(0);
     return 0n;
-  },
-
-  // Opaque state for the export calls: a Monad `Ref` word, stored verbatim.
-  keep_set(value) {
-    kept = value;
-    return 0n;
-  },
-
-  keep_get() {
-    return kept;
   },
 
   // ── Canvas + WebGL ─────────────────────────────────────────────────

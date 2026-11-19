@@ -243,7 +243,8 @@ def keystore_get_begin_raw (slot : String) : RawIO CryptoOp
 def keystore_delete_begin_raw (slot : String) : RawIO CryptoOp
 
 /// C-only heap probes (`runtime/src/platform_web.c`): committed linear
-/// memory and the bump pointer's used bytes. No JS host function.
+/// memory and the collector's used bytes (live + allocated since the last
+/// collection). No JS host function.
 #[extern "c" {link_name := "web_memory_heap_bytes"}]
 def memory_heap_bytes_raw : RawIO I64
 

@@ -181,6 +181,14 @@ echo "== web: export state slot (Keep) =="
     -o "$tmp/web_keep.wasm" --no-cache
 node wasm/web/smoke/export_smoke.mjs "$tmp/web_keep.wasm" keep
 
+echo "== web: collector under a frame loop (state exact, memory bounded) =="
+# Each tick allocates ~27 MB of garbage and replaces the kept list; the
+# collector runs at the export boundary. The bump allocator passed the
+# ceiling by tick 4.
+"$MONAD" build --target wasm32-unknown-unknown fixtures/wasm/gc_tick.mo \
+    -o "$tmp/gc_tick.wasm" --no-cache
+node wasm/web/smoke/gc_smoke.mjs "$tmp/gc_tick.wasm" 200
+
 echo "== web: Oak SPA (mount, dispatch, tick, patch) =="
 "$MONAD" build --target wasm32-unknown-unknown fixtures/wasm/oak_spa.mo \
     -o "$tmp/oak_spa.wasm" --no-cache

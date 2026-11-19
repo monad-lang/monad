@@ -1213,6 +1213,11 @@ pub def runtime_declarations_for_with_ownership (kind : TargetKind) (ownership_o
     // the mode is ever widened.
     let d166 := mk_decl "alloc_constructor_owned" ["i64", "i64"] "i64" in
     let d167 := mk_decl "monad_owned_free" ["i64"] void_ret in
+    // The export boundary (`export_shim`, emit.mo): every `#[export "c"]`
+    // thunk brackets its call with these. i64 on every target; the web
+    // runtime collects in `leave` when the depth returns to 0.
+    let d187 := mk_decl "monad_export_enter" List.empty "i64" in
+    let d188 := mk_decl "monad_export_leave" ["i64"] "i64" in
     [d1, d2, d3, d7, d7b, d7b1, d7c, d7d, d7e, d7f, d8, d9, d10, d11, d12, d13,
         d14, d15, d16, d17, d18, d19, d20, d21, d22, d23, d23a, d23b, d24, d24b, d25, d26, d27, d28, d29, d30, d31,
         d32, d33, d34, d35, d35b, d36, d37, d38, d38b, d39, dSysInt, dSysStr, dSysStat, dSysDirOpen, dSysDirNext, dSysDirClose, d40, d41, d42, d43, d43b, d44,
@@ -1230,7 +1235,7 @@ pub def runtime_declarations_for_with_ownership (kind : TargetKind) (ownership_o
         d142, d143, d144, d145, d146, d147, d148, d149,
         d168, d169, d170, d171, d172, d173, d174, d175,
         d176, d177, d178, d179, d180, d181, d182, d183,
-        d184, d185, d186] ++ (if ownership_on then [d166, d167] else List.empty)
+        d184, d185, d186, d187, d188] ++ (if ownership_on then [d166, d167] else List.empty)
 
 /// The native target's declaration list -- the historical name, kept for
 /// every existing caller and test.
