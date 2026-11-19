@@ -599,6 +599,40 @@ pub def names_constructor (scope : Scope) (id : Identifier) : Bool :=
             },
     }
 
+/// The families owning the constructor `id` names: the qualifier's family
+/// for `Bool.false`, every family with a constructor `false` for a bare one.
+def constructor_owners (scope : Scope) (id : Identifier) : List NamePath :=
+    match id {
+        Identifier.id s =>
+            let dot : I64 := String.find_last s "." in
+            if I64.lt dot 0
+            then List.map (fn (ind : Inductive) => ind.name) (scope_find_all_inductives_by_constructor (NamePath.mk [id]) scope)
+            else match owner_named scope (NamePath.mk [Identifier.id (String.slice s 0 dot)]) {
+                Option.some ind =>
+                    match find_constructor_in_inductive ind (NamePath.mk [Identifier.id (dotted_tail s)]) {
+                        Option.some _ => [ind.name],
+                        Option.none => List.empty,
+                    },
+                Option.none => List.empty,
+            },
+    }
+
+/// Do `a` and `b` name the same constructor in two spellings (`false` and
+/// `Bool.false`)? The tails must agree and the two spellings must share an
+/// owning family.
+pub def same_constructor_ref (scope : Scope) (a : Identifier) (b : Identifier) : Bool :=
+    match a {
+        Identifier.id sa =>
+            match b {
+                Identifier.id sb =>
+                    String.beq (dotted_tail sa) (dotted_tail sb)
+                        && shares_owner (constructor_owners scope a) (constructor_owners scope b),
+            },
+    }
+
+def shares_owner (xs : List NamePath) (ys : List NamePath) : Bool :=
+    List.any (fn (x : NamePath) => List.any (fn (y : NamePath) => x == y) ys) xs
+
 def owner_named (scope : Scope) (name : NamePath) : Option Inductive :=
     match scope_find_inductive name scope {
         Result.ok ind => Option.some ind,

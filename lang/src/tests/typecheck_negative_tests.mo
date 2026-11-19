@@ -413,7 +413,7 @@ def test_allow_non_affine_exempts_a_def : IO Bool :=
 // caller's context under a binder without shifting it. The redex
 // `(fn (x : B a0) => x) b0` (and every annotated `let`, which desugars to it)
 // went through `type_check_app_ordinary`'s synthesized Pi; a call to a def
-// whose return mentions its own parameters went through `instantiate_ret`.
+// whose return mentions its own parameters went through `instantiate_ret_go`.
 // Each acceptance pin has a rejection twin that differs only in the index, so
 // "accept everything" cannot pass.
 
@@ -628,3 +628,67 @@ def test_true_constructor_paths_are_accepted : IO Bool :=
             ++ "    Path (Vec (Nat.succ n) A) (Vec.cons a v) (Vec.cons a v) :=\n"
             ++ "    refl (Vec.cons a v)\n"
             ++ "def hc {n : Nat} {A : Type} (a : A) (v : Vec n A) : Path A (vhead (Vec.cons a v)) a := refl a\n")
+
+// --- Eliminator proofs and dependent arguments (ISSUE-12) -------------------
+//
+// An unannotated lambda's binder type is a hole, and a hole in the body used
+// to skip the def-boundary comparison; a dependent parameter's argument was
+// never compared; and `solve_typevars` bound a constructor name as a type
+// variable. Together they accepted any proof through an explicit eliminator.
+
+def elim_prelude : String :=
+    path_prelude
+        ++ "def ap {A : Type} {B : Type} {a : A} {b : A} (f : A -> B) (p : Path A a b) : Path B (f a) (f b) :=\n"
+        ++ "    fn (i : Cubical.I) => f (p i)\n"
+        ++ "#[proof]\n"
+        ++ "def nat_elim (P : Nat -> Type) (hz : P Nat.zero) (hs : (k : Nat) -> P k -> P (Nat.succ k))\n"
+        ++ "    (n : Nat) : P n :=\n"
+        ++ "    match n { Nat.zero => hz, Nat.succ k => hs k (nat_elim P hz hs k) }\n"
+        ++ "#[proof]\n"
+        ++ "def add_zero_fam (n : Nat) : Type := Path Nat (Nat.add n Nat.zero) n\n"
+
+#[test]
+def test_an_eliminator_does_not_prove_a_false_conclusion : IO Bool :=
+    rejected_with "goal" mismatch
+        (elim_prelude
+            ++ "#[proof]\n"
+            ++ "def goal (n : Nat) : Path Nat (Nat.add n Nat.zero) Nat.zero :=\n"
+            ++ "    nat_elim add_zero_fam (refl Nat.zero) (fn k ih => ap (fn m => Nat.succ m) ih) n\n")
+
+#[test]
+def test_an_eliminator_step_is_checked : IO Bool :=
+    rejected_with "step" mismatch
+        (elim_prelude
+            ++ "#[proof]\n"
+            ++ "def step (n : Nat) : Path Nat (Nat.add n Nat.zero) n :=\n"
+            ++ "    nat_elim add_zero_fam (refl Nat.zero) (fn k ih => refl Nat.zero) n\n")
+
+#[test]
+def test_an_eliminator_base_case_is_checked : IO Bool :=
+    rejected_with "base" mismatch
+        (elim_prelude
+            ++ "#[proof]\n"
+            ++ "def base (n : Nat) : Path Nat (Nat.add n Nat.zero) n :=\n"
+            ++ "    nat_elim add_zero_fam (refl (Nat.succ Nat.zero)) (fn k ih => ap (fn m => Nat.succ m) ih) n\n")
+
+#[test]
+def test_a_constructor_is_not_solved_as_a_type_variable : IO Bool :=
+    rejected_with "w" mismatch
+        (elim_prelude
+            ++ "def take (h : add_zero_fam Nat.zero) : Unit := Unit.unit\n"
+            ++ "def w : Unit := take (refl (Nat.succ Nat.zero))\n")
+
+#[test]
+def test_true_eliminator_proofs_are_accepted : IO Bool :=
+    accepted
+        (elim_prelude
+            ++ "#[proof]\n"
+            ++ "def add_zero (n : Nat) : Path Nat (Nat.add n Nat.zero) n :=\n"
+            ++ "    nat_elim add_zero_fam (refl Nat.zero) (fn k ih => ap (fn m => Nat.succ m) ih) n\n"
+            ++ "def and_f : Path Bool (Bool.and Bool.false Bool.true) Bool.false := refl Bool.false\n"
+            ++ "def opt_pure (A : Type) (a : A) : Option A := Option.some a\n"
+            ++ "def use_fn (f : I64 -> Option I64) : Unit := Unit.unit\n"
+            ++ "def part : Unit := use_fn (opt_pure I64)\n"
+            ++ "class Refl1 (M : Type -> Type) : Prop {\n"
+            ++ "    def refl_m (m : M A) : Path (M A) m m\n"
+            ++ "}\n")

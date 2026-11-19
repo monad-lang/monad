@@ -2,7 +2,7 @@ use lib::types {
     Con, DebugName, Identifier, LocalScope, Scope, Similar, SortLevel, Term, TypeError, binder_is_explicit,
     binder_name, cubical_prim_eq, level_le, npath_last, sentinel, sort_level_of, term_peel
 }
-use lib::typecheck::ctor_refine {present_args}
+use lib::typecheck::ctor_refine {present_args, same_constructor_ref}
 use lib::typecheck::subst {term_shift}
 use lib::typecheck::whnf {whnf}
 
@@ -350,11 +350,29 @@ def reducible (t : Term) : Bool :=
 def con_spine_equal (a : Term) (b : Term) (scope : Scope) (locals : LocalScope) : Bool :=
     match term_peel a {
         Term.con c => con_matches_spine c b scope locals,
+        Term.var ka da =>
+            match term_peel b {
+                Term.con c => con_matches_spine c a scope locals,
+                Term.var kb db => I64.beq ka sentinel && I64.beq kb sentinel && same_ctor_name da db scope,
+                _ => false,
+            },
         _ =>
             match term_peel b {
                 Term.con c => con_matches_spine c a scope locals,
                 _ => false,
             },
+    }
+
+/// A nullary constructor in two spellings: `Bool.and`'s body reduces to the
+/// bare `false` it was written with, a proof writes `Bool.false` (ISSUE-12).
+def same_ctor_name (da : DebugName) (db : DebugName) (scope : Scope) : Bool :=
+    match da {
+        DebugName.named ia =>
+            match db {
+                DebugName.named ib => same_constructor_ref scope ia ib,
+                _ => false,
+            },
+        _ => false,
     }
 
 #[terminating]

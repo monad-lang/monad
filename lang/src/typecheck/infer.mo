@@ -273,6 +273,26 @@ def any_term_has_hole (ts : List Term) : Bool :=
         List.cons x rest => if term_has_hole x then true else any_term_has_hole rest,
     }
 
+/// Does `t` contain a hole in an EXPRESSION position? An unannotated
+/// lambda's binder type is a hole too, but it marks no unfinished body:
+/// counting it skipped the def-boundary comparison for every body with a
+/// `fn x => ...` in it, so a proof through an explicit eliminator was never
+/// compared with its declared type (ISSUE-12).
+#[terminating]
+def term_has_expr_hole (t : Term) : Bool :=
+    match t {
+        Term.hole => true,
+        Term.lam _ _ body => term_has_expr_hole body,
+        _ => any_term_has_expr_hole (term_children t),
+    }
+
+#[terminating]
+def any_term_has_expr_hole (ts : List Term) : Bool :=
+    match ts {
+        List.empty => false,
+        List.cons x rest => if term_has_expr_hole x then true else any_term_has_expr_hole rest,
+    }
+
 /// Does `t` mention a BOUND variable -- a de Bruijn index, not the free-var
 /// sentinel? A DEPENDENT parameter type does: `fiber (A : Type) (B : Type)
 /// (f : A -> B) (b : B)` records `b`'s domain still referencing the `A`/
@@ -286,6 +306,13 @@ def term_has_bound_var (t : Term) : Bool :=
         Term.var idx _ => Bool.not (I64.beq idx sentinel),
         _ => any_term_has_bound_var (term_children t),
     }
+
+/// Does `t` mention a bound variable its own binders do not bind? Shifting
+/// moves exactly the loose indices, so a closed term is unchanged by it. A
+/// parameter's internal Pi binders (`(k : Nat) -> P k -> P (Nat.succ k)`)
+/// are not loose; the earlier parameters, once instantiated, are gone.
+def term_has_loose_bound_var (t : Term) : Bool :=
+    term_has_bound_var t && Bool.not (Similar.similar (term_shift 1 t) t)
 
 #[terminating]
 def any_term_has_bound_var (ts : List Term) : Bool :=
@@ -377,7 +404,7 @@ def any_mentions_uninstantiated (ts : List Term) (scope : Scope) (locals : Local
 ///     rejects it.
 pub def body_type_error (body : Term) (inferred : Term) (expected : Term)
     (scope : Scope) (locals : LocalScope) : Option TypeError :=
-    if term_has_hole body then Option.none
+    if term_has_expr_hole body then Option.none
     else if is_sort_typ expected then Option.none
     else if mentions_uninstantiated_typevar expected scope locals then Option.none
     else if mentions_uninstantiated_typevar inferred scope locals then Option.none
@@ -2523,7 +2550,7 @@ def present_opt_terms (args : List (Option Term)) (acc : List Term) : List Term 
 /// (`type_check_sort_full` compares sorts by level).
 def elim_minor_type_error (minor : Term) (inferred : Term) (expected : Term)
     (scope : Scope) (locals : LocalScope) : Option TypeError :=
-    if term_has_hole minor then Option.none
+    if term_has_expr_hole minor then Option.none
     else if is_sort_typ expected then Option.none
     else
         let inferred_c : Term := canonicalize_bound_var_names (canonicalize_ctor_refs scope inferred) in
@@ -5764,7 +5791,7 @@ def try_type_check_def_call (app_term : Term) (expected_type : Term) (scope : Sc
                                                                     let ret_seed : List (Pair Identifier Term) :=
                                                                         drop_no_progress_bindings
                                                                             (solve_typevars scope (rebuild_pi_chain (drop_params (List.length real_args) params) ret) expected_type List.empty) in
-                                                                    match def_call_check_args real_args params (List.append pre ret_seed) List.empty scope local_types locals {
+                                                                    match def_call_check_args real_args params (List.append pre ret_seed) List.empty List.empty scope local_types locals {
                                                                         // A decline means "type this call another
                                                                         // way", the pre-existing contract. A solved
                                                                         // mismatch is not that: the ordinary path
@@ -5786,8 +5813,12 @@ def try_type_check_def_call (app_term : Term) (expected_type : Term) (scope : Sc
                                                                                     // `ret` unconditionally accepted
                                                                                     // `def wrong : I64 := add2 1`, which
                                                                                     // the reference checker rejects.
+                                                                                    // The residual parameters are instantiated with the
+                                                                                    // applied prefix too: `option_pure A` is `A -> Option A`,
+                                                                                    // not a chain still naming the callee's first binder
+                                                                                    // (ISSUE-12).
                                                                                     let full_ret : Term :=
-                                                                                        rebuild_pi_chain (drop_params (List.length real_args) params) (instantiate_ret ret params elab_args) in
+                                                                                        instantiate_ret_go (rebuild_pi_chain (drop_params (List.length real_args) params) ret) elab_args 0 in
                                                                                     // W1.4: the LEVEL instantiation runs
                                                                                     // beside the type-variable one. A
                                                                                     // declared `: Sort u` return type
@@ -6158,17 +6189,14 @@ def drop_params (n : I64) (params : List Term) : List Term :=
             List.cons _ rest => drop_params (n - 1) rest,
         }
 
-/// Instantiate a signature's return type with the call's own arguments.
+/// Instantiate a term written under a signature's first `List.length args`
+/// binders -- a return type, the residual Pi chain of a partial call, or a
+/// later parameter's type -- with the call's own arguments.
 ///
-/// Without it a dependent result type keeps its binder dangling: measured,
+/// Without it a dependent type keeps its binder dangling: measured,
 /// `def val (s : Shape) : Fam s` called at `circle r` reported `Fam s`, and a
-/// legitimate dependent elim was rejected. Only a SATURATED call is
-/// instantiated -- a partial one's remaining parameters are re-wrapped by
-/// `rebuild_pi_chain`, and their declared types still refer to the applied
-/// prefix this would remove.
-def instantiate_ret (ret : Term) (params : List Term) (args : List Term) : Term :=
-    if I64.beq (List.length args) (List.length params) then instantiate_ret_go ret args 0 else ret
-
+/// legitimate dependent elim was rejected.
+///
 /// `ret` is written under the signature's own binders, so index 0 is the LAST
 /// parameter: recursing on the tail first substitutes the innermost binder,
 /// and each `beta_reduce` closes exactly one. The arguments live in the
@@ -6326,8 +6354,10 @@ def drop_no_progress_bindings (bs : List (Pair Identifier Term)) : List (Pair Id
         },
     }
 
+/// `prior` is the elaborated arguments before this one, in order: a
+/// dependent parameter's type is instantiated with them for the comparison.
 #[partial]
-def def_call_check_args (args : List Term) (params : List Term) (subst : List (Pair Identifier Term)) (levels : List (Pair Identifier SortLevel)) (scope : Scope) (local_types : List Term) (locals : LocalScope) : CallArgOutcome :=
+def def_call_check_args (args : List Term) (params : List Term) (subst : List (Pair Identifier Term)) (levels : List (Pair Identifier SortLevel)) (prior : List Term) (scope : Scope) (local_types : List Term) (locals : LocalScope) : CallArgOutcome :=
     match args {
         List.empty => CallArgOutcome.ok (DccPair.mk List.empty subst levels),
         List.cons arg rest =>
@@ -6337,7 +6367,12 @@ def def_call_check_args (args : List Term) (params : List Term) (subst : List (P
                     // Levels solved by the arguments BEFORE this one
                     // (W1.4) reach this parameter's type, so a later
                     // `(B : Sort u)` is checked at the instantiated `u`.
-                    let a_expected : Term := subst_levels_term (subst_typevars_term param_ty subst) levels in
+                    // A dependent parameter is read at the earlier arguments
+                    // (ISSUE-12); any other is used as declared, so its
+                    // elaboration is unchanged.
+                    let param_at : Term :=
+                        if term_has_loose_bound_var param_ty then instantiate_ret_go param_ty prior 0 else param_ty in
+                    let a_expected : Term := subst_levels_term (subst_typevars_term param_at subst) levels in
                     // A CALL argument gets the parameter type as its
                     // expectation when that type is fully solved: a nested
                     // constrained call (`outer id (inner 41)`,
@@ -6360,7 +6395,7 @@ def def_call_check_args (args : List Term) (params : List Term) (subst : List (P
                     match check_arg_for_call prefer arg want scope local_types locals {
                         ok a_tt0 =>
                             let a_tt : TypedTerm := recheck_unresolved_class_calls arg a_tt0 a_expected scope local_types locals in
-                            def_call_continue arg a_tt param_ty rest rest_params subst levels scope local_types locals,
+                            def_call_continue arg a_tt param_ty rest rest_params subst levels prior scope local_types locals,
                         err _ =>
                             // Same vacuous-success trap `type_check_app`
                             // guards against (see `struct_literal_arg_
@@ -6385,7 +6420,7 @@ def def_call_check_args (args : List Term) (params : List Term) (subst : List (P
                             match type_check arg a_expected scope local_types locals {
                                 err _ => CallArgOutcome.decline,
                                 ok a_tt =>
-                                    def_call_continue arg a_tt param_ty rest rest_params subst levels scope local_types locals,
+                                    def_call_continue arg a_tt param_ty rest rest_params subst levels prior scope local_types locals,
                             },
                     },
             },
@@ -6630,7 +6665,7 @@ def call_arg_type_error (arg : Term) (arg_typ : Term) (param : Term)
     // pair per argument.
     if scope.incomplete_match_ok
     then Option.none
-    else if term_has_bound_var param
+    else if term_has_loose_bound_var param
     then Option.none
     else if constructor_value_expected_as_function arg param scope
     then Option.none
@@ -6684,7 +6719,7 @@ def constructor_ref_arity (t : Term) (scope : Scope) : Option I64 :=
 /// type variables from the argument's (already inferred) type, then
 /// recurse for the remaining arguments.
 #[partial]
-def def_call_continue (arg : Term) (a_tt : TypedTerm) (param_ty : Term) (rest : List Term) (rest_params : List Term) (subst : List (Pair Identifier Term)) (levels : List (Pair Identifier SortLevel)) (scope : Scope) (local_types : List Term) (locals : LocalScope) : CallArgOutcome :=
+def def_call_continue (arg : Term) (a_tt : TypedTerm) (param_ty : Term) (rest : List Term) (rest_params : List Term) (subst : List (Pair Identifier Term)) (levels : List (Pair Identifier SortLevel)) (prior : List Term) (scope : Scope) (local_types : List Term) (locals : LocalScope) : CallArgOutcome :=
     let a_typ : Term := a_tt.typ in
     let next_subst : List (Pair Identifier Term) := solve_typevars scope param_ty a_typ subst in
     // W1.4: the same argument pair also determines LEVEL variables, whose
@@ -6697,10 +6732,14 @@ def def_call_continue (arg : Term) (a_tt : TypedTerm) (param_ty : Term) (rest : 
     // compare the result with the parameter, so `f "s"` for `f (x : I64)`
     // and `needs Msg.started` for `needs (f : I64 -> Msg)` checked
     // cleanly and reached codegen.
-    match call_arg_type_error arg a_typ param_ty next_subst next_levels scope locals {
+    // A dependent parameter (`nat_elim`'s `hz : P Nat.zero`) is compared at
+    // the earlier arguments, not declined (ISSUE-12). The ARGUMENT was
+    // checked against the raw parameter above, so elaboration is unchanged.
+    let param_inst : Term := instantiate_ret_go param_ty prior 0 in
+    match call_arg_type_error arg a_typ param_inst next_subst next_levels scope locals {
         Option.some e => CallArgOutcome.type_error e,
         Option.none =>
-        match def_call_check_args rest rest_params next_subst next_levels scope local_types locals {
+        match def_call_check_args rest rest_params next_subst next_levels (List.append prior [a_tt.term]) scope local_types locals {
             CallArgOutcome.decline => CallArgOutcome.decline,
             CallArgOutcome.type_error e => CallArgOutcome.type_error e,
             CallArgOutcome.ok pair =>
@@ -6781,6 +6820,15 @@ def sig_tvars_go (t : Term) (n : I64) (params : List Term) : SigInfo :=
         _ => { params := params, ret := t },
     }
 
+/// Does `vid` name a constructor or a global def -- a term, never one of a
+/// signature's implicit type parameters (those are registered nowhere)?
+def names_global_term (vid : Identifier) (scope : Scope) : Bool :=
+    names_constructor scope vid
+        || (match scope_resolve_name (NameRef.nid vid) scope empty_locals {
+            Result.ok _ => true,
+            Result.err _ => false,
+        })
+
 /// Best-effort type-variable solver: structurally walk a callee's
 /// declared parameter type against the argument's actual inferred
 /// type, recording `name := actual_part` for every FREE `Term.var`
@@ -6846,8 +6894,14 @@ def solve_typevars (scope : Scope) (param : Term) (actual : Term) (subst : List 
                             // ill-typed; falling through unsolved
                             // degrades to the old lenient path rather
                             // than rewriting `Box P` into garbage).
+                            //
+                            // The same holds for a constructor or a def:
+                            // `add_zero_fam Nat.zero` against `Path Nat X Y`
+                            // bound `Nat.zero := Y`, and the substituted
+                            // parameter then equalled any argument (ISSUE-12).
                             _ =>
                                 if is_scope_type_name vid scope then subst
+                                else if names_global_term vid scope then subst
                                 else if subst_has_id subst vid then subst
                                 else List.cons (Pair.pair vid actual) subst,
                         },
@@ -8389,7 +8443,7 @@ def class_method_next_param (f : Term) (expected_type : Term) (scope : Scope) (l
                                     // this path produces a HINT for an
                                     // argument's binder, never a diagnostic.
                                     // The call's own check reports.
-                                    match def_call_check_args args params List.empty List.empty scope local_types locals {
+                                    match def_call_check_args args params List.empty List.empty List.empty scope local_types locals {
                                         CallArgOutcome.decline => Option.none,
                                         CallArgOutcome.type_error _ => Option.none,
                                         CallArgOutcome.ok dcc =>
@@ -8589,7 +8643,7 @@ def extract_pi_ret_explicit (f_term : Term) (a_term : Term) (f_typ : Term) (a_ty
             // The codomain still names its own binder at index 0; applying
             // the argument closes it (`whnf_go`'s app arm does the same for
             // a lambda). Without this a dependent codomain came back with
-            // the binder dangling -- see `instantiate_ret`.
+            // the binder dangling -- see `instantiate_ret_go`.
             let instantiated : Term := beta_reduce pi_ret a_term in
             if is_hole pi_ret
             then ok (mk_typed app_term (con_spine_result_typ f_term pi_ret scope))
