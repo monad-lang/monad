@@ -195,6 +195,12 @@ type Toml.TableKind {
     kind_inline,
 }
 
+/// A payload-free tag: duplicating it is a plain copy, so the assembler can
+/// test a table's kind more than once without threading it.
+instance Copy Toml.TableKind {
+    def copy (k : Toml.TableKind) : Pair Toml.TableKind Toml.TableKind := Pair.pair k k
+}
+
 /// The document under assembly. `doc_array` exists only for arrays of
 /// tables created by `[[...]]` headers (always extendable); a static array
 /// value — including one holding inline tables — is a `doc_scalar`, which
@@ -273,7 +279,9 @@ def Toml.is_key_char (c : String) : Bool :=
 
 def toml_bare_key_result (r : ParseResult String) : ParseResult String :=
     match r {
-        success rem out => if is_empty out then fail (ParseError.custom "expected key" rem) else success rem out,
+        success rem raw =>
+            let out : String := raw in
+            if is_empty out then fail (ParseError.custom "expected key" rem) else success rem out,
         fail e => fail e
     }
 
@@ -467,7 +475,8 @@ def Toml.unicode_escape (n : I64) (input : String) : ParseResult String :=
 def toml_hex_value (r : Option I64) (input : String) (n : I64) : ParseResult String :=
     match r {
         Option.none => fail (ParseError.custom "invalid \\u escape" input),
-        Option.some cp =>
+        Option.some raw =>
+            let cp : I64 := raw in
             if Toml.codepoint_bad cp
             then fail (ParseError.custom "invalid unicode escape (surrogate or above U+10FFFF)" input)
             else success (String.drop n input) (Toml.utf8_of_codepoint cp)
@@ -611,7 +620,8 @@ def Toml.quote_run_go (q : String) (s : String) (n : I64) : Pair I64 String :=
 #[partial]
 def toml_mlb_quotes (run : Pair I64 String) (acc : List String) : ParseResult String :=
     match run {
-        Pair.pair n rest =>
+        Pair.pair raw rest =>
+            let n : I64 := raw in
             if I64.lt n 3
             then Toml.mlb_loop rest (List.append (Toml.quote_pieces "\"" n) acc)
             else success rest (String.concat_list (List.reverse (List.append (Toml.quote_pieces "\"" (n - 3)) acc)))
@@ -658,7 +668,8 @@ def toml_mlb_continuation (rem : String) : ParseResult String :=
 #[partial]
 def toml_mlb_cont_go (scanned : Pair String String) : ParseResult String :=
     match scanned {
-        Pair.pair ws_text rest =>
+        Pair.pair ws_text raw =>
+            let rest : String := raw in
             if String.contains ws_text "\n"
             then success rest ""
             else if is_empty rest
@@ -773,7 +784,8 @@ def Toml.mll_plain_char (input : String) : ParseResult String :=
 #[partial]
 def toml_mll_quotes (run : Pair I64 String) (acc : List String) : ParseResult String :=
     match run {
-        Pair.pair n rest =>
+        Pair.pair raw rest =>
+            let n : I64 := raw in
             if I64.lt n 3
             then Toml.mll_loop rest (List.append (Toml.quote_pieces "'" n) acc)
             else success rest (String.concat_list (List.reverse (List.append (Toml.quote_pieces "'" (n - 3)) acc)))
@@ -920,7 +932,8 @@ def Toml.digits_pos (digit_of : String -> Option I64) (base : I64) (cs : List St
         List.empty => Option.some acc,
         List.cons c rest =>
             match digit_of c {
-                Option.some d =>
+                Option.some raw =>
+                    let d : I64 := raw in
                     if I64.gt acc (I64.div (I64.sub Toml.i64_max d) base)
                     then Option.none
                     else Toml.digits_pos digit_of base rest (I64.add (I64.mul acc base) d),
@@ -973,7 +986,8 @@ def toml_int_radix (digits : String) (signed : Bool) (base : I64) (pred : I64 ->
     then fail (ParseError.custom "a sign is not allowed on a radix integer" digits)
     else
         match Toml.scan_bytes pred digits {
-            Pair.pair text rest =>
+            Pair.pair raw rest =>
+                let text : String := raw in
                 if is_empty text
                 then fail (ParseError.custom "expected digits after the radix prefix" digits)
                 else if Bool.not (Toml.underscores_ok text)
@@ -994,7 +1008,8 @@ def toml_int_radix_value (r : Option I64) (rest : String) : ParseResult I64 :=
 #[partial]
 def toml_int_decimal (input : String) (neg : Bool) : ParseResult I64 :=
     match Toml.scan_bytes Toml.is_digit_or_underscore_byte input {
-        Pair.pair text rest =>
+        Pair.pair raw rest =>
+            let text : String := raw in
             if is_empty text
             then fail (ParseError.custom "expected digits" input)
             else if Bool.not (Toml.underscores_ok text)
@@ -1085,7 +1100,8 @@ def Toml.nan_value : F64 := 0.0f64 / 0.0f64
 #[partial]
 def toml_float_body (input : String) (neg : Bool) : ParseResult F64 :=
     match Toml.scan_bytes Toml.is_digit_or_underscore_byte input {
-        Pair.pair int_text rest =>
+        Pair.pair int_raw rest =>
+            let int_text : String := int_raw in
             if is_empty int_text
             then fail (ParseError.custom "expected float" input)
             else if Bool.not (Toml.underscores_ok int_text)
@@ -1108,7 +1124,8 @@ def toml_float_after_int (int_text : String) (rest : String) (neg : Bool) : Pars
 #[partial]
 def toml_float_frac (int_text : String) (after_dot : String) (neg : Bool) : ParseResult F64 :=
     match Toml.scan_bytes Toml.is_digit_or_underscore_byte after_dot {
-        Pair.pair frac_text rest =>
+        Pair.pair frac_raw rest =>
+            let frac_text : String := frac_raw in
             if is_empty frac_text
             then fail (ParseError.custom "expected fraction digits" after_dot)
             else if Bool.not (Toml.underscores_ok frac_text)
@@ -1137,7 +1154,8 @@ def toml_float_exp_body (exp_input : String) (int_text : String) (frac_text : St
     let after_sign : String :=
         if I64.beq b 43 || I64.beq b 45 then String.drop 1 exp_input else exp_input in
     match Toml.scan_bytes Toml.is_digit_or_underscore_byte after_sign {
-        Pair.pair exp_text rest =>
+        Pair.pair exp_raw rest =>
+            let exp_text : String := exp_raw in
             if is_empty exp_text
             then fail (ParseError.custom "expected exponent digits" orig)
             else if Bool.not (Toml.underscores_ok exp_text)
@@ -1193,7 +1211,9 @@ def Toml.dt_scan (input : String) : Option String :=
 def toml_dt_result (r : Option String) (input : String) : ParseResult Toml.Value :=
     match r {
         Option.none => fail (ParseError.custom "not a date-time" input),
-        Option.some text => success (String.drop (String.length text) input) (datetime text)
+        Option.some raw =>
+            let text : String := raw in
+            success (String.drop (String.length text) input) (datetime text)
     }
 
 /// n digits at `input` starting at `start`, or `none` — the fixed-width
@@ -1419,7 +1439,7 @@ def Toml.parse_array (input : String) : ParseResult Toml.Value :=
 def toml_parse_array_trailing (input : String) : ParseResult (List Toml.Value) :=
     match toml_parse_array_body input {
         success rem elems =>
-            if List.is_empty elems
+            if List.is_empty (Shared.get (Shared.of elems))
             then success rem elems
             else if String.starts_with "," rem
             then
@@ -1529,7 +1549,8 @@ def Toml.inline_pairs_go (pairs : List (Pair (List String) Toml.Value)) (acc : B
             match p {
                 Pair.pair path v =>
                     match Toml.inline_insert path v acc {
-                        Option.none => Result.err (Toml.inline_duplicate_error (Toml.path_head path)),
+                        Option.none =>
+                            Result.err (Toml.inline_duplicate_error (Toml.path_head (Shared.get (Shared.of path)))),
                         Option.some acc2 => Toml.inline_pairs_go rest acc2,
                     }
             }
@@ -1551,12 +1572,12 @@ def Toml.inline_insert (path : List String) (value : Toml.Value) (t : BTreeMap S
         List.cons k rest =>
             if List.is_empty rest
             then
-                match Map.lookup k t {
+                match Map.lookup k (Shared.get (Shared.of t)) {
                     Option.some _ => Option.none,
                     Option.none => Option.some (Map.insert k value t),
                 }
             else
-                match Map.lookup k t {
+                match Map.lookup k (Shared.get (Shared.of t)) {
                     Option.none => Toml.inline_insert_fresh k rest value t,
                     Option.some existing => Toml.inline_insert_merge k rest value existing t,
                 }
@@ -1833,7 +1854,7 @@ def Toml.apply_header (path : List String) (root : Toml.Doc) : Result String (Pa
 def Toml.header_step (k : String) (rest : List String) (root : Toml.Doc) : Result String (Pair (List Toml.PathStep) Toml.Doc) :=
     match root {
         doc_table entries kind =>
-            match Map.lookup k entries {
+            match Map.lookup k (Shared.get (Shared.of entries)) {
                 Option.none => Toml.header_create k rest entries kind,
                 Option.some child => Toml.header_descend k rest child entries kind,
             },
@@ -1859,11 +1880,11 @@ def Toml.header_create (k : String) (rest : List String) (entries : BTreeMap Str
 #[partial]
 def Toml.header_descend (k : String) (rest : List String) (child : Toml.Doc) (entries : BTreeMap String Toml.Doc) (kind : Toml.TableKind) : Result String (Pair (List Toml.PathStep) Toml.Doc) :=
     match child {
-        doc_table _ ck =>
+        doc_table es ck =>
             if Toml.kind_is_inline ck
             then Result.err (Toml.inline_immutable_error k)
             else
-                match Toml.apply_header rest child {
+                match Toml.apply_header rest (doc_table es ck) {
                     Result.err e => Result.err e,
                     Result.ok pr =>
                         match pr {
@@ -1915,7 +1936,7 @@ def Toml.apply_header_in_last (path : List String) (items : List Toml.Doc) : Res
 def Toml.header_final (k : String) (root : Toml.Doc) : Result String (Pair (List Toml.PathStep) Toml.Doc) :=
     match root {
         doc_table entries kind =>
-            match Map.lookup k entries {
+            match Map.lookup k (Shared.get (Shared.of entries)) {
                 Option.none =>
                     Result.ok (Pair.pair [step_key k] (doc_table (Map.insert k (doc_table BTreeMap.empty kind_explicit) entries) kind)),
                 Option.some child => Toml.header_final_existing k child entries kind,
@@ -1960,7 +1981,7 @@ def Toml.apply_array_header (path : List String) (root : Toml.Doc) : Result Stri
 def Toml.array_header_step (k : String) (rest : List String) (root : Toml.Doc) : Result String (Pair (List Toml.PathStep) Toml.Doc) :=
     match root {
         doc_table entries kind =>
-            match Map.lookup k entries {
+            match Map.lookup k (Shared.get (Shared.of entries)) {
                 Option.none => Toml.array_header_create k rest entries kind,
                 Option.some child => Toml.array_header_descend k rest child entries kind,
             },
@@ -1981,11 +2002,11 @@ def Toml.array_header_create (k : String) (rest : List String) (entries : BTreeM
 #[partial]
 def Toml.array_header_descend (k : String) (rest : List String) (child : Toml.Doc) (entries : BTreeMap String Toml.Doc) (kind : Toml.TableKind) : Result String (Pair (List Toml.PathStep) Toml.Doc) :=
     match child {
-        doc_table _ ck =>
+        doc_table es ck =>
             if Toml.kind_is_inline ck
             then Result.err (Toml.inline_immutable_error k)
             else
-                match Toml.apply_array_header rest child {
+                match Toml.apply_array_header rest (doc_table es ck) {
                     Result.err e => Result.err e,
                     Result.ok pr =>
                         match pr {
@@ -2036,7 +2057,7 @@ def Toml.apply_array_header_in_last (path : List String) (items : List Toml.Doc)
 def Toml.array_header_final (k : String) (root : Toml.Doc) : Result String (Pair (List Toml.PathStep) Toml.Doc) :=
     match root {
         doc_table entries kind =>
-            match Map.lookup k entries {
+            match Map.lookup k (Shared.get (Shared.of entries)) {
                 Option.none =>
                     Result.ok (Pair.pair [step_last k] (doc_table (Map.insert k (doc_array [doc_table BTreeMap.empty kind_explicit]) entries) kind)),
                 Option.some child => Toml.array_header_final_existing k child entries kind,
@@ -2070,7 +2091,7 @@ def Toml.kv_step (s : Toml.PathStep) (rest : List Toml.PathStep) (path : List St
         doc_table entries kind =>
             match s {
                 step_key k =>
-                    match Map.lookup k entries {
+                    match Map.lookup k (Shared.get (Shared.of entries)) {
                         Option.none => Result.err (Toml.lost_current_error k),
                         Option.some child =>
                             match Toml.insert_kv rest path value child {
@@ -2079,7 +2100,7 @@ def Toml.kv_step (s : Toml.PathStep) (rest : List Toml.PathStep) (path : List St
                             },
                     },
                 step_last k =>
-                    match Map.lookup k entries {
+                    match Map.lookup k (Shared.get (Shared.of entries)) {
                         Option.none => Result.err (Toml.lost_current_error k),
                         Option.some child =>
                             match child {
@@ -2133,7 +2154,7 @@ def Toml.kv_insert_here (path : List String) (value : Toml.Value) (root : Toml.D
 /// rather than last-wins — the spec forbids it outright.
 #[partial]
 def Toml.kv_final (k : String) (value : Toml.Value) (entries : BTreeMap String Toml.Doc) (kind : Toml.TableKind) : Result String Toml.Doc :=
-    match Map.lookup k entries {
+    match Map.lookup k (Shared.get (Shared.of entries)) {
         Option.some _ => Result.err (Toml.duplicate_key_error k),
         Option.none => Result.ok (doc_table (Map.insert k (Toml.value_to_doc value) entries) kind),
     }
@@ -2144,7 +2165,7 @@ def Toml.kv_final (k : String) (value : Toml.Value) (entries : BTreeMap String T
 /// tables already defined in [table] form is not allowed".
 #[partial]
 def Toml.kv_step_path (k : String) (rest : List String) (value : Toml.Value) (entries : BTreeMap String Toml.Doc) (kind : Toml.TableKind) : Result String Toml.Doc :=
-    match Map.lookup k entries {
+    match Map.lookup k (Shared.get (Shared.of entries)) {
         Option.none =>
             match Toml.kv_insert_here rest value (doc_table BTreeMap.empty kind_dotted) {
                 Result.err e => Result.err e,
@@ -2152,10 +2173,10 @@ def Toml.kv_step_path (k : String) (rest : List String) (value : Toml.Value) (en
             },
         Option.some child =>
             match child {
-                doc_table _ ck =>
+                doc_table es ck =>
                     if Toml.kind_is_dotted ck
                     then
-                        match Toml.kv_insert_here rest value child {
+                        match Toml.kv_insert_here rest value (doc_table es ck) {
                             Result.err e => Result.err e,
                             Result.ok child2 => Result.ok (doc_table (Map.insert k child2 entries) kind),
                         }
@@ -2168,7 +2189,7 @@ def Toml.kv_step_path (k : String) (rest : List String) (value : Toml.Value) (en
 /// other value (static arrays included) is a scalar.
 #[partial]
 def Toml.value_to_doc (v : Toml.Value) : Toml.Doc :=
-    match v {
+    match Shared.get (Shared.of v) {
         table t => doc_table (Toml.value_table_to_doc t) kind_inline,
         _ => doc_scalar v
     }
@@ -2302,7 +2323,7 @@ def Toml.fold_array_header (steps : List Toml.PathStep) (root : Toml.Doc) (path 
     }
 
 def Toml.fold_kv (steps : List Toml.PathStep) (root : Toml.Doc) (path : List String) (value : Toml.Value) : Toml.Asm :=
-    match Toml.insert_kv steps path value root {
+    match Toml.insert_kv (Shared.get (Shared.of steps)) path value root {
         Result.err e => asm_error e,
         Result.ok root2 => asm_state steps root2,
     }
@@ -2475,7 +2496,7 @@ def Toml.inline_table_to_string (t : BTreeMap String Toml.Value) : String :=
 
 #[partial]
 def toml_inline_table_body (pairs : List (Pair String Toml.Value)) : String :=
-    if List.is_empty pairs
+    if List.is_empty (Shared.get (Shared.of pairs))
     then "{}"
     else String.concat "{ " (String.concat (List.intercalate ", " (List.map Toml.kv_line_to_string pairs)) " }")
 
@@ -2519,7 +2540,7 @@ def Toml.pair_is_scalar (p : Pair String Toml.Value) : Bool :=
     match p { Pair.pair _ v => toml_is_inline_value v }
 
 def toml_is_inline_value (v : Toml.Value) : Bool :=
-    if Toml.is_table v then false else Bool.not (Toml.is_table_array v)
+    if Toml.is_table (Shared.get (Shared.of v)) then false else Bool.not (Toml.is_table_array v)
 
 def Toml.pair_is_table (p : Pair String Toml.Value) : Bool :=
     match p { Pair.pair _ v => Toml.is_table v }
@@ -2540,17 +2561,17 @@ def Toml.kv_line_to_string (p : Pair String Toml.Value) : String :=
     match p { Pair.pair k v => String.concat (Toml.key_to_string k) (String.concat " = " (Toml.value_to_string v)) }
 
 def Toml.render_header (path : List String) : String :=
-    if List.is_empty path
+    if List.is_empty (Shared.get (Shared.of path))
     then ""
     else String.concat "[" (String.concat (List.intercalate "." (List.map Toml.key_to_string path)) "]\n")
 
 def Toml.render_array_header (path : List String) : String :=
-    if List.is_empty path
+    if List.is_empty (Shared.get (Shared.of path))
     then ""
     else String.concat "[[" (String.concat (List.intercalate "." (List.map Toml.key_to_string path)) "]]\n")
 
 def Toml.render_body (header_str : String) (scalars : List (Pair String Toml.Value)) : String :=
-    if List.is_empty scalars
+    if List.is_empty (Shared.get (Shared.of scalars))
     then header_str
     else String.concat header_str (String.concat (List.intercalate "\n" (List.map Toml.kv_line_to_string scalars)) "\n")
 
@@ -2559,12 +2580,13 @@ def Toml.render_body (header_str : String) (scalars : List (Pair String Toml.Val
 /// `[dotted.path]` headers followed by their own scalar keys.
 #[partial]
 def Toml.render_table (path : List String) (t : BTreeMap String Toml.Value) : String :=
+    let pv : List String := Shared.get (Shared.of path) in
     let pairs := BTreeMap.to_list t in
     let scalars := Toml.scalar_entries pairs in
     let tables := Toml.table_entries pairs in
     let table_arrays := Toml.table_array_entries pairs in
-    let body := Toml.render_body (Toml.render_header path) scalars in
-    String.concat body (String.concat (Toml.render_tables path tables) (Toml.render_table_arrays path table_arrays))
+    let body := Toml.render_body (Toml.render_header pv) scalars in
+    String.concat body (String.concat (Toml.render_tables pv tables) (Toml.render_table_arrays pv table_arrays))
 
 /// `[[k]]` sections, one per element. Emitted after this table's `[k]`
 /// sub-sections so that every header's own keys stay under it -- the order
@@ -2573,7 +2595,10 @@ def Toml.render_table (path : List String) (t : BTreeMap String Toml.Value) : St
 def Toml.render_table_arrays (path : List String) (entries : List (Pair String Toml.Value)) : String :=
     match entries {
         List.empty => "",
-        List.cons p rest => String.concat (Toml.render_one_table_array path p) (Toml.render_table_arrays path rest)
+        List.cons p rest =>
+            String.concat
+                (Toml.render_one_table_array (Shared.get (Shared.of path)) p)
+                (Toml.render_table_arrays path rest)
     }
 
 #[partial]
@@ -2586,7 +2611,8 @@ def Toml.render_one_table_array (path : List String) (p : Pair String Toml.Value
 def Toml.render_array_elems (path : List String) (elems : List Toml.Value) : String :=
     match elems {
         List.empty => "",
-        List.cons e rest => String.concat (Toml.render_array_elem path e) (Toml.render_array_elems path rest)
+        List.cons e rest =>
+            String.concat (Toml.render_array_elem (Shared.get (Shared.of path)) e) (Toml.render_array_elems path rest)
     }
 
 /// One `[[path]]` element. ALL of its entries render inline, sub-tables
@@ -2603,7 +2629,8 @@ def Toml.render_array_elem (path : List String) (e : Toml.Value) : String :=
 def Toml.render_tables (path : List String) (tables : List (Pair String Toml.Value)) : String :=
     match tables {
         List.empty => "",
-        List.cons p rest => String.concat (Toml.render_one_table path p) (Toml.render_tables path rest)
+        List.cons p rest =>
+            String.concat (Toml.render_one_table (Shared.get (Shared.of path)) p) (Toml.render_tables path rest)
     }
 
 #[partial]
@@ -2757,7 +2784,9 @@ def test_parse_negative_integer_kv : Bool :=
 #[test]
 def test_parse_bool_kv : Bool :=
     match Toml.parse "a = true\nb = false" {
-        ok t => toml_table_lookup_eq "a" t (boolean true) && toml_table_lookup_eq "b" t (boolean false),
+        ok t_owned =>
+            let t : BTreeMap String Toml.Value := Shared.get (Shared.of t_owned) in
+            toml_table_lookup_eq "a" t (boolean true) && toml_table_lookup_eq "b" t (boolean false),
         err _ => false
     }
 
@@ -2808,7 +2837,8 @@ def test_parse_negative_zero : Bool :=
 #[test]
 def test_parse_underscored_integer : Bool :=
     match Toml.parse "a = 1_000\nb = 1_0\nc = 1_2_3" {
-        ok t =>
+        ok t_owned =>
+            let t : BTreeMap String Toml.Value := Shared.get (Shared.of t_owned) in
             toml_table_lookup_eq "a" t (integer 1000)
             && toml_table_lookup_eq "b" t (integer 10)
             && toml_table_lookup_eq "c" t (integer 123),
@@ -2825,7 +2855,9 @@ def test_parse_hex_integer : Bool :=
 #[test]
 def test_parse_hex_lowercase_and_leading_zeros : Bool :=
     match Toml.parse "n = 0xdeadBEEF\nm = 0x00000001" {
-        ok t => toml_table_lookup_eq "n" t (integer 3735928559) && toml_table_lookup_eq "m" t (integer 1),
+        ok t_owned =>
+            let t : BTreeMap String Toml.Value := Shared.get (Shared.of t_owned) in
+            toml_table_lookup_eq "n" t (integer 3735928559) && toml_table_lookup_eq "m" t (integer 1),
         err _ => false
     }
 
@@ -2942,7 +2974,8 @@ def test_parse_float_pi : Bool :=
 #[test]
 def test_parse_float_exponent : Bool :=
     match Toml.parse "a = 1e6\nb = 5e+22\nc = -2E-2\nd = 1e06" {
-        ok t =>
+        ok t_owned =>
+            let t : BTreeMap String Toml.Value := Shared.get (Shared.of t_owned) in
             toml_table_lookup_eq "a" t (float 1000000.0f64)
             && toml_table_lookup_eq "b" t (float 50000000000000000000000.0f64)
             && toml_table_lookup_eq "c" t (float (-0.02f64))
@@ -2960,7 +2993,8 @@ def test_parse_float_underscored : Bool :=
 #[test]
 def test_parse_float_inf : Bool :=
     match Toml.parse "a = inf\nb = -inf\nc = +inf" {
-        ok t =>
+        ok t_owned =>
+            let t : BTreeMap String Toml.Value := Shared.get (Shared.of t_owned) in
             toml_table_lookup_eq "a" t (float (1.0f64 / 0.0f64))
             && toml_table_lookup_eq "b" t (float (0.0f64 - (1.0f64 / 0.0f64)))
             && toml_table_lookup_eq "c" t (float (1.0f64 / 0.0f64)),
@@ -2972,7 +3006,8 @@ def test_parse_float_inf : Bool :=
 #[test]
 def test_parse_float_nan : Bool :=
     match Toml.parse "a = nan\nb = +nan\nc = -nan" {
-        ok t =>
+        ok t_owned =>
+            let t : BTreeMap String Toml.Value := Shared.get (Shared.of t_owned) in
             match Toml.table_get "a" t {
                 some v => match Toml.get_float v {
                     ok f => match Toml.table_get "b" t {
@@ -3153,7 +3188,9 @@ def test_parse_literal_string : Bool :=
 #[test]
 def test_parse_empty_strings : Bool :=
     match Toml.parse "a = ''\nb = \"\"" {
-        ok t => toml_table_lookup_eq "a" t (string "") && toml_table_lookup_eq "b" t (string ""),
+        ok t_owned =>
+            let t : BTreeMap String Toml.Value := Shared.get (Shared.of t_owned) in
+            toml_table_lookup_eq "a" t (string "") && toml_table_lookup_eq "b" t (string ""),
         err _ => false
     }
 
@@ -3353,7 +3390,8 @@ def test_parse_quoted_hyphenated_key_in_nested_table : Bool :=
 #[test]
 def test_parse_quoted_and_bare_keys : Bool :=
     match Toml.parse "plain = \"a\"\n\"C-x\" = \"b\"\n" {
-        ok t =>
+        ok t_owned =>
+            let t : BTreeMap String Toml.Value := Shared.get (Shared.of t_owned) in
             toml_table_lookup_eq "plain" t (string "a")
                 && toml_table_lookup_eq "C-x" t (string "b"),
         err _ => false
@@ -3691,7 +3729,8 @@ def test_parse_whole_line_comment : Bool :=
 #[test]
 def test_parse_trailing_comment : Bool :=
     match Toml.parse "name = \"example\" # trailing\nversion = \"0.1.0\"" {
-        ok t =>
+        ok t_owned =>
+            let t : BTreeMap String Toml.Value := Shared.get (Shared.of t_owned) in
             if toml_table_lookup_eq "name" t (string "example")
             then toml_table_lookup_eq "version" t (string "0.1.0")
             else false,
@@ -3730,7 +3769,9 @@ def test_parse_comment_only_document : Bool :=
 #[test]
 def test_parse_crlf_document : Bool :=
     match Toml.parse "a = 1\r\nb = 2\r\n" {
-        ok t => toml_table_lookup_eq "a" t (integer 1) && toml_table_lookup_eq "b" t (integer 2),
+        ok t_owned =>
+            let t : BTreeMap String Toml.Value := Shared.get (Shared.of t_owned) in
+            toml_table_lookup_eq "a" t (integer 1) && toml_table_lookup_eq "b" t (integer 2),
         err _ => false
     }
 
@@ -3933,7 +3974,8 @@ def test_header_descends_into_the_last_array_element : Bool :=
             match Toml.array_at "fruit" t {
                 List.cons e _ =>
                     match e {
-                        table elem =>
+                        table elem_owned =>
+                            let elem : BTreeMap String Toml.Value := Shared.get (Shared.of elem_owned) in
                             toml_table_lookup_eq "name" elem (string "apple")
                             && (match Toml.table_get "physical" elem {
                                 some v => match v { table p => toml_table_lookup_eq "color" p (string "red"), _ => false },
@@ -4047,7 +4089,8 @@ def test_dotted_key_then_deeper_header : Bool :=
                     table a_t =>
                         match Toml.table_get "b" a_t {
                             some b_v => match b_v {
-                                table b_t =>
+                                table b_t_owned =>
+                                    let b_t : BTreeMap String Toml.Value := Shared.get (Shared.of b_t_owned) in
                                     toml_table_lookup_eq "c" b_t (integer 1)
                                     && (match Toml.table_get "d" b_t {
                                         some d_v => match d_v { table d_t => toml_table_lookup_eq "e" d_t (integer 2), _ => false },
@@ -4118,7 +4161,8 @@ def mote_toml_fixture : String :=
 #[test]
 def test_parse_mote_fixture : Bool :=
     match Toml.parse mote_toml_fixture {
-        ok t =>
+        ok t_owned =>
+            let t : BTreeMap String Toml.Value := Shared.get (Shared.of t_owned) in
             match Toml.table_get "mote" t {
                 some v => toml_check_mote_table v,
                 none => false
@@ -4132,7 +4176,8 @@ def test_parse_mote_fixture : Bool :=
 
 def toml_check_mote_table (v : Toml.Value) : Bool :=
     match v {
-        table sub =>
+        table sub_owned =>
+            let sub : BTreeMap String Toml.Value := Shared.get (Shared.of sub_owned) in
             toml_table_lookup_eq "name" sub (string "example") &&
             toml_table_lookup_eq "version" sub (string "0.1.0") &&
             toml_table_lookup_eq "edition" sub (string "2026"),
@@ -4147,7 +4192,8 @@ def member_mote_toml_fixture : String :=
 #[test]
 def test_parse_member_mote_fixture : Bool :=
     match Toml.parse member_mote_toml_fixture {
-        ok t =>
+        ok t_owned =>
+            let t : BTreeMap String Toml.Value := Shared.get (Shared.of t_owned) in
             toml_check_member_mote (Toml.table_get "mote" t) &&
             toml_check_member_lib (Toml.table_get "lib" t) &&
             toml_check_member_deps (Toml.table_get "dependencies" t),
@@ -4157,7 +4203,8 @@ def test_parse_member_mote_fixture : Bool :=
 def toml_check_member_mote (found : Option Toml.Value) : Bool :=
     match found {
         some v => match v {
-            table sub =>
+            table sub_owned =>
+                let sub : BTreeMap String Toml.Value := Shared.get (Shared.of sub_owned) in
                 toml_table_lookup_eq "name" sub (string "lang") &&
                 toml_table_lookup_eq "version" sub (string "0.1.0") &&
                 toml_table_lookup_eq "edition" sub (string "2026"),
@@ -4180,7 +4227,8 @@ def toml_check_member_lib (found : Option Toml.Value) : Bool :=
 def toml_check_member_deps (found : Option Toml.Value) : Bool :=
     match found {
         some v => match v {
-            table deps =>
+            table deps_owned =>
+                let deps : BTreeMap String Toml.Value := Shared.get (Shared.of deps_owned) in
                 toml_check_dep_path (Toml.table_get "init" deps) "../init" &&
                 toml_check_dep_path (Toml.table_get "std" deps) "../std",
             _ => false
@@ -4200,7 +4248,8 @@ def toml_check_dep_path (found : Option Toml.Value) (expected : String) : Bool :
 #[test]
 def test_roundtrip_member_mote_fixture : Bool :=
     match Toml.parse member_mote_toml_fixture {
-        ok t =>
+        ok t_owned =>
+            let t : BTreeMap String Toml.Value := Shared.get (Shared.of t_owned) in
             match Toml.parse (Toml.to_string t) {
                 ok t2 => Toml.table_beq t t2,
                 err _ => false
@@ -4226,7 +4275,8 @@ def test_parse_cargo_workspace_fixture : Bool :=
 
 def toml_check_workspace_table (v : Toml.Value) : Bool :=
     match v {
-        table ws =>
+        table ws_owned =>
+            let ws : BTreeMap String Toml.Value := Shared.get (Shared.of ws_owned) in
             toml_table_lookup_eq "members" ws (array [string "core", string "cli", string "wasm"]) &&
             toml_check_workspace_package (Toml.table_get "package" ws),
         _ => false
@@ -4235,7 +4285,8 @@ def toml_check_workspace_table (v : Toml.Value) : Bool :=
 def toml_check_workspace_package (found : Option Toml.Value) : Bool :=
     match found {
         some v => match v {
-            table pkg =>
+            table pkg_owned =>
+                let pkg : BTreeMap String Toml.Value := Shared.get (Shared.of pkg_owned) in
                 toml_table_lookup_eq "version" pkg (string "0.1.2") &&
                 toml_table_lookup_eq "edition" pkg (string "2024") &&
                 toml_table_lookup_eq "license" pkg (string "ASL2"),
@@ -4346,7 +4397,8 @@ def test_serialize_multibyte_passthrough : Bool :=
 #[test]
 def test_roundtrip_mote_fixture : Bool :=
     match Toml.parse mote_toml_fixture {
-        ok t1 =>
+        ok t1_owned =>
+            let t1 : BTreeMap String Toml.Value := Shared.get (Shared.of t1_owned) in
             match Toml.parse (Toml.to_string t1) {
                 ok t2 => Toml.table_beq t1 t2,
                 err _ => false
@@ -4357,7 +4409,8 @@ def test_roundtrip_mote_fixture : Bool :=
 #[test]
 def test_roundtrip_cargo_workspace_fixture : Bool :=
     match Toml.parse cargo_workspace_toml_fixture {
-        ok t1 =>
+        ok t1_owned =>
+            let t1 : BTreeMap String Toml.Value := Shared.get (Shared.of t1_owned) in
             match Toml.parse (Toml.to_string t1) {
                 ok t2 => Toml.table_beq t1 t2,
                 err _ => false
@@ -4386,7 +4439,9 @@ def test_round_trip_lockfile_shape : Bool :=
 #[partial]
 def toml_round_trips_to_same_names (t : BTreeMap String Toml.Value) : Bool :=
     match Toml.parse (Toml.to_string t) {
-        ok t2 => toml_elem_keys t2 == ["name", "source", "name", "source"] && toml_mote_names t2 == ["http", "json"],
+        ok t2_owned =>
+            let t2 : BTreeMap String Toml.Value := Shared.get (Shared.of t2_owned) in
+            toml_elem_keys t2 == ["name", "source", "name", "source"] && toml_mote_names t2 == ["http", "json"],
         err _ => false
     }
 
@@ -4428,7 +4483,8 @@ def test_round_trip_float_document : Bool :=
     match Toml.parse "a = 1.5\nb = inf\nc = -inf\n" {
         ok t =>
             match Toml.parse (Toml.to_string t) {
-                ok t2 =>
+                ok t2_owned =>
+                    let t2 : BTreeMap String Toml.Value := Shared.get (Shared.of t2_owned) in
                     toml_table_lookup_eq "a" t2 (float 1.5f64)
                     && toml_table_lookup_eq "b" t2 (float (1.0f64 / 0.0f64))
                     && toml_table_lookup_eq "c" t2 (float (0.0f64 - (1.0f64 / 0.0f64))),
@@ -4443,7 +4499,8 @@ def test_round_trip_datetime : Bool :=
     match Toml.parse "odt = 1979-05-27T07:32:00Z\nld = 1979-05-27\nlt = 07:32:00\n" {
         ok t =>
             match Toml.parse (Toml.to_string t) {
-                ok t2 =>
+                ok t2_owned =>
+                    let t2 : BTreeMap String Toml.Value := Shared.get (Shared.of t2_owned) in
                     toml_table_lookup_eq "odt" t2 (datetime "1979-05-27T07:32:00Z")
                     && toml_table_lookup_eq "ld" t2 (datetime "1979-05-27")
                     && toml_table_lookup_eq "lt" t2 (datetime "07:32:00"),
@@ -4494,7 +4551,8 @@ def test_round_trip_nested_array : Bool :=
 #[test]
 def test_round_trip_dotted_key : Bool :=
     match Toml.parse "a.b = 1\n" {
-        ok t =>
+        ok t_owned =>
+            let t : BTreeMap String Toml.Value := Shared.get (Shared.of t_owned) in
             match Toml.parse (Toml.to_string t) {
                 ok t2 => Toml.table_beq t t2,
                 err _ => false,
@@ -4550,7 +4608,9 @@ def test_parse_single_line_array_trailing_comma : Bool :=
 #[test]
 def test_newline_still_separates_plain_values : Bool :=
     match Toml.parse "a = 1\nb = 2" {
-        ok t => toml_table_lookup_eq "a" t (integer 1) && toml_table_lookup_eq "b" t (integer 2),
+        ok t_owned =>
+            let t : BTreeMap String Toml.Value := Shared.get (Shared.of t_owned) in
+            toml_table_lookup_eq "a" t (integer 1) && toml_table_lookup_eq "b" t (integer 2),
         err _ => false
     }
 
