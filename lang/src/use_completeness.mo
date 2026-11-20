@@ -399,12 +399,24 @@ def reexport_owner_of (name : NamePath) (decls : List Decl) : Option ModulePath 
 
 def select_reexport (world : List (Pair ModulePath (List Decl))) (path : ModulePath)
     (name : NamePath) (m : ModuleMap Selection) : ModuleMap Selection :=
-    match world_decls_of world path {
+    select_reexport_chain world path name m 16
+
+/// Follow a re-export through every hop to the declaring module: a mote's
+/// facade `pub use other_mote {X}` names `other_mote`, whose own lib.mo may
+/// re-export `X` again from `other_mote::x` (forge gap G12). Each hop's
+/// module is allowed `name`. `depth` bounds a re-export cycle.
+#[terminating]
+def select_reexport_chain (world : List (Pair ModulePath (List Decl))) (path : ModulePath)
+    (name : NamePath) (m : ModuleMap Selection) (depth : I64) : ModuleMap Selection :=
+    if I64.lt depth 1
+    then m
+    else match world_decls_of world path {
         Option.none => m,
         Option.some decls =>
             match reexport_owner_of name decls {
                 Option.none => m,
-                Option.some owner => sel_map_add_allowed owner name m,
+                Option.some owner =>
+                    select_reexport_chain world owner name (sel_map_add_allowed owner name m) (depth - 1),
             },
     }
 
@@ -1933,6 +1945,26 @@ def test_pub_use_reexports_are_ambient : Bool :=
             (List.is_empty
                 (probe_errors [Pair.pair widgets_path list_src] consumer_path
                     "def use_it : I64 := List.length")))
+
+/// A re-export of ANOTHER mote's re-export reaches consumers (forge gap
+/// G12): `app` re-exports `math {Vec3}`, and `math`'s lib re-exports it from
+/// `math::vec`, which declares it. One hop used to stop at `math`. The
+/// control: naming a module that re-exports nothing still fails.
+#[test]
+def test_chained_pub_use_reaches_the_declaring_module : Bool :=
+    let vec_path : ModulePath := ModulePath.mk [Identifier.id "math", Identifier.id "vec"] in
+    let math_path : ModulePath := ModulePath.mk [Identifier.id "math"] in
+    let app_path : ModulePath := ModulePath.mk [Identifier.id "app"] in
+    let world : List (Pair ModulePath String) := [
+        Pair.pair vec_path "pub def Vec3 : I64 := 3\n",
+        Pair.pair math_path "pub use math::vec {Vec3}\n",
+        Pair.pair app_path "pub use math {Vec3}\n",
+    ] in
+    Bool.and
+        (List.is_empty (probe_errors world consumer_path "use app {Vec3}\ndef use_it : I64 := Vec3"))
+        (Bool.not
+            (List.is_empty
+                (probe_errors world consumer_path "use widgets {Vec3}\ndef use_it : I64 := Vec3")))
 
 /// `open T {n}` makes `n` bare without a `use` line, and an unfiltered
 /// `open T` silences the file.
