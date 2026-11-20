@@ -7703,6 +7703,27 @@ def test_affine_check_accepts_a_single_use : IO Bool := do {
     return (I64.beq (List.length affine) 0)
 }
 
+/// A do-bind binder's WRITTEN type decides its `Copy`-ness (forge gap G3).
+/// `get`'s declared payload is the bare `A`, so without the annotation the
+/// binder is a type variable and two uses are an error (the control). With
+/// `let v : T <- get t`, `Copy T` licenses them.
+#[test]
+def test_affine_check_honours_a_typed_do_bind : IO Bool := do {
+    let prelude : String :=
+        "type Pair (A : Type) (B : Type) { pair (l : A) (r : B) }\n"
+        ++ "class Copy A {\n    def copy : A -> Pair A A\n}\n"
+        ++ "type IO A { io (a : A) }\ntype T { mk }\n"
+        ++ "instance Copy T {\n    def copy (x : T) : Pair T T := Pair.pair x x\n}\n"
+        ++ "def get (x : A) : IO A := IO.io x\n"
+        ++ "def both (a : T) (b : T) : IO T := IO.io a\n";
+    let typed : String := prelude ++ "def run (t : T) : IO T := do { let v : T <- get t; both v v }";
+    let untyped : String := prelude ++ "def run (t : T) : IO T := do { let v <- get t; both v v }";
+    let typed_diags : List String <- check_affine_diags_of_source typed "probe";
+    let untyped_diags : List String <- check_affine_diags_of_source untyped "probe";
+    return (Bool.not (diags_contain "is used 2 times but is affine" typed_diags)
+        && diags_contain "is used 2 times but is affine" untyped_diags)
+}
+
 /// An `instance`-bearing module synthesizes `__Dict_*` value defs (and the
 /// promoted method defs) into the checked decl list -- promotion is in
 /// `check_affine_diags_of_source` for exactly that reason, so this tests

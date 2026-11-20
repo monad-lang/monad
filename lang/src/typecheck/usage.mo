@@ -1889,15 +1889,19 @@ def attribute_binder_types_go (s : Scope) (us : List BinderUse) (acc : List Bind
 def attribute_one (s : Scope) (u : BinderUse) : BinderUse :=
     match BinderUse.kind u {
         BinderKind.bk_lam =>
-            // A do-bind binder (`let c <- Cell.new 1`) has a hole for its
-            // written type. Recover it from the initializer's declared
-            // `IO` payload, or every linear/proof rule fails open on it.
+            // An unannotated do-bind binder (`let c <- Cell.new 1`) has a
+            // hole for its type. Recover it from the initializer's declared
+            // `IO` payload, or every linear/proof rule fails open on it. A
+            // written type wins: for `let a : Assets <- Ref.get r` the
+            // payload is the bare `A`, which would hide `Copy Assets`.
             match BinderUse.init u {
                 Option.some m =>
-                    match init_payload_type s m {
+                    if type_unwritten u.typ
+                    then match init_payload_type s m {
                         Option.some t => { u with typ := t },
                         Option.none => u,
-                    },
+                    }
+                    else u,
                 Option.none => u,
             },
         BinderKind.bk_match =>
@@ -1907,6 +1911,12 @@ def attribute_one (s : Scope) (u : BinderUse) : BinderUse :=
                 Option.none => u,
             },
     }
+
+/// The binder's type was not written (`Term.hole`, possibly located).
+def type_unwritten (t : Term) : Bool := match term_peel t {
+    Term.hole => true,
+    _ => false,
+}
 
 def param_type_of (p : Param) : Term := match p {
     Param.mk _name type_ _mult _default _attrs => type_,
