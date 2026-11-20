@@ -1318,6 +1318,16 @@ int64_t monad_f32_gt(int64_t a, int64_t b) { return monad_f32_unbits(a) > monad_
    identity would leak precision the F32 never had. */
 int64_t monad_f64_to_f32(int64_t a) { return monad_f32_bits(monad_f32_unbits(a)); }
 int64_t monad_f32_to_f64(int64_t a) { return monad_f32_bits(monad_f32_unbits(a)); }
+/* I64 <-> F64. The float -> int direction truncates and saturates (NaN is
+   0), which is Rust's `as` and keeps the C cast away from UB. */
+int64_t monad_i64_to_f64(int64_t a) { return monad_f64_bits((double)a); }
+int64_t monad_f64_to_i64(int64_t a) {
+    double d = monad_f64_unbits(a);
+    if (d != d) return 0;
+    if (d >= 9223372036854775808.0) return INT64_MAX;
+    if (d <= -9223372036854775808.0) return INT64_MIN;
+    return (int64_t)d;
+}
 
 /* Signed-width integer arithmetic: the C spelling of the reference's
    `mask_to_suffix(op(mask_to_suffix(a), mask_to_suffix(b)))` -- C's

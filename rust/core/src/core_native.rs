@@ -146,6 +146,8 @@ const PURE_NATIVES: &[&str] = &[
   "f64_to_string",
   "f64_to_f32",
   "f32_to_f64",
+  "i64_to_f64",
+  "f64_to_i64",
   // The decimal -> bit-pattern conversion the compiler uses to lower a
   // float literal (`codegen/emit.mo`). Pure: a function of its own
   // argument text, no IO and no clock, so it is foldable like the rest.
@@ -355,6 +357,9 @@ pub fn exec_native(
     // F64 <-> F32 (`init/src/number.mo`); see `float_convert`.
     "f64_to_f32" => float_convert(args, NumSuffix::F32),
     "f32_to_f64" => float_convert(args, NumSuffix::F64),
+    // I64 <-> F64 (`init/src/number.mo`); see `int_to_float`/`float_to_int`.
+    "i64_to_f64" => int_to_float(args),
+    "f64_to_i64" => float_to_int(args),
     "f64_to_string" => float_to_string(args, NumSuffix::F64),
     // `f64_of_string` is the one F64 native with no F32 twin and no
     // `F64`-typed result: it is the decimal -> bit-pattern conversion the
@@ -815,6 +820,31 @@ fn float_convert(args: &[Value], suffix: NumSuffix) -> Result<Value, CoreEvalErr
   // payload that a literal left unrounded (runtime_core.c does the same).
   let v = extract_float(arg)? as f32 as f64;
   Ok(Value::Lit(IrLit::Float(crate::term::F64Wrap(v), suffix)))
+}
+
+fn int_to_float(args: &[Value]) -> Result<Value, CoreEvalError> {
+  let Some(arg) = args.first() else {
+    return Err(CoreEvalError::NativeArgError(
+      "i64_to_f64 needs 1 arg".into(),
+    ));
+  };
+  let v = extract_int(arg)? as f64;
+  Ok(Value::Lit(IrLit::Float(
+    crate::term::F64Wrap(v),
+    NumSuffix::F64,
+  )))
+}
+
+/// Truncates toward zero and saturates, NaN to 0 (Rust's `as`), the same
+/// as `monad_f64_to_i64` in runtime_core.c.
+fn float_to_int(args: &[Value]) -> Result<Value, CoreEvalError> {
+  let Some(arg) = args.first() else {
+    return Err(CoreEvalError::NativeArgError(
+      "f64_to_i64 needs 1 arg".into(),
+    ));
+  };
+  let v = extract_float(arg)? as i64;
+  Ok(Value::Lit(IrLit::Num(v, NumSuffix::I64)))
 }
 
 fn float_cmp(

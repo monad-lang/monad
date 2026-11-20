@@ -635,6 +635,15 @@ pub def F64.to_f32 (a : F64) : F32
 #[native f32_to_f64]
 pub def F32.to_f64 (a : F32) : F64
 
+/// The nearest `F64` (exact for magnitudes up to 2^53).
+#[native i64_to_f64]
+pub def I64.to_f64 (a : I64) : F64
+
+/// Truncate toward zero. NaN is 0; values beyond I64's range saturate to
+/// its bounds.
+#[native f64_to_i64]
+pub def F64.to_i64 (a : F64) : I64
+
 pub instance Add F32 {
     def add (a b : F32) : F32 := F32.add a b
 }
