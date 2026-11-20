@@ -15,6 +15,8 @@ pub use lib::model {
 
 pub use lib::docs {Trellis.render_docs}
 
+pub use lib::signature {Trellis.sig_targets, Trellis.sig_view}
+
 pub use lib::fuzzy {Fuzzy.Hit, Fuzzy.score, Fuzzy.search, Fuzzy.motes}
 
 pub use lib::project {
@@ -22,11 +24,12 @@ pub use lib::project {
     Trellis.Level.slug, Trellis.Level.of_slug, Trellis.Grouping.slug, Trellis.Grouping.of_slug,
     Trellis.Direction.slug, Trellis.Direction.of_slug,
     Trellis.Projection, Trellis.Section, Trellis.Drawn, Trellis.Prepared, Trellis.Prepared.empty,
-    Trellis.prepare, Trellis.cut, Trellis.key_at, Trellis.effective_grouping, Trellis.project,
+    Trellis.prepare, Trellis.cut, Trellis.pack_size, Trellis.key_at, Trellis.effective_grouping, Trellis.project,
     Trellis.neighbours, Trellis.find_decl, Trellis.find_module, Trellis.lift_key,
 }
 
 pub use lib::app {
     Trellis.Model, Trellis.Msg, Trellis.Effect, Trellis.Model.initial, Trellis.update, Trellis.view,
     Trellis.subscriptions, Trellis.program, Trellis.refresh, Trellis.pick, Trellis.selected_key, Trellis.css,
+    Trellis.source_url,
 }

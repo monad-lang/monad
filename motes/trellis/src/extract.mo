@@ -38,21 +38,29 @@ use lang::types {
     Identifier, NamePath, ModulePath, QualifiedName, Term, SortLevel, UseFilter, UseItem,
     show_identifier, show_name_path, module_path_to_string_colon,
 }
+use lang::pretty {show_term}
 use lang::use_completeness {Refs, DeclRefs, decl_refs}
-use trellis_ui::smap {Smap.empty, Smap.insert, Smap.get, Smap.has, Smap.get_str}
+use trellis_ui::smap {Smap.empty, Smap.insert, Smap.get, Smap.has, Smap.get_str, Smap.get_i64}
 use lib::docs {Trellis.SourceDocs}
 use trellis_ui::model {Trellis.ModuleNode, Trellis.DeclNode, Trellis.Edge, Trellis.Graph, Trellis.decl_id}
 
-/// One parsed module, as `load.mo` hands it over. `lines` maps a
-/// declaration's name to its 1-based line; `docs` holds its doc comments
-/// (`Trellis.SourceDocs.empty` when docs are not extracted).
+/// Each declaration's first and last 1-based line, by name.
+pub struct Trellis.Lines {
+    starts : HashMap String I64,
+    ends : HashMap String I64,
+}
+
+pub def Trellis.Lines.empty : Trellis.Lines := { starts := Smap.empty, ends := Smap.empty }
+
+/// One parsed module, as `load.mo` hands it over. `lines` places each
+/// declaration; `docs` holds its doc comments and signatures.
 pub struct Trellis.Source {
     module : String,
     mote : String,
     file : String,
     external : Bool,
     decls : List Decl,
-    lines : HashMap String I64,
+    lines : Trellis.Lines,
     docs : Trellis.SourceDocs,
 }
 
@@ -95,9 +103,15 @@ def ctor_aliases (owner : String) (cs : List InductConstructor) : List String :=
 def method_aliases (owner : String) (ms : List ClassDef) : List String :=
     List.map (fn (m : ClassDef) => String.concat_list [owner, ".", show_identifier m.name]) ms
 
+/// A named instance by its name; an unnamed one (`_`) by its class and
+/// arguments (`instance Show I64`), so two instances in one module do not
+/// share an id.
 def instance_name (ins : Instance) : String :=
     let own : String := show_identifier ins.name in
-    String.concat "instance " (if String.is_empty own then show_name_path ins.cls else own)
+    if String.is_empty own || String.beq own "_"
+    then String.concat "instance " (List.intercalate " " (List.cons (show_name_path ins.cls)
+        (List.map show_term ins.args)))
+    else String.concat "instance " own
 
 #[partial]
 def named_of (d : Decl) : Option Named :=
@@ -408,14 +422,15 @@ pub def Trellis.doc_href (base : String) (mote : String) (module : String) (kind
             else String.concat_list [mote, "/", inner, ".html"] in
         String.concat_list [base, page, "#", kind, ".", name]
 
-def line_of (s : Trellis.Source) (name : String) : I64 :=
-    match Smap.get name s.lines { Option.some l => l, Option.none => 0 }
+def line_of (s : Trellis.Source) (name : String) : I64 := Smap.get_i64 name 0 s.lines.starts
+
+def end_of (s : Trellis.Source) (name : String) : I64 := Smap.get_i64 name (line_of s name) s.lines.ends
 
 def node_of (docs : String) (s : Trellis.Source) (n : Named) : Trellis.DeclNode :=
     { id := Trellis.decl_id s.module n.name, name := n.name, module := s.module, mote := s.mote, kind := n.kind,
-        vis := n.vis, line := line_of s n.name, attrs := n.attrs, sort := n.sort,
+        vis := n.vis, line := line_of s n.name, end_line := end_of s n.name, attrs := n.attrs, sort := n.sort,
         href := Trellis.doc_href docs s.mote s.module n.kind n.name, docs := Smap.get_str n.name "" s.docs.decl_docs,
-        external := s.external }
+        sig := Smap.get_str n.name "" s.docs.decl_sigs, external := s.external }
 
 def nodes_of (docs : String) (p : Parsed) : List Trellis.DeclNode := List.map (node_of docs p.src) p.named
 

@@ -105,6 +105,9 @@ def test_grouping_is_never_finer_than_the_level : Bool :=
 def section_ids (secs : List Trellis.Section) : String :=
     List.intercalate "," (List.map (fn (sec : Trellis.Section) => sec.id) secs)
 
+def section_labels (secs : List Trellis.Section) : String :=
+    List.intercalate "|" (List.map (fn (sec : Trellis.Section) => sec.label) secs)
+
 def section_counts (secs : List Trellis.Section) : List I64 := List.map (fn (sec : Trellis.Section) => sec.count) secs
 
 def capped (level : Trellis.Level) (cap : I64) (section : String) : Trellis.Settings :=
@@ -119,12 +122,23 @@ def test_under_the_cap_draws_without_sections : Bool :=
     }
 
 #[test]
-def test_over_the_cap_sections_decls_by_module : Bool :=
+def test_over_the_cap_packs_small_modules : Bool :=
     // 8 visible decls: infer has check, infer, Ty (3); unify 2; module 1; nat 2.
+    // With a cap of 3 a section packs up to 3: unify and module share one.
     match Trellis.project fixture (capped Trellis.Level.at_decl 3 "") {
         Trellis.Projection.sectioned n secs =>
-            n == 8 && String.beq (section_ids secs)
-                "lang::typecheck::infer#0,lang::typecheck::unify#0,lang::module#0,proofs::nat#0",
+            n == 8 && String.beq (section_ids secs) "+lang::typecheck::infer,+lang::typecheck::unify,+proofs::nat"
+                && String.beq (section_labels secs) "lang::typecheck::infer|lang::typecheck::unify, lang::module|proofs::nat",
+        _ => false,
+    }
+
+#[test]
+def test_a_wide_cap_packs_everything_small_together : Bool :=
+    // Cap 7 (target 7): infer, unify and module fill 6, nat would make 8.
+    match Trellis.project fixture (capped Trellis.Level.at_decl 7 "") {
+        Trellis.Projection.sectioned _ secs =>
+            String.beq (section_ids secs) "+lang::typecheck::infer,+proofs::nat"
+                && String.contains (section_labels secs) "(3 modules)",
         _ => false,
     }
 
@@ -139,11 +153,12 @@ def test_a_group_over_the_cap_splits_into_parts : Bool :=
 
 #[test]
 def test_picking_a_section_draws_only_its_nodes : Bool :=
-    match Trellis.project fixture (capped Trellis.Level.at_decl 3 "lang::typecheck::unify#0") {
+    match Trellis.project fixture (capped Trellis.Level.at_decl 3 "+lang::typecheck::unify") {
         Trellis.Projection.drawn d =>
-            List.length d.spec.nodes == 2 && has_node "lang::typecheck::unify::whnf" d.spec
+            List.length d.spec.nodes == 3 && has_node "lang::typecheck::unify::whnf" d.spec
+                && has_node "lang::module::load" d.spec
                 && edge_weight "lang::typecheck::unify::unify" "lang::typecheck::unify::whnf" d.spec == 1
-                && List.length d.spec.edges == 2 && List.length d.sections == 4,
+                && Bool.not (has_node "lang::typecheck::infer::infer" d.spec) && List.length d.sections == 3,
         _ => false,
     }
 

@@ -24,10 +24,10 @@ contents" to see its declarations.
 | Command | What it does |
 |---|---|
 | `trellis extract <mote>... [-o FILE]` | write the graph file (`-` for stdout) |
-| `trellis serve <mote>... [--port N] [--ui DIR]` | extract once, then serve the UI and the graph |
+| `trellis serve <mote>... [--port N] [--ui DIR]` | extract once, then serve the UI, the graph and `/source?m=<module>` (a graph module's file, looked up by module path) |
 
 Both take `--tests` (include `*_tests.mo` and `tests/`), `--no-docs` (leave
-doc comments out of the graph file), `--docs-base URL` (link every
+doc comments out of the graph file; signatures stay), `--docs-base URL` (link every
 declaration to its docgen page) and `--verbose` (`extract`: list every
 unresolved reference). A mote is a directory with a `mote.toml`
 (`lang`, `motes/oak_ui`) or a workspace member's name (`oak_ui`).
@@ -38,8 +38,8 @@ unresolved reference). A mote is a directory with a `mote.toml`
 |---|---|
 | Loading: each file with the compiler's strict parser, imports through the compiler's own loader (one shared cache) | `src/load.mo` |
 | Nodes, references (`lang::use_completeness::decl_refs`), import-aware resolution | `src/extract.mo` |
-| Doc comments, with docgen's own `///` scan (`DocExtract.extract_source_as`) | `src/docs.mo` |
-| The graph model, `trellis 2` wire format, projection, fuzzy search, the Oak app | [`trellis_ui`](../trellis_ui/README.md) |
+| Doc comments and signatures, with docgen's own scan (`DocExtract.extract_source_as`) | `src/docs.mo` |
+| The graph model, `trellis 3` wire format, projection, fuzzy search, the Oak app | [`trellis_ui`](../trellis_ui/README.md) |
 | The drawing: `Ui.graph` + `Ui.graph_layout` | [`oak_ui`](../oak_ui/README.md) |
 
 A declaration (`def`, `type`, `struct`, `class`, `instance`, `defmacro`) is a

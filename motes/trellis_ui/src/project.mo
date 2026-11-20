@@ -406,34 +406,99 @@ def parent_sections (parent : String) (count : I64) (cap : I64) (parts : I64) (p
             count := sec_min cap (count - part * cap) } in
         parent_sections parent count cap parts (part + 1) (List.cons sec acc)
 
-def sections_of (cap : I64) (ps : Parents) : List Trellis.Section :=
-    Seq.reverse (Seq.fold (fn (acc : List Trellis.Section) (p : String) =>
-        let count : I64 := Smap.get_i64 p 0 ps.counts in
-        parent_sections p count cap ((count + cap - 1) / cap) 0 acc) List.empty (Seq.reverse ps.order))
+/// A section packs small parents together up to this many nodes (never
+/// more than the cap): a view that touches many modules a few decls each
+/// gets a handful of sections, not one per module.
+pub def Trellis.pack_size : I64 := 50
 
-/// The nodes in section `id`: each node's part is its index within its
-/// parent, divided by `cap`.
+/// The sections being built. Consecutive parents of at most `target` nodes
+/// collect in `pending` (reversed) until the next would overflow it; a bigger
+/// parent closes the pack and gets sections of its own.
+struct Packing {
+    secs : List Trellis.Section,
+    packed : HashMap String String,
+    pending : List String,
+    open_count : I64,
+}
+
+/// `a`, `a, b`, or `a … z (k modules)`.
+def pack_label (unit : String) (first : String) (last : String) (k : I64) : String :=
+    if k == 1 then first
+    else if k == 2 then String.concat_list [first, ", ", last]
+    else String.concat_list [first, " \u{2026} ", last, " (", I64.to_string k, " ", unit, ")"]
+
+def last_of (xs : List String) : String := match xs { List.cons x _ => x, List.empty => "" }
+
+def first_of (xs : List String) : String := last_of (List.reverse xs)
+
+/// Close the open pack into one section; its parents map to its id.
+def close_pack (unit : String) (st : Packing) : Packing :=
+    if List.is_empty st.pending then st
+    else
+        let first : String := first_of st.pending in
+        let id : String := String.concat "+" first in
+        let sec : Trellis.Section := { id := id,
+            label := pack_label unit first (last_of st.pending) (List.length st.pending), count := st.open_count } in
+        { secs := List.cons sec st.secs,
+            packed := Seq.fold (fn (m : HashMap String String) (p : String) => Smap.insert p id m) st.packed st.pending,
+            pending := List.empty, open_count := 0 }
+
+def pack_step (unit : String) (cap : I64) (target : I64) (counts : HashMap String I64) (st : Packing)
+    (p : String) : Packing :=
+    let count : I64 := Smap.get_i64 p 0 counts in
+    if count > target
+    then
+        let closed : Packing := close_pack unit st in
+        { closed with secs := parent_sections p count cap ((count + cap - 1) / cap) 0 closed.secs }
+    else if st.open_count + count > target
+    then
+        let closed : Packing := close_pack unit st in
+        { closed with pending := [p], open_count := count }
+    else { st with pending := List.cons p st.pending, open_count := st.open_count + count }
+
+/// The sections, and each packed parent's section id.
+struct Cutting {
+    sections : List Trellis.Section,
+    packed : HashMap String String,
+}
+
+def sections_of (unit : String) (cap : I64) (ps : Parents) : Cutting :=
+    let st0 : Packing := { secs := List.empty, packed := Smap.empty, pending := List.empty, open_count := 0 } in
+    let target : I64 := sec_min cap Trellis.pack_size in
+    let done : Packing := close_pack unit (Seq.fold (pack_step unit cap target ps.counts) st0 (Seq.reverse ps.order)) in
+    { sections := Seq.reverse done.secs, packed := done.packed }
+
+/// The nodes in section `id`: a packed parent's nodes all belong to its
+/// pack; a big parent's node's part is its index within the parent,
+/// divided by `cap`.
 struct Picking {
     seen : HashMap String I64,
     kept : List Ui.GraphNode,
 }
 
-def pick_step (level : Trellis.Level) (nodes : HashMap String NodeInfo) (cap : I64) (id : String) (st : Picking)
-    (n : Ui.GraphNode) : Picking :=
+def pick_step (level : Trellis.Level) (nodes : HashMap String NodeInfo) (packed : HashMap String String) (cap : I64)
+    (id : String) (st : Picking) (n : Ui.GraphNode) : Picking :=
     match Smap.get n.id nodes {
         Option.none => st,
         Option.some info =>
             let p : String := parent_key level info in
-            let i : I64 := Smap.get_i64 p 0 st.seen in
-            let mine : Bool := String.beq (section_id p (i / cap)) id in
-            { seen := Smap.insert p (i + 1) st.seen, kept := if mine then List.cons n st.kept else st.kept },
+            match Smap.get p packed {
+                Option.some pid => if String.beq pid id then { st with kept := List.cons n st.kept } else st,
+                Option.none =>
+                    let i : I64 := Smap.get_i64 p 0 st.seen in
+                    let mine : Bool := String.beq (section_id p (i / cap)) id in
+                    { seen := Smap.insert p (i + 1) st.seen, kept := if mine then List.cons n st.kept else st.kept },
+            },
     }
 
-def nodes_in_section (level : Trellis.Level) (nodes : HashMap String NodeInfo) (cap : I64) (id : String)
-    (ns : List Ui.GraphNode) : List Ui.GraphNode :=
+def nodes_in_section (level : Trellis.Level) (nodes : HashMap String NodeInfo) (packed : HashMap String String)
+    (cap : I64) (id : String) (ns : List Ui.GraphNode) : List Ui.GraphNode :=
     let st0 : Picking := { seen := Smap.empty, kept := List.empty } in
-    let done : Picking := Seq.fold (pick_step level nodes cap id) st0 ns in
+    let done : Picking := Seq.fold (pick_step level nodes packed cap id) st0 ns in
     Seq.reverse done.kept
+
+def unit_of (level : Trellis.Level) : String :=
+    match level { Trellis.Level.at_module => "motes", _ => "modules" }
 
 def has_section (id : String) (secs : List Trellis.Section) : Bool :=
     List.any (fn (sec : Trellis.Section) => String.beq sec.id id) secs
@@ -502,11 +567,13 @@ pub def Trellis.cut (p : Trellis.Prepared) (cap0 : I64) (section : String) : Tre
         if shown <= cap then drawn_view (spec_for p.grouping p.keys p.agg p.nodes) p.total List.empty ""
         else
             let ps0 : Parents := { counts := Smap.empty, order := List.empty } in
-            let sections : List Trellis.Section :=
-                sections_of cap (Seq.fold (count_parent p.level p.keys.nodes) ps0 p.nodes) in
+            let cutting : Cutting :=
+                sections_of (unit_of p.level) cap (Seq.fold (count_parent p.level p.keys.nodes) ps0 p.nodes) in
+            let sections : List Trellis.Section := cutting.sections in
             if has_section section sections
             then
-                let picked : List Ui.GraphNode := nodes_in_section p.level p.keys.nodes cap section p.nodes in
+                let picked : List Ui.GraphNode :=
+                    nodes_in_section p.level p.keys.nodes cutting.packed cap section p.nodes in
                 drawn_view (spec_for p.grouping p.keys p.agg picked) p.total sections section
             else Trellis.Projection.sectioned shown sections
 

@@ -39,6 +39,11 @@ workspace = true
 [dependencies.markdown]
 workspace = true
 
+# Signatures and source are highlighted with the formatter's tokenizer
+# (`fmt::highlight`: pure, no compiler dependency).
+[dependencies.fmt]
+workspace = true
+
 [dependencies.oak]
 workspace = true
 

@@ -4,7 +4,8 @@
 //
 // Built from `motes/trellis_ui` (`--bin trellis_ui`). Drives the REAL
 // `web_runtime.js` and generated `web.js` over `stub_dom.mjs`, with a stub
-// `fetch` serving a small `trellis 2` graph, and checks end to end:
+// `fetch` serving a small `trellis 3` graph (and `/source`), and checks end
+// to end:
 //   * the first frame starts the fetch, the poll timer delivers the body,
 //     and the module-level graph draws;
 //   * the drawing is SVG: `<svg>` and everything below it is created in the
@@ -16,9 +17,12 @@
 //     namespace (`dom_in_svg` on the parent);
 //   * the picked declaration's doc comment (markdown in the graph file) is
 //     rendered as real elements in the detail panel;
+//   * its signature links the type it names, and its source lines are
+//     fetched from `source?m=<module>` and shown;
 //   * the drawing is fitted (a nested `<svg viewBox>`);
-//   * a view over the node cap shows the section browser, and opening a
-//     section draws just that section.
+//   * a view over the node cap shows the section browser (small modules
+//     packed into one section), and opening a section draws just that
+//     section.
 
 import { readFile } from 'node:fs/promises';
 import { imports } from '../web.js';
@@ -33,10 +37,11 @@ if (!path) {
 
 const SVG = 'http://www.w3.org/2000/svg';
 // 130 declarations in demo::big: at the declaration level with a cap of
-// 100 the view (134 nodes) is split into sections.
-const big = Array.from({ length: 130 }, (_, i) => `D\t2\tbig_${i}\tdef\tpub\t${i + 1}\t\t\t\t`);
+// 100 the view (135 nodes) is split into sections: infer and unify packed
+// together, big in two parts.
+const big = Array.from({ length: 130 }, (_, i) => `D\t2\tbig_${i}\tdef\tpub\t${i + 1}\t\t\t\t\t\t${i + 1}`);
 const graph = [
-  'trellis\t2',
+  'trellis\t3',
   'R\tdemo',
   'M\tdemo::infer\tdemo\tdemo/src/infer.mo\t0\tThe checker.',
   'M\tdemo::unify\tdemo\tdemo/src/unify.mo\t0\t',
@@ -44,20 +49,30 @@ const graph = [
   'D\t0\tcheck\tdef\tpub\t3\t\t\t\t',
   'D\t0\tinfer\tdef\tpub\t9\t\t\t\t',
   'D\t1\tunify\tdef\tpub\t4\t\t\t\t',
-  'D\t1\twhnf\tdef\tpub\t20\t\t\t\tWeak head normal form of `t`.\\n\\nNever *unfolds* a let.',
+  'D\t1\twhnf\tdef\tpub\t20\t\t\t\tWeak head normal form of `t`.\\n\\nNever *unfolds* a let.'
+    + '\tpub def whnf (t : Term) : Term :=\t21',
+  'D\t1\tTerm\ttype\tpub\t2\t\t\t\t\tpub type Term { var }\t2',
   ...big,
   'E\t0\t1\tb',
   'E\t1\t2\tb',
   'E\t2\t3\tb',
+  'E\t3\t4\ts',
   'S\t3\t3\t0',
 ].join('\n');
 
+// demo::unify's file: whnf on lines 20-21.
+const unifySource = Array.from({ length: 19 }, (_, i) => `// line ${i + 1}`)
+  .concat(['pub def whnf (t : Term) : Term :=', '    t', 'pub def unify (a : Term) : Bool := true'])
+  .join('\n');
 let fetched = null;
+const fetchedAll = [];
 globalThis.fetch = (url) => {
-  fetched = url;
-  const bytes = new TextEncoder().encode(graph);
+  fetched = fetched || url;
+  fetchedAll.push(url);
+  const known = url === 'graph.tsv' || url === 'source?m=demo::unify';
+  const bytes = new TextEncoder().encode(url === 'graph.tsv' ? graph : (known ? unifySource : 'Not Found'));
   return Promise.resolve({
-    status: 200,
+    status: known ? 200 : 404,
     headers: { forEach() {} },
     arrayBuffer: () => Promise.resolve(bytes.buffer),
   });
@@ -154,7 +169,19 @@ if (code.length !== 1 || text(code[0]) !== 't' || em.length !== 1 || paras.lengt
   fail(`doc comment rendered as ${JSON.stringify(text(doc))} (${paras.length} p, ${code.length} code, ${em.length} em)`);
 }
 
-// 6. Over the cap: declarations, no focus, cap 100 -> the section browser.
+// 6. The signature links Term; the source lines arrive from /source.
+const ref = one((n) => hasClass(n, 'trellis-sig__ref'), 'a linked name in the signature');
+if (text(ref) !== 'Term' || ref.attrs.title !== 'demo::unify::Term') {
+  fail(`signature link ${JSON.stringify(text(ref))} -> ${ref.attrs.title}`);
+}
+await settle();
+if (!fetchedAll.includes('source?m=demo::unify')) fail(`source not fetched: ${JSON.stringify(fetchedAll)}`);
+const lines = all((n) => hasClass(n, 'trellis-source__line')).map(text);
+if (lines.length !== 2 || !lines[0].includes('pub def whnf') || lines[1].trim() !== 't') {
+  fail(`source lines: ${JSON.stringify(lines)}`);
+}
+
+// 7. Over the cap: declarations, no focus, cap 100 -> the section browser.
 const clear = all((n) => n.tagName === 'BUTTON' && text(n) === 'Clear focus')[0];
 if (!clear) fail('no Clear focus button after the pick');
 clear.fire('click');
@@ -165,7 +192,8 @@ cap.fire('change');
 tick();
 const cards = all((n) => hasClass(n, 'trellis-section'));
 const bigCards = cards.filter((n) => text(n).includes('demo::big'));
-if (cards.length !== 4 || bigCards.length !== 2 || nodes().length !== 0) {
+if (cards.length !== 3 || bigCards.length !== 2 || nodes().length !== 0
+    || !cards.some((n) => text(n).includes('demo::infer, demo::unify'))) {
   fail(`section browser: ${cards.length} sections (${bigCards.length} for demo::big), ${nodes().length} nodes drawn`);
 }
 bigCards[1].fire('click');
@@ -174,4 +202,4 @@ if (nodes().length !== 30) fail(`opening demo::big (2/2) should draw 30 nodes, d
 one((n) => hasClass(n, 'trellis-sectionbar'), 'the section bar');
 
 console.log(`ok: ${path} -> loads graph.tsv, draws fitted SVG in its namespace, fuzzy-picks a declaration, `
-  + 'renders its docs, and browses an oversized view by section');
+  + 'renders its docs, links its signature, shows its fetched source, and browses an oversized view by section');

@@ -3,22 +3,18 @@
 /// folded into their owners, and unresolved references counted.
 
 use std::list {List.any, List.filter}
-use std::map {HashMap}
 use lang::module {try_parse_decls_strict}
 use lang::types {Decl}
-use trellis_ui::smap {Smap.empty}
 use trellis_ui::model {Trellis.Graph, Trellis.DeclNode, Trellis.Edge, Trellis.ModuleNode}
-use lib::extract {Trellis.Source, Trellis.Extracted, Trellis.extract, Trellis.doc_href}
+use lib::extract {Trellis.Source, Trellis.Extracted, Trellis.extract, Trellis.doc_href, Trellis.Lines.empty}
 use lib::load {Trellis.module_of_file}
 use lib::docs {Trellis.docs_of_source}
-
-def no_lines : HashMap String I64 := Smap.empty
 
 def source (module : String) (mote : String) (external : Bool) (text : String) : Trellis.Source :=
     let decls : List Decl := match try_parse_decls_strict text Option.none { Result.ok ds => ds,
         Result.err _ => List.empty } in
-    { module := module, mote := mote, file := "", external := external, decls := decls, lines := no_lines,
-        docs := Trellis.docs_of_source module "" text }
+    { module := module, mote := mote, file := "", external := external, decls := decls,
+        lines := Trellis.Lines.empty, docs := Trellis.docs_of_source true module "" text }
 
 def util : Trellis.Source := source "demo::util" "demo" false r#"
 pub type Shape { circle (r : I64), square (s : I64) }
@@ -143,6 +139,12 @@ pub def bare (x : I64) : I64 := x
 
 /// A point.
 pub struct Point { x : I64 }
+
+pub struct Opts { width : I64 := 80 }
+
+#[inline]
+pub def pad (s : String)
+    (n : I64) : String := s
 "#
 
 def doc_graph : Trellis.Graph :=
@@ -164,9 +166,44 @@ def test_undocumented_decl_has_no_docs : Bool := String.is_empty (docs_of "bare"
 #[test]
 def test_struct_docs : Bool := String.beq (docs_of "Point") "A point."
 
+def sig_of (name : String) : String :=
+    match List.filter (fn (d : Trellis.DeclNode) => String.beq d.name name) (decls_of doc_graph) {
+        List.cons d _ => d.sig,
+        List.empty => "<missing>",
+    }
+
+#[test]
+def test_signature_stops_at_the_body : Bool := String.beq (sig_of "bump") "pub def bump (x : I64) : I64"
+
+#[test]
+def test_signature_spans_lines_and_drops_attributes : Bool :=
+    String.beq (sig_of "pad") "pub def pad (s : String)\n(n : I64) : String"
+
+#[test]
+def test_a_field_default_does_not_end_the_signature : Bool :=
+    String.beq (sig_of "Opts") "pub struct Opts { width : I64 := 80 }"
+
+#[test]
+def test_struct_signature_is_whole : Bool := String.beq (sig_of "Point") "pub struct Point { x : I64 }"
+
 #[test]
 def test_module_docs : Bool :=
     match (modules_of doc_graph) {
         List.cons m _ => String.contains m.docs "The demo module." && String.contains m.docs "Second line.",
         List.empty => false,
     }
+
+def instances : Trellis.Source := source "demo::inst" "demo" false r#"
+class Sized A { def size (a : A) : I64 }
+instance Sized I64 { def size a := a }
+instance Sized Bool { def size b := 1 }
+"#
+
+#[test]
+def test_unnamed_instances_get_distinct_ids : Bool :=
+    let e : Trellis.Extracted := Trellis.extract ["demo"] "" [instances] in
+    let g : Trellis.Graph := e.graph in
+    let ids : List String := List.map (fn (d : Trellis.DeclNode) => d.id)
+        (List.filter (fn (d : Trellis.DeclNode) => String.beq d.kind "instance") (decls_of g)) in
+    List.length ids == 2 && List.any (fn (i : String) => String.beq i "demo::inst::instance Sized I64") ids
+        && List.any (fn (i : String) => String.beq i "demo::inst::instance Sized Bool") ids

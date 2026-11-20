@@ -3,11 +3,11 @@
 //   trellis extract <mote>... [-o FILE] [--tests] [--no-docs] [--docs-base URL] [--verbose]
 //   trellis serve <mote>... [--port N] [--host H] [--ui DIR] [--tests] [--no-docs] [--docs-base URL]
 //
-// `extract` writes the graph file (`trellis 2`, see trellis_ui's model.mo);
+// `extract` writes the graph file (`trellis 3`, see trellis_ui's model.mo);
 // `serve` extracts once and serves the browser UI with the graph. The UI is
 // built by scripts/build-trellis-ui.sh into target-monad/trellis-ui.
 
-use std::io {IO.println, IO.write_stderr, IO.write_file, IO.file_exists, IO.tcp_listen_on, IO.tcp_accept}
+use std::io {IO.println, IO.write_stderr, IO.write_file, IO.file_exists, IO.read_file, IO.tcp_listen_on, IO.tcp_accept}
 use std::path {Path, Path.of, PathError, PathError.to_string}
 use std::stream {FdStream, FdStream.set_timeout}
 use std::concurrent::fiber {forkIO}
@@ -22,8 +22,12 @@ use moon::handler {Handler.try}
 use moon::static_files {StaticConfig, StaticConfig.default, Static.handler}
 use moon::static_cli {StaticCli.parse_port}
 use oak_ui::theme {Ui.Theme.light, Ui.Theme.dark}
-use oak_ui::css {Ui.css_all, Ui.stylesheet_auto}
-use trellis_ui::model {Trellis.Graph, Trellis.Graph.encode}
+use oak_ui::css {Ui.css_reset, Ui.stylesheet_auto}
+use std::map {HashMap}
+use http::uri {Uri.parse_query}
+use trellis_ui::model {Trellis.Graph, Trellis.Graph.encode, Trellis.ModuleNode}
+use trellis_ui::smap {Smap.empty, Smap.insert, Smap.get}
+use trellis_ui::seq {Seq.fold}
 use trellis_ui::app {Trellis.css}
 use lib::extract {Trellis.Extracted, Trellis.extract}
 use lib::load {Trellis.Target, Trellis.Loaded, Trellis.find_target, Trellis.load}
@@ -32,7 +36,7 @@ use lib::load {Trellis.Target, Trellis.Loaded, Trellis.find_target, Trellis.load
 
 def common_args : List Cli.ArgSpec :=
     [Cli.flag "tests" "t" "also extract *_tests.mo files and tests/ directories",
-        Cli.flag "no-docs" "n" "leave out doc comments (a smaller graph file)",
+        Cli.flag "no-docs" "n" "leave out doc comments (signatures stay; a smaller graph file)",
         Cli.option_default "docs-base" "d" "URL" "" "link each declaration to its docgen page under URL",
         Cli.positional_multi "motes"
             "the motes to extract (a directory with a mote.toml, or a workspace member's name)"]
@@ -196,36 +200,83 @@ def idle_ms : I64 := 15000
 
 def write_ms : I64 := 30000
 
-def stylesheet : String := String.concat (Ui.stylesheet_auto Ui.Theme.light Ui.Theme.dark) Trellis.css
+def stylesheet : String := String.concat_list [Ui.stylesheet_auto Ui.Theme.light Ui.Theme.dark, Ui.css_reset, Trellis.css]
 
 def typed (content_type : String) (body : String) : IO (Result String Response) :=
     IO.pure (Result.ok (Response.with_header "Content-Type" content_type (Response.text 200u16 body)))
 
-def route (ui : String) (graph : String) (css : String) (req : Request) : IO (Result String Response) :=
+/// What the server hands out besides the UI directory: the encoded graph,
+/// the stylesheet, and each module's source file by module path.
+struct Site {
+    ui : String,
+    graph : String,
+    css : String,
+    files : HashMap String String,
+}
+
+def not_found : IO (Result String Response) := IO.pure (Result.ok (Response.text 404u16 "Not Found"))
+
+#[terminating]
+def lookup_param (name : String) (ps : List (Pair String String)) : String :=
+    match ps {
+        List.empty => "",
+        List.cons p rest => match p { Pair.pair k v => if String.beq k name then v else lookup_param name rest },
+    }
+
+def query_param (name : String) (query : Option String) : String :=
+    match query { Option.none => "", Option.some q => lookup_param name (Uri.parse_query q) }
+
+/// `/source?m=<module>`: the file of a module in the graph. The module is
+/// looked up in the graph's own table, so the request names no path and
+/// nothing outside the extracted modules is readable.
+def source_of (files : HashMap String String) (module : String) : IO (Result String Response) :=
+    match Smap.get module files {
+        Option.none => not_found,
+        Option.some file =>
+            match Path.of file {
+                Result.err _ => not_found,
+                Result.ok p => do {
+                    let text <- IO.read_file p;
+                    match text {
+                        Result.err _ => not_found,
+                        Result.ok src => IO.pure (Result.ok (Response.with_header "Cache-Control" "max-age=300"
+                            (Response.with_header "Content-Type" "text/plain; charset=utf-8"
+                                (Response.text 200u16 src)))),
+                    }
+                },
+            },
+    }
+
+def route (site : Site) (req : Request) : IO (Result String Response) :=
     let path : String := req.uri.path in
-    if String.beq path "/graph.tsv" then typed "text/tab-separated-values; charset=utf-8" graph
-    else if String.beq path "/trellis.css" then typed "text/css; charset=utf-8" css
-    else Static.handler (StaticConfig.default ui) req
+    if String.beq path "/graph.tsv" then typed "text/tab-separated-values; charset=utf-8" site.graph
+    else if String.beq path "/trellis.css" then typed "text/css; charset=utf-8" site.css
+    else if String.beq path "/source" then source_of site.files (query_param "m" req.uri.query)
+    else Static.handler (StaticConfig.default site.ui) req
 
-def handler (ui : String) (graph : String) (css : String) : Request -> IO Response :=
-    Handler.try (Response.text 500u16 "Internal Server Error") (route ui graph css)
+def handler (site : Site) : Request -> IO Response :=
+    Handler.try (Response.text 500u16 "Internal Server Error") (route site)
 
-def serve_socket (ui : String) (graph : String) (css : String) (sock : FdStream) : IO Unit := do {
+def serve_socket (site : Site) (sock : FdStream) : IO Unit := do {
     let _ <- FdStream.set_timeout sock idle_ms write_ms;
-    Server.serve_connection (handler ui graph css) sock List.empty 1
+    Server.serve_connection (handler site) sock List.empty 1
 }
 
 #[terminating]
-def accept_loop (ui : String) (graph : String) (css : String) (listener : FdStream) : IO I64 := do {
+def accept_loop (site : Site) (listener : FdStream) : IO I64 := do {
     let accepted <- IO.tcp_accept listener;
     match accepted {
         Result.err e => trellis_fail (String.concat "accept failed: " e.message),
         Result.ok sock => do {
-            let _ <- forkIO (fn (_ : Unit) => serve_socket ui graph css sock);
-            accept_loop ui graph css listener
+            let _ <- forkIO (fn (_ : Unit) => serve_socket site sock);
+            accept_loop site listener
         },
     }
 }
+
+def files_of (g : Trellis.Graph) : HashMap String String :=
+    Seq.fold (fn (m : HashMap String String) (mo : Trellis.ModuleNode) =>
+        if String.is_empty mo.file then m else Smap.insert mo.path mo.file m) Smap.empty g.modules
 
 def run_serve (a : Args) : IO I64 := do {
     let has_ui <- exists (String.concat a.ui "/index.html");
@@ -238,7 +289,8 @@ def run_serve (a : Args) : IO I64 := do {
             match built {
                 Result.err e => trellis_fail e,
                 Result.ok x => do {
-                    let graph : String := Trellis.Graph.encode x.graph;
+                    let site : Site := { ui := a.ui, graph := Trellis.Graph.encode x.graph, css := stylesheet,
+                        files := files_of x.graph };
                     let listening <- IO.tcp_listen_on a.host port;
                     match listening {
                         Result.err e => trellis_fail (String.concat_list ["cannot listen on ", a.host, ":", a.port,
@@ -247,7 +299,7 @@ def run_serve (a : Args) : IO I64 := do {
                             IO.println (String.concat "trellis: " (summary x.graph));
                             IO.println (String.concat_list ["trellis: http://", a.host, ":", a.port,
                                 "/  (Ctrl-C to stop)"]);
-                            accept_loop a.ui graph stylesheet listener
+                            accept_loop site listener
                         },
                     }
                 },

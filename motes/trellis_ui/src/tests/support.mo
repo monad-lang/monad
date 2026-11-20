@@ -21,8 +21,8 @@ def nat_m : Trellis.ModuleNode := m "proofs::nat" "proofs" false
 def decl (mo : Trellis.ModuleNode) (name : String) (kind : String) (attrs : List String)
     (sort : String) : Trellis.DeclNode :=
     { id := Trellis.decl_id mo.path name, name := name, module := mo.path, mote := mo.mote, kind := kind,
-        vis := "pub", line := 1, attrs := attrs, sort := sort, href := "", docs := "",
-        external := mo.external }
+        vis := "pub", line := 1, end_line := 1, attrs := attrs, sort := sort, href := "", docs := "",
+        sig := if String.beq name "infer" then "pub def infer (t : Ty) : Ty :=" else "", external := mo.external }
 
 def edge (a : String) (b : String) (axis : String) : Trellis.Edge := { from := a, to := b, axis := axis }
 

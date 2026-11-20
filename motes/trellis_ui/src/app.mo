@@ -11,6 +11,7 @@
 // with `loaded` directly.
 
 use std::list {List.filter, List.any, List.intercalate, List.filter_map}
+use std::map {HashMap}
 use oak::typed {Oak.Node, Oak.Attr, Oak.of_html}
 use xml_html::html {Html.Node}
 use oak::app {Program, Program.with_subs, Command}
@@ -18,7 +19,7 @@ use oak::events {Html.on, Html.on_click, Subscription, Subscription.animation_fr
 use oak::elements {
     Html.div, Html.span, Html.p, Html.ul, Html.li, Html.a, Html.h2, Html.h3, Html.button, Html.type_,
     Html.class_, Html.text, Html.href, Html.attr, Html.aria, Html.role, Html.id_, Html.target, Html.rel,
-    Html.placeholder, Html.title_attr, Html.aside,
+    Html.placeholder, Html.title_attr, Html.aside, Html.pre, Html.details, Html.summary,
 }
 use web_event::event {WebEvent, ListenerFlags, ListenerFlags.none, HandlerResult, HandlerResult.prevent,
     HandlerResult.ignore}
@@ -36,7 +37,7 @@ use oak_ui::graph {Ui.GraphMsg, Ui.GraphView, Ui.GraphView.initial, Ui.GraphView
 use lib::model {Trellis.Graph, Trellis.Graph.empty, Trellis.Graph.decode, Trellis.DeclNode, Trellis.ModuleNode,
     Trellis.DeclNode.is_proof}
 use lib::fuzzy {Fuzzy.Hit, Fuzzy.search, Fuzzy.score}
-use lib::seq {Seq.map, Seq.filter, Seq.length, Seq.fold}
+use lib::seq {Seq.map, Seq.filter, Seq.length, Seq.fold, Seq.reverse}
 use lib::project {
     Trellis.Level, Trellis.Grouping, Trellis.Direction, Trellis.Settings, Trellis.Settings.initial,
     Trellis.Level.slug, Trellis.Level.of_slug, Trellis.Grouping.slug, Trellis.Grouping.of_slug,
@@ -45,7 +46,9 @@ use lib::project {
     Trellis.neighbours, Trellis.find_decl, Trellis.find_module, Trellis.lift_key,
 }
 use lib::model {Trellis.parse_nat}
+use lib::smap {Smap.empty, Smap.insert, Smap.get, Smap.has, Smap.get_str}
 use lib::docs {Trellis.render_docs}
+use lib::signature {Trellis.sig_targets, Trellis.sig_view}
 
 // ═══ Model, messages, effects ═══
 
@@ -79,6 +82,22 @@ pub struct Trellis.Model {
     used_by : List String,
     /// The selected declaration's or module's doc comment, rendered.
     docs : List Html.Node,
+    /// The selected declaration's signature, highlighted and linked, and
+    /// the declarations it names.
+    sig : List (Oak.Node Trellis.Msg),
+    sig_types : List Trellis.DeclNode,
+    /// Module sources fetched so far (`/source?m=`), split into lines once
+    /// on arrival; one request per module. `source_state` marks a module
+    /// `loading` or `failed`.
+    sources : HashMap String (List String),
+    source_state : HashMap String String,
+    /// The selected declaration's source lines, highlighted, and its
+    /// first line (for the gutter).
+    code : List (Oak.Node Trellis.Msg),
+    code_from : I64,
+    code_more : I64,
+    /// `auto` (the OS preference), `light` or `dark`.
+    theme : String,
 }
 
 pub type Trellis.Msg {
@@ -104,11 +123,18 @@ pub type Trellis.Msg {
     section_step (delta : I64),
     close_section,
     filter_sections (query : String),
+    set_theme (slug : String),
+    source_started (module : String) (req : RequestId),
+    source_poll (module : String) (req : RequestId),
+    source_loaded (module : String) (text : String),
+    source_failed (module : String) (why : String),
 }
 
 pub type Trellis.Effect {
     fx_fetch (url : String),
     fx_poll (req : RequestId),
+    fx_fetch_source (module : String) (url : String),
+    fx_poll_source (module : String) (req : RequestId),
 }
 
 def empty_layout : Ui.GraphLayout :=
@@ -120,7 +146,9 @@ pub def Trellis.Model.initial (url : String) : Trellis.Model :=
         query := "", hits := List.empty, cursor := 0, view := Ui.GraphView.initial, prepared := Trellis.Prepared.empty,
         layout := empty_layout,
         shown := 0, total := 0, over := 0, sections := List.empty, section_query := "",
-        detail := Option.none, uses := List.empty, used_by := List.empty, docs := List.empty }
+        detail := Option.none, uses := List.empty, used_by := List.empty, docs := List.empty,
+        sig := List.empty, sig_types := List.empty, sources := Smap.empty, source_state := Smap.empty,
+        code := List.empty, code_from := 0, code_more := 0, theme := "auto" }
 
 // ═══ Update ═══
 
@@ -221,7 +249,7 @@ def switch_level (m : Trellis.Model) (slug : String) : Trellis.Model :=
     let nv : Ui.GraphView := { v with selected := "" } in
     with_settings { m with view := nv } { s with level := to, focus := lifted, section := "" }
 
-def toggle (m : Trellis.Model) (name : String) (on : Bool) : Trellis.Model :=
+def apply_toggle (m : Trellis.Model) (name : String) (on : Bool) : Trellis.Model :=
     let s : Trellis.Settings := m.settings in
     if String.beq name "external" then with_settings m { s with external := on }
     else if String.beq name "tests" then with_settings m { s with tests := on }
@@ -230,7 +258,7 @@ def toggle (m : Trellis.Model) (name : String) (on : Bool) : Trellis.Model :=
     else if String.beq name "proofs" then with_settings m { s with lens := if on then "proofs" else "calls" }
     else m
 
-def search_key (m : Trellis.Model) (key : String) : Trellis.Model :=
+def move_cursor (m : Trellis.Model) (key : String) : Trellis.Model :=
     let n : I64 := List.length m.hits in
     if String.beq key "ArrowDown" then { m with cursor := if m.cursor + 1 >= n then 0 else m.cursor + 1 }
     else if String.beq key "ArrowUp" then { m with cursor := if m.cursor <= 0 then
@@ -243,7 +271,7 @@ def search_key (m : Trellis.Model) (key : String) : Trellis.Model :=
         }
     else m
 
-def loaded (m : Trellis.Model) (text : String) : Trellis.Model :=
+def load_graph (m : Trellis.Model) (text : String) : Trellis.Model :=
     match Trellis.Graph.decode text {
         Result.err why => { m with status := "failed", error := why },
         Result.ok g => Trellis.refresh { m with status := "ready", graph := g },
@@ -252,6 +280,10 @@ def loaded (m : Trellis.Model) (text : String) : Trellis.Model :=
 def poll_delay : I64 := 30
 
 def decl_docs (d : Option Trellis.DeclNode) : String := match d { Option.some x => x.docs, Option.none => "" }
+
+def decl_sig (d : Option Trellis.DeclNode) : String := match d { Option.some x => x.sig, Option.none => "" }
+
+def pick_decl (id : String) : Trellis.Msg := Trellis.Msg.pick "decl" id
 
 def module_docs (g : Trellis.Graph) (path : String) : String :=
     match Trellis.find_module g.modules path { Option.some mo => mo.docs, Option.none => "" }
@@ -263,19 +295,80 @@ def with_detail (m : Trellis.Model) : Trellis.Model :=
             if String.beq level "decl" && Bool.not (String.is_empty key)
             then
                 let d : Option Trellis.DeclNode := Trellis.find_decl m.graph.decls key in
-                { m with detail := d, docs := Trellis.render_docs (decl_docs d),
+                let types : List Trellis.DeclNode := Trellis.sig_targets m.graph key in
+                with_code { m with detail := d, docs := Trellis.render_docs (decl_docs d),
+                    sig := Trellis.sig_view (decl_sig d) types pick_decl, sig_types := types,
                     uses := Trellis.neighbours m.graph key true, used_by := Trellis.neighbours m.graph key false }
             else if String.beq level "module" && Bool.not (String.is_empty key)
             then { m with detail := Option.none, uses := List.empty, used_by := List.empty,
-                docs := Trellis.render_docs (module_docs m.graph key) }
-            else { m with detail := Option.none, uses := List.empty, used_by := List.empty, docs := List.empty },
+                docs := Trellis.render_docs (module_docs m.graph key), sig := List.empty, sig_types := List.empty }
+            else { m with detail := Option.none, uses := List.empty, used_by := List.empty, docs := List.empty,
+                sig := List.empty, sig_types := List.empty },
     }
 
 def keep_detail (before : String) (step : Pair Trellis.Model
     (Command Trellis.Effect Trellis.Msg)) : Pair Trellis.Model (Command Trellis.Effect Trellis.Msg) :=
     match step {
-        Pair.pair m cmd => if String.beq before m.view.selected then step else Pair.pair (with_detail m) cmd,
+        Pair.pair m cmd => if String.beq before m.view.selected then step else fetch_source (with_detail m) cmd,
     }
+
+/// The URL of a module's source, relative to the page.
+pub def Trellis.source_url (module : String) : String := String.concat "source?m=" module
+
+def selected_module (m : Trellis.Model) : String :=
+    match m.detail { Option.some d => d.module, Option.none => "" }
+
+/// Start fetching the selected declaration's module source unless it is
+/// in, or already on its way (or has failed: a static host has no
+/// `/source`, and asking again per click would only repeat the 404).
+def fetch_source (m : Trellis.Model) (cmd : Command Trellis.Effect Trellis.Msg) : Pair Trellis.Model
+    (Command Trellis.Effect Trellis.Msg) :=
+    let module : String := selected_module m in
+    if String.is_empty module || Smap.has module m.sources || Smap.has module m.source_state then Pair.pair m cmd
+    else Pair.pair { m with source_state := Smap.insert module "loading" m.source_state }
+        (Command.batch [cmd, Command.perform (Trellis.Effect.fx_fetch_source module (Trellis.source_url module))])
+
+/// A source view longer than this is cut (a big `type`), with a note.
+def max_source_lines : I64 := 400
+
+/// Lines `from`..`to` (1-based, inclusive) of `text`, at most `limit`.
+struct Slice {
+    at : I64,
+    kept : List String,
+    more : I64,
+}
+
+def slice_lines (lines : List String) (from : I64) (to : I64) (limit : I64) : Slice :=
+    let st0 : Slice := { at := 1, kept := List.empty, more := 0 } in
+    let done : Slice := Seq.fold (fn (st : Slice) (line : String) =>
+        let n : I64 := st.at in
+        if n < from || n > to then { st with at := n + 1 }
+        else if n - from >= limit then { st with at := n + 1, more := st.more + 1 }
+        else { st with at := n + 1, kept := List.cons line st.kept }) st0 lines in
+    { done with kept := Seq.reverse done.kept }
+
+/// One source line, highlighted on its own (a line is short, and per-line
+/// highlighting keeps the tokenizer's recursion shallow).
+def code_line (line : String) : Oak.Node Trellis.Msg :=
+    Html.span [Html.class_ ["trellis-source__line"]] (Trellis.sig_view line List.empty pick_decl)
+
+/// Recompute the source view for the selection from the fetched sources.
+def with_code (m : Trellis.Model) : Trellis.Model :=
+    match m.detail {
+        Option.none => { m with code := List.empty, code_from := 0, code_more := 0 },
+        Option.some d =>
+            match Smap.get d.module m.sources {
+                Option.none => { m with code := List.empty, code_from := d.line, code_more := 0 },
+                Option.some lines =>
+                    let to : I64 := if d.end_line < d.line then d.line else d.end_line in
+                    let s : Slice := slice_lines lines d.line to max_source_lines in
+                    { m with code := Seq.map code_line s.kept, code_from := d.line, code_more := s.more },
+            },
+    }
+
+def store_source (m : Trellis.Model) (module : String) (text : String) : Trellis.Model :=
+    let next : Trellis.Model := { m with sources := Smap.insert module (String.split text "\n") m.sources } in
+    if String.beq (selected_module next) module then with_code next else next
 
 pub def Trellis.update (m : Trellis.Model) (msg : Trellis.Msg) : Pair Trellis.Model
     (Command Trellis.Effect Trellis.Msg) :=
@@ -286,13 +379,13 @@ def update_step (m : Trellis.Model) (msg : Trellis.Msg) : Pair Trellis.Model (Co
         Trellis.Msg.start => Pair.pair { m with status := "loading" } (Command.perform (Trellis.Effect.fx_fetch m.url)),
         Trellis.Msg.fetch_started req => Pair.pair m (Command.after poll_delay (Trellis.Msg.fetch_poll req)),
         Trellis.Msg.fetch_poll req => Pair.pair m (Command.perform (Trellis.Effect.fx_poll req)),
-        Trellis.Msg.loaded text => stay (loaded m text),
+        Trellis.Msg.loaded text => stay (load_graph m text),
         Trellis.Msg.failed why => stay { m with status := "failed", error := why },
         Trellis.Msg.search q =>
             let hits : List Fuzzy.Hit := Fuzzy.search m.graph q search_limit m.settings.external in
             let v : Ui.GraphView := m.view in
             stay { m with query := q, hits := hits, cursor := 0, view := { v with highlighted := hit_keys hits } },
-        Trellis.Msg.search_key key => stay (search_key m key),
+        Trellis.Msg.search_key key => stay (move_cursor m key),
         Trellis.Msg.pick level key => stay (Trellis.pick m level key),
         Trellis.Msg.set_level slug => stay (switch_level m slug),
         Trellis.Msg.set_grouping slug =>
@@ -304,7 +397,7 @@ def update_step (m : Trellis.Model) (msg : Trellis.Msg) : Pair Trellis.Model (Co
         Trellis.Msg.set_depth text =>
             let s : Trellis.Settings := m.settings in
             stay (with_settings m { s with depth := Trellis.parse_nat text }),
-        Trellis.Msg.toggle name on => stay (toggle m name on),
+        Trellis.Msg.toggle name on => stay (apply_toggle m name on),
         Trellis.Msg.graph gm => stay { m with view := Ui.GraphView.update m.view gm },
         Trellis.Msg.focus_selected => stay (focus_selection m),
         Trellis.Msg.drill_selected => stay (drill m),
@@ -319,6 +412,13 @@ def update_step (m : Trellis.Model) (msg : Trellis.Msg) : Pair Trellis.Model (Co
         Trellis.Msg.section_step delta => stay (step_section m delta),
         Trellis.Msg.close_section => stay (show_section m ""),
         Trellis.Msg.filter_sections q => stay { m with section_query := q },
+        Trellis.Msg.set_theme slug => stay { m with theme := slug },
+        Trellis.Msg.source_started module req =>
+            Pair.pair m (Command.after poll_delay (Trellis.Msg.source_poll module req)),
+        Trellis.Msg.source_poll module req => Pair.pair m (Command.perform (Trellis.Effect.fx_poll_source module req)),
+        Trellis.Msg.source_loaded module text => stay (store_source m module text),
+        Trellis.Msg.source_failed module _ =>
+            stay { m with source_state := Smap.insert module "failed" m.source_state },
     }
 
 /// Draw section `id` (`""` for the section list), with the view reset.
@@ -495,8 +595,44 @@ def docs_block (docs : List Html.Node) (none : String) : Oak.Node Trellis.Msg :=
     if List.is_empty docs then Ui.muted [Ui.small] List.empty [Html.text none]
     else Html.div [Html.class_ ["trellis-doc"]] (List.map Oak.of_html docs)
 
-def decl_detail (g : Trellis.Graph) (d : Trellis.DeclNode) (docs : List Html.Node) (uses : List String)
-    (used_by : List String) : Oak.Node Trellis.Msg :=
+/// One resolved type: its name, and where it is declared.
+def type_row (d : Trellis.DeclNode) : Oak.Node Trellis.Msg :=
+    Html.li [Html.class_ ["trellis-types__row"]]
+        [Html.button [Html.type_ "button", Html.class_ ["trellis-ref"], Html.title_attr d.id,
+            Html.on_click (pick_decl d.id)] [Html.text d.name],
+            Html.span [Html.class_ ["trellis-types__module"]] [Html.text d.module]]
+
+/// The declaration's lines from its module's file, fetched on selection.
+def source_block (m : Trellis.Model) (d : Trellis.DeclNode) : Oak.Node Trellis.Msg :=
+    let state : String := Smap.get_str d.module "" m.source_state in
+    let body : Oak.Node Trellis.Msg :=
+        if Bool.not (List.is_empty m.code)
+        then Html.pre [Html.class_ ["trellis-code", "trellis-source"], Html.aria "label" "Source",
+            Html.attr "style" (String.concat_list ["counter-reset: line ", I64.to_string (m.code_from - 1)])] m.code
+        else if String.beq state "failed"
+        then Ui.muted [Ui.small] List.empty [Html.text "Source not available (it is served by `trellis serve`)."]
+        else if Smap.has d.module m.sources
+        then Ui.muted [Ui.small] List.empty [Html.text "The declaration's lines are not known."]
+        else Ui.spinner [Ui.small] "Loading the source\u{2026}" in
+    Html.details [Html.class_ ["trellis-source-box"], Html.attr "open" ""]
+        [Html.summary [Html.class_ ["trellis-refs__title"]] [Html.text "Source"],
+            body,
+            if m.code_more > 0
+            then Ui.muted [Ui.small] List.empty [Html.text (String.concat_list ["\u{2026} ", I64.to_string m.code_more,
+                " more lines"])]
+            else Html.span List.empty List.empty]
+
+/// The signature as written, its names linked, then what each resolves to.
+def sig_block (m : Trellis.Model) : Oak.Node Trellis.Msg :=
+    if List.is_empty m.sig then Ui.muted [Ui.small] List.empty [Html.text "No signature."]
+    else Html.div [Html.class_ ["trellis-sig"]]
+        [Html.pre [Html.class_ ["trellis-code", "trellis-sig__text"], Html.aria "label" "Signature"] m.sig,
+            if List.is_empty m.sig_types then Html.span List.empty List.empty
+            else Html.ul [Html.class_ ["trellis-types"], Html.aria "label" "Types in the signature"]
+                (List.map type_row m.sig_types)]
+
+def decl_detail (m : Trellis.Model) (d : Trellis.DeclNode) : Oak.Node Trellis.Msg :=
+    let g : Trellis.Graph := m.graph in
     let file : String := file_of g d.module in
     let where_ : String := if String.is_empty file then d.module else String.concat_list [file, ":",
         I64.to_string d.line] in
@@ -506,15 +642,17 @@ def decl_detail (g : Trellis.Graph) (d : Trellis.DeclNode) (docs : List Html.Nod
                 (List.append [Ui.badge [Ui.info] d.kind, Ui.badge [Ui.neutral] d.vis]
                     (List.append (if Trellis.DeclNode.is_proof d then [Ui.badge [Ui.warning] "proof"] else List.empty)
                         (List.map (fn (a : String) => Ui.badge [Ui.neutral, Ui.soft] (String.concat "#" a)) d.attrs))),
+            sig_block m,
             Ui.description_list [Ui.small]
                 [Pair.pair "Module" (Ui.code d.module), Pair.pair "Source" (Ui.code where_),
                     Pair.pair "Sort" (Html.text (if String.is_empty d.sort then "\u{2014}" else d.sort))],
-            docs_block docs "No doc comment.",
+            docs_block m.docs "No doc comment.",
             if String.is_empty d.href then Html.span List.empty List.empty
             else Html.a [Html.href d.href, Html.target "_blank", Html.rel "noopener"] [Html.text "Open documentation"],
             actions false,
-            ref_list "Uses" uses,
-            ref_list "Used by" used_by]
+            ref_list "Uses" m.uses,
+            ref_list "Used by" m.used_by,
+            source_block m d]
 
 def module_detail (g : Trellis.Graph) (path : String) (docs : List Html.Node) : Oak.Node Trellis.Msg :=
     Ui.stack [Ui.gap 3] List.empty
@@ -542,7 +680,7 @@ def detail (m : Trellis.Model) : Oak.Node Trellis.Msg :=
             else if String.beq level "mote" then mote_detail m.graph key
             else if String.beq level "module" then module_detail m.graph key m.docs
             else match m.detail {
-                Option.some d => decl_detail m.graph d m.docs m.uses m.used_by,
+                Option.some d => decl_detail m d,
                 Option.none => Ui.muted [Ui.small] List.empty [Html.text key],
             },
     }
@@ -627,11 +765,28 @@ def main_area (m : Trellis.Model) : Oak.Node Trellis.Msg :=
 def the_graph (m : Trellis.Model) : Oak.Node Trellis.Msg :=
     Ui.graph List.empty "Reference graph" m.layout m.view Trellis.Msg.graph [Html.class_ ["trellis-graph"]]
 
+/// The theme picker. `auto` leaves `data-theme` off, so the OS preference
+/// (`Ui.Theme.css_auto`'s media query) decides.
+def theme_picker (theme : String) : Oak.Node Trellis.Msg :=
+    Ui.select [Ui.small]
+        [Pair.pair "auto" "Auto theme", Pair.pair "light" "Light", Pair.pair "dark" "Dark"]
+        theme Trellis.Msg.set_theme [Html.aria "label" "Theme", Html.class_ ["trellis-theme"]]
+
+def theme_attrs (theme : String) : List (Oak.Attr Trellis.Msg) :=
+    if String.beq theme "light" || String.beq theme "dark"
+    then [Html.class_ ["trellis-root", "oak-root"], Html.attr "data-theme" theme]
+    else [Html.class_ ["trellis-root", "oak-root"]]
+
 pub def Trellis.view (m : Trellis.Model) : Oak.Node Trellis.Msg :=
+    Html.div (theme_attrs m.theme) [shell m]
+
+def shell (m : Trellis.Model) : Oak.Node Trellis.Msg :=
     Ui.app_shell [Ui.cls ["trellis"]] false
         [Ui.cluster [Ui.gap 3] List.empty
             [Html.span [Html.class_ ["trellis-brand"]] [Html.text "trellis"],
-                Ui.muted [Ui.small] List.empty [Html.text (List.intercalate ", " m.graph.roots)]]]
+                Ui.muted [Ui.small] List.empty [Html.text (List.intercalate ", " m.graph.roots)],
+                Html.span [Html.class_ ["oak-spacer"]] List.empty,
+                theme_picker m.theme]]
         [Ui.stack [Ui.gap 4] List.empty [search_box m, controls m]]
         [Html.div [Html.class_ ["trellis-main"]]
             [Html.div [Html.class_ ["trellis-canvas"]] [main_area m],
@@ -644,7 +799,14 @@ pub def Trellis.program (url : String) : Program Trellis.Model Trellis.Msg Trell
 /// The app's own styles: layout of the main area and the search results,
 /// on top of `Ui.css_all`. Variables only, like oak_ui's sheet.
 pub def Trellis.css : String := r#"
-.trellis.oak-shell { height: 100vh; min-height: 0; }
+.trellis-root { height: 100vh; color-scheme: light dark; }
+.trellis-root[data-theme="light"] { color-scheme: light; }
+.trellis-root[data-theme="dark"] { color-scheme: dark; }
+.trellis.oak-shell { height: 100%; min-height: 0;
+  grid-template-columns: clamp(18rem, 22vw, 26rem) minmax(0, 1fr); }
+.trellis .oak-shell__header { padding: calc(var(--oak-space) * 2) calc(var(--oak-space) * 4); }
+.trellis .oak-shell__sidebar { padding: calc(var(--oak-space) * 4); min-width: 0; }
+.trellis-theme { width: auto; }
 .trellis .oak-shell__main { padding: 0; min-height: 0; overflow: hidden; }
 .trellis-brand { font-weight: 700; letter-spacing: 0.02em; }
 .trellis-main { display: grid; grid-template-columns: minmax(0, 1fr) clamp(22rem, 28vw, 32rem);
@@ -672,7 +834,8 @@ pub def Trellis.css : String := r#"
 .trellis-section__count { font-size: 0.75em; color: var(--oak-muted); }
 .trellis-section__bar { grid-column: 1 / -1; height: 3px; border-radius: 2px; background: var(--oak-primary); }
 @media (max-width: 768px) {
-  .trellis.oak-shell { height: auto; min-height: 100vh; }
+  .trellis-root { height: auto; min-height: 100vh; }
+  .trellis.oak-shell { height: auto; min-height: 100vh; grid-template-columns: minmax(0, 1fr); }
   .trellis-main { grid-template-columns: minmax(0, 1fr); height: auto; }
   .trellis-canvas { min-height: 60vh; }
   .trellis-detail { border-left: 0; border-top: 1px solid var(--oak-border); }
@@ -681,7 +844,7 @@ pub def Trellis.css : String := r#"
 .trellis-detail__title { font-size: 1.05rem; margin: 0; word-break: break-all; font-family: var(--oak-font-mono); }
 .trellis-hits { list-style: none; margin: 0; padding: 0; border: 1px solid var(--oak-border);
   border-radius: var(--oak-radius-sm); max-height: 22rem; overflow-y: auto; }
-.trellis-hit__button { display: grid; grid-template-columns: 1fr auto; gap: 0 var(--oak-space); width: 100%;
+.trellis-hit__button { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 0 var(--oak-space); width: 100%;
   text-align: left; border: 0; background: transparent;
   padding: calc(var(--oak-space) * 1.5) calc(var(--oak-space) * 2); font: inherit; color: inherit; cursor: pointer; }
 .trellis-hit--active .trellis-hit__button, .trellis-hit__button:hover { background: var(--oak-primary-soft); }
@@ -702,6 +865,30 @@ pub def Trellis.css : String := r#"
   background: var(--oak-surface-alt); border: 1px solid var(--oak-border); border-radius: var(--oak-radius-sm);
   padding: calc(var(--oak-space) * 2); margin: 0 0 var(--oak-space); }
 .trellis-doc pre code { background: transparent; padding: 0; }
+.trellis-code { font-family: var(--oak-font-mono); font-size: 0.8125rem; line-height: 1.45; margin: 0;
+  white-space: pre; overflow-x: auto; background: var(--oak-surface-alt); border: 1px solid var(--oak-border);
+  border-radius: var(--oak-radius-sm); padding: calc(var(--oak-space) * 2); tab-size: 4; }
+.trellis-code .tok-kw { color: var(--oak-primary); font-weight: 600; }
+.trellis-code .tok-fn { color: var(--oak-text); font-weight: 600; }
+.trellis-code .tok-type { color: var(--oak-info); }
+.trellis-code .tok-str { color: var(--oak-success); }
+.trellis-code .tok-num { color: var(--oak-warning); }
+.trellis-code .tok-comment { color: var(--oak-muted); font-style: italic; }
+.trellis-code .tok-attr { color: var(--oak-muted); }
+.trellis-source { counter-reset: line; white-space: pre; max-height: 32rem; overflow: auto; }
+.trellis-source__line { display: block; min-height: 1.45em; }
+.trellis-source__line::before { counter-increment: line; content: counter(line); display: inline-block;
+  width: 3.5ch; margin-right: 1.5ch; text-align: right; color: var(--oak-muted); user-select: none; }
+.trellis-source-box > summary { cursor: pointer; margin-bottom: var(--oak-space); }
+.trellis-sig { display: flex; flex-direction: column; gap: var(--oak-space); }
+.trellis-sig__text { white-space: pre-wrap; overflow-wrap: anywhere; }
+.trellis-sig__ref { font: inherit; color: var(--oak-info); background: none; border: 0; padding: 0; cursor: pointer;
+  text-decoration: underline; text-decoration-color: var(--oak-border-strong); text-underline-offset: 2px; }
+.trellis-sig__ref:hover { text-decoration-color: currentColor; }
+.trellis-types { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
+.trellis-types__row { display: flex; gap: var(--oak-space); align-items: baseline; min-width: 0; }
+.trellis-types__module { font-size: 0.75em; color: var(--oak-muted); overflow: hidden; text-overflow: ellipsis;
+  white-space: nowrap; }
 .trellis-refs__title { font-size: 0.875rem; margin: 0 0 var(--oak-space); }
 .trellis-refs__list { list-style: none; margin: 0; padding: 0; }
 .trellis-ref { border: 0; background: transparent; color: var(--oak-primary); font-family: var(--oak-font-mono);

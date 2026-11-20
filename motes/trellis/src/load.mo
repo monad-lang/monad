@@ -28,7 +28,7 @@ use lang::module {
     module_info_cache_entries, expand_check_paths, decl_ranges_of_source,
 }
 use trellis_ui::smap {Smap.empty, Smap.insert, Smap.has}
-use lib::extract {Trellis.Source}
+use lib::extract {Trellis.Source, Trellis.Lines, Trellis.Lines.empty}
 use lib::docs {Trellis.SourceDocs, Trellis.SourceDocs.empty, Trellis.docs_of_source}
 
 /// A resolved mote argument: its manifest name and directory.
@@ -85,17 +85,21 @@ pub def Trellis.module_of_file (mote : String) (dir : String) (file : String) : 
 // ─── Lines ───
 
 #[terminating]
-def index_lines (rs : List DeclRange) (m : HashMap String I64) : HashMap String I64 :=
+def index_lines (rs : List DeclRange) (m : Trellis.Lines) : Trellis.Lines :=
     match rs {
         List.empty => m,
         List.cons r rest =>
             let name : String := show_name_path r.name in
             // The first declaration of a name wins (an instance's methods
             // share names with their class's).
-            index_lines rest (if Smap.has name m then m else Smap.insert name (r.range.start.line + 1) m),
+            if Smap.has name m.starts then index_lines rest m
+            else
+                let next : Trellis.Lines := { starts := Smap.insert name (r.range.start.line + 1) m.starts,
+                    ends := Smap.insert name (r.range.end.line + 1) m.ends } in
+                index_lines rest next,
     }
 
-def lines_of (src : String) : HashMap String I64 := index_lines (decl_ranges_of_source src) Smap.empty
+def lines_of (src : String) : Trellis.Lines := index_lines (decl_ranges_of_source src) Trellis.Lines.empty
 
 // ─── One target file ───
 
@@ -130,7 +134,7 @@ def load_path (t : Trellis.Target) (file : String) (path : Path) (w : Walk) : IO
                     let s : Trellis.Source :=
                         { module := module, mote := t.name, file := file, external := false,
                             decls := info.decl_list, lines := lines_of src,
-                            docs := docs_if w.docs module file src };
+                            docs := Trellis.docs_of_source w.docs module file src };
                     return { w with sources := List.cons s w.sources, own := Smap.insert module true w.own,
                         cache := loaded.cache }
                 },
@@ -163,16 +167,11 @@ def load_targets (ts : List Trellis.Target) (tests : Bool) (w : Walk) : IO Walk 
 
 // ─── External modules (from the loader's cache) ───
 
-def no_lines : HashMap String I64 := Smap.empty
-
-def docs_if (on : Bool) (module : String) (file : String) (src : String) : Trellis.SourceDocs :=
-    if on then Trellis.docs_of_source module file src else Trellis.SourceDocs.empty
-
 def docs_of_read (on : Bool) (module : String) (file : String) (r : Result StreamError String) : Trellis.SourceDocs :=
-    match r { Result.ok src => docs_if on module file src, Result.err _ => Trellis.SourceDocs.empty }
+    match r { Result.ok src => Trellis.docs_of_source on module file src, Result.err _ => Trellis.SourceDocs.empty }
 
-def lines_of_read (r : Result StreamError String) : HashMap String I64 :=
-    match r { Result.ok src => lines_of src, Result.err _ => no_lines }
+def lines_of_read (r : Result StreamError String) : Trellis.Lines :=
+    match r { Result.ok src => lines_of src, Result.err _ => Trellis.Lines.empty }
 
 def mote_of_path (path : String) : String :=
     match String.split path "::" { List.cons h _ => h, List.empty => path }

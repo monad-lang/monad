@@ -15,11 +15,15 @@ def m2 : Trellis.ModuleNode := { path := "std::list", mote := "std", file := "st
 /// Docs with every character the wire format must carry through a field.
 def check_docs : String := "Check `a\\b`, `\\n` and `\\\\`.\n\n```\nx\ty\n```\n"
 
+/// A two-line signature with a tab and a backslash.
+def check_sig : String := "pub def check (t : Term)\n\t(s : String := \"\\\\\") : Bool :="
+
 def d (m : Trellis.ModuleNode) (name : String) (kind : String) (attrs : List String)
     (sort : String) : Trellis.DeclNode :=
     { id := Trellis.decl_id m.path name, name := name, module := m.path, mote := m.mote, kind := kind,
-        vis := "pub", line := 12, attrs := attrs, sort := sort, href := "lang/typecheck/infer.html#def.check",
-        docs := if String.beq name "check" then check_docs else "", external := m.external }
+        vis := "pub", line := 12, end_line := 20, attrs := attrs, sort := sort,
+        href := "lang/typecheck/infer.html#def.check", docs := if String.beq name "check" then check_docs else "",
+        sig := if String.beq name "check" then check_sig else "", external := m.external }
 
 def edge_ci : Trellis.Edge := { from := "lang::typecheck::infer::check", to := "lang::typecheck::infer::infer",
     axis := "b" }
@@ -118,3 +122,25 @@ def test_version_1_still_decodes : Bool :=
 def test_escaped_docs_are_one_line : Bool :=
     let e : String := Trellis.escape_field check_docs in
     Bool.not (String.contains e "\n") && Bool.not (String.contains e "\t")
+
+#[test]
+def test_round_trip_signature_and_end_line : Bool :=
+    match round {
+        Result.err _ => false,
+        Result.ok g =>
+            match g.decls {
+                List.empty => false,
+                List.cons first rest =>
+                    String.beq first.sig check_sig && first.end_line == 20
+                        && List.all (fn (x : Trellis.DeclNode) => String.is_empty x.sig) rest,
+            },
+    }
+
+#[test]
+def test_version_2_has_no_signature : Bool :=
+    let v2 : String := "trellis\t2\nR\tlang\nM\tlang::m\tlang\tm.mo\t0\t\nD\t0\tf\tdef\tpub\t3\t\t\t\t\nS\t1\t1\t0" in
+    match Trellis.Graph.decode v2 {
+        Result.err _ => false,
+        Result.ok g => match g.decls { List.cons x _ => String.is_empty x.sig && x.end_line == 3,
+            List.empty => false },
+    }
