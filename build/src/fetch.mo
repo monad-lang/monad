@@ -659,13 +659,32 @@ def Build.verify_home (home : String) (m : MoteManifest) (locked : Bool) : IO (R
     if Bool.not (Mote.any_git_dep m.deps_full)
     then return (Result.ok Unit.unit)
     else do {
-        let read <- Lock.read (Path.child_under m.dir "mote.lock");
+        let read <- Build.read_lock_for m;
         match read {
             Result.err e => return (Result.err e),
             Result.ok found => Build.verify_entries home locked found m.deps_full
         }
     }
 }
+
+/// The lock that governs `m`: its workspace root's (where `fetch` writes
+/// it, and where a member's `workspace = true` edges live), falling back to
+/// the member's own when the root has none -- `Mote.read_lock_for`'s rule.
+#[partial]
+def Build.read_lock_for (m : MoteManifest) : IO (Result String (Option LockRead)) :=
+    match m.workspace_root {
+        Option.none => Lock.read (Path.child_under m.dir "mote.lock"),
+        Option.some root => do {
+            let at_root <- Lock.read (Path.child_under root "mote.lock");
+            match at_root {
+                Result.err e => return (Result.err e),
+                Result.ok found => match found {
+                    Option.some r => return (Result.ok (Option.some r)),
+                    Option.none => Lock.read (Path.child_under m.dir "mote.lock")
+                }
+            }
+        }
+    }
 
 #[partial]
 def Build.verify_entries (home : String) (locked : Bool) (found : Option LockRead) (deps : List (Pair String Dependency)) : IO (Result String Unit) := do {

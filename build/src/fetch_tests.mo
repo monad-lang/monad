@@ -571,6 +571,25 @@ def test_offline_after_a_fetch_succeeds : IO Bool := do {
     return (offline == 0)
 }
 
+/// A workspace member that inherits a git dependency (`workspace = true`)
+/// is verified against the ROOT's lock, which is where `fetch` wrote it
+/// (forge gap G2: member-scoped `check` said "not in mote.lock").
+#[test]
+def test_member_verifies_against_the_workspace_lock : IO Bool := do {
+    let root <- Build.make_fetch_fixture "ws" (Build.git_dep_line (Build.fetch_fixture_root "ws") "tag = \"v1\"");
+    let _wroot <- IO.write_file (Path.path (root ++ "/mote.toml"))
+        ("[workspace]\nmembers = [\"app\"]\n\n[workspace.dependencies.dep]\n"
+            ++ Build.git_dep_line root "tag = \"v1\"" ++ "\n");
+    let _wapp <- IO.write_file (Path.path (Build.fetch_app root ++ "/mote.toml"))
+        "[mote]\nname = \"app\"\nversion = \"0.1.0\"\n\n[dependencies.dep]\nworkspace = true\n";
+    let code <- Build.fetch_run_with (Build.fetch_home root) (Build.fetch_app root) FetchMode.fetch;
+    let root_lock <- IO.file_exists (Path.path (root ++ "/mote.lock"));
+    let member_lock <- IO.file_exists (Path.path (Build.fetch_lock_path root));
+    let r <- Build.verify_fixture root true;
+    let _rm <- Build.rm_fetch_fixture "ws";
+    return (code == 0 && root_lock && Bool.not member_lock && is_unit_ok r)
+}
+
 #[partial]
 def Build.verify_fixture (root : String) (locked : Bool) : IO (Result String Unit) := do {
     let man <- Mote.manifest_at (Path.unsafe_dir (Build.fetch_app root));
