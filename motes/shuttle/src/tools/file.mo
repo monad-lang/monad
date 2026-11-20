@@ -265,7 +265,7 @@ def written_content (id : String) (done : String) (w : Result StreamError Unit) 
 /// the next request ~1M tokens and the provider rejected it with 400).
 /// Every byte here is re-sent on each later request of the turn, so the
 /// cap is a token budget, not a display limit; `offset`/`limit` page.
-def read_max_bytes : I64 := 131072
+def read_max_bytes : I64 := 32768
 
 /// How far a paged read scans to reach its offset. Bounded so a huge log
 /// cannot make `read {offset: …}` read forever; a marker says when the

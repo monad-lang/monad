@@ -94,9 +94,18 @@ def encode_message (m : Message) : List ChatMessage :=
             match role {
                 Role.tool => collect_tool_result_messages content,
                 _ =>
+                    let text : Option String := first_text content in
+                    let calls : List ToolCall := collect_tool_calls content in
                     let chat_msg : ChatMessage :=
-                        { role := role_tag role, content := first_text content, tool_calls := collect_tool_calls content, tool_call_id := Option.none, name := Option.none } in
-                    List.cons chat_msg List.empty,
+                        { role := role_tag role, content := text, tool_calls := calls, tool_call_id := Option.none, name := Option.none } in
+                    // A message with no text and no tool call (a `max_tokens`
+                    // stop spent on reasoning) would go out as `content: null`,
+                    // which servers reject with a 400 on EVERY later request.
+                    // There is nothing in it to send, so it is left out.
+                    match text {
+                        Option.some _ => List.cons chat_msg List.empty,
+                        Option.none => if List.is_empty calls then List.empty else List.cons chat_msg List.empty,
+                    },
             }
     }
 

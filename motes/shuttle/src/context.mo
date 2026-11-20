@@ -84,38 +84,42 @@ pub def stub_tool_results (m : Message) : Message :=
             stubbed,
     }
 
-#[partial]
-def trim_over (budget : I64) (pos : I64) (len : I64) (used : I64) (m : Message) (rest : List Message) : List Message :=
-    let stubbed : Message := stub_tool_results m in
-    List.cons stubbed (trim_walk budget (pos + 1) len (used + message_tokens stubbed) rest)
+/// What stubbing a message saves, by the same estimate `trim` budgets with.
+/// A function of the message alone, so the prefix `trim` cuts is stable
+/// while the history grows (the history is append-only).
+def stub_savings (m : Message) : I64 :=
+    message_tokens m - message_tokens (stub_tool_results m)
 
+/// Stub oldest-first until `saved` reaches `target`; the rest, and always
+/// the NEWEST message, stay byte-for-byte.
 #[partial]
-def trim_cons (budget : I64) (pos : I64) (len : I64) (used : I64) (m : Message) (rest : List Message) : List Message :=
-    if pos + 1 == len then List.cons m rest
-    else if Bool.not (budget < used + message_tokens m) then
-        List.cons m (trim_walk budget (pos + 1) len (used + message_tokens m) rest)
-    else trim_over budget pos len used m rest
-
-/// Walk the history oldest-first, keeping each message intact while the
-/// running estimate fits `budget` and stubbing the tool results of every
-/// message past it. The NEWEST message (the last) is never touched --
-/// the model's most recent turn and its tool results stay legible.
-#[partial]
-def trim_walk (budget : I64) (pos : I64) (len : I64) (used : I64) (history : List Message) : List Message :=
+def stub_prefix (target : I64) (saved : I64) (left : I64) (history : List Message) : List Message :=
     match history {
         List.empty => List.empty,
-        List.cons m rest => trim_cons budget pos len used m rest,
+        List.cons m rest =>
+            if Bool.or (I64.lt left 2i64) (Bool.not (saved < target)) then history
+            else List.cons (stub_tool_results m) (stub_prefix target (saved + stub_savings m) (left - 1i64) rest),
     }
 
-/// Oldest-first trimming of tool results: messages are kept byte-for-byte
-/// while the estimated total fits `budget`; once it does not, each
-/// further message's `tool_result` outputs are replaced by the trim
-/// stub (text and `tool_use` blocks are left alone -- only tool OUTPUT
-/// is trimmed, never the request that produced it). The newest message
-/// is exempt. History is oldest-first: the loop appends at the end.
+/// Oldest-first trimming of tool results. Under `budget` the history is
+/// returned as is. Over it, the OLDEST messages' `tool_result` outputs
+/// become the trim stub (text and `tool_use` blocks stay: only tool OUTPUT
+/// is trimmed, never the request that produced it) until the estimate is
+/// back near 70% of the budget. The newest message is exempt.
+///
+/// The amount to save is rounded UP to a multiple of 30% of the budget, so
+/// the cut moves only after that much growth: between moves every request
+/// sends a byte-identical prefix, which is what lets a provider's prompt
+/// cache keep hitting through a long tool loop.
 pub def trim (budget : I64) (history : List Message) : List Message :=
-    if Bool.not (budget < history_tokens history) then history
-    else trim_walk budget 0 (List.length history) 0 history
+    let total : I64 := history_tokens history in
+    if Bool.not (budget < total) then history
+    else
+        let chunk0 : I64 := budget * 3i64 / 10i64 in
+        let chunk : I64 := if I64.lt chunk0 1i64 then 1i64 else chunk0 in
+        let excess : I64 := total - budget * 7i64 / 10i64 in
+        let target : I64 := (excess + chunk - 1i64) / chunk * chunk in
+        stub_prefix target 0i64 (List.length history) history
 
 #[partial]
 def tools_prefix (tools : List ToolSpec) : String :=
@@ -143,8 +147,10 @@ pub def cached_prefix (system : String) (tools : List ToolSpec) : String :=
 // with HTTP 400. The cap is applied where results ENTER the history
 // (the loop) and by the read tool before numbering.
 
-/// The most text one tool result contributes.
-pub def Context.tool_output_max : I64 := 262144
+/// The most text one tool result contributes. Every byte is re-sent on
+/// each later request, so this is a token budget (~12k tokens), with room
+/// above `read`'s own 32 KiB page for its gutter and paging marker.
+pub def Context.tool_output_max : I64 := 49152
 
 /// A prefix no longer than `max`, ending on a UTF-8 boundary (the
 /// runtime's slice answers "" when its end offset is a continuation
@@ -162,5 +168,5 @@ pub def Context.cap_text (text : String) (max : I64) : String :=
     if Bool.not (I64.gt n max) then text
     else
         let note : String := String.concat "\n[truncated: "
-            (String.concat (I64.to_string n) " bytes total]") in
+            (String.concat (I64.to_string n) " bytes total; narrow the command or page the source]") in
         String.concat (cap_slice text max 0i64) note

@@ -117,3 +117,14 @@ def test_decode_response_passes_cached_tokens_through : Bool :=
             },
         Result.err _ => false,
     }
+
+/// A stored assistant message with nothing in it (a `max_tokens` stop that
+/// spent its budget reasoning) is left out: encoded, it went out as
+/// `content: null` and the server answered every later request with 400.
+#[test]
+def test_encode_skips_an_empty_assistant_message : Bool :=
+    let u1 : Message := { role := Role.user, content := [Content.text "write the plan"] } in
+    let empty : Message := { role := Role.assistant, content := [] } in
+    let u2 : Message := { role := Role.user, content := [Content.text "continue"] } in
+    let req : ChatRequest := OpenAI.encode_request "m" 512 "sys" [] [u1, empty, u2] in
+    List.length req.messages == 3

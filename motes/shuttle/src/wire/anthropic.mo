@@ -17,7 +17,8 @@
 ///     error -- it arrives in an ordinary HTTP 200 body.
 ///   * `cache_read_input_tokens` is the wire name for what the
 ///     normal form calls `cached_tokens`; the last tool def carries a
-///     `cache_control` breakpoint (the tool table is the stable
+///     `cache_control` breakpoint, as do the last system block and the
+///     last message's last block (the tool table is the stable
 ///     prefix of every request in a turn loop -- the standard
 ///     breakpoint location; Phase 5's context management owns any
 ///     refinement).
@@ -61,6 +62,46 @@ def mark_last_tool_cached (ts : List AnthropicTool) : List AnthropicTool :=
             },
     }
 
+/// A block as a cache breakpoint. The wire refuses `cache_control` on a
+/// thinking block, so one stays unmarked (that request caches less, once).
+def cache_block (b : Block) : Block :=
+    match b {
+        Block.text s _ => Block.text s true,
+        Block.thinking s signature cache => Block.thinking s signature cache,
+        Block.tool_use id name input _ => Block.tool_use id name input true,
+        Block.tool_result tool_use_id content is_error _ => Block.tool_result tool_use_id content is_error true,
+    }
+
+#[partial]
+def mark_last_block_cached (bs : List Block) : List Block :=
+    match bs {
+        List.empty => List.empty,
+        List.cons b rest =>
+            match rest {
+                List.empty => List.cons (cache_block b) List.empty,
+                List.cons _ _ => List.cons b (mark_last_block_cached rest),
+            },
+    }
+
+def cache_message (m : AnthropicMessage) : AnthropicMessage :=
+    match m {
+        AnthropicMessage.mk role content => AnthropicMessage.mk role (mark_last_block_cached content),
+    }
+
+/// The rolling breakpoint: the LAST message's last block, so the whole
+/// conversation so far is the cached prefix of the next request (the
+/// history is append-only between compactions).
+#[partial]
+def mark_last_message_cached (ms : List AnthropicMessage) : List AnthropicMessage :=
+    match ms {
+        List.empty => List.empty,
+        List.cons m rest =>
+            match rest {
+                List.empty => List.cons (cache_message m) List.empty,
+                List.cons _ _ => List.cons m (mark_last_message_cached rest),
+            },
+    }
+
 /// A normalized message becomes exactly ONE wire message -- the
 /// parallel-tool-call rule above means a `Role.tool` message's several
 /// `tool_result`s share one `user` message rather than splitting.
@@ -81,6 +122,9 @@ def encode_one (m : Message) : AnthropicMessage :=
             { role := wire_role, content := blocks },
     }
 
+def message_content (m : Message) : List Content :=
+    match m { Message.mk _ content => content }
+
 #[partial]
 def encode_message_list (ms : List Message) : List AnthropicMessage :=
     match ms {
@@ -92,7 +136,10 @@ def encode_message_list (ms : List Message) : List AnthropicMessage :=
                         // The wire has no system role in `messages`; its text
                         // folds into the top-level system blocks instead.
                         Role.system_ => encode_message_list rest,
-                        _ => List.cons (encode_one m) (encode_message_list rest),
+                        // The wire rejects an empty content list (a stored
+                        // `max_tokens` stop with no text); nothing to send.
+                        _ => if List.is_empty (message_content m) then encode_message_list rest
+                            else List.cons (encode_one m) (encode_message_list rest),
                     },
             },
     }
@@ -115,10 +162,14 @@ def system_blocks_of (ms : List Message) : List Block :=
 /// (off by default -- it costs tokens and latency). The wire type
 /// carries both (`motes/anthropic`'s own tests pin the shapes).
 pub def Anthropic.encode_request (cfg_model : String) (max_tokens : I64) (thinking : Bool) (system : String) (tools : List ToolSpec) (history : List Message) : MessagesRequest :=
+    // Three breakpoints of the wire's four, in prompt order: the last tool,
+    // the last system block (the base prompt, or a fold/compaction digest
+    // after it), and the last message -- so a request re-reads everything
+    // before its newest turn from the cache.
     let system_block : Block := Block.text system false in
-    let system_blocks : List Block := List.cons system_block (system_blocks_of history) in
+    let system_blocks : List Block := mark_last_block_cached (List.cons system_block (system_blocks_of history)) in
     let wire_tools : List AnthropicTool := mark_last_tool_cached (List.map (fn (spec : ToolSpec) => spec_to_tool spec) tools) in
-    let wire_messages : List AnthropicMessage := encode_message_list history in
+    let wire_messages : List AnthropicMessage := mark_last_message_cached (encode_message_list history) in
     {
         model := cfg_model,
         max_tokens := max_tokens,

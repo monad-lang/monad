@@ -130,7 +130,7 @@ def repeat_chunks (s : String) (n : I64) (acc : List String) : List String :=
 
 #[test]
 def test_read_caps_a_huge_file : IO Bool := do {
-    // "x" then 2-byte chars: the 131072-byte cut lands on a lead byte with
+    // "x" then 2-byte chars: the 32768-byte cut lands on a lead byte with
     // no continuation, so the cut has to back off to a character boundary.
     let big : String := String.concat "x" (String.concat_list (repeat_chunks "é" 131073i64 List.empty));
     let args : WriteArgs := { path := scratch_path "big.txt", content := big };

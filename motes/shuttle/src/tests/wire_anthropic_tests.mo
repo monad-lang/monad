@@ -269,3 +269,87 @@ def test_decode_normalizes_cached_prompt_tokens : Bool :=
                     },
             },
     }
+
+// ── prompt-cache breakpoints beyond the tool table ────────────────────
+
+def block_cached (b : Block) : Bool :=
+    match b {
+        Block.text _ c => c,
+        Block.thinking _ _ c => c,
+        Block.tool_use _id _name _input c => c,
+        Block.tool_result _id _content _is_error c => c,
+    }
+
+#[partial]
+def cached_count (bs : List Block) : I64 :=
+    match bs {
+        List.empty => 0,
+        List.cons b rest => (if block_cached b then 1 else 0) + cached_count rest,
+    }
+
+#[partial]
+def last_block_cached (bs : List Block) : Bool :=
+    match bs {
+        List.empty => false,
+        List.cons b rest => if List.is_empty rest then block_cached b else last_block_cached rest,
+    }
+
+def message_blocks (m : AnthropicMessage) : List Block :=
+    match m { AnthropicMessage.mk _ blocks => blocks }
+
+#[partial]
+def message_cached_counts (ms : List AnthropicMessage) : List I64 :=
+    match ms {
+        List.empty => List.empty,
+        List.cons m rest => List.cons (cached_count (message_blocks m)) (message_cached_counts rest),
+    }
+
+/// The LAST system block is a breakpoint: the base prompt, or the digest a
+/// fold/compaction appended after it (then the base block is not).
+#[test]
+def test_encode_marks_last_system_block_cached : Bool :=
+    let sys_msg : Message := { role := Role.system_, content := [Content.text "digest"] } in
+    let user_msg : Message := { role := Role.user, content := [Content.text "hi"] } in
+    let plain : MessagesRequest := Anthropic.encode_request "claude-opus-5" 512 false "sys" [] [user_msg] in
+    let folded : MessagesRequest := Anthropic.encode_request "claude-opus-5" 512 false "sys" [] [sys_msg, user_msg] in
+    let s1 : List Block := plain.system in
+    let s2 : List Block := folded.system in
+    last_block_cached s1 && cached_count s1 == 1
+        && last_block_cached s2 && cached_count s2 == 1
+
+/// The rolling breakpoint: only the LAST message's last block is marked,
+/// so the whole conversation before it is the next request's cache hit.
+#[test]
+def test_encode_marks_only_the_last_message_cached : Bool :=
+    let u1 : Message := { role := Role.user, content := [Content.text "first"] } in
+    let a1 : Message := { role := Role.assistant, content := [Content.text "reply"] } in
+    let results : List Content := [Content.tool_result "c1" "out1" false, Content.tool_result "c2" "out2" false] in
+    let t1 : Message := { role := Role.tool, content := results } in
+    let req : MessagesRequest := Anthropic.encode_request "claude-opus-5" 512 false "sys" [] [u1, a1, t1] in
+    match message_cached_counts req.messages {
+        List.cons c0 r0 => match r0 {
+            List.cons c1 r1 => match r1 {
+                List.cons c2 r2 => c0 == 0 && c1 == 0 && c2 == 1 && List.is_empty r2,
+                List.empty => false,
+            },
+            List.empty => false,
+        },
+        List.empty => false,
+    }
+
+/// An empty history still encodes (no message to mark), keeping the
+/// system and tool breakpoints only.
+#[test]
+def test_encode_empty_history_keeps_system_breakpoint : Bool :=
+    let req : MessagesRequest := Anthropic.encode_request "claude-opus-5" 512 false "sys" [] [] in
+    List.is_empty req.messages && last_block_cached req.system
+
+/// The same empty assistant message is left out on this wire, which
+/// rejects an empty content list.
+#[test]
+def test_encode_skips_an_empty_assistant_message : Bool :=
+    let u1 : Message := { role := Role.user, content := [Content.text "write the plan"] } in
+    let empty : Message := { role := Role.assistant, content := [] } in
+    let u2 : Message := { role := Role.user, content := [Content.text "continue"] } in
+    let req : MessagesRequest := Anthropic.encode_request "claude-opus-5" 512 false "sys" [] [u1, empty, u2] in
+    List.length req.messages == 2

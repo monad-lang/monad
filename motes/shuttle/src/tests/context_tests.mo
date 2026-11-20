@@ -1,6 +1,8 @@
 /// Tests for `motes/shuttle/src/context.mo` -- Phase 5's accounting,
 /// trimming and cached prefix. Pure value tests, no IO.
-use shuttle::context {usage_zero, usage_add, usage_total, estimate_tokens, trim, cached_prefix, stub_tool_results}
+use shuttle::context {
+    usage_zero, usage_add, usage_total, estimate_tokens, trim, cached_prefix, stub_tool_results, history_tokens
+}
 use shuttle::agent {silent_send_history}
 use shuttle::message {Message, Usage}
 use shuttle::message_types {Role, Content}
@@ -170,3 +172,48 @@ def test_a_projection_does_not_touch_the_stored_history : Bool :=
         && List.length projected == before
         && nth_output projected 0 == "[trimmed by the shuttle context manager]"
         && nth_output projected 2 == "keep me readable"
+
+// ── trim cuts the OLDEST prefix, in stable steps ──────────────────────
+// Each `big_tool` is ~76 estimated tokens and saves ~65 when stubbed. With
+// a budget of 300 the five-result history (~385) must save 175, rounded up
+// to the 90-token step: 180, i.e. the three OLDEST results.
+
+def big_tool (id : String) : Message :=
+    { role := Role.tool, content := [Content.tool_result id big_output false] }
+
+def five_big : List Message :=
+    [big_tool "a", big_tool "b", big_tool "c", big_tool "d", big_tool "e"]
+
+def is_stub (ms : List Message) (n : I64) : Bool :=
+    nth_output ms n == "[trimmed by the shuttle context manager]"
+
+#[test]
+def test_trim_stubs_the_oldest_and_keeps_the_recent : Bool :=
+    let t : List Message := trim 300 (List.append five_big [newest_tool_message]) in
+    is_stub t 0 && is_stub t 1 && is_stub t 2
+        && nth_output t 3 == big_output && nth_output t 4 == big_output
+        && nth_output t 5 == "keep me readable"
+
+#[test]
+def test_trim_fits_the_budget : Bool :=
+    let t : List Message := trim 300 (List.append five_big [newest_tool_message]) in
+    I64.lt (history_tokens t) 301i64
+
+/// A small append leaves the cut where it was: the sent prefix is
+/// byte-stable, so a provider's prompt cache still hits.
+#[test]
+def test_trim_cut_is_stable_under_a_small_append : Bool :=
+    let t : List Message := trim 300 (List.append five_big [plain_message, newest_tool_message]) in
+    is_stub t 2 && nth_output t 3 == big_output && nth_output t 5 == "short"
+
+/// Enough growth crosses the next step and moves the cut forward.
+#[test]
+def test_trim_cut_advances_after_a_step_of_growth : Bool :=
+    let t : List Message := trim 300 (List.append five_big [big_tool "f", newest_tool_message]) in
+    is_stub t 4 && nth_output t 5 == big_output && nth_output t 6 == "keep me readable"
+
+/// The newest message is never stubbed, even when it alone is over budget.
+#[test]
+def test_trim_never_stubs_the_newest : Bool :=
+    let t : List Message := trim 10 [big_tool "a", big_tool "z"] in
+    is_stub t 0 && nth_output t 1 == big_output
