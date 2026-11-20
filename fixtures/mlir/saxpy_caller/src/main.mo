@@ -91,7 +91,8 @@ def main : IO Unit := do {
     let buf <- ByteBuf.alloc 64;
     let dst := ByteBuf.ptr buf;
 
-    let _w <- saxpy dst three_point_zero_bits;
+    // `saxpy` is a `RawIO` extern; `IO.mk` lifts it into this `IO` block.
+    let _w <- IO.mk (saxpy dst three_point_zero_bits);
 
     let got_total := total dst;
     let got_checksum := checksum 8;
