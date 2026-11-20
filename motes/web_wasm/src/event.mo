@@ -16,7 +16,9 @@
 /// badly, narrow the record or add kind-gated groups — do not rely on an
 /// unread field being free.
 
-use web_event::event {WebEvent, FileInfo}
+// Re-exported so `use web_wasm::event {WebEvent, WebEvent.current}` names the
+// snapshot type beside its getter (forge gap G9).
+pub use web_event::event {WebEvent, FileInfo}
 use lib::ffi {
     event_i64_raw, event_f64_raw, event_str_raw, event_data_raw, event_types_raw,
     event_files_count_raw, event_file_i64_raw, event_file_str_raw,
