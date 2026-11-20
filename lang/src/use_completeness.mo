@@ -1528,11 +1528,59 @@ pub def use_completeness_errors (file_path : String) (consumer : ModulePath)
     (consumer_mote : Option String)
     (pre_decls : List Decl) (expanded_decls : List Decl)
     (world : List (Pair ModulePath (List Decl))) : List String :=
-    match collect_opens pre_decls (struct_opens_empty) {
-        // An unfiltered `open T` silences the whole file.
-        Option.none => List.empty,
-        Option.some opens => judge_all file_path consumer consumer_mote pre_decls expanded_decls world opens,
+    List.append (unresolved_use_errors file_path pre_decls world)
+        (match collect_opens pre_decls (struct_opens_empty) {
+            // An unfiltered `open T` silences the whole file.
+            Option.none => List.empty,
+            Option.some opens => judge_all file_path consumer consumer_mote pre_decls expanded_decls world opens,
+        })
+
+// ─── `use` of a module that does not exist ──────────────────────────
+//
+// A `use` whose module the load never found used to print one
+// `unresolved module:` line and carry on: with the imported name unused the
+// run reported 0 errors, and with it used every name surfaced later as an
+// unrelated `unknown variable` (forge gap G4). It is an error at the `use`.
+// A module counts as found when the world holds it or anything under it
+// (a mote named bare, `use web_wasm {X}`, reaches its lib).
+
+#[terminating]
+def unresolved_use_errors (file_path : String) (decls : List Decl)
+    (world : List (Pair ModulePath (List Decl))) : List String :=
+    match decls {
+        List.empty => List.empty,
+        List.cons d rest =>
+            match d {
+                Decl.use_d path _filter _public =>
+                    if world_has_module world (module_path_to_string_colon path)
+                    then unresolved_use_errors file_path rest world
+                    else List.cons (render_unresolved_use file_path path)
+                        (unresolved_use_errors file_path rest world),
+                _ => unresolved_use_errors file_path rest world,
+            },
     }
+
+#[terminating]
+def world_has_module (world : List (Pair ModulePath (List Decl))) (wanted : String) : Bool :=
+    match world {
+        List.empty => false,
+        List.cons entry rest =>
+            match entry {
+                Pair.pair mp _ds =>
+                    let have : String := module_path_to_string_colon mp in
+                    if String.beq have wanted || String.starts_with (wanted ++ "::") have
+                    then true
+                    else world_has_module rest wanted,
+            },
+    }
+
+def render_unresolved_use (file_path : String) (path : ModulePath) : String :=
+    let module_str : String := module_path_to_string_colon path in
+    String.concat_all [
+        "error: unresolved module `", module_str, "`: no file provides it\n",
+        "  hint: check the spelling, and that its mote is a dependency in mote.toml\n",
+        "  in ", file_path,
+    ]
 
 // ─── `open` and visibility ──────────────────────────────────────────
 //
@@ -1965,6 +2013,26 @@ def test_chained_pub_use_reaches_the_declaring_module : Bool :=
         (Bool.not
             (List.is_empty
                 (probe_errors world consumer_path "use widgets {Vec3}\ndef use_it : I64 := Vec3")))
+
+/// A `use` of a module the world does not hold is an error that names the
+/// module (forge gap G4), even when nothing from it is used; a mote named
+/// bare is found through its modules.
+#[test]
+def test_use_of_a_missing_module_is_an_error : Bool :=
+    let missing : List String :=
+        probe_errors [Pair.pair widgets_path widgets_src] consumer_path
+            "use widgets::schedule {Schedule}\ndef use_it : I64 := 1" in
+    let sub_path : ModulePath := ModulePath.mk [Identifier.id "widgets", Identifier.id "gl"] in
+    let bare_mote : List String :=
+        probe_errors [Pair.pair sub_path widgets_src] consumer_path
+            "use widgets {}\nuse widgets::gl {widget}\ndef use_it : I64 := widget" in
+    match missing {
+        List.cons msg rest =>
+            List.is_empty rest
+                && String.contains msg "unresolved module `widgets::schedule`"
+                && List.is_empty bare_mote,
+        List.empty => false,
+    }
 
 /// `open T {n}` makes `n` bare without a `use` line, and an unfiltered
 /// `open T` silences the file.
