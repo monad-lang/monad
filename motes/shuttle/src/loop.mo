@@ -35,7 +35,7 @@ use shuttle::registry {ToolRegistry}
 use shuttle::session {Session}
 use shuttle::agent {RunState, Agent, AgentIdle, AgentAnswered, AgentExecuting, AgentDone, silent_sleep, silent_usage, silent_stop, silent_inbox, silent_side_spend}
 use shuttle::context {usage_zero, usage_add, Context.cap_text, Context.tool_output_max}
-use std::list {List.intercalate}
+use std::list {List.intercalate, List.filter}
 use shuttle::gate {Capability, Pick, Approval, Gate}
 use json::json {Json}
 
@@ -278,13 +278,15 @@ def agent_send_run (s : RunState) : ResultT String IO (Pair RunState Turn) := do
     // session is untouched (append-only), only what THIS call sends is
     // shaped. The default is the identity.
     let sent : List Message := s.send_history s.session.history;
-    let turn <- Loop.retry_send
+    let turn0 <- Loop.retry_send
         (fn (_ : Unit) => Provider.send s.session.config s.session.system_prompt specs sent s.should_stop s.emit)
         s.sleep_ms
         (if s.retries < 1 then 1 else s.retries)
         1
         2000
         s.emit;
+    let turn1 <- Loop.resend_truncated s specs sent turn0;
+    let turn : Turn := Loop.drop_truncated_tool_use turn1;
     // A reply with nothing in it is not a normal finish: it is the shape
     // a proxy's HTML error page, a 200 with an empty stream, or a mangled
     // tool-use stop takes. Reject it BEFORE the turn is counted or written,
@@ -338,6 +340,70 @@ pub def Loop.turn_reply_error (turn : Turn) : String :=
     then String.concat "empty assistant reply (stop: " (String.concat (StopReason.tag turn.stop) ")")
     else String.concat "the reply stopped for tool use with no tool_use block (stop: "
         (String.concat (StopReason.tag turn.stop) ")")
+
+/// A cut-off reply with nothing usable in it: no text (the budget went
+/// to reasoning) or a tool call whose arguments were cut mid-JSON.
+pub def Loop.truncated_unusable (turn : Turn) : Bool :=
+    Bool.and (StopReason.is_truncated turn.stop)
+        (Bool.or (content_has_tool_use turn.message.content) (Bool.not (content_has_text turn.message.content)))
+
+#[partial]
+def content_has_text (cs : List Content) : Bool :=
+    match cs {
+        List.empty => false,
+        List.cons c rest => match c {
+            Content.text t => Bool.or (Bool.not (String.is_empty (String.trim t))) (content_has_text rest),
+            _ => content_has_text rest,
+        },
+    }
+
+/// The budget a cut-off reply is resent with: double, up to `ceiling`.
+pub def Loop.raised_budget (max_tokens : I64) (ceiling : I64) : I64 :=
+    if I64.lt ceiling (max_tokens * 2) then ceiling else max_tokens * 2
+
+/// One resend of an unusable cut-off reply at a raised budget; any other
+/// turn, or one already at the ceiling, passes through. The dropped
+/// attempt's usage is still counted.
+def Loop.resend_truncated (s : RunState) (specs : List ToolSpec) (sent : List Message) (turn : Turn)
+    : ResultT String IO Turn :=
+    let cfg : ProviderConfig := s.session.config in
+    let raised : I64 := Loop.raised_budget cfg.max_tokens s.output_ceiling in
+    if Bool.or (Bool.not (Loop.truncated_unusable turn)) (Bool.not (I64.lt cfg.max_tokens raised))
+    then ResultT.mk (return (Result.ok turn))
+    else ResultT.mk (do {
+        // Any text the cut attempt streamed stays on screen; the note says it
+        // is superseded by what follows.
+        let _ <- s.emit (String.concat_list ["\n[output limit ", I64.to_string cfg.max_tokens, " -> ",
+            I64.to_string raised, ": the reply was cut off and is resent; the partial reply above is discarded]\n"]);
+        let cfg2 : ProviderConfig := { cfg with max_tokens := raised };
+        let res <- ResultT.run (Loop.retry_send
+            (fn (_ : Unit) => Provider.send cfg2 s.session.system_prompt specs sent s.should_stop s.emit)
+            s.sleep_ms (if s.retries < 1 then 1 else s.retries) 1 2000 s.emit);
+        return (Loop.with_dropped_usage turn res)
+    })
+
+/// The resend's result with the dropped attempt's usage folded in.
+def Loop.with_dropped_usage (first : Turn) (res : Result String Turn) : Result String Turn :=
+    match res {
+        Result.err e => Result.err e,
+        Result.ok t =>
+            let t2 : Turn := { t with usage := usage_add first.usage t.usage } in
+            Result.ok t2,
+    }
+
+/// A cut-off reply never keeps a tool call: its arguments are probably
+/// incomplete, it would not be dispatched (the stop is not `tool_use`),
+/// and a stored tool_use with no result breaks every later request.
+pub def Loop.drop_truncated_tool_use (turn : Turn) : Turn :=
+    if Bool.not (StopReason.is_truncated turn.stop) then turn
+    else
+        let m0 : Message := turn.message in
+        let kept : List Content := List.filter (fn (c : Content) => Bool.not (content_is_tool_use c)) m0.content in
+        let m : Message := { m0 with content := kept } in
+        { turn with message := m }
+
+def content_is_tool_use (c : Content) : Bool :=
+    match c { Content.tool_use _ _ _ => true, _ => false }
 
 /// Idle -> Idle: the send, or `none` when the stop seam interrupted it
 /// mid-stream (the run is then marked stopped). The loop's own path:

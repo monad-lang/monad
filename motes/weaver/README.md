@@ -295,11 +295,14 @@ and the model records that assumption in the plan.
 
 Token budgets are deliberately tight because every tool result is re-sent
 on each later request of the turn: `shell` shows 160 lines and `search` 200 lines,
-both 32 KiB; `read` 128 KiB, `monad_check` the first 40 diagnostics and
+both 32 KiB; `read` 32 KiB, `monad_check` the first 40 diagnostics and
 warnings, and `monad_eval` 16 KiB of output. `max_tokens` is clamped to
 the provider's accepted ceiling (8192 for anthropic/openrouter/mistral;
 never raised, and Ollama/mock are uncapped), and `/settings max_tokens`
-reports the effective value.
+reports the effective value. A reply cut off at `max_tokens` with no text
+(the budget went to reasoning) or a half-written tool call is resent once at
+double the budget, up to the provider's cap (32768 when it has none), and a
+cut-off tool call is never run or saved.
 
 The provider decides which models exist: `/model` with no argument
 fetches its `/v1/models` list (the mock wire answers `mock` offline),

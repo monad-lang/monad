@@ -82,6 +82,10 @@ pub struct RunState {
     /// `none` before any call. Not serialized: it is the run's outcome,
     /// and a resumed run's next turn carries its own.
     last_stop : Option StopReason := Option.none,
+    /// The highest `max_tokens` a cut-off reply may be resent with. A
+    /// `max_tokens` stop with no text (all reasoning) or a half-written
+    /// tool call is resent once at double the budget, up to this; 0 = never.
+    output_ceiling : I64 := 0,
 }
 
 /// The usage hook's default: do nothing.

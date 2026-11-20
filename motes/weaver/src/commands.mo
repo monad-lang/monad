@@ -35,7 +35,7 @@ use shuttle::tool {ToolSpec}
 use shuttle::gate {Capability}
 use weaver::policy {Mode, Mode.show, Mode.parse, Mode.approve_plan, AutoDanger, AutoDanger.parse, AutoDanger.show, Verdict}
 use weaver::gate {cap_name}
-use weaver::providers {Weaver.preset, Weaver.config_for, Weaver.preferred_model, Weaver.model_for, Weaver.provider_of, Weaver.clamp_cfg, Weaver.migrate_max_tokens, Weaver.max_tokens_reclamp}
+use weaver::providers {Weaver.preset, Weaver.config_for, Weaver.preferred_model, Weaver.model_for, Weaver.provider_of, Weaver.clamp_cfg, Weaver.migrate_max_tokens, Weaver.max_tokens_reclamp, Weaver.output_cap}
 use weaver::catalog {Catalog.fetch, Catalog.lookup, Catalog.remember, Catalog.render, Catalog.note}
 use weaver::compact {Compact.threshold, Compact.should_compact, Compact.estimate, Compact.compact, Compact.Outcome}
 use weaver::fold {Fold.resume_budget, Fold.fold_session, Fold.digest_note}
@@ -1667,6 +1667,14 @@ pub def Commands.send_history_projector (budget : I64) : List Message -> List Me
 /// would leave.
 pub def Commands.send_history_for (st : WeaverState) : List Message -> List Message :=
     Commands.send_history_projector (Compact.threshold st.context_window st.compact_at)
+
+/// The most a cut-off reply's resend may raise `max_tokens` to
+/// (`RunState.output_ceiling`): the provider's own cap, else 32768.
+pub def Commands.output_ceiling_for (st : WeaverState) : I64 :=
+    match Weaver.output_cap st.provider st.run.session.config.model st.context_window {
+        Option.some cap => cap,
+        Option.none => 32768,
+    }
 
 // ── /permissions ───────────────────────────────────────────────────────
 

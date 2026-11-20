@@ -21,7 +21,7 @@ use weaver::commands {
     Commands.set_plan, Commands.plan_after_turn, SessionPage, Commands.session_page,
     Commands.turns_label, Commands.turn_context, Commands.sessions_for, Commands.place_suffix,
     Commands.memory_text, Commands.store_plan, Commands.linked_plan, Commands.with_skills, Commands.skill_turn, Commands.builtin_names, Commands.apply_setting, Commands.cycle_setting, command_table, SlashCommand, MountedCommand, Commands.mount, Effect.ok,
-    Commands.send_history_projector, Commands.send_history_for,
+    Commands.send_history_projector, Commands.send_history_for, Commands.output_ceiling_for,
 }
 use loom::strand {Active, Disposed, Strand, StrandRun, Strand.run, Strand.sealed}
 use weaver::skills {Skill}
@@ -1441,3 +1441,10 @@ def test_send_history_for_reads_the_window : Bool :=
     let h : List Message := [big_tool_result, ok, newest] in
     List.length (Commands.send_history_for off h) == 3
         && String.contains (proj_nth (Commands.send_history_for on h) 0) "trimmed"
+
+/// The resend ceiling is the provider's own output cap, else 32768.
+#[test]
+def test_output_ceiling_follows_the_provider : Bool :=
+    let anth : WeaverState := { (state_of Mode.manual []) with provider := "anthropic" } in
+    Commands.output_ceiling_for anth == 16384
+        && Commands.output_ceiling_for (state_of Mode.manual []) == 32768
