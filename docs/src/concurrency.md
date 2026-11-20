@@ -27,9 +27,11 @@ overlap with it.
 
 The model is 1:1 pthreads, deliberately: compiled Monad code recurses deeply
 (`main` raises `RLIMIT_STACK` to 128 MB), so a small green-thread stack would
-overflow on the first recursive helper. Each fiber therefore reserves the same
-128 MB of *address* space, committed only as it is touched, so a fiber that does
-not recurse deeply costs nothing in RSS. This does not scale to a hundred
+overflow on the first recursive helper. Each fiber therefore reserves 32 MB of
+*address* space, committed only as it is touched, so a fiber that does not
+recurse deeply costs nothing in RSS. (32 MB is a 4x margin over the deepest
+recursion anything has actually reached: the compiler self-compiles inside an
+8 MB stack. `MONAD_STACK_BYTES` overrides it per run.) This does not scale to a hundred
 thousand fibers, and it is explicitly the interim design — the plan is to
 replace the handle's atomic refcount with the ownership discipline in
 [Linear & Affine Types](./linear-types.md).
@@ -79,7 +81,15 @@ def forkIO (action : Unit -> IO A) : IO (Fiber A)
 def await_fiber (f : Fiber A) : IO (Result FiberError A)
 def pollFiber (f : Fiber A) : IO (Option (Result FiberError A))
 def cancel_fiber (f : Fiber A) : IO Unit
+def wait_any (fs : List (Fiber A)) : IO (Option I64)
 ```
+
+`wait_any` parks until any fiber in the list has stopped, then answers that
+fiber's index in list order (`none` for an empty list, or when the waiting
+fiber is itself cancelled). The index rather than the answer, so the winner is
+still taken through `await_fiber` — one implementation of that protocol. It is
+the primitive `race` is built on, and it is compiled-only: the host cannot
+park, so it answers `none` there.
 
 `pollFiber` is the non-blocking `await_fiber`: `none` while the fiber runs,
 then `some` of the same answer. On the host it runs the deferred action and is
@@ -110,18 +120,20 @@ def test_fork_and_await : IO Bool {
 | Function | Type | Behaviour |
 |----------|------|-----------|
 | `all` | `List (Fiber A) -> IO (Result FiberError (List A))` | awaits every fiber in order, collecting results; stops at the first error |
-| `race` | `List (Fiber A) -> IO (Result FiberError A)` | the answer of whichever fiber stops first; cancels the rest |
+| `race` | `List (Fiber A) -> IO (Result FiberError A)` | the answer of whichever fiber stops first; cancels the rest. Parks on `wait_any`, so a win is seen as soon as it happens. On the host `wait_any` cannot park and answers `none`, so `race` reports `err cancelled` there |
 | `scoped` | `(Scope -> IO A) -> IO A` | runs an action with a scope, cancelling its fibers on exit |
 | `cancel_all` | `List (Fiber A) -> IO Unit` | cancels each fiber |
+| `select` | `List (Channel A) -> IO (Option A)` | takes from whichever channel first holds a value; `none` when the waiter was cancelled. Parks on `channel_take_any`, not a poll loop |
 | `sleepIO` | `I64 -> IO Unit` | sleeps for that many milliseconds |
 | `scope_new` / `scope_fork` / `scope_drop` | | the scope primitives `scoped` is built from |
 
 `sleepIO` is a real blocking sleep (`nanosleep`), so it costs a whole thread
 while it runs.
 
-`race` polls its contestants every millisecond, so it sees a win at most about
-a millisecond late. On the host, polling runs a fiber to completion, so the
-first fiber in the list always wins there.
+`race` parks on `wait_any`, so a win is seen as soon as it happens; the older
+implementation polled its contestants every millisecond, which put a
+one-millisecond floor under every win and cost a timer wakeup per waiting
+fiber. On the host `wait_any` cannot park, so `race` reports `err cancelled`.
 
 ```monad
 use std::concurrent::fiber {Fiber, forkIO}

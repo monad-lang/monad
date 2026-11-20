@@ -406,7 +406,7 @@ void* monad_fork_io(void* closure) {
         pthread_attr_setstacksize(&attr, monad_stack_bytes());
         rc = pthread_create(&thread, &attr, fiber_main, f);
         if (rc != 0) {
-            /* The 128 MB reservation can be refused (thread-count or
+            /* The stack reservation can be refused (thread-count or
                address-space limits). Retry on the default stack: a fiber
                on a small stack beats no fiber. */
             pthread_attr_destroy(&attr);
@@ -723,19 +723,68 @@ typedef struct ChanReg {
 static pthread_mutex_t chan_reg_lock = PTHREAD_MUTEX_INITIALIZER;
 static ChanReg* chan_reg_head = NULL;
 
-/* Wake every blocked channel waiter whose fiber has been cancelled. */
-static void channel_wake_cancelled(void) {
+/* The parking spot of every blocked channel waiter: `park` is the condvar a
+   waiter is actually inside `pthread_cond_wait` on, which for a `take_any`
+   is its FIRST channel and not necessarily the `chan` its node makes it
+   reachable on. Waking `park` is what releases the waiter. Collected under
+   the registry lock into a fresh atomic block (channel pointers, not Monad
+   words, so it must not be GC-scanned); `*out_n` is its length. */
+static ChannelObj** collect_parked(size_t* out_n) {
+    *out_n = 0;
+    size_t n = 0;
     pthread_mutex_lock(&chan_reg_lock);
-    for (ChanReg* n = chan_reg_head; n; n = n->next) {
-        if (!n->waiting) continue;
-        /* Lock order: registry, then the channel. `channel_put`/`take`
-           take only the channel's own lock and never the registry while
-           holding it, so this order is the only one that exists. */
-        pthread_mutex_lock(&n->chan->lock);
-        pthread_cond_broadcast(&n->chan->changed);
-        pthread_mutex_unlock(&n->chan->lock);
+    for (ChanReg* r = chan_reg_head; r; r = r->next) {
+        if (r->waiting) n++;
     }
     pthread_mutex_unlock(&chan_reg_lock);
+    if (n == 0) return NULL;
+    ChannelObj** spots = (ChannelObj**)monad_alloc_atomic((rt_size)(n * sizeof(ChannelObj*)));
+    if (!spots) return NULL;
+    size_t at = 0;
+    pthread_mutex_lock(&chan_reg_lock);
+    for (ChanReg* r = chan_reg_head; r && at < n; r = r->next) {
+        if (!r->waiting) continue;
+        spots[at++] = r->park ? r->park : r->chan;
+    }
+    pthread_mutex_unlock(&chan_reg_lock);
+    *out_n = at;
+    return spots;
+}
+
+/* Broadcast `spots[0..n)` -- each channel lock taken ALONE, never two at
+   once and never with the registry held. A broadcast carries no identity,
+   so a waiter that was not the intended one just re-checks and parks. */
+static void wake_spots(ChannelObj** spots, size_t n) {
+    if (!spots) return;
+    for (size_t i = 0; i < n; i++) {
+        if (!spots[i]) continue;
+        pthread_mutex_lock(&spots[i]->lock);
+        pthread_cond_broadcast(&spots[i]->changed);
+        pthread_mutex_unlock(&spots[i]->lock);
+    }
+}
+
+/* Wake every blocked channel waiter, so one whose own fiber was just
+   cancelled re-checks `monad_fiber_cancelled` and leaves its park.
+
+   LOCK ORDER -- the rule this file keeps: `chan_reg_lock` is a LEAF. A
+   thread may hold at most ONE channel lock and then take the registry
+   (`channel_wait` registers that way, and so do `monad_channel_put` and
+   `monad_channel_take_any`), but nothing may take a channel lock while
+   holding the registry, and nothing may hold two channel locks at once.
+   `wake_spots` is the one way to broadcast a set: it collects under the
+   registry, releases it, and takes each channel lock alone.
+
+   The first version took each channel lock INSIDE the registry walk, which
+   inverts against the registration paths above: the cancel path would hold
+   `chan_reg_lock` and wait for `c->lock` while a `take_any` holds `c->lock`
+   and waits for `chan_reg_lock`. That is an AB-BA deadlock on exactly the
+   path this function exists for -- a cancel racing a blocked `select`, or a
+   `race` loser cancelled under load. */
+static void channel_wake_cancelled(void) {
+    size_t n = 0;
+    ChannelObj** spots = collect_parked(&n);
+    wake_spots(spots, n);
 }
 
 /* Park on `c->changed` with `c->lock` held, cancelling-aware. Returns
@@ -786,31 +835,24 @@ void* monad_channel_put(void* handle, int64_t value) {
             pthread_cond_broadcast(&c->changed);
             /* A `select`/`channel_take_any` waiter parks on the condvar of
                the FIRST channel in its list, which may not be this one --
-               so it is asleep on a condvar this broadcast does not reach.
-               Broadcast the parking spot of every registered waiter that
-               includes THIS channel. Without this a value arriving on a
-               non-first channel never wakes the select, which then blocks
+               so it is asleep on a condvar the broadcast above does not
+               reach. Without waking those spots too, a value arriving on a
+               non-first channel never releases the select, which then blocks
                forever (`check_channel_take_any` in thread_stress.c).
 
-               Lock order: this thread holds `c->lock` and takes
-               `chan_reg_lock`, then takes `spot->lock`. That is the same
-               order `fiber_wait_any`'s cancel path and `channel_wake_cancelled`
-               use (registry-then-channel), and no path takes a channel lock
-               and THEN the registry, so there is no cycle. The `spot->lock`
-               acquisition happens only when `spot != c`, so a plain
-               take/put on one channel never nests two channel locks. */
-            pthread_mutex_lock(&chan_reg_lock);
-            for (ChanReg* n = chan_reg_head; n; n = n->next) {
-                if (n->chan == c && n->waiting) {
-                    ChannelObj* spot = n->park;
-                    if (spot && spot != c) {
-                        pthread_mutex_lock(&spot->lock);
-                        pthread_cond_broadcast(&spot->changed);
-                        pthread_mutex_unlock(&spot->lock);
-                    }
-                }
-            }
-            pthread_mutex_unlock(&chan_reg_lock);
+               So the OTHER spots are collected here -- one channel lock
+               (`c->lock`, already held) plus the registry, which is the
+               permitted order -- and broadcast only after `c->lock` is
+               released, through `wake_spots`. Taking `spot->lock` inline
+               would hold two channel locks at once, the inversion
+               `channel_wake_cancelled` documents; the value stays in
+               `c->full`, so a waiter woken after the release still finds
+               it. */
+            size_t nspots = 0;
+            ChannelObj** spots = collect_parked(&nspots);
+            pthread_mutex_unlock(&c->lock);
+            wake_spots(spots, nspots);
+            return alloc_constructor_impl(0, 0);
         }
         pthread_mutex_unlock(&c->lock);
     }
@@ -908,15 +950,13 @@ void* monad_channel_take_any(void* chans) {
                     value = c->value;
                     c->full = 0;
                     got = 1;
-                    /* Wake the channel's own put-waiters. */
-                    pthread_mutex_lock(&chan_reg_lock);
-                    for (ChanReg* r = chan_reg_head; r; r = r->next) {
-                        if (r->chan == c && r->waiting) {
-                            pthread_cond_broadcast(&c->changed);
-                            break;
-                        }
-                    }
-                    pthread_mutex_unlock(&chan_reg_lock);
+                    /* Wake this channel's own put-waiters. The registry
+                       scan that used to guard this broadcast could only
+                       ever have broadcast `c->changed` itself, so it is
+                       dropped: `c->lock` is held here, and taking the
+                       registry under it for a lookup that changes nothing
+                       is the inversion `channel_wake_cancelled` documents. */
+                    pthread_cond_broadcast(&c->changed);
                 }
                 pthread_mutex_unlock(&c->lock);
                 if (got) break;

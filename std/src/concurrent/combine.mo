@@ -112,8 +112,9 @@ def race_pick (fibers : Shared (List (Fiber A))) (idx : Option I64) : IO (Result
 /// late, and a race held open by sleepers costs no timer wakeups.
 ///
 /// On the Rust host `wait_any` answers `none` (it cannot park), so this
-/// reports `err cancelled` there; `combine_test.mo`'s lazy-host
-/// expectations are written against that.
+/// reports `err cancelled` there. That is why `test_race_single` and
+/// `test_race_first_to_finish` in `combine_test.mo` are COMPILED ONLY:
+/// they assert `ok`, which the host's `err cancelled` cannot satisfy.
 ///
 /// A cancelled loser stops at its next IO bind (cancellation is
 /// cooperative), so nothing waits for it and no later side effect runs.

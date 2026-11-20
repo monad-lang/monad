@@ -273,6 +273,10 @@ def test_sleepIO_fibers_run_concurrently : IO Bool {
 /// The waiter is first in the race list, so the lazy host runs it and
 /// reports `finished`; the compiled backend races it against the timer and
 /// the work finishes first either way.
+///
+/// Compiled only, for the reason above: the host cannot park, so `race`
+/// answers `err cancelled` and this would assert on nothing. The compiled
+/// backend is the one that actually races the waiter against the timer.
 #[test]
 def test_timeout_finished_before_expiry : IO Bool := do {
     let f <- forkIO (fn (_ : Unit) => do { sleepIO 10; return 7i64 });

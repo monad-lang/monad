@@ -6,7 +6,7 @@
 /// What it exists to answer, and why these particular shapes:
 ///
 ///   * `bench_fork_await` -- one `pthread_create` + Boehm thread
-///     registration + 128 MB VA reservation per `forkIO`
+///     registration + 32 MB VA reservation per `forkIO`
 ///     (runtime/src/platform_posix.c's `monad_fork_io`). This is the cost
 ///     a fiber-per-connection server pays per request.
 ///   * `bench_race_win` -- the win latency of `race`, which used to poll
@@ -353,10 +353,10 @@ def read_field_kb (needle : String) : IO I64 := do {
     }
 }
 
-/// 200 fibers neither awaited nor cancelled, each holding a 128 MB ADDRESS
+/// 200 fibers neither awaited nor cancelled, each holding a 32 MB ADDRESS
 /// reservation plus its touched pages until its body returns. VmSize is
 /// the figure that shows the per-fiber ceiling a thread-per-fiber model
-/// hits (200 x 128 MB = 25 GB of virtual space, untouched, so RSS is
+/// hits (200 x 32 MB = 6.4 GB of virtual space, untouched, so RSS is
 /// unaffected); VmRSS shows what is actually committed. The fibers are
 /// then cancelled so this test does not leak threads into the ones after
 /// it.

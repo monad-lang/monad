@@ -99,6 +99,10 @@ def test_select_empty_is_none : IO Bool := do {
 /// already parked. This is the one shape the old polling loop could not
 /// distinguish from a fast probe, and the reason `select` now parks on
 /// the channels themselves.
+///
+/// Compiled only: the host cannot park, so its `channel_take_any` does one
+/// non-blocking scan and answers `none` at once -- this would see `none`,
+/// not the 11 the later put provides.
 #[test]
 def test_select_waits_for_a_later_put : IO Bool := do {
     let a <- new_i64;

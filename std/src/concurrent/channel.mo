@@ -78,6 +78,14 @@ pub def Channel.tryTake (c : Channel A) : IO (Option A) :=
 ///
 /// On the Rust host there is no parking (its fibers are deferred
 /// thunks), so the host answers `none` immediately -- the same lazy
-/// degradation `race` has, for the same reason.
+/// degradation `race` has, for the same reason. Note this is a BEHAVIOUR
+/// CHANGE on the host as well as a type change: the old polling `select`
+/// blocked until a value arrived, where the host's now scans once and
+/// gives up. Nothing in the tree calls `select` outside `channel_test.mo`,
+/// so no caller is affected today.
+///
+/// A NOTE ON THE TYPE: `IO A` became `IO (Option A)`. This is a breaking
+/// change to a `pub` API, made because cancellation is a real outcome with
+/// no value of `A` to report; the polling version had no way to say it.
 pub def select {A : Type} (chs : List (Channel A)) : IO (Option A) :=
     IO.mk (channel_take_any chs)
