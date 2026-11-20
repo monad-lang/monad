@@ -271,6 +271,61 @@ pub def GlWrap.code (w : GlWrap) : I64 :=
         GlWrap.mirrored_repeat => 33648,
     }
 
+// The enums are plain codes, so they are `Copy` like the handles: a call
+// such as `Gl.tex_filter ctx t f f` names one twice.
+
+pub instance Copy GlShaderStage {
+    def copy (x : GlShaderStage) : Pair GlShaderStage GlShaderStage := Pair.pair x x
+}
+
+pub instance Copy GlBufferTarget {
+    def copy (x : GlBufferTarget) : Pair GlBufferTarget GlBufferTarget := Pair.pair x x
+}
+
+pub instance Copy GlTextureTarget {
+    def copy (x : GlTextureTarget) : Pair GlTextureTarget GlTextureTarget := Pair.pair x x
+}
+
+pub instance Copy GlUsage {
+    def copy (x : GlUsage) : Pair GlUsage GlUsage := Pair.pair x x
+}
+
+pub instance Copy GlPrimitive {
+    def copy (x : GlPrimitive) : Pair GlPrimitive GlPrimitive := Pair.pair x x
+}
+
+pub instance Copy GlCap {
+    def copy (x : GlCap) : Pair GlCap GlCap := Pair.pair x x
+}
+
+pub instance Copy GlBlendFactor {
+    def copy (x : GlBlendFactor) : Pair GlBlendFactor GlBlendFactor := Pair.pair x x
+}
+
+pub instance Copy GlCompare {
+    def copy (x : GlCompare) : Pair GlCompare GlCompare := Pair.pair x x
+}
+
+pub instance Copy GlFace {
+    def copy (x : GlFace) : Pair GlFace GlFace := Pair.pair x x
+}
+
+pub instance Copy GlWinding {
+    def copy (x : GlWinding) : Pair GlWinding GlWinding := Pair.pair x x
+}
+
+pub instance Copy GlAttribType {
+    def copy (x : GlAttribType) : Pair GlAttribType GlAttribType := Pair.pair x x
+}
+
+pub instance Copy GlFilter {
+    def copy (x : GlFilter) : Pair GlFilter GlFilter := Pair.pair x x
+}
+
+pub instance Copy GlWrap {
+    def copy (x : GlWrap) : Pair GlWrap GlWrap := Pair.pair x x
+}
+
 /// Which buffers `Gl.clear` clears.
 pub struct GlClear {
     color : Bool := true,
