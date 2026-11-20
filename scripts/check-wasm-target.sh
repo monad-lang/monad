@@ -257,6 +257,13 @@ for mode in webgl2 webgl1-nouint; do
     node wasm/web/smoke/webgl_triangle_smoke.mjs "$tmp/webgl_triangle.wasm" "$mode"
 done
 
+echo "== web: WebGL render targets (framebuffer, depth texture, depth pass) =="
+"$MONAD" build --target wasm32-unknown-unknown fixtures/wasm/webgl_shadow.mo \
+    -o "$tmp/webgl_shadow.wasm" --no-cache
+for mode in webgl2 webgl1 webgl1-nodepth incomplete none; do
+    node wasm/web/smoke/webgl_shadow_smoke.mjs "$tmp/webgl_shadow.wasm" "$mode"
+done
+
 echo "== web: render allocation guard (256 buttons, two handlers each) =="
 "$MONAD" build --target wasm32-unknown-unknown fixtures/wasm/oak_spa_alloc.mo \
     -o "$tmp/oak_spa_alloc.wasm" --no-cache

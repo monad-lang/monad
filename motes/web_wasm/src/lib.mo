@@ -68,6 +68,10 @@ pub use lib::keep {Keep.save, Keep.load}
 pub use lib::canvas {Canvas.client_size, Canvas.buffer_size, Canvas.fit, Canvas.pixel_ratio}
 pub use lib::gl {
     GlContext, GlShader, GlProgram, GlBuffer, GlTexture, GlVertexArray, GlUniform, GlImage,
+    GlFramebuffer, GlAttachment, Gl.create_framebuffer, Gl.bind_framebuffer,
+    Gl.bind_default_framebuffer, Gl.delete_framebuffer, Gl.has_depth_texture,
+    Gl.tex_image_depth, Gl.framebuffer_texture, Gl.framebuffer_complete, Gl.color_mask,
+    Gl.polygon_offset,
     GlOptions, GlOptions.default, GlOptions.flags, GlShaderStage, GlBufferTarget,
     GlTextureTarget, GlUsage, GlPrimitive, GlCap, GlBlendFactor, GlCompare, GlFace,
     GlWinding, GlAttribType, GlFilter, GlWrap, GlClear,

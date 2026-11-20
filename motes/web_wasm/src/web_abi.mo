@@ -430,6 +430,18 @@ def WebImport.gl_draw : WebImport :=
     { module := "monad", name := "gl_draw",
         params := ["i64", "i64", "i64", "i64", "i64"], result := "void" }
 
+def WebImport.gl_state_f : WebImport :=
+    { module := "monad", name := "gl_state_f",
+        params := ["i64", "i64", "f64", "f64", "f64", "f64"], result := "void" }
+
+def WebImport.gl_tex_image_depth : WebImport :=
+    { module := "monad", name := "gl_tex_image_depth",
+        params := ["i64", "i64", "i64"], result := "i64" }
+
+def WebImport.gl_framebuffer_texture : WebImport :=
+    { module := "monad", name := "gl_framebuffer_texture",
+        params := ["i64", "i64", "i64"], result := "void" }
+
 def WebImport.gl_tex_image_from_image : WebImport :=
     { module := "monad", name := "gl_tex_image_from_image",
         params := ["i64", "i64", "i64"], result := "i64" }
@@ -514,6 +526,8 @@ pub def WebAbi.default : WebAbi :=
             WebImport.gl_clear_color, WebImport.gl_state, WebImport.gl_draw,
             WebImport.gl_tex_image_from_image, WebImport.gl_buffer_data,
             WebImport.gl_uniform_matrix, WebImport.gl_tex_image_pixels,
+            WebImport.gl_state_f, WebImport.gl_tex_image_depth,
+            WebImport.gl_framebuffer_texture,
             WebImport.image_load_begin, WebImport.image_info
         ],
             exports := [

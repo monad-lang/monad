@@ -59,7 +59,7 @@ const mediaTables = new Map(); // query -> { mql, wrapper }
 // vao }: `vao` is the WebGL1 `OES_vertex_array_object` extension (null on
 // WebGL2, which has VAOs in core). Objects of every kind share one table;
 // id 0 is the null handle. `glLog` holds the last compile/link info log.
-const glContexts = [null]; // id -> { gl, version, vao, uint, canvas }
+const glContexts = [null]; // id -> { gl, version, vao, uint, depthTex, canvas }
 const glContextIds = new WeakMap(); // GL context -> id, so a re-get keeps its id
 const glObjects = [null]; // id -> { ctx, kind, obj }
 let glLog = '';
@@ -589,6 +589,7 @@ const GL_KIND_VERTEX_ARRAY = 2;
 const GL_KIND_PROGRAM = 3;
 const GL_KIND_SHADER = 4;
 const GL_KIND_UNIFORM = 5;
+const GL_KIND_FRAMEBUFFER = 6;
 
 function glCtx(id) {
   return glContexts[Number(id)] || null;
@@ -623,6 +624,14 @@ function createVertexArray(c) {
   return c.vao ? c.vao.createVertexArrayOES() : null;
 }
 
+// WebGL1's `WEBGL_depth_texture`, probed on first use so contexts that
+// never ask keep their call stream.
+function hasDepthTexture(c) {
+  if (c.version === 2) return true;
+  if (c.depthTex === undefined) c.depthTex = c.gl.getExtension('WEBGL_depth_texture');
+  return c.depthTex !== null;
+}
+
 function bindVertexArray(c, obj) {
   if (c.version === 2) c.gl.bindVertexArray(obj);
   else if (c.vao) c.vao.bindVertexArrayOES(obj);
@@ -639,6 +648,7 @@ function deleteGlObject(c, kind, obj) {
       break;
     case GL_KIND_PROGRAM: gl.deleteProgram(obj); break;
     case GL_KIND_SHADER: gl.deleteShader(obj); break;
+    case GL_KIND_FRAMEBUFFER: gl.deleteFramebuffer(obj); break;
     default: break;
   }
 }
@@ -1666,6 +1676,11 @@ export const host = {
       case 4: return BigInt(c.gl.getError() | 0);
       case 5: return (c.version === 2 || c.vao) ? 1n : 0n;
       case 6: return c.uint ? 1n : 0n;
+      case 7: return hasDepthTexture(c) ? 1n : 0n;
+      case 8: {
+        const gl = c.gl;
+        return gl.checkFramebufferStatus(gl.FRAMEBUFFER) === gl.FRAMEBUFFER_COMPLETE ? 1n : 0n;
+      }
       default: return 0n;
     }
   },
@@ -1679,6 +1694,7 @@ export const host = {
       case GL_KIND_TEXTURE: return addGlObject(ctx, k, c.gl.createTexture());
       case GL_KIND_VERTEX_ARRAY: return addGlObject(ctx, k, createVertexArray(c));
       case GL_KIND_PROGRAM: return addGlObject(ctx, k, c.gl.createProgram());
+      case GL_KIND_FRAMEBUFFER: return addGlObject(ctx, k, c.gl.createFramebuffer());
       default: return 0n;
     }
   },
@@ -1702,6 +1718,8 @@ export const host = {
       case GL_KIND_TEXTURE: c.gl.bindTexture(Number(target), obj); break;
       case GL_KIND_VERTEX_ARRAY: bindVertexArray(c, obj); break;
       case GL_KIND_PROGRAM: c.gl.useProgram(obj); break;
+      // id 0 is null: the canvas's own framebuffer.
+      case GL_KIND_FRAMEBUFFER: c.gl.bindFramebuffer(Number(target), obj); break;
       default: break;
     }
     return 0n;
@@ -1825,8 +1843,44 @@ export const host = {
         if (l) gl.uniform1i(l, B);
         break;
       }
+      case 14: gl.colorMask(A !== 0, B !== 0, Number(cc) !== 0, Number(d) !== 0); break;
       default: break;
     }
+    return 0n;
+  },
+
+  // The float state selector, numbered in gl.mo (`Gl.polygon_offset`).
+  gl_state_f(ctx, which, a, b, cc, d) {
+    const c = glCtx(ctx);
+    if (!c) return 0n;
+    switch (Number(which)) {
+      case 0: c.gl.polygonOffset(a, b); break;
+      default: break;
+    }
+    return 0n;
+  },
+
+  // A data-less depth texture in the bound TEXTURE_2D (the C side bounded
+  // the size). 0n without depth-texture support.
+  gl_tex_image_depth(ctx, w, h) {
+    const c = glCtx(ctx);
+    if (!c || !hasDepthTexture(c)) return 0n;
+    const gl = c.gl;
+    if (c.version === 2) {
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.DEPTH_COMPONENT24, Number(w), Number(h), 0,
+        gl.DEPTH_COMPONENT, gl.UNSIGNED_INT, null);
+    } else {
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.DEPTH_COMPONENT, Number(w), Number(h), 0,
+        gl.DEPTH_COMPONENT, gl.UNSIGNED_SHORT, null);
+    }
+    return 1n;
+  },
+
+  gl_framebuffer_texture(ctx, attachment, tex) {
+    const c = glCtx(ctx);
+    if (!c) return 0n;
+    const gl = c.gl;
+    gl.framebufferTexture2D(gl.FRAMEBUFFER, Number(attachment), gl.TEXTURE_2D, glObj(tex), 0);
     return 0n;
   },
 

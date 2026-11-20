@@ -1277,6 +1277,16 @@ extern int64_t monad_js_gl_draw(int64_t ctx, int64_t indexed, int64_t mode,
 __attribute__((import_module("monad"), import_name("gl_tex_image_from_image")))
 extern int64_t monad_js_gl_tex_image_from_image(int64_t ctx, int64_t target, int64_t image);
 
+__attribute__((import_module("monad"), import_name("gl_state_f")))
+extern int64_t monad_js_gl_state_f(int64_t ctx, int64_t which, double a, double b,
+                                   double c, double d);
+
+__attribute__((import_module("monad"), import_name("gl_tex_image_depth")))
+extern int64_t monad_js_gl_tex_image_depth(int64_t ctx, int64_t w, int64_t h);
+
+__attribute__((import_module("monad"), import_name("gl_framebuffer_texture")))
+extern int64_t monad_js_gl_framebuffer_texture(int64_t ctx, int64_t attachment, int64_t texture);
+
 __attribute__((import_module("monad"), import_name("image_load_begin")))
 extern int64_t monad_js_image_load_begin(int64_t ptr, int64_t len);
 
@@ -1352,6 +1362,20 @@ int64_t web_gl_draw(int64_t ctx, int64_t indexed, int64_t mode, int64_t a, int64
 
 int64_t web_gl_tex_image_from_image(int64_t ctx, int64_t target, int64_t image) {
     return monad_js_gl_tex_image_from_image(ctx, target, image);
+}
+
+int64_t web_gl_state_f(int64_t ctx, int64_t which, double a, double b, double c, double d) {
+    return monad_js_gl_state_f(ctx, which, a, b, c, d);
+}
+
+int64_t web_gl_tex_image_depth(int64_t ctx, int64_t w, int64_t h) {
+    /* The same bound as `web_gl_tex_image_pixels`. */
+    if (w <= 0 || h <= 0 || w > 16384 || h > 16384) return 0;
+    return monad_js_gl_tex_image_depth(ctx, w, h);
+}
+
+int64_t web_gl_framebuffer_texture(int64_t ctx, int64_t attachment, int64_t texture) {
+    return monad_js_gl_framebuffer_texture(ctx, attachment, texture);
 }
 
 int64_t web_image_load_begin(const char* url) {

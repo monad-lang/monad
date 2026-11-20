@@ -18,6 +18,13 @@
 /// The runtime checks the buffer's kind and length before the host sees its
 /// payload; `Gl.f32_buf`/`i32_buf`/`u8_buf` pack a list into one. Textures
 /// can also be filled from a loaded image (`GlImage`).
+///
+/// Render targets: `Gl.create_framebuffer` + `Gl.framebuffer_texture` draw
+/// into a texture, `Gl.bind_default_framebuffer` returns to the canvas. A
+/// shadow map allocates its texture with `Gl.tex_image_depth` (check
+/// `Gl.has_depth_texture` on WebGL1) and draws depth only, with
+/// `Gl.color_mask` off and `Gl.polygon_offset` against acne. Float state
+/// goes through a second selector, `gl_state_f`.
 
 use lib::types {Node}
 use lib::ffi {
@@ -25,7 +32,8 @@ use lib::ffi {
     gl_shader_raw, gl_link_raw, gl_log_raw, gl_location_raw, gl_vertex_attrib_raw,
     gl_uniform_f_raw, gl_clear_color_raw, gl_state_raw, gl_draw_raw,
     gl_tex_image_from_image_raw, image_load_begin_raw, image_info_raw, gl_buffer_data_raw,
-    gl_uniform_matrix_raw, gl_tex_image_pixels_raw,
+    gl_uniform_matrix_raw, gl_tex_image_pixels_raw, gl_tex_image_depth_raw,
+    gl_framebuffer_texture_raw, gl_state_f_raw,
 }
 use std::buf {Buf, Buf.new_f32, Buf.new_i32, Buf.new_u8, Buf.set_f32, Buf.set_i32, Buf.set_u8}
 
@@ -56,6 +64,12 @@ pub struct GlVertexArray {
 }
 
 pub struct GlUniform {
+    id : I64
+}
+
+/// A render target (`createFramebuffer`). Draw calls go to the bound one;
+/// `Gl.bind_default_framebuffer` returns to the canvas.
+pub struct GlFramebuffer {
     id : I64
 }
 
@@ -90,6 +104,10 @@ pub instance Copy GlVertexArray {
 
 pub instance Copy GlUniform {
     def copy (u : GlUniform) : Pair GlUniform GlUniform := Pair.pair u u
+}
+
+pub instance Copy GlFramebuffer {
+    def copy (f : GlFramebuffer) : Pair GlFramebuffer GlFramebuffer := Pair.pair f f
 }
 
 pub instance Copy GlImage {
@@ -271,6 +289,15 @@ pub def GlWrap.code (w : GlWrap) : I64 :=
         GlWrap.mirrored_repeat => 33648,
     }
 
+/// Where `Gl.framebuffer_texture` attaches a texture.
+pub type GlAttachment { color0, depth }
+
+pub def GlAttachment.code (a : GlAttachment) : I64 :=
+    match a {
+        GlAttachment.color0 => 36064,
+        GlAttachment.depth => 36096,
+    }
+
 // The enums are plain codes, so they are `Copy` like the handles: a call
 // such as `Gl.tex_filter ctx t f f` names one twice.
 
@@ -326,6 +353,10 @@ pub instance Copy GlWrap {
     def copy (x : GlWrap) : Pair GlWrap GlWrap := Pair.pair x x
 }
 
+pub instance Copy GlAttachment {
+    def copy (x : GlAttachment) : Pair GlAttachment GlAttachment := Pair.pair x x
+}
+
 /// Which buffers `Gl.clear` clears.
 pub struct GlClear {
     color : Bool := true,
@@ -341,7 +372,8 @@ pub def GlClear.code (c : GlClear) : I64 :=
 /// The `gl_state` selector (`host.gl_state`'s switch).
 type GlState {
     viewport, clear, cap, blend_func, depth_func, cull_face, front_face, depth_mask,
-    active_texture, generate_mipmap, tex_parameter, pixel_store, attrib_array, uniform_i
+    active_texture, generate_mipmap, tex_parameter, pixel_store, attrib_array, uniform_i,
+    color_mask
 }
 
 def GlState.code (s : GlState) : I64 :=
@@ -360,11 +392,12 @@ def GlState.code (s : GlState) : I64 :=
         GlState.pixel_store => 11,
         GlState.attrib_array => 12,
         GlState.uniform_i => 13,
+        GlState.color_mask => 14,
     }
 
 /// The `gl_create`/`gl_delete`/`gl_bind` object kinds (`GL_KIND_*` in the
 /// JS host).
-type GlKind { buffer, texture, vertex_array, program, shader }
+type GlKind { buffer, texture, vertex_array, program, shader, framebuffer }
 
 def GlKind.code (k : GlKind) : I64 :=
     match k {
@@ -373,6 +406,7 @@ def GlKind.code (k : GlKind) : I64 :=
         GlKind.vertex_array => 2,
         GlKind.program => 3,
         GlKind.shader => 4,
+        GlKind.framebuffer => 6,
     }
 
 def state (ctx : GlContext) (s : GlState) (a : I64) (b : I64) (c : I64) (d : I64) : IO Unit :=
@@ -669,6 +703,61 @@ pub def Gl.tex_image_from_image (ctx : GlContext) (target : GlTextureTarget) (im
     let ok <- IO.mk (gl_tex_image_from_image_raw ctx.id (GlTextureTarget.code target) img.id);
     IO.pure (I64.beq ok 1)
 }
+
+// ─── Render targets ──────────────────────────────────────────────────
+
+pub def Gl.create_framebuffer (ctx : GlContext) : IO GlFramebuffer := do {
+    let id <- IO.mk (gl_create_raw ctx.id (GlKind.code GlKind.framebuffer));
+    IO.pure { id := id : GlFramebuffer }
+}
+
+/// Draw into `f` until another framebuffer is bound.
+pub def Gl.bind_framebuffer (ctx : GlContext) (f : GlFramebuffer) : IO Unit :=
+    IO.mk (gl_bind_raw ctx.id (GlKind.code GlKind.framebuffer) 36160 f.id)
+
+/// Draw into the canvas again.
+pub def Gl.bind_default_framebuffer (ctx : GlContext) : IO Unit :=
+    IO.mk (gl_bind_raw ctx.id (GlKind.code GlKind.framebuffer) 36160 0)
+
+pub def Gl.delete_framebuffer (ctx : GlContext) (f : GlFramebuffer) : IO Unit :=
+    IO.mk (gl_delete_raw ctx.id (GlKind.code GlKind.framebuffer) f.id)
+
+/// Whether depth textures exist (WebGL2, or WebGL1 with
+/// `WEBGL_depth_texture`): `Gl.tex_image_depth` needs it.
+pub def Gl.has_depth_texture (ctx : GlContext) : IO Bool := do {
+    let has <- info ctx 7;
+    IO.pure (I64.beq has 1)
+}
+
+/// Allocate the bound `TEXTURE_2D` as a `w`×`h` depth texture with no data
+/// (WebGL2: `DEPTH_COMPONENT24`; WebGL1: 16-bit via `WEBGL_depth_texture`).
+/// False without depth-texture support or for a size outside 1..16384.
+/// Depth textures take `nearest` filtering and `clamp_to_edge` wrapping.
+pub def Gl.tex_image_depth (ctx : GlContext) (w : I64) (h : I64) : IO Bool := do {
+    let r <- IO.mk (gl_tex_image_depth_raw ctx.id w h);
+    accepted r
+}
+
+/// Attach level 0 of the 2D texture `t` to the bound framebuffer.
+pub def Gl.framebuffer_texture (ctx : GlContext) (a : GlAttachment) (t : GlTexture) : IO Unit :=
+    IO.mk (gl_framebuffer_texture_raw ctx.id (GlAttachment.code a) t.id)
+
+/// `checkFramebufferStatus` is `FRAMEBUFFER_COMPLETE` for the bound
+/// framebuffer.
+pub def Gl.framebuffer_complete (ctx : GlContext) : IO Bool := do {
+    let ok <- info ctx 8;
+    IO.pure (I64.beq ok 1)
+}
+
+/// `colorMask`: which colour channels draws write. A depth-only pass turns
+/// all four off.
+pub def Gl.color_mask (ctx : GlContext) (r : Bool) (g : Bool) (b : Bool) (a : Bool) : IO Unit :=
+    state ctx GlState.color_mask (bit r 1) (bit g 1) (bit b 1) (bit a 1)
+
+/// `polygonOffset`: the depth bias applied while `GlCap.polygon_offset_fill`
+/// is enabled (a shadow pass uses it against acne).
+pub def Gl.polygon_offset (ctx : GlContext) (factor : F64) (units : F64) : IO Unit :=
+    IO.mk (gl_state_f_raw ctx.id 0 factor units 0.0 0.0)
 
 // ─── Images ──────────────────────────────────────────────────────────
 

@@ -391,6 +391,18 @@ def gl_state_raw (ctx : I64) (which : I64) (a : I64) (b : I64) (c : I64) (d : I6
 #[extern "c" {link_name := "web_gl_draw"}]
 def gl_draw_raw (ctx : I64) (indexed : I64) (mode : I64) (a : I64) (b : I64) : RawIO Unit
 
+/// The float state selector (`gl.mo` numbers it): 0 = `polygonOffset`.
+#[extern "c" {link_name := "web_gl_state_f"}]
+def gl_state_f_raw (ctx : I64) (which : I64) (a : F64) (b : F64) (c : F64) (d : F64) : RawIO Unit
+
+/// A data-less depth `texImage2D` into the bound `TEXTURE_2D`; 1 = done,
+/// 0 = no depth-texture support, bad size, or unknown context.
+#[extern "c" {link_name := "web_gl_tex_image_depth"}]
+def gl_tex_image_depth_raw (ctx : I64) (w : I64) (h : I64) : RawIO I64
+
+#[extern "c" {link_name := "web_gl_framebuffer_texture"}]
+def gl_framebuffer_texture_raw (ctx : I64) (attachment : I64) (texture : I64) : RawIO Unit
+
 #[extern "c" {link_name := "web_gl_tex_image_from_image"}]
 def gl_tex_image_from_image_raw (ctx : I64) (target : I64) (image : I64) : RawIO I64
 

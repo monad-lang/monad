@@ -10,6 +10,8 @@
 //
 // Modes (`glStub.mode`): 'webgl2' (default), 'webgl1' (no `webgl2` context;
 // VAOs come from `OES_vertex_array_object`), or 'none' (no WebGL at all).
+// `noUintIndices`/`noDepthTexture` withhold those WebGL1 extensions, and
+// `incompleteFramebuffer` makes `checkFramebufferStatus` fail.
 // A shader whose source contains `#error` fails to compile with a fixed log;
 // a program linked from a shader containing `#nolink` fails to link.
 
@@ -20,6 +22,8 @@ export const glStub = {
   contexts: [], // every FakeGL handed out, in order
   lost: false,
   noUintIndices: false, // WebGL1 without OES_element_index_uint
+  noDepthTexture: false, // WebGL1 without WEBGL_depth_texture
+  incompleteFramebuffer: false,
 };
 
 const CONSTANTS = {
@@ -29,6 +33,13 @@ const CONSTANTS = {
   RGBA: 0x1908,
   UNSIGNED_BYTE: 0x1401,
   UNSIGNED_INT: 0x1405,
+  UNSIGNED_SHORT: 0x1403,
+  TEXTURE_2D: 0x0de1,
+  DEPTH_COMPONENT: 0x1902,
+  DEPTH_COMPONENT24: 0x81a6,
+  FRAMEBUFFER: 0x8d40,
+  FRAMEBUFFER_COMPLETE: 0x8cd5,
+  FRAMEBUFFER_INCOMPLETE_ATTACHMENT: 0x8cd6,
 };
 
 class GlObject {
@@ -75,6 +86,9 @@ export class FakeGL {
       };
     }
     if (name === 'OES_element_index_uint') return glStub.noUintIndices ? null : {};
+    if (this.kind === 'webgl' && name === 'WEBGL_depth_texture') {
+      return glStub.noDepthTexture ? null : { UNSIGNED_INT_24_8_WEBGL: 0x84fa };
+    }
     return null;
   }
 
@@ -82,6 +96,7 @@ export class FakeGL {
   createBuffer() { const o = this._new('buffer'); this._rec('createBuffer', o); return o; }
   createTexture() { const o = this._new('texture'); this._rec('createTexture', o); return o; }
   createProgram() { const o = this._new('program'); this._rec('createProgram', o); return o; }
+  createFramebuffer() { const o = this._new('framebuffer'); this._rec('createFramebuffer', o); return o; }
   createShader(stage) { const o = this._new('shader'); o.stage = stage; this._rec('createShader', stage, o); return o; }
 
   createVertexArray() {
@@ -96,11 +111,21 @@ export class FakeGL {
   deleteProgram(o) { this._rec('deleteProgram', o); }
   deleteShader(o) { this._rec('deleteShader', o); }
   deleteVertexArray(o) { this._rec('deleteVertexArray', o); }
+  deleteFramebuffer(o) { this._rec('deleteFramebuffer', o); }
 
   bindBuffer(t, o) { this._rec('bindBuffer', t, o); }
   bindTexture(t, o) { this._rec('bindTexture', t, o); }
   bindVertexArray(o) { this._rec('bindVertexArray', o); }
   useProgram(o) { this._rec('useProgram', o); }
+  bindFramebuffer(t, o) { this._rec('bindFramebuffer', t, o); }
+  framebufferTexture2D(t, att, tt, tex, level) { this._rec('framebufferTexture2D', t, att, tt, tex, level); }
+
+  checkFramebufferStatus(t) {
+    this._rec('checkFramebufferStatus', t);
+    return glStub.incompleteFramebuffer
+      ? CONSTANTS.FRAMEBUFFER_INCOMPLETE_ATTACHMENT
+      : CONSTANTS.FRAMEBUFFER_COMPLETE;
+  }
 
   // ── shaders and programs ──
   shaderSource(sh, src) { sh.source = src; this._rec('shaderSource', sh); }
@@ -161,6 +186,8 @@ export class FakeGL {
   blendFunc(s, d) { this._rec('blendFunc', s, d); }
   depthFunc(f) { this._rec('depthFunc', f); }
   depthMask(m) { this._rec('depthMask', m); }
+  colorMask(r, g, b, a) { this._rec('colorMask', r, g, b, a); }
+  polygonOffset(f, u) { this._rec('polygonOffset', f, u); }
   cullFace(f) { this._rec('cullFace', f); }
   frontFace(w) { this._rec('frontFace', w); }
   activeTexture(u) { this._rec('activeTexture', u); }
@@ -177,7 +204,8 @@ export class FakeGL {
   uniformMatrix4fv(l, tr, m) { this._rec('uniformMatrix4fv', l, tr, Array.from(m)); }
 
   // The image form (6 args) records the image's src; the pixel form (9
-  // args) records the size and the decoded texels.
+  // args) records the size and the decoded texels, or null for an
+  // allocation with no data (a depth texture).
   texImage2D(target, level, internal, ...rest) {
     if (rest.length === 3) {
       const [format, type, source] = rest;
@@ -186,7 +214,8 @@ export class FakeGL {
       return;
     }
     const [w, h, border, format, type, pixels] = rest;
-    this._rec('texImage2D', target, level, internal, w, h, border, format, type, Array.from(pixels));
+    const data = pixels === null ? null : Array.from(pixels);
+    this._rec('texImage2D', target, level, internal, w, h, border, format, type, data);
   }
 }
 
