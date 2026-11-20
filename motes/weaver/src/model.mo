@@ -102,6 +102,10 @@ pub type WeaverMsg {
     btw_result (question : String) (answer : Result String String),
     /// A resumed session's submitted lines (newest first) for Up to recall.
     history_loaded (prompts : List String),
+    /// A `! cmd`'s echo is stored; its command can start.
+    bang_echoed (command : String),
+    /// A `! cmd` finished: its command and shown output.
+    bang_done (command : String) (output : String),
 }
 
 /// `tui::App`'s `on_event : Event -> WeaverMsg` -- every raw event is a

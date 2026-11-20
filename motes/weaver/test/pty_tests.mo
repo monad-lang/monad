@@ -30,6 +30,7 @@ use weaver::pty::models {run_model_picker_select_and_cancel}
 use weaver::pty::processes {run_background_shell_list_and_kill, run_exit_note_mid_turn, run_monitor_refreshes_itself}
 use weaver::pty::approvals {run_auto_mode_refuses_destructive_commands}
 use weaver::pty::scratch {run_scratch_dir_and_env}
+use weaver::pty::bang {run_bang_runs_and_rides_the_next_turn}
 use weaver::pty::ask {run_ask_dialog_and_answer, run_ask_auto_answers_recommended}
 use weaver::pty::rss {run_a_100_tool_turn_stays_bounded}
 use weaver::pty::todos {run_todo_panel_shows_and_folds}
@@ -187,6 +188,9 @@ def test_name_shows_in_the_frame : IO Bool := run_name_shows_in_the_frame
 
 #[test]
 def test_trust_asks_records_and_reasks : IO Bool := run_trust_asks_records_and_reasks
+
+#[test]
+def test_bang_runs_and_rides_the_next_turn : IO Bool := run_bang_runs_and_rides_the_next_turn
 
 #[test]
 def test_instructions_note_a_mid_session_edit : IO Bool := run_instructions_note_a_mid_session_edit

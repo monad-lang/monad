@@ -40,6 +40,7 @@ use shuttle::registry {ToolRegistry}
 use weaver::subagent {Subagent.task_tool, Subagent.drain}
 use weaver::instructions {Instructions.take_notes, Instructions.attaching}
 use weaver::inbox {Inbox.with_notes}
+use weaver::bang {Bang.command, Bang.run, Bang.note, Bang.usage}
 use weaver::procs {Procs.root, Procs.enforce_cap, Procs.max_log_bytes}
 use weaver::todo {TodoTool.impl}
 use weaver::plan_tool {PlanTool.impl}
@@ -137,12 +138,33 @@ def step_of (read : Unit -> IO (Option String)) (write : String -> IO Unit) (st 
         Option.some s => route read write st (String.trim s),
     }
 
-/// Empty input re-prompts; `/` goes to the command table; anything
-/// else is one model turn.
+/// Empty input re-prompts; `!` runs a shell line; `/` goes to the command
+/// table; anything else is one model turn.
 def route (read : Unit -> IO (Option String)) (write : String -> IO Unit) (st : WeaverState) (s : String) : IO Step :=
     if String.is_empty s then IO.pure (mk_step st true)
-    else if String.starts_with "/" s then slash_turn read write st s
-    else model_turn read write st s
+    else match Bang.command s {
+        Option.some command => bang_turn write st command,
+        Option.none =>
+            if String.starts_with "/" s then slash_turn read write st s
+            else model_turn read write st s,
+    }
+
+/// `! cmd`: run it, print its output, and keep the note for the next turn.
+def bang_turn (write : String -> IO Unit) (st : WeaverState) (command : String) : IO Step :=
+    if String.is_empty command then do {
+        let _ <- write (String.concat Bang.usage "\n");
+        IO.pure (mk_step st true)
+    }
+    else do {
+        let out <- Bang.run st.store command;
+        let _ <- write out;
+        let st2 : WeaverState := { st with shell_notes := List.append st.shell_notes [Bang.note command out] };
+        IO.pure (mk_step st2 true)
+    }
+
+def clear_shell_notes (st : WeaverState) : WeaverState :=
+    let st2 : WeaverState := { st with shell_notes := List.empty } in
+    st2
 
 /// A skill's `/<name>` runs a turn with its instructions; any other `/`
 /// line is a command.
@@ -221,9 +243,10 @@ def drive_turn (read : Unit -> IO (Option String)) (write : String -> IO Unit) (
             let st_t : WeaverState := set_on_usage st2 (UsageTracker.silent tracker);
             // Changes to the loaded AGENTS.md files ride the typed line.
             let instr <- Instructions.take_notes st2.instr_seen;
-            let r <- ResultT.run (drive read write st_t (Inbox.with_notes instr text));
+            // So do the `! cmd` results the model has not seen; they clear.
+            let r <- ResultT.run (drive read write st_t (Inbox.with_notes (List.append instr st2.shell_notes) text));
             let last <- UsageTracker.last tracker;
-            let st3 : WeaverState := set_last_context_from st2 last r;
+            let st3 : WeaverState := clear_shell_notes (set_last_context_from st2 last r);
             // A plan-mode turn's text is captured and persisted; other
             // turns leave the stored plan untouched.
             let plan : Option String := Commands.plan_after_turn st2 before r;
@@ -616,7 +639,15 @@ pub def Dumb.status_fields (st : WeaverState) : String :=
         ++ budget_text
         ++ " | ctx "
         ++ ctx_text st in
-    head ++ " | spent in " ++ in_text ++ ", out " ++ out_text ++ ", cached " ++ cached_text
+    head ++ " | spent in " ++ in_text ++ ", out " ++ out_text ++ ", cached " ++ cached_text ++ Dumb.cache_share spent
+
+/// ` (87%)`: the share of all prompt tokens so far served from the
+/// provider's cache (the wires count cached tokens inside `input_tokens`),
+/// so a caching regression shows on the status line. Empty before any
+/// cache hit.
+pub def Dumb.cache_share (spent : Usage) : String :=
+    if Bool.or (I64.lt spent.cached_tokens 1i64) (I64.lt spent.input_tokens 1i64) then ""
+    else String.concat " (" (String.concat (I64.to_string (spent.cached_tokens * 100i64 / spent.input_tokens)) "%)")
 
 /// `12.3k/128k (10%)`, or just the count when autocompact is disabled
 /// by a zero window (a percentage of zero is meaningless).

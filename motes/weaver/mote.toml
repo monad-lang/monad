@@ -55,10 +55,10 @@ workspace = true
 workspace = true
 
 # Assistant Markdown is rendered through the markdown mote; plan files use
-# its YAML frontmatter split and the yaml mote. `xml_html` is here for the
-# same reason `llvm`/`runtime` are below: markdown's library root re-exports
-# its HTML renderer, so the module graph reaches `xml_html` even when weaver
-# only renders styled text. Calendar dates come from the `time` mote.
+# its YAML frontmatter split and the yaml mote. `xml_html` is here because
+# markdown's library root re-exports its HTML renderer, so the module graph
+# reaches `xml_html` even when weaver only renders styled text. Calendar
+# dates come from the `time` mote.
 [dependencies.markdown]
 workspace = true
 
@@ -69,25 +69,9 @@ workspace = true
 workspace = true
 
 
-# The Monad-aware tools (`monad_check`, `monad_eval`) run the compiler's
-# checker and interpreter in-process, so the whole `lang` engine is a
-# dependency. `llvm` and `runtime` are declared for the same reason
-# `motes/lsp/mote.toml` declares them: `lang::module`'s graph reaches
-# codegen and the IR type names, and without them the module graph fails
-# with `module not found: llvm.strmap`.
-[dependencies.lang]
-workspace = true
-
-# `monad_eval` runs through the shared evaluator's filesystem entry
-# (`eval::file`), the same pipeline `monad eval` uses.
-[dependencies.eval]
-workspace = true
-
-[dependencies.llvm]
-workspace = true
-
-[dependencies.runtime]
-workspace = true
+# The Monad-aware tools (`monad_check`, `monad_eval`) shell out to the
+# `monad` binary, so the compiler (`lang`, `eval`, `llvm`, `runtime`) is not
+# linked into weaver. `WEAVER_MONAD_BIN` picks another binary.
 
 # Affine-by-default migration exception (measured 2026-10-22).
 # Delete this table when the mote reaches zero violations; the default

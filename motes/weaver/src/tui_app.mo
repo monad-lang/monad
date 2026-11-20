@@ -88,6 +88,7 @@ use weaver::shell_tool {WeaverShell.impl, WeaverShell.fg_path, WeaverShell.reque
 use weaver::process_tools {ReadProcessTool.impl_with}
 use weaver::stop {Stop.predicate, Stop.request, Stop.reset}
 use weaver::inbox {Inbox.post, Inbox.take, Inbox.seam, Inbox.with_notes}
+use weaver::bang {Bang.command, Bang.run, Bang.note, Bang.usage}
 use weaver::overlay {
     OverlayState, Overlay.read, Overlay.reset, Overlay.ack, Overlay.begin, Overlay.finish, Overlay.should_ack,
     Overlay.monitor_open, Overlay.monitor_close, Overlay.wait_monitor,
@@ -294,6 +295,8 @@ def update_msg (m : TuiModel) (msg : WeaverMsg) : Pair TuiModel (Cmd WeaverMsg) 
         WeaverMsg.side_closed => drain_btw m Cmd.none,
         WeaverMsg.btw_result q r => btw_result_step m q r,
         WeaverMsg.history_loaded ps => Pair.pair { m with prompt := Prompt.with_history m.prompt ps } Cmd.none,
+        WeaverMsg.bang_echoed command => Pair.pair m (bang_run_cmd m.state.store command),
+        WeaverMsg.bang_done command output => bang_done_step m command output,
     }
 
 // ── persistence commands ─────────────────────────────────────────────────
@@ -1106,12 +1109,67 @@ def cycle_mode (m : TuiModel) : TuiModel :=
 def enter_key (m : TuiModel) : Pair TuiModel (Cmd WeaverMsg) :=
     let text : String := String.trim (Prompt.text m.prompt) in
     if String.is_empty text then Pair.pair m Cmd.none
-    else if monitor_wanted text then open_monitor m
+    else match Bang.command text {
+        Option.some command => start_bang m text command,
+        Option.none => enter_line m text,
+    }
+
+def enter_line (m : TuiModel) (text : String) : Pair TuiModel (Cmd WeaverMsg) :=
+    if monitor_wanted text then open_monitor m
     else if Side.wanted (mode_is_plan m.state.mode) text then open_side m text
     else match Side.btw_question text {
         Option.some q => start_btw m text q,
         Option.none => if m.turn_pending then queue_line m text else submit_line m text,
     }
+
+// ── ! cmd ──────────────────────────────────────────────────────────────
+// The user's own shell line runs now, beside a turn if one is running (no
+// gate: the user typed it). Its echo is stored before it runs, by a plain
+// perform like `note_block`'s, so it lands in order with the other blocks;
+// the command then runs on a fiber, its output lands as a block when it
+// exits, and its note waits in `shell_notes` for the next model line.
+
+def start_bang (m : TuiModel) (text : String) (command : String) : Pair TuiModel (Cmd WeaverMsg) :=
+    let cleared : TuiModel := with_streak_reset (fn (mm : TuiModel) => { mm with prompt := Prompt.submitted mm.prompt text }) m in
+    if String.is_empty command then note_block Cmd.none cleared [TLine.plain Bang.usage]
+    else
+        let echo : List TLine := echo_lines text in
+        let block : List TLine := Transcript.next_block cleared.pane.transcript echo in
+        let start : I64 := cleared.pane.transcript.total in
+        let store : Option StoreState := m.state.store in
+        let m2 : TuiModel := Model.append_block cleared echo in
+        Pair.pair m2 (Cmd.perform (fn (_ : Unit) => bang_echo store text start block command))
+
+def bang_echo (store : Option StoreState) (text : String) (start : I64) (block : List TLine) (command : String)
+    : IO WeaverMsg := do {
+    persist_prompt store text;
+    let _ <- append_echo store start block;
+    IO.pure (WeaverMsg.bang_echoed command)
+}
+
+def bang_run_cmd (store : Option StoreState) (command : String) : Cmd WeaverMsg :=
+    Cmd.perform_async
+        (fn (_ : Unit) => do {
+            let out <- Bang.run store command;
+            IO.pure (WeaverMsg.bang_done command out)
+        })
+        (fn (e : FiberError) =>
+            WeaverMsg.bang_done command (String.concat "! failed to start: " (FiberError.message e)))
+
+/// Like `write_echo` but leaves the live block alone: a turn may be
+/// streaming into it.
+def append_echo (store : Option StoreState) (start : I64) (block : List TLine) : IO (Result String Unit) :=
+    match store {
+        Option.none => IO.pure (Result.ok unit),
+        Option.some s => Store.append_transcript s.dir start block,
+    }
+
+def bang_done_step (m : TuiModel) (command : String) (output : String) : Pair TuiModel (Cmd WeaverMsg) :=
+    let st : WeaverState := m.state in
+    let st2 : WeaverState := { st with shell_notes := List.append st.shell_notes [Bang.note command output] } in
+    let lines : List TLine := List.map TLine.plain (theme_split_lines (String.trim output)) in
+    let shown : List TLine := if List.is_empty lines then [TLine.plain "(no output)"] else lines in
+    note_block Cmd.none { m with state := st2 } shown
 
 // ── side commands and /btw ─────────────────────────────────────────────
 // Both run beside a turn: a side command on the main loop (a perform that
@@ -1252,7 +1310,10 @@ def start_queued (m : TuiModel) : Pair TuiModel (Cmd WeaverMsg) :=
 
 /// Submit `text` as this turn's line: echo, history, and the async turn.
 def submit_line (m : TuiModel) (text : String) : Pair TuiModel (Cmd WeaverMsg) :=
-    let st : WeaverState := m.state in
+    // A model line takes the pending `! cmd` notes (they ride its message);
+    // a slash line leaves them pending.
+    let slash : Bool := String.starts_with "/" text in
+    let st : WeaverState := if slash then { (m.state) with shell_notes := List.empty } else m.state in
     let echo : List TLine := echo_lines text in
     let block : List TLine := Transcript.next_block m.pane.transcript echo in
     let start : I64 := m.pane.transcript.total in
@@ -1263,6 +1324,7 @@ def submit_line (m : TuiModel) (text : String) : Pair TuiModel (Cmd WeaverMsg) :
     let p1 : PaneModel := m1.pane in
     let m2 : TuiModel :=
         { m1 with turn_pending := true, banner := Banner.hidden,
+            state := if slash then m1.state else { (m1.state) with shell_notes := List.empty },
             live := Live.start (Option.some m.state.run.session.spent), pane := { p1 with scroll := 0 },
             turn_gen := gen,
             modal := modal_command st text } in
@@ -1300,8 +1362,11 @@ def write_echo (store : Option StoreState) (start : I64) (block : List TLine) : 
 def echo_lines (text : String) : List TLine :=
     List.map TLine.user_line (theme_split_lines text)
 
+/// A state handed back by a fiber or a command replaces the model's, except
+/// the pending `! cmd` notes: those live on the UI side (a `!` can finish
+/// while the fiber runs), and only `submit_line` takes them.
 def set_state (m : TuiModel) (st : WeaverState) : TuiModel :=
-    { m with state := st }
+    { m with state := { st with shell_notes := m.state.shell_notes } }
 
 def set_run (m : TuiModel) (run : RunState) : TuiModel :=
     set_state m { (m.state) with run := run }
@@ -1645,7 +1710,7 @@ def drive_turn_tui (log : Option Logger) (gen : I64) (st : WeaverState) (text : 
             let notes <- Inbox.take st2.store;
             let instr <- Instructions.take_notes st2.instr_seen;
             let spend <- Ref.new usage_zero;
-            let line_text : String := Inbox.with_notes (List.append instr notes) text;
+            let line_text : String := Inbox.with_notes (List.append (List.append instr notes) st2.shell_notes) text;
             let first <- ResultT.run (drive_tui log gen st2 line_text on_u spend);
             // A provider 400 that names a lower output limit re-clamps and
             // retries ONCE, exactly as dumb mode does; the note rides the

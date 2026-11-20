@@ -61,8 +61,9 @@ commands.mo        the slash-command table (BTreeMap) and the
                    interactive State it advances
 usage.mo           per-turn usage: last request (context) and turn delta
                    from shuttle's cumulative spend
-monad_tools.mo     monad_check (compiler checker) and monad_eval (a
-                   REPL-style scratch module on the self-hosted interpreter)
+monad_tools.mo     monad_check and monad_eval over the `monad` binary on
+                   PATH (or WEAVER_MONAD_BIN): `monad check`, and a
+                   REPL-style scratch module run by `monad eval`
 diff.mo            old -> new trim rendering for write/edit approvals
                    (dumb mode's fallback), picked out of the tool input
 diff_hunks.mo      Myers line diff: hunks, @@ headers, gutters, +N -M stat
@@ -96,7 +97,10 @@ already uses for a non-tty stdin). The input box is 3 padded rows
 with a visible reverse-block caret from the first frame (over the
 placeholder, after every submit, and wherever a click lands); a left drag
 selects input text and copies it through OSC 52, and typing or Backspace
-replaces the selection. Alt+Enter folds a newline into it (Enter submits
+replaces the selection. A line starting with `!` runs as a shell command
+right away, even mid-turn and with no approval (you typed it); its output
+shows in the transcript and rides your next message to the model, capped
+at 8 KiB. Alt+Enter folds a newline into it (Enter submits
 the whole value, a multiline submission echoed on its own lines), and the
 arrow keys pull prompt history -- ArrowUp recalls from an empty input, repeats walk
 backward, ArrowDown steps forward back to the live edit. The mouse
@@ -261,18 +265,21 @@ says so, so an unattended plan never blocks on a question.
 /quit (or /q)                        exit (MCP servers are disposed)
 ```
 
-Two Monad-aware tools are registered for the model: `monad_check`
-type-checks a file (`path`) or an in-memory buffer (`source`) with the
-compiler's own checker, and `monad_eval` runs a REPL-style scratch
-module on the self-hosted interpreter -- `def` snippets accumulate for
-the session, bare expressions get a typed `main`, and a snippet with
-`def main` runs whole. Eval is pure (I64/String natives, no IO) and
-tagged `exec`, so `allow_edit`/`manual` ask before it runs. Every snippet
-runs under a step budget and a nesting cap (the browser REPL's), so a
-runaway one comes back as an `out of fuel` / `recursion too deep` tool
-error instead of pinning the turn (Esc cannot interrupt the evaluator).
+Two Monad-aware tools are registered for the model. Both run the `monad`
+binary on PATH (`WEAVER_MONAD_BIN` overrides it), so weaver does not link
+the compiler. `monad_check` runs `monad check` on a file (`path`) or an
+in-memory buffer (`source`), and returns the errors with warnings counted
+rather than listed. `monad_eval` runs a REPL-style scratch module through
+`monad eval`: `def` snippets accumulate for the session, bare expressions
+get a typed `main`, and a snippet with `def main` runs whole. Eval is pure
+(no IO) and tagged `exec`, so `allow_edit`/`manual` ask before it runs.
+Each run is bounded by a 60 s `timeout`, so a runaway snippet comes back
+as a `[timed out]` tool error instead of pinning the turn. A buffer is
+staged as a uniquely named temp `.mo`: in `TMPDIR` unless it has `use`
+lines, which need the nearest enclosing mote's `src/` to resolve. A
+relative `path` is resolved against the session's working directory.
 
-`read` streams to a 128 KiB cap and says so, instead of loading a
+`read` streams to a 32 KiB cap and says so, instead of loading a
 multi-GB file (or `/dev/zero`) whole and cutting afterwards; `offset`
 (1-based first line) and `limit` (lines, default 2000) page a big file
 instead of putting it all in the history. `shell` runs its command as a

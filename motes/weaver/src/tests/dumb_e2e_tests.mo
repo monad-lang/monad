@@ -27,7 +27,7 @@ use shuttle::tools::shell_tools {ShellTool.impl}
 use weaver::commands {WeaverState}
 use weaver::store {StoreState, Store.new_session}
 use weaver::plan_file {PlanRepo, PlanEntry, PlanRepo.list, PlanRepo.capture, PlanDoc, PlanMeta, PlanFile.read, PlanFile.render, PlanFile.linked}
-use weaver::dumb {Dumb.run, Dumb.status_fields}
+use weaver::dumb {Dumb.run, Dumb.status_fields, Dumb.cache_share}
 use weaver::policy {Mode, AutoDanger}
 use json::json {Json, Json.parse, Json.get_array, Json.get_str, Json.make_str, Json.make_array, Json.make_object, Json.make_null, Json.make_num_int, Json.to_string}
 use parsec::number {parse_i64}
@@ -682,6 +682,14 @@ def test_auto_status_has_no_warning : Bool :=
     let st : WeaverState := { (state_of stamp_registry) with mode := Mode.auto } in
     let line : String := Dumb.status_fields st in
     Bool.and (String.contains line "[auto]") (Bool.not (String.contains line "WARNING"))
+
+/// The cache share: cached tokens over all prompt tokens, hidden before
+/// the first hit.
+#[test]
+def test_cache_share_is_the_cached_fraction : Bool :=
+    let hit : Usage := { input_tokens := 1000, output_tokens := 10, cached_tokens := 870 } in
+    let cold : Usage := { input_tokens := 1000, output_tokens := 10, cached_tokens := 0 } in
+    Dumb.cache_share hit == " (87%)" && Dumb.cache_share cold == "" && Dumb.cache_share usage_zero == ""
 
 /// `--mode auto --plan` starts the plan's first turn with no input line
 /// at all (the scripted read has nothing to give).

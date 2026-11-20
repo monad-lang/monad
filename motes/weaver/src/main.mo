@@ -38,8 +38,7 @@ use weaver::plan_file {PlanRepo, PlanRepo.resolve}
 use weaver::skills {Skill, SkillScan, Skills.discover, Skills.user_root, Skills.with_index, Skills.note}
 use weaver::commands {WeaverState, MountedCommand, Commands.set_plan, Commands.session_name, Commands.find_plan, Commands.load_plan, Commands.join_notes, Commands.fold_startup, FoldedResume, with_instructions}
 use weaver::fold {Fold.resume_budget}
-use weaver::monad_tools {MonadCheck.tool, MonadEval.tool}
-use lang::module {ModuleInfoCache, module_info_cache_empty}
+use weaver::monad_tools {MonadCheck.tool, MonadEval.tool, MonadTools.binary}
 use weaver::store {
     StoreState, TLine, TLine.plain, TLine.user_line, Transcript,
     Store.sessions_root, Store.ensure_root, Store.new_session, Store.load_session, Store.load_session_base,
@@ -82,12 +81,12 @@ use std::map {Map}
 /// The registry Weaver ships: all six built-ins (a coding agent's whole
 /// point is the write/edit pair; shuttle's own CLI ships only the
 /// read-side four) plus the Monad-aware tools and every `--mcp` mount's
-/// proxies. The checker cache and eval buffer are per-session Refs
-/// (created in `run_plan`), so one session's checks warm each other and
+/// proxies. The Monad tools run `monad_bin` (`MonadTools.binary`); the
+/// eval buffer is a per-session Ref (created in `run_plan`), so
 /// `monad_eval` definitions accumulate.
-def weaver_registry (log : Option Logger) (check_cache : Ref ModuleInfoCache) (eval_buf : Ref (List String)) (root : Option String) : ToolRegistry :=
-    ToolRegistry.register (MonadEval.tool eval_buf check_cache root)
-        (ToolRegistry.register (MonadCheck.tool check_cache root)
+def weaver_registry (log : Option Logger) (monad_bin : String) (eval_buf : Ref (List String)) (root : Option String) : ToolRegistry :=
+    ToolRegistry.register (MonadEval.tool monad_bin eval_buf root)
+        (ToolRegistry.register (MonadCheck.tool monad_bin root)
             (ToolRegistry.register ReadProcessTool.impl
                 (ToolRegistry.register (KillProcessTool.impl log)
                     (ToolRegistry.register ListProcessesTool.impl
@@ -448,7 +447,7 @@ def initial_state (p : Plan) (reg : ToolRegistry) (s : Settings) (colors : Bool)
     let left : I64 := if p.max_turns - session.turns < 0 then 0 else p.max_turns - session.turns in
     let run : RunState := { session := session, reg := reg, turns_left := left, emit := stdout_write, gate := Gate.auto, always := List.empty, retries := 3, sleep_ms := Dumb.poll_sleep, on_usage := silent_usage, should_stop := silent_stop, inbox := silent_inbox, side_spend := silent_side_spend, stopped := false, last_stop := Option.none } in
     let prov : String := Weaver.provider_of p.provider session.config in
-    let st : WeaverState := { run := run, mode := p.mode, provider := prov, budget := p.max_turns, context_window := p.context_window, compact_at := p.compact_at, plan := Option.none, last_context := 0, grants := grants, place := place, mcps := p.mcps, keys := s.api_keys, catalog := BTreeMap.empty, quit := false, colors := colors, fatal := Option.none, name := Option.none, trusted := p.trusted, instructions := p.instructions, instr_seen := Option.none, store := store, auto_on_danger := auto_on_danger_of s, verdicts := Option.none, plan_repo := Option.none, skills := p.skills, auto_start := p.auto_start, auto_failures := Option.none, auto_safety := auto_safety_of s, mounted := Option.none, auto_progress := Option.none, fatal_out := Option.none } in
+    let st : WeaverState := { run := run, mode := p.mode, provider := prov, budget := p.max_turns, context_window := p.context_window, compact_at := p.compact_at, resume_fold := p.resume_fold, plan := Option.none, last_context := 0, grants := grants, place := place, mcps := p.mcps, keys := s.api_keys, catalog := BTreeMap.empty, quit := false, colors := colors, fatal := Option.none, name := Option.none, trusted := p.trusted, instructions := p.instructions, instr_seen := Option.none, store := store, auto_on_danger := auto_on_danger_of s, verdicts := Option.none, plan_repo := Option.none, skills := p.skills, auto_start := p.auto_start, auto_failures := Option.none, auto_safety := auto_safety_of s, mounted := Option.none, auto_progress := Option.none, fatal_out := Option.none, shell_notes := List.empty } in
     st
 
 /// The dumb UI's palette switch: `NO_COLOR` set anywhere is off --
@@ -564,10 +563,10 @@ def main_plan (setup : LogSetup) (colors : Bool) (s : Settings) (ws : List Weave
     }
 
 def run_plan (setup : LogSetup) (colors : Bool) (p : Plan) (s : Settings) (place : Option SessionPlace) : IO I64 := do {
-    let cache <- Ref.new module_info_cache_empty;
+    let monad_bin <- MonadTools.binary;
     let empty_buf : List String := List.empty;
     let eval_buf <- Ref.new empty_buf;
-    let r <- mount_all client_info p.mcps s (weaver_registry setup.log cache eval_buf (cwd_text place)) [];
+    let r <- mount_all client_info p.mcps s (weaver_registry setup.log monad_bin eval_buf (cwd_text place)) [];
     mounted_plan setup colors p s place r
 }
 

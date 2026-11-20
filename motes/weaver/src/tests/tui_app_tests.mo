@@ -25,6 +25,7 @@ use weaver::model {
     Model.scroll_step, Model.display_rows,
 }
 use weaver::overlay {OverlayState}
+use weaver::ui::prompt {Prompt.set_text}
 use weaver::store {StoreState, TLine, TLine.plain, TranscriptPage, SessionInfo}
 use weaver::diff_tool {DiffTool.sep}
 use std::path {Path, Path.of}
@@ -1129,15 +1130,20 @@ def test_settings_options_make_the_number_rows_editable : Bool :=
         Option.some o => o.label == "Turn budget" && (match o.value { Option.some v => v == "10", Option.none => false }),
         Option.none => false,
     } in
-    let danger_cycles : Bool := match List.get 6 opts {
+    let fold_shown : Bool := match List.get 6 opts {
+        Option.some o => o.label == "Resume fold tail (tokens)",
+        Option.none => false,
+    } in
+    let danger_cycles : Bool := match List.get 7 opts {
         Option.some o => String.starts_with "Auto mode on a dangerous verdict: " o.label,
         Option.none => false,
     } in
-    let safety_toggle : Bool := match List.get 7 opts {
+    let safety_toggle : Bool := match List.get 8 opts {
         Option.some o => String.starts_with "Auto mode safety net: " o.label,
         Option.none => false,
     } in
-    List.length opts == 8 && editable_count opts == 4 && budget_shown && danger_cycles && safety_toggle
+    let shape : Bool := List.length opts == 9 && editable_count opts == 5 in
+    shape && budget_shown && fold_shown && danger_cycles && safety_toggle
 
 /// A repo-scoped picker offers the switch to every repo's sessions, just
 /// before Cancel.
@@ -1351,3 +1357,51 @@ def test_plain_output_with_headers_is_not_a_diff : Bool :=
     let lines : List TLine := TuiApp.render_message (tool_result_msg out) in
     let head : String := tline_text (tline_head lines) in
     String.contains head "lines · ctrl+o" && Bool.not (String.contains head "(+")
+
+// ── ! cmd ────────────────────────────────────────────────────────────────
+
+def with_input (m : TuiModel) (text : String) : TuiModel :=
+    { m with prompt := Prompt.set_text m.prompt text }
+
+/// `! cmd` runs NOW even while a turn runs: a perform (the echo's store
+/// write, in order with the other blocks), not a queued line, and the echo
+/// is in the transcript as the user's.
+#[test]
+def test_bang_runs_beside_a_turn : Bool :=
+    let m0 : TuiModel := with_input (enter_pending (model_of Mode.manual)) "! echo hi" in
+    match TuiApp.update m0 (key_msg Key.enter) {
+        Pair.pair m1 cmd =>
+            m1.turn_pending
+                && List.is_empty m1.queued
+                && cmd_is_perform_repaint cmd
+                && String.is_empty m1.prompt.input.value
+                && transcript_user_contains "! echo hi" m1.pane.transcript.tail,
+    }
+
+/// Once the echo is stored, the command itself runs on a fiber.
+#[test]
+def test_bang_echoed_starts_the_command : Bool :=
+    match TuiApp.update (enter_pending (model_of Mode.manual)) (WeaverMsg.bang_echoed "echo hi") {
+        Pair.pair m1 cmd => cmd_is_perform cmd && m1.turn_pending,
+    }
+
+/// The finished command's output lands in the transcript and waits as a
+/// note for the next model line.
+#[test]
+def test_bang_done_keeps_a_note : Bool :=
+    match TuiApp.update (model_of Mode.manual) (WeaverMsg.bang_done "echo hi" "hi\n") {
+        Pair.pair m1 _ =>
+            transcript_contains "hi" m1.pane.transcript.tail
+                && List.length m1.state.shell_notes == 1,
+    }
+
+/// A model line takes the notes (they ride its message); a slash line
+/// leaves them pending.
+#[test]
+def test_submit_takes_the_shell_notes : Bool :=
+    let m0 : TuiModel := match TuiApp.update (model_of Mode.manual) (WeaverMsg.bang_done "echo hi" "hi\n") {
+        Pair.pair x _ => x,
+    } in
+    let slash : TuiModel := match TuiApp.update (with_input m0 "/model") (key_msg Key.enter) { Pair.pair x _ => x } in
+    let typed : TuiModel := match TuiApp.update (with_input m0 "explain") (key_msg Key.enter) { Pair.pair x _ => x } in
+    List.length slash.state.shell_notes == 1 && List.is_empty typed.state.shell_notes

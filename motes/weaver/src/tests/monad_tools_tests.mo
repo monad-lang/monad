@@ -1,11 +1,13 @@
-/// The Monad-aware tools: `monad_check` against the compiler's checker
-/// and `monad_eval`'s REPL buffer through the self-hosted interpreter.
+/// The Monad-aware tools: `monad_check` and `monad_eval` over the `monad`
+/// binary (`MonadTools.binary`), and the shaping of its output.
 /// Everything runs under /tmp (pure snippets need no imports).
 use init::transformers {ResultT, ResultT.run}
 use shuttle::tool {ToolImpl}
 use shuttle::message_types {Content}
-use weaver::monad_tools {MonadCheck.tool, MonadEval.tool}
-use lang::module {ModuleInfoCache, module_info_cache_empty}
+use weaver::monad_tools {
+    MonadCheck.tool, MonadEval.tool, MonadTools.binary, MonadTools.strip_ansi, MonadTools.summarize,
+    MonadTools.needs_mote, MonadTools.resolve_path,
+}
 use std::ref {Ref}
 use json::json {Json, Json.make_object, Json.make_str}
 use std::map {Map, BTreeMap}
@@ -25,8 +27,8 @@ def text_of (c : Content) : String :=
 
 #[test]
 def test_monad_check_clean_source : IO Bool := do {
-    let cache <- Ref.new module_info_cache_empty;
-    let t : ToolImpl := MonadCheck.tool cache (Option.some "/tmp");
+    let bin <- MonadTools.binary;
+    let t : ToolImpl := MonadCheck.tool bin (Option.some "/tmp");
     let run : String -> Json -> ResultT String IO Content := t.run;
     let r <- ResultT.run (run "call" (source_input "def main : I64 := 1 + 2"));
     match r {
@@ -37,8 +39,8 @@ def test_monad_check_clean_source : IO Bool := do {
 
 #[test]
 def test_monad_check_reports_an_error : IO Bool := do {
-    let cache <- Ref.new module_info_cache_empty;
-    let t : ToolImpl := MonadCheck.tool cache (Option.some "/tmp");
+    let bin <- MonadTools.binary;
+    let t : ToolImpl := MonadCheck.tool bin (Option.some "/tmp");
     let run : String -> Json -> ResultT String IO Content := t.run;
     let r <- ResultT.run (run "call" (source_input "def main : I64 := nope"));
     match r {
@@ -49,15 +51,15 @@ def test_monad_check_reports_an_error : IO Bool := do {
 
 #[test]
 def test_monad_eval_expression : IO Bool := do {
-    let cache <- Ref.new module_info_cache_empty;
+    let bin <- MonadTools.binary;
     let empty_buf : List String := List.empty;
     let buf <- Ref.new empty_buf;
-    let t : ToolImpl := MonadEval.tool buf cache (Option.some "/tmp");
+    let t : ToolImpl := MonadEval.tool bin buf (Option.some "/tmp");
     let run : String -> Json -> ResultT String IO Content := t.run;
     let r <- ResultT.run (run "call" (source_input "1 + 2"));
     match r {
         Result.err _ => IO.pure false,
-        Result.ok c => IO.pure (String.beq (text_of c) "Eval result 3"),
+        Result.ok c => IO.pure (String.contains (text_of c) "Eval result" && String.contains (text_of c) "3"),
     }
 }
 
@@ -65,10 +67,10 @@ def test_monad_eval_expression : IO Bool := do {
 /// module, and a later expression can call it.
 #[test]
 def test_monad_eval_accumulates_definitions : IO Bool := do {
-    let cache <- Ref.new module_info_cache_empty;
+    let bin <- MonadTools.binary;
     let empty_buf : List String := List.empty;
     let buf <- Ref.new empty_buf;
-    let t : ToolImpl := MonadEval.tool buf cache (Option.some "/tmp");
+    let t : ToolImpl := MonadEval.tool bin buf (Option.some "/tmp");
     let run : String -> Json -> ResultT String IO Content := t.run;
     let r1 <- ResultT.run (run "call" (source_input "def double (x : I64) : I64 := x + x"));
     let r2 <- ResultT.run (run "call" (source_input "double 21"));
@@ -79,7 +81,7 @@ def test_monad_eval_accumulates_definitions : IO Bool := do {
             then IO.pure false
             else match r2 {
                 Result.err _ => IO.pure false,
-                Result.ok c2 => IO.pure (String.beq (text_of c2) "Eval result 42"),
+                Result.ok c2 => IO.pure (String.contains (text_of c2) "42"),
             },
     }
 }
@@ -87,17 +89,17 @@ def test_monad_eval_accumulates_definitions : IO Bool := do {
 /// `reset` clears the buffer: a definition accepted before it is gone.
 #[test]
 def test_monad_eval_reset_clears_definitions : IO Bool := do {
-    let cache <- Ref.new module_info_cache_empty;
+    let bin <- MonadTools.binary;
     let empty_buf : List String := List.empty;
     let buf <- Ref.new empty_buf;
-    let t : ToolImpl := MonadEval.tool buf cache (Option.some "/tmp");
+    let t : ToolImpl := MonadEval.tool bin buf (Option.some "/tmp");
     let run : String -> Json -> ResultT String IO Content := t.run;
     let _ <- ResultT.run (run "call" (source_input "def triple (x : I64) : I64 := x + x + x"));
     let _ <- ResultT.run (run "call" (reset_input "0"));
     let r <- ResultT.run (run "call" (source_input "triple 3"));
     match r {
         Result.err _ => IO.pure false,
-        Result.ok c => IO.pure (String.starts_with "FAILED" (text_of c)),
+        Result.ok c => IO.pure (is_error_of c),
     }
 }
 
@@ -112,10 +114,10 @@ def is_error_of (c : Content) : Bool :=
 /// `String`/`Bool`/`Unit` results of accumulated definitions work.
 #[test]
 def test_monad_eval_uses_the_buffer_for_non_i64_expressions : IO Bool := do {
-    let cache <- Ref.new module_info_cache_empty;
+    let bin <- MonadTools.binary;
     let empty_buf : List String := List.empty;
     let buf <- Ref.new empty_buf;
-    let t : ToolImpl := MonadEval.tool buf cache (Option.some "/tmp");
+    let t : ToolImpl := MonadEval.tool bin buf (Option.some "/tmp");
     let run : String -> Json -> ResultT String IO Content := t.run;
     let _ <- ResultT.run (run "call" (source_input "def greeting : String := \"hi\""));
     let r <- ResultT.run (run "call" (source_input "String.concat greeting \"!\""));
@@ -129,10 +131,10 @@ def test_monad_eval_uses_the_buffer_for_non_i64_expressions : IO Bool := do {
 
 #[test]
 def test_monad_eval_failure_is_an_error : IO Bool := do {
-    let cache <- Ref.new module_info_cache_empty;
+    let bin <- MonadTools.binary;
     let empty_buf : List String := List.empty;
     let buf <- Ref.new empty_buf;
-    let t : ToolImpl := MonadEval.tool buf cache (Option.some "/tmp");
+    let t : ToolImpl := MonadEval.tool bin buf (Option.some "/tmp");
     let run : String -> Json -> ResultT String IO Content := t.run;
     let r <- ResultT.run (run "call" (source_input "missing_thing"));
     match r {
@@ -141,28 +143,30 @@ def test_monad_eval_failure_is_an_error : IO Bool := do {
     }
 }
 
-/// A runaway snippet stops at the evaluator's step budget and comes back as
-/// a tool error -- not a hung turn fiber (Esc cannot interrupt it) and not a
-/// stack overrun. The plain `Eval.run_file` keeps `fuel := -1` for the CLI;
-/// this is `monad_eval`'s own bound.
+/// Color codes go; the text between them stays.
 #[test]
-def test_monad_eval_is_bounded : IO Bool := do {
-    let cache <- Ref.new module_info_cache_empty;
-    let empty_buf : List String := List.empty;
-    let buf <- Ref.new empty_buf;
-    let t : ToolImpl := MonadEval.tool buf cache (Option.some "/tmp");
-    let run : String -> Json -> ResultT String IO Content := t.run;
-    let src : String := "#[partial]\ndef spin (n : I64) : I64 := spin n\n\ndef main : I64 := spin 0\n";
-    let r <- ResultT.run (run "call" (source_input src));
-    match r {
-        Result.err _ => IO.pure false,
-        Result.ok c => match c {
-            Content.tool_result _ out is_error =>
-                // Either cap may fire first: a tail-recursive spin burns
-                // fuel, a growing call chain hits the nesting cap.
-                IO.pure (Bool.and is_error
-                    (Bool.or (String.contains out "fuel") (String.contains out "recursion"))),
-            _ => IO.pure false,
-        },
-    }
-}
+def test_strip_ansi_drops_sgr_codes : Bool :=
+    MonadTools.strip_ansi "\u{1b}[1m\u{1b}[31mFAILED\u{1b}[0m ok" == "FAILED ok"
+
+/// Warnings are counted, not listed; errors and their locations stay.
+#[test]
+def test_summarize_counts_warnings_and_keeps_errors : Bool :=
+    let out : String := String.concat "warning: `x` is used twice\n  --> a.mo\n"
+        "error: unknown variable 'nope'\n  --> a.mo\n\n1 error(s)\n" in
+    let s : String := MonadTools.summarize out in
+    String.contains s "unknown variable" && String.contains s "--> a.mo"
+        && String.contains s "1 warning(s) not shown" && Bool.not (String.contains s "used twice")
+
+/// Only a snippet with imports is staged inside the user's mote.
+#[test]
+def test_needs_mote_only_for_imports : Bool :=
+    MonadTools.needs_mote "use json::json {Json}\ndef x : I64 := 1"
+        && MonadTools.needs_mote "  use std::list {List.any}"
+        && Bool.not (MonadTools.needs_mote "def used : I64 := 1\n// use later")
+
+/// A relative `path` is under the session root; an absolute one is kept.
+#[test]
+def test_resolve_path_joins_the_root : Bool :=
+    MonadTools.resolve_path (Option.some "/w") "src/a.mo" == "/w/src/a.mo"
+        && MonadTools.resolve_path (Option.some "/w") "/abs/a.mo" == "/abs/a.mo"
+        && MonadTools.resolve_path Option.none "a.mo" == "a.mo"

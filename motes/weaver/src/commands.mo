@@ -168,6 +168,9 @@ pub struct WeaverState {
     /// Where the TUI writes a fatal error so `main` can exit 1 after the
     /// app closes (the app's own state is gone by then).
     fatal_out : Option (Ref (Option WeaverError)) := Option.none,
+    /// `! cmd` results the model has not seen yet (`bang.mo`): they ride
+    /// the next submitted line, then clear.
+    shell_notes : List String := List.empty,
 }
 
 /// What a command did to the transcript: ordinary output appends,
@@ -1907,6 +1910,7 @@ def help_text : String :=
         "/clear                               start a new session and reset the budget",
         "/compact [instructions]              summarize the context and keep a recent tail",
         "/btw <question>                      ask about the session without interrupting the task",
+        "! <command>                          run a shell command now; its output joins your next message",
         "/help (or /h)                        this table",
         "/quit (or /q)                        exit (MCP servers are disposed)",
     ]
