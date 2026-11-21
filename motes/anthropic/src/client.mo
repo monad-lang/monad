@@ -25,7 +25,7 @@ use http::body {Body.from_text, Body.to_bytes_pure}
 use http::sse {Sse.init, Sse.push, SseState, SseEvent}
 use moose::client {
     Client.default_stream_idle_ms, Client.default_timeout_ms,
-    Client.get_timeout, Client.post_stream_timeout, Client.post_timeout,
+    Client.get_timeout, Client.post_stream_halting, Client.post_timeout,
 }
 use anthropic::types {MessagesRequest, MessagesResponse, AnthropicUsage, Block}
 use std::map {BTreeMap}
@@ -658,7 +658,10 @@ def anthropic_stream_until (halt_seam : Unit -> IO Bool) (on_text : String -> IO
 
 def anthropic_stream_io (u : Uri) (headers : Headers) (body_str : String) (halt_seam : Unit -> IO Bool) (on_text : String -> IO Unit) : IO (Result String MessagesResponse) := do {
     let init : AnthropicAcc := { sse := Sse.init, blocks := List.empty, stop := "", usage := AnthropicUsage.mk 0 0 0 };
-    let res <- Client.post_stream_timeout u headers (Body.from_text body_str) Client.default_stream_idle_ms init (fn st bytes => anthropic_stream_until halt_seam on_text st bytes);
+    // The halt seam is asked between chunks AND while the server is silent
+    // (a long thinking pause), so a stop lands within a slice.
+    let res <- Client.post_stream_halting u headers (Body.from_text body_str) Client.default_stream_idle_ms halt_seam init
+        (fn st bytes => anthropic_stream_until halt_seam on_text st bytes);
     return (match res {
         Result.err e => Result.err e,
         Result.ok pr =>

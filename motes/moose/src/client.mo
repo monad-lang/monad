@@ -85,8 +85,23 @@ struct Client.Reader {
     deadline_ms : I64,
     idle_ms : I64,
     total_ms : I64,
-    streaming : Bool
+    streaming : Bool,
+    /// A streaming read that waits in short slices and asks `halt` between
+    /// them, so a stop lands while the server is silent, not at the next
+    /// chunk (or the idle bound).
+    halting : Bool,
+    halt : Unit -> IO Bool
 }
+
+/// The halt seam of a reader nobody stops.
+def Client.never_halt (_ : Unit) : IO Bool := IO.pure false
+
+/// The slice a halting wait polls in: a stop lands within it, and a reply
+/// that is streaming never waits a whole slice.
+pub def Client.halt_slice_ms : I64 := 200
+
+/// What a halted read answers (the agent loop's `stopped by request`).
+pub def Client.halted_error : String := "stopped by request"
 
 /// Non-streaming default: connect + write + read share one deadline.
 pub def Client.default_timeout_ms : I64 := 30000
@@ -100,17 +115,26 @@ pub def Client.timeout_error (ms : I64) : String :=
 /// A reader whose whole response must arrive within `ms`.
 def Client.total_reader (tr : Transport) (ms : I64) : IO Client.Reader := do {
     let now <- IO.current_time;
-    return ({ t := tr, deadline_ms := now + ms, idle_ms := 0i64, total_ms := ms, streaming := false } : Client.Reader)
+    return ({ t := tr, deadline_ms := now + ms, idle_ms := 0i64, total_ms := ms, streaming := false,
+        halting := false, halt := Client.never_halt } : Client.Reader)
 }
 
 /// A reader whose every read is allowed `ms` of silence.
 def Client.idle_reader (tr : Transport) (ms : I64) : Client.Reader :=
-    ({ t := tr, deadline_ms := 0i64, idle_ms := ms, total_ms := 0i64, streaming := true } : Client.Reader)
+    ({ t := tr, deadline_ms := 0i64, idle_ms := ms, total_ms := 0i64, streaming := true,
+        halting := false, halt := Client.never_halt } : Client.Reader)
+
+/// `idle_reader` whose waits also end when `halt` answers true.
+def Client.halting_reader (tr : Transport) (ms : I64) (halt : Unit -> IO Bool) : Client.Reader :=
+    ({ t := tr, deadline_ms := 0i64, idle_ms := ms, total_ms := 0i64, streaming := true,
+        halting := true, halt := halt } : Client.Reader)
 
 /// Wait for readable within the reader's bound; `Result.err` is the
 /// timeout message, so both read loops report it the same way.
 def Client.reader_wait (r : Client.Reader) : IO (Result String Unit) := do {
-    if r.streaming
+    if r.halting
+    then Client.wait_read_halting r.t r.idle_ms r.halt 0
+    else if r.streaming
     then Client.wait_read_until r.t r.idle_ms r.idle_ms
     else do {
         let now <- IO.current_time;
@@ -118,6 +142,26 @@ def Client.reader_wait (r : Client.Reader) : IO (Result String Unit) := do {
         if remaining < 1
         then return (Result.err (Client.timeout_error r.total_ms))
         else Client.wait_read_until r.t remaining r.total_ms
+    }
+}
+
+/// A streaming wait in `halt_slice_ms` slices up to `idle_ms`: ready,
+/// halted (asked before every slice), or timed out at the idle bound.
+#[partial]
+def Client.wait_read_halting (tr : Transport) (idle_ms : I64) (halt : Unit -> IO Bool) (waited : I64) : IO (Result String Unit) := do {
+    let stop <- halt unit;
+    if stop then return (Result.err Client.halted_error)
+    else if I64.lt (idle_ms - 1) waited then return (Result.err (Client.timeout_error idle_ms))
+    else do {
+        let left : I64 := idle_ms - waited;
+        let slice : I64 := if I64.lt left Client.halt_slice_ms then left else Client.halt_slice_ms;
+        let w <- Transport.wait_read tr slice;
+        match w {
+            Result.err e => return (Result.err e.message),
+            Result.ok ready =>
+                if ready then return (Result.ok Unit.unit)
+                else Client.wait_read_halting tr idle_ms halt (waited + slice),
+        }
     }
 }
 
@@ -457,7 +501,8 @@ def Client.send_until (conn : Connection) (req : Request) (deadline_ms : I64) (t
         Result.ok bytes => do {
             let sock : Transport := conn.socket;
             let r : Client.Reader :=
-                ({ t := sock, deadline_ms := deadline_ms, idle_ms := 0i64, total_ms := total_ms, streaming := false } : Client.Reader);
+                ({ t := sock, deadline_ms := deadline_ms, idle_ms := 0i64, total_ms := total_ms, streaming := false,
+                    halting := false, halt := Client.never_halt } : Client.Reader);
             let write_res <- Client.reader_write r bytes;
             Client.send_after_write r req.method write_res
         }
@@ -718,6 +763,19 @@ pub def Client.post_stream {S : Type} (u : Uri) (hdrs : Headers) (body : Body) (
 /// TLS stall classification) is re-bound to `idle_ms`, so a read that
 /// stalls mid-record fails at the idle bound, not the connect bound.
 pub def Client.post_stream_timeout {S : Type} (u : Uri) (hdrs : Headers) (body : Body) (idle_ms : I64) (init : S) (on_bytes : S -> List U8 -> IO (Result String (Pair S Unit))) : IO (Result String (Pair S Response)) :=
+    Client.post_stream_with u hdrs body idle_ms false Client.never_halt init on_bytes
+
+/// `post_stream_timeout` that also stops while the server is silent:
+/// `halt` is asked every `halt_slice_ms` of a wait, and a true answer ends
+/// the stream with `Client.halted_error` (the connection still closes).
+pub def Client.post_stream_halting {S : Type} (u : Uri) (hdrs : Headers) (body : Body) (idle_ms : I64)
+    (halt : Unit -> IO Bool) (init : S) (on_bytes : S -> List U8 -> IO (Result String (Pair S Unit)))
+    : IO (Result String (Pair S Response)) :=
+    Client.post_stream_with u hdrs body idle_ms true halt init on_bytes
+
+def Client.post_stream_with {S : Type} (u : Uri) (hdrs : Headers) (body : Body) (idle_ms : I64)
+    (halting : Bool) (halt : Unit -> IO Bool) (init : S) (on_bytes : S -> List U8 -> IO (Result String (Pair S Unit)))
+    : IO (Result String (Pair S Response)) :=
     let req : Request :=
         { method := Method.POST, uri := u, headers := hdrs, version := HttpVersion.http1_1, body := body }
     in
@@ -725,28 +783,31 @@ pub def Client.post_stream_timeout {S : Type} (u : Uri) (hdrs : Headers) (body :
         Result.err e => return (Result.err e),
         Result.ok bytes =>
             Monad.bind (Client.connect_with_timeout_io (Uri.format u) Client.default_timeout_ms idle_ms) (fn conn_res =>
-                Client.post_stream_conn idle_ms bytes conn_res init on_bytes)
+                Client.post_stream_conn idle_ms halting halt bytes conn_res init on_bytes)
     }
 
 /// After connecting: write the request, then stream the response, then close.
-def Client.post_stream_conn {S : Type} (idle_ms : I64) (bytes : List U8) (conn_res : Result String Connection) (init : S) (on_bytes : S -> List U8 -> IO (Result String (Pair S Unit))) : IO (Result String (Pair S Response)) :=
+def Client.post_stream_conn {S : Type} (idle_ms : I64) (halting : Bool) (halt : Unit -> IO Bool) (bytes : List U8)
+    (conn_res : Result String Connection) (init : S) (on_bytes : S -> List U8 -> IO (Result String (Pair S Unit)))
+    : IO (Result String (Pair S Response)) :=
     match conn_res {
         Result.err e => return (Result.err e),
         Result.ok conn => do {
-            let r : Client.Reader := Client.idle_reader conn.socket idle_ms;
+            let r : Client.Reader :=
+                if halting then Client.halting_reader conn.socket idle_ms halt else Client.idle_reader conn.socket idle_ms;
             let write_res <- Client.reader_write r bytes;
-            Client.post_stream_sent idle_ms conn write_res init on_bytes
+            Client.post_stream_sent r conn write_res init on_bytes
         }
     }
 
 /// After the write: stream, then close on every exit path. A failed write
 /// closes too -- the connection is open, and its socket is this call's to
 /// reap.
-def Client.post_stream_sent {S : Type} (idle_ms : I64) (conn : Connection) (write_res : Result String U64) (init : S) (on_bytes : S -> List U8 -> IO (Result String (Pair S Unit))) : IO (Result String (Pair S Response)) :=
+def Client.post_stream_sent {S : Type} (r : Client.Reader) (conn : Connection) (write_res : Result String U64) (init : S) (on_bytes : S -> List U8 -> IO (Result String (Pair S Unit))) : IO (Result String (Pair S Response)) :=
     match write_res {
         Result.err e => do { Client.close conn; return (Result.err e) },
         Result.ok _ =>
-            Monad.bind (Client.stream_response_timeout Method.POST conn.socket idle_ms init on_bytes) (fn res =>
+            Monad.bind (Client.stream_response_with Method.POST r init on_bytes) (fn res =>
                 Client.post_stream_close conn res)
     }
 
@@ -769,8 +830,11 @@ def Client.stream_response {S : Type} (method : Method) (tr : Transport) (init :
     Client.stream_response_timeout method tr Client.default_stream_idle_ms init on_bytes
 
 /// `stream_response` with an explicit per-read idle bound.
-def Client.stream_response_timeout {S : Type} (method : Method) (tr : Transport) (idle_ms : I64) (init : S) (on_bytes : S -> List U8 -> IO (Result String (Pair S Unit))) : IO (Result String (Pair S Response)) := do {
-    let r : Client.Reader := Client.idle_reader tr idle_ms;
+def Client.stream_response_timeout {S : Type} (method : Method) (tr : Transport) (idle_ms : I64) (init : S) (on_bytes : S -> List U8 -> IO (Result String (Pair S Unit))) : IO (Result String (Pair S Response)) :=
+    Client.stream_response_with method (Client.idle_reader tr idle_ms) init on_bytes
+
+/// Stream one response through an already-built reader.
+def Client.stream_response_with {S : Type} (method : Method) (r : Client.Reader) (init : S) (on_bytes : S -> List U8 -> IO (Result String (Pair S Unit))) : IO (Result String (Pair S Response)) := do {
     let head <- Client.read_head r List.empty;
     Client.stream_response_head method r head init on_bytes
 }

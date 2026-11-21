@@ -15,7 +15,7 @@ use http::body {Body.from_text, Body.to_bytes_pure}
 use http::sse {Sse.init, Sse.push, SseState, SseEvent}
 use moose::client {
     Client.default_stream_idle_ms, Client.default_timeout_ms,
-    Client.get_timeout, Client.post_stream_timeout, Client.post_timeout,
+    Client.get_timeout, Client.post_stream_halting, Client.post_timeout,
 }
 use openai::types {ChatRequest, ChatResponse, ApiUsage, ChatMessage, Choice}
 use openai::tool {ToolCall, ToolDef}
@@ -648,7 +648,9 @@ def openai_stream_until (stop : Unit -> IO Bool) (on_text : String -> IO Unit) (
 
 def openai_stream_io (u : Uri) (headers : Headers) (body_str : String) (stop : Unit -> IO Bool) (on_text : String -> IO Unit) : IO (Result String ChatResponse) := do {
     let init : OpenaiAcc := { sse := Sse.init, text := "", tools := List.empty, finish := "", usage := ApiUsage.mk 0 0 0, error := Option.none };
-    let res <- Client.post_stream_timeout u headers (Body.from_text body_str) Client.default_stream_idle_ms init (fn st bytes => openai_stream_until stop on_text st bytes);
+    // The stop seam is asked between chunks AND while the server is silent.
+    let res <- Client.post_stream_halting u headers (Body.from_text body_str) Client.default_stream_idle_ms stop init
+        (fn st bytes => openai_stream_until stop on_text st bytes);
     return (match res {
         Result.err e => Result.err e,
         Result.ok pr =>
