@@ -433,20 +433,26 @@ $XDG_CONFIG_HOME/weaver/AGENTS.md    the user's own (else ~/.config/weaver/AGENT
 A project's AGENTS.md and `.weaver/config.toml` steer the model, and a
 cloned repo's copy can carry prompt injection (or set `mode = "auto"`).
 Neither is read until you trust the project. The first start in a
-project with either file asks, before the TUI starts:
-
-```
-Trust this project? [y]es  [n]o  [v]iew
-```
-
-`v` shows the files (the root-to-cwd chain plus every tracked AGENTS.md
-in the repo, which a tool may attach later). A yes is recorded in
-`~/.weaver/trusted.json` with the text you saw; a file added or changed
-since asks again, and `v` then shows the diff. No (or EOF) starts
-untrusted: only your own `~/.config/weaver/AGENTS.md` and
+project with either file asks in a "Trust this project?" dialog over the
+starting TUI: `y` trusts, `n` (or Esc) does not, `v` shows the files (the
+root-to-cwd chain plus every tracked AGENTS.md in the repo, which a tool
+may attach later). The line UI asks the same on stdin
+(`[y]es [n]o [v]iew`). A yes is recorded in `~/.weaver/trusted.json` with
+the text you saw; a file added or changed since asks again, and `v` then
+shows the diff. No (or EOF) starts untrusted: only your own `~/.config/weaver/AGENTS.md` and
 `~/.weaver/config.toml` apply. Without a terminal the project stays
 untrusted unless `--trust` or `WEAVER_TRUST=1` trusts the run (not
 recorded). `/trust` trusts it from inside a session.
+
+### Startup
+
+On a terminal the TUI opens at once. The rest of startup -- the project
+settings, the MCP servers, opening or resuming the session (a resume folds
+the older turns first) -- runs on a fiber behind a "Starting weaver" box
+that names the current step. Lines typed meanwhile are queued and sent once
+the session is up. A startup error shows in a dialog and on stderr, and
+weaver exits 1. Quitting during startup waits for it to finish (up to a
+minute) so its MCP servers still come down.
 
 ## Settings
 

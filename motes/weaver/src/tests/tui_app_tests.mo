@@ -21,12 +21,13 @@ use tui::widgets::picker {Picker.count, Picker.selected}
 use weaver::ui::rows {DisplayRow, Rows.of_line, Rows.wrap, Rows.cap_bytes}
 use weaver::ui::banner {Banner.shown, Banner.hidden}
 use weaver::model {
-    TuiModel, WeaverMsg, init_tui_model, Model.append_block,
+    TuiModel, WeaverMsg, Booted, init_tui_model, Model.append_block, Model.boot_rows,
     Model.scroll_step, Model.display_rows,
 }
 use weaver::overlay {OverlayState}
 use weaver::ui::prompt {Prompt.set_text}
-use weaver::store {StoreState, TLine, TLine.plain, TranscriptPage, SessionInfo}
+use weaver::store {StoreState, TLine, TLine.plain, TranscriptPage, SessionInfo, Transcript.empty}
+use weaver::trust {TrustOutcome}
 use weaver::diff_tool {DiffTool.sep}
 use std::path {Path, Path.of}
 use std::map {Map, BTreeMap}
@@ -43,7 +44,7 @@ use tui::text {Text.width}
 use std::concurrent::fiber {never_started}
 use tui::types {Event, Key}
 use tui::tui {Cmd}
-use std::list {List.filter, List.intercalate}
+use std::list {List.filter, List.intercalate, List.any}
 
 // ── The offline state (commands_tests.mo's shape) ───────────────────────
 
@@ -1409,3 +1410,101 @@ def test_submit_takes_the_shell_notes : Bool :=
     let slash : TuiModel := match TuiApp.update (with_input m0 "/model") (key_msg Key.enter) { Pair.pair x _ => x } in
     let typed : TuiModel := match TuiApp.update (with_input m0 "explain") (key_msg Key.enter) { Pair.pair x _ => x } in
     List.length slash.state.shell_notes == 1 && List.is_empty typed.state.shell_notes
+
+// -- startup behind the UI --
+
+def booting_model : TuiModel :=
+    let m : TuiModel := model_of Mode.manual in
+    { m with booting := Option.some "starting" }
+
+def no_dispose (_ : Unit) : IO Unit := IO.pure unit
+
+def booted_of (st : WeaverState) : Booted :=
+    let b : Booted := { state := st, transcript := Transcript.empty, older := ["an older prompt"], first := Option.none,
+        dispose := no_dispose } in
+    b
+
+def failing_boot (_ : TrustOutcome) : IO (Result String Booted) := IO.pure (Result.err "no")
+
+def trusted : TrustOutcome :=
+    let o : TrustOutcome := { trusted := true, note := Option.none } in
+    o
+
+/// Enter while booting queues the line (no turn, no store yet).
+#[test]
+def test_enter_while_booting_queues : Bool :=
+    match TuiApp.update (with_input booting_model "hello") (key_msg Key.enter) {
+        Pair.pair m1 cmd =>
+            cmd_is_none cmd && Bool.not m1.turn_pending
+                && List.length m1.queued == 1 && String.is_empty m1.prompt.input.value,
+    }
+
+/// The boot fiber's stage reaches the loading box.
+#[test]
+def test_boot_stage_updates_the_box : Bool :=
+    match TuiApp.update booting_model (WeaverMsg.boot_stage "folding the session") {
+        Pair.pair m1 _ =>
+            List.any (fn (r : String) => String.contains r "folding the session")
+                (Model.boot_rows m1 "folding the session")
+                && (match m1.booting { Option.some t => t == "folding the session", Option.none => false }),
+    }
+
+/// `booted` swaps the real session in and starts the queued line.
+#[test]
+def test_booted_swaps_and_sends_the_queue : Bool :=
+    let m0 : TuiModel := { booting_model with queued := ["hello"] } in
+    match TuiApp.update m0 (WeaverMsg.booted (booted_of (state_of Mode.plan))) {
+        Pair.pair m1 _ =>
+            Bool.not (match m1.booting { Option.some _ => true, Option.none => false })
+                && mode_eq m1.state.mode Mode.plan && m1.turn_pending && List.is_empty m1.queued,
+    }
+
+#[test]
+def test_booted_without_a_queue_just_repaints : Bool :=
+    match TuiApp.update booting_model (WeaverMsg.booted (booted_of (state_of Mode.plan))) {
+        Pair.pair m1 cmd => Bool.not m1.turn_pending && Bool.not (cmd_is_none cmd),
+    }
+
+/// A Ctrl+D during boot arms the gesture and the loading box says so: the
+/// box draws no pane, so a hint appended to the placeholder transcript would
+/// never show.
+#[test]
+def test_ctrl_d_while_booting_hints_in_the_box : Bool :=
+    match TuiApp.update booting_model (key_msg (Key.ctrl "d")) {
+        Pair.pair m1 cmd =>
+            cmd_is_none cmd
+                && m1.ctrl_d_streak == 1
+                && List.is_empty m1.pane.transcript.tail
+                && List.any (fn (r : String) => String.contains r "press Ctrl+D again")
+                    (Model.boot_rows m1 "starting"),
+    }
+
+/// The gesture survives the swap to the real session: a Ctrl+D before
+/// startup finished still makes the next press quit, and its hint moves
+/// into the transcript.
+#[test]
+def test_booted_keeps_the_ctrl_d_gesture : Bool :=
+    match TuiApp.update booting_model (key_msg (Key.ctrl "d")) {
+        Pair.pair m1 _ =>
+            match TuiApp.update m1 (WeaverMsg.booted (booted_of (state_of Mode.plan))) {
+                Pair.pair m2 _ =>
+                    match TuiApp.update m2 (key_msg (Key.ctrl "d")) {
+                        Pair.pair _ cmd =>
+                            cmd_is_quit cmd
+                                && transcript_contains "press Ctrl+D again to exit (or /quit)"
+                                    m2.pane.transcript.tail
+                    }
+            }
+    }
+
+/// The trust answer starts the boot fiber; a failure opens the error dialog.
+#[test]
+def test_trust_decided_starts_the_boot : Bool :=
+    let m0 : TuiModel := { booting_model with boot_run := Option.some failing_boot } in
+    let started : Bool := match TuiApp.update m0 (WeaverMsg.trust_decided trusted) {
+        Pair.pair _ cmd => cmd_is_perform cmd,
+    } in
+    let failed : Bool := match TuiApp.update m0 (WeaverMsg.boot_failed "no") {
+        Pair.pair _ cmd => cmd_is_main_perform cmd,
+    } in
+    started && failed

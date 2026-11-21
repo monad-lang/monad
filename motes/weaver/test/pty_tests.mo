@@ -30,6 +30,7 @@ use weaver::pty::models {run_model_picker_select_and_cancel}
 use weaver::pty::processes {run_background_shell_list_and_kill, run_exit_note_mid_turn, run_monitor_refreshes_itself}
 use weaver::pty::approvals {run_auto_mode_refuses_destructive_commands}
 use weaver::pty::scratch {run_scratch_dir_and_env}
+use weaver::pty::boot {run_boot_opens_the_ui_first}
 use weaver::pty::bang {run_bang_runs_and_rides_the_next_turn}
 use weaver::pty::ask {run_ask_dialog_and_answer, run_ask_auto_answers_recommended}
 use weaver::pty::rss {run_a_100_tool_turn_stays_bounded}
@@ -212,3 +213,6 @@ def test_ask_dialog_and_answer : IO Bool := run_ask_dialog_and_answer
 
 #[test]
 def test_ask_auto_answers_recommended : IO Bool := run_ask_auto_answers_recommended
+
+#[test]
+def test_boot_opens_the_ui_first : IO Bool := run_boot_opens_the_ui_first

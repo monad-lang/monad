@@ -256,6 +256,75 @@ pub def Trust.decide (rp : Option Path) (place : Option SessionPlace) (forced : 
         Option.some p => if forced then IO.pure (outcome true Option.none) else decide_at rp p interactive read write,
     }
 
+// -- the TUI's start: the question as data, asked in a dialog --
+
+/// A question the TUI asks in a dialog: what `decide_at` gathers.
+pub struct TrustAsk {
+    rp : Option Path,
+    place : SessionPlace,
+    items : List TrustItem,
+    recorded : Option (List TrustItem),
+    state : TrustState,
+}
+
+/// How a TUI start begins: settled (nothing to ask) or a question.
+pub type TrustStart {
+    trust_settled (outcome : TrustOutcome),
+    trust_ask (ask : TrustAsk),
+}
+
+/// `Trust.decide` without the terminal: a forced run, no project, no
+/// project files and an unchanged record settle at once; otherwise the
+/// question comes back for the caller to ask.
+pub def Trust.start (rp : Option Path) (place : Option SessionPlace) (forced : Bool) : IO TrustStart :=
+    match place {
+        Option.none => IO.pure (TrustStart.trust_settled (outcome false Option.none)),
+        Option.some p =>
+            if forced then IO.pure (TrustStart.trust_settled (outcome true Option.none))
+            else start_at rp p,
+    }
+
+def start_at (rp : Option Path) (p : SessionPlace) : IO TrustStart := do {
+    let items <- Trust.items p;
+    let record <- record_at rp;
+    let recorded : Option (List TrustItem) := Trust.recorded record (Path.to_string p.repo);
+    IO.pure (start_of rp p items recorded)
+}
+
+def start_of (rp : Option Path) (p : SessionPlace) (items : List TrustItem) (recorded : Option
+    (List TrustItem)) : TrustStart :=
+    if List.is_empty items then TrustStart.trust_settled (outcome true Option.none)
+    else match Trust.state recorded items {
+        TrustState.trust_ok => TrustStart.trust_settled (outcome true Option.none),
+        _ =>
+            let a : TrustAsk := { rp := rp, place := p, items := items, recorded := recorded,
+                state := Trust.state recorded items } in
+            TrustStart.trust_ask a,
+    }
+
+/// The dialog's body: what changed (or that the project is new), the files,
+/// and why it matters.
+pub def Trust.dialog_lines (a : TrustAsk) : List String :=
+    List.append (theme_lines (String.concat (Path.to_string a.place.repo) (header_of a.state)))
+        (List.append (List.map item_line a.items)
+            ["", "A file you did not write can steer the model (prompt injection):",
+                "run commands, edit files, send data out."])
+
+def theme_lines (text : String) : List String := String.split text "\n"
+
+/// The `View changes` page: each changed file as a diff, others' first lines.
+pub def Trust.dialog_view (a : TrustAsk) : List String :=
+    String.split (Trust.view a.recorded a.items) "\n"
+
+/// Yes: remember the files as trusted, and start trusted.
+pub def Trust.accept (a : TrustAsk) : IO TrustOutcome := do {
+    let _ <- Trust.remember a.rp a.place.repo a.items;
+    IO.pure (outcome true Option.none)
+}
+
+/// No (or Esc): start untrusted, with the usual note.
+pub def Trust.declined : TrustOutcome := outcome false (Option.some (Trust.declined_note ""))
+
 def outcome (trusted : Bool) (note : Option String) : TrustOutcome :=
     let o : TrustOutcome := { trusted := trusted, note := note } in
     o

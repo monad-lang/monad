@@ -168,10 +168,16 @@ def paging_run (bin : String) (root : String) : IO Bool := do {
         match r {
             Result.err e => do { IO.println (String.concat "FAIL pty sessions spawn: " e); return false },
             Result.ok m => do {
-                let ready <- Pty.wait_until m placeholder_seen 8000;
+                let ready <- Pty.wait_until m placeholder_seen 10000;
+                // The UI opens first and boots behind a loading box: the
+                // prompt (and its placeholder) is already live there, but
+                // Home would page the placeholder's empty pane and be lost
+                // when the resumed transcript takes its place. Wait for the
+                // box to clear, as a user does, before paging.
+                let up <- Pty.wait_until m (fn (o : Output) => Bool.not (grid_has o "Starting weaver")) 10000;
                 Pty.send_text m "\u{1b}[H";
                 let first <- Pty.wait_until m (fn (o : Output) => grid_has o "EARLIEST-LINE-0000") 8000;
-                let a <- Check.report "Home pages older lines from disk" (Bool.and ready first);
+                let a <- Check.report "Home pages older lines from disk" (Bool.and (Bool.and ready up) first);
                 Pty.finish m;
                 return a
             }

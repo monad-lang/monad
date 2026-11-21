@@ -3,7 +3,7 @@
 use weaver::trust {
     TrustItem, TrustState, TrustAnswer, Trust.state, Trust.parse_record, Trust.with_root,
     Trust.recorded, Trust.answer_of, Trust.relative, Trust.decide, Trust.forced_by,
-    Trust.view, Trust.items,
+    Trust.view, Trust.items, TrustStart, TrustAsk, TrustOutcome, Trust.start, Trust.accept, Trust.declined, Trust.dialog_lines,
 }
 use weaver::place {SessionPlace}
 use std::path {Path}
@@ -156,4 +156,69 @@ def test_items_list_tracked_nested_files : IO Bool := do {
     let its <- Trust.items p;
     let _ <- exec_cmd "rm" ["-rf", git_root];
     IO.pure (String.beq (List.intercalate "|" (List.map (fn (it : TrustItem) => it.name) its)) "AGENTS.md|motes/x/AGENTS.md")
+}
+
+// -- the TUI's start: the same decision, the question as data --
+
+def asks (st : TrustStart) : Bool :=
+    match st { TrustStart.trust_ask _ => true, TrustStart.trust_settled _ => false }
+
+def settled_trusted (st : TrustStart) : Bool :=
+    match st { TrustStart.trust_settled o => o.trusted, TrustStart.trust_ask _ => false }
+
+/// A new project asks; yes remembers it, so the next start settles
+/// trusted; an edit asks again.
+def start_yes_then_edit : IO Bool := do {
+    let first <- Trust.start (Option.some record) (Option.some place) false;
+    let accepted <- match first {
+        TrustStart.trust_ask a => Trust.accept a,
+        TrustStart.trust_settled o => IO.pure Trust.declined,
+    };
+    let second <- Trust.start (Option.some record) (Option.some place) false;
+    let _ <- IO.write_file (Path.path (String.concat root "/AGENTS.md")) "rules, edited\n";
+    let third <- Trust.start (Option.some record) (Option.some place) false;
+    IO.pure (asks first && accepted.trusted && settled_trusted second && asks third)
+}
+
+#[test]
+def test_start_asks_until_accepted : IO Bool := do {
+    setup;
+    let ok <- start_yes_then_edit;
+    teardown;
+    IO.pure ok
+}
+
+#[test]
+def test_start_forced_or_empty_settles : IO Bool := do {
+    setup;
+    let forced <- Trust.start (Option.some record) (Option.some place) true;
+    let nowhere <- Trust.start (Option.some record) Option.none false;
+    teardown;
+    let _ <- exec_cmd "mkdir" ["-p", root];
+    let empty <- Trust.start (Option.some record) (Option.some place) false;
+    teardown;
+    let nowhere_untrusted : Bool := match nowhere {
+        TrustStart.trust_settled o => Bool.not o.trusted,
+        TrustStart.trust_ask _ => false,
+    };
+    IO.pure (settled_trusted forced && nowhere_untrusted && settled_trusted empty)
+}
+
+/// The dialog body names the files and the risk; a decline carries the note.
+#[test]
+def test_dialog_lines_and_decline : IO Bool := do {
+    setup;
+    let st <- Trust.start (Option.some record) (Option.some place) false;
+    teardown;
+    let body : String := match st {
+        TrustStart.trust_ask a => List.intercalate "\n" (Trust.dialog_lines a),
+        TrustStart.trust_settled _ => "",
+    };
+    let dec : TrustOutcome := Trust.declined;
+    let d_note : Bool := match dec.note {
+        Option.some n => String.contains n "not trusted",
+        Option.none => false,
+    };
+    IO.pure (String.contains body "AGENTS.md" && String.contains body "prompt injection"
+        && Bool.not dec.trusted && d_note)
 }

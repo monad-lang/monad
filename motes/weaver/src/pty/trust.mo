@@ -1,7 +1,7 @@
-// weaver / pty / trust -- a project with an AGENTS.md is asked about before
-// the TUI starts: `n` starts untrusted with a note, `y` is recorded (and
-// loads the file, named in the startup note) so the next start does not
-// ask, and an edit to the file asks again.
+// weaver / pty / trust -- a project with an AGENTS.md is asked about in a
+// dialog over the booting TUI: `n` starts untrusted with a note, `y` is
+// recorded (and loads the file, named in the startup note) so the next start
+// does not ask, and an edit to the file asks again.
 use pty::spawn {Pty, Output}
 use pty::check {Check.report}
 use weaver::pty_support {run_gated, with_root, spawn_args, read_text}
@@ -18,9 +18,11 @@ def frame_up (o : Output) : Bool :=
 def untrusted_env (root : String) : List (Pair String (Option String)) :=
     [Pair.pair "WEAVER_TRUST" (Option.some "0"), Pair.pair "PWD" (Option.some root)]
 
-/// One start: wait for the question (or the frame, when `expect_ask` is
-/// false), answer, wait for the frame showing `needle` (spaces removed), and quit with a
-/// double Ctrl+C.
+/// One start: wait for the trust dialog (or, when `expect_ask` is false,
+/// for the booted frame), answer with the option's key, wait for the frame
+/// showing `needle` (spaces removed), and quit with a double Ctrl+C. The
+/// loading box draws before the dialog opens, so an expected question is
+/// waited for by itself.
 def one_start (bin : String) (root : String) (answer : String) (expect_ask : Bool) (needle : String) : IO Bool := do {
     let r <- spawn_args bin "mock" List.empty 24 100 root Option.none (untrusted_env root);
     match r {
@@ -29,16 +31,21 @@ def one_start (bin : String) (root : String) (answer : String) (expect_ask : Boo
     }
 }
 
+/// The output is the whole raw stream: the needles are startup notes, which
+/// only appear once the session has booted.
+def booted_with (needle : String) (o : Output) : Bool :=
+    frame_up o && String.contains (Output.tight o) needle
+
 def start_go (m : Pty) (answer : String) (expect_ask : Bool) (needle : String) : IO Bool := do {
-    let q <- Pty.wait_until m (fn (o : Output) => asked o || frame_up o) 6000;
-    let o0 <- Pty.output m;
-    let saw : Bool := asked o0;
-    let _ <- if saw then Pty.send_text m (String.concat answer "\n") else IO.pure unit;
-    let up <- Pty.wait_until m (fn (o : Output) => frame_up o && String.contains (Output.tight o) needle) 6000;
+    let q <- if expect_ask then Pty.wait_until m asked 8000 else IO.pure true;
+    let _ <- if expect_ask then Pty.send_text m answer else IO.pure unit;
+    let up <- Pty.wait_until m (booted_with needle) 8000;
+    let o_end <- Pty.output m;
+    let unasked : Bool := Bool.or expect_ask (Bool.not (asked o_end));
     Pty.send_text m "\u{3}";
     Pty.send_text m "\u{3}";
     Pty.finish m;
-    IO.pure (q && up && (if saw then expect_ask else Bool.not expect_ask))
+    IO.pure (q && up && unasked)
 }
 
 def trust_run (bin : String) (root : String) : IO Bool := do {

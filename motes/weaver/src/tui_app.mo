@@ -51,10 +51,11 @@ use weaver::diff_tool {DiffTool.split}
 use weaver::ui::diff_rows {DiffRows.of_hunks}
 use weaver::dumb {append_user, drive_loop}
 use weaver::model {
-    TuiModel, WeaverMsg, on_event, init_tui_model, init_tui_model_with,
+    TuiModel, WeaverMsg, Booted, on_event, init_tui_model, init_tui_model_with,
     Model.view, Model.scroll_step, Model.append_block, Model.append_lines,
     Model.pane_view, Model.pane_step, Model.refresh_rows,
     Model.prompt_box, Model.picker_height,
+    Model.ctrl_c_hint, Model.ctrl_d_hint, Model.exit_hint,
     panel_height,
 }
 use weaver::ui::pane {
@@ -88,6 +89,9 @@ use weaver::store {
 use weaver::shell_tool {WeaverShell.impl, WeaverShell.fg_path, WeaverShell.request_background}
 use weaver::process_tools {ReadProcessTool.impl_with}
 use weaver::stop {Stop.predicate, Stop.request, Stop.reset}
+use weaver::trust {
+    TrustOutcome, TrustStart, TrustAsk, Trust.dialog_lines, Trust.dialog_view, Trust.accept, Trust.declined,
+}
 use weaver::inbox {Inbox.post, Inbox.take, Inbox.seam, Inbox.with_notes}
 use weaver::bang {Bang.command, Bang.run, Bang.note, Bang.usage}
 use weaver::overlay {
@@ -176,6 +180,52 @@ def run_tui_with_size (log : Option Logger) (st : WeaverState) (tr : Transcript)
         }
     }
 
+/// The UI first, startup behind it: the placeholder state `st` (global
+/// settings, no store, no tools) draws a loading box at once; the first
+/// tick takes `start` (asking the trust question in a dialog when there is
+/// one), and `boot` then runs the rest of startup on a fiber, writing its
+/// stage to `stage`. False when stdin is not a terminal after all.
+pub def Tui.run_booting (log : Option Logger) (st : WeaverState) (start : TrustStart) (boot : TrustOutcome -> IO
+    (Result String Booted)) (stage : Ref String) : IO Bool := do {
+    let is_tty <- Terminal.enter_raw_mode;
+    if Bool.not is_tty
+    then return false
+    else do {
+        let size <- Terminal.size;
+        run_booting_with_size log st start boot stage size
+    }
+}
+
+def run_booting_with_size (log : Option Logger) (st : WeaverState) (start : TrustStart) (boot : TrustOutcome -> IO
+    (Result String Booted)) (stage : Ref String) (size : Pair I64 I64) : IO Bool :=
+    match size {
+        Pair.pair rows cols => do {
+            let _ <- Overlay.reset st.store;
+            let m0 : TuiModel := init_tui_model_with log st rows cols Transcript.empty;
+            let first : TuiModel := { m0 with booting := Option.some "starting", boot_start := Option.some start,
+                boot_run := Option.some boot, boot_stage_ref := Option.some stage };
+            let app : App TuiModel WeaverMsg :=
+                App.app_ticked first on_event TuiApp.update Model.view 100
+                    tick_redraw reads_input owns_screen;
+            let _ <- quiet_children log;
+            let _ <- run_app app;
+            let _ <- Process.quiet_terminal "";
+            return true
+        }
+    }
+
+/// The boot fiber's last step: the real session's prompt history and
+/// auto-start line, with its signal files reset (the placeholder had no
+/// store), bundled for the `booted` message.
+pub def Tui.booted (st : WeaverState) (tr : Transcript) (dispose : Unit -> IO Unit) : IO Booted := do {
+    let _ <- Stop.reset st.store;
+    let _ <- Overlay.reset st.store;
+    let older <- load_prompts st;
+    let first <- if st.auto_start then AutoContinue.next st st.run else IO.pure Option.none;
+    let b : Booted := { state := st, transcript := tr, older := older, first := first, dispose := dispose };
+    IO.pure b
+}
+
 /// Where stderr and helper output go while the TUI owns the terminal: this
 /// run's debug log, or /dev/null with logging off.
 def quiet_children (log : Option Logger) : IO I64 := do {
@@ -190,8 +240,11 @@ def quiet_children (log : Option Logger) : IO I64 := do {
 /// Draw a tick-only batch only when the spinner/banner moved, and never
 /// while a dialog owns the terminal (`modal`).
 pub def tick_redraw (m : TuiModel) : Bool :=
-    Bool.or (Bool.and m.turn_pending (Bool.not m.modal))
-        (Banner.animating m.banner)
+    Bool.or (Bool.or (Bool.and m.turn_pending (Bool.not m.modal)) (Banner.animating m.banner))
+        (Bool.and (is_booting m) (Bool.not m.modal))
+
+pub def is_booting (m : TuiModel) : Bool :=
+    match m.booting { Option.some _ => true, Option.none => false }
 
 /// The loop's paint gate: while a turn's dialog is open it owns the
 /// screen, and this loop writes nothing -- not a message's diff, not a
@@ -298,6 +351,10 @@ def update_msg (m : TuiModel) (msg : WeaverMsg) : Pair TuiModel (Cmd WeaverMsg) 
         WeaverMsg.history_loaded ps => Pair.pair { m with prompt := Prompt.with_history m.prompt ps } Cmd.none,
         WeaverMsg.bang_echoed command => Pair.pair m (bang_run_cmd m.state.store command),
         WeaverMsg.bang_done command output => bang_done_step m command output,
+        WeaverMsg.boot_stage stage => Pair.pair (TuiApp.boot_stage_step m stage) Cmd.none,
+        WeaverMsg.trust_decided outcome => Pair.pair { m with repaint_due := true } (boot_cmd m outcome),
+        WeaverMsg.booted b => TuiApp.booted_step m b,
+        WeaverMsg.boot_failed e => Pair.pair m (boot_failed_cmd m.state.colors e),
     }
 
 // ── persistence commands ─────────────────────────────────────────────────
@@ -612,7 +669,24 @@ pub def TuiApp.subscriptions (m : TuiModel) : Subs WeaverMsg :=
     }) in
     if m.turn_pending
     then Subs.batch [overlay, banner, todos, tasks, Subs.map WeaverMsg.live (Live.subscriptions store (WeaverShell.fg_path store) m.live)]
-    else Subs.batch [overlay, banner, todos, tasks]
+    else match boot_poll m {
+        Option.some stage => Subs.batch [overlay, banner, stage],
+        Option.none => Subs.batch [overlay, banner, todos, tasks],
+    }
+
+/// While booting, the stage line is polled from the boot fiber's ref
+/// (todos and tasks have no store to read yet).
+def boot_poll (m : TuiModel) : Option (Subs WeaverMsg) :=
+    match m.booting {
+        Option.none => Option.none,
+        Option.some _ => match m.boot_stage_ref {
+            Option.none => Option.none,
+            Option.some r => Option.some (Subs.poll 2 (fn (_ : Unit) => do {
+                let t <- Ref.get r;
+                IO.pure (WeaverMsg.boot_stage t)
+            })),
+        },
+    }
 
 /// A polled todo list. Only a change refreshes the rows (the panel's
 /// height moves the transcript's) and asks for a frame: a poll's message
@@ -824,6 +898,12 @@ def update_event (m : TuiModel) (e : Event) : Pair TuiModel (Cmd WeaverMsg) :=
 /// The auto-start line fires on the first idle tick; a title that is due
 /// forks here instead (once), AFTER persistence and the plan dialog.
 def start_pending (m : TuiModel) (poll : Cmd WeaverMsg) : Pair TuiModel (Cmd WeaverMsg) :=
+    match m.boot_start {
+        Option.some start => Pair.pair { m with boot_start := Option.none } (boot_first_cmd m start),
+        Option.none => start_auto m poll,
+    }
+
+def start_auto (m : TuiModel) (poll : Cmd WeaverMsg) : Pair TuiModel (Cmd WeaverMsg) :=
     match m.auto_start {
         Option.some text =>
             if Bool.or m.turn_pending (Bool.or m.overlay_open (Bool.or m.modal (queued_waiting m)))
@@ -1062,7 +1142,7 @@ def ctrl_c_step (m : TuiModel) : Pair TuiModel (Cmd WeaverMsg) :=
     then Pair.pair m Cmd.quit
     else
         let m1 : TuiModel := { m with ctrl_c_streak := 1, ctrl_d_streak := 0 } in
-        exit_hint_step m1 ctrl_c_hint_line
+        exit_hint_step m1 Model.ctrl_c_hint
 
 /// The Ctrl+D twin of `ctrl_c_step`: same streak rules, same hint, same
 /// `Cmd.quit`. Ctrl+D replaces the old half-page scroll binding.
@@ -1071,11 +1151,17 @@ def ctrl_d_step (m : TuiModel) : Pair TuiModel (Cmd WeaverMsg) :=
     then Pair.pair m Cmd.quit
     else
         let m1 : TuiModel := { m with ctrl_d_streak := 1, ctrl_c_streak := 0 } in
-        exit_hint_step m1 ctrl_d_hint_line
+        exit_hint_step m1 Model.ctrl_d_hint
 
 /// Append one exit hint and persist it unless a turn owns the store.
-/// `m` already carries the armed streak.
+/// `m` already carries the armed streak. While startup runs the pane is not
+/// drawn: the loading box shows the hint from the streak itself, so nothing
+/// is appended (the booted transcript would drop the line anyway) -- but the
+/// streak must survive `booted`, or a Ctrl+D during boot would be forgotten.
 def exit_hint_step (m : TuiModel) (hint : String) : Pair TuiModel (Cmd WeaverMsg) :=
+    if is_booting m then Pair.pair m Cmd.none else exit_hint_append m hint
+
+def exit_hint_append (m : TuiModel) (hint : String) : Pair TuiModel (Cmd WeaverMsg) :=
     let start : I64 := m.pane.transcript.total in
     let m2 : TuiModel := Model.append_lines m [TLine.plain hint] in
     // While a turn runs its fiber owns the store: an inline append
@@ -1090,9 +1176,6 @@ def exit_hint_step (m : TuiModel) (hint : String) : Pair TuiModel (Cmd WeaverMsg
 /// `refresh_rows` rebuilds the window.
 def toggle_details (m : TuiModel) : Pair TuiModel (Cmd WeaverMsg) :=
     Pair.pair (with_streak_reset (fn (mm : TuiModel) => pane_only mm PaneMsg.toggle_details) m) Cmd.none
-
-def ctrl_c_hint_line : String := "press Ctrl+C again to exit (or /quit)"
-def ctrl_d_hint_line : String := "press Ctrl+D again to exit (or /quit)"
 
 def cycle_mode (m : TuiModel) : TuiModel :=
     let st2 : WeaverState := { (m.state) with mode := Mode.cycle m.state.mode } in
@@ -1110,6 +1193,7 @@ def cycle_mode (m : TuiModel) : TuiModel :=
 def enter_key (m : TuiModel) : Pair TuiModel (Cmd WeaverMsg) :=
     let text : String := String.trim (Prompt.text m.prompt) in
     if String.is_empty text then Pair.pair m Cmd.none
+    else if is_booting m then Pair.pair (TuiApp.boot_queue m text) Cmd.none
     else match Bang.command text {
         Option.some command => start_bang m text command,
         Option.none => enter_line m text,
@@ -1122,6 +1206,131 @@ def enter_line (m : TuiModel) (text : String) : Pair TuiModel (Cmd WeaverMsg) :=
         Option.some q => start_btw m text q,
         Option.none => if m.turn_pending then queue_line m text else submit_line m text,
     }
+
+// -- startup behind the UI --
+// The placeholder model boots: the first tick asks the trust question (a
+// dialog) or takes the settled outcome, the rest of startup runs on a
+// fiber, and `booted` swaps the real session in. Lines typed meanwhile
+// queue and are sent once it is up.
+
+/// A line typed while booting waits in the queue (the box counts it).
+pub def TuiApp.boot_queue (m : TuiModel) (text : String) : TuiModel :=
+    let queued : List String := List.append m.queued [text] in
+    { (with_streak_reset (fn (mm : TuiModel) => { mm with prompt := Prompt.clear mm.prompt }) m) with queued := queued }
+
+pub def TuiApp.boot_stage_step (m : TuiModel) (stage : String) : TuiModel :=
+    match m.booting {
+        Option.none => m,
+        Option.some old => if old == stage then m else { m with booting := Option.some stage },
+    }
+
+/// The first startup step: a settled trust outcome boots at once, a
+/// question opens the trust dialog.
+def boot_first_cmd (m : TuiModel) (start : TrustStart) : Cmd WeaverMsg :=
+    match start {
+        TrustStart.trust_settled o => boot_cmd m o,
+        TrustStart.trust_ask a => Cmd.perform (fn (_ : Unit) => trust_dialog m.state.colors m.state.store a 3),
+    }
+
+/// The rest of startup on a fiber; its result is a `booted` or a
+/// `boot_failed` message.
+def boot_cmd (m : TuiModel) (o : TrustOutcome) : Cmd WeaverMsg :=
+    match m.boot_run {
+        Option.none => Cmd.none,
+        Option.some run => Cmd.perform_async (fn (_ : Unit) => boot_action run o)
+            (fn (e : FiberError) => WeaverMsg.boot_failed (String.concat "startup failed: " (FiberError.message e))),
+    }
+
+def boot_action (run : TrustOutcome -> IO (Result String Booted)) (o : TrustOutcome) : IO WeaverMsg := do {
+    let r <- run o;
+    IO.pure (match r {
+        Result.ok b => WeaverMsg.booted b,
+        Result.err e => WeaverMsg.boot_failed e,
+    })
+}
+
+/// The trust question as a dialog: Trust (y), Don't trust (n, Esc), or
+/// View the files (v), which shows them and asks again (up to `views`
+/// times, as the line prompt does).
+#[terminating]
+def trust_dialog (colors : Bool) (store : Option StoreState) (a : TrustAsk) (views : I64) : IO WeaverMsg := do {
+    let o0 : DialogOption := { label := "Trust this project", hint := "y", key := "y" };
+    let o1 : DialogOption := { label := "Don't trust it (AGENTS.md and .weaver/config.toml ignored)",
+        hint := "n", key := "n" };
+    let o2 : DialogOption := { label := "View the files", hint := "v", key := "v" };
+    let opts : List DialogOption := if I64.lt views 1 then [o0, o1] else [o0, o1, o2];
+    let d : DialogModel := Dialog.make "Trust this project?" "" (Trust.dialog_lines a) opts;
+    Overlay.monitor_open store;
+    let pr <- main_loop_modal colors d;
+    Overlay.monitor_close store;
+    clear_terminal;
+    match pr { Pair.pair _ step => trust_answered colors store a views step }
+}
+
+#[terminating]
+def trust_answered (colors : Bool) (store : Option StoreState) (a : TrustAsk) (views : I64)
+    (step : DialogStep) : IO WeaverMsg :=
+    match step {
+        DialogStep.choose i =>
+            if i == 0 then trust_accepted a
+            else if i == 2 then trust_view colors store a views
+            else IO.pure (WeaverMsg.trust_decided Trust.declined),
+        _ => IO.pure (WeaverMsg.trust_decided Trust.declined),
+    }
+
+def trust_accepted (a : TrustAsk) : IO WeaverMsg := do {
+    let o <- Trust.accept a;
+    IO.pure (WeaverMsg.trust_decided o)
+}
+
+#[terminating]
+def trust_view (colors : Bool) (store : Option StoreState) (a : TrustAsk) (views : I64) : IO WeaverMsg := do {
+    let close : DialogOption := { label := "Back to the question", hint := "Esc", key := "" };
+    let d0 : DialogModel := Dialog.make "The project's files" "" (Trust.dialog_view a) [close];
+    let d : DialogModel := { d0 with fullscreen := true, footer := "Enter/Esc back" };
+    let _ <- main_loop_modal colors d;
+    clear_terminal;
+    trust_dialog colors store a (views - 1)
+}
+
+/// The real session replaces the placeholder: its state and transcript,
+/// the prompt's history (the line being typed stays), the auto-start line,
+/// and the queue, whose head starts now. An exit gesture armed during boot
+/// carries over -- the boot box was showing its hint and the next press must
+/// still quit -- and the hint moves into the transcript with it.
+pub def TuiApp.booted_step (m : TuiModel) (b : Booted) : Pair TuiModel (Cmd WeaverMsg) :=
+    let m0 : TuiModel := init_tui_model_with m.log b.state m.rows m.cols b.transcript in
+    let m1 : TuiModel := { m0 with prompt := Prompt.with_history m.prompt b.older, auto_start := b.first,
+        queued := m.queued, frame := m.frame, banner := m.banner, repaint_due := true,
+        ctrl_c_streak := m.ctrl_c_streak, ctrl_d_streak := m.ctrl_d_streak } in
+    let m2 : TuiModel := match Model.exit_hint m1 {
+        Option.none => m1,
+        Option.some hint => Model.append_lines m1 [TLine.plain hint],
+    } in
+    match m2.queued {
+        List.empty => Pair.pair m2 repaint_cmd,
+        List.cons text rest => enter_routed { m2 with queued := rest } text,
+    }
+
+/// A line typed during boot, replayed the way Enter routes it: `! cmd`,
+/// side commands and `/btw` keep their own paths (a `! ls` must not reach
+/// the model as text). Later queued lines wait for the turn as usual.
+def enter_routed (m : TuiModel) (text : String) : Pair TuiModel (Cmd WeaverMsg) :=
+    match Bang.command text {
+        Option.some command => start_bang m text command,
+        Option.none => enter_line m text,
+    }
+
+/// Startup failed: say why in a dialog, then quit (`main` repeats the
+/// message on stderr and exits 1).
+def boot_failed_cmd (colors : Bool) (e : String) : Cmd WeaverMsg :=
+    Cmd.perform (fn (_ : Unit) => do {
+        let o0 : DialogOption := { label := "Quit", hint := "Enter", key := "" };
+        let d : DialogModel := Dialog.make "weaver could not start" "" (theme_split_lines e) [o0];
+        let _ <- main_loop_modal colors d;
+        clear_terminal;
+        IO.pure WeaverMsg.quit
+    })
 
 // ── ! cmd ──────────────────────────────────────────────────────────────
 // The user's own shell line runs now, beside a turn if one is running (no

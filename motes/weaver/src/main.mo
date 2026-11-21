@@ -14,7 +14,7 @@
 use mcp_client::protocol {McpClientInfo, McpTool}
 use mcp_client::server {McpServer, Server.connect, Server.list_tools, Server.call, Server.dispose}
 use shuttle::gate {Capability, Gate, Gate.auto}
-use shuttle::registry {ToolRegistry}
+use shuttle::registry {ToolRegistry, ToolRegistry.empty}
 use shuttle::agent {RunState, silent_sleep, silent_usage, silent_stop, silent_inbox, silent_side_spend}
 use shuttle::session {Session, Session.load}
 use shuttle::context {usage_zero}
@@ -59,11 +59,13 @@ use std::ref {Ref, Ref.new}
 use weaver::permissions {PermGrant}
 use weaver::place {SessionPlace, Place.probe, Place.cwd_of, Place.moved_note}
 use weaver::settings {Settings, Settings.load_global, Settings.load_project, Settings.combine, Settings.cap_of, Settings.validate, Loaded, Loaded.empty, Settings.service, Settings.service_settings}
-use weaver::trust {TrustOutcome, Trust.decide, Trust.record_path, Trust.forced_by}
+use weaver::trust {TrustOutcome, Trust.decide, Trust.record_path, Trust.forced_by, Trust.start}
 use weaver::instructions {InstrFile, Instructions.user_path, Instructions.discover, Instructions.note, Prompt.system}
 use tui::terminal {Terminal.enter_raw_mode, Terminal.leave_raw_mode}
 use weaver::error {WeaverError, WeaverError.show}
-use weaver::tui_app {Tui.run_resumed}
+use weaver::tui_app {Tui.run_resumed, Tui.run_booting, Tui.booted}
+use weaver::model {Booted}
+use std::concurrent::combine {sleepIO}
 use log::logger {Logger}
 use weaver::logs {LogSetup, Logs.setup, Logs.finish, Logs.info, Logs.error, Logs.log_rss}
 use weaver::process_tools {
@@ -494,35 +496,158 @@ def warn_settings (log : Option Logger) (ws : List WeaverError) : IO Unit :=
 /// file are plaintext in a repo -- the deliberate act the entry
 /// represents is worth naming, once, so the user knows what landed on
 /// disk. (The global file is the recommended home for keys; no warning
-/// for it.)
-def warn_project_keys (names : List String) : IO Unit :=
+/// for it.) It rides the startup note: the TUI's first transcript block,
+/// or stderr for the line-based fallback.
+def project_keys_note (names : List String) : Option String :=
     match names {
-        List.empty => IO.pure unit,
+        List.empty => Option.none,
         List.cons _ _ =>
-            write_errln (String.concat "warning: api key(s) for " (String.concat (List.intercalate ", " names) " came from .weaver/config.toml -- plaintext on disk; ~/.weaver/config.toml is the recommended home")),
+            Option.some (String.concat "warning: api key(s) for " (String.concat (List.intercalate ", " names) " came from .weaver/config.toml -- plaintext on disk; ~/.weaver/config.toml is the recommended home")),
     }
 
 /// Phase 19: the project's files load only once the user trusts the
 /// project, so the trust question comes before `.weaver/config.toml` is
 /// read. `--trust` or `WEAVER_TRUST=1` trusts this run without asking.
+///
+/// On a terminal the TUI opens FIRST: the trust question is a dialog, and
+/// the rest of startup (settings, MCP mounts, the resume fold) runs on a
+/// fiber behind a loading box. Without one, the line UI asks on stdin and
+/// starts in order, as before.
 def main_trusted (setup : LogSetup) (colors : Bool) (global : Loaded) (c : WeaverCli) : IO I64 := do {
     let place <- Place.probe;
     let env <- IO.get_env "WEAVER_TRUST";
     let forced : Bool := Trust.forced_by (WeaverCli.trust_of c) env;
     let rp <- Trust.record_path;
+    let tty <- tty_probe unit;
+    if tty then main_booting setup colors global c place forced rp
+    else main_lines setup colors global c place forced rp
+}
+
+/// The line UI's start: the stdin trust question, then the chain in order.
+def main_lines (setup : LogSetup) (colors : Bool) (global : Loaded) (c : WeaverCli) (place : Option SessionPlace)
+    (forced : Bool) (rp : Option Path) : IO I64 := do {
     let outcome <- Trust.decide rp place forced tty_probe stdin_line prompt_write;
+    let log : Option Logger := setup.log;
+    main_decided setup colors global c place outcome no_stage (fn (pr : Prepared) => run_prepared log pr) fail_line
+}
+
+def no_stage (_ : String) : IO Unit := IO.pure unit
+
+/// The line UI's failure: the message on stderr, exit 1.
+def fail_line (msg : String) : IO I64 := do {
+    write_errln msg;
+    return 1
+}
+
+/// Everything after the trust decision, up to a prepared session. `ready`
+/// runs it (the line UI) or hands it to the booting TUI; `fail` reports a
+/// startup error; `stage` names the step for the loading box.
+def main_decided {R : Type} (setup : LogSetup) (colors : Bool) (global : Loaded) (c : WeaverCli)
+    (place : Option SessionPlace) (outcome : TrustOutcome)
+    (stage : String -> IO Unit) (ready : Prepared -> IO R) (fail : String -> IO R) : IO R := do {
     let _ <- Logs.info setup.log (String.concat "ev=trust trusted=" (if outcome.trusted then "true" else "false"));
+    let _ <- stage "reading the project settings";
     let project <- if outcome.trusted then Settings.load_project else IO.pure Loaded.empty;
     let loaded : Loaded := Settings.combine global project;
     let _ <- warn_settings setup.log loaded.warnings;
-    let _ <- warn_project_keys loaded.project_keys;
     let user <- Instructions.user_path;
     let fs <- Instructions.discover user place outcome.trusted;
     let _ <- Logs.info setup.log (String.concat "ev=instructions files=" (I64.to_string (List.length fs)));
     let skill_root <- Skills.user_root;
     let scan <- Skills.discover skill_root place outcome.trusted;
     let _ <- Logs.info setup.log (String.concat "ev=skills count=" (I64.to_string (List.length scan.skills)));
-    main_plan setup colors loaded.settings loaded.warnings c place outcome fs scan
+    let keys : Option String := project_keys_note loaded.project_keys;
+    let decided : TrustOutcome := { outcome with note := join_notes keys outcome.note };
+    main_plan setup colors loaded.settings loaded.warnings c place decided fs scan stage ready fail
+}
+
+/// The TUI's start: a placeholder state from the global settings alone (no
+/// store, no tools yet) opens the UI at once; the trust dialog and the boot
+/// fiber do the rest. A global settings error still fails before the UI.
+def main_booting (setup : LogSetup) (colors : Bool) (global : Loaded) (c : WeaverCli) (place : Option SessionPlace)
+    (forced : Bool) (rp : Option Path) : IO I64 :=
+    match plan_of global.settings global.warnings c {
+        Result.err e => do {
+            write_errln (String.concat "error: " (WeaverError.show e));
+            Logs.error setup.log (String.concat "ev=config_error " (WeaverError.show e));
+            return 1
+        },
+        Result.ok p0 => boot_with setup colors global c place forced rp p0,
+    }
+
+def boot_with (setup : LogSetup) (colors : Bool) (global : Loaded) (c : WeaverCli) (place : Option SessionPlace)
+    (forced : Bool) (rp : Option Path) (p0 : Plan) : IO I64 := do {
+    let start <- Trust.start rp place forced;
+    let effective : Bool := Bool.and colors (Bool.not (WeaverCli.no_color_of c));
+    let reg0 : ToolRegistry := ToolRegistry.empty;
+    let fresh : Session := fresh_session p0 reg0;
+    let st0 : WeaverState := initial_state p0 reg0 global.settings effective Option.none fresh Option.none place;
+    let stage <- Ref.new "starting";
+    let none_done : Option (Result String Booted) := Option.none;
+    let slot <- Ref.new none_done;
+    let boot : TrustOutcome -> IO (Result String Booted) :=
+        fn (o : TrustOutcome) => boot_run setup colors global c place o stage slot;
+    let _ <- Tui.run_booting setup.log st0 start boot stage;
+    after_boot slot
+}
+
+/// The boot fiber's body: the shared chain, its result also left in `slot`
+/// for `main` (the TUI may have quit before it finished).
+def boot_run (setup : LogSetup) (colors : Bool) (global : Loaded) (c : WeaverCli) (place : Option SessionPlace)
+    (o : TrustOutcome) (stage : Ref String) (slot : Ref (Option (Result String Booted))) : IO
+    (Result String Booted) := do {
+    let r <- main_decided setup colors global c place o (fn (t : String) => Ref.set stage t) booted_ready booted_fail;
+    let _ <- Ref.set slot (Option.some r);
+    IO.pure r
+}
+
+def booted_ready (pr : Prepared) : IO (Result String Booted) := do {
+    let servers : List McpServer := pr.servers;
+    let b <- Tui.booted pr.state pr.transcript (fn (_ : Unit) => dispose_all servers);
+    IO.pure (Result.ok b)
+}
+
+def booted_fail (msg : String) : IO (Result String Booted) := IO.pure (Result.err msg)
+
+/// After the TUI closed: the boot's result decides the cleanup and the
+/// exit code. A quit during startup waits (up to a minute) for the boot to
+/// finish, so its MCP servers still come down.
+def after_boot (slot : Ref (Option (Result String Booted))) : IO I64 := do {
+    let done <- await_boot slot 0;
+    finish_boot done
+}
+
+/// Poll the slot every 100 ms, up to a minute; `none` if it never fills.
+#[partial]
+def await_boot (slot : Ref (Option (Result String Booted))) (waited : I64) : IO (Option (Result String Booted)) := do {
+    let d <- Ref.get slot;
+    let filled : Bool := match d { Option.some _ => true, Option.none => false };
+    if Bool.or filled (I64.gt waited 600) then IO.pure d
+    else do {
+        let _ <- if waited == 0 then write_errln "weaver: waiting for startup to finish..." else IO.pure unit;
+        let _ <- sleepIO 100;
+        await_boot slot (waited + 1)
+    }
+}
+
+def finish_boot (done : Option (Result String Booted)) : IO I64 :=
+    match done {
+        Option.none => fail_line "error: weaver's startup did not finish",
+        Option.some r => match r {
+            Result.err e => fail_line e,
+            Result.ok b => finish_booted b,
+        },
+    }
+
+def finish_booted (b : Booted) : IO I64 := do {
+    let st : WeaverState := b.state;
+    let fatal_after <- match st.fatal_out {
+        Option.none => IO.pure Option.none,
+        Option.some r => Ref.get r,
+    };
+    let _ <- Procs.shutdown;
+    let _ <- b.dispose unit;
+    exit_of_fatal st fatal_after
 }
 
 /// Stdin is a terminal: raw mode can be entered (and is left at once,
@@ -552,26 +677,30 @@ def join_notes (a : Option String) (b : Option String) : Option String :=
         },
     }
 
-def main_plan (setup : LogSetup) (colors : Bool) (s : Settings) (ws : List WeaverError) (c : WeaverCli) (place : Option SessionPlace) (outcome : TrustOutcome) (fs : List InstrFile) (scan : SkillScan) : IO I64 :=
+def main_plan {R : Type} (setup : LogSetup) (colors : Bool) (s : Settings) (ws : List WeaverError) (c : WeaverCli)
+    (place : Option SessionPlace) (outcome : TrustOutcome) (fs : List InstrFile) (scan : SkillScan)
+    (stage : String -> IO Unit) (ready : Prepared -> IO R) (fail : String -> IO R) : IO R :=
     let effective : Bool := Bool.and colors (Bool.not (WeaverCli.no_color_of c)) in
     match plan_of s ws c {
         Result.err e => do {
-            write_errln (String.concat "error: " (WeaverError.show e));
             Logs.error setup.log (String.concat "ev=config_error " (WeaverError.show e));
-            return 1
+            fail (String.concat "error: " (WeaverError.show e))
         },
         Result.ok p =>
             let trusted : Plan := { p with trusted := outcome.trusted, instructions := fs, skills := scan.skills,
                 model_note := join_notes p.model_note (join_notes outcome.note (join_notes (Instructions.note fs) (Skills.note scan))) } in
-            run_plan setup effective trusted s place,
+            run_plan setup effective trusted s place stage ready fail,
     }
 
-def run_plan (setup : LogSetup) (colors : Bool) (p : Plan) (s : Settings) (place : Option SessionPlace) : IO I64 := do {
+def run_plan {R : Type} (setup : LogSetup) (colors : Bool) (p : Plan) (s : Settings) (place : Option SessionPlace)
+    (stage : String -> IO Unit) (ready : Prepared -> IO R) (fail : String -> IO R) : IO R := do {
     let monad_bin <- MonadTools.binary;
     let empty_buf : List String := List.empty;
     let eval_buf <- Ref.new empty_buf;
+    let _ <- if List.is_empty p.mcps then IO.pure unit
+        else stage (String.concat_list ["connecting ", I64.to_string (List.length p.mcps), " MCP server(s)"]);
     let r <- mount_all client_info p.mcps s (weaver_registry setup.log monad_bin eval_buf (cwd_text place)) [];
-    mounted_plan setup colors p s place r
+    mounted_plan setup colors p s place r stage ready fail
 }
 
 /// The monad tools resolve buffers against the working directory as text.
@@ -581,17 +710,18 @@ def cwd_text (place : Option SessionPlace) : Option String :=
         Option.some c => Option.some (Path.to_string c),
     }
 
-/// `mount_all` disposes the mounted servers itself on error, so both
-/// arms here hand back an exit code and nothing else.
-def mounted_plan (setup : LogSetup) (colors : Bool) (p : Plan) (s : Settings) (place : Option SessionPlace) (r : Result WeaverError (Pair ToolRegistry (List McpServer))) : IO I64 :=
+/// `mount_all` disposes the mounted servers itself on error, so the
+/// failure arm reports and nothing else.
+def mounted_plan {R : Type} (setup : LogSetup) (colors : Bool) (p : Plan) (s : Settings)
+    (place : Option SessionPlace) (r : Result WeaverError (Pair ToolRegistry (List McpServer)))
+    (stage : String -> IO Unit) (ready : Prepared -> IO R) (fail : String -> IO R) : IO R :=
     match r {
         Result.err e => do {
-            write_errln (String.concat "error: " (WeaverError.show e));
             Logs.error setup.log (String.concat "ev=mount_error " (WeaverError.show e));
-            return 1
+            fail (String.concat "error: " (WeaverError.show e))
         },
         Result.ok pr => match pr {
-            Pair.pair reg servers => start_loop setup colors p s place reg servers,
+            Pair.pair reg servers => start_loop setup colors p s place reg servers stage ready fail,
         },
     }
 
@@ -603,19 +733,24 @@ struct OpenedSession {
     note : Option String,
 }
 
-/// The one place the interactive session ends, whatever ended it: EOF
-/// on stdin, `/quit`, or a crashed loop -- the mounted MCP servers come
-/// down on every path. `Tui.run_resumed` auto-detects a tty (via the
-/// same `enter_raw_mode` degrade `terminal.mo` already documents) and
-/// falls back to the line-based `Dumb.run` when stdin is not one.
-/// Phase 9: the exit code follows the state -- a fatal error recorded
-/// mid-session exits 1.
-def start_loop (setup : LogSetup) (colors : Bool) (p : Plan) (s : Settings) (place : Option SessionPlace) (reg : ToolRegistry) (servers : List McpServer) : IO I64 := do {
+/// Open (or resume and fold) the session, then assemble the state. The
+/// mounted MCP servers ride `Prepared`, so whoever runs the session takes
+/// them down on every exit path; a failed open disposes them here.
+def start_loop {R : Type} (setup : LogSetup) (colors : Bool) (p : Plan) (s : Settings) (place : Option SessionPlace)
+    (reg : ToolRegistry) (servers : List McpServer)
+    (stage : String -> IO Unit) (ready : Prepared -> IO R) (fail : String -> IO R) : IO R := do {
     let root_opt <- Store.sessions_root;
+    let step : String :=
+        if resume_requested p then "resuming the session (folding older turns)" else "opening a new session";
+    let _ <- stage step;
     let opened <- open_session root_opt place p s reg;
     match opened {
-        Result.err e => fail_started servers e,
-        Result.ok o => run_opened setup colors p s place reg servers (with_model_note p.model_note o),
+        Result.err e => fail_started servers e fail,
+        Result.ok o => do {
+            let _ <- stage "loading the transcript";
+            let pr <- prepare_opened setup colors p s place reg servers (with_model_note p.model_note o);
+            ready pr
+        },
     }
 }
 
@@ -632,10 +767,9 @@ def with_model_note (note : Option String) (o : OpenedSession) : OpenedSession :
             { o with note := combined },
     }
 
-def fail_started (servers : List McpServer) (e : WeaverError) : IO I64 := do {
-    write_errln (String.concat "error: " (WeaverError.show e));
+def fail_started {R : Type} (servers : List McpServer) (e : WeaverError) (fail : String -> IO R) : IO R := do {
     let _ <- dispose_all servers;
-    return 1
+    fail (String.concat "error: " (WeaverError.show e))
 }
 
 /// The plan a resumed session last captured, when persistence is on.
@@ -677,7 +811,17 @@ def auto_safety_of (s : Settings) : Bool :=
         Option.some b => b,
     }
 
-def run_opened (setup : LogSetup) (colors : Bool) (p : Plan) (s : Settings) (place : Option SessionPlace) (reg : ToolRegistry) (servers : List McpServer) (o : OpenedSession) : IO I64 := do {
+/// A prepared session: its state, the startup transcript, the opened
+/// store/note, and the MCP servers to take down when it ends.
+struct Prepared {
+    state : WeaverState,
+    transcript : Transcript,
+    opened : OpenedSession,
+    servers : List McpServer,
+}
+
+def prepare_opened (setup : LogSetup) (colors : Bool) (p : Plan) (s : Settings) (place : Option SessionPlace)
+    (reg : ToolRegistry) (servers : List McpServer) (o : OpenedSession) : IO Prepared := do {
     let o2 : OpenedSession := with_crash_note setup.crash o;
     let empty_grants : List PermGrant := List.empty;
     let grants <- Ref.new empty_grants;
@@ -712,17 +856,28 @@ def run_opened (setup : LogSetup) (colors : Bool) (p : Plan) (s : Settings) (pla
     let o3 : OpenedSession := { o2 with note := Commands.join_notes o2.note loaded.note };
     let _ <- Logs.info setup.log (String.concat "ev=session_open session=" (session_label o));
     let tr0 <- startup_transcript o3;
-    let ran_tui <- Tui.run_resumed setup.log st tr0;
+    let out : Prepared := { state := st, transcript := tr0, opened := o3, servers := servers };
+    IO.pure out
+}
+
+/// The line UI's session (or the TUI's, when it finds no terminal after
+/// all): the one place it ends, whatever ended it -- EOF on stdin, `/quit`,
+/// or a crashed loop -- and the mounted MCP servers come down on every
+/// path. Phase 9: the exit code follows the state -- a fatal error
+/// recorded mid-session exits 1.
+def run_prepared (log : Option Logger) (pr : Prepared) : IO I64 := do {
+    let st : WeaverState := pr.state;
+    let ran_tui <- Tui.run_resumed log st pr.transcript;
     // The TUI's own model is gone once the app closes; a fatal error it
     // recorded decides the exit code (a TUI fatal used to exit 0).
     let fatal_after <- match st.fatal_out {
         Option.none => IO.pure Option.none,
         Option.some r => Ref.get r,
     };
-    let _ <- if Bool.not ran_tui then announce_note o3 else IO.pure unit;
+    let _ <- if Bool.not ran_tui then announce_note pr.opened else IO.pure unit;
     let final <- run_fallback ran_tui st;
     let _ <- Procs.shutdown;
-    let _ <- dispose_all servers;
+    let _ <- dispose_all pr.servers;
     exit_of_fatal final fatal_after
 }
 

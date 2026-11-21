@@ -15,6 +15,8 @@ use shuttle::message {Message}
 use std::list {}
 use weaver::commands {WeaverState, Effect}
 use weaver::overlay {OverlayState}
+use weaver::trust {TrustOutcome, TrustStart}
+use std::ref {Ref}
 use log::logger {Logger}
 use weaver::error {WeaverError}
 use weaver::dumb {Dumb.status_fields}
@@ -29,7 +31,7 @@ use tui::widget {Widget, SizedWidget, BorderStyle, border_with, border_titled, l
 use weaver::ui::banner {BannerModel, BannerMsg, BannerView, Banner.shown, Banner.rows, Banner.height, Banner.view}
 use weaver::ui::prompt {PromptModel, PromptBox, Prompt.empty, Prompt.view}
 use tui::widgets::picker {PickerModel, Picker.list_height, Picker.view}
-use weaver::ui::live {LiveModel, LiveMsg, LiveView, Live.idle, Live.rows, Live.height}
+use weaver::ui::live {LiveModel, LiveMsg, LiveView, Live.idle, Live.rows, Live.height, Live.spinner_glyph}
 use weaver::ui::rows {DisplayRow, Rows.widget}
 use weaver::ui::pane {
     PaneModel, PaneMsg, PaneView, Pane.make, Pane.update, Pane.refresh,
@@ -106,6 +108,14 @@ pub type WeaverMsg {
     bang_echoed (command : String),
     /// A `! cmd` finished: its command and shown output.
     bang_done (command : String) (output : String),
+    /// Startup, while the UI is already up: the loading box's stage line.
+    boot_stage (stage : String),
+    /// The trust dialog answered; the boot fiber starts with this outcome.
+    trust_decided (outcome : TrustOutcome),
+    /// The boot fiber finished: the real session replaces the placeholder.
+    booted (b : Booted),
+    /// The boot fiber failed: the message, shown before weaver exits.
+    boot_failed (e : String),
 }
 
 /// `tui::App`'s `on_event : Event -> WeaverMsg` -- every raw event is a
@@ -198,6 +208,28 @@ pub struct TuiModel {
     /// `/btw` answers that arrived while a turn's dialog owned the screen:
     /// (question, answer), shown when it closes.
     btw_ready : List (Pair String String) := List.empty,
+    /// Startup runs behind a loading box: the current stage while booting,
+    /// `none` once the session is up.
+    booting : Option String := Option.none,
+    /// The first startup step, taken on the first tick: a settled trust
+    /// outcome or the trust question.
+    boot_start : Option TrustStart := Option.none,
+    /// The rest of startup (settings, MCP, the session and its fold), run
+    /// on a fiber once trust is decided.
+    boot_run : Option (TrustOutcome -> IO (Result String Booted)) := Option.none,
+    /// Where the boot fiber writes its stage; polled while booting.
+    boot_stage_ref : Option (Ref String) := Option.none,
+}
+
+/// What the boot fiber hands the UI: the session's state, its startup
+/// transcript, the prompt history to seed Up with, the auto-start line,
+/// and how to take its MCP servers down at exit.
+pub struct Booted {
+    state : WeaverState,
+    transcript : Transcript,
+    older : List String,
+    first : Option String,
+    dispose : Unit -> IO Unit,
 }
 
 /// The initial model: an empty input box with a hint placeholder, no
@@ -210,7 +242,8 @@ pub def init_tui_model (log : Option Logger) (st : WeaverState) (rows : I64) (co
 
 /// The startup tail loaded from the session store.
 pub def init_tui_model_with (log : Option Logger) (st : WeaverState) (rows : I64) (cols : I64) (tr : Transcript) : TuiModel :=
-    let m : TuiModel := { state := st, prompt := Prompt.empty, pane := Pane.make tr, rows := rows, cols := cols, ctrl_c_streak := 0, ctrl_d_streak := 0, turn_pending := false, frame := 0, banner := Banner.shown, live := Live.idle, modal := false, plan_ready := false, title_due := false, turn_gen := 0, overlay_open := false, dialog_seq := 0, picker := Option.none, queued := List.empty, queued_ready := false, auto_start := Option.none, log := log, todos := List.empty, todos_open := true, tasks_running := 0, tasks_seen := List.empty, repaint_due := false, btw_ready := List.empty } in
+    let m : TuiModel := { state := st, prompt := Prompt.empty, pane := Pane.make tr, rows := rows, cols := cols, ctrl_c_streak := 0, ctrl_d_streak := 0, turn_pending := false, frame := 0, banner := Banner.shown, live := Live.idle, modal := false, plan_ready := false, title_due := false, turn_gen := 0, overlay_open := false, dialog_seq := 0, picker := Option.none, queued := List.empty, queued_ready := false, auto_start := Option.none, log := log, todos := List.empty, todos_open := true, tasks_running := 0, tasks_seen := List.empty, repaint_due := false, btw_ready := List.empty,
+        booting := Option.none, boot_start := Option.none, boot_run := Option.none, boot_stage_ref := Option.none } in
     Model.refresh_rows m
 
 pub def Model.banner_view (m : TuiModel) : BannerView :=
@@ -230,10 +263,7 @@ pub def Model.picker_height (m : TuiModel) : I64 :=
 pub def Model.view (m : TuiModel) : Widget :=
     let colors : Bool := m.state.colors in
     let mode : Mode := m.state.mode in
-    let body : Widget := match m.picker {
-        Option.none => transcript_column m,
-        Option.some p => Picker.view (panel_height m) p,
-    } in
+    let body : Widget := Model.body m in
     // `border_with`, not `with_style (border ...)`: the frame is dim, the
     // rows inside it are not (with_style merges into the whole subtree).
     let inner : Widget :=
@@ -255,6 +285,68 @@ pub def Model.view (m : TuiModel) : Widget :=
         else [sized (LayoutSize.fixed (List.length todo_rows)) (Widget.column (List.map (fn (r : String) =>
             sized (LayoutSize.fixed 1) (with_style (theme_thinking_style_with colors) (label r))) todo_rows))] in
     Widget.column (List.append head (List.append [transcript] (List.append todos [status, input])))
+
+/// The panel's content: the loading box while startup runs, the model
+/// picker while it is open, else the transcript.
+def Model.body (m : TuiModel) : Widget :=
+    match m.booting {
+        Option.some stage => Model.boot_box m stage,
+        Option.none => match m.picker {
+            Option.none => transcript_column m,
+            Option.some p => Picker.view (panel_height m) p,
+        },
+    }
+
+/// The armed exit gesture's line. The hint lives in the transcript once the
+/// session is up, but the loading box draws no pane, so the box asks for it
+/// here; the two strings are the same ones `exit_hint_step` appends.
+pub def Model.ctrl_c_hint : String := "press Ctrl+C again to exit (or /quit)"
+
+pub def Model.ctrl_d_hint : String := "press Ctrl+D again to exit (or /quit)"
+
+pub def Model.exit_hint (m : TuiModel) : Option String :=
+    if m.ctrl_d_streak > 0 then Option.some Model.ctrl_d_hint
+    else if m.ctrl_c_streak > 0 then Option.some Model.ctrl_c_hint
+    else Option.none
+
+def hint_rows (m : TuiModel) : List String :=
+    match Model.exit_hint m {
+        Option.none => List.empty,
+        Option.some h => [h],
+    }
+
+/// The loading box: centred, with a spinner and the boot fiber's stage.
+/// Lines typed meanwhile wait in the queue; the box counts them. An exit
+/// gesture armed during boot shows its hint here too (the pane is not
+/// drawn), so a Ctrl+D before the session is up still says what it did.
+pub def Model.boot_rows (m : TuiModel) (stage : String) : List String :=
+    let n : I64 := List.length m.queued in
+    let head : List String := ["Starting weaver", String.concat_list [Live.spinner_glyph m.frame, " ", stage]] in
+    let queue : List String :=
+        if n == 0 then List.empty
+        else [String.concat_list [I64.to_string n, " line(s) queued -- sent once the session is up"]] in
+    List.append head (List.append queue (hint_rows m))
+
+#[partial]
+def widest_of (rows : List String) (acc : I64) : I64 :=
+    match rows {
+        List.empty => acc,
+        List.cons r rest => widest_of rest (if I64.lt acc (String.length r) then String.length r else acc),
+    }
+
+def Model.boot_box (m : TuiModel) (stage : String) : Widget :=
+    let rows : List String := Model.boot_rows m stage in
+    let widest : I64 := widest_of rows 0 in
+    let room : I64 := if I64.lt (m.cols - 6) 10 then 10 else m.cols - 6 in
+    let width : I64 := if I64.lt room (widest + 4) then room else widest + 4 in
+    let inner : Widget := Widget.column (List.map (fn (r : String) => sized (LayoutSize.fixed 1) (label r)) rows) in
+    let box : Widget :=
+        border_with (theme_border_style_with m.state.colors) BorderStyle.rounded (padding 1 0 1 0 inner) in
+    let height : I64 := List.length rows + 2 in
+    let middle : Widget := Widget.row [sized (LayoutSize.fill 1) (label ""), sized (LayoutSize.fixed width) box,
+        sized (LayoutSize.fill 1) (label "")] in
+    Widget.column [sized (LayoutSize.fill 1) (label ""), sized (LayoutSize.fixed height) middle,
+        sized (LayoutSize.fill 1) (label "")]
 
 // ── the todo panel ───────────────────────────────────────────────────────
 
