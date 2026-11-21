@@ -250,3 +250,17 @@ def test_bare_path_identity : Bool :=
     match DocExtract.extract_source "x.mo" "pub def x : I64 := 1\n" {
         { module, .. } => String.beq module "x",
     }
+
+/// `n` copies of `line`, most recent first (the order does not matter).
+#[terminating]
+def repeated (n : I64) (line : String) (acc : List String) : List String :=
+    if n == 0 then acc else repeated (n - 1) line (List.cons line acc)
+
+/// A large file scans in constant stack: the line split runs once per byte,
+/// so a recursive call per byte overflowed on a ~2 MB source
+/// (`markdown/src/entities.mo` is 742 KB).
+#[test]
+def test_large_source_does_not_overflow : Bool :=
+    let filler : String := String.concat_list (repeated 200000 "// filler\n" List.empty) in
+    let m : DocModule := DocExtract.extract_source "x.mo" (filler ++ "/// Last.\npub def last : I64 := 1\n") in
+    List.length m.items == 1

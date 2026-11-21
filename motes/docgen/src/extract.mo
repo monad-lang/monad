@@ -368,18 +368,37 @@ def shows_whole (kind : String) : Bool :=
 /// the trim each line gets later, so CRLF sources work.
 #[partial]
 def split_lines (text : String) : List String :=
-    split_lines_go (String.to_list text) List.empty List.empty
+    let start : Splitting := { cur := List.empty, acc := List.empty } in
+    split_lines_go (String.to_list text) start
 
 def nl : U8 := 10u8
 
-#[partial]
-def split_lines_go (bytes : List U8) (cur : List U8) (acc : List String) : List String :=
-    match bytes {
-        List.empty => List.reverse (List.cons (String.from_list (List.reverse cur)) acc),
-        List.cons b rest =>
+/// The scan state: the current line's bytes, reversed, and the finished
+/// lines, reversed.
+struct Splitting { cur : List U8, acc : List String }
+
+def finish_line (cur : List U8) : String := String.from_list (List.reverse cur)
+
+def split_step (b : U8) (s : Splitting) : Splitting :=
+    match s {
+        { cur, acc } =>
             if U8.beq b nl
-            then split_lines_go rest List.empty (List.cons (String.from_list (List.reverse cur)) acc)
-            else split_lines_go rest (List.cons b cur) acc,
+            then { cur := List.empty, acc := List.cons (finish_line cur) acc }
+            else { cur := List.cons b cur, acc := acc },
+    }
+
+/// One step per byte, so the self-call must compile to a loop: codegen's
+/// tail-call rewrite (`codegen/src/tco.mo`) follows one match merge back
+/// to the `ret`, not an `if` nested in a match arm. With the branch inside
+/// `split_step`, the arm's only call is the tail call. The nested shape
+/// recursed per byte and overflowed the stack on a large file
+/// (`markdown/src/entities.mo`, 742 KB).
+#[partial]
+def split_lines_go (bytes : List U8) (s : Splitting) : List String :=
+    match bytes {
+        List.empty =>
+            match s { { cur, acc } => List.reverse (List.cons (finish_line cur) acc) },
+        List.cons b rest => split_lines_go rest (split_step b s),
     }
 
 /// Walk a def's lines, keeping the header's own lines. The first line with a
