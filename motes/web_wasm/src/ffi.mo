@@ -15,7 +15,7 @@
 /// rebase supplies `std::cstring`/`Ptr` for length-carrying calls; switch
 /// the multi-byte-string externs to `(ptr, len)` when that lands.
 
-use lib::types {Node, RequestId, ClipboardOp, CryptoOp, WebKey}
+use lib::types {Node, RequestId, ClipboardOp, CryptoOp, WebKey, WebSocket}
 use std::bytebuf {ByteBuf}
 use std::buf {Buf}
 use std::ref {Ref}
@@ -431,3 +431,46 @@ def image_load_begin_raw (url : String) : RawIO I64
 
 #[extern "c" {link_name := "web_image_info"}]
 def image_info_raw (image : I64) (which : I64) : RawIO I64
+
+// ── WebSocket (motes/web_wasm/src/websocket.mo) ────────────────────────
+//
+// Payloads cross through caller-owned `ByteBuf`s (`ws_read`, `ws_send`), so
+// a message larger than the 64 KiB scratch buffer is not truncated. The
+// JS callbacks only ever append to a per-socket queue; wasm is re-entered
+// through `dispatchWith` from a fresh task, never from a promise.
+
+#[extern "c" {link_name := "web_ws_open"}]
+def ws_open_raw (url : String) (protocols : String) : RawIO WebSocket
+
+#[extern "c" {link_name := "web_ws_state"}]
+def ws_state_raw (w : WebSocket) : RawIO I64
+
+#[extern "c" {link_name := "web_ws_peek"}]
+def ws_peek_raw (w : WebSocket) (which : I64) : RawIO I64
+
+#[extern "c" {link_name := "web_ws_read"}]
+def ws_read_raw (w : WebSocket) (buf : ByteBuf) : RawIO I64
+
+#[extern "c" {link_name := "web_ws_info"}]
+def ws_info_raw (w : WebSocket) (which : I64) : RawIO I64
+
+#[extern "c" {link_name := "web_ws_text"}]
+def ws_text_raw (w : WebSocket) (which : I64) : RawIO String
+
+#[extern "c" {link_name := "web_ws_send"}]
+def ws_send_raw (w : WebSocket) (buf : ByteBuf) (is_binary : I64) : RawIO I64
+
+#[extern "c" {link_name := "web_ws_close"}]
+def ws_close_raw (w : WebSocket) (code : I64) (reason : String) : RawIO I64
+
+#[extern "c" {link_name := "web_ws_watch"}]
+def ws_watch_raw (w : WebSocket) (handler : U32) : RawIO I64
+
+#[extern "c" {link_name := "web_ws_unwatch"}]
+def ws_unwatch_raw (w : WebSocket) : RawIO I64
+
+#[extern "c" {link_name := "web_ws_buffered"}]
+def ws_buffered_raw (w : WebSocket) : RawIO I64
+
+#[extern "c" {link_name := "web_ws_free"}]
+def ws_free_raw (w : WebSocket) : RawIO I64

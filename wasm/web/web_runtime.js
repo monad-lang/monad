@@ -49,6 +49,12 @@ const globalTables = new Map(); // "target:event" -> { flags, wrapper }
 let frameHandler = null; // the animation-frame subscription's handler id
 const fetches = []; // id -> { state, status, bytes, offset, headers }
 const clips = []; // id -> { state, text, error }
+// Live sockets: id -> { ws, queue, handler, state, code, reason, clean }.
+// `queue` holds decoded entries { kind, bytes }: kind 1 open, 2 text,
+// 3 binary, 4 close, 5 error. A socket's callbacks only append; the wasm
+// side drains them (`ws_read`) and, when watched, a coalesced
+// `dispatchWith` wakes the app from a fresh task.
+const sockets = [];
 const cryptos = []; // id -> { state, hex, error, key }
 // ECDSA P-256 keypairs (id -> CryptoKey or CryptoKeyPair). The PRIVATE half
 // lives only here, in the host: it is non-extractable, so neither wasm nor
@@ -81,6 +87,17 @@ const focusTraps = new WeakMap();
 // `oak_dispatch_event` export call. Getters read it; after the call it is
 // restored, so an event read from a later tick is `valid = 0`.
 let currentEvent = null;
+
+// Wake a watched socket's app once per task: the queue may gain several
+// entries in one callback burst, and one dispatch drains them all.
+function socket_wake(rec) {
+  if (rec.scheduled) return;
+  rec.scheduled = true;
+  const hid = rec.handler;
+  setTimeout(() => {
+    dispatchWith({ type: 'websocket', timeStamp: Date.now() }, hid);
+  }, 0);
+}
 
 function dispatchWith(evt, id) {
   const prev = currentEvent;
@@ -1170,6 +1187,178 @@ export const host = {
       }
     }
     return 0n;
+  },
+
+  // ── WebSocket ───────────────────────────────────────────────────────
+  ws_open(uptr, ulen, pptr, plen) {
+    const url = str(uptr, ulen);
+    const protocols = str(pptr, plen)
+      .split(',')
+      .map((p) => p.trim())
+      .filter((p) => p.length > 0);
+    const rec = { ws: null, queue: [], handler: 0n, state: 0, code: 1006, reason: '', clean: false, scheduled: false };
+    sockets.push(rec);
+    const id = BigInt(sockets.length - 1);
+    if (typeof globalThis.WebSocket !== 'function') {
+      rec.queue.push({ kind: 5, bytes: null });
+      return id;
+    }
+    let ws;
+    try {
+      ws = protocols.length > 0 ? new WebSocket(url, protocols) : new WebSocket(url);
+    } catch (e) {
+      rec.queue.push({ kind: 5, bytes: null });
+      return id;
+    }
+    rec.ws = ws;
+    ws.binaryType = 'arraybuffer';
+    const push = (kind, bytes) => {
+      if (rec.freed) return;
+      rec.queue.push({ kind, bytes });
+      rec.scheduled = false;
+      if (rec.handler !== 0n) socket_wake(rec);
+    };
+    ws.onopen = () => {
+      rec.state = 1;
+      push(1, null);
+    };
+    ws.onmessage = (ev) => {
+      if (typeof ev.data === 'string') push(2, encoder.encode(ev.data));
+      else push(3, new Uint8Array(ev.data));
+    };
+    ws.onerror = () => {
+      push(5, null);
+    };
+    ws.onclose = (ev) => {
+      rec.state = 3;
+      rec.code = Number(ev.code || 1006);
+      rec.reason = ev.reason || '';
+      rec.clean = Boolean(ev.wasClean);
+      push(4, null);
+    };
+    return id;
+  },
+
+  ws_state(id) {
+    const rec = sockets[Number(id)];
+    return BigInt(rec ? rec.state : -1);
+  },
+
+  // which 0 -> queued entries, 1 -> head kind, 2 -> head payload length in
+  // bytes, 3 -> head is a close (0/1)
+  ws_peek(id, which) {
+    const rec = sockets[Number(id)];
+    if (!rec) return -1n;
+    if (which === 0n) return BigInt(rec.queue.length);
+    const head = rec.queue[0];
+    if (!head) return 0n;
+    if (which === 1n) return BigInt(head.kind);
+    if (which === 2n) return BigInt(head.bytes ? head.bytes.length : 0);
+    return 0n;
+  },
+
+  // Copies the head payload out and pops the entry; returns its kind (0
+  // when the queue is empty).
+  ws_read(id, ptr, max) {
+    const rec = sockets[Number(id)];
+    if (!rec) return 0n;
+    const head = rec.queue.shift();
+    if (!head) return 0n;
+    if (head.bytes) writeBytes(ptr, head.bytes, max);
+    return BigInt(head.kind);
+  },
+
+  // which 0 -> close code, 1 -> wasClean (0/1), 2 -> queued bytes
+  ws_info(id, which) {
+    const rec = sockets[Number(id)];
+    if (!rec) return 0n;
+    if (which === 0n) return BigInt(rec.code);
+    if (which === 1n) return rec.clean ? 1n : 0n;
+    let n = 0;
+    for (const e of rec.queue) n += e.bytes ? e.bytes.length : 0;
+    return BigInt(n);
+  },
+
+  // which 0 -> negotiated protocol, 1 -> close reason
+  ws_text(id, which, ptr, max) {
+    const rec = sockets[Number(id)];
+    if (!rec) return 0n;
+    const text = which === 0n ? (rec.ws ? rec.ws.protocol || '' : '') : rec.reason || '';
+    return writeBytes(ptr, encoder.encode(text), max);
+  },
+
+  ws_send(id, ptr, len, is_binary) {
+    const rec = sockets[Number(id)];
+    if (!rec || !rec.ws || rec.ws.readyState !== 1) return 0n;
+    const bytes = new Uint8Array(memory.buffer, u32(ptr), Number(len)).slice();
+    try {
+      if (is_binary !== 0n) rec.ws.send(bytes.buffer);
+      else rec.ws.send(decoder.decode(bytes));
+    } catch (e) {
+      return 0n;
+    }
+    return 1n;
+  },
+
+  ws_close(id, code, ptr, len) {
+    const rec = sockets[Number(id)];
+    if (!rec) return 0n;
+    if (rec.ws && (rec.ws.readyState === 0 || rec.ws.readyState === 1)) {
+      const reason = str(ptr, len);
+      try {
+        rec.ws.close(Number(code), reason);
+      } catch (e) {
+        rec.ws.close();
+      }
+    }
+    return 1n;
+  },
+
+  ws_watch(id, handler) {
+    const rec = sockets[Number(id)];
+    if (!rec) return 0n;
+    rec.handler = handler;
+    if (rec.queue.length > 0) socket_wake(rec);
+    return 1n;
+  },
+
+  ws_unwatch(id) {
+    const rec = sockets[Number(id)];
+    if (rec) rec.handler = 0n;
+    return 1n;
+  },
+
+  ws_buffered(id) {
+    const rec = sockets[Number(id)];
+    if (!rec) return 0n;
+    return BigInt(rec.queue.length);
+  },
+
+  // Detach the handlers FIRST: closing fires `onclose`, and any in-flight
+  // frame would otherwise push into the queue just cleared (and keep the
+  // record alive for a socket nobody reads).
+  ws_free(id) {
+    const rec = sockets[Number(id)];
+    if (!rec) return 0n;
+    rec.freed = true;
+    rec.handler = 0n;
+    const ws = rec.ws;
+    rec.ws = null;
+    rec.queue = [];
+    if (ws) {
+      ws.onopen = null;
+      ws.onmessage = null;
+      ws.onerror = null;
+      ws.onclose = null;
+      if (ws.readyState === 0 || ws.readyState === 1) {
+        try {
+          ws.close(1000, '');
+        } catch (e) {
+          /* already gone */
+        }
+      }
+    }
+    return 1n;
   },
 
   // One-shot delayed message. The id is reserved in the top bit, which

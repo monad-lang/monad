@@ -229,6 +229,11 @@ echo "== web: subscriptions (window/document listeners, animation frame) =="
     -o "$tmp/oak_subs.wasm" --no-cache
 node wasm/web/smoke/subs_smoke.mjs "$tmp/oak_subs.wasm"
 
+echo "== web: WebSocket (Subscription.websocket and the imperative socket) =="
+"$MONAD" build --target wasm32-unknown-unknown fixtures/wasm/web_socket.mo \
+    -o "$tmp/oak_socket.wasm" --no-cache
+node wasm/web/smoke/websocket_smoke.mjs "$tmp/oak_socket.wasm"
+
 echo "== web: Command.batch / Command.after / Command.focus =="
 # One click batches an immediate dispatch, a 10 ms timer and a focus; the
 # timer fires through oak_dispatch_event with no animation-frame loop.

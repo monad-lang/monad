@@ -91,3 +91,9 @@ pub use lib::gl {
     Gl.buffer_sub_data_f32, Gl.uniform_matrix4, Gl.tex_image_rgba, Gl.f32_buf, Gl.i32_buf,
     Gl.u8_buf,
 }
+
+pub use lib::websocket {
+    WebSocket.connect, WebSocket.state, WebSocket.close, WebSocket.free, WebSocket.send,
+    WebSocket.send_bytes, WebSocket.next, WebSocket.drain, WebSocket.pending,
+    WebSocket.watch, WebSocket.unwatch,
+}

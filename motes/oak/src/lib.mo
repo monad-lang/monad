@@ -23,6 +23,7 @@ pub use lib::typed {
 
 pub use lib::events {
     Subscription, Subscription.window_msg, Subscription.document_msg, Subscription.animation_frame_msg,
+    Subscription.websocket,
     Html.on, Html.msg, Html.msg_with,
     Html.on_click, Html.on_click_with, Html.on_dblclick, Html.on_contextmenu,
     Html.on_auxclick, Html.on_mousedown, Html.on_mouseup, Html.on_mousemove,

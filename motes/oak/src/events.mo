@@ -11,6 +11,7 @@
 // in the `WebEvent` snapshot.
 
 use web_event::event {WebEvent, HandlerResult, ListenerFlags}
+use web_event::websocket {WsEvent}
 use xml_html::html {Html.Attr}
 use lib::typed {Oak.Attr}
 
@@ -33,7 +34,12 @@ pub type Subscription (Msg : Type) {
     window_filter (event : String) (handler : WebEvent -> Option Msg),
     /// A `matchMedia(query)` change subscription (the `WebEvent` carries
     /// `matches`, `media` and `time_stamp`).
-    media (query : String) (handler : WebEvent -> Msg)
+    media (query : String) (handler : WebEvent -> Msg),
+    /// A WebSocket, owned by the subscription: the runtime opens it when
+    /// the subscription appears, reports each `WsEvent` (opened, message,
+    /// closed, failed) through `handler`, and closes it when the
+    /// subscription goes away. Sending is `Command.ws_send url data`.
+    websocket (url : String) (protocols : List String) (handler : WsEvent -> Msg)
 }
 
 pub def Subscription.window_msg {Msg : Type} (event : String) (m : Msg) : Subscription Msg :=

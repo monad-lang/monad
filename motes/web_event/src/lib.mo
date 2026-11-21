@@ -6,3 +6,5 @@ pub use lib::event {
     WebEvent.mod_shift, WebEvent.mod_ctrl, WebEvent.mod_alt, WebEvent.mod_meta,
     HandlerResult.msg, HandlerResult.ignore, HandlerResult.prevent, HandlerResult.map,
 }
+
+pub use lib::websocket {WsData, WsEvent, WsData.text_of, WsData.bytes_of}

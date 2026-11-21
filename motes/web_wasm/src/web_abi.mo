@@ -128,6 +128,42 @@ def WebImport.clipboard_read : WebImport :=
 def WebImport.clipboard_error : WebImport :=
     { module := "monad", name := "clipboard_error", params := ["i64", "i64", "i64"], result := "i64" }
 
+def WebImport.ws_open : WebImport :=
+    { module := "monad", name := "ws_open", params := ["i64", "i64", "i64", "i64"], result := "i64" }
+
+def WebImport.ws_state : WebImport :=
+    { module := "monad", name := "ws_state", params := ["i64"], result := "i64" }
+
+def WebImport.ws_peek : WebImport :=
+    { module := "monad", name := "ws_peek", params := ["i64", "i64"], result := "i64" }
+
+def WebImport.ws_read : WebImport :=
+    { module := "monad", name := "ws_read", params := ["i64", "i64", "i64"], result := "i64" }
+
+def WebImport.ws_info : WebImport :=
+    { module := "monad", name := "ws_info", params := ["i64", "i64"], result := "i64" }
+
+def WebImport.ws_text : WebImport :=
+    { module := "monad", name := "ws_text", params := ["i64", "i64", "i64", "i64"], result := "i64" }
+
+def WebImport.ws_send : WebImport :=
+    { module := "monad", name := "ws_send", params := ["i64", "i64", "i64", "i64"], result := "i64" }
+
+def WebImport.ws_close : WebImport :=
+    { module := "monad", name := "ws_close", params := ["i64", "i64", "i64", "i64"], result := "i64" }
+
+def WebImport.ws_watch : WebImport :=
+    { module := "monad", name := "ws_watch", params := ["i64", "i64"], result := "i64" }
+
+def WebImport.ws_unwatch : WebImport :=
+    { module := "monad", name := "ws_unwatch", params := ["i64"], result := "i64" }
+
+def WebImport.ws_free : WebImport :=
+    { module := "monad", name := "ws_free", params := ["i64"], result := "i64" }
+
+def WebImport.ws_buffered : WebImport :=
+    { module := "monad", name := "ws_buffered", params := ["i64"], result := "i64" }
+
 def WebImport.now_ms : WebImport :=
     { module := "monad", name := "now_ms", params := List.empty, result := "i64" }
 
@@ -490,6 +526,9 @@ pub def WebAbi.default : WebAbi :=
             WebImport.clipboard_available, WebImport.clipboard_read_begin,
             WebImport.clipboard_write_begin, WebImport.clipboard_poll,
             WebImport.clipboard_read, WebImport.clipboard_error,
+            WebImport.ws_open, WebImport.ws_state, WebImport.ws_peek, WebImport.ws_read,
+            WebImport.ws_info, WebImport.ws_text, WebImport.ws_send, WebImport.ws_close,
+            WebImport.ws_watch, WebImport.ws_unwatch, WebImport.ws_buffered, WebImport.ws_free,
             WebImport.now_ms, WebImport.storage_get_raw,
             WebImport.storage_set, WebImport.console_log, WebImport.try_result,
             WebImport.storage_has, WebImport.storage_remove, WebImport.storage_clear,

@@ -36,6 +36,12 @@ use web_wasm::dom {
 }
 use web_wasm::timer {Timer.after, Timer.is_id}
 use web_wasm::media {Media.watch, Media.unwatch}
+use web_wasm::types {WebSocket}
+use web_wasm::websocket {
+    WebSocket.connect, WebSocket.close, WebSocket.free, WebSocket.watch, WebSocket.unwatch,
+    WebSocket.drain, WebSocket.send,
+}
+use web_event::websocket {WsData, WsEvent}
 use web_wasm::event {WebEvent.current, WebEvent.prevent_default, WebEvent.stop_propagation}
 use web_wasm::keep {Keep.load, Keep.save}
 use web_wasm::types {Node}
@@ -58,7 +64,31 @@ def Runtime.sub_key {Msg : Type} (sub : Subscription Msg) : String :=
         Subscription.animation_frame _handler => "frame",
         Subscription.window_filter event _handler => String.concat "windowf:" event,
         Subscription.media query _handler => String.concat "media:" query,
+        Subscription.websocket url protocols _handler =>
+            String.concat "ws:" (String.concat url (String.concat "|" (Runtime.join_protocols protocols))),
     }
+
+#[terminating]
+def Runtime.join_protocols (xs : List String) : String :=
+    match xs {
+        List.empty => "",
+        List.cons x rest => Runtime.join_protocols_tail x (Runtime.join_protocols rest)
+    }
+
+def Runtime.join_protocols_tail (x : String) (tail : String) : String :=
+    if String.beq tail "" then x else String.concat x (String.concat "," tail)
+
+/// The dispatch id a socket's wake-up arrives under: the key's handler hash
+/// with its top two bits cleared, offset by the socket base (0x40000000).
+/// The result is always in [0x40000000, 0x80000000), the range timers
+/// (top bit) never use.
+pub def Runtime.socket_base : U32 := 0x40000000u32
+
+pub def Runtime.socket_id (key : String) : U32 :=
+    U32.add Runtime.socket_base (U32.and (Handler.id List.empty key) 0x3fffffffu32)
+
+pub def Runtime.is_socket_id (id : U32) : Bool :=
+    Bool.and (Bool.not (U32.lt id Runtime.socket_base)) (Bool.not (Timer.is_id id))
 
 def Runtime.window_spec (event : String) : String :=
     Handler.spec_of (Handler.id List.empty (String.concat "window:" event)) ListenerFlags.none
@@ -87,6 +117,169 @@ pub def Runtime.install_sub {Msg : Type} (sub : Subscription Msg) : IO Unit :=
         Subscription.window_filter event _handler =>
             Dom.on_window event (Runtime.window_filter_spec event),
         Subscription.media query _handler => Media.watch query (Runtime.media_spec query),
+        Subscription.websocket url protocols handler => Runtime.install_socket url protocols handler,
+    }
+
+/// Open the subscription's socket and start waking the app with its key's
+/// dispatch id. A failed connection still installs (the queue reports
+/// `failed`), so a later batch sees the event.
+def Runtime.install_socket {Msg : Type} (url : String) (protocols : List String)
+    (handler : WsEvent -> Msg) : IO Unit := do {
+    let ws <- WebSocket.connect url protocols;
+    let key := String.concat "ws:" (String.concat url (String.concat "|" (Runtime.join_protocols protocols)));
+    let _ <- WebSocket.watch ws (Runtime.socket_id key);
+    let state <- Runtime.load_state;
+    let _ <- Ref.update state (Runtime.add_socket (WsSocket.ws_socket key url ws handler));
+    IO.pure unit
+}
+
+def Runtime.add_socket {S : Type} {Msg : Type} (entry : WsSocket Msg)
+    (state : RuntimeState S Msg) : RuntimeState S Msg :=
+    match state {
+        RuntimeState.st root last model queue stopped handlers subs timers focus paint sockets =>
+            RuntimeState.st root last model queue stopped handlers subs timers focus paint
+                (List.cons entry sockets),
+    }
+
+/// A watched socket woke up: drain its queue and enqueue one message per
+/// event through the subscription's handler.
+def Runtime.dispatch_socket {S : Type} {Msg : Type} (id : I64) (sockets : List (WsSocket Msg)) : IO Unit := do {
+    match Runtime.socket_for_id id sockets {
+        Option.none => IO.pure unit,
+        Option.some pair => match pair {
+            Pair.pair ws handler => do {
+                let events <- WebSocket.drain ws;
+                let state <- Runtime.load_state;
+                let _ <- Ref.update state (Runtime.enqueue_events handler events);
+                IO.pure unit
+            }
+        }
+    }
+}
+
+#[terminating]
+def Runtime.socket_for_id {Msg : Type} (id : I64)
+    (sockets : List (WsSocket Msg)) : Option (Pair WebSocket (WsEvent -> Msg)) :=
+    match sockets {
+        List.empty => Option.none,
+        List.cons e rest =>
+            match e {
+                WsSocket.ws_socket key _url ws handler =>
+                    if U32.beq (Runtime.socket_id key) (I64.to_u32 id)
+                    then Option.some (Pair.pair ws handler)
+                    else Runtime.socket_for_id id rest
+            }
+    }
+
+def Runtime.enqueue_events {S : Type} {Msg : Type} (handler : WsEvent -> Msg)
+    (events : List WsEvent) (state : RuntimeState S Msg) : RuntimeState S Msg :=
+    Runtime.fold_enqueue (Runtime.map_events handler events) state
+
+#[terminating]
+def Runtime.map_events {Msg : Type} (handler : WsEvent -> Msg) (events : List WsEvent) : List Msg :=
+    match events {
+        List.empty => List.empty,
+        List.cons e rest => List.cons (handler e) (Runtime.map_events handler rest)
+    }
+
+#[terminating]
+def Runtime.fold_enqueue {S : Type} {Msg : Type} (msgs : List Msg) (state : RuntimeState S Msg)
+    : RuntimeState S Msg :=
+    match msgs {
+        List.empty => state,
+        List.cons m rest => Runtime.fold_enqueue rest (Runtime.enqueue m state)
+    }
+
+def Runtime.set_sockets {S : Type} {Msg : Type} (sockets : List (WsSocket Msg))
+    (state : RuntimeState S Msg) : RuntimeState S Msg :=
+    match state {
+        RuntimeState.st root last model queue stopped handlers subs timers focus paint _old =>
+            RuntimeState.st root last model queue stopped handlers subs timers focus paint sockets,
+    }
+
+/// The live sockets of a state value (pure).
+def Runtime.state_sockets {S : Type} {Msg : Type} (st : RuntimeState S Msg) : List (WsSocket Msg) :=
+    match st {
+        RuntimeState.st _root _last _model _queue _stopped _handlers _subs _timers _focus _paint sockets =>
+            sockets,
+    }
+
+def Runtime.sockets_of_state {S : Type} {Msg : Type} (state : Ref (RuntimeState S Msg))
+    : IO (List (WsSocket Msg)) := do {
+    let st <- Ref.get state;
+    match st {
+        RuntimeState.st _root _last _model _queue _stopped _handlers _subs _timers _focus _paint sockets =>
+            IO.pure sockets,
+    }
+}
+
+/// Send `data` on the socket a `Subscription.websocket` owns for `url`.
+/// No subscription owns it (yet, or any more): the command is dropped.
+def Runtime.send_on_socket {S : Type} {Msg : Type} (url : String) (data : WsData) : IO Unit := do {
+    let state <- Runtime.load_state;
+    let sockets <- Runtime.sockets_of_state state;
+    match Runtime.find_socket url sockets {
+        Option.none => IO.pure unit,
+        Option.some ws => do {
+            let _ <- WebSocket.send ws data;
+            IO.pure unit
+        }
+    }
+}
+
+#[terminating]
+def Runtime.find_socket {Msg : Type} (url : String) (sockets : List (WsSocket Msg)) : Option WebSocket :=
+    match sockets {
+        List.empty => Option.none,
+        List.cons e rest =>
+            match e {
+                WsSocket.ws_socket _key entry_url ws _handler =>
+                    if String.beq entry_url url then Option.some ws else Runtime.find_socket url rest
+            }
+    }
+
+/// Forget the socket for `key` and close it.
+def Runtime.drop_socket {S : Type} {Msg : Type} (key : String)
+    (state : RuntimeState S Msg) : IO (RuntimeState S Msg) := do {
+    match state {
+        RuntimeState.st root last model queue stopped handlers subs timers focus paint sockets =>
+            match Runtime.take_socket key sockets {
+                Pair.pair gone rest => do {
+                    let _ <- Runtime.close_gone gone;
+                    IO.pure (RuntimeState.st root last model queue stopped handlers subs timers focus paint rest)
+                }
+            }
+    }
+}
+
+def Runtime.close_gone {Msg : Type} (gone : Option (WsSocket Msg)) : IO Unit :=
+    match gone {
+        Option.none => IO.pure unit,
+        Option.some e =>
+            match e {
+                WsSocket.ws_socket _key _url ws _handler => do {
+                    let _ <- WebSocket.unwatch ws;
+                    WebSocket.free ws
+                }
+            }
+    }
+
+def Runtime.take_socket {Msg : Type} (key : String) (sockets : List (WsSocket Msg))
+    : Pair (Option (WsSocket Msg)) (List (WsSocket Msg)) :=
+    Runtime.take_socket_go key sockets List.empty
+
+#[terminating]
+def Runtime.take_socket_go {Msg : Type} (key : String) (sockets : List (WsSocket Msg))
+    (acc : List (WsSocket Msg)) : Pair (Option (WsSocket Msg)) (List (WsSocket Msg)) :=
+    match sockets {
+        List.empty => Pair.pair Option.none (List.reverse acc),
+        List.cons e rest =>
+            match e {
+                WsSocket.ws_socket k _url _ws _handler =>
+                    if String.beq k key
+                    then Pair.pair (Option.some e) (List.append (List.reverse acc) rest)
+                    else Runtime.take_socket_go key rest (List.cons e acc)
+            }
     }
 
 pub def Runtime.remove_sub {Msg : Type} (sub : Subscription Msg) : IO Unit :=
@@ -97,6 +290,17 @@ pub def Runtime.remove_sub {Msg : Type} (sub : Subscription Msg) : IO Unit :=
         Subscription.animation_frame _handler => Dom.off_frame,
         Subscription.window_filter event _handler => Dom.off_window event,
         Subscription.media query _handler => Media.unwatch query,
+        Subscription.websocket url protocols _handler => do {
+            let key := String.concat "ws:" (String.concat url (String.concat "|" (Runtime.join_protocols protocols)));
+            let state <- Runtime.load_state;
+            let sockets <- Runtime.sockets_of_state state;
+            match Runtime.take_socket key sockets {
+                Pair.pair gone rest => do {
+                    let _ <- Ref.update state (Runtime.set_sockets rest);
+                    Runtime.close_gone gone
+                }
+            }
+        },
     }
 
 /// Install only the subscriptions whose key is not already applied.
@@ -175,6 +379,7 @@ def Runtime.sub_handler {Msg : Type} (sub : Subscription Msg)
                 (Pair.pair (Handler.id List.empty (String.concat "media:" query))
                     (fn (e : WebEvent) => HandlerResult.msg (handler e)))
                 List.empty,
+        Subscription.websocket _url _protocols _handler => List.empty,
     }
 
 #[terminating]
@@ -185,6 +390,14 @@ def Runtime.collect_sub_handlers {Msg : Type} (subs : List (Subscription Msg))
         List.cons sub rest =>
             List.append (Runtime.sub_handler sub) (Runtime.collect_sub_handlers rest),
     }
+
+/// One WebSocket a `Subscription.websocket` owns: its subscription key,
+/// the live socket and the pure handler each `WsEvent` becomes a message
+/// through. The handler id is `SOCKET_BASE + key` (see `Runtime.socket_id`),
+/// which `Runtime.dispatch` routes to `Runtime.dispatch_socket`.
+pub type WsSocket (Msg : Type) {
+    ws_socket (key : String) (url : String) (ws : WebSocket) (handler : WsEvent -> Msg)
+}
 
 pub type RuntimeState (S : Type) (Msg : Type) {
     st (root : Node) (last : Html.Node) (model : S)
@@ -199,6 +412,8 @@ pub type RuntimeState (S : Type) (Msg : Type) {
         /// patch. A thunk, not a stored `IO`: an action held in a
         /// constructor field can run at construction when compiled.
         (paint : List (Unit -> IO (Option Msg)))
+        /// The live WebSockets owned by subscriptions.
+        (sockets : List (WsSocket Msg))
 }
 
 /// Mount a `Program` under the root the loader selected, and hand the state
@@ -216,15 +431,17 @@ pub def Runtime.mount {S : Type} {Msg : Type} {E : Type}
     let root <- Dom.root;
     let model := Program.init prog;
     let subs := (Program.subscriptions prog) model;
-    let _ <- Runtime.apply_subs List.empty subs;
     match Oak.lower (Program.view prog model) {
         Oak.Lowered.lowered tree handlers => do {
             let _ <- Patch.hydrate_root root tree;
             let table := List.append handlers (Runtime.collect_sub_handlers subs);
             let state : Ref (RuntimeState S Msg) <-
                 Ref.new (RuntimeState.st root tree model List.empty false table subs
-                    List.empty List.empty List.empty);
+                    List.empty List.empty List.empty List.empty);
             let _ <- Keep.save state;
+            // Subscriptions install AFTER the state exists: a WebSocket
+            // subscription registers its socket through the state slot.
+            let _ <- Runtime.apply_subs List.empty subs;
             return unit
         },
     }
@@ -239,11 +456,13 @@ pub def Runtime.dispatch {S : Type} {Msg : Type} (handler : I64) : IO Unit := do
     let state <- Runtime.load_state;
     let snapshot <- Ref.get state;
     match snapshot {
-        RuntimeState.st _root _last _model _queue stopped handlers _subs timers _focus _paint =>
+        RuntimeState.st _root _last _model _queue stopped handlers _subs timers _focus _paint sockets =>
             if stopped
             then IO.pure unit
             else if Timer.is_id (I64.to_u32 handler)
             then Runtime.dispatch_timer state handler timers
+            else if Runtime.is_socket_id (I64.to_u32 handler)
+            then Runtime.dispatch_socket handler sockets
             else
                 match Runtime.lookup_handler (I64.to_u32 handler) handlers {
                     Option.none => IO.pure unit,
@@ -322,40 +541,40 @@ def Runtime.lookup_handler {Msg : Type} (id : U32)
 /// landed in one frame.
 def Runtime.enqueue {S : Type} {Msg : Type} (msg : Msg) (state : RuntimeState S Msg) : RuntimeState S Msg :=
     match state {
-        RuntimeState.st root last model queue stopped handlers subs timers focus paint =>
+        RuntimeState.st root last model queue stopped handlers subs timers focus paint sockets =>
             RuntimeState.st root last model (List.append queue (List.cons msg List.empty))
-                stopped handlers subs timers focus paint,
+                stopped handlers subs timers focus paint sockets,
     }
 
 def Runtime.set_timers {S : Type} {Msg : Type} (timers : List (Pair I64 Msg))
     (state : RuntimeState S Msg) : RuntimeState S Msg :=
     match state {
-        RuntimeState.st root last model queue stopped handlers subs _old focus paint =>
-            RuntimeState.st root last model queue stopped handlers subs timers focus paint,
+        RuntimeState.st root last model queue stopped handlers subs _old focus paint sockets =>
+            RuntimeState.st root last model queue stopped handlers subs timers focus paint sockets,
     }
 
 def Runtime.add_timer {S : Type} {Msg : Type} (id : I64) (msg : Msg)
     (state : RuntimeState S Msg) : RuntimeState S Msg :=
     match state {
-        RuntimeState.st root last model queue stopped handlers subs timers focus paint =>
+        RuntimeState.st root last model queue stopped handlers subs timers focus paint sockets =>
             RuntimeState.st root last model queue stopped handlers subs
-                (List.append timers (List.cons (Pair.pair id msg) List.empty)) focus paint,
+                (List.append timers (List.cons (Pair.pair id msg) List.empty)) focus paint sockets,
     }
 
 def Runtime.add_focus {S : Type} {Msg : Type} (selector : String)
     (state : RuntimeState S Msg) : RuntimeState S Msg :=
     match state {
-        RuntimeState.st root last model queue stopped handlers subs timers focus paint =>
+        RuntimeState.st root last model queue stopped handlers subs timers focus paint sockets =>
             RuntimeState.st root last model queue stopped handlers subs timers
-                (List.append focus (List.cons selector List.empty)) paint,
+                (List.append focus (List.cons selector List.empty)) paint sockets,
     }
 
 def Runtime.add_paint {S : Type} {Msg : Type} (effect : Unit -> IO (Option Msg))
     (state : RuntimeState S Msg) : RuntimeState S Msg :=
     match state {
-        RuntimeState.st root last model queue stopped handlers subs timers focus paint =>
+        RuntimeState.st root last model queue stopped handlers subs timers focus paint sockets =>
             RuntimeState.st root last model queue stopped handlers subs timers focus
-                (List.append paint (List.cons effect List.empty)),
+                (List.append paint (List.cons effect List.empty)) sockets,
     }
 
 /// Run a batch's `after_render` effects in order, after the patch, and
@@ -394,7 +613,7 @@ pub def Runtime.tick {S : Type} {Msg : Type} {E : Type}
     let state <- Runtime.load_state;
     let snapshot <- Ref.get state;
     match snapshot {
-        RuntimeState.st root last model queue stopped handlers subs timers _focus _paint =>
+        RuntimeState.st root last model queue stopped handlers subs timers _focus _paint _sockets =>
             if stopped
             then IO.pure unit
             else if List.is_empty queue
@@ -411,9 +630,11 @@ def Runtime.drain {S : Type} {Msg : Type} {E : Type}
     // Clear the queue first: a message dispatched while the batch runs lands
     // in the NEXT frame. The final write below reads the queue back so it is
     // not overwritten.
+    let before <- Ref.get state;
+    let live_sockets := Runtime.state_sockets before;
     let drained : RuntimeState S Msg :=
         RuntimeState.st root last model List.empty false handlers subs timers List.empty
-            List.empty;
+            List.empty live_sockets;
     let _ <- Ref.set state drained;
     let folded <- Runtime.run_batch prog host model queue;
     match folded {
@@ -435,7 +656,7 @@ def Runtime.drain {S : Type} {Msg : Type} {E : Type}
                     // handler just lowered, not the previous frame's table.
                     let staged : RuntimeState S Msg :=
                         RuntimeState.st root last model List.empty false table next_subs
-                            batch_timers batch_focus batch_paint;
+                            batch_timers batch_focus batch_paint (Runtime.state_sockets after_batch);
                     let _ <- Ref.set state staged;
                     let patches := Patch.diff last tree;
                     let _ <- Patch.apply root patches;
@@ -452,7 +673,8 @@ def Runtime.drain {S : Type} {Msg : Type} {E : Type}
                     let pending := List.append (Runtime.pending_of after_paint) painted;
                     let next : RuntimeState S Msg :=
                         RuntimeState.st root tree next_model pending quit table next_subs
-                            (Runtime.timers_of after_paint) List.empty List.empty;
+                            (Runtime.timers_of after_paint) List.empty List.empty
+                            (Runtime.state_sockets after_paint);
                     let _ <- Ref.set state next;
                     return unit
                 },
@@ -464,22 +686,22 @@ def Runtime.drain {S : Type} {Msg : Type} {E : Type}
 /// The messages dispatched while the batch ran.
 def Runtime.pending_of {S : Type} {Msg : Type} (state : RuntimeState S Msg) : List Msg :=
     match state {
-        RuntimeState.st _root _last _model queue _stopped _handlers _subs _timers _focus _paint => queue,
+        RuntimeState.st _root _last _model queue _stopped _handlers _subs _timers _focus _paint _sockets => queue,
     }
 
 def Runtime.timers_of {S : Type} {Msg : Type} (state : RuntimeState S Msg) : List (Pair I64 Msg) :=
     match state {
-        RuntimeState.st _root _last _model _queue _stopped _handlers _subs timers _focus _paint => timers,
+        RuntimeState.st _root _last _model _queue _stopped _handlers _subs timers _focus _paint _sockets => timers,
     }
 
 def Runtime.focus_of {S : Type} {Msg : Type} (state : RuntimeState S Msg) : List String :=
     match state {
-        RuntimeState.st _root _last _model _queue _stopped _handlers _subs _timers focus _paint => focus,
+        RuntimeState.st _root _last _model _queue _stopped _handlers _subs _timers focus _paint _sockets => focus,
     }
 
 def Runtime.paint_of {S : Type} {Msg : Type} (state : RuntimeState S Msg) : List (Unit -> IO (Option Msg)) :=
     match state {
-        RuntimeState.st _root _last _model _queue _stopped _handlers _subs _timers _focus paint => paint,
+        RuntimeState.st _root _last _model _queue _stopped _handlers _subs _timers _focus paint sockets => paint,
     }
 
 /// The state slot, typed for the caller. `Keep.load` is generic because the
@@ -575,6 +797,10 @@ def Runtime.step_cmd {S : Type} {Msg : Type} {E : Type}
             Runtime.step_batch prog host model rest
         },
         Command.batch cmds => Runtime.step_cmds prog host model rest cmds,
+        Command.ws_send url data => do {
+            let _ <- Runtime.send_on_socket url data;
+            Runtime.step_batch prog host model rest
+        },
     }
 
 def Runtime.paint_thunk {E : Type} {Msg : Type} (host : Host IO E Msg) (effect : E)
@@ -649,5 +875,9 @@ def Runtime.collect_cmds {E : Type} {Msg : Type} (host : Host IO E Msg)
                 },
                 Command.batch inner =>
                     Runtime.collect_cmds host (List.append inner more) perf disp quit,
+                Command.ws_send url data => do {
+                    let _ <- Runtime.send_on_socket url data;
+                    Runtime.collect_cmds host more perf disp quit
+                },
             },
     }

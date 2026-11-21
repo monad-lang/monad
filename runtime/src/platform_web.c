@@ -303,6 +303,43 @@ extern int64_t monad_js_clipboard_read(int64_t op, int64_t ptr, int64_t max);
 __attribute__((import_module("monad"), import_name("clipboard_error")))
 extern int64_t monad_js_clipboard_error(int64_t op, int64_t ptr, int64_t max);
 
+/* ── WebSocket (motes/web_wasm/src/websocket.mo) ───────────────────────── */
+__attribute__((import_module("monad"), import_name("ws_open")))
+extern int64_t monad_js_ws_open(int64_t uptr, int64_t ulen, int64_t pptr, int64_t plen);
+
+__attribute__((import_module("monad"), import_name("ws_state")))
+extern int64_t monad_js_ws_state(int64_t id);
+
+__attribute__((import_module("monad"), import_name("ws_peek")))
+extern int64_t monad_js_ws_peek(int64_t id, int64_t which);
+
+__attribute__((import_module("monad"), import_name("ws_read")))
+extern int64_t monad_js_ws_read(int64_t id, int64_t ptr, int64_t max);
+
+__attribute__((import_module("monad"), import_name("ws_info")))
+extern int64_t monad_js_ws_info(int64_t id, int64_t which);
+
+__attribute__((import_module("monad"), import_name("ws_text")))
+extern int64_t monad_js_ws_text(int64_t id, int64_t which, int64_t ptr, int64_t max);
+
+__attribute__((import_module("monad"), import_name("ws_send")))
+extern int64_t monad_js_ws_send(int64_t id, int64_t ptr, int64_t len, int64_t is_binary);
+
+__attribute__((import_module("monad"), import_name("ws_close")))
+extern int64_t monad_js_ws_close(int64_t id, int64_t code, int64_t ptr, int64_t len);
+
+__attribute__((import_module("monad"), import_name("ws_watch")))
+extern int64_t monad_js_ws_watch(int64_t id, int64_t handler);
+
+__attribute__((import_module("monad"), import_name("ws_unwatch")))
+extern int64_t monad_js_ws_unwatch(int64_t id);
+
+__attribute__((import_module("monad"), import_name("ws_buffered")))
+extern int64_t monad_js_ws_buffered(int64_t id);
+
+__attribute__((import_module("monad"), import_name("ws_free")))
+extern int64_t monad_js_ws_free(int64_t id);
+
 /* The current-event getters. The JS host keeps the live `Event` in a slot for
    the duration of the synchronous export call; strings are written into the
    shared scratch buffer like `dom_tag_name`. `event_f64` returns a plain
@@ -775,6 +812,68 @@ char* web_crypto_result_hex(int64_t op) {
     int64_t n = monad_js_crypto_result_hex(op, (int64_t)(intptr_t)web_scratch,
                                            WEB_SCRATCH_BYTES - 1);
     return web_take_str(web_scratch, n);
+}
+
+/* ── WebSocket wrappers ────────────────────────────────────────────────── */
+
+int64_t web_ws_open(const char* url, const char* protocols) {
+    return monad_js_ws_open(web_str_ptr(url), web_str_len(url), web_str_ptr(protocols),
+                            web_str_len(protocols));
+}
+
+int64_t web_ws_state(int64_t id) {
+    return monad_js_ws_state(id);
+}
+
+int64_t web_ws_peek(int64_t id, int64_t which) {
+    return monad_js_ws_peek(id, which);
+}
+
+/* Copies the head entry's payload into a caller-owned ByteBuf and pops it.
+   Returns the entry's kind (1 open, 2 text, 3 binary, 4 close, 5 error,
+   0 empty) — the same numbers `ws_peek`'s kind answers. */
+int64_t web_ws_read(int64_t id, int64_t buf) {
+    BufObj* obj = (BufObj*)RT_PTR(buf);
+    int64_t cap = obj ? obj->len : 0;
+    int64_t n = monad_js_ws_read(id, obj ? (int64_t)(intptr_t)obj->payload : 0, cap);
+    return n;
+}
+
+int64_t web_ws_info(int64_t id, int64_t which) {
+    return monad_js_ws_info(id, which);
+}
+
+char* web_ws_text(int64_t id, int64_t which) {
+    int64_t n = monad_js_ws_text(id, which, (int64_t)(intptr_t)web_scratch,
+                                 WEB_SCRATCH_BYTES - 1);
+    return web_take_str(web_scratch, n);
+}
+
+int64_t web_ws_send(int64_t id, int64_t buf, int64_t is_binary) {
+    BufObj* obj = (BufObj*)RT_PTR(buf);
+    int64_t len = obj ? obj->len : 0;
+    const char* data = obj ? (const char*)obj->payload : "";
+    return monad_js_ws_send(id, (int64_t)(intptr_t)data, len, is_binary);
+}
+
+int64_t web_ws_close(int64_t id, int64_t code, const char* reason) {
+    return monad_js_ws_close(id, code, web_str_ptr(reason), web_str_len(reason));
+}
+
+int64_t web_ws_watch(int64_t id, int64_t handler) {
+    return monad_js_ws_watch(id, handler);
+}
+
+int64_t web_ws_unwatch(int64_t id) {
+    return monad_js_ws_unwatch(id);
+}
+
+int64_t web_ws_buffered(int64_t id) {
+    return monad_js_ws_buffered(id);
+}
+
+int64_t web_ws_free(int64_t id) {
+    return monad_js_ws_free(id);
 }
 
 int64_t web_window_reload(void) {

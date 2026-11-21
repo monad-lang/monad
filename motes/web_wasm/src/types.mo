@@ -28,3 +28,13 @@ pub instance Copy ClipboardOp {
 pub instance Copy CryptoOp {
     def copy (op : CryptoOp) : Pair CryptoOp CryptoOp := Pair.pair op op
 }
+
+/// A live browser `WebSocket`, as the host's table id (0 means null).
+pub type WebSocket {
+    web_socket
+}
+
+/// The id is a plain word; duplicating it copies the number.
+pub instance Copy WebSocket {
+    def copy (w : WebSocket) : Pair WebSocket WebSocket := Pair.pair w w
+}

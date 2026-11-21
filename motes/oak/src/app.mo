@@ -10,6 +10,7 @@
 
 use lib::events {Subscription}
 use lib::typed {Oak.Node}
+use web_event::websocket {WsData}
 
 // ═══ Types ═══
 //
@@ -37,7 +38,12 @@ pub type Command (E : Type) (Msg : Type) {
     /// has no DOM and treats it as inert.
     after_render (effect : E),
     /// Several commands, run left-to-right (see `step_cmds`).
-    batch (cmds : List (Command E Msg))
+    batch (cmds : List (Command E Msg)),
+    /// Send a message on the WebSocket a `Subscription.websocket` opened
+    /// for `url`. The pure fold has no socket and treats it as inert; the
+    /// browser runtime sends it (and drops it when no subscription owns
+    /// that url).
+    ws_send (url : String) (data : WsData)
 }
 
 pub type Host (N : Type -> Type) (E : Type) (Msg : Type) {
@@ -160,7 +166,8 @@ def step_cmd [Monad N] {S : Type} {Msg : Type} {E : Type}
         Command.after _ms _msg => step_batch a h model rest,
         Command.focus _selector => step_batch a h model rest,
         Command.after_render _effect => step_batch a h model rest,
-        Command.batch cmds => step_cmds a h model rest cmds
+        Command.batch cmds => step_cmds a h model rest cmds,
+        Command.ws_send _url _data => step_batch a h model rest
     }
 
 /// Several commands, left-to-right. `perform` effects run immediately in
@@ -225,6 +232,7 @@ def collect_cmds [Monad N] {E : Type} {Msg : Type} (h : Host N E Msg)
                 Command.focus _selector => collect_cmds h more perf disp quit,
                 Command.after_render _effect => collect_cmds h more perf disp quit,
                 Command.batch inner => collect_cmds h (List.append inner more) perf disp quit,
+                Command.ws_send _url _data => collect_cmds h more perf disp quit,
             },
     }
 
