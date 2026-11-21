@@ -78,17 +78,12 @@ def Runtime.join_protocols (xs : List String) : String :=
 def Runtime.join_protocols_tail (x : String) (tail : String) : String :=
     if String.beq tail "" then x else String.concat x (String.concat "," tail)
 
-/// The dispatch id a socket's wake-up arrives under: the key's handler hash
-/// with its top two bits cleared, offset by the socket base (0x40000000).
-/// The result is always in [0x40000000, 0x80000000), the range timers
-/// (top bit) never use.
-pub def Runtime.socket_base : U32 := 0x40000000u32
-
+/// The dispatch id a socket's wake-up arrives under: the subscription key's
+/// handler hash. It only needs to identify the socket among `sockets`; it
+/// does not reserve a range, because a wake-up is tried after the handler
+/// table misses.
 pub def Runtime.socket_id (key : String) : U32 :=
-    U32.add Runtime.socket_base (U32.and (Handler.id List.empty key) 0x3fffffffu32)
-
-pub def Runtime.is_socket_id (id : U32) : Bool :=
-    Bool.and (Bool.not (U32.lt id Runtime.socket_base)) (Bool.not (Timer.is_id id))
+    Handler.id List.empty key
 
 def Runtime.window_spec (event : String) : String :=
     Handler.spec_of (Handler.id List.empty (String.concat "window:" event)) ListenerFlags.none
@@ -461,11 +456,13 @@ pub def Runtime.dispatch {S : Type} {Msg : Type} (handler : I64) : IO Unit := do
             then IO.pure unit
             else if Timer.is_id (I64.to_u32 handler)
             then Runtime.dispatch_timer state handler timers
-            else if Runtime.is_socket_id (I64.to_u32 handler)
-            then Runtime.dispatch_socket handler sockets
             else
                 match Runtime.lookup_handler (I64.to_u32 handler) handlers {
-                    Option.none => IO.pure unit,
+                    // A socket wake-up is an id no handler table holds, so
+                    // sockets are tried only on a table miss: a handler id
+                    // (a hash over the whole u32 range) is never stolen by
+                    // the socket space.
+                    Option.none => Runtime.dispatch_socket handler sockets,
                     Option.some handler_fn => do {
                         let ev <- WebEvent.current;
                         let outcome := handler_fn ev;

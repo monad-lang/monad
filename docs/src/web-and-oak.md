@@ -119,6 +119,33 @@ Avoid idle `Subscription.animation_frame`: each frame re-renders and
 allocates. Prefer `Command.after` for a one-shot delay, and handlers only on
 elements that can change.
 
+### WebSockets
+
+A socket belongs to a subscription, not to the model:
+
+```monad,ignore
+def subs (_m : Model) : List (Subscription Msg) :=
+    [Subscription.websocket "wss://example.test/game" ["v1"] (fn (e : WsEvent) => Msg.socket e)]
+
+def update (m : Model) (msg : Msg) : Pair Model (Command E Msg) :=
+    match msg {
+        Msg.socket (WsEvent.opened _) =>
+            Pair.pair m (Command.ws_send "wss://example.test/game" (WsData.text "join"))
+        ...
+    }
+```
+
+The runtime opens the socket when the subscription appears and closes it
+when it goes away; each event (`opened protocol`, `message data`,
+`closed code reason clean`, `failed`) becomes one message, and `ws_send`
+addresses the socket by the same URL. A URL with no live subscription drops
+the send. Payloads cross as bytes (a text message is its UTF-8), so a frame
+is not capped by the 64 KiB scratch string.
+
+For an app with its own loop (a game engine), the imperative API is
+`web_wasm::websocket`: `WebSocket.connect`, `drain` (everything queued,
+for a per-frame poll), `next`, `send`, `close`, `watch`/`unwatch`.
+
 ## Browser surface (`web_wasm`)
 
 | Module | What it gives you |
@@ -133,6 +160,7 @@ elements that can change.
 | `keystore` | IndexedDB `put`/`get`/`delete` of a **non-extractable** ECDSA key, so it survives a page reload |
 | `window` / `memory` | `origin`/`href`/`pathname`/`search`/`search_param` reads, `reload`/`navigate`/`replace`, committed/used heap |
 | `timer` | the `Command.after` bridge |
+| `websocket` | `WebSocket.connect`/`drain`/`next`/`send`/`close`/`watch` — the imperative socket behind `Subscription.websocket` |
 
 `Fetch.begin_with` and `Fetch.response_headers` carry headers as
 length-prefixed blobs; that is what an authenticated API (bearer tokens,
