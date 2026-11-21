@@ -8,11 +8,21 @@ grouping boxes and a focus that follows callers or callees.
 The first use case is the type checker:
 
 ```bash
+monad script trellis                   # build both halves, then serve `lang` on 127.0.0.1:8047
+```
+
+Or build and run the pieces yourself:
+
+```bash
 scripts/build-trellis-ui.sh            # once: the browser UI, into target-monad/trellis-ui
 monad run motes/trellis/src/main.mo -- serve lang
 # trellis: 53 modules, ... declarations, ... edges; ... of ... references resolved
 # trellis: http://127.0.0.1:8040/
 ```
+
+`monad script trellis` builds the UI and the native tool from the current
+tree (`--release`) and serves `lang`. Use `-- --mote std --port 9000` to pick
+another mote or port, and `--no-build` to serve what is already built.
 
 Search for `unify` and press Enter: the view switches to declarations,
 focused on `unify` and its neighbours, grouped by module. Raise the depth,

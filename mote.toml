@@ -244,6 +244,15 @@ path = "scripts/mlir_goldens.mo"
 [script-dependencies.mlir-goldens.mlir]
 workspace = true
 
+# `trellis`: build the call-graph tool and its browser UI from this tree, then
+# serve a mote's graph on 127.0.0.1:8047 for inspection.
+[[script]]
+name = "trellis"
+path = "scripts/trellis.mo"
+
+[script-dependencies.trellis.clap]
+workspace = true
+
 # Affine-by-default migration fallback (measured 2026-10-22). This is a
 # virtual workspace root, so the table covers paths with no manifest of
 # their own (`examples/`); a named mote overrides it in its own mote.toml.
