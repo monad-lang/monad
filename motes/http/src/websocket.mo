@@ -830,3 +830,11 @@ def Ws.finish_message (op : WsOpcode) (payload : List U8) : Result WsClose WsFol
             else Result.err (WsClose.of Ws.close_invalid_data "text message is not UTF-8"),
         _ => Ws.folded Option.none 0 (Option.some (WsInbound.message (WsMessage.binary payload)))
     }
+
+/// A message's text (`""` for a binary message) — handy for logging and
+/// for text-only protocols.
+pub def WsMessage.text_of (m : WsMessage) : String :=
+    match m {
+        WsMessage.text s => s,
+        WsMessage.binary _ => ""
+    }

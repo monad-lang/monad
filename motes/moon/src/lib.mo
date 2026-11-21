@@ -99,3 +99,10 @@ pub use lib::live {
     Live.watch_tree, Live.script, Live.inject, Live.dev_middleware,
     Live.dev_middleware_t,
 }
+
+pub use lib::websocket {
+    MoonWs.handler, WsHub, WsHubEvent, WsHub.new, WsHub.handler, WsHub.drain,
+    WsHub.send, WsHub.broadcast, WsHub.kick, WsHub.clients,
+}
+
+pub use lib::context {UpgradeSlot, UpgradeSlot.new, UpgradeSlot.take, Ctx.takeover}

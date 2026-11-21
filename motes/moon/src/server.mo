@@ -47,7 +47,7 @@ use http::types {
     Headers.get_all, Method, Request, Response, Status.bad_request,
     Status.expectation_failed, Status.internal_server_error, Status.not_found,
     Status.payload_too_large, Status.request_header_fields_too_large,
-    Status.request_timeout, http1_0, http1_1,
+    Status.request_timeout, Status.switching_protocols, http1_0, http1_1,
 }
 use http::strings {Strings.drop_bytes, Strings.parse_i64, Strings.split_on}
 use http::wire {
@@ -59,7 +59,8 @@ use http::wire {
     Wire.take_bytes,
 }
 use lib::handler {Handler.try}
-use lib::handler_t {HandlerT, HandlerT.run_io, HttpError, HttpError.to_response}
+use lib::handler_t {HandlerT, HandlerT.run_io, HandlerT.run_io_upgrade, HttpError, HttpError.to_response}
+use lib::context {UpgradeSlot, UpgradeSlot.take}
 use http::body_io {Body.write_chunked}
 use lib::static_files {Static.handler_with, Static.new_cache, StaticConfig, StaticConfig.default}
 
@@ -1055,12 +1056,44 @@ def Server.error_response (cfg : ServerConfig) (e : HttpError) : Response :=
                 res
         }
 
+/// The handler's response and the connection's upgrade slot (a 101 may
+/// have scheduled a takeover).
 def Server.dispatch_t (cfg : ServerConfig) (handler : HandlerT IO Response)
-    (req : Request) : IO Response := do {
-    let r <- HandlerT.run_io handler req;
+    (req : Request) : IO (Pair Response UpgradeSlot) := do {
+    let r <- HandlerT.run_io_upgrade handler req;
     match r {
-        Result.ok res => IO.pure res,
-        Result.err e => IO.pure (Server.error_response cfg e)
+        Pair.pair result up =>
+            match result {
+                Result.ok res => IO.pure (Pair.pair res up),
+                Result.err e => IO.pure (Pair.pair (Server.error_response cfg e) up)
+            }
+    }
+}
+
+/// Write a 101 and hand the connection to the handler's takeover. No
+/// `Connection: close` is added: the 101 carries the `Upgrade` negotiation
+/// the handler built.
+def Server.serve_upgrade_t (t : Transport) (res : Response) (up : UpgradeSlot)
+    (rest : List U8) : IO Unit := do {
+    let taken <- UpgradeSlot.take up;
+    match taken {
+        Option.none => do {
+            let bad : Response :=
+                { status := Status.internal_server_error,
+                    headers := Headers.set "Content-Type" "text/plain; charset=utf-8" Headers.empty,
+                    version := HttpVersion.http1_1, body := Body.text "upgrade without a takeover" };
+            let _ <- Transport.write_bytes t (Server.canned_bytes bad);
+            Transport.close t
+        },
+        Option.some run =>
+            match Wire.format_response_head res {
+                Result.err _ => Transport.close t,
+                Result.ok head => do {
+                    let _ <- Transport.write_bytes t head;
+                    run t rest;
+                    Transport.close t
+                }
+            }
     }
 }
 
@@ -1159,11 +1192,18 @@ def Server.serve_framed_t (cfg : ServerConfig) (handler : HandlerT IO Response)
     (t : Transport) (req : Request) (rest : List U8) (served : I64) : IO Unit := do {
     let keep := Server.keep_alive_with cfg.max_keep_alive req served;
     let closing := Bool.not keep;
-    let res <- Server.dispatch_t cfg handler req;
-    let stay <- Server.write_response_for_t t req.method closing res;
-    if stay
-    then Server.serve_connection_t cfg handler t rest (I64.add served 1)
-    else Transport.close t
+    let dr <- Server.dispatch_t cfg handler req;
+    match dr {
+        Pair.pair res up =>
+            if U16.beq res.status Status.switching_protocols
+            then Server.serve_upgrade_t t res up rest
+            else do {
+                let stay <- Server.write_response_for_t t req.method closing res;
+                if stay
+                then Server.serve_connection_t cfg handler t rest (I64.add served 1)
+                else Transport.close t
+            }
+    }
 }
 
 def Server.serve_parse_error_t (t : Transport) (e : String) : IO Unit := do {

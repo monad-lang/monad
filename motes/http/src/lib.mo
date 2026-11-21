@@ -94,7 +94,7 @@ pub use lib::sse {
 }
 
 pub use lib::websocket {
-    WsMessage, WsClose, WsInbound, WsOffer, WsOpcode, WsFrame, WsMask, WsDecoder, WsHeaders,
+    WsMessage, WsMessage.text_of, WsClose, WsInbound, WsOffer, WsOpcode, WsFrame, WsMask, WsDecoder, WsHeaders,
     Ws.close_normal, Ws.close_going_away, Ws.close_protocol_error, Ws.close_unsupported,
     Ws.close_no_status, Ws.close_abnormal, Ws.close_invalid_data, Ws.close_policy,
     Ws.close_too_big, Ws.close_internal_error, WsClose.of,

@@ -26,7 +26,8 @@ use http::types {
 }
 use lib::context {
     Ctx, Ctx.body_bytes, Ctx.header, Ctx.make, Ctx.method, Ctx.param, Ctx.path,
-    Ctx.session, Ctx.session_handle, Ctx.with_route, Ctx.with_session, SessionSlot,
+    Ctx.session, Ctx.session_handle, Ctx.upgrade_slot, Ctx.with_route, Ctx.with_session,
+    SessionSlot, UpgradeSlot,
 }
 use lib::session {SessionHandle}
 
@@ -273,9 +274,23 @@ pub def HandlerT.map_error_io {A : Type}
 
 /// Run a handler against a bare request, with no session middleware.
 pub def HandlerT.run_io {A : Type} (h : HandlerT IO A) (req : Request) :
-    IO (Result HttpError A) :=
-    let slot : SessionSlot := SessionSlot.absent in
-    HandlerT.run h (Ctx.make req (Shared.of slot))
+    IO (Result HttpError A) := do {
+    let slot : SessionSlot := SessionSlot.absent;
+    let up <- UpgradeSlot.new;
+    HandlerT.run h (Ctx.make req (Shared.of slot) up)
+}
+
+/// Run a handler and hand back the response *and* the connection's upgrade
+/// slot, which the server checks after writing the response (a 101 hands
+/// the connection over; anything else ignores it).
+pub def HandlerT.run_io_upgrade {A : Type} (h : HandlerT IO A) (req : Request) :
+    IO (Pair (Result HttpError A) UpgradeSlot) := do {
+    let slot : SessionSlot := SessionSlot.absent;
+    let up <- UpgradeSlot.new;
+    let ctx := Ctx.make req (Shared.of slot) up;
+    let r <- HandlerT.run h ctx;
+    IO.pure (Pair.pair r (Ctx.upgrade_slot ctx))
+}
 
 /// Adapt a transformer handler to the old total handler shape.
 pub def HandlerT.to_old (h : HandlerT IO Response) (req : Request) : IO Response := do {

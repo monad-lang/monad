@@ -12,7 +12,8 @@
 /// fresh `Shared` handle. `Ctx` never hands out a borrowed view.
 
 use init::copy {Copy}
-use http::types {Body, Headers, Method, Request, Uri}
+use http::types {Body, Headers, Method, Request, Transport, Uri}
+use std::ref {Ref, Ref.get, Ref.set}
 use lib::session {SessionHandle}
 
 /// The session middleware's presence in the context.
@@ -21,13 +22,52 @@ pub type SessionSlot {
     present (handle : SessionHandle)
 }
 
+/// A connection a handler asked the server to hand over after the
+/// response: a 101 upgrade runs `run` with the transport and the bytes
+/// already read past the request head, and the server never returns that
+/// connection to keep-alive.
+///
+/// The cell starts empty; `Ctx.takeover` fills it and the server takes it
+/// once the response head is written. One cell, one upgrade.
+pub struct UpgradeSlot {
+    cell : Ref (Option (Transport -> List U8 -> IO Unit))
+}
+
+/// A `Ref` handle, so copying the slot shares the one cell.
+pub instance Copy UpgradeSlot {
+    def copy (s : UpgradeSlot) : Pair UpgradeSlot UpgradeSlot := Pair.pair s s
+}
+
+pub def UpgradeSlot.new : IO UpgradeSlot := do {
+    let cell <- Ref.new (Option.none : Option (Transport -> List U8 -> IO Unit));
+    let s : UpgradeSlot := { cell := cell };
+    IO.pure s
+}
+
+/// Ask the server to hand the connection to `run` after the response.
+pub def Ctx.takeover (c : Ctx) (run : Transport -> List U8 -> IO Unit) : IO Unit :=
+    Ref.set c.upgrade.cell (Option.some run)
+
+/// The scheduled takeover, consumed.
+pub def UpgradeSlot.take (s : UpgradeSlot) : IO (Option (Transport -> List U8 -> IO Unit)) := do {
+    let cur <- Ref.get s.cell;
+    match cur {
+        Option.none => IO.pure Option.none,
+        Option.some run => do {
+            let _ <- Ref.set s.cell Option.none;
+            IO.pure (Option.some run)
+        }
+    }
+}
+
 pub struct Ctx {
     method : Method,
     path : String,
     headers : Shared Headers,
     body : Shared Body,
     params : Shared (List (Pair String String)),
-    session : Shared SessionSlot
+    session : Shared SessionSlot,
+    upgrade : UpgradeSlot
 }
 
 /// Every field is Copy, so duplicating the record duplicates only handles.
@@ -44,14 +84,14 @@ def Ctx.uri_path (u : Uri) : String :=
 
 /// Build a context from an owned request. The path is the request's own
 /// path; `Ctx.with_route` overrides it for a mounted sub-router.
-pub def Ctx.make (req : Request) (session : Shared SessionSlot) : Ctx :=
+pub def Ctx.make (req : Request) (session : Shared SessionSlot) (upgrade : UpgradeSlot) : Ctx :=
     match req {
         { method, uri, headers, body, .. } =>
             let path := Ctx.uri_path uri in
             let c : Ctx :=
                 { method := method, path := path, headers := Shared.of headers,
                     body := Shared.of body, params := Shared.of List.empty,
-                    session := session } in
+                    session := session, upgrade := upgrade } in
             c
     }
 
@@ -59,13 +99,13 @@ pub def Ctx.with_route (c : Ctx) (path : String)
     (params : List (Pair String String)) : Ctx :=
     let c2 : Ctx :=
         { method := c.method, path := path, headers := c.headers, body := c.body,
-            params := Shared.of params, session := c.session } in
+            params := Shared.of params, session := c.session, upgrade := c.upgrade } in
     c2
 
 pub def Ctx.with_session (c : Ctx) (session : Shared SessionSlot) : Ctx :=
     let c2 : Ctx :=
         { method := c.method, path := c.path, headers := c.headers, body := c.body,
-            params := c.params, session := session } in
+            params := c.params, session := session, upgrade := c.upgrade } in
     c2
 
 // ── accessors ────────────────────────────────────────────────────────────
@@ -81,6 +121,9 @@ pub def Ctx.body (c : Ctx) : Shared Body := c.body
 pub def Ctx.params (c : Ctx) : Shared (List (Pair String String)) := c.params
 
 pub def Ctx.session (c : Ctx) : Shared SessionSlot := c.session
+
+/// The connection's upgrade slot (the server reads it after a 101).
+pub def Ctx.upgrade_slot (c : Ctx) : UpgradeSlot := c.upgrade
 
 /// The installed session handle, if session middleware ran. A fresh
 /// `Shared` handle is made from the matched view (re-wrapping a view is
